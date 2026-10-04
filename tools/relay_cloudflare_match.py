@@ -55,9 +55,9 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / 'edith'))
 
 MST = dt.timezone(dt.timedelta(hours=-7))
-LANE = os.environ.get('CC_RELAY_LANE', 'opus-relay-cloudflare-20261003')
+LANE = os.environ.get('CC_RELAY_LANE')  # else the lane's scratch root the --out directory sits in (D:/mx/<lane>/...)
 SCENARIO_DIR = HERE / 'e2e'
-BOXES_JSON = Path('D:/Projects/reviews/takeover-20260909/grok-workers/lead-tools/inventory/boxes.json')
+REVIEWS = Path('D:/Projects/reviews/takeover-20260909')
 CLOUDFLARE_TURN_CONFIG = Path('D:/mx/coturn-20260920/turn-config-cloudflare.json')
 # The retired fixed account (turnserver-fixed.conf): read into the book only, so a leak of it is still found; never used by a run.
 RETIRED_FIXED_CONF = Path('D:/mx/coturn-20260920/turnserver-fixed.conf')
@@ -82,13 +82,14 @@ RELAY_SETTINGS = ('NetworkTurnServers', 'NetworkTurnUser', 'NetworkTurnPass', 'N
 PUBLIC_DIRECTORY = 'directory.broserver.com'
 PUBLIC_DIRECTORY_LOGS = ('Erol-Mac', '/Users/erol/cortex-directory/logs')
 HOME = dict(gateway='192.168.50.1', public='68.3.162.151')
-# Ports other drivers own (CLAUDE.md, the e2e README, edith_cross): never chosen here.
+# Ports other drivers own (the project policy, the e2e README, edith_cross): never chosen here.
 FOREIGN_PORTS = [(48320, 48539), (48630, 48649), (49180, 49199), (49400, 49479), (49860, 49879), (49985, 49986)]
 PORT_WINDOW = (48700, 49170)
 MATCH_TICKS = 1201
 TICK_S = 1 / 60
 FIXED_PAIR_TTL = 420  # the Fixed row's hand-entered pair: longer than its match, dead minutes after
 DRY_RUN = False
+REDACTOR = None  # the run's SecretBook: no booked value reaches a printed line or a saved file
 
 # --- the mandatory checks, once (R-b) --------------------------------------------------------------------------------
 BASE = ('identities', 'builds', 'exits', 'full_history', 'hashes_equal', 'holds', 'feel_bars', 'relay', 'route_receipts',
@@ -123,12 +124,37 @@ def parse_stamp(text: str | None) -> float | None:
     return None
 
 
+def redacted(text):
+    return REDACTOR.redact(text) if REDACTOR is not None else text
+
+
 def say(message: str) -> None:
-    print(f'[relay-match] {message}', flush=True)
+    print(f'[relay-match] {redacted(message)}', flush=True)
 
 
 def write_json(path, value) -> None:
-    Path(path).write_text(json.dumps(value, indent=2) + '\n', encoding='utf-8')
+    Path(path).write_text(redacted(json.dumps(value, indent=2)) + '\n', encoding='utf-8')
+
+
+def lane_for(out: Path) -> str:
+    """The lane's scratch root name: CC_RELAY_LANE, or the D:/mx/<lane> directory the output sits in."""
+    if LANE:
+        return LANE
+    parts = Path(out).resolve().parts
+    for index, part in enumerate(parts[:-1]):
+        if part.lower() == 'mx' and index + 1 < len(parts):
+            return parts[index + 1]
+    raise SystemExit('the output is not under D:/mx/<lane>: set CC_RELAY_LANE')
+
+
+def boxes_file() -> Path:
+    """The box inventory: CC_RELAY_BOXES_JSON, or the lead tools' inventory/boxes.json."""
+    if os.environ.get('CC_RELAY_BOXES_JSON'):
+        return Path(os.environ['CC_RELAY_BOXES_JSON'])
+    found = sorted(REVIEWS.glob('*/lead-tools/inventory/boxes.json'))
+    if not found:
+        raise SystemExit('no box inventory found: set CC_RELAY_BOXES_JSON')
+    return found[0]
 
 
 def read_json(path):
@@ -202,14 +228,14 @@ def url_host(url: str) -> str:
     return rest[1:rest.index(']')] if rest.startswith('[') else rest.rsplit(':', 1)[0] if ':' in rest else rest
 
 
-def route_receipts(log: str, session: str | None) -> dict:
+def route_receipts(log: str, session: str | None, any_session: bool = False) -> dict:
     """The route lines a peer wrote for this session, per connection: its selected candidate and its RouteAllowed line.
     Each line keeps its number in the log, so a phase (after a migration, after a renewal) can be read from it."""
     current, connections = None, {}
     for number, line in enumerate(log.splitlines()):
         if found := re.search(r'\[net-ice\] (?:host )?session (\S+)', line):
             current = found[1]
-        if not session or current != session:
+        if not any_session and (not session or current != session):
             continue
         if found := re.search(r'\[net-ice\] selected candidate=(\S+) connection=(\d+)', line):
             connections.setdefault(found[2], {}).update(candidate=found[1], selected_at=number)
@@ -242,15 +268,17 @@ def sender_peers(signals, identities: dict[str, str], peers: list[str]) -> dict[
 
 def judge_relay(run: dict) -> dict:
     """mode cloudflare: every Relay only peer relayed at a Cloudflare address on a fresh Cloudflare offer for this session;
-    mode coturn / fixed: the same at our relay's addresses; mode automatic: every peer's route recorded, and a peer the row
-    expects on the relay (the hotspot fallback) relayed through the provider's offer. The provider is bound by exclusion:
-    the inherited relay settings were cleared, so the offer's servers are the only ones a connection can hold, and the
-    relay candidates each relayed peer sent sit at that provider's addresses; a report written after its connection
-    closed is no evidence, and a relayed peer with neither binding fails."""
+    mode coturn / fixed: the same at our relay's addresses; mode automatic: every peer's route recorded on a fresh offer of
+    the provider the directory minted from, and a peer the row expects on the relay (the hotspot fallback) relayed through
+    it. Every joiner's own report describes its own connection to the host and must be open (found) and agree with that
+    peer's route; a closed or missing report fails the row (the engine writes one connection per report, its connection to
+    peer 1, so the host's own report describes none). The provider is bound by exclusion until the engine names the
+    selected endpoint: the inherited relay settings were cleared, so the offer's servers are the only ones a connection can
+    hold, and the relay candidates each relayed peer itself sent sit at that provider's addresses."""
     mode, session = run['mode'], run.get('session_id')
     reasons, peers, routes = [], {}, {}
-    provider = run.get('provider', {'cloudflare': 'cloudflare', 'coturn': 'coturn', 'fixed': 'fixed'}.get(mode))
-    coturn = mode in ('coturn', 'fixed')
+    provider = run.get('provider', {'cloudflare': 'cloudflare', 'coturn': 'coturn', 'fixed': 'fixed', 'automatic': 'cloudflare'}.get(mode))
+    coturn = provider in ('coturn', 'fixed')
     relay_ok = (lambda address: address in (run.get('relay_addresses') or [])) if coturn else cloudflare_address
     names = sorted(run['connection'])
     signals = run.get('signals') or []
@@ -260,9 +288,8 @@ def judge_relay(run: dict) -> dict:
         sent.setdefault(owners[sender], []).extend(signal_candidates(payload))
     for stray in sorted(owner for owner in sent if owner.startswith('unmatched:')):
         reasons.append(f'{stray}: candidates from a sender no peer report names')
-    receipts_complete, bindings = True, {}
-    report = run.get('client_connection') or {}
-    client_report = 'closed' if report.get('found') is False else 'open' if report else 'absent'
+    reports = run.get('reports') or {}
+    receipts_complete, bindings, report_states = True, {}, {}
     for peer in names:
         connection = run['connection'][peer]
         receipts = route_receipts(run['logs'].get(peer, ''), session)
@@ -278,6 +305,15 @@ def judge_relay(run: dict) -> dict:
         if receipts['incomplete']:
             receipts_complete = False
             reasons.append(f'{peer}: connection(s) {receipts["incomplete"]} have no complete route receipt')
+        if peer != 'host':
+            report = reports.get(peer)
+            state = 'missing' if not isinstance(report, dict) or not report else 'closed' if report.get('found') is not True else 'open'
+            report_states[peer] = state
+            entry['report'] = {key: (report or {}).get(key) for key in ('found', 'state', 'relayed', 'remote_identity', 'remote_address')}
+            if state != 'open':
+                reasons.append(f'{peer}: its report holds no live connection ({state}): a lost report fails the row')
+            elif chosen is not None and bool(report.get('relayed')) != (chosen == 'relay'):
+                reasons.append(f'{peer}: its report says relayed={report.get("relayed")} where its route is {chosen}')
         if connection == 'RelayOnly':
             if chosen != 'relay' or receipts['other_allowed'] or any(row['route'] != 'relay' for row in receipts['accepted']):
                 reasons.append(f'{peer}: Relay only but routes {[row.get("route") for row in receipts["accepted"] + receipts["other_allowed"]]}')
@@ -289,14 +325,15 @@ def judge_relay(run: dict) -> dict:
         if outside and (connection == 'RelayOnly' or chosen == 'relay'):
             reasons.append(f'{peer}: relay candidates outside the {provider} relay: {outside}')
         if chosen == 'relay':
+            report = reports.get(peer)
             if relays and not outside and run.get('overrides_cleared'):
                 bindings[peer] = 'by exclusion'
-            elif client_report == 'open' and report.get('relayed') and report.get('remote_address') and relay_ok(host_of(report['remote_address'])):
-                bindings[peer] = 'by the open report'
+            elif report and report.get('found') is True and report.get('relayed') and report.get('remote_address') and \
+                    relay_ok(host_of(report['remote_address'])):
+                bindings[peer] = 'by its open report'
             else:
                 bindings[peer] = None
-                why = 'the inherited relay settings were not cleared' if relays and not run.get('overrides_cleared') else \
-                    'its report was written after the connection closed' if client_report == 'closed' else 'no candidate or report names it'
+                why = 'the inherited relay settings were not cleared' if relays and not run.get('overrides_cleared') else 'no candidate or report names it'
                 reasons.append(f'{peer}: its relay is not bound to the {provider} relay: {why}')
         entry['binding'] = bindings.get(peer)
         peers[peer] = entry
@@ -306,28 +343,26 @@ def judge_relay(run: dict) -> dict:
                            + ('; the fallback to the relay was not exercised' if wanted == 'relay' else ''))
     offer_fresh = None
     if provider:
-        receipt = {'cloudflare': 'cloudflare', 'coturn': 'coturn', 'fixed': 'fixed'}[provider]
-        valid = [row for row in run.get('offers') or [] if session and row.get('session_id') == session and row.get('provider') == receipt
+        valid = [row for row in run.get('offers') or [] if session and row.get('session_id') == session and row.get('provider') == provider
                  and all(type(row.get(key)) is int and row[key] > 0 for key in ('generation', 'expires_at', 'server_count'))]
         fresh = [row for row in valid if str(row.get('match_id', '')).startswith(f'{session}:')
                  and (run.get('run_ends_at') is None or row['expires_at'] > run['run_ends_at'])]
         offer_fresh = bool(fresh) and run.get('run_ends_at') is not None
         if not valid:
-            reasons.append(f'no {receipt} relay offer issued for session {session!r}')
+            reasons.append(f'no {provider} relay offer issued for session {session!r}')
         elif not offer_fresh:
-            reasons.append(f'the {receipt} offer is stale or names another match: '
+            reasons.append(f'the {provider} offer is stale or names another match: '
                            f'{[(row.get("match_id"), row.get("expires_at")) for row in valid]} against the run end {run.get("run_ends_at")}')
         hosts = sorted({url_host(url) for url in run.get('offer_urls') or []})
         allowed = set(run.get('relay_hosts') or run.get('relay_addresses') or []) if coturn else CLOUDFLARE_HOSTS
         if run.get('offer_urls') is not None and (not hosts or set(hosts) - allowed):
             reasons.append(f'the offer names relay servers {hosts}, expected only {sorted(allowed)}')
-        if client_report == 'open' and report.get('relayed') is not True and any(routes.get(peer) == 'relay' for peer in names if peer != 'host'):
-            reasons.append(f'the open client report does not name a relayed connection: {report}')
     endpoint = all(bindings.get(peer) for peer in names if routes.get(peer) == 'relay') and any(routes.get(peer) == 'relay' for peer in names)
-    return dict(mode=mode, passed=not reasons, reasons=reasons, peers=peers, routes=routes, client_report=client_report,
+    return dict(mode=mode, provider=provider, passed=not reasons, reasons=reasons, peers=peers, routes=routes, reports=report_states,
                 receipts_complete=receipts_complete and all(entry['accepted'] for entry in peers.values()),
                 offer_fresh=offer_fresh, endpoint=endpoint, bindings=bindings,
-                direct_as_expected=all(route == 'direct' for route in routes.values()) if mode == 'automatic' else None)
+                binding_note='by exclusion: the engine names neither the selected endpoint nor the offer generation yet',
+                direct_as_expected=all(route == 'direct' for route in routes.values()))
 
 
 FEEL_BARS = ('item9a_wall_tps', 'item9a_net_wait', 'item9a_steady_stalls', 'item9a_missing_frame_stalls', 'item9a_longest_wait',
@@ -346,11 +381,12 @@ def feel_bars(timing: dict, peer: str) -> dict:
 
 
 def tunnel_receipt(rows: list[dict], peers: list[str] | None = None, min_seconds: float | None = None) -> dict:
-    """The hotspot box's own Tailscale states around its engines: down (Stopped) before the first engine started; for every
-    peer one start and one end record, in that order, Stopped at both and at every record between them; back up (Running)
-    after the last end; the bracket at least min_seconds long when given. A missing record, a Running state inside a
-    bracket or an unreadable time fails."""
+    """The hotspot box's own Tailscale states around its engines, by its own clock: down (Stopped) stamped before the first
+    engine started; for every peer one start and one end record, in that order, Stopped at both and at every record between;
+    back up (Running) stamped after the last engine ended; with min_seconds, each engine bracket at least that long. A
+    missing record, a Running state inside a bracket or an unreadable time fails."""
     reasons = []
+    times = [parse_stamp(row.get('at')) for row in rows]
     down = next((index for index, row in enumerate(rows) if row.get('step') == 'down'), None)
     up = next((index for index, row in enumerate(rows) if row.get('step') == 'up'), None)
     if down is None or rows[down].get('exit_code') != 0 or rows[down].get('backend_state') != 'Stopped':
@@ -358,45 +394,56 @@ def tunnel_receipt(rows: list[dict], peers: list[str] | None = None, min_seconds
     named = peers or sorted({row.get('peer') for row in rows if row.get('step', '').startswith('engine-') and row.get('peer')})
     if not named:
         reasons.append('the receipt names no engine')
-    first_start, last_end = None, None
+    starts_at, ends_at = [], []
     for peer in named:
         starts = [index for index, row in enumerate(rows) if row.get('step') == 'engine-started' and row.get('peer') == peer]
         ends = [index for index, row in enumerate(rows) if row.get('step') == 'engine-ended' and row.get('peer') == peer]
         if len(starts) != 1 or len(ends) != 1 or ends[0] < starts[0]:
             reasons.append(f'{peer}: {len(starts)} start and {len(ends)} end record(s), not one ordered bracket')
             continue
-        first_start = starts[0] if first_start is None else min(first_start, starts[0])
-        last_end = ends[0] if last_end is None else max(last_end, ends[0])
-        inside = rows[starts[0]:ends[0] + 1]
-        running = [row.get('step') for row in inside if row.get('backend_state') != 'Stopped']
+        running = [row.get('step') for row in rows[starts[0]:ends[0] + 1] if row.get('backend_state') != 'Stopped']
         if running:
             reasons.append(f'{peer}: the tunnel was not Stopped inside the bracket at {running}')
-        began, ended = parse_stamp(rows[starts[0]].get('at')), parse_stamp(rows[ends[0]].get('at'))
+        began, ended = times[starts[0]], times[ends[0]]
         if began is None or ended is None or ended < began:
             reasons.append(f'{peer}: the bracket times are unreadable or out of order')
-        elif min_seconds is not None and ended - began < min_seconds:
-            reasons.append(f'{peer}: the tunnel was down {ended - began:.0f} s, the match needs {min_seconds:.0f} s')
-    if down is not None and first_start is not None and first_start < down:
-        reasons.append('an engine started before the tunnel went down')
+            continue
+        starts_at.append(began)
+        ends_at.append(ended)
+        if min_seconds is not None and ended - began < min_seconds:
+            reasons.append(f'{peer}: the engine ran {ended - began:.0f} s inside the bracket, the match needs {min_seconds:.0f} s')
+    if down is not None and starts_at:
+        if times[down] is None or times[down] > min(starts_at) or any(index < down for index, row in enumerate(rows) if row.get('step') == 'engine-started'):
+            reasons.append('an engine started before the tunnel went down')
     if up is None or rows[up].get('exit_code') != 0 or rows[up].get('backend_state') != 'Running':
         reasons.append(f'the tunnel did not come back up: {rows[up] if up is not None else "no up step"}')
-    elif last_end is not None and up < last_end:
-        reasons.append('the tunnel came back up before the engine ended')
+    elif ends_at and (times[up] is None or times[up] < max(ends_at)
+                      or any(index > up for index, row in enumerate(rows) if row.get('step') == 'engine-ended')):
+        reasons.append('the tunnel came back up before the last engine ended')
     return dict(passed=not reasons, reasons=reasons)
 
 
 def hotspot_preflight(state: str | None, gateway: str | None, mapped: str | None) -> dict:
-    """The hotspot box's network, read before a live row: an unknown fact refuses; the home network refuses."""
-    unknown = [name for name, value in (('tailscale state', state), ('default gateway', gateway), ('STUN mapped address', mapped))
-               if not value or not str(value).strip()]
-    if unknown:
-        return dict(verdict='REFUSED', reason=f'unknown precondition: {", ".join(unknown)}')
-    if state.strip() != 'Running':
-        return dict(verdict='REFUSED', reason=f'the tunnel is {state.strip()}, not Running')
-    mapped_address = str(mapped).strip().rsplit(':', 1)[0]
-    if gateway.strip() == HOME['gateway'] or mapped_address == HOME['public']:
-        return dict(verdict='HOME', reason=f'the box is on the home network (gateway {gateway.strip()}, mapped {mapped_address})')
-    return dict(verdict='AWAY', reason=f'gateway {gateway.strip()}, mapped {mapped_address}')
+    """The hotspot box's network, read before a live row. Only well-formed facts count: the tunnel state exactly Running or
+    Stopped, a gateway that parses as an address, a STUN-mapped address that parses (address or address:port); anything else
+    is REFUSED. A stopped tunnel refuses; the home network refuses."""
+    state, gateway, mapped = (str(value).strip() if value is not None else '' for value in (state, gateway, mapped))
+
+    def address(text: str) -> str | None:
+        host = text[1:text.index(']')] if text.startswith('[') and ']' in text else text.rsplit(':', 1)[0] if text.count(':') == 1 else text
+        try:
+            return str(ipaddress.ip_address(host))
+        except ValueError:
+            return None
+    malformed = [name for name, ok in (('tailscale state', state in ('Running', 'Stopped')), ('default gateway', address(gateway) is not None),
+                                       ('STUN mapped address', address(mapped) is not None)) if not ok]
+    if malformed:
+        return dict(verdict='REFUSED', reason=f'unknown or malformed precondition: {", ".join(malformed)}')
+    if state != 'Running':
+        return dict(verdict='REFUSED', reason=f'the tunnel is {state}, not Running')
+    if address(gateway) == HOME['gateway'] or address(mapped) == HOME['public']:
+        return dict(verdict='HOME', reason=f'the box is on the home network (gateway {address(gateway)}, mapped {address(mapped)})')
+    return dict(verdict='AWAY', reason=f'gateway {address(gateway)}, mapped {address(mapped)}')
 
 
 def panel_verdict(result) -> dict:
@@ -434,32 +481,58 @@ def seat_holds(peers: list[dict], allowed: set[str], expected: set[str] | None =
 
 
 def renewal_evidence(logs: dict[str, str], calls: list[dict], relayed: list[str], ttl_s: float | None = None,
-                     frames_past_expiry: bool | None = None) -> dict:
-    """An expiring relay login renewed on the live connection of every relayed peer: the engine's renewal line naming at
-    least one live connection, a second mint no sooner than the first login's half-life, every mint answered 201, and
-    the match's frames continuing past the first login's expiry (when the row gives its ttl)."""
-    renewed = {peer: sum(int(count) > 0 for count in re.findall(r'\[net-relay\] relay login renewed on (\d+) live connection', logs.get(peer, '')))
-               for peer in relayed}
-    reasons = [f'{peer}: no live renewal of the relay login on a live connection' for peer, count in renewed.items() if not count]
+                     line_times: dict[str, list] | None = None, samples: dict[str, list] | None = None, first_expiry: float | None = None,
+                     clocks: dict[str, tuple] | None = None, session: str | None = None) -> dict:
+    """An expiring relay login renewed on the live connection of every relayed peer, judged by time: the second mint at or
+    after the half-life measured from the first mint; every mint answered 201; for each relayed peer the engine's renewal
+    line naming at least one live connection, seen on its box AFTER the second mint; that connection's route re-read after
+    the renewal (still relay and allowed, no later refusal or change); and the peer's frames continuing past the first
+    login's ACTUAL expiry. Box times are moved to this box's clock by the measured offset and judged against its uncertainty."""
+    reasons, renewed, routes_after = [], {}, {}
+    epochs = [call.get('epoch') if call.get('epoch') is not None else parse_stamp(call.get('at')) for call in calls]
     if len(calls) < 2:
         reasons.append(f'the directory minted {len(calls)} login(s); a renewal needs a second')
     if any(call.get('status') != 201 for call in calls):
         reasons.append(f'a mint was refused: {[call.get("status") for call in calls]}')
-    if ttl_s is not None and len(calls) >= 2:
-        first, second = parse_stamp(calls[0].get('at')), parse_stamp(calls[1].get('at'))
-        if first is None or second is None or second - first < ttl_s / 2 - 5:
-            reasons.append(f'the second mint came {None if first is None or second is None else round(second - first)} s after the first, '
-                           f'before the half-life of {ttl_s / 2:.0f} s')
-    if ttl_s is not None and not frames_past_expiry:
-        reasons.append('the match did not run past the first login\'s expiry')
-    return dict(passed=not reasons, reasons=reasons, renewed=renewed, mints=len(calls))
+    second = epochs[1] if len(epochs) > 1 else None
+    if ttl_s is None:
+        reasons.append('the row gives no login lifetime to judge the renewal by')
+    elif len(calls) >= 2 and (epochs[0] is None or second is None or second < epochs[0] + ttl_s / 2):
+        reasons.append(f'the second mint came {None if epochs[0] is None or second is None else round(second - epochs[0], 1)} s after the first, '
+                       f'before the half-life of {ttl_s / 2:.0f} s')
+    for peer in relayed:
+        offset, uncertainty = (clocks or {}).get(peer) or (None, None)
+        timed = [(when - offset, line) for when, line in (line_times or {}).get(peer, []) if offset is not None
+                 and re.search(r'\[net-relay\] relay login renewed on ([1-9]\d*) live connection', line)]
+        after = [when for when, _ in timed if second is not None and when - uncertainty > second]
+        renewed[peer] = len(after)
+        if not after:
+            reasons.append(f'{peer}: no renewal on a live connection seen after the second mint' if timed or offset is not None
+                           else f'{peer}: the renewal line carries no time from its box')
+        log = logs.get(peer, '').splitlines()
+        marks = [index for index, line in enumerate(log) if re.search(r'\[net-relay\] relay login renewed on [1-9]\d* live connection', line)]
+        if marks:
+            later = route_receipts('\n'.join(log[marks[-1]:]), None, any_session=True)['connections']
+            current = {key: row.get('route') for key, row in route_receipts('\n'.join(log), session)['connections'].items() if row.get('allowed')}
+            changed = {key: row for key, row in later.items() if 'route' in row and (row.get('route') != 'relay' or not row.get('allowed'))}
+            routes_after[peer] = current
+            if changed or not any(route == 'relay' for route in current.values()):
+                reasons.append(f'{peer}: its route after the renewal is not relay and allowed: {current} {sorted(changed)}')
+        peer_samples = sorted((when - offset, tick) for when, tick in (samples or {}).get(peer, []) if offset is not None)
+        before = [tick for when, tick in peer_samples if first_expiry is not None and when + uncertainty < first_expiry]
+        past = [tick for when, tick in peer_samples if first_expiry is not None and when - uncertainty > first_expiry]
+        if first_expiry is None or not past or max(past) <= max(before, default=0):
+            reasons.append(f'{peer}: no frames timed past the first login\'s expiry')
+    return dict(passed=not reasons, reasons=reasons, renewed=renewed, mints=len(calls), routes_after_renewal=routes_after,
+                note='the offer generation is bound by exclusion until the engine names it')
 
 
 def migration_declarations(logs: dict[str, str], survivors: list[str], session: str | None = None, seats: dict[str, str] | None = None,
                            last_ticks: dict[str, int] | None = None) -> dict:
-    """Every survivor declares, once, the same successor, boundary and round after the host is lost; when given: the
-    successor is one seat's name, each survivor holds a relay route on a connection opened after its declaration, and
-    each survivor's frames run past the boundary."""
+    """Every survivor declares, once, the same successor, boundary and round after the host is lost; the successor is
+    exactly one seat's name; each survivor holds a NEW connection (an id it never used before the declaration) whose
+    selected candidate is relay and whose own RouteAllowed route=relay allowed=1 line follows the declaration; and each
+    survivor's frames run past the boundary. A repeated line on an old connection proves nothing."""
     found = {peer: re.findall(r'(?m)^\[net-match\] Host left - (.+) is now hosting; boundary=(\d+) round=(\d+)', logs.get(peer, ''))
              for peer in survivors}
     distinct = {entry for rows in found.values() for entry in rows}
@@ -467,23 +540,24 @@ def migration_declarations(logs: dict[str, str], survivors: list[str], session: 
     reasons = [] if agreed else [f'the survivors did not declare one successor once each: {found}']
     entry = next(iter(distinct)) if len(distinct) == 1 else (None, None, None)
     boundary = int(entry[1]) if entry[1] else None
-    if agreed and seats is not None and list(seats.values()).count(entry[0]) != 1:
-        reasons.append(f'the successor {entry[0]!r} is not exactly one seat of {sorted(seats.values())}')
-    if agreed and session is not None:
+    if agreed and (seats is None or list(seats.values()).count(entry[0]) != 1):
+        reasons.append(f'the successor {entry[0]!r} is not exactly one seat of {sorted((seats or {}).values())}')
+    successors = {}
+    if agreed:
         for peer in survivors:
             lines = logs.get(peer, '').splitlines()
             declared = next(index for index, line in enumerate(lines) if 'is now hosting; boundary=' in line)
-            after = route_receipts('\n'.join(lines[declared:]), None if True else session)
-            post = [row for key, row in route_receipts(logs.get(peer, ''), session)['connections'].items()
-                    if row.get('selected_at', -1) > declared and row.get('route') == 'relay' and row.get('allowed')]
-            del after
+            seen_before = {match for line in lines[:declared] for match in re.findall(r'connection=(\d+)', line)}
+            post = [key for key, row in route_receipts('\n'.join(lines[declared:]), None, any_session=True)['connections'].items()
+                    if key not in seen_before and row.get('candidate') == 'relay' and row.get('route') == 'relay' and row.get('allowed')
+                    and row.get('selected_at', -1) >= 0 and row.get('allowed_at', -1) >= 0]
+            successors[peer] = post
             if not post:
-                reasons.append(f'{peer}: no relay route receipt on a connection after the migration')
-    if agreed and last_ticks is not None:
-        short = [peer for peer in survivors if (last_ticks.get(peer) or 0) <= (boundary or 0)]
-        if short:
-            reasons.append(f'{short}: no frames after the loss (boundary {boundary})')
-    return dict(passed=not reasons, reasons=reasons, successor=entry[0], boundary=boundary, round=int(entry[2]) if entry[2] else None)
+                reasons.append(f'{peer}: no new connection with its own relay receipts after the migration')
+    if agreed and (last_ticks is None or any((last_ticks.get(peer) or 0) <= (boundary or 0) for peer in survivors)):
+        reasons.append(f'no frames after the loss on every survivor (boundary {boundary}): {last_ticks}')
+    return dict(passed=not reasons, reasons=reasons, successor=entry[0], boundary=boundary, round=int(entry[2]) if entry[2] else None,
+                successor_connections=successors)
 
 
 def menu_choice(log: str, value: str, session: str | None = None) -> dict:
@@ -582,7 +656,7 @@ class Box:
 
 
 def load_boxes(trees: dict[str, str], aliases: dict[str, str] | None = None) -> dict[str, Box]:
-    entries = {entry['name'].lower(): entry for entry in json.loads(BOXES_JSON.read_text(encoding='utf-8'))['boxes']
+    entries = {entry['name'].lower(): entry for entry in json.loads(boxes_file().read_text(encoding='utf-8'))['boxes']
                if entry.get('kind') == 'windows-task'}
     return {name: Box(name, entry, trees.get(name), (aliases or {}).get(name)) for name, entry in entries.items()}
 
@@ -676,9 +750,9 @@ class Directory:
                 response = real(request, *args, **kwargs)
             except HTTPError as error:
                 code = re.search(r'error code:\s*(\d+)', error.read(128).decode('ascii', 'replace'))
-                self.provider_calls.append(dict(at=stamp(), status=error.code, provider_error_code=code[1] if code else None))
+                self.provider_calls.append(dict(at=stamp(), epoch=time.time(), status=error.code, provider_error_code=code[1] if code else None))
                 raise
-            self.provider_calls.append(dict(at=stamp(), status=response.status))
+            self.provider_calls.append(dict(at=stamp(), epoch=time.time(), status=response.status))
             return response
         if backend and backend.get('backend', 'cloudflare') == 'cloudflare':
             module.urlopen = urlopen
@@ -784,9 +858,46 @@ class Tunnel:
 
 # --- our relay for a run, and the bridge EDITH reaches it through ---------------------------------------------------
 
+# Runs on the Mac: reads the secret from stdin and serves it as coturn's configuration through a named pipe (no storage),
+# once for each time coturn opens it, then removes the pipe; coturn runs on in its own session.
+COTURN_STARTER = r'''
+import json, os, subprocess, sys, tempfile, time
+secret = sys.stdin.readline().strip()
+binary, args = sys.argv[1], json.loads(sys.argv[2])
+folder = tempfile.mkdtemp()
+fifo = os.path.join(folder, 'turn.conf')
+os.mkfifo(fifo, 0o600)
+process = subprocess.Popen([binary, '-c', fifo] + args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, start_new_session=True)
+print(process.pid, flush=True)
+deadline, served = time.time() + 6, 0
+try:
+    while time.time() < deadline and process.poll() is None:
+        try:
+            handle = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+        except OSError:
+            time.sleep(0.05)
+            continue
+        try:
+            os.set_blocking(handle, True)
+            os.write(handle, ('static-auth-secret=' + secret + '\n').encode())
+            served += 1
+        except OSError:
+            pass
+        finally:
+            os.close(handle)
+        time.sleep(0.05)
+finally:
+    os.unlink(fifo)
+    os.rmdir(folder)
+print('served', served, flush=True)
+'''
+
+
 class LaneCoturn:
     """A coturn started for one run on the Mac: its own LAN port and relay range, REST authentication with a per-run secret
-    that exists only in this process, in that process's arguments and in the directory's memory; stopped by its PID."""
+    that exists only in this process, in the directory's memory and in that coturn's memory (handed over on stdin and a
+    named pipe, never as an argument a shell, a process list or an exception could show); stopped by its PID."""
 
     def __init__(self, book) -> None:
         self.secret = secrets.token_hex(24)
@@ -805,12 +916,17 @@ class LaneCoturn:
                                    LANE_COTURN['ports'][0], LANE_COTURN['ports'][1] + 1)], capture_output=True, text=True, timeout=60)
         self.port = int(free.stdout.split()[0])
         low, high = LANE_COTURN['relay']
-        command = (f'nohup {LANE_COTURN["binary"]} -n --listening-port={self.port} --listening-ip={self.address} --relay-ip={self.address} '
-                   f'--min-port={low} --max-port={high} --realm=relay-proof.lane --use-auth-secret --static-auth-secret={self.secret} '
-                   f'--fingerprint --no-tls --no-multicast-peers --no-stdout-log --log-file=/dev/null --simple-log '
-                   f'> /dev/null 2>&1 & echo $!')
-        done = subprocess.run(['ssh', '-o', 'BatchMode=yes', LANE_COTURN['ssh'], command], capture_output=True, text=True, timeout=60)
-        self.pid = int(done.stdout.strip().split()[-1])
+        args = [f'--listening-port={self.port}', f'--listening-ip={self.address}', f'--relay-ip={self.address}', f'--min-port={low}',
+                f'--max-port={high}', '--realm=relay-proof.lane', '--use-auth-secret', '--fingerprint', '--no-tls', '--no-multicast-peers',
+                '--no-stdout-log', '--log-file=/dev/null', '--simple-log']
+        starter = base64.b64encode(COTURN_STARTER.encode()).decode()
+        command = f"/usr/bin/python3 -c \"import base64;exec(base64.b64decode('{starter}'))\" {LANE_COTURN['binary']} '{json.dumps(args)}'"
+        done = subprocess.run(['ssh', '-o', 'BatchMode=yes', LANE_COTURN['ssh'], command], input=f'{self.secret}\n',
+                              capture_output=True, text=True, timeout=60)
+        lines = [line for line in done.stdout.splitlines() if line.strip()]
+        self.pid = int(lines[0]) if lines and lines[0].strip().isdigit() else None
+        if not self.pid or not any(line.startswith('served ') and int(line.split()[1]) > 0 for line in lines):
+            raise RuntimeError(f'the run coturn did not start or never read its configuration: {lines[-2:]}')
         time.sleep(2)
         try:
             answer = turn_allocate((self.address, self.port), 'probe-not-a-login', 'x')
@@ -1014,7 +1130,8 @@ def ship(box, root: Path, specs: list[dict], directory_port: int, payload: Path,
     box.remote.mkdir(root)
     box.remote.mkdir(payload / 'edith')
     for local, remote in ((HERE / 'relay_cloudflare_match.py', payload / 'relay_cloudflare_match.py'),
-                          (HERE / 'relay_secrets.py', payload / 'relay_secrets.py'), (HERE / 'edith_cross.py', payload / 'edith_cross.py'),
+                          (HERE / 'relay_secrets.py', payload / 'relay_secrets.py'), (HERE / 'relay_fixtures.json', payload / 'relay_fixtures.json'),
+                          (HERE / 'edith_cross.py', payload / 'edith_cross.py'),
                           (HERE / 'edith/remote_box.py', payload / 'edith/remote_box.py'), (root / 'cert.pem', root / 'cert.pem'),
                           (root / 'input.txt', root / 'input.txt'), (root / 'input-schedule.json', root / 'input-schedule.json')):
         if Path(local).is_file():
@@ -1076,13 +1193,14 @@ def sanitize_box(box, root: Path, book, payload: Path) -> dict:
     try:
         write_json(digests, book.digests())
         box.remote.scp_to(HERE / 'relay_secrets.py', payload / 'relay_secrets.py')
+        box.remote.scp_to(HERE / 'relay_fixtures.json', payload / 'relay_fixtures.json')
         box.remote.scp_to(digests, digests)
         digests.unlink()
         exit_code = None
         try:
             done = subprocess.run(['ssh', '-o', 'BatchMode=yes', box.alias,
                                    f"python '{(payload / 'relay_secrets.py').as_posix()}' sweep --root '{root.as_posix()}' --digests "
-                                   f"'{digests.as_posix()}' --scrub --public-repo '{box.tree}' --out '{receipt_path.as_posix()}'; "
+                                   f"'{digests.as_posix()}' --fixtures '{(payload / 'relay_fixtures.json').as_posix()}' --scrub --out '{receipt_path.as_posix()}'; "
                                    f"$code = $LASTEXITCODE; "
                                    f"Remove-Item -LiteralPath '{digests.as_posix()}' -Force; exit $code"],
                                   capture_output=True, text=True, timeout=1800, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
@@ -1103,16 +1221,10 @@ def sanitize_box(box, root: Path, book, payload: Path) -> dict:
             digests.unlink()
 
 
-def published_check():
-    from relay_secrets import repository_public
-    return repository_public(HERE.parent)
-
-
 def sanitize_local(root: Path, book) -> dict:
     from relay_secrets import sweep
-    public = published_check()
-    first = sweep([root], book.finder(), scrub=True, public=public)
-    verify = sweep([root], book.finder(), public=public)
+    first = sweep([root], book.finder(), scrub=True)
+    verify = sweep([root], book.finder())
     write_json(root / 'secret-scan.json', dict(sweep=first, verify=verify))
     return dict(box='here', status=verify['status'], files=verify['files_scanned'], hits_before=len(first['files_with_secrets']),
                 hits_after=len(verify['files_with_secrets']), incomplete=verify['incomplete'],
@@ -1188,8 +1300,8 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
     h = edith_cross.harness(HERE)
     public = run.get('directory') == 'public'
     run.setdefault('tag', f'rp{os.urandom(3).hex()}')
-    backend = coturn = bridge = None
-    fixed_pair = None
+    backend = coturn = bridge = directory = observer = None
+    fixed_pair = pair_ttl = minted_at = relay_hosts = None
     if run['relay'] in ('cloudflare', 'automatic') and not public:
         backend = read_turn_config(CLOUDFLARE_TURN_CONFIG)
         book.add_turn_config(backend)
@@ -1198,13 +1310,14 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
     ports = dict(directory=block[0], bridge_tcp=block[1], bridge_udp=block[2], **{name: block[index + 3] for index, name in enumerate(names)})
     if not DRY_RUN:
         edith_cross.looped_input(h, root / 'input.txt', ticks)
-    directory = None
     tunnels: list[Tunnel] = []
-    started, states, payload = stamp(), {}, Path('D:/mx') / LANE / 'payload'
-    sanitize, failure = [], None
-    relay_hosts = observer = pair_ttl = minted_at = None
+    started, states, payload = stamp(), {}, Path('D:/mx') / lane_for(out) / 'payload'
+    sanitize, cleanup, fetched, revokes, menus, clocks = [], [], [], [], [], {}
+    failure = interrupt = None
     overrides_cleared, ended_epoch = False, time.time()
     host_name = display_name(run, next(peer for peer in run['peers'] if peer['name'] == 'host'))
+    # One boundary for every way out (a failure, a timeout, an interrupt): the finally below closes, blanks, sweeps on
+    # each box and here, revokes, and only then may an interrupt carry on.
     try:
         if run['relay'] in ('coturn', 'fixed'):
             coturn = LaneCoturn(book)
@@ -1239,6 +1352,7 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
         specs = build_specs(h, run, root, ports, boxes, pin, None, ticks)
         overrides_cleared = all(spec['settings'].get(key) == '' for spec in specs for key in RELAY_SETTINGS)
         menu_texts = render_menus(run, specs, fixed_pair, ports)
+        menus = [(boxes[spec['box']], root / f'{spec["peer"]}.menu.txt') for spec in specs if spec.get('menu_script')]
         if bridge:
             ship_driver_only(bridge.box, payload)
             bridge.open()
@@ -1247,6 +1361,7 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
         if public:
             observer = PublicObserver(host_name, book)
             observer.start()
+        clocks = {box.name: dict(before=measure_clock(box)) for box in used}
         host_box = next(peer['box'] for peer in run['peers'] if peer['name'] == 'host')
         for box in sorted(used, key=lambda box: box.name != host_box):
             if not DRY_RUN:  # the host's box first; a joiner's own payload waits for the host's listing
@@ -1256,15 +1371,16 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
             states[box.name] = wait_done(box, root / f'{box.name}-payload.done', int(run.get('timeout_s', 420)) + 900)
             say(f'{run["name"]}: {box.name} {states[box.name].strip()}')
         ended_epoch = time.time()
-    except BaseException as error:  # every failure path, a kill included, still sweeps, scrubs and revokes below
-        failure = f'{type(error).__name__}: {error}'
+        for box in used:
+            clocks[box.name]['after'] = measure_clock(box)
+    except BaseException as error:
+        failure = redacted(f'{type(error).__name__}: {error}')
         ended_epoch = time.time()
         overrides_cleared = False
         say(f'{run["name"]}: {failure}')
         if not isinstance(error, Exception):
-            raise
+            interrupt = error
     finally:
-        cleanup = []
         steps = [(f'tunnel {tunnel.box.name}', tunnel.close) for tunnel in tunnels]
         steps += [(name, part.close if name == 'bridge' else part.stop) for name, part in
                   (('bridge', bridge), ('directory', directory), ('observer', observer)) if part is not None]
@@ -1272,7 +1388,12 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
             try:
                 close()
             except Exception as error:
-                cleanup.append(f'{step}: {type(error).__name__}: {error}')
+                cleanup.append(redacted(f'{step}: {type(error).__name__}: {error}'))
+        for box, path in menus:  # a script the harness expanded is blanked whether or not an engine loaded it
+            try:
+                put_remote_text(box, path, MENU_BLANK)
+            except Exception as error:
+                cleanup.append(redacted(f'menu {path.name}: {type(error).__name__}: {error}'))
         if not DRY_RUN:
             for box in used:
                 sanitize.append(sanitize_box(box, root, book, payload))
@@ -1281,31 +1402,34 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
                 if fixed_pair and failure is None and not DRY_RUN:
                     pair_ttl = pair_ttl_receipt((coturn.address, coturn.port), fixed_pair, coturn.secret, book)
             except Exception as error:
-                pair_ttl = dict(passed=False, reasons=[f'{type(error).__name__}: {error}'])
+                pair_ttl = dict(passed=False, reasons=[redacted(f'{type(error).__name__}: {error}')])
             finally:
                 coturn.stop()
+        if not DRY_RUN:
+            for box, receipt in zip(used, list(sanitize)):
+                if interrupt is not None or receipt['status'] != 'CLEAN':
+                    continue
+                listing = root / f'{box.name}-evidence.txt'
+                try:
+                    box.remote.ssh(f"python '{(payload / 'relay_cloudflare_match.py').as_posix()}' --evidence-list '{root.as_posix()}' --out "
+                                   f"'{listing.as_posix()}'", timeout=600)
+                    box.remote.fetch_list(root, listing, root, f'{box.name}-evidence.tar')
+                    fetched.append(box.name)
+                except (RuntimeError, subprocess.TimeoutExpired) as error:
+                    sanitize.append(dict(box=box.name, status='INCOMPLETE', error=redacted(f'fetch: {type(error).__name__}: {str(error)[-200:]}')))
+            sanitize.append(sanitize_local(root, book))
+            observed = observer.minted if observer else []
+            if observed:
+                revokes = revoke_cloudflare(read_turn_config(CLOUDFLARE_TURN_CONFIG), [row['username'] for row in observed])
+            elif directory:
+                revokes = directory.revokes
+    if interrupt is not None:
+        raise interrupt
     if DRY_RUN:
         return dict(name=run['name'], dry_run=True, ports=ports, failure=failure)
-    fetched = []
-    for box, receipt in zip(used, sanitize):
-        if receipt['status'] != 'CLEAN':
-            continue
-        listing = root / f'{box.name}-evidence.txt'
-        try:
-            box.remote.ssh(f"python '{(payload / 'relay_cloudflare_match.py').as_posix()}' --evidence-list '{root.as_posix()}' --out "
-                           f"'{listing.as_posix()}'", timeout=600)
-            box.remote.fetch_list(root, listing, root, f'{box.name}-evidence.tar')
-            fetched.append(box.name)
-        except (RuntimeError, subprocess.TimeoutExpired) as error:
-            sanitize.append(dict(box=box.name, status='INCOMPLETE', error=f'fetch: {type(error).__name__}: {str(error)[-200:]}'))
-    sanitize.append(sanitize_local(root, book))
     observed = observer.minted if observer else []
-    if observed:
-        revokes = revoke_cloudflare(read_turn_config(CLOUDFLARE_TURN_CONFIG), [row['username'] for row in observed])
-    else:
-        revokes = directory.revokes if directory else []
     minted = (directory.minted if directory else observed) or (
-        [dict(username=fixed_pair[0], expires_at=int(fixed_pair[0].split(':', 1)[0]))] if fixed_pair else [])
+        [dict(username=fixed_pair[0], expires_at=int(fixed_pair[0].split(':', 1)[0]), minted_at=minted_at)] if fixed_pair else [])
     if failure:
         return dict(name=run['name'], root=str(root), passed=False, refused=failure, identities=identities, sanitize=sanitize,
                     revokes=revokes, cleanup=cleanup)
@@ -1315,7 +1439,21 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
                      provider_calls=directory.provider_calls if directory else [], revokes=revokes, minted=minted, public=public,
                      ticks=ticks, ended_epoch=ended_epoch, overrides_cleared=overrides_cleared, sanitize=sanitize, fetched=fetched,
                      relay_hosts=relay_hosts, coturn_address=coturn.address if coturn else None, fixed_pair=fixed_pair,
-                     pair_ttl=pair_ttl, cleanup=cleanup, minted_at=minted_at), book)
+                     pair_ttl=pair_ttl, cleanup=cleanup, minted_at=minted_at, clocks=clocks), book)
+
+
+MENU_BLANK = '# the menu script was removed by the driver at the end of its run\n'
+
+
+def measure_clock(box) -> dict:
+    """The game box's clock against this box's: offset (box minus here) and its uncertainty (half the ssh round trip)."""
+    if DRY_RUN:
+        return dict(offset_s=0.0, uncertainty_s=0.0)
+    sent = time.time()
+    text = box.remote.ssh('[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()')
+    back = time.time()
+    remote = int(text.strip().splitlines()[-1]) / 1000
+    return dict(offset_s=remote - (sent + back) / 2, uncertainty_s=(back - sent) / 2)
 
 
 def ship_driver_only(box, payload: Path) -> None:
@@ -1366,9 +1504,13 @@ def public_directory_lines(session: str | None) -> list[str]:
 
 
 def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> dict:
+    """The run's verdict from its own files: exactly the checks its row's table names, each computed from the evidence
+    that check reads, a missing one failing."""
     import edith_cross
     names = [peer['name'] for peer in run['peers']]
+    box_of = {peer['name']: peer['box'] for peer in run['peers']}
     ticks = int(facts['ticks'])
+    required = REQUIRED.get(run['name'], BASE)
     records = {name: read_json(root / f'{name}-record.json') for name in names}
     logs = {name: edith_cross.peer_log(root, name) for name in names}
     reports = {name: read_json(root / f'{name}_report.json') for name in names}
@@ -1401,23 +1543,27 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
     compared = {pair: sum(row['compared_ticks'] for row in rows) for pair, rows in live.items()}
     mismatched = sum(row['mismatched_ticks'] + row.get('mismatched_applied_input_ticks', 0) for rows in live.values() for row in rows)
     trace_pass = bool((timing.get('proof') or {}).get('pass')) if not dropped else None
-    peers, last_ticks = {}, {}
+    peers, seen = {}, {}
     for name in names:
         metrics = (timing.get('peers', {}).get(name) or {}).get('metrics', {})
         try:
-            seen = edith_cross.live_ticks(root / f'{name}-live.jsonl')
+            seen[name] = set(edith_cross.live_ticks(root / f'{name}-live.jsonl'))
         except (ValueError, OSError):
-            seen = set()
-        last_ticks[name] = max(seen, default=0)
-        peers[name] = dict(box=next(peer['box'] for peer in run['peers'] if peer['name'] == name), exit_code=records[name].get('exit_code'),
-                           timed_out=records[name].get('timed_out'), exe=str(records[name].get('exe_sha256'))[:16], live_ticks=len(seen),
-                           last_tick=last_ticks[name], holds=len(re.findall(r'\[net-match\] hold peer=\d+ frame=\d+', logs[name])),
+            seen[name] = set()
+        peers[name] = dict(box=box_of[name], exit_code=records[name].get('exit_code'),
+                           timed_out=records[name].get('timed_out'), exe=str(records[name].get('exe_sha256'))[:16], live_ticks=len(seen[name]),
+                           last_tick=max(seen[name], default=0), holds=len(re.findall(r'\[net-match\] hold peer=\d+ frame=\d+', logs[name])),
                            wall_tps=metrics.get('steady_wall_tps'), longest_steady_wait_ms=metrics.get('longest_stall_ms'),
                            waiting_percent=(100 * metrics['net_wait_ms'] / metrics['steady_wall_ms']) if metrics.get('steady_wall_ms') else None,
                            input_delays=metrics.get('peer_input_delays'),
                            timing_pass=(timing.get('peers', {}).get(name) or {}).get('pass_check'))
+    last_ticks = {name: peers[name]['last_tick'] for name in names}
+    # History is contiguous: every frame 1..N on every peer, no gap, and every one of them on every peer.
+    contiguous = {name: bool(seen[name]) and seen[name] == set(range(1, max(seen[name]) + 1)) and max(seen[name]) >= ticks for name in hash_peers}
+    common = set.intersection(*(seen[name] for name in hash_peers)) if hash_peers else set()
+    covered = set(range(1, ticks + 1)) <= common
     joiner = next((name for name in names if name != 'host'), 'client')
-    connection = edith_cross.find_key(reports.get(joiner) or {}, 'connection')
+    connections = {name: edith_cross.find_key(reports.get(name) or {}, 'connection') for name in names}
     identities = {name: edith_cross.find_key(reports.get(name) or {}, 'local_identity') for name in names if name != 'host'}
     if facts.get('public'):
         directory_lines = public_directory_lines(session)
@@ -1433,105 +1579,132 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
                 pass
     offer_urls = None if facts['offers_seen'] is None else next((row['urls'] for row in facts['offers_seen'] if row['session_id'] == session), [])
     mode = run['relay']
-    relay = judge_relay(dict(mode=mode, session_id=session, logs=logs, signals=facts['signals'], identities=identities, offers=offers,
-                             offer_urls=offer_urls, connection={peer['name']: peer.get('judged_connection', peer['connection']) for peer in run['peers']},
-                             client_connection=connection if isinstance(connection, dict) else {}, expect_routes=run.get('expect_routes'),
+    provider = run.get('provider') or {'cloudflare': 'cloudflare', 'coturn': 'coturn', 'fixed': 'fixed', 'automatic': 'cloudflare'}[mode]
+    relay = judge_relay(dict(mode=mode, provider=provider, session_id=session, logs=logs, signals=facts['signals'], identities=identities,
+                             offers=offers, offer_urls=offer_urls,
+                             connection={peer['name']: peer.get('judged_connection', peer['connection']) for peer in run['peers']},
+                             reports={name: value if isinstance(value, dict) else {} for name, value in connections.items()},
+                             expect_routes=run.get('expect_routes'),
                              relay_addresses=[facts['coturn_address']] if facts.get('coturn_address') else None,
                              relay_hosts=facts.get('relay_hosts'), run_ends_at=int(facts['ended_epoch']),
-                             overrides_cleared=facts.get('overrides_cleared'),
-                             **({'provider': run['provider']} if 'provider' in run else {})))
-    write_json(root / 'signals-candidates.json', [dict(sender='host' if sender == 'host' else 'client', candidates=[
+                             overrides_cleared=facts.get('overrides_cleared')))
+    owners = sender_peers(facts['signals'], identities, names)
+    write_json(root / 'signals-candidates.json', [dict(peer=owners[sender], sender=sender, candidates=[
         f'{address}:{port} {kind}' for address, port, kind in signal_candidates(payload)],
         payload_sha256=hashlib.sha256(payload.encode()).hexdigest()) for sender, payload in facts['signals']])
     builds = edith_cross.pair_build_evidence(root, dict(source_sha=next(iter({value['head'] for value in facts['identities'].values()}))), records)
     rtts = transport_rtts(host_log)
     judged = run.get('timing_peers') or hash_peers
     sanitize = facts['sanitize']
-    checks = {
-        'identities': all(value['status'] == 'PASS' for value in facts['identities'].values()),
-        'builds': builds['passed'],
-        'exits': complete,
-        'full_history': all(last_ticks[name] >= ticks for name in hash_peers),
-        'hashes_equal': bool(live) and mismatched == 0 and trace_pass is not False and all(
-            value >= ticks - int(run.get('kill_host_at_tick') or 0) for value in compared.values()),
-        'holds': all(peers[name]['holds'] == 0 for name in judged),
-        'feel_bars': all(feel_bars(timing, name)['passed'] for name in judged),
-        'relay': relay['passed'],
-        'route_receipts': relay['receipts_complete'],
-        'endpoint': relay['endpoint'],
-        'rtt_recorded': bool(rtts),
-        'secrets_observed': bool(facts.get('minted')),
-        'no_secret_in_files': bool(sanitize) and all(row.get('hits_before') == 0 for row in sanitize) and all(row['status'] == 'CLEAN' for row in sanitize),
-        'sanitizer_clean': bool(sanitize) and all(row['status'] == 'CLEAN' and row.get('hits_after', 1) == 0 for row in sanitize)
-                           and len(facts.get('fetched', [])) == len(facts['identities']),
-    }
-    if relay['offer_fresh'] is not None:
-        checks['offer_fresh'] = relay['offer_fresh']
-    if mode == 'automatic':
-        checks['direct_expected'] = bool(relay.get('direct_as_expected'))
-    if facts['provider_calls']:
-        checks['provider_201'] = all(call['status'] == 201 for call in facts['provider_calls'])
-    cloudflare_minted = mode in ('cloudflare', 'automatic') or run.get('provider') == 'cloudflare'
-    if cloudflare_minted:
-        checks['logins_revoked'] = bool(facts['revokes']) and len(facts['revokes']) == len({row['username'] for row in facts['minted']}) \
-            and all(status == 204 for status in facts['revokes'])
-    if mode == 'coturn':
-        checks['logins_short_lived'] = bool(facts['minted']) and all(
-            row.get('expires_at') and row.get('minted_at') and 0 < row['expires_at'] - row['minted_at'] <= 900 for row in facts['minted'])
-    details = {}
-    registry = []
-    if mode == 'cloudflare' or run.get('provider') == 'cloudflare' and any(route == 'relay' for route in relay['routes'].values()):
+    minted = facts.get('minted') or []
+    clocks = {}
+    for box, reading in (facts.get('clocks') or {}).items():
+        values = [reading[key] for key in ('before', 'after') if reading.get(key)]
+        if values:
+            offsets = [value['offset_s'] for value in values]
+            clocks[box] = (sum(offsets) / len(offsets), max(value['uncertainty_s'] for value in values) + (max(offsets) - min(offsets)) / 2)
+    box_clock = {box: read_json(root / f'{box}-clock.json') for box in set(box_of.values())}
+    details, registry = {}, []
+
+    def detail(key, value):
+        details[key] = value
+        return bool(value.get('passed'))
+
+    def registrants():
         addresses = sorted({address for entry in relay['peers'].values() for address in entry.get('relay_addresses') or []})
-        registry = [registrant(address) for address in addresses]
-        checks['relay_registrant'] = bool(registry) and all(row.get('cloudflare') for row in registry)
-    for peer in run['peers']:
-        if peer.get('tailscale_down'):
+        registry.extend(registrant(address) for address in addresses)
+        return bool(registry) and all(row.get('cloudflare') for row in registry)
+
+    def peer_check(key):
+        kind, name = key.split(':', 1)
+        peer = next((peer for peer in run['peers'] if peer['name'] == name), None)
+        if peer is None:
+            return False
+        if kind == 'tunnel':
             rows = read_json(root / f'{peer["box"]}-tailscale.json')
-            details[f'tunnel:{peer["name"]}'] = tunnel_receipt(rows if isinstance(rows, list) else [], [peer['name']], ticks * TICK_S * 0.9)
-        if peer.get('panel_probe'):
-            details[f'panel:{peer["name"]}'] = panel_verdict(read_json(root / f'{peer["name"]}-panel' / 'net-ui-result.json') or None)
-        if peer.get('menu_choice'):
-            details[f'menu_choice:{peer["name"]}'] = (menu_choice(logs.get(peer['name'], ''), peer['menu_choice'], session) if session
-                                                       else dict(passed=False, reasons=['no session to bind the choice to']))
-    if run.get('holds_allowed'):
+            return detail(key, tunnel_receipt(rows if isinstance(rows, list) else [], [name]))
+        if kind == 'panel':
+            return detail(key, panel_verdict(read_json(root / f'{name}-panel' / 'net-ui-result.json') or None))
+        if kind == 'menu_choice':
+            return detail(key, menu_choice(logs.get(name, ''), peer.get('menu_choice', 'Relay only'), session) if session
+                          else dict(passed=False, reasons=['no session to bind the choice to']))
+        return False
+
+    def renewal():
+        relayed = [peer['name'] for peer in run['peers'] if peer.get('judged_connection', peer['connection']) == 'RelayOnly']
+        return detail('renewal', renewal_evidence(
+            logs, facts['provider_calls'], relayed, ttl_s=int(run['relay_ttl_cap']) if run.get('relay_ttl_cap') else None,
+            line_times={name: (box_clock.get(box_of[name]) or {}).get('lines', {}).get(name, []) for name in relayed},
+            samples={name: (box_clock.get(box_of[name]) or {}).get('samples', {}).get(name, []) for name in relayed},
+            first_expiry=minted[0].get('expires_at') if minted else None,
+            clocks={name: clocks.get(box_of[name]) for name in relayed}, session=session))
+
+    def seat_holds_check():
         summary = ((reports.get('host') or {}).get('last_match') or {}).get('peers') or []
         named = [dict(row, name=next((peer['name'] for peer in run['peers'] if display_name(run, peer) == row.get('name')), row.get('name')))
                  for row in summary]
-        details['seat_holds'] = seat_holds(named, set(run['holds_allowed']), set(names))
-    if int(run.get('relay_ttl_cap') or 86400) <= 600 and mode != 'coturn':
-        ttl = int(run['relay_ttl_cap'])
-        details['renewal'] = renewal_evidence(logs, facts['provider_calls'],
-                                              [peer['name'] for peer in run['peers'] if peer.get('judged_connection', peer['connection']) == 'RelayOnly'],
-                                              ttl_s=ttl, frames_past_expiry=all(last_ticks[name] * TICK_S > ttl for name in hash_peers))
-    if dropped:
-        details['migration'] = migration_declarations(logs, hash_peers, session, {peer['name']: display_name(run, peer) for peer in run['peers']},
-                                                      last_ticks)
-    if facts.get('public') and any(peer.get('hotspot') for peer in run['peers'] if peer['name'] == 'host'):
+        return detail('seat_holds', seat_holds(named, set(run.get('holds_allowed') or []), set(names)))
+
+    def listing():
         listed = (read_json(root / f'{joiner}-listed.json') or {}).get('session_id') == session
-        details['listing'] = listing_evidence(directory_lines, session, listed)
-    if facts.get('fixed_pair'):
-        details['menu_entered'] = (menu_choice(logs.get('host', ''), 'Relay only', session) if session
-                                   else dict(passed=False, reasons=['no session to bind the choice to']))
-        checks['pair_blanked'] = bool(sanitize) and all(row['status'] == 'CLEAN' and row.get('hits_after') == 0 for row in sanitize)
-        details['pair_ttl'] = facts.get('pair_ttl') or dict(passed=False, reasons=['the pair was never asked after its TTL'])
-        expiry = int(facts['fixed_pair'][0].split(':', 1)[0])
-        checks['logins_short_lived'] = facts.get('minted_at') is not None and 0 < expiry - facts['minted_at'] <= 900
-    checks.update({name: value['passed'] for name, value in details.items()})
-    required = REQUIRED.get(run['name'], BASE)
-    if 'no_secret_in_files' not in required:  # a pair typed into the menus is judged by pair_blanked instead
-        details['pair_on_disk'] = dict(passed=True, files=[(row['box'], row.get('hits_before')) for row in sanitize])
-        checks.pop('no_secret_in_files', None)
+        return detail('listing', listing_evidence(directory_lines, session, listed))
+
+    def short_lived():
+        if facts.get('fixed_pair'):
+            expiry = int(facts['fixed_pair'][0].split(':', 1)[0])
+            return facts.get('minted_at') is not None and 0 < expiry - facts['minted_at'] <= 900
+        return bool(minted) and all(row.get('expires_at') and row.get('minted_at') and 0 < row['expires_at'] - row['minted_at'] <= 900
+                                    for row in minted)
+
+    compute = {
+        'identities': lambda: all(value['status'] == 'PASS' for value in facts['identities'].values()),
+        'builds': lambda: builds['passed'],
+        'exits': lambda: complete,
+        'full_history': lambda: bool(hash_peers) and all(contiguous[name] for name in hash_peers),
+        'hashes_equal': lambda: bool(live) and mismatched == 0 and trace_pass is not False and covered and all(
+            value >= ticks - int(run.get('kill_host_at_tick') or 0) for value in compared.values()),
+        'holds': lambda: all(peers[name]['holds'] == 0 for name in judged),
+        'feel_bars': lambda: all(feel_bars(timing, name)['passed'] for name in judged),
+        'relay': lambda: relay['passed'],
+        'route_receipts': lambda: relay['receipts_complete'],
+        'endpoint': lambda: relay['endpoint'],
+        'rtt_recorded': lambda: bool(rtts),
+        'secrets_observed': lambda: bool(minted),
+        'no_secret_in_files': lambda: bool(sanitize) and all(row.get('hits_before') == 0 and row['status'] == 'CLEAN' for row in sanitize),
+        'sanitizer_clean': lambda: bool(sanitize) and all(row['status'] == 'CLEAN' and row.get('hits_after', 1) == 0 for row in sanitize)
+                                   and len(facts.get('fetched', [])) == len(facts['identities']),
+        'pair_blanked': lambda: bool(sanitize) and all(row['status'] == 'CLEAN' and row.get('hits_after') == 0 for row in sanitize),
+        'offer_fresh': lambda: bool(relay['offer_fresh']),
+        'direct_expected': lambda: bool(relay['direct_as_expected']),
+        'provider_201': lambda: bool(facts['provider_calls']) and all(call['status'] == 201 for call in facts['provider_calls']),
+        'logins_revoked': lambda: bool(facts['revokes']) and len(facts['revokes']) == len({row['username'] for row in minted})
+                                  and all(status == 204 for status in facts['revokes']),
+        'logins_short_lived': short_lived,
+        'relay_registrant': registrants,
+        'menu_entered': lambda: detail('menu_entered', menu_choice(logs.get('host', ''), 'Relay only', session) if session
+                                       else dict(passed=False, reasons=['no session to bind the choice to'])),
+        'pair_ttl': lambda: detail('pair_ttl', facts.get('pair_ttl') or dict(passed=False, reasons=['the pair was never asked after its TTL'])),
+        'renewal': renewal,
+        'migration': lambda: detail('migration', migration_declarations(
+            logs, hash_peers, session, {peer['name']: display_name(run, peer) for peer in run['peers']}, last_ticks)),
+        'listing': listing,
+        'seat_holds': seat_holds_check,
+    }
+    checks = {}
     for name in required:
-        checks.setdefault(name, False)  # a required check the run did not produce is a failed check
+        producer = compute.get(name) or ((lambda key=name: peer_check(key)) if ':' in name else None)
+        checks[name] = bool(producer()) if producer else False  # a check the run cannot produce fails
+    if 'pair_blanked' in required:
+        details['pair_on_disk'] = dict(passed=True, files=[(row['box'], row.get('hits_before')) for row in sanitize])
     details.update({f'feel:{name}': feel_bars(timing, name) for name in judged})
+    details['history'] = dict(contiguous=contiguous, covered=covered, compared=compared)
     passed = all(checks.values())
     verdict = dict(name=run['name'], scenario=scenario['name'], relay=run['relay'], root=str(root), passed=passed, checks=checks,
                    required=list(required), details=details, registry=registry, session_id=session, peers=peers, relay_evidence=relay,
                    rtt=rtts, delay_changes=delay_changes(host_log), compared_ticks=compared, desyncs=mismatched, builds=builds,
-                   provider_calls=facts['provider_calls'], revokes=facts.get('revokes'), minted_logins=len(facts.get('minted') or []),
+                   provider_calls=facts['provider_calls'], revokes=facts.get('revokes'), minted_logins=len(minted),
                    stun_legs=facts['legs'], ports=facts['ports'], states=facts['states'], started=facts['started'], finished=facts['finished'],
-                   sanitize=sanitize, ticks=ticks, binding_note='by exclusion: every inherited relay setting cleared; the relay candidates '
-                   'each relayed peer sent sit at the provider\'s addresses (the engine does not yet name the selected endpoint)')
+                   sanitize=sanitize, ticks=ticks, clocks=clocks, binding_note=relay['binding_note'])
     write_json(root / 'relay-verdict.json', verdict)
     cell = lambda key, fmt='{}': '/'.join('-' if peers[name][key] is None else fmt.format(peers[name][key]) for name in names)
     say(f'RUN {run["name"]} {"PASS" if passed else "FAIL"} {json.dumps({k: v for k, v in checks.items() if not v})} '
@@ -1602,6 +1775,59 @@ def tailscale(command: list[str]) -> dict:
     return row
 
 
+class BoxClock(threading.Thread):
+    """Runs on a game box beside its engines: each second, every renewal, route or migration line its peers print and each
+    peer's newest live tick, stamped with this box's clock, so the driver can judge them against its own events."""
+    PATTERN = re.compile(r'\[net-relay\] relay login renewed|\[net-route\] RouteAllowed|\[net-ice\] selected candidate|is now hosting; boundary=')
+
+    def __init__(self, root: Path, peers: list[str]) -> None:
+        super().__init__(daemon=True)
+        self.root, self.peers, self.stopping = root, peers, threading.Event()
+        self.offsets = {peer: 0 for peer in peers}
+        self.lines = {peer: [] for peer in peers}
+        self.samples = {peer: [] for peer in peers}
+
+    def run(self) -> None:
+        while not self.stopping.is_set():
+            self.sample()
+            self.stopping.wait(1)
+        self.sample()
+
+    def sample(self) -> None:
+        now = time.time()
+        for peer in self.peers:
+            try:
+                with (self.root / peer / 'stdout.log').open('rb') as stream:
+                    stream.seek(self.offsets[peer])
+                    chunk = stream.read()
+            except OSError:
+                chunk = b''
+            cut = chunk.rfind(b'\n') + 1
+            self.offsets[peer] += cut
+            for line in chunk[:cut].decode('utf-8', 'replace').splitlines():
+                if self.PATTERN.search(line):
+                    self.lines[peer].append([now, line.strip()[:300]])
+            tick = last_live_tick(self.root / f'{peer}-live.jsonl')
+            if tick is not None and (not self.samples[peer] or self.samples[peer][-1][1] != tick):
+                self.samples[peer].append([now, tick])
+
+    def finish(self, path: Path) -> None:
+        self.stopping.set()
+        self.join(timeout=10)
+        write_json(path, dict(clock='this box, epoch seconds', lines=self.lines, samples=self.samples))
+
+
+def last_live_tick(path: Path) -> int | None:
+    try:
+        with path.open('rb') as stream:
+            stream.seek(0, 2)
+            stream.seek(max(0, stream.tell() - 8192))
+            tail = stream.read().rstrip().rsplit(b'\n', 1)[-1]
+        return int(json.loads(tail).get('tick'))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
 def remote_peers(spec_path: str) -> int:
     """Runs on a game box inside its session task: its peers through the runner, a joiner after the host is listed. The
     tailnet a row took down comes back up in a finally that survives any cleanup error, with its receipt."""
@@ -1612,6 +1838,8 @@ def remote_peers(spec_path: str) -> int:
     toggled = any(spec.get('tailscale_down') for spec in specs)
     receipt: list[dict] = []
     running, results = [], {}
+    clock = BoxClock(root, [spec['peer'] for spec in specs])
+    clock.start()
     try:
         h = edith_cross.harness(Path(specs[0]['repo']) / 'tools')
         if toggled:
@@ -1657,11 +1885,14 @@ def remote_peers(spec_path: str) -> int:
             for spec, run in running:
                 edith_cross.redact(h, run, spec)
     finally:
-        if toggled:
-            try:
-                receipt.append(dict(tailscale(['up']), step='up'))
-            finally:
-                write_json(root / f'{specs[0]["box"]}-tailscale.json', receipt)
+        try:
+            clock.finish(root / f'{specs[0]["box"]}-clock.json')
+        finally:
+            if toggled:
+                try:
+                    receipt.append(dict(tailscale(['up']), step='up'))
+                finally:
+                    write_json(root / f'{specs[0]["box"]}-tailscale.json', receipt)
     try:
         h.records.compress_case_records(root)
     except Exception as error:
@@ -1806,7 +2037,7 @@ def table(roots: list[Path]) -> dict:
 
 
 def main(argv=None) -> int:
-    global DRY_RUN
+    global DRY_RUN, REDACTOR, LANE
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--scenario')
     parser.add_argument('--run', action='append', default=[])
@@ -1847,11 +2078,12 @@ def main(argv=None) -> int:
     trees = dict(pair.split('=', 1) for pair in options.tree)
     aliases = dict(scenario.get('aliases') or {}, **dict(pair.split('=', 1) for pair in options.alias))
     boxes = load_boxes(trees, aliases)
-    from relay_secrets import SecretBook
-    book = SecretBook()
+    from relay_secrets import RETIRED_USERNAME_SCOPE, SecretBook
+    book = REDACTOR = SecretBook()
     if RETIRED_FIXED_CONF.is_file():
-        book.add_fixed_login(RETIRED_FIXED_CONF)  # its leak is still found; no run uses it
+        book.add_fixed_login(RETIRED_FIXED_CONF, RETIRED_USERNAME_SCOPE)  # its leak is still found; no run uses it
     out = options.out.resolve()
+    LANE = lane_for(out)
     if not DRY_RUN:
         out.mkdir(parents=True, exist_ok=False)
     verdicts = []
@@ -1868,7 +2100,7 @@ def main(argv=None) -> int:
             say(f'{run["name"]}: {type(error).__name__}: {error}')
             verdicts.append(dict(name=run['name'], root=str(out / run['name']), passed=False, refused=f'{type(error).__name__}: {error}'))
     if DRY_RUN:
-        print(json.dumps(verdicts, indent=1))
+        print(redacted(json.dumps(verdicts, indent=1)))
         return 0
     identities = out / 'identities'
     identities.mkdir(exist_ok=True)
@@ -1879,7 +2111,7 @@ def main(argv=None) -> int:
                     checklist=[item for item in scenario['checklist'] if not options.run or item['run'] in options.run])
     document = review(selected, verdicts, out)
     from relay_secrets import sweep
-    scan = sweep([out], book.finder(), public=published_check())
+    scan = sweep([out], book.finder())
     write_json(out / 'secret-scan.json', scan)
     status = exit_status(document, verdicts, scan)
     say(f'{scenario["name"]}: {document["verdict"]} {document["counts"]} final sweep {scan["status"]} ({scan["files_scanned"]} files) exit={status}')
