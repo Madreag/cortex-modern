@@ -10963,8 +10963,9 @@ int main(int argc, char** argv) {
 	ScenarioRunner::SetLockstepStallUIProbeArmed(netUiProbeScript != nullptr && *netUiProbeScript != '\0');
 
 	const bool mainArgsValid = HandleMainArgs(argc, argv);
-	// Only a menu script or the UI probe reads what the renderer drew.
-	SetPanelDrawRecording(!s_menuScriptPath.empty() || (netUiProbeScript != nullptr && *netUiProbeScript != '\0'));
+	// Only a menu script, the UI probe or a harness's screen watches read what the renderer drew.
+	const char* screenWatches = std::getenv("CCCP_TEST_SCREEN_WATCHES");
+	SetPanelDrawRecording(!s_menuScriptPath.empty() || (netUiProbeScript != nullptr && *netUiProbeScript != '\0') || (screenWatches != nullptr && *screenWatches != '\0'));
 	// The instruments this process runs, from the levers it was launched with: every frame's cost receipt names each one's measured cost.
 	{
 		const auto armed = [](const char* name) { const char* value = std::getenv(name); return value && *value; };
