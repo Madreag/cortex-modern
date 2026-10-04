@@ -154,8 +154,8 @@ namespace RTE {
 		// older copy would name a revision it has already passed.
 		AdoptLobbyConfig();
 		if (admission.GetRoster().revision == m_MatchConfig.seatRosterRevision || m_Lobby.IsStarted()) return;
-		NetMatchConfig stamped = m_MatchConfig;
-		stamped.configRevision = m_MatchConfig.configRevision + 1;
+		NetMatchConfig stamped = m_Lobby.GetMatchConfig();
+		stamped.configRevision = m_Lobby.GetMatchConfig().configRevision + 1;
 		stamped.seatRosterRevision = admission.GetRoster().revision;
 		stamped.seatRosterHash = HashRoster(admission.GetRoster());
 		// A forming round's members are the roster's: a seat that drops or that the host opens leaves them and starts held.
@@ -239,7 +239,8 @@ namespace RTE {
 	}
 
 	void NetMatchRunner::AdoptLobbyConfig() {
-		if (!m_Config.host || m_Lobby.GetMatchConfig().configRevision == m_MatchConfig.configRevision) return;
+		// The lobby also changes what it publishes without a new revision (a joiner's name and delay, the migration roster): its hash decides.
+		if (!m_Config.host || (m_Lobby.GetMatchConfigHash() == m_MatchConfigHash && m_Lobby.GetMatchConfig().configRevision == m_MatchConfig.configRevision)) return;
 		m_MatchConfig = m_Lobby.GetMatchConfig();
 		m_Config.matchConfig = m_MatchConfig;
 		m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
