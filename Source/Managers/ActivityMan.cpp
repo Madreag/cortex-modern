@@ -1986,6 +1986,11 @@ bool ActivityMan::LoadAndLaunchGame(const std::string& fileName) {
 		return false;
 	}
 	g_ConsoleMan.PrintString("SYSTEM: Game \"" + fileName + "\" loaded!");
+	if (std::getenv("CC_TEST_UID_CENSUS")) {
+		long highest = 0;
+		for (const MovableObject* object: g_MovableMan.SnapshotKnownObjects()) highest = std::max(highest, object->GetUniqueID());
+		System::PrintDiagnosticLine("[load-game] uid_counter=" + std::to_string(MovableObject::GetUniqueIDCounter()) + " highest_known=" + std::to_string(highest));
+	}
 	return true;
 }
 
