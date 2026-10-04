@@ -3786,17 +3786,28 @@ static std::string ResyncSaveName() {
 		for (const NetWorldJoinSession& session: sessions)
 			if (session.phase != NetWorldJoinPhase::Active && session.snapshotTick != 0) floor = std::min(floor, session.acknowledgedThrough + 1);
 		// A held seat may come back holding its own state from just before its hold for as long as the host's return window keeps it.
-		const auto window = static_cast<uint64_t>(std::ceil(returnWindowMinutes * 60000.0 / (tickMs > 0.0 ? tickMs : 1000.0 / 60.0)));
+		const uint64_t window = ReturnWindowFrames(returnWindowMinutes, tickMs);
 		const uint64_t skew = NetLockstepCodec::c_MaxFutureFrameSkew;
 		for (const auto& [peer, hold]: holds)
 			if (tick < hold.cutoffFrame + window) floor = std::min(floor, hold.cutoffFrame > skew ? hold.cutoffFrame - skew : 1);
 		return floor;
 	}
 
+	uint64_t NetMatchService::ReturnWindowFrames(uint8_t minutes, double tickMs) {
+		return static_cast<uint64_t>(std::ceil(minutes * 60000.0 / (tickMs > 0.0 ? tickMs : 1000.0 / 60.0)));
+	}
+
+	uint64_t NetMatchService::EffectiveJoinRetention(const NetJoinHistoryPolicy& policy, double tickMs, bool* byWindow) {
+		// A return inside the agreed window resumes from frames reaching back to its hold's floor, so the history never holds less.
+		const uint64_t window = policy.retainFrames == 0 ? 0 : ReturnWindowFrames(policy.returnWindowMinutes, tickMs) + NetLockstepCodec::c_MaxFutureFrameSkew + 1;
+		if (byWindow) *byWindow = window > policy.retainFrames;
+		return std::max(policy.retainFrames, window);
+	}
+
 	uint64_t NetMatchService::StepJoinHistory(NetWorldJoinHost& host, uint64_t tick, std::optional<uint64_t> servedBaseTick, const std::map<uint8_t, NetGameSeatHold>& holds, double tickMs,
 	                                          const NetJoinHistoryPolicy& policy, std::vector<NetJoinHistoryEnd>* ends) {
 		NetWorldFrameLog& tail = host.Tail();
-		tail.SetJournalRetention(policy.retainFrames);
+		tail.SetJournalRetention(EffectiveJoinRetention(policy, tickMs, nullptr));
 		const bool journalFailed = tail.JournalFailed();
 		if (std::string why; tail.TakeJournalFailure(why))
 			System::PrintDiagnosticLine(std::format("[round-history] journal failed tick={} file={} reason={} memory_frames={}..{}", tick, tail.JournalFileName(), why, tail.FirstFrame(), tail.LastFrame()));
@@ -3858,6 +3869,7 @@ static std::string ResyncSaveName() {
 		NetJoinHistoryPolicy policy = JoinHistoryPolicyFromSettings(tickMs);
 		policy.returnWindowMinutes = m_Coordinator->GetConfig().matchConfig.returnWindowMinutes;
 		const uint64_t floor = StepJoinHistory(m_WorldJoin, tick, ServedReturnBaseLocked(SteadyNowMs()), m_Coordinator->HeldTransactions(), tickMs, policy, &ends);
+		(void)EffectiveJoinRetention(policy, tickMs, &m_JoinRetentionByWindow);
 		m_LastReturnHistoryFloor = floor;
 		m_Coordinator->SetReturnHistoryFloor(floor);
 		// A returning seat goes back for a fresh image on its ticket; any other reader is told the world moved on past it.
@@ -3975,10 +3987,10 @@ static std::string ResyncSaveName() {
 					if (tail.JournalRetention() != 0) journalBound = std::min(journalBound, tail.JournalRetention() + NetWorldFrameLog::c_JournalSegmentFrames);
 					System::PrintDiagnosticLine(std::format("[round-history] tick={} memory_frames={} memory_bytes={} memory_bound_frames={} memory_bound_bytes={} journal_files={} journal_bytes={} "
 					                                        "journal_first={} journal_last={} floor={} journal_bound_frames={} journal_index_bytes={} journal_cached_reads={} journal_cached_read_bytes={} "
-					                                        "journal_retain_frames={} journal_failed={} journal_reopens={}",
+					                                        "journal_retain_frames={} journal_failed={} journal_reopens={} journal_retain_by={}",
 					                                        tick, tail.Count(), tail.Bytes(), tail.MaxFrames(), tail.MaxBytes(), journal.files, journal.bytes, journal.first, journal.last,
 					                                        m_LastReturnHistoryFloor, journalBound, journal.indexBytes, journal.cachedReads, journal.cachedReadBytes, tail.JournalRetention(),
-					                                        tail.JournalFailed(), tail.JournalReopens()));
+					                                        tail.JournalFailed(), tail.JournalReopens(), m_JoinRetentionByWindow ? "return_window" : "world_history"));
 				}
 				if (m_WorldJoin.IsConfigured()) {
 					// The image is published when the writer thread has finished this archive, from the pump.

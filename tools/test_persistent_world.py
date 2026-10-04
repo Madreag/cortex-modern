@@ -1198,16 +1198,17 @@ def world_journal_fault(repo: Path, out: Path, port: int = SEGMENT_PORT, fault_a
     """A live two-peer world whose host's journal fails mid-round: it is named, reopened, and the member never waits.
 
     One round runs twice on one port: a control, then the same round with the host's journal faulted at frame
-    `fault_at` (CCCP_TEST_JOURNAL_FAULT=write:<frame> in the host's environment) and its retained history at 60 s.
-    The faulted host must name the failure and the reopen in its [round-history] receipts and keep its journal inside
-    its policy at every autosave after the reopen; both rounds must end cleanly with every shared tick hash equal, and
-    each peer's wall tps is reported beside the control's."""
+    `fault_at` (CCCP_TEST_JOURNAL_FAULT=write:<frame> in the host's environment), its World history at 60 s and its return
+    window at 30 minutes. The faulted host must name the failure and the reopen in its [round-history] receipts and keep its
+    journal inside its policy at every autosave after the reopen, the retention set by the window (never shorter than it);
+    both rounds must end cleanly with every shared tick hash equal, and each peer's wall tps is reported beside the control's."""
     tools = Path(__file__).resolve().parent
     sys.path.insert(0, str(tools))
     import test_autosave_restore as restore
 
     original = restore.make_run
-    retain_frames = 60 * 60
+    # The window's frames at 60 Hz; the retention it sets adds the frames a hold reaches back.
+    window_frames = 30 * 60 * 60
     segment = 3600
 
     def run_round(name: str, host_env: dict, host_settings: dict):
@@ -1240,7 +1241,7 @@ def world_journal_fault(repo: Path, out: Path, port: int = SEGMENT_PORT, fault_a
         return root, {"ticks": [first, last], "wall_tps": tps}
 
     control_root, control = run_round("control", {}, {})
-    faulted_root, faulted = run_round("faulted", {"CCCP_TEST_JOURNAL_FAULT": f"write:{fault_at}"}, {"NetworkHostJoinHistorySeconds": "60"})
+    faulted_root, faulted = run_round("faulted", {"CCCP_TEST_JOURNAL_FAULT": f"write:{fault_at}"}, {"NetworkHostJoinHistorySeconds": "60", "NetworkHostReturnWindowMinutes": "30"})
     host_log = restore.peer_log(faulted_root, "host")
     failed = re.search(r"^\[round-history\] journal failed tick=(\d+) file=(\S+) reason=(.*) memory_frames=(\d+)\.\.(\d+)$", host_log, re.MULTILINE)
     assert failed and f"its write of frame {fault_at} failed" in failed[3], f"{RED_LIVE_JOURNAL_UNNAMED}: {failed[0] if failed else 'no failure receipt'}"
@@ -1252,13 +1253,17 @@ def world_journal_fault(repo: Path, out: Path, port: int = SEGMENT_PORT, fault_a
     for receipt in after:
         frames = int(receipt["journal_last"]) + 1 - int(receipt["journal_first"]) if int(receipt["journal_first"]) else 0
         assert receipt["journal_failed"] == "false" and receipt["journal_reopens"] == "1", f"{RED_LIVE_JOURNAL_NOT_REOPENED}: {receipt}"
-        assert int(receipt["journal_retain_frames"]) == retain_frames and frames <= retain_frames + segment, f"{RED_LIVE_JOURNAL_PAST_POLICY}: {receipt}"
+        retain = int(receipt["journal_retain_frames"])
+        assert receipt.get("journal_retain_by") == "return_window" and window_frames < retain <= window_frames + 200 and frames <= retain + segment, \
+            f"{RED_LIVE_JOURNAL_PAST_POLICY}: {receipt}"
     verdict = {"control": control, "faulted": faulted, "failed": failed[0], "reopened": reopened[0], "receipts_after_reopen": len(after),
-               "largest_journal_frames": max(int(r["journal_last"]) + 1 - int(r["journal_first"]) for r in after if int(r["journal_first"]))}
+               "largest_journal_frames": max(int(r["journal_last"]) + 1 - int(r["journal_first"]) for r in after if int(r["journal_first"])),
+               "retain_frames": int(after[-1]["journal_retain_frames"]), "retain_by": after[-1]["journal_retain_by"]}
     (Path(out) / "journal_fault_verdict.json").write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
     print(f"[world-journal-fault] {failed[0]}", flush=True)
     print(f"[world-journal-fault] {reopened[0]}", flush=True)
-    print(f"[world-journal-fault] receipts_after_reopen={len(after)} largest_journal_frames={verdict['largest_journal_frames']} bound={retain_frames + segment} "
+    print(f"[world-journal-fault] receipts_after_reopen={len(after)} largest_journal_frames={verdict['largest_journal_frames']} "
+          f"retain_frames={verdict['retain_frames']} retain_by={verdict['retain_by']} (World history 60 s, return window 30 min) "
           f"wall_tps control host={control['wall_tps']['host']:.2f} client={control['wall_tps']['client']:.2f} "
           f"faulted host={faulted['wall_tps']['host']:.2f} client={faulted['wall_tps']['client']:.2f}", flush=True)
     return verdict

@@ -885,6 +885,11 @@ namespace RTE {
 		                                const NetJoinHistoryPolicy& policy, std::vector<NetJoinHistoryEnd>* ends);
 		/// The host's options for a join plane's round history, in frames of a round whose tick is tickMs.
 		static NetJoinHistoryPolicy JoinHistoryPolicyFromSettings(double tickMs);
+		/// The frames of a round at tickMs that a return window of this many minutes spans.
+		static uint64_t ReturnWindowFrames(uint8_t minutes, double tickMs);
+		/// The journal retention a policy runs: the host's World history, never shorter than the agreed return window and the frames a held
+		/// seat's floor reaches back before its hold. byWindow says the window set it. 0 leaves the journal to its readers.
+		static uint64_t EffectiveJoinRetention(const NetJoinHistoryPolicy& policy, double tickMs, bool* byWindow);
 		static bool ReadCommittedJoinFrame(const NetLockstepCoordinator& coordinator, uint64_t tick, NetLockstepReadyFrame& ready);
 		/// The image one finished archive describes. An entry the writer has not filled yields an
 		/// image that is not valid, so nothing is published for it.
@@ -1592,6 +1597,7 @@ namespace RTE {
 		std::optional<WorldSeatChange> m_LastWorldRelease;   //!< Host: the world slot it last freed.
 		std::optional<WorldSeatChange> m_LastWorldPromotion; //!< Host: the watcher it last promoted into a freed slot.
 		uint64_t m_LastReturnHistoryFloor = 0;               //!< The oldest frame a returner may still be served from, as last pruned to.
+		bool m_JoinRetentionByWindow = false;                //!< The last history pass's retention came from the agreed return window, not World history.
 		mutable std::pair<uint32_t, size_t> m_LiveModerationKey{UINT32_MAX, 0}; //!< The roster revision and ban count the cached live state was read at.
 		mutable std::string m_LiveModerationState;
 		struct RosterTransition {

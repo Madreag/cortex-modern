@@ -3670,6 +3670,7 @@ namespace RTE {
 		NetJoinHistoryPolicy policy;
 		policy.retainFrames = retainFrames;
 		policy.lagLimitFrames = lagLimitFrames;
+		policy.returnWindowMinutes = 1;
 		std::vector<NetJoinHistoryEnd> ends;
 		uint64_t applied = 0, endedAt = 0;
 		double stepMaxUs = 0.0;
@@ -3700,7 +3701,7 @@ namespace RTE {
 			}
 		}
 		const NetWorldFrameLog::JournalStats stats = SettledJournalStats(tail);
-		const uint64_t frames = stats.first != 0 ? stats.last + 1 - stats.first : 0, bound = retainFrames + segment;
+		const uint64_t frames = stats.first != 0 ? stats.last + 1 - stats.first : 0, bound = NetMatchService::EffectiveJoinRetention(policy, tickMs, nullptr) + segment;
 		if (frames > bound || files() > bound / segment + 1)
 			return Fail("journal-grew-past-its-policy: " + std::to_string(frames) + " frames, " + std::to_string(stats.bytes) + " bytes in " + std::to_string(files()) +
 			            " files after " + std::to_string(lastTick) + " ticks against a bound of " + std::to_string(bound) + " frames (retain " + std::to_string(retainFrames) +
