@@ -58,12 +58,12 @@ namespace RTE {
 
 	/// The world history row's consequence.
 	inline const char* NetJoinHistoryHint() {
-		return "Longer history lets slower joiners catch up and uses more host disk.";
+		return "History this host keeps for joiners and returns, never shorter than the return window. Longer lets slow joiners catch up but uses more disk.";
 	}
 
 	/// The catch-up limit row's consequence.
 	inline const char* NetJoinLagHint() {
-		return "A watcher or return trailing past the limit starts over from an image.";
+		return "A watcher or returning player who trails the round past this limit without gaining on it starts over from a fresh image.";
 	}
 
 	/// One world history or catch-up limit choice, as its row names it.

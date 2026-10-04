@@ -408,6 +408,11 @@ namespace RTE {
 		GUIComboBox* m_HostRecReturnWindowCombo = nullptr; //!< How long a held seat may come back in place.
 		GUIComboBox* m_HostRecJoinHistoryCombo = nullptr; //!< How long this host keeps a world's round history for joiners and returns.
 		GUIComboBox* m_HostRecJoinLagCombo = nullptr;     //!< How far a watcher or returning seat may trail before it starts over.
+		GUILabel* m_HostRecOptionHintLabel = nullptr;     //!< The consequence of the window or history row the player points at or has focused.
+		std::array<GUIControl*, 6> m_HostRecHintRowControls{}; //!< Each of those rows' label and combo, in row order.
+		int m_HostRecHintRow = 0;                         //!< The row the hint names: the last one pointed at or focused; the Return window first.
+		/// Logs the history policy this host would run under the drafted return window and its own history options.
+		void LogHostHistoryPolicy() const;
 		GUILabel* m_HostRecWaitingLabel = nullptr;
 		GUILabel* m_HostRecRepairHintLabel = nullptr;    //!< H25: repair row's own status - hint, confirm line, or live progress.
 		bool m_HostRecRepairArmed = false;             //!< H25: first press arms; the second calls ResyncMatch.

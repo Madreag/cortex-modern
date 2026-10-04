@@ -255,10 +255,19 @@ def version_line():
     return f"v{game}, multiplayer {(tree / 'VERSION.txt').read_text(encoding='utf-8').strip()} (protocol {protocol})"
 
 
-# The Recovery page's history rows: their consequences, and the policy the host runs once the rows pick 10 minutes and 1 minute.
-JOIN_HISTORY_HINT = "Longer history lets slower joiners catch up and uses more host disk."
-JOIN_LAG_HINT = "A watcher or return trailing past the limit starts over from an image."
-JOIN_HISTORY_POLICY = "[round-history] host options world_history_s=600 catch_up_limit_s=60 retain_frames=36000 lag_limit_frames=3600"
+def host_hint(name):
+    """A consequence the host options page shows, read from its owner, Source/Menus/NetHostOptionsText.h."""
+    header = (Path(__file__).resolve().parents[1] / "Source/Menus/NetHostOptionsText.h").read_text(encoding="utf-8")
+    found = re.search(r"inline const char\* " + name + r"\(\) \{\s*return \"([^\"]*)\";", header)
+    if not found:
+        raise RuntimeError(f"NetHostOptionsText.h names no {name}()")
+    return found[1]
+
+
+# The policy the host runs once the Recovery rows pick a 10-minute return window, 10 minutes of history and a 1-minute limit: the window
+# plus the frames its hold reaches back is longer than the history, so the window sets the retention.
+JOIN_HISTORY_POLICY = re.compile(r"\[round-history\] host options world_history_s=600 catch_up_limit_s=60 return_window_min=10 "
+                                 r"retain_frames=(\d+) retain_by=return_window lag_limit_frames=3600")
 
 
 def checks(control, parent):
@@ -1434,26 +1443,28 @@ def scripts(case, port, root, size="960x540"):
         text += "assert_label LabelHostRecAutosaveNote Every player takes each checkpoint at the same tick; a player who rejoins starts from one.\n"
         text += checks("LabelHostRecAutosaveCost", "CollectionBoxHostPageRecovery")
         text += "assert_label LabelHostRecAutosaveCost Saving may cause a brief pause for other players on slower hosts\n"
-        # The return window: five minutes by default, its consequence named under the page, a pick drafted at once.
-        for control in ("LabelHostRecReturnWindow", "ComboHostRecReturnWindow", "LabelHostRecReturnWindowHint"):
+        # The return window: five minutes by default, its consequence in the page's hint area when the row is pointed at, a pick drafted at once.
+        for control in ("LabelHostRecReturnWindow", "ComboHostRecReturnWindow", "LabelHostRecOptionHint"):
             text += checks(control, "CollectionBoxHostPageRecovery")
         text += ("assert_label LabelHostRecReturnWindow Return window\n"
                  "assert_label ComboHostRecReturnWindow 5 minutes\n"
-                 "assert_label LabelHostRecReturnWindowHint A return within the window resumes from the player's held state, "
-                 "a later one loads an image. A longer window keeps more history on the host.\n"
+                 f"focus ComboHostRecReturnWindow\nwait_ms 300\nassert_label LabelHostRecOptionHint {host_hint('NetReturnWindowHint')}\n"
                  "combo_select ComboHostRecReturnWindow 10 minutes\nwait_ms 500\n"
                  "assert_label ComboHostRecReturnWindow 10 minutes\n")
-        # This host's own world history and catch-up limit: the saved settings by default, each consequence named under the
-        # page, a pick taken by the host at once (the host's log names the policy it now runs).
-        for control in ("LabelHostRecJoinHistory", "ComboHostRecJoinHistory", "LabelHostRecJoinLag", "ComboHostRecJoinLag",
-                        "LabelHostRecJoinHistoryHint", "LabelHostRecJoinLagHint"):
+        # This host's own world history and catch-up limit: the saved settings by default, each consequence in the hint area while its
+        # row is pointed at or focused (the last one stays), a pick taken by the host at once (the host's log names the policy it now runs).
+        for control in ("LabelHostRecJoinHistory", "ComboHostRecJoinHistory", "LabelHostRecJoinLag", "ComboHostRecJoinLag"):
             text += checks(control, "CollectionBoxHostPageRecovery")
         text += ("assert_label LabelHostRecJoinHistory World history\n"
                  "assert_label ComboHostRecJoinHistory 6 minutes\n"
                  "assert_label LabelHostRecJoinLag Catch-up limit\n"
                  "assert_label ComboHostRecJoinLag 2 minutes\n"
-                 f"assert_label LabelHostRecJoinHistoryHint {JOIN_HISTORY_HINT}\n"
-                 f"assert_label LabelHostRecJoinLagHint {JOIN_LAG_HINT}\n"
+                 f"focus ComboHostRecJoinHistory\nwait_ms 300\nassert_label LabelHostRecOptionHint {host_hint('NetJoinHistoryHint')}\n"
+                 "assert_text_fits LabelHostRecOptionHint\n"
+                 f"focus ComboHostRecJoinLag\nwait_ms 300\nassert_label LabelHostRecOptionHint {host_hint('NetJoinLagHint')}\n"
+                 "assert_text_fits LabelHostRecOptionHint\n"
+                 f"focus ComboHostRecReturnWindow\nwait_ms 300\nassert_label LabelHostRecOptionHint {host_hint('NetReturnWindowHint')}\n"
+                 "assert_text_fits LabelHostRecOptionHint\n"
                  "combo_select ComboHostRecJoinHistory 10 minutes\nwait_ms 500\n"
                  "assert_label ComboHostRecJoinHistory 10 minutes\n"
                  "combo_select ComboHostRecJoinLag 1 minute\nwait_ms 500\n"
@@ -1977,8 +1988,10 @@ def run_case(options, case, root, failing=None):
         if not failing:
             if case == "lobby":
                 # The picks drive this host's history policy, in frames of the round's tick.
-                assert JOIN_HISTORY_POLICY in logs["host"], [line for line in logs["host"].splitlines() if "host options" in line]
-                result["join_history_policy"] = JOIN_HISTORY_POLICY
+                policy = JOIN_HISTORY_POLICY.search(logs["host"])
+                # Ten minutes of a 60 Hz round plus the frames a hold reaches back: never shorter than the window's 36000 frames.
+                assert policy and 36000 < int(policy[1]) <= 36000 + 200, [line for line in logs["host"].splitlines() if "host options" in line]
+                result["join_history_policy"] = policy[0]
             if case == "net-activity":
                 drawn = [(image["json"], control) for image in images for control in image["controls"]
                          if control["name"] in ("ComboHostActivity", "ComboHostScene", "ComboHostMode")
