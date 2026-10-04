@@ -37,7 +37,10 @@ namespace {
 
 	BITMAP* NewBackBuffer(BITMAP* mainBitmap) {
 		s_BackBuffers.fetch_add(1, std::memory_order_relaxed);
-		return create_bitmap_ex(bitmap_color_depth(mainBitmap), mainBitmap->w, mainBitmap->h);
+		BITMAP* backBitmap = create_bitmap_ex(bitmap_color_depth(mainBitmap), mainBitmap->w, mainBitmap->h);
+		// Saves carry a backdrop's back buffer before anything draws to it; create_bitmap_ex leaves whatever the memory held.
+		if (backBitmap) clear_bitmap(backBitmap);
+		return backBitmap;
 	}
 
 	void FreeBackBuffer(BITMAP* backBitmap) {
