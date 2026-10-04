@@ -1,21 +1,24 @@
 """Relay logins kept in memory, and the gate that proves no retained file holds one.
 
-    python tools/relay_secrets.py sweep --root <dir> [--root <dir> ...] [--digests <book.json>] [--scrub] --out <receipt.json>
+    python tools/relay_secrets.py sweep --root <dir> [--root <dir> ...] [--digests <book.json>] [--fixtures <registry.json>]
+                                        [--scrub] --out <receipt.json>
 
 The Cloudflare key file, a coturn secret and every login a run mints or observes are read into a SecretBook; the book
-never prints, logs or writes a value. A box that must be swept without the values gets a DigestBook: a per-run salt and
-the salted SHA-256 of each value, so no value travels.
+never prints, logs or writes a value, and redact() takes every booked value out of a text before it is printed or saved.
+A box that must be swept without the values gets a DigestBook: a per-run salt and the salted SHA-256 of each value.
 
 sweep() reads every regular file under the roots (a junction, symlink or other reparse point is neither entered nor read;
-nothing is skipped for its size or extension) and looks at each in every form a login can take there: the raw bytes, the
-JSON-escaped and UTF-16 forms, hex-encoded payloads (a resume manifest's ConfigPayload) decoded, and the members of
-gzip, zip and tar archives opened. A hit is the exact book (any length; a short value only at a token boundary), the
-digest book (tokens of a booked length hashed with the salt) or a login's own shape: a JSON username/credential field,
-an INI relay login key, a coturn REST username (expiry:24-hex tag), a 64-hex string after a login key. A file that
-cannot be read, a directory that cannot be listed or an archive that cannot be opened makes the sweep INCOMPLETE, never
-clean. With scrub, a hit is overwritten in place with the same number of 'x' (in its hex form for a hex payload) and an
-archive holding one is replaced by a receipt; the file is swept again and must come back clean. Reports name the file,
-the form and the kind, never a value.
+nothing is skipped for its size or extension) in every form a login can take there: the raw bytes, JSON-escaped and
+UTF-16 forms, JSON Unicode escapes decoded, hex-encoded payloads decoded, and the members of gzip, zip and tar archives.
+A hit is the exact book (a short value only at a token boundary; a value booked for login fields only where a login
+field holds it), the digest book, or a login's own shape: a JSON username/credential field, the relay settings keys in
+INI or JSON, a menu entry into a relay login box, a coturn REST username, a 64-hex value after a login key, a coturn
+account line. A shape hit is excused only by the fixture registry (tools/relay_fixtures.json): its value's digest is a
+registered synthetic value AND the line around it is that value's registered defining line; a booked value is never
+excused. A file, directory or archive that cannot be read, or a decode a depth or size limit stops, makes the sweep
+INCOMPLETE, never clean. With scrub, a hit is overwritten in place in the representation it was found in (x of equal
+length; the hex or UTF-16 encoding of x inside such a span) and an archive holding one is replaced by a receipt; the file
+is swept again and must come back clean. Reports name the file, the form and the kind, never a value.
 """
 from __future__ import annotations
 
@@ -28,7 +31,6 @@ import os
 import re
 import secrets as random_source
 import stat
-import subprocess
 import sys
 import tarfile
 import zipfile
@@ -43,19 +45,24 @@ TOKENS_WIDE = re.compile(rb'[' + TOKEN_CHARS + rb']+')
 TOKENS_NARROW = re.compile(rb'[A-Za-z0-9+/_.\-!#$%&*@^~]+')
 BOUNDARY = re.compile(rb'[A-Za-z0-9+/_\-]')
 HEX_RUN = re.compile(rb'(?:[0-9a-fA-F]{2}){32,}')
+JSON_ESCAPE = re.compile(rb'\\(u[0-9a-fA-F]{4}|["\\/bfnrt])')
+UNICODE_ESCAPE = re.compile(rb'\\u[0-9a-fA-F]{4}')
 MAX_DECODED = 1 << 30
 MAX_DEPTH = 3
+FIXTURES = Path(__file__).resolve().with_name('relay_fixtures.json')
 PLACEHOLDER = re.compile(rb'^(?:x+|redacted|<[^>]*>|REPLACE_WITH[A-Z_]*|\*+)?$')
+RELAY_KEYS = rb'(NetworkTurnUser|NetworkTurnPass|NetworkPlayerTurnUser|NetworkPlayerTurnPass)'
 PATTERNS = {
     # A JSON login field, and the same field escaped inside another JSON string.
     'json-login-field': re.compile(rb'"(username|credential)"\s*:\s*"((?:[^"\\]|\\.)*)"'),
     'escaped-json-login-field': re.compile(rb'\\"(username|credential)\\"\s*:\s*\\"((?:[^"\\]|\\\\(?:\\\\|\\"))*)\\"'),
-    # The same settings keys as JSON (a harness spec or receipt carrying a peer's settings), plain or escaped.
-    'json-relay-setting': re.compile(rb'(?i)"(NetworkTurnUser|NetworkTurnPass|NetworkPlayerTurnUser|NetworkPlayerTurnPass)"\s*:\s*"((?:[^"\\]|\\.)*)"'),
-    'escaped-json-relay-setting': re.compile(
-        rb'(?i)\\"(NetworkTurnUser|NetworkTurnPass|NetworkPlayerTurnUser|NetworkPlayerTurnPass)\\"\s*:\s*\\"((?:[^"\\]|\\\\(?:\\\\|\\"))*)\\"'),
+    # The relay settings keys as JSON (a harness spec or receipt carrying a peer's settings), plain or escaped.
+    'json-relay-setting': re.compile(rb'(?i)"' + RELAY_KEYS + rb'"\s*:\s*"((?:[^"\\]|\\.)*)"'),
+    'escaped-json-relay-setting': re.compile(rb'(?i)\\"' + RELAY_KEYS + rb'\\"\s*:\s*\\"((?:[^"\\]|\\\\(?:\\\\|\\"))*)\\"'),
     # A relay login written into an INI (Settings.ini) by the game or a harness.
-    'ini-relay-login': re.compile(rb'(?mi)^[ \t]*(NetworkTurnUser|NetworkTurnPass|NetworkPlayerTurnUser|NetworkPlayerTurnPass)[ \t]*=[ \t]*([^\r\n]*?)[ \t]*\r?$'),
+    'ini-relay-login': re.compile(rb'(?mi)^[ \t]*' + RELAY_KEYS + rb'[ \t]*=[ \t]*([^\r\n]*?)[ \t]*\r?$'),
+    # A menu script typing into a relay login box, and the menu automation's echo of it.
+    'menu-relay-login': re.compile(rb'(?:^|[\]\s])set_?text[ \t]+(Text\w*Relay\w*(?:User|Pass)\w*)[ \t]+([^\s\\"]+)'),
     # coturn's REST username as the directory mints it: expiry seconds, a colon, a 24-hex tag.
     'coturn-rest-username': re.compile(rb'(?<![0-9])(1[0-9]{9}:[0-9a-f]{24})(?![0-9a-f])'),
     # A 64-hex value right after a login key (Cloudflare's minted username and credential are 64 hex characters).
@@ -63,6 +70,8 @@ PATTERNS = {
     # A coturn account or REST secret line.
     'coturn-secret-line': re.compile(rb'(?mi)^[ \t]*(user|static-auth-secret)[ \t]*=[ \t]*(\S+)'),
 }
+# The retired coturn account's username is the project's own name, so it is a login only where a login field holds it.
+RETIRED_USERNAME_SCOPE = 'login-field'
 
 
 def read_turn_config(path: Path | str) -> dict[str, Any]:
@@ -82,17 +91,26 @@ def read_fixed_login(conf: Path | str) -> tuple[str, str]:
     raise ValueError(f'{Path(conf).name} has no user=<name>:<password> line')
 
 
-def variants(value: bytes) -> set[bytes]:
-    """The forms a value takes in a file: itself, JSON-escaped once and twice, UTF-16, hex."""
+def variants(value: bytes) -> dict[bytes, str]:
+    """The forms a value takes in a file, each with its representation: itself, JSON-escaped once and twice, UTF-16, hex.
+    Other JSON escapes are read by the json-unescaped view."""
     text = value.decode('utf-8', 'surrogateescape')
-    forms = {value}
     once = json.dumps(text)[1:-1]
-    forms.add(once.encode('utf-8', 'surrogateescape'))
-    forms.add(json.dumps(once)[1:-1].encode('utf-8', 'surrogateescape'))
-    forms.add(text.encode('utf-16-le', 'surrogatepass'))
-    forms.add(value.hex().encode())
-    forms.add(value.hex().upper().encode())
+    forms = {value: 'raw', once.encode('utf-8', 'surrogateescape'): 'raw', json.dumps(once)[1:-1].encode('utf-8', 'surrogateescape'): 'raw'}
+    forms.setdefault(text.encode('utf-16-le', 'surrogatepass'), 'utf16')
+    forms.setdefault(value.hex().encode(), 'hex')
+    forms.setdefault(value.hex().upper().encode(), 'hex')
     return forms
+
+
+def json_unescape(data: bytes) -> bytes:
+    """JSON string escapes decoded once (\\uXXXX to UTF-8, the single-character escapes to their characters)."""
+    def one(match: re.Match) -> bytes:
+        code = match.group(1)
+        if code[:1] == b'u':
+            return chr(int(code[1:], 16)).encode('utf-8', 'surrogatepass')
+        return {b'"': b'"', b'\\': b'\\', b'/': b'/', b'b': b'\b', b'f': b'\f', b'n': b'\n', b'r': b'\r', b't': b'\t'}[code]
+    return JSON_ESCAPE.sub(one, data)
 
 
 class SecretBook:
@@ -100,10 +118,12 @@ class SecretBook:
 
     def __init__(self) -> None:
         self._values: dict[bytes, str] = {}
+        self._scopes: dict[bytes, str] = {}
 
-    def add(self, kind: str, value: Any) -> None:
+    def add(self, kind: str, value: Any, scope: str = 'anywhere') -> None:
         if isinstance(value, str) and value and not PLACEHOLDER.match(value.encode('utf-8', 'replace')):
             self._values.setdefault(value.encode('utf-8'), kind)
+            self._scopes.setdefault(value.encode('utf-8'), scope)
 
     def add_turn_config(self, config: dict[str, Any]) -> None:
         for key in ('api_token', 'turn_key_id', 'static_auth_secret'):
@@ -114,9 +134,9 @@ class SecretBook:
             self.add(f'{kind}-username', server.get('username'))
             self.add(f'{kind}-credential', server.get('credential'))
 
-    def add_fixed_login(self, conf: Path | str) -> None:
+    def add_fixed_login(self, conf: Path | str, username_scope: str = 'anywhere') -> None:
         user, password = read_fixed_login(conf)
-        self.add('fixed-username', user)
+        self.add('fixed-username', user, username_scope)
         self.add('fixed-password', password)
 
     def kinds(self) -> list[str]:
@@ -129,13 +149,24 @@ class SecretBook:
         return [value.decode() for value, kind in self._values.items() if kind.endswith(kind_suffix)]
 
     def digests(self, salt: bytes | None = None) -> dict[str, Any]:
-        """The book as a box may carry it: a fresh salt and each value's salted SHA-256 and length, never the value."""
+        """The book as a box may carry it: a fresh salt and each value's salted SHA-256, length and scope, never the value."""
         salt = salt or random_source.token_bytes(16)
-        return dict(salt=salt.hex(), items=[dict(kind=kind, length=len(value), sha256=hashlib.sha256(salt + value).hexdigest())
-                                            for value, kind in self._values.items()])
+        return dict(salt=salt.hex(), items=[dict(kind=kind, length=len(value), scope=self._scopes.get(value, 'anywhere'),
+                                                 sha256=hashlib.sha256(salt + value).hexdigest()) for value, kind in self._values.items()])
 
     def finder(self) -> 'Finder':
-        return Finder([(form, len(form) < SHORT, kind) for value, kind in self._values.items() for form in variants(value)], None)
+        return Finder([(form, len(form) < SHORT, kind, self._scopes.get(value, 'anywhere'), representation)
+                       for value, kind in self._values.items() for form, representation in variants(value).items()], None)
+
+    def redact(self, text: Any) -> Any:
+        """The text with every booked value, in every form, replaced by its kind; anything else unchanged."""
+        if not isinstance(text, str) or not self._values:
+            return text
+        data = text.encode('utf-8', 'surrogateescape')
+        for value, kind in sorted(self._values.items(), key=lambda item: -len(item[0])):
+            for form in variants(value):
+                data = data.replace(form, f'<{kind}>'.encode())
+        return data.decode('utf-8', 'surrogateescape')
 
     def scan(self, roots: Iterable[Path | str], scrub: bool = False) -> dict[str, Any]:
         return sweep(roots, self.finder(), scrub=scrub)
@@ -146,45 +177,85 @@ class DigestBook:
 
     def __init__(self, document: dict[str, Any]) -> None:
         self.salt = bytes.fromhex(document['salt'])
-        self.by_digest = {item['sha256']: item['kind'] for item in document['items']}
+        self.by_digest = {item['sha256']: (item['kind'], item.get('scope', 'anywhere')) for item in document['items']}
         self.lengths = {int(item['length']) for item in document['items']}
 
     def finder(self) -> 'Finder':
         return Finder([], self)
 
-    def kind(self, token: bytes) -> str | None:
+    def kind(self, token: bytes) -> tuple[str, str] | None:
         return self.by_digest.get(hashlib.sha256(self.salt + token).hexdigest()) if len(token) in self.lengths else None
 
 
-class Finder:
-    """Every login hit in one view of a file: (start, end, kind, how) with offsets into that view."""
+class Fixtures:
+    """The registry of synthetic values a tracked file defines: the value's SHA-256 with the SHA-256 of its defining line.
+    A shape hit is a fixture only when both match; no value is held."""
 
-    def __init__(self, exact: list[tuple[bytes, bool, str]], digests: DigestBook | None) -> None:
+    def __init__(self, document: dict[str, Any] | None = None) -> None:
+        self.entries = list((document or {}).get('fixtures', []))
+        self.pairs = {(entry['value_sha256'], entry['line_sha256']) for entry in self.entries}
+
+    @classmethod
+    def load(cls, path: Path | str | None = None) -> 'Fixtures':
+        path = Path(path or FIXTURES)
+        return cls(json.loads(path.read_text(encoding='utf-8'))) if path.is_file() else cls()
+
+    def excuses(self, value: bytes, line: bytes) -> bool:
+        return (hashlib.sha256(value).hexdigest(), hashlib.sha256(line).hexdigest()) in self.pairs
+
+
+def logical_line(view: bytes, start: int, end: int) -> bytes:
+    """The line around a span, read the way a person reads it: a real line, or one line of text kept inside a JSON string
+    (split at its escaped newlines and unescaped), less a leading 'N<tab>' line number, stripped."""
+    escaped_left = view.rfind(b'\\n', 0, start)
+    left = max(view.rfind(b'\n', 0, start) + 1, escaped_left + 2 if escaped_left >= 0 else 0)
+    candidates = [index for index in (view.find(b'\n', end), view.find(b'\\n', end)) if index >= 0]
+    line = view[left:min(candidates) if candidates else len(view)]
+    for _ in range(3):
+        decoded = json_unescape(line)
+        if decoded == line:
+            break
+        line = decoded
+    line = re.sub(rb'^\s*\d+(?:\t|:)', b'', line.rstrip(b'\r'))
+    return line.strip()
+
+
+class Finder:
+    """Every login hit in one view of a file: (start, end, kind, how, representation) with offsets into that view."""
+
+    def __init__(self, exact: list[tuple], digests: DigestBook | None) -> None:
         self.exact, self.digests = exact, digests
 
-    def hits(self, data: bytes) -> list[tuple[int, int, str, str]]:
-        found: list[tuple[int, int, str, str]] = []
-        for form, short, kind in self.exact:
-            start = data.find(form)
-            while start >= 0:
-                end = start + len(form)
-                if not short or ((start == 0 or not BOUNDARY.match(data[start - 1:start]))
-                                 and (end == len(data) or not BOUNDARY.match(data[end:end + 1]))):
-                    found.append((start, end, kind, 'book'))
-                start = data.find(form, start + 1)
-        if self.digests:
-            for tokens in (TOKENS_WIDE, TOKENS_NARROW):
-                for match in tokens.finditer(data):
-                    kind = self.digests.kind(match.group(0))
-                    if kind:
-                        found.append((match.start(), match.end(), kind, 'digest'))
+    def hits(self, data: bytes) -> list[tuple[int, int, str, str, str]]:
+        shapes: list[tuple[int, int, str, str, str]] = []
         for name, pattern in PATTERNS.items():
             for match in pattern.finditer(data):
                 group = match.lastindex or 0
                 value = match.group(group)
                 if value and not PLACEHOLDER.match(value.strip(b'\\')):
-                    found.append((match.start(group), match.end(group), f'shape:{name}', 'pattern'))
-        return found
+                    shapes.append((match.start(group), match.end(group), f'shape:{name}', 'pattern', 'raw'))
+        fields = [(start, end) for start, end, *_ in shapes]
+        in_field = lambda start, end: any(start < right and left < end for left, right in fields)
+        found: list[tuple[int, int, str, str, str]] = []
+        for entry in self.exact:
+            form, short, kind = entry[:3]
+            scope = entry[3] if len(entry) > 3 else 'anywhere'
+            representation = entry[4] if len(entry) > 4 else 'raw'
+            start = data.find(form)
+            while start >= 0:
+                end = start + len(form)
+                if not short or ((start == 0 or not BOUNDARY.match(data[start - 1:start]))
+                                 and (end == len(data) or not BOUNDARY.match(data[end:end + 1]))):
+                    if scope == 'anywhere' or in_field(start, end):
+                        found.append((start, end, kind, 'book', representation))
+                start = data.find(form, start + 1)
+        if self.digests:
+            for tokens in (TOKENS_WIDE, TOKENS_NARROW):
+                for match in tokens.finditer(data):
+                    booked = self.digests.kind(match.group(0))
+                    if booked and (booked[1] == 'anywhere' or in_field(match.start(), match.end())):
+                        found.append((match.start(), match.end(), booked[0], 'digest', 'raw'))
+        return found + shapes
 
 
 def is_reparse(entry: os.DirEntry) -> bool:
@@ -233,10 +304,38 @@ def walk_files(root: Path) -> Iterator[Path]:
             yield path
 
 
+class ArchiveError(Exception):
+    pass
+
+
+class LimitError(ArchiveError):
+    """A decode a depth or size limit stopped: what lies beyond it was not read."""
+
+
+def real_container(data: bytes) -> str | None:
+    """The container a byte string really is (gzip with a readable header, zip, tar), or None."""
+    if data[:2] == b'\x1f\x8b':
+        try:
+            zlib.decompressobj(31).decompress(data[:4096], 1)
+            return 'gzip'
+        except zlib.error:
+            return None
+    if data[:4] == b'PK\x03\x04' or (len(data) > 22 and zipfile.is_zipfile(io.BytesIO(data))):
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                archive.infolist()
+            return 'zip'
+        except (zipfile.BadZipFile, OSError, ValueError, RuntimeError):
+            return None
+    if len(data) > 262 and data[257:262] == b'ustar':
+        return 'tar'
+    return None
+
+
 def views(data: bytes, depth: int = 0) -> Iterator[tuple[str, bytes, Any]]:
-    """(form, bytes, back) for each form a login can take in these bytes; back maps a span of the view to a span of the
-    original bytes, or is None when the view is an archive member (only the whole file can be cleaned)."""
-    yield 'raw', data, (lambda start, end: (start, end))
+    """(form, bytes, back) for each form a login can take in these bytes; back maps a span of the view to (start, end,
+    representation) in the original bytes, or is None when only the whole file can be cleaned."""
+    yield 'raw', data, (lambda start, end, representation='raw': (start, end, representation))
     head = data[:4096]
     if head.count(b'\x00') * 4 > len(head) and len(data) > 1:
         try:
@@ -244,14 +343,23 @@ def views(data: bytes, depth: int = 0) -> Iterator[tuple[str, bytes, Any]]:
             yield 'utf16', text, None
         except UnicodeDecodeError:
             pass
+    # Unicode escapes are text, not a container: decoded at the same depth, and only while the text keeps shrinking.
+    if UNICODE_ESCAPE.search(data):
+        unescaped = json_unescape(data)
+        if len(unescaped) < len(data):
+            for form, inner, _ in views(unescaped, depth):
+                yield f'json-unescaped/{form}', inner, None
     if depth >= MAX_DEPTH:
+        if HEX_RUN.search(data) or real_container(data):
+            raise LimitError(f'nested deeper than {MAX_DEPTH} levels: not read past the limit')
         return
     for match in HEX_RUN.finditer(data):
         decoded = bytes.fromhex(match.group(0).decode())
         base = match.start()
         for form, inner, back in views(decoded, depth + 1):
-            mapped = (lambda start, end, base=base, back=back: None if back is None or back(start, end) is None
-                      else (base + 2 * back(start, end)[0], base + 2 * back(start, end)[1]))
+            def mapped(start, end, representation='raw', base=base, back=back):
+                inner_span = back(start, end, representation) if back else None
+                return None if inner_span is None else (base + 2 * inner_span[0], base + 2 * inner_span[1], 'hex')
             yield f'hex@{base}/{form}', inner, mapped
     # A file that is an archive and cannot be opened is unreadable; inside a decoded value the same magic is often chance
     # (a tick hash decoded as hex), so there only what decodes is scanned, the rest staying covered by the raw view.
@@ -262,12 +370,18 @@ def views(data: bytes, depth: int = 0) -> Iterator[tuple[str, bytes, Any]]:
             if depth == 0:
                 raise ArchiveError(f'gzip unreadable: {type(error).__name__}') from error
             inner = partial_gzip(data)
+        if len(inner) > MAX_DECODED:
+            raise LimitError(f'gzip member larger than {MAX_DECODED} bytes: not read past the limit')
         for form, member, _ in views(inner, depth + 1) if inner else ():
             yield f'gzip/{form}', member, None
     if data[:4] == b'PK\x03\x04' or (len(data) > 22 and zipfile.is_zipfile(io.BytesIO(data))):
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                if any(info.file_size > MAX_DECODED for info in archive.infolist()):
+                    raise LimitError(f'zip member larger than {MAX_DECODED} bytes: not read past the limit')
                 members = [(info.filename, archive.read(info)) for info in archive.infolist()]
+        except LimitError:
+            raise
         except (zipfile.BadZipFile, OSError, RuntimeError, EOFError, ValueError, NotImplementedError) as error:
             if depth == 0:
                 raise ArchiveError(f'zip unreadable: {type(error).__name__}') from error
@@ -278,7 +392,12 @@ def views(data: bytes, depth: int = 0) -> Iterator[tuple[str, bytes, Any]]:
     if len(data) > 262 and data[257:262] == b'ustar':
         try:
             with tarfile.open(fileobj=io.BytesIO(data)) as archive:
-                members = [(info.name, (archive.extractfile(info) or io.BytesIO()).read()) for info in archive.getmembers() if info.isfile()]
+                infos = [info for info in archive.getmembers() if info.isfile()]
+                if any(info.size > MAX_DECODED for info in infos):
+                    raise LimitError(f'tar member larger than {MAX_DECODED} bytes: not read past the limit')
+                members = [(info.name, (archive.extractfile(info) or io.BytesIO()).read()) for info in infos]
+        except LimitError:
+            raise
         except (tarfile.TarError, OSError, EOFError) as error:
             if depth == 0:
                 raise ArchiveError(f'tar unreadable: {type(error).__name__}') from error
@@ -296,42 +415,41 @@ def partial_gzip(data: bytes) -> bytes:
         return b''
 
 
-class ArchiveError(Exception):
-    pass
-
-
-def file_hits(data: bytes, finder: Finder, public=None, public_rows=None) -> tuple[list[dict], list[tuple[int, int]], bool]:
-    """Hits (form, kind, how) of one file, the raw spans to blank, and whether an archive member holds one. A username or
-    a shape hit whose value public() names as already published (the repository's own tracked files) goes to public_rows
-    instead; a key, token, secret, password or minted login is never excused."""
+def file_hits(data: bytes, finder: Finder, fixtures: Fixtures | None = None,
+              fixture_rows: list | None = None) -> tuple[list[dict], list[tuple[int, int, str]], bool]:
+    """Hits (form, kind, how) of one file, the raw spans to blank with their representation, and whether a span cannot be
+    blanked in place. A shape hit that is a registered fixture on its own registered line goes to fixture_rows; a hit
+    overlapping a booked value is never excused."""
     rows, spans, in_archive = [], [], False
+    blankable: set[bytes] = set()  # values already found where they can be blanked in place
     for form, view, back in views(data):
         found = finder.hits(view)
-        fields = [(start, end) for start, end, kind, _ in found if kind.startswith('shape:')]
-        booked = [(start, end) for start, end, kind, _ in found if not kind.startswith('shape:')]
-        overlaps = lambda start, end, spans_: any(start < right and left < end for left, right in spans_)
-        for start, end, kind, how in found:
-            # The retired account's name is a public word outside a login field; a login field's value is public only
-            # when it is no booked value (a sample login in a test file, never the retired account's own name).
-            excusable = (kind == 'fixed-username' and not overlaps(start, end, fields)) or \
-                        (kind.startswith('shape:') and not overlaps(start, end, booked))
-            reason = public(view[start:end]) if public and excusable else None
-            if reason:
-                public_rows.append(dict(form=form, kind=kind, how=how, reason=reason))
+        booked = [(start, end) for start, end, kind, *_ in found if not kind.startswith('shape:')]
+        overlaps = lambda start, end: any(start < right and left < end for left, right in booked)
+        for start, end, kind, how, representation in found:
+            value = view[start:end]
+            if fixtures and kind.startswith('shape:') and not overlaps(start, end) and fixtures.excuses(value, logical_line(view, start, end)):
+                if fixture_rows is not None:
+                    fixture_rows.append(dict(form=form, kind=kind))
                 continue
+            span = back(start, end, representation) if back else None
+            if span is None and value in blankable:
+                continue  # the same value in a decoded copy: blanking it in place removes this one too, and the verify re-reads
             rows.append(dict(form=form, kind=kind, how=how))
-            span = back(start, end) if back else None
             if span is None:
                 in_archive = True
             else:
+                blankable.add(value)
                 spans.append(span)
     return rows, spans, in_archive
 
 
-def sweep(roots: Iterable[Path | str], finder: Finder | None = None, scrub: bool = False, public=None) -> dict[str, Any]:
+def sweep(roots: Iterable[Path | str], finder: Finder | None = None, scrub: bool = False,
+          fixtures: Fixtures | None = None) -> dict[str, Any]:
     finder = finder or Finder([], None)
+    fixtures = Fixtures.load() if fixtures is None else fixtures
     files = 0
-    hits, incomplete, scrubbed, published = [], [], [], []
+    hits, incomplete, scrubbed, excused = [], [], [], []
     for root in roots:
         for path, reason in walk(Path(root)):
             if reason:
@@ -340,11 +458,10 @@ def sweep(roots: Iterable[Path | str], finder: Finder | None = None, scrub: bool
             files += 1
             try:
                 data = path.read_bytes()
-                public_rows = []
-                rows, spans, in_archive = file_hits(data, finder, public, public_rows)
-                if public_rows:
-                    published.append(dict(path=str(path), hits=len(public_rows), kinds=sorted({hit['kind'] for hit in public_rows}),
-                                          reasons=sorted({hit['reason'] for hit in public_rows})))
+                fixture_rows: list[dict] = []
+                rows, spans, in_archive = file_hits(data, finder, fixtures, fixture_rows)
+                if fixture_rows:
+                    excused.append(dict(path=str(path), hits=len(fixture_rows), kinds=sorted({hit['kind'] for hit in fixture_rows})))
             except ArchiveError as error:
                 incomplete.append(dict(path=str(path), reason=str(error)))
                 continue
@@ -357,49 +474,41 @@ def sweep(roots: Iterable[Path | str], finder: Finder | None = None, scrub: bool
                        kinds=sorted({hit['kind'] for hit in rows}), forms=sorted({hit['form'] for hit in rows}))
             hits.append(row)
             if scrub:
-                scrubbed.append(clean_file(path, data, spans, in_archive, row, finder))
+                scrubbed.append(clean_file(path, data, spans, in_archive, row, finder, fixtures))
     leaked_after = [row for row in scrubbed if not row['clean_after']]
     status = 'INCOMPLETE' if incomplete else 'CLEAN' if not hits or (scrub and not leaked_after) else 'LEAKED'
     return dict(status=status, clean=status == 'CLEAN' and not hits, scrubbed_clean=status == 'CLEAN',
-                files_scanned=files, files_with_secrets=hits, incomplete=incomplete, scrubbed=scrubbed, public=published)
+                files_scanned=files, files_with_secrets=hits, incomplete=incomplete, scrubbed=scrubbed, fixtures=excused)
 
 
-def repository_public(repo: Path | str):
-    """public() for sweep: a value already in the repository's tracked files at HEAD is published, never a login."""
-    cache: dict[bytes, str | None] = {}
-
-    def public(value: bytes) -> str | None:
-        if value not in cache:
-            try:
-                text = value.decode('utf-8')
-                done = subprocess.run(['git', '-C', str(repo), 'grep', '-F', '-I', '-l', '-e', text, 'HEAD', '--'],
-                                      capture_output=True, text=True, timeout=120)
-                files = [line for line in done.stdout.splitlines() if line]
-                cache[value] = f'in {len(files)} tracked file(s) of the repository' if done.returncode == 0 and files else None
-            except (UnicodeDecodeError, OSError, subprocess.TimeoutExpired):
-                cache[value] = None
-        return cache[value]
-    return public
+def blank(representation: str, length: int) -> bytes:
+    """x of the span's own length, written in the span's representation."""
+    if representation == 'hex':
+        return b'78' * (length // 2) + b'x' * (length % 2)
+    if representation == 'utf16':
+        return b'x\x00' * (length // 2) + b'x' * (length % 2)
+    return b'x' * length
 
 
-def clean_file(path: Path, data: bytes, spans: list[tuple[int, int]], in_archive: bool, row: dict, finder: Finder) -> dict:
-    """Blanks every span with 'x' (hex '78' inside a hex payload), or replaces an archive that holds a login with a
-    receipt; then sweeps the result again."""
+def clean_file(path: Path, data: bytes, spans: list[tuple[int, int, str]], in_archive: bool, row: dict, finder: Finder,
+               fixtures: Fixtures | None = None) -> dict:
+    """Blanks every span in the representation it was found in, or replaces a file whose hit cannot be blanked in place
+    (an archive member, a decoded escape) with a receipt; then sweeps the result again."""
     if in_archive:
         receipt = path.with_name(path.name + '.scrubbed.json')
-        receipt.write_text(json.dumps(dict(removed=str(path), reason='an archive member held a relay login',
+        receipt.write_text(json.dumps(dict(removed=str(path), reason='a relay login sat where only the whole file can be cleaned',
                                            kinds=row['kinds'], forms=row['forms'], bytes=row['bytes'],
                                            sha256_before=row['sha256_before']), indent=2) + '\n', encoding='utf-8')
         path.unlink()
-        return dict(path=str(path), action='archive replaced by its receipt', receipt=str(receipt), clean_after=not path.exists())
+        return dict(path=str(path), action='file replaced by its receipt', receipt=str(receipt), clean_after=not path.exists())
     blanked = bytearray(data)
-    for start, end in spans:
-        segment = bytes(blanked[start:end])
-        is_hex = re.fullmatch(rb'[0-9a-fA-F]*', segment) is not None and (end - start) % 2 == 0 and any(
-            start >= match.start() and end <= match.end() for match in HEX_RUN.finditer(data))
-        blanked[start:end] = (b'78' * ((end - start) // 2)) if is_hex else b'x' * (end - start)
+    for start, end, representation in spans:
+        blanked[start:end] = blank(representation, end - start)
     path.write_bytes(bytes(blanked))
-    remaining, _, still_archive = file_hits(bytes(blanked), finder)
+    try:
+        remaining, _, still_archive = file_hits(bytes(blanked), finder, fixtures)
+    except ArchiveError:
+        remaining, still_archive = [dict(kind='unreadable after the scrub')], False
     return dict(path=str(path), action='blanked in place', spans=len(spans), sha256_after=hashlib.sha256(blanked).hexdigest(),
                 clean_after=not remaining and not still_archive)
 
@@ -410,19 +519,20 @@ def main(argv=None) -> int:
     run = sub.add_parser('sweep')
     run.add_argument('--root', type=Path, action='append', required=True)
     run.add_argument('--digests', type=Path)
+    run.add_argument('--fixtures', type=Path, help='the fixture registry (default: relay_fixtures.json beside this script)')
     run.add_argument('--scrub', action='store_true')
     run.add_argument('--out', type=Path, required=True)
-    run.add_argument('--public-repo', type=Path, help='a username or shape hit whose value this repository already tracks is reported as public')
     options = parser.parse_args(argv)
     finder = DigestBook(json.loads(options.digests.read_text(encoding='utf-8'))).finder() if options.digests else Finder([], None)
-    public = repository_public(options.public_repo) if options.public_repo else None
-    first = sweep(options.root, finder, scrub=options.scrub, public=public)
-    verify = sweep(options.root, finder, public=public) if options.scrub else None
-    result = dict(sweep=first, verify=verify)
+    fixtures = Fixtures.load(options.fixtures)
+    first = sweep(options.root, finder, scrub=options.scrub, fixtures=fixtures)
+    verify = sweep(options.root, finder, fixtures=fixtures) if options.scrub else None
+    result = dict(sweep=first, verify=verify, fixture_entries=len(fixtures.entries))
     options.out.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
     final = verify or first
     print(json.dumps(dict(status=final['status'], files=final['files_scanned'], hits=len(first['files_with_secrets']),
-                          after=len(final['files_with_secrets']), incomplete=len(final['incomplete']))))
+                          after=len(final['files_with_secrets']), incomplete=len(final['incomplete']),
+                          fixture_files=len(final['fixtures']), fixture_entries=len(fixtures.entries))))
     return 0 if final['status'] == 'CLEAN' else 3 if final['status'] == 'INCOMPLETE' else 1
 
 
