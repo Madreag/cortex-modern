@@ -77,6 +77,7 @@ namespace RTE {
 	bool RunCrossInPlaceHistorySelfTest(std::string* error);
 	bool RunCrossReadyRevisionSelfTest(std::string* error);
 	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
+	bool GnsPacketSpacingSelfTest(std::string* error);
 
 	namespace {
 		bool TestCrossCaptureBarrier(std::string* error) {
@@ -11127,6 +11128,14 @@ namespace RTE {
 		return true;
 	}
 
+	// Packet spacing costs every packet two bytes: only the jitter lever's links send it, whatever CCCP_HEADLESS says.
+	bool TestOnlyTheJitterLeverSendsPacketSpacing(std::string* error) {
+		if (!GnsTransport::IsCompiledIn()) return true;
+		if (!GnsPacketSpacingSelfTest(error)) return false;
+		std::cout << "PASS only_the_jitter_lever_sends_packet_spacing plain=-1 jittered=1" << std::endl;
+		return true;
+	}
+
 	// A host's moderation state - held seats with causes, bans and tickets - reads as digests, and a capsule's roster carries it unchanged.
 	bool TestTheModerationStateCarriesThroughTheCapsule(std::string* error) {
 		NetSeatRoster roster;
@@ -16148,6 +16157,7 @@ namespace RTE {
 		if (!TestARunningRoundsJoinerIsNotAskedForItsStartRoster(&error)) return fail(error);
 		if (!TestTheRostersWaitKeepsTheRoundsStart(&error)) return fail(error);
 		if (!TestFakeLinkEffectsAreReadFromTheLinksOwnCounters(&error)) return fail(error);
+		if (!TestOnlyTheJitterLeverSendsPacketSpacing(&error)) return fail(error);
 		if (!TestTheModerationStateCarriesThroughTheCapsule(&error)) return fail(error);
 		if (!TestRematchRebuildsTheSurvivingRoster(&error)) return fail(error);
 		if (!TestRematchProposalFits(&error)) return fail(error);
