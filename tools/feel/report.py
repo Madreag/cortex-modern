@@ -536,10 +536,21 @@ def wrapped_delta(delta, size, wraps):
     return (delta + size / 2) % size - size / 2 if wraps and size else delta
 
 
+def brief(value):
+    """A measured value short enough for a reason line: a number or text as it is, a collection by its size."""
+    if isinstance(value, (list, tuple, dict, set)):
+        return f'{type(value).__name__} of {len(value)}'
+    text = f'{value:.4g}' if isinstance(value, float) else repr(value)
+    return text if len(text) <= 80 else text[:77] + '...'
+
+
 def pin(value, rule, passed, evidence, detail=None, available=None):
     available = value is not None if available is None else available
-    return dict(value=value, rule=rule, status=('PASS' if passed else 'FAIL') if available else 'MISS',
-                evidence=[str(record_path(path)) for path in evidence], detail=detail)
+    status = ('PASS' if passed else 'FAIL') if available else 'MISS'
+    result = dict(value=value, rule=rule, status=status, evidence=[str(record_path(path)) for path in evidence], detail=detail)
+    if status != 'PASS':
+        result['reason'] = f'measured {brief(value)} against: {rule}' if available else 'no measurement was recorded'
+    return result
 
 
 def peer_id_of(report_path):
@@ -903,6 +914,9 @@ def input_latencies(inputs, frames):
                            frames=frame['frame'] - edge['last_presented_frame'], budget_ms=budget,
                            pass_check=elapsed <= budget)
             row['latency_lower_bound_ms'] = row['ms'] if found else max(0, row['observed_through_ms'] - edge['wall_ms'])
+            if not row['pass_check']:
+                row['reason'] = (f'presented {row["ms"]:.1f} ms after the input, budget {row["budget_ms"]:g} ms' if found else
+                                 f'no presented frame showed the input within {row["latency_lower_bound_ms"]:.1f} ms of observation')
             results.append(row)
     return results
 

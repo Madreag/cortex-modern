@@ -823,6 +823,16 @@ def harness_cost_lines(plain_reports, results):
     return lines + tables
 
 
+def reference_verdict(report):
+    """A reference arm's own verdict: its measurement complete and every required pin it carries passing, each failure named."""
+    pins = report.get('pins') or {}
+    reasons = [f'{name}: {value.get("status")}; {value.get("reason", "")}' for name, value in pins.items()
+               if value.get('required', True) and value.get('status') != 'PASS']
+    if not report.get('measurement_complete'):
+        reasons.append('measurement_complete=false')
+    return dict(passed=not reasons, reasons=reasons, measurement_complete=report.get('measurement_complete'), role='reference')
+
+
 def timing_arm(run, reference):
     report = reduce_timing_case(run, reference)
     report['report_path'] = str(run / 'feel-report.json')
@@ -852,15 +862,18 @@ def analyze(root, stock=None):
         timing = item9a_gates(run, 'sp')
         baselines[cap_name]['steady_wall_tps'] = timing['metrics']['steady_wall_tps']
         result['metrics']['steady_wall_tps'] = timing['metrics']['steady_wall_tps']
+        result['verdict'] = reference_verdict(result)
         write_json(run / 'feel-report.json', result)
         plain = item9a_gates(root / f'baseline-{cap_name}-off', 'sp')
         plain_reports[f'baseline-{cap_name}-off'] = plain
         plain_baselines[cap_name] = dict(steady_wall_tps=plain['metrics']['steady_wall_tps'],
             evidence=plain['metrics']['clock_path'], method='same build, scene, input script, hashes and render cap; recorder off')
+        plain['verdict'] = reference_verdict(plain)
         write_json(root / f'baseline-{cap_name}-off' / 'feel-report.json', plain)
     three_reference = None
     if not subset or (root / 'baseline-three-60hz').is_dir():
         three = item9a_gates(root / 'baseline-three-60hz', 'sp')
+        three['verdict'] = reference_verdict(three)
         write_json(root / 'baseline-three-60hz' / 'feel-report.json', three)
         three_reference = dict(steady_wall_tps=three['metrics']['steady_wall_tps'], evidence=three['metrics']['clock_path'],
             method='same build, six actors, three human seats, recorder and 60 Hz cap; single process with local seat views')
