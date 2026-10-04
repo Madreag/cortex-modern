@@ -1145,7 +1145,8 @@ def run_plan(plan, root):
         plan['preflights'] = preflights
         acceptance_cross.check_driver_preflights(plan, preflights)
         acceptance_cross.check_mod_preflights(plan, preflights)
-        public = acceptance_cross.is_row(plan) and acceptance_cross.public_directory_available(local['tree'])
+        # The directory default is the coordinator's own committed header; a driver-only plan has no local tree.
+        public = acceptance_cross.is_row(plan) and acceptance_cross.public_directory_available(HERE.parent)
         if public:
             pin = ''
         else:
