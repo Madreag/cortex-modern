@@ -1653,7 +1653,8 @@ int MovableObject::UpdateScripts() {
 	if (m_SimUpdatesSinceLastScriptedUpdate < m_SimUpdatesBetweenScriptedUpdates) {
 		m_SimUpdatesSinceLastScriptedUpdate++;
 	}
-	if (LuaMan::AreScriptsFrozen()) {
+	// A preview's copy runs its Update with the preview's other hooks; every other object's scripts stay frozen.
+	if (LuaMan::AreScriptsFrozen() && !LuaMan::ShouldRunPreviewHook(this, "Update")) {
 		return 1;
 	}
 
