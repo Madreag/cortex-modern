@@ -9103,6 +9103,49 @@ static std::string ResyncSaveName() {
 			report["p2p"]["mux"] = {{"ip_events", m_Mux ? m_Mux->IpEvents() : 0}, {"p2p_events", m_Mux ? m_Mux->P2PEvents() : 0}};
 		}
 #endif
+		// Every live connection of the process; one on the session's wire names the player it carries.
+		{
+			std::map<NetPeerId, NetSessionPeerInfo> sessionPeers;
+			if (m_Session) {
+				for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers()) sessionPeers[peer.transportPeerId] = peer;
+			}
+			INetTransport* wire = ActiveWireLocked();
+			auto* mux = dynamic_cast<NetMuxTransport*>(wire);
+			json connections = json::array();
+			for (const GnsProcessConnection& connection: GnsTransport::GetProcessConnections()) {
+				const GnsPeerConnectionInfo& info = connection.info;
+				// The session addresses a mux's ICE half by its tagged id.
+				NetPeerId link = c_InvalidNetPeerId;
+				if (connection.transport == wire || (mux && connection.transport == mux->IpGns())) {
+					link = info.peerId;
+				} else if (mux && connection.transport == mux->P2PGns()) {
+					link = NetMuxTransport::Tag(info.peerId);
+				}
+				const auto peer = link == c_InvalidNetPeerId ? sessionPeers.end() : sessionPeers.find(link);
+				const bool bound = peer != sessionPeers.end();
+				connections.push_back(json{
+				    {"transport", connection.p2p ? "ice" : "ip"},
+				    {"side", connection.host ? "host" : "client"},
+				    {"transport_peer_id", info.peerId},
+				    {"session_wire", link != c_InvalidNetPeerId},
+				    {"session_link", link},
+				    {"bound", bound},
+				    {"lockstep_peer_id", bound ? peer->second.assignedPeerId + 1 : 0},
+				    {"display_name", bound ? peer->second.displayName : std::string()},
+				    {"found", info.found},
+				    {"state", info.state},
+				    {"end_reason", info.endReason},
+				    {"remote_identity", info.remoteIdentity},
+				    {"remote_address", info.remoteAddress},
+				    {"route", info.connectedRoute},
+				    {"candidate", info.selectedCandidateType},
+				    {"relayed", (info.flags & 16) != 0},
+				    {"relay_pop", info.relayPop},
+				    {"offer", info.relayOffer},
+				});
+			}
+			report["connections"] = std::move(connections);
+		}
 		report["private_rejoin"] = {{"configured", m_WorldJoin.IsPrivateMatch()}, {"checkpoint_ready", m_WorldJoin.Image().IsValid()},
 		    {"checkpoint_tick", m_WorldJoin.Image().tick}, {"journal_failed", m_WorldJoin.Tail().JournalFailed()}, {"error", m_PrivateJoinError},
 		    {"catching_up", m_WorldCatchUp.active}, {"applied_through", m_WorldCatchUp.appliedThrough}, {"activation_frame", m_WorldCatchUp.activationTick}};
