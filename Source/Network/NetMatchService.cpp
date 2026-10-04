@@ -60,6 +60,7 @@ namespace RTE {
 
 	// A live host's answer to a held return its tail cannot reach: the seat comes back through the image.
 	static constexpr const char* c_ImageRejoinDetail = "slow player: rejoin from the host's image";
+	static constexpr const char* c_HistoryPassedDetail = "the world's history moved past this catch-up";
 
 	std::string NetMatchSummary::DurationText() const {
 		const uint64_t seconds = runningTicks / 60;
@@ -3763,7 +3764,7 @@ static std::string ResyncSaveName() {
 		if (tick % 60 == 0) PruneReturnHistory(tick);
 	}
 
-	uint64_t NetMatchService::ReturnHistoryFloorLocked(uint64_t tick, uint64_t nowMs) const {
+	std::optional<uint64_t> NetMatchService::ServedReturnBaseLocked(uint64_t nowMs) const {
 		// A returner arriving now is served the published base, unless it would take a new one.
 		std::optional<uint64_t> served;
 		const NetWorldCheckpointImage& image = m_WorldJoin.Image();
@@ -3774,8 +3775,7 @@ static std::string ResyncSaveName() {
 			const bool fresh = m_PrivateImageTakenMs != 0 && nowMs - m_PrivateImageTakenMs < c_PrivateImageMinIntervalMs;
 			if (!m_PrivateImageRecapture && (fresh || !PrivateBaseRefreshDue(true, 0, image.tick, SteadyCaptureMs(m_PrivateCaptureCosts)))) served = image.tick;
 		}
-		const NetLockstepConfig& round = m_Coordinator->GetConfig();
-		return ReturnHistoryFloor(tick, served, m_WorldJoin.Sessions(), m_Coordinator->HeldTransactions(), round.simTickMs, round.matchConfig.returnWindowMinutes);
+		return served;
 	}
 
 	uint64_t NetMatchService::ReturnHistoryFloor(uint64_t tick, std::optional<uint64_t> servedBaseTick, const std::vector<NetWorldJoinSession>& sessions,
@@ -3793,14 +3793,76 @@ static std::string ResyncSaveName() {
 		return floor;
 	}
 
+	uint64_t NetMatchService::StepJoinHistory(NetWorldJoinHost& host, uint64_t tick, std::optional<uint64_t> servedBaseTick, const std::map<uint8_t, NetGameSeatHold>& holds, double tickMs,
+	                                          const NetJoinHistoryPolicy& policy, std::vector<NetJoinHistoryEnd>* ends) {
+		NetWorldFrameLog& tail = host.Tail();
+		tail.SetJournalRetention(policy.retainFrames);
+		const bool journalFailed = tail.JournalFailed();
+		if (std::string why; tail.TakeJournalFailure(why))
+			System::PrintDiagnosticLine(std::format("[round-history] journal failed tick={} file={} reason={} memory_frames={}..{}", tick, tail.JournalFileName(), why, tail.FirstFrame(), tail.LastFrame()));
+		// A reader the history can no longer serve, or one that trails the round past the lag limit without gaining on it and with no join
+		// deadline to end it, would hold the journal open for itself alone: its bootstrap ends here, and a match's returning seat comes back
+		// on a fresh image. A bootstrap still waiting for its transfer is bound to the next image instead.
+		std::vector<NetJoinHistoryEnd> ending;
+		std::vector<NetPeerId> lagging;
+		for (const NetWorldJoinSession& session: host.Sessions())
+			if (StreamsTail(session) && (session.spectator || host.IsPrivateMatch())) lagging.push_back(session.connection);
+		std::erase_if(lagging, [&](NetPeerId connection) { return !host.TrailsPastLagLimit(connection, tick, policy.lagLimitFrames); });
+		for (const NetWorldJoinSession& session: host.Sessions()) {
+			if (session.phase == NetWorldJoinPhase::Active || session.phase == NetWorldJoinPhase::Failed || session.snapshotTick == 0) continue;
+			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted) continue;
+			const uint64_t needed = session.acknowledgedThrough + 1;
+			const uint64_t trail = tick > session.acknowledgedThrough ? tick - session.acknowledgedThrough : 0;
+			const char* reason = nullptr;
+			if (needed <= tick && !tail.Covers(needed)) reason = journalFailed ? "journal" : "history";
+			else if (std::find(lagging.begin(), lagging.end(), session.connection) != lagging.end()) reason = "lag";
+			if (reason == nullptr) continue;
+			NetJoinHistoryEnd end;
+			end.connection = session.connection;
+			end.rebase = host.IsPrivateMatch() && !session.spectator;
+			end.receipt = std::format("[round-history] reader ended connection={} peer={} kind={} reason={} applied={} horizon={} trail_frames={} lag_limit_frames={} first_servable={} action={} seat={}",
+			                          session.connection, static_cast<int>(session.assignedPeerId), session.spectator ? "watcher" : session.returnsToHeldSeat ? "returner" : "joiner", reason,
+			                          session.acknowledgedThrough, tick, trail, policy.lagLimitFrames, tail.FirstServableFrame(), end.rebase ? "rebased" : "closed",
+			                          session.returnsToHeldSeat ? "held" : "none");
+			ending.push_back(std::move(end));
+		}
+		for (const NetJoinHistoryEnd& end: ending) {
+			host.EndBootstrap(end.connection, "the round's history no longer serves it");
+			System::PrintDiagnosticLine(end.receipt);
+		}
+		if (tail.JournalFailed() && tail.ReopenJournal(tick))
+			System::PrintDiagnosticLine(std::format("[round-history] journal reopened tick={} file={} first={} reopens={}", tick, tail.JournalFileName(), tail.FirstServableFrame(), tail.JournalReopens()));
+		uint64_t floor = ReturnHistoryFloor(tick, servedBaseTick, host.Sessions(), holds, tickMs, policy.returnWindowMinutes);
+		// Nothing older than the history can still serve is kept for a return.
+		if (const uint64_t first = tail.FirstServableFrame(); first != 0) floor = std::max(floor, std::min(first, tick + 1));
+		tail.PruneJournalBefore(floor);
+		if (ends) ends->insert(ends->end(), std::make_move_iterator(ending.begin()), std::make_move_iterator(ending.end()));
+		return floor;
+	}
+
+	NetJoinHistoryPolicy NetMatchService::JoinHistoryPolicyFromSettings(double tickMs) {
+		const double tick = std::isfinite(tickMs) && tickMs > 0 ? tickMs : 1000.0 / 60.0;
+		const auto frames = [&](int seconds) { return static_cast<uint64_t>(std::llround(seconds * 1000.0 / tick)); };
+		NetJoinHistoryPolicy policy;
+		policy.retainFrames = frames(g_SettingsMan.GetNetworkHostJoinHistorySeconds());
+		policy.lagLimitFrames = frames(g_SettingsMan.GetNetworkHostJoinLagSeconds());
+		return policy;
+	}
+
 	void NetMatchService::PruneReturnHistory(uint64_t tick) {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (!m_Coordinator || !m_WorldJoin.IsConfigured() || !m_WorldJoin.Tail().HasJournal()) return;
+		if (!m_Coordinator || !m_WorldJoin.IsConfigured()) return;
 		NetLockstepPlaneGuard plane;
-		const uint64_t floor = ReturnHistoryFloorLocked(tick, SteadyNowMs());
-		m_WorldJoin.Tail().PruneJournalBefore(floor);
+		const double tickMs = m_Coordinator->GetConfig().simTickMs;
+		std::vector<NetJoinHistoryEnd> ends;
+		NetJoinHistoryPolicy policy = JoinHistoryPolicyFromSettings(tickMs);
+		policy.returnWindowMinutes = m_Coordinator->GetConfig().matchConfig.returnWindowMinutes;
+		const uint64_t floor = StepJoinHistory(m_WorldJoin, tick, ServedReturnBaseLocked(SteadyNowMs()), m_Coordinator->HeldTransactions(), tickMs, policy, &ends);
 		m_LastReturnHistoryFloor = floor;
 		m_Coordinator->SetReturnHistoryFloor(floor);
+		// A returning seat goes back for a fresh image on its ticket; any other reader is told the world moved on past it.
+		if (m_Session)
+			for (const NetJoinHistoryEnd& end: ends) m_Session->DisconnectReadyPeer(end.connection, NetRejectReason::HostNotAccepting, end.rebase ? c_ImageRejoinDetail : c_HistoryPassedDetail);
 	}
 
 	bool NetMatchService::CaptureFullStateHash(uint64_t tick, uint64_t round, const std::string& dumpDirectory, const std::string& label) {
@@ -3908,11 +3970,15 @@ static std::string ResyncSaveName() {
 				if (m_WorldJoin.IsConfigured()) {
 					const NetWorldFrameLog& tail = m_WorldJoin.Tail();
 					const NetWorldFrameLog::JournalStats journal = tail.GetJournalStats();
-					const uint64_t journalBound = m_LastReturnHistoryFloor != 0 && journal.last >= m_LastReturnHistoryFloor ? journal.last + 1 - m_LastReturnHistoryFloor + NetWorldFrameLog::c_JournalSegmentFrames : 0;
+					uint64_t journalBound = m_LastReturnHistoryFloor != 0 && journal.last >= m_LastReturnHistoryFloor ? journal.last + 1 - m_LastReturnHistoryFloor + NetWorldFrameLog::c_JournalSegmentFrames : 0;
+					// The host's retained history caps it whatever the floor reads.
+					if (tail.JournalRetention() != 0) journalBound = std::min(journalBound, tail.JournalRetention() + NetWorldFrameLog::c_JournalSegmentFrames);
 					System::PrintDiagnosticLine(std::format("[round-history] tick={} memory_frames={} memory_bytes={} memory_bound_frames={} memory_bound_bytes={} journal_files={} journal_bytes={} "
-					                                        "journal_first={} journal_last={} floor={} journal_bound_frames={} journal_index_bytes={} journal_cached_reads={} journal_cached_read_bytes={}",
+					                                        "journal_first={} journal_last={} floor={} journal_bound_frames={} journal_index_bytes={} journal_cached_reads={} journal_cached_read_bytes={} "
+					                                        "journal_retain_frames={} journal_failed={} journal_reopens={}",
 					                                        tick, tail.Count(), tail.Bytes(), tail.MaxFrames(), tail.MaxBytes(), journal.files, journal.bytes, journal.first, journal.last,
-					                                        m_LastReturnHistoryFloor, journalBound, journal.indexBytes, journal.cachedReads, journal.cachedReadBytes));
+					                                        m_LastReturnHistoryFloor, journalBound, journal.indexBytes, journal.cachedReads, journal.cachedReadBytes, tail.JournalRetention(),
+					                                        tail.JournalFailed(), tail.JournalReopens()));
 				}
 				if (m_WorldJoin.IsConfigured()) {
 					// The image is published when the writer thread has finished this archive, from the pump.
@@ -4992,7 +5058,7 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::AnswerStalledReturnersLocked(uint64_t nowMs) {
 		// A returner that replays slower than the round plays keeps catching up: its activation waits until its replay shows
-		// headroom, so no peer ever waits on it, and a restart would only hand the same machine the same gap again.
+		// headroom, so no peer ever waits on it, until the round's history sends it back for a fresh image past the lag limit.
 		for (const NetPeerId connection: m_WorldJoin.ReturnersWithoutHeadroom(nowMs, c_NetWorldHeadroomWaitMs)) {
 			const NetWorldJoinSession* session = m_WorldJoin.FindSession(connection);
 			if (!session || !m_SlowReturnersNoted.insert(connection).second) continue;
@@ -6598,6 +6664,7 @@ static std::string ResyncSaveName() {
 			if (m_InPlaceCatchUp && hostGone && BeginInPlaceMoveLocked(nowMs)) return;
 			ScenarioRunner::SetControllerReplayError(!m_HeldUnreachableText.empty() ? m_HeldUnreachableText : m_WorldCatchUp.privateMatch
 			    ? "PeerHeld:Held - AI in control - reconnecting the private catch-up link"
+			    : rejectText.find(c_HistoryPassedDetail) != std::string::npos ? "PeerLeft:The world moved on past your catch-up - join again"
 			    : "PeerLeft:The host connection was lost while joining the world");
 			return;
 		}

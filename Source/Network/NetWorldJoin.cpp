@@ -13,8 +13,10 @@
 #include <bit>
 #include <cmath>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -904,6 +906,25 @@ namespace RTE {
 			std::unique_ptr<std::fstream> stream;
 			std::vector<std::pair<uint64_t, uint32_t>> records; //!< Offset and size of each frame from first on.
 		};
+		// A fault the test lever CCCP_TEST_JOURNAL_FAULT injects into a round's first journal: "write:F" closes the file under frame F's
+		// write, "queue:F" stops the writer before frame F and holds the queue from F to 64 KiB, so it fills. A reopened journal never takes it.
+		struct Fault {
+			uint64_t writeAt = 0, stallAt = 0;
+		};
+		static Fault ReadFault(bool reopened) {
+			Fault fault;
+			const char* lever = reopened ? nullptr : std::getenv("CCCP_TEST_JOURNAL_FAULT");
+			if (lever == nullptr) return fault;
+			const std::string text = lever;
+			const auto at = [&](const char* kind) -> uint64_t {
+				const std::string prefix = std::string(kind) + ":";
+				return text.rfind(prefix, 0) == 0 ? std::strtoull(text.c_str() + prefix.size(), nullptr, 10) : 0;
+			};
+			fault.writeAt = at("write");
+			fault.stallAt = at("queue");
+			return fault;
+		}
+
 		std::string path;
 		std::mutex mutex;
 		std::condition_variable changed;
@@ -911,17 +932,31 @@ namespace RTE {
 		uint64_t queuedBytes = 0;
 		bool stopping = false;
 		std::atomic<bool> failed{false};
+		std::atomic<bool> finished{false}; //!< Its writer has returned and removed its files.
+		std::string failure; //!< Why it failed, under mutex; the first reason stands.
 		std::atomic<uint64_t> bytesOnDisk{0}; //!< Its files' bytes, as the worker last left them.
 		std::atomic<uint32_t> filesOnDisk{0};
 		std::atomic<uint64_t> indexBytes{0}; //!< The worker's per-frame offsets, as it last left them.
 		std::map<std::tuple<uint64_t, size_t, uint64_t>, std::shared_future<ReadResult>> reads;
+		const Fault fault;
 		std::thread worker;
 
-		explicit Journal(std::string value): path(std::move(value)), worker([this] { Run(); }) {}
+		Journal(std::string value, bool reopened): path(std::move(value)), fault(ReadFault(reopened)), worker([this] { Run(); }) {}
 		~Journal() {
+			RequestStop();
+			if (worker.joinable()) worker.join();
+		}
+		void RequestStop() {
 			{ std::lock_guard lock(mutex); stopping = true; }
 			changed.notify_one();
-			if (worker.joinable()) worker.join();
+		}
+		void Fail(const std::string& why) {
+			std::lock_guard lock(mutex);
+			FailLocked(why);
+		}
+		void FailLocked(const std::string& why) {
+			if (failure.empty()) failure = why;
+			failed = true;
 		}
 		void Prune(uint64_t before) {
 			std::lock_guard lock(mutex);
@@ -931,7 +966,12 @@ namespace RTE {
 		}
 		bool Append(uint64_t frame, const std::vector<uint8_t>& bytes) {
 			std::lock_guard lock(mutex);
-			if (failed || queuedBytes + bytes.size() > 32ULL * 1024 * 1024) { failed = true; return false; }
+			if (failed) return false;
+			const uint64_t limit = fault.stallAt != 0 && frame >= fault.stallAt ? 64ULL * 1024 : c_JournalQueueBytes;
+			if (queuedBytes + bytes.size() > limit) {
+				FailLocked("its writer fell " + std::to_string(limit / 1024) + " KiB of frames behind at frame " + std::to_string(frame));
+				return false;
+			}
 			Job job; job.frame = frame; job.bytes = bytes;
 			queuedBytes += bytes.size(); jobs.push_back(std::move(job));
 			changed.notify_one();
@@ -953,7 +993,7 @@ namespace RTE {
 				const auto& ready = found->second.get();
 				out = ready.records;
 				if (last) *last = ready.last;
-			} catch (...) { failed = true; return 0; }
+			} catch (...) { Fail("a read from frame " + std::to_string(from) + " failed"); return 0; }
 			while (reads.size() > 32) {
 				auto oldest = reads.begin();
 				if (oldest == found) ++oldest;
@@ -975,7 +1015,9 @@ namespace RTE {
 					Job job;
 					{
 						std::unique_lock lock(mutex);
-						changed.wait(lock, [&] { return stopping || !jobs.empty(); });
+						// The lever's stalled writer leaves frame stallAt and everything after it queued.
+						const auto stalled = [&] { return fault.stallAt != 0 && !jobs.front().prune && !jobs.front().result && jobs.front().frame >= fault.stallAt; };
+						changed.wait(lock, [&] { return stopping || (!jobs.empty() && !stalled()); });
 						if (stopping) break;
 						job = std::move(jobs.front()); jobs.pop_front(); queuedBytes -= job.bytes.size();
 					}
@@ -992,13 +1034,14 @@ namespace RTE {
 							segment.path = opened == 0 ? path : path + "." + std::to_string(opened);
 							++opened;
 							segment.stream = std::make_unique<std::fstream>(segment.path, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
-							if (!*segment.stream) { failed = true; break; }
+							if (!*segment.stream) { Fail("it could not open " + std::filesystem::path(segment.path).filename().string()); break; }
 							segments.push_back(std::move(segment));
 						}
 						Segment& segment = segments.back();
+						if (fault.writeAt != 0 && job.frame >= fault.writeAt) segment.stream->close();
 						segment.stream->clear(); segment.stream->seekp(static_cast<std::streamoff>(segment.endOffset));
 						segment.stream->write(reinterpret_cast<const char*>(job.bytes.data()), static_cast<std::streamsize>(job.bytes.size()));
-						if (!*segment.stream) { failed = true; break; }
+						if (!*segment.stream) { Fail("its write of frame " + std::to_string(job.frame) + " failed"); break; }
 						segment.records.emplace_back(segment.endOffset, static_cast<uint32_t>(job.bytes.size()));
 						segment.endOffset += job.bytes.size();
 					} else {
@@ -1013,7 +1056,7 @@ namespace RTE {
 								std::vector<uint8_t> bytes(size);
 								segment.stream->clear(); segment.stream->seekg(static_cast<std::streamoff>(offset));
 								segment.stream->read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size));
-								if (!*segment.stream) { failed = true; result = {}; break; }
+								if (!*segment.stream) { Fail("its read of frame " + std::to_string(expected) + " failed"); result = {}; break; }
 								result.records.push_back(std::move(bytes)); total += size; result.last = expected;
 							}
 							if (failed || expected < segment.first + segment.records.size()) break;
@@ -1031,13 +1074,31 @@ namespace RTE {
 						indexBytes = index;
 					}
 				}
-			} catch (...) { failed = true; }
+			} catch (const std::exception& error) {
+				Fail(std::string("its writer stopped: ") + error.what());
+			} catch (...) { Fail("its writer stopped"); }
 			for (Segment& segment: segments) close(segment);
+			finished = true;
 		}
 	};
 
 	void NetWorldFrameLog::EnableJournal(const std::string& path) {
-		m_Journal = std::make_shared<Journal>(path);
+		m_JournalPath = path;
+		m_JournalReopens = 0;
+		m_JournalReopenAt = 0;
+		OpenJournal(path, false);
+	}
+
+	void NetWorldFrameLog::OpenJournal(const std::string& path, bool reopened) {
+		// The journal this one replaces is told to stop and let go once its writer has, so a slow disk never holds this thread.
+		if (m_Journal) {
+			m_Journal->RequestStop();
+			m_RetiredJournals.push_back(std::move(m_Journal));
+		}
+		std::erase_if(m_RetiredJournals, [](const std::shared_ptr<Journal>& retired) { return retired->finished.load(); });
+		m_JournalBase = m_JournalFirst = m_JournalLast = 0;
+		m_JournalFailureTaken = false;
+		m_Journal = std::make_shared<Journal>(path, reopened);
 		for (const auto& record: m_Records) {
 			if (!m_Journal->Append(record.frame, record.bytes)) break;
 			if (m_JournalFirst == 0) m_JournalBase = m_JournalFirst = record.frame;
@@ -1045,7 +1106,32 @@ namespace RTE {
 		}
 	}
 
+	bool NetWorldFrameLog::ReopenJournal(uint64_t nowFrame) {
+		if (!m_Journal || m_JournalPath.empty() || nowFrame < m_JournalReopenAt) return false;
+		++m_JournalReopens;
+		m_JournalReopenAt = nowFrame + (c_JournalReopenFrames << std::min<uint32_t>(m_JournalReopens - 1, 5));
+		OpenJournal(m_JournalPath + ".r" + std::to_string(m_JournalReopens), true);
+		return true;
+	}
+
 	bool NetWorldFrameLog::JournalFailed() const { return m_Journal && m_Journal->failed; }
+
+	std::string NetWorldFrameLog::JournalFailure() const {
+		if (!m_Journal) return {};
+		std::lock_guard lock(m_Journal->mutex);
+		return m_Journal->failure;
+	}
+
+	bool NetWorldFrameLog::TakeJournalFailure(std::string& why) {
+		if (!JournalFailed() || m_JournalFailureTaken) return false;
+		m_JournalFailureTaken = true;
+		why = JournalFailure();
+		return true;
+	}
+
+	std::string NetWorldFrameLog::JournalFileName() const {
+		return m_Journal ? std::filesystem::path(m_Journal->path).filename().string() : std::string();
+	}
 
 	size_t NetWorldFrameLog::RingFrames(uint32_t boundTicks, uint32_t delayMarginFrames, uint64_t captureIntervalMs, double tickMs) {
 		const double tick = std::isfinite(tickMs) && tickMs > 0 ? tickMs : 1000.0 / 60.0;
@@ -1076,7 +1162,10 @@ namespace RTE {
 		if (m_Journal && m_Journal->Append(frame.targetFrame, record.bytes)) {
 			if (m_JournalFirst == 0) m_JournalBase = m_JournalFirst = frame.targetFrame;
 			m_JournalLast = frame.targetFrame;
+			// The host's retained history bounds the journal whatever its readers still need.
+			if (m_JournalRetain != 0 && m_JournalLast >= m_JournalRetain) PruneJournalBefore(m_JournalLast + 1 - m_JournalRetain);
 		}
+		if (!m_RetiredJournals.empty()) std::erase_if(m_RetiredJournals, [](const std::shared_ptr<Journal>& retired) { return retired->finished.load(); });
 		m_Bytes += record.bytes.size();
 		m_Records.push_back(std::move(record));
 		Trim();
@@ -1151,7 +1240,7 @@ namespace RTE {
 	}
 
 	void NetWorldFrameLog::PruneJournalBefore(uint64_t frame) {
-		if (!m_Journal || m_JournalFirst == 0 || frame <= m_JournalFirst) return;
+		if (!m_Journal || m_Journal->failed || m_JournalFirst == 0 || frame <= m_JournalFirst) return;
 		// The file being written stays, so the first frame left is the first of the oldest file the floor keeps.
 		const auto fileStart = [this](uint64_t at) { return m_JournalBase + (at - m_JournalBase) / c_JournalSegmentFrames * c_JournalSegmentFrames; };
 		const uint64_t first = std::min(fileStart(frame), fileStart(m_JournalLast));
@@ -1171,7 +1260,13 @@ namespace RTE {
 
 	void NetWorldFrameLog::Clear() {
 		m_Journal.reset();
+		m_RetiredJournals.clear();
 		m_JournalBase = m_JournalFirst = m_JournalLast = 0;
+		m_JournalPath.clear();
+		m_JournalRetain = 0;
+		m_JournalReopens = 0;
+		m_JournalReopenAt = 0;
+		m_JournalFailureTaken = false;
 		m_Records.clear();
 		m_Bytes = 0;
 		m_Evicted = 0;
@@ -2316,6 +2411,37 @@ namespace RTE {
 		++m_JoinsCancelled;
 		if (session->assignedPeerId != 0) m_CancelledJoins.push_back(session->assignedPeerId);
 		std::erase_if(m_Sessions, [&](const NetWorldJoinSession& entry) { return entry.connection == connection; });
+	}
+
+	void NetWorldJoinHost::EndBootstrap(NetPeerId connection, const std::string& reason) {
+		NetWorldJoinSession* session = Find(connection);
+		if (session == nullptr) return;
+		if (!session->returnsToHeldSeat) {
+			CancelJoin(connection, reason);
+			return;
+		}
+		// The seat stays its player's: only the bootstrap ends, and the roster hears its return was cut short.
+		session->phase = NetWorldJoinPhase::Failed;
+		session->refusal = reason;
+		++m_JoinsCancelled;
+		if (session->assignedPeerId != 0) m_CancelledJoins.push_back(session->assignedPeerId);
+		std::erase_if(m_Sessions, [&](const NetWorldJoinSession& entry) { return entry.connection == connection; });
+	}
+
+	bool NetWorldJoinHost::TrailsPastLagLimit(NetPeerId connection, uint64_t tick, uint64_t limitFrames) {
+		NetWorldJoinSession* session = Find(connection);
+		if (session == nullptr || limitFrames == 0) return false;
+		const uint64_t trail = tick > session->acknowledgedThrough ? tick - session->acknowledgedThrough : 0;
+		if (trail <= limitFrames) {
+			session->lagSinceTick = 0;
+			return false;
+		}
+		if (session->lagSinceTick == 0 || trail < session->lagSinceTrail) {
+			session->lagSinceTick = tick;
+			session->lagSinceTrail = trail;
+			return false;
+		}
+		return tick >= session->lagSinceTick + limitFrames;
 	}
 
 	std::vector<uint8_t> NetWorldJoinHost::TakeCancelledJoins() {

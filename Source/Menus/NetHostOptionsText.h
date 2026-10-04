@@ -56,6 +56,22 @@ namespace RTE {
 		return std::to_string(minutes) + (minutes == 1 ? " minute" : " minutes");
 	}
 
+	/// The world history row's consequence.
+	inline const char* NetJoinHistoryHint() {
+		return "Longer history lets slower joiners catch up and uses more host disk.";
+	}
+
+	/// The catch-up limit row's consequence.
+	inline const char* NetJoinLagHint() {
+		return "A watcher or return trailing past the limit starts over from an image.";
+	}
+
+	/// One world history or catch-up limit choice, as its row names it.
+	inline std::string NetJoinHistoryText(int seconds) {
+		if (seconds % 60 != 0) return std::to_string(seconds) + (seconds == 1 ? " second" : " seconds");
+		return std::to_string(seconds / 60) + (seconds == 60 ? " minute" : " minutes");
+	}
+
 	/// Settings > Network > Connection's hint for each route choice.
 	inline const char* NetConnectionModeHint(SettingsMan::NetworkConnectionMode mode) {
 		switch (mode) {

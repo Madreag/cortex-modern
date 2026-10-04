@@ -215,6 +215,18 @@ RED_HEAL_WINDOW_RESUMED = "heal-window-survived-a-resumed-round"
 RED_BROWSER_WORLD_ROW = "browser-world-row-text-changed"
 RED_BROWSER_ORDINARY_ROW = "browser-ordinary-row-text-changed"
 RED_BROWSER_ROW_MISSING = "browser-world-row-missing"
+RED_JOURNAL_PAST_POLICY = "journal-grew-past-its-policy"
+RED_STALLED_WATCHER_KEPT = "stalled-watcher-kept-its-bootstrap"
+RED_SLOW_RETURNER_KEPT = "slow-returner-kept-its-catch-up"
+RED_SLOW_RETURNER_SEAT = "slow-returner-lost-its-seat"
+RED_FAR_RETURNER_ENDED = "far-returner-ended-while-closing"
+RED_JOURNAL_FAILURE_UNNAMED = "journal-failure-unnamed"
+RED_JOURNAL_NOT_RECOVERED = "journal-failure-not-recovered"
+# The live journal-fault arm's own REDs: what the driver scores on a real world host whose journal fails mid-round.
+RED_LIVE_JOURNAL_ROUND = "world-journal-fault-round-failed"
+RED_LIVE_JOURNAL_UNNAMED = "world-journal-failure-unnamed"
+RED_LIVE_JOURNAL_NOT_REOPENED = "world-journal-not-reopened"
+RED_LIVE_JOURNAL_PAST_POLICY = "world-journal-past-its-policy"
 
 # The world-segment arm's own REDs: what the driver scores when a real world's segments are read back.
 RED_SEGMENT_NOT_WRITTEN = "world-wrote-no-segment"
@@ -762,6 +774,40 @@ CASES = (
         "pass_token": "[net-world-browser-row-selftest] PASS",
     },
     {
+        # A watcher that heartbeats but stops replaying, over four files of the round's history: the journal stays inside the host's
+        # policy and the watcher's bootstrap ends with a receipt. The run prints the journal's frames, bytes and files every 3,000 ticks.
+        "name": "journal-bound-stalled-watcher",
+        "argv": ["-net-world-journal-bound-selftest"],
+        "red": RED_JOURNAL_PAST_POLICY,
+        "also_red": (RED_STALLED_WATCHER_KEPT,),
+        "pass_token": "[net-world-journal-bound-selftest] PASS",
+    },
+    {
+        # A match's returning seat replaying at half the round's rate: past the lag limit it is sent back for a fresh image, its seat held.
+        # One three minutes behind but closing at three times the round's rate keeps its catch-up.
+        "name": "journal-bound-slow-returner",
+        "argv": ["-net-world-journal-slow-returner-selftest"],
+        "red": RED_SLOW_RETURNER_KEPT,
+        "also_red": (RED_SLOW_RETURNER_SEAT, RED_JOURNAL_PAST_POLICY, RED_FAR_RETURNER_ENDED),
+        "pass_token": "[net-world-journal-slow-returner-selftest] PASS",
+    },
+    {
+        # The journal's disk write fails at frame 5000 (CCCP_TEST_JOURNAL_FAULT=write:5000, set inside the run): reported, reopened, served again.
+        "name": "journal-write-fault-recovered",
+        "argv": ["-net-world-journal-write-fault-selftest"],
+        "red": RED_JOURNAL_NOT_RECOVERED,
+        "also_red": (RED_JOURNAL_FAILURE_UNNAMED,),
+        "pass_token": "[net-world-journal-write-fault-selftest] PASS",
+    },
+    {
+        # The journal's writer stops at frame 5000 until its queue overflows (CCCP_TEST_JOURNAL_FAULT=queue:5000): reported, reopened, served again.
+        "name": "journal-queue-overflow-recovered",
+        "argv": ["-net-world-journal-queue-overflow-selftest"],
+        "red": RED_JOURNAL_NOT_RECOVERED,
+        "also_red": (RED_JOURNAL_FAILURE_UNNAMED,),
+        "pass_token": "[net-world-journal-queue-overflow-selftest] PASS",
+    },
+    {
         "name": "world-segment-replay",
         "kind": "world_segment",
         "fn": "world_segment_replay",
@@ -1136,6 +1182,73 @@ def world_held_seat_late_join(repo: Path, out: Path, port: int = HELD_SEAT_PORT)
     print(f"[world-held-seat] hashes compared={compared} ticks={verdict['first_compared']}..{verdict['last_compared']} "
           f"first_difference={difference if difference is not None else 'none'}", flush=True)
     assert not reasons, "; ".join(reasons)
+def world_journal_fault(repo: Path, out: Path, port: int = SEGMENT_PORT, fault_at: int = 1200, ticks: int = 3600) -> dict:
+    """A live two-peer world whose host's journal fails mid-round: it is named, reopened, and the member never waits.
+
+    One round runs twice on one port: a control, then the same round with the host's journal faulted at frame
+    `fault_at` (CCCP_TEST_JOURNAL_FAULT=write:<frame> in the host's environment) and its retained history at 60 s.
+    The faulted host must name the failure and the reopen in its [round-history] receipts and keep its journal inside
+    its policy at every autosave after the reopen; both rounds must end cleanly with every shared tick hash equal, and
+    each peer's wall tps is reported beside the control's."""
+    tools = Path(__file__).resolve().parent
+    sys.path.insert(0, str(tools))
+    import test_autosave_restore as restore
+
+    original = restore.make_run
+    retain_frames = 60 * 60
+    segment = 3600
+
+    def run_round(name: str, host_env: dict, host_settings: dict):
+        root = Path(out) / name
+        root.mkdir(parents=True, exist_ok=True)
+
+        def make_run(repo_, args, run_out, timeout=120, env=None, **kwargs):
+            host = Path(run_out).name == "host"
+            run = original(repo_, args, run_out, timeout, env={**(env or {}), **(host_env if host else {})}, **kwargs)
+            if host and host_settings:
+                restore.pin_settings(run, host_settings)
+            return run
+
+        restore.make_run = make_run
+        try:
+            records = restore._run_world_round(repo, root, port, ticks, {})
+        finally:
+            restore.make_run = original
+        for who in ("host", "client"):
+            assert records[who].get("exit_code") == 0, f"{RED_LIVE_JOURNAL_ROUND}: {name} {who} exit {records[who].get('exit_code')} {records[who].get('error')}"
+        host_rows = restore.read_live_hashes(root / "host-live.jsonl")
+        client_rows = restore.read_live_hashes(root / "client-live.jsonl")
+        assert host_rows and client_rows, f"{RED_LIVE_JOURNAL_ROUND}: {name} recorded no live hashes"
+        first, last = max(host_rows[0]["tick"], client_rows[0]["tick"]), min(host_rows[-1]["tick"], client_rows[-1]["tick"])
+        restore.compare_live_window(root, first, last, {"client": restore.held_away(restore.peer_log(root, "client"))})
+        tps = {}
+        for who in ("host", "client"):
+            report = json.loads((root / f"{who}_report.json").read_text(encoding="utf-8-sig"))
+            tps[who] = float(report.get("pace", {}).get("wall_tps") or 0.0)
+        return root, {"ticks": [first, last], "wall_tps": tps}
+
+    control_root, control = run_round("control", {}, {})
+    faulted_root, faulted = run_round("faulted", {"CCCP_TEST_JOURNAL_FAULT": f"write:{fault_at}"}, {"NetworkHostJoinHistorySeconds": "60"})
+    host_log = restore.peer_log(faulted_root, "host")
+    failed = re.search(r"^\[round-history\] journal failed tick=(\d+) file=(\S+) reason=(.*) memory_frames=(\d+)\.\.(\d+)$", host_log, re.MULTILINE)
+    assert failed and f"its write of frame {fault_at} failed" in failed[3], f"{RED_LIVE_JOURNAL_UNNAMED}: {failed[0] if failed else 'no failure receipt'}"
+    reopened = re.search(r"^\[round-history\] journal reopened tick=(\d+) file=(\S+) first=(\d+) reopens=1$", host_log, re.MULTILINE)
+    assert reopened and int(reopened[1]) >= int(failed[1]), f"{RED_LIVE_JOURNAL_NOT_REOPENED}: {reopened[0] if reopened else 'no reopen receipt'}"
+    receipts = [dict(pair.split("=", 1) for pair in line.split()[1:]) for line in re.findall(r"^\[round-history\] tick=.*$", host_log, re.MULTILINE)]
+    after = [receipt for receipt in receipts if int(receipt["tick"]) > int(reopened[1])]
+    assert after, f"{RED_LIVE_JOURNAL_NOT_REOPENED}: no autosave receipt after the reopen at {reopened[1]}"
+    for receipt in after:
+        frames = int(receipt["journal_last"]) + 1 - int(receipt["journal_first"]) if int(receipt["journal_first"]) else 0
+        assert receipt["journal_failed"] == "false" and receipt["journal_reopens"] == "1", f"{RED_LIVE_JOURNAL_NOT_REOPENED}: {receipt}"
+        assert int(receipt["journal_retain_frames"]) == retain_frames and frames <= retain_frames + segment, f"{RED_LIVE_JOURNAL_PAST_POLICY}: {receipt}"
+    verdict = {"control": control, "faulted": faulted, "failed": failed[0], "reopened": reopened[0], "receipts_after_reopen": len(after),
+               "largest_journal_frames": max(int(r["journal_last"]) + 1 - int(r["journal_first"]) for r in after if int(r["journal_first"]))}
+    (Path(out) / "journal_fault_verdict.json").write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
+    print(f"[world-journal-fault] {failed[0]}", flush=True)
+    print(f"[world-journal-fault] {reopened[0]}", flush=True)
+    print(f"[world-journal-fault] receipts_after_reopen={len(after)} largest_journal_frames={verdict['largest_journal_frames']} bound={retain_frames + segment} "
+          f"wall_tps control host={control['wall_tps']['host']:.2f} client={control['wall_tps']['client']:.2f} "
+          f"faulted host={faulted['wall_tps']['host']:.2f} client={faulted['wall_tps']['client']:.2f}", flush=True)
     return verdict
 
 
@@ -1167,7 +1280,7 @@ def host_restart_same_world_id(repo: Path, out: Path) -> None:
         raise AssertionError("world-id-did-not-survive-restart: " + repr(printed))
 
 
-USAGE = """usage: test_persistent_world.py [directory-resume | world-segment REPO [OUT] | host-restart REPO [OUT] | world-held-seat REPO [OUT]] [--fullstate-every N] [--port P]
+USAGE = """usage: test_persistent_world.py [directory-resume | world-segment REPO [OUT] | host-restart REPO [OUT] | world-held-seat REPO [OUT] | world-journal-fault REPO [OUT]] [--fullstate-every N] [--port P]
 
   --fullstate-every N  world-segment only: every N committed ticks both peers of each world round hash their whole
                        capture (-net-fullstate-hash-every) and every round's pair must match; 0 is off"""
@@ -1198,6 +1311,10 @@ if __name__ == "__main__":
         world_held_seat_late_join(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else os.getcwd()), port=HELD_SEAT_PORT)
         print("[world-held-seat] PASS")
         # Every launch went through run_sim_test.make_run: nothing here starts the executable itself.
+    elif len(sys.argv) > 1 and sys.argv[1] == "world-journal-fault":
+        world_journal_fault(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else os.getcwd()), port=SEGMENT_RUN_PORT)
+        print("[world-journal-fault] PASS")
+        # Both rounds went through the runner: nothing here starts the executable itself.
     elif len(sys.argv) > 1 and sys.argv[1] == "host-restart":
         host_restart_same_world_id(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else os.getcwd()))
         print("[net-world-identity-print-selftest] PASS")
