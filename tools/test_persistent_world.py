@@ -220,6 +220,7 @@ RED_STALLED_WATCHER_KEPT = "stalled-watcher-kept-its-bootstrap"
 RED_SLOW_RETURNER_KEPT = "slow-returner-kept-its-catch-up"
 RED_SLOW_RETURNER_SEAT = "slow-returner-lost-its-seat"
 RED_FAR_RETURNER_ENDED = "far-returner-ended-while-closing"
+RED_RETENTION_CUT_WINDOW = "the-retention-cut-the-return-window"
 RED_JOURNAL_FAILURE_UNNAMED = "journal-failure-unnamed"
 RED_JOURNAL_NOT_RECOVERED = "journal-failure-not-recovered"
 # The live journal-fault arm's own REDs: what the driver scores on a real world host whose journal fails mid-round.
@@ -790,6 +791,14 @@ CASES = (
         "red": RED_SLOW_RETURNER_KEPT,
         "also_red": (RED_SLOW_RETURNER_SEAT, RED_JOURNAL_PAST_POLICY, RED_FAR_RETURNER_ENDED),
         "pass_token": "[net-world-journal-slow-returner-selftest] PASS",
+    },
+    {
+        # A seat held at frame F under a 30-minute return window and a one-minute World history: its frames from F - skew stay for the
+        # whole window and a return two minutes after the hold resumes in place.
+        "name": "journal-keeps-the-return-window",
+        "argv": ["-net-world-journal-window-selftest"],
+        "red": RED_RETENTION_CUT_WINDOW,
+        "pass_token": "[net-world-journal-window-selftest] PASS",
     },
     {
         # The journal's disk write fails at frame 5000 (CCCP_TEST_JOURNAL_FAULT=write:5000, set inside the run): reported, reopened, served again.
