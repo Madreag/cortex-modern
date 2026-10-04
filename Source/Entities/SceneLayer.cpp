@@ -37,7 +37,10 @@ namespace {
 
 	BITMAP* NewBackBuffer(BITMAP* mainBitmap) {
 		s_BackBuffers.fetch_add(1, std::memory_order_relaxed);
-		return create_bitmap_ex(bitmap_color_depth(mainBitmap), mainBitmap->w, mainBitmap->h);
+		BITMAP* backBitmap = create_bitmap_ex(bitmap_color_depth(mainBitmap), mainBitmap->w, mainBitmap->h);
+		// Saves carry a backdrop's back buffer before anything draws to it; create_bitmap_ex leaves whatever the memory held.
+		if (backBitmap) clear_bitmap(backBitmap);
+		return backBitmap;
 	}
 
 	void FreeBackBuffer(BITMAP* backBitmap) {
@@ -205,6 +208,25 @@ bool BitmapSnapshot::RunSelfTest() {
 				return results;
 			});
 			for (const auto& [name, result]: worker.get()) check(name, result);
+		}
+		// A layer's back buffer reaches saves before anything draws to it, so it never holds what its memory held before.
+		{
+			constexpr int width = 64, height = 64;
+			std::vector<BitmapPtr> used;
+			for (int index = 0; index < 64; ++index) {
+				used.emplace_back(create_bitmap_ex(8, width, height));
+				if (!used.back()) throw std::runtime_error("back buffer fixture allocation failed");
+				clear_to_color(used.back().get(), 171);
+			}
+			used.clear();
+			BitmapPtr main(create_bitmap_ex(8, width, height));
+			BITMAP* back = NewBackBuffer(main.get());
+			size_t lit = 0;
+			for (int y = 0; y < height; ++y) {
+				for (int x = 0; x < width; ++x) lit += back->line[y][x] != 0;
+			}
+			FreeBackBuffer(back);
+			check("new_back_buffer_starts_zeroed lit=" + std::to_string(lit), lit == 0);
 		}
 	} catch (const std::exception& error) {
 		check(error.what(), false);

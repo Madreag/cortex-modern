@@ -1644,12 +1644,15 @@ bool ActivityMan::RunSaveCallbacksSelfTest() {
 	const bool savedAgain = loaded && SaveCurrentGame("save_callbacks_again") && WaitForSaveGameTask();
 	const bool repeated = savedAgain && scriptState.RunScriptString("assert(" + activityClass + ".save_callback_count == 2)") == 0 &&
 	                      LoadAndLaunchGame("save_callbacks_again") && scriptState.RunScriptString("assert(" + activityClass + ".save_callback_count == 2)") == 0;
-	const bool passed = callback && loaded && images && scene && objects && activityState && repeated && copyReceipts == 0;
+	// A script's one-argument SaveGame keeps its meaning from before the compression parameter: the user's save, written and loadable.
+	const bool scripted = repeated && scriptState.RunScriptString("assert(ActivityMan:SaveGame(\"save_callbacks_script\"))") == 0 && WaitForSaveGameTask() &&
+	                      LoadAndLaunchGame("save_callbacks_script");
+	const bool passed = callback && loaded && images && scene && objects && activityState && repeated && copyReceipts == 0 && scripted;
 	{
 		std::ostringstream line;
 		line << "[save-callback-selftest] " << (passed ? "PASS" : "FAIL") << " callback=" << callback << " loaded=" << loaded
 	          << " images=" << images << " scene=" << scene << " objects=" << objects << " activity=" << activityState << " repeated=" << repeated
-	          << " copy_receipts=" << copyReceipts;
+	          << " copy_receipts=" << copyReceipts << " script_save=" << scripted;
 		System::PrintDiagnosticLine(line.str());
 	}
 	return passed;
