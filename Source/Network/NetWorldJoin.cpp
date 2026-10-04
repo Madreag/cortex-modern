@@ -109,9 +109,13 @@ namespace RTE {
 			offer["authority_generation"] = image.authorityGeneration;
 			offer["authority_peer_id"] = image.authorityPeerId;
 			offer["departed_peers"] = image.departedPeers;
-		} else if (!image.sideState.empty()) {
-			// A world's image names the lockstep state of its tick, which its joiner starts on.
+		} else {
+			// A world's image names the lockstep state and the seats of its tick, which its joiner starts on.
 			offer["side_state"] = image.sideState;
+			offer["held_state"] = image.heldState;
+			offer["authority_generation"] = image.authorityGeneration;
+			offer["authority_peer_id"] = image.authorityPeerId;
+			offer["departed_peers"] = image.departedPeers;
 		}
 		return offer.dump();
 	}
@@ -140,6 +144,10 @@ namespace RTE {
 		image.boot = parsed.value("boot", uint64_t{0});
 		image.round = parsed.value("round", uint64_t{0});
 		image.tick = parsed.value("tick", uint64_t{0});
+		if (image.privateSessionId == 0 && (image.sideState.empty() || image.heldState.empty())) {
+			if (error) *error = "world join offer carries no seats for its tick: the host runs an older build";
+			return false;
+		}
 		if (image.privateSessionId != 0) {
 			const auto& pause = parsed.at("pause_state");
 			image.pauseState = {pause.at("paused").get<bool>(), pause.at("resume_countdown").get<int>(), pause.at("paused_frames").get<uint64_t>()};
@@ -1775,7 +1783,8 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetWorldJoinHost::PromoteWaitingSpectator(uint64_t nowFrame, uint64_t* outActivationTick, NetPeerId* outConnection, std::string* error) {
+	bool NetWorldJoinHost::PromoteWaitingSpectator(uint64_t nowFrame, uint64_t* outActivationTick, NetPeerId* outConnection, std::string* error,
+	                                               const std::function<bool(const NetWorldJoinSession&, const NetWorldSlot&)>& bind) {
 		if (outActivationTick) *outActivationTick = 0;
 		const NetWorldSlot* slot = m_Membership.FirstFreeSlot();
 		if (slot == nullptr) {
@@ -1808,6 +1817,10 @@ namespace RTE {
 		const uint8_t peerId = slot->peerId;
 		const int8_t team = slot->team;
 		const uint32_t generation = slot->generation;
+		if (bind && !bind(*oldest, *slot)) {
+			if (error) *error = "the seat roster did not take the watcher's seat onto slot " + std::to_string(static_cast<int>(peerId));
+			return false;
+		}
 		if (!m_Membership.Hold(peerId, oldest->stableSeat, oldest->holderName, error)) {
 			return false;
 		}

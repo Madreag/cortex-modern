@@ -185,6 +185,7 @@ namespace RTE {
 					seat->name.clear();
 					seat->ticket = 0;
 					seat->givenAwayTicket = 0;
+					seat->bindingRef = 0;
 					seat->link = NetSeatLink::Dropped;
 					seat->failedReturns = 0;
 					seat->returnAfterMs = 0;
@@ -365,6 +366,18 @@ namespace RTE {
 					seat->returnAfterMs = 0;
 					return commit("the player is back");
 				}
+				case NetRosterEventKind::SlotBound: {
+					if (!seat) return refuse("no such seat");
+					if (seat->bindingRef == event.slot) return keep("the seat already plays that slot");
+					if (event.slot != 0 && seat->owner == 0) return refuse("an open seat plays no slot");
+					if (next.stage == NetRosterStage::Migrating) return refuse("no host can move a seat to a slot until the new host hosts");
+					// A slot is played from one seat: the seat it moves from plays its own again.
+					if (event.slot != 0)
+						for (NetRosterSeat& each: next.seats)
+							if (each.seatId != seat->seatId && each.bindingRef == event.slot) each.bindingRef = 0;
+					seat->bindingRef = event.slot;
+					return commit(event.slot != 0 ? "the player plays world slot " + std::to_string(event.slot) : "the player plays the seat's own slot");
+				}
 				default: break;
 			}
 			return refuse("no such event");
@@ -407,6 +420,10 @@ namespace RTE {
 				return fail("seat " + std::to_string(is.seatId) + " has a dropped link in phase " + NetSeatPhaseName(is.phase));
 			if (IsBanned(after, is.owner)) return fail("a banned player holds seat " + std::to_string(is.seatId));
 		}
+		for (size_t i = 0; i < after.seats.size(); ++i)
+			for (size_t j = i + 1; j < after.seats.size(); ++j)
+				if (after.seats[i].bindingRef != 0 && after.seats[i].bindingRef == after.seats[j].bindingRef)
+					return fail("seats " + std::to_string(after.seats[i].seatId) + " and " + std::to_string(after.seats[j].seatId) + " play one slot");
 		if (!after.HostSeatValid()) return fail("the host seat does not exist");
 		if (after.migrationGen < before.migrationGen || (after.migrationGen != before.migrationGen && kind != NetRosterEventKind::HostChanged)) return fail("the migration generation moved outside a handover");
 		if (after.revision < before.revision) return fail("the revision went back");
@@ -430,7 +447,7 @@ namespace RTE {
 		static constexpr std::array<const char*, static_cast<size_t>(NetRosterEventKind::Count)> names{
 			"LinkDropped", "ProcessRelaunched", "Returned", "Kicked", "Banned", "RoundEnded", "RematchFormed", "HostLinkLost", "MemberSetProposed", "TransferAborted",
 			"LivenessPassed", "SlowMachine", "HostStalled", "Admitted", "ApplicantAccepted", "RoundStarted", "ImageLoaded", "CaughtUp", "HostResumed", "HostChanged",
-			"SeatReleased", "HeldInPlace"};
+			"SeatReleased", "HeldInPlace", "SlotBound"};
 		return kind < NetRosterEventKind::Count ? names[static_cast<size_t>(kind)] : "?";
 	}
 
@@ -694,28 +711,28 @@ namespace RTE {
 
 		/// The grid's columns as net-roster drives them.
 		struct Column { const char* id; NetRosterEventKind kind; const char* variant; };
-		constexpr std::array<Column, 20> c_Columns{{
+		constexpr std::array<Column, 21> c_Columns{{
 			{"a", NetRosterEventKind::LinkDropped, ""}, {"b", NetRosterEventKind::ProcessRelaunched, ""}, {"c", NetRosterEventKind::Returned, ""},
 			{"d", NetRosterEventKind::Kicked, ""}, {"d2", NetRosterEventKind::Banned, ""}, {"f", NetRosterEventKind::RoundEnded, ""},
 			{"g", NetRosterEventKind::RematchFormed, ""}, {"h", NetRosterEventKind::HostStalled, ""}, {"i", NetRosterEventKind::HostLinkLost, "quorum"},
 			{"i2", NetRosterEventKind::HostLinkLost, "one member"}, {"j", NetRosterEventKind::MemberSetProposed, "left out"}, {"k", NetRosterEventKind::TransferAborted, ""},
 			{"l", NetRosterEventKind::LivenessPassed, "traffic"}, {"l2", NetRosterEventKind::LivenessPassed, "silent"}, {"m", NetRosterEventKind::LinkDropped, "two at once"},
 			{"n", NetRosterEventKind::SlowMachine, "after the grace"}, {"o", NetRosterEventKind::Admitted, ""}, {"p", NetRosterEventKind::ApplicantAccepted, ""},
-			{"r", NetRosterEventKind::SeatReleased, ""}, {"q", NetRosterEventKind::HeldInPlace, ""}}};
+			{"r", NetRosterEventKind::SeatReleased, ""}, {"q", NetRosterEventKind::HeldInPlace, ""}, {"s", NetRosterEventKind::SlotBound, ""}}};
 
 		/// The expected outcome of each cell for the subject seat: its next phase (L S R H I C E M Z G), '-' unchanged, 'X' refused, '.' unreachable.
 		/// Columns in c_Columns' order; rows 1-10 are the grid's rows.
 		constexpr std::array<const char*, 10> c_Expected{{
-			/*  1 LOBBY          */ "LZLLLXS.XXHX-LL-XXL-",
-			/*  2 STARTING       */ "HZSHHXX-XXXX-HH-XXX-",
-			/*  3 RUNNING        */ "HZRHHMX-GXXX-HHHXXXH",
-			/*  4 HELD           */ "-ZIHHEX--XXX----XIH-",
-			/*  5 REJOIN_IMAGE   */ "HZIHHMX-HXXH-HH-XXX-",
-			/*  6 REJOIN_CATCHUP */ "HZIHHMX-HXXH-HH-XXX-",
-			/*  7 ROUND_END      */ "-ZMHHXH.XX-X----XMH-",
-			/*  8 REMATCH_LOBBY  */ "HZMHHXS.XXHX-HH-XXX-",
-			/*  9 RELAUNCHING    */ "--IHH-X--XXX----XIH-",
-			/* 10 MIGRATING      */ "HZX...X.-X.X-HH.XX.."}};
+			/*  1 LOBBY          */ "LZLLLXS.XXHX-LL-XXL--",
+			/*  2 STARTING       */ "HZSHHXX-XXXX-HH-XXX--",
+			/*  3 RUNNING        */ "HZRHHMX-GXXX-HHHXXXH-",
+			/*  4 HELD           */ "-ZIHHEX--XXX----XIH--",
+			/*  5 REJOIN_IMAGE   */ "HZIHHMX-HXXH-HH-XXX--",
+			/*  6 REJOIN_CATCHUP */ "HZIHHMX-HXXH-HH-XXX--",
+			/*  7 ROUND_END      */ "-ZMHHXH.XX-X----XMH--",
+			/*  8 REMATCH_LOBBY  */ "HZMHHXS.XXHX-HH-XXX--",
+			/*  9 RELAUNCHING    */ "--IHH-X--XXX----XIH--",
+			/* 10 MIGRATING      */ "HZX...X.-X.X-HH.XX..X"}};
 
 		char PhaseCode(NetSeatPhase phase) {
 			static constexpr const char* codes = "LSRHICEMZG";
@@ -732,6 +749,7 @@ namespace RTE {
 			event.withTraffic = std::string(column.variant) == "traffic";
 			event.afterGrace = true;
 			if (column.kind == NetRosterEventKind::MemberSetProposed) event.members = {1, 3};
+			if (column.kind == NetRosterEventKind::SlotBound) event.slot = 3;
 			if (column.kind == NetRosterEventKind::Admitted || column.kind == NetRosterEventKind::ApplicantAccepted) {
 				event.owner = 0x2002;
 				event.ticket = 0x8002;
@@ -782,6 +800,8 @@ namespace RTE {
 				ok = ok && got == expected;
 				// A return that is accepted moves the owner's incarnation on; a refusal changes nothing.
 				if (ok && !result.refused && column.kind == NetRosterEventKind::Returned) ok = subject.incarnation == was.incarnation + 1;
+				// An accepted binding is written, and nothing else of the seat moves.
+				if (ok && !result.refused && column.kind == NetRosterEventKind::SlotBound) ok = subject.bindingRef == 3 && result.roster.revision == before.revision + 1;
 				if (ok && result.refused) ok = result.roster.revision == before.revision;
 				// The start gate never waits on a seat its owner is away from.
 				if (ok && IsAway(subject.phase)) ok = !result.roster.StartWaitsOn(2);
@@ -1054,6 +1074,30 @@ namespace RTE {
 			      !joined.refused && !back.refused && newcomerLabel == "Joining" && returnerLabel == "Rejoining" && crossed && played && played->phase == NetSeatPhase::Running && !played->joining,
 			      "newcomer='" + newcomerLabel + "' returner='" + returnerLabel + "' crossed=" + std::to_string(crossed) + " error='" + error +
 			          "' played=" + (played ? std::string(NetSeatPhaseName(played->phase)) + (played->joining ? " joining" : "") : std::string("?")));
+		}
+		{
+			// A world's promoted seat plays a slot that is not its own: the binding moves with the seat, is the peers' and the hash's,
+			// leaves the seat it moves from, and goes with the player when the host opens the seat.
+			NetSeatRoster running = RosterForRow(3);
+			NetRosterEvent bind; bind.kind = NetRosterEventKind::SlotBound; bind.seat = 2; bind.slot = 3;
+			const NetRosterResult bound = ApplyRosterEvent(running, bind);
+			NetRosterEvent moved = bind; moved.seat = 3;
+			const NetRosterResult takenOver = ApplyRosterEvent(bound.roster, moved);
+			NetRosterEvent kick; kick.kind = NetRosterEventKind::Kicked; kick.seat = 3;
+			const NetRosterResult opened = ApplyRosterEvent(takenOver.roster, kick);
+			const NetRosterResult openRefused = ApplyRosterEvent(opened.roster, moved);
+			const NetRosterResult handover = ApplyRosterEvent(RosterForRow(10), bind);
+			NetSeatRoster copy;
+			std::string error;
+			const bool carried = DecodeRoster(EncodeRoster(bound.roster), copy, &error) && copy.Find(2) && copy.Find(2)->bindingRef == 3 &&
+			                     HashRoster(copy) == HashRoster(bound.roster) && HashRoster(bound.roster) != HashRoster(running);
+			const bool ok = !bound.refused && bound.roster.Find(2)->bindingRef == 3 && !takenOver.refused && takenOver.roster.Find(2)->bindingRef == 0 &&
+			                takenOver.roster.Find(3)->bindingRef == 3 && !opened.refused && opened.roster.Find(3)->bindingRef == 0 && openRefused.refused &&
+			                handover.refused && carried;
+			check("seq BIND a seat plays a world slot on every peer's roster, from one seat at a time, until the host opens it", ok,
+			      "bound=" + std::to_string(bound.roster.Find(2)->bindingRef) + " moved_from=" + std::to_string(takenOver.roster.Find(2)->bindingRef) +
+			          " opened=" + std::to_string(opened.roster.Find(3)->bindingRef) + " open_refused='" + openRefused.reason + "' handover='" + handover.reason +
+			          "' carried=" + std::to_string(carried) + " error='" + error + "'");
 		}
 		std::cout << tag << " totals pass=" << pass << " fail=" << fail << " na=" << unreachable << std::endl;
 		std::cout << tag << (fail == 0 ? " PASS" : " FAIL") << std::endl;

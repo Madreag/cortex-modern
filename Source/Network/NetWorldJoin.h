@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -466,6 +467,7 @@ namespace RTE {
 		std::string sideState;
 		NetLockstepPauseState pauseState;
 		std::map<uint8_t, NetGameSeatHold> initialHolds;
+		std::map<uint8_t, NetGameSeatReclaim> initialReclaims; //!< Returns taken at or before B, whose neutral gap may run past it.
 		uint64_t roundId = 0, authorityGeneration = 0;
 		uint8_t authorityPeerId = 1;
 		std::map<uint8_t, uint64_t> initialPeerLeaves;
@@ -488,7 +490,8 @@ namespace RTE {
 	NetLobbyStateChunk MakeJoinerCatchUpReport();
 	/// WJIM: the joiner-only checkpoint envelope streamed through the lobby StateChunk pump.
 	inline constexpr uint32_t c_NetWorldImageMagic = 0x4D494A57U;
-	inline constexpr uint8_t c_NetWorldImageVersion = 2;
+	/// 3: a world offer carries the seats of its tick (held_state, departed_peers, the authority) beside its lockstep state.
+	inline constexpr uint8_t c_NetWorldImageVersion = 3;
 	/// A valid 9-byte StateChunk the joiner and host exchange for progress, catch-up and E.
 	inline constexpr uint64_t c_NetWorldReportTransferId = 0x574A5250ULL;
 	inline constexpr uint64_t c_NetWorldTailTransferId = 0x5441494CULL;
@@ -637,7 +640,9 @@ namespace RTE {
 		/// Gives a freed slot to the oldest watcher that wants it, through the same announced
 		/// activation a fresh join takes: one promotion per call, one E, one brain.
 		/// @param outConnection The promoted watcher; unchanged when none was.
-		bool PromoteWaitingSpectator(uint64_t nowFrame, uint64_t* outActivationTick, NetPeerId* outConnection, std::string* error = nullptr);
+		/// @param bind Records the watcher's seat on the slot before the world seats it; nothing changes when it refuses.
+		bool PromoteWaitingSpectator(uint64_t nowFrame, uint64_t* outActivationTick, NetPeerId* outConnection, std::string* error = nullptr,
+		                             const std::function<bool(const NetWorldJoinSession&, const NetWorldSlot&)>& bind = {});
 		/// Binds the frozen image to every bootstrap still waiting for one.
 		void PublishImage(const NetWorldCheckpointImage& image);
 		const NetWorldCheckpointImage& Image() const { return m_Image; }

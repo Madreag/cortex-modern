@@ -122,10 +122,12 @@ namespace RTE {
 			auto& previous = m_SummarySeats[peerId];
 			const bool away = SeatViewAway(view);
 			const bool wasAway = SeatViewAway(previous);
-			if (away && !wasAway) ++m_CurrentMatchSummary.drops;
-			if (previous.peerId != 0 && previous.seat.owner != 0 && view.seat.owner != 0 && view.seat.owner != previous.seat.owner) {
+			// Another seat on the slot (a world's promoted watcher, or a promotion undone) is counted under its own view.
+			const bool otherSeat = previous.peerId != 0 && previous.stableSeat != view.stableSeat;
+			if (!otherSeat && away && !wasAway) ++m_CurrentMatchSummary.drops;
+			if (!otherSeat && previous.peerId != 0 && previous.seat.owner != 0 && view.seat.owner != 0 && view.seat.owner != previous.seat.owner) {
 				++m_CurrentMatchSummary.substitutions;
-			} else if (wasAway && !away) {
+			} else if (!otherSeat && wasAway && !away) {
 				++m_CurrentMatchSummary.reclaims;
 			}
 			for (auto& peer : m_CurrentMatchSummary.peers) {
@@ -157,20 +159,7 @@ namespace RTE {
 		// Before its round runs a joiner's seats are the lobby's agreed config, which the publish has just adopted.
 		const NetMatchConfig& config = m_State != NetMatchServiceState::Running && m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig
 		                               : m_Runner ? m_Runner->GetMatchConfig() : (m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig);
-		std::map<uint8_t, SeatView> views;
-		for (const NetH4Seat& entry: NetH4BuildSeatTable(config)) {
-			if (entry.cpu || entry.lockstepPeerId == 0) continue;
-			const NetRosterSeat* seat = roster.Find(NetRosterIdOf(entry.stableSeat));
-			if (!seat) continue;
-			std::string name;
-			const std::string open = NetMatchConfigUtil::UnseatedSlotName(entry.lockstepPeerId, config.persistentWorld);
-			for (const NetMatchPlayerSlot& slot: config.players)
-				if (slot.peerId == entry.lockstepPeerId && !slot.displayName.empty() && !(config.persistentWorld && slot.displayName == open)) name = slot.displayName;
-			for (const NetLobbyMember& member: m_LobbySnapshot.members)
-				if (member.peerId == entry.lockstepPeerId && !member.displayName.empty() && member.displayName != open)
-					name = member.displayName;
-			views[entry.lockstepPeerId] = BuildSeatView(entry.lockstepPeerId, entry.stableSeat, roster.revision, *seat, name);
-		}
+		std::map<uint8_t, SeatView> views = BuildSeatViews(roster, NetH4BuildSeatTable(config), config, m_LobbySnapshot.members);
 		if (m_Coordinator) {
 			std::map<uint8_t, std::string> names;
 			for (const auto& [peerId, view]: views) names[peerId] = view.name;
@@ -179,6 +168,31 @@ namespace RTE {
 		std::map<uint8_t, SeatView> previous = std::move(m_SeatViews);
 		m_SeatViews = std::move(views);
 		RecordRosterTransitions(previous, observedAtMs);
+	}
+
+	std::map<uint8_t, NetMatchService::SeatView> NetMatchService::BuildSeatViews(const NetSeatRoster& roster, const std::vector<NetH4Seat>& table, const NetMatchConfig& config,
+	                                                                             const std::vector<NetLobbyMember>& members) {
+		std::map<uint8_t, SeatView> views;
+		// A seat the roster binds to another slot plays that slot: its view is keyed there, and the slot's own seat steps aside.
+		std::set<uint64_t> boundSlots;
+		for (const NetRosterSeat& seat: roster.seats) if (seat.bindingRef != 0) boundSlots.insert(seat.bindingRef);
+		for (const NetH4Seat& entry: table) {
+			if (entry.cpu || entry.lockstepPeerId == 0) continue;
+			const NetRosterSeat* seat = roster.Find(NetRosterIdOf(entry.stableSeat));
+			if (!seat || (seat->bindingRef == 0 && boundSlots.contains(entry.lockstepPeerId))) continue;
+			const uint8_t played = seat->bindingRef != 0 ? static_cast<uint8_t>(seat->bindingRef) : entry.lockstepPeerId;
+			std::string name;
+			const std::string open = NetMatchConfigUtil::UnseatedSlotName(played, config.persistentWorld);
+			// A slot's configured name is the seat's own; a seat playing another slot is named by its player alone.
+			if (seat->bindingRef == 0)
+				for (const NetMatchPlayerSlot& slot: config.players)
+					if (slot.peerId == played && !slot.displayName.empty() && !(config.persistentWorld && slot.displayName == open)) name = slot.displayName;
+			for (const NetLobbyMember& member: members)
+				if (member.peerId == played && !member.displayName.empty() && member.displayName != open)
+					name = member.displayName;
+			views[played] = BuildSeatView(played, entry.stableSeat, roster.revision, *seat, name);
+		}
+		return views;
 	}
 
 	std::map<uint8_t, NetMatchService::SeatView> NetMatchService::GetSeatViews() const {
@@ -1786,7 +1800,7 @@ static std::string ResyncSaveName() {
 				config.matchConfig = m_Runner->GetMatchConfig();
 				config.peerCount = config.matchConfig.peerCount; config.localPeerId = m_LocalPeerId;
 				config.authorityPeerId = m_WorldCatchUp.authorityPeerId;
-				config.initialPeerLeaves = m_WorldCatchUp.initialPeerLeaves;
+				SeedWorldReplaySeats(m_WorldCatchUp, config);
 				config.startFrame = m_WorldCatchUp.snapshotTick + 1;
 				config.migrationGeneration = m_WorldCatchUp.authorityGeneration;
 				config.simTickMs = g_TimerMan.GetDeltaTimeMS();
@@ -2051,13 +2065,18 @@ static std::string ResyncSaveName() {
 			const auto before = previous.find(peerId);
 			const bool known = before != previous.end();
 			const bool newHolder = known && before->second.seat.owner != 0 && view.seat.owner != 0 && view.seat.owner != before->second.seat.owner;
-			if (last.first == view.state && last.second == view.line && !newHolder) continue;
+			// Another seat on this slot (a world's promoted watcher, or a promotion undone): a player taking it joins, and the one
+			// it moves from is named under its own seat's view.
+			const bool otherSeat = known && before->second.stableSeat != view.stableSeat;
+			if (last.first == view.state && last.second == view.line && !newHolder && !otherSeat) continue;
 			const bool firstSeen = last.first.empty();
 			const bool wasAway = known && SeatViewAway(before->second);
 			// A seat the host opened has no holder left to name: the player who had it is the one who went.
 			const std::string& who = view.seat.owner == 0 && known ? before->second.name : view.name;
 			last = {view.state, view.line};
-			if (firstSeen && view.state == "Present" && peerId != m_LocalPeerId) {
+			if (otherSeat) {
+				if (view.seat.owner != 0 && peerId != m_LocalPeerId) ScenarioRunner::PushNetUiToast("player_joined", who + " joined");
+			} else if (firstSeen && view.state == "Present" && peerId != m_LocalPeerId) {
 				ScenarioRunner::PushNetUiToast("player_joined", who + " joined");
 			} else if (newHolder) {
 				ScenarioRunner::PushNetUiToast("player_substituted", who + " joined as substitute");
@@ -4010,20 +4029,29 @@ static std::string ResyncSaveName() {
 		if (m_IsHost && m_MatchConfig.persistentWorld) {
 			System::PrintDiagnosticLine(std::format("[autosave] agreed match={} tick={} state={}", m_AutosaveMatchId, tick,
 			                                       nlohmann::json(AutosaveStore::RenderSideState(m_AutosaveIdentity.sideState)).dump()));
-			// A world joiner starts on this tick's lockstep state too: a hold's handoffs before the image are not in its tail.
+			// A world joiner starts on this tick's lockstep state and seats: a hold's handoffs before the image are not in its tail.
 			NetResyncState state;
 			std::vector<uint8_t> side;
 			std::string error;
 			if (ScenarioRunner::CaptureNetResyncState(tick, state, &error)) {
 				state.pendingInputs.clear(); state.pendingCommands.clear(); state.pendingPlayerBindings.clear(); state.admittedReseats.clear();
-				if (NetResyncCodec::Encode(state, {0}, side, &error)) {
-					std::lock_guard<std::mutex> lock(m_Mutex);
-					m_WorldImageSideStates[tick] = ResumeHex(side);
-					// Captures that never publish do not pile up.
-					while (m_WorldImageSideStates.size() > 8) m_WorldImageSideStates.erase(m_WorldImageSideStates.begin());
-				}
+				if (!NetResyncCodec::Encode(state, {0}, side, &error)) side.clear();
 			}
-			if (side.empty()) System::PrintDiagnosticLine(std::format("[net-world] no lockstep state for the image at tick {}: {}", tick, error));
+			NetWorldCheckpointImage seats;
+			if (!side.empty() && m_Coordinator) {
+				NetLockstepPlaneGuard plane;
+				CaptureWorldImageSeats(*m_Coordinator, tick, seats);
+				seats.sideState = ResumeHex(side);
+			}
+			if (!seats.sideState.empty() && !seats.heldState.empty()) {
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				m_WorldImageStates[tick] = std::move(seats);
+				// Captures that never publish do not pile up.
+				while (m_WorldImageStates.size() > 8) m_WorldImageStates.erase(m_WorldImageStates.begin());
+			} else {
+				System::PrintDiagnosticLine(std::format("[net-world] no lockstep state for the image at tick {}: {}", tick,
+				                                        !error.empty() ? error : m_Coordinator ? "its seats did not encode" : "there is no round"));
+			}
 		}
 		return g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity);
 	}
@@ -4047,6 +4075,95 @@ static std::string ResyncSaveName() {
 		image.captureMs = captureMs;
 		image.digest = entry.digest;
 		return image;
+	}
+
+	void NetMatchService::CaptureWorldImageSeats(const NetLockstepCoordinator& coordinator, uint64_t tick, NetWorldCheckpointImage& image) {
+		// The tail after the image carries every transition from tick + 1 on; the ones at or before it govern the frames it starts.
+		const uint8_t host = coordinator.GetHostPeerId();
+		const auto& config = coordinator.GetConfig();
+		const auto leaves = coordinator.GetPeerLeaveFrames();
+		const auto holds = coordinator.HeldTransactions();
+		NetLockstepFrame seats;
+		seats.targetFrame = tick;
+		seats.roundId = coordinator.GetRoundId();
+		std::map<uint8_t, uint64_t> heldFrom;
+		for (uint8_t peer = 1; peer <= config.peerCount; ++peer) {
+			if (!coordinator.IsSeatUnderAI(peer, tick)) continue;
+			const auto held = holds.find(peer);
+			NetGameSeatHold hold = held != holds.end() && held->second.cutoffFrame <= tick ? held->second : NetGameSeatHold{peer};
+			if (hold.cutoffFrame == 0) {
+				// A seat held from the round's start has no transaction: it is held from its leave, or from this tick at the latest.
+				const auto leave = leaves.find(peer);
+				hold.authorityGeneration = config.migrationGeneration;
+				hold.seatIncarnation = config.peerIncarnations.contains(peer) ? config.peerIncarnations.at(peer) : 0;
+				hold.cutoffFrame = leave != leaves.end() && leave->second <= tick ? leave->second : tick;
+			}
+			heldFrom[peer] = hold.cutoffFrame;
+			seats.commands.push_back({host, hold});
+		}
+		// A return older than the seat's hold is history; a newer one at or before the tick may still be inside its neutral gap.
+		for (const auto& [peer, reclaim]: coordinator.ReclaimTransactions())
+			if (reclaim.activationFrame <= tick && (!heldFrom.contains(peer) || heldFrom.at(peer) < reclaim.activationFrame)) seats.commands.push_back({host, reclaim});
+		image.departedPeers.clear();
+		for (const auto& [peer, frame]: leaves) if (frame <= tick) image.departedPeers[peer] = frame;
+		image.authorityGeneration = config.migrationGeneration;
+		image.authorityPeerId = host;
+		std::vector<uint8_t> bytes;
+		image.heldState = EncodeCommittedJoinFrame(seats, bytes) ? ResumeHex(bytes) : std::string();
+	}
+
+	bool NetMatchService::AdoptWorldImageSeats(const NetWorldCheckpointImage& image, uint8_t peerCount, NetWorldCatchUpClient& catchUp, std::string* error) {
+		// A joiner started without the image's seats would answer a held seat as played and resolve its units to the wrong producer.
+		std::vector<uint8_t> bytes;
+		NetLockstepFrame seats;
+		if (image.sideState.empty() || image.heldState.empty() || !ResumeBytes(image.heldState, bytes) || !DecodeCommittedJoinFrame(bytes, seats, error) ||
+		    seats.targetFrame != image.tick) {
+			if (error) *error = "the world image carries no seat state for its tick " + std::to_string(image.tick) + (error->empty() ? "" : ": " + *error);
+			return false;
+		}
+		if (image.authorityPeerId == 0 || image.authorityPeerId > peerCount) {
+			if (error) *error = "the world image names authority peer " + std::to_string(image.authorityPeerId) + " outside its " + std::to_string(peerCount) + " seats";
+			return false;
+		}
+		std::map<uint8_t, NetGameSeatHold> holds;
+		std::map<uint8_t, NetGameSeatReclaim> reclaims;
+		for (const NetGameCommand& command: seats.commands) {
+			const auto* hold = std::get_if<NetGameSeatHold>(&command.payload);
+			const auto* reclaim = std::get_if<NetGameSeatReclaim>(&command.payload);
+			const uint8_t peer = hold ? hold->peerId : reclaim ? reclaim->peerId : 0;
+			const uint64_t frame = hold ? hold->cutoffFrame : reclaim ? reclaim->activationFrame : 0;
+			if (command.senderPeerId != image.authorityPeerId || peer == 0 || peer > peerCount || frame == 0 || frame > image.tick) {
+				if (error) *error = "the world image's seat state names a transition outside its round: peer " + std::to_string(peer) + " at " + std::to_string(frame);
+				return false;
+			}
+			if (hold) holds[peer] = *hold;
+			else reclaims[peer] = *reclaim;
+		}
+		for (const auto& [peer, frame]: image.departedPeers) {
+			if (peer == 0 || peer > peerCount || frame > image.tick) {
+				if (error) *error = "the world image names a departure outside its round: peer " + std::to_string(peer) + " at " + std::to_string(frame);
+				return false;
+			}
+		}
+		catchUp.initialHolds = std::move(holds);
+		catchUp.initialReclaims = std::move(reclaims);
+		catchUp.initialPeerLeaves = image.departedPeers;
+		catchUp.authorityGeneration = image.authorityGeneration;
+		catchUp.authorityPeerId = image.authorityPeerId;
+		return true;
+	}
+
+	void NetMatchService::SeedWorldReplaySeats(const NetWorldCatchUpClient& catchUp, NetLockstepConfig& config) {
+		config.initialPeerLeaves = catchUp.initialPeerLeaves;
+		config.initialSeatHolds = catchUp.initialHolds;
+		config.initialSeatReclaims = catchUp.initialReclaims;
+		for (const auto& [peer, hold]: catchUp.initialHolds) config.peerIncarnations[peer] = std::max(config.peerIncarnations[peer], hold.seatIncarnation);
+		for (const auto& [peer, reclaim]: catchUp.initialReclaims) config.peerIncarnations[peer] = std::max(config.peerIncarnations[peer], reclaim.seatIncarnation);
+	}
+
+	void NetMatchService::AdoptWorldReplaySeats(NetLockstepCoordinator& live, const NetLockstepCoordinator& replay, uint64_t activationTick) {
+		// The round was configured when its handshake began; a hold or return the replay took since then is the round's too.
+		if (activationTick != 0) live.AdoptReplayedSeatTransitions(replay, activationTick - 1);
 	}
 
 	void NetMatchService::PublishFinishedWorldJoinImage() {
@@ -4116,8 +4233,23 @@ static std::string ResyncSaveName() {
 		}
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			if (const auto side = m_WorldImageSideStates.find(image.tick); side != m_WorldImageSideStates.end()) image.sideState = side->second;
-			m_WorldImageSideStates.erase(m_WorldImageSideStates.begin(), m_WorldImageSideStates.upper_bound(image.tick));
+			const auto state = m_WorldImageStates.find(image.tick);
+			if (state == m_WorldImageStates.end()) {
+				// An archive and the lockstep state of its tick are one image: without the state no joiner may start on it, and the next
+				// bootstrap asks for a capture of its own.
+				if (m_WorldImageRefusedTick != image.tick) {
+					m_WorldImageRefusedTick = image.tick;
+					System::PrintDiagnosticLine("[net-world] the image at tick " + std::to_string(image.tick) + " is not published: no lockstep state was captured at its tick");
+				}
+				if (m_WorldCaptureRequestedTick != 0 && m_WorldCaptureRequestedTick <= image.tick) m_WorldCaptureRequestedTick = 0;
+				return;
+			}
+			image.sideState = state->second.sideState;
+			image.heldState = state->second.heldState;
+			image.departedPeers = state->second.departedPeers;
+			image.authorityGeneration = state->second.authorityGeneration;
+			image.authorityPeerId = state->second.authorityPeerId;
+			m_WorldImageStates.erase(m_WorldImageStates.begin(), m_WorldImageStates.upper_bound(image.tick));
 		}
 		// The buffer the writer produced is shared, not copied: every bootstrap ships these bytes.
 		m_WorldJoinImageDigest = image.digest;
@@ -4447,6 +4579,38 @@ static std::string ResyncSaveName() {
 			if (slot && !slot->held && membership.Hold(status.lockstepPeerId, status.stableSeat, seat->name)) ++bound;
 		}
 		return bound;
+	}
+
+	namespace {
+		/// The lockstep id an admission seat names by itself: a world seat bound to any other slot plays that slot instead.
+		uint8_t SeatOwnLockstepId(const std::vector<NetH4SeatStatus>& statuses, uint16_t stableSeat) {
+			for (const NetH4SeatStatus& status: statuses) if (status.stableSeat == stableSeat) return status.lockstepPeerId;
+			return 0;
+		}
+	} // namespace
+
+	bool NetMatchService::PromoteWorldWatcher(NetWorldJoinHost& world, NetReconnectHost& admission, uint64_t nowFrame, uint64_t* outActivation, NetPeerId* outPromoted) {
+		// The roster takes the watcher's seat onto the slot first: the world seats it only on a binding every peer will read.
+		const std::vector<NetH4SeatStatus> statuses = admission.GetSeatStatuses();
+		return world.PromoteWaitingSpectator(nowFrame, outActivation, outPromoted, nullptr, [&](const NetWorldJoinSession& watcher, const NetWorldSlot& slot) {
+			const uint8_t played = slot.peerId == SeatOwnLockstepId(statuses, watcher.stableSeat) ? 0 : slot.peerId;
+			admission.NoteSeatSlot(watcher.stableSeat, played);
+			const NetRosterSeat* seat = admission.GetRoster().Find(NetRosterIdOf(watcher.stableSeat));
+			return seat != nullptr && seat->bindingRef == played;
+		});
+	}
+
+	void NetMatchService::PublishWorldSeatSlots(NetReconnectHost& admission, const NetWorldMembership& membership) {
+		// The world seats a seat on its slot; the roster is what every peer reads of it. An opened seat's binding went with its player.
+		const std::vector<NetH4SeatStatus> statuses = admission.GetSeatStatuses();
+		for (const NetH4SeatStatus& status: statuses) {
+			const NetRosterSeat* seat = admission.GetRoster().Find(NetRosterIdOf(status.stableSeat));
+			if (seat == nullptr || seat->owner == 0) continue;
+			const NetWorldSlot* held = nullptr;
+			for (const NetWorldSlot& slot: membership.Slots()) if (slot.held && slot.stableSeat == status.stableSeat) held = &slot;
+			const uint8_t played = held != nullptr && held->peerId != status.lockstepPeerId ? held->peerId : 0;
+			if (seat->bindingRef != played) admission.NoteSeatSlot(status.stableSeat, played);
+		}
 	}
 
 	NetH4SeatSimIdentity NetMatchService::WorldSimIdentityOfSeat(const NetWorldMembership& membership, uint16_t stableSeat) {
@@ -5087,7 +5251,7 @@ static std::string ResyncSaveName() {
 		if (m_WorldJoin.Membership().FreeSlots() > 0) {
 			uint64_t promotedAt = 0;
 			NetPeerId promoted = c_InvalidNetPeerId;
-			if (m_WorldJoin.PromoteWaitingSpectator(nowFrame, &promotedAt, &promoted, nullptr) && promotedAt != 0) {
+			if (PromoteWorldWatcher(m_WorldJoin, m_ReconnectHost, nowFrame, &promotedAt, &promoted) && promotedAt != 0) {
 				// The promoted watcher takes the plan a fresh join takes: its own announced E, then one
 				// Activate with one brain. Its member lobby id replaces the watcher id it gave back.
 				m_Coordinator->SetObservationEpoch(promotedAt);
@@ -5108,6 +5272,7 @@ static std::string ResyncSaveName() {
 				NoteWorldPromotionLocked(promoted, promotedAt);
 			}
 		}
+		if (!m_WorldJoin.IsPrivateMatch()) PublishWorldSeatSlots(m_ReconnectHost, m_WorldJoin.Membership());
 		DriveWorldSeatRespawns(nowFrame);
 		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
 			if (session.phase != NetWorldJoinPhase::CatchingUp || session.activationTick == 0) continue;
@@ -5254,8 +5419,9 @@ static std::string ResyncSaveName() {
 		m_WorldCatchUp.roundId = image.round;
 		m_WorldCatchUp.authorityGeneration = image.authorityGeneration;
 		m_WorldCatchUp.authorityPeerId = image.authorityPeerId;
-		m_WorldCatchUp.initialPeerLeaves = image.departedPeers;
+		if (!m_WorldCatchUp.privateMatch && !AdoptWorldImageSeats(image, adopted.peerCount, m_WorldCatchUp, error)) return false;
 		if (m_WorldCatchUp.privateMatch) {
+			m_WorldCatchUp.initialPeerLeaves = image.departedPeers;
 			std::vector<uint8_t> hash, holdBytes;
 			NetLockstepFrame holds;
 			if (image.privateSessionId != adopted.sessionId || !DecodeConfigPayload(image.checkpointConfig, m_WorldCatchUp.checkpointConfig) ||
@@ -6641,6 +6807,7 @@ static std::string ResyncSaveName() {
 				committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
 				committed.sessionId = m_Coordinator->GetConfig().sessionId;
 				const auto pause = ScenarioRunner::CaptureLockstepPauseState();
+				AdoptWorldReplaySeats(*m_Coordinator, *m_CatchUpCoordinator, m_WorldCatchUp.activationTick);
 				ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), true);
 				if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, &error) || !ScenarioRunner::RestoreLockstepPauseState(pause, committed.savedTick)) {
 					ScenarioRunner::SetControllerReplayError("PeerLeft:world catch-up activation: " + error); return;
@@ -8860,9 +9027,9 @@ static std::string ResyncSaveName() {
 		std::ostringstream line;
 		line << m_WorldJoin.MemoryCensus();
 		size_t sideBytes = 0;
-		for (const auto& [tick, side]: m_WorldImageSideStates) sideBytes += side.capacity();
+		for (const auto& [tick, state]: m_WorldImageStates) sideBytes += state.sideState.capacity() + state.heldState.capacity();
 		// The image's archive is shared with the writer's last autosave: the owners count says whether it is held twice.
-		line << " side_states=" << m_WorldImageSideStates.size() << " side_state_bytes=" << sideBytes
+		line << " side_states=" << m_WorldImageStates.size() << " side_state_bytes=" << sideBytes
 		     << " image_archive_bytes=" << (m_WorldJoinImageArchive ? m_WorldJoinImageArchive->size() : 0) << " image_archive_owners=" << m_WorldJoinImageArchive.use_count();
 		if (const auto autosave = g_ActivityMan.LastCompletedAutosave(); autosave && autosave->archive) {
 			line << " autosave_archive_bytes=" << autosave->archive->size() << " autosave_archive_shared=" << (autosave->archive == m_WorldJoinImageArchive ? 1 : 0);

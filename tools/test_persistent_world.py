@@ -15,6 +15,8 @@ from pathlib import Path
 
 # Ports: this driver owns 48860-48879; only the world-segment arm binds one (a two-peer world round).
 SEGMENT_PORT = 48860
+# The held-seat late join's world listens here; its two clients bind ephemeral ports.
+HELD_SEAT_PORT = 48870
 
 
 def _wire_version(header: str, owner: str, name: str) -> int:
@@ -120,6 +122,10 @@ RED_PROMOTION_SECOND_WATCHER = "promotion-moved-the-second-watcher"
 RED_PROMOTION_DECLINE = "promotion-ignored-a-decline"
 RED_PROMOTION_LOBBY_ID = "promotion-kept-the-watcher-lobby-id"
 RED_PROMOTION_BEHIND_INPUT = "promotion-announced-behind-the-sent-input"
+RED_SEAT_BASELINE = "world-joiner-disagrees-on-a-held-seat"
+RED_PROMOTED_BINDING = "promoted-seat-view-names-another-player"
+RED_HELD_SEAT_HASHES = "world-late-joiner-hashed-a-tick-otherwise-than-the-world"
+RED_HELD_SEAT_NOT_HELD = "world-late-joiner-round-did-not-hold-the-left-seat"
 RED_CLEAN_LEAVE_WRONG_SEAT = "clean-leave-released-the-wrong-seat"
 RED_CLEAN_LEAVE_LIVE_MEMBER = "clean-leave-released-a-live-member"
 RED_CLEAN_LEAVE_MISSED = "clean-leave-was-not-detected"
@@ -492,6 +498,18 @@ CASES = (
             RED_PROMOTION_BEHIND_INPUT,
         ),
         "pass_token": "[net-world-promotion-selftest] PASS",
+    },
+    {
+        "name": "world-image-carries-its-seat-baseline",
+        "argv": ["-net-world-seat-baseline-selftest"],
+        "red": RED_SEAT_BASELINE,
+        "pass_token": "[net-world-seat-baseline-selftest] PASS",
+    },
+    {
+        "name": "promoted-seat-is-bound-on-the-roster",
+        "argv": ["-net-world-promoted-binding-selftest"],
+        "red": RED_PROMOTED_BINDING,
+        "pass_token": "[net-world-promoted-binding-selftest] PASS",
     },
     {
         "name": "clean-leave-releases-only-the-seat-that-left",
@@ -986,6 +1004,141 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullst
         tripped = {name: verdict["reasons"] for name, verdict in verdicts.items() if not verdict["passed"]}
         assert verdicts and not tripped, f"full-state oracle: {tripped or 'no two-peer round was sampled'}"
 
+def world_held_seat_late_join(repo: Path, out: Path, port: int = HELD_SEAT_PORT) -> dict:
+    """A dedicated world holds a member's seat for it after the member leaves; a late joiner starts from an image taken
+    after that hold. Every tick the joiner hashes, its catch-up included, must equal the world's, and the joiner's own
+    round must start with the left seat held.
+
+    Three engines, each through run_sim_test.make_run with CCCP_HEADLESS=1: the world, the first client (plays 900 of its
+    own ticks with the end-to-end input script, then leaves) and the late joiner (started once the world has held the
+    first client's seat and run on past it)."""
+    tools = Path(__file__).resolve().parent
+    sys.path.insert(0, str(tools))
+    import threading
+    import time
+    from run_sim_test import make_run
+    from feel.retained_resume import read_live_hashes, PER_PEER_SUBSYSTEMS
+
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    script = str(tools / "e2e" / "play-input.txt")
+    common = ["-net-port", str(port), "-net-match-peers", "3", "-net-match-input-delay", "3", "-net-autosave-seconds", "1"]
+
+    def client(who: str, ticks: int) -> list:
+        return ["-net-match-service-e2e", "-net-join", "127.0.0.1", *common, "-net-match-ticks", str(ticks), "-max-ticks", str(ticks),
+                "-input-script", script, "-net-reconnect-ticket", str(out / f"{who}.ticket"),
+                "-net-live-tick-hashes", str(out / f"{who}-live.jsonl"), "-net-match-report", str(out / f"{who}-report.json")]
+
+    world_ticks = 3600
+    argv = {
+        "world": ["-net-dedicated", "-net-persistent-world", "-net-world-fresh", *common, "-net-match-ticks", str(world_ticks),
+                  "-max-ticks", str(world_ticks), "-net-live-tick-hashes", str(out / "world-live.jsonl"),
+                  "-net-match-report", str(out / "world-report.json")],
+        "first": client("first", 900),
+        "late": client("late", 1000),
+    }
+    env = {"CCCP_HEADLESS": "1", "CC_RUNNER_IGNORE_FULLSCREEN": "1"}
+    runs, records = {}, {}
+
+    def drive(who: str) -> None:
+        try:
+            records[who] = runs[who].start().finish()
+        except Exception as error:
+            records[who] = {"error": repr(error)}
+
+    def log(who: str) -> str:
+        path = out / who / "stdout.log"
+        return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+
+    hold_line = re.compile(r"\[net-match\] hold peer=(\d+) frame=(\d+) AI in control")
+    threads = {}
+    held = None
+    try:
+        for who in ("world", "first"):
+            runs[who] = make_run(repo, argv[who], out / who, 600, env=env)
+            threads[who] = threading.Thread(target=drive, args=(who,))
+        threads["world"].start()
+        time.sleep(1)
+        threads["first"].start()
+        # The late joiner comes once the first client has left, the world holds its seat for it (a hold after its last
+        # activation: a startup hold it came back from is not the leave) and the world has run 240 ticks past that hold.
+        activate_line = re.compile(r"\[net-world\] activate peer=(\d+) at=(\d+)")
+        for _ in range(6000):
+            time.sleep(0.1)
+            if not threads["world"].is_alive():
+                break
+            if threads["first"].is_alive():
+                continue
+            text = log("world")
+            joined = {int(peer): int(at) for peer, at in activate_line.findall(text)}
+            leaves = [(int(peer), int(frame)) for peer, frame in hold_line.findall(text) if int(frame) > joined.get(int(peer), 0)]
+            rows = read_live_hashes(out / "world-live.jsonl") if leaves else []
+            if leaves and rows and rows[-1]["tick"] >= leaves[-1][1] + 240:
+                held = leaves[-1]
+                break
+        if held is not None:
+            runs["late"] = make_run(repo, argv["late"], out / "late", 600, env=env)
+            threads["late"] = threading.Thread(target=drive, args=("late",))
+            threads["late"].start()
+        for thread in threads.values():
+            thread.join()
+    finally:
+        for run in runs.values():
+            run.close()
+
+    late_log = log("late")
+    reasons = []
+    if held is None:
+        reasons.append("the world never held the first client's seat")
+    world_rows = read_live_hashes(out / "world-live.jsonl")
+    late_rows = read_live_hashes(out / "late-live.jsonl")
+    rounds = {row.get("round") for row in world_rows}
+    world_round = next(iter(rounds)) if len(rounds) == 1 else None
+    canonical = {row["tick"]: row for row in world_rows}
+    first_live = min((row["tick"] for row in late_rows if row.get("round") == world_round), default=None)
+    # A joiner labels the ticks it replays before its round with its own index: that prefix is the world round's catch-up.
+    others = {row.get("round") for row in late_rows if row.get("round") != world_round}
+    if others and (len(others) != 1 or first_live is None or any(row["tick"] >= first_live for row in late_rows if row.get("round") != world_round)):
+        reasons.append(f"the joiner hashed rounds the world never ran: {sorted(map(str, others))}")
+
+    def shared(row: dict) -> dict:
+        return {k: v for k, v in row.get("subsystems", {}).items() if k not in PER_PEER_SUBSYSTEMS}
+
+    compared, difference = 0, None
+    for row in late_rows:
+        other = canonical.get(row["tick"])
+        if other is None:
+            continue
+        compared += 1
+        if shared(row) != shared(other) or row.get("sim_gated") != other.get("sim_gated"):
+            difference = row["tick"]
+            differing = sorted(k for k in set(shared(row)) | set(shared(other)) if shared(row).get(k) != shared(other).get(k))
+            reasons.append(f"{RED_HELD_SEAT_HASHES}: tick {difference} differs in {differing}")
+            break
+    activation = re.search(r"\[net-world\] catch-up complete peer=(\d+) at=(\d+)", late_log)
+    seats = re.search(r"\[net-match\] world round from the catch-up at (\d+): held([^\n]*) left([^\n]*)", late_log)
+    if held is not None and (seats is None or f" {held[0]}@" not in seats[2]):
+        reasons.append(f"{RED_HELD_SEAT_NOT_HELD}: {seats[0] if seats else 'the joiner never configured its round'}")
+    if activation is None:
+        reasons.append("the late joiner never completed its catch-up")
+    if compared < 300:
+        reasons.append(f"only {compared} ticks were compared")
+    verdict = {
+        "pass": not reasons, "reasons": reasons, "held": held, "activation": int(activation[2]) if activation else None,
+        "joiner_peer": int(activation[1]) if activation else None, "joiner_round_seats": seats[0] if seats else None,
+        "compared_ticks": compared, "first_compared": min((row["tick"] for row in late_rows if row["tick"] in canonical), default=None),
+        "last_compared": max((row["tick"] for row in late_rows if row["tick"] in canonical), default=None), "first_difference": difference,
+        "exit_codes": {who: records.get(who, {}).get("exit_code") for who in ("world", "first", "late")},
+    }
+    (out / "held_seat_verdict.json").write_text(json.dumps(verdict, indent=2), encoding="utf-8")
+    print(f"[world-held-seat] hold peer={held[0] if held else '-'} frame={held[1] if held else '-'} joiner_activation={verdict['activation']} "
+          f"joiner_round: {verdict['joiner_round_seats']}", flush=True)
+    print(f"[world-held-seat] hashes compared={compared} ticks={verdict['first_compared']}..{verdict['last_compared']} "
+          f"first_difference={difference if difference is not None else 'none'}", flush=True)
+    assert not reasons, "; ".join(reasons)
+    return verdict
+
+
 def _printed_world_id(text: str) -> str:
     for line in (text or "").splitlines():
         if "world-id=" in line:
@@ -1014,7 +1167,7 @@ def host_restart_same_world_id(repo: Path, out: Path) -> None:
         raise AssertionError("world-id-did-not-survive-restart: " + repr(printed))
 
 
-USAGE = """usage: test_persistent_world.py [directory-resume | world-segment REPO [OUT] | host-restart REPO [OUT]] [--fullstate-every N] [--port P]
+USAGE = """usage: test_persistent_world.py [directory-resume | world-segment REPO [OUT] | host-restart REPO [OUT] | world-held-seat REPO [OUT]] [--fullstate-every N] [--port P]
 
   --fullstate-every N  world-segment only: every N committed ticks both peers of each world round hash their whole
                        capture (-net-fullstate-hash-every) and every round's pair must match; 0 is off"""
@@ -1040,6 +1193,10 @@ if __name__ == "__main__":
     elif len(sys.argv) > 1 and sys.argv[1] == "world-segment":
         world_segment_replay(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else os.getcwd()), port=SEGMENT_RUN_PORT, fullstate_every=FULLSTATE_EVERY)
         print("[world-segment-replay] PASS")
+        # Every launch went through run_sim_test.make_run: nothing here starts the executable itself.
+    elif len(sys.argv) > 1 and sys.argv[1] == "world-held-seat":
+        world_held_seat_late_join(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else os.getcwd()), port=HELD_SEAT_PORT)
+        print("[world-held-seat] PASS")
         # Every launch went through run_sim_test.make_run: nothing here starts the executable itself.
     elif len(sys.argv) > 1 and sys.argv[1] == "host-restart":
         host_restart_same_world_id(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else os.getcwd()))

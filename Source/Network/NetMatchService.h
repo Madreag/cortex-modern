@@ -756,6 +756,13 @@ namespace RTE {
 		/// The seat views, by lockstep peer; empty before any roster is heard.
 		std::map<uint8_t, SeatView> GetSeatViews() const;
 		std::optional<SeatView> GetSeatView(uint8_t peerId) const;
+		/// The seat views a peer shows from a roster and the seat table, keyed by the lockstep id each seat plays.
+		static std::map<uint8_t, SeatView> BuildSeatViews(const NetSeatRoster& roster, const std::vector<NetH4Seat>& table, const NetMatchConfig& config,
+		                                                  const std::vector<NetLobbyMember>& members);
+		/// Host: the oldest waiting watcher takes a freed world slot. Returns whether one was promoted.
+		static bool PromoteWorldWatcher(NetWorldJoinHost& world, NetReconnectHost& admission, uint64_t nowFrame, uint64_t* outActivation, NetPeerId* outPromoted);
+		/// Host: the slot each world seat plays goes to the seat roster, so every peer reads it.
+		static void PublishWorldSeatSlots(NetReconnectHost& admission, const NetWorldMembership& membership);
 		NetH4ModerationResult ApplyModeration(const NetModerationSelection& selection, NetModerationAction action);
 		/// Host: close this holder without a reclaim hold. The host confirmation dialog calls this.
 		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action);
@@ -876,6 +883,15 @@ namespace RTE {
 		/// image that is not valid, so nothing is published for it.
 		static NetWorldCheckpointImage WorldImageFromAutosave(const ActivityMan::CompletedAutosave& entry, const NetWorldIdentity& identity,
 		                                                     const NetMatchConfig& matchConfig, uint64_t membershipRevision, double captureMs);
+		/// The seat state a world image's joiner starts from, read at the image's tick: the holds and returns that govern the frames
+		/// after it, the departures and the authority. Every later transition rides the tail.
+		static void CaptureWorldImageSeats(const NetLockstepCoordinator& coordinator, uint64_t tick, NetWorldCheckpointImage& image);
+		/// Takes a received world image's seat state into the catch-up it starts; refuses a seat outside the round.
+		static bool AdoptWorldImageSeats(const NetWorldCheckpointImage& image, uint8_t peerCount, NetWorldCatchUpClient& catchUp, std::string* error = nullptr);
+		/// Seeds a world tail's replay with the seats its image held, so the replay answers every seat as the round did.
+		static void SeedWorldReplaySeats(const NetWorldCatchUpClient& catchUp, NetLockstepConfig& config);
+		/// The world's own round takes the seat transitions its replay made through the frame before the activation.
+		static void AdoptWorldReplaySeats(NetLockstepCoordinator& live, const NetLockstepCoordinator& replay, uint64_t activationTick);
 		/// §11: reads the recovery record so the landing screen can offer a rejoin after a relaunch, or
 		/// say exactly why it cannot. Read-only and safe to call repeatedly.
 		void ScanStoredTicket();
@@ -1302,6 +1318,7 @@ namespace RTE {
 		friend bool TestTheReportListsEveryConnection(std::string* error);
 		friend bool TestRosterTransitionsRecordHoldThenPresent(std::string* error);
 		friend bool TestRosterBannerNamesThePlayerOnce(std::string* error);
+		friend bool TestAPromotedSeatJoinsItsSlot(std::string* error);
 		friend bool TestAiOnlyHostSeatsNoJoiner(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestLobbyTrafficKeepsAHostLinkAlive(std::string* error);
@@ -1794,7 +1811,8 @@ namespace RTE {
 		std::atomic<bool> m_ManualSaveFailed = false; //!< Host: its last ask was not saved.
 		std::atomic<int64_t> m_LastMatchSaveTime = 0; //!< When this peer's writer last archived a checkpoint of this match.
 		uint64_t m_WorldCaptureRequestedTick = 0; //!< The tick a bootstrap already asked a capture at.
-		std::map<uint64_t, std::string> m_WorldImageSideStates; //!< A world host's lockstep state at each capture tick, until that capture's image is published.
+		std::map<uint64_t, NetWorldCheckpointImage> m_WorldImageStates; //!< A world host's lockstep state and seats at each capture tick, until that capture's image is published.
+		uint64_t m_WorldImageRefusedTick = 0; //!< The last archive refused for want of its tick's state, named once.
 		bool m_WorldCapturePending = false;
 		bool m_WorldSpectatorDeclinesPromotion = false; //!< This watcher's own choice, as it last sent it.
 		bool m_LastJoinTargetPersistentWorld = false;
