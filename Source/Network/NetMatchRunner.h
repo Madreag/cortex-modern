@@ -269,6 +269,7 @@ namespace RTE {
 		friend bool TestARunningRoundsJoinerIsNotAskedForItsStartRoster(std::string* error);
 		friend bool TestTheRostersWaitKeepsTheRoundsStart(std::string* error);
 		friend bool TestAStartRequestOutlivesTheRosterStamp(std::string* error);
+		friend bool TestARosterStampFollowsTheLobbysOwnRepublish(std::string* error);
 		// Lockstep peer ids are 1-based and dense; the session assigns the host id 0 and clients 1.. .
 		std::map<uint8_t, NetPeerId> BuildRemoteTransportMap(const NetSession& session) const;
 		uint8_t LocalLockstepPeerId(const NetSession& session) const;
@@ -289,6 +290,8 @@ namespace RTE {
 		bool m_HostOptionsRefused = false;
 		bool m_RematchOwed = false; //!< Client: its last round ended into a rematch lobby; consumed by the next round.
 		std::string m_LastRosterStampRefusal; //!< Host: a refused roster republish, named once.
+		/// Host: takes the lobby's published config when the lobby republished it on its own, so the next draft starts from it.
+		void AdoptLobbyConfig();
 		std::deque<NetTransportEvent> m_SessionTraffic; //!< Session traffic the coordinator owned the wire for, waiting for a reader.
 		uint32_t m_SessionTrafficDropped = 0; //!< Events past the queue's bound, named once.
 		NetMatchConfig m_RematchConfig;       //!< This peer's own derivation of the rematch roster.

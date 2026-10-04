@@ -11295,6 +11295,202 @@ namespace RTE {
 		return true;
 	}
 
+	// The lobby republishes on its own - a delay re-size, a dropped seat - and the runner's copy falls a revision behind; the next roster
+	// revision is stamped on the lobby's config, or every later stamp names a revision the lobby has passed and the round never forms.
+	bool TestARosterStampFollowsTheLobbysOwnRepublish(std::string* error) {
+		LoopbackTransport transport, joiner;
+		NetPeerId hostPeer = 0, clientPeer = 0;
+		if (!StartLoopbackTransports(43186, transport, joiner, hostPeer, clientPeer, error)) return false;
+		NetMatchRunner runner;
+		runner.m_Config.host = true;
+		runner.m_MatchConfig = MakeConfig();
+		NetLobbySessionConfig config;
+		config.host = true;
+		config.localPeerId = 1;
+		config.remotePeerId = 2;
+		config.remoteTransportPeerId = hostPeer;
+		config.matchConfig = runner.m_MatchConfig;
+		config.autoStart = false;
+		if (!runner.m_Lobby.Start(transport, config, error)) return false;
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) {
+			*error = "the seat-auth registry could not draw an epoch";
+			return false;
+		}
+		NetReconnectHost admission;
+		admission.Configure(&registry, runner.m_MatchConfig.sessionId, RematchIdentity());
+		admission.SetSeatTable(NetH4BuildSeatTable(runner.m_MatchConfig), runner.m_MatchConfig.mode);
+		const uint32_t moved = admission.GetRoster().revision;
+		runner.m_Lobby.RequestStart();
+		// The lobby's own re-size of a seat's delay, published past the runner, on a config that still names an older roster.
+		NetMatchConfig resized = runner.m_Lobby.GetMatchConfig();
+		++resized.configRevision;
+		resized.seatRosterRevision = moved + 7;
+		if (resized.peerInputDelayFrames.size() < resized.peerCount) resized.peerInputDelayFrames.resize(resized.peerCount, resized.inputDelayFrames);
+		resized.peerInputDelayFrames[1] = static_cast<uint16_t>(resized.inputDelayFrames + 2);
+		std::string republishError;
+		if (!runner.m_Lobby.RepublishMatchConfig(resized, &republishError)) {
+			*error = "the fixture's delay re-size was refused: " + republishError;
+			return false;
+		}
+		runner.StampSeatRoster(admission);
+		const NetMatchConfig& published = runner.m_Lobby.GetMatchConfig();
+		std::cout << "[net-match-selftest] roster_stamp_after_lobby_republish lobby_revision=" << published.configRevision << " lobby_roster=" << published.seatRosterRevision
+		          << " runner_revision=" << runner.m_MatchConfig.configRevision << " held_roster=" << moved << " delay=" << NetMatchConfigUtil::PeerInputDelay(published, 2)
+		          << " start=" << runner.m_Lobby.IsStartRequested() << std::endl;
+		if (published.seatRosterRevision != moved || runner.m_MatchConfig.configRevision != published.configRevision ||
+		    NetMatchConfigUtil::PeerInputDelay(published, 2) != resized.peerInputDelayFrames[1] || !runner.m_Lobby.IsStartRequested()) {
+			*error = "after the lobby republished revision " + std::to_string(resized.configRevision) + " itself, the roster stamp left the lobby on roster " +
+			         std::to_string(published.seatRosterRevision) + " (the host plane holds " + std::to_string(moved) + ") with the runner at revision " +
+			         std::to_string(runner.m_MatchConfig.configRevision) + (runner.m_Lobby.IsStartRequested() ? "" : " and the start withdrawn");
+			return false;
+		}
+		std::cout << "PASS a_roster_stamp_follows_the_lobbys_own_republish" << std::endl;
+		return true;
+	}
+
+	// The host clicks Start once; before its peers acknowledge, one joiner's link drops and a newcomer takes the freed seat. Each is a change
+	// the lobby makes on its own, so the round still starts from that one click once the peers present acknowledge it.
+	bool TestAHostsStartSurvivesTheLobbysOwnChanges(std::string* error) {
+		LoopbackTransport hostTransport, joinerTransport, stayerTransport, lateTransport;
+		NetSession hostSession, joinerSession, stayerSession, lateSession;
+		NetMatchConfig matchConfig = MakeConfig();
+		matchConfig.peerCount = 3;
+		matchConfig.players[1].displayName = NetMatchConfigUtil::UnseatedSlotName(2, false);
+		matchConfig.players.push_back(NetMatchPlayerSlot{3, 2, false, NetMatchConfigUtil::UnseatedSlotName(3, false)});
+		NetSessionConfig hostConfig;
+		hostConfig.port = 43265;
+		hostConfig.sessionId = matchConfig.sessionId;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 2;
+		hostConfig.heartbeatIntervalMs = 25;
+		hostConfig.timeoutMs = 30000;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "start-intent-selftest";
+		identity.platform = "test";
+		NetSessionConfig joinerConfig = hostConfig, stayerConfig = hostConfig, lateConfig = hostConfig;
+		joinerConfig.displayName = "Joiner";
+		stayerConfig.displayName = "Stayer";
+		lateConfig.displayName = "Late";
+		joinerConfig.localNonce += 1;
+		stayerConfig.localNonce += 2;
+		lateConfig.localNonce += 3;
+		std::error_code code;
+		const std::filesystem::path tickets = std::filesystem::current_path() / "Userdata" / "start-intent-selftest";
+		std::filesystem::remove_all(tickets, code);
+		std::filesystem::create_directories(tickets, code);
+		const NetH4Identity planeIdentity = RematchIdentity();
+		NetSeatAuthRegistry registry;
+		NetReconnectHost admission;
+		if (code || !registry.BeginHostedSession()) {
+			*error = "the start-intent fixture could not prepare its admission plane";
+			return false;
+		}
+		admission.Configure(&registry, matchConfig.sessionId, planeIdentity);
+		admission.SetSeatTable(NetH4BuildSeatTable(matchConfig), matchConfig.mode);
+		admission.SetHostAddress("loopback");
+		admission.SetMatchConfigHash(NetMatchConfigUtil::HashConfig(matchConfig));
+		admission.SetLiveMatch(false);
+		hostSession.SetReconnectHost(&admission);
+		NetReconnectTicketStore joinerStore, stayerStore, lateStore;
+		NetReconnectClient joinerTicket, stayerTicket, lateTicket;
+		joinerStore.SetPath((tickets / "joiner.ticket").string());
+		stayerStore.SetPath((tickets / "stayer.ticket").string());
+		lateStore.SetPath((tickets / "late.ticket").string());
+		joinerTicket.Configure(&joinerStore, planeIdentity, "Joiner");
+		stayerTicket.Configure(&stayerStore, planeIdentity, "Stayer");
+		lateTicket.Configure(&lateStore, planeIdentity, "Late");
+		for (NetReconnectClient* ticket: {&joinerTicket, &stayerTicket, &lateTicket}) {
+			ticket->SetUnixClock(&RematchUnixClock, nullptr);
+			ticket->SetHostContext("loopback", NetHash32{});
+		}
+		joinerSession.SetReconnectClient(&joinerTicket);
+		stayerSession.SetReconnectClient(&stayerTicket);
+		lateSession.SetReconnectClient(&lateTicket);
+		if (!hostSession.StartHost(hostTransport, hostConfig, error) || !joinerSession.StartClient(joinerTransport, "loopback", joinerConfig, error) ||
+		    !stayerSession.StartClient(stayerTransport, "loopback", stayerConfig, error)) {
+			return false;
+		}
+		uint64_t now = 0;
+		bool lateStarted = false;
+		const auto pump = [&](uint64_t forMs, NetLobbySession* lobby) {
+			for (const uint64_t until = now + forMs; now <= until; now += 10) {
+				if (lobby) lobby->Tick(now);
+				else hostSession.Tick(now);
+				joinerSession.Tick(now);
+				stayerSession.Tick(now);
+				if (lateStarted) lateSession.Tick(now);
+				for (LoopbackTransport* leg: {&hostTransport, &joinerTransport, &stayerTransport, &lateTransport}) leg->AdvanceTimeMs(10);
+			}
+		};
+		for (int step = 0; step < 400 && (hostSession.GetReadyPeerCount() != 2 || joinerTicket.GetState() != NetH4ClientState::Joined ||
+		                                  stayerTicket.GetState() != NetH4ClientState::Joined); ++step) {
+			pump(0, nullptr);
+		}
+		if (hostSession.GetReadyPeerCount() != 2) {
+			*error = "the start-intent fixture seated " + std::to_string(hostSession.GetReadyPeerCount()) + " joiners";
+			return false;
+		}
+		NetPeerId joinerLink = c_InvalidNetPeerId;
+		for (const NetSessionPeerInfo& peer: hostSession.GetReadyPeers()) {
+			const uint8_t lockstepPeerId = static_cast<uint8_t>(peer.assignedPeerId + 1);
+			for (NetMatchPlayerSlot& slot: matchConfig.players)
+				if (slot.peerId == lockstepPeerId) slot.displayName = peer.displayName;
+			if (peer.displayName == "Joiner") joinerLink = peer.transportPeerId;
+		}
+		NetMatchRunner runner;
+		NetLobbySession& lobby = runner.GetLobbySession();
+		NetLobbySessionConfig lobbyConfig;
+		lobbyConfig.host = true;
+		lobbyConfig.localPeerId = 1;
+		for (const NetSessionPeerInfo& peer: hostSession.GetReadyPeers()) lobbyConfig.remoteTransportPeerIds.emplace(static_cast<uint8_t>(peer.assignedPeerId + 1), peer.transportPeerId);
+		lobbyConfig.matchConfig = matchConfig;
+		lobbyConfig.session = &hostSession;
+		lobbyConfig.sessionNowMs = [&now]() { return now; };
+		lobbyConfig.displayName = "Host";
+		lobbyConfig.platform = "test";
+		lobbyConfig.autoStart = false;
+		if (!lobby.Start(hostTransport, lobbyConfig, error)) return false;
+		// The click.
+		lobby.RequestStart();
+		// The joiner's link drops before it acknowledged: its seat frees and the lobby republishes the roster.
+		hostSession.DisconnectReadyPeer(joinerLink, NetRejectReason::Timeout, "heartbeat timeout");
+		pump(300, &lobby);
+		const bool keptThroughDrop = lobby.IsStartRequested();
+		// A newcomer takes the freed seat on a new link.
+		if (!lateSession.StartClient(lateTransport, "loopback", lateConfig, error)) return false;
+		lateStarted = true;
+		for (int step = 0; step < 300 && (lobby.m_RemotePeerIds.size() != 2 || lateTicket.GetState() != NetH4ClientState::Joined); ++step) pump(0, &lobby);
+		const bool keptThroughJoin = lobby.IsStartRequested();
+		if (lobby.m_RemotePeerIds.size() != 2) {
+			*error = "the newcomer never took the freed seat: " + std::to_string(lobby.m_RemotePeerIds.size()) + " remotes";
+			return false;
+		}
+		// The peers present acknowledge the revision they now sit in and are ready; nobody clicks again.
+		for (const uint8_t peerId: lobby.m_RemotePeerIds) {
+			NetLobbyConfigAck ack;
+			ack.peerId = peerId;
+			ack.accepted = true;
+			ack.matchConfigHash = lobby.GetMatchConfigHash();
+			lobby.HandleConfigAck(ack);
+			lobby.HandleReady(NetLobbyReady{peerId, true});
+		}
+		pump(100, &lobby);
+		std::cout << "[net-match-selftest] start_intent kept_through_drop=" << keptThroughDrop << " kept_through_join=" << keptThroughJoin
+		          << " started=" << lobby.IsStarted() << " revision=" << lobby.GetMatchConfig().configRevision << std::endl;
+		if (!keptThroughDrop || !keptThroughJoin || !lobby.IsStarted()) {
+			*error = std::string("the host clicked Start once and the round ") + (lobby.IsStarted() ? "started" : "never started") + ": the click was " +
+			         (keptThroughDrop ? (keptThroughJoin ? "kept" : "withdrawn when a newcomer took the freed seat") : "withdrawn when a joiner's link dropped");
+			return false;
+		}
+		std::cout << "PASS a_hosts_start_survives_the_lobbys_own_changes" << std::endl;
+		return true;
+	}
+
 	// A player joining a running match whose host goes is told the match changes host only when the host's roster names another player
 	// still connected to play on; a host alone, or one whose other players are gone, ended the match for it.
 	bool TestAJoinerIsToldTheMatchIsChangingHost(std::string* error) {
@@ -15897,6 +16093,14 @@ namespace RTE {
 		if (!TestAStartRequestOutlivesTheRosterStamp(&startRequestError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << startRequestError << std::endl;
 		}
+		std::string stampFollowError, startIntentError;
+		if (!TestARosterStampFollowsTheLobbysOwnRepublish(&stampFollowError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << stampFollowError << std::endl;
+		}
+		if (!TestAHostsStartSurvivesTheLobbysOwnChanges(&startIntentError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << startIntentError << std::endl;
+		}
+		if (startRequestError.empty()) startRequestError = !stampFollowError.empty() ? stampFollowError : startIntentError;
 		std::string changingHostError;
 		if (!TestAJoinerIsToldTheMatchIsChangingHost(&changingHostError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << changingHostError << std::endl;

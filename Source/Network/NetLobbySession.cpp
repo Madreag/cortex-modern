@@ -137,6 +137,7 @@ namespace RTE {
 		m_LocalReady = config.host || config.autoReady;
 		m_ReadySent = false;
 		m_StartRequested = config.autoStart;
+		m_StartIntent = false;
 		m_FailureReason.clear();
 		m_RemoteLobbyUp.clear();
 		m_LobbyUpConnections.clear();
@@ -669,7 +670,7 @@ namespace RTE {
 			{"config_acked", AllConfigAcked()},
 			{"local_ready", m_LocalReady},
 			{"remote_ready", AllRemoteReady()},
-			{"start_requested", m_StartRequested},
+			{"start_requested", IsStartRequested()},
 			{"match_config", json::parse(NetMatchConfigUtil::BuildReportJson(m_Config.matchConfig))},
 			{"stats", {
 				{"messages_sent", m_Stats.messagesSent},
@@ -714,7 +715,7 @@ namespace RTE {
 		if (IsTerminal(m_State)) {
 			return;
 		}
-		m_StartRequested = true;
+		m_StartIntent = true;
 	}
 
 	bool NetLobbySession::RepublishMatchConfig(const NetMatchConfig& config, std::string* error) {
@@ -759,8 +760,7 @@ namespace RTE {
 		m_State = NetLobbyState::WaitingForConfigAck;
 		m_ReadySent = false;
 		m_LocalReady = m_Config.host || m_Config.autoReady;
-		// A Start pending on the old revision does not carry over; an auto-starting round re-arms it
-		// exactly as Start() did, so the new config is what the round begins on.
+		// An auto-starting round re-arms as Start() did; the host's own Start stands, and the round begins on the new config once acknowledged.
 		m_StartRequested = m_Config.autoStart;
 		m_PeerStatePending = true;
 		m_ConfigResendDue = true;
@@ -912,12 +912,7 @@ namespace RTE {
 		}
 		if (!changed || next.configRevision == UINT64_MAX) return;
 		++next.configRevision;
-		const bool startPending = m_StartRequested;
-		// The host asked for this round to start once, as a player presses it once. A re-size the host
-		// never typed re-opens the acknowledgement, never withdraws that request.
-		if (RepublishMatchConfig(next) && startPending) {
-			m_StartRequested = true;
-		}
+		(void)RepublishMatchConfig(next);
 	}
 
 	void NetLobbySession::SyncSessionPeers() {
@@ -1274,7 +1269,7 @@ namespace RTE {
 		     << " republishes=" << m_Stats.configRepublishes << " config_sent=" << m_Stats.configPacketsSent
 		     << " acks=" << m_Stats.configAcksReceived;
 		if (m_Config.host) {
-			line << " occupancy=" << (HasRequiredOccupancy() ? 1 : 0) << " start_requested=" << (m_StartRequested ? 1 : 0)
+			line << " occupancy=" << (HasRequiredOccupancy() ? 1 : 0) << " start_requested=" << (IsStartRequested() ? 1 : 0)
 			     << " chunks_pending=" << (HasPendingStateChunks() ? 1 : 0);
 			for (uint8_t peerId: m_RemotePeerIds) {
 				line << " peer" << static_cast<int>(peerId) << "=[acked=" << (m_ConfigAckedByPeer.count(peerId) && m_ConfigAckedByPeer.at(peerId) ? 1 : 0)
@@ -1292,7 +1287,7 @@ namespace RTE {
 		if (m_Config.host && m_Config.snapshotProviderPeerId != 0 && !m_IncomingStateComplete)
 			return;
 		// The Start rides the same ordered lane as the state chunks, so it must queue behind them.
-		if (!m_Config.host || !AllConfigAcked() || !AllRemoteReady() || !m_StartRequested || HasPendingStateChunks() || IsTerminal(m_State)) {
+		if (!m_Config.host || !AllConfigAcked() || !AllRemoteReady() || !IsStartRequested() || HasPendingStateChunks() || IsTerminal(m_State)) {
 			ReportStartWait();
 			return;
 		}
@@ -1316,6 +1311,7 @@ namespace RTE {
 		m_StartSentTo.clear();
 		m_StartSendStall = 0;
 		++m_Stats.startPacketsSent;
+		m_StartIntent = false;
 		m_State = NetLobbyState::Started;
 	}
 

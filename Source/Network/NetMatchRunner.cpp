@@ -150,6 +150,9 @@ namespace RTE {
 	}
 
 	void NetMatchRunner::StampSeatRoster(const NetReconnectHost& admission) {
+		// The draft is the lobby's published config: the lobby republishes on its own (a delay re-size, a dropped seat) and a draft from an
+		// older copy would name a revision it has already passed.
+		AdoptLobbyConfig();
 		if (admission.GetRoster().revision == m_MatchConfig.seatRosterRevision || m_Lobby.IsStarted()) return;
 		NetMatchConfig stamped = m_MatchConfig;
 		stamped.configRevision = m_MatchConfig.configRevision + 1;
@@ -161,10 +164,7 @@ namespace RTE {
 			stamped.activePeerIds = present.size() < stamped.peerCount ? present : std::vector<uint8_t>{};
 		}
 		std::string stampError;
-		// The host asked for the start once; a roster revision it never typed reopens the acknowledgement, never withdraws that.
-		const bool startPending = m_Lobby.IsStartRequested();
 		if (m_Lobby.RepublishMatchConfig(stamped, &stampError)) {
-			if (startPending) m_Lobby.RequestStart();
 			m_MatchConfig = stamped;
 			m_Config.matchConfig = stamped;
 			m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
@@ -236,6 +236,14 @@ namespace RTE {
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
 		SyncSeatingWaitToConfig();
 		return true;
+	}
+
+	void NetMatchRunner::AdoptLobbyConfig() {
+		if (!m_Config.host || m_Lobby.GetMatchConfig().configRevision == m_MatchConfig.configRevision) return;
+		m_MatchConfig = m_Lobby.GetMatchConfig();
+		m_Config.matchConfig = m_MatchConfig;
+		m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
+		SyncSeatingWaitToConfig();
 	}
 
 	void NetMatchRunner::SyncSeatingWaitToConfig() {
@@ -645,6 +653,7 @@ namespace RTE {
 			                             : static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count());
 			const NetMatchRunnerClocks clocks = ResolveRoundClocks(roundMs, static_cast<bool>(m_Config.nowMs), sessionMs);
 			m_Lobby.Tick(clocks.lobbyMs);
+			AdoptLobbyConfig();
 			// A seat told its round ended while it was held or rejoining takes the end record, not a round.
 			if (!m_Config.host && m_Lobby.GetRoundEndedRecord() &&
 			    !(m_Lobby.HasCompleteStateTransfer() && IsWorldJoinImageBlob(m_Lobby.PeekReceivedState()))) {

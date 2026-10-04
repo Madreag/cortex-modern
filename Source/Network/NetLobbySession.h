@@ -112,7 +112,8 @@ namespace RTE {
 		bool HasHeardFrom(uint8_t peerId) const;
 		/// The peer's last reported ping in ms (the host stamps relayed states with its measurement).
 		uint32_t GetRemotePingMs(uint8_t peerId) const;
-		bool IsStartRequested() const { return m_StartRequested; }
+		/// Whether the round starts once its peers are ready: an automatic start, or the host's own Start, which only the round's start ends.
+		bool IsStartRequested() const { return m_StartRequested || m_StartIntent; }
 		const NetMatchConfig& GetMatchConfig() const { return m_Config.matchConfig; }
 		void SetRelayOffer(const NetRelayConfig& offer);
 		const std::map<uint8_t, NetInputDelayEstimator>& GetInputDelaySamples() const { return m_InputDelaySamples; }
@@ -277,6 +278,7 @@ namespace RTE {
 		friend bool TestARematchLobbyHoldsADroppedSeat(std::string* error, bool rematch, bool kick, bool alone);
 		friend bool TestALobbyDropsAnAbandonedTransfersTail(std::string* error);
 		friend bool TestALaterLobbysTransferIsNewToItsPeers(std::string* error);
+		friend bool TestAHostsStartSurvivesTheLobbysOwnChanges(std::string* error);
 		bool IsCommittedTransport(NetPeerId transportPeerId) const;
 		uint16_t OutgoingChunkIndex(uint8_t peerId) const;
 		/// Whether the round seats a human on a peer other than this host's own.
@@ -306,7 +308,8 @@ namespace RTE {
 		bool m_ConfigResendDue = false; //!< A republished revision goes out on the next tick, not a resend interval later.
 		bool m_LocalReady = false;
 		bool m_ReadySent = false;
-		bool m_StartRequested = false;
+		bool m_StartRequested = false; //!< The automatic start; re-armed from the config at every change the lobby makes.
+		bool m_StartIntent = false; //!< The host's own Start: no automatic change withdraws it, the round's start or a new round ends it.
 		std::string m_FailureReason;
 		std::vector<uint8_t> m_RemotePeerIds; //!< Every remote lockstep peerId; derived at Start.
 		std::map<uint8_t, NetPeerId> m_RemoteTransports; //!< Lockstep peerId -> transport id for each remote.
