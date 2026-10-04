@@ -1474,7 +1474,7 @@ static std::string PaceCensusSinceLast() {
 
 // One memory census line: its counts are read on the sim thread between ticks and each part's cost goes on its line; the census worker sums
 // the process heaps and prints it.
-static void PostMemoryCensus(uint64_t simTick) {
+static void PostMemoryCensus(uint64_t simTick, const std::string& when = std::string()) {
 	std::string costs;
 	const auto timed = [&costs](const char* name, const auto& part) {
 		const HarnessCost::SimulationSpan span;
@@ -1498,6 +1498,8 @@ static void PostMemoryCensus(uint64_t simTick) {
 	std::ostringstream rest;
 	// Rounds restart their ticks, so the census names its own instant for a slope across a rematching run.
 	rest << " uptime_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - s_CensusProcessStart).count();
+	// A capture still writing holds its whole frozen image, so a line taken beside one counts it.
+	rest << " in_flight=autosave:" << g_ActivityMan.UnwrittenAutosaves() << ",fullstate:" << g_ActivityMan.UnfinishedFullStateCaptures() << when;
 	rest << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua
 	     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << cow
 	     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << ' ' << world << pace;
@@ -1516,10 +1518,20 @@ static uint64_t s_memoryCensusSeconds = 0;
 static void MemoryCensusByUptime() {
 	if (s_memoryCensusSeconds == 0) return;
 	static uint64_t s_nextSlot = 0;
-	const uint64_t slot = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - s_CensusProcessStart).count()) / s_memoryCensusSeconds;
+	static std::optional<std::chrono::steady_clock::time_point> s_dueSince;
+	const auto now = std::chrono::steady_clock::now();
+	const uint64_t slot = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(now - s_CensusProcessStart).count()) / s_memoryCensusSeconds;
 	if (slot < s_nextSlot) return;
+	// A line waits out the captures still writing, so it reads the game's own memory and not a frozen image on its way to disk;
+	// past a tenth of its slot, or into the next slot, it is taken anyway and says it waited.
+	if (!s_dueSince) s_dueSince = now;
+	const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(now - *s_dueSince).count();
+	const bool busy = g_ActivityMan.UnwrittenAutosaves() + g_ActivityMan.UnfinishedFullStateCaptures() != 0;
+	const uint64_t dueSlot = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(*s_dueSince - s_CensusProcessStart).count()) / s_memoryCensusSeconds;
+	if (busy && waited < static_cast<int64_t>(s_memoryCensusSeconds) * 100 && slot == dueSlot) return;
 	s_nextSlot = slot + 1;
-	PostMemoryCensus(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+	s_dueSince.reset();
+	PostMemoryCensus(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), " census_waited_ms=" + std::to_string(waited) + (busy ? " census_busy=1" : ""));
 }
 // Rollback fidelity probe: capture at tick T, record K hashed ticks, restore + rewind,
 // re-run the SAME ticks, compare. Green = the restore layer reproduces the sim byte-exactly.

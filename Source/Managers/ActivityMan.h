@@ -193,6 +193,8 @@ namespace RTE {
 		void WaitForAutosaveTasks() const;
 		/// Automatic captures the writer has not finished; each holds its whole frozen image until it has.
 		size_t UnwrittenAutosaves();
+		/// The full-state oracle's captures still holding their images; a lever-only count, 0 without the lever.
+		size_t UnfinishedFullStateCaptures();
 		/// The last automatic capture this process published; empty when none has.
 		const std::string& LastAutosavePath() const { return m_LastAutosavePath; }
 		uint64_t LastAutosaveTick() const { return m_LastAutosaveTick; }

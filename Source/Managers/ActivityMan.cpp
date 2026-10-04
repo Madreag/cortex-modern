@@ -1222,6 +1222,11 @@ bool ActivityMan::CaptureFullStateHash(uint64_t tick, uint64_t round, const std:
 	return true;
 }
 
+size_t ActivityMan::UnfinishedFullStateCaptures() {
+	std::erase_if(m_FullStateTasks, [](const auto& task) { return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready; });
+	return m_FullStateTasks.size();
+}
+
 size_t ActivityMan::UnwrittenAutosaves() {
 	std::erase_if(m_AutosaveTasks, [](const auto& task) {
 		return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
