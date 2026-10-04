@@ -13,7 +13,8 @@ import edith_cross
 import test_directory_ice_join as directory
 import world_mod_cross
 from edith.remote_box import RemoteBox
-from test_harness_resume5 import REPO
+
+REPO = Path(__file__).resolve().parents[1]
 
 
 class DriverOnlyPublicRow(unittest.TestCase):

@@ -11,8 +11,9 @@ from acceptance_pipeline_controls import (SHARE, augment, collect_final, finish_
                                           judge_final, remove_c3_result)
 from acceptance_collection import Share, start
 from acceptance_mod import sha256
+from inventory_location import inventory_dir
 
-INVENTORY = Path('D:/Projects/reviews/takeover-20260909/grok-workers/lead-tools/inventory')
+INVENTORY = inventory_dir()
 
 
 def write(path, value):
