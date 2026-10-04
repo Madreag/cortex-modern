@@ -1313,7 +1313,6 @@ namespace RTE {
 				*error = "leave changed the remaining player's readiness or left the room startable";
 				return false;
 			}
-			hostLobby.RequestStart();
 			phase = "replacement";
 			if (!join(0, "Returner", false) || !until([&] { return hostLobby.GetState() == NetLobbyState::WaitingForReady && started[0]; })) return false;
 			if (hostLobby.IsStarted() || lobbies[0].IsLocalReady() || hostLobby.GetRemoteName(2) != "Returner") {
@@ -1323,8 +1322,8 @@ namespace RTE {
 			lobbies[0].SetLocalReady(true);
 			phase = "replacement state transfer";
 			if (!until([&] { return hostLobby.IsRemoteReady() && lobbies[0].HasCompleteStateTransfer() && lobbies[1].HasCompleteStateTransfer(); })) return false;
-			if (hostLobby.IsStarted() || hostLobby.IsStartRequested() || lobbies[0].TakeReceivedState() != state || lobbies[1].TakeReceivedState() != state) {
-				*error = "replacement lost state-transfer bytes or retained an obsolete Start request";
+			if (hostLobby.IsStarted() || lobbies[0].TakeReceivedState() != state || lobbies[1].TakeReceivedState() != state) {
+				*error = "replacement lost state-transfer bytes or the round started unasked";
 				return false;
 			}
 			const uint64_t revisionBeforeForgery = hostLobby.GetMatchConfig().configRevision;
