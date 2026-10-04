@@ -5,8 +5,10 @@ from collections import Counter, defaultdict
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
+import sys
 from .records import open_record, record_path, private_history_row
 
 TICKS = 1200
@@ -468,8 +470,36 @@ def early_decision_tick(run, peer, ticks=TICKS):
     return None
 
 
+def json_native(value, where='', failures=None):
+    """The value as JSON holds it: paths as strings; any other value JSON cannot hold is replaced by a named marker."""
+    failures = [] if failures is None else failures
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return value
+    elif isinstance(value, os.PathLike):
+        return os.fspath(value)
+    elif isinstance(value, dict):
+        return {(os.fspath(key) if isinstance(key, os.PathLike) else key): json_native(item, f'{where}.{key}' if where else str(key), failures)
+                for key, item in value.items()}
+    elif isinstance(value, (list, tuple)):
+        return [json_native(item, f'{where}[{index}]', failures) for index, item in enumerate(value)]
+    failures.append(dict(where=where or 'root', type=type(value).__name__, repr=repr(value)[:200]))
+    return dict(unserializable=type(value).__name__, repr=repr(value)[:200])
+
+
 def write_json(path, value):
-    Path(path).write_text(json.dumps(value, indent=2, allow_nan=False) + '\n', encoding='utf-8')
+    """Writes the document whole: a value JSON cannot hold is named in serialization_failures, never lost with the rest."""
+    failures = []
+    native = json_native(value, failures=failures)
+    if failures:
+        if isinstance(native, dict):
+            native['serialization_failures'] = failures
+        else:
+            Path(str(path) + '.serialization-failures.json').write_text(json.dumps(failures, indent=2) + '\n', encoding='utf-8')
+        print(f'{path}: {len(failures)} value(s) not JSON: ' + ', '.join(row['where'] for row in failures[:6]), file=sys.stderr, flush=True)
+    Path(path).write_text(json.dumps(native, indent=2, allow_nan=False) + '\n', encoding='utf-8')
 
 
 def write_jsonl(path, rows):
@@ -582,7 +612,7 @@ def impairment_evidence(run, manifest, logs=None):
     if not reference or any(value != reference for value in changes.values()):
         errors.append(f'live delay-change receipts differ or are absent: { {peer: sorted(value) for peer, value in changes.items()} }')
     return dict(passed=not errors, reason='; '.join(errors), effects=effects,
-                changes={peer: sorted(value) for peer, value in changes.items()}, evidence=paths)
+                changes={peer: sorted(value) for peer, value in changes.items()}, evidence=[str(path) for path in paths])
 
 
 def item9a_gates(run, peer='host', rows=None):
