@@ -6519,6 +6519,8 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	std::vector<char> complete(order.size(), 0);
 	CheckpointLua::NativeEffects effects;
 	const LuaScriptGraphNativeCaptureData* shared = LuaScriptGraphNativeCaptureScope::Current();
+	// Only a match's capture leaves receipts of what its page copies cost; a single-player save leaves none to collect.
+	const CheckpointLua::HeapOwner::ReceiptScope receipts(ScenarioRunner::HasLockstepCoordinator());
 	// A world capture made these before its own workers started; a capture of the graphs alone makes them here.
 	ContentFile::LoadedBitmapIndexScope bitmapIndex;
 	if (!CaptureSentinel::InParallelPhase()) LuaScriptGraphNativeCaptureScope::PreTouch();
@@ -12462,7 +12464,7 @@ void LuaMan::Update() {
 	// The simulation's own stall at the gates, wherever it met one since the last report, apart from the capture workers' waits.
 	static int64_t reportedSimGateUs = 0;
 	const int64_t simGateUs = CheckpointLua::HeapOwner::ThisThreadGateWaitMicroseconds();
-	// The receipt is a match's capture diagnostic: a single-player save lands copies too and logs none of it.
+	// Receipts come from a match's captures alone; one that lands after its match ended is not logged.
 	if (copiedStates != 0 && ScenarioRunner::HasLockstepCoordinator()) {
 		System::PrintDiagnosticLine(std::format("[heap-copy] tick={} states={} pages={} bytes={} copy_us_sum={} copy_us_max={} landed_after_freeze_us_max={} fresh_mapped_bytes={} gate_waited_us={} sim_gate_waited_us={}\n",
 		    g_TimerMan.GetSimUpdateCount(), copiedStates, copiedPages, copiedPages * CheckpointLua::Snapshot::c_PageBytes, copyUsSum, copyUsMax, landedUsMax, freshBytes,
@@ -14771,6 +14773,8 @@ CopyBufferProbe RTE::ProbeCheckpointCopyBuffers() {
 	try {
 		const std::unique_ptr<CheckpointLua::HeapOwner> owner = CheckpointLua::HeapOwner::Create();
 		lua_State* state = owner->State();
+		// The probe reads what each freeze's copy cost.
+		const CheckpointLua::HeapOwner::ReceiptScope receipts(true);
 		// Only the chunks below write the heap, so each freeze copies what they touched.
 		lua_gc(state, LUA_GCSTOP, 0);
 		const auto run = [state](const std::string& code) {

@@ -105,6 +105,8 @@
 #include <unistd.h>
 #endif
 
+#include "CheckpointLuaHeap.h"
+
 using namespace RTE;
 
 #define HACK_MZ_COMPRESS_METHOD_STORE 0
@@ -1606,7 +1608,12 @@ bool ActivityMan::RunSaveCallbacksSelfTest() {
 	const long actorUID = actor->GetUniqueID();
 	const int x = static_cast<int>(actor->GetPos().GetX()), y = static_cast<int>(actor->GetPos().GetY());
 	rectfill(g_SceneMan.GetTerrain()->GetBitmap(), x - 30, y - 30, x + 30, y + 30, 30);
+	const uint64_t landedBefore = CheckpointLua::HeapOwner::LandedCopyCount();
 	if (!SaveCurrentGame("save_callbacks") || !WaitForSaveGameTask()) return false;
+	// A single-player save's page copies land with no receipt: what they cost is a match's capture diagnostic, so nothing is left to collect.
+	scriptState.WaitFrozenCopy();
+	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) state.WaitFrozenCopy();
+	const uint64_t copyReceipts = CheckpointLua::HeapOwner::LandedCopyCount() - landedBefore;
 	const Vector acceleration = g_SceneMan.GetScene()->GetGlobalAcc();
 	const auto expectedImages = g_SceneMan.GetScene()->GetCopiedSceneLayerBitmaps();
 	actors.clear();
@@ -1637,11 +1644,12 @@ bool ActivityMan::RunSaveCallbacksSelfTest() {
 	const bool savedAgain = loaded && SaveCurrentGame("save_callbacks_again") && WaitForSaveGameTask();
 	const bool repeated = savedAgain && scriptState.RunScriptString("assert(" + activityClass + ".save_callback_count == 2)") == 0 &&
 	                      LoadAndLaunchGame("save_callbacks_again") && scriptState.RunScriptString("assert(" + activityClass + ".save_callback_count == 2)") == 0;
-	const bool passed = callback && loaded && images && scene && objects && activityState && repeated;
+	const bool passed = callback && loaded && images && scene && objects && activityState && repeated && copyReceipts == 0;
 	{
 		std::ostringstream line;
 		line << "[save-callback-selftest] " << (passed ? "PASS" : "FAIL") << " callback=" << callback << " loaded=" << loaded
-	          << " images=" << images << " scene=" << scene << " objects=" << objects << " activity=" << activityState << " repeated=" << repeated;
+	          << " images=" << images << " scene=" << scene << " objects=" << objects << " activity=" << activityState << " repeated=" << repeated
+	          << " copy_receipts=" << copyReceipts;
 		System::PrintDiagnosticLine(line.str());
 	}
 	return passed;

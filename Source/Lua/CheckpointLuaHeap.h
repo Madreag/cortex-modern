@@ -4,6 +4,7 @@ extern "C" {
 #include "lua.h"
 #include "lauxlib.h"
 #include "lj_obj.h"
+#include "lj_gc.h"
 #include "lj_vmevent.h"
 }
 
@@ -249,9 +250,11 @@ namespace RTE::CheckpointLua {
 			data->serial = G(m_State)->objserial;
 			data->base = m_Base;
 			data->committed = m_Committed;
-			auto copy = [this, data, started] {
+			const bool receipt = Receipts().load(std::memory_order_acquire);
+			auto copy = [this, data, started, receipt] {
 				m_FreshBytes = 0;
 				CopyPages(*data);
+				if (!receipt) return;
 				std::lock_guard lock(m_CopyMutex);
 				m_LandedCopy = {++m_LandedGeneration, data->copied.load(std::memory_order_relaxed), data->copyUs.load(std::memory_order_relaxed), m_FreshBytes, MicrosecondsSince(started)};
 				LandedCopies().fetch_add(1, std::memory_order_release);
@@ -307,7 +310,20 @@ namespace RTE::CheckpointLua {
 		/// The calling thread's own share of it: the simulation's stall, apart from capture workers that called into a frozen state.
 		static int64_t ThisThreadGateWaitMicroseconds() { return ThreadGateWaitUs(); }
 
-		/// How many copies have landed on any heap: a reader with nothing new to take reads this alone.
+		/// While one is open, the freezes it covers leave receipts of what their copies cost: a match's capture diagnostic,
+		/// so a single-player save lands its copies with none. Opened by the thread that starts the capture, before its workers.
+		class ReceiptScope {
+		public:
+			explicit ReceiptScope(bool open) : m_Was(Receipts().exchange(open, std::memory_order_acq_rel)) {}
+			~ReceiptScope() { Receipts().store(m_Was, std::memory_order_release); }
+			ReceiptScope(const ReceiptScope&) = delete;
+			ReceiptScope& operator=(const ReceiptScope&) = delete;
+
+		private:
+			bool m_Was;
+		};
+
+		/// How many receipted copies have landed on any heap: a reader with nothing new to take reads this alone.
 		static uint64_t LandedCopyCount() { return LandedCopies().load(std::memory_order_acquire); }
 		/// The receipt of the copy that landed last, once; call it after the gate.
 		CopyReceipt TakeCopyReceipt() {
@@ -369,6 +385,10 @@ namespace RTE::CheckpointLua {
 		static std::atomic<uint64_t>& LandedCopies() {
 			static std::atomic<uint64_t> landed{0};
 			return landed;
+		}
+		static std::atomic<bool>& Receipts() {
+			static std::atomic<bool> open{false};
+			return open;
 		}
 		static int64_t& ThreadGateWaitUs() {
 			thread_local int64_t waited = 0;
