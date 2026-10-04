@@ -661,7 +661,9 @@ def judge_retention(root: Path, ticks: int, records: dict) -> dict:
         log = peer_log(root, who)
         captures, _ = landed_checkpoints(log)
         retained = RETAINED.findall(log)
-        assert retained, f"{who} never reported a retention pass"
+        if not retained:
+            # A peer reports a retention pass for each checkpoint it writes: none written is a writer slower than the run.
+            raise CheckpointsShort(f"{who} wrote no checkpoint, so it reported no retention pass", checkpoint_record(root, ticks))
         keep = {int(row[1]) for row in retained}
         assert keep == {RETAINED_AUTOSAVES}, f"{who} used a retention count of {keep}"
         held = checkpoints(root, who)
@@ -1491,6 +1493,14 @@ class CheckpointWaitTests(unittest.TestCase):
         texts = {who: self.capture_lines([133, 253, 373, 493]) for who in ("host", "client")}
         details = self.judge(judge_retention, texts, {"host": [253, 373, 493], "client": [253, 373, 493]}, 700, records)
         self.assertEqual(details["host"]["captures"], [133, 253, 373, 493])
+
+    def test_a_peer_that_wrote_no_checkpoint_waits(self):
+        # The Mac on 66d4f5e147, 5:4x PM: in 700 ticks the host wrote 152 behind 6-9 s writes and the held client took none.
+        records = {"host": {"exit_code": 0}, "client": {"exit_code": 0}}
+        texts = {"host": self.capture_lines([152]), "client": "[autosave] named tick=152 not taken: catch_up=true running=true\n"}
+        with self.assertRaises(CheckpointsShort) as raised:
+            self.judge(judge_retention, texts, {"host": [152], "client": []}, 700, records)
+        self.assertIn("client wrote no checkpoint", str(raised.exception))
 
     def test_a_held_peers_missed_capture_waits_only_when_its_own_line_names_it(self):
         # live-retention-2 on this lane: the client, held and catching up, did not take the capture the host wrote at 480.
