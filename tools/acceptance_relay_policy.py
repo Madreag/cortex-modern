@@ -166,14 +166,44 @@ def _scan_stream(stream, book):
     return dict(sha256=digest.hexdigest(),kinds=sorted(kinds),fields=sorted(fields))
 
 
+def reparse_point(path):
+    return (path.is_symlink() or getattr(path,'is_junction',lambda:False)()
+            or bool(getattr(path.lstat(),'st_file_attributes',0)&getattr(stat,'FILE_ATTRIBUTE_REPARSE_POINT',0x400)))
+
+
+def shared_data_reference(path,root):
+    if path.name!='Data' or path.parent.name!='runtime':return None
+    manifest=path.parent.parent/'runtime.json'
+    try:
+        data=manifest.read_bytes();document=json.loads(data);target=path.resolve()
+        if (Path(document['cwd']).resolve()==path.parent.resolve() and Path(document['data']).resolve()==target
+                and target.is_dir() and not target.is_relative_to(Path(root).resolve())):
+            return dict(manifest=str(manifest),manifest_sha256=hashlib.sha256(data).hexdigest(),target=str(target))
+    except (OSError,ValueError,KeyError,TypeError):pass
+    return None
+
+
+def unsafe_reparse_points(root):
+    failures=[]
+    for directory,dirs,files in os.walk(root,followlinks=False):
+        for name in list(dirs)+files:
+            path=Path(directory)/name
+            if reparse_point(path):
+                if not shared_data_reference(path,root):failures.append(dict(path=str(path),reason='reparse point lacks a matching external runtime Data reference'))
+                if name in dirs:dirs.remove(name)
+    return failures
+
+
 def scan_retained(root, book, previous=None):
     """Scan every retained byte and every archive member; never clear a previously observed native leak."""
     root=Path(root).resolve();files=[];failures=[];logins=[];skipped=[]
     for directory,dirs,names in os.walk(root,followlinks=False):
         for name in list(dirs)+names:
             path=Path(directory)/name
-            if path.is_symlink() or getattr(path.stat(),'st_file_attributes',0) & getattr(stat,'FILE_ATTRIBUTE_REPARSE_POINT',0x400):
-                skipped.append(dict(path=path.relative_to(root).as_posix(),reason='external reparse target excluded'))
+            if reparse_point(path):
+                reference=shared_data_reference(path,root)
+                if reference:skipped.append(dict(path=path.relative_to(root).as_posix(),reason='manifest-bound external runtime Data',**reference))
+                else:failures.append(dict(path=path.relative_to(root).as_posix(),reason='unclassified reparse point'))
                 if name in dirs: dirs.remove(name)
                 if name in names:names.remove(name)
         for name in names:

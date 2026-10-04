@@ -103,6 +103,7 @@ def sanitize_native(root, digests, *, cleanup=False):
     from relay_secrets import DigestBook,SecretBook,sweep,walk_files
     from relay_scrub import scrub
     from relay_login_sweep import sweep as structural_sweep
+    from acceptance_relay_policy import unsafe_reparse_points
     root=Path(root)
     observed=bool(digests.get('items'))
     if not observed and not cleanup:raise ValueError('relay evidence requires a nonempty credential book')
@@ -114,15 +115,16 @@ def sanitize_native(root, digests, *, cleanup=False):
     cleaned=scrub([root],book=book)
     remaining=sweep([root],book.finder())
     structural=structural_sweep([root])
+    unscanned=unsafe_reparse_points(root)
     safe=(remaining['files_scanned']>0 and remaining['status']=='CLEAN' and not remaining['files_with_secrets']
           and not cleaned['incomplete'] and cleaned['hits_after']==0
-          and structural['status']=='CLEAN' and not structural['files_with_logins'] and not structural['incomplete'])
+          and structural['status']=='CLEAN' and not structural['files_with_logins'] and not structural['incomplete'] and not unscanned)
     if safe and observed:
         for path in list(walk_files(root)):
             if path.name=='LogConsole.txt' and path.parent.name=='runtime':
                 (path.parent.parent/'console.log').write_bytes(path.read_bytes())
     return dict(passed=safe and observed and cleaned['hits_before']==0 and not prior_failed,safe_to_copy=safe and observed,
-                cleanup_clean=safe,book_values=len(digests.get('items',[])),
+                cleanup_clean=safe,book_values=len(digests.get('items',[])),unscanned=unscanned,
                 files_scanned=remaining['files_scanned'],hits_before=cleaned['hits_before'],hits_after=cleaned['hits_after'],
                 native_login_leak=cleaned['hits_before']>0 or prior_failed,sanitizer_receipt=cleaned,structural_scan=structural)
 

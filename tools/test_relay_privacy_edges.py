@@ -20,6 +20,28 @@ from test_acceptance_resume3 import build_plan
 
 
 class RelayPrivacyEdges(unittest.TestCase):
+    def test_unknown_reparse_point_cannot_be_excluded_from_a_relay_root(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)/'row';root.mkdir();link=root/'unclassified-link';link.write_text('pointer')
+            (root/'native.log').write_text('clean\n');book=policy.CredentialBook();book.add('minted-username','fixture-'+uuid.uuid4().hex)
+            original=Path.is_symlink
+            with patch.object(Path,'is_symlink',lambda path:True if path==link else original(path)):
+                scan=policy.scan_retained(root,book)
+            self.assertFalse(scan['passed'],'an unexplained reparse point was silently outside the relay check')
+            self.assertTrue(scan['unscanned'])
+
+    def test_only_the_manifest_bound_external_data_link_is_excluded(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base=Path(folder);root=base/'row';runtime=root/'host/runtime';data=runtime/'Data';data.mkdir(parents=True)
+            shared=base/'assets';shared.mkdir()
+            (root/'host/runtime.json').write_text(json.dumps(dict(cwd=str(runtime),data=str(shared))))
+            book=policy.CredentialBook();book.add('minted-username','fixture-'+uuid.uuid4().hex)
+            original_link,original_resolve=Path.is_symlink,Path.resolve
+            with patch.object(Path,'is_symlink',lambda path:True if path==data else original_link(path)),patch.object(Path,'resolve',lambda path,*a,**k:shared if path==data else original_resolve(path,*a,**k)):
+                self.assertTrue(policy.scan_retained(root,book)['passed'])
+                (root/'host/runtime.json').write_text(json.dumps(dict(cwd=str(runtime),data=str(base/'different-assets'))))
+                self.assertFalse(policy.scan_retained(root,book)['passed'],'a different target borrowed the shared-data exclusion')
+
     def test_remote_timeout_stops_then_sweeps_before_returning_failure(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);pair=sessions.Pair.__new__(sessions.Pair)
