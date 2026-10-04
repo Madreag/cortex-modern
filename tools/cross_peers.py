@@ -492,9 +492,9 @@ def preflight_payload(path):
                   modules={p: h for p, h in content.items() if p.endswith('/Index.ini')},
                   fixture={name: digest_file(repo / 'tools/feel' / name) for name in ('CrossCombat.lua', 'CrossCombat.ini')},
                   load=box_load(), scratch_bytes=scratch_bytes(box['scratch']))
-    if any(acceptance_cross.is_row(s) for s in payload['specs']):
+    if any(acceptance_cross.is_row(s) for s in payload.get('specs', ())):
         acceptance_cross.preflight_driver(box, result)
-    if any(s.get('acceptance_row') in ('mod-match', 'mod-refusal') for s in payload['specs']):
+    if any(s.get('acceptance_row') in ('mod-match', 'mod-refusal') for s in payload.get('specs', ())):
         acceptance_cross.preflight_mod(box, result)
     write_json(Path(path).parent / 'preflight.json', result)
     print(f'preflight {box["name"]} files={len(content)} exe={result["executable_sha256"][:16]}')
