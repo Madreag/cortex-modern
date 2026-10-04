@@ -52,7 +52,7 @@ def hold(path):
     root = Path(path).parent
     payload = json.loads(Path(path).read_text(encoding='utf-8-sig'))
     box = payload['box']
-    if box['kind'] not in ('windows-local','windows-task','posix-ssh') or box.get('name') == 'Z13' or \
+    if box['kind'] not in ('windows-local','windows-task','posix-ssh') or \
             (box['kind'] == 'windows-local' and box.get('name') != 'EROL-PC') or \
             platform.node().casefold() != box['hostname'].casefold():
         raise ValueError('reservation holder is not on the declared authorized machine')
