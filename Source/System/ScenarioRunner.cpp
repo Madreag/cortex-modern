@@ -977,7 +977,7 @@ namespace RTE {
 		s_LockstepCoordinator->NoteLocalTickCost(producedFrame, computeMs);
 	}
 
-	void ScenarioRunner::DrawNetUiToasts() {
+	void ScenarioRunner::DrawNetUiToasts(const std::string& screenLine) {
 		const uint64_t nowMs = NetLockstepNowMs();
 		for (auto it = s_NetUiToasts.begin(); it != s_NetUiToasts.end(); ) {
 			if (it->shownAtMs != 0 && nowMs >= it->shownAtMs + c_NetUiToastMs) {
@@ -986,7 +986,7 @@ namespace RTE {
 				++it;
 			}
 		}
-		if (auto* panel = g_MenuMan.GetNetworkPanel()) panel->DrawMatchToasts();
+		if (auto* panel = g_MenuMan.GetNetworkPanel()) panel->DrawMatchToasts(screenLine);
 	}
 
 	const std::vector<ScenarioRunner::NetUiToastRecord>& ScenarioRunner::GetNetUiToastLog() {

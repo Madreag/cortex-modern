@@ -46,6 +46,32 @@ namespace RTE {
 	/// The player's line when the host of the match it was joining is gone and the others play on under a new one.
 	inline constexpr const char* c_NetMatchChangingHostLine = "The match is changing host - try again in a moment";
 
+	/// The toast that announces a match repair: why it started and whose game was found out of step. The repair screen itself
+	/// says that the match is resyncing, so this line never does. reason is the stop that asked for the repair.
+	inline std::string NetRepairStartLine(const std::string& reason, const std::string& localName, const std::string& hostName, bool localIsHost) {
+		const std::string started = "Match repair started";
+		const std::string diverged = "sim state diverged at tick ";
+		if (const size_t at = reason.find(diverged); at != std::string::npos) {
+			const std::string rest = reason.substr(at + diverged.size());
+			const std::string frame = rest.substr(0, rest.find_first_not_of("0123456789"));
+			const size_t open = rest.find(" ("), close = rest.rfind(')');
+			const std::string who = open != std::string::npos && close != std::string::npos && close > open + 2 ? rest.substr(open + 2, close - open - 2) : std::string();
+			const std::string when = frame.empty() ? std::string() : " at frame " + frame;
+			// The host's world is the one every peer reloads, so the host is never the one that fell out of step.
+			if (!who.empty() && who == hostName) return started + (localIsHost ? ": a player fell out of step" : ": out of step with the host") + when;
+			if (!who.empty() && who == localName) return started + ": your game fell out of step" + when;
+			return started + ": " + (who.empty() ? std::string("a game") : who) + " fell out of step" + when;
+		}
+		const size_t requested = reason.find("ResyncRequested:");
+		const std::string message = requested == std::string::npos ? std::string() : reason.substr(requested + 16);
+		if (message.starts_with("host requested repair")) return started + (localIsHost ? " by you" : " by the host");
+		if (message.starts_with("player rejoined")) return started + ": a player rejoined";
+		if (message.starts_with("seat reclaimed")) return started + ": a held seat's player returned";
+		if (message.starts_with("seat substituted")) return started + ": a substitute took a held seat";
+		if (message.starts_with("successor snapshot")) return started + " after the host change";
+		return started;
+	}
+
 	/// A single lobby participant, as shown in the multiplayer lobby player list.
 	struct NetLobbyMember {
 		uint8_t peerId = 0;

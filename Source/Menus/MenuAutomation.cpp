@@ -1670,6 +1670,17 @@ namespace RTE::MenuAutomation {
 			same("seat_join_receiving", NetSeatJoinProgress(3250585, 8598323, false), "receiving the world 3.1 of 8.2 MB");
 			same("seat_join_catching_up", NetSeatJoinProgress(0, 8598323, true), "catching up");
 			same("changing_host_line", c_NetMatchChangingHostLine, "The match is changing host - try again in a moment");
+			// The repair toast names why and whose game, never the repair screen's own line.
+			const std::string diverged = "tick 243 lockstep stopped: Desync:sim state diverged at tick 240 (Client)";
+			same("repair_toast_names_the_player", NetRepairStartLine(diverged, "Host", "Host", true), "Match repair started: Client fell out of step at frame 240");
+			same("repair_toast_on_the_named_screen", NetRepairStartLine(diverged, "Client", "Host", false), "Match repair started: your game fell out of step at frame 240");
+			same("repair_toast_naming_the_host", NetRepairStartLine("Desync:sim state diverged at tick 60 (Host)", "Ana", "Host", false), "Match repair started: out of step with the host at frame 60");
+			same("repair_toast_on_the_host_it_names", NetRepairStartLine("Desync:sim state diverged at tick 60 (Host)", "Host", "Host", true), "Match repair started: a player fell out of step at frame 60");
+			same("repair_toast_host_request", NetRepairStartLine("ResyncRequested:host requested repair", "Ana", "Host", false), "Match repair started by the host");
+			same("repair_toast_own_request", NetRepairStartLine("ResyncRequested:host requested repair", "Host", "Host", true), "Match repair started by you");
+			same("repair_toast_rejoin", NetRepairStartLine("tick 900 lockstep stopped: ResyncRequested:player rejoined", "Ana", "Host", false), "Match repair started: a player rejoined");
+			same("repair_toast_unnamed", NetRepairStartLine("Desync", "Ana", "Host", false), "Match repair started");
+			check("repair_toast_never_the_screen_line", NetRepairStartLine(diverged, "Host", "Host", true).find("Resyncing") == std::string::npos, "");
 		}
 		{
 			// A state line shown twice is caught wherever the two copies are; what a screen repeats by design is not.

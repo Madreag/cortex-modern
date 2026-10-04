@@ -369,7 +369,8 @@ namespace RTE {
 		/// Reclaims of the local seat so far; a surface restarts its own reading when this moves.
 		static uint32_t GetLockstepSeatReclaimEpoch();
 		/// Draws at most three unexpired toast rows at bottom centre, outside simulation state.
-		static void DrawNetUiToasts();
+		/// @param screenLine The line the screen beneath already shows; the rows never repeat it.
+		static void DrawNetUiToasts(const std::string& screenLine = {});
 		/// Every banner queued this run, in order — the report's ui.toasts source.
 		static const std::vector<NetUiToastRecord>& GetNetUiToastLog();
 		/// Unexpired presentation events, oldest first. A toast with no shown stamp is still waiting.

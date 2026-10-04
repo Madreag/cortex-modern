@@ -4780,7 +4780,7 @@ static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, con
 	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8,
 	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]" + (heldRejoin ? "  /  Leave [Esc] - your seat is kept" : ""), GUIFont::Centre);
 	g_MenuMan.DrawNetworkUI();
-	ScenarioRunner::DrawNetUiToasts();
+	ScenarioRunner::DrawNetUiToasts(resyncTitle);
 	ScenarioRunner::NoteResyncOverlayFrame();
 	g_MenuMan.DrawLocalPauseMenu();
 	g_WindowMan.UploadFrame();
@@ -6750,7 +6750,13 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				s_netMatchHeals.Note(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
 				g_ConsoleMan.PrintString("NETWORK: Resyncing from the host (" + std::to_string(s_netMatchHeals.Total()) + "): " + error);
 				System::PrintDiagnosticLine("[net-match] resync: reloading from the host snapshot");
-				ScenarioRunner::PushNetUiToast("resync_start", "Resyncing the match...");
+				const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
+				const auto seatName = [&snapshot](uint8_t peer) {
+					if (const auto view = g_NetMatchService.GetSeatView(peer); view && !view->name.empty()) return view->name;
+					const auto member = std::find_if(snapshot.members.begin(), snapshot.members.end(), [peer](const NetLobbyMember& row) { return row.peerId == peer; });
+					return member != snapshot.members.end() ? member->displayName : std::string();
+				};
+				ScenarioRunner::PushNetUiToast("resync_start", NetRepairStartLine(error, seatName(snapshot.localPeerId), seatName(snapshot.hostPeerId), snapshot.isHost));
 			}
 			ScenarioRunner::ClearControllerReplayError();
 			std::string resyncError;
