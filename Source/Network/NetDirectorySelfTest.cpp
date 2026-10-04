@@ -1077,6 +1077,7 @@ namespace RTE {
 				s.replies->push_back({404, R"({"error":"not_found"})", ""});
 				s.replies->push_back({200, R"({"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				s.replies->push_back({404, R"({"error":"not_found"})", ""});
+				s.replies->push_back({200, R"({"session_id":"9d2e1f3a-3333-4444-8555-666677778888","token":"tok3","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 
 				s.client.Advertise(SampleRegisterRequest(), false);
 				s.client.Update(0);
@@ -1093,9 +1094,19 @@ namespace RTE {
 					return false;
 				}
 				s.client.Update(10000); // heartbeat against the new session -> 404 again
-				s.client.Update(10000); // the once-only re-register is spent: the client fails closed
-				if (s.client.GetState() != NetDirectoryClient::State::Failed || s.sent->size() != 4) {
-					*error = "a second 404 did not fail closed";
+				s.client.Update(10000); // lost again before it beat: no register at once, the backoff first
+				if (s.client.GetState() != NetDirectoryClient::State::Registering || s.sent->size() != 4) {
+					*error = std::string("a second 404 before the row beat was not held to the backoff: state=") + NetDirectoryClient::StateName(s.client.GetState()) +
+					         " requests=" + std::to_string(s.sent->size());
+					return false;
+				}
+				s.client.Update(14999);
+				s.client.Update(15000); // the backoff is over: the row registers again, never given up
+				s.client.Update(15000);
+				if (s.sent->size() != 5 || !RequestIs(s.sent->at(4), "POST", "/v1/sessions", error) || s.client.GetState() != NetDirectoryClient::State::Registered ||
+				    s.client.GetSessionId() != "9d2e1f3a-3333-4444-8555-666677778888") {
+					*error = std::string("the row lost twice was given up: state=") + NetDirectoryClient::StateName(s.client.GetState()) + " requests=" + std::to_string(s.sent->size()) +
+					         (error->empty() ? std::string() : " " + *error);
 					return false;
 				}
 				return true;

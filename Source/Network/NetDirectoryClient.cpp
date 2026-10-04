@@ -549,17 +549,18 @@ namespace RTE {
 				SetState(State::Failed);
 				return;
 			}
-			// The row expired or the service forgot it: exactly one re-register is allowed.
+			m_SessionId.clear();
+			m_Token.clear();
+			SetState(State::Registering);
+			// The row expired or the service forgot it: it registers again at once. Lost again before it beat, the service is
+			// restarting or throttling it: it asks again after the backoff, and a listed row is never given up.
 			if (m_Reregistered) {
-				NoteError("heartbeat: row lost again after re-register");
-				SetState(State::Failed);
+				NoteError("heartbeat: row lost again after re-register, registering again after the backoff");
+				ScheduleRetry(nowMs);
 				return;
 			}
 			m_Reregistered = true;
-			m_SessionId.clear();
-			m_Token.clear();
 			NoteError("heartbeat: row gone (404), re-registering once");
-			SetState(State::Registering);
 			return;
 		}
 		if (reply.statusCode == 429) {

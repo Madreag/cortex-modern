@@ -217,7 +217,7 @@ namespace RTE {
 		uint64_t m_NextHeartbeatMs = 0;
 		uint64_t m_NextAttemptMs = 0;   //!< The retry slot a transient failure or a 429 set.
 		uint64_t m_BackoffMs = 0;
-		bool m_Reregistered = false;    //!< The one re-register a heartbeat 404 is allowed until the new row beats.
+		bool m_Reregistered = false;    //!< A heartbeat 404 re-registered the row and it has not beaten since: the next 404 waits out the backoff.
 		std::vector<std::pair<std::string, std::string>> m_RefusedResumes; //!< Resume claims (session, token) the directory refused.
 		static constexpr size_t c_MaxRefusedResumes = 8;
 		/// Steps a row's resume claim past every claim the directory refused: a world drops a token the directory no longer holds and
