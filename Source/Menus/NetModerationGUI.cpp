@@ -957,8 +957,8 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		auto compose = [&](const std::string& metrics, bool shortenNames) {
 			std::string line = "NET [F6] / ";
 			if (menuLobby) {
-				const int room = maxTextWidth - font->CalculateWidth(line + metrics);
-				line += FitLine(font, snapshot.statusText.empty() ? "LOBBY" : snapshot.statusText, std::max(0, room));
+				// The lobby's status line is the lobby menu's own; the widget names the state only.
+				line += "LOBBY";
 			} else if (hostLost) {
 				line += "HOST LOST / CHOOSING A NEW HOST / " + std::to_string(currentWaitMs) + " ms";
 			} else if (resyncing) {
@@ -1085,7 +1085,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		} else if (paused) {
 			composed += countdown > 0 ? "\nResuming in " + std::to_string((countdown + 59) / 60) + " s" : "\nPAUSED / P to resume";
 		} else if (menuLobby) {
-			composed += "\n" + FitLine(font, snapshot.statusText.empty() ? "LOBBY" : snapshot.statusText, textWidth);
+			composed += "\nLOBBY";
 		} else {
 			composed += "\nLIVE";
 		}
