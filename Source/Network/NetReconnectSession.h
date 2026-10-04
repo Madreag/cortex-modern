@@ -801,6 +801,8 @@ namespace RTE {
 		uint32_t ambiguousLosses = 0;
 		uint32_t confirmedSessionEnds = 0;
 		uint32_t returnRetries = 0; //!< Returns the host said to ask again later, asked again with the same ticket.
+		uint32_t returnEndpointsStored = 0;       //!< Proven returns whose new host address reached the stored ticket.
+		uint32_t returnEndpointStoreFailures = 0; //!< Writes of such an address the store refused; each is retried.
 	};
 
 	/// The client half: it persists the ticket the host offers before acknowledging it, answers a
@@ -811,6 +813,9 @@ namespace RTE {
 		// P21: an unacknowledged leave is an ambiguous loss, so the ladder gives up inside the same
 		// budget every other handshake step uses and the record survives.
 		static constexpr uint64_t c_LeaveAckBudgetMs = 2000;
+		/// A proven host address the store refused is written again after this, doubling to the longest.
+		static constexpr uint64_t c_EndpointRetryMs = 1000;
+		static constexpr uint64_t c_EndpointRetryLongestMs = 32000;
 
 		void Configure(NetReconnectTicketStore* store, NetH4Identity identity, std::string displayName);
 		void SetUnixClock(uint64_t (*clock)(void*), void* context);
@@ -915,6 +920,8 @@ namespace RTE {
 		void Resend(uint64_t nowMs);
 		void Fail(std::string error);
 		uint64_t UnixNowMs() const;
+		/// Writes where the host was reached into the stored ticket of the seat it just committed, and nothing else of it.
+		void StoreReturnEndpoint(uint64_t nowMs);
 
 		NetReconnectTicketStore* m_Store = nullptr;
 		NetRosterReplica m_RosterReplica;
@@ -945,6 +952,8 @@ namespace RTE {
 		uint32_t m_Retransmits = 0;
 		uint64_t m_ReturnRetryAtMs = 0;   //!< When a return the host put off is asked again; 0 when none waits.
 		uint64_t m_ReturnRetryDelayMs = 0; //!< The last wait, doubled each time up to the roster's longest backoff.
+		uint64_t m_EndpointRetryAtMs = 0;    //!< When a proven address the store refused is written again; 0 when none waits.
+		uint64_t m_EndpointRetryDelayMs = 0; //!< The last wait before such a write, doubled each time.
 		NetAuthBytes16 m_TxId{};
 		std::optional<std::pair<uint16_t, NetAuthBytes16>> m_CarriedApplication; //!< An application a lost host left unanswered, for the next host.
 		NetH4TicketRecord m_Record;

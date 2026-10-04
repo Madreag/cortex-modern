@@ -2694,6 +2694,34 @@ namespace RTE {
 		m_Record = std::move(record);
 	}
 
+	void NetReconnectClient::StoreReturnEndpoint(uint64_t nowMs) {
+		m_EndpointRetryAtMs = 0;
+		if (m_Store == nullptr || !m_HasRecord) return;
+		// The ticket on disk must still be this seat's: a newer ticket or a cleared one is left alone.
+		NetH4TicketRecord stored;
+		if (m_Store->Load(UnixNowMs(), stored, nullptr) != NetH4TicketLoadResult::Loaded || stored.epoch != m_Record.epoch || stored.stableSeat != m_Record.stableSeat ||
+		    stored.holderGeneration != m_Record.holderGeneration || stored.credential != m_Record.credential) {
+			return;
+		}
+		NetH4TicketRecord moved = stored;
+		if (!m_HostAddress.empty()) moved.hostAddress = m_HostAddress;
+		if (!m_DirectorySessionId.empty()) moved.directorySessionId = m_DirectorySessionId;
+		if (moved == stored) return;
+		std::string error;
+		if (m_Store->Store(moved, &error)) {
+			++m_Stats.returnEndpointsStored;
+			if (m_EndpointRetryDelayMs != 0) DiagnosticLine() << "[net-h4] the stored ticket now names " << moved.hostAddress << std::endl;
+			m_EndpointRetryDelayMs = 0;
+			return;
+		}
+		++m_Stats.returnEndpointStoreFailures;
+		if (m_EndpointRetryDelayMs == 0) {
+			DiagnosticLine() << "[net-h4] the stored ticket could not take the host's address " << moved.hostAddress << " (" << error << "); retrying" << std::endl;
+		}
+		m_EndpointRetryDelayMs = std::min(m_EndpointRetryDelayMs == 0 ? c_EndpointRetryMs : m_EndpointRetryDelayMs * 2, c_EndpointRetryLongestMs);
+		m_EndpointRetryAtMs = nowMs + m_EndpointRetryDelayMs;
+	}
+
 	bool NetReconnectClient::IsAdmissionPending() const {
 		// Applied waits for a human, which is why it is bounded by the same P2 window everything else
 		// on this plane is, rather than by the handshake ladder.
@@ -3033,6 +3061,8 @@ namespace RTE {
 				DiagnosticLine() << "[net-h4-fault] ack-duplicate: re-presenting the committed ack for seat " << committed->stableSeat << std::endl;
 			}
 			const bool a7NewCommit = m_State != NetH4ClientState::Joined || m_Incarnation != committed->incarnation || m_AssignedPeerId != committed->assignedPeerId;
+			// Only the commit that answers this client's own proof proves the host it reached holds the seat.
+			const bool provenReturn = m_State == NetH4ClientState::Proving && m_HasRecord && committed->txId == m_TxId;
 			m_Incarnation = committed->incarnation;
 			m_AssignedPeerId = committed->assignedPeerId;
 			m_State = NetH4ClientState::Joined;
@@ -3041,6 +3071,10 @@ namespace RTE {
 			if (NetA7Journal::Enabled() && a7NewCommit) NetA7Journal::Session("commit", nowMs, {{"stable_seat", committed->stableSeat},
 				{"peer_id", static_cast<unsigned>(committed->assignedPeerId) + 1}, {"incarnation", committed->incarnation}, {"holder_generation", committed->holderGeneration},
 				{"used_stored_ticket", m_UsedStoredTicket}, {"loaded_ticket_sha256", m_Store ? m_Store->GetA7LoadedSha256() : std::string()}}, "NetReconnectClient::nowMs");
+			if (provenReturn) {
+				m_EndpointRetryDelayMs = 0;
+				StoreReturnEndpoint(nowMs);
+			}
 			return true;
 		}
 		if (const auto* ack = std::get_if<NetH4LeaveAck>(&payload)) {
@@ -3109,6 +3143,9 @@ namespace RTE {
 	}
 
 	void NetReconnectClient::Tick(uint64_t nowMs) {
+		if (m_EndpointRetryAtMs != 0 && nowMs >= m_EndpointRetryAtMs) {
+			StoreReturnEndpoint(nowMs);
+		}
 		if (m_ReturnRetryAtMs != 0) {
 			if (m_State != NetH4ClientState::Reclaiming) {
 				m_ReturnRetryAtMs = 0;
