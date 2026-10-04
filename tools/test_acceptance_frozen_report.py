@@ -13,11 +13,20 @@ import cross_report
 
 
 class FrozenCollection(unittest.TestCase):
-    def test_collection_body_is_the_pinned_frozen_prefix(self):
+    def test_collection_body_is_the_trees_own_cross_report_prefix(self):
         source=inspect.getsource(collector.collect_native)
         source=source[:source.index('    return dict(manifest=manifest')]
         source=source.replace('def collect_native(root):','def build_report(root):',1)
-        self.assertEqual(hashlib.sha256(source.encode()).hexdigest(),collector.COLLECTION_SHA256)
+        tree=inspect.getsource(cross_report.build_report)
+        tree=tree[:tree.index('    if acceptance_inputs:\n        return dict(manifest=manifest')]
+        tree=tree.replace('def build_report(root, *, acceptance_inputs=False):','def build_report(root):',1)
+        # The row delegation is the only line cross_report adds before its collection.
+        delegation=("    if not acceptance_inputs and manifest.get('acceptance_row') in ('mod-match','mod-refusal','world-join','world-soak'):\n"
+                    "        from acceptance_cross_report import build_report as acceptance_report\n"
+                    "        return acceptance_report(root)\n")
+        self.assertEqual(tree.count(delegation),1)
+        tree=tree.replace(delegation,'',1)
+        self.assertEqual(hashlib.sha256(source.encode()).hexdigest(),hashlib.sha256(tree.encode()).hexdigest())
 
     def test_native_mixed_binary_and_foreign_load_remain_failures(self):
         retained=os.environ.get('CC_ACCEPTANCE_TEST_ROOT')

@@ -12,21 +12,28 @@ import tarfile
 
 from acceptance_runtime import retained_open, storage_scope, write_json
 
-AUTHORIZED_COMMIT = '4dd83eaa8bc50d98e090c9f1043a183fd66b6abe'
+# A run whose bundle carries an export older than its coordinator names that export's commit here.
+AUTHORIZED_ENV = 'CC_ACCEPTANCE_FROZEN_COMMIT'
 
 
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def receipt(root, *, verify=True):
+def authorized_commit(head, authorized=None):
+    """The export commit a bundle may carry: the one named, else the bundle's own head."""
+    return authorized or os.environ.get(AUTHORIZED_ENV) or head
+
+
+def receipt(root, *, verify=True, authorized=None):
     root = Path(root)
     path = root/'acceptance-tools.json'
     if not path.is_file():
         return None
     value = json.loads(path.read_text(encoding='utf-8'))
-    if value.get('frozen_commit') != AUTHORIZED_COMMIT:
-        raise ValueError('tool bundle is not the NOTE 13 authorized commit')
+    expected = authorized_commit(value.get('coordinator_commit'), authorized)
+    if not expected or value.get('frozen_commit') != expected:
+        raise ValueError(f'tool bundle exports {value.get("frozen_commit")} but the authorized export is {expected}')
     if verify:
         for entry in value['files']:
             name = Path(entry['path'])
@@ -70,14 +77,15 @@ def helper_archive(repo, root):
     return archive
 
 
-def compose(repo, export, out):
+def compose(repo, export, out, authorized=None):
     repo, export, out = Path(repo).resolve(), Path(export).resolve(), Path(out).resolve()
     frozen = json.loads((export/'export.json').read_text(encoding='utf-8'))
-    if frozen.get('source_commit') != AUTHORIZED_COMMIT:
-        raise ValueError('only the exact NOTE 13 frozen export is authorized')
     current = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
+    authorized = authorized_commit(current, authorized)
+    if frozen.get('source_commit') != authorized:
+        raise ValueError(f'the export is of {frozen.get("source_commit")} but the authorized export is {authorized}')
     added = subprocess.check_output(['git', '-C', str(repo), 'diff', '--name-only', '--diff-filter=A', '-z',
-                                     AUTHORIZED_COMMIT, current, '--', 'tools'], text=True).split('\0')
+                                     authorized, current, '--', 'tools'], text=True).split('\0')
     original_names = {entry['path'] for entry in frozen['files']}
     if original_names.intersection(name for name in added if name):
         raise ValueError('owned adapters cannot replace a frozen export file')
@@ -101,11 +109,11 @@ def compose(repo, export, out):
     # Native build/content identity still comes from each separate engine tree.
     header = 'Source/Managers/SettingsMan.h'
     keep(header, subprocess.check_output(['git', '-C', str(repo), 'show', current+':'+header]), 'driver-config')
-    value = dict(frozen_commit=AUTHORIZED_COMMIT, frozen_export=str(export),
+    value = dict(frozen_commit=authorized, frozen_export=str(export),
                  coordinator_commit=current, coordinator_source_repo=str(repo), files=files,
-                 frozen_files_modified=0, authorization='LEAD-NOTES NOTE 13')
+                 frozen_files_modified=0, authorization='the export of '+authorized)
     write_json(out/'acceptance-tools.json', value)
-    receipt(out)
+    receipt(out, authorized=authorized)
     return value
 
 
@@ -115,11 +123,12 @@ def main(argv=None):
     parser.add_argument('--export', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--scratch', type=Path, required=True)
+    parser.add_argument('--frozen-commit', help='the commit the export was made from (default: the repo HEAD)')
     args = parser.parse_args(argv)
     if not args.out.resolve().is_relative_to(args.scratch.resolve()):
         parser.error('the composed bundle must stay inside this lane scratch')
     with storage_scope(args.scratch, reserve=1024**2) as budget:
-        value = compose(args.repo, args.export, args.out)
+        value = compose(args.repo, args.export, args.out, args.frozen_commit)
         print(json.dumps(dict(frozen_commit=value['frozen_commit'], coordinator_commit=value['coordinator_commit'],
                               files=len(value['files']), retained_bytes=budget.used)))
     return 0

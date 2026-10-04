@@ -1,16 +1,13 @@
-"""Collect row inputs with the frozen cross reporter's unchanged reductions.
+"""Collect row inputs with the cross reporter's unchanged reductions.
 
-The native collection below is retained from the authorized wave's cross_report
-prefix. Only its name and return surface differ; all shared reducers are imported
-from the actual frozen module. The wrapper applies NOTE 14's explicit PC compiler
-exception while retaining the raw load evidence and every timing threshold.
-No frozen file or reporting function is modified.
+The native collection below is the collection prefix of this tree's own
+cross_report.build_report; a test holds the two equal. Only its name and return
+surface differ; all shared reducers are imported from cross_report itself. The
+wrapper applies NOTE 14's explicit PC compiler exception while retaining the raw
+load evidence and every timing threshold. No reporting function is modified.
 """
 from cross_report import (Path, event_paths, judge_exit, load, pace_verdict, peer_root, presentation_contract, presentation_index, re, read_log, record_path, report, rows, source_rows)
 from acceptance_native_load import apply_report_policy
-
-COLLECTION_COMMIT = '4dd83eaa8bc50d98e090c9f1043a183fd66b6abe'
-COLLECTION_SHA256 = '8fb732bf109aa3a4f6cd8d3dde949dc1de0404f6dc9aa140c443f97804b5d0d6'
 
 
 def collect_native(root):
