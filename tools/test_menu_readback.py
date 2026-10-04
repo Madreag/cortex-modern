@@ -369,6 +369,11 @@ def status_wrap_notes(observation):
     return notes
 
 
+def paired_round_ticks(case):
+    """How many ticks a paired case's round runs: long enough for what its probes walk through before its end."""
+    return 2400 if case == "repair" else 1200 if case in ("pause", "pause-save", "save-hotkey") else 400
+
+
 def probe_root(root, who):
     """One directory per peer's probe: the engine writes its result beside the script it was handed."""
     return root / f"{who}_probe"
@@ -460,8 +465,8 @@ def pause_probe(who, root):
         *pause_rows(), menu_step("dump_host_options"), running]
     if who == "client":
         # The leaver's drive starts only once the host's checks are done, so the clean leave cannot
-        # beat the running-match assertions. Gate the leave on a later sim tick so it still has
-        # margin before the 400-tick cap. The menu pump that follows the leave still serves the
+        # beat the running-match assertions. Gate the leave on a later sim tick; the round runs 1200
+        # ticks so the host's page tour never meets its end first. The menu pump that follows the leave still serves the
         # probe's menu-scope steps, so its finish lands there.
         steps += [{"op": "wait_file", "path": str(probe_root(root, "host") / "done.json")},
                   {"op": "wait", "sim_at_least": 220},
@@ -1902,7 +1907,7 @@ def run_case(options, case, root, failing=None):
                 args += ["-net-player-name", "F" * (DISPLAY_NAME_MAX_BYTES + 1)]
             if paired and not menu_driven:
                 # A repair round is long enough for a seat held at its start to finish its rejoin before the repair runs.
-                round_ticks = "2400" if case == "repair" else "1200" if case in ("pause-save", "save-hotkey") else "400"
+                round_ticks = str(paired_round_ticks(case))
                 args += ["-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
                          "-net-match-ticks", round_ticks, "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
                          "-input-script", str(inputs), "-net-match-report", str(root / f"{who}-match.json")]
@@ -2202,10 +2207,11 @@ def run_case(options, case, root, failing=None):
             assert f"[net-match] hold peer=2 frame={leave_frame} AI in control" in logs["host"], leave_frame
             host = reports["host"]
             lockstep = host["service"]["runner"]["lockstep"]
-            assert lockstep["peer_leave_frames"] == {"2": leave_frame} and 0 < leave_frame < 400, lockstep
+            ticks = paired_round_ticks(case)
+            assert lockstep["peer_leave_frames"] == {"2": leave_frame} and 0 < leave_frame < ticks, lockstep
             assert host["service"]["is_host"] is True and lockstep["host_peer_id"] == 1, host["service"]["is_host"]
-            assert host["frames_planned"] == 400 and host["running_ticks"] >= 400, host["running_ticks"]
-            assert lockstep["completed_simulation_tick"] >= 400, lockstep["completed_simulation_tick"]
+            assert host["frames_planned"] == ticks and host["running_ticks"] >= ticks, host["running_ticks"]
+            assert lockstep["completed_simulation_tick"] >= ticks, lockstep["completed_simulation_tick"]
             assert host["service"]["status"] == "e2e complete", host["service"]["status"]
             result["announced_leave"] = {"peer_id": 2, "frame": leave_frame, "leave_acks": leave["client_leave_acks"],
                 "ticket_cleared": not leave["ticket_stored"], "completed_tick": lockstep["completed_simulation_tick"]}
