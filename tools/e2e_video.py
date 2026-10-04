@@ -805,6 +805,35 @@ def await_recorder(video_dir, stop, timeout_s=RECORDER_FLUSH_S):
             return {"target_wall_ms": target, "flushed": False, "last_frame_wall_ms": latest, "reason": "capture stopping"}
 
 
+WATCH_FLUSH_S = 3.0
+WATCH_KILL_SUMMARY = re.compile(r'^\[text-watch\] summary .*"flush":"kill"', re.M)
+
+
+def await_watch_flush(log, stop, timeout_s=WATCH_FLUSH_S):
+    """A peer told of its drop (injected-drop.json) prints its screen watches' summaries within a few drawn frames; waits for
+    them, bounded by timeout_s, so a dropped peer's watches end with a summary. None when the peer armed no watch."""
+    log = Path(log)
+    try:
+        start = log.stat().st_size
+        armed = "[text-watch] armed " in log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    if not armed:
+        return None
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            with open(log, "rb") as handle:
+                handle.seek(max(0, start - 4096))
+                tail = handle.read().decode("utf-8", errors="replace")
+        except OSError:
+            tail = ""
+        if WATCH_KILL_SUMMARY.search(tail):
+            return True
+        if time.monotonic() >= deadline or stop.wait(.05):
+            return False
+
+
 def read_manifest(video_dir):
     path = Path(video_dir) / "manifest.json"
     if not path.is_file():
@@ -1907,6 +1936,9 @@ def run_one(options, scenario, run, run_index, out):
                                                                                   "recorder_flush": flushed})
                 description = ("completed peer probe" if gate.get("probe_complete") else "peer log line " + gate["log"] if gate.get("log")
                                else f"{gate['peer']} sim tick {gate['sim_tick']}" if "sim_tick" in gate else "peer event " + gate["event"])
+                # The scenario is over: the peer prints its screen watches' summaries before it goes.
+                if gate.get("probe_complete"):
+                    await_watch_flush(root / name / "stdout.log", stop_watchers)
                 drop_peer(runs[name], "scenario drop after " + description)
                 return
 

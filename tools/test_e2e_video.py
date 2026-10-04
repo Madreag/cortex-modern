@@ -206,6 +206,25 @@ def check_screen_watches(results, scratch):
     ok &= row(results, "screen/clean-watch-has-summary", watches["duplicates"]["offences"] == [] and watches["duplicates"]["summary"]["frames"] == 900)
     ok &= row(results, "screen/nothing-armed-is-not-judged", driver.screen_watch_results(scratch / "screen-watch-none") is None)
     ok &= row(results, "screen/every-peer-arms-them", all(f"h15-{name} " in driver.SCREEN_WATCHES for name in driver.SCREEN_WATCH_RULES))
+    # A peer dropped at the scenario's end prints its watches' summaries before the kill; the wait is bounded.
+    dropped = scratch / "screen-watch-drop"
+    dropped.mkdir(parents=True, exist_ok=True)
+    log = dropped / "stdout.log"
+    log.write_text(lines[0] + "\n", encoding="utf-8")
+    never = threading.Event()
+
+    def summarize():
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write('[text-watch] summary {"active_frames":235,"flush":"kill","frames":235,"rule":"layout","watch":"h15-layout"}\n')
+    late = threading.Timer(.2, summarize)
+    late.start()
+    flushed = driver.await_watch_flush(log, never, timeout_s=5.0)
+    late.join()
+    ok &= row(results, "screen/drop-waits-for-the-kill-summary", flushed is True)
+    log.write_text(lines[0] + "\n" + '[text-watch] summary {"flush":"periodic","watch":"h15-layout"}\n', encoding="utf-8")
+    ok &= row(results, "screen/drop-wait-is-bounded", driver.await_watch_flush(log, never, timeout_s=.3) is False)
+    log.write_text("no watches here\n", encoding="utf-8")
+    ok &= row(results, "screen/unarmed-peer-is-not-waited-for", driver.await_watch_flush(log, never, timeout_s=5.0) is None)
     return ok
 
 
