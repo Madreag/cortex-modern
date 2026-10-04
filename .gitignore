@@ -114,3 +114,5 @@ imgui.ini
 /reviews/
 # Packaged builds (tools/package_windows.py)
 /dist/
+# Void Wanderers is installed into Data/ for the mod rows; it is never part of the tree
+/Data/VoidWanderers.rte/
