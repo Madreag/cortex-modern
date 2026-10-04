@@ -951,7 +951,7 @@ def scripts(case, port, root, size="960x540"):
         # OS side effects (a shell window, a clipboard write) a readback run must not take.
         text = OPTIONS + net_page("Files")
         for control in ("LabelNetAutosaveTitle", "LabelNetAutosave", "LabelNetAutosaveHost",
-                        "LabelNetAutosaveIntTitle", "LabelNetAutosaveInterval", "LabelNetAutosaveIntervalHost",
+                        "LabelNetAutosaveIntTitle", "LabelNetAutosaveInterval",
                         "LabelNetAutosavesKeptTitle", "TextNetworkAutosavesKept", "LabelNetAutosavesKeptHint",
                         "LabelNetAutosaveInfo", "ButtonNetOpenAutosaves", "ButtonNetCopyAutosavesPath",
                         "LabelNetDiagDirTitle", "TextNetworkDiagDir", "ButtonNetOpenDiagnostics",
@@ -960,8 +960,7 @@ def scripts(case, port, root, size="960x540"):
         # The seeded 45 is under the minute a hosted match clamps to; the page shows that 60 s.
         text += ("assert_label LabelNetAutosave Enabled\n"
                  "assert_label LabelNetAutosaveInterval 60 s\n"
-                 "assert_label LabelNetAutosaveHost Set by the host\n"
-                 "assert_label LabelNetAutosaveIntervalHost Set by the host\n"
+                 "assert_label LabelNetAutosaveHost Both set by the host\n"
                  "assert_label LabelNetAutosavesKeptTitle Autosaves kept:\n"
                  "assert_label LabelNetAutosavesKeptHint " + AUTOSAVES_KEPT_HINT + "\n"
                  "assert_label TextNetworkAutosavesKept " + FILES_SEED["NetworkAutosavesKept"] + "\n"
@@ -2343,7 +2342,7 @@ def run_case(options, case, root, failing=None):
                                          "LabelNetRecoveryStatusTitle", "LabelNetRecoveryStatus",
                                          "ButtonNetRejoin", "ButtonNetCancelRecovery"),
                         "net-files": ("LabelNetAutosave", "LabelNetAutosaveInterval", "LabelNetAutosaveHost",
-                                      "LabelNetAutosaveIntervalHost", "LabelNetAutosavesKeptTitle",
+                                      "LabelNetAutosavesKeptTitle",
                                       "TextNetworkAutosavesKept", "LabelNetAutosavesKeptHint", "LabelNetAutosaveInfo",
                                       "ButtonNetOpenAutosaves", "ButtonNetCopyAutosavesPath",
                                       "TextNetworkDiagDir", "ButtonNetOpenDiagnostics",
@@ -2400,9 +2399,11 @@ def run_case(options, case, root, failing=None):
                     assert all(rect[0] == column for rect in opens) and all(rect[0] == action_column for rect in copies), (opens, copies)
                     assert opens[0][2:] == opens[1][2:] and copies[0][2:] == copies[1][2:], (opens, copies)
                     assert opens[1][1] - opens[0][1] == copies[1][1] - copies[0][1] == 40, (opens, copies)
-                    for name in ("LabelNetAutosaveHost", "LabelNetAutosaveIntervalHost"):
-                        assert rows[name]["text"] == "Set by the host", rows[name]
-                        assert rows[name]["enabled"] is False, rows[name]
+                    # One note covers both host-set rows: it spans them, so the page never says it twice.
+                    note, first, second = (rows[name] for name in ("LabelNetAutosaveHost", "LabelNetAutosave", "LabelNetAutosaveInterval"))
+                    assert note["text"] == "Both set by the host" and note["enabled"] is False, note
+                    assert note["rect"][1] == first["rect"][1] and note["rect"][1] + note["rect"][3] == second["rect"][1] + second["rect"][3], (note, first, second)
+                    assert "LabelNetAutosaveIntervalHost" not in rows, rows.get("LabelNetAutosaveIntervalHost")
                     widths = {rows[name]["rect"][2] for name in FILES_BUTTONS}
                     assert len(widths) == 1, {name: rows[name]["rect"][2] for name in FILES_BUTTONS}
             captioned = [control for control in images[0]["controls"] if control["text"]]
