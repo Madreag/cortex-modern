@@ -2214,6 +2214,7 @@ static std::string ResyncSaveName() {
 		m_WorldJoin.Reset(); m_WorldCatchUp = {};
 		m_LastJoinRoute.reset();
 		m_WorldCaptureRequestedTick = 0;
+		m_WorldWatcherSeatedAt = 0;
 		m_WorldCapturePending = false;
 		ResetCheckpointSchedule();
 		m_PrivateActivations.clear(); m_PrivateJoinBlobs.clear(); m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
@@ -6951,6 +6952,7 @@ static std::string ResyncSaveName() {
 				if (Activity* activity = g_ActivityMan.GetActivity(); activity && !activity->AdoptNetLocalSeat(m_Coordinator->GetConfig().matchConfig, live)) {
 					ScenarioRunner::SetControllerReplayError("PeerLeft:world catch-up activation: the promoted watcher could not take its seat"); return;
 				}
+				m_WorldWatcherSeatedAt = m_WorldCatchUp.activationTick;
 			}
 			m_WorldCatchUp.handedToRound = true;
 		}
@@ -7146,6 +7148,7 @@ static std::string ResyncSaveName() {
 				facts["ticket_seat"] = client->GetRecord().stableSeat;
 			}
 		}
+		if (!m_IsHost && m_WorldWatcherSeatedAt != 0) facts["watcher_seated_at"] = m_WorldWatcherSeatedAt;
 		return facts.dump();
 	}
 
