@@ -13995,7 +13995,8 @@ namespace {
 	int PreviewFenceOwns(const luabind::detail::object_rep* rep) {
 		int offset = 0;
 		if (const MovableObject* mo = FencedMovableObject(rep, offset)) {
-			return LuaMan::IsPreviewClone(mo) || mo->GetUniqueID() > s_PreviewBindingUIDFloor ? 1 : 0;
+			// What the window made answers first: a beam's particles take this test on every write.
+			return mo->GetUniqueID() > s_PreviewBindingUIDFloor || LuaMan::IsPreviewClone(mo) ? 1 : 0;
 		}
 		// The hold's sound copies are the window's own, as are the Vectors it made.
 		if (rep && rep->crep() && std::strcmp(rep->crep()->name(), "SoundContainer") == 0 && IsPreviewSoundCopy(static_cast<const SoundContainer*>(rep->ptr()))) {
