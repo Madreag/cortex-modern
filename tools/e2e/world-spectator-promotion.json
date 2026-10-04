@@ -1,0 +1,172 @@
+{
+  "schema": 1,
+  "name": "world-spectator-promotion",
+  "driver": "tools/acceptance_spectator_tasks.py",
+  "title": "A slow spectator watches a three-seat world and takes a host-released seat",
+  "port_base": 49320,
+  "size": "640x360",
+  "timeout_s": 600,
+  "acceptance_row": "spectator",
+  "preserve_evidence": true,
+  "required_engine_levers": [
+    "CC_TEST_WORLD_MAX_SPECTATORS",
+    "dump_world_ownership",
+    "world_spectator_cost_window"
+  ],
+  "peers": [
+    {
+      "name": "host",
+      "args": [
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-net-live-tick-hashes",
+        "{OUT}/host-live.jsonl"
+      ],
+      "menu_script": "world-spectator.host.menu.txt",
+      "probe": "world-spectator.host.probe.json",
+      "input_script": "play-input.txt",
+      "env": {
+        "CC_TEST_WORLD_MAX_SPECTATORS": "1",
+        "CC_TEST_CROSS_INSTANCE": "host",
+        "CC_TEST_CROSS_RUN": "world-spectator-promotion"
+      },
+      "settings": {
+        "NetworkDisplayName": "Host",
+        "NetworkPortMapEnable": "0"
+      }
+    },
+    {
+      "name": "seated-one",
+      "args": [
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-net-live-tick-hashes",
+        "{OUT}/seated-one-live.jsonl"
+      ],
+      "menu_script": "world-spectator.seated.menu.txt",
+      "input_script": "play-input.txt",
+      "start_when": {
+        "peer": "host",
+        "event": "video_mark spectator-lobby",
+        "timeout_s": 60
+      },
+      "settings": {
+        "NetworkDisplayName": "Seated One",
+        "NetworkPortMapEnable": "0"
+      },
+      "probe": "world-spectator.leave.probe.json",
+      "env": {
+        "CC_TEST_CROSS_INSTANCE": "seated-one",
+        "CC_TEST_CROSS_RUN": "world-spectator-promotion"
+      }
+    },
+    {
+      "name": "seated-two",
+      "args": [
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-net-live-tick-hashes",
+        "{OUT}/seated-two-live.jsonl"
+      ],
+      "menu_script": "world-spectator.seated.menu.txt",
+      "input_script": "play-input.txt",
+      "start_when": {
+        "peer": "seated-one",
+        "event": "video_mark spectator-first-connected",
+        "timeout_s": 90
+      },
+      "settings": {
+        "NetworkDisplayName": "Seated Two",
+        "NetworkPortMapEnable": "0"
+      },
+      "env": {
+        "CC_TEST_CROSS_INSTANCE": "seated-two",
+        "CC_TEST_CROSS_RUN": "world-spectator-promotion"
+      }
+    },
+    {
+      "name": "seated-three",
+      "args": [
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-net-live-tick-hashes",
+        "{OUT}/seated-three-live.jsonl"
+      ],
+      "menu_script": "world-spectator.seated.menu.txt",
+      "input_script": "play-input.txt",
+      "start_when": {
+        "peer": "seated-two",
+        "event": "video_mark spectator-first-connected",
+        "timeout_s": 90
+      },
+      "settings": {
+        "NetworkDisplayName": "Seated Three",
+        "NetworkPortMapEnable": "0"
+      },
+      "env": {
+        "CC_TEST_CROSS_INSTANCE": "seated-three",
+        "CC_TEST_CROSS_RUN": "world-spectator-promotion"
+      }
+    },
+    {
+      "name": "spectator",
+      "args": [
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-net-live-tick-hashes",
+        "{OUT}/spectator-live.jsonl"
+      ],
+      "menu_script": "world-spectator.join.menu.txt",
+      "probe": "world-spectator.join.probe.json",
+      "input_script": "play-input.txt",
+      "start_when": {
+        "peer": "host",
+        "sim_tick": 1200,
+        "timeout_s": 100
+      },
+      "env": {
+        "CCCP_TEST_SIM_COST_US": "500000",
+        "CCCP_TEST_SIM_COST_FROM_TICK": "6000",
+        "CCCP_TEST_SIM_COST_UNTIL_TICK": "6060",
+        "CC_TEST_CROSS_INSTANCE": "spectator",
+        "CC_TEST_CROSS_RUN": "world-spectator-promotion"
+      },
+      "settings": {
+        "NetworkDisplayName": "Spectator",
+        "NetworkPortMapEnable": "0"
+      }
+    }
+  ],
+  "checklist": [
+    {
+      "id": "spectator-image",
+      "peer": "spectator",
+      "screen": "game",
+      "what": "The fourth player receives an image and watches without owning a seat; every comparable hash is equal.",
+      "gate": "scenario-behavior"
+    },
+    {
+      "id": "spectator-cost",
+      "peer": "host",
+      "screen": "game",
+      "what": "Thirty seconds of spectator simulation cost produces no seated hold, no frame wait over 50 ms and at least 59.5 tps on every seated peer.",
+      "gate": "scenario-behavior"
+    },
+    {
+      "id": "spectator-promotion",
+      "peer": "spectator",
+      "screen": "game",
+      "what": "After a seated departure and the host's explicit release, promotion binds the freed seat, actor and ticket incarnation to fresh applied input.",
+      "gate": "scenario-behavior"
+    }
+  ],
+  "behavior_gate": {
+    "kind": "acceptance-spectator"
+  },
+  "dedicated_host": "host",
+  "seated_processes": [
+    "seated-one",
+    "seated-two",
+    "seated-three"
+  ]
+}

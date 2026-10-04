@@ -12,7 +12,7 @@ wait_state Failed
 wait_ms 495
 video_mark version-client-refusal
 assert_substate Landing
-assert_net_label LabelMultiplayerLandingStatus Network protocol differs (host 5; yours 2).
+assert_net_label LabelMultiplayerLandingStatus Network protocol differs (host {NET_PROTOCOL_VERSION}; yours 2).
 assert_enabled ButtonMultiplayerJoinGame 1
 dump_lobby
 wait_ms 990

@@ -44,7 +44,9 @@ class AcceptancePlanVariants(unittest.TestCase):
                 capture_output=True,text=True,timeout=120)
             self.assertEqual(process.returncode,0,(process.stdout+process.stderr)[-3000:])
             result=json.loads((root/'complete/derivation.json').read_text())
-            self.assertEqual(result['counts']['PASS'],len(built()['plan']['rows']))
+            planned=built()['plan']; controls=planned.get('controls',{}).get('ids',[])
+            self.assertEqual(result['counts']['PASS'],len(planned['rows'])-len(controls))
+            self.assertEqual(sorted((row['id'],row['status']) for row in result['row_errors']),[(cid,'DIAGNOSTIC') for cid in sorted(controls)])
 
     def test_without_window_defers_exactly_the_window_rows_and_nothing_else(self):
         from synthetic_evidence import materialize

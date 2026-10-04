@@ -988,8 +988,11 @@ def adopt_restored_histories(live, ranges, logs):
     return adopted, away
 
 
-def build_report(root):
+def build_report(root, *, acceptance_inputs=False):
     root = Path(root).resolve(); manifest = load(root / 'manifest.json', {})
+    if not acceptance_inputs and manifest.get('acceptance_row') in ('mod-match','mod-refusal','world-join','world-soak'):
+        from acceptance_cross_report import build_report as acceptance_report
+        return acceptance_report(root)
     live, events, peers, findings, paths = {}, {}, {}, list(manifest.get('driver_findings', [])), {}
     peer_waits = {}
     mixed_builds = []
@@ -1133,6 +1136,8 @@ def build_report(root):
             feel_gated=quiet, feel_pass=all(feel_pins), wire_egress=None,
             wire_reason='Transport wire counters are not exposed at an owned seam; GnsTransport.cpp:904 detailed-status text is not a per-tick counter API.',
             configs=configs, paths={kind: str(record_path(own / leaf).relative_to(root)) for kind,leaf in [('live','live.jsonl'),('events','events.jsonl'),('log','engine/stdout.log'),('feel','engine/feel/raw.jsonl'),('native','match-report.json')]})
+    if acceptance_inputs:
+        return dict(manifest=manifest, peers=peers, events=events, live=live, paths=paths, findings=findings, capabilities=capabilities, mixed_builds=mixed_builds)
     # X8: every retained process can own a different round; the final report cannot replace its predecessors.
     capacity_inputs = {name: dict(reports=[load(root/fragment/'match-report.json', {}) for fragment in peer['fragments']],
                                   pace=peer['native'].get('pace', {})) for name, peer in peers.items()}

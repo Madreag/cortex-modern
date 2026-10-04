@@ -697,6 +697,17 @@ def check_substitution(results):
     ok &= row(results, "substitute/nested", nested == {"a": ["host"], "b": {"c": "49411"}}, str(nested))
     ok &= row(results, "substitute/unknown-token-left", driver.substitute("{NOPE}", tokens) == "{NOPE}")
     ok &= row(results, 'substitute/quoted-native-path-has-no-escapes', driver.substitute('dump_match_identity "{PROBE_DIR}/id.json"', tokens) == 'dump_match_identity "D:/x/host-stage/probe/id.json"')
+    # The version refusal names the tree's own protocol, so a protocol bump never strands the fixture.
+    protocol = driver.source_tokens(TOOLS.parent)
+    version = protocol.get("NET_PROTOCOL_VERSION")
+    menu = (driver.SCENARIO_DIR / "mp-version-mismatch.protocol.client.menu.txt").read_text(encoding="utf-8")
+    scenario = json.dumps(driver.load_scenario("mp-version-mismatch"))
+    expanded_menu, expanded_scenario = driver.substitute(menu, protocol), json.dumps(driver.substitute(json.loads(scenario), protocol))
+    ok &= row(results, "substitute/version-mismatch-names-the-trees-protocol",
+              type(version) is int and "{NET_PROTOCOL_VERSION}" in menu and "{NET_PROTOCOL_VERSION}" in scenario
+              and f"Network protocol differs (host {version}; yours 2)." in expanded_menu
+              and f"host {version}; yours 2" in expanded_scenario and "{NET_PROTOCOL_VERSION}" not in expanded_menu + expanded_scenario,
+              f"protocol {version}")
     return ok
 
 

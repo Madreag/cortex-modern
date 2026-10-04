@@ -98,7 +98,7 @@ class AcceptanceBoxRoles(unittest.TestCase):
     def test_d06_sections_cover_every_row_once_in_the_ruled_order(self):
         plan = built()['plan']
         sections = plan.get('sections', [])
-        self.assertEqual([row['id'] for row in sections], list(range(7)))
+        self.assertEqual([row['id'] for row in sections], [0, '0b', *range(1, 7)])
         self.assertEqual(sections[0]['rows'], [])
         scheduled = [tuple(ref) for section in sections for ref in section['rows']]
         self.assertEqual(sorted(scheduled), sorted((row['share'], row['id']) for row in plan['rows']))
