@@ -8410,6 +8410,8 @@ namespace {
 	std::pair<size_t, size_t> PreviewCopyAuditCounts();
 	// The last write the window refused through an entity handle, once.
 	std::string TakePreviewEntityWriteRefusal();
+	// Counts a hook a preview ran for an object's script, behind the audit lever.
+	void NotePreviewHookRun(const std::string& self, std::string_view script);
 } // namespace
 
 bool LuaStateWrapper::RunScriptGraphSelfTest() {
@@ -11761,6 +11763,9 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 		explicit HookSelf(const std::string& key) : previous(std::exchange(s_PreviewHookSelfKey, key)) {}
 		~HookSelf() { s_PreviewHookSelfKey = std::move(previous); }
 	} hookSelf(LuaMan::IsRunningPreviewHook() ? selfGlobalTableKey : std::string());
+	if (LuaMan::IsRunningPreviewHook()) {
+		NotePreviewHookRun(selfGlobalTableKey, path);
+	}
 
 	std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
 	{
@@ -14169,6 +14174,15 @@ namespace {
 		s_PreviewCopyAuditForced = forced;
 	}
 
+	// The hooks the window's previews ran, by the object's preview self and its script.
+	std::map<std::pair<std::string, std::string>, size_t> s_PreviewHookRuns;
+
+	void NotePreviewHookRun(const std::string& self, std::string_view script) {
+		if (PreviewCopyAuditEnabled()) {
+			++s_PreviewHookRuns[{self.substr(0, self.find('#')), std::string(script)}];
+		}
+	}
+
 	std::pair<size_t, size_t> PreviewCopyAuditCounts() {
 		return {s_PreviewCopyAuditValues, s_PreviewCopyAuditDifferences};
 	}
@@ -14250,12 +14264,18 @@ namespace {
 				const auto current = std::lower_bound(live.begin(), live.end(), std::make_pair(name, std::string()));
 				changed += " " + name + ":" + old + ">" + value + " live=" + (current != live.end() && current->first == name ? current->second : std::string("nil"));
 			}
+			const MovableObject* object = g_MovableMan.FindObjectByUniqueID(snapshot.uniqueID);
+			const std::string preset = object ? object->GetModuleAndPresetName() : std::string("?");
 			if (!changed.empty()) {
-				const MovableObject* object = g_MovableMan.FindObjectByUniqueID(snapshot.uniqueID);
-				std::cout << "[preview-copy-audit] ran uid=" << snapshot.uniqueID << " preset=" << (object ? object->GetModuleAndPresetName() : std::string("?")) << " changed" << changed << std::endl;
+				std::cout << "[preview-copy-audit] ran uid=" << snapshot.uniqueID << " preset=" << preset << " changed" << changed << std::endl;
+			}
+			const std::string uid = std::to_string(snapshot.uniqueID);
+			for (auto hook = s_PreviewHookRuns.lower_bound({uid, std::string()}); hook != s_PreviewHookRuns.end() && hook->first.first == uid; ++hook) {
+				std::cout << "[preview-copy-audit] hooks uid=" << uid << " preset=" << preset << " runs=" << hook->second << " script=" << hook->first.second << std::endl;
 			}
 		}
 		s_PreviewHoldSnapshots.clear();
+		s_PreviewHookRuns.clear();
 	}
 
 	// Checks each copied instance of a state against its hold under the window's copy table and reports what differs.
@@ -14913,7 +14933,7 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 
 void LuaMan::EndPreviewScripts() {
 	PreviewWindowLaps laps{s_PreviewWindowMs};
-	if (!s_PreviewHoldSnapshots.empty()) {
+	if (!s_PreviewHoldSnapshots.empty() || !s_PreviewHookRuns.empty()) {
 		ReportPreviewHoldChanges();
 	}
 	g_MovableMan.SetShadowMadeHook(nullptr);
