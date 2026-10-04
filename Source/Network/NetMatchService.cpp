@@ -10251,20 +10251,28 @@ static std::string ResyncSaveName() {
 			}
 			if (started && m_Dispatcher) {
 				GnsDirectorySignalDispatcher* dispatcher = m_Dispatcher.get();
-				mux->SetPump([this, dispatcher, p2p = mux->P2PGns(), previous = NetRelayConfig{},
+				// The mux calls a copy of its pump every poll, so what the pump remembers between polls lives here.
+				struct PumpMemory {
+					NetRelayConfig previous;
+					std::shared_ptr<const HostSignalCredential> appliedSignal;
+				};
+				auto memory = std::make_shared<PumpMemory>();
+				memory->appliedSignal = m_HostSignalCredential.load();
+				mux->SetPump([this, dispatcher, p2p = mux->P2PGns(), memory,
 				              initial = request.host ? mux->HostP2PConfig() : mux->GetJoinSpec().p2p,
 				              personal = !g_SettingsMan.GetNetworkPlayerTurnServers().empty() || g_SettingsMan.HasNetworkTurnServersOverride(),
-				              host = request.host, appliedSignal = m_HostSignalCredential.load()]() mutable {
+				              host = request.host]() {
 					if (host) {
-						if (auto signal = m_HostSignalCredential.load(); signal && signal != appliedSignal) {
-							if (appliedSignal && (signal->sessionId != appliedSignal->sessionId || signal->token != appliedSignal->token)) dispatcher->RebindHost(signal->sessionId, signal->token);
-							appliedSignal = std::move(signal);
+						if (auto signal = m_HostSignalCredential.load(); signal && signal != memory->appliedSignal) {
+							if (memory->appliedSignal && (signal->sessionId != memory->appliedSignal->sessionId || signal->token != memory->appliedSignal->token))
+								dispatcher->RebindHost(signal->sessionId, signal->token);
+							memory->appliedSignal = std::move(signal);
 						}
 					}
 					dispatcher->Update(SteadyNowMs());
 					const auto snapshot = m_RelaySnapshot.load();
 					NetRelayConfig offer = snapshot ? *snapshot : NetRelayConfig{};
-					if (offer != previous) {
+					if (offer != memory->previous) {
 						GnsP2PConfig update = initial;
 						if (!personal && initial.connectionMode != 1) {
 							update.turnServerList.clear(); update.turnUserList.clear(); update.turnPassList.clear();
@@ -10276,7 +10284,7 @@ static std::string ResyncSaveName() {
 							update.iceEnable = initial.connectionMode == 2 ? 1 : (initial.stunServerList.empty() ? 2 : 6) | (update.turnServerList.empty() ? 0 : 1);
 						}
 						p2p->UpdateListenerIceServers(update);
-						previous = std::move(offer);
+						memory->previous = std::move(offer);
 					}
 				});
 			}
