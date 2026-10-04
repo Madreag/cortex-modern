@@ -11006,6 +11006,76 @@ end
 		checkpointValues = passed && checkpointValues;
 	}
 	{
+		// A long chain in an instance copies whole; one deeper than the copy can walk is refused by name, never overflowed,
+		// and the state copies the instance again once it is short.
+		const auto* preset = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+		std::unique_ptr<AHuman> actor(preset ? dynamic_cast<AHuman*>(preset->Clone()) : nullptr);
+		bool loaded = false;
+		bool longCopied = false;
+		std::string longProblem;
+		size_t longFrozen = 0;
+		bool longRead = false;
+		int copiedLength = -1;
+		bool refused = false;
+		bool named = false;
+		bool shortCopied = false;
+		std::vector<std::string> problems;
+		if (actor && actor->LoadScript(g_PresetMan.GetFullModulePath("Tests.rte/PreviewDeepGraph.lua")) >= 0) {
+			loaded = actor->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"init"}) >= 0;
+			LuaStateWrapper* state = actor->GetLuaState();
+			const std::string uid = std::to_string(actor->GetUniqueID());
+			const auto copy = [&state, &actor](std::vector<std::string>& found) {
+				const bool copied = state->CopyScriptInstanceToPreviewHold(actor->GetUniqueID(), found);
+				return copied && found.empty();
+			};
+			if (loaded && state) {
+				std::vector<std::string> longProblems;
+				const bool directCopy = copy(longProblems);
+				longProblem = directCopy ? std::string("none") : (longProblems.empty() ? std::string("refused") : longProblems.front());
+				state->DropPreviewScriptObject(actor->GetUniqueID());
+				// The window copies and remaps the long chain, and the preview's self reads all of it.
+				LuaMan::CapturePreviewSelfCopies({actor.get()}, false);
+				MovableObject* clone = nullptr;
+				{
+					MovableObject::FaithfulCloneScope scope(false);
+					clone = dynamic_cast<MovableObject*>(actor->Clone());
+				}
+				if (auto* previewed = dynamic_cast<Actor*>(clone)) {
+					LuaMan::BeginPreviewScripts({previewed}, false, {actor.get()});
+					longFrozen = LuaMan::PreviewFrozenCount();
+					longRead = state->RunScriptString("local node = _ScriptedObjects[\"" + uid + "#preview\"].chain; while node.next do node = node.next end; _ScriptFieldsStash[\"preview-deep-graph\"] = node.index") == 0;
+					longCopied = directCopy && longFrozen == 0 && longRead;
+				}
+				LuaMan::EndPreviewScripts();
+				delete clone;
+				{
+					std::lock_guard<std::recursive_mutex> lock(state->GetMutex());
+					lua_State* L = state->GetLuaState();
+					lua_getglobal(L, "_ScriptFieldsStash");
+					if (lua_istable(L, -1)) {
+						lua_getfield(L, -1, "preview-deep-graph");
+						copiedLength = lua_isnumber(L, -1) ? static_cast<int>(lua_tointeger(L, -1)) : -1;
+						lua_pop(L, 1);
+						lua_pushnil(L);
+						lua_setfield(L, -2, "preview-deep-graph");
+					}
+					lua_pop(L, 1);
+				}
+				refused = state->RunScriptString("local s = _ScriptedObjects[\"" + uid + "\"]; s.chain = s.makeChain(20000)") == 0 && !copy(problems);
+				named = std::any_of(problems.begin(), problems.end(), [](const std::string& problem) { return problem.find("too deep") != std::string::npos; });
+				state->DropPreviewScriptObject(actor->GetUniqueID());
+				std::vector<std::string> shortProblems;
+				shortCopied = state->RunScriptString("local s = _ScriptedObjects[\"" + uid + "\"]; s.chain = s.makeChain(10)") == 0 && copy(shortProblems);
+				state->DropPreviewScriptObject(actor->GetUniqueID());
+			}
+		}
+		const bool passed = loaded && longCopied && copiedLength == 1500 && refused && named && shortCopied;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " preview_copy_refuses_a_graph_too_deep_by_name loaded=" << loaded << " long_copied=" << longCopied
+		          << " long_problem='" << longProblem << "' long_frozen=" << longFrozen << " long_read=" << longRead << " copied_length=" << copiedLength << " refused=" << refused << " named=" << named << " short_copied=" << shortCopied
+		          << " problem='" << (problems.empty() ? std::string() : problems.front()) << "'" << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+	{
 		// A scene reload leaves no scene layer's back buffer behind: a preset's clone loaded twice, and a clone of a loaded scene loaded again.
 		const int before = SceneLayerBackBufferCount();
 		const auto* preset = dynamic_cast<const Scene*>(g_PresetMan.GetEntityPreset("Scene", "Grasslands", "Base.rte"));
@@ -13119,12 +13189,31 @@ namespace {
 		int seen;
 		std::vector<std::string>& problems;
 		LuaThreadCodec::PreviewCopier* copier = nullptr;
-		int depth = 0;
+		intptr_t stackBase = 0;
+		int level = 0;
 		bool tooDeep = false;
 	};
 
-	// Past this depth a script's graph is refused rather than walked: each level holds stack the walk cannot spare.
-	constexpr int c_MaxPreviewCopyDepth = 500;
+	// Counts a level of the walk for as long as the level runs.
+	struct PreviewWalkLevel {
+		int& level;
+		explicit PreviewWalkLevel(int& counter) : level(++counter) {}
+		~PreviewWalkLevel() { --level; }
+	};
+
+	// The copy and the remap recurse once per level of a script's graph, on the main thread (1 MiB on Windows): past this
+	// much of its stack a graph is refused by name instead of overflowing it; the rest is the caller's and the calls a level makes.
+	constexpr intptr_t c_PreviewCopyStackBytes = 768 * 1024;
+
+	// How much stack the walk that set base has used down to here.
+	intptr_t PreviewWalkStackUsed(intptr_t& base) {
+		const char marker = 0;
+		const intptr_t here = reinterpret_cast<intptr_t>(&marker);
+		if (base == 0) {
+			base = here;
+		}
+		return base - here;
+	}
 
 	// A state's copy and remap tables while a window copies its instances; each instance shares them with the others.
 	const char* const c_PreviewCopySeenKey = "cccp.preview_copy_seen";
@@ -13137,6 +13226,7 @@ namespace {
 	bool s_PreviewCopyBatchOpen = false;
 	std::unordered_map<LuaStateWrapper*, PreviewCopyBatch> s_PreviewCopyBatches;
 	std::unordered_set<LuaStateWrapper*> s_PreviewRemapStates;
+	intptr_t s_PreviewRemapStackBase = 0;
 	int s_PreviewRemapDepth = 0;
 
 	void PushPreviewClone(lua_State* L, int src, int seen, PreviewCloneContext& context);
@@ -13164,24 +13254,17 @@ namespace {
 		return ClassDerivesFrom(object->crep(), "MovableObject");
 	}
 
-	void PushPreviewCloneOf(lua_State* L, int src, int seen, PreviewCloneContext& context);
-
 	void PushPreviewClone(lua_State* L, int src, int seen, PreviewCloneContext& context) {
 		src = AbsoluteLuaIndex(L, src);
-		if (context.depth >= c_MaxPreviewCopyDepth || !lua_checkstack(L, 8)) {
+		const PreviewWalkLevel level(context.level);
+		if (PreviewWalkStackUsed(context.stackBase) > c_PreviewCopyStackBytes || !lua_checkstack(L, 8)) {
 			if (!context.tooDeep) {
 				context.tooDeep = true;
-				context.problems.emplace_back("preview copy: the script's graph is too deep to copy");
+				context.problems.emplace_back("preview copy: the script's graph is too deep to copy (level " + std::to_string(context.level) + ")");
 			}
 			lua_pushvalue(L, src);
 			return;
 		}
-		++context.depth;
-		PushPreviewCloneOf(L, src, seen, context);
-		--context.depth;
-	}
-
-	void PushPreviewCloneOf(lua_State* L, int src, int seen, PreviewCloneContext& context) {
 		seen = AbsoluteLuaIndex(L, seen);
 		const int type = lua_type(L, src);
 		if (type == LUA_TFUNCTION) {
@@ -13509,7 +13592,10 @@ namespace {
 		} else {
 			lua_pushboolean(L, 1);
 			lua_rawset(L, seen);
-			const bool remapped = ++s_PreviewRemapDepth <= c_MaxPreviewCopyDepth && RemapPreviewContents(L, index, seen, freezeClass, copyValues);
+			if (s_PreviewRemapDepth++ == 0) {
+				s_PreviewRemapStackBase = 0;
+			}
+			const bool remapped = PreviewWalkStackUsed(s_PreviewRemapStackBase) <= c_PreviewCopyStackBytes && RemapPreviewContents(L, index, seen, freezeClass, copyValues);
 			--s_PreviewRemapDepth;
 			if (remapped) {
 				return true;
