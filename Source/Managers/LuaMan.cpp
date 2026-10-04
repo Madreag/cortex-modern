@@ -80,6 +80,7 @@ extern "C" {
 #include <list>
 #include <cmath>
 #include <charconv>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
