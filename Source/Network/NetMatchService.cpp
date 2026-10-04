@@ -6941,6 +6941,10 @@ static std::string ResyncSaveName() {
 				m_LocalPeerId = live;
 				for (const NetMatchPlayerSlot& slot: m_Coordinator->GetConfig().matchConfig.players)
 					if (slot.peerId == live) m_LocalTeam = slot.team;
+				// The world it watched seated nobody on this machine: the seat's player takes it the way a returner does.
+				if (Activity* activity = g_ActivityMan.GetActivity(); activity && !activity->AdoptNetLocalSeat(m_Coordinator->GetConfig().matchConfig, live)) {
+					ScenarioRunner::SetControllerReplayError("PeerLeft:world catch-up activation: the promoted watcher could not take its seat"); return;
+				}
 			}
 			m_WorldCatchUp.handedToRound = true;
 		}
