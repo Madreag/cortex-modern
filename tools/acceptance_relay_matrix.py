@@ -25,32 +25,40 @@ def run(options, mode, repo):
     from session_directory.session_directory import TurnCredentialProvider
     root=Path(options.out).resolve();root.mkdir(parents=True,exist_ok=False)
     book=policy.CredentialBook()
-    backend=policy.directory_config(dict(directory_turn_config_path=policy.CONFIG),root,book)
-    login,offer=policy.mint_login(backend,dict(validated=True),TurnCredentialProvider(backend).mint)
-    book.add_offer(offer)
     results=[]
-    for arm in declarations:
-        current=copy.copy(options)
-        current.backends=None;current.backend=arm['backend'];current.credential_book=book
-        current.out=root/arm['backend']
-        if arm['backend']=='cloudflare':
-            current.turn=arm['turn'] if mode=='compare' else 'turn.cloudflare.com:3478'
+    try:
+        for arm in declarations:
+            current=copy.copy(options)
+            arm_book=policy.CredentialBook()
+            current.backends=None;current.backend=arm['backend'];current.credential_book=arm_book
+            current.out=root/arm['backend']
+            backend=policy.directory_config(dict(directory_turn_config_path=arm['credential_source']),root,arm_book)
+            login,offer=policy.mint_login(backend,dict(validated=True),TurnCredentialProvider(backend).mint)
+            arm_book.add_offer(offer)
+            server=next(server for server in offer['iceServers'] if server.get('username') and server.get('credential'))
+            urls=server['urls'];endpoint=urls[0] if isinstance(urls,list) else urls
+            current.turn=endpoint if mode=='compare' else endpoint.split(':',1)[1].split('?',1)[0]
             current.login_override=login;current.directory_backend=backend
-        code=pair_run(current,mode,repo)
-        result=read(current.out/'result.json')
-        results.append(dict(id=arm['id'],backend=arm['backend'],required=True,passed=code==0 and result.get('passed') is True,
-                            product=f'{arm["backend"]}/result.json'))
-        for path in (current.out/'identities').glob('*.json'):
-            target=root/'identities'/path.name
-            if target.exists() and read(target)!=read(path):
-                # Each run owns a receipt with its timestamp; executable and source identity must still agree.
-                left,right=read(target),read(path)
-                for key in ('source_sha','exe_sha256','box'):
-                    if left.get(key)!=right.get(key): raise ValueError('relay arms ran with different execution identities')
-            write(target,read(path))
-    scan=policy.scan_retained(root,book)
+            try:code=pair_run(current,mode,repo)
+            finally:
+                for value,kind in arm_book.values.items():book.add(kind,value)
+                book.native_leak |= arm_book.native_leak
+            result=read(current.out/'result.json')
+            results.append(dict(id=arm['id'],name=arm['name'],backend=arm['backend'],required=True,passed=code==0 and result.get('passed') is True,
+                                credential_mode='directory '+arm['backend']+' backend',product=f'{arm["backend"]}/result.json'))
+            for path in (current.out/'identities').glob('*.json'):
+                target=root/'identities'/path.name
+                if target.exists() and read(target)!=read(path):
+                    # Each run owns a receipt with its timestamp; executable and source identity must still agree.
+                    left,right=read(target),read(path)
+                    for key in ('source_sha','exe_sha256','box'):
+                        if left.get(key)!=right.get(key): raise ValueError('relay arms ran with different execution identities')
+                write(target,read(path))
+    finally:
+        write(root/'secret-scan.json',policy.sweep_retained(root,book))
+    scan=policy.sweep_retained(root,book)
     result=dict(passed=all(row['passed'] for row in results) and scan['passed'],arms=results,
                 checks=dict(no_logins_in_kept_files=dict(required=True,passed=scan['passed'],receipt='secret-scan.json')))
     write(root/'result.json',result)
-    write(root/'secret-scan.json',policy.scan_retained(root,book,previous=scan))
+    write(root/'secret-scan.json',policy.sweep_retained(root,book,previous=scan))
     return 0 if result['passed'] else 1

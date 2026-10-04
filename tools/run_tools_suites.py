@@ -15,6 +15,7 @@ import sys
 # The inventory tools live beside the lead's tools, outside the repository; a box without them reports N/A.
 INVENTORY = Path(os.environ.get('CC_INVENTORY_DIR') or "D:/Projects/reviews/takeover-20260909/grok-workers/lead-tools/inventory")
 SUITES = (
+    ("relay-gate", ["relay_gate_test.py"]),
     ("relay-cloudflare", ["relay_cloudflare_test.py"]),
     ("session-directory", ["session_directory/test_session_directory.py"]),
     ("acceptance-harness", ["test_acceptance_harness.py"]),

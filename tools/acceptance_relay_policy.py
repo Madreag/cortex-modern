@@ -9,17 +9,19 @@ from pathlib import Path
 import re
 import stat
 import tarfile
+import tempfile
 import time
 import uuid
 import zipfile
 
 CONFIG = 'D:/mx/coturn-20260920/turn-config-cloudflare.json'
+COTURN_CONFIG = 'D:/mx/coturn-20260920/directory-coturn.json'
 LOGIN_REASON = "the engine's relay selftests print the TURN username through GNS verbose output (engine row A63.1)"
 SAFE_LOGIN = dict(path='capabilities/relay-safe-login.json', engine_row='A63.1', boxes=['ALLY','EDITH'])
-ITEM_15 = 'relay = Cloudflare through the directory\'s mint (primary), our coturn as the fixed-pair alternative'
+ITEM_15 = "direct paths; relay = Cloudflare through the directory's mint (the primary), our own coturn through the directory's coturn backend (the alternative) and the player's own fixed pair proven by one row"
 LOGIN_FIELD = re.compile(rb'"(username|credential)"\s*:\s*"((?:\\.|[^"\\])+)"')
 GNS_USER = re.compile(rb"long-term credentials for user ['\"]([^'\"\r\n]+)")
-INI_LOGIN = re.compile(rb'(Network(?:Player)?Turn(?:User|Pass)|CC_TEST_TURN_(?:USER|PASS))["\']?\s*[:=]\s*["\']?([^\s"\'\r\n,}]+)')
+INI_LOGIN = re.compile(rb'(Network(?:Player)?Turn(?:User|Pass)|CC_TEST_TURN_(?:USER|PASS))["\']?[ \t]*[:=][ \t]*["\']?([^\s"\'\r\n,}]+)')
 HEX_VIEW = re.compile(rb'(?:[0-9a-fA-F]{2}){8,}')
 CHUNK = 1 << 20
 
@@ -48,18 +50,31 @@ def login_fields(data):
                       if match[2]!=b'redacted' and set(match[2])!={ord('x')})
         fields.update(match[1].decode('ascii') for match in INI_LOGIN.finditer(value)
                       if match[2]!=b'redacted' and not match[2].startswith(b'__ACCEPTANCE_'))
-        if GNS_USER.search(value):fields.add('GNS username')
+        if any(match[1]!=b'redacted' and set(match[1])!={ord('x')} for match in GNS_USER.finditer(value)):fields.add('GNS username')
     return sorted(fields)
 
 
 def arms(mode):
     name = 'S1.relay-compare' if mode == 'compare' else 'S1.turn-'+mode
-    return [dict(id=name+'-cloudflare', backend='cloudflare', primary=True,
+    return [dict(id=name+'-cloudflare', name='directory Cloudflare backend', backend='cloudflare', primary=True,
                  turn='turn:turn.cloudflare.com:3478?transport=udp',
                  credential_source=CONFIG, credential_transport=['CC_TEST_TURN_USER','CC_TEST_TURN_PASS'],
                  blocked_reason=LOGIN_REASON, native_evidence='engine GNS lines; no provider log is available'),
-            dict(id=name, backend='coturn', primary=False, turn='turn:{turn}?transport=udp',
-                 credential_source='D:/mx/coturn-20260920/turnserver-fixed.conf')]
+            dict(id=name, name='directory coturn backend', backend='coturn', primary=False, turn='directory coturn backend',
+                 credential_source=COTURN_CONFIG, credential_mode='directory coturn backend')]
+
+
+def scenario_contract(repo):
+    """Read the driver's declaration independently of the acceptance plan, including future-wave test pins."""
+    relative='tools/e2e/mp-relay-cloudflare.json'
+    path=Path(os.environ.get('ACCEPTANCE_RELAY_SCENARIO') or Path(repo)/relative)
+    data=path.read_bytes();document=json.loads(data)
+    names=[run['name'] for run in document['runs']]
+    if not names or len(set(names))!=len(names) or 'fixed' not in names:
+        raise ValueError('relay scenario must declare unique runs including the one Fixed menu proof')
+    return dict(primary='cloudflare',runs=names,alternative='coturn',direct='automatic',fixed_proof='fixed',
+                coturn_mode='directory coturn backend',fixed_credentials='per-run time-limited pair through menu input',
+                replay_required=True,scenario=relative,scenario_sha256=hashlib.sha256(data).hexdigest())
 
 
 def declaration():
@@ -70,16 +85,20 @@ def declaration():
                      reason='awaiting until the user approves a hotspot session',
                      operator='lead-tools/hotspot_relay.sh <row> [--network lte|5g]',
                      fixed_directory_rows=list('abc'), lane_directory_rows=list('def'),
-                     prerequisite='rows a-c require the Cloudflare key deployed on the Mac fixed directory'),
+                     prerequisite='rows a-c require the Cloudflare key deployed on the Mac fixed directory',
+                     secret_check=dict(required=True,per_row=True,empty_book='FAIL',
+                                       observer='relay_cloudflare_match.PublicObserver fetches the public ICE list as a joiner')),
         credential_rule='RED until the sanitizer proves 0 logins in every kept file; replay recording stays enabled',
         safe_login_capability=SAFE_LOGIN)
 
 
 class CredentialBook:
-    def __init__(self): self.needles = {}
+    def __init__(self): self.needles = {};self.values={};self.native_leak=False
 
     def add(self, kind, value):
-        if isinstance(value,str) and value:
+        if (isinstance(value,str) and value and value not in ('redacted','{TURN_USER}','{TURN_PASS}')
+                and not value.startswith('__ACCEPTANCE_')):
+            self.values[value]=kind
             self.needles[value.encode('utf-8')]=kind
             self.needles[value.encode('utf-16-le')]=kind
 
@@ -93,7 +112,8 @@ class CredentialBook:
             self.add('minted-credential',server.get('credential'))
 
     def fields(self, data):
-        kinds={kind for value in decoded_views(data) for needle,kind in self.needles.items() if needle in value}
+        needles=self.needles.copy()
+        kinds={kind for value in decoded_views(data) for needle,kind in needles.items() if needle in value}
         return sorted(kinds),login_fields(data)
 
 
@@ -104,16 +124,19 @@ def directory_config(run, root, book):
     if run.get('directory_turn_config_fixture'):
         if run['directory_turn_config_fixture']!='cloudflare-refused':
             raise ValueError('unknown directory refusal fixture')
-        path=Path(root)/'cloudflare-refused.json'
-        path.parent.mkdir(parents=True,exist_ok=True)
         # An unknown but syntactically valid id/token exercises the provider refusal, not an absent backend.
         config=dict(backend='cloudflare',turn_key_id=uuid.uuid4().hex,api_token=uuid.uuid4().hex+uuid.uuid4().hex)
-        path.write_text(json.dumps(config)+'\n',encoding='utf-8')
+        with tempfile.TemporaryDirectory(prefix='relay-refused-') as temporary:
+            path=Path(temporary)/'backend.json';path.write_text(json.dumps(config),encoding='utf-8')
+            config=json.loads(path.read_text(encoding='utf-8'))
+        book.add_turn_config(config)
+        path=Path(root)/'cloudflare-refused.json';path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text(json.dumps(dict(backend='cloudflare',invalid_fixture=True,loaded_by_path=True))+'\n',encoding='utf-8')
         return config
     if not path: return None
     config=json.loads(Path(path).read_text(encoding='utf-8'))
-    if not isinstance(config,dict) or config.get('backend')!='cloudflare':
-        raise ValueError('the primary relay requires a Cloudflare backend file')
+    if not isinstance(config,dict) or config.get('backend') not in ('cloudflare','coturn'):
+        raise ValueError('a relay requires a Cloudflare or coturn directory backend file')
     book.add_turn_config(config)
     return config
 
@@ -127,7 +150,7 @@ def safe_login_proof(proof, source, executable):
 def mint_login(config, proof, mint):
     # The caller first binds the native proof to its exact source and executable; no mint may precede it.
     if proof.get('validated') is not True: raise ValueError(LOGIN_REASON)
-    offer=mint('acceptance-'+uuid.uuid4().hex,86400,int(time.time()))
+    offer=mint('acceptance-'+uuid.uuid4().hex,900,int(time.time()))
     servers=offer.get('iceServers',[])
     values=[(server.get('username'),server.get('credential')) for server in servers if server.get('username') and server.get('credential')]
     if not values: raise ValueError('Cloudflare returned no usable TURN login')
@@ -143,15 +166,46 @@ def _scan_stream(stream, book):
     return dict(sha256=digest.hexdigest(),kinds=sorted(kinds),fields=sorted(fields))
 
 
+def reparse_point(path):
+    return (path.is_symlink() or getattr(path,'is_junction',lambda:False)()
+            or bool(getattr(path.lstat(),'st_file_attributes',0)&getattr(stat,'FILE_ATTRIBUTE_REPARSE_POINT',0x400)))
+
+
+def shared_data_reference(path,root):
+    if path.name!='Data' or path.parent.name!='runtime':return None
+    manifest=path.parent.parent/'runtime.json'
+    try:
+        data=manifest.read_bytes();document=json.loads(data);target=path.resolve()
+        if (Path(document['cwd']).resolve()==path.parent.resolve() and Path(document['data']).resolve()==target
+                and target.is_dir() and not target.is_relative_to(Path(root).resolve())):
+            return dict(manifest=str(manifest),manifest_sha256=hashlib.sha256(data).hexdigest(),target=str(target))
+    except (OSError,ValueError,KeyError,TypeError):pass
+    return None
+
+
+def unsafe_reparse_points(root):
+    failures=[]
+    for directory,dirs,files in os.walk(root,followlinks=False):
+        for name in list(dirs)+files:
+            path=Path(directory)/name
+            if reparse_point(path):
+                if not shared_data_reference(path,root):failures.append(dict(path=str(path),reason='reparse point lacks a matching external runtime Data reference'))
+                if name in dirs:dirs.remove(name)
+    return failures
+
+
 def scan_retained(root, book, previous=None):
     """Scan every retained byte and every archive member; never clear a previously observed native leak."""
-    root=Path(root).resolve();files=[];failures=[];logins=[]
+    root=Path(root).resolve();files=[];failures=[];logins=[];skipped=[]
     for directory,dirs,names in os.walk(root,followlinks=False):
         for name in list(dirs)+names:
             path=Path(directory)/name
-            if path.is_symlink() or getattr(path.stat(),'st_file_attributes',0) & getattr(stat,'FILE_ATTRIBUTE_REPARSE_POINT',0x400):
-                failures.append(dict(path=path.relative_to(root).as_posix(),reason='unscanned reparse point'))
+            if reparse_point(path):
+                reference=shared_data_reference(path,root)
+                if reference:skipped.append(dict(path=path.relative_to(root).as_posix(),reason='manifest-bound external runtime Data',**reference))
+                else:failures.append(dict(path=path.relative_to(root).as_posix(),reason='unclassified reparse point'))
                 if name in dirs: dirs.remove(name)
+                if name in names:names.remove(name)
         for name in names:
             path=Path(directory)/name
             if path.is_symlink(): continue
@@ -180,9 +234,54 @@ def scan_retained(root, book, previous=None):
             except (OSError,ValueError,tarfile.TarError,zipfile.BadZipFile) as error:
                 failures.append(dict(path=relative,reason=type(error).__name__))
     prior_failure=previous is not None and previous.get('passed') is not True
-    passed=bool(files) and not logins and not failures and not prior_failure
+    passed=bool(files) and bool(book.needles) and not logins and not failures and not prior_failure and not book.native_leak
     return dict(passed=passed,clean=passed,files_scanned=len(files),files=files,
-                files_with_logins=logins,unscanned=failures,prior_native_leak=prior_failure)
+                files_with_logins=logins,unscanned=failures,prior_native_leak=prior_failure or book.native_leak,
+                book_values=len(book.values),skipped_reparse_points=skipped)
+
+
+def native_book(book):
+    from relay_secrets import SecretBook
+    result=SecretBook()
+    for value,kind in book.values.copy().items():result.add(kind,value)
+    return result
+
+
+def sweep_retained(root,book,previous=None):
+    """The relay lane's sanitizer is a mandatory gate before any copy, archive or final verdict."""
+    first=scan_retained(root,book,previous)
+    try:
+        from relay_scrub import scrub
+        from relay_login_sweep import sweep
+        native=native_book(book)
+        cleaned=scrub([Path(root)],book=native)
+        structural=sweep([Path(root)])
+        remaining=scan_retained(root,book)
+        safe=(cleaned.get('status')=='CLEAN' and cleaned.get('hits_after')==0 and not cleaned.get('incomplete')
+              and structural.get('status')=='CLEAN' and not structural.get('files_with_logins') and not structural.get('incomplete')
+              and not remaining['files_with_logins'] and not remaining['unscanned'])
+        passed=first['passed'] and safe and cleaned.get('hits_before')==0
+        result=dict(**{key:value for key,value in first.items() if key not in ('passed','clean')},passed=passed,clean=passed,
+                    sanitizer='relay_login_sweep',sanitizer_receipt=cleaned,structural_scan=structural,safe_to_copy=safe)
+    except (ImportError,OSError,ValueError,RuntimeError) as error:
+        result=dict(**{key:value for key,value in first.items() if key not in ('passed','clean')},passed=False,clean=False,
+                    sanitizer='relay_login_sweep',safe_to_copy=False,sanitizer_error=type(error).__name__)
+    if not result['passed']:book.native_leak=True
+    return result
+
+
+def public_native_bytes(data,book):
+    """Sanitize a native snapshot in memory before a harness copy, retaining the failed-leak verdict."""
+    from relay_secrets import file_hits
+    hits,spans,container=file_hits(data,native_book(book).finder())
+    if not hits:return data
+    book.native_leak=True
+    if container:raise ValueError('native snapshot contains a login in an encoded container; copy refused')
+    cleaned=bytearray(data)
+    for start,end in spans:cleaned[start:end]=b'x'*(end-start)
+    if file_hits(bytes(cleaned),native_book(book).finder())[0]:
+        raise ValueError('native snapshot could not be sanitized in memory; copy refused')
+    return bytes(cleaned)
 
 
 def directory_offer(captured, provider):

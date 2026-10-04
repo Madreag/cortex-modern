@@ -51,7 +51,6 @@ MACHINE = {'here': 'EROL-PC', 'edith': 'EDITH'}
 TURN = {'here': 'turn:192.168.50.122:3479?transport=udp', 'edith': 'turn:68.3.162.151:3479?transport=udp'}
 # The Cloudflare key stays in this file on this box: only its path is passed, to the run's own directory.
 CLOUDFLARE_TURN_CONFIG = Path('D:/mx/coturn-20260920/turn-config-cloudflare.json')
-TURN_CONF = Path('D:/mx/coturn-20260920/turnserver-fixed.conf')
 BOX_LOG = Path('D:/mx/inventory-confirming-2-20260926/steps.log')
 SECRET_KEYS = ('NetworkTurnUser', 'NetworkTurnPass', 'NetworkPlayerTurnUser', 'NetworkPlayerTurnPass')
 # The Linux box (BOXES.md): the lane's directory there, its clone of the tree at the tip and that tree's gcc build.
@@ -132,6 +131,8 @@ def soak_spec(root, ticks, repo=REPO):
 
 
 def prepare_peer(h, spec):
+    from relay_private import require_public
+    require_public(spec['settings']);require_public(spec['env'])
     run_out = Path(spec['root']) / spec['peer']
     run = h.run.make_run(Path(spec['repo']), spec['flags'], run_out, timeout=spec['timeout'], env=spec['env'],
                          expected=[Path(path) for path in spec['expected']])
@@ -147,7 +148,7 @@ def prepare_peer(h, spec):
 
 
 def redact(h, run, spec, spec_path=None):
-    """Both TURN login fields leave the private runtime and spec once the engine has read them."""
+    """Keep legacy callers' empty relay fields public; prepare_peer refuses a staged login."""
     secrets = {key: 'redacted' for key in SECRET_KEYS if key in spec['settings']}
     if not secrets:
         return
@@ -284,6 +285,8 @@ def wait_task_idle(budget_s=900):
 def start_session1(root, spec, label):
     """Ships the spec and the rendered payload, then starts the one session-1 task."""
     root = Path(root)
+    from relay_private import require_public
+    require_public(spec['settings']);require_public(spec['env'])
     spec_path = root / f'{spec["peer"]}-spec.json'
     if DRY_RUN:
         say(f'dry-run: EDITH {spec["peer"]} spec {spec_path} through {TASK} ({SESSION1_SCRIPT}): {" ".join(spec["flags"])}')
@@ -321,7 +324,10 @@ class LinuxPeer:
     """A match peer on the Linux box: its spec with this box's run root mapped to the lane's there, this file's remote-peer path
     run over ssh (the POSIX runner, the tree's gcc build), its files fetched back here when it ends."""
 
-    def __init__(self, spec, local_root, log_path):
+    def __init__(self, spec, local_root, log_path, relay_book=None):
+        from relay_private import require_public
+        require_public(spec['settings']);require_public(spec['env'])
+        self.relay_book=relay_book
         self.local_root = Path(local_root)
         self.remote_root = f'{LINUX_LANE}/runs/{self.local_root.parent.name}/{self.local_root.name}'
         local = str(self.local_root)
@@ -362,6 +368,13 @@ class LinuxPeer:
             self.process.terminate()
             self.process.wait(timeout=30)
         # The tar stream only; its runtime is a link into the tree, so it never travels.
+        if self.relay_book is not None:
+            from acceptance_remote import sanitize_remote
+            from types import SimpleNamespace
+            import shlex
+            scan=sanitize_remote(SimpleNamespace(repo=LINUX_REPO,ssh=LINUX_SSH,python='python3'),None,
+                                 SimpleNamespace(ps_quote=shlex.quote),self.remote_root,self.relay_book)
+            write_json(self.local_root/'linux-secret-scan.json',scan)
         with subprocess.Popen([*SSH_LINUX, f'tar -C {self.remote_root} --exclude=./{self.peer}/runtime -cf - .'],
                               stdout=subprocess.PIPE, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)) as source:
             subprocess.run([WINDOWS_TAR, '-xf', '-', '-C', str(self.local_root)], stdin=source.stdout, check=False,
@@ -627,12 +640,7 @@ def wait_session(directory, budget_s, alive):
 
 
 def turn_login():
-    for line in TURN_CONF.read_text(encoding='utf-8', errors='replace').splitlines():
-        stripped = line.strip()
-        if stripped.startswith('user=') and ':' in stripped:
-            user, secret = stripped[5:].split(':', 1)
-            return user, secret
-    raise RuntimeError(f'{TURN_CONF} has no user=<name>:<password> line')
+    raise ValueError('the fixed coturn account is retired; use the directory coturn backend')
 
 
 def network_settings(path, side, pin, login, peer='host'):
@@ -642,14 +650,13 @@ def network_settings(path, side, pin, login, peer='host'):
                   'SessionDirectoryInstallKey': f'edith-cross-{side}-install'}
     if path == 'direct':
         return {**rendezvous, 'NetworkIceEnable': '1', 'NetworkConnectionMode': 'DirectOnly', 'NetworkHostRelayMode': 'Off'}
-    if path == 'directory-relay':
+    if path in ('directory-relay','relay'):
         # The host asks the directory for the relay; the client may take only the relay it was handed.
         return {**rendezvous, 'NetworkIceEnable': '1', 'NetworkHostRelayMode': 'Directory',
-                'NetworkConnectionMode': 'Automatic' if peer == 'host' else 'RelayOnly'}
-    user, secret = login
-    return {**rendezvous, 'NetworkIceEnable': '1', 'NetworkStunServers': '', 'NetworkConnectionMode': 'RelayOnly',
-            'NetworkHostRelayMode': 'Fixed', 'NetworkTurnServers': TURN[side], 'NetworkTurnUser': user, 'NetworkTurnPass': secret,
-            'NetworkPlayerTurnServers': TURN[side], 'NetworkPlayerTurnUser': user, 'NetworkPlayerTurnPass': secret}
+                'NetworkConnectionMode': 'Automatic' if path=='directory-relay' and peer=='host' else 'RelayOnly',
+                'NetworkTurnServers':'','NetworkTurnUser':'','NetworkTurnPass':'',
+                'NetworkPlayerTurnServers':'','NetworkPlayerTurnUser':'','NetworkPlayerTurnPass':''}
+    raise ValueError('unknown network path')
 
 
 # --- the checks before any launch ----------------------------------------------------------------------------------
@@ -710,17 +717,25 @@ def run_match(h, options, index, login):
     if not DRY_RUN:
         scp_to(root / 'input.txt', root / 'input.txt')
         scp_to(root / 'input-schedule.json', root / 'input-schedule.json')
-    directory = service = pin = None
+    directory = service = pin = service_context = None
+    book=None
+    if options.path in ('relay','directory-relay') and not DRY_RUN:
+        from acceptance_relay_policy import CredentialBook,directory_config,sweep_retained
+        book=CredentialBook()
+        backend=directory_config(dict(directory_turn_config_path=str(options.turn_config)),root,book)
     if options.path != 'ip':
         import test_directory_ice_join as directory
         if DRY_RUN:
             pin = '<pin>'
             say(f'dry-run: session directory on 127.0.0.1:{DIRECTORY_PORT} with a fresh certificate under {root}')
         else:
-            cert, key, pin = make_cert(root)
-            service = directory.start_service(root, DIRECTORY_PORT, cert, key,
-                                              ('--turn-config', str(options.turn_config), '--turn-max-ttl', str(options.relay_ttl))
-                                              if options.path == 'directory-relay' else ())
+            if book is not None:
+                from e2e.directory import serve
+                service_context=serve(root/'directory',DIRECTORY_PORT,(GAME_PORT,GAME_PORT+19),turn_config=backend,secret_book=book)
+                pin=service_context.__enter__()['DIRECTORY_PIN']
+            else:
+                cert, key, pin = make_cert(root)
+                service = directory.start_service(root,DIRECTORY_PORT,cert,key)
 
     def role(peer, session_id=None):
         ice = ['-net-ice', 'off' if options.path == 'ip' else 'on']
@@ -761,27 +776,42 @@ def run_match(h, options, index, login):
             else:
                 time.sleep(0 if DRY_RUN else 20)
             if not note:
-                local = LinuxPeer(spec('client', session_id), root, root / 'client-linux.log') if options.client_box == 'linux' else launch_local(h, spec('client', session_id))
+                local = LinuxPeer(spec('client', session_id), root, root / 'client-linux.log',book) if options.client_box == 'linux' else launch_local(h, spec('client', session_id))
         if local is not None and not DRY_RUN and not note:
             local.finish()
         remote_state = wait_done(root, match_timeout(options) + 300) if not (note and local_peer == 'host') else 'not started'
     finally:
-        if local is not None and not DRY_RUN:
-            local.close()
-            local_spec = spec(local_peer, session_id)
-            if not isinstance(local, LinuxPeer):
-                redact(h, local, local_spec)
-            local_record = local.record
-            write_json(root / f'{local_peer}-record.json', local_record)
-            write_json(root / f'{local_peer}-spec.json', dict(local_spec, settings={key: ('redacted' if key in SECRET_KEYS else value)
-                                                                                   for key, value in local_spec['settings'].items()}))
-        if service is not None:
-            service.terminate()
-            service.wait(timeout=10)
+        try:
+            if local is not None and not DRY_RUN:
+                local.close()
+                local_spec = spec(local_peer, session_id)
+                if not isinstance(local, LinuxPeer):
+                    redact(h, local, local_spec)
+                local_record = local.record
+                write_json(root / f'{local_peer}-record.json', local_record)
+                write_json(root / f'{local_peer}-spec.json', dict(local_spec, settings={key: ('redacted' if key in SECRET_KEYS else value)
+                                                                                       for key, value in local_spec['settings'].items()}))
+            if service is not None:
+                service.terminate()
+                service.wait(timeout=10)
+            if service_context is not None:service_context.__exit__(None,None,None)
+        finally:
+            if book is not None:write_json(root/'secret-scan.json',sweep_retained(root,book))
     if DRY_RUN:
         return dict(name=name, dry_run=True)
     if remote_state != 'not started':
+        if book is not None:
+            from acceptance_remote import sanitize_remote
+            from types import SimpleNamespace
+            import remote_box as rb
+            scan=sanitize_remote(SimpleNamespace(repo=str(options.remote_repo or options.repo),ssh=box().alias),box(),rb,root,book)
+            write_json(root/'remote-secret-scan.json',scan)
         fetch(root, [f'{remote_peer_name}*', 'session1*'], [f'{remote_peer_name}/runtime'])
+    if book is not None:
+        scan=sweep_retained(root,book)
+        write_json(root/'secret-scan.json',scan)
+        if not scan['safe_to_copy']:raise ValueError('relay sanitizer refused analysis copies')
+        (root/'service.log').write_bytes((root/'directory/service.log').read_bytes())
     if options.soak:
         verdict = soak_verdict(root, match_ticks(options))
         write_json(root / 'soak-verdict.json', verdict)
@@ -790,7 +820,8 @@ def run_match(h, options, index, login):
     return analyze_match(h, root, dict(name=name, started=started, finished=stamp(), direction=options.direction, path=options.path, ticks=match_ticks(options),
                                        port=port, machines=machines, soak=options.soak, source_sha=command_source_sha(options.repo),
                                        local_peer=local_peer, session_id=session_id, remote_state=remote_state, note=note,
-                                       feel_records=options.feel_records, instrumentation=options.instrumentation, box_here_at_start=load))
+                                       feel_records=options.feel_records, instrumentation=options.instrumentation, box_here_at_start=load,
+                                       relay_secret_scan=scan['passed'] if book is not None else None))
 
 
 def path_label(options):
@@ -875,7 +906,7 @@ def relay_evidence(root, meta):
         except ValueError:
             errors.append('invalid relay_offer_issued JSON'); continue
         provider = row.get('provider')
-        expected = {'cloudflare', 'coturn'} if meta['path'] == 'directory-relay' else {'fixed'}
+        expected = {'cloudflare', 'coturn'} if meta['path'] == 'directory-relay' else {'coturn'}
         if row.get('session_id') == session and session and provider in expected and row.get('match_id') and all(
                 type(row.get(key)) is int and row[key] > 0 for key in ('generation', 'expires_at', 'server_count')):
             offers.append(row)
@@ -957,7 +988,7 @@ def analyze_match(h, root, meta):
     timing_pass = all(result.get('peers', {}).get(peer, {}).get('pass_check') is True for peer in required_timing)
     relay = relay_evidence(root, meta)
     builds = pair_build_evidence(root, meta, records)
-    passed = bool(not receipt_failures and complete and result.get('off_wire_pass') and passes and mismatched == 0 and holds_pass and soak_pass and timing_pass and relay['passed'] and builds['passed'])
+    passed = bool(not receipt_failures and complete and result.get('off_wire_pass') and passes and mismatched == 0 and holds_pass and soak_pass and timing_pass and relay['passed'] and builds['passed'] and meta.get('relay_secret_scan') is not False)
     verdict = dict(name=meta['name'], passed=passed, compared_ticks=compared, desyncs=mismatched, holds=holds, hold_judgement=hold_judgement,
                    trace_pair_pass=(result.get('proof') or {}).get('sim_gated_pass'), peers=peers, manifest=manifest,
                    receipt_failures=receipt_failures, soak_pass=soak_pass, item9a_pass=timing_pass, required_timing_peers=required_timing, relay=relay, builds=builds)
@@ -1100,7 +1131,10 @@ def main(argv=None):
     if not DRY_RUN and not wait_box(options.box_wait):
         say('REFUSED: the inventory feel matrix still holds this box')
         return 3
-    login = turn_login() if options.path == 'relay' else None
+    if options.path=='relay':
+        from acceptance_relay_policy import COTURN_CONFIG
+        options.turn_config=Path(COTURN_CONFIG)
+    login = None
     label = f'{options.direction}-{path_label(options)}'
     tunnel = Tunnel(options.out.resolve() / f'tunnel-{label}.log', options.relay_bridge) if options.path != 'ip' else None
     linux_tunnel = LinuxTunnel(options.out.resolve() / f'tunnel-linux-{label}.log') if options.client_box == 'linux' and options.path != 'ip' else None

@@ -120,16 +120,17 @@ def wait_for_window(root, section, *, marker=None, timeout=None, sleep_fn=None, 
     started=prior.get('started_epoch',clock());waits=prior.get('waits',0)
     while True:
         current=run_split.window_variant(marker)
-        occupied=current.get('occupied',False) or current['variant']!='WITH'
+        user_hold=current['variant']!='WITH'
+        occupied=current.get('occupied',False) or user_hold
         remaining=budget-(clock()-started)
         state='AWAITING' if occupied else 'READY'
         receipt=dict(state=state,collection_id=schedule['collection_id'],source_sha=schedule['source_sha'],section=section,
                      started_epoch=started,waits=waits,budget_s=budget,marker=current,
-                     reason='waiting for the EROL-PC reservation to clear' if occupied else '',updated=run_split.stamp())
+                     reason=run_split.WINDOW_REASON if user_hold else 'waiting for the EROL-PC reservation to clear' if occupied else '',updated=run_split.stamp())
         write(path,receipt)
         schedule.setdefault('window_wait_receipts',{})[str(section)]=dict(path=path.relative_to(root).as_posix(),sha256=sha256(path))
         write(root/'split-plan.json',schedule)
-        if not occupied or remaining<=0:return receipt
+        if user_hold or not occupied or remaining<=0:return receipt
         seconds=min(45*60,remaining)
         print(f'{run_split.stamp()} section {section}: WAIT for EROL-PC reservation; retry in {seconds:g} s',flush=True)
         sleep(seconds);waits+=1

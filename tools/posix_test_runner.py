@@ -57,6 +57,8 @@ SETTINGS_OVERRIDES = {
     "LaunchIntoActivity": "0",
     # No unattended engine asks a router of this network for a mapping.
     "NetworkPortMapEnable": "0",
+    "NetworkTurnServers": "", "NetworkTurnUser": "", "NetworkTurnPass": "",
+    "NetworkPlayerTurnServers": "", "NetworkPlayerTurnUser": "", "NetworkPlayerTurnPass": "",
 }
 
 DEFAULT_SETTINGS = """SettingsMan

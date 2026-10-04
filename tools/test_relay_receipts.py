@@ -35,7 +35,7 @@ class RelayReceipts(unittest.TestCase):
                     (root / peer / 'stdout.log').write_text('\n'.join(lines))
                 if missing != 'offer':
                     (root / 'service.log').write_text('INFO relay_offer_issued ' + json.dumps(dict(session_id='session-one',
-                        match_id='match-one', provider='fixed', generation=1, expires_at=1600, server_count=1)))
+                        match_id='match-one', provider='coturn', generation=1, expires_at=1600, server_count=1)))
                 with contextlib.redirect_stdout(io.StringIO()):
                     result = edith_cross.analyze_match(harness, root, meta)
                 self.assertEqual(result['passed'], missing == 'none', result['relay'])

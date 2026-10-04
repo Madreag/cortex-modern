@@ -37,20 +37,20 @@ class RelayRows(unittest.TestCase):
         self.assertIsNotNone(result, 'relay credential and backend policy is required')
         return result
 
-    def test_c501_cloudflare_driver_and_three_run_contract(self):
+    def test_c501_cloudflare_driver_and_scenario_run_contract(self):
         row = self.row('gap.mp-relay-cloudflare')
         self.assertIn('{REPO}/tools/relay_cloudflare_match.py', row['argv'])
-        self.assertEqual(row['relay_contract']['runs'], ['cloudflare','coturn','automatic'])
+        self.assertEqual(row['relay_contract']['runs'], ['cloudflare','coturn','fixed','automatic'])
         self.assertEqual(row['relay_contract']['primary'], 'cloudflare')
         self.assertEqual(row['engine_boxes'], {'ALLY':1,'EDITH':1})
 
-    def test_c502_directory_primary_and_fixed_alternative(self):
+    def test_c502_directory_primary_and_coturn_alternative(self):
         scenario = json.loads((REPO/'tools/e2e/mp-direct-vs-relay.json').read_text())
         runs = {run['name']:run for run in scenario['runs']}
         self.assertEqual(runs['relay']['peers'][0]['settings']['NetworkHostRelayMode'], 'Directory')
         self.assertEqual(runs['relay']['directory_turn_config_path'], 'D:/mx/coturn-20260920/turn-config-cloudflare.json')
-        self.assertIn('relay-fixed', runs)
-        self.assertEqual(runs['relay-fixed']['peers'][0]['settings']['NetworkHostRelayMode'], 'Fixed')
+        self.assertIn('relay-coturn', runs)
+        self.assertEqual(runs['relay-coturn']['peers'][0]['settings']['NetworkHostRelayMode'], 'Directory')
         self.assertTrue(any(item.get('directory_relay_offer') == 'cloudflare' and item['run']=='relay' for item in scenario['checklist']))
         for peer in runs['relay']['peers']:
             self.assertEqual(peer['settings']['NetworkConnectionMode'], 'RelayOnly')
@@ -94,7 +94,8 @@ class RelayRows(unittest.TestCase):
         words=self.plan.get('relay_policy',{}).get('item_15','')
         self.assertIn('Cloudflare through the directory',words)
         self.assertIn('coturn',words)
-        self.assertIn('fixed-pair alternative',words)
+        self.assertIn("directory's coturn backend (the alternative)",words)
+        self.assertIn("player's own fixed pair proven by one row",words)
 
     def test_c507_cross_arm_directory_first(self):
         self.assertEqual(self.plan.get('relay_policy',{}).get('cross_arms'),

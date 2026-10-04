@@ -94,8 +94,6 @@ def run_section(options):
     if str(options.section) not in schedule.get('section_receipts',{}):
         collection.start_section(options.root,options.section,inventory_root=options.inventory)
         schedule=collection.read(options.root/'split-plan.json')
-    if collection.wait_for_window(options.root,options.section)['state']!='READY':
-        return 3
     codes=[]
     def owned(spec):
         share=collection.Share(options.root,spec['share'],options.inventory)
