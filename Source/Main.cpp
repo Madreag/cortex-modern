@@ -6768,9 +6768,15 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			const size_t heldAt = error.find("PeerHeld:");
 			const std::string stopLine = heldAt == std::string::npos ? std::string() : error.substr(heldAt + 9);
 			const std::string unreachableAtStop = stopLine.rfind("The host is unreachable", 0) == 0 ? stopLine : std::string();
+			// The wait's screen goes up before the host's snapshot save holds this thread, so the stopped match says why at once.
+			const bool leaveAtOnce = UpdateResyncUI(0, heldRejoin, unreachableAtStop);
 			if (heldRejoin) {
 				resyncOk = g_NetMatchService.BeginHeldRejoin(&resyncError);
 			} else resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
+			if (leaveAtOnce) {
+				leftTheWait = true;
+				resyncOk = false;
+			}
 			std::string launchPreset;
 			for (bool attempt = resyncOk; attempt;) {
 				attempt = false;
