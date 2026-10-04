@@ -1,0 +1,10 @@
+wait_ms 1980
+activate ButtonMainToMultiplayer
+wait_ms 495
+activate ButtonMultiplayerJoinGame
+wait_ms 495
+settext TextJoinAddress 127.0.0.1
+settext TextJoinPort {PORT}
+activate ButtonMultiplayerConnect
+wait_file {PROBE_DIR}/done.json 180
+exit
