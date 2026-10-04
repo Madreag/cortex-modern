@@ -28,7 +28,7 @@ install_memory_guard()
 MST = timezone(timedelta(hours=-7))
 HELPERS = REPO / 'tools/feel'
 SP_CONTROL = Path('D:/mx/opus-f24-20260913/sp-control')
-SP_COMPARATOR = Path('D:/Projects/reviews/takeover-20260909/grok-workers/opus-f24-first-update-20260913/scripts/compare_sp.py')
+SP_COMPARATOR = HELPERS / 'compare_sp.py'
 BYTE_LIMIT = 5_000_000_000
 MATRIX_BYTE_LIMIT = 10_000_000_000
 # Every N committed ticks each match peer hashes its whole capture (-net-fullstate-hash-every); 0 is off. Set by --fullstate-every.
@@ -901,6 +901,9 @@ def analyze(root, stock=None):
 
 
 def gates(root, control, timeout):
+    if not (Path(control) / 'launch.json').is_file():
+        raise ValueError(f"the single-player control {control} is absent on {os.environ.get('COMPUTERNAME') or 'this box'}; "
+                         "the gates compare this tree's run with it (--sp-control names another copy)")
     out = root / 'gates'
     out.mkdir(exist_ok=False)
     env = dict(os.environ, CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1')
