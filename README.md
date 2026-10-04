@@ -1,166 +1,300 @@
-# Cortex Command Community Project Source
-*The Cortex Command Community Project is Free/Libre and Open Source under GNU AGPL v3*
+<div align="center">
 
-[![Meson Build (Linux, macOS)](https://github.com/cortex-command-community/Cortex-Command-Community-Project/actions/workflows/meson.yml/badge.svg)](https://github.com/cortex-command-community/Cortex-Command-Community-Project/actions/workflows/meson.yml) [![Windows Build](https://github.com/cortex-command-community/Cortex-Command-Community-Project/actions/workflows/msbuild.yml/badge.svg)](https://github.com/cortex-command-community/Cortex-Command-Community-Project/actions/workflows/msbuild.yml)
+# Cortex Modern
 
-This is a community-driven effort to continue the development of Cortex Command.  
-Stay up to date in our [Discord channel](https://discord.gg/TSU6StNQUG).
+**Cortex Command with online multiplayer that feels like single player. Any OS with any OS.**
 
-***
+A community fork of the [Cortex Command Community Project](https://github.com/cortex-command-community/Cortex-Command-Community-Project) that adds internet play: host or join from the main menu, your own soldier answers instantly, nobody waits for anybody's connection, and the mods you already have keep working.
 
-# Installing the Game
-If you just want to play the latest version of the game you can get it from our [website](https://cortex-command-community.github.io/downloads).
+[![Status: Alpha](https://img.shields.io/badge/status-alpha-orange)](#whats-in-alpha-1)
+[![Version](https://img.shields.io/badge/version-0.1.0--alpha.1-blue)](VERSION.txt)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-555)](#play-in-five-minutes)
+[![Based on CCCP](https://img.shields.io/badge/based%20on-CCCP%207.0%20dev-6a3)](https://github.com/cortex-command-community/Cortex-Command-Community-Project)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
-# Getting Mods
-You can get mods from our [mod portal](https://cccp.mod.io).
+![C++](https://img.shields.io/badge/C%2B%2B-engine-00599C?logo=cplusplus&logoColor=white)
+![Lua](https://img.shields.io/badge/Lua-mods%20%26%20scripts-2C2D72?logo=lua&logoColor=white)
+![Python](https://img.shields.io/badge/Python-test%20harness-3776AB?logo=python&logoColor=white)
+![Meson](https://img.shields.io/badge/Meson-macOS%20%2F%20Linux%20build-39207C?logo=meson&logoColor=white)
+![MSBuild](https://img.shields.io/badge/Visual%20Studio-Windows%20build-5C2D91?logo=visualstudio&logoColor=white)
 
-# How To Make Your Voice Heard #
-So you want to take part in the project? A good start would be going to the discord where the project is discussed. You can find a link [here](https://discord.gg/TSU6StNQUG). All our releases are available under the releases area and all of our bugs, changes, and ideas are tracked in GitHub issues. Feel free to play and suggest changes or point out any problems.
+<img src="docs/images/match.gif" alt="A two-player match: the network overlay in the corner, the seats panel opening on F6" width="800">
 
-# How To Make Issues #
-Please feel free to add issues and bugs. It's as simple as going to the issues tab and clicking a button. Once you do that, you'll see an easy to follow template to fill in. Try to put in the appropriate category for the issue and it'll be handled from there.
+<sub>Recorded by the project's own test recorder on the alpha build. Top right: the network overlay (input delay, route, pace).</sub>
 
-# How to Contribute #
-If you've got any C++ experience, experience with the game's ini data through modding it, are good at spriting, or know Lua, you can contribute some of your time directly to the project. We'll gladly consider all pull requests that come in and are always happy to have more hands on deck.
+</div>
 
-# More Information
-See the [Information and Recommendations](https://github.com/cortex-command-community/Cortex-Command-Community-Project/wiki/Information,-Recommended-Plugins-and-Useful-Links) page for more details and useful development tools.
+---
 
-***
+## What's new
 
-# Windows Build Instructions
-First you need to download the necessary files:
+| | | |
+|---|---|---|
+| 🌐 **Host or join from the menu** | A built-in game list. Host a game, pick it from the list on the other machine, play. No port forwarding to set up. | [How to](#play-in-five-minutes) |
+| ⚡ **Feels like single player** | Your own soldier answers the instant you press. A player with a bad connection or a slow machine never slows anyone else down. | [How it works](#how-it-works) |
+| 🖥️ **Windows, macOS and Linux in one match** | Every machine runs the exact same simulation, bit for bit. Mixed-OS matches are a normal case, not a special one. | [How it works](#how-it-works) |
+| 🔁 **Leave and come back** | Drop out, crash, or close the game: the AI holds your seat and your soldiers keep fighting. Rejoin while the match runs. | [Menus](#the-new-menus-and-screens) |
+| 👑 **Host moderation** | A seats panel shows who holds what and why. Hand a held seat to a newcomer, kick, ban. Nobody loses a seat without the host's click. | [Menus](#the-new-menus-and-screens) |
+| 💾 **Autosave and resume** | The host sets a checkpoint interval for the whole match. A match can be resumed from disk by everyone, even after the host's machine died. | [Menus](#the-new-menus-and-screens) |
+| 🌍 **Persistent worlds** | A match that keeps running while players join and leave. Latecomers watch, then take a seat when one opens. | [How it works](#how-it-works) |
+| 🧩 **Your mods, unchanged** | Mods run exactly as before. Void Wanderers is part of the test set. | [Mods](#mods) |
+| 🔌 **Direct connection first, relay when needed** | Direct peer-to-peer whenever the internet allows it. When it does not, a Cloudflare relay takes over by itself. Nothing to enter. | [Connections](#connections-direct-relay-and-your-options) |
 
-1. Install the necessary tools.  
-You'll probably want [Visual Studio Community Edition](https://visualstudio.microsoft.com/downloads/) (build supports 2019 (>=16.10) and 2022 versions. Earlier versions are not supported due to lack of C++20 standard library features and conformance).  
-You also need to have both x86 and x64 versions of the [Visual C++ Redistributable for Visual Studio 2015-2022](https://support.microsoft.com/en-us/help/2977003/the-latest-supported-visual-c-downloads) installed in order to run the compiled builds.  
-You may also want to check out the list of recommended Visual Studio plugins [here](https://github.com/cortex-command-community/Cortex-Command-Community-Project/wiki/Information,-Recommended-Plugins-and-Useful-Links).
+---
 
-2. Clone this Repository into a folder.  
+## Play in five minutes
 
-3. Copy the `fmod.dll` library from `Cortex-Command-Community-Project\external\lib\win` into the root directory.
+> **Both players need the same Cortex Modern version and the same mods.** The version is printed at the bottom left of the main menu and in `VERSION.txt` beside the game.
+>
+> <img src="docs/images/version-line.png" alt="The version line on the main menu: Community Project v7.0.0, multiplayer 0.1.0-alpha.1 (protocol 5)" width="300">
 
-Now you're ready to build and launch the game.  
-Simply open `RTEA.sln` with Visual Studio, choose your target platform (x86 or x64) and configuration, and run the project.
+<details>
+<summary><b>Windows</b></summary>
 
-* Use `Debug Full` for debugging with all visual elements enabled (builds fast, runs very slow).
-* Use `Debug Minimal` for debugging with all visual elements disabled (builds fast, runs slightly faster).
-* Use `Debug Release` for a debugger-enabled release build (builds slow, runs almost as fast as Final. **Debugging may be unreliable due to compiler optimizations**).
-* Use `Final` to build release executable.
+1. Get the build. Packaged alpha builds appear on the [Releases](https://github.com/Madreag/cortex-modern/releases) page as they are cut; until then, build from source ([Building](#building)) or take the zip a friend built from the same version.
+2. Unpack anywhere. Start `Cortex Command.exe`. If SmartScreen asks, choose **More info → Run anyway**.
+3. **Host:** Main Menu → **Multiplayer** → type your name → **Host Game** → set the activity, scene and the number of players → **Create Lobby**.
+4. **Join:** Main Menu → **Multiplayer** → type your name → **Join Game** → pick the match from the list (or type the host's address and port) → **Connect**.
+5. The match starts when every seat is filled. In the match, **F6** opens the seats panel; the network overlay in the corner shows input delay, route (direct or relay) and pace.
 
-The first build will take a while, but future ones should be quicker.
+</details>
 
-If you want to use an IDE other than Visual Studio, you will have to build using meson. Check the [Linux](#building) and [Installing Dependencies](#installing-dependencies) section for pointers.
+<details>
+<summary><b>macOS</b></summary>
 
-## Windows Subsystem for Linux (WSL)
+1. Get the build (see Windows, step 1). Unpack the app.
+2. On first launch macOS may block an unsigned app: **System Settings → Privacy & Security → Open Anyway**, then launch again.
+3. Host or join exactly as on Windows: **Multiplayer → Host Game** or **Join Game**.
+4. The first time you host, macOS asks whether the game may accept incoming connections: allow it.
 
-The Linux build can be built and run on Windows 10 using WSL by following the Linux [building](#building) and [running](#running) instructions.  
-Information on installing and using WSL can be found [here](https://learn.microsoft.com/en-us/windows/wsl/install).
+</details>
 
-Building can be done directly from the Windows filesystem side, without having to clone the repositories on the Linux filesystem side.  
-By default WSL will mount your `C:` drive to `/mnt/c/`, or just `/c/`. From there you can navigate to the Source and Data directories to follow the meson build steps.
+<details>
+<summary><b>Linux</b></summary>
 
-This has been tested with WSL2 Ubuntu 22.04 but should work with other distributions and WSL1 as well.
+1. Get the build (see Windows, step 1). Unpack the tarball; if the executable lost its permission, `chmod +x CortexCommand`.
+2. Launch from the unpacked folder so the game finds its `Data` directory.
+3. Host or join exactly as on Windows: **Multiplayer → Host Game** or **Join Game**.
 
-***
+</details>
 
-# Linux and macOS Build Instructions
-The Linux build uses the meson build system, and builds against system libraries.
+**Troubleshooting**
 
-## Dependencies
+- *Nobody can see my match.* The game list is served by the directory service at `directory.broserver.com`. If it is unreachable, the host can share its address and port, and players type them into Join Game.
+- *We connect, but the overlay says "via relay".* Your internet did not allow a direct route. The relay adds a few milliseconds and costs nothing. To insist on direct, set **Settings → Network → Connection** to *Direct only* on both machines (it may then fail to connect).
+- *A player's soldier is "held".* Their inputs stopped arriving (lag spike, alt-tab, a crash). The AI plays the seat until they are back. The seats panel (F6) says why.
+- *Everything got slower when someone joined.* It should not. If it did, it is a bug: see [Reporting a bug](#reporting-a-bug).
 
-* [`meson`](https://www.mesonbuild.com)`>= 1.6.0` (`pip install meson`/`brew install meson` if your distro doesn't include a recent version)
-* `ninja`
-* `gcc`, `g++` (>=13, clang unsupported) 
-* `opengl` (usually provided by the gpu driver)
-* `flac`
-* `luajit`
-* `lua` (maybe optional)
-* `minizip`
-* `tbb`
-* `lz4>=1.9.0`
-* `libpng`
-* `dylibbundler` (required only if installing on macOS)
+---
 
-For unspecified versions assume compatibility with the latest ubuntu LTS release.
+## The new menus and screens
+
+| | |
+|---|---|
+| <img src="docs/images/main-menu.jpg" alt="The main menu with Multiplayer" width="440"> | **Main menu.** **Multiplayer** sits between Scenario Battle and Saved Games. The version line at the bottom left names the base game, the multiplayer version and the network protocol. |
+| <img src="docs/images/join-game.png" alt="Join Game with the game list" width="440"> | **Join Game.** Type a host's address and port, or click a game in the list. `[LAN]` games are on your network; `[NET]` games come from the directory service. |
+| <img src="docs/images/host-options-seats.png" alt="Host options: Seats" width="440"> | **Host options: Seats.** How many players the lobby seats, each seat's team, its input delay (automatic by default) and its state. **Details** opens the seat. |
+| <img src="docs/images/host-options-network.png" alt="Host options: Network" width="440"> | **Host options: Network.** **Internet: NAT traversal (STUN)** lets players behind home routers connect directly; **Relay (TURN)** is off, from the directory (Cloudflare), or your own server. Every row has a one-line hint naming its consequence. The **Delay / session** tab holds the slow-player bound and what happens when a player falls behind. |
+| <img src="docs/images/recovery.png" alt="Host options: Recovery" width="440"> | **Host options: Recovery.** Automatic match repair; the **Return window** for a dropped player; authenticated rejoin; **Autosave checkpoints** every 60 seconds to 60 minutes, or off; **World history** and the **Catch-up limit** for persistent worlds. |
+| <img src="docs/images/net-overlay.png" alt="The in-match network overlay" width="440"> | **In the match.** The overlay: input delay in ticks and milliseconds, your route (*via direct* or *via relay*), the slowest peer's round trip, and the pace. **F6** opens the seats panel: held seats and why, applications for a seat, kick and ban. |
+| <img src="docs/images/match-seats.jpg" alt="The seats panel open during a match" width="440"> | **The seats panel.** The match continues while it is open. Chat lines sit at the top of the screen; a toast names what just happened (a player joined, the match paused). |
+
+Not pictured: **Settings → Network** (your **Connection** setting, the STUN list, your own relay, the directory address, diagnostics), the post-match summary with rematch, and the **Rejoin Match** offer on the Multiplayer menu when a match of yours is still running.
+
+---
+
+## How it works
+
+Every player runs the same deterministic simulation. Only controller inputs cross the network. Your own soldier is shown through an instant-response copy of the match, so your presses are on screen immediately; a few frames later the real match confirms them. This is the architecture the Community Project asked for: controllers on the wire, AI on every machine, no fixed-point math, standardized floating point so Windows, macOS and Linux agree to the bit.
+
+```mermaid
+flowchart LR
+    subgraph You["Your machine"]
+        I[Your input] --> IRC[Instant-response copy<br/>shows your soldier now]
+        I --> L[Lockstep match<br/>runs when every input is in]
+    end
+    subgraph Them["Each other player"]
+        TI[Their input] --> TL[The same lockstep match]
+    end
+    I -- inputs only --> TL
+    TI -- inputs only --> L
+    L <-. identical state, every frame .-> TL
+```
+
+**A laggy player never slows the others.** If a player's inputs stop arriving past a bound the host sets, that player's seat is handed to the AI on every machine at the same frame, and the match goes on. When their inputs return, they catch up privately and take the seat back. Nobody else feels a thing.
+
+```mermaid
+sequenceDiagram
+    participant H as Host
+    participant D as Directory service
+    participant R as Cloudflare relay
+    participant J as Joiner
+    H->>D: list my match (+ short-lived relay credentials)
+    J->>D: show me matches
+    D-->>J: the list, the host's address, the credentials
+    J->>H: direct connection (STUN) ...
+    Note over J,H: direct works for most home connections
+    J->>R: ... or through the relay when direct fails
+    R->>H: relayed traffic, a few ms extra
+```
+
+**Connections.** The directory service lists matches and mints short-lived relay credentials, so the game never holds a long-lived key. Connections try a direct route first (three public STUN servers are preconfigured). When no direct route completes, the Cloudflare relay carries the match. You set nothing. If you want, **Settings → Network** lets you force *Direct only* or *Relay only*, change the STUN list, or point at your own relay server. Hosts can run their own relay too: see [`docs/turn-relay.md`](docs/turn-relay.md).
+
+---
+
+## Connections: direct, relay and your options
+
+| Setting | Where | What it does |
+|---|---|---|
+| **Connection: Automatic** (default) | Settings → Network | Direct first; the relay only when no direct route completes. Best performance when direct works, no setup when it does not. |
+| **Connection: Direct only** | Settings → Network | Never uses a relay. Lowest latency; may fail behind strict routers. |
+| **Connection: Relay only** | Settings → Network | Always relays. Use when direct connections keep dropping. |
+| **STUN servers** | Settings → Network | How your public address is discovered. Three public servers preconfigured, editable. |
+| **Your own relay** | Settings → Network, Host options | A fixed relay address, username and password, for players who run their own TURN server. |
+| **Internet: NAT traversal (STUN)** | Host options → Network | Lets the host's match be reached over the internet. Off means players need the host's port forwarded. |
+| **Relay (TURN)** | Host options → Network | Off, from the directory (Cloudflare, the default when configured), or a fixed server. |
+
+---
+
+## What makes this different
+
+- **Single-player feel over the internet.** Tested with 100 and 200 ms of artificial lag plus jitter and packet loss: your own input is never delayed, and the fast player never waits for the slow one.
+- **Cross-platform lockstep that actually holds.** The simulation is bit-identical across Windows, macOS and Linux, checked by hashing every subsystem every frame on every machine in the test set.
+- **Nothing is lost when something goes wrong.** Drops, crashes, host loss, a dead host machine: the AI holds seats, the match migrates to a new host, checkpoints resume from disk, and players rejoin while play continues.
+- **The host stays in charge.** Seats, applications, kick, ban, autosave, slow-player policy, repair policy: all host options, each with a hint.
+- **Mods are untouched.** No opt-in flags, no patched mods, no rewrites. The engine was fixed wherever a mod and multiplayer disagreed.
+
+---
+
+## Mods
+
+Existing mods work unchanged. Scripts, saves and data files behave as they do in the Community Project build this fork is based on. Where the 7.0 base had removed script functions that older mods still call, this fork keeps those names working with their old meaning (the functions Void Wanderers uses are covered; the full set of old names is on the roadmap).
+
+Void Wanderers, the most-played mod, is part of the test set: it is played in single player and in multiplayer on every machine before a build ships.
+
+---
+
+## What's in Alpha 1
+
+| Feature | Proof in the test set |
+|---|---|
+| Two to four players over the internet, host or join from the menu | Multi-machine matches on five machines and three operating systems |
+| Your own input never delayed; a laggy player stalls nobody | Feel measurements at 100 and 200 ms with jitter and loss |
+| Leave, crash, rejoin; the AI holds the seat | Drop, rejoin and repair scenes, on video |
+| Host loss: the match continues on a new host | Host-loss and migration scenes |
+| Checkpoints and resume from disk for the whole match | Resume scenes; both peers killed and reloaded |
+| Persistent worlds with late joiners and watchers | World join, world restart and segment tests |
+| Host moderation: seats, applications, kick, ban | Moderation scenes, on video |
+| Direct connection with STUN; Cloudflare relay fallback; your own relay | Relay comparison and relay-only matches |
+| Windows, macOS and Linux in one match | Cross-platform determinism tests on every build |
+| Mods unchanged, Void Wanderers tested | The mod battery and the Void Wanderers scenes |
+
+---
+
+## Known issues
+
+Alpha means alpha. Everything below is tracked; items marked *being fixed* have someone on them today.
+
+| Issue | What you would see | State |
+|---|---|---|
+| Host and client disagree under lag | The first full test run of this alpha found the two machines' states diverging under artificial lag. Players would see a repair, or a desync. | **Being fixed** (the first priority) |
+| The same message shown twice | During a repair, "Resyncing the match..." can appear twice at once. Cosmetic. | **Being fixed** |
+| Mac hosts write checkpoints slowly | A joiner of a Mac-hosted world waits about 5 seconds for the snapshot instead of 2. | Next alpha |
+| Your stop may show a fraction late, rarely | On a joined machine, in moments that depend on randomness (debris at your feet), your own stop can show one input delay late. | Being measured |
+| Held seat between rounds | A newcomer cannot apply for a dropped player's seat between rounds, only during play. | Next alpha |
+| Watching a brand-new world | A watcher joining a world created moments ago gets no status line. | Next alpha |
+| Autosave on a slow host | A 2014-class host with checkpoints on can give others a brief pause once per save. | Next alpha |
+
+---
+
+## Roadmap
+
+Public names first; the names used inside the project in parentheses.
+
+| Release | Contents |
+|---|---|
+| **Alpha 1** (V1) `0.1.0-alpha.1` | Everything in [What's in Alpha 1](#whats-in-alpha-1), with zero known bugs on the full test run. **In progress.** |
+| **Alpha 2** (V1.1) `0.2.0-alpha.N` | The known issues above; bandwidth per player measured and shown in the host options; the Wait and Pause slow-player policies; a sound check across players; hour-long matches with checkpoints; faster checkpoint compression for Mac hosts; Mac and Linux packaging; the directory service on a dedicated host; short room codes for private games. |
+| **Beta** (V1.5) `0.3.0-beta.N` | More than four players (up to 32 in one match); team members with the Brains option; a per-mod compatibility profile; CI-built, signed packages. |
+| **1.0** | The released product. |
+| **1.1** (V2) | Other players' soldiers shown where they will be, not where they were: presentation prediction without rewinding the match. The full set of old mod function names. |
+| **Later** (V3) | True rollback (predicting other players' inputs and re-simulating). Only if 1.1 is not enough. |
+
+---
+
+## Branches and releases
+
+- `alpha/v1-20260923`: the alpha. Every reviewed fix lands here. This README describes this branch.
+- `stage2/*`: work branches, one per change, merged into the alpha as they are reviewed and built.
+- `development`: the Community Project's upstream branch, untouched, kept for merging their work in.
+- Releases will be tags with packages for the three operating systems, checksums and the matching source. Pre-releases are flagged, so "latest" never points at an alpha.
+
+---
 
 ## Building
 
-1. Install Dependencies (see [below](#installing-dependencies) for instructions).
+Multiplayer needs the GameNetworkingSockets library (GNS). A build without it is single-player only.
 
-2. Clone this Repository and open a terminal in it.
+<details>
+<summary><b>Windows (Visual Studio)</b></summary>
 
-3. `meson setup build` or `meson setup --buildtype=debug build` for debug build (default is release build)  
-	For macOS you need to specify gcc, with `env CC=gcc-13 CXX=g++-13 meson setup build`
+1. Install [Visual Studio Community](https://visualstudio.microsoft.com/downloads/) 2019 (16.10 or newer) or 2022 with the C++ workload, and both x86 and x64 [Visual C++ Redistributables](https://support.microsoft.com/en-us/help/2977003/the-latest-supported-visual-c-downloads).
+2. Clone this repository and check out the alpha branch.
+3. Build or install GNS and point `GNS_ROOT` and `GNS_DEP_ROOT` at it (`RTEA.common.props` reads them).
+4. Copy `fmod.dll` from `external\lib\win` into the root directory.
+5. Open `RTEA.sln`, choose x64 and a configuration, build and run.
+   - `Debug Full`: debugging with all visuals (builds fast, runs slow).
+   - `Debug Minimal`: debugging with visuals off.
+   - `Debug Release`: debugger-enabled optimized build.
+   - `Final`: the release executable.
 
-4. `ninja -C build`
+</details>
 
-5. (optional) `sudo ninja install -C build` (To uninstall later, keep the build directory intact. The game can then be uninstalled by `sudo ninja uninstall -C build`)
+<details>
+<summary><b>Linux and macOS (meson)</b></summary>
 
-If you want to change the buildtype afterwards, you can use `meson configure --buildtype {release or debug}` in the build directory or create a secondary build directory as in Step 3. There are also additional build options documented in the [wiki](https://github.com/cortex-command-community/Cortex-Command-Community-Project/wiki/Meson-build-options) as well as through running `meson configure` in the build directory.
+Dependencies: `meson` (0.60+), `ninja`, a C++17 compiler (GCC 11+ or Clang 13+), and the libraries the Community Project lists: `allegro4`, `boost`, `flac`, `libpng`, `luajit`, `minizip`, `lz4`, `libtbb`, `fmod`, plus GNS for multiplayer.
 
-## Running
-(If you installed the game in step 5 above, it should appear with your regular applications and will just run)
+```sh
+git clone https://github.com/Madreag/cortex-modern.git
+cd cortex-modern
+git checkout alpha/v1-20260923
+meson setup build --buildtype=release
+ninja -C build
+```
 
-1. (*optional*) Copy (link) all `libfmod` files from `external/lib/[os]/[arch]` into the repository.
-  - Linux: `cd $REPOSITORY; ln -s ../external/lib/linux/x86_64/libfmod.so* .`
-  - macOS: `cd $REPOSITORY; ln -s ../external/lib/macOS/libfmod.dylib .`
+Run from the repository root so the game finds `Data`. `meson_options.txt` lists the options (install type, debug symbols).
 
-2. Run `./CortexCommand` or `./CortexCommand_debug`.
+</details>
 
-## Installing Dependencies
+<details>
+<summary><b>Windows Subsystem for Linux</b></summary>
 
-**macOS additional dependencies:**  
-- `brew` [brew.sh](https://brew.sh) (or any other package manager)  
-- `Xcode` or `Command Line Tools for Xcode` (if you need to, you can also generate an xcode project from meson using the `--backend=xcode` option on setup)
+The Linux build can be built and run on Windows 10/11 through WSL by following the Linux instructions. Building works directly from the Windows filesystem.
 
-**Homebrew (macOS):**  
-`brew install pkg-config sdl3 minizip lz4 flac luajit lua libpng tbb gcc@13 ninja meson dylibbundler`
+</details>
 
-**Arch Linux:**  
-`sudo pacman -S tbb flac luajit lua minizip lz4 libpng meson ninja base-devel`  
+The full upstream build notes, including recommended Visual Studio plugins, debugging with VS Code and the SAST tools, are in the Community Project's [README](https://github.com/cortex-command-community/Cortex-Command-Community-Project#readme).
 
-**Ubuntu >=22.04:**  
-`sudo apt-get install build-essential libflac++-dev luajit-5.1-dev liblua5.1-dev libminizip-dev liblz4-dev libpng++-dev libtbb-dev ninja-build python3-pip`  
-`sudo python3 -m pip install meson`
+---
 
-**Fedora:**  
-`# dnf install allegro-loadpng-devel allegro-devel libsdl2-devel SDL2_image-devel lua-devel boost-devel meson ninja-build flac-devel luajit-devel minizip-compat-devel tbb-devel lz4-devel libpng-devel lua-devel gcc gcc-c++`  
+## Contributing
 
-## Troubleshooting
+This fork follows the Community Project's engineering rules: controller-sync multiplayer (never deterministic AI), standardized floating point for cross-platform determinism (never expanded fixed-point), and small, single-purpose commits. Changes that would break existing mods are not accepted; the engine is fixed instead.
 
-* older versions of `pipewire(-alsa)` and fmod don't work well together, so the game might [not close, have no sound or crash](https://gitlab.freedesktop.org/pipewire/pipewire/-/issues/1514). Workaround by `ln -s /bin/true /usr/bin/pulseaudio`
+Issues and pull requests are welcome here. Changes that belong upstream are prepared as focused pull requests to the Community Project once they are proven here.
 
-***
-## Debugging with VS Code
+## Reporting a bug
 
-This repository includes launch configurations to automatically build and debug the game using [VS Code](https://code.visualstudio.com/) on any of the supported platforms using one of the two supported build systems.
+Open an issue with:
 
-### Requirements
-- [C/C++ Extension Pack](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools-extension-pack) extension (all platforms) 
+1. The version line from the bottom left of the main menu (also `VERSION.txt` beside the game).
+2. Your operating system and the other players' operating systems.
+3. The connection mode the overlay showed: *via direct* or *via relay*.
+4. **Save Diagnostics** (the button under the Multiplayer and Host screens, also in Settings → Network): attach the diagnostics it saves. Check the bundle for anything you consider private before attaching it.
 
-#### msbuild *(Windows only)*
-  - [msbuild command line tools](https://learn.microsoft.com/en-us/visualstudio/msbuild/msbuild?view=vs-2022) (available [here](https://visualstudio.microsoft.com/downloads/?q=build+tools#build-tools-for-visual-studio-2022)), available on system `PATH`
-  - The `fmod.dll` library must be copied to the **Data Repository** (as above)
-  
-#### meson *(All platforms)*
-  - meson, [as above](#dependencies), available on the system `PATH`
-  - The [meson editor extension](https://marketplace.visualstudio.com/items?itemName=mesonbuild.mesonbuild) 
-  - Run the provided `Setup Meson` task, found via the command palette -> `Tasks: Run Task`
-  - Windows:
-    - [Visual Studio (2022) C++ Build Tools](https://visualstudio.microsoft.com/downloads/?q=build+tools#build-tools-for-visual-studio-2022) (`MSVC v143`)
-    - The `fmod.dll` library must be copied to the **Data Repository** (as above)
-  - Linux:
-    - [All the dependencies listed above](#dependencies)
-  - macOS:
-    - [All the dependencies listed above](#dependencies)
-    - The [`lldb`](https://lldb.llvm.org/) debugger 
+## Credits and license
 
+Cortex Command is by Data Realms. The [Cortex Command Community Project](https://github.com/cortex-command-community/Cortex-Command-Community-Project), maintained by Causeless and the community, is the base this fork builds on, and its architectural direction for multiplayer is the one implemented here.
 
-These launch configurations are accessible via the [Run and Debug](https://code.visualstudio.com/docs/editor/debugging#_run-and-debug-view) view, and provide profiles to build and run the game in Release mode or any of the [3 Debug modes](https://github.com/cortex-command-community/Cortex-Command-Community-Project/wiki/Meson-build-options). 
-
-All configurations will run pre-launch tasks to build the game using the supported backend before launching.
-
-## SAST Tools
-
-[PVS-Studio](https://pvs-studio.com/en/pvs-studio/?utm_source=website&utm_medium=github&utm_campaign=open_source) - static analyzer for C, C++, C#, and Java code.
+Cortex Modern is Free/Libre and Open Source under the GNU AGPL v3, like the project it forks: see [LICENSE](LICENSE). Third-party notices are in [`Licences/`](Licences/).
