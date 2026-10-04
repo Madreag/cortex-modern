@@ -802,6 +802,25 @@ def write_case_gates(root, results):
     return result
 
 
+def harness_cost_lines(plain_reports, results):
+    """Each judged peer's instrument cost against the frame budget; a peer that is not PASS shows its per-instrument table."""
+    lines = ['', '## Harness cost (instruments measured per frame; work before a run of frames is listed apart)', '',
+             '| Arm / peer | Status | Aggregate frame max ms | Outside frames ms | Reason |', '|---|---|---|---|---|']
+    tables = []
+    judged = [(name, 'sp', report) for name, report in plain_reports.items()]
+    judged += [(row['name'], peer, measured) for row in results for peer, measured in (row.get('peers') or {}).items()]
+    for name, peer, measured in judged:
+        cost = (measured.get('pins') or {}).get('item9a_harness_cost')
+        if not cost:
+            continue
+        detail = cost.get('detail') or {}
+        outside = sum(value['outside_frames_ms'] or 0 for value in (detail.get('instruments') or {}).values())
+        lines.append(f'| {name} / {peer} | {cost["status"]} | {value_text(cost.get("value"))} | {outside:.3f} | {(cost.get("reason") or "")[:300]} |')
+        if cost['status'] != 'PASS' and detail.get('table'):
+            tables += ['', f'{name} / {peer}:', '```', *detail['table'], '```']
+    return lines + tables
+
+
 def timing_arm(run, reference):
     report = reduce_timing_case(run, reference)
     report['report_path'] = str(run / 'feel-report.json')
@@ -818,9 +837,10 @@ def analyze(root, stock=None):
         result['report_path'] = str(root / 'feel-report.json')
         write_json(root / 'feel-report.json', result)
         return [result]
-    baselines, plain_baselines = {}, {}
+    baselines, plain_baselines, plain_reports = {}, {}, {}
     matrix_plan = json.loads((root / 'matrix-plan.json').read_text(encoding='utf-8')) if (root / 'matrix-plan.json').is_file() else {}
     subset, group = matrix_plan.get('lag_arms'), matrix_plan.get('matrix_group', 'all')
+    chosen = set(matrix_plan.get('cases') or ())
     for cap_name in ('60hz', 'uncapped'):
         run = root / f'baseline-{cap_name}'
         if subset and not run.is_dir():
@@ -832,11 +852,12 @@ def analyze(root, stock=None):
         result['metrics']['steady_wall_tps'] = timing['metrics']['steady_wall_tps']
         write_json(run / 'feel-report.json', result)
         plain = item9a_gates(root / f'baseline-{cap_name}-off', 'sp')
+        plain_reports[f'baseline-{cap_name}-off'] = plain
         plain_baselines[cap_name] = dict(steady_wall_tps=plain['metrics']['steady_wall_tps'],
             evidence=plain['metrics']['clock_path'], method='same build, scene, input script, hashes and render cap; recorder off')
         write_json(root / f'baseline-{cap_name}-off' / 'feel-report.json', plain)
     three_reference = None
-    if not subset:
+    if not subset or (root / 'baseline-three-60hz').is_dir():
         three = item9a_gates(root / 'baseline-three-60hz', 'sp')
         write_json(root / 'baseline-three-60hz' / 'feel-report.json', three)
         three_reference = dict(steady_wall_tps=three['metrics']['steady_wall_tps'], evidence=three['metrics']['clock_path'],
@@ -913,7 +934,7 @@ def analyze(root, stock=None):
             if subset and name not in subset:
                 continue
             results.append(reduce_arm(root / (name + '-on'), name, lambda: lag_arm(name, cap_name)))
-    for name, *_ in () if subset else TIMING_CASES + JITTER_CASES:
+    for name, *_ in [case for case in TIMING_CASES + JITTER_CASES if case[0] in chosen] if subset else TIMING_CASES + JITTER_CASES:
         if not matrix_arm_selected(name, group):
             continue
         run = root / name
@@ -923,7 +944,7 @@ def analyze(root, stock=None):
         reference = three_reference if 'silent' in name else dict(steady_wall_tps=baselines['60hz']['steady_wall_tps'],
             evidence=baselines['60hz']['raw_path'], method='same build, four actors, recorder and 60 Hz cap')
         results.append(reduce_arm(run, name, lambda: timing_arm(run, reference)))
-    for name, _, _ in () if subset else AUTOSAVE_CASES + AUTOSAVE_THREE_CASES:
+    for name, _, _ in [case for case in AUTOSAVE_CASES + AUTOSAVE_THREE_CASES if case[0] in chosen] if subset else AUTOSAVE_CASES + AUTOSAVE_THREE_CASES:
         if not matrix_arm_selected(name, group):
             continue
         run = root / name
@@ -938,6 +959,8 @@ def analyze(root, stock=None):
         failures = sum(row['status'] == 'FAIL' for peer in report['peers'].values() for row in peer['pins'].values())
         link = f'{report["name"]}/feel-report.json' if report['name'] in {case[0] for case in TIMING_CASES + JITTER_CASES + tuple((name, lag, 0, None) for name, lag, _ in AUTOSAVE_CASES)} else f'{report["name"]}-on/summary.md'
         lines.append(f'| {report["name"]} | {report["measurement_complete"]} | {report["off_wire_pass"]} | {failures} FAIL, {misses} MISS; [{report["name"]}]({link}) |')
+    lines += harness_cost_lines(plain_reports, results)
+    print('\n'.join(harness_cost_lines(plain_reports, results)), flush=True)
     lines += ['', 'Item 9a requires 59.5 TPS, zero steady blocking waits, less than one percent waiting,',
               'and a 50 ms maximum wait and confirmed-horizon lag. The single-player rate is diagnostic.',
               'Missing records and failed',
@@ -1094,7 +1117,7 @@ def _main(argv=None):
     scratch_bytes(root, MATRIX_BYTE_LIMIT)
     counts = dict(host_lua_states=args.host_lua_states, client_lua_states=args.client_lua_states,
                   host_pre_match_history=args.host_pre_match_history, client_pre_match_history=args.client_pre_match_history)
-    if args.cases:
+    if args.cases and not args.lag_arms:
         selected = [(index, case) for index, case in enumerate(AUTOSAVE_CASES + AUTOSAVE_THREE_CASES) if case[0] in args.cases] + \
                    [(index, case) for index, case in enumerate(TIMING_CASES + JITTER_CASES) if case[0] in args.cases]
         launch_selected = lambda script, exe_hash: [(launch_autosave_arm if len(case) == 3 else launch_timing_arm)(root, index, case, args.port, script, exe_hash, args.timeout, counts)
@@ -1149,6 +1172,17 @@ def _main(argv=None):
                     # The arms run one at a time, so the on arm's port is free again.
                     launch_case(root, f'{arm}-nopred', lag, 60 if cap_name == '60hz' else 0, True, args.port + 2 * index,
                                 script, exe_hash, args.timeout, prediction=False, **counts)
+            chosen = set(args.cases or ())
+            # A silent arm's rate is called against the three-seat baseline, as in the full matrix.
+            if any(case[0] in chosen and case[3] is not None for case in TIMING_CASES):
+                launch_case(root, 'baseline-three-60hz', 0, 60, True, 0, script, exe_hash, args.timeout, sp=True,
+                            window_ticks=2 * TICKS, sp_humans=3, **counts)
+            for index, case in enumerate(TIMING_CASES + JITTER_CASES):
+                if case[0] in chosen:
+                    launch_timing_arm(root, index, case, args.port, script, exe_hash, args.timeout, counts)
+            for index, case in enumerate(AUTOSAVE_CASES + AUTOSAVE_THREE_CASES):
+                if case[0] in chosen:
+                    launch_autosave_arm(root, index, case, args.port, script, exe_hash, args.timeout, counts)
             return
         for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
             launch_case(root, 'baseline-' + cap_name, 0, cap, True, 0, script, exe_hash, args.timeout, sp=True, **counts)
@@ -1181,7 +1215,7 @@ def _main(argv=None):
                     scratch_byte_limits=dict(case=BYTE_LIMIT, matrix=MATRIX_BYTE_LIMIT),
                     mode='service e2e without -free-run-sim; the normal loop presents every render iteration',
                     captures='own -feel-measure seam; frame-<requested tick>.png after UploadFrame',
-                    lag_arms=args.lag_arms, matrix_group=args.matrix_group,
+                    lag_arms=args.lag_arms, cases=args.cases if args.lag_arms else None, matrix_group=args.matrix_group,
                     arms=[arm['arm'] for arm in dry_run_plan(lambda: launch_matrix(root / 'input.txt', None))],
                     lua_states={'host': args.host_lua_states, 'client': args.client_lua_states},
                     pre_match_history={'host': args.host_pre_match_history, 'client': args.client_pre_match_history})

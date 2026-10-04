@@ -25,7 +25,7 @@ SUITES = (
     ("launch-budget", ["-m", "unittest", "feel.test_launch_budget"]),
     ("cross-driver", ["-m", "unittest", "feel.test_cross_driver"]),
     ("cross-report", ["-m", "unittest", "feel.test_report", "feel.test_report_serialization", "feel.test_harness_cost",
-                      "feel.test_impairment_evidence"]),
+                      "feel.test_impairment_evidence", "feel.test_matrix_selection"]),
     ("cross-oracles", ["-m", "unittest", "feel.test_cross_oracles"]),
     ("autosave-restore-oracles", ["-m", "unittest", "test_autosave_restore"]),
     ("compare-snapshots", ["test_compare_snapshots.py"]),
