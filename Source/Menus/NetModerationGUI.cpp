@@ -241,13 +241,19 @@ namespace {
 	bool ToastNamesTheSeat(const std::string& kind) { return kind == "seat_held"; }
 	bool ToastNamesNobody(const std::string& kind) { return kind == "slow_machine" || kind == "catch_up"; }
 
+	// The roster names this machine's own seat held or rejoining until the host says it is back.
+	bool OwnRosterSeatHeld() {
+		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+		return std::any_of(snapshot.members.begin(), snapshot.members.end(), [&snapshot](const auto& member) {
+			return member.peerId == snapshot.localPeerId && !member.cpu && (member.aiHeld || member.reclaiming) && !ScenarioRunner::IsLockstepSeatReleased(member.peerId);
+		});
+	}
+
 	bool ToastStillApplies(const ScenarioRunner::NetUiToastRecord& toast) {
 		if (toast.kind == "slow_machine") return ScenarioRunner::IsLockstepLocalMachineSlow();
 		if (toast.kind != "seat_held") return true;
 		if (toast.text.find("rejoining") != std::string::npos) {
-			const uint8_t local = ScenarioRunner::GetLockstepLocalPeerId();
-			return ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing() ||
-			    (local != 0 && ScenarioRunner::IsLockstepSeatUnderAI(local, ScenarioRunner::GetLockstepCompletedFrame()) && !ScenarioRunner::IsLockstepSeatReleased(local));
+			return ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing() || ScenarioRunner::IsLockstepOwnSeatHeld() || OwnRosterSeatHeld();
 		}
 		const uint8_t peer = toast.senderPeerId ? toast.senderPeerId : ScenarioRunner::GetLockstepLocalPeerId();
 		return ScenarioRunner::IsLockstepSeatUnderAI(peer, ScenarioRunner::GetLockstepCompletedFrame());
@@ -1432,7 +1438,8 @@ void NetModerationGUI::DrawMatchToasts() {
 	m_ToastRect = {};
 	m_SeatsPanelRect = {};
 	const bool menuLobby = PostMatchLobbySurfaces();
-	if (!ScenarioRunner::IsLockstepControllerSyncActive() && !g_NetMatchService.IsMatchResyncing() && !menuLobby) {
+	// A relaunched peer replaying its private catch-up is in the match before its round's controllers sync: its held line shows then too.
+	if (!ScenarioRunner::IsLockstepControllerSyncActive() && !g_NetMatchService.IsMatchResyncing() && !ScenarioRunner::WorldCatchUpActive() && !menuLobby) {
 		for (GUILabel* label: m_Toasts) {
 			if (label) {
 				label->SetVisible(false);
@@ -1444,7 +1451,10 @@ void NetModerationGUI::DrawMatchToasts() {
 	RandomGenerator* previousRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	CreateOverlay();
-	const auto queued = ScenarioRunner::GetVisibleNetUiToasts();
+	auto queued = ScenarioRunner::GetVisibleNetUiToasts();
+	// The own seat's line lasts as long as the roster's held or rejoining reading, which the host ends a round trip after the player's input applies.
+	if (OwnRosterSeatHeld() && std::none_of(queued.begin(), queued.end(), [](const auto& toast) { return toast.kind == "seat_held" && toast.text.find("rejoining") != std::string::npos; }))
+		queued.push_back({ScenarioRunner::GetLockstepCompletedFrame(), "seat_held", "Held - AI in control - rejoining", ScenarioRunner::GetLockstepLocalPeerId()});
 	std::vector<ScenarioRunner::NetUiToastRecord> visible;
 	std::vector<size_t> indices;
 	std::vector<std::string> lines;

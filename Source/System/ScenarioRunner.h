@@ -323,6 +323,8 @@ namespace RTE {
 		/// Whether the host released this held seat: the AI keeps its units and its player no longer reclaims it.
 		static bool IsLockstepSeatReleased(uint8_t peerId);
 		static bool IsLockstepSeatReclaimGap(uint8_t peerId, uint64_t frame);
+		/// Whether this machine's own seat is held: the AI plays it, or its reclaim's gap runs before the player's input applies.
+		static bool IsLockstepOwnSeatHeld();
 		static void FilterReclaimControllerInputs(NetLockstepReadyFrame& ready);
 		static void ApplyLockstepSeatAI(uint8_t peerId, uint64_t frame);
 		static void HandLockstepActorToAI(int64_t actorUniqueID, uint8_t heldPeerId);

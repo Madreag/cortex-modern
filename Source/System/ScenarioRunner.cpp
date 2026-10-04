@@ -1003,8 +1003,7 @@ namespace RTE {
 		}
 		// This machine's own seat reads held from the hold until its control returns: the catch-up ends before the reclaim lands.
 		const uint8_t localPeer = GetLockstepLocalPeerId();
-		const bool ownSeatHeld = localPeer != 0 && IsLockstepSeatUnderAI(localPeer, GetLockstepCompletedFrame()) && !IsLockstepSeatReleased(localPeer);
-		if (WorldCatchUpActive() || ownSeatHeld) visible.push_back({s_WorldCatchUpAppliedThrough, "seat_held", "Held - AI in control - rejoining", localPeer});
+		if (WorldCatchUpActive() || IsLockstepOwnSeatHeld()) visible.push_back({s_WorldCatchUpAppliedThrough, "seat_held", "Held - AI in control - rejoining", localPeer});
 		if (WorldCatchUpActive()) {
 			// The replay's own rate, over the last second or so; the frame it needs is the announced activation once there is one,
 			// else the round's newest frame here, which moves on at the round's rate.
@@ -1641,6 +1640,12 @@ namespace RTE {
 	bool ScenarioRunner::IsLockstepSeatReclaimGap(uint8_t peerId, uint64_t frame) {
 		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsSeatReclaimGap(peerId, frame);
+	}
+
+	bool ScenarioRunner::IsLockstepOwnSeatHeld() {
+		const uint8_t local = GetLockstepLocalPeerId();
+		const uint64_t completed = GetLockstepCompletedFrame();
+		return local != 0 && (IsLockstepSeatUnderAI(local, completed) || IsLockstepSeatReclaimGap(local, completed + 1)) && !IsLockstepSeatReleased(local);
 	}
 
 	// The seat a reclaim at this frame covers an actor for. A peer that joined the round with the hold
