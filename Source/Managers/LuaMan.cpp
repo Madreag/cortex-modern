@@ -11202,6 +11202,65 @@ end
 		checkpointValues = passed && checkpointValues;
 	}
 	{
+		// A Timer a script keeps is a value: the preview's copy resets its own, one Timer held twice stays one, and the live
+		// Timer keeps the start its own ticks gave it.
+		const auto* preset = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+		std::unique_ptr<AHuman> actor(preset ? dynamic_cast<AHuman*>(preset->Clone()) : nullptr);
+		const auto stashed = [&actor](const std::string& key) {
+			LuaStateWrapper* state = actor ? actor->GetLuaState() : nullptr;
+			if (!state) return std::string("none");
+			std::lock_guard<std::recursive_mutex> lock(state->GetMutex());
+			lua_State* L = state->GetLuaState();
+			std::string value = "nil";
+			lua_getglobal(L, "_ScriptFieldsStash");
+			if (lua_istable(L, -1)) {
+				lua_getfield(L, -1, key.c_str());
+				if (lua_isboolean(L, -1)) {
+					value = lua_toboolean(L, -1) ? "true" : "false";
+				} else if (lua_isnumber(L, -1)) {
+					value = std::to_string(lua_tointeger(L, -1));
+				}
+				lua_pop(L, 1);
+				lua_pushnil(L);
+				lua_setfield(L, -2, key.c_str());
+			}
+			lua_pop(L, 1);
+			return value;
+		};
+		bool loaded = false;
+		bool frozen = true;
+		std::string previewElapsed = "none", liveElapsed = "none", previewAlias = "none";
+		if (actor && actor->LoadScript(g_PresetMan.GetFullModulePath("Tests.rte/PreviewTimer.lua")) >= 0) {
+			loaded = actor->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"init"}) >= 0;
+			LuaMan::CapturePreviewSelfCopies({actor.get()}, false);
+			MovableObject* clone = nullptr;
+			{
+				MovableObject::FaithfulCloneScope scope(false);
+				clone = dynamic_cast<MovableObject*>(actor->Clone());
+			}
+			if (auto* previewed = dynamic_cast<Actor*>(clone)) {
+				LuaMan::BeginPreviewScripts({previewed}, false, {actor.get()});
+				frozen = LuaMan::PreviewFrozenCount() > 0;
+				if (!frozen) {
+					LuaMan::SetScriptsFrozen(true);
+					previewed->UpdateScripts();
+					LuaMan::SetScriptsFrozen(false);
+					previewed->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"preview"});
+				}
+			}
+			LuaMan::EndPreviewScripts();
+			delete clone;
+			actor->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"live"});
+			previewElapsed = stashed("preview-timer:preview");
+			previewAlias = stashed("preview-timer-alias:preview");
+			liveElapsed = stashed("preview-timer:live");
+		}
+		const bool passed = loaded && !frozen && previewElapsed == "0" && previewAlias == "true" && liveElapsed == "5000";
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " preview_copy_resets_its_own_timer loaded=" << loaded << " frozen=" << frozen
+		          << " preview_elapsed_ms=" << previewElapsed << " preview_alias_same=" << previewAlias << " live_elapsed_ms=" << liveElapsed << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+	{
 		// A scene reload leaves no scene layer's back buffer behind: a preset's clone loaded twice, and a clone of a loaded scene loaded again.
 		const int before = SceneLayerBackBufferCount();
 		const auto* preset = dynamic_cast<const Scene*>(g_PresetMan.GetEntityPreset("Scene", "Grasslands", "Base.rte"));
