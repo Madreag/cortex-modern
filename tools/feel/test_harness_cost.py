@@ -8,7 +8,7 @@ from feel import report
 
 def complete_cost_log(first=300, last=1200, costs=None, disabled=()):
     from feel.harness_cost import INSTRUMENTS
-    scope = dict(version=1, process=44, incarnation=0, round=1, first_frame=first, last_frame=last,
+    scope = dict(version=2, process=44, incarnation=0, round=1, first_frame=first, last_frame=last,
                  instruments={name: name not in disabled for name in INSTRUMENTS})
     rows = ['[harness-cost-scope] ' + json.dumps(scope)]
     for frame in range(first, last + 1):
@@ -43,12 +43,12 @@ class HarnessCostEvidence(unittest.TestCase):
         from feel.harness_cost import INSTRUMENTS
         good = self.measured(complete_cost_log(costs={name: 1 for name in INSTRUMENTS}))
         self.assertTrue(good['instrument_valid'], good)
-        self.assertEqual(good['instrumentation']['max_frame_ms'], 8)
+        self.assertEqual(good['instrumentation']['max_frame_ms'], len(INSTRUMENTS))
         self.assertTrue(good['product_pass'])
         high = self.measured(complete_cost_log(costs={name: 7 for name in INSTRUMENTS}))
         self.assertFalse(high['instrument_valid'])
         self.assertTrue(high['product_pass'], 'invalid instrumentation is not a product failure')
-        self.assertEqual(high['instrumentation']['max_frame_ms'], 56)
+        self.assertEqual(high['instrumentation']['max_frame_ms'], 7 * len(INSTRUMENTS))
         for name in INSTRUMENTS:
             with self.subTest(instrument=name):
                 log = complete_cost_log().replace('"' + name + '": 0', '"missing_' + name + '": 0')
@@ -78,22 +78,22 @@ class HarnessCostEvidence(unittest.TestCase):
             self.assertFalse(self.measured(broken)['instrument_valid'])
 
 
-def receipt_log(segments, *, round_id=1, enabled=('recorder', 'screen_watches'), closed=True, opened=False, outside=None, frame_ms=None):
+def receipt_log(segments, *, round_id=1, enabled=('recorder', 'screen_watches'), closed=True, opened=False, outside=None, frame_ms=None, version=2):
     """Receipts as the engine writes them: per segment an optional opening receipt and outside-frame costs, its frames, its close."""
-    from feel.harness_cost import INSTRUMENTS
-    instruments = {name: name in enabled for name in INSTRUMENTS}
+    from feel.harness_cost import VERSION_INSTRUMENTS
+    instruments = {name: name in enabled for name in VERSION_INSTRUMENTS[version]}
     rows = []
     for segment, (first, last) in enumerate(segments):
         base = dict(process=44, incarnation=0, round=round_id, segment=segment)
         if opened:
-            rows.append('[harness-cost-scope-open] ' + json.dumps(dict(base, version=1, first_frame=first, instruments=instruments)))
+            rows.append('[harness-cost-scope-open] ' + json.dumps(dict(base, version=version, first_frame=first, instruments=instruments)))
         if outside is not None:
             rows.append('[harness-cost-outside] ' + json.dumps(dict(base, before_frame=first, costs_ms={name: outside.get(name, 0) for name in enabled})))
         for frame in range(first, last + 1):
             costs = {name: (frame_ms or {}).get((frame, name), 1.0) for name in enabled}
             rows.append('[harness-cost-frame] ' + json.dumps(dict(base, frame=frame, partition_valid=True, costs_ms=costs)))
         if closed:
-            rows.append('[harness-cost-scope] ' + json.dumps(dict(base, version=1, first_frame=first, last_frame=last, instruments=instruments)))
+            rows.append('[harness-cost-scope] ' + json.dumps(dict(base, version=version, first_frame=first, last_frame=last, instruments=instruments)))
     return '\n'.join(rows) + '\n'
 
 
@@ -154,6 +154,16 @@ class HarnessCostReceipts(unittest.TestCase):
         self.assertEqual(quiet['status'], 'PASS', quiet['reason'])
         contradicted = self.reduce(receipt_log([(1, 300)]) + '[localpred] previews=354 harness_ms_total=0.305 harness_avg_ms=0.0009\n')
         self.assertIn('preview_fidelity declared disabled but native cost observations exist', contradicted['reason'])
+
+
+    def test_version_one_receipts_still_read_and_version_two_names_every_instrument(self):
+        old = self.reduce(receipt_log([(1, 300)], version=1))
+        self.assertEqual(old['status'], 'PASS', old['reason'])
+        self.assertEqual(old['instruments']['controller_trace']['status'], 'DISABLED')
+        short = receipt_log([(1, 300)], version=1).replace('"version": 1', '"version": 2')
+        self.assertIn('invalid or duplicate instrumentation scope', self.reduce(short)['reason'])
+        traced = self.reduce(receipt_log([(1, 300)], enabled=('controller_trace', 'feel_recorder')))
+        self.assertEqual(traced['instruments']['controller_trace']['frame_samples'], 300)
 
 
 if __name__ == '__main__':

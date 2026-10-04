@@ -15,9 +15,11 @@ namespace RTE {
 	class HarnessCost {
 
 	public:
-		enum Instrument : uint8_t { SimDump, TickEnd, FullState, Census, PreviewFidelity, StallSampler, ScreenWatches, Recorder, InstrumentCount };
+		enum Instrument : uint8_t { SimDump, TickEnd, FullState, Census, PreviewFidelity, StallSampler, ScreenWatches, Recorder, ControllerTrace, FeelRecorder, InstrumentCount };
 		static constexpr std::array<const char*, InstrumentCount> c_Names{"sim_dump", "tick_end", "fullstate", "census", "preview_fidelity",
-		                                                                 "stall_sampler", "screen_watches", "recorder"};
+		                                                                 "stall_sampler", "screen_watches", "recorder", "controller_trace", "feel_recorder"};
+		/// The receipts' version: 2 names the controller trace and the feel recorder beside version 1's eight instruments.
+		static constexpr int c_ReceiptVersion = 2;
 
 		/// Whether this process runs an instrument; the run's receipt names every instrument with its state.
 		static void SetEnabled(Instrument instrument, bool enabled) { s_Enabled[instrument].store(enabled, std::memory_order_relaxed); }

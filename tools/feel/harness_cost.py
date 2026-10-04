@@ -6,7 +6,9 @@ from pathlib import Path
 import re
 
 INSTRUMENTS = ('sim_dump', 'tick_end', 'fullstate', 'census', 'preview_fidelity',
-               'stall_sampler', 'screen_watches', 'recorder')
+               'stall_sampler', 'screen_watches', 'recorder', 'controller_trace', 'feel_recorder')
+# The instruments each receipt version names (HarnessCost::c_ReceiptVersion); version 1 had no controller trace or feel recorder.
+VERSION_INSTRUMENTS = {1: INSTRUMENTS[:8], 2: INSTRUMENTS}
 FRAME_BUDGET_MS = 50
 # The menu loop's stays are numbered from this bit up (Main.cpp c_HarnessMenuRounds); no match round reaches it.
 MENU_ROUNDS = 1 << 62
@@ -23,10 +25,10 @@ def key(row):
 
 def scope_valid(scope, closed):
     start, end, enabled = scope.get('first_frame'), scope.get('last_frame'), scope.get('instruments')
-    return (scope.get('version') == 1 and type(scope.get('process')) is int and scope['process'] > 0
+    return (scope.get('version') in VERSION_INSTRUMENTS and type(scope.get('process')) is int and scope['process'] > 0
             and type(scope.get('incarnation')) is int and type(scope.get('round')) is int and type(scope.get('segment', 0)) is int
             and type(start) is int and (type(end) is int and 0 <= start <= end if closed else 0 <= start)
-            and isinstance(enabled, dict) and set(enabled) == set(INSTRUMENTS)
+            and isinstance(enabled, dict) and set(enabled) == set(VERSION_INSTRUMENTS[scope['version']])
             and all(type(value) is bool for value in enabled.values()))
 
 
@@ -154,7 +156,7 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
     complete_scopes = [scope['valid'] for scope in scopes]
     instruments = {}
     for name in INSTRUMENTS:
-        declarations = [scope['instruments'].get(name) for scope in scopes]
+        declarations = [scope['instruments'].get(name, False) for scope in scopes]
         known = bool(declarations) and all(type(v) is bool for v in declarations)
         disabled = known and not any(declarations) and not samples[name]
         values = [r['ms'] for r in covered[name]]

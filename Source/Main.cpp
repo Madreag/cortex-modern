@@ -4161,7 +4161,7 @@ namespace {
 		if (!s_harnessCostScope.open) return;
 		s_harnessCostScope.open = false;
 		static const unsigned long incarnation = std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"));
-		System::PrintDiagnosticLine("[harness-cost-scope] " + nlohmann::json{{"version", 1}, {"process", System::GetProcessID()}, {"incarnation", incarnation},
+		System::PrintDiagnosticLine("[harness-cost-scope] " + nlohmann::json{{"version", HarnessCost::c_ReceiptVersion}, {"process", System::GetProcessID()}, {"incarnation", incarnation},
 		    {"round", s_harnessCostScope.round}, {"segment", s_harnessCostScope.segment}, {"first_frame", s_harnessCostScope.first},
 		    {"last_frame", s_harnessCostScope.last}, {"instruments", HarnessCostInstruments()}}.dump());
 	}
@@ -4189,7 +4189,7 @@ static void WriteHarnessCostFrameOf(uint64_t round, uint64_t frame) {
 		(void)s_flushAtExit;
 		scope = {true, round, frame, frame, s_segments[round]++};
 		// Declared as it opens, so a process ended before its close still owns the frames it wrote.
-		System::PrintDiagnosticLine("[harness-cost-scope-open] " + nlohmann::json{{"version", 1}, {"process", System::GetProcessID()}, {"incarnation", incarnation},
+		System::PrintDiagnosticLine("[harness-cost-scope-open] " + nlohmann::json{{"version", HarnessCost::c_ReceiptVersion}, {"process", System::GetProcessID()}, {"incarnation", incarnation},
 		    {"round", round}, {"segment", scope.segment}, {"first_frame", frame}, {"instruments", HarnessCostInstruments()}}.dump());
 		// What the instruments did before this run of frames began (a lobby, a loading screen) is no frame's cost.
 		System::PrintDiagnosticLine("[harness-cost-outside] " + nlohmann::json{{"process", System::GetProcessID()}, {"incarnation", incarnation}, {"round", round},
@@ -10998,6 +10998,8 @@ int main(int argc, char** argv) {
 		HarnessCost::SetEnabled(HarnessCost::PreviewFidelity, armed("CCCP_TEST_PREVIEW_FIDELITY") || FrameMan::FeelRecordingEnabled());
 		HarnessCost::SetEnabled(HarnessCost::ScreenWatches, armed("CCCP_TEST_SCREEN_WATCHES") || !s_menuScriptPath.empty() || (netUiProbeScript != nullptr && *netUiProbeScript != '\0'));
 		HarnessCost::SetEnabled(HarnessCost::Recorder, !s_recordVideoDirectory.empty());
+		HarnessCost::SetEnabled(HarnessCost::ControllerTrace, ScenarioRunner::IsControllerDebugDumpEnabled());
+		HarnessCost::SetEnabled(HarnessCost::FeelRecorder, FrameMan::FeelRecordingEnabled());
 	}
 	if (CaptureSentinel::Enabled()) CaptureSentinel::Enable();
 	if (s_netDedicated && !s_netMatchServiceE2E) {
