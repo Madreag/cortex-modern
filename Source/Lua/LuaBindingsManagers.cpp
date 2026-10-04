@@ -27,6 +27,11 @@ namespace {
 		return self->WriteReport(path);
 	}
 
+	// A script's SaveGame(name) is the user's save, as it was before the compression parameter existed.
+	bool ActivityManSaveGame(ActivityMan& self, const std::string& fileName) {
+		return self.SaveCurrentGame(fileName, ActivityMan::SaveCompression::Fast);
+	}
+
 	// The form without findChildMOIDs passes its default; the script's resultPos is written as the full form writes it.
 	bool SceneManCastFindMORay(SceneMan& self, const Vector& start, const Vector& ray, MOID targetMOID, Vector& resultPos, unsigned char ignoreMaterial, bool ignoreAllTerrain, int skip) {
 		return self.CastFindMORay(start, ray, targetMOID, resultPos, ignoreMaterial, ignoreAllTerrain, skip);
@@ -49,6 +54,7 @@ LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, ActivityMan) {
 	    .def("EndActivity", &ActivityMan::EndActivity)
 	    .def("ActivityRunning", &ActivityMan::ActivityRunning)
 	    .def("ActivityPaused", &ActivityMan::ActivityPaused)
+	    .def("SaveGame", &ActivityManSaveGame)
 	    .def("SaveGame", &ActivityMan::SaveCurrentGame)
 	    .def("LoadGame", &ActivityMan::LoadAndLaunchGame);
 }
