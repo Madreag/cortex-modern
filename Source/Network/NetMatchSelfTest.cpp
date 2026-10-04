@@ -11358,6 +11358,16 @@ namespace RTE {
 		NetMatchRunner runner;
 		runner.m_Config.host = true;
 		runner.m_MatchConfig = MakeConfig();
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) {
+			*error = "the seat-auth registry could not draw an epoch";
+			return false;
+		}
+		NetReconnectHost admission;
+		admission.Configure(&registry, runner.m_MatchConfig.sessionId, RematchIdentity());
+		admission.SetSeatTable(NetH4BuildSeatTable(runner.m_MatchConfig), runner.m_MatchConfig.mode);
+		// The published config names an earlier roster, so the plane's current one is a revision to stamp.
+		runner.m_MatchConfig.seatRosterRevision = admission.GetRoster().revision + 9;
 		NetLobbySessionConfig config;
 		config.host = true;
 		config.localPeerId = 1;
@@ -11367,14 +11377,6 @@ namespace RTE {
 		config.autoStart = false;
 		if (!runner.m_Lobby.Start(transport, config, error)) return false;
 		runner.m_MatchConfigHash = runner.m_Lobby.GetMatchConfigHash();
-		NetSeatAuthRegistry registry;
-		if (!registry.BeginHostedSession()) {
-			*error = "the seat-auth registry could not draw an epoch";
-			return false;
-		}
-		NetReconnectHost admission;
-		admission.Configure(&registry, runner.m_MatchConfig.sessionId, RematchIdentity());
-		admission.SetSeatTable(NetH4BuildSeatTable(runner.m_MatchConfig), runner.m_MatchConfig.mode);
 		// What SyncSessionPeers does when peer 2 binds again: its name and its delay change, the revision does not.
 		NetMatchConfig& lobbyConfig = runner.m_Lobby.m_Config.matchConfig;
 		const uint32_t revision = lobbyConfig.configRevision;
@@ -11391,10 +11393,11 @@ namespace RTE {
 		for (const NetMatchPlayerSlot& slot: published.players) {
 			if (slot.peerId == 2) name = slot.displayName;
 		}
-		std::cout << "[net-match-selftest] roster_stamp_after_unrevised_rebind revision=" << revision << "->" << published.configRevision << " name='" << name
+		std::cout << "[net-match-selftest] roster_stamp_after_unrevised_rebind revision=" << revision << "->" << published.configRevision << " roster="
+		          << published.seatRosterRevision << " name='" << name
 		          << "' delay=" << NetMatchConfigUtil::PeerInputDelay(published, 2) << " expected_delay=" << delay << " runner_hash_matches="
 		          << (runner.m_MatchConfigHash == runner.m_Lobby.GetMatchConfigHash()) << std::endl;
-		if (published.configRevision != revision + 1 || name != "Rebound" || NetMatchConfigUtil::PeerInputDelay(published, 2) != delay ||
+		if (published.configRevision != revision + 1 || published.seatRosterRevision != admission.GetRoster().revision || name != "Rebound" || NetMatchConfigUtil::PeerInputDelay(published, 2) != delay ||
 		    runner.m_MatchConfigHash != runner.m_Lobby.GetMatchConfigHash()) {
 			*error = "the roster stamp after a rebind the lobby published without a revision carried '" + name + "' at delay " +
 			         std::to_string(NetMatchConfigUtil::PeerInputDelay(published, 2)) + " over the lobby's 'Rebound' at " + std::to_string(delay);
