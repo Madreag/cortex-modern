@@ -1786,7 +1786,7 @@ static std::string ResyncSaveName() {
 				config.matchConfig = m_Runner->GetMatchConfig();
 				config.peerCount = config.matchConfig.peerCount; config.localPeerId = m_LocalPeerId;
 				config.authorityPeerId = m_WorldCatchUp.authorityPeerId;
-				config.initialPeerLeaves = m_WorldCatchUp.initialPeerLeaves;
+				SeedWorldReplaySeats(m_WorldCatchUp, config);
 				config.startFrame = m_WorldCatchUp.snapshotTick + 1;
 				config.migrationGeneration = m_WorldCatchUp.authorityGeneration;
 				config.simTickMs = g_TimerMan.GetDeltaTimeMS();
@@ -4048,6 +4048,25 @@ static std::string ResyncSaveName() {
 		return image;
 	}
 
+	void NetMatchService::CaptureWorldImageSeats(const NetLockstepCoordinator& coordinator, uint64_t tick, NetWorldCheckpointImage& image) {
+		// A world's image names its lockstep side state only.
+		(void)coordinator; (void)tick; (void)image;
+	}
+
+	bool NetMatchService::AdoptWorldImageSeats(const NetWorldCheckpointImage& image, uint8_t peerCount, NetWorldCatchUpClient& catchUp, std::string* error) {
+		(void)peerCount; (void)error;
+		catchUp.initialPeerLeaves = image.departedPeers;
+		return true;
+	}
+
+	void NetMatchService::SeedWorldReplaySeats(const NetWorldCatchUpClient& catchUp, NetLockstepConfig& config) {
+		config.initialPeerLeaves = catchUp.initialPeerLeaves;
+	}
+
+	void NetMatchService::AdoptWorldReplaySeats(NetLockstepCoordinator& live, const NetLockstepCoordinator& replay, uint64_t activationTick) {
+		(void)live; (void)replay; (void)activationTick;
+	}
+
 	void NetMatchService::PublishFinishedWorldJoinImage() {
 		if (m_WorldJoin.IsPrivateMatch() && m_PrivateBasePending) {
 			const std::optional<ActivityMan::CompletedAutosave> entry = g_ActivityMan.LastCompletedAutosave();
@@ -5253,8 +5272,9 @@ static std::string ResyncSaveName() {
 		m_WorldCatchUp.roundId = image.round;
 		m_WorldCatchUp.authorityGeneration = image.authorityGeneration;
 		m_WorldCatchUp.authorityPeerId = image.authorityPeerId;
-		m_WorldCatchUp.initialPeerLeaves = image.departedPeers;
+		if (!m_WorldCatchUp.privateMatch && !AdoptWorldImageSeats(image, adopted.peerCount, m_WorldCatchUp, error)) return false;
 		if (m_WorldCatchUp.privateMatch) {
+			m_WorldCatchUp.initialPeerLeaves = image.departedPeers;
 			std::vector<uint8_t> hash, holdBytes;
 			NetLockstepFrame holds;
 			if (image.privateSessionId != adopted.sessionId || !DecodeConfigPayload(image.checkpointConfig, m_WorldCatchUp.checkpointConfig) ||
@@ -6640,6 +6660,7 @@ static std::string ResyncSaveName() {
 				committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
 				committed.sessionId = m_Coordinator->GetConfig().sessionId;
 				const auto pause = ScenarioRunner::CaptureLockstepPauseState();
+				AdoptWorldReplaySeats(*m_Coordinator, *m_CatchUpCoordinator, m_WorldCatchUp.activationTick);
 				ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), true);
 				if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, &error) || !ScenarioRunner::RestoreLockstepPauseState(pause, committed.savedTick)) {
 					ScenarioRunner::SetControllerReplayError("PeerLeft:world catch-up activation: " + error); return;

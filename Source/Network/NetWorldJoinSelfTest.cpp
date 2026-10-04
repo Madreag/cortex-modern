@@ -8187,6 +8187,97 @@ namespace RTE {
 		return 0;
 	}
 
+	/// A world joiner answers every seat as the round does from its image's tick on. A hold and a return the round took before the
+	/// image are in the image's seat state, never in the tail after it; a hold the replay takes after the joiner's own round was
+	/// prepared reaches that round at the activation.
+	int TestAWorldImageCarriesItsSeatBaseline() {
+		std::string error;
+		NetMatchConfig world = NetMatchConfigUtil::MakeDefault(0x9B10);
+		world.peerCount = 4;
+		world.persistentWorld = true;
+		world.players = {{1, 0, false, "Host"}, {2, 1, false, "Two"}, {3, 2, false, "Three"}, {4, 3, false, "Four"}};
+		const auto roundConfig = [&](uint8_t local, uint64_t start) {
+			NetLockstepConfig config;
+			config.sessionId = world.sessionId; config.roundId = 77; config.matchConfig = world; config.peerCount = 4;
+			config.localPeerId = local; config.authorityPeerId = 1; config.startFrame = start; config.migrationGeneration = 3;
+			return config;
+		};
+		const auto play = [&](NetLockstepCoordinator& coordinator, uint64_t from, uint64_t through, const std::map<uint64_t, std::vector<NetGameCommand>>& commands) {
+			for (uint64_t frame = from; frame <= through; ++frame) {
+				const auto found = commands.find(frame);
+				if (!coordinator.QueueReplayFrame(frame, {}, found == commands.end() ? std::vector<NetGameCommand>{} : found->second, &error)) return false;
+				coordinator.Tick(frame);
+				NetLockstepReadyFrame ready;
+				if (!coordinator.PopReadyFrame(ready) || ready.frame != frame) {
+					error = "frame " + std::to_string(frame) + " did not commit: " + error;
+					return false;
+				}
+			}
+			return true;
+		};
+		// Seat 2 is held at 50 and back at 62; seat 3 is held at 45, back at 55 with its neutral gap running to 62, and held again at 70.
+		const std::map<uint64_t, std::vector<NetGameCommand>> round = {
+			{45, {NetGameCommand{1, NetGameSeatHold{3, 3, 5, 1, 45}}}},
+			{50, {NetGameCommand{1, NetGameSeatHold{2, 3, 7, 1, 50}}}},
+			{55, {NetGameCommand{1, NetGameSeatReclaim{3, 3, 8, 2, 55, 4, 62}}}},
+			{62, {NetGameCommand{1, NetGameSeatReclaim{2, 3, 9, 2, 62, 4, 64}}}},
+			{70, {NetGameCommand{1, NetGameSeatHold{3, 3, 10, 2, 70}}}},
+		};
+		const uint64_t imageTick = 60, prepared = 65, activation = 75;
+		LoopbackTransport hostWire;
+		NetLockstepCoordinator host;
+		if (!host.StartReplay(hostWire, roundConfig(1, 41), &error) || !play(host, 41, imageTick, round)) return Fail("seat-baseline round: " + error);
+
+		// The host's image of tick 60, offered and taken as a joiner on seat 4 takes it.
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId; image.boot = 1; image.round = 77; image.tick = imageTick;
+		image.bytes = 32; image.digest = "abc"; image.path = "Worlds/image.bin"; image.sideState = "00";
+		NetMatchService::CaptureWorldImageSeats(host, imageTick, image);
+		NetWorldCheckpointImage offered;
+		NetWorldCatchUpClient catchUp;
+		if (!DecodeWorldJoinOffer(EncodeWorldJoinOffer(image), offered, &error) || !NetMatchService::AdoptWorldImageSeats(offered, world.peerCount, catchUp, &error))
+			return Fail("seat-baseline offer: " + error);
+		NetLockstepConfig replayConfig = roundConfig(4, imageTick + 1);
+		NetMatchService::SeedWorldReplaySeats(catchUp, replayConfig);
+		LoopbackTransport replayWire;
+		NetLockstepCoordinator replay;
+		if (!replay.StartReplay(replayWire, replayConfig, &error)) return Fail("seat-baseline replay: " + error);
+
+		std::vector<std::string> differences;
+		const uint64_t first = imageTick + 1;
+		const auto compare = [&](const char* who, const NetLockstepCoordinator& joiner, uint64_t frame) {
+			const int hostHeld2 = host.IsSeatUnderAI(2, frame), joinerHeld2 = joiner.IsSeatUnderAI(2, frame);
+			const int hostHeld3 = host.IsSeatUnderAI(3, frame), joinerHeld3 = joiner.IsSeatUnderAI(3, frame);
+			const int hostGap3 = host.IsSeatReclaimGap(3, frame), joinerGap3 = joiner.IsSeatReclaimGap(3, frame);
+			const int hostOwner = host.ResolveActorOwner(1001, 1, false, frame), joinerOwner = joiner.ResolveActorOwner(1001, 1, false, frame);
+			std::cout << "[net-world-seat-baseline-selftest] host IsSeatUnderAI(2," << frame << ")=" << hostHeld2 << " IsSeatUnderAI(3)=" << hostHeld3
+			          << " reclaim_gap(3)=" << hostGap3 << " team1_actor_owner=" << hostOwner << std::endl;
+			std::cout << "[net-world-seat-baseline-selftest] " << who << " IsSeatUnderAI(2," << frame << ")=" << joinerHeld2 << " IsSeatUnderAI(3)=" << joinerHeld3
+			          << " reclaim_gap(3)=" << joinerGap3 << " team1_actor_owner=" << joinerOwner << std::endl;
+			if (hostHeld2 != joinerHeld2 || hostHeld3 != joinerHeld3 || hostGap3 != joinerGap3 || hostOwner != joinerOwner)
+				differences.push_back(std::string(who) + " at " + std::to_string(frame));
+		};
+		compare("joiner", replay, first);
+
+		// The joiner's round is prepared at 65 with the seats the replay holds then; the replay goes on to the frame before E.
+		if (!play(replay, first, prepared, round) || !play(host, first, activation - 1, round)) return Fail("seat-baseline tail: " + error);
+		NetLockstepConfig liveConfig = roundConfig(4, activation);
+		for (const auto& [peer, hold]: replay.HeldTransactions()) if (peer != 4 && hold.cutoffFrame <= activation) liveConfig.initialSeatHolds[peer] = hold;
+		for (const auto& [peer, frame]: replay.GetPeerLeaveFrames()) if (peer != 4 && !liveConfig.initialSeatHolds.contains(peer) && frame <= activation) liveConfig.initialPeerLeaves[peer] = frame;
+		LoopbackTransport liveWire;
+		NetLockstepCoordinator live;
+		if (!live.StartReplay(liveWire, liveConfig, &error) || !play(replay, prepared + 1, activation - 1, round)) return Fail("seat-baseline live round: " + error);
+		NetMatchService::AdoptWorldReplaySeats(live, replay, activation);
+		compare("live", live, activation);
+		if (!differences.empty()) {
+			std::string where;
+			for (const std::string& difference: differences) where += (where.empty() ? "" : ", ") + difference;
+			return Fail("world-joiner-disagrees-on-a-held-seat: the joiner answers a seat otherwise than the round does (" + where + ")");
+		}
+		std::cout << "[net-world-seat-baseline-selftest] PASS the joiner answers every seat as the round does at " << first << " and at its activation " << activation << std::endl;
+		return 0;
+	}
+
 	int RunNamed(const char* name) {
 		if (std::strcmp(name, "-net-world-activation-trail-selftest") == 0) return TestActivationFollowsTheMeasuredTrail();
 		if (std::strcmp(name, "-net-world-second-round-selftest") == 0) {
@@ -8396,6 +8487,10 @@ namespace RTE {
 		if (std::strcmp(name, "promotion") == 0 || std::strcmp(name, "-net-world-promotion-selftest") == 0) {
 			s_FailTag = "net-world-promotion-selftest";
 			return TestFreedSlotPromotesTheOldestSpectator();
+		}
+		if (std::strcmp(name, "seat-baseline") == 0 || std::strcmp(name, "-net-world-seat-baseline-selftest") == 0) {
+			s_FailTag = "net-world-seat-baseline-selftest";
+			return TestAWorldImageCarriesItsSeatBaseline();
 		}
 		if (std::strcmp(name, "clean-leave") == 0 || std::strcmp(name, "-net-world-clean-leave-selftest") == 0) {
 			s_FailTag = "net-world-clean-leave-selftest";
@@ -8718,6 +8813,7 @@ namespace RTE {
 		if (const int result = TestActivationFollowsTheMeasuredTrail(); result != 0) return result;
 		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatProvesItsHeadroom(); result != 0) return result;
+		if (const int result = TestAWorldImageCarriesItsSeatBaseline(); result != 0) return result;
 		if (const int result = TestALobbySeatsNoPeerPastItsRoster(); result != 0) return result;
 		if (const int result = TestAReturnerKeepingPaceAtTheHeadIsActivated(); result != 0) return result;
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;

@@ -120,6 +120,7 @@ RED_PROMOTION_SECOND_WATCHER = "promotion-moved-the-second-watcher"
 RED_PROMOTION_DECLINE = "promotion-ignored-a-decline"
 RED_PROMOTION_LOBBY_ID = "promotion-kept-the-watcher-lobby-id"
 RED_PROMOTION_BEHIND_INPUT = "promotion-announced-behind-the-sent-input"
+RED_SEAT_BASELINE = "world-joiner-disagrees-on-a-held-seat"
 RED_CLEAN_LEAVE_WRONG_SEAT = "clean-leave-released-the-wrong-seat"
 RED_CLEAN_LEAVE_LIVE_MEMBER = "clean-leave-released-a-live-member"
 RED_CLEAN_LEAVE_MISSED = "clean-leave-was-not-detected"
@@ -492,6 +493,12 @@ CASES = (
             RED_PROMOTION_BEHIND_INPUT,
         ),
         "pass_token": "[net-world-promotion-selftest] PASS",
+    },
+    {
+        "name": "world-image-carries-its-seat-baseline",
+        "argv": ["-net-world-seat-baseline-selftest"],
+        "red": RED_SEAT_BASELINE,
+        "pass_token": "[net-world-seat-baseline-selftest] PASS",
     },
     {
         "name": "clean-leave-releases-only-the-seat-that-left",

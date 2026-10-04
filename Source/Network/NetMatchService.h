@@ -876,6 +876,15 @@ namespace RTE {
 		/// image that is not valid, so nothing is published for it.
 		static NetWorldCheckpointImage WorldImageFromAutosave(const ActivityMan::CompletedAutosave& entry, const NetWorldIdentity& identity,
 		                                                     const NetMatchConfig& matchConfig, uint64_t membershipRevision, double captureMs);
+		/// The seat state a world image's joiner starts from, read at the image's tick: the holds and returns that govern the frames
+		/// after it, the departures and the authority. Every later transition rides the tail.
+		static void CaptureWorldImageSeats(const NetLockstepCoordinator& coordinator, uint64_t tick, NetWorldCheckpointImage& image);
+		/// Takes a received world image's seat state into the catch-up it starts; refuses a seat outside the round.
+		static bool AdoptWorldImageSeats(const NetWorldCheckpointImage& image, uint8_t peerCount, NetWorldCatchUpClient& catchUp, std::string* error = nullptr);
+		/// Seeds a world tail's replay with the seats its image held, so the replay answers every seat as the round did.
+		static void SeedWorldReplaySeats(const NetWorldCatchUpClient& catchUp, NetLockstepConfig& config);
+		/// The world's own round takes the seat transitions its replay made through the frame before the activation.
+		static void AdoptWorldReplaySeats(NetLockstepCoordinator& live, const NetLockstepCoordinator& replay, uint64_t activationTick);
 		/// §11: reads the recovery record so the landing screen can offer a rejoin after a relaunch, or
 		/// say exactly why it cannot. Read-only and safe to call repeatedly.
 		void ScanStoredTicket();
