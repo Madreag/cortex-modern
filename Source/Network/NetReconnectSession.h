@@ -660,6 +660,11 @@ namespace RTE {
 		/// A world's free gameplay slot: not the host's, not committed, not closed and not already being
 		/// offered. Unlike a match seat it may have been held before - a clean leave gives it back.
 		SeatState* FindFreeWorldSeat();
+		/// The held seat a ticketless joiner owns by its proven participant identity, or by name when nothing proves it either
+		/// way; only the refusal's wording rides on it, never the seat.
+		const SeatState* HeldSeatOwnedBy(NetPeerId connection, const std::string& displayName) const;
+		/// The refusal of a ticketless joiner the host cannot seat, naming why: its own seat held, a world's slots held, or full.
+		NetJoinRejected RefuseUnseatable(NetPeerId connection, const std::string& displayName, NetRejectReason reason, const std::string& summary, const std::string& key) const;
 		Provisional* FindProvisionalByTxId(const NetAuthBytes16& txId);
 		bool BindIncarnation(SeatState& seat, NetPeerId connection);
 		void ReleaseProvisional(uint16_t stableSeat);

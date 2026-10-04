@@ -181,4 +181,13 @@ namespace RTE {
 		std::string m_StatusText;
 	};
 
+	/// What a joiner the host refused can answer from the landing (§9b): apply to substitute in a running match, apply for its own
+	/// held seat, or, in a world whose slots are all held for their players, apply for one or wait for one to open.
+	enum class NetJoinRefusalOffer : uint8_t { None, Substitute, OwnSeat, SlotsHeld };
+	/// The offer the host's refusal key names.
+	NetJoinRefusalOffer NetJoinRefusalOfferOf(const std::string& mismatchKey);
+	/// The landing's line for the offer, and its Apply button's caption.
+	const char* NetJoinRefusalOfferLine(NetJoinRefusalOffer offer);
+	const char* NetJoinRefusalApplyCaption(NetJoinRefusalOffer offer);
+
 } // namespace RTE
