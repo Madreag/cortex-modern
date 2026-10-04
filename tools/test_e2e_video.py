@@ -842,6 +842,17 @@ def check_ffmpeg_lookup(results, scratch):
                   line.startswith(f"[e2e-video] ffmpeg is absent on {driver.box_name()}") and str(tools) in line, line)
         missing = driver.encode(None, scratch / "video", 30, scratch / "absent.mp4")
         ok &= row(results, "ffmpeg/encode-names-the-box", f"ffmpeg is absent on {driver.box_name()}" in missing.get("reason", ""), str(missing))
+        # A scene wider than the box's declared engine cap is refused before any engine starts, naming both numbers.
+        spectator = driver.load_scenario("world-spectator-promotion")
+        (inventory / "boxes.json").write_text(json.dumps({"boxes": [{"name": "UNIT", "hostname": driver.box_name(), "max_engines": 4,
+                                                                      "memory": {"max_engines": 1}}]}), encoding="utf-8")
+        refused = driver.engine_cap_findings(spectator)
+        ok &= row(results, "engine-cap/refuses-a-wider-scene", len(refused) == 1 and refused[0]["need"] == 5 and refused[0]["cap"] == 1 and
+                  f"needs 5 engines at once on {driver.box_name()}; its declared cap is 1 (box manifest memory.max_engines)" in refused[0]["reason"],
+                  str(refused))
+        ok &= row(results, "engine-cap/admits-a-scene-that-fits", driver.engine_cap_findings(driver.load_scenario("sp-smoke")) == [])
+        (inventory / "boxes.json").write_text(json.dumps({"boxes": []}), encoding="utf-8")
+        ok &= row(results, "engine-cap/undeclared-cap-refuses-nothing", driver.engine_cap_findings(spectator) == [])
     return ok
 
 

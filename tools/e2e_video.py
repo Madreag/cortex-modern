@@ -215,16 +215,37 @@ def box_name():
     return os.environ.get("COMPUTERNAME") or platform.node()
 
 
-def declared_tool_dirs():
-    """The directories this box's manifest entry puts ahead of PATH for its runs (a box's own copy of ffmpeg lives there)."""
+def box_entry():
+    """This box's entry in the inventory copy's box manifest; empty when the manifest or the entry is absent."""
     from inventory_location import inventory_dir
     try:
         boxes = json.loads((inventory_dir() / "boxes.json").read_text(encoding="utf-8-sig")).get("boxes", [])
     except (OSError, ValueError, AttributeError):
-        return []
+        return {}
     me = box_name().casefold()
-    entry = next((box for box in boxes if me in {str(box.get(key) or "").casefold() for key in ("hostname", "computer_name", "name")}), {})
-    return [Path(directory) for directory in entry.get("path_prepend") or []]
+    return next((box for box in boxes if me in {str(box.get(key) or "").casefold() for key in ("hostname", "computer_name", "name")}), {})
+
+
+def declared_tool_dirs():
+    """The directories this box's manifest entry puts ahead of PATH for its runs (a box's own copy of ffmpeg lives there)."""
+    return [Path(directory) for directory in box_entry().get("path_prepend") or []]
+
+
+def engine_cap_findings(scenario):
+    """A scene that needs more engines at once than this box's manifest allows is refused before any engine starts."""
+    entry = box_entry()
+    caps = [(entry.get("max_engines"), "max_engines"), ((entry.get("memory") or {}).get("max_engines"), "memory.max_engines"),
+            ((entry.get("runner") or {}).get("max_engines"), "runner.max_engines")]
+    declared = [(int(value), field) for value, field in caps if isinstance(value, (int, float))]
+    if not declared:
+        return []
+    cap, field = min(declared)
+    runs = scenario.get("runs") or [{"peers": scenario.get("peers", [])}]
+    need = max(len(run.get("peers", [])) for run in runs)
+    if need <= cap:
+        return []
+    return [{"class": "harness", "reason": f"{scenario['name']} needs {need} engines at once on {box_name()}; "
+                                       f"its declared cap is {cap} (box manifest {field})", "need": need, "cap": cap}]
 
 
 def ffmpeg_choice():
@@ -2766,12 +2787,16 @@ def main():
     from relay_private import public_value
     capture=public_value(capture,capture_book.values if scenario.get('relay_secret_scan') else ())
     missing = requirement_findings(options.repo, scenario)
+    if not options.host_box and not scenario.get("cross_machine"):
+        missing += engine_cap_findings(scenario)
     if missing:
         capture["requires_findings"] = missing
         write_json(out / "capture.json", capture)
+        classes = {row.get("class", "data") for row in missing}
         write_json(out / "review.json", {"schema": 1, "scenario": scenario["name"], "verdict": "requires-blocked",
                    "checklist": [{**item, "frames": None, "probe": "not-run", "state": "requires-blocked",
-                                  "finding": {"class": "data", "reason": "; ".join(row["reason"] for row in missing), "evidence": missing}}
+                                  "finding": {"class": classes.pop() if len(classes) == 1 else "data",
+                                              "reason": "; ".join(row["reason"] for row in missing), "evidence": missing}}
                                  for item in scenario["checklist"]]})
         scenario_manifest(capture, out, time.monotonic() - started)
         print(f"{scenario['name']}: requires-blocked: {missing}")
