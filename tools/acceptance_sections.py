@@ -28,9 +28,11 @@ def freeze_helpers(inventory, root):
         target=destination/relative;target.parent.mkdir(parents=True,exist_ok=True)
         content=source.read_bytes();target.write_bytes(content)
         receipts[relative.as_posix()]=hashlib.sha256(content).hexdigest()
-    gate=inventory.parent/'build_gate.ps1'
-    shutil.copy2(gate,root/'build_gate.ps1')
-    receipts['../build_gate.ps1']=hashlib.sha256(gate.read_bytes()).hexdigest()
+    # The lead scripts beside the inventory keep that place in the frozen copy (the tools' suites test the hotspot script).
+    for name in ('build_gate.ps1','hotspot_relay.sh'):
+        script=inventory.parent/name
+        shutil.copy2(script,root/name)
+        receipts['../'+name]=hashlib.sha256(script.read_bytes()).hexdigest()
     collection.write(root/'frozen-helpers.json',dict(source=str(inventory),files=receipts))
     collection.write(root/'HELPERS-SHA256.json',{key:value for key,value in receipts.items() if '/' not in key and key.endswith('.py')})
     return receipts
