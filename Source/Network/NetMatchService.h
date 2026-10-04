@@ -1368,6 +1368,7 @@ namespace RTE {
 		friend bool TestCapturedWorldIdentityKeepsTheWorldStamp(std::string* error);
 		friend bool TestServiceWorldJoinAdoptsConfig(std::string* error);
 		friend bool TestALateCaptureVerdictLeavesTheNextJoinItsCapture(std::string* error);
+		friend bool TestAnEndedWorldLandsInsteadOfRematching(std::string* error);
 		friend bool TestChatSendRefusedOutsideCarry(std::string* error);
 		friend bool TestServiceReportCarriesActivityPreset(std::string* error);
 		friend bool RowRestartKey(NetMatchService& service, const std::filesystem::path& scratch, std::array<uint8_t, 32>& key, std::string* error);

@@ -812,6 +812,16 @@ static std::string ResyncSaveName() {
 		bool departedHost = false;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			// A persistent world never rematches: its end is the world closing, and every seat lands on it as on its host leaving.
+			const NetMatchConfig& round = m_Runner ? m_Runner->GetMatchConfig() : m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig;
+			if (m_State == NetMatchServiceState::Completed && round.persistentWorld) {
+				m_State = NetMatchServiceState::Failed;
+				m_ErrorText = m_IsHost ? "The world is closed" : "The host left the match";
+				m_StatusText = m_ErrorText;
+				if (!m_IsHost) NoteHostEndedTheMatchLocked();
+				if (error) *error = m_ErrorText;
+				return false;
+			}
 			if (m_State != NetMatchServiceState::Completed || !ActiveWireLocked() || !m_Session || !m_Runner) {
 				if (error) *error = "no completed match to rematch";
 				return false;

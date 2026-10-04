@@ -6754,6 +6754,25 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestAnEndedWorldLandsInsteadOfRematching(std::string* error) {
+		for (const bool host: {true, false}) {
+			NetMatchService service;
+			service.m_IsHost = host;
+			service.m_State = NetMatchServiceState::Completed;
+			service.m_AdoptedMatchConfig = NetMatchConfigUtil::MakeDefault(42);
+			service.m_AdoptedMatchConfig.persistentWorld = true;
+			std::string refusal;
+			const bool rematched = service.ReturnToLobby(&refusal);
+			const std::string landed = host ? "The world is closed" : "The host left the match";
+			if (rematched || service.GetState() != NetMatchServiceState::Failed || service.GetErrorText() != landed || refusal != landed) {
+				*error = std::string(host ? "the host" : "a seat") + " of an ended world was offered a rematch it never gets: state=" +
+				         std::to_string(static_cast<int>(service.GetState())) + " text='" + service.GetErrorText() + "' refusal='" + refusal + "'";
+				return false;
+			}
+		}
+		return true;
+	}
+
 	bool TestServiceWorldJoinAdoptsConfig(std::string* error) {
 		for (const bool wrongStartHash : {false, true}) {
 			NetMatchService service;
@@ -16489,6 +16508,7 @@ namespace RTE {
 		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
 		if (!TestTwoThreadsSendOnOneTransport(&error)) return fail(error);
 		if (!TestALateCaptureVerdictLeavesTheNextJoinItsCapture(&error)) return fail(error);
+		if (!TestAnEndedWorldLandsInsteadOfRematching(&error)) return fail(error);
 		if (!TestServiceWorldJoinAdoptsConfig(&error)) return fail(error);
 		if (!TestRemovedWoundReleasesItsRadiusCache(&error)) return fail(error);
 		if (!TestLobbyStartReturnsBeforeHashingModules(&error)) return fail(error);
