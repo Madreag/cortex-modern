@@ -38,6 +38,14 @@
       "equals": {
         "visible": true
       },
+      "text_contains": "Match repair started"
+    },
+    {
+      "op": "wait",
+      "control": "LabelNetMatchToastNewest",
+      "equals": {
+        "visible": true
+      },
       "text_contains": "Match resynced (healed at frame "
     },
     {
