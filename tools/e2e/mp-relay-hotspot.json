@@ -178,6 +178,32 @@
           "menu_choice": "Relay only"
         }
       ]
+    },
+    {
+      "name": "g-relay-only-public",
+      "relay": "automatic",
+      "provider": "cloudflare",
+      "directory": "public",
+      "host_relay_mode": "Directory",
+      "expect_routes": {
+        "client": "relay",
+        "host": "relay"
+      },
+      "timeout_s": 600,
+      "peers": [
+        {
+          "name": "host",
+          "box": "edith",
+          "connection": "RelayOnly"
+        },
+        {
+          "name": "client",
+          "box": "ally",
+          "connection": "RelayOnly",
+          "hotspot": true,
+          "tailscale_down": true
+        }
+      ]
     }
   ],
   "checklist": [
@@ -365,6 +391,38 @@
       "run": "f-relay-by-hand",
       "check": "hashes_equal",
       "what": "Both agree on every compared frame."
+    },
+    {
+      "id": "g-tunnel",
+      "run": "g-relay-only-public",
+      "peer": "client",
+      "check": "tunnel:client",
+      "what": "Tailscale was down on the Ally for its whole match."
+    },
+    {
+      "id": "g-listed",
+      "run": "g-relay-only-public",
+      "check": "listing",
+      "what": "The public directory gave the session a Cloudflare relay."
+    },
+    {
+      "id": "g-routes",
+      "run": "g-relay-only-public",
+      "peer": "client",
+      "check": "route:client",
+      "what": "With Relay only on both players the hotspot player's route is the relay for the whole match."
+    },
+    {
+      "id": "g-joined",
+      "run": "g-relay-only-public",
+      "check": "hashes_equal",
+      "what": "Both players agree on every compared frame."
+    },
+    {
+      "id": "g-feel",
+      "run": "g-relay-only-public",
+      "check": "feel_bars",
+      "what": "Both peers hold the feel driver's gates."
     }
   ]
 }
