@@ -387,6 +387,12 @@ def box_load(own_pids=()):
     return rows
 
 
+def describe_load(rows):
+    """The processes a load check saw, by name, pid and path, so a refusal names what it met."""
+    return '; '.join(f"{row.get('Name')} pid {row.get('ProcessId')}" + (f" at {row['ExecutablePath']}" if row.get('ExecutablePath') else '')
+                     for row in rows) or 'nothing'
+
+
 def digest_file(path):
     digest = hashlib.sha256()
     with Path(path).open('rb') as stream:

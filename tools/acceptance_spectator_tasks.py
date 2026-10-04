@@ -216,8 +216,8 @@ def run_payload(path, payload=None):
         deadline, session, next_status = time.monotonic()+640, None, 0
         def guard_owned():
             own_pids = [cross.engine_pid(run) for peer,run in runs.items() if peer not in complete]
-            if cross.box_load(own_pids):
-                raise RuntimeError('another native workload appeared during the spectator row')
+            if load := cross.box_load(own_pids):
+                raise RuntimeError('another native workload appeared during the spectator row: '+cross.describe_load(load))
             # The frozen local guard intentionally rejects any existing engine
             # at this executable. For the second declared peer, retain every
             # other guard after explicitly accounting for our owned processes.

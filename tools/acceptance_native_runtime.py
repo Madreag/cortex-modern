@@ -165,9 +165,9 @@ def run_payload(path):
     next_sample, next_load, verdict = 0, 0, 0
     def require_quiet(own_pids=()):
         load = box_load(own_pids)
-        if blocking_load(box, load):
+        if blocking := blocking_load(box, load):
             write_json(root/'foreign-load.json', dict(own_pids=list(own_pids), load=load))
-            raise RuntimeError('another native workload appeared under this row reservation')
+            raise RuntimeError('another native workload appeared under this row reservation: '+cross.describe_load(blocking))
         if load:
             write_json(root/'admitted-compile-load.json', dict(authorization='LEAD-NOTES NOTE 14', load=load))
     try:

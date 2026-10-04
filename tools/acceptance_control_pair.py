@@ -109,8 +109,8 @@ def validate_box(box, source_sha, exe_sha256):
 def guard_pair(box, runs, completed):
     import cross_peers as cross
     own = [cross.engine_pid(run) for who, run in runs.items() if who not in completed]
-    if cross.box_load([pid for pid in own if pid]):
-        raise RuntimeError('foreign native workload appeared during the control pair')
+    if load := cross.box_load([pid for pid in own if pid]):
+        raise RuntimeError('foreign native workload appeared during the control pair: '+cross.describe_load(load))
     if not cross.owns_reservation(box):
         raise RuntimeError('control pair lost its physical reservation')
     if reason := cross.inventory_guard():
