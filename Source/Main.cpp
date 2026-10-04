@@ -1462,6 +1462,56 @@ static std::string PaceCensusSinceLast() {
 	last = now;
 	return out.str();
 }
+
+// One memory census line: its counts are read on the sim thread between ticks and each part's cost goes on its line; the census worker sums
+// the process heaps and prints it.
+static void PostMemoryCensus(uint64_t simTick) {
+	std::string costs;
+	const auto timed = [&costs](const char* name, const auto& part) {
+		const HarnessCost::SimulationSpan span;
+		std::ostringstream text;
+		text << part();
+		const int64_t ns = span.Stop();
+		HarnessCost::Charge(HarnessCost::Census, ns);
+		costs += std::string(costs.empty() ? "" : ",") + name + ":" + std::to_string(ns / 1000);
+		return text.str();
+	};
+	const std::string lua = timed("lua", [] { return g_LuaMan.GetTotalHeapBytes(); });
+	// The capture keeps its last image for the next one to share; that image is the full-state instrument's own memory.
+	const std::string cow = timed("cow", [] { return CheckpointCow::Get().Cache().Census() + " last_image_mb=" + std::to_string(CheckpointCow::Get().LastImageBytes() >> 20) + " " + CheckpointCow::Get().PartCensus(); });
+	const std::string movable = timed("movable", [] { return g_MovableMan.Census(); });
+	const std::string atoms = timed("atoms", [] { return Atom::SampledConstructionStacks(); });
+	const std::string audio = timed("audio", [] { return g_AudioMan.Census(); });
+	const std::string runner = timed("runner", [] { return ScenarioRunner::MemoryCensus(); });
+	const std::string console = timed("console", [] { return g_ConsoleMan.LogCensus(); });
+	const std::string pace = timed("pace", [] { return PaceCensusSinceLast(); });
+	const std::string world = timed("world", [] { return g_NetMatchService.MemoryCensus(); });
+	std::ostringstream rest;
+	// Rounds restart their ticks, so the census names its own instant for a slope across a rematching run.
+	rest << " uptime_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - s_CensusProcessStart).count();
+	rest << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua
+	     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << cow
+	     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << ' ' << world << pace;
+	CensusWorker::Get().Post([simTick, rest = std::move(rest).str(), costs = std::move(costs)]() mutable {
+		// The worker's whole job is the census's cost too, charged to the frame it ends in.
+		const auto began = std::chrono::steady_clock::now();
+		const std::string heap = ProcessHeapCensus(costs);
+		System::PrintDiagnosticLine("[mem-census] tick=" + std::to_string(simTick) + heap + rest + " census_us=" + costs);
+		HarnessCost::Charge(HarnessCost::Census, std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - began).count());
+	});
+}
+
+// The census on the process's own clock: a line in every slot of this many seconds from its start, before its first tick and through
+// its lobby, loads and catch-up, never more than one a slot; 0 = never.
+static uint64_t s_memoryCensusSeconds = 0;
+static void MemoryCensusByUptime() {
+	if (s_memoryCensusSeconds == 0) return;
+	static uint64_t s_nextSlot = 0;
+	const uint64_t slot = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - s_CensusProcessStart).count()) / s_memoryCensusSeconds;
+	if (slot < s_nextSlot) return;
+	s_nextSlot = slot + 1;
+	PostMemoryCensus(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+}
 // Rollback fidelity probe: capture at tick T, record K hashed ticks, restore + rewind,
 // re-run the SAME ticks, compare. Green = the restore layer reproduces the sim byte-exactly.
 static long long s_rbProbeAtTick = 0;
@@ -1975,6 +2025,12 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (currentArg == "-memory-census-histogram") {
 			s_memoryCensusHistogram = true;
 			++i;
+			continue;
+		}
+		if (currentArg == "-memory-census-seconds") {
+			if (lastArg) return false;
+			s_memoryCensusSeconds = std::strtoull(argValue[i + 1], nullptr, 10);
+			i += 2;
 			continue;
 		}
 		if (currentArg == "-memory-census-ticks") {
@@ -3988,6 +4044,7 @@ void RunMenuLoop() {
 
 		g_UInputMan.Update();
 		g_TimerMan.Update();
+		MemoryCensusByUptime();
 		g_TimerMan.UpdateSim();
 		g_AudioMan.Update();
 		g_MusicMan.Update();
@@ -7198,6 +7255,7 @@ void RunGameLoop() {
 		frameHeadWindow.reset();
 
 		g_TimerMan.Update();
+		MemoryCensusByUptime();
 
 		if (!g_ActivityMan.ActivityRunning()) {
 			LocalPrediction::Clear();
@@ -8039,42 +8097,7 @@ void RunGameLoop() {
 				}
 				if (lever.fullscreen && tick + 60 >= lever.from && tick <= lever.to + 60 && (tick + 60 - lever.from) % 60 == 0) WriteTestWindowState(tick);
 			}
-			if (s_memoryCensusTicks != 0 && simTick % s_memoryCensusTicks == 0) {
-				// The census's counts are read on the sim thread and each part's cost goes on its line; the census worker sums the process heaps and prints it.
-				std::string costs;
-				const auto timed = [&costs](const char* name, const auto& part) {
-					const HarnessCost::SimulationSpan span;
-					std::ostringstream text;
-					text << part();
-					const int64_t ns = span.Stop();
-					HarnessCost::Charge(HarnessCost::Census, ns);
-					costs += std::string(costs.empty() ? "" : ",") + name + ":" + std::to_string(ns / 1000);
-					return text.str();
-				};
-				const std::string lua = timed("lua", [] { return g_LuaMan.GetTotalHeapBytes(); });
-				// The capture keeps its last image for the next one to share; that image is the full-state instrument's own memory.
-				const std::string cow = timed("cow", [] { return CheckpointCow::Get().Cache().Census() + " last_image_mb=" + std::to_string(CheckpointCow::Get().LastImageBytes() >> 20) + " " + CheckpointCow::Get().PartCensus(); });
-				const std::string movable = timed("movable", [] { return g_MovableMan.Census(); });
-				const std::string atoms = timed("atoms", [] { return Atom::SampledConstructionStacks(); });
-				const std::string audio = timed("audio", [] { return g_AudioMan.Census(); });
-				const std::string runner = timed("runner", [] { return ScenarioRunner::MemoryCensus(); });
-				const std::string console = timed("console", [] { return g_ConsoleMan.LogCensus(); });
-				const std::string pace = timed("pace", [] { return PaceCensusSinceLast(); });
-				const std::string world = timed("world", [] { return g_NetMatchService.MemoryCensus(); });
-				std::ostringstream rest;
-				// Rounds restart their ticks, so the census names its own instant for a slope across a rematching run.
-				rest << " uptime_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - s_CensusProcessStart).count();
-				rest << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua
-				     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << cow
-				     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << ' ' << world << pace;
-				CensusWorker::Get().Post([simTick, rest = std::move(rest).str(), costs = std::move(costs)]() mutable {
-					// The worker's whole job is the census's cost too, charged to the frame it ends in.
-					const auto began = std::chrono::steady_clock::now();
-					const std::string heap = ProcessHeapCensus(costs);
-					System::PrintDiagnosticLine("[mem-census] tick=" + std::to_string(simTick) + heap + rest + " census_us=" + costs);
-					HarnessCost::Charge(HarnessCost::Census, std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - began).count());
-				});
-			}
+			if (s_memoryCensusTicks != 0 && simTick % s_memoryCensusTicks == 0) PostMemoryCensus(simTick);
 			if (s_scriptedLeaveDue) {
 				s_scriptedLeaveDue = false;
 				{
@@ -10974,7 +10997,7 @@ int main(int argc, char** argv) {
 		HarnessCost::SetEnabled(HarnessCost::SimDump, dump && std::sscanf(dump, "%llu:%llu", &dumpFrom, &dumpTo) == 2 && dumpTo >= dumpFrom);
 		HarnessCost::SetEnabled(HarnessCost::TickEnd, !s_netLiveTickHashPath.empty());
 		HarnessCost::SetEnabled(HarnessCost::FullState, s_netFullStateEvery != 0);
-		HarnessCost::SetEnabled(HarnessCost::Census, s_memoryCensusTicks != 0);
+		HarnessCost::SetEnabled(HarnessCost::Census, s_memoryCensusTicks != 0 || s_memoryCensusSeconds != 0);
 		// A preview's steps are recorded only for the feel recorder or the fidelity probe; the player's own prediction setting arms neither.
 		HarnessCost::SetEnabled(HarnessCost::PreviewFidelity, armed("CCCP_TEST_PREVIEW_FIDELITY") || FrameMan::FeelRecordingEnabled());
 		HarnessCost::SetEnabled(HarnessCost::ScreenWatches, armed("CCCP_TEST_SCREEN_WATCHES") || !s_menuScriptPath.empty() || (netUiProbeScript != nullptr && *netUiProbeScript != '\0'));
