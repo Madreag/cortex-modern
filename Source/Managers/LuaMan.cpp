@@ -102,6 +102,7 @@ extern "C" {
 #include <unordered_map>
 #include <random>
 #include <unordered_set>
+#include <utility>
 
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyLua.hpp"
@@ -13099,12 +13100,29 @@ namespace {
 		return 0;
 	}
 
-	// One copy of a script's instance: what it has copied so far and the coroutines and closures it copies.
+	// One copy of scripts' instances: what it has copied so far and the coroutines and closures it copies.
 	struct PreviewCloneContext {
 		int seen;
 		std::vector<std::string>& problems;
 		LuaThreadCodec::PreviewCopier* copier = nullptr;
+		int depth = 0;
+		bool tooDeep = false;
 	};
+
+	// Past this depth a script's graph is refused rather than walked: each level holds stack the walk cannot spare.
+	constexpr int c_MaxPreviewCopyDepth = 500;
+
+	// A state's copy and remap tables while a window copies its instances; each instance shares them with the others.
+	const char* const c_PreviewCopySeenKey = "cccp.preview_copy_seen";
+	const char* const c_PreviewRemapSeenKey = "cccp.preview_remap_seen";
+
+	struct PreviewCopyBatch {
+		std::unique_ptr<LuaThreadCodec::PreviewCopier> copier;
+	};
+	bool s_PreviewCopyBatchOpen = false;
+	std::unordered_map<LuaStateWrapper*, PreviewCopyBatch> s_PreviewCopyBatches;
+	std::unordered_set<LuaStateWrapper*> s_PreviewRemapStates;
+	int s_PreviewRemapDepth = 0;
 
 	void PushPreviewClone(lua_State* L, int src, int seen, PreviewCloneContext& context);
 
@@ -13114,8 +13132,41 @@ namespace {
 		lua_replace(L, -2);
 	}
 
+	// Whether the copy, or the remap that follows it, gives this userdata another value: a Vector or a live sound is
+	// copied, and an object handle names the window's view of its object.
+	bool PreviewCopyReplaces(lua_State* L, int index, void*) {
+		const auto* object = luabind::detail::is_class_object(L, AbsoluteLuaIndex(L, index));
+		if (!object || !object->crep()) {
+			return false;
+		}
+		const char* className = object->crep()->name();
+		if (std::strcmp(className, "Vector") == 0) {
+			return true;
+		}
+		if (std::strcmp(className, "SoundContainer") == 0) {
+			return ScriptGraphNativeAlive(L, object);
+		}
+		return ClassDerivesFrom(object->crep(), "MovableObject");
+	}
+
+	void PushPreviewCloneOf(lua_State* L, int src, int seen, PreviewCloneContext& context);
+
 	void PushPreviewClone(lua_State* L, int src, int seen, PreviewCloneContext& context) {
 		src = AbsoluteLuaIndex(L, src);
+		if (context.depth >= c_MaxPreviewCopyDepth || !lua_checkstack(L, 8)) {
+			if (!context.tooDeep) {
+				context.tooDeep = true;
+				context.problems.emplace_back("preview copy: the script's graph is too deep to copy");
+			}
+			lua_pushvalue(L, src);
+			return;
+		}
+		++context.depth;
+		PushPreviewCloneOf(L, src, seen, context);
+		--context.depth;
+	}
+
+	void PushPreviewCloneOf(lua_State* L, int src, int seen, PreviewCloneContext& context) {
 		seen = AbsoluteLuaIndex(L, seen);
 		const int type = lua_type(L, src);
 		if (type == LUA_TFUNCTION) {
@@ -13149,6 +13200,13 @@ namespace {
 		if (type == LUA_TUSERDATA) {
 			if (const auto* object = luabind::detail::is_class_object(L, src)) {
 				if (object->crep() && std::strcmp(object->crep()->name(), "Vector") == 0) {
+					// One Vector held in two places is one copy, so a write through one alias reads through the other.
+					lua_pushvalue(L, src);
+					lua_rawget(L, seen);
+					if (!lua_isnil(L, -1)) {
+						return;
+					}
+					lua_pop(L, 1);
 					const auto* vector = static_cast<const Vector*>(object->ptr());
 					lua_getglobal(L, "Vector");
 					lua_pushnumber(L, vector->GetX());
@@ -13156,7 +13214,11 @@ namespace {
 					if (lua_pcall(L, 2, 1, 0) != 0) {
 						lua_pop(L, 1);
 						lua_pushvalue(L, src);
+						return;
 					}
+					lua_pushvalue(L, src);
+					lua_pushvalue(L, -2);
+					lua_rawset(L, seen);
 					return;
 				}
 				// A sound its owner took along when it was deleted stays as the script holds it; the remap freezes it.
@@ -13385,28 +13447,69 @@ namespace {
 		return true;
 	}
 
+	bool RemapPreviewContents(lua_State* L, int index, int seen, std::string& freezeClass, bool copyValues);
+
+	// Each value is remapped once for the window: a handle held in two places stays one handle, and a value whose remap
+	// failed fails again wherever another hold reaches it.
 	bool RemapPreviewValue(lua_State* L, int index, int seen, std::string& freezeClass) {
 		index = AbsoluteLuaIndex(L, index);
 		seen = AbsoluteLuaIndex(L, seen);
 		const int type = lua_type(L, index);
-		if (type == LUA_TUSERDATA) {
-			return RemapPreviewUserdata(L, index, freezeClass);
-		}
-		// A copied coroutine's stack and an own closure copy's variables hold references as the hold's fields do.
+		// A copied coroutine's stack and a closure copy's own variables hold references as the hold's fields do.
 		const bool copyValues = type == LUA_TTHREAD || (type == LUA_TFUNCTION && LuaThreadCodec::IsOwnPreviewCopy(L, index));
-		if (type != LUA_TTABLE && !copyValues) {
+		if (type != LUA_TUSERDATA && type != LUA_TTABLE && !copyValues) {
 			return true;
+		}
+		if (!lua_checkstack(L, 8)) {
+			freezeClass = "a graph too deep to remap";
+			return false;
 		}
 		lua_pushvalue(L, index);
 		lua_rawget(L, seen);
-		if (!lua_isnil(L, -1)) {
+		if (lua_type(L, -1) == LUA_TSTRING) {
+			freezeClass = lua_tostring(L, -1);
 			lua_pop(L, 1);
+			return false;
+		}
+		if (type == LUA_TUSERDATA && lua_isuserdata(L, -1)) {
+			lua_replace(L, index);
 			return true;
 		}
+		const bool visited = !lua_isnil(L, -1);
 		lua_pop(L, 1);
+		if (visited) {
+			return true;
+		}
 		lua_pushvalue(L, index);
-		lua_pushboolean(L, 1);
+		if (type == LUA_TUSERDATA) {
+			if (RemapPreviewUserdata(L, index, freezeClass)) {
+				// The image answers for itself too, so a hold that meets it again leaves it.
+				lua_pushvalue(L, index);
+				lua_rawset(L, seen);
+				lua_pushvalue(L, index);
+				lua_pushvalue(L, index);
+				lua_rawset(L, seen);
+				return true;
+			}
+		} else {
+			lua_pushboolean(L, 1);
+			lua_rawset(L, seen);
+			const bool remapped = ++s_PreviewRemapDepth <= c_MaxPreviewCopyDepth && RemapPreviewContents(L, index, seen, freezeClass, copyValues);
+			--s_PreviewRemapDepth;
+			if (remapped) {
+				return true;
+			}
+			if (freezeClass.empty()) {
+				freezeClass = "a graph too deep to remap";
+			}
+			lua_pushvalue(L, index);
+		}
+		lua_pushstring(L, freezeClass.c_str());
 		lua_rawset(L, seen);
+		return false;
+	}
+
+	bool RemapPreviewContents(lua_State* L, int index, int seen, std::string& freezeClass, bool copyValues) {
 		if (copyValues) {
 			struct Remap { int seen; std::string& freezeClass; } remap{seen, freezeClass};
 			return LuaThreadCodec::RemapPreviewCopyValues(L, index, [](lua_State* state, void* raw) {
@@ -13762,13 +13865,35 @@ bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector
 		lua_pop(m_State, 1);
 		lua_newtable(m_State);
 	}
-	lua_newtable(m_State);
+	// Inside a window the state's instances share one copy, so a table, closure or variable two of them hold is one copy too.
+	PreviewCopyBatch single;
+	PreviewCopyBatch* batch = s_PreviewCopyBatchOpen ? &s_PreviewCopyBatches[this] : &single;
+	if (batch == &single) {
+		lua_newtable(m_State);
+	} else {
+		lua_getfield(m_State, LUA_REGISTRYINDEX, c_PreviewCopySeenKey);
+		if (!lua_istable(m_State, -1)) {
+			lua_pop(m_State, 1);
+			lua_newtable(m_State);
+			lua_pushvalue(m_State, -1);
+			lua_setfield(m_State, LUA_REGISTRYINDEX, c_PreviewCopySeenKey);
+		}
+	}
 	const int seen = lua_gettop(m_State);
 	PreviewCloneContext context{seen, problems};
-	LuaThreadCodec::PreviewCopier copier(m_State, seen, &MapPreviewValue, &context, PreviewCoroutineStandIn);
-	context.copier = &copier;
+	if (!batch->copier) {
+		batch->copier = std::make_unique<LuaThreadCodec::PreviewCopier>(m_State, seen, &MapPreviewValue, &PreviewCopyReplaces, &context, PreviewCoroutineStandIn);
+	} else {
+		batch->copier->Rebind(seen, &context);
+	}
+	context.copier = batch->copier.get();
 	PushPreviewClone(m_State, -2, seen, context);
-	copier.Finish();
+	if (batch == &single) {
+		batch->copier->Finish();
+	}
+	if (const std::string refusal = batch->copier->TakeRefusal(); !refusal.empty()) {
+		problems.emplace_back("preview copy: " + refusal);
+	}
 	if (!lua_istable(m_State, -1)) {
 		problems.emplace_back("preview self clone produced no table");
 		lua_settop(m_State, top);
@@ -13787,6 +13912,39 @@ bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector
 	lua_settop(m_State, top);
 	return problems.empty();
 }
+
+namespace {
+	// Joins each state's open variables once all its instances are copied, then lets the window's copy table go.
+	void FinishPreviewCopyBatches() {
+		for (auto& [state, batch]: s_PreviewCopyBatches) {
+			std::lock_guard<std::recursive_mutex> lock(state->GetMutex());
+			lua_State* L = state->GetLuaState();
+			const int top = lua_gettop(L);
+			lua_getfield(L, LUA_REGISTRYINDEX, c_PreviewCopySeenKey);
+			if (batch.copier && lua_istable(L, -1)) {
+				std::vector<std::string> problems;
+				PreviewCloneContext context{lua_gettop(L), problems};
+				context.copier = batch.copier.get();
+				batch.copier->Rebind(context.seen, &context);
+				batch.copier->Finish();
+			}
+			lua_pushnil(L);
+			lua_setfield(L, LUA_REGISTRYINDEX, c_PreviewCopySeenKey);
+			lua_settop(L, top);
+		}
+		s_PreviewCopyBatches.clear();
+		s_PreviewCopyBatchOpen = false;
+	}
+
+	void ClearPreviewRemapTables() {
+		for (LuaStateWrapper* state: s_PreviewRemapStates) {
+			std::lock_guard<std::recursive_mutex> lock(state->GetMutex());
+			lua_pushnil(state->GetLuaState());
+			lua_setfield(state->GetLuaState(), LUA_REGISTRYINDEX, c_PreviewRemapSeenKey);
+		}
+		s_PreviewRemapStates.clear();
+	}
+} // namespace
 
 bool LuaStateWrapper::SnapshotPreviewGlobals(std::string& text, std::vector<std::string>& problems) {
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
@@ -14061,7 +14219,15 @@ bool LuaStateWrapper::RemapPreviewHoldReferences(long uniqueID, std::string& fre
 		lua_settop(m_State, top);
 		return true;
 	}
-	lua_newtable(m_State);
+	// One remap table per state for the window, so the holds that share a copy remap it once.
+	lua_getfield(m_State, LUA_REGISTRYINDEX, c_PreviewRemapSeenKey);
+	if (!lua_istable(m_State, -1)) {
+		lua_pop(m_State, 1);
+		lua_newtable(m_State);
+		lua_pushvalue(m_State, -1);
+		lua_setfield(m_State, LUA_REGISTRYINDEX, c_PreviewRemapSeenKey);
+		s_PreviewRemapStates.insert(this);
+	}
 	s_PreviewRemappingState = this;
 	const bool ok = RemapPreviewValue(m_State, -2, lua_gettop(m_State), freezeClass);
 	s_PreviewRemappingState = nullptr;
@@ -14234,6 +14400,7 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 	g_MovableMan.SetShadowMadeHook(&FollowShadowToHeldHandles);
 	laps.Lap(0);
 	if (!sharedSlot) {
+		s_PreviewCopyBatchOpen = true;
 		for (const MovableObject* root: roots) {
 			WalkOwned(root, [](MovableObject* mo) {
 				LuaStateWrapper* state = mo->GetLuaState();
@@ -14247,6 +14414,7 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 				}
 			});
 		}
+		FinishPreviewCopyBatches();
 	}
 	laps.Lap(1);
 	if (PreviewGlobalFenceEnabled()) {
@@ -14400,6 +14568,7 @@ void LuaMan::EndPreviewScripts() {
 			std::cout << "[preview-globals] undone=" << s_PreviewGlobalsUndone << " at the first preview that wrote one" << std::endl;
 		}
 	}
+	ClearPreviewRemapTables();
 	laps.last = std::chrono::steady_clock::now();
 	ClosePreviewWindow();
 	laps.Lap(10);
