@@ -1,6 +1,7 @@
 {
   "schema": 1,
   "name": "world-spectator-promotion",
+  "driver": "tools/acceptance_spectator_tasks.py",
   "title": "A slow spectator watches a three-seat world and takes a host-released seat",
   "port_base": 49320,
   "size": "640x360",
