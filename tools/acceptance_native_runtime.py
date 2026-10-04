@@ -9,6 +9,7 @@ import time
 
 import cross_peers as cross
 import world_mod_cross as acceptance_cross
+from acceptance_native_load import blocking_load
 from cross_peers import (render_cap_hz, write_json, configure_posix_box, digest_file,
     assert_box_guard, read_capabilities, wait_for_payload_release, refuse_mixed_build,
     Tail, engine_pid, box_load, sample_memory, owns_reservation, inventory_guard,
@@ -161,9 +162,17 @@ def run_payload(path):
     effect_readers = {}; effect_rows = {}
     recovery_ledgers={}; clean_reads={}
     specifications = {s['peer']: s for s in payload['specs']}
-    next_sample, verdict = 0, 0
+    next_sample, next_load, verdict = 0, 0, 0
+    def require_quiet(own_pids=()):
+        load = box_load(own_pids)
+        if blocking_load(box, load):
+            write_json(root/'foreign-load.json', dict(own_pids=list(own_pids), load=load))
+            raise RuntimeError('another native workload appeared under this row reservation')
+        if load:
+            write_json(root/'admitted-compile-load.json', dict(authorization='LEAD-NOTES NOTE 14', load=load))
     try:
         assert_box_guard(box)
+        require_quiet()
         write_json(root / 'payload-owned.json', dict(box=box['name'], runner_pid=os.getpid()))
         preflight = json.loads((root / 'preflight.json').read_text(encoding='utf-8'))
         if box['kind'] == 'windows-local' and len(payload['specs']) != 1:
@@ -187,8 +196,10 @@ def run_payload(path):
                 session = json.loads(session_path.read_text(encoding='utf-8'))['session']
                 spec['flags'] = [session if flag == '<published-session-id>' else flag for flag in spec['flags']]
             assert_box_guard(box)
+            require_quiet()
             run = prepare_instance(spec, payload['pin'], box)
             runs[spec['peer']] = run
+            require_quiet()
             before_launch=time.monotonic()*1000
             run.start(); started[spec['peer']] = time.monotonic()
             refuse_mixed_build(preflight, box, spec, run)
@@ -214,6 +225,9 @@ def run_payload(path):
                 if box.get('exclusive_marker') and Path(box['exclusive_marker']).exists() and not owns_reservation(box):
                     raise RuntimeError(f'{box["name"]}: exclusive measurement reservation appeared during this payload')
                 if box['kind'] == 'windows-local' and (reason := inventory_guard()): raise RuntimeError(reason)
+                if now >= next_load:
+                    require_quiet([engine_pid(run) for peer,run in runs.items() if peer not in completed])
+                    next_load = now+2
                 if now >= next_sample:
                     own_pids = [engine_pid(r) for r in runs.values()]
                     load = box_load(own_pids)

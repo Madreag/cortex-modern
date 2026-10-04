@@ -19,6 +19,7 @@ from acceptance_runtime import ACTIVE_STORAGE, check_storage, storage_scope, wri
 from edith.remote_box import RemoteBox, render_payload
 from world_soak_tasks import read_json as read_windows_json
 from acceptance_frozen_tools import driver_git_context, helper_archive, receipt as frozen_receipt
+from acceptance_native_load import acquire_reservation, blocking_load
 
 ROWS = ('mod-match', 'mod-refusal', 'world-join')
 ALIASES = {'EROL-PC': None, 'EDITH': 'edith', 'Mac': 'Erol-Mac', 'Linux': '3090'}
@@ -40,6 +41,8 @@ def validate_profile(box, lane, row='mod-match'):
         raise ValueError('helpers and retained evidence must stay inside this lane')
     if box.get('peers_per_box') != 1 or not box.get('exclusive_marker') or not box.get('hostname'):
         raise ValueError('one process, a real host identity and a box reservation are required')
+    if box.get('compiler_overlap_row') and (name != 'EROL-PC' or row not in ('mod-match','mod-refusal') or box['compiler_overlap_row'] != row):
+        raise ValueError('compiler overlap is authorized only for this PC functional mod row')
     if windows:
         if row == 'world-join':
             tree = 'D:/Projects/fencing-warm' if name == 'EROL-PC' else root+'/engine-tip'
@@ -73,6 +76,8 @@ def make_plan(options, profiles, mod_receipts=None):
         validate_profile(box, options.lane, options.row)
     by_name = {box['name']: deepcopy(box) for box in profiles}
     by_name['EROL-PC']['payload_root'] = options.out.as_posix()
+    if options.row in ('mod-match', 'mod-refusal'):
+        by_name['EROL-PC']['compiler_overlap_row'] = options.row
     base = cross.parse_args(['--boxes', str(options.template_boxes), '--lane', options.lane,
                              '--mac-guard', by_name['Mac'].get('guard_file', by_name['Mac']['exclusive_marker']), '--roster', 'four-way',
                              '--out', str(options.out), '--ticks', '12001' if options.row == 'world-join' else '1201',
@@ -142,7 +147,7 @@ def validate_preflights(plan):
             raise ValueError('Windows executable bytes differ')
         if any(value.get(key) != reference.get(key) for key in ('content', 'modules', 'fixture')):
             raise ValueError(name+': complete content/module/fixture manifests differ')
-        if value.get('load'):
+        if blocking_load(box, value.get('load', [])):
             raise ValueError(name+': another build or engine is active')
         if value.get('acceptance_remote_driver_sha256') != plan['driver_sources']['acceptance_remote_tasks.py']:
             raise ValueError(name+': remote task coordinator bytes differ')
@@ -265,7 +270,7 @@ def run_payload(path):
         borrowed = lease_context.enter_context(borrow(box, Path(path).parent))
         if frozen is not None and not borrowed:
             shared_claim = acquire_shared_reservation(box, Path(path).parent, 60)
-        claim = cross.acquire_reservation(box, Path(path).parent, 60)
+        claim = acquire_reservation(box, Path(path).parent, 60)
         write_json(Path(path).parent/'reservation.json', {key: value for key, value in claim['record'].items() if key != 'token'})
         return native_payload(path)
     finally:

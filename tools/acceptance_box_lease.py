@@ -15,6 +15,7 @@ import cross_peers as cross
 from acceptance_frozen_tools import receipt as frozen_receipt
 from acceptance_native_runtime import acquire_shared_reservation, release_shared_reservation
 from acceptance_runtime import write_json
+from acceptance_native_load import acquire_reservation
 
 ENV_FILE = 'lease-env.key'  # Private reservation tokens stay native and are excluded from evidence tar streams.
 
@@ -57,12 +58,14 @@ def hold(path):
         raise ValueError('reservation holder is not on the declared authorized machine')
     if frozen_receipt(Path(__file__).parent.parent) is None:
         raise ValueError('native reservation holder requires the frozen NOTE 11 bundle')
+    if box.get('compiler_overlap_row') and (not payload.get('specs') or any(spec.get('acceptance_row') != box['compiler_overlap_row'] for spec in payload['specs'])):
+        raise ValueError('compiler-overlap reservation differs from the native row')
     claim = shared = None
     error = None
     try:
         assert_idle_task(box)
         shared = acquire_shared_reservation(box, root, 60)
-        claim = cross.acquire_reservation(box, root, 60)
+        claim = acquire_reservation(box, root, 60)
         if claim.get('borrowed'):
             raise RuntimeError('a new row holder cannot borrow an unrelated outer reservation')
         assert_idle_task(box)

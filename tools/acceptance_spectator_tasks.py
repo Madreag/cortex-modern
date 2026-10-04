@@ -231,6 +231,7 @@ def run_payload(path, payload=None):
                 raise RuntimeError('declared native process capacity exhausted')
             run = prepare_peer(box,plan,root,peer,session)
             runs[peer]=run
+            guard_owned()
             run.start()
             if sha256(Path(run.argv[0])) != plan['preflights'][box['name']]['executable_sha256']:
                 raise RuntimeError('native executable changed during launch')

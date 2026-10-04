@@ -28,7 +28,7 @@ DRIVER_FILES = ("cross_peers.py", "cross_report.py", "e2e_video.py", "feel/repor
                 "feel_measure.py", "feel/harness_cost.py", "feel/host_loss.py", "e2e/ownership.py", "edith/remote_box.py",
                 "acceptance_native_runtime.py", "acceptance_frozen_tools.py", "acceptance_remote_tasks.py",
                 "acceptance_clock_brackets.py", "acceptance_spectator.py", "acceptance_spectator_tasks.py",
-                "acceptance_box_lease.py", "acceptance_transfer.py")
+                "acceptance_box_lease.py", "acceptance_transfer.py", "acceptance_frozen_report.py", "acceptance_native_load.py")
 
 
 def named_row(arguments):

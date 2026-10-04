@@ -111,7 +111,7 @@ def build_report(root):
         runtime_driver_sources=manifest.get('driver_sources', {}),
         report_sources={name: sha256(Path(__file__).parent/name) for name in
                         ('acceptance_cross_report.py', 'acceptance_rows.py', 'acceptance_evidence.py',
-                         'acceptance_fixed_gates.py', 'acceptance_transfer.py', 'world_soak.py', 'cross_report.py', 'feel/report.py')}))
+                         'acceptance_fixed_gates.py', 'acceptance_frozen_report.py', 'acceptance_native_load.py', 'acceptance_transfer.py', 'world_soak.py', 'cross_report.py', 'feel/report.py')}))
     row = manifest["acceptance_row"]
     specs = {("pc" if spec["peer"] == "erol" else spec["peer"]): spec for spec in manifest["specs"]}
     paths = {name: peer_root(root, manifest, spec) for name, spec in specs.items()}
@@ -230,9 +230,9 @@ def build_report(root):
     except (KeyError, TypeError, ValueError) as error:
         result = dict(row=row, passed=False, failures=["incomplete native receipts: "+str(error)])
     try:
-        from cross_report import build_report as collect_fixed
+        from acceptance_frozen_report import collect as collect_fixed
         from acceptance_fixed_gates import evaluate
-        fixed = evaluate(collect_fixed(root, acceptance_inputs=True), facts)
+        fixed = evaluate(collect_fixed(root), facts)
     except (OSError, KeyError, TypeError, ValueError) as error:
         fixed = dict(passed=False, failures=["fixed harness collection incomplete: "+str(error)])
     write_json(root/"fixed-harness-result.json", fixed)
