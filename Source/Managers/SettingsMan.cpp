@@ -217,6 +217,8 @@ void SettingsMan::Clear() {
 	m_NetworkToastsEnabled = m_NetworkChatVisible = m_NetworkChatNotify = m_NetworkAutoReconnect = m_NetworkOfferStoredRejoin = m_NetworkRecordReplays = m_NetworkHostAutoRepair = true;
 	m_NetworkChatSound = false;
 	m_NetworkHostIdleWaitMinutes = 10;
+	m_NetworkHostJoinHistorySeconds = 360;
+	m_NetworkHostJoinLagSeconds = 120;
 	m_NetworkPathHorizonTicks = 30;
 	SetNetworkAutosavesKept(static_cast<int>(AutosaveStore::c_RetainedAutosaves));
 	m_NumberOfLuaStatesOverride = -1;
@@ -439,6 +441,8 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("NetworkHostDelayPolicy", { m_NetworkHostDelayPolicy = ParseHostDelayPolicy(reader.ReadPropValue()); });
 	MatchProperty("NetworkHostAutoRepair", { reader >> m_NetworkHostAutoRepair; });
 	MatchProperty("NetworkHostIdleWaitMinutes", { int minutes = m_NetworkHostIdleWaitMinutes; reader >> minutes; SetNetworkHostIdleWaitMinutes(minutes); });
+	MatchProperty("NetworkHostJoinHistorySeconds", { int seconds = m_NetworkHostJoinHistorySeconds; reader >> seconds; SetNetworkHostJoinHistorySeconds(seconds); });
+	MatchProperty("NetworkHostJoinLagSeconds", { int seconds = m_NetworkHostJoinLagSeconds; reader >> seconds; SetNetworkHostJoinLagSeconds(seconds); });
 	MatchProperty("NetworkPathHorizonTicks", { int ticks = m_NetworkPathHorizonTicks; reader >> ticks; SetNetworkPathHorizonTicks(ticks); });
 	MatchProperty("NetworkAutosavesKept", { int kept = m_NetworkAutosavesKept; reader >> kept; SetNetworkAutosavesKept(kept); });
 	MatchProperty("NetworkHostVisibility", { m_NetworkHostVisibility = ParseHostVisibility(reader.ReadPropValue()); });
@@ -795,6 +799,8 @@ void SettingsMan::WriteNetworkPreferences(Writer& writer) const {
 	writer.NewPropertyWithValue("NetworkHostDelayPolicy", DelayPolicyText(m_NetworkHostDelayPolicy));
 	writer.NewPropertyWithValue("NetworkHostAutoRepair", m_NetworkHostAutoRepair);
 	writer.NewPropertyWithValue("NetworkHostIdleWaitMinutes", m_NetworkHostIdleWaitMinutes);
+	writer.NewPropertyWithValue("NetworkHostJoinHistorySeconds", m_NetworkHostJoinHistorySeconds);
+	writer.NewPropertyWithValue("NetworkHostJoinLagSeconds", m_NetworkHostJoinLagSeconds);
 	writer.NewPropertyWithValue("NetworkPathHorizonTicks", m_NetworkPathHorizonTicks);
 	writer.NewPropertyWithValue("NetworkAutosavesKept", m_NetworkAutosavesKept);
 	writer.NewPropertyWithValue("NetworkHostVisibility", VisibilityText(m_NetworkHostVisibility));
@@ -807,6 +813,10 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	}
 	SettingsMan& settings = Instance();
 	settings.Clear();
+	if (settings.GetNetworkHostJoinHistorySeconds() != 360 || settings.GetNetworkHostJoinLagSeconds() != 120) {
+		std::cout << Tag << " FAIL join-history defaults" << std::endl;
+		return 1;
+	}
 	settings.SetNetworkDisplayName("AlphaPilot");
 	settings.SetNetworkMatchStatusMode(NetworkMatchStatusMode::Always);
 	settings.SetNetworkChatDefaultScope(NetworkChatDefaultScope::Team);
@@ -829,6 +839,8 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	settings.SetNetworkHostIdleWaitMinutes(0);
 	settings.SetNetworkPathHorizonTicks(45);
 	settings.SetNetworkAutosavesKept(7);
+	settings.SetNetworkHostJoinHistorySeconds(900);
+	settings.SetNetworkHostJoinLagSeconds(45);
 
 	const std::string path = (std::filesystem::temp_directory_path() / "cccp-settings-preferences-selftest.ini").string();
 	const auto writeRead = [&](auto&& fill) {
@@ -931,6 +943,14 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	settings.SetNetworkHostIdleWaitMinutes(61);
 	settings.SetNetworkHostIdleWaitMinutes(-1);
 	check("idle-wait range", settings.GetNetworkHostIdleWaitMinutes() == 0);
+	check("join-history roundtrip", settings.GetNetworkHostJoinHistorySeconds() == 900 && settings.GetNetworkHostJoinLagSeconds() == 45);
+	settings.SetNetworkHostJoinHistorySeconds(600);
+	settings.SetNetworkHostJoinHistorySeconds(59);
+	settings.SetNetworkHostJoinHistorySeconds(1801);
+	settings.SetNetworkHostJoinLagSeconds(60);
+	settings.SetNetworkHostJoinLagSeconds(9);
+	settings.SetNetworkHostJoinLagSeconds(1801);
+	check("join-history range", settings.GetNetworkHostJoinHistorySeconds() == 600 && settings.GetNetworkHostJoinLagSeconds() == 60);
 	settings.SetNetworkPathHorizonTicks(45);
 	settings.SetNetworkPathHorizonTicks(121);
 	settings.SetNetworkPathHorizonTicks(-1);

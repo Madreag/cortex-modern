@@ -293,6 +293,14 @@ namespace RTE {
 		/// Idle-lobby wait in minutes. 0 means Never; default 10. Out of 0-60 is ignored.
 		int GetNetworkHostIdleWaitMinutes() const { return m_NetworkHostIdleWaitMinutes; }
 		void SetNetworkHostIdleWaitMinutes(int minutes);
+		/// The play a hosted round's journal keeps for joiners and returning seats, whatever any one of them still needs. This host's own
+		/// disk, never the match's. Default 360 (the five-minute in-place return window and its margin); out of 60-1800 is ignored.
+		int GetNetworkHostJoinHistorySeconds() const { return m_NetworkHostJoinHistorySeconds; }
+		void SetNetworkHostJoinHistorySeconds(int seconds) { if (seconds >= 60 && seconds <= 1800) m_NetworkHostJoinHistorySeconds = seconds; }
+		/// How far a watcher or a match's returning seat may trail a hosted round while it replays before its catch-up ends: a watcher is
+		/// told the world moved on, a returning seat comes back on a fresh image and keeps its seat. Default 120; out of 10-1800 is ignored.
+		int GetNetworkHostJoinLagSeconds() const { return m_NetworkHostJoinLagSeconds; }
+		void SetNetworkHostJoinLagSeconds(int seconds) { if (seconds >= 10 && seconds <= 1800) m_NetworkHostJoinLagSeconds = seconds; }
 		/// Shared path-grid horizon in ticks. Default 30. Out of 0-120 is ignored.
 		int GetNetworkPathHorizonTicks() const { return m_NetworkPathHorizonTicks; }
 		void SetNetworkPathHorizonTicks(int ticks);
@@ -660,6 +668,8 @@ namespace RTE {
 		NetworkHostVisibility m_NetworkHostVisibility;
 		bool m_NetworkToastsEnabled, m_NetworkChatVisible, m_NetworkChatNotify, m_NetworkChatSound, m_NetworkAutoReconnect, m_NetworkOfferStoredRejoin, m_NetworkRecordReplays, m_NetworkHostAutoRepair;
 		int m_NetworkHostIdleWaitMinutes;
+		int m_NetworkHostJoinHistorySeconds = 360; //!< The play a hosted round's journal keeps for joiners and returning seats.
+		int m_NetworkHostJoinLagSeconds = 120; //!< How far a replaying watcher or returning seat may trail a hosted round.
 		int m_NetworkPathHorizonTicks;
 		int m_NetworkAutosavesKept;
 		int m_NumberOfLuaStatesOverride; //!< Retired: an old settings file's threaded-Lua-state override, read and ignored. -1 when there is none.
