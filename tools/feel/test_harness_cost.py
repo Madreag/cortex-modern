@@ -78,5 +78,83 @@ class HarnessCostEvidence(unittest.TestCase):
             self.assertFalse(self.measured(broken)['instrument_valid'])
 
 
+def receipt_log(segments, *, round_id=1, enabled=('recorder', 'screen_watches'), closed=True, opened=False, outside=None, frame_ms=None):
+    """Receipts as the engine writes them: per segment an optional opening receipt and outside-frame costs, its frames, its close."""
+    from feel.harness_cost import INSTRUMENTS
+    instruments = {name: name in enabled for name in INSTRUMENTS}
+    rows = []
+    for segment, (first, last) in enumerate(segments):
+        base = dict(process=44, incarnation=0, round=round_id, segment=segment)
+        if opened:
+            rows.append('[harness-cost-scope-open] ' + json.dumps(dict(base, version=1, first_frame=first, instruments=instruments)))
+        if outside is not None:
+            rows.append('[harness-cost-outside] ' + json.dumps(dict(base, before_frame=first, costs_ms={name: outside.get(name, 0) for name in enabled})))
+        for frame in range(first, last + 1):
+            costs = {name: (frame_ms or {}).get((frame, name), 1.0) for name in enabled}
+            rows.append('[harness-cost-frame] ' + json.dumps(dict(base, frame=frame, partition_valid=True, costs_ms=costs)))
+        if closed:
+            rows.append('[harness-cost-scope] ' + json.dumps(dict(base, version=1, first_frame=first, last_frame=last, instruments=instruments)))
+    return '\n'.join(rows) + '\n'
+
+
+class HarnessCostReceipts(unittest.TestCase):
+    def reduce(self, text, **window):
+        from feel.harness_cost import reduce_costs
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / 'stdout.log'
+            log.write_text(text)
+            return reduce_costs([log], **window)
+
+    def test_segments_of_one_round_are_separate_scopes(self):
+        # A pause menu splits round 0 into two runs of frames; the menu's own stay is a round of its own.
+        text = receipt_log([(1, 181), (182, 1200)], round_id=0) + receipt_log([(1, 40)], round_id=(1 << 62) | 1)
+        result = self.reduce(text, first_frame=300, last_frame=1200)
+        self.assertEqual(result['status'], 'PASS', result['reason'])
+        self.assertEqual(result['measured_frames'], 1240)
+
+    def test_window_must_be_covered_by_one_match_round(self):
+        result = self.reduce(receipt_log([(1, 181), (183, 1200)], round_id=0), first_frame=300, last_frame=1200)
+        self.assertEqual(result['status'], 'PASS', result['reason'])
+        result = self.reduce(receipt_log([(1, 181), (183, 1200)], round_id=0), first_frame=1, last_frame=1200)
+        self.assertEqual(result['status'], 'FAIL')
+        self.assertIn('requested 1..1200', result['reason'])
+        result = self.reduce(receipt_log([(1, 1200)], round_id=(1 << 62) | 1), first_frame=300, last_frame=1200)
+        self.assertEqual(result['status'], 'FAIL', 'a menu stay is not the match window')
+
+    def test_opening_receipt_owns_the_frames_of_a_process_ended_before_its_close(self):
+        self.assertIn('no owning instrumentation scope', self.reduce(receipt_log([(1, 900)], closed=False))['reason'])
+        result = self.reduce(receipt_log([(1, 900)], closed=False, opened=True))
+        self.assertEqual(result['status'], 'PASS', result['reason'])
+        self.assertFalse(result['scope_receipts'][0]['closed'])
+        self.assertEqual(self.reduce(receipt_log([(1, 900)], opened=True))['status'], 'PASS')
+        disagreeing = receipt_log([(1, 900)], opened=True).replace('"first_frame": 1, "last_frame"', '"first_frame": 2, "last_frame"')
+        self.assertEqual(self.reduce(disagreeing)['status'], 'FAIL')
+
+    def test_work_before_a_run_of_frames_is_listed_outside_every_frame(self):
+        result = self.reduce(receipt_log([(1, 300)], opened=True, outside=dict(recorder=59.7)))
+        self.assertEqual(result['status'], 'PASS', result['reason'])
+        self.assertEqual(result['instruments']['recorder']['outside_frames_ms'], 59.7)
+        self.assertEqual(result['max_frame_ms'], 2.0)
+        self.assertTrue(any('59.700' in line for line in result['table']), result['table'])
+        unowned = receipt_log([(1, 300)], opened=True, outside=dict(recorder=59.7)).replace('"before_frame": 1', '"before_frame": 2')
+        self.assertIn('outside-frame costs have no owning scope', self.reduce(unowned)['reason'])
+        extra = receipt_log([(1, 300)], opened=True, outside=dict(recorder=1)).replace('"costs_ms": {"recorder": 1, ', '"costs_ms": {"recorder": 1, "census": 0, ')
+        self.assertIn('invalid outside-frame costs', self.reduce(extra)['reason'])
+
+    def test_an_instrument_over_budget_is_named_with_its_number(self):
+        result = self.reduce(receipt_log([(1, 300)], enabled=('stall_sampler', 'tick_end'), frame_ms={(22, 'stall_sampler'): 61.7}))
+        self.assertEqual(result['status'], 'FAIL')
+        self.assertIn('stall_sampler alone 61.7 ms', result['reason'])
+        self.assertIn('peak frame 22 of round 1 = 62.7 ms (stall_sampler=61.7, tick_end=1)', result['reason'])
+        self.assertEqual(result['over_budget_instruments'], {'stall_sampler': 61.7})
+
+    def test_disabled_instrument_has_no_observations(self):
+        quiet = self.reduce(receipt_log([(1, 300)]) + '[localpred] previews=354 actor_ticks=4820 ms_total=2142.5 avg_ms=6.05 known_copy_avg_ms=0\n')
+        self.assertEqual(quiet['instruments']['preview_fidelity']['status'], 'DISABLED')
+        self.assertEqual(quiet['status'], 'PASS', quiet['reason'])
+        contradicted = self.reduce(receipt_log([(1, 300)]) + '[localpred] previews=354 harness_ms_total=0.305 harness_avg_ms=0.0009\n')
+        self.assertIn('preview_fidelity declared disabled but native cost observations exist', contradicted['reason'])
+
+
 if __name__ == '__main__':
     unittest.main()
