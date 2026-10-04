@@ -8403,6 +8403,12 @@ void RTE::ArmLuaCheckpointValueBarrier() {
 	luabind::detail::checkpoint_object_write = [](void* value) { CheckpointValueWritten(value); };
 }
 
+namespace {
+	// The preview copy's audit lever and its running counts: values audited, differences found.
+	void ForcePreviewCopyAudit(bool forced);
+	std::pair<size_t, size_t> PreviewCopyAuditCounts();
+} // namespace
+
 bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	LoadScriptGraphHelper();
@@ -10955,9 +10961,13 @@ end
 		bool frozen = false;
 		std::string live;
 		std::string preview;
+		const std::pair<size_t, size_t> auditBefore = PreviewCopyAuditCounts();
 		if (actor && actor->LoadScript(scriptPath) >= 0) {
 			loaded = actor->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"init"}) >= 0;
+			// The audit checks every edge of the copy against the copy's own map.
+			ForcePreviewCopyAudit(true);
 			LuaMan::CapturePreviewSelfCopies({actor.get()}, false);
+			ForcePreviewCopyAudit(false);
 			MovableObject* clone = nullptr;
 			{
 				MovableObject::FaithfulCloneScope scope(false);
@@ -10979,7 +10989,11 @@ end
 		}
 		const auto liveLines = split(live);
 		const auto previewLines = split(preview);
-		bool passed = loaded && !frozen && liveLines.size() == 13 && previewLines.size() == liveLines.size();
+		const size_t auditValues = PreviewCopyAuditCounts().first - auditBefore.first;
+		const size_t auditDifferences = PreviewCopyAuditCounts().second - auditBefore.second;
+		const bool audited = auditValues > 0 && auditDifferences == 0;
+		std::cout << "[script-graph-selftest] " << (audited ? "PASS" : "FAIL") << " preview_copy_audit_finds_every_edge_kept values=" << auditValues << " differences=" << auditDifferences << std::endl;
+		bool passed = loaded && !frozen && audited && liveLines.size() == 13 && previewLines.size() == liveLines.size();
 		for (size_t index = 0; index < liveLines.size(); ++index) {
 			const std::string& name = liveLines[index].first;
 			const std::string seen = index < previewLines.size() && previewLines[index].first == name ? previewLines[index].second : std::string("missing");
@@ -13118,6 +13132,7 @@ namespace {
 
 	struct PreviewCopyBatch {
 		std::unique_ptr<LuaThreadCodec::PreviewCopier> copier;
+		std::vector<long> uniqueIDs;
 	};
 	bool s_PreviewCopyBatchOpen = false;
 	std::unordered_map<LuaStateWrapper*, PreviewCopyBatch> s_PreviewCopyBatches;
@@ -13910,10 +13925,76 @@ bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector
 	lua_pushvalue(m_State, -3);
 	lua_settable(m_State, -3);
 	lua_settop(m_State, top);
+	if (batch != &single && problems.empty()) {
+		batch->uniqueIDs.push_back(uniqueID);
+	}
 	return problems.empty();
 }
 
 namespace {
+	bool s_PreviewCopyAuditForced = false;
+	size_t s_PreviewCopyAuditHolds = 0;
+	size_t s_PreviewCopyAuditValues = 0;
+	size_t s_PreviewCopyAuditDifferences = 0;
+
+	bool PreviewCopyAuditEnabled() {
+		static const bool lever = std::getenv("CCCP_TEST_PREVIEW_COPY_AUDIT") != nullptr;
+		return lever || s_PreviewCopyAuditForced;
+	}
+
+	void ForcePreviewCopyAudit(bool forced) {
+		s_PreviewCopyAuditForced = forced;
+	}
+
+	std::pair<size_t, size_t> PreviewCopyAuditCounts() {
+		return {s_PreviewCopyAuditValues, s_PreviewCopyAuditDifferences};
+	}
+
+	// The window's copy of the value on top of the stack, read from the copy table, or the value itself where the copy shares it.
+	void PreviewCopyImage(lua_State* L, void* raw) {
+		const int seen = *static_cast<const int*>(raw);
+		const int value = lua_gettop(L);
+		const auto* object = lua_type(L, value) == LUA_TUSERDATA ? luabind::detail::is_class_object(L, value) : nullptr;
+		if (object && object->crep() && std::strcmp(object->crep()->name(), "SoundContainer") == 0) {
+			lua_pushlightuserdata(L, object->ptr());
+		} else {
+			lua_pushvalue(L, value);
+		}
+		lua_rawget(L, seen);
+		if (lua_isnil(L, -1)) {
+			lua_pop(L, 1);
+			return;
+		}
+		lua_replace(L, value);
+	}
+
+	// Checks each copied instance of a state against its hold under the window's copy table and reports what differs.
+	void AuditPreviewCopies(LuaStateWrapper* state, const std::vector<long>& uniqueIDs, int seen) {
+		lua_State* L = state->GetLuaState();
+		for (const long uniqueID: uniqueIDs) {
+			const int top = lua_gettop(L);
+			PushScriptObjectInstanceTable(L, uniqueID);
+			lua_getglobal(L, "_ScriptFieldsStash");
+			if (lua_istable(L, -1)) {
+				lua_getfield(L, -1, ("preview:" + std::to_string(uniqueID)).c_str());
+				lua_remove(L, -2);
+			}
+			std::vector<std::string> differences;
+			size_t standIns = 0;
+			const size_t values = LuaThreadCodec::AuditPreviewCopy(L, top + 1, top + 2, &PreviewCopyImage, &seen, differences, 8, &standIns);
+			lua_settop(L, top);
+			++s_PreviewCopyAuditHolds;
+			s_PreviewCopyAuditValues += values;
+			s_PreviewCopyAuditDifferences += differences.size();
+			const MovableObject* object = g_MovableMan.FindObjectByUniqueID(uniqueID);
+			std::cout << "[preview-copy-audit] uid=" << uniqueID << " preset=" << (object ? object->GetModuleAndPresetName() : std::string("?")) << " values=" << values
+			          << " stand_ins=" << standIns << " differences=" << differences.size() << " total_holds=" << s_PreviewCopyAuditHolds << " total_differences=" << s_PreviewCopyAuditDifferences << std::endl;
+			for (const std::string& difference: differences) {
+				std::cout << "[preview-copy-audit] difference uid=" << uniqueID << " " << difference << std::endl;
+			}
+		}
+	}
+
 	// Joins each state's open variables once all its instances are copied, then lets the window's copy table go.
 	void FinishPreviewCopyBatches() {
 		for (auto& [state, batch]: s_PreviewCopyBatches) {
@@ -13927,6 +14008,9 @@ namespace {
 				context.copier = batch.copier.get();
 				batch.copier->Rebind(context.seen, &context);
 				batch.copier->Finish();
+				if (PreviewCopyAuditEnabled()) {
+					AuditPreviewCopies(state, batch.uniqueIDs, context.seen);
+				}
 			}
 			lua_pushnil(L);
 			lua_setfield(L, LUA_REGISTRYINDEX, c_PreviewCopySeenKey);

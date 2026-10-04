@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 struct lua_State;
 
@@ -59,4 +60,10 @@ namespace RTE::LuaThreadCodec {
 	/// Hands each value a preview copy keeps outside its tables to remap - a copied coroutine's stack, a closure copy's own
 	/// variables - which may replace the value on top of the stack; the copy keeps what it leaves. False when remap fails.
 	bool RemapPreviewCopyValues(lua_State* state, int index, bool (*remap)(lua_State* state, void* context), void* context);
+	/// For a test lever: checks a copy against its original under the copy's own map. Every edge of the original - a table's
+	/// keys, values and metatable, a closure's variables, a native closure's values, a coroutine's slots - must join the
+	/// images in the copy, and a closure or variable the copy shares with the original must read the same and never be
+	/// written. image pushes the copy's value for the value on top of the stack, or the value itself.
+	/// @return The values audited; each difference is appended to differences, up to limit, with the path that reached it.
+	size_t AuditPreviewCopy(lua_State* state, int original, int copy, PreviewCopier::MapValue image, void* context, std::vector<std::string>& differences, size_t limit, size_t* standIns);
 } // namespace RTE::LuaThreadCodec
