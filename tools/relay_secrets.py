@@ -47,6 +47,7 @@ BOUNDARY = re.compile(rb'[A-Za-z0-9+/_\-]')
 HEX_RUN = re.compile(rb'(?:[0-9a-fA-F]{2}){32,}')
 JSON_ESCAPE = re.compile(rb'\\(u[0-9a-fA-F]{4}|["\\/bfnrt])')
 UNICODE_ESCAPE = re.compile(rb'\\u[0-9a-fA-F]{4}')
+STRING_LITERAL = re.compile(rb'"(?:[^"\\\n]|\\.)*"')
 MAX_DECODED = 1 << 30
 MAX_DEPTH = 3
 FIXTURES = Path(__file__).resolve().with_name('relay_fixtures.json')
@@ -194,29 +195,39 @@ class Fixtures:
     def __init__(self, document: dict[str, Any] | None = None) -> None:
         self.entries = list((document or {}).get('fixtures', []))
         self.pairs = {(entry['value_sha256'], entry['line_sha256']) for entry in self.entries}
+        self.values = {entry['value_sha256'] for entry in self.entries}
 
     @classmethod
     def load(cls, path: Path | str | None = None) -> 'Fixtures':
         path = Path(path or FIXTURES)
         return cls(json.loads(path.read_text(encoding='utf-8'))) if path.is_file() else cls()
 
+    def knows(self, value: bytes) -> bool:
+        return hashlib.sha256(value).hexdigest() in self.values
+
     def excuses(self, value: bytes, line: bytes) -> bool:
         return (hashlib.sha256(value).hexdigest(), hashlib.sha256(line).hexdigest()) in self.pairs
 
 
 def logical_line(view: bytes, start: int, end: int) -> bytes:
-    """The line around a span, read the way a person reads it: a real line, or one line of text kept inside a JSON string
-    (split at its escaped newlines and unescaped), less a leading 'N<tab>' line number, stripped."""
-    escaped_left = view.rfind(b'\\n', 0, start)
-    left = max(view.rfind(b'\n', 0, start) + 1, escaped_left + 2 if escaped_left >= 0 else 0)
-    candidates = [index for index in (view.find(b'\n', end), view.find(b'\\n', end)) if index >= 0]
-    line = view[left:min(candidates) if candidates else len(view)]
+    """The line around a span, read the way a person reads it: its own line, or, when the span sits inside an escaped
+    JSON string (a log or transcript quoting a file), the line of that string's decoded text that holds it; less a
+    leading line number ('N<tab>', 'N:' or grep's 'N-'), stripped."""
+    left = view.rfind(b'\n', 0, start) + 1
+    right = view.find(b'\n', end)
+    line, start, end = view[left:right if right >= 0 else len(view)], start - left, end - left
     for _ in range(3):
-        decoded = json_unescape(line)
-        if decoded == line:
+        literal = next((match for match in STRING_LITERAL.finditer(line) if match.start() < start and end < match.end()), None)
+        if literal is None or b'\\' not in literal.group(0):
             break
-        line = decoded
-    line = re.sub(rb'^\s*\d+(?:\t|:)', b'', line.rstrip(b'\r'))
+        inner = literal.start() + 1
+        position, value = len(json_unescape(line[inner:start])), json_unescape(line[start:end])
+        decoded = json_unescape(line[inner:literal.end() - 1])
+        line_left = decoded.rfind(b'\n', 0, position) + 1
+        line_right = decoded.find(b'\n', position + len(value))
+        line = decoded[line_left:line_right if line_right >= 0 else len(decoded)]
+        start, end = position - line_left, position - line_left + len(value)
+    line = re.sub(rb'^\s*\d+(?:\t|:|-)', b'', line.rstrip(b'\r'))
     return line.strip()
 
 
@@ -428,7 +439,8 @@ def file_hits(data: bytes, finder: Finder, fixtures: Fixtures | None = None,
         overlaps = lambda start, end: any(start < right and left < end for left, right in booked)
         for start, end, kind, how, representation in found:
             value = view[start:end]
-            if fixtures and kind.startswith('shape:') and not overlaps(start, end) and fixtures.excuses(value, logical_line(view, start, end)):
+            if fixtures and kind.startswith('shape:') and not overlaps(start, end) and fixtures.knows(value) and \
+                    fixtures.excuses(value, logical_line(view, start, end)):
                 if fixture_rows is not None:
                     fixture_rows.append(dict(form=form, kind=kind))
                 continue
