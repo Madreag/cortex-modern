@@ -8376,6 +8376,10 @@ MovableMan::ConstructionRegistryScope::~ConstructionRegistryScope() {
 	g_AudioMan.SetCheckpointSoundContainerCursor(m_SoundCursor);
 }
 
+void MovableMan::ConstructionRegistryScope::KeepDrawnUniqueIDs() {
+	m_Counter = std::max(m_Counter, MovableObject::GetUniqueIDCounter());
+}
+
 CheckpointSoundRegistry MovableMan::ConstructionRegistryScope::GetStagedSoundRegistrations() const {
 	return g_AudioMan.AddedCheckpointSoundRegistrations(m_OriginalSounds);
 }

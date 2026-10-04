@@ -21,6 +21,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <utility>
 #include <vector>
 
 struct BITMAP;
@@ -1231,6 +1232,10 @@ namespace RTE {
 		/// @return The counter's current base.
 		static long GetUniqueIDCounter() { return m_UniqueIDCounter; }
 
+		/// Gets the highest saved UniqueID this thread has read since the last call, and starts the count again.
+		/// @return The highest saved UniqueID read, or 0 when none was.
+		static long TakeHighestPersistedUniqueIDRead() { return std::exchange(s_HighestPersistedUniqueIDRead, 0); }
+
 		/// Returns this MO's unique persistent ID
 		/// @return Returns this MO's unique persistent ID
 		long GetUniqueID() const { return m_UniqueID; }
@@ -1618,6 +1623,7 @@ namespace RTE {
 		int m_PersistedLuaStateIndex; //!< The Lua state index the save recorded for this object, -1 when none.
 		long m_FaithfulMOToNotHitUID = 0; //!< Snapshot link for m_pMOToNotHit, resolved after a restore.
 		inline static thread_local int s_ScriptLoadDeferralDepth = 0;
+		inline static thread_local long s_HighestPersistedUniqueIDRead = 0; //!< The highest saved UniqueID read on this thread since it was last taken.
 		static int s_FaithfulCloneDepth;
 		static bool s_FaithfulCloneRegisters;
 		static bool s_FaithfulClonePreview;

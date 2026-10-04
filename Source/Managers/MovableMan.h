@@ -171,6 +171,8 @@ namespace RTE {
 			ConstructionRegistryScope(const ConstructionRegistryScope&) = delete;
 			ConstructionRegistryScope& operator=(const ConstructionRegistryScope&) = delete;
 			CheckpointSoundRegistry GetStagedSoundRegistrations() const;
+			/// Keeps every UniqueID the staged objects drew taken once the scope ends, for objects that keep the IDs they were read with.
+			void KeepDrawnUniqueIDs();
 		private:
 			std::map<long, MovableObject*> m_Original;
 			CheckpointSoundRegistry m_OriginalSounds;

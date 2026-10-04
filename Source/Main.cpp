@@ -1233,6 +1233,8 @@ static bool s_frameRecorderSelfTest = false;
 static bool s_saveIoSelfTest = false;
 static bool s_saveIoSelfTestQueued = false;
 static std::string s_saveIoSelfTestName;
+static uint64_t s_saveIoSelfTestAfter = 0;
+static uint64_t s_saveIoSelfTestFirstTick = 0;
 static bool s_saveMenuSelfTest = false;
 static bool s_saveMenuSelfTestPassed = true;
 static bool s_menuScriptFailed = false;
@@ -2246,6 +2248,12 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if ((currentArg == "-load-io-selftest" || currentArg == "-load-io-success-selftest") && i + 1 < argCount) {
 			s_loadSelfTestName = argValue[i + 1];
 			s_loadSelfTestExpected = currentArg == "-load-io-success-selftest";
+			i += 2;
+			continue;
+		}
+		// The save waits this many ticks past the first one this run simulates.
+		if (currentArg == "-save-io-selftest-after" && i + 1 < argCount) {
+			s_saveIoSelfTestAfter = std::strtoull(argValue[i + 1], nullptr, 10);
 			i += 2;
 			continue;
 		}
@@ -8644,7 +8652,11 @@ void RunGameLoop() {
 				g_MetricsCollector.SetResult(s_loadSelfTestPassed);
 				break;
 			}
-			if (s_saveIoSelfTest && simTick > 0) {
+			if (s_saveIoSelfTest && simTick > 0 && s_saveIoSelfTestFirstTick == 0) s_saveIoSelfTestFirstTick = simTick;
+			if (s_saveIoSelfTest && simTick > 0 && simTick >= s_saveIoSelfTestFirstTick + s_saveIoSelfTestAfter) {
+				if (s_saveIoSelfTestAfter > 0) {
+					System::PrintDiagnosticLine("[save-selftest] played " + std::to_string(simTick - s_saveIoSelfTestFirstTick) + " ticks from " + std::to_string(s_saveIoSelfTestFirstTick));
+				}
 				if (s_saveMenuSelfTest) s_saveMenuSelfTestPassed = SaveLoadMenuGUI::RunSaveSelfTest(s_saveIoSelfTestName, s_saveIoSelfTestQueued);
 				else s_saveIoSelfTestQueued = g_ActivityMan.SaveCurrentGame(s_saveIoSelfTestName);
 				{

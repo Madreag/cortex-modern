@@ -696,7 +696,10 @@ int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader
 	StartPropertyList(return SceneObject::ReadProperty(propName, reader));
 
 	MatchProperty("Mass", { reader >> m_Mass; });
-	MatchProperty("UniqueID", { reader >> m_PersistedUniqueID; });
+	MatchProperty("UniqueID", {
+		reader >> m_PersistedUniqueID;
+		s_HighestPersistedUniqueIDRead = std::max(s_HighestPersistedUniqueIDRead, m_PersistedUniqueID);
+	});
 	MatchProperty("ScriptsRestored", { reader >> m_ScriptStateRestored; });
 	MatchProperty("ScriptState", { reader >> m_PersistedScriptState; });
 	MatchProperty("LuaState", { reader >> m_PersistedLuaStateIndex; });
