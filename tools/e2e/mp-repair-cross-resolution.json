@@ -44,7 +44,7 @@
       ],
       "readback": [
         {
-          "step": 8,
+          "step": 9,
           "path": [
             "control",
             "visible"
@@ -52,7 +52,7 @@
           "equals": true
         },
         {
-          "step": 8,
+          "step": 9,
           "path": [
             "control",
             "text"
@@ -123,7 +123,7 @@
       ],
       "readback": [
         {
-          "step": 8,
+          "step": 9,
           "path": [
             "control",
             "visible"
@@ -131,7 +131,7 @@
           "equals": true
         },
         {
-          "step": 8,
+          "step": 9,
           "path": [
             "control",
             "text"
