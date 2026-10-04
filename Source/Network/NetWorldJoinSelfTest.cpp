@@ -8302,6 +8302,51 @@ namespace RTE {
 		return 0;
 	}
 
+	/// The slot a promoted watcher takes is announced as its join, and the summary counts no return for it.
+	bool TestAPromotedSeatJoinsItsSlot(std::string* error) {
+		NetMatchService service;
+		service.m_State = NetMatchServiceState::Running;
+		service.m_LocalPeerId = 3;
+		NetRosterSeat opened;
+		opened.seatId = 3;
+		opened.phase = NetSeatPhase::Held;
+		opened.holdCause = NetSeatHoldCause::Kicked;
+		service.m_SeatViews = {{2, NetMatchService::BuildSeatView(2, 2, 11, opened, "A")}};
+		service.RecordRosterTransitions({}, 1000);
+		const std::map<uint8_t, NetMatchService::SeatView> before = service.m_SeatViews;
+		NetRosterSeat promoted;
+		promoted.seatId = 5;
+		promoted.owner = 0x44;
+		promoted.phase = NetSeatPhase::Running;
+		promoted.bindingRef = 2;
+		promoted.name = "dave";
+		service.m_SeatViews = {{2, NetMatchService::BuildSeatView(2, 4, 12, promoted, "")}};
+		const size_t toastsBefore = ScenarioRunner::GetNetUiToastLog().size();
+		service.RecordRosterTransitions(before, 2000);
+		const std::vector<ScenarioRunner::NetUiToastRecord>& toasts = ScenarioRunner::GetNetUiToastLog();
+		const std::string said = toasts.size() == toastsBefore + 1 ? toasts.back().kind + ": " + toasts.back().text : std::to_string(toasts.size() - toastsBefore) + " banners";
+		std::cout << "[net-world-promoted-binding-selftest] promotion banner='" << said << "' reclaims=" << service.m_CurrentMatchSummary.reclaims
+		          << " substitutions=" << service.m_CurrentMatchSummary.substitutions << std::endl;
+		if (said != "player_joined: dave joined" || service.m_CurrentMatchSummary.reclaims != 0 || service.m_CurrentMatchSummary.substitutions != 0) {
+			*error = "promoted-seat-announced-as-a-return: the slot's new player reads '" + said + "' with " + std::to_string(service.m_CurrentMatchSummary.reclaims) + " returns counted";
+			return false;
+		}
+		// The promotion undone: the slot is the opened seat's again and says nothing; its player is named under its own seat.
+		const std::map<uint8_t, NetMatchService::SeatView> promotedViews = service.m_SeatViews;
+		service.m_SeatViews = {{2, NetMatchService::BuildSeatView(2, 2, 13, opened, "A")}};
+		const size_t undoBefore = ScenarioRunner::GetNetUiToastLog().size();
+		const auto dropsBefore = service.m_CurrentMatchSummary.drops;
+		service.RecordRosterTransitions(promotedViews, 3000);
+		const size_t undoBanners = ScenarioRunner::GetNetUiToastLog().size() - undoBefore;
+		std::cout << "[net-world-promoted-binding-selftest] promotion undone banners=" << undoBanners << " drops=" << service.m_CurrentMatchSummary.drops - dropsBefore << std::endl;
+		if (undoBanners != 0 || service.m_CurrentMatchSummary.drops != dropsBefore) {
+			*error = "promoted-seat-undo-announced-twice: the slot handed back said " + std::to_string(undoBanners) + " banners and counted " +
+			         std::to_string(service.m_CurrentMatchSummary.drops - dropsBefore) + " drops beside its player's own";
+			return false;
+		}
+		return true;
+	}
+
 	/// A watcher promoted into a freed world slot plays it under its own seat and ticket. The seat roster carries that binding to
 	/// every peer, and the slot's view names the promoted player: through a slot freed during its image transfer, a promotion
 	/// after its catch-up, a drop before its activation and its next return.
@@ -8444,6 +8489,7 @@ namespace RTE {
 		if (!ReclaimWorldSeat(admission, identity, dave, 65, 3000)) return Fail("promoted-binding: dave's return was not taken");
 		NetMatchService::PublishWorldSeatSlots(admission, world.Membership());
 		check("next-return", aliceSlot, "dave", dave.stableSeat);
+		if (std::string banner; !TestAPromotedSeatJoinsItsSlot(&banner)) wrong.push_back(banner);
 
 		if (!wrong.empty()) {
 			std::string where;

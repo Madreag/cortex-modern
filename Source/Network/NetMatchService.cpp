@@ -122,10 +122,12 @@ namespace RTE {
 			auto& previous = m_SummarySeats[peerId];
 			const bool away = SeatViewAway(view);
 			const bool wasAway = SeatViewAway(previous);
-			if (away && !wasAway) ++m_CurrentMatchSummary.drops;
-			if (previous.peerId != 0 && previous.seat.owner != 0 && view.seat.owner != 0 && view.seat.owner != previous.seat.owner) {
+			// Another seat on the slot (a world's promoted watcher, or a promotion undone) is counted under its own view.
+			const bool otherSeat = previous.peerId != 0 && previous.stableSeat != view.stableSeat;
+			if (!otherSeat && away && !wasAway) ++m_CurrentMatchSummary.drops;
+			if (!otherSeat && previous.peerId != 0 && previous.seat.owner != 0 && view.seat.owner != 0 && view.seat.owner != previous.seat.owner) {
 				++m_CurrentMatchSummary.substitutions;
-			} else if (wasAway && !away) {
+			} else if (!otherSeat && wasAway && !away) {
 				++m_CurrentMatchSummary.reclaims;
 			}
 			for (auto& peer : m_CurrentMatchSummary.peers) {
@@ -2063,13 +2065,18 @@ static std::string ResyncSaveName() {
 			const auto before = previous.find(peerId);
 			const bool known = before != previous.end();
 			const bool newHolder = known && before->second.seat.owner != 0 && view.seat.owner != 0 && view.seat.owner != before->second.seat.owner;
-			if (last.first == view.state && last.second == view.line && !newHolder) continue;
+			// Another seat on this slot (a world's promoted watcher, or a promotion undone): a player taking it joins, and the one
+			// it moves from is named under its own seat's view.
+			const bool otherSeat = known && before->second.stableSeat != view.stableSeat;
+			if (last.first == view.state && last.second == view.line && !newHolder && !otherSeat) continue;
 			const bool firstSeen = last.first.empty();
 			const bool wasAway = known && SeatViewAway(before->second);
 			// A seat the host opened has no holder left to name: the player who had it is the one who went.
 			const std::string& who = view.seat.owner == 0 && known ? before->second.name : view.name;
 			last = {view.state, view.line};
-			if (firstSeen && view.state == "Present" && peerId != m_LocalPeerId) {
+			if (otherSeat) {
+				if (view.seat.owner != 0 && peerId != m_LocalPeerId) ScenarioRunner::PushNetUiToast("player_joined", who + " joined");
+			} else if (firstSeen && view.state == "Present" && peerId != m_LocalPeerId) {
 				ScenarioRunner::PushNetUiToast("player_joined", who + " joined");
 			} else if (newHolder) {
 				ScenarioRunner::PushNetUiToast("player_substituted", who + " joined as substitute");
