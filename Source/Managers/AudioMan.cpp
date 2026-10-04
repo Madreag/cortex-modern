@@ -2931,6 +2931,71 @@ bool AudioMan::RunCheckpointEffectsSelfTest() {
 			StopAll();
 		}
 	}
+	// The 2026-09-20 writer archived a voice from its owner alone: no backend mode, no 3D distances, no effects. Such a voice
+	// restores as the positional voice its owner plays, and its next archive is a full capture.
+	{
+		bool row = false;
+		std::string detail;
+		try {
+			const auto* preset = dynamic_cast<const SoundContainer*>(g_PresetMan.GetEntityPreset("SoundContainer", "Brain Pod Hit", "Base.rte"));
+			if (!preset) throw std::runtime_error("missing sound preset");
+			std::unique_ptr<SoundContainer> source(static_cast<SoundContainer*>(preset->Clone()));
+			source->SetLoopSetting(-1);
+			source->SetPitchVariation(0);
+			source->SetPosition((m_CurrentActivityHumanPlayerPositions.empty() ? Vector() : *m_CurrentActivityHumanPlayerPositions.front()) + Vector(300.0F, 0.0F));
+			AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+			if (!source->Play() || source->GetPlayingChannels()->empty()) throw std::runtime_error("sound did not play");
+			const int identity = *source->GetPlayingChannels()->begin();
+			FMOD::Channel* live = nullptr;
+			AudioCheckpoint::Require(GetVoiceChannel(identity, &live));
+			const auto fresh = AudioCheckpoint::Control::Capture(live, true);
+			FMOD::Sound* sample = nullptr;
+			AudioCheckpoint::Require(live->getCurrentSound(&sample));
+			// That writer's whole archive step.
+			PlayingVoice& voice = m_PlayingVoices.at(identity);
+			voice.control = AudioCheckpoint::Control();
+			RefreshStoredVoiceControl(voice);
+			const std::string checkpoint = SaveCheckpoint();
+			std::unique_ptr<SoundContainer> restored;
+			{ MovableObject::FaithfulCloneScope clone(true); restored.reset(static_cast<SoundContainer*>(source->Clone())); }
+			// A process that loads the save has not played this owner yet, so the shared sample holds its own distances.
+			AudioCheckpoint::Require(sample->set3DMinMaxDistance(1.0F, 5000.0F));
+			if (!LoadCheckpoint(checkpoint)) throw std::runtime_error("audio checkpoint refused");
+			FMOD::Channel* reloaded = nullptr;
+			AudioCheckpoint::Require(GetVoiceChannel(identity, &reloaded));
+			const auto after = AudioCheckpoint::Control::Capture(reloaded, true);
+			// The positional update writes the lowpass as parameter 1 of the voice's first effect.
+			FMOD::DSP* head = nullptr;
+			FMOD_DSP_TYPE headType = FMOD_DSP_TYPE_UNKNOWN;
+			FMOD_DSP_PARAMETER_DESC* lowpassParameter = nullptr;
+			const bool headIsLowpass = reloaded->getDSP(0, &head) == FMOD_OK && head->getType(&headType) == FMOD_OK && head->getParameterInfo(1, &lowpassParameter) == FMOD_OK &&
+			                           headType == FMOD_DSP_TYPE_MULTIBAND_EQ && lowpassParameter->type == FMOD_DSP_PARAMETER_TYPE_FLOAT;
+			const FMOD_VECTOR position = GetAsFMODVector(restored->GetPosition());
+			const FMOD_RESULT updated = UpdatePositionalEffectsForSoundChannel(reloaded, &position);
+			const unsigned archivedMode = m_PlayingVoices.at(identity).control.mode;
+			// One round trip of the archive the restore keeps.
+			const std::string resaved = SaveCheckpoint();
+			if (!LoadCheckpoint(resaved)) throw std::runtime_error("re-saved audio checkpoint refused");
+			FMOD::Channel* again = nullptr;
+			AudioCheckpoint::Require(GetVoiceChannel(identity, &again));
+			const auto twice = AudioCheckpoint::Control::Capture(again, true);
+			const auto matches = [&fresh](const AudioCheckpoint::Control& control) {
+				return control.mode == fresh.mode && control.minimumDistance == fresh.minimumDistance && control.maximumDistance == fresh.maximumDistance &&
+				       control.level == fresh.level && control.effects.size() == fresh.effects.size() && !control.paused;
+			};
+			row = updated == FMOD_OK && headIsLowpass && (archivedMode & (FMOD_2D | FMOD_3D)) != 0 && matches(after) && matches(twice);
+			detail = std::format("fresh_mode={} restored_mode={} archived_mode={} fresh_distances={}/{} restored_distances={}/{} fresh_effects={} restored_effects={} resaved_effects={} "
+			                     "restored_head_dsp_type={} head_parameter_1_type={} update_result={}",
+			    fresh.mode, after.mode, archivedMode, fresh.minimumDistance, fresh.maximumDistance, after.minimumDistance, after.maximumDistance, fresh.effects.size(), after.effects.size(),
+			    twice.effects.size(), static_cast<int>(headType), lowpassParameter ? static_cast<int>(lowpassParameter->type) : -1, static_cast<int>(updated));
+			Update3DEffectsForSFXChannels();
+		} catch (const std::exception& error) {
+			detail = std::string("reason=") + error.what();
+		}
+		StopAll();
+		System::PrintDiagnosticLine(std::format("[checkpoint-audio-effects-selftest] {} an_owner_only_voice_archive_restores_positional {}\n", row ? "PASS" : "FAIL", detail));
+		passed = row && passed;
+	}
 	// A voice captured while its sample was still loading carries no rate or loop range of its own (Voice::Capture); a restore
 	// where the sample is ready starts it, and that start must not refuse the whole checkpoint.
 	{
