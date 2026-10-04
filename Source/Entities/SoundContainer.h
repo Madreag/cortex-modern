@@ -477,6 +477,14 @@ namespace RTE {
 		/// Necessary because sounds loaded from ini seem to be used directly instead of loaded from PresetMan, so their correctness can't be guaranteed when they're played.
 		/// @return The FMOD_RESULT for updating all of the SoundContainer's sounds' properties. If it's not FMOD_OK, something went wrong.
 		FMOD_RESULT UpdateSoundProperties();
+
+		/// Gets the playback mode and 3D distances UpdateSoundProperties gives one of this SoundContainer's sounds, without setting them.
+		/// @param soundData The sound to describe.
+		/// @param panningStrength The sound panning effect strength the 3D rolloff follows.
+		/// @param mode The FMOD mode the sound plays with.
+		/// @param minimumDistance The distance its attenuation starts at.
+		/// @param maximumDistance The distance past which it is silent.
+		void GetSoundProperties(const SoundData& soundData, float panningStrength, FMOD_MODE& mode, float& minimumDistance, float& maximumDistance) const;
 #pragma endregion
 
 	private:

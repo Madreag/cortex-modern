@@ -974,6 +974,15 @@ FMOD_RESULT SoundContainer::UpdateSoundProperties() {
 	return result;
 }
 
+void SoundContainer::GetSoundProperties(const SoundData& soundData, float panningStrength, FMOD_MODE& mode, float& minimumDistance, float& maximumDistance) const {
+	const bool immobile = CurrentImmobile();
+	mode = (CurrentLoops() == 0) ? FMOD_LOOP_OFF : FMOD_LOOP_NORMAL;
+	mode |= immobile ? FMOD_2D : (panningStrength == 1.0F ? FMOD_3D_INVERSEROLLOFF : FMOD_3D_CUSTOMROLLOFF);
+	const float attenuationStartDistance = immobile ? static_cast<float>(c_SoundMaxAudibleDistance) : CurrentAttenuationStartDistance();
+	minimumDistance = soundData.MinimumAudibleDistance + std::clamp(attenuationStartDistance, 0.0F, static_cast<float>(c_SoundMaxAudibleDistance) - soundData.MinimumAudibleDistance);
+	maximumDistance = static_cast<float>(c_SoundMaxAudibleDistance);
+}
+
 void SoundContainer::ReidentifyCheckpoint(uint64_t identity) {
 	if (m_CheckpointRegistered) g_AudioMan.UnregisterCheckpointSoundContainer(this, m_CheckpointIdentity);
 	m_CheckpointIdentity = identity;

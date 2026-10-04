@@ -1985,6 +1985,50 @@ void AudioMan::RefreshStoredVoiceControl(PlayingVoice& voice) {
 	voice.hasArchive = true;
 }
 
+bool AudioMan::CompleteArchivedVoiceControl(FMOD::Channel* channel, AudioCheckpoint::Voice& description, const SoundContainer* owner, float panningStrength) {
+	if (!channel || description.control.Captured()) return false;
+	// The owner's sample properties, its pan, and for a mobile owner the lowpass and panning level, as PlaySoundContainer gives a voice.
+	FMOD_RESULT result = FMOD_OK;
+	FMOD::Sound* sound = nullptr;
+	const SoundData* soundData = (owner && channel->getCurrentSound(&sound) == FMOD_OK) ? owner->GetSoundDataForSound(sound) : nullptr;
+	if (soundData) {
+		FMOD_MODE mode;
+		float minimumDistance;
+		float maximumDistance;
+		owner->GetSoundProperties(*soundData, panningStrength, mode, minimumDistance, maximumDistance);
+		result = channel->setMode(mode);
+		result = (result == FMOD_OK) ? channel->set3DMinMaxDistance(minimumDistance, maximumDistance) : result;
+	}
+	if (result == FMOD_OK && owner && owner->GetCustomPanValue() != 0.0F) result = channel->setPan(owner->GetCustomPanValue());
+	// The archive's spatial flag was its owner's mobility.
+	if (result == FMOD_OK && description.control.spatial) {
+		FMOD::DSP* lowpass = nullptr;
+		result = m_AudioSystem->createDSPByType(FMOD_DSP_TYPE_MULTIBAND_EQ, &lowpass);
+		result = (result == FMOD_OK) ? lowpass->setParameterFloat(1, 22000.0F) : result;
+		result = (result == FMOD_OK) ? channel->addDSP(0, lowpass) : result;
+		if (result != FMOD_OK && lowpass) lowpass->release();
+		result = (result == FMOD_OK) ? channel->set3DLevel(panningStrength * (owner ? owner->GetPanningStrengthMultiplier() : 1.0F)) : result;
+	}
+	FMOD_MODE mode = 0;
+	result = (result == FMOD_OK) ? channel->getMode(&mode) : result;
+	std::string reason = FMOD_ErrorString(result);
+	if (result == FMOD_OK) {
+		try {
+			AudioCheckpoint::Control control = AudioCheckpoint::Control::Capture(channel, (mode & FMOD_3D) != 0);
+			control.paused = description.control.paused;
+			control.volume = description.control.volume;
+			control.pitch = description.control.pitch;
+			if (control.spatial) control.position = description.control.position;
+			description.control = std::move(control);
+			return true;
+		} catch (const std::exception& error) {
+			reason = error.what();
+		}
+	}
+	System::PrintDiagnosticLine("[audio-checkpoint] voice " + std::to_string(description.identity) + " keeps its owner-only archive: " + reason);
+	return false;
+}
+
 void AudioMan::BindVoiceLifetime(PlayingVoice& voice, unsigned sampleFrames, float sampleRate, unsigned loopStart, unsigned loopEnd, float pitch, int loops, double position, bool paused) {
 	if (!sampleFrames || !std::isfinite(sampleRate) || !(sampleRate > 0) || !std::isfinite(pitch) || !(pitch > 0) || loops < -1) return;
 	if (loopEnd >= sampleFrames) loopEnd = sampleFrames - 1;
@@ -2077,6 +2121,8 @@ void AudioMan::StartAwaitingSampleVoices() {
 		if (!SampleReadyForPlayback(sound)) continue;
 		FMOD::Channel* channel = nullptr;
 		if (m_AudioSystem->playSound(sound, buses[description.bus], true, &channel) != FMOD_OK || !channel) continue;
+		const bool completed = CompleteArchivedVoiceControl(channel, description, found->second.owner, m_SoundPanningEffectStrength);
+		if (completed) found->second.control = description.control;
 		description.Apply(m_AudioSystem, channel);
 		TrackVoiceEffects(channel);
 		found->second.SetChannel(channel);
@@ -2096,6 +2142,10 @@ void AudioMan::StartAwaitingSampleVoices() {
 				found->second.lifetime.bus = description.bus;
 				BindVoiceLifetime(found->second, frames, rate, description.loopStart, description.loopEnd, description.control.pitch > 0 ? description.control.pitch : 1.0F, description.loops, description.position, description.control.paused);
 			}
+		}
+		// A completed voice takes its distance volume and lowpass before it is heard, as a played voice does.
+		if (FMOD_VECTOR position; completed && description.control.spatial && m_SoundChannelMinimumAudibleDistances.contains(identity) && channel->get3DAttributes(&position, nullptr) == FMOD_OK) {
+			UpdatePositionalEffectsForSoundChannel(channel, &position);
 		}
 		StoreVoiceArchive(found->second);
 		started.push_back(identity);
@@ -2542,7 +2592,9 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			~CandidateCleanup() { if (!committed) for (const auto& [identity, channel]: channels) AudioMan::StopDetached(channel); }
 		} cleanup{backendCandidates};
 		const std::array<FMOD::ChannelGroup*, 3> buses = {m_SFXChannelGroup, m_UIChannelGroup, m_MusicChannelGroup};
-		for (const auto& voice: state.voices) {
+		size_t completedVoices = 0;
+		std::vector<int> completedSpatialVoices;
+		for (auto& voice: state.voices) {
 			if (!voice.playing) continue;
 			if (!SampleReadyForPlayback(sounds.at(voice.path))) {
 				candidates.at(voice.identity).awaitingSample = true;
@@ -2553,6 +2605,11 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			AudioCheckpoint::Require(m_AudioSystem->playSound(sounds.at(voice.path), buses[voice.bus], true, &channel));
 			backendCandidates.emplace(voice.identity, channel);
 			NoteChannelOrigin(channel, voice.identity, nullptr, voice.path, "restored");
+			if (CompleteArchivedVoiceControl(channel, voice, candidates.at(voice.identity).owner, state.panning)) {
+				candidates.at(voice.identity).control = voice.control;
+				++completedVoices;
+				if (voice.control.spatial) completedSpatialVoices.push_back(voice.identity);
+			}
 			voice.Apply(m_AudioSystem, channel);
 			TrackVoiceEffects(channel);
 			candidates.at(voice.identity).SetChannel(channel);
@@ -2649,6 +2706,14 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			std::lock_guard lock(g_SoundEventsListMutex[player]);
 			m_SoundEvents[player].swap(events[player]);
 		}
+		// A completed voice takes its distance volume and lowpass before the mixer runs again, as a played voice does.
+		for (int identity: completedSpatialVoices) {
+			FMOD::Channel* channel = m_PlayingVoices.at(identity).Channel();
+			if (FMOD_VECTOR position; channel && m_SoundChannelMinimumAudibleDistances.contains(identity) && channel->get3DAttributes(&position, nullptr) == FMOD_OK) {
+				UpdatePositionalEffectsForSoundChannel(channel, &position);
+			}
+		}
+		if (completedVoices) System::PrintDiagnosticLine("[audio-checkpoint] completed " + std::to_string(completedVoices) + " owner-only voice archives (" + std::to_string(completedSpatialVoices.size()) + " positional)");
 		cleanup.committed = true;
 		originalEffects.Commit();
 		if (m_AudioEnabled && state.enabled) m_GroupEffects.swap(restoredGroupEffects);
@@ -2930,6 +2995,71 @@ bool AudioMan::RunCheckpointEffectsSelfTest() {
 			passed = false;
 			StopAll();
 		}
+	}
+	// The 2026-09-20 writer archived a voice from its owner alone: no backend mode, no 3D distances, no effects. Such a voice
+	// restores as the positional voice its owner plays, and its next archive is a full capture.
+	{
+		bool row = false;
+		std::string detail;
+		try {
+			const auto* preset = dynamic_cast<const SoundContainer*>(g_PresetMan.GetEntityPreset("SoundContainer", "Brain Pod Hit", "Base.rte"));
+			if (!preset) throw std::runtime_error("missing sound preset");
+			std::unique_ptr<SoundContainer> source(static_cast<SoundContainer*>(preset->Clone()));
+			source->SetLoopSetting(-1);
+			source->SetPitchVariation(0);
+			source->SetPosition((m_CurrentActivityHumanPlayerPositions.empty() ? Vector() : *m_CurrentActivityHumanPlayerPositions.front()) + Vector(300.0F, 0.0F));
+			AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+			if (!source->Play() || source->GetPlayingChannels()->empty()) throw std::runtime_error("sound did not play");
+			const int identity = *source->GetPlayingChannels()->begin();
+			FMOD::Channel* live = nullptr;
+			AudioCheckpoint::Require(GetVoiceChannel(identity, &live));
+			const auto fresh = AudioCheckpoint::Control::Capture(live, true);
+			FMOD::Sound* sample = nullptr;
+			AudioCheckpoint::Require(live->getCurrentSound(&sample));
+			// That writer's whole archive step.
+			PlayingVoice& voice = m_PlayingVoices.at(identity);
+			voice.control = AudioCheckpoint::Control();
+			RefreshStoredVoiceControl(voice);
+			const std::string checkpoint = SaveCheckpoint();
+			std::unique_ptr<SoundContainer> restored;
+			{ MovableObject::FaithfulCloneScope clone(true); restored.reset(static_cast<SoundContainer*>(source->Clone())); }
+			// A process that loads the save has not played this owner yet, so the shared sample holds its own distances.
+			AudioCheckpoint::Require(sample->set3DMinMaxDistance(1.0F, 5000.0F));
+			if (!LoadCheckpoint(checkpoint)) throw std::runtime_error("audio checkpoint refused");
+			FMOD::Channel* reloaded = nullptr;
+			AudioCheckpoint::Require(GetVoiceChannel(identity, &reloaded));
+			const auto after = AudioCheckpoint::Control::Capture(reloaded, true);
+			// The positional update writes the lowpass as parameter 1 of the voice's first effect.
+			FMOD::DSP* head = nullptr;
+			FMOD_DSP_TYPE headType = FMOD_DSP_TYPE_UNKNOWN;
+			FMOD_DSP_PARAMETER_DESC* lowpassParameter = nullptr;
+			const bool headIsLowpass = reloaded->getDSP(0, &head) == FMOD_OK && head->getType(&headType) == FMOD_OK && head->getParameterInfo(1, &lowpassParameter) == FMOD_OK &&
+			                           headType == FMOD_DSP_TYPE_MULTIBAND_EQ && lowpassParameter->type == FMOD_DSP_PARAMETER_TYPE_FLOAT;
+			const FMOD_VECTOR position = GetAsFMODVector(restored->GetPosition());
+			const FMOD_RESULT updated = UpdatePositionalEffectsForSoundChannel(reloaded, &position);
+			const unsigned archivedMode = m_PlayingVoices.at(identity).control.mode;
+			// One round trip of the archive the restore keeps.
+			const std::string resaved = SaveCheckpoint();
+			if (!LoadCheckpoint(resaved)) throw std::runtime_error("re-saved audio checkpoint refused");
+			FMOD::Channel* again = nullptr;
+			AudioCheckpoint::Require(GetVoiceChannel(identity, &again));
+			const auto twice = AudioCheckpoint::Control::Capture(again, true);
+			const auto matches = [&fresh](const AudioCheckpoint::Control& control) {
+				return control.mode == fresh.mode && control.minimumDistance == fresh.minimumDistance && control.maximumDistance == fresh.maximumDistance &&
+				       control.level == fresh.level && control.effects.size() == fresh.effects.size() && !control.paused;
+			};
+			row = updated == FMOD_OK && headIsLowpass && (archivedMode & (FMOD_2D | FMOD_3D)) != 0 && matches(after) && matches(twice);
+			detail = std::format("fresh_mode={} restored_mode={} archived_mode={} fresh_distances={}/{} restored_distances={}/{} fresh_effects={} restored_effects={} resaved_effects={} "
+			                     "restored_head_dsp_type={} head_parameter_1_type={} update_result={}",
+			    fresh.mode, after.mode, archivedMode, fresh.minimumDistance, fresh.maximumDistance, after.minimumDistance, after.maximumDistance, fresh.effects.size(), after.effects.size(),
+			    twice.effects.size(), static_cast<int>(headType), lowpassParameter ? static_cast<int>(lowpassParameter->type) : -1, static_cast<int>(updated));
+			Update3DEffectsForSFXChannels();
+		} catch (const std::exception& error) {
+			detail = std::string("reason=") + error.what();
+		}
+		StopAll();
+		System::PrintDiagnosticLine(std::format("[checkpoint-audio-effects-selftest] {} an_owner_only_voice_archive_restores_positional {}\n", row ? "PASS" : "FAIL", detail));
+		passed = row && passed;
 	}
 	// A voice captured while its sample was still loading carries no rate or loop range of its own (Voice::Capture); a restore
 	// where the sample is ready starts it, and that start must not refuse the whole checkpoint.
