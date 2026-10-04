@@ -27,15 +27,15 @@ class FrozenIdentity(unittest.TestCase):
     def test_an_unnamed_newer_tip_is_not_an_authorized_export(self):
         with patch.object(Path, 'is_file', return_value=True), \
                 patch.object(Path, 'read_text', return_value=json.dumps(dict(frozen_commit='f'*40, files=[]))):
-            with self.assertRaisesRegex(ValueError, 'NOTE 11'):
+            with self.assertRaisesRegex(ValueError, 'NOTE 13'):
                 frozen.receipt('/virtual')
 
-    def test_erol_pc_is_refused_before_even_a_capability_launch(self):
-        payload = dict(box=dict(kind='windows-task'), specs=[])
+    def test_retired_host_is_refused_before_even_a_capability_launch(self):
+        payload = dict(box=dict(name='Z13',kind='windows-task',hostname='EROL-TABLET'), specs=[])
         with patch.object(Path, 'read_text', return_value=json.dumps(payload)), \
                 patch.object(native.platform, 'node', return_value='EROL-PC'), \
                 patch.object(native, 'read_capabilities') as caps:
-            with self.assertRaisesRegex(ValueError, 'driver only'):
+            with self.assertRaisesRegex(ValueError, 'retired'):
                 native.run_payload('/virtual/payload.json')
         caps.assert_not_called()
 

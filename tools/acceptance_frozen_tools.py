@@ -12,7 +12,7 @@ import tarfile
 
 from acceptance_runtime import retained_open, storage_scope, write_json
 
-AUTHORIZED_COMMIT = '7b9ff5067bc2901cfdac497d89a5961bb42afdb0'
+AUTHORIZED_COMMIT = '4dd83eaa8bc50d98e090c9f1043a183fd66b6abe'
 
 
 def digest(path):
@@ -26,7 +26,7 @@ def receipt(root, *, verify=True):
         return None
     value = json.loads(path.read_text(encoding='utf-8'))
     if value.get('frozen_commit') != AUTHORIZED_COMMIT:
-        raise ValueError('tool bundle is not the NOTE 11 authorized commit')
+        raise ValueError('tool bundle is not the NOTE 13 authorized commit')
     if verify:
         for entry in value['files']:
             name = Path(entry['path'])
@@ -74,7 +74,7 @@ def compose(repo, export, out):
     repo, export, out = Path(repo).resolve(), Path(export).resolve(), Path(out).resolve()
     frozen = json.loads((export/'export.json').read_text(encoding='utf-8'))
     if frozen.get('source_commit') != AUTHORIZED_COMMIT:
-        raise ValueError('only the exact NOTE 11 frozen export is authorized')
+        raise ValueError('only the exact NOTE 13 frozen export is authorized')
     current = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
     added = subprocess.check_output(['git', '-C', str(repo), 'diff', '--name-only', '--diff-filter=A', '-z',
                                      AUTHORIZED_COMMIT, current, '--', 'tools'], text=True).split('\0')
@@ -103,7 +103,7 @@ def compose(repo, export, out):
     keep(header, subprocess.check_output(['git', '-C', str(repo), 'show', current+':'+header]), 'driver-config')
     value = dict(frozen_commit=AUTHORIZED_COMMIT, frozen_export=str(export),
                  coordinator_commit=current, coordinator_source_repo=str(repo), files=files,
-                 frozen_files_modified=0, authorization='LEAD-NOTES NOTE 11')
+                 frozen_files_modified=0, authorization='LEAD-NOTES NOTE 13')
     write_json(out/'acceptance-tools.json', value)
     receipt(out)
     return value

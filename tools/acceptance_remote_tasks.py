@@ -113,7 +113,7 @@ def make_plan(options, profiles, mod_receipts=None):
         plan['driver_tracked_changes'] = []  # Every bundled committed blob was checked by driver_git_context.
         plan.update(frozen_tools=dict(commit=frozen['frozen_commit'], export=frozen['frozen_export'],
                                       coordinator_commit=frozen['coordinator_commit'], frozen_files_modified=0),
-                    authorization='LEAD-NOTES NOTE 11 frozen tools / NOTE 12 placement / RESUME 3')
+                    authorization='LEAD-NOTES NOTE 13 frozen tools / NOTE 12 placement / RESUME 3')
         cross.coordinator(plan)
     plan['driver_sources']['acceptance_remote_tasks.py'] = sha256(Path(__file__))
     return plan
