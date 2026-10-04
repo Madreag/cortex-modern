@@ -4867,7 +4867,7 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::AnswerStalledReturnersLocked(uint64_t nowMs) {
 		// A returner that replays slower than the round plays keeps catching up: its activation waits until its replay shows
-		// headroom, so no peer ever waits on it, and a restart would only hand the same machine the same gap again.
+		// headroom, so no peer ever waits on it, until the round's history sends it back for a fresh image past the lag limit.
 		for (const NetPeerId connection: m_WorldJoin.ReturnersWithoutHeadroom(nowMs, c_NetWorldHeadroomWaitMs)) {
 			const NetWorldJoinSession* session = m_WorldJoin.FindSession(connection);
 			if (!session || !m_SlowReturnersNoted.insert(connection).second) continue;
