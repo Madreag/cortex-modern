@@ -1,0 +1,246 @@
+{
+ "schema": 1,
+ "note": "SHA-256 of each synthetic value and of its defining line; no value is stored",
+ "fixtures": [
+  {
+   "value_sha256": "7cbaf5a277ae8932c8091a3edbf7bd1d1cb150732bbc9f7a6dde1b248d94fd6d",
+   "length": 9,
+   "kind": "shape:coturn-secret-line",
+   "defined_at": "external/sources/RakNet/src/NatPunchthroughServer.cpp:133",
+   "line_sha256": "ee9e042029ada94b408ca4b350d9656842b374ee17df9d5043f5b5a4a9a4fef2",
+   "why": "third-party source: an assignment or format string that only looks like a login"
+  },
+  {
+   "value_sha256": "8f9da5d06d0852c0fff126782d9bc362b36b5c564ab250189b9a21310c1f57f0",
+   "length": 9,
+   "kind": "shape:coturn-secret-line",
+   "defined_at": "external/sources/RakNet/src/NatPunchthroughServer.cpp:164",
+   "line_sha256": "f4ec44884e4ad1b45ace82c3b6b563cad44cc9ba4a383872fd4b04d013e88edb",
+   "why": "third-party source: an assignment or format string that only looks like a login"
+  },
+  {
+   "value_sha256": "8f9da5d06d0852c0fff126782d9bc362b36b5c564ab250189b9a21310c1f57f0",
+   "length": 9,
+   "kind": "shape:coturn-secret-line",
+   "defined_at": "external/sources/RakNet/src/NatPunchthroughServer.cpp:461",
+   "line_sha256": "f4ec44884e4ad1b45ace82c3b6b563cad44cc9ba4a383872fd4b04d013e88edb",
+   "why": "third-party source: an assignment or format string that only looks like a login"
+  },
+  {
+   "value_sha256": "5383bd94021079f135560923bde35975567f125074d0dafe0f25353c1dee5b25",
+   "length": 12,
+   "kind": "shape:coturn-secret-line",
+   "defined_at": "external/sources/allegro 4.4.3.1-custom/misc/sf-cf.py:62",
+   "line_sha256": "98351f71a8ad5cd5e79ad5cc80166e43e4eb27be7c660a6de126c6a4a9fed201",
+   "why": "third-party source: an assignment or format string that only looks like a login"
+  },
+  {
+   "value_sha256": "1143b96d92d18e9689b60297894ce0d73a45aefc0a896431cb6b1b7665fc8025",
+   "length": 11,
+   "kind": "shape:json-relay-setting",
+   "defined_at": "tools/e2e/mp-direct-vs-relay.json:105",
+   "line_sha256": "8534f5a34353e4304a4df9526e22be4aa690f5c4872370d0d544d70c4419b264",
+   "why": "e2e scenario templates and negative fixtures: placeholders and deliberately invalid sample logins"
+  },
+  {
+   "value_sha256": "00d78918a28cdb5867bd798e0bba6079499dc242e9e18df5790a20a7c1a154b3",
+   "length": 11,
+   "kind": "shape:json-relay-setting",
+   "defined_at": "tools/e2e/mp-direct-vs-relay.json:106",
+   "line_sha256": "1683f90c2829e881fbc78e3d959fd64c294c5afa5f1c8783fe72daf335769e6f",
+   "why": "e2e scenario templates and negative fixtures: placeholders and deliberately invalid sample logins"
+  },
+  {
+   "value_sha256": "1143b96d92d18e9689b60297894ce0d73a45aefc0a896431cb6b1b7665fc8025",
+   "length": 11,
+   "kind": "shape:json-relay-setting",
+   "defined_at": "tools/e2e/mp-direct-vs-relay.json:83",
+   "line_sha256": "8534f5a34353e4304a4df9526e22be4aa690f5c4872370d0d544d70c4419b264",
+   "why": "e2e scenario templates and negative fixtures: placeholders and deliberately invalid sample logins"
+  },
+  {
+   "value_sha256": "00d78918a28cdb5867bd798e0bba6079499dc242e9e18df5790a20a7c1a154b3",
+   "length": 11,
+   "kind": "shape:json-relay-setting",
+   "defined_at": "tools/e2e/mp-direct-vs-relay.json:84",
+   "line_sha256": "1683f90c2829e881fbc78e3d959fd64c294c5afa5f1c8783fe72daf335769e6f",
+   "why": "e2e scenario templates and negative fixtures: placeholders and deliberately invalid sample logins"
+  },
+  {
+   "value_sha256": "1143b96d92d18e9689b60297894ce0d73a45aefc0a896431cb6b1b7665fc8025",
+   "length": 11,
+   "kind": "shape:menu-relay-login",
+   "defined_at": "tools/e2e/mp-direct-vs-relay.relay.client.menu.txt:13",
+   "line_sha256": "6569865d81581544ddde07254f236b684115e6b425b4987abf816745cc8d6619",
+   "why": "menu script templates: {TOKEN} placeholders the harness fills at run time"
+  },
+  {
+   "value_sha256": "00d78918a28cdb5867bd798e0bba6079499dc242e9e18df5790a20a7c1a154b3",
+   "length": 11,
+   "kind": "shape:menu-relay-login",
+   "defined_at": "tools/e2e/mp-direct-vs-relay.relay.client.menu.txt:14",
+   "line_sha256": "d4186e9810aa2f00a82ffd210493d898116d2a11f766ace4d7b0e4ac4e640a96",
+   "why": "menu script templates: {TOKEN} placeholders the harness fills at run time"
+  },
+  {
+   "value_sha256": "1143b96d92d18e9689b60297894ce0d73a45aefc0a896431cb6b1b7665fc8025",
+   "length": 11,
+   "kind": "shape:menu-relay-login",
+   "defined_at": "tools/e2e/mp-direct-vs-relay.relay.host.menu.txt:13",
+   "line_sha256": "6569865d81581544ddde07254f236b684115e6b425b4987abf816745cc8d6619",
+   "why": "menu script templates: {TOKEN} placeholders the harness fills at run time"
+  },
+  {
+   "value_sha256": "00d78918a28cdb5867bd798e0bba6079499dc242e9e18df5790a20a7c1a154b3",
+   "length": 11,
+   "kind": "shape:menu-relay-login",
+   "defined_at": "tools/e2e/mp-direct-vs-relay.relay.host.menu.txt:14",
+   "line_sha256": "d4186e9810aa2f00a82ffd210493d898116d2a11f766ace4d7b0e4ac4e640a96",
+   "why": "menu script templates: {TOKEN} placeholders the harness fills at run time"
+  },
+  {
+   "value_sha256": "1143b96d92d18e9689b60297894ce0d73a45aefc0a896431cb6b1b7665fc8025",
+   "length": 11,
+   "kind": "shape:menu-relay-login",
+   "defined_at": "tools/e2e/mp-relay-fixed.host.menu.txt:12",
+   "line_sha256": "6569865d81581544ddde07254f236b684115e6b425b4987abf816745cc8d6619",
+   "why": "menu script templates: {TOKEN} placeholders the harness fills at run time"
+  },
+  {
+   "value_sha256": "00d78918a28cdb5867bd798e0bba6079499dc242e9e18df5790a20a7c1a154b3",
+   "length": 11,
+   "kind": "shape:menu-relay-login",
+   "defined_at": "tools/e2e/mp-relay-fixed.host.menu.txt:13",
+   "line_sha256": "d4186e9810aa2f00a82ffd210493d898116d2a11f766ace4d7b0e4ac4e640a96",
+   "why": "menu script templates: {TOKEN} placeholders the harness fills at run time"
+  },
+  {
+   "value_sha256": "1143b96d92d18e9689b60297894ce0d73a45aefc0a896431cb6b1b7665fc8025",
+   "length": 11,
+   "kind": "shape:menu-relay-login",
+   "defined_at": "tools/e2e/mp-relay-fixed.host.menu.txt:51",
+   "line_sha256": "bf8b6010143012b6da0a2923a5e2c0833721705982c24e9c20f81a30007d2771",
+   "why": "menu script templates: {TOKEN} placeholders the harness fills at run time"
+  },
+  {
+   "value_sha256": "00d78918a28cdb5867bd798e0bba6079499dc242e9e18df5790a20a7c1a154b3",
+   "length": 11,
+   "kind": "shape:menu-relay-login",
+   "defined_at": "tools/e2e/mp-relay-fixed.host.menu.txt:52",
+   "line_sha256": "72cd8f88dbcc9d2b31aa45df4630d0704973f1a0ab829413eb1a40d34d7b8678",
+   "why": "menu script templates: {TOKEN} placeholders the harness fills at run time"
+  },
+  {
+   "value_sha256": "a81dc27936eccf0856c9a59cd860e375ababf148d0b6aa5f7902109636bbcbe1",
+   "length": 35,
+   "kind": "shape:ini-relay-login",
+   "defined_at": "tools/feel/relay_join.py:118",
+   "line_sha256": "34f14f89db7d23357258260b427ae13922e3e9191522951df58e048d7b3e78d3",
+   "why": "the relay join driver: a keyword-argument line naming the settings keys, holding no value"
+  },
+  {
+   "value_sha256": "0537c4b0c7087395bc0ac3991b90daf6f327b48444b34a58a5149bd30c25087b",
+   "length": 14,
+   "kind": "shape:coturn-secret-line",
+   "defined_at": "tools/relay_gate_test.py:26",
+   "line_sha256": "98324b5ab9c6acd0dc15b34d05d437a0b9099e826de87254ca358ad9b015fe56",
+   "why": "the relay sweep's own unit rows: synthetic logins each row builds"
+  },
+  {
+   "value_sha256": "b9982cc09a585fe77de079a55d63aceac03b888e9fee1d9bdf0202c09e0b298c",
+   "length": 25,
+   "kind": "shape:coturn-secret-line",
+   "defined_at": "tools/relay_gate_test.py:675",
+   "line_sha256": "ad51ea7d75222871576aeef72e8d72d62d7aba6a33ccf76534bad90b446ec1d7",
+   "why": "the relay sweep's own unit rows: synthetic logins each row builds"
+  },
+  {
+   "value_sha256": "8a78baa332541f290a418c41db49479a9a31e9f33594ec17b2b127167c94ddcf",
+   "length": 6,
+   "kind": "shape:menu-relay-login",
+   "defined_at": "tools/relay_gate_test.py:679",
+   "line_sha256": "bfc4510195a27b2c2a19e12a4e784b0a942ad3dd3dab8912b102a9e10182e9a4",
+   "why": "the relay sweep's own unit rows: synthetic logins each row builds"
+  },
+  {
+   "value_sha256": "58d8a99c419262c860b1b99b3f0d6cfb2cb6d4ab3ada4c65221e8dd70d8a994e",
+   "length": 40,
+   "kind": "shape:json-login-field",
+   "defined_at": "tools/relay_gate_test.py:688",
+   "line_sha256": "046721c6da51927520b529bc02510969bbf5b068cc918f676c102ffc4ac57b34",
+   "why": "the relay sweep's own unit rows: synthetic logins each row builds"
+  },
+  {
+   "value_sha256": "965929f266775b606a0e7870d1012e927ca6542e2bc739af2c953086b3054b5c",
+   "length": 15,
+   "kind": "shape:json-login-field",
+   "defined_at": "tools/relay_gate_test.py:688",
+   "line_sha256": "046721c6da51927520b529bc02510969bbf5b068cc918f676c102ffc4ac57b34",
+   "why": "the relay sweep's own unit rows: synthetic logins each row builds"
+  },
+  {
+   "value_sha256": "0bfe935e70c321c7ca3afc75ce0d0ca2f98b5422e008bb31c00c6d7f1f1c0ad6",
+   "length": 1,
+   "kind": "shape:json-login-field",
+   "defined_at": "tools/session_directory/test_session_directory.py:190",
+   "line_sha256": "cd45760588a081ae465375e3edb0da2f29833c6fa4bcb4b77eb4b3a76e973cf1",
+   "why": "the directory's unit tests: sample relay logins built for those tests"
+  },
+  {
+   "value_sha256": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+   "length": 1,
+   "kind": "shape:json-login-field",
+   "defined_at": "tools/session_directory/test_session_directory.py:190",
+   "line_sha256": "cd45760588a081ae465375e3edb0da2f29833c6fa4bcb4b77eb4b3a76e973cf1",
+   "why": "the directory's unit tests: sample relay logins built for those tests"
+  },
+  {
+   "value_sha256": "67e6bec25586020d768f464f80e3c549161974d42f8a53e9b2d9a920150bff52",
+   "length": 12,
+   "kind": "shape:json-login-field",
+   "defined_at": "tools/session_directory/test_session_directory.py:222",
+   "line_sha256": "35187447c732a9a50c3972043507f2e059195dfa70c86ab2c975b8b3fba9a396",
+   "why": "the directory's unit tests: sample relay logins built for those tests"
+  },
+  {
+   "value_sha256": "dca6861589d640c028853cee4c51e8c222c3a6b52ad396864e1cf0c742571f42",
+   "length": 16,
+   "kind": "shape:json-login-field",
+   "defined_at": "tools/session_directory/test_session_directory.py:222",
+   "line_sha256": "35187447c732a9a50c3972043507f2e059195dfa70c86ab2c975b8b3fba9a396",
+   "why": "the directory's unit tests: sample relay logins built for those tests"
+  },
+  {
+   "value_sha256": "6246cc49b75a8b3ca4fd746293d568d2ec1ea86dc8a331e1b00dfc610c565232",
+   "length": 14,
+   "kind": "shape:json-login-field",
+   "defined_at": "tools/session_directory/test_session_directory.py:238",
+   "line_sha256": "75c1820ccda2d00bf058bcbddf44483b304d388807378faac939d587b373d2d3",
+   "why": "the directory's unit tests: sample relay logins built for those tests"
+  },
+  {
+   "value_sha256": "748d03338e41ea1b7d228a8b3263dc149287c408106054f71c31f4dbfc792ee9",
+   "length": 18,
+   "kind": "shape:json-login-field",
+   "defined_at": "tools/session_directory/test_session_directory.py:238",
+   "line_sha256": "75c1820ccda2d00bf058bcbddf44483b304d388807378faac939d587b373d2d3",
+   "why": "the directory's unit tests: sample relay logins built for those tests"
+  },
+  {
+   "value_sha256": "029f12e06e1e4f0052032ae525b9b2d77868d4c224c1fb6c34936b4e34399cfb",
+   "length": 13,
+   "kind": "shape:json-relay-setting",
+   "defined_at": "tools/test_menu_readback.py:2035",
+   "line_sha256": "8f32d67e6c2a31eb356e4977ac62ddf8c9192219f7897194a89b8d3aa0e52248",
+   "why": "the menu readback driver: sample relay logins typed into the boxes under test"
+  },
+  {
+   "value_sha256": "26dd5108ac4cc667ad9775ee675f87b5956ab328c6ac8358fb27ed625cf49dfe",
+   "length": 17,
+   "kind": "shape:json-relay-setting",
+   "defined_at": "tools/test_menu_readback.py:2035",
+   "line_sha256": "8f32d67e6c2a31eb356e4977ac62ddf8c9192219f7897194a89b8d3aa0e52248",
+   "why": "the menu readback driver: sample relay logins typed into the boxes under test"
+  }
+ ]
+}

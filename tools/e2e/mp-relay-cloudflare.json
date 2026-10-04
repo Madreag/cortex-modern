@@ -1,0 +1,391 @@
+{
+  "schema": 1,
+  "name": "mp-relay-cloudflare",
+  "cross_machine": true,
+  "driver": "tools/relay_cloudflare_match.py",
+  "title": "A Relay only match through the Cloudflare relay the directory mints, then through our own relay minted by the directory's coturn backend, then the host's own relay and pair entered by hand (Relay = Fixed), then Automatic, proved by the transport's own receipts",
+  "capture_policy": "No picture: the route is proved by each peer's same-session selected-candidate and RouteAllowed lines on every connection, the ICE candidates each peer itself sent through the directory (a Relay only peer sends relay candidates only, each at the relay's address), every inherited relay setting cleared so the offer is the only relay a connection can hold (the binding 'by exclusion'), the directory's relay_offer_issued receipt for the session, fresh past the run's end. Labels and settings are never route proof. Every key and minted login stays in the driver's memory; the run's files are swept on each box (salted digests travel), scrubbed, swept again and only then fetched.",
+  "boxes": {
+    "host": "ally",
+    "client": "edith"
+  },
+  "ticks": 1201,
+  "runs": [
+    {
+      "name": "cloudflare",
+      "relay": "cloudflare",
+      "host_relay_mode": "Directory",
+      "relay_ttl_cap": 86400,
+      "timeout_s": 420,
+      "peers": [
+        {
+          "name": "host",
+          "box": "ally",
+          "connection": "RelayOnly"
+        },
+        {
+          "name": "client",
+          "box": "edith",
+          "connection": "RelayOnly"
+        }
+      ]
+    },
+    {
+      "name": "coturn",
+      "relay": "coturn",
+      "host_relay_mode": "Directory",
+      "timeout_s": 420,
+      "peers": [
+        {
+          "name": "host",
+          "box": "ally",
+          "connection": "RelayOnly"
+        },
+        {
+          "name": "client",
+          "box": "edith",
+          "connection": "RelayOnly"
+        }
+      ],
+      "relay_ttl_cap": 900
+    },
+    {
+      "name": "fixed",
+      "relay": "fixed",
+      "host_relay_mode": "Fixed",
+      "timeout_s": 600,
+      "peers": [
+        {
+          "name": "host",
+          "box": "ally",
+          "connection": "Automatic",
+          "judged_connection": "RelayOnly",
+          "menu_script": "mp-relay-fixed.host.menu.txt"
+        },
+        {
+          "name": "client",
+          "box": "edith",
+          "connection": "Automatic",
+          "judged_connection": "RelayOnly",
+          "menu_script": "mp-relay-join.client.menu.txt",
+          "menu_choice": "Relay only"
+        }
+      ]
+    },
+    {
+      "name": "automatic",
+      "relay": "automatic",
+      "host_relay_mode": "Directory",
+      "relay_ttl_cap": 86400,
+      "timeout_s": 420,
+      "peers": [
+        {
+          "name": "host",
+          "box": "ally",
+          "connection": "Automatic"
+        },
+        {
+          "name": "client",
+          "box": "edith",
+          "connection": "Automatic"
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "cf-identities",
+      "run": "cloudflare",
+      "check": "identities",
+      "what": "Both boxes run one executable bound to a build receipt at the same commit."
+    },
+    {
+      "id": "cf-builds",
+      "run": "cloudflare",
+      "check": "builds",
+      "what": "Each peer's runner hash equals its box's build receipt."
+    },
+    {
+      "id": "cf-provider-201",
+      "run": "cloudflare",
+      "check": "provider_201",
+      "what": "Cloudflare answered every credential request of the directory with HTTP 201."
+    },
+    {
+      "id": "cf-offer",
+      "run": "cloudflare",
+      "check": "offer",
+      "what": "The directory issued a Cloudflare offer for this very session, naming only Cloudflare's servers, and the client's report names a relayed connection at a Cloudflare address."
+    },
+    {
+      "id": "cf-route-host",
+      "run": "cloudflare",
+      "peer": "host",
+      "check": "route:host",
+      "what": "The host's transport selected a relay candidate and allowed the relay route for this session, and no other route."
+    },
+    {
+      "id": "cf-route-client",
+      "run": "cloudflare",
+      "peer": "client",
+      "check": "route:client",
+      "what": "The client's transport selected a relay candidate and allowed the relay route for this session, and no other route."
+    },
+    {
+      "id": "cf-address-host",
+      "run": "cloudflare",
+      "peer": "host",
+      "check": "address:host",
+      "what": "Every candidate the host sent was a relay candidate at a Cloudflare address."
+    },
+    {
+      "id": "cf-address-client",
+      "run": "cloudflare",
+      "peer": "client",
+      "check": "address:client",
+      "what": "Every candidate the client sent was a relay candidate at a Cloudflare address."
+    },
+    {
+      "id": "cf-exits",
+      "run": "cloudflare",
+      "check": "exits",
+      "what": "Both engines ended clean with their evidence."
+    },
+    {
+      "id": "cf-history",
+      "run": "cloudflare",
+      "check": "full_history",
+      "what": "Both peers recorded every frame of the 1201."
+    },
+    {
+      "id": "cf-hashes",
+      "run": "cloudflare",
+      "check": "hashes_equal",
+      "what": "The live hashes agree on every compared frame and the traces agree."
+    },
+    {
+      "id": "cf-feel",
+      "run": "cloudflare",
+      "check": "feel_bars",
+      "what": "Both peers hold the feel driver's gates through the relay."
+    },
+    {
+      "id": "cf-holds",
+      "run": "cloudflare",
+      "check": "holds",
+      "what": "No seat was held."
+    },
+    {
+      "id": "cf-rtt",
+      "run": "cloudflare",
+      "check": "rtt_recorded",
+      "what": "The transport's own round trip over the relay is recorded."
+    },
+    {
+      "id": "cf-secrets",
+      "run": "cloudflare",
+      "check": "no_secret_in_files",
+      "what": "No file of the run holds the key, the token or a minted login."
+    },
+    {
+      "id": "co-identities",
+      "run": "coturn",
+      "check": "identities",
+      "what": "Both boxes run one executable bound to a build receipt at the same commit."
+    },
+    {
+      "id": "co-builds",
+      "run": "coturn",
+      "check": "builds",
+      "what": "Each peer's runner hash equals its box's build receipt."
+    },
+    {
+      "id": "co-offer",
+      "run": "coturn",
+      "check": "offer",
+      "what": "The directory minted a time-limited login from our relay's secret (the coturn backend) for this very session, fresh past the run's end, naming only our relay."
+    },
+    {
+      "id": "co-route-host",
+      "run": "coturn",
+      "peer": "host",
+      "check": "route:host",
+      "what": "The host's transport selected and allowed the relay route for this session, and no other route."
+    },
+    {
+      "id": "co-route-client",
+      "run": "coturn",
+      "peer": "client",
+      "check": "route:client",
+      "what": "The client's transport selected and allowed the relay route for this session, and no other route."
+    },
+    {
+      "id": "co-address-host",
+      "run": "coturn",
+      "peer": "host",
+      "check": "address:host",
+      "what": "Every candidate the host sent was a relay candidate at our relay's address."
+    },
+    {
+      "id": "co-address-client",
+      "run": "coturn",
+      "peer": "client",
+      "check": "address:client",
+      "what": "Every candidate the client sent was a relay candidate at our relay's address."
+    },
+    {
+      "id": "co-exits",
+      "run": "coturn",
+      "check": "exits",
+      "what": "Both engines ended clean with their evidence."
+    },
+    {
+      "id": "co-history",
+      "run": "coturn",
+      "check": "full_history",
+      "what": "Both peers recorded every frame of the 1201."
+    },
+    {
+      "id": "co-hashes",
+      "run": "coturn",
+      "check": "hashes_equal",
+      "what": "The live hashes agree on every compared frame and the traces agree."
+    },
+    {
+      "id": "co-feel",
+      "run": "coturn",
+      "check": "feel_bars",
+      "what": "Both peers hold the feel driver's gates through our relay."
+    },
+    {
+      "id": "co-holds",
+      "run": "coturn",
+      "check": "holds",
+      "what": "No seat was held."
+    },
+    {
+      "id": "co-rtt",
+      "run": "coturn",
+      "check": "rtt_recorded",
+      "what": "The transport's own round trip over our relay is recorded."
+    },
+    {
+      "id": "co-secrets",
+      "run": "coturn",
+      "check": "no_secret_in_files",
+      "what": "No file of the run holds our relay's secret or a minted login."
+    },
+    {
+      "id": "fx-menu",
+      "run": "fixed",
+      "check": "menu_entered",
+      "what": "The host chose Connection = Relay only on its Network page, entered our relay and a time-limited pair there, before any match networking, and its connection selected the relay after the choice."
+    },
+    {
+      "id": "fx-chosen",
+      "run": "fixed",
+      "check": "menu_choice:client",
+      "what": "The joiner chose Relay only by hand before connecting, and its connection selected the relay after the choice."
+    },
+    {
+      "id": "fx-offer",
+      "run": "fixed",
+      "check": "offer",
+      "what": "The host published its own relay (Relay = Fixed) for this very session; the offer names only our relay."
+    },
+    {
+      "id": "fx-route-host",
+      "run": "fixed",
+      "peer": "host",
+      "check": "route:host",
+      "what": "The host selected and allowed the relay route for this session, and no other route."
+    },
+    {
+      "id": "fx-route-client",
+      "run": "fixed",
+      "peer": "client",
+      "check": "route:client",
+      "what": "The joiner selected and allowed the relay route for this session, and no other route."
+    },
+    {
+      "id": "fx-hashes",
+      "run": "fixed",
+      "check": "hashes_equal",
+      "what": "The live hashes agree on every compared frame."
+    },
+    {
+      "id": "fx-pair-ttl",
+      "run": "fixed",
+      "check": "pair_ttl",
+      "what": "After its TTL the pair is refused by our relay (401) while a fresh pair from the same secret is allocated."
+    },
+    {
+      "id": "fx-secrets",
+      "run": "fixed",
+      "check": "pair_blanked",
+      "what": "The pair the menus typed was found only where the engine wrote it on EDITH, blanked there, and no file holds it after the sweep; it is dead by its TTL besides."
+    },
+    {
+      "id": "au-identities",
+      "run": "automatic",
+      "check": "identities",
+      "what": "Both boxes run one executable bound to a build receipt at the same commit."
+    },
+    {
+      "id": "au-route-host",
+      "run": "automatic",
+      "peer": "host",
+      "check": "route:host",
+      "what": "The host's transport recorded the route it took for this session."
+    },
+    {
+      "id": "au-route-client",
+      "run": "automatic",
+      "peer": "client",
+      "check": "route:client",
+      "what": "The client's transport recorded the route it took for this session."
+    },
+    {
+      "id": "au-direct",
+      "run": "automatic",
+      "check": "direct_expected",
+      "what": "Automatic took the direct route, as it must when one completes."
+    },
+    {
+      "id": "au-exits",
+      "run": "automatic",
+      "check": "exits",
+      "what": "Both engines ended clean with their evidence."
+    },
+    {
+      "id": "au-hashes",
+      "run": "automatic",
+      "check": "hashes_equal",
+      "what": "The live hashes agree on every compared frame and the traces agree."
+    },
+    {
+      "id": "au-feel",
+      "run": "automatic",
+      "check": "feel_bars",
+      "what": "Both peers hold the feel driver's gates."
+    },
+    {
+      "id": "au-holds",
+      "run": "automatic",
+      "check": "holds",
+      "what": "No seat was held."
+    },
+    {
+      "id": "au-rtt",
+      "run": "automatic",
+      "check": "rtt_recorded",
+      "what": "The transport's own round trip is recorded."
+    },
+    {
+      "id": "au-secrets",
+      "run": "automatic",
+      "check": "no_secret_in_files",
+      "what": "No file of the run holds the key, the token or a minted login."
+    }
+  ]
+}
