@@ -4,6 +4,7 @@ extern "C" {
 #include "lua.h"
 #include "lauxlib.h"
 #include "lj_obj.h"
+#include "lj_gc.h"
 #include "lj_vmevent.h"
 }
 
