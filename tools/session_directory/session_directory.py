@@ -989,7 +989,27 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
             text = re.sub(r"peer=(?!host(?:[&\s]|$))[^&\s]+", "peer=redacted", text)
             LOGGER.info("%s %s", self.address_string(), text)
 
+        def parse_request(self) -> bool:
+            self._body_read = False
+            return super().parse_request()
+
+        def _drain_body(self) -> None:
+            # A refusal answered before the body is read still takes it off the wire: closing over unread bytes resets
+            # the connection, and a client whose body is still arriving loses the answer.
+            self._body_read = True
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                return
+            if 0 < length <= MAX_BODY:
+                try:
+                    self.rfile.read(length)
+                except OSError:
+                    pass
+
         def _send(self, status: int, body: dict[str, Any]) -> None:
+            if not getattr(self, "_body_read", True):
+                self._drain_body()
             raw = json.dumps(body).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
@@ -1009,6 +1029,7 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                 raise ValueError("malformed_json")
             if length > MAX_BODY:
                 raise OverflowError("payload_too_large")
+            self._body_read = True
             blob = self.rfile.read(length) if length else b""
             try:
                 parsed = json.loads(blob.decode("utf-8"))
