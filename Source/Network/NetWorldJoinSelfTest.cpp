@@ -3701,7 +3701,11 @@ namespace RTE {
 			}
 		}
 		const NetWorldFrameLog::JournalStats stats = SettledJournalStats(tail);
-		const uint64_t frames = stats.first != 0 ? stats.last + 1 - stats.first : 0, bound = NetMatchService::EffectiveJoinRetention(policy, tickMs, nullptr) + segment;
+		const uint64_t frames = stats.first != 0 ? stats.last + 1 - stats.first : 0, bound = tail.JournalBoundFrames();
+		// The bound the host prints with each prune is its policy's retention plus the file being written.
+		if (bound != NetMatchService::EffectiveJoinRetention(policy, tickMs, nullptr) + segment)
+			return Fail("journal-bound-misnamed: the journal names a bound of " + std::to_string(bound) + " frames for a retention of " +
+			            std::to_string(NetMatchService::EffectiveJoinRetention(policy, tickMs, nullptr)) + " frames and files of " + std::to_string(segment));
 		if (frames > bound || files() > bound / segment + 1)
 			return Fail("journal-grew-past-its-policy: " + std::to_string(frames) + " frames, " + std::to_string(stats.bytes) + " bytes in " + std::to_string(files()) +
 			            " files after " + std::to_string(lastTick) + " ticks against a bound of " + std::to_string(bound) + " frames (retain " + std::to_string(retainFrames) +

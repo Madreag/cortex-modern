@@ -227,6 +227,8 @@ namespace RTE {
 		/// frames plus one file. 0 leaves it to PruneJournalBefore alone.
 		void SetJournalRetention(uint64_t frames) { m_JournalRetain = frames; }
 		uint64_t JournalRetention() const { return m_JournalRetain; }
+		/// The most frames the journal ever holds: its retention plus the file being written. 0 while no retention bounds it.
+		uint64_t JournalBoundFrames() const { return m_JournalRetain == 0 ? 0 : m_JournalRetain + c_JournalSegmentFrames; }
 		/// Why the journal stopped taking frames; empty while it works.
 		std::string JournalFailure() const;
 		/// Replaces a failed journal with a fresh one beside it, seeded with the frames still in memory. Refuses until its retry frame,

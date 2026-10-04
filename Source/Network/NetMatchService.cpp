@@ -3984,7 +3984,7 @@ static std::string ResyncSaveName() {
 					const NetWorldFrameLog::JournalStats journal = tail.GetJournalStats();
 					uint64_t journalBound = m_LastReturnHistoryFloor != 0 && journal.last >= m_LastReturnHistoryFloor ? journal.last + 1 - m_LastReturnHistoryFloor + NetWorldFrameLog::c_JournalSegmentFrames : 0;
 					// The host's retained history caps it whatever the floor reads.
-					if (tail.JournalRetention() != 0) journalBound = std::min(journalBound, tail.JournalRetention() + NetWorldFrameLog::c_JournalSegmentFrames);
+					if (tail.JournalBoundFrames() != 0) journalBound = std::min(journalBound, tail.JournalBoundFrames());
 					System::PrintDiagnosticLine(std::format("[round-history] tick={} memory_frames={} memory_bytes={} memory_bound_frames={} memory_bound_bytes={} journal_files={} journal_bytes={} "
 					                                        "journal_first={} journal_last={} floor={} journal_bound_frames={} journal_index_bytes={} journal_cached_reads={} journal_cached_read_bytes={} "
 					                                        "journal_retain_frames={} journal_failed={} journal_reopens={} journal_retain_by={}",
