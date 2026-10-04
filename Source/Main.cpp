@@ -3980,6 +3980,7 @@ void RunMenuLoop() {
 	BeginHarnessCostMenuStay();
 
 	while (!System::IsSetToQuit()) {
+		HarnessCost::BeginFrame();
 		g_WindowMan.ClearBackbuffer();
 		PollSDLEvents();
 
@@ -4142,16 +4143,27 @@ namespace {
 	std::mutex s_harnessCostMutex;
 	HarnessCostScope s_harnessCostScope;
 
+	nlohmann::json HarnessCostInstruments() {
+		nlohmann::json instruments = nlohmann::json::object();
+		for (size_t instrument = 0; instrument < HarnessCost::InstrumentCount; ++instrument)
+			instruments[HarnessCost::c_Names[instrument]] = HarnessCost::Enabled(static_cast<HarnessCost::Instrument>(instrument));
+		return instruments;
+	}
+
+	nlohmann::json HarnessCostMs(const std::array<int64_t, HarnessCost::InstrumentCount>& charged) {
+		nlohmann::json costs = nlohmann::json::object();
+		for (size_t instrument = 0; instrument < HarnessCost::InstrumentCount; ++instrument)
+			if (HarnessCost::Enabled(static_cast<HarnessCost::Instrument>(instrument))) costs[HarnessCost::c_Names[instrument]] = static_cast<double>(charged[instrument]) / 1e6;
+		return costs;
+	}
+
 	void CloseHarnessCostScopeLocked() {
 		if (!s_harnessCostScope.open) return;
 		s_harnessCostScope.open = false;
 		static const unsigned long incarnation = std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"));
-		nlohmann::json instruments = nlohmann::json::object();
-		for (size_t instrument = 0; instrument < HarnessCost::InstrumentCount; ++instrument)
-			instruments[HarnessCost::c_Names[instrument]] = HarnessCost::Enabled(static_cast<HarnessCost::Instrument>(instrument));
-		System::PrintDiagnosticLine("[harness-cost-scope] " + nlohmann::json{{"version", 1}, {"process", System::GetProcessID()}, {"incarnation", incarnation},
+		System::PrintDiagnosticLine("[harness-cost-scope] " + nlohmann::json{{"version", HarnessCost::c_ReceiptVersion}, {"process", System::GetProcessID()}, {"incarnation", incarnation},
 		    {"round", s_harnessCostScope.round}, {"segment", s_harnessCostScope.segment}, {"first_frame", s_harnessCostScope.first},
-		    {"last_frame", s_harnessCostScope.last}, {"instruments", instruments}}.dump());
+		    {"last_frame", s_harnessCostScope.last}, {"instruments", HarnessCostInstruments()}}.dump());
 	}
 }
 
@@ -4164,6 +4176,8 @@ static void WriteHarnessCostFrameOf(uint64_t round, uint64_t frame) {
 	// A tick that simulated no new frame leaves its costs to the frame that follows.
 	if (scope.open && scope.round == round && frame == scope.last) return;
 	if (scope.open && (scope.round != round || frame != scope.last + 1)) CloseHarnessCostScopeLocked();
+	auto charged = HarnessCost::TakeFrame();
+	const auto before = HarnessCost::TakeBeforeFrame();
 	if (!scope.open) {
 		static const bool s_flushAtExit = [] {
 			std::atexit([] {
@@ -4174,14 +4188,18 @@ static void WriteHarnessCostFrameOf(uint64_t round, uint64_t frame) {
 		}();
 		(void)s_flushAtExit;
 		scope = {true, round, frame, frame, s_segments[round]++};
+		// Declared as it opens, so a process ended before its close still owns the frames it wrote.
+		System::PrintDiagnosticLine("[harness-cost-scope-open] " + nlohmann::json{{"version", HarnessCost::c_ReceiptVersion}, {"process", System::GetProcessID()}, {"incarnation", incarnation},
+		    {"round", round}, {"segment", scope.segment}, {"first_frame", frame}, {"instruments", HarnessCostInstruments()}}.dump());
+		// What the instruments did before this run of frames began (a lobby, a loading screen) is no frame's cost.
+		System::PrintDiagnosticLine("[harness-cost-outside] " + nlohmann::json{{"process", System::GetProcessID()}, {"incarnation", incarnation}, {"round", round},
+		    {"segment", scope.segment}, {"before_frame", frame}, {"costs_ms", HarnessCostMs(before)}}.dump());
+	} else {
+		for (size_t instrument = 0; instrument < HarnessCost::InstrumentCount; ++instrument) charged[instrument] += before[instrument];
 	}
 	scope.last = frame;
-	const auto charged = HarnessCost::TakeFrame();
-	nlohmann::json costs = nlohmann::json::object();
-	for (size_t instrument = 0; instrument < HarnessCost::InstrumentCount; ++instrument)
-		if (HarnessCost::Enabled(static_cast<HarnessCost::Instrument>(instrument))) costs[HarnessCost::c_Names[instrument]] = static_cast<double>(charged[instrument]) / 1e6;
 	System::PrintDiagnosticLine("[harness-cost-frame] " + nlohmann::json{{"process", System::GetProcessID()}, {"incarnation", incarnation}, {"round", round},
-	    {"segment", scope.segment}, {"frame", frame}, {"partition_valid", true}, {"costs_ms", costs}}.dump());
+	    {"segment", scope.segment}, {"frame", frame}, {"partition_valid", true}, {"costs_ms", HarnessCostMs(charged)}}.dump());
 }
 
 static void WriteHarnessCostFrame(uint64_t frame) {
@@ -7293,6 +7311,7 @@ void RunGameLoop() {
 				break;
 			}
 			ZoneScopedN("Simulation Update");
+			HarnessCost::BeginFrame();
 
 			// The probe's sim-rate keys land before the update that reads them; SDL events only arrive per frame.
 			NetModerationGUIProbe::OnSimTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
@@ -10979,6 +10998,8 @@ int main(int argc, char** argv) {
 		HarnessCost::SetEnabled(HarnessCost::PreviewFidelity, armed("CCCP_TEST_PREVIEW_FIDELITY") || FrameMan::FeelRecordingEnabled());
 		HarnessCost::SetEnabled(HarnessCost::ScreenWatches, armed("CCCP_TEST_SCREEN_WATCHES") || !s_menuScriptPath.empty() || (netUiProbeScript != nullptr && *netUiProbeScript != '\0'));
 		HarnessCost::SetEnabled(HarnessCost::Recorder, !s_recordVideoDirectory.empty());
+		HarnessCost::SetEnabled(HarnessCost::ControllerTrace, ScenarioRunner::IsControllerDebugDumpEnabled());
+		HarnessCost::SetEnabled(HarnessCost::FeelRecorder, FrameMan::FeelRecordingEnabled());
 	}
 	if (CaptureSentinel::Enabled()) CaptureSentinel::Enable();
 	if (s_netDedicated && !s_netMatchServiceE2E) {

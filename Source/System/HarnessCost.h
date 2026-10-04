@@ -11,13 +11,15 @@ namespace RTE {
 	/// What the test instruments cost the frames a run simulates: each instrument's own work, measured where it runs - on the
 	/// simulation thread or a worker - and charged to the frame being simulated when that work ends, for the per-frame receipts a
 	/// run's instrument verdict reads. A sample that suspends the simulation thread is taken out of the simulation-thread work it
-	/// interrupted, so no time is charged twice.
+	/// interrupted, so no time is charged twice. Work that ends while no frame runs is receipted apart, before the next run of frames.
 	class HarnessCost {
 
 	public:
-		enum Instrument : uint8_t { SimDump, TickEnd, FullState, Census, PreviewFidelity, StallSampler, ScreenWatches, Recorder, InstrumentCount };
+		enum Instrument : uint8_t { SimDump, TickEnd, FullState, Census, PreviewFidelity, StallSampler, ScreenWatches, Recorder, ControllerTrace, FeelRecorder, InstrumentCount };
 		static constexpr std::array<const char*, InstrumentCount> c_Names{"sim_dump", "tick_end", "fullstate", "census", "preview_fidelity",
-		                                                                 "stall_sampler", "screen_watches", "recorder"};
+		                                                                 "stall_sampler", "screen_watches", "recorder", "controller_trace", "feel_recorder"};
+		/// The receipts' version: 2 names the controller trace and the feel recorder beside version 1's eight instruments.
+		static constexpr int c_ReceiptVersion = 2;
 
 		/// Whether this process runs an instrument; the run's receipt names every instrument with its state.
 		static void SetEnabled(Instrument instrument, bool enabled) { s_Enabled[instrument].store(enabled, std::memory_order_relaxed); }
@@ -68,9 +70,27 @@ namespace RTE {
 			return frame;
 		}
 
+		/// Marks where a frame's own work starts: what was charged before it is set aside, so a frame that opens a run of
+		/// frames is not charged with the work done while no frame ran (a lobby, a loading screen).
+		static void BeginFrame() {
+			for (size_t instrument = 0; instrument < InstrumentCount; ++instrument) {
+				s_Before[instrument].fetch_add(s_Charged[instrument].exchange(0, std::memory_order_relaxed), std::memory_order_relaxed);
+			}
+		}
+
+		/// Takes what was set aside by BeginFrame since the last frame was written, in nanoseconds.
+		static std::array<int64_t, InstrumentCount> TakeBeforeFrame() {
+			std::array<int64_t, InstrumentCount> before{};
+			for (size_t instrument = 0; instrument < InstrumentCount; ++instrument) {
+				before[instrument] = s_Before[instrument].exchange(0, std::memory_order_relaxed);
+			}
+			return before;
+		}
+
 	private:
 		static inline std::array<std::atomic<bool>, InstrumentCount> s_Enabled{};
 		static inline std::array<std::atomic<int64_t>, InstrumentCount> s_Charged{};
+		static inline std::array<std::atomic<int64_t>, InstrumentCount> s_Before{};
 		static inline std::atomic<int64_t> s_SuspendedNs{0};
 	};
 } // namespace RTE

@@ -20,6 +20,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <intrin.h>
 #else
 #include <time.h>
 #endif
@@ -131,47 +132,47 @@ namespace RTE {
 		int m_Exit = -1;
 	};
 
-	namespace {
-		/// The processor time the calling thread has used, in nanoseconds: what its work took from the machine, without the time
-		/// it spent blocked on a pipe or a disk.
-		int64_t ThreadCpuNanoseconds() {
 #ifdef _WIN32
-			FILETIME created, exited, kernel, user;
-			if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) return 0;
-			const auto ticks = [](const FILETIME& time) { return (static_cast<int64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime; };
-			return (ticks(kernel) + ticks(user)) * 100;
-#else
-			timespec now{};
-			if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now) != 0) return 0;
-			return static_cast<int64_t>(now.tv_sec) * 1000000000 + now.tv_nsec;
-#endif
+	namespace {
+		/// Thread cycles per nanosecond: the thread cycle counter counts the time-stamp counter, whose rate is read once against
+		/// the performance counter. Both are wall clocks, so a thread the scheduler interrupts while it reads cannot skew the rate.
+		double ThreadCyclesPerNanosecond() {
+			static const double s_Rate = [] {
+				LARGE_INTEGER frequency{}, begin{}, now{};
+				QueryPerformanceFrequency(&frequency);
+				QueryPerformanceCounter(&begin);
+				const unsigned long long stampBegin = __rdtsc();
+				do {
+					QueryPerformanceCounter(&now);
+				} while (now.QuadPart - begin.QuadPart < frequency.QuadPart / 100);
+				const unsigned long long stampEnd = __rdtsc();
+				const double nanoseconds = static_cast<double>(now.QuadPart - begin.QuadPart) * 1e9 / static_cast<double>(frequency.QuadPart);
+				return static_cast<double>(stampEnd - stampBegin) / nanoseconds;
+			}();
+			return s_Rate;
 		}
+	} // namespace
+#endif
 
+	int64_t FrameRecorder::ThreadCpuNanoseconds() {
+#ifdef _WIN32
+		// The thread's cycle count, not its thread times: those advance only at the scheduler's 15.6 ms tick.
+		ULONG64 cycles = 0;
+		const double rate = ThreadCyclesPerNanosecond();
+		if (rate <= 0.0 || !QueryThreadCycleTime(GetCurrentThread(), &cycles)) return 0;
+		return static_cast<int64_t>(static_cast<double>(cycles) / rate);
+#else
+		timespec now{};
+		if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now) != 0) return 0;
+		return static_cast<int64_t>(now.tv_sec) * 1000000000 + now.tv_nsec;
+#endif
+	}
+
+	namespace {
 		std::string FrameLeaf(std::size_t index) {
 			std::ostringstream name;
 			name << "frame-" << std::setw(6) << std::setfill('0') << index << ".png";
 			return name.str();
-		}
-
-		// The fastest deflate level with the Sub filter: a recording is read once by the encoder, so speed beats size.
-		bool SaveRgbPng(const std::string& path, const unsigned char* pixels, int width, int height) {
-			std::FILE* file = std::fopen(path.c_str(), "wb");
-			if (!file) return false;
-			png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
-			png_infop info = png ? png_create_info_struct(png) : nullptr;
-			bool saved = false;
-			if (png && info && !setjmp(png_jmpbuf(png))) {
-				png_init_io(png, file);
-				png_set_compression_level(png, 1);
-				png_set_filter(png, PNG_FILTER_TYPE_BASE, PNG_FILTER_SUB);
-				png_set_IHDR(png, info, width, height, 8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
-				png_write_info(png, info);
-				for (int row = 0; row < height; ++row) png_write_row(png, const_cast<png_bytep>(pixels + static_cast<std::size_t>(row) * width * 3));
-				png_write_end(png, nullptr);
-				saved = true;
-			}
-			png_destroy_write_struct(png ? &png : nullptr, info ? &info : nullptr);
-			return std::fclose(file) == 0 && saved;
 		}
 
 		/// Writers enough to keep a 4K capture's rate on a desktop CPU without taking the engine's own cores.
@@ -179,6 +180,27 @@ namespace RTE {
 			return std::clamp<std::size_t>(std::thread::hardware_concurrency() / 5, 2, 6);
 		}
 	} // namespace
+
+	// The fastest deflate level with the Sub filter: a recording is read once by the encoder, so speed beats size.
+	bool FrameRecorder::SaveRgbPng(const std::string& path, const unsigned char* pixels, int width, int height, std::size_t stride) {
+		std::FILE* file = std::fopen(path.c_str(), "wb");
+		if (!file) return false;
+		png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+		png_infop info = png ? png_create_info_struct(png) : nullptr;
+		bool saved = false;
+		if (png && info && !setjmp(png_jmpbuf(png))) {
+			png_init_io(png, file);
+			png_set_compression_level(png, 1);
+			png_set_filter(png, PNG_FILTER_TYPE_BASE, PNG_FILTER_SUB);
+			png_set_IHDR(png, info, width, height, 8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+			png_write_info(png, info);
+			for (int row = 0; row < height; ++row) png_write_row(png, const_cast<png_bytep>(pixels + static_cast<std::size_t>(row) * stride));
+			png_write_end(png, nullptr);
+			saved = true;
+		}
+		png_destroy_write_struct(png ? &png : nullptr, info ? &info : nullptr);
+		return std::fclose(file) == 0 && saved;
+	}
 
 	FrameRecorder& FrameRecorder::Instance() {
 		static FrameRecorder recorder;
@@ -342,7 +364,7 @@ namespace RTE {
 
 	std::string FrameRecorder::WriteFrame(const QueuedFrame& frame) {
 		const std::string path = (std::filesystem::path(m_FramesDirectory) / FrameLeaf(frame.index)).string();
-		const bool saved = SaveRgbPng(path, frame.pixels.data(), frame.meta.width, frame.meta.height);
+		const bool saved = SaveRgbPng(path, frame.pixels.data(), frame.meta.width, frame.meta.height, static_cast<std::size_t>(frame.meta.width) * 3);
 
 		nlohmann::json line = {{"frame", frame.index}, {"wall_ms", frame.meta.wallMS}, {"sim_tick", frame.meta.simTick},
 		    {"screen", frame.meta.screen}, {"resolution", {frame.meta.width, frame.meta.height}}, {"saved", saved}};

@@ -5,8 +5,10 @@ from collections import Counter, defaultdict
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
+import sys
 from .records import open_record, record_path, private_history_row
 
 TICKS = 1200
@@ -468,8 +470,36 @@ def early_decision_tick(run, peer, ticks=TICKS):
     return None
 
 
+def json_native(value, where='', failures=None):
+    """The value as JSON holds it: paths as strings; any other value JSON cannot hold is replaced by a named marker."""
+    failures = [] if failures is None else failures
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return value
+    elif isinstance(value, os.PathLike):
+        return os.fspath(value)
+    elif isinstance(value, dict):
+        return {(os.fspath(key) if isinstance(key, os.PathLike) else key): json_native(item, f'{where}.{key}' if where else str(key), failures)
+                for key, item in value.items()}
+    elif isinstance(value, (list, tuple)):
+        return [json_native(item, f'{where}[{index}]', failures) for index, item in enumerate(value)]
+    failures.append(dict(where=where or 'root', type=type(value).__name__, repr=repr(value)[:200]))
+    return dict(unserializable=type(value).__name__, repr=repr(value)[:200])
+
+
 def write_json(path, value):
-    Path(path).write_text(json.dumps(value, indent=2, allow_nan=False) + '\n', encoding='utf-8')
+    """Writes the document whole: a value JSON cannot hold is named in serialization_failures, never lost with the rest."""
+    failures = []
+    native = json_native(value, failures=failures)
+    if failures:
+        if isinstance(native, dict):
+            native['serialization_failures'] = failures
+        else:
+            Path(str(path) + '.serialization-failures.json').write_text(json.dumps(failures, indent=2) + '\n', encoding='utf-8')
+        print(f'{path}: {len(failures)} value(s) not JSON: ' + ', '.join(row['where'] for row in failures[:6]), file=sys.stderr, flush=True)
+    Path(path).write_text(json.dumps(native, indent=2, allow_nan=False) + '\n', encoding='utf-8')
 
 
 def write_jsonl(path, rows):
@@ -506,10 +536,21 @@ def wrapped_delta(delta, size, wraps):
     return (delta + size / 2) % size - size / 2 if wraps and size else delta
 
 
+def brief(value):
+    """A measured value short enough for a reason line: a number or text as it is, a collection by its size."""
+    if isinstance(value, (list, tuple, dict, set)):
+        return f'{type(value).__name__} of {len(value)}'
+    text = f'{value:.4g}' if isinstance(value, float) else repr(value)
+    return text if len(text) <= 80 else text[:77] + '...'
+
+
 def pin(value, rule, passed, evidence, detail=None, available=None):
     available = value is not None if available is None else available
-    return dict(value=value, rule=rule, status=('PASS' if passed else 'FAIL') if available else 'MISS',
-                evidence=[str(record_path(path)) for path in evidence], detail=detail)
+    status = ('PASS' if passed else 'FAIL') if available else 'MISS'
+    result = dict(value=value, rule=rule, status=status, evidence=[str(record_path(path)) for path in evidence], detail=detail)
+    if status != 'PASS':
+        result['reason'] = f'measured {brief(value)} against: {rule}' if available else 'no measurement was recorded'
+    return result
 
 
 def peer_id_of(report_path):
@@ -582,7 +623,7 @@ def impairment_evidence(run, manifest, logs=None):
     if not reference or any(value != reference for value in changes.values()):
         errors.append(f'live delay-change receipts differ or are absent: { {peer: sorted(value) for peer, value in changes.items()} }')
     return dict(passed=not errors, reason='; '.join(errors), effects=effects,
-                changes={peer: sorted(value) for peer, value in changes.items()}, evidence=paths)
+                changes={peer: sorted(value) for peer, value in changes.items()}, evidence=[str(path) for path in paths])
 
 
 def item9a_gates(run, peer='host', rows=None):
@@ -873,6 +914,9 @@ def input_latencies(inputs, frames):
                            frames=frame['frame'] - edge['last_presented_frame'], budget_ms=budget,
                            pass_check=elapsed <= budget)
             row['latency_lower_bound_ms'] = row['ms'] if found else max(0, row['observed_through_ms'] - edge['wall_ms'])
+            if not row['pass_check']:
+                row['reason'] = (f'presented {row["ms"]:.1f} ms after the input, budget {row["budget_ms"]:g} ms' if found else
+                                 f'no presented frame showed the input within {row["latency_lower_bound_ms"]:.1f} ms of observation')
             results.append(row)
     return results
 

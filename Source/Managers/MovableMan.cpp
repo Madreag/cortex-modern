@@ -47,6 +47,7 @@
 #include "PieMenu.h"
 #include "ScenarioRunner.h"
 #include "AsyncLineWriter.h"
+#include "HarnessCost.h"
 #include "NetActorOwnership.h"
 #include "NetLockstep.h"
 #include "NetWorldJoin.h"
@@ -228,6 +229,12 @@ namespace {
 		if (!ScenarioRunner::ShouldControllerDebugDumpTick(tick)) {
 			return;
 		}
+		// The trace is the harness's work on the simulation thread, charged to the frame it runs in.
+		const HarnessCost::SimulationSpan span;
+		struct Charge {
+			const HarnessCost::SimulationSpan& span;
+			~Charge() { HarnessCost::Charge(HarnessCost::ControllerTrace, span.Stop()); }
+		} charge{span};
 
 		json root;
 		root["tick"] = tick;

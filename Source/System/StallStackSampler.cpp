@@ -31,8 +31,27 @@ namespace RTE {
 		s_Thread = thread;
 		s_ThresholdMs = threshold;
 		HarnessCost::SetEnabled(HarnessCost::StallSampler, true);
+		// The symbols load here, before any frame runs, so no sample pays for them inside a tick; the load is the sampler's own cost.
+		const auto loadStart = std::chrono::steady_clock::now();
+		SymSetOptions(SYMOPT_UNDNAME);
+		s_Symbols = SymInitialize(GetCurrentProcess(), nullptr, TRUE) || GetLastError() == ERROR_INVALID_PARAMETER;
+		// A module's symbols load on its first lookup: one lookup in each module now keeps that out of every sample.
+		if (s_Symbols) {
+			SymEnumerateModules64(GetCurrentProcess(), [](PCSTR, DWORD64 base, PVOID) -> BOOL {
+				char buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};
+				auto* symbol = reinterpret_cast<PSYMBOL_INFO>(buffer);
+				symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+				symbol->MaxNameLen = MAX_SYM_NAME;
+				DWORD64 displacement = 0;
+				SymFromAddr(GetCurrentProcess(), base + 0x1000, &displacement, symbol);
+				return TRUE;
+			}, nullptr);
+		}
+		const int64_t loadNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - loadStart).count();
+		HarnessCost::Charge(HarnessCost::StallSampler, loadNs);
 		s_Watcher = std::jthread([](std::stop_token stop) { Watch(stop); });
-		System::PrintDiagnosticLine("[stall-stack] armed: a tick past " + std::to_string(threshold) + " ms is sampled every " + std::to_string(threshold) + " ms");
+		System::PrintDiagnosticLine("[stall-stack] armed: a tick past " + std::to_string(threshold) + " ms is sampled every " + std::to_string(threshold) +
+		                            " ms; symbols " + (s_Symbols ? "loaded" : "unavailable") + " in " + std::to_string(loadNs / 1000000) + " ms before the first frame");
 #else
 		(void)threshold;
 #endif
@@ -101,12 +120,8 @@ namespace RTE {
 		ResumeThread(thread);
 		s_LastSuspendNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - suspended).count();
 		HarnessCost::NoteSimulationSuspended(s_LastSuspendNs);
-		static bool symbols = false;
 		HANDLE process = GetCurrentProcess();
-		if (!symbols) {
-			SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
-			symbols = SymInitialize(process, nullptr, TRUE) || GetLastError() == ERROR_INVALID_PARAMETER;
-		}
+		const bool symbols = s_Symbols;
 		std::ostringstream line;
 		for (int index = 0; index < count; ++index) {
 			char buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};

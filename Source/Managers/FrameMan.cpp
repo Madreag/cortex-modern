@@ -19,6 +19,7 @@
 #include "AHuman.h"
 #include "Controller.h"
 #include "FrameRecorder.h"
+#include "HarnessCost.h"
 #include "HDFirearm.h"
 #include "InputScript.h"
 #include "LocalPrediction.h"
@@ -243,9 +244,15 @@ namespace {
 		double lastPresentMS = 0;
 		double iterationCPUMS = 0;
 		bool iterationActive = false;
+		/// What a capture's encode did, measured on the thread that ran it.
+		struct Encoded {
+			bool saved = false;
+			double wallMs = 0.0;
+			double cpuMs = 0.0;
+		};
 		struct Capture {
 			FeelJson row;
-			std::future<bool> saved;
+			std::future<Encoded> saved;
 		};
 		std::vector<Capture> captures;
 	};
@@ -254,6 +261,12 @@ namespace {
 	double FeelNowMS() {
 		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
 	}
+
+	/// The feel recorder's own work on the calling thread, charged to the frame it ends in.
+	struct FeelCost {
+		HarnessCost::SimulationSpan span;
+		~FeelCost() { HarnessCost::Charge(HarnessCost::FeelRecorder, span.Stop()); }
+	};
 
 	double FeelProcessCPUMS() {
 #ifdef _WIN32
@@ -315,7 +328,10 @@ namespace {
 	void FeelWriteSavedCaptures(bool wait) {
 		std::erase_if(s_Feel.captures, [wait](auto& capture) {
 			if (!wait && capture.saved.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return false;
-			capture.row["saved"] = capture.saved.get();
+			const FeelState::Encoded encoded = capture.saved.get();
+			capture.row["saved"] = encoded.saved;
+			capture.row["encode_wall_ms"] = encoded.wallMs;
+			capture.row["encode_cpu_ms"] = encoded.cpuMs;
 			FeelWrite(capture.row);
 			return true;
 		});
@@ -374,6 +390,7 @@ double FrameMan::FeelClockMS() { return FeelRecordingEnabled() ? FeelNowMS() : 0
 
 void FrameMan::FeelInputSample(const Actor* actor, int player) {
 	if (!FeelRecordingEnabled() || !actor || !InputScript::DrivesPlayer(player) || g_MovableMan.IsSpeculative()) return;
+	const FeelCost cost;
 	const double wallMS = FeelNowMS();
 	const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	const auto key = std::make_pair(static_cast<int64_t>(actor->GetUniqueID()), player);
@@ -406,11 +423,13 @@ void FrameMan::FeelPreviewStep(const Actor* actor, uint64_t committedTick, uint6
 
 void FrameMan::FeelInteraction(uint64_t tick, long uid, const std::string& fields, const std::string& source) {
 	if (!FeelRecordingEnabled()) return;
+	const FeelCost cost;
 	FeelWrite({{"type", "interaction"}, {"tick", tick}, {"uid", uid}, {"fields", fields}, {"source", source}});
 }
 
 void FrameMan::FeelBeginIteration() {
 	if (!FeelRecordingEnabled()) return;
+	const FeelCost cost;
 	s_Feel.iterationActive = g_ActivityMan.ActivityRunning();
 	s_Feel.iterationBeginMS = FeelNowMS();
 	s_Feel.iterationCPUMS = FeelProcessCPUMS();
@@ -418,6 +437,7 @@ void FrameMan::FeelBeginIteration() {
 
 void FrameMan::FeelBeforePreview() {
 	if (!FeelRecordingEnabled()) return;
+	const FeelCost cost;
 	for (const auto& edge: s_Feel.pending) FeelWrite(edge);
 	s_Feel.pending.clear();
 	const double now = FeelNowMS();
@@ -434,6 +454,7 @@ bool FrameMan::FeelBeginDraw() {
 		s_Feel.nextDrawMS = std::max(now, s_Feel.nextDrawMS) + 1000.0 / s_Feel.capHz;
 	}
 	if (!FeelRecordingEnabled()) return true;
+	const FeelCost cost;
 	s_Feel.drawBeginMS = FeelNowMS();
 	s_Feel.frame = {{"type", "frame"}, {"frame", s_Feel.frameNumber + 1}, {"tick", g_TimerMan.GetSimUpdateCount()},
 	    {"draw_begin_ms", s_Feel.drawBeginMS}, {"cap_hz", s_Feel.capHz}, {"active", s_Feel.iterationActive},
@@ -447,6 +468,7 @@ bool FrameMan::FeelBeginDraw() {
 
 void FrameMan::FeelPreviewSwap(uint64_t adoptionTick, uint64_t swapTick, uint64_t leadTicks, float poseDelta) {
 	if (!FeelRecordingEnabled()) return;
+	const FeelCost cost;
 	FeelWrite({{"type", "preview_swap"}, {"adoption_tick", adoptionTick}, {"tick", swapTick},
 	    {"adoption_lead_ticks", leadTicks}, {"swap_pose_delta", poseDelta}});
 }
@@ -459,6 +481,7 @@ void FrameMan::FeelBeforePresent() {
 void FrameMan::FeelAfterPresent() {
 	if (!FeelRecordingEnabled()) return;
 	const double now = FeelNowMS();
+	const FeelCost cost;
 	++s_Feel.frameNumber;
 	// What the frame showed: inside the render window the controlled actors are the preview clones the player saw.
 	s_Feel.frame["actors"] = FeelLocalActors();
@@ -494,9 +517,20 @@ void FrameMan::FeelAfterPresent() {
 		s_Feel.captures.push_back({{{"type", "capture"}, {"requested_tick", s_Feel.nextCaptureTick}, {"tick", tick}, {"frame", s_Feel.frameNumber},
 		    {"path", name.generic_string()}, {"capture_ms", FeelNowMS() - now}},
 		    std::async(std::launch::async, [copy, path = name.string()] {
-			    const bool saved = copy && IMG_SavePNG(copy, path.c_str());
+			    // The encode's processor time is the recorder's, charged to the frame it ends in.
+			    const auto began = std::chrono::steady_clock::now();
+			    const int64_t cpuBefore = FrameRecorder::ThreadCpuNanoseconds();
+			    FeelState::Encoded encoded;
+			    // The screen copy is 8-bit RGB: the recorder's fastest-level writer keeps the encode off the frames' budget.
+			    encoded.saved = copy && (copy->format == SDL_PIXELFORMAT_RGB24
+			        ? FrameRecorder::SaveRgbPng(path, static_cast<const unsigned char*>(copy->pixels), copy->w, copy->h, static_cast<std::size_t>(copy->pitch))
+			        : IMG_SavePNG(copy, path.c_str()));
 			    if (copy) SDL_DestroySurface(copy);
-			    return saved;
+			    const int64_t cpuNs = FrameRecorder::ThreadCpuNanoseconds() - cpuBefore;
+			    HarnessCost::Charge(HarnessCost::FeelRecorder, cpuNs);
+			    encoded.cpuMs = static_cast<double>(cpuNs) / 1e6;
+			    encoded.wallMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+			    return encoded;
 		    })});
 		s_Feel.nextCaptureTick += 60;
 	}
@@ -505,6 +539,7 @@ void FrameMan::FeelAfterPresent() {
 
 void FrameMan::FeelEndIteration(uint64_t ticks, long long simUS, long long updateUS, long long drawUS) {
 	if (!FeelRecordingEnabled()) return;
+	const FeelCost cost;
 	FeelWrite({{"type", "iteration"}, {"tick", g_TimerMan.GetSimUpdateCount()}, {"active", s_Feel.iterationActive && g_ActivityMan.ActivityRunning()},
 	    {"begin_ms", s_Feel.iterationBeginMS}, {"end_ms", FeelNowMS()}, {"cpu_begin_ms", s_Feel.iterationCPUMS}, {"cpu_end_ms", FeelProcessCPUMS()},
 	    {"pace_sim_ticks", ticks}, {"pace_sim_us", simUS}, {"pace_update_us", updateUS}, {"pace_draw_us", drawUS}});
