@@ -8410,6 +8410,10 @@ namespace {
 	// The preview copy's audit lever and its running counts: values audited, differences found.
 	void ForcePreviewCopyAudit(bool forced);
 	std::pair<size_t, size_t> PreviewCopyAuditCounts();
+	// The last write the window refused through an entity handle, once.
+	std::string TakePreviewEntityWriteRefusal();
+	// Counts a hook a preview ran for an object's script, behind the audit lever.
+	void NotePreviewHookRun(const std::string& self, std::string_view script);
 } // namespace
 
 bool LuaStateWrapper::RunScriptGraphSelfTest() {
@@ -11079,6 +11083,71 @@ end
 		checkpointValues = passed && checkpointValues;
 	}
 	{
+		// A script that keeps its activity previews: it reads through the handle what the live instance reads, and a write through
+		// it is refused at the call by name and reruns the preview frozen, the live activity unchanged.
+		const auto* preset = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+		std::unique_ptr<AHuman> actor(preset ? dynamic_cast<AHuman*>(preset->Clone()) : nullptr);
+		Activity* activity = g_ActivityMan.GetActivity();
+		const float fundsBefore = activity ? activity->GetTeamFunds(0) : -1.0F;
+		const auto stash = [&actor](const std::string& key) {
+			LuaStateWrapper* state = actor ? actor->GetLuaState() : nullptr;
+			if (!state) return std::string();
+			std::lock_guard<std::recursive_mutex> lock(state->GetMutex());
+			lua_State* L = state->GetLuaState();
+			std::string text;
+			lua_getglobal(L, "_ScriptFieldsStash");
+			if (lua_istable(L, -1)) {
+				lua_getfield(L, -1, key.c_str());
+				if (const char* value = lua_tostring(L, -1)) text = value;
+				lua_pop(L, 1);
+				lua_pushnil(L);
+				lua_setfield(L, -2, key.c_str());
+			}
+			lua_pop(L, 1);
+			return text;
+		};
+		bool loaded = false;
+		bool frozen = true;
+		bool rerun = false;
+		std::string refusal;
+		std::string previewRead;
+		std::string liveRead;
+		if (activity && actor && actor->LoadScript(g_PresetMan.GetFullModulePath("Tests.rte/PreviewEntityHandle.lua")) >= 0) {
+			loaded = actor->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"init"}) >= 0;
+			TakePreviewEntityWriteRefusal();
+			LuaMan::CapturePreviewSelfCopies({actor.get()}, false);
+			MovableObject* clone = nullptr;
+			{
+				MovableObject::FaithfulCloneScope scope(false);
+				clone = dynamic_cast<MovableObject*>(actor->Clone());
+			}
+			if (auto* previewed = dynamic_cast<Actor*>(clone)) {
+				LuaMan::BeginPreviewScripts({previewed}, false, {actor.get()});
+				frozen = LuaMan::PreviewFrozenCount() > 0;
+				// A frozen copy would run the hooks on the instance itself.
+				if (!frozen) {
+					previewed->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"read"});
+					previewed->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"write"});
+				}
+			}
+			rerun = LuaMan::TakePreviewCoroutineResumed();
+			refusal = TakePreviewEntityWriteRefusal();
+			LuaMan::EndPreviewScripts();
+			delete clone;
+			actor->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"live-read"});
+			previewRead = stash("preview-entity:read");
+			liveRead = stash("preview-entity:live-read");
+		}
+		const float fundsAfter = activity ? activity->GetTeamFunds(0) : -1.0F;
+		const bool readPassed = loaded && !frozen && !previewRead.empty() && previewRead == liveRead;
+		const bool writePassed = loaded && !frozen && rerun && refusal == "Activity:SetTeamFunds" && fundsAfter == fundsBefore;
+		std::cout << "[script-graph-selftest] " << (readPassed ? "PASS" : "FAIL") << " preview_entity_handle_read_previews_unfrozen loaded=" << loaded << " frozen=" << frozen
+		          << " preview='" << previewRead << "' live='" << liveRead << "'" << std::endl;
+		std::cout << "[script-graph-selftest] " << (writePassed ? "PASS" : "FAIL") << " preview_entity_handle_write_refused_by_name rerun=" << rerun << " write='" << refusal
+		          << "' funds_before=" << fundsBefore << " funds_after=" << fundsAfter << std::endl;
+		checkpointValues = readPassed && writePassed && checkpointValues;
+	}
+	{
 		// A scene reload leaves no scene layer's back buffer behind: a preset's clone loaded twice, and a clone of a loaded scene loaded again.
 		const int before = SceneLayerBackBufferCount();
 		const auto* preset = dynamic_cast<const Scene*>(g_PresetMan.GetEntityPreset("Scene", "Grasslands", "Base.rte"));
@@ -11129,6 +11198,8 @@ uint64_t LuaMan::ScriptStatesTakenFromASpawner() {
 }
 
 thread_local LuaStateWrapper* s_currentLuaState = nullptr;
+// The self a preview hook runs for, so a write the window refuses names its object.
+thread_local std::string s_PreviewHookSelfKey;
 LuaStateWrapper* LuaMan::GetThreadCurrentLuaState() const {
 	return s_currentLuaState;
 }
@@ -11689,6 +11760,14 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 	}
 	// Kept by value for the same reason: a preview hook's failure names its script after the call.
 	const std::string previewScript = LuaMan::IsRunningPreviewHook() ? path : std::string();
+	struct HookSelf {
+		std::string previous;
+		explicit HookSelf(const std::string& key) : previous(std::exchange(s_PreviewHookSelfKey, key)) {}
+		~HookSelf() { s_PreviewHookSelfKey = std::move(previous); }
+	} hookSelf(LuaMan::IsRunningPreviewHook() ? selfGlobalTableKey : std::string());
+	if (LuaMan::IsRunningPreviewHook()) {
+		NotePreviewHookRun(selfGlobalTableKey, path);
+	}
 
 	std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
 	{
@@ -13448,6 +13527,22 @@ namespace {
 		lua_pop(L, 1);
 	}
 
+	// An entity handle the window keeps is read only while its object lives: an Area while its scene does, an activity while it runs.
+	bool PreviewEntityHandleAlive(lua_State* L, const luabind::detail::object_rep* object) {
+		if (!ScriptGraphNativeAlive(L, object)) {
+			return false;
+		}
+		const luabind::detail::class_rep* crep = object->crep();
+		if (!ClassDerivesFrom(crep, "Activity") || crep->has_holder() || crep->get_class_type() != luabind::detail::class_rep::cpp_class) {
+			return true;
+		}
+		int offset = 0;
+		if (luabind::detail::implicit_cast(crep, &typeid(Activity), offset) < 0) {
+			return true;
+		}
+		return reinterpret_cast<const Activity*>(static_cast<const char*>(object->ptr()) + offset) == g_ActivityMan.GetActivity();
+	}
+
 	bool RemapPreviewUserdata(lua_State* L, int index, std::string& freezeClass) {
 		index = AbsoluteLuaIndex(L, index);
 		const auto* object = luabind::detail::is_class_object(L, index);
@@ -13463,7 +13558,9 @@ namespace {
 			if (std::strcmp(className, "SoundContainer") == 0 && IsPreviewSoundCopy(static_cast<const SoundContainer*>(object->ptr()))) {
 				return true;
 			}
-			if (ClassDerivesFrom(object->crep(), "Entity")) {
+			// The window has no view of an activity, a scene or an area: the preview keeps the live handle and reads through it,
+			// and the fence refuses a write through it. One that is gone is never read.
+			if (ClassDerivesFrom(object->crep(), "Entity") && !PreviewEntityHandleAlive(L, object)) {
 				freezeClass = className;
 				return false;
 			}
@@ -13827,6 +13924,45 @@ namespace {
 		}
 	}
 
+	// Whether a class is an entity the window has no view of (an activity, a scene, an area): an Entity that is not a
+	// MovableObject, read from the class the running state registered under that name.
+	bool PreviewFenceEntityClass(std::string_view className) {
+		thread_local std::unordered_map<std::string, bool> known;
+		const std::string name(className);
+		if (const auto found = known.find(name); found != known.end()) {
+			return found->second;
+		}
+		lua_State* L = s_currentLuaState ? s_currentLuaState->GetLuaState() : nullptr;
+		if (!L || name.empty() || !lua_checkstack(L, 1)) {
+			return false;
+		}
+		lua_getglobal(L, name.c_str());
+		const auto* crep = luabind::detail::is_class_rep(L, -1) ? static_cast<const luabind::detail::class_rep*>(lua_touserdata(L, -1)) : nullptr;
+		lua_pop(L, 1);
+		const bool entity = crep && ClassDerivesFrom(crep, "Entity") && !ClassDerivesFrom(crep, "MovableObject");
+		known.emplace(name, entity);
+		return entity;
+	}
+
+	// A write through an entity handle the window keeps cannot be dropped and the hook run on: it is refused, named, and this
+	// tick's preview runs again with the scripts frozen.
+	std::atomic<bool> s_PreviewEntityWriteRefused{false};
+	std::string s_PreviewLastEntityWrite;
+
+	void PreviewFenceRefuseEntityWrite(const std::string& call) {
+		s_PreviewEntityWriteRefused = true;
+		s_PreviewLastEntityWrite = call;
+		const std::string uid = s_PreviewHookSelfKey.substr(0, s_PreviewHookSelfKey.find('#'));
+		static std::unordered_set<std::string> reported;
+		if (reported.insert(uid + " " + call).second) {
+			std::cout << "[preview] frozen uid=" << (uid.empty() ? std::string("?") : uid) << " write=" << call << std::endl;
+		}
+	}
+
+	std::string TakePreviewEntityWriteRefusal() {
+		return std::exchange(s_PreviewLastEntityWrite, std::string());
+	}
+
 	bool PreviewFenceRuns(const char* className, const char* methodName, bool isConst) {
 		const std::string_view cls = className ? className : "";
 		const std::string_view name = methodName ? methodName : "";
@@ -13836,7 +13972,12 @@ namespace {
 		}
 		const bool reads = PreviewFenceManagerClass(cls) ? PreviewFenceManagerReads(name, isConst) : (isConst && !PreviewFenceMutatorName(name)) || PreviewFenceListedReader(name);
 		if (!reads) {
-			PreviewFenceNoteDropped(std::string(cls.empty() ? "?" : cls) + ":" + std::string(name.empty() ? "?" : name), "on an object the preview does not own");
+			const std::string call = std::string(cls.empty() ? "?" : cls) + ":" + std::string(name.empty() ? "?" : name);
+			if (PreviewFenceEntityClass(cls)) {
+				PreviewFenceRefuseEntityWrite(call);
+			} else {
+				PreviewFenceNoteDropped(call, "on an object the preview does not own");
+			}
 		}
 		return reads;
 	}
@@ -14035,6 +14176,15 @@ namespace {
 		s_PreviewCopyAuditForced = forced;
 	}
 
+	// The hooks the window's previews ran, by the object's preview self and its script.
+	std::map<std::pair<std::string, std::string>, size_t> s_PreviewHookRuns;
+
+	void NotePreviewHookRun(const std::string& self, std::string_view script) {
+		if (PreviewCopyAuditEnabled()) {
+			++s_PreviewHookRuns[{self.substr(0, self.find('#')), std::string(script)}];
+		}
+	}
+
 	std::pair<size_t, size_t> PreviewCopyAuditCounts() {
 		return {s_PreviewCopyAuditValues, s_PreviewCopyAuditDifferences};
 	}
@@ -14057,6 +14207,79 @@ namespace {
 		lua_replace(L, value);
 	}
 
+	// The top-level scalar fields of the table at index, as text, by name.
+	std::vector<std::pair<std::string, std::string>> PreviewScalarFields(lua_State* L, int index) {
+		std::vector<std::pair<std::string, std::string>> fields;
+		index = AbsoluteLuaIndex(L, index);
+		if (!lua_istable(L, index)) {
+			return fields;
+		}
+		lua_pushnil(L);
+		while (lua_next(L, index) != 0) {
+			const int type = lua_type(L, -1);
+			if (lua_type(L, -2) == LUA_TSTRING && (type == LUA_TNUMBER || type == LUA_TSTRING || type == LUA_TBOOLEAN)) {
+				lua_pushvalue(L, -1);
+				const char* text = type == LUA_TBOOLEAN ? (lua_toboolean(L, -1) ? "true" : "false") : lua_tostring(L, -1);
+				fields.emplace_back(lua_tostring(L, -3), text ? text : "?");
+				lua_pop(L, 1);
+			}
+			lua_pop(L, 1);
+		}
+		std::sort(fields.begin(), fields.end());
+		return fields;
+	}
+
+	// Each audited hold's fields after the copy, so the window's end can say what the preview's hooks changed in it.
+	struct PreviewHoldSnapshot {
+		LuaStateWrapper* state;
+		long uniqueID;
+		std::vector<std::pair<std::string, std::string>> fields;
+	};
+	std::vector<PreviewHoldSnapshot> s_PreviewHoldSnapshots;
+
+	void PushPreviewHold(lua_State* L, long uniqueID) {
+		lua_getglobal(L, "_ScriptFieldsStash");
+		if (lua_istable(L, -1)) {
+			lua_getfield(L, -1, ("preview:" + std::to_string(uniqueID)).c_str());
+			lua_remove(L, -2);
+		}
+	}
+
+	// Prints the fields of each audited hold that the preview changed, beside the live instance's value at the window's end.
+	void ReportPreviewHoldChanges() {
+		for (const PreviewHoldSnapshot& snapshot: s_PreviewHoldSnapshots) {
+			std::lock_guard<std::recursive_mutex> lock(snapshot.state->GetMutex());
+			lua_State* L = snapshot.state->GetLuaState();
+			const int top = lua_gettop(L);
+			PushPreviewHold(L, snapshot.uniqueID);
+			const auto now = PreviewScalarFields(L, -1);
+			PushScriptObjectInstanceTable(L, snapshot.uniqueID);
+			const auto live = PreviewScalarFields(L, -1);
+			lua_settop(L, top);
+			std::string changed;
+			for (const auto& [name, value]: now) {
+				const auto before = std::lower_bound(snapshot.fields.begin(), snapshot.fields.end(), std::make_pair(name, std::string()));
+				const std::string old = before != snapshot.fields.end() && before->first == name ? before->second : std::string("nil");
+				if (old == value) {
+					continue;
+				}
+				const auto current = std::lower_bound(live.begin(), live.end(), std::make_pair(name, std::string()));
+				changed += " " + name + ":" + old + ">" + value + " live=" + (current != live.end() && current->first == name ? current->second : std::string("nil"));
+			}
+			const MovableObject* object = g_MovableMan.FindObjectByUniqueID(snapshot.uniqueID);
+			const std::string preset = object ? object->GetModuleAndPresetName() : std::string("?");
+			if (!changed.empty()) {
+				std::cout << "[preview-copy-audit] ran uid=" << snapshot.uniqueID << " preset=" << preset << " changed" << changed << std::endl;
+			}
+			const std::string uid = std::to_string(snapshot.uniqueID);
+			for (auto hook = s_PreviewHookRuns.lower_bound({uid, std::string()}); hook != s_PreviewHookRuns.end() && hook->first.first == uid; ++hook) {
+				std::cout << "[preview-copy-audit] hooks uid=" << uid << " preset=" << preset << " runs=" << hook->second << " script=" << hook->first.second << std::endl;
+			}
+		}
+		s_PreviewHoldSnapshots.clear();
+		s_PreviewHookRuns.clear();
+	}
+
 	// Checks each copied instance of a state against its hold under the window's copy table and reports what differs.
 	void AuditPreviewCopies(LuaStateWrapper* state, const std::vector<long>& uniqueIDs, int seen) {
 		lua_State* L = state->GetLuaState();
@@ -14071,6 +14294,7 @@ namespace {
 			std::vector<std::string> differences;
 			size_t standIns = 0;
 			const size_t values = LuaThreadCodec::AuditPreviewCopy(L, top + 1, top + 2, &PreviewCopyImage, &seen, differences, 8, &standIns);
+			s_PreviewHoldSnapshots.push_back({state, uniqueID, PreviewScalarFields(L, top + 2)});
 			lua_settop(L, top);
 			++s_PreviewCopyAuditHolds;
 			s_PreviewCopyAuditValues += values;
@@ -14575,6 +14799,7 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 	DropPreviewSoundCopies();
 	s_PreviewFrozenUIDs.clear();
 	s_PreviewCoroutineResumed = false;
+	s_PreviewEntityWriteRefused = false;
 	s_PreviewHeldByRoot.clear();
 	g_MovableMan.SetShadowMadeHook(&FollowShadowToHeldHandles);
 	laps.Lap(0);
@@ -14621,7 +14846,10 @@ void LuaMan::SetPreviewEagerShadows(bool eager) {
 }
 
 bool LuaMan::TakePreviewCoroutineResumed() {
-	return s_PreviewCoroutineResumed.exchange(false);
+	// A write refused through an entity handle reruns the preview frozen as a stand-in coroutine's resume does.
+	const bool resumed = s_PreviewCoroutineResumed.exchange(false);
+	const bool refused = s_PreviewEntityWriteRefused.exchange(false);
+	return resumed || refused;
 }
 
 bool LuaMan::PreviewGlobalFenceEnabled() {
@@ -14707,6 +14935,9 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 
 void LuaMan::EndPreviewScripts() {
 	PreviewWindowLaps laps{s_PreviewWindowMs};
+	if (!s_PreviewHoldSnapshots.empty() || !s_PreviewHookRuns.empty()) {
+		ReportPreviewHoldChanges();
+	}
 	g_MovableMan.SetShadowMadeHook(nullptr);
 	s_PreviewHeldByRoot.clear();
 	for (LuaStateWrapper* state: s_PreviewHeldStates) {
