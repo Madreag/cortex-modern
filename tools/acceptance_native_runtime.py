@@ -150,8 +150,8 @@ def run_payload(path):
     from feel.records import CaptureSealer, RecoveryLedger, NativeFaultEffects, LobbyWatch
     payload = json.loads(Path(path).read_text(encoding='utf-8'))
     root, box = Path(path).parent, payload['box']
-    if platform.node().casefold() != box['hostname'].casefold():
-        raise ValueError('native payload is on a different machine')
+    if box.get('name') == 'Z13' or platform.node().casefold() != box['hostname'].casefold():
+        raise ValueError('native payload is on a retired or different machine')
     if box['kind'] == 'windows-local' and box['name'] != 'EROL-PC':
         raise ValueError('only the NOTE 12 EROL-PC host may run locally')
     if not payload['specs'] or any(not acceptance_cross.is_row(spec) or not spec.get('preserve_evidence') for spec in payload['specs']):

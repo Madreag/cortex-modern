@@ -88,7 +88,7 @@ class RemoteSafety(unittest.TestCase):
         self.assertEqual(next(spec for spec in plan['specs'] if spec['role']=='host')['initial_skill'],50)
 
     def test_profile_cannot_substitute_local_box_runner_floor_or_unowned_helpers(self):
-        for field, value in (('name','ALLY'), ('kind','windows-task'), ('runner','bare-exe'),
+        for field, value in (('name','Z13'), ('kind','windows-task'), ('runner','bare-exe'),
                              ('hostname',''), ('helpers','D:/mx/other/helpers'), ('peers_per_box',2),
                              ('exclusive_marker','D:/mx/test/private-marker'), ('launch_floor_gib',2)):
             with self.subTest(field=field), self.assertRaises(ValueError):

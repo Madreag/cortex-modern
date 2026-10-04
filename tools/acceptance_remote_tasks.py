@@ -22,16 +22,16 @@ from acceptance_frozen_tools import driver_git_context, helper_archive, receipt 
 from acceptance_native_load import acquire_reservation, blocking_load
 
 ROWS = ('mod-match', 'mod-refusal', 'world-join')
-ALIASES = {'EROL-PC': None, 'EDITH': 'edith', 'Z13': 'z13', 'Mac': 'Erol-Mac', 'Linux': '3090'}
-PEERS = {'erol': 'EROL-PC', 'edith': 'EDITH', 'z13': 'Z13', 'mac': 'Mac', 'linux': 'Linux'}
+ALIASES = {'EROL-PC': None, 'EDITH': 'edith', 'Mac': 'Erol-Mac', 'Linux': '3090'}
+PEERS = {'erol': 'EROL-PC', 'edith': 'EDITH', 'mac': 'Mac', 'linux': 'Linux'}
 
 
 def validate_profile(box, lane, row='mod-match'):
     if row not in ROWS: raise ValueError('unknown four-box acceptance row')
     name = box.get('name')
     if name not in ALIASES or box.get('ssh') != ALIASES[name]:
-        raise ValueError('four-box rows require authorized EROL-PC, EDITH, Z13, Mac and Linux')
-    windows = name in ('EROL-PC', 'EDITH', 'Z13')
+        raise ValueError('four-box rows require authorized EROL-PC, EDITH, Mac and Linux; Z13 is retired')
+    windows = name in ('EROL-PC', 'EDITH')
     expected_kind = 'windows-local' if name == 'EROL-PC' else 'windows-task' if windows else 'posix-ssh'
     if box.get('kind') != expected_kind:
         raise ValueError('machine requires its authorized native runner kind')
