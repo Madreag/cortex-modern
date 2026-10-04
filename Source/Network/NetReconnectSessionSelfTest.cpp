@@ -7524,6 +7524,68 @@ namespace RTE {
 			return 0;
 		}
 
+		// A player returning to the same hosted session reaches it at another address (another route, a renamed host): its ticket is still
+		// its seat's, so the return presents it, and the ticket the host issues names the new address. A session the ticket does not name
+		// is never offered the ticket's seat: that join stays new and the host decides.
+		int TestAReturnFromAnotherAddressPresentsItsTicket() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			NetReconnectTicketStore store;
+			store.SetPath(StorePath("another-address"));
+			NetH4TicketRecord record;
+			record.recordVersion = NetReconnectTicketStore::RecordVersionFor(record.persistentWorld);
+			record.epoch = Ramp<16>(0x25);
+			record.stableSeat = 2;
+			record.holderGeneration = 4;
+			record.credential = Ramp<32>(0x65);
+			record.hostSessionId = 0x4835ULL;
+			record.hostAddress = "10.0.0.5:7777";
+			record.issuedAtUnixMs = 1'700'000'000'000ULL;
+			record.matchConfigHash = MakeHash(9);
+			if (!store.Store(record, &error)) {
+				return Fail("could not store the reclaim ticket: " + error);
+			}
+			const auto admit = [&](uint64_t acceptedSession, bool* reclaimed, uint16_t* seat, std::string* boundAddress) {
+				NetReconnectClient client;
+				uint64_t unixNow = record.issuedAtUnixMs;
+				client.Configure(&store, MakeIdentity(), "Player");
+				client.SetUnixClock(&FixedUnixClock, &unixNow);
+				client.SetHostContext("192.168.1.20:7777", MakeHash(9));
+				client.NoteAcceptedHostSession(acceptedSession);
+				if (!client.BeginAdmission(0, &error)) return false;
+				*reclaimed = false;
+				for (NetH4Outbound& outbound: client.TakeOutbound()) {
+					if (const auto* reclaim = std::get_if<NetH4Reclaim>(&outbound.payload)) {
+						*reclaimed = true;
+						*seat = reclaim->stableSeat;
+					}
+				}
+				*boundAddress = client.GetRecord().hostAddress;
+				return client.UsedStoredTicket() == *reclaimed;
+			};
+			bool sameReclaimed = false, otherReclaimed = true;
+			uint16_t seat = 0, otherSeat = 0;
+			std::string sameAddress, otherAddress;
+			if (!admit(record.hostSessionId, &sameReclaimed, &seat, &sameAddress) || !admit(0x9999ULL, &otherReclaimed, &otherSeat, &otherAddress)) {
+				return Fail("admission did not start: " + error);
+			}
+			std::cout << "[net-reconnect-session-selftest] another_address same_session_reclaim=" << sameReclaimed << " seat=" << seat << " bound=" << sameAddress
+			          << " other_session_reclaim=" << otherReclaimed << std::endl;
+			if (!sameReclaimed || seat != record.stableSeat || sameAddress != "192.168.1.20:7777") {
+				return Fail("a return to its own hosted session at another address joined as a stranger instead of presenting its ticket for seat " +
+				            std::to_string(record.stableSeat));
+			}
+			if (otherReclaimed) {
+				return Fail("a ticket was offered to a session it does not name, reached at an address it does not name");
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS a_return_from_another_address_presents_its_ticket" << std::endl;
+			return 0;
+		}
+
 		// A return the host puts off (the roster's backoff, a host change) keeps its seat: the client asks again with the same
 		// ticket after a backoff that doubles to the roster's longest, and never trades the seat for a fresh one.
 		int TestAPutOffReturnAsksAgainWithItsTicket() {
@@ -8972,6 +9034,7 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestAPutOffReturnAsksAgainWithItsTicket(); result != 0) return result;
+		if (const int result = TestAReturnFromAnotherAddressPresentsItsTicket(); result != 0) return result;
 		if (const int result = TestEndedCredentialsStayOutOfWorld(); result != 0) return result;
 		if (const int result = TestAnAnsweredReclaimIsNotRefusedTwice(); result != 0) return result;
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;

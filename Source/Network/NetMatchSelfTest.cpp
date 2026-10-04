@@ -11349,6 +11349,78 @@ namespace RTE {
 		return true;
 	}
 
+	// A joiner the host refuses because the match is full knocks again while a dead slot may free; its whole wait still ends at the
+	// round's budget with the refusal named, never knocking on past it until someone cancels.
+	bool TestAFullMatchsKnockEndsAtTheBudget(std::string* error) {
+		LoopbackTransport hostTransport, firstTransport, knockTransport;
+		NetSession host, first, knock;
+		NetSessionConfig hostConfig;
+		hostConfig.port = 43273;
+		hostConfig.sessionId = 0x46554c4c4b4e4f43ULL;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 1;
+		hostConfig.heartbeatIntervalMs = 25;
+		hostConfig.timeoutMs = 30000;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "full-knock-selftest";
+		identity.platform = "test";
+		NetSessionConfig firstConfig = hostConfig, knockConfig = hostConfig;
+		firstConfig.displayName = "First";
+		knockConfig.displayName = "Knock";
+		firstConfig.localNonce += 1;
+		knockConfig.localNonce += 2;
+		if (!host.StartHost(hostTransport, hostConfig, error) || !first.StartClient(firstTransport, "loopback", firstConfig, error)) return false;
+		uint64_t now = 0;
+		const auto advance = [&](uint64_t ms) {
+			host.Tick(now);
+			first.Tick(now);
+			for (LoopbackTransport* leg: {&hostTransport, &firstTransport, &knockTransport}) leg->AdvanceTimeMs(ms);
+			now += ms;
+		};
+		for (int step = 0; step < 400 && host.GetReadyPeerCount() != 1; ++step) {
+			first.Tick(now);
+			advance(10);
+		}
+		if (host.GetReadyPeerCount() != 1) {
+			*error = "the full-match fixture never seated its first joiner";
+			return false;
+		}
+		NetMatchRunner runner;
+		runner.m_Config.host = false;
+		runner.m_Config.joinAddress = "loopback";
+		runner.m_Config.sessionConfig = knockConfig;
+		std::atomic<bool> cancel{false};
+		runner.m_Config.cancelRequested = &cancel;
+		bool sawFull = false;
+		runner.m_Config.pumpHost = [&](NetSession& session) {
+			sawFull = sawFull || (session.IsRejected() && session.GetRejectReason() == NetRejectReason::SessionFull);
+			advance(5);
+		};
+		if (!knock.StartClient(knockTransport, "loopback", knockConfig, error)) return false;
+		// Only a cancel ends a wait that never consults its budget; it comes long after the budget.
+		std::thread watchdog([&cancel] {
+			for (int slice = 0; slice < 120 && !cancel.load(); ++slice) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			cancel.store(true);
+		});
+		const auto began = std::chrono::steady_clock::now();
+		std::string waitError;
+		const bool ready = runner.WaitForSessionReady(knockTransport, knock, 1, 400, &waitError);
+		const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+		cancel.store(true);
+		watchdog.join();
+		std::cout << "[net-match-selftest] full_knock ready=" << ready << " refused_full=" << sawFull << " elapsed_ms=" << static_cast<long long>(elapsedMs) << " why='" << waitError << "'" << std::endl;
+		if (ready || !sawFull || waitError == "match setup canceled" || elapsedMs > 2000.0) {
+			*error = "a joiner refused as full waited " + std::to_string(static_cast<long long>(elapsedMs)) + " ms against a 400 ms budget and ended '" + waitError + "'";
+			return false;
+		}
+		std::cout << "PASS a_full_matchs_knock_ends_at_the_budget" << std::endl;
+		return true;
+	}
+
 	// The host clicks Start once; before its peers acknowledge, one joiner's link drops and a newcomer takes the freed seat. Each is a change
 	// the lobby makes on its own, so the round still starts from that one click once the peers present acknowledge it.
 	bool TestAHostsStartSurvivesTheLobbysOwnChanges(std::string* error) {
@@ -16093,14 +16165,17 @@ namespace RTE {
 		if (!TestAStartRequestOutlivesTheRosterStamp(&startRequestError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << startRequestError << std::endl;
 		}
-		std::string stampFollowError, startIntentError;
+		std::string stampFollowError, startIntentError, fullKnockError;
 		if (!TestARosterStampFollowsTheLobbysOwnRepublish(&stampFollowError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << stampFollowError << std::endl;
 		}
 		if (!TestAHostsStartSurvivesTheLobbysOwnChanges(&startIntentError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << startIntentError << std::endl;
 		}
-		if (startRequestError.empty()) startRequestError = !stampFollowError.empty() ? stampFollowError : startIntentError;
+		if (!TestAFullMatchsKnockEndsAtTheBudget(&fullKnockError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << fullKnockError << std::endl;
+		}
+		if (startRequestError.empty()) startRequestError = !stampFollowError.empty() ? stampFollowError : !startIntentError.empty() ? startIntentError : fullKnockError;
 		std::string changingHostError;
 		if (!TestAJoinerIsToldTheMatchIsChangingHost(&changingHostError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << changingHostError << std::endl;

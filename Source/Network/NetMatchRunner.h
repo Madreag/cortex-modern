@@ -270,6 +270,7 @@ namespace RTE {
 		friend bool TestTheRostersWaitKeepsTheRoundsStart(std::string* error);
 		friend bool TestAStartRequestOutlivesTheRosterStamp(std::string* error);
 		friend bool TestARosterStampFollowsTheLobbysOwnRepublish(std::string* error);
+		friend bool TestAFullMatchsKnockEndsAtTheBudget(std::string* error);
 		// Lockstep peer ids are 1-based and dense; the session assigns the host id 0 and clients 1.. .
 		std::map<uint8_t, NetPeerId> BuildRemoteTransportMap(const NetSession& session) const;
 		uint8_t LocalLockstepPeerId(const NetSession& session) const;

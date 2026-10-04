@@ -1390,6 +1390,7 @@ namespace RTE {
 			m_Config.timeoutMs = accepted->timeoutMs;
 			// §4 expands the handshake: with an admission plane attached, Ready waits for JoinCommitted,
 			// which is also what hands back the seat's own peer id instead of this freshly allocated one.
+			if (m_ReconnectClient) m_ReconnectClient->NoteAcceptedHostSession(accepted->sessionId);
 			if (m_ReconnectClient && m_ReconnectClient->BeginAdmission(m_NowMs)) {
 				m_State = NetSessionState::Accepted;
 				m_StateStartedMs = m_NowMs;

@@ -2725,10 +2725,14 @@ namespace RTE {
 		m_LastLoad = m_Store->Load(UnixNowMs(), record, nullptr);
 		if (NetA7Journal::Enabled()) NetA7Journal::Session("ticket_loaded", nowMs, {{"load_result", static_cast<int>(m_LastLoad)},
 			{"ticket_sha256", m_Store->GetA7LoadedSha256()}, {"host_matches", m_LastLoad == NetH4TicketLoadResult::Loaded && record.hostAddress == m_HostAddress}}, "NetReconnectClient::nowMs");
-		// A directory match keeps its ticket binding when its host address changes.
-		if (m_LastLoad == NetH4TicketLoadResult::Loaded && (record.hostAddress == m_HostAddress || (!m_DirectorySessionId.empty() && record.directorySessionId == m_DirectorySessionId))) {
+		// The ticket is tried for the hosted session it names, at whatever address that host answered from: the reclaim's credential
+		// proves the seat, a host that does not hold it refuses and the fresh join follows. A directory match keeps its binding the same way.
+		const bool sameSession = record.hostSessionId != 0 && record.hostSessionId == m_AcceptedHostSessionId;
+		if (m_LastLoad == NetH4TicketLoadResult::Loaded && (record.hostAddress == m_HostAddress || sameSession || (!m_DirectorySessionId.empty() && record.directorySessionId == m_DirectorySessionId))) {
 			m_UsedStoredTicket = true;
 			record.matchConfigHash = m_MatchConfigHash;
+			// The ticket the host issues for the return names the address it was reached at.
+			record.hostAddress = m_HostAddress;
 			return BeginReclaim(record, nowMs, error);
 		}
 		return BeginNewJoin(nowMs, error);

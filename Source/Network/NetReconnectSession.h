@@ -830,6 +830,8 @@ namespace RTE {
 		/// configuration it adopts, and that id is what its return watch browses for.
 		void AdoptDirectorySessionId(const std::string& directorySessionId);
 
+		/// The hosted session the host's join answer named; a stored record of that session is its own whatever address reached it.
+		void NoteAcceptedHostSession(uint64_t hostSessionId) { m_AcceptedHostSessionId = hostSessionId; }
 		/// Starts the §4 transaction the session was accepted into: a stored record for THIS host is
 		/// reclaimed, anything else is a fresh join.
 		/// @return Whether a transaction is now running; false leaves the session's ordinary Ready path.
@@ -920,6 +922,7 @@ namespace RTE {
 		std::string m_DisplayName = "Player";
 		std::string m_HostAddress;
 		std::string m_DirectorySessionId;
+		uint64_t m_AcceptedHostSessionId = 0; //!< The hosted session the host's join answer named.
 		NetHash32 m_MatchConfigHash{};
 		bool m_WorldTarget = false;
 		uint64_t (*m_UnixClock)(void*) = nullptr;

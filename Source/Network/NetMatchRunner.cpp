@@ -498,8 +498,14 @@ namespace RTE {
 			if (session.IsReady() && session.GetReadyPeerCount() >= expectedReadyPeers) {
 				return true;
 			}
-			// A reconnect can knock before the host's transport notices the dead slot; retry until
-			// the timeout frees it (the budget above still bounds the whole wait).
+			// The budget bounds the whole wait, a refused knock's retries included.
+			if (waitMs > maxWaitMs) {
+				const std::string rejectText = session.IsRejected() ? session.BuildRejectText() : std::string();
+				SetFailed(!rejectText.empty() ? rejectText : std::string("timed out waiting for session Ready"));
+				if (error) *error = m_SetupError;
+				return false;
+			}
+			// A reconnect can knock before the host's transport notices the dead slot; retry until the timeout frees it.
 			if (!m_Config.host && session.IsRejected() && session.GetRejectReason() == NetRejectReason::SessionFull) {
 				if (nowMs >= nextRetryMs) {
 					nextRetryMs = nowMs + 2000;
@@ -522,11 +528,6 @@ namespace RTE {
 				// Surface the recorded mismatch (mod/config/version, timeout) instead of the bare state name.
 				const std::string rejectText = session.BuildRejectText();
 				SetFailed(!rejectText.empty() ? rejectText : std::string("session did not reach Ready; state=") + NetSession::StateName(session.GetState()));
-				if (error) *error = m_SetupError;
-				return false;
-			}
-			if (waitMs > maxWaitMs) {
-				SetFailed("timed out waiting for session Ready");
 				if (error) *error = m_SetupError;
 				return false;
 			}
