@@ -59,7 +59,8 @@ class RelayReceiptGates(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);path=root/'native.jsonl.gz'
             path.write_bytes(gzip.compress(b'{"ticks":1201}\n'))
-            self.assertTrue(scan_retained(root,CredentialBook())['passed'])
+            book=CredentialBook();book.add('minted-username','booked-clean-fixture')
+            self.assertTrue(scan_retained(root,book)['passed'])
             path.write_bytes(gzip.compress(b'{"username":"compressed-login","credential":"compressed-password"}\n'))
             self.assertFalse(scan_retained(root,CredentialBook())['passed'])
 

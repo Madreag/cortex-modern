@@ -97,8 +97,57 @@ def pack_evidence(root, archive):
     return {path.relative_to(root).as_posix(): sha256(path) for path in paths}
 
 
-def fetch_evidence(box, remote, rb, remote_directory, local_directory):
+def sanitize_native(root, digests, *, cleanup=False):
+    """A native gate uses salted digests from stdin; no credential input file is created."""
+    from relay_secrets import DigestBook,SecretBook,sweep,walk_files
+    from relay_scrub import scrub
+    from relay_login_sweep import sweep as structural_sweep
+    root=Path(root)
+    observed=bool(digests.get('items'))
+    if not observed and not cleanup:raise ValueError('relay evidence requires a nonempty credential book')
+    book=DigestBook(digests) if observed else SecretBook()
+    prior_failed=False
+    for path in root.rglob('*secret-scan.json'):
+        prior=read(path)
+        prior_failed |= prior.get('passed') is False or prior.get('native_login_leak') is True
+    cleaned=scrub([root],book=book)
+    remaining=sweep([root],book.finder())
+    structural=structural_sweep([root])
+    safe=(remaining['files_scanned']>0 and remaining['status']=='CLEAN' and not remaining['files_with_secrets']
+          and not cleaned['incomplete'] and cleaned['hits_after']==0
+          and structural['status']=='CLEAN' and not structural['files_with_logins'] and not structural['incomplete'])
+    if safe and observed:
+        for path in list(walk_files(root)):
+            if path.name=='LogConsole.txt' and path.parent.name=='runtime':
+                (path.parent.parent/'console.log').write_bytes(path.read_bytes())
+    return dict(passed=safe and observed and cleaned['hits_before']==0 and not prior_failed,safe_to_copy=safe and observed,
+                cleanup_clean=safe,book_values=len(digests.get('items',[])),
+                files_scanned=remaining['files_scanned'],hits_before=cleaned['hits_before'],hits_after=cleaned['hits_after'],
+                native_login_leak=cleaned['hits_before']>0 or prior_failed,sanitizer_receipt=cleaned,structural_scan=structural)
+
+
+def sanitize_remote(box,remote,rb,root,book, *, cleanup=False):
+    try:
+        from acceptance_relay_policy import native_book
+        digests=native_book(book).digests()
+        if not digests['items'] and not cleanup:raise ValueError('relay evidence requires a nonempty credential book')
+        action='--relay-cleanup' if cleanup else '--relay-sanitize'
+        command=f'{getattr(box,"python","python")} {rb.ps_quote(box.repo+"/tools/acceptance_remote.py")} {action} {rb.ps_quote(Path(root).as_posix())}'
+        process=subprocess.run(['ssh','-o','BatchMode=yes',box.ssh,command],input=json.dumps(digests),text=True,
+                               capture_output=True,timeout=900,check=True)
+        gate=json.loads(process.stdout)
+    except BaseException:
+        book.native_leak=True
+        raise
+    if gate.get('passed') is not True:book.native_leak=True
+    if gate.get('cleanup_clean' if cleanup else 'safe_to_copy') is not True:
+        raise ValueError('native relay sanitizer refused '+('cleanup' if cleanup else 'evidence copy'))
+    return gate
+
+
+def fetch_evidence(box, remote, rb, remote_directory, local_directory, *, book=None):
     remote_directory, local_directory = Path(remote_directory), Path(local_directory)
+    gate=sanitize_remote(box,remote,rb,remote_directory,book) if book is not None else None
     local_directory.mkdir(parents=True, exist_ok=True)
     archive = remote_directory/'.acceptance-evidence.tar'
     manifest = remote_directory/'.acceptance-evidence.json'
@@ -110,6 +159,7 @@ def fetch_evidence(box, remote, rb, remote_directory, local_directory):
     remote.scp_from(manifest, local_manifest)
     expected = read(local_manifest)
     unpack_evidence(local_archive, local_directory, expected)
+    if gate is not None:write(local_directory/'native-secret-scan.json',gate)
     return expected
 
 
@@ -219,7 +269,13 @@ def main(argv=None):
     parser.add_argument('--broker')
     parser.add_argument('--snapshot', type=Path)
     parser.add_argument('--publish', type=Path)
+    parser.add_argument('--relay-sanitize',type=Path)
+    parser.add_argument('--relay-cleanup',type=Path)
     options = parser.parse_args(argv)
+    if options.relay_sanitize:
+        print(json.dumps(sanitize_native(options.relay_sanitize,json.load(sys.stdin))));return 0
+    if options.relay_cleanup:
+        print(json.dumps(sanitize_native(options.relay_cleanup,json.load(sys.stdin),cleanup=True)));return 0
     if options.broker:
         from acceptance_peer_session import broker
         return broker(options.broker)

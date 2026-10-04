@@ -88,6 +88,7 @@ def main():
     parser.add_argument('--port', type=int, default=49492)
     parser.add_argument('--game-port', type=int, default=49493)
     parser.add_argument('--turn', required=True)
+    parser.add_argument('--turn-config',type=Path,default=Path('D:/mx/coturn-20260920/directory-coturn.json'))
     parser.add_argument('--keep-wsl-running', action='store_true')
     parser.add_argument('--rendezvous-log', type=int, default=0)
     parser.add_argument('--fullstate-every', type=int, default=0,
@@ -106,9 +107,12 @@ def main():
         parser.error('--fullstate-every must be 0 or positive')
     if not all(49470 <= value <= 49499 for value in (args.port, args.game_port)):
         parser.error('ports must stay in 49470..49499')
-    username, password = os.environ['CC_TEST_TURN_USER'], os.environ['CC_TEST_TURN_PASS']
     repo, root = Path(__file__).resolve().parents[2], args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
+    from acceptance_relay_policy import CredentialBook,directory_config,sweep_retained
+    from e2e.directory import serve
+    book=CredentialBook()
+    backend=directory_config(dict(directory_turn_config_path=str(args.turn_config)),root,book)
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'localhost')])
     now = datetime.now(timezone.utc)
@@ -123,9 +127,8 @@ def main():
     pin = hashlib.sha256(certificate.public_bytes(serialization.Encoding.DER)).hexdigest()
     settings = dict(SessionDirectoryUrl=f'127.0.0.1:{args.port}', SessionDirectoryCertSha256=pin,
                     NetworkIceEnable='1', NetworkStunServers='', NetworkConnectionMode='RelayOnly',
-                    NetworkHostRelayMode='Fixed', NetworkTurnServers=args.turn,
-                    NetworkTurnUser=username, NetworkTurnPass=password,
-                    NetworkPlayerTurnServers=args.turn, NetworkPlayerTurnUser=username, NetworkPlayerTurnPass=password)
+                    NetworkHostRelayMode='Directory', NetworkTurnServers='',NetworkTurnUser='',NetworkTurnPass='',
+                    NetworkPlayerTurnServers='',NetworkPlayerTurnUser='',NetworkPlayerTurnPass='')
     turn_host, turn_port = turn_endpoint(args.turn)
     keepalive = None
     if args.keep_wsl_running:
@@ -135,7 +138,9 @@ def main():
     reachable, sampler_stop = {'ok': 0, 'fail': 0}, threading.Event()
     sampler = threading.Thread(target=sample_turn, args=(turn_host, turn_port, reachable, sampler_stop), daemon=True)
     sampler.start()
-    service = start_service(root, args.port, cert, key_path)
+    service = serve(root/'directory',args.port,(49470,49499),turn_config=backend,secret_book=book)
+    tokens=service.__enter__()
+    settings.update(SessionDirectoryUrl=tokens['DIRECTORY_URL'],SessionDirectoryCertSha256=tokens['DIRECTORY_PIN'])
     runs, records = {}, {}
     try:
         session_id = ''
@@ -171,15 +176,19 @@ def main():
         for peer in ('client', 'host'):
             records[peer] = runs[peer].finish()
     finally:
-        sampler_stop.set()
-        sampler.join(timeout=5)
-        for run in runs.values():
-            run.close()
-        service.terminate()
-        service.wait(timeout=10)
-        if keepalive is not None:
-            keepalive.terminate()
-            keepalive.wait(timeout=10)
+        from contextlib import ExitStack
+        try:
+            with ExitStack() as cleanup:
+                if keepalive is not None:
+                    cleanup.callback(keepalive.wait,timeout=10)
+                    cleanup.callback(keepalive.terminate)
+                cleanup.callback(service.__exit__,None,None,None)
+                for run in runs.values():cleanup.callback(run.close)
+                cleanup.callback(sampler.join,timeout=5)
+                cleanup.callback(sampler_stop.set)
+        finally:
+            scan=sweep_retained(root,book)
+            (root/'secret-scan.json').write_text(json.dumps(scan,indent=2)+'\n',encoding='utf-8')
     checks = {}
     for peer in ('host', 'client'):
         log = (root / peer / 'stdout.log').read_text(encoding='utf-8-sig', errors='replace')
@@ -189,17 +198,18 @@ def main():
                             relay_candidate=bool(re.search(r'\[net-ice\] selected candidate=.*relay', log)),
                             relay_allowed='[net-route] RouteAllowed route=relay allowed=1' in log,
                             no_429=not has_http_429(log))
-    directory = (root / 'service.log').read_text(encoding='utf-8', errors='replace')
+    directory = (root / 'directory/service.log').read_text(encoding='utf-8', errors='replace')
     comparisons = compare_live_hashes(root / 'host-live.jsonl', root / 'client-live.jsonl', 1)
     passed = (all(all(value for key, value in checks[peer].items() if key != 'lines') for peer in checks)
               and not has_http_429(directory) and bool(comparisons)
               and all(row['compared_ticks'] > 0 and row['mismatched_ticks'] == 0
                       and row['mismatched_applied_input_ticks'] == 0 for row in comparisons))
     fullstate = compare_fullstate(root / 'host' / 'stdout.log', root / 'client' / 'stdout.log') if args.fullstate_every else None
-    passed = passed and (fullstate is None or fullstate['passed'])
+    passed = passed and (fullstate is None or fullstate['passed']) and scan['passed']
     result = dict(passed=passed, checks=checks, comparisons=comparisons, fullstate=fullstate,
                   directory_no_429=not has_http_429(directory), directory_port=args.port, game_port=args.game_port,
-                  relay=dict(endpoint=f'{turn_host}:{turn_port}', warm_attempts=warm_attempts, reachable=reachable))
+                  relay=dict(backend=backend['backend'],credential_source='directory offer',endpoint=f'{turn_host}:{turn_port}', warm_attempts=warm_attempts, reachable=reachable),
+                  secret_scan=dict(required=True,passed=scan['passed'],path='secret-scan.json'))
     (root / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     print(f"[relay-join] {'PASS' if passed else 'FAIL'} " + str(root / 'result.json'))
     return 0 if passed else 1

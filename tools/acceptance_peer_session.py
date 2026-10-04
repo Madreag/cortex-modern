@@ -85,7 +85,7 @@ class Pair:
             if box.kind != 'windows-task' or box.max_engines < 1:
                 raise ValueError(f'{name}: one engine through its session task is required')
             self.boxes[role] = dispatch.prepare_box(self.repo, box, self.root, self.inventory, self.source, self.executable)
-        self.deliveries, self.tunnels = [], {}
+        self.deliveries, self.tunnels, self.pending = [], {}, []
 
     def mapped(self, role, value):
         box, _, _, root = self.boxes[role]
@@ -115,7 +115,7 @@ class Pair:
                 time.sleep(1)
             else: raise RuntimeError(f'{box.name}: private directory tunnel did not open')
 
-    def launch(self, role, local_task, kind, native, values=None, timeout=900):
+    def launch(self, role, local_task, kind, native, values=None, timeout=900, *, book=None):
         box, remote, rb, _ = self.boxes[role]
         task = Path(self.mapped(role,str(Path(local_task).resolve())))
         payload = dict(kind=kind, box=box.name, repo=box.repo, executable=box.exe, exe_sha256=self.executable,
@@ -125,21 +125,47 @@ class Pair:
         self.deliveries.append(delivery)
         payload['values_pipe'] = delivery.address
         done = dispatch.task_payload(box,remote,rb,task,payload,Path(local_task)/'control',wait=False)
+        if not hasattr(self,'pending'):self.pending=[]
+        artifact_root=Path(self.mapped(role,native['root'])) if kind=='capture-peer' else task
+        self.pending.append(dict(role=role,task=task,done=done,timeout=timeout,destination=Path(local_task),root=artifact_root,book=book))
         return task, done
 
-    def finish(self, role, task, done, timeout, destination):
+    def complete(self, task):
+        self.pending=[entry for entry in getattr(self,'pending',[]) if entry['task']!=task]
+
+    def cancel(self, role, task, done, timeout, destination, *, book=None, root=None):
+        box,remote,rb,_=self.boxes[role]
+        stop=Path(task)/'stop.json'
+        encoded=base64.b64encode(json.dumps(dict(reason='coordinator closed its owned peer')).encode()).decode()
+        remote.ssh(f'[IO.File]::WriteAllBytes({rb.ps_quote(stop.as_posix())},[Convert]::FromBase64String({rb.ps_quote(encoded)}))')
+        ended=remote.wait_done(done,120)
+        if ended=='TIMEOUT':
+            write(Path(destination)/'cleanup-incomplete.json',dict(passed=False,reason='owned native task did not stop; no evidence copied'))
+            raise TimeoutError(f'{box.name}: owned native task did not stop for relay cleanup')
+        if book is not None:
+            gate=dispatch.sanitize_remote(box,remote,rb,root or task,book,cleanup=True)
+            write(Path(destination)/'cancel-secret-scan.json',gate)
+        self.complete(task)
+        return ended
+
+    def finish(self, role, task, done, timeout, destination, *, book=None):
         box, remote, rb, _ = self.boxes[role]
         result = remote.wait_done(done, timeout+120)
-        if result == 'TIMEOUT': raise TimeoutError(f'{box.name}: session task did not terminate')
-        dispatch.fetch_evidence(box,remote,rb,task,destination)
+        if result == 'TIMEOUT':
+            self.cancel(role,task,done,timeout,destination,book=book)
+            raise TimeoutError(f'{box.name}: session task exceeded its budget; stopped and swept')
+        dispatch.fetch_evidence(box,remote,rb,task,destination,book=book)
+        self.complete(task)
         return result
 
     def close(self):
-        for delivery in self.deliveries: delivery.close()
-        for process, handle in self.tunnels.values():
-            if process.poll() is None:
-                process.terminate(); process.wait(timeout=15)
-            handle.close()
+        with contextlib.ExitStack() as cleanup:
+            for delivery in self.deliveries:cleanup.callback(delivery.close)
+            for process,handle in self.tunnels.values():
+                cleanup.callback(handle.close)
+                if process.poll() is None:
+                    cleanup.callback(process.wait,timeout=15);cleanup.callback(process.terminate)
+            for task in list(getattr(self,'pending',[])):cleanup.callback(self.cancel,**task)
 
     def __enter__(self): return self
     def __exit__(self,*_): self.close()
@@ -175,27 +201,34 @@ def execute(spec):
     if spec['kind'] == 'relay-peer':
         import edith_cross
         native = spec['native']
+        from relay_private import require_public
+        require_public(values.get('settings',{}))
         native['settings'].update(values.get('settings',{}))
         Path(native['root']).mkdir(parents=True,exist_ok=True)
         for name, text in native.pop('input_files',{}).items():
             (Path(native['root'])/name).write_text(text,encoding='utf-8')
         path = Path(native['root'])/(native['peer']+'-spec.json')
-        # Secret values remain in memory until the runner seeds the private runtime.
+        # The directory issues the login; no settings or task file carries one.
         h = edith_cross.harness(Path(native['repo'])/'tools')
         run = edith_cross.prepare_peer(h,native)
         try:
-            run.start(); record=run.finish()
+            run.start()
+            stop=Path(spec['identity']).parent/'stop.json'
+            while run.poll() is None:
+                if stop.is_file():run.terminate(reason='coordinator closed its owned peer')
+                time.sleep(.05)
+            record=run.finish()
         finally:
             run.close(); edith_cross.redact(h,run,native)
         write(Path(native['root'])/(native['peer']+'-record.json'),record)
         write(path,native)
         return 0 if record.get('exit_code') == 0 else 1
     if spec['kind'] == 'relay-selftest':
-        os.environ.update(values.get('environment',{}))
         from turn_relay_rows import main
+        from relay_private import inherited_environment
         import sys
-        sys.argv = ['turn_relay_rows.py',*spec['native']['argv']]
-        return main()
+        sys.argv = ['turn_relay_rows.py',*spec['native']['argv'],'--stop-file',str(Path(spec['identity']).parent/'stop.json')]
+        with inherited_environment(values.get('environment',{})):return main()
     if spec['kind'] == 'capture-peer':
         from acceptance_e2e_remote import execute_peer
         return execute_peer(spec, values)

@@ -88,8 +88,9 @@ def check_scratch_budget(root, limit):
     return footprint
 
 
-def write_json(path, value):
-    Path(path).write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+def write_json(path, value, secrets=()):
+    from relay_private import public_value
+    Path(path).write_text(json.dumps(public_value(value,secrets), indent=2) + "\n", encoding="utf-8")
 
 
 def file_evidence(path):
@@ -1610,20 +1611,23 @@ def stage_peer(scenario, peer, root, tokens):
     Every peer's staging paths are already in `tokens` before a byte is written, so one peer's script
     can name another's done file the way the readback driver's paired cases do.
     """
+    from relay_private import LOGIN_KEYS,placeholder,public_value
+    private_values=[str(value) for key,value in tokens.items() if key in LOGIN_KEYS and value]
+    tokens={key:placeholder(key) if key in LOGIN_KEYS else value for key,value in tokens.items()}
     environment = {"CCCP_HEADLESS": "1"}
     if peer.get("probe"):
         directory = Path(root) / "probe"
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / "probe.json"
         probe = substitute(json.loads(scenario_text(scenario, peer["probe"])), tokens)
-        path.write_text(json.dumps(probe, indent=2) + "\n", encoding="utf-8")
+        write_json(path,probe,private_values)
         environment["CC_TEST_NET_UI_SCRIPT"] = str(path)
     if peer.get("input_script"):
         path = Path(root) / "input.txt"
-        path.write_text(substitute(scenario_text(scenario, peer["input_script"]), tokens), encoding="utf-8")
+        path.write_text(public_value(substitute(scenario_text(scenario, peer["input_script"]), tokens),private_values), encoding="utf-8")
     if peer.get("menu_script"):
         path = Path(root) / "menu.txt"
-        path.write_text(substitute(scenario_text(scenario, peer["menu_script"]), tokens), encoding="utf-8")
+        path.write_text(public_value(substitute(scenario_text(scenario, peer["menu_script"]), tokens),private_values), encoding="utf-8")
     # Every peer's engine arms the shared screen watches from this file on its first drawn frame.
     watches = Path(root) / "screen-watches.txt"
     watches.write_text(SCREEN_WATCHES, encoding="utf-8")
@@ -1637,6 +1641,7 @@ def stage_peer(scenario, peer, root, tokens):
         environment["CCCP_TEST_RECORD_ENCODER"] = str(ffmpeg)
         environment["CCCP_TEST_RECORD_CODEC"] = encoder_codec(ffmpeg)
     environment.update(substitute(peer.get("env", {}), tokens))
+    environment={key:value for key,value in environment.items() if key not in LOGIN_KEYS}
     if environment["CCCP_HEADLESS"] != "1":
         raise ValueError("a scenario cannot override CCCP_HEADLESS=1")
     return environment
@@ -1683,6 +1688,8 @@ def run_one(options, scenario, run, run_index, out):
     port = port_for(run_index, options.port)
     timeout = run.get("timeout_s") or scenario.get("timeout_s") or 300
     runs, records, staged = {}, {}, {}
+    from relay_private import LOGIN_KEYS,public_settings,public_value,inherited_environment,MenuStream
+    private_menus={};private_environments={};streams={}
     failed = threading.Event()
     stop_watchers = threading.Event()
     peers = run.get("peers") or scenario.get("peers") or []
@@ -1716,6 +1723,23 @@ def run_one(options, scenario, run, run_index, out):
         seed = {"ResolutionX": width, "ResolutionY": height}
         seed.update(substitute(peer.get("settings", {}), tokens))
         seed.update(dict(getattr(options, "setting", [])))
+        for key,value in seed.items():
+            if key in LOGIN_KEYS and value:
+                token='TURN_PASS' if key.endswith(('Pass','PASS')) else 'TURN_USER'
+                tokens.setdefault(token,value)
+        private_environments[name]={key:value for key,value in substitute(peer.get('env',{}),tokens).items() if key in LOGIN_KEYS}
+        if peer.get('menu_script') and (any(key in tokens for key in LOGIN_KEYS) or any(seed.get(key) for key in LOGIN_KEYS)):
+            template=scenario_text(scenario,peer['menu_script'])
+            if any('{'+key+'}' in template for key in LOGIN_KEYS):private_menus[name]=substitute(template,tokens)
+        private_values=[str(value) for key,value in tokens.items() if key in LOGIN_KEYS and value]
+        if private_values and not dry and getattr(options,'relay_book',None) is None:
+            from acceptance_relay_policy import CredentialBook
+            options.relay_book=CredentialBook()
+        if any(any(value in str(argument) for value in private_values) for argument in args):
+            raise ValueError('relay login cannot be passed in a captured command argument')
+        if any(seed.get(key) for key in LOGIN_KEYS) and name not in private_menus:
+            raise ValueError('a relay login must reach the Fixed menu through its private input stream')
+        seed=public_settings(seed)
         cap = render_cap_hz(getattr(options, "render_cap", 60))
         arm = {"size": f"{seed['ResolutionX']}x{seed['ResolutionY']}", "settings": seed, "render_cap": cap}
         if dry:
@@ -1737,9 +1761,18 @@ def run_one(options, scenario, run, run_index, out):
                 raise ValueError(f"Retained runtime leaves this capture: {retained}")
             console = retained / "LogConsole.txt"
             if previous and console.is_file():
-                (Path(previous["root"]) / "console-before-restore.log").write_bytes(console.read_bytes())
+                data=console.read_bytes()
+                if getattr(options,'relay_book',None):
+                    from acceptance_relay_policy import public_native_bytes
+                    data=public_native_bytes(data,options.relay_book)
+                (Path(previous["root"]) / "console-before-restore.log").write_bytes(data)
         factory = options.remote_capture.make_run if getattr(options, 'remote_capture', None) else make_run
-        run_handle = factory(options.repo, args, peer_root, timeout, env=environment, **({"runtime": retained} if retained else {}))
+        with inherited_environment(private_environments[name]):
+            run_handle = factory(options.repo, args, peer_root, timeout, env=environment, **({"runtime": retained} if retained else {}))
+        run_handle.private_menu=private_menus.get(name)
+        run_handle.private_environment=private_environments[name]
+        if getattr(options,'relay_book',None):
+            for index,value in enumerate(private_values):options.relay_book.add('private-menu-'+str(index),value)
         (Path(run_handle.out) / "video").mkdir(parents=True, exist_ok=False)
         for directory in peer.get("output_dirs", []):
             (Path(run_handle.out) / directory).mkdir(parents=True, exist_ok=False)
@@ -1758,7 +1791,7 @@ def run_one(options, scenario, run, run_index, out):
             metadata["render_cap"] = cap
             write_json(runtime_manifest, metadata)
         # Fixture modules a scenario needs land in the private runtime, never in the repository.
-        for entry in substitute(peer.get("runtime_files", []), tokens):
+        for entry in public_value(substitute(peer.get("runtime_files", []), tokens),private_values):
             destination = Path(run_handle.cwd) / entry["to"]
             destination.parent.mkdir(parents=True, exist_ok=True)
             if "copy" in entry:
@@ -1766,7 +1799,11 @@ def run_one(options, scenario, run, run_index, out):
                 # An unpacked package carries the game alone: a harness fixture comes from the driver's own tree.
                 if not source.is_file() and (Path(options.repo) / "MANIFEST.json").is_file():
                     source = TOOLS.parent / entry["copy"]
-                destination.write_bytes(staged_copy(source, entry.get("replace", [])))
+                data=staged_copy(source, entry.get("replace", []))
+                if getattr(options,'relay_book',None):
+                    from acceptance_relay_policy import public_native_bytes
+                    data=public_native_bytes(data,options.relay_book)
+                destination.write_bytes(data)
             else:
                 destination.write_text(entry["write"], encoding="utf-8")
         runs[name] = run_handle
@@ -1781,13 +1818,29 @@ def run_one(options, scenario, run, run_index, out):
 
     def drive(name):
         try:
-            record = runs[name].start().finish()
+            handle=runs[name]
+            if private_menus.get(name) and not getattr(options,'remote_capture',None):
+                streams[name]=MenuStream(private_menus[name])
+                handle.argv[handle.argv.index('-menu-script')+1]=streams[name].path
+            with inherited_environment(private_environments[name]):handle.start()
+            record=handle.finish()
+            if getattr(options,'relay_book',None) and not getattr(options,'remote_capture',None):
+                from acceptance_relay_policy import sweep_retained
+                scan=sweep_retained(handle.out,options.relay_book)
+                write_json(Path(handle.out)/'peer-secret-scan.json',scan)
+                if not scan['safe_to_copy']:raise ValueError('relay sanitizer refused native console copy')
             console = Path(runs[name].cwd) / "LogConsole.txt"
             if console.is_file():
-                (Path(runs[name].out) / "console.log").write_bytes(console.read_bytes())
+                data=console.read_bytes()
+                if getattr(options,'relay_book',None):
+                    from acceptance_relay_policy import public_native_bytes
+                    data=public_native_bytes(data,options.relay_book)
+                (Path(runs[name].out) / "console.log").write_bytes(data)
             records[name] = record
         except Exception as error:  # the peer's record carries the failure; the others still finish
-            records[name] = {"error": repr(error)}
+            records[name] = {"error": public_value(repr(error),getattr(getattr(options,'relay_book',None),'values',{}))}
+        finally:
+            if name in streams:streams[name].close()
         observe = next(peer.get("observe_after_failure", False) for peer in peers if peer["name"] == name)
         if not observe and (records[name].get("error") or menu_script_failures(runs[name].out) or
                             records[name].get("exit_code") not in (0, None) and not records[name].get("injected_termination")):
@@ -1938,6 +1991,11 @@ def run_one(options, scenario, run, run_index, out):
             timer.join()
     for name, handle in runs.items():
         handle.close()
+    if getattr(options,'relay_book',None):
+        from acceptance_relay_policy import sweep_retained
+        scan=sweep_retained(root,options.relay_book)
+        write_json(root/'secret-scan.json',scan)
+        if not scan['safe_to_copy']:raise ValueError('relay sanitizer refused capture reduction')
     footprint_peak = note_footprint(options.scratch_root, footprint["peak"])
 
     collected = []
@@ -2595,6 +2653,11 @@ def main():
         from e2e.cross import select_peer
         scenario = select_peer(scenario, options.peer)
     options.tokens = supplied_tokens(options.token)
+    from relay_private import LOGIN_KEYS
+    definitions=scenario.get('runs') or [scenario]
+    if (any(options.tokens.get(key) for key in LOGIN_KEYS) or any(key in LOGIN_KEYS and value for key,value in options.setting)
+            or any(peer.get('settings',{}).get(key) for run in definitions for peer in run.get('peers',[]) for key in LOGIN_KEYS)):
+        scenario['relay_secret_scan']=True
     if options.host_box or options.client_box:
         if (options.host_box, options.client_box) != ('ALLY', 'EDITH') or not options.inventory or not options.collection_root:
             parser.error('remote capture requires ALLY host, EDITH client, inventory and collection root')
@@ -2617,9 +2680,9 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     if scenario.get('relay_secret_scan'):
         from acceptance_relay_policy import CredentialBook
-        options.relay_book = CredentialBook()
+        capture_book = CredentialBook()
         for key in ('TURN_USER', 'TURN_PASS'):
-            options.relay_book.add(key, options.tokens.get(key))
+            capture_book.add(key, options.tokens.get(key))
     if options.host_box:
         from acceptance_e2e_remote import RemoteCapture
         options.remote_capture = RemoteCapture(options)
@@ -2638,6 +2701,8 @@ def main():
                "settings": dict(options.setting), "render_cap": options.render_cap,
                "scratch_root": str(options.scratch_root), "scratch_limit_bytes": options.scratch_limit_bytes,
                "started": stamp(), "command": [sys.executable, *sys.argv], "scenario_definition": scenario}
+    from relay_private import public_value
+    capture=public_value(capture,capture_book.values if scenario.get('relay_secret_scan') else ())
     missing = requirement_findings(options.repo, scenario)
     if missing:
         capture["requires_findings"] = missing
@@ -2654,6 +2719,14 @@ def main():
     try:
         for index, run in enumerate(runs):
             name = run.get("name", f"run{index}")
+            options.relay_book=None
+            needs_relay=bool(run.get('directory_turn_config_path') or run.get('directory_turn_config_fixture') or
+                             any(peer.get('settings',{}).get('NetworkHostRelayMode') in ('Fixed','Directory') for peer in run.get('peers',[])))
+            if scenario.get('relay_secret_scan') and needs_relay:
+                options.relay_book=CredentialBook()
+                for key in ('TURN_USER','TURN_PASS'):
+                    values=getattr(getattr(options,'remote_capture',None),'secrets',{})
+                    options.relay_book.add(key,values.get('__ACCEPTANCE_'+key+'__',options.tokens.get(key)))
             options.completed_runs = capture["runs"]
             options.resume_tokens = {}
             skip = None
@@ -2704,6 +2777,14 @@ def main():
                 options.service_tokens = tokens
                 captured = run_one(options, scenario, run, index, out)
                 captured["services"] = {key: str(value) for key, value in tokens.items()}
+            if options.relay_book is not None:
+                from acceptance_relay_policy import sweep_retained
+                scan=sweep_retained(Path(captured['root']),options.relay_book)
+                write_json(Path(captured['root'])/'secret-scan.json',scan)
+                captured['relay_secret_scan']=dict(required=True,passed=scan['passed'],book_values=len(options.relay_book.values))
+                complete &= scan['passed']
+                for value,kind in options.relay_book.values.items():capture_book.add(kind,value)
+                capture_book.native_leak |= options.relay_book.native_leak
             capture["runs"].append(captured)
             write_json(out / "capture.json", capture)
             if captured.get("interrupted"):
@@ -2716,23 +2797,33 @@ def main():
                 complete = False
                 break
     except (KeyboardInterrupt, Exception) as error:
-        capture["interrupted"] = f"{type(error).__name__}: {error}"
+        capture["interrupted"] = public_value(f"{type(error).__name__}: {error}",getattr(getattr(options,'relay_book',None),'values',{}))
         complete = False
         for captured in capture["runs"]:
             captured["interrupted"] = capture["interrupted"]
             review(scenario, captured, Path(captured["root"]))
+    finally:
+        try:
+            if getattr(options,'remote_capture',None):options.remote_capture.close()
+        finally:
+            if scenario.get('relay_secret_scan') and getattr(options,'relay_book',None) is not None:
+                for value,kind in options.relay_book.values.items():capture_book.add(kind,value)
+                capture_book.native_leak |= options.relay_book.native_leak
+            if scenario.get('relay_secret_scan'):
+                from acceptance_relay_policy import sweep_retained
+                scan=sweep_retained(out,capture_book)
+                write_json(out/'secret-scan.json',scan)
+                complete &= scan['passed']
     scenario_manifest(capture, out, time.monotonic() - started)
     document = aggregate_review(capture, out)
     complete &= not document.get('run_findings') and not any(item.get("finding") or item.get("blocked_by") for item in document["checklist"])
     for run in capture["runs"]:
         for peer in run["peers"]:
             peer.pop("index", None)
-    (out / "capture.json").write_text(json.dumps(capture, indent=2) + "\n", encoding="utf-8")
-    if getattr(options, 'remote_capture', None):
-        options.remote_capture.close()
+    write_json(out / 'capture.json',capture)
     if scenario.get('relay_secret_scan'):
-        from acceptance_relay_policy import scan_retained
-        scan = scan_retained(out, options.relay_book)
+        from acceptance_relay_policy import sweep_retained
+        scan = sweep_retained(out, capture_book)
         write_json(out/'secret-scan.json', scan)
         complete &= scan['passed']
         if not scan['passed']:

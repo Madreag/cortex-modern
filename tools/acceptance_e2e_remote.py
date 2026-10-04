@@ -40,6 +40,7 @@ class RemoteRun:
     def __init__(self, capture, repo, args, out, timeout, environment):
         from run_sim_test import RUNTIME_SETTINGS
         self.capture,self.pair=capture,capture.pair
+        self.book=getattr(capture.options,'relay_book',None)
         self.repo,self.out,self.timeout=Path(repo).resolve(),Path(out).resolve(),timeout
         self.role=self.out.name
         if self.role not in ('host','client'): raise ValueError('remote capture declares one host and one client')
@@ -58,12 +59,19 @@ class RemoteRun:
             for path in base.rglob('*'):
                 if path.is_file():
                     text=self.pair.mapped(self.role,path.read_text(encoding='utf-8'))
-                    for token,value in self.capture.secrets.items(): text=text.replace(token,value)
                     files[path.relative_to(root).as_posix()]=text
         native=dict(root=str(root),out=str(self.out),role=self.role,argv=self.argv[2:],environment=self.env,
-                    timeout=self.timeout,repo=str(self.repo),secrets=list(self.capture.secrets))
+                    timeout=self.timeout,repo=str(self.repo),secrets=list(self.capture.secrets),relay_gate=self.book is not None)
+        menu=getattr(self,'private_menu',None)
+        if menu:
+            for token,value in self.capture.secrets.items():menu=menu.replace(token,value)
+        private_environment=dict(getattr(self,'private_environment',{}))
+        for key,value in private_environment.items():
+            for token,secret in self.capture.secrets.items():value=value.replace(token,secret)
+            private_environment[key]=value
         task,done=self.pair.launch(self.role,root/'.sessions'/self.role,'capture-peer',native,
-                                  dict(files=files,secrets=self.capture.secrets),timeout=self.timeout+120)
+                                  dict(files=files,secrets=self.capture.secrets,menu=menu,
+                                       environment=private_environment),timeout=self.timeout+120,book=self.book)
         self.task,self.done=task,done;self.started=True
         self.deadline=time.monotonic()+self.timeout+240
         return self
@@ -78,6 +86,9 @@ class RemoteRun:
             if not path.is_relative_to(self.out.parent): raise ValueError('native snapshot escaped the declared run')
             path.parent.mkdir(parents=True,exist_ok=True)
             data=base64.b64decode(encoded,validate=True)
+            if self.book is not None:
+                from acceptance_relay_policy import public_native_bytes
+                data=public_native_bytes(data,self.book)
             # Publish atomically: the scenario thread may be reading a frame index or done receipt now.
             temporary=path.with_name(path.name+'.incoming-'+self.role)
             temporary.write_bytes(data);os.replace(temporary,path)
@@ -110,7 +121,8 @@ class RemoteRun:
             raise TimeoutError('remote capture task did not finish')
         source=Path(self.pair.mapped(self.role,str(self.out.parent)))
         raw=self.out.parent/'.native'/self.role
-        dispatch.fetch_evidence(box,remote,rb,source,raw)
+        dispatch.fetch_evidence(box,remote,rb,source,raw,book=self.book)
+        self.pair.complete(self.task)
         for path in raw.iterdir():
             if path.name not in (self.role,self.role+'-stage'): continue
             target=self.out.parent/path.name
@@ -133,14 +145,19 @@ class RemoteRun:
         remote.ssh(f'[IO.File]::WriteAllBytes({rb.ps_quote(stop.as_posix())},[Convert]::FromBase64String({rb.ps_quote(encoded)}))')
 
     def close(self):
-        if self.started and not self.finished: self.terminate('coordinator closed the capture')
+        if self.started and not self.finished:
+            self.pair.cancel(self.role,self.task,self.done,self.timeout,self.out,book=self.book,
+                             root=Path(self.pair.mapped(self.role,str(self.out.parent))))
+            self.finished=True
 
 
 def execute_peer(spec, values):
     from run_sim_test import make_run
     import e2e_video as video
+    from relay_private import public_value,inherited_environment,MenuStream,require_public
     native=spec['native'];root=Path(native['root']);out=Path(native['out']);role=native['role']
     environment=dict(native['environment'])
+    require_public(environment)
     encoder=video.find_ffmpeg()
     if encoder:
         environment['CCCP_TEST_RECORD_ENCODER']=str(encoder)
@@ -152,14 +169,18 @@ def execute_peer(spec, values):
         if path.is_relative_to(out/'runtime'):
             runtime_files[path.relative_to(out/'runtime')]=text
         else:
-            path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text,encoding='utf-8')
-    run=make_run(Path(native['repo']),native['argv'],out,timeout=native['timeout'],env=environment)
+            path.parent.mkdir(parents=True,exist_ok=True);path.write_text(public_value(text,values.get('secrets',{}).values()),encoding='utf-8')
+    with inherited_environment(values.get('environment',{})):
+        run=make_run(Path(native['repo']),native['argv'],out,timeout=native['timeout'],env=environment)
     for relative,text in runtime_files.items():
-        path=Path(run.cwd)/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text,encoding='utf-8')
+        path=Path(run.cwd)/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(public_value(text,values.get('secrets',{}).values()),encoding='utf-8')
     (out/'video').mkdir()
     task=Path(spec['identity']).parent
+    menu=None
     try:
-        run.start()
+        if values.get('menu'):
+            menu=MenuStream(values['menu']);run.argv[run.argv.index('-menu-script')+1]=menu.path
+        with inherited_environment(values.get('environment',{})):run.start()
         while run.poll() is None:
             if (task/'stop.json').is_file(): run.terminate(reason=read(task/'stop.json')['reason'])
             video.gameplay_signals(out/'video',root/(role+'-stage'))
@@ -167,14 +188,13 @@ def execute_peer(spec, values):
         record=run.finish()
     finally:
         run.close()
-        # Retain the scripts and writable settings with credential values replaced after the engine exits.
-        for base in (root/(role+'-stage'),Path(run.cwd)/'Userdata'):
-            for path in base.rglob('*'):
-                if path.is_file() and path.suffix.lower() in ('.txt','.ini','.json'):
-                    text=path.read_text(encoding='utf-8',errors='replace')
-                    for token,value in values.get('secrets',{}).items(): text=text.replace(value,token)
-                    path.write_text(text,encoding='utf-8')
+        if menu:menu.close()
     console=Path(run.cwd)/'LogConsole.txt'
-    if console.is_file(): shutil.copy2(console,out/'console.log')
+    if console.is_file() and not native.get('relay_gate'):
+        from acceptance_relay_policy import CredentialBook,public_native_bytes
+        book=CredentialBook()
+        for token,value in values.get('secrets',{}).items():book.add(token,value)
+        (out/'console.log').write_bytes(public_native_bytes(console.read_bytes(),book))
+        if book.native_leak:write(out/'console-secret-scan.json',dict(passed=False,native_login_leak=True))
     write(out/'record.json',record)
     return 0 if record.get('exit_code')==0 else 1

@@ -6,11 +6,6 @@
   "timeout_s": 190,
   "title": "Direct and relay connections proved by the transport and visible diagnostics",
   "capture_policy": "Every route item requires visible connected-route diagnostics and the native selected-candidate and RouteAllowed lines. Preferences alone are not route proof. Both routes play the same inputs at the same fixed input delay, so the scripted round lands on the same frames whatever the route's round trip.",
-  "requires_tokens": [
-    "TURN_SERVER",
-    "TURN_USER",
-    "TURN_PASS"
-  ],
   "runs": [
     {
       "name": "direct",
@@ -115,7 +110,7 @@
       "directory_turn_config_path": "D:/mx/coturn-20260920/turn-config-cloudflare.json"
     },
     {
-      "name": "relay-fixed",
+      "name": "relay-coturn",
       "peers": [
         {
           "name": "host",
@@ -123,7 +118,7 @@
             "-input-script",
             "{INPUT_SCRIPT}"
           ],
-          "menu_script": "mp-direct-vs-relay.relay-fixed.host.menu.txt",
+          "menu_script": "mp-direct-vs-relay.relay.host.menu.txt",
           "input_script": "ui-surfaces.input.txt",
           "probe": "mp-direct-vs-relay.relay.host.probe.json",
           "settings": {
@@ -133,10 +128,7 @@
             "NetworkMatchStatusMode": "Always",
             "NetworkHostDelayPolicy": "Fixed",
             "NetworkInputDelayFrames": "4",
-            "NetworkTurnServers": "{TURN_SERVER}",
-            "NetworkTurnUser": "{TURN_USER}",
-            "NetworkTurnPass": "{TURN_PASS}",
-            "NetworkHostRelayMode": "Fixed",
+            "NetworkHostRelayMode": "Directory",
             "SessionDirectoryUrl": "{DIRECTORY_URL}",
             "SessionDirectoryCertSha256": "{DIRECTORY_PIN}"
           }
@@ -147,7 +139,7 @@
             "-input-script",
             "{INPUT_SCRIPT}"
           ],
-          "menu_script": "mp-direct-vs-relay.relay-fixed.client.menu.txt",
+          "menu_script": "mp-direct-vs-relay.relay.client.menu.txt",
           "input_script": "ui-surfaces.input.txt",
           "probe": "mp-direct-vs-relay.relay.client.probe.json",
           "settings": {
@@ -155,10 +147,7 @@
             "NetworkIceEnable": "1",
             "NetworkShowDiagnostics": "1",
             "NetworkMatchStatusMode": "Always",
-            "NetworkTurnServers": "{TURN_SERVER}",
-            "NetworkTurnUser": "{TURN_USER}",
-            "NetworkTurnPass": "{TURN_PASS}",
-            "NetworkHostRelayMode": "Fixed",
+            "NetworkHostRelayMode": "Directory",
             "SessionDirectoryUrl": "{DIRECTORY_URL}",
             "SessionDirectoryCertSha256": "{DIRECTORY_PIN}"
           },
@@ -169,7 +158,9 @@
             "directory_listed": true
           }
         }
-      ]
+      ],
+      "credential_mode": "directory coturn backend",
+      "directory_turn_config_path": "D:/mx/coturn-20260920/directory-coturn.json"
     }
   ],
   "checklist": [
@@ -578,8 +569,8 @@
       "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
     },
     {
-      "id": "relay-fixed-connection-host",
-      "run": "relay-fixed",
+      "id": "relay-coturn-connection-host",
+      "run": "relay-coturn",
       "peer": "host",
       "mark": "relay-connection-host",
       "screen": "SettingsScreen",
@@ -589,8 +580,8 @@
       ]
     },
     {
-      "id": "relay-fixed-route-host",
-      "run": "relay-fixed",
+      "id": "relay-coturn-route-host",
+      "run": "relay-coturn",
       "peer": "host",
       "mark": "relay-mp-play-host",
       "screen": "game",
@@ -634,8 +625,8 @@
       "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
     },
     {
-      "id": "relay-fixed-candidate-host",
-      "run": "relay-fixed",
+      "id": "relay-coturn-candidate-host",
+      "run": "relay-coturn",
       "peer": "host",
       "mark": "relay-mp-play-host",
       "screen": "game",
@@ -679,8 +670,8 @@
       "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
     },
     {
-      "id": "relay-fixed-connection-client",
-      "run": "relay-fixed",
+      "id": "relay-coturn-connection-client",
+      "run": "relay-coturn",
       "peer": "client",
       "mark": "relay-connection-client",
       "screen": "SettingsScreen",
@@ -690,8 +681,8 @@
       ]
     },
     {
-      "id": "relay-fixed-route-client",
-      "run": "relay-fixed",
+      "id": "relay-coturn-route-client",
+      "run": "relay-coturn",
       "peer": "client",
       "mark": "relay-mp-play-client",
       "screen": "game",
@@ -735,8 +726,8 @@
       "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
     },
     {
-      "id": "relay-fixed-candidate-client",
-      "run": "relay-fixed",
+      "id": "relay-coturn-candidate-client",
+      "run": "relay-coturn",
       "peer": "client",
       "mark": "relay-mp-play-client",
       "screen": "game",
@@ -787,6 +778,18 @@
       "mark": "relay-mp-play-host",
       "screen": "game",
       "what": "relay_offer_issued provider=cloudflare for this session",
+      "log_regex": [
+        "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
+      ]
+    },
+    {
+      "id": "relay-coturn-offer",
+      "run": "relay-coturn",
+      "peer": "host",
+      "directory_relay_offer": "coturn",
+      "mark": "relay-mp-play-host",
+      "screen": "game",
+      "what": "relay_offer_issued provider=coturn for this session",
       "log_regex": [
         "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
       ]

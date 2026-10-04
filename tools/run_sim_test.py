@@ -48,7 +48,8 @@ def file_sha256(source):
 # No unattended engine asks a router of this network for a mapping; the port-map scenario opts in on its own fake gateway.
 RUNTIME_SETTINGS = {"MuteMaster": "1", "MuteMusic": "1", "MuteSounds": "1", "MasterVolume": "0", "MusicVolume": "0", "SoundVolume": "0", "Fullscreen": "0",
                     "SkipIntro": "1", "EnableVSync": "0", "SessionDirectoryUrl": "", "ResolutionX": "960", "ResolutionY": "540", "UseMultiDisplays": "0",
-                    "NetworkPortMapEnable": "0"}
+                    "NetworkPortMapEnable": "0", "NetworkTurnServers": "", "NetworkTurnUser": "", "NetworkTurnPass": "",
+                    "NetworkPlayerTurnServers": "", "NetworkPlayerTurnUser": "", "NetworkPlayerTurnPass": ""}
 
 
 def prepare_runtime(repo, out, fixtures=None):
