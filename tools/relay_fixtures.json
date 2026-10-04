@@ -143,7 +143,7 @@
    "length": 14,
    "kind": "shape:coturn-secret-line",
    "defined_at": "tools/relay_gate_test.py:26",
-   "line_sha256": "1b9fe12d13018ba27652043cf2ae94c50fb4e450a123216deb2b11efe5c6f002",
+   "line_sha256": "98324b5ab9c6acd0dc15b34d05d437a0b9099e826de87254ca358ad9b015fe56",
    "why": "the relay sweep's own unit rows: synthetic logins each row builds"
   },
   {
@@ -159,7 +159,7 @@
    "length": 6,
    "kind": "shape:menu-relay-login",
    "defined_at": "tools/relay_gate_test.py:679",
-   "line_sha256": "ba67fb3cbff51a4a7414c449df53d1a02e866b29303a8f7f24b6886bdf065c0e",
+   "line_sha256": "bfc4510195a27b2c2a19e12a4e784b0a942ad3dd3dab8912b102a9e10182e9a4",
    "why": "the relay sweep's own unit rows: synthetic logins each row builds"
   },
   {
