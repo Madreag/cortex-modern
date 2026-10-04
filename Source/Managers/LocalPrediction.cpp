@@ -62,6 +62,12 @@ namespace RTE {
 	static double s_HarnessMs = 0.0;
 	// Previews that ran a clone's scripts frozen, and those run again because a script resumed a coroutine stand-in.
 	static uint64_t s_FrozenPreviews = 0;
+	// The world's debris in flight carried into a preview: the nearest pixels around a previewed actor's legs, for the first steps.
+	constexpr float c_PreviewDebrisHalfWidth = 64.0F;
+	constexpr float c_PreviewDebrisAbove = 16.0F;
+	constexpr float c_PreviewDebrisBelow = 48.0F;
+	constexpr size_t c_PreviewDebrisCount = 6;
+	constexpr int c_PreviewDebrisSteps = 20;
 	static uint64_t s_CoroutineReruns = 0;
 	static bool s_RerunningFrozen = false;
 	// Test lever CCCP_TEST_PREVIEW_SHADOW_CHECK: each preview is made again with every held reference shadowed at the bind.
@@ -356,6 +362,10 @@ namespace RTE {
 			g_MovableMan.SetFaithfulLinkRoot(nullptr);
 			AdoptMOIDs(preview.clone, preview.original);
 		}
+		// The world's debris in flight near the previewed actors lands in the preview as it will in the world.
+		std::vector<Vector> previewed;
+		for (const MovableObject* clone: clones) previewed.push_back(clone->GetPos());
+		g_MovableMan.ShadowParticlesNear(previewed, c_PreviewDebrisHalfWidth, c_PreviewDebrisAbove, c_PreviewDebrisBelow, c_PreviewDebrisCount, c_PreviewDebrisSteps);
 		Trace("resolved");
 		lap(7);
 
@@ -414,6 +424,7 @@ namespace RTE {
 				previewHarnessMs += static_cast<double>(harnessNs) / 1e6;
 			}
 			g_MovableMan.HarvestSpeculativeSpawns();
+			g_MovableMan.SettleSpeculativeParticles();
 		}
 		Trace("stepped");
 		lap(8);

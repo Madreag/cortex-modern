@@ -369,6 +369,13 @@ namespace RTE {
 		void HarvestSpeculativeSpawns();
 		/// One TravelStage then UpdateStage per speculative spawn; the same stages the preview clones use.
 		void TravelSpeculativeSpawns();
+		/// The world's pixel particles in flight around the given points - halfWidth to either side, from above over to below under
+		/// each - travel on inside the speculation as shadows for its first travelSteps, the nearest maxCount of them, so debris that
+		/// lands where a previewed actor stands lands in its preview too.
+		void ShadowParticlesNear(const std::vector<Vector>& points, float halfWidth, float above, float below, size_t maxCount, int travelSteps);
+		/// Settles the speculation's resting debris - its own unnamed pixel spawns and the travelling shadows - into the terrain
+		/// the preview puts back afterwards, as the world settles its particles.
+		void SettleSpeculativeParticles();
 		size_t GetSpeculativeSpawnCount() const;
 		/// The preset names of the speculative spawns, comma separated.
 		std::string DescribeSpeculativeSpawns() const;
@@ -1157,6 +1164,9 @@ namespace RTE {
 			std::unordered_map<const MovableObject*, MovableObject*> residents; //!< Shadow -> its resident.
 			std::unordered_map<const MovableObject*, Spawn> spawnMeta;
 			std::vector<Spawn> spawns;
+			std::vector<MovableObject*> travelers; //!< Shadows of the world's particles in flight, travelling with the speculation.
+			int travelerSteps = 0; //!< The steps the travelers still move; past them they stand as the rest of the world does.
+			bool travelersMoved = false; //!< They moved this step, so only now can one have come to rest.
 			std::vector<MovableObject*> taken;
 			AddQueueMark mark;
 			std::list<Actor*> rosters[Activity::MaxTeamCount];
@@ -1179,6 +1189,8 @@ namespace RTE {
 		void DestroySpeculativeSpawn(MovableObject* mo);
 		void DisposeSpeculativeSpawns();
 		void TakePreviewSpawn(MovableObject* particle);
+		/// Piles a resting particle the way its material piles and draws it into the terrain; the world's settle and the preview's share it.
+		void SettleIntoTerrain(MovableObject* particle);
 		struct PreviewGhost {
 			MovableObject* object = nullptr;
 			PreviewEventLedger::Key key;
