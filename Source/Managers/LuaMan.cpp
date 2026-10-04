@@ -7194,6 +7194,7 @@ template <typename Manager> static Manager* InstanceOrNull() { return Manager::I
 namespace {
 	thread_local unsigned s_PreviewPresetsWindow = 0;
 	thread_local std::unordered_map<std::string, const Entity*> s_PreviewPresets;
+	thread_local uint64_t s_PreviewPresetLookups = 0;
 
 	// The preset a Create call clones inside a preview window, looked up once per window: presets do not change while it is
 	// open, and the search by name walks every module's list. Null outside a window and for a name with no preset.
@@ -7209,6 +7210,7 @@ namespace {
 		std::string key = std::string(type) + '\n' + module + '\n' + preset;
 		const auto [found, added] = s_PreviewPresets.try_emplace(std::move(key), nullptr);
 		if (added) {
+			++s_PreviewPresetLookups;
 			found->second = g_PresetMan.GetEntityPreset(type, preset, module);
 		}
 		return found->second;
@@ -11334,6 +11336,84 @@ end
 		const bool passed = loaded && !frozen && previewElapsed == "0" && previewAlias == "true" && liveElapsed == "5000";
 		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " preview_copy_resets_its_own_timer loaded=" << loaded << " frozen=" << frozen
 		          << " preview_elapsed_ms=" << previewElapsed << " preview_alias_same=" << previewAlias << " live_elapsed_ms=" << liveElapsed << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+	{
+		// A Create call inside a preview window clones the preset it looked up once for that window, the same one the search
+		// finds; a name with no preset is still nil, and outside a window every call takes the search as before.
+		std::string lastName;
+		for (int module = g_PresetMan.GetTotalModuleCount() - 1; module >= 0 && lastName.empty(); --module) {
+			std::list<Entity*> pixels;
+			g_PresetMan.GetAllOfType(pixels, "MOPixel", module);
+			for (const Entity* pixel: pixels) {
+				if (pixel->GetClassName() == "MOPixel") {
+					lastName = pixel->GetPresetName();
+				}
+			}
+		}
+		const auto* preset = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+		std::unique_ptr<AHuman> actor(preset ? dynamic_cast<AHuman*>(preset->Clone()) : nullptr);
+		LuaStateWrapper* state = nullptr;
+		if (actor && actor->LoadScript(g_PresetMan.GetFullModulePath("Tests.rte/PreviewUpdateHook.lua")) >= 0 && actor->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"init"}) >= 0) {
+			state = actor->GetLuaState();
+		}
+		const std::string name = "'" + lastName + "'";
+		const std::string loop = "local name = " + name + "; for i = 1, 2000 do local p = CreateMOPixel(name) end";
+		const auto timed = [&state](const std::string& code) {
+			const auto begin = std::chrono::steady_clock::now();
+			const int status = state->RunScriptString(code);
+			const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count();
+			return status == 0 ? us / 2000.0 : -1.0;
+		};
+		const auto window = [&actor](const std::function<void()>& body) {
+			LuaMan::CapturePreviewSelfCopies({actor.get()}, false);
+			MovableObject* clone = nullptr;
+			{
+				MovableObject::FaithfulCloneScope scope(false);
+				clone = dynamic_cast<MovableObject*>(actor->Clone());
+			}
+			LuaMan::BeginPreviewScripts({dynamic_cast<Actor*>(clone)}, false, {actor.get()});
+			body();
+			LuaMan::EndPreviewScripts();
+			delete clone;
+		};
+		std::string verdict = "none";
+		uint64_t firstWindow = 0, secondWindow = 0, outside = 0;
+		double outsideUs = -1.0, insideUs = -1.0;
+		if (state && !lastName.empty()) {
+			uint64_t lookups = s_PreviewPresetLookups;
+			window([&] {
+				state->RunScriptString("local name = " + name + "; local first = CreateMOPixel(name); local same = true; "
+				                       "for i = 1, 200 do local p = CreateMOPixel(name); same = same and p.PresetName == name and p.ClassName == 'MOPixel' end; "
+				                       "local missing = CreateMOPixel('cccp preview no such preset'); local moduled = CreateMOPixel('Spark Yellow 1', 'Base.rte'); "
+				                       "_ScriptFieldsStash = _ScriptFieldsStash or {}; "
+				                       "_ScriptFieldsStash['preview-create'] = (same and first.PresetName == name and missing == nil and moduled ~= nil and moduled.PresetName == 'Spark Yellow 1') and 'ok' or 'wrong'");
+				insideUs = timed(loop);
+			});
+			firstWindow = s_PreviewPresetLookups - lookups;
+			lookups = s_PreviewPresetLookups;
+			window([&] { state->RunScriptString("local name = " + name + "; local a = CreateMOPixel(name); local b = CreateMOPixel(name)"); });
+			secondWindow = s_PreviewPresetLookups - lookups;
+			lookups = s_PreviewPresetLookups;
+			outsideUs = timed(loop);
+			outside = s_PreviewPresetLookups - lookups;
+			state->RunScriptString("collectgarbage('collect')");
+			std::lock_guard<std::recursive_mutex> stateLock(state->GetMutex());
+			lua_State* L = state->GetLuaState();
+			lua_getglobal(L, "_ScriptFieldsStash");
+			if (lua_istable(L, -1)) {
+				lua_getfield(L, -1, "preview-create");
+				verdict = lua_isstring(L, -1) ? lua_tostring(L, -1) : "nil";
+				lua_pop(L, 1);
+				lua_pushnil(L);
+				lua_setfield(L, -2, "preview-create");
+			}
+			lua_pop(L, 1);
+		}
+		const bool passed = verdict == "ok" && firstWindow == 3 && secondWindow == 1 && outside == 0;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " preview_create_looks_up_each_preset_once_per_window name='" << lastName << "' clones=" << verdict
+		          << " lookups_first_window=" << firstWindow << " lookups_second_window=" << secondWindow << " lookups_outside=" << outside
+		          << " create_us_outside=" << outsideUs << " create_us_inside=" << insideUs << std::endl;
 		checkpointValues = passed && checkpointValues;
 	}
 	{
