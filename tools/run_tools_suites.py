@@ -44,6 +44,7 @@ SUITES = (
     ("runner-feel-marker", ["test_win32_runner_feel_marker.py"]),
     ("runner-limits", ["test_win32_runner_limits.py"]),
     ("feel-engine-placement", ["test_feel_placement.py"]),
+    ("feel-recorder-on-off-scope", ["test_feel_on_off_proof.py"]),
     ("soak-judgement", ["test_soak_two_peer.py"]),
     ("inventory-run-split", [str(INVENTORY / "run_split.py"), "--self-test"]),
     ("inventory-run-stream", [str(INVENTORY / "run_stream.py"), "--self-test"]),

@@ -481,6 +481,17 @@ def committed_timeline(run, final_tick=TICKS):
                 delay_changes=[[int(peer), int(frame), int(delay)] for peer, frame, delay in changes if int(frame) <= final_tick])
 
 
+def scope_on_off(row, timelines):
+    """A recorder-on/off comparison counts only when both matches committed one timeline; otherwise it says why it is not judged."""
+    row['committed_timelines'] = timelines
+    row['required'] = timelines['on'] == timelines['off']
+    if not row['required']:
+        differs = [key for key in timelines['on'] if timelines['on'][key] != timelines['off'].get(key)]
+        row['reason'] = (f"not judged: the recorder-on and recorder-off runs are two matches that committed different {' and '.join(differs)}; "
+                         "host and client are compared in peers_on and peers_off, and each against the recorder-off replay")
+    return row
+
+
 def compare_pair(first, second, expected_ticks=TICKS, cross_peer=False, client_away=(), window_only=False, client_rewinds=()):
     """Two peers' traces skip only the per-machine routing subsystem (and the total that folds it in); two runs of one
     peer compare every field."""
@@ -827,8 +838,7 @@ def analyze(root, stock=None):
             # Two separate matches are one sim only when they committed one timeline; otherwise the replay rows carry the proof.
             timelines = {state: committed_timeline(run) for state, run in (('on', on), ('off', off))}
             for peer in ('host', 'client'):
-                proof[peer + '_on_off']['committed_timelines'] = timelines
-                proof[peer + '_on_off']['required'] = timelines['on'] == timelines['off']
+                scope_on_off(proof[peer + '_on_off'], timelines)
             if FULLSTATE_EVERY:
                 for state, state_run in (('on', on), ('off', off)):
                     verdict = compare_fullstate(state_run / 'host' / 'stdout.log', state_run / 'client' / 'stdout.log')
