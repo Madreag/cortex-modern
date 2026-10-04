@@ -225,6 +225,28 @@ def check_screen_watches(results, scratch):
     ok &= row(results, "screen/drop-wait-is-bounded", driver.await_watch_flush(log, never, timeout_s=.3) is False)
     log.write_text("no watches here\n", encoding="utf-8")
     ok &= row(results, "screen/unarmed-peer-is-not-waited-for", driver.await_watch_flush(log, never, timeout_s=5.0) is None)
+    # A peer dropped at tick 233 whose only summary is the drop's own flush, printed through tick 235 after it read the notice.
+    def dropped_items(case, flush_violations, offence_frames):
+        peer_root = scratch / f"screen-watch-dropped-{case}" / "client"
+        video = peer_root / "video"
+        video.mkdir(parents=True, exist_ok=True)
+        (video / "injected-drop.json").write_text(json.dumps({"last_recorded_frame": {"sim_tick": 233}}), encoding="utf-8")
+        watch_lines = ['[text-watch] armed {"armed": "h15-duplicates", "rule": "duplicates", "state": "always", "control": "", "text": ""}']
+        watch_lines += ['[text-watch] violation h15-duplicates duplicates ' + json.dumps({"lockstep_frame": frame, "detail": {"text": f"line {frame}", "controls": ["a", "b"]}})
+                        for frame in offence_frames]
+        watch_lines.append('[text-watch] summary ' + json.dumps({"watch": "h15-duplicates", "rule": "duplicates", "frames": 224, "active_frames": 224,
+                                                                 "violations": flush_violations, "flush": "kill", "through_tick": 235}))
+        (peer_root / "stdout.log").write_text("\n".join(watch_lines) + "\n", encoding="utf-8")
+        peer = {"peer": "client", "root": str(peer_root), "video_dir": str(video), "video": None, "expected_termination": True,
+                "record": {"injected_termination": "scenario drop after completed peer probe"}}
+        items = driver.capture_evidence_items({"runs": []}, {"name": "640x360"}, peer)
+        return next(item for item in items if item["id"] == "screen-duplicates-client")
+    clean = dropped_items("clean", 0, [])
+    ok &= row(results, "screen/drop-flush-is-the-terminal-summary", clean["probe"] == "pass", json.dumps(clean.get("finding")))
+    after = dropped_items("after", 1, [234])
+    ok &= row(results, "screen/drop-flush-offence-past-the-kill-not-counted", after["probe"] == "pass", json.dumps(after.get("finding")))
+    before = dropped_items("before", 1, [200])
+    ok &= row(results, "screen/drop-flush-offence-before-the-kill-fails", before["probe"] == "fail", json.dumps(before.get("finding")))
     return ok
 
 

@@ -1137,18 +1137,23 @@ def capture_evidence_items(scenario, capture, peer):
         for arm in range(1, result.get('arms', 0) + 1):
             own = [row for row in summaries if row.get('_arm') == arm]
             if killed:
-                own = [row for row in own if type(row.get('through_tick')) is int and kill_tick is not None
-                       and 0 <= row['through_tick'] <= kill_tick]
-                if own: selected.append(max(own, key=lambda row: row['through_tick']))
+                timed = [row for row in own if type(row.get('through_tick')) is int and kill_tick is not None]
+                within = [row for row in timed if 0 <= row['through_tick'] <= kill_tick]
+                # The drop's own flush is printed after the peer reads the drop notice, so it reaches a few ticks past the kill:
+                # it covers the judged span, and its count is read from the offences listed up to the kill.
+                drop_flush = [row for row in timed if row.get('flush') == 'kill' and row['through_tick'] > kill_tick]
+                if within: selected.append(max(within, key=lambda row: row['through_tick']))
+                elif drop_flush: selected.append(min(drop_flush, key=lambda row: row['through_tick']))
             else:
                 final = [row for row in own if row.get('flush') != 'periodic']
                 if len(final) == 1: selected.append(final[0])
         complete = bool(result.get('arms')) and len(selected) == result['arms']
         if not complete: offences.append(dict(detail=f'watch {watch}: arms={result.get("arms", 0)}, summaries={len(summaries)}'))
         for summary in selected:
+            past_kill = killed and kill_tick is not None and summary.get('flush') == 'kill' and type(summary.get('through_tick')) is int and summary['through_tick'] > kill_tick
             if type(summary.get('frames')) is not int or summary['frames'] <= 0 or type(summary.get('violations')) is not int:
                 complete = False; offences.append(dict(detail=f'watch {watch}: invalid summary {summary}'))
-            elif summary['violations'] > 0: offences.append(dict(detail=f'watch {watch}: summary violations={summary["violations"]}'))
+            elif summary['violations'] > 0 and not past_kill: offences.append(dict(detail=f'watch {watch}: summary violations={summary["violations"]}'))
             if watch.startswith('scene-') and summary.get('active_frames', 0) == 0:
                 offences.append(dict(detail='its state never held while it was armed'))
         rule = SCREEN_WATCH_RULES.get(watch, (f'Every armed {watch} screen check has a terminal summary', ''))[0]
