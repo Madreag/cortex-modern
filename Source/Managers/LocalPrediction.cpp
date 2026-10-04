@@ -60,6 +60,7 @@ namespace RTE {
 	double LocalPrediction::s_PreviewMs = 0.0;
 	// The harness's own records of each preview step, kept out of the preview's cost.
 	static double s_HarnessMs = 0.0;
+	static bool s_HarnessMeasured = false;
 	// Previews that ran a clone's scripts frozen, and those run again because a script resumed a coroutine stand-in.
 	static uint64_t s_FrozenPreviews = 0;
 	// The world's debris in flight carried into a preview: the nearest pixels around a previewed actor's legs, for the first steps.
@@ -412,16 +413,20 @@ namespace RTE {
 				}
 				MovableMan::PostUpdateStage(clone);
 				// What the harness records of each step is its own cost, not the preview's: timed apart and kept out of the preview's.
-				const HarnessCost::SimulationSpan harnessSpan;
-				FrameMan::FeelPreviewStep(clone, static_cast<uint64_t>(simCount), tick, feelStepBeginMS);
-				if (s_FidelityProbe && (step == 1 || (tick >= s_FidelityWindow.first && tick <= s_FidelityWindow.second))) {
-					SimDumpTape lines;
-					g_MovableMan.CaptureMOSimState(tick, "actor", clone, lines);
-					s_FidelitySteps.insert({{preview.original->GetUniqueID(), tick}, {step, std::move(lines)}});
+				// With neither the feel recorder nor the fidelity probe there is no harness work, so nothing is timed.
+				if (s_FidelityProbe || FrameMan::FeelRecordingEnabled()) {
+					const HarnessCost::SimulationSpan harnessSpan;
+					FrameMan::FeelPreviewStep(clone, static_cast<uint64_t>(simCount), tick, feelStepBeginMS);
+					if (s_FidelityProbe && (step == 1 || (tick >= s_FidelityWindow.first && tick <= s_FidelityWindow.second))) {
+						SimDumpTape lines;
+						g_MovableMan.CaptureMOSimState(tick, "actor", clone, lines);
+						s_FidelitySteps.insert({{preview.original->GetUniqueID(), tick}, {step, std::move(lines)}});
+					}
+					const int64_t harnessNs = harnessSpan.Stop();
+					HarnessCost::Charge(HarnessCost::PreviewFidelity, harnessNs);
+					previewHarnessMs += static_cast<double>(harnessNs) / 1e6;
+					s_HarnessMeasured = true;
 				}
-				const int64_t harnessNs = harnessSpan.Stop();
-				HarnessCost::Charge(HarnessCost::PreviewFidelity, harnessNs);
-				previewHarnessMs += static_cast<double>(harnessNs) / 1e6;
 			}
 			g_MovableMan.HarvestSpeculativeSpawns();
 			g_MovableMan.SettleSpeculativeParticles();
@@ -718,7 +723,8 @@ namespace RTE {
 			phases += (phase ? "," : "") + std::string(s_PhaseNames[phase]) + ":" + std::to_string(s_PhaseMs[phase] / static_cast<double>(s_PreviewCount));
 		}
 		return "previews=" + std::to_string(s_PreviewCount) + " actor_ticks=" + std::to_string(s_PreviewTicks) + " ms_total=" + std::to_string(s_PreviewMs) + " avg_ms=" + std::to_string(s_PreviewMs / static_cast<double>(s_PreviewCount)) +
-		       " harness_ms_total=" + std::to_string(s_HarnessMs) + " harness_avg_ms=" + std::to_string(s_HarnessMs / static_cast<double>(s_PreviewCount)) +
+		       // A process with no harness work on its previews reports none.
+		       (s_HarnessMeasured || HarnessCost::Enabled(HarnessCost::PreviewFidelity) ? " harness_ms_total=" + std::to_string(s_HarnessMs) + " harness_avg_ms=" + std::to_string(s_HarnessMs / static_cast<double>(s_PreviewCount)) : std::string()) +
 		       " known_copy_avg_ms=" + std::to_string(MovableMan::KnownObjectsScope::CopyMs() / static_cast<double>(s_PreviewCount)) +
 		       " shadows=" + std::to_string(stats.shadows) + " taken=" + std::to_string(stats.taken) + " violations=" + std::to_string(stats.violations) + " preview_codec_fallback=" + std::to_string(LuaMan::PreviewCodecFallbackCount()) +
 		       " frozen_previews=" + std::to_string(s_FrozenPreviews) + " coroutine_reruns=" + std::to_string(s_CoroutineReruns) +
