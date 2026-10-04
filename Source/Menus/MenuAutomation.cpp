@@ -464,8 +464,9 @@ namespace RTE::MenuAutomation {
 				const auto& log = ScenarioRunner::GetNetUiToastLog();
 				if (std::any_of(log.begin(), log.end(), [](const auto& toast) { return toast.kind == "seat_held" && toast.senderPeerId == 0; })) return true;
 			}
+			// A seat the host opened is released, as its label reads it, though a peer still catching up replays it held.
 			for (const auto& member: snapshot.members) {
-				if (member.cpu || (member.peerId == snapshot.localPeerId) != local || ScenarioRunner::IsLockstepSeatReleased(member.peerId)) continue;
+				if (member.cpu || (member.peerId == snapshot.localPeerId) != local || ScenarioRunner::IsLockstepSeatReleased(member.peerId) || NetPlayerPresentation::Opened(member.peerId)) continue;
 				if (member.aiHeld || member.reclaiming || ScenarioRunner::IsLockstepSeatUnderAI(member.peerId, frame)) return true;
 			}
 			return false;
