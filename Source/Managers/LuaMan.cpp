@@ -7191,6 +7191,82 @@ void LuaStateWrapper::Clear() {
 /// The manager behind a Lua global, or null where a self-test runs a state without it.
 template <typename Manager> static Manager* InstanceOrNull() { return Manager::IsConstructed() ? &Manager::Instance() : nullptr; }
 
+namespace {
+	thread_local unsigned s_PreviewPresetsWindow = 0;
+	thread_local std::unordered_map<std::string, const Entity*> s_PreviewPresets;
+
+	// The preset a Create call clones inside a preview window, looked up once per window: presets do not change while it is
+	// open, and the search by name walks every module's list. Null outside a window and for a name with no preset.
+	const Entity* PreviewWindowPreset(const char* type, const std::string& preset, const std::string& module) {
+		const unsigned window = luabind::detail::preview_fence_window;
+		if (window == 0) {
+			return nullptr;
+		}
+		if (s_PreviewPresetsWindow != window) {
+			s_PreviewPresets.clear();
+			s_PreviewPresetsWindow = window;
+		}
+		std::string key = std::string(type) + '\n' + module + '\n' + preset;
+		const auto [found, added] = s_PreviewPresets.try_emplace(std::move(key), nullptr);
+		if (added) {
+			found->second = g_PresetMan.GetEntityPreset(type, preset, module);
+		}
+		return found->second;
+	}
+} // namespace
+
+// The Create bindings: a preview window clones the preset it looked up for this window; everything else goes through the adapter.
+#define PreviewWindowCreateFunctionsForType(TYPE) \
+	static TYPE* PreviewWindowCreate##TYPE(std::string preset, std::string module) { \
+		if (const Entity* found = PreviewWindowPreset(#TYPE, preset, module)) { \
+			return dynamic_cast<TYPE*>(found->Clone()); \
+		} \
+		return LuaAdaptersEntityCreate::Create##TYPE(std::move(preset), std::move(module)); \
+	} \
+	static TYPE* PreviewWindowCreate##TYPE(std::string preset) { \
+		return PreviewWindowCreate##TYPE(std::move(preset), "All"); \
+	}
+
+PreviewWindowCreateFunctionsForType(SoundContainer);
+PreviewWindowCreateFunctionsForType(MOPixel);
+PreviewWindowCreateFunctionsForType(TerrainObject);
+PreviewWindowCreateFunctionsForType(MOSParticle);
+PreviewWindowCreateFunctionsForType(MOSRotating);
+PreviewWindowCreateFunctionsForType(Attachable);
+PreviewWindowCreateFunctionsForType(AEmitter);
+PreviewWindowCreateFunctionsForType(AEJetpack);
+PreviewWindowCreateFunctionsForType(PEmitter);
+PreviewWindowCreateFunctionsForType(Actor);
+PreviewWindowCreateFunctionsForType(ADoor);
+PreviewWindowCreateFunctionsForType(Arm);
+PreviewWindowCreateFunctionsForType(Leg);
+PreviewWindowCreateFunctionsForType(AHuman);
+PreviewWindowCreateFunctionsForType(ACrab);
+PreviewWindowCreateFunctionsForType(Turret);
+PreviewWindowCreateFunctionsForType(ACDropShip);
+PreviewWindowCreateFunctionsForType(ACRocket);
+PreviewWindowCreateFunctionsForType(HeldDevice);
+PreviewWindowCreateFunctionsForType(Magazine);
+PreviewWindowCreateFunctionsForType(Round);
+PreviewWindowCreateFunctionsForType(HDFirearm);
+PreviewWindowCreateFunctionsForType(ThrownDevice);
+PreviewWindowCreateFunctionsForType(TDExplosive);
+PreviewWindowCreateFunctionsForType(PieSlice);
+PreviewWindowCreateFunctionsForType(PieMenu);
+PreviewWindowCreateFunctionsForType(Scene);
+
+/// RegisterLuaBindingsOfConcreteType with the Create bindings above.
+#define RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(OWNINGSCOPE, TYPE) \
+	luabind::def((std::string("Create") + std::string(#TYPE)).c_str(), (TYPE * (*)(std::string, std::string)) & PreviewWindowCreate##TYPE, luabind::adopt(luabind::result)), \
+	    luabind::def((std::string("Create") + std::string(#TYPE)).c_str(), (TYPE * (*)(std::string)) & PreviewWindowCreate##TYPE, luabind::adopt(luabind::result)), \
+	    luabind::def((std::string("Random") + std::string(#TYPE)).c_str(), (TYPE * (*)(std::string, int)) & LuaAdaptersEntityCreate::Random##TYPE, luabind::adopt(luabind::result)), \
+	    luabind::def((std::string("Random") + std::string(#TYPE)).c_str(), (TYPE * (*)(std::string, std::string)) & LuaAdaptersEntityCreate::Random##TYPE, luabind::adopt(luabind::result)), \
+	    luabind::def((std::string("Random") + std::string(#TYPE)).c_str(), (TYPE * (*)(std::string)) & LuaAdaptersEntityCreate::Random##TYPE, luabind::adopt(luabind::result)), \
+	    luabind::def((std::string("To") + std::string(#TYPE)).c_str(), (TYPE * (*)(Entity*)) & LuaAdaptersEntityCast::To##TYPE), \
+	    luabind::def((std::string("To") + std::string(#TYPE)).c_str(), (const TYPE* (*)(const Entity*)) & LuaAdaptersEntityCast::ToConst##TYPE), \
+	    luabind::def((std::string("Is") + std::string(#TYPE)).c_str(), &LuaAdaptersEntityCast::IsConst##TYPE), \
+	    OWNINGSCOPE::Register##TYPE##LuaBindings()
+
 void LuaStateWrapper::Initialize() {
 	m_NativeCache.reset();
 	m_CheckpointHeap = CheckpointLua::HeapOwner::Create();
@@ -7302,45 +7378,45 @@ void LuaStateWrapper::Initialize() {
 	                         RegisterLuaBindingsOfType(SystemLuaBindings, Vector),
 	                         RegisterLuaBindingsOfType(SystemLuaBindings, Box),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, Entity),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, SoundContainer),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, SoundContainer),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, SoundSet),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, LimbPath),
 	                         RegisterLuaBindingsOfAbstractType(EntityLuaBindings, SceneObject),
 	                         RegisterLuaBindingsOfAbstractType(EntityLuaBindings, MovableObject),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, Material),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, MOPixel),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, TerrainObject),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, MOPixel),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, TerrainObject),
 	                         RegisterLuaBindingsOfAbstractType(EntityLuaBindings, MOSprite),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, MOSParticle),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, MOSRotating),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, Attachable),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, MOSParticle),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, MOSRotating),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, Attachable),
 	                         RegisterLuaBindingsOfAbstractType(EntityLuaBindings, Emission),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, AEmitter),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, AEJetpack),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, PEmitter),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, Actor),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, ADoor),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, Arm),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, Leg),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, AHuman),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, ACrab),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, Turret),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, AEmitter),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, AEJetpack),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, PEmitter),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, Actor),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, ADoor),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, Arm),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, Leg),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, AHuman),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, ACrab),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, Turret),
 	                         RegisterLuaBindingsOfAbstractType(EntityLuaBindings, ACraft),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, ACDropShip),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, ACRocket),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, HeldDevice),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, Magazine),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, Round),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, HDFirearm),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, ThrownDevice),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, TDExplosive),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, PieSlice),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, PieMenu),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, ACDropShip),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, ACRocket),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, HeldDevice),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, Magazine),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, Round),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, HDFirearm),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, ThrownDevice),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, TDExplosive),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, PieSlice),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, PieMenu),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, Gib),
 	                         RegisterLuaBindingsOfType(SystemLuaBindings, Controller),
 	                         RegisterLuaBindingsOfType(SystemLuaBindings, Timer),
 	                         RegisterLuaBindingsOfType(SystemLuaBindings, PathRequest),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, Scene),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, Scene),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, SceneArea),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, StaticSceneLayer),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, SLBackground),
