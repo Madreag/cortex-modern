@@ -11194,6 +11194,8 @@ uint64_t LuaMan::ScriptStatesTakenFromASpawner() {
 }
 
 thread_local LuaStateWrapper* s_currentLuaState = nullptr;
+// The self a preview hook runs for, so a write the window refuses names its object.
+thread_local std::string s_PreviewHookSelfKey;
 LuaStateWrapper* LuaMan::GetThreadCurrentLuaState() const {
 	return s_currentLuaState;
 }
@@ -11754,6 +11756,11 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 	}
 	// Kept by value for the same reason: a preview hook's failure names its script after the call.
 	const std::string previewScript = LuaMan::IsRunningPreviewHook() ? path : std::string();
+	struct HookSelf {
+		std::string previous;
+		explicit HookSelf(const std::string& key) : previous(std::exchange(s_PreviewHookSelfKey, key)) {}
+		~HookSelf() { s_PreviewHookSelfKey = std::move(previous); }
+	} hookSelf(LuaMan::IsRunningPreviewHook() ? selfGlobalTableKey : std::string());
 
 	std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
 	{
@@ -13513,6 +13520,22 @@ namespace {
 		lua_pop(L, 1);
 	}
 
+	// An entity handle the window keeps is read only while its object lives: an Area while its scene does, an activity while it runs.
+	bool PreviewEntityHandleAlive(lua_State* L, const luabind::detail::object_rep* object) {
+		if (!ScriptGraphNativeAlive(L, object)) {
+			return false;
+		}
+		const luabind::detail::class_rep* crep = object->crep();
+		if (!ClassDerivesFrom(crep, "Activity") || crep->has_holder() || crep->get_class_type() != luabind::detail::class_rep::cpp_class) {
+			return true;
+		}
+		int offset = 0;
+		if (luabind::detail::implicit_cast(crep, &typeid(Activity), offset) < 0) {
+			return true;
+		}
+		return reinterpret_cast<const Activity*>(static_cast<const char*>(object->ptr()) + offset) == g_ActivityMan.GetActivity();
+	}
+
 	bool RemapPreviewUserdata(lua_State* L, int index, std::string& freezeClass) {
 		index = AbsoluteLuaIndex(L, index);
 		const auto* object = luabind::detail::is_class_object(L, index);
@@ -13528,7 +13551,9 @@ namespace {
 			if (std::strcmp(className, "SoundContainer") == 0 && IsPreviewSoundCopy(static_cast<const SoundContainer*>(object->ptr()))) {
 				return true;
 			}
-			if (ClassDerivesFrom(object->crep(), "Entity")) {
+			// The window has no view of an activity, a scene or an area: the preview keeps the live handle and reads through it,
+			// and the fence refuses a write through it. One that is gone is never read.
+			if (ClassDerivesFrom(object->crep(), "Entity") && !PreviewEntityHandleAlive(L, object)) {
 				freezeClass = className;
 				return false;
 			}
@@ -13892,8 +13917,40 @@ namespace {
 		}
 	}
 
-	// The last write the window refused through an entity handle.
+	// Whether a class is an entity the window has no view of (an activity, a scene, an area): an Entity that is not a
+	// MovableObject, read from the class the running state registered under that name.
+	bool PreviewFenceEntityClass(std::string_view className) {
+		thread_local std::unordered_map<std::string, bool> known;
+		const std::string name(className);
+		if (const auto found = known.find(name); found != known.end()) {
+			return found->second;
+		}
+		lua_State* L = s_currentLuaState ? s_currentLuaState->GetLuaState() : nullptr;
+		if (!L || name.empty() || !lua_checkstack(L, 1)) {
+			return false;
+		}
+		lua_getglobal(L, name.c_str());
+		const auto* crep = luabind::detail::is_class_rep(L, -1) ? static_cast<const luabind::detail::class_rep*>(lua_touserdata(L, -1)) : nullptr;
+		lua_pop(L, 1);
+		const bool entity = crep && ClassDerivesFrom(crep, "Entity") && !ClassDerivesFrom(crep, "MovableObject");
+		known.emplace(name, entity);
+		return entity;
+	}
+
+	// A write through an entity handle the window keeps cannot be dropped and the hook run on: it is refused, named, and this
+	// tick's preview runs again with the scripts frozen.
+	std::atomic<bool> s_PreviewEntityWriteRefused{false};
 	std::string s_PreviewLastEntityWrite;
+
+	void PreviewFenceRefuseEntityWrite(const std::string& call) {
+		s_PreviewEntityWriteRefused = true;
+		s_PreviewLastEntityWrite = call;
+		const std::string uid = s_PreviewHookSelfKey.substr(0, s_PreviewHookSelfKey.find('#'));
+		static std::unordered_set<std::string> reported;
+		if (reported.insert(uid + " " + call).second) {
+			std::cout << "[preview] frozen uid=" << (uid.empty() ? std::string("?") : uid) << " write=" << call << std::endl;
+		}
+	}
 
 	std::string TakePreviewEntityWriteRefusal() {
 		return std::exchange(s_PreviewLastEntityWrite, std::string());
@@ -13909,7 +13966,11 @@ namespace {
 		const bool reads = PreviewFenceManagerClass(cls) ? PreviewFenceManagerReads(name, isConst) : (isConst && !PreviewFenceMutatorName(name)) || PreviewFenceListedReader(name);
 		if (!reads) {
 			const std::string call = std::string(cls.empty() ? "?" : cls) + ":" + std::string(name.empty() ? "?" : name);
-			PreviewFenceNoteDropped(call, "on an object the preview does not own");
+			if (PreviewFenceEntityClass(cls)) {
+				PreviewFenceRefuseEntityWrite(call);
+			} else {
+				PreviewFenceNoteDropped(call, "on an object the preview does not own");
+			}
 		}
 		return reads;
 	}
@@ -14716,6 +14777,7 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 	DropPreviewSoundCopies();
 	s_PreviewFrozenUIDs.clear();
 	s_PreviewCoroutineResumed = false;
+	s_PreviewEntityWriteRefused = false;
 	s_PreviewHeldByRoot.clear();
 	g_MovableMan.SetShadowMadeHook(&FollowShadowToHeldHandles);
 	laps.Lap(0);
@@ -14762,7 +14824,10 @@ void LuaMan::SetPreviewEagerShadows(bool eager) {
 }
 
 bool LuaMan::TakePreviewCoroutineResumed() {
-	return s_PreviewCoroutineResumed.exchange(false);
+	// A write refused through an entity handle reruns the preview frozen as a stand-in coroutine's resume does.
+	const bool resumed = s_PreviewCoroutineResumed.exchange(false);
+	const bool refused = s_PreviewEntityWriteRefused.exchange(false);
+	return resumed || refused;
 }
 
 bool LuaMan::PreviewGlobalFenceEnabled() {
