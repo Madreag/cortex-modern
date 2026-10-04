@@ -1352,6 +1352,7 @@ def scripts(case, port, root, size="960x540"):
         text += ("combo_select ComboHostSeatType2 CPU\nwait 3\n"
                  "assert_label LabelHostOptStatus Unsaved changes\n"
                  "assert_label LabelHostSeatState2 CPU / Skill\n")
+        text += "assert_no_overlap_within CollectionBoxHostPageSeats\n"
         text += "dump_host_options\n"
         # H04-H11: the seat's Details dialog - the seat's identity, the reclaim clock's line, the
         # applicant row and the moderation actions, Kick and Ban among them.
@@ -1381,6 +1382,7 @@ def scripts(case, port, root, size="960x540"):
                  "combo_select ComboHostRulesBrainless Keep playing, humans spectate\nwait_ms 500\n"
                  "assert_label ComboHostRulesBrainless Keep playing, humans spectate\n")
         text += checks("ComboHostRulesBrainless", "CollectionBoxHostPageRules")
+        text += "assert_no_overlap_within CollectionBoxHostPageRules\n"
         text += "dump_host_options\n"
         # H21-H24 Network.
         text += "activate TabHostPageNetwork\nwait 3\nactivate TabHostNetTuning\nwait 3\nassert_visible CollectionBoxHostPageNetwork 1\n"
@@ -1420,6 +1422,7 @@ def scripts(case, port, root, size="960x540"):
         text += (f"set_text TextHostNetPort 40000\nwait 3\n"
                  "assert_label LabelHostOptStatus End the session to change the port\n"
                  f"assert_label TextHostNetPort {port}\n")
+        text += "assert_no_overlap_within CollectionBoxHostPageNetwork\n"
         text += "dump_host_options\n"
         # H25-H28 Recovery.
         text += "activate TabHostPageRecovery\nwait 3\nassert_visible CollectionBoxHostPageRecovery 1\n"
@@ -1492,12 +1495,14 @@ def scripts(case, port, root, size="960x540"):
         text += checks("LabelHostRecRepairHint", "CollectionBoxHostPageRecovery")
         text += ("assert_enabled ButtonHostRecRepairNow 0\n"
                  "assert_label LabelHostRecRepairHint Repair needs a live match session\n")
+        text += "assert_no_overlap_within CollectionBoxHostPageRecovery\n"
         text += "dump_host_options\n"
         # H29-H31 Files and status.
         text += "activate TabHostPageFiles\nwait 3\nassert_visible CollectionBoxHostPageFiles 1\n"
         text += "assert_label LabelHostOptionsTitle F I L E S   A N D   S T A T U S\n"
         text += checks("ButtonHostFilesSaveDiag", "CollectionBoxHostPageFiles")
         text += checks("ComboHostFilesWidget", "CollectionBoxHostPageFiles")
+        text += "assert_no_overlap_within CollectionBoxHostPageFiles\n"
         text += "dump_host_options\n"
         # H32-H35 Session.
         text += "activate TabHostPageSession\nwait 3\nassert_visible CollectionBoxHostPageSession 1\n"
@@ -1514,6 +1519,7 @@ def scripts(case, port, root, size="960x540"):
         text += checks("ButtonHostSessEnd", "CollectionBoxHostPageSession")
         # H10's count is the ban store's own rows: none yet, so the session row reads zero.
         text += "assert_label LabelHostSessBanned 0 banned this session\n"
+        text += "assert_no_overlap_within CollectionBoxHostPageSession\n"
         # H11: the banned-player dialog reads the store through GetBanRecords - empty here, so
         # the pick combo has no row to land Remove on and the button stays off.
         text += ("activate ButtonHostSessBanned\nwait 3\nassert_visible HostBannedDialog 1\n")
