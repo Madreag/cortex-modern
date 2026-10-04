@@ -8411,10 +8411,28 @@ namespace RTE {
 		if (erinAt == 0) return Fail("promoted-binding: erin was not promoted after her catch-up");
 		check("promoted-after-catch-up", bobSlot, "erin", erin.stableSeat);
 
-		// 3. Erin's link drops before her activation: her seat is held for her, still on the slot she was given.
+		// 3. Erin's link drops before her activation: her seat is held for her, still on the slot she was given. When the world
+		// cancels the promotion she never reached, the slot is the open seat's again on every peer and her seat plays none.
 		admission.NotifyDisconnect(64, erinAt - 1);
 		NetMatchService::PublishWorldSeatSlots(admission, world.Membership());
 		check("drop-during-promotion", bobSlot, "erin", erin.stableSeat);
+		world.CancelJoin(64, "the joiner missed the announced activation");
+		NetMatchService::PublishWorldSeatSlots(admission, world.Membership());
+		{
+			std::string why;
+			NetSeatRoster sent;
+			const NetSeatRoster& hosted = admission.GetRoster();
+			if (!DecodeRoster(EncodeRoster(hosted), sent, &why) || (!peer.Apply(sent, &why) && peer.Roster().revision != hosted.revision)) why = "the peer did not take the revision: " + why;
+			const auto peerViews = NetMatchService::BuildSeatViews(peer.Roster(), table, config, {});
+			const auto slotView = peerViews.find(bobSlot);
+			const NetRosterSeat* erinSeat = peer.Roster().Find(NetRosterIdOf(erin.stableSeat));
+			const bool released = slotView != peerViews.end() && slotView->second.stableSeat == bob.stableSeat && erinSeat && erinSeat->bindingRef == 0 &&
+			                      HashRoster(hosted) == HashRoster(peer.Roster()) && why.empty();
+			std::cout << "[net-world-promoted-binding-selftest] promotion-cancelled slot=" << static_cast<int>(bobSlot) << " peer_view_seat="
+			          << (slotView == peerViews.end() ? -1 : slotView->second.stableSeat) << " erin_binding=" << (erinSeat ? erinSeat->bindingRef : 0)
+			          << "@" << peer.Roster().revision << " hash_equal=" << (HashRoster(hosted) == HashRoster(peer.Roster())) << std::endl;
+			if (!released) wrong.push_back("promotion-cancelled: slot " + std::to_string(bobSlot) + " still reads seat " + std::to_string(slotView == peerViews.end() ? -1 : slotView->second.stableSeat) + " " + why);
+		}
 
 		// 4. Dave plays his slot, drops, and comes back with his ticket: the same seat on the same slot.
 		if (!world.NoteCatchUpProgress(63, daveAt - 1, 1, 1, daveAt - 1, nullptr, &error) || !world.CompleteActivation(63, daveAt - 1, &error))

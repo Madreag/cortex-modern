@@ -1783,7 +1783,8 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetWorldJoinHost::PromoteWaitingSpectator(uint64_t nowFrame, uint64_t* outActivationTick, NetPeerId* outConnection, std::string* error) {
+	bool NetWorldJoinHost::PromoteWaitingSpectator(uint64_t nowFrame, uint64_t* outActivationTick, NetPeerId* outConnection, std::string* error,
+	                                               const std::function<bool(const NetWorldJoinSession&, const NetWorldSlot&)>& bind) {
 		if (outActivationTick) *outActivationTick = 0;
 		const NetWorldSlot* slot = m_Membership.FirstFreeSlot();
 		if (slot == nullptr) {
@@ -1816,6 +1817,10 @@ namespace RTE {
 		const uint8_t peerId = slot->peerId;
 		const int8_t team = slot->team;
 		const uint32_t generation = slot->generation;
+		if (bind && !bind(*oldest, *slot)) {
+			if (error) *error = "the seat roster did not take the watcher's seat onto slot " + std::to_string(static_cast<int>(peerId));
+			return false;
+		}
 		if (!m_Membership.Hold(peerId, oldest->stableSeat, oldest->holderName, error)) {
 			return false;
 		}

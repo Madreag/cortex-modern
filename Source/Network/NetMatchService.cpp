@@ -171,18 +171,24 @@ namespace RTE {
 	std::map<uint8_t, NetMatchService::SeatView> NetMatchService::BuildSeatViews(const NetSeatRoster& roster, const std::vector<NetH4Seat>& table, const NetMatchConfig& config,
 	                                                                             const std::vector<NetLobbyMember>& members) {
 		std::map<uint8_t, SeatView> views;
+		// A seat the roster binds to another slot plays that slot: its view is keyed there, and the slot's own seat steps aside.
+		std::set<uint64_t> boundSlots;
+		for (const NetRosterSeat& seat: roster.seats) if (seat.bindingRef != 0) boundSlots.insert(seat.bindingRef);
 		for (const NetH4Seat& entry: table) {
 			if (entry.cpu || entry.lockstepPeerId == 0) continue;
 			const NetRosterSeat* seat = roster.Find(NetRosterIdOf(entry.stableSeat));
-			if (!seat) continue;
+			if (!seat || (seat->bindingRef == 0 && boundSlots.contains(entry.lockstepPeerId))) continue;
+			const uint8_t played = seat->bindingRef != 0 ? static_cast<uint8_t>(seat->bindingRef) : entry.lockstepPeerId;
 			std::string name;
-			const std::string open = NetMatchConfigUtil::UnseatedSlotName(entry.lockstepPeerId, config.persistentWorld);
-			for (const NetMatchPlayerSlot& slot: config.players)
-				if (slot.peerId == entry.lockstepPeerId && !slot.displayName.empty() && !(config.persistentWorld && slot.displayName == open)) name = slot.displayName;
+			const std::string open = NetMatchConfigUtil::UnseatedSlotName(played, config.persistentWorld);
+			// A slot's configured name is the seat's own; a seat playing another slot is named by its player alone.
+			if (seat->bindingRef == 0)
+				for (const NetMatchPlayerSlot& slot: config.players)
+					if (slot.peerId == played && !slot.displayName.empty() && !(config.persistentWorld && slot.displayName == open)) name = slot.displayName;
 			for (const NetLobbyMember& member: members)
-				if (member.peerId == entry.lockstepPeerId && !member.displayName.empty() && member.displayName != open)
+				if (member.peerId == played && !member.displayName.empty() && member.displayName != open)
 					name = member.displayName;
-			views[entry.lockstepPeerId] = BuildSeatView(entry.lockstepPeerId, entry.stableSeat, roster.revision, *seat, name);
+			views[played] = BuildSeatView(played, entry.stableSeat, roster.revision, *seat, name);
 		}
 		return views;
 	}
@@ -4567,13 +4573,36 @@ static std::string ResyncSaveName() {
 		return bound;
 	}
 
+	namespace {
+		/// The lockstep id an admission seat names by itself: a world seat bound to any other slot plays that slot instead.
+		uint8_t SeatOwnLockstepId(const std::vector<NetH4SeatStatus>& statuses, uint16_t stableSeat) {
+			for (const NetH4SeatStatus& status: statuses) if (status.stableSeat == stableSeat) return status.lockstepPeerId;
+			return 0;
+		}
+	} // namespace
+
 	bool NetMatchService::PromoteWorldWatcher(NetWorldJoinHost& world, NetReconnectHost& admission, uint64_t nowFrame, uint64_t* outActivation, NetPeerId* outPromoted) {
-		(void)admission;
-		return world.PromoteWaitingSpectator(nowFrame, outActivation, outPromoted, nullptr);
+		// The roster takes the watcher's seat onto the slot first: the world seats it only on a binding every peer will read.
+		const std::vector<NetH4SeatStatus> statuses = admission.GetSeatStatuses();
+		return world.PromoteWaitingSpectator(nowFrame, outActivation, outPromoted, nullptr, [&](const NetWorldJoinSession& watcher, const NetWorldSlot& slot) {
+			const uint8_t played = slot.peerId == SeatOwnLockstepId(statuses, watcher.stableSeat) ? 0 : slot.peerId;
+			admission.NoteSeatSlot(watcher.stableSeat, played);
+			const NetRosterSeat* seat = admission.GetRoster().Find(NetRosterIdOf(watcher.stableSeat));
+			return seat != nullptr && seat->bindingRef == played;
+		});
 	}
 
 	void NetMatchService::PublishWorldSeatSlots(NetReconnectHost& admission, const NetWorldMembership& membership) {
-		(void)admission; (void)membership;
+		// The world seats a seat on its slot; the roster is what every peer reads of it. An opened seat's binding went with its player.
+		const std::vector<NetH4SeatStatus> statuses = admission.GetSeatStatuses();
+		for (const NetH4SeatStatus& status: statuses) {
+			const NetRosterSeat* seat = admission.GetRoster().Find(NetRosterIdOf(status.stableSeat));
+			if (seat == nullptr || seat->owner == 0) continue;
+			const NetWorldSlot* held = nullptr;
+			for (const NetWorldSlot& slot: membership.Slots()) if (slot.held && slot.stableSeat == status.stableSeat) held = &slot;
+			const uint8_t played = held != nullptr && held->peerId != status.lockstepPeerId ? held->peerId : 0;
+			if (seat->bindingRef != played) admission.NoteSeatSlot(status.stableSeat, played);
+		}
 	}
 
 	NetH4SeatSimIdentity NetMatchService::WorldSimIdentityOfSeat(const NetWorldMembership& membership, uint16_t stableSeat) {
@@ -5235,7 +5264,7 @@ static std::string ResyncSaveName() {
 				NoteWorldPromotionLocked(promoted, promotedAt);
 			}
 		}
-		PublishWorldSeatSlots(m_ReconnectHost, m_WorldJoin.Membership());
+		if (!m_WorldJoin.IsPrivateMatch()) PublishWorldSeatSlots(m_ReconnectHost, m_WorldJoin.Membership());
 		DriveWorldSeatRespawns(nowFrame);
 		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
 			if (session.phase != NetWorldJoinPhase::CatchingUp || session.activationTick == 0) continue;
