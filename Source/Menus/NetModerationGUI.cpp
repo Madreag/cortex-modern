@@ -1063,7 +1063,8 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 			for (const auto& member: snapshot.members) {
 				if (member.cpu) continue;
 				composed += "\nP" + std::to_string(member.peerId) + ": Ping " + ((hostLost && member.peerId == snapshot.hostPeerId) || member.pingMs == 0 ? "--" : std::to_string(member.pingMs)) + " ms / delay " + std::to_string(member.inputDelayFrames) + " frames";
-				composed += "\nWaits " + std::to_string(member.waits) + " / longest " + std::to_string(member.longestWaitMs) + " ms";
+				// Each player's second row names them too, or two players' equal numbers read as one line twice.
+				composed += "\nP" + std::to_string(member.peerId) + " waits " + std::to_string(member.waits) + " / longest " + std::to_string(member.longestWaitMs) + " ms";
 				if (member.reclaiming || member.aiHeld || !member.connected) composed += " / " + NetPlayerPresentation::State(member);
 			}
 		}
