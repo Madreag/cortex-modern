@@ -729,7 +729,8 @@ def stall_args(client_stall: str, scale: int = 1) -> list[str]:
 
 def forced_hold_evidence(root: Path, lever: str, scale: int = 1, offset: int = 0, ticks: int = 0) -> dict:
     """A requested stall is evidence only after its native hold and completed reclaim. Given the run's ticks, a held client whose
-    catch-up set its reclaim past the run's end is a short run, as a slow writer's is: its schedule doubles."""
+    catch-up set its reclaim past the run's end, or was still short of it when the run ended, is a short run, as a slow writer's is:
+    its schedule doubles. A catch-up that passed its reclaim tick and never completed fails as before."""
     if not lever:
         return {'requested': False}
     tick, milliseconds = map(int, lever.split(':'))
@@ -747,10 +748,15 @@ def forced_hold_evidence(root: Path, lever: str, scale: int = 1, offset: int = 0
     completed = set(map(int, re.findall(r'\[net-match\] private catch-up complete frame=(\d+)', client)))
     completed |= set(map(int, re.findall(rf'\[net-world\] catch-up complete peer={seat} at=(\d+)', client)))
     pairs = [(hold, back) for hold in holds if hold >= tick for back in reclaims if back > hold and back in completed]
-    activations = [int(value) for value in re.findall(r'\[net-match\] held client catch-up applied=\d+ activation=(\d+)', client)]
-    if not pairs and ticks and any(hold >= tick for hold in holds) and activations and activations[-1] > ticks:
-        raise CheckpointsShort(f'client stall {tick}: the held client set its reclaim for tick {activations[-1]}, past the run\'s {ticks}',
-                               checkpoint_record(root, ticks))
+    progress = [tuple(map(int, row)) for row in re.findall(r'\[net-match\] held client catch-up applied=(\d+) activation=(\d+)', client)]
+    if not pairs and ticks and any(hold >= tick for hold in holds) and progress and progress[-1][1] > 0 and progress[-1][1] not in completed:
+        applied, activation = progress[-1]
+        if activation > ticks:
+            raise CheckpointsShort(f'client stall {tick}: the held client set its reclaim for tick {activation}, past the run\'s {ticks}',
+                                   checkpoint_record(root, ticks))
+        if applied < activation:
+            raise CheckpointsShort(f'client stall {tick}: the held client had applied {applied} of the {activation} its reclaim needs when the run ended',
+                                   checkpoint_record(root, ticks))
     assert pairs, f'client stall {tick} has no native hold/completed reclaim: holds={holds}, reclaims={reclaims}'
     return dict(requested=True, stall_tick=tick, stall_fired=int(fired[1]), seat=seat, hold=pairs[0][0], reclaim=pairs[0][1])
 
@@ -1521,11 +1527,16 @@ class CheckpointWaitTests(unittest.TestCase):
             with self.assertRaises(CheckpointsShort) as raised:
                 forced_hold_evidence(root, "40:1500", ticks=700)
             self.assertIn("set its reclaim for tick 789, past the run's 700", str(raised.exception))
-            # Inside the run, or with no reclaim set at all, the missing return is the failure it always was.
-            for line in ("activation=650", "activation=0"):
-                (root / "client" / "stdout.log").write_text(client.replace("activation=789", line), encoding="utf-8")
+            # The Mac on 95df52ba14: the restore run's client had applied 700 of the 775 its reclaim needed when the 800-tick run ended.
+            (root / "client" / "stdout.log").write_text(client.replace("applied=282 activation=789", "applied=700 activation=775"), encoding="utf-8")
+            with self.assertRaises(CheckpointsShort) as raised:
+                forced_hold_evidence(root, "40:1500", ticks=800)
+            self.assertIn("had applied 700 of the 775 its reclaim needs", str(raised.exception))
+            # A catch-up past its reclaim tick that never completed, or none set at all, is the failure it always was.
+            for line in ("applied=700 activation=650", "applied=282 activation=0"):
+                (root / "client" / "stdout.log").write_text(client.replace("applied=282 activation=789", line), encoding="utf-8")
                 with self.assertRaises(AssertionError) as raised:
-                    forced_hold_evidence(root, "40:1500", ticks=700)
+                    forced_hold_evidence(root, "40:1500", ticks=800)
                 self.assertNotIsInstance(raised.exception, CheckpointsShort)
 
     def test_a_held_peers_missed_capture_waits_only_when_its_own_line_names_it(self):
