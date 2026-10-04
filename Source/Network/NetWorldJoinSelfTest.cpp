@@ -395,6 +395,46 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestAJoinWaitsForAnImageItsHistoryServes() {
+			std::string error;
+			NetWorldJoinHost host;
+			if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error)) {
+				return Fail("stale-image host refused a world config: " + error);
+			}
+			host.Tail().Configure(4, 1 << 20);
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId;
+			image.boot = 1;
+			image.round = 1;
+			image.tick = 40;
+			image.bytes = 8;
+			image.digest = "d";
+			image.path = "Worlds/image.bin";
+			host.PublishImage(image);
+			// The world played on past its only image, and its history no longer reaches back to it.
+			for (uint64_t frame = 41; frame <= 60; ++frame) {
+				if (!host.Tail().Append(MakeCommittedFrame(frame), &error)) {
+					return Fail("stale-image tail refused a committed frame: " + error);
+				}
+			}
+			if (host.Tail().Covers(41)) {
+				return Fail("the stale-image fixture's history still covers its image");
+			}
+			if (!host.BeginJoin(7, 2, "alice", 1000, &error)) {
+				return Fail("stale-image join was refused: " + error);
+			}
+			if (const NetWorldJoinSession* session = host.FindSession(7); session == nullptr || session->snapshotTick != 0) {
+				return Fail("a join took the tick 40 image the world's history no longer follows, and could never catch up from it");
+			}
+			image.tick = 60;
+			image.digest = "e";
+			host.PublishImage(image);
+			if (const NetWorldJoinSession* session = host.FindSession(7); session == nullptr || session->snapshotTick != 60) {
+				return Fail("a join waiting for a servable image did not take the next one");
+			}
+			return 0;
+		}
+
 		int TestJoinPlaneAndLeave() {
 			std::string error;
 			NetWorldJoinHost host;
@@ -9269,6 +9309,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestAJoinerWaitingOnAnUnagreedActivationIsReannounced(); result != 0) {
+			return result;
+		}
+		if (const int result = TestAJoinWaitsForAnImageItsHistoryServes(); result != 0) {
 			return result;
 		}
 		if (const int result = TestJoinPlaneAndLeave(); result != 0) {

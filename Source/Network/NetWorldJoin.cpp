@@ -1796,7 +1796,9 @@ namespace RTE {
 		session.joinOrder = m_NextJoinOrder++;
 		// A bootstrap opened after the image was frozen starts from it: PublishImage only reaches the
 		// bootstraps that were already waiting, so a later one would have no B to finish a transfer on.
-		if (m_Image.IsValid()) {
+		// An image whose following frames the history no longer holds cannot be caught up from: it waits for the next.
+		const uint64_t servableFrom = m_Tail.FirstServableFrame();
+		if (m_Image.IsValid() && (servableFrom == 0 || servableFrom <= m_Image.tick + 1)) {
 			session.snapshotTick = m_Image.tick;
 			session.deliveredThrough = m_Image.tick;
 			session.acknowledgedThrough = m_Image.tick;
