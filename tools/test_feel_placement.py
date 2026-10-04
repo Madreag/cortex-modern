@@ -12,7 +12,11 @@ PEERS = ['host', 'client', 'survivor']
 
 
 def placements(mask_text, cpus=32):
-    with patch.dict(os.environ, {'CC_RUNNER_AFFINITY_MASK': mask_text}), patch.object(feel_measure.os, 'cpu_count', return_value=cpus):
+    # A synthetic machine of `cpus` processors: the runner clips a mask to the system's, and boxes differ.
+    import win32_test_runner
+    system = (1 << cpus) - 1
+    with patch.dict(os.environ, {'CC_RUNNER_AFFINITY_MASK': mask_text}), patch.object(feel_measure.os, 'cpu_count', return_value=cpus), \
+            patch.object(win32_test_runner, 'affinity_of', return_value=(system, system)):
         return feel_measure.engine_placements(PEERS)
 
 
