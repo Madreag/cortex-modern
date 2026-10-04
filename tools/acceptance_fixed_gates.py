@@ -125,7 +125,7 @@ def evaluate(inputs, facts):
     memory = memory_verdict(active, memory_manifest)
     bound = identity(manifest, peers)
     captures = capture_evidence(inputs, intervals, manifest.get("fullstate_every", 0))
-    findings = [finding for finding in inputs.get("findings", []) if not (row == "mod-refusal" and finding.get("peer") == "linux"
+    findings = [finding for finding in inputs.get("findings", []) if not (row == "mod-refusal" and isinstance(finding, dict) and finding.get("peer") == "linux"
                 and re.search(r"admission refused[^\n]*ModuleManifestMismatch", finding.get("text", "")))]
     checks = dict(identity=bound["passed"], measured_workload=bool(workload) and all(value["passed"] for value in workload.values()),
                   coverage_minima=all(value["status"] in ("PASS", "NOT APPLICABLE") for value in matrix if value.get("required", True)),
@@ -139,6 +139,8 @@ def evaluate(inputs, facts):
                   binary_admission=bool(inputs.get("capabilities")) and all(inputs["capabilities"].get(box["name"], {}).get("peer_limit", 0) >= len(active)
                       for box in manifest["boxes"]),
                   no_mixed_builds=not inputs.get("mixed_builds"))
+    summaries = [{key:value for key,value in finding.items() if key in ("peer", "path", "line", "kind")}
+                 if isinstance(finding, dict) else dict(kind='driver', detail=str(finding)) for finding in findings]
     return dict(passed=all(checks.values()), checks=checks, identity=bound, workload=workload, coverage=matrix,
-                memory=memory, captures=captures, findings=[{key:value for key,value in finding.items() if key in ("peer", "path", "line", "kind")} for finding in findings],
+                memory=memory, captures=captures, findings=summaries,
                 failures=[key+": fixed harness evidence missing or failed" for key, passed in checks.items() if not passed])

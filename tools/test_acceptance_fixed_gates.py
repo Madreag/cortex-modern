@@ -19,6 +19,17 @@ def fixture():
 
 
 class FixedAcceptanceEvidence(unittest.TestCase):
+    def test_native_driver_string_finding_is_a_durable_failure(self):
+        for row in ('mod-match', 'mod-refusal'):
+            with self.subTest(row=row):
+                value = fixture()
+                value['manifest']['acceptance_row'] = row
+                value['findings'] = ['Mac: owning payload exited 1; cancelled reduced match']
+                result = self.judge(value)
+                self.assertFalse(result['passed'])
+                self.assertFalse(result['checks']['no_engine_findings'])
+                self.assertIn('owning payload exited 1', result['findings'][0]['detail'])
+
     def test_checkout_head_is_diagnostic_when_the_measured_build_matches(self):
         value = fixture()
         value['manifest']['preflights']['EDITH']['head'] = 'f'*40
