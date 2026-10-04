@@ -60,6 +60,7 @@
 #include <iterator>
 #include <list>
 #include <map>
+#include <memory>
 #include <set>
 #include <mutex>
 #include <sstream>
@@ -239,7 +240,25 @@ namespace RTE::MenuAutomation {
 		tab->SetCheck(true);
 		tab->AddEvent(GUIEvent::Notification, GUITab::UnPushed, 0);
 	}
-	bool Text(GUIControl* control, std::string& text) {
+	// A relay login is a credential, though only its password box masks itself on screen: its boxes are named by their role.
+	constexpr std::array<std::string_view, 4> c_CredentialBoxes{"TextHostRelayUser", "TextHostRelayPass", "TextNetworkRelayUser", "TextNetworkRelayPass"};
+	bool CredentialName(const std::string& name) {
+		return std::find(c_CredentialBoxes.begin(), c_CredentialBoxes.end(), name) != c_CredentialBoxes.end();
+	}
+	bool Credential(GUIControl* control) {
+		auto* box = dynamic_cast<GUITextBox*>(control);
+		return box && (box->HasPasswordMask() || CredentialName(box->GetName()));
+	}
+	/// What a capture may write of a control's text: a credential's as its mask, whatever it holds.
+	std::string Captured(bool credential, const std::string& text) {
+		return credential ? std::string(text.size(), '*') : text;
+	}
+	/// A set_text step's record: a credential box's value never reaches it, whether or not the box takes it.
+	std::string SetTextObservation(GUIControl* control, const std::string& name, const std::string& argument) {
+		return Credential(control) || CredentialName(name) ? name + " <masked>" : name + " " + argument;
+	}
+	// What the control draws: only measuring and comparing read it, every capture reads Text.
+	bool DisplayText(GUIControl* control, std::string& text) {
 		if (auto* value = dynamic_cast<GUILabel*>(control)) text = value->GetText();
 		else if (auto* value = dynamic_cast<GUIButton*>(control)) text = value->GetText();
 		else if (auto* value = dynamic_cast<GUITextBox*>(control)) text = value->GetDisplayText();
@@ -248,6 +267,11 @@ namespace RTE::MenuAutomation {
 		else if (auto* value = dynamic_cast<GUITab*>(control)) text = value->GetText();
 		else if (auto* value = dynamic_cast<GUIComboBox*>(control)) text = value->GetSelectedItem() ? value->GetSelectedItem()->m_Name : value->GetText();
 		else return false;
+		return true;
+	}
+	bool Text(GUIControl* control, std::string& text) {
+		if (!DisplayText(control, text)) return false;
+		text = Captured(Credential(control), text);
 		return true;
 	}
 	void Click(GUIControlManager* manager, const std::string& name) {
@@ -276,11 +300,11 @@ namespace RTE::MenuAutomation {
 		}
 		std::string text;
 		const bool measureHiddenPreset = control && control->GetName() == "ComboPresetResolution";
-		if ((!Visible(control) && !measureHiddenPreset) || !Text(control, text)) return false;
+		if ((!Visible(control) && !measureHiddenPreset) || !DisplayText(control, text)) return false;
 		// A closed picker is measured on the line it draws, which is not always the whole item name.
 		if (auto* combo = dynamic_cast<GUIComboBox*>(control)) text = combo->GetText();
 		const auto rect = Rectangle(control->GetPanel());
-		observation += " text=" + Json(text).dump() + " rect=" + Json(rect).dump();
+		observation += " text=" + Json(Captured(Credential(control), text)).dump() + " rect=" + Json(rect).dump();
 		if (auto* label = dynamic_cast<GUILabel*>(control)) {
 			observation += " height=" + std::to_string(label->GetTextHeight()) + " word_width=" + std::to_string(label->GetMaxWordWidth());
 			if (label->GetHorizontalOverflowScroll() && control->GetName() == "LabelMultiplayerStatus") {
@@ -853,7 +877,7 @@ namespace RTE::MenuAutomation {
 			bool found = panel && panel->AutomationLabelText(name, text);
 			if (!found) if (auto* main = g_MenuMan.GetMainMenu()) found = main->AutomationLabelText(name, text);
 			const bool carries = found && text.find(expected) != std::string::npos;
-			observation = name + " \"" + expected + "\" text=" + Json(text).dump();
+			observation = name + " \"" + Captured(CredentialName(name), expected) + "\" text=" + Json(Captured(CredentialName(name), text)).dump();
 			return found && carries == (command == "assert_net_label");
 		}
 		if (command == "assert_toast_band") {
@@ -1179,10 +1203,11 @@ namespace RTE::MenuAutomation {
 				std::string name, expected, text;
 				args >> name;
 				std::getline(args >> std::ws, expected);
-				bool found = Text(manager->GetControl(name), text);
+				bool found = DisplayText(manager->GetControl(name), text);
 				MainMenuGUI* main = g_MenuMan.GetMainMenu();
 				if (!found && main && manager == main->AutomationManager()) found = main->AutomationLabelText(name, text);
-				observation = name + " \"" + expected + "\" text=\"" + text + "\"";
+				const bool credential = CredentialName(name) || Credential(manager->GetControl(name));
+				observation = name + " \"" + Captured(credential, expected) + "\" text=\"" + Captured(credential, text) + "\"";
 				return found && text.find(expected) != std::string::npos;
 			}
 			if (command == "key_down" || command == "key_up") {
@@ -1445,7 +1470,7 @@ namespace RTE::MenuAutomation {
 				observation = result.dump();
 				return Writer().Queue(path, std::move(result), g_FrameMan.GetBackBuffer32());
 			}
-			observation = name + " " + argument;
+			observation = command == "set_text" ? SetTextObservation(control, name, argument) : name + " " + argument;
 			if (!control) { observation += " missing control"; return false; }
 			if (command == "assert_visible") {
 				observation += " actual=" + std::to_string(Visible(control));
@@ -1459,7 +1484,6 @@ namespace RTE::MenuAutomation {
 				// The typed-entry seam for a settings page: the box takes the value and raises the notification a typed entry raises.
 				auto* box = dynamic_cast<GUITextBox*>(control);
 				if (!box || !Enabled(box) || argument.empty()) return false;
-				if (box->HasPasswordMask()) observation = name + " <masked>";
 				box->SetText(argument);
 				// The event queue clears at the top of every Update, so the Enter has to be raised
 				// inside one - the same channel a scripted click takes.
@@ -1592,6 +1616,39 @@ namespace RTE::MenuAutomation {
 			                                     line("network", "NetworkSeatKick0", "Kick", true), line("network", "NetworkSeatKick1", "Kick", true),
 			                                     line("menu", "LabelMatchChat0", "gg"), line("menu", "LabelMatchChat1", "gg"), line("overlay", "NetworkPing", "--"), line("overlay", "NetworkLoss", "--")});
 			check("duplicates_by_design_pass", byDesign.is_null(), byDesign.dump());
+		}
+		{
+			// A relay login's boxes capture as their mask and their set_text record is masked, on the host's page and the player's; each
+			// box keeps what was typed. The boxes need the timer manager and have no control manager, so a bare panel takes their events.
+			if (!TimerMan::IsConstructed()) TimerMan::Construct();
+			GUIPanel signals;
+			std::vector<std::unique_ptr<GUITextBox>> boxes;
+			const auto box = [&boxes, &signals](const char* name, const char* value, bool masked) {
+				auto& made = boxes.emplace_back(std::make_unique<GUITextBox>(nullptr, nullptr));
+				made->GUIControl::Create(name, 0, 0, 120, 16);
+				made->SetSignalTarget(&signals);
+				made->SetPasswordMask(masked);
+				made->SetText(value);
+				return made.get();
+			};
+			const std::string value = "synthetic-login-3f9a";
+			GUITextBox* plain = box("TextHostRelayAddress", "relay.example.test:3478", false);
+			for (GUITextBox* credential: {box("TextHostRelayUser", value.c_str(), false), box("TextHostRelayPass", value.c_str(), true),
+			                              box("TextNetworkRelayUser", value.c_str(), false), box("TextNetworkRelayPass", value.c_str(), true)}) {
+				const std::string name = credential->GetName();
+				std::string captured, drawn;
+				const bool read = Text(credential, captured) && DisplayText(credential, drawn);
+				check(("credential_capture_masked " + name).c_str(), read && captured == std::string(value.size(), '*'), "captured=" + captured);
+				const std::string record = SetTextObservation(credential, name, "synthetic-typed-5519");
+				check(("credential_set_text_record_masked " + name).c_str(), record == name + " <masked>", "record=" + record);
+				const bool drawnRight = drawn == (credential->HasPasswordMask() ? std::string(value.size(), '*') : value);
+				check(("credential_box_keeps_its_value " + name).c_str(), credential->GetText() == value && drawnRight, drawnRight ? "drawn as before" : "drawn differently");
+			}
+			std::string plainText;
+			const bool plainRead = Text(plain, plainText);
+			check("plain_box_captured_as_shown", plainRead && plainText == "relay.example.test:3478", "captured=" + plainText);
+			const std::string plainRecord = SetTextObservation(plain, "TextHostRelayAddress", "relay.example.test:3478");
+			check("plain_set_text_record_kept", plainRecord == "TextHostRelayAddress relay.example.test:3478", "record=" + plainRecord);
 		}
 		std::cout << "[menu-automation-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 		return passed;
