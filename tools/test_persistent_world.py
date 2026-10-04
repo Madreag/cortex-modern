@@ -942,9 +942,13 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullst
                                             carry=carry)
         return run_round
 
-    # Two segments stand only once two checkpoints are written.
+    def segments_standing(run_root: Path, start: int) -> int:
+        identity = restore.WORLD_IDENTITY.search(restore.peer_log(run_root, "host"))
+        return len(list((run_root / "host/runtime/Autosaves").glob(f"{identity[1]}-*.ccreplay"))) if identity else 0
+
+    # The replay needs two segments standing at the round's end, each cut at a checkpoint.
     world, records, _ = restore.run_world_round_sized("world", recording_round(), out / "world", clock, SEGMENT_ROUND_TICKS, 2,
-                                                      restore.WORLD_START_LEAD_TICKS, written=restore.written_since)
+                                                      restore.WORLD_START_LEAD_TICKS, written=segments_standing)
     for who in ("host", "client"):
         assert records[who].get("exit_code") == 0, (who, records[who].get("exit_code"), records[who].get("error"))
     host_log = restore.peer_log(world, "host")
