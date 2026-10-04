@@ -123,6 +123,7 @@ RED_PROMOTION_DECLINE = "promotion-ignored-a-decline"
 RED_PROMOTION_LOBBY_ID = "promotion-kept-the-watcher-lobby-id"
 RED_PROMOTION_BEHIND_INPUT = "promotion-announced-behind-the-sent-input"
 RED_SEAT_BASELINE = "world-joiner-disagrees-on-a-held-seat"
+RED_PROMOTED_BINDING = "promoted-seat-view-names-another-player"
 RED_HELD_SEAT_HASHES = "world-late-joiner-hashed-a-tick-otherwise-than-the-world"
 RED_HELD_SEAT_NOT_HELD = "world-late-joiner-round-did-not-hold-the-left-seat"
 RED_CLEAN_LEAVE_WRONG_SEAT = "clean-leave-released-the-wrong-seat"
@@ -503,6 +504,12 @@ CASES = (
         "argv": ["-net-world-seat-baseline-selftest"],
         "red": RED_SEAT_BASELINE,
         "pass_token": "[net-world-seat-baseline-selftest] PASS",
+    },
+    {
+        "name": "promoted-seat-is-bound-on-the-roster",
+        "argv": ["-net-world-promoted-binding-selftest"],
+        "red": RED_PROMOTED_BINDING,
+        "pass_token": "[net-world-promoted-binding-selftest] PASS",
     },
     {
         "name": "clean-leave-releases-only-the-seat-that-left",

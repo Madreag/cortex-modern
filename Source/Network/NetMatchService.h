@@ -755,6 +755,13 @@ namespace RTE {
 		/// The seat views, by lockstep peer; empty before any roster is heard.
 		std::map<uint8_t, SeatView> GetSeatViews() const;
 		std::optional<SeatView> GetSeatView(uint8_t peerId) const;
+		/// The seat views a peer shows from a roster and the seat table, keyed by the lockstep id each seat plays.
+		static std::map<uint8_t, SeatView> BuildSeatViews(const NetSeatRoster& roster, const std::vector<NetH4Seat>& table, const NetMatchConfig& config,
+		                                                  const std::vector<NetLobbyMember>& members);
+		/// Host: the oldest waiting watcher takes a freed world slot. Returns whether one was promoted.
+		static bool PromoteWorldWatcher(NetWorldJoinHost& world, NetReconnectHost& admission, uint64_t nowFrame, uint64_t* outActivation, NetPeerId* outPromoted);
+		/// Host: the slot each world seat plays goes to the seat roster, so every peer reads it.
+		static void PublishWorldSeatSlots(NetReconnectHost& admission, const NetWorldMembership& membership);
 		NetH4ModerationResult ApplyModeration(const NetModerationSelection& selection, NetModerationAction action);
 		/// Host: close this holder without a reclaim hold. The host confirmation dialog calls this.
 		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action);

@@ -157,20 +157,7 @@ namespace RTE {
 		// Before its round runs a joiner's seats are the lobby's agreed config, which the publish has just adopted.
 		const NetMatchConfig& config = m_State != NetMatchServiceState::Running && m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig
 		                               : m_Runner ? m_Runner->GetMatchConfig() : (m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig);
-		std::map<uint8_t, SeatView> views;
-		for (const NetH4Seat& entry: NetH4BuildSeatTable(config)) {
-			if (entry.cpu || entry.lockstepPeerId == 0) continue;
-			const NetRosterSeat* seat = roster.Find(NetRosterIdOf(entry.stableSeat));
-			if (!seat) continue;
-			std::string name;
-			const std::string open = NetMatchConfigUtil::UnseatedSlotName(entry.lockstepPeerId, config.persistentWorld);
-			for (const NetMatchPlayerSlot& slot: config.players)
-				if (slot.peerId == entry.lockstepPeerId && !slot.displayName.empty() && !(config.persistentWorld && slot.displayName == open)) name = slot.displayName;
-			for (const NetLobbyMember& member: m_LobbySnapshot.members)
-				if (member.peerId == entry.lockstepPeerId && !member.displayName.empty() && member.displayName != open)
-					name = member.displayName;
-			views[entry.lockstepPeerId] = BuildSeatView(entry.lockstepPeerId, entry.stableSeat, roster.revision, *seat, name);
-		}
+		std::map<uint8_t, SeatView> views = BuildSeatViews(roster, NetH4BuildSeatTable(config), config, m_LobbySnapshot.members);
 		if (m_Coordinator) {
 			std::map<uint8_t, std::string> names;
 			for (const auto& [peerId, view]: views) names[peerId] = view.name;
@@ -179,6 +166,25 @@ namespace RTE {
 		std::map<uint8_t, SeatView> previous = std::move(m_SeatViews);
 		m_SeatViews = std::move(views);
 		RecordRosterTransitions(previous, observedAtMs);
+	}
+
+	std::map<uint8_t, NetMatchService::SeatView> NetMatchService::BuildSeatViews(const NetSeatRoster& roster, const std::vector<NetH4Seat>& table, const NetMatchConfig& config,
+	                                                                             const std::vector<NetLobbyMember>& members) {
+		std::map<uint8_t, SeatView> views;
+		for (const NetH4Seat& entry: table) {
+			if (entry.cpu || entry.lockstepPeerId == 0) continue;
+			const NetRosterSeat* seat = roster.Find(NetRosterIdOf(entry.stableSeat));
+			if (!seat) continue;
+			std::string name;
+			const std::string open = NetMatchConfigUtil::UnseatedSlotName(entry.lockstepPeerId, config.persistentWorld);
+			for (const NetMatchPlayerSlot& slot: config.players)
+				if (slot.peerId == entry.lockstepPeerId && !slot.displayName.empty() && !(config.persistentWorld && slot.displayName == open)) name = slot.displayName;
+			for (const NetLobbyMember& member: members)
+				if (member.peerId == entry.lockstepPeerId && !member.displayName.empty() && member.displayName != open)
+					name = member.displayName;
+			views[entry.lockstepPeerId] = BuildSeatView(entry.lockstepPeerId, entry.stableSeat, roster.revision, *seat, name);
+		}
+		return views;
 	}
 
 	std::map<uint8_t, NetMatchService::SeatView> NetMatchService::GetSeatViews() const {
@@ -4561,6 +4567,15 @@ static std::string ResyncSaveName() {
 		return bound;
 	}
 
+	bool NetMatchService::PromoteWorldWatcher(NetWorldJoinHost& world, NetReconnectHost& admission, uint64_t nowFrame, uint64_t* outActivation, NetPeerId* outPromoted) {
+		(void)admission;
+		return world.PromoteWaitingSpectator(nowFrame, outActivation, outPromoted, nullptr);
+	}
+
+	void NetMatchService::PublishWorldSeatSlots(NetReconnectHost& admission, const NetWorldMembership& membership) {
+		(void)admission; (void)membership;
+	}
+
 	NetH4SeatSimIdentity NetMatchService::WorldSimIdentityOfSeat(const NetWorldMembership& membership, uint16_t stableSeat) {
 		const NetWorldSlot* bound = BoundWorldSlot(membership, stableSeat);
 		if (bound == nullptr) {
@@ -5199,7 +5214,7 @@ static std::string ResyncSaveName() {
 		if (m_WorldJoin.Membership().FreeSlots() > 0) {
 			uint64_t promotedAt = 0;
 			NetPeerId promoted = c_InvalidNetPeerId;
-			if (m_WorldJoin.PromoteWaitingSpectator(nowFrame, &promotedAt, &promoted, nullptr) && promotedAt != 0) {
+			if (PromoteWorldWatcher(m_WorldJoin, m_ReconnectHost, nowFrame, &promotedAt, &promoted) && promotedAt != 0) {
 				// The promoted watcher takes the plan a fresh join takes: its own announced E, then one
 				// Activate with one brain. Its member lobby id replaces the watcher id it gave back.
 				m_Coordinator->SetObservationEpoch(promotedAt);
@@ -5220,6 +5235,7 @@ static std::string ResyncSaveName() {
 				NoteWorldPromotionLocked(promoted, promotedAt);
 			}
 		}
+		PublishWorldSeatSlots(m_ReconnectHost, m_WorldJoin.Membership());
 		DriveWorldSeatRespawns(nowFrame);
 		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
 			if (session.phase != NetWorldJoinPhase::CatchingUp || session.activationTick == 0) continue;

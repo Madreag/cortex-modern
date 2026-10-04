@@ -8302,6 +8302,138 @@ namespace RTE {
 		return 0;
 	}
 
+	/// A watcher promoted into a freed world slot plays it under its own seat and ticket. The seat roster carries that binding to
+	/// every peer, and the slot's view names the promoted player: through a slot freed during its image transfer, a promotion
+	/// after its catch-up, a drop before its activation and its next return.
+	int TestAPromotedSeatIsBoundOnTheRoster() {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		const NetMatchConfig config = MakeTwoSeatWorld();
+		const std::vector<NetH4Seat> table = NetH4BuildSeatTable(config);
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) return Fail("promoted-binding fixture: the registry did not arm");
+		NetReconnectHost admission;
+		admission.Configure(&registry, 0x5750ULL, identity);
+		admission.SetSeatTable(table, NetMatchMode::PvPSkirmish);
+		admission.SetLiveMatch(true);
+		admission.SetPersistentWorld(true);
+		NetWorldJoinHost world;
+		std::string error;
+		if (!world.Configure(config, MakeIdentity(), &error)) return Fail("promoted-binding fixture: " + error);
+		admission.SetSeatSimIdentitySource([](void* context, uint16_t stableSeat) {
+			return NetMatchService::WorldSimIdentityOfSeat(static_cast<const NetWorldJoinHost*>(context)->Membership(), stableSeat);
+		}, &world);
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId; image.boot = 1; image.round = 1; image.tick = 400; image.bytes = 32; image.digest = "d";
+		world.PublishImage(image);
+		NetH4TicketOffer alice, bob, dave, erin;
+		if (!CommitWorldSeat(admission, identity, 61, "alice", alice) || !CommitWorldSeat(admission, identity, 62, "bob", bob) ||
+		    !CommitWorldSeat(admission, identity, 63, "dave", dave) || !CommitWorldSeat(admission, identity, 64, "erin", erin))
+			return Fail("promoted-binding fixture: the admission did not seat four players");
+		uint64_t frame = 440;
+		const auto activate = [&](NetPeerId connection) {
+			uint64_t at = 0;
+			return world.NoteTransferComplete(connection, 32, &error) && world.NoteCatchUpProgress(connection, frame, 1, 1, frame + 40, &at, &error) && at != 0 &&
+			       world.NoteCatchUpProgress(connection, at - 1, 1, 1, at - 1, nullptr, &error) && world.CompleteActivation(connection, at - 1, &error) && (frame = at + 1) != 0;
+		};
+		if (!world.BeginJoin(61, alice.stableSeat, "alice", 1000, &error) || !world.BeginJoin(62, bob.stableSeat, "bob", 1010, &error) ||
+		    !world.BeginJoin(63, dave.stableSeat, "dave", 1020, &error) || !activate(61) || !activate(62))
+			return Fail("promoted-binding fixture: the members did not reach their slots (" + error + ")");
+		NetMatchService::PublishWorldSeatSlots(admission, world.Membership());
+		const auto slotOf = [&](NetPeerId connection) { const NetWorldJoinSession* session = world.FindSession(connection); return session ? session->assignedPeerId : uint8_t{0}; };
+		const uint8_t aliceSlot = slotOf(61), bobSlot = slotOf(62);
+		if (aliceSlot == 0 || bobSlot == 0 || aliceSlot == bobSlot) return Fail("promoted-binding fixture: alice and bob do not play two slots");
+
+		std::vector<std::string> wrong;
+		NetRosterReplica peer;
+		// The host's roster as a peer holds it, and the view each copy gives the slot.
+		const auto check = [&](const char* name, uint8_t slot, const std::string& player, uint16_t playerSeat) {
+			std::string why;
+			const NetSeatRoster& hosted = admission.GetRoster();
+			NetSeatRoster sent;
+			if (!DecodeRoster(EncodeRoster(hosted), sent, &why) || (!peer.Apply(sent, &why) && peer.Roster().revision != hosted.revision)) {
+				wrong.push_back(std::string(name) + ": the peer did not take revision " + std::to_string(hosted.revision) + " (" + why + ")");
+				return;
+			}
+			const auto hostViews = NetMatchService::BuildSeatViews(hosted, table, config, {});
+			const auto peerViews = NetMatchService::BuildSeatViews(peer.Roster(), table, config, {});
+			const auto hostView = hostViews.find(slot), peerView = peerViews.find(slot);
+			const NetRosterSeat* hostSeat = hosted.Find(NetRosterIdOf(playerSeat));
+			const NetRosterSeat* peerSeat = peer.Roster().Find(NetRosterIdOf(playerSeat));
+			const std::string hostName = hostView == hostViews.end() ? "-" : hostView->second.name, peerName = peerView == peerViews.end() ? "-" : peerView->second.name;
+			const uint64_t hostBinding = hostSeat ? hostSeat->bindingRef : 0, peerBinding = peerSeat ? peerSeat->bindingRef : 0;
+			std::cout << "[net-world-promoted-binding-selftest] " << name << " slot=" << static_cast<int>(slot) << " host_view=" << hostName
+			          << " peer_view=" << peerName << " peer_view_seat=" << (peerView == peerViews.end() ? -1 : peerView->second.stableSeat)
+			          << " binding host=" << hostBinding << "@" << hosted.revision << " peer=" << peerBinding << "@" << peer.Roster().revision
+			          << " hash_equal=" << (HashRoster(hosted) == HashRoster(peer.Roster())) << std::endl;
+			if (peerName != player || hostName != player || peerView->second.stableSeat != playerSeat || hostBinding != slot || peerBinding != slot ||
+			    hosted.revision != peer.Roster().revision || HashRoster(hosted) != HashRoster(peer.Roster()))
+				wrong.push_back(std::string(name) + ": slot " + std::to_string(slot) + " reads " + peerName + " on the peer and " + hostName + " on the host, not " + player);
+		};
+		const auto kick = [&](const NetH4TicketOffer& offer) {
+			NetModerationSelection selected{};
+			for (const auto& seat: admission.GetModerationView()) if (seat.stableSeat == offer.stableSeat) selected = NetSelectModerationSeat(seat);
+			NetParticipantRemovalIssue issued;
+			if (admission.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, 2000, 0, 1, 1, frame, issued) != NetKickBanResult::Ok) return false;
+			// The world frees the slot of the seat the host opened, as its pump does.
+			NetMatchService::WorldCleanLeave leave;
+			if (!NetMatchService::FindWorldCleanLeave(admission.GetSeatStatuses(), world, leave) || !world.Membership().Release(leave.peerId, &error)) return false;
+			world.CancelJoin(leave.connection, "slot released");
+			NetMatchService::PublishWorldSeatSlots(admission, world.Membership());
+			return true;
+		};
+		const auto promote = [&](NetPeerId expected) {
+			uint64_t at = 0;
+			NetPeerId promoted = c_InvalidNetPeerId;
+			world.NoteSentInputThrough(frame + 40);
+			if (!NetMatchService::PromoteWorldWatcher(world, admission, frame + 50, &at, &promoted) || promoted != expected) return uint64_t{0};
+			NetMatchService::PublishWorldSeatSlots(admission, world.Membership());
+			return at;
+		};
+
+		// 1. Alice's slot is freed while dave is still receiving the image; he is promoted once he streams.
+		if (!world.NoteTransferStarted(63, 7, 1, 400) || !kick(alice)) return Fail("promoted-binding: the host could not free alice's slot (" + error + ")");
+		uint64_t at = 0;
+		NetPeerId promoted = c_InvalidNetPeerId;
+		if (NetMatchService::PromoteWorldWatcher(world, admission, frame + 50, &at, &promoted)) return Fail("promoted-binding: a watcher still receiving its image was promoted");
+		if (!StreamWatcher(world, 63, frame, &error)) return Fail("promoted-binding: dave never streamed (" + error + ")");
+		const uint64_t daveAt = promote(63);
+		if (daveAt == 0) return Fail("promoted-binding: dave was not promoted into the freed slot");
+		check("freed-during-transfer", aliceSlot, "dave", dave.stableSeat);
+
+		// 2. Erin streams to the round's head; bob's slot frees afterwards and she takes it, at an activation of her own.
+		frame = daveAt + 20;
+		if (!world.BeginJoin(64, erin.stableSeat, "erin", 1030, &error) || !world.NoteTransferStarted(64, 8, 1, 400) || !StreamWatcher(world, 64, frame, &error))
+			return Fail("promoted-binding: erin never streamed (" + error + ")");
+		if (!kick(bob)) return Fail("promoted-binding: the host could not free bob's slot (" + error + ")");
+		const uint64_t erinAt = promote(64);
+		if (erinAt == 0) return Fail("promoted-binding: erin was not promoted after her catch-up");
+		check("promoted-after-catch-up", bobSlot, "erin", erin.stableSeat);
+
+		// 3. Erin's link drops before her activation: her seat is held for her, still on the slot she was given.
+		admission.NotifyDisconnect(64, erinAt - 1);
+		NetMatchService::PublishWorldSeatSlots(admission, world.Membership());
+		check("drop-during-promotion", bobSlot, "erin", erin.stableSeat);
+
+		// 4. Dave plays his slot, drops, and comes back with his ticket: the same seat on the same slot.
+		if (!world.NoteCatchUpProgress(63, daveAt - 1, 1, 1, daveAt - 1, nullptr, &error) || !world.CompleteActivation(63, daveAt - 1, &error))
+			return Fail("promoted-binding: dave never reached his activation (" + error + ")");
+		admission.NoteReturnCaughtUp(aliceSlot);
+		admission.NotifyDisconnect(63, daveAt + 10);
+		if (!ReclaimWorldSeat(admission, identity, dave, 65, 3000)) return Fail("promoted-binding: dave's return was not taken");
+		NetMatchService::PublishWorldSeatSlots(admission, world.Membership());
+		check("next-return", aliceSlot, "dave", dave.stableSeat);
+
+		if (!wrong.empty()) {
+			std::string where;
+			for (const std::string& each: wrong) where += (where.empty() ? "" : "; ") + each;
+			return Fail("promoted-seat-view-names-another-player: " + where);
+		}
+		std::cout << "[net-world-promoted-binding-selftest] PASS the promoted seats play their slots on every peer's roster" << std::endl;
+		return 0;
+	}
+
 	int RunNamed(const char* name) {
 		if (std::strcmp(name, "-net-world-activation-trail-selftest") == 0) return TestActivationFollowsTheMeasuredTrail();
 		if (std::strcmp(name, "-net-world-second-round-selftest") == 0) {
@@ -8515,6 +8647,10 @@ namespace RTE {
 		if (std::strcmp(name, "seat-baseline") == 0 || std::strcmp(name, "-net-world-seat-baseline-selftest") == 0) {
 			s_FailTag = "net-world-seat-baseline-selftest";
 			return TestAWorldImageCarriesItsSeatBaseline();
+		}
+		if (std::strcmp(name, "promoted-binding") == 0 || std::strcmp(name, "-net-world-promoted-binding-selftest") == 0) {
+			s_FailTag = "net-world-promoted-binding-selftest";
+			return TestAPromotedSeatIsBoundOnTheRoster();
 		}
 		if (std::strcmp(name, "clean-leave") == 0 || std::strcmp(name, "-net-world-clean-leave-selftest") == 0) {
 			s_FailTag = "net-world-clean-leave-selftest";
@@ -8838,6 +8974,7 @@ namespace RTE {
 		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatProvesItsHeadroom(); result != 0) return result;
 		if (const int result = TestAWorldImageCarriesItsSeatBaseline(); result != 0) return result;
+		if (const int result = TestAPromotedSeatIsBoundOnTheRoster(); result != 0) return result;
 		if (const int result = TestALobbySeatsNoPeerPastItsRoster(); result != 0) return result;
 		if (const int result = TestAReturnerKeepingPaceAtTheHeadIsActivated(); result != 0) return result;
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
