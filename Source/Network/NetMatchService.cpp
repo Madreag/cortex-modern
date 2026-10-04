@@ -7092,9 +7092,14 @@ static std::string ResyncSaveName() {
 		nlohmann::json facts = nlohmann::json::object();
 		if (!m_Runner) return facts.dump();
 		const NetMatchConfig& config = m_Runner->GetMatchConfig();
+		// The seats are the world's slot table: the authored capacity, or every peer id but the host's when none was authored.
 		uint32_t seats = 0;
 		for (const uint8_t capacity: config.worldTeamCapacity) seats += capacity;
-		facts["configuration"] = {{"seats", seats}, {"world_max_spectators", config.worldMaxSpectators}, {"persistent_world", config.persistentWorld}};
+		const bool authored = seats != 0;
+		if (!authored && config.persistentWorld) {
+			for (uint8_t peerId = 1; peerId <= config.peerCount; ++peerId) seats += peerId != config.hostPeerId;
+		}
+		facts["configuration"] = {{"seats", seats}, {"capacity_authored", authored}, {"world_max_spectators", config.worldMaxSpectators}, {"persistent_world", config.persistentWorld}};
 		facts["is_host"] = m_IsHost;
 		facts["image_received"] = m_Runner->SawWorldImageTransfer();
 		// A watcher replays the committed tail outside any round, so its own id and the ticks it watched are the service's.
