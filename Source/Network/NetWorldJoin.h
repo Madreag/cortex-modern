@@ -204,6 +204,7 @@ namespace RTE {
 		uint64_t catchUpGateLoggedFrame = 0;
 		uint8_t spectatorLobbyPeer = 0;   //!< Non-member lobby id in [32, 47]; 0 if none remains.
 		std::string refusal;              //!< Why the bootstrap failed; empty while it is alive.
+		uint64_t lagSinceTick = 0, lagSinceTrail = 0; //!< Where its trail last stood past the history's lag limit without gaining.
 	};
 
 	/// The bounded log of canonical committed frames from B+1 onward. A joiner applies these at the
@@ -213,12 +214,28 @@ namespace RTE {
 		static constexpr size_t c_DefaultMaxFrames = 3600;              //!< A minute of 60 Hz ticks.
 		static constexpr uint64_t c_DefaultMaxBytes = 32ULL * 1024 * 1024;
 		static constexpr size_t c_JournalSegmentFrames = 3600;          //!< The journal's frames per file; the oldest go a file at a time.
+		static constexpr uint64_t c_JournalQueueBytes = 32ULL * 1024 * 1024; //!< Frames waiting for the journal's writer; past it the journal fails.
+		static constexpr uint64_t c_JournalReopenFrames = 600;          //!< The first wait before a failed journal is opened again; it doubles per failure.
 
 		/// The frames a peer's record of its round keeps: the slow-player bound, the delay margin and one capture interval of frames.
 		static size_t RingFrames(uint32_t boundTicks, uint32_t delayMarginFrames, uint64_t captureIntervalMs, double tickMs);
 		void Configure(size_t maxFrames, uint64_t maxBytes);
 		void EnableJournal(const std::string& path);
 		bool HasJournal() const { return static_cast<bool>(m_Journal); }
+		/// Keeps the journal to its newest frames whatever its readers need, a whole file at a time: it never holds more than this many
+		/// frames plus one file. 0 leaves it to PruneJournalBefore alone.
+		void SetJournalRetention(uint64_t frames) { m_JournalRetain = frames; }
+		uint64_t JournalRetention() const { return m_JournalRetain; }
+		/// Why the journal stopped taking frames; empty while it works.
+		std::string JournalFailure() const;
+		/// Replaces a failed journal with a fresh one beside it, seeded with the frames still in memory. Refuses until its retry frame,
+		/// which doubles from c_JournalReopenFrames with every failure, so a disk that keeps failing is not reopened every pass.
+		bool ReopenJournal(uint64_t nowFrame);
+		uint32_t JournalReopens() const { return m_JournalReopens; }
+		/// Why a failed journal stopped, once per journal; false while it works and once it has been told.
+		bool TakeJournalFailure(std::string& why);
+		/// The journal file being written, without its folder.
+		std::string JournalFileName() const;
 		/// The journal's files on disk as its writer last left them, and the frames it covers.
 		struct JournalStats {
 			uint64_t bytes = 0;
@@ -266,9 +283,16 @@ namespace RTE {
 		};
 
 		void Trim();
+		void OpenJournal(const std::string& path, bool reopened);
 		struct Journal;
 		std::shared_ptr<Journal> m_Journal;
+		std::vector<std::shared_ptr<Journal>> m_RetiredJournals; //!< Failed journals told to stop, let go once their writers have.
 		uint64_t m_JournalBase = 0, m_JournalFirst = 0, m_JournalLast = 0; //!< Base: its first file's first frame, where every file boundary is counted from.
+		std::string m_JournalPath;      //!< The path the round's journal was enabled at; a reopened one is written beside it.
+		uint64_t m_JournalRetain = 0;
+		uint32_t m_JournalReopens = 0;
+		uint64_t m_JournalReopenAt = 0; //!< The first frame a failed journal may be opened again at.
+		bool m_JournalFailureTaken = false;
 
 		std::deque<Record> m_Records;
 		size_t m_MaxFrames = c_DefaultMaxFrames;
@@ -436,6 +460,21 @@ namespace RTE {
 	inline bool StreamsTail(const NetWorldJoinSession& session) {
 		return session.phase == NetWorldJoinPhase::CatchingUp || (session.spectator && session.phase == NetWorldJoinPhase::Spectating);
 	}
+
+	/// The host's policy for a join plane's round history, in frames: the play its journal keeps whatever any reader needs, and how far a
+	/// replaying reader no join deadline bounds (a watcher, a returning seat of a match) may trail the round before its bootstrap ends.
+	/// Zero turns either off.
+	struct NetJoinHistoryPolicy {
+		uint64_t retainFrames = 0;
+		uint64_t lagLimitFrames = 0;
+	};
+
+	/// A bootstrap the round's history stopped serving, and the receipt that says why.
+	struct NetJoinHistoryEnd {
+		NetPeerId connection = c_InvalidNetPeerId;
+		bool rebase = false; //!< A returning seat of a match: it comes back on a fresh image. Any other reader is closed.
+		std::string receipt;
+	};
 
 	inline uint8_t WorldJoinLobbyPeer(const NetWorldJoinSession& session) {
 		if (session.assignedPeerId != 0) {
@@ -690,6 +729,12 @@ namespace RTE {
 		void MarkActivationCommitted(NetPeerId connection);
 		/// Ends a bootstrap without a seat drop: a failed or slow fresh join is not a departure.
 		void CancelJoin(NetPeerId connection, const std::string& reason);
+		/// Ends a bootstrap the round's history can no longer serve. A seat its player is coming back to stays held for that player, as a
+		/// dropped link leaves it; a fresh join gives its slot back as CancelJoin does, and a watcher its lobby id.
+		void EndBootstrap(NetPeerId connection, const std::string& reason);
+		/// Whether a reader has trailed the round past the lag limit for a whole limit of round time without gaining on it. A reader that
+		/// gains is closing, however far behind, and its window starts again.
+		bool TrailsPastLagLimit(NetPeerId connection, uint64_t tick, uint64_t limitFrames);
 		/// The peers whose joins were cancelled since the last call, oldest first.
 		std::vector<uint8_t> TakeCancelledJoins();
 		/// Cancels every bootstrap past its deadline. Returns how many it ended.
