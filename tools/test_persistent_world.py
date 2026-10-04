@@ -1182,6 +1182,9 @@ def world_held_seat_late_join(repo: Path, out: Path, port: int = HELD_SEAT_PORT)
     print(f"[world-held-seat] hashes compared={compared} ticks={verdict['first_compared']}..{verdict['last_compared']} "
           f"first_difference={difference if difference is not None else 'none'}", flush=True)
     assert not reasons, "; ".join(reasons)
+    return verdict
+
+
 def world_journal_fault(repo: Path, out: Path, port: int = SEGMENT_PORT, fault_at: int = 1200, ticks: int = 3600) -> dict:
     """A live two-peer world whose host's journal fails mid-round: it is named, reopened, and the member never waits.
 
