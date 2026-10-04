@@ -53,6 +53,10 @@ namespace RTE {
 		/// The clock the frame index and the manifest are stamped on.
 		static long long SteadyNowMS();
 
+		/// The processor time the calling thread has used, in nanoseconds: what its work took from the machine, without the time
+		/// it spent blocked on a pipe or a disk.
+		static int64_t ThreadCpuNanoseconds();
+
 		/// Opens directory/frames and starts the writer. The directory must exist and be empty.
 		/// @return Whether recording started; error names the directory and the reason when it did not.
 		bool Start(const std::string& directory, int fps, std::string* error);

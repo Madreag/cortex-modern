@@ -131,22 +131,48 @@ namespace RTE {
 		int m_Exit = -1;
 	};
 
-	namespace {
-		/// The processor time the calling thread has used, in nanoseconds: what its work took from the machine, without the time
-		/// it spent blocked on a pipe or a disk.
-		int64_t ThreadCpuNanoseconds() {
 #ifdef _WIN32
-			FILETIME created, exited, kernel, user;
-			if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) return 0;
-			const auto ticks = [](const FILETIME& time) { return (static_cast<int64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime; };
-			return (ticks(kernel) + ticks(user)) * 100;
-#else
-			timespec now{};
-			if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now) != 0) return 0;
-			return static_cast<int64_t>(now.tv_sec) * 1000000000 + now.tv_nsec;
-#endif
+	namespace {
+		/// Thread cycles per nanosecond, read once from this thread running unbroken against the performance counter; the
+		/// fastest of a few short reads, so a read the scheduler interrupted cannot lower it.
+		double ThreadCyclesPerNanosecond() {
+			static const double s_Rate = [] {
+				LARGE_INTEGER frequency{}, begin{}, now{};
+				QueryPerformanceFrequency(&frequency);
+				double rate = 0.0;
+				for (int attempt = 0; attempt < 3; ++attempt) {
+					ULONG64 cyclesBegin = 0, cyclesEnd = 0;
+					QueryPerformanceCounter(&begin);
+					QueryThreadCycleTime(GetCurrentThread(), &cyclesBegin);
+					do {
+						QueryPerformanceCounter(&now);
+					} while (now.QuadPart - begin.QuadPart < frequency.QuadPart / 500);
+					QueryThreadCycleTime(GetCurrentThread(), &cyclesEnd);
+					const double nanoseconds = static_cast<double>(now.QuadPart - begin.QuadPart) * 1e9 / static_cast<double>(frequency.QuadPart);
+					rate = std::max(rate, static_cast<double>(cyclesEnd - cyclesBegin) / nanoseconds);
+				}
+				return rate;
+			}();
+			return s_Rate;
 		}
+	} // namespace
+#endif
 
+	int64_t FrameRecorder::ThreadCpuNanoseconds() {
+#ifdef _WIN32
+		// The thread's cycle count, not its thread times: those advance only at the scheduler's 15.6 ms tick.
+		ULONG64 cycles = 0;
+		const double rate = ThreadCyclesPerNanosecond();
+		if (rate <= 0.0 || !QueryThreadCycleTime(GetCurrentThread(), &cycles)) return 0;
+		return static_cast<int64_t>(static_cast<double>(cycles) / rate);
+#else
+		timespec now{};
+		if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now) != 0) return 0;
+		return static_cast<int64_t>(now.tv_sec) * 1000000000 + now.tv_nsec;
+#endif
+	}
+
+	namespace {
 		std::string FrameLeaf(std::size_t index) {
 			std::ostringstream name;
 			name << "frame-" << std::setw(6) << std::setfill('0') << index << ".png";
