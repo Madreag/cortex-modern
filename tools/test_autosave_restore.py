@@ -551,7 +551,7 @@ def arm_restore(repo: Path, root: Path, port: int, client_stall: str = "") -> di
                  for who in ("host", "client")}
         extra['client'] += stall_args(client_stall, scale)
         records = run_pair(repo, run_root, port, ticks, 2, extra)
-        evidence = forced_hold_evidence(run_root, client_stall, scale)
+        evidence = forced_hold_evidence(run_root, client_stall, scale, ticks=ticks)
         return dict(judge_restore(run_root, ticks, records), forced_hold=evidence)
     return wait_for_checkpoints(attempt, 800)
 
@@ -649,7 +649,7 @@ def arm_retention(repo: Path, root: Path, port: int, client_stall: str = "") -> 
     def attempt(scale: int, ticks: int) -> dict:
         run_root = wait_root(root, scale, ticks)
         records = run_pair(repo, run_root, port, ticks, 2, {'client': stall_args(client_stall, scale)})
-        evidence = forced_hold_evidence(run_root, client_stall, scale)
+        evidence = forced_hold_evidence(run_root, client_stall, scale, ticks=ticks)
         return dict(judge_retention(run_root, ticks, records), forced_hold=evidence)
     return wait_for_checkpoints(attempt, 700)
 
@@ -714,7 +714,7 @@ def arm_anchor(repo: Path, root: Path, port: int, slow_peers: bool = False, clie
                            "-net-match-e2e-resync"],
                   "client": ["-net-match-e2e-resync", *stall_args(client_stall, scale)]},
                  {"host": {"NetworkSlowPlayerBoundTicks": "120"}} if slow_peers else None)
-        evidence = forced_hold_evidence(run_root, client_stall, scale)
+        evidence = forced_hold_evidence(run_root, client_stall, scale, ticks=ticks)
         return dict(judge_anchor(run_root, ticks, perturb_at), forced_hold=evidence)
     return wait_for_checkpoints(attempt, ANCHOR_TICKS)
 
@@ -727,8 +727,9 @@ def stall_args(client_stall: str, scale: int = 1) -> list[str]:
     return ["-net-test-live-stall", f"{tick * scale}:{milliseconds}"]
 
 
-def forced_hold_evidence(root: Path, lever: str, scale: int = 1, offset: int = 0) -> dict:
-    """A requested stall is evidence only after its native hold and completed reclaim."""
+def forced_hold_evidence(root: Path, lever: str, scale: int = 1, offset: int = 0, ticks: int = 0) -> dict:
+    """A requested stall is evidence only after its native hold and completed reclaim. Given the run's ticks, a held client whose
+    catch-up set its reclaim past the run's end is a short run, as a slow writer's is: its schedule doubles."""
     if not lever:
         return {'requested': False}
     tick, milliseconds = map(int, lever.split(':'))
@@ -746,6 +747,10 @@ def forced_hold_evidence(root: Path, lever: str, scale: int = 1, offset: int = 0
     completed = set(map(int, re.findall(r'\[net-match\] private catch-up complete frame=(\d+)', client)))
     completed |= set(map(int, re.findall(rf'\[net-world\] catch-up complete peer={seat} at=(\d+)', client)))
     pairs = [(hold, back) for hold in holds if hold >= tick for back in reclaims if back > hold and back in completed]
+    activations = [int(value) for value in re.findall(r'\[net-match\] held client catch-up applied=\d+ activation=(\d+)', client)]
+    if not pairs and ticks and any(hold >= tick for hold in holds) and activations and activations[-1] > ticks:
+        raise CheckpointsShort(f'client stall {tick}: the held client set its reclaim for tick {activations[-1]}, past the run\'s {ticks}',
+                               checkpoint_record(root, ticks))
     assert pairs, f'client stall {tick} has no native hold/completed reclaim: holds={holds}, reclaims={reclaims}'
     return dict(requested=True, stall_tick=tick, stall_fired=int(fired[1]), seat=seat, hold=pairs[0][0], reclaim=pairs[0][1])
 
@@ -1501,6 +1506,27 @@ class CheckpointWaitTests(unittest.TestCase):
         with self.assertRaises(CheckpointsShort) as raised:
             self.judge(judge_retention, texts, {"host": [152], "client": []}, 700, records)
         self.assertIn("client wrote no checkpoint", str(raised.exception))
+
+    def test_a_reclaim_set_past_the_run_waits_and_a_missing_one_fails(self):
+        # The Mac on de8e196578, 5:52 PM: the client held at 46 caught up in place and set its reclaim for 789 in a 700-tick run.
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for who in ("host", "client"):
+                (root / who).mkdir()
+            (root / "host" / "stdout.log").write_text("[net-match] hold peer=2 frame=46 AI in control\n", encoding="utf-8")
+            client = ("[net-lockstep] start round=1 frame=1 local_peer=2 peers=2 input_delay=3\n[net-test] live stall frame=40\n"
+                      "[net-match] held client catch-up applied=282 activation=789 work_ticks=240 wire_packets=0\n")
+            (root / "client" / "stdout.log").write_text(client, encoding="utf-8")
+            with self.assertRaises(CheckpointsShort) as raised:
+                forced_hold_evidence(root, "40:1500", ticks=700)
+            self.assertIn("set its reclaim for tick 789, past the run's 700", str(raised.exception))
+            # Inside the run, or with no reclaim set at all, the missing return is the failure it always was.
+            for line in ("activation=650", "activation=0"):
+                (root / "client" / "stdout.log").write_text(client.replace("activation=789", line), encoding="utf-8")
+                with self.assertRaises(AssertionError) as raised:
+                    forced_hold_evidence(root, "40:1500", ticks=700)
+                self.assertNotIsInstance(raised.exception, CheckpointsShort)
 
     def test_a_held_peers_missed_capture_waits_only_when_its_own_line_names_it(self):
         # live-retention-2 on this lane: the client, held and catching up, did not take the capture the host wrote at 480.
