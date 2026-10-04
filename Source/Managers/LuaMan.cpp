@@ -13996,7 +13996,9 @@ namespace {
 	}
 
 	// Joins each state's open variables once all its instances are copied, then lets the window's copy table go.
-	void FinishPreviewCopyBatches() {
+	// @return The instances of each state whose joins met what cannot be copied faithfully.
+	std::vector<long> FinishPreviewCopyBatches() {
+		std::vector<long> refused;
 		for (auto& [state, batch]: s_PreviewCopyBatches) {
 			std::lock_guard<std::recursive_mutex> lock(state->GetMutex());
 			lua_State* L = state->GetLuaState();
@@ -14008,6 +14010,9 @@ namespace {
 				context.copier = batch.copier.get();
 				batch.copier->Rebind(context.seen, &context);
 				batch.copier->Finish();
+				if (!batch.copier->TakeRefusal().empty() || !problems.empty()) {
+					refused.insert(refused.end(), batch.uniqueIDs.begin(), batch.uniqueIDs.end());
+				}
 				if (PreviewCopyAuditEnabled()) {
 					AuditPreviewCopies(state, batch.uniqueIDs, context.seen);
 				}
@@ -14018,6 +14023,7 @@ namespace {
 		}
 		s_PreviewCopyBatches.clear();
 		s_PreviewCopyBatchOpen = false;
+		return refused;
 	}
 
 	void ClearPreviewRemapTables() {
@@ -14498,7 +14504,11 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 				}
 			});
 		}
-		FinishPreviewCopyBatches();
+		for (const long uniqueID: FinishPreviewCopyBatches()) {
+			if (s_PreviewFrozenUIDs.insert(uniqueID).second) {
+				++s_PreviewCodecFallbacks;
+			}
+		}
 	}
 	laps.Lap(1);
 	if (PreviewGlobalFenceEnabled()) {
