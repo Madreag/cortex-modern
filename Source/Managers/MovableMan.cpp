@@ -1813,6 +1813,9 @@ void MovableMan::DumpMOLines(uint64_t tick, const char* kind, MovableObject* mo,
 				for (const MOID ignored: group->GetIgnoreMOIDs()) {
 					feetHash = fnv(feetHash, static_cast<uint32_t>(ignored));
 				}
+				for (const long long residue: group->GetTravelResidue()) {
+					feetHash = fnv(fnv(feetHash, static_cast<uint32_t>(residue)), static_cast<uint32_t>(static_cast<unsigned long long>(residue) >> 32));
+				}
 				feetHash = fnv(feetHash, static_cast<uint32_t>(group->GetAtomCount()));
 			}
 			out << " paths=" << std::hex << pathHash << " feet=" << feetHash << std::dec;
@@ -3067,6 +3070,91 @@ void MovableMan::TravelSpeculativeSpawns() {
 		}
 		UpdateStage(spawn.object, dynamic_cast<Actor*>(spawn.object) != nullptr);
 	}
+	m_Speculation.travelersMoved = m_Speculation.travelerSteps > 0;
+	if (!m_Speculation.travelersMoved) {
+		return;
+	}
+	--m_Speculation.travelerSteps;
+	for (MovableObject* traveler: m_Speculation.travelers) {
+		if (!traveler->IsSetToDelete()) TravelStage(traveler, false);
+	}
+	for (MovableObject* traveler: m_Speculation.travelers) {
+		if (!traveler->IsSetToDelete()) UpdateStage(traveler, false);
+	}
+}
+
+static bool IsNamedSpeculativeSpawn(const MovableObject* mo);
+
+void MovableMan::ShadowParticlesNear(const std::vector<Vector>& points, float halfWidth, float above, float below, size_t maxCount, int travelSteps) {
+	if (!m_Speculation.active || points.empty() || maxCount == 0) {
+		return;
+	}
+	std::vector<std::pair<float, MovableObject*>> nearest;
+	for (MovableObject* particle: m_Particles) {
+		// Only a pixel settles without telling the pathfinder; a sprite particle's bake would reach the world's update list.
+		if (!particle || particle->IsSetToDelete() || particle->ToSettle() || dynamic_cast<MOSprite*>(particle)) {
+			continue;
+		}
+		float closest = -1.0F;
+		for (const Vector& point: points) {
+			const Vector offset = g_SceneMan.ShortestDistance(point, particle->GetPos(), g_SceneMan.SceneWrapsX() || g_SceneMan.SceneWrapsY());
+			if (std::abs(offset.m_X) <= halfWidth && offset.m_Y >= -above && offset.m_Y <= below && (closest < 0.0F || offset.GetSqrMagnitude() < closest)) {
+				closest = offset.GetSqrMagnitude();
+			}
+		}
+		if (closest >= 0.0F) nearest.emplace_back(closest, particle);
+	}
+	std::sort(nearest.begin(), nearest.end(), [](const auto& a, const auto& b) { return a.first != b.first ? a.first < b.first : a.second->GetUniqueID() < b.second->GetUniqueID(); });
+	nearest.resize(std::min(nearest.size(), maxCount));
+	for (const auto& [distance, particle]: nearest) {
+		if (MovableObject* shadow = ShadowOf(particle)) m_Speculation.travelers.push_back(shadow);
+	}
+	m_Speculation.travelerSteps = travelSteps;
+}
+
+void MovableMan::SettleSpeculativeParticles() {
+	if (!m_Speculation.active || !m_SettlingEnabled) {
+		return;
+	}
+	const auto settle = [this](MovableObject* particle) {
+		if (!particle || particle->IsSetToDelete() || dynamic_cast<MOSprite*>(particle)) {
+			return;
+		}
+		particle->RestDetection();
+		if (particle->ToSettle() || particle->IsAtRest()) {
+			SettleIntoTerrain(particle);
+			particle->SetToDelete(true);
+		}
+	};
+	for (Speculation::Spawn& spawn: m_Speculation.spawns) {
+		// A named spawn is a shot the overlay may present; only debris settles here.
+		if (spawn.object && !IsNamedSpeculativeSpawn(spawn.object)) settle(spawn.object);
+	}
+	if (m_Speculation.travelersMoved) {
+		for (MovableObject* traveler: m_Speculation.travelers) {
+			settle(traveler);
+		}
+	}
+}
+
+void MovableMan::SettleIntoTerrain(MovableObject* particle) {
+	Vector parPos(particle->GetPos());
+	Material const* terrMat = g_SceneMan.GetMaterialFromID(g_SceneMan.GetTerrain()->GetMaterialPixel(parPos.GetFloorIntX(), parPos.GetFloorIntY()));
+	int piling = particle->GetMaterial()->GetPiling();
+	if (piling > 0) {
+		for (int s = 0; s < piling && (terrMat->GetIndex() == particle->GetMaterial()->GetIndex() || terrMat->GetIndex() == particle->GetMaterial()->GetSettleMaterial()); ++s) {
+			if ((piling - s) % 2 == 0) {
+				parPos.m_Y -= 1.0F;
+			} else {
+				parPos.m_X += (RandomNum() >= 0.5F ? 1.0F : -1.0F);
+			}
+			terrMat = g_SceneMan.GetMaterialFromID(g_SceneMan.GetTerrain()->GetMaterialPixel(parPos.GetFloorIntX(), parPos.GetFloorIntY()));
+		}
+		particle->SetPos(parPos.GetFloored());
+	}
+	if (particle->GetDrawPriority() >= terrMat->GetPriority()) {
+		particle->DrawToTerrain(g_SceneMan.GetTerrain());
+	}
 }
 
 size_t MovableMan::GetSpeculativeSpawnCount() const {
@@ -3440,6 +3528,9 @@ void MovableMan::EndSpeculation(std::vector<MovableObject*>* takenResidents) {
 	if (takenResidents) {
 		*takenResidents = m_Speculation.taken;
 	}
+	m_Speculation.travelers.clear();
+	m_Speculation.travelerSteps = 0;
+	m_Speculation.travelersMoved = false;
 	m_Speculation.shadows.clear();
 	m_Speculation.residents.clear();
 	m_Speculation.taken.clear();
@@ -7000,23 +7091,7 @@ void MovableMan::Update() {
 			midIt = parIt;
 
 			while (parIt != m_Particles.end()) {
-				Vector parPos((*parIt)->GetPos());
-				Material const* terrMat = g_SceneMan.GetMaterialFromID(g_SceneMan.GetTerrain()->GetMaterialPixel(parPos.GetFloorIntX(), parPos.GetFloorIntY()));
-				int piling = (*parIt)->GetMaterial()->GetPiling();
-				if (piling > 0) {
-					for (int s = 0; s < piling && (terrMat->GetIndex() == (*parIt)->GetMaterial()->GetIndex() || terrMat->GetIndex() == (*parIt)->GetMaterial()->GetSettleMaterial()); ++s) {
-						if ((piling - s) % 2 == 0) {
-							parPos.m_Y -= 1.0F;
-						} else {
-							parPos.m_X += (RandomNum() >= 0.5F ? 1.0F : -1.0F);
-						}
-						terrMat = g_SceneMan.GetMaterialFromID(g_SceneMan.GetTerrain()->GetMaterialPixel(parPos.GetFloorIntX(), parPos.GetFloorIntY()));
-					}
-					(*parIt)->SetPos(parPos.GetFloored());
-				}
-				if ((*parIt)->GetDrawPriority() >= terrMat->GetPriority()) {
-					(*parIt)->DrawToTerrain(g_SceneMan.GetTerrain());
-				}
+				SettleIntoTerrain(*parIt);
 				ForgetActivitySlots(*parIt);
 				(*parIt)->DestroyScriptState();
 				delete (*parIt);
