@@ -5,6 +5,8 @@ staged byte for byte and never edited. Rows:
   fork0920_resave             Load Game of the fork save, then the Save Game menu saves it, and the save it wrote loads and saves again.
   original7_second_generation Load Game of the 7.0 save, Save Game, Load Game of that save, Save Game again.
   original7_unique_ids        After Load Game of the 7.0 save the unique ID counter stands at or above every live object's ID.
+  resave_unique_ids           The same after Load Game of a save that recorded a counter below its own objects' IDs (--resave: one an
+                              earlier build wrote after loading a 7.0 save), and the Save Game menu then saves it.
 --chain LABEL=PATH:TICKS repeats load -> play TICKS -> save --cycles times from PATH, then loads the last save and plays TICKS.
 """
 
@@ -83,6 +85,12 @@ def original7_unique_ids(repo, root, original7):
     return {"pass": loaded["loaded"] and census is not None and census[0] >= census[1], "census": census, "load": loaded}
 
 
+def resave_unique_ids(repo, root, resave):
+    loaded = load_and_save(repo, root, resave, "census", env={"CC_TEST_UID_CENSUS": "1"})
+    census = loaded["census"]
+    return {"pass": saved_cleanly(loaded) and census is not None and census[0] >= census[1], "census": census, "load": loaded}
+
+
 def chain(repo, root, source, ticks, cycles):
     rows, current = [], Path(source)
     for cycle in range(1, cycles + 1):
@@ -105,14 +113,17 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--original-7", type=Path)
     parser.add_argument("--fork-0920", type=Path)
+    parser.add_argument("--resave", type=Path, help="a save written after loading a 7.0 save by a build that kept the counter below its IDs")
     parser.add_argument("--rows", default="fork0920_resave,original7_second_generation,original7_unique_ids")
     parser.add_argument("--chain", action="append", default=[], metavar="LABEL=PATH:TICKS")
     parser.add_argument("--cycles", type=int, default=3)
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=False)
     repo, out = args.repo.resolve(), args.out.resolve()
-    inputs = {"fork0920_resave": args.fork_0920, "original7_second_generation": args.original_7, "original7_unique_ids": args.original_7}
-    rows = {"fork0920_resave": fork0920_resave, "original7_second_generation": original7_second_generation, "original7_unique_ids": original7_unique_ids}
+    inputs = {"fork0920_resave": args.fork_0920, "original7_second_generation": args.original_7, "original7_unique_ids": args.original_7,
+              "resave_unique_ids": args.resave}
+    rows = {"fork0920_resave": fork0920_resave, "original7_second_generation": original7_second_generation, "original7_unique_ids": original7_unique_ids,
+            "resave_unique_ids": resave_unique_ids}
     results = {}
     for name in [row for row in args.rows.split(",") if row]:
         source = inputs[name]
