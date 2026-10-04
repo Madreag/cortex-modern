@@ -1299,6 +1299,7 @@ namespace RTE {
 		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);
 		friend bool TestResumePreparesTheAgreedLobby(std::string* error);
 		friend bool TestWrittenConfigsHoldNoRelayLogin(std::string* error);
+		friend bool TestTheReportListsEveryConnection(std::string* error);
 		friend bool TestRosterTransitionsRecordHoldThenPresent(std::string* error);
 		friend bool TestRosterBannerNamesThePlayerOnce(std::string* error);
 		friend bool TestAiOnlyHostSeatsNoJoiner(std::string* error);

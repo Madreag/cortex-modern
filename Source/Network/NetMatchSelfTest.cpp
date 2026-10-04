@@ -57,6 +57,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -7105,6 +7106,86 @@ namespace RTE {
 		std::cout << "[net-match-selftest] " << (pass ? "PASS" : "FAIL") << " a_written_config_holds_no_relay_login files=" << files << " logins=" << logins
 		          << (first.empty() ? "" : " first=" + first) << " scrubbed='" << scrubbed << "'" << std::endl;
 		if (!pass) *error = logins ? "a written configuration holds a relay login (" + first + ")" : "a kept line was not scrubbed of a relay login";
+		return pass;
+	}
+
+	// The report lists every live connection of the process: a host's names each joiner it carries, a joiner's its host, also once
+	// its link is the wire a migration hands it.
+	bool TestTheReportListsEveryConnection(std::string* error) {
+		if (!GnsTransport::IsCompiledIn()) return true;
+		NetMatchService host, joiner;
+		host.m_IsHost = true;
+		host.m_Transport = std::make_unique<GnsTransport>();
+		host.m_Session = std::make_unique<NetSession>();
+		joiner.m_Transport = std::make_unique<GnsTransport>();
+		joiner.m_Session = std::make_unique<NetSession>();
+		GnsTransport secondLink;
+		NetSession second;
+		NetSessionConfig config;
+		config.port = 49538;
+		config.maxPeers = 2;
+		config.timeoutMs = 5000;
+		config.heartbeatIntervalMs = 25;
+		config.sessionId = MakeConfig().sessionId;
+		config.displayName = "Host";
+		auto& identity = config.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "report-connections-selftest";
+		identity.platform = "test";
+		NetSessionConfig firstConfig = config, secondConfig = config;
+		firstConfig.displayName = "Joiner A";
+		firstConfig.localNonce += 1;
+		secondConfig.displayName = "Joiner B";
+		secondConfig.localNonce += 2;
+		if (!host.m_Session->StartHost(*host.m_Transport, config, error) || !joiner.m_Session->StartClient(*joiner.m_Transport, "127.0.0.1", firstConfig, error) ||
+		    !second.StartClient(secondLink, "127.0.0.1", secondConfig, error)) {
+			return false;
+		}
+		const auto started = std::chrono::steady_clock::now();
+		const auto elapsedMs = [&] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count()); };
+		while (elapsedMs() < 5000 && !(host.m_Session->GetReadyPeerCount() == 2 && joiner.m_Session->IsReady() && second.IsReady())) {
+			host.m_Session->Tick(elapsedMs());
+			joiner.m_Session->Tick(elapsedMs());
+			second.Tick(elapsedMs());
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		if (host.m_Session->GetReadyPeerCount() != 2 || !joiner.m_Session->IsReady() || !second.IsReady()) {
+			*error = "the two joiners did not reach Ready: the host has " + std::to_string(host.m_Session->GetReadyPeerCount());
+			return false;
+		}
+		// The connections a report carries on its session's wire, and the lockstep players they are bound to.
+		const auto onWire = [](const NetMatchService& service, std::set<int>& players, size_t& listed) {
+			const nlohmann::json report = nlohmann::json::parse(service.BuildReportJson());
+			const nlohmann::json connections = report.value("connections", nlohmann::json::array());
+			listed = connections.size();
+			size_t wire = 0;
+			for (const nlohmann::json& entry: connections) {
+				if (!entry.value("session_wire", false)) continue;
+				++wire;
+				const bool bound = entry.value("bound", false) && entry.value("found", false) && entry.value("state", 0) == 3 && entry.value("route", "") == "direct" &&
+				                   !entry.value("remote_address", "").empty() && entry.value("offer", "") == "none";
+				if (bound) players.insert(entry.value("lockstep_peer_id", 0));
+			}
+			return wire;
+		};
+		std::set<int> hostPlayers, joinerPlayers, migratedPlayers;
+		size_t listed = 0, joinerListed = 0, migratedListed = 0;
+		const size_t hostWire = onWire(host, hostPlayers, listed);
+		const size_t joinerWire = onWire(joiner, joinerPlayers, joinerListed);
+		joiner.m_MigratedTransport = std::move(joiner.m_Transport);
+		const size_t migratedWire = onWire(joiner, migratedPlayers, migratedListed);
+		const bool pass = hostWire == 2 && hostPlayers == std::set<int>{2, 3} && joinerWire == 1 && joinerPlayers == std::set<int>{1} && migratedWire == 1 &&
+		                  migratedPlayers == std::set<int>{1} && listed >= 4;
+		std::cout << "[net-match-selftest] " << (pass ? "PASS" : "FAIL") << " report_lists_every_connection host_connections=" << hostWire << " host_bound=" << hostPlayers.size()
+		          << " joiner_connections=" << joinerWire << " joiner_bound=" << joinerPlayers.size() << " migrated_connections=" << migratedWire
+		          << " migrated_bound=" << migratedPlayers.size() << " process_connections=" << listed << std::endl;
+		if (!pass) {
+			*error = "the host's report lists " + std::to_string(hostWire) + " of its 2 joiners' connections (" + std::to_string(hostPlayers.size()) + " bound to a player), a joiner's " +
+			         std::to_string(joinerWire) + " (" + std::to_string(migratedWire) + " on a migrated wire) of its 1, the process " + std::to_string(listed);
+		}
 		return pass;
 	}
 
@@ -16058,6 +16139,7 @@ namespace RTE {
 		row(&TestAManualSaveKeepsTheIntervalAndWaitsForASafeTick, "a_manual_save_keeps_the_interval_and_waits_for_a_safe_tick");
 		row(&TestTickHashTraceIsBoundedAndLossless, "tick_hash_trace_is_bounded_and_lossless");
 		row(&TestWrittenConfigsHoldNoRelayLogin, "a_written_config_holds_no_relay_login");
+		row(&TestTheReportListsEveryConnection, "report_lists_every_connection");
 		if (!rowsPassed) return fail("a reporting row failed");
 		std::string menuError, routeError;
 		const bool menuInputs = TestLocalMenuKeepsInputs(&menuError);
