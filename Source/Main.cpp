@@ -10975,8 +10975,8 @@ int main(int argc, char** argv) {
 		HarnessCost::SetEnabled(HarnessCost::TickEnd, !s_netLiveTickHashPath.empty());
 		HarnessCost::SetEnabled(HarnessCost::FullState, s_netFullStateEvery != 0);
 		HarnessCost::SetEnabled(HarnessCost::Census, s_memoryCensusTicks != 0);
-		// Every preview records its steps for the harness, so the record's cost runs wherever previews do.
-		HarnessCost::SetEnabled(HarnessCost::PreviewFidelity, armed("CCCP_TEST_PREVIEW_FIDELITY") || LocalPrediction::IsEnabled());
+		// A preview's steps are recorded only for the feel recorder or the fidelity probe; the player's own prediction setting arms neither.
+		HarnessCost::SetEnabled(HarnessCost::PreviewFidelity, armed("CCCP_TEST_PREVIEW_FIDELITY") || FrameMan::FeelRecordingEnabled());
 		HarnessCost::SetEnabled(HarnessCost::ScreenWatches, armed("CCCP_TEST_SCREEN_WATCHES") || !s_menuScriptPath.empty() || (netUiProbeScript != nullptr && *netUiProbeScript != '\0'));
 		HarnessCost::SetEnabled(HarnessCost::Recorder, !s_recordVideoDirectory.empty());
 	}

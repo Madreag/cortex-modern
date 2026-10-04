@@ -254,6 +254,7 @@ namespace RTE::CheckpointLua {
 				CopyPages(*data);
 				std::lock_guard lock(m_CopyMutex);
 				m_LandedCopy = {++m_LandedGeneration, data->copied.load(std::memory_order_relaxed), data->copyUs.load(std::memory_order_relaxed), m_FreshBytes, MicrosecondsSince(started)};
+				LandedCopies().fetch_add(1, std::memory_order_release);
 			};
 			if (submit) {
 				// The snapshot waits on a promise of its own: a task's future can keep the task, and with it this
@@ -306,6 +307,8 @@ namespace RTE::CheckpointLua {
 		/// The calling thread's own share of it: the simulation's stall, apart from capture workers that called into a frozen state.
 		static int64_t ThisThreadGateWaitMicroseconds() { return ThreadGateWaitUs(); }
 
+		/// How many copies have landed on any heap: a reader with nothing new to take reads this alone.
+		static uint64_t LandedCopyCount() { return LandedCopies().load(std::memory_order_acquire); }
 		/// The receipt of the copy that landed last, once; call it after the gate.
 		CopyReceipt TakeCopyReceipt() {
 			std::lock_guard lock(m_CopyMutex);
@@ -362,6 +365,10 @@ namespace RTE::CheckpointLua {
 		static std::atomic<int64_t>& GateWaitUs() {
 			static std::atomic<int64_t> waited{0};
 			return waited;
+		}
+		static std::atomic<uint64_t>& LandedCopies() {
+			static std::atomic<uint64_t> landed{0};
+			return landed;
 		}
 		static int64_t& ThreadGateWaitUs() {
 			thread_local int64_t waited = 0;
