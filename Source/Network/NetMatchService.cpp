@@ -3798,7 +3798,7 @@ static std::string ResyncSaveName() {
 
 	NetJoinHistoryPolicy NetMatchService::JoinHistoryPolicyFromSettings(double tickMs) {
 		const double tick = std::isfinite(tickMs) && tickMs > 0 ? tickMs : 1000.0 / 60.0;
-		const auto frames = [&](int seconds) { return static_cast<uint64_t>(std::ceil(seconds * 1000.0 / tick)); };
+		const auto frames = [&](int seconds) { return static_cast<uint64_t>(std::llround(seconds * 1000.0 / tick)); };
 		NetJoinHistoryPolicy policy;
 		policy.retainFrames = frames(g_SettingsMan.GetNetworkHostJoinHistorySeconds());
 		policy.lagLimitFrames = frames(g_SettingsMan.GetNetworkHostJoinLagSeconds());
