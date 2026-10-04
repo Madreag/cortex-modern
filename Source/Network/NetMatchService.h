@@ -506,6 +506,8 @@ namespace RTE {
 		void ForgetOpenCaptureOnHeal();
 		/// Applies a finished capture's verdict to the world bookkeeping it stood for.
 		void ApplyAutosaveVerdict(uint64_t tick, bool joinCapture, bool archived);
+		/// A world bootstrap asks for a capture of its own unless one it can start from is already on its way.
+		void NoteWorldJoinWantsCapture();
 		/// Settles the awaited capture a writer verdict names; a verdict nobody awaits changes nothing.
 		void ResolveAwaitedAutosave(uint64_t tick, bool archived);
 		/// Takes every verdict the writer thread has finished since the last tick boundary; returns the captures they finished.
@@ -1365,6 +1367,7 @@ namespace RTE {
 		friend bool TestCompletedLobbyExpires(std::string* error);
 		friend bool TestCapturedWorldIdentityKeepsTheWorldStamp(std::string* error);
 		friend bool TestServiceWorldJoinAdoptsConfig(std::string* error);
+		friend bool TestALateCaptureVerdictLeavesTheNextJoinItsCapture(std::string* error);
 		friend bool TestChatSendRefusedOutsideCarry(std::string* error);
 		friend bool TestServiceReportCarriesActivityPreset(std::string* error);
 		friend bool RowRestartKey(NetMatchService& service, const std::filesystem::path& scratch, std::array<uint8_t, 32>& key, std::string* error);

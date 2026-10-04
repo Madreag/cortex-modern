@@ -3530,6 +3530,12 @@ static std::string ResyncSaveName() {
 		m_RestartAdmissionDue.store(true);
 	}
 
+	void NetMatchService::NoteWorldJoinWantsCapture() {
+		// The writer's verdict can land after its image was published: an image at or past the asked tick has answered that capture.
+		if (m_WorldCaptureRequestedTick != 0 && m_WorldJoin.Image().tick >= m_WorldCaptureRequestedTick) m_WorldCaptureRequestedTick = 0;
+		if (m_WorldCaptureRequestedTick == 0) m_WorldCapturePending = true;
+	}
+
 	void NetMatchService::ResolveAwaitedAutosave(uint64_t tick, bool archived) {
 		const auto awaited = std::find_if(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(),
 		                                  [&](const AwaitedAutosave& entry) { return entry.tick == tick; });
@@ -5246,7 +5252,7 @@ static std::string ResyncSaveName() {
 				continue;
 			}
 			// The session pump may run inside a tick; capture after the world finishes it.
-			if (m_WorldCaptureRequestedTick == 0) m_WorldCapturePending = true;
+			NoteWorldJoinWantsCapture();
 			if (const NetWorldJoinSession* session = m_WorldJoin.FindSession(peer.transportPeerId)) {
 				if (m_Runner) {
 					const uint8_t lobbyPeer = WorldJoinLobbyPeer(*session);

@@ -6727,6 +6727,33 @@ namespace RTE {
 		}
 	}
 
+	bool TestALateCaptureVerdictLeavesTheNextJoinItsCapture(std::string* error) {
+		NetMatchService service;
+		NetWorldCheckpointImage image;
+		image.worldId = "01234567-89ab-cdef-0123-456789abcdef";
+		image.boot = 1;
+		image.tick = 1710;
+		image.bytes = 1;
+		// The writer finished the join's capture and the service published its image before the simulation took the verdict.
+		service.m_WorldJoin.PublishImage(image);
+		service.ApplyAutosaveVerdict(1710, true, true);
+		service.m_WorldCapturePending = false;
+		service.NoteWorldJoinWantsCapture();
+		if (!service.m_WorldCapturePending) {
+			*error = "a join after its capture's image was published asked for none of its own and was served the tick 1710 image";
+			return false;
+		}
+		// A capture still on its way answers a join that comes before its image lands.
+		service.m_WorldCapturePending = false;
+		service.ApplyAutosaveVerdict(1800, true, true);
+		service.NoteWorldJoinWantsCapture();
+		if (service.m_WorldCapturePending) {
+			*error = "a join asked for a second capture while the one at tick 1800 had not landed";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestServiceWorldJoinAdoptsConfig(std::string* error) {
 		for (const bool wrongStartHash : {false, true}) {
 			NetMatchService service;
@@ -16461,6 +16488,7 @@ namespace RTE {
 		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
 		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
 		if (!TestTwoThreadsSendOnOneTransport(&error)) return fail(error);
+		if (!TestALateCaptureVerdictLeavesTheNextJoinItsCapture(&error)) return fail(error);
 		if (!TestServiceWorldJoinAdoptsConfig(&error)) return fail(error);
 		if (!TestRemovedWoundReleasesItsRadiusCache(&error)) return fail(error);
 		if (!TestLobbyStartReturnsBeforeHashingModules(&error)) return fail(error);
