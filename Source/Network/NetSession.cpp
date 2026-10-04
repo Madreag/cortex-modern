@@ -1035,8 +1035,10 @@ namespace RTE {
 			}
 		}
 		if (m_ReconnectClient && m_RemoteTransportPeerId != c_InvalidNetPeerId) {
+			// The plane speaks only on a link the host accepted: a refused join's resends from an earlier link never reach a new one ahead of its proof.
+			const bool accepted = m_State == NetSessionState::Accepted || m_State == NetSessionState::Ready;
 			for (NetH4Outbound& outbound : m_ReconnectClient->TakeOutbound()) {
-				Send(m_RemoteTransportPeerId, std::move(outbound.payload));
+				if (accepted) Send(m_RemoteTransportPeerId, std::move(outbound.payload));
 			}
 			CompleteClientAdmission();
 		}

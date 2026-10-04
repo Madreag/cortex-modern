@@ -448,6 +448,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_ResumeStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelResumeStatus"));
 	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerReconnect"));
 	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerCancelReconnect"));
+	m_MainMenuButtons[MenuButton::MultiplayerWaitSlotButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerWaitSlot"));
 	m_MainMenuButtons[MenuButton::MultiplayerHostBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostBack"));
 	m_MainMenuButtons[MenuButton::MultiplayerJoinBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonJoinBack"));
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerModerate"));
@@ -1206,11 +1207,17 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		m_MultiplayerSubScreen = cancelsTransfer ? MultiplayerSubScreen::JoinSetup : MultiplayerSubScreen::Landing;
 		g_GUISound.BackButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReconnectButton] &&
-	           m_MultiplayerApplyOffered && g_NetMatchService.WasJoinRefusedByALiveMatch() &&
+	           m_MultiplayerApplyOffered && g_NetMatchService.JoinRefusalOffer() != NetJoinRefusalOffer::None &&
 	           g_NetMatchService.GetReconnectUx().GetOffer() != NetReconnectOffer::Available &&
 	           !g_NetMatchService.GetReconnectUx().IsActive()) {
-		// §9b: ask the host for a seat whose holder is gone. The host picks which one.
-		ApplyToSubstitute();
+		// §9b: ask the host for a seat - the player's own held one when the host named it, else one whose holder is gone; the host decides.
+		uint16_t ownSeat = 0;
+		if (g_NetMatchService.JoinRefusalOffer(&ownSeat) == NetJoinRefusalOffer::OwnSeat) ApplyForOwnSeat(ownSeat);
+		else ApplyToSubstitute();
+		g_GUISound.ButtonPressSound()->Play();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerWaitSlotButton] && m_MultiplayerApplyOffered &&
+	           g_NetMatchService.JoinRefusalOffer() == NetJoinRefusalOffer::SlotsHeld) {
+		WaitForSlot();
 		g_GUISound.ButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]) {
 		// §11's manual retry, and the same button that takes up the stored ticket after a relaunch.
@@ -3230,6 +3237,30 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	g_GUISound.ButtonPressSound()->Play();
 }
 
+void MainMenuGUI::ApplyForOwnSeat(uint16_t stableSeat) {
+	std::string error;
+	m_MultiplayerApplyOffered = false;
+	if (g_NetMatchService.BeginSeatApplication(m_MultiplayerJoinRequest, stableSeat, &error)) {
+		m_MultiplayerLandingStatusLabel->SetText("Asking the host for your slot...");
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
+	} else {
+		m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(error));
+	}
+	m_ReconnectStatusShown = m_MultiplayerLandingStatusLabel->GetText();
+}
+
+void MainMenuGUI::WaitForSlot() {
+	std::string error;
+	// The wait is the join's own bounded wait, knocking for a slot; the same refusal offers Apply again when it runs out.
+	if (g_NetMatchService.BeginSlotWait(m_MultiplayerJoinRequest, &error)) {
+		m_MultiplayerLandingStatusLabel->SetText("Waiting for a slot to open...");
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
+	} else {
+		m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(error));
+	}
+	m_ReconnectStatusShown = m_MultiplayerLandingStatusLabel->GetText();
+}
+
 void MainMenuGUI::ApplyToSubstitute() {
 	std::string error;
 	m_MultiplayerApplyOffered = false;
@@ -3341,7 +3372,12 @@ void MainMenuGUI::RefreshReconnectControls() {
 	const bool recovering = reconnect.IsActive();
 	// §9b: the one refusal a joiner can answer. The same two buttons carry it, so the landing panel
 	// keeps one pair of controls whatever it is offering.
-	const bool applying = !recovering && !offering && m_MultiplayerApplyOffered && g_NetMatchService.WasJoinRefusedByALiveMatch();
+	const NetJoinRefusalOffer refusal = m_MultiplayerApplyOffered ? g_NetMatchService.JoinRefusalOffer() : NetJoinRefusalOffer::None;
+	const bool applying = !recovering && !offering && refusal != NetJoinRefusalOffer::None;
+	// A world whose slots are all held offers a wait beside the application; it stands where Resume does while it is offered.
+	const bool waitOffered = landing && applying && refusal == NetJoinRefusalOffer::SlotsHeld;
+	m_MainMenuButtons[MenuButton::MultiplayerWaitSlotButton]->SetVisible(waitOffered);
+	m_MainMenuButtons[MenuButton::MultiplayerResumeGameButton]->SetVisible(!waitOffered);
 	// 7e: the match died with its host and no successor took it. The prompt stays up and waits for that
 	// host to come back: enabled once its row is listed again, or at once when there is no directory to
 	// watch and the only route left is the address the player types.
@@ -3349,7 +3385,7 @@ void MainMenuGUI::RefreshReconnectControls() {
 	const bool hostBack = reconnect.HasHostReturned() || !reconnect.CanWatchHostReturn();
 	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || applying || awaiting || reconnect.CanRetryManually()));
 	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering ? (!awaiting || hostBack) : (applying || reconnect.CanRetryManually()));
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(offering ? "Rejoin Match" : (applying ? "Apply to Substitute" : "Retry"));
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(offering ? "Rejoin Match" : (applying ? NetJoinRefusalApplyCaption(refusal) : "Retry"));
 	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetVisible(landing && (offering || applying || awaiting || recovering));
 	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetEnabled(offering || applying || awaiting || reconnect.CanCancel());
 	if (!landing) {
@@ -3372,7 +3408,7 @@ void MainMenuGUI::RefreshReconnectControls() {
 		return;
 	}
 	if (applying) {
-		const std::string offer = "The match is already in progress. Apply to substitute for a dropped player?";
+		const std::string offer = NetJoinRefusalOfferLine(refusal);
 		if (offer != m_ReconnectStatusShown) {
 			m_MultiplayerLandingStatusLabel->SetText(offer);
 			m_ReconnectStatusShown = offer;
@@ -3734,7 +3770,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		}
 	} else {
 		s_ShareResolved = false;
-		m_MultiplayerStatusLabel->SetText(!snapshot.transferLine.empty() ? snapshot.transferLine : PlayerFacingStatus(snapshot.statusText));
+		// A join in progress names what it waits on: the world's image, or one of its held slots and the seconds left.
+		m_MultiplayerStatusLabel->SetText(!snapshot.transferLine.empty() ? snapshot.transferLine :
+		                                  !snapshot.waitLine.empty()    ? snapshot.waitLine :
+		                                                                  PlayerFacingStatus(snapshot.statusText));
 	}
 	if (!addressOnOwnRow) {
 		m_MultiplayerStatusLabel->SetHorizontalOverflowScroll(false);
@@ -3914,8 +3953,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	// Start only once the remote peer is actually ready, not merely present.
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && snapshot.remoteReady);
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetEnabled(true);
-	// While the world's image comes the exit cancels the join, and says so.
-	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetText(snapshot.transferLine.empty() ? "Leave" : "Cancel");
+	// While the world's image comes, or a held slot is waited for, the exit cancels the join, and says so.
+	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetText(snapshot.transferLine.empty() && snapshot.waitLine.empty() ? "Leave" : "Cancel");
 	// §9b: moderation is a match feature - a lobby seat whose holder leaves goes straight back in the pool.
 	seats->SetPositionRel(pairLeft + leave->GetWidth() + pairGap, 236 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetVisible(snapshot.isHost);

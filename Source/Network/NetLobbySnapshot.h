@@ -21,6 +21,12 @@ namespace RTE {
 		return line + " - " + NetMegabytesText(rate) + " MB/s - " + std::to_string((total - received + rate - 1) / rate) + " s left";
 	}
 
+	/// What a joiner waiting for a world's held slot to open reads while it knocks: the seconds its bounded wait has left.
+	inline std::string NetSlotWaitLine(uint64_t leftMs) {
+		// One lobby status row: the offer that led here already said why.
+		return "Waiting for a slot to open - " + std::to_string((leftMs + 999) / 1000) + " s";
+	}
+
 	/// What a joiner reads while it replays the world up to the round: the frame it has reached of the one it needs, how fast it
 	/// replays and how long is left. roundFramesPerSecond is how fast that target moves on, 0 when it is a fixed frame.
 	inline std::string NetCatchUpLine(uint64_t applied, uint64_t target, double framesPerSecond, double roundFramesPerSecond) {
@@ -95,6 +101,7 @@ namespace RTE {
 		uint32_t transferReceivedBytes = 0; //!< The world image this joiner is receiving: what has come so far.
 		uint32_t transferTotalBytes = 0;    //!< Its whole size; 0 when no image is coming.
 		std::string transferLine;           //!< The line the joiner reads while it comes; "" when none is.
+		std::string waitLine;               //!< The line a joiner waiting for a world's held slot reads, with its countdown; "" when none is.
 		bool joiningWorld = false;          //!< This peer comes into a running world by its image: nobody there readies up.
 		uint64_t resumeTick = 0;
 		std::string resumeDigest; //!< The checkpoint's world-structure digest, the identity a peer compares.

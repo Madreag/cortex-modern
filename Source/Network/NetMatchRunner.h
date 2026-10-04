@@ -98,6 +98,7 @@ namespace RTE {
 		std::string scenario;
 		bool autoReady = true;
 		bool autoStart = true;
+		bool waitForSlot = false; //!< A joiner a world refused because its slots are held knocks again for one to open, within the join's wait.
 		const std::atomic<bool>* readyRequested = nullptr;
 		std::atomic<bool>* startRequested = nullptr;
 		// Host: the round's start scripts, streamed ahead of the lobby start the first time a start is asked for.
@@ -288,6 +289,7 @@ namespace RTE {
 		bool m_UseLobbyProtocol = false;
 		bool m_ResyncRound = false;
 		bool m_HostLostDuringSetup = false;
+		uint64_t m_SlotWaitLeftMs = 0; //!< A joiner waiting for a world's held slot: what its bounded wait has left.
 		bool m_HostOptionsRefused = false;
 		bool m_RematchOwed = false; //!< Client: its last round ended into a rematch lobby; consumed by the next round.
 		std::string m_LastRosterStampRefusal; //!< Host: a refused roster republish, named once.

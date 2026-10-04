@@ -885,12 +885,15 @@ namespace RTE {
 		/// Whether a finished match still wants the menu loop's pump for its rematch lobby and kept
 		/// directory lease. Not a recovery: the screens route a drop, not an ordinary match end.
 		bool NeedsCompletedLobbyPump() const;
-		/// Whether the host refused the last join because its match is already running, which is the
-		/// only case §9b's applicant path exists for.
-		bool WasJoinRefusedByALiveMatch() const;
 		/// Asks the host for a seat instead of joining one: the same connection the join used, with
 		/// §9b's application in place of the new-join request. The host picks the seat.
 		bool BeginSubstituteApplication(const NetMatchServiceRequest& request, std::string* error = nullptr);
+		/// What the landing can offer for the last refused join, and the held seat the refusal named for this player.
+		NetJoinRefusalOffer JoinRefusalOffer(uint16_t* ownSeat = nullptr) const;
+		/// Asks the host for this player's own held seat; the host decides.
+		bool BeginSeatApplication(const NetMatchServiceRequest& request, uint16_t stableSeat, std::string* error = nullptr);
+		/// Joins a world whose slots are all held and waits, knocking, for one to open within the join's own bounded wait.
+		bool BeginSlotWait(const NetMatchServiceRequest& request, std::string* error = nullptr);
 
 		NetMatchServiceState GetState() const;
 		NetHostHandoverState GetHostHandoverState() const;
@@ -1630,7 +1633,10 @@ namespace RTE {
 		static bool s_ApplyForSeat;
 		static uint16_t s_ApplySeat;
 		static bool s_ApplyOnce; //!< The menu's one-shot application; consumed by the next join's plane.
-		bool m_JoinRefusedByLiveMatch = false; //!< The last join was refused by a running match (§9b).
+		static uint16_t s_ApplyOnceSeat; //!< The seat that application asks for; any substitutable seat unless it is the player's own.
+		static bool s_WaitForSlotOnce; //!< The menu's one-shot wait for a world's held slot; consumed by the next join's runner.
+		std::string m_JoinRefusalKey; //!< The host's key for the last refused join, which names what the landing offers.
+		std::optional<uint16_t> m_JoinRefusalSeat; //!< The held seat that refusal named as this player's own; seat 0 is a seat too.
 		bool m_SubstituteRejoinStarted = false; //!< This process's accepted application has started its join into the running match.
 		static bool s_AutoSubstitute;
 		static uint16_t s_AutoSubstituteSeat;

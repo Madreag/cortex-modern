@@ -259,6 +259,8 @@ namespace RTE {
 		uint32_t GetReadyPeerCount() const;
 		NetRejectReason GetRejectReason() const { return m_RejectReason; }
 		const std::string& GetMismatchKey() const { return m_MismatchKey; }
+		/// The value the refusal says it expected; a seat held for the joiner names that seat here.
+		const std::string& GetMismatchExpected() const { return m_ExpectedValue; }
 		bool HasReject() const { return m_HasReject; }
 		const std::string& GetRejectSummary() const { return m_RejectSummary; }
 		/// Host: the display name the last refused connection joined with, so the host's notice can say who.
