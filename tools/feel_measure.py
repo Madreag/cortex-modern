@@ -29,7 +29,8 @@ install_memory_guard()
 MST = timezone(timedelta(hours=-7))
 HELPERS = REPO / 'tools/feel'
 SP_CONTROL = Path('D:/mx/opus-f24-20260913/sp-control')
-SP_COMPARATOR = Path('D:/Projects/reviews/takeover-20260909/grok-workers/opus-f24-first-update-20260913/scripts/compare_sp.py')
+# The single-player comparison, kept beside the driver so every box that runs the matrix has it.
+SP_COMPARATOR = HELPERS / 'compare_sp.py'
 BYTE_LIMIT = 5_000_000_000
 MATRIX_BYTE_LIMIT = 10_000_000_000
 # Every N committed ticks each match peer hashes its whole capture (-net-fullstate-hash-every); 0 is off. Set by --fullstate-every.
