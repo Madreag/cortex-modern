@@ -514,9 +514,11 @@ def clean_file(path: Path, data: bytes, spans: list[tuple[int, int, str]], in_ar
         path.unlink()
         return dict(path=str(path), action='file replaced by its receipt', receipt=str(receipt), clean_after=not path.exists())
     blanked = bytearray(data)
-    for start, end, representation in spans:
-        blanked[start:end] = blank(representation, end - start)
-    path.write_bytes(bytes(blanked))
+    with path.open('r+b') as stream:  # each span written where it lies: a file another process still appends to keeps its tail
+        for start, end, representation in spans:
+            blanked[start:end] = blank(representation, end - start)
+            stream.seek(start)
+            stream.write(blanked[start:end])
     try:
         remaining, _, still_archive = file_hits(bytes(blanked), finder, fixtures)
     except ArchiveError:
