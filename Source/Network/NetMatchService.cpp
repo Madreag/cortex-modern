@@ -1841,6 +1841,8 @@ static std::string ResyncSaveName() {
 			if (!ScenarioRunner::InstallWorldCatchUp(m_WorldCatchUp.snapshotTick, m_WorldCatchUp.tail, error, m_WorldCatchUp.privateMatch)) {
 				return false;
 			}
+			// A replay run under another peer's id is a watcher's: nothing of this machine's own is held in it.
+			ScenarioRunner::SetWorldCatchUpWatcher(m_CatchUpCoordinator && m_CatchUpCoordinator->GetConfig().localPeerId != m_LocalPeerId);
 			NoteTailReplayBeganLocked();
 			// Loading the snapshot and installing the catch-up own this thread for seconds while nothing reads the
 			// session: the admission and silence windows are measured from the end of that work, not across it.

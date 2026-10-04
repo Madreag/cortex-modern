@@ -252,7 +252,7 @@ namespace {
 	bool ToastStillApplies(const ScenarioRunner::NetUiToastRecord& toast) {
 		if (toast.kind == "slow_machine") return ScenarioRunner::IsLockstepLocalMachineSlow();
 		if (toast.kind != "seat_held") return true;
-		if (toast.text.find("rejoining") != std::string::npos) {
+		if (toast.text.ends_with("joining")) {
 			return ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing() || ScenarioRunner::IsLockstepOwnSeatHeld() || OwnRosterSeatHeld();
 		}
 		const uint8_t peer = toast.senderPeerId ? toast.senderPeerId : ScenarioRunner::GetLockstepLocalPeerId();

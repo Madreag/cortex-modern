@@ -97,6 +97,7 @@ namespace RTE {
 		uint64_t s_WorldCatchUpFence = 0; //!< The first tail frame the replay may not apply yet; 0 when none is fenced.
 		std::optional<NetLockstepFrame> s_WorldCatchUpLastApplied; //!< The tail frame the replay applied last, as the round committed it.
 		uint64_t s_WorldCatchUpRound = 0; //!< The round of the tail frame the replay applied last.
+		bool s_WorldCatchUpWatcher = false; //!< The replay is a watcher's, with no seat of this machine's in it.
 		std::map<uint8_t, uint32_t> s_WorldHolderGeneration;
 		uint64_t s_WorldMembershipRevision = 0;
 
@@ -1004,7 +1005,12 @@ namespace RTE {
 		}
 		// This machine's own seat reads held from the hold until its control returns: the catch-up ends before the reclaim lands.
 		const uint8_t localPeer = GetLockstepLocalPeerId();
-		if (WorldCatchUpActive() || IsLockstepOwnSeatHeld()) visible.push_back({s_WorldCatchUpAppliedThrough, "seat_held", "Held - AI in control - rejoining", localPeer});
+		// A watcher has no seat to be held in until its host promotes it into one, and replays under another peer's id until it lands there.
+		if (WorldCatchUpActive() && s_WorldCatchUpWatcher) {
+			if (s_WorldCatchUpActivationTick != 0) visible.push_back({s_WorldCatchUpAppliedThrough, "seat_held", "Held - AI in control - joining", 0});
+		} else if (WorldCatchUpActive() || IsLockstepOwnSeatHeld()) {
+			visible.push_back({s_WorldCatchUpAppliedThrough, "seat_held", "Held - AI in control - rejoining", localPeer});
+		}
 		if (WorldCatchUpActive()) {
 			// The replay's own rate, over the last second or so; the frame it needs is the announced activation once there is one,
 			// else the round's newest frame here, which moves on at the round's rate.
@@ -1400,6 +1406,7 @@ namespace RTE {
 		s_CatchUpLastMeasured = snapshotTick;
 		s_WorldCatchUpActivationTick = 0;
 		s_WorldCatchUpRound = 0;
+		s_WorldCatchUpWatcher = false;
 		s_WorldCatchUpActive = true;
 		s_WorldCatchUpHeld = false;
 		s_WorldCatchUpFence = 0;
@@ -1440,6 +1447,7 @@ namespace RTE {
 	void ScenarioRunner::ReleaseWorldCatchUp() {
 		s_WorldCatchUpActive = false;
 		s_WorldCatchUpHeld = false;
+		s_WorldCatchUpWatcher = false;
 		s_WorldCatchUpTail.clear();
 		s_WorldCatchUpFence = 0;
 		s_WorldCatchUpLastApplied.reset();
@@ -1454,6 +1462,10 @@ namespace RTE {
 		for (const NetLockstepFrame& frame: s_WorldCatchUpTail)
 			if (frame.targetFrame == simTick) return frame.roundId;
 		return s_WorldCatchUpRound;
+	}
+
+	void ScenarioRunner::SetWorldCatchUpWatcher(bool watcher) {
+		s_WorldCatchUpWatcher = watcher;
 	}
 
 	uint64_t ScenarioRunner::WorldCatchUpAppliedThrough() {
