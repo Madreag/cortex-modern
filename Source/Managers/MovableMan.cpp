@@ -1185,13 +1185,20 @@ uint64_t RTE::GetLockstepPausedFrames() { return s_LockstepPausedFrames; }
 void RTE::RestoreLockstepPausedFrames(uint64_t frames) { s_LockstepPausedFrames = frames; }
 
 void RTE::ApplyLockstepSeatReclaims(const NetLockstepReadyFrame& ready, const std::deque<Actor*>& actors) {
+	const Activity* current = g_ActivityMan.GetActivity();
 	for (uint8_t peer: ready.reclaimedPeerIds) {
 		size_t reclaimed = 0;
+		const bool local = peer == ScenarioRunner::GetLockstepLocalPeerId();
 		for (Actor* actor: actors) {
 			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
 			if (ScenarioRunner::GetLockstepReclaimSeat(uid, actor->GetTeam(), !actor->IsPlayerControlled(), ready.frame) != peer) continue;
 			ScenarioRunner::ReclaimLockstepActor(uid, peer);
-			actor->GetController()->ResetLocalInputState(actor->GetController()->GetInputMode());
+			// An actor this machine's player already took back keeps its seat; the rest start from their committed mode.
+			int seat = Players::NoPlayer;
+			for (int player = Players::PlayerOne; local && current && player < Players::MaxPlayerCount; ++player)
+				if (current->IsLocalHumanSeat(player) && current->GetLocallyControlledActor(player) == actor) seat = player;
+			if (seat != Players::NoPlayer) actor->GetController()->ResetLocalInputState(Controller::CIM_PLAYER, seat);
+			else actor->GetController()->ResetLocalInputState(actor->GetController()->GetInputMode());
 			actor->TouchCheckpoint(); ++reclaimed;
 		}
 		if (auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) activity->ApplyNetworkSeatAI(peer, false, ready.frame);

@@ -16548,10 +16548,24 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (survivorFrames != 1) {
 				return finish("the private replay dropped a frame of a seat that is not reclaiming");
 			}
+			// The returning player takes its actor back while the committed frames still run it on the AI.
+			Controller& seated = *heldActor->GetController();
+			seated.SetWireApplyTick(40);
+			seated.ApplyWireMode(Controller::CIM_AI, Players::NoPlayer);
+			const bool switched = g_ActivityMan.GetActivity()->SwitchToActor(heldActor, Players::PlayerOne, Activity::TeamTwo);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!switched || seated.GetSeatMode() != Controller::CIM_PLAYER || seated.GetSeatPlayerRaw() != Players::PlayerOne) {
+				return finish("the returning player could not take its actor before the reclaim");
+			}
 			// The reclaim hands that actor back on this peer too, or the rejoining peer reclaims nothing.
 			ApplyLockstepSeatReclaims(ready, {heldActor, survivorActor, rejoinerActor});
 			if (ScenarioRunner::GetLockstepControlOverrideOwner(rejoinerUID) != 2) {
 				return finish("the reclaim left the seat's own actor under the host on the rejoining peer");
+			}
+			std::cout << "[net-lockstep-selftest] reclaim_local_seat mode=" << static_cast<int>(seated.GetSeatMode()) << " player=" << seated.GetSeatPlayerRaw()
+			          << " controlled=" << (g_ActivityMan.GetActivity()->GetLocallyControlledActor(Players::PlayerOne) == heldActor) << std::endl;
+			if (seated.GetSeatMode() != Controller::CIM_PLAYER || seated.GetSeatPlayerRaw() != Players::PlayerOne) {
+				return finish("the reclaim put the actor the returning player had taken back on its AI, so the player's input never reaches it");
 			}
 			return finish(nullptr);
 		}
