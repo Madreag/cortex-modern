@@ -1194,6 +1194,16 @@ def world_held_seat_late_join(repo: Path, out: Path, port: int = HELD_SEAT_PORT)
     return verdict
 
 
+def max_future_frame_skew():
+    """NetLockstepCodec::c_MaxFutureFrameSkew from the header under test: how far a held seat's floor reaches back before its hold."""
+    header = (Path(__file__).resolve().parents[1] / "Source/Network/NetLockstep.h").read_text(encoding="utf-8")
+    factor = re.search(r"c_MaxFutureFrameSkew = (\d+)ULL \* c_MaxInputDelayFrames;", header)
+    delay = re.search(r"c_MaxInputDelayFrames = (\d+);", header)
+    if not factor or not delay:
+        raise RuntimeError("NetLockstep.h no longer names c_MaxFutureFrameSkew as a multiple of c_MaxInputDelayFrames")
+    return int(factor[1]) * int(delay[1])
+
+
 def world_journal_fault(repo: Path, out: Path, port: int = SEGMENT_PORT, fault_at: int = 1200, ticks: int = 3600) -> dict:
     """A live two-peer world whose host's journal fails mid-round: it is named, reopened, and the member never waits.
 
@@ -1254,7 +1264,8 @@ def world_journal_fault(repo: Path, out: Path, port: int = SEGMENT_PORT, fault_a
         frames = int(receipt["journal_last"]) + 1 - int(receipt["journal_first"]) if int(receipt["journal_first"]) else 0
         assert receipt["journal_failed"] == "false" and receipt["journal_reopens"] == "1", f"{RED_LIVE_JOURNAL_NOT_REOPENED}: {receipt}"
         retain = int(receipt["journal_retain_frames"])
-        assert receipt.get("journal_retain_by") == "return_window" and window_frames < retain <= window_frames + 200 and frames <= retain + segment, \
+        low = window_frames + max_future_frame_skew() + 1
+        assert receipt.get("journal_retain_by") == "return_window" and low <= retain <= low + 1 and frames <= retain + segment, \
             f"{RED_LIVE_JOURNAL_PAST_POLICY}: {receipt}"
     verdict = {"control": control, "faulted": faulted, "failed": failed[0], "reopened": reopened[0], "receipts_after_reopen": len(after),
                "largest_journal_frames": max(int(r["journal_last"]) + 1 - int(r["journal_first"]) for r in after if int(r["journal_first"])),

@@ -255,6 +255,16 @@ def version_line():
     return f"v{game}, multiplayer {(tree / 'VERSION.txt').read_text(encoding='utf-8').strip()} (protocol {protocol})"
 
 
+def max_future_frame_skew():
+    """NetLockstepCodec::c_MaxFutureFrameSkew from the header under test: how far a held seat's floor reaches back before its hold."""
+    header = (Path(__file__).resolve().parents[1] / "Source/Network/NetLockstep.h").read_text(encoding="utf-8")
+    factor = re.search(r"c_MaxFutureFrameSkew = (\d+)ULL \* c_MaxInputDelayFrames;", header)
+    delay = re.search(r"c_MaxInputDelayFrames = (\d+);", header)
+    if not factor or not delay:
+        raise RuntimeError("NetLockstep.h no longer names c_MaxFutureFrameSkew as a multiple of c_MaxInputDelayFrames")
+    return int(factor[1]) * int(delay[1])
+
+
 def host_hint(name):
     """A consequence the host options page shows, read from its owner, Source/Menus/NetHostOptionsText.h."""
     header = (Path(__file__).resolve().parents[1] / "Source/Menus/NetHostOptionsText.h").read_text(encoding="utf-8")
@@ -1989,8 +1999,9 @@ def run_case(options, case, root, failing=None):
             if case == "lobby":
                 # The picks drive this host's history policy, in frames of the round's tick.
                 policy = JOIN_HISTORY_POLICY.search(logs["host"])
-                # Ten minutes of a 60 Hz round plus the frames a hold reaches back: never shorter than the window's 36000 frames.
-                assert policy and 36000 < int(policy[1]) <= 36000 + 200, [line for line in logs["host"].splitlines() if "host options" in line]
+                # Ten minutes of a 60 Hz round plus the frames a hold reaches back and one, a frame more when the tick's length rounds up.
+                low = 36000 + max_future_frame_skew() + 1
+                assert policy and low <= int(policy[1]) <= low + 1, [line for line in logs["host"].splitlines() if "host options" in line]
                 result["join_history_policy"] = policy[0]
             if case == "net-activity":
                 drawn = [(image["json"], control) for image in images for control in image["controls"]
