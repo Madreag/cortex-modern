@@ -171,6 +171,7 @@ namespace RTE {
 			MultiplayerLeaveButton,
 			MultiplayerReconnectButton,
 			MultiplayerCancelReconnectButton,
+			MultiplayerWaitSlotButton,
 			MultiplayerHostBackButton,
 			MultiplayerJoinBackButton,
 			MultiplayerModerateButton,
@@ -653,6 +654,10 @@ namespace RTE {
 		void StartMultiplayer(bool host);
 		/// §9b: answers a live match's refusal by asking the host for a seat instead of a new one.
 		void ApplyToSubstitute();
+		/// Asks the host for the player's own held seat, which the host's refusal named.
+		void ApplyForOwnSeat(uint16_t stableSeat);
+		/// Joins again and waits, knocking, for one of a world's held slots to open.
+		void WaitForSlot();
 
 		/// Launches the activity once the multiplayer runtime reaches lockstep ready.
 		void MaybeLaunchMultiplayerActivity();

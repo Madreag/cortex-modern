@@ -285,7 +285,9 @@ namespace RTE {
 			} else {
 				const NetH4ApplicantView& applicant = seat.applicants[index];
 				row.applicant = applicant.connection;
-				row.applicantText = applicant.displayName + " (" + std::to_string(index + 1) + "/" + std::to_string(seat.applicants.size()) + ")";
+				// An applicant that carries the held seat's own player's name is shown as such; the host still decides.
+				row.applicantText = applicant.displayName + (seat.held && applicant.displayName == seat.displayName ? " - same name" : "") + " (" +
+				                    std::to_string(index + 1) + "/" + std::to_string(seat.applicants.size()) + ")";
 				if (applicant.approved) {
 					row.applicantText += " *";
 				}
@@ -372,6 +374,33 @@ namespace RTE {
 			case NetReconnectUxState::Refused: return "Refused";
 		}
 		return "Unknown";
+	}
+
+	NetJoinRefusalOffer NetJoinRefusalOfferOf(const std::string& mismatchKey) {
+		if (mismatchKey == "live_match") return NetJoinRefusalOffer::Substitute;
+		if (mismatchKey == "seat_held_for_you") return NetJoinRefusalOffer::OwnSeat;
+		if (mismatchKey == "slots_held") return NetJoinRefusalOffer::SlotsHeld;
+		return NetJoinRefusalOffer::None;
+	}
+
+	const char* NetJoinRefusalOfferLine(NetJoinRefusalOffer offer) {
+		switch (offer) {
+			case NetJoinRefusalOffer::Substitute: return "The match is already in progress. Apply to substitute for a dropped player?";
+			case NetJoinRefusalOffer::OwnSeat: return "Your slot is held for you. Apply to rejoin, the host decides";
+			case NetJoinRefusalOffer::SlotsHeld: return "All slots are held for returning players. Apply for a slot or wait";
+			case NetJoinRefusalOffer::None: break;
+		}
+		return "";
+	}
+
+	const char* NetJoinRefusalApplyCaption(NetJoinRefusalOffer offer) {
+		switch (offer) {
+			case NetJoinRefusalOffer::Substitute: return "Apply to Substitute";
+			case NetJoinRefusalOffer::OwnSeat: return "Apply to Rejoin";
+			case NetJoinRefusalOffer::SlotsHeld: return "Apply for a Slot";
+			case NetJoinRefusalOffer::None: break;
+		}
+		return "";
 	}
 
 } // namespace RTE

@@ -872,6 +872,10 @@ namespace RTE {
 			if (state.seat.cpu || state.seat.local || IsSeated(state) || IsHostOpened(state) || IsHolderAway(state)) {
 				continue;
 			}
+			// A watcher seat serves a running round only: a world between rounds seats its roster's players and never one above it.
+			if (state.seat.lockstepPeerId >= c_WorldSpectatorLobbyPeerFirst && m_Roster.stage != NetRosterStage::Running) {
+				continue;
+			}
 			const bool provisional = std::any_of(m_Provisionals.begin(), m_Provisionals.end(), [&state](const Provisional& pending) {
 				return pending.stableSeat == state.seat.stableSeat;
 			});
@@ -880,6 +884,27 @@ namespace RTE {
 			}
 		}
 		return nullptr;
+	}
+
+	const NetReconnectHost::SeatState* NetReconnectHost::HeldSeatOwnedBy(NetPeerId connection, const std::string& displayName) const {
+		NetAuthBytes32 id{};
+		const bool proven = LookupParticipantId(connection, id);
+		for (const SeatState& state : m_Seats) {
+			// Held by the roster counts before the old link has timed out: the player can be back on a new one by then.
+			if (state.seat.cpu || state.seat.local || !(RosterHoldsSeat(state) || IsHolderAway(state))) continue;
+			if (proven && state.hasParticipantId ? state.participantId == id : (!displayName.empty() && state.holderName == displayName)) return &state;
+		}
+		return nullptr;
+	}
+
+	NetJoinRejected NetReconnectHost::RefuseUnseatable(NetPeerId connection, const std::string& displayName, NetRejectReason reason, const std::string& summary, const std::string& key) const {
+		// The joiner's own seat waits for it: it applies for that seat and the host decides, as for any held seat.
+		if (const SeatState* own = HeldSeatOwnedBy(connection, displayName))
+			return NetJoinRejected{NetRejectReason::HostNotAccepting, "your seat is held for you", "seat_held_for_you", std::to_string(own->seat.stableSeat), ""};
+		const bool slotsHeld = m_PersistentWorld && std::any_of(m_Seats.begin(), m_Seats.end(), [this](const SeatState& state) {
+			return !state.seat.cpu && !state.seat.local && (RosterHoldsSeat(state) || IsHolderAway(state));
+		});
+		return slotsHeld ? NetJoinRejected{reason, summary, "slots_held", "", ""} : NetJoinRejected{reason, summary, key, "", ""};
 	}
 
 	NetReconnectHost::Provisional* NetReconnectHost::FindProvisionalByTxId(const NetAuthBytes16& txId) {
@@ -1099,7 +1124,7 @@ namespace RTE {
 			// rides the same release delay every denial does, and a NewJoin only ever reaches this
 			// path on a live match, so nothing an observer could not already time is disclosed.
 			++m_Stats.provisionalSeatsRefused;
-			const NetPayload refusal = NetJoinRejected{NetRejectReason::HostNotAccepting, "the match is already in progress", "live_match", "", ""};
+			const NetPayload refusal = RefuseUnseatable(connection, message.displayName, NetRejectReason::HostNotAccepting, "the match is already in progress", "live_match");
 			m_Admission.ScheduleDenial(connection, message.txId, NetH4DenialReason::UnknownSeat, nowMs, &refusal);
 			return;
 		}
@@ -1112,7 +1137,7 @@ namespace RTE {
 		SeatState* seat = m_PersistentWorld ? FindFreeWorldSeat() : FindFreeNeverHeldSeat();
 		if (seat == nullptr) {
 			++m_Stats.provisionalSeatsRefused;
-			Send(connection, NetJoinRejected{NetRejectReason::SessionFull, "session is full", "seats", "", ""});
+			Send(connection, RefuseUnseatable(connection, message.displayName, NetRejectReason::SessionFull, "session is full", "seats"));
 			return;
 		}
 		uint32_t holderGeneration = 0;

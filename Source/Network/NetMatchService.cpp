@@ -312,6 +312,8 @@ namespace RTE {
 	bool NetMatchService::s_ApplyForSeat = false;
 	uint16_t NetMatchService::s_ApplySeat = 0;
 	bool NetMatchService::s_ApplyOnce = false;
+	uint16_t NetMatchService::s_ApplyOnceSeat = c_NetH4AnySubstitutableSeat;
+	bool NetMatchService::s_WaitForSlotOnce = false;
 	bool NetMatchService::s_AutoSubstitute = false;
 	uint16_t NetMatchService::s_AutoSubstituteSeat = 0;
 	uint64_t NetMatchService::s_AutoSubstituteDelayMs = 0;
@@ -712,7 +714,8 @@ static std::string ResyncSaveName() {
 			m_BeaconGamePort = request.port;
 			m_BeaconMaxPlayers = static_cast<uint8_t>(std::max(1, m_HumanSeats - (request.dedicated ? 1 : 0)));
 			m_LocalName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
-			m_JoinRefusedByLiveMatch = false;
+			m_JoinRefusalKey.clear();
+			m_JoinRefusalSeat.reset();
 			// A new join is not the substitute this process was; its own rejoin carries on as one.
 			if (!request.rejoin) m_SubstituteRejoinStarted = false;
 			if (request.host) {
@@ -2305,7 +2308,8 @@ static std::string ResyncSaveName() {
 			m_PendingLobbyBytes = 0;
 			m_PendingLobbyOverflow = false;
 			m_EndedLockstepPackets = 0;
-			m_JoinRefusedByLiveMatch = false;
+			m_JoinRefusalKey.clear();
+			m_JoinRefusalSeat.reset();
 			ResetRoundGoodbyeLocked();
 			EndAdmissionSession();
 		}
@@ -2840,13 +2844,34 @@ static std::string ResyncSaveName() {
 		return m_AdmissionClock.NowMs(SteadyNowMs());
 	}
 
-	bool NetMatchService::WasJoinRefusedByALiveMatch() const {
+	NetJoinRefusalOffer NetMatchService::JoinRefusalOffer(uint16_t* ownSeat) const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		return m_JoinRefusedByLiveMatch && m_State == NetMatchServiceState::Failed;
+		if (m_State != NetMatchServiceState::Failed) return NetJoinRefusalOffer::None;
+		const NetJoinRefusalOffer offer = NetJoinRefusalOfferOf(m_JoinRefusalKey);
+		if (offer == NetJoinRefusalOffer::OwnSeat && !m_JoinRefusalSeat) return NetJoinRefusalOffer::None;
+		if (ownSeat && m_JoinRefusalSeat) *ownSeat = *m_JoinRefusalSeat;
+		return offer;
+	}
+
+	bool NetMatchService::BeginSeatApplication(const NetMatchServiceRequest& request, uint16_t stableSeat, std::string* error) {
+		s_ApplyOnce = true;
+		s_ApplyOnceSeat = stableSeat;
+		if (Start(request, error)) return true;
+		s_ApplyOnce = false;
+		s_ApplyOnceSeat = c_NetH4AnySubstitutableSeat;
+		return false;
+	}
+
+	bool NetMatchService::BeginSlotWait(const NetMatchServiceRequest& request, std::string* error) {
+		s_WaitForSlotOnce = true;
+		if (Start(request, error)) return true;
+		s_WaitForSlotOnce = false;
+		return false;
 	}
 
 	bool NetMatchService::BeginSubstituteApplication(const NetMatchServiceRequest& request, std::string* error) {
 		s_ApplyOnce = true;
+		s_ApplyOnceSeat = c_NetH4AnySubstitutableSeat;
 		if (Start(request, error)) {
 			return true;
 		}
@@ -9916,6 +9941,7 @@ static std::string ResyncSaveName() {
 
 		NetMatchRunnerConfig runnerConfig;
 		runnerConfig.host = request.host;
+		runnerConfig.waitForSlot = !request.host && std::exchange(s_WaitForSlotOnce, false);
 		runnerConfig.joinAddress = request.host ? "" : request.address;
 		if (!request.host) {
 			const std::string sessionId = request.sessionId;
@@ -10298,9 +10324,12 @@ static std::string ResyncSaveName() {
 				m_ErrorText = lostHost ? m_StatusText : (m_Session && m_Session->HasReject() ? m_Session->BuildPlayerRefusalText() : error);
 				// A refusal that says the round is over is an answer, not a lost link: the seat completes.
 				(void)NoteHostGoodbyeLocked(m_Session.get());
-				// §9b: a live match is the one refusal a joiner can answer, by applying for a seat.
-				m_JoinRefusedByLiveMatch = !request.host && m_Session && m_Session->HasReject() &&
-				                           m_Session->GetMismatchKey() == "live_match";
+				// §9b: the refusals a joiner can answer - a running match, its own seat held for it, a world's slots all held.
+				m_JoinRefusalKey = !request.host && m_Session && m_Session->HasReject() ? m_Session->GetMismatchKey() : std::string();
+				m_JoinRefusalSeat.reset();
+				if (const std::string seat = m_Session ? m_Session->GetMismatchExpected() : std::string(); m_JoinRefusalKey == "seat_held_for_you" && !seat.empty()) {
+					m_JoinRefusalSeat = static_cast<uint16_t>(std::strtoul(seat.c_str(), nullptr, 10));
+				}
 			}
 			m_WorkerDone = true;
 		}
@@ -10710,8 +10739,9 @@ static std::string ResyncSaveName() {
 		m_ReconnectClient.SetWorldTarget(request.persistentWorld || matchConfig.persistentWorld);
 		m_ReconnectClient.SetDirectorySessionId(request.sessionId);
 		// A rejoin holds its seat already: it reclaims, it never applies again.
-		m_ReconnectClient.SetApplyForSeat((s_ApplyForSeat || s_ApplyOnce) && !request.rejoin, s_ApplyOnce ? c_NetH4AnySubstitutableSeat : s_ApplySeat);
+		m_ReconnectClient.SetApplyForSeat((s_ApplyForSeat || s_ApplyOnce) && !request.rejoin, s_ApplyOnce ? s_ApplyOnceSeat : s_ApplySeat);
 		s_ApplyOnce = false;
+		s_ApplyOnceSeat = c_NetH4AnySubstitutableSeat;
 		session.SetReconnectClient(&m_ReconnectClient);
 		session.EnableParticipantProof(&m_ParticipantStore);
 		m_AdmissionAttached = true;

@@ -154,8 +154,8 @@ namespace RTE {
 		// older copy would name a revision it has already passed.
 		AdoptLobbyConfig();
 		if (admission.GetRoster().revision == m_MatchConfig.seatRosterRevision || m_Lobby.IsStarted()) return;
-		NetMatchConfig stamped = m_MatchConfig;
-		stamped.configRevision = m_MatchConfig.configRevision + 1;
+		NetMatchConfig stamped = m_Lobby.GetMatchConfig();
+		stamped.configRevision = m_Lobby.GetMatchConfig().configRevision + 1;
 		stamped.seatRosterRevision = admission.GetRoster().revision;
 		stamped.seatRosterHash = HashRoster(admission.GetRoster());
 		// A forming round's members are the roster's: a seat that drops or that the host opens leaves them and starts held.
@@ -239,7 +239,8 @@ namespace RTE {
 	}
 
 	void NetMatchRunner::AdoptLobbyConfig() {
-		if (!m_Config.host || m_Lobby.GetMatchConfig().configRevision == m_MatchConfig.configRevision) return;
+		// The lobby also changes what it publishes without a new revision (a joiner's name and delay, the migration roster): its hash decides.
+		if (!m_Config.host || (m_Lobby.GetMatchConfigHash() == m_MatchConfigHash && m_Lobby.GetMatchConfig().configRevision == m_MatchConfig.configRevision)) return;
 		m_MatchConfig = m_Lobby.GetMatchConfig();
 		m_Config.matchConfig = m_MatchConfig;
 		m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
@@ -496,17 +497,22 @@ namespace RTE {
 			}
 			// N-peer: the host must have every client Ready, not just the first to connect.
 			if (session.IsReady() && session.GetReadyPeerCount() >= expectedReadyPeers) {
+				m_SlotWaitLeftMs = 0;
 				return true;
 			}
 			// The budget bounds the whole wait, a refused knock's retries included.
 			if (waitMs > maxWaitMs) {
+				m_SlotWaitLeftMs = 0;
 				const std::string rejectText = session.IsRejected() ? session.BuildRejectText() : std::string();
 				SetFailed(!rejectText.empty() ? rejectText : std::string("timed out waiting for session Ready"));
 				if (error) *error = m_SetupError;
 				return false;
 			}
+			// A world whose slots are all held tells the joiner so at once; one that chose to wait knocks for a slot, its countdown shown.
+			const bool slotsHeld = session.IsRejected() && session.GetMismatchKey() == "slots_held";
+			m_SlotWaitLeftMs = m_Config.waitForSlot ? maxWaitMs - waitMs : 0;
 			// A reconnect can knock before the host's transport notices the dead slot; retry until the timeout frees it.
-			if (!m_Config.host && session.IsRejected() && session.GetRejectReason() == NetRejectReason::SessionFull) {
+			if (!m_Config.host && session.IsRejected() && session.GetRejectReason() == NetRejectReason::SessionFull && (!slotsHeld || m_Config.waitForSlot)) {
 				if (nowMs >= nextRetryMs) {
 					nextRetryMs = nowMs + 2000;
 					std::string retryError;
@@ -904,6 +910,7 @@ namespace RTE {
 		} else {
 			m_TransferMarkMs = 0;
 		}
+		if (m_SlotWaitLeftMs != 0) snapshot.waitLine = NetSlotWaitLine(m_SlotWaitLeftMs);
 		snapshot.activityPreset = rosterConfig.activityPreset;
 		snapshot.activityModule = rosterConfig.activityModule;
 		snapshot.sceneName = rosterConfig.sceneName;

@@ -19,6 +19,7 @@
 #include "NetReconnectUx.h"
 #include "NetParticipantCrypto.h"
 #include "NetSeatAuth.h"
+#include "NetWorldJoin.h"
 #include "NetSession.h"
 #include "Activity.h"
 #include "ActivityMan.h"
@@ -3403,6 +3404,167 @@ namespace RTE {
 					return Fail(mode + ": a stranger's join was not answered as before");
 				}
 			}
+			return 0;
+		}
+
+		// A seat's player who comes back without its ticket is told its seat is held for it and which, so it can apply for that seat; a
+		// stranger is answered as before; and a newcomer to a world whose every slot is held for its player is told so, not left to wait.
+		int TestAnUnticketedReturnIsToldItsSeatIsHeld() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			const auto refusalTo = [](Wire& wire, NetPeerId connection, const NetAuthBytes32* id, const std::string& name, uint8_t tx, std::string* error) -> const NetJoinRejected* {
+				if (id) wire.host.BindParticipantId(connection, *id);
+				NetH4NewJoin join;
+				join.txId = Ramp<16>(tx);
+				join.identity = MakeIdentity();
+				join.displayName = name;
+				if (!wire.SendRaw(connection, join, error)) return nullptr;
+				wire.nowMs += NetReconnectAdmission::c_DenialReleaseMs;
+				wire.DrainHostOutbound();
+				return LastOf<NetJoinRejected>(wire.Delivered(connection));
+			};
+			const auto keyOf = [](const NetJoinRejected* refused) { return refused ? refused->mismatchKey + (refused->expected.empty() ? "" : ":" + refused->expected) : std::string("none"); };
+			// Every row is printed before the verdict, so one run shows what each joiner was told in a match and in a world.
+			std::string failures;
+			const auto note = [&failures](bool persistent, const std::string& what) { failures += std::string(failures.empty() ? "" : "; ") + (persistent ? "world: " : "match: ") + what; };
+			for (const bool persistent: {false, true}) {
+				if (!ResetLaneDirectory(&error)) return Fail(error);
+				uint64_t unixNow = 1'700'000'000'000ULL;
+				Wire wire;
+				ConfigureWire(wire);
+				wire.host.SetPersistentWorld(persistent);
+				std::vector<std::unique_ptr<Endpoint>> players;
+				std::vector<NetH4TicketRecord> records;
+				// A match holds the one seat its player left; a world holds both, so it has no slot left for a newcomer.
+				for (size_t index = 0; index < (persistent ? 2u : 1u); ++index) {
+					auto player = std::make_unique<Endpoint>();
+					player->connection = static_cast<NetPeerId>(95 + index);
+					ConfigureEndpoint(*player, std::string(persistent ? "held-world-" : "held-match-") + std::to_string(index), &unixNow);
+					wire.Add(player.get());
+					wire.host.BindParticipantId(player->connection, Ramp<32>(static_cast<uint8_t>(0xB1 + index)));
+					if (!player->client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) return Fail("the seeding join did not settle: " + error);
+					players.push_back(std::move(player));
+				}
+				wire.host.SetLiveMatch(true);
+				// Held in place with its old link still up: the player is back on a new connection before that link times out.
+				std::string inPlace = "not held";
+				NetH4TicketRecord seated;
+				if (players[0]->store.Load(unixNow, seated, &error) != NetH4TicketLoadResult::Loaded) return Fail("the seated player holds no ticket: " + error);
+				for (const NetH4ModerationSeat& seat: wire.host.GetModerationView()) {
+					if (seat.cpu || seat.stableSeat != seated.stableSeat) continue;
+					wire.host.NoteSeatHeldInPlace(seat.lockstepPeerId, NetSeatHoldCause::Capacity);
+					const NetAuthBytes32 sameOwner = Ramp<32>(0xB1);
+					inPlace = keyOf(refusalTo(wire, 96, &sameOwner, "renamed", 0x70, &error)) + " expected=seat_held_for_you:" + std::to_string(seat.stableSeat);
+				}
+				std::cout << "[net-reconnect-session-selftest] unticketed_return " << (persistent ? "world" : "match") << " held_in_place=" << inPlace << std::endl;
+				if (inPlace.substr(0, inPlace.find(' ')) != inPlace.substr(inPlace.find("expected=") + 9)) note(persistent, "its player back while its seat is held in place was answered " + inPlace);
+				for (auto& player: players) {
+					if (!player->client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) return Fail("the leave did not settle: " + error);
+					NetH4TicketRecord record;
+					if (player->store.Load(unixNow, record, &error) != NetH4TicketLoadResult::Loaded) return Fail("the leaver's ticket was not kept: " + error);
+					records.push_back(record);
+					player->connected = false;
+					wire.Remove(player->connection);
+				}
+				const NetAuthBytes32 owner = Ramp<32>(0xB1);
+				const std::string ownSeat = "seat_held_for_you:" + std::to_string(records[0].stableSeat);
+				const std::array<uint8_t, 32> rosterBefore = HashRoster(wire.host.GetRoster());
+				const std::string byIdentity = keyOf(refusalTo(wire, 97, &owner, "renamed", 0x71, &error));
+				const std::string byName = keyOf(refusalTo(wire, 98, nullptr, persistent ? "held-world-0" : "held-match-0", 0x72, &error));
+				const NetAuthBytes32 strangerId = Ramp<32>(0xC1);
+				const std::string stranger = keyOf(refusalTo(wire, 99, &strangerId, "stranger", 0x73, &error));
+				std::cout << "[net-reconnect-session-selftest] unticketed_return " << (persistent ? "world" : "match") << " by_identity=" << byIdentity
+				          << " by_name=" << byName << " stranger=" << stranger << std::endl;
+				if (byIdentity != ownSeat || byName != ownSeat) {
+					note(persistent, "a held seat's player back without its ticket was answered '" + byIdentity + "' / '" + byName + "', not told its seat " +
+					                 std::to_string(records[0].stableSeat) + " is held for it");
+				}
+				if (stranger != (persistent ? "slots_held" : "live_match")) note(persistent, "a stranger was answered '" + stranger + "'");
+				// What each landing shows for its refusal, word for word.
+				const auto landing = [](const std::string& key) {
+					const NetJoinRefusalOffer offer = NetJoinRefusalOfferOf(key.substr(0, key.find(':')));
+					return std::string(NetJoinRefusalOfferLine(offer)) + " [" + NetJoinRefusalApplyCaption(offer) + "]";
+				};
+				const std::string returnerSees = landing(byName);
+				const std::string strangerSees = landing(stranger);
+				std::cout << "[net-reconnect-session-selftest] unticketed_return " << (persistent ? "world" : "match") << " returner_sees='" << returnerSees
+				          << "' stranger_sees='" << strangerSees << "'" << std::endl;
+				if (returnerSees != "Your slot is held for you. Apply to rejoin, the host decides [Apply to Rejoin]") note(persistent, "the returner's landing reads '" + returnerSees + "'");
+				if (strangerSees != (persistent ? "All slots are held for returning players. Apply for a slot or wait [Apply for a Slot]" :
+				                                  "The match is already in progress. Apply to substitute for a dropped player? [Apply to Substitute]")) {
+					note(persistent, "the newcomer's landing reads '" + strangerSees + "'");
+				}
+				// The returner's Apply reaches the host as a request beside its own slot; nothing is decided or replicated until the host acts.
+				Endpoint back;
+				back.connection = 100;
+				ConfigureEndpoint(back, persistent ? "held-world-0" : "held-match-0", &unixNow);
+				wire.Add(&back);
+				if (!back.client.BeginApplication(records[0].stableSeat, wire.nowMs, &error) || !wire.Pump(&error)) {
+					return Fail(std::string(persistent ? "world" : "match") + ": the returner's application did not settle: " + error);
+				}
+				NetModerationUx panel;
+				panel.Refresh(wire.host.GetModerationView());
+				std::string beside = "no row";
+				for (size_t row = 0; row < panel.RowCount(); ++row) {
+					if (panel.GetRow(row).stableSeat == records[0].stableSeat) beside = panel.GetRow(row).applicantText;
+				}
+				const bool rosterKept = HashRoster(wire.host.GetRoster()) == rosterBefore;
+				std::cout << "[net-reconnect-session-selftest] unticketed_return " << (persistent ? "world" : "match") << " host_sees='" << beside
+				          << "' client=" << NetReconnectClientStateName(back.client.GetState()) << " roster_unchanged=" << rosterKept << std::endl;
+				if (beside != std::string(persistent ? "held-world-0" : "held-match-0") + " - same name (1/1)") {
+					note(persistent, "the host's row for seat " + std::to_string(records[0].stableSeat) + " shows '" + beside + "'");
+				}
+				if (!rosterKept || back.client.GetState() == NetH4ClientState::Joined) note(persistent, "a refusal or an application changed the seats before the host decided");
+			}
+			if (!failures.empty()) return Fail(failures);
+			std::cout << "[net-reconnect-session-selftest] PASS an_unticketed_return_is_told_its_seat_is_held" << std::endl;
+			return 0;
+		}
+
+		// A world resumed from disk waits between rounds for its players; a newcomer there is told every slot is held, never handed a
+		// watcher seat its lobby cannot seat. Once the round runs the same newcomer is offered the watcher seat.
+		int TestAWorldBetweenRoundsOffersNoWatcherSeat() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) return Fail(error);
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			wire.host.SetPersistentWorld(true);
+			wire.host.SetSeatTable({{1, 1, 0, false, 2, false}, {2, static_cast<uint8_t>(c_WorldSpectatorLobbyPeerFirst - 1), -1, false, c_WorldSpectatorLobbyPeerFirst, false}},
+			                       NetMatchMode::PvPSkirmish);
+			Endpoint player;
+			player.connection = 120;
+			ConfigureEndpoint(player, "world-player", &unixNow);
+			wire.Add(&player);
+			if (!player.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) return Fail("the world's player was not seated: " + error);
+			wire.host.SetLiveMatch(true);
+			if (!player.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) return Fail("the world's player did not leave: " + error);
+			player.connected = false;
+			wire.Remove(player.connection);
+			const auto answerTo = [&wire](NetPeerId connection, uint8_t tx, std::string* error) -> std::string {
+				NetH4NewJoin join;
+				join.txId = Ramp<16>(tx);
+				join.identity = MakeIdentity();
+				join.displayName = "newcomer";
+				if (!wire.SendRaw(connection, join, error)) return "unsent";
+				wire.nowMs += NetReconnectAdmission::c_DenialReleaseMs;
+				wire.DrainHostOutbound();
+				const std::vector<NetPayload>& delivered = wire.Delivered(connection);
+				if (const NetJoinRejected* refused = LastOf<NetJoinRejected>(delivered)) return refused->mismatchKey;
+				return LastOf<NetH4TicketOffer>(delivered) ? "offered" : "nothing";
+			};
+			// The restart: the world is a lobby after a round until its players come back.
+			wire.host.SetLiveMatch(false);
+			const std::string betweenRounds = answerTo(121, 0x81, &error);
+			wire.host.SetLiveMatch(true);
+			const std::string whileRunning = answerTo(122, 0x82, &error);
+			std::cout << "[net-reconnect-session-selftest] world_between_rounds newcomer=" << betweenRounds << " while_running=" << whileRunning << std::endl;
+			if (betweenRounds != "slots_held") return Fail("a newcomer to a world between rounds with every slot held was answered '" + betweenRounds + "'");
+			if (whileRunning != "offered") return Fail("a newcomer to a running world was answered '" + whileRunning + "', not offered its watcher seat");
+			std::cout << "[net-reconnect-session-selftest] PASS a_world_between_rounds_offers_no_watcher_seat" << std::endl;
 			return 0;
 		}
 
@@ -9143,6 +9305,8 @@ namespace RTE {
 		if (const int result = TestAPutOffReturnAsksAgainWithItsTicket(); result != 0) return result;
 		if (const int result = TestAReturnFromAnotherAddressPresentsItsTicket(); result != 0) return result;
 		if (const int result = TestAReclaimAtANewAddressIsWhereTheNextReturnGoes(); result != 0) return result;
+		if (const int result = TestAnUnticketedReturnIsToldItsSeatIsHeld(); result != 0) return result;
+		if (const int result = TestAWorldBetweenRoundsOffersNoWatcherSeat(); result != 0) return result;
 		if (const int result = TestEndedCredentialsStayOutOfWorld(); result != 0) return result;
 		if (const int result = TestAnAnsweredReclaimIsNotRefusedTwice(); result != 0) return result;
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;
