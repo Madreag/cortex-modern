@@ -6678,6 +6678,9 @@ static std::string ResyncSaveName() {
 			const auto& config = m_Coordinator->GetConfig();
 			System::PrintDiagnosticLine(std::format("[net-lockstep] start round={} frame={} local_peer={} peers={} input_delay={}\n",
 			    m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames));
+			// Starting the joined round handed its session traffic to the runner's start queue, which nothing reads after the start:
+			// the session takes it back, the queued events first, or a returner never hears the roster, the chat or a kick again.
+			AttachCoordinatorSessionSink();
 		}
 		ReleaseWorldCatchUpOnceRunning(m_Coordinator && m_Coordinator->IsRunning(), m_WorldCatchUp);
 	}

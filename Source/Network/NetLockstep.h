@@ -1455,6 +1455,7 @@ namespace RTE {
 		friend bool TestAFirstDelayChangeIsNotAMutualWait(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestLobbyTrafficKeepsAHostLinkAlive(std::string* error);
+		friend bool TestAJoinedRoundGivesTheSessionItsTraffic(std::string* error);
 		friend bool TestASeatKnockingWhileTheRoundFormsIsAnswered(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);

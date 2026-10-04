@@ -8641,6 +8641,38 @@ namespace RTE {
 		return true;
 	}
 
+	/// Starting a joined round hands its session traffic to the runner's start queue; once the round runs, the roster, the chat
+	/// and the host's kick reach the session again, or a returner never hears them for the rest of the match.
+	bool TestAJoinedRoundGivesTheSessionItsTraffic(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = false;
+		service.m_State = NetMatchServiceState::Running;
+		service.m_Runner = std::make_unique<NetMatchRunner>();
+		service.m_Session = std::make_unique<NetSession>();
+		service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+		NetLockstepCoordinator& coordinator = *service.m_Coordinator;
+		coordinator.m_State = NetLockstepState::Running;
+		coordinator.m_RemotePeerIds = {1};
+		coordinator.m_RemoteTransports[1] = 7;
+		service.m_Runner->CarrySessionTraffic(coordinator);
+		service.m_WorldCatchUp.active = true;
+		service.DriveWorldJoinClient(0);
+		std::vector<uint8_t> lobbyPacket;
+		if (!NetLobbyProtocol::Encode(NetLobbyMessage{NetLobbyReady{2, true}}, lobbyPacket)) {
+			*error = "the joined-round fixture could not encode a lobby packet";
+			return false;
+		}
+		coordinator.HandleEvent({NetTransportEventType::PacketReceived, 7, NetTransportLane::ControlReliable, lobbyPacket, {}}, 1);
+		const size_t lobby = service.m_PendingLobbyEvents.size(), session = service.m_PendingSessionEvents.size();
+		const size_t queued = service.m_Runner->TakeSessionTraffic().size();
+		std::cout << "[net-match-selftest] joined_round_session_traffic lobby=" << lobby << " session=" << session << " start_queue=" << queued << std::endl;
+		if (lobby + session == 0) {
+			*error = "a joined round's lobby traffic never reached the session once the round ran";
+			return false;
+		}
+		return true;
+	}
+
 	/// The round's goodbye reaches a returning seat still in its handshake, not only a seated one: one that is mid-handshake
 	/// when the host leaves reads the round ending instead of a lost link, and completes rather than failing.
 	bool TestTheGoodbyeReachesAHandshakingReturner(std::string* error) {
@@ -15978,6 +16010,7 @@ namespace RTE {
 		if (!chatCarryError.empty()) return fail(chatCarryError);
 		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
 		if (!TestLobbyTrafficKeepsAHostLinkAlive(&error)) return fail(error);
+		if (!TestAJoinedRoundGivesTheSessionItsTraffic(&error)) return fail(error);
 		if (!TestASeatKnockingWhileTheRoundFormsIsAnswered(&error)) return fail(error);
 		if (!TestAStartHeldSeatReturnsAsTheNextIncarnation(&error)) return fail(error);
 		if (!TestALinkClosedForTheImageKeepsTheSeatAtTheRematch(&error)) return fail(error);
