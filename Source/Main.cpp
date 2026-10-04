@@ -778,19 +778,27 @@ static void BeginCrossTick(uint64_t tick) {
 	// owner, the actor it plays from this tick, and a recovery the fresh-input receipt answers, whether or not a schedule asked for one.
 	{
 		const uint8_t local = ScenarioRunner::GetLockstepLocalPeerId();
-		static bool wasAway = false;
+		// A return is owed from the first tick the seat is away until its player plays an actor this peer owns: a relaunched peer's catch-up is
+		// away before it knows its seat, and the committed binding names the player's actor only once its first frame lands.
+		static bool returnOwed = false;
+		static bool lastCatchup = false;
 		static uint64_t awayRound = 0;
-		const bool away = local != 0 && (catchup || ScenarioRunner::IsLockstepSeatUnderAI(local, tick));
-		if (round != awayRound) { wasAway = false; awayRound = round; }
+		const bool away = catchup || (local != 0 && ScenarioRunner::IsLockstepSeatUnderAI(local, tick));
+		if (round != awayRound) {
+			if (!lastCatchup) returnOwed = false;
+			awayRound = round;
+		}
+		lastCatchup = catchup;
+		if (away) returnOwed = true;
 		Activity* activity = g_ActivityMan.GetActivity();
 		const auto view = local != 0 ? g_NetMatchService.GetSeatView(local) : std::nullopt;
-		if (wasAway && !away && activity && view && view->seat.owner != 0) {
+		if (returnOwed && !away && activity && view && view->seat.owner != 0) {
 			for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-				const Actor* actor = activity->GetControlledActor(player);
-				if (!actor) continue;
+				const Actor* actor = activity->IsLocalHumanSeat(player) ? activity->GetLocallyControlledActor(player) : nullptr;
+				if (!actor || !g_MovableMan.IsActor(actor)) continue;
 				const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(actor->GetUniqueID(), actor->GetTeam(), false);
 				if (owner != local) continue;
-				const nlohmann::json reclaim = {{"type", "ownership_reclaim"}, {"round", round}, {"peer", local}, {"stable_seat", view->stableSeat},
+				const nlohmann::json reclaim ={{"type", "ownership_reclaim"}, {"round", round}, {"peer", local}, {"stable_seat", view->stableSeat},
 				    {"actor", actor->GetUniqueID()}, {"owner_peer", owner}, {"ticket_incarnation", view->seat.incarnation},
 				    {"seat_incarnation", view->seat.incarnation}, {"activation_tick", tick}, {"tick", tick}, {"committed", true}};
 				g_MetricsCollector.WriteObservation(reclaim);
@@ -799,10 +807,10 @@ static void BeginCrossTick(uint64_t tick) {
 				s_crossRecoveryCases.push_back({{"id", id}, {"return_incarnation", incarnation}, {"deadline_ms", 60000}});
 				s_crossRecoveryStarts[id] = {{"effect_finished", true},
 				    {"engine_after_wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()}};
+				returnOwed = false;
 				break;
 			}
 		}
-		wasAway = away;
 	}
 	if (newRound) {
 		nlohmann::json roster = nlohmann::json::array();
