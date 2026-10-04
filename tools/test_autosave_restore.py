@@ -90,11 +90,29 @@ WORLD_AUTOSAVE_TICKS = 60  # -net-autosave-seconds 1 at the round's 60 ticks a s
 ROUND_TICKS_PER_SECOND = 60  # Every world round here runs the default 60 ticks a second.
 # The world-restart arm's first boot: the host is killed once a capture past this tick is published.
 WORLD_KILL_TICK = 400
+# The world arms size their rounds from one checkpoint write measured on this machine at their start (measure_world_write): the
+# Mac's writer takes 5.3 s a checkpoint against Linux's 1.75 s, so no fixed tick count serves every box. One write samples a
+# spread (3.5-9.8 s a write on the Mac), so a writer pass is sized at twice it.
+WRITE_MARGIN = 2
+# A world round's first capture comes a requested second after its lockstep starts, a few dozen ticks in.
+WORLD_START_LEAD_TICKS = 2 * WORLD_AUTOSAVE_TICKS
+
+
+def writer_pass_ticks(write_seconds: float) -> int:
+    """The ticks one checkpoint write may take on this machine: the measured write with its margin."""
+    return math.ceil(WRITE_MARGIN * write_seconds * ROUND_TICKS_PER_SECOND)
 
 
 def world_round_ticks(old_ticks: int, write_seconds: float, writes: int, lead_ticks: int, entry_ticks: int = 0) -> int:
-    """The ticks a world round needs at this machine's measured write."""
-    return old_ticks
+    """The ticks a world round needs at this machine's measured write: its lead, a held seat's way back (the host names no capture
+    while a seat comes back), then `writes` captures, each one requested second and one write after the last, each landing inside
+    its own pass. Never fewer than the round's old length."""
+    return max(old_ticks, lead_ticks + entry_ticks + writes * (WORLD_AUTOSAVE_TICKS + writer_pass_ticks(write_seconds)))
+
+
+def world_round_timeout_s(ticks: int) -> int:
+    """A world peer's runner timeout, a hang guard: twice the round at its rate plus its startup, never under the old 420 s."""
+    return max(420, math.ceil(2 * ticks / ROUND_TICKS_PER_SECOND) + 180)
 
 
 def resumed_round_ticks(host_log: str, round_ticks: int) -> int:
