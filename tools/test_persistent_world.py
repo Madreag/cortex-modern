@@ -209,6 +209,8 @@ RED_HEAL_WINDOW_RESUMED = "heal-window-survived-a-resumed-round"
 RED_BROWSER_WORLD_ROW = "browser-world-row-text-changed"
 RED_BROWSER_ORDINARY_ROW = "browser-ordinary-row-text-changed"
 RED_BROWSER_ROW_MISSING = "browser-world-row-missing"
+RED_JOURNAL_PAST_POLICY = "journal-grew-past-its-policy"
+RED_STALLED_WATCHER_KEPT = "stalled-watcher-kept-its-bootstrap"
 
 # The world-segment arm's own REDs: what the driver scores when a real world's segments are read back.
 RED_SEGMENT_NOT_WRITTEN = "world-wrote-no-segment"
@@ -742,6 +744,15 @@ CASES = (
             RED_BROWSER_ROW_MISSING,
         ),
         "pass_token": "[net-world-browser-row-selftest] PASS",
+    },
+    {
+        # A watcher that heartbeats but stops replaying, over four files of the round's history: the journal stays inside the host's
+        # policy and the watcher's bootstrap ends with a receipt. The run prints the journal's frames, bytes and files every 3,000 ticks.
+        "name": "journal-bound-stalled-watcher",
+        "argv": ["-net-world-journal-bound-selftest"],
+        "red": RED_JOURNAL_PAST_POLICY,
+        "also_red": (RED_STALLED_WATCHER_KEPT,),
+        "pass_token": "[net-world-journal-bound-selftest] PASS",
     },
     {
         "name": "world-segment-replay",

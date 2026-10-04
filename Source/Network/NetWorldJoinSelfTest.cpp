@@ -3589,6 +3589,78 @@ namespace RTE {
 		return 0;
 	}
 
+	// The journal's files and bytes once its writer has finished every job queued so far.
+	NetWorldFrameLog::JournalStats SettledJournalStats(const NetWorldFrameLog& log) {
+		NetWorldFrameLog::JournalStats stats = log.GetJournalStats();
+		for (int still = 0, polls = 0; still < 3 && polls < 2000; ++polls) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+			const NetWorldFrameLog::JournalStats next = log.GetJournalStats();
+			still = next.bytes == stats.bytes && next.files == stats.files ? still + 1 : 0;
+			stats = next;
+		}
+		return stats;
+	}
+
+	// A watcher that keeps its link and its reports but stops replaying cannot hold the round's history: the journal stays inside
+	// the host's policy whatever one reader does, and the watcher's bootstrap ends with a receipt that names why.
+	int TestAStalledWatcherCannotPinTheJournal() {
+		// This run's policy: a minute of history and half a minute of trail, over four files of frames.
+		constexpr uint64_t segment = NetWorldFrameLog::c_JournalSegmentFrames;
+		constexpr uint64_t retainFrames = segment, lagLimitFrames = segment / 2;
+		constexpr uint64_t imageTick = 60, stallAt = 120, lastTick = 4 * segment;
+		const double tickMs = 1000.0 / 60.0;
+		ResumeScratchDirectory scratch;
+		const auto files = [&] {
+			size_t count = 0;
+			for (const auto& entry: std::filesystem::directory_iterator(scratch.path))
+				if (entry.path().filename().string().starts_with("world_history.inputs")) ++count;
+			return count;
+		};
+		NetWorldJoinHost host;
+		std::string error;
+		if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error)) return Fail(error);
+		// The seat is taken and given back before any image, so the second joiner watches and is the round's only reader.
+		if (!host.BeginJoin(11, 11, "member", 1000, &error) || !host.BeginJoin(12, 12, "watcher", 1000, &error)) return Fail(error);
+		host.CancelJoin(11, "the member left before its image");
+		if (const NetWorldJoinSession* watcher = host.FindSession(12); watcher == nullptr || !watcher->spectator) return Fail("the second joiner does not watch");
+		NetWorldFrameLog& tail = host.Tail();
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId; image.boot = 1; image.round = 1; image.tick = imageTick; image.bytes = 64; image.digest = "image";
+		uint64_t applied = 0;
+		for (uint64_t tick = 1; tick <= lastTick; ++tick) {
+			if (!tail.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
+			if (tick == 1) tail.EnableJournal((scratch.path / "world_history.inputs").string());
+			if (tick == imageTick) {
+				host.PublishImage(image);
+				if (!host.NoteTransferStarted(12, 1, 1, imageTick) || !host.NoteTransferComplete(12, image.bytes, &error)) return Fail("the watcher did not take its image: " + error);
+			}
+			// It replays to stallAt, then stands still while its reports keep coming.
+			if (tick > imageTick && tick % 10 == 0 && host.FindSession(12)) {
+				applied = std::min(tick, stallAt);
+				(void)host.NoteCatchUpProgress(12, applied, 0, 0, tick + 1, nullptr, nullptr);
+			}
+			if (tick % 60 == 0) {
+				// A world serves a joiner the published image while its tail is still in memory.
+				const bool served = tail.Count() != 0 && imageTick + 1 >= tail.FirstFrame();
+				(void)NetMatchService::StepJoinHistory(host, tick, served ? std::optional<uint64_t>(imageTick) : std::nullopt, {}, tickMs);
+			}
+			if (tick % 3000 == 0 || tick == lastTick) {
+				const NetWorldFrameLog::JournalStats stats = SettledJournalStats(tail);
+				std::cout << "[" << s_FailTag << "] journal tick=" << tick << " frames=" << (stats.first != 0 ? stats.last + 1 - stats.first : 0) << " bytes=" << stats.bytes
+				          << " files=" << files() << " index_bytes=" << stats.indexBytes << " watcher=" << (host.FindSession(12) ? "open" : "ended") << " watcher_applied=" << applied << std::endl;
+			}
+		}
+		const NetWorldFrameLog::JournalStats stats = SettledJournalStats(tail);
+		const uint64_t frames = stats.first != 0 ? stats.last + 1 - stats.first : 0, bound = retainFrames + segment;
+		if (frames > bound || files() > bound / segment + 1)
+			return Fail("journal-grew-past-its-policy: " + std::to_string(frames) + " frames, " + std::to_string(stats.bytes) + " bytes in " + std::to_string(files()) +
+			            " files after " + std::to_string(lastTick) + " ticks against a bound of " + std::to_string(bound) + " frames (retain " + std::to_string(retainFrames) +
+			            ", lag limit " + std::to_string(lagLimitFrames) + ")");
+		if (host.FindSession(12)) return Fail("stalled-watcher-kept-its-bootstrap: it applied " + std::to_string(applied) + " and the round is at " + std::to_string(lastTick));
+		std::cout << "[" << s_FailTag << "] PASS a_stalled_watcher_cannot_pin_the_journal frames=" << frames << " bound=" << bound << " files=" << files() << std::endl;
+		return 0;
+	}
+
 	int TestPrivateNeutralPrelude() {
 		LoopbackTransport transport;
 		NetLockstepCoordinator coordinator;
@@ -8188,6 +8260,10 @@ namespace RTE {
 	}
 
 	int RunNamed(const char* name) {
+		if (std::strcmp(name, "-net-world-journal-bound-selftest") == 0) {
+			s_FailTag = "net-world-journal-bound-selftest";
+			return TestAStalledWatcherCannotPinTheJournal();
+		}
 		if (std::strcmp(name, "-net-world-activation-trail-selftest") == 0) return TestActivationFollowsTheMeasuredTrail();
 		if (std::strcmp(name, "-net-world-second-round-selftest") == 0) {
 			s_FailTag = "net-world-second-round-selftest";
@@ -8727,6 +8803,7 @@ namespace RTE {
 		if (const int result = TestCommittedTailJournal(); result != 0) return result;
 		if (const int result = TestCommittedTailJournalPrunes(); result != 0) return result;
 		if (const int result = TestTheReturnHistoryFloor(); result != 0) return result;
+		if (const int result = TestAStalledWatcherCannotPinTheJournal(); result != 0) return result;
 		if (const int result = TestEveryPeersRecordServesTheHostsTail(); result != 0) return result;
 		{
 			std::string error;
