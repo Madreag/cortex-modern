@@ -1006,9 +1006,6 @@ def sp_fixture_files(control_launch):
 def gates(root, control, timeout):
     """The suite, the script-graph self-test and the single-player comparison; a step that cannot run fails with its reason."""
     import traceback
-    if not (Path(control) / 'launch.json').is_file():
-        raise ValueError(f"the single-player control {control} is absent on {os.environ.get('COMPUTERNAME') or 'this box'}; "
-                         "the gates compare this tree's run with it (--sp-control names another copy)")
     out = root / 'gates'
     out.mkdir(exist_ok=False)
     env = dict(os.environ, CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1')
@@ -1038,6 +1035,9 @@ def gates(root, control, timeout):
         result['script_graph_pass'] = record.get('exit_code') == 0 and not record.get('timed_out') \
             and bool(re.search(r'\bPASS\b', text)) and not re.search(r'\bFAIL\b', text)
     def single_player():
+        if not (Path(control) / 'launch.json').is_file():
+            raise ValueError(f"the single-player control {control} is absent on {os.environ.get('COMPUTERNAME') or 'this box'}; "
+                             "the gates compare this tree's run with it (--sp-control names another copy)")
         control_launch = json.loads((control / 'launch.json').read_text(encoding='utf-8'))
         if control_launch.get('exit_code') != 0 or control_launch.get('timed_out') or not control_launch.get('evidence_complete'):
             raise ValueError('the SP control did not complete')
