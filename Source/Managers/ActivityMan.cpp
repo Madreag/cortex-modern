@@ -71,7 +71,6 @@
 
 #include "lua.hpp"
 #include "HarnessCost.h"
-#include "CheckpointLuaHeap.h"
 
 #include <algorithm>
 #include <array>
@@ -105,6 +104,8 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #endif
+
+#include "CheckpointLuaHeap.h"
 
 using namespace RTE;
 
