@@ -129,7 +129,7 @@ class RelayRows(unittest.TestCase):
             second=policy.scan_retained(root,book,previous=result)
             self.assertFalse(second['passed'],'scrubbing retained evidence cannot turn the native credential leak green')
             self.assertNotIn('test-minted-user-123456',json.dumps(result))
-        self.assertEqual(len(self.plan['rows']),342)
+        self.assertEqual(len(self.plan['rows']),366)
 
 
 class MergeSourceGate(unittest.TestCase):
