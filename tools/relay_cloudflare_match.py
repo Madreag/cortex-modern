@@ -57,7 +57,6 @@ sys.path.insert(0, str(HERE / 'edith'))
 MST = dt.timezone(dt.timedelta(hours=-7))
 LANE = os.environ.get('CC_RELAY_LANE')  # else the lane's scratch root the --out directory sits in (D:/mx/<lane>/...)
 SCENARIO_DIR = HERE / 'e2e'
-REVIEWS = Path('D:/Projects/reviews/takeover-20260909')
 CLOUDFLARE_TURN_CONFIG = Path('D:/mx/coturn-20260920/turn-config-cloudflare.json')
 # The retired fixed account (turnserver-fixed.conf): read into the book only, so a leak of it is still found; never used by a run.
 RETIRED_FIXED_CONF = Path('D:/mx/coturn-20260920/turnserver-fixed.conf')
@@ -148,13 +147,14 @@ def lane_for(out: Path) -> str:
 
 
 def boxes_file() -> Path:
-    """The box inventory: CC_RELAY_BOXES_JSON, or the lead tools' inventory/boxes.json."""
+    """The box inventory: CC_RELAY_BOXES_JSON, or the boxes.json of the inventory copy this run reads."""
     if os.environ.get('CC_RELAY_BOXES_JSON'):
         return Path(os.environ['CC_RELAY_BOXES_JSON'])
-    found = sorted(REVIEWS.glob('*/lead-tools/inventory/boxes.json'))
-    if not found:
-        raise SystemExit('no box inventory found: set CC_RELAY_BOXES_JSON')
-    return found[0]
+    from inventory_location import inventory_dir
+    found = inventory_dir() / 'boxes.json'
+    if not found.is_file():
+        raise SystemExit(f'no box inventory at {found}: set CC_RELAY_BOXES_JSON or CC_INVENTORY_DIR')
+    return found
 
 
 def read_json(path):
