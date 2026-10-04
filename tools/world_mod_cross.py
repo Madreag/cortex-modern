@@ -28,7 +28,7 @@ DRIVER_FILES = ("cross_peers.py", "cross_report.py", "e2e_video.py", "feel/repor
                 "feel_measure.py", "feel/harness_cost.py", "feel/host_loss.py", "e2e/ownership.py", "edith/remote_box.py",
                 "acceptance_native_runtime.py", "acceptance_frozen_tools.py", "acceptance_remote_tasks.py",
                 "acceptance_clock_brackets.py", "acceptance_spectator.py", "acceptance_spectator_tasks.py",
-                "acceptance_box_lease.py")
+                "acceptance_box_lease.py", "acceptance_transfer.py")
 
 
 def named_row(arguments):
@@ -317,6 +317,9 @@ def stage_activity(run, spec):
     from feel_measure import private_settings
     private_settings(run, spec.get("render_cap", 60))
     (Path(spec["own"])/"engine/feel").mkdir(exist_ok=True)
+    if spec['acceptance_row'] == 'world-join' and spec.get('defer_until_session'):
+        from acceptance_transfer import stage_probe
+        stage_probe(run, spec)
     if spec["acceptance_row"].startswith("mod-"):
         from acceptance_mod import alter_one_byte
         own = Path(spec["own"])

@@ -111,7 +111,7 @@ def build_report(root):
         runtime_driver_sources=manifest.get('driver_sources', {}),
         report_sources={name: sha256(Path(__file__).parent/name) for name in
                         ('acceptance_cross_report.py', 'acceptance_rows.py', 'acceptance_evidence.py',
-                         'acceptance_fixed_gates.py', 'world_soak.py', 'cross_report.py', 'feel/report.py')}))
+                         'acceptance_fixed_gates.py', 'acceptance_transfer.py', 'world_soak.py', 'cross_report.py', 'feel/report.py')}))
     row = manifest["acceptance_row"]
     specs = {("pc" if spec["peer"] == "erol" else spec["peer"]): spec for spec in manifest["specs"]}
     paths = {name: peer_root(root, manifest, spec) for name, spec in specs.items()}
@@ -153,7 +153,12 @@ def build_report(root):
             if len(totals) != 1:
                 failures.append('transfer: native StateChunk receipt missing or repeated')
         else:
-            facts["transfer"] = load(paths.get("edith", root)/"acceptance-transfer.json", {})
+            from acceptance_transfer import collect as collect_transfer
+            try:
+                facts['transfer'] = collect_transfer(paths.get('edith', root))
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                facts['transfer'] = {}
+                failures.append('transfer: '+str(error))
             received = facts['transfer'].get('received_bytes')
             if len(totals) != 1 or type(received) is not int or totals[0] != received:
                 failures.append('transfer: native StateChunk receipt missing, repeated, or differs from clocked byte count')

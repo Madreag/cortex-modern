@@ -17,7 +17,8 @@ class CrossReceiptReport(unittest.TestCase):
         return Path(temporary.name)
 
     def test_clocked_transfer_bytes_must_match_the_native_receiver(self):
-        line = '[net-match] state transfer complete: 123 bytes\n'
+        from test_acceptance_transfer import native_probe, native_log
+        line = native_log(native_probe())
         error = 'transfer: native StateChunk receipt missing, repeated, or differs from clocked byte count'
         for receipt, log, rejected in ((123, line, False), (124, line, True), (None, line, True),
                                        (123, '', True), (123, line+line, True)):
@@ -31,7 +32,12 @@ class CrossReceiptReport(unittest.TestCase):
                 own = root/'edith/incarnation-0'
                 (own/'engine').mkdir(parents=True)
                 (own/'engine/stdout.log').write_text(log, encoding='utf-8')
-                (own/'acceptance-transfer.json').write_text(json.dumps(dict(received_bytes=receipt)), encoding='utf-8')
+                (own/'record.json').write_text(json.dumps(dict(pid=42)), encoding='utf-8')
+                if receipt is not None:
+                    (own/'transfer-probe').mkdir()
+                    (own/'transfer-probe/net-ui-result.json').write_text(json.dumps(native_probe(receipt)), encoding='utf-8')
+                # A caller-supplied summary must never substitute for the native probe.
+                (own/'acceptance-transfer.json').write_text(json.dumps(dict(received_bytes=123)), encoding='utf-8')
                 result = build_report(root)
                 self.assertEqual(error in result['failures'], rejected)
 
