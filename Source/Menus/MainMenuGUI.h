@@ -404,6 +404,8 @@ namespace RTE {
 		GUICheckbox* m_HostRecAutosaveCheck = nullptr;
 		GUITextBox* m_HostRecAutosaveIntervalBox = nullptr;
 		GUILabel* m_HostRecLastSaveLabel = nullptr;
+		GUIComboBox* m_HostRecJoinHistoryCombo = nullptr; //!< How long this host keeps a world's round history for joiners and returns.
+		GUIComboBox* m_HostRecJoinLagCombo = nullptr;     //!< How far a watcher or returning seat may trail before it starts over.
 		GUILabel* m_HostRecWaitingLabel = nullptr;
 		GUILabel* m_HostRecRepairHintLabel = nullptr;    //!< H25: repair row's own status - hint, confirm line, or live progress.
 		bool m_HostRecRepairArmed = false;             //!< H25: first press arms; the second calls ResyncMatch.

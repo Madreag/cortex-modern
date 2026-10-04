@@ -54,8 +54,11 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <format>
 #include <sstream>
 #include <thread>
+#include <utility>
+#include <vector>
 
 using namespace RTE;
 
@@ -1603,6 +1606,14 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostRecAutosaveCheck = dynamic_cast<GUICheckbox*>(get("CheckHostRecAutosave"));
 	m_HostRecAutosaveIntervalBox = dynamic_cast<GUITextBox*>(get("TextHostRecAutosaveInterval"));
 	m_HostRecLastSaveLabel = dynamic_cast<GUILabel*>(get("LabelHostRecLastSave"));
+	m_HostRecJoinHistoryCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRecJoinHistory"));
+	m_HostRecJoinLagCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRecJoinLag"));
+	for (const auto& [name, hint]: {std::pair{"LabelHostRecJoinHistoryHint", NetJoinHistoryHint()}, std::pair{"LabelHostRecJoinLagHint", NetJoinLagHint()}}) {
+		if (auto* label = dynamic_cast<GUILabel*>(get(name))) {
+			label->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+			label->SetText(hint);
+		}
+	}
 	m_HostRecWaitingLabel = dynamic_cast<GUILabel*>(get("LabelHostRecWaiting"));
 	m_HostFilesSavePathLabel = dynamic_cast<GUILabel*>(get("LabelHostFilesSavePath"));
 	m_HostFilesDiagPathLabel = dynamic_cast<GUILabel*>(get("LabelHostFilesDiagPath"));
@@ -1710,6 +1721,12 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		m_HostFilesWidgetCombo->AddItem("Off");
 		m_HostFilesWidgetCombo->AddItem("Auto");
 		m_HostFilesWidgetCombo->AddItem("Always");
+	}
+	for (const auto& [combo, choices]: {std::pair{m_HostRecJoinHistoryCombo, std::vector<int>{60, 120, 180, 360, 600, 900, 1200, 1800}},
+	                                    std::pair{m_HostRecJoinLagCombo, std::vector<int>{30, 60, 120, 300, 600, 1800}}}) {
+		if (!combo) continue;
+		combo->ClearList();
+		for (const int seconds: choices) combo->AddItem(NetJoinHistoryText(seconds));
 	}
 	if (m_HostSessIdleCombo) {
 		m_HostSessIdleCombo->ClearList();
@@ -1896,6 +1913,36 @@ namespace {
 
 	void HostOptSetEditable(GUIControl* control, bool editable) {
 		if (control) control->SetEnabled(editable);
+	}
+
+	/// The seconds a world history or catch-up limit item names.
+	int HostOptJoinHistorySecondsOf(const GUIListPanel::Item* item) {
+		if (!item) return 0;
+		const long count = std::strtol(item->m_Name.c_str(), nullptr, 10);
+		return static_cast<int>(item->m_Name.find("minute") != std::string::npos ? count * 60 : count);
+	}
+
+	/// The seconds a world history or catch-up limit row has picked; 0 when nothing is picked.
+	int HostOptJoinHistorySecondsOf(GUIComboBox* combo) {
+		return combo && combo->GetSelectedIndex() >= 0 ? HostOptJoinHistorySecondsOf(combo->GetItem(combo->GetSelectedIndex())) : 0;
+	}
+
+	/// Shows a world history or catch-up limit, offering a saved value the list lacks in its place among the others.
+	void HostOptSelectJoinHistory(GUIComboBox* combo, int seconds) {
+		if (!combo) return;
+		std::vector<int> offered;
+		for (int i = 0; i < combo->GetCount(); ++i) {
+			const int listed = HostOptJoinHistorySecondsOf(combo->GetItem(i));
+			if (listed == seconds) {
+				if (combo->GetSelectedIndex() != i) combo->SetSelectedIndex(i);
+				return;
+			}
+			offered.push_back(listed);
+		}
+		offered.insert(std::upper_bound(offered.begin(), offered.end(), seconds), seconds);
+		combo->ClearList();
+		for (const int listed: offered) combo->AddItem(NetJoinHistoryText(listed));
+		combo->SetSelectedIndex(static_cast<int>(std::find(offered.begin(), offered.end(), seconds) - offered.begin()));
 	}
 
 	bool HostOptBoxFocused(GUITextBox* box) {
@@ -2188,6 +2235,11 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	HostOptSetEditable(m_HostRecAutosaveIntervalBox, editable && m_HostOptionsDraft.autosaveEnabled);
 	HostOptSetEditable(m_HostRecRepairCheck, editable);
 	HostOptSetEditable(m_HostRecAutosaveCheck, editable);
+	// This host's own history options: they never ride the match config, so they show the saved settings on every pass.
+	HostOptSelectJoinHistory(m_HostRecJoinHistoryCombo, g_SettingsMan.GetNetworkHostJoinHistorySeconds());
+	HostOptSelectJoinHistory(m_HostRecJoinLagCombo, g_SettingsMan.GetNetworkHostJoinLagSeconds());
+	HostOptSetEditable(m_HostRecJoinHistoryCombo, editable);
+	HostOptSetEditable(m_HostRecJoinLagCombo, editable);
 	if (m_HostRecLastSaveLabel) {
 		// H28: the service exposes no last-autosave tick getter, so the observation is the local
 		// filesystem's own newest .ccsave - the same place the [autosave] log line's file lands.
@@ -3047,6 +3099,19 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 	if (guiEventControl == m_HostRulesModeCombo) {
 		DraftHostOptionsFromControls();
 		RederiveHostOptionsRoster();
+		return;
+	}
+	if (guiEventControl == m_HostRecJoinHistoryCombo || guiEventControl == m_HostRecJoinLagCombo) {
+		// This host's own options take effect at its next history pass; Save as host defaults keeps them.
+		const bool history = guiEventControl == m_HostRecJoinHistoryCombo;
+		if (const int seconds = HostOptJoinHistorySecondsOf(history ? m_HostRecJoinHistoryCombo : m_HostRecJoinLagCombo); seconds != 0) {
+			if (history) g_SettingsMan.SetNetworkHostJoinHistorySeconds(seconds);
+			else g_SettingsMan.SetNetworkHostJoinLagSeconds(seconds);
+		}
+		const NetJoinHistoryPolicy policy = NetMatchService::JoinHistoryPolicyFromSettings(g_TimerMan.GetDeltaTimeMS());
+		System::PrintDiagnosticLine(std::format("[round-history] host options world_history_s={} catch_up_limit_s={} retain_frames={} lag_limit_frames={}",
+		                                        g_SettingsMan.GetNetworkHostJoinHistorySeconds(), g_SettingsMan.GetNetworkHostJoinLagSeconds(), policy.retainFrames,
+		                                        policy.lagLimitFrames));
 		return;
 	}
 	if (guiEventControl == m_HostFilesWidgetCombo) {
