@@ -346,7 +346,7 @@ class HotspotRows(unittest.TestCase):
     def test_every_hotspot_row_is_declared_with_its_lever(self):
         scenario = json.loads((Path(__file__).resolve().parent / 'e2e/mp-relay-hotspot.json').read_text(encoding='utf-8'))
         runs = {run['name'][0]: run for run in scenario['runs']}
-        self.assertEqual(sorted(runs), list('abcdef'))
+        self.assertEqual(sorted(runs), list('abcdefg'))
         self.assertTrue(any(peer.get('tailscale_down') for peer in runs['a']['peers']))
         self.assertEqual(runs['a']['expect_routes'], {'client': 'relay'})
         self.assertEqual(next(peer for peer in runs['b']['peers'] if peer['name'] == 'host')['box'], 'ally')
@@ -355,6 +355,11 @@ class HotspotRows(unittest.TestCase):
         self.assertGreater(runs['d']['ticks'] / 60, runs['d']['relay_ttl_cap'])
         self.assertTrue(runs['e']['kill_host_at_tick'])
         self.assertTrue(any(peer.get('menu_script') for peer in runs['f']['peers']))
+        # Two Relay only players meet in the public directory, the hotspot box off the tailnet, and stay relayed.
+        self.assertEqual(runs['g']['directory'], 'public')
+        self.assertEqual({peer['connection'] for peer in runs['g']['peers']}, {'RelayOnly'})
+        self.assertTrue(next(peer for peer in runs['g']['peers'] if peer['box'] == 'ally').get('tailscale_down'))
+        self.assertEqual(runs['g']['expect_routes'], {'client': 'relay', 'host': 'relay'})
         for run in scenario['runs']:
             for peer in run['peers']:
                 if peer['box'] == 'ally':
