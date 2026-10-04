@@ -7193,6 +7193,84 @@ void LuaStateWrapper::Clear() {
 /// The manager behind a Lua global, or null where a self-test runs a state without it.
 template <typename Manager> static Manager* InstanceOrNull() { return Manager::IsConstructed() ? &Manager::Instance() : nullptr; }
 
+namespace {
+	thread_local unsigned s_PreviewPresetsWindow = 0;
+	thread_local std::unordered_map<std::string, const Entity*> s_PreviewPresets;
+	thread_local uint64_t s_PreviewPresetLookups = 0;
+
+	// The preset a Create call clones inside a preview window, looked up once per window: presets do not change while it is
+	// open, and the search by name walks every module's list. Null outside a window and for a name with no preset.
+	const Entity* PreviewWindowPreset(const char* type, const std::string& preset, const std::string& module) {
+		const unsigned window = luabind::detail::preview_fence_window;
+		if (window == 0) {
+			return nullptr;
+		}
+		if (s_PreviewPresetsWindow != window) {
+			s_PreviewPresets.clear();
+			s_PreviewPresetsWindow = window;
+		}
+		std::string key = std::string(type) + '\n' + module + '\n' + preset;
+		const auto [found, added] = s_PreviewPresets.try_emplace(std::move(key), nullptr);
+		if (added) {
+			++s_PreviewPresetLookups;
+			found->second = g_PresetMan.GetEntityPreset(type, preset, module);
+		}
+		return found->second;
+	}
+} // namespace
+
+// The Create bindings: a preview window clones the preset it looked up for this window; everything else goes through the adapter.
+#define PreviewWindowCreateFunctionsForType(TYPE) \
+	static TYPE* PreviewWindowCreate##TYPE(std::string preset, std::string module) { \
+		if (const Entity* found = PreviewWindowPreset(#TYPE, preset, module)) { \
+			return dynamic_cast<TYPE*>(found->Clone()); \
+		} \
+		return LuaAdaptersEntityCreate::Create##TYPE(std::move(preset), std::move(module)); \
+	} \
+	static TYPE* PreviewWindowCreate##TYPE(std::string preset) { \
+		return PreviewWindowCreate##TYPE(std::move(preset), "All"); \
+	}
+
+PreviewWindowCreateFunctionsForType(SoundContainer);
+PreviewWindowCreateFunctionsForType(MOPixel);
+PreviewWindowCreateFunctionsForType(TerrainObject);
+PreviewWindowCreateFunctionsForType(MOSParticle);
+PreviewWindowCreateFunctionsForType(MOSRotating);
+PreviewWindowCreateFunctionsForType(Attachable);
+PreviewWindowCreateFunctionsForType(AEmitter);
+PreviewWindowCreateFunctionsForType(AEJetpack);
+PreviewWindowCreateFunctionsForType(PEmitter);
+PreviewWindowCreateFunctionsForType(Actor);
+PreviewWindowCreateFunctionsForType(ADoor);
+PreviewWindowCreateFunctionsForType(Arm);
+PreviewWindowCreateFunctionsForType(Leg);
+PreviewWindowCreateFunctionsForType(AHuman);
+PreviewWindowCreateFunctionsForType(ACrab);
+PreviewWindowCreateFunctionsForType(Turret);
+PreviewWindowCreateFunctionsForType(ACDropShip);
+PreviewWindowCreateFunctionsForType(ACRocket);
+PreviewWindowCreateFunctionsForType(HeldDevice);
+PreviewWindowCreateFunctionsForType(Magazine);
+PreviewWindowCreateFunctionsForType(Round);
+PreviewWindowCreateFunctionsForType(HDFirearm);
+PreviewWindowCreateFunctionsForType(ThrownDevice);
+PreviewWindowCreateFunctionsForType(TDExplosive);
+PreviewWindowCreateFunctionsForType(PieSlice);
+PreviewWindowCreateFunctionsForType(PieMenu);
+PreviewWindowCreateFunctionsForType(Scene);
+
+/// RegisterLuaBindingsOfConcreteType with the Create bindings above.
+#define RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(OWNINGSCOPE, TYPE) \
+	luabind::def((std::string("Create") + std::string(#TYPE)).c_str(), (TYPE * (*)(std::string, std::string)) & PreviewWindowCreate##TYPE, luabind::adopt(luabind::result)), \
+	    luabind::def((std::string("Create") + std::string(#TYPE)).c_str(), (TYPE * (*)(std::string)) & PreviewWindowCreate##TYPE, luabind::adopt(luabind::result)), \
+	    luabind::def((std::string("Random") + std::string(#TYPE)).c_str(), (TYPE * (*)(std::string, int)) & LuaAdaptersEntityCreate::Random##TYPE, luabind::adopt(luabind::result)), \
+	    luabind::def((std::string("Random") + std::string(#TYPE)).c_str(), (TYPE * (*)(std::string, std::string)) & LuaAdaptersEntityCreate::Random##TYPE, luabind::adopt(luabind::result)), \
+	    luabind::def((std::string("Random") + std::string(#TYPE)).c_str(), (TYPE * (*)(std::string)) & LuaAdaptersEntityCreate::Random##TYPE, luabind::adopt(luabind::result)), \
+	    luabind::def((std::string("To") + std::string(#TYPE)).c_str(), (TYPE * (*)(Entity*)) & LuaAdaptersEntityCast::To##TYPE), \
+	    luabind::def((std::string("To") + std::string(#TYPE)).c_str(), (const TYPE* (*)(const Entity*)) & LuaAdaptersEntityCast::ToConst##TYPE), \
+	    luabind::def((std::string("Is") + std::string(#TYPE)).c_str(), &LuaAdaptersEntityCast::IsConst##TYPE), \
+	    OWNINGSCOPE::Register##TYPE##LuaBindings()
+
 void LuaStateWrapper::Initialize() {
 	m_NativeCache.reset();
 	m_CheckpointHeap = CheckpointLua::HeapOwner::Create();
@@ -7304,45 +7382,45 @@ void LuaStateWrapper::Initialize() {
 	                         RegisterLuaBindingsOfType(SystemLuaBindings, Vector),
 	                         RegisterLuaBindingsOfType(SystemLuaBindings, Box),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, Entity),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, SoundContainer),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, SoundContainer),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, SoundSet),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, LimbPath),
 	                         RegisterLuaBindingsOfAbstractType(EntityLuaBindings, SceneObject),
 	                         RegisterLuaBindingsOfAbstractType(EntityLuaBindings, MovableObject),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, Material),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, MOPixel),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, TerrainObject),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, MOPixel),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, TerrainObject),
 	                         RegisterLuaBindingsOfAbstractType(EntityLuaBindings, MOSprite),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, MOSParticle),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, MOSRotating),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, Attachable),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, MOSParticle),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, MOSRotating),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, Attachable),
 	                         RegisterLuaBindingsOfAbstractType(EntityLuaBindings, Emission),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, AEmitter),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, AEJetpack),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, PEmitter),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, Actor),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, ADoor),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, Arm),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, Leg),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, AHuman),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, ACrab),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, Turret),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, AEmitter),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, AEJetpack),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, PEmitter),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, Actor),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, ADoor),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, Arm),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, Leg),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, AHuman),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, ACrab),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, Turret),
 	                         RegisterLuaBindingsOfAbstractType(EntityLuaBindings, ACraft),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, ACDropShip),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, ACRocket),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, HeldDevice),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, Magazine),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, Round),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, HDFirearm),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, ThrownDevice),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, TDExplosive),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, PieSlice),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, PieMenu),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, ACDropShip),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, ACRocket),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, HeldDevice),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, Magazine),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, Round),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, HDFirearm),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, ThrownDevice),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, TDExplosive),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, PieSlice),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, PieMenu),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, Gib),
 	                         RegisterLuaBindingsOfType(SystemLuaBindings, Controller),
 	                         RegisterLuaBindingsOfType(SystemLuaBindings, Timer),
 	                         RegisterLuaBindingsOfType(SystemLuaBindings, PathRequest),
-	                         RegisterLuaBindingsOfConcreteType(EntityLuaBindings, Scene),
+	                         RegisterLuaBindingsOfConcreteTypeCreatedInPreviews(EntityLuaBindings, Scene),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, SceneArea),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, StaticSceneLayer),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, SLBackground),
@@ -11204,6 +11282,143 @@ end
 		checkpointValues = passed && checkpointValues;
 	}
 	{
+		// A Timer a script keeps is a value: the preview's copy resets its own, one Timer held twice stays one, and the live
+		// Timer keeps the start its own ticks gave it.
+		const auto* preset = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+		std::unique_ptr<AHuman> actor(preset ? dynamic_cast<AHuman*>(preset->Clone()) : nullptr);
+		const auto stashed = [&actor](const std::string& key) {
+			LuaStateWrapper* state = actor ? actor->GetLuaState() : nullptr;
+			if (!state) return std::string("none");
+			std::lock_guard<std::recursive_mutex> lock(state->GetMutex());
+			lua_State* L = state->GetLuaState();
+			std::string value = "nil";
+			lua_getglobal(L, "_ScriptFieldsStash");
+			if (lua_istable(L, -1)) {
+				lua_getfield(L, -1, key.c_str());
+				if (lua_isboolean(L, -1)) {
+					value = lua_toboolean(L, -1) ? "true" : "false";
+				} else if (lua_isnumber(L, -1)) {
+					value = std::to_string(lua_tointeger(L, -1));
+				}
+				lua_pop(L, 1);
+				lua_pushnil(L);
+				lua_setfield(L, -2, key.c_str());
+			}
+			lua_pop(L, 1);
+			return value;
+		};
+		bool loaded = false;
+		bool frozen = true;
+		std::string previewElapsed = "none", liveElapsed = "none", previewAlias = "none";
+		if (actor && actor->LoadScript(g_PresetMan.GetFullModulePath("Tests.rte/PreviewTimer.lua")) >= 0) {
+			loaded = actor->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"init"}) >= 0;
+			LuaMan::CapturePreviewSelfCopies({actor.get()}, false);
+			MovableObject* clone = nullptr;
+			{
+				MovableObject::FaithfulCloneScope scope(false);
+				clone = dynamic_cast<MovableObject*>(actor->Clone());
+			}
+			if (auto* previewed = dynamic_cast<Actor*>(clone)) {
+				LuaMan::BeginPreviewScripts({previewed}, false, {actor.get()});
+				frozen = LuaMan::PreviewFrozenCount() > 0;
+				if (!frozen) {
+					LuaMan::SetScriptsFrozen(true);
+					previewed->UpdateScripts();
+					LuaMan::SetScriptsFrozen(false);
+					previewed->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"preview"});
+				}
+			}
+			LuaMan::EndPreviewScripts();
+			delete clone;
+			actor->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"live"});
+			previewElapsed = stashed("preview-timer:preview");
+			previewAlias = stashed("preview-timer-alias:preview");
+			liveElapsed = stashed("preview-timer:live");
+		}
+		const bool passed = loaded && !frozen && previewElapsed == "0" && previewAlias == "true" && liveElapsed == "5000";
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " preview_copy_resets_its_own_timer loaded=" << loaded << " frozen=" << frozen
+		          << " preview_elapsed_ms=" << previewElapsed << " preview_alias_same=" << previewAlias << " live_elapsed_ms=" << liveElapsed << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+	{
+		// A Create call inside a preview window clones the preset it looked up once for that window, the same one the search
+		// finds; a name with no preset is still nil, and outside a window every call takes the search as before.
+		std::string lastName;
+		for (int module = g_PresetMan.GetTotalModuleCount() - 1; module >= 0 && lastName.empty(); --module) {
+			std::list<Entity*> pixels;
+			g_PresetMan.GetAllOfType(pixels, "MOPixel", module);
+			for (const Entity* pixel: pixels) {
+				if (pixel->GetClassName() == "MOPixel") {
+					lastName = pixel->GetPresetName();
+				}
+			}
+		}
+		const auto* preset = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+		std::unique_ptr<AHuman> actor(preset ? dynamic_cast<AHuman*>(preset->Clone()) : nullptr);
+		LuaStateWrapper* state = nullptr;
+		if (actor && actor->LoadScript(g_PresetMan.GetFullModulePath("Tests.rte/PreviewUpdateHook.lua")) >= 0 && actor->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"init"}) >= 0) {
+			state = actor->GetLuaState();
+		}
+		const std::string name = "'" + lastName + "'";
+		const std::string loop = "local name = " + name + "; for i = 1, 2000 do local p = CreateMOPixel(name) end";
+		const auto timed = [&state](const std::string& code) {
+			const auto begin = std::chrono::steady_clock::now();
+			const int status = state->RunScriptString(code);
+			const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count();
+			return status == 0 ? us / 2000.0 : -1.0;
+		};
+		const auto window = [&actor](const std::function<void()>& body) {
+			LuaMan::CapturePreviewSelfCopies({actor.get()}, false);
+			MovableObject* clone = nullptr;
+			{
+				MovableObject::FaithfulCloneScope scope(false);
+				clone = dynamic_cast<MovableObject*>(actor->Clone());
+			}
+			LuaMan::BeginPreviewScripts({dynamic_cast<Actor*>(clone)}, false, {actor.get()});
+			body();
+			LuaMan::EndPreviewScripts();
+			delete clone;
+		};
+		std::string verdict = "none";
+		uint64_t firstWindow = 0, secondWindow = 0, outside = 0;
+		double outsideUs = -1.0, insideUs = -1.0;
+		if (state && !lastName.empty()) {
+			uint64_t lookups = s_PreviewPresetLookups;
+			window([&] {
+				state->RunScriptString("local name = " + name + "; local first = CreateMOPixel(name); local same = true; "
+				                       "for i = 1, 200 do local p = CreateMOPixel(name); same = same and p.PresetName == name and p.ClassName == 'MOPixel' end; "
+				                       "local missing = CreateMOPixel('cccp preview no such preset'); local moduled = CreateMOPixel('Spark Yellow 1', 'Base.rte'); "
+				                       "_ScriptFieldsStash = _ScriptFieldsStash or {}; "
+				                       "_ScriptFieldsStash['preview-create'] = (same and first.PresetName == name and missing == nil and moduled ~= nil and moduled.PresetName == 'Spark Yellow 1') and 'ok' or 'wrong'");
+				insideUs = timed(loop);
+			});
+			firstWindow = s_PreviewPresetLookups - lookups;
+			lookups = s_PreviewPresetLookups;
+			window([&] { state->RunScriptString("local name = " + name + "; local a = CreateMOPixel(name); local b = CreateMOPixel(name)"); });
+			secondWindow = s_PreviewPresetLookups - lookups;
+			lookups = s_PreviewPresetLookups;
+			outsideUs = timed(loop);
+			outside = s_PreviewPresetLookups - lookups;
+			state->RunScriptString("collectgarbage('collect')");
+			std::lock_guard<std::recursive_mutex> stateLock(state->GetMutex());
+			lua_State* L = state->GetLuaState();
+			lua_getglobal(L, "_ScriptFieldsStash");
+			if (lua_istable(L, -1)) {
+				lua_getfield(L, -1, "preview-create");
+				verdict = lua_isstring(L, -1) ? lua_tostring(L, -1) : "nil";
+				lua_pop(L, 1);
+				lua_pushnil(L);
+				lua_setfield(L, -2, "preview-create");
+			}
+			lua_pop(L, 1);
+		}
+		const bool passed = verdict == "ok" && firstWindow == 3 && secondWindow == 1 && outside == 0;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " preview_create_looks_up_each_preset_once_per_window name='" << lastName << "' clones=" << verdict
+		          << " lookups_first_window=" << firstWindow << " lookups_second_window=" << secondWindow << " lookups_outside=" << outside
+		          << " create_us_outside=" << outsideUs << " create_us_inside=" << insideUs << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+	{
 		// A scene reload leaves no scene layer's back buffer behind: a preset's clone loaded twice, and a clone of a loaded scene loaded again.
 		const int before = SceneLayerBackBufferCount();
 		const auto* preset = dynamic_cast<const Scene*>(g_PresetMan.GetEntityPreset("Scene", "Grasslands", "Base.rte"));
@@ -13375,8 +13590,8 @@ namespace {
 		lua_replace(L, -2);
 	}
 
-	// Whether the copy, or the remap that follows it, gives this userdata another value: a Vector or a live sound is
-	// copied, and an object handle names the window's view of its object.
+	// Whether the copy, or the remap that follows it, gives this userdata another value: a Vector, a Timer or a live sound
+	// is copied, and an object handle names the window's view of its object.
 	bool PreviewCopyReplaces(lua_State* L, int index, void*) {
 		const auto* object = luabind::detail::is_class_object(L, AbsoluteLuaIndex(L, index));
 		if (!object || !object->crep()) {
@@ -13385,6 +13600,9 @@ namespace {
 		const char* className = object->crep()->name();
 		if (std::strcmp(className, "Vector") == 0) {
 			return true;
+		}
+		if (std::strcmp(className, "Timer") == 0) {
+			return object->ptr() != nullptr;
 		}
 		if (std::strcmp(className, "SoundContainer") == 0) {
 			return ScriptGraphNativeAlive(L, object);
@@ -13452,6 +13670,20 @@ namespace {
 						lua_pushvalue(L, src);
 						return;
 					}
+					lua_pushvalue(L, src);
+					lua_pushvalue(L, -2);
+					lua_rawset(L, seen);
+					return;
+				}
+				// A Timer is its stamps: the preview resets and reads its own, and one Timer held in two places is one copy.
+				if (object->crep() && std::strcmp(object->crep()->name(), "Timer") == 0 && object->ptr()) {
+					lua_pushvalue(L, src);
+					lua_rawget(L, seen);
+					if (!lua_isnil(L, -1)) {
+						return;
+					}
+					lua_pop(L, 1);
+					luabind::object(L, *static_cast<const Timer*>(object->ptr())).push(L);
 					lua_pushvalue(L, src);
 					lua_pushvalue(L, -2);
 					lua_rawset(L, seen);
@@ -13862,7 +14094,8 @@ namespace {
 	int PreviewFenceOwns(const luabind::detail::object_rep* rep) {
 		int offset = 0;
 		if (const MovableObject* mo = FencedMovableObject(rep, offset)) {
-			return LuaMan::IsPreviewClone(mo) || mo->GetUniqueID() > s_PreviewBindingUIDFloor ? 1 : 0;
+			// What the window made answers first: a beam's particles take this test on every write.
+			return mo->GetUniqueID() > s_PreviewBindingUIDFloor || LuaMan::IsPreviewClone(mo) ? 1 : 0;
 		}
 		// The hold's sound copies are the window's own, as are the Vectors it made.
 		if (rep && rep->crep() && std::strcmp(rep->crep()->name(), "SoundContainer") == 0 && IsPreviewSoundCopy(static_cast<const SoundContainer*>(rep->ptr()))) {
