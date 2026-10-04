@@ -1460,13 +1460,15 @@ void NetModerationGUI::DrawMatchToasts(const std::string& screenLine) {
 	std::vector<size_t> indices;
 	std::vector<std::string> lines;
 	const auto sentence = [](const std::string& text) { return text.substr(0, text.find_last_not_of(". ") + 1); };
+	const uint8_t localPeer = ScenarioRunner::GetLockstepLocalPeerId();
 	for (size_t index = 0; index < queued.size(); ++index) {
 		if (!ToastStillApplies(queued[index])) continue;
 		// A seat's toast reads its current state, so two events about one seat can read alike: the band shows that line once.
 		std::string line = ToastText(queued[index]);
 		if (std::find(lines.begin(), lines.end(), line) != lines.end()) continue;
-		// The screen beneath shows its own line; the band does not read it out again.
-		if (!screenLine.empty() && sentence(line) == sentence(screenLine)) continue;
+		// The screen beneath shows its own line; the band does not read it out again, nor this seat's own state when that is the line.
+		const bool ownSeat = queued[index].senderPeerId == 0 || queued[index].senderPeerId == localPeer;
+		if (!screenLine.empty() && (sentence(line) == sentence(screenLine) || (ownSeat && sentence(queued[index].text) == sentence(screenLine)))) continue;
 		lines.push_back(std::move(line));
 		visible.push_back(queued[index]);
 		indices.push_back(index);
