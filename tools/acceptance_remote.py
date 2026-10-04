@@ -46,6 +46,7 @@ def remote_commands(commands, local_repo, remote_repo, local_root, remote_root):
 def prepare_box(repo, box, root, inventory_root, source, executable, *, declared_tree=False):
     split, rb = inventory_modules(inventory_root)
     box = box if declared_tree else split.execution_box(box)
+    if split.held_reason(box):raise RuntimeError(split.held_reason(box))
     remote = rb.RemoteBox(box.ssh, box.task, box.session_script)
     work = Path(root)/'.windows'/box.name
     work.mkdir(parents=True, exist_ok=True)

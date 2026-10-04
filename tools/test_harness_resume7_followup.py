@@ -61,6 +61,11 @@ class FollowupRulings(unittest.TestCase):
                 receipt=collection.wait_for_window(root,3,marker=marker,timeout=9000,sleep_fn=hold,now_fn=lambda:clock[0])
             self.assertLessEqual(len(sleeps),1,'a user hold consumed the reservation budget')
             self.assertEqual(receipt['state'],'AWAITING');self.assertEqual(receipt['reason'],run_split.WINDOW_REASON)
+            from test_acceptance_resume3 import build_plan
+            reader=build_plan.acceptance_manifest
+            spec=next(row for row in result['plan']['rows'] if row['section']==3 and row.get('window_required'))
+            decision=reader.section_choice(spec,collection.read(root/'split-plan.json'),reader.Evidence(root))
+            self.assertEqual(decision['reason'],run_split.WINDOW_REASON,'the row reader changed the user hold into a lane reservation')
 
     def test_t9_live_target_refuses_before_checkout(self):
         refresh=module(INVENTORY/'refresh_windows.py','refresh_guard_unit')
