@@ -57,6 +57,8 @@ A community fork of the [Cortex Command Community Project](https://github.com/co
 
 ## Play in five minutes
 
+> No second player handy? [Run a host and a client side by side on one Windows PC](docs/handtest.md).
+>
 > **Both players need the same Cortex Modern version and the same mods.** The version is printed at the bottom left of the main menu and in `VERSION.txt` beside the game. If a join is refused as "modules", the two `Data` folders differ: the same mods in the same versions on both sides fixes it.
 >
 > <img src="docs/images/version-line.png" alt="The version line on the main menu: Community Project v7.0.0, multiplayer 0.1.0-alpha.1 (protocol 5)" width="300">
@@ -300,7 +302,7 @@ The full upstream build notes, including recommended Visual Studio plugins, debu
 
 This fork follows the Community Project's engineering rules: controller-sync multiplayer (never deterministic AI), standardized floating point for cross-platform determinism (never expanded fixed-point), and small, single-purpose commits. Changes that would break existing mods are not accepted; the engine is fixed instead.
 
-Issues and pull requests are welcome here. Changes that belong upstream are prepared as focused pull requests to the Community Project once they are proven here.
+Issues and pull requests are welcome here. Changes that belong upstream are prepared as focused pull requests to the Community Project once they are proven here. The rules and the checks to run first are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Reporting a bug
 
@@ -310,6 +312,8 @@ Open an issue with:
 2. Your operating system and the other players' operating systems.
 3. The connection mode the overlay showed: *via direct* or *via relay*.
 4. **Save Diagnostics** (the button under the Multiplayer and Host screens, also in Settings → Network): attach the diagnostics it saves. Check the bundle for anything you consider private before attaching it.
+
+For anything that could be used against other players, use the private route in [SECURITY.md](SECURITY.md) instead of a public issue.
 
 ## Credits and license
 
