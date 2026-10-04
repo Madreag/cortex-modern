@@ -145,9 +145,29 @@ namespace RTE {
 		}
 	}
 
+	void NetDirectoryClient::ApplyRefusedResumes(NetDirectoryRegisterRequest& row) const {
+		const auto refused = [&] { return std::find(m_RefusedResumes.begin(), m_RefusedResumes.end(), std::make_pair(row.resumeSessionId, row.resumeToken)) != m_RefusedResumes.end(); };
+		while (!row.resumeSessionId.empty() && refused()) {
+			if (row.persistentWorld && row.worldId == row.resumeSessionId && !row.resumeToken.empty()) {
+				row.resumeToken.clear();
+			} else {
+				row.resumeSessionId.clear();
+				row.resumeToken.clear();
+			}
+		}
+	}
+
+	std::string NetDirectoryClient::ClaimedSessionId(const NetDirectoryRegisterRequest& row) const {
+		NetDirectoryRegisterRequest claimed = row;
+		ApplyRefusedResumes(claimed);
+		return claimed.resumeSessionId;
+	}
+
 	void NetDirectoryClient::Advertise(const NetDirectoryRegisterRequest& row, bool running, bool listed) {
 		const bool hiddenLatchFailed = m_State == State::Failed && m_HiddenUnsupported;
 		m_Row = row;
+		// The host passes its row every frame: a claim the directory refused is never presented again.
+		ApplyRefusedResumes(m_Row);
 		m_Running = running;
 		m_DesiredListed = listed;
 		if (listed) {
@@ -463,11 +483,13 @@ namespace RTE {
 			return;
 		}
 		if (reply.statusCode == 403 && !m_Row.resumeSessionId.empty()) {
-			// The stored row token is not this row's any more: register fresh instead of leaving the
-			// world unlisted for the rest of its life.
-			m_Row.resumeSessionId.clear();
-			m_Row.resumeToken.clear();
-			NoteError("register refused (403): the stored directory row is not ours, registering fresh");
+			// The stored row token is not this row's any more (a directory that restarted holds none): a world claims its own id
+			// again, anything else registers fresh, instead of leaving the row unlisted for the rest of its life.
+			if (m_RefusedResumes.size() >= c_MaxRefusedResumes) m_RefusedResumes.erase(m_RefusedResumes.begin());
+			m_RefusedResumes.emplace_back(m_Row.resumeSessionId, m_Row.resumeToken);
+			ApplyRefusedResumes(m_Row);
+			NoteError(m_Row.resumeSessionId.empty() ? "register refused (403): the stored directory row is not ours, registering fresh"
+			                                        : "register refused (403): the directory holds no token for the world's row, claiming the world's id again");
 			ScheduleRetry(nowMs);
 			return;
 		}
@@ -511,6 +533,8 @@ namespace RTE {
 			m_ExpiresInS = response.expiresInS;
 			m_NextHeartbeatMs = nowMs + static_cast<uint64_t>(m_HeartbeatS) * 1000;
 			m_BackoffMs = 0;
+			// A row that beats again has lived: a service that forgets it later is answered with another register.
+			m_Reregistered = false;
 			return;
 		}
 		if (reply.statusCode == 404) {

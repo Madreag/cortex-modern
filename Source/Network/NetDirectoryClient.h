@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace RTE {
@@ -115,6 +116,8 @@ namespace RTE {
 		/// capability, otherwise the row is deleted once and the intent stays Failed.
 		void Advertise(const NetDirectoryRegisterRequest& row, bool running, bool listed = true);
 		bool Resume(const NetDirectoryRegisterRequest& row, const std::string& sessionId, const std::string& token, bool running = true, bool listed = true);
+		/// The session id a register of this row would claim: its resume id, unless the directory refused that claim; empty for a new id.
+		std::string ClaimedSessionId(const NetDirectoryRegisterRequest& row) const;
 		/// The host generation the directory said holds the row, once it refused this host's; 0 while it has not.
 		int64_t GetSupersededGeneration() const { return m_SupersededGeneration; }
 		void AbandonLease();
@@ -214,7 +217,12 @@ namespace RTE {
 		uint64_t m_NextHeartbeatMs = 0;
 		uint64_t m_NextAttemptMs = 0;   //!< The retry slot a transient failure or a 429 set.
 		uint64_t m_BackoffMs = 0;
-		bool m_Reregistered = false;    //!< The one re-register a heartbeat 404 is allowed.
+		bool m_Reregistered = false;    //!< The one re-register a heartbeat 404 is allowed until the new row beats.
+		std::vector<std::pair<std::string, std::string>> m_RefusedResumes; //!< Resume claims (session, token) the directory refused.
+		static constexpr size_t c_MaxRefusedResumes = 8;
+		/// Steps a row's resume claim past every claim the directory refused: a world drops a token the directory no longer holds and
+		/// claims its own id as on its first boot; any other refused claim registers a new id.
+		void ApplyRefusedResumes(NetDirectoryRegisterRequest& row) const;
 		uint64_t m_BrowseNextMs = 0;
 		std::vector<NetDirectorySessionRow> m_Rows;
 		std::string m_ListError;

@@ -1698,6 +1698,17 @@ namespace RTE {
 			std::shared_ptr<const NetRelayConfig> value;
 		};
 		RelaySnapshotSlot m_RelaySnapshot;
+		struct HostSignalCredential {
+			std::string sessionId;
+			std::string token;
+		};
+		struct HostSignalSlot {
+			std::shared_ptr<const HostSignalCredential> load() const { std::lock_guard<std::mutex> lock(mutex); return value; }
+			void store(std::shared_ptr<const HostSignalCredential> next) { std::lock_guard<std::mutex> lock(mutex); value = std::move(next); }
+			mutable std::mutex mutex;
+			std::shared_ptr<const HostSignalCredential> value;
+		};
+		HostSignalSlot m_HostSignalCredential; //!< The row the host's ICE signal channel answers on; the worker's pump rebinds to a re-registered one.
 		NetRelayConfig m_FixedRelayOffer;
 		std::string m_RelayError;
 		int m_HostRelayMode = 1;

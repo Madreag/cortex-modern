@@ -2750,8 +2750,8 @@ static std::string ResyncSaveName() {
 				m_DirectoryRow.spectatorFree = m_WorldSpectatorsFree;
 				m_DirectoryRow.joinMode = NetIceRowJoinMode(m_IceEnabled, !m_DirectoryRow.listenAddrs.empty(), m_IceBoundSessionId, m_Directory.GetSessionId());
 				advertised = m_DirectoryRow;
-				// A register receives a new id; only the existing bound row can advertise ICE.
-				advertised.joinMode = NetIceRowJoinMode(m_IceEnabled, !advertised.listenAddrs.empty(), m_IceBoundSessionId, std::string());
+				// A register receives a new id unless it claims the row's own again; only the bound id can advertise ICE.
+				advertised.joinMode = NetIceRowJoinMode(m_IceEnabled, !advertised.listenAddrs.empty(), m_IceBoundSessionId, m_Directory.ClaimedSessionId(advertised));
 			}
 			if (!advertised.resumeSessionId.empty() && m_Directory.GetState() == NetDirectoryClient::State::Idle && m_Directory.GetSessionId().empty()) {
 				(void)m_Directory.Resume(advertised, advertised.resumeSessionId, advertised.resumeToken, directoryRunning, directoryListed);
@@ -2768,13 +2768,22 @@ static std::string ResyncSaveName() {
 		// The directory holds the row at a later generation: the match went on without this host.
 		if (m_IsHost && m_Coordinator && m_Directory.GetState() == NetDirectoryClient::State::Superseded) m_Coordinator->NoteSuperseded(static_cast<uint64_t>(m_Directory.GetSupersededGeneration()));
 		UpdateRelayOffer(nowMs);
+		std::string reboundSignal;
 		{
 			// The worker cannot touch the directory client, so what it needs is published here.
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_DirectorySessionId = m_Directory.GetSessionId();
 			m_DirectoryToken = m_Directory.GetToken();
 			m_DirectoryRegistered = m_Directory.GetState() == NetDirectoryClient::State::Registered;
+			// A directory that lost the row and took it back issued it a new token: the host's signal channel answers on that one.
+			if (m_IsHost && m_DirectoryRegistered && !m_DirectoryToken.empty() && !m_IceBoundSessionId.empty() && m_DirectorySessionId == m_IceBoundSessionId) {
+				if (const auto signal = m_HostSignalCredential.load(); signal && signal->token != m_DirectoryToken) {
+					m_HostSignalCredential.store(std::make_shared<const HostSignalCredential>(HostSignalCredential{m_DirectorySessionId, m_DirectoryToken}));
+					reboundSignal = m_DirectorySessionId;
+				}
+			}
 		}
+		if (!reboundSignal.empty()) System::PrintDiagnosticLine("[net-ice] host signal channel follows the re-registered row session=" + reboundSignal);
 		// The world's image follows the writer thread, never a file read on this one.
 		if (m_IsHost) {
 			PublishFinishedWorldJoinImage();
@@ -9722,6 +9731,7 @@ static std::string ResyncSaveName() {
 				if (error) *error = "the host signal channel would not open";
 				return false;
 			}
+			m_HostSignalCredential.store(std::make_shared<const HostSignalCredential>(HostSignalCredential{sessionId, token}));
 			const std::string iceSeed = (request.persistentWorld && !request.worldId.empty()) ? request.worldId : sessionId;
 			const std::string identity = NetIceHostIdentity(iceSeed);
 			NetRelayConfig relay;
@@ -10243,7 +10253,14 @@ static std::string ResyncSaveName() {
 				GnsDirectorySignalDispatcher* dispatcher = m_Dispatcher.get();
 				mux->SetPump([this, dispatcher, p2p = mux->P2PGns(), previous = NetRelayConfig{},
 				              initial = request.host ? mux->HostP2PConfig() : mux->GetJoinSpec().p2p,
-				              personal = !g_SettingsMan.GetNetworkPlayerTurnServers().empty() || g_SettingsMan.HasNetworkTurnServersOverride()]() mutable {
+				              personal = !g_SettingsMan.GetNetworkPlayerTurnServers().empty() || g_SettingsMan.HasNetworkTurnServersOverride(),
+				              host = request.host, appliedSignal = m_HostSignalCredential.load()]() mutable {
+					if (host) {
+						if (auto signal = m_HostSignalCredential.load(); signal && signal != appliedSignal) {
+							if (appliedSignal && (signal->sessionId != appliedSignal->sessionId || signal->token != appliedSignal->token)) dispatcher->RebindHost(signal->sessionId, signal->token);
+							appliedSignal = std::move(signal);
+						}
+					}
 					dispatcher->Update(SteadyNowMs());
 					const auto snapshot = m_RelaySnapshot.load();
 					NetRelayConfig offer = snapshot ? *snapshot : NetRelayConfig{};
