@@ -118,7 +118,7 @@ def install(options):
             if options.box == 'Z13':
                 # Replace the directory entry outside D:/mx, detaching any old
                 # hard link without modifying its other runtime-tree entries.
-                staged = path.with_name(path.name+'.astra-new-'+token)
+                staged = path.with_name(path.name+'.staged-'+token)
                 with staged.open('xb') as stream, source.open('rb') as raw: shutil.copyfileobj(raw, stream)
                 os.replace(staged, path)
             else:
