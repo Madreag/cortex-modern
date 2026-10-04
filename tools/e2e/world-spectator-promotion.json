@@ -112,14 +112,11 @@
     {
       "name": "spectator",
       "args": [
-        "-input-script",
-        "{INPUT_SCRIPT}",
         "-net-live-tick-hashes",
         "{OUT}/spectator-live.jsonl"
       ],
       "menu_script": "world-spectator.join.menu.txt",
       "probe": "world-spectator.join.probe.json",
-      "input_script": "play-input.txt",
       "start_when": {
         "peer": "host",
         "sim_tick": 1200,
