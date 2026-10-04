@@ -254,6 +254,12 @@ def version_line():
     return f"v{game}, multiplayer {(tree / 'VERSION.txt').read_text(encoding='utf-8').strip()} (protocol {protocol})"
 
 
+# The Recovery page's history rows: their consequences, and the policy the host runs once the rows pick 10 minutes and 1 minute.
+JOIN_HISTORY_HINT = "Longer history lets slower joiners catch up and uses more host disk."
+JOIN_LAG_HINT = "A watcher or return trailing past the limit starts over from an image."
+JOIN_HISTORY_POLICY = "[round-history] host options world_history_s=600 catch_up_limit_s=60 retain_frames=36000 lag_limit_frames=3600"
+
+
 def checks(control, parent):
     return (f"assert_visible {control} 1\nassert_rect_inside {control} {parent}\n"
             f"assert_rect_inside {control} viewport\nassert_text_fits {control}\n")
@@ -1424,6 +1430,21 @@ def scripts(case, port, root, size="960x540"):
         text += "assert_label LabelHostRecAutosaveNote Every player takes each checkpoint at the same tick; a player who rejoins starts from one.\n"
         text += checks("LabelHostRecAutosaveCost", "CollectionBoxHostPageRecovery")
         text += "assert_label LabelHostRecAutosaveCost Saving may cause a brief pause for other players on slower hosts\n"
+        # This host's own world history and catch-up limit: the saved settings by default, each consequence named under the
+        # page, a pick taken by the host at once (the host's log names the policy it now runs).
+        for control in ("LabelHostRecJoinHistory", "ComboHostRecJoinHistory", "LabelHostRecJoinLag", "ComboHostRecJoinLag",
+                        "LabelHostRecJoinHistoryHint", "LabelHostRecJoinLagHint"):
+            text += checks(control, "CollectionBoxHostPageRecovery")
+        text += ("assert_label LabelHostRecJoinHistory World history\n"
+                 "assert_label ComboHostRecJoinHistory 6 minutes\n"
+                 "assert_label LabelHostRecJoinLag Catch-up limit\n"
+                 "assert_label ComboHostRecJoinLag 2 minutes\n"
+                 f"assert_label LabelHostRecJoinHistoryHint {JOIN_HISTORY_HINT}\n"
+                 f"assert_label LabelHostRecJoinLagHint {JOIN_LAG_HINT}\n"
+                 "combo_select ComboHostRecJoinHistory 10 minutes\nwait_ms 500\n"
+                 "assert_label ComboHostRecJoinHistory 10 minutes\n"
+                 "combo_select ComboHostRecJoinLag 1 minute\nwait_ms 500\n"
+                 "assert_label ComboHostRecJoinLag 1 minute\n")
         text += ("setcheck CheckHostRecAutosave 1\nwait_ms 500\nassert_checked CheckHostRecAutosave 1\n"
                  "assert_enabled TextHostRecAutosaveInterval 1\n"
                  # Switching autosave on from off starts at the shortest cadence, not the off zero.
@@ -1448,6 +1469,9 @@ def scripts(case, port, root, size="960x540"):
                  "assert_label LabelHostOptStatus Apply republishes this lobby.\n"
                  "assert_checked CheckHostRecAutosave 0\n"
                  "assert_label LabelHostRecLastSave No autosaves while this is off\n"
+                 # The host's own picks stand through the Apply that republishes the lobby.
+                 "assert_label ComboHostRecJoinHistory 10 minutes\n"
+                 "assert_label ComboHostRecJoinLag 1 minute\n"
                  "setcheck CheckHostRecAutosave 0\nwait_ms 500\nassert_checked CheckHostRecAutosave 0\n"
                  "assert_enabled TextHostRecAutosaveInterval 0\n")
         text += checks("TextHostRecAutosaveInterval", "CollectionBoxHostPageRecovery")
@@ -1933,6 +1957,10 @@ def run_case(options, case, root, failing=None):
                 assert record.get("exit_code") == expected_exit, record
                 assert "[menu-script] FAILED:" not in logs[who], logs[who][-3000:]
         if not failing:
+            if case == "lobby":
+                # The picks drive this host's history policy, in frames of the round's tick.
+                assert JOIN_HISTORY_POLICY in logs["host"], [line for line in logs["host"].splitlines() if "host options" in line]
+                result["join_history_policy"] = JOIN_HISTORY_POLICY
             if case == "net-activity":
                 drawn = [(image["json"], control) for image in images for control in image["controls"]
                          if control["name"] in ("ComboHostActivity", "ComboHostScene", "ComboHostMode")
