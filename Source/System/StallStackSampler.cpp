@@ -35,6 +35,18 @@ namespace RTE {
 		const auto loadStart = std::chrono::steady_clock::now();
 		SymSetOptions(SYMOPT_UNDNAME);
 		s_Symbols = SymInitialize(GetCurrentProcess(), nullptr, TRUE) || GetLastError() == ERROR_INVALID_PARAMETER;
+		// A module's symbols load on its first lookup: one lookup in each module now keeps that out of every sample.
+		if (s_Symbols) {
+			SymEnumerateModules64(GetCurrentProcess(), [](PCSTR, DWORD64 base, PVOID) -> BOOL {
+				char buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};
+				auto* symbol = reinterpret_cast<PSYMBOL_INFO>(buffer);
+				symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+				symbol->MaxNameLen = MAX_SYM_NAME;
+				DWORD64 displacement = 0;
+				SymFromAddr(GetCurrentProcess(), base + 0x1000, &displacement, symbol);
+				return TRUE;
+			}, nullptr);
+		}
 		const int64_t loadNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - loadStart).count();
 		HarnessCost::Charge(HarnessCost::StallSampler, loadNs);
 		s_Watcher = std::jthread([](std::stop_token stop) { Watch(stop); });
