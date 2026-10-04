@@ -1,9 +1,12 @@
 import os
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
+import world_image_sizes
 from world_image_sizes import image_measurement, markdown, offered_scenes, transfer_totals, offered_archive
 from acceptance_mod import sha256
 
@@ -71,6 +74,16 @@ class ImageSizes(unittest.TestCase):
         table, complete = markdown([self.scene], [row])
         self.assertTrue(complete)
         self.assertIn('FAILED AFTER TRANSFER', table)
+
+    def test_a_selection_that_measures_nothing_reports_an_incomplete_table(self):
+        scenes = self.root/'scenes.json'; scenes.write_text(json.dumps(dict(scenes=[self.scene])))
+        out = self.root/'measure'
+        argv = ['world_image_sizes.py', 'measure', '--repo', str(self.root), '--scenes', str(scenes), '--out', str(out),
+                '--scratch', str(self.root), '--port', '49999', '--scene-index', '7']
+        with patch.object(sys, 'argv', argv), patch.object(world_image_sizes, 'collect_scene', side_effect=AssertionError('launched')):
+            self.assertEqual(world_image_sizes.main(), 1)
+        self.assertIn('| Grasslands | Base.rte | NOT MEASURED | NOT MEASURED | — | UNPROVEN | NOT RUN |',
+                      (out/'image-sizes.md').read_text(encoding='utf-8'))
 
 
 if __name__ == "__main__":

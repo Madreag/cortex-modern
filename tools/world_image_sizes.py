@@ -199,6 +199,8 @@ def main():
     scenes = json.loads(args.scenes.read_text(encoding="utf-8-sig"))["scenes"]
     args.out.mkdir(parents=True, exist_ok=False)
     measurements = []
+    table, complete = markdown(scenes, measurements)
+    (args.out/"image-sizes.md").write_text(table, encoding="utf-8")
     for index, scene in enumerate(scenes):
         if index < args.start_index or args.scene_index is not None and index not in args.scene_index:
             continue
