@@ -265,6 +265,8 @@ namespace RTE {
 		static void ReleaseWorldCatchUp();
 		static uint64_t WorldCatchUpAppliedThrough();
 		static uint64_t WorldCatchUpActivationTick();
+		/// The round the replay's frame at this tick was committed in: a world's replay runs under its image's round number instead.
+		static uint64_t WorldCatchUpRoundAt(uint64_t simTick);
 		static void NoteWorldCatchUpTickCost(uint64_t tick, uint64_t workUs, uint64_t wallUs = 0);
 		static uint64_t WorldCatchUpWorkTicks();
 		static uint64_t WorldCatchUpWorkUs();

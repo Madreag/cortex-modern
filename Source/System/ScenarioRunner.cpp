@@ -96,6 +96,7 @@ namespace RTE {
 		std::deque<NetLockstepFrame> s_WorldCatchUpTail;
 		uint64_t s_WorldCatchUpFence = 0; //!< The first tail frame the replay may not apply yet; 0 when none is fenced.
 		std::optional<NetLockstepFrame> s_WorldCatchUpLastApplied; //!< The tail frame the replay applied last, as the round committed it.
+		uint64_t s_WorldCatchUpRound = 0; //!< The round of the tail frame the replay applied last.
 		std::map<uint8_t, uint32_t> s_WorldHolderGeneration;
 		uint64_t s_WorldMembershipRevision = 0;
 
@@ -1398,6 +1399,7 @@ namespace RTE {
 		s_CatchUpHeadroom = {};
 		s_CatchUpLastMeasured = snapshotTick;
 		s_WorldCatchUpActivationTick = 0;
+		s_WorldCatchUpRound = 0;
 		s_WorldCatchUpActive = true;
 		s_WorldCatchUpHeld = false;
 		s_WorldCatchUpFence = 0;
@@ -1444,6 +1446,14 @@ namespace RTE {
 		s_CatchUpPriorInputThrough = 0;
 		std::erase_if(s_NetUiToasts, [](const NetUiToast& toast) { return toast.record.kind == "seat_held"; });
 		s_SlowMachineNoticeUntilMs = 0;
+	}
+
+	uint64_t ScenarioRunner::WorldCatchUpRoundAt(uint64_t simTick) {
+		NetLockstepPlaneGuard plane;
+		if (!s_WorldCatchUpActive) return 0;
+		for (const NetLockstepFrame& frame: s_WorldCatchUpTail)
+			if (frame.targetFrame == simTick) return frame.roundId;
+		return s_WorldCatchUpRound;
 	}
 
 	uint64_t ScenarioRunner::WorldCatchUpAppliedThrough() {
@@ -1517,6 +1527,7 @@ namespace RTE {
 		}
 		NetLockstepFrame frame = std::move(*found);
 		s_WorldCatchUpTail.erase(found);
+		s_WorldCatchUpRound = frame.roundId;
 		s_WorldCatchUpLastApplied = frame;
 		outFrame = {};
 		outFrame.frame = simTick;

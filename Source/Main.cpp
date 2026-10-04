@@ -720,12 +720,14 @@ static void BeginCrossTick(uint64_t tick) {
 		configHash = NetMatchConfigUtil::StoredConfigHash(*config);
 	}
 	const char* tickPhase = CrossTickPhase(catchup, tick, s_crossLastCommitted.contains(round) ? s_crossLastCommitted.at(round) : 0, execution);
+	// A world's replay runs under its image's round number; its rows name the round their frames were committed in.
+	const uint64_t replayedRound = catchup ? ScenarioRunner::WorldCatchUpRoundAt(tick) : 0;
 	s_crossContext = {{"run", run}, {"instance", instance},
 	    {"process", System::GetProcessID()}, {"execution", executionBase + std::to_string(execution)},
 	    {"incarnation", incarnation}, {"seat_incarnation", nullptr},
 	    {"authority_generation", catchup ? nlohmann::json(nullptr) : authority}, {"authority_generation_observed_at_tick", authorityObservedTick},
 	    {"authority_generation_source", "service.runner.lockstep; refreshed on round/host/catch-up transition"},
-	    {"session", std::to_string(config->sessionId)}, {"match", std::to_string(CrossRecordRound(round, config->roundId))},
+	    {"session", std::to_string(config->sessionId)}, {"match", std::to_string(replayedRound != 0 ? replayedRound : CrossRecordRound(round, config->roundId))},
 	    {"round", round}, {"source_round", config->roundId}, {"tick", tick}, {"peer", ScenarioRunner::GetLockstepLocalPeerId()},
 	    {"history_branch", CrossLandedBranch(CrossHistoryBranch(configuredStart, unmappedHistories.contains(historyKey), ScenarioRunner::GetLockstepResumeFrame(), returns), catchup, tickPhase, configuredStart, tick)},
 	    {"configured_start_frame", catchup ? nlohmann::json(nullptr) : nlohmann::json(configuredStart)},
