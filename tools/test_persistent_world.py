@@ -213,6 +213,7 @@ RED_JOURNAL_PAST_POLICY = "journal-grew-past-its-policy"
 RED_STALLED_WATCHER_KEPT = "stalled-watcher-kept-its-bootstrap"
 RED_SLOW_RETURNER_KEPT = "slow-returner-kept-its-catch-up"
 RED_SLOW_RETURNER_SEAT = "slow-returner-lost-its-seat"
+RED_FAR_RETURNER_ENDED = "far-returner-ended-while-closing"
 RED_JOURNAL_FAILURE_UNNAMED = "journal-failure-unnamed"
 RED_JOURNAL_NOT_RECOVERED = "journal-failure-not-recovered"
 # The live journal-fault arm's own REDs: what the driver scores on a real world host whose journal fails mid-round.
@@ -765,10 +766,11 @@ CASES = (
     },
     {
         # A match's returning seat replaying at half the round's rate: past the lag limit it is sent back for a fresh image, its seat held.
+        # One three minutes behind but closing at three times the round's rate keeps its catch-up.
         "name": "journal-bound-slow-returner",
         "argv": ["-net-world-journal-slow-returner-selftest"],
         "red": RED_SLOW_RETURNER_KEPT,
-        "also_red": (RED_SLOW_RETURNER_SEAT, RED_JOURNAL_PAST_POLICY),
+        "also_red": (RED_SLOW_RETURNER_SEAT, RED_JOURNAL_PAST_POLICY, RED_FAR_RETURNER_ENDED),
         "pass_token": "[net-world-journal-slow-returner-selftest] PASS",
     },
     {

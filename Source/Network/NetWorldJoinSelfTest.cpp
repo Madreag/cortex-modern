@@ -36,6 +36,7 @@
 
 #include "nlohmann/json.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdlib>
@@ -43,10 +44,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <tuple>
 #include <variant>
 #include <vector>
@@ -3724,6 +3727,42 @@ namespace RTE {
 		const uint64_t frames = stats.first != 0 ? stats.last + 1 - stats.first : 0;
 		if (frames > policy.retainFrames + segment) return Fail("journal-grew-past-its-policy: " + std::to_string(frames) + " frames after the returner went");
 		std::cout << "[" << s_FailTag << "] PASS a_slow_returner_is_sent_back_for_a_fresh_image ended_at=" << endedAt << " journal_frames=" << frames << " " << ends[0].receipt << std::endl;
+		return 0;
+	}
+
+	// A held seat coming back in place three minutes behind, replaying three frames for every one the round commits, trails far past the
+	// lag limit while it closes: it keeps its catch-up to the head of the round.
+	int TestAFarReturnerClosingOnTheRoundKeepsItsCatchUp() {
+		constexpr uint64_t lagLimitFrames = 600, heldThrough = 1200, returnAt = 12000, lastTick = 18000;
+		const double tickMs = 1000.0 / 60.0;
+		ResumeScratchDirectory scratch;
+		NetWorldJoinHost host;
+		std::string error;
+		const auto config = NetMatchConfigUtil::MakeDefault(0x9A41);
+		if (!host.ConfigureMatchRejoins(config, 1, tickMs, &error)) return Fail(error);
+		NetWorldFrameLog& tail = host.Tail();
+		NetJoinHistoryPolicy policy;
+		policy.lagLimitFrames = lagLimitFrames;
+		std::vector<NetJoinHistoryEnd> ends;
+		// The round's hold of the seat keeps its history while it may still come back in place.
+		std::map<uint8_t, NetGameSeatHold> holds;
+		holds[2].cutoffFrame = heldThrough;
+		uint64_t applied = heldThrough, largestTrail = 0;
+		for (uint64_t tick = 1; tick <= lastTick; ++tick) {
+			if (!tail.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
+			if (tick == 1) tail.EnableJournal((scratch.path / "match.inputs").string());
+			if (tick == returnAt && !host.BeginInPlaceRejoin(42, 2, 2, 3, "returning", 1, heldThrough, &error)) return Fail("the held seat could not come back in place: " + error);
+			if (tick > returnAt && host.FindSession(42)) {
+				applied = std::min(applied + 3, tick);
+				largestTrail = std::max(largestTrail, tick - applied);
+				if (tick % 10 == 0) (void)host.NoteCatchUpProgress(42, applied, 30, 167, tick + 1, nullptr, nullptr);
+			}
+			if (tick % 60 == 0) (void)NetMatchService::StepJoinHistory(host, tick, std::nullopt, holds, tickMs, policy, &ends);
+		}
+		if (!ends.empty() || host.FindSession(42) == nullptr || applied + 1 < lastTick)
+			return Fail("far-returner-ended-while-closing: a returner closing on the round from " + std::to_string(largestTrail) + " frames behind was ended (" +
+			            (ends.empty() ? std::string("no receipt") : ends[0].receipt) + "), applied " + std::to_string(applied));
+		std::cout << "[" << s_FailTag << "] PASS a_far_returner_closing_on_the_round_keeps_its_catch_up largest_trail=" << largestTrail << " lag_limit=" << lagLimitFrames << std::endl;
 		return 0;
 	}
 
@@ -8424,7 +8463,8 @@ namespace RTE {
 		}
 		if (std::strcmp(name, "-net-world-journal-slow-returner-selftest") == 0) {
 			s_FailTag = "net-world-journal-slow-returner-selftest";
-			return TestASlowReturnerIsSentBackForAFreshImage();
+			if (const int result = TestASlowReturnerIsSentBackForAFreshImage(); result != 0) return result;
+			return TestAFarReturnerClosingOnTheRoundKeepsItsCatchUp();
 		}
 		if (std::strcmp(name, "-net-world-journal-write-fault-selftest") == 0) {
 			s_FailTag = "net-world-journal-write-fault-selftest";
@@ -8975,6 +9015,7 @@ namespace RTE {
 		if (const int result = TestTheReturnHistoryFloor(); result != 0) return result;
 		if (const int result = TestAStalledWatcherCannotPinTheJournal(); result != 0) return result;
 		if (const int result = TestASlowReturnerIsSentBackForAFreshImage(); result != 0) return result;
+		if (const int result = TestAFarReturnerClosingOnTheRoundKeepsItsCatchUp(); result != 0) return result;
 		if (const int result = TestAJournalFailureIsRecovered("write:5000", "its write of frame 5000 failed"); result != 0) return result;
 		if (const int result = TestAJournalFailureIsRecovered("queue:5000", "its writer fell 64 KiB of frames behind"); result != 0) return result;
 		if (const int result = TestEveryPeersRecordServesTheHostsTail(); result != 0) return result;
