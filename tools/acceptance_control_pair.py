@@ -39,10 +39,16 @@ def ordinary_verdict(pair_result, texts):
     holds = [hold for values in receipt['holds'].values() for hold in values]
     stalls = [stall for values in receipt['stall'].values() for stall in values]
     if holds:
-        first = min(hold['tick'] for hold in holds)
-        fired = [stall['tick'] for stall in stalls if stall['tick'] <= first]
-        reasons.append(('forced hold' if fired else 'unscheduled hold')+' at tick='+str(first)
-                       + ('; stall tick='+str(max(fired)) if fired else ''))
+        forced, unscheduled = [], []
+        for tick in sorted({hold['tick'] for hold in holds}):
+            fired = [stall['tick'] for stall in stalls if stall['tick'] <= tick]
+            if fired:
+                forced.append(f'forced hold at tick={tick}; stall tick={max(fired)}')
+            else:
+                unscheduled.append(f'unscheduled hold at tick={tick}')
+        # Preserve the planted fault even when an earlier ordinary hold exists.
+        # Every raw hold remains in the native pair and injection receipts.
+        reasons += forced[:1]+unscheduled[:1]
     elif pair_result.get('held', {}).get('held') or any(pair_result.get('hold_lines', {}).values()):
         reasons.append('hold reported without its native seat/tick receipt')
     if pair_result.get('passed') is not True and not reasons:

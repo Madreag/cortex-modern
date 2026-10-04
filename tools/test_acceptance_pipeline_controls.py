@@ -80,6 +80,15 @@ class OrdinaryControlVerdict(unittest.TestCase):
         self.assertFalse(result['passed'])
         self.assertIn('unscheduled hold at tick=244', result['reason'])
 
+    def test_earlier_hold_cannot_hide_later_injected_hold(self):
+        result = ordinary_verdict(dict(passed=True), dict(
+            host='[net-match] hold peer=2 frame=12 AI in control\n'
+                 '[net-match] hold peer=2 frame=244 AI in control\n',
+            client='[net-test] live stall frame=240 ms=5000\n'))
+        self.assertFalse(result['passed'])
+        self.assertIn('forced hold at tick=244; stall tick=240', result['reason'])
+        self.assertIn('unscheduled hold at tick=12', result['reason'])
+
 
 @unittest.skipUnless(INVENTORY.is_dir(), 'shared inventory is unavailable')
 class RealCollectionCounterexamples(unittest.TestCase):
