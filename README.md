@@ -26,6 +26,19 @@ A community fork of the [Cortex Command Community Project](https://github.com/co
 
 ---
 
+> [!NOTE]
+> **Alpha 1 status, October 4.** Playable today, built from source on Windows, macOS and Linux. The full acceptance run on this exact build has not finished yet.
+>
+> **Being fixed right now**
+> - "Resyncing the match..." can show twice at once during a repair.
+> - A join refused as "modules" does not say which mod differs.
+> - Memory use in hour-long persistent worlds is being measured.
+>
+> **Not proven yet**
+> - On a phone hotspot, two-player matches work on LTE, both with Automatic and with Relay only. Four players, a relay login expiring mid-match and the host leaving mid-match are not proven over mobile data yet.
+>
+> The whole list is in [Known issues](#known-issues).
+
 ## What's new
 
 | | | |
@@ -44,7 +57,7 @@ A community fork of the [Cortex Command Community Project](https://github.com/co
 
 ## Play in five minutes
 
-> **Both players need the same Cortex Modern version and the same mods.** The version is printed at the bottom left of the main menu and in `VERSION.txt` beside the game.
+> **Both players need the same Cortex Modern version and the same mods.** The version is printed at the bottom left of the main menu and in `VERSION.txt` beside the game. If a join is refused as "modules", the two `Data` folders differ: the same mods in the same versions on both sides fixes it.
 >
 > <img src="docs/images/version-line.png" alt="The version line on the main menu: Community Project v7.0.0, multiplayer 0.1.0-alpha.1 (protocol 5)" width="300">
 
@@ -185,7 +198,8 @@ Void Wanderers, the most-played mod, is part of the test set: it is played in si
 | Checkpoints and resume from disk for the whole match | Resume scenes; both peers killed and reloaded |
 | Persistent worlds with late joiners and watchers | World join, world restart and segment tests |
 | Host moderation: seats, applications, kick, ban | Moderation scenes, on video |
-| Direct connection with STUN; Cloudflare relay fallback; your own relay | Relay comparison and relay-only matches |
+| Direct connection with STUN; Cloudflare relay fallback; your own relay | Relay comparison and relay-only matches, and a phone-hotspot session on LTE |
+| Saves from the original game and from earlier builds load, play and save again | Old-save tests on Windows and Linux |
 | Windows, macOS and Linux in one match | Cross-platform determinism tests on every build |
 | Mods unchanged, Void Wanderers tested | The mod battery and the Void Wanderers scenes |
 
@@ -197,10 +211,14 @@ Alpha means alpha. Everything below is tracked; items marked *being fixed* have 
 
 | Issue | What you would see | State |
 |---|---|---|
-| Host and client disagree under lag | The first full test run of this alpha found the two machines' states diverging under artificial lag. Players would see a repair, or a desync. | **Being fixed** (the first priority) |
 | The same message shown twice | During a repair, "Resyncing the match..." can appear twice at once. Cosmetic. | **Being fixed** |
+| A refused join says only "modules" | Two players whose game data differ by a single byte cannot join each other, and the message does not say which mod differs. Both need identical `Data` folders. | **Being fixed** |
+| A relayed connection can give up early | Setting up a relayed connection over a slow path can take longer than the 10 seconds it is given. Trying again, or Automatic, gets through. | **Being fixed** |
+| Hour-long worlds | Memory use grows over a long persistent world. Being measured to tell a leak from a cache that stops growing. | **Being measured** |
+| Mobile data | Two players: proven on LTE, direct and through the relay. Four players, relay login renewal and host loss over mobile data: not proven yet. | Being tested |
+| Your stop may show a fraction late, rarely | On a joined machine, in moments that depend on randomness (debris at your feet), your own stop can show one input delay late: 1 to 3 times in 32 in a heavy-debris test. | Under review |
+| A joiner can pause a busy world for a moment | When someone joins a busy persistent world on a loaded host, everyone can see a pause of about a third of a second while the snapshot is taken. | Next alpha |
 | Mac hosts write checkpoints slowly | A joiner of a Mac-hosted world waits about 5 seconds for the snapshot instead of 2. | Next alpha |
-| Your stop may show a fraction late, rarely | On a joined machine, in moments that depend on randomness (debris at your feet), your own stop can show one input delay late. | Being measured |
 | Held seat between rounds | A newcomer cannot apply for a dropped player's seat between rounds, only during play. | Next alpha |
 | Watching a brand-new world | A watcher joining a world created moments ago gets no status line. | Next alpha |
 | Autosave on a slow host | A 2014-class host with checkpoints on can give others a brief pause once per save. | Next alpha |
