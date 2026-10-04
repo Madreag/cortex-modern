@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import win32_test_runner as runner
 
@@ -60,19 +61,14 @@ class Limits(unittest.TestCase):
 
     def test_a_launch_records_and_applies_both(self):
         root = Path(self.scratch.name)
-        saved = os.environ.get("CC_RUNNER_BOX_MANIFEST")
-        os.environ["CC_RUNNER_BOX_MANIFEST"] = str(self.manifest)
         box = os.environ.get("COMPUTERNAME", "")
         self.manifest.write_text(json.dumps({"boxes": [{"name": box, "runner": {"affinity_mask": "0x3", "engine_memory_gb": 2}}]}),
                                  encoding="utf-8")
-        try:
+        # The box's own runner variables (a box's user environment or a run's payload) would outrank this manifest.
+        environ = {key: value for key, value in os.environ.items() if not key.startswith("CC_RUNNER_")}
+        with patch.dict(os.environ, {**environ, "CC_RUNNER_BOX_MANIFEST": str(self.manifest)}, clear=True):
             record = runner.run([sys.executable, "-c", "import time; time.sleep(0.2)"], root, root / "run", timeout=30,
                                 startup_checks=False)
-        finally:
-            if saved is None:
-                os.environ.pop("CC_RUNNER_BOX_MANIFEST")
-            else:
-                os.environ["CC_RUNNER_BOX_MANIFEST"] = saved
         launch = json.loads((root / "run" / "launch.json").read_text(encoding="utf-8"))
         self.assertEqual(record["exit_code"], 0)
         self.assertEqual(launch["affinity_mask"], "0x00000003")
