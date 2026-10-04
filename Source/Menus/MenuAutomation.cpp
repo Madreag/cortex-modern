@@ -64,10 +64,12 @@
 #include <set>
 #include <mutex>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <tuple>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace RTE::MenuAutomation {
@@ -648,7 +650,7 @@ namespace RTE::MenuAutomation {
 	}
 
 	bool Handles(const std::string& command) {
-		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_inside_screen" || command == "assert_text_fits" || command == "assert_no_overlap" ||
+		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_inside_screen" || command == "assert_text_fits" || command == "assert_no_overlap" || command == "assert_no_overlap_within" ||
 			command == "dump_refresh_count" || command == "dump_enter_state" ||
 			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad" ||
 			command == "key_down" || command == "key_up" || command == "focus" ||
@@ -1113,6 +1115,29 @@ namespace RTE::MenuAutomation {
 			const auto a = Rectangle(aControl->GetPanel()), b = Rectangle(bControl->GetPanel());
 			observation = first + " " + second + " rect=" + Json(a).dump() + " other=" + Json(b).dump();
 			return a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1];
+		}
+		if (command == "assert_no_overlap_within") {
+			// No two visible controls of one panel overlap, so the panel's layout leaves every one readable.
+			std::string parentName;
+			args >> parentName;
+			auto* network = g_MenuMan.GetNetworkPanel();
+			GUIControl* parent = manager ? manager->GetControl(parentName) : nullptr;
+			if (!parent && network) parent = network->GetControl(parentName);
+			std::vector<GUIControl*>* children = parent ? parent->GetChildren() : nullptr;
+			if (!Visible(parent) || !children) { observation = parentName + " missing or hidden"; return false; }
+			std::vector<std::pair<std::string, Rect>> shown;
+			for (GUIControl* child: *children)
+				if (Visible(child)) shown.emplace_back(child->GetName(), Rectangle(child->GetPanel()));
+			Json overlaps = Json::array();
+			for (size_t i = 0; i < shown.size(); ++i) {
+				for (size_t j = i + 1; j < shown.size(); ++j) {
+					const Rect& a = shown[i].second;
+					const Rect& b = shown[j].second;
+					if (!(a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1])) overlaps.push_back({shown[i].first, shown[j].first, a, b});
+				}
+			}
+			observation = Json{{"parent", parentName}, {"visible_children", shown.size()}, {"overlaps", overlaps}}.dump();
+			return overlaps.empty();
 		}
 		if (command == "assert_inside_screen") {
 			std::string name;

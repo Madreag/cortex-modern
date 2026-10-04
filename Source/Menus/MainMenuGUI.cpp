@@ -1614,17 +1614,13 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostRecAutosaveIntervalBox = dynamic_cast<GUITextBox*>(get("TextHostRecAutosaveInterval"));
 	m_HostRecLastSaveLabel = dynamic_cast<GUILabel*>(get("LabelHostRecLastSave"));
 	m_HostRecReturnWindowCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRecReturnWindow"));
-	if (auto* returnHint = dynamic_cast<GUILabel*>(get("LabelHostRecReturnWindowHint"))) {
-		returnHint->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
-		returnHint->SetText(NetReturnWindowHint());
-	}
 	m_HostRecJoinHistoryCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRecJoinHistory"));
 	m_HostRecJoinLagCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRecJoinLag"));
-	for (const auto& [name, hint]: {std::pair{"LabelHostRecJoinHistoryHint", NetJoinHistoryHint()}, std::pair{"LabelHostRecJoinLagHint", NetJoinLagHint()}}) {
-		if (auto* label = dynamic_cast<GUILabel*>(get(name))) {
-			label->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
-			label->SetText(hint);
-		}
+	m_HostRecHintRowControls = {get("LabelHostRecReturnWindow"), m_HostRecReturnWindowCombo, get("LabelHostRecJoinHistory"), m_HostRecJoinHistoryCombo,
+	                            get("LabelHostRecJoinLag"), m_HostRecJoinLagCombo};
+	if ((m_HostRecOptionHintLabel = dynamic_cast<GUILabel*>(get("LabelHostRecOptionHint")))) {
+		m_HostRecOptionHintLabel->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+		m_HostRecOptionHintLabel->SetText(NetReturnWindowHint());
 	}
 	m_HostRecWaitingLabel = dynamic_cast<GUILabel*>(get("LabelHostRecWaiting"));
 	m_HostFilesSavePathLabel = dynamic_cast<GUILabel*>(get("LabelHostFilesSavePath"));
@@ -2287,6 +2283,18 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	HostOptSelectJoinHistory(m_HostRecJoinLagCombo, g_SettingsMan.GetNetworkHostJoinLagSeconds());
 	HostOptSetEditable(m_HostRecJoinHistoryCombo, editable);
 	HostOptSetEditable(m_HostRecJoinLagCombo, editable);
+	// One hint area under the rows names the consequence of the row the player points at or has focused; the last one stays.
+	if (m_HostRecOptionHintLabel && m_HostOptionsPages[3] && m_HostOptionsPages[3]->GetVisible()) {
+		int mouseX = 0, mouseY = 0;
+		m_SubMenuScreenGUIControlManager->GetManager()->GetInputController()->GetMousePosition(&mouseX, &mouseY);
+		for (size_t index = 0; index < m_HostRecHintRowControls.size(); ++index) {
+			GUIControl* control = m_HostRecHintRowControls[index];
+			GUIPanel* panel = control ? control->GetPanel() : nullptr;
+			if (panel && (panel->PointInside(mouseX, mouseY) || panel->HasFocus())) m_HostRecHintRow = static_cast<int>(index / 2);
+		}
+		const char* hint = m_HostRecHintRow == 1 ? NetJoinHistoryHint() : m_HostRecHintRow == 2 ? NetJoinLagHint() : NetReturnWindowHint();
+		if (m_HostRecOptionHintLabel->GetText() != hint) m_HostRecOptionHintLabel->SetText(hint);
+	}
 	if (m_HostRecLastSaveLabel) {
 		// H28: the service exposes no last-autosave tick getter, so the observation is the local
 		// filesystem's own newest .ccsave - the same place the [autosave] log line's file lands.
@@ -2606,6 +2614,16 @@ void MainMenuGUI::ApplyHostOptions() {
 		m_HostOptionsStatusLabel->SetText(NetHostOptionsApplyText(g_NetMatchService.GetState()));
 	}
 	g_GUISound.ButtonPressSound()->Play();
+}
+
+void MainMenuGUI::LogHostHistoryPolicy() const {
+	NetJoinHistoryPolicy policy = NetMatchService::JoinHistoryPolicyFromSettings(g_TimerMan.GetDeltaTimeMS());
+	policy.returnWindowMinutes = m_HostOptionsDraft.returnWindowMinutes;
+	bool byWindow = false;
+	const uint64_t retain = NetMatchService::EffectiveJoinRetention(policy, g_TimerMan.GetDeltaTimeMS(), &byWindow);
+	System::PrintDiagnosticLine(std::format("[round-history] host options world_history_s={} catch_up_limit_s={} return_window_min={} retain_frames={} retain_by={} lag_limit_frames={}",
+	                                        g_SettingsMan.GetNetworkHostJoinHistorySeconds(), g_SettingsMan.GetNetworkHostJoinLagSeconds(), policy.returnWindowMinutes, retain,
+	                                        byWindow ? "return_window" : "world_history", policy.lagLimitFrames));
 }
 
 void MainMenuGUI::SaveHostOptionsDefaults() {
@@ -3158,10 +3176,7 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 			if (history) g_SettingsMan.SetNetworkHostJoinHistorySeconds(seconds);
 			else g_SettingsMan.SetNetworkHostJoinLagSeconds(seconds);
 		}
-		const NetJoinHistoryPolicy policy = NetMatchService::JoinHistoryPolicyFromSettings(g_TimerMan.GetDeltaTimeMS());
-		System::PrintDiagnosticLine(std::format("[round-history] host options world_history_s={} catch_up_limit_s={} retain_frames={} lag_limit_frames={}",
-		                                        g_SettingsMan.GetNetworkHostJoinHistorySeconds(), g_SettingsMan.GetNetworkHostJoinLagSeconds(), policy.retainFrames,
-		                                        policy.lagLimitFrames));
+		LogHostHistoryPolicy();
 		return;
 	}
 	if (guiEventControl == m_HostFilesWidgetCombo) {
@@ -3180,6 +3195,7 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 	}
 	if (guiEventControl == m_HostRecReturnWindowCombo) {
 		if (const uint8_t minutes = HostOptReturnWindowOf(m_HostRecReturnWindowCombo); minutes != 0) m_HostOptionsDraft.returnWindowMinutes = minutes;
+		LogHostHistoryPolicy();
 		return;
 	}
 	if (guiEventControl == m_HostNetSlowPolicyCombo) {

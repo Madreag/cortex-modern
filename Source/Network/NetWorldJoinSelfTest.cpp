@@ -3670,6 +3670,7 @@ namespace RTE {
 		NetJoinHistoryPolicy policy;
 		policy.retainFrames = retainFrames;
 		policy.lagLimitFrames = lagLimitFrames;
+		policy.returnWindowMinutes = 1;
 		std::vector<NetJoinHistoryEnd> ends;
 		uint64_t applied = 0, endedAt = 0;
 		double stepMaxUs = 0.0;
@@ -3700,7 +3701,7 @@ namespace RTE {
 			}
 		}
 		const NetWorldFrameLog::JournalStats stats = SettledJournalStats(tail);
-		const uint64_t frames = stats.first != 0 ? stats.last + 1 - stats.first : 0, bound = retainFrames + segment;
+		const uint64_t frames = stats.first != 0 ? stats.last + 1 - stats.first : 0, bound = NetMatchService::EffectiveJoinRetention(policy, tickMs, nullptr) + segment;
 		if (frames > bound || files() > bound / segment + 1)
 			return Fail("journal-grew-past-its-policy: " + std::to_string(frames) + " frames, " + std::to_string(stats.bytes) + " bytes in " + std::to_string(files()) +
 			            " files after " + std::to_string(lastTick) + " ticks against a bound of " + std::to_string(bound) + " frames (retain " + std::to_string(retainFrames) +
@@ -3801,6 +3802,42 @@ namespace RTE {
 			return Fail("far-returner-ended-while-closing: a returner closing on the round from " + std::to_string(largestTrail) + " frames behind was ended (" +
 			            (ends.empty() ? std::string("no receipt") : ends[0].receipt) + "), applied " + std::to_string(applied));
 		std::cout << "[" << s_FailTag << "] PASS a_far_returner_closing_on_the_round_keeps_its_catch_up largest_trail=" << largestTrail << " lag_limit=" << lagLimitFrames << std::endl;
+		return 0;
+	}
+
+	// A seat held at frame F may come back in place for the whole return window the host agreed, however short its World history: the
+	// journal keeps the frames from F - skew until the window closes, and a return two minutes after the hold resumes in place.
+	int TestTheRetentionKeepsTheReturnWindow() {
+		constexpr uint64_t heldAt = 600, minute = 3600, returnAt = heldAt + 2 * minute;
+		const uint64_t keptFrom = heldAt - NetLockstepCodec::c_MaxFutureFrameSkew;
+		const double tickMs = 1000.0 / 60.0;
+		ResumeScratchDirectory scratch;
+		NetWorldJoinHost host;
+		std::string error;
+		const auto config = NetMatchConfigUtil::MakeDefault(0x9A42);
+		if (!host.ConfigureMatchRejoins(config, 1, tickMs, &error)) return Fail(error);
+		NetWorldFrameLog& tail = host.Tail();
+		// The host's World history is a minute; the window it agreed for the match is thirty.
+		NetJoinHistoryPolicy policy;
+		policy.retainFrames = minute;
+		policy.returnWindowMinutes = 30;
+		std::map<uint8_t, NetGameSeatHold> holds;
+		holds[2].cutoffFrame = heldAt;
+		std::vector<NetJoinHistoryEnd> ends;
+		for (uint64_t tick = 1; tick <= returnAt; ++tick) {
+			if (!tail.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
+			if (tick == 1) tail.EnableJournal((scratch.path / "match.inputs").string());
+			if (tick % 60 != 0) continue;
+			(void)NetMatchService::StepJoinHistory(host, tick, std::nullopt, holds, tickMs, policy, &ends);
+			if (tick > heldAt && !tail.Covers(keptFrom))
+				return Fail("the-retention-cut-the-return-window: at tick " + std::to_string(tick) + ", " + std::to_string(tick - heldAt) +
+				            " frames into a 30-minute window, the journal serves from " + std::to_string(tail.FirstServableFrame()) + " past the held seat's " +
+				            std::to_string(keptFrom) + " (retain " + std::to_string(tail.JournalRetention()) + " frames)");
+		}
+		if (!host.BeginInPlaceRejoin(42, 2, 2, 3, "returning", 1, heldAt - 1, &error))
+			return Fail("the-retention-cut-the-return-window: a return two minutes after the hold was refused in place: " + error);
+		std::cout << "[" << s_FailTag << "] PASS the_retention_keeps_the_return_window held_at=" << heldAt << " kept_from=" << keptFrom << " first_servable="
+		          << tail.FirstServableFrame() << " retain_frames=" << tail.JournalRetention() << " returned_in_place_at=" << returnAt << std::endl;
 		return 0;
 	}
 
@@ -8788,6 +8825,10 @@ namespace RTE {
 			s_FailTag = "net-world-journal-bound-selftest";
 			return TestAStalledWatcherCannotPinTheJournal();
 		}
+		if (std::strcmp(name, "-net-world-journal-window-selftest") == 0) {
+			s_FailTag = "net-world-journal-window-selftest";
+			return TestTheRetentionKeepsTheReturnWindow();
+		}
 		if (std::strcmp(name, "-net-world-journal-slow-returner-selftest") == 0) {
 			s_FailTag = "net-world-journal-slow-returner-selftest";
 			if (const int result = TestASlowReturnerIsSentBackForAFreshImage(); result != 0) return result;
@@ -9353,6 +9394,7 @@ namespace RTE {
 		if (const int result = TestAStalledWatcherCannotPinTheJournal(); result != 0) return result;
 		if (const int result = TestASlowReturnerIsSentBackForAFreshImage(); result != 0) return result;
 		if (const int result = TestAFarReturnerClosingOnTheRoundKeepsItsCatchUp(); result != 0) return result;
+		if (const int result = TestTheRetentionKeepsTheReturnWindow(); result != 0) return result;
 		if (const int result = TestAJournalFailureIsRecovered("write:5000", "its write of frame 5000 failed"); result != 0) return result;
 		if (const int result = TestAJournalFailureIsRecovered("queue:5000", "its writer fell 64 KiB of frames behind"); result != 0) return result;
 		if (const int result = TestEveryPeersRecordServesTheHostsTail(); result != 0) return result;
