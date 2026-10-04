@@ -10,7 +10,7 @@ settext TextHostPort {PORT}
 activate ButtonMultiplayerCreate
 wait_ms 825
 video_mark spectator-lobby
-wait_connected 4 90
+wait_connected 3 90
 wait_remote_ready 90
 activate ButtonMultiplayerStart
 wait_file {PROBE_DIR}/done.json 180
