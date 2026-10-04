@@ -36,7 +36,9 @@ function Update(self)
 		self.Health = 50 + impulse % 40
 		print(string.format("[preview-cache] commit uid=%d tick=%d impulse=%.4f health=%.4f", self.UniqueID, self.cacheTicks, impulse, self.Health))
 	end
-	local notes = _ScriptFieldsStash and _ScriptFieldsStash[NOTES]
+	-- Only the world's own instance prints and clears the notes: a preview's copy runs this hook too, and its print is dropped.
+	local live = _ScriptedObjects ~= nil and rawequal(_ScriptedObjects[tostring(self.UniqueID)], self)
+	local notes = live and _ScriptFieldsStash and _ScriptFieldsStash[NOTES]
 	if notes then
 		_ScriptFieldsStash[NOTES] = nil
 		for line in string.gmatch(notes, "[^\n]+") do

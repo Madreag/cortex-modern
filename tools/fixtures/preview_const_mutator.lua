@@ -22,7 +22,9 @@ function OnStride(self)
 end
 
 function Update(self)
-	local notes = _ScriptFieldsStash and _ScriptFieldsStash[NOTES]
+	-- Only the world's own instance prints and clears the notes: a preview's copy runs this hook too, and its print is dropped.
+	local live = _ScriptedObjects ~= nil and rawequal(_ScriptedObjects[tostring(self.UniqueID)], self)
+	local notes = live and _ScriptFieldsStash and _ScriptFieldsStash[NOTES]
 	if notes then
 		_ScriptFieldsStash[NOTES] = nil
 		for line in string.gmatch(notes, "[^\n]+") do

@@ -28,7 +28,9 @@ function Update(self)
 	-- The spare steers the sim: health says whether it is attached anywhere, so an attach only one peer made shows.
 	local spare = PreviewArgumentSpare
 	self.Health = (spare ~= nil and spare:IsAttached()) and 99 or 100
-	local notes = _ScriptFieldsStash and _ScriptFieldsStash[NOTES]
+	-- Only the world's own instance prints and clears the notes: a preview's copy runs this hook too, and its print is dropped.
+	local live = _ScriptedObjects ~= nil and rawequal(_ScriptedObjects[tostring(self.UniqueID)], self)
+	local notes = live and _ScriptFieldsStash and _ScriptFieldsStash[NOTES]
 	if notes then
 		_ScriptFieldsStash[NOTES] = nil
 		for line in string.gmatch(notes, "[^\n]+") do

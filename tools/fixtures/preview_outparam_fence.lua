@@ -23,7 +23,9 @@ end
 function Update(self)
 	-- The Vector steers the sim: health follows where the last cast hit, so a cast only one peer made shows in the world.
 	self.Health = 100 - (math.floor(rayHit.X) % 10) / 10
-	local notes = _ScriptFieldsStash and _ScriptFieldsStash[NOTES]
+	-- Only the world's own instance prints and clears the notes: a preview's copy runs this hook too, and its print is dropped.
+	local live = _ScriptedObjects ~= nil and rawequal(_ScriptedObjects[tostring(self.UniqueID)], self)
+	local notes = live and _ScriptFieldsStash and _ScriptFieldsStash[NOTES]
 	if notes then
 		_ScriptFieldsStash[NOTES] = nil
 		for line in string.gmatch(notes, "[^\n]+") do
