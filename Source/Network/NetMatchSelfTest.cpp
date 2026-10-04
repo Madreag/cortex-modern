@@ -748,10 +748,10 @@ namespace RTE {
 					return false;
 				}
 				invalid = bytes;
-				invalid[reservedOffset] = 32;
+				invalid[reservedOffset] = 64;
 				const auto unknown = NetLobbyProtocol::Decode(invalid);
 				if (unknown.ok || unknown.error.code != NetLobbyErrorCode::ReservedFieldNonZero) {
-					*error = "a reserved word of 32 was not refused";
+					*error = "a reserved word of 64 was not refused";
 					return false;
 				}
 				const auto hash = NetMatchConfigUtil::HashConfig(config);
@@ -11459,7 +11459,8 @@ namespace RTE {
 		cancel.store(true);
 		watchdog.join();
 		std::cout << "[net-match-selftest] full_knock ready=" << ready << " refused_full=" << sawFull << " elapsed_ms=" << static_cast<long long>(elapsedMs) << " why='" << waitError << "'" << std::endl;
-		if (ready || !sawFull || waitError == "match setup canceled" || elapsedMs > 2000.0) {
+		// The wait ends on the first pass past its budget: one 5 ms sleep at the platform timer's granularity plus a pump, never a retry's 2 s.
+		if (ready || !sawFull || waitError == "match setup canceled" || elapsedMs > 400.0 + 50.0) {
 			*error = "a joiner refused as full waited " + std::to_string(static_cast<long long>(elapsedMs)) + " ms against a 400 ms budget and ended '" + waitError + "'";
 			return false;
 		}
