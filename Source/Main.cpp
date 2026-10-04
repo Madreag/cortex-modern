@@ -90,6 +90,9 @@
 #include <mach/mach.h>
 #elif defined(__linux__)
 #include <unistd.h>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 #endif
 
 #include "ControllerFrame.h"
@@ -394,7 +397,13 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 	unsigned long long pages = 0, resident = 0;
 	std::ifstream statm("/proc/self/statm");
 	if (!(statm >> pages >> resident)) return {};
-	return std::format(" resident_mb={}", (resident * static_cast<unsigned long long>(sysconf(_SC_PAGESIZE))) >> 20);
+	std::string heap;
+#if defined(__GLIBC__)
+	// What the allocator hands the program and what it keeps free, so a resident climb names which of the two it is.
+	const struct mallinfo2 info = mallinfo2();
+	heap = std::format(" heap_in_use_mb={} heap_free_mb={} heap_mmap_mb={}", (info.uordblks + info.hblkhd) >> 20, info.fordblks >> 20, info.hblkhd >> 20);
+#endif
+	return std::format(" resident_mb={}{}", (resident * static_cast<unsigned long long>(sysconf(_SC_PAGESIZE))) >> 20, heap);
 #else
 	return {};
 #endif
