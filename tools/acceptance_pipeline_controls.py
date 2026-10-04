@@ -28,7 +28,7 @@ def plan_rows():
                         C2='client stall; final forced hold and fired stall tick required',
                         C3='passing native run-result.json removed before collection; final result absent required')
     return [dict(id='control.'+control, share=SHARE, section='0b', group='controls',
-                 acceptance_ids=[], required=False,
+                 acceptance_ids=[], required=False, gaps=[],
                  reason='mandatory section 0b pipeline control; expected RED, no product acceptance credit',
                  control=control, expected=descriptions[control], runner='acceptance_pipeline_controls',
                  driver='tools/acceptance_control_pair.py', driver_box='EROL-PC', box='EROL-PC',
