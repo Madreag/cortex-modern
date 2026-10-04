@@ -51,9 +51,21 @@ SUITES = (
     ("inventory-merge-defects", [str(INVENTORY / "merge_defects.py"), "--self-test"]),
     ("inventory-acceptance-manifest", [str(INVENTORY / "acceptance_manifest.py"), "--self-test"]),
     ("acceptance-collection", [str(INVENTORY / "test_acceptance_collection.py")]),
+    ("acceptance-rows", ["-m", "unittest", "test_acceptance_ally_build", "test_acceptance_box_lease", "test_acceptance_box_mods",
+                         "test_acceptance_clock_brackets", "test_acceptance_control_plan_integration", "test_acceptance_cross_report",
+                         "test_acceptance_deferred", "test_acceptance_evidence", "test_acceptance_fixed_captures",
+                         "test_acceptance_fixed_gates", "test_acceptance_frozen_report", "test_acceptance_frozen_tools",
+                         "test_acceptance_image_report", "test_acceptance_local_host", "test_acceptance_mod",
+                         "test_acceptance_native_admission", "test_acceptance_native_load", "test_acceptance_pipeline_controls",
+                         "test_acceptance_posix_build", "test_acceptance_private_runtime", "test_acceptance_remote_tasks",
+                         "test_acceptance_retained_links", "test_acceptance_rows", "test_acceptance_spectator",
+                         "test_acceptance_spectator_tasks", "test_acceptance_storage", "test_acceptance_tip_runtime",
+                         "test_acceptance_transfer", "test_cross_peers_public_row"]),
+    ("world-rows", ["-m", "unittest", "test_world_image_sizes", "test_world_mod_cross", "test_world_soak", "test_world_soak_tasks"]),
 )
 # The cross driver's suite reads the Windows boxes' trees and ctypes.WinDLL; the other platforms run the cross peers, not this suite.
-WINDOWS_ONLY = {"runner-feel-marker", "runner-limits", "feel-engine-placement", "cross-driver"}
+# The acceptance and world row suites test the Windows coordinator, which names its boxes' D: trees.
+WINDOWS_ONLY = {"runner-feel-marker", "runner-limits", "feel-engine-placement", "cross-driver", "acceptance-rows", "world-rows"}
 
 
 def run(repo: Path, name: str, argv: list[str], timeout: float) -> tuple[str, int, str]:
