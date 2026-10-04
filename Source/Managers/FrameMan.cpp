@@ -521,7 +521,10 @@ void FrameMan::FeelAfterPresent() {
 			    const auto began = std::chrono::steady_clock::now();
 			    const int64_t cpuBefore = FrameRecorder::ThreadCpuNanoseconds();
 			    FeelState::Encoded encoded;
-			    encoded.saved = copy && IMG_SavePNG(copy, path.c_str());
+			    // The screen copy is 8-bit RGB: the recorder's fastest-level writer keeps the encode off the frames' budget.
+			    encoded.saved = copy && (copy->format == SDL_PIXELFORMAT_RGB24
+			        ? FrameRecorder::SaveRgbPng(path, static_cast<const unsigned char*>(copy->pixels), copy->w, copy->h, static_cast<std::size_t>(copy->pitch))
+			        : IMG_SavePNG(copy, path.c_str()));
 			    if (copy) SDL_DestroySurface(copy);
 			    const int64_t cpuNs = FrameRecorder::ThreadCpuNanoseconds() - cpuBefore;
 			    HarnessCost::Charge(HarnessCost::FeelRecorder, cpuNs);

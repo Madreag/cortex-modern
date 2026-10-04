@@ -57,6 +57,9 @@ namespace RTE {
 		/// it spent blocked on a pipe or a disk.
 		static int64_t ThreadCpuNanoseconds();
 
+		/// Writes 8-bit RGB rows, each stride bytes apart, as a PNG at the fastest deflate level.
+		static bool SaveRgbPng(const std::string& path, const unsigned char* pixels, int width, int height, std::size_t stride);
+
 		/// Opens directory/frames and starts the writer. The directory must exist and be empty.
 		/// @return Whether recording started; error names the directory and the reason when it did not.
 		bool Start(const std::string& directory, int fps, std::string* error);

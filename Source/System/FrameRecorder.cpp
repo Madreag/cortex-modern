@@ -175,32 +175,32 @@ namespace RTE {
 			return name.str();
 		}
 
-		// The fastest deflate level with the Sub filter: a recording is read once by the encoder, so speed beats size.
-		bool SaveRgbPng(const std::string& path, const unsigned char* pixels, int width, int height) {
-			std::FILE* file = std::fopen(path.c_str(), "wb");
-			if (!file) return false;
-			png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
-			png_infop info = png ? png_create_info_struct(png) : nullptr;
-			bool saved = false;
-			if (png && info && !setjmp(png_jmpbuf(png))) {
-				png_init_io(png, file);
-				png_set_compression_level(png, 1);
-				png_set_filter(png, PNG_FILTER_TYPE_BASE, PNG_FILTER_SUB);
-				png_set_IHDR(png, info, width, height, 8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
-				png_write_info(png, info);
-				for (int row = 0; row < height; ++row) png_write_row(png, const_cast<png_bytep>(pixels + static_cast<std::size_t>(row) * width * 3));
-				png_write_end(png, nullptr);
-				saved = true;
-			}
-			png_destroy_write_struct(png ? &png : nullptr, info ? &info : nullptr);
-			return std::fclose(file) == 0 && saved;
-		}
-
 		/// Writers enough to keep a 4K capture's rate on a desktop CPU without taking the engine's own cores.
 		std::size_t WriterCount() {
 			return std::clamp<std::size_t>(std::thread::hardware_concurrency() / 5, 2, 6);
 		}
 	} // namespace
+
+	// The fastest deflate level with the Sub filter: a recording is read once by the encoder, so speed beats size.
+	bool FrameRecorder::SaveRgbPng(const std::string& path, const unsigned char* pixels, int width, int height, std::size_t stride) {
+		std::FILE* file = std::fopen(path.c_str(), "wb");
+		if (!file) return false;
+		png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+		png_infop info = png ? png_create_info_struct(png) : nullptr;
+		bool saved = false;
+		if (png && info && !setjmp(png_jmpbuf(png))) {
+			png_init_io(png, file);
+			png_set_compression_level(png, 1);
+			png_set_filter(png, PNG_FILTER_TYPE_BASE, PNG_FILTER_SUB);
+			png_set_IHDR(png, info, width, height, 8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+			png_write_info(png, info);
+			for (int row = 0; row < height; ++row) png_write_row(png, const_cast<png_bytep>(pixels + static_cast<std::size_t>(row) * stride));
+			png_write_end(png, nullptr);
+			saved = true;
+		}
+		png_destroy_write_struct(png ? &png : nullptr, info ? &info : nullptr);
+		return std::fclose(file) == 0 && saved;
+	}
 
 	FrameRecorder& FrameRecorder::Instance() {
 		static FrameRecorder recorder;
@@ -364,7 +364,7 @@ namespace RTE {
 
 	std::string FrameRecorder::WriteFrame(const QueuedFrame& frame) {
 		const std::string path = (std::filesystem::path(m_FramesDirectory) / FrameLeaf(frame.index)).string();
-		const bool saved = SaveRgbPng(path, frame.pixels.data(), frame.meta.width, frame.meta.height);
+		const bool saved = SaveRgbPng(path, frame.pixels.data(), frame.meta.width, frame.meta.height, static_cast<std::size_t>(frame.meta.width) * 3);
 
 		nlohmann::json line = {{"frame", frame.index}, {"wall_ms", frame.meta.wallMS}, {"sim_tick", frame.meta.simTick},
 		    {"screen", frame.meta.screen}, {"resolution", {frame.meta.width, frame.meta.height}}, {"saved", saved}};
