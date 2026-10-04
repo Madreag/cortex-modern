@@ -871,8 +871,13 @@ namespace RTE {
 		/// one), the returns under way and the holds.
 		static uint64_t ReturnHistoryFloor(uint64_t tick, std::optional<uint64_t> servedBaseTick, const std::vector<NetWorldJoinSession>& sessions,
 		                                   const std::map<uint8_t, NetGameSeatHold>& holds, double tickMs);
-		/// One pass over a join plane's round history: prunes it to the oldest frame anyone may still be served from, which it returns.
-		static uint64_t StepJoinHistory(NetWorldJoinHost& host, uint64_t tick, std::optional<uint64_t> servedBaseTick, const std::map<uint8_t, NetGameSeatHold>& holds, double tickMs);
+		/// One pass over a join plane's round history: a failed journal is reported and opened again, every bootstrap the history can no
+		/// longer serve or that trails past the policy's lag limit is ended with a receipt (into ends, for the caller to tell its reader), and
+		/// the history is pruned to the oldest frame anyone may still be served from, which it returns.
+		static uint64_t StepJoinHistory(NetWorldJoinHost& host, uint64_t tick, std::optional<uint64_t> servedBaseTick, const std::map<uint8_t, NetGameSeatHold>& holds, double tickMs,
+		                                const NetJoinHistoryPolicy& policy, std::vector<NetJoinHistoryEnd>* ends);
+		/// The host's options for a join plane's round history, in frames of a round whose tick is tickMs.
+		static NetJoinHistoryPolicy JoinHistoryPolicyFromSettings(double tickMs);
 		static bool ReadCommittedJoinFrame(const NetLockstepCoordinator& coordinator, uint64_t tick, NetLockstepReadyFrame& ready);
 		/// The image one finished archive describes. An entry the writer has not filled yields an
 		/// image that is not valid, so nothing is published for it.
