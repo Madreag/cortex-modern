@@ -4758,30 +4758,7 @@ static void DrawFrameWithPreviews() {
 	NetModerationGUIProbe::AfterDraw();
 }
 
-/// Draws the wait's screen: its line, how long it has run and the network surfaces over it.
-/// @param watched Whether the screen watches judge this frame; a frame they never evaluate leaves them no line.
-static void DrawResyncUI(uint32_t elapsedSeconds, bool heldRejoin, const std::string& heldLine, bool watched) {
-	g_WindowMan.ClearBackbuffer();
-	clear_to_color(g_FrameMan.GetBackBuffer32(), makeacol32(20, 22, 27, 255));
-	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
-	const int centerX = g_WindowMan.GetResX() / 2;
-	const int centerY = g_WindowMan.GetResY() / 2;
-	const std::string resyncTitle = heldRejoin ? (heldLine.empty() ? std::string("Held - AI in control - rejoining...") : heldLine) : std::string("Resyncing the match...");
-	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, resyncTitle, GUIFont::Centre);
-	if (watched) MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncTitle);
-	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8,
-	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]" + (heldRejoin ? "  /  Leave [Esc] - your seat is kept" : ""), GUIFont::Centre);
-	g_MenuMan.DrawNetworkUI();
-	ScenarioRunner::DrawNetUiToasts(resyncTitle);
-	ScenarioRunner::NoteResyncOverlayFrame();
-	g_MenuMan.DrawLocalPauseMenu();
-	g_WindowMan.UploadFrame();
-	if (FrameRecorder::Instance().Enabled()) {
-		g_FrameMan.RecordVideoFrame(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", g_NetMatchService.GetLobbySnapshot().serviceState);
-	}
-}
-
-/// Runs and draws the wait; returns whether a held seat's player asked to leave it.
+/// Draws the wait; returns whether a held seat's player asked to leave it.
 static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, const std::string& heldLine = {}) {
 	PollSDLEvents();
 	g_UInputMan.Update(false);
@@ -4792,7 +4769,24 @@ static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, con
 	}
 	g_MenuMan.UpdateNetworkUI();
 	g_MenuMan.UpdateLocalPauseMenu();
-	DrawResyncUI(elapsedSeconds, heldRejoin, heldLine, true);
+	g_WindowMan.ClearBackbuffer();
+	clear_to_color(g_FrameMan.GetBackBuffer32(), makeacol32(20, 22, 27, 255));
+	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
+	const int centerX = g_WindowMan.GetResX() / 2;
+	const int centerY = g_WindowMan.GetResY() / 2;
+	const std::string resyncTitle = heldRejoin ? (heldLine.empty() ? std::string("Held - AI in control - rejoining...") : heldLine) : std::string("Resyncing the match...");
+	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, resyncTitle, GUIFont::Centre);
+	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncTitle);
+	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8,
+	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]" + (heldRejoin ? "  /  Leave [Esc] - your seat is kept" : ""), GUIFont::Centre);
+	g_MenuMan.DrawNetworkUI();
+	ScenarioRunner::DrawNetUiToasts(resyncTitle);
+	ScenarioRunner::NoteResyncOverlayFrame();
+	g_MenuMan.DrawLocalPauseMenu();
+	g_WindowMan.UploadFrame();
+	if (FrameRecorder::Instance().Enabled()) {
+		g_FrameMan.RecordVideoFrame(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", g_NetMatchService.GetLobbySnapshot().serviceState);
+	}
 	NetModerationGUIProbe::AfterDraw();
 	g_UInputMan.EndFrame();
 	g_UInputMan.EndSimUpdate();
@@ -6774,11 +6768,15 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			const size_t heldAt = error.find("PeerHeld:");
 			const std::string stopLine = heldAt == std::string::npos ? std::string() : error.substr(heldAt + 9);
 			const std::string unreachableAtStop = stopLine.rfind("The host is unreachable", 0) == 0 ? stopLine : std::string();
-			// The wait's screen is drawn before the host's snapshot save holds this thread, so the stopped match says why at once.
-			DrawResyncUI(0, heldRejoin, unreachableAtStop, false);
+			// The wait's screen goes up before the host's snapshot save holds this thread, so the stopped match says why at once.
+			const bool leaveAtOnce = UpdateResyncUI(0, heldRejoin, unreachableAtStop);
 			if (heldRejoin) {
 				resyncOk = g_NetMatchService.BeginHeldRejoin(&resyncError);
 			} else resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
+			if (leaveAtOnce) {
+				leftTheWait = true;
+				resyncOk = false;
+			}
 			std::string launchPreset;
 			for (bool attempt = resyncOk; attempt;) {
 				attempt = false;
