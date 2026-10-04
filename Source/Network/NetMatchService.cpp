@@ -4009,20 +4009,29 @@ static std::string ResyncSaveName() {
 		if (m_IsHost && m_MatchConfig.persistentWorld) {
 			System::PrintDiagnosticLine(std::format("[autosave] agreed match={} tick={} state={}", m_AutosaveMatchId, tick,
 			                                       nlohmann::json(AutosaveStore::RenderSideState(m_AutosaveIdentity.sideState)).dump()));
-			// A world joiner starts on this tick's lockstep state too: a hold's handoffs before the image are not in its tail.
+			// A world joiner starts on this tick's lockstep state and seats: a hold's handoffs before the image are not in its tail.
 			NetResyncState state;
 			std::vector<uint8_t> side;
 			std::string error;
 			if (ScenarioRunner::CaptureNetResyncState(tick, state, &error)) {
 				state.pendingInputs.clear(); state.pendingCommands.clear(); state.pendingPlayerBindings.clear(); state.admittedReseats.clear();
-				if (NetResyncCodec::Encode(state, {0}, side, &error)) {
-					std::lock_guard<std::mutex> lock(m_Mutex);
-					m_WorldImageSideStates[tick] = ResumeHex(side);
-					// Captures that never publish do not pile up.
-					while (m_WorldImageSideStates.size() > 8) m_WorldImageSideStates.erase(m_WorldImageSideStates.begin());
-				}
+				if (!NetResyncCodec::Encode(state, {0}, side, &error)) side.clear();
 			}
-			if (side.empty()) System::PrintDiagnosticLine(std::format("[net-world] no lockstep state for the image at tick {}: {}", tick, error));
+			NetWorldCheckpointImage seats;
+			if (!side.empty() && m_Coordinator) {
+				NetLockstepPlaneGuard plane;
+				CaptureWorldImageSeats(*m_Coordinator, tick, seats);
+				seats.sideState = ResumeHex(side);
+			}
+			if (!seats.sideState.empty() && !seats.heldState.empty()) {
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				m_WorldImageStates[tick] = std::move(seats);
+				// Captures that never publish do not pile up.
+				while (m_WorldImageStates.size() > 8) m_WorldImageStates.erase(m_WorldImageStates.begin());
+			} else {
+				System::PrintDiagnosticLine(std::format("[net-world] no lockstep state for the image at tick {}: {}", tick,
+				                                        !error.empty() ? error : m_Coordinator ? "its seats did not encode" : "there is no round"));
+			}
 		}
 		return g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity);
 	}
@@ -4049,22 +4058,92 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::CaptureWorldImageSeats(const NetLockstepCoordinator& coordinator, uint64_t tick, NetWorldCheckpointImage& image) {
-		// A world's image names its lockstep side state only.
-		(void)coordinator; (void)tick; (void)image;
+		// The tail after the image carries every transition from tick + 1 on; the ones at or before it govern the frames it starts.
+		const uint8_t host = coordinator.GetHostPeerId();
+		const auto& config = coordinator.GetConfig();
+		const auto leaves = coordinator.GetPeerLeaveFrames();
+		const auto holds = coordinator.HeldTransactions();
+		NetLockstepFrame seats;
+		seats.targetFrame = tick;
+		seats.roundId = coordinator.GetRoundId();
+		std::map<uint8_t, uint64_t> heldFrom;
+		for (uint8_t peer = 1; peer <= config.peerCount; ++peer) {
+			if (!coordinator.IsSeatUnderAI(peer, tick)) continue;
+			const auto held = holds.find(peer);
+			NetGameSeatHold hold = held != holds.end() && held->second.cutoffFrame <= tick ? held->second : NetGameSeatHold{peer};
+			if (hold.cutoffFrame == 0) {
+				// A seat held from the round's start has no transaction: it is held from its leave, or from this tick at the latest.
+				const auto leave = leaves.find(peer);
+				hold.authorityGeneration = config.migrationGeneration;
+				hold.seatIncarnation = config.peerIncarnations.contains(peer) ? config.peerIncarnations.at(peer) : 0;
+				hold.cutoffFrame = leave != leaves.end() && leave->second <= tick ? leave->second : tick;
+			}
+			heldFrom[peer] = hold.cutoffFrame;
+			seats.commands.push_back({host, hold});
+		}
+		// A return older than the seat's hold is history; a newer one at or before the tick may still be inside its neutral gap.
+		for (const auto& [peer, reclaim]: coordinator.ReclaimTransactions())
+			if (reclaim.activationFrame <= tick && (!heldFrom.contains(peer) || heldFrom.at(peer) < reclaim.activationFrame)) seats.commands.push_back({host, reclaim});
+		image.departedPeers.clear();
+		for (const auto& [peer, frame]: leaves) if (frame <= tick) image.departedPeers[peer] = frame;
+		image.authorityGeneration = config.migrationGeneration;
+		image.authorityPeerId = host;
+		std::vector<uint8_t> bytes;
+		image.heldState = EncodeCommittedJoinFrame(seats, bytes) ? ResumeHex(bytes) : std::string();
 	}
 
 	bool NetMatchService::AdoptWorldImageSeats(const NetWorldCheckpointImage& image, uint8_t peerCount, NetWorldCatchUpClient& catchUp, std::string* error) {
-		(void)peerCount; (void)error;
+		// A joiner started without the image's seats would answer a held seat as played and resolve its units to the wrong producer.
+		std::vector<uint8_t> bytes;
+		NetLockstepFrame seats;
+		if (image.sideState.empty() || image.heldState.empty() || !ResumeBytes(image.heldState, bytes) || !DecodeCommittedJoinFrame(bytes, seats, error) ||
+		    seats.targetFrame != image.tick) {
+			if (error) *error = "the world image carries no seat state for its tick " + std::to_string(image.tick) + (error->empty() ? "" : ": " + *error);
+			return false;
+		}
+		if (image.authorityPeerId == 0 || image.authorityPeerId > peerCount) {
+			if (error) *error = "the world image names authority peer " + std::to_string(image.authorityPeerId) + " outside its " + std::to_string(peerCount) + " seats";
+			return false;
+		}
+		std::map<uint8_t, NetGameSeatHold> holds;
+		std::map<uint8_t, NetGameSeatReclaim> reclaims;
+		for (const NetGameCommand& command: seats.commands) {
+			const auto* hold = std::get_if<NetGameSeatHold>(&command.payload);
+			const auto* reclaim = std::get_if<NetGameSeatReclaim>(&command.payload);
+			const uint8_t peer = hold ? hold->peerId : reclaim ? reclaim->peerId : 0;
+			const uint64_t frame = hold ? hold->cutoffFrame : reclaim ? reclaim->activationFrame : 0;
+			if (command.senderPeerId != image.authorityPeerId || peer == 0 || peer > peerCount || frame == 0 || frame > image.tick) {
+				if (error) *error = "the world image's seat state names a transition outside its round: peer " + std::to_string(peer) + " at " + std::to_string(frame);
+				return false;
+			}
+			if (hold) holds[peer] = *hold;
+			else reclaims[peer] = *reclaim;
+		}
+		for (const auto& [peer, frame]: image.departedPeers) {
+			if (peer == 0 || peer > peerCount || frame > image.tick) {
+				if (error) *error = "the world image names a departure outside its round: peer " + std::to_string(peer) + " at " + std::to_string(frame);
+				return false;
+			}
+		}
+		catchUp.initialHolds = std::move(holds);
+		catchUp.initialReclaims = std::move(reclaims);
 		catchUp.initialPeerLeaves = image.departedPeers;
+		catchUp.authorityGeneration = image.authorityGeneration;
+		catchUp.authorityPeerId = image.authorityPeerId;
 		return true;
 	}
 
 	void NetMatchService::SeedWorldReplaySeats(const NetWorldCatchUpClient& catchUp, NetLockstepConfig& config) {
 		config.initialPeerLeaves = catchUp.initialPeerLeaves;
+		config.initialSeatHolds = catchUp.initialHolds;
+		config.initialSeatReclaims = catchUp.initialReclaims;
+		for (const auto& [peer, hold]: catchUp.initialHolds) config.peerIncarnations[peer] = std::max(config.peerIncarnations[peer], hold.seatIncarnation);
+		for (const auto& [peer, reclaim]: catchUp.initialReclaims) config.peerIncarnations[peer] = std::max(config.peerIncarnations[peer], reclaim.seatIncarnation);
 	}
 
 	void NetMatchService::AdoptWorldReplaySeats(NetLockstepCoordinator& live, const NetLockstepCoordinator& replay, uint64_t activationTick) {
-		(void)live; (void)replay; (void)activationTick;
+		// The round was configured when its handshake began; a hold or return the replay took since then is the round's too.
+		if (activationTick != 0) live.AdoptReplayedSeatTransitions(replay, activationTick - 1);
 	}
 
 	void NetMatchService::PublishFinishedWorldJoinImage() {
@@ -4134,8 +4213,23 @@ static std::string ResyncSaveName() {
 		}
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			if (const auto side = m_WorldImageSideStates.find(image.tick); side != m_WorldImageSideStates.end()) image.sideState = side->second;
-			m_WorldImageSideStates.erase(m_WorldImageSideStates.begin(), m_WorldImageSideStates.upper_bound(image.tick));
+			const auto state = m_WorldImageStates.find(image.tick);
+			if (state == m_WorldImageStates.end()) {
+				// An archive and the lockstep state of its tick are one image: without the state no joiner may start on it, and the next
+				// bootstrap asks for a capture of its own.
+				if (m_WorldImageRefusedTick != image.tick) {
+					m_WorldImageRefusedTick = image.tick;
+					System::PrintDiagnosticLine("[net-world] the image at tick " + std::to_string(image.tick) + " is not published: no lockstep state was captured at its tick");
+				}
+				if (m_WorldCaptureRequestedTick != 0 && m_WorldCaptureRequestedTick <= image.tick) m_WorldCaptureRequestedTick = 0;
+				return;
+			}
+			image.sideState = state->second.sideState;
+			image.heldState = state->second.heldState;
+			image.departedPeers = state->second.departedPeers;
+			image.authorityGeneration = state->second.authorityGeneration;
+			image.authorityPeerId = state->second.authorityPeerId;
+			m_WorldImageStates.erase(m_WorldImageStates.begin(), m_WorldImageStates.upper_bound(image.tick));
 		}
 		// The buffer the writer produced is shared, not copied: every bootstrap ships these bytes.
 		m_WorldJoinImageDigest = image.digest;
@@ -8880,9 +8974,9 @@ static std::string ResyncSaveName() {
 		std::ostringstream line;
 		line << m_WorldJoin.MemoryCensus();
 		size_t sideBytes = 0;
-		for (const auto& [tick, side]: m_WorldImageSideStates) sideBytes += side.capacity();
+		for (const auto& [tick, state]: m_WorldImageStates) sideBytes += state.sideState.capacity() + state.heldState.capacity();
 		// The image's archive is shared with the writer's last autosave: the owners count says whether it is held twice.
-		line << " side_states=" << m_WorldImageSideStates.size() << " side_state_bytes=" << sideBytes
+		line << " side_states=" << m_WorldImageStates.size() << " side_state_bytes=" << sideBytes
 		     << " image_archive_bytes=" << (m_WorldJoinImageArchive ? m_WorldJoinImageArchive->size() : 0) << " image_archive_owners=" << m_WorldJoinImageArchive.use_count();
 		if (const auto autosave = g_ActivityMan.LastCompletedAutosave(); autosave && autosave->archive) {
 			line << " autosave_archive_bytes=" << autosave->archive->size() << " autosave_archive_shared=" << (autosave->archive == m_WorldJoinImageArchive ? 1 : 0);

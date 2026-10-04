@@ -68,6 +68,21 @@ namespace RTE {
 
 		const char* c_WorldId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
+		/// The seats a world image names for its tick, none held here: a joiner refuses an offer without them.
+		void GiveWorldImageItsSeats(NetWorldCheckpointImage& image) {
+			NetLockstepFrame seats;
+			seats.targetFrame = image.tick;
+			std::vector<uint8_t> bytes;
+			(void)EncodeCommittedJoinFrame(seats, bytes);
+			static constexpr char c_Digits[] = "0123456789abcdef";
+			image.heldState.clear();
+			for (const uint8_t byte: bytes) {
+				image.heldState.push_back(c_Digits[byte >> 4]);
+				image.heldState.push_back(c_Digits[byte & 0x0F]);
+			}
+			if (image.sideState.empty()) image.sideState = "00";
+		}
+
 		class ScriptedAuthCrypto : public NetAuthCrypto {
 		public:
 			bool IsRealCrypto() const override { return false; }
@@ -364,7 +379,14 @@ namespace RTE {
 			image.digest = "abc";
 			image.path = "Worlds/image.bin";
 			NetWorldCheckpointImage decoded;
-			if (!DecodeWorldJoinOffer(EncodeWorldJoinOffer(image), decoded, &error) || decoded.worldId != image.worldId || decoded.tick != image.tick || decoded.bytes != image.bytes) {
+			// An older host's world offer names no seats for its tick: a joiner refuses it by name instead of starting on a guess.
+			if (DecodeWorldJoinOffer(EncodeWorldJoinOffer(image), decoded, &error) || error.find("carries no seats") == std::string::npos) {
+				return Fail("world-joiner-took-an-offer-without-its-seats: " + error);
+			}
+			error.clear();
+			GiveWorldImageItsSeats(image);
+			if (!DecodeWorldJoinOffer(EncodeWorldJoinOffer(image), decoded, &error) || decoded.worldId != image.worldId || decoded.tick != image.tick || decoded.bytes != image.bytes ||
+			    decoded.heldState != image.heldState || decoded.sideState != image.sideState) {
 				return Fail("world join offer did not round-trip: " + error);
 			}
 			return 0;
@@ -635,6 +657,7 @@ namespace RTE {
 			const std::vector<uint8_t> archive = {0xCA, 0xFE, 0xBA, 0xBE};
 			image.digest = DigestWorldJoinBytes(archive);
 			image.bytes = archive.size();
+			GiveWorldImageItsSeats(image);
 			NetWorldFrameLog log;
 			std::string error;
 			if (!log.Append(MakeCommittedFrame(41), &error) || !log.Append(MakeCommittedFrame(42), &error)) {
@@ -766,6 +789,7 @@ namespace RTE {
 			image.bytes = archive.size();
 			image.digest = DigestWorldJoinBytes(archive);
 			image.path = "Worlds/pump.bin";
+			GiveWorldImageItsSeats(image);
 			std::vector<uint8_t> blob;
 			if (!EncodeWorldJoinImageBlob(image, archive, {}, blob, &error)) {
 				return Fail("pump blob did not encode: " + error);

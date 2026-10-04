@@ -109,9 +109,13 @@ namespace RTE {
 			offer["authority_generation"] = image.authorityGeneration;
 			offer["authority_peer_id"] = image.authorityPeerId;
 			offer["departed_peers"] = image.departedPeers;
-		} else if (!image.sideState.empty()) {
-			// A world's image names the lockstep state of its tick, which its joiner starts on.
+		} else {
+			// A world's image names the lockstep state and the seats of its tick, which its joiner starts on.
 			offer["side_state"] = image.sideState;
+			offer["held_state"] = image.heldState;
+			offer["authority_generation"] = image.authorityGeneration;
+			offer["authority_peer_id"] = image.authorityPeerId;
+			offer["departed_peers"] = image.departedPeers;
 		}
 		return offer.dump();
 	}
@@ -140,6 +144,10 @@ namespace RTE {
 		image.boot = parsed.value("boot", uint64_t{0});
 		image.round = parsed.value("round", uint64_t{0});
 		image.tick = parsed.value("tick", uint64_t{0});
+		if (image.privateSessionId == 0 && (image.sideState.empty() || image.heldState.empty())) {
+			if (error) *error = "world join offer carries no seats for its tick: the host runs an older build";
+			return false;
+		}
 		if (image.privateSessionId != 0) {
 			const auto& pause = parsed.at("pause_state");
 			image.pauseState = {pause.at("paused").get<bool>(), pause.at("resume_countdown").get<int>(), pause.at("paused_frames").get<uint64_t>()};
