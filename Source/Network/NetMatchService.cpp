@@ -3719,7 +3719,7 @@ static std::string ResyncSaveName() {
 		if (tick % 60 == 0) PruneReturnHistory(tick);
 	}
 
-	uint64_t NetMatchService::ReturnHistoryFloorLocked(uint64_t tick, uint64_t nowMs) const {
+	std::optional<uint64_t> NetMatchService::ServedReturnBaseLocked(uint64_t nowMs) const {
 		// A returner arriving now is served the published base, unless it would take a new one.
 		std::optional<uint64_t> served;
 		const NetWorldCheckpointImage& image = m_WorldJoin.Image();
@@ -3730,7 +3730,7 @@ static std::string ResyncSaveName() {
 			const bool fresh = m_PrivateImageTakenMs != 0 && nowMs - m_PrivateImageTakenMs < c_PrivateImageMinIntervalMs;
 			if (!m_PrivateImageRecapture && (fresh || !PrivateBaseRefreshDue(true, 0, image.tick, SteadyCaptureMs(m_PrivateCaptureCosts)))) served = image.tick;
 		}
-		return ReturnHistoryFloor(tick, served, m_WorldJoin.Sessions(), m_Coordinator->HeldTransactions(), m_Coordinator->GetConfig().simTickMs);
+		return served;
 	}
 
 	uint64_t NetMatchService::ReturnHistoryFloor(uint64_t tick, std::optional<uint64_t> servedBaseTick, const std::vector<NetWorldJoinSession>& sessions,
@@ -3748,12 +3748,17 @@ static std::string ResyncSaveName() {
 		return floor;
 	}
 
+	uint64_t NetMatchService::StepJoinHistory(NetWorldJoinHost& host, uint64_t tick, std::optional<uint64_t> servedBaseTick, const std::map<uint8_t, NetGameSeatHold>& holds, double tickMs) {
+		const uint64_t floor = ReturnHistoryFloor(tick, servedBaseTick, host.Sessions(), holds, tickMs);
+		host.Tail().PruneJournalBefore(floor);
+		return floor;
+	}
+
 	void NetMatchService::PruneReturnHistory(uint64_t tick) {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (!m_Coordinator || !m_WorldJoin.IsConfigured() || !m_WorldJoin.Tail().HasJournal()) return;
 		NetLockstepPlaneGuard plane;
-		const uint64_t floor = ReturnHistoryFloorLocked(tick, SteadyNowMs());
-		m_WorldJoin.Tail().PruneJournalBefore(floor);
+		const uint64_t floor = StepJoinHistory(m_WorldJoin, tick, ServedReturnBaseLocked(SteadyNowMs()), m_Coordinator->HeldTransactions(), m_Coordinator->GetConfig().simTickMs);
 		m_LastReturnHistoryFloor = floor;
 		m_Coordinator->SetReturnHistoryFloor(floor);
 	}
