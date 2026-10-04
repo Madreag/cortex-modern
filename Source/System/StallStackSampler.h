@@ -42,5 +42,6 @@ namespace RTE {
 		static inline void* s_Thread = nullptr;
 		static inline std::jthread s_Watcher;
 		static inline int64_t s_LastSuspendNs = 0; //!< How long the last sample held the thread suspended; the watcher's own.
+		static inline bool s_Symbols = false; //!< Whether the symbols loaded when the sampler was armed.
 	};
 } // namespace RTE
