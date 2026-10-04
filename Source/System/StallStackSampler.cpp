@@ -1,6 +1,7 @@
 #include "StallStackSampler.h"
 
 #include "System.h"
+#include "HarnessCost.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -29,6 +30,7 @@ namespace RTE {
 		}
 		s_Thread = thread;
 		s_ThresholdMs = threshold;
+		HarnessCost::SetEnabled(HarnessCost::StallSampler, true);
 		s_Watcher = std::jthread([](std::stop_token stop) { Watch(stop); });
 		System::PrintDiagnosticLine("[stall-stack] armed: a tick past " + std::to_string(threshold) + " ms is sampled every " + std::to_string(threshold) + " ms");
 #else
@@ -54,8 +56,12 @@ namespace RTE {
 				continue;
 			}
 			nextSampleMs = now + s_ThresholdMs;
+			const auto sampleStart = std::chrono::steady_clock::now();
 			const std::string frames = Sample();
+			const int64_t sampleNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - sampleStart).count();
 			// A tick that ended while the stack was read is not reported.
+			// The suspension is charged as it ends; the rest of the sample is the watcher's own work.
+			HarnessCost::Charge(HarnessCost::StallSampler, sampleNs - s_LastSuspendNs);
 			if (s_BeganMs.load(std::memory_order_acquire) != began) {
 				continue;
 			}
@@ -69,6 +75,8 @@ namespace RTE {
 		constexpr int c_MaxFrames = 24;
 		DWORD64 addresses[c_MaxFrames] = {};
 		int count = 0;
+		s_LastSuspendNs = 0;
+		const auto suspended = std::chrono::steady_clock::now();
 		if (SuspendThread(thread) == static_cast<DWORD>(-1)) {
 			return "suspend failed";
 		}
@@ -91,6 +99,8 @@ namespace RTE {
 			}
 		}
 		ResumeThread(thread);
+		s_LastSuspendNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - suspended).count();
+		HarnessCost::NoteSimulationSuspended(s_LastSuspendNs);
 		static bool symbols = false;
 		HANDLE process = GetCurrentProcess();
 		if (!symbols) {

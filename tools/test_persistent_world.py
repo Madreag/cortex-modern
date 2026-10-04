@@ -959,7 +959,7 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullst
     # for the tick it resumed from - not an ordinary file that names no world.
     restarted = out / "restarted"
     restarted.mkdir(parents=True, exist_ok=True)
-    again = restore._run_world_round(repo, restarted, port + 2, 600,
+    again = restore._run_world_round(repo, restarted, port, 600,
                                      {"host": ["-net-replay-out", str(restarted / "host" / "match.ccreplay")]}, carry=world)
     for who in ("host", "client"):
         assert again[who].get("exit_code") == 0, (who, again[who].get("exit_code"), again[who].get("error"))

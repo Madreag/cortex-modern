@@ -68,6 +68,7 @@ namespace RTE {
 		ParticipantChallenge = 28,
 		ParticipantProof = 29,
 		RosterRevision = 30,
+		RosterRevisionRequest = 31,
 	};
 
 	enum class NetRejectReason : uint16_t {
@@ -100,6 +101,8 @@ namespace RTE {
 		IdentityUnproven = 20,
 		// Host-authored: the host released this player's seat. Not SessionEnded (the match runs on).
 		SeatReleased = 21,
+		// A client's own record that its link to the host closed with no word from the host. Never sent, so never decoded.
+		HostLinkLost = 22,
 	};
 
 	enum class NetParticipantRemovalReason : uint8_t {
@@ -230,6 +233,10 @@ namespace RTE {
 
 		bool operator==(const NetPong&) const = default;
 	};
+
+	/// The words the host closes a removed seat's link with; the seat reads them as its removal, never as the host lost.
+	inline constexpr const char* c_NetRemovedLinkText = "removed from this session";
+	inline constexpr const char* c_NetBannedLinkText = "banned from this session";
 
 	struct NetDisconnect {
 		uint16_t disconnectReason = 0;
@@ -366,6 +373,14 @@ namespace RTE {
 		std::vector<uint8_t> roster; ///< EncodeRoster's bytes: tickets and the ban list stay on the host.
 
 		bool operator==(const NetH4RosterRevision&) const = default;
+	};
+
+	/// A peer whose agreed config names a seat roster revision it never heard asks the host for that one by number.
+	struct NetH4RosterRevisionRequest {
+		uint16_t h4Version = c_NetH4Version;
+		uint32_t revision = 0;
+
+		bool operator==(const NetH4RosterRevisionRequest&) const = default;
 	};
 
 	/// Phase B: asking the host for a seat whose holder is gone. An applicant is inert - it holds no
@@ -530,7 +545,8 @@ namespace RTE {
 		NetParticipantRemoval,
 		NetParticipantChallenge,
 		NetParticipantProof,
-		NetH4RosterRevision>;
+		NetH4RosterRevision,
+		NetH4RosterRevisionRequest>;
 
 	struct NetMessage {
 		uint32_t sequence = 0;

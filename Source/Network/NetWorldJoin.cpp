@@ -14,9 +14,11 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <random>
 #include <sstream>
@@ -107,6 +109,9 @@ namespace RTE {
 			offer["authority_generation"] = image.authorityGeneration;
 			offer["authority_peer_id"] = image.authorityPeerId;
 			offer["departed_peers"] = image.departedPeers;
+		} else if (!image.sideState.empty()) {
+			// A world's image names the lockstep state of its tick, which its joiner starts on.
+			offer["side_state"] = image.sideState;
 		}
 		return offer.dump();
 	}
@@ -880,8 +885,16 @@ namespace RTE {
 		struct Job {
 			uint64_t frame = 0, maxBytes = 0;
 			size_t maxRecords = 0;
+			bool prune = false; //!< Drops the segments wholly before frame.
 			std::vector<uint8_t> bytes;
 			std::shared_ptr<std::promise<ReadResult>> result;
+		};
+		// One file of consecutive frames; the oldest go a whole file at a time.
+		struct Segment {
+			uint64_t first = 0, endOffset = 0;
+			std::string path;
+			std::unique_ptr<std::fstream> stream;
+			std::vector<std::pair<uint64_t, uint32_t>> records; //!< Offset and size of each frame from first on.
 		};
 		std::string path;
 		std::mutex mutex;
@@ -890,6 +903,9 @@ namespace RTE {
 		uint64_t queuedBytes = 0;
 		bool stopping = false;
 		std::atomic<bool> failed{false};
+		std::atomic<uint64_t> bytesOnDisk{0}; //!< Its files' bytes, as the worker last left them.
+		std::atomic<uint32_t> filesOnDisk{0};
+		std::atomic<uint64_t> indexBytes{0}; //!< The worker's per-frame offsets, as it last left them.
 		std::map<std::tuple<uint64_t, size_t, uint64_t>, std::shared_future<ReadResult>> reads;
 		std::thread worker;
 
@@ -898,8 +914,12 @@ namespace RTE {
 			{ std::lock_guard lock(mutex); stopping = true; }
 			changed.notify_one();
 			if (worker.joinable()) worker.join();
-			std::error_code ignored;
-			std::filesystem::remove(path, ignored);
+		}
+		void Prune(uint64_t before) {
+			std::lock_guard lock(mutex);
+			Job job; job.frame = before; job.prune = true;
+			jobs.push_back(std::move(job));
+			changed.notify_one();
 		}
 		bool Append(uint64_t frame, const std::vector<uint8_t>& bytes) {
 			std::lock_guard lock(mutex);
@@ -934,12 +954,15 @@ namespace RTE {
 			return out.size();
 		}
 		void Run() {
+			std::deque<Segment> segments;
+			uint64_t opened = 0;
+			const auto close = [](Segment& segment) {
+				segment.stream.reset();
+				std::error_code ignored;
+				std::filesystem::remove(segment.path, ignored);
+			};
 			try {
 				std::filesystem::create_directories(std::filesystem::path(path).parent_path());
-				std::fstream stream(path, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
-				if (!stream) { failed = true; return; }
-				std::map<uint64_t, std::pair<uint64_t, uint32_t>> index;
-				uint64_t endOffset = 0;
 				while (true) {
 					Job job;
 					{
@@ -948,29 +971,60 @@ namespace RTE {
 						if (stopping) break;
 						job = std::move(jobs.front()); jobs.pop_front(); queuedBytes -= job.bytes.size();
 					}
-					if (!job.result) {
-						stream.clear(); stream.seekp(static_cast<std::streamoff>(endOffset));
-						stream.write(reinterpret_cast<const char*>(job.bytes.data()), static_cast<std::streamsize>(job.bytes.size()));
-						if (!stream) { failed = true; return; }
-						index[job.frame] = {endOffset, static_cast<uint32_t>(job.bytes.size())};
-						endOffset += job.bytes.size();
+					if (job.prune) {
+						// The segment being written stays: frames only ever join the newest one.
+						while (segments.size() > 1 && segments.front().first + segments.front().records.size() <= job.frame) {
+							close(segments.front());
+							segments.pop_front();
+						}
+					} else if (!job.result) {
+						if (segments.empty() || segments.back().records.size() >= c_JournalSegmentFrames) {
+							Segment segment;
+							segment.first = job.frame;
+							segment.path = opened == 0 ? path : path + "." + std::to_string(opened);
+							++opened;
+							segment.stream = std::make_unique<std::fstream>(segment.path, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
+							if (!*segment.stream) { failed = true; break; }
+							segments.push_back(std::move(segment));
+						}
+						Segment& segment = segments.back();
+						segment.stream->clear(); segment.stream->seekp(static_cast<std::streamoff>(segment.endOffset));
+						segment.stream->write(reinterpret_cast<const char*>(job.bytes.data()), static_cast<std::streamsize>(job.bytes.size()));
+						if (!*segment.stream) { failed = true; break; }
+						segment.records.emplace_back(segment.endOffset, static_cast<uint32_t>(job.bytes.size()));
+						segment.endOffset += job.bytes.size();
 					} else {
 						ReadResult result;
 						uint64_t total = 0, expected = job.frame;
-						stream.flush();
-						for (auto record = index.lower_bound(job.frame); record != index.end(); ++record) {
-							const auto [offset, size] = record->second;
-							if (record->first != expected || result.records.size() >= job.maxRecords || (total != 0 && total + size > job.maxBytes)) break;
-							std::vector<uint8_t> bytes(size);
-							stream.clear(); stream.seekg(static_cast<std::streamoff>(offset));
-							stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size));
-							if (!stream) { failed = true; result = {}; break; }
-							result.records.push_back(std::move(bytes)); total += size; result.last = record->first; ++expected;
+						for (Segment& segment: segments) {
+							if (expected < segment.first || expected >= segment.first + segment.records.size()) continue;
+							segment.stream->flush();
+							for (; expected < segment.first + segment.records.size(); ++expected) {
+								const auto [offset, size] = segment.records[expected - segment.first];
+								if (result.records.size() >= job.maxRecords || (total != 0 && total + size > job.maxBytes)) break;
+								std::vector<uint8_t> bytes(size);
+								segment.stream->clear(); segment.stream->seekg(static_cast<std::streamoff>(offset));
+								segment.stream->read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size));
+								if (!*segment.stream) { failed = true; result = {}; break; }
+								result.records.push_back(std::move(bytes)); total += size; result.last = expected;
+							}
+							if (failed || expected < segment.first + segment.records.size()) break;
 						}
 						job.result->set_value(std::move(result));
 					}
+					if (!job.result) {
+						uint64_t bytes = 0, index = 0;
+						for (const Segment& segment: segments) {
+							bytes += segment.endOffset;
+							index += segment.records.capacity() * sizeof(decltype(segment.records)::value_type);
+						}
+						bytesOnDisk = bytes;
+						filesOnDisk = static_cast<uint32_t>(segments.size());
+						indexBytes = index;
+					}
 				}
 			} catch (...) { failed = true; }
+			for (Segment& segment: segments) close(segment);
 		}
 	};
 
@@ -978,7 +1032,7 @@ namespace RTE {
 		m_Journal = std::make_shared<Journal>(path);
 		for (const auto& record: m_Records) {
 			if (!m_Journal->Append(record.frame, record.bytes)) break;
-			if (m_JournalFirst == 0) m_JournalFirst = record.frame;
+			if (m_JournalFirst == 0) m_JournalBase = m_JournalFirst = record.frame;
 			m_JournalLast = record.frame;
 		}
 	}
@@ -1012,7 +1066,7 @@ namespace RTE {
 			return false;
 		}
 		if (m_Journal && m_Journal->Append(frame.targetFrame, record.bytes)) {
-			if (m_JournalFirst == 0) m_JournalFirst = frame.targetFrame;
+			if (m_JournalFirst == 0) m_JournalBase = m_JournalFirst = frame.targetFrame;
 			m_JournalLast = frame.targetFrame;
 		}
 		m_Bytes += record.bytes.size();
@@ -1027,6 +1081,25 @@ namespace RTE {
 			m_Records.pop_front();
 			++m_Evicted;
 		}
+	}
+
+	NetWorldFrameLog::JournalStats NetWorldFrameLog::GetJournalStats() const {
+		JournalStats stats;
+		if (!m_Journal) return stats;
+		stats.bytes = m_Journal->bytesOnDisk;
+		stats.files = m_Journal->filesOnDisk;
+		stats.first = m_JournalFirst;
+		stats.last = m_JournalLast;
+		stats.indexBytes = m_Journal->indexBytes;
+		// The reads are kept by the caller's thread, which this is.
+		stats.cachedReads = static_cast<uint32_t>(m_Journal->reads.size());
+		for (const auto& [key, read]: m_Journal->reads) {
+			if (read.wait_for(std::chrono::seconds(0)) != std::future_status::ready) continue;
+			try {
+				for (const std::vector<uint8_t>& record: read.get().records) stats.cachedReadBytes += record.capacity();
+			} catch (...) {}
+		}
+		return stats;
 	}
 
 	uint64_t NetWorldFrameLog::FirstServableFrame() const {
@@ -1069,6 +1142,16 @@ namespace RTE {
 		}
 	}
 
+	void NetWorldFrameLog::PruneJournalBefore(uint64_t frame) {
+		if (!m_Journal || m_JournalFirst == 0 || frame <= m_JournalFirst) return;
+		// The file being written stays, so the first frame left is the first of the oldest file the floor keeps.
+		const auto fileStart = [this](uint64_t at) { return m_JournalBase + (at - m_JournalBase) / c_JournalSegmentFrames * c_JournalSegmentFrames; };
+		const uint64_t first = std::min(fileStart(frame), fileStart(m_JournalLast));
+		if (first <= m_JournalFirst) return;
+		m_JournalFirst = first;
+		m_Journal->Prune(first);
+	}
+
 	bool NetWorldFrameLog::AdoptRecords(const NetWorldFrameLog& other) {
 		if (!m_Records.empty()) return false;
 		if (m_Round != 0 && std::any_of(other.m_Records.begin(), other.m_Records.end(), [this](const Record& record) { return record.round != m_Round; })) return false;
@@ -1080,7 +1163,7 @@ namespace RTE {
 
 	void NetWorldFrameLog::Clear() {
 		m_Journal.reset();
-		m_JournalFirst = m_JournalLast = 0;
+		m_JournalBase = m_JournalFirst = m_JournalLast = 0;
 		m_Records.clear();
 		m_Bytes = 0;
 		m_Evicted = 0;
@@ -1282,11 +1365,13 @@ namespace RTE {
 		return found == m_Slots.end() ? nullptr : &*found;
 	}
 
+	const NetWorldSlot* NetWorldMembership::SlotOfPeer(uint8_t peerId) const {
+		const auto found = std::find_if(m_Slots.begin(), m_Slots.end(), [&](const NetWorldSlot& slot) { return slot.peerId == peerId; });
+		return found == m_Slots.end() ? nullptr : &*found;
+	}
+
 	const NetWorldSlot* NetWorldMembership::SlotOfSeat(uint16_t stableSeat) const {
-		if (stableSeat == 0) {
-			return nullptr;
-		}
-		const auto found = std::find_if(m_Slots.begin(), m_Slots.end(), [&](const NetWorldSlot& slot) { return slot.stableSeat == stableSeat; });
+		const auto found = std::find_if(m_Slots.begin(), m_Slots.end(), [&](const NetWorldSlot& slot) { return slot.seated && slot.stableSeat == stableSeat; });
 		return found == m_Slots.end() ? nullptr : &*found;
 	}
 
@@ -1302,6 +1387,7 @@ namespace RTE {
 		}
 		slot->held = true;
 		slot->stableSeat = stableSeat;
+		slot->seated = true;
 		slot->holderName = holderName;
 		++m_Revision;
 		return true;
@@ -1313,7 +1399,7 @@ namespace RTE {
 			if (error) *error = "peer " + std::to_string(static_cast<int>(peerId)) + " is not a world slot";
 			return false;
 		}
-		if (slot->stableSeat != stableSeat || stableSeat == 0) {
+		if (!slot->seated || slot->stableSeat != stableSeat) {
 			if (error) *error = "world slot " + std::to_string(static_cast<int>(peerId)) + " is not that seat's";
 			return false;
 		}
@@ -1418,7 +1504,7 @@ namespace RTE {
 		json slots = json::array();
 		for (const NetWorldSlot& slot: m_Slots) {
 			slots.push_back({{"peer_id", static_cast<int>(slot.peerId)}, {"team", static_cast<int>(slot.team)},
-			                 {"generation", slot.generation}, {"stable_seat", slot.stableSeat},
+			                 {"generation", slot.generation}, {"stable_seat", slot.stableSeat}, {"seated", slot.seated},
 			                 {"held", slot.held}, {"reclaim_hold", slot.reclaimHold},
 			                 {"brain_missing_since", slot.brainMissingSince}, {"holder", slot.holderName}});
 		}
@@ -1583,7 +1669,8 @@ namespace RTE {
 		return found == m_Sessions.end() ? nullptr : &*found;
 	}
 
-	bool NetWorldJoinHost::BeginJoin(NetPeerId connection, uint16_t stableSeat, const std::string& holderName, uint64_t nowMs, std::string* error, bool credentialedHolder) {
+	bool NetWorldJoinHost::BeginJoin(NetPeerId connection, uint16_t stableSeat, const std::string& holderName, uint64_t nowMs, std::string* error, bool credentialedHolder,
+	                                 uint8_t seatPeerId) {
 		if (IsPrivateMatch() && !credentialedHolder) { if (error) *error = "a running match only readmits its authenticated holder"; return false; }
 		if (!IsConfigured()) {
 			if (error) *error = "the world join plane is not configured";
@@ -1628,7 +1715,9 @@ namespace RTE {
 			}
 		}
 		if (slot == nullptr) {
-			slot = m_Membership.FirstFreeSlot();
+			// The roster chose the seat: its own slot when that is free, else the first free one.
+			if (const NetWorldSlot* own = m_Membership.SlotOfPeer(seatPeerId); own && !own->held && !own->reclaimHold) slot = own;
+			else slot = m_Membership.FirstFreeSlot();
 		}
 		if (slot == nullptr) {
 			// Every team is at capacity, so this connection watches - but only while the host's bound
@@ -1784,7 +1873,7 @@ namespace RTE {
 
 	bool NetWorldJoinHost::BeginFinalTail(NetPeerId connection, uint64_t finalFrame) {
 		auto* session = Find(connection);
-		if (!session || session->phase != NetWorldJoinPhase::CatchingUp || finalFrame < session->snapshotTick) return false;
+		if (!session || !StreamsTail(*session) || finalFrame < session->snapshotTick) return false;
 		if (session->finalTailFrame) return *session->finalTailFrame == finalFrame;
 		const uint64_t through = std::max(session->snapshotTick, session->acknowledgedThrough);
 		if (through < finalFrame && (!m_Tail.Covers(through + 1) || !m_Tail.Covers(finalFrame))) return false;
@@ -1802,7 +1891,7 @@ namespace RTE {
 
 	bool NetWorldJoinHost::NextTailChunk(NetPeerId connection, std::vector<uint8_t>& chunk) {
 		auto* session = Find(connection);
-		if (!session || session->phase != NetWorldJoinPhase::CatchingUp) return false;
+		if (!session || !StreamsTail(*session)) return false;
 		if (session->finalTailFrame && session->deliveredThrough >= *session->finalTailFrame) return false;
 		if (session->pendingTail.empty()) {
 			std::vector<std::vector<uint8_t>> frames;
@@ -1823,7 +1912,7 @@ namespace RTE {
 		packed.clear();
 		if (large) *large = false;
 		NetWorldJoinSession* session = Find(connection);
-		if (!session || session->phase != NetWorldJoinPhase::CatchingUp) return false;
+		if (!session || !StreamsTail(*session)) return false;
 		const auto pack = [&](const std::vector<std::vector<uint8_t>>& frames) {
 			for (const std::vector<uint8_t>& frame: frames) {
 				AppendU32LE(packed, static_cast<uint32_t>(frame.size()));
@@ -1966,7 +2055,7 @@ namespace RTE {
 			if (error) *error = "no world bootstrap for that connection";
 			return false;
 		}
-		if (session->phase != NetWorldJoinPhase::CatchingUp) {
+		if (!StreamsTail(*session)) {
 			if (error) *error = "that bootstrap is not catching up";
 			return false;
 		}
@@ -1995,6 +2084,19 @@ namespace RTE {
 			session->wallCatchUpMs += elapsedMs;
 		}
 		m_Metrics.NoteCatchUp(ticksReplayed, elapsedMs);
+		// A watcher never joins the round: it replays the committed tail for as long as it watches, and only one inside the lead
+		// can be promoted into a freed seat with an activation it reaches in time.
+		if (session->spectator) {
+			const bool watching = appliedThrough + c_NetWorldActivationLeadFrames >= nowFrame;
+			if (watching != (session->phase == NetWorldJoinPhase::Spectating)) {
+				session->phase = watching ? NetWorldJoinPhase::Spectating : NetWorldJoinPhase::CatchingUp;
+				std::ostringstream line;
+				line << "[net-world] watcher connection=" << connection << (watching ? " watching" : " catching up") << " applied=" << appliedThrough << " horizon=" << nowFrame;
+				System::PrintDiagnosticLine(line.str());
+			}
+			session->catchUpGate = watching ? "watching" : "outside-lead";
+			return true;
+		}
 		// A returning seat is activated only once it has shown it replays faster than the round plays, or that it has kept the
 		// round's pace at the head of the tail, where the tail's own arrival is what paces it.
 		const bool provesHeadroom = IsPrivateMatch() || session->returnsToHeldSeat;
@@ -2116,29 +2218,6 @@ namespace RTE {
 		return found == m_Sessions.end() ? nullptr : &*found;
 	}
 
-	bool NetWorldJoinHost::ScheduleSpectatorActivation(NetPeerId connection, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error) {
-		if (outActivationTick) *outActivationTick = 0;
-		NetWorldJoinSession* session = Find(connection);
-		if (session == nullptr || !session->spectator) {
-			if (error) *error = "that connection is not a spectator bootstrap";
-			return false;
-		}
-		if (session->activationTick != 0) {
-			if (outActivationTick) *outActivationTick = session->activationTick;
-			return true;
-		}
-		// A spectator with no image on the way has nothing to stream from, and announcing E would take
-		// it out of the phase its transfer is retried in.
-		if (!session->transferStarted || session->snapshotTick == 0) {
-			if (error) *error = "the spectator has no image transfer yet";
-			return false;
-		}
-		session->phase = NetWorldJoinPhase::CatchingUp;
-		session->activationTick = ChooseActivationTick(nowFrame);
-		if (outActivationTick) *outActivationTick = session->activationTick;
-		return true;
-	}
-
 	const NetWorldJoinSession* NetWorldJoinHost::SlowActivation(uint64_t nowFrame) const {
 		const auto found = std::find_if(m_Sessions.begin(), m_Sessions.end(), [&](const NetWorldJoinSession& session) {
 			// A joiner already waiting at E-1 is slow too once the round passed an E it never agreed.
@@ -2204,7 +2283,7 @@ namespace RTE {
 			if (error) *error = "that bootstrap has no activation due at frame " + std::to_string(atFrame);
 			return false;
 		}
-		session->phase = session->spectator ? NetWorldJoinPhase::Spectating : NetWorldJoinPhase::Active;
+		session->phase = NetWorldJoinPhase::Active;
 		++m_ActivationsCommitted;
 		return true;
 	}
@@ -2222,7 +2301,14 @@ namespace RTE {
 		session->phase = NetWorldJoinPhase::Failed;
 		session->refusal = reason;
 		++m_JoinsCancelled;
+		if (session->assignedPeerId != 0) m_CancelledJoins.push_back(session->assignedPeerId);
 		std::erase_if(m_Sessions, [&](const NetWorldJoinSession& entry) { return entry.connection == connection; });
+	}
+
+	std::vector<uint8_t> NetWorldJoinHost::TakeCancelledJoins() {
+		std::vector<uint8_t> taken;
+		taken.swap(m_CancelledJoins);
+		return taken;
 	}
 
 	bool NetWorldJoinHost::ShowsReplayHeadroom(const NetWorldJoinSession& session) {
@@ -2283,7 +2369,7 @@ namespace RTE {
 	uint64_t NetWorldJoinHost::OldestNeededFrame() const {
 		uint64_t oldest = 0;
 		for (const NetWorldJoinSession& session: m_Sessions) {
-			if (session.phase != NetWorldJoinPhase::CatchingUp && session.phase != NetWorldJoinPhase::SnapshotTransfer) {
+			if (!StreamsTail(session) && session.phase != NetWorldJoinPhase::SnapshotTransfer) {
 				continue;
 			}
 			const uint64_t needed = session.acknowledgedThrough + 1;
@@ -2292,6 +2378,24 @@ namespace RTE {
 			}
 		}
 		return oldest;
+	}
+
+	std::string NetWorldJoinHost::MemoryCensus() const {
+		size_t active = 0, tailBytes = 0, inFlight = 0;
+		for (const NetWorldJoinSession& session: m_Sessions) {
+			active += session.phase == NetWorldJoinPhase::Active ? 1 : 0;
+			tailBytes += session.pendingTail.capacity();
+			inFlight += session.tailInFlight.size();
+		}
+		const NetWorldFrameLog::JournalStats journal = m_Tail.GetJournalStats();
+		std::ostringstream line;
+		line << "world: sessions=" << m_Sessions.size() << " active_sessions=" << active << " session_tail_bytes=" << tailBytes << " tail_in_flight=" << inFlight
+		     << " refused=" << m_Refused.size() << " cancelled=" << m_CancelledJoins.size() << " slots=" << m_Membership.Slots().size()
+		     << " history_frames=" << m_Tail.Count() << " history_bytes=" << m_Tail.Bytes() << " history_evicted=" << m_Tail.Evicted()
+		     << " journal_files=" << journal.files << " journal_disk_bytes=" << journal.bytes << " journal_index_bytes=" << journal.indexBytes
+		     << " journal_cached_reads=" << journal.cachedReads << " journal_cached_read_bytes=" << journal.cachedReadBytes
+		     << " image_tick=" << m_Image.tick << " image_bytes=" << m_Image.bytes;
+		return line.str();
 	}
 
 	std::string NetWorldJoinHost::BuildReportJson() const {

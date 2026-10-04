@@ -29,4 +29,12 @@ namespace RTE {
 		void UdpLists(std::string& servers, std::string& users, std::string& passwords) const;
 	};
 
+	/// The relay logins handed to the transport, so no log line the harness keeps carries one.
+	namespace NetRelayLogins {
+		/// Remembers each entry of a comma-separated username or password list.
+		void Remember(const std::string& list);
+		/// The line with every remembered login standing alone in it replaced by a mark.
+		std::string Scrub(std::string line);
+	}
+
 } // namespace RTE

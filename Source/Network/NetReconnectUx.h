@@ -170,7 +170,7 @@ namespace RTE {
 		/// The panel's own line, so an empty panel says why it is empty.
 		std::string GetSummaryText() const;
 
-		/// The seat's line. Time since the drop, the hold in frames AND seconds, and who is waiting.
+		/// The seat's line: who holds it, why it is held and who is waiting.
 		static std::string DescribeSeat(const NetH4ModerationSeat& seat);
 		/// Why a held seat is held, for the host: "Left 2 min ago", "Connection lost 10 s ago" or "Machine too slow"; empty when it is not held.
 		static std::string HoldCause(const NetH4ModerationSeat& seat);
@@ -179,33 +179,6 @@ namespace RTE {
 		std::vector<Row> m_Rows;
 		std::map<uint16_t, NetModerationSelection> m_Chosen;
 		std::string m_StatusText;
-	};
-
-	/// The persistent roster, populated only by the coordinator's authenticated complete snapshots.
-	class NetSeatPresence {
-	public:
-		bool ApplySnapshot(const NetLockstepSeatSnapshot& snapshot, uint64_t receivedAtMs = NetLockstepNowMs());
-		const std::map<uint8_t, NetSeatPresenceEntry>& GetSeats() const { return m_Seats; }
-		const std::optional<NetLockstepSeatSnapshot>& GetSnapshot() const { return m_Snapshot; }
-		/// Used only to display the simulation hold; admission alone decides the public seat state.
-		void NoteFrame(uint64_t appliedFrame);
-		void Clear();
-
-		NetSeatPresenceState StateOf(uint8_t peerId) const;
-		/// Frames the seat's hold still has to run; 0 when nothing is being held for it.
-		uint64_t HoldFramesRemaining(uint8_t peerId) const;
-		uint64_t HoldWallSecondsRemaining(uint8_t peerId, uint64_t nowMs = NetLockstepNowMs()) const;
-		/// The persistent line for the seat, or "" while there is nothing to say about it.
-		std::string Line(uint8_t peerId, const std::string& playerName) const;
-
-		static uint64_t HoldSeconds(uint64_t frames);
-		static const char* StateName(NetSeatPresenceState state);
-
-	private:
-		std::map<uint8_t, NetSeatPresenceEntry> m_Seats;
-		std::optional<NetLockstepSeatSnapshot> m_Snapshot;
-		uint64_t m_ReceivedAtMs = 0;
-		uint64_t m_Frame = 0;
 	};
 
 } // namespace RTE

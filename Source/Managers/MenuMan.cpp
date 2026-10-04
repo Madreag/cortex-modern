@@ -434,7 +434,8 @@ void MenuMan::Draw() const {
 			int mouseX = 0;
 			int mouseY = 0;
 			m_GUIInput->GetMousePosition(&mouseX, &mouseY);
-			BITMAP* deviceIcon = g_UInputMan.GetDeviceIcon(device)->GetBitmaps32()[0];
+			const Icon* icon = g_UInputMan.GetDeviceIcon(device);
+			BITMAP* deviceIcon = icon && !icon->GetBitmaps32().empty() ? icon->GetBitmaps32()[0] : nullptr;
 			if (deviceIcon) {
 				draw_sprite(g_FrameMan.GetBackBuffer32(), deviceIcon, mouseX + (deviceIcon->w / 2), mouseY - (deviceIcon->h / 5));
 			}
@@ -444,7 +445,8 @@ void MenuMan::Draw() const {
 			if (g_UInputMan.JoystickActive(playerIndex)) {
 				int matchedDevice = InputDevice::DEVICE_GAMEPAD_1 + playerIndex;
 				if (matchedDevice != device) {
-					BITMAP* deviceIcon = g_UInputMan.GetDeviceIcon(matchedDevice)->GetBitmaps32()[0];
+					const Icon* icon = g_UInputMan.GetDeviceIcon(matchedDevice);
+					BITMAP* deviceIcon = icon && !icon->GetBitmaps32().empty() ? icon->GetBitmaps32()[0] : nullptr;
 					if (deviceIcon) {
 						draw_sprite(g_FrameMan.GetBackBuffer32(), deviceIcon, g_WindowMan.GetResX() - 30 * g_UInputMan.GetJoystickCount() + 30 * playerIndex, g_WindowMan.GetResY() - 25);
 					}

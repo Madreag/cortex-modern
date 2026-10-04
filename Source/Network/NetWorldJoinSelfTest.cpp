@@ -216,6 +216,18 @@ namespace RTE {
 			}
 		};
 
+		// A watcher reaches its stream as the host walks it there: its image delivered, then its replay inside the lead.
+		bool StreamWatcher(NetWorldJoinHost& host, NetPeerId connection, uint64_t nowFrame, std::string* error) {
+			uint64_t announced = 0;
+			if (!host.NoteTransferComplete(connection, 32, error) || !host.NoteCatchUpProgress(connection, nowFrame - 1, 1, 1, nowFrame, &announced, error)) return false;
+			const NetWorldJoinSession* session = host.FindSession(connection);
+			if (announced != 0 || session == nullptr || session->phase != NetWorldJoinPhase::Spectating) {
+				if (error) *error = "the watcher reads " + std::string(session ? NetWorldJoinPhaseName(session->phase) : "gone") + " with E " + std::to_string(announced);
+				return false;
+			}
+			return true;
+		}
+
 		// A private directory for a row's own files; removed with them.
 		struct ResumeScratchDirectory {
 			std::filesystem::path path;
@@ -1339,6 +1351,64 @@ namespace RTE {
 			return 0;
 		}
 
+		// A watcher speaks on its reserved lobby id, and its own state is what lets its image leave the host.
+		int TestWatcherStateMarksItsConnectionUp() {
+			for (const uint8_t peer: {c_WorldSpectatorLobbyPeerFirst, c_WorldSpectatorLobbyPeerLast, static_cast<uint8_t>(NetMatchConfigUtil::c_MaxPeerCount + 1),
+			                          static_cast<uint8_t>(c_WorldSpectatorLobbyPeerFirst - 1), static_cast<uint8_t>(c_WorldSpectatorLobbyPeerLast + 1)}) {
+				NetLobbyMessage message;
+				NetLobbyPeerState state;
+				state.peerId = peer;
+				state.displayName = "Watcher";
+				message.payload = state;
+				std::vector<uint8_t> bytes;
+				NetLobbyError encodeError;
+				if (!NetLobbyProtocol::Encode(message, bytes, &encodeError)) return Fail("watcher-state-undecodable: peer " + std::to_string(peer) + " did not encode: " + encodeError.message);
+				const NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(bytes);
+				const bool watcher = peer >= c_WorldSpectatorLobbyPeerFirst && peer <= c_WorldSpectatorLobbyPeerLast;
+				if (decoded.ok != watcher)
+					return Fail("watcher-state-undecodable: a peer state from lobby id " + std::to_string(peer) + (decoded.ok ? " decoded" : " was refused: " + decoded.error.message));
+			}
+			std::string error;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			if (!hostTransport.StartHost(47161, &error) || !clientTransport.Connect("loopback", 47161, &error)) return Fail("watcher pair: " + error);
+			NetPeerId hostRemote = c_InvalidNetPeerId;
+			NetPeerId clientRemote = c_InvalidNetPeerId;
+			for (const NetTransportEvent& event: hostTransport.PollEvents())
+				if (event.type == NetTransportEventType::PeerConnected) hostRemote = event.peerId;
+			for (const NetTransportEvent& event: clientTransport.PollEvents())
+				if (event.type == NetTransportEventType::PeerConnected) clientRemote = event.peerId;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.matchConfig = MakeWorldConfig();
+			hostConfig.autoStart = false;
+			NetLobbySessionConfig clientConfig;
+			clientConfig.localPeerId = c_WorldSpectatorLobbyPeerFirst;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemote;
+			clientConfig.matchConfig = MakeWorldConfig();
+			NetLobbySession host;
+			NetLobbySession client;
+			if (!host.Start(hostTransport, hostConfig, &error) || !host.BindWorldTransferRemote(c_WorldSpectatorLobbyPeerFirst, hostRemote, &error) ||
+			    !client.Start(clientTransport, clientConfig, &error)) {
+				return Fail("watcher pair: " + error);
+			}
+			uint64_t nowMs = 0;
+			for (int round = 0; round < 8; ++round) {
+				host.Tick(nowMs);
+				client.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+				nowMs += 10;
+			}
+			if (!host.IsRemoteConnectionLobbyUp(c_WorldSpectatorLobbyPeerFirst) || host.GetStats().malformedMessages != 0) {
+				return Fail("watcher-never-lobby-up: the host heard the watcher's lobby lobby-up " + std::string(host.IsRemoteConnectionLobbyUp(c_WorldSpectatorLobbyPeerFirst) ? "true" : "false") +
+				            ", malformed " + std::to_string(host.GetStats().malformedMessages) + ", the watcher sent " + std::to_string(client.GetStats().messagesSent));
+			}
+			return 0;
+		}
+
 		// A joiner names a tail chunk it cannot read the round of instead of dropping it unseen.
 		int TestJoinerNamesAnUnroundedTailChunk() {
 			std::string error;
@@ -1547,12 +1617,13 @@ namespace RTE {
 				return Fail("the overflow connection did not become a spectator");
 			}
 			uint64_t announced = 0;
-			if (host.ScheduleSpectatorActivation(8, 100, &announced, &error)) {
-				return Fail("spectator-activation-before-its-image: E " + std::to_string(announced) + " was announced with no transfer started");
+			if (host.NoteCatchUpProgress(8, 40, 1, 1, 100, &announced, &error) || announced != 0) {
+				return Fail("spectator-activation-before-its-image: E " + std::to_string(announced) + " was announced with no image delivered");
 			}
 			if (host.FindSession(8)->phase != NetWorldJoinPhase::SnapshotTransfer) {
 				return Fail("spectator-activation-before-its-image: the spectator left the phase its transfer is retried in");
 			}
+			error.clear();
 			NetWorldCheckpointImage image;
 			image.worldId = c_WorldId;
 			image.boot = 1;
@@ -1565,8 +1636,23 @@ namespace RTE {
 			if (!host.NoteTransferStarted(8, 0x22, 2, 0)) {
 				return Fail("spectator transfer start refused");
 			}
-			if (!host.ScheduleSpectatorActivation(8, 100, &announced, &error) || announced != 100 + c_NetWorldActivationLeadFrames) {
-				return Fail("spectator-activation-before-its-image: E was not announced once the image was on the way: " + error);
+			// Its image arriving is not its replay reaching the round: a watcher a lead or more behind keeps catching up.
+			if (!host.NoteTransferComplete(8, 8, &error) || !host.NoteCatchUpProgress(8, 40, 1, 1, 200, &announced, &error) || announced != 0 ||
+			    host.FindSession(8)->phase != NetWorldJoinPhase::CatchingUp) {
+				return Fail("watcher-watching-outside-the-lead: the watcher replaying at 40 with the round at 200 reads " + std::string(NetWorldJoinPhaseName(host.FindSession(8)->phase)) +
+				            " with E " + std::to_string(announced) + (error.empty() ? "" : ": " + error));
+			}
+			// Inside the lead it watches: the tail streams on and no activation is handed to it, so it never joins the round.
+			const NetWorldJoinSession* watcher = host.FindSession(8);
+			if (!host.NoteCatchUpProgress(8, 150, 110, 1000, 200, &announced, &error) || announced != 0 || watcher->activationTick != 0 ||
+			    watcher->phase != NetWorldJoinPhase::Spectating || !StreamsTail(*watcher)) {
+				return Fail("watcher-handed-an-activation: the watcher inside the lead at 150 of 200 reads " + std::string(NetWorldJoinPhaseName(watcher->phase)) + " with E " +
+				            std::to_string(announced) + ", activation " + std::to_string(watcher->activationTick) + (error.empty() ? "" : ": " + error));
+			}
+			// One that falls a lead behind again is no watcher a freed seat can take.
+			if (!host.NoteCatchUpProgress(8, 151, 1, 1000, 300, &announced, &error) || watcher->phase != NetWorldJoinPhase::CatchingUp || !StreamsTail(*watcher)) {
+				return Fail("watcher-behind-still-promotable: the watcher at 151 with the round at 300 reads " + std::string(NetWorldJoinPhaseName(watcher->phase)) +
+				            (error.empty() ? "" : ": " + error));
 			}
 			return 0;
 		}
@@ -3426,6 +3512,83 @@ namespace RTE {
 		return 0;
 	}
 
+	// A long round's journal keeps a file of frames at a time back to the oldest frame anyone may still be served from: what the floor
+	// keeps reads back exactly, the files below it go, and the end of the round leaves none.
+	int TestCommittedTailJournalPrunes() {
+		ResumeScratchDirectory scratch;
+		const auto path = scratch.path / "committed.inputs";
+		const auto files = [&] {
+			size_t count = 0;
+			for (const auto& entry: std::filesystem::directory_iterator(scratch.path))
+				if (entry.path().filename().string().starts_with("committed.inputs")) ++count;
+			return count;
+		};
+		NetWorldFrameLog log;
+		log.Configure(2, 1024 * 1024);
+		log.EnableJournal(path.string());
+		std::string error;
+		const uint64_t perFile = NetWorldFrameLog::c_JournalSegmentFrames;
+		for (uint64_t tick = 1; tick <= 3 * perFile; ++tick) if (!log.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
+		const auto settle = [&](auto&& done) {
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+			while (!done() && std::chrono::steady_clock::now() < deadline && !log.JournalFailed()) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+			return done();
+		};
+		if (!settle([&] { return files() == 3; })) return Fail("the journal wrote " + std::to_string(files()) + " files for three files of frames");
+		const uint64_t firstKept = 2 * perFile + 1;
+		log.PruneJournalBefore(firstKept + 99);
+		if (log.FirstServableFrame() != firstKept || log.Covers(firstKept - 1) || !log.Covers(firstKept) || !settle([&] { return files() == 1; }))
+			return Fail("below a floor of " + std::to_string(firstKept + 99) + " the journal still serves from " + std::to_string(log.FirstServableFrame()) + " and keeps " +
+			            std::to_string(files()) + " of 3 files");
+		std::vector<std::vector<uint8_t>> records;
+		if (!settle([&] { return log.CopyFrom(firstKept, 8, 1024 * 1024, records) != 0; }) || records.size() != 8) return Fail("the kept file did not read back its frames");
+		for (size_t index = 0; index < records.size(); ++index) {
+			NetLockstepFrame frame;
+			if (!DecodeCommittedJoinFrame(records[index], frame, &error) || frame != MakeCommittedFrame(firstKept + index)) return Fail("a kept frame differs from the committed one: " + error);
+		}
+		log.Clear();
+		if (!settle([&] { return files() == 0; })) return Fail("the ended round left " + std::to_string(files()) + " journal files");
+		std::cout << "[net-world-join-selftest] PASS committed_tail_journal_prunes files=3->1 first_servable=" << firstKept << std::endl;
+		return 0;
+	}
+
+	// The oldest frame a returner arriving now may be served from: the base it would get, each return under way, each recent hold.
+	int TestTheReturnHistoryFloor() {
+		const double tickMs = 1000.0 / 60.0;
+		std::vector<NetWorldJoinSession> sessions;
+		std::map<uint8_t, NetGameSeatHold> holds;
+		const auto floor = [&](uint64_t tick, std::optional<uint64_t> base) { return NetMatchService::ReturnHistoryFloor(tick, base, sessions, holds, tickMs); };
+		std::vector<std::string> wrong;
+		const auto expect = [&](const char* what, uint64_t got, uint64_t want) {
+			if (got != want) wrong.push_back(std::string(what) + " " + std::to_string(got) + " not " + std::to_string(want));
+		};
+		expect("nothing to serve", floor(50000, std::nullopt), 50001);
+		expect("a served base", floor(50000, 30000), 30001);
+		NetWorldJoinSession returning;
+		returning.phase = NetWorldJoinPhase::CatchingUp;
+		returning.snapshotTick = 30000;
+		returning.acknowledgedThrough = 41000;
+		NetWorldJoinSession waiting;
+		waiting.phase = NetWorldJoinPhase::Authenticating;
+		NetWorldJoinSession active = returning;
+		active.phase = NetWorldJoinPhase::Active;
+		active.acknowledgedThrough = 100;
+		sessions = {returning, waiting, active};
+		expect("a return under way", floor(50000, std::nullopt), 41001);
+		sessions.clear();
+		holds[2].cutoffFrame = 49000;
+		expect("a recent hold", floor(50000, std::nullopt), 49000 - NetLockstepCodec::c_MaxFutureFrameSkew);
+		const auto window = static_cast<uint64_t>(std::ceil(NetMatchService::c_InPlaceReturnWindowMs / tickMs));
+		expect("a hold past the in-place window", floor(49000 + window, std::nullopt), 49000 + window + 1);
+		if (!wrong.empty()) {
+			std::string joined;
+			for (const std::string& line: wrong) joined += (joined.empty() ? "" : "; ") + line;
+			return Fail("the return history floor read " + joined);
+		}
+		std::cout << "[net-world-join-selftest] PASS the_return_history_floor in_place_window_frames=" << window << std::endl;
+		return 0;
+	}
+
 	int TestPrivateNeutralPrelude() {
 		LoopbackTransport transport;
 		NetLockstepCoordinator coordinator;
@@ -3639,21 +3802,18 @@ namespace RTE {
 		return 0;
 	}
 
-	/// A survivor that finds no other live member never ends the match because its host was lost: with a held seat in the
-	/// round it hosts the match so that seat rejoins it, with none it rejoins the host; only the host's announced leave ends it.
+	/// A survivor that published a handover alone never ends the match because its host was lost: its quorum (the two-seat
+	/// exception, or every other connected seat gone or held) lets it host; only the host's leave record ends it.
 	int TestALoneSurvivorWithAHeldSeatHostsTheMatch() {
 		using Outcome = NetMatchService::LoneElection;
-		if (NetMatchService::LoneElectionOutcome(false, true, false) != Outcome::HostForHeldSeats) {
-			return Fail("lone-survivor-ended-a-held-match: a lost host with a held seat in the round did not hand the match to the survivor");
+		if (NetMatchService::LoneElectionOutcome(false, false) != Outcome::HostAlone) {
+			return Fail("lone-survivor-left-a-two-player-match: the survivor of a lost host did not host the match it carries alone");
 		}
-		if (NetMatchService::LoneElectionOutcome(false, false, false) != Outcome::RejoinHost) {
-			return Fail("lone-survivor-took-an-unheld-match: a lost host with no held seat was not rejoined");
-		}
-		if (NetMatchService::LoneElectionOutcome(true, true, false) != Outcome::EndMatch || NetMatchService::LoneElectionOutcome(true, false, false) != Outcome::EndMatch) {
-			return Fail("lone-survivor-overruled-the-host: the host's announced leave did not end the match");
+		if (NetMatchService::LoneElectionOutcome(true, false) != Outcome::EndMatch) {
+			return Fail("lone-survivor-overruled-the-host: the host's leave record did not end the match");
 		}
 		// l4p-34: the Mac, cut off by its own lag, heard neither the host nor Linux and, with EDITH's seat held, took the match over.
-		if (NetMatchService::LoneElectionOutcome(false, true, true) != Outcome::RejoinHost) {
+		if (NetMatchService::LoneElectionOutcome(false, true) != Outcome::RejoinHost) {
 			return Fail("lone-survivor-split-the-match: a peer that heard no live member and no host hosted a match of its own instead of rejoining");
 		}
 		std::cout << "[net-world-join-selftest] PASS a_lone_survivor_with_a_held_seat_hosts_the_match" << std::endl;
@@ -3714,33 +3874,38 @@ namespace RTE {
 		return 0;
 	}
 
-	/// Only the host's link decides a held seat's host is gone: the link lost by the host's end or its silence, or no word from the host
-	/// for the silence bound. The seat's own transport stopping is its own fault, and a host that told it to take the image answered.
+	/// Only the host's link decides a held seat's host is gone: the link lost by the host's end, or no word from the host past the
+	/// host-loss bound - one second plus two of the seat's round trips, the round's own reading. The seat's own transport stopping is
+	/// its own fault, and a host that told it to take the image answered.
 	int TestAHeldSeatJudgesItsHostByTheLinkAlone() {
-		struct Case { const char* name; bool linkLost; bool hasReject; NetRejectReason reason; bool ownStop; bool imageRejoin; uint64_t silentMs; bool gone; };
+		struct Case { const char* name; bool linkLost; bool hasReject; NetRejectReason reason; bool ownStop; bool imageRejoin; uint64_t silentMs; uint64_t rttMs; bool gone; };
 		const Case cases[] = {
-			{"own-transport-stopped", true, true, NetRejectReason::InternalError, true, false, 0, false},
-			{"host-connection-dropped", true, true, NetRejectReason::InternalError, false, false, 0, true},
-			{"host-ended-the-session", true, true, NetRejectReason::SessionEnded, false, false, 0, true},
-			{"host-link-timed-out", true, true, NetRejectReason::Timeout, false, false, 0, true},
-			{"link-closed-without-reject", true, false, NetRejectReason::InternalError, false, false, 0, true},
-			{"told-to-take-the-image", true, true, NetRejectReason::HostNotAccepting, false, true, 0, false},
-			{"host-silent-past-the-round-timeout", false, false, NetRejectReason::InternalError, false, false, 21000, true},
-			{"tail-stalled-with-the-link-up", false, false, NetRejectReason::InternalError, false, false, 3500, false},
+			{"own-transport-stopped", true, true, NetRejectReason::InternalError, true, false, 0, 0, false},
+			{"host-connection-dropped", true, true, NetRejectReason::InternalError, false, false, 0, 0, true},
+			{"host-link-lost", true, true, NetRejectReason::HostLinkLost, false, false, 0, 0, true},
+			{"host-ended-the-session", true, true, NetRejectReason::SessionEnded, false, false, 0, 0, true},
+			{"host-link-timed-out", true, true, NetRejectReason::Timeout, false, false, 0, 0, true},
+			{"link-closed-without-reject", true, false, NetRejectReason::InternalError, false, false, 0, 0, true},
+			{"told-to-take-the-image", true, true, NetRejectReason::HostNotAccepting, false, true, 0, 0, false},
+			{"host-silent-past-the-loss-bound", false, false, NetRejectReason::InternalError, false, false, 1200, 100, true},
+			{"host-stalled-900ms", false, false, NetRejectReason::InternalError, false, false, 900, 0, false},
+			{"lagged-link-inside-its-bound", false, false, NetRejectReason::InternalError, false, false, 1300, 200, false},
 		};
 		for (const Case& test: cases) {
-			if (NetMatchService::HeldSeatHostIsGone(test.linkLost, test.hasReject, test.reason, test.ownStop, test.imageRejoin, test.silentMs, 20000) != test.gone) {
+			if (NetMatchService::HeldSeatHostIsGone(test.linkLost, test.hasReject, test.reason, test.ownStop, test.imageRejoin, test.silentMs, test.rttMs) != test.gone) {
 				return Fail(std::string("held-seat-host-verdict-") + test.name + ": the held seat judged its host " + (test.gone ? "alive" : "gone"));
 			}
 		}
-		// Two held seats that last heard their host at the same moment judge it gone together: a seat whose own link sends nothing
-		// learns of the loss no later than the link's own timeout, as a busy one does.
-		const uint64_t bound = NetMatchService::HeldSeatSilenceBoundMs();
-		if (bound > c_NetLinkTimeoutMs || !NetMatchService::HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, c_NetLinkTimeoutMs + 1, bound) ||
-		    NetMatchService::HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, c_NetLinkTimeoutMs / 2, bound)) {
-			return Fail("held-seat-host-verdict-silent-past-the-link-timeout: bound=" + std::to_string(bound) + "ms against the link's " + std::to_string(c_NetLinkTimeoutMs) + "ms");
-		}
-		std::cout << "[net-world-join-selftest] PASS a_held_seat_judges_its_host_by_the_link_alone" << std::endl;
+		// The held seat and the round read one predicate: the same silence and round trip give the same verdict on both paths.
+		for (const uint64_t rtt: {0ULL, 40ULL, 200ULL, 401ULL})
+			for (const uint64_t silent: {0ULL, 999ULL, 1000ULL, 1079ULL, 1080ULL, 1399ULL, 1400ULL, 1801ULL, 1802ULL, 4000ULL}) {
+				const bool held = NetMatchService::HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, silent, rtt);
+				if (held != NetHostLinkLost(false, silent, rtt) || held != (silent >= 1000 + 2 * rtt)) {
+					return Fail("held-seat-host-verdict-shared-bound: silent=" + std::to_string(silent) + "ms rtt=" + std::to_string(rtt) + "ms held seat=" + std::to_string(held) +
+					            " round=" + std::to_string(NetHostLinkLost(false, silent, rtt)));
+				}
+			}
+		std::cout << "[net-world-join-selftest] PASS a_held_seat_judges_its_host_by_the_link_alone bound_ms=" << NetHostLossBoundMs(0) << "+2rtt" << std::endl;
 		return 0;
 	}
 
@@ -4382,6 +4547,77 @@ namespace RTE {
 		return true;
 	}
 
+	// A dropped holder comes back on a new transport with its ticket: the reclaim, the challenge and the proof.
+	bool ReclaimWorldSeat(NetReconnectHost& admission, const NetH4Identity& identity, const NetH4TicketOffer& offer, NetPeerId connection, uint64_t nowMs) {
+		NetH4Reclaim reclaim;
+		reclaim.txId.fill(static_cast<uint8_t>(connection));
+		reclaim.epoch = offer.epoch;
+		reclaim.stableSeat = offer.stableSeat;
+		reclaim.holderGeneration = offer.holderGeneration;
+		reclaim.identity = identity;
+		reclaim.displayName = "returner";
+		admission.HandleMessage(connection, reclaim, nowMs);
+		NetAuthBytes32 challenge{};
+		bool challenged = false;
+		for (const NetH4Outbound& outbound: admission.TakeOutbound()) {
+			if (const auto* issued = std::get_if<NetH4Challenge>(&outbound.payload)) {
+				challenge = issued->challenge;
+				challenged = true;
+			}
+		}
+		if (!challenged) return false;
+		NetH4Transcript transcript;
+		transcript.domain = NetH4ProofDomain::Reclaim;
+		transcript.protocolVersion = NetProtocol::c_Version;
+		transcript.epoch = offer.epoch;
+		transcript.stableSeat = offer.stableSeat;
+		transcript.holderGeneration = offer.holderGeneration;
+		transcript.challenge = challenge;
+		transcript.clientNonce.fill(0x22);
+		NetH4Proof proof;
+		proof.txId = reclaim.txId;
+		proof.epoch = offer.epoch;
+		proof.stableSeat = offer.stableSeat;
+		proof.holderGeneration = offer.holderGeneration;
+		proof.clientNonce = transcript.clientNonce;
+		if (!NetH4ComputeProof(offer.credential, transcript, proof.mac)) return false;
+		admission.HandleMessage(connection, proof, nowMs + 10);
+		admission.TakeOutbound();
+		return true;
+	}
+
+	// A member the roster seated in the lobby, before the round started, holds its slot: a player joining the running world takes the slot of
+	// the seat the roster gave it, and a watcher arriving with no free slot watches, never playing on the member's slot.
+	int TestASeatedMembersSlotIsNotGivenToAJoiner() {
+		NetWorldJoinHost world;
+		std::string error;
+		if (!world.Configure(MakeTwoSeatWorld(), MakeIdentity(), &error)) return Fail("seated-members-slot: the world plane refused its config (" + error + ")");
+		// Seat 2 is the member's, playing since the start; seat 3 is the joiner's, admitted and coming in through the image.
+		std::vector<NetH4SeatStatus> statuses(2);
+		statuses[0].stableSeat = 2; statuses[0].lockstepPeerId = 2; statuses[0].committed = true;
+		statuses[1].stableSeat = 3; statuses[1].lockstepPeerId = 3; statuses[1].committed = true;
+		NetSeatRoster roster;
+		roster.seats.resize(2);
+		roster.seats[0].seatId = NetRosterIdOf(2); roster.seats[0].owner = 0xA1; roster.seats[0].phase = NetSeatPhase::Running; roster.seats[0].name = "member";
+		roster.seats[1].seatId = NetRosterIdOf(3); roster.seats[1].owner = 0xB2; roster.seats[1].phase = NetSeatPhase::RejoinImage; roster.seats[1].name = "joiner";
+		const size_t bound = NetMatchService::BindSeatedWorldMembers(statuses, roster, world.Membership());
+		const size_t again = NetMatchService::BindSeatedWorldMembers(statuses, roster, world.Membership());
+		if (!world.BeginJoin(71, 3, "joiner", 1000, &error, false, 3)) return Fail("seated-members-slot: the joiner was refused: " + error);
+		if (!world.BeginJoin(72, 4, "watcher", 1000, &error, false, c_WorldSpectatorLobbyPeerFirst)) return Fail("seated-members-slot: the watcher was refused: " + error);
+		const NetWorldJoinSession* joiner = world.FindSession(71);
+		const NetWorldJoinSession* watcher = world.FindSession(72);
+		const NetWorldSlot* member = world.Membership().SlotOfPeer(2);
+		if (!joiner || !watcher || !member || joiner->spectator || joiner->assignedPeerId != 3 || !watcher->spectator || !member->held || member->stableSeat != 2 || bound != 1 ||
+		    again != 0) {
+			return Fail("seated-members-slot: the joiner took slot " + std::to_string(joiner ? joiner->assignedPeerId : 0) + (joiner && joiner->spectator ? " as a watcher" : "") +
+			            ", the watcher " + (watcher && watcher->spectator ? "watches" : "took slot " + std::to_string(watcher ? watcher->assignedPeerId : 0)) +
+			            ", the member's slot 2 is " + (member && member->held ? "held by seat " + std::to_string(member->stableSeat) : std::string("free")) + ", bound " +
+			            std::to_string(bound) + " then " + std::to_string(again));
+		}
+		std::cout << "[net-world-join-selftest] PASS a_seated_members_slot_is_not_given_to_a_joiner joiner_slot=3 watcher=spectator member_slot=2" << std::endl;
+		return 0;
+	}
+
 	// A world member who leaves keeps its slot: its H4 row stays its own and nothing releases the slot to the next holder.
 	int TestWorldCleanLeaveReleasesOnlyTheSeatThatLeft() {
 		ScriptedAuthCrypto crypto;
@@ -4436,9 +4672,7 @@ namespace RTE {
 		    !world.CompleteActivation(51, memberE - 1, &error)) {
 			return Fail("clean-leave-released-the-wrong-seat: alice never reached Active (" + error + ")");
 		}
-		uint64_t watcherE = 0;
-		if (!world.ScheduleSpectatorActivation(52, memberE, &watcherE, &error) || watcherE == 0 ||
-		    !world.CompleteActivation(52, watcherE, &error)) {
+		if (!StreamWatcher(world, 52, memberE, &error)) {
 			return Fail("clean-leave-released-the-wrong-seat: bob never reached his stream (" + error + ")");
 		}
 		NetMatchService::WorldCleanLeave leave;
@@ -4524,9 +4758,7 @@ namespace RTE {
 		    !world.CompleteActivation(61, aliceE - 1, &error)) {
 			return Fail("reclaim-hold-missed-the-slot: alice never reached Active (" + error + ")");
 		}
-		uint64_t daveWatchE = 0;
-		if (!world.ScheduleSpectatorActivation(63, aliceE, &daveWatchE, &error) || daveWatchE == 0 ||
-		    !world.CompleteActivation(63, daveWatchE, &error)) {
+		if (!StreamWatcher(world, 63, aliceE, &error)) {
 			return Fail("reclaim-hold-missed-the-slot: dave never reached his stream (" + error + ")");
 		}
 		// The host releases alice's slot and dave is promoted onto it, keeping his own H4 seat. A leave keeps the slot its
@@ -4536,10 +4768,11 @@ namespace RTE {
 			return Fail("reclaim-hold-missed-the-slot: the host's release did not free a slot (" + error + ")");
 		}
 		world.CancelJoin(61, "slot released");
-		world.NoteSentInputThrough(daveWatchE + 40);
+		const uint64_t watching = aliceE + c_NetWorldActivationLeadFrames;
+		world.NoteSentInputThrough(watching + 40);
 		uint64_t promotedAt = 0;
 		NetPeerId promoted = c_InvalidNetPeerId;
-		if (!world.PromoteWaitingSpectator(daveWatchE + 50, &promotedAt, &promoted, &error) || promoted != 63 ||
+		if (!world.PromoteWaitingSpectator(watching + 50, &promotedAt, &promoted, &error) || promoted != 63 ||
 		    !world.NoteCatchUpProgress(63, promotedAt - 1, 1, 1, promotedAt - 1, nullptr, &error) ||
 		    !world.CompleteActivation(63, promotedAt - 1, &error)) {
 			return Fail("reclaim-hold-missed-the-slot: dave was not promoted into the freed slot (" + error + ")");
@@ -4683,9 +4916,7 @@ namespace RTE {
 		    !world.CompleteActivation(61, aliceE - 1, &error)) {
 			return Fail("promoted-drop-named-the-seats-id: alice never reached Active (" + error + ")");
 		}
-		uint64_t daveWatchE = 0;
-		if (!world.ScheduleSpectatorActivation(63, aliceE, &daveWatchE, &error) || daveWatchE == 0 ||
-		    !world.CompleteActivation(63, daveWatchE, &error)) {
+		if (!StreamWatcher(world, 63, aliceE, &error)) {
 			return Fail("promoted-drop-named-the-seats-id: dave never reached his stream (" + error + ")");
 		}
 		// The host releases alice's slot and dave is promoted onto it, keeping his own H4 seat. A leave keeps the slot its
@@ -4695,10 +4926,11 @@ namespace RTE {
 			return Fail("promoted-drop-named-the-seats-id: the host's release did not free a slot (" + error + ")");
 		}
 		world.CancelJoin(61, "slot released");
-		world.NoteSentInputThrough(daveWatchE + 40);
+		const uint64_t watching = aliceE + c_NetWorldActivationLeadFrames;
+		world.NoteSentInputThrough(watching + 40);
 		uint64_t promotedAt = 0;
 		NetPeerId promoted = c_InvalidNetPeerId;
-		if (!world.PromoteWaitingSpectator(daveWatchE + 50, &promotedAt, &promoted, &error) || promoted != 63 ||
+		if (!world.PromoteWaitingSpectator(watching + 50, &promotedAt, &promoted, &error) || promoted != 63 ||
 		    !world.NoteCatchUpProgress(63, promotedAt - 1, 1, 1, promotedAt - 1, nullptr, &error) ||
 		    !world.CompleteActivation(63, promotedAt - 1, &error)) {
 			return Fail("promoted-drop-named-the-seats-id: dave was not promoted into the freed slot (" + error + ")");
@@ -4708,6 +4940,8 @@ namespace RTE {
 			return Fail("promoted-drop-named-the-seats-id: dave does not hold the freed slot");
 		}
 		const uint8_t playedSlot = seated->assignedPeerId;
+		// Dave plays his slot from his activation, as the host's service reports it to the seat roster.
+		admission.NoteReturnCaughtUp(playedSlot);
 		uint8_t daveSeatLockstep = 0;
 		for (const NetH4Seat& seat: seats) {
 			if (seat.stableSeat == daveOffer.stableSeat) {
@@ -4840,7 +5074,57 @@ namespace RTE {
 		return config;
 	}
 
-	// Seat 0 is the admission plane's "no seat", so a dedicated world may not put a joinable seat there.
+	// D54.5: stable seat 0 - an ordinary match's original host's seat - is a seat like any other after a handover: the original host
+	// relaunches, reclaims it from the successor with its own ticket, the successor names that connection's seat 0 (never "none"),
+	// and its private return takes that seat's own slot, never a watcher's.
+	int TestTheOriginalHostReturnsToSeatZeroAfterAHandover() {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		NetMatchConfig match = NetMatchConfigUtil::MakeDefault(0x5A30ULL);
+		match.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 1, false, "Successor"}, NetMatchPlayerSlot{3, 2, false, "Third"}};
+		match.peerCount = 3;
+		NetSeatAuthRegistry oldRegistry, nextRegistry;
+		if (!oldRegistry.BeginHostedSession()) return Fail("original-host-return: the registry did not arm");
+		NetReconnectHost oldHost;
+		oldHost.Configure(&oldRegistry, match.sessionId, identity);
+		oldHost.SetSeatTable(NetH4BuildSeatTable(match), match.mode);
+		NetH4TicketRecord own;
+		if (!oldHost.EnsureLocalTicket(own) || own.stableSeat != 0) return Fail("original-host-return: the original host's own seat took no seat-0 ticket");
+		NetH4TicketOffer successorOffer;
+		if (!CommitWorldSeat(oldHost, identity, 72, "successor", successorOffer)) return Fail("original-host-return: the successor could not join the old host");
+		oldHost.SetLiveMatch(true);
+		const std::vector<uint8_t> state = oldHost.ExportMigrationState();
+		NetMatchConfig successorMatch = match;
+		successorMatch.hostPeerId = 2;
+		NetReconnectHost successor;
+		if (!successor.ImportMigrationState(state, nextRegistry, successorMatch, 2, {}, 1000)) return Fail("original-host-return: the successor did not import the old host's plane");
+		NetH4TicketOffer ticket;
+		ticket.epoch = own.epoch;
+		ticket.stableSeat = own.stableSeat;
+		ticket.holderGeneration = own.holderGeneration;
+		ticket.credential = own.credential;
+		if (!ReclaimWorldSeat(successor, identity, ticket, 71, 1200)) return Fail("original-host-return: the successor refused the original host's own ticket");
+		const std::optional<uint16_t> named = successor.StableSeatOfConnection(71);
+		if (!named || *named != 0 || successor.StableSeatOfConnection(79)) {
+			return Fail(std::string("original-host-return: the successor reads the original host's connection as ") + (named ? "seat " + std::to_string(*named) : std::string("holding no seat")) +
+			            (successor.StableSeatOfConnection(79) ? " and an unknown connection as a seat" : ""));
+		}
+		NetWorldJoinHost world;
+		std::string error;
+		if (!world.ConfigureMatchRejoins(successorMatch, 1, 1000.0 / 60.0, &error) || !world.BeginRejoin(71, *named, 1, 2, "original host", 1200, &error)) {
+			return Fail("original-host-return: the private return of seat 0 was refused: " + error);
+		}
+		const NetWorldJoinSession* session = world.FindSession(71);
+		if (!session || session->spectator || session->assignedPeerId != 1 || session->stableSeat != 0) {
+			return Fail("original-host-return: seat 0's private return did not take its own slot: " +
+			            (session ? std::string(session->spectator ? "a watcher" : "slot " + std::to_string(session->assignedPeerId)) : std::string("no session")));
+		}
+		std::cout << "[net-world-join-selftest] PASS the_original_host_returns_to_seat_zero_after_a_handover seat=" << *named << " slot=" << static_cast<int>(session->assignedPeerId) << std::endl;
+		return 0;
+	}
+
+	// Seat 0 is the admission plane's "no seat" in a world, so a dedicated world may not put a joinable seat there.
 	int TestDedicatedWorldFirstSeatCanBeNamed() {
 		ScriptedAuthCrypto crypto;
 		ScopedTestCrypto scope(&crypto);
@@ -4885,10 +5169,10 @@ namespace RTE {
 			            std::to_string(static_cast<int>(table.front().stableSeat)));
 		}
 		// This is the read the world's pump makes before it may begin a bootstrap for the connection.
-		const uint16_t named = admission.StableSeatOfConnection(61);
+		const std::optional<uint16_t> named = admission.StableSeatOfConnection(61);
 		if (named != offer.stableSeat) {
 			return Fail("world-first-seat-unnamable: the first joiner's connection reads seat " +
-			            std::to_string(static_cast<int>(named)) + " while it holds seat " +
+			            (named ? std::to_string(static_cast<int>(*named)) : std::string("none")) + " while it holds seat " +
 			            std::to_string(static_cast<int>(offer.stableSeat)) + ", so its join can never begin");
 		}
 		return 0;
@@ -4983,7 +5267,7 @@ namespace RTE {
 		return 0;
 	}
 
-	// A watcher and a member due at one frame: streaming the watcher leaves the member due, not skipped.
+	// A watcher streaming beside a member due at E is never due itself: the walk finds the member.
 	int TestDueSpectatorLeavesTheMemberDue() {
 		NetWorldJoinHost host;
 		std::string error;
@@ -5014,47 +5298,31 @@ namespace RTE {
 			return Fail("due-walk-skipped-the-member: the fixture did not open one watcher and one member");
 		}
 		const uint64_t nowFrame = 440;
-		uint64_t watcherE = 0;
 		uint64_t memberE = 0;
-		if (!host.NoteTransferStarted(71, 7, 1, 400) || !host.ScheduleSpectatorActivation(71, nowFrame, &watcherE, &error) ||
-		    !host.NoteTransferComplete(72, 32, &error) || !host.NoteCatchUpProgress(72, 400, 1, 1, nowFrame, &memberE, &error)) {
-			return Fail("due-walk-skipped-the-member: the fixture could not announce both activations (" + error + ")");
-		}
-		if (watcherE == 0 || watcherE != memberE) {
-			return Fail("due-walk-skipped-the-member: the fixture announced " + std::to_string(watcherE) + " and " +
-			            std::to_string(memberE) + " instead of one frame");
+		if (!host.NoteTransferStarted(71, 7, 1, 400) || !StreamWatcher(host, 71, nowFrame, &error) ||
+		    !host.NoteTransferComplete(72, 32, &error) || !host.NoteCatchUpProgress(72, 400, 1, 1, nowFrame, &memberE, &error) || memberE == 0) {
+			return Fail("due-walk-skipped-the-member: the fixture could not stream the watcher and announce the member (" + error + ")");
 		}
 		if (!host.NoteCatchUpProgress(72, memberE - 1, 1, 1, memberE - 1, nullptr, &error)) {
 			return Fail("due-walk-skipped-the-member: the member never applied through E-1 (" + error + ")");
 		}
-		// One pump reads one frame: the walk the service runs over it must reach both.
-		const uint64_t nextFrame = watcherE - 1;
-		const NetWorldJoinSession* first = host.DueActivation(nextFrame);
-		if (first == nullptr || first->connection != 71) {
-			return Fail("due-walk-skipped-the-member: the watcher is not the first due bootstrap of the pump");
+		// One pump reads one frame: the walk finds the member, never the watcher streaming beside it.
+		const uint64_t nextFrame = memberE - 1;
+		const NetWorldJoinSession* due = host.DueActivation(nextFrame);
+		if (due == nullptr || due->connection != 72) {
+			return Fail("due-walk-skipped-the-member: the due bootstrap at frame " + std::to_string(nextFrame) + " is " +
+			            (due ? "connection " + std::to_string(due->connection) : std::string("none")));
 		}
-		const NetWorldActivationPlan watcherPlan = PlanWorldActivation(*first, nextFrame, false);
-		if (watcherPlan.admit) {
-			return Fail("due-walk-skipped-the-member: a watcher's plan admitted it to a seat");
-		}
-		if (!host.CompleteActivation(first->connection, watcherPlan.firstRequired, &error)) {
-			return Fail("due-walk-skipped-the-member: the watcher's stream was refused (" + error + ")");
-		}
-		const NetWorldJoinSession* second = host.DueActivation(nextFrame);
-		if (second == nullptr || second->connection != 72) {
-			return Fail("due-walk-skipped-the-member: the member is not due behind the streamed watcher at frame " +
-			            std::to_string(nextFrame));
-		}
-		const NetWorldActivationPlan memberPlan = PlanWorldActivation(*second, nextFrame, false);
+		const NetWorldActivationPlan memberPlan = PlanWorldActivation(*due, nextFrame, false);
 		if (!memberPlan.admit || memberPlan.firstRequired != memberE) {
 			return Fail(std::string("due-walk-skipped-the-member: the member's plan reads admit ") +
 			            (memberPlan.admit ? "true" : "false") + " at frame " + std::to_string(memberPlan.firstRequired));
 		}
-		if (!host.CompleteActivation(second->connection, memberPlan.firstRequired - 1, &error)) {
+		if (!host.CompleteActivation(due->connection, memberPlan.firstRequired - 1, &error)) {
 			return Fail("due-walk-skipped-the-member: the member's activation was refused (" + error + ")");
 		}
-		if (host.DueActivation(nextFrame) != nullptr || host.LateActivation(nextFrame) != nullptr) {
-			return Fail("due-walk-skipped-the-member: a bootstrap is still due after the pump walked both");
+		if (host.DueActivation(nextFrame) != nullptr || host.LateActivation(nextFrame) != nullptr || host.FindSession(71)->phase != NetWorldJoinPhase::Spectating) {
+			return Fail("due-walk-skipped-the-member: a bootstrap is still due after the pump, or the watcher stopped streaming");
 		}
 		return 0;
 	}
@@ -5188,11 +5456,7 @@ namespace RTE {
 		}
 		for (const NetPeerId connection: {43, 44}) {
 			(void)host.NoteTransferStarted(connection, 7, 1, 400);
-			uint64_t announced = 0;
-			if (!host.ScheduleSpectatorActivation(connection, 500, &announced, &error) || announced == 0) {
-				return Fail("promotion-never-happened: a watcher was announced no E (" + error + ")");
-			}
-			if (!host.CompleteActivation(connection, announced, &error)) {
+			if (!StreamWatcher(host, connection, 500, &error)) {
 				return Fail("promotion-never-happened: a watcher never reached its stream (" + error + ")");
 			}
 		}
@@ -5413,8 +5677,7 @@ namespace RTE {
 			return Fail("expired-hold-never-promoted: the fixture could not fill the world (" + error + ")");
 		}
 		(void)expiring.NoteTransferStarted(63, 7, 1, 100);
-		uint64_t announced = 0;
-		if (!expiring.ScheduleSpectatorActivation(63, 200, &announced, &error) || !expiring.CompleteActivation(63, announced, &error)) {
+		if (!StreamWatcher(expiring, 63, 200, &error)) {
 			return Fail("expired-hold-never-promoted: the watcher never reached its stream (" + error + ")");
 		}
 		expiring.CancelJoin(61, "connection lost");
@@ -6589,6 +6852,51 @@ namespace RTE {
 		return true;
 	}
 
+	// R6 (eeee): a provisional host's play may never be the match's: a capture named before the loss is skipped and reported missed,
+	// nothing new is named and a save asked for is refused while it lasts, and the schedule names captures again once a majority is back.
+	bool TestAProvisionalHostWritesNothing(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_AutosaveMatchId = "00000000deadbeef-000000000000000e";
+		service.m_MatchAutosaveSeconds = 1;
+		const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+		std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+		std::vector<uint64_t> named, taken, missed;
+		bool refused = false;
+		for (uint64_t tick = 1; tick <= 700; ++tick) {
+			NetMatchService::AutosaveTickInput input;
+			input.tick = tick; input.now = static_cast<int64_t>(tick) * tickLength;
+			if (const auto due = stream.find(tick); due != stream.end()) input.applied = due->second;
+			input.writers = {1}; input.lead = 5; input.localPeer = 1;
+			const bool provisional = tick >= 120 && tick < 400;
+			input.hostProvisional = provisional;
+			input.manualRequested = tick == 200;
+			const NetMatchService::AutosaveTickOutput output = service.StepAutosaveSchedule(input);
+			refused = refused || output.manualRefused;
+			if (output.capture) {
+				taken.push_back(tick);
+				stream[tick + 4].push_back({1, NetGameCheckpoint::Written, tick});
+			}
+			for (NetMatchService::CheckpointNote note: output.send) {
+				note.sender = 1;
+				if (note.kind == NetGameCheckpoint::Capture) named.push_back(note.tick);
+				if (note.kind == NetGameCheckpoint::Missed) missed.push_back(note.tick);
+				stream[tick + 4].push_back(note);
+			}
+		}
+		const auto inside = [](uint64_t tick) { return tick >= 120 && tick < 400; };
+		const bool wroteInside = std::any_of(taken.begin(), taken.end(), inside);
+		const bool namedInside = std::any_of(named.begin(), named.end(), [](uint64_t tick) { return tick >= 125 && tick < 400; });
+		const bool namedAfter = std::any_of(named.begin(), named.end(), [](uint64_t tick) { return tick >= 400; });
+		if (wroteInside || namedInside || !refused || !namedAfter) {
+			*error = "a-provisional-host-writes-nothing: captures taken while provisional=" + std::to_string(wroteInside) + " named while provisional=" + std::to_string(namedInside) +
+			         " save refused=" + std::to_string(refused) + " named after=" + std::to_string(namedAfter) + " (named " + std::to_string(named.size()) + ", missed " + std::to_string(missed.size()) + ")";
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_provisional_host_writes_nothing named=" << named.size() << " taken=" << taken.size() << " missed=" << missed.size() << std::endl;
+		return true;
+	}
+
 	// The host's seat is held while its writer finishes a capture: its own report rides no frame the round plays, and the schedule
 	// still names the next capture once the other writer has reported, instead of waiting on the host for the rest of the round.
 	bool TestAHostsLostOwnReportDoesNotStopTheSchedule(std::string* error) {
@@ -7121,6 +7429,196 @@ namespace RTE {
 		return true;
 	}
 
+	// F53.2, the first path: a player who leaves between rounds keeps the seat - the seat roster holds it for its return, the leave's
+	// answer tells it so, and nothing is released (A12). The decision reads the roster's stage, never the plane's live-match flag.
+	bool TestALeaveBetweenRoundsKeepsTheSeat(std::string* error) {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		const NetMatchConfig config = NetMatchConfigUtil::MakeDefault(0x9A63);
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) {
+			*error = "the between-rounds leave row's registry did not arm";
+			return false;
+		}
+		NetReconnectHost host;
+		host.Configure(&registry, config.sessionId, identity);
+		host.SetSeatTable(NetH4BuildSeatTable(config), config.mode);
+		host.SetLiveMatch(false);
+		NetH4TicketOffer offer;
+		if (!CommitWorldSeat(host, identity, 61, "leaver", offer)) {
+			*error = "the between-rounds leave row could not seat its player";
+			return false;
+		}
+		host.SetLiveMatch(true);
+		host.SetMatchEnded();
+		const uint32_t releasedBefore = host.GetStats().seatsReleased;
+		NetH4LeaveRequest leave;
+		leave.txId.fill(0x63);
+		leave.epoch = offer.epoch;
+		leave.stableSeat = offer.stableSeat;
+		leave.holderGeneration = offer.holderGeneration;
+		host.HandleMessage(61, leave, 2000);
+		const NetH4LeaveAck* ack = nullptr;
+		const std::vector<NetH4Outbound> answered = host.TakeOutbound();
+		for (const NetH4Outbound& outbound: answered)
+			if (const auto* told = std::get_if<NetH4LeaveAck>(&outbound.payload)) ack = told;
+		const NetRosterSeat* seat = host.GetRoster().Find(static_cast<uint8_t>(offer.stableSeat + 1));
+		if (ack == nullptr || ack->seatClosed || !seat || seat->owner == 0 || seat->phase != NetSeatPhase::Held || seat->holdCause != NetSeatHoldCause::Leave ||
+		    host.GetStats().seatsReleased != releasedBefore || host.IsSeatClosed(offer.stableSeat)) {
+			*error = std::string("a leave between rounds did not keep the seat: ack=") + (ack ? (ack->seatClosed ? "closed" : "kept") : "none") + " roster=" +
+			         (seat ? RosterSeatLabel(*seat) : std::string("no seat")) + " released=" + std::to_string(host.GetStats().seatsReleased - releasedBefore);
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_leave_between_rounds_keeps_the_seat roster='" << RosterSeatLabel(*seat) << "'" << std::endl;
+		return true;
+	}
+
+	// F53.2, the second path: a match resumed from disk opens its lobby on the seats it saved, nobody connected yet; a player who comes
+	// back and drops in that lobby keeps the seat, held by the roster, never released.
+	bool TestAResumedLobbyHoldsADroppedSeat(std::string* error) {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		const NetMatchConfig config = NetMatchConfigUtil::MakeDefault(0x9A64);
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) {
+			*error = "the resumed-lobby row's registry did not arm";
+			return false;
+		}
+		NetReconnectHost host;
+		host.Configure(&registry, config.sessionId, identity);
+		host.SetSeatTable(NetH4BuildSeatTable(config), config.mode);
+		host.SetLiveMatch(false);
+		NetH4TicketRecord hostTicket;
+		NetH4TicketOffer offer;
+		if (!host.EnsureLocalTicket(hostTicket) || !CommitWorldSeat(host, identity, 61, "player", offer)) {
+			*error = "the resumed-lobby row could not seat the host and its player";
+			return false;
+		}
+		host.SetLiveMatch(true);
+		// The match is saved, and resumed from disk: the host imports what it saved, nobody has reconnected, and its lobby opens.
+		const std::vector<uint8_t> saved = host.ExportMigrationState();
+		NetSeatAuthRegistry resumedRegistry;
+		NetReconnectHost resumed;
+		if (!resumed.ImportMigrationState(saved, resumedRegistry, config, config.hostPeerId, {}, 2000)) {
+			*error = "the resumed-lobby row could not import the saved plane";
+			return false;
+		}
+		resumed.SetLiveMatch(false);
+		const uint8_t seatId = static_cast<uint8_t>(offer.stableSeat + 1);
+		const NetRosterSeat* away = resumed.GetRoster().Find(seatId);
+		// Its player is owed the round's end and the next lobby: the seat is held for it, its owner kept.
+		if (resumed.GetRoster().stage != NetRosterStage::Ended || !away || away->owner == 0 || away->link != NetSeatLink::Dropped ||
+		    (away->phase != NetSeatPhase::RoundEnd && away->phase != NetSeatPhase::Held)) {
+			*error = "the resumed lobby does not hold the seat its player has not come back to: " + (away ? std::string(NetSeatPhaseName(away->phase)) : std::string("no seat"));
+			return false;
+		}
+		if (!ReclaimWorldSeat(resumed, identity, offer, 65, 3000) || resumed.GetRoster().Find(seatId)->link != NetSeatLink::Connected) {
+			*error = "the resumed lobby's player could not come back to its seat";
+			return false;
+		}
+		const uint32_t releasedBefore = resumed.GetStats().seatsReleased;
+		resumed.NotifyDisconnect(65, 0);
+		const NetRosterSeat* seat = resumed.GetRoster().Find(seatId);
+		if (!seat || seat->owner == 0 || seat->phase != NetSeatPhase::Held || resumed.GetStats().seatsReleased != releasedBefore || resumed.IsSeatClosed(offer.stableSeat)) {
+			*error = "a drop in a resumed match's lobby released the seat: roster=" + (seat ? RosterSeatLabel(*seat) : std::string("no seat")) +
+			         " released=" + std::to_string(resumed.GetStats().seatsReleased - releasedBefore);
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_resumed_lobby_holds_a_dropped_seat roster='" << RosterSeatLabel(*seat) << "'" << std::endl;
+		return true;
+	}
+
+	// SEAT-ROSTER S2 at the service: a private return's phases come from the round - its image in moves the roster on, an abandoned
+	// transfer fails the return - and a failed return is begun again only after the roster's backoff and under its bound.
+	bool TestAPrivateReturnFollowsTheRoundOnTheRoster(std::string* error) {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		NetMatchService host;
+		host.m_IsHost = true;
+		const NetMatchConfig config = NetMatchConfigUtil::MakeDefault(0x9A61);
+		if (!host.m_SeatAuth.BeginHostedSession()) {
+			*error = "the private-return row's registry did not arm";
+			return false;
+		}
+		NetReconnectHost& plane = host.m_ReconnectHost;
+		plane.Configure(&host.m_SeatAuth, config.sessionId, identity);
+		plane.SetSeatTable(NetH4BuildSeatTable(config), config.mode);
+		plane.SetLiveMatch(false);
+		NetH4TicketOffer offer;
+		if (!CommitWorldSeat(plane, identity, 61, "returner", offer)) {
+			*error = "the private-return row could not seat its player";
+			return false;
+		}
+		plane.SetLiveMatch(true);
+		uint8_t peer = 0;
+		for (const NetH4Seat& seat: plane.GetSeatTable())
+			if (seat.stableSeat == offer.stableSeat) peer = seat.lockstepPeerId;
+		const uint8_t seatId = static_cast<uint8_t>(offer.stableSeat + 1);
+		const auto held = [&plane, seatId]() { return plane.GetRoster().Find(seatId); };
+		const auto phaseText = [&held]() { return std::string(held() ? NetSeatPhaseName(held()->phase) : "no seat"); };
+		// The player plays the round, drops, and returns with its ticket on a new link.
+		plane.NotifyDisconnect(61, 100);
+		if (!ReclaimWorldSeat(plane, identity, offer, 65, 1500) || !held() || held()->phase != NetSeatPhase::RejoinImage) {
+			*error = "the private-return row's return was not admitted into its image: " + phaseText();
+			return false;
+		}
+		NetPeerId holder = c_InvalidNetPeerId;
+		uint32_t generation = 0, incarnation = 0;
+		std::string setupError;
+		if (!plane.GetSeatHolder(offer.stableSeat, holder, generation, incarnation) || holder != 65 ||
+		    !host.m_WorldJoin.ConfigureMatchRejoins(config, 1, 1000.0 / 60.0, &setupError) || !host.m_WorldJoin.BeginRejoin(65, offer.stableSeat, peer, incarnation, "returner", 1500, &setupError)) {
+			*error = "the private-return row could not open the rejoin: " + setupError;
+			return false;
+		}
+		host.FeedRosterReturnsLocked();
+		if (held()->phase != NetSeatPhase::RejoinImage) {
+			*error = "a private return moved on before its image was in: " + phaseText();
+			return false;
+		}
+		if (!host.m_WorldJoin.NoteTransferComplete(65, 32, &setupError)) {
+			*error = "the private-return row's image did not complete: " + setupError;
+			return false;
+		}
+		host.FeedRosterReturnsLocked();
+		if (held()->phase != NetSeatPhase::RejoinCatchUp) {
+			*error = "a private return whose image is in did not reach the roster's catch-up: " + phaseText();
+			return false;
+		}
+		// The rejoin is abandoned with the player still connected: the roster fails the return, and nothing begins it again inside the backoff.
+		host.m_WorldJoin.CancelJoin(65, "the returner could not be moved past the capture park");
+		host.FeedRosterReturnsLocked();
+		if (held()->phase != NetSeatPhase::Held || held()->holdCause != NetSeatHoldCause::RejoinFailed || held()->failedReturns != 1) {
+			*error = "an abandoned private return did not fail on the roster: " + phaseText() + " failed=" + std::to_string(held()->failedReturns);
+			return false;
+		}
+		if (host.RosterOffersReturnLocked(peer, 65)) {
+			*error = "a failed private return was begun again inside its backoff";
+			return false;
+		}
+		// Past the backoff it is begun again; past the roster's bound it is not.
+		uint8_t offered = 0;
+		while (held()->failedReturns < c_RosterReturnAttempts) {
+			plane.Tick(held()->returnAfterMs);
+			if (!host.RosterOffersReturnLocked(peer, 65) || held()->phase != NetSeatPhase::RejoinImage) {
+				*error = "a failed private return was not begun again past its backoff: " + phaseText() + " failed=" + std::to_string(held()->failedReturns);
+				return false;
+			}
+			++offered;
+			plane.NoteReturnAborted(peer);
+		}
+		plane.Tick(held()->returnAfterMs);
+		if (host.RosterOffersReturnLocked(peer, 65) || held()->phase != NetSeatPhase::Held) {
+			*error = "a private return past the roster's bound was begun again: " + phaseText();
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_private_return_follows_the_round_on_the_roster offered_again=" << static_cast<int>(offered)
+		          << " failed=" << static_cast<int>(held()->failedReturns) << std::endl;
+		return true;
+	}
+
 	// The corrective: a round that opens ON a checkpoint records a segment from its FIRST frame, not an
 	// ordinary file that names no world.
 	bool TestResumedWorldRecordsASegment(std::string* error) {
@@ -7500,7 +7998,6 @@ namespace RTE {
 			*error = "the second round started under the first round's goodbye: launched=" + std::to_string(launched) + " goodbye_seen=" + std::to_string(seen) +
 			         " owed_to_rejoiners=" + std::to_string(owed) + " final_frame=" + std::to_string(finalFrame) + " catch_up_reads_match_over=" + std::to_string(catchUpReadsOver);
 			service.Destroy();
-			ScenarioRunner::SetLockstepSeatPresence(nullptr);
 			return false;
 		}
 		// The second round ends held too; a teardown ends that goodbye with it.
@@ -7508,11 +8005,9 @@ namespace RTE {
 		if (!goodbye(service, finalFrame, owed, catchUpReadsOver) || !owed) {
 			*error = "the second held round ended without owing its returner the goodbye";
 			service.Destroy();
-			ScenarioRunner::SetLockstepSeatPresence(nullptr);
 			return false;
 		}
 		service.Destroy();
-		ScenarioRunner::SetLockstepSeatPresence(nullptr);
 		const bool seenAfterTeardown = goodbye(service, finalFrame, owed, catchUpReadsOver);
 		if (seenAfterTeardown || owed || finalFrame != 0 || catchUpReadsOver) {
 			*error = "a torn-down service kept the last round's goodbye: goodbye_seen=" + std::to_string(seenAfterTeardown) + " owed_to_rejoiners=" + std::to_string(owed) +
@@ -7882,6 +8377,10 @@ namespace RTE {
 			s_FailTag = "net-world-bootstrap-selftest";
 			return TestHostBootstrapRefusals();
 		}
+		if (std::strcmp(name, "watcher-lobby-up") == 0 || std::strcmp(name, "-net-world-watcher-lobby-up-selftest") == 0) {
+			s_FailTag = "net-world-watcher-lobby-up-selftest";
+			return TestWatcherStateMarksItsConnectionUp();
+		}
 		if (std::strcmp(name, "unrounded-tail") == 0 || std::strcmp(name, "-net-world-unrounded-tail-selftest") == 0) {
 			s_FailTag = "net-world-unrounded-tail-selftest";
 			return TestJoinerNamesAnUnroundedTailChunk();
@@ -8071,6 +8570,7 @@ namespace RTE {
 		if (const int result = TestHostBootstrapRefusals(); result != 0) {
 			return result;
 		}
+		if (const int result = TestWatcherStateMarksItsConnectionUp(); result != 0) return result;
 		if (const int result = TestJoinerNamesAnUnroundedTailChunk(); result != 0) return result;
 		if (const int result = TestWorldImagePublishedFromTheWriter(); result != 0) {
 			return result;
@@ -8161,6 +8661,7 @@ namespace RTE {
 		if (const int result = TestWorldCleanLeaveReleasesOnlyTheSeatThatLeft(); result != 0) {
 			return result;
 		}
+		if (const int result = TestASeatedMembersSlotIsNotGivenToAJoiner(); result != 0) return result;
 		if (const int result = TestWorldReclaimHoldFollowsTheSeatsSlot(); result != 0) {
 			return result;
 		}
@@ -8168,6 +8669,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestWorldAdmitsItsConfiguredWatcher(); result != 0) {
+			return result;
+		}
+		if (const int result = TestTheOriginalHostReturnsToSeatZeroAfterAHandover(); result != 0) {
 			return result;
 		}
 		if (const int result = TestDedicatedWorldFirstSeatCanBeNamed(); result != 0) {
@@ -8221,6 +8725,8 @@ namespace RTE {
 		if (const int result = TestAnEarlierRoundsTailChunkIsDropped(); result != 0) return result;
 		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
 		if (const int result = TestCommittedTailJournal(); result != 0) return result;
+		if (const int result = TestCommittedTailJournalPrunes(); result != 0) return result;
+		if (const int result = TestTheReturnHistoryFloor(); result != 0) return result;
 		if (const int result = TestEveryPeersRecordServesTheHostsTail(); result != 0) return result;
 		{
 			std::string error;
@@ -8236,6 +8742,7 @@ namespace RTE {
 			if (!TestWorldCaptureKeepsOneImageInFlight(&error)) return Fail(error);
 			if (!TestALostCaptureIsNamedAgain(&error)) return Fail(error);
 			if (!TestAHostsLostOwnReportDoesNotStopTheSchedule(&error)) return Fail(error);
+			if (!TestAProvisionalHostWritesNothing(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedOverAPendingActivation(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(&error)) return Fail(error);
 			if (!TestPeersCheckpointTheSameTicks(&error)) return Fail(error);
@@ -8243,6 +8750,9 @@ namespace RTE {
 			if (!TestAHealNamesTheNextCaptureAfresh(&error)) return Fail(error);
 			if (!TestAHealNamesACheckpointEveryPeerHolds(&error)) return Fail(error);
 			if (!TestAStuckPrivateImageIsRetakenOnceThenRefused(&error)) return Fail(error);
+			if (!TestAPrivateReturnFollowsTheRoundOnTheRoster(&error)) return Fail(error);
+			if (!TestALeaveBetweenRoundsKeepsTheSeat(&error)) return Fail(error);
+			if (!TestAResumedLobbyHoldsADroppedSeat(&error)) return Fail(error);
 			if (!TestCheckpointCommandCrossesTheWire(&error)) return Fail(error);
 			if (!TestResumedWorldRecordsASegment(&error)) return Fail(error);
 			if (!TestWorldSegmentPlaybackStandsOnTheCheckpoint(&error)) return Fail(error);

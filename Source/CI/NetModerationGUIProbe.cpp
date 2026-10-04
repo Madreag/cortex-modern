@@ -57,6 +57,9 @@ namespace {
 		size_t index = 0, gestureIndex = SIZE_MAX;
 		uint64_t renders = 0, stepRender = 0, stepMs = 0, simTick = 0, resultWrittenMs = 0;
 		Clock::time_point started;
+		Clock::time_point loadedAt; //!< The label dump's one clock: the script's load, which the activation and a round's reset never move.
+		uint64_t labelDumpMs = 0, labelWrittenMs = 0;
+		std::string labelBoundary;
 		std::filesystem::path directory;
 		Json script, result;
 		std::string hintAtLoad;
@@ -212,6 +215,7 @@ namespace {
 			}
 		}
 		observed["local_actor_alive"] = localActorAlive;
+		observed["local_peer"] = snapshot.localPeerId;
 		// The setup editor a lockstep match holds in, so a script can drive and read this peer's own seats.
 		auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 		observed["editing"] = game && game->GetActivityState() == Activity::Editing;
@@ -296,6 +300,38 @@ namespace {
 
 	void WriteResult();
 
+	/// A script's "label_dump": {"every_ms": N} writes every line the screen shows - the menus, the network panel and overlay, the
+	/// game's own screen message, the text drawn by hand - every N ms of this peer's clock (5000 by default) and at every change of
+	/// screen, service state or image transfer, from the script's load (before its activation) to its end: what a joiner reads while
+	/// a world's image comes, while it loads and while it catches up.
+	void LabelDump() {
+		const Json config = probe.script.value("label_dump", Json());
+		if (!config.is_object()) return;
+		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+		const std::string screen = MenuScreen();
+		const bool catchingUp = ScenarioRunner::WorldCatchUpActive();
+		const std::string boundary = screen + '|' + snapshot.serviceState + '|' + (snapshot.transferTotalBytes != 0 ? "transfer" : "") + '|' + (catchingUp ? "catchup" : "");
+		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - probe.loadedAt).count());
+		const bool atBoundary = boundary != probe.labelBoundary;
+		if (!atBoundary && now < probe.labelDumpMs + config.value("every_ms", uint64_t{5000})) return;
+		probe.labelBoundary = boundary;
+		probe.labelDumpMs = now;
+		const uint64_t unixMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		Json record = {{"at_ms", now}, {"unix_ms", unixMs}, {"why", atBoundary ? "boundary" : "cadence"}, {"screen", screen}, {"service", snapshot.serviceState},
+		    {"transfer", {{"received_bytes", snapshot.transferReceivedBytes}, {"total_bytes", snapshot.transferTotalBytes}}}, {"catching_up", catchingUp},
+		    {"sim_frame", g_TimerMan.GetSimUpdateCount()}, {"lockstep_frame", ScenarioRunner::HasLockstepCoordinator() ? ScenarioRunner::GetLockstepCompletedFrame() : 0},
+		    {"lines", Json::parse(MenuAutomation::ShownTextJson(MenuControls()))}};
+		if (!probe.result.contains("label_dumps")) probe.result["label_dumps"] = Json::array();
+		probe.result["label_dumps"].push_back(std::move(record));
+		System::PrintDiagnosticLine("[net-ui-probe] label dump at_ms=" + std::to_string(now) + " screen=" + screen + " service=" + snapshot.serviceState +
+		                            " transfer=" + std::to_string(snapshot.transferReceivedBytes) + "/" + std::to_string(snapshot.transferTotalBytes) + (atBoundary ? " boundary" : ""));
+		// A dump before the script's steps begin is the only record of what came before them, so it is written within a second.
+		if (now >= probe.labelWrittenMs + 1000) {
+			WriteResult();
+			probe.labelWrittenMs = now;
+		}
+	}
+
 	/// Completes a script whose round ended while finish_on_round_end was armed: the steps it had left are recorded as
 	/// skipped and the signals it named are written, so a peer waiting on them goes on.
 	void FinishOnRoundEnd(const Json& observed) {
@@ -332,11 +368,12 @@ namespace {
 		const char* path = std::getenv("CC_TEST_NET_UI_SCRIPT");
 		if (!path || !*path) return;
 		probe.enabled = true;
-		probe.started = Clock::now();
+		probe.started = probe.loadedAt = Clock::now();
 		const char* hint = SDL_GetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS);
 		probe.hintAtLoadPresent = hint != nullptr;
 		probe.hintAtLoad = hint ? hint : "";
 		probe.directory = std::filesystem::absolute(path).parent_path();
+		MenuAutomation::SetArtifactDirectory(probe.directory.string());
 		probe.result = {{"schema", 1}, {"pass", false}, {"complete", false}, {"steps", Json::array()}, {"pid", System::GetProcessID()}};
 		Require(!std::filesystem::exists(probe.directory / "net-ui-result.json"), "probe result already exists");
 		probe.resultStarted = true;
@@ -474,7 +511,7 @@ namespace {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("lockstep_frame_at_least") || step.contains("renders") ||
 			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
 			    step.contains("editing") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
-			    step.contains("picker_open") || step.contains("chat_entry_open"), "wait has no predicate");
+			    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most"), "wait has no predicate");
 			if (step.contains("chat_entry_open") && observed["net_ui"].at("chat_entry_open") != step["chat_entry_open"]) return false;
 			if (step.contains("screen") && observed["screen"] != step["screen"]) return false;
 			if (step.contains("picker_open")) {
@@ -497,6 +534,8 @@ namespace {
 			}
 			if (step.contains("service") && observed["service"] != step["service"]) return false;
 			if (step.contains("sim_at_least") && observed["sim_frame"].get<long long>() < step["sim_at_least"].get<long long>()) return false;
+			// A watcher plays a seat once its own id is a seat's.
+			if (step.contains("local_peer_at_most") && (observed["local_peer"].get<int>() == 0 || observed["local_peer"].get<int>() > step["local_peer_at_most"].get<int>())) return false;
 			if (step.contains("lockstep_frame_at_least") && observed["lockstep_frame"].get<uint64_t>() < step["lockstep_frame_at_least"].get<uint64_t>()) return false;
 			if (step.contains("renders") && probe.renders - probe.stepRender < step["renders"].get<uint64_t>()) return false;
 			if (step.contains("elapsed_ms") && NowMs() - probe.stepMs < step["elapsed_ms"].get<uint64_t>()) return false;
@@ -884,6 +923,7 @@ namespace {
 				Load();
 			}
 			if (!probe.enabled) return;
+			if (phase == Phase::Draw && !probe.done) LabelDump();
 			const uint64_t round = ScenarioRunner::GetLockstepRoundId();
 			if (probe.script.value("repeat_rounds", false) && round > 0 && round != probe.round) {
 				probe.round = round; probe.index = 0; probe.done = false; probe.phaseArmed = false;

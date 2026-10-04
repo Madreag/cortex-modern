@@ -58,6 +58,7 @@ namespace RTE {
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
 		m_SetupError.clear();
 		m_WorldJoinImage = false;
+		m_RoundEventsBeforeStart.clear();
 		m_ReceivedStateBytes.clear();
 		m_State = NetMatchRuntimeState::SessionStarting;
 
@@ -130,6 +131,9 @@ namespace RTE {
 			if (config.postLobbySettleMs > 0) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(config.postLobbySettleMs));
 			}
+			if (!AgreeOnSeatRoster(transport, session, error)) {
+				return false;
+			}
 		}
 
 		if (m_WorldJoinImage) {
@@ -142,6 +146,69 @@ namespace RTE {
 			return false;
 		}
 		m_State = NetMatchRuntimeState::Running;
+		return true;
+	}
+
+	void NetMatchRunner::StampSeatRoster(const NetReconnectHost& admission) {
+		// The draft is the lobby's published config: the lobby republishes on its own (a delay re-size, a dropped seat) and a draft from an
+		// older copy would name a revision it has already passed.
+		AdoptLobbyConfig();
+		if (admission.GetRoster().revision == m_MatchConfig.seatRosterRevision || m_Lobby.IsStarted()) return;
+		NetMatchConfig stamped = m_MatchConfig;
+		stamped.configRevision = m_MatchConfig.configRevision + 1;
+		stamped.seatRosterRevision = admission.GetRoster().revision;
+		stamped.seatRosterHash = HashRoster(admission.GetRoster());
+		// A forming round's members are the roster's: a seat that drops or that the host opens leaves them and starts held.
+		if (const std::vector<uint8_t> waitsOn = admission.StartMembers(); !waitsOn.empty()) {
+			const std::vector<uint8_t> present = RematchMembers(stamped.hostPeerId, stamped.peerCount, waitsOn);
+			stamped.activePeerIds = present.size() < stamped.peerCount ? present : std::vector<uint8_t>{};
+		}
+		std::string stampError;
+		if (m_Lobby.RepublishMatchConfig(stamped, &stampError)) {
+			m_MatchConfig = stamped;
+			m_Config.matchConfig = stamped;
+			m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
+		} else if (stampError != m_LastRosterStampRefusal) {
+			m_LastRosterStampRefusal = stampError;
+			DiagnosticLine() << "[net-match] seat roster revision " << stamped.seatRosterRevision << " not republished: " << stampError << std::endl;
+		}
+	}
+
+	bool NetMatchRunner::AgreeOnSeatRoster(INetTransport& transport, NetSession& session, std::string* error) {
+		m_RosterAgreedRevision = 0;
+		if (m_Config.host || m_MatchConfig.version < NetMatchConfigUtil::c_SeatRosterVersion || m_MatchConfig.seatRosterRevision == 0) return true;
+		// A peer that joins a running round was not at its start: it holds the host's roster whole from its admission.
+		if (m_WorldJoinImage) return true;
+		NetReconnectClient* reconnect = session.GetReconnectClient();
+		if (!reconnect) return true;
+		std::string why;
+		const auto asked = std::chrono::steady_clock::now();
+		bool waited = false;
+		if (!reconnect->GetRosterReplica().AgreesAt(m_MatchConfig.seatRosterRevision, m_MatchConfig.seatRosterHash, &why)) {
+			// A revision this peer never heard - a full send queue lost it - is asked for by number; the host answers from what it published.
+			waited = true;
+			reconnect->RequestRosterRevision(m_MatchConfig.seatRosterRevision);
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(c_RosterRevisionWaitMs);
+			while (!reconnect->GetRosterReplica().AgreesAt(m_MatchConfig.seatRosterRevision, m_MatchConfig.seatRosterHash, &why) && std::chrono::steady_clock::now() < deadline) {
+				const uint64_t nowMs = m_Config.nowMs ? m_Config.nowMs() : 0;
+				// The host's round start can arrive while this peer asks: it is the round's, and the session would drop it.
+				for (NetTransportEvent& event: transport.PollEvents()) {
+					if (NetLobbySession::IsRoundPacket(event)) m_RoundEventsBeforeStart.push_back(std::move(event));
+					else session.InjectEvent(event, nowMs);
+				}
+				session.Tick(nowMs, false);
+				std::this_thread::sleep_for(std::chrono::milliseconds(5));
+			}
+		}
+		if (!reconnect->GetRosterReplica().AgreesAt(m_MatchConfig.seatRosterRevision, m_MatchConfig.seatRosterHash, &why)) {
+			SetFailed("the round's seat roster was refused: " + why);
+			if (error) *error = m_SetupError;
+			return false;
+		}
+		m_RosterAgreedRevision = m_MatchConfig.seatRosterRevision;
+		DiagnosticLine() << "[net-match] seat roster revision " << m_MatchConfig.seatRosterRevision << " agreed"
+		                 << (waited ? " after asking for it, " + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - asked).count()) + " ms" : std::string())
+		                 << std::endl;
 		return true;
 	}
 
@@ -169,6 +236,14 @@ namespace RTE {
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
 		SyncSeatingWaitToConfig();
 		return true;
+	}
+
+	void NetMatchRunner::AdoptLobbyConfig() {
+		if (!m_Config.host || m_Lobby.GetMatchConfig().configRevision == m_MatchConfig.configRevision) return;
+		m_MatchConfig = m_Lobby.GetMatchConfig();
+		m_Config.matchConfig = m_MatchConfig;
+		m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
+		SyncSeatingWaitToConfig();
 	}
 
 	void NetMatchRunner::SyncSeatingWaitToConfig() {
@@ -292,9 +367,12 @@ namespace RTE {
 
 	bool NetMatchRunner::StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error, std::vector<uint8_t> stateToStream, std::vector<NetTransportEvent> pendingLobbyEvents) {
 		m_PrivateJoinConfig.reset();
+		m_WorldJoinHolds.clear();
+		m_WorldJoinLeaves.clear();
 		m_WorldJoinStarting = false;
 		m_HostLostDuringSetup = false;
 		m_HostOptionsRefused = false;
+		m_RoundEventsBeforeStart.clear();
 		m_SetupError.clear();
 		m_ResyncRound = !stateToStream.empty() || m_SnapshotProviderPeerId != 0;
 		if (m_ResyncRound && coordinator.UsesBoundedWait() && !m_MatchConfig.persistentWorld) {
@@ -335,16 +413,8 @@ namespace RTE {
 		if (!VerifyRematchProposal(error)) {
 			return false;
 		}
-		// The round starts only on the seat roster the host agreed it on: a peer that heard another is refused by name.
-		if (!m_Config.host && m_MatchConfig.version >= NetMatchConfigUtil::c_SeatRosterVersion && m_MatchConfig.seatRosterRevision != 0) {
-			std::string why;
-			if (const NetReconnectClient* reconnect = session.GetReconnectClient();
-			    reconnect && !reconnect->GetRosterReplica().AgreesAt(m_MatchConfig.seatRosterRevision, m_MatchConfig.seatRosterHash, &why)) {
-				SetFailed("the round's seat roster was refused: " + why);
-				if (error) *error = m_SetupError;
-				return false;
-			}
-			if (session.GetReconnectClient()) DiagnosticLine() << "[net-match] seat roster revision " << m_MatchConfig.seatRosterRevision << " agreed" << std::endl;
+		if (!AgreeOnSeatRoster(transport, session, error)) {
+			return false;
 		}
 		// A rematch's members are the host's to name: the seats it starts held are the ones the agreed config leaves out.
 		const std::vector<uint8_t> formedMembers = m_ActivePeerIds;
@@ -428,8 +498,14 @@ namespace RTE {
 			if (session.IsReady() && session.GetReadyPeerCount() >= expectedReadyPeers) {
 				return true;
 			}
-			// A reconnect can knock before the host's transport notices the dead slot; retry until
-			// the timeout frees it (the budget above still bounds the whole wait).
+			// The budget bounds the whole wait, a refused knock's retries included.
+			if (waitMs > maxWaitMs) {
+				const std::string rejectText = session.IsRejected() ? session.BuildRejectText() : std::string();
+				SetFailed(!rejectText.empty() ? rejectText : std::string("timed out waiting for session Ready"));
+				if (error) *error = m_SetupError;
+				return false;
+			}
+			// A reconnect can knock before the host's transport notices the dead slot; retry until the timeout frees it.
 			if (!m_Config.host && session.IsRejected() && session.GetRejectReason() == NetRejectReason::SessionFull) {
 				if (nowMs >= nextRetryMs) {
 					nextRetryMs = nowMs + 2000;
@@ -452,11 +528,6 @@ namespace RTE {
 				// Surface the recorded mismatch (mod/config/version, timeout) instead of the bare state name.
 				const std::string rejectText = session.BuildRejectText();
 				SetFailed(!rejectText.empty() ? rejectText : std::string("session did not reach Ready; state=") + NetSession::StateName(session.GetState()));
-				if (error) *error = m_SetupError;
-				return false;
-			}
-			if (waitMs > maxWaitMs) {
-				SetFailed("timed out waiting for session Ready");
 				if (error) *error = m_SetupError;
 				return false;
 			}
@@ -556,26 +627,7 @@ namespace RTE {
 				m_Lobby.RequestStart();
 			}
 			// A new seat roster revision is the round's next configuration revision while the lobby is open, as a host option is.
-			if (admission && admission->GetRoster().revision != m_MatchConfig.seatRosterRevision && !m_Lobby.IsStarted()) {
-				NetMatchConfig stamped = m_MatchConfig;
-				stamped.configRevision = m_MatchConfig.configRevision + 1;
-				stamped.seatRosterRevision = admission->GetRoster().revision;
-				stamped.seatRosterHash = HashRoster(admission->GetRoster());
-				// A forming round's members are the roster's: a seat that drops or that the host opens leaves them and starts held.
-				if (const std::vector<uint8_t> waitsOn = admission->StartMembers(); !waitsOn.empty()) {
-					const std::vector<uint8_t> present = RematchMembers(stamped.hostPeerId, stamped.peerCount, waitsOn);
-					stamped.activePeerIds = present.size() < stamped.peerCount ? present : std::vector<uint8_t>{};
-				}
-				std::string stampError;
-				if (m_Lobby.RepublishMatchConfig(stamped, &stampError)) {
-					m_MatchConfig = stamped;
-					m_Config.matchConfig = stamped;
-					m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
-				} else if (stampError != m_LastRosterStampRefusal) {
-					m_LastRosterStampRefusal = stampError;
-					DiagnosticLine() << "[net-match] seat roster revision " << stamped.seatRosterRevision << " not republished: " << stampError << std::endl;
-				}
-			}
+			if (admission) StampSeatRoster(*admission);
 			// An accepted host-options draft becomes this round's next configuration revision here, on
 			// the thread that owns the lobby: every peer re-acknowledges it before the Start gate opens.
 			if (m_Config.host && m_Config.hostOptions && m_Config.hostOptions->Take(stagedOptions)) {
@@ -602,6 +654,7 @@ namespace RTE {
 			                             : static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count());
 			const NetMatchRunnerClocks clocks = ResolveRoundClocks(roundMs, static_cast<bool>(m_Config.nowMs), sessionMs);
 			m_Lobby.Tick(clocks.lobbyMs);
+			AdoptLobbyConfig();
 			// A seat told its round ended while it was held or rejoining takes the end record, not a round.
 			if (!m_Config.host && m_Lobby.GetRoundEndedRecord() &&
 			    !(m_Lobby.HasCompleteStateTransfer() && IsWorldJoinImageBlob(m_Lobby.PeekReceivedState()))) {
@@ -772,11 +825,23 @@ namespace RTE {
 			for (uint8_t peer = 1; peer <= lockstepConfig.peerCount; ++peer)
 				if (peer == lockstepConfig.localPeerId || !lockstepConfig.initialPeerLeaves.contains(peer)) lockstepConfig.activePeerIds.push_back(peer);
 		}
+		// A world joiner never waits on a seat the round already holds: its tail's holds and departures are its round's from the start.
+		if (m_WorldJoinStarting && !m_PrivateJoinConfig) {
+			for (const auto& [peer, hold]: m_WorldJoinHolds) lockstepConfig.initialSeatHolds[peer] = hold;
+			for (const auto& [peer, frame]: m_WorldJoinLeaves) if (!lockstepConfig.initialSeatHolds.contains(peer)) lockstepConfig.initialPeerLeaves.emplace(peer, frame);
+		}
 		// A seat knocking to come back while the round forms is the session's traffic, never dropped for want of a reader.
 		CarrySessionTraffic(coordinator);
 		if (!coordinator.Start(transport, lockstepConfig, error)) {
 			SetFailed(error ? *error : "lockstep start failed");
 			return false;
+		}
+		// What the lobby and the roster's wait read of this round is the round's first: a host that goes straight into a long load
+		// answers no repeat of a start this peer never saw.
+		if (m_UseLobbyProtocol) {
+			const uint64_t nowMs = NetLockstepNowMs();
+			for (const NetTransportEvent& event: m_Lobby.TakeRoundEventsAfterStart()) coordinator.InjectEvent(event, nowMs);
+			for (const NetTransportEvent& event: std::exchange(m_RoundEventsBeforeStart, {})) coordinator.InjectEvent(event, nowMs);
 		}
 		return true;
 	}
@@ -823,6 +888,22 @@ namespace RTE {
 		NetLobbySnapshot snapshot;
 		snapshot.hostPeerId = m_ActiveHostPeerId != 0 ? m_ActiveHostPeerId : rosterConfig.hostPeerId;
 		snapshot.lobbyPhase = StateName(m_State);
+		// A joiner that receives the world's image says how much has come, how fast and how long is left.
+		if (const auto [received, total] = m_Lobby.GetStateTransferProgress(); !m_Config.host && total > 0 && !m_Lobby.HasCompleteStateTransfer()) {
+			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			if (m_TransferMarkMs == 0 || received < m_TransferMarkBytes) {
+				m_TransferMarkMs = nowMs;
+				m_TransferMarkBytes = received;
+			}
+			const uint64_t elapsedMs = nowMs - m_TransferMarkMs;
+			const double rate = elapsedMs >= 500 ? static_cast<double>(received - m_TransferMarkBytes) * 1000.0 / static_cast<double>(elapsedMs) : 0.0;
+			m_ImageTransferSeen = true;
+			snapshot.transferReceivedBytes = received;
+			snapshot.transferTotalBytes = total;
+			snapshot.transferLine = NetImageTransferLine(received, total, rate);
+		} else {
+			m_TransferMarkMs = 0;
+		}
 		snapshot.activityPreset = rosterConfig.activityPreset;
 		snapshot.activityModule = rosterConfig.activityModule;
 		snapshot.sceneName = rosterConfig.sceneName;

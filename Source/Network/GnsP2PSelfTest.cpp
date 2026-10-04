@@ -1,6 +1,7 @@
 #include "GnsP2PSelfTest.h"
 
 #include "GnsTransport.h"
+#include "NetIceServers.h"
 
 #include <iostream>
 
@@ -118,6 +119,7 @@ namespace RTE {
 			std::lock_guard<std::mutex> lock(s_OutputMutex);
 			for (std::string line; std::getline(lines, line);) {
 				if (!line.empty()) {
+					line = NetRelayLogins::Scrub(line);
 					std::cout << "[net-p2p-selftest] t=" << Ms(ElapsedMs()) << "ms gns(" << static_cast<int>(type) << ") " << line << '\n';
 					NoteCandidates(line);
 					if (line.find("the renewed login") != std::string::npos) {
@@ -1271,8 +1273,11 @@ namespace RTE {
 			return true;
 		}
 
+		constexpr const char* c_RelaySelfTestOffer = "relay-selftest@1";
+
 		GnsP2PConfig RelayOnlyConfig(const std::string& server, const std::string& user, const std::string& pass) {
 			GnsP2PConfig config;
+			config.relayOffer = c_RelaySelfTestOffer;
 			config.iceEnable = k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_Relay;
 			config.connectionMode = 2;
 			config.turnServerList = server;
@@ -1288,6 +1293,15 @@ namespace RTE {
 				return {};
 			}
 			return std::string(side.name) + " is " + StateName(info.state) + (relayed ? ", relayed" : ", not relayed") + (info.endDebug.empty() ? std::string() : " (\"" + info.endDebug + "\")");
+		}
+
+		// A relayed route's receipt names the TURN server it runs through and the relay offer its TURN lists came from.
+		std::string CheckRouteReceipt(Side& side, const std::string& server) {
+			const std::string receipt = side.transport.GetPeerConnectionInfo(side.peer).routeReceipt;
+			const bool relayed = receipt.find(" route=relay ") != std::string::npos;
+			const bool addressed = receipt.find(" remote=") != std::string::npos && receipt.find(" turn=" + server + " ") != std::string::npos;
+			const bool offered = receipt.find(std::string(" offer=") + c_RelaySelfTestOffer) != std::string::npos;
+			return relayed && addressed && offered ? std::string() : std::string(side.name) + " route receipt '" + receipt + "'";
 		}
 
 		std::vector<uint8_t> Numbered(char tag, uint32_t number) {
@@ -1374,6 +1388,8 @@ namespace RTE {
 						failure = "the relayed connection did not reach Connected on both sides within 30s (host \"" + host.closeReason + "\", joiner \"" + joiner.closeReason + "\")";
 					} else if (!(failure = CheckRelayed(joiner)).empty() || !(failure = CheckRelayed(host)).empty()) {
 						failure = "not a relayed route: " + failure;
+					} else if (!(failure = CheckRouteReceipt(joiner, server)).empty() || !(failure = CheckRouteReceipt(host, server)).empty()) {
+						failure = "the relayed route's receipt does not name its endpoint and offer: " + failure;
 					} else {
 						Say("both sides Connected over the relay " + Ms(ElapsedMs() - connectMs) + "ms after ConnectP2P; holding for " + std::to_string(seconds) + " s");
 						PrintConnection(joiner);
@@ -1420,7 +1436,13 @@ namespace RTE {
 							const std::vector<uint8_t> fromHost = Payload('H');
 							if (!joiner.transport.Send(joiner.peer, NetTransportLane::ControlReliable, fromJoiner, &error) || !host.transport.Send(host.peer, NetTransportLane::ControlReliable, fromHost, &error)) {
 								failure = "Send after the hold: " + error;
-							} else if (!WaitUntil(5000, pump, [&] { return !host.received.empty() && !joiner.received.empty(); }) || host.received.front() != fromJoiner || joiner.received.front() != fromHost) {
+							} else if (!WaitUntil(5000, pump, [&] {
+								// The hold's last numbered message can still be in flight and land first; the reliable one must arrive whole.
+								const auto arrived = [](const Side& side, const std::vector<uint8_t>& message) {
+									return std::find(side.received.begin(), side.received.end(), message) != side.received.end();
+								};
+								return arrived(host, fromJoiner) && arrived(joiner, fromHost);
+							})) {
 								failure = "the 64-byte reliable messages did not cross both ways intact after the hold";
 							} else {
 								joiner.transport.Disconnect(joiner.peer, "net-p2p-selftest done");

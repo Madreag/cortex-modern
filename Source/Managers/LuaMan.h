@@ -22,7 +22,7 @@
 struct lua_State;
 
 namespace RTE {
-	namespace CheckpointLua { class HeapOwner; class NativeCache; }
+	namespace CheckpointLua { class HeapOwner; class NativeCache; struct CopyReceipt; }
 
 	/// What one frozen script graph capture cost on the simulation thread, summed over the states.
 	struct FrozenCaptureStats {
@@ -56,6 +56,8 @@ namespace RTE {
 		size_t freezes = 0;
 		size_t mostLive = 0; //!< The most copy buffers the heap held after any freeze, once the snapshot before it was released.
 		size_t bound = 0;
+		size_t freshAfterSecond = 0; //!< Copy buffer bytes the freezes after the second mapped fresh instead of reusing one released.
+		size_t liveBound = 0; //!< The buffers a heap holds at most: a snapshot's and the next freeze's.
 		bool pagesMatch = false; //!< Every array the last snapshot froze reads back as the live heap.
 		std::string error;
 	};
@@ -275,6 +277,8 @@ namespace RTE {
 		bool FrozenCaptureAvailable() const { return !m_FrozenCaptureUnavailable->load(std::memory_order_relaxed); }
 		/// Blocks until the last frozen capture's page copy has landed; the VM may write its heap again after this.
 		void WaitFrozenCopy();
+		/// What that copy cost, once, after the gate; generation 0 when no copy landed since the last call.
+		CheckpointLua::CopyReceipt TakeFrozenCopyReceipt();
 		/// Captures every state off a frozen image, the states side by side; false when any state could not freeze.
 		/// whileWaiting runs on the calling thread once the master state is captured, while the pool captures the rest.
 		static bool CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats, const std::function<void()>& whileWaiting = {});
@@ -603,7 +607,11 @@ namespace RTE {
 		/// The clones BeginPreviewScripts bound, until EndPreviewScripts.
 		static std::vector<const MovableObject*> PreviewRoots();
 		static bool IsPreviewEdgeHook(const std::string& functionName);
+		/// The per-tick hooks a preview clone runs where the world's tick runs them, so the clone keeps what they change.
+		static bool IsPreviewTickHook(const std::string& functionName);
 		static bool ShouldRunPreviewHook(const MovableObject* mo, const std::string& functionName);
+		/// Every still-registered object of a preview clone's tree that is bound to a script state, with that state.
+		static std::vector<std::pair<MovableObject*, LuaStateWrapper*>> PreviewBindingsUnder(const MovableObject* root);
 		static bool IsRunningPreviewHook() { return s_RunningPreviewHook; }
 		static void SetRunningPreviewHook(bool running) { s_RunningPreviewHook = running; }
 		struct PreviewHookScope {

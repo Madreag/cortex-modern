@@ -17,6 +17,7 @@
 #include "NetMatchReplay.h"
 #include "NetReconnectUx.h"
 #include "NetWorldJoin.h"
+#include "NetLobbySnapshot.h"
 #include "RTETools.h"
 #include "SettingsMan.h"
 #include "TimerMan.h"
@@ -69,7 +70,6 @@ namespace RTE {
 		std::function<bool()> s_PendingSessionTail;
 		std::function<uint64_t()> s_SessionProgress;
 		std::function<void()> s_GoodbyeToPendingReturners;
-		const NetSeatPresence* s_SeatPresence = nullptr;
 		std::vector<NetGameCommand> s_PendingLocalGameCommands;
 		std::vector<std::pair<uint8_t, NetGameCheckpoint>> s_AppliedCheckpoints;
 		uint64_t s_NextLocalCommandSequence = 1;
@@ -154,6 +154,7 @@ namespace RTE {
 		uint64_t s_SlowMachineNoticeUntilMs = 0;
 		long long s_LockstepWaitUs = 0;
 		std::optional<std::chrono::steady_clock::time_point> s_PreSimWait;
+		bool s_PacedClockStarted = false; //!< This coordinator's round has run its first tick: its clock owes from there, never from the wait for its start.
 		NetPaceSlide s_PaceSlide;
 		struct LockstepWaitTimer {
 			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
@@ -837,20 +838,42 @@ namespace RTE {
 		std::mutex s_AbandonedTicksMutex;
 		uint64_t s_AbandonedTicksFrom = 0;
 		uint64_t s_AbandonedTicksRound = 0;
+		uint64_t s_AbandonedRanThrough = 0;
+		std::pair<uint64_t, uint64_t> s_AbandonedTaken; //!< The round and hold frame last taken: a stopped round asks again every pass.
 	}
 
-	void ScenarioRunner::AbandonTicksFrom(uint64_t frame) {
+	void ScenarioRunner::AbandonTicksFrom(uint64_t frame, uint64_t ranThrough) {
 		const uint64_t round = GetLockstepRoundId();
 		std::lock_guard<std::mutex> lock(s_AbandonedTicksMutex);
+		if (s_AbandonedTaken == std::make_pair(round, frame)) return;
 		if (s_AbandonedTicksFrom != 0 && s_AbandonedTicksRound == round && s_AbandonedTicksFrom <= frame) return;
 		s_AbandonedTicksFrom = frame;
 		s_AbandonedTicksRound = round;
+		s_AbandonedRanThrough = ranThrough;
 	}
 
-	uint64_t ScenarioRunner::TakeAbandonedTicksFrom(uint64_t& round) {
+	uint64_t ScenarioRunner::TakeAbandonedTicksFrom(uint64_t& round, uint64_t& ranThrough) {
 		std::lock_guard<std::mutex> lock(s_AbandonedTicksMutex);
 		round = s_AbandonedTicksRound;
+		ranThrough = s_AbandonedRanThrough;
+		if (s_AbandonedTicksFrom != 0) s_AbandonedTaken = {s_AbandonedTicksRound, s_AbandonedTicksFrom};
 		return std::exchange(s_AbandonedTicksFrom, 0);
+	}
+
+	namespace {
+		std::mutex s_HarnessReceiptsMutex;
+		std::map<std::string, std::string> s_HarnessReceipts;
+	}
+
+	void ScenarioRunner::NoteHarnessReceipt(const std::string& name, const std::string& json) {
+		std::lock_guard<std::mutex> lock(s_HarnessReceiptsMutex);
+		s_HarnessReceipts[name] = json;
+	}
+
+	std::string ScenarioRunner::GetHarnessReceipt(const std::string& name) {
+		std::lock_guard<std::mutex> lock(s_HarnessReceiptsMutex);
+		const auto found = s_HarnessReceipts.find(name);
+		return found == s_HarnessReceipts.end() ? std::string() : found->second;
 	}
 
 	std::string ScenarioRunner::MemoryCensus() {
@@ -899,10 +922,6 @@ namespace RTE {
 
 	void ScenarioRunner::SetHeldCatchUp(std::function<bool()> begin) {
 		s_HeldCatchUp = std::move(begin);
-	}
-
-	void ScenarioRunner::SetLockstepSeatPresence(const NetSeatPresence* presence) {
-		s_SeatPresence = presence;
 	}
 
 	void ScenarioRunner::PushNetUiToast(const std::string& kind, const std::string& text, uint8_t senderPeerId) {
@@ -984,15 +1003,41 @@ namespace RTE {
 		}
 		// This machine's own seat reads held from the hold until its control returns: the catch-up ends before the reclaim lands.
 		const uint8_t localPeer = GetLockstepLocalPeerId();
-		const bool ownSeatHeld = localPeer != 0 && IsLockstepSeatUnderAI(localPeer, GetLockstepCompletedFrame()) && !IsLockstepSeatReleased(localPeer);
-		if (WorldCatchUpActive() || ownSeatHeld) visible.push_back({s_WorldCatchUpAppliedThrough, "seat_held", "Held - AI in control - rejoining", localPeer});
+		if (WorldCatchUpActive() || IsLockstepOwnSeatHeld()) visible.push_back({s_WorldCatchUpAppliedThrough, "seat_held", "Held - AI in control - rejoining", localPeer});
+		if (WorldCatchUpActive()) {
+			// The replay's own rate, over the last second or so; the frame it needs is the announced activation once there is one,
+			// else the round's newest frame here, which moves on at the round's rate.
+			static uint64_t s_markFrame = 0, s_markMs = 0;
+			static double s_framesPerSecond = 0.0;
+			const uint64_t applied = s_WorldCatchUpAppliedThrough;
+			if (s_markMs == 0 || applied < s_markFrame) {
+				s_markFrame = applied;
+				s_markMs = nowMs;
+				s_framesPerSecond = 0.0;
+			} else if (nowMs - s_markMs >= 1000) {
+				s_framesPerSecond = static_cast<double>(applied - s_markFrame) * 1000.0 / static_cast<double>(nowMs - s_markMs);
+				s_markFrame = applied;
+				s_markMs = nowMs;
+			}
+			const bool fixed = s_WorldCatchUpActivationTick != 0;
+			const uint64_t target = fixed ? s_WorldCatchUpActivationTick - 1 : (s_WorldCatchUpTail.empty() ? applied : std::max(applied, s_WorldCatchUpTail.back().targetFrame));
+			// Until the activation is named the replay runs on frames the host is still streaming, so its rate tells nothing of when
+			// it ends: the line says how far it has come and promises no time.
+			visible.push_back({applied, "catch_up", NetCatchUpLine(applied, target, fixed ? s_framesPerSecond : 0.0, 0.0), localPeer});
+		}
 		if (WorldCatchUpActive() && IsLockstepLocalMachineSlow()) visible.push_back({s_WorldCatchUpAppliedThrough, "slow_machine", "Your machine cannot keep up with this match. The AI is playing your seat.", GetLockstepLocalPeerId()});
 		// A host whose own machine held its seat catches up in place, and says so on its own screen.
 		uint64_t heldAt = 0;
+		uint64_t provisionalAt = 0;
 		{
 			NetLockstepPlaneGuard plane;
 			if (s_LockstepCoordinator && s_LockstepCoordinator->IsOwnHostSeatHeld() && s_LockstepCoordinator->IsSelfHeld()) heldAt = s_LockstepCoordinator->GetStats().nextFrame;
+			if (s_LockstepCoordinator && s_LockstepCoordinator->IsHostProvisional()) provisionalAt = s_LockstepCoordinator->GetStats().nextFrame;
 		}
+		if (provisionalAt != 0)
+			visible.push_back({provisionalAt, "host_provisional",
+			                   "Connection to the other players lost - reconnecting. If they continue without you, you rejoin them as a player and your play since the loss will not count",
+			                   GetLockstepLocalPeerId()});
 		if (heldAt != 0 && !WorldCatchUpActive() && IsLockstepLocalMachineSlow()) visible.push_back({heldAt, "slow_machine", "Your machine cannot keep up with this match. The AI is playing your seat.", GetLockstepLocalPeerId()});
 		return visible;
 	}
@@ -1074,9 +1119,9 @@ namespace RTE {
 		NetLockstepPlane::Target(coordinator);
 		s_PreSimWait.reset();
 		s_PaceSlide.Reset();
+		s_PacedClockStarted = false;
 		s_LocalStartParkPublished = false;
 		if (!coordinator) {
-			s_SeatPresence = nullptr;
 			s_E2eFirstTransferUid = 0; // A resync does not undo the first transfer; the latch clears with the coordinator.
 		}
 		if (coordinator && (!preserveCommands || s_CommandSessionId != coordinator->GetConfig().sessionId || s_CommandEpoch != coordinator->GetConfig().seatPresenceEpoch)) {
@@ -1597,6 +1642,12 @@ namespace RTE {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsSeatReclaimGap(peerId, frame);
 	}
 
+	bool ScenarioRunner::IsLockstepOwnSeatHeld() {
+		const uint8_t local = GetLockstepLocalPeerId();
+		const uint64_t completed = GetLockstepCompletedFrame();
+		return local != 0 && (IsLockstepSeatUnderAI(local, completed) || IsLockstepSeatReclaimGap(local, completed + 1)) && !IsLockstepSeatReleased(local);
+	}
+
 	// The seat a reclaim at this frame covers an actor for. A peer that joined the round with the hold
 	// already in its config never ran the hold's actor handoff, so it has no drop-time claimant to read:
 	// there the seat that owns the actor in the world is the one reclaiming it, which is the same seat
@@ -1934,18 +1985,6 @@ namespace RTE {
 			return false;
 		}
 		outWho = s_LockstepCoordinator->DescribeHeldPause(outSecondsLeft, NetLockstepNowMs());
-		if (s_SeatPresence) {
-			for (const auto& [peerId, seat]: s_SeatPresence->GetSeats()) {
-				if (!seat.holdActive) {
-					continue;
-				}
-				if (!seat.holderName.empty()) {
-					outWho = seat.holderName;
-				}
-				outSecondsLeft = static_cast<uint32_t>(s_SeatPresence->HoldWallSecondsRemaining(peerId));
-				break;
-			}
-		}
 		return true;
 	}
 
@@ -3072,27 +3111,32 @@ namespace RTE {
 		s_LockstepCoordinator->NoteLocalStartPark(g_ActivityMan.GetLastRestartMs());
 	}
 
+	std::optional<NetLockstepCoordinator::HoldFact> ScenarioRunner::GetLockstepLastHold(uint8_t peerId) {
+		NetLockstepPlaneGuard plane;
+		return s_LockstepCoordinator ? s_LockstepCoordinator->LastHoldOf(peerId) : std::nullopt;
+	}
+
 	uint8_t ScenarioRunner::GetLockstepAgreedSeatDeviceClass(int seat) {
 		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator ? s_LockstepCoordinator->AgreedSeatDeviceClass(seat) : 0;
 	}
 
-	// A peer that keeps standing at its input horizon holds its clock back the slow-player bound's worth, so its inputs land with the
-	// lead every other peer's do instead of the tick that needs them waiting on each. A seat whose reclaim gap has just closed caught up
-	// to the newest input it holds, so it stands there by construction and gives the inputs their lead at once.
+	// A peer that keeps standing at its input horizon holds its clock back, so its inputs land with the lead every other peer's do instead
+	// of the tick that needs them waiting on each; never so far that its own inputs land late. A seat whose reclaim gap has just closed
+	// caught up to the newest input it holds, so it stands there by construction and gives the inputs their lead at once.
 	static bool RunPacedTick(uint64_t tick) {
 		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
 		const bool gapClosed = tick > 0 && s_LockstepCoordinator->IsSeatReclaimGap(local, tick - 1) && !s_LockstepCoordinator->IsSeatReclaimGap(local, tick);
 		if (gapClosed) s_PaceSlide.Reset();
 		const NetPaceSlide::Action action = gapClosed ? NetPaceSlide::Action::Slide : s_PaceSlide.NoteTickAt(tick);
 		if (action == NetPaceSlide::Action::Slide) {
-			const int bound = std::max<int>(1, s_LockstepCoordinator->GetConfig().slowPlayerBoundTicks);
-			g_TimerMan.HoldSimTicks(bound);
+			const uint32_t slide = s_LockstepCoordinator->HorizonSlideTicks(tick);
+			g_TimerMan.HoldSimTicks(static_cast<int>(slide));
 			System::PrintDiagnosticLine("[net-lockstep] pace slide at tick " + std::to_string(tick) + ": " +
 			                            (gapClosed ? std::string("this seat's reclaim gap closed at the newest input it holds") :
 			                                         std::to_string(NetPaceSlide::c_AheadTicks) + "+ of the last " + std::to_string(NetPaceSlide::c_WindowTicks) +
 			                                             " ticks were due before their inputs") +
-			                            "; the clock drops what it owes and holds back " + std::to_string(bound) + " ticks");
+			                            "; the clock drops what it owes and holds back " + std::to_string(slide) + " ticks");
 		}
 		return true;
 	}
@@ -3113,7 +3157,7 @@ namespace RTE {
 		if (s_LockstepCoordinator->IsFailed() || s_LockstepCoordinator->IsStopped()) {
 			if (s_LockstepCoordinator->IsStopped() && s_LockstepCoordinator->IsLocalSeatHeld()) {
 				// The ticks this seat ran from its hold on were off the round, however it comes back or if its round ends first.
-				if (const uint64_t hold = s_LockstepCoordinator->GetLocalHoldFrame(); hold != 0 && tick > hold) AbandonTicksFrom(hold);
+				if (const uint64_t hold = s_LockstepCoordinator->GetLocalHoldFrame(); hold != 0) AbandonTicksFrom(hold, tick > hold ? tick - 1 : 0);
 				if (s_HeldCatchUp && s_HeldCatchUp()) return false;
 			}
 			SetControllerReplayError("tick " + std::to_string(tick) + " lockstep stopped: " + s_LockstepCoordinator->GetStats().timeoutReason);
@@ -3125,6 +3169,12 @@ namespace RTE {
 		if (!s_LockstepCoordinator->IsRunning()) {
 			s_PreSimWait = now;
 			return false;
+		}
+		// The time this peer waited for its round to start is not owed: a peer that waited longer would race through it and run
+		// ahead of the others' clocks by the difference, and the peer behind would feed every tick late.
+		if (!s_PacedClockStarted) {
+			s_PacedClockStarted = true;
+			g_TimerMan.HoldSimTicks(0);
 		}
 		std::string primeError;
 		if (!PrimeRestoredLockstepInputs(&primeError)) { SetControllerReplayError(primeError); return false; }

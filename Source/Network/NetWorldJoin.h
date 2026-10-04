@@ -212,12 +212,25 @@ namespace RTE {
 	public:
 		static constexpr size_t c_DefaultMaxFrames = 3600;              //!< A minute of 60 Hz ticks.
 		static constexpr uint64_t c_DefaultMaxBytes = 32ULL * 1024 * 1024;
+		static constexpr size_t c_JournalSegmentFrames = 3600;          //!< The journal's frames per file; the oldest go a file at a time.
 
 		/// The frames a peer's record of its round keeps: the slow-player bound, the delay margin and one capture interval of frames.
 		static size_t RingFrames(uint32_t boundTicks, uint32_t delayMarginFrames, uint64_t captureIntervalMs, double tickMs);
 		void Configure(size_t maxFrames, uint64_t maxBytes);
 		void EnableJournal(const std::string& path);
 		bool HasJournal() const { return static_cast<bool>(m_Journal); }
+		/// The journal's files on disk as its writer last left them, and the frames it covers.
+		struct JournalStats {
+			uint64_t bytes = 0;
+			uint32_t files = 0;
+			uint64_t first = 0, last = 0;
+			uint64_t indexBytes = 0;      //!< Memory: the files' per-frame offsets.
+			uint32_t cachedReads = 0;     //!< Memory: the reads kept for the joiners asking again.
+			uint64_t cachedReadBytes = 0;
+		};
+		JournalStats GetJournalStats() const;
+		size_t MaxFrames() const { return m_MaxFrames; }
+		uint64_t MaxBytes() const { return m_MaxBytes; }
 		bool JournalFailed() const;
 		/// Encodes and retains one committed frame. Frames must arrive in order and without gaps, and of the log's round once it has one.
 		bool Append(const NetLockstepFrame& frame, std::string* error = nullptr);
@@ -238,6 +251,8 @@ namespace RTE {
 		size_t CopyFrom(uint64_t from, size_t maxRecords, uint64_t maxBytes, std::vector<std::vector<uint8_t>>& out, uint64_t* lastCopied = nullptr) const;
 		/// Forgets everything at or before the frame every live bootstrap has applied.
 		void DropThrough(uint64_t frame);
+		/// Lets the journal go below the oldest frame anyone may still be served from, a whole file at a time.
+		void PruneJournalBefore(uint64_t frame);
 		/// Takes another log's records as this empty log's own, bounded as this log is. False when this log already holds a record
 		/// or one of them belongs to another round than this log's.
 		bool AdoptRecords(const NetWorldFrameLog& other);
@@ -253,7 +268,7 @@ namespace RTE {
 		void Trim();
 		struct Journal;
 		std::shared_ptr<Journal> m_Journal;
-		uint64_t m_JournalFirst = 0, m_JournalLast = 0;
+		uint64_t m_JournalBase = 0, m_JournalFirst = 0, m_JournalLast = 0; //!< Base: its first file's first frame, where every file boundary is counted from.
 
 		std::deque<Record> m_Records;
 		size_t m_MaxFrames = c_DefaultMaxFrames;
@@ -310,6 +325,7 @@ namespace RTE {
 		int8_t team = -1;          //!< The team the host assigns in the configured order.
 		uint32_t generation = 0;   //!< Advanced on every clean leave, so a returner is a new holder.
 		uint16_t stableSeat = 0;   //!< The admission seat bound to the slot while it is held.
+		bool seated = false;       //!< A seat has been bound to the slot; seat 0 is a seat, an ordinary match's original host's.
 		bool held = false;
 		bool reclaimHold = false; //!< Its holder dropped: only that holder may take it back.
 		uint64_t brainMissingSince = 0; //!< The committed frame its brain went; 0 while one lives.
@@ -329,6 +345,8 @@ namespace RTE {
 		const NetWorldSlot* FirstFreeSlot() const;
 		/// The slot a credentialed holder reclaims; null when the seat is not this world's.
 		const NetWorldSlot* SlotOfSeat(uint16_t stableSeat) const;
+		/// The slot that plays this lockstep id; null when the id is not one of this world's slots.
+		const NetWorldSlot* SlotOfPeer(uint8_t peerId) const;
 		bool Hold(uint8_t peerId, uint16_t stableSeat, const std::string& holderName, std::string* error = nullptr);
 		/// Gives a slot back to the holder its seat names. The generation does not move: a reclaim
 		/// is the same holder returning, not a new one, so the credentials it holds stay good.
@@ -391,8 +409,8 @@ namespace RTE {
 	/// World-join plane schema on the offer, the transition and the membership report.
 	inline constexpr uint16_t c_NetWorldJoinSchema = 1;
 	/// Overflow spectators bind lobby ids in [first, last], one per connection, above member seats.
-	inline constexpr uint8_t c_WorldSpectatorLobbyPeerFirst = 32;
-	inline constexpr uint8_t c_WorldSpectatorLobbyPeerLast = 47;
+	inline constexpr uint8_t c_WorldSpectatorLobbyPeerFirst = NetLobbyProtocol::c_FirstWatcherPeer;
+	inline constexpr uint8_t c_WorldSpectatorLobbyPeerLast = NetLobbyProtocol::c_LastWatcherPeer;
 	inline constexpr size_t c_WorldSpectatorLobbyCap = static_cast<size_t>(c_WorldSpectatorLobbyPeerLast - c_WorldSpectatorLobbyPeerFirst + 1);
 	// A host may never configure more spectators than the world has lobby ids to bind them on.
 	static_assert(NetMatchConfigUtil::c_MaxWorldSpectators <= c_WorldSpectatorLobbyCap);
@@ -412,6 +430,11 @@ namespace RTE {
 			return c_WorldSpectatorLobbyCap;
 		}
 		return std::min<size_t>(config.worldMaxSpectators, c_WorldSpectatorLobbyCap);
+	}
+
+	/// A joiner replaying toward its activation, or a watcher replaying for as long as it watches.
+	inline bool StreamsTail(const NetWorldJoinSession& session) {
+		return session.phase == NetWorldJoinPhase::CatchingUp || (session.spectator && session.phase == NetWorldJoinPhase::Spectating);
 	}
 
 	inline uint8_t WorldJoinLobbyPeer(const NetWorldJoinSession& session) {
@@ -604,7 +627,9 @@ namespace RTE {
 		/// @param nowMs The host's admission clock, so a stalled transfer can expire.
 		/// @param credentialedHolder Whether the admission plane says this connection is the seat's
 		/// own returning holder. Only it may take back a slot a reclaim hold is keeping.
-		bool BeginJoin(NetPeerId connection, uint16_t stableSeat, const std::string& holderName, uint64_t nowMs, std::string* error = nullptr, bool credentialedHolder = false);
+		/// @param seatPeerId The lockstep id of the seat the roster admitted this connection to; its slot is taken when free.
+		bool BeginJoin(NetPeerId connection, uint16_t stableSeat, const std::string& holderName, uint64_t nowMs, std::string* error = nullptr, bool credentialedHolder = false,
+		               uint8_t seatPeerId = 0);
 		/// Records which slots are waiting for a dropped holder, from the admission plane's seats.
 		void NoteReclaimHolds(const std::vector<uint8_t>& peerIds);
 		/// A watcher's own choice: a spectator that declines is skipped when a slot frees.
@@ -656,8 +681,6 @@ namespace RTE {
 		/// ahead of it, so a member is a peer of the round before the frames it owes go out.
 		void NoteSentInputThrough(uint64_t lastQueuedTarget) { m_SentInputThrough = lastQueuedTarget; }
 		uint64_t SentInputThrough() const { return m_SentInputThrough; }
-		/// Announces E for an overflow spectator (no Controller, no Admit).
-		bool ScheduleSpectatorActivation(NetPeerId connection, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error = nullptr);
 		/// Announces a later E once. A second miss is a CancelJoin.
 		bool ReannounceActivation(NetPeerId connection, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error = nullptr);
 		/// Marks the bootstrap active once its transition has been committed.
@@ -667,6 +690,8 @@ namespace RTE {
 		void MarkActivationCommitted(NetPeerId connection);
 		/// Ends a bootstrap without a seat drop: a failed or slow fresh join is not a departure.
 		void CancelJoin(NetPeerId connection, const std::string& reason);
+		/// The peers whose joins were cancelled since the last call, oldest first.
+		std::vector<uint8_t> TakeCancelledJoins();
 		/// Cancels every bootstrap past its deadline. Returns how many it ended.
 		size_t ExpireStaleJoins(uint64_t nowMs);
 		/// Ends every bootstrap whose connection is gone, so a spectator's lobby id returns to the pool.
@@ -682,6 +707,8 @@ namespace RTE {
 		const NetWorldMembership& Membership() const { return m_Membership; }
 		NetWorldFrameLog& Tail() { return m_Tail; }
 		const NetWorldFrameLog& Tail() const { return m_Tail; }
+		/// What its joins, history and image hold, as counts and bytes, for the memory census.
+		std::string MemoryCensus() const;
 		/// The round a joiner's catch-up names for this tail: the match round of a rejoin plane, the boot round of a world.
 		uint64_t TailRound() const { return m_PrivateRound != 0 ? m_PrivateRound : m_Identity.round; }
 		NetWorldMetrics& Metrics() { return m_Metrics; }
@@ -716,6 +743,7 @@ namespace RTE {
 		uint64_t m_SentInputThrough = 0; //!< The round's highest sent target, from the coordinator.
 		uint64_t m_ActivationsCommitted = 0;
 		uint64_t m_JoinsCancelled = 0;
+		std::vector<uint8_t> m_CancelledJoins; //!< The assigned peers of the joins cancelled, for the host's seat roster.
 	};
 
 } // namespace RTE

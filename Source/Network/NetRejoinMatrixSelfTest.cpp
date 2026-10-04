@@ -29,7 +29,7 @@ namespace RTE {
 	bool TestLobbyModerationRows(std::string* error);
 	bool TestKickedSeatReadsOpen(std::string* error);
 	bool TestALinklessMemberIsHeldByTheStart(std::string* error);
-	bool TestARematchLobbyHoldsADroppedSeat(std::string* error, bool rematch, bool kick);
+	bool TestARematchLobbyHoldsADroppedSeat(std::string* error, bool rematch, bool kick, bool alone);
 	bool TestALobbyDropsAnAbandonedTransfersTail(std::string* error);
 	bool TestALaterLobbysTransferIsNewToItsPeers(std::string* error);
 	bool TestLobbyTrafficKeepsAHostLinkAlive(std::string* error);
@@ -165,7 +165,7 @@ namespace RTE {
 						set("legal: the survivors leave to the landing with 'The host left the match'", "R1-392ii");
 						x.notWalked = "no in-process lever fails a migration short of losing every successor";
 						break;
-					case Event::SuccessorLost: set("subhost=3", "DESIGN-MIGRATION"); break;
+					case Event::SuccessorLost: set("sub=unreachable subhost=1", "R6-sss"); break;
 					case Event::MigrationBegin: set("sub=run subhost=2", "DESIGN-MIGRATION"); break;
 					case Event::HostLost: set("sub=run subhost=2", "R1-392ii"); break;
 					case Event::HostGoodbye:
@@ -608,7 +608,10 @@ namespace RTE {
 				return false;
 			}
 			if (key == "holds") return value == "0" ? o.holds == 0 : value == ">0" ? o.holds > 0 : false;
-			if (key == "sub") return value == "run" ? o.sub == "run" : value == "over" ? o.sub == "stopped:Complete" : value == "ended" ? o.sub != "run" && o.sub != "migrating" : false;
+			if (key == "sub") {
+				if (value == "unreachable") return o.sub == "stopped:PeerHeld";
+				return value == "run" ? o.sub == "run" : value == "over" ? o.sub == "stopped:Complete" : value == "ended" ? o.sub != "run" && o.sub != "migrating" : false;
+			}
 			if (key == "subhost") return std::to_string(o.subHost) == value;
 			if (key == "api") return value == "ok" ? o.api == "ok" : value == "refused" ? o.api.rfind("refused", 0) == 0 : false;
 			return false;
@@ -1039,14 +1042,6 @@ namespace RTE {
 			played.peerCount = 4;
 			played.hostPeerId = 1;
 			played.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 1, false, "Two"}, NetMatchPlayerSlot{3, 2, false, "Three"}, NetMatchPlayerSlot{4, 3, false, "Four"}};
-			NetLockstepSeatSnapshot seats;
-			for (uint8_t peer = 1; peer <= 4; ++peer) {
-				NetSeatPresenceEntry entry;
-				entry.stableSeat = peer;
-				entry.peerId = peer;
-				entry.state = peer == 2 || peer == 4 ? NetSeatPresenceState::Disconnected : NetSeatPresenceState::Present;
-				seats.seats.push_back(entry);
-			}
 			NetMatchConfig derived;
 			std::string deriveError;
 			if (!NetMatchConfigUtil::DeriveRematchConfig(played, derived, &deriveError)) {
@@ -1171,7 +1166,7 @@ namespace RTE {
 		};
 		const auto P = [](State s, Event e) { return std::make_pair(s, e); };
 		const Row kick{"service_kick", &TestServiceKick}, moderation{"lobby_moderation_rows", &TestLobbyModerationRows}, kickedOpen{"kicked_seat_reads_open", &TestKickedSeatReadsOpen};
-		const Row linkless{"a_linkless_member_is_held_by_the_start", &TestALinklessMemberIsHeldByTheStart}, lobbyHold{"a_rematch_lobby_holds_a_dropped_seat", [](std::string* error) { return TestARematchLobbyHoldsADroppedSeat(error, true, false); }};
+		const Row linkless{"a_linkless_member_is_held_by_the_start", &TestALinklessMemberIsHeldByTheStart}, lobbyHold{"a_rematch_lobby_holds_a_dropped_seat", [](std::string* error) { return TestARematchLobbyHoldsADroppedSeat(error, true, false, false); }};
 		const Row abandoned{"a_lobby_drops_an_abandoned_transfers_tail", &TestALobbyDropsAnAbandonedTransfersTail}, laterLobby{"a_later_lobbys_transfer_is_new_to_its_peers", &TestALaterLobbysTransferIsNewToItsPeers};
 		const Row traffic{"lobby_traffic_keeps_a_host_link_alive", &TestLobbyTrafficKeepsAHostLinkAlive}, startHeld{"a_start_held_seats_return_completes", &TestAStartHeldSeatsReturnCompletes};
 		const Row knocking{"a_seat_knocking_while_the_round_forms_is_answered", &TestASeatKnockingWhileTheRoundFormsIsAnswered}, queued{"a_queued_return_leaves_a_later_hold", &TestAQueuedReturnLeavesALaterHold};

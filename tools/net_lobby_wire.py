@@ -7,6 +7,7 @@ import re
 
 LOBBY_HEADER = "Source/Network/NetLobbyProtocol.h"
 CONFIG_HEADER = "Source/Network/NetMatchConfig.h"
+SESSION_HEADER = "Source/Network/NetProtocol.h"
 # An integer literal with its C++ suffix; anything else (an expression, another constant) is not a wire value.
 LITERAL = r"(0[xX][0-9a-fA-F]+|\d+)[uUlL]*"
 
@@ -84,3 +85,11 @@ def read(repo):
         relay_layout_version=_constant(config, CONFIG_HEADER, config_start, config_body, 'NetMatchConfigUtil', 'c_RelayLayoutVersion'),
         seat_roster_version=_constant(config, CONFIG_HEADER, config_start, config_body, 'NetMatchConfigUtil', 'c_SeatRosterVersion'),
         default_slow_bound=_constant(config, CONFIG_HEADER, config_start, config_body, 'NetMatchConfigUtil', 'c_DefaultSlowPlayerBoundTicks'))
+
+
+def session_protocol(repo):
+    """The session protocol a host on this tree speaks: what a refused peer is told the host runs."""
+    path = Path(repo) / SESSION_HEADER
+    text = path.read_text(encoding="utf-8")
+    start, body = _scope(text, SESSION_HEADER, r"(?m)^[ \t]*class\s+NetProtocol\b[^;{]*\{", "class NetProtocol")
+    return _constant(text, SESSION_HEADER, start, body, "NetProtocol", "c_Version")

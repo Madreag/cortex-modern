@@ -1,6 +1,7 @@
 #pragma once
 
 #include "NetDirectoryClient.h"
+#include "GnsTransport.h"
 #include "NetLanDiscovery.h"
 #include "NetLobbySnapshot.h"
 #include "NetMatchReplay.h"
@@ -442,6 +443,8 @@ namespace RTE {
 		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
 		/// A completed tick's committed frame joins the catch-up history a returner replays; a paused tick's too.
 		void AppendCommittedJoinFrame(uint64_t tick);
+		/// Lets the round's return history go below the oldest frame a returner may still be served from.
+		void PruneReturnHistory(uint64_t tick);
 		void AutosaveAtTickBoundary(uint64_t tick);
 		bool CaptureFullStateHash(uint64_t tick, uint64_t round, const std::string& dumpDirectory, const std::string& label = "");
 		/// One entry of the checkpoint schedule on the committed stream.
@@ -461,6 +464,7 @@ namespace RTE {
 			bool startupPending = false; //!< Host: the round's agreed first frame is still ahead.
 			bool ownSeatHeld = false; //!< Host: its own seat is held, so what it sends rides no frame the round plays.
 			bool manualRequested = false; //!< Host: the host asked to save the match and no capture has taken the ask yet.
+			bool hostProvisional = false; //!< Host: it reaches no majority, so its play may not be the match's and nothing is written.
 		};
 		struct AutosaveTickOutput {
 			bool capture = false; //!< This peer captures at this tick.
@@ -470,6 +474,7 @@ namespace RTE {
 			bool manualSaved = false; //!< Host: every writer of the capture it asked for has reported.
 			size_t manualReported = 0; //!< Host: how many writers reported that capture.
 			size_t manualWriters = 0; //!< Host: how many writers it named for it.
+			bool manualRefused = false; //!< Host: the ask came while its play was provisional; nothing is saved.
 		};
 		/// The checkpoint schedule at one tick boundary, with the capture and the stream left to the caller.
 		/// Every peer captures at each tick the host names; the host names the next one only once every
@@ -671,6 +676,15 @@ namespace RTE {
 		/// A held rejoin whose host never answered its handshake asks that host again: a host that does not answer one dial is not shown
 		/// gone, and the peers that host nothing are never dialled for it.
 		static bool HeldRejoinRetriesTheHost(bool lostDuringSetup, bool hasReject, NetRejectReason reason, const std::string& rejectSummary);
+		/// A held rejoin's next step after an attempt failed with its host still there: ask that host again after the seat roster's
+		/// backoff, or stop and say why - a final answer (the seat given away, the player removed or banned, the session over) or the
+		/// roster's bound of failed returns reached.
+		struct HeldRejoinStep {
+			bool retry = false;
+			uint32_t delayMs = 0;
+			std::string stop;
+		};
+		static HeldRejoinStep NextHeldRejoinStep(uint8_t failedAttempts, bool hasReject, NetRejectReason reason, const std::string& rejectText);
 		static bool RematchLossReturnsThroughRejoin(bool isHost, bool hostEndedMatch, bool rosterRefused, bool sessionReady, bool hasReject, NetRejectReason reason, bool linkLost,
 		                                            bool startNeverCame, bool heldAtStart);
 		/// Client: the last rematch setup lost its link to the host and the seat is owed its return to the round the host plays.
@@ -685,6 +699,8 @@ namespace RTE {
 		static bool PrivateBaseRefreshDue(bool seatHeld, uint64_t staleFrom, uint64_t baseTick, double steadyCaptureMs);
 		/// The median of the given capture costs, or -1 when there are none.
 		static double SteadyCaptureMs(const std::deque<double>& costs);
+		/// Whether a host's roster names a player besides the host still connected, who plays on under a new host when the host goes.
+		static bool MatchPlaysOnUnderANewHost(const NetSeatRoster& roster);
 		/// Whether the round's goodbye is owed to a ready seat at the round's end: one the round does not use, or one still under the AI at its last frame.
 		static bool EndedRoundOwesGoodbye(bool coordinatorUsesPeer, bool seatUnderAIAtEnd);
 		/// Whether an ended round holds its record back from a held seat until that seat asks for its final tail; a seat whose rejoin
@@ -697,16 +713,48 @@ namespace RTE {
 		/// Runs the mid-match session upkeep: drains the reconnect-handshake events the coordinator
 		/// handed over, and (host) turns a newly Ready session peer into a resync-for-rejoin.
 		void PumpSessionEvents();
-		/// Consumes the host's current seat snapshot on the game thread.
-		void PumpSeatPresence();
+		/// Reads the session's seat roster on the game thread into the seat views every seat label, toast and report line comes from.
+		void PumpSeatViews();
+		/// While the fake link adds an effect, prints what it did to this peer's received packets in the running round, every two seconds.
+		void ReportFakeLinkEffects();
+		/// The moderation state a host hands over, as JSON: each held seat with its cause, each ban and each ticket, by digest. Live: this host's
+		/// roster now. Carried: the state in the last handover capsule this peer opened.
+		std::string GetModerationSnapshotState(bool carried) const;
+		/// Who holds which world seat, as JSON, read from the roster and the world's slots for a probe's dump: the world's seats and
+		/// watchers, this peer's ticket and the seat its slot is, whether it received the world's image, and on the host the last
+		/// slot it freed and the watcher it promoted into it, with whether the host's own removal freed it.
+		std::string GetWorldOwnershipFacts() const;
+		/// That state of one roster and its ban list.
+		static std::string ModerationStateOf(const NetSeatRoster& roster);
 		/// The reconnect UX state machine (§11): auto-retry, the stored-ticket offer and the roster's
 		/// dropped/reclaiming marks. Game-thread only.
 		NetReconnectUx& GetReconnectUx() { return m_ReconnectUx; }
 		const NetReconnectUx& GetReconnectUx() const { return m_ReconnectUx; }
 		/// Reads the cached moderation view; actions require a running match on the game thread.
 		std::vector<NetH4ModerationSeat> GetModerationSeats() const;
-		/// The seat-presence plane — where dropped seats get their reclaim-hold marks.
-		const NetSeatPresence& GetSeatPresence() const { return m_SeatPresence; }
+		/// The digest a player's stable identity is reported as, in the moderation state and its receipts.
+		static std::string IdentityDigest(uint64_t id);
+		/// The frame the host's last removal took effect at.
+		uint64_t GetLastRemovalBoundary() const;
+		/// This peer's own removal by the host: why, and the frame it took effect at.
+		struct OwnRemoval {
+			NetRejectReason reason = NetRejectReason::InternalError;
+			uint64_t boundary = 0;
+		};
+		std::optional<OwnRemoval> GetOwnRemoval() const;
+		/// One seat as the session's roster has it - the host's own, or a client's copy of it.
+		struct SeatView {
+			uint8_t peerId = 0;
+			uint16_t stableSeat = 0;
+			uint32_t revision = 0; //!< The roster revision the view was read from.
+			NetRosterSeat seat;
+			std::string name;
+			std::string state; //!< A report's word for the seat: "Present", "Held", "Reconnecting" or "Left".
+			std::string line;  //!< "name: label" while the seat is not plainly played; empty otherwise.
+		};
+		/// The seat views, by lockstep peer; empty before any roster is heard.
+		std::map<uint8_t, SeatView> GetSeatViews() const;
+		std::optional<SeatView> GetSeatView(uint8_t peerId) const;
 		NetH4ModerationResult ApplyModeration(const NetModerationSelection& selection, NetModerationAction action);
 		/// Host: close this holder without a reclaim hold. The host confirmation dialog calls this.
 		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action);
@@ -720,9 +768,17 @@ namespace RTE {
 		/// Re-enters the match this process was dropped from, using the stored recovery record.
 		bool BeginTicketRejoin(std::string* error = nullptr);
 		bool BeginHeldRejoin(std::string* error = nullptr);
-		/// Held client: its rejoin found the host gone, so it rejoins the next peer the match's successor order names.
-		/// @return Whether an attempt started; false when the failure was not the host's departure or no successor is left.
+		/// Held client: its rejoin failed. A host that is gone sends the seat to the next peer the match's successor order names; a host
+		/// still there is asked again after the seat roster's backoff, armed here and begun by PumpHeldRejoin, never slept on.
+		/// @return Whether an attempt started or is armed; false when the rejoin ends, the reason in the status text.
 		bool BeginHeldRejoinOnNextHost(std::string* error = nullptr);
+		/// Held client: begins an armed retry of its host once the backoff is over.
+		/// @return Whether a retry is armed or has just begun.
+		bool PumpHeldRejoin(std::string* error = nullptr);
+		/// While this held seat waits for a host no majority can replace: what it waits for, in the player's words; empty otherwise.
+		std::string GetHostUnreachableLine() const;
+		/// The held seat's player leaves the wait: the seat and its ticket stay theirs, and the landing offers Rejoin Match.
+		void LeaveHeldWait();
 		/// How far every rejoin this host is serving has come: its admission, its phase, the image staged for
 		/// it, the transfer it has acknowledged and the tail it has consumed. The goodbye drain watches this
 		/// beside the round's own progress, because a rejoin commits no frame until it is back in the round.
@@ -773,6 +829,19 @@ namespace RTE {
 		/// the seat's lockstep id - a promoted watcher plays on a slot its own seat does not name, so
 		/// a leftover row naming that id would release whoever holds it next.
 		static bool FindWorldCleanLeave(const std::vector<NetH4SeatStatus>& statuses, const NetWorldJoinHost& world, WorldCleanLeave& outLeave);
+		/// A world slot the host freed or a watcher it promoted into one, for the ownership receipts.
+		struct WorldSeatChange {
+			uint8_t peerId = 0;                          //!< The slot's lockstep id.
+			uint16_t freedSeat = 0;                      //!< The admission seat the slot was bound to when it was freed.
+			uint16_t watcherSeat = 0;                    //!< A promotion's watcher: its own admission seat.
+			NetPeerId connection = c_InvalidNetPeerId;   //!< A promotion's watcher connection.
+			uint64_t frame = 0;                          //!< The frame the slot was freed, or the activation a promotion announced.
+			bool hostAuthorized = false;                 //!< The host's own removal of the seat's player freed it.
+		};
+		/// Records a freed world slot; the host's removal (a kick, a ban, a release) is what authorizes a later promotion into it.
+		void NoteWorldReleaseLocked(const std::vector<NetH4SeatStatus>& statuses, uint8_t peerId, uint16_t stableSeat, uint64_t frame);
+		/// Records the watcher promoted into the last freed slot.
+		void NoteWorldPromotionLocked(NetPeerId connection, uint64_t activation);
 		/// A slot whose seat the AI holds while its player closed that seat by leaving: the member chose to go, so the seat is
 		/// released (the AI keeps its units) and the slot opens for a new join. A seat still committed, dropped or mid-reclaim
 		/// is still its member's. The departed returner's bootstrap, if any is left, is named in the result.
@@ -784,6 +853,9 @@ namespace RTE {
 		/// A held slot whose seat the AI plays waits for its own player the same way.
 		static std::vector<uint8_t> WorldReclaimHoldSlots(const std::vector<NetH4SeatStatus>& statuses, const NetWorldMembership& membership,
 		                                                  const std::set<uint8_t>& aiHeldPeers = {});
+		/// Binds every seat the roster has seated, and is not bringing in through the world's image, to its own slot: a member seated
+		/// in the lobby before the round started holds its slot as a member that joined later does. Returns how many it bound.
+		static size_t BindSeatedWorldMembers(const std::vector<NetH4SeatStatus>& statuses, const NetSeatRoster& roster, NetWorldMembership& membership);
 		/// The sim id and team the holder of an admission seat plays on. The world plane owns that
 		/// answer: a member plays the slot its seat is bound to, whatever id its seat table names.
 		/// An unbound seat is not the world's, so the caller keeps the seat's own pair.
@@ -794,6 +866,11 @@ namespace RTE {
 		/// Ends the joiner's catch-up the moment its own coordinator runs: the round owns the wire and
 		/// the pacing from there. Returns whether this call released it.
 		static bool ReleaseWorldCatchUpOnceRunning(bool coordinatorRunning, NetWorldCatchUpClient& catchUp);
+		static constexpr double c_InPlaceReturnWindowMs = 300000.0; //!< How long after its hold a seat may still come back holding its own state.
+		/// The oldest frame a returner arriving now could be served from, from its parts: the base it would get (none when it would take a new
+		/// one), the returns under way and the holds.
+		static uint64_t ReturnHistoryFloor(uint64_t tick, std::optional<uint64_t> servedBaseTick, const std::vector<NetWorldJoinSession>& sessions,
+		                                   const std::map<uint8_t, NetGameSeatHold>& holds, double tickMs);
 		static bool ReadCommittedJoinFrame(const NetLockstepCoordinator& coordinator, uint64_t tick, NetLockstepReadyFrame& ready);
 		/// The image one finished archive describes. An entry the writer has not filled yields an
 		/// image that is not valid, so nothing is published for it.
@@ -875,6 +952,8 @@ namespace RTE {
 		/// Proves the keepalive keeps ticking through a load that runs off the service lock.
 		bool RunSnapshotLoadKeepaliveSelfTest(std::string* error);
 		std::string BuildReportJson() const;
+		/// What the world's joins, history, images and transfers hold, as counts and bytes, for the memory census.
+		std::string MemoryCensus() const;
 		/// Builds the match roster from the request. An empty scene keeps MakeDefault unless the caller
 		/// already resolved one; a named scene overwrites the default after any launch-config rules.
 		static bool BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId, NetMatchConfig& outConfig, std::string* error = nullptr);
@@ -949,6 +1028,12 @@ namespace RTE {
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest, NetIdentityBuildOptions identityOptions);
 		void DriveWorldJoins(uint64_t nowMs);
 		void DrivePrivateMatchRejoins(uint64_t nowMs);
+		/// Host: the seat roster's return phases from the round - a returner's world in, its seat playing at a committed frame, its
+		/// transfer abandoned.
+		void FeedRosterReturnsLocked();
+		/// Host: whether a held seat's connected holder may begin a return now. A return the roster failed is offered again only after
+		/// its backoff and under its bound; past the bound the holder is told why, once.
+		bool RosterOffersReturnLocked(uint8_t lockstepPeerId, NetPeerId holder);
 		/// Host: publishes the earliest activation told to a returner and not yet scheduled, for the autosave schedule.
 		void NoteAnnouncedActivationsLocked();
 		/// Moves a returning seat's activation to the first frame the agreed park cannot reach and tells the returner.
@@ -965,18 +1050,15 @@ namespace RTE {
 		void AnswerStalledReturnersLocked(uint64_t nowMs);
 		bool PrivateReturnerInFlightLocked() const;
 	public:
-		enum class LoneElection { EndMatch, RejoinHost, HostForHeldSeats };
-		/// What a survivor that finds no other live member does: an announced leave ends its match, a lost host with a held
-		/// seat in the round is replaced by this peer so the held seats rejoin it, and a lost host with none is rejoined.
+		enum class LoneElection { EndMatch, RejoinHost, HostAlone };
+		/// What a survivor that published a handover alone does: the host's leave record ends its match; otherwise its quorum (the
+		/// two-seat exception, or every other connected seat gone or held) lets it host, and the held seats rejoin it.
 		/// liveMembersUnheard: the round had other live members, neither held nor gone, and none answered - this peer is the one cut off.
-		static LoneElection LoneElectionOutcome(bool hostAnnounced, bool heldSeats, bool liveMembersUnheard);
+		static LoneElection LoneElectionOutcome(bool hostAnnounced, bool liveMembersUnheard);
 		/// Whether a held seat's host is gone: the host ended or timed out its link (the transport's verdict), or the seat heard nothing
-		/// at all from it for the silence bound. Its own transport stopping is not the host's doing, and a seat told to come back through
-		/// the image has a host that answered.
-		static bool HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool ownStop, bool imageRejoin, uint64_t hostSilentMs, uint64_t silenceBoundMs);
-		/// The silence bound of a seat catching up in place: its host acks or feeds it every tick, so the link's own timeout, counted from
-		/// the host's last word, lands on every held seat together however busy each seat's own link is.
-		static uint64_t HeldSeatSilenceBoundMs() { return c_NetLinkTimeoutMs; }
+		/// at all from it past the host-loss bound for its round trip (NetHostLinkLost, the round's own reading). Its own transport
+		/// stopping is not the host's doing, and a seat told to come back through the image has a host that answered.
+		static bool HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool ownStop, bool imageRejoin, uint64_t hostSilentMs, uint64_t hostRttMs);
 		/// Where a held seat's catch-up goes when its host is gone, from the match's successor order, the peers it can dial in that
 		/// order and the seats it knows are held. Returns the peers to dial; empty when this seat hosts the match itself.
 		static std::vector<uint8_t> HeldSuccessionRoutes(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer,
@@ -1024,6 +1106,9 @@ namespace RTE {
 		std::set<uint8_t> HeldSurvivorsLocked() const;
 		/// Held client, host gone: keeps only the routes its catch-up moves to; returns whether this seat hosts the match itself.
 		bool HeldSeatHostsLocked();
+		/// The human seats of the round: a held seat hosts alone only when it and the lost host are all of them.
+		size_t HumanSeatCountLocked() const;
+		std::string m_HeldUnreachableText; //!< Held client: why it waits for its host instead of hosting, for the screen.
 		/// Held client: opens the match's published listener for the held seats that may dial this one.
 		bool OpenHeldListenerLocked();
 		/// Held client moving to a successor: sends it the lost host's frames this seat replayed, then a record of no bytes that ends them.
@@ -1213,11 +1298,13 @@ namespace RTE {
 		bool HostOptionsNeedCorrectionLocked() const;
 		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);
 		friend bool TestResumePreparesTheAgreedLobby(std::string* error);
+		friend bool TestWrittenConfigsHoldNoRelayLogin(std::string* error);
 		friend bool TestRosterTransitionsRecordHoldThenPresent(std::string* error);
 		friend bool TestRosterBannerNamesThePlayerOnce(std::string* error);
 		friend bool TestAiOnlyHostSeatsNoJoiner(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestLobbyTrafficKeepsAHostLinkAlive(std::string* error);
+		friend bool TestAJoinedRoundGivesTheSessionItsTraffic(std::string* error);
 		friend bool TestALinkClosedForTheImageKeepsTheSeatAtTheRematch(std::string* error);
 		friend bool TestServiceKick(std::string* error);
 		friend bool TestServiceKickRejoin(std::string* error);
@@ -1256,6 +1343,7 @@ namespace RTE {
 		friend bool TestWorldCaptureKeepsOneImageInFlight(std::string* error);
 		friend bool TestALostCaptureIsNamedAgain(std::string* error);
 		friend bool TestAHostsLostOwnReportDoesNotStopTheSchedule(std::string* error);
+		friend bool TestAProvisionalHostWritesNothing(std::string* error);
 		friend bool TestNoCaptureIsNamedOverAPendingActivation(std::string* error);
 		friend bool TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(std::string* error);
 		friend bool TestPeersCheckpointTheSameTicks(std::string* error);
@@ -1265,6 +1353,8 @@ namespace RTE {
 		friend bool TestAHealNamesTheNextCaptureAfresh(std::string* error);
 		friend bool TestAHealNamesACheckpointEveryPeerHolds(std::string* error);
 		friend bool TestAStuckPrivateImageIsRetakenOnceThenRefused(std::string* error);
+		friend bool TestAPrivateReturnFollowsTheRoundOnTheRoster(std::string* error);
+		friend bool TestAHeldRejoinAsksItsHostAgainOffTheGameThread(std::string* error);
 		friend bool TestWorldReturnWatchKeysOnWorldId(std::string* error);
 		friend bool TestTheGoodbyeEndsWithItsRound(std::string* error);
 		friend bool TestAnOwnSideErrorKeepsTheSeatsReconnect(std::string* error);
@@ -1306,7 +1396,12 @@ namespace RTE {
 		/// recovery record (P22), then clears the registry, the ledger and the seats. Caller holds the lock.
 		void EndAdmissionSession();
 		void ResetRosterTransitionHistory();
-		void RecordRosterTransitions(uint64_t observedAtMs);
+		/// Reads the session's roster into the seat views, then records what moved. Caller holds the lock.
+		void RefreshSeatViewsLocked(uint64_t observedAtMs);
+		/// One seat's view: the roster's name for its holder first, then the caller's.
+		static SeatView BuildSeatView(uint8_t peerId, uint16_t stableSeat, uint32_t revision, const NetRosterSeat& seat, const std::string& name);
+		/// The toasts, the transition log and the summary counts from what moved since the previous views.
+		void RecordRosterTransitions(const std::map<uint8_t, SeatView>& previous, uint64_t observedAtMs);
 		/// Publishes a successful local host action to the presentation sink; caller holds the lock.
 		void RecordModerationAction(uint16_t stableSeat, NetModerationAction action);
 		/// Runs the §11 automatic-retry schedule from the service's own state. Game thread only.
@@ -1393,6 +1488,7 @@ namespace RTE {
 		bool m_IdentityPending = false;
 		bool m_IsHost = false;
 		uint8_t m_LocalPeerId = 0;
+		uint8_t m_WorldJoinerSeatPeer = 0; //!< A world's joiner: the lockstep peer of the seat its ticket names, read on the thread that pumps its session.
 		int m_LocalTeam = -1;
 		bool m_Dedicated = false;
 		int m_HumanSeats = 0;
@@ -1450,7 +1546,7 @@ namespace RTE {
 		NetLobbySnapshot m_LobbySnapshot;
 		std::optional<NetMatchSummary> m_LastMatchSummary;
 		NetMatchSummary m_CurrentMatchSummary;
-		std::map<uint8_t, NetSeatPresenceEntry> m_SummarySeats;
+		std::map<uint8_t, SeatView> m_SummarySeats;
 		NetSeatAuthRegistry m_SeatAuth; //!< Hosted-session reconnect-auth material (off-sim epoch + seat credentials); survives resync/rejoin/rematch.
 		// The admission plane lives on the service, not on a session or a match round, so a seat and its
 		// ledger survive resync, rejoin and rematch exactly as the registry does (§3).
@@ -1460,7 +1556,16 @@ namespace RTE {
 		NetParticipantIdentityStore m_ParticipantStore;
 		NetHostBanStore m_BanStore;
 		NetReconnectUx m_ReconnectUx;
-		NetSeatPresence m_SeatPresence;
+		std::map<uint8_t, SeatView> m_SeatViews; //!< Every seat label's source: the session's roster, read each pump.
+		uint64_t m_FakeLinkRound = 0;            //!< The round the fake link's counts are measured from.
+		NetFakeLinkEffects m_FakeLinkBaseline;   //!< The counts when that round began.
+		uint64_t m_FakeLinkReportedAtMs = 0;
+		std::string m_CarriedModerationState;      //!< The moderation state of the last handover capsule opened.
+		std::optional<WorldSeatChange> m_LastWorldRelease;   //!< Host: the world slot it last freed.
+		std::optional<WorldSeatChange> m_LastWorldPromotion; //!< Host: the watcher it last promoted into a freed slot.
+		uint64_t m_LastReturnHistoryFloor = 0;               //!< The oldest frame a returner may still be served from, as last pruned to.
+		mutable std::pair<uint32_t, size_t> m_LiveModerationKey{UINT32_MAX, 0}; //!< The roster revision and ban count the cached live state was read at.
+		mutable std::string m_LiveModerationState;
 		struct RosterTransition {
 			uint8_t peerId = 0;
 			std::string state;
@@ -1688,6 +1793,7 @@ namespace RTE {
 		std::atomic<bool> m_ManualSaveFailed = false; //!< Host: its last ask was not saved.
 		std::atomic<int64_t> m_LastMatchSaveTime = 0; //!< When this peer's writer last archived a checkpoint of this match.
 		uint64_t m_WorldCaptureRequestedTick = 0; //!< The tick a bootstrap already asked a capture at.
+		std::map<uint64_t, std::string> m_WorldImageSideStates; //!< A world host's lockstep state at each capture tick, until that capture's image is published.
 		bool m_WorldCapturePending = false;
 		bool m_WorldSpectatorDeclinesPromotion = false; //!< This watcher's own choice, as it last sent it.
 		bool m_LastJoinTargetPersistentWorld = false;
@@ -1695,7 +1801,8 @@ namespace RTE {
 		bool BeginTicketRejoinOnRoute(std::string* error, const NetMatchServiceRequest* liveRoute);
 		/// Held client: the hosts its rejoin may still find when its own is gone, in the match's published successor order.
 		std::deque<NetMatchServiceRequest> m_HeldRejoinRoutes;
-		uint32_t m_HeldRejoinHostRetryMs = 0; //!< The backoff before the next dial of a host that did not answer a held rejoin.
+		uint8_t m_HeldRejoinFailedAttempts = 0; //!< The attempts of this held rejoin that failed with its host still there.
+		uint64_t m_HeldRejoinRetryAtMs = 0;     //!< When the armed retry of the host begins; 0 when none is armed.
 		uint64_t m_HeldRejoinPriorInput = 0;
 		std::string m_HostEndReason; //!< The host's End Match reason while its round plays to the agreed end frame.
 		bool m_HeldRejoinDriving = false; //!< The held seat's rejoin loop owns the attempts until a launch or its last failure.
@@ -1703,10 +1810,6 @@ namespace RTE {
 		bool m_RematchReturnOwed = false; //!< Client: the last rematch setup lost its link and the seat returns through the rejoin.
 		bool m_LeftRoundHeld = false; //!< Client: this round ended while the seat was held, on the record the host sent it.
 		uint32_t m_ReconnectRouteTurn = 0; //!< Alternates the reconnect prompt's attempts between the ticket's host and the successors.
-		uint8_t m_ElectionHostPeer = 0; //!< Client: the round's host as last seen before an election.
-		uint64_t m_HostSilenceAtElectionMs = UINT64_MAX; //!< Client: how long that host was quiet when its election began.
-		/// A host heard this close to its election announced its leave; a lost one is silent for the host-silence bound (500 ms or more).
-		static constexpr uint64_t c_HostAnnouncedSilenceMs = 250;
 		bool m_RejoinOfRunningMatch = false; //!< Client: this service is rejoining the match it was playing, so its seat committed frames.
 		bool m_HostEndedTheMatch = false; //!< Client: the host left a match this seat finished; it lands and nothing reconnects.
 		/// Client: the host ended the match by leaving it; the ticket goes and no reconnect is offered or driven.
@@ -1774,6 +1877,8 @@ namespace RTE {
 		std::deque<double> m_PrivateCaptureCosts; //!< Host: the last three capture costs past the round's first, which the refresh rule reads.
 		bool m_PrivateCaptureCold = false; //!< Host: the capture in flight is the round's first, whose one-time warm-up is not the steady cost.
 		static constexpr uint64_t c_PrivateImageMinIntervalMs = 10000; //!< The shortest wall gap between two captures.
+		/// The oldest frame a returner arriving now could be served from: the base it would get, every return under way, every recent hold.
+		uint64_t ReturnHistoryFloorLocked(uint64_t tick, uint64_t nowMs) const;
 		static constexpr uint64_t c_PrivateImageWaitMs = 20000; //!< How long a returning seat waits on one capture's writer.
 		bool m_PrivateImageRecapture = false; //!< Host: the next pass takes a fresh base; the stuck writer was abandoned.
 		bool m_PrivateImageRecaptured = false; //!< Host: this wait already took its one fresh base.

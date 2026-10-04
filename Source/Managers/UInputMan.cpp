@@ -367,7 +367,7 @@ void UInputMan::StartJoystickUpdater() {
 	static const bool stopAtExit = std::atexit(StopJoystickUpdater) == 0;
 	(void)stopAtExit;
 	s_JoystickUpdaterStop = false;
-	const char* rescanText = std::getenv("CCCP_FORCE_HID_RESCAN_MS");
+	const char* rescanText = std::getenv("CCCP_TEST_HID_RESCAN_MS");
 	const uint64_t rescanMS = rescanText ? std::strtoull(rescanText, nullptr, 10) : 0;
 	s_JoystickUpdater = std::thread([rescanMS]() {
 		uint64_t nextRescan = rescanMS ? SDL_GetTicks() + rescanMS : 0;

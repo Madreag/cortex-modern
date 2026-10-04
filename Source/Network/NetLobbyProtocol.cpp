@@ -689,7 +689,7 @@ namespace RTE {
 		}
 
 		bool RefuseOversizePeerId(uint8_t peerId, size_t offset, NetLobbyError* error) {
-			if (peerId > NetLobbyProtocol::c_MaxPeers) {
+			if (peerId > NetLobbyProtocol::c_MaxPeers && (peerId < NetLobbyProtocol::c_FirstWatcherPeer || peerId > NetLobbyProtocol::c_LastWatcherPeer)) {
 				SetError(error, NetLobbyErrorCode::InvalidValue, offset, "peer id is invalid");
 				return false;
 			}

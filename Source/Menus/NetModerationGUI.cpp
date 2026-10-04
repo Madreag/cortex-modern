@@ -239,15 +239,21 @@ namespace {
 
 	// A seat's own state names the seat; only a toast about an action names who did it.
 	bool ToastNamesTheSeat(const std::string& kind) { return kind == "seat_held"; }
-	bool ToastNamesNobody(const std::string& kind) { return kind == "slow_machine"; }
+	bool ToastNamesNobody(const std::string& kind) { return kind == "slow_machine" || kind == "catch_up"; }
+
+	// The roster names this machine's own seat held or rejoining until the host says it is back.
+	bool OwnRosterSeatHeld() {
+		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+		return std::any_of(snapshot.members.begin(), snapshot.members.end(), [&snapshot](const auto& member) {
+			return member.peerId == snapshot.localPeerId && !member.cpu && (member.aiHeld || member.reclaiming) && !ScenarioRunner::IsLockstepSeatReleased(member.peerId);
+		});
+	}
 
 	bool ToastStillApplies(const ScenarioRunner::NetUiToastRecord& toast) {
 		if (toast.kind == "slow_machine") return ScenarioRunner::IsLockstepLocalMachineSlow();
 		if (toast.kind != "seat_held") return true;
 		if (toast.text.find("rejoining") != std::string::npos) {
-			const uint8_t local = ScenarioRunner::GetLockstepLocalPeerId();
-			return ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing() ||
-			    (local != 0 && ScenarioRunner::IsLockstepSeatUnderAI(local, ScenarioRunner::GetLockstepCompletedFrame()) && !ScenarioRunner::IsLockstepSeatReleased(local));
+			return ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing() || ScenarioRunner::IsLockstepOwnSeatHeld() || OwnRosterSeatHeld();
 		}
 		const uint8_t peer = toast.senderPeerId ? toast.senderPeerId : ScenarioRunner::GetLockstepLocalPeerId();
 		return ScenarioRunner::IsLockstepSeatUnderAI(peer, ScenarioRunner::GetLockstepCompletedFrame());
@@ -261,8 +267,9 @@ namespace {
 			const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 			const auto member = std::find_if(snapshot.members.begin(), snapshot.members.end(), [&](const auto& row) { return row.peerId == sender; });
 			const std::string state = member != snapshot.members.end() ? NetPlayerPresentation::State(*member) : std::string("Held - AI in control");
+			const bool joining = member != snapshot.members.end() && member->joining;
 			return NetPlayerPresentation::Name(sender, g_NetMatchService.GetPeerDisplayName(sender)) + ": " +
-			    (toast.text.find("rejoining") != std::string::npos ? "Held - AI in control - rejoining" : state);
+			    (toast.text.find("rejoining") != std::string::npos ? (joining ? "Held - AI in control - joining" : "Held - AI in control - rejoining") : state);
 		}
 		if (toast.kind == "resumed" && sender == 0) {
 			const auto& events = ScenarioRunner::GetNetUiToastLog();
@@ -657,7 +664,8 @@ void NetModerationGUI::Refresh() {
 		const auto& seat = m_Model.GetRow(row);
 		controls.name->SetText(WrapText(m_LabelFont, FitTokens(m_LabelFont, "Seat " + std::to_string(seat.stableSeat) + "  /  " + DisplayName(NetPlayerPresentation::Name(seat.lockstepPeerId, seat.view.displayName)), controls.name->GetWidth()), controls.name->GetWidth()));
 		const std::string cause = NetModerationUx::HoldCause(seat.view);
-		controls.detail->SetText(NetPlayerPresentation::State(seat.lockstepPeerId, false, seat.view.dropped, seat.view.reclaiming) + (cause.empty() ? "" : "  /  " + cause));
+		controls.detail->SetText(NetPlayerPresentation::State(seat.lockstepPeerId, false, seat.view.dropped, seat.view.reclaiming) + (cause.empty() ? "" : "  /  " + cause) +
+		                         (seat.view.joinProgress.empty() ? "" : "  /  " + seat.view.joinProgress));
 		controls.applicant->SetText(DisplayName(seat.applicantText));
 		controls.applicant->SetEnabled(seat.view.actionsAvailable && (seat.applicants > 1 || (seat.applicants && seat.applicant == c_InvalidNetPeerId)));
 		for (size_t action = 0; action < controls.actions.size(); ++action) {
@@ -911,6 +919,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		rect(backbuffer, kept.x, kept.y, kept.x + kept.width - 1, kept.y + kept.height - 1, makeacol32(59, 65, 83, 255));
 		hline(backbuffer, kept.x + 1, kept.y + 1, kept.x + kept.width - 2, waiting ? makeacol32(170, 120, 0, 255) : makeacol32(108, 118, 168, 255));
 		m_NetStatus->Draw(&bitmap, false);
+		m_StatusWrap = m_StatusLayoutWrap;
 		RecordStatusObservation(snapshot, hostLost, currentWaitMs);
 	};
 	if (backbuffer->h < c_CompactMaxHeight && (m_Open || !g_SettingsMan.GetNetworkShowDiagnostics())) {
@@ -1012,6 +1021,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		checkKept(stripKept, stripKeptText);
 		m_StatusLayoutKey = stripKey;
 		m_StatusLayoutRect = m_StatusRect;
+		m_StatusLayoutWrap = {};
 		RecordStatusObservation(snapshot, hostLost, currentWaitMs);
 		return;
 	}
@@ -1053,7 +1063,8 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 			for (const auto& member: snapshot.members) {
 				if (member.cpu) continue;
 				composed += "\nP" + std::to_string(member.peerId) + ": Ping " + ((hostLost && member.peerId == snapshot.hostPeerId) || member.pingMs == 0 ? "--" : std::to_string(member.pingMs)) + " ms / delay " + std::to_string(member.inputDelayFrames) + " frames";
-				composed += "\nWaits " + std::to_string(member.waits) + " / longest " + std::to_string(member.longestWaitMs) + " ms";
+				// Each player's second row names them too, or two players' equal numbers read as one line twice.
+				composed += "\nP" + std::to_string(member.peerId) + " waits " + std::to_string(member.waits) + " / longest " + std::to_string(member.longestWaitMs) + " ms";
 				if (member.reclaiming || member.aiHeld || !member.connected) composed += " / " + NetPlayerPresentation::State(member);
 			}
 		}
@@ -1122,6 +1133,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	checkKept(panelKept, panelKeptText);
 	m_StatusLayoutKey = panelKey;
 	m_StatusLayoutRect = m_StatusRect;
+	m_StatusLayoutWrap = m_StatusWrap;
 	RecordStatusObservation(snapshot, hostLost, currentWaitMs);
 }
 
@@ -1427,7 +1439,8 @@ void NetModerationGUI::DrawMatchToasts() {
 	m_ToastRect = {};
 	m_SeatsPanelRect = {};
 	const bool menuLobby = PostMatchLobbySurfaces();
-	if (!ScenarioRunner::IsLockstepControllerSyncActive() && !g_NetMatchService.IsMatchResyncing() && !menuLobby) {
+	// A relaunched peer replaying its private catch-up is in the match before its round's controllers sync: its held line shows then too.
+	if (!ScenarioRunner::IsLockstepControllerSyncActive() && !g_NetMatchService.IsMatchResyncing() && !ScenarioRunner::WorldCatchUpActive() && !menuLobby) {
 		for (GUILabel* label: m_Toasts) {
 			if (label) {
 				label->SetVisible(false);
@@ -1439,7 +1452,10 @@ void NetModerationGUI::DrawMatchToasts() {
 	RandomGenerator* previousRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	CreateOverlay();
-	const auto queued = ScenarioRunner::GetVisibleNetUiToasts();
+	auto queued = ScenarioRunner::GetVisibleNetUiToasts();
+	// The own seat's line lasts as long as the roster's held or rejoining reading, which the host ends a round trip after the player's input applies.
+	if (OwnRosterSeatHeld() && std::none_of(queued.begin(), queued.end(), [](const auto& toast) { return toast.kind == "seat_held" && toast.text.find("rejoining") != std::string::npos; }))
+		queued.push_back({ScenarioRunner::GetLockstepCompletedFrame(), "seat_held", "Held - AI in control - rejoining", ScenarioRunner::GetLockstepLocalPeerId()});
 	std::vector<ScenarioRunner::NetUiToastRecord> visible;
 	std::vector<size_t> indices;
 	std::vector<std::string> lines;

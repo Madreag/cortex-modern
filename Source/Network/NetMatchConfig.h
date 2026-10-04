@@ -196,6 +196,9 @@ namespace RTE {
 		static std::string StoredConfigHash(const NetMatchConfig& config);
 		/// Splits a stored hash into its rule and hex. A bare hex predates the rule tag, so it is the sorted-roster rule.
 		static bool ParseStoredConfigHash(const std::string& stored, uint16_t& rule, std::string& hex);
+		/// The config as a file or a kept log holds it: without the relay offer, whose logins are live secrets. The relay is
+		/// outside the config hash, and every launch takes the host's live offer, so nothing that reads a written copy needs it.
+		static NetMatchConfig WithoutRelay(const NetMatchConfig& config);
 		static std::string BuildReportJson(const NetMatchConfig& config);
 		/// The peer's input delay: its per-sender entry, or the uniform value when no set rides the config.
 		static uint16_t PeerInputDelay(const NetMatchConfig& config, uint8_t peerId);

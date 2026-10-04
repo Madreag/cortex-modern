@@ -49,6 +49,7 @@ namespace RTE {
 		int64_t spectatorFree = 0; //!< Watchers a full world could still admit. A world's field only.
 		int64_t spectatorMax = 0;  //!< The watcher capacity those free slots are counted against.
 		int64_t seatsHeld = 0; //!< Seats a running match holds for players who are gone; a newcomer may apply for one.
+		int64_t migrationGen = 0; //!< The host handover generation a successor claims the row at; a resume names it.
 		std::string resumeSessionId; //!< The existing match row or a world's durable UUID.
 		std::string resumeToken;     //!< The row's current token, the proof a resume may take it over.
 
@@ -77,6 +78,7 @@ namespace RTE {
 		std::optional<int64_t> seatsHeld; //!< Absent keeps the row's current count; an older service ignores it.
 		std::optional<std::string> state; //!< "lobby" | "running"
 		std::optional<bool> listed; //!< Absent keeps current visibility; false hides, true relists.
+		std::optional<int64_t> migrationGen; //!< The generation this host holds the row at; a later one refuses it.
 
 		bool operator==(const NetDirectoryHeartbeatRequest&) const = default;
 	};
@@ -86,6 +88,7 @@ namespace RTE {
 		int64_t expiresInS = 0;
 		int64_t heartbeatS = 0;
 		std::optional<bool> listed; //!< Absent on replies from services without unlisted-session support.
+		std::optional<int64_t> migrationGen; //!< The row's generation, told to a host that named its own.
 
 		bool operator==(const NetDirectoryHeartbeatResponse&) const = default;
 	};
@@ -93,6 +96,7 @@ namespace RTE {
 	// DELETE /v1/sessions/{id} request body.
 	struct NetDirectoryDeleteRequest {
 		std::string token;
+		std::optional<int64_t> migrationGen; //!< A host the match left behind may not delete its successor's row.
 
 		bool operator==(const NetDirectoryDeleteRequest&) const = default;
 	};

@@ -70,6 +70,7 @@
 #include <SDL3_image/SDL_image.h>
 
 #include "lua.hpp"
+#include "HarnessCost.h"
 
 #include <algorithm>
 #include <array>
@@ -475,6 +476,11 @@ namespace {
 		const int closed = zipClose(archive.file, fileName.c_str());
 		archive.file = nullptr;
 		if (closed != ZIP_OK) throw std::runtime_error("could not finish archive");
+		if (automatic && manifest && AutosaveStore::HigherGenerationHolds(savePath.parent_path(), matchId, manifest->savedTick, manifest->migrationGen)) {
+			std::error_code ignored;
+			std::filesystem::remove(archive.path, ignored);
+			throw std::runtime_error("a higher host generation already holds tick " + std::to_string(manifest->savedTick));
+		}
 #ifdef _WIN32
 		if (automatic) {
 			if (!MoveFileExW(archive.path.c_str(), savePath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) throw std::runtime_error("could not publish autosave: " + std::to_string(GetLastError()));
@@ -493,7 +499,10 @@ namespace {
 				throw std::runtime_error("the published checkpoint is not restorable: " + refusal);
 			}
 			// A heal names the rewind point from this record instead of reading every archive again.
-			if (manifest) published.worldBoot = manifest->worldBoot;
+			if (manifest) {
+				published.worldBoot = manifest->worldBoot;
+				published.migrationGen = manifest->migrationGen;
+			}
 			AutosaveStore::NoteValidated(published);
 			// The manifest is published after its world, so a manifest without an archive never exists.
 			if (manifest && !manifest->configPayload.empty()) {
@@ -724,7 +733,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	if (!scene || !activity || activity->GetActivityState() == Activity::Over) return false;
 	// Every layer of the image comes off the terrain, and a scene mid-load has none yet.
 	if (!scene->GetTerrain()) throw std::runtime_error("scene has no terrain");
-	const auto freezeStart = std::chrono::steady_clock::now();
+	const HarnessCost::SimulationSpan freezeSpan;
 	CaptureTrace::Begin(tick);
 	struct TraceEnd {
 		~TraceEnd() { CaptureTrace::End(); }
@@ -775,6 +784,14 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	sceneCache->Begin();
 	// What the workers would make on first use is made here; from the first worker to the join they only read.
 	LuaScriptGraphNativeCaptureScope::PreTouch();
+	// The movable saver's walk of the script states would wait at each state's copy gate once the graphs freeze them, so the
+	// objects they hold are gathered here, before any state freezes; no script runs between.
+	std::vector<MovableObject*> scriptHeld;
+	{
+		CaptureTrace::Span span("script_held");
+		g_LuaMan.VisitScriptHeldMovableObjects([&scriptHeld](MovableObject* object) { scriptHeld.push_back(object); });
+	}
+	MovableMan::ScriptHeldScope scriptHeldScope(std::move(scriptHeld));
 	std::optional<CaptureSentinel::ParallelPhase> parallel(std::in_place);
 	// The parts run in the order they are named, the longest first; this thread takes whatever part is left once the
 	// graphs are done, so it never waits behind other pool work for a part nobody started.
@@ -820,18 +837,28 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			startActivity = Writer::Capture([&](Writer& writer) { writer.NewPropertyWithValue("CheckpointStartActivity", m_StartActivity.get()); });
 		});
 	}
+	// The parts whose bitmaps rarely change (the terrain's material copy, fonts, glows) keep their caches from one capture to the
+	// next: each bitmap is compared row by row against what the part wrote last time instead of copied whole again.
+	std::vector<CheckpointCache*> partCaches;
+	const auto partCache = [&cow, &partCaches](const std::string& part) {
+		CheckpointCache& cache = cow.PartCache(part);
+		cache.Begin();
+		partCaches.push_back(&cache);
+		return &cache;
+	};
 	captureAside("scene_runtime", {}, [&] {
 		const auto sceneRuntimeStart = std::chrono::steady_clock::now();
 		image->sceneRuntime = CheckpointWriter::CaptureNative([scene] { return scene->SaveRuntimeCheckpoint(); });
 		image->sceneRuntimeUs = since(sceneRuntimeStart);
-	});
+	}, partCache("scene_runtime"));
 	captureAside("audio_samples", {}, [&audioSamples] { audioSamples = g_AudioMan.CaptureCheckpointSamples(); });
 	for (size_t part = 0; part < managerSavers.size(); ++part) {
-		captureAside("manager", managerSavers[part].name, [&managerParts, &managerTimings, &managerSavers, &since, part] {
+		const std::string& name = managerSavers[part].name;
+		captureAside("manager", name, [&managerParts, &managerTimings, &managerSavers, &since, part] {
 			const auto start = std::chrono::steady_clock::now();
 			managerParts[part] = CheckpointWriter::CaptureNative(managerSavers[part].save);
 			managerTimings[part] = {managerSavers[part].name, since(start)};
-		});
+		}, name == "frame" || name == "post_process" ? partCache("manager:" + name) : nullptr);
 	}
 	// Each terrain layer copies its own dirty rows; the image keeps the layers' order.
 	const auto layersStart = std::chrono::steady_clock::now();
@@ -951,6 +978,10 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->placeObjects = g_SceneMan.GetPlaceObjectsOnLoad();
 	image->placeUnits = g_SceneMan.GetPlaceUnitsOnLoad();
 	std::vector<CheckpointText> retired = cow.Cache().RetireUnused();
+	for (CheckpointCache* cache: partCaches) {
+		std::vector<CheckpointText> replaced = cache->RetireUnused();
+		std::move(replaced.begin(), replaced.end(), std::back_inserter(retired));
+	}
 	image->imageBytes = image->activity.OwnedBytes() + image->scene.OwnedBytes() + image->structure.OwnedBytes()
 		+ image->sceneRuntime.OwnedBytes() + image->globals.OwnedBytes();
 	size_t graphBytes = 0;
@@ -966,13 +997,17 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	}
 	image->dirtyBytes = dirtyBytes;
 	image->dirtyRatio = image->imageBytes ? static_cast<double>(dirtyBytes) / static_cast<double>(image->imageBytes) : 0;
-	image->freezeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - freezeStart).count();
+	const int64_t freezeNs = freezeSpan.Stop();
+	image->freezeUs = freezeNs / 1000;
+	// The full-state oracle's own freeze is an instrument's cost; an autosave's is the product's.
+	if (fullStateOnly) HarnessCost::Charge(HarnessCost::FullState, freezeNs);
 	simSpan.reset();
 	CaptureTrace::End();
 	bytes = image->imageBytes;
 	auto previousImage = cow.FinishImage(image);
 	if (fullStateOnly) {
-		// The periodic samples are one series; a labelled capture answers one save or restore and is never replaced.
+		// A round's periodic samples are one series, so a sample only ever stands in for an older one of its own round; a labelled
+		// capture answers one save or restore and is never replaced.
 		const AutosaveArchiveWriter::Submitted submitted = FullStateWriter().Submit([image, dump = m_FullStateDumpDirectory, round = m_FullStateRound, label = m_FullStateLabel, sceneCache, previousImage, retired = std::move(retired),
 		                                retiredLayers = std::move(retiredLayers)](bool replaced) mutable {
 			retired.clear();
@@ -994,8 +1029,10 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 					if (scope != CheckpointScope::Shared) perPeer += (perPeer.empty() ? "" : ",") + name;
 				});
 				System::PrintDiagnosticLine(std::format("[fullstate-scope] tick={} round={} label={} per_peer={}", image->tick, round, label.empty() ? "sample" : label, perPeer));
+				const int64_t hashNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+				HarnessCost::Charge(HarnessCost::FullState, hashNs);
 				System::PrintDiagnosticLine(std::format("[fullstate-cost] tick={} freeze_us={} hash_us={} image_bytes={}", image->tick, image->freezeUs,
-				    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(), image->imageBytes));
+				    hashNs / 1000, image->imageBytes));
 				// The task outlives its run in the verdict's shared state; the image need not.
 				image.reset();
 				return true;
@@ -1006,7 +1043,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 				System::PrintDiagnosticLine(std::format("[fullstate] tick={} failed: {}", image->tick, error.what()));
 				return false;
 			}
-		}, m_FullStateLabel.empty() ? "sample" : "", tick);
+		}, m_FullStateLabel.empty() ? "sample/round-" + std::to_string(m_FullStateRound) : std::string(), tick);
 		task = submitted.verdict;
 		PrintCoalescedCapture("fullstate", tick, submitted);
 		return true;
@@ -1044,6 +1081,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		manifest.sessionId = identity->sessionId;
 		manifest.roundId = identity->roundId;
 		manifest.worldBoot = identity->worldBoot;
+		manifest.migrationGen = identity->migrationGen;
 		manifest.savedTick = tick;
 		manifest.simTimeTicks = descriptor.simTimeTicks;
 		manifest.intervalSeconds = identity->intervalSeconds;

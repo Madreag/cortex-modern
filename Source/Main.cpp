@@ -84,6 +84,7 @@
 #include "RTEError.h"
 #include "DataModule.h"
 #include "MenuAutomation.h"
+#include "GUIDrawRecord.h"
 #ifdef __APPLE__
 #include "AppleApplication.h"
 #include <mach/mach.h>
@@ -142,6 +143,7 @@
 #include "MetricsCollector.h"
 #include "AsyncLineWriter.h"
 #include "StallStackSampler.h"
+#include "HarnessCost.h"
 #include "ContractAudit.h"
 
 #include "RenderTarget.h"
@@ -154,8 +156,8 @@
 #ifdef _WIN32
 #include "windows.h"
 #include <crtdbg.h>
+#include <processsnapshot.h>
 #include <psapi.h>
-#include <tlhelp32.h>
 #endif
 
 #include <algorithm>
@@ -183,8 +185,10 @@
 #include <iomanip>
 #include <random>
 #include <condition_variable>
+#include <future>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <array>
 #include <list>
@@ -219,6 +223,33 @@ using namespace RTE;
 
 // Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
 static bool s_recordTickHashes = false;
+
+/// Test lever CCCP_TEST_MINIMIZE_TICKS=<from>:<to>[:fullscreen]: the window is minimized at the first tick and restored at the second.
+/// With ':fullscreen' it is shown in the game's own fullscreen from startup, before any round, and its state is written every 60 ticks
+/// from 60 before the minimize to 60 after the restore, so a run proves the whole minimized span was a fullscreen one.
+struct MinimizeLever { uint64_t from = 0, to = 0; bool fullscreen = false; };
+
+static const MinimizeLever& TestMinimizeLever() {
+	static const MinimizeLever s_lever = [] {
+		unsigned long long from = 0, to = 0;
+		char form[16] = {};
+		const char* text = std::getenv("CCCP_TEST_MINIMIZE_TICKS");
+		const int fields = text ? std::sscanf(text, "%llu:%llu:%15s", &from, &to, form) : 0;
+		if (fields < 2 || to <= from) return MinimizeLever{};
+		return MinimizeLever{from, to, fields == 3 && std::string(form) == "fullscreen"};
+	}();
+	return s_lever;
+}
+
+static void WriteTestWindowState(uint64_t tick) {
+	const SDL_WindowFlags flags = SDL_GetWindowFlags(g_WindowMan.GetWindow());
+	const MinimizeLever& lever = TestMinimizeLever();
+	const nlohmann::json state{{"tick", tick}, {"process", System::GetProcessID()}, {"round", ScenarioRunner::GetLockstepRoundId()},
+	                           {"fullscreen", g_WindowMan.IsFullscreen() && (flags & SDL_WINDOW_FULLSCREEN) != 0}, {"minimized", (flags & SDL_WINDOW_MINIMIZED) != 0},
+	                           {"hidden", (flags & SDL_WINDOW_HIDDEN) != 0}, {"input_focus", (flags & SDL_WINDOW_INPUT_FOCUS) != 0},
+	                           {"minimize_from", lever.from}, {"minimize_to", lever.to}};
+	System::PrintDiagnosticLine("[window-state] " + state.dump());
+}
 static std::string s_netLiveTickHashPath;
 
 // Written every tick, so the disk never holds the simulation.
@@ -233,16 +264,25 @@ static AsyncLineWriter& LiveTickHashStream() {
 	return s_netLiveTickHashes;
 }
 
-// Ticks a held seat ran off the round leave both hash records; the live stream names the round they belong to.
+static nlohmann::json s_crossContext;
+
+// Ticks a held seat ran off the round leave both hash records; the live stream names the round they belong to and the process that ran them.
 static void RetractAbandonedTickHashes() {
 	uint64_t round = 0;
-	const uint64_t abandoned = ScenarioRunner::TakeAbandonedTicksFrom(round);
+	uint64_t ranThrough = 0;
+	const uint64_t abandoned = ScenarioRunner::TakeAbandonedTicksFrom(round, ranThrough);
 	if (abandoned == 0) {
 		return;
 	}
-	g_MetricsCollector.RetractTickHashesFrom(abandoned);
+	// Ticks run past the hold were live on this seat's own screen until it heard of the hold; none run retracts nothing it showed.
+	const bool ran = ranThrough >= abandoned;
+	if (ran) g_MetricsCollector.RetractTickHashesFrom(abandoned);
 	if (!s_netLiveTickHashPath.empty()) {
-		LiveTickHashStream().Write(nlohmann::json{{"abandon_from", abandoned}, {"round", round}}.dump());
+		nlohmann::json receipt{{"abandon_from", abandoned}, {"round", round}, {"ran_through", ran ? ranThrough : 0}, {"private", !ran}, {"player_visible", ran},
+		                       {"process", System::GetProcessID()}};
+		for (const char* key: {"instance", "execution", "incarnation"})
+			if (s_crossContext.is_object() && s_crossContext.contains(key)) receipt[key] = s_crossContext[key];
+		LiveTickHashStream().Write(receipt.dump());
 	}
 }
 
@@ -282,14 +322,12 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 	}
 	DWORD handles = 0;
 	GetProcessHandleCount(GetCurrentProcess(), &handles);
+	// This process's threads alone: a thread snapshot of the whole system costs tens of milliseconds on a busy desktop.
 	size_t threads = 0;
-	if (HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0); snapshot != INVALID_HANDLE_VALUE) {
-		THREADENTRY32 entry{};
-		entry.dwSize = sizeof(entry);
-		for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry)) {
-			if (entry.th32OwnerProcessID == GetCurrentProcessId()) ++threads;
-		}
-		CloseHandle(snapshot);
+	if (HPSS snapshot = nullptr; PssCaptureSnapshot(GetCurrentProcess(), PSS_CAPTURE_THREADS, 0, &snapshot) == ERROR_SUCCESS) {
+		PSS_THREAD_INFORMATION captured{};
+		if (PssQuerySnapshot(snapshot, PSS_QUERY_THREAD_INFORMATION, &captured, sizeof(captured)) == ERROR_SUCCESS) threads = captured.ThreadsCaptured;
+		PssFreeSnapshot(GetCurrentProcess(), snapshot);
 	}
 	lap("heap_threads");
 	std::string histogram;
@@ -362,12 +400,20 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 #endif
 }
 
+// The census's clock: the process's start, so its instants line up across rounds that restart their ticks.
+static const std::chrono::steady_clock::time_point s_CensusProcessStart = std::chrono::steady_clock::now();
+
 // The memory census's process figures are summed here, off the simulation thread: on a large heap they cost hundreds of milliseconds.
 class CensusWorker {
 public:
 	static CensusWorker& Get() {
-		static CensusWorker worker;
-		return worker;
+		// Never destroyed: a job still running at exit is left to finish, never joined past the exit's wait.
+		static CensusWorker* worker = [] {
+			auto* created = new CensusWorker();
+			std::atexit([] { Get().Stop(); });
+			return created;
+		}();
+		return *worker;
 	}
 
 	void Post(std::function<void()> job) {
@@ -378,13 +424,14 @@ public:
 		m_Wake.notify_one();
 	}
 
-	~CensusWorker() {
-		{
-			std::lock_guard<std::mutex> lock(m_Mutex);
-			m_Stopping = true;
-		}
+	void Stop() {
+		std::unique_lock<std::mutex> lock(m_Mutex);
+		m_Stopping = true;
 		m_Wake.notify_one();
-		m_Thread.join();
+		const bool finished = m_Done.wait_for(lock, std::chrono::seconds(2), [this] { return m_Finished; });
+		lock.unlock();
+		if (finished) m_Thread.join();
+		else m_Thread.detach();
 	}
 
 private:
@@ -399,6 +446,8 @@ private:
 				std::unique_lock<std::mutex> lock(m_Mutex);
 				m_Wake.wait(lock, [this] { return m_Stopping || !m_Jobs.empty(); });
 				if (m_Jobs.empty()) {
+					m_Finished = true;
+					m_Done.notify_all();
 					return;
 				}
 				job = std::move(m_Jobs.front());
@@ -411,15 +460,17 @@ private:
 	std::mutex m_Mutex;
 	std::condition_variable m_Wake;
 	std::deque<std::function<void()>> m_Jobs;
+	std::condition_variable m_Done;
 	bool m_Stopping = false;
+	bool m_Finished = false;
 	std::thread m_Thread;
 };
 // Test lever: every N committed lockstep ticks each peer hashes its whole capture; 0 is off.
 static uint32_t s_netFullStateEvery = 0;
 static std::string s_netFullStateDump;
-static nlohmann::json s_crossContext;
 static nlohmann::json s_crossSchedule = nlohmann::json::array();
 static uint64_t s_crossBudget = 0;
+static uint64_t s_crossOwnIdentity = 0; //!< This peer's stable identity as its seat's owner, last seen live.
 static std::map<uint64_t, uint64_t> s_crossLastCommitted;
 static std::map<uint64_t, uint64_t> s_crossFirstGameplayTick;
 static std::set<std::string> s_crossFired;
@@ -682,15 +733,85 @@ static void BeginCrossTick(uint64_t tick) {
 	    {"config_hash", configHash}, {"host_peer", ScenarioRunner::GetLockstepHostPeerId()},
 	    {"phase", tickPhase}, {"gameplay_tick", g_ActivityMan.ActivityRunning()},
 	    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()}};
-	if (const auto& snapshot = g_NetMatchService.GetSeatPresence().GetSnapshot()) {
-		for (const auto& seat: snapshot->seats) if (seat.peerId == ScenarioRunner::GetLockstepLocalPeerId()) {
-			s_crossContext["seat_incarnation"] = seat.incarnation;
-			s_crossContext["holder_generation"] = seat.holderGeneration;
-			s_crossContext["seat_generation"] = seat.seatGeneration;
-			s_crossContext["seat_revision"] = snapshot->revision;
-		}
+	if (const auto view = g_NetMatchService.GetSeatView(ScenarioRunner::GetLockstepLocalPeerId())) {
+		s_crossContext["seat_incarnation"] = view->seat.incarnation;
+		s_crossContext["seat_revision"] = view->revision;
+		if (view->seat.owner != 0) s_crossOwnIdentity = view->seat.owner;
 	}
 	g_MetricsCollector.BeginEventTick(s_crossContext);
+	// The moderation state a lost host hands over: every applied tick on the host, and once each handover on every survivor.
+	if (!catchup && authority.is_number_unsigned()) {
+		const uint64_t generation = authority.get<uint64_t>();
+		static uint64_t firstGeneration = UINT64_MAX, afterGeneration = UINT64_MAX;
+		if (firstGeneration == UINT64_MAX) firstGeneration = generation;
+		const auto emit = [&](const char* stage, const std::string& state) {
+			const auto parsed = nlohmann::json::parse(state, nullptr, false);
+			if (parsed.is_discarded()) return;
+			g_MetricsCollector.WriteObservation({{"type", "moderation_snapshot"}, {"stage", stage}, {"tick", tick}, {"host_peer", host}, {"authority_generation", generation}, {"state", parsed}});
+		};
+		if (host == ScenarioRunner::GetLockstepLocalPeerId()) emit("before", g_NetMatchService.GetModerationSnapshotState(false));
+		if (generation > firstGeneration && generation != afterGeneration) {
+			afterGeneration = generation;
+			emit("after", g_NetMatchService.GetModerationSnapshotState(true));
+		}
+	}
+	// A silence another peer's schedule declared, once its seat is held here: the hold the host committed for it and what it measured.
+	if (!catchup && host == ScenarioRunner::GetLockstepLocalPeerId()) {
+		static std::set<std::string> namedHolds;
+		for (const auto& entry: s_crossSchedule) {
+			const std::string id = entry.value("id", std::string());
+			const std::string target = entry.value("peer", std::string());
+			const bool silence = entry.value("action", std::string()) == "silence" || entry.value("declared_action", std::string()) == "silence";
+			if (!silence || target.empty() || target == instance || namedHolds.contains(id) || s_crossBudget < entry.value("tick", uint64_t{0})) continue;
+			for (const NetH4ModerationSeat& seat: g_NetMatchService.GetModerationSeats()) {
+				if (seat.cpu || !seat.held || seat.displayName != target) continue;
+				const auto fact = ScenarioRunner::GetLockstepLastHold(seat.lockstepPeerId);
+				if (!fact) continue;
+				namedHolds.insert(id);
+				g_MetricsCollector.WriteObservation({{"type", "scheduled_hold"}, {"id", id}, {"peer", seat.lockstepPeerId}, {"cause", "silent"}, {"hold_cause", fact->cause},
+				    {"roster_cause", NetSeatHoldCauseName(seat.holdCause)}, {"ai_in_control", true}, {"tick", fact->frame}, {"silence_ms", fact->silenceMs},
+				    {"bound_ms", fact->boundMs}});
+			}
+		}
+	}
+	// This peer's seat comes back - a return, a held seat's reclaim, a stall's in-place catch-up, an applicant seated: the roster's committed
+	// owner, the actor it plays from this tick, and a recovery the fresh-input receipt answers, whether or not a schedule asked for one.
+	{
+		const uint8_t local = ScenarioRunner::GetLockstepLocalPeerId();
+		// A return is owed from the first tick the seat is away until its player plays an actor this peer owns: a relaunched peer's catch-up is
+		// away before it knows its seat, and the committed binding names the player's actor only once its first frame lands.
+		static bool returnOwed = false;
+		static bool lastCatchup = false;
+		static uint64_t awayRound = 0;
+		const bool away = catchup || (local != 0 && ScenarioRunner::IsLockstepSeatUnderAI(local, tick));
+		if (round != awayRound) {
+			if (!lastCatchup) returnOwed = false;
+			awayRound = round;
+		}
+		lastCatchup = catchup;
+		if (away) returnOwed = true;
+		Activity* activity = g_ActivityMan.GetActivity();
+		const auto view = local != 0 ? g_NetMatchService.GetSeatView(local) : std::nullopt;
+		if (returnOwed && !away && activity && view && view->seat.owner != 0) {
+			for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+				const Actor* actor = activity->IsLocalHumanSeat(player) ? activity->GetLocallyControlledActor(player) : nullptr;
+				if (!actor || !g_MovableMan.IsActor(actor)) continue;
+				const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(actor->GetUniqueID(), actor->GetTeam(), false);
+				if (owner != local) continue;
+				const nlohmann::json reclaim ={{"type", "ownership_reclaim"}, {"round", round}, {"peer", local}, {"stable_seat", view->stableSeat},
+				    {"actor", actor->GetUniqueID()}, {"owner_peer", owner}, {"ticket_incarnation", view->seat.incarnation},
+				    {"seat_incarnation", view->seat.incarnation}, {"activation_tick", tick}, {"tick", tick}, {"committed", true}};
+				g_MetricsCollector.WriteObservation(reclaim);
+				ScenarioRunner::NoteHarnessReceipt("ownership_reclaim", reclaim.dump());
+				const std::string id = "own-return-" + std::to_string(round) + "-" + std::to_string(tick);
+				s_crossRecoveryCases.push_back({{"id", id}, {"return_incarnation", incarnation}, {"deadline_ms", 60000}});
+				s_crossRecoveryStarts[id] = {{"effect_finished", true},
+				    {"engine_after_wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()}};
+				returnOwed = false;
+				break;
+			}
+		}
+	}
 	if (newRound) {
 		nlohmann::json roster = nlohmann::json::array();
 		for (const auto& slot: config->players) roster.push_back({{"peer", slot.peerId}, {"team", slot.team}, {"human", !slot.cpu}});
@@ -702,6 +823,21 @@ static void BeginCrossTick(uint64_t tick) {
 		    " config=" + NetMatchConfigUtil::StoredConfigHash(*config) + " peer_limit=" + std::to_string(NetMatchConfigUtil::c_MaxPeerCount));
 	}
 	previousRound = round; previousTick = tick;
+}
+
+// A peer the host banned ends on the ban: the entry that declared it, its identity and the last tick the host played it live.
+static void CrossNoteOwnBan() {
+	static bool noted = false;
+	const auto removal = !noted && g_MetricsCollector.EventsEnabled() ? g_NetMatchService.GetOwnRemoval() : std::nullopt;
+	if (!removal || removal->reason != NetRejectReason::ParticipantBanned || removal->boundary == 0 || s_crossOwnIdentity == 0) return;
+	noted = true;
+	const std::string instance = CrossEnvironment("CC_TEST_CROSS_INSTANCE");
+	for (const auto& entry: s_crossSchedule) {
+		if (entry.value("action", std::string()) != "moderation-ban" || entry.value("target_peer", std::string()) != instance) continue;
+		g_MetricsCollector.WriteObservation({{"type", "moderation_terminal"}, {"id", entry.value("id", std::string())}, {"result", "ParticipantBanned"}, {"terminal", true},
+		    {"identity_sha256", NetMatchService::IdentityDigest(s_crossOwnIdentity)}, {"last_live_tick", removal->boundary - 1}, {"tick", removal->boundary - 1},
+		    {"simulated_through", g_TimerMan.GetSimUpdateCount()}});
+	}
 }
 
 static void ApplyCrossSchedule() {
@@ -717,9 +853,12 @@ static void ApplyCrossSchedule() {
 		}
 		resetAt = 0;
 	}
+	static const std::string instance = CrossEnvironment("CC_TEST_CROSS_INSTANCE");
 	for (const auto& fault: s_crossSchedule) {
 		const std::string id = fault.at("id");
 		if (s_crossFired.contains(id) || s_crossBudget < fault.at("tick").get<uint64_t>()) continue;
+		// An entry naming another peer is that peer's fault, declared here so this one can name what it does about it.
+		if (const std::string owner = fault.value("peer", std::string()); !owner.empty() && owner != instance) continue;
 		const std::string action = fault.at("action");
 		if (action == "crash-restart" || action == "brain-eliminate") continue;
 		const auto stamp = [] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
@@ -753,6 +892,24 @@ static void ApplyCrossSchedule() {
 			s_crossLeaveRequested = true;
 			receipt["applied"] = true;
 			receipt["scope"] = "announced_leave_at_next_committed_tick_end";
+		} else if (action == "moderation-ban") {
+			const std::string target = fault.value("target_peer", std::string());
+			receipt["target_peer"] = target;
+			for (const NetH4ModerationSeat& seat: g_NetMatchService.GetModerationSeats()) {
+				if (seat.cpu || seat.displayName != target) continue;
+				const auto view = g_NetMatchService.GetSeatView(seat.lockstepPeerId);
+				const uint64_t identity = view ? view->seat.owner : 0;
+				const NetKickBanResult result = g_NetMatchService.RemoveParticipant(NetSelectModerationSeat(seat), NetParticipantRemovalAction::BanSession);
+				receipt["result"] = NetKickBanResultName(result);
+				receipt["target_seat"] = seat.lockstepPeerId;
+				receipt["applied"] = result == NetKickBanResult::Ok && identity != 0;
+				if (receipt["applied"] == true) {
+					g_MetricsCollector.WriteObservation({{"type", "moderation_action"}, {"id", id}, {"action", "Ban"}, {"applied", true}, {"target_peer", target},
+					    {"target_seat", seat.lockstepPeerId}, {"identity_sha256", NetMatchService::IdentityDigest(identity)}, {"budget_tick", s_crossBudget},
+					    {"tick", g_NetMatchService.GetLastRemovalBoundary()}});
+				}
+				break;
+			}
 		}
 		receipt["completed_wall_ms"] = stamp();
 		if (receipt["applied"] == true) {
@@ -852,9 +1009,12 @@ static void CrossRecoveryAtCommittedTick(uint64_t tick, bool paused = false) {
 			const auto sample = g_MetricsCollector.ProducedControllerFor(round, tick, actor->GetUniqueID());
 			if (!controller || !MetricsCollector::IsFreshControllerRecovery(sample, round, tick, actor->GetUniqueID(),
 			        controller->GetWireApplyTick(), controllable, held, catchup, start.value("engine_after_wall_ms", 0.0))) continue;
-			g_MetricsCollector.WriteObservation({{"type", "recovery"}, {"id", id}, {"recovery_phase", "first_controllable_input"},
+			const nlohmann::json first = {{"type", "recovery"}, {"id", id}, {"recovery_phase", "first_controllable_input"},
 			    {"terminal", true}, {"deadline_ms", recovery.at("deadline_ms")}, {"input", sample}, {"wire_tick", controller->GetWireApplyTick()},
-			    {"controllable", controllable}, {"held", held}, {"catchup", catchup}, {"actor", actor->GetUniqueID()}, {"player", player}});
+			    {"controllable", controllable}, {"held", held}, {"catchup", catchup}, {"actor", actor->GetUniqueID()}, {"player", player}, {"tick", tick},
+			    {"seat_incarnation", s_crossContext.is_object() ? s_crossContext.value("seat_incarnation", nlohmann::json(nullptr)) : nlohmann::json(nullptr)}};
+			g_MetricsCollector.WriteObservation(first);
+			ScenarioRunner::NoteHarnessReceipt("first_controllable_input", first.dump());
 			s_crossRecoveryDone.insert(id);
 			break;
 		}
@@ -1595,6 +1755,12 @@ void InitializeManagers() {
 	g_FrameMan.Initialize();
 	g_PostProcessMan.Initialize();
 	g_PerformanceMan.Initialize();
+	// The minimize lever's fullscreen form enters the game's own fullscreen before any round, as a player who plays fullscreen starts.
+	if (TestMinimizeLever().fullscreen && g_WindowMan.GetWindow()) {
+		SDL_ShowWindow(g_WindowMan.GetWindow());
+		if (!g_WindowMan.IsFullscreen()) g_WindowMan.ToggleFullscreen();
+		WriteTestWindowState(0);
+	}
 
 	if (g_AudioMan.Initialize()) {
 		g_GUISound.Initialize();
@@ -3093,6 +3259,126 @@ static bool RunFrameRecorderSelfTest() {
 	if (refuser.Start(paced.string(), 30, &error)) return FrameRecorderSelfTestFail("a non-empty directory was accepted");
 	if (error.find(paced.string()) == std::string::npos) return FrameRecorderSelfTestFail("the refusal does not name the directory: " + error);
 
+	// A line writer behind a stalled disk holds its bound, drops the rest and says so in its own file, in order.
+	{
+		const std::filesystem::path bounded = scratch / "bounded.txt";
+		AsyncLineWriter writer(4, size_t{1} << 20);
+		if (!writer.Open(bounded.string())) return FrameRecorderSelfTestFail("the bounded writer could not open " + bounded.string());
+		std::promise<void> released;
+		std::shared_future<void> release = released.get_future().share();
+		std::promise<void> entered;
+		std::future<void> stalled = entered.get_future();
+		writer.WriteMade([release, &entered] { entered.set_value(); release.wait(); return std::string("stalled\n"); });
+		stalled.wait();
+		for (int line = 0; line < 10; ++line) writer.Write("line " + std::to_string(line));
+		const unsigned long long dropped = writer.Dropped();
+		released.set_value();
+		// The writer takes what waited, and the report of what it dropped, before anything newer queues.
+		writer.Flush();
+		writer.Write("after");
+		writer.Flush();
+		writer.Close();
+		std::ifstream in(bounded);
+		std::vector<std::string> lines;
+		for (std::string line; std::getline(in, line);) lines.push_back(line);
+		const std::vector<std::string> expected = {"stalled", "line 0", "line 1", "line 2", "line 3", "[async-writer] dropped 6 entries (42 bytes) while the disk fell behind", "after"};
+		if (dropped != 6 || lines != expected) {
+			std::string seen;
+			for (const std::string& line: lines) seen += "|" + line;
+			return FrameRecorderSelfTestFail("a line writer behind a stalled disk dropped " + std::to_string(dropped) + " and wrote " + seen);
+		}
+	}
+
+	// Every thread that logs an event - the menu's and each writer's - leaves whole lines, all of them, in the event index.
+	const std::filesystem::path logged = scratch / "events";
+	if (!std::filesystem::create_directory(logged, code) || code) return FrameRecorderSelfTestFail("could not create " + logged.string());
+	{
+		FrameRecorder eventRecorder;
+		if (!eventRecorder.Start(logged.string(), 5, &error)) return FrameRecorderSelfTestFail("the event recorder refused to start: " + error);
+		constexpr int c_Threads = 8;
+		constexpr int c_PerThread = 2000;
+		std::vector<std::thread> loggers;
+		for (int thread = 0; thread < c_Threads; ++thread) {
+			loggers.emplace_back([&eventRecorder, thread] {
+				for (int event = 0; event < c_PerThread; ++event) eventRecorder.RecordEvent("thread " + std::to_string(thread) + " event " + std::to_string(event) + " " + std::string(64, 'x'));
+			});
+		}
+		for (std::thread& logger: loggers) logger.join();
+		eventRecorder.Finish();
+		std::ifstream events(logged / "events.jsonl");
+		std::size_t whole = 0, torn = 0;
+		for (std::string line; std::getline(events, line);) {
+			const nlohmann::json parsed = nlohmann::json::parse(line, nullptr, false);
+			(parsed.is_discarded() || !parsed.contains("message") ? torn : whole) += 1;
+		}
+		if (whole != static_cast<std::size_t>(c_Threads * c_PerThread) || torn != 0) {
+			return FrameRecorderSelfTestFail("events logged from " + std::to_string(c_Threads) + " threads at once left " + std::to_string(whole) + " whole lines of " +
+			                                 std::to_string(c_Threads * c_PerThread) + " and " + std::to_string(torn) + " torn");
+		}
+	}
+
+#ifndef _WIN32
+	// The encoder starts behind a shell here: every argument reaches it whole, and one that stops reading fails the
+	// recorder's writes instead of ending the process.
+	{
+		const char* savedEncoder = std::getenv("CCCP_TEST_RECORD_ENCODER");
+		const std::optional<std::string> restoreEncoder = savedEncoder ? std::optional<std::string>(savedEncoder) : std::nullopt;
+		const auto encodeWith = [&](const std::string& name, const std::string& body, int side, nlohmann::json& parsed) {
+			const std::filesystem::path directory = scratch / name;
+			const std::filesystem::path script = scratch / (name + ".sh");
+			if (!std::filesystem::create_directory(directory, code) || code) return false;
+			{
+				std::ofstream out(script);
+				out << "#!/bin/sh\n" << body << "\n";
+			}
+			std::filesystem::permissions(script, std::filesystem::perms::owner_all, code);
+			setenv("CCCP_TEST_RECORD_ENCODER", script.c_str(), 1);
+			FrameRecorder recorder;
+			const bool started = recorder.Start(directory.string(), 5, &error);
+			const std::size_t sideBytes = static_cast<std::size_t>(side) * side * 3;
+			for (int index = 0; started && index < 10; ++index) {
+				FrameRecorder::FrameMeta meta;
+				meta.wallMS = index * 100;
+				meta.simTick = static_cast<unsigned long long>(index);
+				meta.screen = "game";
+				meta.width = side;
+				meta.height = side;
+				if (unsigned char* pixels = recorder.BeginFrame(meta.wallMS, sideBytes)) {
+					std::fill(pixels, pixels + sideBytes, static_cast<unsigned char>(index * 20));
+					recorder.EndFrame(meta);
+				}
+			}
+			recorder.Finish();
+			if (restoreEncoder) {
+				setenv("CCCP_TEST_RECORD_ENCODER", restoreEncoder->c_str(), 1);
+			} else {
+				unsetenv("CCCP_TEST_RECORD_ENCODER");
+			}
+			return started && manifestOf(directory, parsed);
+		};
+		const std::string reader = (scratch / "reader").string();
+		nlohmann::json encoded;
+		if (!encodeWith("reader", "for argument in \"$@\"; do printf '%s\\n' \"$argument\"; done > '" + reader + "/args.txt'\ncat > '" + reader + "/frames.raw'", 4, encoded)) {
+			return FrameRecorderSelfTestFail("the encoder recording did not start or left no manifest: " + error);
+		}
+		std::ifstream argsIn(scratch / "reader" / "args.txt");
+		bool padWhole = false;
+		for (std::string argument; std::getline(argsIn, argument);) padWhole |= argument == "pad=ceil(iw/2)*2:ceil(ih/2)*2";
+		std::error_code sizeCode;
+		const auto rawBytes = std::filesystem::file_size(scratch / "reader" / "frames.raw", sizeCode);
+		if (!padWhole || sizeCode || rawBytes != 5 * 4 * 4 * 3 || encoded.value("frames_saved", -1) != 5 || encoded.value("write_failures", -1) != 0) {
+			return FrameRecorderSelfTestFail("the shell split the encoder's arguments or the frames never reached it: pad_whole=" + std::to_string(padWhole) +
+			                                 " raw_bytes=" + std::to_string(sizeCode ? -1 : static_cast<long long>(rawBytes)) + " manifest=" + encoded.dump());
+		}
+		nlohmann::json stopped;
+		if (!encodeWith("stopped", "exit 0", 128, stopped)) return FrameRecorderSelfTestFail("the stopped encoder's recording left no manifest: " + error);
+		const bool named = stopped.contains("encoder") && stopped["encoder"].is_object() && stopped["encoder"].value("error", std::string()) == "the encoder stopped reading";
+		if (stopped.value("write_failures", -1) < 1 || !named) {
+			return FrameRecorderSelfTestFail("an encoder that stopped reading was not reported: " + stopped.dump());
+		}
+	}
+#endif
+
 	std::filesystem::remove_all(scratch, code);
 	{
 		std::ostringstream line;
@@ -3684,10 +3970,14 @@ void ProcessMenuScript() {
 	}
 }
 
+static void BeginHarnessCostMenuStay();
+static void WriteHarnessCostMenuFrame();
+
 void RunMenuLoop() {
 	g_MenuMan.SetIsInMenuScreen(true);
 	g_UInputMan.DisableKeys(false);
 	g_UInputMan.TrapMousePos(false);
+	BeginHarnessCostMenuStay();
 
 	while (!System::IsSetToQuit()) {
 		g_WindowMan.ClearBackbuffer();
@@ -3732,8 +4022,9 @@ void RunMenuLoop() {
 
 		if (!s_menuScriptPath.empty()) {
 			ProcessMenuScript();
-			if (s_menuScriptHoldE2ePause && s_menuScriptComplete) break;
 		}
+		WriteHarnessCostMenuFrame();
+		if (!s_menuScriptPath.empty() && s_menuScriptHoldE2ePause && s_menuScriptComplete) break;
 	}
 
 	g_MenuMan.SetIsInMenuScreen(false);
@@ -3788,13 +4079,12 @@ static void DumpSimStateIfArmed(uint64_t simTick) {
 	if (!s_out.IsOpen() || simTick < s_from || simTick > s_to) {
 		return;
 	}
-	const long long startUs = g_TimerMan.GetAbsoluteTime();
+	const HarnessCost::SimulationSpan span;
 	auto tape = std::make_shared<SimDumpTape>();
 	g_MovableMan.CaptureSimState(simTick, *tape);
 	// What the dump costs the simulation thread, so a harness cost is never read as the engine's own.
 	static uint64_t s_ticks = 0, s_over2 = 0, s_over50 = 0, s_maxTick = 0;
 	static double s_totalMs = 0, s_maxMs = 0;
-	const double ms = static_cast<double>(g_TimerMan.GetAbsoluteTime() - startUs) / 1000.0;
 	// Test lever: the simulation also writes the text itself, and the writer compares it with the tape's.
 	static const bool s_compare = std::getenv("CCCP_TEST_SIM_DUMP_COMPARE") != nullptr;
 	std::shared_ptr<const std::string> inlineText;
@@ -3803,7 +4093,16 @@ static void DumpSimStateIfArmed(uint64_t simTick) {
 		g_MovableMan.DumpSimState(simTick, text);
 		inlineText = std::make_shared<const std::string>(std::move(text).str());
 	}
+	const int64_t simulationNs = span.Stop();
+	HarnessCost::Charge(HarnessCost::SimDump, simulationNs);
+	const double ms = static_cast<double>(simulationNs) / 1e6;
 	s_out.WriteMade([tape, inlineText, simTick, last = s_to]() {
+		// The writer's own work is the dump's too, charged to the frame it ends in.
+		const auto began = std::chrono::steady_clock::now();
+		struct Charge {
+			std::chrono::steady_clock::time_point began;
+			~Charge() { HarnessCost::Charge(HarnessCost::SimDump, std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - began).count()); }
+		} charge{began};
 		std::ostringstream text;
 		tape->Replay(text);
 		std::string made = std::move(text).str();
@@ -3830,6 +4129,78 @@ static void DumpSimStateIfArmed(uint64_t simTick) {
 		     << " over_2ms=" << s_over2 << " over_50ms=" << s_over50;
 		System::PrintDiagnosticLine(line.str());
 	}
+}
+
+// The instruments' cost receipts: one scope per process, round and unbroken run of simulated frames, naming every instrument's
+// state, and inside it one line per frame with what each running instrument cost that frame.
+namespace {
+	struct HarnessCostScope {
+		bool open = false;
+		uint64_t round = 0, first = 0, last = 0;
+		uint32_t segment = 0;
+	};
+	std::mutex s_harnessCostMutex;
+	HarnessCostScope s_harnessCostScope;
+
+	void CloseHarnessCostScopeLocked() {
+		if (!s_harnessCostScope.open) return;
+		s_harnessCostScope.open = false;
+		static const unsigned long incarnation = std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"));
+		nlohmann::json instruments = nlohmann::json::object();
+		for (size_t instrument = 0; instrument < HarnessCost::InstrumentCount; ++instrument)
+			instruments[HarnessCost::c_Names[instrument]] = HarnessCost::Enabled(static_cast<HarnessCost::Instrument>(instrument));
+		System::PrintDiagnosticLine("[harness-cost-scope] " + nlohmann::json{{"version", 1}, {"process", System::GetProcessID()}, {"incarnation", incarnation},
+		    {"round", s_harnessCostScope.round}, {"segment", s_harnessCostScope.segment}, {"first_frame", s_harnessCostScope.first},
+		    {"last_frame", s_harnessCostScope.last}, {"instruments", instruments}}.dump());
+	}
+}
+
+static void WriteHarnessCostFrameOf(uint64_t round, uint64_t frame) {
+	if (!HarnessCost::AnyEnabled()) return;
+	std::lock_guard<std::mutex> lock(s_harnessCostMutex);
+	static const unsigned long incarnation = std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"));
+	static std::map<uint64_t, uint32_t> s_segments;
+	HarnessCostScope& scope = s_harnessCostScope;
+	// A tick that simulated no new frame leaves its costs to the frame that follows.
+	if (scope.open && scope.round == round && frame == scope.last) return;
+	if (scope.open && (scope.round != round || frame != scope.last + 1)) CloseHarnessCostScopeLocked();
+	if (!scope.open) {
+		static const bool s_flushAtExit = [] {
+			std::atexit([] {
+				std::lock_guard<std::mutex> exitLock(s_harnessCostMutex);
+				CloseHarnessCostScopeLocked();
+			});
+			return true;
+		}();
+		(void)s_flushAtExit;
+		scope = {true, round, frame, frame, s_segments[round]++};
+	}
+	scope.last = frame;
+	const auto charged = HarnessCost::TakeFrame();
+	nlohmann::json costs = nlohmann::json::object();
+	for (size_t instrument = 0; instrument < HarnessCost::InstrumentCount; ++instrument)
+		if (HarnessCost::Enabled(static_cast<HarnessCost::Instrument>(instrument))) costs[HarnessCost::c_Names[instrument]] = static_cast<double>(charged[instrument]) / 1e6;
+	System::PrintDiagnosticLine("[harness-cost-frame] " + nlohmann::json{{"process", System::GetProcessID()}, {"incarnation", incarnation}, {"round", round},
+	    {"segment", scope.segment}, {"frame", frame}, {"partition_valid", true}, {"costs_ms", costs}}.dump());
+}
+
+static void WriteHarnessCostFrame(uint64_t frame) {
+	WriteHarnessCostFrameOf(ScenarioRunner::GetLockstepRoundId(), frame);
+}
+
+// The menus' frames carry their instruments' costs too (the recorder's readback, the menu script's watches); each stay in the
+// menu loop is a round of its own, numbered apart from any match round, its frames counted from one.
+static uint64_t s_harnessMenuStay = 0;
+static uint64_t s_harnessMenuFrame = 0;
+static constexpr uint64_t c_HarnessMenuRounds = uint64_t{1} << 62;
+
+static void BeginHarnessCostMenuStay() {
+	++s_harnessMenuStay;
+	s_harnessMenuFrame = 0;
+}
+
+static void WriteHarnessCostMenuFrame() {
+	WriteHarnessCostFrameOf(c_HarnessMenuRounds | s_harnessMenuStay, ++s_harnessMenuFrame);
 }
 
 // CC_TERRAIN_DUMP=<tick> saves the material and FG color bitmaps beside the -out trace at that tick
@@ -4387,9 +4758,12 @@ static void DrawFrameWithPreviews() {
 	NetModerationGUIProbe::AfterDraw();
 }
 
-static void UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false) {
+/// Draws the wait; returns whether a held seat's player asked to leave it.
+static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, const std::string& heldLine = {}) {
 	PollSDLEvents();
 	g_UInputMan.Update(false);
+	// A held seat stays its player's, so the player may leave the wait from its first second.
+	const bool leave = heldRejoin && !g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.KeyPressed(SDLK_ESCAPE);
 	if (g_UInputMan.KeyPressed(SDLK_F6) || (g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.AnyStartPress(false))) {
 		g_MenuMan.ToggleNetworkPanel();
 	}
@@ -4400,11 +4774,11 @@ static void UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false) {
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
 	const int centerX = g_WindowMan.GetResX() / 2;
 	const int centerY = g_WindowMan.GetResY() / 2;
-	const std::string resyncTitle = heldRejoin ? "Held - AI in control - rejoining..." : "Resyncing the match...";
+	const std::string resyncTitle = heldRejoin ? (heldLine.empty() ? std::string("Held - AI in control - rejoining...") : heldLine) : std::string("Resyncing the match...");
 	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, resyncTitle, GUIFont::Centre);
 	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncTitle);
 	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8,
-	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]", GUIFont::Centre);
+	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]" + (heldRejoin ? "  /  Leave [Esc] - your seat is kept" : ""), GUIFont::Centre);
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts();
 	ScenarioRunner::NoteResyncOverlayFrame();
@@ -4416,6 +4790,7 @@ static void UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false) {
 	NetModerationGUIProbe::AfterDraw();
 	g_UInputMan.EndFrame();
 	g_UInputMan.EndSimUpdate();
+	return leave;
 }
 
 // The previews' gameplay against -lpinv-expect. A preview that starts before the canonical pickup must
@@ -6117,8 +6492,8 @@ static bool RunNetMatchE2ERematch(const std::string& result, bool finished) {
 			}
 			g_NetMatchService.RequestStart();
 		}
-		const auto rematchWaitStart = std::chrono::steady_clock::now();
-		while (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - rematchWaitStart).count() < 60) {
+		// The service's own deadlines end a lobby that never starts; no wall clock here does.
+		for (;;) {
 			CrossReadyForCurrentConfig(crossReadyRevision);
 			if (g_NetMatchService.ConsumeReadyToLaunch(rematchPreset)) {
 				rematchReady = true;
@@ -6135,14 +6510,18 @@ static bool RunNetMatchE2ERematch(const std::string& result, bool finished) {
 		System::PrintDiagnosticLine("[net-match] rematch lobby link lost: rejoining the host");
 		std::string rejoinError;
 		if (g_NetMatchService.BeginHeldRejoin(&rejoinError)) {
-			const auto rejoinStart = std::chrono::steady_clock::now();
-			while (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - rejoinStart).count() < 60) {
+			for (;;) {
 				CrossReadyForCurrentConfig(crossReadyRevision);
 				if (g_NetMatchService.ConsumeReadyToLaunch(rematchPreset)) {
 					rematchReady = true;
 					break;
 				}
-				if (g_NetMatchService.GetState() == NetMatchServiceState::Failed) break;
+				if (g_NetMatchService.PumpHeldRejoin(&rejoinError)) {
+					std::this_thread::sleep_for(std::chrono::milliseconds(5));
+					continue;
+				}
+				// A failed attempt is asked again after the roster's backoff, until its bound or the host's final word.
+				if (g_NetMatchService.GetState() == NetMatchServiceState::Failed && !g_NetMatchService.BeginHeldRejoinOnNextHost(&rejoinError)) break;
 				std::this_thread::sleep_for(std::chrono::milliseconds(5));
 			}
 		} else {
@@ -6378,6 +6757,11 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			bool resyncOk = false;
 			uint64_t endRecord = 0;
 			bool endedByRecord = false;
+			bool leftTheWait = false;
+			// Without a majority the seat waits for its host and the screen says why.
+			const size_t heldAt = error.find("PeerHeld:");
+			const std::string stopLine = heldAt == std::string::npos ? std::string() : error.substr(heldAt + 9);
+			const std::string unreachableAtStop = stopLine.rfind("The host is unreachable", 0) == 0 ? stopLine : std::string();
 			if (heldRejoin) {
 				resyncOk = g_NetMatchService.BeginHeldRejoin(&resyncError);
 			} else resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
@@ -6392,26 +6776,32 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 						resyncOk = false;
 						break;
 					}
-					UpdateResyncUI(static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - resyncWaitStart).count()), heldRejoin);
+					const std::string unreachable = heldRejoin ? g_NetMatchService.GetHostUnreachableLine() : std::string();
+					if (UpdateResyncUI(static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - resyncWaitStart).count()), heldRejoin,
+					                   unreachable.empty() ? unreachableAtStop : unreachable)) {
+						leftTheWait = true;
+						resyncOk = false;
+						break;
+					}
 					if (System::IsSetToQuit()) {
 						resyncError = "quit requested during resync";
 						resyncOk = false;
 						break;
+					}
+					// A held rejoin's next attempt is armed in the service and begins there once its backoff is over.
+					if (heldRejoin && g_NetMatchService.PumpHeldRejoin(&resyncError)) {
+						std::this_thread::sleep_for(std::chrono::milliseconds(5));
+						continue;
 					}
 					if (g_NetMatchService.GetState() == NetMatchServiceState::Failed) {
 						resyncError = g_NetMatchService.GetErrorText();
 						resyncOk = false;
 						break;
 					}
-					if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - resyncWaitStart).count() > 60) {
-						resyncError = "timed out waiting for the resync round";
-						resyncOk = false;
-						break;
-					}
 					std::this_thread::sleep_for(std::chrono::milliseconds(5));
 				}
 				// A held seat whose host is gone rejoins the peer that hosts the match now, through its private rejoin.
-				if (!resyncOk && !endedByRecord && heldRejoin && !System::IsSetToQuit()) {
+				if (!resyncOk && !endedByRecord && !leftTheWait && heldRejoin && !System::IsSetToQuit()) {
 					std::string nextError;
 					if (g_NetMatchService.BeginHeldRejoinOnNextHost(&nextError)) {
 						resyncOk = true;
@@ -6504,6 +6894,18 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				} else {
 					returnToMenuAfterNetworkEnd = true;
 				}
+			} else if (leftTheWait) {
+				System::PrintDiagnosticLine("[net-match] held client: left the wait for its host; the seat and its ticket are kept");
+				g_ConsoleMan.PrintString("NETWORK: Left the match - your seat is kept; Rejoin Match while it runs");
+				g_NetMatchService.LeaveHeldWait();
+				g_ActivityMan.EndActivity();
+				g_ActivityMan.SetInActivity(false);
+				ScenarioRunner::ClearControllerReplayError();
+				if (s_netMatchServiceE2E) {
+					System::SetQuit(true);
+				} else {
+					returnToMenuAfterNetworkEnd = true;
+				}
 			} else if (NetMatchHostGoodbyeEndedTheRejoin(resyncError)) {
 				// The host's goodbye ends this seat's match at the frame the round ended on: the rejoin had
 				// nothing left to return to, so the seat completes with what it holds instead of failing.
@@ -6547,6 +6949,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				line << "[net-match] controller sync failed: " << error;
 				System::PrintDiagnosticErrorLine(line.str());
 			}
+			CrossNoteOwnBan();
 			g_ConsoleMan.PrintString("NETWORK: Match stopped: " + error);
 			g_NetMatchService.ReportRuntimeError(error);
 			g_ActivityMan.EndActivity();
@@ -6908,8 +7311,49 @@ void RunGameLoop() {
 				static const long long s_fromTick = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_FROM_TICK"); return text ? std::atoll(text) : 0LL; }();
 				static const long long s_untilTick = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_UNTIL_TICK"); return text ? std::atoll(text) : 0LL; }();
 				const long long tick = g_TimerMan.GetSimUpdateCount();
+				// The window's receipt: which process crawled, over which ticks, from when to when on the steady clock the cross records read.
+				struct Window {
+					bool open = false, closed = false;
+					long long firstTick = 0, lastTick = 0;
+					double startMs = 0, endMs = 0;
+				};
+				static Window s_window;
+				const auto steadyMs = [] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
+				const auto receipt = [](const char* stage) {
+					return std::string("[sim-cost] ") + stage + " " + nlohmann::json{{"process", System::GetProcessID()}, {"instance", CrossEnvironment("CC_TEST_CROSS_INSTANCE")},
+					    {"incarnation", std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"))}, {"cost_us", s_testSimCostUs}, {"first_tick", s_window.firstTick},
+					    {"last_tick", s_window.lastTick}, {"start_ms", s_window.startMs}, {"end_ms", s_window.endMs}}.dump();
+				};
+				// The same window for a probe's dump: the world_spectator_cost_window a scripted watcher's crawl is proven by.
+				const auto keep = [] {
+					const std::string instance = CrossEnvironment("CC_TEST_CROSS_INSTANCE");
+					ScenarioRunner::NoteHarnessReceipt("world_spectator_cost_window", nlohmann::json{{"receipt", "world_spectator_cost_window"},
+					    {"process", instance.empty() ? nlohmann::json(System::GetProcessID()) : nlohmann::json(instance)}, {"pid", System::GetProcessID()},
+					    {"sim_cost_us", s_testSimCostUs}, {"first_tick", s_window.firstTick}, {"last_tick", s_window.lastTick}, {"start_ms", s_window.startMs},
+					    {"end_ms", s_window.endMs}, {"closed", s_window.closed}}.dump());
+				};
 				if (tick >= s_fromTick && (s_untilTick == 0 || tick < s_untilTick)) {
+					if (!s_window.open) {
+						s_window.open = true;
+						s_window.firstTick = tick;
+						s_window.startMs = steadyMs();
+						System::PrintDiagnosticLine(receipt("window_open"));
+						std::atexit([] {
+							if (s_window.open && !s_window.closed) {
+								s_window.closed = true;
+								System::PrintDiagnosticLine(std::string("[sim-cost] window_closed_at_exit ") + nlohmann::json{{"process", System::GetProcessID()},
+								    {"first_tick", s_window.firstTick}, {"last_tick", s_window.lastTick}, {"start_ms", s_window.startMs}, {"end_ms", s_window.endMs}}.dump());
+							}
+						});
+					}
 					for (const long long until = g_TimerMan.GetAbsoluteTime() + s_testSimCostUs; g_TimerMan.GetAbsoluteTime() < until;) {}
+					s_window.lastTick = tick;
+					s_window.endMs = steadyMs();
+					keep();
+				} else if (s_window.open && !s_window.closed) {
+					s_window.closed = true;
+					System::PrintDiagnosticLine(receipt("window_closed"));
+					keep();
 				}
 			};
 			if (s_testSimCostUs > 0 && s_testSimCostOutside) spendTestSimCost();
@@ -7501,7 +7945,7 @@ void RunGameLoop() {
 			}
 			CrossRecoveryAtCommittedTick(simTick, lockstepPausedTick);
 			if (hashThisTick) {
-				const auto harnessStart = std::chrono::steady_clock::now();
+				const HarnessCost::SimulationSpan harnessSpan;
 				// The object census goes in here, not inside MovableMan::Update: the checkpoint
 				// archive below writes the same deques, so both have to read one instant.
 				g_MovableMan.FeedTickEndChecksum();
@@ -7513,19 +7957,33 @@ void RunGameLoop() {
 					// A subsystem with nothing to hash this tick (no actors left) still has its row entry, at the empty value.
 					for (const auto& [name, hash]: SimChecksum::CompleteSubsystems(tickResult)) subsystems[name] = SimChecksum::HashHex(hash);
 					nlohmann::json observation = s_crossContext.is_object() ? s_crossContext : nlohmann::json::object();
+					// A catch-up replays committed ticks behind its overlay: the player plays none of them, so they are its private history.
+					const bool catchUpTick = ScenarioRunner::WorldCatchUpActive();
+					if (!observation.contains("phase")) observation["phase"] = catchUpTick ? "catchup" : "live";
+					observation["player_visible"] = !catchUpTick;
 					observation.update(nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
 					    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()},
 					    {"peer", ScenarioRunner::GetLockstepLocalPeerId()}, {"paused", lockstepPausedTick},
 					    {"total", SimChecksum::HashHex(tickResult.total)}, {"sim_gated", SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult))},
 					    {"subsystems", std::move(subsystems)}});
 					LiveTickHashStream().Write(observation.dump());
+					// The first tick this process recorded in each round: where its comparable history begins, for a probe's dump.
+					static uint64_t s_firstLiveRound = 0;
+					if (const uint64_t round = ScenarioRunner::GetLockstepRoundId(); round != s_firstLiveRound) {
+						s_firstLiveRound = round;
+						ScenarioRunner::NoteHarnessReceipt("first_live_tick", nlohmann::json{{"round", round}, {"tick", simTick}}.dump());
+					}
 					// The harness's own tick-end cost on this machine, beside the capacity it publishes: the share of a slow seat that is the harness's.
 					static std::vector<double> s_harnessTickUs;
-					s_harnessTickUs.push_back(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - harnessStart).count());
+					const int64_t harnessNs = harnessSpan.Stop();
+					HarnessCost::Charge(HarnessCost::TickEnd, harnessNs);
+					s_harnessTickUs.push_back(static_cast<double>(harnessNs) / 1000.0);
 					if (s_harnessTickUs.size() == 600) {
 						std::sort(s_harnessTickUs.begin(), s_harnessTickUs.end());
-						System::PrintDiagnosticLine(std::format("[harness-cost] tick={} window=600 tick_end_us p50={:.0f} p95={:.0f} max={:.0f}", simTick, s_harnessTickUs[300],
-						                                        s_harnessTickUs[570], s_harnessTickUs.back()));
+						// Whole microseconds cut down, never rounded up: a summary must not read above the frame records it summarises.
+						const auto us = [](double value) { return static_cast<long long>(value); };
+						System::PrintDiagnosticLine(std::format("[harness-cost] tick={} window=600 tick_end_us p50={} p95={} max={}", simTick, us(s_harnessTickUs[300]),
+						                                        us(s_harnessTickUs[570]), us(s_harnessTickUs.back())));
 						s_harnessTickUs.clear();
 					}
 				}
@@ -7565,51 +8023,56 @@ void RunGameLoop() {
 				g_LuaMan.WaitForAsyncGarbageCollection();
 			}
 			if (s_crossLeaveRequested) { s_crossLeaveRequested = false; s_scriptedLeaveDue = true; }
-			// Test lever CCCP_TEST_MINIMIZE_TICKS=<from>:<to>: the window is minimized at the first tick and restored at the second.
-			static const std::pair<uint64_t, uint64_t> s_minimizeTicks = [] {
-				unsigned long long from = 0, to = 0;
-				const char* text = std::getenv("CCCP_TEST_MINIMIZE_TICKS");
-				return text && std::sscanf(text, "%llu:%llu", &from, &to) == 2 && to > from ? std::pair<uint64_t, uint64_t>(from, to) : std::pair<uint64_t, uint64_t>(0, 0);
-			}();
-			if (s_minimizeTicks.second != 0 && g_WindowMan.GetWindow()) {
+			if (const MinimizeLever& lever = TestMinimizeLever(); lever.to != 0 && g_WindowMan.GetWindow()) {
+				SDL_Window* window = g_WindowMan.GetWindow();
 				const uint64_t tick = static_cast<uint64_t>(simTick);
-				if (tick == s_minimizeTicks.first) SDL_MinimizeWindow(g_WindowMan.GetWindow());
-				if (tick == s_minimizeTicks.second) SDL_RestoreWindow(g_WindowMan.GetWindow());
-				if (tick == s_minimizeTicks.first || tick == s_minimizeTicks.first + 60 || tick == s_minimizeTicks.second || tick == s_minimizeTicks.second + 60) {
-					const SDL_WindowFlags flags = SDL_GetWindowFlags(g_WindowMan.GetWindow());
+				if (tick == lever.from) SDL_MinimizeWindow(window);
+				if (tick == lever.to) {
+					// SDL minimizes an unfocused fullscreen window again, and a private desktop gives none focus, so it comes back as a window.
+					if (lever.fullscreen && g_WindowMan.IsFullscreen()) g_WindowMan.ToggleFullscreen();
+					SDL_RestoreWindow(window);
+				}
+				if (tick == lever.from || tick == lever.from + 60 || tick == lever.to || tick == lever.to + 60) {
+					const SDL_WindowFlags flags = SDL_GetWindowFlags(window);
 					System::PrintDiagnosticLine("[selftest] window tick=" + std::to_string(tick) + " minimized=" + std::to_string((flags & SDL_WINDOW_MINIMIZED) != 0) +
 					                            " hidden=" + std::to_string((flags & SDL_WINDOW_HIDDEN) != 0));
 				}
+				if (lever.fullscreen && tick + 60 >= lever.from && tick <= lever.to + 60 && (tick + 60 - lever.from) % 60 == 0) WriteTestWindowState(tick);
 			}
 			if (s_memoryCensusTicks != 0 && simTick % s_memoryCensusTicks == 0) {
 				// The census's counts are read on the sim thread and each part's cost goes on its line; the census worker sums the process heaps and prints it.
 				std::string costs;
 				const auto timed = [&costs](const char* name, const auto& part) {
-					const auto begin = std::chrono::steady_clock::now();
+					const HarnessCost::SimulationSpan span;
 					std::ostringstream text;
 					text << part();
-					costs += std::string(costs.empty() ? "" : ",") + name + ":" + std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin).count());
+					const int64_t ns = span.Stop();
+					HarnessCost::Charge(HarnessCost::Census, ns);
+					costs += std::string(costs.empty() ? "" : ",") + name + ":" + std::to_string(ns / 1000);
 					return text.str();
 				};
 				const std::string lua = timed("lua", [] { return g_LuaMan.GetTotalHeapBytes(); });
 				// The capture keeps its last image for the next one to share; that image is the full-state instrument's own memory.
-				const std::string cow = timed("cow", [] { return CheckpointCow::Get().Cache().Census() + " last_image_mb=" + std::to_string(CheckpointCow::Get().LastImageBytes() >> 20); });
+				const std::string cow = timed("cow", [] { return CheckpointCow::Get().Cache().Census() + " last_image_mb=" + std::to_string(CheckpointCow::Get().LastImageBytes() >> 20) + " " + CheckpointCow::Get().PartCensus(); });
 				const std::string movable = timed("movable", [] { return g_MovableMan.Census(); });
 				const std::string atoms = timed("atoms", [] { return Atom::SampledConstructionStacks(); });
 				const std::string audio = timed("audio", [] { return g_AudioMan.Census(); });
 				const std::string runner = timed("runner", [] { return ScenarioRunner::MemoryCensus(); });
 				const std::string console = timed("console", [] { return g_ConsoleMan.LogCensus(); });
 				const std::string pace = timed("pace", [] { return PaceCensusSinceLast(); });
+				const std::string world = timed("world", [] { return g_NetMatchService.MemoryCensus(); });
 				std::ostringstream rest;
 				// Rounds restart their ticks, so the census names its own instant for a slope across a rematching run.
-				static const auto s_censusEpoch = std::chrono::steady_clock::now();
-				rest << " uptime_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - s_censusEpoch).count();
+				rest << " uptime_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - s_CensusProcessStart).count();
 				rest << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua
 				     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << cow
-				     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << pace;
+				     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << ' ' << world << pace;
 				CensusWorker::Get().Post([simTick, rest = std::move(rest).str(), costs = std::move(costs)]() mutable {
+					// The worker's whole job is the census's cost too, charged to the frame it ends in.
+					const auto began = std::chrono::steady_clock::now();
 					const std::string heap = ProcessHeapCensus(costs);
 					System::PrintDiagnosticLine("[mem-census] tick=" + std::to_string(simTick) + heap + rest + " census_us=" + costs);
+					HarnessCost::Charge(HarnessCost::Census, std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - began).count());
 				});
 			}
 			if (s_scriptedLeaveDue) {
@@ -7832,7 +8295,8 @@ void RunGameLoop() {
 				bool landed = false;
 				for (uint8_t peer = 1; peer <= NetLockstepCodec::c_MaxPeerCount && !landed && simTick > 60; ++peer)
 					landed = ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick - 60) && !ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick - 59);
-				if (landed && !reclaimStart) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump, "landed");
+				// A landed tick owes its sample even when another seat's gap opens on it; each label dumps into a folder of its own.
+				if (landed) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump, "landed");
 				if (!catchingUp && ((roundStart && !reclaimStart) || simTick % s_netFullStateEvery == 0)) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump);
 			}
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
@@ -7840,6 +8304,9 @@ void RunGameLoop() {
 			TelemetryBundle::CaptureAtTickBoundary();
 			const long long crossCaptureUs = g_TimerMan.GetAbsoluteTime() - crossCaptureStartUs;
 			const long long crossCaptureWaitUs = ScenarioRunner::GetLockstepWaitUs() - crossCaptureWaitStartUs;
+			WriteHarnessCostFrame(static_cast<uint64_t>(simTick));
+			// The watches' running totals, so a peer a scene kills has reported what it judged.
+			if (simTick % 600 == 0) MenuAutomation::ReportWatches("periodic");
 
 			// The paced round estimates execution cost without counting its idle interval.
 			if (measureLockstepCost) {
@@ -9522,8 +9989,6 @@ int RunNetMatchServiceE2E() {
 		if (e2eHost && crossOptionsApplied) {
 			g_NetMatchService.RequestStart();
 		}
-		const bool unlimitedWorld = e2eHost && s_netPersistentWorld && !s_netMatchTicksExplicit;
-		auto waitStart = std::chrono::steady_clock::now();
 		bool roundEndedOnTheWay = false;
 		while (true) {
 			PollSDLEvents();
@@ -9562,18 +10027,10 @@ int RunNetMatchServiceE2E() {
 					s_netMatchServiceE2EExitCode = 1;
 					break;
 				}
-				waitStart = std::chrono::steady_clock::now();
 				continue;
 			}
 			if (state == NetMatchServiceState::Failed) {
 				setupError = g_NetMatchService.GetErrorText();
-				s_netMatchServiceE2EExitCode = 1;
-				break;
-			}
-			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-				std::chrono::steady_clock::now() - waitStart).count());
-			if (!unlimitedWorld && nowMs > 60000) {
-				setupError = "timed out waiting for service launch";
 				s_netMatchServiceE2EExitCode = 1;
 				break;
 			}
@@ -9679,6 +10136,7 @@ int RunNetMatchServiceE2E() {
 	}
 
 	CrossRecoveryAtCommittedTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+	CrossNoteOwnBan();
 	std::string reportError;
 	const int exitCode = setupError.empty() ? s_netMatchServiceE2EExitCode : 1;
 	const bool a7ReportSettled = !NetA7Journal::Enabled() || g_NetMatchService.CanSealA7Journal();
@@ -10505,6 +10963,23 @@ int main(int argc, char** argv) {
 	ScenarioRunner::SetLockstepStallUIProbeArmed(netUiProbeScript != nullptr && *netUiProbeScript != '\0');
 
 	const bool mainArgsValid = HandleMainArgs(argc, argv);
+	// Only a menu script, the UI probe or a harness's screen watches read what the renderer drew.
+	const char* screenWatches = std::getenv("CCCP_TEST_SCREEN_WATCHES");
+	SetPanelDrawRecording(!s_menuScriptPath.empty() || (netUiProbeScript != nullptr && *netUiProbeScript != '\0') || (screenWatches != nullptr && *screenWatches != '\0'));
+	// The instruments this process runs, from the levers it was launched with: every frame's cost receipt names each one's measured cost.
+	{
+		const auto armed = [](const char* name) { const char* value = std::getenv(name); return value && *value; };
+		unsigned long long dumpFrom = 0, dumpTo = 0;
+		const char* dump = std::getenv("CC_SIM_DUMP");
+		HarnessCost::SetEnabled(HarnessCost::SimDump, dump && std::sscanf(dump, "%llu:%llu", &dumpFrom, &dumpTo) == 2 && dumpTo >= dumpFrom);
+		HarnessCost::SetEnabled(HarnessCost::TickEnd, !s_netLiveTickHashPath.empty());
+		HarnessCost::SetEnabled(HarnessCost::FullState, s_netFullStateEvery != 0);
+		HarnessCost::SetEnabled(HarnessCost::Census, s_memoryCensusTicks != 0);
+		// A preview's steps are recorded only for the feel recorder or the fidelity probe; the player's own prediction setting arms neither.
+		HarnessCost::SetEnabled(HarnessCost::PreviewFidelity, armed("CCCP_TEST_PREVIEW_FIDELITY") || FrameMan::FeelRecordingEnabled());
+		HarnessCost::SetEnabled(HarnessCost::ScreenWatches, armed("CCCP_TEST_SCREEN_WATCHES") || !s_menuScriptPath.empty() || (netUiProbeScript != nullptr && *netUiProbeScript != '\0'));
+		HarnessCost::SetEnabled(HarnessCost::Recorder, !s_recordVideoDirectory.empty());
+	}
 	if (CaptureSentinel::Enabled()) CaptureSentinel::Enable();
 	if (s_netDedicated && !s_netMatchServiceE2E) {
 		s_netWorldDaemon = true;
@@ -10589,6 +11064,8 @@ int main(int argc, char** argv) {
 	}
 
 	g_PresetMan.LoadAllDataModules();
+	// The device icons are presets, so they load once the modules have, before any path that can draw a menu.
+	if (!System::IsInExternalModuleValidationMode()) g_UInputMan.LoadDeviceIcons();
 	SpendPreMatchHistory(s_preMatchHistoryObjects);
 	PlayPreMatchActivity(s_preMatchActivity);
 	// The modules are loaded and will not change under this process: read them once here, off the game
@@ -10744,9 +11221,6 @@ int main(int argc, char** argv) {
 	int scenarioExitCode = 0;
 
 	if (!System::IsInExternalModuleValidationMode()) {
-		// Load the different input device icons. This can't be done during UInputMan::Create() because the icon presets don't exist so we need to do this after modules are loaded.
-		g_UInputMan.LoadDeviceIcons();
-
 		if (g_ConsoleMan.LoadWarningsExist()) {
 			g_ConsoleMan.PrintString("WARNING: Encountered non-fatal errors during module loading!\nSee \"LogLoadingWarning.txt\" for information.");
 			g_ConsoleMan.SaveLoadWarningLog("LogLoadingWarning.txt");

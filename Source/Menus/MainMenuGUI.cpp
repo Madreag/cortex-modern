@@ -1200,8 +1200,10 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		g_NetMatchService.RequestStart();
 		g_GUISound.ButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]) {
+		// A join cancelled while the world's image comes goes back to where the player chose the match; the host frees the seat it offered.
+		const bool cancelsTransfer = !g_NetMatchService.GetLobbySnapshot().transferLine.empty();
 		g_NetMatchService.Destroy();
-		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+		m_MultiplayerSubScreen = cancelsTransfer ? MultiplayerSubScreen::JoinSetup : MultiplayerSubScreen::Landing;
 		g_GUISound.BackButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReconnectButton] &&
 	           m_MultiplayerApplyOffered && g_NetMatchService.WasJoinRefusedByALiveMatch() &&
@@ -2709,12 +2711,11 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 		}
 	}
 	const NetModerationUx::Row* mrow = m_HostSeatDlgModerationRow >= 0 ? &m_ModerationUx.GetRow(m_HostSeatDlgModerationRow) : nullptr;
-	if (mrow && (mrow->view.dropped || mrow->view.heldForReclaim || mrow->view.reclaiming)) {
-		// H08's countdown is the snapshot's own figure: frames the round still holds, in seconds.
-		const uint64_t seconds = NetSeatPresence::HoldSeconds(mrow->view.holdFramesRemaining);
-		m_HostSeatDlgReclaim->SetText(mrow->view.holdFramesRemaining > 0
-		                                  ? "Reclaim: seat held " + std::to_string(seconds) + "s for the original holder"
-		                                  : "Reclaim: the hold has run out");
+	if (mrow && (mrow->view.dropped || mrow->view.held || mrow->view.reclaiming)) {
+		// A held seat waits for its player with no deadline: only the host's click gives it away.
+		const std::string cause = NetModerationUx::HoldCause(mrow->view);
+		m_HostSeatDlgReclaim->SetText(mrow->view.reclaiming ? std::string("Reclaim: its player is rejoining")
+		                                                    : "Reclaim: seat kept for its player" + (cause.empty() ? std::string() : " - " + cause));
 	} else {
 		m_HostSeatDlgReclaim->SetText(mrow ? "Reclaim: seat in use" : "Reclaim: --");
 	}
@@ -3660,17 +3661,22 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			if (open) return " - Team " + std::to_string(member.team + 1);
 			std::string tail = member.isLocal ? " (you)" : "";
 			tail += " - Team " + std::to_string(member.team + 1);
-			tail += member.peerId == snapshot.hostPeerId ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
+			// A running world readies nobody up: its joiner comes in by the image.
+			if (member.peerId == snapshot.hostPeerId) tail += " - Host";
+			else if (!snapshot.joiningWorld) tail += member.ready ? " - Ready" : " - Not ready";
 			tail += seat;
-			if (!member.cpu && withMetrics) tail += " - Ping " + std::to_string(member.pingMs) + " ms - delay " + std::to_string(member.inputDelayFrames) + " frames";
+			// A world's joiner measures only its own link: the others' are the host's to know.
+			if (!member.cpu && withMetrics && (!snapshot.joiningWorld || member.isLocal)) tail += " - Ping " + std::to_string(member.pingMs) + " ms - delay " + std::to_string(member.inputDelayFrames) + " frames";
 			return tail;
 		};
 		// An open seat reads open, never as a player who is not ready, nor by the remembered name of the one who held it.
 		lobbyRowName[i] = open ? std::string("Open seat")
 		                                     : LobbyRowName(member, m_MultiplayerNameTextBox && !m_MultiplayerNameTextBox->GetText().empty()
 		                                                            ? m_MultiplayerNameTextBox->GetText() : SavedMultiplayerName());
-		lobbyRowTailFull[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine);
-		lobbyRowTailWithoutMetrics[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine, false);
+		// The seat's line is "name: state"; the row already starts with the name.
+		const std::string seatLine = member.statusLine.empty() ? std::string() : member.statusLine.substr(member.statusLine.rfind(": ") == std::string::npos ? 0 : member.statusLine.rfind(": ") + 2);
+		lobbyRowTailFull[i] = buildTail(seatLine.empty() ? seatMark : " - " + seatLine);
+		lobbyRowTailWithoutMetrics[i] = buildTail(seatLine.empty() ? seatMark : " - " + seatLine, false);
 		// The row drops connection metrics before shortening the seat state.
 		lobbyRowTailCompact[i] = buildTail(seatMark, false);
 		label->SetVisible(true);
@@ -3728,7 +3734,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		}
 	} else {
 		s_ShareResolved = false;
-		m_MultiplayerStatusLabel->SetText(PlayerFacingStatus(snapshot.statusText));
+		m_MultiplayerStatusLabel->SetText(!snapshot.transferLine.empty() ? snapshot.transferLine : PlayerFacingStatus(snapshot.statusText));
 	}
 	if (!addressOnOwnRow) {
 		m_MultiplayerStatusLabel->SetHorizontalOverflowScroll(false);
@@ -3902,12 +3908,14 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	leave->SetPositionRel(pairLeft, 236 + extraHeight);
 	LayoutMultiplayerFooter(contentWidth, contentHeight);
 
-	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost);
-	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetEnabled(!snapshot.isHost && snapshot.inLobby);
+	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost && !snapshot.joiningWorld);
+	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetEnabled(!snapshot.isHost && !snapshot.joiningWorld && snapshot.inLobby);
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetVisible(snapshot.isHost);
 	// Start only once the remote peer is actually ready, not merely present.
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && snapshot.remoteReady);
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetEnabled(true);
+	// While the world's image comes the exit cancels the join, and says so.
+	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetText(snapshot.transferLine.empty() ? "Leave" : "Cancel");
 	// §9b: moderation is a match feature - a lobby seat whose holder leaves goes straight back in the pool.
 	seats->SetPositionRel(pairLeft + leave->GetWidth() + pairGap, 236 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetVisible(snapshot.isHost);

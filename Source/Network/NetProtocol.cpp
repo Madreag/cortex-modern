@@ -296,6 +296,9 @@ namespace RTE {
 				case NetRejectReason::SeatReleased:
 					out = static_cast<NetRejectReason>(rawReason);
 					return true;
+				// A client's own record of its link, never a host's word.
+				case NetRejectReason::HostLinkLost:
+					break;
 			}
 			SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset() - 2, "reject reason has invalid enum value");
 			return false;
@@ -662,6 +665,16 @@ namespace RTE {
 			AppendU16LE(out, payload.h4Version);
 			AppendU16LE(out, static_cast<uint16_t>(payload.roster.size()));
 			out.insert(out.end(), payload.roster.begin(), payload.roster.end());
+			return true;
+		}
+
+		bool EncodePayload(const NetH4RosterRevisionRequest& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
+			if (payload.revision == 0) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "a roster revision request names no revision");
+				return false;
+			}
+			AppendU16LE(out, payload.h4Version);
+			AppendU32LE(out, payload.revision);
 			return true;
 		}
 
@@ -1185,6 +1198,17 @@ namespace RTE {
 			return true;
 		}
 
+		bool DecodePayload(ByteReader& reader, NetH4RosterRevisionRequest& payload, NetProtocolError* error) {
+			if (!ReadH4Version(reader, payload.h4Version, error) || !ReadOrTruncated(reader.ReadU32LE(payload.revision), reader, error, "revision")) {
+				return false;
+			}
+			if (payload.revision == 0) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset(), "a roster revision request names no revision");
+				return false;
+			}
+			return true;
+		}
+
 		bool DecodePayload(ByteReader& reader, NetH4RosterRevision& payload, NetProtocolError* error) {
 			uint16_t size = 0;
 			if (!ReadH4Version(reader, payload.h4Version, error) || !ReadOrTruncated(reader.ReadU16LE(size), reader, error, "roster_size")) {
@@ -1234,6 +1258,7 @@ namespace RTE {
 			case NetMessageType::SubstitutionAck:
 			case NetMessageType::ParticipantRemoval:
 			case NetMessageType::RosterRevision:
+			case NetMessageType::RosterRevisionRequest:
 				return true;
 			default:
 				return false;
@@ -1254,8 +1279,9 @@ namespace RTE {
 			       static_cast<uint16_t>(type) >= static_cast<uint16_t>(NetMessageType::ClientHello) &&
 			       static_cast<uint16_t>(type) <= static_cast<uint16_t>(NetMessageType::Chat);
 		}
-		if (headerVersion == 4) {
-			return type != NetMessageType::RosterRevision;
+		// 3 is the published alpha's and 4 differs from it only in a reject reason it may carry; 5 adds the roster revision.
+		if (headerVersion == 3 || headerVersion == 4) {
+			return type != NetMessageType::RosterRevision && type != NetMessageType::RosterRevisionRequest;
 		}
 		return headerVersion == c_Version;
 	}
@@ -1292,6 +1318,7 @@ namespace RTE {
 			[](const NetParticipantChallenge&) { return NetMessageType::ParticipantChallenge; },
 			[](const NetParticipantProof&) { return NetMessageType::ParticipantProof; },
 			[](const NetH4RosterRevision&) { return NetMessageType::RosterRevision; },
+			[](const NetH4RosterRevisionRequest&) { return NetMessageType::RosterRevisionRequest; },
 		}, payload);
 	}
 
@@ -1354,6 +1381,7 @@ namespace RTE {
 			case NetRejectReason::ParticipantBanned: return "ParticipantBanned";
 			case NetRejectReason::IdentityUnproven: return "IdentityUnproven";
 			case NetRejectReason::SeatReleased: return "SeatReleased";
+			case NetRejectReason::HostLinkLost: return "HostLinkLost";
 		}
 		return "Unknown";
 	}
@@ -1382,9 +1410,9 @@ namespace RTE {
 	}
 
 	bool NetProtocol::CanEncodeAtVersion(uint16_t headerVersion) {
-		// v1 and v2 share every payload they had with this build, so an older peer can still be told,
+		// Every older version shares every payload it had with this build, so an older peer can still be told,
 		// in its own envelope, why it was refused.
-		return headerVersion == c_Version || headerVersion == 1 || headerVersion == 2 || headerVersion == 4;
+		return headerVersion == c_Version || (headerVersion >= 1 && headerVersion <= 4);
 	}
 
 	bool NetProtocol::PeekHeaderVersion(const uint8_t* data, size_t size, uint16_t& outVersion) {
@@ -1729,6 +1757,12 @@ namespace RTE {
 			}
 			case NetMessageType::RosterRevision: {
 				NetH4RosterRevision value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::RosterRevisionRequest: {
+				NetH4RosterRevisionRequest value;
 				decoded = DecodePayload(payloadReader, value, &payloadError);
 				payload = value;
 				break;

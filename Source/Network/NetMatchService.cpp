@@ -105,25 +105,92 @@ namespace RTE {
 		return m_LastMatchSummary;
 	}
 
+	namespace {
+		/// A seat is away while its owner's link is gone, its return is in flight or the host opened it; a hold in place keeps its player.
+		bool SeatViewAway(const NetMatchService::SeatView& view) {
+			return view.peerId != 0 && (view.seat.owner == 0 || view.seat.link == NetSeatLink::Dropped || view.state == "Reconnecting");
+		}
+
+		/// The name a route receipt gives the relay offer a connection's TURN lists came from: its match id and its expiry.
+		std::string RelayOfferName(const NetRelayConfig& offer) {
+			return offer.matchId + "@" + std::to_string(offer.expiresAt);
+		}
+	} // namespace
+
 	void NetMatchService::UpdateSummarySeatsLocked() {
-		for (const auto& [peerId, seat] : m_SeatPresence.GetSeats()) {
+		for (const auto& [peerId, view] : m_SeatViews) {
 			auto& previous = m_SummarySeats[peerId];
-			const auto away = [](NetSeatPresenceState state) {
-				return state == NetSeatPresenceState::Disconnected || state == NetSeatPresenceState::Reconnecting || state == NetSeatPresenceState::Left;
-			};
-			if (away(seat.state) && !away(previous.state)) ++m_CurrentMatchSummary.drops;
-			if (previous.peerId && seat.holderGeneration > previous.holderGeneration) {
+			const bool away = SeatViewAway(view);
+			const bool wasAway = SeatViewAway(previous);
+			if (away && !wasAway) ++m_CurrentMatchSummary.drops;
+			if (previous.peerId != 0 && previous.seat.owner != 0 && view.seat.owner != 0 && view.seat.owner != previous.seat.owner) {
 				++m_CurrentMatchSummary.substitutions;
-			} else if (previous.peerId && !away(seat.state) && (away(previous.state) || seat.incarnation > previous.incarnation)) {
+			} else if (wasAway && !away) {
 				++m_CurrentMatchSummary.reclaims;
 			}
 			for (auto& peer : m_CurrentMatchSummary.peers) {
 				if (peer.peerId != peerId) continue;
-				peer.seat = seat.stableSeat;
-				if (!seat.holderName.empty()) peer.name = seat.holderName;
+				peer.seat = view.stableSeat;
+				if (!view.name.empty()) peer.name = view.name;
 			}
-			previous = seat;
+			previous = view;
 		}
+	}
+
+	NetMatchService::SeatView NetMatchService::BuildSeatView(uint8_t peerId, uint16_t stableSeat, uint32_t revision, const NetRosterSeat& seat, const std::string& name) {
+		SeatView view;
+		view.peerId = peerId;
+		view.stableSeat = stableSeat;
+		view.revision = revision;
+		view.seat = seat;
+		view.name = !seat.name.empty() ? seat.name : (name.empty() ? "Player " + std::to_string(peerId) : name);
+		view.state = RosterSeatStateWord(seat);
+		view.line = RosterSeatLine(seat, view.name);
+		return view;
+	}
+
+	void NetMatchService::RefreshSeatViewsLocked(uint64_t observedAtMs) {
+		const NetRosterReplica& replica = m_ReconnectClient.GetRosterReplica();
+		const bool hosted = m_IsHost && m_AdmissionAttached;
+		if (!hosted && !replica.HasRoster()) return;
+		const NetSeatRoster& roster = hosted ? m_ReconnectHost.GetRoster() : replica.Roster();
+		// Before its round runs a joiner's seats are the lobby's agreed config, which the publish has just adopted.
+		const NetMatchConfig& config = m_State != NetMatchServiceState::Running && m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig
+		                               : m_Runner ? m_Runner->GetMatchConfig() : (m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig);
+		std::map<uint8_t, SeatView> views;
+		for (const NetH4Seat& entry: NetH4BuildSeatTable(config)) {
+			if (entry.cpu || entry.lockstepPeerId == 0) continue;
+			const NetRosterSeat* seat = roster.Find(NetRosterIdOf(entry.stableSeat));
+			if (!seat) continue;
+			std::string name;
+			const std::string open = NetMatchConfigUtil::UnseatedSlotName(entry.lockstepPeerId, config.persistentWorld);
+			for (const NetMatchPlayerSlot& slot: config.players)
+				if (slot.peerId == entry.lockstepPeerId && !slot.displayName.empty() && !(config.persistentWorld && slot.displayName == open)) name = slot.displayName;
+			for (const NetLobbyMember& member: m_LobbySnapshot.members)
+				if (member.peerId == entry.lockstepPeerId && !member.displayName.empty() && member.displayName != open)
+					name = member.displayName;
+			views[entry.lockstepPeerId] = BuildSeatView(entry.lockstepPeerId, entry.stableSeat, roster.revision, *seat, name);
+		}
+		if (m_Coordinator) {
+			std::map<uint8_t, std::string> names;
+			for (const auto& [peerId, view]: views) names[peerId] = view.name;
+			m_Coordinator->SetSeatNames(std::move(names));
+		}
+		std::map<uint8_t, SeatView> previous = std::move(m_SeatViews);
+		m_SeatViews = std::move(views);
+		RecordRosterTransitions(previous, observedAtMs);
+	}
+
+	std::map<uint8_t, NetMatchService::SeatView> NetMatchService::GetSeatViews() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_SeatViews;
+	}
+
+	std::optional<NetMatchService::SeatView> NetMatchService::GetSeatView(uint8_t peerId) const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		const auto found = m_SeatViews.find(peerId);
+		if (found == m_SeatViews.end()) return std::nullopt;
+		return found->second;
 	}
 
 	void NetMatchService::CaptureMatchSummaryLocked(const std::string& result) {
@@ -886,6 +953,12 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	bool NetMatchService::MatchPlaysOnUnderANewHost(const NetSeatRoster& roster) {
+		return std::any_of(roster.seats.begin(), roster.seats.end(), [&roster](const NetRosterSeat& seat) {
+			return seat.seatId != roster.hostSeat && seat.owner != 0 && seat.link == NetSeatLink::Connected;
+		});
+	}
+
 	std::string NetMatchService::RoundEndResultText(int winnerTeam, int localTeam) {
 		if (winnerTeam < 0) return "Match over: draw";
 		if (localTeam == Activity::NoTeam) return "Match over";
@@ -988,8 +1061,8 @@ static std::string ResyncSaveName() {
 			uint8_t seat = 0;
 			for (const auto& [peerId, transport]: m_Coordinator->RemoteTransports()) if (transport == peer.transportPeerId) seat = peerId;
 			if (seat == 0) {
-				const uint16_t stable = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
-				for (const auto& held: m_ReconnectHost.GetSeatStatuses()) if (stable != 0 && held.stableSeat == stable) seat = held.lockstepPeerId;
+				const std::optional<uint16_t> stable = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
+				for (const auto& held: m_ReconnectHost.GetSeatStatuses()) if (stable && held.stableSeat == *stable) seat = held.lockstepPeerId;
 			}
 			if (!EndedRoundOwesGoodbye(m_Coordinator->UsesTransportPeer(peer.transportPeerId), seat != 0 && m_Coordinator->IsSeatUnderAI(seat, lastFrame))) continue;
 			if (seat != 0 && EndedRoundAwaitsFinalTail(m_WorldJoin.FindSession(peer.transportPeerId) != nullptr, m_Coordinator->IsSeatUnderAI(seat, lastFrame),
@@ -1045,6 +1118,7 @@ static std::string ResyncSaveName() {
 			case NetRejectReason::SessionEnded:
 			case NetRejectReason::Timeout:
 			case NetRejectReason::InternalError:
+			case NetRejectReason::HostLinkLost:
 				return true;
 			default:
 				return false;
@@ -1716,12 +1790,24 @@ static std::string ResyncSaveName() {
 				config.startFrame = m_WorldCatchUp.snapshotTick + 1;
 				config.migrationGeneration = m_WorldCatchUp.authorityGeneration;
 				config.simTickMs = g_TimerMan.GetDeltaTimeMS();
+				// A watcher holds no seat: it replays the round as its authority recorded it, and a playback takes no local input.
+				if (m_LocalPeerId == 0 || m_LocalPeerId > config.peerCount) config.localPeerId = config.authorityPeerId;
 				auto transport = std::make_unique<LoopbackTransport>();
 				auto replay = std::make_unique<NetLockstepCoordinator>();
-				if (config.peerCount != 0 && m_LocalPeerId != 0 && m_LocalPeerId <= config.peerCount && replay->StartReplay(*transport, config, error)) {
+				if (config.peerCount != 0 && config.localPeerId != 0 && config.localPeerId <= config.peerCount && replay->StartReplay(*transport, config, error)) {
 					m_CatchUpTransport = std::move(transport);
 					m_CatchUpCoordinator = std::move(replay);
 					ScenarioRunner::SetLockstepCoordinator(m_CatchUpCoordinator.get());
+					// The image's own lockstep state: the handoffs a hold made before its tick are not in the tail that follows it.
+					if (!m_WorldCatchUp.sideState.empty()) {
+						committed = std::make_shared<NetResyncState>();
+						std::vector<uint8_t> metadata, placeholder;
+						if (!ResumeBytes(m_WorldCatchUp.sideState, metadata) || !NetResyncCodec::Decode(metadata, config.sessionId, m_WorldCatchUp.snapshotTick + 1, *committed, placeholder, error) ||
+						    placeholder != std::vector<uint8_t>{0}) {
+							if (error && error->empty()) *error = "the world image's lockstep state does not decode";
+							return false;
+						}
+					}
 				}
 			}
 			const uint64_t stagingBeganMs = SteadyNowMs();
@@ -1743,7 +1829,12 @@ static std::string ResyncSaveName() {
 			m_AdmissionClock.NotePark(SteadyNowMs() - stagingBeganMs, SteadyNowMs());
 			NotePumpParkedLocked();
 			m_WorldCatchUp.tail.clear();
-			if (committed) {
+			if (committed && !m_WorldCatchUp.privateMatch) {
+				// Restored where the load lands, as a private match's is; the world's seats come from its own roster.
+				if (!g_ActivityMan.SetPendingCheckpointCallbacks([] { return true; }, [committed](Activity&) {
+					return static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == committed->savedTick && ScenarioRunner::RestoreCommittedCatchUpState(*committed);
+				})) return false;
+			} else if (committed) {
 				struct LocalState { Activity::NetLocalPlayerState activity; std::string input, gui, frame; bool valid = false, prepared = false; };
 				const auto local = std::make_shared<LocalState>();
 				const auto pause = m_WorldCatchUp.pauseState;
@@ -1952,41 +2043,38 @@ static std::string ResyncSaveName() {
 		m_LastRosterPair.clear();
 	}
 
-	void NetMatchService::RecordRosterTransitions(uint64_t observedAtMs) {
+	void NetMatchService::RecordRosterTransitions(const std::map<uint8_t, SeatView>& previous, uint64_t observedAtMs) {
 		UpdateSummarySeatsLocked();
 		const uint64_t appliedFrame = ScenarioRunner::GetLockstepAppliedFrame();
-		for (const NetLobbyMember& member: m_LobbySnapshot.members) {
-			const std::string state = NetSeatPresence::StateName(m_SeatPresence.StateOf(member.peerId));
-			const std::string line = m_SeatPresence.Line(member.peerId, member.displayName);
-			std::pair<std::string, std::string>& last = m_LastRosterPair[member.peerId];
-			if (last.first == state && last.second == line) {
-				continue;
-			}
-			const std::string previous = last.first;
-			const std::string previousLine = last.second;
-			last = {state, line};
-			if (!member.cpu) {
-				const auto seat = m_SeatPresence.GetSeats().find(member.peerId);
-				const std::string name = seat != m_SeatPresence.GetSeats().end() && !seat->second.holderName.empty() ? seat->second.holderName : member.displayName;
-				const std::string who = name.empty() ? "Player " + std::to_string(member.peerId) : name;
-				const bool wasAway = previous == "Disconnected" || previous == "Reconnecting" || previous == "Left";
-				if (previous.empty() && state == "Present" && member.peerId != m_LocalPeerId) {
-					ScenarioRunner::PushNetUiToast("player_joined", who + " joined");
-				} else if (state == "Disconnected" && !previous.empty() && !wasAway) {
-					ScenarioRunner::PushNetUiToast("player_dropped", who + " dropped");
-				} else if (state == "Left" && !previous.empty() && previous != "Left") {
-					ScenarioRunner::PushNetUiToast("player_left", who + " left");
-				} else if (state == "Present" && wasAway) {
-					ScenarioRunner::PushNetUiToast("player_rejoined", who + " rejoined");
-				} else if (state == "Substituted" && (previous != state || previousLine != line)) {
-					ScenarioRunner::PushNetUiToast("player_substituted", who + " joined as substitute");
-				}
+		for (const auto& [peerId, view]: m_SeatViews) {
+			std::pair<std::string, std::string>& last = m_LastRosterPair[peerId];
+			const auto before = previous.find(peerId);
+			const bool known = before != previous.end();
+			const bool newHolder = known && before->second.seat.owner != 0 && view.seat.owner != 0 && view.seat.owner != before->second.seat.owner;
+			if (last.first == view.state && last.second == view.line && !newHolder) continue;
+			const bool firstSeen = last.first.empty();
+			const bool wasAway = known && SeatViewAway(before->second);
+			// A seat the host opened has no holder left to name: the player who had it is the one who went.
+			const std::string& who = view.seat.owner == 0 && known ? before->second.name : view.name;
+			last = {view.state, view.line};
+			if (firstSeen && view.state == "Present" && peerId != m_LocalPeerId) {
+				ScenarioRunner::PushNetUiToast("player_joined", who + " joined");
+			} else if (newHolder) {
+				ScenarioRunner::PushNetUiToast("player_substituted", who + " joined as substitute");
+			} else if (view.seat.owner == 0 && known && before->second.seat.owner != 0) {
+				ScenarioRunner::PushNetUiToast("player_left", who + " left");
+			} else if (SeatViewAway(view) && !firstSeen && !wasAway) {
+				// A seat the round holds in place keeps its player; a link that went is a drop, and a leave is said as one.
+				const bool left = view.seat.holdCause == NetSeatHoldCause::Leave;
+				ScenarioRunner::PushNetUiToast(left ? "player_left" : "player_dropped", who + (left ? " left" : " dropped"));
+			} else if (view.state == "Present" && wasAway) {
+				ScenarioRunner::PushNetUiToast("player_rejoined", who + " rejoined");
 			}
 			if (m_RosterTransitions.size() >= 256) {
 				++m_RosterTransitionsDropped;
 				continue;
 			}
-			m_RosterTransitions.push_back({member.peerId, state, line, appliedFrame, observedAtMs});
+			m_RosterTransitions.push_back({peerId, view.state, view.line, appliedFrame, observedAtMs});
 		}
 	}
 
@@ -2000,7 +2088,7 @@ static std::string ResyncSaveName() {
 		m_ReconnectHost.EndHostedSession();
 		m_ReconnectHost.TakeOutbound();
 		m_SeatStatuses.clear();
-		m_SeatPresence.Clear();
+		m_SeatViews.clear();
 		ResetRosterTransitionHistory();
 		m_ModerationSeats.clear();
 		m_LobbyModerationSignature = 0;
@@ -2076,15 +2164,20 @@ static std::string ResyncSaveName() {
 		m_IdentityPending = false;
 		m_LeftRoundHeld = false;
 		SealPendingWorldSegmentAtEnd();
+		// A host whose match went on under a successor writes nothing of its own play and leaves the listing to that successor.
+		const bool superseded = m_IsHost && m_Coordinator && m_Coordinator->IsSuperseded();
 		// A restart imports the seats as the round left them: a clean leave in its last seconds releases its seat there too.
-		PublishRestartAdmission();
+		if (!superseded) PublishRestartAdmission();
 		// A clean stop of a world leaves the tick it stopped on, before anything is torn down.
 		WriteFinalWorldCheckpoint();
 		RunCleanLeave();
 		// The round is over here too: an admission file with no checkpoint left behind it goes now.
 		SweepRestartAdmission();
 		m_LanDiscovery.Stop();
-		m_Directory.Shutdown(); // the DELETE goes out before the row would expire
+		if (superseded)
+			m_Directory.AbandonLease();
+		else
+			m_Directory.Shutdown(); // the DELETE goes out before the row would expire
 		ReleaseHostPortMap();   // the router mapping goes out with the listing
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::SetSessionPump(nullptr);
@@ -2485,6 +2578,8 @@ static std::string ResyncSaveName() {
 		JoinWorkerIfDone();
 		if (m_MigrationDirectoryResumePending) {
 			m_Directory.Configure(g_SettingsMan.GetSessionDirectoryUrl(), g_SettingsMan.GetOrCreateSessionDirectoryInstallKey(), g_SettingsMan.GetSessionDirectoryCertSha256());
+			// The successor claims the row at the generation it hosts: the directory takes one claim per generation.
+			m_DirectoryRow.migrationGen = static_cast<int64_t>(m_MigrationGeneration);
 			(void)m_Directory.Resume(m_DirectoryRow, m_MigrationDirectorySession, m_MigrationDirectoryToken);
 			m_MigrationDirectoryResumePending = false;
 		}
@@ -2541,7 +2636,7 @@ static std::string ResyncSaveName() {
 						if (NetH4SeatIsOpen(seat.lockstepPeerId, m_LocalPeerId, seat.committed, seat.closed)) {
 							++directorySeatsFree;
 						}
-						if (NetH4SeatIsHeld(seat.lockstepPeerId, m_LocalPeerId, seat.dropped, seat.closed)) {
+						if (NetH4SeatIsHeld(seat.lockstepPeerId, m_LocalPeerId, seat.held, seat.closed)) {
 							++directorySeatsHeld;
 						}
 					}
@@ -2627,6 +2722,7 @@ static std::string ResyncSaveName() {
 				m_DirectoryRow.peerCount = m_BeaconMaxPlayers;
 				m_DirectoryRow.seatsFree = directorySeatsFree;
 				m_DirectoryRow.seatsHeld = directorySeatsHeld;
+				m_DirectoryRow.migrationGen = static_cast<int64_t>(m_MigrationGeneration);
 				m_DirectoryRow.spectatorFree = m_WorldSpectatorsFree;
 				m_DirectoryRow.joinMode = NetIceRowJoinMode(m_IceEnabled, !m_DirectoryRow.listenAddrs.empty(), m_IceBoundSessionId, m_Directory.GetSessionId());
 				advertised = m_DirectoryRow;
@@ -2643,7 +2739,10 @@ static std::string ResyncSaveName() {
 			// The mapping goes out with a retracted listing or the end of hosting, and nothing is left pending after it.
 			if (s_PortMapRequested && !mappingKept) ReleaseHostPortMap();
 		}
-		m_Directory.Update(nowMs);
+		// A provisional host refreshes no listing: the match may have gone on under the next generation.
+		if (!m_IsHost || !m_Coordinator || !m_Coordinator->IsHostProvisional()) m_Directory.Update(nowMs);
+		// The directory holds the row at a later generation: the match went on without this host.
+		if (m_IsHost && m_Coordinator && m_Directory.GetState() == NetDirectoryClient::State::Superseded) m_Coordinator->NoteSuperseded(static_cast<uint64_t>(m_Directory.GetSupersededGeneration()));
 		UpdateRelayOffer(nowMs);
 		{
 			// The worker cannot touch the directory client, so what it needs is published here.
@@ -2966,7 +3065,6 @@ static std::string ResyncSaveName() {
 			const uint64_t finalFrame = m_CompletedRoundFinalFrame != 0 ? m_CompletedRoundFinalFrame : (resume > 0 ? resume - 1 : 0);
 			AnswerEndedReturnersLocked(finalFrame);
 		});
-		ScenarioRunner::SetLockstepSeatPresence(&m_SeatPresence);
 		ScenarioRunner::SetHeldCatchUp([this] { return BeginInPlaceCatchUp(); });
 		// The coordinator owns the transport queue during the match; reconnect handshakes hand over
 		// here and drain through PumpSessionEvents on the same (game) thread.
@@ -3066,7 +3164,7 @@ static std::string ResyncSaveName() {
 		if (!m_PendingResyncState.has_value() || m_CurrentMatchSummary.peers.empty()) {
 			m_LastMatchSummary.reset();
 			m_CurrentMatchSummary = {};
-			m_SummarySeats = m_SeatPresence.GetSeats();
+			m_SummarySeats = m_SeatViews;
 			const auto& config = m_Runner ? m_Runner->GetMatchConfig() : m_Coordinator->GetConfig().matchConfig;
 			for (const auto& slot : config.players) {
 				if (slot.cpu) continue;
@@ -3137,10 +3235,11 @@ static std::string ResyncSaveName() {
 		}
 
 		/// The lobby payload bytes that carried a configuration, kept so a restart republishes the very
-		/// configuration the peers hashed instead of rebuilding one that only looks like it.
+		/// configuration the peers hashed instead of rebuilding one that only looks like it. The copy is written
+		/// down (a restart manifest, an image's offer and its log line), so it holds no relay login.
 		bool EncodeConfigPayload(const NetMatchConfig& config, std::string& outHex) {
 			std::vector<uint8_t> bytes;
-			if (!NetLobbyProtocol::Encode(NetLobbyMessage{NetLobbyMatchConfig{config}}, bytes)) return false;
+			if (!NetLobbyProtocol::Encode(NetLobbyMessage{NetLobbyMatchConfig{NetMatchConfigUtil::WithoutRelay(config)}}, bytes)) return false;
 			outHex = ResumeHex(bytes);
 			return true;
 		}
@@ -3495,12 +3594,23 @@ static std::string ResyncSaveName() {
 			m_ScheduledCaptures.erase(m_ScheduledCaptures.begin(), m_ScheduledCaptures.upper_bound(input.tick));
 			output.capture = true;
 		}
+		// A provisional host's play may never be the match's: it takes no capture, and reports the one it was named as missed.
+		if (output.capture && input.hostProvisional) {
+			output.capture = false;
+			m_ManualCaptures.erase(m_ManualCaptures.begin(), m_ManualCaptures.upper_bound(input.tick));
+			output.send.push_back({0, NetGameCheckpoint::Missed, input.tick});
+			if (m_IsHost && input.localPeer != 0) m_CaptureWriters.erase(input.localPeer);
+		}
 		if (output.capture && !m_ManualCaptures.empty() && *m_ManualCaptures.begin() <= input.tick) {
 			m_ManualCaptures.erase(m_ManualCaptures.begin(), m_ManualCaptures.upper_bound(input.tick));
 			output.manual = true;
 		}
 		if (!m_IsHost) return output;
 		bool ask = input.manualRequested;
+		if (ask && input.hostProvisional) {
+			output.manualRefused = true;
+			ask = false;
+		}
 		// A capture whose tick passed without reaching the stream rode a frame the round never played (the host's own, while its seat
 		// was held): no writer takes it, so the schedule names the next one instead of waiting on it for the rest of the round.
 		if (m_OpenCaptureTick != 0 && !m_OpenCaptureApplied && input.tick > m_OpenCaptureTick) {
@@ -3535,7 +3645,7 @@ static std::string ResyncSaveName() {
 		// A park commits empty frames, so an activation inside one would never be stamped: nothing is named until it lands.
 		// The startup frames before a round's agreed first frame carry no commands either, so a capture named in them never
 		// reaches a writer and the schedule would wait on it for the rest of the round.
-		if (input.activationPending || input.startupPending || input.ownSeatHeld) return output;
+		if (input.activationPending || input.startupPending || input.ownSeatHeld || input.hostProvisional) return output;
 		const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
 		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
 		if (m_NextAutosaveSimTime < 0 || input.now < m_LastAutosaveSimTime) {
@@ -3601,7 +3711,51 @@ static std::string ResyncSaveName() {
 			std::string error;
 			record(frame);
 			if (m_WorldJoin.IsConfigured() && !m_WorldJoin.Tail().Append(frame, &error) && m_WorldJoin.IsPrivateMatch()) m_PrivateJoinError = "committed catch-up history: " + error;
+			// A world's host keeps the round's history past its memory on disk too, so a slow joiner's tail is never evicted under it.
+			if (m_IsHost && m_WorldJoin.IsConfigured() && !m_WorldJoin.IsPrivateMatch() && !m_WorldJoin.Tail().HasJournal() && m_WorldJoin.Tail().Count() != 0) {
+				m_WorldJoin.Tail().EnableJournal(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/world_history_" + std::to_string(System::GetProcessID()) + "_" + std::to_string(round) + ".ccsave.inputs");
+			}
 		} else if (m_WorldJoin.IsPrivateMatch()) m_PrivateJoinError = "the completed tick has no committed catch-up input";
+		if (tick % 60 == 0) PruneReturnHistory(tick);
+	}
+
+	uint64_t NetMatchService::ReturnHistoryFloorLocked(uint64_t tick, uint64_t nowMs) const {
+		// A returner arriving now is served the published base, unless it would take a new one.
+		std::optional<uint64_t> served;
+		const NetWorldCheckpointImage& image = m_WorldJoin.Image();
+		if (image.IsValid() && !m_WorldJoin.IsPrivateMatch()) {
+			// A world's joiner starts from the published image while its tail is still in memory; an older one waits for the capture its join asks for.
+			if (m_WorldJoin.Tail().Count() != 0 && image.tick + 1 >= m_WorldJoin.Tail().FirstFrame()) served = image.tick;
+		} else if (image.IsValid()) {
+			const bool fresh = m_PrivateImageTakenMs != 0 && nowMs - m_PrivateImageTakenMs < c_PrivateImageMinIntervalMs;
+			if (!m_PrivateImageRecapture && (fresh || !PrivateBaseRefreshDue(true, 0, image.tick, SteadyCaptureMs(m_PrivateCaptureCosts)))) served = image.tick;
+		}
+		return ReturnHistoryFloor(tick, served, m_WorldJoin.Sessions(), m_Coordinator->HeldTransactions(), m_Coordinator->GetConfig().simTickMs);
+	}
+
+	uint64_t NetMatchService::ReturnHistoryFloor(uint64_t tick, std::optional<uint64_t> servedBaseTick, const std::vector<NetWorldJoinSession>& sessions,
+	                                             const std::map<uint8_t, NetGameSeatHold>& holds, double tickMs) {
+		uint64_t floor = tick + 1;
+		if (servedBaseTick) floor = std::min(floor, *servedBaseTick + 1);
+		// Every return under way reads the tail on from the last frame it applied.
+		for (const NetWorldJoinSession& session: sessions)
+			if (session.phase != NetWorldJoinPhase::Active && session.snapshotTick != 0) floor = std::min(floor, session.acknowledgedThrough + 1);
+		// A held seat may come back holding its own state from just before its hold, while catching up in place still beats an image.
+		const auto window = static_cast<uint64_t>(std::ceil(c_InPlaceReturnWindowMs / (tickMs > 0.0 ? tickMs : 1000.0 / 60.0)));
+		const uint64_t skew = NetLockstepCodec::c_MaxFutureFrameSkew;
+		for (const auto& [peer, hold]: holds)
+			if (tick < hold.cutoffFrame + window) floor = std::min(floor, hold.cutoffFrame > skew ? hold.cutoffFrame - skew : 1);
+		return floor;
+	}
+
+	void NetMatchService::PruneReturnHistory(uint64_t tick) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_Coordinator || !m_WorldJoin.IsConfigured() || !m_WorldJoin.Tail().HasJournal()) return;
+		NetLockstepPlaneGuard plane;
+		const uint64_t floor = ReturnHistoryFloorLocked(tick, SteadyNowMs());
+		m_WorldJoin.Tail().PruneJournalBefore(floor);
+		m_LastReturnHistoryFloor = floor;
+		m_Coordinator->SetReturnHistoryFloor(floor);
 	}
 
 	bool NetMatchService::CaptureFullStateHash(uint64_t tick, uint64_t round, const std::string& dumpDirectory, const std::string& label) {
@@ -3647,8 +3801,13 @@ static std::string ResyncSaveName() {
 			const auto& start = m_Coordinator->GetAgreedStartRecord();
 			input.startupPending = start && tick < start->agreedFirstFrame;
 			input.manualRequested = m_ManualSaveAsked.exchange(false);
+			input.hostProvisional = m_Coordinator->IsHostProvisional();
 		}
 		AutosaveTickOutput output = StepAutosaveSchedule(input);
+		if (output.manualRefused) {
+			ScenarioRunner::PushNetUiToast("match_save", "Match not saved: the connection to the other players is lost");
+			m_ManualSaveWaitShown = false;
+		}
 		if (output.manualPending) {
 			m_ManualSaveAsked = true;
 			if (!m_ManualSaveWaitShown) ScenarioRunner::PushNetUiToast("match_save", "Saving at the next safe tick");
@@ -3700,6 +3859,16 @@ static std::string ResyncSaveName() {
 				// The segment holds this tick's frames from here; it opens when the archive validates and is
 				// dropped with it when the capture is refused.
 				RollWorldReplaySegment(tick);
+				// The round's history at each save: what this peer keeps of it in memory and on disk, beside the bounds that keep it flat.
+				if (m_WorldJoin.IsConfigured()) {
+					const NetWorldFrameLog& tail = m_WorldJoin.Tail();
+					const NetWorldFrameLog::JournalStats journal = tail.GetJournalStats();
+					const uint64_t journalBound = m_LastReturnHistoryFloor != 0 && journal.last >= m_LastReturnHistoryFloor ? journal.last + 1 - m_LastReturnHistoryFloor + NetWorldFrameLog::c_JournalSegmentFrames : 0;
+					System::PrintDiagnosticLine(std::format("[round-history] tick={} memory_frames={} memory_bytes={} memory_bound_frames={} memory_bound_bytes={} journal_files={} journal_bytes={} "
+					                                        "journal_first={} journal_last={} floor={} journal_bound_frames={} journal_index_bytes={} journal_cached_reads={} journal_cached_read_bytes={}",
+					                                        tick, tail.Count(), tail.Bytes(), tail.MaxFrames(), tail.MaxBytes(), journal.files, journal.bytes, journal.first, journal.last,
+					                                        m_LastReturnHistoryFloor, journalBound, journal.indexBytes, journal.cachedReads, journal.cachedReadBytes));
+				}
 				if (m_WorldJoin.IsConfigured()) {
 					// The image is published when the writer thread has finished this archive, from the pump.
 					std::ostringstream line;
@@ -3836,9 +4005,24 @@ static std::string ResyncSaveName() {
 		// The tick is complete, so the agreed lockstep state of THIS tick is what a restart needs; it
 		// is read once, here, through the same reader the heal's snapshot capture uses.
 		m_AutosaveIdentity.sideState = ScenarioRunner::CaptureAgreedSideState();
+		m_AutosaveIdentity.migrationGen = m_MigrationGeneration;
 		if (m_IsHost && m_MatchConfig.persistentWorld) {
 			System::PrintDiagnosticLine(std::format("[autosave] agreed match={} tick={} state={}", m_AutosaveMatchId, tick,
 			                                       nlohmann::json(AutosaveStore::RenderSideState(m_AutosaveIdentity.sideState)).dump()));
+			// A world joiner starts on this tick's lockstep state too: a hold's handoffs before the image are not in its tail.
+			NetResyncState state;
+			std::vector<uint8_t> side;
+			std::string error;
+			if (ScenarioRunner::CaptureNetResyncState(tick, state, &error)) {
+				state.pendingInputs.clear(); state.pendingCommands.clear(); state.pendingPlayerBindings.clear(); state.admittedReseats.clear();
+				if (NetResyncCodec::Encode(state, {0}, side, &error)) {
+					std::lock_guard<std::mutex> lock(m_Mutex);
+					m_WorldImageSideStates[tick] = ResumeHex(side);
+					// Captures that never publish do not pile up.
+					while (m_WorldImageSideStates.size() > 8) m_WorldImageSideStates.erase(m_WorldImageSideStates.begin());
+				}
+			}
+			if (side.empty()) System::PrintDiagnosticLine(std::format("[net-world] no lockstep state for the image at tick {}: {}", tick, error));
 		}
 		return g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity);
 	}
@@ -3924,10 +4108,15 @@ static std::string ResyncSaveName() {
 		if (!entry || entry->tick <= m_WorldJoin.Image().tick) {
 			return;
 		}
-		const NetWorldCheckpointImage image = WorldImageFromAutosave(*entry, m_WorldIdentity, m_MatchConfig,
-		                                                            m_WorldJoin.Membership().Revision(), g_ActivityMan.LastAutosaveCaptureMs());
+		NetWorldCheckpointImage image = WorldImageFromAutosave(*entry, m_WorldIdentity, m_MatchConfig,
+		                                                      m_WorldJoin.Membership().Revision(), g_ActivityMan.LastAutosaveCaptureMs());
 		if (!image.IsValid()) {
 			return;
+		}
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (const auto side = m_WorldImageSideStates.find(image.tick); side != m_WorldImageSideStates.end()) image.sideState = side->second;
+			m_WorldImageSideStates.erase(m_WorldImageSideStates.begin(), m_WorldImageSideStates.upper_bound(image.tick));
 		}
 		// The buffer the writer produced is shared, not copied: every bootstrap ships these bytes.
 		m_WorldJoinImageDigest = image.digest;
@@ -4169,6 +4358,17 @@ static std::string ResyncSaveName() {
 				outLeave.connection = session.connection;
 				return true;
 			}
+			// A member seated in the lobby before the round started has no world session: the roster alone binds it, and
+			// a slot no session claims is released once the roster stops seating its seat.
+			if (std::none_of(world.Sessions().begin(), world.Sessions().end(), [&](const NetWorldJoinSession& session) {
+				    return !session.spectator && session.assignedPeerId == slot->peerId;
+			    })) {
+				outLeave.peerId = slot->peerId;
+				outLeave.stableSeat = slot->stableSeat;
+				outLeave.holderGeneration = slot->generation;
+				outLeave.team = slot->team;
+				return true;
+			}
 		}
 		return false;
 	}
@@ -4235,6 +4435,19 @@ static std::string ResyncSaveName() {
 		return holds;
 	}
 
+	size_t NetMatchService::BindSeatedWorldMembers(const std::vector<NetH4SeatStatus>& statuses, const NetSeatRoster& roster, NetWorldMembership& membership) {
+		size_t bound = 0;
+		for (const NetH4SeatStatus& status: statuses) {
+			if (status.stableSeat == 0 || !status.committed || status.closed || BoundWorldSlot(membership, status.stableSeat)) continue;
+			// A seat coming in through the image takes its slot when its join begins.
+			const NetRosterSeat* seat = roster.Find(NetRosterIdOf(status.stableSeat));
+			if (!seat || seat->phase == NetSeatPhase::RejoinImage || seat->phase == NetSeatPhase::RejoinCatchUp) continue;
+			const NetWorldSlot* slot = membership.SlotOfPeer(status.lockstepPeerId);
+			if (slot && !slot->held && membership.Hold(status.lockstepPeerId, status.stableSeat, seat->name)) ++bound;
+		}
+		return bound;
+	}
+
 	NetH4SeatSimIdentity NetMatchService::WorldSimIdentityOfSeat(const NetWorldMembership& membership, uint16_t stableSeat) {
 		const NetWorldSlot* bound = BoundWorldSlot(membership, stableSeat);
 		if (bound == nullptr) {
@@ -4263,7 +4476,7 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::SendWorldJoinTailTo(NetLobbySession& lobby, NetWorldJoinHost& host, const NetWorldJoinSession& session) {
-		if (session.phase != NetWorldJoinPhase::CatchingUp) {
+		if (!StreamsTail(session)) {
 			return;
 		}
 		const uint8_t lobbyPeer = WorldJoinLobbyPeer(session);
@@ -4374,18 +4587,17 @@ static std::string ResyncSaveName() {
 		return HeldSuccessionRoutes(successorOrder, lostHost, localPeer, reachable, held).empty();
 	}
 
-	bool NetMatchService::HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool ownStop, bool imageRejoin, uint64_t hostSilentMs, uint64_t silenceBoundMs) {
+	bool NetMatchService::HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool ownStop, bool imageRejoin, uint64_t hostSilentMs, uint64_t hostRttMs) {
 		// A dropped connection is carried as a plain disconnect; only this seat's own stop and the host's refusal say nothing of the host.
-		if (linkLost) return !ownStop && !imageRejoin && (!hasReject || reason == NetRejectReason::SessionEnded || reason == NetRejectReason::Timeout || reason == NetRejectReason::InternalError);
-		return silenceBoundMs != 0 && hostSilentMs > silenceBoundMs;
+		if (linkLost) return !ownStop && !imageRejoin && (!hasReject || reason == NetRejectReason::SessionEnded || reason == NetRejectReason::Timeout || reason == NetRejectReason::InternalError || reason == NetRejectReason::HostLinkLost);
+		return NetHostLinkLost(false, hostSilentMs, hostRttMs);
 	}
 
-	NetMatchService::LoneElection NetMatchService::LoneElectionOutcome(bool hostAnnounced, bool heldSeats, bool liveMembersUnheard) {
-		// An announced leave is the host's decision; a lost host is absent, and a match with a held seat is never ended by that.
+	NetMatchService::LoneElection NetMatchService::LoneElectionOutcome(bool hostAnnounced, bool liveMembersUnheard) {
+		// An announced leave is the host's decision; a lost host is absent, and the match goes on.
 		if (hostAnnounced) return LoneElection::EndMatch;
 		// Live members that went silent with the host say this peer lost its own link: it rejoins rather than host a match of its own.
-		if (liveMembersUnheard) return LoneElection::RejoinHost;
-		return heldSeats ? LoneElection::HostForHeldSeats : LoneElection::RejoinHost;
+		return liveMembersUnheard ? LoneElection::RejoinHost : LoneElection::HostAlone;
 	}
 
 	bool NetMatchService::PrivateReturnerInFlightLocked() const {
@@ -4424,9 +4636,9 @@ static std::string ResyncSaveName() {
 			if (!m_Coordinator->HasHeldAISeat(member)) continue;
 			// A returner told this round is over waits for the next round's start, which offers its seat again.
 			if (m_ToldMatchOver.contains(peer.transportPeerId)) continue;
-			const uint16_t seat = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
+			const std::optional<uint16_t> seat = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
 			NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
-			if (seat == 0 || !m_ReconnectHost.GetSeatHolder(seat, holder, generation, incarnation) || holder != peer.transportPeerId) continue;
+			if (!seat || !m_ReconnectHost.GetSeatHolder(*seat, holder, generation, incarnation) || holder != peer.transportPeerId) continue;
 			if (const auto bumps = m_InPlaceIncarnationBumps.find(member); bumps != m_InPlaceIncarnationBumps.end()) incarnation += bumps->second;
 			// The held seat's own connection stays up: its player catches up in place on it, so its reports must reach the round.
 			// A relaunched returner is a new incarnation and rejoins through the image.
@@ -4445,8 +4657,9 @@ static std::string ResyncSaveName() {
 			m_Runner->GetLobbySession().BindWorldTransferRemote(member, holder, nullptr);
 			// A return already agreed is on its way; if it passes, the seat is held again and its player answered then.
 			if (!m_Runner->GetLobbySession().IsRemoteConnectionLobbyUp(member) || m_Coordinator->HasAgreedSeatReclaim(member)) continue;
+			if (!RosterOffersReturnLocked(member, holder)) continue;
 			std::string error;
-			if (!m_WorldJoin.BeginRejoin(holder, seat, member, incarnation, peer.displayName, nowMs, &error)) continue;
+			if (!m_WorldJoin.BeginRejoin(holder, *seat, member, incarnation, peer.displayName, nowMs, &error)) continue;
 			{
 				std::ostringstream line;
 				line << "[net-match] private rejoin peer=" << static_cast<int>(member) << " incarnation=" << incarnation;
@@ -4466,6 +4679,7 @@ static std::string ResyncSaveName() {
 				SendSuccessorCapsuleToLocked(session.assignedPeerId);
 				m_WorldJoin.NoteMatchConfigSent(session.connection);
 			}
+			m_Coordinator->NoteReturningLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
 			m_WorldJoin.NoteRejoinLinkFit(session.connection, PrepareHeldPeerRejoinLocked(session.assignedPeerId));
 			if (INetTransport* wire = ActiveWireLocked()) m_WorldJoin.NoteTailLinkRtt(session.connection, wire->GetPeerPingMs(session.connection));
 			// A returning seat takes the base being captured for it, not the older one that capture replaces.
@@ -4538,6 +4752,36 @@ static std::string ResyncSaveName() {
 		}
 		// After the walk: CancelJoin erases from the vector the loop above is iterating.
 		for (const NetPeerId connection: missed) m_WorldJoin.CancelJoin(connection, "the returner could not be moved past the capture park");
+	}
+
+	void NetMatchService::FeedRosterReturnsLocked() {
+		for (const uint8_t peer: m_WorldJoin.TakeCancelledJoins()) m_ReconnectHost.NoteReturnAborted(peer);
+		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions())
+			if (session.phase == NetWorldJoinPhase::CatchingUp || session.phase == NetWorldJoinPhase::Active) m_ReconnectHost.NoteReturnWorldReady(session.assignedPeerId);
+		if (!m_Coordinator || !m_Coordinator->IsRunning()) return;
+		const uint64_t next = m_Coordinator->GetStats().nextFrame;
+		if (next == 0) return;
+		// A returner is back when the round needs its seat's input at a committed frame and the AI no longer plays it.
+		for (const uint8_t peer: m_ReconnectHost.ReturningPeers())
+			if (m_Coordinator->SeatPlaysAtFrame(peer, next - 1)) m_ReconnectHost.NoteReturnCaughtUp(peer);
+		// The round's own hold of a playing seat whose link stays open is the roster's too, and so is that seat's return in place.
+		for (const uint8_t peer: m_ReconnectHost.PlayingPeers())
+			if (m_Coordinator->HasHeldAISeat(peer) && m_Coordinator->IsSeatUnderAI(peer, next - 1))
+				m_ReconnectHost.NoteSeatHeldInPlace(peer, m_Coordinator->IsHeldAsSlowMachine(peer) ? NetSeatHoldCause::Capacity : NetSeatHoldCause::LateStream);
+		for (const uint8_t peer: m_ReconnectHost.HeldInPlacePeers())
+			if (m_Coordinator->SeatPlaysAtFrame(peer, next - 1)) m_ReconnectHost.NoteSeatPlaysAgain(peer);
+	}
+
+	bool NetMatchService::RosterOffersReturnLocked(uint8_t lockstepPeerId, NetPeerId holder) {
+		const NetRosterSeat* seat = m_ReconnectHost.RosterSeatOfPeer(lockstepPeerId);
+		if (!seat || seat->phase != NetSeatPhase::Held || seat->holdCause != NetSeatHoldCause::RejoinFailed) return true;
+		std::string refusal;
+		if (m_ReconnectHost.ReofferReturn(lockstepPeerId, &refusal)) return true;
+		if (!refusal.empty()) {
+			System::PrintDiagnosticLine("[net-match] return refused peer=" + std::to_string(static_cast<int>(lockstepPeerId)) + ": " + refusal);
+			RefuseReturnerLocked(holder, refusal, refusal);
+		}
+		return false;
 	}
 
 	void NetMatchService::SendSuccessorCapsuleToLocked(uint8_t member) {
@@ -4673,9 +4917,12 @@ static std::string ResyncSaveName() {
 			release.team = held.team;
 			(void)m_WorldJoin.Membership().Release(held.peerId, nullptr);
 			(void)ScenarioRunner::SubmitWorldTransition(release);
+			NoteWorldReleaseLocked(m_ReconnectHost.GetSeatStatuses(), held.peerId, held.stableSeat, m_Coordinator->GetStats().nextFrame);
 			if (held.connection != c_InvalidNetPeerId) m_WorldJoin.CancelJoin(held.connection, "left while the AI held the seat");
 			System::PrintDiagnosticLine("[net-world] release held peer=" + std::to_string(static_cast<int>(held.peerId)) + ": its player left while the AI held the seat");
 		}
+		// A member the roster seated before the round started holds its slot: a later join never takes it.
+		(void)BindSeatedWorldMembers(m_ReconnectHost.GetSeatStatuses(), m_ReconnectHost.GetRoster(), m_WorldJoin.Membership());
 		m_WorldJoin.NoteReclaimHolds(WorldReclaimHoldSlots(m_ReconnectHost.GetSeatStatuses(), m_WorldJoin.Membership(), aiHeld));
 		m_WorldSpectatorsFree = static_cast<int64_t>(m_WorldJoin.SpectatorsFree());
 		bool answeredRefusal = false;
@@ -4686,10 +4933,11 @@ static std::string ResyncSaveName() {
 			if (m_WorldJoin.FindSession(peer.transportPeerId) != nullptr) {
 				continue;
 			}
-			const uint16_t stableSeat = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
-			if (stableSeat == 0) {
+			const std::optional<uint16_t> seated = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
+			if (!seated) {
 				continue;
 			}
+			const uint16_t stableSeat = *seated;
 			if (m_WorldJoin.RefusalOf(peer.transportPeerId) != NetWorldJoinRefusal::None) {
 				continue;
 			}
@@ -4699,7 +4947,16 @@ static std::string ResyncSaveName() {
 			uint32_t holderIncarnation = 0;
 			const bool credentialedHolder = m_ReconnectHost.GetSeatHolder(stableSeat, holderConnection, holderGeneration, holderIncarnation) &&
 			                                holderConnection == peer.transportPeerId;
-			if (!m_WorldJoin.BeginJoin(peer.transportPeerId, stableSeat, peer.displayName, nowMs, &joinError, credentialedHolder)) {
+			if (credentialedHolder) {
+				uint8_t played = 0;
+				for (const NetH4Seat& seat: m_ReconnectHost.GetSeatTable())
+					if (seat.stableSeat == stableSeat) played = m_ReconnectHost.SimIdentityOfSeat(seat).peerId;
+				if (played != 0 && !RosterOffersReturnLocked(played, peer.transportPeerId)) continue;
+			}
+			uint8_t seatPeerId = 0;
+			for (const NetH4Seat& seat: m_ReconnectHost.GetSeatTable())
+				if (seat.stableSeat == stableSeat) seatPeerId = seat.lockstepPeerId;
+			if (!m_WorldJoin.BeginJoin(peer.transportPeerId, stableSeat, peer.displayName, nowMs, &joinError, credentialedHolder, seatPeerId)) {
 				// A world with no seat and no watcher slot answers the connection once, before it has
 				// read a byte of image, with the reason the joiner shows.
 				const NetWorldJoinRefusal refusal =
@@ -4752,7 +5009,7 @@ static std::string ResyncSaveName() {
 					}
 				}
 			}
-			if (session.phase == NetWorldJoinPhase::CatchingUp && m_Runner) {
+			if (StreamsTail(session) && m_Runner) {
 				SendWorldJoinTailTo(m_Runner->GetLobbySession(), m_WorldJoin, session);
 			}
 		}
@@ -4769,14 +5026,6 @@ static std::string ResyncSaveName() {
 			m_Runner->GetLobbySession().PumpOutgoingChunks();
 		}
 		const uint64_t nowFrame = m_Coordinator->GetStats().nextFrame;
-		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
-			if (session.spectator && session.activationTick == 0) {
-				uint64_t spectatorActivation = 0;
-				if (m_WorldJoin.ScheduleSpectatorActivation(session.connection, nowFrame, &spectatorActivation, nullptr) && spectatorActivation != 0) {
-					m_Coordinator->SetObservationEpoch(spectatorActivation);
-				}
-			}
-		}
 		while (const NetWorldJoinSession* slow = m_WorldJoin.SlowActivation(g_TimerMan.GetSimUpdateCount())) {
 			uint64_t later = 0;
 			const uint64_t previous = slow->activationTick;
@@ -4825,12 +5074,16 @@ static std::string ResyncSaveName() {
 			release.team = leave.team;
 			(void)m_WorldJoin.Membership().Release(leave.peerId, nullptr);
 			(void)ScenarioRunner::SubmitWorldTransition(release);
-			m_WorldJoin.CancelJoin(leave.connection, "clean leave");
+			if (leave.connection != c_InvalidNetPeerId) m_WorldJoin.CancelJoin(leave.connection, "clean leave");
+			NoteWorldReleaseLocked(seatStatuses, leave.peerId, leave.stableSeat, nowFrame);
 			{
 				std::ostringstream line;
 				line << "[net-world] release peer=" << static_cast<int>(leave.peerId);
 				System::PrintDiagnosticLine(line.str());
 			}
+		}
+		// A slot the host freed - however its member went - goes to the watcher waiting longest.
+		if (m_WorldJoin.Membership().FreeSlots() > 0) {
 			uint64_t promotedAt = 0;
 			NetPeerId promoted = c_InvalidNetPeerId;
 			if (m_WorldJoin.PromoteWaitingSpectator(nowFrame, &promotedAt, &promoted, nullptr) && promotedAt != 0) {
@@ -4851,15 +5104,12 @@ static std::string ResyncSaveName() {
 					line << "[net-world] promote connection=" << promoted << " at=" << promotedAt;
 					System::PrintDiagnosticLine(line.str());
 				}
+				NoteWorldPromotionLocked(promoted, promotedAt);
 			}
 		}
 		DriveWorldSeatRespawns(nowFrame);
 		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
 			if (session.phase != NetWorldJoinPhase::CatchingUp || session.activationTick == 0) continue;
-			if (session.spectator) {
-				if (session.acknowledgedThrough + 1 >= session.activationTick) m_WorldJoin.CompleteActivation(session.connection, session.activationTick, nullptr);
-				continue;
-			}
 			if (!session.activationProposed && session.acknowledgedActivation == session.activationTick && session.acknowledgedThrough + 6 >= g_TimerMan.GetSimUpdateCount()) {
 				NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
 				if (!m_ReconnectHost.GetSeatHolder(session.stableSeat, holder, generation, incarnation) || holder != session.connection) continue;
@@ -4995,7 +5245,11 @@ static std::string ResyncSaveName() {
 		m_WorldCatchUp.active = true;
 		m_WorldCatchUp.privateMatch = image.privateSessionId != 0;
 		// A world image carries no roster of its own; the restore maps this machine's seats from the adopted one.
-		if (!m_WorldCatchUp.privateMatch) m_WorldCatchUp.checkpointConfig = adopted;
+		if (!m_WorldCatchUp.privateMatch) {
+			m_WorldCatchUp.checkpointConfig = adopted;
+			// Its lockstep state at the image's tick, when its host named one.
+			m_WorldCatchUp.sideState = image.sideState;
+		}
 		m_WorldCatchUp.roundId = image.round;
 		m_WorldCatchUp.authorityGeneration = image.authorityGeneration;
 		m_WorldCatchUp.authorityPeerId = image.authorityPeerId;
@@ -5319,7 +5573,16 @@ static std::string ResyncSaveName() {
 		return held;
 	}
 
+	size_t NetMatchService::HumanSeatCountLocked() const {
+		if (!m_Coordinator) return 0;
+		std::set<uint8_t> humans;
+		for (const NetMatchPlayerSlot& slot: m_Coordinator->GetConfig().matchConfig.players)
+			if (!slot.cpu && slot.peerId != 0) humans.insert(slot.peerId);
+		return humans.size();
+	}
+
 	bool NetMatchService::HeldSeatHostsLocked() {
+		m_HeldUnreachableText.clear();
 		if (!m_Coordinator || !m_CatchUpCoordinator) {
 			System::PrintDiagnosticLine("[net-match] held client: its host is gone and its catch-up is gone too");
 			return false;
@@ -5352,6 +5615,12 @@ static std::string ResyncSaveName() {
 		line << " clock=" << SteadyNowMs();
 		System::PrintDiagnosticLine(line.str());
 		if (!routes.empty() && listens) (void)OpenHeldListenerLocked();
+		// The seats the lost host held have no vote: beside other players they wait for the host, which may be the one still playing.
+		if (routes.empty() && HumanSeatCountLocked() > 2) {
+			m_HeldUnreachableText = "PeerHeld:The host is unreachable - 1 of " + std::to_string(HumanSeatCountLocked()) + " players reachable";
+			System::PrintDiagnosticLine("[net-match] held client: no majority can carry the match without its host; it waits for the host");
+			return false;
+		}
 		return routes.empty();
 	}
 
@@ -5383,6 +5652,10 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::HostAloneFromOwnStateLocked() {
+		if (HumanSeatCountLocked() > 2) {
+			System::PrintDiagnosticLine("[net-match] held client cannot host alone: " + std::to_string(HumanSeatCountLocked()) + " players and no majority without the host");
+			return false;
+		}
 		if (!m_Coordinator || !m_CatchUpCoordinator || !m_CatchUpTransport || !g_ActivityMan.ActivityRunning()) {
 			System::PrintDiagnosticLine(std::string("[net-match] held client cannot host alone: ") + (!m_CatchUpCoordinator || !m_CatchUpTransport ? "its catch-up is gone" : "no round runs"));
 			return false;
@@ -5923,9 +6196,9 @@ static std::string ResyncSaveName() {
 			m_WorldJoin.CancelJoin(stale, "the seat was held again after its return");
 			System::PrintDiagnosticLine("[net-match] held seat peer=" + std::to_string(member) + " was held again after its return; its next catch-up replaces the last");
 		}
-		const uint16_t seat = m_ReconnectHost.StableSeatOfConnection(connection);
+		const std::optional<uint16_t> seat = m_ReconnectHost.StableSeatOfConnection(connection);
 		NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
-		if (hold == heldSeats.end() || seat == 0 || !m_ReconnectHost.GetSeatHolder(seat, holder, generation, incarnation) || holder != connection) return;
+		if (hold == heldSeats.end() || !seat || !m_ReconnectHost.GetSeatHolder(*seat, holder, generation, incarnation) || holder != connection) return;
 		const uint64_t heldThrough = report.value;
 		std::string error;
 		// A seat held before this host took the round over replayed the lost host's frames, which are the round's own up to the handover.
@@ -5939,7 +6212,7 @@ static std::string ResyncSaveName() {
 		// A return a lost host agreed and this round passed still spent its incarnation on every peer.
 		const auto& known = m_Coordinator->GetConfig().peerIncarnations;
 		const uint32_t returning = std::max(hold->second.seatIncarnation, known.contains(member) ? known.at(member) : 0U) + 1;
-		if (error.empty() && m_WorldJoin.BeginInPlaceRejoin(connection, seat, member, returning, link->displayName, nowMs, heldThrough, &error)) {
+		if (error.empty() && m_WorldJoin.BeginInPlaceRejoin(connection, *seat, member, returning, link->displayName, nowMs, heldThrough, &error)) {
 			m_InPlaceIncarnationBumps[member] = returning > incarnation ? returning - incarnation : 0;
 			m_Coordinator->NoteInPlaceReturn(member);
 			(void)m_Runner->GetLobbySession().BindWorldTransferRemote(member, connection, nullptr);
@@ -6131,7 +6404,7 @@ static std::string ResyncSaveName() {
 			if (m_InPlaceCatchUp && hostGone) m_StatusText = "Host lost - arranging handover";
 			if (m_InPlaceCatchUp && hostGone && HeldSeatHostsLocked() && HostHeldMatchLocked()) return;
 			if (m_InPlaceCatchUp && hostGone && BeginInPlaceMoveLocked(nowMs)) return;
-			ScenarioRunner::SetControllerReplayError(m_WorldCatchUp.privateMatch
+			ScenarioRunner::SetControllerReplayError(!m_HeldUnreachableText.empty() ? m_HeldUnreachableText : m_WorldCatchUp.privateMatch
 			    ? "PeerHeld:Held - AI in control - reconnecting the private catch-up link"
 			    : "PeerLeft:The host connection was lost while joining the world");
 			return;
@@ -6150,7 +6423,7 @@ static std::string ResyncSaveName() {
 		if (refusal != 0) {
 			m_State = NetMatchServiceState::Failed; m_ErrorText = NetWorldJoinRefusalText(refusal); return;
 		}
-		// The host's link is its liveness, never its tail: a host that closes the link or says nothing at all for the link's own timeout
+		// The host's link is its liveness, never its tail: a host that closes the link or says nothing at all past the host-loss bound
 		// is gone, and the seat rejoins the next host, or hosts the match itself when only held seats are left.
 		if (m_InPlaceCatchUp) {
 			const uint64_t steadyMs = SteadyNowMs();
@@ -6162,7 +6435,9 @@ static std::string ResyncSaveName() {
 				                            " kept=" + std::to_string(m_WorldCatchUp.tailFramesKept) + " repeated=" + std::to_string(m_WorldCatchUp.tailFramesRepeated) +
 				                            " buffered=" + std::to_string(ScenarioRunner::WorldCatchUpHasFrame(m_WorldCatchUp.appliedThrough + 1)));
 			}
-			if (steadyMs > m_InPlaceHeardMs && HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, steadyMs - m_InPlaceHeardMs, HeldSeatSilenceBoundMs())) {
+			uint64_t hostRttMs = 0;
+			if (INetTransport* wire = ActiveWireLocked(); wire && m_Session) hostRttMs = wire->GetPeerPingMs(m_Session->GetRemoteTransportPeerId());
+			if (steadyMs > m_InPlaceHeardMs && HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, steadyMs - m_InPlaceHeardMs, hostRttMs)) {
 				System::PrintDiagnosticLine("[net-match] held client: the host sent nothing for " + std::to_string(steadyMs - m_InPlaceHeardMs) + "ms at frame " +
 				                            std::to_string(m_WorldCatchUp.appliedThrough));
 				// The committed frames it replayed already ended the round by its own rules: the seat has the result, not a match to carry on.
@@ -6174,7 +6449,7 @@ static std::string ResyncSaveName() {
 				if (HeldSeatHostsLocked() && HostHeldMatchLocked()) return;
 				if (BeginInPlaceMoveLocked(nowMs)) return;
 				m_InPlaceCatchUp = false;
-				ScenarioRunner::SetControllerReplayError("PeerHeld:Held - AI in control - the host sent no catch-up; rejoining");
+				ScenarioRunner::SetControllerReplayError(!m_HeldUnreachableText.empty() ? m_HeldUnreachableText : "PeerHeld:Held - AI in control - the host sent no catch-up; rejoining");
 				return;
 			}
 		}
@@ -6249,6 +6524,22 @@ static std::string ResyncSaveName() {
 					System::PrintDiagnosticLine(line.str());
 				}
 				m_Runner->ConfigurePrivateJoin(live);
+			}
+			if (!m_WorldCatchUp.privateMatch && !m_Runner->IsWorldJoinLockstepStarting() && m_CatchUpCoordinator) {
+				// The seats the replayed tail holds at the activation stay held in the joiner's live round: it never waits on their input.
+				std::map<uint8_t, NetGameSeatHold> holds;
+				for (const auto& [peer, hold]: m_CatchUpCoordinator->HeldTransactions())
+					if (peer != m_LocalPeerId && hold.cutoffFrame <= m_WorldCatchUp.activationTick) holds[peer] = hold;
+				std::map<uint8_t, uint64_t> leaves;
+				for (const auto& [peer, frame]: m_CatchUpCoordinator->GetPeerLeaveFrames())
+					if (peer != m_LocalPeerId && !holds.contains(peer) && frame <= m_WorldCatchUp.activationTick) leaves[peer] = frame;
+				std::ostringstream line;
+				line << "[net-match] world round from the catch-up at " << m_WorldCatchUp.activationTick << ": held";
+				for (const auto& [peer, hold]: holds) line << ' ' << static_cast<int>(peer) << '@' << hold.cutoffFrame;
+				line << " left";
+				for (const auto& [peer, frame]: leaves) line << ' ' << static_cast<int>(peer) << '@' << frame;
+				System::PrintDiagnosticLine(line.str());
+				m_Runner->ConfigureWorldJoinSeats(std::move(holds), std::move(leaves));
 			}
 			if (!m_Runner->IsWorldJoinLockstepStarting())
 				m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, m_WorldCatchUp.appliedThrough, &error);
@@ -6373,6 +6664,12 @@ static std::string ResyncSaveName() {
 			          << " at=" << m_WorldCatchUp.activationTick << " input_horizon=" << m_Coordinator->GetStats().nextFrame;
 				System::PrintDiagnosticLine(line.str());
 			}
+			// A watcher promoted into a seat plays it under the seat's id from here, and every later reading of this peer names that seat.
+			if (const uint8_t live = m_Coordinator->GetConfig().localPeerId; live != 0 && live != m_LocalPeerId) {
+				m_LocalPeerId = live;
+				for (const NetMatchPlayerSlot& slot: m_Coordinator->GetConfig().matchConfig.players)
+					if (slot.peerId == live) m_LocalTeam = slot.team;
+			}
 			m_WorldCatchUp.handedToRound = true;
 		}
 		if (m_Coordinator && m_Coordinator->IsRunning()) {
@@ -6381,6 +6678,9 @@ static std::string ResyncSaveName() {
 			const auto& config = m_Coordinator->GetConfig();
 			System::PrintDiagnosticLine(std::format("[net-lockstep] start round={} frame={} local_peer={} peers={} input_delay={}\n",
 			    m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames));
+			// Starting the joined round handed its session traffic to the runner's start queue, which nothing reads after the start:
+			// the session takes it back, the queued events first, or a returner never hears the roster, the chat or a kick again.
+			AttachCoordinatorSessionSink();
 		}
 		ReleaseWorldCatchUpOnceRunning(m_Coordinator && m_Coordinator->IsRunning(), m_WorldCatchUp);
 	}
@@ -6410,29 +6710,172 @@ static std::string ResyncSaveName() {
 		return {m_RewindAnchorMatchId, m_RewindAnchorTick, m_RewindAnchorHeld};
 	}
 
-	void NetMatchService::PumpSeatPresence() {
+	void NetMatchService::ReportFakeLinkEffects() {
+		int jitterMs = 0;
+		float reorderPercent = 0, duplicatePercent = 0;
+		GnsTransport::GetFakeLinkSettings(jitterMs, reorderPercent, duplicatePercent);
+		if ((jitterMs <= 0 && reorderPercent <= 0 && duplicatePercent <= 0) || !m_Coordinator || !m_Coordinator->IsRunning()) return;
+		NetFakeLinkEffects now;
+		for (GnsTransport* transport: {m_Transport.get(), m_Mux ? m_Mux->IpGns() : nullptr, m_Mux ? m_Mux->P2PGns() : nullptr}) {
+			if (!transport) continue;
+			const NetFakeLinkEffects one = transport->GetFakeLinkEffects();
+			now.jitterPackets += one.jitterPackets;
+			now.reorderedPackets += one.reorderedPackets;
+			now.duplicatedPackets += one.duplicatedPackets;
+		}
+		const uint64_t round = m_Coordinator->GetRoundId();
+		if (round != m_FakeLinkRound) {
+			m_FakeLinkRound = round;
+			m_FakeLinkBaseline = now;
+			m_FakeLinkReportedAtMs = SteadyNowMs();
+			return;
+		}
+		if (SteadyNowMs() < m_FakeLinkReportedAtMs + 2000) return;
+		m_FakeLinkReportedAtMs = SteadyNowMs();
+		System::PrintDiagnosticLine("[net-fake-link] " + nlohmann::json{{"round", round}, {"peer", m_Coordinator->GetConfig().localPeerId}, {"jitter_ms", jitterMs},
+		    {"reorder_percent", reorderPercent}, {"dup_percent", duplicatePercent}, {"jitter_packets", now.jitterPackets - m_FakeLinkBaseline.jitterPackets},
+		    {"reordered_packets", now.reorderedPackets - m_FakeLinkBaseline.reorderedPackets}, {"duplicated_packets", now.duplicatedPackets - m_FakeLinkBaseline.duplicatedPackets}}.dump());
+	}
+
+	std::string NetMatchService::IdentityDigest(uint64_t id) {
+		// A player's identity goes out as a digest of its stable id, never the id or its ticket.
+		std::array<uint8_t, 8> bytes{};
+		for (size_t i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<uint8_t>(id >> (8 * i));
+		return System::Sha256Hex(bytes.data(), bytes.size());
+	}
+
+	uint64_t NetMatchService::GetLastRemovalBoundary() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_LastRemovalIssue.notice.boundaryFrame;
+	}
+
+	std::optional<NetMatchService::OwnRemoval> NetMatchService::GetOwnRemoval() const {
+		NetLockstepPlane::Gap plane("own removal");
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		const NetReconnectClient* client = m_Session ? m_Session->GetReconnectClient() : nullptr;
+		if (client && client->WasRemoved()) return OwnRemoval{client->GetLastRejectReason(), client->GetRemovalBoundary()};
+		// The round ends on the removal before its notice reaches the session; the round kept the notice's frame.
+		if (m_IsHost || !m_Coordinator || m_Coordinator->GetRemovalBoundary() == 0 || !m_Session || !m_Session->HasReject()) return std::nullopt;
+		return OwnRemoval{m_Session->GetRejectReason(), m_Coordinator->GetRemovalBoundary()};
+	}
+
+	std::string NetMatchService::ModerationStateOf(const NetSeatRoster& roster) {
+		using json = nlohmann::json;
+		const auto digest = [](uint64_t id) { return IdentityDigest(id); };
+		json held = json::array(), tickets = json::array(), bans = json::array();
+		for (const NetRosterSeat& seat: roster.seats) {
+			if (seat.owner == 0) continue;
+			if (seat.phase == NetSeatPhase::Held || seat.phase == NetSeatPhase::RoundEnd || seat.phase == NetSeatPhase::Relaunching)
+				held.push_back({{"seat", seat.seatId}, {"cause", NetSeatHoldCauseName(seat.holdCause)}});
+			tickets.push_back({{"seat", seat.seatId}, {"incarnation", seat.incarnation}, {"identity_sha256", digest(seat.owner)}});
+		}
+		std::vector<std::string> banned;
+		for (const uint64_t id: roster.banned) banned.push_back(digest(id));
+		std::sort(banned.begin(), banned.end());
+		for (const std::string& one: banned) bans.push_back(one);
+		return json{{"held_seats", held}, {"bans", bans}, {"tickets", tickets}}.dump();
+	}
+
+	std::string NetMatchService::GetModerationSnapshotState(bool carried) const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (carried) return m_CarriedModerationState;
+		if (!m_IsHost || !m_AdmissionAttached) return {};
+		const NetSeatRoster& roster = m_ReconnectHost.GetRoster();
+		if (const std::pair<uint32_t, size_t> key{roster.revision, roster.banned.size()}; key != m_LiveModerationKey) {
+			m_LiveModerationKey = key;
+			m_LiveModerationState = ModerationStateOf(roster);
+		}
+		return m_LiveModerationState;
+	}
+
+	void NetMatchService::NoteWorldReleaseLocked(const std::vector<NetH4SeatStatus>& statuses, uint8_t peerId, uint16_t stableSeat, uint64_t frame) {
+		WorldSeatChange release;
+		release.peerId = peerId;
+		release.freedSeat = stableSeat;
+		release.frame = frame;
+		for (const NetH4SeatStatus& status: statuses) {
+			if (status.stableSeat != stableSeat) continue;
+			release.hostAuthorized = status.holdCause == NetSeatHoldCause::Kicked || status.holdCause == NetSeatHoldCause::Banned || status.holdCause == NetSeatHoldCause::Released;
+		}
+		m_LastWorldRelease = release;
+	}
+
+	void NetMatchService::NoteWorldPromotionLocked(NetPeerId connection, uint64_t activation) {
+		const NetWorldJoinSession* session = m_WorldJoin.FindSession(connection);
+		if (!session) return;
+		WorldSeatChange promotion;
+		promotion.peerId = session->assignedPeerId;
+		promotion.watcherSeat = session->stableSeat;
+		promotion.connection = connection;
+		promotion.frame = activation;
+		if (m_LastWorldRelease && m_LastWorldRelease->peerId == promotion.peerId) {
+			promotion.freedSeat = m_LastWorldRelease->freedSeat;
+			promotion.hostAuthorized = m_LastWorldRelease->hostAuthorized;
+		}
+		m_LastWorldPromotion = promotion;
+	}
+
+	std::string NetMatchService::GetWorldOwnershipFacts() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		nlohmann::json facts = nlohmann::json::object();
+		if (!m_Runner) return facts.dump();
+		const NetMatchConfig& config = m_Runner->GetMatchConfig();
+		uint32_t seats = 0;
+		for (const uint8_t capacity: config.worldTeamCapacity) seats += capacity;
+		facts["configuration"] = {{"seats", seats}, {"world_max_spectators", config.worldMaxSpectators}, {"persistent_world", config.persistentWorld}};
+		facts["is_host"] = m_IsHost;
+		facts["image_received"] = m_Runner->SawWorldImageTransfer();
+		// A watcher replays the committed tail outside any round, so its own id and the ticks it watched are the service's.
+		facts["local_peer"] = m_LocalPeerId;
+		if (!m_IsHost && m_WorldCatchUp.snapshotTick != 0) facts["replayed"] = {{"first", m_WorldCatchUp.snapshotTick + 1}, {"last", m_WorldCatchUp.appliedThrough}};
+		// A seat is named by the admission seat its lockstep id has in the round's config: the number every peer reads alike.
+		nlohmann::json seatOfPeer = nlohmann::json::object();
+		for (const NetH4Seat& seat: NetH4BuildSeatTable(config)) {
+			if (!seat.cpu && seat.lockstepPeerId != 0) seatOfPeer[std::to_string(seat.lockstepPeerId)] = seat.stableSeat;
+		}
+		facts["seat_of_peer"] = seatOfPeer;
+		if (m_IsHost && m_LastWorldRelease) {
+			facts["release"] = {{"peer", m_LastWorldRelease->peerId}, {"freed_seat", m_LastWorldRelease->freedSeat}, {"frame", m_LastWorldRelease->frame},
+			                    {"host_authorized", m_LastWorldRelease->hostAuthorized}};
+		}
+		if (m_IsHost && m_LastWorldPromotion) {
+			const WorldSeatChange& promoted = *m_LastWorldPromotion;
+			nlohmann::json promotion = {{"peer", promoted.peerId}, {"seat", seatOfPeer.value(std::to_string(promoted.peerId), nlohmann::json(nullptr))},
+			                            {"freed_seat", promoted.freedSeat}, {"watcher_seat", promoted.watcherSeat}, {"host_authorized", promoted.hostAuthorized}};
+			// An activation announced again later is the one that committed.
+			const NetWorldJoinSession* session = m_WorldJoin.FindSession(promoted.connection);
+			promotion["activation_tick"] = session && session->activationTick != 0 ? session->activationTick : promoted.frame;
+			NetPeerId holder = c_InvalidNetPeerId;
+			uint32_t generation = 0, incarnation = 0;
+			if (m_ReconnectHost.GetSeatHolder(promoted.watcherSeat, holder, generation, incarnation)) promotion["ticket_incarnation"] = incarnation;
+			if (Activity* activity = g_ActivityMan.GetActivity(); activity && WorldActivityPlayerOf(config, promoted.peerId) >= 0) {
+				if (const Actor* actor = activity->GetControlledActor(WorldActivityPlayerOf(config, promoted.peerId))) promotion["actor"] = actor->GetUniqueID();
+			}
+			facts["promotion"] = promotion;
+		}
+		if (!m_IsHost && m_Session) {
+			if (const NetReconnectClient* client = m_Session->GetReconnectClient(); client && client->HasRecord()) {
+				facts["ticket_incarnation"] = client->GetIncarnation();
+				facts["ticket_seat"] = client->GetRecord().stableSeat;
+			}
+		}
+		return facts.dump();
+	}
+
+	void NetMatchService::PumpSeatViews() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (!m_Coordinator || m_State != NetMatchServiceState::Running) {
 			return;
 		}
-		if (const auto snapshot = m_Coordinator->TakeSeatSnapshot()) {
-			if (m_SeatPresence.ApplySnapshot(*snapshot)) {
-				RecordRosterTransitions(snapshot->observedAtMs);
-			}
-		}
-		m_SeatPresence.NoteFrame(ScenarioRunner::GetLockstepAppliedFrame());
+		RefreshSeatViewsLocked(NetLockstepNowMs());
 		CaptureA7SeatView();
 	}
 
 	void NetMatchService::PublishModerationView() {
 		if (!m_Coordinator || !m_IsHost || !m_AdmissionAttached || m_State != NetMatchServiceState::Running) return;
 		auto seats = m_ReconnectHost.GetModerationView();
-		const uint64_t appliedFrame = ScenarioRunner::GetLockstepAppliedFrame();
-		const auto& leaves = m_Coordinator->GetPeerLeaveFrames();
-		std::vector<NetSeatPresenceEntry> presence;
 		for (auto& seat: seats) {
 			if (seat.cpu || seat.lockstepPeerId == 0) continue;
-			seat.slowMachine = m_Coordinator->IsHeldAsSlowMachine(seat.lockstepPeerId);
 			for (const auto& member: m_LobbySnapshot.members) {
 				if (member.peerId == seat.lockstepPeerId) { seat.displayName = member.displayName; break; }
 			}
@@ -6442,37 +6885,16 @@ static std::string ResyncSaveName() {
 					if (previous.stableSeat == seat.stableSeat && previous.epoch == seat.epoch) { seat.displayName = previous.displayName; break; }
 				}
 			}
-			NetSeatPresenceEntry entry;
-			entry.stableSeat = seat.stableSeat;
-			entry.peerId = seat.lockstepPeerId;
-			entry.holderName = seat.displayName;
-			entry.holderGeneration = seat.holderGeneration;
-			entry.seatGeneration = seat.seatGeneration;
-			entry.incarnation = seat.incarnation;
-			if (seat.closed) {
-				entry.state = NetSeatPresenceState::Left;
-			} else if (seat.dropped) {
-				entry.state = seat.reclaiming ? NetSeatPresenceState::Reconnecting : NetSeatPresenceState::Disconnected;
-				entry.holdActive = seat.heldForReclaim;
-				entry.holdUntilMs = seat.holdUntilMs;
-			} else if (!seat.substituteName.empty()) {
-				entry.state = NetSeatPresenceState::Substituted;
+			// A player coming into the seat: how much of the world's image it has, then that it replays it.
+			for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
+				if (session.assignedPeerId != seat.lockstepPeerId) continue;
+				const bool receiving = session.phase == NetWorldJoinPhase::SnapshotTransfer && session.transferStarted && session.totalChunks > 0;
+				if (receiving || session.phase == NetWorldJoinPhase::CatchingUp)
+					seat.joinProgress = NetSeatJoinProgress(receiving ? session.transferBytes * session.ackedChunks / session.totalChunks : 0, session.transferBytes, !receiving);
 			}
-			const auto left = leaves.find(seat.lockstepPeerId);
-			if (seat.dropped && left != leaves.end()) {
-				entry.holdUntilFrame = left->second + NetLockstepCoordinator::c_ReclaimHoldFrames;
-				seat.holdFramesRemaining = appliedFrame < entry.holdUntilFrame ? entry.holdUntilFrame - appliedFrame : 0;
-			}
-			presence.push_back(std::move(entry));
 		}
-		std::sort(presence.begin(), presence.end(), [](const auto& a, const auto& b) { return a.stableSeat < b.stableSeat; });
 		m_ModerationSeats = std::move(seats);
-		(void)m_Coordinator->PublishSeatSnapshot(std::move(presence), AdmissionNowMs());
-		if (const auto snapshot = m_Coordinator->TakeSeatSnapshot()) {
-			if (m_SeatPresence.ApplySnapshot(*snapshot)) {
-				RecordRosterTransitions(snapshot->observedAtMs);
-			}
-		}
+		RefreshSeatViewsLocked(AdmissionNowMs());
 	}
 
 	void NetMatchService::PublishLobbyModerationViewLocked() {
@@ -6501,9 +6923,6 @@ static std::string ResyncSaveName() {
 					if (previous.stableSeat == seat.stableSeat && previous.epoch == seat.epoch) { seat.displayName = previous.displayName; break; }
 				}
 			}
-			// Frames are the coordinator's and there is no coordinator before the match: the lobby row
-			// carries the plane's own milliseconds and leaves the frame countdown at zero.
-			seat.holdFramesRemaining = 0;
 		}
 		m_ModerationSeats = std::move(seats);
 		m_LobbyModerationSignature = signature;
@@ -7018,6 +7437,16 @@ static std::string ResyncSaveName() {
 				return false;
 			m_MigrationKey = key;
 			m_MigrationAdmissionState = admission;
+			{
+				// What this capsule carries for moderation, read once: the roster whole and the host's ban list beside it.
+				const auto carried = nlohmann::json::from_cbor(admission, true, false);
+				NetSeatRoster roster;
+				std::string rosterError;
+				if (!carried.is_discarded() && carried.contains("roster_bytes") && DecodeRoster(carried.at("roster_bytes").get<std::vector<uint8_t>>(), roster, &rosterError)) {
+					roster.banned = carried.value("roster_banned", std::vector<uint64_t>{});
+					m_CarriedModerationState = ModerationStateOf(roster);
+				}
+			}
 			m_MigrationAuthority = authority;
 			m_MigrationMembers = members;
 			m_MigrationGeneration = body.at("generation").get<uint64_t>();
@@ -7081,20 +7510,8 @@ static std::string ResyncSaveName() {
 					++event;
 			}
 		if (m_Coordinator->IsMigrating() && m_Coordinator->GetMigrationPhase() != NetHostMigrationPhase::ResyncAdmission) {
-			// How long the host had been quiet when its election began: an announced leave is heard up to the moment it begins,
-			// a lost host has been silent for the round's host-silence bound.
-			if (m_HostSilenceAtElectionMs == UINT64_MAX && m_ElectionHostPeer != 0) {
-				const auto& peers = m_Coordinator->GetStats().peers;
-				const auto host = peers.find(m_ElectionHostPeer);
-				const uint64_t nowMs = NetLockstepNowMs();
-				m_HostSilenceAtElectionMs = host != peers.end() && host->second.lastHeardMs != 0 && nowMs >= host->second.lastHeardMs ? nowMs - host->second.lastHeardMs : UINT64_MAX - 1;
-			}
 			m_StatusText = "Host lost - arranging handover";
 			return;
-		}
-		if (!m_Coordinator->IsMigrating()) {
-			m_ElectionHostPeer = m_Coordinator->GetHostPeerId();
-			m_HostSilenceAtElectionMs = UINT64_MAX;
 		}
 		if (!m_Coordinator->TakeMigrationNotice()) {
 			if (m_Coordinator->GetMigrationPhase() == NetHostMigrationPhase::ResyncAdmission) {
@@ -7129,7 +7546,7 @@ static std::string ResyncSaveName() {
 				if (m_Coordinator->HasHeldAISeat(peer) || m_Coordinator->IsPeerGoneAtFrame(peer, result.boundary)) continue;
 				liveMembersUnheard = true;
 			}
-			switch (LoneElectionOutcome(m_HostSilenceAtElectionMs < c_HostAnnouncedSilenceMs, m_Coordinator->AnyHeldAISeat(), liveMembersUnheard)) {
+			switch (LoneElectionOutcome(m_Coordinator->MigrationHostAnnouncedLeave(), liveMembersUnheard)) {
 				case LoneElection::EndMatch:
 					System::PrintDiagnosticLine("[net-match] host left with no other survivor: the match is over for this seat");
 					ScenarioRunner::SetControllerReplayError("PeerLeft:The host left the match");
@@ -7138,8 +7555,8 @@ static std::string ResyncSaveName() {
 					System::PrintDiagnosticLine("[net-match] host lost with no other survivor: rejoining the host instead of taking the match over");
 					ScenarioRunner::SetControllerReplayError("PeerHeld:The host connection was lost - rejoining");
 					return;
-				case LoneElection::HostForHeldSeats:
-					System::PrintDiagnosticLine("[net-match] host lost with only held seats beside this one: hosting the match so they rejoin it");
+				case LoneElection::HostAlone:
+					System::PrintDiagnosticLine("[net-match] host lost with no other connected seat: hosting the match so the held seats rejoin it");
 					System::PrintDiagnosticLine("[net-match] Host left - " + m_Coordinator->DescribePeer(result.hostPeerId) + " is now hosting; boundary=" +
 					                            std::to_string(result.boundary) + " round=" + std::to_string(m_Coordinator->GetRoundId()));
 					break;
@@ -7414,7 +7831,8 @@ static std::string ResyncSaveName() {
 				return;
 			}
 		}
-		PumpSeatPresence();
+		PumpSeatViews();
+		ReportFakeLinkEffects();
 		{
 			// The stamp must track the sim even on ticks that carry no session events, or a send
 			// between heartbeats would date a chat line by the last heartbeat's frame.
@@ -7531,24 +7949,16 @@ static std::string ResyncSaveName() {
 					const NetHoldResolutionNotice& notice = *it;
 					if (notice.resolution == NetHoldResolution::Reclaimed && m_Coordinator->HasAgreedSeatReclaim(notice.lockstepPeerId)) { it = m_PendingHeldResolutions.erase(it); continue; }
 					if (m_Coordinator->UsesBoundedWait() && m_Coordinator->HasHeldAISeat(notice.lockstepPeerId)) {
-						// The AI plays a held seat and nobody waits on it, so its holder's window closing gives nothing up: only the host's
-						// release does.
-						if (notice.resolution == NetHoldResolution::Expired) { it = m_PendingHeldResolutions.erase(it); continue; }
 						++it;
 						continue;
 					}
 					if (notice.resolution == NetHoldResolution::Reclaimed && !PrepareHeldPeerRejoinLocked(notice.lockstepPeerId)) { ++it; continue; }
 					NetLockstepHoldResolution resolution = NetLockstepHoldResolution::None;
 					switch (notice.resolution) {
-						case NetHoldResolution::Expired: resolution = NetLockstepHoldResolution::Expired; break;
 						case NetHoldResolution::Reclaimed: resolution = NetLockstepHoldResolution::Reclaimed; break;
 						case NetHoldResolution::Substituted: resolution = NetLockstepHoldResolution::Substituted; break;
 					}
-					if (notice.resolution == NetHoldResolution::Expired)
-						System::PrintDiagnosticLine("[net-reconnect] the held seat of peer " + std::to_string(static_cast<int>(notice.lockstepPeerId)) + " expired at its holder's window");
 					m_Coordinator->ResolveHeldSeat(notice.lockstepPeerId, resolution, nowMs);
-					if (notice.resolution == NetHoldResolution::Expired)
-						std::erase_if(m_PendingHeldReseats, [&](const auto& reseat) { return reseat.newOwnerPeerId == notice.lockstepPeerId; });
 					it = m_PendingHeldResolutions.erase(it);
 				}
 			}
@@ -7559,6 +7969,7 @@ static std::string ResyncSaveName() {
 		if (m_IsHost && m_Coordinator && m_Coordinator->IsRunning() && (m_Coordinator->IsPersistentWorldRound() || m_WorldJoin.IsPrivateMatch())) {
 			DriveWorldJoins(nowMs);
 		}
+		if (m_IsHost) FeedRosterReturnsLocked();
 		if (m_Runner) AdoptWorldTicketSession(m_Runner->GetLobbySession().GetMatchConfig());
 		DriveWorldJoinClient(nowMs);
 		// The round has already said goodbye: a rejoin that lands in the drain window is answered with it,
@@ -7759,15 +8170,42 @@ static std::string ResyncSaveName() {
 		// An unseated roster slot keeps its open name: presence still remembers the player who held
 		// it, and between rounds that entry is stale - a kicked seat must not read the removed name.
 		const bool persistentWorld = (m_Runner ? m_Runner->GetMatchConfig() : (m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig)).persistentWorld;
+		if (snapshot.joiningWorld && m_State == NetMatchServiceState::Starting && !m_SeatViews.empty()) {
+			// A world's joiner lists the world's seated players from the roster the host sent, not the lobby's passing member list,
+			// in which a dedicated host appears as a player and the seats come and go as their states arrive.
+			const NetMatchConfig& config = m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig;
+			const auto own = std::find_if(snapshot.members.begin(), snapshot.members.end(), [](const NetLobbyMember& member) { return member.isLocal; });
+			std::vector<NetLobbyMember> seated;
+			for (const auto& [peerId, view]: m_SeatViews) {
+				if (view.seat.owner == 0 && peerId != m_WorldJoinerSeatPeer) continue;
+				// The lobby's rows carry the lobby's ids; only this peer's own row (its link to the host) is kept from them.
+				NetLobbyMember member = peerId == m_WorldJoinerSeatPeer && own != snapshot.members.end() ? *own : NetLobbyMember{};
+				member.peerId = peerId;
+				member.isLocal = peerId == m_WorldJoinerSeatPeer;
+				member.connected = member.isLocal || view.seat.link == NetSeatLink::Connected;
+				for (const NetMatchPlayerSlot& slot: config.players)
+					if (slot.peerId == peerId) member.team = slot.team;
+				seated.push_back(std::move(member));
+			}
+			if (std::none_of(seated.begin(), seated.end(), [](const NetLobbyMember& member) { return member.isLocal; }))
+				for (const NetLobbyMember& member: snapshot.members)
+					if (member.isLocal) seated.insert(seated.begin(), member);
+			snapshot.members = std::move(seated);
+		}
 		for (NetLobbyMember& member: snapshot.members) {
-			const bool unseated = !member.connected && !member.cpu && !member.isLocal &&
+			const auto view = m_SeatViews.find(member.peerId);
+			// A world publishes every seat as open: its roster, not the slot's label, says who sits in a seat and whether they are there.
+			const bool seatedInWorld = persistentWorld && view != m_SeatViews.end() && view->second.seat.owner != 0;
+			const bool unseated = !seatedInWorld && !member.connected && !member.cpu && !member.isLocal &&
 			                      member.displayName == NetMatchConfigUtil::UnseatedSlotName(member.peerId, persistentWorld);
-			const auto current = m_SeatPresence.GetSeats().find(member.peerId);
-			if (!unseated && current != m_SeatPresence.GetSeats().end() && !current->second.holderName.empty()) member.displayName = current->second.holderName;
-			const NetSeatPresenceState state = unseated ? NetSeatPresenceState::Present : m_SeatPresence.StateOf(member.peerId);
-			member.dropped = state == NetSeatPresenceState::Disconnected || state == NetSeatPresenceState::Reconnecting;
-			member.reclaiming = state == NetSeatPresenceState::Reconnecting;
-			member.statusLine = unseated ? std::string() : m_SeatPresence.Line(member.peerId, member.displayName);
+			const bool known = !unseated && view != m_SeatViews.end();
+			if (known && !view->second.name.empty()) member.displayName = view->second.name;
+			if (seatedInWorld && !member.isLocal) member.connected = view->second.seat.link == NetSeatLink::Connected;
+			if (member.isLocal && !m_LocalName.empty() && member.displayName == NetMatchConfigUtil::UnseatedSlotName(member.peerId, persistentWorld)) member.displayName = m_LocalName;
+			member.dropped = known && view->second.seat.link == NetSeatLink::Dropped && view->second.state != "Left";
+			member.reclaiming = known && view->second.state == "Reconnecting";
+			member.joining = member.reclaiming && view->second.seat.joining;
+			member.statusLine = known ? view->second.line : std::string();
 			member.connectedRoute = GetConnectedRouteLocked(member.peerId);
 			if (m_Coordinator && m_State == NetMatchServiceState::Running) {
 				member.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_Coordinator->GetConfig().matchConfig, member.peerId);
@@ -8249,9 +8687,8 @@ static std::string ResyncSaveName() {
 
 	std::string NetMatchService::GetPeerDisplayName(uint8_t peerId) const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		const auto seat = m_SeatPresence.GetSeats().find(peerId);
-		if (seat != m_SeatPresence.GetSeats().end() && !seat->second.holderName.empty()) {
-			return seat->second.holderName;
+		if (const auto view = m_SeatViews.find(peerId); view != m_SeatViews.end() && !view->second.name.empty()) {
+			return view->second.name;
 		}
 		for (const NetLobbyMember& member: m_LobbySnapshot.members) {
 			if (member.peerId == peerId && !member.displayName.empty()) {
@@ -8417,6 +8854,22 @@ static std::string ResyncSaveName() {
 		return record.dump(2, ' ', false, json::error_handler_t::replace);
 	}
 
+	std::string NetMatchService::MemoryCensus() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		std::ostringstream line;
+		line << m_WorldJoin.MemoryCensus();
+		size_t sideBytes = 0;
+		for (const auto& [tick, side]: m_WorldImageSideStates) sideBytes += side.capacity();
+		// The image's archive is shared with the writer's last autosave: the owners count says whether it is held twice.
+		line << " side_states=" << m_WorldImageSideStates.size() << " side_state_bytes=" << sideBytes
+		     << " image_archive_bytes=" << (m_WorldJoinImageArchive ? m_WorldJoinImageArchive->size() : 0) << " image_archive_owners=" << m_WorldJoinImageArchive.use_count();
+		if (const auto autosave = g_ActivityMan.LastCompletedAutosave(); autosave && autosave->archive) {
+			line << " autosave_archive_bytes=" << autosave->archive->size() << " autosave_archive_shared=" << (autosave->archive == m_WorldJoinImageArchive ? 1 : 0);
+		}
+		if (m_Runner) line << ' ' << m_Runner->GetLobbySession().MemoryCensus();
+		return line.str();
+	}
+
 	std::string NetMatchService::BuildReportJson() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		bool dedicated = m_Dedicated;
@@ -8526,7 +8979,6 @@ static std::string ResyncSaveName() {
 					{"display_name", seat.displayName},
 					{"epoch", seat.epoch},
 					{"incarnation", seat.incarnation},
-					{"hold_frames_remaining", seat.holdFramesRemaining},
 					{"substitution_transaction", seat.substitutionTransaction},
 					{"actions_available", m_State == NetMatchServiceState::Running},
 					{"committed", seat.committed},
@@ -8545,15 +8997,8 @@ static std::string ResyncSaveName() {
 		reconnect["moderation"] = moderation;
 		// §11's roster lines exactly as this peer shows them, so a two-process gate can read a CLIENT's.
 		json rosterLines = json::array();
-		for (const NetLobbyMember& member: m_LobbySnapshot.members) {
-			const std::string line = m_SeatPresence.Line(member.peerId, member.displayName);
-			if (!line.empty()) {
-				rosterLines.push_back(json{
-					{"peer_id", static_cast<int>(member.peerId)},
-					{"state", NetSeatPresence::StateName(m_SeatPresence.StateOf(member.peerId))},
-					{"line", line},
-				});
-			}
+		for (const auto& [peerId, view]: m_SeatViews) {
+			if (!view.line.empty()) rosterLines.push_back(json{{"peer_id", static_cast<int>(peerId)}, {"state", view.state}, {"line", view.line}});
 		}
 		reconnect["roster_lines"] = rosterLines;
 		json rosterTransitions = json::array();
@@ -8568,18 +9013,17 @@ static std::string ResyncSaveName() {
 		}
 		reconnect["roster_transitions"] = rosterTransitions;
 		reconnect["roster_transitions_dropped"] = static_cast<int>(m_RosterTransitionsDropped);
-		if (const auto& snapshot = m_SeatPresence.GetSnapshot()) {
+		// The seats as this peer's roster has them: the comparer joins each peer to its seat through this section.
+		if (!m_SeatViews.empty()) {
 			json entries = json::array();
-			for (const auto& seat: snapshot->seats) {
-				entries.push_back({{"stable_seat", seat.stableSeat}, {"peer_id", seat.peerId},
-				                   {"state", NetSeatPresence::StateName(seat.state)}, {"holder_name", seat.holderName},
-				                   {"holder_generation", seat.holderGeneration}, {"seat_generation", seat.seatGeneration},
-				                   {"incarnation", seat.incarnation}, {"hold_until_frame", seat.holdUntilFrame},
-				                   {"hold_active", seat.holdActive}, {"hold_until_ms", seat.holdUntilMs}});
+			uint32_t revision = 0;
+			for (const auto& [peerId, view]: m_SeatViews) {
+				revision = view.revision;
+				entries.push_back({{"stable_seat", view.stableSeat}, {"peer_id", peerId}, {"state", view.state}, {"holder_name", view.name},
+				                   {"label", RosterSeatLabel(view.seat)}, {"incarnation", view.seat.incarnation}, {"phase", NetSeatPhaseName(view.seat.phase)},
+				                   {"link", view.seat.link == NetSeatLink::Connected ? "connected" : "dropped"}});
 			}
-			reconnect["seat_snapshot"] = {{"epoch", snapshot->epoch}, {"session_id", snapshot->sessionId},
-			                              {"round_id", snapshot->roundId}, {"revision", snapshot->revision},
-			                              {"observed_at_ms", snapshot->observedAtMs}, {"seats", entries}};
+			reconnect["seat_snapshot"] = {{"revision", revision}, {"seats", entries}};
 		}
 		if (!m_RejoinOutcome.empty()) {
 			reconnect["rejoin_outcome"] = m_RejoinOutcome;
@@ -8744,7 +9188,10 @@ static std::string ResyncSaveName() {
 		} else if (!settings.GetNetworkPlayerTurnServers().empty()) {
 			selected = NetRelayConfig::Fixed(settings.GetNetworkPlayerTurnServers(), settings.GetNetworkPlayerTurnUser(), settings.GetNetworkPlayerTurnPass(), "personal", now + 3600);
 		}
-		if (config.connectionMode != 1 && selected.Usable(now)) selected.UdpLists(config.turnServerList, config.turnUserList, config.turnPassList);
+		if (config.connectionMode != 1 && selected.Usable(now)) {
+			selected.UdpLists(config.turnServerList, config.turnUserList, config.turnPassList);
+			config.relayOffer = RelayOfferName(selected);
+		}
 		config.iceEnable = (config.stunServerList.empty() ? 2 : 6) | (config.turnServerList.empty() ? 0 : 1);
 		if (config.connectionMode == 2) {
 			config.iceEnable = 1;
@@ -9133,7 +9580,7 @@ static std::string ResyncSaveName() {
 			return false;
 		}
 		const auto routeFailed = [&] {
-			const bool unconnectedClose = session.IsClosed() && session.GetRejectReason() == NetRejectReason::InternalError && session.GetMismatchKey().empty();
+			const bool unconnectedClose = session.IsClosed() && (session.GetRejectReason() == NetRejectReason::InternalError || session.GetRejectReason() == NetRejectReason::HostLinkLost) && session.GetMismatchKey().empty();
 			return runner.GetLobbySession().GetState() == NetLobbyState::Idle &&
 			       (session.IsFailed() || session.IsClosed() || session.GetState() == NetSessionState::Connecting) &&
 			       session.GetRemoteTransportPeerId() == c_InvalidNetPeerId && !session.IsRejected() &&
@@ -9324,6 +9771,9 @@ static std::string ResyncSaveName() {
 		runnerConfig.publishLobby = [this, runnerRaw](const NetLobbySnapshot& snapshot) {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_LobbySnapshot = snapshot;
+			// A world's joiner that has begun to receive the image comes into a running world: nobody there readies up.
+			m_LobbySnapshot.joiningWorld = !m_IsHost && runnerRaw->SawWorldImageTransfer() &&
+			                               (runnerRaw->GetLobbySession().GetState() != NetLobbyState::Idle ? runnerRaw->GetLobbySession().GetMatchConfig() : runnerRaw->GetMatchConfig()).persistentWorld;
 			// The announced delay comes from the lobby's exchanged config (host-authored, already
 			// auto-adjusted) — never recomputed here, so every peer renders the same value.
 			const NetMatchConfig& config = runnerRaw->GetState() != NetMatchRuntimeState::Running && runnerRaw->GetLobbySession().GetState() != NetLobbyState::Idle
@@ -9361,6 +9811,15 @@ static std::string ResyncSaveName() {
 			// The host's seat panel moderates from the admission rows, and the lobby is where it most
 			// needs them; they are named from the roster that has just been published.
 			PublishLobbyModerationViewLocked();
+			// A world's joiner sits in the lobby while the image comes: its seat lines read the roster the host has already sent,
+			// here on the thread that pumps its session.
+			if (!m_IsHost && config.persistentWorld && m_ReconnectClient.GetRosterReplica().HasRoster()) RefreshSeatViewsLocked(AdmissionNowMs());
+			// Its own seat is the one its ticket names: a world's seats and the lobby's ids are not the same numbers.
+			m_WorldJoinerSeatPeer = 0;
+			if (!m_IsHost && config.persistentWorld && m_ReconnectClient.HasRecord()) {
+				for (const NetH4Seat& entry: NetH4BuildSeatTable(config))
+					if (!entry.cpu && entry.stableSeat == m_ReconnectClient.GetRecord().stableSeat) m_WorldJoinerSeatPeer = entry.lockstepPeerId;
+			}
 		};
 
 		// One clock from here on: setup, play, stalls and every resync read the same elapsed time.
@@ -9476,7 +9935,11 @@ static std::string ResyncSaveName() {
 						GnsP2PConfig update = initial;
 						if (!personal && initial.connectionMode != 1) {
 							update.turnServerList.clear(); update.turnUserList.clear(); update.turnPassList.clear();
-							if (offer.Usable(UnixNowMs(nullptr) / 1000)) offer.UdpLists(update.turnServerList, update.turnUserList, update.turnPassList);
+							update.relayOffer = "none";
+							if (offer.Usable(UnixNowMs(nullptr) / 1000)) {
+								offer.UdpLists(update.turnServerList, update.turnUserList, update.turnPassList);
+								update.relayOffer = RelayOfferName(offer);
+							}
 							update.iceEnable = initial.connectionMode == 2 ? 1 : (initial.stunServerList.empty() ? 2 : 6) | (update.turnServerList.empty() ? 0 : 1);
 						}
 						p2p->UpdateListenerIceServers(update);
@@ -9607,7 +10070,19 @@ static std::string ResyncSaveName() {
 				const bool lostHost = !request.host && !seatReleased &&
 				    (m_Runner->DidLoseHostDuringSetup() || (reachedHost && ClientSessionLossIsHostDeparture(*m_Session)));
 				System::PrintDiagnosticLine("[net-match] setup failed: " + error + (lostHost ? " (the host left)" : ""));
-				m_StatusText = lostHost ? "The host left the match"
+				// A player coming into a running match whose host went while the others play on: the match is changing host.
+				// An application waiting on a held seat is one: such a seat is in a match with other players.
+				NetReconnectClient* replica = m_Session ? m_Session->GetReconnectClient() : nullptr;
+				const bool joiningWorld = m_Runner->SawWorldImageTransfer() && replica && replica->GetRosterReplica().HasRoster() &&
+				                          MatchPlaysOnUnderANewHost(replica->GetRosterReplica().Roster());
+				const bool applying = replica && replica->HasUnansweredApplication();
+				const bool changingHost = lostHost && !NoteHostGoodbyeLocked(m_Session.get()) && (joiningWorld || applying);
+				if (changingHost) {
+					System::PrintDiagnosticLine(std::string("[net-match] the host left while this player was ") + (applying ? "applying for a seat" : "joining") +
+					                            "; the others play on under a new host");
+					if (applying) replica->CarryApplicationToNextHost();
+				}
+				m_StatusText = changingHost ? std::string(c_NetMatchChangingHostLine) : lostHost ? "The host left the match"
 				                        : SetupFailureStatus(m_Session.get(), noDirectRoute, (m_RelayAttempted && noDirectRoute) || error.starts_with("Relay "));
 				m_ErrorText = lostHost ? m_StatusText : (m_Session && m_Session->HasReject() ? m_Session->BuildPlayerRefusalText() : error);
 				// A refusal that says the round is over is an answer, not a lost link: the seat completes.
@@ -9753,7 +10228,7 @@ static std::string ResyncSaveName() {
 		}
 		if (m_LastRemovalIssue.connection != c_InvalidNetPeerId) {
 			const NetRejectReason reason = action == NetParticipantRemovalAction::Kick ? NetRejectReason::ParticipantRemoved : NetRejectReason::ParticipantBanned;
-			const char* text = action == NetParticipantRemovalAction::Kick ? "removed from this session" : "banned from this session";
+			const char* text = action == NetParticipantRemovalAction::Kick ? c_NetRemovedLinkText : c_NetBannedLinkText;
 			session.DisconnectReadyPeer(m_LastRemovalIssue.connection, reason, text);
 		}
 		session.TickAdmissionPlane(nowMs);
@@ -9833,6 +10308,8 @@ static std::string ResyncSaveName() {
 	}
 
 	NetKickBanResult NetMatchService::RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action) {
+		// The Seats panel calls this inside the plane's window, and a removal reads the round and evicts from it.
+		NetLockstepPlane::Gap plane("seat removal");
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_LastRemovalIssue = {};
 		if (!m_AdmissionAttached || !m_IsHost) {
@@ -9870,6 +10347,8 @@ static std::string ResyncSaveName() {
 	}
 
 	NetKickBanResult NetMatchService::UnbanParticipant(const NetAuthBytes32& identity) {
+		// The ban list's Unban runs inside the plane's window too, and asks whether a relaunch holds the round.
+		NetLockstepPlane::Gap plane("unban");
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (!m_IsHost) {
 			m_LastKickBanResult = NetKickBanResult::NotHosting;
@@ -10105,7 +10584,19 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::BeginHeldRejoin(std::string* error) {
 		const uint64_t prior = m_Coordinator ? m_Coordinator->SentInputThrough() : 0;
-		const auto liveRoute = m_LastJoinRoute;
+		auto liveRoute = m_LastJoinRoute;
+		// A host whose match went on under a successor returns to that successor as a player, with its own seat's ticket.
+		if (m_Coordinator && m_Coordinator->SupersedingPeer() != 0) {
+			const NetMatchConfig& config = m_Coordinator->GetConfig().matchConfig;
+			const auto endpoint = std::find_if(config.migrationPeers.begin(), config.migrationPeers.end(), [&](const auto& candidate) { return candidate.peerId == m_Coordinator->SupersedingPeer(); });
+			if (endpoint != config.migrationPeers.end() && endpoint->listenPort != 0 && !endpoint->listenAddrs.empty()) {
+				NetMatchServiceRequest route;
+				route.host = false;
+				route.address = endpoint->listenAddrs.front();
+				route.port = endpoint->listenPort;
+				liveRoute = route;
+			}
+		}
 		// The match published who hosts it next; a seat that finds its host gone asks them in that order.
 		m_HeldRejoinRoutes.clear();
 		m_ReconnectRouteTurn = 0;
@@ -10134,6 +10625,8 @@ static std::string ResyncSaveName() {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_HeldRejoinDriving = true;
+			m_HeldRejoinFailedAttempts = 0;
+			m_HeldRejoinRetryAtMs = 0;
 		}
 		const bool started = BeginTicketRejoinOnRoute(error, liveRoute ? &*liveRoute : nullptr);
 		if (started) ScenarioRunner::SetWorldCatchUpPriorInputThrough(prior);
@@ -10152,6 +10645,8 @@ static std::string ResyncSaveName() {
 	void NetMatchService::EndHeldRejoinInNextRound() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_HeldRejoinDriving = false;
+		m_HeldRejoinFailedAttempts = 0;
+		m_HeldRejoinRetryAtMs = 0;
 		m_HeldRejoinRoutes.clear();
 		m_HeldRejoinPriorInput = 0;
 		// The rejoin is over: its phase, and the ceiling that phase keeps, end with it.
@@ -10166,7 +10661,7 @@ static std::string ResyncSaveName() {
 		// A start that never came on a link this side still reads ready is the host playing the round with this seat held.
 		if (isHost || hostEndedMatch || rosterRefused || (sessionReady && !startNeverCame) || !linkLost) return false;
 		// A link closed with no reason from the host, or lost in transport, is a drop: the host keeps the seat for its return.
-		return !hasReject || reason == NetRejectReason::InternalError || reason == NetRejectReason::Timeout;
+		return !hasReject || reason == NetRejectReason::InternalError || reason == NetRejectReason::HostLinkLost || reason == NetRejectReason::Timeout;
 	}
 
 	bool NetMatchService::RematchReturnOwed() const {
@@ -10178,27 +10673,55 @@ static std::string ResyncSaveName() {
 		return !lostDuringSetup && hasReject && reason == NetRejectReason::Timeout && rejectSummary == "client hello timeout";
 	}
 
+	NetMatchService::HeldRejoinStep NetMatchService::NextHeldRejoinStep(uint8_t failedAttempts, bool hasReject, NetRejectReason reason, const std::string& rejectText) {
+		HeldRejoinStep step;
+		// The host's final word on the seat ends the rejoin with that word.
+		const bool final = hasReject && (reason == NetRejectReason::SeatReassigned || reason == NetRejectReason::ParticipantRemoved || reason == NetRejectReason::ParticipantBanned ||
+		                                 reason == NetRejectReason::SeatReleased || reason == NetRejectReason::SessionEnded || reason == NetRejectReason::IdentityUnproven ||
+		                                 (reason >= NetRejectReason::ProtocolMismatch && reason <= NetRejectReason::UserdataModulesNotAllowed));
+		if (final) {
+			step.stop = rejectText.empty() ? "Could not rejoin - the host refused the seat" : rejectText;
+			return step;
+		}
+		if (failedAttempts >= c_RosterReturnAttempts) {
+			step.stop = "Could not rejoin - the host did not take the seat back after " + std::to_string(failedAttempts) + " tries";
+			return step;
+		}
+		step.retry = true;
+		step.delayMs = static_cast<uint32_t>(c_RosterReturnBackoffMs << (failedAttempts > 0 ? failedAttempts - 1 : 0));
+		return step;
+	}
+
 	bool NetMatchService::BeginHeldRejoinOnNextHost(std::string* error) {
-		uint32_t retryInMs = 0;
+		HeldRejoinStep step;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_IsHost) return false;
 			const bool lostDuringSetup = m_Runner && m_Runner->DidLoseHostDuringSetup();
-			if (!m_IsHost && m_Session && HeldRejoinRetriesTheHost(lostDuringSetup, m_Session->HasReject(), m_Session->HasReject() ? m_Session->GetRejectReason() : NetRejectReason::InternalError,
-			                                                       m_Session->GetRejectSummary())) {
-				m_HeldRejoinHostRetryMs = std::min<uint32_t>(2000, std::max<uint32_t>(250, m_HeldRejoinHostRetryMs * 2));
-				retryInMs = m_HeldRejoinHostRetryMs;
-				m_StatusText = "Could not reach the host - retrying";
-			} else {
-				// Only a host that is gone sends the seat on; a refusal from a live host is that host's answer.
-				const bool hostGone = !m_IsHost && (lostDuringSetup || (m_Session && ClientSessionLossIsHostDeparture(*m_Session)));
+			const bool hasReject = m_Session && m_Session->HasReject();
+			const NetRejectReason reason = hasReject ? m_Session->GetRejectReason() : NetRejectReason::InternalError;
+			// A host that did not answer one dial is not gone; only a host that is gone sends the seat on.
+			const bool helloUnanswered = m_Session && HeldRejoinRetriesTheHost(lostDuringSetup, hasReject, reason, m_Session->GetRejectSummary());
+			const bool hostGone = !helloUnanswered && (lostDuringSetup || (m_Session && ClientSessionLossIsHostDeparture(*m_Session)));
+			if (hostGone) {
 				// A host that answered the round is over is not gone: the seat completes on what it holds.
-				if (!hostGone || NoteHostGoodbyeLocked(m_Session.get()) || m_HeldRejoinRoutes.empty()) return false;
+				if (NoteHostGoodbyeLocked(m_Session.get()) || m_HeldRejoinRoutes.empty()) return false;
+			} else {
+				step = NextHeldRejoinStep(++m_HeldRejoinFailedAttempts, hasReject, reason, hasReject ? m_Session->BuildRejectText() : std::string());
+				if (!step.retry) {
+					m_HeldRejoinRetryAtMs = 0;
+					m_StatusText = step.stop;
+					if (error) *error = step.stop;
+					return false;
+				}
+				m_HeldRejoinRetryAtMs = SteadyNowMs() + step.delayMs;
+				m_StatusText = "Could not rejoin - retrying";
 			}
 		}
-		if (retryInMs != 0) {
-			System::PrintDiagnosticLine("[net-match] held rejoin: the host did not answer; asking the host again in " + std::to_string(retryInMs) + " ms");
-			std::this_thread::sleep_for(std::chrono::milliseconds(retryInMs));
-			return BeginTicketRejoin(error);
+		if (step.retry) {
+			System::PrintDiagnosticLine("[net-match] held rejoin: attempt " + std::to_string(m_HeldRejoinFailedAttempts) + " failed with the host still there; asking it again in " +
+			                            std::to_string(step.delayMs) + " ms");
+			return true;
 		}
 		while (!m_HeldRejoinRoutes.empty()) {
 			const NetMatchServiceRequest route = m_HeldRejoinRoutes.front();
@@ -10207,6 +10730,33 @@ static std::string ResyncSaveName() {
 			if (RejoinSuccessorRoute(route, error)) return true;
 		}
 		return false;
+	}
+
+	std::string NetMatchService::GetHostUnreachableLine() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		static const std::string c_Prefix = "PeerHeld:";
+		return m_HeldUnreachableText.rfind(c_Prefix, 0) == 0 ? m_HeldUnreachableText.substr(c_Prefix.size()) : m_HeldUnreachableText;
+	}
+
+	void NetMatchService::LeaveHeldWait() {
+		if (GetState() == NetMatchServiceState::Running) {
+			LeaveMatch("Match left");
+			return;
+		}
+		// A rejoin attempt may be in flight: it ends with the session, and the ticket on disk is the player's way back.
+		Destroy();
+		ScanStoredTicket();
+	}
+
+	bool NetMatchService::PumpHeldRejoin(std::string* error) {
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_HeldRejoinRetryAtMs == 0) return false;
+			if (SteadyNowMs() < m_HeldRejoinRetryAtMs) return true;
+			m_HeldRejoinRetryAtMs = 0;
+		}
+		// An attempt that cannot even start fails as an attempt does: the wait reads the failure and asks for the next step.
+		return BeginTicketRejoin(error);
 	}
 
 	bool NetMatchService::RejoinSuccessorRoute(const NetMatchServiceRequest& route, std::string* error) {
@@ -10320,6 +10870,10 @@ static std::string ResyncSaveName() {
 				}
 			}
 			config.worldMaxSpectators = request.worldMaxSpectators.value_or(NetMatchConfigUtil::c_MaxWorldSpectators);
+			// Test lever: a scripted world names its watcher bound; unset, nothing changes.
+			if (const char* lever = std::getenv("CC_TEST_WORLD_MAX_SPECTATORS"); lever && *lever) {
+				config.worldMaxSpectators = static_cast<uint8_t>(std::clamp(std::atoi(lever), 0, static_cast<int>(NetMatchConfigUtil::c_MaxWorldSpectators)));
+			}
 			config.worldRespawnDelaySeconds = request.worldRespawnDelaySeconds.value_or(NetMatchConfigUtil::c_DefaultWorldRespawnDelaySeconds);
 			config.activityPreset = request.activityPreset.empty() ? "Persistent World" : request.activityPreset;
 			config.peerCount = request.peerCount;

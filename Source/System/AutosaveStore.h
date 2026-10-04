@@ -22,6 +22,7 @@ namespace RTE {
 		uint64_t sessionId = 0;
 		uint64_t roundId = 0;
 		uint64_t worldBoot = 0; //!< Read from the restart manifest; not part of Restore.ini.
+		uint64_t migrationGen = 0; //!< The host generation that wrote it, from the restart manifest; not part of Restore.ini.
 		uint64_t savedTick = 0;
 		long long simTimeTicks = 0;
 		uint32_t intervalSeconds = 0;
@@ -62,6 +63,7 @@ namespace RTE {
 		uint64_t sessionId = 0;
 		uint64_t roundId = 0;
 		uint64_t worldBoot = 0;
+		uint64_t migrationGen = 0; //!< The host generation that wrote it: a host replaced after a split writes under the higher one.
 		uint64_t savedTick = 0;
 		long long simTimeTicks = 0;
 		uint32_t intervalSeconds = 0;
@@ -111,6 +113,7 @@ namespace RTE {
 		uint64_t sessionId = 0;
 		uint64_t roundId = 0;
 		uint64_t worldBoot = 0;
+		uint64_t migrationGen = 0; //!< The host generation the match is played under when the capture is taken.
 		uint32_t intervalSeconds = 0;
 		/// The agreed configuration, as the peers hashed it, so a restart can reopen this very lobby.
 		/// Empty on a match whose configuration was never published (a local activity).
@@ -135,6 +138,7 @@ namespace RTE {
 		bool restorable = false;
 		uint64_t worldBoot = 0;
 		uint64_t roundId = 0;
+		uint64_t migrationGen = 0;
 	};
 
 	/// The match checkpoint store: where autosaves live, what makes one restorable, and which ones are kept.
@@ -188,7 +192,10 @@ namespace RTE {
 		/// Whether the archive is restorable: every entry a restore reads is complete, a descriptor of a schema
 		/// we know rides along, and the tick in the name, in the descriptor and in the world all agree.
 		static bool Validate(const std::filesystem::path& path, AutosaveDescriptor& out, std::string* error = nullptr);
-		/// This match's restorable checkpoints, newest (boot, round, tick) first.
+		/// Whether this directory already holds the match's checkpoint at that tick under a higher host generation: a writer of a
+		/// lower one never replaces it.
+		static bool HigherGenerationHolds(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick, uint64_t generation);
+		/// This match's restorable checkpoints, newest (generation, boot, round, tick) first.
 		static std::vector<AutosaveDescriptor> ListRestorable(const std::filesystem::path& directory, const std::string& matchId);
 		static std::vector<AutosaveDescriptor> ListRestorable(const std::string& matchId);
 		/// The checkpoint a rejoin rewinds to: the newest restorable one this peer holds.

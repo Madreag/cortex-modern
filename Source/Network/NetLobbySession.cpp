@@ -66,6 +66,7 @@ namespace RTE {
 	bool NetLobbySession::Start(INetTransport& transport, const NetLobbySessionConfig& config, std::string* error) {
 		m_RoundEndedRecord.reset();
 		m_EventsAfterRoundEnded.clear();
+		m_RoundEventsAfterStart.clear();
 		m_InputDelaySamples.clear();
 		m_TimingClockMs = 0;
 		if (config.localPeerId == 0) {
@@ -136,6 +137,7 @@ namespace RTE {
 		m_LocalReady = config.host || config.autoReady;
 		m_ReadySent = false;
 		m_StartRequested = config.autoStart;
+		m_StartIntent = false;
 		m_FailureReason.clear();
 		m_RemoteLobbyUp.clear();
 		m_LobbyUpConnections.clear();
@@ -185,6 +187,10 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetLobbySession::IsRoundPacket(const NetTransportEvent& event) {
+		return event.type == NetTransportEventType::PacketReceived && (NetLockstepCodec::LooksLikePacket(event.bytes) || NetHostMigrationCodec::LooksLikePacket(event.bytes));
+	}
+
 	void NetLobbySession::Tick(uint64_t nowMs) {
 		if (!m_Config.matchConfig.relay.Empty() && !m_Config.matchConfig.relay.Usable(RelayWallSeconds())) SetRelayOffer({});
 		if (!m_Transport || m_State == NetLobbyState::Idle || IsTerminal(m_State)) {
@@ -206,11 +212,16 @@ namespace RTE {
 			}
 			SyncSessionPeers();
 		}
-		for (const NetTransportEvent& event : events) {
+		for (size_t index = 0; index < events.size(); ++index) {
 			if (IsTerminal(m_State)) {
+				// The host sends the round's first packets right behind its Start: one read can carry both, and the round waits on them.
+				if (m_State == NetLobbyState::Started) {
+					for (; index < events.size(); ++index)
+						if (IsRoundPacket(events[index])) m_RoundEventsAfterStart.push_back(std::move(events[index]));
+				}
 				return;
 			}
-			HandleEvent(event, nowMs);
+			HandleEvent(events[index], nowMs);
 		}
 		if (IsTerminal(m_State)) {
 			return;
@@ -447,6 +458,19 @@ namespace RTE {
 		return !m_Config.resumeMatchId.empty() && !m_ResumeAnsweredPeers.contains(peerId);
 	}
 
+	std::string NetLobbySession::MemoryCensus() const {
+		size_t queued = 0, tail = 0, datagrams = 0;
+		for (const auto& [peer, bytes]: m_QueuedStateTransfers) queued += bytes.capacity();
+		for (const auto& [round, bytes]: m_PendingTail) tail += bytes.capacity();
+		for (const auto& [round, bytes]: m_PendingTailDatagrams) datagrams += bytes.capacity();
+		std::ostringstream line;
+		line << "lobby: send_bytes=" << m_StateBytesToSend.capacity() << " queued_transfers=" << m_QueuedStateTransfers.size() << " queued_bytes=" << queued
+		     << " received_bytes=" << m_ReceivedState.capacity() << " pending_tail=" << m_PendingTail.size() << " pending_tail_bytes=" << tail
+		     << " tail_datagrams=" << m_PendingTailDatagrams.size() << " tail_datagram_bytes=" << datagrams << " join_reports=" << m_WorldJoinReports.size()
+		     << " events_after_end=" << m_EventsAfterRoundEnded.size();
+		return line.str();
+	}
+
 	std::vector<uint8_t> NetLobbySession::TakeReceivedState() {
 		if (!m_IncomingStateComplete) return {};
 		m_IncomingStateComplete = false;
@@ -646,7 +670,7 @@ namespace RTE {
 			{"config_acked", AllConfigAcked()},
 			{"local_ready", m_LocalReady},
 			{"remote_ready", AllRemoteReady()},
-			{"start_requested", m_StartRequested},
+			{"start_requested", IsStartRequested()},
 			{"match_config", json::parse(NetMatchConfigUtil::BuildReportJson(m_Config.matchConfig))},
 			{"stats", {
 				{"messages_sent", m_Stats.messagesSent},
@@ -691,7 +715,7 @@ namespace RTE {
 		if (IsTerminal(m_State)) {
 			return;
 		}
-		m_StartRequested = true;
+		m_StartIntent = true;
 	}
 
 	bool NetLobbySession::RepublishMatchConfig(const NetMatchConfig& config, std::string* error) {
@@ -736,8 +760,7 @@ namespace RTE {
 		m_State = NetLobbyState::WaitingForConfigAck;
 		m_ReadySent = false;
 		m_LocalReady = m_Config.host || m_Config.autoReady;
-		// A Start pending on the old revision does not carry over; an auto-starting round re-arms it
-		// exactly as Start() did, so the new config is what the round begins on.
+		// An auto-starting round re-arms as Start() did; the host's own Start stands, and the round begins on the new config once acknowledged.
 		m_StartRequested = m_Config.autoStart;
 		m_PeerStatePending = true;
 		m_ConfigResendDue = true;
@@ -889,12 +912,7 @@ namespace RTE {
 		}
 		if (!changed || next.configRevision == UINT64_MAX) return;
 		++next.configRevision;
-		const bool startPending = m_StartRequested;
-		// The host asked for this round to start once, as a player presses it once. A re-size the host
-		// never typed re-opens the acknowledgement, never withdraws that request.
-		if (RepublishMatchConfig(next) && startPending) {
-			m_StartRequested = true;
-		}
+		(void)RepublishMatchConfig(next);
 	}
 
 	void NetLobbySession::SyncSessionPeers() {
@@ -995,14 +1013,17 @@ namespace RTE {
 		if (m_Config.host) {
 			const NetReconnectHost* plane = m_Config.session ? m_Config.session->GetReconnectHost() : nullptr;
 			if (plane && plane->GetRoster().stage == NetRosterStage::Starting) {
-				// A forming round waits on the seats its roster has at the start on a live link, never on a held or an opened one.
+				// A forming round waits on the seats its roster has at the start on a live link, never on a held or an opened one;
+				// the host alone starts it when every other seat is held for its player.
 				for (const uint8_t member: plane->StartMembers())
 					if (member != m_Config.matchConfig.hostPeerId && !IsKnownRemote(member)) return false;
-			} else if (const std::vector<uint8_t>& members = m_Config.matchConfig.activePeerIds;
-			           m_RemotePeerIds.size() + 1 != (members.empty() ? m_Config.matchConfig.peerCount : members.size())) {
-				// The first lobby fills every seat; with no round forming the agreed config names the members.
-				return false;
+				return true;
 			}
+			const std::vector<uint8_t>& members = m_Config.matchConfig.activePeerIds;
+			// The first lobby fills every seat; with no round forming the agreed config names the members.
+			if (m_RemotePeerIds.size() + 1 != (members.empty() ? m_Config.matchConfig.peerCount : members.size())) return false;
+			// After a played round the members named are the ones present: the others' seats are held for them, the host alone included.
+			if (plane && plane->GetRoster().stage != NetRosterStage::Lobby && !members.empty()) return true;
 		}
 		return !m_RemotePeerIds.empty() || !SeatsRemoteHuman();
 	}
@@ -1248,7 +1269,7 @@ namespace RTE {
 		     << " republishes=" << m_Stats.configRepublishes << " config_sent=" << m_Stats.configPacketsSent
 		     << " acks=" << m_Stats.configAcksReceived;
 		if (m_Config.host) {
-			line << " occupancy=" << (HasRequiredOccupancy() ? 1 : 0) << " start_requested=" << (m_StartRequested ? 1 : 0)
+			line << " occupancy=" << (HasRequiredOccupancy() ? 1 : 0) << " start_requested=" << (IsStartRequested() ? 1 : 0)
 			     << " chunks_pending=" << (HasPendingStateChunks() ? 1 : 0);
 			for (uint8_t peerId: m_RemotePeerIds) {
 				line << " peer" << static_cast<int>(peerId) << "=[acked=" << (m_ConfigAckedByPeer.count(peerId) && m_ConfigAckedByPeer.at(peerId) ? 1 : 0)
@@ -1266,7 +1287,7 @@ namespace RTE {
 		if (m_Config.host && m_Config.snapshotProviderPeerId != 0 && !m_IncomingStateComplete)
 			return;
 		// The Start rides the same ordered lane as the state chunks, so it must queue behind them.
-		if (!m_Config.host || !AllConfigAcked() || !AllRemoteReady() || !m_StartRequested || HasPendingStateChunks() || IsTerminal(m_State)) {
+		if (!m_Config.host || !AllConfigAcked() || !AllRemoteReady() || !IsStartRequested() || HasPendingStateChunks() || IsTerminal(m_State)) {
 			ReportStartWait();
 			return;
 		}
@@ -1290,6 +1311,7 @@ namespace RTE {
 		m_StartSentTo.clear();
 		m_StartSendStall = 0;
 		++m_Stats.startPacketsSent;
+		m_StartIntent = false;
 		m_State = NetLobbyState::Started;
 	}
 

@@ -160,6 +160,8 @@ namespace RTE {
 		size_t Reused() const { return m_Reused; }
 		/// Entries, their owned bytes, pixel snapshots and retired texts not yet handed back, for the memory census.
 		std::string Census() const;
+		/// The bytes its pixel snapshots hold.
+		size_t PixelBytes() const;
 	private:
 		struct Entry { CheckpointText text; uint64_t generation = 0; uint64_t stamp = 0; uint64_t identity = 0; MovableObjectReference object; };
 		std::unordered_map<const void*, std::unordered_map<unsigned, Entry>> m_Entries;

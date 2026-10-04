@@ -132,7 +132,12 @@ namespace {
 	// written, so a disk that stalls a write never stalls the simulation or the session plane. A fault line and the exit drain it.
 	class AsyncConsoleBuf final : public std::streambuf {
 	public:
-		explicit AsyncConsoleBuf(std::streambuf* target) : m_Target(target), m_Writer([this] { Run(); }) {}
+		/// Output queued past this is dropped and counted, never waited for: a stalled log must not stall the simulation.
+		static constexpr size_t c_MaxPendingBytes = size_t{64} << 20;
+		/// How long a fault or the exit waits for the writer before writing past it.
+		static constexpr int c_WriterWaitMs = 2000;
+
+		explicit AsyncConsoleBuf(std::streambuf* target, size_t maxPendingBytes = c_MaxPendingBytes) : m_Target(target), m_MaxPending(maxPendingBytes), m_Writer([this] { Run(); }) {}
 
 		// Writes what is queued; with tryOnly it gives up rather than wait on a writer or a queueing thread.
 		bool Drain(bool tryOnly) {
@@ -144,21 +149,61 @@ namespace {
 			} else if (!write.try_lock() || !lock.try_lock()) {
 				return false;
 			}
-			std::string batch;
-			batch.swap(m_Pending);
+			std::string batch = TakeBatchLocked();
 			lock.unlock();
 			WriteBatch(batch);
 			return true;
 		}
 
-		void Stop() {
-			{
-				std::lock_guard<std::mutex> lock(m_Lock);
-				m_Stopping = true;
+		/// Writes what is queued before a fault's own line: waits up to the bound for the writer, then writes the queue to the file
+		/// past a writer stuck in its write. Returns whether nothing queued was left behind.
+		bool DrainForFault(std::FILE* file, int waitMs = c_WriterWaitMs) {
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(waitMs);
+			while (!Drain(true)) {
+				if (std::chrono::steady_clock::now() >= deadline) {
+					std::unique_lock<std::mutex> lock(m_Lock, std::defer_lock);
+					while (!lock.try_lock()) {
+						if (std::chrono::steady_clock::now() >= deadline + std::chrono::milliseconds(waitMs)) return false;
+						std::this_thread::sleep_for(std::chrono::milliseconds(1));
+					}
+					const std::string batch = TakeBatchLocked();
+					lock.unlock();
+					std::fwrite(batch.data(), 1, batch.size(), file);
+					std::fflush(file);
+					return true;
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
+			return true;
+		}
+
+		/// The exit waits for the writer only so long: a stalled disk must not hold the process open.
+		void Stop(std::FILE* file = stdout, int waitMs = c_WriterWaitMs) {
+			std::unique_lock<std::mutex> lock(m_Lock);
+			m_Stopping = true;
 			m_Wake.notify_one();
-			if (m_Writer.joinable()) m_Writer.join();
-			Drain(false);
+			const bool finished = m_Done.wait_for(lock, std::chrono::milliseconds(waitMs), [this] { return m_WriterDone; });
+			lock.unlock();
+			if (finished) {
+				if (m_Writer.joinable()) m_Writer.join();
+				Drain(false);
+				return;
+			}
+			// The buffer is never destroyed, so a writer still in its write may finish it after the process stops waiting.
+			if (m_Writer.joinable()) m_Writer.detach();
+			(void)DrainForFault(file, waitMs);
+		}
+
+		/// Bytes queued and not yet taken by the writer.
+		size_t PendingBytes() {
+			std::lock_guard<std::mutex> lock(m_Lock);
+			return m_Pending.size();
+		}
+
+		/// Bytes of output dropped because the queue was full, not yet reported in the log.
+		size_t DroppedBytes() {
+			std::lock_guard<std::mutex> lock(m_Lock);
+			return m_DroppedBytes;
 		}
 
 	protected:
@@ -166,13 +211,19 @@ namespace {
 			{
 				std::lock_guard<std::mutex> lock(m_Lock);
 				if (!m_Stopping) {
+					// Once full, the queue drops until the writer takes it, so the report of the loss sits where the loss was.
+					if (m_DroppedBytes != 0 || m_Pending.size() + static_cast<size_t>(count) > m_MaxPending) {
+						m_DroppedBytes += static_cast<size_t>(count);
+						return count;
+					}
 					m_Pending.append(text, static_cast<size_t>(count));
 					m_Wake.notify_one();
 					return count;
 				}
 			}
-			// After the exit's drain, output goes out where it is written.
-			std::lock_guard<std::mutex> write(m_WriteLock);
+			// After the exit's drain, output goes out where it is written - unless a writer left behind still holds the file.
+			std::unique_lock<std::mutex> write(m_WriteLock, std::try_to_lock);
+			if (!write.owns_lock()) return count;
 			const std::streamsize written = m_Target->sputn(text, count);
 			m_Target->pubsync();
 			return written;
@@ -188,6 +239,17 @@ namespace {
 		int sync() override { return 0; }
 
 	private:
+		/// The queue as one batch, with the report of what overflowed after it. Caller holds m_Lock.
+		std::string TakeBatchLocked() {
+			std::string batch;
+			batch.swap(m_Pending);
+			if (m_DroppedBytes != 0) {
+				batch += "[console] " + std::to_string(m_DroppedBytes) + " bytes of output were dropped while standard output fell behind\n";
+				m_DroppedBytes = 0;
+			}
+			return batch;
+		}
+
 		void WriteBatch(const std::string& batch) {
 			if (batch.empty()) return;
 			m_Target->sputn(batch.data(), static_cast<std::streamsize>(batch.size()));
@@ -198,27 +260,66 @@ namespace {
 			for (;;) {
 				{
 					std::unique_lock<std::mutex> lock(m_Lock);
-					m_Wake.wait(lock, [this] { return m_Stopping || !m_Pending.empty(); });
-					if (m_Stopping) return;
+					m_Wake.wait(lock, [this] { return m_Stopping || !m_Pending.empty() || m_DroppedBytes != 0; });
+					if (m_Stopping) {
+						m_WriterDone = true;
+						m_Done.notify_all();
+						return;
+					}
 				}
 				// Taken in the drain's order, so no batch is written before an older one.
 				std::lock_guard<std::mutex> write(m_WriteLock);
 				std::string batch;
 				{
 					std::lock_guard<std::mutex> lock(m_Lock);
-					batch.swap(m_Pending);
+					batch = TakeBatchLocked();
 				}
 				WriteBatch(batch);
 			}
 		}
 
 		std::streambuf* m_Target;
+		size_t m_MaxPending;
 		std::mutex m_Lock; //!< Guards the queue; held only to append or take it.
 		std::mutex m_WriteLock; //!< Held while a batch is taken and written, so batches reach the file in order.
 		std::condition_variable m_Wake;
+		std::condition_variable m_Done;
 		std::string m_Pending;
+		size_t m_DroppedBytes = 0; //!< Output the full queue turned away since the writer last took it.
 		bool m_Stopping = false;
+		bool m_WriterDone = false;
 		std::thread m_Writer;
+	};
+
+	/// A sink that holds every write until it is released: a disk that stalls.
+	class StalledSink final : public std::streambuf {
+	public:
+		void Release() {
+			{
+				std::lock_guard<std::mutex> lock(m_Lock);
+				m_Released = true;
+			}
+			m_Wake.notify_all();
+		}
+
+		std::string Text() {
+			std::lock_guard<std::mutex> lock(m_Lock);
+			return m_Text;
+		}
+
+	protected:
+		std::streamsize xsputn(const char* text, std::streamsize count) override {
+			std::unique_lock<std::mutex> lock(m_Lock);
+			m_Wake.wait(lock, [this] { return m_Released; });
+			m_Text.append(text, static_cast<size_t>(count));
+			return count;
+		}
+
+	private:
+		std::mutex m_Lock;
+		std::condition_variable m_Wake;
+		bool m_Released = false;
+		std::string m_Text;
 	};
 
 	// Never destroyed: a thread still writing at exit finds it, writing straight through once the exit has drained it.
@@ -275,6 +376,7 @@ namespace {
 		if (whole.empty() || whole.back() != '\n') {
 			whole += '\n';
 		}
+		if (&stream == &std::cout) (void)s_AsyncConsole->DrainForFault(file);
 		if (s_PrintDepth != 0) {
 			s_LastFaultDepthPath = 1;
 			std::fwrite(whole.data(), 1, whole.size(), file);
@@ -284,7 +386,7 @@ namespace {
 		s_LastFaultDepthPath = 0;
 		std::unique_lock<std::mutex> printLock(PrintLock(), std::try_to_lock);
 		if (printLock.owns_lock()) {
-			if (&stream == &std::cout && s_AsyncConsole->Drain(true)) {
+			if (&stream == &std::cout) {
 				std::fwrite(whole.data(), 1, whole.size(), file);
 				std::fflush(file);
 				return;
@@ -904,6 +1006,51 @@ const std::string& System::GetThisExeSha256() {
 		return hash.empty() ? std::string("unavailable") : hash;
 	}();
 	return digest;
+}
+
+bool System::RunConsoleQueueSelfTest(std::string* error) {
+	const auto fail = [error](const std::string& why) {
+		if (error) *error = why;
+		return false;
+	};
+	// A stalled disk: the queue fills to its bound, the rest is dropped and said, a fault's drain returns within its bound, and the
+	// exit does not wait on the stuck writer past its own.
+	auto* sink = new StalledSink();
+	auto* console = new AsyncConsoleBuf(sink, 64);
+	const std::string first(32, 'a');
+	console->sputn(first.data(), static_cast<std::streamsize>(first.size()));
+	// The writer takes the first text and sticks in the disk's write, as a stalled log does.
+	const auto taken = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	while (std::chrono::steady_clock::now() < taken && console->PendingBytes() != 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	if (console->PendingBytes() != 0) return fail("the console writer never took its queue");
+	std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	const std::string queued(64, 'b');
+	const std::string overflow(10, 'c');
+	console->sputn(queued.data(), static_cast<std::streamsize>(queued.size()));
+	console->sputn(overflow.data(), static_cast<std::streamsize>(overflow.size()));
+	if (console->DroppedBytes() != overflow.size()) return fail("a full console queue dropped " + std::to_string(console->DroppedBytes()) + " bytes, not the 10 past its bound");
+	std::FILE* faultFile = std::tmpfile();
+	if (!faultFile) return fail("no temporary file for the fault drain");
+	const auto faultStarted = std::chrono::steady_clock::now();
+	const bool drained = console->DrainForFault(faultFile, 100);
+	const auto faultMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - faultStarted).count();
+	std::string faultText(256, '\0');
+	std::rewind(faultFile);
+	faultText.resize(std::fread(faultText.data(), 1, faultText.size(), faultFile));
+	std::fclose(faultFile);
+	if (!drained || faultMs > 1000 || faultText.find(queued) == std::string::npos || faultText.find("[console] 10 bytes of output were dropped") == std::string::npos) {
+		return fail("a fault behind a stuck writer drained=" + std::to_string(drained) + " in " + std::to_string(faultMs) + " ms and wrote '" + faultText + "'");
+	}
+	const auto stopStarted = std::chrono::steady_clock::now();
+	console->Stop(stdout, 100);
+	const auto stopMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - stopStarted).count();
+	if (stopMs > 1000) return fail("the exit waited " + std::to_string(stopMs) + " ms on a stuck writer");
+	// The writer finishes its batch once the disk moves; both objects stay alive for it, as the real console does.
+	sink->Release();
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	if (sink->Text() != first) return fail("the stalled disk received '" + sink->Text() + "'");
+	std::cout << "[rteerror-selftest] PASS console_queue_is_bounded dropped=10 fault_ms=" << faultMs << " exit_ms=" << stopMs << std::endl;
+	return true;
 }
 
 void System::FlushConsole() {

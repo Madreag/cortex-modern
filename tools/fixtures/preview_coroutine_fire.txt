@@ -1,0 +1,13 @@
+# Preview coroutine (host, player 0): tap the held rifle's trigger so its shots run inside the host's preview window.
+120 122 FIRE
+150 152 FIRE
+180 182 FIRE
+210 212 FIRE
+240 242 FIRE
+270 272 FIRE
+300 302 FIRE
+330 332 FIRE
+360 362 FIRE
+390 392 FIRE
+420 422 FIRE
+450 452 FIRE

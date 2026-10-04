@@ -339,6 +339,20 @@ namespace RTE {
 		/// as the registry does after each. @return The first way it did not, or empty.
 		std::string KnownObjectsScopeMissedChange();
 
+		/// While one lives, the checkpoint saver reads the objects the script states held from this list, gathered on the
+		/// capturing thread before any state froze, instead of entering each state (which waits for that state's page copy).
+		class ScriptHeldScope {
+		public:
+			explicit ScriptHeldScope(std::vector<MovableObject*> held);
+			~ScriptHeldScope();
+			ScriptHeldScope(const ScriptHeldScope&) = delete;
+			ScriptHeldScope& operator=(const ScriptHeldScope&) = delete;
+			static const std::vector<MovableObject*>* Current();
+		private:
+			std::vector<MovableObject*> m_Held;
+			const std::vector<MovableObject*>* m_Previous = nullptr;
+		};
+
 		struct AddQueueMark {
 			size_t actors = 0;
 			size_t items = 0;
@@ -875,6 +889,8 @@ namespace RTE {
 		static void PreControllerStage(Actor* actor);
 		static void UpdateStage(MovableObject* mo, bool actor = false);
 		static void PostUpdateStage(MovableObject* mo);
+		/// A preview clone's tree runs its threaded and synced hooks where the world's tick runs everyone's: after the wire, before the update.
+		static void PreviewScriptStage(const MovableObject* root);
 		/// Applies one wire frame to an actor: its actor state, its controller and the apply tick.
 		static bool ApplyLockstepFrameToActor(Actor& actor, const ControllerFrame& frame, uint64_t simTick, std::string* error);
 

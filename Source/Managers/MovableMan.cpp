@@ -7,6 +7,7 @@
 #include "SimDumpTape.h"
 #include "NetA7Journal.h"
 #include "PrimitiveMan.h"
+#include <optional>
 #include <chrono>
 #include <map>
 
@@ -691,8 +692,8 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 		}
 		if (!ScenarioRunner::ConsumeLockstepGameCommand(command)) continue;
 		if (const auto* checkpoint = std::get_if<NetGameCheckpoint>(&command.payload)) {
-			// The schedule is the host's; any peer may report its own writer.
-			if (checkpoint->kind != NetGameCheckpoint::Written && command.senderPeerId != ScenarioRunner::GetLockstepHostPeerId()) {
+			// The schedule is the host's; any peer may report its own writer, kept or missed.
+			if (checkpoint->IsHostSchedule() && command.senderPeerId != ScenarioRunner::GetLockstepHostPeerId()) {
 				g_ConsoleMan.PrintString("ERROR: Rejected a checkpoint schedule from a peer that is not the host");
 				continue;
 			}
@@ -1184,13 +1185,20 @@ uint64_t RTE::GetLockstepPausedFrames() { return s_LockstepPausedFrames; }
 void RTE::RestoreLockstepPausedFrames(uint64_t frames) { s_LockstepPausedFrames = frames; }
 
 void RTE::ApplyLockstepSeatReclaims(const NetLockstepReadyFrame& ready, const std::deque<Actor*>& actors) {
+	const Activity* current = g_ActivityMan.GetActivity();
 	for (uint8_t peer: ready.reclaimedPeerIds) {
 		size_t reclaimed = 0;
+		const bool local = peer == ScenarioRunner::GetLockstepLocalPeerId();
 		for (Actor* actor: actors) {
 			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
 			if (ScenarioRunner::GetLockstepReclaimSeat(uid, actor->GetTeam(), !actor->IsPlayerControlled(), ready.frame) != peer) continue;
 			ScenarioRunner::ReclaimLockstepActor(uid, peer);
-			actor->GetController()->ResetLocalInputState(actor->GetController()->GetInputMode());
+			// An actor this machine's player already took back keeps its seat; the rest start from their committed mode.
+			int seat = Players::NoPlayer;
+			for (int player = Players::PlayerOne; local && current && player < Players::MaxPlayerCount; ++player)
+				if (current->IsLocalHumanSeat(player) && current->GetLocallyControlledActor(player) == actor) seat = player;
+			if (seat != Players::NoPlayer) actor->GetController()->ResetLocalInputState(Controller::CIM_PLAYER, seat);
+			else actor->GetController()->ResetLocalInputState(actor->GetController()->GetInputMode());
 			actor->TouchCheckpoint(); ++reclaimed;
 		}
 		if (auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) activity->ApplyNetworkSeatAI(peer, false, ready.frame);
@@ -2761,6 +2769,23 @@ void MovableMan::KnownObjectsScope::Copy() const {
 
 MovableMan::KnownObjectsScope::~KnownObjectsScope() {
 	g_MovableMan.m_KnownObjectsScope.store(m_Previous);
+}
+
+namespace {
+	// Set by the capturing thread before its savers start and read by them; one capture at a time.
+	std::atomic<const std::vector<MovableObject*>*> s_CaptureScriptHeld{nullptr};
+}
+
+MovableMan::ScriptHeldScope::ScriptHeldScope(std::vector<MovableObject*> held) : m_Held(std::move(held)), m_Previous(s_CaptureScriptHeld.load()) {
+	s_CaptureScriptHeld.store(&m_Held);
+}
+
+MovableMan::ScriptHeldScope::~ScriptHeldScope() {
+	s_CaptureScriptHeld.store(m_Previous);
+}
+
+const std::vector<MovableObject*>* MovableMan::ScriptHeldScope::Current() {
+	return s_CaptureScriptHeld.load();
 }
 
 std::string MovableMan::KnownObjectsScopeMissedChange() {
@@ -7143,6 +7168,39 @@ void MovableMan::UpdateStage(MovableObject* mo, bool actor) {
 	mo->ApplyImpulses();
 }
 
+void MovableMan::PreviewScriptStage(const MovableObject* root) {
+	auto bound = LuaMan::PreviewBindingsUnder(root);
+	if (bound.empty()) return;
+	LuaStateWrapper* const previousOverride = g_LuaMan.GetThreadLuaStateOverride();
+	LuaStateWrapper* const master = &g_LuaMan.GetMasterScriptState();
+	// A script may destroy an object of the tree, so each one is looked up again before it runs.
+	const auto live = [](MovableObject* mo, LuaStateWrapper* state) { return state->GetPendingRegisteredMOs().contains(mo); };
+	// Each state runs its objects in unique-ID order, as the world's pass does; the states share nothing.
+	std::stable_sort(bound.begin(), bound.end(), [](const auto& lhs, const auto& rhs) { return lhs.first->GetUniqueID() < rhs.first->GetUniqueID(); });
+	for (const auto& [mo, state]: bound) {
+		if (!live(mo, state)) continue;
+		g_LuaMan.SetThreadLuaStateOverride(state, state != master);
+		mo->RunScriptedFunctionInAppropriateScripts("ThreadedUpdate", false, false, {}, {}, {});
+	}
+	g_LuaMan.SetThreadLuaStateOverride(master);
+	for (const auto& [mo, state]: bound) {
+		if (state == master && live(mo, state)) mo->RunScriptedFunctionInAppropriateScripts("SyncedUpdate", false, false, {}, {}, {});
+	}
+	// A threaded object runs the SyncedUpdate it asked for, in the world's synced order.
+	std::vector<std::pair<SyncedUpdateEntry, LuaStateWrapper*>> requested;
+	for (const auto& [mo, state]: bound) {
+		if (state != master && live(mo, state) && mo->HasRequestedSyncedUpdate()) requested.push_back({{mo, mo->GetUniqueID(), mo->GetID(), mo->GetScriptRegistrationSerial()}, state});
+	}
+	std::sort(requested.begin(), requested.end(), [](const auto& lhs, const auto& rhs) { return SyncedUpdateEntryEarlier(lhs.first, rhs.first); });
+	for (const auto& [entry, state]: requested) {
+		if (!live(entry.object, state)) continue;
+		g_LuaMan.SetThreadLuaStateOverride(state);
+		entry.object->RunScriptedFunctionInAppropriateScripts("SyncedUpdate", false, false, {}, {}, {});
+		if (live(entry.object, state)) entry.object->ResetRequestedSyncedUpdateFlag();
+	}
+	g_LuaMan.SetThreadLuaStateOverride(previousOverride);
+}
+
 void MovableMan::PostUpdateStage(MovableObject* mo) {
 	static const uint64_t soundPhase = Hash("PostUpdate");
 	SoundSimulationScope sounds(mo->GetUniqueID(), soundPhase);
@@ -7745,7 +7803,9 @@ void MovableMan::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whi
 
 std::string MovableMan::SaveCheckpoint() const {
 	CheckpointWriter writer("MovableMan2");
+	std::optional<CaptureTrace::Span> span(std::in_place, "movable_fields");
 	VisitCheckpoint(writer, *this);
+	span.emplace("movable_collect");
 	std::map<long, std::vector<long>> references;
 	// A row exists to rebind borrowed pointers, so an object that borrows nothing needs none.
 	// Writing one anyway makes the restore demand back an owner the checkpoint never carried.
@@ -7760,9 +7820,13 @@ std::string MovableMan::SaveCheckpoint() const {
 	collect(m_Actors); collect(m_Items); collect(m_Particles);
 	collect(m_AddedActors); collect(m_AddedItems); collect(m_AddedParticles);
 	CollectOwnedMovableObjects(g_SceneMan.GetScene(), visited, carried);
-	g_LuaMan.VisitScriptHeldMovableObjects([&visited, &carried](MovableObject* object) {
-		CollectOwnedMovableObjects(object, visited, carried);
-	});
+	if (const std::vector<MovableObject*>* held = ScriptHeldScope::Current()) {
+		for (const MovableObject* object: *held) CollectOwnedMovableObjects(object, visited, carried);
+	} else {
+		g_LuaMan.VisitScriptHeldMovableObjects([&visited, &carried](MovableObject* object) {
+			CollectOwnedMovableObjects(object, visited, carried);
+		});
+	}
 	const auto shared = [&visited, &carried](const Activity* activity) {
 		if (const auto* game = dynamic_cast<const GameActivity*>(activity)) {
 			game->VisitCheckpointSharedObjects([&visited, &carried](const Entity* child) { CollectOwnedMovableObjects(child, visited, carried); });
@@ -7770,6 +7834,7 @@ std::string MovableMan::SaveCheckpoint() const {
 	};
 	shared(g_ActivityMan.GetActivity());
 	shared(g_ActivityMan.GetCheckpointStartActivity());
+	span.emplace("movable_references", std::to_string(carried.size()));
 	std::map<long, std::vector<bool>> perPeer;
 	for (const auto& [identity, object]: m_KnownObjects) {
 		if (!carried.contains(object)) continue;

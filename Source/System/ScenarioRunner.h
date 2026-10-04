@@ -15,7 +15,6 @@
 #include <vector>
 
 namespace RTE {
-	class NetSeatPresence;
 	/// CLI scenario direct-launch mode.
 	///
 	/// Activated when the binary is invoked with `-scenario <PresetName>`. Skips the menu loop,
@@ -140,10 +139,18 @@ namespace RTE {
 		static bool RunCommittedSeatHandoffSelfTest();
 		/// The runner's and the round's records and their entry counts, one line for the memory census.
 		static std::string MemoryCensus();
-		/// A held seat that had already run frames from its hold on ran them off the round: its hash records drop them from this frame.
-		static void AbandonTicksFrom(uint64_t frame);
-		/// The frame the hash records drop from and the round it belongs to, once; 0 when nothing was abandoned since the last call.
-		static uint64_t TakeAbandonedTicksFrom(uint64_t& round);
+		/// A held seat's history leaves the round from its hold frame: its hash records drop the frames it ran from there through
+		/// ranThrough, the last it ran (0 when it learned of the hold before reaching it). Said once per hold.
+		static void AbandonTicksFrom(uint64_t frame, uint64_t ranThrough);
+		/// The frame the hash records drop from, its round and the last frame this process ran past it, once; 0 when nothing was
+		/// abandoned since the last call.
+		static uint64_t TakeAbandonedTicksFrom(uint64_t& round, uint64_t& ranThrough);
+		/// What the host measured when it last held a seat, while a round runs.
+		static std::optional<NetLockstepCoordinator::HoldFact> GetLockstepLastHold(uint8_t peerId);
+		/// Keeps a receipt this process wrote for the harness, by name, so a probe's dump can read it back.
+		static void NoteHarnessReceipt(const std::string& name, const std::string& json);
+		/// The last receipt of that name, as JSON text; empty when this process wrote none.
+		static std::string GetHarnessReceipt(const std::string& name);
 		static void ObserveLockstepPlayerBindings(uint8_t peer, uint64_t frame, const NetGamePlayerBindings& bindings);
 		static bool ConsumeLockstepGameCommand(const NetGameCommand& command);
 		static std::vector<NetResyncPendingCommand> CaptureUnacknowledgedLocalCommands();
@@ -316,6 +323,8 @@ namespace RTE {
 		/// Whether the host released this held seat: the AI keeps its units and its player no longer reclaims it.
 		static bool IsLockstepSeatReleased(uint8_t peerId);
 		static bool IsLockstepSeatReclaimGap(uint8_t peerId, uint64_t frame);
+		/// Whether this machine's own seat is held: the AI plays it, or its reclaim's gap runs before the player's input applies.
+		static bool IsLockstepOwnSeatHeld();
 		static void FilterReclaimControllerInputs(NetLockstepReadyFrame& ready);
 		static void ApplyLockstepSeatAI(uint8_t peerId, uint64_t frame);
 		static void HandLockstepActorToAI(int64_t actorUniqueID, uint8_t heldPeerId);
@@ -342,7 +351,6 @@ namespace RTE {
 		/// What a round stopped by this peer's own seat hold tries first: the catch-up in place on the committed tail.
 		/// Returns whether it began, which takes the round off the stop path.
 		static void SetHeldCatchUp(std::function<bool()> begin);
-		static void SetLockstepSeatPresence(const NetSeatPresence* presence);
 
 		/// One shown match-event banner: the lockstep tick it was recorded at, its class and text.
 		struct NetUiToastRecord {

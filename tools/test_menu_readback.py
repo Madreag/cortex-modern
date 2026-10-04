@@ -709,7 +709,8 @@ def scripts(case, port, root, size="960x540"):
                 "combo_select ComboHostActivity P4 Alpha Duel - Base.rte\nwait_ms 400\n"
                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait_connected 2 60\nwait_remote_ready 60\n"
-                "activate ButtonMultiplayerStart\n")
+                # The Start button takes the remote ready on the menu's next update.
+                "wait 3\nactivate ButtonMultiplayerStart\n")
         client = (LANDING + "activate ButtonMultiplayerJoinGame\nwait_ms 400\n"
                   f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
                   "activate ButtonMultiplayerConnect\nwait_connected 2 60\nactivate ButtonMultiplayerReady\n")
@@ -1005,7 +1006,8 @@ def scripts(case, port, root, size="960x540"):
                 "combo_select ComboHostActivity P4 Alpha Duel - Base.rte\nwait 5\n"
                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait_connected 2 60\nwait_remote_ready 60\n"
-                "activate ButtonMultiplayerStart\n")
+                # The Start button takes the remote ready on the menu's next update.
+                "wait 3\nactivate ButtonMultiplayerStart\n")
         client = (LANDING + "activate ButtonMultiplayerJoinGame\nwait 5\n"
                   f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
                   "activate ButtonMultiplayerConnect\nwait_connected 2 60\nwait 5\n"
@@ -1158,9 +1160,9 @@ def scripts(case, port, root, size="960x540"):
                 "wait 10\nassert_label LabelHostSeatName1 Client 2\n"
                 "dump_host_options\n"
                 "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
-                # The kicked seat is open again: it reads the unseated name, never CPU, and the
+                # The kicked seat is open again: it reads open, never CPU nor the removed player, and the
                 # kicked client rejoins it below - only the ban list keeps an identity out.
-                "dump_lobby\nassert_label LabelLobbyPlayer1 Client 2\n"
+                "dump_lobby\nassert_label LabelLobbyPlayer1 Open seat - Team 1\n"
                 "assert_label_absent LabelLobbyPlayer0 Joiner\nassert_label_absent LabelLobbyPlayer1 Joiner\n"
                 "assert_label LabelLobbyPlayer2 CPU\n"
                 # The client's rejoin waits on this dump, taken on the options panel so the lobby keeps one capture.
@@ -2123,8 +2125,9 @@ def run_case(options, case, root, failing=None):
             assert reports["client"]["service"]["status"] == "Match left", reports["client"]["service"]["status"]
             leave = reports["client"]["service"]["reconnect"]
             assert leave["client_leave_acks"] == 1 and leave["client_unacknowledged_leaves"] == 0, leave
-            assert leave["client_state"] == "Left" and leave["ticket_stored"] is False, leave
-            assert "[net-reconnect] leave: Left (ticket cleared)" in logs["client"], logs["client"][-2000:]
+            # A player who leaves keeps the seat and its ticket, so Rejoin Match brings the player back while the match runs.
+            assert leave["client_state"] == "Left" and leave["ticket_stored"] is True, leave
+            assert "[net-reconnect] leave: Left (ticket kept)" in logs["client"], logs["client"][-2000:]
             announcements = re.findall(r"\[net-lockstep\] a leave becomes a hold for peer 2 at frame (\d+): Match left", logs["host"])
             assert len(announcements) == 1, announcements
             leave_frame = int(announcements[0])

@@ -91,6 +91,7 @@ extern "C" {
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -7485,6 +7486,10 @@ void LuaStateWrapper::WaitFrozenCopy() {
 	if (m_CheckpointHeap) m_CheckpointHeap->WaitCopy();
 }
 
+CheckpointLua::CopyReceipt LuaStateWrapper::TakeFrozenCopyReceipt() {
+	return m_CheckpointHeap ? m_CheckpointHeap->TakeCopyReceipt() : CheckpointLua::CopyReceipt{};
+}
+
 void LuaStateWrapper::Destroy() {
 	ReportPreviewBarrierStats();
 	if (!m_State) {
@@ -10616,6 +10621,43 @@ _PrimitiveQueueCapture = nil
 		lua_setglobal(m_State, firePath.c_str());
 	}
 	checkpointValues = previewLeavesNoUpvalueWrite && checkpointValues;
+	// A preview slot's fields are its instance table through a registry reference, and they may name the slot itself: dropping
+	// the slot must let both go, window after window, or each preview keeps its copy of the fields for the life of the state.
+	bool previewSlotDropReleasesFields = false;
+	{
+		const auto liveSlots = [this]() {
+			int live = 0;
+			lua_pushnil(m_State);
+			while (lua_next(m_State, LUA_REGISTRYINDEX) != 0) {
+				if (lua_type(m_State, -2) == LUA_TNUMBER && lua_type(m_State, -1) != LUA_TNUMBER) ++live;
+				lua_pop(m_State, 1);
+			}
+			return live;
+		};
+		constexpr long c_ProbeUid = 987654321;
+		const std::string slot = "_ScriptedObjects[\"" + std::to_string(c_ProbeUid) + "#preview\"]";
+		const std::string stash = "_ScriptFieldsStash[\"preview:" + std::to_string(c_ProbeUid) + "\"]";
+		RunScriptString("collectgarbage(\"collect\") collectgarbage(\"collect\")", false);
+		const int before = liveSlots();
+		bool bound = true;
+		constexpr int c_Windows = 50;
+		for (int window = 0; window < c_Windows && bound; ++window) {
+			bound = RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; _ScriptFieldsStash = _ScriptFieldsStash or {}; " + slot + " = Vector(1, 2); " +
+			                        stash + " = {fieldValue = 1}; " + stash + ".slot = " + slot + "; _PreviewSlotProbeBound = _ScriptGraphSetInstance(" + slot + ", " + stash + ")",
+			                        false) == 0;
+			lua_getglobal(m_State, "_PreviewSlotProbeBound");
+			bound = bound && lua_toboolean(m_State, -1);
+			lua_pop(m_State, 1);
+			DropPreviewScriptObject(c_ProbeUid);
+			RunScriptString("collectgarbage(\"collect\") collectgarbage(\"collect\")", false);
+		}
+		RunScriptString("_PreviewSlotProbeBound = nil", false);
+		const int after = liveSlots();
+		previewSlotDropReleasesFields = bound && after <= before;
+		std::cout << "[script-graph-selftest] " << (previewSlotDropReleasesFields ? "PASS" : "FAIL") << " preview_slot_drop_releases_its_fields windows=" << c_Windows
+		          << " bound=" << bound << " live_registry_slots before=" << before << " after=" << after << std::endl;
+	}
+	checkpointValues = previewSlotDropReleasesFields && checkpointValues;
 	// A mod may add a key to a library table, by require("table.clear") or by a plain string.trim = f. The graph
 	// names such a value by its path, which is the very key the restore's wipe takes, so a set-aside must keep it.
 	bool addedLibraryKeyReinstates = false;
@@ -12234,10 +12276,41 @@ void LuaMan::Update() {
 	m_MasterScriptState.WaitFrozenCopy();
 	for (LuaStateWrapper& luaState: m_ScriptStates) luaState.WaitFrozenCopy();
 	static int64_t reportedGateWaitUs = 0;
-	if (const int64_t gateWaitUs = CheckpointLua::HeapOwner::GateWaitMicroseconds(); gateWaitUs != reportedGateWaitUs) {
+	const int64_t gateWaitUs = CheckpointLua::HeapOwner::GateWaitMicroseconds();
+	if (gateWaitUs != reportedGateWaitUs) {
 		System::PrintDiagnosticLine(std::format("[autosave-gate] tick={} waited_us={}\n", g_TimerMan.GetSimUpdateCount(), gateWaitUs - reportedGateWaitUs));
-		reportedGateWaitUs = gateWaitUs;
 	}
+	// What the last capture's page copies cost, once they have all landed: the gate's wait is their tail past the tick's start.
+	size_t copiedStates = 0, copiedPages = 0, freshBytes = 0;
+	int64_t copyUsSum = 0, copyUsMax = 0, landedUsMax = 0;
+	const auto addReceipt = [&](LuaStateWrapper& state) {
+		const CheckpointLua::CopyReceipt receipt = state.TakeFrozenCopyReceipt();
+		if (receipt.generation == 0) return;
+		++copiedStates;
+		copiedPages += receipt.pages;
+		freshBytes += receipt.freshBytes;
+		copyUsSum += receipt.copyUs;
+		copyUsMax = std::max(copyUsMax, receipt.copyUs);
+		landedUsMax = std::max(landedUsMax, receipt.landedUs);
+	};
+	// A tick after no capture reads one counter; the states are asked only once a copy has landed.
+	static uint64_t takenLandings = 0;
+	if (const uint64_t landings = CheckpointLua::HeapOwner::LandedCopyCount(); landings != takenLandings) {
+		takenLandings = landings;
+		addReceipt(m_MasterScriptState);
+		for (LuaStateWrapper& luaState: m_ScriptStates) addReceipt(luaState);
+	}
+	// The simulation's own stall at the gates, wherever it met one since the last report, apart from the capture workers' waits.
+	static int64_t reportedSimGateUs = 0;
+	const int64_t simGateUs = CheckpointLua::HeapOwner::ThisThreadGateWaitMicroseconds();
+	// The receipt is a match's capture diagnostic: a single-player save lands copies too and logs none of it.
+	if (copiedStates != 0 && ScenarioRunner::HasLockstepCoordinator()) {
+		System::PrintDiagnosticLine(std::format("[heap-copy] tick={} states={} pages={} bytes={} copy_us_sum={} copy_us_max={} landed_after_freeze_us_max={} fresh_mapped_bytes={} gate_waited_us={} sim_gate_waited_us={}\n",
+		    g_TimerMan.GetSimUpdateCount(), copiedStates, copiedPages, copiedPages * CheckpointLua::Snapshot::c_PageBytes, copyUsSum, copyUsMax, landedUsMax, freshBytes,
+		    gateWaitUs - reportedGateWaitUs, simGateUs - reportedSimGateUs));
+		reportedSimGateUs = simGateUs;
+	}
+	reportedGateWaitUs = gateWaitUs;
 
 	m_MasterScriptState.Update();
 	for (LuaStateWrapper& luaState: m_ScriptStates) {
@@ -12953,19 +13026,42 @@ namespace {
 		return 0;
 	}
 
-	void PushPreviewClone(lua_State* L, int src, int seen, std::vector<std::string>& problems) {
+	// One copy of a script's instance: what it has copied so far and the coroutines and closures it copies.
+	struct PreviewCloneContext {
+		int seen;
+		std::vector<std::string>& problems;
+		LuaThreadCodec::PreviewCopier* copier = nullptr;
+	};
+
+	void PushPreviewClone(lua_State* L, int src, int seen, PreviewCloneContext& context);
+
+	void MapPreviewValue(lua_State* L, void* raw) {
+		auto& context = *static_cast<PreviewCloneContext*>(raw);
+		PushPreviewClone(L, -1, context.seen, context);
+		lua_replace(L, -2);
+	}
+
+	void PushPreviewClone(lua_State* L, int src, int seen, PreviewCloneContext& context) {
 		src = AbsoluteLuaIndex(L, src);
 		seen = AbsoluteLuaIndex(L, seen);
 		const int type = lua_type(L, src);
+		if (type == LUA_TFUNCTION) {
+			context.copier->PushFunction(src);
+			return;
+		}
 		if (type == LUA_TTHREAD) {
-			// A coroutine cannot be copied: the copy holds a stand-in that reads as the original does, suspended or dead, and
-			// resuming it marks the window so the preview runs again with the scripts frozen.
 			lua_pushvalue(L, src);
 			lua_rawget(L, seen);
 			if (!lua_isnil(L, -1)) {
 				return;
 			}
 			lua_pop(L, 1);
+			// A coroutine resumes on its own copy where the original stands.
+			if (context.copier->PushThread(src)) {
+				return;
+			}
+			// One that cannot be copied gets a stand-in that reads as the original does, and resuming it marks the window
+			// so the preview runs again with the scripts frozen.
 			lua_State* original = lua_tothread(L, src);
 			const int status = lua_status(original);
 			lua_State* standIn = lua_newthread(L);
@@ -13039,15 +13135,15 @@ namespace {
 		while (lua_next(L, src) != 0) {
 			const int value = lua_gettop(L);
 			const int key = value - 1;
-			PushPreviewClone(L, key, seen, problems);
-			PushPreviewClone(L, value, seen, problems);
+			PushPreviewClone(L, key, seen, context);
+			PushPreviewClone(L, value, seen, context);
 			lua_rawset(L, copy);
 			lua_pop(L, 1);
 		}
 		// A cached module or class keeps its methods on its metatable; the copy gets its own clone of it, so the
 		// preview reaches the same methods and a write through them still lands inside the copy.
 		if (lua_getmetatable(L, src) != 0) {
-			PushPreviewClone(L, -1, seen, problems);
+			PushPreviewClone(L, -1, seen, context);
 			lua_setmetatable(L, copy);
 			lua_pop(L, 1);
 		}
@@ -13145,6 +13241,26 @@ namespace {
 		if (LuaMan::IsPreviewClone(mo)) {
 			return true;
 		}
+		// An object's own script handle - a coroutine's or a closure's self - is its preview self, whose fields are the copy's.
+		{
+			const std::string uid = std::to_string(mo->GetUniqueID());
+			lua_getglobal(L, "_ScriptedObjects");
+			if (lua_istable(L, -1)) {
+				lua_getfield(L, -1, uid.c_str());
+				const bool own = lua_rawequal(L, -1, index) != 0;
+				lua_pop(L, 1);
+				if (own) {
+					lua_getfield(L, -1, (uid + "#preview").c_str());
+					if (lua_isuserdata(L, -1)) {
+						lua_replace(L, index);
+						lua_pop(L, 1);
+						return true;
+					}
+					lua_pop(L, 1);
+				}
+			}
+			lua_pop(L, 1);
+		}
 		// A script keeps its reference past the object's deletion, so only an object still alive is read.
 		if (!g_MovableMan.ValidMO(mo) && !ScriptGraphNativeAlive(L, object)) {
 			freezeClass = className;
@@ -13203,7 +13319,9 @@ namespace {
 		if (type == LUA_TUSERDATA) {
 			return RemapPreviewUserdata(L, index, freezeClass);
 		}
-		if (type != LUA_TTABLE) {
+		// A copied coroutine's stack and an own closure copy's variables hold references as the hold's fields do.
+		const bool copyValues = type == LUA_TTHREAD || (type == LUA_TFUNCTION && LuaThreadCodec::IsOwnPreviewCopy(L, index));
+		if (type != LUA_TTABLE && !copyValues) {
 			return true;
 		}
 		lua_pushvalue(L, index);
@@ -13216,6 +13334,13 @@ namespace {
 		lua_pushvalue(L, index);
 		lua_pushboolean(L, 1);
 		lua_rawset(L, seen);
+		if (copyValues) {
+			struct Remap { int seen; std::string& freezeClass; } remap{seen, freezeClass};
+			return LuaThreadCodec::RemapPreviewCopyValues(L, index, [](lua_State* state, void* raw) {
+				auto& context = *static_cast<Remap*>(raw);
+				return RemapPreviewValue(state, -1, context.seen, context.freezeClass);
+			}, &remap);
+		}
 
 		// The walk may change and clear existing fields; a key the remap changes is set once the walk is done.
 		int moved = 0;
@@ -13566,7 +13691,11 @@ bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector
 	}
 	lua_newtable(m_State);
 	const int seen = lua_gettop(m_State);
-	PushPreviewClone(m_State, -2, seen, problems);
+	PreviewCloneContext context{seen, problems};
+	LuaThreadCodec::PreviewCopier copier(m_State, seen, &MapPreviewValue, &context, PreviewCoroutineStandIn);
+	context.copier = &copier;
+	PushPreviewClone(m_State, -2, seen, context);
+	copier.Finish();
 	if (!lua_istable(m_State, -1)) {
 		problems.emplace_back("preview self clone produced no table");
 		lua_settop(m_State, top);
@@ -13875,7 +14004,8 @@ void LuaStateWrapper::ClearPreviewHeldHandles() {
 
 void LuaStateWrapper::DropPreviewScriptObject(long uniqueID) {
 	const std::string uid = std::to_string(uniqueID);
-	RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; _ScriptedObjects[\"" + uid + "#preview\"] = nil; if _ScriptFieldsStash then _ScriptFieldsStash[\"preview:" + uid + "\"] = nil; end");
+	// The window's copy of the fields is the slot's instance table through a registry reference; letting go of the slot alone leaves it rooted there.
+	RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; local slot = _ScriptedObjects[\"" + uid + "#preview\"]; if slot and _ScriptGraphSetInstance then _ScriptGraphSetInstance(slot, nil) end; _ScriptedObjects[\"" + uid + "#preview\"] = nil; if _ScriptFieldsStash then _ScriptFieldsStash[\"preview:" + uid + "\"] = nil; end");
 }
 
 bool LuaStateWrapper::AttachPreviewInvStride(MovableObject* object) {
@@ -13986,11 +14116,26 @@ bool LuaMan::IsPreviewEdgeHook(const std::string& functionName) {
 	return functionName == "OnFire" || functionName == "OnStride" || functionName == "OnReload" || functionName == "OnAttach" || functionName == "OnDetach" || functionName == "OnCollideWithMO" || functionName == "OnCollideWithTerrain";
 }
 
+bool LuaMan::IsPreviewTickHook(const std::string& functionName) {
+	return functionName == "Update" || functionName == "ThreadedUpdate" || functionName == "SyncedUpdate";
+}
+
 bool LuaMan::ShouldRunPreviewHook(const MovableObject* mo, const std::string& functionName) {
-	if (!mo || !IsPreviewClone(mo) || !IsPreviewEdgeHook(functionName)) {
+	if (!mo || !IsPreviewClone(mo) || !(IsPreviewEdgeHook(functionName) || IsPreviewTickHook(functionName))) {
 		return false;
 	}
 	return s_PreviewSharedSlot || s_PreviewFrozenUIDs.count(mo->GetUniqueID()) == 0;
+}
+
+std::vector<std::pair<MovableObject*, LuaStateWrapper*>> LuaMan::PreviewBindingsUnder(const MovableObject* root) {
+	std::vector<std::pair<MovableObject*, LuaStateWrapper*>> bindings;
+	for (const auto& [uid, clone, state]: s_PreviewCloneBindings) {
+		// A destroyed clone left its state's sets, so the address alone answers before anything reads it.
+		if (state && state->GetPendingRegisteredMOs().contains(clone) && clone->GetRootParent() == root) {
+			bindings.emplace_back(clone, state);
+		}
+	}
+	return bindings;
 }
 
 std::string LuaMan::PreviewScriptKey(const MovableObject* mo) {
@@ -14199,6 +14344,7 @@ std::string LuaMan::DescribePreviewWindowCost() {
 CopyBufferProbe RTE::ProbeCheckpointCopyBuffers() {
 	CopyBufferProbe probe;
 	probe.bound = CheckpointLua::HeapOwner::c_LiveSlabs + 1;
+	probe.liveBound = CheckpointLua::HeapOwner::c_LiveSlabs;
 	try {
 		const std::unique_ptr<CheckpointLua::HeapOwner> owner = CheckpointLua::HeapOwner::Create();
 		lua_State* state = owner->State();
@@ -14216,12 +14362,16 @@ CopyBufferProbe RTE::ProbeCheckpointCopyBuffers() {
 		    "hot = {} for i = 1, 16384 do hot[i] = 0 end");
 		CheckpointLua::Snapshot held = owner->Freeze({});
 		probe.freezes = 1;
+		(void)owner->TakeCopyReceipt();
 		for (int round = 1; round <= rounds; ++round) {
 			run("for i = 1, 16384 do hot[i] = hot[i] + 1 end local t = groups[" + std::to_string(round) + "] for i = 1, 16384 do t[i] = -i end");
 			// Each freeze replaces the snapshot before it, as a world keeps one capture in flight.
 			held = owner->Freeze({});
 			++probe.freezes;
 			probe.mostLive = std::max(probe.mostLive, owner->LiveSlabs());
+			// The second freeze fills a buffer while the first still holds its own; from the third on one is always free.
+			const CheckpointLua::CopyReceipt receipt = owner->TakeCopyReceipt();
+			if (probe.freezes > 2) probe.freshAfterSecond += receipt.freshBytes;
 		}
 		// Nothing wrote the arrays after the last freeze, so its snapshot reads them back byte for byte.
 		const auto matches = [&held, state]() {

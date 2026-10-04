@@ -179,10 +179,17 @@ namespace RTE {
 		NetLobbySession& GetLobbySession() { return m_Lobby; }
 		const NetLobbySession& GetLobbySession() const { return m_Lobby; }
 		bool TookWorldJoinImage() const { return m_WorldJoinImage; }
+		/// Whether this runner received any of a running world's image, whole or not.
+		bool SawWorldImageTransfer() const { return m_ImageTransferSeen || m_WorldJoinImage; }
 		/// Starts the joiner's lockstep at its activation tick without blocking the sim update it runs
 		/// inside: the handshake finishes over the pumps that follow.
 		/// @return Whether the coordinator is already running.
 		void ConfigurePrivateJoin(const NetLockstepConfig& config) { m_PrivateJoinConfig = config; m_MatchConfig = config.matchConfig; m_ActiveHostPeerId = config.authorityPeerId; }
+		/// A world joiner's live round starts with the seats its replayed tail holds at the activation held, and the members it lost gone.
+		void ConfigureWorldJoinSeats(std::map<uint8_t, NetGameSeatHold> holds, std::map<uint8_t, uint64_t> leaves) {
+			m_WorldJoinHolds = std::move(holds);
+			m_WorldJoinLeaves = std::move(leaves);
+		}
 		bool StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, uint64_t updateTick, std::string* error = nullptr);
 		/// One tick of a starting joiner's handshake. Returns whether the coordinator is running; a
 		/// false with an error set is the start giving up.
@@ -194,6 +201,8 @@ namespace RTE {
 		/// How many of the joiner's own updates the start has cost so far.
 		uint32_t GetWorldJoinStartTicks() const { return m_WorldJoinStartTicks; }
 		const NetMatchConfig& GetMatchConfig() const { return m_MatchConfig; }
+		/// The seat roster revision this peer's round started on, checked against its own copy; 0 for a host or before a checked start.
+		uint32_t GetRosterAgreedRevision() const { return m_RosterAgreedRevision; }
 		void SetRelayOffer(const NetRelayConfig& offer) {
 			m_MatchConfig.relay = offer;
 			m_Config.matchConfig.relay = offer;
@@ -246,11 +255,22 @@ namespace RTE {
 		/// Client: the host's proposal must keep every seat of the round this peer played.
 		bool VerifyRematchProposal(std::string* error);
 		bool WaitForSessionReady(INetTransport& transport, NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error);
+		/// A round starts only on the seat roster the host agreed it on: a peer that heard another is refused by name.
+		bool AgreeOnSeatRoster(INetTransport& transport, NetSession& session, std::string* error);
+		/// Stamps a moved seat roster into the open lobby's config as its next revision; a start the host asked for stays asked.
+		void StampSeatRoster(const NetReconnectHost& admission);
+		uint32_t m_RosterAgreedRevision = 0;
+		static constexpr uint64_t c_RosterRevisionWaitMs = 2000; //!< How long a start waits for the revision it asked the host for.
 		bool RunLobby(INetTransport& transport, NetSession& session, uint64_t maxWaitMs, std::string* error, std::vector<NetTransportEvent> pendingEvents = {});
 		bool StartLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error);
 		bool WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error, NetSession* session = nullptr);
 		NetLobbySnapshot BuildLobbySnapshot(const INetTransport& transport, const NetSession& session) const;
 		friend bool TestKickedSeatReadsOpen(std::string* error);
+		friend bool TestARunningRoundsJoinerIsNotAskedForItsStartRoster(std::string* error);
+		friend bool TestTheRostersWaitKeepsTheRoundsStart(std::string* error);
+		friend bool TestAStartRequestOutlivesTheRosterStamp(std::string* error);
+		friend bool TestARosterStampFollowsTheLobbysOwnRepublish(std::string* error);
+		friend bool TestAFullMatchsKnockEndsAtTheBudget(std::string* error);
 		// Lockstep peer ids are 1-based and dense; the session assigns the host id 0 and clients 1.. .
 		std::map<uint8_t, NetPeerId> BuildRemoteTransportMap(const NetSession& session) const;
 		uint8_t LocalLockstepPeerId(const NetSession& session) const;
@@ -259,15 +279,20 @@ namespace RTE {
 		NetMatchRuntimeState m_State = NetMatchRuntimeState::Idle;
 		NetMatchRunnerConfig m_Config;
 		NetLobbySession m_Lobby;
+		std::vector<NetTransportEvent> m_RoundEventsBeforeStart; //!< The round's own packets read while its roster was agreed, before its coordinator started.
 		NetMatchConfig m_MatchConfig;
 		NetHash32 m_MatchConfigHash{};
 		std::optional<NetLockstepConfig> m_PrivateJoinConfig;
+		std::map<uint8_t, NetGameSeatHold> m_WorldJoinHolds; //!< A world joiner's live round: the seats held at its activation.
+		std::map<uint8_t, uint64_t> m_WorldJoinLeaves;        //!< And the members gone by it.
 		bool m_UseLobbyProtocol = false;
 		bool m_ResyncRound = false;
 		bool m_HostLostDuringSetup = false;
 		bool m_HostOptionsRefused = false;
 		bool m_RematchOwed = false; //!< Client: its last round ended into a rematch lobby; consumed by the next round.
 		std::string m_LastRosterStampRefusal; //!< Host: a refused roster republish, named once.
+		/// Host: takes the lobby's published config when the lobby republished it on its own, so the next draft starts from it.
+		void AdoptLobbyConfig();
 		std::deque<NetTransportEvent> m_SessionTraffic; //!< Session traffic the coordinator owned the wire for, waiting for a reader.
 		uint32_t m_SessionTrafficDropped = 0; //!< Events past the queue's bound, named once.
 		NetMatchConfig m_RematchConfig;       //!< This peer's own derivation of the rematch roster.
@@ -279,6 +304,9 @@ namespace RTE {
 		std::vector<uint8_t> m_StateToStream; //!< Host: a match-state file the next lobby round streams out.
 		std::vector<uint8_t> m_ReceivedStateBytes; //!< The state file the last lobby round received.
 		bool m_WorldJoinImage = false;
+		mutable bool m_ImageTransferSeen = false; //!< A world image transfer began while this runner was in its lobby.
+		mutable uint64_t m_TransferMarkMs = 0;      //!< When the incoming image's rate was first measured from.
+		mutable uint32_t m_TransferMarkBytes = 0;   //!< What had come by then.
 		bool m_WorldJoinStarting = false;      //!< A joiner's lockstep start is mid-handshake.
 		std::optional<uint64_t> m_WorldJoinStartLastTick;
 		uint32_t m_WorldJoinStartTicks = 0;    //!< The joiner's own updates that start has cost.

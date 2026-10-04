@@ -73,7 +73,7 @@ namespace RTE {
 		std::atomic<size_t> s_RetainedAutosaves{AutosaveStore::c_RetainedAutosaves};
 
 		auto CheckpointOrder(const AutosaveDescriptor& descriptor) {
-			return std::make_tuple(descriptor.worldBoot, descriptor.roundId, descriptor.savedTick);
+			return std::make_tuple(descriptor.migrationGen, descriptor.worldBoot, descriptor.roundId, descriptor.savedTick);
 		}
 
 		/// The tick the saved world itself stands on, read out of the checkpoint's own property.
@@ -270,7 +270,10 @@ namespace RTE {
 			const bool matchingManifest = ReadManifest(path.parent_path(), descriptor.matchId, descriptor.savedTick, manifest) &&
 			                              manifest.sessionId == descriptor.sessionId && manifest.roundId == descriptor.roundId &&
 			                              manifest.savedTick == descriptor.savedTick && !manifest.configPayload.empty();
-			if (matchingManifest) descriptor.worldBoot = manifest.worldBoot;
+			if (matchingManifest) {
+				descriptor.worldBoot = manifest.worldBoot;
+				descriptor.migrationGen = manifest.migrationGen;
+			}
 			descriptor.resumable = matchingManifest && ReadAdmission(path.parent_path(), descriptor.matchId, admission);
 			out = std::move(descriptor);
 			return true;
@@ -331,6 +334,7 @@ namespace RTE {
 		Line(out, "SessionId", std::to_string(manifest.sessionId));
 		Line(out, "RoundId", std::to_string(manifest.roundId));
 		Line(out, "WorldBoot", std::to_string(manifest.worldBoot));
+		if (manifest.migrationGen != 0) Line(out, "MigrationGen", std::to_string(manifest.migrationGen));
 		Line(out, "SavedTick", std::to_string(manifest.savedTick));
 		Line(out, "SimTimeTicks", std::to_string(manifest.simTimeTicks));
 		Line(out, "IntervalSeconds", std::to_string(manifest.intervalSeconds));
@@ -370,6 +374,8 @@ namespace RTE {
 			} else if (key == "WorldBoot") {
 				if (!ParseNumber(value, parsed.worldBoot)) { if (error) *error = "unreadable WorldBoot"; return false; }
 				hasWorldBoot = true;
+			} else if (key == "MigrationGen") {
+				if (!ParseNumber(value, parsed.migrationGen)) { if (error) *error = "unreadable MigrationGen"; return false; }
 			} else if (key == "SavedTick") {
 				if (!ParseNumber(value, number)) { if (error) *error = "unreadable SavedTick"; return false; }
 				parsed.savedTick = number;
@@ -525,7 +531,16 @@ namespace RTE {
 		}
 	}
 
+	bool AutosaveStore::HigherGenerationHolds(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick, uint64_t generation) {
+		AutosaveManifest held;
+		return ReadManifest(directory, matchId, tick, held) && held.savedTick == tick && held.migrationGen > generation;
+	}
+
 	bool AutosaveStore::PublishManifest(const std::filesystem::path& directory, const AutosaveManifest& manifest, std::string* error) {
+		if (HigherGenerationHolds(directory, manifest.matchId, manifest.savedTick, manifest.migrationGen)) {
+			if (error) *error = "a higher host generation holds this tick";
+			return false;
+		}
 		if (!ValidMatchId(manifest.matchId) || manifest.savedTick == 0 || manifest.configPayload.empty()) {
 			if (error) *error = "manifest has no match id, committed tick or configuration";
 			return false;
@@ -706,7 +721,7 @@ namespace RTE {
 
 	std::vector<uint64_t> AutosaveStore::RetainedTicks(std::vector<AutosaveCandidate> candidates, uint64_t pinnedTick, uint64_t pinnedRound) {
 		std::sort(candidates.begin(), candidates.end(), [](const AutosaveCandidate& left, const AutosaveCandidate& right) {
-			return std::tie(left.worldBoot, left.roundId, left.tick) > std::tie(right.worldBoot, right.roundId, right.tick);
+			return std::tie(left.migrationGen, left.worldBoot, left.roundId, left.tick) > std::tie(right.migrationGen, right.worldBoot, right.roundId, right.tick);
 		});
 		std::vector<uint64_t> kept;
 		const size_t retained = RetainedAutosaves();
@@ -745,10 +760,11 @@ namespace RTE {
 				if (ReadManifest(directory, matchId, tick, manifest) && manifest.savedTick == tick) {
 					descriptor.roundId = manifest.roundId;
 					descriptor.worldBoot = manifest.worldBoot;
+					descriptor.migrationGen = manifest.migrationGen;
 				}
 				if (tick == pinnedTick && (descriptor.roundId == pinnedRound || descriptor.roundId == 0)) pinnedRefusal = refusal;
 			}
-			candidates.push_back({tick, restorable, descriptor.worldBoot, descriptor.roundId});
+			candidates.push_back({tick, restorable, descriptor.worldBoot, descriptor.roundId, descriptor.migrationGen});
 		}
 		const std::vector<uint64_t> kept = RetainedTicks(std::move(candidates), pinnedTick, pinnedRound);
 		if (!pinnedRefusal.empty()) {

@@ -29,6 +29,7 @@
 #include "GameActivity.h"
 #include "NetLobbySnapshot.h"
 #include "NetMatchService.h"
+#include "NetWorldJoin.h"
 #include "NetIdentity.h"
 #include "ScenarioRunner.h"
 #include "PresetMan.h"
@@ -39,6 +40,7 @@
 #include "WindowMan.h"
 #include "RTEError.h"
 #include "System.h"
+#include "HarnessCost.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
@@ -69,6 +71,7 @@
 
 namespace RTE::MenuAutomation {
 	using Json = nlohmann::json;
+	std::string s_ArtifactDirectory; //!< Where a probe's dumps are written, beside the probe.
 	using Rect = std::array<int, 4>;
 	class ReadbackWriter {
 		struct Dump {
@@ -326,6 +329,7 @@ namespace RTE::MenuAutomation {
 	// for a few frames cannot slip between two scripted checks.
 	struct ShownLine {
 		std::string source, control, text;
+		bool caption = false; //!< A control's own caption - a button, a box, a tab, a choice - which repeats on every row it serves.
 	};
 	struct TextWatch {
 		std::string rule, state, control, text;
@@ -371,23 +375,50 @@ namespace RTE::MenuAutomation {
 	/// Every line of text the screen shows this frame, one entry per drawn line of each shown control and of the game's own screen message.
 	std::vector<ShownLine> ShownLines(GUIControlManager* menu) {
 		std::vector<ShownLine> lines;
-		const auto add = [&lines](const std::string& source, const std::string& control, const std::string& text) {
+		const auto add = [&lines](const std::string& source, const std::string& control, const std::string& text, bool caption = false) {
 			std::istringstream rows(text);
 			for (std::string row; std::getline(rows, row);) {
 				const auto start = row.find_first_not_of(" \t\r");
 				if (start == std::string::npos) continue;
-				lines.push_back({source, control, row.substr(start, row.find_last_not_of(" \t\r") - start + 1)});
+				lines.push_back({source, control, row.substr(start, row.find_last_not_of(" \t\r") - start + 1), caption});
 			}
 		};
 		for (const auto& [source, manager]: WatchedManagers(menu)) {
 			for (GUIControl* control: *manager->GetControlList()) {
 				std::string text;
-				if (Shown(control) && Text(control, text)) add(source, control->GetName(), text);
+				const bool caption = dynamic_cast<GUIButton*>(control) || dynamic_cast<GUICheckbox*>(control) || dynamic_cast<GUIRadioButton*>(control) ||
+				                     dynamic_cast<GUITab*>(control) || dynamic_cast<GUIComboBox*>(control);
+				if (Shown(control) && Text(control, text)) add(source, control->GetName(), text, caption);
 			}
 		}
 		if (g_ActivityMan.IsInActivity()) add("screen", "ScreenText", g_FrameMan.GetScreenText(0));
 		for (const auto& [source, text]: s_DrawnText) add("drawn", source, text);
 		return lines;
+	}
+
+	std::string ShownTextJson(GUIControlManager* menu) {
+		Json lines = Json::array();
+		for (const ShownLine& line: ShownLines(menu)) lines.push_back({{"source", line.source}, {"control", line.control}, {"text", line.text}});
+		return lines.dump();
+	}
+
+	/// The first visible line shown twice at once, naming both controls; null when every line is shown once. What may repeat: chat
+	/// (players repeat themselves), a control's caption (a row's verb), one column's value on its rows (a control name differing only
+	/// by its row number), an open seat beside another, and a line with no letter in it.
+	Json DuplicateLine(const std::vector<ShownLine>& lines) {
+		const auto column = [](const std::string& control) { return control.substr(0, control.find_last_not_of("0123456789") + 1); };
+		std::map<std::string, std::vector<const ShownLine*>> seen;
+		for (const ShownLine& line: lines) {
+			if (line.caption || line.control.starts_with("LabelMatchChat") || line.control == "TextMatchChatInput" || line.text == "Open seat") continue;
+			if (std::none_of(line.text.begin(), line.text.end(), [](unsigned char c) { return std::isalpha(c) != 0; })) continue;
+			std::vector<const ShownLine*>& shown = seen[line.text];
+			for (const ShownLine* earlier: shown) {
+				const bool rows = earlier->control != line.control && column(earlier->control) == column(line.control) && column(line.control) != line.control;
+				if (!rows) return Json{{"text", line.text}, {"controls", {earlier->source + "/" + earlier->control, line.source + "/" + line.control}}};
+			}
+			shown.push_back(&line);
+		}
+		return nullptr;
 	}
 
 	bool WatchStateHolds(const std::string& state) {
@@ -494,6 +525,14 @@ namespace RTE::MenuAutomation {
 			}
 		}
 		if (s_Watches.empty()) return;
+		// A scene that drops this peer says so in its recorder's directory first: the summaries go out before the process does.
+		static bool s_DropReported = false;
+		static int s_DropChecks = 0;
+		if (!s_DropReported && ++s_DropChecks % 15 == 0 && FrameRecorder::Instance().Enabled() &&
+		    std::filesystem::exists(std::filesystem::path(FrameRecorder::Instance().Directory()) / "injected-drop.json")) {
+			s_DropReported = true;
+			ReportWatches("kill");
+		}
 		const auto now = std::chrono::steady_clock::now();
 		const double span = s_LastEvaluated.time_since_epoch().count() == 0 ? c_DrawWindowSeconds * 1000 : std::chrono::duration<double, std::milli>(now - s_LastEvaluated).count();
 		s_FrameSpanMs = std::clamp(span + 1.0, 1.0, c_DrawWindowSeconds * 1000);
@@ -502,16 +541,17 @@ namespace RTE::MenuAutomation {
 		bool linesRead = false;
 		for (auto& [name, watch]: s_Watches) {
 			++watch.frames;
-			const auto judged = std::chrono::steady_clock::now();
 			struct Cost {
 				TextWatch& watch;
-				std::chrono::steady_clock::time_point began;
+				HarnessCost::SimulationSpan span;
 				~Cost() {
-					const int64_t us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count();
+					const int64_t ns = span.Stop();
+					HarnessCost::Charge(HarnessCost::ScreenWatches, ns);
+					const int64_t us = ns / 1000;
 					watch.costUs += us;
 					watch.worstUs = std::max(watch.worstUs, us);
 				}
-			} cost{watch, judged};
+			} cost{watch, {}};
 			if (!WatchStateHolds(watch.state)) continue;
 			++watch.active;
 			if (!linesRead && watch.rule != "layout" && watch.rule != "rtt" && watch.rule != "seat_rows") {
@@ -533,15 +573,7 @@ namespace RTE::MenuAutomation {
 				if (!shown) detail = watch.control + " is not shown";
 				else if (watch.rule == "equals" && text != watch.text) detail = watch.control + " reads " + Json(text).dump();
 			} else if (watch.rule == "duplicates") {
-				std::map<std::string, std::string> seen;
-				for (const ShownLine& line: lines) {
-					if (line.source == "menu" || line.control.starts_with("LabelMatchChat") || line.control == "TextMatchChatInput") continue;
-					auto [entry, added] = seen.emplace(line.text, line.control);
-					if (!added && entry->second != line.control) {
-						detail = Json{{"text", line.text}, {"controls", {entry->second, line.control}}};
-						break;
-					}
-				}
+				detail = DuplicateLine(lines);
 			} else if (watch.rule == "rtt") {
 				if (const std::string contradiction = RttContradiction(menu); !contradiction.empty()) detail = contradiction;
 			} else if (watch.rule == "layout") {
@@ -580,10 +612,14 @@ namespace RTE::MenuAutomation {
 		s_DrawnText.clear();
 	}
 
-	void ReportWatches() {
+	void SetArtifactDirectory(const std::string& directory) { s_ArtifactDirectory = directory; }
+
+	void ReportWatches(const char* flush) {
+		const long long throughTick = g_TimerMan.GetSimUpdateCount();
 		for (const auto& [name, watch]: s_Watches) {
 			System::PrintDiagnosticLine("[text-watch] summary " + Json{{"watch", name}, {"rule", watch.rule}, {"state", watch.state}, {"frames", watch.frames},
-			    {"active_frames", watch.active}, {"violations", watch.violations}, {"offences", watch.offenders.size()}, {"cost_us", watch.costUs}, {"worst_us", watch.worstUs}}.dump());
+			    {"active_frames", watch.active}, {"violations", watch.violations}, {"offences", watch.offenders.size()}, {"cost_us", watch.costUs}, {"worst_us", watch.worstUs},
+			    {"through_tick", throughTick}, {"flush", flush}}.dump());
 		}
 	}
 
@@ -597,7 +633,7 @@ namespace RTE::MenuAutomation {
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
 			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "status_line" || command == "ghost_watch" || command == "text_watch" || command == "assert_list_rows" ||
-			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "fire_assert" ||
+			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "dump_world_ownership" || command == "fire_assert" || command == "fire_abort" || command == "fire_worker_throw" ||
 			command == "window_event" || command == "assert_window_focus" || command == "game_key" || command == "assert_game_input" || command == "open_local_pause" || command == "meta_command";
 	}
 	Json PanelCoverage(GUIControl* control) {
@@ -686,6 +722,71 @@ namespace RTE::MenuAutomation {
 				{"resyncing", g_NetMatchService.IsMatchResyncing()}, {"slow_notice", ScenarioRunner::IsLockstepLocalMachineSlow()}}.dump();
 			return true;
 		}
+		if (command == "dump_world_ownership") {
+			// Who holds which world seat at a probe's mark, from the roster, the world's slots and this process's own receipts: written
+			// beside the probe as <mark>.ownership.json, never from a requested seat or a scripted expectation.
+			std::string mark;
+			args >> mark;
+			const bool named = !mark.empty() && mark.size() <= 100 && std::all_of(mark.begin(), mark.end(), [](unsigned char c) { return std::isalnum(c) || c == '-' || c == '_'; });
+			if (s_ArtifactDirectory.empty() || !named) return false;
+			const Json facts = Json::parse(g_NetMatchService.GetWorldOwnershipFacts(), nullptr, false);
+			if (!facts.is_object()) return false;
+			const auto receipt = [](const char* name) {
+				const std::string text = ScenarioRunner::GetHarnessReceipt(name);
+				const Json value = text.empty() ? Json(nullptr) : Json::parse(text, nullptr, false);
+				return value.is_object() ? value : Json(nullptr);
+			};
+			// A watcher replays under its authority's round, so its own id is the service's.
+			const uint8_t serviceLocal = facts.value("local_peer", static_cast<uint8_t>(0));
+			const uint8_t local = serviceLocal != 0 ? serviceLocal : ScenarioRunner::GetLockstepLocalPeerId();
+			const Json seat = facts.value("seat_of_peer", Json::object()).value(std::to_string(local), Json(nullptr));
+			const Json ticketIncarnation = facts.value("ticket_incarnation", Json(nullptr));
+			const Json firstLive = receipt("first_live_tick");
+			const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
+			const char* instance = std::getenv("CC_TEST_CROSS_INSTANCE");
+			Json dump = {{"schema", 1}, {"mark", mark}, {"process", instance && *instance ? Json(instance) : Json(System::GetProcessID())}, {"pid", System::GetProcessID()},
+			    {"round", ScenarioRunner::GetLockstepRoundId()}, {"local_peer", local}, {"sim_tick", g_TimerMan.GetSimUpdateCount()}, {"lockstep_frame", frame},
+			    {"configuration", facts.value("configuration", Json::object())}, {"seated_first_tick", firstLive.is_object() ? firstLive.value("tick", Json(nullptr)) : Json(nullptr)}};
+			Json ownership = {{"seat", seat}, {"local_peer", local}, {"ticket_incarnation", ticketIncarnation}};
+			if (Activity* activity = g_ActivityMan.GetActivity()) {
+				for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+					const Actor* actor = activity->GetControlledActor(player);
+					if (!actor || ScenarioRunner::GetLockstepActorOwner(actor->GetUniqueID(), actor->GetTeam(), false) != local) continue;
+					ownership["actor"] = actor->GetUniqueID();
+					break;
+				}
+			}
+			dump["ownership"] = ownership;
+			// A watcher plays on a lobby id above every seat's and watches the ticks it replayed; a seat plays its round's.
+			const bool watcher = local >= c_WorldSpectatorLobbyPeerFirst;
+			const Json replayed = facts.value("replayed", Json(nullptr));
+			dump["watch"] = {{"role", watcher ? "Spectator" : "Seated"}, {"image_received", facts.value("image_received", false)},
+			    {"first", watcher && replayed.is_object() ? replayed.value("first", Json(nullptr)) : firstLive.is_object() ? firstLive.value("tick", Json(nullptr)) : Json(nullptr)},
+			    {"last", watcher && replayed.is_object() ? replayed.value("last", Json(nullptr)) : Json(frame)}};
+			if (const Json window = receipt("world_spectator_cost_window"); window.is_object()) dump["sim_cost"] = window;
+			if (facts.value("is_host", false)) {
+				if (facts.contains("promotion")) dump["promotion"] = facts["promotion"];
+				if (facts.contains("release")) dump["release"] = facts["release"];
+			} else if (const Json reclaim = receipt("ownership_reclaim"); reclaim.is_object()) {
+				// A promoted watcher's own side: the seat its slot is, the actor it plays from its activation, and its first fresh input.
+				Json promotion = {{"seat", seat}, {"freed_seat", seat}, {"actor", reclaim.value("actor", Json(nullptr))}, {"ticket_incarnation", ticketIncarnation},
+				    {"activation_tick", reclaim.value("activation_tick", Json(nullptr))}};
+				if (const Json first = receipt("first_controllable_input"); first.is_object()) {
+					const Json input = first.value("input", Json::object());
+					promotion["input_tick"] = first.value("wire_tick", Json(nullptr));
+					promotion["input_created_tick"] = input.value("produced_tick", Json(nullptr));
+					promotion["applied_actor"] = input.value("actor", Json(nullptr));
+					promotion["applied_seat"] = facts.value("seat_of_peer", Json::object()).value(std::to_string(local), Json(nullptr));
+					promotion["applied_incarnation"] = first.value("seat_incarnation", Json(nullptr));
+					promotion["applied_input"] = input;
+				}
+				dump["promotion"] = promotion;
+			}
+			std::ofstream output(std::filesystem::path(s_ArtifactDirectory) / (mark + ".ownership.json"));
+			output << dump.dump(2) << '\n';
+			observation = dump.dump();
+			return static_cast<bool>(output);
+		}
 		if (command == "fire_assert") {
 			if (!FireAssertAllowed()) return false;
 			// The assert seam the harness needs: a scripted run must be able to answer a real assert the way
@@ -694,6 +795,22 @@ namespace RTE::MenuAutomation {
 			if (reason.empty()) return false;
 			observation = reason;
 			RTEAssert(false, reason);
+			return true;
+		}
+		if (command == "fire_abort") {
+			if (!FireAssertAllowed()) return false;
+			// A real abort for a scripted run: its reason, its dumps and its exit are what the run proves on the box.
+			std::string reason{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};
+			if (reason.empty()) return false;
+			observation = reason;
+			RTEAbort(reason);
+			return true;
+		}
+		if (command == "fire_worker_throw") {
+			if (!FireAssertAllowed()) return false;
+			// An allocation failure on a worker no code catches: the run proves the engine ends naming it, on any box.
+			observation = "std::bad_alloc on a worker thread";
+			RTEError::ThrowOnWorkerThread();
 			return true;
 		}
 		if (command == "push_toast") {
@@ -1016,6 +1133,8 @@ namespace RTE::MenuAutomation {
 			args >> observation;
 			if (observation.empty()) return false;
 			FrameRecorder::Instance().RecordEvent("video_mark " + observation);
+			// Each mark closes a span of the scene: the watches say what they judged up to it.
+			ReportWatches("periodic");
 			return true;
 		}
 		try {
@@ -1400,6 +1519,11 @@ namespace RTE::MenuAutomation {
 		}
 		{
 			// A panel its manager skipped on the latest pass is off the screen, however recent the pass before was.
+			SetPanelDrawRecording(false);
+			int unrecorded = 0;
+			RecordPanelDraw(&unrecorded);
+			check("draw_record_off_records_nothing", PanelDrawAgeMs(&unrecorded) < 0, "age_ms=" + std::to_string(PanelDrawAgeMs(&unrecorded)));
+			SetPanelDrawRecording(true);
 			int manager = 0, shown = 0, replaced = 0, loose = 0;
 			const void* previous = BeginPanelDrawPass(&manager);
 			RecordPanelDraw(&shown);
@@ -1446,6 +1570,28 @@ namespace RTE::MenuAutomation {
 			check("hint_summary_policy", summary.find("\nWhen a player falls behind: Give the seat to the AI (host too) until they catch up\n") != std::string::npos, summary);
 			check("hint_summary_delay", summary.find("\nInput delay: Automatic, ping plus a 3-tick margin, raised live if inputs arrive late - now 4 (auto, 50ms ping)\n") != std::string::npos, summary);
 			check("hint_summary_no_rejoin", summary.find("rejoin") == std::string::npos, summary);
+			same("transfer_line_measured", NetImageTransferLine(3250585, 8598323, 1468006.0), "Receiving the world: 3.1 of 8.2 MB - 1.4 MB/s - 4 s left");
+			same("transfer_line_before_a_rate", NetImageTransferLine(0, 8598323, 0.0), "Receiving the world: 0.0 of 8.2 MB");
+			same("transfer_line_complete", NetImageTransferLine(8598323, 8598323, 1468006.0), "Receiving the world: 8.2 of 8.2 MB");
+			same("catch_up_line_to_an_activation", NetCatchUpLine(1200, 2400, 300.0, 0.0), "Catching up with the world: frame 1200 of 2400 - 300 frames/s - 4 s left");
+			same("catch_up_line_to_a_moving_round", NetCatchUpLine(1200, 2400, 300.0, 60.0), "Catching up with the world: frame 1200 of 2400 - 300 frames/s - 5 s left");
+			same("catch_up_line_before_a_rate", NetCatchUpLine(1200, 2400, 0.0, 60.0), "Catching up with the world: frame 1200 of 2400");
+			same("seat_join_receiving", NetSeatJoinProgress(3250585, 8598323, false), "receiving the world 3.1 of 8.2 MB");
+			same("seat_join_catching_up", NetSeatJoinProgress(0, 8598323, true), "catching up");
+			same("changing_host_line", c_NetMatchChangingHostLine, "The match is changing host - try again in a moment");
+		}
+		{
+			// A state line shown twice is caught wherever the two copies are; what a screen repeats by design is not.
+			const auto line = [](const char* source, const char* control, const char* text, bool caption = false) { return ShownLine{source, control, text, caption}; };
+			const Json acrossMenu = DuplicateLine({line("menu", "LobbyStatusLabel", "leaver: Held - AI in control"), line("overlay", "NetworkStatus", "leaver: Held - AI in control")});
+			check("duplicates_menu_and_overlay", !acrossMenu.is_null(), acrossMenu.dump());
+			const Json withinOne = DuplicateLine({line("network", "NetworkRoster", "leaver: Held - AI in control"), line("network", "NetworkRoster", "leaver: Held - AI in control")});
+			check("duplicates_within_one_control", !withinOne.is_null(), withinOne.dump());
+			const Json byDesign = DuplicateLine({line("network", "NetworkSeatDetail0", "Connected"), line("network", "NetworkSeatDetail1", "Connected"),
+			                                     line("network", "NetworkRoster", "Open seat"), line("network", "NetworkRoster", "Open seat"),
+			                                     line("network", "NetworkSeatKick0", "Kick", true), line("network", "NetworkSeatKick1", "Kick", true),
+			                                     line("menu", "LabelMatchChat0", "gg"), line("menu", "LabelMatchChat1", "gg"), line("overlay", "NetworkPing", "--"), line("overlay", "NetworkLoss", "--")});
+			check("duplicates_by_design_pass", byDesign.is_null(), byDesign.dump());
 		}
 		std::cout << "[menu-automation-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 		return passed;

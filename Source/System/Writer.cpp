@@ -72,7 +72,9 @@ struct CheckpointText::Data {
 	};
 	std::string values;
 	std::vector<CheckpointText> children;
-	std::function<std::string()> produce;
+	// A deferred node's producer, dropped once it has produced: what it captured (a frozen heap, a pixel snapshot) goes with it.
+	mutable std::function<std::string()> produce;
+	bool deferred = false;
 	std::string peerMark;
 	mutable std::vector<std::pair<size_t, size_t>> peerRuns;
 	std::string identity;
@@ -117,6 +119,7 @@ CheckpointText::CheckpointText(std::string text) {
 CheckpointText CheckpointText::Deferred(std::function<std::string()> produce, size_t ownedBytes, std::string identity) {
 	auto data = std::make_shared<Data>();
 	data->produce = std::move(produce);
+	data->deferred = true;
 	data->ownedBytes = ownedBytes;
 	data->identity = std::move(identity);
 	return CheckpointText(std::move(data));
@@ -126,6 +129,7 @@ CheckpointText CheckpointText::DeferredWithPeerRuns(std::function<std::string()>
 	if (mark.empty()) throw std::logic_error("a per-peer run mark cannot be empty");
 	auto data = std::make_shared<Data>();
 	data->produce = std::move(produce);
+	data->deferred = true;
 	data->peerMark = std::move(mark);
 	data->ownedBytes = ownedBytes;
 	data->hasPeer = true;
@@ -204,7 +208,7 @@ size_t CheckpointText::OwnedBytes() const { return m_Data ? m_Data->ownedBytes :
 bool CheckpointText::SameValues(const CheckpointText& other) const {
 	if (m_Data == other.m_Data) return true;
 	if (!m_Data || !other.m_Data) return false;
-	if (m_Data->produce || other.m_Data->produce) return m_Data->produce && other.m_Data->produce && !m_Data->identity.empty() && m_Data->identity == other.m_Data->identity;
+	if (m_Data->deferred || other.m_Data->deferred) return m_Data->deferred && other.m_Data->deferred && !m_Data->identity.empty() && m_Data->identity == other.m_Data->identity;
 	if (m_Data->children.empty() || other.m_Data->children.empty()) return m_Data->values == other.m_Data->values && m_Data->children.size() == other.m_Data->children.size();
 	std::vector<Data::Pair> pending{{m_Data.get(), other.m_Data.get()}};
 	std::unordered_set<Data::Pair, Data::PairHash> seen;
@@ -213,8 +217,8 @@ bool CheckpointText::SameValues(const CheckpointText& other) const {
 		pending.pop_back();
 		if (current == previous) continue;
 		if (!current || !previous) return false;
-		if (current->produce || previous->produce) {
-			if (!current->produce || !previous->produce || current->identity.empty() || current->identity != previous->identity) return false;
+		if (current->deferred || previous->deferred) {
+			if (!current->deferred || !previous->deferred || current->identity.empty() || current->identity != previous->identity) return false;
 			continue;
 		}
 		if (current->values != previous->values || current->children.size() != previous->children.size()) return false;
@@ -227,7 +231,7 @@ bool CheckpointText::SameValues(const CheckpointText& other) const {
 CheckpointText CheckpointText::ReuseChildren(const CheckpointText& previous) const {
 	if (m_Data == previous.m_Data) return previous;
 	if (!m_Data || !previous.m_Data) return *this;
-	if (m_Data->produce || previous.m_Data->produce) return SameValues(previous) ? previous : *this;
+	if (m_Data->deferred || previous.m_Data->deferred) return SameValues(previous) ? previous : *this;
 	if (m_Data->children.empty() || previous.m_Data->children.empty()) return SameValues(previous) ? previous : *this;
 	struct Result { bool equal; std::shared_ptr<Data> value; };
 	struct Frame {
@@ -247,8 +251,8 @@ CheckpointText CheckpointText::ReuseChildren(const CheckpointText& previous) con
 			if (!frame.current || !frame.previous) {
 				results.emplace(pair, Result{false, frame.current}); pending.pop_back(); continue;
 			}
-			if (frame.current->produce || frame.previous->produce) {
-				const bool equal = frame.current->produce && frame.previous->produce && !frame.current->identity.empty() && frame.current->identity == frame.previous->identity;
+			if (frame.current->deferred || frame.previous->deferred) {
+				const bool equal = frame.current->deferred && frame.previous->deferred && !frame.current->identity.empty() && frame.current->identity == frame.previous->identity;
 				results.emplace(pair, Result{equal, equal ? frame.previous : frame.current}); pending.pop_back(); continue;
 			}
 			frame.equal = frame.current->values == frame.previous->values && frame.current->children.size() == frame.previous->children.size();
@@ -304,16 +308,17 @@ const std::string& CheckpointText::Text() const {
 		Frame& frame = pending.back();
 		const Data* node = frame.node;
 		if (node->formatted.load(std::memory_order_acquire)) { pending.pop_back(); continue; }
-		if (!node->produce && frame.next < node->children.size()) {
+		if (!node->deferred && frame.next < node->children.size()) {
 			const Data* child = node->children[frame.next++].m_Data.get();
 			if (child && !child->formatted.load(std::memory_order_acquire)) pending.push_back({child});
 			continue;
 		}
 		const auto format = [node] {
-			if (node->produce) {
+			if (node->deferred) {
 				node->text = node->produce();
 				if (!node->peerMark.empty()) StripPeerMarks(node->text, node->peerMark, node->peerRuns);
 				node->formatted.store(true, std::memory_order_release);
+				node->produce = nullptr;
 				return;
 			}
 			std::string text;
@@ -397,7 +402,7 @@ std::string CheckpointText::SharedText(int64_t simTimeTicks) const {
 std::string CheckpointText::SharedText() const {
 	if (!m_Data || !m_Data->hasPeer) return Text();
 	if (m_Data->usesSimTime) return AtSimTime(m_Data->simTimeTicks).SharedText();
-	if (m_Data->produce) {
+	if (m_Data->deferred) {
 		const std::string& text = Text();
 		std::string shared;
 		size_t at = 0;
@@ -580,6 +585,12 @@ CheckpointText CheckpointCache::CapturePixels(const BITMAP* bitmap) {
 	previous.snapshot = std::move(snapshot);
 	previous.text = std::move(text);
 	return previous.text;
+}
+
+size_t CheckpointCache::PixelBytes() const {
+	size_t bytes = 0;
+	for (const auto& [bitmap, pixels]: m_Pixels) if (pixels.snapshot) bytes += pixels.snapshot->OwnedBytes();
+	return bytes;
 }
 
 std::string CheckpointCache::Census() const {
@@ -888,6 +899,13 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		const auto unkeyed = CheckpointText::Deferred([] { return std::string("stable"); });
 		const auto otherUnkeyed = CheckpointText::Deferred([] { return std::string("stable"); });
 		check(unkeyed.SameValues(unkeyed) && !unkeyed.SameValues(otherUnkeyed) && !unkeyed.SameValues(original), "owned_checkpoint_preserves_deferred_identity_rules");
+		// A formatted deferred text keeps its text, not its producer: what the producer captured (a frozen heap copy) is let go.
+		auto held = std::make_shared<int>(7);
+		const auto holding = CheckpointText::Deferred([held] { return std::to_string(*held); }, 0, "OwnedCheckpointHolding1");
+		const long before = held.use_count();
+		const bool producedOnce = holding.Text() == "7" && holding.Text() == "7" && holding.SameValues(holding);
+		check(before == 2 && producedOnce && held.use_count() == 1, "owned_checkpoint_formatted_text_lets_its_producer_go",
+		      "use_count before=" + std::to_string(before) + " after=" + std::to_string(held.use_count()));
 
 		auto attempts = std::make_shared<std::atomic<int>>(0);
 		const auto flaky = CheckpointText::Deferred([attempts] {

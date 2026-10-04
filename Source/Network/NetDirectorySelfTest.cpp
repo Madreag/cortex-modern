@@ -1027,6 +1027,50 @@ namespace RTE {
 				return true;
 			}
 
+			// R6 (sss): one host per handover generation - a successor's claim names its generation, every heartbeat and the delete
+			// carry this host's, and a 409 that names a later one stops the client keeping the row.
+			bool TestASupersededHostKeepsTheRowNoMore(std::string* error) {
+				NetDirectoryRegisterRequest claim = SampleRegisterRequest();
+				claim.resumeSessionId = "7b8c9d2e-1111-4222-8333-444455556666";
+				claim.resumeToken = "tok";
+				claim.migrationGen = 2;
+				NetDirectoryRegisterRequest decodedClaim;
+				std::string reason;
+				if (!NetDirectoryCodec::DecodeRegisterRequest(NetDirectoryCodec::EncodeRegisterRequest(claim), decodedClaim, reason) || decodedClaim.migrationGen != 2) {
+					*error = "a successor's claim lost its generation: " + reason;
+					return false;
+				}
+				ScriptedClient s;
+				s.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({409, R"({"error":"superseded","migration_gen":1})", ""});
+				s.client.Advertise(SampleRegisterRequest(), true);
+				s.client.Update(0);
+				s.client.Update(0);
+				s.client.Update(5000); // heartbeat -> 409
+				s.client.Update(5000);
+				s.client.Update(10000);
+				s.client.Update(15000);
+				NetDirectoryHeartbeatRequest beat;
+				if (s.sent->size() != 2 || !NetDirectoryCodec::DecodeHeartbeatRequest(s.sent->at(1).body, beat, reason) || beat.migrationGen != 0) {
+					*error = "the heartbeat did not carry this host's generation, or the client went on after the refusal: sent=" + std::to_string(s.sent->size()) + " " + reason;
+					return false;
+				}
+				if (s.client.GetState() != NetDirectoryClient::State::Superseded || s.client.GetSupersededGeneration() != 1) {
+					*error = std::string("a refused row did not leave the client superseded: state=") + NetDirectoryClient::StateName(s.client.GetState()) + " generation=" +
+					         std::to_string(s.client.GetSupersededGeneration());
+					return false;
+				}
+				NetDirectoryDeleteRequest deletion;
+				deletion.token = "tok";
+				deletion.migrationGen = 3;
+				NetDirectoryDeleteRequest decodedDeletion;
+				if (!NetDirectoryCodec::DecodeDeleteRequest(NetDirectoryCodec::EncodeDeleteRequest(deletion), decodedDeletion, reason) || decodedDeletion.migrationGen != 3) {
+					*error = "a delete lost its generation: " + reason;
+					return false;
+				}
+				return true;
+			}
+
 			bool TestHeartbeat404Reregisters(std::string* error) {
 				ScriptedClient s;
 				s.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
@@ -2834,6 +2878,7 @@ namespace RTE {
 			if (!TestClientLifecycle(&error)) return fail(error);
 			if (!TestRelayCredentialRequest(&error)) return fail(error);
 			if (!TestHeartbeat404Reregisters(&error)) return fail(error);
+			if (!TestASupersededHostKeepsTheRowNoMore(&error)) return fail(error);
 			if (!TestHeartbeat429HonorsRetryAfter(&error)) return fail(error);
 			if (!TestTransportErrorBackoff(&error)) return fail(error);
 			if (!TestJoinListLabels(&error)) return fail(error);

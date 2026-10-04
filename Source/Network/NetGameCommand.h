@@ -391,6 +391,8 @@ namespace RTE {
 		enum Kind : uint8_t { Capture = 1, Written = 2, ManualCapture = 3, Missed = 4 };
 		uint8_t kind = Capture;
 		uint64_t tick = 0; //!< Capture: the tick every peer captures at. Written or Missed: the capture this peer's writer finished or did not keep.
+		/// Whether only the host may send this: a capture it names, never a peer's own report of its writer, kept or missed.
+		bool IsHostSchedule() const { return kind == Capture || kind == ManualCapture; }
 		bool operator==(const NetGameCheckpoint&) const = default;
 	};
 

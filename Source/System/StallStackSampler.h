@@ -41,5 +41,6 @@ namespace RTE {
 		static inline std::atomic<uint64_t> s_Tick{0};
 		static inline void* s_Thread = nullptr;
 		static inline std::jthread s_Watcher;
+		static inline int64_t s_LastSuspendNs = 0; //!< How long the last sample held the thread suspended; the watcher's own.
 	};
 } // namespace RTE

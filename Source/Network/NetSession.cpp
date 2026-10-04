@@ -20,6 +20,22 @@
 namespace RTE {
 
 	namespace {
+		/// A host too old to write this build's envelope closes the link saying so: "protocol version N does not match this build's M".
+		bool ReadOlderHostClose(const std::string& reason, std::string& ours, std::string& hosts) {
+			static const std::string c_Lead = "protocol version ";
+			static const std::string c_Middle = " does not match this build's ";
+			const size_t lead = reason.find(c_Lead);
+			const size_t middle = lead == std::string::npos ? std::string::npos : reason.find(c_Middle, lead + c_Lead.size());
+			if (middle == std::string::npos) return false;
+			const auto digits = [](const std::string& text) { return !text.empty() && std::all_of(text.begin(), text.end(), [](char c) { return c >= '0' && c <= '9'; }); };
+			ours = reason.substr(lead + c_Lead.size(), middle - lead - c_Lead.size());
+			const size_t start = middle + c_Middle.size();
+			size_t end = start;
+			while (end < reason.size() && reason[end] >= '0' && reason[end] <= '9') ++end;
+			hosts = reason.substr(start, end - start);
+			return digits(ours) && digits(hosts);
+		}
+
 		using json = nlohmann::json;
 
 		constexpr uint8_t c_HostAssignedPeerId = 0;
@@ -621,9 +637,14 @@ namespace RTE {
 					}
 					RefreshHostState();
 				} else if (m_State != NetSessionState::Rejected && m_State != NetSessionState::Failed) {
+					std::string ours, hosts;
+					if (!m_HasReject && ReadOlderHostClose(event.reason, ours, hosts)) {
+						SetRejected(NetRejectReason::ProtocolMismatch, "protocol_version", hosts, ours, event.reason);
+						break;
+					}
 					// Keep the close reason the host sent with the disconnect so the UI can show why.
 					if (!m_HasReject) {
-						RecordReject(NetRejectReason::InternalError, "", "", "", event.reason.empty() ? "connection closed by peer" : event.reason);
+						RecordReject(NetRejectReason::HostLinkLost, "", "", "", event.reason.empty() ? "connection closed by peer" : event.reason);
 					}
 					m_State = NetSessionState::Closed;
 				}
@@ -648,6 +669,11 @@ namespace RTE {
 					// not fail the host session for everyone else. A committed peer drops via PeerDisconnected.
 					++m_Stats.unboundConnectionFaults;
 				} else {
+					std::string ours, hosts;
+					if (ReadOlderHostClose(event.reason, ours, hosts)) {
+						SetRejected(NetRejectReason::ProtocolMismatch, "protocol_version", hosts, ours, event.reason);
+						break;
+					}
 					// The client's lone link to the host faulted - it genuinely cannot proceed.
 					SetFailed(NetRejectReason::InternalError, "transport", "", event.reason, event.reason.empty() ? "transport error" : event.reason);
 				}
@@ -971,7 +997,21 @@ namespace RTE {
 
 	void NetSession::FlushReconnectOutbound() {
 		if (m_ReconnectHost) {
+			// A seat roster revision a full send queue refused is the one a peer's config may name: it goes again, in order, first.
+			for (auto unsent = m_UnsentRosterRevisions.begin(); unsent != m_UnsentRosterRevisions.end();) {
+				auto& queue = unsent->second;
+				while (!queue.empty() && FindPeer(unsent->first) && Send(unsent->first, queue.front())) queue.erase(queue.begin());
+				unsent = queue.empty() || !FindPeer(unsent->first) ? m_UnsentRosterRevisions.erase(unsent) : std::next(unsent);
+			}
 			for (NetH4Outbound& outbound : m_ReconnectHost->TakeOutbound()) {
+				if (const auto* revision = std::get_if<NetH4RosterRevision>(&outbound.payload)) {
+					auto& queue = m_UnsentRosterRevisions[outbound.connection];
+					if (!queue.empty() || !Send(outbound.connection, outbound.payload)) {
+						if (queue.size() < 16) queue.push_back(*revision);
+					}
+					if (queue.empty()) m_UnsentRosterRevisions.erase(outbound.connection);
+					continue;
+				}
 				Send(outbound.connection, std::move(outbound.payload));
 			}
 			for (const NetH4Commit& commit : m_ReconnectHost->TakeCommits()) {
@@ -1284,7 +1324,7 @@ namespace RTE {
 			}
 			// A refused reclaim is not automatically a refused join: the stored ticket may simply name a
 			// hosted session that has ended. One fallback attempt, then a refusal is a refusal.
-			if (m_ReconnectClient && m_State == NetSessionState::Accepted && m_ReconnectClient->AbsorbRejection(m_NowMs, rejected->rejectReason)) {
+			if (m_ReconnectClient && m_State == NetSessionState::Accepted && m_ReconnectClient->AbsorbRejection(m_NowMs, rejected->rejectReason, rejected->mismatchKey)) {
 				FlushReconnectOutbound();
 				return;
 			}
@@ -1350,6 +1390,7 @@ namespace RTE {
 			m_Config.timeoutMs = accepted->timeoutMs;
 			// §4 expands the handshake: with an admission plane attached, Ready waits for JoinCommitted,
 			// which is also what hands back the seat's own peer id instead of this freshly allocated one.
+			if (m_ReconnectClient) m_ReconnectClient->NoteAcceptedHostSession(accepted->sessionId);
 			if (m_ReconnectClient && m_ReconnectClient->BeginAdmission(m_NowMs)) {
 				m_State = NetSessionState::Accepted;
 				m_StateStartedMs = m_NowMs;
@@ -1578,8 +1619,13 @@ namespace RTE {
 	}
 
 	void NetSession::RecordReject(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
-		System::PrintDiagnosticLine(std::string("[net-session] admission refused reason=") + NetProtocol::RejectReasonName(reason) +
-		                            " role=" + (m_Role == NetSessionRole::Host ? "host" : "client") + " key=" + key + " detail=" + summary);
+		// A lost link refused nothing: it is named as what happened.
+		if (reason == NetRejectReason::HostLinkLost) {
+			System::PrintDiagnosticLine("[net-session] link to the host lost detail=" + summary);
+		} else {
+			System::PrintDiagnosticLine(std::string("[net-session] admission refused reason=") + NetProtocol::RejectReasonName(reason) +
+			                            " role=" + (m_Role == NetSessionRole::Host ? "host" : "client") + " key=" + key + " detail=" + summary);
+		}
 		m_RejectReason = reason;
 		m_HasReject = true;
 		m_MismatchKey = key;
@@ -1602,6 +1648,26 @@ namespace RTE {
 
 	std::string NetSession::BuildPlayerRefusalText() const {
 		if (!m_HasReject) return {};
+		if (m_Role == NetSessionRole::Host) {
+			// The host refused a joiner: its notice names what differed, the joiner's value against this host's own.
+			switch (m_RejectReason) {
+				case NetRejectReason::ProtocolMismatch: {
+					if (m_MismatchKey != "network_protocol_version" && m_MismatchKey != "protocol_version") return "Their network protocol differs.";
+					// A joiner offers a range of protocols; one that offers a single protocol is named by it.
+					const size_t dash = m_ActualValue.find('-');
+					const bool single = dash != std::string::npos && m_ActualValue.substr(0, dash) == m_ActualValue.substr(dash + 1);
+					return "Their network protocol differs (theirs " + (single ? m_ActualValue.substr(0, dash) : m_ActualValue) + "; yours " + m_ExpectedValue + ").";
+				}
+				case NetRejectReason::BuildMismatch:
+					// Two builds with the same id can still differ in their session identity; its hashes mean nothing on screen.
+					if (m_MismatchKey != "build_id") return "Their build differs from yours.";
+					return "Their build differs from yours (theirs " + m_ActualValue + "; yours " + m_ExpectedValue + ").";
+				case NetRejectReason::GameVersionMismatch: return "Their game version differs from yours (theirs " + m_ActualValue + "; yours " + m_ExpectedValue + ").";
+				case NetRejectReason::ControllerFrameVersionMismatch:
+				case NetRejectReason::ControllerFrameSizeMismatch: return "Their game version differs from yours.";
+				default: break;
+			}
+		}
 		if (m_Role == NetSessionRole::Client) {
 			// A version refusal says which side is newer: the host's value is whichever of the two is not this build's.
 			const auto hostValue = [&](const std::string& mine) { return m_ExpectedValue == mine ? m_ActualValue : m_ExpectedValue; };
@@ -1647,6 +1713,7 @@ namespace RTE {
 			case NetRejectReason::SessionEnded: return "This session has ended.";
 			case NetRejectReason::SeatReassigned: return "The host gave your seat to another player.";
 			case NetRejectReason::SeatReleased: return "The host released your seat.";
+			case NetRejectReason::HostLinkLost: return "The connection to the host was lost.";
 			case NetRejectReason::ParticipantRemoved:
 				if (m_Role == NetSessionRole::Host && !m_RefusedPlayerName.empty()) return m_RefusedPlayerName + " was removed from this session";
 				return "The host removed you from this session";

@@ -24,11 +24,13 @@ namespace RTE {
 		std::unordered_map<const void*, DrawPass> s_DrawPasses;
 		std::unordered_map<const void*, PanelDraw> s_PanelDraws;
 		const void* s_DrawingManager = nullptr;
+		bool s_Recording = false;
 
 		double SecondsSince(DrawClock::time_point at) { return std::chrono::duration<double>(DrawClock::now() - at).count(); }
 	} // namespace
 
 	const void* BeginPanelDrawPass(const void* manager) {
+		if (!s_Recording) return nullptr;
 		DrawPass& pass = s_DrawPasses[manager];
 		++pass.serial;
 		pass.at = DrawClock::now();
@@ -38,11 +40,11 @@ namespace RTE {
 	}
 
 	void EndPanelDrawPass(const void* previous) {
-		s_DrawingManager = previous;
+		if (s_Recording) s_DrawingManager = previous;
 	}
 
 	void RecordPanelDraw(const void* panel) {
-		if (panel) {
+		if (s_Recording && panel) {
 			const auto pass = s_DrawingManager ? s_DrawPasses.find(s_DrawingManager) : s_DrawPasses.end();
 			s_PanelDraws[panel] = {s_DrawingManager, pass != s_DrawPasses.end() ? pass->second.serial : 0, DrawClock::now()};
 		}
@@ -69,6 +71,11 @@ namespace RTE {
 	void ClearPanelDrawRecord() {
 		s_PanelDraws.clear();
 		s_DrawPasses.clear();
+	}
+
+	void SetPanelDrawRecording(bool recording) {
+		s_Recording = recording;
+		if (!recording) ClearPanelDrawRecord();
 	}
 } // namespace RTE
 

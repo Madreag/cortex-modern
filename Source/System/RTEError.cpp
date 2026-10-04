@@ -17,9 +17,11 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <iostream>
 #include <mutex>
+#include <new>
 #include <regex>
 #include <thread>
 #include <utility>
@@ -103,6 +105,53 @@ static void RecordPendingWorkerMessage(WorkerMessageKind kind, const std::string
 #if (defined(__linux__) || (defined(__APPLE__) && defined(__MACH__)))
 backward::SignalHandling sh;
 #endif
+#if defined(_WIN32) && !defined(TARGET_MACHINE_X86)
+/// Names an MSVC C++ exception from its throw information: the thrown type and, for a std::exception, its message.
+static void DescribeCppException(const EXCEPTION_RECORD& record, char* text, size_t size) {
+	text[0] = '\0';
+	// MSVC raises a C++ throw with this code; its fourth parameter is the base of the module that threw.
+	if (record.ExceptionCode != 0xE06D7363 || record.NumberParameters < 4) return;
+	__try {
+		const uintptr_t object = record.ExceptionInformation[1];
+		const uintptr_t base = record.ExceptionInformation[3];
+		const int32_t* throwInfo = reinterpret_cast<const int32_t*>(record.ExceptionInformation[2]);
+		const int32_t* types = reinterpret_cast<const int32_t*>(base + static_cast<uint32_t>(throwInfo[3]));
+		const char* thrown = nullptr;
+		const char* message = nullptr;
+		for (int32_t index = 0; index < types[0]; ++index) {
+			// A catchable type: properties, type descriptor, this displacement (member, vbtable, vbase), size, copy function.
+			const int32_t* catchable = reinterpret_cast<const int32_t*>(base + static_cast<uint32_t>(types[1 + index]));
+			const char* name = reinterpret_cast<const char*>(base + static_cast<uint32_t>(catchable[1])) + 2 * sizeof(void*);
+			if (!thrown) thrown = name;
+			if (std::strcmp(name, ".?AVexception@std@@") == 0 && catchable[3] == -1) message = reinterpret_cast<const std::exception*>(object + catchable[2])->what();
+		}
+		// A decorated class name reads '.?AVbad_alloc@std@@': its scopes come innermost first.
+		char readable[160] = "an unknown type";
+		if (thrown && std::strncmp(thrown, ".?A", 3) == 0 && thrown[3] != '\0') {
+			const char* parts[8];
+			size_t lengths[8];
+			size_t count = 0;
+			for (const char* at = thrown + 4; *at != '\0' && *at != '@' && count < 8; ++count) {
+				parts[count] = at;
+				while (*at != '\0' && *at != '@') ++at;
+				lengths[count] = static_cast<size_t>(at - parts[count]);
+				if (*at == '@') ++at;
+			}
+			size_t used = 0;
+			for (size_t part = count; part-- > 0 && used + lengths[part] + 3 < sizeof(readable);) {
+				std::memcpy(readable + used, parts[part], lengths[part]);
+				used += lengths[part];
+				if (part != 0) { std::memcpy(readable + used, "::", 2); used += 2; }
+			}
+			readable[used] = '\0';
+		}
+		std::snprintf(text, size, "C++ exception %s%s%s", readable, message ? ": " : "", message ? message : "");
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		std::snprintf(text, size, "C++ exception whose type could not be read");
+	}
+}
+#endif
+
 #ifdef _WIN32
 /// <summary>
 /// Custom exception handler for Windows SEH.
@@ -238,6 +287,20 @@ static LONG WINAPI RTEWindowsExceptionHandler([[maybe_unused]] EXCEPTION_POINTER
 				std::fclose(recordFile);
 			}
 		}
+		// A C++ exception nothing caught names its type and message, and the thread it ended, before anything that can fail.
+		char thrownRecord[400];
+		DescribeCppException(*exceptPtr->ExceptionRecord, thrownRecord, sizeof(thrownRecord) - 64);
+		if (thrownRecord[0] != '\0') {
+			const size_t used = std::strlen(thrownRecord);
+			std::snprintf(thrownRecord + used, sizeof(thrownRecord) - used, " on %s\n", GetCurrentThreadId() == s_AppMainThreadId.load() ? "the main thread" : "a worker thread");
+			std::fputs("FATAL: ", stderr);
+			std::fputs(thrownRecord, stderr);
+			std::fflush(stderr);
+			if (std::FILE* recordFile = std::fopen("AbortCode.txt", "a")) {
+				std::fputs(thrownRecord, recordFile);
+				std::fclose(recordFile);
+			}
+		}
 		wchar_t dumpPath[MAX_PATH];
 		const DWORD dumpPathLength = GetEnvironmentVariableW(L"CC_TEST_CRASH_DUMP", dumpPath, MAX_PATH);
 		wchar_t fullDumpFlag[16];
@@ -291,7 +354,10 @@ static LONG WINAPI RTEWindowsExceptionHandler([[maybe_unused]] EXCEPTION_POINTER
 	std::string symbolNameAtAddress = getSymbolNameFromAddress(processHandle, exceptionAddress);
 	RTEError::FormatFunctionSignature(symbolNameAtAddress);
 
-	exceptionDescription << getExceptionDescriptionFromCode(exceptionCode) << " at address 0x" << std::uppercase << std::hex << exceptionAddress << ".\n\n"
+	char thrown[400];
+	DescribeCppException(*exceptPtr->ExceptionRecord, thrown, sizeof(thrown));
+	exceptionDescription << (thrown[0] != '\0' ? std::string(thrown) : getExceptionDescriptionFromCode(exceptionCode))
+	                     << (GetCurrentThreadId() == s_AppMainThreadId.load() ? "" : " on a worker thread") << " at address 0x" << std::uppercase << std::hex << exceptionAddress << ".\n\n"
 	                     << symbolNameAtAddress << std::endl;
 
 	backward::StackTrace st;
@@ -305,6 +371,15 @@ static LONG WINAPI RTEWindowsExceptionHandler([[maybe_unused]] EXCEPTION_POINTER
 #endif
 }
 #endif
+
+void RTEError::ThrowOnWorkerThread() {
+#ifdef _WIN32
+	// A thread of the system's own, as the transport's workers are: nothing above the throw catches it.
+	if (const HANDLE thread = CreateThread(nullptr, 0, [](LPVOID) -> DWORD { throw std::bad_alloc(); }, nullptr, 0, nullptr)) CloseHandle(thread);
+#else
+	std::thread([] { throw std::bad_alloc(); }).detach();
+#endif
+}
 
 void RTEError::SetExceptionHandlers() {
 #ifdef _WIN32
@@ -475,12 +550,16 @@ void RTEError::UnhandledExceptionFunc(const std::string& description, const std:
 		}
 	}
 
+	// The reason reaches the log before the dumps run: they touch a process that is already failing.
+	System::PrintFaultToCLI(exceptionMessage);
+	std::string afterDumps;
 	if (DumpAbortSave()) {
-		exceptionMessage += "\nThe game has saved to 'AbortSave'.";
+		afterDumps += "\nThe game has saved to 'AbortSave'.";
 	}
 	if (DumpAbortScreen()) {
-		exceptionMessage += "\nThe last frame has been dumped to 'AbortScreen.png'.";
+		afterDumps += "\nThe last frame has been dumped to 'AbortScreen.png'.";
 	}
+	exceptionMessage += afterDumps;
 
 	g_ConsoleMan.PrintString(exceptionMessage);
 
@@ -493,8 +572,11 @@ void RTEError::UnhandledExceptionFunc(const std::string& description, const std:
 	}
 	if (g_ConsoleMan.SaveAllText("AbortLog.txt")) {
 		exceptionMessage += consoleSaveMsg;
+		afterDumps += consoleSaveMsg;
 	}
-	System::PrintFaultToCLI(exceptionMessage);
+	if (!afterDumps.empty()) {
+		System::PrintFaultToCLI(afterDumps.substr(1));
+	}
 
 	// Ditch the video mode so the message box appears without problems.
 	if (g_WindowMan.GetWindow()) {
@@ -521,13 +603,17 @@ void RTEError::AbortFunc(const std::string& description, const SourceLocation& s
 		FormatFunctionSignature(funcName);
 
 		std::string abortMessage = "Runtime Error in file '" + fileName + "', line " + lineNum + ",\nin function '" + funcName + "'\nbecause:\n\n" + description + "\n";
+		// The reason reaches the log before the dumps run: they touch a process that is already failing.
+		System::PrintFaultToCLI(abortMessage);
+		std::string afterDumps;
 
 		if (DumpAbortSave()) {
-			abortMessage += "\nThe game has saved to 'AbortSave'.";
+			afterDumps += "\nThe game has saved to 'AbortSave'.";
 		}
 		if (DumpAbortScreen()) {
-			abortMessage += "\nThe last frame has been dumped to 'AbortScreen.png'.";
+			afterDumps += "\nThe last frame has been dumped to 'AbortScreen.png'.";
 		}
+		abortMessage += afterDumps;
 
 		g_ConsoleMan.PrintString(abortMessage);
 
@@ -552,8 +638,11 @@ void RTEError::AbortFunc(const std::string& description, const SourceLocation& s
 
 		if (g_ConsoleMan.SaveAllText("AbortLog.txt")) {
 			abortMessage += consoleSaveMsg;
+			afterDumps += consoleSaveMsg;
 		}
-		System::PrintFaultToCLI(abortMessage);
+		if (!afterDumps.empty()) {
+			System::PrintFaultToCLI(afterDumps.substr(1));
+		}
 
 		// Ditch the video mode so the message box appears without problems.
 		if (g_WindowMan.GetWindow()) {
@@ -792,31 +881,49 @@ void RTEError::DumpHardwareInfo() {
 }
 
 bool RTEError::DumpAbortScreen() {
-	int success = -1;
-	if (glReadPixels != nullptr) {
-		int w, h;
-		SDL_GetWindowSizeInPixels(g_WindowMan.GetWindow(), &w, &h);
-		if (!(w > 0 && h > 0)) {
-			return false;
-		}
-		BITMAP* readBuffer = create_bitmap_ex(24, w, h);
-		// Read screen from the front buffer since that is the only framebuffer guaranteed to exist at this point.
-		// Read twice because front buffer content is technically undefined, but most drivers still eventually give up the contents correctly.
-		glReadBuffer(GL_FRONT);
-		glPixelStorei(GL_PACK_ALIGNMENT, 1);
-		glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, readBuffer->line[0]);
-		glFinish();
-		glReadBuffer(GL_BACK);
-		glReadBuffer(GL_FRONT);
-		glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, readBuffer->line[0]);
-		glFinish();
-
-		BITMAP* flipBuffer = create_bitmap_ex(24, w, h);
-		draw_sprite_v_flip(flipBuffer, readBuffer, 0, 0);
-
-		success = save_png("AbortScreen.png", flipBuffer, nullptr);
+	// Only the thread whose context is current can read the window; an abort anywhere else has no frame to dump.
+	if (glReadPixels == nullptr || glBindFramebuffer == nullptr || glBindBuffer == nullptr || !g_WindowMan.GetWindow() || SDL_GL_GetCurrentContext() == nullptr) {
+		return false;
 	}
-	return success == 0;
+	int w = 0;
+	int h = 0;
+	SDL_GetWindowSizeInPixels(g_WindowMan.GetWindow(), &w, &h);
+	if (!(w > 0 && h > 0)) {
+		return false;
+	}
+	// A lost context reports an error on every call, so the old errors are drained a bounded number of times.
+	for (int drained = 0; drained < 32 && glGetError() != GL_NO_ERROR; ++drained) {}
+	// The renderer may have left its own framebuffer, pack buffer or row layout bound; this read is the default framebuffer, tightly packed.
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+	glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+	glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+	glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+	// Read screen from the front buffer since that is the only framebuffer guaranteed to exist at this point.
+	glReadBuffer(GL_FRONT);
+	if (const GLenum error = glGetError(); error != GL_NO_ERROR) {
+		System::PrintFaultToCLI("The last frame was not dumped: GL error " + std::to_string(error) + " selecting the front buffer.");
+		return false;
+	}
+	BITMAP* readBuffer = create_bitmap_ex(24, w, h);
+	BITMAP* flipBuffer = readBuffer ? create_bitmap_ex(24, w, h) : nullptr;
+	if (!flipBuffer) {
+		return false;
+	}
+	// Read twice because front buffer content is technically undefined, but most drivers still eventually give up the contents correctly.
+	glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, readBuffer->line[0]);
+	glFinish();
+	glReadBuffer(GL_BACK);
+	glReadBuffer(GL_FRONT);
+	glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, readBuffer->line[0]);
+	glFinish();
+	if (const GLenum error = glGetError(); error != GL_NO_ERROR) {
+		System::PrintFaultToCLI("The last frame was not dumped: GL error " + std::to_string(error) + " reading it.");
+		return false;
+	}
+	draw_sprite_v_flip(flipBuffer, readBuffer, 0, 0);
+	return save_png("AbortScreen.png", flipBuffer, nullptr) == 0;
 }
 
 bool RTEError::DumpAbortSave() {
@@ -906,7 +1013,11 @@ bool RTEError::RunAssertPolicySelfTest() {
 	          << " worker_assert_reaches_dialog pending=" << pendingBefore << " boxes=" << boxesBefore
 	          << " after_dispatch pending=" << pendingAfter << " boxes=" << boxesAfter << std::endl;
 
-	const bool passed = dialogLeftUnfired && workerFired && ignoreAllFired && dispatched;
+	std::string consoleError;
+	const bool consoleBounded = System::RunConsoleQueueSelfTest(&consoleError);
+	if (!consoleBounded) std::cout << "[rteerror-selftest] FAIL console_queue_is_bounded " << consoleError << std::endl;
+
+	const bool passed = dialogLeftUnfired && workerFired && ignoreAllFired && dispatched && consoleBounded;
 	std::cout << "[rteerror-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 	return passed;
 }

@@ -42,11 +42,13 @@ namespace RTE {
 		NetSeatPhase phase = NetSeatPhase::Lobby;
 		NetSeatHoldCause holdCause = NetSeatHoldCause::None;
 		NetSeatLink link = NetSeatLink::Connected;
+		bool joining = false;                                  ///< Its owner took the seat by admission and has not played it yet: joining, not rejoining.
 		uint8_t failedReturns = 0;                             ///< Returns that failed since its owner was last back.
 		uint64_t returnAfterMs = 0;                            ///< A return is not offered again before this (the backoff).
 		uint64_t bindingRef = 0;                               ///< The committed world's brain/actor for the seat.
 		uint64_t givenAwayTicket = 0;                          ///< The ticket of the player the host gave this seat away from.
 		uint64_t heldSinceMs = 0;                              ///< When its owner went away, on the host's clock; the host's own, never sent.
+		std::string name;                                      ///< Its owner's display name as the host seated it; empty while the seat is open.
 	};
 
 	/// Who holds which seat, in what phase: owned by the host's session plane and replicated by revision.
@@ -64,12 +66,14 @@ namespace RTE {
 		NetRosterSeat* Find(uint8_t seatId);
 		/// The start gate waits on a seat only while its owner is at the gate on a live link.
 		bool StartWaitsOn(uint8_t seatId) const;
+		/// A host that plays no seat of its own (a dedicated host) names seat 0; any other host names a seat of the roster.
+		bool HostSeatValid() const { return hostSeat == 0 || Find(hostSeat) != nullptr; }
 	};
 
 	/// Every seat event; each goes through ApplyRosterEvent and nowhere else.
 	enum class NetRosterEventKind : uint8_t {
 		LinkDropped, ProcessRelaunched, Returned, Kicked, Banned, RoundEnded, RematchFormed, HostLinkLost, MemberSetProposed, TransferAborted,
-		LivenessPassed, SlowMachine, HostStalled, Admitted, ApplicantAccepted, RoundStarted, ImageLoaded, CaughtUp, HostResumed, HostChanged, SeatReleased, Count
+		LivenessPassed, SlowMachine, HostStalled, Admitted, ApplicantAccepted, RoundStarted, ImageLoaded, CaughtUp, HostResumed, HostChanged, SeatReleased, HeldInPlace, Count
 	};
 
 	struct NetRosterEvent {
@@ -77,12 +81,14 @@ namespace RTE {
 		uint8_t seat = 0;              ///< The seat the event names.
 		uint64_t owner = 0;            ///< Admitted / ApplicantAccepted: the player taking the seat.
 		uint64_t ticket = 0;           ///< Returned: the ticket shown; Admitted / ApplicantAccepted: the ticket issued.
+		std::string name;              ///< Admitted / ApplicantAccepted: the display name of the player taking the seat.
 		uint64_t nowMs = 0;            ///< The plane's clock, for the return's backoff.
 		bool withTraffic = false;      ///< LivenessPassed: the link carried authenticated traffic.
+		NetSeatHoldCause cause = NetSeatHoldCause::None; ///< HeldInPlace: why the round holds the seat.
 		bool byChoice = false;         ///< LinkDropped: the owner left on purpose.
 		bool afterGrace = false;       ///< SlowMachine: the round is past its warm-up grace.
 		bool keptWorld = false;        ///< Returned: the owner's process kept the round's world.
-		bool quorum = false;           ///< HostLinkLost: every surviving member agrees the host's link is gone.
+		bool quorum = false;           ///< HostLinkLost: a strict majority of the connected seats agree the host's link is gone.
 		std::vector<uint8_t> members;  ///< MemberSetProposed: the members the host proposes to start.
 	};
 
@@ -90,6 +96,7 @@ namespace RTE {
 		NetSeatRoster roster;
 		bool changed = false;          ///< A new revision.
 		bool refused = false;          ///< The event was refused; the roster is unchanged.
+		bool retryLater = false;       ///< A refusal that passes with time: the same event is accepted later.
 		std::string reason;            ///< What happened, in the words a player can act on.
 	};
 
@@ -104,7 +111,14 @@ namespace RTE {
 	bool CheckRosterInvariants(const NetSeatRoster& before, const NetSeatRoster& after, NetRosterEventKind kind, std::string* reason);
 	/// The label the Seats panel shows for a seat.
 	std::string RosterSeatLabel(const NetRosterSeat& seat);
+	/// A report's word for a seat: "Present" while its owner plays it, "Held", "Reconnecting", or "Left" once the host opened it.
+	const char* RosterSeatStateWord(const NetRosterSeat& seat);
+	/// "name: label" while the seat is not plainly played; empty while it is.
+	std::string RosterSeatLine(const NetRosterSeat& seat, const std::string& name);
+	/// Stable seats count from 0, roster seats from 1.
+	inline uint8_t NetRosterIdOf(uint16_t stableSeat) { return static_cast<uint8_t>(stableSeat + 1); }
 	const char* NetSeatPhaseName(NetSeatPhase phase);
+	const char* NetSeatHoldCauseName(NetSeatHoldCause cause);
 	const char* NetRosterEventName(NetRosterEventKind kind);
 
 	/// A roster revision as it goes to the peers: tickets and the ban list stay on the host.
@@ -119,6 +133,8 @@ namespace RTE {
 		/// Takes a newer revision of this match's roster - a later host generation, or a later revision of the same one; says why
 		/// when it does not. A new host's numbering starts this copy's history again.
 		bool Apply(const NetSeatRoster& revision, std::string* why);
+		/// Keeps an older revision of the host generation it follows as history it can agree on, the roster it holds unchanged.
+		bool ApplyPast(const NetSeatRoster& revision);
 		/// Follows the hosted match named: a copy of another match's roster is dropped. 0 follows the first match heard.
 		void Attach(uint64_t matchId);
 		/// Drops every revision heard: a peer attaching to a hosted session starts its copy there.

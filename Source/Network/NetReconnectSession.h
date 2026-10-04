@@ -11,6 +11,7 @@
 #include "NetTransport.h"
 
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -20,6 +21,9 @@ namespace RTE {
 
 	class NetHostBanStore;
 	class NetSeatAuthRegistry;
+
+	/// The refusal key of a return the host will take later with the same ticket (a backoff, a host change): its client retries, never joins anew.
+	constexpr const char* c_ReturnRetryKey = "return_retry";
 
 	/// One admission reply the session owes a connection.
 	struct NetH4Outbound {
@@ -56,14 +60,13 @@ namespace RTE {
 	};
 
 	enum class NetHoldResolution : uint16_t {
-		Expired = 0,
 		Reclaimed = 1,
 		Substituted = 2,
 	};
 
 	struct NetHoldResolutionNotice {
 		uint8_t lockstepPeerId = 0;
-		NetHoldResolution resolution = NetHoldResolution::Expired;
+		NetHoldResolution resolution = NetHoldResolution::Reclaimed;
 	};
 
 	/// The seat table in the pinned form, straight off the live match config.
@@ -210,6 +213,8 @@ namespace RTE {
 		bool dropped = false;
 		bool closed = false;
 		bool heldForReclaim = false;  //!< The original holder can still return.
+		bool held = false;            //!< Its player away and the AI playing it, by the roster.
+		NetSeatHoldCause holdCause = NetSeatHoldCause::None; //!< Why the roster holds it.
 		bool substitutable = false;   //!< A host action may reassign it right now.
 		bool substituting = false;    //!< An approval is in flight for it.
 		NetAuthBytes16 substitutionTransaction{};
@@ -225,7 +230,7 @@ namespace RTE {
 		bool leftByChoice = false;    //!< The holder left on purpose; the seat is held for it as for a drop.
 		uint64_t leftForMs = 0;       //!< How long ago it left.
 		bool slowMachine = false;     //!< Held because the holder's machine cannot keep up with the round.
-		uint64_t holdFramesRemaining = 0; //!< Frames the round still holds the seat for; a frame, never a clock.
+		std::string joinProgress;     //!< How far the player coming into the seat is: the world's image, then its replay; "" otherwise.
 		std::vector<NetH4ApplicantView> applicants;
 
 		bool operator==(const NetH4ModerationSeat&) const = default;
@@ -272,7 +277,9 @@ namespace RTE {
 		uint8_t lockstepPeerId = 0;
 		bool committed = false;
 		bool closed = false;
-		bool dropped = false;      //!< Committed, but its holder's transport is gone.
+		bool dropped = false;      //!< Committed, but its holder's link is lost, by the roster.
+		bool held = false;         //!< Committed, its player away and the AI playing it, by the roster: lost, left or held by the round.
+		NetSeatHoldCause holdCause = NetSeatHoldCause::None; //!< Why the roster holds it.
 		bool reclaiming = false;   //!< A reclaim transaction for it is in flight.
 		bool substituting = false; //!< An approved substitute is persisting its ticket.
 		uint16_t applicants = 0;   //!< Players asking the host for this seat.
@@ -338,6 +345,7 @@ namespace RTE {
 		uint32_t substitutionsSuperseded = 0; //!< Lost the seat-generation CAS to a returner.
 		uint32_t substitutionAckFailures = 0;
 		uint32_t reassignedReclaimsRefused = 0; //!< Proved the retired credential and was told why.
+		uint32_t rosterRefusedReturns = 0;      //!< A proven return the seat roster refused: its backoff, its ticket or its host.
 	};
 
 	/// The host's §4/§6/§7 state machine: it runs the admission transaction, fences a superseded
@@ -451,11 +459,13 @@ namespace RTE {
 		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action, uint64_t nowMs, uint64_t unixNowMs, uint64_t sessionId, uint32_t round, uint64_t boundaryFrame, NetParticipantRemovalIssue& issued);
 		bool HasSubstitution(uint16_t stableSeat) const;
 		size_t GetApplicantCount() const { return m_Applicants.size(); }
+		/// Applications a lost host left pending that no applicant has asked this host again for yet.
+		size_t GetCarriedApplicantCount() const { return m_CarriedApplicants.size(); }
 
 		/// Which peer id, if any, currently holds the seat on which transport.
 		bool GetSeatHolder(uint16_t stableSeat, NetPeerId& connection, uint32_t& holderGeneration, uint32_t& incarnation) const;
-		/// The committed H4 seat on this connection; 0 until admission has one.
-		uint16_t StableSeatOfConnection(NetPeerId connection) const;
+		/// The committed H4 seat on this connection; none until admission has one. Seat 0 is a seat: an ordinary match's original host's.
+		std::optional<uint16_t> StableSeatOfConnection(NetPeerId connection) const;
 		bool IsSeatClosed(uint16_t stableSeat) const;
 		/// Every seat's admission status, in stable-seat order.
 		std::vector<NetH4SeatStatus> GetSeatStatuses() const;
@@ -466,12 +476,32 @@ namespace RTE {
 		/// A rematch forms in its lobby: the round before it is over, its present seats go to the start and the seats whose players
 		/// are away or that the host opened start held.
 		void FormRematch();
+		/// A returning seat's world is the round's: its image is in, or its player kept the world.
+		void NoteReturnWorldReady(uint8_t lockstepPeerId);
+		/// A returning seat plays the round again at a committed frame.
+		void NoteReturnCaughtUp(uint8_t lockstepPeerId);
+		/// The round holds a playing seat whose link stays open; Capacity is a machine too slow for the round.
+		void NoteSeatHeldInPlace(uint8_t lockstepPeerId, NetSeatHoldCause cause);
+		/// A seat the round held with its link open plays again: its player kept the world.
+		void NoteSeatPlaysAgain(uint8_t lockstepPeerId);
+		/// The lockstep peers whose seats the roster has playing, and those the round holds with their links open.
+		std::vector<uint8_t> PlayingPeers() const;
+		std::vector<uint8_t> HeldInPlacePeers() const;
+		/// A returning seat's transfer was abandoned: the AI keeps the seat and the return is offered again after the roster's backoff.
+		void NoteReturnAborted(uint8_t lockstepPeerId);
+		/// The lockstep peers whose seats are on their way back, through the image or the catch-up.
+		std::vector<uint8_t> ReturningPeers() const;
+		/// A seat whose return failed while its player stayed connected: true when the return is offered again now (its backoff over,
+		/// under the roster's bound). Past the bound the refusal names why and nothing more is offered on this link.
+		bool ReofferReturn(uint8_t lockstepPeerId, std::string* refusal);
 		/// The lockstep peers a forming round's start waits on - the roster's seats at the start on a live link - and the host's,
 		/// sorted; empty when no round is forming.
 		std::vector<uint8_t> StartMembers() const;
 		/// The seat table as the plane holds it now, in table order.
 		std::vector<NetH4Seat> GetSeatTable() const;
 		std::vector<uint8_t> ExportMigrationState() const;
+		/// The wall clock the plane writes the roster's host-side times by when it hands them to another machine; the system clock unset.
+		void SetUnixClock(uint64_t (*clock)(void*), void* context);
 		/// How many seats an exported plane still offers a joiner, read without importing it, so a
 		/// restarted host's directory row advertises what the match really has before the plane is live.
 		/// @return The open seats, or -1 when the bytes are not an export.
@@ -605,12 +635,23 @@ namespace RTE {
 		/// When the holder went away, on this plane's clock; 0 while it is here.
 		uint64_t HolderAwaySinceMs(const SeatState& seat) const;
 		/// Every change to a seat's hold goes through the roster's one transition function.
-		void ApplySeatEvent(const SeatState& seat, NetRosterEventKind kind, bool byChoice = false);
+		void ApplySeatEvent(const SeatState& seat, NetRosterEventKind kind, bool byChoice = false, bool keptWorld = false, NetSeatHoldCause cause = NetSeatHoldCause::None);
+		/// The roster holds the seat for its player: it has an owner who is away while the AI plays it.
+		bool RosterHoldsSeat(const SeatState& seat) const;
 		void ApplyStageEvent(NetRosterEventKind kind);
 		/// Sends the roster's current revision to every connected holder, or to one connection.
 		void SendRoster(NetPeerId only = c_InvalidNetPeerId);
-		/// A holder this plane seats or takes back is playing: the plane sees no image or catch-up of its own.
+		std::vector<std::pair<uint32_t, std::vector<uint8_t>>> m_RosterHistory; //!< The revisions this host published, oldest first, bounded.
+		/// A seat whose holder never takes the round's image - the host's own, a watcher's - is back the moment it is seated.
 		void SettleReturn(const SeatState& seat);
+		/// The roster's owner for the seat's holder: the player's proven identity, or with none proven its ticket.
+		uint64_t RosterOwnerOf(const SeatState& seat) const;
+		/// The seat roster's answer to a return with the ticket of this holder generation; empty when the return may begin.
+		/// retryLater says the same return is taken later.
+		std::string RosterRefusesReturn(const SeatState& seat, uint32_t holderGeneration, bool* retryLater = nullptr) const;
+		/// The plane seat a lockstep peer plays: a world slot's member before a seat whose own id it is.
+		const SeatState* SeatOfPeer(uint8_t lockstepPeerId) const;
+		SeatState* SeatOfPeer(uint8_t lockstepPeerId) { return const_cast<SeatState*>(std::as_const(*this).SeatOfPeer(lockstepPeerId)); }
 		/// Seats a new holder in the roster: an open seat is admitted, a held one given to the applicant.
 		void SeatHolder(const SeatState& seat);
 		/// Keeps one roster seat per plane seat, the existing ones as they are.
@@ -685,7 +726,19 @@ namespace RTE {
 		NetReconnectLedger m_Ledger;
 		std::vector<SeatState> m_Seats;
 		NetSeatRoster m_Roster; //!< Whether each seat's holder is away, why and since when; changed only through ApplyRosterEvent.
+		uint64_t (*m_UnixClock)(void*) = nullptr;
+		void* m_UnixClockContext = nullptr;
+		uint64_t UnixNowMs() const;
 		std::vector<Applicant> m_Applicants;
+		/// An application a lost host left pending: the same application when its applicant asks this host again with its transaction.
+		struct CarriedApplicant {
+			uint16_t stableSeat = 0;
+			NetAuthBytes16 txId{};
+			std::string displayName;
+			uint64_t appliedAtMs = 0;
+		};
+		std::vector<CarriedApplicant> m_CarriedApplicants;
+		uint64_t m_CarriedApplicantsUntilMs = 0; //!< When the ones nobody asked again for are dropped, as an unanswered applicant expires.
 		std::vector<Substitution> m_Substitutions;
 		std::vector<Provisional> m_Provisionals;
 		std::vector<PendingReclaim> m_PendingReclaims;
@@ -726,6 +779,10 @@ namespace RTE {
 	const char* NetReconnectClientStateName(NetH4ClientState state);
 	/// The seat roster's match: the hosted session's admission epoch, which every admitted peer holds in its ticket; 0 for none.
 	uint64_t NetRosterMatchIdOf(const NetAuthBytes16& epoch);
+	/// The seat roster's owner for a player who proved its participant identity; 0 for none.
+	uint64_t NetRosterOwnerIdOf(const NetAuthBytes32& participantId);
+	/// The seat roster's ticket id: the ticket a holder returns with, named by its session's epoch, its seat and its holder generation.
+	uint64_t NetRosterTicketIdOf(const NetAuthBytes16& epoch, uint16_t stableSeat, uint32_t holderGeneration);
 
 	struct NetReconnectClientStats {
 		uint32_t requestsSent = 0;
@@ -743,6 +800,7 @@ namespace RTE {
 		uint32_t unacknowledgedLeaves = 0;
 		uint32_t ambiguousLosses = 0;
 		uint32_t confirmedSessionEnds = 0;
+		uint32_t returnRetries = 0; //!< Returns the host said to ask again later, asked again with the same ticket.
 	};
 
 	/// The client half: it persists the ticket the host offers before acknowledging it, answers a
@@ -772,15 +830,18 @@ namespace RTE {
 		/// configuration it adopts, and that id is what its return watch browses for.
 		void AdoptDirectorySessionId(const std::string& directorySessionId);
 
+		/// The hosted session the host's join answer named; a stored record of that session is its own whatever address reached it.
+		void NoteAcceptedHostSession(uint64_t hostSessionId) { m_AcceptedHostSessionId = hostSessionId; }
 		/// Starts the §4 transaction the session was accepted into: a stored record for THIS host is
 		/// reclaimed, anything else is a fresh join.
 		/// @return Whether a transaction is now running; false leaves the session's ordinary Ready path.
 		bool BeginAdmission(uint64_t nowMs, std::string* error = nullptr);
 		/// The host refused the transaction. A refused RECLAIM falls back to one fresh join (the ticket
 		/// was for a session that is gone), which is exactly what a ticketless client would have sent.
-		/// A seat the host says was REASSIGNED is gone for good, so that one is never retried.
+		/// A seat the host says was REASSIGNED is gone for good, so that one is never retried. A return
+		/// the host takes later (the key c_ReturnRetryKey) is asked again with the same ticket after a backoff.
 		/// @return Whether the refusal was absorbed; false means the session should fail on it.
-		bool AbsorbRejection(uint64_t nowMs, NetRejectReason reason = NetRejectReason::HostNotAccepting);
+		bool AbsorbRejection(uint64_t nowMs, NetRejectReason reason = NetRejectReason::HostNotAccepting, const std::string& key = {});
 
 		bool BeginNewJoin(uint64_t nowMs, std::string* error = nullptr);
 		bool BeginReclaim(const NetH4TicketRecord& record, uint64_t nowMs, std::string* error = nullptr);
@@ -788,6 +849,12 @@ namespace RTE {
 		/// Phase B: ask the host for a seat instead of joining one. A live match refuses an ordinary
 		/// join, so this is the only way in for a player the host has to approve by hand.
 		bool BeginApplication(uint16_t stableSeat, uint64_t nowMs, std::string* error = nullptr);
+		/// Whether this player waits on an application its host acknowledged and nobody has answered.
+		bool HasUnansweredApplication() const { return m_State == NetH4ClientState::Applied; }
+		/// Keeps that application for the next host: the next application for its seat asks again with its transaction.
+		void CarryApplicationToNextHost() {
+			if (HasUnansweredApplication()) m_CarriedApplication = std::make_pair(m_ApplySeat, m_TxId);
+		}
 		/// Makes BeginAdmission apply for a seat rather than join or reclaim. The UI (B2) and the gate
 		/// drivers set this; nothing on the wire does.
 		void SetApplyForSeat(bool enabled, uint16_t stableSeat);
@@ -803,6 +870,8 @@ namespace RTE {
 		void NotifyParticipantRemoved(NetRejectReason reason);
 		bool WasRemoved() const { return m_Removed; }
 		NetAuthBytes16 LastRemovalTx() const { return m_LastRemovalTx; }
+		/// The frame the host's removal of this seat took effect at.
+		uint64_t GetRemovalBoundary() const { return m_RemovalBoundary; }
 		/// The link died without an answer. The record is exactly what this case exists for: it stays.
 		void NotifyAmbiguousLoss();
 
@@ -838,6 +907,8 @@ namespace RTE {
 		const NetReconnectClientStats& GetStats() const { return m_Stats; }
 		/// The host's seat roster as this peer last heard it, revision by revision.
 		const NetRosterReplica& GetRosterReplica() const { return m_RosterReplica; }
+		/// Asks the host for the seat roster revision a config names that this peer never heard.
+		void RequestRosterRevision(uint32_t revision);
 
 	private:
 		void SendRequest(NetPayload payload, uint64_t nowMs);
@@ -851,6 +922,7 @@ namespace RTE {
 		std::string m_DisplayName = "Player";
 		std::string m_HostAddress;
 		std::string m_DirectorySessionId;
+		uint64_t m_AcceptedHostSessionId = 0; //!< The hosted session the host's join answer named.
 		NetHash32 m_MatchConfigHash{};
 		bool m_WorldTarget = false;
 		uint64_t (*m_UnixClock)(void*) = nullptr;
@@ -871,7 +943,10 @@ namespace RTE {
 		uint64_t m_RequestSentMs = 0;
 		uint64_t m_RequestOpenedMs = 0;
 		uint32_t m_Retransmits = 0;
+		uint64_t m_ReturnRetryAtMs = 0;   //!< When a return the host put off is asked again; 0 when none waits.
+		uint64_t m_ReturnRetryDelayMs = 0; //!< The last wait, doubled each time up to the roster's longest backoff.
 		NetAuthBytes16 m_TxId{};
+		std::optional<std::pair<uint16_t, NetAuthBytes16>> m_CarriedApplication; //!< An application a lost host left unanswered, for the next host.
 		NetH4TicketRecord m_Record;
 		bool m_HasRecord = false;
 		uint32_t m_Incarnation = 0;
@@ -880,6 +955,7 @@ namespace RTE {
 		bool m_WantsLinkClosed = false;
 		bool m_Removed = false;
 		NetAuthBytes16 m_LastRemovalTx{};
+		uint64_t m_RemovalBoundary = 0;
 		std::string m_Error;
 		std::vector<NetH4Outbound> m_Outbound;
 		NetReconnectClientStats m_Stats;

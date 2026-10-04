@@ -316,6 +316,18 @@ CheckpointCow& CheckpointCow::Get() {
 	return store;
 }
 
+CheckpointCache& CheckpointCow::PartCache(const std::string& part) {
+	std::unique_ptr<CheckpointCache>& cache = m_PartCaches[part];
+	if (!cache) cache = std::make_unique<CheckpointCache>();
+	return *cache;
+}
+
+std::string CheckpointCow::PartCensus() const {
+	size_t pixelBytes = 0;
+	for (const auto& [part, cache]: m_PartCaches) pixelBytes += cache->PixelBytes();
+	return "parts=" + std::to_string(m_PartCaches.size()) + " part_pixel_mb=" + std::to_string(pixelBytes >> 20);
+}
+
 void CheckpointCow::BeginImage() {
 	static const bool armed = [] { ArmLuaCheckpointBarrier(); return true; }();
 	(void)armed;
@@ -1204,6 +1216,15 @@ bool RTE::RunCheckpointImageSelfTest() {
 				fail(row, detail);
 			} else {
 				pass(row, detail);
+			}
+			// A freeze copies into the buffer the snapshot before the last gave back: a fresh one costs a first-touch fault per page.
+			const char* reuse = "a_freeze_reuses_the_copy_buffer_the_last_one_released";
+			const std::string reused = "fresh_after_second=" + std::to_string(probe.freshAfterSecond) + " most_live=" + std::to_string(probe.mostLive) +
+			                           " live_bound=" + std::to_string(probe.liveBound);
+			if (probe.error.empty() && probe.freshAfterSecond == 0 && probe.mostLive <= probe.liveBound && probe.pagesMatch) {
+				pass(reuse, reused);
+			} else {
+				fail(reuse, reused);
 			}
 		}
 

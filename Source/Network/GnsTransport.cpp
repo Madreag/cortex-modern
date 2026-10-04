@@ -1,5 +1,6 @@
 #include "GnsTransport.h"
 #include "DiagnosticLine.h"
+#include "NetIceServers.h"
 #include "SettingsMan.h"
 #include "System.h"
 
@@ -204,7 +205,7 @@ namespace RTE {
 			std::lock_guard<std::mutex> lock(mutex);
 			for (std::string line; std::getline(lines, line);) {
 				if (!line.empty()) {
-					System::PrintDiagnosticLine("[net-gns] " + std::to_string(static_cast<int>(type)) + " " + line);
+					System::PrintDiagnosticLine("[net-gns] " + std::to_string(static_cast<int>(type)) + " " + NetRelayLogins::Scrub(line));
 				}
 			}
 		}
@@ -220,6 +221,10 @@ namespace RTE {
 
 		// Test harness: splits the requested RTT across the send/recv legs of every connection, and adds its jitter.
 		void ApplySimulatedLag() {
+			// A headless harness run's packets carry their send spacing, which plain UDP leaves out, so the receiving end's own
+			// latency-variance histogram measures the jitter its link meets.
+			static const bool s_HarnessRun = [] { const char* headless = std::getenv("CCCP_HEADLESS"); return headless && std::string_view(headless) == "1"; }();
+			if (s_HarnessRun) SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendTimeSincePreviousPacket, 1);
 			if (s_SimulatedLagMs > 0) {
 				SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Send, s_SimulatedLagMs / 2);
 				SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Recv, s_SimulatedLagMs - s_SimulatedLagMs / 2);
@@ -456,6 +461,7 @@ namespace RTE {
 
 		void Stop() {
 			m_RouteLogged.clear(); m_CandidateIdentities.clear(); m_CandidateTypes.clear();
+			m_ConnectionOffers.clear(); m_RouteReceipts.clear(); m_RelayOffer = "none";
 			m_Announced.clear(); m_HeldPackets.clear();
 			m_P2PMode = -1;
 			if (!m_Interface) {
@@ -614,6 +620,9 @@ namespace RTE {
 		}
 
 		mutable std::set<HSteamNetConnection> m_RouteLogged;
+		mutable std::map<HSteamNetConnection, std::string> m_RouteReceipts; //!< Each connection's [net-route] line.
+		std::map<HSteamNetConnection, std::string> m_ConnectionOffers; //!< The relay offer each connection's TURN lists came from.
+		std::string m_RelayOffer = "none"; //!< The offer a connection made or accepted now runs with.
 		std::map<uint32_t, std::string> m_CandidateIdentities;
 		std::map<std::pair<std::string, std::string>, std::string> m_CandidateTypes;
 
@@ -625,7 +634,18 @@ namespace RTE {
 			const bool allowed = GnsTransport::ConnectionPolicyAllowsRoute(m_P2PMode, relayed);
 			if (m_RouteLogged.insert(connection).second) {
 				DiagnosticLine() << "[net-ice] selected candidate=" << CandidateType(info) << " connection=" << connection << std::endl;
-				DiagnosticLine() << "[net-route] RouteAllowed route=" << (relayed ? "relay" : "direct") << " allowed=" << (allowed ? 1 : 0) << " connection=" << connection << std::endl;
+				// The endpoint in use (GNS reports none for a relayed route) and, for a relayed route, the TURN servers this connection
+				// runs with and the relay offer they came from.
+				char address[SteamNetworkingIPAddr::k_cchMaxString]{};
+				info.m_addrRemote.ToString(address, sizeof(address), true);
+				const auto offer = m_ConnectionOffers.find(connection);
+				std::ostringstream line;
+				line << "[net-route] RouteAllowed route=" << (relayed ? "relay" : "direct") << " allowed=" << (allowed ? 1 : 0) << " connection=" << connection
+				     << " remote=" << (info.m_addrRemote.IsIPv6AllZeros() ? std::string("none") : std::string(address));
+				if (relayed) line << " turn=" << ConnectionConfigString(connection, k_ESteamNetworkingConfig_P2P_TURN_ServerList);
+				line << " offer=" << (relayed && offer != m_ConnectionOffers.end() ? offer->second : std::string("none"));
+				m_RouteReceipts[connection] = line.str();
+				DiagnosticLine() << line.str() << std::endl;
 			}
 			return allowed;
 		}
@@ -706,6 +726,7 @@ namespace RTE {
 		}
 
 		void AcceptIncomingConnection(HSteamNetConnection connection) {
+			m_ConnectionOffers[connection] = m_RelayOffer;
 			if (m_Interface->AcceptConnection(connection) != k_EResultOK) {
 				m_Interface->CloseConnection(connection, 0, "accept failed", false);
 				m_PendingEvents.push_back({NetTransportEventType::TransportError, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "GNS AcceptConnection failed"});
@@ -754,6 +775,8 @@ namespace RTE {
 
 		void ForgetConnection(HSteamNetConnection connection) {
 			m_RouteLogged.erase(connection);
+			m_ConnectionOffers.erase(connection);
+			m_RouteReceipts.erase(connection);
 			m_Announced.erase(connection);
 			m_HeldPackets.erase(connection);
 			const auto peerIt = m_PeersByConnection.find(connection);
@@ -821,6 +844,7 @@ namespace RTE {
 			m_IsStarted = true;
 			m_NextPeerId = 1;
 			m_LiveTurnLogin = config.turnServerList + '\n' + config.turnUserList + '\n' + config.turnPassList;
+			m_RelayOffer = config.relayOffer;
 			return true;
 		}
 
@@ -861,6 +885,8 @@ namespace RTE {
 					m_ConnectionsByPeer[1] = m_ServerConnection;
 					s_ConnectionOwners[m_ServerConnection] = this;
 					m_LiveTurnLogin = config.turnServerList + '\n' + config.turnUserList + '\n' + config.turnPassList;
+					m_RelayOffer = config.relayOffer;
+					m_ConnectionOffers[m_ServerConnection] = config.relayOffer;
 					return true;
 				}
 			}
@@ -909,6 +935,7 @@ namespace RTE {
 				result.connectedRoute = (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0 ? "relay" : "direct";
 				result.selectedCandidateType = CandidateType(info);
 			}
+			if (const auto receipt = m_RouteReceipts.find(connectionIt->second); receipt != m_RouteReceipts.end()) result.routeReceipt = receipt->second;
 
 			const std::pair<const char*, ESteamNetworkingConfigValue> numbers[] = {
 				{"P2P_Transport_ICE_Enable", k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable},
@@ -938,6 +965,21 @@ namespace RTE {
 				return {};
 			}
 			return detail.data();
+		}
+
+		NetFakeLinkEffects GetFakeLinkEffects() {
+			NetFakeLinkEffects total;
+			if (!m_Interface) return total;
+			std::vector<char> detail(16 * 1024, '\0');
+			for (const auto& [connection, peerId]: m_PeersByConnection) {
+				(void)peerId;
+				if (m_Interface->GetDetailedConnectionStatus(connection, detail.data(), static_cast<int>(detail.size())) != 0) continue;
+				const NetFakeLinkEffects one = GnsTransport::ParseFakeLinkEffects(detail.data());
+				total.jitterPackets += one.jitterPackets;
+				total.reorderedPackets += one.reorderedPackets;
+				total.duplicatedPackets += one.duplicatedPackets;
+			}
+			return total;
 		}
 
 		std::string GetLocalIdentity() {
@@ -986,6 +1028,7 @@ namespace RTE {
 		void UpdateListenerIceServers(const GnsP2PConfig& config) {
 			GnsTransport::ApplyIceServers(config);
 			UpdateLiveTurnLogins(config);
+			m_RelayOffer = config.relayOffer;
 			if (m_ListenSocket == k_HSteamListenSocket_Invalid) return;
 			auto* utils = SteamNetworkingUtils();
 			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_Int32, &config.iceEnable);
@@ -1003,6 +1046,7 @@ namespace RTE {
 			int renewed = 0;
 			for (const auto& [connection, peerId] : m_PeersByConnection) {
 				(void)peerId;
+				m_ConnectionOffers[connection] = config.relayOffer;
 				renewed += utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_ServerList, k_ESteamNetworkingConfig_Connection, connection, k_ESteamNetworkingConfig_String, config.turnServerList.c_str()) &&
 				           utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_UserList, k_ESteamNetworkingConfig_Connection, connection, k_ESteamNetworkingConfig_String, config.turnUserList.c_str()) &&
 				           utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_PassList, k_ESteamNetworkingConfig_Connection, connection, k_ESteamNetworkingConfig_String, config.turnPassList.c_str());
@@ -1179,6 +1223,7 @@ namespace RTE {
 		bool ReceiveP2PSignal(const void*, int, ISteamNetworkingSignalingRecvContext*) { return false; }
 		GnsPeerConnectionInfo GetPeerConnectionInfo(NetPeerId) { return {}; }
 		std::string GetPeerDetailedStatus(NetPeerId) { return {}; }
+		NetFakeLinkEffects GetFakeLinkEffects() { return {}; }
 		std::string GetLocalIdentity() { return {}; }
 	};
 
@@ -1271,6 +1316,55 @@ namespace RTE {
 		return m_Impl->GetPeerDetailedStatus(peerId);
 	}
 
+	NetFakeLinkEffects GnsTransport::GetFakeLinkEffects() const {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
+		return m_Impl->GetFakeLinkEffects();
+	}
+
+	NetFakeLinkEffects GnsTransport::ParseFakeLinkEffects(const std::string& status) {
+		NetFakeLinkEffects effects;
+		// The connection's own end prints first; the remote host's copy of its counters follows.
+		const size_t local = status.find("Lifetime stats:");
+		if (local == std::string::npos) return effects;
+		const size_t remote = status.find("received from remote host", local);
+		const std::string_view section = std::string_view(status).substr(local, remote == std::string::npos ? std::string::npos : remote - local);
+		// GNS groups thousands with commas.
+		const auto number = [&section](size_t& at) -> int64_t {
+			while (at < section.size() && section[at] == ' ') ++at;
+			int64_t value = 0;
+			for (; at < section.size() && ((section[at] >= '0' && section[at] <= '9') || section[at] == ','); ++at)
+				if (section[at] != ',') value = value * 10 + (section[at] - '0');
+			return value;
+		};
+		const auto counter = [&](std::string_view label) -> int64_t {
+			size_t at = section.find(label);
+			if (at == std::string_view::npos) return 0;
+			at += label.size();
+			return number(at);
+		};
+		effects.reorderedPackets = counter("OutOfOrder:");
+		effects.duplicatedPackets = counter("Duplicate :");
+		// The latency variance histogram's counts follow its header row: under 1 ms, then 1-2, 2-5, 5-10, 10-20 and over 20.
+		if (const size_t histogram = section.find("Latency variance histogram"); histogram != std::string_view::npos) {
+			const size_t header = section.find('\n', histogram);
+			const size_t counts = header == std::string_view::npos ? std::string_view::npos : section.find('\n', header + 1);
+			if (counts != std::string_view::npos) {
+				size_t at = counts + 1;
+				for (int bucket = 0; bucket < 6; ++bucket) {
+					const int64_t value = number(at);
+					if (bucket > 0) effects.jitterPackets += value;
+				}
+			}
+		}
+		return effects;
+	}
+
+	void GnsTransport::GetFakeLinkSettings(int& jitterMs, float& reorderPercent, float& duplicatePercent) {
+		jitterMs = s_SimulatedJitterMs;
+		reorderPercent = s_SimulatedReorderPercent;
+		duplicatePercent = s_SimulatedDuplicatePercent;
+	}
+
 	std::string GnsTransport::GetLocalIdentity() const {
 		return m_Impl->GetLocalIdentity();
 	}
@@ -1306,6 +1400,9 @@ namespace RTE {
 	}
 
 	void GnsTransport::ApplyIceServers(const GnsP2PConfig& config) {
+		// Every relay login reaches the transport through here, so every log line can be scrubbed of it.
+		NetRelayLogins::Remember(config.turnUserList);
+		NetRelayLogins::Remember(config.turnPassList);
 #ifdef CCCP_WITH_GNS
 		if (!SteamNetworkingUtils()) return;
 		SteamNetworkingUtils()->SetGlobalConfigValueString(k_ESteamNetworkingConfig_P2P_STUN_ServerList, config.stunServerList.c_str());

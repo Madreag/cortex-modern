@@ -19,7 +19,12 @@ namespace RTE {
 	class AsyncLineWriter {
 
 	public:
+		/// Past these the writer drops and counts, never waits: a record written every tick must not stall the simulation on a slow disk.
+		static constexpr size_t c_MaxQueuedEntries = 65536;
+		static constexpr size_t c_MaxQueuedBytes = size_t{64} << 20;
+
 		AsyncLineWriter() = default;
+		AsyncLineWriter(size_t maxEntries, size_t maxBytes) : m_MaxEntries(maxEntries), m_MaxBytes(maxBytes) {}
 		~AsyncLineWriter() { Close(); }
 		AsyncLineWriter(const AsyncLineWriter&) = delete;
 		AsyncLineWriter& operator=(const AsyncLineWriter&) = delete;
@@ -48,6 +53,8 @@ namespace RTE {
 		void WriteBlock(std::string text) {
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
+				if (Full(text.size())) return;
+				m_QueuedBytes += text.size();
 				m_Queue.push_back({std::move(text), nullptr});
 			}
 			m_Wake.notify_one();
@@ -57,9 +64,16 @@ namespace RTE {
 		void WriteMade(std::function<std::string()> make) {
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
+				if (Full(0)) return;
 				m_Queue.push_back({std::string(), std::move(make)});
 			}
 			m_Wake.notify_one();
+		}
+
+		/// Entries the full queue dropped, all told.
+		unsigned long long Dropped() {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			return m_DroppedTotal;
 		}
 
 		/// Returns once every line queued before the call is written and flushed.
@@ -84,13 +98,30 @@ namespace RTE {
 		}
 
 	private:
+		/// Whether an entry of these bytes is turned away; once full, the queue drops until the writer takes it. Caller holds m_Mutex.
+		bool Full(size_t bytes) {
+			if (m_Dropped == 0 && m_Queue.size() < m_MaxEntries && m_QueuedBytes + bytes <= m_MaxBytes) return false;
+			++m_Dropped;
+			++m_DroppedTotal;
+			m_DroppedBytes += bytes;
+			return true;
+		}
+
 		void Run() {
 			std::unique_lock<std::mutex> lock(m_Mutex);
 			while (true) {
-				m_Wake.wait(lock, [this] { return m_Stopping || !m_Queue.empty(); });
+				m_Wake.wait(lock, [this] { return m_Stopping || !m_Queue.empty() || m_Dropped != 0; });
 				std::deque<Entry> batch;
 				batch.swap(m_Queue);
 				m_Queued += batch.size();
+				m_QueuedBytes = 0;
+				// The loss is said where it happened: after what was queued before it.
+				if (m_Dropped != 0) {
+					batch.push_back({"[async-writer] dropped " + std::to_string(m_Dropped) + " entries (" + std::to_string(m_DroppedBytes) + " bytes) while the disk fell behind\n", nullptr});
+					--m_Queued;
+					m_Dropped = 0;
+					m_DroppedBytes = 0;
+				}
 				const bool stopping = m_Stopping;
 				lock.unlock();
 				for (const Entry& entry: batch) {
@@ -117,6 +148,12 @@ namespace RTE {
 			std::function<std::string()> make;
 		};
 		std::deque<Entry> m_Queue;
+		size_t m_MaxEntries = c_MaxQueuedEntries;
+		size_t m_MaxBytes = c_MaxQueuedBytes;
+		size_t m_QueuedBytes = 0;
+		unsigned long long m_Dropped = 0; //!< Entries dropped since the writer last took the queue.
+		unsigned long long m_DroppedBytes = 0;
+		unsigned long long m_DroppedTotal = 0;
 		unsigned long long m_Queued = 0; //!< Lines taken off the queue by the writer.
 		unsigned long long m_Written = 0; //!< Lines the writer has flushed.
 		bool m_Stopping = false;

@@ -102,6 +102,9 @@ namespace RTE {
 		/// AssertFunc on the headed dialog/Ignore path leaves AssertFired false; the headless continue path still sets it.
 		static bool RunAssertPolicySelfTest();
 
+		/// Throws a std::bad_alloc nothing catches on a thread of its own, as a worker that runs out of memory does.
+		static void ThrowOnWorkerThread();
+
 		/// Formats function signatures so they're slightly more sane.
 		/// @param funcSig Reference to the function signature to format.
 		static void FormatFunctionSignature(std::string& funcSig);

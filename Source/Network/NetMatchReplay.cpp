@@ -274,10 +274,10 @@ namespace RTE {
 		m_DiagnosticTruncated = false;
 		m_AgreedStart.reset();
 		m_AgreedStartWritten = false;
-		// The synced config rides the lobby codec, so the replayer rebuilds the identical roster.
+		// The synced config rides the lobby codec, so the replayer rebuilds the identical roster; a recording players share never holds a relay login.
 		std::vector<uint8_t> configBytes;
 		NetLobbyError lobbyError;
-		if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{config}}, configBytes, &lobbyError)) {
+		if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{NetMatchConfigUtil::WithoutRelay(config)}}, configBytes, &lobbyError)) {
 			if (error) *error = "could not encode the replay config: " + lobbyError.message;
 			Close();
 			return false;

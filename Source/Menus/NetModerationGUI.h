@@ -192,6 +192,7 @@ namespace RTE {
 		OverlayRect m_SeatsPanelRect; //!< Where the open seats panel sat when the toast band was laid out.
 		WrapAudit m_RosterWrap;   //!< The roster box's last wrap, for the word-boundary check.
 		WrapAudit m_StatusWrap;   //!< The status box's last wrap, for the word-boundary check.
+		WrapAudit m_StatusLayoutWrap; //!< The wrap the kept status layout was drawn with; a frame that draws the kept box reports it.
 		std::string m_StatusProbeLine; //!< Extra status line; empty leaves the box unchanged.
 		bool m_GhostWatchArmed = false;  //!< Whether DrawMatchToasts runs the ghost scan after each draw.
 		int m_GhostWatchHits = 0;        //!< Frames the armed watch saw a stale band on.

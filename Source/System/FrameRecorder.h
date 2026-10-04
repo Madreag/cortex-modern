@@ -11,8 +11,11 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <optional>
 #include <utility>
 #include <vector>
+
+#include "HarnessCost.h"
 
 namespace RTE {
 
@@ -58,6 +61,8 @@ namespace RTE {
 		bool Start(const std::string& directory, int fps, std::size_t queueBound, std::string* error);
 
 		bool Enabled() const { return m_Enabled; }
+		/// The directory this run's frames go to.
+		const std::string& Directory() const { return m_Directory; }
 		int Fps() const { return m_Fps; }
 
 		/// Records an automation observation on the frame index's clock.
@@ -106,6 +111,7 @@ namespace RTE {
 		std::ofstream m_Index;
 		std::ofstream m_DroppedIndex; //!< One row per frame slot the full queue turned away, written by the writer thread.
 		std::ofstream m_Events;
+		std::mutex m_EventsMutex; //!< The event index has one owner at a time: the menu thread and every writer thread log to it.
 
 		long long m_StartedWallMS = 0;
 		long long m_EndedWallMS = 0;
@@ -121,6 +127,7 @@ namespace RTE {
 		std::vector<unsigned char> m_Staging;
 		bool m_StagingHeld = false;
 		std::size_t m_StagingSlot = 0;
+		std::optional<HarnessCost::SimulationSpan> m_ReadbackSpan; //!< The read back of the staged frame, measured until it is queued.
 
 		// The encoder a harness names (CCCP_TEST_RECORD_ENCODER, its codec in CCCP_TEST_RECORD_CODEC); writer thread only.
 		std::string m_EncoderPath;

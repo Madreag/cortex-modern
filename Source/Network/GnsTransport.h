@@ -23,6 +23,7 @@ namespace RTE {
 		int rendezvousLogLevel = 0; //!< k_ESteamNetworkingConfig_LogLevel_P2PRendezvous; 0 keeps the GNS default.
 		std::string localIdentity; //!< Non-empty: ResetIdentity to it first, which closes every GNS connection in the process.
 		int localVirtualPort = -1; //!< The joiner's own virtual port; -1 uses the remote one.
+		std::string relayOffer = "none"; //!< The relay offer the TURN lists came from (its match id and expiry), named on each relayed route.
 	};
 
 	/// A peer connection as GNS reports it: GetConnectionInfo plus the P2P config the connection runs with.
@@ -38,7 +39,15 @@ namespace RTE {
 		uint32_t relayPop = 0;
 		std::string connectedRoute;
 		std::string selectedCandidateType;
+		std::string routeReceipt; //!< The connection's [net-route] line, once its route is chosen.
 		std::vector<std::string> config; //!< "Name=value" of each config value the P2P path sets, read back from the connection.
+	};
+
+	/// What the fake link did to the packets an end received: GNS's own counters on that end.
+	struct NetFakeLinkEffects {
+		int64_t jitterPackets = 0;     ///< Packets that arrived 1 ms or more off their link's steady latency.
+		int64_t reorderedPackets = 0;
+		int64_t duplicatedPackets = 0;
 	};
 
 	class GnsTransport : public INetTransport {
@@ -66,6 +75,12 @@ namespace RTE {
 		bool ReceiveP2PSignal(const void* blob, int size, ISteamNetworkingSignalingRecvContext* context);
 		GnsPeerConnectionInfo GetPeerConnectionInfo(NetPeerId peerId) const;
 		std::string GetPeerDetailedStatus(NetPeerId peerId) const;
+		/// The fake link's effects on what this transport's connections received, summed.
+		NetFakeLinkEffects GetFakeLinkEffects() const;
+		/// One connection's effects, read from its detailed status: its own end's lifetime counters, not the remote host's.
+		static NetFakeLinkEffects ParseFakeLinkEffects(const std::string& detailedStatus);
+		/// The fake link's requested jitter, reorder and duplicate settings; zeros while it is off.
+		static void GetFakeLinkSettings(int& jitterMs, float& reorderPercent, float& duplicatePercent);
 		/// The GNS identity of this process; every transport in it shares one.
 		std::string GetLocalIdentity() const;
 		/// The same identity read without a transport of its own; empty while GNS is not running in this process.

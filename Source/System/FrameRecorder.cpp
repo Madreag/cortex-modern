@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -19,6 +20,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#else
+#include <time.h>
 #endif
 
 namespace RTE {
@@ -63,6 +66,8 @@ namespace RTE {
 			m_Process = process.hProcess;
 			return true;
 #else
+			// An encoder that stops reading fails the next write instead of ending the process.
+			std::signal(SIGPIPE, SIG_IGN);
 			m_Pipe = popen((command + " 2>\"" + logPath + "\"").c_str(), "w");
 			if (!m_Pipe) {
 				error = "popen failed";
@@ -127,6 +132,21 @@ namespace RTE {
 	};
 
 	namespace {
+		/// The processor time the calling thread has used, in nanoseconds: what its work took from the machine, without the time
+		/// it spent blocked on a pipe or a disk.
+		int64_t ThreadCpuNanoseconds() {
+#ifdef _WIN32
+			FILETIME created, exited, kernel, user;
+			if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) return 0;
+			const auto ticks = [](const FILETIME& time) { return (static_cast<int64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime; };
+			return (ticks(kernel) + ticks(user)) * 100;
+#else
+			timespec now{};
+			if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now) != 0) return 0;
+			return static_cast<int64_t>(now.tv_sec) * 1000000000 + now.tv_nsec;
+#endif
+		}
+
 		std::string FrameLeaf(std::size_t index) {
 			std::ostringstream name;
 			name << "frame-" << std::setw(6) << std::setfill('0') << index << ".png";
@@ -218,7 +238,9 @@ namespace RTE {
 
 	void FrameRecorder::RecordEvent(const std::string& message) {
 		if (!m_Enabled) return;
-		m_Events << nlohmann::json({{"wall_ms", SteadyNowMS()}, {"message", message}}).dump() << '\n' << std::flush;
+		const std::string row = nlohmann::json({{"wall_ms", SteadyNowMS()}, {"message", message}}).dump();
+		std::lock_guard<std::mutex> lock(m_EventsMutex);
+		if (m_Events.is_open()) m_Events << row << '\n' << std::flush;
 	}
 
 	// Called with the lock held; the pacer is the render thread's alone.
@@ -256,6 +278,8 @@ namespace RTE {
 		}
 		m_StagingSlot = m_Admitted - 1;
 		lock.unlock();
+		// From here to EndFrame the frame is read back on this thread: the recorder's cost to the frame it runs in.
+		m_ReadbackSpan.emplace();
 		m_Staging.resize(bytes);
 		m_StagingHeld = true;
 		return m_Staging.data();
@@ -264,6 +288,10 @@ namespace RTE {
 	void FrameRecorder::EndFrame(const FrameMeta& meta) {
 		if (!m_StagingHeld) return;
 		m_StagingHeld = false;
+		if (m_ReadbackSpan) {
+			HarnessCost::Charge(HarnessCost::Recorder, m_ReadbackSpan->Stop());
+			m_ReadbackSpan.reset();
+		}
 		QueuedFrame frame;
 		frame.pixels = std::move(m_Staging);
 		frame.meta = meta;
@@ -292,7 +320,10 @@ namespace RTE {
 				m_Queue.pop_front();
 			}
 			WritePendingDrops();
+			// The writer's processor time is the recorder's cost: a write blocked on the encoder's pipe or the disk takes nothing from a frame.
+			const int64_t cpuBefore = ThreadCpuNanoseconds();
 			std::string row = m_EncoderPath.empty() ? WriteFrame(frame) : EncodeFrame(frame);
+			HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - cpuBefore);
 			frame.pixels.clear();
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
@@ -342,7 +373,7 @@ namespace RTE {
 			const std::string preset = m_EncoderCodec.find("nvenc") != std::string::npos ? "-preset p1 -cq 23" : "-preset ultrafast -crf 20";
 			const std::string command = "\"" + m_EncoderPath + "\" -hide_banner -loglevel warning -y -f rawvideo -pix_fmt rgb24 -s " +
 			    std::to_string(m_EncodedWidth) + "x" + std::to_string(m_EncodedHeight) + " -framerate " + std::to_string(m_Fps) +
-			    " -i - -vf pad=ceil(iw/2)*2:ceil(ih/2)*2 -c:v " + m_EncoderCodec + " " + preset + " -pix_fmt yuv420p \"" +
+			    " -i - -vf \"pad=ceil(iw/2)*2:ceil(ih/2)*2\" -c:v " + m_EncoderCodec + " " + preset + " -pix_fmt yuv420p \"" +
 			    (std::filesystem::path(m_Directory) / "capture.mp4").string() + "\"";
 			auto encoder = std::make_unique<EncoderPipe>();
 			if (encoder->Open(command, (std::filesystem::path(m_Directory) / "encoder.log").string(), m_EncoderError)) m_Encoder = std::move(encoder);
@@ -435,7 +466,10 @@ namespace RTE {
 		WriteManifest();
 		m_Index.close();
 		m_DroppedIndex.close();
-		m_Events.close();
+		{
+			std::lock_guard<std::mutex> lock(m_EventsMutex);
+			m_Events.close();
+		}
 		m_Enabled = false;
 	}
 

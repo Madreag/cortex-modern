@@ -96,6 +96,20 @@ class FieldError(Exception):
         return {"error": self.error, "field": self.field}
 
 
+class Superseded(Exception):
+    """A host handover generation the row has already passed: the match went on under a later host."""
+
+    def __init__(self, code: str, generation: int) -> None:
+        super().__init__(code)
+        self.body = {"error": code, "migration_gen": generation}
+
+
+def optional_generation(data: dict[str, Any]) -> Optional[int]:
+    if "migration_gen" not in data:
+        return None
+    return require_int(data, "migration_gen", 0, 10**9)
+
+
 class TurnError(Exception):
     def __init__(self, status: int, code: str, retry_after_s: int = 0) -> None:
         super().__init__(code)
@@ -432,6 +446,7 @@ class Session:
         self.ice_offer: Optional[dict[str, Any]] = None
         self.ice_generation = 0
         self.ice_refused = False  # the host's last mint was refused by its relay backend
+        self.migration_gen = 0  # the host handover generation that holds the row
 
     def age_s(self, now: float) -> int:
         return max(0, int(now - self.created_at))
@@ -461,7 +476,7 @@ class SessionDirectory:
         self._lock = threading.RLock()
         self._signals_changed = threading.Condition(self._lock)
         self._sessions: dict[str, Session] = {}
-        self._resume_tokens: dict[str, tuple[str, float]] = {}
+        self._resume_tokens: dict[str, tuple[str, float, int]] = {}
         self.limiter = DualRateLimiter()
         self.turn_provider = TurnCredentialProvider(turn_config)
         self.turn_limiter = RateLimiter(TURN_REQUESTS_PER_MIN, TURN_REQUESTS_PER_MIN)
@@ -504,9 +519,9 @@ class SessionDirectory:
             ]
             for sid in dead:
                 sess = self._sessions[sid]
-                self._resume_tokens[sid] = (sess.token, sess.last_beat + self.expiry_s + RESUME_GRACE_S)
+                self._resume_tokens[sid] = (sess.token, sess.last_beat + self.expiry_s + RESUME_GRACE_S, sess.migration_gen)
                 del self._sessions[sid]
-            for sid, (_, deadline) in list(self._resume_tokens.items()):
+            for sid, (_, deadline, _) in list(self._resume_tokens.items()):
                 if now >= deadline:
                     del self._resume_tokens[sid]
             while len(self._resume_tokens) > MAX_ROWS:
@@ -552,6 +567,8 @@ class SessionDirectory:
             if "seats_held" in data:
                 fields["seats_held"] = require_int(data, "seats_held", 0, 10**9)
             resume = data.get("resume_session_id")
+            claimed = optional_generation(data)
+            generation = claimed or 0
             if resume is not None:
                 session_id = require_str(data, "resume_session_id")
                 try:
@@ -566,6 +583,15 @@ class SessionDirectory:
                 first_world = world and not token and presented in (None, "")
                 if not first_world and (not token or not isinstance(presented, str) or not tokens_equal(presented, token)):
                     raise PermissionError("forbidden")
+                # One host per handover generation: the first successor's claim takes the row, any later claim at that generation
+                # or below is told the match already went on; a resume that names no generation is a host reopening its own.
+                held = previous.migration_gen if previous else retained[2] if retained else 0
+                if claimed is not None and claimed <= held:
+                    raise Superseded("already_migrated", held)
+                if claimed is None and held > 0:
+                    raise Superseded("already_migrated", held)
+                if claimed is None:
+                    generation = held
                 if world:
                     token = secrets.token_urlsafe(24)
             else:
@@ -575,6 +601,7 @@ class SessionDirectory:
                 token = secrets.token_urlsafe(24)
             sess = Session(session_id, token, fields, observed_ip, now)
             sess.install_key = install_key
+            sess.migration_gen = generation
             if resume is not None:
                 if not first_world:
                     sess.state = "running"
@@ -674,12 +701,16 @@ class SessionDirectory:
             if not isinstance(value, bool):
                 raise FieldError("invalid_field", "listed")
             listed = value
+        generation = optional_generation(data)
         with self._lock:
             sess = self._get(session_id, now)
             if sess is None:
                 raise KeyError("not_found")
             if not tokens_equal(token, sess.token):
                 raise PermissionError("forbidden")
+            # A host the match left behind no longer keeps the row its successor holds.
+            if generation is not None and generation < sess.migration_gen:
+                raise Superseded("superseded", sess.migration_gen)
             if valid_install_key(install_key):
                 sess.install_key = install_key
             sess.fields["peer_count"] = peer_count
@@ -696,20 +727,28 @@ class SessionDirectory:
                 sess.listed = listed
             sess.last_beat = now
             listed_now = sess.listed
-        return {
+            held = sess.migration_gen
+        answer: dict[str, Any] = {
             "expires_in_s": as_json_int(self.expiry_s),
             "heartbeat_s": as_json_int(self.heartbeat_s),
             "listed": listed_now,
         }
+        # Only a host that names its generation is told the row's: an older build reads the answer it always did.
+        if generation is not None:
+            answer["migration_gen"] = held
+        return answer
 
     def delete(self, session_id: str, data: dict[str, Any], now: float) -> dict[str, Any]:
         token = require_str(data, "token")
+        generation = optional_generation(data)
         with self._lock:
             sess = self._get(session_id, now)
             if sess is None:
                 raise KeyError("not_found")
             if not tokens_equal(token, sess.token):
                 raise PermissionError("forbidden")
+            if generation is not None and generation < sess.migration_gen:
+                raise Superseded("superseded", sess.migration_gen)
             del self._sessions[session_id]
             self._resume_tokens.pop(session_id, None)
             self._signals_changed.notify_all()
@@ -1017,6 +1056,8 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
         def _handle_error(self, exc: BaseException) -> None:
             if isinstance(exc, TurnError):
                 self._send(exc.status, exc.body)
+            elif isinstance(exc, Superseded):
+                self._send(409, exc.body)
             elif isinstance(exc, FieldError):
                 self._send(400, exc.body())
             elif isinstance(exc, PermissionError):

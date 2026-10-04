@@ -1832,7 +1832,8 @@ namespace {
 		return FMOD_OK;
 	}
 
-	FMOD::Sound* MakeHeldPendingSound(FMOD::System* system) {
+	/// @param why Set to the creation result and the open state when no held sound could be made.
+	FMOD::Sound* MakeHeldPendingSound(FMOD::System* system, std::string* why = nullptr) {
 		if (!system) return nullptr;
 		FMOD::Sound* sound = nullptr;
 		FMOD_CREATESOUNDEXINFO info{};
@@ -1842,9 +1843,15 @@ namespace {
 		info.fileuserasyncread = HeldPendingAsyncRead;
 		info.fileuserasynccancel = HeldPendingAsyncCancel;
 		info.ignoresetfilesystem = 1;
-		if (system->createSound("held-pending", FMOD_CREATESAMPLE | FMOD_3D | FMOD_NONBLOCKING, &info, &sound) != FMOD_OK || !sound) return nullptr;
+		const FMOD_RESULT created = system->createSound("held-pending", FMOD_CREATESAMPLE | FMOD_3D | FMOD_NONBLOCKING, &info, &sound);
+		if (created != FMOD_OK || !sound) {
+			if (why) *why = std::string("createSound: ") + FMOD_ErrorString(created);
+			return nullptr;
+		}
 		FMOD_OPENSTATE open = FMOD_OPENSTATE_ERROR;
-		if (sound->getOpenState(&open, nullptr, nullptr, nullptr) != FMOD_OK || open == FMOD_OPENSTATE_READY || open == FMOD_OPENSTATE_PLAYING || open == FMOD_OPENSTATE_ERROR) {
+		const FMOD_RESULT read = sound->getOpenState(&open, nullptr, nullptr, nullptr);
+		if (read != FMOD_OK || open == FMOD_OPENSTATE_READY || open == FMOD_OPENSTATE_PLAYING || open == FMOD_OPENSTATE_ERROR) {
+			if (why) *why = std::string("getOpenState: ") + FMOD_ErrorString(read) + " open_state=" + std::to_string(static_cast<int>(open));
 			sound->release();
 			return nullptr;
 		}
@@ -3239,8 +3246,9 @@ bool AudioMan::RunCheckpointSelfTest() {
 			if (!loadingOwner->Play()) throw std::runtime_error("loading-sample voice did not play");
 			const int loadingId = *loadingOwner->GetPlayingChannels()->begin();
 			const std::string path = m_PlayingVoices.at(loadingId).soundPath;
-			FMOD::Sound* loading = MakeHeldPendingSound(m_AudioSystem);
-			if (!loading) throw std::runtime_error("could not hold a non-ready private sound");
+			std::string heldWhy;
+			FMOD::Sound* loading = MakeHeldPendingSound(m_AudioSystem, &heldWhy);
+			if (!loading) throw std::runtime_error("could not hold a non-ready private sound: " + heldWhy);
 			FMOD::Sound* ready = nullptr;
 			const auto cached = ContentFile::s_LoadedSamples.find(path);
 			if (cached != ContentFile::s_LoadedSamples.end()) ready = cached->second;
@@ -3259,8 +3267,8 @@ bool AudioMan::RunCheckpointSelfTest() {
 			const std::string beforeLoading = SaveCheckpoint();
 			const auto holdPending = [&]() {
 				if (SampleReadyForPlayback(loading)) {
-					FMOD::Sound* again = MakeHeldPendingSound(m_AudioSystem);
-					if (!again) throw std::runtime_error("could not hold a non-ready private sound through load");
+					FMOD::Sound* again = MakeHeldPendingSound(m_AudioSystem, &heldWhy);
+					if (!again) throw std::runtime_error("could not hold a non-ready private sound through load: " + heldWhy);
 					loading->release();
 					loading = again;
 				}
@@ -3389,8 +3397,9 @@ bool AudioMan::RunCheckpointSelfTest() {
 			if (!pendingOwner->Play()) throw std::runtime_error("match-start pending voice did not play");
 			const int pendingId = *pendingOwner->GetPlayingChannels()->begin();
 			const std::string pendingPath = m_PlayingVoices.at(pendingId).soundPath;
-			FMOD::Sound* pending = MakeHeldPendingSound(m_AudioSystem);
-			if (!pending) throw std::runtime_error("could not hold a non-ready sample for match-start clear");
+			std::string heldWhy;
+			FMOD::Sound* pending = MakeHeldPendingSound(m_AudioSystem, &heldWhy);
+			if (!pending) throw std::runtime_error("could not hold a non-ready sample for match-start clear: " + heldWhy);
 			FMOD::Sound* ready = nullptr;
 			const auto cached = ContentFile::s_LoadedSamples.find(pendingPath);
 			if (cached != ContentFile::s_LoadedSamples.end()) ready = cached->second;

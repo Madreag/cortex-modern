@@ -142,6 +142,8 @@ namespace RTE {
 		/// Writes everything standard output has queued so far before returning, for a caller about to end the process without its exit.
 		/// Returns at once, writing nothing, when another thread is writing or queueing a line right now.
 		static void FlushConsole();
+		/// The console queue's bound, its overflow report, a fault's drain past a stuck writer and the exit's bounded wait.
+		static bool RunConsoleQueueSelfTest(std::string* error);
 
 		/// The console echo of an abort or assert, with the same fault-handler discipline.
 		/// @param stringToPrint The message, printed exactly as PrintToCLI prints it.

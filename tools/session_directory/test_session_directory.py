@@ -437,6 +437,40 @@ class DirectoryTests(unittest.TestCase):
                 resume_session_id=created["session_id"], resume_token=created["token"],
             ), "192.0.2.2", 23)
 
+    def test_one_host_claims_each_handover_generation(self) -> None:
+        directory = session_directory.SessionDirectory(15, 5)
+        created = directory.register(sample_register(), "192.0.2.1", 0)
+        sid, token = created["session_id"], created["token"]
+        first = directory.register(sample_register(
+            resume_session_id=sid, resume_token=token, migration_gen=1, listen_addrs=["192.0.2.2"], listen_port=45793,
+        ), "192.0.2.2", 1)
+        self.assertEqual(first["session_id"], sid, "the first successor's claim did not take the row")
+        with self.assertRaises(session_directory.Superseded) as again:
+            directory.register(sample_register(
+                resume_session_id=sid, resume_token=token, migration_gen=1, listen_addrs=["192.0.2.3"], listen_port=45794,
+            ), "192.0.2.3", 2)
+        self.assertEqual(again.exception.body, {"error": "already_migrated", "migration_gen": 1})
+        with self.assertRaises(session_directory.Superseded):
+            directory.register(sample_register(resume_session_id=sid, resume_token=token, listen_addrs=["192.0.2.4"], listen_port=45795), "192.0.2.4", 3)
+        row = directory._sessions[sid]
+        self.assertEqual((row.fields["listen_addrs"], row.migration_gen), (["192.0.2.2"], 1), "a later claim moved the row off the first successor")
+        # The host the match left behind is refused its heartbeat and its delete; the successor keeps both.
+        beat = {"token": token, "peer_count": 2, "seats_free": 0}
+        with self.assertRaises(session_directory.Superseded) as stale:
+            directory.heartbeat(sid, {**beat, "migration_gen": 0}, 4)
+        self.assertEqual(stale.exception.body, {"error": "superseded", "migration_gen": 1})
+        with self.assertRaises(session_directory.Superseded):
+            directory.delete(sid, {"token": token, "migration_gen": 0}, 5)
+        self.assertEqual(directory.heartbeat(sid, {**beat, "migration_gen": 1}, 6)["migration_gen"], 1)
+        # A generation retained past the lease still decides the next claim.
+        directory.prune(30)
+        with self.assertRaises(session_directory.Superseded):
+            directory.register(sample_register(resume_session_id=sid, resume_token=token, migration_gen=1), "192.0.2.5", 31)
+        second = directory.register(sample_register(resume_session_id=sid, resume_token=token, migration_gen=2), "192.0.2.6", 32)
+        self.assertEqual((second["session_id"], directory._sessions[sid].migration_gen), (sid, 2))
+        directory.delete(sid, {"token": token, "migration_gen": 2}, 33)
+        self.assertNotIn(sid, directory._sessions)
+
     def test_live_resume_wrong_token_leaves_the_row_unchanged(self) -> None:
         self.start(port=45810)
         status, created = self.register()

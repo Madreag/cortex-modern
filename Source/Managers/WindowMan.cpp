@@ -10,6 +10,7 @@
 #include "PostProcessMan.h"
 #include "RenderTarget.h"
 #include "GLResourceMan.h"
+#include "System.h"
 
 #include "GLCheck.h"
 #include <SDL3/SDL.h>
@@ -236,6 +237,9 @@ void WindowMan::InitializeOpenGL() {
 	if (!gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress)) {
 		RTEAbort("Failed to load GL functions!");
 	}
+	// Which GPU and driver this run renders with, so every machine's log names its own.
+	const auto glText = [](GLenum name) { const auto* text = reinterpret_cast<const char*>(glGetString(name)); return std::string(text ? text : "unknown"); };
+	System::PrintDiagnosticLine("[gpu] renderer=" + glText(GL_RENDERER) + " vendor=" + glText(GL_VENDOR) + " version=" + glText(GL_VERSION));
 
 	SDL_GL_SetSwapInterval(m_EnableVSync ? 1 : 0);
 

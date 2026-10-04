@@ -34,10 +34,15 @@ namespace RTE::NetPlayerPresentation {
 	/// Whether this session has seen the peer hold its seat.
 	inline bool Seated(uint8_t peer) { return seated.contains(peer); }
 
-	/// The departure every peer agrees on: the seat's own presence row, or the committed leave frame.
+	/// Whether the host opened the seat: its player no longer holds it.
+	inline bool Opened(uint8_t peer) {
+		const auto view = g_NetMatchService.GetSeatView(peer);
+		return view && view->seat.owner == 0;
+	}
+
+	/// The departure every peer agrees on: the seat the host opened, or the committed leave frame.
 	inline bool Departed(uint8_t peer) {
-		return g_NetMatchService.GetSeatPresence().StateOf(peer) == NetSeatPresenceState::Left ||
-		    (Seated(peer) && ScenarioRunner::IsLockstepPeerGone(peer, ScenarioRunner::GetLockstepCompletedFrame()));
+		return Opened(peer) || (Seated(peer) && ScenarioRunner::IsLockstepPeerGone(peer, ScenarioRunner::GetLockstepCompletedFrame()));
 	}
 
 	inline std::string Name(uint8_t peer, const std::string& fallback) {
@@ -49,22 +54,22 @@ namespace RTE::NetPlayerPresentation {
 
 	inline std::string Name(const NetLobbyMember& member) { return Name(member.peerId, member.displayName); }
 
-	inline std::string State(uint8_t peer, bool aiHeld, bool dropped, bool reclaiming) {
+	inline std::string State(uint8_t peer, bool aiHeld, bool dropped, bool reclaiming, bool joining = false) {
 		const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
-		const bool released = ScenarioRunner::IsLockstepSeatReleased(peer) || g_NetMatchService.GetSeatPresence().StateOf(peer) == NetSeatPresenceState::Left;
+		const bool released = ScenarioRunner::IsLockstepSeatReleased(peer) || Opened(peer);
 		// A seat the AI plays for its player is held, however its player went; only the host's release makes it Left.
 		const bool held = !released && (aiHeld || ScenarioRunner::IsLockstepSeatUnderAI(peer, frame));
 		const bool left = !held && Departed(peer);
 		const bool ai = held || (left && (ScenarioRunner::IsLockstepSeatUnderAI(peer, frame) || (Seated(peer) && ScenarioRunner::IsLockstepPeerGone(peer, frame))));
 		if (left) return ai ? "Left - AI in control" : "Left";
-		if (ai) return reclaiming ? "Held - AI in control - rejoining" : "Held - AI in control";
-		if (reclaiming) return "Rejoining";
+		if (ai) return reclaiming ? (joining ? "Held - AI in control - joining" : "Held - AI in control - rejoining") : "Held - AI in control";
+		if (reclaiming) return joining ? "Joining" : "Rejoining";
 		if (dropped) return "Disconnected";
 		return "Connected";
 	}
 
 	inline std::string State(const NetLobbyMember& member) {
-		return State(member.peerId, member.aiHeld, member.dropped, member.reclaiming);
+		return State(member.peerId, member.aiHeld, member.dropped, member.reclaiming, member.joining);
 	}
 
 	inline std::string Row(const NetLobbyMember& member) {
