@@ -34,7 +34,6 @@ TOOLS = Path(__file__).resolve().parent
 MODULE = "VoidWanderers.rte"
 PRESET = "Void Wanderers"
 RECORDED_DIGEST = "d1220ef2b4ac541ab5950ee5b223f9f995c0737e3be7b8196088e8b01cd18c2a"  # the manifest digest of the user's copy
-DEFAULT_SOURCE = Path("C:/Users/egerm/Downloads/voidwanderersrte-1ign/VoidWanderers.rte")
 TICKS = 600
 # The paired e2e scenario's forbidden lines (tools/e2e/mod-void-wanderers.json) plus the engine's own assert text.
 FORBIDDEN = re.compile(r"^ERROR:|RTE Aborted|Assertion failed|RTE Assert", re.M)
@@ -104,8 +103,10 @@ def compare_manifests(repo: Path, source: Path | None, out: Path) -> dict:
         if only_installed or only_source:
             problems.append(f"installed and source differ: {len(only_installed)} line(s) only installed, "
                             f"{len(only_source)} only in the source; first {(only_installed or only_source)[0]}")
+    elif source:
+        problems.append(f"the named source {source} is not an installed module on {os.environ.get('COMPUTERNAME') or 'this box'}")
     else:
-        result["source"] = f"absent: {source}"
+        result["source"] = "none named: the recorded digest is the proof"
     result.update({"pass": not problems, "error": "; ".join(problems)})
     return result
 
@@ -269,7 +270,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path)
     parser.add_argument("--port", type=int, default=43620)
     parser.add_argument("--timeout", type=float, default=900)
-    parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
+    # The recorded digest proves the installed copy on every box; a source, when named, is compared line for line too.
+    parser.add_argument("--source", type=Path, help="a downloaded copy of the module to compare with the installed one")
     parser.add_argument("--parts", default="sp,mp", help="the scenarios to run, comma-separated; the manifests always run")
     parser.add_argument("--self-test", action="store_true")
     options = parser.parse_args(argv)
