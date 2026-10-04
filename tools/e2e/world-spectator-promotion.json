@@ -3,7 +3,7 @@
   "name": "world-spectator-promotion",
   "driver": "tools/acceptance_spectator_tasks.py",
   "title": "A slow spectator watches a three-seat world and takes a host-released seat",
-  "port_base": 49320,
+  "port_base": 49401,
   "size": "640x360",
   "timeout_s": 600,
   "acceptance_row": "spectator",
@@ -28,7 +28,8 @@
       "env": {
         "CC_TEST_WORLD_MAX_SPECTATORS": "1",
         "CC_TEST_CROSS_INSTANCE": "host",
-        "CC_TEST_CROSS_RUN": "world-spectator-promotion"
+        "CC_TEST_CROSS_RUN": "world-spectator-promotion",
+        "CC_TEST_CROSS_RECORDS": "{OUT}/host-events.jsonl"
       },
       "settings": {
         "NetworkDisplayName": "Host",
@@ -129,7 +130,8 @@
         "CCCP_TEST_SIM_COST_FROM_TICK": "6000",
         "CCCP_TEST_SIM_COST_UNTIL_TICK": "6060",
         "CC_TEST_CROSS_INSTANCE": "spectator",
-        "CC_TEST_CROSS_RUN": "world-spectator-promotion"
+        "CC_TEST_CROSS_RUN": "world-spectator-promotion",
+        "CC_TEST_CROSS_RECORDS": "{OUT}/spectator-events.jsonl"
       },
       "settings": {
         "NetworkDisplayName": "Spectator",
