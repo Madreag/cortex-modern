@@ -1,4 +1,6 @@
 """Native foreign-workload checks must precede every owned engine launch."""
+from contextlib import redirect_stdout
+import io
 import json
 from pathlib import Path
 import unittest
@@ -15,9 +17,11 @@ class NativeAdmission(unittest.TestCase):
                 patch.object(native.platform,'node',return_value='Erol-Mac'), \
                 patch.object(native,'assert_box_guard'), patch.object(native,'write_json'), \
                 patch.object(native,'box_load',return_value=[dict(ProcessId=99,Name='CortexCommand')]), \
-                patch.object(native,'read_capabilities',side_effect=RuntimeError('capability reached')) as caps:
+                patch.object(native,'read_capabilities',side_effect=RuntimeError('capability reached')) as caps, \
+                redirect_stdout(io.StringIO()) as printed:
             self.assertEqual(native.run_payload('/virtual/payload.json'),1)
         caps.assert_not_called()
+        self.assertIn('under this row reservation: CortexCommand pid 99', printed.getvalue())
 
     def test_foreign_workload_during_preparation_refuses_before_game_start(self):
         spec = dict(peer='mac', role='host', own='/virtual/mac/incarnation-0', acceptance_row='mod-match',
@@ -32,9 +36,10 @@ class NativeAdmission(unittest.TestCase):
                 patch.object(native,'wait_for_payload_release'), \
                 patch.object(native,'prepare_instance',return_value=run), \
                 patch.object(native.acceptance_cross,'restore_activity'), \
-                patch.object(native.acceptance_cross,'retain_native_screens'):
+                patch.object(native.acceptance_cross,'retain_native_screens'), redirect_stdout(io.StringIO()) as printed:
             self.assertEqual(native.run_payload('/virtual/payload.json'),1)
         run.start.assert_not_called()
+        self.assertIn('under this row reservation: CortexCommand pid 99', printed.getvalue())
         run.close.assert_called()
 
 

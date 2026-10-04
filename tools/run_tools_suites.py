@@ -9,11 +9,14 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
+from inventory_location import inventory_dir
+
 # The inventory tools live beside the lead's tools, outside the repository; a box without them reports N/A.
-INVENTORY = Path(os.environ.get('CC_INVENTORY_DIR') or "D:/Projects/reviews/takeover-20260909/grok-workers/lead-tools/inventory")
+INVENTORY = inventory_dir()
 SUITES = (
     ("runner-firewall", ["test_win32_runner_firewall.py"]),
     ("relay-gate", ["relay_gate_test.py"]),
@@ -71,13 +74,30 @@ SUITES = (
 WINDOWS_ONLY = {"runner-feel-marker", "runner-limits", "feel-engine-placement", "cross-driver", "acceptance-rows", "world-rows"}
 
 
-def run(repo: Path, name: str, argv: list[str], timeout: float) -> tuple[str, int, str]:
+def suites_for(inventory: Path) -> tuple:
+    """The suite table with its inventory suites read from another copy of the inventory."""
+    prefixes = (str(INVENTORY) + os.sep, str(INVENTORY) + "/")
+    return tuple((name, [str(inventory / Path(argv[0]).name), *argv[1:]] if argv[0].startswith(prefixes) else argv)
+                 for name, argv in SUITES)
+
+
+def run(repo: Path, name: str, argv: list[str], timeout: float, inventory: Path = INVENTORY) -> tuple[str, int, str, dict]:
     command = [sys.executable, *argv] if argv[0] == '-m' else [sys.executable, str(repo / "tools" / argv[0]), *argv[1:]]
+    # Every suite reads the same inventory copy this run scores.
+    env = dict(os.environ, CC_INVENTORY_DIR=str(inventory))
     try:
-        done = subprocess.run(command, cwd=str(repo / "tools"), capture_output=True, text=True, timeout=timeout)
+        done = subprocess.run(command, cwd=str(repo / "tools"), capture_output=True, text=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
-        return name, 124, f"timed out after {timeout}s"
-    return name, done.returncode, (done.stdout + done.stderr)[-2000:]
+        return name, 124, f"timed out after {timeout}s", {}
+    output = done.stdout + done.stderr
+    return name, done.returncode, output[-2000:], test_counts(output)
+
+
+def test_counts(output: str) -> dict:
+    """unittest's own totals, so two boxes' verdicts compare test for test, skips included."""
+    ran = [int(value) for value in re.findall(r"^Ran (\d+) tests? in ", output, re.M)]
+    skipped = [int(value) for value in re.findall(r"^(?:OK|FAILED) \(.*?skipped=(\d+)", output, re.M)]
+    return dict(tests=sum(ran), skipped=sum(skipped)) if ran else {}
 
 
 def main() -> int:
@@ -86,10 +106,12 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--only", action="append", default=[], help="run just these suite names")
     parser.add_argument('--out', type=Path, help='write the collection verdict JSON and its log')
+    parser.add_argument('--inventory', type=Path, help="the lead's inventory copy (default: CC_INVENTORY_DIR, else the lead's own)")
     args = parser.parse_args()
+    inventory = args.inventory.resolve() if args.inventory else INVENTORY
     worst = 0
     results, logs, inputs = [], [], [Path(__file__)]
-    for name, argv in SUITES:
+    for name, argv in (suites_for(inventory) if args.inventory else SUITES):
         if args.only and name not in args.only:
             continue
         script = Path(argv[0])
@@ -102,10 +124,10 @@ def main() -> int:
             print(line); logs.append(line)
             results.append(dict(name=name, status='NOT APPLICABLE', reason=line))
             continue
-        name, code, output = run(args.repo.resolve(), name, argv, args.timeout)
+        name, code, output, counts = run(args.repo.resolve(), name, argv, args.timeout, inventory)
         line = f"[tools-suites] {'PASS' if code == 0 else 'FAIL'} {name} exit={code}"
         print(line); logs.extend([line, output])
-        results.append(dict(name=name, status='PASS' if code == 0 else 'FAIL', exit_code=code))
+        results.append(dict(name=name, status='PASS' if code == 0 else 'FAIL', exit_code=code, **counts))
         if code != 0:
             print(output)
             worst = code

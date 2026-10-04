@@ -617,6 +617,23 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(row["peer_count"], 2)
         self.assertEqual(row["seats_free"], 1)
 
+    def test_a_refusal_reaches_a_client_whose_body_arrives_late(self) -> None:
+        # A loaded box sends the headers and the body apart; the install-key gate answers between them. Closing over the
+        # unread body reset the connection and the client lost the answer (WinError 10053 on the Z13).
+        self.start()
+        body = json.dumps(dict(sample_register(), padding="x" * 2000)).encode("utf-8")
+        head = (f"POST /v1/sessions HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+                f"X-Install-Key: short\r\nContent-Length: {len(body)}\r\n\r\n").encode("ascii")
+        for attempt in range(3):
+            with self.subTest(attempt=attempt), socket.create_connection(("127.0.0.1", self.port), timeout=5) as sock:
+                sock.sendall(head)
+                time.sleep(0.2)
+                sock.sendall(body)
+                time.sleep(0.2)
+                reply = sock.recv(65536)
+                self.assertTrue(reply.startswith(b"HTTP/1.1 400 "), reply[:80])
+                self.assertIn(b'"invalid_install_key"', reply)
+
     def test_wrong_install_key_format(self) -> None:
         self.start()
         status, err = self.register(key="short")

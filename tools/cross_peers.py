@@ -371,20 +371,55 @@ def scratch_bytes(root):
     return total
 
 
+def own_tree(rows, root=None):
+    """The pids this process started, at any depth (a payload's engines, an exiting engine of a finished peer): every link
+    is checked by creation time, so a pid reused after its first owner exited never makes a stranger ours."""
+    root = os.getpid() if root is None else root
+    by_pid = {row['ProcessId']: row for row in rows}
+    own = set()
+    for row in rows:
+        chain, current = [], row
+        while current is not None and current['ProcessId'] not in own and current['ProcessId'] != root:
+            parent = by_pid.get(current.get('ParentProcessId'))
+            if parent is None or parent is current or len(chain) > 64 or (parent.get('Created') or 0) > (current.get('Created') or 0):
+                current = None
+            else:
+                chain.append(current['ProcessId'])
+                current = parent
+        if current is not None:
+            own.update(chain)
+    return own
+
+
 def box_load(own_pids=()):
+    """The engines and compilers on this box that are not the caller's own (the pids it names and every process it
+    started), by name, pid and path."""
     if sys.platform == 'win32':
-        script = "Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(Cortex Command.*|cl|link|MSBuild)\\.exe$' } | Select-Object ProcessId,Name,ExecutablePath | ConvertTo-Json -Compress"
+        script = ("Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,"
+                  "@{n='Created';e={if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { 0 }}} | ConvertTo-Json -Compress")
         raw = command(['pwsh', '-NoProfile', '-Command', script]).strip()
         rows = json.loads(raw) if raw else []
         rows = rows if isinstance(rows, list) else [rows]
-        return [row for row in rows if row['ProcessId'] not in own_pids]
-    raw = command(['ps', '-axo', 'pid=,comm='])
+        own = own_tree(rows)
+        return [dict(ProcessId=row['ProcessId'], Name=row['Name'], ExecutablePath=row.get('ExecutablePath')) for row in rows
+                if re.match(r'(Cortex Command.*|cl|link|MSBuild)\.exe$', row.get('Name') or '', re.I)
+                and row['ProcessId'] not in own_pids and row['ProcessId'] not in own]
+    raw = command(['ps', '-axo', 'pid=,ppid=,comm='])
     rows = []
     for line in raw.splitlines():
-        fields = line.strip().split(None, 1)
-        if len(fields) == 2 and re.search(r'CortexCommand|cc1plus|ninja|clang|g\+\+', fields[1]) and int(fields[0]) not in own_pids:
-            rows.append(dict(ProcessId=int(fields[0]), Name=Path(fields[1]).name))
-    return rows
+        fields = line.strip().split(None, 2)
+        if len(fields) == 3 and fields[0].isdigit() and fields[1].isdigit():
+            rows.append(dict(ProcessId=int(fields[0]), ParentProcessId=int(fields[1]), Name=Path(fields[2]).name, command=fields[2]))
+    own = own_tree(rows)
+    return [dict(ProcessId=row['ProcessId'], Name=row['Name']) for row in rows
+            if re.search(r'CortexCommand|cc1plus|ninja|clang|g\+\+', row['command']) and row['ProcessId'] not in own_pids
+            and row['ProcessId'] not in own]
+
+
+def describe_load(rows):
+    """The processes a load check saw, by name, pid and path, so a refusal names what it met."""
+    return '; '.join(f"{row.get('Name')} pid {row.get('ProcessId')}" + (f" at {row['ExecutablePath']}" if row.get('ExecutablePath') else '')
+                     for row in rows) or 'nothing'
 
 
 def digest_file(path):

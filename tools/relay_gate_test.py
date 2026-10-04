@@ -22,6 +22,7 @@ import relay_cloudflare_match as match  # noqa: E402
 import relay_login_sweep  # noqa: E402
 import relay_scrub  # noqa: E402
 from relay_secrets import SecretBook  # noqa: E402
+from inventory_location import lead_script  # noqa: E402
 
 USER = 'u-6f"x\\k-77'          # a minted username the directory accepts, with a quote and a backslash
 CRED = 'c"r\\ed-0123456789'
@@ -339,8 +340,13 @@ class Wiring(unittest.TestCase):
             return dict(name=run['name'], dry_run=True)
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(match, 'run_one', capture), contextlib.redirect_stdout(io.StringIO()), \
                 mock.patch.object(match, 'LANE', 'unit-lane', create=True):
-            match.main(['--scenario', 'mp-relay-hotspot', '--out', str(Path(folder) / 'x'), '--run', 'd-credential-expiry',
-                        '--run', 'e-migration-relayed', '--dry-run'])
+            # The scenario's game boxes as an inventory of the test's own, so no box's copy is read.
+            boxes = Path(folder) / 'boxes.json'
+            boxes.write_text(json.dumps(dict(boxes=[dict(name=name, kind='windows-task', ssh=name.lower(), repo=f'D:/Projects/{name}-build')
+                                                    for name in ('EDITH', 'ALLY', 'Z13')])), encoding='utf-8')
+            with mock.patch.dict(os.environ, {'CC_RELAY_BOXES_JSON': str(boxes)}):
+                match.main(['--scenario', 'mp-relay-hotspot', '--out', str(Path(folder) / 'x'), '--run', 'd-credential-expiry',
+                            '--run', 'e-migration-relayed', '--dry-run'])
         self.assertEqual(seen, [24000, 1801])
 
     def test_every_joiner_keeps_its_own_candidates(self):
@@ -411,7 +417,8 @@ class Evidence(unittest.TestCase):
         self.assertFalse(match.tunnel_receipt(middle)['passed'])
 
     def test_an_unknown_network_precondition_is_refused(self):
-        script = Path(os.environ.get('CC_RELAY_HOTSPOT_SCRIPT') or next(Path('D:/Projects/reviews/takeover-20260909').glob('*/lead-tools/hotspot_relay.sh')))
+        script = Path(os.environ.get('CC_RELAY_HOTSPOT_SCRIPT') or lead_script('hotspot_relay.sh'))
+        self.assertTrue(script.is_file(), f'{script} is absent: the inventory copy this run reads does not carry the hotspot script')
         with tempfile.TemporaryDirectory() as folder:
             shim = Path(folder) / 'ssh'
             shim.write_text('#!/usr/bin/env bash\ncase "$*" in *BackendState*) echo Running;; *) echo "";; esac\n', encoding='utf-8', newline='\n')

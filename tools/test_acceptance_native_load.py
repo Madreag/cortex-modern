@@ -60,4 +60,24 @@ class FunctionalCompilePolicy(unittest.TestCase):
         self.assertEqual(policy.apply_report_policy(bad),bad)
 
 
+class OwnWorkload(unittest.TestCase):
+    def test_the_payloads_own_tree_is_not_foreign_and_a_stranger_is_named(self):
+        import json
+        import sys
+        cross = policy.cross
+        # The payload (100) started an engine (101, now exiting) and a runner child (102 -> engine 103); 200 is the
+        # user's own game; 300 names 100 as its parent but is older than 100 (a pid reused after its parent exited).
+        rows = [dict(ProcessId=100, ParentProcessId=50, Name='python.exe', ExecutablePath=None, Created=10),
+                dict(ProcessId=101, ParentProcessId=100, Name='Cortex Command.exe', ExecutablePath='D:/run/Cortex Command.exe', Created=11),
+                dict(ProcessId=102, ParentProcessId=100, Name='python.exe', ExecutablePath=None, Created=12),
+                dict(ProcessId=103, ParentProcessId=102, Name='Cortex Command.exe', ExecutablePath='D:/run/Cortex Command.exe', Created=13),
+                dict(ProcessId=200, ParentProcessId=7, Name='Cortex Command.exe', ExecutablePath='C:/Games/Cortex Command.exe', Created=14),
+                dict(ProcessId=300, ParentProcessId=100, Name='cl.exe', ExecutablePath='C:/VS/cl.exe', Created=5)]
+        with patch.object(sys, 'platform', 'win32'), patch.object(cross.os, 'getpid', return_value=100), \
+                patch.object(cross, 'command', return_value=json.dumps(rows)):
+            load = cross.box_load()
+        self.assertEqual([row['ProcessId'] for row in load], [200, 300])
+        self.assertEqual(cross.describe_load(load), 'Cortex Command.exe pid 200 at C:/Games/Cortex Command.exe; cl.exe pid 300 at C:/VS/cl.exe')
+
+
 if __name__ == '__main__': unittest.main()

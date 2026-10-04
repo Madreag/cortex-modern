@@ -15,7 +15,7 @@ import acceptance_sections as sections
 import acceptance_relay_policy as policy
 import run_tools_suites
 from test_harness_resume5 import built,REPO
-from test_harness_resume6 import module,LEAD
+from test_harness_resume6 import module
 from test_inventory_oracle_evidence import INVENTORY,run_split
 
 

@@ -185,7 +185,11 @@ class ArgumentPolicyError(ValueError):
     """The argument vector is not an explicit, well-formed test launch."""
 
 
-BOX_MANIFEST = Path(r"D:\Projects\reviews\takeover-20260909\grok-workers\lead-tools\inventory\boxes.json")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from inventory_location import inventory_dir  # noqa: E402
+
+# The box manifest of the inventory copy this run reads (a run ships one to every box).
+BOX_MANIFEST = inventory_dir() / "boxes.json"
 # A 32 GB box reports a little under 32 GiB once the firmware has taken its share.
 LARGE_BOX_BYTES = 30 * 1024 ** 3
 
@@ -386,7 +390,6 @@ def _probe_writable(directory):
 
 
 FIREWALL_RULES_KEY = r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules"
-FIREWALL_ALLOW_SCRIPT = r"D:\Projects\reviews\takeover-20260909\grok-workers\firewall_allow_all_exes.ps1"
 # While the feel matrix's stream holds this box (inventory/run_stream.py writes the marker for S3's run), only an
 # engine whose environment carries the marker's token launches.
 FEEL_MARKER = Path(r"D:\mx\FEEL-MATRIX-RUNNING")
@@ -622,7 +625,8 @@ class IsolatedRun:
                     self._check(
                         "firewall_allow_rule_present",
                         allowed,
-                        str(exe) if allowed else f"firewall on and no inbound allow rule for {exe}; turn the box's firewall off or run {FIREWALL_ALLOW_SCRIPT} elevated",
+                        str(exe) if allowed else f"firewall on and no inbound allow rule for {exe} on {os.environ.get('COMPUTERNAME', 'this box')}; "
+                                                 "the fleet keeps every box's firewall off: turn it off there (elevated)",
                     )
         try:
             private = (

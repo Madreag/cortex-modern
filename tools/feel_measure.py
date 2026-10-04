@@ -1006,6 +1006,9 @@ def sp_fixture_files(control_launch):
 def gates(root, control, timeout):
     """The suite, the script-graph self-test and the single-player comparison; a step that cannot run fails with its reason."""
     import traceback
+    if not (Path(control) / 'launch.json').is_file():
+        raise ValueError(f"the single-player control {control} is absent on {os.environ.get('COMPUTERNAME') or 'this box'}; "
+                         "the gates compare this tree's run with it (--sp-control names another copy)")
     out = root / 'gates'
     out.mkdir(exist_ok=False)
     env = dict(os.environ, CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1')

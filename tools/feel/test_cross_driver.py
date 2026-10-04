@@ -41,8 +41,10 @@ class CrossDriverTests(unittest.TestCase):
             with patch.object(cross_peers,'assert_box_guard'),patch.object(cross_peers,'read_capabilities',return_value=dict(peer_limit=4)), \
                  patch.object(cross_peers,'wait_for_payload_release'),patch.object(cross_peers,'prepare_instance',side_effect=prepare), \
                  patch.object(cross_peers,'sample_memory',return_value=None),patch.object(cross_peers,'retain_checkpoints'), \
-                 patch.object(cross_peers,'box_load',return_value=[]),patch.object(cross_peers,'seal_evidence'):
+                 patch.object(cross_peers,'box_load',return_value=[]),patch.object(cross_peers,'seal_evidence'), \
+                 contextlib.redirect_stdout(io.StringIO()) as printed:
                 verdict=cross_peers.run_payload(root/'payload.json')
+            self.assertIn('PAYLOAD FAIL: Mac: mixed build refused',printed.getvalue())
             error=json.loads((root/'payload-error.json').read_text())['error'] if (root/'payload-error.json').is_file() else 'accepted'
             self.assertEqual(verdict,1,error)
             self.assertIn('mixed build',error); self.assertIn(preflighted,error); self.assertIn(started,error)
@@ -154,8 +156,10 @@ class CrossDriverTests(unittest.TestCase):
             root = Path(temporary)
             spec = copy.deepcopy(plan['specs'][0])
             box = next(box for box in plan['boxes'] if box['name'] == spec['box'])
+            # The combat fixture is staged from this tree, not from the tree the manifest names for EROL-PC.
             spec.update(own=str(root / 'first'), settings={'ResolutionX': '3840', 'ResolutionY': '2160',
-                        'SessionDirectoryUrl': '', 'NetworkShowDiagnostics': '0'}, render_cap=0)
+                        'SessionDirectoryUrl': '', 'NetworkShowDiagnostics': '0'}, render_cap=0,
+                        repo=str(Path(cross_peers.__file__).resolve().parents[1]))
 
             def make_run(repo, flags, out, **kwargs):
                 runtime = kwargs.get('runtime') or out / 'runtime'

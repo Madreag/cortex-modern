@@ -11,10 +11,10 @@ from unittest.mock import Mock, patch
 
 from test_harness_resume5 import built
 from test_inventory_oracle_evidence import run_stream
+from inventory_location import inventory_dir
 import run_tools_suites
 
 REPO = Path(__file__).resolve().parents[1]
-LEAD = Path('D:/Projects/reviews/takeover-20260909/grok-workers/lead-tools')
 
 
 def module(path, name):
@@ -134,7 +134,7 @@ class RelayRows(unittest.TestCase):
 
 class MergeSourceGate(unittest.TestCase):
     def check(self, source):
-        gate=module(LEAD/'inventory/merge_gate.py','merge_gate_unit')
+        gate=module(inventory_dir()/'merge_gate.py','merge_gate_unit')
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder); tree=root/'repo'; tree.mkdir()
             def git(*args):

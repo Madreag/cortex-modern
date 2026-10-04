@@ -19,6 +19,10 @@ def freeze_helpers(inventory, root):
     destination=root/'inventory'
     if destination.exists(): raise ValueError('this collection already froze its helpers')
     destination.mkdir()
+    # The defect merge reads its follow-up register beside its own copy (the Mac's and Linux's copies carry it the same way).
+    followups=next((path for path in (inventory/'ENGINE-FOLLOWUPS.txt',inventory.parent.parent/'opus-next-20260914/ENGINE-FOLLOWUPS.txt')
+                    if path.is_file()),None)
+    if followups is None: raise ValueError(f'the follow-up register is absent beside {inventory} and in the lead\'s folder')
     selected=[*inventory.glob('*.py'),inventory/'boxes.json']
     selected += [path for path in (inventory/'acceptance-v1').rglob('*') if path.is_file()
                  and path.suffix in ('.py','.json','.sh','.zsh','.md') and '__pycache__' not in path.parts]
@@ -28,9 +32,13 @@ def freeze_helpers(inventory, root):
         target=destination/relative;target.parent.mkdir(parents=True,exist_ok=True)
         content=source.read_bytes();target.write_bytes(content)
         receipts[relative.as_posix()]=hashlib.sha256(content).hexdigest()
-    gate=inventory.parent/'build_gate.ps1'
-    shutil.copy2(gate,root/'build_gate.ps1')
-    receipts['../build_gate.ps1']=hashlib.sha256(gate.read_bytes()).hexdigest()
+    content=followups.read_bytes();(destination/followups.name).write_bytes(content)
+    receipts[followups.name]=hashlib.sha256(content).hexdigest()
+    # The lead scripts beside the inventory keep that place in the frozen copy (the tools' suites test the hotspot script).
+    for name in ('build_gate.ps1','hotspot_relay.sh'):
+        script=inventory.parent/name
+        shutil.copy2(script,root/name)
+        receipts['../'+name]=hashlib.sha256(script.read_bytes()).hexdigest()
     collection.write(root/'frozen-helpers.json',dict(source=str(inventory),files=receipts))
     collection.write(root/'HELPERS-SHA256.json',{key:value for key,value in receipts.items() if '/' not in key and key.endswith('.py')})
     return receipts

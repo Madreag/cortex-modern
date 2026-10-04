@@ -1,6 +1,8 @@
 """The suite runner's sanitizer rule: a sanitizer build's declared wall-clock budget lines are reported, not judged,
 and nothing else about the row is excused. Pure scoring; no engine."""
 
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -103,7 +105,9 @@ class RenderCapSanitizer(unittest.TestCase):
 
     def score(self, sanitizer=None, **change):
         from test_headless_render_cap import score_detect  # noqa: PLC0415
-        return score_detect({**self.CASE, **change}, sanitizer)
+        # The judge prints its verdict line; for these synthetic cases it stays out of the suite's log.
+        with contextlib.redirect_stdout(io.StringIO()):
+            return score_detect({**self.CASE, **change}, sanitizer)
 
     def test_an_ordinary_build_gates_the_frame_floor(self):
         self.assertFalse(self.score()["pass"])

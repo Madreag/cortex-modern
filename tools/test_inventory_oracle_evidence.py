@@ -8,8 +8,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from inventory_location import inventory_dir
 
-INVENTORY = Path('D:/Projects/reviews/takeover-20260909/grok-workers/lead-tools/inventory')
+INVENTORY = inventory_dir()
 if INVENTORY.is_dir():
     sys.path.insert(0, str(INVENTORY))
     import extract_defects

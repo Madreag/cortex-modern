@@ -804,6 +804,7 @@ def check_encode(results, scratch):
     (scratch / "video/frames/frame-000000.png").write_bytes(b"frame")
     missing = driver.encode(None, scratch / "video", 30, scratch / "out.mp4")
     ok &= row(results, "encode/no-ffmpeg", missing["encoded"] is False and "ffmpeg" in missing["reason"])
+    ok &= check_ffmpeg_lookup(results, scratch)
     located = driver.find_ffmpeg()
     row(results, "encode/ffmpeg-located", True, str(located))
     if located:
@@ -818,6 +819,40 @@ def check_encode(results, scratch):
         result = driver.encode(located, video, 10, scratch / "timed.mp4")
         duration = float(result.get("ffprobe", {}).get("format", {}).get("duration", 0))
         ok &= row(results, "encode/keeps-one-second-stall", result["encoded"] and 1.1 <= duration <= 1.4, str(result))
+    return ok
+
+
+def check_ffmpeg_lookup(results, scratch):
+    """A box whose ffmpeg is in neither PATH nor the usual places uses its manifest's directory; a box with none is named."""
+    from unittest import mock
+    inventory, tools = scratch / "ffmpeg-inventory", scratch / "ffmpeg-box-bin"
+    tools.mkdir(parents=True)
+    inventory.mkdir()
+    executable = tools / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+    executable.write_bytes(b"")
+    (inventory / "boxes.json").write_text(json.dumps({"boxes": [{"name": "UNIT", "hostname": driver.box_name(),
+                                                                  "path_prepend": [str(tools)]}]}), encoding="utf-8")
+    with mock.patch.object(driver.shutil, "which", return_value=None), mock.patch.object(driver, "FFMPEG_CANDIDATES", ()), \
+            mock.patch.dict(os.environ, {"CC_INVENTORY_DIR": str(inventory)}):
+        chosen = driver.ffmpeg_choice()
+        ok = row(results, "ffmpeg/box-manifest-directory", chosen == (str(executable), f"{driver.box_name()} manifest"), str(chosen))
+        executable.unlink()
+        line = driver.ffmpeg_line()
+        ok &= row(results, "ffmpeg/absent-names-the-box", driver.find_ffmpeg() is None and
+                  line.startswith(f"[e2e-video] ffmpeg is absent on {driver.box_name()}") and str(tools) in line, line)
+        missing = driver.encode(None, scratch / "video", 30, scratch / "absent.mp4")
+        ok &= row(results, "ffmpeg/encode-names-the-box", f"ffmpeg is absent on {driver.box_name()}" in missing.get("reason", ""), str(missing))
+        # A scene wider than the box's declared engine cap is refused before any engine starts, naming both numbers.
+        spectator = driver.load_scenario("world-spectator-promotion")
+        (inventory / "boxes.json").write_text(json.dumps({"boxes": [{"name": "UNIT", "hostname": driver.box_name(), "max_engines": 4,
+                                                                      "memory": {"max_engines": 1}}]}), encoding="utf-8")
+        refused = driver.engine_cap_findings(spectator)
+        ok &= row(results, "engine-cap/refuses-a-wider-scene", len(refused) == 1 and refused[0]["need"] == 5 and refused[0]["cap"] == 1 and
+                  f"needs 5 engines at once on {driver.box_name()}; its declared cap is 1 (box manifest memory.max_engines)" in refused[0]["reason"],
+                  str(refused))
+        ok &= row(results, "engine-cap/admits-a-scene-that-fits", driver.engine_cap_findings(driver.load_scenario("sp-smoke")) == [])
+        (inventory / "boxes.json").write_text(json.dumps({"boxes": []}), encoding="utf-8")
+        ok &= row(results, "engine-cap/undeclared-cap-refuses-nothing", driver.engine_cap_findings(spectator) == [])
     return ok
 
 

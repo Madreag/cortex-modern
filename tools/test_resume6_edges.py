@@ -49,8 +49,8 @@ class Resume6Edges(unittest.TestCase):
     def test_legacy_mac_launch_and_cross_refresh_check_reservation(self):
         from types import SimpleNamespace
         with tempfile.TemporaryDirectory() as folder:
-            template=Path(folder)/'job.zsh';template.write_text('#!/bin/zsh\nSHA='+('a'*40)+'\nBRANCH=unit\necho RUN\n')
-            with patch.object(run_stream,'MAC_TEMPLATE',template):
+            template='#!/bin/zsh\nSHA='+('a'*40)+'\nBRANCH=unit\necho RUN\n'
+            with patch.object(run_stream.mac_template,'TEMPLATE',template):
                 script=run_stream.mac_script(SimpleNamespace(head='b'*40,branch='unit'),run_stream.Command('S5','!mac',[],mac={'template':'gates'}),'unit')
             self.assertIn('ACCEPTANCE-STREAM-RUNNING',script)
             self.assertIn('held by',script)
