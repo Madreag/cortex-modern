@@ -244,9 +244,15 @@ namespace {
 		double lastPresentMS = 0;
 		double iterationCPUMS = 0;
 		bool iterationActive = false;
+		/// What a capture's encode did, measured on the thread that ran it.
+		struct Encoded {
+			bool saved = false;
+			double wallMs = 0.0;
+			double cpuMs = 0.0;
+		};
 		struct Capture {
 			FeelJson row;
-			std::future<bool> saved;
+			std::future<Encoded> saved;
 		};
 		std::vector<Capture> captures;
 	};
@@ -322,7 +328,10 @@ namespace {
 	void FeelWriteSavedCaptures(bool wait) {
 		std::erase_if(s_Feel.captures, [wait](auto& capture) {
 			if (!wait && capture.saved.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return false;
-			capture.row["saved"] = capture.saved.get();
+			const FeelState::Encoded encoded = capture.saved.get();
+			capture.row["saved"] = encoded.saved;
+			capture.row["encode_wall_ms"] = encoded.wallMs;
+			capture.row["encode_cpu_ms"] = encoded.cpuMs;
 			FeelWrite(capture.row);
 			return true;
 		});
@@ -509,11 +518,16 @@ void FrameMan::FeelAfterPresent() {
 		    {"path", name.generic_string()}, {"capture_ms", FeelNowMS() - now}},
 		    std::async(std::launch::async, [copy, path = name.string()] {
 			    // The encode's processor time is the recorder's, charged to the frame it ends in.
+			    const auto began = std::chrono::steady_clock::now();
 			    const int64_t cpuBefore = FrameRecorder::ThreadCpuNanoseconds();
-			    const bool saved = copy && IMG_SavePNG(copy, path.c_str());
+			    FeelState::Encoded encoded;
+			    encoded.saved = copy && IMG_SavePNG(copy, path.c_str());
 			    if (copy) SDL_DestroySurface(copy);
-			    HarnessCost::Charge(HarnessCost::FeelRecorder, FrameRecorder::ThreadCpuNanoseconds() - cpuBefore);
-			    return saved;
+			    const int64_t cpuNs = FrameRecorder::ThreadCpuNanoseconds() - cpuBefore;
+			    HarnessCost::Charge(HarnessCost::FeelRecorder, cpuNs);
+			    encoded.cpuMs = static_cast<double>(cpuNs) / 1e6;
+			    encoded.wallMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+			    return encoded;
 		    })});
 		s_Feel.nextCaptureTick += 60;
 	}

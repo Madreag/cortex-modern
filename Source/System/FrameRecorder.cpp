@@ -20,6 +20,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <intrin.h>
 #else
 #include <time.h>
 #endif
@@ -133,25 +134,20 @@ namespace RTE {
 
 #ifdef _WIN32
 	namespace {
-		/// Thread cycles per nanosecond, read once from this thread running unbroken against the performance counter; the
-		/// fastest of a few short reads, so a read the scheduler interrupted cannot lower it.
+		/// Thread cycles per nanosecond: the thread cycle counter counts the time-stamp counter, whose rate is read once against
+		/// the performance counter. Both are wall clocks, so a thread the scheduler interrupts while it reads cannot skew the rate.
 		double ThreadCyclesPerNanosecond() {
 			static const double s_Rate = [] {
 				LARGE_INTEGER frequency{}, begin{}, now{};
 				QueryPerformanceFrequency(&frequency);
-				double rate = 0.0;
-				for (int attempt = 0; attempt < 3; ++attempt) {
-					ULONG64 cyclesBegin = 0, cyclesEnd = 0;
-					QueryPerformanceCounter(&begin);
-					QueryThreadCycleTime(GetCurrentThread(), &cyclesBegin);
-					do {
-						QueryPerformanceCounter(&now);
-					} while (now.QuadPart - begin.QuadPart < frequency.QuadPart / 500);
-					QueryThreadCycleTime(GetCurrentThread(), &cyclesEnd);
-					const double nanoseconds = static_cast<double>(now.QuadPart - begin.QuadPart) * 1e9 / static_cast<double>(frequency.QuadPart);
-					rate = std::max(rate, static_cast<double>(cyclesEnd - cyclesBegin) / nanoseconds);
-				}
-				return rate;
+				QueryPerformanceCounter(&begin);
+				const unsigned long long stampBegin = __rdtsc();
+				do {
+					QueryPerformanceCounter(&now);
+				} while (now.QuadPart - begin.QuadPart < frequency.QuadPart / 100);
+				const unsigned long long stampEnd = __rdtsc();
+				const double nanoseconds = static_cast<double>(now.QuadPart - begin.QuadPart) * 1e9 / static_cast<double>(frequency.QuadPart);
+				return static_cast<double>(stampEnd - stampBegin) / nanoseconds;
 			}();
 			return s_Rate;
 		}
