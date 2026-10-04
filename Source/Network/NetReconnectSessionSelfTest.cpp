@@ -7586,6 +7586,113 @@ namespace RTE {
 			return 0;
 		}
 
+		// A seat reclaimed at a new address keeps that address through a relaunch: the ticket on disk names where the host was proven
+		// reachable, so the next return dials it without the player entering it again. Nothing is written before the host commits the
+		// proof, the credential and the seat never change, and a write that fails is retried. Run once as a match and once as a world
+		// with no directory row, the return the address alone has to find.
+		int TestAReclaimAtANewAddressIsWhereTheNextReturnGoes() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			for (const bool world: {false, true}) {
+				std::string error;
+				if (!ResetLaneDirectory(&error)) return Fail(error);
+				const std::string name = world ? "moved-world" : "moved-match";
+				const std::string first = "10.0.0.5:7777", second = "192.168.1.20:7777", third = "172.16.0.9:7777";
+				const uint64_t hostSession = 0x4831ULL;
+				uint64_t unixNow = 1'700'000'000'000ULL;
+				const auto onDisk = [&](NetH4TicketRecord& record) {
+					NetReconnectTicketStore fresh;
+					fresh.SetPath(StorePath(name));
+					return fresh.Load(unixNow, record, nullptr) == NetH4TicketLoadResult::Loaded;
+				};
+				Wire wire;
+				ConfigureWire(wire, hostSession);
+				Endpoint player;
+				player.connection = 61;
+				ConfigureEndpoint(player, name, &unixNow);
+				player.client.SetHostContext(first, MakeHash(9));
+				player.client.SetWorldTarget(world);
+				wire.Add(&player);
+				NetH4TicketRecord seeded;
+				if (SeatAndDrop(wire, player, seeded, unixNow, &error) != 0) return Fail("could not seat the player before the move: " + error);
+				if (seeded.hostAddress != first || seeded.persistentWorld != world) return Fail("the seeding ticket names " + seeded.hostAddress);
+
+				// A relaunch reaches the same hosted session at another address and proves its ticket there.
+				const auto returnAt = [&](Endpoint& returner, NetPeerId connection, const std::string& address, uint64_t advertisedSession) {
+					wire.nowMs += 3000;
+					wire.host.SetLiveMatch(true);
+					returner.connection = connection;
+					ConfigureEndpoint(returner, name, &unixNow);
+					returner.client.SetHostContext(address, NetHash32{});
+					returner.client.SetWorldTarget(world);
+					returner.client.NoteAcceptedHostSession(advertisedSession);
+					wire.Add(&returner);
+					return returner.client.BeginAdmission(wire.nowMs, &error);
+				};
+				// A return plays on before its link goes again; one dropped mid-return would be a failed return the roster backs off.
+				const auto drop = [&](Endpoint& gone) {
+					for (const NetH4Seat& seat: MakeSeatTable())
+						if (seat.stableSeat == seeded.stableSeat) wire.host.NoteReturnCaughtUp(seat.lockstepPeerId);
+					wire.host.NotifyDisconnect(gone.connection, wire.nowMs);
+					gone.connected = false;
+					wire.Remove(gone.connection);
+					gone.client.NotifyAmbiguousLoss();
+				};
+				Endpoint moved;
+				if (!returnAt(moved, 62, second, hostSession)) return Fail("the return at a new address did not begin: " + error);
+				NetH4TicketRecord stored;
+				if (!onDisk(stored) || stored.hostAddress != first) {
+					return Fail("the ticket named " + stored.hostAddress + " before the host committed the proof at " + second);
+				}
+				if (!wire.Pump(&error) || moved.client.GetState() != NetH4ClientState::Joined || !moved.client.UsedStoredTicket()) {
+					return Fail("the return at a new address did not reclaim its seat: " + error);
+				}
+				if (!onDisk(stored) || stored.hostAddress != second) {
+					return Fail("after a reclaim proven at " + second + " the relaunched ticket still names " + stored.hostAddress);
+				}
+				if (stored.epoch != seeded.epoch || stored.stableSeat != seeded.stableSeat || stored.holderGeneration != seeded.holderGeneration ||
+				    stored.credential != seeded.credential || stored.hostSessionId != seeded.hostSessionId || stored.issuedAtUnixMs != seeded.issuedAtUnixMs ||
+				    stored.persistentWorld != world || stored.directorySessionId != seeded.directorySessionId) {
+					return Fail("the reclaim rewrote more of the ticket than where its host was reached");
+				}
+				const NetMatchServiceRequest rejoin = NetMatchService::BuildTicketRejoinRequest(stored, "Player", false);
+				if (rejoin.address != second || rejoin.persistentWorld != world) {
+					return Fail("the next return would dial " + rejoin.address + " instead of " + second);
+				}
+
+				// The next relaunch dials what the ticket names, with no session hint, and the ticket alone finds the seat.
+				drop(moved);
+				Endpoint back;
+				if (!returnAt(back, 63, rejoin.address, 0) || !wire.Pump(&error) || back.client.GetState() != NetH4ClientState::Joined || !back.client.UsedStoredTicket()) {
+					return Fail("a return to the address the ticket names did not reclaim the seat: " + error);
+				}
+
+				// A write that fails leaves the proven ticket in place and lands once the store can take it.
+				drop(back);
+				const std::filesystem::path blocker = StorePath(name) + ".tmp";
+				std::error_code code;
+				std::filesystem::create_directories(blocker, code);
+				Endpoint retried;
+				if (!returnAt(retried, 64, third, hostSession) || !wire.Pump(&error) || retried.client.GetState() != NetH4ClientState::Joined) {
+					return Fail("the return with a blocked store did not reclaim its seat: state=" + std::string(NetReconnectClientStateName(retried.client.GetState())) +
+					            " client='" + retried.client.GetError() + "' " + error);
+				}
+				if (!onDisk(stored) || stored.hostAddress != second) return Fail("a failed write left the ticket naming " + stored.hostAddress);
+				std::filesystem::remove_all(blocker, code);
+				for (int step = 0; step < 8 && onDisk(stored) && stored.hostAddress != third; ++step) {
+					wire.nowMs += 5000;
+					if (!wire.Pump(&error)) return Fail(error);
+				}
+				if (!onDisk(stored) || stored.hostAddress != third) {
+					return Fail("the write the store refused was never retried: the ticket names " + stored.hostAddress);
+				}
+				std::cout << "[net-reconnect-session-selftest] " << (world ? "world" : "match") << " moved_return before_commit=" << first
+				          << " after_commit=" << second << " next_return_dials=" << rejoin.address << " after_retry=" << stored.hostAddress << std::endl;
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS a_reclaim_at_a_new_address_is_where_the_next_return_goes" << std::endl;
+			return 0;
+		}
+
 		// A return the host puts off (the roster's backoff, a host change) keeps its seat: the client asks again with the same
 		// ticket after a backoff that doubles to the roster's longest, and never trades the seat for a fresh one.
 		int TestAPutOffReturnAsksAgainWithItsTicket() {
@@ -9035,6 +9142,7 @@ namespace RTE {
 		}
 		if (const int result = TestAPutOffReturnAsksAgainWithItsTicket(); result != 0) return result;
 		if (const int result = TestAReturnFromAnotherAddressPresentsItsTicket(); result != 0) return result;
+		if (const int result = TestAReclaimAtANewAddressIsWhereTheNextReturnGoes(); result != 0) return result;
 		if (const int result = TestEndedCredentialsStayOutOfWorld(); result != 0) return result;
 		if (const int result = TestAnAnsweredReclaimIsNotRefusedTwice(); result != 0) return result;
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;

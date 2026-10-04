@@ -125,6 +125,8 @@ namespace RTE {
 		NetRelayConfig relay;
 		uint32_t seatRosterRevision = 0; ///< The host's seat roster revision this config was agreed on; 0 when the match has none.
 		NetHash32 seatRosterHash{};      ///< HashRoster of that revision: a peer whose copy differs is refused at the start by name.
+		// How long a held seat's history stays on the host for a return in place; a later return loads an image.
+		uint8_t returnWindowMinutes = 5;
 
 		bool operator==(const NetMatchConfig&) const = default;
 	};
@@ -148,12 +150,17 @@ namespace RTE {
 		static constexpr uint16_t c_TimingOptionsVersion = 6;
 		static constexpr uint16_t c_DefaultSlowPlayerBoundTicks = 3;
 		static constexpr uint16_t c_MaxSlowPlayerBoundTicks = 120;
-		// Reserved values are 1 dedicated, 2 path, 4 world (v5), 8 redundancy and 16 migration.
+		// Reserved values are 1 dedicated, 2 path, 4 world (v5), 8 redundancy, 16 migration and 32 return window.
 		static constexpr uint16_t c_ReservedDedicatedBit = 1;
 		static constexpr uint16_t c_ReservedPathHorizonBit = 2;
 		static constexpr uint16_t c_ReservedFrameRedundancyBit = 8; // A trailing U16 carries the window.
 		static constexpr uint16_t c_ReservedPersistentWorldBit = 4;
-		static constexpr uint16_t c_ReservedKnownMask = c_ReservedDedicatedBit | c_ReservedPathHorizonBit | c_ReservedFrameRedundancyBit | c_MigrationConfigFlag;
+		static constexpr uint16_t c_ReservedReturnWindowBit = 32; // A U8 of minutes trails the whole config.
+		static constexpr uint16_t c_ReservedKnownMask = c_ReservedDedicatedBit | c_ReservedPathHorizonBit | c_ReservedFrameRedundancyBit | c_MigrationConfigFlag | c_ReservedReturnWindowBit;
+		// The default keeps five minutes of a held seat's history: past it the host frees the journal and a return loads an image.
+		static constexpr uint8_t c_DefaultReturnWindowMinutes = 5;
+		static constexpr uint8_t c_MinReturnWindowMinutes = 1;
+		static constexpr uint8_t c_MaxReturnWindowMinutes = 30;
 		static constexpr uint16_t c_DefaultPathHorizonTicks = 30;
 		static constexpr uint16_t c_MaxPathHorizonTicks = 120;
 		static constexpr size_t c_WorldIdBytes = 36; // A canonical UUID, the directory's registration id.

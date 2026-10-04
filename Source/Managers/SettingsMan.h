@@ -293,6 +293,9 @@ namespace RTE {
 		/// Idle-lobby wait in minutes. 0 means Never; default 10. Out of 0-60 is ignored.
 		int GetNetworkHostIdleWaitMinutes() const { return m_NetworkHostIdleWaitMinutes; }
 		void SetNetworkHostIdleWaitMinutes(int minutes);
+		/// Minutes a held seat's history stays on the host for a return in place. Default 5. Out of 1-30 is ignored.
+		int GetNetworkHostReturnWindowMinutes() const { return m_NetworkHostReturnWindowMinutes; }
+		void SetNetworkHostReturnWindowMinutes(int minutes);
 		/// Shared path-grid horizon in ticks. Default 30. Out of 0-120 is ignored.
 		int GetNetworkPathHorizonTicks() const { return m_NetworkPathHorizonTicks; }
 		void SetNetworkPathHorizonTicks(int ticks);
@@ -660,6 +663,7 @@ namespace RTE {
 		NetworkHostVisibility m_NetworkHostVisibility;
 		bool m_NetworkToastsEnabled, m_NetworkChatVisible, m_NetworkChatNotify, m_NetworkChatSound, m_NetworkAutoReconnect, m_NetworkOfferStoredRejoin, m_NetworkRecordReplays, m_NetworkHostAutoRepair;
 		int m_NetworkHostIdleWaitMinutes;
+		int m_NetworkHostReturnWindowMinutes;
 		int m_NetworkPathHorizonTicks;
 		int m_NetworkAutosavesKept;
 		int m_NumberOfLuaStatesOverride; //!< Retired: an old settings file's threaded-Lua-state override, read and ignored. -1 when there is none.

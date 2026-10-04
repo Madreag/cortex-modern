@@ -56,6 +56,7 @@
 #include <iostream>
 #include <sstream>
 #include <thread>
+#include <vector>
 
 using namespace RTE;
 
@@ -1603,6 +1604,11 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostRecAutosaveCheck = dynamic_cast<GUICheckbox*>(get("CheckHostRecAutosave"));
 	m_HostRecAutosaveIntervalBox = dynamic_cast<GUITextBox*>(get("TextHostRecAutosaveInterval"));
 	m_HostRecLastSaveLabel = dynamic_cast<GUILabel*>(get("LabelHostRecLastSave"));
+	m_HostRecReturnWindowCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRecReturnWindow"));
+	if (auto* returnHint = dynamic_cast<GUILabel*>(get("LabelHostRecReturnWindowHint"))) {
+		returnHint->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+		returnHint->SetText(NetReturnWindowHint());
+	}
 	m_HostRecWaitingLabel = dynamic_cast<GUILabel*>(get("LabelHostRecWaiting"));
 	m_HostFilesSavePathLabel = dynamic_cast<GUILabel*>(get("LabelHostFilesSavePath"));
 	m_HostFilesDiagPathLabel = dynamic_cast<GUILabel*>(get("LabelHostFilesDiagPath"));
@@ -1711,6 +1717,12 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		m_HostFilesWidgetCombo->AddItem("Auto");
 		m_HostFilesWidgetCombo->AddItem("Always");
 	}
+	if (m_HostRecReturnWindowCombo) {
+		m_HostRecReturnWindowCombo->ClearList();
+		for (const int minutes : {1, 2, 5, 10, 15, 20, 30}) {
+			m_HostRecReturnWindowCombo->AddItem(NetReturnWindowText(static_cast<uint8_t>(minutes)));
+		}
+	}
 	if (m_HostSessIdleCombo) {
 		m_HostSessIdleCombo->ClearList();
 		m_HostSessIdleCombo->AddItem("Never");
@@ -1804,6 +1816,7 @@ NetMatchServiceRequest MainMenuGUI::HostRequestDraft() const {
 		request.idleWaitMinutes = m_HostSetupOptions->idleWaitMinutes;
 		request.automaticRepair = m_HostSetupOptions->automaticRepair;
 		request.autosaveSeconds = m_HostSetupOptions->autosaveEnabled ? m_HostSetupOptions->autosaveIntervalSeconds : 0;
+		request.returnWindowMinutes = m_HostSetupOptions->returnWindowMinutes;
 		request.inputDelayFrames = m_HostSetupOptions->inputDelayFrames;
 		request.autoInputDelay = m_HostSetupOptions->delayPolicy == NetMatchDelayPolicy::Auto;
 		request.peerCount = m_HostSetupOptions->peerCount;
@@ -1896,6 +1909,32 @@ namespace {
 
 	void HostOptSetEditable(GUIControl* control, bool editable) {
 		if (control) control->SetEnabled(editable);
+	}
+
+	/// The minutes a return window choice names; 0 when nothing is picked.
+	uint8_t HostOptReturnWindowOf(GUIComboBox* combo) {
+		const GUIListPanel::Item* item = combo && combo->GetSelectedIndex() >= 0 ? combo->GetItem(combo->GetSelectedIndex()) : nullptr;
+		const long minutes = item ? std::strtol(item->m_Name.c_str(), nullptr, 10) : 0;
+		return minutes >= NetMatchConfigUtil::c_MinReturnWindowMinutes && minutes <= NetMatchConfigUtil::c_MaxReturnWindowMinutes ? static_cast<uint8_t>(minutes) : 0;
+	}
+
+	/// Shows a return window, offering a saved value the list lacks in its place among the others.
+	void HostOptSelectReturnWindow(GUIComboBox* combo, uint8_t minutes) {
+		if (!combo) return;
+		std::vector<uint8_t> offered;
+		for (int i = 0; i < combo->GetCount(); ++i) {
+			const GUIListPanel::Item* item = combo->GetItem(i);
+			const long listed = item ? std::strtol(item->m_Name.c_str(), nullptr, 10) : 0;
+			if (listed == minutes) {
+				if (combo->GetSelectedIndex() != i) combo->SetSelectedIndex(i);
+				return;
+			}
+			offered.push_back(static_cast<uint8_t>(listed));
+		}
+		offered.insert(std::upper_bound(offered.begin(), offered.end(), minutes), minutes);
+		combo->ClearList();
+		for (const uint8_t listed : offered) combo->AddItem(NetReturnWindowText(listed));
+		combo->SetSelectedIndex(static_cast<int>(std::find(offered.begin(), offered.end(), minutes) - offered.begin()));
 	}
 
 	bool HostOptBoxFocused(GUITextBox* box) {
@@ -2186,6 +2225,8 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		m_HostRecAutosaveIntervalBox->SetText(std::to_string(m_HostOptionsDraft.autosaveIntervalSeconds));
 	}
 	HostOptSetEditable(m_HostRecAutosaveIntervalBox, editable && m_HostOptionsDraft.autosaveEnabled);
+	HostOptSelectReturnWindow(m_HostRecReturnWindowCombo, m_HostOptionsDraft.returnWindowMinutes);
+	HostOptSetEditable(m_HostRecReturnWindowCombo, editable);
 	HostOptSetEditable(m_HostRecRepairCheck, editable);
 	HostOptSetEditable(m_HostRecAutosaveCheck, editable);
 	if (m_HostRecLastSaveLabel) {
@@ -2313,6 +2354,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		        || m_HostOptionsDraft.frameRedundancyTicks != m_HostSetupOptions->frameRedundancyTicks
 		        || m_HostOptionsDraft.autosaveEnabled != m_HostSetupOptions->autosaveEnabled
 		        || m_HostOptionsDraft.autosaveIntervalSeconds != m_HostSetupOptions->autosaveIntervalSeconds
+		        || m_HostOptionsDraft.returnWindowMinutes != m_HostSetupOptions->returnWindowMinutes
 		        || m_HostOptionsDraft.inputDelayFrames != m_HostSetupOptions->inputDelayFrames;
 	} else {
 		const NetMatchConfig adopted = g_NetMatchService.GetLobbyMatchConfig();
@@ -2438,6 +2480,7 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 		}
 	}
 	if (!m_HostOptionsDraft.autosaveEnabled) m_HostOptionsDraft.autosaveIntervalSeconds = 0;
+	if (const uint8_t minutes = HostOptReturnWindowOf(m_HostRecReturnWindowCombo); minutes != 0) m_HostOptionsDraft.returnWindowMinutes = minutes;
 
 	// Session: the idle combo's index maps onto the minutes table.
 	static const uint8_t idleValues[] = {0, 1, 5, 10, 20, 30, 45, 60};
@@ -2517,6 +2560,7 @@ void MainMenuGUI::SaveHostOptionsDefaults() {
 	g_SettingsMan.SetNetworkSlowPlayerBoundTicks(m_HostOptionsDraft.slowPlayerBoundTicks);
 	g_SettingsMan.SetNetworkSlowPlayerPolicy(m_HostOptionsDraft.slowPlayerPolicy == NetSlowPlayerPolicy::Pause ? SettingsMan::NetworkSlowPlayerPolicy::Pause : SettingsMan::NetworkSlowPlayerPolicy::Substitute);
 	g_SettingsMan.SetNetworkHostIdleWaitMinutes(m_HostOptionsDraft.idleWaitMinutes);
+	g_SettingsMan.SetNetworkHostReturnWindowMinutes(m_HostOptionsDraft.returnWindowMinutes);
 	g_SettingsMan.SetNetworkHostAutoRepair(m_HostOptionsDraft.automaticRepair);
 	g_SettingsMan.SetAutosaveSeconds(m_HostOptionsDraft.autosaveEnabled ? m_HostOptionsDraft.autosaveIntervalSeconds : 0);
 	g_SettingsMan.SetBrainlessHumansSpectate(m_HostOptionsDraft.brainlessHumansSpectate);
@@ -3063,6 +3107,10 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		m_HostOptionsDraft.frameRedundancyTicks = static_cast<uint8_t>(m_HostNetRedundancyCombo->GetSelectedIndex() + 1);
 		return;
 	}
+	if (guiEventControl == m_HostRecReturnWindowCombo) {
+		if (const uint8_t minutes = HostOptReturnWindowOf(m_HostRecReturnWindowCombo); minutes != 0) m_HostOptionsDraft.returnWindowMinutes = minutes;
+		return;
+	}
 	if (guiEventControl == m_HostNetSlowPolicyCombo) {
 		m_HostOptionsDraft.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 		return;
@@ -3173,6 +3221,7 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		request.idleWaitMinutes = m_HostSetupOptions->idleWaitMinutes;
 		request.automaticRepair = m_HostSetupOptions->automaticRepair;
 		request.autosaveSeconds = m_HostSetupOptions->autosaveEnabled ? m_HostSetupOptions->autosaveIntervalSeconds : 0;
+		request.returnWindowMinutes = m_HostSetupOptions->returnWindowMinutes;
 		request.peerCount = m_HostSetupOptions->peerCount;
 		request.inputDelayFrames = m_HostSetupOptions->inputDelayFrames;
 		request.autoInputDelay = m_HostSetupOptions->delayPolicy == NetMatchDelayPolicy::Auto;

@@ -210,6 +210,7 @@ namespace RTE {
 		std::optional<bool> automaticRepair;
 		std::optional<uint16_t> pathHorizonTicks;
 		std::optional<uint8_t> frameRedundancyTicks;
+		std::optional<uint8_t> returnWindowMinutes;
 		// The host's checkpoint cadence in simulation seconds; 0 disables autosaves. Unset keeps the
 		// run's AutosaveSeconds setting/override, so a request that names nothing changes nothing.
 		std::optional<uint32_t> autosaveSeconds;
@@ -866,11 +867,10 @@ namespace RTE {
 		/// Ends the joiner's catch-up the moment its own coordinator runs: the round owns the wire and
 		/// the pacing from there. Returns whether this call released it.
 		static bool ReleaseWorldCatchUpOnceRunning(bool coordinatorRunning, NetWorldCatchUpClient& catchUp);
-		static constexpr double c_InPlaceReturnWindowMs = 300000.0; //!< How long after its hold a seat may still come back holding its own state.
 		/// The oldest frame a returner arriving now could be served from, from its parts: the base it would get (none when it would take a new
-		/// one), the returns under way and the holds.
+		/// one), the returns under way and the holds, each hold kept for the host's return window.
 		static uint64_t ReturnHistoryFloor(uint64_t tick, std::optional<uint64_t> servedBaseTick, const std::vector<NetWorldJoinSession>& sessions,
-		                                   const std::map<uint8_t, NetGameSeatHold>& holds, double tickMs);
+		                                   const std::map<uint8_t, NetGameSeatHold>& holds, double tickMs, uint8_t returnWindowMinutes);
 		static bool ReadCommittedJoinFrame(const NetLockstepCoordinator& coordinator, uint64_t tick, NetLockstepReadyFrame& ready);
 		/// The image one finished archive describes. An entry the writer has not filled yields an
 		/// image that is not valid, so nothing is published for it.

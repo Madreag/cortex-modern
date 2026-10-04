@@ -749,10 +749,10 @@ namespace RTE {
 					return false;
 				}
 				invalid = bytes;
-				invalid[reservedOffset] = 32;
+				invalid[reservedOffset] = 64;
 				const auto unknown = NetLobbyProtocol::Decode(invalid);
 				if (unknown.ok || unknown.error.code != NetLobbyErrorCode::ReservedFieldNonZero) {
-					*error = "a reserved word of 32 was not refused";
+					*error = "a reserved word of 64 was not refused";
 					return false;
 				}
 				const auto hash = NetMatchConfigUtil::HashConfig(config);
@@ -1452,6 +1452,9 @@ namespace RTE {
 				// The redundancy window must survive the round trip and affect the hash.
 				{"frame_redundancy_off", [](auto& c) { c.frameRedundancyTicks = 1; }},
 				{"frame_redundancy_max", [](auto& c) { c.frameRedundancyTicks = NetMatchConfigUtil::c_MaxFrameRedundancyTicks; }},
+				// So must the return window.
+				{"return_window_short", [](auto& c) { c.returnWindowMinutes = NetMatchConfigUtil::c_MinReturnWindowMinutes; }},
+				{"return_window_long", [](auto& c) { c.returnWindowMinutes = NetMatchConfigUtil::c_MaxReturnWindowMinutes; }},
 				{"floor", [](auto& c) { ++c.inputDelayFrames; }}, {"sender_1", [](auto& c) { ++c.peerInputDelayFrames[0]; }},
 				{"sender_2", [](auto& c) { ++c.peerInputDelayFrames[1]; }},
 			};
@@ -1891,12 +1894,45 @@ namespace RTE {
 				return false;
 			}
 			const size_t plainSize = bytes.size();
-			// Known values are 1 dedicated, 2 path, 4 world, 8 redundancy and 16 migration.
-			bytes[reservedOffset] = 32;
+			// Known values are 1 dedicated, 2 path, 4 world, 8 redundancy, 16 migration and 32 return window.
+			bytes[reservedOffset] = 64;
 			const NetLobbyDecodeResult refused = NetLobbyProtocol::Decode(bytes);
 			if (refused.ok || refused.error.code != NetLobbyErrorCode::ReservedFieldNonZero) {
-				*error = "a reserved word of 32 was not refused";
+				*error = "a reserved word of 64 was not refused";
 				return false;
+			}
+			bytes[reservedOffset] = 0;
+			// A non-default return window sets bit 0x20 and trails the whole config; the default leaves the bytes as they were.
+			NetMatchConfig returning = MakeConfig();
+			returning.returnWindowMinutes = 12;
+			message.payload = NetLobbyMatchConfig{returning};
+			std::vector<uint8_t> returningBytes;
+			if (!NetLobbyProtocol::Encode(message, returningBytes, &encodeError) || returningBytes.size() != plainSize + 1 ||
+			    returningBytes[reservedOffset] != 32 || returningBytes[reservedOffset + 1] != 0 || returningBytes.back() != 12 ||
+			    !std::equal(bytes.begin() + reservedOffset + 2, bytes.end(), returningBytes.begin() + reservedOffset + 2)) {
+				*error = "a non-default return window did not encode bit 0x20 and its minutes after the whole config";
+				return false;
+			}
+			const NetLobbyDecodeResult returningDecoded = NetLobbyProtocol::Decode(returningBytes);
+			const NetLobbyMatchConfig* returningConfig = returningDecoded.ok ? std::get_if<NetLobbyMatchConfig>(&returningDecoded.message.payload) : nullptr;
+			if (!returningConfig || returningConfig->config.returnWindowMinutes != 12 ||
+			    NetMatchConfigUtil::HashConfig(returningConfig->config) != NetMatchConfigUtil::HashConfig(returning) ||
+			    NetMatchConfigUtil::HashConfig(returning) == NetMatchConfigUtil::HashConfig(MakeConfig())) {
+				*error = "reserved bit 0x20 did not decode the return window into the same agreed hash";
+				return false;
+			}
+			if (!plainConfig || plainConfig->config.returnWindowMinutes != NetMatchConfigUtil::c_DefaultReturnWindowMinutes) {
+				*error = "a config without bit 0x20 did not decode the default return window";
+				return false;
+			}
+			for (const uint8_t outOfRange : {0, NetMatchConfigUtil::c_MaxReturnWindowMinutes + 1}) {
+				std::vector<uint8_t> broken = returningBytes;
+				broken.back() = outOfRange;
+				const NetLobbyDecodeResult refusedReturn = NetLobbyProtocol::Decode(broken);
+				if (refusedReturn.ok || refusedReturn.error.code != NetLobbyErrorCode::InvalidValue) {
+					*error = "a return window outside its range was accepted";
+					return false;
+				}
 			}
 			// The redundancy word precedes the versioned relay payload.
 			NetMatchConfig windowed = MakeConfig();
@@ -4545,6 +4581,7 @@ namespace RTE {
 					draft.difficulty = 73;
 					draft.idleWaitMinutes = 0;
 					draft.frameRedundancyTicks = 1;
+					draft.returnWindowMinutes = 12;
 					std::string refusal;
 					if (!row.service.SubmitHostOptions(draft.configRevision, draft, &refusal)) {
 						row.Fail("SubmitHostOptions refused the live draft: " + refusal);
@@ -4572,7 +4609,7 @@ namespace RTE {
 			const auto& adopted = row.clientLobby.GetMatchConfig();
 			if (!sawReset || blockedPublishes != 5 || !row.clientCoordinator.IsRunning() ||
 			    adopted.configRevision != nextRevision || adopted.difficulty != 73 || adopted.idleWaitMinutes != 0 ||
-			    adopted.frameRedundancyTicks != 1 || row.clientLobby.GetMatchConfigHash() != row.runner.GetMatchConfigHash()) {
+			    adopted.frameRedundancyTicks != 1 || adopted.returnWindowMinutes != 12 || row.clientLobby.GetMatchConfigHash() != row.runner.GetMatchConfigHash()) {
 				*error = "the service draft did not reach the running peer: revision=" + std::to_string(adopted.configRevision);
 				return false;
 			}
@@ -4884,15 +4921,24 @@ namespace RTE {
 			NetMatchServiceRequest request;
 			request.host = true;
 			request.frameRedundancyTicks = fresh.frameRedundancyTicks;
+			request.returnWindowMinutes = 12;
 			NetMatchConfig built;
 			if (!NetMatchService::BuildMatchConfig(request, fresh.sessionId, built, error)) return false;
 			if (built.frameRedundancyTicks != 6) {
 				*error = "the hosted request lost the seeded redundancy: " + std::to_string(built.frameRedundancyTicks);
 				return false;
 			}
+			if (built.returnWindowMinutes != 12) {
+				*error = "the hosted request lost the return window: " + std::to_string(built.returnWindowMinutes);
+				return false;
+			}
 			const std::string summary = NetHostOptionsSummary(built, {});
 			if (summary.find("Frame redundancy: 6 ticks") == std::string::npos) {
 				*error = "the adopted summary lost the redundancy: " + summary;
+				return false;
+			}
+			if (summary.find("\nReturn window: 12 minutes\n") == std::string::npos) {
+				*error = "the adopted summary lost the return window: " + summary;
 				return false;
 			}
 			return true;
@@ -11494,7 +11540,8 @@ namespace RTE {
 		cancel.store(true);
 		watchdog.join();
 		std::cout << "[net-match-selftest] full_knock ready=" << ready << " refused_full=" << sawFull << " elapsed_ms=" << static_cast<long long>(elapsedMs) << " why='" << waitError << "'" << std::endl;
-		if (ready || !sawFull || waitError == "match setup canceled" || elapsedMs > 2000.0) {
+		// The wait ends on the first pass past its budget: one 5 ms sleep at the platform timer's granularity plus a pump, never a retry's 2 s.
+		if (ready || !sawFull || waitError == "match setup canceled" || elapsedMs > 400.0 + 50.0) {
 			*error = "a joiner refused as full waited " + std::to_string(static_cast<long long>(elapsedMs)) + " ms against a 400 ms budget and ended '" + waitError + "'";
 			return false;
 		}

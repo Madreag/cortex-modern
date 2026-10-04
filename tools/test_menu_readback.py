@@ -1425,6 +1425,15 @@ def scripts(case, port, root, size="960x540"):
         text += "assert_label LabelHostRecAutosaveNote Every player takes each checkpoint at the same tick; a player who rejoins starts from one.\n"
         text += checks("LabelHostRecAutosaveCost", "CollectionBoxHostPageRecovery")
         text += "assert_label LabelHostRecAutosaveCost Saving may cause a brief pause for other players on slower hosts\n"
+        # The return window: five minutes by default, its consequence named under the page, a pick drafted at once.
+        for control in ("LabelHostRecReturnWindow", "ComboHostRecReturnWindow", "LabelHostRecReturnWindowHint"):
+            text += checks(control, "CollectionBoxHostPageRecovery")
+        text += ("assert_label LabelHostRecReturnWindow Return window\n"
+                 "assert_label ComboHostRecReturnWindow 5 minutes\n"
+                 "assert_label LabelHostRecReturnWindowHint A return within the window resumes from the player's held state, "
+                 "a later one loads an image. A longer window keeps more history on the host.\n"
+                 "combo_select ComboHostRecReturnWindow 10 minutes\nwait_ms 500\n"
+                 "assert_label ComboHostRecReturnWindow 10 minutes\n")
         text += ("setcheck CheckHostRecAutosave 1\nwait_ms 500\nassert_checked CheckHostRecAutosave 1\n"
                  "assert_enabled TextHostRecAutosaveInterval 1\n"
                  # Switching autosave on from off starts at the shortest cadence, not the off zero.
@@ -1449,6 +1458,8 @@ def scripts(case, port, root, size="960x540"):
                  "assert_label LabelHostOptStatus Apply republishes this lobby.\n"
                  "assert_checked CheckHostRecAutosave 0\n"
                  "assert_label LabelHostRecLastSave No autosaves while this is off\n"
+                 # The applied draft keeps the picked window.
+                 "assert_label ComboHostRecReturnWindow 10 minutes\n"
                  "setcheck CheckHostRecAutosave 0\nwait_ms 500\nassert_checked CheckHostRecAutosave 0\n"
                  "assert_enabled TextHostRecAutosaveInterval 0\n")
         text += checks("TextHostRecAutosaveInterval", "CollectionBoxHostPageRecovery")

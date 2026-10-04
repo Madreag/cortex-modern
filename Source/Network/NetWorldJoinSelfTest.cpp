@@ -3557,7 +3557,8 @@ namespace RTE {
 		const double tickMs = 1000.0 / 60.0;
 		std::vector<NetWorldJoinSession> sessions;
 		std::map<uint8_t, NetGameSeatHold> holds;
-		const auto floor = [&](uint64_t tick, std::optional<uint64_t> base) { return NetMatchService::ReturnHistoryFloor(tick, base, sessions, holds, tickMs); };
+		uint8_t windowMinutes = NetMatchConfigUtil::c_DefaultReturnWindowMinutes;
+		const auto floor = [&](uint64_t tick, std::optional<uint64_t> base) { return NetMatchService::ReturnHistoryFloor(tick, base, sessions, holds, tickMs, windowMinutes); };
 		std::vector<std::string> wrong;
 		const auto expect = [&](const char* what, uint64_t got, uint64_t want) {
 			if (got != want) wrong.push_back(std::string(what) + " " + std::to_string(got) + " not " + std::to_string(want));
@@ -3578,14 +3579,27 @@ namespace RTE {
 		sessions.clear();
 		holds[2].cutoffFrame = 49000;
 		expect("a recent hold", floor(50000, std::nullopt), 49000 - NetLockstepCodec::c_MaxFutureFrameSkew);
-		const auto window = static_cast<uint64_t>(std::ceil(NetMatchService::c_InPlaceReturnWindowMs / tickMs));
+		const auto framesOf = [&](uint8_t minutes) { return static_cast<uint64_t>(std::ceil(minutes * 60000.0 / tickMs)); };
+		const uint64_t window = framesOf(NetMatchConfigUtil::c_DefaultReturnWindowMinutes);
+		const uint64_t held = 49000 - NetLockstepCodec::c_MaxFutureFrameSkew;
+		expect("a hold at the end of the default window", floor(49000 + window - 1, std::nullopt), held);
 		expect("a hold past the in-place window", floor(49000 + window, std::nullopt), 49000 + window + 1);
+		// The host's option decides how long a hold keeps its history, not the default.
+		const uint64_t sixMinutes = framesOf(6);
+		windowMinutes = 10;
+		expect("a six-minute hold under a ten-minute window", floor(49000 + sixMinutes, std::nullopt), held);
+		expect("a hold past a ten-minute window", floor(49000 + framesOf(10), std::nullopt), 49000 + framesOf(10) + 1);
+		windowMinutes = 1;
+		expect("a two-minute hold under a one-minute window", floor(49000 + framesOf(2), std::nullopt), 49000 + framesOf(2) + 1);
+		expect("a hold inside a one-minute window", floor(49000 + framesOf(1) - 1, std::nullopt), held);
+		windowMinutes = NetMatchConfigUtil::c_MaxReturnWindowMinutes;
+		expect("a 29-minute hold under the longest window", floor(49000 + framesOf(29), std::nullopt), held);
 		if (!wrong.empty()) {
 			std::string joined;
 			for (const std::string& line: wrong) joined += (joined.empty() ? "" : "; ") + line;
 			return Fail("the return history floor read " + joined);
 		}
-		std::cout << "[net-world-join-selftest] PASS the_return_history_floor in_place_window_frames=" << window << std::endl;
+		std::cout << "[net-world-join-selftest] PASS the_return_history_floor default_window_frames=" << window << " option_windows=1,10,30" << std::endl;
 		return 0;
 	}
 
