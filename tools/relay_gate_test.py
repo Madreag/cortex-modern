@@ -1,5 +1,5 @@
-"""The independent read's counterexamples (F1-F6 of astra-read-relay-20261003), one unit row each: every one is a run or
-an artifact the landed relay driver judged wrongly. No engine, no network, no real login (every value here is fake)."""
+"""Counterexamples to the relay driver and its sweep, one unit row each: every row is a run, an artifact or an input the
+judge or the sweep once read wrongly, built from synthetic values only (no issued login, no network, no engine)."""
 from __future__ import annotations
 
 import contextlib
@@ -162,6 +162,19 @@ class FakeRemote:
             raise RuntimeError('scp failed: connection reset (synthetic)')
         self.sent.append(str(remote))
 
+    def ssh(self, command, timeout=120, check=True):
+        import time
+        return str(int(time.time() * 1000))
+
+    def fetch_list(self, root, listing, local_root, tar_name):
+        return 0
+
+    def start_task(self, script, budget_s=900):
+        pass
+
+    def read_text(self, path, timeout=120):
+        return None
+
 
 class FakeBox:
     def __init__(self, name='edith'):
@@ -197,10 +210,12 @@ class TransferFailure(unittest.TestCase):
 
 
 def verdict_from(name: str, kind: str, peers: list[str], **checks) -> dict:
+    # Every check any row names starts true, so a negative row isolates the one check it turns false.
     base = {key: True for key in ('identities', 'builds', 'exits', 'full_history', 'hashes_equal', 'holds', 'feel_bars', 'relay',
                                   'rtt_recorded', 'no_secret_in_files', 'provider_201', 'logins_revoked', 'relay_registrant',
                                   'renewal', 'migration', 'listing', 'seat_holds', 'offer_fresh', 'endpoint', 'route_receipts',
-                                  'frames_past_expiry', 'tunnel', 'panel', 'menu_choice')}
+                                  'frames_past_expiry', 'tunnel', 'panel', 'menu_choice', 'secrets_observed', 'sanitizer_clean',
+                                  'direct_expected', 'logins_short_lived', 'pair_blanked', 'pair_ttl', 'menu_entered')}
     for peer in ('host', 'client', 'client2', 'hotspot'):
         base.update({f'tunnel:{peer}': True, f'panel:{peer}': True, f'menu_choice:{peer}': True})
     base.update(checks)
@@ -219,15 +234,25 @@ def scenario(name: str) -> dict:
 class MandatoryChecks(unittest.TestCase):
     """F2: a run that failed any mandatory check fails the review and the exit status, whatever the checklist names."""
 
-    def review(self, scenario_name: str, verdict: dict):
+    def review(self, scenario_name: str, verdict: dict, passes: bool = False):
         whole = scenario(scenario_name)
         only = dict(whole, runs=[run for run in whole['runs'] if run['name'] == verdict['name']],
                     checklist=[item for item in whole['checklist'] if item['run'] == verdict['name']])
         with tempfile.TemporaryDirectory() as folder:
             document = match.review(only, [verdict], Path(folder))
-        self.assertFalse(document['passed'], f'{verdict["name"]}: review passed a failed run')
         status = match.exit_status(document, [verdict]) if hasattr(match, 'exit_status') else 0
+        if passes:
+            self.assertTrue(document['passed'], [item for item in document['checklist'] if item['state'] != 'PASS'])
+            self.assertEqual(status, 0)
+            return
+        self.assertFalse(document['passed'], f'{verdict["name"]}: review passed a failed run')
         self.assertNotEqual(status, 0)
+
+    def test_the_same_verdict_with_every_check_true_passes(self):
+        for scenario_name, row, kind, peers in (('mp-relay-cloudflare', 'cloudflare', 'cloudflare', ['host', 'client']),
+                                                 ('mp-relay-hotspot', 'd-credential-expiry', 'cloudflare', ['host', 'client'])):
+            with self.subTest(row):
+                self.review(scenario_name, verdict_from(row, kind, peers), passes=True)
 
     def test_a_login_left_unrevoked_fails(self):
         self.review('mp-relay-cloudflare', verdict_from('cloudflare', 'cloudflare', ['host', 'client'], logins_revoked=False))
@@ -268,6 +293,10 @@ def receipts(session: str, route: str = 'relay', connection: int = 7) -> str:
                       f'[net-route] RouteAllowed route={route} allowed=1 connection={connection}'])
 
 
+OPEN_REPORT = {'found': True, 'state': 3, 'relayed': True, 'remote_address': '', 'remote_identity': 'str:h-6d7c0768'}
+CLOSED_REPORT = {'end_reason': 0, 'found': False, 'relay_pop': 0, 'relayed': False, 'remote_address': '', 'remote_identity': '', 'state': 0}
+
+
 def three_peer_run(**changes):
     run = dict(mode='cloudflare', session_id=SESSION, connection={'host': 'RelayOnly', 'client': 'RelayOnly', 'client2': 'RelayOnly'},
                logs={peer: receipts(SESSION) for peer in ('host', 'client', 'client2')},
@@ -277,7 +306,7 @@ def three_peer_run(**changes):
                identities={'client': 'str:c-aaaa1111bbbb2222', 'client2': 'str:c-dddd4444eeee5555'},
                offers=[dict(session_id=SESSION, match_id=f'{SESSION}:1', provider='cloudflare', generation=1, expires_at=4102444800, server_count=2)],
                offer_urls=['turn:turn.cloudflare.com:3478?transport=udp'], client_connection={'found': True, 'relayed': True, 'remote_address': '104.30.150.145:4001'},
-               relay_addresses=None, run_ends_at=4000000000)
+               reports={'client': OPEN_REPORT, 'client2': OPEN_REPORT}, overrides_cleared=True, relay_addresses=None, run_ends_at=4000000000)
     run.update(changes)
     return run
 
@@ -308,7 +337,8 @@ class Wiring(unittest.TestCase):
         def capture(scenario_, run, out, boxes, ticks, book_):
             seen.append(ticks)
             return dict(name=run['name'], dry_run=True)
-        with tempfile.TemporaryDirectory() as folder, mock.patch.object(match, 'run_one', capture), contextlib.redirect_stdout(io.StringIO()):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(match, 'run_one', capture), contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(match, 'LANE', 'unit-lane', create=True):
             match.main(['--scenario', 'mp-relay-hotspot', '--out', str(Path(folder) / 'x'), '--run', 'd-credential-expiry',
                         '--run', 'e-migration-relayed', '--dry-run'])
         self.assertEqual(seen, [24000, 1801])
@@ -353,7 +383,7 @@ class Binding(unittest.TestCase):
     def test_a_closed_report_is_no_route_proof(self):
         closed = {'end_reason': 0, 'found': False, 'relay_pop': 0, 'relayed': False, 'remote_address': '', 'remote_identity': '', 'state': 0}
         run = three_peer_run(mode='automatic', provider='cloudflare', expect_routes={'client': 'relay'}, signals=[], offer_urls=None,
-                             client_connection=closed, connection={'host': 'Automatic', 'client': 'Automatic'},
+                             client_connection=closed, reports={'client': closed}, connection={'host': 'Automatic', 'client': 'Automatic'},
                              logs={'host': receipts(SESSION), 'client': receipts(SESSION)})
         self.assertFalse(match.judge_relay(run)['passed'])
 
@@ -381,7 +411,7 @@ class Evidence(unittest.TestCase):
         self.assertFalse(match.tunnel_receipt(middle)['passed'])
 
     def test_an_unknown_network_precondition_is_refused(self):
-        script = Path(os.environ.get('CC_RELAY_HOTSPOT_SCRIPT', 'D:/Projects/reviews/takeover-20260909/grok-workers/lead-tools/hotspot_relay.sh'))
+        script = Path(os.environ.get('CC_RELAY_HOTSPOT_SCRIPT') or next(Path('D:/Projects/reviews/takeover-20260909').glob('*/lead-tools/hotspot_relay.sh')))
         with tempfile.TemporaryDirectory() as folder:
             shim = Path(folder) / 'ssh'
             shim.write_text('#!/usr/bin/env bash\ncase "$*" in *BackendState*) echo Running;; *) echo "";; esac\n', encoding='utf-8', newline='\n')
@@ -462,30 +492,14 @@ class ProofPieces(unittest.TestCase):
         self.assertFalse(match.menu_choice(chosen + '\n' + receipts(SESSION, route='direct'), 'Relay only', SESSION)['passed'])
         self.assertFalse(match.menu_choice(chosen + '\n' + receipts('another-session'), 'Relay only', SESSION)['passed'])
 
-    def test_a_published_username_or_fixture_is_reported_never_a_secret(self):
-        import relay_secrets
-        published = {FIXED_USER.encode(), b'private-user'}
-        public = lambda value: 'in the repository' if value in published else None
-        with tempfile.TemporaryDirectory() as folder:
-            (Path(folder) / 'notes.md').write_text(f'the {FIXED_USER} project\n{{"username": "private-user"}}\n', encoding='utf-8')
-            sweep = relay_secrets.sweep([folder], book().finder(), public=public)
-            self.assertEqual(sweep['status'], 'CLEAN', sweep['files_with_secrets'])
-            self.assertEqual(sweep['public'][0]['hits'], 2)
-            (Path(folder) / 'Settings.ini').write_text(f'\tNetworkTurnPass = {FIXED_PASS}\n\tNetworkTurnUser = {USER}\n', encoding='utf-8')
-            leaked = relay_secrets.sweep([folder], book().finder(), public=lambda value: 'in the repository')
-        self.assertEqual(leaked['status'], 'LEAKED')
-        self.assertEqual({kind for row in leaked['files_with_secrets'] for kind in row['kinds']} & {'fixed-password', 'minted-username'},
-                         {'fixed-password', 'minted-username'})
-
     def test_the_retired_name_in_a_login_field_is_a_login(self):
         # EDITH's first-pass coturn run kept the retired account's name as NetworkTurnUser (2026-10-03 3:46 PM sweep).
         import relay_secrets
-        public = lambda value: 'in the repository'
         with tempfile.TemporaryDirectory() as folder:
             (Path(folder) / 'Settings.ini').write_text(f'\tNetworkTurnUser = {FIXED_USER}\n', encoding='utf-8')
             (Path(folder) / 'peers.json').write_text(json.dumps({'settings': {'NetworkTurnUser': FIXED_USER}, 'iceServers': [
                 {'username': FIXED_USER}]}), encoding='utf-8')
-            sweep = relay_secrets.sweep([folder], book().finder(), public=public)
+            sweep = relay_secrets.sweep([folder], book().finder())
         self.assertEqual(sweep['status'], 'LEAKED')
         self.assertEqual(sorted(Path(row['path']).name for row in sweep['files_with_secrets']), ['Settings.ini', 'peers.json'])
 
@@ -523,13 +537,414 @@ class ProofPieces(unittest.TestCase):
              mock.patch.object(match, 'sanitize_box', lambda box, root, book_, payload: swept.append(box.name) or dict(box=box.name, status='INCOMPLETE')), \
              mock.patch('relay_secrets.read_turn_config', return_value=dict(turn_key_id='unit-key', api_token='unit-token')), \
              mock.patch('edith_cross.harness', return_value=mock.MagicMock()), mock.patch('edith_cross.looped_input'), \
-             contextlib.redirect_stdout(io.StringIO()):
+             mock.patch.object(match, 'LANE', 'unit-lane', create=True), contextlib.redirect_stdout(io.StringIO()):
             verdict = match.run_one(dict(name='mp-relay-cloudflare'), run, Path(folder), {'edith': FakeBox()}, 1201, SecretBook())
         self.assertEqual(swept, ['edith'])
         self.assertFalse(verdict['passed'])
         self.assertIn('synthetic', verdict['refused'])
         self.assertTrue(any(row.get('box') == 'here' for row in verdict['sanitize']), verdict['sanitize'])
 
+
+
+# --- the green-tip probes: each row was judged wrongly by the tip they were read on -----------------------------------
+
+def supported(function, **kwargs):
+    """The keyword arguments a function takes: a probe passes its evidence to whichever judge it meets, so a judge that
+    ignores a piece of evidence is tested on the rest instead of failing on a signature."""
+    import inspect
+    parameters = inspect.signature(function).parameters
+    return {key: value for key, value in kwargs.items() if key in parameters}
+
+
+def synthetic(label: str, length: int = 64) -> str:
+    import hashlib
+    return hashlib.sha256(label.encode()).hexdigest()[:length]
+
+
+def tracked_repo(folder: Path, text: str) -> Path:
+    """A throwaway repository whose HEAD tracks the text: what 'a matching tracked value' looked like to the old sweep."""
+    repo = folder / 'repo'
+    repo.mkdir()
+    (repo / 'tracked.txt').write_text(text, encoding='utf-8')
+    for command in (['init', '-q'], ['add', 'tracked.txt'], ['-c', 'user.name=unit', '-c', 'user.email=unit@example.invalid', 'commit', '-q', '-m', 'unit']):
+        subprocess.run(['git', '-C', str(repo), *command], capture_output=True, check=True)
+    return repo
+
+
+def lane_sweep(root: Path, folder: Path, secrets: SecretBook, repo: Path) -> tuple[int, dict]:
+    import relay_lane_sweep
+    out = folder / 'receipt.json'
+    with mock.patch.object(relay_lane_sweep, 'lane_book', return_value=(secrets, ['synthetic'])), \
+            mock.patch.object(relay_lane_sweep, 'REPO', repo, create=True), contextlib.redirect_stdout(io.StringIO()):
+        status = relay_lane_sweep.main(['--root', str(root), '--out', str(out)])
+    return status, json.loads(out.read_text(encoding='utf-8'))
+
+
+def read_ticks(path) -> set:
+    path = Path(path)
+    return {json.loads(line)['tick'] for line in path.read_text(encoding='utf-8').splitlines() if line.strip()} if path.is_file() else set()
+
+
+class FakeHarness:
+    def __init__(self, names):
+        pins = {bar: dict(status='PASS', value=1) for bar in match.FEEL_BARS}
+        peer = dict(pins=pins, metrics={}, pass_check=True)
+        self.records = mock.MagicMock()
+        self.feel = mock.MagicMock()
+        self.feel.reduce_timing_case.return_value = dict(peers={name: dict(peer) for name in names}, proof={'pass': True})
+        self.feel.timing_peer.return_value = dict(peer)
+        self.feel.compare_live_hashes.side_effect = lambda left, right, step: [
+            dict(compared_ticks=len(read_ticks(left) & read_ticks(right)), mismatched_ticks=0)]
+
+
+def judge_folder(root: Path, peers: dict, session: str = SESSION, ticks: int = 1202, missing=(), offers=True, provider='cloudflare'):
+    """A finished run's folder: each peer's log with its route receipts, its live ticks, its record and its report."""
+    for name, peer in peers.items():
+        (root / name).mkdir(parents=True)
+        opening = f'[net-ice] host session {session}' if name == 'host' else f'[net-ice] session {session} join_mode=ice resolved'
+        lines = [opening, f'[net-ice] selected candidate={peer["route"]} connection={peer["connection"]}',
+                 f'[net-route] RouteAllowed route={peer["route"]} allowed=1 connection={peer["connection"]}']
+        if name == 'host':
+            lines.append('[net-match] auto input delay: peer 2 rtt 5ms -> 3 frames (manual floor 0)')
+        (root / name / 'stdout.log').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        (root / f'{name}-live.jsonl').write_text(''.join(json.dumps(dict(tick=tick)) + '\n' for tick in range(1, ticks + 1)
+                                                         if tick not in missing), encoding='utf-8')
+        (root / f'{name}-record.json').write_text(json.dumps(dict(exit_code=0, evidence_complete=True, timed_out=False,
+                                                                  exe_sha256='a' * 64)), encoding='utf-8')
+        report = peer.get('report', CLOSED_REPORT if name == 'host' else OPEN_REPORT)
+        (root / f'{name}_report.json').write_text(json.dumps(dict(service=dict(p2p=dict(connection=report, local_identity=peer.get('identity', ''))))),
+                                                  encoding='utf-8')
+    if offers:
+        offer = dict(session_id=session, match_id=f'{session}:0', provider=provider, generation=1, expires_at=4102444800, server_count=2)
+        (root / 'service.log').write_text(f'2026-10-03 INFO relay_offer_issued {json.dumps(offer)}\n', encoding='utf-8')
+    return root
+
+
+def judge_facts(signals, public=False, **changes):
+    facts = dict(started='s', finished='f', states={}, identities={'edith': dict(status='PASS', head='a' * 40, executable_sha256='b' * 64)},
+                 legs={}, ports={}, sessions=[SESSION], signals=signals,
+                 offers_seen=None if public else [dict(session_id=SESSION, urls=['turn:turn.cloudflare.com:3478?transport=udp'], expires_at=4102444800)],
+                 provider_calls=[] if public else [dict(at='2026-10-03 02:00:00 PM MST', epoch=1791066000.0, status=201)],
+                 revokes=[204], minted=[dict(username='unit-minted', expires_at=4102444800, minted_at=1791066000)], public=public, ticks=1201,
+                 ended_epoch=4000000000, overrides_cleared=True,
+                 sanitize=[dict(box='edith', status='CLEAN', hits_before=0, hits_after=0), dict(box='here', status='CLEAN', hits_before=0, hits_after=0)],
+                 fetched=['edith'], relay_hosts=None, coturn_address=None, fixed_pair=None, pair_ttl=None, cleanup=[], minted_at=None, clocks={})
+    facts.update(changes)
+    return facts
+
+
+def full_judge(run, root, facts, directory_lines=()):
+    import edith_cross
+    names = [peer['name'] for peer in run['peers']]
+    with mock.patch.object(edith_cross, 'pair_build_evidence', return_value=dict(passed=True)), \
+            mock.patch.object(edith_cross, 'live_ticks', read_ticks), \
+            mock.patch.object(match, 'registrant', lambda address: dict(address=address, cloudflare=True)), \
+            mock.patch.object(match, 'public_directory_lines', return_value=list(directory_lines)), contextlib.redirect_stdout(io.StringIO()):
+        return match.judge_run(FakeHarness(names), dict(name='unit'), run, root, facts, SecretBook())
+
+
+CLOUDFLARE_SIGNALS = [('host', signal('str:h-6d7c0768', relay_line('104.30.150.145', 4001))),
+                      ('client:aaaa1111bbbb2222cccc3333', signal('str:c-aaaa1111', relay_line('104.30.146.169', 4002)))]
+
+
+def cloudflare_relay_row(folder: Path, missing=()):
+    run = dict(name='cloudflare', relay='cloudflare', peers=[dict(name='host', box='edith', connection='RelayOnly'),
+                                                             dict(name='client', box='edith', connection='RelayOnly')])
+    root = judge_folder(folder / 'run', {'host': dict(route='relay', connection=7),
+                                          'client': dict(route='relay', connection=8, identity='str:c-aaaa1111bbbb2222')}, missing=missing)
+    return run, root, judge_facts(CLOUDFLARE_SIGNALS)
+
+
+class GreenTipProbes(unittest.TestCase):
+    """The probes the read of the green tip ran, as rows: G1-G7 plus the Cloudflare positive control."""
+
+    # G1: no shape hit is excused because a repository tracks the same text.
+    def test_g1_a_tracked_64_hex_login_is_a_secret_hit(self):
+        login = json.dumps(dict(username=synthetic('g1-user'), credential=synthetic('g1-credential')))
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            (folder / 'run').mkdir()
+            (folder / 'run' / 'offer.json').write_text(login, encoding='utf-8')
+            unrelated = SecretBook()
+            unrelated.add('backend-api_token', synthetic('unrelated-token'))
+            status, receipt = lane_sweep(folder / 'run', folder, unrelated, tracked_repo(folder, login))
+        self.assertEqual(status, 1, receipt['roots'][0])
+        self.assertGreaterEqual(receipt['roots'][0]['hits'], 1)
+
+    def test_g1_a_booked_username_in_a_menu_echo_is_found(self):
+        user = synthetic('g1-menu-user', 12)
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            (folder / 'run' / 'host').mkdir(parents=True)
+            (folder / 'run' / 'host' / 'stdout.log').write_text(f'[menu-script] set_text TextHostRelayUser {user} PASS\n', encoding='utf-8')
+            secrets = SecretBook()
+            secrets.add('fixed-username', user, **supported(secrets.add, scope='login-field'))
+            status, receipt = lane_sweep(folder / 'run', folder, secrets, tracked_repo(folder, f'the {user} project\n'))
+        self.assertEqual(status, 1, receipt['roots'][0])
+
+    def test_g1_a_unicode_escaped_credential_is_found(self):
+        credential = synthetic('g1-escaped-credential', 24)
+        escaped = ''.join(f'\\u{ord(character):04x}' for character in credential)
+        text = '{"username": "' + synthetic('g1-escaped-user', 16) + '", "credential": "' + escaped + '"}'
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            (folder / 'run').mkdir()
+            (folder / 'run' / 'capture.json').write_text(text, encoding='utf-8')
+            secrets = SecretBook()
+            secrets.add('minted-credential', credential)
+            status, receipt = lane_sweep(folder / 'run', folder, secrets, tracked_repo(folder, text))
+        self.assertEqual(status, 1, receipt['roots'][0])
+
+    # G2: no secret in any exception text; every exit path sanitizes.
+    def run_patches(self, folder: Path, secret_store: list, start=None):
+        real_init = match.LaneCoturn.__init__
+
+        def init(coturn, book_):
+            real_init(coturn, book_)
+            secret_store.append(coturn.secret)
+        patches = [mock.patch.object(match, 'LANE', 'unit-lane', create=True),
+                   mock.patch.object(match, 'load_boxes', lambda trees, aliases=None: {'edith': FakeBox(), 'ally': FakeBox('ally')}),
+                   mock.patch.object(match, 'identity', return_value=dict(status='PASS', head='a' * 40, executable_sha256='b' * 64, errors=[])),
+                   mock.patch.object(match, 'choose_ports', return_value=list(range(48700, 48706))),
+                   mock.patch.object(match, 'RETIRED_FIXED_CONF', folder / 'no-such.conf'),
+                   mock.patch.object(match, 'sanitize_box', lambda box, root, book_, payload: dict(box=box.name, status='CLEAN', hits_before=0, hits_after=0)),
+                   mock.patch.object(match, 'put_remote_text', lambda box, path, text: None),
+                   mock.patch.object(match.LaneCoturn, '__init__', init),
+                   mock.patch('edith_cross.harness', return_value=mock.MagicMock()), mock.patch('edith_cross.looped_input')]
+        if start is not None:
+            patches.append(mock.patch.object(match.LaneCoturn, 'start', start))
+        return patches
+
+    def test_g2_a_timeout_carrying_the_secret_leaves_no_copy(self):
+        secrets_made = []
+
+        def start(coturn):
+            raise subprocess.TimeoutExpired(cmd=f'ssh Erol-Mac turnserver --static-auth-secret={coturn.secret}', timeout=60)
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            printed = io.StringIO()
+            with contextlib.ExitStack() as stack:
+                for patch in self.run_patches(folder, secrets_made, start):
+                    stack.enter_context(patch)
+                stack.enter_context(contextlib.redirect_stdout(printed))
+                match.main(['--scenario', 'mp-relay-cloudflare', '--run', 'coturn', '--out', str(folder / 'out'),
+                            '--box', 'host=edith', '--box', 'client=edith'])
+            written = [path.read_text(encoding='utf-8', errors='replace') for path in (folder / 'out').rglob('*') if path.is_file()]
+        self.assertTrue(secrets_made)
+        self.assertNotIn(secrets_made[0], printed.getvalue())
+        self.assertFalse([text for text in written if secrets_made[0] in text])
+
+    def test_g2_an_interrupt_still_sweeps_here_and_revokes(self):
+        swept, revoked = [], []
+
+        class Observer:
+            def __init__(self, host_name, book_):
+                self.minted, self.session = [dict(username='unit-public-login', expires_at=4102444800)], SESSION
+
+            def start(self):
+                pass
+
+            def stop(self):
+                pass
+        run = copy.deepcopy(next(run for run in scenario('mp-relay-hotspot')['runs'] if run['name'] == 'a-automatic-fallback'))
+        with tempfile.TemporaryDirectory() as folder, contextlib.ExitStack() as stack:
+            folder = Path(folder)
+            for patch in self.run_patches(folder, []):
+                stack.enter_context(patch)
+            stack.enter_context(mock.patch.object(match, 'PublicObserver', Observer))
+            stack.enter_context(mock.patch.object(match, 'wait_done', side_effect=KeyboardInterrupt()))
+            stack.enter_context(mock.patch.object(match, 'sanitize_local', lambda root, book_: swept.append(root) or dict(box='here', status='CLEAN')))
+            stack.enter_context(mock.patch.object(match, 'revoke_cloudflare', lambda config, names, *args, **kwargs: revoked.extend(names) or [204]))
+            stack.enter_context(mock.patch('relay_secrets.read_turn_config', return_value=dict(turn_key_id='unit', api_token='unit')))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            boxes = {'edith': FakeBox(), 'ally': FakeBox('ally')}
+            for box in boxes.values():
+                box.remote.fail_on = '<every copy succeeds>'
+            with self.assertRaises(KeyboardInterrupt):
+                match.run_one(dict(name='mp-relay-hotspot'), run, folder / 'out', boxes, 1201, SecretBook())
+        self.assertTrue(swept, 'the local sweep did not run')
+        self.assertEqual(revoked, ['unit-public-login'])
+
+    def test_g2_the_expanded_menu_is_blanked_after_a_failure_before_load(self):
+        writes, pair = {}, ('1791066329:' + synthetic('g2-tag', 24), synthetic('g2-credential', 28))
+
+        def start(coturn):
+            coturn.port, coturn.pid = 3490, None
+
+        class Quiet:
+            def __init__(self, *args, **kwargs):
+                self.pin, self.revokes, self.minted, self.signals, self.offers, self.provider_calls, self.box = 'a' * 64, [], [], [], [], [], args[0] if args else None
+
+            def open(self):
+                pass
+
+            def close(self):
+                pass
+
+            def stop(self):
+                pass
+
+            def sessions(self):
+                return []
+        run = copy.deepcopy(next(run for run in scenario('mp-relay-cloudflare')['runs'] if run['name'] == 'fixed'))
+        for peer in run['peers']:
+            peer['box'] = 'edith'
+        box = FakeBox()
+        box.remote.fail_on = '<every copy succeeds>'
+        box.remote.start_task = mock.MagicMock(side_effect=RuntimeError('the task refused to start (synthetic)'))
+        with tempfile.TemporaryDirectory() as folder, contextlib.ExitStack() as stack:
+            folder = Path(folder)
+            for patch in self.run_patches(folder, [], start):
+                stack.enter_context(patch)
+            stack.enter_context(mock.patch.object(match, 'put_remote_text', lambda box_, path, text: writes.__setitem__(str(path), text)))
+            stack.enter_context(mock.patch.object(match, 'coturn_rest_login', return_value=pair))
+            stack.enter_context(mock.patch.object(match, 'box_lan_address', return_value='10.0.0.5'))
+            for name in ('Bridge', 'Directory', 'Tunnel'):
+                stack.enter_context(mock.patch.object(match, name, Quiet))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            verdict = match.run_one(dict(name='mp-relay-cloudflare'), run, folder / 'out', {'edith': box}, 1201, SecretBook())
+        self.assertFalse(verdict['passed'])
+        menus = {path: text for path, text in writes.items() if path.endswith('.menu.txt')}
+        self.assertTrue(menus, 'no menu script was shipped')
+        self.assertFalse([path for path, text in menus.items() if pair[0] in text or pair[1] in text], 'a shipped menu still holds the pair')
+
+    # G3: exactly the row's table; contiguous history.
+    def test_g3_a_correct_automatic_direct_row_passes(self):
+        run = dict(name='automatic', relay='automatic', peers=[dict(name='host', box='edith', connection='Automatic'),
+                                                               dict(name='client', box='edith', connection='Automatic')])
+        srflx = 'candidate:2 1 udp 1694498815 24.251.145.96 51000 typ srflx'
+        with tempfile.TemporaryDirectory() as folder:
+            root = judge_folder(Path(folder) / 'run', {'host': dict(route='direct', connection=7),
+                                                       'client': dict(route='direct', connection=8, identity='str:c-aaaa1111bbbb2222',
+                                                                      report=dict(OPEN_REPORT, relayed=False))})
+            verdict = full_judge(run, root, judge_facts([('host', signal('str:h-6d7c0768', srflx)),
+                                                         ('client:aaaa1111bbbb2222cccc3333', signal('str:c-aaaa1111', srflx))]))
+        self.assertTrue(verdict['passed'], {key: value for key, value in verdict['checks'].items() if not value})
+
+    def test_g3_hotspot_a_with_every_required_check_true_passes(self):
+        run = copy.deepcopy(next(run for run in scenario('mp-relay-hotspot')['runs'] if run['name'] == 'a-automatic-fallback'))
+        at = lambda second: f'2026-10-03 02:{second // 60:02d}:{second % 60:02d} PM MST'
+        offer = dict(session_id=SESSION, match_id=f'{SESSION}:0', provider='cloudflare', generation=1, expires_at=4102444800, server_count=2)
+        bound = dict(OPEN_REPORT, remote_address='104.30.146.169:5000')
+        with tempfile.TemporaryDirectory() as folder:
+            root = judge_folder(Path(folder) / 'run', {'host': dict(route='relay', connection=7, report=bound),
+                                                       'client': dict(route='relay', connection=8, identity='str:c-aaaa1111bbbb2222', report=bound)},
+                                offers=False)
+            (root / 'ally-tailscale.json').write_text(json.dumps([
+                dict(step='before', at=at(0), backend_state='Running'), dict(step='down', at=at(1), exit_code=0, backend_state='Stopped'),
+                dict(step='engine-started', at=at(2), peer='client', backend_state='Stopped'),
+                dict(step='engine-ended', at=at(40), peer='client', backend_state='Stopped'),
+                dict(step='up', at=at(41), exit_code=0, backend_state='Running')]), encoding='utf-8')
+            (root / 'client-panel').mkdir()
+            (root / 'client-panel' / 'net-ui-result.json').write_text(json.dumps({'pass': True, 'complete': True}), encoding='utf-8')
+            verdict = full_judge(run, root, judge_facts([], public=True), [f'INFO relay_offer_issued {json.dumps(offer)}'])
+        self.assertTrue(verdict['passed'], {key: value for key, value in verdict['checks'].items() if not value})
+
+    def test_g3_the_cloudflare_relay_row_passes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            verdict = full_judge(*cloudflare_relay_row(Path(folder)))
+        self.assertTrue(verdict['passed'], {key: value for key, value in verdict['checks'].items() if not value})
+
+    def test_g3_a_pair_missing_tick_600_fails(self):
+        with tempfile.TemporaryDirectory() as folder:
+            verdict = full_judge(*cloudflare_relay_row(Path(folder), missing=(600,)))
+        self.assertFalse(verdict['passed'])
+        self.assertFalse(verdict['checks']['full_history'])
+
+    # G4: a closed report fails; one report and one retained sender entry per peer.
+    def test_g4_a_closed_report_fails_a_three_peer_run(self):
+        verdict = match.judge_relay(three_peer_run(client_connection=CLOSED_REPORT, reports={'client': CLOSED_REPORT, 'client2': OPEN_REPORT},
+                                                   overrides_cleared=True))
+        self.assertFalse(verdict['passed'])
+
+    def test_g4_two_joiners_keep_two_reports_and_two_sender_entries(self):
+        run = dict(name='unit-three', relay='cloudflare', peers=[dict(name='host', box='edith', connection='RelayOnly'),
+                                                                 dict(name='client', box='edith', connection='RelayOnly'),
+                                                                 dict(name='client2', box='ally', connection='RelayOnly')])
+        with tempfile.TemporaryDirectory() as folder:
+            root = judge_folder(Path(folder) / 'run', {'host': dict(route='relay', connection=7),
+                                                       'client': dict(route='relay', connection=8, identity='str:c-aaaa1111bbbb2222'),
+                                                       'client2': dict(route='relay', connection=9, identity='str:c-dddd4444eeee5555')})
+            verdict = full_judge(run, root, judge_facts(three_peer_run()['signals']))
+            retained = json.loads((root / 'signals-candidates.json').read_text(encoding='utf-8'))
+        self.assertEqual(sorted(verdict['relay_evidence'].get('reports', {})), ['client', 'client2'])
+        self.assertEqual(sorted({row.get('peer', row.get('sender')) for row in retained}), ['client', 'client2', 'host'])
+
+    # G5: renewal, migration, the tunnel and the preconditions judged by time and identity.
+    def test_g5_a_mint_before_the_half_life_fails(self):
+        renewed = '[net-relay] relay login renewed on 1 live connection(s)'
+        logs = {peer: receipts(SESSION) + '\n' + renewed + '\n' for peer in ('host', 'client')}
+        first, ttl = 1791066000.0, 300
+
+        def evidence(second_mint):
+            calls = [dict(status=201, epoch=first, at='2026-10-03 02:00:00 PM MST'),
+                     dict(status=201, epoch=second_mint, at='2026-10-03 02:02:25 PM MST')]
+            timed = {peer: [[second_mint + 5, renewed]] for peer in logs}
+            samples = {peer: [[first + 10, 600], [first + ttl + 20, 19000]] for peer in logs}
+            return match.renewal_evidence(logs, calls, list(logs), ttl_s=ttl, **supported(
+                match.renewal_evidence, frames_past_expiry=True, line_times=timed, samples=samples, first_expiry=first + ttl,
+                clocks={peer: (0.0, 0.5) for peer in logs}, session=SESSION))
+        self.assertFalse(evidence(first + 145)['passed'], 'a second mint five seconds before the half-life passed')
+        self.assertTrue(evidence(first + 150)['passed'], evidence(first + 150)['reasons'])
+
+    def test_g5_a_repeated_line_on_the_same_connection_is_no_migration(self):
+        declared = '[net-match] Host left - relayproof-client is now hosting; boundary=600 round=1'
+        seats = {'host': 'relayproof-host', 'client': 'relayproof-client', 'client2': 'relayproof-client2'}
+        stale = {peer: receipts(SESSION) + '\n' + declared + '\n[net-ice] selected candidate=relay connection=7\n' for peer in ('client', 'client2')}
+        fresh = {peer: receipts(SESSION) + '\n' + declared + '\n[net-ice] selected candidate=relay connection=9\n'
+                       '[net-route] RouteAllowed route=relay allowed=1 connection=9\n' for peer in ('client', 'client2')}
+        ticks = {'client': 1801, 'client2': 1801}
+        self.assertFalse(match.migration_declarations(stale, ['client', 'client2'], SESSION, seats, ticks)['passed'])
+        self.assertTrue(match.migration_declarations(fresh, ['client', 'client2'], SESSION, seats, ticks)['passed'])
+
+    def test_g5_a_bracket_shorter_than_the_run_fails(self):
+        rows = tunnel()
+        up = next(row for row in rows if row['step'] == 'up')
+        up['at'] = '2026-10-03 14:00:30 MST'  # back up 35 s before the engine ended, though listed after it
+        self.assertTrue(match.tunnel_receipt(tunnel(), ['client'])['passed'])
+        self.assertFalse(match.tunnel_receipt(rows, ['client'])['passed'])
+
+    def test_g5_malformed_preconditions_are_refused(self):
+        for state, gateway, mapped in (('Running: error reading status', '172.20.10.1', '100.64.1.2:5000'), ('Running', 'None', 'None'),
+                                       ('Running', '172.20.10.1', 'mapped=None')):
+            with self.subTest(state=state, gateway=gateway, mapped=mapped):
+                self.assertEqual(match.hotspot_preflight(state, gateway, mapped)['verdict'], 'REFUSED')
+        self.assertEqual(match.hotspot_preflight('Running', '172.20.10.1', '100.64.1.2:5000')['verdict'], 'AWAY')
+
+    # G6: limits are incomplete, never clean; a scrub keeps the span's representation.
+    def test_g6_four_nested_gzips_are_incomplete(self):
+        data = plain(LOGIN)
+        for _ in range(4):
+            data = gzip.compress(data)
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / 'nested.gz').write_bytes(data)
+            scanned = book().scan([folder])
+        self.assertEqual(scanned.get('status'), 'INCOMPLETE', scanned)
+
+    def test_g6_a_raw_64_hex_login_is_scrubbed_and_verified_clean(self):
+        import relay_secrets
+        login = synthetic('g6-raw-hex-login')
+        secrets = SecretBook()
+        secrets.add('minted-username', login)
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / 'offer.json').write_text(json.dumps(dict(username=login)), encoding='utf-8')
+            scrubbed = relay_secrets.sweep([folder], secrets.finder(), scrub=True)
+            verify = relay_secrets.sweep([folder], secrets.finder())
+            left = (Path(folder) / 'offer.json').read_text(encoding='utf-8')
+        self.assertEqual(scrubbed['status'], 'CLEAN', scrubbed['scrubbed'])
+        self.assertEqual(verify['status'], 'CLEAN', verify['files_with_secrets'])
+        self.assertNotIn(login, left)
+
+    # G7: no lane, model, reader or tool name in the code (the names are assembled so this row does not name them).
+    def test_g7_no_names_in_the_code(self):
+        import re
+        names = ['as' + 'tra', 'op' + 'us', 'cl' + 'aude', 'anth' + 'ropic', 'fa' + 'ble', 'gr' + 'ok', 'ki' + 'mi', 'gp' + 't-', 'co' + 'dex',
+                 'cur' + 'sor', 'de' + 'vin', 'swe' + '-2', 'son' + 'net', 'hai' + 'ku', 'independent ' + 'read']
+        pattern = re.compile('|'.join(re.escape(name) for name in names), re.IGNORECASE)
+        files = sorted(TOOLS.glob('relay_*.py')) + sorted(TOOLS.glob('relay_*.json')) + sorted((TOOLS / 'e2e').glob('mp-relay-*'))
+        found = [f'{path.name}:{number}' for path in files for number, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1)
+                 if pattern.search(line)]
+        self.assertEqual(found, [])
 
 if __name__ == '__main__':
     unittest.main()

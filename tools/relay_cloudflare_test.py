@@ -99,7 +99,7 @@ def cloudflare_run(**changes):
                signals=[('host', signal(relay_line('141.101.90.17'))), ('client-nonce', signal(relay_line('162.159.207.9', 40002)))],
                offers=[dict(session_id=session, match_id=f'{session}:1', provider='cloudflare', generation=1, expires_at=2000, server_count=2)],
                offer_urls=['stun:stun.cloudflare.com:3478', 'turn:turn.cloudflare.com:3478?transport=udp', 'turns:turn.cloudflare.com:443?transport=tcp'],
-               client_connection={'relayed': True, 'remote_address': '141.101.90.17:40001'},
+               reports={'client': {'found': True, 'state': 3, 'relayed': True, 'remote_address': '141.101.90.17:40001'}},
                relay_addresses=None, overrides_cleared=True, run_ends_at=1500)
     run.update(changes)
     return run
@@ -158,13 +158,14 @@ class CloudflareMatchEvidence(unittest.TestCase):
         self.assertFalse(self.judge(run)['passed'])
 
     def test_the_client_report_must_agree_the_connection_is_relayed(self):
-        self.assertFalse(self.judge(cloudflare_run(client_connection={'relayed': False, 'remote_address': '24.251.145.96:5000'}))['passed'])
+        self.assertFalse(self.judge(cloudflare_run(reports={'client': {'found': True, 'relayed': False, 'remote_address': '24.251.145.96:5000'}}))['passed'])
 
     def test_our_relay_passes_only_with_its_own_addresses_and_a_fixed_offer(self):
         coturn = dict(mode='coturn', relay_addresses=['192.168.50.122', '68.3.162.151'],
                       signals=[('host', signal(relay_line('192.168.50.122', 49201))), ('client-nonce', signal(relay_line('192.168.50.122', 49202)))],
                       offers=[dict(session_id='session-one', match_id='session-one:1', provider='coturn', generation=1, expires_at=2000, server_count=1)],
-                      offer_urls=['turn:68.3.162.151:3479?transport=udp'], client_connection={'relayed': True, 'remote_address': '192.168.50.122:49201'})
+                      offer_urls=['turn:68.3.162.151:3479?transport=udp'],
+                      reports={'client': {'found': True, 'state': 3, 'relayed': True, 'remote_address': '192.168.50.122:49201'}})
         self.assertTrue(self.judge(cloudflare_run(**coturn))['passed'])
         through_cloudflare = dict(coturn, signals=cloudflare_run()['signals'])
         self.assertFalse(self.judge(cloudflare_run(**through_cloudflare))['passed'])
@@ -173,8 +174,8 @@ class CloudflareMatchEvidence(unittest.TestCase):
         session = 'session-one'
         run = cloudflare_run(mode='automatic', connection={'host': 'Automatic', 'client': 'Automatic'},
                              logs={'host': receipts(session, route='direct'), 'client': receipts(session, route='direct')},
-                             signals=[('host', signal('candidate:2 1 udp 2130706431 24.251.145.96 51000 typ srflx'))], offers=[], offer_urls=[],
-                             client_connection={'relayed': False, 'remote_address': '24.251.145.96:51000'})
+                             signals=[('host', signal('candidate:2 1 udp 2130706431 24.251.145.96 51000 typ srflx'))],
+                             reports={'client': {'found': True, 'state': 3, 'relayed': False, 'remote_address': '24.251.145.96:51000'}})
         verdict = self.judge(run)
         self.assertTrue(verdict['passed'], verdict['reasons'])
         self.assertEqual(verdict['routes'], {'host': 'direct', 'client': 'direct'})
@@ -276,7 +277,7 @@ class HotspotRows(unittest.TestCase):
         self.assertTrue(verdict['passed'], verdict['reasons'])
         run['logs']['client'] = receipts(session, route='direct')
         run['logs']['host'] = receipts(session, route='direct')
-        run['client_connection'] = {'relayed': False, 'remote_address': '24.251.145.96:5000'}
+        run['reports'] = {'client': {'found': True, 'state': 3, 'relayed': False, 'remote_address': '24.251.145.96:5000'}}
         verdict = self.match().judge_relay(run)
         self.assertFalse(verdict['passed'])
         self.assertTrue(any('fallback' in reason for reason in verdict['reasons']), verdict['reasons'])
@@ -310,22 +311,30 @@ class HotspotRows(unittest.TestCase):
     def test_d_an_expiring_credential_is_renewed_on_the_live_connection(self):
         renewal = self.match().renewal_evidence
         renewed = '[net-relay] relay login renewed on 1 live connection(s)'
-        logs = {'host': renewed, 'client': renewed}
-        calls = [dict(status=201), dict(status=201)]
-        self.assertTrue(renewal(logs, calls, ['host', 'client'])['passed'])
-        self.assertFalse(renewal({'host': renewed, 'client': ''}, calls, ['host', 'client'])['passed'])
-        self.assertFalse(renewal(logs, calls[:1], ['host', 'client'])['passed'])
-        self.assertFalse(renewal(logs, [dict(status=201), dict(status=403, provider_error_code='1010')], ['host', 'client'])['passed'])
+        route = '[net-ice] session s\n[net-ice] selected candidate=relay connection=7\n[net-route] RouteAllowed route=relay allowed=1 connection=7\n'
+        logs = {'host': route + renewed, 'client': route + renewed}
+        calls = [dict(status=201, epoch=1000.0), dict(status=201, epoch=1160.0)]
+        timed = dict(line_times={peer: [[1170.0, renewed]] for peer in logs}, samples={peer: [[1010.0, 600], [1320.0, 19000]] for peer in logs},
+                     first_expiry=1300.0, clocks={peer: (0.0, 0.5) for peer in logs}, session='s', ttl_s=300)
+        self.assertTrue(renewal(logs, calls, ['host', 'client'], **timed)['passed'], renewal(logs, calls, ['host', 'client'], **timed)['reasons'])
+        self.assertFalse(renewal({'host': route + renewed, 'client': route}, calls, ['host', 'client'],
+                                 **dict(timed, line_times={'host': [[1170.0, renewed]], 'client': []}))['passed'])
+        self.assertFalse(renewal(logs, calls[:1], ['host', 'client'], **timed)['passed'])
+        self.assertFalse(renewal(logs, [dict(status=201, epoch=1000.0), dict(status=403, epoch=1160.0, provider_error_code='1010')], ['host', 'client'], **timed)['passed'])
+        self.assertFalse(renewal(logs, calls, ['host', 'client'], **dict(timed, line_times={}))['passed'])
 
     def test_e_the_survivors_name_one_successor_after_the_relayed_host_is_lost(self):
         migration = self.match().migration_declarations
         line = '[net-match] Host left - Client is now hosting; boundary=640 round=1'
-        self.assertEqual(migration({'client': line, 'client2': line}, ['client', 'client2'])['boundary'], 640)
-        self.assertTrue(migration({'client': line, 'client2': line}, ['client', 'client2'])['passed'])
+        successor = '\n[net-ice] selected candidate=relay connection=9\n[net-route] RouteAllowed route=relay allowed=1 connection=9'
+        seats, ticks = {'host': 'Host', 'client': 'Client', 'client2': 'Client2'}, {'client': 1801, 'client2': 1801}
+        both = {'client': line + successor, 'client2': line + successor}
+        self.assertEqual(migration(both, ['client', 'client2'], 's', seats, ticks)['boundary'], 640)
+        self.assertTrue(migration(both, ['client', 'client2'], 's', seats, ticks)['passed'])
         other = '[net-match] Host left - Client2 is now hosting; boundary=640 round=1'
-        self.assertFalse(migration({'client': line, 'client2': other}, ['client', 'client2'])['passed'])
-        self.assertFalse(migration({'client': line, 'client2': ''}, ['client', 'client2'])['passed'])
-        self.assertFalse(migration({'client': line + '\n' + line, 'client2': line}, ['client', 'client2'])['passed'])
+        self.assertFalse(migration({'client': line + successor, 'client2': other + successor}, ['client', 'client2'], 's', seats, ticks)['passed'])
+        self.assertFalse(migration({'client': line + successor, 'client2': ''}, ['client', 'client2'], 's', seats, ticks)['passed'])
+        self.assertFalse(migration({'client': line + '\n' + line + successor, 'client2': line + successor}, ['client', 'client2'], 's', seats, ticks)['passed'])
 
     def test_f_relay_only_chosen_by_hand_is_read_from_the_menu_script(self):
         chosen = self.match().menu_choice
@@ -396,12 +405,12 @@ class OracleCorrections(unittest.TestCase):
     def test_a_report_written_after_the_connection_closed_is_no_route_evidence(self):
         import relay_cloudflare_match as match
         closed = {'end_reason': 0, 'found': False, 'relay_pop': 0, 'relayed': False, 'remote_address': '', 'remote_identity': '', 'state': 0}
-        verdict = match.judge_relay(cloudflare_run(client_connection=closed))
-        self.assertTrue(verdict['passed'], verdict['reasons'])
-        self.assertEqual(verdict['client_report'], 'closed')
-        self.assertEqual(verdict['bindings'], {'host': 'by exclusion', 'client': 'by exclusion'})
+        verdict = match.judge_relay(cloudflare_run(reports={'client': closed}))
+        self.assertFalse(verdict['passed'])
+        self.assertEqual(verdict['reports'], {'client': 'closed'})
+        self.assertFalse(match.judge_relay(cloudflare_run(reports={}))['passed'])
         found_direct = dict(closed, found=True, relayed=False, remote_address='24.251.145.96:5000', state=4)
-        self.assertFalse(match.judge_relay(cloudflare_run(client_connection=found_direct))['passed'])
+        self.assertFalse(match.judge_relay(cloudflare_run(reports={'client': found_direct}))['passed'])
 
 
 class LeakScrub(unittest.TestCase):
