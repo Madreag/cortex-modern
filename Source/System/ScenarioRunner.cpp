@@ -1794,6 +1794,9 @@ namespace RTE {
 				++it;
 			}
 		}
+		// The claims the released seat held on the actors the AI plays for it end here too, at the committed frame on every
+		// peer: a replay never hears the release notice that expires them live.
+		std::erase_if(s_LockstepDroppedControlOverrides, [ownerPeerId](const auto& claim) { return claim.second == ownerPeerId; });
 	}
 
 	bool ScenarioRunner::TakeExpiredDroppedClaim(int64_t actorUniqueID, uint64_t frame) {
