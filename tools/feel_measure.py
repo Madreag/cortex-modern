@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -969,50 +970,79 @@ def analyze(root, stock=None):
     return results
 
 
+def sp_fixture_files(control_launch):
+    """The SP control's own staged module files, or the tracked fixture when the control's runtime is gone; each with its source."""
+    staged = Path(control_launch['cwd']) / 'Userdata/UserScenes.rte'
+    if all((staged / name).is_file() for name in ('Index.ini', 'PieSwitchSP.lua')):
+        return {name: (staged / name).read_bytes() for name in ('Index.ini', 'PieSwitchSP.lua')}, 'control runtime', staged
+    from pie_lockstep.run_arm import FIXTURES, module_index
+    return {'Index.ini': module_index(True).encode('utf-8'), 'PieSwitchSP.lua': (FIXTURES / 'PieSwitchSP.lua').read_bytes()}, 'tracked fixture', FIXTURES
+
+
 def gates(root, control, timeout):
+    """The suite, the script-graph self-test and the single-player comparison; a step that cannot run fails with its reason."""
+    import traceback
     out = root / 'gates'
     out.mkdir(exist_ok=False)
     env = dict(os.environ, CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1')
-    command = [sys.executable, '-B', str(HELPERS / 'launch_budget.py'), str(REPO / 'tools/run_selftests.py'), '--repo', str(REPO),
-               '--out', str(out / 'selftests'), '--timeout', str(timeout)]
-    with (out / 'selftests-driver.log').open('w', encoding='utf-8') as log:
-        suite = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, env=env)
-    graph = make_run(REPO, ['-script-graph-selftest'], out / 'script-graph', timeout=timeout, env=env)
-    try:
-        graph_record = graph.start().finish()
-    finally:
-        graph.close()
-    control_launch = json.loads((control / 'launch.json').read_text(encoding='utf-8'))
-    if control_launch.get('exit_code') != 0 or control_launch.get('timed_out') or not control_launch.get('evidence_complete'):
-        raise ValueError('the SP control did not complete')
-    argv = control_launch['argv'][1:]
-    argv = [value for value in argv if value != '-headless']
-    if argv[argv.index('-scenario') + 1] != 'PieSwitchSP' or any(value.startswith('-feel') or value.startswith('-net') for value in argv):
-        raise ValueError('the SP control is not the uninstrumented pie-close fixture')
-    sp = out / 'sp'
-    argv[argv.index('-out') + 1] = str(sp / 'trace.json')
-    run = make_run(REPO, argv, sp, timeout=timeout, env=dict(CCCP_HEADLESS='1', CC_SIM_DUMP='27:320'),
-                   expected=[sp / 'trace.json', sp / 'trace.json.simdump.txt'])
-    module = Path(run.cwd) / 'Userdata/UserScenes.rte'
-    module.mkdir(exist_ok=True)
-    for name in ('Index.ini', 'PieSwitchSP.lua'):
-        (module / name).write_bytes((Path(control_launch['cwd']) / 'Userdata/UserScenes.rte' / name).read_bytes())
-    try:
-        record = run.start().finish()
-    finally:
-        run.close()
-    write_json(sp / 'sp_summary.json', {key: record.get(key) for key in ('pid', 'exit_code', 'timed_out', 'evidence_complete', 'cwd', 'verdict_lines')})
-    compare_command = [sys.executable, '-B', str(SP_COMPARATOR), str(control), str(sp), str(out / 'sp-comparison.json')]
-    with (out / 'sp-comparison.log').open('w', encoding='utf-8') as log:
-        compared = subprocess.run(compare_command, stdout=log, stderr=subprocess.STDOUT, env=env)
-    suite_json = json.loads((out / 'selftests/result.json').read_text(encoding='utf-8'))
-    graph_text = (out / 'script-graph/stdout.log').read_text(encoding='utf-8-sig', errors='replace')
-    result = dict(measured=stamp(), selftests_command=command, selftests=suite_json,
-                  selftests_pass=suite.returncode == 0 and suite_json.get('passed') == len(SELFTESTS) and suite_json.get('total') == len(SELFTESTS),
-                  script_graph_pass=graph_record.get('exit_code') == 0 and not graph_record.get('timed_out')
-                  and bool(re.search(r'\bPASS\b', graph_text)) and not re.search(r'\bFAIL\b', graph_text),
-                  sp_comparator=file_record(SP_COMPARATOR), sp_compare_command=compare_command,
-                  sp_control_dump=file_record(control / 'trace.json.simdump.txt'), sp_compare_pass=compared.returncode == 0)
+    result = dict(measured=stamp(), selftests_pass=False, script_graph_pass=False, sp_compare_pass=False, errors={})
+    def step(name, body):
+        try:
+            body()
+        except Exception as error:
+            result['errors'][name] = f'{type(error).__name__}: {error}'
+            result[name + '_traceback'] = traceback.format_exc().splitlines()[-4:]
+    def suite():
+        command = [sys.executable, '-B', str(HELPERS / 'launch_budget.py'), str(REPO / 'tools/run_selftests.py'), '--repo', str(REPO),
+                   '--out', str(out / 'selftests'), '--timeout', str(timeout)]
+        result['selftests_command'] = command
+        with (out / 'selftests-driver.log').open('w', encoding='utf-8') as log:
+            done = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, env=env)
+        suite_json = json.loads((out / 'selftests/result.json').read_text(encoding='utf-8'))
+        result['selftests'] = suite_json
+        result['selftests_pass'] = done.returncode == 0 and suite_json.get('passed') == len(SELFTESTS) and suite_json.get('total') == len(SELFTESTS)
+    def graph():
+        run = make_run(REPO, ['-script-graph-selftest'], out / 'script-graph', timeout=timeout, env=env)
+        try:
+            record = run.start().finish()
+        finally:
+            run.close()
+        text = (out / 'script-graph/stdout.log').read_text(encoding='utf-8-sig', errors='replace')
+        result['script_graph_pass'] = record.get('exit_code') == 0 and not record.get('timed_out') \
+            and bool(re.search(r'\bPASS\b', text)) and not re.search(r'\bFAIL\b', text)
+    def single_player():
+        control_launch = json.loads((control / 'launch.json').read_text(encoding='utf-8'))
+        if control_launch.get('exit_code') != 0 or control_launch.get('timed_out') or not control_launch.get('evidence_complete'):
+            raise ValueError('the SP control did not complete')
+        argv = control_launch['argv'][1:]
+        argv = [value for value in argv if value != '-headless']
+        if argv[argv.index('-scenario') + 1] != 'PieSwitchSP' or any(value.startswith('-feel') or value.startswith('-net') for value in argv):
+            raise ValueError('the SP control is not the uninstrumented pie-close fixture')
+        files, source, origin = sp_fixture_files(control_launch)
+        result['sp_fixture'] = dict(source=source, path=str(origin), sha256={name: hashlib.sha256(data).hexdigest() for name, data in files.items()})
+        sp = out / 'sp'
+        argv[argv.index('-out') + 1] = str(sp / 'trace.json')
+        run = make_run(REPO, argv, sp, timeout=timeout, env=dict(CCCP_HEADLESS='1', CC_SIM_DUMP='27:320'),
+                       expected=[sp / 'trace.json', sp / 'trace.json.simdump.txt'])
+        module = Path(run.cwd) / 'Userdata/UserScenes.rte'
+        module.mkdir(exist_ok=True)
+        for name, data in files.items():
+            (module / name).write_bytes(data)
+        try:
+            record = run.start().finish()
+        finally:
+            run.close()
+        write_json(sp / 'sp_summary.json', {key: record.get(key) for key in ('pid', 'exit_code', 'timed_out', 'evidence_complete', 'cwd', 'verdict_lines')})
+        compare_command = [sys.executable, '-B', str(SP_COMPARATOR), str(control), str(sp), str(out / 'sp-comparison.json')]
+        result.update(sp_comparator=file_record(SP_COMPARATOR), sp_compare_command=compare_command,
+                      sp_control_dump=file_record(control / 'trace.json.simdump.txt'))
+        with (out / 'sp-comparison.log').open('w', encoding='utf-8') as log:
+            compared = subprocess.run(compare_command, stdout=log, stderr=subprocess.STDOUT, env=env)
+        result['sp_compare_pass'] = compared.returncode == 0
+    step('selftests', suite)
+    step('script_graph', graph)
+    step('sp_compare', single_player)
+    result['reasons'] = [f'{name}: {error}' for name, error in result['errors'].items()]
     write_json(out / 'gates.json', result)
     return result
 
@@ -1258,7 +1288,8 @@ def _main(argv=None):
                       presentation_measurement_complete=all(row.get('measurement_complete', False) for row in results),
                       launches_complete=bool(case_launches) and all(case_launches.values()),
                       case_launches=case_launches, item9a_pass=item9a_pass, item9a_checks=len(item9a_rows), gates_pass=gate_pass,
-                      scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT), gates_unverified=skip_gates, failure_reasons=reasons)
+                      scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT), gates_unverified=skip_gates, failure_reasons=reasons,
+                      gates={key: gate_result.get(key) for key in ('selftests_pass', 'script_graph_pass', 'sp_compare_pass', 'reasons')} if gate_result else None)
     write_json(root / 'completion.json', completion)
     with (root / 'summary.md').open('a', encoding='utf-8') as stream:
         stream.write(f'\nGates passed: {gate_pass}. See gates/gates.json and completion.json.\n')

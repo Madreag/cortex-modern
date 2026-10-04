@@ -17,6 +17,19 @@ from run_sim_test import make_run
 from win32_test_runner import firewall_allows_inbound
 
 
+def module_index(sp):
+    """The UserScenes.rte Index.ini the fixture runs from; the single-player form declares its activity."""
+    index = ('DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n'
+             '\tIgnoreMissingItems = 1\n')
+    if sp:
+        index += ('\tAddActivity = GAScripted\n\t\tPresetName = Determinism PieSwitchSP\n'
+                  '\t\tSceneName = Grasslands\n\t\tScriptPath = UserScenes.rte/PieSwitchSP.lua\n'
+                  '\t\tLuaClassName = PieSwitchSP\n\t\tMinTeamsRequired = 1\n'
+                  '\t\tIsTestActivity = 1\n\t\tDefaultRequireClearPathToOrbit = 0\n'
+                  '\t\tDefaultFogOfWar = 0\n\t\tDefaultDeployUnits = 0\n')
+    return index
+
+
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -92,15 +105,7 @@ def main():
             (module / 'PieObserver.lua').write_bytes(observer.read_bytes())
             (module / 'PieCase.lua').write_text('return ' + json.dumps(args.case) + '\n', encoding='utf-8')
             (module / 'PieSwitchSP.lua').write_bytes(setup.read_bytes())
-            index = ('DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n'
-                     '\tIgnoreMissingItems = 1\n')
-            if args.sp:
-                index += ('\tAddActivity = GAScripted\n\t\tPresetName = Determinism PieSwitchSP\n'
-                          '\t\tSceneName = Grasslands\n\t\tScriptPath = UserScenes.rte/PieSwitchSP.lua\n'
-                          '\t\tLuaClassName = PieSwitchSP\n\t\tMinTeamsRequired = 1\n'
-                          '\t\tIsTestActivity = 1\n\t\tDefaultRequireClearPathToOrbit = 0\n'
-                          '\t\tDefaultFogOfWar = 0\n\t\tDefaultDeployUnits = 0\n')
-            (module / 'Index.ini').write_text(index, encoding='utf-8')
+            (module / 'Index.ini').write_text(module_index(args.sp), encoding='utf-8')
             runs.append((peer, run))
             run.start()
             if peer == 'host':

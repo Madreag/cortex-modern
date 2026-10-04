@@ -85,6 +85,23 @@ class ReportSerialization(unittest.TestCase):
             self.assertTrue(any('reduction failed: TypeError' in reason for reason in bad['reasons']), bad)
             self.assertEqual(json.loads((root / 'good-arm/feel-report.json').read_text(encoding='utf-8'))['verdict']['first_divergence'], 948)
 
+    def test_a_gate_step_that_cannot_run_is_recorded_not_raised(self):
+        from unittest.mock import patch
+        import feel_measure
+        with tempfile.TemporaryDirectory() as folder:
+            root, control = Path(folder) / 'run', Path(folder) / 'control'
+            root.mkdir(); control.mkdir()
+            (control / 'launch.json').write_text(json.dumps(dict(exit_code=0, evidence_complete=True, cwd=str(control / 'pruned-runtime'),
+                argv=['engine.exe', '-headless', '-scenario', 'PieSwitchSP', '-seed', '42', '-out', str(control / 'trace.json')])))
+            with patch.object(feel_measure.subprocess, 'run', side_effect=OSError('no suite in a unit test')), \
+                 patch.object(feel_measure, 'make_run', side_effect=OSError('no engine in a unit test')):
+                result = feel_measure.gates(root, control, 1)
+            self.assertEqual((result['selftests_pass'], result['script_graph_pass'], result['sp_compare_pass']), (False, False, False))
+            self.assertEqual(sorted(result['errors']), ['script_graph', 'selftests', 'sp_compare'])
+            self.assertEqual(result['sp_fixture']['source'], 'tracked fixture', 'a pruned control runtime stages the tracked fixture')
+            written = json.loads((root / 'gates/gates.json').read_text(encoding='utf-8'))
+            self.assertEqual(len(written['reasons']), 3)
+
 
 if __name__ == '__main__':
     unittest.main()
