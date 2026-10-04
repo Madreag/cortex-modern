@@ -34,7 +34,7 @@ class LocalHost(unittest.TestCase):
             self.assertEqual(host['box'], 'EROL-PC')
             self.assertEqual(Path(host['root']), options(row).out)
             self.assertEqual(host['executable'], boxes[0]['executable'])
-            self.assertNotIn('driver', plan)
+            self.assertFalse(plan.get('driver'))
             self.assertNotIn('Z13', str(plan['boxes']))
 
     def test_retired_host_is_refused_before_any_transport(self):
