@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -31,8 +32,9 @@ def main(argv=None) -> int:
         parser.error(f'{out} exists; the control is written to a new folder')
     flags = ['-scenario', 'PieSwitchSP', '-seed', '42', '-max-ticks', '320', '-tick-hashes',
              '-out', str(out / 'trace.json'), '-input-script', str(INPUT_SCRIPT)]
-    run = make_run(args.repo, flags, out, timeout=args.timeout, env=dict(CCCP_HEADLESS='1', CC_SIM_DUMP='27:320'),
-                   expected=[out / 'trace.json', out / 'trace.json.simdump.txt'])
+    # A control executable kept outside a tree finds the tree's libraries on the path, as run_arm.py's does.
+    env = dict(CCCP_HEADLESS='1', CC_SIM_DUMP='27:320', PATH=str(args.repo.resolve()) + os.pathsep + os.environ.get('PATH', ''))
+    run = make_run(args.repo, flags, out, timeout=args.timeout, env=env, expected=[out / 'trace.json', out / 'trace.json.simdump.txt'])
     if args.exe:
         run.argv[0] = str(args.exe.resolve())
     module = Path(run.cwd) / 'Userdata/UserScenes.rte'
