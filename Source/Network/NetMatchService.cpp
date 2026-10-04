@@ -3741,8 +3741,8 @@ static std::string ResyncSaveName() {
 		// Every return under way reads the tail on from the last frame it applied.
 		for (const NetWorldJoinSession& session: sessions)
 			if (session.phase != NetWorldJoinPhase::Active && session.snapshotTick != 0) floor = std::min(floor, session.acknowledgedThrough + 1);
-		// A held seat may come back holding its own state from just before its hold, while catching up in place still beats an image.
-		const auto window = static_cast<uint64_t>(std::ceil(c_InPlaceReturnWindowMs / (tickMs > 0.0 ? tickMs : 1000.0 / 60.0)));
+		// A held seat may come back holding its own state from just before its hold for as long as the host's return window keeps it.
+		const auto window = static_cast<uint64_t>(std::ceil(returnWindowMinutes * 60000.0 / (tickMs > 0.0 ? tickMs : 1000.0 / 60.0)));
 		const uint64_t skew = NetLockstepCodec::c_MaxFutureFrameSkew;
 		for (const auto& [peer, hold]: holds)
 			if (tick < hold.cutoffFrame + window) floor = std::min(floor, hold.cutoffFrame > skew ? hold.cutoffFrame - skew : 1);

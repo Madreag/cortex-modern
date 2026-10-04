@@ -867,7 +867,6 @@ namespace RTE {
 		/// Ends the joiner's catch-up the moment its own coordinator runs: the round owns the wire and
 		/// the pacing from there. Returns whether this call released it.
 		static bool ReleaseWorldCatchUpOnceRunning(bool coordinatorRunning, NetWorldCatchUpClient& catchUp);
-		static constexpr double c_InPlaceReturnWindowMs = 300000.0; //!< How long after its hold a seat may still come back holding its own state.
 		/// The oldest frame a returner arriving now could be served from, from its parts: the base it would get (none when it would take a new
 		/// one), the returns under way and the holds, each hold kept for the host's return window.
 		static uint64_t ReturnHistoryFloor(uint64_t tick, std::optional<uint64_t> servedBaseTick, const std::vector<NetWorldJoinSession>& sessions,
