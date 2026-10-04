@@ -225,7 +225,11 @@ def fullstate_pairs(root: Path, admissions: bool = False) -> dict:
         client_log = host_log.parent.parent / "client" / "stdout.log"
         if client_log.is_file():
             verdict = compare_fullstate(host_log, client_log)
-            if admissions and (reason := unsampled_admissions(verdict, host_log, client_log)):
+            # A round its own clock ended with a seat still coming back ran again longer: it is never asked for a sample after a
+            # return it did not reach, and every sample it took is still compared.
+            if (host_log.parent.parent / SHORT_ROUND).is_file():
+                verdict["short_round"] = json.loads((host_log.parent.parent / SHORT_ROUND).read_text(encoding="utf-8")).get("short")
+            elif admissions and (reason := unsampled_admissions(verdict, host_log, client_log)):
                 verdict["reasons"].append(reason)
                 verdict["passed"] = False
             results[host_log.parent.parent.relative_to(root).as_posix()] = verdict
@@ -1086,7 +1090,7 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "") -> dic
             "forced_hold": {'died': died_hold, 'resumed': resumed_hold}}
 
 
-def _world_peer_args(root: Path, who: str, port: int, ticks: int, extra: list, own_ticks: int = 0) -> list:
+def _world_peer_args(root: Path, who: str, port: int, ticks: int, extra: list, own_ticks: int = 0, fullstate: bool = True) -> list:
     """One peer of a persistent world: the host is the dedicated world daemon, the client an ordinary join.
     `own_ticks` is the cap a peer counts from its own first tick; it defaults to `ticks` for a round that starts at 0."""
     args = ["-net-port", str(port), "-net-match-peers", "2", "-net-match-input-delay", "3",
@@ -1098,7 +1102,7 @@ def _world_peer_args(root: Path, who: str, port: int, ticks: int, extra: list, o
         args = ["-net-dedicated", "-net-persistent-world", *args]
     else:
         args = ["-net-match-service-e2e", "-net-join", "127.0.0.1", *args]
-    return args + extra + fullstate_args()
+    return args + extra + (fullstate_args() if fullstate else [])
 
 
 def _carry_world_state(source: Path, who: str, runtime: Path) -> None:
@@ -1149,12 +1153,14 @@ def _world_kill_ready(host_log: str, client_log: str, kill_past: int, published:
 
 
 def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict, kill_past: int = 0,
-                     carry=None, own_ticks: int = 0, after_carry=None) -> dict:
+                     carry=None, own_ticks: int = 0, after_carry=None, return_wait_ticks: int = 0) -> dict:
     """One round of a persistent world. `carry` is the previous round's root: its world state is
     copied into each staged runtime after the runner prepares it and before the process starts;
-    `after_carry(who, runtime)` then edits what that peer finds on its disk."""
+    `after_carry(who, runtime)` then edits what that peer finds on its disk. `return_wait_ticks` bounds the kill's wait on a
+    held seat's return by the round's ticks since the hold instead of by wall time."""
     if FAMILY_LOCK.exists():
         raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
+    timeout = world_round_timeout_s(own_ticks or ticks)
     runs, records = {}, {}
     def drive(who: str) -> None:
         try:
@@ -1167,7 +1173,7 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
     try:
         for who in ("host", "client"):
             runs[who] = make_run(repo, _world_peer_args(root, who, port, ticks, extra.get(who, []), own_ticks),
-                                 root / who, 420, env={"CCCP_HEADLESS": "1"})
+                                 root / who, timeout, env={"CCCP_HEADLESS": "1"})
             if carry is not None:
                 _carry_world_state(carry, who, Path(runs[who].cwd))
             if after_carry is not None:
@@ -1179,7 +1185,7 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
             waiter = threading.Event()
             waited_on_return = 0
             sample_wait_began, shared_seen_at, shared_count = None, [], 0
-            for _ in range(4200):
+            for _ in range(timeout * 10):
                 waiter.wait(0.1)
                 host_log, client_log = peer_log(root, "host"), peer_log(root, "client")
                 if FULLSTATE_EVERY and len(shared := _shared_samples(host_log, client_log)) > shared_count:
@@ -1196,7 +1202,8 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
                 ready = _world_kill_ready(host_log, client_log, kill_past, published, ticket.exists())
                 blocked = None if ready else "the kill conditions (seated client, ticket, a capture past the kill tick, a published autosave)"
                 # The kill waits for a held seat to come back, as a player's host would not die mid-rejoin on cue.
-                if ready and _seat_mid_return(host_log) and waited_on_return < WORLD_KILL_RETURN_WAIT_POLLS:
+                if ready and kill_waits_on_return(host_log, last_live_tick(root / "host-live.jsonl") if return_wait_ticks else 0,
+                                                  return_wait_ticks, waited_on_return):
                     waited_on_return += 1
                     ready, blocked = False, f"a held seat's return (held at {SEAT_HELD.findall(host_log)[-1]}, waited {waited_on_return / 10} s)"
                 # And for the first sample both peers share after it, bounded by the cadence the shared samples keep.
@@ -1223,6 +1230,258 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
             run.close()
     records["_killed"] = killed
     return records
+
+
+WRITER_DONE = re.compile(r"^\[autosave\] tick=(\d+) freeze_us=(\d+) worker_us=(\d+) image_bytes=(\d+) ", re.MULTILINE)
+WRITE_SPLIT = re.compile(r"^\[autosave-split\] tick=(\d+) [^\n]*?\bcompress_write_ms=(\d+(?:\.\d+)?) ", re.MULTILINE)
+SEAT_HOLD_LINE = re.compile(r"^\[net-match\] hold peer=(\d+) frame=(\d+) AI in control([^\n]*)$", re.MULTILINE)
+SEAT_RECLAIM_LINE = re.compile(r"^\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+)", re.MULTILINE)
+CATCH_UP_LIMIT_SETTING = re.compile(r"(?m)^\s*NetworkHostJoinLagSeconds\s*=\s*(\d+)\s*$")
+# The write probe's own cap: a writer that finishes no checkpoint in a minute of the round fails the probe by name.
+WRITE_PROBE_TICKS = 3600
+# A round its own clock ended short runs at most this often in all.
+WORLD_ROUND_ATTEMPTS = 3
+# Left in a round that ran again because its clock ended it with a seat still coming back: the full-state oracle still compares
+# its samples, but cannot ask it for a sample after a return it never reached.
+SHORT_ROUND = "short-round.json"
+RED_JOINER_MISSED_LIMIT = "joiner-missed-the-default-catch-up-limit"
+
+
+def catch_up_limit(source: Path | None = None) -> dict:
+    """The host's default 'Catch-up limit' (NetworkHostJoinLagSeconds) as the game's settings code sets it - SettingsMan's Clear()
+    and its member initializer, which must agree - and the world join deadline that bounds a world bootstrap, both read from the
+    sources under test."""
+    source = source or Path(__file__).resolve().parents[1] / "Source"
+    cleared = re.findall(r"(?m)^\s*m_NetworkHostJoinLagSeconds\s*=\s*(\d+)\s*;", (source / "Managers/SettingsMan.cpp").read_text(encoding="utf-8"))
+    member = re.findall(r"(?m)^\s*int\s+m_NetworkHostJoinLagSeconds\s*=\s*(\d+)\s*;", (source / "Managers/SettingsMan.h").read_text(encoding="utf-8"))
+    deadline = re.findall(r"(?m)^\s*inline\s+constexpr\s+uint64_t\s+c_NetWorldJoinDeadlineMs\s*=\s*(\d+)\s*;",
+                          (source / "Network/NetWorldJoin.h").read_text(encoding="utf-8"))
+    if len(cleared) != 1 or cleared != member:
+        raise RuntimeError(f"SettingsMan no longer sets one default NetworkHostJoinLagSeconds: Clear() {cleared}, member {member}")
+    if len(deadline) != 1:
+        raise RuntimeError(f"NetWorldJoin.h no longer names one c_NetWorldJoinDeadlineMs: {deadline}")
+    return {"default_s": int(cleared[0]), "join_deadline_s": int(deadline[0]) / 1000,
+            "source": "Source/Managers/SettingsMan.cpp m_NetworkHostJoinLagSeconds in Clear() and its SettingsMan.h initializer; "
+                      "the join deadline from Source/Network/NetWorldJoin.h c_NetWorldJoinDeadlineMs"}
+
+
+def writer_measurement(host_log: str, autosaves: Path):
+    """The first checkpoint the host's writer finished, from its own line: the write's seconds, the image it serialized and the
+    archive it wrote to disk. None before a write has finished."""
+    done = WRITER_DONE.search(host_log)
+    if done is None:
+        return None
+    tick, identity = int(done[1]), WORLD_IDENTITY.search(host_log)
+    archive = autosaves / f"{identity[1]}-{tick}.ccsave" if identity else None
+    split = {int(row[0]): float(row[1]) for row in WRITE_SPLIT.findall(host_log)}
+    return {"tick": tick, "write_seconds": int(done[3]) / 1e6, "freeze_ms": int(done[2]) / 1000, "compress_write_ms": split.get(tick),
+            "image_bytes": int(done[4]), "archive_bytes": archive.stat().st_size if archive is not None and archive.is_file() else None}
+
+
+def measure_world_write(repo: Path, root: Path, port: int) -> dict:
+    """One checkpoint write of the world arms' own world on this machine: a two-peer world round with the arms' flags runs until
+    the host's writer has finished its first checkpoint, then both peers are stopped. The peers run as probe-host and probe-client,
+    outside the rounds the full-state oracle judges, and take no full-state samples."""
+    if FAMILY_LOCK.exists():
+        raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
+    root.mkdir(parents=True, exist_ok=False)
+    names = {"host": "probe-host", "client": "probe-client"}
+    autosaves = root / "probe-host/runtime/Autosaves"
+    runs, records, measured = {}, {}, None
+
+    def drive(who: str) -> None:
+        try:
+            records[who] = runs[who].start().finish()
+        except Exception as error:
+            records[who] = {"error": repr(error)}
+
+    threads = {who: threading.Thread(target=drive, args=(who,)) for who in names}
+    try:
+        for who, name in names.items():
+            runs[who] = make_run(repo, _world_peer_args(root, who, port, WRITE_PROBE_TICKS, [], fullstate=False), root / name,
+                                 world_round_timeout_s(WRITE_PROBE_TICKS), env={"CCCP_HEADLESS": "1"})
+        threads["host"].start()
+        threading.Event().wait(1)
+        threads["client"].start()
+        while measured is None and threads["host"].is_alive():
+            threading.Event().wait(0.2)
+            measured = writer_measurement(peer_log(root, names["host"]), autosaves)
+        for who, thread in threads.items():
+            if thread.is_alive():
+                try:
+                    runs[who].terminate(code=137, reason="write probe measured")
+                except RuntimeError:
+                    pass
+        for thread in threads.values():
+            if thread.ident is not None:
+                thread.join()
+    finally:
+        for run in runs.values():
+            run.close()
+    host_log = peer_log(root, names["host"])
+    measured = measured or writer_measurement(host_log, autosaves)
+    assert measured, (f"the write probe's world host finished no checkpoint write in {WRITE_PROBE_TICKS} ticks: captures "
+                      f"{captures_text(host_log)}; host {records.get('host', {}).get('exit_code')} {records.get('host', {}).get('error', '')}")
+    return dict(measured, root=str(root))
+
+
+def last_live_tick(path: Path) -> int:
+    """The newest tick a live-hash file records, read from its tail; 0 before it has one."""
+    try:
+        with open(path, "rb") as stream:
+            stream.seek(max(0, stream.seek(0, os.SEEK_END) - 65536))
+            lines = stream.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return 0
+    for line in reversed(lines):
+        try:
+            return int(json.loads(line)["tick"])
+        except (ValueError, KeyError, TypeError):
+            continue
+    return 0
+
+
+def live_tick_span(path: Path) -> tuple[int, int]:
+    """The first and last ticks a live-hash file records; a line a kill cut short is skipped. (0, 0) without one."""
+    ticks = []
+    if Path(path).is_file():
+        for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                ticks.append(int(json.loads(line)["tick"]))
+            except (ValueError, KeyError, TypeError):
+                continue
+    return (min(ticks), max(ticks)) if ticks else (0, 0)
+
+
+def seat_entries(host_log: str, last_tick: int) -> list[dict]:
+    """Every seat the host held in a round and the tick it was back, in the round's ticks: `ticks` is how long it was away, and a
+    seat still away when the round ended has no `back` and counts to `last_tick`. The host's own seat, held while its own simulation
+    stalls, never re-enters and is not a joiner; a hold agreed past the round's last tick never touched the round."""
+    events = sorted([(match.start(), int(match[1]), int(match[2]), match[3]) for match in SEAT_HOLD_LINE.finditer(host_log)] +
+                    [(match.start(), int(match[1]), int(match[2]), None) for match in SEAT_RECLAIM_LINE.finditer(host_log)])
+    away, entries = {}, []
+    for _, peer, frame, hold in events:
+        if hold is not None:
+            if "the host's own seat" not in hold and frame <= last_tick:
+                away.setdefault(peer, frame)
+        elif peer in away:
+            held = away.pop(peer)
+            entries.append({"peer": peer, "hold": held, "back": frame, "ticks": frame - held})
+    entries += [{"peer": peer, "hold": held, "back": None, "ticks": max(0, last_tick - held)} for peer, held in away.items()]
+    return entries
+
+
+def kill_waits_on_return(host_log: str, now: int, return_wait_ticks: int, waited_polls: int) -> bool:
+    """Whether a world kill still waits on a held seat: a joiner away for up to `return_wait_ticks` of the round when given (the
+    round's tick `now`), any other hold - the host's own seat - for the old wall-clock bound of polls."""
+    if not _seat_mid_return(host_log):
+        return False
+    away = [entry["hold"] for entry in seat_entries(host_log, now) if entry["back"] is None] if return_wait_ticks else []
+    return now - max(away) < return_wait_ticks if away else waited_polls < WORLD_KILL_RETURN_WAIT_POLLS
+
+
+def judge_entries(name: str, entries: list[dict], limit: dict, write_seconds: float, last_tick: int) -> None:
+    """The product's question: every seat a round held came back within the host's default catch-up limit. One back past it, or
+    still away at the round's end past it, fails by name: a game defect, not the test's clock."""
+    limit_ticks = limit["default_s"] * ROUND_TICKS_PER_SECOND
+    for entry in entries:
+        away = entry["back"] is None
+        if entry["ticks"] > limit_ticks or (away and entry["ticks"] >= limit_ticks):
+            where = f"still away when the round ended at {last_tick}" if away else f"back at {entry['back']}"
+            raise AssertionError(f"{RED_JOINER_MISSED_LIMIT}: needed {'more than ' if away else ''}"
+                                 f"{entry['ticks'] / ROUND_TICKS_PER_SECOND:.1f} s, limit {limit['default_s']} s, write {write_seconds:.2f} s "
+                                 f"({name}: peer {entry['peer']} held at {entry['hold']}, {where})")
+
+
+def written_since(root: Path, start: int) -> int:
+    """How many checkpoints the round's host wrote past tick `start`."""
+    return len({int(row[0]) for row in RETAINED.findall(peer_log(root, "host")) if int(row[0]) > start})
+
+
+def staged_catch_up_limit(root: Path):
+    """The catch-up limit the round's host ran with when its staged Settings.ini sets one; None when it keeps the default."""
+    settings = root / "host/runtime/Userdata/Settings.ini"
+    found = CATCH_UP_LIMIT_SETTING.search(settings.read_text(encoding="utf-8", errors="replace")) if settings.is_file() else None
+    return int(found[1]) if found else None
+
+
+def save_clock(clock: dict) -> None:
+    """The world arms' clock as it stands, with its five numbers on top."""
+    rounds, write = clock["rounds"], clock.get("write") or {}
+    back = [entry["ticks"] for record in rounds.values() for attempt in record["attempts"] for entry in attempt["entries"]
+            if entry["back"] is not None]
+    clock["numbers"] = {
+        "write_seconds": write.get("write_seconds"), "write_bytes": write.get("archive_bytes"), "image_bytes": write.get("image_bytes"),
+        "computed_round_ticks": {name: record["computed_ticks"] for name, record in rounds.items()},
+        "final_round_ticks": {name: record.get("final_ticks") for name, record in rounds.items()},
+        "old_round_ticks": {name: record["old_ticks"] for name, record in rounds.items()},
+        "catch_up_limit_s": clock["catch_up_limit"]["default_s"],
+        "joiner_catch_up_seconds": round(max(back) / ROUND_TICKS_PER_SECOND, 2) if back else None,
+        "joiner_returns": len(back),
+    }
+    if not back:
+        clock["numbers"]["joiner_note"] = "no seat was held in these rounds: every seat played from its round's start"
+    Path(clock["path"]).write_text(json.dumps(clock, indent=2) + "\n", encoding="utf-8")
+
+
+def world_clock(repo: Path, root: Path, port: int) -> dict:
+    """The world arms' clock, taken at their start: the host's default catch-up limit from the settings code and one checkpoint
+    write of their world on this machine. Kept in <root>/world_clock.json as the rounds run."""
+    clock = {"path": str(root / "world_clock.json"), "catch_up_limit": catch_up_limit(), "rounds": {}}
+    clock["write"] = measure_world_write(repo, root / "write-probe", port)
+    save_clock(clock)
+    return clock
+
+
+def run_world_round_sized(name: str, run_round, root: Path, clock: dict, old_ticks: int, writes: int, lead_ticks: int,
+                          entry_ticks: int = 0, written=None) -> tuple[Path, dict, int]:
+    """Runs one world round, run_round(run_root, ticks), at the ticks this machine's measured write needs, judges every seat it held
+    against the host's default catch-up limit, and runs it again, longer, only when the round's own clock ended it short: a held
+    seat still coming back inside the limit (the next run gives that seat the whole limit), or, given `written(root, start)`, fewer
+    than `writes` checkpoints written with no seat away while the round's own slowest write says its passes did not fit (the next
+    run is sized from that write). A host that did not end its round itself is never run again: the arm judges it."""
+    write_seconds = clock["write"]["write_seconds"]
+    limit_ticks = clock["catch_up_limit"]["default_s"] * ROUND_TICKS_PER_SECOND
+    ticks = world_round_ticks(old_ticks, write_seconds, writes, lead_ticks, entry_ticks)
+    record = clock["rounds"][name] = {"old_ticks": old_ticks, "computed_ticks": ticks, "writes": writes, "lead_ticks": lead_ticks,
+                                      "entry_ticks": entry_ticks, "attempts": []}
+    run_root = root
+    for _ in range(WORLD_ROUND_ATTEMPTS):
+        records = run_round(run_root, ticks)
+        first, last = live_tick_span(run_root / "host-live.jsonl")
+        host_log = peer_log(run_root, "host")
+        entries = seat_entries(host_log, last)
+        attempt = {"root": run_root.name, "ticks": ticks, "first_tick": first, "last_tick": last, "entries": entries,
+                   "host_catch_up_limit_s": staged_catch_up_limit(run_root)}
+        record["attempts"].append(attempt)
+        save_clock(clock)
+        judge_entries(name, entries, clock["catch_up_limit"], write_seconds, last)
+        host = records.get("host") or {}
+        ended = "error" not in host and host.get("exit_code") == 0 and not host.get("timed_out") and not records.get("_killed")
+        start, away, later = max(first - 1, 0), [entry for entry in entries if entry["back"] is None], None
+        if ended and away:
+            latest = max(away, key=lambda entry: entry["hold"])
+            later = world_round_ticks(ticks, write_seconds, writes, latest["hold"] - start, limit_ticks)
+            attempt["short"] = f"peer {latest['peer']} held at {latest['hold']} was still coming back when the round ended at {last}"
+        elif ended and written is not None and (count := written(run_root, start)) < writes:
+            slowest = max([write_seconds] + [int(row[2]) / 1e6 for row in WRITER_DONE.findall(host_log)])
+            settled = max([lead_ticks + entry_ticks] + [entry["back"] - start for entry in entries])
+            if (sized := world_round_ticks(ticks, slowest, writes, settled)) > ticks:
+                later = sized
+                attempt["short"] = f"{count} of {writes} checkpoints written; its slowest write took {slowest:.2f} s"
+        # A round that already had the length it would be given again was not short of its clock: the arm judges it.
+        if later is not None and later <= ticks:
+            later = None
+            attempt.pop("short")
+        if later is None:
+            record["final_ticks"] = ticks
+            save_clock(clock)
+            return run_root, records, ticks
+        (run_root / SHORT_ROUND).write_text(json.dumps(attempt, indent=2) + "\n", encoding="utf-8")
+        ticks, run_root = later, root.parent / f"{root.name}-wait-{later}"
+    save_clock(clock)
+    raise AssertionError(f"{name}: its own clock ended it short {WORLD_ROUND_ATTEMPTS} times: "
+                         + "; ".join(attempt["short"] for attempt in record["attempts"]))
 
 
 def world_offers(log: str) -> list[dict]:
@@ -1285,11 +1544,14 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
     RED before the change (written, not run): a world boot never resolves a resume, so the restarted
     host opens the scene at tick 0 and prints no `[autosave] resuming` line at all; -net-world-fresh
     does not parse, so the fresh half ends before a lobby exists.
+
+    Every round is sized from one checkpoint write measured on this machine at the arm's start, and every seat a round holds
+    must be back within the host's default catch-up limit (run_world_round_sized).
     """
     root.mkdir(parents=True, exist_ok=False)
-    first, second, fresh = root / "boot1", root / "boot2", root / "fresh"
-    first.mkdir(parents=True, exist_ok=False)
-    kill_tick = 400
+    clock = world_clock(repo, root, port)
+    limit_ticks = clock["catch_up_limit"]["default_s"] * ROUND_TICKS_PER_SECOND
+    kill_tick = WORLD_KILL_TICK
 
     def stall(start: int, extra: dict) -> dict:
         """The stress lever: the client stalls once past `start`, so its seat is held and has to rejoin."""
@@ -1307,11 +1569,18 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
         # at tick 124, so it rejoins from the first capture and catches up across everything since it, the old-image rejoin
         # a loaded box produced by chance.
         first_extra = {**first_extra, "client": [*first_extra.get("client", []), *([] if client_stall else ["-net-test-live-stall", "124:300"])]}
-        os.environ["CC_TEST_WORLD_JOIN_FIRST_IMAGE"] = "1"
-    try:
-        records = _run_world_round(repo, first, port, 1200, first_extra, kill_past=kill_tick)
-    finally:
-        os.environ.pop("CC_TEST_WORLD_JOIN_FIRST_IMAGE", None)
+
+    def first_round(run_root: Path, ticks: int) -> dict:
+        run_root.mkdir(parents=True, exist_ok=False)
+        if rejoin_from_first_capture:
+            os.environ["CC_TEST_WORLD_JOIN_FIRST_IMAGE"] = "1"
+        try:
+            return _run_world_round(repo, run_root, port, ticks, first_extra, kill_past=kill_tick, return_wait_ticks=limit_ticks)
+        finally:
+            os.environ.pop("CC_TEST_WORLD_JOIN_FIRST_IMAGE", None)
+
+    # The first boot ends at its kill; its length bounds only a run whose kill never comes, so a held seat gets the whole limit.
+    first, records, _ = run_world_round_sized("boot1", first_round, root / "boot1", clock, 1200, 2, kill_tick, limit_ticks)
     if rejoin_from_first_capture:
         first_capture = min((int(row[0]) for row in CAPTURE.findall(peer_log(first, "host"))), default=None)
         images = [int(tick) for tick in re.findall(r"^\[net-match\] bootstrap checkpoint=(\d+) ", peer_log(first, "client"), re.MULTILINE)]
@@ -1354,18 +1623,26 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
     assert (first / "client/runtime/Userdata/reconnect.ticket").is_file(), "the killed world's client kept no reconnect ticket"
 
     # Boot two: the same install, no -net-resume-match. The world reopens on its own newest checkpoint.
-    second.mkdir(parents=True, exist_ok=False)
-    resumed_ticks = resumed_round_ticks(peer_log(first, "host"), round_ticks)
-    resume_end = resume_tick + resumed_ticks
-    # Each peer counts its cap from its own first tick, so the resumed round is given the ticks it runs past the checkpoint.
+    resumed_old = resumed_round_ticks(peer_log(first, "host"), round_ticks)
+    # The resumed and fresh rounds hold a seat's way back as long as the first boot's took on this machine, with the write's margin.
+    returns = [entry["ticks"] for entry in clock["rounds"]["boot1"]["attempts"][-1]["entries"] if entry["back"] is not None]
+    entry_estimate = WRITE_MARGIN * max(returns, default=0)
     def drop_client_copy(who: str, runtime: Path) -> None:
         # The client lost its copy of the checkpoint the world resumes on, so it is streamed the host's archive.
         if who == "client":
             for leftover in (runtime / "Autosaves").glob(f"{world_id}-{resume_tick}.*"):
                 leftover.unlink()
 
-    resumed = _run_world_round(repo, second, port, resume_end, stall(resume_tick, {}), carry=first, own_ticks=resumed_ticks,
-                               after_carry=drop_client_copy if client_lacks_checkpoint else None)
+    # Each peer counts its cap from its own first tick, so the resumed round is given the ticks it runs past the checkpoint.
+    def second_round(run_root: Path, ticks: int) -> dict:
+        run_root.mkdir(parents=True, exist_ok=False)
+        return _run_world_round(repo, run_root, port, resume_tick + ticks, stall(resume_tick, {}), carry=first, own_ticks=ticks,
+                                after_carry=drop_client_copy if client_lacks_checkpoint else None)
+
+    # It rotates past its anchor: more than the retained count written after it.
+    second, resumed, resumed_ticks = run_world_round_sized("boot2", second_round, root / "boot2", clock, resumed_old, RETAINED_AUTOSAVES + 1,
+                                                           WORLD_START_LEAD_TICKS, entry_estimate, written_since)
+    resume_end = resume_tick + resumed_ticks
     host_log = peer_log(second, "host")
     if client_lacks_checkpoint:
         client_log = peer_log(second, "client")
@@ -1403,10 +1680,14 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
     assert {int(fields["SavedTick"]) for fields in held_two.values()} == expected, (sorted(held_two), sorted(expected))
 
     # The fresh flag: the same install and the same checkpoints, a NEW round from the scene.
-    fresh.mkdir(parents=True, exist_ok=False)
+    def fresh_round(run_root: Path, ticks: int) -> dict:
+        run_root.mkdir(parents=True, exist_ok=False)
+        return _run_world_round(repo, run_root, port, ticks, stall(0, {"host": ["-net-world-fresh"]}), carry=second)
+
     # The fresh world rotates the previous boot out only once it has completed its own retained checkpoints: it runs as many
-    # writer passes as the resumed round did.
-    fresh_records = _run_world_round(repo, fresh, port, resumed_ticks, stall(0, {"host": ["-net-world-fresh"]}), carry=second)
+    # writer passes as the resumed round does.
+    fresh, fresh_records, fresh_ticks = run_world_round_sized("fresh", fresh_round, root / "fresh", clock, resumed_old, RETAINED_AUTOSAVES + 1,
+                                                              WORLD_START_LEAD_TICKS, entry_estimate, written_since)
     fresh_log = peer_log(fresh, "host")
     assert not RESUMING.search(fresh_log), "a fresh world boot resumed a checkpoint anyway"
     fresh_identity = WORLD_IDENTITY.findall(fresh_log)
@@ -1422,7 +1703,7 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
     for who in ("host", "client"):
         assert fresh_records[who].get("exit_code") == 0, (who, fresh_records[who].get("exit_code"))
         assert not fresh_records[who].get("timed_out"), who
-    fresh_compared = _compare_world_round(fresh, world_id, 0, resumed_ticks)
+    fresh_compared = _compare_world_round(fresh, world_id, 0, fresh_ticks)
     fresh_hold = forced_hold_evidence(fresh, client_stall)
     fresh_held = checkpoints(fresh, "host")
     old_rounds = {fields["RoundId"] for fields in held_two.values()}
@@ -1434,6 +1715,7 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
             "retention kept the previous boot ahead of the fresh world's completed checkpoints"
     return {"world_id": world_id, "boot": boot_one, "resume_tick": resume_tick,
             "kill_capture_tick": records["_kill_capture_tick"], "resume_end": resume_end, "resumed_ticks": resumed_ticks,
+            "fresh_ticks": fresh_ticks,
             "kill_waited_on_return_s": records["_kill_waited_on_return_s"], "kill_waited_on_sample_s": records["_kill_waited_on_sample_s"],
             "kill_sample_wait_bound_s": records["_kill_sample_wait_bound_s"],
             "manifest_control_owners": side_state["control_owners"], "manifest_applied_sequences": side_state["applied_sequences"],
@@ -1857,6 +2139,183 @@ class WorldClockSizingTests(unittest.TestCase):
         needed = self.landed(write_seconds, 52, (48, back), 1, max(WORLD_KILL_TICK, back))
         self.assertGreaterEqual(world_round_ticks(1200, write_seconds, 2, WORLD_KILL_TICK, limit_ticks), needed)
 
+    def test_a_fast_writer_keeps_the_old_rounds(self):
+        # Acceptance run 1 on the Z13 (2.0 s a write) and the Linux box's 1.75 s: every world round keeps the length it had.
+        for write_seconds in (1.75, 2.0):
+            self.assertEqual(world_round_ticks(1200, write_seconds, 2, WORLD_START_LEAD_TICKS), 1200)
+            self.assertEqual(world_round_ticks(600, write_seconds, 0, 0), 600)
+            # The Z13's resumed round, 2,425 ticks from its first boot's capture gap, with that boot's return of 487 ticks.
+            self.assertEqual(world_round_ticks(2425, write_seconds, RETAINED_AUTOSAVES + 1, WORLD_START_LEAD_TICKS, WRITE_MARGIN * 487), 2425)
+        for tenths in range(0, 200):
+            self.assertGreaterEqual(world_round_ticks(1200, tenths / 10, 2, WORLD_START_LEAD_TICKS), 1200)
+
+    def test_the_resumed_round_holds_the_first_boots_return(self):
+        # audit-h9b47 on the Mac: the first boot wrote one checkpoint (5266 ms), so its capture gaps gave the resumed round 600 ticks;
+        # its client was held at 48 and back at 1265. The resumed round's client is held the same way and needs four writes after.
+        write_seconds, returned = 5.266, 1265 - 48
+        old = resumed_round_ticks("[autosave] tick=52 capture_ms=34.175 bytes=201235150\n", 600)
+        self.assertEqual(old, 600)
+        needed = self.landed(write_seconds, 53, (48, 48 + returned), RETAINED_AUTOSAVES + 1, 1)
+        self.assertGreaterEqual(world_round_ticks(old, write_seconds, RETAINED_AUTOSAVES + 1, WORLD_START_LEAD_TICKS, WRITE_MARGIN * returned), needed)
+
+    def test_the_seat_entries_pair_each_hold_with_its_return(self):
+        log = ("[net-match] hold peer=2 frame=48 AI in control\n[net-match] hold peer=2 frame=60 AI in control\n"
+               "[net-match] hold peer=1 frame=163 AI in control (the host's own seat, AI of peer 1)\n"
+               "[net-match] seat-reclaimed peer=2 frame=535 live_actors=1\n[net-match] seat-reclaimed peer=1 frame=170 live_actors=1\n"
+               "[net-match] hold peer=3 frame=900 AI in control\n[net-match] hold peer=2 frame=1300 AI in control\n")
+        self.assertEqual(seat_entries(log, 1200), [{"peer": 2, "hold": 48, "back": 535, "ticks": 487},
+                                                    {"peer": 3, "hold": 900, "back": None, "ticks": 300}])
+        self.assertEqual(seat_entries("", 1200), [])
+
+    def test_the_kill_waits_on_a_joiner_for_the_limit_in_round_ticks(self):
+        held = "[net-match] hold peer=2 frame=48 AI in control\n"
+        own = "[net-match] hold peer=1 frame=163 AI in control (the host's own seat, AI of peer 1)\n"
+        limit = 120 * ROUND_TICKS_PER_SECOND
+        # The Mac's returner, still catching up at 1205 after 30 s of wall time: the kill keeps waiting, by the round's ticks.
+        self.assertTrue(kill_waits_on_return(held, 1205, limit, WORLD_KILL_RETURN_WAIT_POLLS + 1))
+        self.assertFalse(kill_waits_on_return(held, 48 + limit, limit, 0))
+        self.assertFalse(kill_waits_on_return(held + "[net-match] seat-reclaimed peer=2 frame=1265 live_actors=1\n", 1300, limit, 0))
+        # The host's own seat and a run without the bound keep the old wall-clock bound.
+        self.assertTrue(kill_waits_on_return(own, 9000, limit, WORLD_KILL_RETURN_WAIT_POLLS - 1))
+        self.assertFalse(kill_waits_on_return(own, 200, limit, WORLD_KILL_RETURN_WAIT_POLLS))
+        self.assertFalse(kill_waits_on_return(held, 1205, 0, WORLD_KILL_RETURN_WAIT_POLLS))
+
+    def test_a_seat_back_past_the_default_limit_is_the_products_red(self):
+        limit = {"default_s": 120}
+        judge_entries("boot1", [{"peer": 2, "hold": 48, "back": 48 + 7200, "ticks": 7200}], limit, 5.27, 9000)
+        judge_entries("boot1", [{"peer": 2, "hold": 48, "back": None, "ticks": 7199}], limit, 5.27, 7247)
+        with self.assertRaisesRegex(AssertionError, r"^joiner-missed-the-default-catch-up-limit: needed 120\.0 s, limit 120 s, write 5\.27 s "
+                                                    r"\(boot2: peer 2 held at 48, back at 7249\)$"):
+            judge_entries("boot2", [{"peer": 2, "hold": 48, "back": 7249, "ticks": 7201}], limit, 5.266, 9000)
+        with self.assertRaisesRegex(AssertionError, r"needed more than 120\.0 s, limit 120 s, write 5\.27 s \(world: peer 2 held at 306, "
+                                                    r"still away when the round ended at 7506\)$"):
+            judge_entries("world", [{"peer": 2, "hold": 306, "back": None, "ticks": 7200}], limit, 5.27, 7506)
+
+    def test_the_default_catch_up_limit_is_the_settings_codes(self):
+        limit = catch_up_limit()
+        self.assertTrue(10 <= limit["default_s"] <= 1800 and limit["join_deadline_s"] > 0, limit)
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            for name in ("Managers", "Network"):
+                (source / name).mkdir()
+            (source / "Network/NetWorldJoin.h").write_text("\tinline constexpr uint64_t c_NetWorldJoinDeadlineMs = 180000;\n", encoding="utf-8")
+            (source / "Managers/SettingsMan.h").write_text("\t\tint m_NetworkHostJoinLagSeconds = 90; //!< note\n", encoding="utf-8")
+            (source / "Managers/SettingsMan.cpp").write_text("\tm_NetworkHostJoinLagSeconds = 90;\n\tint seconds = m_NetworkHostJoinLagSeconds;\n",
+                                                             encoding="utf-8")
+            self.assertEqual((catch_up_limit(source)["default_s"], catch_up_limit(source)["join_deadline_s"]), (90, 180))
+            (source / "Managers/SettingsMan.cpp").write_text("\tm_NetworkHostJoinLagSeconds = 120;\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "no longer sets one default"):
+                catch_up_limit(source)
+        import test_persistent_world
+        self.assertEqual(test_persistent_world.RED_JOINER_MISSED_LIMIT, RED_JOINER_MISSED_LIMIT)
+
+    def test_the_write_probe_reads_the_writers_own_line(self):
+        world = "9ec24399-33d7-41ce-9906-54a1c76b71ab"
+        log = (f"[net-world] identity {world} boot=1 round=1\n[autosave] tick=53 capture_ms=42.997 bytes=201235044\n"
+               "[autosave-split] tick=53 serialize_scene_ms=0.129 serialize_mos_ms=39.578 lua_graph_ms=38.014 compress_write_ms=1933.525 "
+               "freeze_ms=42.726 bytes=201235044\n")
+        with tempfile.TemporaryDirectory() as directory:
+            autosaves = Path(directory)
+            self.assertIsNone(writer_measurement(log, autosaves))
+            log += "[autosave] tick=53 freeze_us=42726 worker_us=2013165 image_bytes=201235044 dirty_ratio=0.925261 p99_freeze_us=42726\n"
+            self.assertEqual(writer_measurement(log, autosaves)["archive_bytes"], None)
+            (autosaves / f"{world}-53.ccsave").write_bytes(b"x" * 4011757)
+            self.assertEqual(writer_measurement(log, autosaves), {"tick": 53, "write_seconds": 2.013165, "freeze_ms": 42.726,
+                                                                   "compress_write_ms": 1933.525, "image_bytes": 201235044, "archive_bytes": 4011757})
+
+    def test_live_ticks_skip_a_line_a_kill_cut(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "host-live.jsonl"
+            self.assertEqual((last_live_tick(path), live_tick_span(path)), (0, (0, 0)))
+            path.write_text("".join(json.dumps({"tick": tick, "subsystems": {}}) + "\n" for tick in range(54, 900)) + '{"tick": 900, "sub',
+                            encoding="utf-8")
+            self.assertEqual((last_live_tick(path), live_tick_span(path)), (899, (54, 899)))
+
+
+class SizedWorldRoundTests(unittest.TestCase):
+    """run_world_round_sized against scripted rounds: the host log and live hashes each run would leave."""
+    LIMIT_TICKS = 120 * ROUND_TICKS_PER_SECOND
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        self.clock = {"path": str(self.root / "world_clock.json"), "rounds": {}, "catch_up_limit": {"default_s": 120},
+                      "write": {"write_seconds": 5.3, "archive_bytes": 4011757, "image_bytes": 201235044}}
+        self.runs, self.calls = [], []
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def run_round(self, run_root: Path, ticks: int) -> dict:
+        self.calls.append((run_root.name, ticks))
+        host_log, first, last, record = self.runs[len(self.calls) - 1]
+        (run_root / "host").mkdir(parents=True)
+        (run_root / "host/stdout.log").write_text(host_log, encoding="utf-8")
+        (run_root / "host-live.jsonl").write_text("".join(json.dumps({"tick": tick}) + "\n" for tick in range(first, last + 1)), encoding="utf-8")
+        return record
+
+    def sized(self, name="world", **kwargs):
+        return run_world_round_sized(name, self.run_round, self.root / name, self.clock, kwargs.pop("old", 1200), kwargs.pop("writes", 2),
+                                     kwargs.pop("lead", WORLD_START_LEAD_TICKS), **kwargs)
+
+    ENDED = {"host": {"exit_code": 0}, "client": {"exit_code": 0}, "_killed": False}
+    HELD = "[net-match] hold peer=2 frame=306 AI in control\n"
+    WROTE = "".join(f"[autosave] retained tick={tick} keep=3 pinned=0 removed=0\n" for tick in (87, 1300, 1700))
+
+    def test_a_seat_still_coming_back_gets_the_whole_limit_on_the_next_run(self):
+        # audit-h9b47 world-segment on the Mac: the client, held at 306 for capacity, was announced back at 1265 after the
+        # 1,200-tick round ended. The round runs again with that seat given the default catch-up limit.
+        first = world_round_ticks(1200, 5.3, 2, WORLD_START_LEAD_TICKS)
+        self.runs = [(self.HELD, 1, first, self.ENDED), (self.HELD + "[net-match] seat-reclaimed peer=2 frame=1265\n" + self.WROTE, 1, 9000, self.ENDED)]
+        root, _, ticks = self.sized(written=written_since)
+        longer = world_round_ticks(first, 5.3, 2, 306, self.LIMIT_TICKS)
+        self.assertEqual(self.calls, [("world", first), (f"world-wait-{longer}", longer)])
+        self.assertEqual((root.name, ticks), (f"world-wait-{longer}", longer))
+        short = json.loads((self.root / "world" / SHORT_ROUND).read_text(encoding="utf-8"))
+        self.assertEqual(short["short"], f"peer 2 held at 306 was still coming back when the round ended at {first}")
+        numbers = json.loads(Path(self.clock["path"]).read_text(encoding="utf-8"))["numbers"]
+        self.assertEqual((numbers["computed_round_ticks"], numbers["final_round_ticks"], numbers["joiner_catch_up_seconds"]),
+                         ({"world": first}, {"world": longer}, round(959 / 60, 2)))
+
+    def test_a_seat_away_past_the_limit_fails_at_once(self):
+        self.runs = [(self.HELD, 1, 306 + self.LIMIT_TICKS, self.ENDED)]
+        with self.assertRaisesRegex(AssertionError, "^joiner-missed-the-default-catch-up-limit: needed more than 120.0 s"):
+            self.sized(written=written_since)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_a_host_that_did_not_end_its_round_is_never_run_again(self):
+        for record in ({"host": {"exit_code": 3}, "client": {"exit_code": 0}}, {"host": {"exit_code": 0, "timed_out": True}, "client": {}},
+                       {"host": {"error": "RuntimeError()"}, "client": {}}, {"host": {"exit_code": 137}, "client": {}, "_killed": True}):
+            self.calls, self.runs = [], [(self.HELD, 1, 1200, record)]
+            root, records, ticks = self.sized(name=f"round{len(self.clock['rounds'])}", written=written_since)
+            self.assertEqual((len(self.calls), records, ticks), (1, record, world_round_ticks(1200, 5.3, 2, WORLD_START_LEAD_TICKS)))
+            self.assertFalse((root / SHORT_ROUND).exists())
+
+    def test_too_few_writes_run_again_only_when_the_slowest_write_explains_them(self):
+        first = world_round_ticks(1200, 5.3, 2, WORLD_START_LEAD_TICKS)
+        slow = "[autosave] retained tick=87 keep=3 pinned=0 removed=0\n[autosave] tick=87 freeze_us=41235 worker_us=19648363 image_bytes=1 \n"
+        self.runs = [(slow, 1, first, self.ENDED), (slow + self.WROTE, 1, 9000, self.ENDED)]
+        _, _, ticks = self.sized(written=written_since)
+        self.assertEqual(self.calls[1][1], world_round_ticks(first, 19.648363, 2, WORLD_START_LEAD_TICKS))
+        self.assertEqual(ticks, self.calls[1][1])
+        # A write inside the sizing leaves the shortfall to the arm's own judgement.
+        self.calls, self.runs = [], [(slow.replace("worker_us=19648363", "worker_us=5000000"), 1, first, self.ENDED)]
+        self.sized(name="again", written=written_since)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_a_short_round_is_still_compared_and_never_asked_for_a_later_sample(self):
+        sample = "[fullstate] tick=60 hash=ef9b7943247e96ec sections=header:258ea10e07185ecb round=7\n"
+        for name in ("boot2", "boot2-wait-9000"):
+            for who, text in (("host", sample + "[net-match] hold peer=2 frame=100 AI in control\n"), ("client", sample)):
+                (self.root / name / who).mkdir(parents=True)
+                (self.root / name / who / "stdout.log").write_text(text, encoding="utf-8")
+        (self.root / "boot2" / SHORT_ROUND).write_text(json.dumps({"short": "peer 2 held at 100 was still coming back"}), encoding="utf-8")
+        verdicts = fullstate_pairs(self.root, admissions=True)
+        self.assertTrue(verdicts["boot2"]["passed"])
+        self.assertEqual(verdicts["boot2"]["short_round"], "peer 2 held at 100 was still coming back")
+        self.assertFalse(verdicts["boot2-wait-9000"]["passed"])
+        self.assertIn("a seat came in after the last shared sample 60: held at [100]", verdicts["boot2-wait-9000"]["reasons"][0])
+
 
 class WorldRestartOracleTests(unittest.TestCase):
     def test_the_resumed_round_is_sized_to_the_writer_pace(self):
@@ -2208,6 +2667,8 @@ def main() -> int:
         except Exception as error:
             details.update(passed=False, error=str(error))
             print(f"FAIL {arm}: {error}", flush=True)
+        if (clock := root / arm / "world_clock.json").is_file():
+            details["world_clock"] = json.loads(clock.read_text(encoding="utf-8"))
         if FULLSTATE_EVERY:
             details["fullstate"] = fullstate_pairs(root / arm, admissions=arm == "world-restart")
             if arm == "anchor":

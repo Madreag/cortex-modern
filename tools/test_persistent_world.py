@@ -15,6 +15,9 @@ from pathlib import Path
 
 # Ports: this driver owns 48860-48879; only the world-segment arm binds one (a two-peer world round).
 SEGMENT_PORT = 48860
+# The world-segment arm's two rounds' old fixed lengths, the floors of the lengths the measured write gives them.
+SEGMENT_ROUND_TICKS = 1200
+RESTARTED_ROUND_TICKS = 600
 # The held-seat late join's world listens here; its two clients bind ephemeral ports.
 HELD_SEAT_PORT = 48870
 
@@ -246,6 +249,8 @@ RED_RESUMED_HEADER_WRONG = "resumed-world-segment-header-wrong"
 RED_RESUMED_HELD_FRAMES = "resumed-world-held-its-first-frames"
 RED_RESUMED_NO_DIGEST = "resumed-world-recorded-without-a-digest"
 RED_RESUMED_UNARMED = "resumed-world-recorded-unarmed"
+# A seat the world held came back past the host's default catch-up limit: a game defect, judged against the product, not the clock.
+RED_JOINER_MISSED_LIMIT = "joiner-missed-the-default-catch-up-limit"
 
 CASES = (
     {
@@ -831,6 +836,7 @@ CASES = (
             RED_SEGMENT_BOOTED_THE_PRESET,
             RED_SEGMENT_CHAIN_BROKE,
             RED_SEGMENT_HASHES_DIVERGED,
+            RED_JOINER_MISSED_LIMIT,
         ),
         "pass_token": "[world-segment-replay] PASS",
     },
@@ -924,11 +930,21 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullst
     # Every N committed ticks both peers of each round hash their whole capture; each round's pair must match.
     restore.FULLSTATE_EVERY = fullstate_every
     out = Path(out)
-    world = out / "world"
-    world.mkdir(parents=True, exist_ok=True)
-    # The runner creates each peer's run directory itself; the recording lands in the host's once it exists.
-    recording = world / "host" / "match.ccreplay"
-    records = restore._run_world_round(repo, world, port, 1200, {"host": ["-net-replay-out", str(recording)]})
+    out.mkdir(parents=True, exist_ok=True)
+    # One checkpoint write measured here sizes both rounds; every seat a round holds must be back within the default catch-up limit.
+    clock = restore.world_clock(repo, out, port)
+
+    def recording_round(carry=None):
+        def run_round(run_root: Path, ticks: int) -> dict:
+            run_root.mkdir(parents=True, exist_ok=True)
+            # The runner creates each peer's run directory itself; the recording lands in the host's once it exists.
+            return restore._run_world_round(repo, run_root, port, ticks, {"host": ["-net-replay-out", str(run_root / "host" / "match.ccreplay")]},
+                                            carry=carry)
+        return run_round
+
+    # Two segments stand only once two checkpoints are written.
+    world, records, _ = restore.run_world_round_sized("world", recording_round(), out / "world", clock, SEGMENT_ROUND_TICKS, 2,
+                                                      restore.WORLD_START_LEAD_TICKS, written=restore.written_since)
     for who in ("host", "client"):
         assert records[who].get("exit_code") == 0, (who, records[who].get("exit_code"), records[who].get("error"))
     host_log = restore.peer_log(world, "host")
@@ -1008,7 +1024,8 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullst
     overall = {"passed": passed and not tail_reason, "window_passed": passed, "tail_passed": not tail_reason,
                "first_tick": first_tick + 1, "last_compared_tick": last, "host_last_tick": host_last, "replay_last_tick": replay_last,
                "host_completion": host_completion,
-               "reasons": [reason for reason in (None if passed else window_reason, tail_reason or None) if reason]}
+               "reasons": [reason for reason in (None if passed else window_reason, tail_reason or None) if reason],
+               "world_clock": clock["numbers"]}
     (out / "segment_replay_verdict.json").write_text(json.dumps(overall, indent=2), encoding="utf-8")
     for name, data in windowed.items():
         run = data["runs"][0]
@@ -1030,10 +1047,10 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullst
 
     # The restarted world: its round opens ON a checkpoint, so its FIRST recording is a segment named
     # for the tick it resumed from - not an ordinary file that names no world.
-    restarted = out / "restarted"
-    restarted.mkdir(parents=True, exist_ok=True)
-    again = restore._run_world_round(repo, restarted, port, 600,
-                                     {"host": ["-net-replay-out", str(restarted / "host" / "match.ccreplay")]}, carry=world)
+    restarted, again, _ = restore.run_world_round_sized("restarted", recording_round(carry=world), out / "restarted", clock,
+                                                        RESTARTED_ROUND_TICKS, 0, 0)
+    overall["world_clock"] = clock["numbers"]
+    (out / "segment_replay_verdict.json").write_text(json.dumps(overall, indent=2), encoding="utf-8")
     for who in ("host", "client"):
         assert again[who].get("exit_code") == 0, (who, again[who].get("exit_code"), again[who].get("error"))
     restarted_log = restore.peer_log(restarted, "host")
