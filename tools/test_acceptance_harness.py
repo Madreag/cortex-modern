@@ -21,7 +21,7 @@ class AcceptanceTests(unittest.TestCase):
             root = Path(temporary)
             with mock.patch.object(autosave, 'wait_for_checkpoints', side_effect=lambda attempt, ticks: attempt(1, ticks)), \
                  mock.patch.object(autosave, 'run_pair', return_value={}) as pair, \
-                 mock.patch.object(autosave, 'forced_hold_evidence', return_value={'requested': True}) as proof, \
+                 mock.patch.object(autosave, 'held_client_state', return_value=({'requested': True}, '')) as proof, \
                  mock.patch.object(autosave, 'judge_restore', return_value={}), \
                  mock.patch.object(autosave, 'judge_retention', return_value={}), \
                  mock.patch.object(autosave, 'judge_anchor', return_value={}):
