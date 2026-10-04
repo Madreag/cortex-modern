@@ -471,6 +471,8 @@ namespace RTE {
 		std::vector<NetH4SeatStatus> GetSeatStatuses() const;
 		/// The host's seat roster: the one record of whether each seat's holder is away, why and since when.
 		const NetSeatRoster& GetRoster() const { return m_Roster; }
+		/// A world seat plays this slot (0: its own): the roster carries it to every peer.
+		void NoteSeatSlot(uint16_t stableSeat, uint8_t slot);
 		/// The roster seat a lockstep peer plays, read off the same binding the coordinator asks by; null when none.
 		const NetRosterSeat* RosterSeatOfPeer(uint8_t lockstepPeerId) const;
 		/// A rematch forms in its lobby: the round before it is over, its present seats go to the start and the seats whose players

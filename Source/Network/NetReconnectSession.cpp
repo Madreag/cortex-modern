@@ -599,6 +599,23 @@ namespace RTE {
 		SendRoster();
 	}
 
+	void NetReconnectHost::NoteSeatSlot(uint16_t stableSeat, uint8_t slot) {
+		NetRosterEvent event;
+		event.kind = NetRosterEventKind::SlotBound;
+		event.seat = RosterIdOf(stableSeat);
+		event.slot = slot;
+		event.nowMs = m_NowMs;
+		const NetRosterResult result = RTE::ApplyRosterEvent(m_Roster, event);
+		if (result.refused) {
+			DiagnosticLine() << "[roster] refused SlotBound seat=" << static_cast<int>(event.seat) << " slot=" << static_cast<int>(slot) << ": " << result.reason << std::endl;
+			return;
+		}
+		if (!result.changed) return;
+		DiagnosticLine() << "[roster] rev=" << result.roster.revision << " seat=" << static_cast<int>(event.seat) << " SlotBound slot=" << static_cast<int>(slot) << ": " << result.reason << std::endl;
+		m_Roster = result.roster;
+		SendRoster();
+	}
+
 	void NetReconnectHost::SendRoster(NetPeerId only) {
 		NetH4RosterRevision revision;
 		revision.roster = EncodeRoster(m_Roster);

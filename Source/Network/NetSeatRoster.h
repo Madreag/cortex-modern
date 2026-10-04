@@ -45,7 +45,7 @@ namespace RTE {
 		bool joining = false;                                  ///< Its owner took the seat by admission and has not played it yet: joining, not rejoining.
 		uint8_t failedReturns = 0;                             ///< Returns that failed since its owner was last back.
 		uint64_t returnAfterMs = 0;                            ///< A return is not offered again before this (the backoff).
-		uint64_t bindingRef = 0;                               ///< The committed world's brain/actor for the seat.
+		uint64_t bindingRef = 0;                               ///< The committed world's slot (its lockstep id) whose brain the seat plays, when not the seat's own; 0 plays its own.
 		uint64_t givenAwayTicket = 0;                          ///< The ticket of the player the host gave this seat away from.
 		uint64_t heldSinceMs = 0;                              ///< When its owner went away, on the host's clock; the host's own, never sent.
 		std::string name;                                      ///< Its owner's display name as the host seated it; empty while the seat is open.
@@ -73,7 +73,8 @@ namespace RTE {
 	/// Every seat event; each goes through ApplyRosterEvent and nowhere else.
 	enum class NetRosterEventKind : uint8_t {
 		LinkDropped, ProcessRelaunched, Returned, Kicked, Banned, RoundEnded, RematchFormed, HostLinkLost, MemberSetProposed, TransferAborted,
-		LivenessPassed, SlowMachine, HostStalled, Admitted, ApplicantAccepted, RoundStarted, ImageLoaded, CaughtUp, HostResumed, HostChanged, SeatReleased, HeldInPlace, Count
+		LivenessPassed, SlowMachine, HostStalled, Admitted, ApplicantAccepted, RoundStarted, ImageLoaded, CaughtUp, HostResumed, HostChanged, SeatReleased, HeldInPlace,
+		SlotBound, Count
 	};
 
 	struct NetRosterEvent {
@@ -90,6 +91,7 @@ namespace RTE {
 		bool keptWorld = false;        ///< Returned: the owner's process kept the round's world.
 		bool quorum = false;           ///< HostLinkLost: a strict majority of the connected seats agree the host's link is gone.
 		std::vector<uint8_t> members;  ///< MemberSetProposed: the members the host proposes to start.
+		uint8_t slot = 0;              ///< SlotBound: the world slot the seat plays when not its own; 0 when it plays its own.
 	};
 
 	struct NetRosterResult {
