@@ -87,6 +87,14 @@ CLIENT_SAVER_DELAY_MS = 0
 RETAINED_AUTOSAVES = 3  # The default of the NetworkAutosavesKept option (AutosaveStore::c_RetainedAutosaves), which
                         # these runs never set; the engine's own keep= value is held to it below.
 WORLD_AUTOSAVE_TICKS = 60  # -net-autosave-seconds 1 at the round's 60 ticks a second: the world arms' requested cadence.
+ROUND_TICKS_PER_SECOND = 60  # Every world round here runs the default 60 ticks a second.
+# The world-restart arm's first boot: the host is killed once a capture past this tick is published.
+WORLD_KILL_TICK = 400
+
+
+def world_round_ticks(old_ticks: int, write_seconds: float, writes: int, lead_ticks: int, entry_ticks: int = 0) -> int:
+    """The ticks a world round needs at this machine's measured write."""
+    return old_ticks
 
 
 def resumed_round_ticks(host_log: str, round_ticks: int) -> int:
@@ -1806,6 +1814,30 @@ class SubstanceFirstTests(unittest.TestCase):
             write(root, "client", [tick for tick in range(1, 643) if tick != 500])
             with self.assertRaisesRegex(AssertionError, "client missing 1 required ticks: \\[500\\]"):
                 compare_live_window(root, 1, 700, unfinished=True)
+
+
+class WorldClockSizingTests(unittest.TestCase):
+    @staticmethod
+    def landed(write_seconds: float, first_capture: int, out: tuple, writes: int, after: int) -> int:
+        """The tick a world round's `writes`-th checkpoint captured at or past `after` is written, at the real writer pace: a
+        capture each requested second or as soon as the previous write is done, none while the seat `out` (hold, back) is away."""
+        write, capture, captured = math.ceil(write_seconds * ROUND_TICKS_PER_SECOND), first_capture, 0
+        while True:
+            if out[0] <= capture < out[1]:
+                capture = out[1]
+            captured += capture >= after
+            if captured >= writes:
+                return capture + write
+            capture += max(WORLD_AUTOSAVE_TICKS, write)
+
+    def test_a_slow_writer_gets_the_round_its_writes_need(self):
+        # The Mac's world writer, 5.3 s a checkpoint (Apple's zlib 1.2.12; audit-h9b47 world-restart: one write of 5266 ms in
+        # 1,200 ticks). The first boot's client is held at 48 by the stall lever and comes back at the edge of the default
+        # catch-up limit; the host is killed only once a capture past both the kill tick and that return is written.
+        write_seconds, limit_ticks = 5.3, 120 * ROUND_TICKS_PER_SECOND
+        back = 48 + limit_ticks
+        needed = self.landed(write_seconds, 52, (48, back), 1, max(WORLD_KILL_TICK, back))
+        self.assertGreaterEqual(world_round_ticks(1200, write_seconds, 2, WORLD_KILL_TICK, limit_ticks), needed)
 
 
 class WorldRestartOracleTests(unittest.TestCase):
