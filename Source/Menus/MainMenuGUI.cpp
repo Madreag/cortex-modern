@@ -1263,7 +1263,7 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 			const NetDirectoryClient::GameRow& row = m_GameRows[static_cast<size_t>(selected)];
 			if (!row.joinable) {
 				if (m_MultiplayerLanGamesLabel) {
-					m_MultiplayerLanGamesLabel->SetText("Cannot join this game: " + row.reason);
+					m_MultiplayerLanGamesLabel->SetText(NetDirectoryClient::JoinRefusalText(row));
 				}
 				g_GUISound.BackButtonPressSound()->Play();
 			} else {

@@ -1423,6 +1423,15 @@ namespace RTE {
 #endif
 	}
 
+	uint32_t GnsTransport::IceConnectTimeoutMs() {
+		if (const char* lever = std::getenv("CC_TEST_ICE_CONNECT_TIMEOUT_MS"); lever && *lever) {
+			char* end = nullptr;
+			const unsigned long value = std::strtoul(lever, &end, 10);
+			if (end && *end == '\0' && value >= 1000 && value <= 600000) return static_cast<uint32_t>(value);
+		}
+		return c_IceConnectTimeoutMs;
+	}
+
 	void GnsTransport::UpdateListenerIceServers(const GnsP2PConfig& config) {
 		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 #ifdef CCCP_WITH_GNS

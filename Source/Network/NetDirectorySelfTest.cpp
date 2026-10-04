@@ -2018,6 +2018,18 @@ namespace RTE {
 					if (netMerged[1].joinable || netMerged[1].reason != "identity") {
 						note("identity-mismatch NET row joinable=" + std::to_string(netMerged[1].joinable) + " reason=\"" + netMerged[1].reason + "\", expected joinable=no reason=identity");
 					}
+					// A player cannot act on 'modules': the refusal says the game data differs, both digests and where to compare them.
+					if (netMerged[0].hostModuleManifestHash != kHex64A || netMerged[0].localModuleManifestHash != local.moduleManifestHash) {
+						note("modded-host NET row carried game data digests host=\"" + netMerged[0].hostModuleManifestHash + "\" local=\"" + netMerged[0].localModuleManifestHash + "\"");
+					}
+					const std::string refusal = NetDirectoryClient::JoinRefusalText(netMerged[0]);
+					const std::string opening = "Cannot join this game: your game data differs from the host's (yours " + local.moduleManifestHash.substr(0, 8) + ", the host's " + kHex64A.substr(0, 8) + ")";
+					if (refusal.rfind(opening, 0) != 0 || refusal.find("console") == std::string::npos || refusal.find("module_manifest") != std::string::npos) {
+						note("modded-host refusal read \"" + refusal + "\"");
+					}
+					if (NetDirectoryClient::JoinRefusalText(netMerged[1]) != "Cannot join this game: identity") {
+						note("identity-mismatch refusal read \"" + NetDirectoryClient::JoinRefusalText(netMerged[1]) + "\"");
+					}
 				}
 
 				// A v1 beacon carries no compatibility fields: the row must list but never be joinable.

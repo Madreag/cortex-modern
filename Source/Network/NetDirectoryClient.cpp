@@ -787,6 +787,10 @@ namespace RTE {
 		return rows;
 	}
 
+	std::string NetDirectoryClient::JoinRefusalText(const GameRow& row) {
+		return "Cannot join this game: " + row.reason;
+	}
+
 	std::string NetDirectoryClient::DescribeGameRow(const GameRow& row) {
 		const std::string refusal = row.joinable ? std::string() : " [" + row.reason + "]";
 		if (!row.persistentWorld) {

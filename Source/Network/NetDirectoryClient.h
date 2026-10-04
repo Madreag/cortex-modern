@@ -75,11 +75,15 @@ namespace RTE {
 			int64_t peerCount = 0;
 			int64_t spectatorFree = 0;
 			int64_t spectatorMax = 0;
+			std::string localModuleManifestHash; //!< A 'modules' refusal's two digests: this player's game data and the host's.
+			std::string hostModuleManifestHash;
 		};
 
 		/// The one line the join screen shows for a row. A world reads its boot, its published state and
 		/// its seat and watcher counts; every other row keeps the line it has always had.
 		static std::string DescribeGameRow(const GameRow& row);
+		/// The sentence the join screen shows for a row it refuses.
+		static std::string JoinRefusalText(const GameRow& row);
 
 		NetDirectoryClient();
 		NetDirectoryClient(const NetDirectoryClient&) = delete;
