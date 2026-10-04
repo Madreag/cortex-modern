@@ -1,5 +1,6 @@
 """Remote acceptance safety and control checks; no engine or filesystem fixture."""
 from copy import deepcopy
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -32,7 +33,8 @@ def profiles(row=None):
                           scratch=root, helpers=root+'/helpers', tree=root+'/repo', executable=root+'/repo/build-gcc/CortexCommand',
                           runner='tools/posix_test_runner.py via run_sim_test.make_run over ssh',
                           python='python3', ports=[49120,49139], directory_port=49139, sampler='engine-pid-ps',
-                          exclusive_marker=str(Path(root).parent/'ACCEPTANCE-STREAM-RUNNING').replace('\\','/')))
+                          exclusive_marker=root+'/FEEL-MATRIX-RUNNING',
+                          acceptance_marker=str(Path(root).parent/'ACCEPTANCE-STREAM-RUNNING').replace('\\','/')))
     return boxes
 
 
@@ -69,13 +71,14 @@ class RemoteSafety(unittest.TestCase):
         frozen = dict(frozen_commit='7b9ff5067bc2901cfdac497d89a5961bb42afdb0',
                       frozen_export='/virtual/export', coordinator_commit='b'*40)
         boxes = profiles('mod-match')
-        for box in boxes:
-            if box['kind'] == 'posix-ssh':
-                box.update(acceptance_marker=box['exclusive_marker'],
-                           exclusive_marker=box['scratch']+'/FEEL-MATRIX-RUNNING')
-        with patch.object(remote, 'driver_git_context') as context, \
+        actual_context = remote.driver_git_context
+        @contextmanager
+        def pinned_context(root):
+            # Preserve the real Git binding when this test runs in an export.
+            with actual_context(root):
+                yield frozen
+        with patch.object(remote, 'driver_git_context', pinned_context), \
                 patch.object(remote.cross, 'coordinator', create=True):
-            context.return_value.__enter__.return_value = frozen
             plan = remote.make_plan(options('mod-match'), boxes, mods())
         self.assertEqual(plan['driver_commit'], frozen['coordinator_commit'])
         self.assertIn('source_worktree_observed', plan)
@@ -105,13 +108,24 @@ class RemoteSafety(unittest.TestCase):
 
     def test_native_preflights_require_expected_source_and_equal_windows_bytes(self):
         plan = remote.make_plan(options('world-join'), profiles('world-join'))
+        # Keep this synthetic preflight's helper inside its synthetic lane;
+        # the real planner binds the local helper to its actual bundle path.
+        for box in plan['boxes']:
+            if box['name'] == 'EROL-PC':
+                box['helpers'] = box['scratch']+'/helpers'
+        plan.setdefault('frozen_tools', dict(commit='c'*40))
         plan['preflights'] = {box['name']:dict(hostname=box['hostname'], machine_id=box['name'],
             executable_sha256=('e' if box['kind'].startswith('windows-') else 'f')*64,
             build=dict(commit='a'*40, executable_sha256=('e' if box['kind'].startswith('windows-') else 'f')*64),
+            frozen_tools=dict(commit=plan['frozen_tools']['commit'], frozen_files_modified=0),
             content={'Base.rte/Index.ini':'d'*64}, modules={}, fixture={}, load=[],
             acceptance_driver_sources={key:plan['driver_sources'][key] for key in world.DRIVER_FILES},
             acceptance_remote_driver_sha256=plan['driver_sources']['acceptance_remote_tasks.py']) for box in plan['boxes']}
         remote.validate_preflights(plan)
+        missing_frozen = deepcopy(plan)
+        missing_frozen['preflights']['Mac'].pop('frozen_tools')
+        with self.assertRaisesRegex(ValueError, 'frozen NOTE 11 tool identity'):
+            remote.validate_preflights(missing_frozen)
         held=deepcopy(plan)
         held['reservation_holders']={name:{} for name in remote.ALIASES}
         for value in held['preflights'].values(): value['preflight_reservation']=dict(borrowed=True)
@@ -146,8 +160,6 @@ class RemoteSafety(unittest.TestCase):
 
     def test_frozen_posix_profiles_require_both_reservations(self):
         for box in profiles()[2:]:
-            shared = box['exclusive_marker']
-            box.update(exclusive_marker=box['scratch']+'/FEEL-MATRIX-RUNNING', acceptance_marker=shared)
             remote.validate_profile(box, 'test')
             box['acceptance_marker'] = box['scratch']+'/private-stream'
             with self.assertRaisesRegex(ValueError, 'shared acceptance stream marker'):
@@ -175,6 +187,7 @@ class RemoteSafety(unittest.TestCase):
         claim = dict(record=dict(pid=123, token='fixture'))
         before = dict(os.environ)
         with patch.object(Path,'read_text',return_value=json.dumps(payload)), \
+             patch.object(remote, 'frozen_receipt', return_value=None), \
              patch.object(remote.platform,'node',return_value='EROL-PC'), \
              patch.object(native_runtime,'run_payload',side_effect=RuntimeError('native failure')), \
              patch.object(remote.cross,'acquire_reservation',return_value=claim), \
@@ -197,6 +210,7 @@ class RemoteSafety(unittest.TestCase):
             return json.dumps(build if path.name == 'build.json' else payload if path.name == 'payload.json' else result)
         for log_hash in ('b'*64, 'c'*64):
             with self.subTest(log_hash=log_hash), patch.object(Path,'read_text',read), \
+                 patch.object(remote, 'frozen_receipt', return_value=None), \
                  patch.object(remote.platform,'node',return_value=box['hostname']), \
                  patch.object(remote.cross,'preflight_payload',return_value=0), \
                  patch.object(remote,'sha256',side_effect=lambda path:log_hash if path.name=='build.log' else 'd'*64), \
