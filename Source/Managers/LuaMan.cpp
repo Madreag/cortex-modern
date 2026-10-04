@@ -10918,6 +10918,79 @@ end
 		checkpointValues = passed && checkpointValues;
 	}
 	{
+		// An unchanged mod's script reads the same through a preview's copy of its instance as through the instance:
+		// each function is one value wherever it is held, a variable shared with a coroutine stays shared, a closure's
+		// self is the object it runs for, and nothing the copy runs reaches the instance.
+		const auto* preset = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+		std::unique_ptr<AHuman> actor(preset ? dynamic_cast<AHuman*>(preset->Clone()) : nullptr);
+		const std::string scriptPath = g_PresetMan.GetFullModulePath("Tests.rte/PreviewIdentity.lua");
+		const auto report = [&actor](const std::string& who) {
+			LuaStateWrapper* state = actor ? actor->GetLuaState() : nullptr;
+			if (!state) return std::string();
+			std::lock_guard<std::recursive_mutex> lock(state->GetMutex());
+			lua_State* L = state->GetLuaState();
+			std::string text;
+			lua_getglobal(L, "_ScriptFieldsStash");
+			if (lua_istable(L, -1)) {
+				lua_getfield(L, -1, ("preview-identity:" + who).c_str());
+				if (const char* value = lua_tostring(L, -1)) text = value;
+				lua_pop(L, 1);
+				lua_pushnil(L);
+				lua_setfield(L, -2, ("preview-identity:" + who).c_str());
+			}
+			lua_pop(L, 1);
+			return text;
+		};
+		const auto split = [](const std::string& text) {
+			std::vector<std::pair<std::string, std::string>> lines;
+			std::istringstream stream(text);
+			for (std::string line; std::getline(stream, line);) {
+				const size_t space = line.find(' ');
+				lines.emplace_back(line.substr(0, space), space == std::string::npos ? std::string() : line.substr(space + 1));
+			}
+			return lines;
+		};
+		bool loaded = false;
+		bool frozen = false;
+		std::string live;
+		std::string preview;
+		if (actor && actor->LoadScript(scriptPath) >= 0) {
+			loaded = actor->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"init"}) >= 0;
+			LuaMan::CapturePreviewSelfCopies({actor.get()}, false);
+			MovableObject* clone = nullptr;
+			{
+				MovableObject::FaithfulCloneScope scope(false);
+				clone = dynamic_cast<MovableObject*>(actor->Clone());
+			}
+			if (auto* previewed = dynamic_cast<Actor*>(clone)) {
+				LuaMan::BeginPreviewScripts({previewed}, false, {actor.get()});
+				frozen = LuaMan::PreviewFrozenCount() > 0;
+				// A frozen copy would run the hook on the instance itself.
+				if (!frozen) {
+					previewed->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"preview"});
+				}
+			}
+			LuaMan::EndPreviewScripts();
+			delete clone;
+			actor->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"live"});
+			live = report("live");
+			preview = report("preview");
+		}
+		const auto liveLines = split(live);
+		const auto previewLines = split(preview);
+		bool passed = loaded && !frozen && liveLines.size() == 13 && previewLines.size() == liveLines.size();
+		for (size_t index = 0; index < liveLines.size(); ++index) {
+			const std::string& name = liveLines[index].first;
+			const std::string seen = index < previewLines.size() && previewLines[index].first == name ? previewLines[index].second : std::string("missing");
+			const bool same = seen == liveLines[index].second;
+			passed = passed && same;
+			std::cout << "[script-graph-selftest] " << (same ? "PASS" : "FAIL") << " preview_copy_identity_" << name << " live='" << liveLines[index].second << "' preview='" << seen << "'" << std::endl;
+		}
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " preview_copy_keeps_identity_and_shared_variables loaded=" << loaded << " frozen=" << frozen
+		          << " live_cases=" << liveLines.size() << " preview_cases=" << previewLines.size() << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+	{
 		// A scene reload leaves no scene layer's back buffer behind: a preset's clone loaded twice, and a clone of a loaded scene loaded again.
 		const int before = SceneLayerBackBufferCount();
 		const auto* preset = dynamic_cast<const Scene*>(g_PresetMan.GetEntityPreset("Scene", "Grasslands", "Base.rte"));
