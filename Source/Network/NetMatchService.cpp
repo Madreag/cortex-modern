@@ -3730,11 +3730,12 @@ static std::string ResyncSaveName() {
 			const bool fresh = m_PrivateImageTakenMs != 0 && nowMs - m_PrivateImageTakenMs < c_PrivateImageMinIntervalMs;
 			if (!m_PrivateImageRecapture && (fresh || !PrivateBaseRefreshDue(true, 0, image.tick, SteadyCaptureMs(m_PrivateCaptureCosts)))) served = image.tick;
 		}
-		return ReturnHistoryFloor(tick, served, m_WorldJoin.Sessions(), m_Coordinator->HeldTransactions(), m_Coordinator->GetConfig().simTickMs);
+		const NetLockstepConfig& round = m_Coordinator->GetConfig();
+		return ReturnHistoryFloor(tick, served, m_WorldJoin.Sessions(), m_Coordinator->HeldTransactions(), round.simTickMs, round.matchConfig.returnWindowMinutes);
 	}
 
 	uint64_t NetMatchService::ReturnHistoryFloor(uint64_t tick, std::optional<uint64_t> servedBaseTick, const std::vector<NetWorldJoinSession>& sessions,
-	                                             const std::map<uint8_t, NetGameSeatHold>& holds, double tickMs) {
+	                                             const std::map<uint8_t, NetGameSeatHold>& holds, double tickMs, uint8_t returnWindowMinutes) {
 		uint64_t floor = tick + 1;
 		if (servedBaseTick) floor = std::min(floor, *servedBaseTick + 1);
 		// Every return under way reads the tail on from the last frame it applied.
@@ -10901,6 +10902,7 @@ static std::string ResyncSaveName() {
 			config.automaticRepair = request.automaticRepair.value_or(config.automaticRepair);
 			config.pathHorizonTicks = request.pathHorizonTicks.value_or(config.pathHorizonTicks);
 			config.frameRedundancyTicks = request.frameRedundancyTicks.value_or(config.frameRedundancyTicks);
+			config.returnWindowMinutes = request.returnWindowMinutes.value_or(config.returnWindowMinutes);
 		}
 		// CPU teams follow human teams and consume no peer identity.
 		config.players.clear();
@@ -11115,6 +11117,7 @@ static std::string ResyncSaveName() {
 		if (!request.idleWaitMinutes) request.idleWaitMinutes = saved.idleWaitMinutes;
 		if (!request.automaticRepair) request.automaticRepair = saved.automaticRepair;
 		if (!request.pathHorizonTicks) request.pathHorizonTicks = saved.pathHorizonTicks;
+		if (!request.returnWindowMinutes) request.returnWindowMinutes = saved.returnWindowMinutes;
 	}
 
 	void NetMatchService::SetState(NetMatchServiceState state, std::string status, std::string error) {

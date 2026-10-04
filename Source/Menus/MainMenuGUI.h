@@ -404,6 +404,7 @@ namespace RTE {
 		GUICheckbox* m_HostRecAutosaveCheck = nullptr;
 		GUITextBox* m_HostRecAutosaveIntervalBox = nullptr;
 		GUILabel* m_HostRecLastSaveLabel = nullptr;
+		GUIComboBox* m_HostRecReturnWindowCombo = nullptr; //!< How long a held seat may come back in place.
 		GUILabel* m_HostRecWaitingLabel = nullptr;
 		GUILabel* m_HostRecRepairHintLabel = nullptr;    //!< H25: repair row's own status - hint, confirm line, or live progress.
 		bool m_HostRecRepairArmed = false;             //!< H25: first press arms; the second calls ResyncMatch.

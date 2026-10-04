@@ -281,6 +281,10 @@ namespace RTE {
 			if (!config.successorOrder.empty()) {
 				reserved |= NetMatchConfigUtil::c_MigrationConfigFlag;
 			}
+			const bool carriesReturnWindow = config.returnWindowMinutes != NetMatchConfigUtil::c_DefaultReturnWindowMinutes;
+			if (carriesReturnWindow) {
+				reserved |= NetMatchConfigUtil::c_ReservedReturnWindowBit;
+			}
 			AppendU16LE(out, reserved);
 			if (!AppendString(out, config.activityType, NetLobbyProtocol::c_MaxShortTextBytes, "activity_type", error) ||
 			    !AppendString(out, config.activityPreset, NetLobbyProtocol::c_MaxShortTextBytes, "activity_preset", error) ||
@@ -367,6 +371,10 @@ namespace RTE {
 			if (config.version >= NetMatchConfigUtil::c_SeatRosterVersion) {
 				AppendU32LE(out, config.seatRosterRevision);
 				AppendHash(out, config.seatRosterHash);
+			}
+			// The return window trails everything, so a config at the default encodes as it always did.
+			if (carriesReturnWindow) {
+				AppendU8(out, config.returnWindowMinutes);
 			}
 			return true;
 		}
@@ -554,6 +562,14 @@ namespace RTE {
 			out.seatRosterHash = {};
 			if (out.version >= NetMatchConfigUtil::c_SeatRosterVersion &&
 			    !ReadOrTruncated(reader.ReadU32LE(out.seatRosterRevision) && reader.ReadHash(out.seatRosterHash), reader, error, "seat roster")) return false;
+			out.returnWindowMinutes = NetMatchConfigUtil::c_DefaultReturnWindowMinutes;
+			if (reserved & NetMatchConfigUtil::c_ReservedReturnWindowBit) {
+				if (!ReadOrTruncated(reader.ReadU8(out.returnWindowMinutes), reader, error, "config.return_window_minutes")) return false;
+				if (out.returnWindowMinutes < NetMatchConfigUtil::c_MinReturnWindowMinutes || out.returnWindowMinutes > NetMatchConfigUtil::c_MaxReturnWindowMinutes) {
+					SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset() - 1, "return_window_minutes is out of range");
+					return false;
+				}
+			}
 			std::string validateError;
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(out, &validateError)) {
 				SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset(), validateError);

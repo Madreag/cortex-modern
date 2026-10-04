@@ -417,6 +417,7 @@ namespace RTE {
 		config.idleWaitMinutes = static_cast<uint8_t>(std::clamp(g_SettingsMan.GetNetworkHostIdleWaitMinutes(), 0, 60));
 		config.automaticRepair = g_SettingsMan.GetNetworkHostAutoRepair();
 		config.pathHorizonTicks = static_cast<uint16_t>(g_SettingsMan.GetNetworkPathHorizonTicks());
+		config.returnWindowMinutes = static_cast<uint8_t>(std::clamp<int>(g_SettingsMan.GetNetworkHostReturnWindowMinutes(), c_MinReturnWindowMinutes, c_MaxReturnWindowMinutes));
 	}
 
 	bool NetMatchConfigUtil::DeriveRematchConfig(const NetMatchConfig& previous, NetMatchConfig& outConfig, std::string* error) {
@@ -528,6 +529,7 @@ namespace RTE {
 		if (config.autosaveEnabled && config.autosaveIntervalSeconds == 0) return refuse("enabled autosave requires a nonzero interval");
 		if (config.idleWaitMinutes > 60) return refuse("idle_wait_minutes is out of range");
 		if (config.frameRedundancyTicks < 1 || config.frameRedundancyTicks > c_MaxFrameRedundancyTicks) return refuse("frame_redundancy_ticks is out of range");
+		if (config.returnWindowMinutes < c_MinReturnWindowMinutes || config.returnWindowMinutes > c_MaxReturnWindowMinutes) return refuse("return_window_minutes is out of range");
 		if (config.delayPolicy != NetMatchDelayPolicy::Auto && config.delayPolicy != NetMatchDelayPolicy::Fixed) return refuse("delay_policy is invalid");
 		if (config.mode != NetMatchMode::PvPSkirmish && config.mode != NetMatchMode::CoopPvE && config.mode != NetMatchMode::PvPvE) return refuse("match mode is invalid");
 		if (!ValidateModule(config.activityModule, "activity_module", error) || !ValidateModule(config.sceneModule, "scene_module", error)) return false;
@@ -747,6 +749,10 @@ namespace RTE {
 		// Same for the redundancy window: only a host's non-default choice rides it.
 		if (config.frameRedundancyTicks != c_DefaultFrameRedundancyTicks) {
 			fields.emplace_back("frame_redundancy_ticks", std::to_string(config.frameRedundancyTicks));
+		}
+		// So does a non-default return window.
+		if (config.returnWindowMinutes != c_DefaultReturnWindowMinutes) {
+			fields.emplace_back("return_window_minutes", std::to_string(config.returnWindowMinutes));
 		}
 		// The world identity is frozen for the world's life: its members' rosters change under a
 		// separate revision, so what a joiner validates against stays the same string every boot. Only

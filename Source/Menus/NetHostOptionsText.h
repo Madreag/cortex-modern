@@ -46,6 +46,16 @@ namespace RTE {
 		return "Every player takes each checkpoint at the same tick; a player who rejoins starts from one.";
 	}
 
+	/// The return window row's consequence.
+	inline const char* NetReturnWindowHint() {
+		return "A return within the window resumes from the player's held state, a later one loads an image. A longer window keeps more history on the host.";
+	}
+
+	/// One return window choice, as the row and the summary name it.
+	inline std::string NetReturnWindowText(uint8_t minutes) {
+		return std::to_string(minutes) + (minutes == 1 ? " minute" : " minutes");
+	}
+
 	/// Settings > Network > Connection's hint for each route choice.
 	inline const char* NetConnectionModeHint(SettingsMan::NetworkConnectionMode mode) {
 		switch (mode) {
@@ -185,6 +195,7 @@ namespace RTE {
 		line(config.autosaveEnabled
 		         ? "Autosaves: every " + std::to_string(config.autosaveIntervalSeconds) + " sim seconds"
 		         : "Autosaves: off");
+		line("Return window: " + NetReturnWindowText(config.returnWindowMinutes));
 		line(std::string("Idle wait: ") +
 		     (config.idleWaitMinutes == 0 ? "never" : std::to_string(config.idleWaitMinutes) + " minutes") +
 		     "   Automatic repair: " + (config.automaticRepair ? "on" : "off"));
