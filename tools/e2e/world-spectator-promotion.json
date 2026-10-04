@@ -45,7 +45,7 @@
         "{OUT}/seated-one-live.jsonl"
       ],
       "menu_script": "world-spectator.seated.menu.txt",
-      "input_script": "play-input.txt",
+      "input_script": "world-spectator.input.txt",
       "start_when": {
         "peer": "host",
         "event": "video_mark spectator-lobby",
@@ -70,7 +70,7 @@
         "{OUT}/seated-two-live.jsonl"
       ],
       "menu_script": "world-spectator.seated.menu.txt",
-      "input_script": "play-input.txt",
+      "input_script": "world-spectator.input.txt",
       "start_when": {
         "peer": "seated-one",
         "event": "video_mark spectator-first-connected",
@@ -94,7 +94,7 @@
         "{OUT}/seated-three-live.jsonl"
       ],
       "menu_script": "world-spectator.seated.menu.txt",
-      "input_script": "play-input.txt",
+      "input_script": "world-spectator.input.txt",
       "start_when": {
         "peer": "seated-two",
         "event": "video_mark spectator-first-connected",
@@ -167,5 +167,13 @@
     "seated-one",
     "seated-two",
     "seated-three"
+  ],
+  "allowed_stills": [
+    {
+      "peer": "spectator",
+      "from_mark": "spectator-crawl-begins",
+      "to_mark": "spectator-crawl-ends",
+      "reason": "the watcher's own picture while its injected simulation cost runs ticks 6000-6060 at 0.5 s each: a machine that slow sheds its own presentation, never anyone's simulation"
+    }
   ]
 }
