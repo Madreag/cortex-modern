@@ -736,6 +736,8 @@ namespace RTE::LuaThreadCodec {
 
 	namespace {
 		const char* const c_OwnPreviewCopiesKey = "cccp.preview_own_copies";
+		// Past this many functions deep the decision copies rather than recurse further: a copy reads what the original does.
+		constexpr int c_MaxDecisionDepth = 400;
 	}
 
 	bool IsOwnPreviewCopy(lua_State* L, int index) {
@@ -776,7 +778,7 @@ namespace RTE::LuaThreadCodec {
 		if (!IsOwnPreviewCopy(L, index)) return true;
 		GCfunc* function = funcV(L->base + index - 1);
 		if (!isluafunc(function)) {
-			// A coroutine.wrap copy holds its coroutine's copy.
+			// A native closure's copy holds every one of its values as its own.
 			for (uint32_t slot = 0; slot < function->c.nupvalues; ++slot) {
 				if (!lua_checkstack(L, 2)) return false;
 				copyTV(L, L->top, &function->c.upvalue[slot]);
@@ -791,8 +793,28 @@ namespace RTE::LuaThreadCodec {
 			}
 			return true;
 		}
-		for (uint32_t slot = 0; slot < function->l.nupvalues; ++slot) {
+		// The variables the copy holds of its own: every one, or the slots its entry lists; the rest are the original's.
+		std::vector<uint32_t> slots;
+		lua_getfield(L, LUA_REGISTRYINDEX, c_OwnPreviewCopiesKey);
+		lua_pushvalue(L, index);
+		lua_rawget(L, -2);
+		if (lua_istable(L, -1)) {
+			const size_t count = lua_objlen(L, -1);
+			for (size_t at = 1; at <= count; ++at) {
+				lua_rawgeti(L, -1, static_cast<int>(at));
+				slots.push_back(static_cast<uint32_t>(lua_tointeger(L, -1) - 1));
+				lua_pop(L, 1);
+			}
+		} else {
+			for (uint32_t slot = 0; slot < function->l.nupvalues; ++slot) {
+				slots.push_back(slot);
+			}
+		}
+		lua_pop(L, 2);
+		for (const uint32_t slot: slots) {
+			if (slot >= function->l.nupvalues) continue;
 			GCupval* upvalue = &gcref(function->l.uvptr[slot])->uv;
+			// One joined to a coroutine's copy lives on that copy's stack, which the coroutine's own remap reaches.
 			if (!upvalue->closed) continue;
 			if (!lua_checkstack(L, 2)) return false;
 			copyTV(L, L->top, uvval(upvalue));
@@ -817,18 +839,32 @@ namespace RTE::LuaThreadCodec {
 			ptrdiff_t slot;
 		};
 
+		// A function's place in the walk that decides, a cycle at a time, which functions the copy copies.
+		struct Visit {
+			int index = -1;
+			int low = -1;
+			bool onStack = false;
+			bool reason = false;
+			bool decided = false;
+			bool copied = false;
+		};
+
 		lua_State* L;
 		int seen;
 		MapValue mapValue;
+		Replaced replaced;
 		void* context;
 		int (*standIn)(lua_State*);
-		std::unordered_map<GCupval*, GCupval*> upvalues; //!< A variable a copied coroutine's code owns, and the copy's.
+		std::unordered_map<GCupval*, GCupval*> cells; //!< A closed variable the copied closures hold, and the copy's own.
+		std::unordered_map<GCupval*, GCupval*> held; //!< A variable open on a coroutine, and the one the copies hold until it is joined.
 		std::unordered_map<lua_State*, lua_State*> threads; //!< Each coroutine restored, and its copy.
-		std::unordered_set<GCfunc*> copies; //!< The closures this copy made.
-		std::unordered_set<GCfunc*> ownCopies; //!< Those whose closed variables are the copy's own.
+		std::unordered_map<const GCfunc*, Visit> visits; //!< Every function the decision walk reached.
+		std::vector<const GCfunc*> pending; //!< The decision walk's functions whose cycle is still open.
+		int visitCount = 0;
 		std::vector<Join> joins; //!< Variables open on a coroutine, moved to its copy's stack once it is restored.
 		std::unordered_map<GCupval*, lua_State*> owners;
 		bool ownersRead = false;
+		std::string refusal;
 
 		TValue* Slot(int index) const { return L->base + ((index < 0 ? lua_gettop(L) + index + 1 : index) - 1); }
 
@@ -852,14 +888,116 @@ namespace RTE::LuaThreadCodec {
 		// A coroutine at rest whose copy can own a variable, not the state running the copy.
 		bool Copyable(const lua_State* thread) const { return thread && thread != L && thread != mainthread(G(L)); }
 
-		bool NeedsCopy(const GCfunc* function) {
-			for (uint32_t index = 0; index < function->l.nupvalues; ++index) {
-				GCupval* upvalue = &gcref(function->l.uvptr[index])->uv;
-				if (upvalues.contains(upvalue) || (!upvalue->closed && Copyable(OwnerOf(upvalue)))) {
-					return true;
+		bool IsWrap(const GCfunc* function) {
+			const int wrap = WrapFunctionId(L);
+			return !isluafunc(function) && wrap >= 0 && function->c.ffid == wrap && function->c.nupvalues == 1 && tvisthread(&function->c.upvalue[0]);
+		}
+
+		// Whether the copy gives a value that is not a function another value: tables and coroutines are copied, and the
+		// map says which userdata it or the remap after it replaces.
+		bool Replaces(const TValue* value) {
+			if (tvistab(value) || tvisthread(value)) {
+				return true;
+			}
+			if (!tvisudata(value)) {
+				return false;
+			}
+			if (!lua_checkstack(L, 1)) {
+				return true;
+			}
+			copyTV(L, L->top, value);
+			incr_top(L);
+			const bool result = replaced(L, -1, context);
+			L->top--;
+			return result;
+		}
+
+		// A closure is copied when a variable of it is written, holds a value the copy replaces, or is open on a coroutine
+		// the copy restores; a native closure when a value of it is replaced. A cycle of unwritten variables is decided whole.
+		void Connect(const GCfunc* function, int depth) {
+			Visit& visit = visits[function];
+			visit.index = visit.low = visitCount++;
+			visit.onStack = true;
+			pending.push_back(function);
+			const auto follow = [&](const TValue* value) {
+				if (!tvisfunc(value)) {
+					visit.reason = visit.reason || Replaces(value);
+					return;
+				}
+				const GCfunc* next = funcV(value);
+				auto found = visits.find(next);
+				if (found == visits.end()) {
+					if (depth >= c_MaxDecisionDepth) {
+						visit.reason = true;
+						return;
+					}
+					Connect(next, depth + 1);
+					found = visits.find(next);
+				} else if (found->second.onStack) {
+					visit.low = std::min(visit.low, found->second.index);
+					return;
+				}
+				if (found->second.decided) {
+					visit.reason = visit.reason || found->second.copied;
+				} else {
+					visit.low = std::min(visit.low, found->second.low);
+				}
+			};
+			if (isluafunc(function)) {
+				for (uint32_t slot = 0; slot < function->l.nupvalues; ++slot) {
+					GCupval* upvalue = &gcref(function->l.uvptr[slot])->uv;
+					if (!upvalue->closed) {
+						if (Copyable(OwnerOf(upvalue))) {
+							visit.reason = true;
+						} else if (refusal.empty()) {
+							refusal = "a closure's variable is open on the state running the copy";
+						}
+					} else if (!upvalue->immutable) {
+						visit.reason = true;
+					} else {
+						follow(&upvalue->tv);
+					}
+				}
+			} else if (IsWrap(function)) {
+				visit.reason = true;
+			} else {
+				for (uint32_t slot = 0; slot < function->c.nupvalues; ++slot) {
+					follow(&function->c.upvalue[slot]);
 				}
 			}
-			return false;
+			if (visit.low != visit.index) {
+				return;
+			}
+			size_t first = pending.size();
+			bool copied = false;
+			do {
+				--first;
+				copied = copied || visits[pending[first]].reason;
+			} while (pending[first] != function);
+			for (size_t at = first; at < pending.size(); ++at) {
+				Visit& member = visits[pending[at]];
+				member.onStack = false;
+				member.decided = true;
+				member.copied = copied;
+			}
+			pending.resize(first);
+		}
+
+		bool Decide(const GCfunc* function) {
+			auto found = visits.find(function);
+			if (found == visits.end()) {
+				Connect(function, 0);
+				found = visits.find(function);
+			}
+			return found->second.copied;
+		}
+
+		// Whether a copied closure takes its own copy of this closed variable: one written, or holding a value the copy replaces.
+		bool OwnsVariable(const GCupval* upvalue) {
+			if (!upvalue->immutable) {
+				return true;
+			}
+			return tvisfunc(&upvalue->tv) ? Decide(funcV(&upvalue->tv)) : Replaces(&upvalue->tv);
 		}
 
 		void SetUpvalue(GCfunc* function, uint32_t index, GCupval* upvalue) {
@@ -867,18 +1005,52 @@ namespace RTE::LuaThreadCodec {
 			lj_gc_objbarrier(L, function, upvalue);
 		}
 
-		// The value on top of the stack belongs to a copied coroutine's code: its functions are copied with their variables.
-		void MapOwn(PreviewCopier& copier) {
-			if (lua_type(L, -1) == LUA_TFUNCTION) {
-				PushClosure(copier, -1, true);
-				lua_replace(L, -2);
-			} else {
-				mapValue(L, context);
+		// Replaces the value on top of the stack with what the copy holds for it and stores that into the variable.
+		void StoreMapped(GCupval* variable) {
+			mapValue(L, context);
+			copyTV(L, uvval(variable), L->top - 1);
+			if (tvisgcv(L->top - 1)) {
+				lj_gc_objbarrier(L, variable, gcV(L->top - 1));
 			}
+			lua_pop(L, 1);
 		}
 
-		// The copies whose variables are all their own, for the remap that follows the copy.
-		void MarkOwn(GCfunc* copy) {
+		// The copy's own variable for the original's, made once for every closure that shares it; the closure takes it
+		// before its value is mapped, so the mapping's allocations cannot collect it.
+		void TakeOwnVariable(GCfunc* copy, uint32_t slot, GCupval* upvalue) {
+			if (const auto found = cells.find(upvalue); found != cells.end()) {
+				SetUpvalue(copy, slot, found->second);
+				return;
+			}
+			GCupval* own = NewClosedUpvalue(L, upvalue);
+			SetUpvalue(copy, slot, own);
+			cells.emplace(upvalue, own);
+			copyTV(L, L->top, uvval(upvalue));
+			incr_top(L);
+			StoreMapped(own);
+		}
+
+		// A variable open on a coroutine: every copy that shares it holds one copy, the original's value mapped, until the
+		// coroutine's copy is restored and the variable moves onto its stack.
+		void HoldOpenVariable(GCfunc* copy, uint32_t slot, GCupval* upvalue, lua_State* owner) {
+			if (const auto found = held.find(upvalue); found != held.end()) {
+				SetUpvalue(copy, slot, found->second);
+			} else {
+				GCupval* variable = NewClosedUpvalue(L, upvalue);
+				SetUpvalue(copy, slot, variable);
+				held.emplace(upvalue, variable);
+				copyTV(L, L->top, uvval(upvalue));
+				incr_top(L);
+				StoreMapped(variable);
+			}
+			joins.push_back({copy, slot, upvalue, owner, uvval(upvalue) - tvref(owner->stack)});
+		}
+
+		// Records which values of a copy are its own, so the remap after the copy reaches those and never the original's.
+		void MarkOwn(GCfunc* copy, const std::vector<uint32_t>& own, uint32_t count) {
+			if (count > 0 && own.empty()) {
+				return;
+			}
 			lua_getfield(L, LUA_REGISTRYINDEX, c_OwnPreviewCopiesKey);
 			if (!lua_istable(L, -1)) {
 				lua_pop(L, 1);
@@ -892,119 +1064,95 @@ namespace RTE::LuaThreadCodec {
 			}
 			setfuncV(L, L->top, copy);
 			incr_top(L);
-			lua_pushboolean(L, 1);
+			if (own.size() == count) {
+				lua_pushboolean(L, 1);
+			} else {
+				lua_createtable(L, static_cast<int>(own.size()), 0);
+				for (size_t at = 0; at < own.size(); ++at) {
+					lua_pushinteger(L, static_cast<lua_Integer>(own[at]) + 1);
+					lua_rawseti(L, -2, static_cast<int>(at) + 1);
+				}
+			}
 			lua_rawset(L, -3);
 			lua_pop(L, 1);
 		}
 
-		// Gives a copy its own closed variables, each copied once, its value mapped as the coroutine's own.
-		void OwnVariables(PreviewCopier& copier, GCfunc* copy, const GCfunc* original) {
-			ownCopies.insert(copy);
-			MarkOwn(copy);
-			for (uint32_t index = 0; index < original->l.nupvalues; ++index) {
-				GCupval* upvalue = &gcref(original->l.uvptr[index])->uv;
-				if (!upvalue->closed) {
-					continue;
-				}
-				if (const auto found = upvalues.find(upvalue); found != upvalues.end()) {
-					SetUpvalue(copy, index, found->second);
-					continue;
-				}
-				GCupval* own = NewClosedUpvalue(L, upvalue);
-				SetUpvalue(copy, index, own);
-				upvalues.emplace(upvalue, own);
-				copyTV(L, L->top, uvval(upvalue));
+		// A native closure's copy holds each of its values as the copy holds it; coroutine.wrap's resumes its coroutine's copy.
+		void PushNativeCopy(int index, const GCfunc* original) {
+			const uint32_t count = original->c.nupvalues;
+			GCfunc* copy = lj_func_newC(L, count, tabref(original->c.env));
+			for (uint32_t slot = 0; slot < count; ++slot) {
+				setnilV(&copy->c.upvalue[slot]);
+			}
+			copy->c.ffid = original->c.ffid;
+			copy->c.f = original->c.f;
+			copy->c.pc = original->c.pc;
+			setfuncV(L, L->top, copy);
+			incr_top(L);
+			const int copyIndex = lua_gettop(L);
+			MarkOwn(copy, {}, 0);
+			lua_pushvalue(L, index);
+			lua_pushvalue(L, copyIndex);
+			lua_rawset(L, seen);
+			for (uint32_t slot = 0; slot < count; ++slot) {
+				copyTV(L, L->top, &original->c.upvalue[slot]);
 				incr_top(L);
-				MapOwn(copier);
-				copyTV(L, uvval(own), L->top - 1);
+				mapValue(L, context);
+				copyTV(L, &copy->c.upvalue[slot], L->top - 1);
 				if (tvisgcv(L->top - 1)) {
-					lj_gc_objbarrier(L, own, gcV(L->top - 1));
+					lj_gc_objbarrier(L, copy, gcV(L->top - 1));
 				}
 				lua_pop(L, 1);
 			}
+			lua_settop(L, copyIndex);
 		}
 
-		void PushClosure(PreviewCopier& copier, int index, bool own) {
+		void PushClosure(int index) {
 			index = index < 0 ? lua_gettop(L) + index + 1 : index;
 			GCfunc* original = funcV(Slot(index));
 			lua_pushvalue(L, index);
 			lua_rawget(L, seen);
 			if (!lua_isnil(L, -1)) {
-				GCfunc* known = funcV(L->top - 1);
-				if (own && isluafunc(known) && copies.contains(known) && !ownCopies.contains(known)) {
-					OwnVariables(copier, known, original);
-				}
 				return;
 			}
 			lua_pop(L, 1);
-			if (!isluafunc(original)) {
-				const int wrap = WrapFunctionId(L);
-				if (wrap < 0 || original->c.ffid != wrap || original->c.nupvalues != 1 || !tvisthread(&original->c.upvalue[0])) {
-					lua_pushvalue(L, index);
-					return;
-				}
-				// A coroutine.wrap function resumes its coroutine's copy.
-				GCfunc* copy = lj_func_newC(L, 1, tabref(original->c.env));
-				setnilV(&copy->c.upvalue[0]);
-				copy->c.ffid = original->c.ffid;
-				copy->c.f = original->c.f;
-				copy->c.pc = original->c.pc;
-				setfuncV(L, L->top, copy);
-				incr_top(L);
-				const int copyIndex = lua_gettop(L);
-				copies.insert(copy);
-				MarkOwn(copy);
+			// Decided from the function's own variables before any reference is handed out, so every place that holds
+			// the function holds the same value.
+			if (!Decide(original)) {
 				lua_pushvalue(L, index);
-				lua_pushvalue(L, copyIndex);
-				lua_rawset(L, seen);
-				setthreadV(L, L->top, threadV(&original->c.upvalue[0]));
-				incr_top(L);
-				mapValue(L, context);
-				copyTV(L, &copy->c.upvalue[0], L->top - 1);
-				if (tvisgcv(L->top - 1)) {
-					lj_gc_objbarrier(L, copy, gcV(L->top - 1));
-				}
-				lua_settop(L, copyIndex);
 				return;
 			}
-			if (!own && !NeedsCopy(original)) {
-				lua_pushvalue(L, index);
+			if (!isluafunc(original)) {
+				PushNativeCopy(index, original);
 				return;
 			}
 			GCfunc* copy = lj_func_newL_empty(L, funcproto(original), tabref(original->l.env));
 			setfuncV(L, L->top, copy);
 			incr_top(L);
 			const int copyIndex = lua_gettop(L);
-			copies.insert(copy);
 			lua_pushvalue(L, index);
 			lua_pushvalue(L, copyIndex);
 			lua_rawset(L, seen);
+			std::vector<uint32_t> own;
 			for (uint32_t slot = 0; slot < original->l.nupvalues; ++slot) {
 				GCupval* upvalue = &gcref(original->l.uvptr[slot])->uv;
-				if (const auto found = upvalues.find(upvalue); found != upvalues.end()) {
-					SetUpvalue(copy, slot, found->second);
-				} else if (upvalue->closed) {
-					// Shared until the copy owns it below: the window's fence covers what the original's other holders reach.
-					SetUpvalue(copy, slot, upvalue);
-				} else if (lua_State* owner = OwnerOf(upvalue); Copyable(owner)) {
-					// Until the coroutine's copy is restored, the variable holds what the original holds, privately.
-					GCupval* held = &gcref(copy->l.uvptr[slot])->uv;
-					copyTV(L, L->top, uvval(upvalue));
-					incr_top(L);
-					mapValue(L, context);
-					copyTV(L, uvval(held), L->top - 1);
-					if (tvisgcv(L->top - 1)) {
-						lj_gc_objbarrier(L, held, gcV(L->top - 1));
+				if (!upvalue->closed) {
+					lua_State* owner = OwnerOf(upvalue);
+					if (Copyable(owner)) {
+						HoldOpenVariable(copy, slot, upvalue, owner);
+						own.push_back(slot);
+					} else {
+						SetUpvalue(copy, slot, upvalue);
 					}
-					lua_pop(L, 1);
-					joins.push_back({copy, slot, upvalue, owner, uvval(upvalue) - tvref(owner->stack)});
+				} else if (OwnsVariable(upvalue)) {
+					TakeOwnVariable(copy, slot, upvalue);
+					own.push_back(slot);
 				} else {
+					// Never written and holding what the copy holds: the original's variable reads the same.
 					SetUpvalue(copy, slot, upvalue);
 				}
 			}
-			if (own) {
-				OwnVariables(copier, copy, original);
-			}
+			MarkOwn(copy, own, original->l.nupvalues);
 			lua_settop(L, copyIndex);
 		}
 
@@ -1042,10 +1190,19 @@ namespace RTE::LuaThreadCodec {
 		}
 	};
 
-	PreviewCopier::PreviewCopier(lua_State* state, int seen, MapValue mapValue, void* context, int (*standIn)(lua_State*)) :
-	    m_Impl(new Impl{state, seen < 0 ? lua_gettop(state) + seen + 1 : seen, mapValue, context, standIn}) {}
+	PreviewCopier::PreviewCopier(lua_State* state, int seen, MapValue mapValue, Replaced replaced, void* context, int (*standIn)(lua_State*)) :
+	    m_Impl(new Impl{state, seen < 0 ? lua_gettop(state) + seen + 1 : seen, mapValue, replaced, context, standIn}) {}
 
 	PreviewCopier::~PreviewCopier() { delete m_Impl; }
+
+	void PreviewCopier::Rebind(int seen, void* context) {
+		m_Impl->seen = seen < 0 ? lua_gettop(m_Impl->L) + seen + 1 : seen;
+		m_Impl->context = context;
+	}
+
+	std::string PreviewCopier::TakeRefusal() {
+		return std::exchange(m_Impl->refusal, std::string());
+	}
 
 	bool PreviewCopier::PushThread(int index) {
 		lua_State* L = m_Impl->L;
@@ -1085,7 +1242,7 @@ namespace RTE::LuaThreadCodec {
 		}
 		for (const lua_Integer key: keys) {
 			lua_rawgeti(L, slots, static_cast<int>(key));
-			m_Impl->MapOwn(*this);
+			m_Impl->mapValue(L, m_Impl->context);
 			lua_rawseti(L, slots, static_cast<int>(key));
 		}
 		lua_pushcfunction(L, ThreadRestore);
@@ -1103,46 +1260,321 @@ namespace RTE::LuaThreadCodec {
 	}
 
 	void PreviewCopier::PushFunction(int index) {
-		m_Impl->PushClosure(*this, index, false);
+		m_Impl->PushClosure(index);
 	}
 
 	void PreviewCopier::Finish() {
-		lua_State* L = m_Impl->L;
 		m_Impl->JoinOpenVariables(*this);
-		if (m_Impl->upvalues.empty()) {
-			return;
-		}
-		// A closure a copied table took before the coroutine's code owned its variable moves onto the copy's.
-		const int top = lua_gettop(L);
-		lua_newtable(L);
-		const int tables = lua_gettop(L);
-		int count = 0;
-		lua_pushnil(L);
-		while (lua_next(L, m_Impl->seen) != 0) {
-			if (lua_istable(L, -1) && lua_istable(L, -2)) {
-				lua_pushvalue(L, -1);
-				lua_rawseti(L, tables, ++count);
+	}
+
+	namespace {
+		// One audit of a copy against its original under the copy's own map.
+		struct CopyAudit {
+			lua_State* L;
+			PreviewCopier::MapValue image;
+			void* context;
+			std::vector<std::string>& differences;
+			size_t limit;
+			size_t values = 0;
+			size_t standIns = 0;
+			std::unordered_set<const GCobj*> visited;
+			std::unordered_map<const GCupval*, const GCupval*> cells;
+			std::vector<std::pair<TValue, std::string>> work;
+
+			void Note(const std::string& path, const std::string& what) {
+				if (differences.size() < limit) {
+					differences.push_back(path + ": " + what);
+				}
 			}
-			lua_pop(L, 1);
-		}
-		for (int at = 1; at <= count; ++at) {
-			lua_rawgeti(L, tables, at);
-			const int table = lua_gettop(L);
-			lua_pushnil(L);
-			while (lua_next(L, table) != 0) {
-				if (lua_type(L, -1) == LUA_TFUNCTION && isluafunc(funcV(L->top - 1)) && !m_Impl->copies.contains(funcV(L->top - 1)) &&
-				    m_Impl->NeedsCopy(funcV(L->top - 1))) {
-					m_Impl->PushClosure(*this, -1, false);
-					lua_pushvalue(L, -3);
-					lua_pushvalue(L, -2);
-					lua_rawset(L, table);
+
+			// Pushes the value, then its image.
+			void PushPair(const TValue* value) {
+				copyTV(L, L->top, value);
+				incr_top(L);
+				copyTV(L, L->top, value);
+				incr_top(L);
+				image(L, context);
+			}
+
+			// Whether the copy holds exactly the image of the original's value.
+			bool Holds(const TValue* original, const TValue* copied) {
+				PushPair(original);
+				copyTV(L, L->top, copied);
+				incr_top(L);
+				const bool same = lua_rawequal(L, -1, -2) != 0;
+				lua_pop(L, 3);
+				return same;
+			}
+
+			bool SameImage(const TValue* value) {
+				PushPair(value);
+				const bool same = lua_rawequal(L, -1, -2) != 0;
+				lua_pop(L, 2);
+				return same;
+			}
+
+			static std::string KeyName(const TValue* key) {
+				if (tvisstr(key)) {
+					return std::string(".") + strVdata(key);
+				}
+				if (tvisnumber(key)) {
+					const double number = numberVnum(key);
+					const long long whole = static_cast<long long>(number);
+					return "[" + (number == static_cast<double>(whole) ? std::to_string(whole) : std::to_string(number)) + "]";
+				}
+				return std::string("[") + lj_typename(key) + "]";
+			}
+
+			void Push(const TValue* value, const std::string& path) {
+				if (tvisgcv(value) && !tvisstr(value)) {
+					work.emplace_back(*value, path);
+				}
+			}
+
+			lua_State* OwnerOf(const GCupval* upvalue) {
+				for (GCobj* object = gcref(G(L)->gc.root); object != nullptr; object = gcnext(object)) {
+					if (object->gch.gct != ~LJ_TTHREAD) {
+						continue;
+					}
+					for (GCobj* entry = gcref(object->th.openupval); entry != nullptr; entry = gcnext(entry)) {
+						if (&entry->uv == upvalue) {
+							return &object->th;
+						}
+					}
+				}
+				return nullptr;
+			}
+
+			// A variable the copy holds as the original's own: never written, holding what the copy holds, not open on a coroutine the copy restored.
+			void SharedVariable(const GCupval* upvalue, const std::string& path) {
+				if (!upvalue->closed) {
+					lua_State* owner = OwnerOf(upvalue);
+					if (owner && owner != L && owner != mainthread(G(L))) {
+						Note(path, "shares a variable open on a coroutine the copy restores");
+					}
+					return;
+				}
+				if (!upvalue->immutable) {
+					Note(path, "shares a variable the original's code writes");
+				} else if (!SameImage(&upvalue->tv)) {
+					Note(path, "shares a variable holding a value the copy replaces");
+				}
+			}
+
+			void Table(GCtab* original, const TValue* imageValue, const std::string& path) {
+				if (!tvistab(imageValue) || tabV(imageValue) == original) {
+					Note(path, tvistab(imageValue) ? "a table the copy shares with the original" : "a table the copy replaced with another type");
+					return;
+				}
+				GCtab* copy = tabV(imageValue);
+				size_t count = 0;
+				const auto visit = [&](const TValue* key, const TValue* value) {
+					if (tvisnil(value)) {
+						return;
+					}
+					++count;
+					// The copy's value under the key's image.
+					settabV(L, L->top, copy);
+					incr_top(L);
+					PushPair(key);
+					lua_remove(L, -2);
+					lua_rawget(L, -2);
+					const TValue copied = *(L->top - 1);
+					lua_pop(L, 2);
+					if (!Holds(value, &copied)) {
+						Note(path + KeyName(key), "the copy holds another value under the key's image");
+					}
+					Push(key, path + "{key}" + KeyName(key));
+					Push(value, path + KeyName(key));
+				};
+				for (uint32_t at = 0; at < original->asize; ++at) {
+					TValue key;
+					setintV(&key, static_cast<int32_t>(at));
+					visit(&key, tvref(original->array) + at);
+				}
+				if (original->hmask) {
+					Node* nodes = noderef(original->node);
+					for (uint32_t at = 0; at <= original->hmask; ++at) {
+						visit(&nodes[at].key, &nodes[at].val);
+					}
+				}
+				size_t copyCount = 0;
+				for (uint32_t at = 0; at < copy->asize; ++at) {
+					copyCount += tvisnil(tvref(copy->array) + at) ? 0 : 1;
+				}
+				if (copy->hmask) {
+					Node* nodes = noderef(copy->node);
+					for (uint32_t at = 0; at <= copy->hmask; ++at) {
+						copyCount += tvisnil(&nodes[at].val) ? 0 : 1;
+					}
+				}
+				if (copyCount != count) {
+					Note(path, "the copy holds " + std::to_string(copyCount) + " entries, the original " + std::to_string(count));
+				}
+				TValue meta;
+				TValue copyMeta;
+				setnilV(&meta);
+				setnilV(&copyMeta);
+				if (GCtab* table = tabref(original->metatable)) {
+					settabV(L, &meta, table);
+				}
+				if (GCtab* table = tabref(copy->metatable)) {
+					settabV(L, &copyMeta, table);
+				}
+				if (!Holds(&meta, &copyMeta)) {
+					Note(path + "{metatable}", "the copy's metatable is not the image of the original's");
+				}
+				Push(&meta, path + "{metatable}");
+			}
+
+			void Function(GCfunc* original, const TValue* imageValue, const std::string& path) {
+				if (!tvisfunc(imageValue)) {
+					Note(path, "a function the copy replaced with another type");
+					return;
+				}
+				GCfunc* copy = funcV(imageValue);
+				const bool shared = copy == original;
+				if (!isluafunc(original)) {
+					if (!shared && (isluafunc(copy) || copy->c.ffid != original->c.ffid || copy->c.f != original->c.f || copy->c.nupvalues != original->c.nupvalues)) {
+						Note(path, "a native closure copied as another function");
+						return;
+					}
+					for (uint32_t slot = 0; slot < original->c.nupvalues; ++slot) {
+						const std::string where = path + "{value " + std::to_string(slot + 1) + "}";
+						if (shared ? !SameImage(&original->c.upvalue[slot]) : !Holds(&original->c.upvalue[slot], &copy->c.upvalue[slot])) {
+							Note(where, shared ? "a shared native closure holds a value the copy replaces" : "the copy holds another value");
+						}
+						Push(&original->c.upvalue[slot], where);
+					}
+					return;
+				}
+				if (!isluafunc(copy) || funcproto(copy) != funcproto(original)) {
+					Note(path, "a closure copied as another function");
+					return;
+				}
+				for (uint32_t slot = 0; slot < original->l.nupvalues; ++slot) {
+					const GCupval* upvalue = &gcref(original->l.uvptr[slot])->uv;
+					const GCupval* copied = &gcref(copy->l.uvptr[slot])->uv;
+					const std::string where = path + "{variable " + std::to_string(slot + 1) + "}";
+					if (copied == upvalue) {
+						SharedVariable(upvalue, where);
+					} else {
+						// Every copy that shares the original's variable shares one copy of it: one cell, or one stack slot once joined.
+						if (const auto found = cells.find(upvalue); found == cells.end()) {
+							cells.emplace(upvalue, copied);
+						} else if (found->second != copied && (copied->closed || found->second->closed || uvval(found->second) != uvval(copied))) {
+							Note(where, "two copies of one variable");
+						}
+						if (!Holds(uvval(upvalue), uvval(copied))) {
+							Note(where, "the copy's variable holds another value");
+						}
+					}
+					Push(uvval(upvalue), where);
+				}
+			}
+
+			void Thread(lua_State* original, const TValue* imageValue, const std::string& path) {
+				if (!tvisthread(imageValue) || threadV(imageValue) == original) {
+					Note(path, tvisthread(imageValue) ? "a coroutine the copy shares with the original" : "a coroutine the copy replaced with another type");
+					return;
+				}
+				lua_State* copy = threadV(imageValue);
+				const int top = lua_gettop(L);
+				lua_pushcfunction(L, ThreadCapture);
+				setthreadV(L, L->top, original);
+				incr_top(L);
+				if (lua_pcall(L, 1, 1, 0) != 0 || !lua_istable(L, -1)) {
+					lua_settop(L, top);
+					return;
+				}
+				lua_pushcfunction(L, ThreadCapture);
+				setthreadV(L, L->top, copy);
+				incr_top(L);
+				const bool capturedCopy = lua_pcall(L, 1, 1, 0) == 0 && lua_istable(L, -1);
+				const int originalDescription = top + 1;
+				const int copyDescription = top + 2;
+				lua_getfield(L, originalDescription, "status");
+				const std::string status = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+				lua_pop(L, 1);
+				std::string copyStatus;
+				if (capturedCopy) {
+					lua_getfield(L, copyDescription, "status");
+					copyStatus = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
 					lua_pop(L, 1);
 				}
-				lua_pop(L, 1);
+				if (!capturedCopy || copyStatus != status) {
+					// A coroutine that cannot be rebuilt gets a stand-in, which reruns the preview frozen when resumed.
+					++standIns;
+					lua_settop(L, top);
+					return;
+				}
+				lua_getfield(L, originalDescription, "slots");
+				lua_getfield(L, copyDescription, "slots");
+				const int originalSlots = top + 3;
+				const int copySlots = top + 4;
+				lua_pushnil(L);
+				while (lua_next(L, originalSlots) != 0) {
+					const lua_Integer key = lua_tointeger(L, -2);
+					const TValue value = *(L->top - 1);
+					lua_rawgeti(L, copySlots, static_cast<int>(key));
+					const TValue copied = *(L->top - 1);
+					lua_pop(L, 2);
+					const std::string where = path + "{slot " + std::to_string(key) + "}";
+					if (!Holds(&value, &copied)) {
+						Note(where, "the copy's slot holds another value");
+					}
+					Push(&value, where);
+				}
+				lua_settop(L, top);
 			}
-			lua_settop(L, table - 1);
+
+			void Run() {
+				while (!work.empty()) {
+					if (!lua_checkstack(L, 16)) {
+						Note("audit", "the stack cannot grow");
+						return;
+					}
+					const auto [value, path] = work.back();
+					work.pop_back();
+					if (!visited.insert(gcV(&value)).second) {
+						continue;
+					}
+					++values;
+					PushPair(&value);
+					const TValue imageValue = *(L->top - 1);
+					lua_pop(L, 2);
+					if (tvistab(&value)) {
+						Table(tabV(&value), &imageValue, path);
+					} else if (tvisfunc(&value)) {
+						Function(funcV(&value), &imageValue, path);
+					} else if (tvisthread(&value)) {
+						Thread(threadV(&value), &imageValue, path);
+					}
+				}
+			}
+		};
+	} // namespace
+
+	size_t AuditPreviewCopy(lua_State* state, int original, int copy, PreviewCopier::MapValue image, void* context, std::vector<std::string>& differences, size_t limit, size_t* standIns) {
+		original = original < 0 ? lua_gettop(state) + original + 1 : original;
+		copy = copy < 0 ? lua_gettop(state) + copy + 1 : copy;
+		const int top = lua_gettop(state);
+		if (!lua_istable(state, original) || !lua_istable(state, copy) || !lua_checkstack(state, 16)) {
+			differences.push_back("self: no instance table and copy to compare");
+			return 0;
 		}
-		lua_settop(L, top);
-		m_Impl->JoinOpenVariables(*this);
+		CopyAudit audit{state, image, context, differences, limit};
+		const TValue root = *(state->base + original - 1);
+		const TValue copied = *(state->base + copy - 1);
+		// The instance's image is its hold.
+		audit.visited.insert(gcV(&root));
+		audit.values = 1;
+		audit.Table(tabV(&root), &copied, "self");
+		audit.Run();
+		lua_settop(state, top);
+		if (standIns) {
+			*standIns = audit.standIns;
+		}
+		return audit.values;
 	}
 } // namespace RTE::LuaThreadCodec

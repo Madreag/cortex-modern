@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
+#include <vector>
 
 struct lua_State;
 
@@ -14,38 +16,54 @@ namespace RTE::LuaThreadCodec {
 	/// Registers capture and restore helpers for coroutine frames and open upvalues.
 	void Register(lua_State* state);
 
-	/// Copies the coroutines a preview's script copy holds so each resumes where its original stands, and the closures that
-	/// reach their variables, so a preview writes only its own copies.
+	/// Copies what a preview's script copy holds through closures and coroutines, so the copy keeps every identity and
+	/// shared variable the original has and a preview writes only its own copies.
 	class PreviewCopier {
 	public:
 		/// Replaces the value on top of the stack with what the copy holds for it.
 		using MapValue = void (*)(lua_State* state, void* context);
 
+		/// Whether the copy, or the remap that follows it, gives the userdata at index another value.
+		using Replaced = bool (*)(lua_State* state, int index, void* context);
+
 		/// @param seen The absolute index of the copy's original-to-copy table.
 		/// @param standIn The body a coroutine that cannot be copied gets instead.
-		PreviewCopier(lua_State* state, int seen, MapValue mapValue, void* context, int (*standIn)(lua_State*));
+		PreviewCopier(lua_State* state, int seen, MapValue mapValue, Replaced replaced, void* context, int (*standIn)(lua_State*));
 		~PreviewCopier();
+
+		/// Points the copier at the original-to-copy table and the map context of the call it serves next.
+		void Rebind(int seen, void* context);
 
 		/// Pushes the copy of the coroutine at index, recorded in seen: its frames, its place in them and its own values.
 		/// @return False, pushing nothing, when it cannot resume faithfully (running, or inside a continuation the codec cannot rebuild).
 		bool PushThread(int index);
 
-		/// Pushes the function at index, or a copy whose variables are the copy's: an upvalue open on a coroutine moves to that
-		/// coroutine's copy, one a copied coroutine's code owns is copied once. A coroutine.wrap function gets its coroutine's copy.
+		/// Pushes the function at index, or its copy when a variable of it is written, holds a value the copy replaces or is
+		/// open on a coroutine the copy restores; decided before the function is handed out, so it is one value everywhere.
+		/// Copies that share a variable share its copy. A coroutine.wrap function gets its coroutine's copy.
 		void PushFunction(int index);
 
-		/// Joins the variables the walk left open and moves the closures the copied tables hold onto the copied variables.
+		/// Joins the variables the walk left open to the copied coroutines' stacks.
 		void Finish();
+
+		/// Why the values copied since the last call cannot be copied faithfully, or empty.
+		std::string TakeRefusal();
 
 	private:
 		struct Impl;
 		Impl* m_Impl;
 	};
 
-	/// Whether the function at index is a closure a preview copier made whose variables are all its own.
+	/// Whether the function at index is a closure a preview copier made that holds values of its own.
 	bool IsOwnPreviewCopy(lua_State* state, int index);
 
-	/// Hands each value a preview copy keeps outside its tables to remap - a copied coroutine's stack, an own closure copy's
+	/// Hands each value a preview copy keeps outside its tables to remap - a copied coroutine's stack, a closure copy's own
 	/// variables - which may replace the value on top of the stack; the copy keeps what it leaves. False when remap fails.
 	bool RemapPreviewCopyValues(lua_State* state, int index, bool (*remap)(lua_State* state, void* context), void* context);
+	/// For a test lever: checks a copy against its original under the copy's own map. Every edge of the original - a table's
+	/// keys, values and metatable, a closure's variables, a native closure's values, a coroutine's slots - must join the
+	/// images in the copy, and a closure or variable the copy shares with the original must read the same and never be
+	/// written. image pushes the copy's value for the value on top of the stack, or the value itself.
+	/// @return The values audited; each difference is appended to differences, up to limit, with the path that reached it.
+	size_t AuditPreviewCopy(lua_State* state, int original, int copy, PreviewCopier::MapValue image, void* context, std::vector<std::string>& differences, size_t limit, size_t* standIns);
 } // namespace RTE::LuaThreadCodec
