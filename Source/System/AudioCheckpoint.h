@@ -145,6 +145,9 @@ struct Control {
 		archive(hasDelayStart, hasDelayEnd, delayStops, delayStart, delayEnd, fades);
 		archive(spatial, position, velocity, coneOrientation, minimumDistance, maximumDistance, cone, directOcclusion, reverbOcclusion, spread, level, doppler, customDistanceFilter, customLevel, centerFrequency, effects);
 	}
+	// A backend capture always reports a 2D or 3D mode. An archive written from the owner alone (the 2026-09-20 writer, or a
+	// voice captured before its sample loaded) has none, so the channel it starts on supplies what it never recorded.
+	bool Captured() const { return (mode & (FMOD_2D | FMOD_3D)) != 0; }
 	std::string SaveCheckpoint() const { CheckpointWriter archive("AudioControl1"); const_cast<Control*>(this)->Fields(archive); return archive.Text(); }
 	bool LoadCheckpoint(std::string_view text, bool validateOnly = false) {
 		try {

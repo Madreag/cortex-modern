@@ -701,6 +701,10 @@ namespace RTE {
 		void EraseBackendIdentity(int identity);
 		void StoreVoiceArchive(PlayingVoice& voice);
 		void RefreshStoredVoiceControl(PlayingVoice& voice);
+		/// Sets a restored voice's fresh channel up as PlaySoundContainer sets up its owner's voice when the archive holds no backend
+		/// capture, and makes the archive that capture with the fields the archive did record laid over it.
+		/// @return Whether the archive needed completing.
+		bool CompleteArchivedVoiceControl(FMOD::Channel* channel, AudioCheckpoint::Voice& description, const SoundContainer* owner, float panningStrength);
 		void BindVoiceLifetime(PlayingVoice& voice, unsigned sampleFrames, float sampleRate, unsigned loopStart, unsigned loopEnd, float pitch, int loops, double position, bool paused);
 		void FoldVoiceLifetime(PlayingVoice& voice);
 		bool VoiceSimLive(const PlayingVoice& voice) const;
