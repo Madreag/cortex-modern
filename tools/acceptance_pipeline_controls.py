@@ -80,7 +80,8 @@ def remove_c3_result(share, evidence):
     injection = read(product.parent/'injection.json')
     if (result.get('passed') is not True or result.get('collection_id') != share.run_id
             or result.get('source_sha') != share.source):
-        raise ValueError('C3 must first pass natively in this collection')
+        raise ValueError(f'C3 did not first pass natively in this collection: passed={result.get("passed")!r}, '
+                         f'collection {result.get("collection_id")!r}, source {result.get("source_sha")!r}')
     if (not injection.get('native_mode') or injection.get('collection_id') != share.run_id
             or injection.get('source_sha') != share.source
             or injection.get('executable_sha256') != share.schedule['exe_sha256']

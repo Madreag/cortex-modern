@@ -73,9 +73,9 @@ def configure_plan(plan, row, mod_receipts=None):
         plan.setdefault("driver_sources", {})[module] = sha256(Path(__file__).parent/module)
     names = {spec["peer"] for spec in plan["specs"]}
     if names != {"erol", "edith", "mac", "linux"} or plan["host"] != "erol":
-        raise ValueError("acceptance requires the four named boxes with the PC hosting")
+        raise ValueError(f"acceptance peers {sorted(names)} hosted by {plan['host']!r} are not the four named boxes with the PC hosting")
     if len({spec["box"] for spec in plan["specs"]}) != 4:
-        raise ValueError("acceptance requires four distinct machines")
+        raise ValueError(f"acceptance peers share machines: {sorted({spec['box'] for spec in plan['specs']})}")
     world = row.startswith("world-")
     if row == "world-soak":
         plan["specs"] = [s for s in plan["specs"] if s["peer"] in ("erol", "edith")]

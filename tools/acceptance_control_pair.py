@@ -84,7 +84,8 @@ def validate_box(box, source_sha, exe_sha256):
             or box.get('launch_floor_gib') != 10
             or box.get('exclusive_marker') != 'D:/mx/FEEL-MATRIX-RUNNING'
             or box.get('guard_file') != 'D:/mx/BOX-FREE-FOR-CROSS'):
-        raise ValueError('control pair requires the authorized PC identity, reservation and native limits')
+        raise ValueError(f'control pair box {box.get("name")!r} on {platform.node()!r} differs from the authorized PC identity, '
+                         'reservation or native limits')
     exe = Path(box['executable']).resolve()
     approved = {Path('D:/Projects/takeover-build/Cortex Command.exe').resolve(),
                 Path('D:/Projects/fencing-warm/Cortex Command.exe').resolve()}
