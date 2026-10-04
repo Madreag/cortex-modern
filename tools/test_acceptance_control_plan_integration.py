@@ -8,15 +8,19 @@ import unittest
 
 from test_acceptance_resume import fixture, write
 from test_acceptance_pipeline_controls import INVENTORY
-from acceptance_collection import Share
+from acceptance_collection import Share, start_section
 from acceptance_control_pair import ordinary_verdict, injection_receipt
 from acceptance_pipeline_controls import SHARE, augment, collect_final, finish_required, judge_final, remove_c3_result
 from acceptance_mod import sha256
 
-PROPOSAL = Path('D:/Projects/reviews/takeover-20260909/grok-workers/astra-acceptance-rows-20261002/proposals/controls-0b')
+MANIFEST = INVENTORY/'acceptance_manifest.py'
 
 
-@unittest.skipUnless((PROPOSAL/'acceptance_manifest.py').is_file(), 'owner integration proposal unavailable')
+def manifest_requires_controls():
+    return MANIFEST.is_file() and 'section 0b' in MANIFEST.read_text(encoding='utf-8')
+
+
+@unittest.skipUnless(manifest_requires_controls(), 'the inventory manifest with the section 0b gate is unavailable')
 class ControlPlanIntegration(unittest.TestCase):
     def prepare(self, parent, policy_v2=False):
         root = parent/'run'; root.mkdir()
@@ -35,12 +39,8 @@ class ControlPlanIntegration(unittest.TestCase):
         schedule['exe_sha256'] = exe
         write(root/'acceptance-plan.json', plan); write(root/'split-plan.json', schedule)
         if policy_v2:
-            frozen = Path('D:/mx/astra-acceptance-rows-20261002/resume-3/frozen-tools-o/tools/acceptance_collection.py')
-            spec = importlib.util.spec_from_file_location('frozen_section_receipt_unit', frozen)
-            collector = importlib.util.module_from_spec(spec); spec.loader.exec_module(collector)
             for section in ('0b', 1):
-                collector.start_section(root, section, marker=parent/'absent-unit-marker',
-                                        inventory_root=INVENTORY, optional_boxes={})
+                start_section(root, section, marker=parent/'absent-unit-marker', inventory_root=INVENTORY, optional_boxes={})
         share = Share(root, SHARE, INVENTORY)
         for control in ('C1', 'C2', 'C3'):
             command_id = 'control.'+control
@@ -70,7 +70,7 @@ class ControlPlanIntegration(unittest.TestCase):
         gate = judge_final(root, INVENTORY)
         self.assertTrue(gate['passed'], gate)
         write(root/'controls/gate.json', gate)
-        spec = importlib.util.spec_from_file_location('proposed_controls_manifest', PROPOSAL/'acceptance_manifest.py')
+        spec = importlib.util.spec_from_file_location('inventory_controls_manifest', MANIFEST)
         reader = importlib.util.module_from_spec(spec); spec.loader.exec_module(reader)
         return root, requirements, reader
 
