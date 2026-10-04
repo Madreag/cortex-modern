@@ -41,7 +41,10 @@ class Plans(unittest.TestCase):
         for spec in result["specs"]:
             args = spec["flags"]
             self.assertEqual(args[args.index("-net-match-service-module")+1], "VoidWanderers.rte")
-            self.assertNotIn("-net-fullstate-dump", args)
+            self.assertEqual(args[args.index('-net-fullstate-dump')+1], spec['own']+'/fullstate')
+            self.assertEqual(spec['env']['CC_TEST_FULLSTATE_DUMP_SECTIONS'], 'header')
+            self.assertEqual(spec['keep_fullstate_sections'], ['header'])
+            self.assertEqual(args[args.index('-net-fullstate-hash-every')+1], '60')
             self.assertEqual(spec["ticks"], 1201)
             self.assertTrue(spec["preserve_evidence"])
 

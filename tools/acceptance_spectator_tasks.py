@@ -161,10 +161,12 @@ def prepare_peer(box, plan, root, peer, session):
              '-net-match-service-module','Base.rte','-net-match-service-scene','Grasslands','-net-match-service-scene-module','Base.rte',
              '-net-match-auto-delay','-net-local-prediction','on','-net-ice','on','-net-player-name',peer,
              '-net-live-tick-hashes',str(root/(peer+'-live.jsonl')),'-net-fullstate-hash-every','60',
+             '-net-fullstate-dump',str(root/(peer+'-fullstate')),
              '-net-match-report',str(root/(peer+'-match-report.json')),'-input-script',str(stage/'input.txt'),
              '-net-reconnect-ticket',str(stage/'participant.ticket'),'-net-autosave-seconds','0']
     flags += ['-net-host','-net-persistent-world','-net-world-fresh'] if peer=='host' else ['-net-join-session',session]
     env = dict(CCCP_HEADLESS='1', CC_RUNNER_IGNORE_FULLSCREEN='1', CC_TEST_NET_UI_SCRIPT=str(probe),
+               CC_TEST_FULLSTATE_DUMP_SECTIONS='header',
                CC_TEST_CROSS_RUN=plan['run'], CC_TEST_CROSS_INSTANCE=peer, CC_TEST_CROSS_EXECUTION='process-0',
                CC_TEST_CROSS_INCARNATION='0', CC_TEST_CROSS_RECORDS=str(root/(peer+'-events.jsonl')),
                CC_TEST_CROSS_EVENT_RAW_LIMIT=str(256*1024**2), CC_RUNNER_BOX_NAME=box['name'])

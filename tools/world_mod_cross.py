@@ -138,10 +138,15 @@ def configure_plan(plan, row, mod_receipts=None):
                             ("-net-match-service-preset", "Persistent World" if world else "Void Wanderers"),
                             ("-net-match-service-module", "Base.rte" if world else "VoidWanderers.rte"),
                             ("-net-match-service-scene", spec["scene"]), ("-net-match-service-scene-module", spec["scene_module"]),
-                            ("-net-fullstate-hash-every", 60), ("-net-fullstate-dump", False),
+                            ("-net-fullstate-hash-every", 60), ("-net-fullstate-dump", spec['own']+'/fullstate'),
                             ("-net-cross-rematches", False), ("-net-cross-host-options", False),
                             ("-net-autosave-seconds", 60 if row == "world-soak" else 0)):
             flags = flag(flags, name, value)
+        # A native dump root emits each capture's process/round/ordinal identity.
+        # The existing engine selector limits diagnostic text only: every state
+        # section is still hashed before that selector is consulted.
+        spec['keep_fullstate_sections'] = ['header']
+        spec['env']['CC_TEST_FULLSTATE_DUMP_SECTIONS'] = 'header'
         if row == 'world-soak':
             flags = flag(flags, '-memory-census-ticks', 3600)
         if world and spec["role"] == "host":
