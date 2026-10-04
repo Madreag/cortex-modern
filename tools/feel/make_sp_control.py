@@ -27,7 +27,8 @@ def main(argv=None) -> int:
     parser.add_argument('--timeout', type=float, default=300)
     args = parser.parse_args(argv)
     out = args.out
-    out.mkdir(parents=True, exist_ok=False)
+    if out.exists():
+        parser.error(f'{out} exists; the control is written to a new folder')
     flags = ['-scenario', 'PieSwitchSP', '-seed', '42', '-max-ticks', '320', '-tick-hashes',
              '-out', str(out / 'trace.json'), '-input-script', str(INPUT_SCRIPT)]
     run = make_run(args.repo, flags, out, timeout=args.timeout, env=dict(CCCP_HEADLESS='1', CC_SIM_DUMP='27:320'),
