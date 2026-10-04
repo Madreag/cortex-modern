@@ -10,8 +10,13 @@ INSTRUMENTS = ('sim_dump', 'tick_end', 'fullstate', 'census', 'preview_fidelity'
 # The instruments each receipt version names (HarnessCost::c_ReceiptVersion); version 1 had no controller trace or feel recorder.
 VERSION_INSTRUMENTS = {1: INSTRUMENTS[:8], 2: INSTRUMENTS}
 FRAME_BUDGET_MS = 50
-# The menu loop's stays are numbered from this bit up (Main.cpp c_HarnessMenuRounds); no match round reaches it.
+# The menu loop's stays are this bit with the stay's count below it (Main.cpp c_HarnessMenuRounds). Match round ids are random
+# 64-bit values, so only that narrow range reads as a menu stay.
 MENU_ROUNDS = 1 << 62
+
+
+def menu_round(round_id):
+    return MENU_ROUNDS <= round_id < MENU_ROUNDS + (1 << 32)
 TAGS = ('[harness-cost-scope] ', '[harness-cost-scope-open] ', '[harness-cost-outside] ', '[harness-cost-frame] ')
 
 
@@ -36,7 +41,7 @@ def window_coverage(scopes, first_frame, last_frame):
     """Whether one match round's frames, over all its segments, cover the requested window; the best coverage otherwise."""
     rounds = defaultdict(set)
     for scope in scopes:
-        if scope['valid'] and scope['round'] < MENU_ROUNDS:
+        if scope['valid'] and not menu_round(scope['round']):
             rounds[scope['path'], scope['process'], scope['incarnation'], scope['round']].update(scope['frames'])
     wanted = set(range(first_frame if first_frame is not None else 0, (last_frame if last_frame is not None else -1) + 1))
     if first_frame is None or last_frame is None:

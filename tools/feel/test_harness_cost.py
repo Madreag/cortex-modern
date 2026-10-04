@@ -120,6 +120,9 @@ class HarnessCostReceipts(unittest.TestCase):
         self.assertIn('requested 1..1200', result['reason'])
         result = self.reduce(receipt_log([(1, 1200)], round_id=(1 << 62) | 1), first_frame=300, last_frame=1200)
         self.assertEqual(result['status'], 'FAIL', 'a menu stay is not the match window')
+        # Match round ids are random 64-bit values: one above 2^62 is still a match round.
+        result = self.reduce(receipt_log([(1, 2401)], round_id=10397662371052802788), first_frame=300, last_frame=2400)
+        self.assertEqual(result['status'], 'PASS', result['reason'])
 
     def test_opening_receipt_owns_the_frames_of_a_process_ended_before_its_close(self):
         self.assertIn('no owning instrumentation scope', self.reduce(receipt_log([(1, 900)], closed=False))['reason'])
