@@ -7629,7 +7629,10 @@ namespace RTE {
 					wire.Add(&returner);
 					return returner.client.BeginAdmission(wire.nowMs, &error);
 				};
+				// A return plays on before its link goes again; one dropped mid-return would be a failed return the roster backs off.
 				const auto drop = [&](Endpoint& gone) {
+					for (const NetH4Seat& seat: MakeSeatTable())
+						if (seat.stableSeat == seeded.stableSeat) wire.host.NoteReturnCaughtUp(seat.lockstepPeerId);
 					wire.host.NotifyDisconnect(gone.connection, wire.nowMs);
 					gone.connected = false;
 					wire.Remove(gone.connection);
@@ -7671,7 +7674,8 @@ namespace RTE {
 				std::filesystem::create_directories(blocker, code);
 				Endpoint retried;
 				if (!returnAt(retried, 64, third, hostSession) || !wire.Pump(&error) || retried.client.GetState() != NetH4ClientState::Joined) {
-					return Fail("the return with a blocked store did not reclaim its seat: " + error);
+					return Fail("the return with a blocked store did not reclaim its seat: state=" + std::string(NetReconnectClientStateName(retried.client.GetState())) +
+					            " client='" + retried.client.GetError() + "' " + error);
 				}
 				if (!onDisk(stored) || stored.hostAddress != second) return Fail("a failed write left the ticket naming " + stored.hostAddress);
 				std::filesystem::remove_all(blocker, code);
