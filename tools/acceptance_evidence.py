@@ -87,8 +87,13 @@ def peer_receipt(box, live_path, log, record, first, last):
     waits = [(int(t), float(ms)) for t, ms in re.findall(r"\[net-frame-wait\] frame=(\d+) wait_ms=(\d+(?:\.\d+)?)", log)]
     holds = [int(t) for t in re.findall(r"\[net-match\] hold peer=\d+ frame=(\d+)", log) if first <= int(t) <= last]
     windows = []
-    for low in range(first, last, 60):
-        high = min(low+60, last)
+    # Every window spans at least 60 ticks: a shorter tail joins the window before it, or one late tick the pacer makes up
+    # on the next would decide a rate the next tick never enters.
+    starts = list(range(first, last, 60))
+    if len(starts) > 1 and last - starts[-1] < 60:
+        starts.pop()
+    for index, low in enumerate(starts):
+        high = starts[index+1] if index+1 < len(starts) else last
         times = [observed.get(tick, []) for tick in range(low, high+1)]
         complete = all(len(value) == 1 and type(value[0]) in (int, float) for value in times)
         interval_waits = [ms for tick, ms in waits if low < tick <= high or tick == low == first]

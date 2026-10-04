@@ -395,6 +395,46 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestAJoinWaitsForAnImageItsHistoryServes() {
+			std::string error;
+			NetWorldJoinHost host;
+			if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error)) {
+				return Fail("stale-image host refused a world config: " + error);
+			}
+			host.Tail().Configure(4, 1 << 20);
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId;
+			image.boot = 1;
+			image.round = 1;
+			image.tick = 40;
+			image.bytes = 8;
+			image.digest = "d";
+			image.path = "Worlds/image.bin";
+			host.PublishImage(image);
+			// The world played on past its only image, and its history no longer reaches back to it.
+			for (uint64_t frame = 41; frame <= 60; ++frame) {
+				if (!host.Tail().Append(MakeCommittedFrame(frame), &error)) {
+					return Fail("stale-image tail refused a committed frame: " + error);
+				}
+			}
+			if (host.Tail().Covers(41)) {
+				return Fail("the stale-image fixture's history still covers its image");
+			}
+			if (!host.BeginJoin(7, 2, "alice", 1000, &error)) {
+				return Fail("stale-image join was refused: " + error);
+			}
+			if (const NetWorldJoinSession* session = host.FindSession(7); session == nullptr || session->snapshotTick != 0) {
+				return Fail("a join took the tick 40 image the world's history no longer follows, and could never catch up from it");
+			}
+			image.tick = 60;
+			image.digest = "e";
+			host.PublishImage(image);
+			if (const NetWorldJoinSession* session = host.FindSession(7); session == nullptr || session->snapshotTick != 60) {
+				return Fail("a join waiting for a servable image did not take the next one");
+			}
+			return 0;
+		}
+
 		int TestJoinPlaneAndLeave() {
 			std::string error;
 			NetWorldJoinHost host;
@@ -5778,6 +5818,46 @@ namespace RTE {
 		return 0;
 	}
 
+	// A seat held to the AI before its release left claims on the actors the AI plays for it; the committed Release ends them on
+	// every peer at its frame, or a watcher replaying the world reseats one of them to whoever is promoted into the freed slot.
+	int TestWorldReleaseEndsTheSeatsClaims() {
+		std::string error;
+		LoopbackTransport transport;
+		LoopbackTransport remote;
+		if (!transport.StartHost(47176, &error) || !remote.Connect("loopback", 47176, &error)) {
+			return Fail("release-kept-the-seats-claims: loopback: " + error);
+		}
+		NetLockstepCoordinator round;
+		NetLockstepConfig config;
+		config.sessionId = 12;
+		config.localPeerId = 1;
+		config.peerCount = 2;
+		config.remotePeerId = 2;
+		config.remoteTransportPeerId = 1;
+		config.timeoutMs = 1000000;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x52454C45ULL);
+		config.matchConfig.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 1, false, "Client"}};
+		if (!round.Start(transport, config, &error)) {
+			return Fail("release-kept-the-seats-claims: coordinator: " + error);
+		}
+		ScenarioRunner::SetLockstepCoordinator(&round);
+		ScenarioRunner::HandLockstepActorToAI(4501, 2);
+		const uint8_t heldBy = ScenarioRunner::GetLockstepDropTimeActorOwner(4501, 1, true);
+		// What MovableMan's apply of the Release DriveWorldJoins commits for peer 2 does.
+		ScenarioRunner::ReleaseLockstepControlOverridesOf(2);
+		const uint8_t afterRelease = ScenarioRunner::GetLockstepDropTimeActorOwner(4501, 1, true);
+		ScenarioRunner::ReclaimLockstepActor(4501, 1);
+		ScenarioRunner::ReleaseLockstepControlOverridesOf(1);
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		if (heldBy != 2) {
+			return Fail("release-kept-the-seats-claims: the fixture's held actor reads drop-time owner " + std::to_string(static_cast<int>(heldBy)));
+		}
+		if (afterRelease == 2) {
+			return Fail("release-kept-the-seats-claims: actor 4501 still reads released peer 2 as its drop-time owner, so the next return to that slot reseats it");
+		}
+		return 0;
+	}
+
 	// A watcher that has been streaming is the one a freed slot goes to, at its own announced E.
 	int TestFreedSlotPromotesTheOldestSpectator() {
 		NetWorldJoinHost host;
@@ -9271,6 +9351,9 @@ namespace RTE {
 		if (const int result = TestAJoinerWaitingOnAnUnagreedActivationIsReannounced(); result != 0) {
 			return result;
 		}
+		if (const int result = TestAJoinWaitsForAnImageItsHistoryServes(); result != 0) {
+			return result;
+		}
 		if (const int result = TestJoinPlaneAndLeave(); result != 0) {
 			return result;
 		}
@@ -9337,6 +9420,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestDedicatedWorldFirstSeatCanBeNamed(); result != 0) {
+			return result;
+		}
+		if (const int result = TestWorldReleaseEndsTheSeatsClaims(); result != 0) {
 			return result;
 		}
 		if (const int result = TestWorldReleaseFreesTheDepartedBrain(); result != 0) {

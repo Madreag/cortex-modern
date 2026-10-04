@@ -6,9 +6,9 @@ wait_ms 495
 settext TextJoinAddress 127.0.0.1
 settext TextJoinPort {PORT}
 activate ButtonMultiplayerConnect
-wait_connected 2 90
+wait_members 2
 video_mark spectator-first-connected
-wait_connected 4 90
+wait_connected 3 90
 wait_ms 495
 activate ButtonMultiplayerReady
 wait_file {PROBE_DIR_host}/done.json 180

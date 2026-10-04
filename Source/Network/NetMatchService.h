@@ -506,6 +506,8 @@ namespace RTE {
 		void ForgetOpenCaptureOnHeal();
 		/// Applies a finished capture's verdict to the world bookkeeping it stood for.
 		void ApplyAutosaveVerdict(uint64_t tick, bool joinCapture, bool archived);
+		/// A world bootstrap asks for a capture of its own unless one it can start from is already on its way.
+		void NoteWorldJoinWantsCapture();
 		/// Settles the awaited capture a writer verdict names; a verdict nobody awaits changes nothing.
 		void ResolveAwaitedAutosave(uint64_t tick, bool archived);
 		/// Takes every verdict the writer thread has finished since the last tick boundary; returns the captures they finished.
@@ -1365,6 +1367,8 @@ namespace RTE {
 		friend bool TestCompletedLobbyExpires(std::string* error);
 		friend bool TestCapturedWorldIdentityKeepsTheWorldStamp(std::string* error);
 		friend bool TestServiceWorldJoinAdoptsConfig(std::string* error);
+		friend bool TestALateCaptureVerdictLeavesTheNextJoinItsCapture(std::string* error);
+		friend bool TestAnEndedWorldLandsInsteadOfRematching(std::string* error);
 		friend bool TestChatSendRefusedOutsideCarry(std::string* error);
 		friend bool TestServiceReportCarriesActivityPreset(std::string* error);
 		friend bool RowRestartKey(NetMatchService& service, const std::filesystem::path& scratch, std::array<uint8_t, 32>& key, std::string* error);
@@ -1830,6 +1834,7 @@ namespace RTE {
 		std::atomic<bool> m_ManualSaveFailed = false; //!< Host: its last ask was not saved.
 		std::atomic<int64_t> m_LastMatchSaveTime = 0; //!< When this peer's writer last archived a checkpoint of this match.
 		uint64_t m_WorldCaptureRequestedTick = 0; //!< The tick a bootstrap already asked a capture at.
+		uint64_t m_WorldWatcherSeatedAt = 0; //!< The tick this watcher took the seat its host promoted it into.
 		std::map<uint64_t, NetWorldCheckpointImage> m_WorldImageStates; //!< A world host's lockstep state and seats at each capture tick, until that capture's image is published.
 		uint64_t m_WorldImageRefusedTick = 0; //!< The last archive refused for want of its tick's state, named once.
 		bool m_WorldCapturePending = false;

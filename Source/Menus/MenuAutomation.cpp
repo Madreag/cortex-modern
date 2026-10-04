@@ -464,8 +464,9 @@ namespace RTE::MenuAutomation {
 				const auto& log = ScenarioRunner::GetNetUiToastLog();
 				if (std::any_of(log.begin(), log.end(), [](const auto& toast) { return toast.kind == "seat_held" && toast.senderPeerId == 0; })) return true;
 			}
+			// A seat the host opened is released, as its label reads it, though a peer still catching up replays it held.
 			for (const auto& member: snapshot.members) {
-				if (member.cpu || (member.peerId == snapshot.localPeerId) != local || ScenarioRunner::IsLockstepSeatReleased(member.peerId)) continue;
+				if (member.cpu || (member.peerId == snapshot.localPeerId) != local || ScenarioRunner::IsLockstepSeatReleased(member.peerId) || NetPlayerPresentation::Opened(member.peerId)) continue;
 				if (member.aiHeld || member.reclaiming || ScenarioRunner::IsLockstepSeatUnderAI(member.peerId, frame)) return true;
 			}
 			return false;
@@ -796,7 +797,7 @@ namespace RTE::MenuAutomation {
 			} else if (const Json reclaim = receipt("ownership_reclaim"); reclaim.is_object()) {
 				// A promoted watcher's own side: the seat its slot is, the actor it plays from its activation, and its first fresh input.
 				Json promotion = {{"seat", seat}, {"freed_seat", seat}, {"actor", reclaim.value("actor", Json(nullptr))}, {"ticket_incarnation", ticketIncarnation},
-				    {"activation_tick", reclaim.value("activation_tick", Json(nullptr))}};
+				    {"activation_tick", facts.contains("watcher_seated_at") ? facts["watcher_seated_at"] : reclaim.value("activation_tick", Json(nullptr))}};
 				if (const Json first = receipt("first_controllable_input"); first.is_object()) {
 					const Json input = first.value("input", Json::object());
 					promotion["input_tick"] = first.value("wire_tick", Json(nullptr));

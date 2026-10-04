@@ -7,6 +7,18 @@
       "command": "dump_world_ownership spectator-image"
     },
     {
+      "op": "menu",
+      "command": "dump_seat_state"
+    },
+    {
+      "op": "wait",
+      "sim_at_least": 5940
+    },
+    {
+      "op": "menu",
+      "command": "video_mark spectator-crawl-begins"
+    },
+    {
       "op": "wait",
       "sim_at_least": 6061
     },
@@ -17,6 +29,14 @@
     {
       "op": "signal",
       "name": "crawl-complete"
+    },
+    {
+      "op": "wait",
+      "renders": 5
+    },
+    {
+      "op": "menu",
+      "command": "video_mark spectator-crawl-ends"
     },
     {
       "op": "wait_file",
@@ -55,5 +75,8 @@
       "op": "finish"
     }
   ],
-  "activate_phase": "Running"
+  "activate_phase": "Running",
+  "label_dump": {
+    "every_ms": 5000
+  }
 }

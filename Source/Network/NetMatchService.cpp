@@ -812,6 +812,16 @@ static std::string ResyncSaveName() {
 		bool departedHost = false;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			// A persistent world never rematches: its end is the world closing, and every seat lands on it as on its host leaving.
+			const NetMatchConfig& round = m_Runner ? m_Runner->GetMatchConfig() : m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig;
+			if (m_State == NetMatchServiceState::Completed && round.persistentWorld) {
+				m_State = NetMatchServiceState::Failed;
+				m_ErrorText = m_IsHost ? "The world is closed" : "The host left the match";
+				m_StatusText = m_ErrorText;
+				if (!m_IsHost) NoteHostEndedTheMatchLocked();
+				if (error) *error = m_ErrorText;
+				return false;
+			}
 			if (m_State != NetMatchServiceState::Completed || !ActiveWireLocked() || !m_Session || !m_Runner) {
 				if (error) *error = "no completed match to rematch";
 				return false;
@@ -1841,6 +1851,8 @@ static std::string ResyncSaveName() {
 			if (!ScenarioRunner::InstallWorldCatchUp(m_WorldCatchUp.snapshotTick, m_WorldCatchUp.tail, error, m_WorldCatchUp.privateMatch)) {
 				return false;
 			}
+			// A replay run under another peer's id is a watcher's: nothing of this machine's own is held in it.
+			ScenarioRunner::SetWorldCatchUpWatcher(m_CatchUpCoordinator && m_CatchUpCoordinator->GetConfig().localPeerId != m_LocalPeerId);
 			NoteTailReplayBeganLocked();
 			// Loading the snapshot and installing the catch-up own this thread for seconds while nothing reads the
 			// session: the admission and silence windows are measured from the end of that work, not across it.
@@ -2214,6 +2226,7 @@ static std::string ResyncSaveName() {
 		m_WorldJoin.Reset(); m_WorldCatchUp = {};
 		m_LastJoinRoute.reset();
 		m_WorldCaptureRequestedTick = 0;
+		m_WorldWatcherSeatedAt = 0;
 		m_WorldCapturePending = false;
 		ResetCheckpointSchedule();
 		m_PrivateActivations.clear(); m_PrivateJoinBlobs.clear(); m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
@@ -3528,6 +3541,12 @@ static std::string ResyncSaveName() {
 		}
 		// Every checkpoint wants a current admission file beside it; the pump writes it.
 		m_RestartAdmissionDue.store(true);
+	}
+
+	void NetMatchService::NoteWorldJoinWantsCapture() {
+		// The writer's verdict can land after its image was published: an image at or past the asked tick has answered that capture.
+		if (m_WorldCaptureRequestedTick != 0 && m_WorldJoin.Image().tick >= m_WorldCaptureRequestedTick) m_WorldCaptureRequestedTick = 0;
+		if (m_WorldCaptureRequestedTick == 0) m_WorldCapturePending = true;
 	}
 
 	void NetMatchService::ResolveAwaitedAutosave(uint64_t tick, bool archived) {
@@ -5246,7 +5265,7 @@ static std::string ResyncSaveName() {
 				continue;
 			}
 			// The session pump may run inside a tick; capture after the world finishes it.
-			if (m_WorldCaptureRequestedTick == 0) m_WorldCapturePending = true;
+			NoteWorldJoinWantsCapture();
 			if (const NetWorldJoinSession* session = m_WorldJoin.FindSession(peer.transportPeerId)) {
 				if (m_Runner) {
 					const uint8_t lobbyPeer = WorldJoinLobbyPeer(*session);
@@ -6941,6 +6960,11 @@ static std::string ResyncSaveName() {
 				m_LocalPeerId = live;
 				for (const NetMatchPlayerSlot& slot: m_Coordinator->GetConfig().matchConfig.players)
 					if (slot.peerId == live) m_LocalTeam = slot.team;
+				// The world it watched seated nobody on this machine: the seat's player takes it the way a returner does.
+				if (Activity* activity = g_ActivityMan.GetActivity(); activity && !activity->AdoptNetLocalSeat(m_Coordinator->GetConfig().matchConfig, live)) {
+					ScenarioRunner::SetControllerReplayError("PeerLeft:world catch-up activation: the promoted watcher could not take its seat"); return;
+				}
+				m_WorldWatcherSeatedAt = m_WorldCatchUp.activationTick;
 			}
 			m_WorldCatchUp.handedToRound = true;
 		}
@@ -7092,9 +7116,14 @@ static std::string ResyncSaveName() {
 		nlohmann::json facts = nlohmann::json::object();
 		if (!m_Runner) return facts.dump();
 		const NetMatchConfig& config = m_Runner->GetMatchConfig();
+		// The seats are the world's slot table: the authored capacity, or every peer id but the host's when none was authored.
 		uint32_t seats = 0;
 		for (const uint8_t capacity: config.worldTeamCapacity) seats += capacity;
-		facts["configuration"] = {{"seats", seats}, {"world_max_spectators", config.worldMaxSpectators}, {"persistent_world", config.persistentWorld}};
+		const bool authored = seats != 0;
+		if (!authored && config.persistentWorld) {
+			for (uint8_t peerId = 1; peerId <= config.peerCount; ++peerId) seats += peerId != config.hostPeerId;
+		}
+		facts["configuration"] = {{"seats", seats}, {"capacity_authored", authored}, {"world_max_spectators", config.worldMaxSpectators}, {"persistent_world", config.persistentWorld}};
 		facts["is_host"] = m_IsHost;
 		facts["image_received"] = m_Runner->SawWorldImageTransfer();
 		// A watcher replays the committed tail outside any round, so its own id and the ticks it watched are the service's.
@@ -7131,6 +7160,7 @@ static std::string ResyncSaveName() {
 				facts["ticket_seat"] = client->GetRecord().stableSeat;
 			}
 		}
+		if (!m_IsHost && m_WorldWatcherSeatedAt != 0) facts["watcher_seated_at"] = m_WorldWatcherSeatedAt;
 		return facts.dump();
 	}
 

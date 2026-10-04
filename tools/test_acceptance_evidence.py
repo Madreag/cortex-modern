@@ -52,6 +52,15 @@ class NativeReceipts(unittest.TestCase):
         self.assertEqual(result["timing"][0]["max_wait_ms"], 51)
         self.assertEqual(result["timing"][0]["wait_ms"], 51)
 
+    def test_a_short_tail_is_judged_with_the_window_before_it(self):
+        # One tick 2.4 ms late and the next as early: the pacer's own correction, with the corrected tick past the bracket's end.
+        rows = [dict(self.base[0], tick=t, wall_ms=t*1000/60 + (2.4 if t == 72 else 0)) for t in range(1, 74)]
+        path = self.write("a.jsonl", rows)
+        timing = peer_receipt("pc", path, "", dict(exit_code=0), 1, 72)["timing"]
+        self.assertEqual([(w["first"], w["last"]) for w in timing], [(1, 72)])
+        self.assertTrue(all(w["last"] - w["first"] >= 60 for w in timing))
+        self.assertGreaterEqual((timing[-1]["last"] - timing[-1]["first"]) * 1000 / timing[-1]["elapsed_ms"], 59.5)
+
     def test_malformed_receipt_fails(self):
         with self.assertRaises(ValueError): tagged_receipts('[transfer] {bad}', 'transfer')
 
