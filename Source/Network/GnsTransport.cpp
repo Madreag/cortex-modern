@@ -221,10 +221,6 @@ namespace RTE {
 
 		// Test harness: splits the requested RTT across the send/recv legs of every connection, and adds its jitter.
 		void ApplySimulatedLag() {
-			// A headless harness run's packets carry their send spacing, which plain UDP leaves out, so the receiving end's own
-			// latency-variance histogram measures the jitter its link meets.
-			static const bool s_HarnessRun = [] { const char* headless = std::getenv("CCCP_HEADLESS"); return headless && std::string_view(headless) == "1"; }();
-			if (s_HarnessRun) SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendTimeSincePreviousPacket, 1);
 			if (s_SimulatedLagMs > 0) {
 				SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Send, s_SimulatedLagMs / 2);
 				SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Recv, s_SimulatedLagMs - s_SimulatedLagMs / 2);
@@ -238,6 +234,9 @@ namespace RTE {
 				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Max, jitter);
 				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Pct, 100.0F);
 				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Pct, 100.0F);
+				// A jittered link's packets carry their send spacing, which plain UDP leaves out, so the receiving end's own
+				// latency-variance histogram measures the jitter; it costs two bytes a packet, so no other run sends it.
+				SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendTimeSincePreviousPacket, 1);
 			}
 			if (s_SimulatedReorderPercent > 0) {
 				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketReorder_Send, s_SimulatedReorderPercent);
@@ -1504,10 +1503,57 @@ namespace RTE {
 		accepted &= utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Max, jitterMs);
 		accepted &= utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Pct, jitterMs > 0 ? 100.0F : 0.0F);
 		accepted &= utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Pct, jitterMs > 0 ? 100.0F : 0.0F);
+		// A jittered cross link sends its packet spacing as the jitter lever's does; with no jitter left, GNS's default returns.
+		accepted &= utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendTimeSincePreviousPacket, jitterMs > 0 || s_SimulatedJitterMs > 0 ? 1 : -1);
 		s_CrossTransportResetMs.store(durationMs ? std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() + durationMs : 0);
 		return accepted;
 #else
 		(void)lagMs; (void)lossPercent; (void)jitterMs; (void)durationMs;
+		return false;
+#endif
+	}
+
+	bool GnsPacketSpacingSelfTest(std::string* error) {
+#ifdef CCCP_WITH_GNS
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
+		if (!AcquireGns(error)) return false;
+		const auto spacing = [] {
+			int32 value = 0;
+			size_t size = sizeof(value);
+			ESteamNetworkingConfigDataType type = k_ESteamNetworkingConfig_Int32;
+			SteamNetworkingUtils()->GetConfigValue(k_ESteamNetworkingConfig_SendTimeSincePreviousPacket, k_ESteamNetworkingConfig_Global, 0, &type, &value, &size);
+			return value;
+		};
+		// A transport starts the way a player's does, then the way the jitter lever's does.
+		const int lever = s_SimulatedJitterMs;
+		s_SimulatedJitterMs = 0;
+		ApplySimulatedLag();
+		const int32 plain = spacing();
+		s_SimulatedJitterMs = 40;
+		ApplySimulatedLag();
+		const int32 jittered = spacing();
+		s_SimulatedJitterMs = lever;
+		// The rest of the process runs on GNS's defaults again.
+		SteamNetworkingUtils()->SetConfigValue(k_ESteamNetworkingConfig_SendTimeSincePreviousPacket, k_ESteamNetworkingConfig_Global, 0, k_ESteamNetworkingConfig_Int32, nullptr);
+		for (const ESteamNetworkingConfigValue value: {k_ESteamNetworkingConfig_FakePacketJitter_Send_Avg, k_ESteamNetworkingConfig_FakePacketJitter_Recv_Avg,
+		                                               k_ESteamNetworkingConfig_FakePacketJitter_Send_Max, k_ESteamNetworkingConfig_FakePacketJitter_Recv_Max,
+		                                               k_ESteamNetworkingConfig_FakePacketJitter_Send_Pct, k_ESteamNetworkingConfig_FakePacketJitter_Recv_Pct}) {
+			SteamNetworkingUtils()->SetConfigValue(value, k_ESteamNetworkingConfig_Global, 0, k_ESteamNetworkingConfig_Float, nullptr);
+		}
+		ReleaseGns();
+		const char* headless = std::getenv("CCCP_HEADLESS");
+		const std::string run = std::string("CCCP_HEADLESS=") + (headless ? headless : "(unset)");
+		if (plain != -1) {
+			if (error) *error = "a transport with no jitter lever set SendTimeSincePreviousPacket=" + std::to_string(plain) + " under " + run + ", not GNS's default -1";
+			return false;
+		}
+		if (jittered != 1) {
+			if (error) *error = "the jitter lever's transport set SendTimeSincePreviousPacket=" + std::to_string(jittered) + ", so the jitter receipt has no packet spacing to count";
+			return false;
+		}
+		return true;
+#else
+		if (error) *error = "GameNetworkingSockets support is not compiled in";
 		return false;
 #endif
 	}
