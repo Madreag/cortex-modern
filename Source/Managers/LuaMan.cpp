@@ -11146,6 +11146,62 @@ end
 		checkpointValues = readPassed && writePassed && checkpointValues;
 	}
 	{
+		// The preview steps its copies with the scripts frozen: a copy's Update runs into the copy's own instance, the live
+		// instance's count stays where its own ticks left it.
+		const auto* preset = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+		std::unique_ptr<AHuman> actor(preset ? dynamic_cast<AHuman*>(preset->Clone()) : nullptr);
+		const auto count = [&actor](const std::string& who) {
+			LuaStateWrapper* state = actor ? actor->GetLuaState() : nullptr;
+			if (!state) return -1;
+			std::lock_guard<std::recursive_mutex> lock(state->GetMutex());
+			lua_State* L = state->GetLuaState();
+			int value = -1;
+			lua_getglobal(L, "_ScriptFieldsStash");
+			if (lua_istable(L, -1)) {
+				lua_getfield(L, -1, ("preview-update:" + who).c_str());
+				value = lua_isnumber(L, -1) ? static_cast<int>(lua_tointeger(L, -1)) : -1;
+				lua_pop(L, 1);
+				lua_pushnil(L);
+				lua_setfield(L, -2, ("preview-update:" + who).c_str());
+			}
+			lua_pop(L, 1);
+			return value;
+		};
+		bool loaded = false;
+		bool frozen = true;
+		int previewCount = -1;
+		int liveCount = -1;
+		if (actor && actor->LoadScript(g_PresetMan.GetFullModulePath("Tests.rte/PreviewUpdateHook.lua")) >= 0) {
+			loaded = actor->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"init"}) >= 0;
+			LuaMan::CapturePreviewSelfCopies({actor.get()}, false);
+			MovableObject* clone = nullptr;
+			{
+				MovableObject::FaithfulCloneScope scope(false);
+				clone = dynamic_cast<MovableObject*>(actor->Clone());
+			}
+			if (auto* previewed = dynamic_cast<Actor*>(clone)) {
+				LuaMan::BeginPreviewScripts({previewed}, false, {actor.get()});
+				frozen = LuaMan::PreviewFrozenCount() > 0;
+				if (!frozen) {
+					LuaMan::SetScriptsFrozen(true);
+					previewed->UpdateScripts();
+					previewed->UpdateScripts();
+					LuaMan::SetScriptsFrozen(false);
+					previewed->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"preview"});
+				}
+			}
+			LuaMan::EndPreviewScripts();
+			delete clone;
+			actor->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"live"});
+			previewCount = count("preview");
+			liveCount = count("live");
+		}
+		const bool passed = loaded && !frozen && previewCount == 2 && liveCount == 0;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " preview_copy_runs_its_update_hook loaded=" << loaded << " frozen=" << frozen
+		          << " preview_updates=" << previewCount << " live_updates=" << liveCount << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+	{
 		// A scene reload leaves no scene layer's back buffer behind: a preset's clone loaded twice, and a clone of a loaded scene loaded again.
 		const int before = SceneLayerBackBufferCount();
 		const auto* preset = dynamic_cast<const Scene*>(g_PresetMan.GetEntityPreset("Scene", "Grasslands", "Base.rte"));
