@@ -162,7 +162,8 @@ class HarnessCostReceipts(unittest.TestCase):
     def test_version_one_receipts_still_read_and_version_two_names_every_instrument(self):
         old = self.reduce(receipt_log([(1, 300)], version=1))
         self.assertEqual(old['status'], 'PASS', old['reason'])
-        self.assertEqual(old['instruments']['controller_trace']['status'], 'DISABLED')
+        self.assertEqual(old['instruments']['controller_trace']['status'], 'NOT RECEIPTED (version 1)')
+        self.assertEqual(old['instruments']['census']['status'], 'DISABLED')
         short = receipt_log([(1, 300)], version=1).replace('"version": 1', '"version": 2')
         self.assertIn('invalid or duplicate instrumentation scope', self.reduce(short)['reason'])
         traced = self.reduce(receipt_log([(1, 300)], enabled=('controller_trace', 'feel_recorder')))

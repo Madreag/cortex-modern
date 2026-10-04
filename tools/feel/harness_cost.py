@@ -37,6 +37,10 @@ def scope_valid(scope, closed):
             and all(type(value) is bool for value in enabled.values()))
 
 
+def scope_version(scope):
+    return scope.get('version', 1)
+
+
 def window_coverage(scopes, first_frame, last_frame):
     """Whether one match round's frames, over all its segments, cover the requested window; the best coverage otherwise."""
     rounds = defaultdict(set)
@@ -110,7 +114,7 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
         receipt = close or open_
         last = close['last_frame'] if close else max((row.get('frame') for row in grouped[identity] if type(row.get('frame')) is int), default=open_['first_frame'] - 1)
         scopes.append(dict(path=identity[0], process=identity[1], incarnation=identity[2], round=identity[3], segment=identity[4],
-                           first_frame=receipt['first_frame'], last_frame=last, instruments=receipt['instruments'], closed=bool(close),
+                           version=receipt['version'], first_frame=receipt['first_frame'], last_frame=last, instruments=receipt['instruments'], closed=bool(close),
                            line=receipt['line'], valid=True, frames=set()))
     used = {key(scope) for scope in scopes}
     covered, aggregate = defaultdict(list), []
@@ -164,6 +168,8 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
         declarations = [scope['instruments'].get(name, False) for scope in scopes]
         known = bool(declarations) and all(type(v) is bool for v in declarations)
         disabled = known and not any(declarations) and not samples[name]
+        # A version-1 receipt names eight instruments: one it does not name may have run without a receipt.
+        unreceipted = bool(scopes) and all(name not in VERSION_INSTRUMENTS[scope_version(scope)] for scope in scopes) and not samples[name]
         values = [r['ms'] for r in covered[name]]
         observed_max = max([r.get('max_ms', 0) for r in samples[name]] + values, default=None)
         missing_sources = []
@@ -176,7 +182,7 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
         if observed_max is not None and not number(observed_max): errors.append(f'{name}: invalid measured cost {observed_max}')
         measured = bool(values) and all(complete_scopes) and not missing_sources
         ordered = sorted(values)
-        instruments[name] = dict(status='DISABLED' if disabled else 'MEASURED' if measured else 'MISSING COST',
+        instruments[name] = dict(status='NOT RECEIPTED (version 1)' if unreceipted else 'DISABLED' if disabled else 'MEASURED' if measured else 'MISSING COST',
             scope_known=known and not missing_sources, complete=disabled or measured, missing_cost_sources=missing_sources,
             measured_total_ms=sum(values) if values else None, measured_max_ms=observed_max,
             mean_frame_ms=sum(values) / len(values) if values else None,
