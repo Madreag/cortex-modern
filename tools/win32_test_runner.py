@@ -425,13 +425,53 @@ def feel_matrix_hold(env, marker=None):
     return text[:300] if isinstance(pid, int) and _pid_alive(pid) else None
 
 
-def firewall_allows_inbound(exe):
-    """True when an active inbound Allow rule names this executable.
+FIREWALL_PROFILE_KEYS = (
+    r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\DomainProfile",
+    r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\StandardProfile",
+    r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\PublicProfile",
+)
+FIREWALL_POLICY_KEYS = (
+    r"SOFTWARE\Policies\Microsoft\WindowsFirewall\DomainProfile",
+    r"SOFTWARE\Policies\Microsoft\WindowsFirewall\StandardProfile",
+    r"SOFTWARE\Policies\Microsoft\WindowsFirewall\PublicProfile",
+)
 
-    Read from the rule store in the registry (no elevation needed) instead of the WMI cmdlets, which take
-    tens of seconds. Without such a rule Windows raises the "new app listening" prompt on the desktop the
+
+def firewall_disabled_everywhere():
+    """True when every firewall profile is off (a policy value wins over the profile's own), False when any is on, None when unreadable."""
+    try:
+        import winreg
+    except ImportError:
+        return None
+
+    def enable_value(path):
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path) as key:
+                return winreg.QueryValueEx(key, "EnableFirewall")[0]
+        except OSError:
+            return None
+
+    states = []
+    for profile, policy in zip(FIREWALL_PROFILE_KEYS, FIREWALL_POLICY_KEYS):
+        value = enable_value(policy)
+        if value is None:
+            value = enable_value(profile)
+        if value is None:
+            return None
+        states.append(int(value) == 0)
+    return all(states)
+
+
+def firewall_allows_inbound(exe):
+    """True when the firewall is off on every profile or an active inbound Allow rule names this executable.
+
+    A firewall that is off filters nothing, so no rule is needed and none is asked for (the user keeps every box's
+    firewall off). Otherwise read the rule store in the registry (no elevation needed) instead of the WMI cmdlets,
+    which take tens of seconds. Without such a rule Windows raises the "new app listening" prompt on the desktop the
     first time the process binds a socket, and an unattended run then waits on nobody.
     """
+    if firewall_disabled_everywhere():
+        return True
     try:
         import winreg
     except ImportError:
@@ -582,7 +622,7 @@ class IsolatedRun:
                     self._check(
                         "firewall_allow_rule_present",
                         allowed,
-                        str(exe) if allowed else f"no inbound allow rule for {exe}; run {FIREWALL_ALLOW_SCRIPT} elevated",
+                        str(exe) if allowed else f"firewall on and no inbound allow rule for {exe}; turn the box's firewall off or run {FIREWALL_ALLOW_SCRIPT} elevated",
                     )
         try:
             private = (
