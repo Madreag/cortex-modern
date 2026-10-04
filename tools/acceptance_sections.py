@@ -20,8 +20,9 @@ def freeze_helpers(inventory, root):
     if destination.exists(): raise ValueError('this collection already froze its helpers')
     destination.mkdir()
     # The defect merge reads its follow-up register beside its own copy (the Mac's and Linux's copies carry it the same way).
-    followups=next(path for path in (inventory/'ENGINE-FOLLOWUPS.txt',inventory.parent.parent/'opus-next-20260914/ENGINE-FOLLOWUPS.txt')
-                   if path.is_file())
+    followups=next((path for path in (inventory/'ENGINE-FOLLOWUPS.txt',inventory.parent.parent/'opus-next-20260914/ENGINE-FOLLOWUPS.txt')
+                    if path.is_file()),None)
+    if followups is None: raise ValueError(f'the follow-up register is absent beside {inventory} and in the lead\'s folder')
     selected=[*inventory.glob('*.py'),inventory/'boxes.json']
     selected += [path for path in (inventory/'acceptance-v1').rglob('*') if path.is_file()
                  and path.suffix in ('.py','.json','.sh','.zsh','.md') and '__pycache__' not in path.parts]
