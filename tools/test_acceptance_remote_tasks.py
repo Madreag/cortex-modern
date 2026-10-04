@@ -14,11 +14,17 @@ import acceptance_native_runtime as native_runtime
 def profiles(row=None):
     from test_world_soak_tasks import profiles as windows_profiles
     boxes = windows_profiles()
+    boxes[0].update(name='EROL-PC', kind='windows-local', hostname='EROL-PC',
+                    tree='D:/Projects/takeover-build', executable='D:/Projects/takeover-build/Cortex Command.exe',
+                    guard_file='D:/mx/BOX-FREE-FOR-CROSS', launch_floor_gib=10, max_engines=4,
+                    affinity_mask='0x0000FFFF', engine_memory_gb=12,
+                    runner='tools/run_sim_test.py / tools/win32_test_runner.py')
+    boxes[0].pop('ssh', None); boxes[0].pop('task_script', None)
     for box in boxes:
         box['peers_per_box'] = 1
-        box['hostname'] = 'EROL-TABLET' if box['name'] == 'Z13' else 'EDITH'
+        box['hostname'] = box['name']
         if row == 'world-join':
-            box['tree'] = 'D:/Projects/z13-rows-build' if box['name'] == 'Z13' else 'D:/mx/test/engine-tip'
+            box['tree'] = 'D:/Projects/fencing-warm' if box['name'] == 'EROL-PC' else 'D:/mx/test/engine-tip'
             box['executable'] = box['tree']+'/Cortex Command.exe'
     for name, alias, root, host in (('Mac', 'Erol-Mac', '/Users/erol/cortex-workers/test', 'Erol-Mac'),
                                     ('Linux', '3090', '/home/erol/cortex-workers/test', 'linux-host')):
@@ -51,11 +57,11 @@ class RemoteSafety(unittest.TestCase):
             with self.subTest(row=row):
                 plan = remote.make_plan(options(row), profiles(row), mods() if row.startswith('mod-') else None)
                 self.assertEqual({spec['peer']:spec['box'] for spec in plan['specs']}, remote.PEERS)
-                self.assertEqual(plan['coordinator_only']['engine_instances'], 0)
-                self.assertTrue(all(box['kind'] != 'windows-local' for box in plan['boxes']))
+                self.assertEqual(plan['coordinator_game_peer']['engine_instances'], 1)
+                self.assertEqual(sum(box['kind'] == 'windows-local' for box in plan['boxes']), 1)
                 for spec in plan['specs']:
                     box = next(box for box in plan['boxes'] if box['name'] == spec['box'])
-                    self.assertTrue(spec['own'].startswith(box['scratch']+'/unit/'))
+                    self.assertTrue(spec['own'].startswith(remote.native_root(plan, box)+'/'))
                     self.assertEqual(spec['executable'], box['executable'])
                     self.assertEqual(spec['env']['CCCP_HEADLESS'], '1')
 
@@ -79,7 +85,7 @@ class RemoteSafety(unittest.TestCase):
         self.assertEqual(next(spec for spec in plan['specs'] if spec['role']=='host')['initial_skill'],50)
 
     def test_profile_cannot_substitute_local_box_runner_floor_or_unowned_helpers(self):
-        for field, value in (('name','EROL-PC'), ('kind','windows-local'), ('runner','bare-exe'),
+        for field, value in (('name','Z13'), ('kind','windows-task'), ('runner','bare-exe'),
                              ('hostname',''), ('helpers','D:/mx/other/helpers'), ('peers_per_box',2),
                              ('exclusive_marker','D:/mx/test/private-marker'), ('launch_floor_gib',2)):
             with self.subTest(field=field), self.assertRaises(ValueError):
@@ -90,7 +96,7 @@ class RemoteSafety(unittest.TestCase):
         import json
         payload = dict(box=profiles()[0], specs=[dict(peer='erol', acceptance_row='mod-match')])
         with patch.object(Path,'read_text',return_value=json.dumps(payload)), \
-             patch.object(remote.platform,'node',return_value='EROL-PC'), \
+             patch.object(remote.platform,'node',return_value='EROL-TABLET'), \
              patch.object(remote.cross,'run_payload') as native, \
              patch.object(remote.cross,'acquire_reservation') as reserve:
             with self.assertRaisesRegex(ValueError,'wrong physical host'):
@@ -100,8 +106,8 @@ class RemoteSafety(unittest.TestCase):
     def test_native_preflights_require_expected_source_and_equal_windows_bytes(self):
         plan = remote.make_plan(options('world-join'), profiles('world-join'))
         plan['preflights'] = {box['name']:dict(hostname=box['hostname'], machine_id=box['name'],
-            executable_sha256=('e' if box['kind']=='windows-task' else 'f')*64,
-            build=dict(commit='a'*40, executable_sha256=('e' if box['kind']=='windows-task' else 'f')*64),
+            executable_sha256=('e' if box['kind'].startswith('windows-') else 'f')*64,
+            build=dict(commit='a'*40, executable_sha256=('e' if box['kind'].startswith('windows-') else 'f')*64),
             content={'Base.rte/Index.ini':'d'*64}, modules={}, fixture={}, load=[],
             acceptance_driver_sources={key:plan['driver_sources'][key] for key in world.DRIVER_FILES},
             acceptance_remote_driver_sha256=plan['driver_sources']['acceptance_remote_tasks.py']) for box in plan['boxes']}
@@ -113,7 +119,7 @@ class RemoteSafety(unittest.TestCase):
         held['preflights']['Mac']['preflight_reservation']['borrowed']=False
         with self.assertRaisesRegex(ValueError,'did not hold'):
             remote.validate_preflights(held)
-        for field, value in (('machine_id','Z13'), ('hostname','EROL-PC'), ('content',{}),
+        for field, value in (('machine_id','EROL-PC'), ('hostname','EROL-PC'), ('content',{}),
                              ('build',dict(commit='b'*40,executable_sha256='e'*64)),
                              ('acceptance_remote_driver_sha256','b'*64), ('load',[{'Name':'ninja'}])):
             with self.subTest(field=field), self.assertRaises((ValueError,RuntimeError)):
@@ -126,7 +132,7 @@ class RemoteSafety(unittest.TestCase):
             remote.validate_preflights(bad)
 
     def test_control_publication_preserves_the_transferred_candidate(self):
-        box = profiles()[0]
+        box = profiles()[1]
         with patch.object(remote.cross, 'command') as transfer, patch.object(remote,'remote_python') as publish:
             remote.publish_new(box, Path('/virtual/session.json'), 'D:/mx/test/session.json')
         self.assertEqual(transfer.call_args.args[0][0], 'scp')
@@ -148,7 +154,7 @@ class RemoteSafety(unittest.TestCase):
                 remote.validate_profile(box, 'test')
 
     def test_note8_rows_cannot_use_acceptance_or_engineer_development_files(self):
-        for name, tree in [('Z13','D:/Projects/z13-build'), ('Z13','D:/Projects/z13-dev-build'),
+        for name, tree in [('EROL-PC','D:/Projects/z13-build'), ('EROL-PC','D:/Projects/z13-dev-build'),
                            ('EDITH','D:/Projects/inventory-build')]:
             with self.subTest(name=name, tree=tree):
                 boxes=profiles('world-join')
@@ -169,7 +175,7 @@ class RemoteSafety(unittest.TestCase):
         claim = dict(record=dict(pid=123, token='fixture'))
         before = dict(os.environ)
         with patch.object(Path,'read_text',return_value=json.dumps(payload)), \
-             patch.object(remote.platform,'node',return_value='EROL-TABLET'), \
+             patch.object(remote.platform,'node',return_value='EROL-PC'), \
              patch.object(native_runtime,'run_payload',side_effect=RuntimeError('native failure')), \
              patch.object(remote.cross,'acquire_reservation',return_value=claim), \
              patch.object(remote.cross,'release_reservation',return_value=True) as release, \

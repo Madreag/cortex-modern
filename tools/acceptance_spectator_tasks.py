@@ -1,4 +1,4 @@
-"""Run the NOTE 11 spectator placement through native tasks and the POSIX runner."""
+"""Run the NOTE 12 spectator placement through native tasks and the POSIX runner."""
 from __future__ import annotations
 
 import argparse
@@ -25,35 +25,38 @@ import cross_peers as cross
 from edith.remote_box import RemoteBox, render_payload
 import world_mod_cross as world
 
-ROLES = {name: tuple(peer for peer in PEERS if PLACEMENT[peer] == name) for name in ('Z13','EDITH','Linux')}
+ROLES = {name: tuple(peer for peer in PEERS if PLACEMENT[peer] == name) for name in ('EROL-PC','EDITH','Linux')}
 
 
 def validate(box, lane, peers, native=False):
     if box.get('name') not in ROLES:
-        raise ValueError('NOTE 11 spectator row uses Z13, EDITH and Linux')
+        raise ValueError('NOTE 12 spectator row uses EROL-PC, EDITH and Linux')
     remote.validate_profile({**box, 'peers_per_box':1}, lane, 'world-join')
     expected = ROLES[box['name']]
     if tuple(peers) != expected or box.get('peers_per_box') != len(expected):
-        raise ValueError('spectator roster exceeds or differs from the NOTE 11 placement')
+        raise ValueError('spectator roster exceeds or differs from the NOTE 12 placement')
     if native and platform.node().casefold() != box['hostname'].casefold():
         raise ValueError('spectator payload is on the wrong physical machine')
 
 
 def plan_for(options, profiles):
     by_name = {value['name']:deepcopy(value) for value in profiles if value['name'] in ROLES}
-    if set(by_name) != set(ROLES): raise ValueError('the three NOTE 11 row trees are required')
+    if set(by_name) != set(ROLES): raise ValueError('the three NOTE 12 row trees are required')
     frozen = frozen_receipt(Path(__file__).parent.parent)
     if frozen is None: raise ValueError('R1 requires the frozen NOTE 11 tool bundle')
     for name, box in by_name.items():
         box['peers_per_box'] = len(ROLES[name])
         box['helpers'] = box['scratch']+'/'+options.out.name+'-helpers'
+        if box['kind'] == 'windows-local':
+            box['helpers'] = Path(__file__).resolve().parent.parent.as_posix()
+            box['payload_root'] = (options.out/'boxes'/box['name']).as_posix()
         if box['kind'] == 'posix-ssh':
             box['acceptance_marker'] = str(Path(box['scratch']).parent/'ACCEPTANCE-STREAM-RUNNING').replace('\\','/')
             box['exclusive_marker'] = box['scratch']+'/FEEL-MATRIX-RUNNING'
         validate(box, options.lane, ROLES[name])
     return dict(run=options.out.name, lane=options.lane, source_sha=options.source_sha,
-                boxes=list(by_name.values()), peers=list(PEERS), coordinator_engine_instances=0,
-                placement=PLACEMENT, driver=dict(kind='coordinator',directory_port=49148),
+                boxes=list(by_name.values()), peers=list(PEERS), coordinator_engine_instances=2,
+                placement=PLACEMENT,
                 driver_sha256=sha256(Path(__file__)), driver_commit=frozen['coordinator_commit'],
                 frozen_tools=dict(commit=frozen['frozen_commit'],export=frozen['frozen_export'],frozen_files_modified=0),
                 configuration=dict(persistent_world=True, dedicated_host=True, humans=3, cpu_slots=0, world_max_spectators=1),
@@ -69,7 +72,7 @@ def native_preflight(path):
     destination = Path(path).parent/'preflight.json'
     value = json.loads(destination.read_text())
     build = json.loads(Path(box['build_receipt']).read_text(encoding='utf-8-sig'))
-    expected_configuration = 'Final' if box['kind'] == 'windows-task' else 'release'
+    expected_configuration = 'Final' if box['kind'].startswith('windows-') else 'release'
     if build.get('configuration') != expected_configuration or build.get('build_exit_code') != 0 or \
             build.get('commit') != plan['source_sha'] or build.get('executable_sha256') != value['executable_sha256'] or \
             sha256(Path(build['build_log'])) != build.get('build_log_sha256'):
@@ -87,7 +90,7 @@ def check_preflights(plan):
     values = plan.get('preflights', {})
     if set(values) != set(ROLES): raise ValueError('native preflights missing')
     cross.require_distinct_machines(values)
-    reference = values['Z13']
+    reference = values['EROL-PC']
     for box in plan['boxes']:
         value = values[box['name']]
         if value.get('load') or value.get('hostname','').casefold() != box['hostname'].casefold():
@@ -96,7 +99,7 @@ def check_preflights(plan):
             raise ValueError('spectator build identity differs')
         if any(value[key] != reference[key] for key in ('content','modules','fixture','acceptance_driver_sources')):
             raise ValueError('complete content or driver bytes differ')
-        if box['kind'] == 'windows-task' and value['executable_sha256'] != reference['executable_sha256']:
+        if box['kind'].startswith('windows-') and value['executable_sha256'] != reference['executable_sha256']:
             raise ValueError('Windows runtime bytes differ')
         if value.get('frozen_tools') != dict(commit=plan['frozen_tools']['commit'],frozen_files_modified=0):
             raise ValueError('frozen native tool identity differs')
@@ -190,6 +193,10 @@ def run_payload(path, payload=None):
     install_memory_guard()
     settings = dict(CC_RUNNER_BOX_NAME=box['name'])
     if 'launch_floor_gib' in box: settings['CC_RUNNER_MIN_FREE_GB']=str(box['launch_floor_gib'])
+    if box['kind'] == 'windows-local':
+        settings.update(CC_RUNNER_AFFINITY_MASK=box['affinity_mask'],
+                        CC_RUNNER_JOB_MEMORY_GB=str(box['engine_memory_gb']),
+                        CCCP_HEADLESS='1', CC_RUNNER_IGNORE_FULLSCREEN='1')
     previous = {key:os.environ.get(key) for key in settings}
     os.environ.update(settings)
     claim, shared_claim, runs, complete, errors = None, None, {}, {}, []
@@ -205,8 +212,23 @@ def run_payload(path, payload=None):
         write_json(root/'launch-ready.json',dict(box=box['name'],capabilities=caps))
         cross.wait_for_payload_release(root,360)
         deadline, session, next_status = time.monotonic()+640, None, 0
+        def guard_owned():
+            own_pids = [cross.engine_pid(run) for peer,run in runs.items() if peer not in complete]
+            if cross.box_load(own_pids):
+                raise RuntimeError('another native workload appeared during the spectator row')
+            # The frozen local guard intentionally rejects any existing engine
+            # at this executable. For the second declared peer, retain every
+            # other guard after explicitly accounting for our owned processes.
+            if box['kind'] == 'windows-local' and own_pids:
+                if not cross.owns_reservation(box): raise RuntimeError('physical reservation was lost')
+                if reason := cross.inventory_guard(): raise RuntimeError(reason)
+                cross.assert_box_guard({**box, 'kind':'windows-task'})
+            else:
+                cross.assert_box_guard(box)
         def start(peer):
-            cross.assert_box_guard(box)
+            guard_owned()
+            if len(runs) >= box['peers_per_box']:
+                raise RuntimeError('declared native process capacity exhausted')
             run = prepare_peer(box,plan,root,peer,session)
             runs[peer]=run
             run.start()
@@ -220,7 +242,7 @@ def run_payload(path, payload=None):
             session_file=root/'session.json'
             if session is None and session_file.is_file(): session=json.loads(session_file.read_text())['session']
             if session is not None:
-                if box['name']=='Z13' and 'seated-one' not in runs: start('seated-one')
+                if box['name']=='EROL-PC' and 'seated-one' not in runs: start('seated-one')
                 initial=root/'seated-one-stage/probe/initial-seat.ownership.json'
                 if box['name']=='EDITH' and 'seated-two' not in runs and initial.is_file():
                     if json.loads(initial.read_text())['ownership'].get('seat') != 1:
@@ -236,9 +258,7 @@ def run_payload(path, payload=None):
                     sessions=re.findall(r'(?m)^\[net-directory\] registered session_id=(\S+) heartbeat_s=\d+',text)
                     if sessions: status['session']=sessions[-1]
                 write_json(root/'control.json',status)
-                if cross.box_load([cross.engine_pid(run) for peer,run in runs.items() if peer not in complete]):
-                    raise RuntimeError('another native workload appeared during the spectator row')
-                cross.assert_box_guard(box)
+                guard_owned()
                 next_status=time.monotonic()+2
             for peer,run in runs.items():
                 if peer not in complete and run.poll() is not None:
@@ -268,10 +288,11 @@ def run_payload(path, payload=None):
 def stage(plan, root):
     archive=helper_archive(Path(__file__).parent.parent,root)
     for box in plan['boxes']:
-        remote_root=box['scratch']+'/'+plan['run']
-        remote.remote_python(box,'from pathlib import Path; import sys; Path(sys.argv[1]).mkdir(exist_ok=False); Path(sys.argv[2]).mkdir(exist_ok=False)',remote_root,box['helpers'])
-        cross.command(['scp','-q',str(archive),box['ssh']+':'+box['helpers']+'/helpers.tar'],timeout=180)
-        cross.command(cross.remote_command(box,['tar.exe' if box['kind']=='windows-task' else 'tar','-xf',box['helpers']+'/helpers.tar','-C',box['helpers']]),timeout=180)
+        remote_root=remote.native_root(plan,box)
+        if box['kind'] != 'windows-local':
+            remote.remote_python(box,'from pathlib import Path; import sys; Path(sys.argv[1]).mkdir(exist_ok=False); Path(sys.argv[2]).mkdir(exist_ok=False)',remote_root,box['helpers'])
+            cross.command(['scp','-q',str(archive),box['ssh']+':'+box['helpers']+'/helpers.tar'],timeout=180)
+            cross.command(remote.native_command(box,['tar.exe' if box['kind']=='windows-task' else 'tar','-xf',box['helpers']+'/helpers.tar','-C',box['helpers']]),timeout=180)
         own=root/'boxes'/box['name']; own.mkdir(parents=True)
         peers=ROLES[box['name']]
         write_json(own/'payload.json',dict(box=box,plan=plan,peers=peers,specs=[dict(acceptance_row='spectator')]))
@@ -280,17 +301,20 @@ def stage(plan, root):
     try:
         remote.start_leases(plan,root,leases)
         for box in plan['boxes']:
-            remote_root=box['scratch']+'/'+plan['run']
+            remote_root=remote.native_root(plan,box)
             own=root/'boxes'/box['name']
-            cross.command(cross.remote_command(box,[box['python'],box['helpers']+'/tools/acceptance_spectator_tasks.py','--preflight',remote_root+'/payload.json']),timeout=240)
-            world.fetch_preserved(box,remote_root,own/'preflight-fetch')
-            value=json.loads((own/'preflight-fetch/preflight.json').read_text())
+            cross.command(remote.native_command(box,[box['python'],box['helpers']+'/tools/acceptance_spectator_tasks.py','--preflight',remote_root+'/payload.json']),timeout=240)
+            if box['kind'] == 'windows-local':
+                value=remote.read_json(box,remote_root+'/preflight.json')
+            else:
+                world.fetch_preserved(box,remote_root,own/'preflight-fetch')
+                value=json.loads((own/'preflight-fetch/preflight.json').read_text())
             write_json(own/'preflight.json',value)
             plan.setdefault('preflights',{})[box['name']]=value
             write_json(root/'spectator-remote.json',plan)
         check_preflights(plan)
         for box in plan['boxes']:
-            remote.publish_new(box,root/'spectator-remote.json',box['scratch']+'/'+plan['run']+'/verified-plan.json')
+            remote.publish_new(box,root/'spectator-remote.json',remote.native_root(plan,box)+'/verified-plan.json')
         return leases
     except BaseException:
         failures=remote.stop_leases(plan,root,leases)
@@ -308,7 +332,7 @@ def launch(plan, root, evidence, leases=None):
     for source in [root/'spectator-remote.json',*[root/'boxes'/box['name']/leaf for box in plan['boxes'] for leaf in ('preflight.json','payload.json')]]:
         target=proof/source.relative_to(root); target.parent.mkdir(parents=True,exist_ok=True); copyfile(source,target)
         if sha256(source)!=sha256(target): raise ValueError('pre-run evidence copy differs')
-    boxes={box['name']:box for box in plan['boxes']}; roots={name:box['scratch']+'/'+plan['run'] for name,box in boxes.items()}
+    boxes={box['name']:box for box in plan['boxes']}; roots={name:remote.native_root(plan,box) for name,box in boxes.items()}
     started,errors,relayed,processes=[],[],set(),{}
     clock_events=[]
     write_json(root/'clock-order.json',clock_events)
@@ -330,7 +354,7 @@ def launch(plan, root, evidence, leases=None):
         clock_events.append(dict(sequence=len(clock_events)+1,kind=kind,peer=peer,sha256=receipt['sha256'],**extra))
         write_json(root/'clock-order.json',clock_events)
     try:
-        for name in ('Linux','EDITH','Z13'):
+        for name in ('Linux','EDITH','EROL-PC'):
             box=boxes[name]; own=root/'boxes'/name
             driver=box['helpers']+'/tools/acceptance_spectator_tasks.py'
             payload=roots[name]+'/payload.json'
@@ -344,7 +368,7 @@ def launch(plan, root, evidence, leases=None):
                     'sys.stdout=log; sys.stderr=log; sys.dont_write_bytecode=True; '
                     'script,payload=sys.argv[1:3]; sys.path.insert(0,str(Path(script).parent)); '
                     'sys.argv=[script,"--payload",payload]; runpy.run_path(script,run_name="__main__")')
-                processes[name]=subprocess.Popen(cross.remote_command(box,[box['python'],'-c',bootstrap,driver,payload,roots[name]+'/payload.log']),
+                processes[name]=subprocess.Popen(remote.native_command(box,[box['python'],'-c',bootstrap,driver,payload,roots[name]+'/payload.log']),
                     stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             started.append(name)
         deadline=time.monotonic()+180
@@ -362,7 +386,7 @@ def launch(plan, root, evidence, leases=None):
         initials,begin,end={}, {}, {}
         timing_start=timing_begun=armed=closed=timing_done=False
         while time.monotonic()<deadline:
-            control=remote.read_json(boxes['Z13'],roots['Z13']+'/control.json') or {}
+            control=remote.read_json(boxes['EROL-PC'],roots['EROL-PC']+'/control.json') or {}
             if control.get('session') and not session:
                 for name in boxes: publish(name,'session.json',dict(session=control['session']))
                 session=True
@@ -382,7 +406,7 @@ def launch(plan, root, evidence, leases=None):
             if watcher and not timing_start:
                 ready=document('Linux','spectator-stage/probe/spectator-ready.json')
                 if ready is not None:
-                    for name in ('Z13','EDITH'): publish(name,'timing-start.json',dict(watcher_ready_sha256=ready['sha256']))
+                    for name in ('EROL-PC','EDITH'): publish(name,'timing-start.json',dict(watcher_ready_sha256=ready['sha256']))
                     timing_start=True
             if timing_start:
                 for peer in SEATED:
@@ -401,7 +425,7 @@ def launch(plan, root, evidence, leases=None):
                 signal=document('Linux','spectator-stage/probe/crawl-complete.json')
                 if value is not None and signal is not None:
                     clock_event('crawl-closed','spectator',value,signal_sha256=signal['sha256'])
-                    for name in ('Z13','EDITH'): publish(name,'spectator-stage/probe/crawl-complete.json',signal['document'])
+                    for name in ('EROL-PC','EDITH'): publish(name,'spectator-stage/probe/crawl-complete.json',signal['document'])
                     closed=True
             if closed:
                 for peer in SEATED:
@@ -409,10 +433,10 @@ def launch(plan, root, evidence, leases=None):
                     value=document(PLACEMENT[peer],peer+'-stage/probe/crawl-end.ownership.json')
                     if value is not None: end[peer]=value; clock_event('crawl-end',peer,value)
             if len(end)==3 and not timing_done:
-                publish('Z13','timing-complete.json',dict(seated={peer:value['sha256'] for peer,value in end.items()}))
+                publish('EROL-PC','timing-complete.json',dict(seated={peer:value['sha256'] for peer,value in end.items()}))
                 timing_done=True
-            for source,dest,peer,signal in [('Z13','Linux','host','host-released'),
-                    ('Linux','Z13','spectator','promoted-input'),('Z13','EDITH','host','done')]:
+            for source,dest,peer,signal in [('EROL-PC','Linux','host','host-released'),
+                    ('Linux','EROL-PC','spectator','promoted-input'),('EROL-PC','EDITH','host','done')]:
                 key=(source,dest,peer,signal)
                 if key in relayed: continue
                 relative=peer+'-stage/probe/'+signal+'.json'
@@ -445,7 +469,9 @@ def launch(plan, root, evidence, leases=None):
             except Exception as error: errors.append(name+': final native collection: '+str(error))
         errors.extend(remote.stop_leases(plan,root,leases or {}))
         for name in started:
-            try: world.fetch_preserved(boxes[name],roots[name],root/'boxes'/name,compress_records=True,stream_transfer=True)
+            try:
+                if boxes[name]['kind'] != 'windows-local':
+                    world.fetch_preserved(boxes[name],roots[name],root/'boxes'/name,compress_records=True,stream_transfer=True)
             except Exception as error: errors.append(name+': final native collection: '+str(error))
     result=collect(root)
     result['failures'].extend(errors); result['passed']=not result['failures']

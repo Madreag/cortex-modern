@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 
 SEATED = ('seated-one', 'seated-two', 'seated-three')
-PLACEMENT = {'host': 'Z13', 'seated-one': 'Z13', 'seated-two': 'EDITH',
+PLACEMENT = {'host': 'EROL-PC', 'seated-one': 'EROL-PC', 'seated-two': 'EDITH',
              'seated-three': 'EDITH', 'spectator': 'Linux'}
 
 
@@ -20,7 +20,7 @@ def collect_brackets(root, plan, cost):
     events = json.loads((root/'clock-order.json').read_text(encoding='utf-8'))
     placement = plan['placement']
     if placement != PLACEMENT:
-        raise ValueError('native clock bracket placement differs from NOTE 11')
+        raise ValueError('native clock bracket placement differs from NOTE 12')
     facts = dict(method='native-probe-brackets-v1', placement=placement, events=events,
                  native_cost=cost, peers={})
     for event in events:
@@ -53,7 +53,7 @@ def errors(facts):
         if not value:
             problems.append('throttle: '+reason)
     require(proof.get('method') == 'native-probe-brackets-v1', 'native cross-box clock proof is missing')
-    require(proof.get('placement') == PLACEMENT, 'native cross-box placement differs from NOTE 11')
+    require(proof.get('placement') == PLACEMENT, 'native cross-box placement differs from NOTE 12')
     require(proof.get('native_cost') == cost and cost.get('closed') is True,
             'native spectator cost did not close with the retained receipt')
     require(proof.get('cost_dump', {}).get('process') == 'spectator' and

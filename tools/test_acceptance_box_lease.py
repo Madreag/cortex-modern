@@ -13,8 +13,8 @@ from test_acceptance_remote_tasks import profiles
 
 class NativeReservation(unittest.TestCase):
     def test_provisioning_cannot_claim_a_box_or_start_native_preflight(self):
-        box=profiles()[0]
-        plan=dict(run='fixture',boxes=[box],specs=[dict(box='Z13',peer='erol')])
+        box=profiles()[1]
+        plan=dict(run='fixture',boxes=[box],specs=[dict(box='EDITH',peer='erol')])
         with patch.object(Path,'mkdir'), patch.object(remote,'helper_archive',return_value=Path('/virtual/helpers.tar')), \
                 patch.object(remote,'remote_python'), patch.object(remote,'publish_new'), patch.object(remote,'write_json'), \
                 patch.object(remote,'start_leases') as holders, patch.object(remote.cross,'command') as command:
@@ -22,22 +22,22 @@ class NativeReservation(unittest.TestCase):
         holders.assert_not_called()
         self.assertFalse(any('--preflight' in str(call) for call in command.call_args_list))
 
-    def test_physical_pc_cannot_hold_a_game_box(self):
-        payload=dict(box=profiles()[0])
+    def test_physical_pc_cannot_impersonate_a_remote_game_box(self):
+        payload=dict(box=profiles()[1])
         with patch.object(Path,'read_text',return_value=json.dumps(payload)), \
                 patch.object(lease.platform,'node',return_value='EROL-PC'), \
                 patch.object(lease.cross,'acquire_reservation') as acquire:
-            with self.assertRaisesRegex(ValueError,'declared remote machine'):
+            with self.assertRaisesRegex(ValueError,'declared authorized machine'):
                 lease.hold('/virtual/payload.json')
         acquire.assert_not_called()
 
     def test_borrowed_environment_requires_a_live_unchanged_holder_and_is_restored(self):
         raw=json.dumps(dict(CCCP_FEEL_MATRIX_RUN='fixture-token')).encode()
-        good=dict(box='Z13',runner_pid=123,deadline_monotonic_s=10,environment_sha256=hashlib.sha256(raw).hexdigest())
+        good=dict(box='EDITH',runner_pid=123,deadline_monotonic_s=10,environment_sha256=hashlib.sha256(raw).hexdigest())
         for defect in (None,'dead','digest','ended','wrong-box'):
             ready=dict(good)
             if defect=='digest': ready['environment_sha256']='0'*64
-            if defect=='wrong-box': ready['box']='EDITH'
+            if defect=='wrong-box': ready['box']='Mac'
             before=dict(os.environ)
             with self.subTest(defect=defect), patch.object(Path,'is_file',return_value=True), \
                     patch.object(Path,'read_bytes',return_value=raw), patch.object(Path,'read_text',return_value=json.dumps(ready)), \
@@ -45,21 +45,21 @@ class NativeReservation(unittest.TestCase):
                     patch.object(lease.time,'monotonic',return_value=1), \
                     patch.object(lease.cross,'owns_reservation',return_value=True), patch.object(lease.cross,'assert_box_guard'):
                 if defect is None:
-                    with lease.borrow(dict(name='Z13'),'/virtual') as borrowed:
+                    with lease.borrow(dict(name='EDITH'),'/virtual') as borrowed:
                         self.assertTrue(borrowed)
                         self.assertEqual(os.environ['CCCP_FEEL_MATRIX_RUN'],'fixture-token')
                 else:
                     with self.assertRaises(ValueError):
-                        with lease.borrow(dict(name='Z13'),'/virtual'):
+                        with lease.borrow(dict(name='EDITH'),'/virtual'):
                             self.fail('changed reservation was borrowed')
             self.assertEqual(dict(os.environ),before)
 
     def test_reservations_precede_native_preflight(self):
-        box=profiles()[0]
-        plan=dict(run='fixture',boxes=[box],specs=[dict(box='Z13',peer='erol')])
+        box=profiles()[1]
+        plan=dict(run='fixture',boxes=[box],specs=[dict(box='EDITH',peer='erol')])
         events=[]
         def start(plan,root,holders):
-            events.append('reserved'); holders['Z13']='native-holder'
+            events.append('reserved'); holders['EDITH']='native-holder'
         def command(args,**kwargs):
             if isinstance(args[-1],str) and '--preflight' in args[-1]:
                 self.assertIn('reserved',events)
@@ -74,13 +74,13 @@ class NativeReservation(unittest.TestCase):
                 patch.object(remote.world,'fetch_preserved'), patch.object(remote,'validate_preflights'):
             holders=remote.stage(plan,Path('/virtual/run'))
         self.assertEqual(events,['reserved','preflight'])
-        self.assertEqual(holders,{'Z13':'native-holder'})
+        self.assertEqual(holders,{'EDITH':'native-holder'})
         release.assert_not_called()
 
     def test_native_preflight_failure_releases_the_held_boxes(self):
-        box=profiles()[0]
-        plan=dict(run='fixture',boxes=[box],specs=[dict(box='Z13',peer='erol')])
-        def start(plan,root,holders): holders['Z13']='native-holder'
+        box=profiles()[1]
+        plan=dict(run='fixture',boxes=[box],specs=[dict(box='EDITH',peer='erol')])
+        def start(plan,root,holders): holders['EDITH']='native-holder'
         with patch.object(Path,'mkdir'), patch.object(Path,'read_text',return_value='{}'), \
                 patch.object(remote,'helper_archive',return_value=Path('/virtual/helpers.tar')), \
                 patch.object(remote,'remote_python'), patch.object(remote,'publish_new'), patch.object(remote,'write_json'), \
@@ -89,15 +89,15 @@ class NativeReservation(unittest.TestCase):
                 patch.object(remote,'validate_preflights',side_effect=ValueError('foreign workload')):
             with self.assertRaisesRegex(ValueError,'foreign workload'):
                 remote.stage(plan,Path('/virtual/run'))
-        self.assertEqual(release.call_args.args[2],{'Z13':'native-holder'})
+        self.assertEqual(release.call_args.args[2],{'EDITH':'native-holder'})
 
     def test_spectator_preflight_uses_the_same_live_reservation_layer(self):
         import acceptance_spectator_tasks as spectator
-        box=profiles('world-join')[0]
+        box=profiles('world-join')[1]
         plan=dict(run='fixture',boxes=[box])
         events=[]
         def start(plan,root,holders):
-            events.append('reserved'); holders['Z13']='native-holder'
+            events.append('reserved'); holders['EDITH']='native-holder'
         def command(args,**kwargs):
             if isinstance(args[-1],str) and '--preflight' in args[-1]:
                 self.assertIn('reserved',events); events.append('preflight')
@@ -110,7 +110,7 @@ class NativeReservation(unittest.TestCase):
                 patch.object(remote.world,'fetch_preserved'), patch.object(spectator,'check_preflights'):
             holders=spectator.stage(plan,Path('/virtual/run'))
         self.assertEqual(events,['reserved','preflight'])
-        self.assertEqual(holders,{'Z13':'native-holder'})
+        self.assertEqual(holders,{'EDITH':'native-holder'})
         release.assert_not_called()
 
 

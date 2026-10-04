@@ -1,4 +1,4 @@
-"""Run the NOTE 8 four-box rows through their separate native engine trees."""
+"""Run the NOTE 12 four-box rows through their authorized native engine trees."""
 from __future__ import annotations
 
 import argparse
@@ -21,18 +21,19 @@ from world_soak_tasks import read_json as read_windows_json
 from acceptance_frozen_tools import driver_git_context, helper_archive, receipt as frozen_receipt
 
 ROWS = ('mod-match', 'mod-refusal', 'world-join')
-ALIASES = {'Z13': 'z13', 'EDITH': 'edith', 'Mac': 'Erol-Mac', 'Linux': '3090'}
-PEERS = {'erol': 'Z13', 'edith': 'EDITH', 'mac': 'Mac', 'linux': 'Linux'}
+ALIASES = {'EROL-PC': None, 'EDITH': 'edith', 'Mac': 'Erol-Mac', 'Linux': '3090'}
+PEERS = {'erol': 'EROL-PC', 'edith': 'EDITH', 'mac': 'Mac', 'linux': 'Linux'}
 
 
 def validate_profile(box, lane, row='mod-match'):
     if row not in ROWS: raise ValueError('unknown four-box acceptance row')
     name = box.get('name')
     if name not in ALIASES or box.get('ssh') != ALIASES[name]:
-        raise ValueError('four-box rows require Z13, EDITH, Mac and Linux through their named aliases')
-    windows = name in ('Z13', 'EDITH')
-    if box.get('kind') != ('windows-task' if windows else 'posix-ssh'):
-        raise ValueError('no local engine launch is authorized')
+        raise ValueError('four-box rows require authorized EROL-PC, EDITH, Mac and Linux; Z13 is retired')
+    windows = name in ('EROL-PC', 'EDITH')
+    expected_kind = 'windows-local' if name == 'EROL-PC' else 'windows-task' if windows else 'posix-ssh'
+    if box.get('kind') != expected_kind:
+        raise ValueError('machine requires its authorized native runner kind')
     root = ('D:/mx/' if windows else '/Users/erol/cortex-workers/' if name == 'Mac' else '/home/erol/cortex-workers/')+lane
     helpers = PurePosixPath(box.get('helpers', '').replace('\\', '/'))
     if box.get('scratch') != root or not helpers.is_relative_to(PurePosixPath(root)) or '..' in helpers.parts:
@@ -41,16 +42,22 @@ def validate_profile(box, lane, row='mod-match'):
         raise ValueError('one process, a real host identity and a box reservation are required')
     if windows:
         if row == 'world-join':
-            tree = 'D:/Projects/z13-rows-build' if name == 'Z13' else root+'/engine-tip'
+            tree = 'D:/Projects/fencing-warm' if name == 'EROL-PC' else root+'/engine-tip'
         else:
-            tree = 'D:/Projects/z13-build' if name == 'Z13' else 'D:/Projects/inventory-build'
+            tree = 'D:/Projects/takeover-build' if name == 'EROL-PC' else 'D:/Projects/inventory-build'
         if box.get('tree') != tree or box.get('executable') != tree+'/Cortex Command.exe':
             raise ValueError('Windows runtime differs from the authorized existing path')
-        if box.get('runner') != 'cortex-session1' or box.get('task_script') != 'D:/mx/session1/run.ps1':
-            raise ValueError('Windows engines require the existing session task')
+        if name == 'EDITH':
+            if box.get('runner') != 'cortex-session1' or box.get('task_script') != 'D:/mx/session1/run.ps1':
+                raise ValueError('EDITH engines require the existing session task')
+        elif (box.get('runner') != 'tools/run_sim_test.py / tools/win32_test_runner.py' or
+              box.get('hostname') != 'EROL-PC' or box.get('guard_file') != 'D:/mx/BOX-FREE-FOR-CROSS' or
+              box.get('max_engines') != 4 or box.get('affinity_mask') != '0x0000FFFF' or
+              box.get('engine_memory_gb') != 12 or box.get('task_script')):
+            raise ValueError('EROL-PC requires NOTE 12 runner, physical free marker and unchanged limits')
         if box['exclusive_marker'] != 'D:/mx/FEEL-MATRIX-RUNNING':
             raise ValueError('Windows task must take the physical box reservation')
-        if box.get('launch_floor_gib') != (6.5 if name == 'Z13' else 10):
+        if box.get('launch_floor_gib') != 10:
             raise ValueError('named Windows memory floor changed')
     else:
         shared = str(PurePosixPath(root).parent/'ACCEPTANCE-STREAM-RUNNING')
@@ -65,6 +72,7 @@ def make_plan(options, profiles, mod_receipts=None):
     for box in profiles:
         validate_profile(box, options.lane, options.row)
     by_name = {box['name']: deepcopy(box) for box in profiles}
+    by_name['EROL-PC']['payload_root'] = options.out.as_posix()
     base = cross.parse_args(['--boxes', str(options.template_boxes), '--lane', options.lane,
                              '--mac-guard', by_name['Mac'].get('guard_file', by_name['Mac']['exclusive_marker']), '--roster', 'four-way',
                              '--out', str(options.out), '--ticks', '12001' if options.row == 'world-join' else '1201',
@@ -73,7 +81,7 @@ def make_plan(options, profiles, mod_receipts=None):
         plan = world.configure_plan(cross.make_plan(base), options.row, mod_receipts)
     for spec in plan['specs']:
         box = by_name[PEERS[spec['peer']]]
-        old_root, new_root = spec['root'], box['scratch']+'/'+plan['run']
+        old_root, new_root = spec['root'], native_root(plan, box)
         def rebase(value):
             if isinstance(value, str):
                 return value.replace(old_root+'/', new_root+'/') if value != old_root else new_root
@@ -92,20 +100,20 @@ def make_plan(options, profiles, mod_receipts=None):
     for instance in plan['instances']:
         spec = next(spec for spec in plan['specs'] if spec['peer'] == instance['name'])
         instance.update(box=spec['box'], port_block=spec['port_block'])
-    plan.update(boxes=list(by_name.values()), acceptance_host_box='Z13', world_host_box='Z13',
+    plan.update(boxes=list(by_name.values()), acceptance_host_box='EROL-PC', world_host_box='EROL-PC',
                 source_sha=options.source_sha, expected_source_sha=options.source_sha,
-                coordinator_only=dict(box='EROL-PC', engine_instances=0),
-                authorization='LEAD-NOTES NOTE 8 / RESUME 3')
+                coordinator_game_peer=dict(box='EROL-PC', engine_instances=1),
+                authorization='LEAD-NOTES NOTE 12 / NOTE 12b / RESUME 3')
     if frozen is not None:
+        by_name['EROL-PC']['helpers'] = Path(__file__).resolve().parent.parent.as_posix()
         if any(box['kind'] == 'posix-ssh' and not box.get('acceptance_marker') for box in plan['boxes']):
             raise ValueError('frozen POSIX tools require their shared directory-owner reservation')
         plan['source_worktree_observed'] = dict(commit=plan['driver_commit'], tracked_changes=plan['driver_tracked_changes'])
         plan['driver_commit'] = frozen['coordinator_commit']
         plan['driver_tracked_changes'] = []  # Every bundled committed blob was checked by driver_git_context.
-        plan.update(driver=dict(kind='coordinator', directory_port=49148),
-                    frozen_tools=dict(commit=frozen['frozen_commit'], export=frozen['frozen_export'],
+        plan.update(frozen_tools=dict(commit=frozen['frozen_commit'], export=frozen['frozen_export'],
                                       coordinator_commit=frozen['coordinator_commit'], frozen_files_modified=0),
-                    authorization='LEAD-NOTES NOTE 11 / RESUME 3')
+                    authorization='LEAD-NOTES NOTE 11 frozen tools / NOTE 12 placement / RESUME 3')
         cross.coordinator(plan)
     plan['driver_sources']['acceptance_remote_tasks.py'] = sha256(Path(__file__))
     return plan
@@ -119,7 +127,7 @@ def validate_preflights(plan):
     source = plan.get('expected_source_sha')
     if not re.fullmatch(r'[0-9a-f]{40}', str(source)):
         raise ValueError('full expected source commit is required')
-    reference = values['Z13']
+    reference = values['EROL-PC']
     for box in plan['boxes']:
         validate_profile(box, plan['lane'], plan['acceptance_row'])
         name, value = box['name'], values[box['name']]
@@ -146,11 +154,31 @@ def validate_preflights(plan):
     world.check_mod_preflights(plan, values)
 
 
+def native_root(plan, box):
+    return box.get('payload_root', box['scratch']+'/'+plan['run'])
+
+
+def native_command(box, arguments):
+    if box.get('name') not in ALIASES or box.get('ssh') != ALIASES[box['name']]:
+        raise ValueError('transport target is retired or not authorized')
+    if box['name'] == 'EROL-PC':
+        if box['kind'] != 'windows-local':
+            raise ValueError('EROL-PC transport must stay native')
+        return list(map(str, arguments))
+    return cross.remote_command(box, arguments)
+
+
 def remote_python(box, code, *arguments):
-    return cross.command(cross.remote_command(box, [box['python'], '-c', code, *arguments]), timeout=240)
+    if box.get('name') not in ALIASES:
+        raise ValueError('transport target is retired or not authorized')
+    return cross.command(native_command(box, [box['python'], '-c', code, *arguments]), timeout=240)
 
 
 def read_json(box, path):
+    native_command(box, [])
+    if box['kind'] == 'windows-local':
+        source = Path(path)
+        return json.loads(source.read_text(encoding='utf-8-sig')) if source.is_file() else None
     if box['kind'] == 'windows-task':
         return read_windows_json(RemoteBox(box['ssh'], box['runner'], box['task_script']), path)
     raw = remote_python(box, 'from pathlib import Path; import sys; p=Path(sys.argv[1]); print(p.read_text() if p.is_file() else "null")', path)
@@ -160,6 +188,13 @@ def read_json(box, path):
 def publish_new(box, local, remote):
     # A hard link exposes a complete immutable control file and retains the
     # transferred candidate. No move, replacement or deletion under scratch.
+    native_command(box, [])
+    if box['kind'] == 'windows-local':
+        if Path(local).resolve() != Path(remote).resolve():
+            os.link(local, remote)
+        elif not Path(local).is_file():
+            raise FileNotFoundError(local)
+        return
     candidate = remote+f'.retained-{time.monotonic_ns()}'
     cross.command(['scp', '-q', str(local), box['ssh']+':'+candidate], timeout=120)
     remote_python(box, 'import os,sys; os.link(sys.argv[1],sys.argv[2])', candidate, remote)
@@ -172,7 +207,7 @@ def preflight_payload(path):
     if len(specs) != 1 or PEERS.get(specs[0].get('peer')) != box['name']:
         raise ValueError('payload differs from the authorized four-box roster')
     validate_profile(box, PurePosixPath(box['scratch']).name, specs[0].get('acceptance_row'))
-    if platform.node().casefold() != box['hostname'].casefold() or platform.node().casefold() == 'erol-pc':
+    if platform.node().casefold() != box['hostname'].casefold():
         raise ValueError('payload is on the wrong physical host; no engine launched')
     from acceptance_box_lease import borrow
     with borrow(box, Path(path).parent) as held:
@@ -189,7 +224,7 @@ def preflight_payload(path):
     if box.get('build_receipt'):
         source = Path(box['build_receipt'])
         build = json.loads(source.read_text(encoding='utf-8-sig'))
-        configuration = 'Final' if box['kind'] == 'windows-task' else 'release'
+        configuration = 'Final' if box['kind'].startswith('windows-') else 'release'
         if build.get('build_exit_code') != 0 or build.get('configuration') != configuration or \
                 build.get('executable_sha256') != value['executable_sha256'] or \
                 not build.get('build_log') or sha256(Path(build['build_log'])) != build.get('build_log_sha256'):
@@ -206,7 +241,7 @@ def run_payload(path):
     if len(specs) != 1 or PEERS.get(specs[0].get('peer')) != box['name']:
         raise ValueError('payload differs from the authorized four-box roster')
     validate_profile(box, PurePosixPath(box['scratch']).name, specs[0].get('acceptance_row'))
-    if platform.node().casefold() != box['hostname'].casefold() or platform.node().casefold() == 'erol-pc':
+    if platform.node().casefold() != box['hostname'].casefold():
         raise ValueError('payload is on the wrong physical host; no engine launched')
     if len(specs) != 1 or PEERS.get(specs[0].get('peer')) != box['name'] or specs[0].get('acceptance_row') not in ROWS:
         raise ValueError('payload differs from the authorized four-box roster')
@@ -214,6 +249,10 @@ def run_payload(path):
     settings = dict(CC_RUNNER_BOX_NAME=box['name'])
     if 'launch_floor_gib' in box:
         settings['CC_RUNNER_MIN_FREE_GB'] = str(box['launch_floor_gib'])
+    if box['kind'] == 'windows-local':
+        settings.update(CC_RUNNER_AFFINITY_MASK=box['affinity_mask'],
+                        CC_RUNNER_JOB_MEMORY_GB=str(box['engine_memory_gb']),
+                        CCCP_HEADLESS='1', CC_RUNNER_IGNORE_FULLSCREEN='1')
     previous, claim, shared_claim = {key: os.environ.get(key) for key in settings}, None, None
     from acceptance_box_lease import borrow
     lease_context = ExitStack()
@@ -244,26 +283,26 @@ def run_payload(path):
 
 def start_leases(plan, root, leases):
     for box in plan['boxes']:
-        remote_root = box['scratch']+'/'+plan['run']
+        remote_root = native_root(plan, box)
         script = box['helpers']+'/tools/acceptance_box_lease.py'
         bootstrap = ('import sys,runpy; from pathlib import Path; log=open(sys.argv[3],"x"); '
                      'sys.stdout=log; sys.stderr=log; sys.dont_write_bytecode=True; '
                      'script,payload=sys.argv[1:3]; sys.path.insert(0,str(Path(script).parent)); '
                      'sys.argv=[script,"--hold",payload]; runpy.run_path(script,run_name="__main__")')
-        leases[box['name']] = subprocess.Popen(cross.remote_command(box, [box['python'], '-c', bootstrap,
+        leases[box['name']] = subprocess.Popen(native_command(box, [box['python'], '-c', bootstrap,
             script, remote_root+'/payload.json', remote_root+'/lease.log']), stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
     deadline = time.monotonic()+180
     while time.monotonic() < deadline:
         ready = {}
         for box in plan['boxes']:
-            native_root = box['scratch']+'/'+plan['run']
-            error = read_json(box, native_root+'/lease-error.json')
+            box_root = native_root(plan, box)
+            error = read_json(box, box_root+'/lease-error.json')
             if error is not None:
                 raise RuntimeError(box['name']+': native reservation refused: '+str(error['error']))
             if leases[box['name']].poll() is not None:
                 raise RuntimeError(box['name']+': reservation holder exited before preflight')
-            ready[box['name']] = read_json(box, native_root+'/lease-ready.json')
+            ready[box['name']] = read_json(box, box_root+'/lease-ready.json')
         if all(ready.values()):
             plan['reservation_holders'] = ready
             write_json(root/'manifest.json', plan)
@@ -280,7 +319,7 @@ def stop_leases(plan, root, leases):
     for box in plan['boxes']:
         if box['name'] not in leases: continue
         try:
-            publish_new(box, root/'lease-stop.json', box['scratch']+'/'+plan['run']+'/lease-stop.json')
+            publish_new(box, root/'lease-stop.json', native_root(plan, box)+'/lease-stop.json')
         except Exception as error:
             errors.append(box['name']+': reservation stop publication failed: '+str(error))
     for box in plan['boxes']:
@@ -289,7 +328,7 @@ def stop_leases(plan, root, leases):
             _, failure = leases[box['name']].communicate(timeout=120)
             own = root/'boxes'/box['name']
             write_text(own/'lease-ssh-outcome.txt', f'exit_code={leases[box["name"]].returncode}\n'+failure.decode('utf-8',errors='replace'))
-            released = read_json(box, box['scratch']+'/'+plan['run']+'/lease-released.json')
+            released = read_json(box, native_root(plan, box)+'/lease-released.json')
             write_json(own/'lease-released.json', released)
             if box['name'] in plan.get('reservation_holders', {}) and (not released or released.get('released') is not True or
                     (box['kind']=='posix-ssh' and released.get('shared_released') is not True)):
@@ -302,11 +341,14 @@ def stop_leases(plan, root, leases):
 def provision(plan, root):
     archive = helper_archive(Path(__file__).resolve().parent.parent, root)
     for box in plan['boxes']:
-        remote_root = box['scratch']+'/'+plan['run']
-        remote_python(box, 'from pathlib import Path; import sys; Path(sys.argv[1]).mkdir(parents=True,exist_ok=False); Path(sys.argv[2]).mkdir(parents=True,exist_ok=False)',
-                      remote_root, box['helpers'])
-        cross.command(['scp', '-q', str(archive), box['ssh']+':'+box['helpers']+'/helpers.tar'], timeout=180)
-        cross.command(cross.remote_command(box, ['tar.exe' if box['kind'] == 'windows-task' else 'tar', '-xf', box['helpers']+'/helpers.tar', '-C', box['helpers']]), timeout=180)
+        remote_root = native_root(plan, box)
+        if box['kind'] != 'windows-local':
+            remote_python(box, 'from pathlib import Path; import sys; Path(sys.argv[1]).mkdir(parents=True,exist_ok=False); Path(sys.argv[2]).mkdir(parents=True,exist_ok=False)',
+                          remote_root, box['helpers'])
+            cross.command(['scp', '-q', str(archive), box['ssh']+':'+box['helpers']+'/helpers.tar'], timeout=180)
+            cross.command(native_command(box, ['tar.exe' if box['kind'] == 'windows-task' else 'tar', '-xf', box['helpers']+'/helpers.tar', '-C', box['helpers']]), timeout=180)
+        elif Path(remote_root).resolve() != root.resolve():
+            raise ValueError('local payload must use the collector root')
         own = root/'boxes'/box['name']; own.mkdir(parents=True)
         write_json(own/'payload.json', dict(box=box, specs=[spec for spec in plan['specs'] if spec['box'] == box['name']], pin=''))
         publish_new(box, own/'payload.json', remote_root+'/payload.json')
@@ -317,11 +359,14 @@ def measure_preflight(plan, root):
     try:
         start_leases(plan, root, leases)
         for box in plan['boxes']:
-            remote_root = box['scratch']+'/'+plan['run']
+            remote_root = native_root(plan, box)
             own = root/'boxes'/box['name']
-            cross.command(cross.remote_command(box, [box['python'], box['helpers']+'/tools/acceptance_remote_tasks.py', '--preflight', remote_root+'/payload.json']), timeout=240)
-            world.fetch_preserved(box, remote_root, own/'preflight-fetch')
-            value = json.loads((own/'preflight-fetch/preflight.json').read_text(encoding='utf-8-sig'))
+            cross.command(native_command(box, [box['python'], box['helpers']+'/tools/acceptance_remote_tasks.py', '--preflight', remote_root+'/payload.json']), timeout=240)
+            if box['kind'] == 'windows-local':
+                value = read_json(box, remote_root+'/preflight.json')
+            else:
+                world.fetch_preserved(box, remote_root, own/'preflight-fetch')
+                value = json.loads((own/'preflight-fetch/preflight.json').read_text(encoding='utf-8-sig'))
             write_json(own/'preflight.json', value)
             plan.setdefault('preflights', {})[box['name']] = value
             write_json(root/'manifest.json', plan)
@@ -362,18 +407,18 @@ def launch(plan, root, evidence, leases=None):
     if not world.public_directory_available(Path(__file__).resolve().parent.parent):
         raise RuntimeError('public directory is unavailable; a lane-owned fallback must be prepared before launch')
     for box in plan['boxes']:
-        remote_root = box['scratch']+'/'+plan['run']
+        remote_root = native_root(plan, box)
         if any(read_json(box, remote_root+'/'+leaf) is not None
                for leaf in ('reservation.json', 'payload-owned.json', 'done.json')):
             raise FileExistsError('a remote payload already used this run; retain it and select a fresh run name')
     preserve_before_launch(plan, root, evidence)
     boxes = {box['name']: box for box in plan['boxes']}
-    roots = {name: box['scratch']+'/'+plan['run'] for name, box in boxes.items()}
+    roots = {name: native_root(plan, box) for name, box in boxes.items()}
     started, processes = [], {}
     published = late_released = False
     plan['driver_findings'] = []
     try:
-        for name in ('Linux', 'Mac', 'EDITH', 'Z13'):
+        for name in ('Linux', 'Mac', 'EDITH', 'EROL-PC'):
             box, remote_root, own = boxes[name], roots[name], root/'boxes'/name
             args = [box['helpers']+'/tools/acceptance_remote_tasks.py', '--payload', remote_root+'/payload.json']
             if box['kind'] == 'windows-task':
@@ -387,7 +432,7 @@ def launch(plan, root, evidence, leases=None):
                              'log=open(sys.argv[3],"x"); sys.stdout=log; sys.stderr=log; '
                              'script,payload=sys.argv[1:3]; sys.path.insert(0,str(Path(script).parent)); '
                              'sys.argv=[script,"--payload",payload]; runpy.run_path(script,run_name="__main__")')
-                processes[name] = subprocess.Popen(cross.remote_command(box, [box['python'], '-c', bootstrap,
+                processes[name] = subprocess.Popen(native_command(box, [box['python'], '-c', bootstrap,
                                   args[0], args[2], remote_root+'/payload.log']),
                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                                   creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
@@ -407,7 +452,7 @@ def launch(plan, root, evidence, leases=None):
         for name in started: publish_new(boxes[name], root/'launch-go.json', roots[name]+'/launch-go.json')
         deadline, next_status = time.monotonic()+plan['deadlines']['launch_s']+180, 0
         while time.monotonic() < deadline:
-            control = read_json(boxes['Z13'], roots['Z13']+'/host-control.json') or {}
+            control = read_json(boxes['EROL-PC'], roots['EROL-PC']+'/host-control.json') or {}
             if control.get('session') and not published:
                 write_json(root/'session.json', dict(session=control['session']))
                 for name in ('EDITH', 'Mac', 'Linux'):
@@ -457,7 +502,8 @@ def launch(plan, root, evidence, leases=None):
                 budget.reserve += 64*1024**2
                 budget.admit(0)
             for name in started:
-                world.fetch_preserved(boxes[name], roots[name], root/'boxes'/name, compress_records=True, stream_transfer=True)
+                if boxes[name]['kind'] != 'windows-local':
+                    world.fetch_preserved(boxes[name], roots[name], root/'boxes'/name, compress_records=True, stream_transfer=True)
         finally:
             if budget is not None: budget.reserve = reserve
     from acceptance_cross_report import build_report

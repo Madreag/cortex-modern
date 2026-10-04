@@ -33,12 +33,15 @@ def alive(pid):
 
 
 def assert_idle_task(box):
-    if box['kind'] != 'windows-task':
+    if not box['kind'].startswith('windows-'):
         return
-    state = cross.command(['pwsh','-NoProfile','-Command',
+    if box['kind'] == 'windows-task':
+        state = cross.command(['pwsh','-NoProfile','-Command',
                            '(Get-ScheduledTask -TaskName cortex-session1).State.ToString()']).strip()
-    if state != 'Ready':
-        raise RuntimeError('native session task is occupied; no reservation or launch forced')
+        if state != 'Ready':
+            raise RuntimeError('native session task is occupied; no reservation or launch forced')
+    else:
+        cross.assert_box_guard(box)
     from feel.launch_budget import free_memory_bytes
     if free_memory_bytes() < box['launch_floor_gib']*1024**3:
         raise RuntimeError('native session memory floor is not met')
@@ -48,9 +51,10 @@ def hold(path):
     root = Path(path).parent
     payload = json.loads(Path(path).read_text(encoding='utf-8-sig'))
     box = payload['box']
-    if box['kind'] not in ('windows-task','posix-ssh') or platform.node().casefold() == 'erol-pc' or \
+    if box['kind'] not in ('windows-local','windows-task','posix-ssh') or box.get('name') == 'Z13' or \
+            (box['kind'] == 'windows-local' and box.get('name') != 'EROL-PC') or \
             platform.node().casefold() != box['hostname'].casefold():
-        raise ValueError('reservation holder is not on the declared remote machine')
+        raise ValueError('reservation holder is not on the declared authorized machine')
     if frozen_receipt(Path(__file__).parent.parent) is None:
         raise ValueError('native reservation holder requires the frozen NOTE 11 bundle')
     claim = shared = None
