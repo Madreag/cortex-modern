@@ -8422,7 +8422,9 @@ namespace RTE {
 			std::string why;
 			NetSeatRoster sent;
 			const NetSeatRoster& hosted = admission.GetRoster();
-			if (!DecodeRoster(EncodeRoster(hosted), sent, &why) || (!peer.Apply(sent, &why) && peer.Roster().revision != hosted.revision)) why = "the peer did not take the revision: " + why;
+			// A revision the peer already holds is not a refusal.
+			if (DecodeRoster(EncodeRoster(hosted), sent, &why) && (peer.Apply(sent, &why) || peer.Roster().revision == hosted.revision)) why.clear();
+			else why = "the peer did not take revision " + std::to_string(hosted.revision) + ": " + why;
 			const auto peerViews = NetMatchService::BuildSeatViews(peer.Roster(), table, config, {});
 			const auto slotView = peerViews.find(bobSlot);
 			const NetRosterSeat* erinSeat = peer.Roster().Find(NetRosterIdOf(erin.stableSeat));
