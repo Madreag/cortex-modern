@@ -21,6 +21,7 @@ import bisect
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shutil
 import stat
@@ -45,12 +46,10 @@ DEFAULT_SIZE = "960x540"
 DEFAULT_FPS = 30
 SHEET_COLUMNS = 6
 SHEET_THUMB_WIDTH = 320
+# Where an ffmpeg usually lives when PATH does not name it, per platform; a box's manifest may add its own directories.
 FFMPEG_CANDIDATES = (
-    r"C:\Users\egerm\scoop\shims\ffmpeg.exe",
-    "/opt/homebrew/bin/ffmpeg",
-    "/usr/local/bin/ffmpeg",
-    "/usr/bin/ffmpeg",
-)
+    (Path.home() / "scoop/shims/ffmpeg.exe", Path("C:/Tools/ffmpeg/bin/ffmpeg.exe"), Path("C:/ProgramData/chocolatey/bin/ffmpeg.exe"))
+    if os.name == "nt" else (Path("/opt/homebrew/bin/ffmpeg"), Path("/usr/local/bin/ffmpeg"), Path("/usr/bin/ffmpeg")))
 SCRATCH_LIMIT = 5_000_000_000
 
 
@@ -212,15 +211,50 @@ def capture_binary(repo):
     return resolve_binary(repo)
 
 
-def find_ffmpeg():
-    """PATH first, then the two machines' known locations; None when the encode has to be skipped."""
+def box_name():
+    return os.environ.get("COMPUTERNAME") or platform.node()
+
+
+def declared_tool_dirs():
+    """The directories this box's manifest entry puts ahead of PATH for its runs (a box's own copy of ffmpeg lives there)."""
+    from inventory_location import inventory_dir
+    try:
+        boxes = json.loads((inventory_dir() / "boxes.json").read_text(encoding="utf-8-sig")).get("boxes", [])
+    except (OSError, ValueError, AttributeError):
+        return []
+    me = box_name().casefold()
+    entry = next((box for box in boxes if me in {str(box.get(key) or "").casefold() for key in ("hostname", "computer_name", "name")}), {})
+    return [Path(directory) for directory in entry.get("path_prepend") or []]
+
+
+def ffmpeg_choice():
+    """(path, where it was found): PATH first, then this platform's usual places, then the box manifest's directories."""
     found = shutil.which("ffmpeg")
     if found:
-        return found
+        return found, "PATH"
     for candidate in FFMPEG_CANDIDATES:
-        if Path(candidate).is_file():
-            return candidate
-    return None
+        if candidate.is_file():
+            return str(candidate), "usual location"
+    for directory in declared_tool_dirs():
+        candidate = directory / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+        if candidate.is_file():
+            return str(candidate), f"{box_name()} manifest"
+    return None, None
+
+
+def find_ffmpeg():
+    """The ffmpeg this box records with; None when the box has none (missing_ffmpeg() says so by name)."""
+    return ffmpeg_choice()[0]
+
+
+def missing_ffmpeg():
+    places = [str(path) for path in FFMPEG_CANDIDATES] + [str(path) for path in declared_tool_dirs()]
+    return f"ffmpeg is absent on {box_name()}: not on PATH, not at {', '.join(places)}"
+
+
+def ffmpeg_line():
+    path, found_at = ffmpeg_choice()
+    return f"[e2e-video] ffmpeg {path} ({found_at}) on {box_name()}" if path else f"[e2e-video] {missing_ffmpeg()}"
 
 
 def find_ffprobe(ffmpeg):
@@ -852,7 +886,7 @@ def encode(ffmpeg, video_dir, fps, destination):
     if not frames.is_dir() or not any(frames.glob("frame-*.png")):
         return {"encoded": False, "reason": f"no frames in {frames}"}
     if not ffmpeg:
-        return {"encoded": False, "reason": "ffmpeg not found on PATH or at the known locations"}
+        return {"encoded": False, "reason": missing_ffmpeg()}
     rows = [row for row in read_index(video_dir) if row.get("saved", True) and
             (frames / f"frame-{row['frame']:06d}.png").is_file()]
     if not rows:
@@ -1085,12 +1119,15 @@ def capture_evidence_items(scenario, capture, peer):
     output.append(item(f'recording-rate-{name}', 'Recorder evidence is complete, reaches its declared minimum and meets the existing saved-share/gap bars',
                        error, incomplete=health is None or not health.get('complete', False), recording=health))
     allowed, stills, error = [], None, ''
+    ffmpeg = find_ffmpeg()
     try:
-        stills = freeze_scan(find_ffmpeg(), peer.get('video'), read_index(peer['video_dir']) if peer.get('video_dir') else [],
+        stills = freeze_scan(ffmpeg, peer.get('video'), read_index(peer['video_dir']) if peer.get('video_dir') else [],
                              peer.get('video_dir'), allowed, named_still_windows(scenario, capture['name'], name, peer.get('video_dir')))
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as failed:
         error = f'still scan: {type(failed).__name__}: {failed}'
-    if stills is None: error = error or 'still scan is absent: ffmpeg or encoded video unavailable'
+    if stills is None:
+        error = error or (f'still scan is absent: {missing_ffmpeg()}' if not ffmpeg else
+                          f'still scan is absent: no encoded video for this peer ({(peer.get("encode") or {}).get("reason") or peer.get("video") or "none recorded"})')
     moved = [still for still in stills or [] if (still.get('changed_pixels') or 0) >= MOTION_PIXELS]
     failures = [still for still in stills or [] if still not in moved]
     if failures: error = f'{len(failures)} running still(s), first at {failures[0]["start_s"]} s'
@@ -2625,6 +2662,7 @@ def main():
     parser.add_argument("--scratch-limit-bytes", type=positive_bytes,
                         help=f"positive byte allowance; default {SCRATCH_LIMIT}, or the retained allowance when finalizing")
     parser.add_argument("--list", action="store_true")
+    parser.add_argument("--which-ffmpeg", action="store_true", help="print the ffmpeg this box records with and where it was found")
     parser.add_argument("--fullstate-every", type=int, default=0,
                         help="multi-peer runs: every N committed ticks each peer hashes its whole capture (-net-fullstate-hash-every); "
                              "a pair that differs is an engine finding; 0 is off")
@@ -2636,6 +2674,9 @@ def main():
         from e2e.cross import merge_halves
         return 0 if merge_halves(options.merge_peer_captures, options.out) else 1
 
+    if options.which_ffmpeg:
+        print(ffmpeg_line())
+        return 0 if find_ffmpeg() else 1
     if options.list:
         for path in sorted(SCENARIO_DIR.glob("*.json")):
             scenario = json.loads(path.read_text(encoding="utf-8"))
@@ -2714,6 +2755,7 @@ def main():
     except RuntimeError as error:
         raise SystemExit(str(error)) from None
     started = time.monotonic()
+    print(ffmpeg_line(), flush=True)
     source = source_evidence(options.repo)
     exe = file_evidence(capture_binary(options.repo))
     capture = {"schema": 1, "scenario": scenario["name"], "repo": str(Path(options.repo).resolve()), "out": str(out), "platform": sys.platform,
