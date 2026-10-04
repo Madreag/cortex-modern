@@ -24,7 +24,7 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 import session_directory
-from session_directory import IP_REQ_PER_MIN, DualRateLimiter, LOGGER, RunningServer, spawn_server
+from session_directory import IP_REG_PER_MIN, IP_REQ_PER_MIN, DualRateLimiter, LOGGER, RunningServer, spawn_server
 from unittest import mock
 
 INSTALL_KEY = "0123456789abcdef"
@@ -1192,6 +1192,31 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(limited["error"], "rate_limited")
         self.assertIsInstance(limited["retry_after_s"], int)
         self.assertGreaterEqual(limited["retry_after_s"], 1)
+
+    def test_tunnel_clients_keep_their_own_ip(self) -> None:
+        # Behind the Cloudflare tunnel every request reaches the service from loopback: each client is limited and
+        # reported by the address the tunnel names, never pooled into one loopback bucket.
+        self.start()
+
+        def register_from(ip: str, i: int) -> tuple[int, dict[str, Any]]:
+            status_i, body_i = self.call("POST", "/v1/sessions", sample_register(),
+                                         headers={"X-Install-Key": f"T{ip.replace('.', '')}{i:04d}".ljust(16, "0")[:16], "CF-Connecting-IP": ip})
+            self.assertIsInstance(body_i, dict)
+            return status_i, body_i
+
+        for i in range(IP_REG_PER_MIN):
+            status, body = register_from("203.0.113.7", i)
+            self.assertEqual(status, 200, msg=f"register {i+1} from the first client")
+            self.assertEqual(body["observed_ip"], "203.0.113.7")
+        status, _ = register_from("203.0.113.7", IP_REG_PER_MIN)
+        self.assertEqual(status, 429)
+        status, body = register_from("198.51.100.9", 0)
+        self.assertEqual(status, 200, msg="a second client behind the tunnel was limited by the first one's registers")
+        self.assertEqual(body["observed_ip"], "198.51.100.9")
+        status, body = self.call("POST", "/v1/sessions", sample_register(),
+                                 headers={"X-Install-Key": "Tbadheader000000", "CF-Connecting-IP": "not-an-address"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["observed_ip"], "127.0.0.1")
 
     def test_signal_session_queue_caps_and_idle_drop(self) -> None:
         self.start(queue_idle_s=1.5)

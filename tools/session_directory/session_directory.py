@@ -8,6 +8,7 @@ import base64
 import binascii
 import hmac
 import hashlib
+import ipaddress
 import json
 import logging
 import re
@@ -1024,7 +1025,17 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
             return parts, parse_qs(parsed.query)
 
         def _observed_ip(self) -> str:
-            return str(self.client_address[0])
+            # The Cloudflare tunnel reaches the service from loopback and names each client in CF-Connecting-IP; nothing
+            # but a loopback peer may name another address, so a remote client cannot pick its own bucket.
+            peer = str(self.client_address[0])
+            named = (self.headers.get("CF-Connecting-IP") or "").strip()
+            if named:
+                try:
+                    if ipaddress.ip_address(peer).is_loopback:
+                        return str(ipaddress.ip_address(named))
+                except ValueError:
+                    pass
+            return peer
 
         def _install_gate(
             self, is_register: bool
