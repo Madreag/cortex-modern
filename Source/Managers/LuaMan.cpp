@@ -13588,8 +13588,8 @@ namespace {
 		lua_replace(L, -2);
 	}
 
-	// Whether the copy, or the remap that follows it, gives this userdata another value: a Vector or a live sound is
-	// copied, and an object handle names the window's view of its object.
+	// Whether the copy, or the remap that follows it, gives this userdata another value: a Vector, a Timer or a live sound
+	// is copied, and an object handle names the window's view of its object.
 	bool PreviewCopyReplaces(lua_State* L, int index, void*) {
 		const auto* object = luabind::detail::is_class_object(L, AbsoluteLuaIndex(L, index));
 		if (!object || !object->crep()) {
@@ -13598,6 +13598,9 @@ namespace {
 		const char* className = object->crep()->name();
 		if (std::strcmp(className, "Vector") == 0) {
 			return true;
+		}
+		if (std::strcmp(className, "Timer") == 0) {
+			return object->ptr() != nullptr;
 		}
 		if (std::strcmp(className, "SoundContainer") == 0) {
 			return ScriptGraphNativeAlive(L, object);
@@ -13665,6 +13668,20 @@ namespace {
 						lua_pushvalue(L, src);
 						return;
 					}
+					lua_pushvalue(L, src);
+					lua_pushvalue(L, -2);
+					lua_rawset(L, seen);
+					return;
+				}
+				// A Timer is its stamps: the preview resets and reads its own, and one Timer held in two places is one copy.
+				if (object->crep() && std::strcmp(object->crep()->name(), "Timer") == 0 && object->ptr()) {
+					lua_pushvalue(L, src);
+					lua_rawget(L, seen);
+					if (!lua_isnil(L, -1)) {
+						return;
+					}
+					lua_pop(L, 1);
+					luabind::object(L, *static_cast<const Timer*>(object->ptr())).push(L);
 					lua_pushvalue(L, src);
 					lua_pushvalue(L, -2);
 					lua_rawset(L, seen);
