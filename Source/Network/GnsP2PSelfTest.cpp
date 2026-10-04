@@ -445,6 +445,16 @@ namespace RTE {
 				*failure = std::string(side.name) + " is not connected over a peer host candidate";
 				return false;
 			}
+			// The process's connection list carries it as a direct ICE connection with no relay offer.
+			bool listed = false;
+			for (const GnsProcessConnection& connection : GnsTransport::GetProcessConnections()) {
+				listed |= connection.transport == &side.transport && connection.info.peerId == side.peer && connection.p2p && connection.info.connectedRoute == "direct" &&
+				          connection.info.relayOffer == "none";
+			}
+			if (!listed) {
+				*failure = std::string(side.name) + "'s connection is not in the process's connection list as a direct ICE connection";
+				return false;
+			}
 			return true;
 		}
 
@@ -1295,13 +1305,19 @@ namespace RTE {
 			return std::string(side.name) + " is " + StateName(info.state) + (relayed ? ", relayed" : ", not relayed") + (info.endDebug.empty() ? std::string() : " (\"" + info.endDebug + "\")");
 		}
 
-		// A relayed route's receipt names the TURN server it runs through and the relay offer its TURN lists came from.
+		// A relayed route's receipt names the TURN server it runs through and the relay offer its TURN lists came from; the process's
+		// connection list names the same offer for the connection.
 		std::string CheckRouteReceipt(Side& side, const std::string& server) {
 			const std::string receipt = side.transport.GetPeerConnectionInfo(side.peer).routeReceipt;
 			const bool relayed = receipt.find(" route=relay ") != std::string::npos;
 			const bool addressed = receipt.find(" remote=") != std::string::npos && receipt.find(" turn=" + server + " ") != std::string::npos;
 			const bool offered = receipt.find(std::string(" offer=") + c_RelaySelfTestOffer) != std::string::npos;
-			return relayed && addressed && offered ? std::string() : std::string(side.name) + " route receipt '" + receipt + "'";
+			bool listed = false;
+			for (const GnsProcessConnection& connection : GnsTransport::GetProcessConnections()) {
+				listed |= connection.transport == &side.transport && connection.info.peerId == side.peer && connection.info.connectedRoute == "relay" &&
+				          connection.info.relayOffer == c_RelaySelfTestOffer;
+			}
+			return relayed && addressed && offered && listed ? std::string() : std::string(side.name) + " route receipt '" + receipt + "'" + (listed ? "" : "; its listed connection names no relayed offer");
 		}
 
 		std::vector<uint8_t> Numbered(char tag, uint32_t number) {

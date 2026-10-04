@@ -41,6 +41,18 @@ namespace RTE {
 		std::string selectedCandidateType;
 		std::string routeReceipt; //!< The connection's [net-route] line, once its route is chosen.
 		std::vector<std::string> config; //!< "Name=value" of each config value the P2P path sets, read back from the connection.
+		NetPeerId peerId = c_InvalidNetPeerId; //!< The transport's own id for the peer.
+		std::string relayOffer = "none"; //!< The relay offer the route line names: the connection's for a relayed route, none for a direct one.
+	};
+
+	class GnsTransport;
+
+	/// A live connection of one of the process's transports.
+	struct GnsProcessConnection {
+		const GnsTransport* transport = nullptr;
+		bool p2p = false; //!< The transport runs ICE rather than direct IP.
+		bool host = false; //!< The transport listens, so the connection was accepted rather than dialed.
+		GnsPeerConnectionInfo info;
 	};
 
 	/// What the fake link did to the packets an end received: GNS's own counters on that end.
@@ -74,6 +86,8 @@ namespace RTE {
 		/// Hands one rendezvous blob from the peer to GNS; context answers connect requests and rejections.
 		bool ReceiveP2PSignal(const void* blob, int size, ISteamNetworkingSignalingRecvContext* context);
 		GnsPeerConnectionInfo GetPeerConnectionInfo(NetPeerId peerId) const;
+		/// Every live connection of every transport in this process, each transport's in peer order.
+		static std::vector<GnsProcessConnection> GetProcessConnections();
 		std::string GetPeerDetailedStatus(NetPeerId peerId) const;
 		/// The fake link's effects on what this transport's connections received, summed.
 		NetFakeLinkEffects GetFakeLinkEffects() const;

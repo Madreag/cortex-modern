@@ -638,16 +638,21 @@ namespace RTE {
 				// runs with and the relay offer they came from.
 				char address[SteamNetworkingIPAddr::k_cchMaxString]{};
 				info.m_addrRemote.ToString(address, sizeof(address), true);
-				const auto offer = m_ConnectionOffers.find(connection);
 				std::ostringstream line;
 				line << "[net-route] RouteAllowed route=" << (relayed ? "relay" : "direct") << " allowed=" << (allowed ? 1 : 0) << " connection=" << connection
 				     << " remote=" << (info.m_addrRemote.IsIPv6AllZeros() ? std::string("none") : std::string(address));
 				if (relayed) line << " turn=" << ConnectionConfigString(connection, k_ESteamNetworkingConfig_P2P_TURN_ServerList);
-				line << " offer=" << (relayed && offer != m_ConnectionOffers.end() ? offer->second : std::string("none"));
+				line << " offer=" << RouteOffer(connection, relayed);
 				m_RouteReceipts[connection] = line.str();
 				DiagnosticLine() << line.str() << std::endl;
 			}
 			return allowed;
+		}
+
+		// A direct route uses no relay offer, whatever login its connection holds.
+		std::string RouteOffer(HSteamNetConnection connection, bool relayed) const {
+			const auto offer = m_ConnectionOffers.find(connection);
+			return relayed && offer != m_ConnectionOffers.end() ? offer->second : std::string("none");
 		}
 
 		void RefuseRoute(HSteamNetConnection connection) {
@@ -910,11 +915,26 @@ namespace RTE {
 			return accepted;
 		}
 
-		GnsPeerConnectionInfo GetPeerConnectionInfo(NetPeerId peerId) {
-			GnsPeerConnectionInfo result;
+		GnsPeerConnectionInfo GetPeerConnectionInfo(NetPeerId peerId) const {
 			const auto connectionIt = m_ConnectionsByPeer.find(peerId);
+			return connectionIt == m_ConnectionsByPeer.end() ? GnsPeerConnectionInfo{} : ConnectionInfo(connectionIt->second, peerId);
+		}
+
+		static std::vector<GnsProcessConnection> ProcessConnections() {
+			std::vector<GnsProcessConnection> connections;
+			for (const Impl* impl : s_LiveImpls) {
+				for (const auto& [peerId, connection] : impl->m_ConnectionsByPeer) {
+					connections.push_back({impl->m_Facade, impl->m_P2PMode >= 0, impl->m_IsHost, impl->ConnectionInfo(connection, peerId)});
+				}
+			}
+			return connections;
+		}
+
+		GnsPeerConnectionInfo ConnectionInfo(HSteamNetConnection connection, NetPeerId peerId) const {
+			GnsPeerConnectionInfo result;
+			result.peerId = peerId;
 			SteamNetConnectionInfo_t info{};
-			if (!m_Interface || connectionIt == m_ConnectionsByPeer.end() || !m_Interface->GetConnectionInfo(connectionIt->second, &info)) {
+			if (!m_Interface || !m_Interface->GetConnectionInfo(connection, &info)) {
 				return result;
 			}
 			char identity[SteamNetworkingIdentity::k_cchMaxString] = {};
@@ -935,7 +955,8 @@ namespace RTE {
 				result.connectedRoute = (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0 ? "relay" : "direct";
 				result.selectedCandidateType = CandidateType(info);
 			}
-			if (const auto receipt = m_RouteReceipts.find(connectionIt->second); receipt != m_RouteReceipts.end()) result.routeReceipt = receipt->second;
+			result.relayOffer = RouteOffer(connection, (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0);
+			if (const auto receipt = m_RouteReceipts.find(connection); receipt != m_RouteReceipts.end()) result.routeReceipt = receipt->second;
 
 			const std::pair<const char*, ESteamNetworkingConfigValue> numbers[] = {
 				{"P2P_Transport_ICE_Enable", k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable},
@@ -949,9 +970,9 @@ namespace RTE {
 				{"TimeoutConnected", k_ESteamNetworkingConfig_TimeoutConnected},
 			};
 			for (const auto& [name, value] : numbers) {
-				result.config.push_back(std::string(name) + "=" + std::to_string(ConnectionConfigInt32(connectionIt->second, value)));
+				result.config.push_back(std::string(name) + "=" + std::to_string(ConnectionConfigInt32(connection, value)));
 			}
-			result.config.push_back("P2P_STUN_ServerList=\"" + ConnectionConfigString(connectionIt->second, k_ESteamNetworkingConfig_P2P_STUN_ServerList) + "\"");
+			result.config.push_back("P2P_STUN_ServerList=\"" + ConnectionConfigString(connection, k_ESteamNetworkingConfig_P2P_STUN_ServerList) + "\"");
 			return result;
 		}
 
@@ -1169,6 +1190,7 @@ namespace RTE {
 		std::set<HSteamNetConnection> m_Announced; //!< Connections whose PeerConnected we have already handed up.
 		std::map<HSteamNetConnection, std::vector<NetTransportEvent>> m_HeldPackets; //!< Payloads GNS delivered before that.
 		std::string m_LiveTurnLogin; //!< The TURN server, user and password lists the live connections run with.
+		const GnsTransport* m_Facade = nullptr; //!< The transport this implements, as the process's connection list names it.
 
 		static std::map<HSteamListenSocket, Impl*> s_ListenerOwners;
 		static std::map<HSteamNetConnection, Impl*> s_ConnectionOwners;
@@ -1222,9 +1244,11 @@ namespace RTE {
 
 		bool ReceiveP2PSignal(const void*, int, ISteamNetworkingSignalingRecvContext*) { return false; }
 		GnsPeerConnectionInfo GetPeerConnectionInfo(NetPeerId) { return {}; }
+		static std::vector<GnsProcessConnection> ProcessConnections() { return {}; }
 		std::string GetPeerDetailedStatus(NetPeerId) { return {}; }
 		NetFakeLinkEffects GetFakeLinkEffects() { return {}; }
 		std::string GetLocalIdentity() { return {}; }
+		const GnsTransport* m_Facade = nullptr;
 	};
 
 #endif
@@ -1238,7 +1262,12 @@ namespace RTE {
 		}
 	}
 
-	GnsTransport::GnsTransport() : m_Impl(new Impl()) {}
+	// Under the call lock, because the process's connection list walks every live transport.
+	GnsTransport::GnsTransport() {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
+		m_Impl = new Impl();
+		m_Impl->m_Facade = this;
+	}
 
 	GnsTransport::~GnsTransport() {
 		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
@@ -1309,6 +1338,11 @@ namespace RTE {
 	GnsPeerConnectionInfo GnsTransport::GetPeerConnectionInfo(NetPeerId peerId) const {
 		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		return m_Impl->GetPeerConnectionInfo(peerId);
+	}
+
+	std::vector<GnsProcessConnection> GnsTransport::GetProcessConnections() {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
+		return Impl::ProcessConnections();
 	}
 
 	std::string GnsTransport::GetPeerDetailedStatus(NetPeerId peerId) const {
