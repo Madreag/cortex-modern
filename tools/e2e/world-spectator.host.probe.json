@@ -46,6 +46,23 @@
       "name": "done"
     },
     {
+      "op": "key_down",
+      "key": "Escape"
+    },
+    {
+      "op": "key_up",
+      "key": "Escape"
+    },
+    {
+      "op": "wait",
+      "screen": "Pause",
+      "elapsed_ms": 450
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonEndMatch"
+    },
+    {
       "op": "finish"
     }
   ]
