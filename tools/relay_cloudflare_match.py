@@ -119,7 +119,7 @@ REQUIRED = {
     'f-relay-by-hand': SEATED + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'menu_choice:client'),
     # A public row sees no candidate (the directory is not this run's): the relay is bound by the engine's own receipt and the
     # directory's offer line, and its holds are the hotspot seat's own (the fast peer's feel is the row's bar).
-    'g-relay-only-public': SEATED + ('offer_fresh', 'endpoint', 'logins_revoked', 'tunnel:client', 'route_history:client'),
+    'g-relay-only-public': SEATED + ('offer_fresh', 'endpoint', 'logins_revoked', 'tunnel:client', 'route_history:client', 'listing'),
 }
 
 
@@ -1826,7 +1826,8 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
     joiner = next((name for name in names if name != 'host'), 'client')
     connections = {name: edith_cross.find_key(reports.get(name) or {}, 'connection') for name in names}
     identities = {name: [edith_cross.find_key(reports.get(name) or {}, 'local_identity'),
-                         *re.findall(r'\[net-ice\] connected connection=\d+ .*? local=(str:c-\S+)', logs.get(name, ''))]
+                         *re.findall(r'dialling the ICE half as (str:c-\S+)', logs.get(name, '')),
+                         *re.findall(r"\[net-migration\] dialing the successor's ICE route .*? as=(str:c-\S+)", logs.get(name, ''))]
                   for name in names if name != 'host'}
     if facts.get('public'):
         directory_lines = public_directory_lines(session)
