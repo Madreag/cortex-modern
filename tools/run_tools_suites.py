@@ -74,7 +74,8 @@ SUITES = (
 )
 # The cross driver's suite reads the Windows boxes' trees and ctypes.WinDLL; the other platforms run the cross peers, not this suite.
 # The acceptance and world row suites test the Windows coordinator, which names its boxes' D: trees.
-WINDOWS_ONLY = {"runner-feel-marker", "runner-limits", "feel-engine-placement", "cross-driver", "acceptance-rows", "world-rows"}
+WINDOWS_ONLY = {"runner-feel-marker", "runner-limits", "feel-engine-placement", "cross-driver", "acceptance-rows", "world-rows",
+                "package-runner-scope"}
 
 
 def suites_for(inventory: Path) -> tuple:
