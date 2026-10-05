@@ -1268,9 +1268,11 @@ def listed_rows(peer_root, control):
 
 
 def listed_games(peer_root):
-    """The Join screen's rows as the join targets they stand for, from the script's last dump that lists them."""
+    """The Join screen's rows as the join targets they stand for, from the script's last dump that lists any (a dump taken after
+    the player left Join a Game lists none)."""
     path = Path(peer_root) / "stdout.log"
     text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    seen = None
     for line in reversed(text.splitlines()):
         if not line.startswith(("[menu-script] dump_host_options {", "[menu-script] dump_player_options {")):
             continue
@@ -1279,9 +1281,10 @@ def listed_games(peer_root):
             games = json.loads(body).get("game_rows")
         except json.JSONDecodeError:
             continue
-        if games is not None:
+        if games:
             return games
-    return None
+        seen = games if seen is None else seen
+    return seen
 
 
 def own_session_evidence(peer_root, spec, port):
