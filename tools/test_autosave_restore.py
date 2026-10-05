@@ -1941,8 +1941,8 @@ class CheckpointWaitTests(unittest.TestCase):
 
 
 class SubstanceFirstTests(unittest.TestCase):
-    """A run the arms took for short used to be retried, and a later passing run hid a
-    real restore or autosave failure. Each first run here is short AND broken; the arm fails it at once and never retries it."""
+    """A run the arms took for short is never retried: a later passing run could hide a real restore or autosave
+    failure. Each first run here is short AND broken; the arm fails it at once."""
     MATCH = CheckpointWaitTests.MATCH
     POLICY_PASS = f"[autosave-store-selftest] PASS match={MATCH} restorable=3 same_set=1\n"
     POLICY_ONE = f"[autosave-store-selftest] FAIL match={MATCH} restorable=1 (two checkpoints are needed)\n"
