@@ -165,7 +165,7 @@ namespace RTE {
 						set("legal: the survivors leave to the landing with 'The host left the match'", "HOSTLOSS-HELD");
 						x.notWalked = "no in-process lever fails a migration short of losing every successor";
 						break;
-					case Event::SuccessorLost: set("sub=unreachable subhost=1", "SUCCESSOR-LOST"); break;
+					case Event::SuccessorLost: set("sub=unreachable subhost=1", "QUORUM"); break;
 					case Event::MigrationBegin: set("sub=run subhost=2", "DESIGN-MIGRATION"); break;
 					case Event::HostLost: set("sub=run subhost=2", "HOSTLOSS-HELD"); break;
 					case Event::HostGoodbye:
@@ -252,7 +252,7 @@ namespace RTE {
 					else if (s == State::Draining) set("round=run " + quiet, "GAP", "a relaunch requested after the round's last tick");
 					else if (s == State::Held) set("round=relaunch seat=Held " + quiet, "LS-STOP");
 					else if (s == State::Left) set("round=relaunch seat=Held " + quiet, "LS-STOP LEAVE-HELD");
-					else if (s == State::Reclaiming) set("round=relaunch " + quiet, "LS-STOP", "what an agreed reclaim becomes across a relaunch is not ruled");
+					else if (s == State::Reclaiming) set("round=relaunch " + quiet, "LS-STOP", "no policy says what an agreed reclaim becomes across a relaunch");
 					else if (rejoin) set("round=relaunch " + quiet, "LS-STOP", "a relaunch while the seat's rejoin is in flight: the conservative expectation keeps the rejoin's session");
 					else set("round=relaunch " + quiet, "LS-STOP");
 					break;
