@@ -405,7 +405,7 @@ namespace RTE {
 
 	void NetDirectoryClient::ScheduleRetry(uint64_t nowMs) {
 		m_BackoffMs = m_BackoffMs == 0 ? c_RetryBaseMs : std::min<uint64_t>(m_BackoffMs * 2, c_RetryMaxMs);
-		m_NextAttemptMs = nowMs + m_BackoffMs;
+		m_NextAttemptMs = std::max(m_NextAttemptMs, nowMs + m_BackoffMs);
 	}
 
 	void NetDirectoryClient::StartRequest(RequestKind kind, const Request& request) {

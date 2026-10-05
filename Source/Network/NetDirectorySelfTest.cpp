@@ -1065,6 +1065,15 @@ namespace RTE {
 						return false;
 					}
 				}
+				ScriptedClient throttled;
+				throttled.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				throttled.replies->push_back({429, R"({"retry_after_s":30})", ""});
+				throttled.client.Advertise(SampleRegisterRequest(), true);
+				throttled.client.Update(0); throttled.client.Update(0);
+				throttled.client.Update(5000); throttled.client.Update(5000);
+				throttled.client.RefreshRegistration(SampleRegisterRequest(), true, 6000);
+				throttled.client.Update(34999);
+				if (throttled.sent->size() != 2) { *error = "F1: refreshing the listing shortened a service throttle deadline"; return false; }
 				std::cout << "[net-directory-selftest] PASS listed_refusals_keep_retrying" << std::endl;
 				return true;
 			}
