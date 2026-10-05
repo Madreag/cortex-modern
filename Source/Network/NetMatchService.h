@@ -807,6 +807,8 @@ namespace RTE {
 		bool TakeRoundEndRecord(uint64_t& record);
 		/// The result line a seat reads for a round's winner team, as its own team sees it.
 		static std::string RoundEndResultText(int winnerTeam, int localTeam);
+		/// Why a session-id join found no row to dial; a seat coming back on its ticket to a row its host no longer keeps reads the match as over.
+		static std::string IceSessionRefusalText(bool rejoin, const std::string& sessionId, const std::string& why);
 		/// The request a stored ticket rejoins with. The world flag is the ticket's own, so a relaunch
 		/// against a world host still hellos on the world plane.
 		static NetMatchServiceRequest BuildTicketRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget);

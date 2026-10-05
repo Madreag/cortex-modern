@@ -15716,6 +15716,13 @@ namespace RTE {
 			*error = "session-id join: an either row did not carry its direct address too";
 			return false;
 		}
+		// 2026-10-04 row f: a held seat whose host ended the round while it rejoined found no row and stayed failed.
+		if (NetMatchService::IceSessionRefusalText(true, "gone", "no such session").rfind("match over", 0) != 0 ||
+		    NetMatchService::IceSessionRefusalText(false, "gone", "no such session") != "session gone: no such session" ||
+		    NetMatchService::IceSessionRefusalText(true, "full", "full") != "session full: full") {
+			*error = "session-id join: a rejoin to a row its host no longer keeps read as a failure: " + NetMatchService::IceSessionRefusalText(true, "gone", "no such session");
+			return false;
+		}
 		std::cout << "[net-match-selftest] PASS session-id join: an absent, full, mismatched or ip-only row is refused with the join list's own label; an ice row resolves to str:h-<session>, an either row keeps its address" << std::endl;
 		return true;
 	}

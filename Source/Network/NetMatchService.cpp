@@ -1012,6 +1012,12 @@ static std::string ResyncSaveName() {
 		return winnerTeam == localTeam ? "Victory!" : "Defeat";
 	}
 
+	std::string NetMatchService::IceSessionRefusalText(bool rejoin, const std::string& sessionId, const std::string& why) {
+		// The rejoin reads it as the host's goodbye: the round ended while the seat was on its way back.
+		if (rejoin && why == "no such session") return "match over: the host's session is gone";
+		return "session " + sessionId + ": " + why;
+	}
+
 	bool NetMatchService::TakeRoundEndRecord(uint64_t& record) {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (!m_RoundEndRecord) return false;
@@ -9856,7 +9862,7 @@ static std::string ResyncSaveName() {
 					return false;
 				}
 			}
-			if (error) *error = "session " + request.sessionId + ": " + why;
+			if (error) *error = IceSessionRefusalText(request.rejoin, request.sessionId, why);
 			return false;
 		}
 		if (target.persistentWorld && worldIdentityBuilt) {
