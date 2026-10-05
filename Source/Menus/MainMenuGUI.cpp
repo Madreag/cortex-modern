@@ -2335,7 +2335,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	// Capacity is a session property once the lobby is open; only the setup draft may move it.
 	HostOptSetEditable(m_HostSeatPlayersCombo, editable && m_HostOptionsSetupDraft);
 	if (m_HostSeatCapacityHint) {
-		m_HostSeatCapacityHint->SetText(m_HostOptionsSetupDraft ? "Peers the lobby will seat" : "Fixed while the lobby is open");
+		m_HostSeatCapacityHint->SetText(m_HostOptionsSetupDraft ? "includes you" : "Fixed while the lobby is open");
 	}
 	// Each rostered slot is a row; while the draft can still take a seat a trailing "Closed"
 	// placeholder row is where the host opens one back up. peerCount itself is transport
@@ -3754,7 +3754,7 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 	if (guiEventControl == m_HostNetRecalcButton) {
 		// The auto policy already re-derives each sender's figure from the live link; the button is
 		// the host's "look again now" - the readouts re-fill from the service snapshot this frame.
-		m_HostOptionsStatusLabel->SetText("Link figures refreshed from the live snapshot.");
+		m_HostOptionsStatusLabel->SetText("The delay and ping figures were measured again.");
 		g_GUISound.ItemChangeSound()->Play();
 		return;
 	}
