@@ -23975,6 +23975,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		class ReleasePathHostWire final : public LoopbackTransport {
 		public:
 			bool commitOnlyToFirst = false;
+			bool fourthFutureOnlyToFirst = false;
+			size_t fourthFutureInputsToFirst = 0;
 			std::vector<NetLockstepTiming> decisions;
 			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
 				const auto decoded = NetLockstepCodec::Decode(bytes);
@@ -23985,6 +23987,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					}
 					if (const auto* stop = std::get_if<NetLockstepStop>(&decoded.packet.payload);
 					    commitOnlyToFirst && peer == 1 && stop && stop->reason == NetLockstepStopReason::Expired) return true;
+					if (fourthFutureOnlyToFirst) {
+						if (const auto* stop = std::get_if<NetLockstepStop>(&decoded.packet.payload);
+						    peer == 2 && stop && stop->senderPeerId == 4 && stop->reason == NetLockstepStopReason::PeerRemoved) return true;
+						if (const auto* frame = std::get_if<NetLockstepFrame>(&decoded.packet.payload); frame && frame->senderPeerId == 4 && frame->targetFrame >= 30) {
+							if (peer == 2) return true;
+							if (peer == 1) ++fourthFutureInputsToFirst;
+						}
+					}
 				}
 				return LoopbackTransport::Send(peer, lane, bytes, error, congested);
 			}
@@ -24013,6 +24023,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			std::array<INetTransport*, 4> wires{&hostWire, &firstWire, &secondWire, &fourthWire};
 			std::array<NetLockstepCoordinator, 4> peers;
 			std::array<uint64_t, 4> produced{1, 1, 1, 1};
+			std::array<uint64_t, 4> produceThrough{UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX};
 			std::array<bool, 4> alive{true, true, true, true};
 			std::array<std::map<uint64_t, NetLockstepReadyFrame>, 4> committed;
 			NetMatchConfig match;
@@ -24021,7 +24032,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			uint64_t drainThrough = UINT64_MAX;
 			std::string failure;
 
-			bool Start(uint16_t port, bool bounded = true, bool world = false) {
+			bool Start(uint16_t port, bool bounded = true, bool world = false, uint64_t heldHostFrame = 0) {
 				match = ReleasedClaimsMatch(0x9C00 + port, 4);
 				match.slowPlayerPolicy = bounded ? NetSlowPlayerPolicy::Substitute : NetSlowPlayerPolicy::Pause;
 				match.successorOrder = {2, 3, 4};
@@ -24037,6 +24048,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				for (size_t index = 0; index < peers.size(); ++index) {
 					auto config = ReleasedClaimsConfig(match, static_cast<uint8_t>(index + 1), index == 0 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}, {4, 3}} : std::map<uint8_t, NetPeerId>{{1, 1}}, bounded);
 					config.startFrame = 1;
+					if (heldHostFrame) config.initialSeatHolds[1] = {1, 0, 1, 1, heldHostFrame};
 					config.migrationKey.fill(0x39);
 					config.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); };
 					if (!peers[index].Start(*wires[index], config, &failure)) return false;
@@ -24046,7 +24058,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return peers[0].IsRunning() && peers[0].GetStats().nextFrame >= 15;
 			}
 			void Pump() {
-				for (size_t index = 0; index < peers.size(); ++index) if (alive[index]) FeedReleasedClaimsPeer(peers[index], produced[index]);
+				for (size_t index = 0; index < peers.size(); ++index) if (alive[index] && produced[index] <= produceThrough[index]) {
+					if (index == 3 && hostWire.fourthFutureOnlyToFirst) {
+						if (peers[index].IsRunning() && produced[index] <= peers[index].GetStats().nextFrame + 4 &&
+						    peers[index].QueueLocalInput(produced[index], {MakeFrame(400, produced[index])}, {}, &failure)) ++produced[index];
+					} else FeedReleasedClaimsPeer(peers[index], produced[index]);
+				}
 				for (size_t index = 0; index < peers.size(); ++index) if (alive[index]) peers[index].Tick(now);
 				for (size_t index = 0; index < peers.size(); ++index) {
 					if (!alive[index]) continue;
@@ -24424,6 +24441,45 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return fail("");
 		}
 
+		bool TestUnequalFutureDeparturesConvergeAtSuccession(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("unequal_future_departures_converge_at_succession", why, error); };
+			ReleasePathRound round;
+			if (!round.Start(47420, true, false, 20)) return fail("the held-host fixture did not start: " + round.failure);
+			round.drainThrough = 29;
+			round.produceThrough[3] = 31;
+			round.hostWire.fourthFutureOnlyToFirst = true;
+			for (int turn = 0; turn < 400 && (round.peers[1].GetResumeFrame() != 30 || round.peers[2].GetResumeFrame() != 30 || round.produced[3] != 32); ++turn) round.Pump();
+			if (round.peers[1].GetResumeFrame() != 30 || round.peers[2].GetResumeFrame() != 30 || round.produced[3] != 32 ||
+			    round.hostWire.fourthFutureInputsToFirst < 2 || !round.peers[1].IsSeatUnderAI(1, 29) || !round.peers[2].IsSeatUnderAI(1, 29))
+				return fail("the survivors did not apply 29 with host 1 held at 20 and only peer 2 receiving seat 4's inputs 30/31");
+			round.peers[0].EvictRemovedPeer(4, "playing seat removed after input 31", round.now);
+			round.alive[3] = false;
+			for (int turn = 0; turn < 5; ++turn) round.Pump();
+			if (!round.peers[1].GetPeerLeaveFrames().contains(4) || round.peers[1].GetPeerLeaveFrames().at(4) != 32 || round.peers[2].GetPeerLeaveFrames().contains(4))
+				return fail("the fixture did not give peer 2 leave 32 and peer 3 no departure");
+			if (!round.Migrate() || round.peers[1].GetMigrationResult().boundary != 29 || round.peers[2].GetMigrationResult().boundary != 29)
+				return fail("the unequal survivors did not succeed at boundary 29");
+			round.drainThrough = UINT64_MAX;
+			for (int turn = 0; turn < 30; ++turn) round.Pump();
+			std::string failures;
+			for (size_t index: {size_t{1}, size_t{2}}) {
+				const auto leaves = round.peers[index].GetPeerLeaveFrames();
+				if (!leaves.contains(4) || leaves.at(4) != 30) failures += "peer " + std::to_string(index + 1) + " leaves seat 4 at " + (leaves.contains(4) ? std::to_string(leaves.at(4)) : "none") + " expected 30; ";
+			}
+			for (uint64_t tick = 29; tick <= 37; ++tick) {
+				if (!round.committed[1].contains(tick) || !round.committed[2].contains(tick)) return fail("a survivor lacks frame " + std::to_string(tick));
+				const auto commands = [](const NetLockstepReadyFrame& ready) {
+					std::vector<NetGameCommand> result;
+					for (const auto& command: PackWorldJoinReadyFrame(ready).commands) if (std::holds_alternative<NetGameSeatRelease>(command.payload)) result.push_back(command);
+					return result;
+				};
+				if (commands(round.committed[1].at(tick)) != commands(round.committed[2].at(tick))) failures += "release commands differ at " + std::to_string(tick) + "; ";
+			}
+			if (!CompareDepartureHistory(round.match, 4, 30, {{&round.peers[1], round.committed[1]}, {&round.peers[2], round.committed[2]}}, "unequal-succession-departure.ccreplay", &round.failure))
+				failures += "claim, control or input hashes differ through succession: " + round.failure;
+			return fail(failures);
+		}
+
 		bool TestWorldDepartureUsesInputBoundary(std::string* error) {
 			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("world_departure_uses_input_boundary", why, error); };
 			NetMatchConfig world = ReleasedClaimsMatch(0x9D02, 4);
@@ -24679,7 +24735,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	int NetLockstepSelfTest::RunSeatSuccession() {
 		EnsureSwitchTestManagers();
 		bool passed = true;
-		for (bool (*test)(std::string*): {TestPlayingDepartureSurvivesSuccession, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
+		for (bool (*test)(std::string*): {TestPlayingDepartureSurvivesSuccession, TestUnequalFutureDeparturesConvergeAtSuccession, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
 			std::string error;
 			passed &= test(&error);
 		}
