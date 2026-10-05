@@ -186,7 +186,7 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_AutoRepairCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkAutoRepair"));
 	m_ToastsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkToasts"));
 	m_PredictionCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkPrediction"));
-	m_DiagnosticsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->AddControl("CheckboxNetworkDiagnostics", "CHECKBOX", m_PageBoxes[0], 15, 172, 320, 20));
+	m_DiagnosticsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->AddControl("CheckboxNetworkDiagnostics", "CHECKBOX", m_PageBoxes[0], 15, 132, 320, 20));
 	m_DiagnosticsCheckbox->SetText("Show network diagnostics");
 
 	m_StatusModeCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboMatchStatusWidget"));

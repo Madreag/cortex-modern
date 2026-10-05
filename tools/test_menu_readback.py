@@ -2623,16 +2623,16 @@ def run_case(options, case, root, failing=None):
             assert basics and next(c["text"] for c in basics[0]["controls"] if c["name"] == "TextNetworkDisplayName") == NETWORK_SEED["NetworkDisplayName"], basics[:1]
             result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(NETWORK_SAVED))
             assert result["saved"] == NETWORK_SAVED, result["saved"]
-            # The page sits on the Misc page's grid: a 20px row pitch, and under the automatic policy
-            # the hidden fixed row leaves no gap behind it.
-            pitch = ("LabelNetworkDisplayName", "LabelNetworkDelayPolicy", "LabelNetworkFixedDelay",
-                     "LabelNetworkIdleWait", "LabelNetworkPathHorizon", "CheckboxNetworkAutoRepair",
-                     "CheckboxNetworkToasts", "LabelMatchStatusWidget", "CheckboxNetworkDiagnostics")
+            # The page sits on the Misc page's grid: its first row at the top row, a 20px row pitch, and under the
+            # automatic policy the hidden fixed row leaves no gap behind it.
+            pitch = ("LabelNetworkDelayPolicy", "LabelNetworkFixedDelay", "LabelNetworkIdleWait", "LabelNetworkPathHorizon",
+                     "CheckboxNetworkAutoRepair", "CheckboxNetworkToasts", "CheckboxNetworkDiagnostics")
+            assert after[pitch[0]]["rect"][1] - after["CollectionBoxNetPagePlayer"]["rect"][1] == 12, (after[pitch[0]], after["CollectionBoxNetPagePlayer"])
             deltas = [after[b]["rect"][1] - after[a]["rect"][1] for a, b in zip(pitch, pitch[1:])]
-            assert deltas == [20] * 8, deltas
-            without_fixed = pitch[:2] + pitch[3:]
+            assert deltas == [20] * 6, deltas
+            without_fixed = pitch[:1] + pitch[2:]
             closed = [rows[b]["rect"][1] - rows[a]["rect"][1] for a, b in zip(without_fixed, without_fixed[1:])]
-            assert closed == [20] * 7, closed
+            assert closed == [20] * 5, closed
             # The landing's name row shares the Host/Join block's centre line; doubled centres avoid halves.
             landing = {c["name"]: c for c in images[-1]["controls"]}
             prompt, box = landing["LabelMultiplayerNamePrompt"]["rect"], landing["TextMultiplayerName"]["rect"]
