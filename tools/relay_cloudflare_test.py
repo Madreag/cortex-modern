@@ -390,6 +390,13 @@ class HotspotRows(unittest.TestCase):
         self.assertFalse(renewal(logs, [dict(status=201, epoch=1000.0), dict(status=403, epoch=1160.0, provider_error_code='1010')], ['host', 'client'], **timed)['passed'])
         self.assertFalse(renewal(logs, calls, ['host', 'client'], **dict(timed, line_times={}))['passed'])
 
+    def test_renewal_does_not_excuse_a_hold_without_stall_evidence(self):
+        scenario = json.loads((Path(__file__).parent / 'e2e/mp-relay-hotspot.json').read_text())
+        run = next(row for row in scenario['runs'] if row['name'] == 'd-credential-expiry')
+        peers = [dict(name='host', holds=0), dict(name='client', holds=1)]
+        verdict = self.match().seat_holds(peers, set(run.get('holds_allowed') or []), {'host', 'client'})
+        self.assertFalse(verdict['passed'], 'a held seat is excused without any independent link-stall record')
+
     def test_e_the_survivors_feel_is_judged_on_either_side_of_the_loss(self):
         """2026-10-04 row e: the whole-match bars read 47.5 tps and a 7.5 s wait, both the host loss's own pause."""
         around = self.match().feel_around_loss
@@ -415,6 +422,14 @@ class HotspotRows(unittest.TestCase):
         self.assertGreater(verdict['pause_ms'], 7888)
         # A stall before the loss's pause is still the before window's.
         self.assertFalse(around(rows, '[net-frame-wait] frame=500 wait_ms=80\n[net-frame-wait] frame=628 wait_ms=7888\n', 630, 1801)['passed'])
+
+    def test_an_earlier_larger_gap_is_not_the_recorded_host_loss(self):
+        tick = 1000 / 60
+        rows = [dict(tick=t, wall_ms=t * tick + (9000 if t >= 450 else 0) + (7888 if t >= 628 else 0))
+                for t in range(1, 1802)]
+        log = '[net-match] host lost; collecting surviving peers at applied frame 627 final_frame=1802\n'
+        verdict = self.match().feel_around_loss(rows, log, 630, 1801)
+        self.assertFalse(verdict['passed'], 'a larger unrelated gap removes the defective part of the before window')
 
     def test_e_a_survivor_s_second_dial_is_its_own(self):
         """2026-10-04 row e: a survivor dials its successor as a second identity; its connect receipt names it."""
@@ -722,6 +737,20 @@ class FeelBars(unittest.TestCase):
         self.assertFalse(match.feel_bars(self.timing(item9a_wall_tps={'status': 'FAIL', 'value': 41.2}), 'host')['passed'])
         self.assertFalse(match.feel_bars(self.timing(item9a_longest_wait={'status': 'MISS', 'value': None}), 'host')['passed'])
         self.assertFalse(match.feel_bars({'peers': {}}, 'host')['passed'])
+
+    def test_missing_logs_and_unobserved_spikes_never_repair_a_pin(self):
+        import relay_cloudflare_match as match
+        for log in (None, '', '   \n'):
+            with self.subTest(log=log):
+                self.assertFalse(match.feel_bars(self.timing(), 'host', log=log)['passed'])
+        missing = dict(item9a_steady_stalls={'status': 'MISS', 'value': None},
+                       item9a_missing_frame_stalls={'status': 'PASS', 'value': 0})
+        self.assertFalse(match.feel_bars(self.timing(**missing), 'host', log='[net-match] hold peer=4 frame=1120\n',
+                                         spikes={1120}, ticks=1201)['passed'])
+        failed = dict(item9a_steady_stalls={'status': 'FAIL', 'value': 1},
+                      item9a_missing_frame_stalls={'status': 'FAIL', 'value': 1})
+        self.assertFalse(match.feel_bars(self.timing(**failed), 'host', log='[net-frame-wait] frame=1120 wait_ms=2\n',
+                                         spikes={1120}, ticks=1201)['passed'])
 
     def test_a_live_rows_one_wait_at_a_held_frame_is_the_spikes(self):
         import relay_cloudflare_match as match
