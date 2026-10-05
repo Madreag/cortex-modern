@@ -489,8 +489,9 @@ class SessionDirectory:
             owners = json.loads(self._owner_state.read_text(encoding="utf-8"))
             if not isinstance(owners, dict):
                 raise ValueError("invalid world owner state")
+            normalized_owners: dict[str, dict[str, Any]] = {}
             for sid, owner in owners.items():
-                uuid.UUID(sid)
+                canonical_id = str(uuid.UUID(sid))
                 if (not isinstance(owner, dict) or not re.fullmatch(r"[0-9a-f]{64}", owner.get("token_sha256", ""))
                         or type(owner.get("migration_gen")) is not int or not 0 <= owner["migration_gen"] <= 10**9):
                     raise ValueError("invalid world owner state")
@@ -501,7 +502,10 @@ class SessionDirectory:
                 if "install_sha256" in owner and (not re.fullmatch(r"[0-9a-f]{64}", owner["install_sha256"])
                         or type(owner.get("world_boot")) is not int or not 0 <= owner["world_boot"] <= 10**9):
                     raise ValueError("invalid world owner state")
-            self._world_owners = owners
+                if canonical_id in normalized_owners and normalized_owners[canonical_id] != owner:
+                    raise ValueError("conflicting world owner state")
+                normalized_owners[canonical_id] = owner
+            self._world_owners = normalized_owners
         self.limiter = DualRateLimiter()
         self.turn_provider = TurnCredentialProvider(turn_config)
         self.turn_limiter = RateLimiter(TURN_REQUESTS_PER_MIN, TURN_REQUESTS_PER_MIN)
@@ -639,14 +643,20 @@ class SessionDirectory:
             if fields.get("persistent_world") is True:
                 world_id = fields.get("world_id", "")
                 try:
-                    uuid.UUID(world_id)
+                    world_id = str(uuid.UUID(world_id))
                 except (ValueError, TypeError, AttributeError):
                     raise FieldError("invalid_field", "world_id") from None
-                if resume is not None and resume != world_id:
-                    raise PermissionError("forbidden")
-                if resume is None:
-                    resume = world_id
-                    data = dict(data, resume_session_id=world_id)
+                fields["world_id"] = world_id
+                if resume is not None:
+                    try:
+                        resume = str(uuid.UUID(resume))
+                    except (ValueError, TypeError, AttributeError):
+                        raise PermissionError("forbidden") from None
+                    if resume != world_id:
+                        raise PermissionError("forbidden")
+                # Equivalent UUID spellings share one owner proof.
+                resume = world_id
+                data = dict(data, resume_session_id=world_id)
             claimed = optional_generation(data)
             generation = claimed or 0
             if resume is not None:

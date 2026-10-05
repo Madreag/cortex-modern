@@ -2160,6 +2160,19 @@ class DirectoryTests(unittest.TestCase):
             store.register(alias, "192.0.2.3", 23, "cccccccccccccccc")
         with self.assertRaises(PermissionError, msg="F3: a new resume id duplicated a known world"):
             store.register(dict(request, resume_session_id=str(uuid.uuid4())), "192.0.2.3", 24, "cccccccccccccccc")
+        for alternate in (world_id.upper(), world_id.replace("-", "")):
+            with self.assertRaises(PermissionError, msg="F3: an alternate UUID spelling duplicated a known world's owner"):
+                store.register(dict(request, world_id=alternate, resume_session_id=alternate), "192.0.2.3", 25, "cccccccccccccccc")
+        with tempfile.TemporaryDirectory() as temporary:
+            owner_file = Path(temporary) / "world-owners.json"
+            owner_file.write_text(json.dumps({world_id.upper(): store._world_owners[world_id]}), encoding="utf-8")
+            restarted = session_directory.SessionDirectory(300, 5, owner_state=owner_file)
+            with self.assertRaises(PermissionError, msg="F3: a noncanonical saved owner allowed a tokenless claim"):
+                restarted.register(request, "192.0.2.3", 26, "cccccccccccccccc")
+            resumed = restarted.register(dict(current, world_id=world_id.upper(), resume_session_id=world_id.upper(), resume_token=own["token"]),
+                                         "192.0.2.2", 27, "fedcba9876543210")
+            self.assertEqual(resumed["session_id"], world_id, "F3: a proved alternate spelling changed the world id")
+            self.assertEqual(list(json.loads(owner_file.read_text(encoding="utf-8"))), [world_id], "F3: saved ownership retained duplicate spellings")
 
     def test_lost_register_reply_survives_live_updates_and_a_long_outage(self) -> None:
         store = session_directory.SessionDirectory(15, 5)
