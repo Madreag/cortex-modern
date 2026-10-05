@@ -1360,6 +1360,7 @@ namespace RTE {
 		friend bool TestSignalPumpInitialCredential(std::string* error);
 		friend bool TestStaleWorldImageRecaptures(std::string* error);
 		friend bool TestWorldCatchUpRefusal(std::string* error);
+		friend bool TestWorldDisconnectReason(bool watcher, std::string* error);
 		void InstallIcePump(NetMuxTransport& mux, bool host);
 		void RefuseWorldCatchUpLocked(const std::string& rejectText);
 		std::string RefreshDirectorySignalCredentialLocked(uint64_t nowMs);
