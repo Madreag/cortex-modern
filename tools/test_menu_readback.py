@@ -163,6 +163,8 @@ SIZE_GATES = (
     ("lobby-name", "1280x720"),
     ("lobby-name", "1920x1080"),
     ("live", "1280x720"),
+    # The start countdown pictured at the second size too.
+    ("lobby-countdown", "1280x720"),
     # Every screen's controls by hand at the three sizes and in the 2560x1440 window a 960x540 screen is shown in.
     *((case, size) for case in CASES if case.startswith("sweep-") for size in ("640x360", "1280x720", "960x540@2.6667")),
 )
@@ -814,11 +816,12 @@ def lobby_case(case, port, root):
         host = (host_lobby(port) + "wait_connected 2 60\nwait_label LabelMultiplayerStatus Start Match starts in 30 s\n"
                 "assert_enabled ButtonMultiplayerStart 1\n"
                 "activate ButtonMultiplayerStart\nwait_label LabelMultiplayerStatus Starting in\nassert_label ButtonMultiplayerStart Cancel Start\n"
-                f"wait_file {marks['saw']} 30\nactivate ButtonMultiplayerStart\nwait_label LabelMultiplayerStatus Start Match starts in 30 s\n"
+                # The count as the host sees it, Cancel Start in place of Start Match, pictured.
+                f"dump_host_options\nwait_file {marks['saw']} 30\nactivate ButtonMultiplayerStart\nwait_label LabelMultiplayerStatus Start Match starts in 30 s\n"
                 f"assert_label ButtonMultiplayerStart Start Match\ntouch_file {marks['cancelled']}\nwait_file {marks['cleared']} 30\n"
                 "activate ButtonMultiplayerStart\nwait_label LabelMultiplayerStatus Starting in\nwait_state Running 50\nexit\n")
         client = (join_by_address(port) + "wait_label LabelMultiplayerStatus The host is starting the match in\n"
-                  f"wait_label LabelMultiplayerStatus press Ready\ntouch_file {marks['saw']}\nwait_file {marks['cancelled']} 30\n"
+                  f"wait_label LabelMultiplayerStatus press Ready\ndump_host_options\ntouch_file {marks['saw']}\nwait_file {marks['cancelled']} 30\n"
                   f"wait_label LabelMultiplayerStatus Press Ready when you're ready to play\ntouch_file {marks['cleared']}\n"
                   "wait_label LabelMultiplayerStatus The host is starting the match in\nwait_state Running 50\nexit\n")
     elif case == "lobby-last-ready":
