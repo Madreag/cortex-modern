@@ -244,8 +244,8 @@ Public names first; the names used inside the project in parentheses.
 
 ## Branches and releases
 
-- `alpha/v1-20260923`: the alpha. Every reviewed fix lands here. This README describes this branch.
-- `stage2/*`: work branches, one per change, merged into the alpha as they are reviewed and built.
+- `main`: the alpha. A plain clone gives you this branch, and this README describes it.
+- `cm-dev`: the integration branch. Every change lands here first, reviewed and built, and `main` is fast-forwarded from it.
 - `development`: the Community Project's upstream branch, untouched, kept for merging their work in.
 - Releases will be tags with packages for the three operating systems, checksums and the matching source. Pre-releases are flagged, so "latest" never points at an alpha.
 
@@ -259,7 +259,7 @@ Multiplayer needs the GameNetworkingSockets library (GNS). A build without it is
 <summary><b>Windows (Visual Studio)</b></summary>
 
 1. Install [Visual Studio Community](https://visualstudio.microsoft.com/downloads/) 2019 (16.10 or newer) or 2022 with the C++ workload, and both x86 and x64 [Visual C++ Redistributables](https://support.microsoft.com/en-us/help/2977003/the-latest-supported-visual-c-downloads).
-2. Clone this repository and check out the alpha branch.
+2. Clone this repository. The default branch, `main`, is the alpha.
 3. Build or install GNS and point `GNS_ROOT` and `GNS_DEP_ROOT` at it (`RTEA.common.props` reads them).
 4. Copy `fmod.dll` from `external\lib\win` into the root directory.
 5. Open `RTEA.sln`, choose x64 and a configuration, build and run.
@@ -278,7 +278,6 @@ Dependencies: `meson` (0.60+), `ninja`, a C++17 compiler (GCC 11+ or Clang 13+),
 ```sh
 git clone https://github.com/Madreag/cortex-modern.git
 cd cortex-modern
-git checkout alpha/v1-20260923
 meson setup build --buildtype=release
 ninja -C build
 ```
