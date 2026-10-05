@@ -148,7 +148,8 @@ namespace RTE {
 	void NetDirectoryClient::ApplyRefusedResumes(NetDirectoryRegisterRequest& row) const {
 		const auto refused = [&] { return std::find(m_RefusedResumes.begin(), m_RefusedResumes.end(), std::make_pair(row.resumeSessionId, row.resumeToken)) != m_RefusedResumes.end(); };
 		while (!row.resumeSessionId.empty() && refused()) {
-			if (row.persistentWorld && row.worldId == row.resumeSessionId && !row.resumeToken.empty()) {
+			if (row.persistentWorld && row.worldId == row.resumeSessionId) {
+				if (row.resumeToken.empty()) break;
 				row.resumeToken.clear();
 			} else {
 				row.resumeSessionId.clear();
@@ -164,9 +165,8 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::Advertise(const NetDirectoryRegisterRequest& row, bool running, bool listed) {
-		const bool hiddenLatchFailed = m_State == State::Failed && m_HiddenUnsupported;
 		m_Row = row;
-		// The host passes its row every frame: a claim the directory refused is never presented again.
+		// A refused stored token gives way to the world's first-boot claim.
 		ApplyRefusedResumes(m_Row);
 		m_Running = running;
 		m_DesiredListed = listed;
@@ -174,19 +174,18 @@ namespace RTE {
 			m_HiddenUnsupported = false;
 		}
 		if (!m_Listed) {
-			m_Reregistered = false;
 			// m_NextAttemptMs stays: a 429 or backoff deadline binds every request, whatever the intent.
 			m_BackoffMs = 0;
 			// A hidden intent that a legacy service already refused stays Failed on repeat calls.
 			if (m_State == State::Failed && (listed || !m_HiddenUnsupported)) {
 				SetState(State::Idle);
 			}
-		} else if (hiddenLatchFailed && listed) {
-			// A visible intent resumes ordinary registration from the hidden-unsupported failure.
-			SetState(State::Idle);
+		} else if (m_State == State::Failed && listed) {
+			SetState(m_SessionId.empty() ? State::Registering : State::Registered);
 		}
 		m_Listed = true;
 	}
+
 
 	void NetDirectoryClient::AbandonLease() {
 		if (m_Request) {
@@ -485,8 +484,11 @@ namespace RTE {
 		if (reply.statusCode == 403 && !m_Row.resumeSessionId.empty()) {
 			// The stored row token is not this row's any more (a directory that restarted holds none): a world claims its own id
 			// again, anything else registers fresh, instead of leaving the row unlisted for the rest of its life.
-			if (m_RefusedResumes.size() >= c_MaxRefusedResumes) m_RefusedResumes.erase(m_RefusedResumes.begin());
-			m_RefusedResumes.emplace_back(m_Row.resumeSessionId, m_Row.resumeToken);
+			const auto claim = std::make_pair(m_Row.resumeSessionId, m_Row.resumeToken);
+			if (std::find(m_RefusedResumes.begin(), m_RefusedResumes.end(), claim) == m_RefusedResumes.end()) {
+				if (m_RefusedResumes.size() >= c_MaxRefusedResumes) m_RefusedResumes.erase(m_RefusedResumes.begin());
+				m_RefusedResumes.push_back(claim);
+			}
 			ApplyRefusedResumes(m_Row);
 			NoteError(m_Row.resumeSessionId.empty() ? "register refused (403): the stored directory row is not ours, registering fresh"
 			                                        : "register refused (403): the directory holds no token for the world's row, claiming the world's id again");
@@ -494,7 +496,8 @@ namespace RTE {
 			return;
 		}
 		NoteError("register refused: HTTP " + std::to_string(reply.statusCode));
-		SetState(State::Failed);
+		ScheduleRetry(nowMs);
+		if (!m_Listed || !m_DesiredListed) SetState(State::Failed);
 	}
 
 	void NetDirectoryClient::HandleHeartbeatReply(const Reply& reply, uint64_t nowMs) {
@@ -533,8 +536,6 @@ namespace RTE {
 			m_ExpiresInS = response.expiresInS;
 			m_NextHeartbeatMs = nowMs + static_cast<uint64_t>(m_HeartbeatS) * 1000;
 			m_BackoffMs = 0;
-			// A row that beats again has lived: a service that forgets it later is answered with another register.
-			m_Reregistered = false;
 			return;
 		}
 		if (reply.statusCode == 404) {
@@ -552,15 +553,8 @@ namespace RTE {
 			m_SessionId.clear();
 			m_Token.clear();
 			SetState(State::Registering);
-			// The row expired or the service forgot it: it registers again at once. Lost again before it beat, the service is
-			// restarting or throttling it: it asks again after the backoff, and a listed row is never given up.
-			if (m_Reregistered) {
-				NoteError("heartbeat: row lost again after re-register, registering again after the backoff");
-				ScheduleRetry(nowMs);
-				return;
-			}
-			m_Reregistered = true;
-			NoteError("heartbeat: row gone (404), re-registering once");
+			NoteError("heartbeat: row gone (404), re-registering after the backoff");
+			ScheduleRetry(nowMs);
 			return;
 		}
 		if (reply.statusCode == 429) {
@@ -577,7 +571,8 @@ namespace RTE {
 			return;
 		}
 		NoteError("heartbeat refused: HTTP " + std::to_string(reply.statusCode));
-		SetState(State::Failed);
+		ScheduleRetry(nowMs);
+		if (!m_Listed || !m_DesiredListed) SetState(State::Failed);
 	}
 
 	void NetDirectoryClient::HandleDeleteReply(const Reply& reply, uint64_t nowMs) {

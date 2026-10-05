@@ -1167,26 +1167,29 @@ namespace RTE {
 				s.client.Update(0);
 				s.client.Update(0);
 				s.client.Update(5000); // heartbeat -> 404
-				s.client.Update(5000); // handled: one re-register is issued immediately
+				s.client.Update(5000);
+				s.client.Update(9999);
+				if (s.sent->size() != 2) { *error = "the first 404 retry ignored its backoff"; return false; }
+				s.client.Update(10000);
 				if (s.sent->size() != 3 || !RequestIs(s.sent->at(2), "POST", "/v1/sessions", error)) {
 					*error = error->empty() ? "no re-register after the 404" : *error;
 					return false;
 				}
-				s.client.Update(5000); // the second registration lands
+				s.client.Update(10000);
 				if (s.client.GetState() != NetDirectoryClient::State::Registered || s.client.GetSessionId() != "8c9d2e1f-2222-4333-8444-555566667777") {
 					*error = "the re-registered session was not adopted";
 					return false;
 				}
-				s.client.Update(10000); // heartbeat against the new session -> 404 again
-				s.client.Update(10000); // lost again before it beat: no register at once, the backoff first
+				s.client.Update(15000);
+				s.client.Update(15000);
 				if (s.client.GetState() != NetDirectoryClient::State::Registering || s.sent->size() != 4) {
 					*error = std::string("a second 404 before the row beat was not held to the backoff: state=") + NetDirectoryClient::StateName(s.client.GetState()) +
 					         " requests=" + std::to_string(s.sent->size());
 					return false;
 				}
-				s.client.Update(14999);
-				s.client.Update(15000); // the backoff is over: the row registers again, never given up
-				s.client.Update(15000);
+				s.client.Update(19999);
+				s.client.Update(20000);
+				s.client.Update(20000);
 				if (s.sent->size() != 5 || !RequestIs(s.sent->at(4), "POST", "/v1/sessions", error) || s.client.GetState() != NetDirectoryClient::State::Registered ||
 				    s.client.GetSessionId() != "9d2e1f3a-3333-4444-8555-666677778888") {
 					*error = std::string("the row lost twice was given up: state=") + NetDirectoryClient::StateName(s.client.GetState()) + " requests=" + std::to_string(s.sent->size()) +
@@ -1224,7 +1227,7 @@ namespace RTE {
 					s.client.Advertise(row, true, true);
 					s.client.Update(nowMs);
 				};
-				for (uint64_t now: {0, 0, 5000, 5000, 10000, 10000, 10000, 10000, 15000, 15000, 20000, 20000, 25000, 25000, 25000, 25000, 30000, 30000}) frame(now);
+				for (uint64_t now = 0; now <= 90000 && s.client.GetToken() != "tok-3"; ++now) frame(now);
 				std::vector<std::string> claims;
 				for (const NetDirectoryClient::Request& request: *s.sent) {
 					if (request.method != "POST" || request.path != "/v1/sessions") continue;
