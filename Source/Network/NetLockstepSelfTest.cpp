@@ -2090,6 +2090,13 @@ namespace RTE {
 				if (complete) { ++now; return true; }
 			}
 			*error = "the bounded-input fixture did not finish its accepted startup prefix";
+			for (const auto& [peer, wire]: peers) {
+				const auto report = nlohmann::json::parse(peer->BuildReportJson());
+				*error += " peer=" + std::to_string(peer->GetConfig().localPeerId) + " next=" + std::to_string(peer->GetStats().nextFrame) +
+				          " resume=" + std::to_string(peer->GetResumeFrame()) + " state=" + NetLockstepCoordinator::StateName(peer->GetState()) +
+				          " receipts=" + report.at("input_acceptance_receipts").dump() + " mark=" + report.at("input_accepted_through").dump() +
+				          " rejected=" + report.at("input_acceptance_rejections").dump();
+			}
 			return false;
 		}
 
@@ -2654,7 +2661,7 @@ namespace RTE {
 			host.Tick(150);
 			if (!host.QueueLocalInput(20, {}, {}, error)) {
 				*error = "timing fixture after deadline: " + *error + " next=" + std::to_string(host.GetStats().nextFrame) +
-				         " holds=" + std::to_string(host.GetStats().peers.at(2).holds); return false;
+				         " holds=" + std::to_string(host.GetStats().peers.at(2).holds) + " " + host.DescribePendingTimingDecisions(20); return false;
 			}
 			host.Tick(151);
 			if (host.TimingDecisionPendingAt(20) || !host.PopReadyFrame(ready) || ready.frame != 20 ||
