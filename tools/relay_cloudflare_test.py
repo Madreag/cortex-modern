@@ -755,7 +755,7 @@ class FeelBars(unittest.TestCase):
                                          spikes={1120}, ticks=1201)['passed'])
 
     def test_a_spike_needs_the_runs_measured_bound(self):
-        match = self.match()
+        import relay_cloudflare_match as match
         log = ('[net-lockstep] propose hold peer=4 next_frame=1120 played=1 first_missing_ms=2000 now=2100 cause=late_stream\n'
                '[net-match] hold peer=4 frame=1120 AI in control\n')
         self.assertEqual(match.observed_input_spikes(log), {})
