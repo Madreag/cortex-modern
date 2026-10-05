@@ -24247,7 +24247,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					value.substituteSlowPeers = true; value.slowPlayerBoundTicks = 3; value.simTickMs = 1000.0 / 60;
 					value.relayToOtherPeers = peer == 1; value.peerInputDelayFrames = {{1, 0}, {2, delay}}; value.peerIncarnations = {{1, 1}, {2, 1}};
 					value.matchConfig = NetMatchConfigUtil::MakeDefault(value.sessionId); value.matchConfig.delayPolicy = NetMatchDelayPolicy::Fixed;
-					value.matchConfig.inputDelayFrames = 0; value.matchConfig.peerInputDelayFrames = value.peerInputDelayFrames;
+					value.matchConfig.inputDelayFrames = 0; value.matchConfig.peerInputDelayFrames = {0, delay};
 					return value;
 				};
 				if (!StartCoordinatorPair(port, hostWire, clientWire, host, client, config(1), config(2), &error)) return false;
@@ -24353,6 +24353,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (*pair.client.m_HostAcceptedLocalFrames.rbegin() != 4) { error = "another round supplied acceptance"; return false; }
 			stale.roundId = pair.client.GetRoundId(); ++stale.sessionId; pair.client.HandleAck(stale, 1);
 			if (*pair.client.m_HostAcceptedLocalFrames.rbegin() != 4) { error = "another session supplied acceptance"; return false; }
+			Pair zero;
+			if (!zero.Start(47556, 0, error) || !zero.Warm(error)) return false;
 			return true;
 		});
 		row("reclaim_seed", [&](std::string& error) {
