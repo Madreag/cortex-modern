@@ -2,7 +2,7 @@
 
 `play.ps1` launches isolated headed instances for a person at this PC;
 `collect_logs.ps1` packs their logs for review. The full runbook is
-`HANDTEST.md` at the repo root.
+`docs/handtest.md`.
 
 ## Isolation
 
