@@ -961,12 +961,12 @@ def scripts(case, port, root, size="960x540"):
                 "assert_visible LobbyLeaveDialog 1\nactivate ButtonLobbyLeaveStay\nwait 4\nassert_substate Lobby\nwait_state Starting 5\nexit\n")
         return {"host": in_base_words(text) if BASE_WORDS else text}, {}
     if case == "host-hand-open":
-        # Opened by a hand - its press, then its release frames later - Advanced shows the activity's own rules and the saved
-        # timing, never what its controls held before the panel showed the draft.
+        # Opened by a hand - its press, then its release frames later - Advanced shows the activity's own rules and the draft's
+        # own timing (the default redundancy), never what its controls held before the panel showed the draft.
         text = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\nassert_substate HostSetup\n"
                 "activate ButtonHostOptions\nwait 10\nassert_substate HostOptions\n"
                 "activate TabHostPageRules\nwait 3\nassert_checked CheckHostRulesFog 1\nassert_label LabelHostRulesGoldValue 2000 oz\n"
-                "activate TabHostPageTiming\nwait 3\nassert_label ComboHostNetRedundancy 6 ticks\nexit\n")
+                "activate TabHostPageTiming\nwait 3\nassert_label ComboHostNetRedundancy 4 ticks\nexit\n")
         return {"host": in_base_words(text) if BASE_WORDS else text}, {}
     if case == "host-one-draft":
         # The rows, Advanced and the summary are one draft: rows changed after a visit to Advanced reach the lobby.
@@ -1494,7 +1494,8 @@ def scripts(case, port, root, size="960x540"):
                 # kicked client rejoins it below - only the ban list keeps an identity out.
                 "dump_lobby\nassert_label LabelLobbyPlayer1 Open seat - Team 1\n"
                 "assert_label_absent LabelLobbyPlayer0 Joiner\nassert_label_absent LabelLobbyPlayer1 Joiner\n"
-                "assert_label LabelLobbyPlayer2 CPU\n"
+                # The computer's seat, in the lobby's words.
+                "assert_label LabelLobbyPlayer2 AI - Team\n"
                 # The client's rejoin waits on this dump, taken on the options panel so the lobby keeps one capture.
                 "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\ndump_host_options\n"
                 "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
@@ -1715,7 +1716,8 @@ def scripts(case, port, root, size="960x540"):
         text += checks("ComboHostNetPolicy", "CollectionBoxHostPageTiming")
         text += checks("LabelHostNetRedundancy", "CollectionBoxHostPageTiming")
         text += checks("ComboHostNetRedundancy", "CollectionBoxHostPageTiming")
-        text += "assert_label ComboHostNetRedundancy 6 ticks (default)\n"
+        # The saved host defaults' 6 ticks, not the 4-tick default.
+        text += "assert_label ComboHostNetRedundancy 6 ticks\n"
         text += checks("TextHostNetMinDelay", "CollectionBoxHostPageTiming")
         for control in ("LabelHostNetSlowBound", "TextHostNetSlowBound", "LabelHostNetSlowBoundHint", "LabelHostNetSlowPolicy", "ComboHostNetSlowPolicy",
                         "LabelHostNetSlowPolicyHint"):
@@ -2229,7 +2231,7 @@ def run_case(options, case, root, failing=None):
             runs[who] = make_run(options.repo, args, root / who, 180, env=env)
             set_visual_resolution(runs[who], *size_parts(options.size)[:2])
             set_window_multiplier(runs[who], size_parts(options.size)[2])
-            if case in ("lobby", "host-defaults", "host-hand-open"):
+            if case in ("lobby", "host-defaults"):
                 (runs[who].cwd / "Userdata/NetworkHostDefaults.ini").write_text(
                     "Version = 2\nFrameRedundancyTicks = 6\nSlowPlayerBoundTicks = 3\nSlowPlayerPolicy = substitute\n", encoding="utf-8")
             if case in ("host-stun", "host-stun-empty", "host-relay", "net-connection"):
