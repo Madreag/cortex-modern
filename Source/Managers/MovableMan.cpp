@@ -1299,8 +1299,17 @@ void MovableMan::ReconcileLockstepControlBindings() {
 			continue;
 		}
 		const int64_t uid = static_cast<int64_t>(controlled->GetUniqueID());
-		if (ScenarioRunner::GetLockstepActorOwner(uid, controlled->GetTeam(), !controlled->IsPlayerControlled()) != localPeerId) {
+		const bool localHuman = activity->IsLocalHumanSeat(player);
+		if (ScenarioRunner::GetLockstepActorOwner(uid, controlled->GetTeam(), !localHuman && !controlled->IsPlayerControlled()) != localPeerId) {
 			activity->ReleaseLockstepControlOfActor(player);
+		} else if (localHuman && !ScenarioRunner::WorldCatchUpActive() &&
+		           !ScenarioRunner::IsLockstepSeatUnderAI(localPeerId, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()))) {
+			Controller* controller = const_cast<Actor*>(controlled)->GetController();
+			if (controller->GetSeatMode() != Controller::CIM_PLAYER || controller->GetSeatPlayerRaw() != player) {
+				// The local binding can appear after the reclaim event has passed.
+				controller->DropLocalProduction();
+				controller->ResetLocalInputState(Controller::CIM_PLAYER, player);
+			}
 		}
 	}
 }
@@ -7307,6 +7316,7 @@ void MovableMan::UpdateControllers() {
 	RebuildContiguousActorIDs();
 
 	const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) ReconcileLockstepControlBindings();
 	DumpControllerDebugSnapshot("controller_pre", simTick, m_Actors);
 
 	auto applyReplayFrame = [&](const char* phase) -> bool {
