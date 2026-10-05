@@ -32,6 +32,7 @@
 
 namespace RTE {
 	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
+	uint64_t NetLockstepSharedClockMs();
 	static std::atomic<uint64_t> s_CrossTransportResetMs{0};
 
 	namespace {
@@ -82,7 +83,7 @@ namespace RTE {
 				if (!SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, 100.0F)) return false;
 				started = true; firstMs = nowMs; untilMs = nowMs + config.durationMs;
 				DiagnosticLine() << "[test-uplink-stall] begin frame=" << frame << " duration_ms=" << config.durationMs << " send_loss=100 recv_loss=" << GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Recv)
-				                 << " clock_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
+				                 << " clock_ms=" << NetLockstepSharedClockMs() << std::endl;
 				return true;
 			}
 			void Update(uint64_t nowMs) {
@@ -91,7 +92,7 @@ namespace RTE {
 				if (!SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, previousLoss)) return;
 				finished = true;
 				DiagnosticLine() << "[test-uplink-stall] end elapsed_ms=" << nowMs - firstMs << " send_loss=" << previousLoss
-				                 << " clock_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
+				                 << " clock_ms=" << NetLockstepSharedClockMs() << std::endl;
 			}
 		};
 		UplinkStall s_TestUplinkStall;
