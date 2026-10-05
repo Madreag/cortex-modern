@@ -19,6 +19,7 @@
 #include <steam/isteamnetworkingutils.h>
 #include <steam/steamnetworkingsockets.h>
 #endif
+#include "ConsoleMan.h"
 #include "NetIdentity.h"
 #include "NetPortMap.h"
 #include "NetProtocol.h"
@@ -261,6 +262,24 @@ namespace RTE {
 
 	std::string NetIceMenuJoinAddress(const NetDirectoryClient::GameRow& row) {
 		return row.source == "NET" && !row.sessionId.empty() ? "session:" + row.sessionId : row.address;
+	}
+
+	void NetReportGameData(const NetIdentityManifest& manifest) {
+		for (const std::string& line : NetIdentity::DescribeGameData(manifest)) {
+			g_ConsoleMan.PrintString(line);
+			System::PrintDiagnosticLine("[net-identity] " + line.substr(line.find_first_not_of(' ')));
+		}
+	}
+
+	std::string NetIceConnectingLine(uint64_t elapsedMs, uint64_t limitMs, bool hostAnswered, bool relayReady, bool retrying) {
+		// The clock leads, so a status line elided to its box still says how long the wait may last.
+		const std::string opening = std::string(retrying ? "Connecting again" : "Connecting") + " (" + std::to_string(elapsedMs / 1000) + " of " + std::to_string(limitMs / 1000) + " s) - ";
+		if (!hostAnswered) return opening + "waiting for the host's answer";
+		return opening + "testing routes" + (relayReady ? ", relay ready" : "");
+	}
+
+	bool NetIceRetryCanSucceed(uint64_t signalsFromHost, uint64_t refusals) {
+		return signalsFromHost > 0 && refusals == 0;
 	}
 
 	void FillDirectoryLocalIdentity(NetDirectoryLocalIdentity& local, const NetIdentityManifest& manifest) {
@@ -9816,6 +9835,20 @@ static std::string ResyncSaveName() {
 		}
 		browse.StopBrowsing();
 		if (!why.empty()) {
+			if (why == "modules") {
+				NetReportGameData(manifest);
+				for (const NetDirectorySessionRow& row : browse.Rows()) {
+					if (row.sessionId != request.sessionId) continue;
+					NetDirectoryClient::GameRow refused;
+					refused.reason = why;
+					refused.localModuleManifestHash = (row.persistentWorld && worldIdentityBuilt ? worldLocal : local).moduleManifestHash;
+					refused.hostModuleManifestHash = row.moduleManifestHash;
+					// The player reads the sentence; the session id is the log's.
+					System::PrintDiagnosticLine("[net-ice] session " + request.sessionId + " refused: modules");
+					if (error) *error = NetDirectoryClient::JoinRefusalText(refused);
+					return false;
+				}
+			}
 			if (error) *error = "session " + request.sessionId + ": " + why;
 			return false;
 		}
@@ -10076,6 +10109,7 @@ static std::string ResyncSaveName() {
 			runnerConfig.resolveJoinAddress = [this, sessionId, address, iceWanted, local, ticketPath, installKey, baseUrl, certPin]() {
 				NetH4TicketRecord record;
 				{
+		if (request.host) NetReportGameData(manifest);
 					std::lock_guard<std::mutex> lock(m_Mutex);
 					m_TicketStore.SetPath(ticketPath);
 					if (m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) != NetH4TicketLoadResult::Loaded) {

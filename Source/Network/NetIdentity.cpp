@@ -807,6 +807,17 @@ namespace RTE {
 		return digests;
 	}
 
+	std::vector<std::string> NetIdentity::DescribeGameData(const NetIdentityManifest& manifest) {
+		std::vector<std::string> lines;
+		lines.push_back("Your game data " + HashHex(manifest.moduleManifestHash).substr(0, 8) + ": " + std::to_string(manifest.modules.size()) +
+		                " modules - a player whose digest for a module differs has different files in it");
+		for (const NetIdentityModuleEntry& module : manifest.modules) {
+			lines.push_back("  " + module.fileName + " " + HashHex(module.contentHash).substr(0, 12) + " (" + std::to_string(module.fileCount) + " files, " +
+			                std::to_string(module.totalBytes) + " bytes)");
+		}
+		return lines;
+	}
+
 	NetModuleDiff NetIdentity::DiffModules(const std::vector<NetModuleDigestEntry>& local, const std::vector<NetModuleDigestEntry>& remote) {
 		std::map<std::string, const NetModuleDigestEntry*> remoteByName;
 		for (const NetModuleDigestEntry& entry : remote) {

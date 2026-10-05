@@ -82,8 +82,8 @@ namespace RTE {
 		/// The one line the join screen shows for a row. A world reads its boot, its published state and
 		/// its seat and watcher counts; every other row keeps the line it has always had.
 		static std::string DescribeGameRow(const GameRow& row);
-		/// The sentence the join screen shows for a row it refuses.
-		static std::string JoinRefusalText(const GameRow& row);
+		/// The sentence the join screen shows for a row it refuses; brief is the form one line of the list's label holds.
+		static std::string JoinRefusalText(const GameRow& row, bool brief = false);
 
 		NetDirectoryClient();
 		NetDirectoryClient(const NetDirectoryClient&) = delete;

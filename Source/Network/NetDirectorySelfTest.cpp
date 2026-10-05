@@ -2027,6 +2027,9 @@ namespace RTE {
 					if (refusal.rfind(opening, 0) != 0 || refusal.find("console") == std::string::npos || refusal.find("module_manifest") != std::string::npos) {
 						note("modded-host refusal read \"" + refusal + "\"");
 					}
+					if (NetDirectoryClient::JoinRefusalText(netMerged[0], true) != "Cannot join: game data differs - see the console (~)") {
+						note("modded-host brief refusal read \"" + NetDirectoryClient::JoinRefusalText(netMerged[0], true) + "\"");
+					}
 					if (NetDirectoryClient::JoinRefusalText(netMerged[1]) != "Cannot join this game: identity") {
 						note("identity-mismatch refusal read \"" + NetDirectoryClient::JoinRefusalText(netMerged[1]) + "\"");
 					}

@@ -1264,6 +1264,14 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 			if (!row.joinable) {
 				if (m_MultiplayerLanGamesLabel) {
 					m_MultiplayerLanGamesLabel->SetText(NetDirectoryClient::JoinRefusalText(row));
+					// The label holds one line; the whole sentence goes to the console with the module digests.
+					if (m_MultiplayerLanGamesLabel->GetTextWidth() > m_MultiplayerLanGamesLabel->GetWidth()) {
+						m_MultiplayerLanGamesLabel->SetText(NetDirectoryClient::JoinRefusalText(row, true));
+					}
+				}
+				if (row.reason == "modules") {
+					g_ConsoleMan.PrintString(NetDirectoryClient::JoinRefusalText(row));
+					if (m_DirectoryManifest) NetReportGameData(*m_DirectoryManifest);
 				}
 				g_GUISound.BackButtonPressSound()->Play();
 			} else {
@@ -4774,6 +4782,7 @@ void MainMenuGUI::RefreshGamesList() {
 			local.sessionIdentityHash = NetIdentity::HashHex(manifest.sessionIdentityHash);
 			local.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
 			m_DirectoryIdentity = local;
+			m_DirectoryManifest = manifest;
 		}
 		if (worldBuilt) {
 			NetDirectoryLocalIdentity worldLocal;

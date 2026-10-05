@@ -157,6 +157,8 @@ namespace RTE {
 		/// The loaded modules as the diagnostic digest wire carries them, sorted by file name and cut
 		/// to the entry and byte caps. Diagnostic only - admission still decides on the full hashes.
 		static std::vector<NetModuleDigestEntry> BuildModuleDigests(const std::vector<NetIdentityModuleEntry>& modules, size_t maxEntries, bool* outTruncated = nullptr);
+		/// This player's game data as two players compare it: the digest the directory compares, then one line per module.
+		static std::vector<std::string> DescribeGameData(const NetIdentityManifest& manifest);
 		/// Diffs two digest lists by file name, never by load order, so one extra module does not make
 		/// every module after it look different.
 		static NetModuleDiff DiffModules(const std::vector<NetModuleDigestEntry>& local, const std::vector<NetModuleDigestEntry>& remote);

@@ -153,6 +153,12 @@ namespace RTE {
 	bool NetIcePrefersP2P(const NetIceJoinTarget& target, bool iceEnabled);
 	/// Keeps an Internet selection attached to its directory session.
 	std::string NetIceMenuJoinAddress(const NetDirectoryClient::GameRow& row);
+	/// Prints this player's game data digests to the console and the log, where two players whose data differs compare them.
+	void NetReportGameData(const NetIdentityManifest& manifest);
+	/// The line a joiner reads while its ICE connect runs: what it waits on, how long it has waited and how long it may.
+	std::string NetIceConnectingLine(uint64_t elapsedMs, uint64_t limitMs, bool hostAnswered, bool relayReady, bool retrying);
+	/// A connect that ran out of time is worth one more dial only when the host answered it and refused nothing: its session lives.
+	bool NetIceRetryCanSucceed(uint64_t signalsFromHost, uint64_t refusals);
 
 	/// Resolves a session id against a directory listing. Empty and a filled target when the row can
 	/// be joined, else the join list's own refusal label for it.
