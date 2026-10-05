@@ -85,7 +85,7 @@ A walked expectation is a list of tokens that must all hold. A not-walked expect
 | kick | 1 | seat=Left round=run sess=ended:ParticipantRemoved | NP-KICK MATCH-END |  | walked |
 | ban | 1 | seat=Left round=run sess=ended:ParticipantBanned | NP-KICK MATCH-END |  | walked |
 | seat-release | 1 | seat=Active round=run holds=0 sess=ready | LS-STOP |  | walked |
-| own-cap | 1 | seat=Left round=run sess=ended | LEAVE MATCH-END |  | walked |
+| own-cap | 1 | seat=Held round=run sess=ended | LEAVE LEAVE-HELD |  | walked |
 | resume-from-disk | 2 | refuse: a running round is not replaced by a disk resume (conservative) | GAP | GAP: a resume from disk requested while a round runs | not walked: a NetMatchService step (private capture writer, world join, checkpoint resume) that needs an activity load; the in-process rig has none |
 | match-over | 1 | round=over peer=over sess=ended | LS-STOP NS-PHASE |  | walked |
 | link-blip | 1 | seat=Active round=run peer=run holds=0 sess=ready | HOLD |  | walked |
@@ -116,7 +116,7 @@ A walked expectation is a list of tokens that must all hold. A not-walked expect
 | kick | 1 | seat=Left round=run sess=ended:ParticipantRemoved | NP-KICK MATCH-END |  | walked |
 | ban | 1 | seat=Left round=run sess=ended:ParticipantBanned | NP-KICK MATCH-END |  | walked |
 | seat-release | 1 | seat=Left round=run sess=ready | LS-STOP MATCH-END |  | walked |
-| own-cap | 1 | seat=Held round=run sess=ended | LEAVE MATCH-END |  | walked |
+| own-cap | 1 | seat=Held round=run sess=ended | LEAVE LEAVE-HELD |  | walked |
 | resume-from-disk | 2 | refuse: a running round is not replaced by a disk resume (conservative) | GAP | GAP: a resume from disk requested while a round runs | not walked: a NetMatchService step (private capture writer, world join, checkpoint resume) that needs an activity load; the in-process rig has none |
 | match-over | 1 | round=over sess=ended | NS-PHASE |  | walked |
 | link-blip | 1 | seat=Held peer=held round=run sess=ready | RETURN |  | walked |
@@ -178,7 +178,7 @@ A walked expectation is a list of tokens that must all hold. A not-walked expect
 | kick | 1 | seat=Left round=run | NP-KICK MATCH-END |  | walked; coordinator half only: the handshaking returner is refused by the admission plane (NetReconnectHost), which the rig does not compose |
 | ban | 1 | seat=Left round=run | NP-KICK MATCH-END |  | walked; coordinator half only: the handshaking returner is refused by the admission plane (NetReconnectHost), which the rig does not compose |
 | seat-release | 1 | seat=Left round=run | LS-STOP MATCH-END |  | walked |
-| own-cap | 1 | seat=Held round=run sess=ended | LEAVE MATCH-END |  | walked |
+| own-cap | 1 | seat=Held round=run sess=ended | LEAVE LEAVE-HELD |  | walked |
 | resume-from-disk | 2 | refuse: a running round is not replaced by a disk resume (conservative) | GAP | GAP: a resume from disk requested while a round runs | not walked: a NetMatchService step (private capture writer, world join, checkpoint resume) that needs an activity load; the in-process rig has none |
 | match-over | 1 | round=over sess=ended | NS-PHASE |  | walked |
 | link-blip | 1 | seat=Held round=run sess=alive | RETURN |  | walked |
@@ -209,7 +209,7 @@ A walked expectation is a list of tokens that must all hold. A not-walked expect
 | kick | 1 | seat=Left round=run sess=ended:ParticipantRemoved | NP-KICK MATCH-END |  | walked |
 | ban | 1 | seat=Left round=run sess=ended:ParticipantBanned | NP-KICK MATCH-END |  | walked |
 | seat-release | 1 | seat=Left round=run | LS-STOP MATCH-END |  | walked |
-| own-cap | 1 | seat=Held round=run sess=ended | LEAVE MATCH-END |  | walked |
+| own-cap | 1 | seat=Held round=run sess=ended | LEAVE LEAVE-HELD |  | walked |
 | resume-from-disk | 2 | refuse: a running round is not replaced by a disk resume (conservative) | GAP | GAP: a resume from disk requested while a round runs | not walked: a NetMatchService step (private capture writer, world join, checkpoint resume) that needs an activity load; the in-process rig has none |
 | match-over | 1 | round=over sess=ended | NS-PHASE |  | walked |
 | link-blip | 1 | seat=Held round=run sess=phase:ImagePending | RETURN |  | walked |
@@ -240,7 +240,7 @@ A walked expectation is a list of tokens that must all hold. A not-walked expect
 | kick | 1 | seat=Left round=run sess=ended:ParticipantRemoved | NP-KICK MATCH-END |  | walked |
 | ban | 1 | seat=Left round=run sess=ended:ParticipantBanned | NP-KICK MATCH-END |  | walked |
 | seat-release | 1 | seat=Left round=run | LS-STOP MATCH-END |  | walked |
-| own-cap | 1 | seat=Held round=run sess=ended | LEAVE MATCH-END |  | walked |
+| own-cap | 1 | seat=Held round=run sess=ended | LEAVE LEAVE-HELD |  | walked |
 | resume-from-disk | 2 | refuse: a running round is not replaced by a disk resume (conservative) | GAP | GAP: a resume from disk requested while a round runs | not walked: a NetMatchService step (private capture writer, world join, checkpoint resume) that needs an activity load; the in-process rig has none |
 | match-over | 1 | round=over sess=ended | NS-PHASE |  | walked |
 | link-blip | 1 | seat=Held round=run sess=phase:Loading | RETURN |  | walked |
@@ -271,7 +271,7 @@ A walked expectation is a list of tokens that must all hold. A not-walked expect
 | kick | 1 | seat=Left round=run sess=ended:ParticipantRemoved | NP-KICK MATCH-END |  | walked |
 | ban | 1 | seat=Left round=run sess=ended:ParticipantBanned | NP-KICK MATCH-END |  | walked |
 | seat-release | 1 | seat=Left round=run | LS-STOP MATCH-END |  | walked |
-| own-cap | 1 | seat=Held round=run sess=ended | LEAVE MATCH-END |  | walked |
+| own-cap | 1 | seat=Held round=run sess=ended | LEAVE LEAVE-HELD |  | walked |
 | resume-from-disk | 2 | refuse: a running round is not replaced by a disk resume (conservative) | GAP | GAP: a resume from disk requested while a round runs | not walked: a NetMatchService step (private capture writer, world join, checkpoint resume) that needs an activity load; the in-process rig has none |
 | match-over | 1 | round=over sess=ended | NS-PHASE |  | walked |
 | link-blip | 1 | seat=Held round=run sess=phase:TailReplay | RETURN |  | walked |
@@ -302,7 +302,7 @@ A walked expectation is a list of tokens that must all hold. A not-walked expect
 | kick | 1 | seat=Left round=run sess=ended:ParticipantRemoved | NP-KICK MATCH-END |  | walked |
 | ban | 1 | seat=Left round=run sess=ended:ParticipantBanned | NP-KICK MATCH-END |  | walked |
 | seat-release | 1 | seat=Active round=run holds=0 sess=ready | LS-STOP |  | walked |
-| own-cap | 1 | seat=Left round=run sess=ended | LEAVE MATCH-END |  | walked |
+| own-cap | 1 | seat=Held round=run sess=ended | LEAVE LEAVE-HELD |  | walked |
 | resume-from-disk | 2 | refuse: a running round is not replaced by a disk resume (conservative) | GAP | GAP: a resume from disk requested while a round runs | not walked: a NetMatchService step (private capture writer, world join, checkpoint resume) that needs an activity load; the in-process rig has none |
 | match-over | 1 | round=over peer=over sess=ended | LS-STOP NS-PHASE |  | walked |
 | link-blip | 1 | seat=Active round=run peer=run holds=0 sess=ready | HOLD |  | walked |
@@ -357,7 +357,7 @@ A walked expectation is a list of tokens that must all hold. A not-walked expect
 | migration-begin | 2 | sub=run subhost=2 | DESIGN-MIGRATION |  | walked |
 | migration-complete | 2 | sub=run subhost=2 | HOSTLOSS-HELD |  | walked |
 | migration-fail | 2 | legal: the survivors leave to the landing with 'The host left the match' | HOSTLOSS-HELD |  | not walked: no in-process lever fails a migration short of losing every successor |
-| migration-successor-lost | 2 | subhost=3 | DESIGN-MIGRATION |  | walked |
+| migration-successor-lost | 2 | sub=unreachable subhost=1 | QUORUM |  | walked |
 | late-join | 2 | api=refused sub=run subhost=2 | TICKET |  | walked |
 | ticket-rejoin | 2 | sub=run subhost=2 | ADMISSION |  | walked |
 | held-rejoin | 2 | api=refused sub=run subhost=2 | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | walked |
@@ -405,15 +405,15 @@ A walked expectation is a list of tokens that must all hold. A not-walked expect
 
 | event | tier | expected outcome | source | gap | walk |
 |---|---|---|---|---|---|
-| hold-proposed | 1 | seat=Left peer=left round=run holds=0 sess=ready | HOLD |  | walked |
-| hold-resolved | 1 | seat=Left peer=left round=run sess=ready | RETURN RECLAIM |  | walked |
-| park-begin | 1 | seat=Left peer=left round=run holds=0 sess=ready | LS-PARK |  | walked |
-| park-end | 1 | seat=Left peer=left round=run holds=0 sess=ready | GAP | GAP: a park end with no park open | walked |
+| hold-proposed | 1 | seat=Held peer=left round=run holds=0 sess=ready | HOLD |  | walked |
+| hold-resolved | 1 | seat=Held peer=left round=run sess=ready | RETURN RECLAIM |  | walked |
+| park-begin | 1 | seat=Held peer=left round=run holds=0 sess=ready | LS-PARK |  | walked |
+| park-end | 1 | seat=Held peer=left round=run holds=0 sess=ready | GAP | GAP: a park end with no park open | walked |
 | private-capture-complete | 1 | ignore: no seat waits on that image (conservative) | GAP | GAP: a private image completing for a seat that is not waiting on one | not walked: a NetMatchService step (private capture writer, world join, checkpoint resume) that needs an activity load; the in-process rig has none |
 | world-image-offered | 2 | ignore: no seat waits on an image (conservative) | GAP | GAP: a world image offered to a seat that is not waiting on one | not walked: a NetMatchService step (private capture writer, world join, checkpoint resume) that needs an activity load; the in-process rig has none |
 | opening-resume-offer | 2 | refuse: the opening resume offer is retired once the round runs past its anchor; a rejoin takes the image path with the newest image | WORLD-RESUME |  | not walked: a NetMatchService step (private capture writer, world join, checkpoint resume) that needs an activity load; the in-process rig has none |
 | tail-replay-complete | 1 | n/a: the completion is raised only by the seat's own tail replay | NS-PHASE |  | not walked: a NetMatchService step (private capture writer, world join, checkpoint resume) that needs an activity load; the in-process rig has none |
-| resync-relaunch | 1 | round=relaunch seat=Left sess=ready | LS-STOP MATCH-END |  | walked |
+| resync-relaunch | 1 | round=relaunch seat=Held sess=ready | LS-STOP LEAVE-HELD |  | walked |
 | host-goodbye | 1 | round=ended peer=left sess=ended | HOSTLOSS-HELD TICKET |  | walked |
 | host-lost | 1 | peer=left sess=ended | HOSTLOSS-HELD |  | walked |
 | migration-begin | 2 | api=refused round=run | HOSTLOSS-HELD |  | walked |
@@ -421,16 +421,16 @@ A walked expectation is a list of tokens that must all hold. A not-walked expect
 | migration-fail | 2 | n/a: raised only while a host migration runs | DESIGN-MIGRATION |  | not walked: needs a migration in progress (three peers); not composed in this row |
 | migration-successor-lost | 2 | n/a: raised only while a host migration runs | DESIGN-MIGRATION |  | not walked: needs a migration in progress (three peers); not composed in this row |
 | late-join | 2 | api=refused round=run sess=ready | TICKET RECLAIM |  | walked |
-| ticket-rejoin | 1 | seat=Left peer=left round=run sess=ready | ADMISSION |  | walked |
-| held-rejoin | 1 | api=refused seat=Left round=run sess=ready | MATCH-END TICKET |  | walked |
+| ticket-rejoin | 1 | seat=Held peer=left round=run sess=ready | ADMISSION |  | walked |
+| held-rejoin | 1 | api=ok seat=Reclaiming round=run sess=ready | LEAVE-HELD RETURN |  | walked |
 | kick | 1 | seat=Left round=run sess=ended:ParticipantRemoved | NP-KICK MATCH-END |  | walked |
 | ban | 1 | seat=Left round=run sess=ended:ParticipantBanned | NP-KICK MATCH-END |  | walked |
 | seat-release | 1 | seat=Left round=run sess=ready | LS-STOP MATCH-END |  | walked |
-| own-cap | 1 | seat=Left round=run sess=ended | LEAVE MATCH-END |  | walked |
+| own-cap | 1 | seat=Held round=run sess=ended | LEAVE LEAVE-HELD |  | walked |
 | resume-from-disk | 2 | refuse: a running round is not replaced by a disk resume (conservative) | GAP | GAP: a resume from disk requested while a round runs | not walked: a NetMatchService step (private capture writer, world join, checkpoint resume) that needs an activity load; the in-process rig has none |
 | match-over | 1 | round=over sess=ended | NS-PHASE |  | walked |
-| link-blip | 1 | seat=Left peer=left round=run sess=ready | RETURN |  | walked |
-| link-restore | 1 | seat=Left peer=left round=run sess=ready | RETURN |  | walked |
+| link-blip | 1 | seat=Held peer=left round=run sess=ready | RETURN |  | walked |
+| link-restore | 1 | seat=Held peer=left round=run sess=ready | RETURN |  | walked |
 
 ## Gap list (64 pairs)
 
