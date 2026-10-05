@@ -27,3 +27,16 @@ native gaps and identities must still be assessed. Raw difference counts include
 candidate objects and clock context and are not bug counts.
 
 The observer itself is `Source/System/ContractAudit.h`: read-only friend access to the classes it records.
+
+## Audit scripts
+
+`--script` stages one of these as the audited activity's script; each reads values through the public Lua API so the
+native observer has an independent account to compare with:
+
+- `mod_native_contracts.lua`: every native property of every object class, through its getters.
+- `mod_activity_contracts.lua`: the activity's own values.
+- `mod_ui_contracts.lua`: the activity-owned UI and its retained native values; `mod_ui_perturb_contracts.lua` is the
+  same with one deliberate change the audit must report (the `memory-perturb` operation).
+- `mod_primitive_contracts.lua`: drawing calls queued during a tick, read back primitive by primitive.
+- `mod_reference_contracts.lua`: retained references to native objects (`--variant-env CC_CONTRACT_REFERENCE`).
+- `mod_failure_continuation.lua`: script state that must continue unchanged after a failed save or load.
