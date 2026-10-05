@@ -3017,7 +3017,7 @@ def run_case(options, case, root, failing=None):
             assert len(bvb_closed) >= 2, bvb_closed
             assert bvb_closed[-1]["text"] and bvb_closed[-1]["text"] != bvb_closed[0]["text"], bvb_closed
             assert "Grasslands" not in bvb_closed[-1]["text"], bvb_closed[-1]
-            assert all(row["text"] == "Brain vs Brain - Base.rte" or row["dropped"] for row in picker[2:]), picker
+            assert all(row["text"] == "Brain vs Brain" or row["dropped"] for row in picker[2:]), picker
             result["picker_cycle"] = picker
             result["scene_cycle"] = scenes
             picked_scene = bvb_closed[-1]["text"]
