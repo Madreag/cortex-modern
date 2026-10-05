@@ -1,0 +1,1 @@
+Microsoft Visual C++ runtime libraries: copyright Microsoft Corporation; redistributed under the Visual Studio license terms (https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files).

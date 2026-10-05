@@ -26,6 +26,9 @@ SUITES = (
     ("e2e-video", ["test_e2e_video.py"]),
     ("lobby-wire", ["test_net_lobby_wire.py"]),
     ("settings-seed", ["test_settings_seed.py"]),
+    ("package-contents", ["test_package_contents.py"]),
+    ("package-evidence", ["test_package_evidence.py"]),
+    ("package-runner-scope", ["test_package_runner_scope.py"]),
     ("launch-budget", ["-m", "unittest", "feel.test_launch_budget"]),
     ("cross-driver", ["-m", "unittest", "feel.test_cross_driver"]),
     ("cross-report", ["-m", "unittest", "feel.test_report", "feel.test_report_serialization", "feel.test_harness_cost",
@@ -71,7 +74,8 @@ SUITES = (
 )
 # The cross driver's suite reads the Windows boxes' trees and ctypes.WinDLL; the other platforms run the cross peers, not this suite.
 # The acceptance and world row suites test the Windows coordinator, which names its boxes' D: trees.
-WINDOWS_ONLY = {"runner-feel-marker", "runner-limits", "feel-engine-placement", "cross-driver", "acceptance-rows", "world-rows"}
+WINDOWS_ONLY = {"runner-feel-marker", "runner-limits", "feel-engine-placement", "cross-driver", "acceptance-rows", "world-rows",
+                "package-runner-scope"}
 
 
 def suites_for(inventory: Path) -> tuple:

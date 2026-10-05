@@ -6,14 +6,17 @@ import tempfile
 import unittest
 
 import package_windows
+from test_package_contents import pe
 
 
 class PackageEvidence(unittest.TestCase):
     def fixture(self, root):
         for name in package_windows.REQUIRED_PAYLOAD - {package_windows.BUILD_RECEIPT}:
             path = root / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_text('payload')
+        pe(root / package_windows.EXECUTABLE)
         exe = package_windows.sha256(root / package_windows.EXECUTABLE)
-        (root / package_windows.BUILD_RECEIPT).write_text(json.dumps(dict(commit='a'*40, executable_sha256=exe)))
+        (root / package_windows.BUILD_RECEIPT).write_text(json.dumps(dict(commit='a'*40, executable_sha256=exe,
+                                                                       configuration='Final', version='1.0.0')))
         entries = [dict(path=name, bytes=(root/name).stat().st_size, sha256=package_windows.sha256(root/name))
                    for name in sorted(package_windows.REQUIRED_PAYLOAD)]
         manifest = dict(schema=1, version='1.0.0', tag='v1.0.0', source=dict(commit='a'*40), executable=package_windows.EXECUTABLE,
@@ -59,6 +62,29 @@ class PackageEvidence(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 code = package_windows.verify(root)
         self.assertNotEqual(code, 0)
+
+    def test_internal_receipt_fields_do_not_verify(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); self.fixture(root)
+            path = root/package_windows.BUILD_RECEIPT
+            receipt = json.loads(path.read_text()); receipt['build_log'] = 'private-build.log'
+            path.write_text(json.dumps(receipt))
+            self.assertFalse(package_windows.verify_evidence(root)['passed'])
+
+    def test_missing_import_does_not_verify_even_with_matching_hashes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); manifest = self.fixture(root)
+            exe = root/package_windows.EXECUTABLE; pe(exe, ('missing-runtime.dll',))
+            for entry in manifest['files']:
+                if entry['path'] == exe.name: entry.update(bytes=exe.stat().st_size, sha256=package_windows.sha256(exe))
+            receipt = root/package_windows.BUILD_RECEIPT
+            build = json.loads(receipt.read_text()); build['executable_sha256'] = package_windows.sha256(exe)
+            receipt.write_text(json.dumps(build))
+            for entry in manifest['files']:
+                if entry['path'] == receipt.name: entry.update(bytes=receipt.stat().st_size, sha256=package_windows.sha256(receipt))
+            (root/'MANIFEST.json').write_text(json.dumps(manifest))
+            result = package_windows.verify_evidence(root)
+            self.assertIn('Cortex Command.exe: unresolved import: missing-runtime.dll', result['collection'][0]['errors'])
 
 
 if __name__ == '__main__':
