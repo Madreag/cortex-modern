@@ -191,13 +191,14 @@ def lifecycle_steps(arm, who, tag):
 
 
 def single_player_steps(tag):
+    # Single player's pause menu runs in the menu loop, which pumps only menu-scope steps.
     return {"schema": 1, "timeout_ms": 180000, "steps": [
-        {"op": "wait", "sim_at_least": 200}, *escape(), {"op": "wait", "screen": "Pause"},
-        {"op": "assert", "equals": {"screen": "Pause", "paused": True}},
+        {"op": "wait", "sim_at_least": 200}, *escape(), {"op": "wait", "screen": "Pause", "scope": "menu"},
+        {"op": "assert", "equals": {"screen": "Pause", "paused": True}, "scope": "menu"},
         menu_step("assert_visible ButtonBackToMain 1"), menu_step("assert_visible ButtonSaveOrLoadGame 1"),
         menu_step("assert_visible ButtonPauseMatch 0"), menu_step("assert_visible ButtonLeaveMatch 0"),
-        menu_step("dump_host_options"), {"op": "screenshot", "name": f"{tag}_sp"},
-        {"op": "signal", "name": "done"}, {"op": "finish"}]}
+        menu_step("dump_host_options"), {"op": "screenshot", "name": f"{tag}_sp", "scope": "menu"},
+        {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]}
 
 
 def peer_names(arm):
