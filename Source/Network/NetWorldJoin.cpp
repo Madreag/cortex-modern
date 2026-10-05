@@ -1252,8 +1252,14 @@ namespace RTE {
 		const auto fileStart = [this](uint64_t at) { return m_JournalBase + (at - m_JournalBase) / c_JournalSegmentFrames * c_JournalSegmentFrames; };
 		const uint64_t first = std::min(fileStart(frame), fileStart(m_JournalLast));
 		if (first <= m_JournalFirst) return;
+		const uint64_t dropped = first - m_JournalFirst;
 		m_JournalFirst = first;
 		m_Journal->Prune(first);
+		const uint64_t frames = m_JournalLast + 1 - m_JournalFirst;
+		System::PrintDiagnosticLine("[round-history] journal pruned first=" + std::to_string(m_JournalFirst) + " last=" + std::to_string(m_JournalLast) +
+		                            " frames=" + std::to_string(frames) + " dropped_frames=" + std::to_string(dropped) + " bound_frames=" + std::to_string(JournalBoundFrames()) +
+		                            " retain_frames=" + std::to_string(m_JournalRetain) + " file_frames=" + std::to_string(c_JournalSegmentFrames) +
+		                            " disk_bytes_before=" + std::to_string(m_Journal->bytesOnDisk.load()) + " within_bound=" + (JournalBoundFrames() == 0 || frames <= JournalBoundFrames() ? "1" : "0"));
 	}
 
 	bool NetWorldFrameLog::AdoptRecords(const NetWorldFrameLog& other) {

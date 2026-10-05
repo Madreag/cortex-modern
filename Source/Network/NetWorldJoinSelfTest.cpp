@@ -3741,7 +3741,11 @@ namespace RTE {
 			}
 		}
 		const NetWorldFrameLog::JournalStats stats = SettledJournalStats(tail);
-		const uint64_t frames = stats.first != 0 ? stats.last + 1 - stats.first : 0, bound = NetMatchService::EffectiveJoinRetention(policy, tickMs, nullptr) + segment;
+		const uint64_t frames = stats.first != 0 ? stats.last + 1 - stats.first : 0, bound = tail.JournalBoundFrames();
+		// The bound the host prints with each prune is its policy's retention plus the file being written.
+		if (bound != NetMatchService::EffectiveJoinRetention(policy, tickMs, nullptr) + segment)
+			return Fail("journal-bound-misnamed: the journal names a bound of " + std::to_string(bound) + " frames for a retention of " +
+			            std::to_string(NetMatchService::EffectiveJoinRetention(policy, tickMs, nullptr)) + " frames and files of " + std::to_string(segment));
 		if (frames > bound || files() > bound / segment + 1)
 			return Fail("journal-grew-past-its-policy: " + std::to_string(frames) + " frames, " + std::to_string(stats.bytes) + " bytes in " + std::to_string(files()) +
 			            " files after " + std::to_string(lastTick) + " ticks against a bound of " + std::to_string(bound) + " frames (retain " + std::to_string(retainFrames) +
@@ -3878,6 +3882,45 @@ namespace RTE {
 			return Fail("the-retention-cut-the-return-window: a return two minutes after the hold was refused in place: " + error);
 		std::cout << "[" << s_FailTag << "] PASS the_retention_keeps_the_return_window held_at=" << heldAt << " kept_from=" << keptFrom << " first_servable="
 		          << tail.FirstServableFrame() << " retain_frames=" << tail.JournalRetention() << " returned_in_place_at=" << returnAt << std::endl;
+		return 0;
+	}
+
+	// A world publishes each minute's autosave image when its writer has finished the archive, a few dozen ticks after the capture. A
+	// joiner arriving after the memory ring has let go of the newest image's next frame, before the next image is out, is still sent an
+	// image the round's history can catch it up from.
+	int TestTheNewestImageKeepsItsHistory() {
+		constexpr uint64_t interval = 3600, captureOffset = 16, publishDelay = 90, lastTick = 3 * interval + 200;
+		const double tickMs = 1000.0 / 60.0;
+		ResumeScratchDirectory scratch;
+		NetWorldJoinHost host;
+		std::string error;
+		if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error)) return Fail(error);
+		NetWorldFrameLog& tail = host.Tail();
+		NetJoinHistoryPolicy policy;
+		policy.retainFrames = 21600;
+		policy.lagLimitFrames = 7200;
+		policy.returnWindowMinutes = 5;
+		std::vector<NetJoinHistoryEnd> ends;
+		uint64_t published = 0, uncovered = 0, firstUncovered = 0, images = 0;
+		for (uint64_t tick = 1; tick <= lastTick; ++tick) {
+			if (!tail.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
+			if (tick == 1) tail.EnableJournal((scratch.path / "world_history.inputs").string());
+			if (tick > captureOffset + publishDelay && (tick - captureOffset - publishDelay) % interval == 0) {
+				NetWorldCheckpointImage image;
+				image.worldId = c_WorldId; image.boot = 1; image.round = 1; image.tick = tick - publishDelay; image.bytes = 64; image.digest = "image-" + std::to_string(tick);
+				host.PublishImage(image);
+				published = image.tick;
+				++images;
+			}
+			if (tick % 60 == 0) (void)NetMatchService::StepJoinHistory(host, tick, NetMatchService::WorldServedBase(host), {}, tickMs, policy, &ends);
+			// A joiner arriving now is sent the newest image and catches up from the frame after it.
+			if (published != 0 && !tail.Covers(published + 1) && uncovered++ == 0) firstUncovered = tick;
+		}
+		if (uncovered != 0)
+			return Fail("newest-image-lost-its-history: from tick " + std::to_string(firstUncovered) + " the round's history no longer held the frame after the newest published image (" +
+			            std::to_string(uncovered) + " ticks), so a joiner sent that image could not catch up; the history served from " + std::to_string(tail.FirstServableFrame()));
+		std::cout << "[" << s_FailTag << "] PASS the_newest_image_keeps_its_history images=" << images << " newest=" << published << " first_servable=" << tail.FirstServableFrame()
+		          << " ends=" << ends.size() << std::endl;
 		return 0;
 	}
 
@@ -8907,7 +8950,8 @@ namespace RTE {
 		}
 		if (std::strcmp(name, "-net-world-journal-window-selftest") == 0) {
 			s_FailTag = "net-world-journal-window-selftest";
-			return TestTheRetentionKeepsTheReturnWindow();
+			if (const int result = TestTheRetentionKeepsTheReturnWindow(); result != 0) return result;
+			return TestTheNewestImageKeepsItsHistory();
 		}
 		if (std::strcmp(name, "-net-world-journal-slow-returner-selftest") == 0) {
 			s_FailTag = "net-world-journal-slow-returner-selftest";
@@ -9481,6 +9525,7 @@ namespace RTE {
 		if (const int result = TestASlowReturnerIsSentBackForAFreshImage(); result != 0) return result;
 		if (const int result = TestAFarReturnerClosingOnTheRoundKeepsItsCatchUp(); result != 0) return result;
 		if (const int result = TestTheRetentionKeepsTheReturnWindow(); result != 0) return result;
+		if (const int result = TestTheNewestImageKeepsItsHistory(); result != 0) return result;
 		if (const int result = TestAJournalFailureIsRecovered("write:5000", "its write of frame 5000 failed"); result != 0) return result;
 		if (const int result = TestAJournalFailureIsRecovered("queue:5000", "its writer fell 64 KiB of frames behind"); result != 0) return result;
 		if (const int result = TestEveryPeersRecordServesTheHostsTail(); result != 0) return result;

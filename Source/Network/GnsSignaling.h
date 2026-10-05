@@ -136,6 +136,9 @@ namespace RTE {
 		// Every poll spends the service's per-key request budget, so polling is armed only during a rendezvous.
 		void SetPolling(bool armed, uint64_t nowMs);
 		void Update(uint64_t nowMs);
+		/// Host: points the channel at the row the directory re-registered, keeping the joiners' signaling and the poll arming. Call
+		/// from the thread that runs Update.
+		void RebindHost(const std::string& sessionId, const std::string& sessionToken);
 		void Stop();
 
 		static std::string HostIdentity(const std::string& sessionId);
@@ -160,6 +163,7 @@ namespace RTE {
 		NetDirectorySignalChannel m_Channel;
 		GnsTransport* m_Transport = nullptr;
 		Role m_Role = Role::Joiner;
+		Config m_Config;
 		std::string m_SessionId;
 		Admission m_Admission;
 		Trace m_Trace;
