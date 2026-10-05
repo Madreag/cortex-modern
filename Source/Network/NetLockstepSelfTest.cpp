@@ -2651,6 +2651,7 @@ namespace RTE {
 			}
 			host.NoteFrameWait(20, 100, true);
 			host.NoteFrameWait(20, 150, true);
+			host.Tick(150);
 			if (!host.QueueLocalInput(20, {}, {}, error)) {
 				*error = "timing fixture after deadline: " + *error + " next=" + std::to_string(host.GetStats().nextFrame) +
 				         " holds=" + std::to_string(host.GetStats().peers.at(2).holds); return false;
