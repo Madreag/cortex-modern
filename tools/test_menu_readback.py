@@ -904,7 +904,13 @@ def sweep_options(readonly=False, live=False):
     for tab, page in OPTION_PAGES:
         # The team picker chooses whose technology and AI skill the rows under it show; picking one changes no setting.
         quiet = " quiet=ComboHostRulesTeam" if page.endswith("Rules") and not readonly else ""
-        text += f"activate {tab}\nwait 4\ndump_host_options\nsweep {page} label={page} restore=back_options" + (" readonly" if readonly else "") + (" own=ButtonHostSessEnd" if live and not readonly and page.endswith("Session") else "") + quiet + "\n"
+        # A page whose buttons act in place (Recalculate, Repair match now, Save diagnostics) is come back to by its own tab;
+        # Escape is the way back from the dialogs the Seats and Session pages open, and would leave Advanced from the others.
+        in_place = page.endswith(("Timing", "Recovery", "Files"))
+        back = f"back_{tab}" if in_place else "back_options"
+        if in_place:
+            text += f"define {back}\nactivate {tab}\nwait 4\nassert_substate HostOptions\nassert_checked {tab} 1\nend\n"
+        text += f"activate {tab}\nwait 4\ndump_host_options\nsweep {page} label={page} restore={back}" + (" readonly" if readonly else "") + (" own=ButtonHostSessEnd" if live and not readonly and page.endswith("Session") else "") + quiet + "\n"
     if not readonly:
         # The seat dialog a Details button opens is a screen of its own.
         text += "activate TabHostPageSeats\nwait 4\nactivate ButtonHostSeatDetails0\nwait 6\ndump_host_options\nsweep HostSeatDialog label=seat-dialog own=ButtonHostSeatDlgClose\nactivate ButtonHostSeatDlgClose\nwait 4\n"
