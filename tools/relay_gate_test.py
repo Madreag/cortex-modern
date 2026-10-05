@@ -954,6 +954,15 @@ class GreenTipProbes(unittest.TestCase):
                 self.assertNotIn(gateway, json.dumps(result))
                 self.assertNotIn(mapped.split(':')[0], json.dumps(result))
 
+    def test_process_log_redacts_a_private_address_before_retention(self):
+        book = SecretBook()
+        address = '192.0.2.28'
+        book.add('owner-address', address)
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(match, 'REDACTOR', book):
+            path = Path(folder) / 'process.log'
+            match.retain_redacted_process_log(io.StringIO(f'path uses {address}\nready\n'), path)
+            self.assertEqual(path.read_text(), 'path uses <owner-address>\nready\n')
+
 
     # G6: limits are incomplete, never clean; a scrub keeps the span's representation.
     def test_g6_four_nested_gzips_are_incomplete(self):

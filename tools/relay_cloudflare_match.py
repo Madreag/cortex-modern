@@ -36,6 +36,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import os
 import re
 import secrets
@@ -998,6 +999,12 @@ class Directory:
             module.urlopen = urlopen
         self.server = module.spawn_server(port=port, cert=self.cert, key=key, insecure_http=False, log_file=root / 'service.log',
                                           turn_config=backend, turn_max_ttl=ttl_cap)
+        class PrivateLogFilter(logging.Filter):
+            def filter(self, record):
+                record.msg, record.args = book.redact(record.getMessage()), ()
+                return True
+        for handler in module.LOGGER.handlers:
+            handler.addFilter(PrivateLogFilter())
         key.unlink()
         store = self.server.store
         mint, post, register, mint_offer = store.turn_provider.mint, store.post_signal, store.register, store.mint_ice_servers
@@ -1069,6 +1076,13 @@ def revoke_cloudflare(backend: dict, usernames: list[str], opener=None, agent: s
 CLOUDFLARED = Path('C:/Program Files (x86)/cloudflared/cloudflared.exe')
 
 
+def retain_redacted_process_log(stream, path: Path) -> None:
+    with path.open('w', encoding='utf-8') as log:
+        for line in stream:
+            log.write(redacted(line))
+            log.flush()
+
+
 class QuickTunnel:
     """A Cloudflare quick tunnel (trycloudflare.com: no account, no router port) to this run's directory, so every box reaches
     it over the public internet as a player's machine reaches a directory, never through the tailnet's relay. cloudflared runs
@@ -1076,6 +1090,7 @@ class QuickTunnel:
 
     def __init__(self, port: int, root: Path) -> None:
         self.port, self.root, self.process, self.host = port, root, None, None
+        self.log_reader = None
 
     def open(self, budget_s: float = 90) -> str:
         if DRY_RUN:
@@ -1087,14 +1102,17 @@ class QuickTunnel:
         config = home / 'quick-tunnel.yml'
         config.write_text('no-autoupdate: true\n', encoding='utf-8')
         env = dict(os.environ, USERPROFILE=str(home), HOME=str(home), HOMEDRIVE='', HOMEPATH='')
-        log = (self.root / 'cloudflared.log').open('w', encoding='utf-8')
         self.process = subprocess.Popen([str(CLOUDFLARED), '--config', str(config), 'tunnel', '--no-autoupdate', '--url',
                                          f'https://127.0.0.1:{self.port}', '--no-tls-verify'], stdin=subprocess.DEVNULL,
-                                        stdout=log, stderr=subprocess.STDOUT, env=env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace',
+                                        env=env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        self.log_reader = threading.Thread(target=retain_redacted_process_log, args=(self.process.stdout, self.root / 'cloudflared.log'), daemon=True)
+        self.log_reader.start()
         deadline = time.monotonic() + budget_s
         while time.monotonic() < deadline and self.host is None:
             time.sleep(1)
-            found = re.search(r'https://([a-z0-9-]+\.trycloudflare\.com)', (self.root / 'cloudflared.log').read_text(encoding='utf-8', errors='replace'))
+            path = self.root / 'cloudflared.log'
+            found = re.search(r'https://([a-z0-9-]+\.trycloudflare\.com)', path.read_text(encoding='utf-8', errors='replace') if path.is_file() else '')
             if found:
                 self.host = found[1]
             elif self.process.poll() is not None:
@@ -1116,6 +1134,8 @@ class QuickTunnel:
         if self.process and self.process.poll() is None:
             self.process.terminate()
             self.process.wait(timeout=20)
+        if self.log_reader:
+            self.log_reader.join(timeout=20)
 
 
 # Runs on a box (python -c): the directory's round trip from there, each request on a new connection as an engine's first is.
@@ -1440,6 +1460,9 @@ def build_specs(h, run: dict, root: Path, ports: dict, boxes: dict, pin: str, lo
                 flags[flags.index(option) + 1] = humans
             flags += ['-net-player-name', name]
         spec['flags'] = flags
+        if not run.get('persist_tickets', True) and '-net-reconnect-ticket' in flags:
+            at = flags.index('-net-reconnect-ticket')
+            del flags[at:at + 2]
         if peer['name'] == 'host' and run.get('kill_host_at_tick'):
             spec['kill_at_tick'] = int(run['kill_host_at_tick'])
         if peer.get('panel_probe'):
