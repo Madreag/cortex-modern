@@ -6930,6 +6930,8 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				// The host's goodbye ends this seat's match at the frame the round ended on: the rejoin had
 				// nothing left to return to, so the seat completes with what it holds instead of failing.
 				s_netMatchCompletedByHostGoodbye = heldRejoin;
+				// The round ends before another tick would write what the hold abandoned.
+				RetractAbandonedTickHashes();
 				if (heldRejoin) {
 					std::ostringstream line;
 					line << "[net-match] completed_by_host_goodbye=1 held_from=" << s_netMatchHeldFromTick
@@ -6940,7 +6942,8 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				g_ActivityMan.EndActivity();
 				g_ActivityMan.SetInActivity(false);
 				ScenarioRunner::ClearControllerReplayError();
-				if (s_netMatchServiceE2E) {
+				// An observed trace of a held seat ends with its match, as the trace cap ends one that played on.
+				if (s_netMatchServiceE2E || (heldRejoin && observeTraceRecovery)) {
 					System::SetQuit(true);
 				} else {
 					returnToMenuAfterNetworkEnd = true;

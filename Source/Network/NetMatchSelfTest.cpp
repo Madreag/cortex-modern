@@ -15723,6 +15723,14 @@ namespace RTE {
 			*error = "session-id join: a rejoin to a row its host no longer keeps read as a failure: " + NetMatchService::IceSessionRefusalText(true, "gone", "no such session");
 			return false;
 		}
+		// The signal poll's 404 says the same mid-rendezvous, after the link to the leaving host has dropped.
+		const std::string dropped = "Relay connection failed: Connection dropped; check the relay or choose Automatic";
+		if (!NetMatchService::RejoinFoundHostRowGone(true, true, dropped) ||
+		    !NetMatchService::RejoinFoundHostRowGone(true, false, NetMatchService::IceSessionRefusalText(true, "gone", "no such session")) ||
+		    NetMatchService::RejoinFoundHostRowGone(false, true, dropped) || NetMatchService::RejoinFoundHostRowGone(true, false, dropped)) {
+			*error = "session-id join: a returning seat whose host's row was gone read its host as lost instead of its round as over";
+			return false;
+		}
 		std::cout << "[net-match-selftest] PASS session-id join: an absent, full, mismatched or ip-only row is refused with the join list's own label; an ice row resolves to str:h-<session>, an either row keeps its address" << std::endl;
 		return true;
 	}

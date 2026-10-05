@@ -1018,6 +1018,10 @@ static std::string ResyncSaveName() {
 		return "session " + sessionId + ": " + why;
 	}
 
+	bool NetMatchService::RejoinFoundHostRowGone(bool rejoin, bool signalSessionGone, const std::string& setupError) {
+		return rejoin && (signalSessionGone || setupError.rfind("match over", 0) == 0);
+	}
+
 	bool NetMatchService::TakeRoundEndRecord(uint64_t& record) {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (!m_RoundEndRecord) return false;
@@ -10452,6 +10456,13 @@ static std::string ResyncSaveName() {
 		}
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			// The directory answers a returning seat whose host ended the round and left with no row: the signal poll's 404, or the ticket lookup's.
+			bool signalSessionGone = false;
+#ifdef CCCP_WITH_GNS
+			signalSessionGone = m_Dispatcher && m_Dispatcher->Channel().GetState() == NetDirectorySignalChannel::State::Failed &&
+			                    m_Dispatcher->Channel().GetLastError() == "session gone";
+#endif
+			m_RejoinFoundHostRowGone = !started && !request.host && RejoinFoundHostRowGone(request.rejoin, signalSessionGone, error);
 			if (started) {
 				// The lockstep peer id is the session-assigned id + 1; the team comes from that slot.
 				const uint8_t localLockstepId = static_cast<uint8_t>(session->GetLocalPeerId() + 1);
@@ -11081,6 +11092,7 @@ static std::string ResyncSaveName() {
 			m_HeldRejoinDriving = true;
 			m_HeldRejoinFailedAttempts = 0;
 			m_HeldRejoinRetryAtMs = 0;
+			m_RejoinFoundHostRowGone = false;
 		}
 		const bool started = BeginTicketRejoinOnRoute(error, liveRoute ? &*liveRoute : nullptr);
 		if (started) ScenarioRunner::SetWorldCatchUpPriorInputThrough(prior);
@@ -11151,6 +11163,11 @@ static std::string ResyncSaveName() {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_IsHost) return false;
+			// With no successor to ask, a round whose host's row is gone is over: the seat completes as on the host's goodbye.
+			if (m_RejoinFoundHostRowGone && m_HeldRejoinRoutes.empty()) {
+				m_HostGoodbyeSeen = true;
+				return false;
+			}
 			const bool lostDuringSetup = m_Runner && m_Runner->DidLoseHostDuringSetup();
 			const bool hasReject = m_Session && m_Session->HasReject();
 			const NetRejectReason reason = hasReject ? m_Session->GetRejectReason() : NetRejectReason::InternalError;

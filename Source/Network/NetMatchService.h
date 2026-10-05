@@ -809,6 +809,8 @@ namespace RTE {
 		static std::string RoundEndResultText(int winnerTeam, int localTeam);
 		/// Why a session-id join found no row to dial; a seat coming back on its ticket to a row its host no longer keeps reads the match as over.
 		static std::string IceSessionRefusalText(bool rejoin, const std::string& sessionId, const std::string& why);
+		/// Whether a returning seat's failed start found its host's directory row gone: the host ended the round and left.
+		static bool RejoinFoundHostRowGone(bool rejoin, bool signalSessionGone, const std::string& setupError);
 		/// The request a stored ticket rejoins with. The world flag is the ticket's own, so a relaunch
 		/// against a world host still hellos on the world plane.
 		static NetMatchServiceRequest BuildTicketRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget);
@@ -1861,6 +1863,7 @@ namespace RTE {
 		/// Held client: the hosts its rejoin may still find when its own is gone, in the match's published successor order.
 		std::deque<NetMatchServiceRequest> m_HeldRejoinRoutes;
 		uint8_t m_HeldRejoinFailedAttempts = 0; //!< The attempts of this held rejoin that failed with its host still there.
+		bool m_RejoinFoundHostRowGone = false; //!< The last start was a rejoin that found its host's directory row gone.
 		uint64_t m_HeldRejoinRetryAtMs = 0;     //!< When the armed retry of the host begins; 0 when none is armed.
 		uint64_t m_HeldRejoinPriorInput = 0;
 		std::string m_HostEndReason; //!< The host's End Match reason while its round plays to the agreed end frame.
