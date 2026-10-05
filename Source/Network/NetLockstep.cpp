@@ -4185,7 +4185,10 @@ namespace RTE {
 		m_SeatTransitions = seatTransitions;
 		// A release past the boundary was agreed with the lost host on some survivors only: the successor proposes it afresh.
 		for (const auto& [peer, releases]: seatReleases)
-			for (const auto& [frame, release]: releases) if (frame <= m_MigrationBoundary) m_SeatReleases[peer][frame] = release;
+			for (const auto& [frame, release]: releases) {
+				if (frame <= m_MigrationBoundary) m_SeatReleases[peer][frame] = release;
+				else if (m_AiHeldSeats.contains(peer) && frame >= m_AiHeldSeats.at(peer)) m_ReleasedAiSeats.insert(peer);
+			}
 		for (const uint8_t peer: passedReturns)
 			if (const auto seat = m_SeatTransitions.find(peer); seat != m_SeatTransitions.end()) seat->second.erase(seat->second.upper_bound(m_MigrationBoundary), seat->second.end());
 		for (uint8_t peer: m_Config.activePeerIds) {
@@ -11733,7 +11736,7 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::ProposeOwedSeatReleases(uint64_t nowMs) {
-		if (!UsesBoundedWait() || m_Config.localPeerId != GetHostPeerId() || !m_RelayHost || !IsRunning() || IsMigrating() || m_NextTimingRevision == UINT64_MAX) return;
+		if (!UsesBoundedWait() || IsPersistentWorldRound() || m_Config.localPeerId != GetHostPeerId() || !m_RelayHost || !IsRunning() || IsMigrating() || m_NextTimingRevision == UINT64_MAX) return;
 		for (uint8_t peer: m_ReleasedAiSeats) {
 			if (peer > NetLockstepTiming{}.seatIncarnations.size()) continue;
 			if (!m_AiHeldSeats.contains(peer) || HasReleaseSinceHold(peer) ||
