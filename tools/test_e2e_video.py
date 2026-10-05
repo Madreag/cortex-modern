@@ -482,15 +482,19 @@ def check_levers_inside_rounds(results):
 
 
 def unconfirmed_clicks(steps):
-    """Each mouse_up sent before a wait saw its control read pushed after the mouse_down."""
+    """Each mouse_up sent before a wait saw its control read pushed after the mouse_down; a list, which has no pushed
+    state, selects the pressed item on the down, so its wait reads that item selected."""
     found, pressed = [], {}
     for index, step in enumerate(steps):
         control = step.get("control")
         if step.get("op") == "mouse_down":
-            pressed[control] = False
-        elif step.get("op") == "wait" and control in pressed and step.get("equals", {}).get("pushed") is True:
-            pressed[control] = True
-        elif step.get("op") == "mouse_up" and control in pressed and not pressed.pop(control):
+            pressed[control] = {"item": step.get("item"), "seen": False}
+        elif step.get("op") == "wait" and control in pressed:
+            equals = step.get("equals", {})
+            item = pressed[control]["item"]
+            if equals.get("pushed") is True or (item is not None and equals.get("selected") == item):
+                pressed[control]["seen"] = True
+        elif step.get("op") == "mouse_up" and control in pressed and not pressed.pop(control)["seen"]:
             found.append(f"step {index} {control}")
     return found
 
