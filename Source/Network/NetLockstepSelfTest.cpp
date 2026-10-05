@@ -23374,6 +23374,449 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return failure.empty() ? true : fail(failure);
 	}
 
+	namespace {
+		// A host link that keeps one peer's seat decisions and notices back until the row lets them through: that peer hears them
+		// late while the frames flow on.
+		class LateSeatNoticeWire final : public LoopbackTransport {
+		public:
+			std::set<NetPeerId> lateTo;
+
+			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
+				if (lateTo.contains(peer) && IsSeatNotice(bytes)) {
+					m_Held.push_back({peer, lane, bytes});
+					return true;
+				}
+				return LoopbackTransport::Send(peer, lane, bytes, error, congested);
+			}
+
+			/// Sends what was held in the order it was sent, or loses it.
+			void Deliver(bool lose = false) {
+				auto held = std::move(m_Held);
+				m_Held.clear();
+				lateTo.clear();
+				if (!lose) for (const auto& packet: held) (void)LoopbackTransport::Send(packet.peer, packet.lane, packet.bytes);
+			}
+
+			size_t Held() const { return m_Held.size(); }
+
+		private:
+			struct Packet {
+				NetPeerId peer;
+				NetTransportLane lane;
+				std::vector<uint8_t> bytes;
+			};
+			std::vector<Packet> m_Held;
+
+			static bool IsSeatNotice(const std::vector<uint8_t>& bytes) {
+				const auto packet = NetLockstepCodec::Decode(bytes);
+				if (!packet.ok) return false;
+				if (std::holds_alternative<NetLockstepStop>(packet.packet.payload)) return true;
+				const auto* timing = std::get_if<NetLockstepTiming>(&packet.packet.payload);
+				return timing && timing->phase != NetTimingPhase::Status;
+			}
+		};
+
+		// A client link that keeps everything its peer sends back while holding: the host hears that peer late and falls behind it.
+		class LateOutboundWire final : public LoopbackTransport {
+		public:
+			bool holding = false;
+
+			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
+				if (holding) {
+					m_Held.push_back({peer, lane, bytes});
+					return true;
+				}
+				return LoopbackTransport::Send(peer, lane, bytes, error, congested);
+			}
+
+			void Deliver() {
+				holding = false;
+				auto held = std::move(m_Held);
+				m_Held.clear();
+				for (const auto& packet: held) (void)LoopbackTransport::Send(packet.peer, packet.lane, packet.bytes);
+			}
+
+		private:
+			struct Packet {
+				NetPeerId peer;
+				NetTransportLane lane;
+				std::vector<uint8_t> bytes;
+			};
+			std::vector<Packet> m_Held;
+		};
+
+		// One peer's copy of an actor and the handoff and claim its simulation keeps on it, taken through the engine's own per-frame
+		// pass. The engine keeps one claim map per process, so the view puts its own back before each frame and reads it after.
+		struct ClaimView {
+			std::string who;
+			NetLockstepCoordinator* coordinator = nullptr;
+			std::unique_ptr<Actor> actor;
+			int64_t uid = 0;
+			int team = 0;
+			uint8_t seeded = 0;
+			uint8_t watched = 0; //!< The seat whose hold on the actor the row follows.
+			uint8_t claimant = 0;
+			uint8_t handoff = 0;
+			std::map<uint64_t, std::string> after; //!< What the pass left on each frame this view applied.
+			std::optional<uint64_t> ended; //!< The frame the watched seat's last hold on the actor ended.
+
+			bool Create(const std::string& name, NetLockstepCoordinator& peer, int actorTeam, uint8_t seededOwner, uint8_t watchedSeat) {
+				who = name;
+				coordinator = &peer;
+				team = actorTeam;
+				seeded = seededOwner;
+				watched = watchedSeat;
+				actor.reset(MakeSwitchTestActor(actorTeam));
+				if (!actor) return false;
+				actor->GetController()->ApplyWireMode(Controller::CIM_AI, Players::NoPlayer);
+				uid = static_cast<int64_t>(actor->GetUniqueID());
+				return true;
+			}
+
+			bool Holds() const { return claimant == watched || handoff == watched; }
+
+			void Apply(const NetLockstepReadyFrame& ready) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::SetLockstepCoordinator(coordinator);
+				NetActorOwnership::SeedOwner(uid, seeded, team);
+				if (claimant != 0) {
+					ScenarioRunner::HandLockstepActorToAI(uid, claimant);
+					if (handoff == 0) ScenarioRunner::ReleaseLockstepControlOverridesOf(ScenarioRunner::GetLockstepHostPeerId());
+				}
+				if (handoff != 0) ScenarioRunner::SetLockstepControlOverride(uid, handoff);
+				const bool held = Holds();
+				ApplyLockstepLeaveHandoffs(ready, {actor.get()}, false);
+				const AutosaveSideState state = ScenarioRunner::CaptureAgreedSideState();
+				claimant = state.droppedControlOwners.contains(uid) ? state.droppedControlOwners.at(uid) : 0;
+				handoff = state.controlOwners.contains(uid) ? state.controlOwners.at(uid) : 0;
+				if (held && !Holds() && !ended) ended = ready.frame;
+				after[ready.frame] = "claim=" + std::to_string(claimant) + " handoff=" + std::to_string(handoff) +
+				                     " mode=" + std::to_string(static_cast<int>(actor->GetController()->GetInputMode()));
+			}
+
+			std::string Ended() const { return ended ? std::to_string(*ended) : std::string("never"); }
+		};
+
+		// Every frame two views both applied left the same claim, handoff and controller mode on them.
+		bool SameClaimsEveryFrame(const ClaimView& first, const ClaimView& second, std::string* error) {
+			for (const auto& [frame, state]: first.after) {
+				const auto other = second.after.find(frame);
+				if (other == second.after.end() || other->second == state) continue;
+				*error = "frame " + std::to_string(frame) + ": " + first.who + " " + state + ", " + second.who + " " + other->second;
+				return false;
+			}
+			return true;
+		}
+
+		bool ReportReleasedClaimsRow(const char* name, const std::string& failure, std::string* error) {
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			NetActorOwnership::ClearSeededOwners();
+			std::cout << "[net-lockstep-selftest] " << (failure.empty() ? "PASS " : "FAIL ") << name;
+			if (!failure.empty()) std::cout << ": " << failure;
+			std::cout << std::endl;
+			if (error && !failure.empty()) *error = failure;
+			return failure.empty();
+		}
+
+		NetMatchConfig ReleasedClaimsMatch(uint64_t sessionId, uint8_t peers) {
+			NetMatchConfig match = NetMatchConfigUtil::MakeDefault(sessionId);
+			match.peerCount = peers;
+			match.hostPeerId = 1;
+			match.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+			match.players.clear();
+			for (uint8_t peer = 1; peer <= peers; ++peer) match.players.push_back({peer, static_cast<int>(peer - 1), false, "Seat " + std::to_string(peer)});
+			return match;
+		}
+
+		NetLockstepConfig ReleasedClaimsConfig(const NetMatchConfig& match, uint8_t local, std::map<uint8_t, NetPeerId> remotes, bool bounded) {
+			NetLockstepConfig config;
+			config.sessionId = match.sessionId;
+			config.roundId = 0x9B;
+			config.localPeerId = local;
+			config.peerCount = match.peerCount;
+			config.timeoutMs = bounded ? 20000 : 400;
+			config.substituteSlowPeers = bounded;
+			if (bounded) {
+				config.simTickMs = 1000.0 / 60.0;
+				config.slowPlayerBoundTicks = 600;
+			}
+			config.remoteTransportPeerIds = std::move(remotes);
+			config.relayToOtherPeers = local == match.hostPeerId;
+			config.frameLane = NetTransportLane::ControlReliable;
+			config.scenario = "LockstepSelfTest";
+			config.ownershipPolicy = "team-owner";
+			config.matchConfig = match;
+			for (uint8_t peer = 1; peer <= match.peerCount; ++peer) config.peerIncarnations[peer] = 1;
+			return config;
+		}
+
+		// Produces while the peer's pipeline has room, as the simulation does.
+		void FeedReleasedClaimsPeer(NetLockstepCoordinator& peer, uint64_t& next) {
+			std::string ignored;
+			if (peer.IsRunning() && next <= peer.GetStats().nextFrame + 4 && peer.QueueLocalInput(next, {}, {}, &ignored)) ++next;
+		}
+
+		void ApplyReadyFrames(NetLockstepCoordinator& peer, ClaimView& view, std::map<uint64_t, NetLockstepReadyFrame>* record = nullptr) {
+			NetLockstepReadyFrame ready;
+			while (peer.PopReadyFrame(ready)) {
+				if (record) (*record)[ready.frame] = ready;
+				view.Apply(ready);
+				peer.FinishSimulationTick(ready.frame);
+			}
+		}
+
+		// A host releases a seat the AI holds (a kick, or a world member that left while held). The claims the seat kept on the actors
+		// the AI plays for it end on one frame on every peer: the host that decided it, a survivor that hears it late, and a replay of
+		// the committed stream (a watcher or a returning seat catching up), which never hears a notice at all.
+		bool TestHeldSeatReleaseEndsItsClaimsOnOneFrame(std::string* error) {
+			const char* name = "held_seat_release_ends_its_claims_on_one_frame";
+			EnsureSwitchTestManagers();
+			NetActorOwnership::ClearSeededOwners();
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow(name, why, error); };
+			LateSeatNoticeWire hostWire;
+			LoopbackTransport survivorWire, heldWire;
+			std::string setup;
+			if (!hostWire.StartHost(49611, &setup) || !survivorWire.Connect("loopback", 49611, &setup) || !heldWire.Connect("loopback", 49611, &setup)) return fail(setup);
+			const NetMatchConfig match = ReleasedClaimsMatch(0x9B11, 3);
+			NetLockstepCoordinator host, survivor, held;
+			if (!host.Start(hostWire, ReleasedClaimsConfig(match, 1, {{2, 1}, {3, 2}}, true), &setup) ||
+			    !survivor.Start(survivorWire, ReleasedClaimsConfig(match, 2, {{1, 1}}, true), &setup) ||
+			    !held.Start(heldWire, ReleasedClaimsConfig(match, 3, {{1, 1}}, true), &setup)) return fail(setup);
+			ClaimView hostView, survivorView, replayView;
+			if (!hostView.Create("host", host, 2, 3, 3) || !survivorView.Create("survivor", survivor, 2, 3, 3)) return fail("the views' actors could not be created");
+			uint64_t now = 0;
+			std::array<uint64_t, 3> produced{};
+			std::map<uint64_t, NetLockstepReadyFrame> committed;
+			const auto pump = [&](bool heldPlays) {
+				FeedReleasedClaimsPeer(host, produced[0]);
+				FeedReleasedClaimsPeer(survivor, produced[1]);
+				if (heldPlays) FeedReleasedClaimsPeer(held, produced[2]);
+				host.Tick(now);
+				survivor.Tick(now);
+				if (heldPlays) held.Tick(now);
+				ApplyReadyFrames(host, hostView, &committed);
+				ApplyReadyFrames(survivor, survivorView);
+				if (heldPlays) {
+					NetLockstepReadyFrame ready;
+					while (held.PopReadyFrame(ready)) held.FinishSimulationTick(ready.frame);
+				}
+				hostWire.AdvanceTimeMs(5);
+				survivorWire.AdvanceTimeMs(5);
+				heldWire.AdvanceTimeMs(5);
+				now += 5;
+			};
+			for (int turn = 0; turn < 400 && !(host.IsRunning() && survivor.IsRunning() && held.IsRunning()); ++turn) pump(true);
+			for (int turn = 0; turn < 400 && host.GetStats().nextFrame < 10; ++turn) pump(true);
+			if (!host.IsRunning() || host.GetStats().nextFrame < 10) return fail("the three seats never played: " + host.BuildReportJson());
+			std::string decision;
+			if (!host.ProposePeerHold(3, now, &decision)) return fail("the host could not hold seat 3: " + decision);
+			for (int turn = 0; turn < 600 && !(hostView.claimant == 3 && survivorView.claimant == 3); ++turn) pump(false);
+			if (hostView.claimant != 3 || survivorView.claimant != 3) {
+				return fail("the held seat's actor never got its claim: host " + std::to_string(hostView.claimant) + " survivor " + std::to_string(survivorView.claimant));
+			}
+			for (int turn = 0; turn < 20; ++turn) pump(false);
+			const uint64_t replayFrom = committed.rbegin()->first + 1;
+			const auto holds = host.HeldTransactions();
+			const auto leaves = host.GetPeerLeaveFrames();
+			// The survivor hears the release 200 ms after the host decides it; the frames keep coming meanwhile.
+			hostWire.lateTo = {1};
+			host.EvictRemovedPeer(3, "removed by the host", now);
+			for (int turn = 0; turn < 40; ++turn) pump(false);
+			hostWire.Deliver();
+			for (int turn = 0; turn < 3000 && !(hostView.ended && survivorView.ended && host.GetStats().nextFrame > std::max(*hostView.ended, *survivorView.ended) + 20); ++turn) pump(false);
+			std::string differs;
+			if (!hostView.ended || !survivorView.ended || *hostView.ended != *survivorView.ended || !SameClaimsEveryFrame(hostView, survivorView, &differs)) {
+				return fail("the released seat's claim ended at frame " + hostView.Ended() + " on the host and " + survivorView.Ended() +
+				            " on the survivor that heard the release late" + (differs.empty() ? std::string() : "; " + differs));
+			}
+			// The committed stream replayed from before the release, as a watcher or a returning seat replays it.
+			LoopbackTransport replayWire;
+			NetLockstepConfig replayConfig = ReleasedClaimsConfig(match, 2, {}, true);
+			replayConfig.authorityPeerId = 1;
+			replayConfig.startFrame = replayFrom;
+			replayConfig.initialSeatHolds = holds;
+			for (const auto& [peer, frame]: leaves) if (frame < replayFrom) replayConfig.initialPeerLeaves[peer] = frame;
+			NetLockstepCoordinator replay;
+			if (!replay.StartReplay(replayWire, replayConfig, &setup)) return fail("the replay did not start: " + setup);
+			if (!replayView.Create("replay", replay, 2, 3, 3)) return fail("the replay's actor could not be created");
+			replayView.claimant = 3;
+			replayView.handoff = 1;
+			for (const auto& [frame, ready]: committed) {
+				if (frame < replayFrom) continue;
+				std::vector<ControllerFrame> frames = ready.localFrames;
+				frames.insert(frames.end(), ready.remoteFrames.begin(), ready.remoteFrames.end());
+				std::vector<NetGameCommand> commands = ready.localCommands;
+				commands.insert(commands.end(), ready.remoteCommands.begin(), ready.remoteCommands.end());
+				if (!replay.QueueReplayFrame(frame, frames, commands, &setup)) return fail("the replay refused frame " + std::to_string(frame) + ": " + setup);
+				replay.Tick(now);
+				ApplyReadyFrames(replay, replayView);
+			}
+			if (!replayView.ended || *replayView.ended != *hostView.ended || !SameClaimsEveryFrame(hostView, replayView, &differs)) {
+				return fail("the released seat's claim ended at frame " + hostView.Ended() + " live and " + replayView.Ended() + " in the replay of the committed stream" +
+				            (differs.empty() ? std::string() : "; " + differs));
+			}
+			std::cout << "[net-lockstep-selftest] released_claim_frame=" << *hostView.ended << " host=survivor=replay" << std::endl;
+			return fail("");
+		}
+
+		// The host removes a seat that is still playing while a survivor is ahead of it: the survivor already committed frames carrying
+		// the seat's input that the host had relayed. The seat leaves at the first frame the host never relayed, on every peer, so the
+		// committed inputs agree and so do the claim and handoff the seat held.
+		bool TestKickedPlayingSeatLeavesOnOneFrame(std::string* error) {
+			const char* name = "kicked_playing_seat_leaves_on_one_frame";
+			EnsureSwitchTestManagers();
+			NetActorOwnership::ClearSeededOwners();
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow(name, why, error); };
+			LoopbackTransport hostWire, kickedWire;
+			LateOutboundWire survivorWire;
+			std::string setup;
+			if (!hostWire.StartHost(49612, &setup) || !survivorWire.Connect("loopback", 49612, &setup) || !kickedWire.Connect("loopback", 49612, &setup)) return fail(setup);
+			const NetMatchConfig match = ReleasedClaimsMatch(0x9B12, 3);
+			NetLockstepCoordinator host, survivor, kicked;
+			if (!host.Start(hostWire, ReleasedClaimsConfig(match, 1, {{2, 1}, {3, 2}}, true), &setup) ||
+			    !survivor.Start(survivorWire, ReleasedClaimsConfig(match, 2, {{1, 1}}, true), &setup) ||
+			    !kicked.Start(kickedWire, ReleasedClaimsConfig(match, 3, {{1, 1}}, true), &setup)) return fail(setup);
+			// The host's actor the kicked seat took control of.
+			ClaimView hostView, survivorView;
+			if (!hostView.Create("host", host, 0, 1, 3) || !survivorView.Create("survivor", survivor, 0, 1, 3)) return fail("the views' actors could not be created");
+			hostView.handoff = survivorView.handoff = 3;
+			uint64_t now = 0;
+			std::array<uint64_t, 3> produced{};
+			std::map<uint64_t, NetLockstepReadyFrame> hostCommitted, survivorCommitted;
+			const auto pump = [&](bool kickedPlays) {
+				FeedReleasedClaimsPeer(host, produced[0]);
+				FeedReleasedClaimsPeer(survivor, produced[1]);
+				if (kickedPlays) FeedReleasedClaimsPeer(kicked, produced[2]);
+				host.Tick(now);
+				survivor.Tick(now);
+				if (kickedPlays) kicked.Tick(now);
+				ApplyReadyFrames(host, hostView, &hostCommitted);
+				ApplyReadyFrames(survivor, survivorView, &survivorCommitted);
+				if (kickedPlays) {
+					NetLockstepReadyFrame ready;
+					while (kicked.PopReadyFrame(ready)) kicked.FinishSimulationTick(ready.frame);
+				}
+				hostWire.AdvanceTimeMs(5);
+				survivorWire.AdvanceTimeMs(5);
+				kickedWire.AdvanceTimeMs(5);
+				now += 5;
+			};
+			for (int turn = 0; turn < 400 && !(host.IsRunning() && survivor.IsRunning() && kicked.IsRunning()); ++turn) pump(true);
+			for (int turn = 0; turn < 400 && host.GetStats().nextFrame < 10; ++turn) pump(true);
+			if (!host.IsRunning() || host.GetStats().nextFrame < 10) return fail("the three seats never played: " + host.BuildReportJson());
+			// The host stops hearing the survivor for a while; the survivor plays on to the end of the host's sent input.
+			survivorWire.holding = true;
+			for (int turn = 0; turn < 30; ++turn) pump(true);
+			const uint64_t hostNext = host.GetStats().nextFrame, survivorNext = survivor.GetStats().nextFrame;
+			if (survivorNext <= hostNext) return fail("the survivor did not get ahead of the host: host " + std::to_string(hostNext) + " survivor " + std::to_string(survivorNext));
+			host.EvictRemovedPeer(3, "removed by the host", now);
+			for (int turn = 0; turn < 10; ++turn) pump(false);
+			survivorWire.Deliver();
+			for (int turn = 0; turn < 3000 && !(hostView.ended && survivorView.ended && host.GetStats().nextFrame > std::max(*hostView.ended, *survivorView.ended) + 20 &&
+			                                   survivor.GetStats().nextFrame > std::max(*hostView.ended, *survivorView.ended) + 20); ++turn) pump(false);
+			const auto hostLeave = host.GetPeerLeaveFrames(), survivorLeave = survivor.GetPeerLeaveFrames();
+			if (!hostLeave.contains(3) || !survivorLeave.contains(3) || hostLeave.at(3) != survivorLeave.at(3)) {
+				return fail("the kicked seat left at frame " + (hostLeave.contains(3) ? std::to_string(hostLeave.at(3)) : std::string("none")) + " on the host and " +
+				            (survivorLeave.contains(3) ? std::to_string(survivorLeave.at(3)) : std::string("none")) + " on the survivor (host was at " +
+				            std::to_string(hostNext) + ", the survivor at " + std::to_string(survivorNext) + ")");
+			}
+			for (const auto& [frame, ready]: hostCommitted) {
+				const auto other = survivorCommitted.find(frame);
+				if (other == survivorCommitted.end()) continue;
+				if (ready.remoteFrameCounts.contains(3) != other->second.remoteFrameCounts.contains(3)) {
+					return fail("frame " + std::to_string(frame) + " carried the kicked seat's input on " + (ready.remoteFrameCounts.contains(3) ? "the host" : "the survivor") +
+					            " only (it left at " + std::to_string(hostLeave.at(3)) + "; host was at " + std::to_string(hostNext) + ", the survivor at " + std::to_string(survivorNext) + ")");
+				}
+			}
+			std::string differs;
+			if (!hostView.ended || !survivorView.ended || *hostView.ended != *survivorView.ended || !SameClaimsEveryFrame(hostView, survivorView, &differs)) {
+				return fail("the kicked seat's handoff ended at frame " + hostView.Ended() + " on the host and " + survivorView.Ended() + " on the survivor" +
+				            (differs.empty() ? std::string() : "; " + differs));
+			}
+			std::cout << "[net-lockstep-selftest] kicked_leave_frame=" << hostLeave.at(3) << " host_next=" << hostNext << " survivor_next=" << survivorNext << std::endl;
+			return fail("");
+		}
+
+		// The unbounded policies stop every peer's commits while a dropped seat is unresolved, so the host's resolution reaches each
+		// peer before it commits the seat's first missing frame: a late resolution ends the dropped seat's claim on the same frame.
+		bool TestUnboundedDropEndsItsClaimsOnOneFrame(std::string* error) {
+			const char* name = "unbounded_drop_ends_its_claims_on_one_frame";
+			EnsureSwitchTestManagers();
+			NetActorOwnership::ClearSeededOwners();
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow(name, why, error); };
+			LateSeatNoticeWire hostWire;
+			LoopbackTransport survivorWire, droppedWire;
+			std::string setup;
+			if (!hostWire.StartHost(49613, &setup) || !survivorWire.Connect("loopback", 49613, &setup) || !droppedWire.Connect("loopback", 49613, &setup)) return fail(setup);
+			const NetMatchConfig match = ReleasedClaimsMatch(0x9B13, 3);
+			NetLockstepCoordinator host, survivor, dropped;
+			if (!host.Start(hostWire, ReleasedClaimsConfig(match, 1, {{2, 1}, {3, 2}}, false), &setup) ||
+			    !survivor.Start(survivorWire, ReleasedClaimsConfig(match, 2, {{1, 1}}, false), &setup) ||
+			    !dropped.Start(droppedWire, ReleasedClaimsConfig(match, 3, {{1, 1}}, false), &setup)) return fail(setup);
+			ClaimView hostView, survivorView;
+			if (!hostView.Create("host", host, 0, 1, 3) || !survivorView.Create("survivor", survivor, 0, 1, 3)) return fail("the views' actors could not be created");
+			hostView.handoff = survivorView.handoff = 3;
+			uint64_t now = 0;
+			std::array<uint64_t, 3> produced{};
+			const auto pump = [&](bool droppedPlays) {
+				FeedReleasedClaimsPeer(host, produced[0]);
+				FeedReleasedClaimsPeer(survivor, produced[1]);
+				if (droppedPlays) FeedReleasedClaimsPeer(dropped, produced[2]);
+				host.Tick(now);
+				survivor.Tick(now);
+				if (droppedPlays) dropped.Tick(now);
+				ApplyReadyFrames(host, hostView);
+				ApplyReadyFrames(survivor, survivorView);
+				if (droppedPlays) {
+					NetLockstepReadyFrame ready;
+					while (dropped.PopReadyFrame(ready)) dropped.FinishSimulationTick(ready.frame);
+				}
+				hostWire.AdvanceTimeMs(5);
+				survivorWire.AdvanceTimeMs(5);
+				if (droppedPlays) droppedWire.AdvanceTimeMs(5);
+				now += 5;
+			};
+			for (int turn = 0; turn < 400 && !(host.IsRunning() && survivor.IsRunning() && dropped.IsRunning()); ++turn) pump(true);
+			for (int turn = 0; turn < 400 && host.GetStats().nextFrame < 10; ++turn) pump(true);
+			if (!host.IsRunning() || host.GetStats().nextFrame < 10) return fail("the three seats never played: " + host.BuildReportJson());
+			// Seat 3's process wedges: the host calls it gone on its own budget and every peer pauses on the dropped seat.
+			for (int turn = 0; turn < 2000 && !(host.GetPeerLeaveFrames().contains(3) && survivor.GetPeerLeaveFrames().contains(3)); ++turn) pump(false);
+			if (!host.AnyDroppedSeatHeld() || !survivor.AnyDroppedSeatHeld()) return fail("the wedged seat was not held for its return: " + host.BuildReportJson());
+			hostWire.lateTo = {1};
+			host.ResolveHeldSeat(3, NetLockstepHoldResolution::Expired, now);
+			for (int turn = 0; turn < 40; ++turn) pump(false);
+			hostWire.Deliver();
+			for (int turn = 0; turn < 3000 && !(hostView.ended && survivorView.ended && host.GetStats().nextFrame > std::max(*hostView.ended, *survivorView.ended) + 20); ++turn) pump(false);
+			std::string differs;
+			if (!hostView.ended || !survivorView.ended || *hostView.ended != *survivorView.ended || !SameClaimsEveryFrame(hostView, survivorView, &differs)) {
+				return fail("the dropped seat's claim ended at frame " + hostView.Ended() + " on the host and " + survivorView.Ended() +
+				            " on the survivor that heard the resolution late" + (differs.empty() ? std::string() : "; " + differs));
+			}
+			std::cout << "[net-lockstep-selftest] dropped_claim_frame=" << *hostView.ended << " leave_frame=" << host.GetPeerLeaveFrames().at(3) << std::endl;
+			return fail("");
+		}
+
+		bool RunReleasedClaimsRows() {
+			bool passed = true;
+			for (bool (*test)(std::string*): {TestHeldSeatReleaseEndsItsClaimsOnOneFrame, TestKickedPlayingSeatLeavesOnOneFrame, TestUnboundedDropEndsItsClaimsOnOneFrame}) {
+				std::string error;
+				passed &= test(&error);
+			}
+			return passed;
+		}
+	}
+
+	int NetLockstepSelfTest::RunReleasedClaims() {
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		if (!LuaMan::IsConstructed()) LuaMan::Construct();
+		if (!SimChecksum::IsConstructed()) SimChecksum::Construct();
+		if (!MovableMan::IsConstructed()) MovableMan::Construct();
+		if (!ActivityMan::IsConstructed()) ActivityMan::Construct();
+		const bool passed = RunReleasedClaimsRows();
+		std::cout << "[net-lockstep-released-claims-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
+		return passed ? 0 : 1;
+	}
+
 	int NetLockstepSelfTest::RunOrdering() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		std::string error;
@@ -23445,6 +23888,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			std::cerr << "[net-lockstep-selftest] FAIL " << name << ": " << rowError << std::endl;
 			rowsPassed = false;
 		};
+		row(&TestHeldSeatReleaseEndsItsClaimsOnOneFrame, "held_seat_release_ends_its_claims_on_one_frame");
+		row(&TestKickedPlayingSeatLeavesOnOneFrame, "kicked_playing_seat_leaves_on_one_frame");
+		row(&TestUnboundedDropEndsItsClaimsOnOneFrame, "unbounded_drop_ends_its_claims_on_one_frame");
 		row(&TestAReturnGapDoesNotStartTheHostsClock, "a_return_gap_does_not_start_the_hosts_clock");
 		row(&TestAHoldLandsAtTheFirstFrameItsSeatOwes, "a_hold_lands_at_the_first_frame_its_seat_owes");
 		row(&TestALinklessMemberIsHeldByTheStart, "a_linkless_member_is_held_by_the_start");
