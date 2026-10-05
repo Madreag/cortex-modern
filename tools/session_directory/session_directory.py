@@ -999,6 +999,7 @@ class SessionDirectory:
                 if host_token is None or not tokens_equal(host_token, sess.token):
                     raise PermissionError("forbidden")
                 self._ack_world_register(sess, now)
+            authenticated_lease = sess
             deadline = now + wait_s
             # Long-poll: hold the request until this peer's queue gains a signal past
             # `after`, the session goes away, or the wait elapses.
@@ -1013,6 +1014,8 @@ class SessionDirectory:
                 sess = self._sessions.get(session_id)
                 if sess is None:
                     raise KeyError("not_found")
+                if peer == "host" and (sess is not authenticated_lease or not tokens_equal(host_token or "", sess.token)):
+                    raise PermissionError("forbidden")
             now = time.monotonic()
             queue = sess.queues.get(peer)
             if queue is None:
