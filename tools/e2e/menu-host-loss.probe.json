@@ -14,7 +14,7 @@
     {
       "op": "wait",
       "control": "LabelNetMatchStatus",
-      "text_contains": "Host connection lost - choosing a new host",
+      "text_contains": "Host lost - contacting the next host",
       "equals": {
         "visible": true
       }

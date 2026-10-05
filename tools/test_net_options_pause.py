@@ -168,13 +168,13 @@ def lifecycle_steps(arm, who, tag):
                   menu_step("post_command ButtonResume"), {"op": "wait", "screen": "Gameplay"},
                   {"op": "wait", "sim_at_least": 480}, {"op": "finish"}]
     elif arm == "leave":
-        # The confirmation replaces the rows; its text names what this seat loses when it leaves.
+        # The confirmation replaces the rows; its text says what happens to this seat when it leaves.
         steps += [menu_step("post_command ButtonLeaveMatch"), {"op": "wait", "screen": "PauseLeaveConfirm"},
                   menu_step("assert_visible LabelLeaveConfirm 1"), menu_step("assert_rect_inside LabelLeaveConfirm LeaveConfirmBox"),
                   menu_step("assert_text_fits LabelLeaveConfirm"), menu_step("assert_text_fits ButtonLeaveConfirm"),
                   menu_step("assert_text_fits ButtonLeaveCancel"), menu_step("assert_visible ButtonResume 0"),
                   {"op": "assert_control", "scope": "menu", "control": "LabelLeaveConfirm",
-                   "text_contains": "match ends for everyone" if who == "host" else "fall to a teammate or to the AI",
+                   "text_contains": "match ends for everyone" if who == "host" else "your seat stays yours",
                    "equals": {"visible": True}},
                   menu_step("dump_host_options"), {"op": "screenshot", "name": f"{tag}_confirm"},
                   # Cancel first: the confirmation must be escapable without touching the session.

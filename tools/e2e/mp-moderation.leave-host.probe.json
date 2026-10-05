@@ -46,7 +46,7 @@
     {
       "op": "assert_control",
       "control": "NetworkSeatName0",
-      "text_contains": "Seat 1"
+      "text_contains": "leaver"
     },
     {
       "op": "assert_control",
@@ -54,11 +54,35 @@
       "equals": {
         "enabled": true
       },
-      "text_contains": "Approve substitute"
+      "text_contains": "Let newcomer join"
     },
     {
       "op": "menu",
       "command": "video_mark host-accepts-newcomer"
+    },
+    {
+      "op": "mouse_down",
+      "control": "NetworkSeatSubstitute0"
+    },
+    {
+      "op": "wait",
+      "control": "NetworkSeatSubstitute0",
+      "equals": {
+        "pushed": true
+      }
+    },
+    {
+      "op": "mouse_up",
+      "control": "NetworkSeatSubstitute0"
+    },
+    {
+      "op": "wait",
+      "renders": 4
+    },
+    {
+      "op": "assert_control",
+      "control": "NetworkSeatsStatus",
+      "text_contains": "newcomer takes leaver's place"
     },
     {
       "op": "mouse_down",

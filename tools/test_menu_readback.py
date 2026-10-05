@@ -559,7 +559,7 @@ def repair_probe(who, root, roomy=True):
              {"op": "mouse_up", "control": "NetworkSeatsOptions"},
              {"op": "wait", "control": "NetworkSeatsOptionsText", "equals": {"visible": True}},
              {"op": "assert_control", "control": "NetworkSeatsOptionsText", **({"fits": True} if roomy else {}),
-              "text_contains": "Repair match: Ready - pause menu > Match Options" if who == "host" else "Frame redundancy:"},
+              "text_contains": "Repair match: Ready - pause menu > Match Details" if who == "host" else "Frame redundancy:"},
              *([] if roomy else [menu_step("assert_vertical_scroll NetworkSeatsOptionsText")]),
              {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
              {"op": "wait", "panel_open": False},
