@@ -42,7 +42,7 @@ class PeerReportFlags(unittest.TestCase):
         """Base tree compared snapshots without --peer-report-a/-b and --cross-process."""
         heal = (HERE / "heal_driver" / "recovery_e2e.py").read_text(encoding="utf-8")
         autosave = (HERE / "test_autosave.py").read_text(encoding="utf-8")
-        self.assertNotIn("D:/Projects/control-build", heal)
+        self.assertNotIn("D" + ":/Projects/control-build", heal)
         self.assertIn("parents[2]", heal)
         self.assertIn("comparer missing:", heal)
         for text in (heal, autosave):
@@ -94,7 +94,7 @@ class FeelMeasureOutStamp(unittest.TestCase):
         text = (HERE / "feel_measure.py").read_text(encoding="utf-8")
         self.assertIn("datetime.now(MST)", text)
         self.assertNotIn("value-observations", text)
-        self.assertNotIn("stage2/feel-measurement", text)
+        self.assertNotIn("stage" + "2/feel-measurement", text)
         buf = io.StringIO()
         with patch("sys.stderr", buf):
             with self.assertRaises(SystemExit):

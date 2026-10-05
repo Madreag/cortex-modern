@@ -2140,11 +2140,11 @@ class WorldClockSizingTests(unittest.TestCase):
         self.assertGreaterEqual(world_round_ticks(1200, write_seconds, 2, WORLD_KILL_TICK, limit_ticks), needed)
 
     def test_a_fast_writer_keeps_the_old_rounds(self):
-        # Acceptance run 1 on the Z13 (2.0 s a write) and the Linux box's 1.75 s: every world round keeps the length it had.
+        # A laptop's 2.0 s a write and a Linux box's 1.75 s in one acceptance run: every world round keeps the length it had.
         for write_seconds in (1.75, 2.0):
             self.assertEqual(world_round_ticks(1200, write_seconds, 2, WORLD_START_LEAD_TICKS), 1200)
             self.assertEqual(world_round_ticks(600, write_seconds, 0, 0), 600)
-            # The Z13's resumed round, 2,425 ticks from its first boot's capture gap, with that boot's return of 487 ticks.
+            # A laptop's resumed round, 2,425 ticks from its first boot's capture gap, with that boot's return of 487 ticks.
             self.assertEqual(world_round_ticks(2425, write_seconds, RETAINED_AUTOSAVES + 1, WORLD_START_LEAD_TICKS, WRITE_MARGIN * 487), 2425)
         for tenths in range(0, 200):
             self.assertGreaterEqual(world_round_ticks(1200, tenths / 10, 2, WORLD_START_LEAD_TICKS), 1200)
@@ -2567,7 +2567,7 @@ class WorldRestartOracleTests(unittest.TestCase):
             "no canonical snapshot": (logs(canonical=False), False),
             "a section the canonical capture keeps for itself": (logs(canonical_own="graph.3"), True),
             "a section the canonical capture drops unnamed": (logs(canonical_own=""), False),
-            # EDITH S1 restore-all on merge 254: the slow saver coalesced samples after the heal on each peer.
+            # A restore-all run on a slow Windows box: the slow saver coalesced samples after the heal on each peer.
             "samples each peer's own saver coalesced after the heal": (
                 logs(absent={"host": {840, 1020}, "client": {840, 960}}, coalesced={"host": [840, 1020], "client": [840, 960]}), True),
             "an absence no line of the peer names": (logs(absent={"client": {1200}}), False),

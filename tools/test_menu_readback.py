@@ -483,7 +483,7 @@ def pause_probe(who, root):
                   {"op": "wait", "service": "Completed", "scope": "menu"},
                   {"op": "signal", "name": "left", "scope": "menu"}]
     else:
-        # ENGINE 200: End Match is the host's row only while the round runs. The enabled state is re-derived
+        # End Match is the host's row only while the round runs. The enabled state is re-derived
         # from the live service on every pause-menu Update and the button is drawn by that same pass, so the
         # host reads it live here and the capture's recorded pause rows carry the state after completion.
         # The host keeps its probe running until the client has left: a host that stops probing plays at full rate while the
@@ -1140,7 +1140,7 @@ def scripts(case, port, root, size="960x540"):
                 "assert_text_fits LabelLobbyPlayersHeader\n"
                 "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
                 # The host's options panel edits the adopted config; its Rules page carries the
-                # picked activity/mode and the L33 row the ledger names.
+                # picked activity/mode and the brainless-humans row.
                 "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
                 "assert_label LabelHostOptionsTitle H O S T   O P T I O N S\n"
                 # H09/H10: the host's own seat is never kickable, whoever else is in the lobby.
@@ -1234,7 +1234,7 @@ def scripts(case, port, root, size="960x540"):
                   "assert_text_fits LabelLobbyPlayersHeader\n"
                   "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
                   # The client's Options button opens the same adopted config as a read-only
-                  # details view: every edit control is disabled, the L33 row reads identically,
+                  # details view: every edit control is disabled, the brainless-humans row reads identically,
                   # and the title names what it is.
                   "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
                   "assert_label LabelHostOptionsTitle M A T C H   D E T A I L S\n"
@@ -1391,7 +1391,7 @@ def scripts(case, port, root, size="960x540"):
         text += ("assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
                  "dump_host_options\nactivate ButtonHostSeatDlgClose\nwait 3\n"
                  "assert_visible HostSeatDialog 0\n")
-        # H07-H20 Rules: the L33 row keeps the ledger's exact label and pair of answers.
+        # H07-H20 Rules: the brainless-humans row keeps its exact label and pair of answers.
         text += "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
         text += "assert_label LabelHostOptionsTitle M A T C H   R U L E S\n"
         text += checks("ComboHostRulesActivity", "CollectionBoxHostPageRules")
@@ -1489,7 +1489,7 @@ def scripts(case, port, root, size="960x540"):
                  # Switching autosave on from off starts at the shortest cadence, not the off zero.
                  "assert_label TextHostRecAutosaveInterval 60\n"
                  "assert_label LabelHostRecLastSave Checkpoint every 60 sim seconds - none saved yet\n"
-                 # ENGINE 166: the caption follows the typed interval on the Changed notification,
+                 # The caption follows the typed interval on the Changed notification,
                  # before any Apply or focus loss commits it. The product bounds the interval to
                  # every minute through every hour: 5 commits as 60, 3600 keeps, 0 stays off.
                  "set_text TextHostRecAutosaveInterval 5\nwait_ms 500\n"
@@ -1588,7 +1588,7 @@ def scripts(case, port, root, size="960x540"):
                   # The host's own sim count says nothing about the client's start: the first checks
                   # wait until the client's round has committed frames of its own.
                   {"op": "wait_file", "path": str(probe_root(root, "client") / "client_frame.json")},
-                  # ENGINE 195: a band pushed while the panel is closed paints at the bottom of the
+                  # A band pushed while the panel is closed paints at the bottom of the
                   # game screen; opening the panel moves it, and `single` fails if the old band's
                   # pixels stay behind on the GUI layer. The watch arms before the move so a ghost
                   # that only lives for the frames between the move and the next wipe still counts.
@@ -1599,7 +1599,7 @@ def scripts(case, port, root, size="960x540"):
                   {"op": "wait", "panel_open": True}, {"op": "wait", "renders": 5},
                   menu_step("ghost_watch assert"),
                   menu_step("assert_toast_band single"),
-                  # ENGINE 210: the corner roster box wraps at word boundaries only, and its width
+                  # The corner roster box wraps at word boundaries only, and its width
                   # rule grows the panel to the longest word instead of letting it hang over. The
                   # status box only wraps in its tall layout; the strip path is one FitLine'd line.
                   menu_step("assert_word_wrap probe Seats [F6] Input delay: 15 (auto, re-sized live) PeerExtremelyLongDisplayNameForWrapChecking0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 sits row"),
@@ -1621,7 +1621,7 @@ def scripts(case, port, root, size="960x540"):
                   {"op": "key_up", "key": "Escape"}, {"op": "wait", "screen": "Pause"}]) if case == "live"
                  else [{"op": "wait", "screen": "MultiplayerScreen"}])
         if case == "live":
-            # The match's pause menu opens without pausing the shared sim (L03): the menu is a local
+            # The match's pause menu opens without pausing the shared sim: the menu is a local
             # surface, the synchronized pause is its own row. Both peers keep running while it is open.
             steps += [{"op": "assert", "equals": {"service": "Running", "paused": False}, "sim_at_least": 100},
                       menu_step("assert_visible ButtonSettings 1"), menu_step("dump_host_options"),

@@ -80,7 +80,7 @@ def rules_for(variant):
 
 
 def encode_config(rules, wire, dedicated=False, default=False):
-    """Encode the existing L12 MatchConfig packet consumed by NetLobbyProtocol, at that tree's own versions."""
+    """Encode the existing MatchConfig packet consumed by NetLobbyProtocol, at that tree's own versions."""
     if struct.calcsize(ENVELOPE) != wire.header_bytes.value:
         raise RuntimeError(f"envelope layout is {struct.calcsize(ENVELOPE)} bytes, {wire.header_bytes.site} says "
                            f"{wire.header_bytes.value}")
