@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 from PIL import Image
@@ -3067,6 +3068,9 @@ def run_case(options, case, root, failing=None):
         result["pass"] = True
     except Exception as error:
         result["error"] = str(error)
+        # The check that failed, by its line in this driver: a message that is only the data it read names no check.
+        result["failed_at"] = [f"{frame.lineno}: {frame.line}" for frame in traceback.extract_tb(error.__traceback__)
+                               if frame.filename == __file__][-1:]
     finally:
         for run in runs.values():
             run.close()
