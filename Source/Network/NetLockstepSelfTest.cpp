@@ -24464,6 +24464,13 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		public:
 			SoundContainer* sound = nullptr;
 			int mutations = 0;
+			Entity* Clone(Entity* cloneTo = nullptr) const override {
+				auto* copy = cloneTo ? dynamic_cast<AuthorityReadingActivity*>(cloneTo) : new AuthorityReadingActivity;
+				if (!copy) return nullptr;
+				copy->sound = sound; copy->mutations = mutations;
+				return copy;
+			}
+			int Start() override { SetActivityState(Activity::Running); return 0; }
 			void Update() override { SoundSimulationScope shared(0, 0x9D04); if (sound->GetAudibleVolume() > 0.5F) ++mutations; }
 		};
 
@@ -24491,15 +24498,20 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!replay.StartReplay(wire, config, &why)) return fail(why);
 			ScenarioRunner::SetLockstepCoordinator(&replay);
 			g_AudioMan.CommitSoundObservations(119, {}, observations);
-			AuthorityReadingActivity activity; activity.sound = &sound;
+			auto* startActivity = new AuthorityReadingActivity; startActivity->sound = &sound;
+			if (g_ActivityMan.StartActivity(startActivity) < 0) return fail("the authority-reading activity did not start");
+			auto* activity = dynamic_cast<AuthorityReadingActivity*>(g_ActivityMan.GetActivity());
+			if (!activity) return fail("the activity manager lost the authority-reading activity");
 			std::string failures;
 			for (int pass = 0; pass < 2; ++pass) {
-				activity.mutations = 0;
+				activity->mutations = 0;
+				g_TimerMan.RewindSimTo(119, 119 * g_TimerMan.GetDeltaTimeTicks());
 				if (pass && !ScenarioRunner::RewindReplayForProbe(120, &why)) return fail(why);
 				for (uint64_t tick = 120; tick <= 122; ++tick) {
 					if (!ScenarioRunner::PollLockstepSimulationTick(tick)) return fail("playback did not grant activity tick " + std::to_string(tick));
-					activity.Update();
-					if (activity.mutations != static_cast<int>(tick - 120)) failures += std::string(pass ? "rewind" : "first pass") + " activity tick " + std::to_string(tick) + " host=" + std::to_string(replay.GetHostPeerId()) + " mutations=" + std::to_string(activity.mutations) + " expected=" + std::to_string(tick - 120) + "; ";
+					g_TimerMan.GrantSimUpdates(1); g_TimerMan.UpdateSim(); g_ActivityMan.Update();
+					if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != tick) return fail("the simulation counter did not advance to the recorded frame");
+					if (activity->mutations != static_cast<int>(tick - 120)) failures += std::string(pass ? "rewind" : "first pass") + " activity tick " + std::to_string(tick) + " host=" + std::to_string(replay.GetHostPeerId()) + " mutations=" + std::to_string(activity->mutations) + " expected=" + std::to_string(tick - 120) + "; ";
 					if (!ScenarioRunner::QueueLockstepLocalControllerFrames(tick, {}, &why)) return fail(why);
 					replay.Tick(0); NetLockstepReadyFrame ready;
 					if (!replay.PopReadyFrame(ready)) return fail(replay.GetStats().timeoutReason);
