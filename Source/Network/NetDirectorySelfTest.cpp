@@ -1270,9 +1270,7 @@ namespace RTE {
 				return true;
 			}
 
-			// A persistent world outlives directory restarts: a service that forgot the row (heartbeat 404) and so holds no token for it
-			// refuses the world's stored token (403); the world then claims its own id as on its first boot, though the host hands the
-			// client the refused token again every frame, and its row comes back under the same id. A later restart is answered the same way.
+			// A forgotten service needs tokenless recovery after the retained proof gets its retry.
 			bool TestAWorldTakesItsRowBackFromAForgetfulDirectory(std::string* error) {
 				const std::string world = "5e6f7a8b-1111-4222-8333-444455556666";
 				const auto granted = [&](const char* token) {
@@ -1282,7 +1280,7 @@ namespace RTE {
 				const NetDirectoryClient::Reply gone{404, R"({"error":"not_found"})", ""};
 				const NetDirectoryClient::Reply forbidden{403, R"({"error":"forbidden"})", ""};
 				ScriptedClient s;
-				for (const NetDirectoryClient::Reply& reply: {granted("tok-1"), beat, gone, forbidden, granted("tok-2"), beat, gone, forbidden, granted("tok-3")}) s.replies->push_back(reply);
+				for (const NetDirectoryClient::Reply& reply: {granted("tok-1"), beat, gone, forbidden, forbidden, granted("tok-2"), beat, gone, forbidden, forbidden, granted("tok-3")}) s.replies->push_back(reply);
 				NetDirectoryRegisterRequest row = SampleRegisterRequest();
 				row.persistentWorld = true;
 				row.worldId = world;
@@ -1292,13 +1290,18 @@ namespace RTE {
 					return false;
 				}
 				// What the host does every frame: it hands the client its row, whose resume token is the last one the service issued.
+				std::vector<uint64_t> registerTimes;
 				const auto frame = [&](uint64_t nowMs) {
+					const size_t before = s.sent->size();
 					row.resumeSessionId = world;
 					if (!s.client.GetToken().empty()) row.resumeToken = s.client.GetToken();
 					s.client.Advertise(row, true, true);
 					s.client.Update(nowMs);
+					for (size_t i = before; i < s.sent->size(); ++i) {
+						if (s.sent->at(i).method == "POST" && s.sent->at(i).path == "/v1/sessions") registerTimes.push_back(nowMs);
+					}
 				};
-				for (uint64_t now = 0; now <= 90000 && s.client.GetToken() != "tok-3"; ++now) frame(now);
+				for (uint64_t now = 0; now <= 120000 && s.client.GetToken() != "tok-3"; ++now) frame(now);
 				std::vector<std::string> claims;
 				for (const NetDirectoryClient::Request& request: *s.sent) {
 					if (request.method != "POST" || request.path != "/v1/sessions") continue;
@@ -1312,10 +1315,16 @@ namespace RTE {
 				}
 				std::string seen;
 				for (const std::string& claim: claims) seen += (seen.empty() ? "" : ",") + claim;
-				const std::vector<std::string> wanted = {world + "/-", world + "/tok-1", world + "/-", world + "/tok-2", world + "/-"};
+				const std::vector<std::string> wanted = {world + "/-", world + "/tok-1", world + "/tok-1", world + "/-", world + "/tok-2", world + "/tok-2", world + "/-"};
 				if (claims != wanted) {
-					*error = "world-reclaim: the world's registers claimed " + seen + "; a token the directory refused must give way to the world's own id";
+					*error = "world-reclaim: the world's registers claimed " + seen + "; proof retry or tokenless same-id recovery was lost";
 					return false;
+				}
+				for (size_t i = 1; i < registerTimes.size(); ++i) {
+					if (registerTimes[i] - registerTimes[i - 1] < 5000) {
+						*error = "world-reclaim: registration retried without its backoff";
+						return false;
+					}
 				}
 				if (s.client.GetState() != NetDirectoryClient::State::Registered || s.client.GetSessionId() != world || s.client.GetToken() != "tok-3") {
 					*error = std::string("world-reclaim: after two directory restarts the client is ") + NetDirectoryClient::StateName(s.client.GetState()) + " on '" +
