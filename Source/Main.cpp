@@ -10848,6 +10848,9 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-input-acceptance-selftest") {
 			return NetLockstepSelfTest::RunAcceptance();
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-input-acceptance-steady-selftest") {
+			return NetLockstepSelfTest::RunAcceptanceSteady();
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-first-start-selftest") {
 			return NetLockstepSelfTest::RunFirstStart();
 		}

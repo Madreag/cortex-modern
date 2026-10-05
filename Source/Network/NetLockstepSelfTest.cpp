@@ -24465,6 +24465,118 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return failed == 0 ? 0 : 1;
 	}
 
+	int NetLockstepSelfTest::RunAcceptanceSteady() {
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		struct Wire : LoopbackTransport {
+			struct Pending { uint64_t at; NetTransportEvent event; };
+			uint32_t rtt = 0, random = 1;
+			uint64_t lastReliable = 0;
+			std::vector<Pending> pending;
+			uint32_t Jitter() { random = random * 1664525U + 1013904223U; return random % 41; }
+			uint32_t GetPeerPingMs(NetPeerId) const override {
+				uint32_t value = static_cast<uint32_t>(NowMs() / 100) + 731;
+				uint32_t measured = rtt;
+				for (int leg = 0; leg < 4; ++leg) { value = value * 1664525U + 1013904223U; measured += value % 41; }
+				return measured;
+			}
+			std::vector<NetTransportEvent> PollEvents() override {
+				auto events = LoopbackTransport::PollEvents();
+				std::vector<NetTransportEvent> ready;
+				for (auto& event : events) {
+					if (event.type != NetTransportEventType::PacketReceived) { ready.push_back(std::move(event)); continue; }
+					uint64_t due = NowMs() + rtt / 2 + Jitter() + Jitter();
+					if (event.lane == NetTransportLane::ControlReliable) { due = std::max(due, lastReliable); lastReliable = due; }
+					pending.push_back({due, std::move(event)});
+				}
+				std::stable_sort(pending.begin(), pending.end(), [](const Pending& a, const Pending& b) { return a.at < b.at; });
+				auto end = pending.begin();
+				while (end != pending.end() && end->at <= NowMs()) { ready.push_back(std::move(end->event)); ++end; }
+				pending.erase(pending.begin(), end);
+				return ready;
+			}
+		};
+		int failed = 0;
+		for (uint32_t rtt : {20U, 60U, 120U}) {
+			Wire hostWire, clientWire; hostWire.rtt = clientWire.rtt = rtt;
+			hostWire.random = 19 + rtt; clientWire.random = 271 + rtt;
+			NetLockstepCoordinator host, client;
+			NetInputDelayEstimator measured;
+			for (uint64_t now = 100; now <= 5100; now += 100) { hostWire.AdvanceTimeMs(100); measured.Observe(now, hostWire.GetPeerPingMs(1)); }
+			const uint16_t delay = static_cast<uint16_t>(measured.RequiredFrames(1000.0 / 60));
+			const auto config = [&](uint8_t peer) {
+				auto value = MakeCoordinatorConfig(peer, peer == 1 ? 2 : 1, 0xACD000 + rtt, peer == 1 ? 0 : delay, NetTransportLane::InputUnreliable);
+				value.startFrame = 1; value.roundId = peer == 1 ? value.sessionId + 1 : 0;
+				value.timeoutMs = 60000; value.substituteSlowPeers = true; value.adaptiveInputDelay = true;
+				value.simTickMs = 1000.0 / 60; value.slowPlayerBoundTicks = 3; value.relayToOtherPeers = peer == 1;
+				value.peerInputDelayFrames = {{1, 0}, {2, delay}}; value.peerIncarnations = {{1, 1}, {2, 1}};
+				value.initialDelaySamples[peer == 1 ? 2 : 1] = measured;
+				value.matchConfig = NetMatchConfigUtil::MakeDefault(value.sessionId);
+				value.matchConfig.delayPolicy = NetMatchDelayPolicy::Auto; value.matchConfig.inputDelayFrames = 0;
+				value.matchConfig.peerInputDelayFrames = {0, delay};
+				return value;
+			};
+			std::string error;
+			bool ok = StartCoordinatorPair(static_cast<uint16_t>(47540 + rtt / 20), hostWire, clientWire, host, client, config(1), config(2), &error);
+			uint64_t now = 0;
+			const auto pump = [&] {
+				++now; hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
+			};
+			for (; ok && now < 2000 && (!host.IsRunning() || !client.IsRunning());) pump();
+			ok = ok && host.IsRunning() && client.IsRunning();
+			struct Sim { uint64_t frame = 1, due = 0; bool produced = false; MigrationSimFixture world; };
+			Sim a, b; a.due = b.due = now;
+			uint64_t waits = 0;
+			std::map<int64_t, uint64_t> leads;
+			while (ok && now < 100000 && (a.frame <= 3900 || b.frame <= 3900)) {
+				const uint64_t before = client.m_HostAcceptedLocalFrames.empty() ? 0 : *client.m_HostAcceptedLocalFrames.rbegin();
+				const uint64_t needed = b.frame;
+				pump();
+				const uint64_t through = client.m_HostAcceptedLocalFrames.empty() ? 0 : *client.m_HostAcceptedLocalFrames.rbegin();
+				for (uint64_t frame = std::max<uint64_t>(301, before + 1); frame <= std::min<uint64_t>(3900, through); ++frame)
+					++leads[static_cast<int64_t>(frame) - static_cast<int64_t>(needed)];
+				if (a.frame <= 3900 && now >= a.due) {
+					if (!a.produced && !host.TimingDecisionPendingAt(a.frame)) {
+						ok = host.QueueLocalInput(a.frame, {MakeFrame(101, a.frame)}, {}, &error); a.produced = ok;
+					}
+					NetLockstepReadyFrame ready;
+					if (a.produced && host.PopReadyFrame(ready)) {
+						a.world.Apply(ready); host.FinishSimulationTick(ready.frame); ++a.frame; a.produced = false; a.due = now + 17;
+					} else host.NoteFrameWait(a.frame, now);
+				}
+				if (b.frame <= 3900 && now >= b.due) {
+					NetLockstepReadyFrame ready;
+					if (client.PopReadyFrame(ready)) {
+						b.world.Apply(ready); client.FinishSimulationTick(ready.frame);
+						const auto input = std::vector<ControllerFrame>{MakeFrame(102, b.frame)};
+						if (!client.DeferLocalInput(b.frame, input)) ok = client.QueueLocalInput(b.frame, input, {}, &error);
+						++b.frame; b.due = now + 17;
+					} else {
+						const auto counted = client.m_InputAcceptanceWaits;
+						client.NoteFrameWait(b.frame, now);
+						if (b.frame > 300 && client.m_InputAcceptanceWaits != counted) {
+							++waits;
+							std::cout << "[acceptance-steady-cause] base_rtt_ms=" << rtt << " frame=" << b.frame << " block=" << client.m_AdvanceBlock << std::endl;
+						}
+					}
+				}
+				ok = ok && host.IsRunning() && client.IsRunning();
+			}
+			uint64_t acknowledgements = 0;
+			for (const auto& [lead, count] : leads) acknowledgements += count;
+			const uint64_t holds = host.GetStats().peers.at(2).holds;
+			ok = ok && a.frame == 3901 && b.frame == 3901 && waits == 0 && holds == 0 && acknowledgements == 3600 && a.world.Hash() == b.world.Hash();
+			std::cout << "[net-input-acceptance-steady-selftest] " << (ok ? "PASS" : "FAIL") << " base_rtt_ms=" << rtt
+			          << " jitter_max_ms_per_leg=40 jitter_average_ms_per_leg=20 steady_frames=3600 waits=" << waits << " holds=" << holds
+			          << " acknowledged=" << acknowledgements << " host_frame=" << a.frame << " client_frame=" << b.frame << " initial_delay=" << delay
+			          << " final_delay=" << host.InputDelayAt(2, 3900) << " error=" << error << " ack_lead_frames={";
+			bool first = true;
+			for (const auto& [lead, count] : leads) { std::cout << (first ? "" : ",") << lead << ":" << count; first = false; }
+			std::cout << "}" << std::endl;
+			if (!ok) ++failed;
+		}
+		return failed == 0 ? 0 : 1;
+	}
+
 	int NetLockstepSelfTest::RunFirstStart() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		std::string error;

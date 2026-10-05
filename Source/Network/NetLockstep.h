@@ -1924,6 +1924,8 @@ namespace RTE {
 		uint64_t m_InputAcceptanceWaits = 0;
 		std::optional<uint64_t> m_LastInputAcceptanceWait;
 		std::map<int64_t, uint64_t> m_InputAcceptanceLeadFrames;
+		uint64_t m_InputAcceptanceReceipts = 0;
+		std::map<std::string, uint64_t> m_InputAcceptanceRejections;
 		std::map<uint8_t, uint64_t> m_ObservationEpochApplied; //!< sender -> the newest epoch its encode table was reset at.
 		size_t m_LastAdmissionReplayFrames = 0;        //!< What the last admission replayed, for the report.
 		std::function<void(const NetTransportEvent&)> m_SessionEventSink; //!< Forwards session traffic (reconnect handshakes) mid-match.
