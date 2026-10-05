@@ -34,7 +34,7 @@ def service_args(port, ticket, report, extra, players, ticks):
 def join_script(name, port, lines):
     return ("wait 40\nactivate ButtonMainToMultiplayer\nwait 12\n"
             f"settext TextMultiplayerName {name}\nactivate ButtonMultiplayerJoinGame\nwait 10\n"
-            f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n"
+            f"activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\nactivate ButtonJoinAddressGo\n"
             "wait_state Failed 240\nwait 5\nassert_substate Landing\n" + "".join(line + "\n" for line in lines))
 
 
@@ -182,7 +182,7 @@ def world_arm(repo, root, port, result):
                  f"assert_label LabelMultiplayerStatus {WAIT_LINE}", "assert_label ButtonMultiplayerLeave Cancel",
                  "wait_ms 10000", f"assert_label LabelMultiplayerStatus {WAIT_LINE}",
                  "activate ButtonMultiplayerLeave", "wait 10", "assert_substate Landing",
-                 "activate ButtonMultiplayerJoinGame", "wait 10", "activate ButtonMultiplayerConnect",
+                 "activate ButtonMultiplayerJoinGame", "wait 10", "activate ButtonJoinAddressGo",
                  "wait_state Failed 240", "wait 5", f"assert_error {SLOTS_HELD_LINE}",
                  "activate ButtonMultiplayerReconnect", "wait_ms 12000", "dump_lobby", "exit"]
         (root / "newcomer.txt").write_text(join_script("Newcomer", port, lines), encoding="utf-8")

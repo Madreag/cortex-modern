@@ -3,6 +3,10 @@ activate ButtonMainToOptions
 wait_ms 600
 select_settings_page Network
 wait_ms 450
+select_settings_page Network:Basics
+wait 3
+activate ButtonNetworkAdvanced
+wait 4
 select_settings_page Network:Connection
 wait_ms 900
 combo_select ComboNetworkConnection Relay only
@@ -26,36 +30,40 @@ wait_ms 450
 assert_substate HostSetup
 combo_select ComboHostActivity P4 Alpha Duel - Base.rte
 wait_ms 500
-settext TextHostPort {PORT}
-settext TextHostPlayers 2
+setup_host_port {PORT}
+combo_select ComboHostPlayers 2
 wait_ms 495
 activate ButtonHostOptions
 wait_ms 450
-activate TabHostPageNetwork
+activate TabHostPageConnection
 wait_ms 600
-activate TabHostNetRouting
+activate TabHostPageConnection
 wait_ms 600
-activate TabHostNetTuning
+activate TabHostPageTiming
 wait_ms 600
-combo_select ComboHostNetVisibility Internet: Listed
+activate TabHostPageConnection
+wait_ms 600
+combo_select ComboHostNetVisibility Public (default)
 wait_ms 900
-assert_label ComboHostNetVisibility Listed
-activate TabHostNetRouting
+assert_label ComboHostNetVisibility Public (default)
+activate TabHostPageConnection
 wait_ms 600
-combo_select ComboHostNetRelay Fixed
+combo_select ComboHostNetRelay Custom relay
 wait_ms 600
-assert_label ComboHostNetRelay Fixed
+assert_label ComboHostNetRelay Custom relay
 # Relay = Fixed shows the host's own relay boxes; the pair entered here is what the host publishes to joiners.
 assert_visible TextHostRelayAddress 1
 set_text TextHostRelayAddress {TURN_SERVER}
 set_text TextHostRelayUser {TURN_USER}
 set_text TextHostRelayPass {TURN_PASS}
 wait_ms 600
-activate TabHostNetTuning
+activate TabHostPageTiming
 wait_ms 600
-activate TabHostNetRouting
+activate TabHostPageConnection
 wait_ms 600
 assert_label TextHostRelayAddress turn:
+activate ButtonHostOptApply
+wait_ms 600
 activate ButtonHostOptBack
 wait_ms 450
 assert_substate HostSetup

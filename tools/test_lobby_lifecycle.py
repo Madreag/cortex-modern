@@ -41,8 +41,8 @@ from run_sim_test import make_run, seed_settings
 def menu_script(name, host, players, port):
     script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
     if host:
-        return script + f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\nsettext TextHostPlayers {players}\nactivate ButtonMultiplayerCreate\n"
-    return script + f"activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\nwait_connected {players}\nactivate ButtonMultiplayerReady\n"
+        return script + f"activate ButtonMultiplayerHostGame\nwait 10\nsetup_host_port {port}\nsettext TextHostPlayers {players}\nactivate ButtonMultiplayerCreate\n"
+    return script + f"activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\nactivate ButtonJoinAddressGo\nwait_connected {players}\nactivate ButtonMultiplayerReady\n"
 
 
 def wait_for_log(run, marker, seconds=45):

@@ -25,8 +25,8 @@ def check(repo, root, port, url):
                  f"assert_label LabelLanGames {HINT}\n"
                  "assert_visible LabelLanGames 1\n"
                  "assert_text_fits LabelLanGames\n"
-                 f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
-                 "activate ButtonMultiplayerConnect\nwait_connected 2 90\n"
+                 f"activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
+                 "activate ButtonJoinAddressGo\nwait_connected 2 90\n"
                  "assert_substate Lobby\ndump_lobby\nwait_ms 500\ngoto_main\nexit\n")
         for who, script in (("host", host), ("guest", guest)):
             path = root / f"{who}.menu.txt"

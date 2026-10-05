@@ -100,8 +100,8 @@ def main() -> int:
         script = root / "applicant.txt"
         script.write_text(
             "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName Applicant\n"
-            f"activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress session:{session_id}\n"
-            "activate ButtonMultiplayerConnect\n"
+            f"activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress session:{session_id}\n"
+            "activate ButtonJoinAddressGo\n"
             "wait_state Failed 240\nwait 5\nassert_substate Landing\n"
             "assert_error The match is already in progress\n"
             "assert_enabled ButtonMultiplayerReconnect 1\n"

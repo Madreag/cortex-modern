@@ -5,9 +5,11 @@ assert_substate Landing
 settext TextMultiplayerName Joiner
 activate ButtonMultiplayerJoinGame
 wait_ms 660
+activate ButtonJoinByAddress
+wait 4
 settext TextJoinAddress 127.0.0.1
 settext TextJoinPort {PORT}
-activate ButtonMultiplayerConnect
+activate ButtonJoinAddressGo
 wait_state Failed
 wait_ms 495
 video_mark version-client-refusal

@@ -49,12 +49,12 @@ def set_resolution(runtime: Path, x: int, y: int) -> None:
 def head(name: str, host: bool, port: int) -> str:
     script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
     if host:
-        return script + (f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\n"
-                         "settext TextHostPlayers 2\n"
+        return script + (f"activate ButtonMultiplayerHostGame\nwait 10\nsetup_host_port {port}\n"
+                         "combo_select ComboHostPlayers 2\n"
                          "activate ButtonMultiplayerCreate\nwait_connected 2\nwait_remote_ready\n"
                          "wait_all_ready\nactivate ButtonMultiplayerStart\n")
-    return script + (f"activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\n"
-                     f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n"
+    return script + (f"activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
+                     f"settext TextJoinPort {port}\nactivate ButtonJoinAddressGo\n"
                      "wait_connected 2\nactivate ButtonMultiplayerReady\nwait_remote_ready\n")
 
 

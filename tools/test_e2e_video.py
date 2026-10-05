@@ -730,7 +730,7 @@ def check_e2e_host_end_completion(results, repo):
 
 def check_substitution(results):
     tokens = {"PORT": 49411, "PROBE_DIR": Path("D:/x/host-stage/probe"), "PEER": "host"}
-    text = driver.substitute("settext TextHostPort {PORT}\nwait_file {PROBE_DIR}/done.json 240\n", tokens)
+    text = driver.substitute("setup_host_port {PORT}\nwait_file {PROBE_DIR}/done.json 240\n", tokens)
     ok = row(results, "substitute/text", "49411" in text and "{PORT}" not in text and "{PROBE_DIR}" not in text)
     args = driver.substitute(["-net-port", "{PORT}", "-peer", "{PEER}"], tokens)
     ok &= row(results, "substitute/list", args == ["-net-port", "49411", "-peer", "host"], str(args))
@@ -1183,9 +1183,9 @@ def check_listed_rows(results, scratch):
                                                                      {"listen_port": 49475, "session_id": "ours"}]}), encoding="utf-8")
     ok &= row(results, "directory-session/own-port-row", driver.directory_session(directory, 49475) == "ours")
     menu = root / "menu.txt"
-    menu.write_text("settext TextJoinAddress session:{DIRECTORY_SESSION}\n", encoding="utf-8")
+    menu.write_text("activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress session:{DIRECTORY_SESSION}\n", encoding="utf-8")
     bound = driver.bind_directory_session(menu, "ours")
-    ok &= row(results, "directory-session/bound-into-script", bound and menu.read_text(encoding="utf-8") == "settext TextJoinAddress session:ours\n")
+    ok &= row(results, "directory-session/bound-into-script", bound and menu.read_text(encoding="utf-8") == "activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress session:ours\n")
     return ok
 
 

@@ -26,9 +26,9 @@ def main():
     def start(name, host, suffix, extra=(), trace=False):
         script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
         if host:
-            script += f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {options.port}\nsettext TextHostPlayers 2\nactivate ButtonMultiplayerCreate\n"
+            script += f"activate ButtonMultiplayerHostGame\nwait 10\nsetup_host_port {options.port}\ncombo_select ComboHostPlayers 2\nactivate ButtonMultiplayerCreate\n"
         else:
-            script += f"activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {options.port}\nactivate ButtonMultiplayerConnect\n"
+            script += f"activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {options.port}\nactivate ButtonJoinAddressGo\n"
         path = root / f"{name}.txt"
         path.write_text(script + suffix)
         args = ["-menu-script", path, "-num-lua-states", 4, *extra]

@@ -244,12 +244,12 @@ def menu_script(who, port, name=None):
     text = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name or who}\n"
     if who == "Host":
         text += ("activate ButtonMultiplayerHostGame\nwait 10\n"
-                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
+                 f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
                  "activate ButtonMultiplayerCreate\nwait_connected 2\nwait_remote_ready\n"
                  "wait_all_ready\nactivate ButtonMultiplayerStart\n")
     else:
-        text += ("activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\n"
-                 f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\nwait_connected 2\n"
+        text += ("activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
+                 f"settext TextJoinPort {port}\nactivate ButtonJoinAddressGo\nwait_connected 2\n"
                  "activate ButtonMultiplayerReady\nwait_remote_ready\n")
     return text + "wait 99999\n"
 

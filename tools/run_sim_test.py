@@ -52,6 +52,16 @@ RUNTIME_SETTINGS = {"MuteMaster": "1", "MuteMusic": "1", "MuteSounds": "1", "Mas
                     "NetworkPlayerTurnServers": "", "NetworkPlayerTurnUser": "", "NetworkPlayerTurnPass": ""}
 
 
+def runtime_settings_text(settings):
+    """A runtime's Settings.ini: the tree's own with every runtime override in place, each on its own line."""
+    for name, value in RUNTIME_SETTINGS.items():
+        pattern = rf"(?m)^([ \t]*{name}[ \t]*=[ \t]*)[^\r\n]*"
+        settings, count = re.subn(pattern, lambda match: match[1] + value, settings)
+        if count == 0:
+            settings += f"\n\t{name} = {value}\n"
+    return settings
+
+
 def prepare_runtime(repo, out, fixtures=None):
     repo, out = Path(repo).resolve(), Path(out).resolve()
     runtime = out / "runtime"
@@ -62,13 +72,8 @@ def prepare_runtime(repo, out, fixtures=None):
     subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", "New-Item -ItemType Junction -Path " + quote(runtime / "Data") + " -Target " + quote(repo / "Data") + " | Out-Null"], check=True, creationflags=subprocess.CREATE_NO_WINDOW)
     # An unpacked release package ships no Settings.ini: the runtime holds the overrides alone and the game keeps its defaults for the rest.
     source = repo / "Userdata/Settings.ini"
-    settings = source.read_text(encoding="utf-8-sig") if source.is_file() else "SettingsMan\n"
+    settings = runtime_settings_text(source.read_text(encoding="utf-8-sig") if source.is_file() else "SettingsMan\n")
     values = RUNTIME_SETTINGS
-    for name, value in values.items():
-        pattern = rf"(?m)^([ \t]*{name}[ \t]*=[ \t]*)[^\r\n]*"
-        settings, count = re.subn(pattern, lambda match: match[1] + value, settings)
-        if count == 0:
-            settings += f"\n\t{name} = {value}\n"
     (runtime / "Userdata/Settings.ini").write_text(settings, encoding="utf-8")
     # The script-graph self-test reads its mod-compatibility fixture from the runtime, as the POSIX runner stages it.
     modcompat = repo / "tools/fixtures/preview_window_modcompat.lua"

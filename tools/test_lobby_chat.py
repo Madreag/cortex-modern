@@ -118,7 +118,7 @@ def shots_menu_script(who: str, port: int, res_tag: str) -> str:
     head = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {who}\n"
     if who == "Host":
         return (head + "activate ButtonMultiplayerHostGame\nwait 10\n"
-                f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
+                f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait_connected 2\n"
                 "chat all lobby hello at minimum viewport\nwait 15\n"
                 "chat team for my team only\nwait 15\n"
@@ -132,8 +132,8 @@ def shots_menu_script(who: str, port: int, res_tag: str) -> str:
                 "assert_label LabelLobbyChatNewest lobby closing marker\n"
                 "dump_lobby\nexit\n")
     return (head + "activate ButtonMultiplayerJoinGame\nwait 10\n"
-            f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
-            "activate ButtonMultiplayerConnect\nwait_connected 2\nwait 20\n"
+            f"activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
+            "activate ButtonJoinAddressGo\nwait_connected 2\nwait 20\n"
             "chat all hello from the client seat\nwait 60\nexit\n")
 
 
@@ -159,7 +159,7 @@ def game_version(repo: Path) -> str:
 def mismatch_menu_script(port: int, res_tag: str) -> str:
     return (f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName Host\n"
             f"activate ButtonMultiplayerHostGame\nwait 10\n"
-            f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
+            f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
             f"activate ButtonMultiplayerCreate\n"
             f"wait_error could not join\n"
             f"chat all lobby line beside the error\nwait 10\n"
@@ -192,8 +192,8 @@ def run_mismatch_shots(repo: Path, root: Path, port: int) -> dict:
             joiner_script = arm / "joiner.txt"
             joiner_script.write_text(
                 "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName Guest\n"
-                "activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\n"
-                f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\nwait 80\nexit\n",
+                "activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
+                f"settext TextJoinPort {port}\nactivate ButtonJoinAddressGo\nwait 80\nexit\n",
                 encoding="utf-8")
             runs = {
                 "host": make_run(repo, host_args, arm / "host", 240),

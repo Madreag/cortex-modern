@@ -477,11 +477,11 @@ def main():
         require_pin(repo, options.exe_sha256, before, checks, f"{name}_prelaunch")
         script = f"wait 40\nscreenshot main-start\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
         if host:
-            script += (f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\n"
-                       "settext TextHostPlayers 2\nactivate ButtonMultiplayerCreate\n")
+            script += (f"activate ButtonMultiplayerHostGame\nwait 10\nsetup_host_port {port}\n"
+                       "combo_select ComboHostPlayers 2\nactivate ButtonMultiplayerCreate\n")
         else:
-            script += ("activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\n"
-                       f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n")
+            script += ("activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
+                       f"settext TextJoinPort {port}\nactivate ButtonJoinAddressGo\n")
         path = root / phase / f"{name}.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(script + suffix, encoding="utf-8")

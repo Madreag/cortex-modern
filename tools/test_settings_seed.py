@@ -37,6 +37,18 @@ class SettingsSeedTest(unittest.TestCase):
         self.assertEqual(run_sim_test.RUNTIME_SETTINGS.get("NetworkPortMapEnable"), "0")
         self.assertEqual(posix_test_runner.SETTINGS_OVERRIDES.get("NetworkPortMapEnable"), "0")
 
+    def test_no_runner_lets_a_test_lobby_reach_a_directory(self):
+        # A test lobby registers on no directory unless its scene names one: every runner starts the engine with the address empty,
+        # whatever the tree's own Settings.ini names - the game's built-in default is the public directory.
+        self.assertEqual(run_sim_test.RUNTIME_SETTINGS.get("SessionDirectoryUrl"), "")
+        self.assertEqual(posix_test_runner.SETTINGS_OVERRIDES.get("SessionDirectoryUrl"), "")
+        public = "SettingsMan\n\tSessionDirectoryUrl = directory.broserver.com\n\tSkipIntro = 0\n"
+        for runtime in (run_sim_test.runtime_settings_text(public), posix_test_runner.apply_settings_overrides(public, posix_test_runner.SETTINGS_OVERRIDES)):
+            self.assertRegex(runtime, r"(?m)^\tSessionDirectoryUrl = $")
+            self.assertNotIn("broserver", runtime)
+        # A tree with no Settings.ini at all (a release package) gets the empty address too, never the built-in default.
+        self.assertRegex(run_sim_test.runtime_settings_text("SettingsMan\n"), r"(?m)^\tSessionDirectoryUrl = $")
+
     def test_an_absent_property_is_appended_once(self):
         self.assertEqual(posix_test_runner.apply_settings_overrides("SettingsMan\n\tMuteMaster = 1\n", {"SkipIntro": "1"}),
                          "SettingsMan\n\tMuteMaster = 1\n\n\tSkipIntro = 1\n")

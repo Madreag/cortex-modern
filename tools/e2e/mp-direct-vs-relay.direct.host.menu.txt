@@ -3,6 +3,10 @@ activate ButtonMainToOptions
 wait_ms 600
 select_settings_page Network
 wait_ms 450
+select_settings_page Network:Basics
+wait 3
+activate ButtonNetworkAdvanced
+wait 4
 select_settings_page Network:Connection
 video_mark direct-connection-host
 wait_ms 900
@@ -27,8 +31,8 @@ wait_ms 450
 assert_substate HostSetup
 combo_select ComboHostActivity P4 Alpha Duel - Base.rte
 wait_ms 500
-settext TextHostPort {PORT}
-settext TextHostPlayers 2
+setup_host_port {PORT}
+combo_select ComboHostPlayers 2
 wait_ms 495
 activate ButtonHostOptions
 wait_ms 450
@@ -43,20 +47,22 @@ wait_ms 660
 assert_visible CollectionBoxHostPageRules 1
 dump_host_options
 video_mark direct-mp-options-network
-activate TabHostPageNetwork
+activate TabHostPageConnection
 wait_ms 600
-activate TabHostNetRouting
+activate TabHostPageConnection
 wait_ms 600
 combo_select ComboHostNetRelay Off
 wait_ms 600
 assert_label ComboHostNetRelay Off
-activate TabHostNetTuning
+activate TabHostPageTiming
 wait_ms 600
-combo_select ComboHostNetVisibility Internet: Listed
+activate TabHostPageConnection
+wait_ms 600
+combo_select ComboHostNetVisibility Public (default)
 wait_ms 900
-assert_label ComboHostNetVisibility Listed
+assert_label ComboHostNetVisibility Public (default)
 wait_ms 660
-assert_visible CollectionBoxHostPageNetwork 1
+assert_visible CollectionBoxHostPageConnection 1
 dump_host_options
 video_mark direct-mp-options-recovery
 activate TabHostPageRecovery
@@ -73,6 +79,8 @@ activate TabHostPageSession
 wait_ms 660
 assert_visible CollectionBoxHostPageSession 1
 dump_host_options
+activate ButtonHostOptApply
+wait_ms 600
 activate ButtonHostOptBack
 wait_ms 450
 assert_substate HostSetup

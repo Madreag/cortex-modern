@@ -6,8 +6,8 @@ activate ButtonMultiplayerHostGame
 wait_ms 400
 combo_select ComboHostActivity P4 Alpha Duel - Base.rte
 wait_ms 500
-settext TextHostPort {PORT}
-settext TextHostPlayers 2
+setup_host_port {PORT}
+combo_select ComboHostPlayers 2
 activate ButtonMultiplayerCreate
 wait_ms 600
 assert_substate Lobby

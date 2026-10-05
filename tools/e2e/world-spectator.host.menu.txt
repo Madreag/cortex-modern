@@ -5,8 +5,8 @@ activate ButtonMultiplayerHostGame
 wait_ms 495
 combo_select ComboHostActivity Persistent World - Base.rte
 wait_ms 900
-settext TextHostPlayers 4
-settext TextHostPort {PORT}
+combo_select ComboHostPlayers 4
+setup_host_port {PORT}
 activate ButtonMultiplayerCreate
 wait_ms 825
 video_mark spectator-lobby

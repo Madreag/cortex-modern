@@ -3,12 +3,15 @@ activate ButtonMainToMultiplayer
 wait_ms 495
 activate ButtonMultiplayerJoinGame
 wait_ms 495
+activate ButtonJoinByAddress
+wait 4
 settext TextJoinAddress 127.0.0.1
 settext TextJoinPort {PORT}
-activate ButtonMultiplayerConnect
+activate ButtonJoinAddressGo
 wait_members 2
 video_mark spectator-first-connected
 wait_connected 3 90
+wait_substate Lobby 30
 wait_ms 495
 activate ButtonMultiplayerReady
 wait_file {PROBE_DIR_host}/done.json 180

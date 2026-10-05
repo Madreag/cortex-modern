@@ -108,15 +108,15 @@ def end_reason_agreement(labels, summary, console, expected_rounds):
 def menu_script(who, port):
     script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {who}\n"
     if who == "Host":
-        script += (f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\n"
-                   "settext TextHostPlayers 2\nsettext TextHostInputDelay 3\nsetcheck CheckHostPortMap 0\n"
+        script += (f"activate ButtonMultiplayerHostGame\nwait 10\nsetup_host_port {port}\n"
+                   "combo_select ComboHostPlayers 2\nsettext TextHostInputDelay 3\nsetcheck CheckHostPortMap 0\n"
                    "activate ButtonMultiplayerCreate\nwait_connected 2\nwait_remote_ready\nwait_all_ready\n")
         for row in range(1, 9):
             script += f"chat all chatrow{row}\nwait_ms 600\n"
         script += "assert_label LabelLobbyChatNewest chatrow8\nscreenshot report_before\nactivate ButtonMultiplayerStart\n"
     else:
-        script += ("activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\n"
-                   f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n"
+        script += ("activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
+                   f"settext TextJoinPort {port}\nactivate ButtonJoinAddressGo\n"
                    "wait_connected 2\nactivate ButtonMultiplayerReady\n")
     script += ("wait_state Running 120\nwait_state Starting 240\nwait 20\n"
                "assert_screen MultiplayerScreen\nassert_substate Lobby\n"

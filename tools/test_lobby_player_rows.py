@@ -110,11 +110,11 @@ def bands(counts):
 def menu_script(name, host, port, players):
     script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
     if host:
-        return script + (f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\n"
+        return script + (f"activate ButtonMultiplayerHostGame\nwait 10\nsetup_host_port {port}\n"
                          f"settext TextHostPlayers {players}\n"
                          "activate ButtonMultiplayerCreate\n")
-    return script + ("activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\n"
-                     f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n")
+    return script + ("activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
+                     f"settext TextJoinPort {port}\nactivate ButtonJoinAddressGo\n")
 
 
 def main():

@@ -4,10 +4,13 @@ wait_ms 600
 settext TextMultiplayerName ClientB
 activate ButtonMultiplayerJoinGame
 wait_ms 600
+activate ButtonJoinByAddress
+wait 4
 settext TextJoinAddress 127.0.0.1
 settext TextJoinPort {PORT}
-activate ButtonMultiplayerConnect
+activate ButtonJoinAddressGo
 wait_connected 3 90
+wait_substate Lobby 30
 wait_ms 900
 assert_substate Lobby
 video_mark moderation-clientb-seated
@@ -22,9 +25,11 @@ wait_ms 1800
 video_mark moderation-clientb-rejoin
 activate ButtonMultiplayerJoinGame
 wait_ms 600
+activate ButtonJoinByAddress
+wait 4
 settext TextJoinAddress 127.0.0.1
 settext TextJoinPort {PORT}
-activate ButtonMultiplayerConnect
+activate ButtonJoinAddressGo
 wait_state Failed 60
 video_mark moderation-clientb-refused
 wait_ms 1200

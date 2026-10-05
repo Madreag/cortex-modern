@@ -20,11 +20,11 @@ from run_sim_test import make_run, seed_settings
 def menu_script(name, host, port, tail):
     script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
     if host:
-        script += (f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\n"
-                   "settext TextHostPlayers 2\nactivate ButtonMultiplayerCreate\n")
+        script += (f"activate ButtonMultiplayerHostGame\nwait 10\nsetup_host_port {port}\n"
+                   "combo_select ComboHostPlayers 2\nactivate ButtonMultiplayerCreate\n")
     else:
-        script += (f"activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\n"
-                   f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n"
+        script += (f"activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
+                   f"settext TextJoinPort {port}\nactivate ButtonJoinAddressGo\n"
                    "wait_connected 2\nactivate ButtonMultiplayerReady\nwait_remote_ready\ndump_lobby\n")
     return script + tail
 

@@ -5,8 +5,8 @@ settext TextMultiplayerName Host
 activate ButtonMultiplayerHostGame
 wait_ms 600
 combo_select ComboHostActivity P4 Alpha Duel - Base.rte
-settext TextHostPort {PORT}
-settext TextHostPlayers 2
+setup_host_port {PORT}
+combo_select ComboHostPlayers 2
 activate ButtonHostOptions
 wait_ms 600
 activate TabHostPageRecovery

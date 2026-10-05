@@ -93,9 +93,9 @@ def main():
     def start(phase, name, host, port, suffix, modules):
         script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
         if host:
-            script += f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\nsettext TextHostPlayers 2\nactivate ButtonMultiplayerCreate\n"
+            script += f"activate ButtonMultiplayerHostGame\nwait 10\nsetup_host_port {port}\ncombo_select ComboHostPlayers 2\nactivate ButtonMultiplayerCreate\n"
         else:
-            script += f"activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n"
+            script += f"activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\nactivate ButtonJoinAddressGo\n"
         path = root / phase / f"{name}.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(script + suffix, encoding="utf-8")
