@@ -3919,6 +3919,15 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	g_GUISound.ButtonPressSound()->Play();
 }
 
+bool MainMenuGUI::ActivityNameShared(const std::string& preset) {
+	// The loaded activities do not change while the menus run, so each name is counted once.
+	const auto known = m_ActivityNameShared.find(preset);
+	if (known != m_ActivityNameShared.end()) return known->second;
+	const std::vector<NetHostActivityChoice> activities = NetMatchService::ListHostActivities();
+	const bool shared = std::count_if(activities.begin(), activities.end(), [&preset](const NetHostActivityChoice& other) { return other.preset == preset; }) > 1;
+	return m_ActivityNameShared[preset] = shared;
+}
+
 void MainMenuGUI::ApplyForOwnSeat(uint16_t stableSeat) {
 	std::string error;
 	m_MultiplayerApplyOffered = false;
@@ -4362,10 +4371,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		return;
 	}
 
-	// The match header is two fixed rows: the activity with its defining module, then the scene
-	// and the mode's menu label. A joiner's placeholder shows the same rows with what it has.
+	// The match header is two fixed rows: the activity (its module only when two loaded activities share its name, as Host a
+	// Game says it), then the scene and the mode's menu label. A joiner's placeholder shows the same rows with what it has.
 	std::string matchInfo = snapshot.activityPreset;
-	if (!snapshot.activityModule.empty()) {
+	if (!snapshot.activityModule.empty() && (matchInfo.empty() || ActivityNameShared(matchInfo))) {
 		matchInfo += matchInfo.empty() ? snapshot.activityModule : " - " + snapshot.activityModule;
 	}
 	m_MultiplayerLobbyMatchLabel->SetText(matchInfo);

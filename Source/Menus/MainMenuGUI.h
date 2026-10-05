@@ -341,6 +341,7 @@ namespace RTE {
 		std::array<GUIButton*, 3> m_ModerationCancelButtons;
 		NetModerationUx m_ModerationUx; //!< §9b's panel model; the buttons and the headless driver share it.
 		std::map<const GUIControl*, NetModerationUx::Row> m_PressedModeration;
+		std::map<std::string, bool> m_ActivityNameShared; //!< Per activity name, whether two loaded activities share it.
 		std::array<GUILabel*, NetMatchConfigUtil::c_MaxPlayers> m_MultiplayerLobbyPlayerLabels;
 		GUIFont* m_MultiplayerLobbyPlayerRowFont = nullptr; //!< The font the player rows draw in, so the row text is measured against what draws it.
 		GUIFont* m_MultiplayerLobbyPlayerRowFallbackFont = nullptr; //!< Supplies the row bytes the primary font's atlas has no ink for.
@@ -740,6 +741,8 @@ namespace RTE {
 		void ApplyToSubstitute();
 		/// Asks the host for the player's own held seat, which the host's refusal named.
 		void ApplyForOwnSeat(uint16_t stableSeat);
+		/// Whether two loaded activities share this name, so a header names the module to tell them apart.
+		bool ActivityNameShared(const std::string& preset);
 		/// Joins again and waits, knocking, for one of a world's held slots to open.
 		void WaitForSlot();
 

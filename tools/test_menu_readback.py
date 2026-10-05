@@ -1465,7 +1465,7 @@ def scripts(case, port, root, size="960x540"):
                 "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
                 "wait_label LabelLobbyPlayer1 Joiner\n"
                 f"wait_file {(root / 'client/runtime/ScreenShots/dump_host_options_0.json').as_posix()} 60\n"
-                "assert_label LabelLobbyMatch Brain vs Brain - Base.rte\n"
+                "assert_label LabelLobbyMatch Brain vs Brain\nassert_label_absent LabelLobbyMatch Base.rte\n"
                 "assert_label LabelLobbyMatchMode Fredeleig Bunkers - Players versus AI\n"
                 "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
                 "assert_text_fits LabelLobbyPlayersHeader\n"
@@ -1560,7 +1560,7 @@ def scripts(case, port, root, size="960x540"):
                   "activate ButtonJoinAddressGo\n"
                   "wait_label LabelLobbyPlayer1 Joiner\nwait_activity Brain vs Brain\nwait 12\n"
                   "assert_substate Lobby\n"
-                  "assert_label LabelLobbyMatch Brain vs Brain - Base.rte\n"
+                  "assert_label LabelLobbyMatch Brain vs Brain\nassert_label_absent LabelLobbyMatch Base.rte\n"
                   "assert_label LabelLobbyMatchMode Fredeleig Bunkers - Players versus AI\n"
                   "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
                   "assert_text_fits LabelLobbyPlayersHeader\n"
@@ -3051,7 +3051,8 @@ def run_case(options, case, root, failing=None):
                 assert [shot["activity_preset"], shot["activity_module"]] == [preset, module], shot["json"]
                 assert shot.get("scene_name") == key_scene, (who, shot.get("scene_name"), key_scene)
                 controls = {c["name"]: c for c in shot["controls"]}
-                assert controls["LabelLobbyMatch"]["text"] == f"{preset} - {module}", (who, controls["LabelLobbyMatch"])
+                # The header names the module only to tell apart two loaded activities of one name, as Host a Game does.
+                assert controls["LabelLobbyMatch"]["text"] == host_activity_label({"preset": preset, "module": module}, shot.get("activity_table", [])), (who, controls["LabelLobbyMatch"])
                 assert controls["LabelLobbyMatchMode"]["text"] == key_scene + " - Players versus AI", (who, controls["LabelLobbyMatchMode"], key_scene)
                 assert "Grasslands" not in controls["LabelLobbyMatchMode"]["text"], (who, controls["LabelLobbyMatchMode"])
                 for name in ("LabelLobbyMatch", "LabelLobbyMatchMode", "LabelLobbyPlayersHeader"):
