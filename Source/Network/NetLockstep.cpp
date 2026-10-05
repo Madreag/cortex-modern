@@ -4544,6 +4544,8 @@ namespace RTE {
 		NetLockstepConfig config = requested;
 		if (config.substituteSlowPeers) {
 			const uint8_t host = config.authorityPeerId != 0 ? config.authorityPeerId : config.matchConfig.hostPeerId;
+			if (config.peerInputDelayFrames.empty())
+				for (uint8_t peer = 1; peer <= config.peerCount; ++peer) config.peerInputDelayFrames[peer] = config.inputDelayFrames;
 			// One tick of lookahead publishes a client's input before its simulation starts.
 			for (uint8_t peer = 1; peer <= config.peerCount; ++peer) {
 				const auto found = config.peerInputDelayFrames.find(peer);

@@ -24326,6 +24326,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!pair.client.IsLocalSeatHeld() || pair.client.GetLocalHoldFrame() != missing || pair.client.GetResumeFrame() != missing) {
 				error = "held frame disagrees with the client's in-place boundary"; return false;
 			}
+			NetLockstepReadyFrame held;
+			while (pair.host.PopReadyFrame(held)) { pair.history[held.frame] = held; pair.hostWorld.Apply(held); pair.host.FinishSimulationTick(held.frame); }
 			for (uint64_t frame = pair.hostWorld.applied + 1; frame <= missing + 20; ++frame) if (!pair.Drive(frame, error)) return false;
 			NetLockstepCoordinator tail;
 			LoopbackTransport tailWire;
@@ -24377,7 +24379,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row("round_seed", [&](std::string& error) {
 			Pair pair; if (!pair.Start(47554, 4, error)) return false;
 			if (pair.client.m_HostAcceptedLocalFrames.empty() || *pair.client.m_HostAcceptedLocalFrames.rbegin() != 4) { error = "the agreed startup neutral range has no acceptance seed"; return false; }
-			NetLockstepAck stale; stale.senderPeerId = 1; stale.receivedMask = NetLockstepCodec::c_InputAcceptedMask; stale.highestContiguousFrame = 1000;
+			pair.clientWire.dropSentFrom = 5;
+			if (!pair.client.QueueLocalInput(1, {MakeFrame(102, 1)}, {}, &error)) return false;
+			NetLockstepAck stale; stale.senderPeerId = 1; stale.receivedMask = NetLockstepCodec::c_InputAcceptedMask; stale.highestContiguousFrame = 5;
 			stale.sessionId = pair.client.GetConfig().sessionId; stale.roundId = pair.client.GetRoundId() + 1; stale.seatIncarnation = 1;
 			pair.client.HandleAck(stale, 1);
 			if (*pair.client.m_HostAcceptedLocalFrames.rbegin() != 4) { error = "another round supplied acceptance"; return false; }
@@ -24391,14 +24395,22 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			Pair pair; if (!pair.Start(47555, 4, error) || !pair.Warm(error)) return false;
 			if (!pair.host.ProposePeerHold(2, pair.now, &error, 105, "late_stream")) return false;
 			for (int turn = 0; turn < 10; ++turn) pair.Step();
-			if (!pair.host.SchedulePeerReclaim(2, 1, 2, 120, &error)) return false;
-			for (int turn = 0; turn < 10; ++turn) pair.Step();
+			Wire returnWire; NetLockstepCoordinator returning;
+			if (!returnWire.Connect("loopback", 47555, &error) || !pair.host.SchedulePeerReclaim(2, 2, 2, 120, &error)) return false;
 			const auto reclaim = pair.host.ReclaimTransactions().at(2);
-			if (pair.client.m_HostAcceptedLocalFrames.empty() || *pair.client.m_HostAcceptedLocalFrames.rbegin() != reclaim.neutralThroughFrame) { error = "a reclaim did not seed its agreed neutral range"; return false; }
-			NetLockstepAck stale; stale.senderPeerId = 1; stale.receivedMask = NetLockstepCodec::c_InputAcceptedMask; stale.highestContiguousFrame = 1000;
-			stale.sessionId = pair.client.GetConfig().sessionId; stale.roundId = pair.client.GetRoundId(); stale.seatIncarnation = 1;
-			pair.client.HandleAck(stale, 1);
-			if (*pair.client.m_HostAcceptedLocalFrames.rbegin() != reclaim.neutralThroughFrame) { error = "an old incarnation supplied acceptance after reclaim"; return false; }
+			auto config = pair.client.GetConfig(); config.startFrame = 120; config.roundId = pair.host.GetRoundId(); config.peerIncarnations[2] = 2;
+			config.joinsRunningRound = true; config.seatStateThroughFrame = 120; config.initialSeatReclaims[2] = reclaim;
+			if (!returning.Start(returnWire, config, &error)) return false;
+			const auto pump = [&] { ++pair.now; pair.hostWire.AdvanceTimeMs(1); returnWire.AdvanceTimeMs(1); pair.host.Tick(pair.now); returning.Tick(pair.now); };
+			for (int turn = 0; turn < 20; ++turn) pump();
+			if (!returning.IsRunning() || returning.m_HostAcceptedLocalFrames.empty() || *returning.m_HostAcceptedLocalFrames.rbegin() != reclaim.neutralThroughFrame) { error = "a reclaim did not seed its agreed neutral range"; return false; }
+			if (!returning.QueueLocalInput(121, {MakeFrame(102, 121)}, {}, &error)) return false;
+			NetLockstepAck stale; stale.senderPeerId = 1; stale.receivedMask = NetLockstepCodec::c_InputAcceptedMask; stale.highestContiguousFrame = reclaim.neutralThroughFrame + 1;
+			stale.sessionId = config.sessionId; stale.roundId = returning.GetRoundId(); stale.seatIncarnation = 1;
+			returning.HandleAck(stale, 1);
+			if (*returning.m_HostAcceptedLocalFrames.rbegin() != reclaim.neutralThroughFrame) { error = "an old incarnation supplied acceptance after reclaim"; return false; }
+			for (int turn = 0; turn < 10; ++turn) pump();
+			if (*returning.m_HostAcceptedLocalFrames.rbegin() <= reclaim.neutralThroughFrame) { error = "the reclaimed seat's first real input was not accepted"; return false; }
 			return true;
 		});
 		row("succession_seed", [&](std::string& error) {
@@ -24427,7 +24439,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			for (int turn = 0; turn < 1500 && (a.GetHostPeerId() != 2 || b.GetHostPeerId() != 2 || a.IsMigrating() || b.IsMigrating()); ++turn, now += 5) { a.Tick(now); b.Tick(now); collect(a); collect(b); }
 			if (b.IsMigrating() || b.GetHostPeerId() != 2 || b.m_HostAcceptedLocalFrames.empty()) { error = "succession did not reset and seed the surviving client's acceptance"; return false; }
 			const auto seeded = *b.m_HostAcceptedLocalFrames.rbegin();
-			NetLockstepAck stale; stale.senderPeerId = 2; stale.receivedMask = NetLockstepCodec::c_InputAcceptedMask; stale.highestContiguousFrame = 1000;
+			const auto nextInput = b.SentInputThrough() + 1;
+			if (!b.QueueLocalInput(nextInput - b.GetConfig().inputDelayFrames, {}, {}, &error)) return false;
+			NetLockstepAck stale; stale.senderPeerId = 2; stale.receivedMask = NetLockstepCodec::c_InputAcceptedMask; stale.highestContiguousFrame = nextInput;
 			stale.sessionId = b.GetConfig().sessionId; stale.roundId = b.GetRoundId(); stale.seatIncarnation = 1; stale.authorityGeneration = 0;
 			b.HandleAck(stale, b.GetConfig().remoteTransportPeerIds.at(2));
 			if (*b.m_HostAcceptedLocalFrames.rbegin() != seeded) { error = "an old authority generation supplied acceptance"; return false; }
