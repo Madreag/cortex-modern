@@ -1543,14 +1543,6 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		m_HostSeatDetailsButtons[row] = dynamic_cast<GUIButton*>(get(("ButtonHostSeatDetails" + n).c_str()));
 	}
 	m_HostRulesActivityCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRulesActivity"));
-	if (m_HostRulesActivityCombo) {
-		// The same module-qualified census the setup picker's combo carries; a staged preset the
-		// census lacks still displays by name through HostOptSelectCombo.
-		m_HostRulesActivityCombo->ClearList();
-		for (const auto& [preset, module] : m_MultiplayerHostActivities) {
-			m_HostRulesActivityCombo->AddItem(preset + (module.empty() ? "" : " - " + module));
-		}
-	}
 	m_HostRulesSceneCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRulesScene"));
 	m_HostRulesModeCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRulesMode"));
 	m_HostRulesDifficultySlider = dynamic_cast<GUISlider*>(get("SliderHostRulesDifficulty"));
@@ -1786,21 +1778,6 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		m_HostRecAutosaveIntervalBox->SetMinNumericValue(NetMatchService::c_MinAutosaveIntervalSeconds);
 		m_HostRecAutosaveIntervalBox->SetMaxTextLength(4);
 	}
-	// The scene list is a preset census like the host picker's activity one; the draft's own scene
-	// always stays selectable even when no preset of that name loads.
-	m_HostOptionsScenes.clear();
-	std::list<Entity*> scenes;
-	if (g_PresetMan.GetAllOfType(scenes, "Scene")) {
-		for (const Entity* scene : scenes) {
-			m_HostOptionsScenes.push_back(scene->GetPresetName());
-		}
-	}
-	if (m_HostRulesSceneCombo) {
-		m_HostRulesSceneCombo->ClearList();
-		for (const std::string& name : m_HostOptionsScenes) {
-			m_HostRulesSceneCombo->AddItem(name);
-		}
-	}
 }
 
 // The class that defines a host-pickable activity, empty when the list does not offer it.
@@ -1929,6 +1906,8 @@ void MainMenuGUI::OpenHostOptions(bool setupDraft) {
 		m_HostOptionsStatusLabel->SetText(m_HostOptionsReadOnly ? "Only the host edits these." : "");
 	}
 	m_HostOptionsBaseRevision = m_HostOptionsDraft.configRevision;
+	RefreshHostOptionsActivities();
+	RefreshHostOptionsScenes(false);
 	m_MultiplayerSubScreen = MultiplayerSubScreen::HostOptions;
 	ShowHostOptionsPage(m_HostOptionsPage);
 	g_GUISound.ButtonPressSound()->Play();
@@ -2153,7 +2132,14 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	// Rules page.
 	HostOptSelectCombo(m_HostRulesActivityCombo, m_HostOptionsDraft.activityPreset +
 	                   (m_HostOptionsDraft.activityModule.empty() ? "" : " - " + m_HostOptionsDraft.activityModule));
-	HostOptSelectCombo(m_HostRulesSceneCombo, m_HostOptionsDraft.sceneName);
+	const auto draftedScene = std::find_if(m_HostOptionsScenes.begin(), m_HostOptionsScenes.end(), [this](const NetHostSceneChoice& scene) {
+		return scene.name == m_HostOptionsDraft.sceneName && scene.module == m_HostOptionsDraft.sceneModule;
+	});
+	if (draftedScene != m_HostOptionsScenes.end()) {
+		HostOptSelectComboIndex(m_HostRulesSceneCombo, static_cast<int>(draftedScene - m_HostOptionsScenes.begin()));
+	} else {
+		HostOptSelectCombo(m_HostRulesSceneCombo, m_HostOptionsDraft.sceneName);
+	}
 	const int modeIndex = m_HostOptionsDraft.mode == NetMatchMode::CoopPvE ? 1 : (m_HostOptionsDraft.mode == NetMatchMode::PvPvE ? 2 : 0);
 	HostOptSelectComboIndex(m_HostRulesModeCombo, modeIndex);
 	if (m_HostRulesDifficultySlider) m_HostRulesDifficultySlider->SetValue(m_HostOptionsDraft.difficulty);
@@ -2472,6 +2458,34 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	RefreshHostBannedDialog();
 }
 
+void MainMenuGUI::RefreshHostOptionsActivities() {
+	// The census the host screen offers, by module; an agreed activity outside it still displays by name.
+	m_HostOptionsActivities = NetMatchService::ListHostActivities();
+	if (!m_HostRulesActivityCombo) return;
+	m_HostRulesActivityCombo->ClearList();
+	for (const NetHostActivityChoice& row : m_HostOptionsActivities) {
+		m_HostRulesActivityCombo->AddItem(row.preset + (row.module.empty() ? "" : " - " + row.module));
+	}
+}
+
+void MainMenuGUI::RefreshHostOptionsScenes(bool resolve) {
+	m_HostOptionsScenes = NetMatchService::ListHostScenes(m_HostOptionsDraft.activityPreset, m_HostOptionsDraft.activityModule);
+	const bool runs = std::any_of(m_HostOptionsScenes.begin(), m_HostOptionsScenes.end(), [this](const NetHostSceneChoice& scene) {
+		return scene.name == m_HostOptionsDraft.sceneName && scene.module == m_HostOptionsDraft.sceneModule;
+	});
+	// A new activity keeps the scene when it can run there, else takes its preferred one, as the host screen does.
+	if (resolve && !runs) {
+		NetMatchService::ResolveHostScene(m_HostOptionsDraft.activityPreset, m_HostOptionsDraft.activityModule, m_HostOptionsDraft.sceneName, m_HostOptionsDraft.sceneModule);
+	}
+	if (!m_HostRulesSceneCombo) return;
+	m_HostRulesSceneCombo->ClearList();
+	std::map<std::string, int> names;
+	for (const NetHostSceneChoice& scene : m_HostOptionsScenes) ++names[scene.name];
+	for (const NetHostSceneChoice& scene : m_HostOptionsScenes) {
+		m_HostRulesSceneCombo->AddItem(scene.name + (names[scene.name] > 1 && !scene.module.empty() ? " - " + scene.module : ""));
+	}
+}
+
 void MainMenuGUI::DraftHostOptionsFromControls() {
 	// Seats: team picks only; the kind column commits in ChangeHostSeatType the moment it moves,
 	// so a row past the roster (the closed-seat placeholder) has nothing to read back.
@@ -2486,15 +2500,21 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 	// Rules.
 	if (m_HostRulesActivityCombo && m_HostRulesActivityCombo->GetSelectedIndex() >= 0) {
 		const int picked = m_HostRulesActivityCombo->GetSelectedIndex();
-		if (picked < static_cast<int>(m_MultiplayerHostActivities.size())) {
-			m_HostOptionsDraft.activityPreset = m_MultiplayerHostActivities[picked].first;
-			m_HostOptionsDraft.activityModule = m_MultiplayerHostActivities[picked].second;
+		if (picked < static_cast<int>(m_HostOptionsActivities.size())) {
+			m_HostOptionsDraft.activityPreset = m_HostOptionsActivities[picked].preset;
+			m_HostOptionsDraft.activityModule = m_HostOptionsActivities[picked].module;
+			// The launch resolves the activity by its class too.
+			m_HostOptionsDraft.activityType = m_HostOptionsActivities[picked].activityType;
 		} else if (const GUIListPanel::Item* item = m_HostRulesActivityCombo->GetItem(picked)) {
 			m_HostOptionsDraft.activityPreset = item->m_Name;
 		}
 	}
 	if (m_HostRulesSceneCombo && m_HostRulesSceneCombo->GetSelectedIndex() >= 0) {
-		if (const GUIListPanel::Item* item = m_HostRulesSceneCombo->GetItem(m_HostRulesSceneCombo->GetSelectedIndex())) {
+		const int picked = m_HostRulesSceneCombo->GetSelectedIndex();
+		if (picked < static_cast<int>(m_HostOptionsScenes.size())) {
+			m_HostOptionsDraft.sceneName = m_HostOptionsScenes[picked].name;
+			m_HostOptionsDraft.sceneModule = m_HostOptionsScenes[picked].module;
+		} else if (const GUIListPanel::Item* item = m_HostRulesSceneCombo->GetItem(picked)) {
 			m_HostOptionsDraft.sceneName = item->m_Name;
 		}
 	}
@@ -2601,10 +2621,7 @@ void MainMenuGUI::FollowHostActivityDefaults(const NetMatchStandardRules& before
 	}
 	unsigned reseed = 0;
 	if (m_HostOptionsDraft.activityPreset != before.activityPreset || m_HostOptionsDraft.activityModule != before.activityModule) {
-		// The launch resolves the activity by its class too, so the class follows the pick.
-		if (std::string type = HostActivityType(m_HostOptionsDraft.activityPreset, m_HostOptionsDraft.activityModule); !type.empty()) {
-			m_HostOptionsDraft.activityType = std::move(type);
-		}
+		RefreshHostOptionsScenes(true);
 		reseed = NetActivitySetup::AllSeededRules;
 	} else if (m_HostOptionsDraft.difficulty != before.difficulty) {
 		reseed = NetActivitySetup::StartingGold;

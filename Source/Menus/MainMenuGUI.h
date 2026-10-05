@@ -461,7 +461,8 @@ namespace RTE {
 		std::optional<NetH4ModerationSeat> m_HostSeatDlgRemovalSeat; //!< The seat's admission row a Kick/Ban selection rides, when published.
 		bool m_HostKickBanWatch = false;                //!< A Queued removal's applied result lands in GetLastKickBanResult.
 		std::string m_HostKickBanVerb;                  //!< "Kick"/"Ban" - the action the watch is reporting.
-		std::vector<std::string> m_HostOptionsScenes;   //!< Scene presets the Site combo offers.
+		std::vector<NetHostActivityChoice> m_HostOptionsActivities; //!< The activities the Rules page offers: the host screen's census.
+		std::vector<NetHostSceneChoice> m_HostOptionsScenes;        //!< The scenes the Rules page offers: those the drafted activity runs.
 		std::vector<std::string> m_HostOptionsTechModules; //!< Tech combo's resolved module names (-All-/-Random- first).
 		std::string m_ReconnectStatusShown; //!< The last §11 line this screen wrote, so it may clear its own.
 		std::string m_PendingAutomationCommand; //!< Control waiting to raise Command after Update clears the queue.
@@ -632,6 +633,11 @@ namespace RTE {
 		void RefreshHostOptionsControls(const NetLobbySnapshot& snapshot);
 		/// Reads every editable control back into the draft (Apply, and before roster re-derivation).
 		void DraftHostOptionsFromControls();
+		/// Fills the Rules page's activity list from the host screen's census.
+		void RefreshHostOptionsActivities();
+		/// Fills the Rules page's scene list with the scenes the drafted activity can run.
+		/// @param resolve Whether a drafted scene the activity cannot run gives way to the activity's preferred one.
+		void RefreshHostOptionsScenes(bool resolve);
 		/// Keeps the activity-seeded rules on the activity's own defaults after a draft read: a new activity re-seeds
 		/// them and a new difficulty re-seeds the gold, except a rule the host set himself.
 		/// @param before The draft's rules before the read. @param guiEventControl The control the read answered.
