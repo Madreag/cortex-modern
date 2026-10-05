@@ -779,9 +779,11 @@ def scripts(case, port, root, size="960x540"):
                 "assert_substate HostOptions\nactivate TabHostPageSeats\nwait 3\n"
                 + hand_pick("ComboHostSeatPlayers", "3") + hand_pick("ComboHostSeatPlayers", "4")
                 + "activate TabHostPageRules\nwait 3\n"
+                # The draft starts from the activity's own rules: Skirmish Defense names no gold (2,000) and fog of war on.
+                + "assert_label LabelHostRulesGoldValue 2000 oz\nassert_checked CheckHostRulesFog 1\n"
                 + hand_pick("ComboHostRulesMode", "Co-op PvE")
-                + hand_click("CheckHostRulesFog") + "assert_checked CheckHostRulesFog 1\n"
                 + hand_click("CheckHostRulesFog") + "assert_checked CheckHostRulesFog 0\n"
+                + hand_click("CheckHostRulesFog") + "assert_checked CheckHostRulesFog 1\n"
                 + hand_click("CheckHostRulesDeploy") + "assert_checked CheckHostRulesDeploy 1\n"
                 + "slider_set SliderHostRulesDifficulty 80\nwait 4\nassert_label LabelHostRulesDifficultyValue 80\n"
                 + "slider_set SliderHostRulesGold 5000\nwait 4\nassert_label LabelHostRulesGoldValue 5000 oz\n"

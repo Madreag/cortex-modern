@@ -1803,6 +1803,29 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	}
 }
 
+// The class that defines a host-pickable activity, empty when the list does not offer it.
+static std::string HostActivityType(const std::string& preset, const std::string& module) {
+	for (const NetHostActivityChoice& row : NetMatchService::ListHostActivities()) {
+		if (row.preset == preset && row.module == module) return row.activityType;
+	}
+	return {};
+}
+
+// A host who staged no rules plays by the activity's own: the gold, fog of war, clear path and deployment the Scenario
+// screen seeds for it. A request whose activity or scene does not resolve keeps today's path and its refusal.
+static void SeedHostRulesFromActivity(NetMatchServiceRequest& request) {
+	if (request.standardRules || request.persistentWorld || request.activityPreset == "Persistent World") return;
+	if (!NetMatchService::SeatActivityModule(request) || !NetMatchService::SeatHostScene(request)) return;
+	NetMatchStandardRules rules;
+	rules.mode = request.mode;
+	rules.activityPreset = request.activityPreset;
+	rules.activityModule = request.activityModule;
+	if (!request.activityType.empty()) rules.activityType = request.activityType;
+	rules.sceneName = request.sceneName;
+	if (!request.sceneModule.empty()) rules.sceneModule = request.sceneModule;
+	if (NetActivitySetup::SeedRulesFromActivity(rules)) request.standardRules = rules;
+}
+
 NetMatchServiceRequest MainMenuGUI::HostRequestDraft() const {
 	NetMatchServiceRequest request;
 	request.host = true;
@@ -1814,7 +1837,13 @@ NetMatchServiceRequest MainMenuGUI::HostRequestDraft() const {
 	if (m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size()) {
 		request.activityPreset = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].first;
 		request.activityModule = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].second;
+		request.activityType = HostActivityType(request.activityPreset, request.activityModule);
 	}
+	if (m_MultiplayerHostSceneIndex < m_MultiplayerHostScenes.size()) {
+		request.sceneName = m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex].first;
+		request.sceneModule = m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex].second;
+	}
+	NetMatchService::ApplyHostActivityFallback(request);
 	const long parsedPlayers = std::strtol(m_MultiplayerHostPlayersTextBox->GetText().c_str(), nullptr, 10);
 	request.peerCount = static_cast<uint8_t>(std::clamp<long>(parsedPlayers, NetMatchConfigUtil::c_MinPeerCount, NetMatchConfigUtil::c_MaxPeerCount));
 	request.mode = m_MultiplayerHostMode;
@@ -1850,6 +1879,7 @@ NetMatchServiceRequest MainMenuGUI::HostRequestDraft() const {
 	} else {
 		NetHostDefaultsTemplate saved;
 		if (NetHostDefaults::Load(saved, nullptr)) request.frameRedundancyTicks = saved.frameRedundancyTicks;
+		SeedHostRulesFromActivity(request);
 	}
 	NetMatchService::SeatSavedOptions(request);
 	return request;
@@ -3349,6 +3379,7 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 			g_SettingsMan.SetNetworkInputDelayFrames(inputDelay);
 			request.inputDelayFrames = static_cast<uint16_t>(inputDelay);
 		}
+		SeedHostRulesFromActivity(request);
 	}
 
 	std::string error;
