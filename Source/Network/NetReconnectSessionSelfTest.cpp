@@ -4099,6 +4099,7 @@ namespace RTE {
 			// The old host plays a round and starts the next before it is lost.
 			wire.host.SetLiveMatch(true);
 			wire.host.SetMatchEnded();
+			wire.host.FormRematch();
 			wire.host.SetLiveMatch(true);
 			if (!wire.Pump(&error)) {
 				return Fail(error);
@@ -4662,6 +4663,7 @@ namespace RTE {
 			// The rematch keeps the held seat and its holder, and the next round runs: the round-one ticket still names it.
 			if (nextRound) {
 				admission.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+				admission.FormRematch();
 				admission.SetLiveMatch(true);
 			}
 			LoopbackTransport secondTransport;
