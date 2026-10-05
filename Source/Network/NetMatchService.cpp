@@ -9943,20 +9943,18 @@ static std::string ResyncSaveName() {
 	                                         bool transportReady, bool& noDirectRoute, std::string* error) {
 		noDirectRoute = false;
 		const uint32_t directTimeoutMs = config.sessionConfig.timeoutMs;
-		if (!config.host && config.sessionConfig.p2pJoin.connect) {
-			// The host's JoinAccepted restores its heartbeat timeout after candidate gathering.
-			config.sessionConfig.timeoutMs = std::max(directTimeoutMs, c_IceConnectBudgetMs);
+		const bool iceDial = !config.host && config.sessionConfig.p2pJoin.connect;
+		if (iceDial) {
+			m_IceDialRetrying = false;
+			// The host's JoinAccepted restores its heartbeat timeout after candidate gathering; the session outlives the transport's connect limit.
+			config.sessionConfig.timeoutMs = std::max(directTimeoutMs, GnsTransport::IceConnectTimeoutMs() + c_IceHandshakeMarginMs);
+			ArmIceConnectingLine(config, session);
 		}
 		INetTransport& wire = mux ? static_cast<INetTransport&>(*mux) : ip;
 		// Directory lookup time is not part of either transport's connection deadline.
 		if (config.nowMs) session.Tick(config.nowMs(), false);
 		if (transportReady && runner.Start(wire, session, coordinator, config, error)) return true;
 		if (config.host || !NetIcePrefersP2P(target, m_IceEnabled) || m_CancelRequested.load()) return false;
-		if (m_ConnectionMode == 2) {
-			// A setup that never reached the transport already says why; only a relay that failed to connect is named here.
-			if (error && transportReady) *error = "Relay connection failed: " + *error + "; check the relay or choose Automatic";
-			return false;
-		}
 		const auto routeFailed = [&] {
 			const bool unconnectedClose = session.IsClosed() && (session.GetRejectReason() == NetRejectReason::InternalError || session.GetRejectReason() == NetRejectReason::HostLinkLost) && session.GetMismatchKey().empty();
 			return runner.GetLobbySession().GetState() == NetLobbyState::Idle &&
@@ -9964,6 +9962,30 @@ static std::string ResyncSaveName() {
 			       session.GetRemoteTransportPeerId() == c_InvalidNetPeerId && !session.IsRejected() &&
 			       (!session.HasReject() || session.GetMismatchKey() == "transport" || session.GetMismatchKey() == "timeout_ms" || unconnectedClose);
 		};
+#ifdef CCCP_WITH_GNS
+		// A dial that ran out of time while its host was answering gets one more: the slow part was the exchange, not the host.
+		if (iceDial && transportReady && routeFailed() && m_Dispatcher) {
+			const GnsDirectorySignalDispatcher::Counters counters = m_Dispatcher->GetCounters();
+			const bool retry = NetIceRetryCanSucceed(counters.signalsIn, counters.refusals);
+			System::PrintDiagnosticLine("[net-ice] connect failed after " + std::to_string((SteadyNowMs() - m_IceDialStartedMs) / 1000) + " s (signals from the host " +
+			                            std::to_string(counters.signalsIn) + ", refusals " + std::to_string(counters.refusals) + "): " +
+			                            (retry ? "dialling once more" : "no retry, the host never answered") + "; " + (error ? *error : std::string()));
+			if (retry) {
+				session.Close("retry ICE");
+				if (error) error->clear();
+				m_IceDialRetrying = true;
+				ArmIceConnectingLine(config, session);
+				if (config.nowMs) session.Tick(config.nowMs(), false);
+				if (runner.Start(wire, session, coordinator, config, error)) return true;
+				if (m_CancelRequested.load()) return false;
+			}
+		}
+#endif
+		if (m_ConnectionMode == 2) {
+			// A setup that never reached the transport already says why; only a relay that failed to connect is named here.
+			if (error && transportReady) *error = "Relay connection failed: " + *error + "; check the relay or choose Automatic";
+			return false;
+		}
 		if (transportReady && !routeFailed()) return false;
 		noDirectRoute = true;
 		const std::string iceError = (transportReady ? (m_RelayAttempted ? "ICE direct/relay connection failed: " : "ICE connection failed: ") : "") + (error ? *error : std::string());
@@ -10003,6 +10025,39 @@ static std::string ResyncSaveName() {
 		noDirectRoute = !started && !m_CancelRequested.load() && routeFailed();
 		if (noDirectRoute && error) *error = iceError + "; IP connection failed: " + *error;
 		return started;
+	}
+
+	void NetMatchService::ArmIceConnectingLine(NetMatchRunnerConfig& config, NetSession& session) {
+		m_IceDialStartedMs = SteadyNowMs();
+		m_IceConnectingPhase.clear();
+		m_IceSignalsAtDial = 0;
+#ifdef CCCP_WITH_GNS
+		if (m_Dispatcher) m_IceSignalsAtDial = m_Dispatcher->GetCounters().signalsIn;
+#endif
+		if (config.publishLobby && !m_IceDialRetrying) {
+			// Runs on the worker thread beside the dial; it stops naming the dial the moment the transport connects.
+			config.publishLobby = [this, &session, publish = config.publishLobby](const NetLobbySnapshot& snapshot) {
+				if (session.GetRemoteTransportPeerId() == c_InvalidNetPeerId && session.GetState() == NetSessionState::Connecting) {
+					UpdateIceConnectingLine();
+				}
+				publish(snapshot);
+			};
+		}
+	}
+
+	void NetMatchService::UpdateIceConnectingLine() {
+		bool answered = false;
+#ifdef CCCP_WITH_GNS
+		answered = m_Dispatcher && m_Dispatcher->GetCounters().signalsIn > m_IceSignalsAtDial;
+#endif
+		const std::string phase = m_IceDialRetrying ? (answered ? "retry, testing routes" : "retry, waiting for the host") : (answered ? "testing routes" : "waiting for the host's answer");
+		const std::string line = NetIceConnectingLine(SteadyNowMs() - m_IceDialStartedMs, GnsTransport::IceConnectTimeoutMs(), answered, m_RelayAttempted, m_IceDialRetrying);
+		if (phase != m_IceConnectingPhase) {
+			m_IceConnectingPhase = phase;
+			System::PrintDiagnosticLine("[net-ice] connecting: " + line);
+		}
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_StatusText = line;
 	}
 
 	std::string NetMatchService::SetupFailureStatus(const NetSession* session, bool noDirectRoute, bool relayFailed) {

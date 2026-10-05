@@ -461,6 +461,7 @@ namespace RTE {
 		void Stop() {
 			m_RouteLogged.clear(); m_CandidateIdentities.clear(); m_CandidateTypes.clear();
 			m_ConnectionOffers.clear(); m_RouteReceipts.clear(); m_RelayOffer = "none";
+			m_RouteTracker.Clear(); m_DialedMs.clear();
 			m_Announced.clear(); m_HeldPackets.clear();
 			m_P2PMode = -1;
 			if (!m_Interface) {
@@ -512,6 +513,7 @@ namespace RTE {
 				PollIncomingMessages();
 				if (m_P2PMode >= 0) {
 					PollCallbacks();
+					NoteRouteChanges();
 					const auto connections = m_PeersByConnection;
 					for (const auto& [connection, peer] : connections) {
 						if (!RouteAllowed(connection)) RefuseRoute(connection);
@@ -619,7 +621,9 @@ namespace RTE {
 		}
 
 		mutable std::set<HSteamNetConnection> m_RouteLogged;
-		mutable std::map<HSteamNetConnection, std::string> m_RouteReceipts; //!< Each connection's [net-route] line.
+		mutable std::map<HSteamNetConnection, std::string> m_RouteReceipts; //!< Each connection's latest [net-route] line.
+		mutable GnsRouteTracker m_RouteTracker; //!< The route each receipt named, so a live change gets its own receipt.
+		std::map<HSteamNetConnection, uint64_t> m_DialedMs; //!< When each ICE connection was dialed or accepted.
 		std::map<HSteamNetConnection, std::string> m_ConnectionOffers; //!< The relay offer each connection's TURN lists came from.
 		std::string m_RelayOffer = "none"; //!< The offer a connection made or accepted now runs with.
 		std::map<uint32_t, std::string> m_CandidateIdentities;
@@ -632,20 +636,50 @@ namespace RTE {
 			const bool relayed = (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0;
 			const bool allowed = GnsTransport::ConnectionPolicyAllowsRoute(m_P2PMode, relayed);
 			if (m_RouteLogged.insert(connection).second) {
-				DiagnosticLine() << "[net-ice] selected candidate=" << CandidateType(info) << " connection=" << connection << std::endl;
-				// The endpoint in use (GNS reports none for a relayed route) and, for a relayed route, the TURN servers this connection
-				// runs with and the relay offer they came from.
-				char address[SteamNetworkingIPAddr::k_cchMaxString]{};
-				info.m_addrRemote.ToString(address, sizeof(address), true);
-				std::ostringstream line;
-				line << "[net-route] RouteAllowed route=" << (relayed ? "relay" : "direct") << " allowed=" << (allowed ? 1 : 0) << " connection=" << connection
-				     << " remote=" << (info.m_addrRemote.IsIPv6AllZeros() ? std::string("none") : std::string(address));
-				if (relayed) line << " turn=" << ConnectionConfigString(connection, k_ESteamNetworkingConfig_P2P_TURN_ServerList);
-				line << " offer=" << RouteOffer(connection, relayed);
-				m_RouteReceipts[connection] = line.str();
-				DiagnosticLine() << line.str() << std::endl;
+				m_RouteTracker.Observe(connection, relayed);
+				if (const auto dialed = m_DialedMs.find(connection); dialed != m_DialedMs.end()) {
+					DiagnosticLine() << "[net-ice] connected connection=" << connection << " after_ms=" << SteadyMs() - dialed->second << " route=" << (relayed ? "relay" : "direct") << std::endl;
+				}
+				WriteRouteReceipt(connection, info, relayed, allowed, nullptr);
 			}
 			return allowed;
+		}
+
+		static uint64_t SteadyMs() {
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		}
+
+		// The endpoint in use (GNS reports none for a relayed route) and, for a relayed route, the TURN servers this connection runs with
+		// and the relay offer they came from; a change names the move and how long after the dial it came.
+		void WriteRouteReceipt(HSteamNetConnection connection, const SteamNetConnectionInfo_t& info, bool relayed, bool allowed, const char* change) const {
+			DiagnosticLine() << "[net-ice] selected candidate=" << CandidateType(info) << " connection=" << connection << std::endl;
+			char address[SteamNetworkingIPAddr::k_cchMaxString]{};
+			info.m_addrRemote.ToString(address, sizeof(address), true);
+			std::ostringstream line;
+			line << "[net-route] RouteAllowed route=" << (relayed ? "relay" : "direct") << " allowed=" << (allowed ? 1 : 0) << " connection=" << connection
+			     << " remote=" << (info.m_addrRemote.IsIPv6AllZeros() ? std::string("none") : std::string(address));
+			if (relayed) line << " turn=" << ConnectionConfigString(connection, k_ESteamNetworkingConfig_P2P_TURN_ServerList);
+			line << " offer=" << RouteOffer(connection, relayed);
+			if (change) {
+				line << " change=" << change;
+				if (const auto dialed = m_DialedMs.find(connection); dialed != m_DialedMs.end()) line << " after_ms=" << SteadyMs() - dialed->second;
+			}
+			m_RouteReceipts[connection] = line.str();
+			DiagnosticLine() << line.str() << std::endl;
+		}
+
+		// ICE keeps testing candidate pairs after the first route, so a live connection can move between relay and direct.
+		void NoteRouteChanges() {
+			for (const auto& [connection, peer] : m_PeersByConnection) {
+				(void)peer;
+				if (!m_RouteLogged.contains(connection)) continue;
+				SteamNetConnectionInfo_t info{};
+				if (!m_Interface->GetConnectionInfo(connection, &info) || info.m_eState != k_ESteamNetworkingConnectionState_Connected) continue;
+				const bool relayed = (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0;
+				if (m_RouteTracker.Observe(connection, relayed) == GnsRouteTracker::Observation::Moved) {
+					WriteRouteReceipt(connection, info, relayed, GnsTransport::ConnectionPolicyAllowsRoute(m_P2PMode, relayed), GnsRouteTracker::MoveName(relayed));
+				}
+			}
 		}
 
 		// A direct route uses no relay offer, whatever login its connection holds.
@@ -731,6 +765,7 @@ namespace RTE {
 
 		void AcceptIncomingConnection(HSteamNetConnection connection) {
 			m_ConnectionOffers[connection] = m_RelayOffer;
+			if (m_P2PMode >= 0) m_DialedMs[connection] = SteadyMs();
 			if (m_Interface->AcceptConnection(connection) != k_EResultOK) {
 				m_Interface->CloseConnection(connection, 0, "accept failed", false);
 				m_PendingEvents.push_back({NetTransportEventType::TransportError, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "GNS AcceptConnection failed"});
@@ -772,6 +807,10 @@ namespace RTE {
 			}
 
 			const NetPeerId peerId = peerIt->second;
+			if (const auto dialed = m_DialedMs.find(connection); dialed != m_DialedMs.end() && !m_RouteLogged.contains(connection)) {
+				DiagnosticLine() << "[net-ice] connect ended connection=" << connection << " after_ms=" << SteadyMs() - dialed->second
+				                 << " limit_ms=" << GnsTransport::IceConnectTimeoutMs() << std::endl;
+			}
 			ForgetConnection(connection);
 			DiagnosticLine() << "[net-transport] closed peer=" << peerId << " reason=" << reason << std::endl;
 			m_PendingEvents.push_back({NetTransportEventType::PeerDisconnected, peerId, NetTransportLane::ControlReliable, {}, reason});
@@ -779,6 +818,8 @@ namespace RTE {
 
 		void ForgetConnection(HSteamNetConnection connection) {
 			m_RouteLogged.erase(connection);
+			m_RouteTracker.Forget(connection);
+			m_DialedMs.erase(connection);
 			m_ConnectionOffers.erase(connection);
 			m_RouteReceipts.erase(connection);
 			m_Announced.erase(connection);
@@ -891,6 +932,7 @@ namespace RTE {
 					m_LiveTurnLogin = config.turnServerList + '\n' + config.turnUserList + '\n' + config.turnPassList;
 					m_RelayOffer = config.relayOffer;
 					m_ConnectionOffers[m_ServerConnection] = config.relayOffer;
+					m_DialedMs[m_ServerConnection] = SteadyMs();
 					return true;
 				}
 			}
@@ -1097,6 +1139,9 @@ namespace RTE {
 		}
 
 		static int ConnectionConfigInt32(HSteamNetConnection connection, ESteamNetworkingConfigValue value) {
+			// Candidates cross the directory before a route can be tried, so a relayed connect outlasts GNS's 10 s default.
+			connectionConfigs.emplace_back();
+			connectionConfigs.back().SetInt32(k_ESteamNetworkingConfig_TimeoutInitial, static_cast<int32>(GnsTransport::IceConnectTimeoutMs()));
 			int32 number = -1;
 			size_t size = sizeof(number);
 			ESteamNetworkingConfigDataType type = k_ESteamNetworkingConfig_Int32;

@@ -15599,6 +15599,23 @@ namespace RTE {
 		return true;
 	}
 
+	// A joiner's ICE dial names what it waits on and how long it may; a retry is offered only to a dial its host answered.
+	bool TestIceConnectingLine(std::string* error) {
+		const std::string waiting = NetIceConnectingLine(6400, 30000, false, true, false);
+		const std::string testing = NetIceConnectingLine(12900, 30000, true, true, false);
+		const std::string again = NetIceConnectingLine(2000, 30000, true, false, true);
+		if (waiting != "Connecting (6 of 30 s) - waiting for the host's answer" || testing != "Connecting (12 of 30 s) - testing routes, relay ready" ||
+		    again != "Connecting again (2 of 30 s) - testing routes") {
+			*error = "the connecting line read \"" + waiting + "\" / \"" + testing + "\" / \"" + again + "\"";
+			return false;
+		}
+		if (!NetIceRetryCanSucceed(3, 0) || NetIceRetryCanSucceed(0, 0) || NetIceRetryCanSucceed(4, 1)) {
+			*error = "an ICE retry was offered to a dial its host never answered or refused, or denied to one it answered";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestReservedSeatDirectoryResolve(std::string* error) {
 		NetDirectoryLocalIdentity identity;
 		identity.networkProtocolVersion = 1; identity.lockstepCodecVersion = NetLockstepCodec::c_Version;
@@ -16022,8 +16039,9 @@ namespace RTE {
 				*error = "ice retry retained the ICE dial or lost the failed stages: " + why;
 				return false;
 			}
-			if (arm == 3 && config.sessionConfig.timeoutMs != 15000) {
-				*error = "ice gathering retained the shorter heartbeat timeout";
+			// The session waits out the transport's ICE connect limit and the hello after it.
+			if (arm == 3 && config.sessionConfig.timeoutMs != GnsTransport::IceConnectTimeoutMs() + NetMatchService::c_IceHandshakeMarginMs) {
+				*error = "ice gathering kept a session timeout of " + std::to_string(config.sessionConfig.timeoutMs) + " ms, shorter than the ICE connect limit and the hello";
 				return false;
 			}
 			if (arm == 6 && session.GetStats().timeouts != 0) {
@@ -16310,6 +16328,7 @@ namespace RTE {
 		if (!TestHandoverSnapshotStatus(&error)) return fail(error);
 		if (!TestDiscoveryOccupancy(&error)) return fail(error);
 		if (!TestReservedSeatDirectoryResolve(&error)) return fail(error);
+		if (!TestIceConnectingLine(&error)) return fail(error);
 		if (!TestRelayOfferRefresh(&error)) return fail(error);
 		if (!TestIceConnectionFallback(&error)) return fail(error);
 		if (!TestInternetMenuJoinUsesSession(&error)) return fail(error);

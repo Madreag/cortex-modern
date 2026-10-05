@@ -1289,10 +1289,13 @@ namespace RTE {
 		void PublishRelayOfferLocked(NetSession& session, INetTransport& wire);
 		bool ReadRelayOffer(NetRelayConfig& offer) const;
 		void SetRelayOfferLocked(const NetRelayConfig& offer);
-		/// Retries a failed ICE connection once through the row's direct address.
+		/// Dials ICE once more when its host answered but the connect ran out of time, then retries through the row's direct address.
 		bool StartLobbyConnection(std::unique_ptr<NetMuxTransport>& mux, INetTransport& ip, NetSession& session, NetLockstepCoordinator& coordinator,
 		                          NetMatchRunner& runner, NetMatchRunnerConfig& config, const NetIceJoinTarget& target,
 		                          bool transportReady, bool& noDirectRoute, std::string* error);
+		/// Starts the line a joiner reads while its ICE dial runs; the lobby publish keeps it current until the transport connects.
+		void ArmIceConnectingLine(NetMatchRunnerConfig& config, NetSession& session);
+		void UpdateIceConnectingLine();
 		/// Keeps admission refusals distinct from a failed direct connection.
 		static std::string SetupFailureStatus(const NetSession* session, bool noDirectRoute, bool relayFailed = false);
 		/// The ICE virtual port a host listens on and a joiner dials.
@@ -1308,6 +1311,7 @@ namespace RTE {
 		static constexpr uint64_t c_IceRegisterBudgetMs = 30000;
 		static constexpr uint64_t c_IceResolveBudgetMs = 30000;
 		static constexpr uint32_t c_IceConnectBudgetMs = 15000;
+		static constexpr uint32_t c_IceHandshakeMarginMs = 5000; //!< The session's hello after the transport connects, on top of its connect limit.
 		void JoinWorkerIfDone();
 		/// Attaches the H4 admission plane to a freshly built session. Host: only with a live auth
 		/// epoch, so a build without crypto keeps the pre-admission handshake and issues no tickets.
@@ -1715,6 +1719,10 @@ namespace RTE {
 		bool m_RelayReady = false;
 		bool m_RelayPublishPending = false;
 		bool m_RelayAttempted = false;
+		uint64_t m_IceDialStartedMs = 0; //!< Worker thread: the joiner's current ICE dial, for the line it reads while it connects.
+		bool m_IceDialRetrying = false;
+		uint64_t m_IceSignalsAtDial = 0; //!< The host's signals before this dial, so a retry waits for an answer of its own.
+		std::string m_IceConnectingPhase; //!< The phase the log last named, so a phase is logged once, not each second.
 		uint64_t m_RelayOfferIssuedAt = 0; //!< Wall seconds when the current offer was adopted.
 		uint64_t m_RelayReplies = 0;
 		uint64_t m_NextRelayRequestMs = 0;
