@@ -19,6 +19,10 @@ namespace RTE {
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false) override;
 		/// Enables scoped input only for an active automation driver.
 		static void SetAutomationDriving(bool enabled);
+		/// Whether an automation driver is running this process's menus.
+		static bool AutomationDriving();
+		/// Presses or releases a key for every menu input, as the keyboard does; refused while no driver runs.
+		static bool QueueScriptedKey(const std::string& name, bool down);
 		/// Takes a share of the process-global joystick background-events hint, which SDL needs before it
 		/// will deliver a virtual pad's presses to a window that has no keyboard focus.
 		static void AcquireJoystickBackgroundEvents();
@@ -37,8 +41,6 @@ namespace RTE {
 		bool GetKeyJoyMouseCursor() const { return m_KeyJoyMouseCursor; }
 		/// Queues a device event for the next poll; inactive wrappers refuse it.
 		virtual bool QueueAutomationInput(const std::string& device, const std::string& name, bool down) { return false; }
-		/// Queues a control's own handler after the input update clears its event queue.
-		virtual bool QueueAutomationCommand(std::function<void()> command) { return false; }
 		virtual void ReleaseAutomationInput() {}
 #pragma region Creation
 		/// Constructor method used to instantiate a GUIInputWrapper object in system memory.

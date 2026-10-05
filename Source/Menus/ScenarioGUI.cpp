@@ -380,22 +380,18 @@ void ScenarioGUI::CalculateLinesToSitePoint() {
 	}
 }
 
-bool ScenarioGUI::AutomationPostCommand(const std::string& controlName) {
-	if (m_ActivityConfigBox->AutomationActivateCell(controlName)) return true;
-	GUIControl* control = m_GUIControlManager->GetControl(controlName);
-	if (!control || !MenuAutomation::Enabled(control)) return false;
-	m_AutomationCommand = controlName;
-	return true;
+std::optional<std::pair<int, int>> ScenarioGUI::AutomationScenePoint(const std::string& sceneName) const {
+	if (!m_ActivityScenes || m_ActivityConfigBox->IsEnabled()) return std::nullopt;
+	for (const Scene* scene: *m_ActivityScenes) {
+		if (scene->GetPresetName() != sceneName) continue;
+		const Vector site = m_PlanetCenter + scene->GetLocation() + scene->GetLocationOffset();
+		return std::make_pair(site.GetFloorIntX(), site.GetFloorIntY());
+	}
+	return std::nullopt;
 }
 
-bool ScenarioGUI::AutomationSelectScene(const std::string& sceneName) {
-	if (!m_ActivityScenes || m_ActivityConfigBox->IsEnabled()) return false;
-	for (Scene* scene: *m_ActivityScenes) {
-		if (scene->GetPresetName() != sceneName) continue;
-		SetSelectedScene(scene);
-		return true;
-	}
-	return false;
+bool ScenarioGUI::AutomationSceneSelected(const std::string& sceneName) const {
+	return m_SelectedScene && m_SelectedScene->GetPresetName() == sceneName;
 }
 
 ScenarioGUI::ScenarioMenuUpdateResult ScenarioGUI::Update() {
@@ -418,11 +414,6 @@ ScenarioGUI::ScenarioMenuUpdateResult ScenarioGUI::Update() {
 	int mousePosY;
 	m_GUIControlManager->GetManager()->GetInputController()->GetMousePosition(&mousePosX, &mousePosY);
 	m_GUIControlManager->Update();
-	if (!m_AutomationCommand.empty()) {
-		GUIControl* control = m_GUIControlManager->GetControl(m_AutomationCommand);
-		m_AutomationCommand.clear();
-		if (control && MenuAutomation::Enabled(control)) control->AddEvent(GUIEvent::Command, 0, 0);
-	}
 
 	if (!m_ActivityConfigBox->IsEnabled()) {
 		m_RootBox->SetVisible(true);

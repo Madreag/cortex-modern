@@ -56,10 +56,8 @@ namespace RTE {
 		void Draw() const;
 		/// Routes automation to the controls owned by the active settings page.
 		GUIControlManager* AutomationManager() const { return m_GUIControlManager.get(); }
+		/// Presses a named control of the active page by hand, as every script word does.
 		bool AutomationPostCommand(const std::string& name);
-		void QueuePendingPage(const std::string& page) { m_PendingPage = page; }
-		void ClearPendingPage() { m_PendingPage.clear(); }
-		const std::string& PendingPage() const { return m_PendingPage; }
 #pragma endregion
 
 	private:
@@ -89,7 +87,6 @@ namespace RTE {
 		GUICollectionBox* m_SettingsTabberBox;
 		GUIButton* m_BackToMainButton;
 		std::array<GUITab*, SettingsMenuScreen::SettingsMenuCount> m_SettingsMenuTabs;
-		std::string m_PendingPage;
 
 #pragma region Settings Menu Handling
 		/// Disables the settings menu tabber and back buttons. This is used when a settings sub-menu dialog box is active.

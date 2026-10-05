@@ -60,6 +60,9 @@ namespace RTE {
 		/// The panel that currently has keyboard focus; null when none does.
 		GUIPanel* GetFocusPanel() const { return m_FocusPanel; }
 
+		/// The panel a mouse at this point reaches: the captured panel, or the topmost enabled visible panel under it.
+		GUIPanel* PanelUnderMouse(int X, int Y) { return m_CapturedPanel ? m_CapturedPanel : FindTopPanel(X, Y); }
+
 		/// Presses Return on a panel that drops the focus and checks the key loop stops there.
 		static bool RunComboKeyCommitSelfTest();
 

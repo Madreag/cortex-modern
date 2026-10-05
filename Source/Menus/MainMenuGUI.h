@@ -89,21 +89,17 @@ namespace RTE {
 #pragma region Automation
 		/// Gets the control manager for the screen currently drawn.
 		GUIControlManager* AutomationManager() const;
-		/// Activates a control by name, dispatching to the active screen handler exactly as a click does.
-		/// @return Whether the control was found.
-		bool AutomationActivateControl(const std::string& controlName);
+		/// The list and row a scripted row name stands for: GameRow<n>, GameRowPort<port> (the joinable game on that port) or LabelReplayRow<n>.
+		bool AutomationRowOf(const std::string& name, std::string& listName, int& row) const;
 
-		/// Names a clickable control; its Command is posted after the next GUI Update.
-		bool AutomationPostCommand(const std::string& controlName);
+		/// What the multiplayer screens hold for the next lobby and the host's draft, for a readback that a change reached them.
+		std::string AutomationModelText() const;
 
-		/// Sets a text box's text by control name.
-		bool AutomationSetText(const std::string& controlName, const std::string& text);
+		/// The dialog that takes every click while it is open, or null.
+		GUIControl* AutomationModalDialog() const;
 
-		/// Pins the lobby share-address host the status row draws.
-		void AutomationSetShareAddress(const std::string& address);
-
-		/// Sets a checkbox's state by control name, then runs the same change path a click would.
-		bool AutomationSetCheck(const std::string& controlName, bool checked);
+		/// Setup for a scripted host: the port it listens on, which a player sets in Advanced. False when the text is no port.
+		bool AutomationSetupHostPort(const std::string& port);
 
 		/// Gets a named control's text (label, button or checkbox) for assert_label; false when it has none.
 		bool AutomationLabelText(const std::string& controlName, std::string& text) const;
@@ -509,7 +505,6 @@ namespace RTE {
 		std::vector<NetHostSceneChoice> m_HostOptionsScenes;        //!< The scenes the Rules page offers: those the drafted activity runs.
 		std::vector<std::string> m_HostOptionsTechModules; //!< Tech combo's resolved module names (-All-/-Random- first).
 		std::string m_ReconnectStatusShown; //!< The last §11 line this screen wrote, so it may clear its own.
-		std::string m_PendingAutomationCommand; //!< Control waiting to raise Command after Update clears the queue.
 		NetMatchServiceRequest m_MultiplayerJoinRequest; //!< The join the player last asked for, so an application reuses it.
 		bool m_MultiplayerApplyOffered = false;          //!< A join of this host may still be answered by applying (§9b).
 		GUICollectionBox* m_CreditsScrollPanel;
@@ -599,9 +594,6 @@ namespace RTE {
 		/// Handles the player interaction with the MainMenuGUI GUI elements.
 		/// @return Whether the player requested to return to the main menu from one of the sub-menus.
 		bool HandleInputEvents();
-
-		/// Posts a pending menu-script Command after Update has cleared the queue.
-		void PostPendingAutomationCommand();
 
 		/// Handles the player interaction with the main screen GUI elements.
 		/// @param guiEventControl Pointer to the GUI element that the player interacted with.

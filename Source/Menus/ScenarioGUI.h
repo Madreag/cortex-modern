@@ -1,5 +1,8 @@
 #pragma once
 
+#include <optional>
+#include <utility>
+
 #include "ScenarioActivityConfigGUI.h"
 #include "MOSParticle.h"
 
@@ -63,13 +66,13 @@ namespace RTE {
 		~ScenarioGUI() { if (s_AutomationActive == this) s_AutomationActive = nullptr; }
 		GUIControlManager* AutomationManager() const { return m_GUIControlManager.get(); }
 		std::string AutomationScreen() const { return m_ActivityConfigBox->IsEnabled() ? "ScenarioConfig" : "ScenarioPicker"; }
-		bool AutomationPostCommand(const std::string& controlName);
-		bool AutomationSelectScene(const std::string& sceneName);
+		/// Where a scene's site sits on the planet, for a scripted click; empty while the scene is not offered.
+		std::optional<std::pair<int, int>> AutomationScenePoint(const std::string& sceneName) const;
+		bool AutomationSceneSelected(const std::string& sceneName) const;
 #pragma endregion
 
 	private:
 		inline static ScenarioGUI* s_AutomationActive = nullptr;
-		std::string m_AutomationCommand;
 		std::unique_ptr<GUIInputWrapper> m_AutomationInput;
 		int m_RootBoxMaxWidth; //!< The maximum width the root CollectionBox that holds all this menu's GUI elements. This is to constrain this menu to the primary window's display (left-most) while in multi-display fullscreen, otherwise positioning can get stupid.
 

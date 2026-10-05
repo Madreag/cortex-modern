@@ -263,9 +263,6 @@ static std::string LobbyRowName(const NetLobbyMember& member, const std::string&
 
 bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string* error);
 
-static std::string s_ShareAddress;
-static bool s_ShareResolved = false;
-
 static std::optional<size_t> ReplayRowIndex(const std::string& name) {
 	const std::string prefix = "LabelReplayRow";
 	if (!name.starts_with(prefix)) return std::nullopt;
@@ -357,7 +354,6 @@ void MainMenuGUI::Clear() {
 
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 	m_ReconnectStatusShown.clear();
-	m_PendingAutomationCommand.clear();
 	m_CreditsScrollPanel = nullptr;
 	m_MainMenuScreens.fill(nullptr);
 	m_MainMenuButtons.fill(nullptr);
@@ -1068,7 +1064,6 @@ bool MainMenuGUI::HandleInputEvents() {
 		UpdateMainScreenHoveredButton(dynamic_cast<GUIButton*>(m_MainMenuScreenGUIControlManager->GetControlUnderPoint(mouseX, mouseY, m_MainMenuScreens[MenuScreen::MainScreen], 1)));
 	}
 	m_ActiveGUIControlManager->Update();
-	PostPendingAutomationCommand();
 
 	GUIEvent guiEvent;
 	while (m_ActiveGUIControlManager->GetEvent(&guiEvent)) {
@@ -5006,106 +5001,67 @@ static bool IsControlClickable(GUIControl* control) {
 	return MenuAutomation::Enabled(control);
 }
 
-bool MainMenuGUI::AutomationActivateControl(const std::string& controlName) {
+bool MainMenuGUI::AutomationRowOf(const std::string& name, std::string& listName, int& row) const {
 	// The list shows every engine beaconing on the network, so a scripted join names its own session's row by port.
-	if (controlName.starts_with("GameRowPort")) {
-		const std::string number = controlName.substr(11);
+	if (name.starts_with("GameRowPort")) {
+		const std::string number = name.substr(11);
 		if (number.empty() || number.size() > 5 || number.find_first_not_of("0123456789") != std::string::npos) return false;
 		const unsigned long port = std::stoul(number);
-		const auto row = std::find_if(m_GameRows.begin(), m_GameRows.end(), [port](const NetDirectoryClient::GameRow& candidate) { return candidate.port == port; });
-		if (row == m_GameRows.end() || !IsControlClickable(m_MultiplayerLanGamesList) || m_ActiveDialogBox) return false;
-		m_MultiplayerLanGamesList->SetSelectedIndex(static_cast<int>(row - m_GameRows.begin()));
-		HandleMultiplayerScreenInputEvents(m_MultiplayerLanGamesList);
+		const auto found = std::find_if(m_GameRows.begin(), m_GameRows.end(), [port](const NetDirectoryClient::GameRow& candidate) { return candidate.port == port; });
+		if (found == m_GameRows.end()) return false;
+		listName = m_MultiplayerLanGamesList->GetName();
+		row = static_cast<int>(found - m_GameRows.begin());
 		return true;
 	}
-	if (controlName.starts_with("GameRow")) {
-		const std::string number = controlName.substr(7);
+	if (name.starts_with("GameRow")) {
+		const std::string number = name.substr(7);
 		if (number.empty() || number.size() > 3 || number.find_first_not_of("0123456789") != std::string::npos) return false;
-		const size_t index = static_cast<size_t>(std::stoul(number));
-		if (index >= m_GameRows.size() || !IsControlClickable(m_MultiplayerLanGamesList) || m_ActiveDialogBox) return false;
-		m_MultiplayerLanGamesList->SetSelectedIndex(static_cast<int>(index));
-		HandleMultiplayerScreenInputEvents(m_MultiplayerLanGamesList);
+		listName = m_MultiplayerLanGamesList->GetName();
+		row = std::stoi(number);
 		return true;
 	}
-	if (const auto index = ReplayRowIndex(controlName)) {
-		if (*index >= m_ReplayRows.size() || !IsControlClickable(m_ReplayList) || m_ActiveDialogBox) return false;
-		m_ReplayList->SetSelectedIndex(static_cast<int>(*index));
-		HandleMultiplayerScreenInputEvents(m_ReplayList);
-		return true;
-	}
-	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return m_SettingsMenu->AutomationPostCommand(controlName);
-	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
-	if (!control) {
-		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
-	}
-	if (!control || !IsControlClickable(control)) {
-		return false;
-	}
-	switch (m_ActiveMenuScreen) {
-		case MenuScreen::MainScreen: HandleMainScreenInputEvents(control); break;
-		case MenuScreen::MetaGameNoticeScreen: HandleMetaGameNoticeScreenInputEvents(control); break;
-		case MenuScreen::MultiplayerScreen: HandleMultiplayerScreenInputEvents(control); break;
-		case MenuScreen::EditorScreen: HandleEditorsScreenInputEvents(control); break;
-		case MenuScreen::QuitScreen: HandleQuitScreenInputEvents(control); break;
-		default: return false;
-	}
-	return true;
-}
-
-bool MainMenuGUI::AutomationPostCommand(const std::string& controlName) {
-	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return m_SettingsMenu->AutomationPostCommand(controlName);
-	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
-	if (!control) {
-		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
-	}
-	if (!control || !IsControlClickable(control)) {
-		return false;
-	}
-	m_PendingAutomationCommand = controlName;
-	return true;
-}
-
-void MainMenuGUI::PostPendingAutomationCommand() {
-	if (m_PendingAutomationCommand.empty()) {
-		return;
-	}
-	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(m_PendingAutomationCommand);
-	if (!control) {
-		control = m_MainMenuScreenGUIControlManager->GetControl(m_PendingAutomationCommand);
-	}
-	m_PendingAutomationCommand.clear();
-	if (control && IsControlClickable(control)) {
-		control->AddEvent(GUIEvent::Command, 0, 0);
-	}
-}
-
-bool MainMenuGUI::AutomationSetText(const std::string& controlName, const std::string& text) {
-	GUITextBox* textBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl(controlName));
-	if (textBox && IsControlClickable(textBox)) {
-		textBox->SetText(text);
+	if (const auto index = ReplayRowIndex(name)) {
+		listName = m_ReplayList->GetName();
+		row = static_cast<int>(*index);
 		return true;
 	}
 	return false;
 }
 
-void MainMenuGUI::AutomationSetShareAddress(const std::string& address) {
-	s_ShareAddress = address;
-	s_ShareResolved = true;
+std::string MainMenuGUI::AutomationModelText() const {
+	const auto draft = [](const NetMatchConfig& config) {
+		std::ostringstream text;
+		text << NetMatchConfigUtil::BuildReportJson(NetMatchConfigUtil::WithoutRelay(config)) << " delay=" << static_cast<int>(config.delayPolicy) << "/" << config.inputDelayFrames
+		     << " slow=" << config.slowPlayerBoundTicks << "/" << static_cast<int>(config.slowPlayerPolicy) << " autosave=" << config.autosaveEnabled << "/" << config.autosaveIntervalSeconds
+		     << " idle=" << static_cast<int>(config.idleWaitMinutes) << " repair=" << config.automaticRepair << " horizon=" << config.pathHorizonTicks
+		     << " redundancy=" << static_cast<int>(config.frameRedundancyTicks) << " return=" << static_cast<int>(config.returnWindowMinutes) << " peers=";
+		for (const uint16_t delay: config.peerInputDelayFrames) text << delay << ",";
+		return text.str();
+	};
+	std::ostringstream text;
+	text << "host activity=" << m_MultiplayerHostActivityIndex << " scene=" << m_MultiplayerHostSceneIndex << " mode=" << static_cast<int>(m_MultiplayerHostMode)
+	     << " players=" << static_cast<int>(m_MultiplayerHostPeerCount) << " port=" << (m_MultiplayerHostPortTextBox ? m_MultiplayerHostPortTextBox->GetText() : "")
+	     << " name=" << (m_MultiplayerNameTextBox ? m_MultiplayerNameTextBox->GetText() : "")
+	     << " join=" << (m_MultiplayerJoinAddressTextBox ? m_MultiplayerJoinAddressTextBox->GetText() : "") << ":" << (m_MultiplayerJoinPortTextBox ? m_MultiplayerJoinPortTextBox->GetText() : "")
+	     << "\ndraft " << draft(m_HostOptionsDraft);
+	if (m_HostSetupOptions) text << "\nstaged " << draft(*m_HostSetupOptions);
+	const HostComputerDraft& computer = m_HostComputerDraft;
+	text << "\ncomputer listing=" << static_cast<int>(computer.listing) << " portmap=" << computer.portMap << " port=" << computer.port << " ice=" << computer.ice
+	     << " relay=" << static_cast<int>(computer.relay) << " relayfields=" << computer.relayFields[0] << "|" << computer.relayFields[1] << "|" << computer.relayFields[2].size()
+	     << " history=" << computer.joinHistorySeconds << " lag=" << computer.joinLagSeconds << " widget=" << static_cast<int>(computer.statusWidget)
+	     << "\nlobby ready=" << g_NetMatchService.IsReadyRequested() << " countdown=" << g_NetMatchService.GetLobbySnapshot().startCountdownRunning;
+	return text.str();
 }
 
-bool MainMenuGUI::AutomationSetCheck(const std::string& controlName, bool checked) {
-	GUICheckbox* checkbox = dynamic_cast<GUICheckbox*>(m_SubMenuScreenGUIControlManager->GetControl(controlName));
-	if (!checkbox) {
-		checkbox = dynamic_cast<GUICheckbox*>(m_MainMenuScreenGUIControlManager->GetControl(controlName));
-	}
-	if (!checkbox || !IsControlClickable(checkbox)) {
-		return false;
-	}
-	checkbox->SetCheck(checked ? GUICheckbox::Checked : GUICheckbox::Unchecked);
-	// SetCheck raises no event; the click path is the Changed notification routed to the screen handler.
-	if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen) {
-		HandleMultiplayerScreenInputEvents(checkbox);
-	}
+GUIControl* MainMenuGUI::AutomationModalDialog() const {
+	return m_ActiveMenuScreen == MenuScreen::MultiplayerScreen ? m_ActiveDialogBox : nullptr;
+}
+
+bool MainMenuGUI::AutomationSetupHostPort(const std::string& port) {
+	char* end = nullptr;
+	const long parsed = std::strtol(port.c_str(), &end, 10);
+	if (port.empty() || *end != '\0' || parsed < 1 || parsed > 65535 || !m_MultiplayerHostPortTextBox) return false;
+	m_MultiplayerHostPortTextBox->SetText(std::to_string(parsed));
 	return true;
 }
 

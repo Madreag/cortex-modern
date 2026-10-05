@@ -55,13 +55,9 @@ SettingsGUI::SettingsGUI(AllegroScreen* guiScreen, GUIInputWrapper* guiInput, bo
 		SetActiveSettingsMenuScreen(SettingsMenuScreen::VideoSettingsMenu, false);
 	}
 	m_SettingsMenuTabs[m_ActiveSettingsMenuScreen]->SetCheck(true);
-	MenuAutomation::BindSettingsOwner(m_GUIControlManager.get(), this);
 }
 
-SettingsGUI::~SettingsGUI() {
-	MenuAutomation::UnbindSettingsOwner(m_GUIControlManager.get());
-	m_PendingPage.clear();
-}
+SettingsGUI::~SettingsGUI() = default;
 
 GUICollectionBox* SettingsGUI::GetActiveDialogBox() const {
 	GUICollectionBox* activeDialogBox = nullptr;
@@ -148,13 +144,11 @@ void SettingsGUI::SetActiveSettingsMenuScreen(SettingsMenuScreen activeMenu, boo
 
 bool SettingsGUI::HandleInputEvents() {
 	m_GUIControlManager->Update();
-	MenuAutomation::ApplyQueuedPage(m_GUIControlManager.get());
 
 	GUIEvent guiEvent;
 	while (m_GUIControlManager->GetEvent(&guiEvent)) {
 		if (guiEvent.GetType() == GUIEvent::Command) {
 			if (guiEvent.GetControl() == m_BackToMainButton) {
-				m_PendingPage.clear();
 				RefreshActiveSettingsMenuScreen();
 				return true;
 			}
@@ -222,7 +216,6 @@ void SettingsGUI::Draw() const {
 }
 
 bool SettingsGUI::AutomationPostCommand(const std::string& name) {
-	if (!MenuAutomation::Enabled(m_GUIControlManager->GetControl(name))) return false;
-	auto* input = dynamic_cast<GUIInputWrapper*>(m_GUIControlManager->GetInput());
-	return input && input->QueueAutomationCommand([this, name] { MenuAutomation::Click(m_GUIControlManager.get(), name); });
+	std::string observation;
+	return MenuAutomation::HandClick(m_GUIControlManager.get(), name, nullptr, observation);
 }
