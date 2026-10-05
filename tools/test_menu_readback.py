@@ -794,11 +794,12 @@ def lobby_case(case, port, root):
     """The lobby's Ready and Start as the user decided them, and its Escape, on real engines."""
     marks = {name: probe_root(root, "host") / f"{name}.mark" for name in ("saw", "cancelled", "cleared", "readied", "host_saw_ready", "unreadied", "done")}
     if case == "lobby-ready-all":
-        host = (host_lobby(port) + "wait_remote_ready 60\nwait 3\n"
+        # The host starts once the joined player has read that it is ready, so that line is seen before the round begins.
+        host = (host_lobby(port) + f"wait_remote_ready 60\nwait_file {marks['readied']} 30\nwait 3\n"
                 "wait_label LabelMultiplayerStatus Everyone is ready - press Start Match\nassert_label ButtonMultiplayerStart Start Match\n"
                 "activate ButtonMultiplayerStart\nwait_state Running 20\nexit\n")
         client = (join_by_address(port) + "activate ButtonMultiplayerReady\nwait 4\nassert_label ButtonMultiplayerReady Cancel Ready\n"
-                  "wait_label LabelMultiplayerStatus You're ready - waiting for the host\nwait_state Running 20\nexit\n")
+                  f"wait_label LabelMultiplayerStatus You're ready\ntouch_file {marks['readied']}\nwait_state Running 20\nexit\n")
     elif case == "lobby-countdown":
         # The joined player counts once the lobby says Start Match would count down for that player's Ready; Start is live from then.
         host = (host_lobby(port) + "wait_connected 2 60\nwait_label LabelMultiplayerStatus Start Match starts in 30 s\n"
@@ -845,7 +846,9 @@ def lobby_case(case, port, root):
             steps += [{"op": "wait", "service": "Starting", "scope": "menu"}, {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]
             probes[who] = {"schema": 1, "timeout_ms": 150000, "steps": steps}
             assert scripts[who].endswith("exit\n"), scripts[who][-80:]
-            scripts[who] = scripts[who][:-len("exit\n")] + f"wait_file {probe_root(root, who) / 'done.json'} 60\nassert_substate Lobby\nexit\n"
+            # The host leaves last: its exit closes the lobby the joined player is back in.
+            last = f"wait_file {probe_root(root, 'client') / 'done.json'} 60\n" if who == "host" else ""
+            scripts[who] = scripts[who][:-len("exit\n")] + f"wait_file {probe_root(root, who) / 'done.json'} 60\n{last}assert_substate Lobby\nexit\n"
     return ({who: in_base_words(text) for who, text in scripts.items()} if BASE_WORDS else scripts), probes
 
 
@@ -1597,7 +1600,8 @@ def scripts(case, port, root, size="960x540"):
                   "assert_status The host banned you from this session\n"
                   # No trailing dump: a refused peer's lobby view is its own local default config,
                   # and the paired check reads each side's last dump_lobby for the same match.
-                  "assert_substate Landing\nexit\n")
+                  # A join refused with nothing to answer stays on the Join screen with its reason.
+                  "assert_substate JoinSetup\nexit\n")
         return {"host": host, "client": client}, {
             "host": {"schema": 1, "timeout_ms": 90000, "steps": [
                 {"op": "wait", "service": "Starting", "scope": "menu"},
