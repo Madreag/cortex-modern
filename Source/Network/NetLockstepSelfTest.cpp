@@ -19350,6 +19350,72 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			}
 		};
 
+		bool TestSuccessorWaitsForAThirtySecondDial(std::string* error) {
+			struct Clock { uint64_t now = 0; uint64_t connectedAt = UINT64_MAX; };
+			class DelayedConnection : public LoopbackTransport {
+			public:
+				explicit DelayedConnection(std::shared_ptr<Clock> clock) : m_Clock(std::move(clock)) {}
+				std::vector<NetTransportEvent> PollEvents() override {
+					return m_Clock->now < m_Clock->connectedAt ? std::vector<NetTransportEvent>{} : LoopbackTransport::PollEvents();
+				}
+			private:
+				std::shared_ptr<Clock> m_Clock;
+			};
+			const auto clock = std::make_shared<Clock>();
+			LoopbackTransport hostWire, secondWire, thirdWire;
+			constexpr uint16_t port = 47540;
+			if (!hostWire.StartHost(port, error) || !secondWire.Connect("loopback", port, error) || !thirdWire.Connect("loopback", port, error)) return false;
+			auto match = NetMatchConfigUtil::MakeDefault(0x7540);
+			match.peerCount = 3; match.players.push_back({3, 2, false, "Third"}); match.successorOrder = {2, 3};
+			for (uint8_t peer = 1; peer <= 3; ++peer)
+				match.migrationPeers.push_back({peer, static_cast<uint16_t>(port + peer), {"ice:" + std::to_string(peer)}});
+			const auto config = [&](uint8_t peer) {
+				NetLockstepConfig value; value.sessionId = match.sessionId; value.matchConfig = match;
+				value.peerCount = 3; value.localPeerId = peer; value.startFrame = 1; value.timeoutMs = 60000;
+				value.roundId = peer == 1 ? 0x754001 : 0; value.relayToOtherPeers = peer == 1;
+				value.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}} : std::map<uint8_t, NetPeerId>{{1, 1}};
+				value.migrationKey.fill(0x39);
+				value.migrationTransportFactory = [clock] { return std::make_unique<DelayedConnection>(clock); };
+				value.migrationIceDial = [=](INetTransport& wire, const std::string& identity, std::string* why) {
+					return wire.Connect("loopback", static_cast<uint16_t>(port + std::stoi(identity)), why);
+				};
+				return value;
+			};
+			NetLockstepCoordinator host, second, third;
+			if (!host.Start(hostWire, config(1), error) || !second.Start(secondWire, config(2), error) || !third.Start(thirdWire, config(3), error)) return false;
+			const auto collect = [](NetLockstepCoordinator& peer) {
+				NetLockstepReadyFrame ready; while (peer.PopReadyFrame(ready)) peer.FinishSimulationTick(ready.frame);
+			};
+			for (uint64_t frame = 1; frame <= 5; ++frame) {
+				for (int turn = 0; turn < 10; ++turn, clock->now += 5) { host.Tick(clock->now); second.Tick(clock->now); third.Tick(clock->now); }
+				for (auto* peer : {&host, &second, &third})
+					if (!peer->QueueLocalInput(frame, {MakeFrame(100 + peer->GetConfig().localPeerId, frame)}, {}, error)) return false;
+				for (int turn = 0; turn < 10; ++turn, clock->now += 5) {
+					host.Tick(clock->now); second.Tick(clock->now); third.Tick(clock->now);
+					collect(host); collect(second); collect(third);
+				}
+			}
+			if (second.GetResumeFrame() != 6 || third.GetResumeFrame() != 6) { *error = "delayed successor fixture did not share frame five"; return false; }
+			hostWire.Stop();
+			const uint64_t started = clock->now;
+			clock->connectedAt = started + 25000;
+			if (!second.BeginHostMigration(started) || !third.BeginHostMigration(started)) { *error = "delayed successor fixture did not begin succession"; return false; }
+			for (; clock->now - started < 35000; clock->now += 5) {
+				second.Tick(clock->now); third.Tick(clock->now); collect(second); collect(third);
+				if (second.IsStopped() || second.IsFailed() || third.IsStopped() || third.IsFailed()) {
+					*error = "successor abandoned a permitted 25000 ms dial at " + std::to_string(clock->now - started) + " ms: " + second.GetStats().timeoutReason;
+					return false;
+				}
+				if (second.GetMigrationResult().generation == 1 && third.GetMigrationResult().generation == 1 && second.IsRunning() && third.IsRunning()) {
+					if (second.GetHostPeerId() != 2 || third.GetHostPeerId() != 2) { *error = "delayed successor produced different authorities"; return false; }
+					std::cout << "[net-lockstep-selftest] PASS successor_waits_for_a_thirty_second_dial connected_ms=25000 completed_ms=" << clock->now - started << std::endl;
+					return true;
+				}
+			}
+			*error = "successor did not complete after its permitted 25000 ms dial";
+			return false;
+		}
+
 		struct MigrationSimFixture {
 			std::map<int64_t, int64_t> position;
 			std::map<uint8_t, uint64_t> commandTotals;
@@ -24194,6 +24260,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			std::cerr << "[net-lockstep-selftest] FAIL " << name << ": " << rowError << std::endl;
 			rowsPassed = false;
 		};
+		row(&TestSuccessorWaitsForAThirtySecondDial, "successor_waits_for_a_thirty_second_dial");
 		row(&TestHeldSeatReleaseEndsItsClaimsOnOneFrame, "held_seat_release_ends_its_claims_on_one_frame");
 		row(&TestKickedPlayingSeatLeavesOnOneFrame, "kicked_playing_seat_leaves_on_one_frame");
 		row(&TestUnboundedDropEndsItsClaimsOnOneFrame, "unbounded_drop_ends_its_claims_on_one_frame");
