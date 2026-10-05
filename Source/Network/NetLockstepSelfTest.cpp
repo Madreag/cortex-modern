@@ -24074,6 +24074,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				round.firstWire.loseAcks = true;
 				if (release) round.peers[0].EvictRemovedPeer(4, "removed while held", round.now);
 				else if (!round.peers[0].ProposeInputDelay(3, 2, round.peers[0].GetStats().nextFrame + 30, &round.failure)) return fail(round.failure);
+				round.Pump();
 				const auto proposal = round.hostWire.Last(release ? NetTimingAction::Release : NetTimingAction::Delay, NetTimingPhase::Propose);
 				if (!proposal || (proposal->requiredPeers & 2) == 0) return fail("the decision did not require peer 2");
 				for (int turn = 0; turn < 3; ++turn) round.Pump();
