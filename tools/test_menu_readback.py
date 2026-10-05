@@ -1169,6 +1169,8 @@ def scripts(case, port, root, size="960x540"):
         text += checks("TabNetworkSettings", "CollectionBoxSettingsBase")
         for control in BASICS_ROWS:
             text += checks(control, "CollectionBoxNetPageBasics")
+        # The first view's rows keep apart whatever the Player page's delay policy hides.
+        text += "assert_no_overlap_within CollectionBoxNetPageBasics\n"
         # The pages behind Advanced settings stay off the first view.
         for tab in NETWORK_TABS:
             text += f"assert_visible {tab} 0\n"
@@ -2616,7 +2618,9 @@ def run_case(options, case, root, failing=None):
             assert len(tabs) == len(NETWORK_TABS) and all(tab["text_fits"] for tab in tabs.values()), tabs
             assert not any(box in rows or box in after for box in NETWORK_BOXES[1:]), sorted(rows)
             result["page_text"] = {name: [rows[name]["text"], after[name]["text"]] for name in NETWORK_ROWS}
-            assert result["page_text"]["TextNetworkDisplayName"] == [NETWORK_SEED["NetworkDisplayName"], NETWORK_SAVED["NetworkDisplayName"]], result["page_text"]
+            # The name is the first view's: the seeded one there, and the page's edit saved.
+            basics = [capture for capture in images if capture["settings_page"] == "Network:Basics"]
+            assert basics and next(c["text"] for c in basics[0]["controls"] if c["name"] == "TextNetworkDisplayName") == NETWORK_SEED["NetworkDisplayName"], basics[:1]
             result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(NETWORK_SAVED))
             assert result["saved"] == NETWORK_SAVED, result["saved"]
             # The page sits on the Misc page's grid: a 20px row pitch, and under the automatic policy

@@ -264,7 +264,7 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	};
 	m_RowsUnderFixedDelay = {rowTop(m_IdleWaitLabel), rowTop(m_IdleWaitTextbox), rowTop(m_IdleWaitHintLabel),
 	                         rowTop(m_PathHorizonLabel), rowTop(m_PathHorizonTextbox), rowTop(m_PathHorizonHintLabel), rowTop(m_AutoRepairCheckbox),
-	                         rowTop(m_ToastsCheckbox), rowTop(m_PredictionCheckbox), rowTop(m_GUIControlManager->GetControl("LabelMatchStatusWidget")), rowTop(m_StatusModeCombo), rowTop(m_DiagnosticsCheckbox)};
+	                         rowTop(m_ToastsCheckbox), rowTop(m_PredictionCheckbox), rowTop(m_DiagnosticsCheckbox)};
 
 	ShowSavedValues();
 	// The skin draws only the player page's box first; checking its tab keeps the selector in step.
