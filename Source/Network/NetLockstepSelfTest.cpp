@@ -24523,6 +24523,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			};
 			for (; ok && now < 2000 && (!host.IsRunning() || !client.IsRunning());) pump();
 			ok = ok && host.IsRunning() && client.IsRunning();
+			host.SetFinalFrame(3900); client.SetFinalFrame(3900);
 			struct Sim { uint64_t frame = 1, due = 0, firstTick = 0; bool produced = false; MigrationSimFixture world; };
 			Sim a, b; a.due = b.due = now;
 			uint64_t waits = 0;
