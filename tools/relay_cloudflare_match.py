@@ -464,7 +464,10 @@ FEEL_BARS = ('item9a_wall_tps', 'item9a_net_wait', 'item9a_steady_stalls', 'item
 LIVE_SPIKE_PINS = ('item9a_steady_stalls', 'item9a_missing_frame_stalls')
 
 
-def observed_input_spikes(log: str, tick_ms: float = 1000 / 60, bound_ticks: int = 3) -> dict:
+def observed_input_spikes(log: str, tick_ms: float | None = None, bound_ticks: int | None = None) -> dict:
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < float('inf')
+           for value in (tick_ms, bound_ticks)):
+        return {}
     proposals, observed = {}, {}
     for line in log.splitlines():
         if line.startswith('[net-lockstep] propose hold peer='):
@@ -1960,7 +1963,8 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
     builds = edith_cross.pair_build_evidence(root, dict(source_sha=next(iter({value['head'] for value in facts['identities'].values()}))), records)
     rtts = transport_rtts(host_log)
     judged = run.get('timing_peers') or hash_peers
-    spikes = observed_input_spikes(host_log)
+    spikes = observed_input_spikes(host_log, edith_cross.find_key(reports.get('host') or {}, 'sim_tick_ms'),
+                                   edith_cross.find_key(reports.get('host') or {}, 'slow_player_bound_ticks'))
     sanitize = facts['sanitize']
     minted = facts.get('minted') or []
     clocks = {}

@@ -767,7 +767,7 @@ class FeelBars(unittest.TestCase):
         steady = dict(item9a_steady_stalls={'status': 'FAIL', 'value': 1}, item9a_missing_frame_stalls={'status': 'FAIL', 'value': 1})
         log = '[net-frame-wait] frame=1120 wait_ms=2\n[net-frame-wait] frame=200 wait_ms=40\n'
         observed = match.observed_input_spikes('[net-lockstep] propose hold peer=4 next_frame=1120 played=1 first_missing_ms=2000 now=2100 cause=late_stream\n'
-                                                '[net-match] hold peer=4 frame=1120 AI in control\n')
+                                                '[net-match] hold peer=4 frame=1120 AI in control\n', 1000 / 60, 3)
         verdict = match.feel_bars(self.timing(**steady), 'host', log=log, spikes=observed, ticks=1201)
         self.assertTrue(verdict['passed'], verdict)
         self.assertEqual(verdict['live_spike_reading'], dict(steady=0, spike_waits=[(1120, 2)],
