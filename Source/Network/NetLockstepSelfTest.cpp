@@ -24029,6 +24029,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			NetMatchConfig match;
 			uint64_t now = 0;
 			bool recording = false;
+			bool hostPlaneOnly = false;
 			uint64_t drainThrough = UINT64_MAX;
 			std::string failure;
 
@@ -24063,9 +24064,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 						    peers[index].QueueLocalInput(produced[index], {MakeFrame(400, produced[index])}, {}, &failure)) ++produced[index];
 					} else FeedReleasedClaimsPeer(peers[index], produced[index]);
 				}
-				for (size_t index = 0; index < peers.size(); ++index) if (alive[index]) peers[index].Tick(now);
+				for (size_t index = 0; index < peers.size(); ++index) if (alive[index]) {
+					if (index == 0 && hostPlaneOnly) peers[index].PlaneTick(now); else peers[index].Tick(now);
+				}
 				for (size_t index = 0; index < peers.size(); ++index) {
-					if (!alive[index]) continue;
+					if (!alive[index] || (index == 0 && hostPlaneOnly)) continue;
 					NetLockstepReadyFrame ready;
 					if (recording && index == 2) {
 						while (peers[index].GetResumeFrame() <= drainThrough && peers[index].HasReadyFrame(peers[index].GetResumeFrame())) {
@@ -24447,6 +24450,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			round.produceThrough[0] = 19;
 			for (int turn = 0; turn < 400 && round.peers[0].GetResumeFrame() < 20; ++turn) round.Pump();
 			if (round.peers[0].GetResumeFrame() != 20 || !round.peers[0].ProposePeerHold(1, round.now, &round.failure, 20)) return fail("host 1 was not held at 20: " + round.failure);
+			round.hostPlaneOnly = true;
 			round.drainThrough = 29;
 			round.produceThrough[3] = 31;
 			round.hostWire.fourthFutureOnlyToFirst = true;
