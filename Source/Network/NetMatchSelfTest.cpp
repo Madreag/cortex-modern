@@ -15650,6 +15650,18 @@ namespace RTE {
 	}
 
 	bool TestSessionIdJoinRefusals(std::string* error) {
+		bool evidencePassed = true;
+		for (const char* state : {"unlisted", "hidden", "expired", "unreachable"}) {
+			const std::string why = std::string(state) == "unreachable" ? "directory unavailable" : "no such session";
+			const std::string refusal = NetMatchService::IceSessionRefusalText(true, "live", why);
+			const bool ended = NetMatchService::RejoinFoundHostRowGone(true, true, refusal);
+			std::cout << "[net-match-selftest] " << (ended ? "FAIL" : "PASS") << " live_rejoin_" << state << " ended=" << ended << std::endl;
+			evidencePassed = evidencePassed && !ended;
+		}
+		const std::string hostEnd = NetMatchService::IceSessionRefusalText(true, "ended", "ended by host");
+		const bool endedByHost = NetMatchService::RejoinFoundHostRowGone(true, false, hostEnd);
+		std::cout << "[net-match-selftest] " << (endedByHost ? "PASS" : "FAIL") << " rejoin_ended_by_host ended=" << endedByHost << std::endl;
+		if (!evidencePassed || !endedByHost) { *error = "rejoin completion accepts listing absence or misses the host's authenticated end"; return false; }
 		NetDirectoryLocalIdentity local;
 		local.networkProtocolVersion = 1;
 		local.lockstepCodecVersion = 20;

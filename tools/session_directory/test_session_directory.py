@@ -126,6 +126,25 @@ def sample_register(**overrides: object) -> dict[str, Any]:
 
 
 class DirectoryTests(unittest.TestCase):
+    def test_only_the_host_delete_proves_the_session_ended(self) -> None:
+        store = session_directory.SessionDirectory(15, 5)
+        created = store.register(sample_register(), "192.0.2.1", 0)
+        sid, token = created["session_id"], created["token"]
+        self.assertEqual(store.host_end_status(sid, 1), {"session_id": sid, "ended_by_host": False})
+        store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 0, "state": "running", "listed": False}, 2)
+        self.assertFalse(store.host_end_status(sid, 3)["ended_by_host"], "hidden running row proved an end")
+        store.prune(30)
+        self.assertFalse(store.host_end_status(sid, 31)["ended_by_host"], "expired running row proved an end")
+        with self.assertRaises(PermissionError):
+            store.delete(sid, {"token": "not-the-host-token"}, 32)
+        self.assertFalse(store.host_end_status(sid, 33)["ended_by_host"])
+        store.delete(sid, {"token": token}, 34)
+        self.assertTrue(store.host_end_status(sid, 34)["ended_by_host"])
+        self.assertTrue(store.host_end_status(sid, 633)["ended_by_host"])
+        self.assertFalse(store.host_end_status(sid, 634)["ended_by_host"], "host end survived beyond ten minutes")
+        with self.assertRaises(KeyError):
+            store.get_signals(sid, "host", 0, token, 635)
+
     def setUp(self) -> None:
         self.server: Optional[RunningServer] = None
         self.tls_dir: Optional[tempfile.TemporaryDirectory[str]] = None
