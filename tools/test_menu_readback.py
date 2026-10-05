@@ -3011,7 +3011,7 @@ def run_case(options, case, root, failing=None):
             modes = [next(c for c in image["controls"] if c["name"] == "ComboHostMode")
                      for image in images if image["peer"] == "host"
                      and any(c["name"] == "ComboHostMode" for c in image["controls"])]
-            assert any(row["text"] == "Co-op PvE" for row in modes), modes
+            assert any(row["text"] == "Players versus AI" for row in modes), modes
             result["mode_cycle"] = modes
             # The two header rows carry the friendly mode label, and both peers' panels are the
             # same rectangle for the same lobby state - no peer's own status text widens its panel.
