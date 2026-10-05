@@ -24523,7 +24523,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			};
 			for (; ok && now < 2000 && (!host.IsRunning() || !client.IsRunning());) pump();
 			ok = ok && host.IsRunning() && client.IsRunning();
-			struct Sim { uint64_t frame = 1, due = 0; bool produced = false; MigrationSimFixture world; };
+			struct Sim { uint64_t frame = 1, due = 0, firstTick = 0; bool produced = false; MigrationSimFixture world; };
 			Sim a, b; a.due = b.due = now;
 			uint64_t waits = 0;
 			std::map<int64_t, uint64_t> leads;
@@ -24540,7 +24540,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					}
 					NetLockstepReadyFrame ready;
 					if (a.produced && host.PopReadyFrame(ready)) {
-						a.world.Apply(ready); host.FinishSimulationTick(ready.frame); ++a.frame; a.produced = false; a.due = now + 17;
+						if (a.frame == 1) a.firstTick = now;
+						a.world.Apply(ready); host.FinishSimulationTick(ready.frame); ++a.frame; a.produced = false;
+						a.due = a.firstTick + static_cast<uint64_t>(std::ceil((a.frame - 1) * 1000.0 / 60));
 					} else host.NoteFrameWait(a.frame, now);
 				}
 				if (b.frame <= 3900 && now >= b.due) {
@@ -24549,7 +24551,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 						b.world.Apply(ready); client.FinishSimulationTick(ready.frame);
 						const auto input = std::vector<ControllerFrame>{MakeFrame(102, b.frame)};
 						if (!client.DeferLocalInput(b.frame, input)) ok = client.QueueLocalInput(b.frame, input, {}, &error);
-						++b.frame; b.due = now + 17;
+						if (b.frame == 1) b.firstTick = now;
+						++b.frame; b.due = b.firstTick + static_cast<uint64_t>(std::ceil((b.frame - 1) * 1000.0 / 60));
 					} else {
 						const auto counted = client.m_InputAcceptanceWaits;
 						client.NoteFrameWait(b.frame, now);
