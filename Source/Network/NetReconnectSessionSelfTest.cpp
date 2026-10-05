@@ -4919,23 +4919,23 @@ namespace RTE {
 			return 0;
 		}
 
-		// The seats panel and the stall overlay must agree about the pause: the round's hold decides.
+		// The Players panel and the stall overlay must agree about the pause: the round's hold decides.
 		int TestModerationPanelTitleFollowsTheRoundHold() {
 			std::string who;
 			uint32_t seconds = 0;
 			if (ScenarioRunner::DescribeLockstepHoldPause(who, seconds) || !who.empty() || seconds != 0) {
 				return Fail("a round with no coordinator reported a hold pause");
 			}
-			if (NetModerationPanelTitle(true, false, "Alice", 0) != "SEATS  /  The match continues while this panel is open") {
+			if (NetModerationPanelTitle(true, false, "Alice", 0) != "PLAYERS  /  The match continues while this panel is open") {
 				return Fail("the panel claimed a pause the round is not in");
 			}
-			if (NetModerationPanelTitle(true, true, "Alice", 7) != "SEATS  /  Match paused: waiting for Alice to return (7s left)") {
+			if (NetModerationPanelTitle(true, true, "Alice", 7) != "PLAYERS  /  Match paused: waiting for Alice to return (7s left)") {
 				return Fail("the panel did not name the held player and the countdown");
 			}
-			if (NetModerationPanelTitle(true, true, "", 3) != "SEATS  /  Match paused: waiting for a player to return (3s left)") {
+			if (NetModerationPanelTitle(true, true, "", 3) != "PLAYERS  /  Match paused: waiting for a player to return (3s left)") {
 				return Fail("a nameless hold lost its wording");
 			}
-			if (NetModerationPanelTitle(false, true, "Alice", 7) != "SEATS  /  Resynchronizing the match...") {
+			if (NetModerationPanelTitle(false, true, "Alice", 7) != "PLAYERS  /  Restoring the shared match state...") {
 				return Fail("a resyncing round did not say so");
 			}
 			return 0;

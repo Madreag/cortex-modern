@@ -265,7 +265,7 @@ namespace RTE {
 		GUILabel* m_Roster = nullptr;
 		GUIButton* m_Close = nullptr;
 		/// The F6 panel's second view: the match's adopted options, the same read-only panel the pause
-		/// menu's Match Options and the lobby's Details show.
+		/// menu's Match Details and the lobby's Details show.
 		GUIButton* m_OptionsToggle = nullptr;
 		GUILabel* m_Options = nullptr;
 		bool m_OptionsView = false;
