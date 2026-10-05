@@ -25170,7 +25170,7 @@ namespace {
 					if (tick >= 30 && (!cores[copy]->IsSeatUnderAI(seat, tick) || !cores[copy]->IsSeatReclaimableAt(seat, tick) || views[copy].claimant != seat)) failures += "seat " + std::to_string(seat) + " survivor " + std::to_string(copy + 3) + " frame " + std::to_string(tick) + " held=" + std::to_string(cores[copy]->IsSeatUnderAI(seat, tick)) + " claim=" + std::to_string(views[copy].claimant) + "; ";
 				}
 			}
-			writer.Close();
+			writer.Close(); if (!WaitForReplayCloseForTest(writer, &round.failure)) return fail(round.failure);
 			if (holds != 1 || releases) failures += "seat " + std::to_string(seat) + " holds=" + std::to_string(holds) + " releases=" + std::to_string(releases) + "; ";
 			NetMatchReplayReader reader;
 			if (!reader.Open(path, &round.failure)) return fail(round.failure);
