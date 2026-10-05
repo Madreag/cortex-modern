@@ -133,7 +133,7 @@ namespace {
 	ChatScope ParseChatDefaultScope(const std::string& raw) { return ParseEnum(raw, {{"all", ChatScope::All}, {"team", ChatScope::Team}}, ChatScope::All, "NetworkChatDefaultScope"); }
 	ChatSize ParseChatTextSize(const std::string& raw) { return ParseEnum(raw, {{"small", ChatSize::Small}, {"large", ChatSize::Large}}, ChatSize::Small, "NetworkChatTextSize"); }
 	DelayPolicy ParseHostDelayPolicy(const std::string& raw) { return ParseEnum(raw, {{"auto", DelayPolicy::Auto}, {"fixed", DelayPolicy::Fixed}}, DelayPolicy::Auto, "NetworkHostDelayPolicy"); }
-	Visibility ParseHostVisibility(const std::string& raw) { return ParseEnum(raw, {{"lan", Visibility::LAN}, {"listed", Visibility::Listed}, {"unlisted", Visibility::Unlisted}}, Visibility::LAN, "NetworkHostVisibility"); }
+	Visibility ParseHostVisibility(const std::string& raw) { return ParseEnum(raw, {{"local", Visibility::LAN}, {"public", Visibility::Listed}, {"unlisted", Visibility::Unlisted}}, Visibility::Listed, "NetworkHostGameListing"); }
 
 	const char* MatchStatusText(MatchMode mode) { return mode == MatchMode::Off ? "Off" : (mode == MatchMode::Always ? "Always" : "Auto"); }
 	const char* ChatScopeText(ChatScope scope) { return scope == ChatScope::Team ? "Team" : "All"; }
@@ -141,7 +141,7 @@ namespace {
 	const char* DelayPolicyText(DelayPolicy policy) { return policy == DelayPolicy::Fixed ? "Fixed" : "Auto"; }
 	SlowPolicy ParseSlowPolicy(const std::string& raw) { return ParseEnum(raw, {{"substitute", SlowPolicy::Substitute}, {"pause", SlowPolicy::Pause}}, SlowPolicy::Substitute, "NetworkSlowPlayerPolicy"); }
 	const char* SlowPolicyText(SlowPolicy policy) { return policy == SlowPolicy::Pause ? "Pause" : "Substitute"; }
-	const char* VisibilityText(Visibility visibility) { return visibility == Visibility::Listed ? "Listed" : (visibility == Visibility::Unlisted ? "Unlisted" : "LAN"); }
+	const char* VisibilityText(Visibility visibility) { return visibility == Visibility::Listed ? "Public" : (visibility == Visibility::Unlisted ? "Unlisted" : "Local"); }
 
 }
 
@@ -213,7 +213,7 @@ void SettingsMan::Clear() {
 	m_NetworkChatTextSize = NetworkChatTextSize::Small;
 	m_NetworkChatKey = "T";
 	m_NetworkHostDelayPolicy = NetworkHostDelayPolicy::Auto;
-	m_NetworkHostVisibility = NetworkHostVisibility::LAN;
+	m_NetworkHostVisibility = NetworkHostVisibility::Listed;
 	m_NetworkToastsEnabled = m_NetworkChatVisible = m_NetworkChatNotify = m_NetworkAutoReconnect = m_NetworkOfferStoredRejoin = m_NetworkRecordReplays = m_NetworkHostAutoRepair = true;
 	m_NetworkChatSound = false;
 	m_NetworkHostIdleWaitMinutes = 10;
@@ -447,7 +447,9 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("NetworkHostJoinLagSeconds", { int seconds = m_NetworkHostJoinLagSeconds; reader >> seconds; SetNetworkHostJoinLagSeconds(seconds); });
 	MatchProperty("NetworkPathHorizonTicks", { int ticks = m_NetworkPathHorizonTicks; reader >> ticks; SetNetworkPathHorizonTicks(ticks); });
 	MatchProperty("NetworkAutosavesKept", { int kept = m_NetworkAutosavesKept; reader >> kept; SetNetworkAutosavesKept(kept); });
-	MatchProperty("NetworkHostVisibility", { m_NetworkHostVisibility = ParseHostVisibility(reader.ReadPropValue()); });
+	MatchProperty("NetworkHostGameListing", { m_NetworkHostVisibility = ParseHostVisibility(reader.ReadPropValue()); });
+	// Retired, and read only so an old settings file still parses: no build applied it, and the LAN every file saved would hide a host that never chose.
+	MatchProperty("NetworkHostVisibility", { reader.ReadPropValue(); });
 	// Retired, and read only so an old settings file still parses: the count is a build constant.
 	MatchProperty("NumberOfLuaStatesOverride", { reader >> m_NumberOfLuaStatesOverride; });
 	MatchProperty("ForceImmediatePathingRequestCompletion", { reader >> m_ForceImmediatePathingRequestCompletion; });
@@ -810,7 +812,7 @@ void SettingsMan::WriteNetworkPreferences(Writer& writer) const {
 	writer.NewPropertyWithValue("NetworkHostJoinLagSeconds", m_NetworkHostJoinLagSeconds);
 	writer.NewPropertyWithValue("NetworkPathHorizonTicks", m_NetworkPathHorizonTicks);
 	writer.NewPropertyWithValue("NetworkAutosavesKept", m_NetworkAutosavesKept);
-	writer.NewPropertyWithValue("NetworkHostVisibility", VisibilityText(m_NetworkHostVisibility));
+	writer.NewPropertyWithValue("NetworkHostGameListing", VisibilityText(m_NetworkHostVisibility));
 }
 
 int SettingsMan::RunNetworkPreferencesSelfTest() {
@@ -985,9 +987,14 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 		writer.NewPropertyWithValue("NetworkChatDefaultScope", "TEAM");
 		writer.NewPropertyWithValue("NetworkChatTextSize", "large");
 		writer.NewPropertyWithValue("NetworkHostDelayPolicy", "FIXED");
-		writer.NewPropertyWithValue("NetworkHostVisibility", "listed");
+		writer.NewPropertyWithValue("NetworkHostGameListing", "unlisted");
 	});
-	check("case-insensitive", settings.GetNetworkMatchStatusMode() == NetworkMatchStatusMode::Always && settings.GetNetworkChatDefaultScope() == NetworkChatDefaultScope::Team && settings.GetNetworkChatTextSize() == NetworkChatTextSize::Large && settings.GetNetworkHostDelayPolicy() == NetworkHostDelayPolicy::Fixed && settings.GetNetworkHostVisibility() == NetworkHostVisibility::Listed);
+	check("case-insensitive", settings.GetNetworkMatchStatusMode() == NetworkMatchStatusMode::Always && settings.GetNetworkChatDefaultScope() == NetworkChatDefaultScope::Team && settings.GetNetworkChatTextSize() == NetworkChatTextSize::Large && settings.GetNetworkHostDelayPolicy() == NetworkHostDelayPolicy::Fixed && settings.GetNetworkHostVisibility() == NetworkHostVisibility::Unlisted);
+
+	// A file from before the choice was applied says LAN under the old name; the host stays listed, as it always was.
+	settings.Clear();
+	writeRead([&](Writer& writer) { writer.NewPropertyWithValue("NetworkHostVisibility", "LAN"); });
+	check("retired visibility key ignored", settings.GetNetworkHostVisibility() == NetworkHostVisibility::Listed);
 
 	// The saved host options only reach a match through the mapping, so the mapping is checked here.
 	settings.Clear();

@@ -169,6 +169,16 @@ namespace RTE {
 		Failed,
 	};
 
+	/// Where the host's game stands in the online game list.
+	enum class NetListingStatus {
+		None,      //!< Not hosting.
+		LocalOnly, //!< Kept to this network: no online listing is made.
+		Opening,   //!< The listing is being made.
+		Listed,    //!< Anyone finds it in the online game list.
+		Unlisted,  //!< Held online but not shown in the list.
+		Failed,    //!< The online list refused or could not be reached; the reason says which.
+	};
+
 	/// One compatible scene for the host's activity picker, in scene-manager order.
 	struct NetHostSceneChoice {
 		std::string name;
@@ -626,6 +636,8 @@ namespace RTE {
 		void GetResyncStatus(bool* inFlight, uint64_t* bytes, uint64_t* elapsedMs) const;
 		/// The lobby's directory visibility: 0 LAN only (no held row), 1 hidden lease, 2 listed.
 		int GetDirectoryVisibility() const;
+		/// Where this host's game stands in the online game list; the reason names why it is not listed when it failed.
+		NetListingStatus GetListingStatus(std::string* reason = nullptr) const;
 		/// Moves the lobby's directory visibility through the held lease: 0 retracts the row (LAN
 		/// only - re-listing needs a new hosted session), 1 keeps the lease hidden, 2 lists it.
 		/// False when there is no lease to move. The bound ICE identity never changes.
@@ -1717,6 +1729,8 @@ namespace RTE {
 		std::string m_DirectorySessionId;
 		std::string m_DirectoryToken;
 		bool m_DirectoryRegistered = false;
+		NetDirectoryClient::State m_DirectoryState = NetDirectoryClient::State::Disabled; //!< The listing's state, published for the menus.
+		std::string m_DirectoryError; //!< The listing's last failure, published for the menus.
 		std::unique_ptr<NetSession> m_Session;
 		/// The session a rematch or resync worker owns; m_Session is empty for as long as it runs, and a
 		/// park declared on this thread must still reach the session that is evaluating silence.
@@ -1767,6 +1781,7 @@ namespace RTE {
 		NetDirectoryRegisterRequest m_DirectoryRow; //!< The listing template; counts refresh per Update.
 		bool m_DirectoryRetracted = false;          //!< The match ended while the state was still Running.
 		bool m_DirectoryHidden = false;             //!< A natural ICE end keeps the bound row unlisted.
+		bool m_HostThisNetworkOnly = false;         //!< The host keeps this session to its own network: no directory hears of it.
 		bool m_DirectoryRelistPending = false;      //!< The next lobby awaits the hide acknowledgement.
 		bool m_KeepEndedDirectoryLease = false;    //!< A held seat may still need the match-over answer.
 		uint16_t m_BeaconGamePort = 0;

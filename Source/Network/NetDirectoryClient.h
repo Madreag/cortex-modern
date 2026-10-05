@@ -59,6 +59,7 @@ namespace RTE {
 			std::string source;    //!< "LAN" | "NET"
 			std::string name;
 			std::string activity;
+			std::string scene; //!< NET rows only: a LAN beacon carries none.
 			std::string mode;
 			std::string players;   //!< "taken/max"
 			std::string address;
@@ -92,6 +93,8 @@ namespace RTE {
 		void Configure(std::string baseUrl, std::string installKey, std::string certPinSha256);
 
 		State GetState() const { return m_State; }
+		/// Why the directory last refused or failed a request; empty when nothing has.
+		const std::string& LastError() const { return m_LastError; }
 		/// The held row's last acknowledged visibility; empty before registration or after loss.
 		std::optional<bool> GetConfirmedListed() const { return m_ConfirmedListed; }
 		const std::string& GetSessionId() const { return m_SessionId; }

@@ -754,6 +754,7 @@ namespace RTE {
 			row.source = "NET";
 			row.name = session.name;
 			row.activity = session.activity;
+			row.scene = session.scene;
 			row.mode = session.mode;
 			row.players = std::to_string(std::max<int64_t>(0, session.peerCount - session.seatsFree)) + "/" + std::to_string(session.peerCount);
 			if (!session.listenAddrs.empty()) {

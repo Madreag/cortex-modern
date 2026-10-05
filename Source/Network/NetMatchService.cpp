@@ -646,7 +646,10 @@ static std::string ResyncSaveName() {
 		// The directory row advertises the same identity fields the probe registers; only the counts
 		// move afterwards. Only a host ever lists itself.
 		const std::string directoryListenAddr = NetLanDiscovery::GetPrimaryLocalAddress();
-		const bool directoryConfigured = !g_SettingsMan.GetSessionDirectoryUrl().empty();
+		// A host that keeps its game to this network never registers, so nothing reaches a directory or a router for it.
+		const SettingsMan::NetworkHostVisibility whoCanJoin = g_SettingsMan.GetNetworkHostVisibility();
+		const bool thisNetworkOnly = request.host && whoCanJoin == SettingsMan::NetworkHostVisibility::LAN;
+		const bool directoryConfigured = !g_SettingsMan.GetSessionDirectoryUrl().empty() && !thisNetworkOnly;
 		const bool icePreference = request.host || g_SettingsMan.HasNetworkIceEnableOverride() ? g_SettingsMan.GetNetworkIceEnable() : true;
 		const bool iceEnabled = icePreference && directoryConfigured &&
 		                        (request.host || !request.sessionId.empty());
@@ -776,11 +779,12 @@ static std::string ResyncSaveName() {
 				}
 			}
 			m_DirectoryRetracted = false;
-			m_DirectoryHidden = false;
+			m_DirectoryHidden = request.host && whoCanJoin == SettingsMan::NetworkHostVisibility::Unlisted;
+			m_HostThisNetworkOnly = thisNetworkOnly;
 			m_KeepEndedDirectoryLease = false;
 			m_DirectoryRelistPending = false;
 		}
-		if (request.host && g_SettingsMan.GetNetworkPortMapEnable()) {
+		if (request.host && g_SettingsMan.GetNetworkPortMapEnable() && !thisNetworkOnly) {
 			RequestHostPortMap(request.port, nullptr);
 		} else {
 			ReleaseHostPortMap();
@@ -1227,6 +1231,23 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_DirectoryRetracted || m_IceBoundSessionId.empty()) return 0;
 		return m_DirectoryHidden ? 1 : 2;
+	}
+
+	NetListingStatus NetMatchService::GetListingStatus(std::string* reason) const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_IsHost || m_State == NetMatchServiceState::Idle) return NetListingStatus::None;
+		if (m_HostThisNetworkOnly || m_DirectoryState == NetDirectoryClient::State::Disabled) return NetListingStatus::LocalOnly;
+		const auto failed = [reason](const std::string& why) {
+			if (reason) *reason = why;
+			return NetListingStatus::Failed;
+		};
+		if (m_DirectoryRetracted) return failed("the listing closed when the match ended");
+		switch (m_DirectoryState) {
+			case NetDirectoryClient::State::Registered: return m_DirectoryHidden ? NetListingStatus::Unlisted : NetListingStatus::Listed;
+			case NetDirectoryClient::State::Failed: return failed(m_DirectoryError);
+			case NetDirectoryClient::State::Superseded: return failed("the match went on under another host");
+			default: return m_DirectoryHidden ? NetListingStatus::Unlisted : NetListingStatus::Opening;
+		}
 	}
 
 	bool NetMatchService::SetDirectoryVisibility(int visibility) {
@@ -2746,7 +2767,7 @@ static std::string ResyncSaveName() {
 				s_PortMapApplied = true;
 			}
 		}
-		const std::string& directoryUrl = g_SettingsMan.GetSessionDirectoryUrl();
+		const std::string directoryUrl = m_HostThisNetworkOnly ? std::string() : g_SettingsMan.GetSessionDirectoryUrl();
 		// The install key is minted on the first directory use, so only a listing host asks for it.
 		const std::string directoryKey = (directoryWanted && !directoryUrl.empty()) ? g_SettingsMan.GetOrCreateSessionDirectoryInstallKey() : g_SettingsMan.GetSessionDirectoryInstallKey();
 		const std::string directoryCertPin = g_SettingsMan.GetSessionDirectoryCertSha256();
@@ -2787,6 +2808,8 @@ static std::string ResyncSaveName() {
 			m_DirectorySessionId = m_Directory.GetSessionId();
 			m_DirectoryToken = m_Directory.GetToken();
 			m_DirectoryRegistered = m_Directory.GetState() == NetDirectoryClient::State::Registered;
+			m_DirectoryState = m_Directory.GetState();
+			m_DirectoryError = m_Directory.LastError();
 		}
 		// The world's image follows the writer thread, never a file read on this one.
 		if (m_IsHost) {
