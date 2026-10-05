@@ -1409,6 +1409,7 @@ namespace RTE {
 		friend bool TestAStuckPrivateImageIsRetakenOnceThenRefused(std::string* error);
 		friend bool TestAPrivateReturnFollowsTheRoundOnTheRoster(std::string* error);
 		friend bool TestAHeldRejoinAsksItsHostAgainOffTheGameThread(std::string* error);
+		friend bool TestIceConnectingLine(std::string* error);
 		friend bool TestWorldReturnWatchKeysOnWorldId(std::string* error);
 		friend bool TestTheGoodbyeEndsWithItsRound(std::string* error);
 		friend bool TestAnOwnSideErrorKeepsTheSeatsReconnect(std::string* error);

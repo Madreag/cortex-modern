@@ -15601,6 +15601,32 @@ namespace RTE {
 
 	// A joiner's ICE dial names what it waits on and how long it may; a retry is offered only to a dial its host answered.
 	bool TestIceConnectingLine(std::string* error) {
+		{
+			LoopbackTransport listener, wire;
+			NetSession session;
+			NetMatchService service;
+			NetMatchRunnerConfig config;
+			if (!listener.StartHost(47548, error)) return false;
+			config.sessionConfig.port = 47548;
+			config.sessionConfig.timeoutMs = 30000;
+			config.sessionConfig.p2pJoin.connect = true;
+			std::string shown;
+			config.publishLobby = [&](const NetLobbySnapshot&) { shown = service.GetStatusText(); };
+			service.ArmIceConnectingLine(config, session);
+			service.m_IceDialStartedMs -= 31000;
+			config.sessionConfig.p2pJoin = {};
+			config.sessionConfig.timeoutMs = 5000;
+			service.m_IceRoute = "ip";
+			service.ArmIceConnectingLine(config, session);
+			if (!session.StartClient(wire, "loopback", config.sessionConfig, error)) return false;
+			config.publishLobby({});
+			if (!shown.starts_with("Connecting (0 of 5 s)") || shown.find("30 s") != std::string::npos) {
+				*error = "direct fallback publisher retained the relay attempt clock: " + shown;
+				std::cout << "[net-match-selftest] FAIL direct_fallback_attempt_clock " << shown << std::endl;
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS direct_fallback_attempt_clock " << shown << std::endl;
+		}
 		const std::string waiting = NetIceConnectingLine(6400, 30000, false, true, false);
 		const std::string testing = NetIceConnectingLine(12900, 30000, true, true, false);
 		const std::string again = NetIceConnectingLine(2000, 30000, true, false, true);
