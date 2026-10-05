@@ -4431,7 +4431,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	// Four rows keep the original pitch; a fuller roster packs its rows so the screen stays inside the smallest viewport.
 	const size_t rows = std::min(rowName.size(), m_MultiplayerLobbyPlayerLabels.size());
 	const int rowPitch = rows > 4 ? 14 : 18;
-	const int rowsExtra = std::max(0, static_cast<int>(rows) * rowPitch - 4 * 18);
+	// A short viewport would leave the chat no line: there the roster takes only the rows it shows, and an empty error band no room.
+	const bool shortViewport = g_WindowMan.GetResY() < 540;
+	const int rowsExtra = shortViewport ? static_cast<int>(rows) * rowPitch - 4 * 18 : std::max(0, static_cast<int>(rows) * rowPitch - 4 * 18);
 	for (size_t i = 0; i < m_MultiplayerLobbyPlayerLabels.size(); ++i) {
 		GUILabel* label = m_MultiplayerLobbyPlayerLabels[i];
 		if (!label) continue;
@@ -4584,7 +4586,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MultiplayerErrorLabel->SetHorizontalOverflowScroll(scrollWide);
 	// A finished round uses the vacant error band before taking room from chat.
 	const int errorHeight = summary ? (snapshot.errorText.empty() ? 0 : std::min(std::max(24, m_MultiplayerErrorLabel->GetTextHeight() + 4), errorRoom))
-	                                : std::max(24, std::min(m_MultiplayerErrorLabel->GetTextHeight() + 4, errorRoom));
+	                                : (shortViewport && m_MultiplayerErrorLabel->GetText().empty() ? 0 : std::max(24, std::min(m_MultiplayerErrorLabel->GetTextHeight() + 4, errorRoom)));
 	m_MultiplayerErrorLabel->SetVisible(errorHeight > 0);
 	const bool scrollTall = !scrollWide && m_MultiplayerErrorLabel->GetTextHeight() + 4 > errorRoom;
 	m_MultiplayerErrorLabel->SetVerticalOverflowScroll(scrollTall);
