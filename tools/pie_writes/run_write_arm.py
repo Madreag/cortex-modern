@@ -1,4 +1,4 @@
-"""Run the F23c local-pie-write fixtures through the existing isolated simulation runner."""
+"""Run the local pie-write fixtures through the existing isolated simulation runner."""
 from __future__ import annotations
 
 import argparse

@@ -4,7 +4,7 @@ Two service peers on loopback; the client's window is minimized from tick 600 to
 CCCP_TEST_MINIMIZE_TICKS and then restored. The client must run at >= 59.5 ticks a second over that window, its seat never held,
 the host never waiting a frame over 50 ms on it, every shared tick's live hash equal, the window really minimized and restored.
 
-  python tools/test_minimized_peer.py --out D:/mx/<lane>/minimized-peer
+  python tools/test_minimized_peer.py --out <dir>
 """
 
 from __future__ import annotations

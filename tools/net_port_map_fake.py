@@ -1,4 +1,4 @@
-"""W97 lane loopback fakes: a NAT-PMP/PCP responder and a fake UPnP IGD.
+"""Loopback fakes: a NAT-PMP/PCP responder and a fake UPnP IGD.
 
 Two listeners, all on 127.0.0.1 and nowhere else:
   * UDP --natpmp-port (lane default 47601) answers NAT-PMP external-address and UDP map

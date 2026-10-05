@@ -2,8 +2,8 @@
 multiplayer container, its panel edges and the Back button inside the viewport,
 and the long diagnostic must stay reachable through the label's overflow scroll.
 
-    python test_viewport_fit.py --repo D:/Projects/item7-ux \
-        --out D:/mx/ui-viewport-complete-20260913/detector --port 47871 \
+    python test_viewport_fit.py --repo <tree> \
+        --out <dir> --port 47871 \
         --exe-sha256 <exe hash>
 
 Three phases, each one host + one refused joiner on loopback:

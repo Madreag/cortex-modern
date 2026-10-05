@@ -653,7 +653,7 @@ class RuntimeProjectionTests(unittest.TestCase):
         self.assert_field(value, ("scroll_timer", "sim_limit"), False)
 
     def test_background_scaling_to_the_screen_is_the_peers_own(self):
-        # r3-erol-match4k: the 4K peer's backdrops read scale 2.0, scroll ratio 0.5 and 6000 wide where the others read 1.0, 0.25, 3000.
+        # A 4K peer's backdrops read scale 2.0, scroll ratio 0.5 and 6000 wide where the others read 1.0, 0.25, 3000.
         value = dict(version="SLBackground2", offset=[1, 2], auto_offset=[3, 4], z_order=5,
             scroll_timer=dict(sim_start=100, sim_limit=20, real_start=101, real_limit=30), back_bitmap=None,
             scroll_info=[0.5, 0.5], scroll_ratio=[0.5, 0.25], scale=[2.0, 2.0], scaled_dimensions=[6000.0, 1360.0])

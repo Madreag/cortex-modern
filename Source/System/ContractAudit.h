@@ -1,6 +1,6 @@
 #pragma once
 
-// Read-only audit instrumentation; generated from the retained declaration inventory.
+// Read-only audit instrumentation: the contract audit reads native fields through these friends.
 #include "GAScripted.h"
 #include "GameActivity.h"
 #include "ACDropShip.h"

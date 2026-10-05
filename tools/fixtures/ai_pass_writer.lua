@@ -1,4 +1,4 @@
--- The F72-B end-to-end fixture's actor script. Its AI pass - owner-only, per machine - sends the
+-- The end-to-end fixture's actor script. Its AI pass - owner-only, per machine - sends the
 -- actor a message whose receiver writes simulation state (the pattern BrowncoatBoss.lua:103-113 and
 -- :177-201 use), and gibs a second object. Both calls must land on every peer at the committed tick.
 -- It also makes the two calls no wire can carry, to show they still behave as they always did: a

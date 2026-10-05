@@ -1,6 +1,6 @@
 """Require complete two-peer evidence and identical pie, controller and hash state on both peers.
 
-The F23c sites are local UI writes into pie and controller state the sim dumps, so the oracle is peer
+The sites are local UI writes into pie and controller state the sim dumps, so the oracle is peer
 equality: for every actor and tick the pie interaction state, control bits, input mode and disabled bit
 must match, every tick hash must match, and the raw dumps must be identical. Each case also has to prove
 its site was reached, or a run that never opened the menu would pass without testing anything.

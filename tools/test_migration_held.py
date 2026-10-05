@@ -46,7 +46,7 @@ PORT_BLOCK = (49760, 49799)
 
 
 def compare_window(first: Path, second: Path, start: int, cap: int, out: Path) -> dict:
-    """Both traces over [start, cap] only: a held peer's coverage starts at the image it loaded (ruling D2), so the window is
+    """Both traces over [start, cap] only: a held peer's coverage starts at the image it loaded, so the window is
     validated and compared tick by tick and the held gap before it is not part of the comparison."""
     from compare_sim_traces import load_trace, strict_compare  # noqa: PLC0415
 
@@ -133,7 +133,7 @@ def judge(out: Path, repo: Path) -> dict:
             failures.append(f"{name} exited {exit_code}")
     verdict["protocol_errors"] = {name: len(re.findall(r"ProtocolError:", text)) for name, text in logs.items()}
     if hosted:
-        # A survivor held later in the run is compared from the image it loaded, as every peer's coverage is (ruling D2).
+        # A survivor held later in the run is compared from the image it loaded, as every peer's coverage is.
         covered = {row["tick"] for row in json.loads((run / "clientc_trace.json").read_text(encoding="utf-8-sig"))["runs"][0]["tick_hashes"]}
         survivorStart = CAP
         while survivorStart - 1 > boundary and survivorStart - 1 in covered:

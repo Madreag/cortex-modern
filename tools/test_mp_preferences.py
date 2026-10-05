@@ -1,4 +1,4 @@
-"""Write L01 Settings.ini fixtures. Does not launch the engine unless --launch is set.
+"""Write the multiplayer preferences' Settings.ini fixtures. Does not launch the engine unless --launch is set.
 
 The handwritten FAIL log is a scorer demo, not RED. PHASE B RED is the engine run with
 CCCP_SETTINGS_PREFERENCES_SELFTEST_BROKEN pointed at broken-Settings.ini.

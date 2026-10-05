@@ -1,4 +1,4 @@
-"""Enforce the lane's free-memory floor before each private-desktop engine launch."""
+"""Enforce this box's free-memory floor before each private-desktop engine launch."""
 from __future__ import annotations
 
 import ctypes
@@ -9,8 +9,11 @@ import runpy
 import sys
 from contextlib import contextmanager
 
-MARKER = Path('D:/mx/FEEL-MATRIX-RUNNING')
-CROSS_GUARD = Path('D:/mx/BOX-FREE-FOR-CROSS')
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import box_facts  # noqa: E402
+
+MARKER = box_facts.marker_path('timing', 'FEEL-MATRIX-RUNNING')
+CROSS_GUARD = box_facts.marker_path('cross-free', 'BOX-FREE-FOR-CROSS')
 
 def free_memory_bytes():
     if sys.platform != 'win32':
@@ -51,7 +54,7 @@ def install_memory_guard():
             raise RuntimeError(reason)
         marker = MARKER
         if marker.is_file() and json.loads(marker.read_text(encoding='utf-8')).get('token') != os.environ.get('CCCP_FEEL_MATRIX_RUN'):
-            refuse('engine launch refused: another lane owns the feel matrix marker', marker=str(marker))
+            refuse("engine launch refused: another run owns the box's timing marker", marker=str(marker))
         # The cross driver claims the marker before its own local launch; only a process without it is kept off the reserved box.
         if CROSS_GUARD.exists() and not holds_marker():
             refuse('engine launch refused: the box is reserved for the cross match')

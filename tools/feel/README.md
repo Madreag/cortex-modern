@@ -4,7 +4,7 @@ Run only after build authorization and removal of the phase lock:
 
 ```powershell
 $env:CCCP_HEADLESS = '1'
-python -B tools/feel_measure.py --out D:\mx\feel-item9a-review --skip-gates
+python -B tools/feel_measure.py --out <dir> --skip-gates
 ```
 
 The driver uses the assigned worktree's executable and `run_sim_test.make_run` for

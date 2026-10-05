@@ -66,7 +66,7 @@ def compare_live_hashes_or_fail(host_path, client_path, first_tick):
 # player number on its own machine and CIM_NETWORK/NoPlayer on every other one, so "controller_route" is per-peer by
 # construction and can never match across peers. The input those seats APPLY is the "controller" subsystem and is
 # compared unchanged, so this exclusion cannot hide an input difference. Evidence: the live controller dumps of
-# D:/mx/item9a-20260919/r9h-11-matrix/autosave-200ms at ticks 1 and 181+ (ctrl_input_mode host=1 client=2,
+# a 200 ms autosave matrix arm at ticks 1 and 181+ (ctrl_input_mode host=1 client=2,
 # ctrl_player host=0 client=-1 on the host's seat, mirrored on the client's), with sim_gated equal on every tick.
 PER_PEER_SUBSYSTEMS = frozenset({"controller_route"})
 

@@ -3,7 +3,6 @@ matches that agreed different first frames or delay changes is not judged, and t
 defect list reads it as a diagnostic instead of a desync; a pair on one timeline that differs is still a defect."""
 
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -11,8 +10,9 @@ import tempfile
 import unittest
 
 import feel_measure
+from inventory_location import inventory_dir
 
-INVENTORY = Path(os.environ.get('CC_INVENTORY_DIR') or 'D:/Projects/reviews/takeover-20260909/grok-workers/lead-tools/inventory')
+INVENTORY = inventory_dir()
 
 
 def write_match(run, first_frame, changes, delays=(23, 23)):

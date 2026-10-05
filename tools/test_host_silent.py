@@ -6,7 +6,7 @@ while the host holds the client's seat) and judges from the run's files:
   1. the client never declares itself the host (`Host left - Client is now hosting` is the split brain);
   2. the client rejoins the host through its private rejoin (`private catch-up complete frame=E`) and is not landed;
   3. both peers play to tick 2400 and their tick hashes are equal on every tick the client simulated from its rejoin
-     through the end (ruling D2: a peer's coverage starts at the image it loaded).
+     through the end (a peer's coverage starts at the image it loaded).
 
     python tools/test_host_silent.py --repo <tree> --out <dir> [--size 640x360] [--fps 2]
     python tools/test_host_silent.py --judge <dir>
@@ -32,7 +32,7 @@ CAUGHT_UP = re.compile(r"\[net-match\] private catch-up complete frame=(\d+)")
 
 
 def compare_window(first: Path, second: Path, start: int, cap: int, out: Path) -> dict:
-    """Both traces over [start, cap] only: a held peer's coverage starts at the image it loaded (ruling D2), so the window is
+    """Both traces over [start, cap] only: a held peer's coverage starts at the image it loaded, so the window is
     validated and compared tick by tick and the held gap before it is not part of the comparison."""
     from compare_sim_traces import load_trace, strict_compare  # noqa: PLC0415
 

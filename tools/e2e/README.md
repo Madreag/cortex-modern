@@ -5,8 +5,8 @@ Each `<name>.json` here is one play-through `tools/e2e_video.py` can run on priv
 A reviewing agent reads `review.json` first, then the contact sheet, then the video, and only an agent-approved
 capture is parked for the user.
 
-    python tools/e2e_video.py --repo <tree> --out D:\mx\e2e-video\<name> --scenario <name>
-    python tools/e2e_video.py --repo <tree> --review-only D:\mx\e2e-video\<name>
+    python tools/e2e_video.py --repo <tree> --out <dir>\<name> --scenario <name>
+    python tools/e2e_video.py --repo <tree> --review-only <dir>\<name>
 
 `--review-only` prints the retained review without launching, encoding, or rewriting it. `--size` overrides every
 run's logical resolution. `--fps` sets the capture and encoded frame rate. The encoder uses each saved frame's

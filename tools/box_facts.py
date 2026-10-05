@@ -154,6 +154,12 @@ def scratch_dir(name: str) -> Path:
     return (scratch_root() or Path(tempfile.gettempdir()) / 'cortex-scratch') / name
 
 
+def marker_path(kind: str, default_name: str) -> Path:
+    """This box's marker of one kind (the first, when the file lists several), else one under the default scratch."""
+    found = markers(kind)
+    return found[0] if found else scratch_dir(default_name)
+
+
 def held(*kinds: str) -> list[Path]:
     """The markers of these kinds that exist now on this box (an empty list lets a run start)."""
     return [path for kind in kinds for path in markers(kind) if path.exists()]

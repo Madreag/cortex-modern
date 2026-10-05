@@ -1,4 +1,4 @@
-"""Prove an AI pass's script writes land on every peer: the two-peer end-to-end arm for F72-B.
+"""Prove an AI pass's script writes land on every peer: the two-peer end-to-end arm.
 
 The staged activity seats one AI actor whose own pass sends it a message (its receiver writes
 self.Vel, the pattern BrowncoatBoss.lua uses) and gibs a free particle. Both are owner-only

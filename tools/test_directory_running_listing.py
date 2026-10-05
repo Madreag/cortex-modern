@@ -7,7 +7,7 @@ the host refuses it because the match is running, the landing panel offers to ap
 seat, and the script presses that button; the host must register the applicant. When the match ends
 the row must be gone from the listing.
 
-  python tools/test_directory_running_listing.py --out D:/mx/<lane>/running-listing
+  python tools/test_directory_running_listing.py --out <dir>
 """
 
 from __future__ import annotations

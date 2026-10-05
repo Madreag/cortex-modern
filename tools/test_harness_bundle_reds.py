@@ -4,7 +4,6 @@ Each case asserts the changed behaviour and records what the base tree did.
 """
 from __future__ import annotations
 
-import importlib
 import io
 import os
 import sys
@@ -17,9 +16,7 @@ from unittest.mock import patch
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE / "contracts"))
 
-from generate_observer import DEFAULT_INVENTORY, hand_fields, main as generate_main, parse_args
 from run_selftests import engine_executable
 from test_match_overlay import probe_script
 
@@ -38,69 +35,6 @@ class WireRefusalDelay(unittest.TestCase):
         """Base tree used the client hold delay for wire-refusal and missed the 120-tick editor cap."""
         text = (HERE / "net_activity_launch.py").read_text(encoding="utf-8")
         self.assertIn('if options.variant == "wire-refusal":\n                    delay = 0', text)
-
-
-class GenerateObserverRepo(unittest.TestCase):
-    def test_repo_is_required(self):
-        """Base tree had no generate_observer in this worktree and no --repo switch."""
-        with self.assertRaises(SystemExit):
-            parse_args([])
-        options = parse_args(["--repo", str(REPO)])
-        self.assertEqual(options.repo, Path(str(REPO)))
-
-    def test_import_does_not_overwrite_the_header(self):
-        header = REPO / "Source" / "System" / "ContractAudit.h"
-        before = header.read_bytes()
-        importlib.reload(sys.modules["generate_observer"])
-        self.assertEqual(header.read_bytes(), before)
-
-    def test_refuses_to_drop_hand_fields(self):
-        """A hand Field/Visit line the generator cannot emit must abort the write."""
-        import hashlib
-        import json
-
-        # ContractAuditCanary names no inventory class and appears in no definition, so nothing emits these.
-        existing = ('void Visit(const ContractAuditCanary& object, const std::string& path) {\n'
-                    'Field(path + ".ContractAuditCanary.m_HandWrittenOnly", object.m_HandWrittenOnly);\n')
-        definitions = (HERE / "contracts" / "observer_definitions.py").read_text(encoding="utf-8")
-        inventory_text = Path(DEFAULT_INVENTORY).read_text(encoding="utf-8")
-        for line in hand_fields(existing):
-            self.assertNotIn(line, definitions)
-        self.assertNotIn("ContractAuditCanary", inventory_text)
-        inventory = json.loads(inventory_text)
-        with tempfile.TemporaryDirectory() as tmp:
-            tree = Path(tmp)
-            for data in inventory["classes"].values():
-                src = REPO / data["path"]
-                if not src.is_file():
-                    continue
-                dest = tree / data["path"]
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(src.read_bytes())
-            dest_header = tree / "Source" / "System" / "ContractAudit.h"
-            dest_header.parent.mkdir(parents=True, exist_ok=True)
-            dest_header.write_text(existing, encoding="utf-8")
-            inventory["header_hashes"] = {
-                rel: hashlib.sha256((tree / rel).read_bytes()).hexdigest()
-                for rel in inventory.get("header_hashes", {})
-                if (tree / rel).is_file()
-            }
-            inv_path = tree / "native-fields.json"
-            inv_path.write_text(json.dumps(inventory), encoding="utf-8")
-            originals = HERE / "contracts" / "observer-originals"
-            manifest = HERE / "contracts" / "observer-manifest.json"
-            self.assertFalse(originals.exists(), f"fixture needs a clean {originals}")
-            self.assertFalse(manifest.exists(), f"fixture needs a clean {manifest}")
-            before = {path: path.read_bytes() for path in tree.rglob("*") if path.is_file()}
-            buf = io.StringIO()
-            with redirect_stdout(buf):
-                code = generate_main(["--repo", str(tree), "--inventory", str(inv_path)])
-            self.assertEqual(code, 1)
-            self.assertIn("refusing overwrite: generated header drops hand fields", buf.getvalue())
-            self.assertFalse(originals.exists(), f"refused run wrote {originals}")
-            self.assertFalse(manifest.exists(), f"refused run wrote {manifest}")
-            after = {path: path.read_bytes() for path in tree.rglob("*") if path.is_file()}
-            self.assertEqual(before, after)
 
 
 class PeerReportFlags(unittest.TestCase):

@@ -32,7 +32,7 @@ range the other batteries use.
 
 Run one gate, or all of them:
     python tools/h4_substitution_gates.py all
-    python tools/h4_substitution_gates.py substitute_commit --out D:/mx/b1
+    python tools/h4_substitution_gates.py substitute_commit --out <dir>
     python tools/h4_substitution_gates.py all --dry-run     # prints the commands, launches nothing
 """
 
