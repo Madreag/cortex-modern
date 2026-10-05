@@ -754,6 +754,14 @@ class FeelBars(unittest.TestCase):
         self.assertFalse(match.feel_bars(self.timing(**failed), 'host', log='[net-frame-wait] frame=1120 wait_ms=2\n',
                                          spikes={1120}, ticks=1201)['passed'])
 
+    def test_a_spike_needs_the_runs_measured_bound(self):
+        match = self.match()
+        log = ('[net-lockstep] propose hold peer=4 next_frame=1120 played=1 first_missing_ms=2000 now=2100 cause=late_stream\n'
+               '[net-match] hold peer=4 frame=1120 AI in control\n')
+        self.assertEqual(match.observed_input_spikes(log), {})
+        self.assertEqual(match.observed_input_spikes(log, 1000 / 60, 8), {})
+        self.assertIn(1120, match.observed_input_spikes(log, 1000 / 60, 3))
+
     def test_a_live_rows_one_wait_at_a_held_frame_is_the_spikes(self):
         import relay_cloudflare_match as match
         steady = dict(item9a_steady_stalls={'status': 'FAIL', 'value': 1}, item9a_missing_frame_stalls={'status': 'FAIL', 'value': 1})
