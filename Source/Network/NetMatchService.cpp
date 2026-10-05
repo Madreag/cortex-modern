@@ -9618,7 +9618,8 @@ static std::string ResyncSaveName() {
 		spec.p2p = BuildIceConfig(g_SettingsMan, std::string(), c_MigrationVirtualPort, snapshot ? *snapshot : NetRelayConfig{});
 		spec.makeSignaling = [raw = dispatcher.get()] { return raw->CreateJoinSignaling(); };
 		mux->SetJoinSpec(std::move(spec));
-		System::PrintDiagnosticLine("[net-migration] dialing the successor's ICE route identity=" + (identity.empty() ? std::string("(any)") : identity) + " session=" + ice.session);
+		System::PrintDiagnosticLine("[net-migration] dialing the successor's ICE route identity=" + (identity.empty() ? std::string("(any)") : identity) + " session=" + ice.session +
+		                            " as=" + dispatcher->LocalIdentity());
 		return mux->Connect(std::string(), 0, error);
 #else
 		(void)transport; (void)identity;
@@ -9937,7 +9938,9 @@ static std::string ResyncSaveName() {
 		}
 		{
 			std::ostringstream line;
-			line << "[net-ice] session " << request.sessionId << " join_mode=" << target.joinMode << " resolved to identity " << target.identity << "; dialling the ICE half";
+			// The dial's own identity names this dial's signals among the directory's, a rejoin's second dial included.
+			line << "[net-ice] session " << request.sessionId << " join_mode=" << target.joinMode << " resolved to identity " << target.identity << "; dialling the ICE half as "
+			     << (dispatcher ? dispatcher->LocalIdentity() : std::string("none"));
 			System::PrintDiagnosticLine(line.str());
 		}
 		return true;

@@ -638,12 +638,7 @@ namespace RTE {
 			if (m_RouteLogged.insert(connection).second) {
 				m_RouteTracker.Observe(connection, relayed);
 				if (const auto dialed = m_DialedMs.find(connection); dialed != m_DialedMs.end()) {
-					// The local identity names which dial of this peer the directory's signals came from.
-					SteamNetworkingIdentity local;
-					char localText[SteamNetworkingIdentity::k_cchMaxString]{};
-					if (m_Interface->GetIdentity(&local)) local.ToString(localText, sizeof(localText));
-					DiagnosticLine() << "[net-ice] connected connection=" << connection << " after_ms=" << SteadyMs() - dialed->second << " route=" << (relayed ? "relay" : "direct")
-					                 << " local=" << (localText[0] ? localText : "none") << std::endl;
+					DiagnosticLine() << "[net-ice] connected connection=" << connection << " after_ms=" << SteadyMs() - dialed->second << " route=" << (relayed ? "relay" : "direct") << std::endl;
 				}
 				WriteRouteReceipt(connection, info, relayed, allowed, nullptr);
 			}
