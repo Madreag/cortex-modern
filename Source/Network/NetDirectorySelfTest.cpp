@@ -1060,18 +1060,18 @@ namespace RTE {
 				recovered.client.RefreshRegistration(row, true, 1);
 				recovered.replies->push_back({403, R"({"error":"forbidden"})", ""});
 				recovered.replies->push_back({403, R"({"error":"forbidden"})", ""});
-				for (uint64_t now: {5001ULL, 10001ULL}) { recovered.client.Update(now); recovered.client.Update(now); }
+				for (uint64_t now: {5001ULL, 15001ULL}) { recovered.client.Update(now); recovered.client.Update(now); }
 				recovered.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"latest-proof","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
-				recovered.client.Update(20001);
+				recovered.client.Update(35001);
 				if (json::parse(recovered.sent->back().body).value("resume_token", std::string()) != "previous-proof") { *error = "S5: recovery lost its second retained proof"; return false; }
-				recovered.client.Update(20001);
+				recovered.client.Update(35001);
 				recovered.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
-				recovered.client.Update(25001); recovered.client.Update(25001);
-				recovered.client.RefreshRegistration(row, true, 25002);
+				recovered.client.Update(40001); recovered.client.Update(40001);
+				recovered.client.RefreshRegistration(row, true, 40002);
 				recovered.replies->push_back({403, R"({"error":"forbidden"})", ""});
 				recovered.replies->push_back({403, R"({"error":"forbidden"})", ""});
-				for (uint64_t now: {30002ULL, 35002ULL}) { recovered.client.Update(now); recovered.client.Update(now); }
-				recovered.client.Update(45002);
+				for (uint64_t now: {45002ULL, 55002ULL}) { recovered.client.Update(now); recovered.client.Update(now); }
+				recovered.client.Update(75002);
 				if (json::parse(recovered.sent->back().body).contains("resume_token")) { *error = "S5: an acknowledged replacement retained an older proof"; return false; }
 				std::cout << "[net-directory-selftest] PASS world_proof_survives_one_refusal" << std::endl;
 				return true;
@@ -2874,6 +2874,34 @@ namespace RTE {
 			}
 
 #ifdef CCCP_WITH_GNS
+			bool TestGoneListingEndsTheRendezvous(std::string* error) {
+				GnsTransport transport;
+				GnsDirectorySignalDispatcher dispatcher;
+				GnsDirectorySignalDispatcher::Config config;
+				config.role = GnsDirectorySignalDispatcher::Role::Joiner; config.baseUrl = "https://dir.test";
+				config.sessionId = "7b8c9d2e-1111-4222-8333-444455556666"; config.joinNonce = "joiner-on-old-row";
+				if (!dispatcher.Start(transport, config)) { *error = "old-row fixture could not start signaling"; return false; }
+				class Gone final : public NetDirectoryClient::Transport {
+				public:
+					void Start(const NetDirectoryClient::Request&) override {}
+					bool Finished() override { return true; }
+					NetDirectoryClient::Reply Take() override { return {404, R"({"error":"not_found"})", ""}; }
+					void Abort() override {}
+				};
+				const_cast<NetDirectorySignalChannel&>(dispatcher.Channel()).SetTransportFactory([] { return std::make_unique<Gone>(); });
+				GnsP2PConfig p2p; p2p.iceEnable = 2; p2p.localIdentity = dispatcher.LocalIdentity();
+				if (!transport.ConnectP2P(dispatcher.CreateJoinSignaling(), GnsDirectorySignalDispatcher::HostIdentity(config.sessionId), 47472, p2p, error)) return false;
+				dispatcher.SetPolling(true, 0); dispatcher.Update(0); dispatcher.Update(1);
+				const auto events = transport.PollEvents();
+				const bool refused = std::any_of(events.begin(), events.end(), [](const NetTransportEvent& event) {
+					return event.type == NetTransportEventType::PeerDisconnected && event.reason.find("Refresh the list and try again") != std::string::npos;
+				});
+				dispatcher.Stop(); transport.Stop();
+				if (!refused) { *error = "point3: a removed listing left the old rendezvous waiting without retry words"; return false; }
+				std::cout << "[net-directory-selftest] PASS gone_listing_ends_rendezvous" << std::endl;
+				return true;
+			}
+
 			bool TestDispatcherReportDumpSurvivesNonUtf8(std::string* error) {
 				GnsTransport transport;
 				GnsDirectorySignalDispatcher dispatcher;
@@ -3126,6 +3154,12 @@ namespace RTE {
 
 			std::string error;
 			const char* selected = std::getenv("CCCP_TEST_DIRECTORY_CASE");
+#ifdef CCCP_WITH_GNS
+			if (!selected || std::string(selected) == "point3") {
+				if (!TestGoneListingEndsTheRendezvous(&error)) return fail(error);
+				if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
+			}
+#endif
 			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
 				if (!selected || std::string(selected) == test.first) {
 					if (!test.second(&error)) return fail(error);
