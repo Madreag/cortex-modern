@@ -2060,7 +2060,7 @@ class DirectoryTests(unittest.TestCase):
         with self.assertRaises(PermissionError, msg="F2: another install replayed a tokenless world claim"):
             store.register(first_request, "192.0.2.1", 27, "fedcba9876543210")
         with self.assertRaises(PermissionError, msg="F2: an old register replay outlived its retry window"):
-            store.register(resume, "192.0.2.1", 20 + session_directory.RESUME_GRACE_S + 1, INSTALL_KEY)
+            store.register(resume, "192.0.2.1", 26 + session_directory.RESUME_GRACE_S + 1, INSTALL_KEY)
         first_request = dict(first_request, world_id=str(uuid.uuid4()))
         first_request["resume_session_id"] = first_request["world_id"]
         first = store.register(first_request, "192.0.2.1", 200, INSTALL_KEY)
@@ -2112,6 +2112,71 @@ class DirectoryTests(unittest.TestCase):
                                      "192.0.2.1", time.monotonic(), INSTALL_KEY)
             finally:
                 third.stop()
+
+    def test_lost_world_reply_recovers_even_when_the_service_restarts(self) -> None:
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(session_directory, "configure_logging"):
+            log = Path(folder) / "directory.log"
+            world_id = str(uuid.uuid4())
+            request = sample_register(persistent_world=True, world_id=world_id,
+                                      world_boot=1, resume_session_id=world_id)
+            first = spawn_server(log_file=log)
+            try:
+                created = first.store.register(request, "192.0.2.1", time.monotonic(), INSTALL_KEY)
+            finally:
+                first.stop()
+            second = spawn_server(log_file=log)
+            try:
+                with self.assertRaises(PermissionError, msg="F2: a different install replayed a lost first registration"):
+                    second.store.register(request, "192.0.2.1", time.monotonic(), "fedcba9876543210")
+                recovered = second.store.register(request, "192.0.2.1", time.monotonic(), INSTALL_KEY)
+                self.assertEqual(recovered["session_id"], world_id, "F2: a lost first reply and restart changed the world id")
+                resume = dict(request, world_boot=2, resume_token=recovered["token"])
+                lost = second.store.register(resume, "192.0.2.1", time.monotonic(), INSTALL_KEY)
+            finally:
+                second.stop()
+            third = spawn_server(log_file=log)
+            try:
+                replayed = third.store.register(resume, "192.0.2.1", time.monotonic(), INSTALL_KEY)
+                self.assertEqual(replayed["session_id"], lost["session_id"], "F2: a lost resume reply and restart changed the world id")
+                third.store.heartbeat(world_id, {"token": replayed["token"], "peer_count": 1, "seats_free": 1}, time.monotonic(), INSTALL_KEY)
+            finally:
+                third.stop()
+
+    def test_world_owner_cannot_be_bypassed_with_an_alias_or_same_generation(self) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        world_id = str(uuid.uuid4())
+        request = sample_register(persistent_world=True, world_id=world_id, world_boot=1, resume_session_id=world_id)
+        first = store.register(request, "192.0.2.1", 10, INSTALL_KEY)
+        moved_request = dict(request, migration_gen=1, resume_token=first["token"])
+        moved = store.register(moved_request, "192.0.2.2", 20, "fedcba9876543210")
+        current = dict(moved_request, resume_token=moved["token"])
+        own = store.register(current, "192.0.2.2", 21, "fedcba9876543210")
+        self.assertEqual(own["session_id"], world_id, "F3: the current world host could not refresh its own generation")
+        with self.assertRaises(session_directory.Superseded, msg="F3: a different host refreshed the same world generation"):
+            store.register(dict(current, resume_token=own["token"]), "192.0.2.3", 22, "cccccccccccccccc")
+        alias = dict(request)
+        alias.pop("resume_session_id")
+        with self.assertRaises(PermissionError, msg="F3: an omitted resume id bypassed world ownership"):
+            store.register(alias, "192.0.2.3", 23, "cccccccccccccccc")
+        with self.assertRaises(PermissionError, msg="F3: a new resume id duplicated a known world"):
+            store.register(dict(request, resume_session_id=str(uuid.uuid4())), "192.0.2.3", 24, "cccccccccccccccc")
+
+    def test_lost_register_reply_survives_live_updates_and_a_long_outage(self) -> None:
+        store = session_directory.SessionDirectory(15, 5)
+        world_id = str(uuid.uuid4())
+        request = sample_register(persistent_world=True, world_id=world_id, world_boot=1, resume_session_id=world_id)
+        created = store.register(request, "192.0.2.1", 10, INSTALL_KEY)
+        resume = dict(request, world_boot=2, resume_token=created["token"])
+        lost = store.register(resume, "192.0.2.1", 11, INSTALL_KEY)
+        try:
+            retried = store.register(dict(resume, seats_free=0, peer_count=3, listen_addrs=["192.0.2.9"]),
+                                     "192.0.2.9", 600, INSTALL_KEY)
+        except PermissionError:
+            self.fail("F2: a live listing update or long outage invalidated the host's unacknowledged register proof")
+        self.assertEqual((retried["session_id"], retried["token"]), (lost["session_id"], lost["token"]),
+                         "F2: recovery after a long outage changed the world lease")
+        self.assertEqual(store.list_sessions(601, None, None, None)["sessions"][0]["seats_free"], 0,
+                         "F2: replaying a register lost the host's updated seat count")
 
     def test_world_resume_without_the_row_token_is_refused(self) -> None:
         self.start()

@@ -105,15 +105,19 @@ Self-signed certificate (same `openssl` command as above, including the SAN) unl
 
 Keep `world-owners.json` across deployments and restarts. The command-line service
 stores it beside `--log-file`, or in its working directory when no log is supplied;
-`--owner-state PATH` selects an explicit location. The supplied service layout uses
-`/Users/erol/cortex-directory/logs/world-owners.json`. Back up this file with the
+`--owner-state PATH` selects an explicit location. Deploy with the supplied service
+argument `--owner-state /Users/erol/cortex-directory/world-owners.json`. Back up this file with the
 service configuration. It contains SHA-256 token proofs and host generations, never
 the tokens. An unreadable or malformed existing file prevents startup.
 
-A known world id requires its current token even while its discovery lease is
-absent. An identical register from the same install and source replays its result
-for 120 seconds, including after discovery expiry, without rotating again or
-discarding pending signals. A different host, request or expired retry receives the
+A known world id requires its owner proof even while its discovery lease is
+absent. A register's claim key uses the existing install identity, world id, boot,
+generation and presented proof. Live counts and address updates keep that key.
+Its result replays without another rotation or discarding pending signals until
+the host acknowledges the new token, then for 120 seconds. After a restart its
+hashed retry proof recovers the
+same id and issues a fresh token, since tokens are never stored on disk.
+A different host, request or expired retry receives the
 ordinary ownership checks.
 
 Worlds registered before this change have no durable proof until their next

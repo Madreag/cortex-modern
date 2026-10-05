@@ -494,6 +494,13 @@ class SessionDirectory:
                 if (not isinstance(owner, dict) or not re.fullmatch(r"[0-9a-f]{64}", owner.get("token_sha256", ""))
                         or type(owner.get("migration_gen")) is not int or not 0 <= owner["migration_gen"] <= 10**9):
                     raise ValueError("invalid world owner state")
+                if "retry_fingerprint" in owner and (not re.fullmatch(r"[0-9a-f]{64}", owner["retry_fingerprint"])
+                        or not re.fullmatch(r"[0-9a-f]{64}", owner.get("retry_token_sha256", ""))
+                        or type(owner.get("retry_until_unix")) not in (int, float) or not 0 <= owner["retry_until_unix"] < 10**12):
+                    raise ValueError("invalid world owner state")
+                if "install_sha256" in owner and (not re.fullmatch(r"[0-9a-f]{64}", owner["install_sha256"])
+                        or type(owner.get("world_boot")) is not int or not 0 <= owner["world_boot"] <= 10**9):
+                    raise ValueError("invalid world owner state")
             self._world_owners = owners
         self.limiter = DualRateLimiter()
         self.turn_provider = TurnCredentialProvider(turn_config)
@@ -507,8 +514,17 @@ class SessionDirectory:
         if not self._pruner.is_alive():
             self._pruner.start()
 
-    def _remember_world_owner(self, sid: str, token: str, generation: int) -> None:
+    def _remember_world_owner(self, sid: str, token: str, generation: int, presented: str = "", fingerprint: str = "",
+                              install_key: str = "", world_boot: int = 0) -> None:
         owner = {"token_sha256": hashlib.sha256(token.encode()).hexdigest(), "migration_gen": generation}
+        if install_key:
+            owner.update(install_sha256=hashlib.sha256(install_key.encode()).hexdigest(), world_boot=world_boot)
+        if fingerprint:
+            owner.update(retry_token_sha256=hashlib.sha256(presented.encode()).hexdigest(),
+                         retry_fingerprint=fingerprint, retry_until_unix=0)
+        self._save_world_owner(sid, owner)
+
+    def _save_world_owner(self, sid: str, owner: dict[str, Any]) -> None:
         if self._world_owners.get(sid) == owner:
             return
         owners = dict(self._world_owners, **{sid: owner})
@@ -531,6 +547,13 @@ class SessionDirectory:
             finally:
                 temporary.unlink(missing_ok=True)
         self._world_owners = owners
+
+    def _ack_world_register(self, sess: Session, now: float) -> None:
+        owner = self._world_owners.get(sess.session_id)
+        if owner is None or owner.get("retry_until_unix", -1) != 0:
+            return
+        self._save_world_owner(sess.session_id, dict(owner, retry_until_unix=time.time() + RESUME_GRACE_S))
+        sess.register_retry_until = now + RESUME_GRACE_S
 
     def stop(self) -> None:
         self._stop.set()
@@ -570,7 +593,7 @@ class SessionDirectory:
             while len(self._resume_tokens) > MAX_ROWS:
                 del self._resume_tokens[next(iter(self._resume_tokens))]
             for sid, replay in list(self._register_replays.items()):
-                if now >= replay.register_retry_until:
+                if replay.register_retry_until != 0 and now >= replay.register_retry_until:
                     del self._register_replays[sid]
             for sess in self._sessions.values():
                 self._prune_idle_queues(sess, now)
@@ -583,7 +606,7 @@ class SessionDirectory:
         self.prune(now)
         with self._lock:
             # Capacity is answered before any field work: a full directory must not spend parsing.
-            resume_id = data.get("resume_session_id")
+            resume_id = data.get("resume_session_id", data.get("world_id") if data.get("persistent_world") is True else None)
             resuming = isinstance(resume_id, str) and resume_id in self._sessions
             if not resuming and len(self._sessions) >= MAX_ROWS:
                 raise OverflowError("full")
@@ -613,6 +636,17 @@ class SessionDirectory:
             if "seats_held" in data:
                 fields["seats_held"] = require_int(data, "seats_held", 0, 10**9)
             resume = data.get("resume_session_id")
+            if fields.get("persistent_world") is True:
+                world_id = fields.get("world_id", "")
+                try:
+                    uuid.UUID(world_id)
+                except (ValueError, TypeError, AttributeError):
+                    raise FieldError("invalid_field", "world_id") from None
+                if resume is not None and resume != world_id:
+                    raise PermissionError("forbidden")
+                if resume is None:
+                    resume = world_id
+                    data = dict(data, resume_session_id=world_id)
             claimed = optional_generation(data)
             generation = claimed or 0
             if resume is not None:
@@ -623,13 +657,15 @@ class SessionDirectory:
                     raise FieldError("invalid_field", "resume_session_id")
                 presented = data.get("resume_token")
                 previous = self._sessions.get(session_id)
-                fingerprint = hashlib.sha256(json.dumps([data, install_key, observed_ip], sort_keys=True).encode()).hexdigest()
+                fingerprint = hashlib.sha256(json.dumps([session_id, fields.get("world_boot", 0), claimed or 0, presented or "", install_key]).encode()).hexdigest()
                 replay = self._register_replays.get(session_id)
                 owner = self._world_owners.get(session_id)
                 if (replay and fields.get("persistent_world") is True and valid_install_key(install_key)
-                        and replay.register_fingerprint == fingerprint and now < replay.register_retry_until
+                        and replay.register_fingerprint == fingerprint and (replay.register_retry_until == 0 or now < replay.register_retry_until)
                         and owner and tokens_equal(owner["token_sha256"], hashlib.sha256(replay.token.encode()).hexdigest())):
                     replay.last_beat = now
+                    replay.fields = fields
+                    replay.observed_ip = observed_ip
                     self._sessions[session_id] = replay
                     self._resume_tokens.pop(session_id, None)
                     return self._register_reply(replay)
@@ -637,17 +673,31 @@ class SessionDirectory:
                 token = previous.token if previous else retained[0] if retained else ""
                 world = fields.get("persistent_world") is True and fields.get("world_id") == session_id
                 owner = self._world_owners.get(session_id)
+                if owner is not None and not world:
+                    raise PermissionError("forbidden")
+                # A replacement proof is kept until its host acknowledges it, then for one retry window.
+                replayed_owner = (world and owner is not None and previous is None and retained is None
+                                  and (presented is None or isinstance(presented, str))
+                                  and valid_install_key(install_key)
+                                  and tokens_equal(hashlib.sha256(install_key.encode()).hexdigest(), owner.get("install_sha256", ""))
+                                  and fields.get("world_boot", 0) >= owner.get("world_boot", 0)
+                                  and (owner.get("retry_until_unix", -1) == 0 or time.time() < owner.get("retry_until_unix", 0))
+                                  and tokens_equal(hashlib.sha256((presented or "").encode()).hexdigest(), owner.get("retry_token_sha256", "")))
                 proven = (owner is not None and isinstance(presented, str)
                           and tokens_equal(hashlib.sha256(presented.encode()).hexdigest(), owner["token_sha256"]))
+                same_host = (world and proven and valid_install_key(install_key)
+                             and tokens_equal(hashlib.sha256(install_key.encode()).hexdigest(), owner.get("install_sha256", "")))
                 first_world = world and not token and owner is None and presented in (None, "")
-                if not first_world and not (proven if owner is not None else token and isinstance(presented, str) and tokens_equal(presented, token)):
+                if not first_world and not replayed_owner and not (proven if owner is not None else token and isinstance(presented, str) and tokens_equal(presented, token)):
                     raise PermissionError("forbidden")
                 # One host per handover generation: the first successor's claim takes the row, any later claim at that generation
                 # or below is told the match already went on; a resume that names no generation is a host reopening its own.
                 held = previous.migration_gen if previous else retained[2] if retained else owner["migration_gen"] if owner else 0
-                if claimed is not None and claimed <= held:
+                if same_host and fields.get("world_boot", 0) > owner.get("world_boot", 0):
+                    held = generation
+                if claimed is not None and claimed <= held and not ((replayed_owner or same_host) and claimed == held):
                     raise Superseded("already_migrated", held)
-                if claimed is None and held > 0:
+                if claimed is None and held > 0 and not (replayed_owner or same_host):
                     raise Superseded("already_migrated", held)
                 if claimed is None:
                     generation = held
@@ -664,10 +714,13 @@ class SessionDirectory:
             sess.install_key = install_key
             sess.migration_gen = generation
             if fields.get("persistent_world") is True or session_id in self._world_owners:
-                self._remember_world_owner(session_id, token, generation)
+                self._remember_world_owner(session_id, token, generation,
+                                           presented if resume is not None and isinstance(presented, str) else "",
+                                           fingerprint if resume is not None and fields.get("persistent_world") is True else "",
+                                           install_key, fields.get("world_boot", 0))
             if fields.get("persistent_world") is True and resume is not None:
                 sess.register_fingerprint = fingerprint
-                sess.register_retry_until = now + RESUME_GRACE_S
+                sess.register_retry_until = 0
                 self._register_replays[session_id] = sess
             if resume is not None:
                 if not first_world:
@@ -778,6 +831,7 @@ class SessionDirectory:
                 raise KeyError("not_found")
             if not tokens_equal(token, sess.token):
                 raise PermissionError("forbidden")
+            self._ack_world_register(sess, now)
             # A host the match left behind no longer keeps the row its successor holds.
             if generation is not None and generation < sess.migration_gen:
                 raise Superseded("superseded", sess.migration_gen)
@@ -928,6 +982,7 @@ class SessionDirectory:
             if peer == "host":
                 if host_token is None or not tokens_equal(host_token, sess.token):
                     raise PermissionError("forbidden")
+                self._ack_world_register(sess, now)
             deadline = now + wait_s
             # Long-poll: hold the request until this peer's queue gains a signal past
             # `after`, the session goes away, or the wait elapses.
