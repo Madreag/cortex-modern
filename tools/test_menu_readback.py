@@ -832,7 +832,21 @@ def lobby_case(case, port, root):
                 f"wait_label LabelMultiplayerStatus Waiting for 1 more player to join\ntouch_file {marks['done']}\nexit\n")
         client = join_by_address(port) + f"activate ButtonMultiplayerReady\nwait 4\ntouch_file {marks['readied']}\nwait_file {marks['done']} 60\nexit\n"
     scripts = {"host": host, "client": client}
-    return ({who: in_base_words(text) for who, text in scripts.items()} if BASE_WORDS else scripts), {}
+    probes = {}
+    if case != "lobby-seat-missing":
+        # A menu script runs only while the menus do: once the round runs, the host ends it by hand (Escape, End Match) and both
+        # scripts finish in the lobby they come back to.
+        for who in scripts:
+            steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "elapsed_ms": 2000}]
+            if who == "host":
+                steps += [{"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
+                          {"op": "wait", "screen": "Pause", "elapsed_ms": 400},
+                          menu_step("assert_enabled ButtonEndMatch 1"), menu_step("activate ButtonEndMatch")]
+            steps += [{"op": "wait", "service": "Starting", "scope": "menu"}, {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]
+            probes[who] = {"schema": 1, "timeout_ms": 150000, "steps": steps}
+            assert scripts[who].endswith("exit\n"), scripts[who][-80:]
+            scripts[who] = scripts[who][:-len("exit\n")] + f"wait_file {probe_root(root, who) / 'done.json'} 60\nassert_substate Lobby\nexit\n"
+    return ({who: in_base_words(text) for who, text in scripts.items()} if BASE_WORDS else scripts), probes
 
 
 
