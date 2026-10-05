@@ -258,9 +258,12 @@ def status_probes(root, base):
              *keys("F6"), {"op": "wait", "panel_open": True}, {"op": "wait", "renders": 6},
              read("LabelNetMatchStatus", tag="status-panel-open"), shot("status-panel-open"), *click("NetworkSeatsClose"),
              {"op": "wait", "panel_open": False},
-             {"op": "key_down", "key": "P", "sim_at_least": 300}, {"op": "key_up", "key": "P", "sim_at_least": 300},
-             {"op": "wait", "control": "LabelNetMatchStatus", "text_contains": "Match paused"}, {"op": "wait", "renders": 6},
-             read("LabelNetMatchStatus", tag="status-paused"), shot("status-paused"),
+             # The command-line match turns the P shortcut off (Main.cpp), so the pause goes through the menu's row.
+             *keys("Escape"), *on_screen("Pause"), *hand("ButtonPauseMatch"),
+             {"op": "wait", "elapsed_ms": 1500} if base else {"op": "wait", "scope": "menu", "control": "LabelMatchLive", "text_contains": LIVE_PAUSED},
+             *hand("ButtonResume"), *on_screen("Gameplay"),
+             {"op": "wait", "elapsed_ms": 1500} if base else {"op": "wait", "control": "LabelNetMatchStatus", "text_contains": "Match paused"},
+             {"op": "wait", "renders": 6}, read("LabelNetMatchStatus", tag="status-paused"), shot("status-paused"),
              *keys("Escape"), *on_screen("Pause"), *hand("ButtonPauseMatch"),
              {"op": "wait", "elapsed_ms": 1500} if base else {"op": "wait", "scope": "menu", "control": "LabelMatchLive", "text_contains": LIVE_RUNNING},
              *hand("ButtonResume"),
@@ -282,7 +285,8 @@ def check_status(checks, reads, size, diagnostics):
         numbers = [token for token in ("PACE", "RTT", "delay ") if token in live]
         if diagnostics:
             # A short screen keeps the tall box while the statistics are on and the panel is closed.
-            missing = [token for token in ("\nRTT ", "\nPACE ", "delay 3 ticks") if token not in live]
+            # Each peer reads its own delay, which the match sizes per sender.
+            missing = [token for token in ("\nRTT ", "\nPACE ") if token not in live] + ([] if re.search(r"delay \d+ ticks", live) else ["delay N ticks"])
             checks.check(f"status-{who}-numbers-with-detailed-statistics", not missing, f"missing {missing} in {live!r}")
         else:
             checks.check(f"status-{who}-numbers-behind-detailed-statistics", not numbers, f"numbers shown by default: {numbers}")
