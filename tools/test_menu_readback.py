@@ -2142,6 +2142,9 @@ def captures(runtime, metadata):
             width, height = source.size
             assert [0, 0, width, height] == value["viewport"], (path, source.size, value["viewport"])
             assert source.getbbox(), f"empty PNG: {png}"
+            # The mask colour is never drawn: where it shows, a panel draws without its skin.
+            masked = next((count for count, colour in source.convert("RGB").getcolors(1 << 24) if colour == (255, 0, 255)), 0)
+            assert not masked, f"{masked} mask-colour pixels on screen: {png}"
             names = {control["name"]: control for control in value["controls"]}
             assert len(names) == len(value["controls"]), f"duplicate control: {path}"
             for control in value["controls"]:
