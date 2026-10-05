@@ -1013,6 +1013,10 @@ namespace {
 
 uint64_t RendezvousCount() { return rendezvousCount.load(); }
 bool Running() { return probe.loaded && probe.enabled && !probe.done; }
+void WriteUnfinished() {
+	// The steps since the last once-a-second write are otherwise lost with the process.
+	if (Running() && probe.resultStarted) WriteResult();
+}
 
 bool RunCrossScopeSelfTest(std::string* error) {
 	bool passed = true;

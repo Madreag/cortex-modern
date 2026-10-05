@@ -7155,6 +7155,7 @@ void RunGameLoop() {
 		// The completed round's held pause menu ends the moment its probe does, or when the window runs out.
 		if (s_netMatchE2ECompletedMs && !ProbeHoldsE2eEnd(s_netMatchE2ECompletedMs)) {
 			s_netMatchE2ECompletedMs = 0;
+			NetModerationGUIProbe::WriteUnfinished();
 			g_ActivityMan.EndActivity();
 			ScenarioRunner::ClearControllerReplayError();
 			System::SetQuit(true);
@@ -7162,6 +7163,7 @@ void RunGameLoop() {
 		}
 		// A run that left its match ends as a leaver's run does, once its probe is done or the window runs out.
 		if (s_netMatchE2ELeftMs && !ProbeHoldsE2eEnd(s_netMatchE2ELeftMs)) {
+			NetModerationGUIProbe::WriteUnfinished();
 			System::SetQuit(true);
 			break;
 		}
