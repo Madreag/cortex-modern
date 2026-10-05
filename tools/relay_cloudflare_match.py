@@ -101,12 +101,20 @@ REQUIRED = {
     'fixed': tuple(check for check in BASE if check != 'no_secret_in_files') + ('offer_fresh', 'endpoint', 'menu_entered',
                                                                                'logins_short_lived', 'pair_blanked', 'pair_ttl',
                                                                                'menu_choice:client'),
-    'a-automatic-fallback': BASE + ('offer_fresh', 'endpoint', 'logins_revoked', 'tunnel:client', 'panel:client'),
+    # Automatic on a carrier NAT ends on the best route ICE completes (direct where the NAT can be punched): the history of its
+    # route receipts and the panel's agreement with the live route at every frame are its evidence, whichever route it ends on.
+    'a-automatic-fallback': BASE + ('offer_fresh', 'logins_revoked', 'tunnel:client', 'panel:client', 'route_history:client'),
+    # The forced form: the hotspot end offers relay candidates only, so no direct route completes and Automatic holds the relay.
+    'a-automatic-forced': BASE + ('offer_fresh', 'endpoint', 'logins_revoked', 'tunnel:client', 'panel:client', 'route_history:client'),
     'b-hotspot-host': BASE + ('offer_fresh', 'logins_revoked', 'tunnel:host', 'listing'),
     'c-four-players': tuple(check for check in BASE if check != 'holds') + ('offer_fresh', 'logins_revoked', 'tunnel:hotspot', 'seat_holds'),
     'd-credential-expiry': BASE + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'renewal'),
     'e-migration-relayed': BASE + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'migration'),
     'f-relay-by-hand': BASE + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'menu_choice:client'),
+    # A public row sees no candidate (the directory is not this run's): the relay is bound by the engine's own receipt and the
+    # directory's offer line, and its holds are the hotspot seat's own (the fast peer's feel is the row's bar).
+    'g-relay-only-public': tuple(check for check in BASE if check != 'holds') + ('offer_fresh', 'endpoint', 'logins_revoked', 'tunnel:client',
+                                                                                 'seat_holds', 'route_history:client'),
 }
 
 
@@ -231,7 +239,7 @@ def url_host(url: str) -> str:
 def route_receipts(log: str, session: str | None, any_session: bool = False) -> dict:
     """The route lines a peer wrote for this session, per connection: its selected candidate and its RouteAllowed line.
     Each line keeps its number in the log, so a phase (after a migration, after a renewal) can be read from it."""
-    current, connections = None, {}
+    current, connections, history = None, {}, []
     for number, line in enumerate(log.splitlines()):
         if found := re.search(r'\[net-ice\] (?:host )?session (\S+)', line):
             current = found[1]
@@ -241,12 +249,57 @@ def route_receipts(log: str, session: str | None, any_session: bool = False) -> 
             connections.setdefault(found[2], {}).update(candidate=found[1], selected_at=number)
         if found := re.search(r'\[net-route\] RouteAllowed route=(\w+) allowed=(\d+) connection=(\d+)', line):
             connections.setdefault(found[3], {}).update(route=found[1], allowed=found[2] == '1', allowed_at=number, line=line.strip())
+            change = re.search(r' change=(\w+)->(\w+)', line)
+            history.append(dict(connection=found[3], route=found[1], allowed=found[2] == '1', at=number,
+                                change=f'{change[1]}->{change[2]}' if change else None,
+                                after_ms=int(re.search(r' after_ms=(\d+)', line)[1]) if ' after_ms=' in line else None))
     accepted = [dict(connection=key, **value) for key, value in connections.items() if value.get('allowed') and value.get('candidate')
                 and (value['route'] == 'relay') == (value['candidate'] == 'relay')]
     other_allowed = [dict(connection=key, **value) for key, value in connections.items() if value.get('allowed') and dict(connection=key, **value) not in accepted]
     refused = [dict(connection=key, **value) for key, value in connections.items() if value.get('route') and not value.get('allowed')]
     incomplete = [key for key, value in connections.items() if 'candidate' not in value or 'route' not in value]
-    return dict(accepted=accepted, other_allowed=other_allowed, refused=refused, incomplete=incomplete, connections=connections)
+    return dict(accepted=accepted, other_allowed=other_allowed, refused=refused, incomplete=incomplete, connections=connections, history=history)
+
+
+def receipt_binding(line: str, offers: list[dict], session: str | None, provider: str, hosts: set[str]) -> str | None:
+    """A relayed route bound by the engine's own receipt: its TURN servers are the provider's alone and its offer is one the
+    directory logged issuing for this session (match id and expiry). None when the receipt does not bind it."""
+    servers = re.search(r' turn=(\S+)', line or '')
+    offer = re.search(r' offer=(\S+)', line or '')
+    named = {host_of(server) for server in servers[1].split(',')} if servers else set()
+    issued = {f'{row.get("match_id")}@{row.get("expires_at")}' for row in offers if row.get('session_id') == session and row.get('provider') == provider}
+    if named and named <= hosts and offer and offer[1] in issued:
+        return f'by its route receipt: turn {sorted(named)} on offer {offer[1]}'
+    return None
+
+
+def route_history(log: str, session: str | None, report: dict | None, watch: dict | None) -> dict:
+    """A peer's route through its match, from its own receipts: each move of a live connection has its own receipt naming the
+    move, the last receipt is the route the connection holds at the end (its open report), and every move the panel probe saw
+    the transport make has a receipt of the same direction."""
+    receipts = route_receipts(log, session)
+    history, reasons = receipts['history'], []
+    if not history:
+        reasons.append(f'no route receipt for session {session!r}')
+    last = {}
+    for row in history:
+        before = last.get(row['connection'])
+        if before is not None:
+            if row['change'] != f'{before}->{row["route"]}':
+                reasons.append(f'connection {row["connection"]}: a receipt at line {row["at"]} names {row["change"]} after a {before} receipt')
+        elif row['change']:
+            reasons.append(f'connection {row["connection"]}: its first receipt names a change ({row["change"]})')
+        last[row['connection']] = row['route']
+    moves = [row['change'] for row in history if row['change']]
+    if isinstance(report, dict) and report.get('found') is True and last:
+        live = 'relay' if report.get('relayed') else 'direct'
+        if list(last.values())[-1] != live:
+            reasons.append(f'the last receipt names {list(last.values())[-1]}, the open report says the route is {live}')
+    seen = [f'{move.get("from")}->{move.get("to")}' for move in (watch or {}).get('moves', []) if move.get('what') == 'live' and move.get('from')]
+    for direction in set(seen):
+        if seen.count(direction) > moves.count(direction):
+            reasons.append(f'the probe saw the transport move {direction} {seen.count(direction)} time(s), the receipts name {moves.count(direction)}')
+    return dict(passed=not reasons, reasons=reasons, history=history, moves=moves, probe_moves=seen)
 
 
 def sender_peers(signals, identities: dict[str, str], peers: list[str]) -> dict[str, str]:
@@ -282,6 +335,7 @@ def judge_relay(run: dict) -> dict:
     relay_ok = (lambda address: address in (run.get('relay_addresses') or [])) if coturn else cloudflare_address
     names = sorted(run['connection'])
     signals = run.get('signals') or []
+    signals_observed = run.get('signals_observed', True)
     owners = sender_peers(signals, run.get('identities') or {}, names)
     sent: dict[str, list] = {}
     for sender, payload in signals:
@@ -317,7 +371,8 @@ def judge_relay(run: dict) -> dict:
         if connection == 'RelayOnly':
             if chosen != 'relay' or receipts['other_allowed'] or any(row['route'] != 'relay' for row in receipts['accepted']):
                 reasons.append(f'{peer}: Relay only but routes {[row.get("route") for row in receipts["accepted"] + receipts["other_allowed"]]}')
-            if not relays:
+            # A public directory is not this run's: what each peer sent through it is not observable, so its route receipt binds it.
+            if not relays and signals_observed:
                 reasons.append(f'{peer}: sent no relay candidate through the directory')
             if any(kind != 'relay' for _, _, kind in own):
                 reasons.append(f'{peer}: Relay only but sent {sorted({kind for _, _, kind in own if kind != "relay"})} candidates')
@@ -326,8 +381,12 @@ def judge_relay(run: dict) -> dict:
             reasons.append(f'{peer}: relay candidates outside the {provider} relay: {outside}')
         if chosen == 'relay':
             report = reports.get(peer)
+            by_receipt = receipt_binding(receipts['accepted'][-1].get('line'), run.get('offers') or [], session, provider,
+                                         set(run.get('relay_hosts') or run.get('relay_addresses') or []) if coturn else CLOUDFLARE_HOSTS)
             if relays and not outside and run.get('overrides_cleared'):
                 bindings[peer] = 'by exclusion'
+            elif by_receipt and run.get('overrides_cleared'):
+                bindings[peer] = by_receipt
             elif report and report.get('found') is True and report.get('relayed') and report.get('remote_address') and \
                     relay_ok(host_of(report['remote_address'])):
                 bindings[peer] = 'by its open report'
@@ -447,9 +506,16 @@ def hotspot_preflight(state: str | None, gateway: str | None, mapped: str | None
 
 
 def panel_verdict(result) -> dict:
-    """The in-match connection panel's probe (CC_TEST_NET_UI_SCRIPT): it ran to its end and every assertion held."""
+    """The in-match connection panel's probe (CC_TEST_NET_UI_SCRIPT): it ran to its end and every assertion held; a probe that
+    watched the route did so on at least one frame (its moves are recorded, so a run whose route moved shows both)."""
     ok = isinstance(result, dict) and result.get('pass') is True and result.get('complete') is True
-    return dict(passed=ok, reasons=[] if ok else [f'the connection panel probe did not pass: {result!r}'[:300]])
+    reasons = [] if ok else [f'the connection panel probe did not pass: {result!r}'[:300]]
+    script = (result or {}).get('script') if isinstance(result, dict) else None
+    watched = isinstance(script, dict) and any(step.get('op') == 'watch_route' for step in script.get('steps', []))
+    watch = (result or {}).get('route_watch') if isinstance(result, dict) else None
+    if ok and watched and not (isinstance(watch, dict) and watch.get('samples', 0) > 0):
+        reasons.append('the probe watched the route on no frame')
+    return dict(passed=not reasons, reasons=reasons, route_watch=watch)
 
 
 def listing_evidence(lines: list[str], session: str | None, listed: bool) -> dict:
@@ -644,20 +710,23 @@ def turn_allocate(server: tuple[str, int], username: str, password: str, timeout
 class Box:
     def __init__(self, name: str, entry: dict, tree: str | None = None, alias: str | None = None) -> None:
         self.name = name
-        self.alias = alias or entry['ssh']
+        self.local = entry.get('kind') == 'local'
+        self.alias = alias or entry.get('ssh') or 'localhost'
         self.task = entry.get('task', 'cortex-session1')
         self.session_script = entry.get('session_script', 'D:/mx/session1/run.ps1')
         self.tree = tree or entry['repo']
         self.path_prepend = list(entry.get('path_prepend') or [])
         self.max_engines = int((entry.get('memory') or {}).get('max_engines') or (entry.get('runner') or {}).get('max_engines') or 2)
         self.computer = entry.get('computer_name') or entry.get('hostname') or name
-        from remote_box import RemoteBox
-        self.remote = RemoteBox(self.alias, self.task, self.session_script, dry_run=DRY_RUN, say=say)
+        from remote_box import LocalBox, RemoteBox
+        self.remote = (LocalBox if self.local else RemoteBox)(self.alias, self.task, self.session_script, dry_run=DRY_RUN, say=say)
 
 
 def load_boxes(trees: dict[str, str], aliases: dict[str, str] | None = None) -> dict[str, Box]:
+    """The Windows game boxes: each one's session task, and this box (kind local) whose peers start here in this session.
+    A local box's tree is the --tree a run names: the inventory's tree there belongs to the merge gate."""
     entries = {entry['name'].lower(): entry for entry in json.loads(boxes_file().read_text(encoding='utf-8'))['boxes']
-               if entry.get('kind') == 'windows-task'}
+               if entry.get('kind') == 'windows-task' or (entry.get('kind') == 'local' and entry['name'].lower() in trees)}
     return {name: Box(name, entry, trees.get(name), (aliases or {}).get(name)) for name, entry in entries.items()}
 
 
@@ -718,6 +787,75 @@ def identity(box: Box, expected_head: str | None = None) -> dict:
     return dict(schema=1, box=box.name.upper(), node=box.computer, platform='Windows', os='Windows', source_sha=head, head=head,
                 executable=exe, executable_sha256=measured, build=build, build_receipt=f'{box.tree}/tools/cross_peers/build.json',
                 status='INCOMPLETE' if errors else 'PASS', errors=errors, measured=stamp())
+
+
+# Runs on a box (python -c): each module directory of the tree's Data and Mods hashed over its files' relative paths and bytes,
+# or with WANT set, one module's files each hashed. Junctions and symlinks are never entered.
+DATA_DIGEST_CODE = r'''
+import hashlib, json, os, sys
+tree, want = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else '')
+out = {}
+for top in ('Data', 'Mods'):
+    base = os.path.join(tree, top)
+    if not os.path.isdir(base):
+        continue
+    for module in sorted(os.listdir(base)):
+        root = os.path.join(base, module)
+        if not os.path.isdir(root) or os.path.islink(root) or (want and top + '/' + module != want):
+            continue
+        files, stack = [], [root]
+        while stack:
+            folder = stack.pop()
+            with os.scandir(folder) as entries:
+                for entry in entries:
+                    if entry.is_symlink() or (getattr(entry.stat(follow_symlinks=False), 'st_file_attributes', 0) & 0x400):
+                        continue
+                    (stack.append if entry.is_dir(follow_symlinks=False) else files.append)(entry.path)
+        digest, per_file = hashlib.sha256(), {}
+        for path in sorted(files, key=lambda path: os.path.relpath(path, root).replace(os.sep, '/').lower()):
+            name = os.path.relpath(path, root).replace(os.sep, '/')
+            with open(path, 'rb') as handle:
+                data = handle.read()
+            digest.update(name.lower().encode() + b'\0' + str(len(data)).encode() + b'\0' + data)
+            if want:
+                per_file[name] = hashlib.sha256(data).hexdigest()
+        out[top + '/' + module] = per_file if want else [digest.hexdigest(), len(files)]
+print(json.dumps(out))
+'''
+
+
+def data_digests(box: Box, module: str = '') -> dict:
+    """The box tree's Data and Mods, per module (or one module's files): what every peer of a match must hold byte for byte."""
+    encoded = base64.b64encode(DATA_DIGEST_CODE.encode()).decode()
+    if getattr(box, 'local', False):
+        done = subprocess.run([sys.executable, '-c', DATA_DIGEST_CODE, box.tree, module], capture_output=True, text=True, timeout=600)
+        text = done.stdout
+    else:
+        text = box.remote.ssh(f"python -c \"import base64,sys;exec(base64.b64decode('{encoded}'))\" '{box.tree}' '{module}' data-digests", timeout=600)
+    return json.loads(text.strip().splitlines()[-1])
+
+
+def data_preflight(boxes: list[Box]) -> dict:
+    """Every box's modules against the first box's: a module that differs anywhere refuses the run in seconds, naming the box,
+    the module and its first differing file, before any engine starts (a peer with other bytes is refused by the directory)."""
+    if DRY_RUN or len(boxes) < 2:
+        return dict(passed=True, reasons=[], digests={})
+    digests = {box.name: data_digests(box) for box in boxes}
+    reference = boxes[0]
+    reasons = []
+    for box in boxes[1:]:
+        for module in sorted(set(digests[box.name]) | set(digests[reference.name])):
+            mine, theirs = digests[box.name].get(module), digests[reference.name].get(module)
+            if mine == theirs:
+                continue
+            if mine is None or theirs is None:
+                reasons.append(f'{box.name}: module {module} is {"missing" if mine is None else "extra"} against {reference.name}')
+                continue
+            left, right = data_digests(reference, module).get(module, {}), data_digests(box, module).get(module, {})
+            differing = sorted(name for name in set(left) | set(right) if left.get(name) != right.get(name))
+            reasons.append(f'{box.name}: module {module} differs from {reference.name} ({mine[1]} files against {theirs[1]}); '
+                           f'first differing file {differing[0] if differing else "(none found)"} of {len(differing)}')
+    return dict(passed=not reasons, reasons=reasons, digests=digests)
 
 
 def box_lan_address(box: Box) -> str:
@@ -824,6 +962,91 @@ def revoke_cloudflare(backend: dict, usernames: list[str], opener=None, agent: s
         except OSError:
             statuses.append(0)
     return statuses
+
+
+CLOUDFLARED = Path('C:/Program Files (x86)/cloudflared/cloudflared.exe')
+
+
+class QuickTunnel:
+    """A Cloudflare quick tunnel (trycloudflare.com: no account, no router port) to this run's directory, so every box reaches
+    it over the public internet as a player's machine reaches a directory, never through the tailnet's relay. cloudflared runs
+    with a configuration of its own and a home of its own, so it never reads a named tunnel's credentials."""
+
+    def __init__(self, port: int, root: Path) -> None:
+        self.port, self.root, self.process, self.host = port, root, None, None
+
+    def open(self, budget_s: float = 90) -> str:
+        if DRY_RUN:
+            self.host = 'dry-run.trycloudflare.com'
+            say(f'dry-run: cloudflared quick tunnel to https://127.0.0.1:{self.port}')
+            return self.host
+        home = self.root / 'cloudflared-home'
+        home.mkdir(exist_ok=True)
+        config = home / 'quick-tunnel.yml'
+        config.write_text('no-autoupdate: true\n', encoding='utf-8')
+        env = dict(os.environ, USERPROFILE=str(home), HOME=str(home), HOMEDRIVE='', HOMEPATH='')
+        log = (self.root / 'cloudflared.log').open('w', encoding='utf-8')
+        self.process = subprocess.Popen([str(CLOUDFLARED), '--config', str(config), 'tunnel', '--no-autoupdate', '--url',
+                                         f'https://127.0.0.1:{self.port}', '--no-tls-verify'], stdin=subprocess.DEVNULL,
+                                        stdout=log, stderr=subprocess.STDOUT, env=env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        deadline = time.monotonic() + budget_s
+        while time.monotonic() < deadline and self.host is None:
+            time.sleep(1)
+            found = re.search(r'https://([a-z0-9-]+\.trycloudflare\.com)', (self.root / 'cloudflared.log').read_text(encoding='utf-8', errors='replace'))
+            if found:
+                self.host = found[1]
+            elif self.process.poll() is not None:
+                break
+        if self.host is None:
+            raise RuntimeError(f'the quick tunnel named no address within {budget_s:.0f} s; see {self.root / "cloudflared.log"}')
+        while time.monotonic() < deadline:
+            try:
+                request = urllib.request.Request(f'https://{self.host}/v1/sessions', headers={'X-Install-Key': 'relay-proof-tunnel-probe',
+                                                                                              'User-Agent': 'cccp-relay-proof/1'})
+                with urllib.request.urlopen(request, context=ssl.create_default_context(), timeout=10) as reply:
+                    if reply.status == 200:
+                        return self.host
+            except (OSError, ValueError):
+                time.sleep(2)
+        raise RuntimeError(f'the quick tunnel {self.host} never answered the directory within {budget_s:.0f} s')
+
+    def close(self) -> None:
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            self.process.wait(timeout=20)
+
+
+# Runs on a box (python -c): the directory's round trip from there, each request on a new connection as an engine's first is.
+PATH_RTT_CODE = r'''
+import json, ssl, statistics, sys, time, urllib.request
+url, samples = sys.argv[1], []
+for _ in range(5):
+    began = time.perf_counter()
+    try:
+        request = urllib.request.Request(url, headers={'X-Install-Key': 'relay-proof-path-rtt-probe', 'User-Agent': 'cccp-relay-proof/1'})
+        with urllib.request.urlopen(request, context=ssl.create_default_context(), timeout=20) as reply:
+            reply.read()
+        samples.append(round((time.perf_counter() - began) * 1000))
+    except OSError as error:
+        samples.append(None)
+good = [value for value in samples if value is not None]
+print(json.dumps(dict(url=url, samples_ms=samples, min_ms=min(good) if good else None, median_ms=statistics.median(good) if good else None)))
+'''
+
+
+def directory_rtt(box, url: str) -> dict:
+    """A request to the directory and its answer from a box, five times on new connections (TLS included)."""
+    if DRY_RUN:
+        return {}
+    encoded = base64.b64encode(PATH_RTT_CODE.encode()).decode()
+    try:
+        if getattr(box, 'local', False):
+            text = subprocess.run([sys.executable, '-c', PATH_RTT_CODE, url], capture_output=True, text=True, timeout=180).stdout
+        else:
+            text = box.remote.ssh(f"python -c \"import base64,sys;exec(base64.b64decode('{encoded}'))\" '{url}'", timeout=180)
+        return json.loads(text.strip().splitlines()[-1])
+    except (OSError, ValueError, IndexError, RuntimeError, subprocess.TimeoutExpired) as error:
+        return dict(url=url, error=f'{type(error).__name__}: {str(error)[-160:]}')
 
 
 class Tunnel:
@@ -1069,7 +1292,9 @@ def peer_settings(run: dict, peer: dict, port: int, pin: str, login=None) -> dic
     only TURN list a connection can hold is the directory's offer; a login is never seeded (a Fixed pair is entered by the
     menu automation on the box). A public row keeps the game's own directory and the system's certificate check."""
     public = run.get('directory') == 'public'
-    settings = {'SessionDirectoryUrl': PUBLIC_DIRECTORY if public else f'127.0.0.1:{port}', 'SessionDirectoryCertSha256': '' if public else pin,
+    # A tunnel row's directory is this run's own, met at its quick tunnel's public name with the system's certificate check.
+    url = PUBLIC_DIRECTORY if public else run.get('tunnel_host') or f'127.0.0.1:{port}'
+    settings = {'SessionDirectoryUrl': url, 'SessionDirectoryCertSha256': '' if public or run.get('tunnel_host') else pin,
                 'SessionDirectoryInstallKey': f'relay-proof-{peer["box"]}-{peer["name"]}'[:32], 'NetworkIceEnable': '1',
                 'NetworkConnectionMode': peer.get('settings_connection', peer['connection']), 'NetworkShowDiagnostics': '1',
                 'NetworkMatchStatusMode': 'Always', 'NetworkDisplayName': display_name(run, peer),
@@ -1111,6 +1336,10 @@ def build_specs(h, run: dict, root: Path, ports: dict, boxes: dict, pin: str, lo
             spec['kill_at_tick'] = int(run['kill_host_at_tick'])
         if peer.get('panel_probe'):
             spec['env']['CC_TEST_NET_UI_SCRIPT'] = str(root / f'{peer["name"]}-panel' / 'probe.json')
+        for key, value in (peer.get('env') or {}).items():
+            if not key.startswith(('CC_TEST_', 'CCCP_TEST_')):
+                raise ValueError(f'{run["name"]}: {peer["name"]} names {key}, not a test lever')
+            spec['env'][key] = str(value)
         spec.update(box=peer['box'], tailscale_down=bool(peer.get('tailscale_down')), panel_probe=peer.get('panel_probe'),
                     panel_route=peer.get('panel_route'), menu_script=peer.get('menu_script'), name=name)
         specs.append(spec)
@@ -1118,18 +1347,19 @@ def build_specs(h, run: dict, root: Path, ports: dict, boxes: dict, pin: str, lo
 
 
 def ship(box, root: Path, specs: list[dict], directory_port: int, payload: Path, public: bool = False, host_name: str = '',
-         menu_texts: dict[str, str] | None = None) -> Path:
+         menu_texts: dict[str, str] | None = None, tunnel_host: str | None = None) -> Path:
     """The box's spec (its peers in start order) and the drivers; a menu script is written straight onto the box from
     memory (a Fixed pair inside one never touches this box's disk); returns the local copy of the rendered task payload."""
     spec_path = root / f'{box.name}-peers.json'
     document = dict(root=str(root), lane=LANE, directory=dict(port=directory_port, cert=str(root / 'cert.pem'), public=public,
-                    host_name=host_name), peers=specs)
+                    host_name=host_name, host=tunnel_host), peers=specs)
     if DRY_RUN:
         say(f'dry-run: {box.name} runs {[spec["peer"] for spec in specs]} from {box.tree}: ' + json.dumps([spec['settings'] for spec in specs]))
         return root / f'{box.name}-run.ps1'
     box.remote.mkdir(root)
     box.remote.mkdir(payload / 'edith')
     for local, remote in ((HERE / 'relay_cloudflare_match.py', payload / 'relay_cloudflare_match.py'),
+                          (boxes_file(), payload / 'boxes.json'),
                           (HERE / 'relay_secrets.py', payload / 'relay_secrets.py'), (HERE / 'relay_fixtures.json', payload / 'relay_fixtures.json'),
                           (HERE / 'edith_cross.py', payload / 'edith_cross.py'),
                           (HERE / 'edith/remote_box.py', payload / 'edith/remote_box.py'), (root / 'cert.pem', root / 'cert.pem'),
@@ -1154,7 +1384,8 @@ def ship(box, root: Path, specs: list[dict], directory_port: int, payload: Path,
     from remote_box import render_payload
     script = render_payload(box.tree, [str(payload / 'relay_cloudflare_match.py'), '--remote-peers', str(spec_path)],
                             root / f'{box.name}-payload.log', root / f'{box.name}-payload.done',
-                            {'CC_RELAY_LANE': LANE, 'CC_EDITH_CROSS_LANE': LANE}, box.path_prepend)
+                            {'CC_RELAY_LANE': LANE, 'CC_EDITH_CROSS_LANE': LANE, 'CC_RUNNER_BOX_MANIFEST': str(payload / 'boxes.json')},
+                            box.path_prepend)
     local = root / f'{box.name}-run.ps1'
     local.write_text(script, encoding='utf-8')
     return local
@@ -1297,10 +1528,21 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
         refusal = f'the boxes do not run one receipted build: {[(name, value["head"][:10], str(value["executable_sha256"])[:12], value["errors"]) for name, value in identities.items()]}'
         say(f'{run["name"]}: REFUSED {refusal}')
         return dict(name=run['name'], root=str(root), passed=False, refused=refusal, identities=identities)
+    started_data = time.monotonic()
+    data = data_preflight(used)
+    if not DRY_RUN:
+        write_json(root / 'data-preflight.json', dict(data, seconds=round(time.monotonic() - started_data, 1)))
+    if not data['passed']:
+        refusal = f'the boxes do not hold the same game data: {data["reasons"]}'
+        say(f'{run["name"]}: REFUSED {refusal}')
+        return dict(name=run['name'], root=str(root), passed=False, refused=refusal, identities=identities)
+    say(f'{run["name"]}: game data equal on {[box.name for box in used]} ({time.monotonic() - started_data:.0f} s)')
     h = edith_cross.harness(HERE)
     public = run.get('directory') == 'public'
+    tunneled = run.get('directory') == 'tunnel'
     run.setdefault('tag', f'rp{os.urandom(3).hex()}')
-    backend = coturn = bridge = directory = observer = None
+    backend = coturn = bridge = directory = observer = quick = None
+    legs = {}
     fixed_pair = pair_ttl = minted_at = relay_hosts = None
     if run['relay'] in ('cloudflare', 'automatic') and not public:
         backend = read_turn_config(CLOUDFLARE_TURN_CONFIG)
@@ -1343,8 +1585,14 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
         if not DRY_RUN and not public:
             directory = Directory(root, ports['directory'], backend, int(run.get('relay_ttl_cap', 86400)), book)
         pin = directory.pin if directory else '<pin>'
+        if tunneled:
+            quick = QuickTunnel(ports['directory'], root)
+            run['tunnel_host'] = quick.open()
+            say(f'{run["name"]}: the directory is met at https://{run["tunnel_host"]} (a quick tunnel to this box)')
+            legs = {box.name: directory_rtt(box, f'https://{run["tunnel_host"]}/v1/sessions') for box in used}
+            say(f'{run["name"]}: directory round trip per box {json.dumps({name: leg.get("median_ms") for name, leg in legs.items()})}')
         for box in used:
-            if not public:
+            if not public and not tunneled and not getattr(box, 'local', False):
                 forwards = [ports['directory']] + ([ports['bridge_tcp']] if bridge and box is bridge.box else [])
                 tunnels.append(Tunnel(box, forwards, root / f'tunnel-{box.name}.log'))
         for tunnel in tunnels:
@@ -1357,7 +1605,7 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
             ship_driver_only(bridge.box, payload)
             bridge.open()
         scripts = {box.name: ship(box, root, [spec for spec in specs if spec['box'] == box.name], ports['directory'], payload, public,
-                                  host_name, menu_texts) for box in used}
+                                  host_name, menu_texts, run.get('tunnel_host')) for box in used}
         if public:
             observer = PublicObserver(host_name, book)
             observer.start()
@@ -1381,7 +1629,7 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
         if not isinstance(error, Exception):
             interrupt = error
     finally:
-        steps = [(f'tunnel {tunnel.box.name}', tunnel.close) for tunnel in tunnels]
+        steps = [(f'tunnel {tunnel.box.name}', tunnel.close) for tunnel in tunnels] + ([('quick tunnel', quick.close)] if quick else [])
         steps += [(name, part.close if name == 'bridge' else part.stop) for name, part in
                   (('bridge', bridge), ('directory', directory), ('observer', observer)) if part is not None]
         for step, close in steps:
@@ -1434,7 +1682,7 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
         return dict(name=run['name'], root=str(root), passed=False, refused=failure, identities=identities, sanitize=sanitize,
                     revokes=revokes, cleanup=cleanup)
     return judge_run(h, scenario, run, root, dict(started=started, finished=stamp(), states=states, identities=identities,
-                     legs={}, ports=ports, sessions=directory.sessions() if directory else [],
+                     legs=legs, ports=ports, sessions=directory.sessions() if directory else [],
                      signals=directory.signals if directory else [], offers_seen=directory.offers if directory else None,
                      provider_calls=directory.provider_calls if directory else [], revokes=revokes, minted=minted, public=public,
                      ticks=ticks, ended_epoch=ended_epoch, overrides_cleared=overrides_cleared, sanitize=sanitize, fetched=fetched,
@@ -1587,7 +1835,7 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
                              expect_routes=run.get('expect_routes'),
                              relay_addresses=[facts['coturn_address']] if facts.get('coturn_address') else None,
                              relay_hosts=facts.get('relay_hosts'), run_ends_at=int(facts['ended_epoch']),
-                             overrides_cleared=facts.get('overrides_cleared')))
+                             overrides_cleared=facts.get('overrides_cleared'), signals_observed=not facts.get('public')))
     owners = sender_peers(facts['signals'], identities, names)
     write_json(root / 'signals-candidates.json', [dict(peer=owners[sender], sender=sender, candidates=[
         f'{address}:{port} {kind}' for address, port, kind in signal_candidates(payload)],
@@ -1625,6 +1873,9 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
             return detail(key, tunnel_receipt(rows if isinstance(rows, list) else [], [name]))
         if kind == 'panel':
             return detail(key, panel_verdict(read_json(root / f'{name}-panel' / 'net-ui-result.json') or None))
+        if kind == 'route_history':
+            watch = (read_json(root / f'{name}-panel' / 'net-ui-result.json') or {}).get('route_watch')
+            return detail(key, route_history(logs.get(name, ''), session, connections.get(name) if isinstance(connections.get(name), dict) else None, watch))
         if kind == 'menu_choice':
             return detail(key, menu_choice(logs.get(name, ''), peer.get('menu_choice', 'Relay only'), session) if session
                           else dict(passed=False, reasons=['no session to bind the choice to']))
@@ -1741,8 +1992,8 @@ def pair_ttl_receipt(target, pair, secret: str, book, now=time.time, sleep=time.
 
 def directory_session(directory: dict, budget_s: float) -> dict | None:
     """The host's listing row: the lane directory's only row, or the public directory's row carrying the host's name."""
-    if directory.get('public'):
-        url, context = f'https://{PUBLIC_DIRECTORY}/v1/sessions', ssl.create_default_context()
+    if directory.get('public') or directory.get('host'):
+        url, context = f'https://{PUBLIC_DIRECTORY if directory.get("public") else directory["host"]}/v1/sessions', ssl.create_default_context()
     else:
         url, context = f'https://127.0.0.1:{directory["port"]}/v1/sessions', ssl.create_default_context(cafile=directory['cert'])
     deadline = time.monotonic() + budget_s

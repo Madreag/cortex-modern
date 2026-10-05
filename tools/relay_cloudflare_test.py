@@ -266,7 +266,7 @@ class HotspotRows(unittest.TestCase):
             with self.subTest(name):
                 self.assertFalse(judge(rows)['passed'])
 
-    def test_a_automatic_fallback_needs_the_relay_on_the_hotspot_peer_with_no_player_action(self):
+    def test_a_forced_fallback_needs_the_relay_on_the_hotspot_peer_with_no_player_action(self):
         session = 'session-one'
         srflx = 'candidate:2 1 udp 1694498815 172.58.1.2 51000 typ srflx'
         signals = [('host', signal(relay_line('141.101.90.17'), srflx)), ('client-nonce', signal(relay_line('162.159.207.9', 40002), srflx))]
@@ -288,6 +288,73 @@ class HotspotRows(unittest.TestCase):
         for result in ({'pass': False, 'complete': True}, {'pass': True, 'complete': False}, {}, None):
             with self.subTest(result=result):
                 self.assertFalse(panel(result)['passed'])
+        watching = {'pass': True, 'complete': True, 'script': {'steps': [{'op': 'watch_route'}]}}
+        self.assertFalse(panel(watching)['passed'])
+        self.assertTrue(panel(dict(watching, route_watch={'samples': 900, 'moves': []}))['passed'])
+
+    def test_a_every_move_of_the_route_has_its_receipt(self):
+        """2026-10-04's row a: the connection moved from the relay to direct within 4 s and its log kept the one relay receipt."""
+        history = self.match().route_history
+        opening = '[net-ice] session s join_mode=ice resolved to identity x; dialling the ICE half\n'
+        relay = ('[net-ice] selected candidate=relay connection=7\n[net-route] RouteAllowed route=relay allowed=1 connection=7 remote=none '
+                 'turn=turn.cloudflare.com:3478 offer=s:0@2000\n')
+        moved = ('[net-ice] selected candidate=srflx connection=7\n[net-route] RouteAllowed route=direct allowed=1 connection=7 '
+                 'remote=24.251.145.96:5000 offer=none change=relay->direct after_ms=4100\n')
+        direct_report = {'found': True, 'relayed': False}
+        verdict = history(opening + relay + moved, 's', direct_report, None)
+        self.assertTrue(verdict['passed'], verdict['reasons'])
+        self.assertEqual(verdict['moves'], ['relay->direct'])
+        self.assertFalse(history(opening + relay, 's', direct_report, None)['passed'])
+        self.assertFalse(history(opening + relay + moved.replace('change=relay->direct', 'change=direct->relay'), 's', direct_report, None)['passed'])
+        self.assertFalse(history(opening + relay.replace('offer=s:0@2000', 'offer=s:0@2000 change=direct->relay'), 's', {'found': True, 'relayed': True}, None)['passed'])
+        seen = {'moves': [{'what': 'live', 'from': 'relay', 'to': 'direct'}, {'what': 'live', 'from': 'direct', 'to': 'relay'}]}
+        self.assertFalse(history(opening + relay + moved, 's', direct_report, seen)['passed'])
+        self.assertFalse(history('', 's', direct_report, None)['passed'])
+
+    def test_a_public_relay_is_bound_by_its_own_receipt_and_the_directory_s_offer(self):
+        """The public directory is not the run's: no candidate is observable, so the engine's receipt names the relay and its offer."""
+        session = 'session-one'
+        line = ('[net-route] RouteAllowed route=relay allowed=1 connection=7 remote=none turn=turn.cloudflare.com:3478,turn.cloudflare.com:443 '
+                f'offer={session}:0@2000')
+        log = '\n'.join([f'[net-ice] session {session} join_mode=ice resolved to identity x; dialling the ICE half',
+                          '[net-ice] selected candidate=relay connection=7', line])
+        offers = [dict(session_id=session, match_id=f'{session}:0', provider='cloudflare', generation=1, expires_at=2000, server_count=2)]
+        run = cloudflare_run(logs={'host': log, 'client': log}, signals=[], offers=offers, offer_urls=None, signals_observed=False,
+                             reports={'client': {'found': True, 'state': 3, 'relayed': True, 'remote_address': ''}})
+        verdict = self.match().judge_relay(run)
+        self.assertTrue(verdict['passed'], verdict['reasons'])
+        self.assertTrue(verdict['bindings']['client'].startswith('by its route receipt'))
+        for name, changed in {'another offer': line.replace('@2000', '@1999'), 'another relay': line.replace('turn.cloudflare.com:443', 'relay.example.net:443'),
+                              'no relay named': line.split(' turn=')[0] + f' offer={session}:0@2000'}.items():
+            with self.subTest(name):
+                swapped = log.replace(line, changed)
+                self.assertFalse(self.match().judge_relay(dict(run, logs={'host': swapped, 'client': swapped}))['passed'])
+        self.assertFalse(self.match().judge_relay(dict(run, signals_observed=True))['passed'])
+
+    def test_every_box_holds_the_same_game_data_before_an_engine_starts(self):
+        """2026-10-04: six Data text files with CRLF on two boxes were refused as 'modules' by the directory after a 10-minute wait."""
+        import tempfile
+        match = self.match()
+
+        class Here:
+            def __init__(self, name, tree):
+                self.name, self.tree, self.local = name, tree, True
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(match, 'DRY_RUN', False):
+            trees = []
+            for box in ('edith', 'ally'):
+                module = Path(folder) / box / 'Data' / 'Base.rte' / 'GUIs'
+                module.mkdir(parents=True)
+                (module / 'MainMenuSubMenuGUI.ini').write_bytes(b'[Panel]\nWidth = 2\n')
+                (Path(folder) / box / 'Data' / 'Tests.rte').mkdir()
+                (Path(folder) / box / 'Data' / 'Tests.rte' / 'Preview.lua').write_bytes(b'return 1\n')
+                trees.append(Here(box, str(Path(folder) / box)))
+            self.assertTrue(match.data_preflight(trees)['passed'])
+            (Path(folder) / 'ally' / 'Data' / 'Base.rte' / 'GUIs' / 'MainMenuSubMenuGUI.ini').write_bytes(b'[Panel]\r\nWidth = 2\r\n')
+            verdict = match.data_preflight(trees)
+            self.assertFalse(verdict['passed'])
+            self.assertEqual(len(verdict['reasons']), 1, verdict['reasons'])
+            self.assertIn('ally: module Data/Base.rte differs', verdict['reasons'][0])
+            self.assertIn('GUIs/MainMenuSubMenuGUI.ini', verdict['reasons'][0])
 
     def test_b_the_hotspot_host_is_listed_and_given_a_cloudflare_relay(self):
         listing = self.match().listing_evidence
@@ -345,12 +412,27 @@ class HotspotRows(unittest.TestCase):
 
     def test_every_hotspot_row_is_declared_with_its_lever(self):
         scenario = json.loads((Path(__file__).resolve().parent / 'e2e/mp-relay-hotspot.json').read_text(encoding='utf-8'))
-        runs = {run['name'][0]: run for run in scenario['runs']}
+        named = {run['name']: run for run in scenario['runs']}
+        runs = {run['name'][0]: run for run in scenario['runs'] if run['name'] != 'a-automatic-forced'}
         self.assertEqual(sorted(runs), list('abcdefg'))
+        self.assertEqual(sorted(named), ['a-automatic-fallback', 'a-automatic-forced', 'b-hotspot-host', 'c-four-players', 'd-credential-expiry',
+                                         'e-migration-relayed', 'f-relay-by-hand', 'g-relay-only-public'])
         self.assertTrue(any(peer.get('tailscale_down') for peer in runs['a']['peers']))
-        self.assertEqual(runs['a']['expect_routes'], {'client': 'relay'})
+        # On a carrier NAT that can be punched Automatic ends direct: the natural form proves its route history, the forced form the fallback.
+        self.assertNotIn('expect_routes', runs['a'])
+        forced = named['a-automatic-forced']
+        self.assertEqual(forced['expect_routes'], {'client': 'relay'})
+        hotspot = next(peer for peer in forced['peers'] if peer['box'] == 'ally')
+        self.assertEqual(hotspot['env'], {'CC_TEST_ICE_GATHER_RELAY_ONLY': '1'})
+        self.assertEqual(hotspot['connection'], 'Automatic')
+        self.assertTrue(hotspot.get('tailscale_down'))
         self.assertEqual(next(peer for peer in runs['b']['peers'] if peer['name'] == 'host')['box'], 'ally')
         self.assertEqual(len(runs['c']['peers']), 4)
+        self.assertEqual(sorted(peer['box'] for peer in runs['c']['peers']), ['ally', 'edith', 'erol-pc', 'erol-pc'])
+        for row in 'def':
+            self.assertEqual(runs[row]['directory'], 'tunnel', row)
+        self.assertEqual(runs['g']['timing_peers'], ['host'])
+        self.assertEqual(runs['g']['holds_allowed'], ['client'])
         self.assertLessEqual(runs['d']['relay_ttl_cap'], 600)
         self.assertGreater(runs['d']['ticks'] / 60, runs['d']['relay_ttl_cap'])
         self.assertTrue(runs['e']['kill_host_at_tick'])

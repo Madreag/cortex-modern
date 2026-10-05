@@ -165,6 +165,8 @@ class FakeRemote:
 
     def ssh(self, command, timeout=120, check=True):
         import time
+        if command.rstrip().endswith(' data-digests'):
+            return '{"Data/Base.rte": ["same-on-every-fake-box", 1]}'  # the game data preflight: every fake box holds the same
         return str(int(time.time() * 1000))
 
     def fetch_list(self, root, listing, local_root, tar_name):

@@ -3,8 +3,8 @@
   "name": "mp-relay-hotspot",
   "cross_machine": true,
   "driver": "tools/relay_cloudflare_match.py",
-  "title": "The Ally on a phone hotspot (carrier NAT): Automatic falls back to Cloudflare with no player action, the hotspot box hosts, four players never feel it, an expiring login renews live, a relayed host is lost, and Relay only is chosen by hand",
-  "approval": "Runs only after the user approves the hotspot session (brief of 2026-10-03). The levers, the verdicts and the operator checklist are built; no row has run.",
+  "title": "The Ally on a phone hotspot (carrier NAT): Automatic takes the best route it can complete and the panel follows it, falls back to Cloudflare with no player action when no direct route completes, the hotspot box hosts, four players never feel it, an expiring login renews live, a relayed host is lost, and Relay only is chosen by hand",
+  "approval": "The hotspot rows on the Ally over LTE (2026-10-04): every row runs against the public directory or this run's own directory met through a quick tunnel, never through the tailnet's relay.",
   "operator_preamble": [
     "1. Plug the Ally into its charger and keep it plugged in for the whole session.",
     "2. Turn on the phone's hotspot. Start with LTE: in the phone's mobile settings turn 5G off (LTE only); the 5G pass repeats every row with 5G on.",
@@ -22,9 +22,6 @@
       "provider": "cloudflare",
       "directory": "public",
       "host_relay_mode": "Directory",
-      "expect_routes": {
-        "client": "relay"
-      },
       "timeout_s": 600,
       "peers": [
         {
@@ -38,10 +35,39 @@
           "connection": "Automatic",
           "hotspot": true,
           "tailscale_down": true,
-          "panel_probe": "mp-relay-hotspot.panel.probe.json",
-          "panel_route": "via relay"
+          "panel_probe": "mp-relay-hotspot.route.probe.json"
         }
       ]
+    },
+    {
+      "name": "a-automatic-forced",
+      "relay": "automatic",
+      "provider": "cloudflare",
+      "directory": "public",
+      "host_relay_mode": "Directory",
+      "timeout_s": 600,
+      "peers": [
+        {
+          "name": "host",
+          "box": "edith",
+          "connection": "Automatic"
+        },
+        {
+          "name": "client",
+          "box": "ally",
+          "connection": "Automatic",
+          "hotspot": true,
+          "tailscale_down": true,
+          "panel_probe": "mp-relay-hotspot.route-relay.probe.json",
+          "env": {
+            "CC_TEST_ICE_GATHER_RELAY_ONLY": "1"
+          }
+        }
+      ],
+      "expect_routes": {
+        "client": "relay"
+      },
+      "lever_note": "CC_TEST_ICE_GATHER_RELAY_ONLY=1 on the hotspot end: it offers relay candidates only, as a network no direct route crosses; the player's Connection setting stays Automatic, so the route policy is Automatic's."
     },
     {
       "name": "b-hotspot-host",
@@ -83,7 +109,7 @@
       "peers": [
         {
           "name": "host",
-          "box": "z13",
+          "box": "erol-pc",
           "connection": "Automatic"
         },
         {
@@ -93,7 +119,7 @@
         },
         {
           "name": "client2",
-          "box": "z13",
+          "box": "erol-pc",
           "connection": "Automatic"
         },
         {
@@ -104,12 +130,12 @@
           "tailscale_down": true
         }
       ],
-      "placement_note": "Four engines need a third Windows box beside EDITH (two) and the Ally (one): the Z13 when the rows lane releases it or EROL-PC when the user frees it; placed with --box at the run."
+      "placement_note": "Two engines on EROL-PC (a local box: its peers start in this session), one on EDITH (across the internet), the Ally on the hotspot; the Z13 is not used."
     },
     {
       "name": "d-credential-expiry",
       "relay": "cloudflare",
-      "directory": "lane",
+      "directory": "tunnel",
       "host_relay_mode": "Directory",
       "relay_ttl_cap": 300,
       "ticks": 24000,
@@ -126,12 +152,13 @@
           "connection": "RelayOnly",
           "hotspot": true
         }
-      ]
+      ],
+      "directory_note": "This run's directory, met by every box at a Cloudflare quick tunnel's public name: the Ally reaches it over the carrier as a player would, never through the tailnet's relay."
     },
     {
       "name": "e-migration-relayed",
       "relay": "cloudflare",
-      "directory": "lane",
+      "directory": "tunnel",
       "host_relay_mode": "Directory",
       "ticks": 1801,
       "kill_host_at_tick": 600,
@@ -153,12 +180,13 @@
           "connection": "RelayOnly",
           "hotspot": true
         }
-      ]
+      ],
+      "directory_note": "This run's directory, met by every box at a Cloudflare quick tunnel's public name: the Ally reaches it over the carrier as a player would, never through the tailnet's relay."
     },
     {
       "name": "f-relay-by-hand",
       "relay": "cloudflare",
-      "directory": "lane",
+      "directory": "tunnel",
       "host_relay_mode": "Directory",
       "timeout_s": 600,
       "peers": [
@@ -177,7 +205,8 @@
           "menu_script": "mp-relay-join.client.menu.txt",
           "menu_choice": "Relay only"
         }
-      ]
+      ],
+      "directory_note": "This run's directory, met by every box at a Cloudflare quick tunnel's public name: the Ally reaches it over the carrier as a player would, never through the tailnet's relay."
     },
     {
       "name": "g-relay-only-public",
@@ -203,6 +232,12 @@
           "hotspot": true,
           "tailscale_down": true
         }
+      ],
+      "timing_peers": [
+        "host"
+      ],
+      "holds_allowed": [
+        "client"
       ]
     }
   ],
@@ -215,24 +250,10 @@
       "what": "Tailscale was down on the Ally from before its engine started until after it ended, and back up after."
     },
     {
-      "id": "a-fallback",
-      "run": "a-automatic-fallback",
-      "peer": "client",
-      "check": "route:client",
-      "what": "On the hotspot the Ally's Automatic connection took the relay route with no player action."
-    },
-    {
       "id": "a-offer",
       "run": "a-automatic-fallback",
       "check": "offer",
       "what": "The public directory issued a Cloudflare relay for this session and the Ally's report names a relayed connection at a Cloudflare address."
-    },
-    {
-      "id": "a-panel",
-      "run": "a-automatic-fallback",
-      "peer": "client",
-      "check": "panel:client",
-      "what": "The Ally's connection panel says 'via relay' during the match."
     },
     {
       "id": "a-hashes",
@@ -251,6 +272,47 @@
       "run": "a-automatic-fallback",
       "check": "no_secret_in_files",
       "what": "No file of the run holds a login."
+    },
+    {
+      "id": "a-route",
+      "run": "a-automatic-fallback",
+      "peer": "client",
+      "check": "route_history:client",
+      "what": "The Ally's Automatic connection names every route it held, one receipt per move, the last being the route it ends on."
+    },
+    {
+      "id": "a-panel",
+      "run": "a-automatic-fallback",
+      "peer": "client",
+      "check": "panel:client",
+      "what": "The Ally's connection panel names the route the transport holds at every frame of the match."
+    },
+    {
+      "id": "a-forced-fallback",
+      "run": "a-automatic-forced",
+      "peer": "client",
+      "check": "route:client",
+      "what": "With no direct route possible from the hotspot, the Ally's Automatic connection takes the relay with no player action."
+    },
+    {
+      "id": "a-forced-panel",
+      "run": "a-automatic-forced",
+      "peer": "client",
+      "check": "panel:client",
+      "what": "The Ally's connection panel says 'via relay' at every frame of the match."
+    },
+    {
+      "id": "a-forced-hashes",
+      "run": "a-automatic-forced",
+      "check": "hashes_equal",
+      "what": "The live hashes agree on every compared frame."
+    },
+    {
+      "id": "a-forced-tunnel",
+      "run": "a-automatic-forced",
+      "peer": "client",
+      "check": "tunnel:client",
+      "what": "Tailscale was down on the Ally for its whole match."
     },
     {
       "id": "b-tunnel",
@@ -423,6 +485,12 @@
       "run": "g-relay-only-public",
       "check": "feel_bars",
       "what": "Both peers hold the feel driver's gates."
+    },
+    {
+      "id": "g-holds",
+      "run": "g-relay-only-public",
+      "check": "seat_holds",
+      "what": "No seat but the hotspot's was held."
     }
   ]
 }
