@@ -1893,7 +1893,9 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
             clocks={name: clocks.get(box_of[name]) for name in relayed}, session=session))
 
     def seat_holds_check():
-        summary = ((reports.get('host') or {}).get('last_match') or {}).get('peers') or []
+        # The service writes its match summary under 'service' (the e2e report); an older report had it at the top.
+        last_match = edith_cross.find_key(reports.get('host') or {}, 'last_match')
+        summary = (last_match if isinstance(last_match, dict) else {}).get('peers') or []
         named = [dict(row, name=next((peer['name'] for peer in run['peers'] if display_name(run, peer) == row.get('name')), row.get('name')))
                  for row in summary]
         return detail('seat_holds', seat_holds(named, set(run.get('holds_allowed') or []), set(names)))
