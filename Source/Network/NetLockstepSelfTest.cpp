@@ -23884,10 +23884,71 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return fail("");
 		}
 
+		// A release's decision and its committed record cross every encoding they ride, and a decoder of the layout before refuses both.
+		bool TestASeatReleaseCrossesEveryEncoding(std::string* error) {
+			const char* name = "a_seat_release_crosses_every_encoding";
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow(name, why, error); };
+			const auto olderLayout = [](std::vector<uint8_t> bytes) {
+				bytes[4] = static_cast<uint8_t>(NetLockstepCodec::c_HoldMarkerVersion);
+				bytes[5] = 0;
+				return bytes;
+			};
+			NetLockstepFrame record;
+			record.senderPeerId = 1;
+			record.roundId = 9;
+			record.targetFrame = 77;
+			record.commands = {NetGameCommand{1, NetGameSeatRelease{2, 3, 4, 5, 77}}};
+			NetLockstepError failure;
+			std::vector<uint8_t> recovery;
+			NetLockstepFrame recovered;
+			if (!NetLockstepCodec::EncodeRecoveryInput(record, recovery, &failure) || !NetLockstepCodec::DecodeRecoveryInput(recovery, recovered, &failure) ||
+			    recovered.commands != record.commands || recovered.targetFrame != record.targetFrame) {
+				return fail("the recovery record lost the release: " + failure.message);
+			}
+			std::vector<uint8_t> packet;
+			if (!NetLockstepCodec::Encode({record}, packet, &failure)) return fail("the release record did not encode: " + failure.message);
+			const auto decoded = NetLockstepCodec::Decode(packet);
+			const auto* frame = decoded.ok ? std::get_if<NetLockstepFrame>(&decoded.packet.payload) : nullptr;
+			if (!frame || frame->commands != record.commands || packet[4] != NetLockstepCodec::c_SeatReleaseVersion) return fail("the release record's packet did not decode at its layout");
+			if (NetLockstepCodec::Decode(olderLayout(packet)).ok) return fail("a decoder before the release layout read its record");
+			NetLockstepTiming timing;
+			timing.senderPeerId = 1;
+			timing.peerId = 2;
+			timing.action = NetTimingAction::Release;
+			timing.phase = NetTimingPhase::Propose;
+			timing.sessionId = 1;
+			timing.roundId = 9;
+			timing.revision = 3;
+			timing.applyFrame = 80;
+			timing.nextFrame = 70;
+			timing.requiredPeers = 0x5;
+			timing.seatIncarnations[1] = 1;
+			for (const NetTimingPhase phase: {NetTimingPhase::Propose, NetTimingPhase::Acknowledge, NetTimingPhase::Commit}) {
+				timing.phase = phase;
+				std::vector<uint8_t> bytes;
+				if (!NetLockstepCodec::Encode({timing}, bytes, &failure)) return fail("the release decision did not encode: " + failure.message);
+				const auto read = NetLockstepCodec::Decode(bytes);
+				const auto* decision = read.ok ? std::get_if<NetLockstepTiming>(&read.packet.payload) : nullptr;
+				if (!decision || !(*decision == timing) || bytes[4] != NetLockstepCodec::c_SeatReleaseVersion) return fail("the release decision did not decode at its layout");
+				if (NetLockstepCodec::Decode(olderLayout(bytes)).ok) return fail("a decoder before the release layout read its decision");
+			}
+			// A release holds no seat and has no frame of its own to wait on.
+			timing.phase = NetTimingPhase::Propose;
+			timing.heldPeers = 0x2;
+			timing.requiredPeers = 0x1;
+			std::vector<uint8_t> refused;
+			if (NetLockstepCodec::Encode({timing}, refused, &failure)) return fail("a release naming a held seat encoded");
+			timing.heldPeers = 0;
+			timing.phase = NetTimingPhase::HoldAtFrame;
+			timing.cutoffFrame = timing.applyFrame;
+			if (NetLockstepCodec::Encode({timing}, refused, &failure)) return fail("a release in a hold's phase encoded");
+			return fail("");
+		}
+
 		bool RunReleasedClaimsRows() {
 			bool passed = true;
 			for (bool (*test)(std::string*): {TestHeldSeatReleaseEndsItsClaimsOnOneFrame, TestKickedPlayingSeatLeavesOnOneFrame, TestUnboundedDropEndsItsClaimsOnOneFrame,
-			                                  TestAReleaseTheHostTookWithItEndsOnOneFrame}) {
+			                                  TestAReleaseTheHostTookWithItEndsOnOneFrame, TestASeatReleaseCrossesEveryEncoding}) {
 				std::string error;
 				passed &= test(&error);
 			}
@@ -23986,6 +24047,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestKickedPlayingSeatLeavesOnOneFrame, "kicked_playing_seat_leaves_on_one_frame");
 		row(&TestUnboundedDropEndsItsClaimsOnOneFrame, "unbounded_drop_ends_its_claims_on_one_frame");
 		row(&TestAReleaseTheHostTookWithItEndsOnOneFrame, "a_release_the_host_took_with_it_ends_on_one_frame");
+		row(&TestASeatReleaseCrossesEveryEncoding, "a_seat_release_crosses_every_encoding");
 		row(&TestAReturnGapDoesNotStartTheHostsClock, "a_return_gap_does_not_start_the_hosts_clock");
 		row(&TestAHoldLandsAtTheFirstFrameItsSeatOwes, "a_hold_lands_at_the_first_frame_its_seat_owes");
 		row(&TestALinklessMemberIsHeldByTheStart, "a_linkless_member_is_held_by_the_start");

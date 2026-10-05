@@ -11731,7 +11731,8 @@ namespace RTE {
 			for (uint8_t remote: m_RemotePeerIds)
 				if (remote != peer && m_RemoteStartsReceived.contains(remote) && !IsPeerGoneAtFrame(remote, timing.applyFrame)) timing.requiredPeers |= static_cast<uint8_t>(1U << (remote - 1));
 			m_TimingDecisions[timing.revision] = {timing, static_cast<uint8_t>(1U << (m_Config.localPeerId - 1)), false, nowMs};
-			DiagnosticLine() << "[net-lockstep] release of peer " << static_cast<int>(peer) << " proposed for " << timing.applyFrame << " revision=" << timing.revision << std::endl;
+			DiagnosticLine() << "[net-lockstep] release of peer " << static_cast<int>(peer) << " proposed for " << timing.applyFrame << " revision=" << timing.revision
+			          << " next=" << m_Stats.nextFrame << " required=" << static_cast<int>(timing.requiredPeers) << std::endl;
 			QueueTiming(timing);
 			CommitTiming(timing.revision);
 		}
