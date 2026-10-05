@@ -24186,9 +24186,16 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					views[3].ApplyTick(ready); tail.FinishSimulationTick(ready.frame);
 				}
 				ScenarioRunner::ReleaseWorldCatchUp();
-				for (size_t index = 0; index < views.size(); ++index) if (!views[index].ended || *views[index].ended != leave || views[index].hashes != views[0].hashes) {
-					if (!failures.empty()) failures += "; ";
-					failures += std::string(bounded ? "playing kick" : "unbounded expiry") + " at " + std::to_string(leave) + " ends control at " + views[index].Ended() + " on " + views[index].who;
+				for (size_t index = 0; index < views.size(); ++index) {
+					const std::string context = std::string(bounded ? "playing kick" : "unbounded expiry") + " at " + std::to_string(leave);
+					if (!views[index].ended || *views[index].ended != leave) {
+						if (!failures.empty()) failures += "; ";
+						failures += context + " ends control at " + views[index].Ended() + " on " + views[index].who;
+					}
+					if (views[index].hashes != views[0].hashes) {
+						if (!failures.empty()) failures += "; ";
+						failures += context + " has unequal tick hashes on " + views[index].who;
+					}
 				}
 			}
 			return fail(failures);
