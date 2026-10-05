@@ -942,7 +942,18 @@ class GreenTipProbes(unittest.TestCase):
                                        ('Running', '172.20.10.1', 'mapped=None')):
             with self.subTest(state=state, gateway=gateway, mapped=mapped):
                 self.assertEqual(match.hotspot_preflight(state, gateway, mapped)['verdict'], 'REFUSED')
-        self.assertEqual(match.hotspot_preflight('Running', '172.20.10.1', '100.64.1.2:5000')['verdict'], 'AWAY')
+        with mock.patch.dict(match.HOME, gateway='192.0.2.1', public='192.0.2.2'):
+            self.assertEqual(match.hotspot_preflight('Running', '172.20.10.1', '100.64.1.2:5000')['verdict'], 'AWAY')
+    def test_home_baseline_is_required_and_addresses_stay_private(self):
+        with mock.patch.dict(match.HOME, gateway='', public=''):
+            self.assertEqual(match.hotspot_preflight('Running', '198.51.100.1', '198.51.100.2:5000')['verdict'], 'REFUSED')
+        with mock.patch.dict(match.HOME, gateway='192.0.2.1', public='192.0.2.2'):
+            for gateway, mapped in [('192.0.2.1', '198.51.100.2:5000'), ('198.51.100.1', '192.0.2.2:5000')]:
+                result = match.hotspot_preflight('Running', gateway, mapped)
+                self.assertEqual(result['verdict'], 'HOME')
+                self.assertNotIn(gateway, json.dumps(result))
+                self.assertNotIn(mapped.split(':')[0], json.dumps(result))
+
 
     # G6: limits are incomplete, never clean; a scrub keeps the span's representation.
     def test_g6_four_nested_gzips_are_incomplete(self):

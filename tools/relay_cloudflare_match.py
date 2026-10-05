@@ -61,7 +61,7 @@ CLOUDFLARE_TURN_CONFIG = Path('D:/mx/coturn-20260920/turn-config-cloudflare.json
 # The retired fixed account (turnserver-fixed.conf): read into the book only, so a leak of it is still found; never used by a run.
 RETIRED_FIXED_CONF = Path('D:/mx/coturn-20260920/turnserver-fixed.conf')
 # Our relay for a run: a coturn on the Mac with a per-run REST secret, on its own LAN port and relay range.
-LANE_COTURN = dict(ssh='Erol-Mac', binary='/opt/homebrew/opt/coturn/bin/turnserver', address='192.168.50.122',
+LANE_COTURN = dict(ssh='Erol-Mac', binary='/opt/homebrew/opt/coturn/bin/turnserver', address=os.environ.get('CC_RELAY_COTURN_ADDRESS', ''),
                    ports=(3490, 3499), relay=(49301, 49340))
 # https://www.cloudflare.com/ips-v4 and /ips-v6, read 2026-10-03; turn.cloudflare.com resolved to 141.101.90.1 that day.
 CLOUDFLARE_RANGES = [ipaddress.ip_network(text) for text in (
@@ -80,7 +80,7 @@ RELAY_SETTINGS = ('NetworkTurnServers', 'NetworkTurnUser', 'NetworkTurnPass', 'N
 # The game's built-in directory (c_DefaultSessionDirectoryUrl): the hotspot rows that turn the tailnet off meet there.
 PUBLIC_DIRECTORY = 'directory.broserver.com'
 PUBLIC_DIRECTORY_LOGS = ('Erol-Mac', '/Users/erol/cortex-directory/logs')
-HOME = dict(gateway='192.168.50.1', public='68.3.162.151')
+HOME = dict(gateway=os.environ.get('CC_RELAY_HOME_GATEWAY', ''), public=os.environ.get('CC_RELAY_HOME_PUBLIC', ''))
 # Ports other drivers own (the project policy, the e2e README, edith_cross): never chosen here.
 FOREIGN_PORTS = [(48320, 48539), (48630, 48649), (49180, 49199), (49400, 49479), (49860, 49879), (49985, 49986)]
 PORT_WINDOW = (48700, 49170)
@@ -584,9 +584,12 @@ def hotspot_preflight(state: str | None, gateway: str | None, mapped: str | None
         return dict(verdict='REFUSED', reason=f'unknown or malformed precondition: {", ".join(malformed)}')
     if state != 'Running':
         return dict(verdict='REFUSED', reason=f'the tunnel is {state}, not Running')
-    if address(gateway) == HOME['gateway'] or address(mapped) == HOME['public']:
-        return dict(verdict='HOME', reason=f'the box is on the home network (gateway {address(gateway)}, mapped {address(mapped)})')
-    return dict(verdict='AWAY', reason=f'gateway {address(gateway)}, mapped {address(mapped)}')
+    home_gateway, home_public = (address(str(HOME.get(key) or '')) for key in ('gateway', 'public'))
+    if home_gateway is None or home_public is None:
+        return dict(verdict='REFUSED', reason='the home-network baseline is missing or malformed')
+    if address(gateway) == home_gateway or address(mapped) == home_public:
+        return dict(verdict='HOME', reason='the box is on the home network')
+    return dict(verdict='AWAY', reason='the gateway and mapped address differ from the home-network baseline')
 
 
 def panel_verdict(result) -> dict:
@@ -1223,8 +1226,14 @@ class LaneCoturn:
         book.add('lane-coturn-secret', self.secret)
         self.pid, self.port = None, None
         self.address = LANE_COTURN['address']
+        book.add('owner-address', self.address)
 
     def start(self) -> None:
+        try:
+            ipaddress.ip_address(self.address)
+        except ValueError:
+            raise RuntimeError('CC_RELAY_COTURN_ADDRESS must name the test relay address') from None
+
         if DRY_RUN:
             self.port = LANE_COTURN['ports'][0]
             say(f'dry-run: coturn on {LANE_COTURN["ssh"]} {self.address}:{self.port} relay {LANE_COTURN["relay"]} (REST secret in memory)')
@@ -2506,6 +2515,9 @@ def main(argv=None) -> int:
     boxes = load_boxes(trees, aliases)
     from relay_secrets import RETIRED_USERNAME_SCOPE, SecretBook
     book = REDACTOR = SecretBook()
+    for address in HOME.values():
+        book.add('owner-address', address)
+    book.add('owner-address', LANE_COTURN['address'])
     if RETIRED_FIXED_CONF.is_file():
         book.add_fixed_login(RETIRED_FIXED_CONF, RETIRED_USERNAME_SCOPE)  # its leak is still found; no run uses it
     out = options.out.resolve()
