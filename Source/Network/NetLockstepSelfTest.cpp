@@ -3,6 +3,7 @@
 
 #include "allegro.h"
 #include "LoopbackTransport.h"
+#include "GnsTransport.h"
 #include "NetLockstep.h"
 #include "NetMatchService.h"
 #include "NetAuthCrypto.h"
@@ -24695,6 +24696,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestEachSurvivorsRunwayUsesItsOwnLink, "each_survivors_runway_uses_its_own_link");
 		row(&TestAReturnRebuildsArrivalSlack, "a_return_rebuilds_arrival_slack");
 		row(&TestALinksSilenceKeepsItsCover, "a_links_silence_keeps_its_cover");
+#ifdef CCCP_WITH_GNS
+		row(&GnsTransport::UplinkStallSelfTest, "uplink_stall_sends_only");
+#endif
 		row(&TestAHeldSeatsSilenceCarriesItsReturn, "a_held_seats_silence_carries_its_return");
 		row(&TestANeutralGapLeavesNoCommandsToResend, "a_neutral_gap_leaves_no_commands_to_resend");
 		row(&TestFreshRoundDropsRetainedCollisionResults, "fresh_round_drops_retained_collision_results");

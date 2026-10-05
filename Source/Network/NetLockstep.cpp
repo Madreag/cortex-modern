@@ -1,4 +1,5 @@
 #include "NetLockstep.h"
+#include "GnsTransport.h"
 
 #include "NetActorOwnership.h"
 #include "NetAuthCrypto.h"
@@ -10170,6 +10171,8 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded, uint8_t onlyPeerId, size_t* outValueObservationsEncoded, NetLockstepObservationBlocks* blocks) {
+		if (const auto* outgoing = std::get_if<NetLockstepFrame>(&packet.payload); outgoing && dynamic_cast<GnsTransport*>(m_Transport))
+			GnsTransport::ObserveOutgoingLockstepFrame(outgoing->targetFrame);
 		std::vector<uint8_t> windowBytes;
 		std::vector<uint8_t> classicBytes;
 		NetLockstepError encodeError;

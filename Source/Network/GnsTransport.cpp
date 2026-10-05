@@ -45,6 +45,58 @@ namespace RTE {
 #ifdef CCCP_WITH_GNS
 
 	namespace {
+		struct UplinkStallConfig { uint64_t frame = 0, durationMs = 0; };
+		UplinkStallConfig ParseUplinkStall(const char* frame, const char* duration) {
+			const auto number = [](const char* text, uint64_t limit) {
+				if (!text || !*text) return uint64_t(0);
+				uint64_t value = 0;
+				for (const char* at = text; *at; ++at) {
+					if (*at < '0' || *at > '9' || value > limit / 10) return uint64_t(0);
+					value = value * 10 + static_cast<uint64_t>(*at - '0');
+					if (value > limit) return uint64_t(0);
+				}
+				return value;
+			};
+			UplinkStallConfig result{number(frame, 1000000), number(duration, 10000)};
+			return result.frame && result.durationMs ? result : UplinkStallConfig{};
+		}
+		const UplinkStallConfig& TestUplinkStallConfig() {
+			static const UplinkStallConfig config = [] {
+				const char* headless = std::getenv("CCCP_HEADLESS");
+				return headless && std::string_view(headless) == "1" ? ParseUplinkStall(std::getenv("CC_TEST_GNS_UPLINK_STALL_FRAME"), std::getenv("CC_TEST_GNS_UPLINK_STALL_MS")) : UplinkStallConfig{};
+			}();
+			return config;
+		}
+		float GlobalLoss(ESteamNetworkingConfigValue key) {
+			float value = 0; size_t size = sizeof(value); ESteamNetworkingConfigDataType type = k_ESteamNetworkingConfig_Float;
+			SteamNetworkingUtils()->GetConfigValue(key, k_ESteamNetworkingConfig_Global, 0, &type, &value, &size);
+			return value;
+		}
+		struct UplinkStall {
+			bool started = false, finished = false;
+			uint64_t firstMs = 0, untilMs = 0;
+			float previousLoss = 0;
+			bool NoteFrame(const UplinkStallConfig& config, uint64_t frame, uint64_t nowMs) {
+				if (started || config.durationMs == 0 || frame < config.frame) return false;
+				previousLoss = GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Send);
+				if (!SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, 100.0F)) return false;
+				started = true; firstMs = nowMs; untilMs = nowMs + config.durationMs;
+				DiagnosticLine() << "[test-uplink-stall] begin frame=" << frame << " duration_ms=" << config.durationMs << " send_loss=100 recv_loss=" << GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Recv)
+				                 << " clock_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
+				return true;
+			}
+			void Update(uint64_t nowMs) {
+				if (!started || finished) return;
+				if (nowMs < untilMs) { SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, 100.0F); return; }
+				if (!SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, previousLoss)) return;
+				finished = true;
+				DiagnosticLine() << "[test-uplink-stall] end elapsed_ms=" << nowMs - firstMs << " send_loss=" << previousLoss
+				                 << " clock_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
+			}
+		};
+		UplinkStall s_TestUplinkStall;
+		uint64_t UplinkStallClockMs() { return static_cast<uint64_t>(SteamNetworkingUtils()->GetLocalTimestamp() / 1000); }
+
 		struct SignalField { uint32_t number; uint8_t wire; uint64_t integer; std::string_view bytes; };
 		bool SignalFields(std::string_view bytes, std::vector<SignalField>& out) {
 			size_t cursor = 0;
@@ -381,6 +433,7 @@ namespace RTE {
 				SetError(error, "ICE route refused by the player's Connection setting");
 				return false;
 			}
+			s_TestUplinkStall.Update(UplinkStallClockMs());
 			const EResult result = m_Interface->SendMessageToConnection(
 				connectionIt->second,
 				bytes.data(),
@@ -508,6 +561,7 @@ namespace RTE {
 
 		std::vector<NetTransportEvent> PollEvents() {
 			if (m_Interface) {
+				s_TestUplinkStall.Update(UplinkStallClockMs());
 				// Drain delivered messages first: a close callback forgets the connection, which would
 				// drop a reject/goodbye that GNS already delivered alongside it.
 				PollIncomingMessages();
@@ -1625,6 +1679,44 @@ namespace RTE {
 		s_RendezvousLogLevel = level;
 #else
 		(void)level;
+#endif
+	}
+
+	void GnsTransport::ObserveOutgoingLockstepFrame(uint64_t targetFrame) {
+#ifdef CCCP_WITH_GNS
+		const auto& config = TestUplinkStallConfig();
+		if (config.durationMs == 0) return;
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
+		if (SteamNetworkingUtils()) s_TestUplinkStall.NoteFrame(config, targetFrame, UplinkStallClockMs());
+#else
+		(void)targetFrame;
+#endif
+	}
+
+	bool GnsTransport::UplinkStallSelfTest(std::string* error) {
+#ifdef CCCP_WITH_GNS
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
+		if (!AcquireGns(error)) return false;
+		bool passed = true;
+		const float send = GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Send), receive = GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Recv);
+		for (uint64_t duration : {300U, 800U}) {
+			UplinkStall test;
+			const UplinkStallConfig config{600, duration};
+			passed = passed && !test.NoteFrame({}, 600, 1000) && !test.NoteFrame(config, 599, 1000) && test.NoteFrame(config, 600, 1000);
+			test.Update(1000 + duration - 1);
+			passed = passed && GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Send) == 100.0F && GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Recv) == receive;
+			test.Update(1000 + duration);
+			passed = passed && test.finished && GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Send) == send && !test.NoteFrame(config, 600, 2000);
+		}
+		for (const auto& bad : {ParseUplinkStall(nullptr, "300"), ParseUplinkStall("600", nullptr), ParseUplinkStall("-1", "300"), ParseUplinkStall("600x", "300"), ParseUplinkStall("600", "10001")}) passed = passed && bad.durationMs == 0;
+		passed = passed && ParseUplinkStall("600", "300").durationMs == 300;
+		SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, send);
+		ReleaseGns();
+		if (!passed && error) *error = "the one-way stall changed receiving, failed its clock, or failed to restore sending";
+		return passed;
+#else
+		if (error) *error = "GameNetworkingSockets support is not compiled in";
+		return false;
 #endif
 	}
 

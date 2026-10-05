@@ -1735,6 +1735,12 @@ namespace RTE {
 			std::cout << "[net-p2p-selftest] " << (passed ? "PASS payload_hold_order_and_cap" : "FAIL: " + error) << std::endl;
 			return passed ? 0 : 1;
 		}
+		if (args.size() == 1 && args[0] == "uplink-stall") {
+			std::string error;
+			const bool passed = GnsTransport::UplinkStallSelfTest(&error);
+			std::cout << "[net-p2p-selftest] " << (passed ? "PASS uplink_stall_sends_only" : "FAIL: " + error) << std::endl;
+			return passed ? 0 : 1;
+		}
 		if (args[0] == "relay-hold" && args.size() == 3 && ParseNumber(args[1], &value) && value > 0) {
 			return RunRelayHold(value, args[2]);
 		}

@@ -147,6 +147,8 @@ namespace RTE {
 		static void SetRendezvousLogLevel(int level);
 		/// Exercises the pre-announcement payload queue without opening a socket.
 		static bool PayloadHoldSelfTest(std::string* error = nullptr);
+		static void ObserveOutgoingLockstepFrame(uint64_t targetFrame);
+		static bool UplinkStallSelfTest(std::string* error = nullptr);
 
 	private:
 		struct Impl;
