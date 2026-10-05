@@ -24143,8 +24143,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				auto tailConfig = ReleasedClaimsConfig(round.match, 3, {{1, 1}}, bounded);
 				tailConfig.startFrame = from;
 				if (!cold.Start(coldWire, tailConfig, &round.failure) || cold.IsRunning()) return fail("the direct catch-up coordinator already runs");
-				std::array<ReleasePathClaimView, 5> views;
-				std::array<NetLockstepCoordinator*, 5> coordinators{&round.peers[0], &round.peers[2], &replay, &tail, &cold};
+				std::array<ReleasePathClaimView, 6> views;
+				std::array<NetLockstepCoordinator*, 6> coordinators{&round.peers[0], &round.peers[1], &round.peers[2], &replay, &tail, &cold};
 				for (size_t index = 0; index < views.size(); ++index) {
 					if (!views[index].Create("copy " + std::to_string(index), *coordinators[index], 0, 1, 4)) return fail("the departure actor could not be created");
 					views[index].handoff = 4;
@@ -24162,8 +24162,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					tailFrames.push_back(decoded);
 					if (!writer.WriteFrame(tick, packed.frames, packed.commands, packed.observations, packed.valueObservations, &round.failure)) return fail(round.failure);
 					views[0].ApplyTick(ready);
-					if (!round.committed[2].contains(tick)) return fail("the survivor did not pass the departure frame");
-					views[1].ApplyTick(round.committed[2].at(tick));
+					for (size_t index: {size_t{1}, size_t{2}}) {
+						if (!round.committed[index].contains(tick)) return fail("survivor " + std::to_string(index + 1) + " did not pass the departure frame");
+						views[index].ApplyTick(round.committed[index].at(tick));
+					}
 				}
 				writer.Close(); if (!WaitForReplayCloseForTest(writer, &round.failure)) return fail(round.failure);
 				NetMatchReplayReader reader;
@@ -24175,10 +24177,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					replay.Tick(0);
 					NetLockstepReadyFrame ready;
 					if (!replay.PopReadyFrame(ready)) return fail("the recorded departure stopped playback: " + replay.GetStats().timeoutReason);
-					views[2].ApplyTick(ready); replay.FinishSimulationTick(ready.frame);
+					views[3].ApplyTick(ready); replay.FinishSimulationTick(ready.frame);
 				}
 				if (!eof) return fail(round.failure);
-				for (size_t index: {size_t{3}, size_t{4}}) {
+				for (size_t index: {size_t{4}, size_t{5}}) {
 					ScenarioRunner::SetLockstepCoordinator(coordinators[index]);
 					if (!ScenarioRunner::InstallWorldCatchUp(from - 1, tailFrames, &round.failure)) return fail(round.failure);
 					for (const auto& frame: tailFrames) {
