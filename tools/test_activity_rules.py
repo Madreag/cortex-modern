@@ -6,7 +6,10 @@ tick each peer prints the rules it plays by; the run passes when, on both peers,
 path to orbit and unit deployment are the activity's own defaults - the values the single-player setup seeds from the
 same activity - and every seated team's funds equal that gold.
 
-  python tools/test_activity_rules.py --out D:/mx/<lane>/activity-rules [--port 47350] [--runs 1]
+  python tools/test_activity_rules.py --out D:/mx/<lane>/activity-rules [--port 47350] [--runs 1] [--path address|newcomer]
+
+The newcomer path (MENU-UX.md section 6) joins through the game list - the host's row, Join Game - instead of by address; the
+host's port is the one setup word, so two runs on one machine never meet.
 """
 
 from __future__ import annotations
@@ -51,17 +54,27 @@ def expected_rules(defaults: dict, difficulty: int) -> dict:
             "deploy": int(values.get("DefaultDeployUnits", -1) > 0)}
 
 
+def newcomer_scripts(port: int) -> dict:
+    host = ("wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\nactivate ButtonMultiplayerHostGame\nwait 6\n"
+            f"assert_substate HostSetup\nsetup_host_port {port}\nactivate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
+            "wait_remote_ready 120\nwait 10\nactivate ButtonMultiplayerStart\nwait_state Running 60\nwait_ms 600000\nexit\n")
+    client = ("wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\nactivate ButtonMultiplayerJoinGame\nwait 6\n"
+              f"assert_substate JoinSetup\nwait_row GameRowPort{port} 90\nclick_row GameRowPort{port}\nwait 4\nactivate ButtonMultiplayerConnect\n"
+              "wait_connected 2 90\nwait_substate Lobby 30\nwait 5\nactivate ButtonMultiplayerReady\nwait_ms 600000\nexit\n")
+    return {"host": host, "client": client}
+
+
 def scripts(port: int) -> dict:
     host = ("wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\nsettext TextMultiplayerName Host\n"
             "activate ButtonMultiplayerHostGame\nwait 6\nassert_substate HostSetup\n"
             # The run's own port, so two runs on one machine never meet; nothing else on the screen is touched.
-            f"settext TextHostPort {port}\n"
+            f"setup_host_port {port}\n"
             "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\nwait_remote_ready 120\nwait 10\n"
             "activate ButtonMultiplayerStart\nwait_state Running 60\nwait_ms 600000\nexit\n")
     client = ("wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\nsettext TextMultiplayerName Joiner\n"
               "activate ButtonMultiplayerJoinGame\nwait 6\nassert_substate JoinSetup\n"
-              f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
-              "activate ButtonMultiplayerConnect\nwait_connected 2 90\nwait 20\nactivate ButtonMultiplayerReady\n"
+              f"activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
+              "activate ButtonJoinAddressGo\nwait_connected 2 90\nwait_substate Lobby 30\nwait 5\nactivate ButtonMultiplayerReady\n"
               "wait_ms 600000\nexit\n")
     return {"host": host, "client": client}
 
@@ -71,7 +84,7 @@ def run_once(options, root: Path) -> dict:
     runs, logs, result = {}, {}, {"peers": {}}
     started = set()
     try:
-        for who, text in scripts(options.port).items():
+        for who, text in (newcomer_scripts if options.path == "newcomer" else scripts)(options.port).items():
             script = root / f"{who}-menu.txt"
             script.write_text(text, encoding="utf-8")
             runs[who] = make_run(options.repo, ["-menu-script", str(script)], root / who, options.timeout, env={"CCCP_HEADLESS": "1"})
@@ -131,6 +144,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=47350)
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--timeout", type=float, default=300)
+    parser.add_argument("--path", choices=("address", "newcomer"), default="address", help="join by address, or the newcomer's way through the game list")
     options = parser.parse_args()
     options.repo = options.repo.resolve()
     options.out.mkdir(parents=True, exist_ok=False)

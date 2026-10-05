@@ -21,8 +21,11 @@ from test_telemetry_bundle import set_visual_resolution
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "pause-save", "save-hotkey", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
-         "lobby-name", "net-options", "net-activity", "net-host-left", "net-host-left-early", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "host-by-hand", "host-follows-activity", "oracles")
-PAIRED_CASES = ("pause", "pause-save", "save-hotkey", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early")
+         "lobby-name", "net-options", "net-activity", "net-host-left", "net-host-left-early", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "host-by-hand", "host-follows-activity", "lobby-ready-all", "lobby-countdown", "lobby-last-ready", "lobby-ready-back",
+         "lobby-seat-missing", "lobby-escape", "host-one-draft", "host-hand-open",
+         "sweep-landing", "sweep-host", "sweep-join", "sweep-lobby", "sweep-advanced-setup", "sweep-advanced-lobby", "sweep-advanced-client", "sweep-settings-network", "sweep-browsers", "oracles")
+PAIRED_CASES = ("pause", "pause-save", "save-hotkey", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early",
+                "lobby-ready-all", "lobby-countdown", "lobby-last-ready", "lobby-ready-back", "lobby-seat-missing", "sweep-advanced-client")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
@@ -58,12 +61,15 @@ NETWORK_BOXES = tuple("CollectionBoxNetPage" + page for page in NETWORK_PAGES)
 NETWORK_PAGE_BOX = NETWORK_BOXES[0]
 # Every control the player page owns, measured where it is drawn. The fixed-delay row belongs to
 # the fixed policy, so it is drawn only there - the cue the video page's resolution rows already use.
-NETWORK_ROWS = ("LabelNetworkDisplayName", "TextNetworkDisplayName", "LabelNetworkDelayPolicy",
+# The first view: the name, the Connection summary and its Change, the chat switches, the status display, then Advanced settings.
+BASICS_ROWS = ("LabelNetworkDisplayName", "TextNetworkDisplayName", "LabelNetworkConnectionSummary", "LabelNetworkConnectionValue",
+               "ButtonNetworkConnectionChange", "CheckboxNetworkChatVisible", "CheckboxNetworkChatNotify", "LabelMatchStatusWidget",
+               "ComboMatchStatusWidget", "ButtonNetworkAdvanced", "LabelNetworkAdvancedHint")
+NETWORK_ROWS = ("LabelNetworkDelayPolicy",
                 "RadioNetworkDelayAuto", "RadioNetworkDelayFixed", "LabelNetworkIdleWait",
                 "TextNetworkIdleWait", "LabelNetworkIdleWaitHint", "LabelNetworkPathHorizon",
                 "TextNetworkPathHorizon", "LabelNetworkPathHorizonHint", "CheckboxNetworkAutoRepair",
-                "CheckboxNetworkToasts", "CheckboxNetworkPrediction", "CheckboxNetworkDiagnostics",
-                "LabelMatchStatusWidget", "ComboMatchStatusWidget")
+                "CheckboxNetworkToasts", "CheckboxNetworkPrediction", "CheckboxNetworkDiagnostics")
 NETWORK_FIXED_ROWS = ("LabelNetworkFixedDelay", "TextNetworkFixedDelay", "LabelNetworkFixedDelayHint")
 MAX_INPUT_DELAY_FRAMES = 60  # NetMatchConfigUtil::c_MaxInputDelayFrames, which the hint states.
 LOBBY_PORT_MAP_ROW = 14  # MainMenuGUI's port-map row: the host alone maps its router port, so only its lobby carries it.
@@ -100,9 +106,14 @@ INTERNET_SAVED = {"SessionDirectoryUrl": "newdir.example.test/serve",
                   "SessionDirectoryCertSha256": "b" * 64}
 STUN_DEFAULT = "stun.l.google.com:19302,stun.cloudflare.com:3478,stun.nextcloud.com:443"
 NAT_KEYS = ("NetworkIceEnable", "NetworkStunServers", "NetworkTurnServers", "NetworkTurnUser", "NetworkTurnPass")
-NAT_LABEL = "Internet: NAT traversal (STUN)"
-NAT_STATES = ("Automatic", "Off (LAN or port-forwarded only)")
-NAT_HINT = "Players behind home routers connect directly. Off means they need your port forwarded."
+NAT_LABEL = "Automatic direct connection"
+NAT_STATES = ("On (default)", "Off")
+# The row's first line for each drafted state; the lines under it say what this computer's settings mean for it.
+NAT_HINTS = {"On (default)": "Tries a direct connection through each player's router first. Recommended.",
+             "Off": "Players reach you only at your public address and port; many home networks cannot."}
+# With no STUN server to ask, On reaches this network only, and its first line says so.
+NAT_STUN_EMPTY = "The STUN server list is empty, so only players on your network connect directly (Settings - Network - Connection)."
+RELAY_STATES = ("Off", "Game service (default)", "Custom relay")
 RELAY_KEYS = (*NAT_KEYS, "NetworkHostRelayMode", "NetworkConnectionMode", "NetworkPlayerTurnServers", "NetworkPlayerTurnUser", "NetworkPlayerTurnPass")
 CONNECTION_ROWS = ("LabelNetworkConnection", "ComboNetworkConnection", "LabelNetworkConnectionHint",
                    "LabelNetworkStunServers", "TextNetworkStunServers", "LabelNetworkStunHint", "LabelNetworkOwnRelay",
@@ -221,10 +232,6 @@ MATCH_RULES = {"delay_policy": 2, "idle_wait_minutes": 25, "automatic_repair": F
 COMBO_BUTTON = 17
 FIT_LINE = re.compile(r"assert_text_fits (\w+).*?rect=\[(-?\d+),(-?\d+),(-?\d+),(-?\d+)\].*?available=\[(-?\d+),(-?\d+)\]")
 WATCHED = ("ComboBrainlessHumansSpectate", "ComboMatchStatusWidget")
-# The landing panel's focus ring, in the (y, x) order MenuAutomation builds it in: the three action
-# buttons of the first row, then Resume on the second, then the footer.
-ORDER = ("TextMultiplayerName", "ButtonMultiplayerHostGame", "ButtonMultiplayerJoinGame",
-         "ButtonMultiplayerReplays", "ButtonMultiplayerResumeGame", "ButtonBackToMain", "ButtonSaveDiagnostics")
 # The resume screen's own rows, measured where they are drawn.
 RESUME_ROWS = ("LabelResumeTitle", "LabelResumeBlurb", "ListResumeMatches", "LabelResumeSelected",
                "LabelResumeStatus", "ButtonResumeStart", "ButtonResumeBack")
@@ -336,14 +343,17 @@ def seeds(case):
 
 def host_lobby(port):
     return (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
-            f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
+            f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
             "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n")
 
 
 def net_page(page):
-    """The reach a script has into the network page's own selector: the tab name it would click."""
-    return (f"select_settings_page Network\nwait 3\nassert_settings_page Network\n"
-            f"select_settings_page Network:{page}\nwait 3\nassert_settings_page Network:{page}\n"
+    """The reach a script has into the network page's own selector: the tab name it would click. The pages past the first view
+    show once Advanced settings is pressed, the way a player opens them."""
+    text = "select_settings_page Network\nwait 3\nassert_settings_page Network\nselect_settings_page Network:Basics\nwait 3\n"
+    if page != "Basics":
+        text += "activate ButtonNetworkAdvanced\nwait 4\n"
+    return (text + f"select_settings_page Network:{page}\nwait 3\nassert_settings_page Network:{page}\n"
             f"assert_visible CollectionBoxNetPage{page} 1\n")
 
 
@@ -352,14 +362,13 @@ def menu_step(command):
 
 
 def hand_pick(combo, item):
-    """A hand's pick from a drop-down: the list opens, the mouse goes down on the row, frames pass, the mouse comes up."""
-    return (f"combo_drop {combo}\nwait 3\ncombo_press {combo} {item}\nwait 4\ncombo_release {combo}\nwait 4\n"
-            f"assert_label {combo} {item}\n")
+    """A hand's pick from a drop-down, read back frames after the release."""
+    return f"combo_select {combo} {item}\nwait 4\nassert_label {combo} {item}\n"
 
 
 def hand_click(control):
-    """A hand's click: down on one frame, up on a later one."""
-    return f"hand_press {control}\nwait 3\nhand_release {control}\nwait 4\n"
+    """A hand's click, frames before the next step."""
+    return f"activate {control}\nwait 4\n"
 
 
 def roster_fit_observations(observation):
@@ -564,7 +573,7 @@ def repair_probe(who, root, roomy=True):
              {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
              {"op": "wait", "panel_open": False},
              {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
-             {"op": "wait", "screen": "Pause"}, menu_step("activate ButtonMatchOptions"),
+             {"op": "wait", "screen": "Pause"}, {"op": "wait", "renders": 2}, menu_step("activate ButtonMatchOptions"),
              {"op": "wait", "screen": "PauseMatchOptions"},
              {"op": "assert", "equals": {"service": "Running"}},
              menu_step("assert_rect_inside MatchOptionsBox viewport"),
@@ -671,45 +680,49 @@ def world_open_seat_readback(port):
 def host_stun_readback(port):
     row_checks = "assert_label LabelHostNetIce " + NAT_LABEL + "\n"
     for control in ("LabelHostNetIce", "ComboHostNetIce", "LabelHostNetIceHint"):
-        row_checks += checks(control, "CollectionBoxHostPageNetwork")
-    reopen = ("activate ButtonHostOptBack\nwait 3\nactivate ButtonHostOptions\nwait 3\n"
-              "activate TabHostPageNetwork\nwait 3\n")
+        row_checks += checks(control, "CollectionBoxHostPageConnection")
+    # This computer's choice commits with Apply and stands when Advanced opens again.
+    reopen = ("activate ButtonHostOptApply\nwait 3\nactivate ButtonHostOptBack\nwait 3\nactivate ButtonHostOptions\nwait 3\n"
+              "activate TabHostPageConnection\nwait 3\n")
     text = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
-            f"settext TextHostPort {port}\nactivate ButtonHostOptions\nwait 3\n"
-            "activate TabHostPageNetwork\nwait 3\n" + row_checks +
-            "assert_label ComboHostNetIce Automatic\ndump_host_options\n")
+            f"setup_host_port {port}\nactivate ButtonHostOptions\nwait 3\n"
+            "activate TabHostPageConnection\nwait 3\n" + row_checks +
+            f"assert_label ComboHostNetIce {NAT_STATES[0]}\ndump_host_options\n")
     for state in (NAT_STATES[1], NAT_STATES[0]):
         text += (f"combo_select ComboHostNetIce {state}\nwait 3\n" + reopen + row_checks +
                  f"assert_label ComboHostNetIce {state}\ndump_host_options\n")
-    text += (f"combo_select ComboHostNetIce {NAT_STATES[1]}\nwait 3\n"
+    # A live lobby keeps the routes it opened with: Apply refuses the change with the way to make it, and Cancel restores the page.
+    text += (f"combo_select ComboHostNetIce {NAT_STATES[1]}\nwait 3\n" + reopen +
              "activate ButtonHostOptBack\nwait 3\nactivate ButtonMultiplayerCreate\nwait 15\n"
-             "activate ButtonLobbyOptions\nwait 3\nactivate TabHostPageNetwork\nwait 3\n"
-             "combo_select ComboHostNetIce Automatic\nwait 3\n"
-             "assert_label LabelHostOptStatus End this session to change NAT traversal.\n" + row_checks +
+             "activate ButtonLobbyOptions\nwait 3\nactivate TabHostPageConnection\nwait 3\n"
+             f"combo_select ComboHostNetIce {NAT_STATES[0]}\nwait 3\nactivate ButtonHostOptApply\nwait 3\n"
+             "assert_label LabelHostOptStatus Close this lobby to change the direct connection.\n" + row_checks +
+             "activate ButtonHostOptBack\nwait 3\nactivate ButtonLobbyOptions\nwait 3\nactivate TabHostPageConnection\nwait 3\n"
              f"assert_label ComboHostNetIce {NAT_STATES[1]}\ndump_host_options\nexit\n")
     return text
 
 
 def host_relay_readback(port):
     text = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
-            f"settext TextHostPort {port}\nactivate ButtonHostOptions\nwait 3\n"
-            "activate TabHostPageNetwork\nwait 3\nactivate TabHostNetRouting\nwait 3\n"
-            "assert_label LabelHostNetRelay Relay (TURN)\nassert_label ComboHostNetRelay Directory\n"
-            "assert_label ComboHostNetIce Automatic\ndump_host_options\n")
-    for state in ("Off", "Fixed", "Directory"):
+            f"setup_host_port {port}\nactivate ButtonHostOptions\nwait 3\n"
+            "activate TabHostPageConnection\nwait 3\n"
+            f"assert_label LabelHostNetRelay Relay fallback\nassert_label ComboHostNetRelay {RELAY_STATES[1]}\n"
+            f"assert_label ComboHostNetIce {NAT_STATES[0]}\ndump_host_options\n")
+    for state in (RELAY_STATES[0], RELAY_STATES[2], RELAY_STATES[1]):
         text += f"combo_select ComboHostNetRelay {state}\nwait 3\n"
-        text += checks("LabelHostNetRelay", "CollectionBoxHostNetworkRouting")
-        text += checks("ComboHostNetRelay", "CollectionBoxHostNetworkRouting")
-        text += checks("LabelHostRelayHint", "CollectionBoxHostNetworkRouting")
-        if state == "Directory":
-            text += "assert_label LabelHostRelayHint the login renews itself while the session runs\n"
-        if state == "Fixed":
+        text += checks("LabelHostNetRelay", "CollectionBoxHostPageConnection")
+        text += checks("ComboHostNetRelay", "CollectionBoxHostPageConnection")
+        text += checks("LabelHostRelayHint", "CollectionBoxHostPageConnection")
+        if state == RELAY_STATES[1]:
+            text += "assert_label LabelHostRelayHint login renews itself while the session runs\n"
+        if state == RELAY_STATES[2]:
             for suffix, value in (("Address", "relay.example:3478"), ("User", "fixed-user"), ("Pass", "fixed-password")):
                 text += f"set_text TextHostRelay{suffix} {value}\nwait 3\n"
-                text += checks("TextHostRelay" + suffix, "CollectionBoxHostNetworkRouting")
-            text += "assert_label TextHostRelayPass **************\n"
-        text += ("activate ButtonHostOptBack\nwait 3\nactivate ButtonHostOptions\nwait 3\n"
-                 "activate TabHostPageNetwork\nwait 3\nactivate TabHostNetRouting\nwait 3\n"
+                text += checks("TextHostRelay" + suffix, "CollectionBoxHostPageConnection")
+            text += "assert_label TextHostRelayPass **************\nassert_label LabelHostRelayHint never a signing secret\n"
+        # This computer's choice commits with Apply and stands when Advanced opens again.
+        text += ("activate ButtonHostOptApply\nwait 3\nactivate ButtonHostOptBack\nwait 3\nactivate ButtonHostOptions\nwait 3\n"
+                 "activate TabHostPageConnection\nwait 3\n"
                  f"assert_label ComboHostNetRelay {state}\ndump_host_options\n")
     return text + "activate ButtonHostOptBack\nwait 3\nexit\n"
 
@@ -744,17 +757,222 @@ def connection_readback():
     return text
 
 
+# The base screens' words for the same steps, so a case written for these screens runs on the base build for its RED.
+BASE_WORDS = False
+BASE_TRANSLATION = (("setup_host_port ", "settext TextHost" + "Port "), ("combo_select ComboHostPlayers ", "settext TextHostPlayers "),
+                    ("activate ButtonJoinByAddress\nwait 4\n", ""), ("activate ButtonJoinAddressGo", "activate ButtonMultiplayer" + "Connect"),
+                    ("Players versus AI", "Co-op PvE"), ("Players versus players", "PvP"), ("more players to join", "players to join"),
+                    ("more player to join", "player to join"), ("wait_substate Lobby 30\n", ""),
+                    ("activate ButtonHostOptions\n", "hand_press ButtonHostOptions\nwait 2\nhand_release ButtonHostOptions\n"),
+                    ("activate TabHostPageTiming\n", "activate TabHostPageNetwork\nwait 3\nactivate TabHostNetTuning\n"))
+
+
+def in_base_words(text):
+    for new, old in BASE_TRANSLATION:
+        text = text.replace(new, old)
+    return text
+
+
+def host_lobby(port, players=2, mode=None):
+    """A host's way to an open lobby: Host a Game, the rows it changes, Create Lobby."""
+    text = LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\nassert_substate HostSetup\n" + f"setup_host_port {port}\n"
+    if players != 2:
+        text += f"combo_select ComboHostPlayers {players}\nwait 4\n"
+    if mode:
+        text += f"combo_select ComboHostMode {mode}\nwait 4\n"
+    return text + "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
+
+
+def join_by_address(port):
+    """A joiner's way in by the host's address: Join a Game, Join by address, the address and port, Join."""
+    return (LANDING + "activate ButtonMultiplayerJoinGame\nwait_ms 400\nassert_substate JoinSetup\n"
+            "activate ButtonJoinByAddress\nwait 4\n" + f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
+            "activate ButtonJoinAddressGo\nwait_connected 2 60\nwait_substate Lobby 30\nwait 5\n")
+
+
+def lobby_case(case, port, root):
+    """The lobby's Ready and Start as the user decided them, and its Escape, on real engines."""
+    marks = {name: probe_root(root, "host") / f"{name}.mark" for name in ("saw", "cancelled", "cleared", "readied", "host_saw_ready", "unreadied", "done")}
+    if case == "lobby-ready-all":
+        host = (host_lobby(port) + "wait_remote_ready 60\nwait 3\n"
+                "wait_label LabelMultiplayerStatus Everyone is ready - press Start Match\nassert_label ButtonMultiplayerStart Start Match\n"
+                "activate ButtonMultiplayerStart\nwait_state Running 20\nexit\n")
+        client = (join_by_address(port) + "activate ButtonMultiplayerReady\nwait 4\nassert_label ButtonMultiplayerReady Cancel Ready\n"
+                  "wait_label LabelMultiplayerStatus You're ready - waiting for the host\nwait_state Running 20\nexit\n")
+    elif case == "lobby-countdown":
+        # The joined player counts once the lobby names it as the one to press Ready; Start is live from then.
+        host = (host_lobby(port) + "wait_connected 2 60\nwait_label LabelMultiplayerStatus to press Ready - Start Match starts in 30 s\n"
+                "assert_enabled ButtonMultiplayerStart 1\n"
+                "activate ButtonMultiplayerStart\nwait_label LabelMultiplayerStatus Starting in\nassert_label ButtonMultiplayerStart Cancel Start\n"
+                f"wait_file {marks['saw']} 30\nactivate ButtonMultiplayerStart\nwait_label LabelMultiplayerStatus Start Match starts in 30 s\n"
+                f"assert_label ButtonMultiplayerStart Start Match\ntouch_file {marks['cancelled']}\nwait_file {marks['cleared']} 30\n"
+                "activate ButtonMultiplayerStart\nwait_label LabelMultiplayerStatus Starting in\nwait_state Running 50\nexit\n")
+        client = (join_by_address(port) + "wait_label LabelMultiplayerStatus The host is starting the match in\n"
+                  f"wait_label LabelMultiplayerStatus press Ready\ntouch_file {marks['saw']}\nwait_file {marks['cancelled']} 30\n"
+                  f"wait_label LabelMultiplayerStatus Press Ready when you're ready to play\ntouch_file {marks['cleared']}\n"
+                  "wait_label LabelMultiplayerStatus The host is starting the match in\nwait_state Running 50\nexit\n")
+    elif case == "lobby-last-ready":
+        # The last Ready ends the count: the round starts well before its thirty seconds.
+        host = (host_lobby(port) + "wait_connected 2 60\nwait_label LabelMultiplayerStatus to press Ready - Start Match starts in 30 s\n"
+                "activate ButtonMultiplayerStart\nwait_label LabelMultiplayerStatus Starting in\n"
+                "wait_state Running 20\nexit\n")
+        client = (join_by_address(port) + "wait_label LabelMultiplayerStatus The host is starting the match in\n"
+                  "activate ButtonMultiplayerReady\nwait_state Running 20\nexit\n")
+    elif case == "lobby-ready-back":
+        host = (host_lobby(port) + "wait_remote_ready 60\nwait_label LabelMultiplayerStatus Everyone is ready\n"
+                f"touch_file {marks['host_saw_ready']}\nwait_file {marks['unreadied']} 30\nwait_label LabelMultiplayerStatus to press Ready\n"
+                "activate ButtonMultiplayerStart\nwait_label LabelMultiplayerStatus Starting in\nwait_state Running 50\nexit\n")
+        client = (join_by_address(port) + "activate ButtonMultiplayerReady\nwait 4\nassert_label ButtonMultiplayerReady Cancel Ready\n"
+                  f"wait_file {marks['host_saw_ready']} 30\nactivate ButtonMultiplayerReady\nwait 4\nassert_label ButtonMultiplayerReady Ready\n"
+                  f"touch_file {marks['unreadied']}\nwait_label LabelMultiplayerStatus The host is starting the match in\nwait_state Running 50\nexit\n")
+    else:  # lobby-seat-missing
+        # A human seat nobody has joined keeps Start off, and the lobby says who is missing.
+        # A lobby with an empty seat is never all ready: the host learns of the joined player's Ready by its mark.
+        host = (host_lobby(port, players=3) + f"wait_connected 2 60\nwait_file {marks['readied']} 60\nwait 10\nassert_enabled ButtonMultiplayerStart 0\n"
+                f"wait_label LabelMultiplayerStatus Waiting for 1 more player to join\ntouch_file {marks['done']}\nexit\n")
+        client = join_by_address(port) + f"activate ButtonMultiplayerReady\nwait 4\ntouch_file {marks['readied']}\nwait_file {marks['done']} 60\nexit\n"
+    scripts = {"host": host, "client": client}
+    return ({who: in_base_words(text) for who, text in scripts.items()} if BASE_WORDS else scripts), {}
+
+
+
+def size_parts(size):
+    """A size's screen width and height and the window multiplier it is shown at: "960x540@2.6667" is a 960x540 screen in a 2560x1440 window."""
+    screen, _, multiplier = size.partition("@")
+    width, height = (int(part) for part in screen.split("x"))
+    return width, height, float(multiplier) if multiplier else 1.0
+
+
+def set_window_multiplier(run, multiplier):
+    """Shows the run's screen at the multiplier, the way a player's Settings.ini does."""
+    if multiplier == 1.0:
+        return
+    path = run.cwd / "Userdata/Settings.ini"
+    settings = path.read_text(encoding="utf-8")
+    settings, count = re.subn(r"(?m)^(\s*ResolutionMultiplier\s*=\s*)[^\r\n]*", lambda match: match[1] + f"{multiplier:.6f}", settings)
+    if count == 0:
+        settings = settings.replace("\tResolutionY", f"\tResolutionMultiplier = {multiplier:.6f}\n\tResolutionY", 1)
+    path.write_text(settings, encoding="utf-8")
+
+
+ESCAPE = "key Escape down\nwait 2\nkey Escape up\nwait 8\n"
+# Ways back for the buttons a sweep presses: one level back by Escape, to the screen the sweep stands on.
+SWEEP_MACROS = ("define back_landing\n" + ESCAPE + "assert_substate Landing\nend\n"
+                "define back_host\n" + ESCAPE + "assert_substate HostSetup\nend\n"
+                "define back_lobby\n" + ESCAPE + "assert_substate Lobby\nend\n"
+                "define back_join\n" + ESCAPE + "assert_substate JoinSetup\nend\n"
+                "define back_options\n" + ESCAPE + "assert_substate HostOptions\nend\n"
+                "define back_basics\nactivate TabNetPageBasics\nwait 4\nassert_settings_page Network:Basics\nend\n")
+OPTION_PAGES = (("TabHostPageSeats", "CollectionBoxHostPageSeats"), ("TabHostPageRules", "CollectionBoxHostPageRules"),
+                ("TabHostPageConnection", "CollectionBoxHostPageConnection"), ("TabHostPageTiming", "CollectionBoxHostPageTiming"),
+                ("TabHostPageRecovery", "CollectionBoxHostPageRecovery"), ("TabHostPageFiles", "CollectionBoxHostPageFiles"),
+                ("TabHostPageSession", "CollectionBoxHostPageSession"))
+FOOTER = "ButtonHostOptBack,ButtonHostOptApply,ButtonHostOptDefaults,ButtonHostOptRestore"
+
+
+def sweep_options(readonly=False, live=False):
+    """Advanced, page by page: the footer and the selector, then every page's own controls; a dialog a page opens is closed by Escape."""
+    own = FOOTER + (",ButtonHostSessEnd" if live and not readonly else "")
+    text = f"sweep MultiplayerHostOptionsPanel depth=1 label=advanced-frame own={own}\n" if not readonly else "sweep MultiplayerHostOptionsPanel depth=1 label=advanced-frame readonly own=ButtonHostOptBack\n"
+    for tab, page in OPTION_PAGES:
+        text += f"activate {tab}\nwait 4\nsweep {page} label={page} restore=back_options" + (" readonly" if readonly else "") + (" own=ButtonHostSessEnd" if live and not readonly and page.endswith("Session") else "") + "\n"
+    if not readonly:
+        # The seat dialog a Details button opens is a screen of its own.
+        text += "activate TabHostPageSeats\nwait 4\nactivate ButtonHostSeatDetails0\nwait 6\nsweep HostSeatDialog label=seat-dialog own=ButtonHostSeatDlgClose\nactivate ButtonHostSeatDlgClose\nwait 4\n"
+        text += "activate ButtonHostOptRestore\nwait 4\nactivate ButtonHostOptDefaults\nwait 4\nactivate ButtonHostOptApply\nwait 6\n"
+    return text
+
+
+def sweep_case(case, port, root):
+    """The sweep of one screen; the screen's own control list says what is visited."""
+    host_screen = LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\nassert_substate HostSetup\n" + f"setup_host_port {port}\n"
+    if case == "sweep-landing":
+        text = LANDING + SWEEP_MACROS + "sweep MultiplayerLandingPanel label=landing restore=back_landing\nexit\n"
+    elif case == "sweep-host":
+        text = (host_screen + SWEEP_MACROS + "sweep MultiplayerHostPanel label=host restore=back_host own=ButtonHostBack,ButtonMultiplayerCreate\n"
+                "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\nactivate ButtonMultiplayerLeave\nwait 8\nassert_substate Landing\n"
+                "activate ButtonMultiplayerHostGame\nwait 6\nactivate ButtonHostBack\nwait 6\nassert_substate Landing\nexit\n")
+    elif case == "sweep-join":
+        text = (LANDING + "activate ButtonMultiplayerJoinGame\nwait_ms 400\nassert_substate JoinSetup\n" + SWEEP_MACROS +
+                "sweep MultiplayerJoinPanel label=join restore=back_join own=ButtonJoinBack\n"
+                "activate ButtonJoinByAddress\nwait 4\nsweep JoinAddressDialog label=join-address own=ButtonJoinAddressCancel,ButtonJoinAddressGo\n"
+                "activate ButtonJoinAddressCancel\nwait 4\nactivate ButtonJoinByAddress\nwait 4\nactivate ButtonJoinAddressGo\nwait 6\n"
+                "wait_label LabelJoinSelected Enter the address the host gave you\nassert_substate JoinSetup\n"
+                "activate ButtonJoinBack\nwait 6\nassert_substate Landing\nexit\n")
+    elif case == "sweep-lobby":
+        text = (host_screen + SWEEP_MACROS + "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
+                "sweep MultiplayerLobbyPanel label=lobby restore=back_lobby quiet=TextLobbyChat own=ButtonMultiplayerLeave\n"
+                "activate ButtonMultiplayerLeave\nwait 8\nassert_substate Landing\nexit\n")
+    elif case == "sweep-advanced-setup":
+        text = (host_screen + SWEEP_MACROS + "activate ButtonHostOptions\nwait_ms 400\nassert_substate HostOptions\n" + sweep_options() +
+                "activate ButtonHostOptBack\nwait 6\nassert_substate HostSetup\nexit\n")
+    elif case == "sweep-advanced-lobby":
+        text = (host_screen + SWEEP_MACROS + "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
+                "activate ButtonLobbyOptions\nwait_ms 400\nassert_substate HostOptions\n" + sweep_options(live=True) +
+                "activate TabHostPageSession\nwait 4\nactivate ButtonHostSessEnd\nwait 8\nassert_substate Landing\nexit\n")
+    elif case == "sweep-advanced-client":
+        done = probe_root(root, "host") / "client-swept.mark"
+        host = (host_screen + "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\nwait_connected 2 60\n" + f"wait_file {done} 300\nexit\n")
+        client = (LANDING + "activate ButtonMultiplayerJoinGame\nwait_ms 400\nactivate ButtonJoinByAddress\nwait 4\n"
+                  f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\nactivate ButtonJoinAddressGo\nwait_connected 2 60\nwait_substate Lobby 30\nwait 5\n" + SWEEP_MACROS +
+                  "activate ButtonLobbyEditSetup\nwait_ms 400\nassert_substate HostOptions\n" + sweep_options(readonly=True) +
+                  f"activate ButtonHostOptBack\nwait 6\nassert_substate Lobby\ntouch_file {done}\nexit\n")
+        return {"host": host, "client": client}, {}
+    elif case == "sweep-settings-network":
+        pages = ("Player", "Chat", "Recovery", "Files", "Internet", "Connection")
+        text = (OPTIONS + SWEEP_MACROS + "select_settings_page Network\nwait 4\nassert_settings_page Network:Basics\n"
+                "sweep CollectionBoxNetPageBasics label=network-basics restore=back_basics\n")
+        # The boxes that take a key name or a digest are given one they take.
+        takes = {"Chat": " with=TextNetworkChatKey:Y", "Internet": " with=TextNetworkDirPin:" + "0123456789abcdef" * 4}
+        for page in pages:
+            text += (f"activate TabNetPage{page}\nwait 4\nsweep CollectionBoxNetPage{page} label=network-{page.lower()} restore=back_basics"
+                     f"{takes.get(page, '')}\nactivate TabNetPage{page}\nwait 4\n")
+        text += "activate TabNetPageBasics\nwait 4\nexit\n"
+    else:  # sweep-browsers
+        text = (LANDING + SWEEP_MACROS + "activate ButtonMultiplayerReplays\nwait 6\nsweep ReplayBrowserPanel label=replays own=ButtonReplayBack\n"
+                "activate ButtonReplayBack\nwait 6\nassert_substate Landing\nactivate ButtonMultiplayerResumeGame\nwait 6\n"
+                "sweep MultiplayerResumePanel label=saved-matches own=ButtonResumeBack\nactivate ButtonResumeBack\nwait 6\nassert_substate Landing\nexit\n")
+    return {"host": text}, {}
+
+
 def scripts(case, port, root, size="960x540"):
+    if case.startswith("sweep-"):
+        return sweep_case(case, port, root)
+    if case in ("lobby-ready-all", "lobby-countdown", "lobby-last-ready", "lobby-ready-back", "lobby-seat-missing"):
+        return lobby_case(case, port, root)
+    if case == "lobby-escape":
+        # Escape in an open lobby asks before it closes it; Stay keeps the lobby and its players.
+        text = (host_lobby(port) + "key Escape down\nwait 2\nkey Escape up\nwait 6\nassert_substate Lobby\nwait_state Starting 5\n"
+                "assert_visible LobbyLeaveDialog 1\nactivate ButtonLobbyLeaveStay\nwait 4\nassert_substate Lobby\nwait_state Starting 5\nexit\n")
+        return {"host": in_base_words(text) if BASE_WORDS else text}, {}
+    if case == "host-hand-open":
+        # Opened by a hand - its press, then its release frames later - Advanced shows the activity's own rules and the saved
+        # timing, never what its controls held before the panel showed the draft.
+        text = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\nassert_substate HostSetup\n"
+                "activate ButtonHostOptions\nwait 10\nassert_substate HostOptions\n"
+                "activate TabHostPageRules\nwait 3\nassert_checked CheckHostRulesFog 1\nassert_label LabelHostRulesGoldValue 2000 oz\n"
+                "activate TabHostPageTiming\nwait 3\nassert_label ComboHostNetRedundancy 6 ticks\nexit\n")
+        return {"host": in_base_words(text) if BASE_WORDS else text}, {}
+    if case == "host-one-draft":
+        # The rows, Advanced and the summary are one draft: rows changed after a visit to Advanced reach the lobby.
+        text = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\n" + f"setup_host_port {port}\n"
+                "activate ButtonHostOptions\nwait_ms 400\nassert_substate HostOptions\nactivate TabHostPageTiming\nwait 3\n"
+                "combo_select ComboHostNetRedundancy 7 ticks\nwait 4\nactivate ButtonHostOptApply\nwait 4\n"
+                "activate ButtonHostOptBack\nwait_ms 400\nassert_substate HostSetup\n"
+                "combo_select ComboHostPlayers 3\nwait 4\ncombo_select ComboHostMode Players versus AI\nwait 4\n"
+                "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
+                "wait_label LabelLobbyMatchMode Players versus AI\nwait_label LabelMultiplayerStatus Waiting for 2 more players to join\nexit\n")
+        return {"host": in_base_words(text) if BASE_WORDS else text}, {}
     if case == "local-end-match":
         host = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\n"
                 "combo_select ComboHostActivity P4 Alpha Duel - Base.rte\nwait_ms 400\n"
-                f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
+                f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait_connected 2 60\nwait_remote_ready 60\n"
                 # The Start button takes the remote ready on the menu's next update.
                 "wait 3\nactivate ButtonMultiplayerStart\n")
         client = (LANDING + "activate ButtonMultiplayerJoinGame\nwait_ms 400\n"
-                  f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
-                  "activate ButtonMultiplayerConnect\nwait_connected 2 60\nactivate ButtonMultiplayerReady\n")
+                  f"activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
+                  "activate ButtonJoinAddressGo\nwait_connected 2 60\nwait_substate Lobby 30\nactivate ButtonMultiplayerReady\n")
         probes = {}
         for who in ("host", "client"):
             steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "elapsed_ms": 2000}]
@@ -776,12 +994,15 @@ def scripts(case, port, root, size="960x540"):
         # Every kind of control on the host options, operated the way a hand does: a press and its release on different
         # frames with the panel's own per-frame refresh in between, and the value read back frames after.
         text = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\nactivate ButtonHostOptions\nwait_ms 400\n"
-                "assert_substate HostOptions\nactivate TabHostPageSeats\nwait 3\n"
-                + hand_pick("ComboHostSeatPlayers", "3") + hand_pick("ComboHostSeatPlayers", "4")
-                + "activate TabHostPageRules\nwait 3\n"
+                "assert_substate HostOptions\n"
                 # The draft starts from the activity's own rules: Skirmish Defense names no gold (2,000) and fog of war on.
+                "activate TabHostPageRules\nwait 3\nassert_label LabelHostRulesGoldValue 2000 oz\nassert_checked CheckHostRulesFog 1\n"
+                "activate TabHostPageSeats\nwait 3\n"
+                + hand_pick("ComboHostSeatPlayers", "3") + hand_pick("ComboHostSeatPlayers", "4")
+                # A new seat count keeps the rules.
+                + "activate TabHostPageRules\nwait 3\n"
                 + "assert_label LabelHostRulesGoldValue 2000 oz\nassert_checked CheckHostRulesFog 1\n"
-                + hand_pick("ComboHostRulesMode", "Co-op PvE")
+                + hand_pick("ComboHostRulesMode", "Players versus AI")
                 + hand_click("CheckHostRulesFog") + "assert_checked CheckHostRulesFog 0\n"
                 + hand_click("CheckHostRulesFog") + "assert_checked CheckHostRulesFog 1\n"
                 + hand_click("CheckHostRulesDeploy") + "assert_checked CheckHostRulesDeploy 1\n"
@@ -791,8 +1012,8 @@ def scripts(case, port, root, size="960x540"):
                 + "slider_set SliderHostRulesSkill 30\nwait 4\nassert_label LabelHostRulesSkillValue 30\n"
                 + hand_pick("ComboHostRulesTeam", "Team 2") + "assert_label LabelHostRulesSkillValue 50\n"
                 + hand_pick("ComboHostRulesTeam", "Team 1") + "assert_label LabelHostRulesSkillValue 30\n"
-                + "activate TabHostPageNetwork\nwait 3\nscreenshot hand_net_connection\nwait 2\n"
-                + "activate TabHostNetTuning\nwait 3\nscreenshot hand_net_delay\nwait 2\n"
+                + "activate TabHostPageConnection\nwait 3\nscreenshot hand_net_connection\nwait 2\n"
+                + "activate TabHostPageTiming\nwait 3\nscreenshot hand_net_delay\nwait 2\n"
                 + hand_pick("ComboHostNetRedundancy", "7 ticks")
                 + "activate TabHostPageRecovery\nwait 3\n"
                 + hand_click("CheckHostRecRepair") + "assert_checked CheckHostRecRepair 0\n"
@@ -820,9 +1041,8 @@ def scripts(case, port, root, size="960x540"):
         return {"host": text + "exit\n"}, {}
     if case == "prehost-visibility":
         text = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\n"
-                "activate ButtonHostOptions\nwait_ms 400\nactivate TabHostPageNetwork\n"
-                "activate TabHostNetTuning\nwait_ms 400\n")
-        for label in ("Internet: Unlisted", "Internet: Listed", "LAN only"):
+                "activate ButtonHostOptions\nwait_ms 400\nactivate TabHostPageConnection\nwait_ms 400\n")
+        for label in ("Unlisted", "Public (default)", "Local discovery"):
             text += f"combo_select ComboHostNetVisibility {label}\nwait_ms 500\nassert_label ComboHostNetVisibility {label}\n"
         return {"host": text + "exit\n"}, {}
     if case == "repair":
@@ -851,8 +1071,8 @@ def scripts(case, port, root, size="960x540"):
         text = world_open_seat_readback(port)
     elif case == "host-defaults":
         text = LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
-        text += (f"settext TextHostPort {port}\nactivate ButtonHostOptions\nwait 5\n"
-                 "activate TabHostPageNetwork\nwait 3\nactivate TabHostNetTuning\nwait 3\n"
+        text += (f"setup_host_port {port}\nactivate ButtonHostOptions\nwait 5\n"
+                 "activate TabHostPageConnection\nwait 3\nactivate TabHostPageTiming\nwait 3\n"
                  "assert_label ComboHostNetRedundancy 6 ticks\n"
                  "assert_label TextHostNetSlowBound 3\n"
                  "assert_label ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
@@ -860,47 +1080,44 @@ def scripts(case, port, root, size="960x540"):
                  "assert_combo_items ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
                  "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.\n"
                  "assert_text_fits LabelHostNetSlowPolicyHint\n"
-                 "activate ButtonHostOptApply\nwait 3\nassert_enabled ButtonHostOptApply 0\n"
+                 # Nothing drafted yet: Apply has nothing to commit.
+                 "assert_enabled ButtonHostOptApply 0\n"
                  "combo_select ComboHostNetRedundancy 7 ticks\nwait 3\n"
                  "set_text TextHostNetSlowBound 7\nwait 3\n"
                  "assert_enabled ButtonHostOptApply 1\nactivate ButtonHostOptApply\nwait 3\n"
                  "assert_enabled ButtonHostOptApply 0\ndump_host_options\n"
                  "activate ButtonHostOptBack\nwait 3\nactivate ButtonMultiplayerCreate\nwait 15\n"
-                 "activate ButtonLobbyOptions\nwait 3\nactivate TabHostPageNetwork\nwait 3\nactivate TabHostNetTuning\nwait 3\n"
+                 "activate ButtonLobbyOptions\nwait 3\nactivate TabHostPageConnection\nwait 3\nactivate TabHostPageTiming\nwait 3\n"
                  "assert_label ComboHostNetRedundancy 7 ticks\nassert_label TextHostNetSlowBound 7\n"
                  "assert_label LabelHostNetSlowPolicyHint A player late past 7 ticks (117 ms), host too, is held to the AI while others play on. Other policies return in a later version.\n"
                  "assert_combo_items ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
                  "assert_enabled TextHostNetSlowBound 1\nassert_text_fits LabelHostNetSlowPolicyHint\n"
                  "dump_host_options\nexit\n")
     elif case == "landing":
-        text = LANDING + "assert_label LabelMultiplayerNamePrompt Multiplayer name:\n"
+        text = LANDING + "assert_label LabelMultiplayerNamePrompt Your name\n"
         text += checks("ButtonMultiplayerHostGame", "MultiplayerLandingPanel")
         text += "assert_visible ButtonMultiplayerCreate 0\n"
-        for name in (*ORDER, ORDER[0]):
-            text += f"focus_next\nassert_focus {name}\n"
-        text += f"focus_previous\nassert_focus {ORDER[-1]}\ndump_host_options\n"
-        # A name past the wire's 64-byte cap would die silently in the hello encode, so the host
-        # button's create refuses it and the landing's status line says why.
-        text += ("settext TextMultiplayerName " + "N" * (DISPLAY_NAME_MAX_BYTES + 1) + "\n"
-                 "activate ButtonMultiplayerHostGame\nwait 5\nassert_substate HostSetup\n"
-                 "activate ButtonMultiplayerCreate\nwait 5\ndump_host_options\n"
-                 "assert_substate Landing\n"
-                 "assert_label LabelMultiplayerLandingStatus limited to 64 bytes\n"
-                 "exit\n")
+        text += "dump_host_options\n"
+        # A name past the wire's 64-byte cap would die in the hello encode. A hand never gets one into the
+        # box: it takes 24 printable characters, and a saved name over 64 bytes is refused when the
+        # settings load. The command line's over-cap name is refused on the console (checked below).
+        text += ("settext TextMultiplayerName " + "N" * (DISPLAY_NAME_MAX_BYTES + 1) + "\nwait 3\n"
+                 "assert_box_text TextMultiplayerName " + "N" * 24 + "\n"
+                 "dump_host_options\nexit\n")
     elif case == "net-resume":
         # The resume entry sits on the landing panel and opens a screen of its own. With no resumable
         # match on this private runtime the list is empty, the status says so in its own words and
         # Resume cannot be pressed - the state a player meets before any match has been checkpointed.
         text = LANDING + checks("ButtonMultiplayerResumeGame", "MultiplayerLandingPanel")
-        text += "assert_label ButtonMultiplayerResumeGame Resume Match\n"
+        text += "assert_label ButtonMultiplayerResumeGame Host Saved Match\n"
         text += "activate ButtonMultiplayerResumeGame\nwait 5\nassert_substate ResumeSetup\n"
         for name in RESUME_ROWS:
             text += checks(name, "MultiplayerResumePanel") if name != "ListResumeMatches" else \
                 (f"assert_visible {name} 1\nassert_rect_inside {name} MultiplayerResumePanel\n"
                  f"assert_rect_inside {name} viewport\n")
-        text += "assert_label LabelResumeTitle R E S U M E   M A T C H\n"
-        text += "assert_label LabelResumeSelected Select a match to restart it\n"
-        text += "assert_label LabelResumeStatus No match here can be restarted\n"
+        text += "assert_label LabelResumeTitle H O S T   S A V E D   M A T C H\n"
+        text += "assert_label LabelResumeSelected Pick a saved match to host it again.\n"
+        text += "assert_label LabelResumeStatus No saved matches found.\n"
         text += "assert_enabled ButtonResumeStart 0\n"
         text += "assert_enabled ButtonResumeBack 1\n"
         # The rejoin prompt is not an offer here: this runtime has no ticket, so it stays off the screen.
@@ -921,9 +1138,8 @@ def scripts(case, port, root, size="960x540"):
             text += f"assert_visible CollectionBox{page}Settings 1\n"
             text += checks(f"Tab{page}Settings", "CollectionBoxSettingsBase")
             if page == "Gameplay":
-                # Enter drops, Down moves, Enter commits: the same pad/keyboard path the host combos use.
-                text += ("focus ComboBrainlessHumansSpectate\n"
-                         "key_down Return\nwait 2\nkey_up Return\nwait 3\n"
+                # A click opens the list, Down moves, Enter commits: the keys a player uses in an open list.
+                text += ("combo_drop ComboBrainlessHumansSpectate\nwait 4\n"
                          "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
                          "key_down Return\nwait 2\nkey_up Return\nwait 3\n"
                          "assert_label ComboBrainlessHumansSpectate End the match\n")
@@ -933,27 +1149,35 @@ def scripts(case, port, root, size="960x540"):
         # The saved preferences reach the player page, an edit on the page reaches the settings, and the
         # lobby's own name box shows what the page saved. A page switch is a page leave: the typed
         # name commits when the selector moves to chat and back.
-        text = OPTIONS + "select_settings_page Network\nwait 3\nassert_settings_page Network\nassert_settings_page Network:Player\n"
+        text = OPTIONS + "select_settings_page Network\nwait 3\nassert_settings_page Network\nassert_settings_page Network:Basics\n"
         text += "assert_visible CollectionBoxNetworkSettings 1\n"
         text += checks("TabNetworkSettings", "CollectionBoxSettingsBase")
+        for control in BASICS_ROWS:
+            text += checks(control, "CollectionBoxNetPageBasics")
+        # The pages behind Advanced settings stay off the first view.
+        for tab in NETWORK_TABS:
+            text += f"assert_visible {tab} 0\n"
+        text += ("assert_label TextNetworkDisplayName " + NETWORK_SEED["NetworkDisplayName"] + "\n"
+                 "assert_label ComboMatchStatusWidget " + NETWORK_SEED["NetworkMatchStatusMode"] + "\n")
+        text += "dump_player_options\n"
+        text += "set_text TextNetworkDisplayName " + NETWORK_SAVED["NetworkDisplayName"] + "\n"
+        text += "activate ButtonNetworkAdvanced\nwait 4\nassert_settings_page Network:Player\n"
         for tab in NETWORK_TABS:
             text += checks(tab, "CollectionBoxNetworkSettings")
         for index, box in enumerate(NETWORK_BOXES):
             text += f"assert_visible {box} {1 if index == 0 else 0}\n"
         for control in NETWORK_ROWS:
             text += checks(control, NETWORK_PAGE_BOX)
-        text += ("assert_label TextNetworkDisplayName " + NETWORK_SEED["NetworkDisplayName"] + "\n"
-                 "assert_label TextNetworkIdleWait " + NETWORK_SEED["NetworkHostIdleWaitMinutes"] + "\n"
-                 "assert_label TextNetworkPathHorizon " + NETWORK_SEED["NetworkPathHorizonTicks"] + "\n"
-                 "assert_label ComboMatchStatusWidget " + NETWORK_SEED["NetworkMatchStatusMode"] + "\n")
+        text += ("assert_label TextNetworkIdleWait " + NETWORK_SEED["NetworkHostIdleWaitMinutes"] + "\n"
+                 "assert_label TextNetworkPathHorizon " + NETWORK_SEED["NetworkPathHorizonTicks"] + "\n")
         # The saved policy is automatic here, so the fixed-delay row is not on the page at all.
         for control in NETWORK_FIXED_ROWS:
             text += f"assert_visible {control} 0\n"
         text += "dump_player_options\n"
-        text += "set_text TextNetworkDisplayName " + NETWORK_SAVED["NetworkDisplayName"] + "\n"
-        text += "select_settings_page Network:Chat\nwait 3\nassert_settings_page Network:Chat\n"
-        text += "assert_visible CollectionBoxNetPagePlayer 0\nselect_settings_page Network:Player\nwait 3\n"
-        text += "assert_label TextNetworkDisplayName " + NETWORK_SAVED["NetworkDisplayName"] + "\n"
+        # A page switch is a page leave: the typed name committed when the selector moved, and the first view shows it.
+        text += "select_settings_page Network:Chat\nwait 3\nassert_settings_page Network:Chat\nassert_visible CollectionBoxNetPagePlayer 0\n"
+        text += "select_settings_page Network:Basics\nwait 3\nassert_label TextNetworkDisplayName " + NETWORK_SAVED["NetworkDisplayName"] + "\n"
+        text += "activate ButtonNetworkAdvanced\nwait 4\nselect_settings_page Network:Player\nwait 3\n"
         text += "post_command RadioNetworkDelayFixed\nwait 3\n"
         for control in NETWORK_FIXED_ROWS:
             text += checks(control, NETWORK_PAGE_BOX)
@@ -968,20 +1192,21 @@ def scripts(case, port, root, size="960x540"):
         text += checks("LabelMultiplayerNamePrompt", "MultiplayerLandingPanel")
         text += checks("TextMultiplayerName", "MultiplayerLandingPanel")
         text += "dump_host_options\n"
-        # The host screen names the saved policy beside its delay box; the page flipped it to Fixed
-        # with 7 frames, so the box pre-fills the override it would send.
+        # The host screen keeps the delay behind Advanced; the page flipped the policy to Fixed with 7 frames, so Advanced's
+        # Timing page proposes that policy and floor for the next lobby.
         text += ("activate ButtonMultiplayerHostGame\nwait 5\nassert_substate HostSetup\n"
-                 "assert_visible LabelHostInputDelayPolicy 1\ndump_host_options\n"
-                 "assert_label LabelHostInputDelayPolicy (fixed, 7)\n"
-                 "assert_label TextHostInputDelay 7\nassert_enabled TextHostInputDelay 1\n"
-                 + checks("LabelHostInputDelayPolicy", "MultiplayerHostPanel") +
-                 "post_command ButtonHostBack\nwait 4\nassert_substate Landing\ndump_host_options\nexit\n")
+                 "assert_visible LabelHostInputDelayPolicy 0\nassert_visible TextHostInputDelay 0\n"
+                 "activate ButtonHostOptions\nwait 5\nactivate TabHostPageTiming\nwait 3\n"
+                 "assert_label ComboHostNetPolicy Fixed\nassert_label TextHostNetMinDelay 7\nassert_enabled TextHostNetMinDelay 1\ndump_host_options\n"
+                 "activate ButtonHostOptBack\nwait 4\npost_command ButtonHostBack\nwait 4\nassert_substate Landing\ndump_host_options\nexit\n")
     elif case == "net-chat":
         # Every chat row is read where it is drawn; the muted-players button stays disabled with its
         # reason until a muted-players store exists.
-        text = OPTIONS + net_page("Chat")
-        for control in ("CheckboxNetworkChatVisible", "CheckboxNetworkChatSound", "LabelNetworkChatScope",
-                        "ComboNetworkChatScope", "CheckboxNetworkChatNotify", "LabelNetworkChatTextSize",
+        text = OPTIONS + net_page("Basics")
+        for control in ("CheckboxNetworkChatVisible", "CheckboxNetworkChatNotify"):
+            text += checks(control, "CollectionBoxNetPageBasics")
+        text += net_page("Chat")
+        for control in ("CheckboxNetworkChatSound", "LabelNetworkChatScope", "ComboNetworkChatScope", "LabelNetworkChatTextSize",
                         "ComboNetworkChatTextSize", "LabelNetworkChatKey", "TextNetworkChatKey",
                         "ButtonNetMutedPlayers", "LabelNetMutedReason"):
             text += checks(control, "CollectionBoxNetPageChat")
@@ -990,6 +1215,7 @@ def scripts(case, port, root, size="960x540"):
                  "assert_label ComboNetworkChatScope " + CHAT_SEED["NetworkChatDefaultScope"] + "\n"
                  "assert_label ComboNetworkChatTextSize " + CHAT_SEED["NetworkChatTextSize"] + "\n"
                  "dump_player_options\n"
+                 + net_page("Basics") +
                  "post_command CheckboxNetworkChatVisible\npost_command CheckboxNetworkChatNotify\nwait 3\n"
                  "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n")
     elif case == "net-recovery":
@@ -1076,27 +1302,28 @@ def scripts(case, port, root, size="960x540"):
         text = LANDING + "assert_label TextMultiplayerName " + NETWORK_SEED["NetworkDisplayName"] + "\n"
         text += ("dump_host_options\nsettext TextMultiplayerName Recon7\n"
                  "activate ButtonMultiplayerHostGame\nwait 5\n"
-                 "assert_visible LabelHostInputDelayPolicy 1\nassert_label LabelHostInputDelayPolicy (auto)\n"
+                 "assert_visible LabelHostInputDelayPolicy 0\nassert_visible TextHostInputDelay 0\nassert_visible TextHostPort 0\n"
                  "dump_host_options\n"
-                 # The seeded policy is automatic: the box reads the policy, not a stale frame count.
-                 "assert_label TextHostInputDelay auto\nassert_enabled TextHostInputDelay 0\n"
-                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
+                 # The seeded policy is automatic and Advanced's Timing page says so; autosave is off, so its interval box is off.
+                 "activate ButtonHostOptions\nwait 5\nactivate TabHostPageTiming\nwait 3\nassert_label ComboHostNetPolicy Automatic\ndump_host_options\n"
+                 "activate TabHostPageRecovery\nwait 3\nassert_enabled TextHostRecAutosaveInterval 0\ndump_host_options\n"
+                 "activate ButtonHostOptBack\nwait 4\nassert_substate HostSetup\n"
+                 f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
                  "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
-                 "dump_host_options\n"
-                 f"set_share_address {WIDE_SHARE_HOST}\nwait 5\n"
+                 "assert_text_fits LabelLobbyPortMap\n"
                  "dump_host_options\nexit\n")
     elif case in ("net-host-left", "net-host-left-early"):
         done = probe_root(root, "host") / "done.json"
         client_frame = probe_root(root, "client") / "client_frame.json"
         host = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
                 "combo_select ComboHostActivity P4 Alpha Duel - Base.rte\nwait 5\n"
-                f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
+                f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait_connected 2 60\nwait_remote_ready 60\n"
                 # The Start button takes the remote ready on the menu's next update.
                 "wait 3\nactivate ButtonMultiplayerStart\n")
         client = (LANDING + "activate ButtonMultiplayerJoinGame\nwait 5\n"
-                  f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
-                  "activate ButtonMultiplayerConnect\nwait_connected 2 60\nwait 5\n"
+                  f"activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
+                  "activate ButtonJoinAddressGo\nwait_connected 2 60\nwait_substate Lobby 30\nwait 5\n"
                   "activate ButtonMultiplayerReady\n")
         if case == "net-host-left":
             host += f"wait_file {done} 90\nwait_ms 500\ndump_lobby\ndump_host_options\nexit\n"
@@ -1120,8 +1347,8 @@ def scripts(case, port, root, size="960x540"):
                        "wait_error The host left the match\nwait_state Failed 30\n"
                        "dump_lobby\ndump_reconnect\ndump_host_options\nexit\n")
         leave = [{"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
-                 {"op": "wait", "screen": "Pause"}, menu_step("activate ButtonLeaveMatch"),
-                 {"op": "wait", "screen": "PauseLeaveConfirm"}, menu_step("activate ButtonLeaveConfirm"),
+                 {"op": "wait", "screen": "Pause"}, {"op": "wait", "renders": 2}, menu_step("activate ButtonLeaveMatch"),
+                 {"op": "wait", "screen": "PauseLeaveConfirm"}, {"op": "wait", "renders": 2}, menu_step("activate ButtonLeaveConfirm"),
                  {"op": "wait", "scope": "menu", "elapsed_ms": 500},
                  {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]
         if case == "net-host-left":
@@ -1167,51 +1394,50 @@ def scripts(case, port, root, size="960x540"):
                 "assert_visible LabelHostScene 1\nassert_label LabelHostScene Scene\n"
                 "assert_visible ComboHostScene 1\n"
                 "assert_text_fits ComboHostScene\n"
-                "assert_visible ComboHostMode 1\nassert_label ComboHostMode PvP\n"
-                "assert_label LabelHostInfo Grasslands - PvP\n"
+                "assert_visible ComboHostMode 1\nassert_label ComboHostMode Players versus players\n"
+                "assert_label LabelHostInfo Grasslands - 2 players on separate teams\n"
                 "combo_select ComboHostActivity Persistent World - Base.rte\nwait 3\n"
-                "focus ComboHostActivity\n"
-                "key_down Return\nwait 2\nkey_up Return\nwait 3\ndump_host_options\n"
+                # A hand opens the list; the arrow keys and Return pick in it.
+                "combo_drop ComboHostActivity\nwait 3\ndump_host_options\n"
                 "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
                 "key_down Return\nwait 2\nkey_up Return\nwait 3\n"
                 "assert_label ComboHostActivity Brain vs Brain - Base.rte\ndump_host_options\n"
-                "focus ComboHostScene\n"
-                "key_down Return\nwait 2\nkey_up Return\nwait 3\ndump_host_options\n"
+                "combo_drop ComboHostScene\nwait 3\ndump_host_options\n"
                 "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
                 "key_down Return\nwait 2\nkey_up Return\nwait 3\n"
                 "assert_label ComboHostScene Fredeleig Bunkers\ndump_host_options\n"
                 # combo_drop is the same panel-level click a user makes; the dumped capture shows the
                 # list open. combo_select picks the row by its text the way a click on it would.
                 "combo_drop ComboHostMode\nwait 3\ndump_host_options\n"
-                "combo_select ComboHostMode Co-op PvE\nwait 3\n"
-                "assert_label ComboHostMode Co-op PvE\n"
-                "assert_label LabelHostInfo Fredeleig Bunkers - Co-op PvE\ndump_host_options\n"
-                f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
+                "combo_select ComboHostMode Players versus AI\nwait 3\n"
+                "assert_label ComboHostMode Players versus AI\n"
+                "assert_label LabelHostInfo Fredeleig Bunkers - 2 players together against an AI team\ndump_host_options\n"
+                f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
                 "wait_label LabelLobbyPlayer1 Joiner\n"
                 f"wait_file {(root / 'client/runtime/ScreenShots/dump_host_options_0.json').as_posix()} 60\n"
                 "assert_label LabelLobbyMatch Brain vs Brain - Base.rte\n"
-                "assert_label LabelLobbyMatchMode Fredeleig Bunkers - Co-op PvE\n"
+                "assert_label LabelLobbyMatchMode Fredeleig Bunkers - Players versus AI\n"
                 "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
                 "assert_text_fits LabelLobbyPlayersHeader\n"
                 "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
                 # The host's options panel edits the adopted config; its Rules page carries the
                 # picked activity/mode and the L33 row the ledger names.
                 "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
-                "assert_label LabelHostOptionsTitle H O S T   O P T I O N S\n"
+                "assert_label LabelHostOptionsTitle A D V A N C E D\nactivate TabHostPageSeats\nwait 3\n"
                 # H09/H10: the host's own seat is never kickable, whoever else is in the lobby.
                 "activate ButtonHostSeatDetails0\nwait 3\nassert_visible HostSeatDialog 1\n"
                 "assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
                 "assert_label LabelHostSeatDlgActionHint The host's own seat is never kicked or banned.\n"
                 "activate ButtonHostSeatDlgClose\nwait 3\nassert_visible HostSeatDialog 0\n"
-                # H34 on the two-peer fixture: the adopted config names both seated humans, the
-                # lobby sits LAN only, and the bound port refuses the edit mid-session.
-                "activate TabHostPageNetwork\nwait 3\nactivate TabHostNetTuning\nwait 3\nassert_visible CollectionBoxHostPageNetwork 1\n"
+                # H34 on the two-peer fixture: the adopted config names both seated humans, the lobby is kept to
+                # this network, and Apply refuses a port edit mid-session.
+                "activate TabHostPageTiming\nwait 3\nassert_visible CollectionBoxHostPageTiming 1\n"
                 "assert_label LabelHostNetMode Host mode: Playing - capacity 2 - humans seated 2\n"
-                "assert_label ComboHostNetVisibility LAN only\n"
-                "set_text TextHostNetPort 40000\nwait 3\n"
-                "assert_label LabelHostOptStatus End the session to change the port\n"
-                f"assert_label TextHostNetPort {port}\n"
+                "activate TabHostPageConnection\nwait 3\nassert_label ComboHostNetVisibility Local discovery\n"
+                "set_text TextHostNetPort 40000\nwait 3\nactivate ButtonHostOptApply\nwait 3\n"
+                "assert_label LabelHostOptStatus Close this lobby to change the game port\n"
+                f"set_text TextHostNetPort {port}\nwait 3\nassert_label TextHostNetPort {port}\n"
                 # H25: a hosted lobby is still Starting, so even on a connected session the repair
                 # button stays off with the live-session reason until a match is Running.
                 "activate TabHostPageRecovery\nwait 3\nassert_visible CollectionBoxHostPageRecovery 1\n"
@@ -1222,7 +1448,7 @@ def scripts(case, port, root, size="960x540"):
                 "assert_label ComboHostRulesBrainless Keep playing, humans spectate\n"
                 "assert_enabled ComboHostRulesBrainless 1\n"
                 "assert_label ComboHostRulesActivity Brain vs Brain - Base.rte\n"
-                "assert_label ComboHostRulesMode Co-op PvE\n"
+                "assert_label ComboHostRulesMode Players versus AI\n"
                 "dump_host_options\n"
                 # The live republish: the host's Apply moves every peer's adopted config to the
                 # next revision. The status line reads the acknowledge, then the client's Details
@@ -1278,14 +1504,14 @@ def scripts(case, port, root, size="960x540"):
                 "dump_lobby\nwait 600\nexit\n")
         client = (LANDING + "settext TextMultiplayerName Joiner\n"
                   "activate ButtonMultiplayerJoinGame\nwait 10\n"
-                  "settext TextJoinAddress 127.0.0.1\n"
+                  "activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
                   f"settext TextJoinPort {port}\n"
                   f"wait_file {(probe_root(root, 'host') / 'hosting.json').as_posix()} 60\n"
-                  "activate ButtonMultiplayerConnect\n"
+                  "activate ButtonJoinAddressGo\n"
                   "wait_label LabelLobbyPlayer1 Joiner\nwait_activity Brain vs Brain\nwait 12\n"
                   "assert_substate Lobby\n"
                   "assert_label LabelLobbyMatch Brain vs Brain - Base.rte\n"
-                  "assert_label LabelLobbyMatchMode Fredeleig Bunkers - Co-op PvE\n"
+                  "assert_label LabelLobbyMatchMode Fredeleig Bunkers - Players versus AI\n"
                   "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
                   "assert_text_fits LabelLobbyPlayersHeader\n"
                   "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
@@ -1300,7 +1526,7 @@ def scripts(case, port, root, size="960x540"):
                   "assert_enabled ComboHostRulesBrainless 0\n"
                   "assert_enabled ComboHostRulesActivity 0\n"
                   "assert_label ComboHostRulesActivity Brain vs Brain - Base.rte\n"
-                  "assert_label ComboHostRulesMode Co-op PvE\n"
+                  "assert_label ComboHostRulesMode Players versus AI\n"
                   "assert_enabled ButtonHostOptApply 0\n"
                   "dump_host_options\n"
                   "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
@@ -1330,9 +1556,9 @@ def scripts(case, port, root, size="960x540"):
                   f"wait_file {(root / 'host/runtime/ScreenShots/dump_host_options_11.json').as_posix()} 60\n"
                   # A kick is not a ban: the same identity joins again and lands back in the lobby.
                   "activate ButtonMultiplayerJoinGame\nwait 5\n"
-                  "settext TextJoinAddress 127.0.0.1\n"
+                  "activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
                   f"settext TextJoinPort {port}\n"
-                  "activate ButtonMultiplayerConnect\n"
+                  "activate ButtonJoinAddressGo\n"
                   "wait_connected 3 60\n"
                   "assert_substate Lobby\n"
                   "assert_label LabelLobbyPlayer1 Joiner\n"
@@ -1343,9 +1569,9 @@ def scripts(case, port, root, size="960x540"):
                   "assert_status The host banned you from this session\n"
                   "assert_substate Landing\n"
                   "activate ButtonMultiplayerJoinGame\nwait 5\n"
-                  "settext TextJoinAddress 127.0.0.1\n"
+                  "activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
                   f"settext TextJoinPort {port}\n"
-                  "activate ButtonMultiplayerConnect\n"
+                  "activate ButtonJoinAddressGo\n"
                   "wait_state Failed 60\n"
                   "assert_status The host banned you from this session\n"
                   # No trailing dump: a refused peer's lobby view is its own local default config,
@@ -1381,10 +1607,9 @@ def scripts(case, port, root, size="960x540"):
         # The host starts the match, so its lobby hides the ready button the joining peers get.
         text = host_lobby(port) + "assert_visible ButtonMultiplayerReady 0\n"
         text += checks("ButtonMultiplayerLeave", "MultiplayerLobbyPanel")
-        # The Seats row is the host's own disabled control: it must read disabled and sit in the
-        # panel. The dump lands before the header and readiness asserts so the capture exists either way.
-        text += checks("ButtonMultiplayerModerate", "MultiplayerLobbyPanel")
-        text += "assert_enabled ButtonMultiplayerModerate 0\n"
+        # Players (the moderation panel) is a match feature: the lobby before a match does not show it. The dump lands
+        # before the header and readiness asserts so the capture exists either way.
+        text += "assert_visible ButtonMultiplayerModerate 0\n"
         text += "dump_host_options\n"
         text += checks("LabelLobbyPlayersHeader", "MultiplayerLobbyPanel")
         # The lobby shows the main menu's version line inside its panel, under the chat entry.
@@ -1394,12 +1619,13 @@ def scripts(case, port, root, size="960x540"):
         # H01-H35: the six host-options pages behind the lobby's Options button. Each tab shows its
         # own collection box, every visited control answers the fit checks, and the dump rows land
         # on each page so the capture names the page's whole surface at this size.
-        text += "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
-        text += "assert_visible MultiplayerHostOptionsPanel 1\n"
-        text += "assert_label LabelHostOptionsTitle H O S T   O P T I O N S\n"
+        text += "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\nassert_visible CollectionBoxHostPageConnection 1\n"
+        text += "activate TabHostPageSeats\nwait 3\nassert_visible MultiplayerHostOptionsPanel 1\n"
+        text += "assert_label LabelHostOptionsTitle A D V A N C E D\n"
         text += checks("TabHostPageSeats", "MultiplayerHostOptionsPanel")
         text += checks("TabHostPageRules", "MultiplayerHostOptionsPanel")
-        text += checks("TabHostPageNetwork", "MultiplayerHostOptionsPanel")
+        text += checks("TabHostPageConnection", "MultiplayerHostOptionsPanel")
+        text += checks("TabHostPageTiming", "MultiplayerHostOptionsPanel")
         text += checks("TabHostPageRecovery", "MultiplayerHostOptionsPanel")
         text += checks("TabHostPageFiles", "MultiplayerHostOptionsPanel")
         text += checks("TabHostPageSession", "MultiplayerHostOptionsPanel")
@@ -1418,16 +1644,13 @@ def scripts(case, port, root, size="960x540"):
         text += checks("ComboHostSeatType1", "CollectionBoxHostPageSeats")
         text += checks("ComboHostSeatType2", "CollectionBoxHostPageSeats")
         text += "assert_visible ComboHostSeatType6 0\n"
-        # A seated human's kind never moves: the host's own row is locked, and the open row's edit
-        # is refused with the reason in the status line instead of silently dropping the seat.
+        # A seated human's kind never moves, and an open lobby's human seat stays its peer's: the host's
+        # own row and the joined player's row offer no other kind, so a hand cannot open them.
         text += "assert_enabled ComboHostSeatType0 0\n"
-        # The open seat's member row lands when the roster publishes: until then the row refuses
-        # with the not-yet-seated reason, so the select waits on the roster, not a wall clock.
-        text += ("wait_members 2\ncombo_select ComboHostSeatType1 CPU\nwait 3\n"
-                 "assert_label LabelHostOptStatus A seated player is never dropped by an options edit\n")
-        # H03: a two-peer lobby has no free peer id, so the closed tail refuses a human seat with
-        # the reason in the status line, then accepts the peerless CPU seat the same row offers.
-        text += ("combo_select ComboHostSeatType2 Open\nwait 3\n"
+        text += "wait_members 2\nwait 3\nassert_enabled ComboHostSeatType1 0\n"
+        # H03: a two-peer lobby has no free peer id, so the closed tail turns a hand's human seat down
+        # with the reason in the status line, then accepts the peerless CPU seat the same row offers.
+        text += ("combo_refused ComboHostSeatType2 Open\nwait 3\n"
                  "assert_label LabelHostOptStatus No free peer seat\n")
         text += ("combo_select ComboHostSeatType2 CPU\nwait 3\n"
                  "assert_label LabelHostOptStatus Unsaved changes\n"
@@ -1439,7 +1662,7 @@ def scripts(case, port, root, size="960x540"):
         text += ("activate ButtonHostSeatDetails0\nwait 3\nassert_visible HostSeatDialog 1\n")
         for control in ("LabelHostSeatDlgName", "LabelHostSeatDlgSeat", "LabelHostSeatDlgTeam",
                         "LabelHostSeatDlgState", "LabelHostSeatDlgReclaim", "LabelHostSeatDlgApplicants",
-                        "ButtonHostSeatDlgApplicant", "ButtonHostSeatDlgWait", "ButtonHostSeatDlgApprove",
+                        "ListHostSeatDlgApplicants", "ButtonHostSeatDlgWait", "ButtonHostSeatDlgApprove",
                         "ButtonHostSeatDlgCancel", "ButtonHostSeatDlgKick", "ButtonHostSeatDlgBan",
                         "LabelHostSeatDlgActionHint", "LabelHostSeatDlgStatus", "ButtonHostSeatDlgClose"):
             text += checks(control, "HostSeatDialog")
@@ -1449,7 +1672,7 @@ def scripts(case, port, root, size="960x540"):
                  "assert_visible HostSeatDialog 0\n")
         # H07-H20 Rules: the L33 row keeps the ledger's exact label and pair of answers.
         text += "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
-        text += "assert_label LabelHostOptionsTitle M A T C H   R U L E S\n"
+        text += "assert_label LabelHostOptionsTitle A D V A N C E D\n"
         text += checks("ComboHostRulesActivity", "CollectionBoxHostPageRules")
         text += checks("ComboHostRulesScene", "CollectionBoxHostPageRules")
         text += checks("ComboHostRulesMode", "CollectionBoxHostPageRules")
@@ -1464,49 +1687,51 @@ def scripts(case, port, root, size="960x540"):
         text += checks("ComboHostRulesBrainless", "CollectionBoxHostPageRules")
         text += "assert_no_overlap_within CollectionBoxHostPageRules\n"
         text += "dump_host_options\n"
-        # H21-H24 Network.
-        text += "activate TabHostPageNetwork\nwait 3\nactivate TabHostNetTuning\nwait 3\nassert_visible CollectionBoxHostPageNetwork 1\n"
-        text += "assert_label LabelHostOptionsTitle N E T W O R K   O P T I O N S\n"
-        text += checks("ComboHostNetPolicy", "CollectionBoxHostPageNetwork")
-        text += checks("LabelHostNetRedundancy", "CollectionBoxHostPageNetwork")
-        text += checks("ComboHostNetRedundancy", "CollectionBoxHostPageNetwork")
-        text += "assert_label ComboHostNetRedundancy 6 ticks\n"
-        text += checks("TextHostNetMinDelay", "CollectionBoxHostPageNetwork")
+        # H21-H24 Timing: the delay policy and its numbers, the redundancy, the slow-player bound and policy.
+        text += "activate TabHostPageTiming\nwait 3\nassert_visible CollectionBoxHostPageTiming 1\n"
+        text += "assert_label LabelHostOptionsTitle A D V A N C E D\n"
+        text += checks("ComboHostNetPolicy", "CollectionBoxHostPageTiming")
+        text += checks("LabelHostNetRedundancy", "CollectionBoxHostPageTiming")
+        text += checks("ComboHostNetRedundancy", "CollectionBoxHostPageTiming")
+        text += "assert_label ComboHostNetRedundancy 6 ticks (default)\n"
+        text += checks("TextHostNetMinDelay", "CollectionBoxHostPageTiming")
         for control in ("LabelHostNetSlowBound", "TextHostNetSlowBound", "LabelHostNetSlowBoundHint", "LabelHostNetSlowPolicy", "ComboHostNetSlowPolicy",
                         "LabelHostNetSlowPolicyHint"):
-            text += checks(control, "CollectionBoxHostPageNetwork")
+            text += checks(control, "CollectionBoxHostPageTiming")
         text += "assert_label TextHostNetSlowBound 3\n"
         text += "assert_label ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
         text += "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.\n"
         text += "assert_label LabelHostNetEffective Effective delay: ping plus a 3-tick margin, raised live if inputs arrive late, at least\n"
-        text += checks("LabelHostNetEffective", "CollectionBoxHostPageNetwork")
-        text += checks("ButtonHostNetRecalc", "CollectionBoxHostPageNetwork")
-        # H34: the host row names mode/capacity/seated humans off the adopted config; the three
-        # visibility states are explicit and a LAN lobby sits on LAN only.
-        text += checks("LabelHostNetMode", "CollectionBoxHostPageNetwork")
+        text += checks("LabelHostNetEffective", "CollectionBoxHostPageTiming")
+        text += checks("ButtonHostNetRecalc", "CollectionBoxHostPageTiming")
+        # H34: the host row names mode/capacity/seated humans off the adopted config.
+        text += checks("LabelHostNetMode", "CollectionBoxHostPageTiming")
         text += "assert_label LabelHostNetMode Host mode: Playing - capacity 2 - humans seated 1\n"
-        text += checks("ComboHostNetVisibility", "CollectionBoxHostPageNetwork")
-        text += "assert_label ComboHostNetVisibility LAN only\n"
-        text += checks("TextHostNetPort", "CollectionBoxHostPageNetwork")
+        text += "assert_no_overlap_within CollectionBoxHostPageTiming\n"
+        text += "dump_host_options\n"
+        # Connection: the listing in its honest names and the port, this computer's choices that commit with Apply.
+        text += "activate TabHostPageConnection\nwait 3\nassert_visible CollectionBoxHostPageConnection 1\n"
+        text += checks("ComboHostNetVisibility", "CollectionBoxHostPageConnection")
+        text += "assert_label ComboHostNetVisibility Local discovery\n"
+        text += checks("TextHostNetPort", "CollectionBoxHostPageConnection")
         text += f"assert_label TextHostNetPort {port}\n"
-        # An Internet pick needs a configured directory URL the fixture lacks: it refuses with the
-        # reason and the combo snaps back to the live state.
-        text += ("combo_select ComboHostNetVisibility Internet: Listed\nwait 3\n"
-                 "assert_label LabelHostOptStatus Internet needs a session directory URL\n"
-                 "assert_label ComboHostNetVisibility LAN only\n"
-                 "combo_select ComboHostNetVisibility Internet: Unlisted\nwait 3\n"
-                 "assert_label LabelHostOptStatus Internet needs a session directory URL\n"
-                 "assert_label ComboHostNetVisibility LAN only\n")
-        # A hosted session owns its bound port: the edit refuses, names the end-session path, and
-        # the field resets to the live value.
-        text += (f"set_text TextHostNetPort 40000\nwait 3\n"
-                 "assert_label LabelHostOptStatus End the session to change the port\n"
-                 f"assert_label TextHostNetPort {port}\n")
-        text += "assert_no_overlap_within CollectionBoxHostPageNetwork\n"
+        # An online listing needs the game list service this fixture lacks: Apply refuses it with the reason and the page keeps
+        # the pick to change or cancel.
+        text += ("combo_select ComboHostNetVisibility Public (default)\nwait 3\nactivate ButtonHostOptApply\nwait 3\n"
+                 "assert_label LabelHostOptStatus An online listing needs the online game list service\n"
+                 "assert_label ComboHostNetVisibility Public (default)\n"
+                 "combo_select ComboHostNetVisibility Unlisted\nwait 3\nactivate ButtonHostOptApply\nwait 3\n"
+                 "assert_label LabelHostOptStatus An online listing needs the online game list service\n"
+                 "combo_select ComboHostNetVisibility Local discovery\nwait 3\nassert_label ComboHostNetVisibility Local discovery\n")
+        # A hosted lobby owns its bound port: Apply refuses the edit and names the way to change it.
+        text += ("set_text TextHostNetPort 40000\nwait 3\nactivate ButtonHostOptApply\nwait 3\n"
+                 "assert_label LabelHostOptStatus Close this lobby to change the game port\n"
+                 f"set_text TextHostNetPort {port}\nwait 3\nassert_label TextHostNetPort {port}\n")
+        text += "assert_no_overlap_within CollectionBoxHostPageConnection\n"
         text += "dump_host_options\n"
         # H25-H28 Recovery.
         text += "activate TabHostPageRecovery\nwait 3\nassert_visible CollectionBoxHostPageRecovery 1\n"
-        text += "assert_label LabelHostOptionsTitle M A T C H   R E C O V E R Y\n"
+        text += "assert_label LabelHostOptionsTitle A D V A N C E D\n"
         text += checks("CheckHostRecRepair", "CollectionBoxHostPageRecovery")
         text += checks("CheckHostRecAutosave", "CollectionBoxHostPageRecovery")
         text += checks("LabelHostRecAutosaveHint", "CollectionBoxHostPageRecovery")
@@ -1581,19 +1806,19 @@ def scripts(case, port, root, size="960x540"):
         text += "dump_host_options\n"
         # H29-H31 Files and status.
         text += "activate TabHostPageFiles\nwait 3\nassert_visible CollectionBoxHostPageFiles 1\n"
-        text += "assert_label LabelHostOptionsTitle F I L E S   A N D   S T A T U S\n"
+        text += "assert_label LabelHostOptionsTitle A D V A N C E D\n"
         text += checks("ButtonHostFilesSaveDiag", "CollectionBoxHostPageFiles")
         text += checks("ComboHostFilesWidget", "CollectionBoxHostPageFiles")
         text += "assert_no_overlap_within CollectionBoxHostPageFiles\n"
         text += "dump_host_options\n"
         # H32-H35 Session.
         text += "activate TabHostPageSession\nwait 3\nassert_visible CollectionBoxHostPageSession 1\n"
-        text += "assert_label LabelHostOptionsTitle S E S S I O N\n"
+        text += "assert_label LabelHostOptionsTitle A D V A N C E D\n"
         text += checks("LabelHostSessHosting", "CollectionBoxHostPageSession")
         text += checks("ComboHostSessIdle", "CollectionBoxHostPageSession")
         text += ("combo_select ComboHostSessIdle 5 minutes\nwait_ms 500\n"
                  "assert_label ComboHostSessIdle 5 minutes\n"
-                 "combo_select ComboHostSessIdle 10 minutes\nwait_ms 500\n"
+                 "combo_select ComboHostSessIdle 10 minutes (default)\nwait_ms 500\n"
                  "assert_label ComboHostSessIdle 10 minutes\n")
         text += checks("LabelHostSessIdleState", "CollectionBoxHostPageSession")
         text += checks("LabelHostSessBanned", "CollectionBoxHostPageSession")
@@ -1624,12 +1849,12 @@ def scripts(case, port, root, size="960x540"):
         text += "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\nexit\n"
     elif case == "input":
         text = (RESET_INPUT + "activate ButtonMainToMultiplayer\nwait 5\n"
-                "assert_visible TextMultiplayerName 1\nfocus_next\nassert_focus TextMultiplayerName\n"
+                "assert_visible TextMultiplayerName 1\nfocus TextMultiplayerName\nassert_focus TextMultiplayerName\n"
                 "settext TextMultiplayerName abc\nkey End down\nkey End up\nkey Backspace down\n"
                 "key Backspace up\nassert_label TextMultiplayerName ab\ndump_player_options\n"
-                "focus_next\nassert_focus ButtonMultiplayerHostGame\nkey KP1 down\nkey KP1 up\nwait 3\n"
+                "focus ButtonMultiplayerHostGame\nkey KP1 down\nkey KP1 up\nwait 3\n"
                 "assert_substate HostSetup\nactivate ButtonHostBack\nwait 4\n"
-                "focus_previous\nassert_focus TextMultiplayerName\nfocus_next\n"
+                "focus ButtonMultiplayerHostGame\n"
                 "pad south down\npad south up\nwait 3\nassert_substate HostSetup\n"
                 "dump_host_options\nexit\n")
     elif case in ("live", "disabled", "scope-off", "input-parity"):
@@ -1638,7 +1863,7 @@ def scripts(case, port, root, size="960x540"):
                 else RESET_INPUT + LANDING if case == "input-parity" else LANDING)
         text += "assert_visible root 1\n"
         if case in ("scope-off", "input-parity"):
-            text += "focus_next\nassert_focus TextMultiplayerName\n"
+            text += "focus TextMultiplayerName\nassert_focus TextMultiplayerName\n"
         text += f"wait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n"
         steps = (([{"op": "wait", "sim_at_least": 150},
                   # The host's own sim count says nothing about the client's start: the first checks
@@ -1700,11 +1925,9 @@ def scripts(case, port, root, size="960x540"):
                                   if route == "mouse" else [menu_step(f"{route} {'KP1' if route == 'key' else 'south'} {edge}")])
                         if edge == "down":
                             steps += [menu_step("assert_focus ButtonMultiplayerHostGame")]
-                steps += [menu_step("assert_visible TextHostPort 1"), menu_step("dump_host_options"),
+                steps += [menu_step("assert_visible ComboHostPlayers 1"), menu_step("dump_host_options"),
                           menu_step("post_command ButtonHostBack"), menu_step("assert_visible ButtonMultiplayerHostGame 1")]
-                if route != "post_command":
-                    steps += [menu_step("focus_previous")]
-                steps += [menu_step("assert_focus TextMultiplayerName")]
+                steps += [menu_step("focus TextMultiplayerName"), menu_step("assert_focus TextMultiplayerName")]
             steps += [menu_step("post_command ButtonMultiplayerHostGame"), menu_step("assert_visible ComboHostActivity 1"),
                       menu_step("focus ComboHostActivity"),
                       menu_step("key Return down"), menu_step("dump_enter_state"), menu_step("key Return up"),
@@ -1906,21 +2129,21 @@ def host_options_geometry(images):
             assert drop_bottom <= panel["rect"][1] + panel["rect"][3], (visibility, panel, drop_bottom)
             measured["visibility_drop_bottom"] = drop_bottom
     assert all("CollectionBoxHostPage" + page in measured for page in
-               ("Seats", "Rules", "Network", "Recovery", "Files", "Session")), measured
+               ("Seats", "Rules", "Connection", "Timing", "Recovery", "Files", "Session")), measured
     return measured
 
 
 def timing_options_geometry(images):
     measured = []
-    # Rows sit in the Tuning box, 24 px below the page's tab strip.
-    expected = {'LabelHostNetSlowBound': (8, 68, 104, 18), 'TextHostNetSlowBound': (120, 68, 44, 18),
-                'LabelHostNetSlowBoundHint': (172, 68, 100, 18), 'LabelHostNetSlowPolicy': (8, 88, 172, 18),
-                'ComboHostNetSlowPolicy': (184, 88, 329, 18)}
+    # Rows sit where the Timing page draws them.
+    expected = {'LabelHostNetSlowBound': (8, 44, 104, 18), 'TextHostNetSlowBound': (120, 44, 44, 18),
+                'LabelHostNetSlowBoundHint': (172, 44, 100, 18), 'LabelHostNetSlowPolicy': (8, 64, 172, 18),
+                'ComboHostNetSlowPolicy': (184, 64, 300, 18)}
     for capture in images:
         rows = {row['name']: row for row in capture['controls']}
-        if 'CollectionBoxHostPageNetwork' not in rows:
+        if 'CollectionBoxHostPageTiming' not in rows or not rows['CollectionBoxHostPageTiming'].get('visible', True):
             continue
-        page = rows['CollectionBoxHostPageNetwork']['rect']
+        page = rows['CollectionBoxHostPageTiming']['rect']
         for name, rectangle in expected.items():
             row = rows[name]
             actual = (row['rect'][0] - page[0], row['rect'][1] - page[1], *row['rect'][2:])
@@ -1942,7 +2165,8 @@ def run_case(options, case, root, failing=None):
     inputs.write_text(INPUT_SCRIPT, encoding="utf-8")
     paired = case in PAIRED_CASES
     # A menu-driven pair joins through the real UI, so it carries no service-e2e flags.
-    menu_driven = case in ("net-activity", "local-end-match", "net-host-left", "net-host-left-early")
+    menu_driven = case in ("net-activity", "local-end-match", "net-host-left", "net-host-left-early", "lobby-ready-all", "lobby-countdown",
+                           "lobby-last-ready", "lobby-ready-back", "lobby-seat-missing", "sweep-advanced-client")
     seeded = {} if failing else seeds(case)
     runs, records, argv, images = {}, {}, {}, []
     result = {"pass": False, "case": case, "scripts": {}, "records": records, "probes": {}, "seeds": seeded}
@@ -1981,7 +2205,8 @@ def run_case(options, case, root, failing=None):
                 env["CC_TEST_NET_UI_SCRIPT"] = str(path)
             argv[who] = args
             runs[who] = make_run(options.repo, args, root / who, 180, env=env)
-            set_visual_resolution(runs[who], *map(int, options.size.split("x")))
+            set_visual_resolution(runs[who], *size_parts(options.size)[:2])
+            set_window_multiplier(runs[who], size_parts(options.size)[2])
             if case in ("lobby", "host-defaults"):
                 (runs[who].cwd / "Userdata/NetworkHostDefaults.ini").write_text(
                     "Version = 2\nFrameRedundancyTicks = 6\nSlowPlayerBoundTicks = 3\nSlowPlayerPolicy = substitute\n", encoding="utf-8")
@@ -2056,6 +2281,14 @@ def run_case(options, case, root, failing=None):
                 expected_exit = 137 if (case, who) == ("net-host-left-early", "host") else 0
                 assert record.get("exit_code") == expected_exit, record
                 assert "[menu-script] FAILED:" not in logs[who], logs[who][-3000:]
+                # A script that was meant to run to its end did: a run that never read it is no pass. A service-e2e pair
+                # starts its round without the menus (its probes are its checks), and a script whose last wait is for its
+                # round to run leaves the menus there.
+                if expected_exit == 0 and not (paired and not menu_driven):
+                    _, waits_for_round, tail = texts[who].rpartition("wait_state Running")
+                    rest = [line.strip() for line in tail.splitlines()[1:] if line.strip()]
+                    in_round = bool(waits_for_round) and rest in ([], ["exit"]) and "state:Running -> OK" in logs[who]
+                    assert "[menu-script] complete" in logs[who] or in_round, logs[who][-3000:]
         if not failing:
             if case == "lobby":
                 # The picks drive this host's history policy, in frames of the round's tick.
@@ -2108,7 +2341,7 @@ def run_case(options, case, root, failing=None):
                 row = fits[0]
                 assert row["widest_token"] <= row["column"] and row["widest_line"] <= row["column"], row
                 assert row["inside"] is True and len(row["rect"]) == 4, row
-                width, height = (int(part) for part in options.size.split("x"))
+                width, height = size_parts(options.size)[:2]
                 assert row["rect"][0] + row["rect"][2] <= width and row["rect"][1] + row["rect"][3] <= height, row
                 if options.size == "640x360":
                     assert row["ellipsis"] is True and WIDE_ROSTER_NAME not in row["drawn"], row
@@ -2130,17 +2363,19 @@ def run_case(options, case, root, failing=None):
             assert [page["ComboHostNetIce"]["text"] for page in pages] == [*NAT_STATES, *NAT_STATES], pages
             for page in pages:
                 label, combo, hint = (page[name] for name in ("LabelHostNetIce", "ComboHostNetIce", "LabelHostNetIceHint"))
-                assert label["text"] == NAT_LABEL and hint["text"].startswith(NAT_HINT + "\n"), (label, hint)
+                first = NAT_STUN_EMPTY if (case, combo["text"]) == ("host-stun-empty", "On (default)") else NAT_HINTS[combo["text"]]
+                assert label["text"] == NAT_LABEL and hint["text"].startswith(first + "\n"), (label, hint)
                 assert combo_item_names(combo) == list(NAT_STATES), combo
                 assert all(row["text_fits"] for row in (label, combo, hint)), (label, combo, hint)
                 assert label["rect"][1] == combo["rect"][1], (label, combo)
                 assert label["rect"][0] + label["rect"][2] + 8 <= combo["rect"][0], (label, combo)
-                page_rect = page["CollectionBoxHostPageNetwork"]["rect"]
+                page_rect = page["CollectionBoxHostPageConnection"]["rect"]
                 assert page_rect[1] + page_rect[3] + 4 <= page["ButtonHostOptBack"]["rect"][1], page
             for page in (pages[0], pages[2]):
-                expected = "STUN list empty: direct candidates are LAN-only." if case == "host-stun-empty" else "STUN finds direct routes."
-                assert expected in page["LabelHostNetIceHint"]["text"], page
-                assert "session directory URL" in page["LabelHostNetIceHint"]["text"], page
+                # An empty STUN list leaves direct connections to this network, and the hint says so; the shipped list says nothing of it.
+                empty = "The STUN server list is empty" in page["LabelHostNetIceHint"]["text"]
+                assert empty == (case == "host-stun-empty"), page
+                assert "online game list service" in page["LabelHostNetIceHint"]["text"], page
             expected_saved = dict.fromkeys(NAT_KEYS, "")
             expected_saved.update({"NetworkIceEnable": "0", "NetworkStunServers": "" if case == "host-stun-empty" else STUN_DEFAULT})
             result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(NAT_KEYS))
@@ -2149,8 +2384,8 @@ def run_case(options, case, root, failing=None):
                                   for page in pages]
         if case == "host-relay":
             pages = [{row["name"]: row for row in capture["controls"]} for capture in images]
-            assert [page["ComboHostNetRelay"]["text"] for page in pages] == ["Directory", "Off", "Fixed", "Directory"], pages
-            assert all(combo_item_names(page["ComboHostNetRelay"]) == ["Off", "Directory", "Fixed"] for page in pages)
+            assert [page["ComboHostNetRelay"]["text"] for page in pages] == [RELAY_STATES[1], RELAY_STATES[0], RELAY_STATES[2], RELAY_STATES[1]], pages
+            assert all(combo_item_names(page["ComboHostNetRelay"]) == list(RELAY_STATES) for page in pages)
             assert pages[2]["TextHostRelayPass"]["text"] == "*" * len("fixed-password"), pages[2]
             assert "fixed-password" not in json.dumps(images), "host password escaped the masked readback"
             result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(RELAY_KEYS))
@@ -2342,7 +2577,7 @@ def run_case(options, case, root, failing=None):
             assert set(NETWORK_ROWS) <= rows.keys(), sorted(rows)
             # The settings dialog's base box centres on the viewport at every size, not only at 640.
             base = rows["CollectionBoxSettingsBase"]["rect"]
-            res_y = int(options.size.split("x")[1])
+            res_y = size_parts(options.size)[1]
             assert base[1] * 2 + base[3] == res_y, (base, res_y)
             # The player page shares the other pages' value column.
             column = rows["CollectionBoxNetPagePlayer"]["rect"][0] + NETWORK_VALUE_COLUMN
@@ -2381,10 +2616,9 @@ def run_case(options, case, root, failing=None):
             # The host screen's own readback: the label sits beside the delay box and names the saved
             # policy with the frames it would send - the box pre-fills that same count.
             host_rows = {c["name"]: c for c in images[-2]["controls"]}
-            policy = host_rows.get("LabelHostInputDelayPolicy")
-            assert policy and policy["text"] == "(fixed, " + NETWORK_SAVED["NetworkInputDelayFrames"] + ")", policy
-            assert host_rows["TextHostInputDelay"]["text"] == NETWORK_SAVED["NetworkInputDelayFrames"], host_rows["TextHostInputDelay"]
-            assert host_rows["TextHostInputDelay"]["enabled"] is True, host_rows["TextHostInputDelay"]
+            assert host_rows["ComboHostNetPolicy"]["text"].startswith("Fixed"), host_rows["ComboHostNetPolicy"]
+            assert host_rows["TextHostNetMinDelay"]["text"] == NETWORK_SAVED["NetworkInputDelayFrames"], host_rows["TextHostNetMinDelay"]
+            assert host_rows["TextHostNetMinDelay"]["enabled"] is True, host_rows["TextHostNetMinDelay"]
         if case in ("net-chat", "net-recovery", "net-files", "net-internet", "misc-page"):
             # One capture per page case: the sub-page's own rows, all fitted, and nothing the case
             # names as disabled enabled in the draw.
@@ -2396,8 +2630,7 @@ def run_case(options, case, root, failing=None):
                 result["size_gates"] = [list(row) for row in SIZE_GATES]
                 result["net_chat_size"] = options.size
             rows = {control["name"]: control for control in images[0]["controls"]}
-            expected = {"net-chat": ("CheckboxNetworkChatVisible", "CheckboxNetworkChatSound", "ComboNetworkChatScope",
-                                     "CheckboxNetworkChatNotify", "ComboNetworkChatTextSize",
+            expected = {"net-chat": ("CheckboxNetworkChatSound", "ComboNetworkChatScope", "ComboNetworkChatTextSize",
                                      "LabelNetworkChatKey", "TextNetworkChatKey",
                                      "ButtonNetMutedPlayers", "LabelNetMutedReason"),
                         "net-recovery": ("CheckboxNetworkAutoReconnect", "CheckboxNetworkOfferRejoin",
@@ -2421,8 +2654,7 @@ def run_case(options, case, root, failing=None):
                 # control starts on it, and the pages' rows ride the Misc grid's 20px pitch.
                 column = rows[f"CollectionBoxNetPage{sub_page.split(':')[1]}"]["rect"][0] + NETWORK_VALUE_COLUMN
                 on_column = {
-                    "net-chat": ("CheckboxNetworkChatSound", "ComboNetworkChatScope",
-                                 "ComboNetworkChatTextSize", "TextNetworkChatKey", "LabelNetMutedReason"),
+                    "net-chat": ("ComboNetworkChatScope", "ComboNetworkChatTextSize", "TextNetworkChatKey", "LabelNetMutedReason"),
                     "net-recovery": ("CheckboxNetworkOfferRejoin", "LabelNetLastHost",
                                      "LabelNetRecoveryRecord", "LabelNetRecoveryStatus",
                                      "ButtonNetRejoin"),
@@ -2434,8 +2666,7 @@ def run_case(options, case, root, failing=None):
                 for name in on_column:
                     assert rows[name]["rect"][0] == column, (name, rows[name]["rect"], column)
                 grid_rows = {
-                    "net-chat": ("CheckboxNetworkChatVisible", "LabelNetworkChatScope",
-                                 "CheckboxNetworkChatNotify", "LabelNetworkChatTextSize",
+                    "net-chat": ("LabelNetworkChatScope", "CheckboxNetworkChatSound", "LabelNetworkChatTextSize",
                                  "LabelNetworkChatKey", "ButtonNetMutedPlayers"),
                     "net-recovery": ("CheckboxNetworkAutoReconnect", "LabelNetLastHostTitle",
                                      "LabelNetRecoveryTitle", "LabelNetRecoveryStatusTitle",
@@ -2452,7 +2683,7 @@ def run_case(options, case, root, failing=None):
                 # The internet pin box's own row sits between its label and the status row; the chat
                 # page's muted stub waits one row under its rows.
                 expected_pitch = [20, 20, 40, 20, 20, 20] if case == "net-internet" else \
-                    [20] * 4 + [40] if case == "net-chat" else [20] * (len(grid_rows) - 1)
+                    [20] * 3 + [40] if case == "net-chat" else [20] * (len(grid_rows) - 1)
                 assert deltas == expected_pitch, (case, deltas)
                 if case == "net-files":
                     # The folders' action pairs stack in the same two columns, one row pair apart.
@@ -2513,12 +2744,11 @@ def run_case(options, case, root, failing=None):
             status = next(c for c in images[0]["controls"] if c["name"] == "LabelMultiplayerLandingStatus")
             assert status["text"] == "", status
             prompt = next(c for c in images[0]["controls"] if c["name"] == "LabelMultiplayerNamePrompt")
-            assert prompt["text"] == "Multiplayer name:", prompt
-            # The over-cap name was refused twice: once on the command line, once at the host's create.
+            assert prompt["text"] == "Your name", prompt
+            # The over-cap name was refused on the command line, and the box kept a hand to its 24 characters.
             assert "-net-player-name over the 64-byte cap" in logs["host"], logs["host"][-2000:]
-            refused = {c["name"]: c for c in images[-1]["controls"]}
-            assert refused["LabelMultiplayerLandingStatus"]["text"] == "Display names are limited to 64 bytes.", \
-                refused["LabelMultiplayerLandingStatus"]
+            typed = {c["name"]: c for c in images[-1]["controls"]}
+            assert typed["TextMultiplayerName"]["text"] == "N" * 24, typed["TextMultiplayerName"]
         if case in ("lobby", "lobby-name"):
             # The Leave/Seats block is centred on the lobby panel the way Start Match is; doubled
             # centres avoid halves. The Players header starts on its rows' left edge and holds its line.
@@ -2529,9 +2759,8 @@ def run_case(options, case, root, failing=None):
             if case == "lobby":
                 result["host_options_geometry"] = host_options_geometry(images)
                 result["timing_options_geometry"] = timing_options_geometry(images)
-            leave, seats, last, panel = (drawn[name] for name in
-                                         ("ButtonMultiplayerLeave", "ButtonMultiplayerModerate", "ButtonLobbyOptions",
-                                          "MultiplayerLobbyPanel"))
+            leave, last, panel = (drawn[name] for name in ("ButtonMultiplayerLeave", "ButtonLobbyOptions", "MultiplayerLobbyPanel"))
+            assert not drawn.get("ButtonMultiplayerModerate", {}).get("visible", False), drawn.get("ButtonMultiplayerModerate")
             assert leave["rect"][0] + last["rect"][0] + last["rect"][2] == panel["rect"][0] * 2 + panel["rect"][2], \
                 (leave["rect"], last["rect"], panel["rect"])
             header = drawn["LabelLobbyPlayersHeader"]
@@ -2541,7 +2770,7 @@ def run_case(options, case, root, failing=None):
                 row["rect"][0] == header["rect"][0] for row in seat_rows), (header, seat_rows)
             start = drawn["ButtonMultiplayerStart"]
             pair_span = last["rect"][0] + last["rect"][2] - leave["rect"][0]
-            pair_gap = seats["rect"][0] - leave["rect"][0] - leave["rect"][2]
+            pair_gap = last["rect"][0] - leave["rect"][0] - leave["rect"][2]
             back = next((c for c in drawn.values() if c["name"] == "ButtonBackToMain"), None)
             save = next((c for c in drawn.values() if c["name"] == "ButtonSaveDiagnostics"), None)
             assert pair_span == start["rect"][2], (pair_span, start["rect"], leave["rect"], last["rect"])
@@ -2554,35 +2783,29 @@ def run_case(options, case, root, failing=None):
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == NETWORK_SEED["NetworkDisplayName"]
             result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", {"NetworkDisplayName"})
             assert result["saved"] == {"NetworkDisplayName": "Recon7"}, result["saved"]
-            # The seeded policy is automatic, so the lobby row must not call the delay fixed.
+            # The host's own row names it the host, in words; ping and delay live in the row's details.
             result["lobby_row"] = next(c["text"] for c in images[-1]["controls"] if c["name"] == "LabelLobbyPlayer0")
-            assert re.search(r'Ping \d+ ms - delay \d+ frames', result["lobby_row"]), result["lobby_row"]
-            # The host screen under the seeded policy: the box says auto, and is not an editable count.
-            host_setup = {c["name"]: c for c in images[-3]["controls"]}
-            assert host_setup["TextHostInputDelay"]["text"] == "auto", host_setup["TextHostInputDelay"]
-            assert host_setup["TextHostInputDelay"]["enabled"] is False, host_setup["TextHostInputDelay"]
-            assert host_setup["LabelHostInputDelayPolicy"]["text"] == "(auto)", host_setup["LabelHostInputDelayPolicy"]
-            assert host_setup["ComboHostActivity"]["rect"][0] == host_setup["TextHostPort"]["rect"][0], (
-                host_setup["ComboHostActivity"]["rect"], host_setup["TextHostPort"]["rect"])
-            # The disabled delay box's frame is DimRect at 55% of an enabled TextBox frame.
-            delay_luma = frame_luma(images[-3]["png"], host_setup["TextHostInputDelay"]["rect"])
-            port_luma = frame_luma(images[-3]["png"], host_setup["TextHostPort"]["rect"])
+            assert "Host" in result["lobby_row"], result["lobby_row"]
+            host_setup = {c["name"]: c for c in images[1]["controls"]}
+            assert not any(host_setup.get(name, {}).get("visible", False) for name in ("TextHostInputDelay", "LabelHostInputDelayPolicy", "TextHostPort")), host_setup
+            # The four setup rows share one value column.
+            columns = {host_setup[name]["rect"][0] for name in ("ComboHostActivity", "ComboHostScene", "ComboHostMode", "ComboHostPlayers")}
+            assert len(columns) == 1, columns
+            # A disabled text box's frame is DimRect at 55% of an enabled TextBox frame.
+            timing = {c["name"]: c for c in images[2]["controls"]}
+            recovery = {c["name"]: c for c in images[3]["controls"]}
+            delay_luma = frame_luma(images[3]["png"], recovery["TextHostRecAutosaveInterval"]["rect"])
+            port_luma = frame_luma(images[2]["png"], timing["TextHostNetSlowBound"]["rect"])
             result["delay_frame_luma"] = delay_luma
             result["port_frame_luma"] = port_luma
             assert port_luma > 0, (delay_luma, port_luma)
             ratio = delay_luma / port_luma
             result["delay_frame_luma_ratio"] = ratio
             assert 0.45 <= ratio <= 0.65, (delay_luma, port_luma, ratio)
-            # The disabled Seats control sits in the lobby capture for the visual review.
-            assert drawn["ButtonMultiplayerModerate"]["enabled"] is False, drawn["ButtonMultiplayerModerate"]
-            ipv4_status = share_status_row(images[-2], options.port)
-            ipv6_status = share_status_row(images[-1], options.port, WIDE_SHARE_HOST)
-            assert ipv6_status["word_width"] > ipv6_status["row_width"], ipv6_status
-            result["share_status"] = {"ipv4": ipv4_status, "ipv6": ipv6_status}
             # The multiplayer screen's panel centres vertically too; an odd height shifts one pixel,
             # and a panel taller than the viewport clamps to its top edge instead of centring.
             screen_rect = drawn["MultiplayerScreen"]["rect"]
-            res_y = int(options.size.split("x")[1])
+            res_y = size_parts(options.size)[1]
             top, bottom = screen_rect[1], res_y - screen_rect[1] - screen_rect[3]
             if screen_rect[3] <= res_y:
                 assert 0 <= bottom - top <= 1, (screen_rect, res_y)
@@ -2753,7 +2976,7 @@ def run_case(options, case, root, failing=None):
                 assert shot.get("scene_name") == key_scene, (who, shot.get("scene_name"), key_scene)
                 controls = {c["name"]: c for c in shot["controls"]}
                 assert controls["LabelLobbyMatch"]["text"] == f"{preset} - {module}", (who, controls["LabelLobbyMatch"])
-                assert controls["LabelLobbyMatchMode"]["text"] == key_scene + " - Co-op PvE", (who, controls["LabelLobbyMatchMode"], key_scene)
+                assert controls["LabelLobbyMatchMode"]["text"] == key_scene + " - Players versus AI", (who, controls["LabelLobbyMatchMode"], key_scene)
                 assert "Grasslands" not in controls["LabelLobbyMatchMode"]["text"], (who, controls["LabelLobbyMatchMode"])
                 for name in ("LabelLobbyMatch", "LabelLobbyMatchMode", "LabelLobbyPlayersHeader"):
                     assert controls[name]["text_fits"] is True, (who, name, controls[name])
@@ -2869,12 +3092,15 @@ def main():
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--case", choices=(*CASES, "all"), required=True)
-    parser.add_argument("--size", choices=("640x360", "960x540", "1280x720", "1920x1080", "2560x1440", "3840x2160"), required=True)
+    parser.add_argument("--size", choices=("640x360", "960x540", "1280x720", "1920x1080", "2560x1440", "3840x2160", "960x540@2.6667"), required=True)
     parser.add_argument("--all-sizes", action="store_true",
                         help="also run every SIZE_GATES row; net-chat and lobby-name always do this")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--base-words", action="store_true", help="write the new lobby, Escape and one-draft cases in the base screens' words, for their RED on the base build")
     parser.add_argument("--port", type=int, required=True)
     options = parser.parse_args()
+    global BASE_WORDS
+    BASE_WORDS = options.base_words
     selected = planned_cases(options.case, options.size, options.all_sizes)
     if not selected:
         parser.error('the selected size partition has no cases')
