@@ -24313,19 +24313,23 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    const std::vector<std::pair<NetLockstepCoordinator*, std::map<uint64_t, NetLockstepReadyFrame>>>& live,
 		    const std::string& path, std::string* error) {
 			SuccessionReplayScope scope;
-			const uint64_t from = leave - 1, through = leave + 3;
+			const uint64_t from = leave - 1, through = leave + 7;
 			std::vector<ReleasePathClaimView> views(live.size() + 3);
-			LoopbackTransport replayWire, tailWire, directWire;
+			LoopbackTransport replayWire, tailWire, directWire, directHost;
 			NetLockstepCoordinator replay, tail, direct;
 			auto config = ReleasedClaimsConfig(match, 3, {}, true);
 			config.startFrame = from;
 			if (!replay.StartReplay(replayWire, config, error) || !tail.StartReplay(tailWire, config, error)) return false;
+			if (!directHost.StartHost(47429, error) || !directWire.Connect("loopback", 47429, error)) return false;
+			auto directConfig = config; directConfig.remoteTransportPeerIds = {{1, 1}};
+			if (!direct.Start(directWire, directConfig, error) || direct.IsRunning()) return false;
 			NetMatchReplayWriter writer;
 			if (!writer.Open(path, match, error)) return false;
 			std::vector<NetLockstepFrame> frames;
 			for (size_t index = 0; index < views.size(); ++index) {
 				NetLockstepCoordinator* peer = index < live.size() ? live[index].first : index == live.size() ? &replay : index == live.size() + 1 ? &tail : &direct;
-				if (!views[index].Create("copy " + std::to_string(index), *peer, seat - 1, seat, seat)) { *error = "the departure actor could not be created"; return false; }
+				const uint8_t actorOwner = seat == 2 ? 1 : 2;
+				if (!views[index].Create("copy " + std::to_string(index), *peer, actorOwner - 1, actorOwner, seat)) { *error = "the departure actor could not be created"; return false; }
 				views[index].handoff = seat;
 			}
 			for (uint64_t tick = from; tick <= through; ++tick) {
@@ -24333,9 +24337,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					if (!live[index].second.contains(tick)) { *error = "survivor lacks frame " + std::to_string(tick); return false; }
 					views[index].ApplyTick(live[index].second.at(tick));
 				}
-				NetLockstepFrame packed;
-				if (!PackWorldJoinReadyFrame(live[0].second.at(tick), packed, error) ||
-				    !writer.WriteFrame(tick, packed.frames, packed.commands, packed.observations, packed.valueObservations, error, packed.senderPeerId)) return false;
+				NetLockstepFrame packed = PackWorldJoinReadyFrame(live[0].second.at(tick));
+				if (!writer.WriteFrame(tick, packed.frames, packed.commands, packed.observations, packed.valueObservations, error, packed.senderPeerId)) return false;
 				frames.push_back(std::move(packed));
 			}
 			writer.Close(); if (!WaitForReplayCloseForTest(writer, error)) return false;
