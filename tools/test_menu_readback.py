@@ -901,7 +901,9 @@ def sweep_options(readonly=False, live=False):
     text = f"sweep MultiplayerHostOptionsPanel depth=1 label=advanced-frame own={own}\n" if not readonly else "sweep MultiplayerHostOptionsPanel depth=1 label=advanced-frame readonly own=ButtonHostOptBack\n"
     # Each page and dialog is pictured as it opens, before the sweep changes anything on it.
     for tab, page in OPTION_PAGES:
-        text += f"activate {tab}\nwait 4\ndump_host_options\nsweep {page} label={page} restore=back_options" + (" readonly" if readonly else "") + (" own=ButtonHostSessEnd" if live and not readonly and page.endswith("Session") else "") + "\n"
+        # The team picker chooses whose technology and AI skill the rows under it show; picking one changes no setting.
+        quiet = " quiet=ComboHostRulesTeam" if page.endswith("Rules") and not readonly else ""
+        text += f"activate {tab}\nwait 4\ndump_host_options\nsweep {page} label={page} restore=back_options" + (" readonly" if readonly else "") + (" own=ButtonHostSessEnd" if live and not readonly and page.endswith("Session") else "") + quiet + "\n"
     if not readonly:
         # The seat dialog a Details button opens is a screen of its own.
         text += "activate TabHostPageSeats\nwait 4\nactivate ButtonHostSeatDetails0\nwait 6\ndump_host_options\nsweep HostSeatDialog label=seat-dialog own=ButtonHostSeatDlgClose\nactivate ButtonHostSeatDlgClose\nwait 4\n"
