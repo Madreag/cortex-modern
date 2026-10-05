@@ -4,7 +4,7 @@ The atlas is 16 glyphs per row from U+0020, a red separator at (0, 0) and
 on each glyph's scanline, colour-key at top-right. Width is the run to the
 next red minus one. This tool keeps 0x20-0x7F cells byte-identical and
 fills 0x80-0xFF, except the engine HUD-icon indexes listed below. Those
-cells are restored from the wave tip and pinned; the generator refuses
+cells are restored from HUD_SOURCE and pinned; the generator refuses
 to emit if any of them would change. Names use Menus/FontSmall through
 GlyphFontFor (GUIFont.cpp:143), so FontLarge HUD cells are not the
 letter atlas and Skins/FontSmall HUD cells are not name letters.
@@ -43,7 +43,8 @@ CP1252_UNUSED = frozenset({0x81, 0x8D, 0x8F, 0x90, 0x9D})
 #   0xD5  DataModule.cpp:57,122  -43 via LoadingScreen.cpp:139
 #   0xD6  Reader.cpp:550  -42 via LoadingScreen.cpp:139
 FONT_SMALL_HUD = frozenset({0xCF, 0xD5, 0xD6})
-WAVE_TIP = "6447c4c2e3"
+# The commit whose atlases hold the HUD icon cells as the engine draws them, from before the Latin-1 cells were added.
+HUD_SOURCE = "3863b8b87d"
 # FontLarge HUD lives only on Skins/FontLarge.png (GetLargeFont(), FrameMan.cpp:1281).
 #   0xC2  GameActivity.cpp:2824  -62 team-one (commented draw; cell is the icon)
 #   0xC5  GameActivity.cpp:2824  -59 team-two
@@ -658,10 +659,10 @@ def build_glyph(font, style, code):
     return special(font, style, code), "?"
 
 
-def load_wave_tip_cells(path):
-    """HUD pin cells from the wave tip, not from an already-emitted atlas."""
+def load_hud_source_cells(path):
+    """HUD pin cells from HUD_SOURCE, not from an already-emitted atlas."""
     rel = Path(path).resolve().relative_to(ROOT).as_posix()
-    raw = subprocess.check_output(["git", "-C", str(ROOT), "show", f"{WAVE_TIP}:{rel}"])
+    raw = subprocess.check_output(["git", "-C", str(ROOT), "show", f"{HUD_SOURCE}:{rel}"])
     return parse_font(path, Image.open(BytesIO(raw)))["cells"]
 
 
@@ -676,7 +677,7 @@ def plan_high(font, style, pin_cells):
             continue
         if is_hud(code, font):
             if code not in pin_cells:
-                raise RuntimeError(f"{font['path']}: HUD cell U+{code:02X} missing at {WAVE_TIP}")
+                raise RuntimeError(f"{font['path']}: HUD cell U+{code:02X} missing at {HUD_SOURCE}")
             planned[code] = pin_cells[code].copy()
             bases[code] = "HUD"
             kept.append(code)
@@ -815,7 +816,7 @@ def extend_one(path):
     font = parse_font(path)
     style = style_of(font)
     keep = hud_keep_set(path)
-    pin_cells = load_wave_tip_cells(path) if keep else {}
+    pin_cells = load_hud_source_cells(path) if keep else {}
     planned, bases, kept, uncovered = plan_high(font, style, pin_cells)
     refuse_if_hud_changed(pin_cells, planned, keep, path)
     canvas, cells = emit_atlas(font, planned)
