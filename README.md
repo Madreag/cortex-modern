@@ -69,7 +69,7 @@ A community fork of the [Cortex Command Community Project](https://github.com/co
 2. Unpack anywhere. Start `Cortex Command.exe`. If SmartScreen asks, choose **More info → Run anyway**.
 3. **Host:** Main Menu → **Multiplayer** → type your name → **Host Game** → set the activity, scene and the number of players → **Create Lobby**.
 4. **Join:** Main Menu → **Multiplayer** → type your name → **Join Game** → pick the match from the list (or type the host's address and port) → **Connect**.
-5. The match starts when every seat is filled. In the match, **F6** opens the seats panel; the network overlay in the corner shows input delay, route (direct or relay) and pace.
+5. When everyone is in the lobby, each joining player presses **Ready**, then the host presses **Start Match**. In the match, **F6** opens the seats panel; the network overlay in the corner shows input delay, route (direct or relay) and pace.
 
 </details>
 
