@@ -1159,7 +1159,8 @@ def scripts(case, port, root, size="960x540"):
         for tab in NETWORK_TABS:
             text += f"assert_visible {tab} 0\n"
         text += ("assert_label TextNetworkDisplayName " + NETWORK_SEED["NetworkDisplayName"] + "\n"
-                 "assert_label ComboMatchStatusWidget " + NETWORK_SEED["NetworkMatchStatusMode"] + "\n")
+                 # The saved Auto, in the player's words.
+                 "assert_label ComboMatchStatusWidget When needed\n")
         text += "dump_player_options\n"
         text += "set_text TextNetworkDisplayName " + NETWORK_SAVED["NetworkDisplayName"] + "\n"
         text += "activate ButtonNetworkAdvanced\nwait 4\nassert_settings_page Network:Player\n"
@@ -1518,10 +1519,10 @@ def scripts(case, port, root, size="960x540"):
                   "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
                   "assert_text_fits LabelLobbyPlayersHeader\n"
                   "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
-                  # The client's Options button opens the same adopted config as a read-only
+                  # The client's Match details button opens the same adopted config as a read-only
                   # details view: every edit control is disabled, the L33 row reads identically,
                   # and the title names what it is.
-                  "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
+                  "activate ButtonLobbyEditSetup\nwait 5\nassert_substate HostOptions\n"
                   "assert_label LabelHostOptionsTitle M A T C H   D E T A I L S\n"
                   "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
                   "assert_label LabelHostRulesBrainless When every human brain is lost\n"
@@ -1535,7 +1536,7 @@ def scripts(case, port, root, size="960x540"):
                   "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
                   # The host's dump follows Apply; the client reads the resulting revision.
                   f"wait_file {(root / 'host/runtime/ScreenShots/dump_host_options_8.json').as_posix()} 60\n"
-                  "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
+                  "activate ButtonLobbyEditSetup\nwait 5\nassert_substate HostOptions\n"
                   "assert_label LabelHostOptionsTitle M A T C H   D E T A I L S\n"
                   "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
                   "wait_label ComboHostRulesBrainless End the match\n"
@@ -1665,10 +1666,14 @@ def scripts(case, port, root, size="960x540"):
         text += ("activate ButtonHostSeatDetails0\nwait 3\nassert_visible HostSeatDialog 1\n")
         for control in ("LabelHostSeatDlgName", "LabelHostSeatDlgSeat", "LabelHostSeatDlgTeam",
                         "LabelHostSeatDlgState", "LabelHostSeatDlgReclaim", "LabelHostSeatDlgApplicants",
-                        "ListHostSeatDlgApplicants", "ButtonHostSeatDlgWait", "ButtonHostSeatDlgApprove",
+                        "ButtonHostSeatDlgWait", "ButtonHostSeatDlgApprove",
                         "ButtonHostSeatDlgCancel", "ButtonHostSeatDlgKick", "ButtonHostSeatDlgBan",
                         "LabelHostSeatDlgActionHint", "LabelHostSeatDlgStatus", "ButtonHostSeatDlgClose"):
             text += checks(control, "HostSeatDialog")
+        # Nobody has applied: the line above the list says so, and the empty list has no row to measure.
+        text += ("assert_label LabelHostSeatDlgApplicants Nobody is asking for this seat\n"
+                 "assert_visible ListHostSeatDlgApplicants 1\nassert_rect_inside ListHostSeatDlgApplicants HostSeatDialog\n"
+                 "assert_rect_inside ListHostSeatDlgApplicants viewport\nassert_list_rows ListHostSeatDlgApplicants 0\n")
         # H09/H10: the host's own seat is never kickable - the row stays pressable-looking but off.
         text += ("assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
                  "dump_host_options\nactivate ButtonHostSeatDlgClose\nwait 3\n"
@@ -2210,7 +2215,7 @@ def run_case(options, case, root, failing=None):
             runs[who] = make_run(options.repo, args, root / who, 180, env=env)
             set_visual_resolution(runs[who], *size_parts(options.size)[:2])
             set_window_multiplier(runs[who], size_parts(options.size)[2])
-            if case in ("lobby", "host-defaults"):
+            if case in ("lobby", "host-defaults", "host-hand-open"):
                 (runs[who].cwd / "Userdata/NetworkHostDefaults.ini").write_text(
                     "Version = 2\nFrameRedundancyTicks = 6\nSlowPlayerBoundTicks = 3\nSlowPlayerPolicy = substitute\n", encoding="utf-8")
             if case in ("host-stun", "host-stun-empty", "host-relay", "net-connection"):
