@@ -68,11 +68,13 @@
 #include <mutex>
 #include <new>
 #include <optional>
+#include <ratio>
 #include <set>
 #include <string>
 #include <system_error>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -24019,11 +24021,17 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			uint64_t drainThrough = UINT64_MAX;
 			std::string failure;
 
-			bool Start(uint16_t port, bool bounded = true) {
+			bool Start(uint16_t port, bool bounded = true, bool world = false) {
 				match = ReleasedClaimsMatch(0x9C00 + port, 4);
 				match.slowPlayerPolicy = bounded ? NetSlowPlayerPolicy::Substitute : NetSlowPlayerPolicy::Pause;
 				match.successorOrder = {2, 3, 4};
 				for (uint8_t peer = 1; peer <= 4; ++peer) match.migrationPeers.push_back({peer, static_cast<uint16_t>(port + peer), {"loopback"}});
+				if (world) {
+					match.version = NetMatchConfigUtil::c_PersistentWorldVersion; match.persistentWorld = true; match.dedicated = true;
+					match.worldId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"; match.worldBoot = 1;
+					match.players[0].peerId = 0; match.players[0].cpu = true;
+					match.successorOrder.clear(); match.migrationPeers.clear();
+				}
 				if (!hostWire.StartHost(port, &failure) || !firstWire.Connect("loopback", port, &failure) ||
 				    !secondWire.Connect("loopback", port, &failure) || !fourthWire.Connect("loopback", port, &failure)) return false;
 				for (size_t index = 0; index < peers.size(); ++index) {
@@ -24309,6 +24317,26 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			peer.m_MigrationResult.members = {2, 3};
 			peer.ApplyMigrationMembership(0);
 		}
+		static std::pair<double, double> MeasureStamp(NetLockstepCoordinator& peer) {
+			NetLockstepPlaneGuard plane;
+			constexpr uint64_t count = 1000000;
+			std::vector<double> stamped, assigned;
+			volatile uint64_t sink = 0;
+			for (int sample = 0; sample < 7; ++sample) {
+				NetLockstepReadyFrame ready;
+				auto begin = std::chrono::steady_clock::now();
+				for (uint64_t frame = 0; frame < count; ++frame) { ready.frame = frame; peer.StampFrameAuthority(ready); sink = sink + ready.authorityPeerId; }
+				auto end = std::chrono::steady_clock::now();
+				stamped.push_back(std::chrono::duration<double, std::nano>(end - begin).count() / count);
+				begin = std::chrono::steady_clock::now();
+				for (uint64_t frame = 0; frame < count; ++frame) { ready.frame = frame; ready.authorityPeerId = peer.GetHostPeerId(); sink = sink + ready.authorityPeerId; }
+				end = std::chrono::steady_clock::now();
+				assigned.push_back(std::chrono::duration<double, std::nano>(end - begin).count() / count);
+			}
+			if (sink != 14 * count * peer.GetHostPeerId() || !peer.m_PeerLeaveFrames.empty() || !peer.m_AiHeldSeats.empty() || !peer.m_ReplayAuthorities.empty()) return {-1, -1};
+			std::sort(stamped.begin(), stamped.end()); std::sort(assigned.begin(), assigned.end());
+			return {stamped[3], assigned[3]};
+		}
 	};
 
 	namespace {
@@ -24570,12 +24598,97 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		}
 	}
 
+	namespace {
+		bool TestWorldAdmissionExcusesRemovedAcknowledger(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("world_admission_excuses_removed_acknowledger", why, error); };
+			ReleasePathRound round;
+			if (!round.Start(47440, true, true)) return fail("the world admission fixture did not start: " + round.failure);
+			round.firstWire.loseAcks = true;
+			NetGameWorldTransition admission;
+			admission.kind = NetGameWorldTransition::Activate; admission.peerId = 4; admission.holderGeneration = 2;
+			admission.membershipRevision = 2; admission.activationFrame = round.peers[0].GetStats().nextFrame + 40;
+			admission.team = 3; admission.player = 3;
+			if (!round.peers[0].ProposeWorldAdmission(3, 2, admission, &round.failure)) return fail(round.failure);
+			for (int turn = 0; turn < 4; ++turn) round.Pump();
+			const auto proposed = round.hostWire.Last(NetTimingAction::WorldAdmission, NetTimingPhase::Propose);
+			if (!proposed || !(proposed->requiredPeers & 2) || round.firstWire.lost == 0 || round.hostWire.Last(NetTimingAction::WorldAdmission, NetTimingPhase::Commit)) return fail("WorldAdmission did not wait on peer 2's missing acknowledgement");
+			round.peers[0].EvictRemovedPeer(2, "removed during WorldAdmission", round.now); round.alive[1] = false;
+			size_t blocked = 0;
+			for (int turn = 0; turn < 400 && round.peers[2].GetResumeFrame() <= proposed->applyFrame + 4; ++turn) {
+				round.Pump();
+				for (size_t index: {size_t{0}, size_t{2}}) if (round.peers[index].GetStats().nextFrame >= proposed->applyFrame && round.peers[index].TimingDecisionPendingAt(proposed->applyFrame)) ++blocked;
+			}
+			if (blocked || !round.hostWire.Last(NetTimingAction::WorldAdmission, NetTimingPhase::Commit) || round.peers[0].GetResumeFrame() <= proposed->applyFrame || round.peers[2].GetResumeFrame() <= proposed->applyFrame)
+				return fail("WorldAdmission waits for removed peer 2 at " + std::to_string(proposed->applyFrame) + " blocked=" + std::to_string(blocked));
+			std::cout << "[net-lockstep-selftest] removed_peer_decision_blocked_frames=0 kinds=WorldAdmission" << std::endl;
+			return fail("");
+		}
+
+		bool TestHeldFormerHostKeepsReclaimableClaims(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("held_former_host_keeps_reclaimable_claims", why, error); };
+			SuccessionReplayScope scope;
+			const auto match = ReleasedClaimsMatch(0x9D06, 3);
+			LoopbackTransport wire; NetLockstepCoordinator peer;
+			auto config = ReleasedClaimsConfig(match, 3, {}, true); config.startFrame = 100;
+			std::string why;
+			if (!peer.StartReplay(wire, config, &why)) return fail(why);
+			ClaimView view; if (!view.Create("held former host", peer, 2, 3, 1)) return fail("the held actor did not create");
+			view.handoff = 1;
+			for (uint64_t tick = 100; tick <= 122; ++tick) {
+				if (tick == 121) SeatSuccessionTestAccess::Succeed(peer, 2, 120);
+				std::vector<NetGameCommand> commands;
+				if (tick == 100) commands.push_back({1, NetGameSeatHold{1, 0, 1, 1, 100}});
+				if (!peer.QueueReplayFrame(tick, {}, commands, &why, {}, {}, tick < 121 ? 1 : 2)) return fail(why);
+				peer.Tick(0); NetLockstepReadyFrame ready;
+				if (!peer.PopReadyFrame(ready)) return fail(peer.GetStats().timeoutReason);
+				view.Apply(ready); peer.FinishSimulationTick(tick);
+				if (tick >= 120 && (!peer.IsSeatReclaimableAt(1, tick) || peer.IsSeatReleased(1) || view.claimant != 1 || view.handoff != (tick < 121 ? 1 : 2) || view.ended || view.actor->GetController()->GetInputMode() != Controller::CIM_AI))
+					return fail("held former host at " + std::to_string(tick) + " reclaimable=" + std::to_string(peer.IsSeatReclaimableAt(1, tick)) + " claim=" + std::to_string(view.claimant) + " handoff=" + std::to_string(view.handoff));
+			}
+			return fail("");
+		}
+
+		bool TestMultipartObservationSendersReplay(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("multipart_observation_senders_replay", why, error); };
+			std::vector<ControllerFrame> controllers;
+			for (int64_t uid = 1; uid <= 600; ++uid) controllers.push_back(MakeFrame(uid, 44));
+			std::vector<NetSoundObservation> sounds;
+			std::vector<NetValueObservation> values;
+			for (uint8_t sender = 1; sender <= 3; ++sender) for (uint32_t index = 0; index < 20; ++index) {
+				const uint64_t uid = sender * 10000 + index;
+				NetSoundObservation sound;
+				sound.senderPeerId = sender; sound.objectUID = uid; sound.tick = 43; sound.phase = 77; sound.ordinal = index + 1; sound.value = 0.25F * sender;
+				sounds.push_back(sound);
+				values.push_back(MakeValueObservation(sender, uid, 43, index + 1, "multipart", sender * 100 + index));
+			}
+			const auto match = ReleasedClaimsMatch(0x9D07, 3);
+			NetMatchReplayWriter writer; std::string why;
+			if (!writer.Open("multipart-observations.ccreplay", match, &why) || !writer.WriteFrame(44, controllers, {}, sounds, values, &why, 2)) return fail(why);
+			writer.Close(); if (!WaitForReplayCloseForTest(writer, &why)) return fail(why);
+			NetMatchReplayReader reader; NetLockstepFrame recorded; bool eof = false;
+			if (!reader.Open("multipart-observations.ccreplay", &why) || !reader.ReadFrame(recorded, eof, &why)) return fail(why);
+			if (recorded.frames != controllers || recorded.observations != sounds || recorded.valueObservations != values || recorded.replayAuthorityPeerId != 2)
+				return fail("multipart playback lost controller, sound or value sender data while recording authority 2");
+			return fail("");
+		}
+
+	}
+
 	int NetLockstepSelfTest::RunSeatSuccession() {
 		EnsureSwitchTestManagers();
 		bool passed = true;
-		for (bool (*test)(std::string*): {TestPlayingDepartureSurvivesSuccession, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestPreviousClaimRulesAreRefused}) {
+		for (bool (*test)(std::string*): {TestPlayingDepartureSurvivesSuccession, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
 			std::string error;
 			passed &= test(&error);
+		}
+		if (passed) {
+			ReleasePathRound round;
+			if (!round.Start(47425)) passed = ReportReleasedClaimsRow("authority_stamp_cost_fixture", "the non-leaving match did not start", nullptr);
+			else {
+				const auto [full, baseline] = SeatSuccessionTestAccess::MeasureStamp(round.peers[0]);
+				if (full < 0) passed = ReportReleasedClaimsRow("authority_stamp_cost_fixture", "the measurement match contains a departure or a hold", nullptr);
+				else std::cout << "[authority-stamp-cost] lookup_and_assignment_ns=" << full << " assignment_loop_ns=" << baseline << " incremental_lookup_ns=" << full - baseline << " samples=7 iterations=1000000 peers=4 departures=0" << std::endl;
+			}
 		}
 		std::cout << "[net-lockstep-seat-succession-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 		return passed ? 0 : 1;
