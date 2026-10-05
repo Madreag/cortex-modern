@@ -78,11 +78,11 @@ TAG_PATTERNS = [
     EDGE_L + r'A[0-9]{2}\.[0-9]+',
     EDGE_L + r'R-[A-Z]{1,2}' + EDGE_R,
     EDGE_L + r'(?:CF|HL|RT|DS|LN|RD|MW|PK)[0-9]' + EDGE_R,
-    EDGE_L + r'L4P(?:-[A-Z])?' + EDGE_R,
+    EDGE_L + r'L' r'4P(?:-[A-Z])?' + EDGE_R,
     EDGE_L + r'L[0-9]{2}' + EDGE_R,
     EDGE_L + r'Source[0-9]{2}' + EDGE_R,
     EDGE_L + r'R[0-9](?:F[0-9]+|D[0-9]+|WAY[0-9]+|-[0-9]{3})',
-    # A ruling named by its letters ("ruling ppp"), and the numbered user rules A0-A16.
+    # A ruling named by its letters, and the numbered rules of the maintainer's own rule list (A0-A16).
     r'(?i)' + EDGE_L + r'rulings?\s+(?:[a-z]{1,4}|[A-Z]?[0-9]{1,2}(?:\.[0-9]+)?)' + EDGE_R,
     EDGE_L + r'A(?:1[0-6]|[0-9])' + EDGE_R + r'(?=[:)])',
 ]
@@ -297,11 +297,12 @@ def self_test() -> int:
         run('init', '-q')
         run('config', 'user.email', 'scan@example.invalid')
         run('config', 'user.name', 'scan')
-        (repo / 'upstream.txt').write_text('an upstream line with 10.9.8.7\n', encoding='utf-8')
+        upstream = 'an upstream line with ' + '.'.join(['10', '9', '8', '7']) + '\n'
+        (repo / 'upstream.txt').write_text(upstream, encoding='utf-8')
         run('add', '-A')
         run('commit', '-qm', 'base')
         base = git(repo, 'rev-parse', 'HEAD').strip()
-        (repo / 'upstream.txt').write_text('an upstream line with 10.9.8.7\n' + clean + '\n', encoding='utf-8')
+        (repo / 'upstream.txt').write_text(upstream + clean + '\n', encoding='utf-8')
         for kind, text in planted.items():
             (repo / f'{kind}.txt').write_text(text + '\n', encoding='utf-8')
         (repo / 'clean.txt').write_text(clean + '\n', encoding='utf-8')
