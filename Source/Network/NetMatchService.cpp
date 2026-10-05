@@ -3773,13 +3773,18 @@ static std::string ResyncSaveName() {
 		if (tick % 60 == 0) PruneReturnHistory(tick);
 	}
 
+	std::optional<uint64_t> NetMatchService::WorldServedBase(const NetWorldJoinHost& host) {
+		// A world's joiner starts from the published image while the round's history still holds the frames after it; past that it
+		// waits for the capture its join asks for.
+		return host.ImageHistoryServable() ? std::optional<uint64_t>(host.Image().tick) : std::nullopt;
+	}
+
 	std::optional<uint64_t> NetMatchService::ServedReturnBaseLocked(uint64_t nowMs) const {
 		// A returner arriving now is served the published base, unless it would take a new one.
 		std::optional<uint64_t> served;
 		const NetWorldCheckpointImage& image = m_WorldJoin.Image();
 		if (image.IsValid() && !m_WorldJoin.IsPrivateMatch()) {
-			// A world's joiner starts from the published image while its tail is still in memory; an older one waits for the capture its join asks for.
-			if (m_WorldJoin.Tail().Count() != 0 && image.tick + 1 >= m_WorldJoin.Tail().FirstFrame()) served = image.tick;
+			served = WorldServedBase(m_WorldJoin);
 		} else if (image.IsValid()) {
 			const bool fresh = m_PrivateImageTakenMs != 0 && nowMs - m_PrivateImageTakenMs < c_PrivateImageMinIntervalMs;
 			if (!m_PrivateImageRecapture && (fresh || !PrivateBaseRefreshDue(true, 0, image.tick, SteadyCaptureMs(m_PrivateCaptureCosts)))) served = image.tick;
@@ -4495,6 +4500,11 @@ static std::string ResyncSaveName() {
 		}
 		if (!m_Runner || !m_WorldJoin.Image().IsValid()) {
 			if (error) *error = "the joiner has no image yet";
+			return false;
+		}
+		// An image the round's history has moved past could never be caught up from: the join waits for the capture it asked for.
+		if (!m_WorldJoin.IsPrivateMatch() && m_WorldJoin.ImageHistoryLost()) {
+			if (error) *error = "the published image is older than the round's history; waiting for the capture this join asked for";
 			return false;
 		}
 		// Every cheap refusal is answered before the archive is touched: this runs on the sim thread
