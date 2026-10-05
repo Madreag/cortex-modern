@@ -2575,9 +2575,11 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	HostOptSetEditable(m_MultiplayerHostPortMapCheckbox, editable);
 	if (m_HostNetPortBox && !HostOptBoxFocused(m_HostNetPortBox)) m_HostNetPortBox->SetText(m_HostComputerDraft.port);
 	if (GUILabel* portHint = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostNetPortHint"))) {
-		// The router's own answer for the lobby being hosted, beside the port it was asked to open.
-		const std::string hint = "default 41010" + (snapshot.portMap.empty() ? std::string() : " - " + snapshot.portMap);
+		// The router's own answer for the lobby being hosted takes the default's place beside the port, which a live lobby cannot change.
+		const std::string hint = snapshot.portMap.empty() ? "default 41010" : snapshot.portMap;
 		if (portHint->GetText() != hint) portHint->SetText(hint);
+		// A router's error longer than the row scrolls through its lines rather than running out of it.
+		portHint->SetVerticalOverflowScroll(true);
 	}
 	HostOptSetEditable(m_HostNetVisibilityCombo, editable);
 	HostOptSelectComboIndex(m_HostNetIceCombo, m_HostComputerDraft.ice ? 0 : 1);
