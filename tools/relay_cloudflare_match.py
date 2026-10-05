@@ -1466,6 +1466,9 @@ def sanitize_box(box, root: Path, book, payload: Path) -> dict:
     digest file removed after. Returns the box's receipt (counts, never values); an unreachable box is INCOMPLETE."""
     if DRY_RUN:
         return dict(box=box.name, status='CLEAN', dry_run=True)
+    if getattr(box, 'local', False):
+        # This box's run files are the driver's own run root: they are swept here, in this process.
+        return dict(sanitize_local(root, book), box=box.name)
     digests = root / f'{box.name}-digests.json'
     receipt_path = root / f'{box.name}-sanitize.json'
     try:

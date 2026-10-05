@@ -186,6 +186,26 @@ class FakeBox:
         self.remote = FakeRemote()
 
 
+class LocalGameBox(unittest.TestCase):
+    """A game box that is this box (row c's EROL-PC): its run files are the driver's own run root."""
+
+    def test_a_local_box_is_swept_in_its_own_run_root(self):
+        secret = 'Zq8vN3pXw7LmT2rK5yHcRb4'
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / 'c-four-players'
+            (root / 'client2').mkdir(parents=True)
+            (root / 'client2' / 'stdout.log').write_text(f'[net-ice] relay login {secret}\n', encoding='utf-8')
+            box = FakeBox('erol-pc')
+            box.local = True
+            secrets = SecretBook()
+            secrets.add('minted-credential', secret)
+            with mock.patch.object(match.subprocess, 'run', side_effect=AssertionError('a local box is never reached over ssh')):
+                receipt = match.sanitize_box(box, root, secrets, Path(folder) / 'payload')
+            text = (root / 'client2' / 'stdout.log').read_text(encoding='utf-8')
+        self.assertEqual((receipt['box'], receipt['status'], receipt['hits_before'], receipt['hits_after']), ('erol-pc', 'CLEAN', 1, 0))
+        self.assertNotIn(secret, text)
+
+
 def legacy_fixed_run():
     return dict(name='coturn', relay='coturn', host_relay_mode='Fixed', relay_urls=['turn:relay.example:3479?transport=udp'],
                 timeout_s=420, peers=[dict(name='host', box='edith', connection='RelayOnly'), dict(name='client', box='edith', connection='RelayOnly')])
