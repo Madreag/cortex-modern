@@ -4194,11 +4194,11 @@ namespace RTE {
 						bool found = false;
 						for (const NetH4Outbound& outbound: host->TakeOutbound()) {
 							if (const auto* update = std::get_if<NetH4RosterRevision>(&outbound.payload)) {
-								const auto decoded = DecodeRoster(update->roster);
-								if (!decoded.ok || decoded.roster.revision != revision) continue;
+								NetSeatRoster decoded;
+								if (!DecodeRoster(update->roster, decoded, &error) || decoded.revision != revision) continue;
 								found = true;
-								if (decoded.roster.stage != observedStage) ++transitions[static_cast<size_t>(decoded.roster.stage)];
-								observedStage = decoded.roster.stage;
+								if (decoded.stage != observedStage) ++transitions[static_cast<size_t>(decoded.stage)];
+								observedStage = decoded.stage;
 							}
 						}
 						if (!found) return false;
