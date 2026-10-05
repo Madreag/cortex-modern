@@ -7199,6 +7199,36 @@ static std::string ResyncSaveName() {
 		RefreshSeatViewsLocked(AdmissionNowMs());
 	}
 
+	void NetMatchService::KickHeldSeatsForTestLocked(uint64_t nowMs) {
+		// MS, or MS:SEAT to kick only that lockstep seat.
+		static const std::optional<std::pair<uint64_t, uint8_t>> lever = []() -> std::optional<std::pair<uint64_t, uint8_t>> {
+			const char* text = std::getenv("CCCP_TEST_KICK_HELD_AFTER_MS");
+			if (!text || !*text) return std::nullopt;
+			char* end = nullptr;
+			const unsigned long long after = std::strtoull(text, &end, 10);
+			unsigned long long seat = 0;
+			if (end && *end == ':') seat = std::strtoull(end + 1, &end, 10);
+			return end && *end == 0 && seat <= 255 ? std::optional<std::pair<uint64_t, uint8_t>>{{after, static_cast<uint8_t>(seat)}} : std::nullopt;
+		}();
+		if (!lever || !m_IsHost || !m_Session || !m_Coordinator || !m_Coordinator->IsRunning() || m_State != NetMatchServiceState::Running) return;
+		const auto& [afterMs, onlySeat] = *lever;
+		// A removal republishes the seats, so the walk reads a copy.
+		const std::vector<NetH4ModerationSeat> seats = m_ModerationSeats;
+		for (const NetH4ModerationSeat& seat: seats) {
+			const uint8_t peer = seat.lockstepPeerId;
+			if (seat.cpu || peer == 0 || (onlySeat != 0 && peer != onlySeat) || m_TestKickedSeats.contains(peer)) continue;
+			if (!m_Coordinator->HasHeldAISeat(peer)) {
+				m_TestHeldSinceMs.erase(peer);
+				continue;
+			}
+			const uint64_t since = m_TestHeldSinceMs.try_emplace(peer, nowMs).first->second;
+			if (nowMs < since + afterMs) continue;
+			m_TestKickedSeats.insert(peer);
+			const NetKickBanResult result = ApplyRemovalLocked(NetSelectModerationSeat(seat), NetParticipantRemovalAction::Kick, *m_Session);
+			System::PrintDiagnosticLine("[net-test] kicked held seat " + std::to_string(peer) + " after " + std::to_string(nowMs - since) + "ms: " + NetKickBanResultName(result));
+		}
+	}
+
 	void NetMatchService::PublishLobbyModerationViewLocked() {
 		if (!m_IsHost || !m_AdmissionAttached || m_State != NetMatchServiceState::Starting) {
 			return;
@@ -8267,6 +8297,7 @@ static std::string ResyncSaveName() {
 			}
 			m_SeatStatuses = m_ReconnectHost.GetSeatStatuses();
 			PublishModerationView();
+			KickHeldSeatsForTestLocked(nowMs);
 			CaptureA7SeatView();
 		}
 		if (m_IsHost && m_Coordinator && m_Coordinator->IsRunning() && (m_Coordinator->IsPersistentWorldRound() || m_WorldJoin.IsPrivateMatch())) {

@@ -10,6 +10,8 @@ namespace RTE {
 		static int RunHoldHeartbeat();
 		/// The seat transition record and the gaps and judgement that read it, alone.
 		static int RunSeatLog();
+		/// When a seat's claims on its actors end, on every peer and in a replay, alone.
+		static int RunReleasedClaims();
 	};
 
 } // namespace RTE

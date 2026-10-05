@@ -10810,6 +10810,9 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-seat-log-selftest") {
 			return NetLockstepSelfTest::RunSeatLog();
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-released-claims-selftest") {
+			return NetLockstepSelfTest::RunReleasedClaims();
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-selftest") {
 			if (NetMatchSelfTest::RunBeforeInitialization() != 0) return EXIT_FAILURE;
 			netMatchSelfTest = true;
