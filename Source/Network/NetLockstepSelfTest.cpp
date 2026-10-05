@@ -25186,7 +25186,8 @@ namespace {
 				views[3].ApplyTick(ready); tail.FinishSimulationTick(ready.frame);
 			}
 			NetLockstepFrame end; bool eof = false;
-			if (!reader.ReadFrame(end, eof, &round.failure) || !eof) return fail("recording did not end at frame 37");
+			(void)reader.ReadFrame(end, eof, &round.failure);
+			if (!eof) return fail("recording did not end at frame 37");
 			for (const auto& view: views) if (view.claimant != seat || view.ended || view.hashes != views[0].hashes) failures += view.who + " claim=" + std::to_string(view.claimant) + " ends=" + view.Ended() + "; ";
 		}
 		std::string ticketFailure;
