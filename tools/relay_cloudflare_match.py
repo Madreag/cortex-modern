@@ -840,7 +840,9 @@ def data_preflight(boxes: list[Box]) -> dict:
     the module and its first differing file, before any engine starts (a peer with other bytes is refused by the directory)."""
     if DRY_RUN or len(boxes) < 2:
         return dict(passed=True, reasons=[], digests={})
-    digests = {box.name: data_digests(box) for box in boxes}
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=len(boxes)) as pool:
+        digests = dict(zip([box.name for box in boxes], pool.map(data_digests, boxes)))
     reference = boxes[0]
     reasons = []
     for box in boxes[1:]:
