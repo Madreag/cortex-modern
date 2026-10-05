@@ -69,12 +69,14 @@ def scripts(port: int) -> dict:
 def run_once(options, root: Path) -> dict:
     root.mkdir(parents=True, exist_ok=False)
     runs, logs, result = {}, {}, {"peers": {}}
+    started = set()
     try:
         for who, text in scripts(options.port).items():
             script = root / f"{who}-menu.txt"
             script.write_text(text, encoding="utf-8")
             runs[who] = make_run(options.repo, ["-menu-script", str(script)], root / who, options.timeout, env={"CCCP_HEADLESS": "1"})
             runs[who].start()
+            started.add(who)
             if who == "host":
                 time.sleep(2.0)
         deadline = time.monotonic() + options.timeout
@@ -88,8 +90,9 @@ def run_once(options, root: Path) -> dict:
                 break
             time.sleep(1.0)
     finally:
+        # A run whose start was refused never ran: its refusal is what propagates, so only started runs are stopped.
         for who, run in runs.items():
-            if run.poll() is None:
+            if who in started and run.poll() is None:
                 run.terminate(0, "the rules were read")
             try:
                 run.close()
