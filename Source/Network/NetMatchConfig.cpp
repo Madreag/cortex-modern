@@ -245,9 +245,10 @@ namespace RTE {
 	uint32_t NetInputDelayEstimator::RequiredFrames(double tickMs, uint16_t floor) const {
 		if (!std::isfinite(tickMs) || tickMs <= 0) return std::numeric_limits<uint32_t>::max();
 		const uint32_t rtt = std::max(P95Ms(), m_Samples.empty() ? 0U : m_Samples.back().second);
-		// Cover one retransmission after the one-way trip, and the longest the input stream itself went silent: a smoothed
-		// round trip never shows a link that stops for a moment and then delivers everything at once.
-		const double frames = std::ceil((1.5 * rtt) / tickMs) + 1 + std::ceil(std::max(JitterMs(), SilenceMs()) / tickMs);
+		// Cover one retransmission after the one-way trip and the input stream's own silences, which a smoothed round trip never
+		// shows; a link that keeps going silent carries twice its longest, since its next silence is not always as brief.
+		const uint32_t silenceMargin = std::min(m_Silences.size() > 1 ? 2 * SilenceMs() : SilenceMs(), c_MaxSilenceMarginMs);
+		const double frames = std::ceil((1.5 * rtt) / tickMs) + 1 + std::ceil(std::max(JitterMs(), silenceMargin) / tickMs);
 		return static_cast<uint32_t>(std::clamp(frames, static_cast<double>(floor), static_cast<double>(std::numeric_limits<uint32_t>::max())));
 	}
 

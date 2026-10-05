@@ -48,6 +48,8 @@ namespace RTE {
 		static constexpr uint64_t c_SilenceWindowMs = 120000;
 		/// A silence longer than half the largest delay is an outage the hold answers, not jitter a delay should carry.
 		static constexpr uint32_t c_MaxCarriedSilenceMs = 500;
+		/// The most a link's silences add to its delay: a returning seat's delay still fits beside a long round trip and its restart.
+		static constexpr uint32_t c_MaxSilenceMarginMs = 300;
 		void Observe(uint64_t nowMs, uint32_t rttMs);
 		/// Records how long the sender's input stream fell silent beyond its cadence.
 		void ObserveSilence(uint64_t nowMs, uint32_t silenceMs);
