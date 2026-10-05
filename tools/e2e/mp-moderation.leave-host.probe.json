@@ -44,6 +44,24 @@
       "text_contains": "newcomer"
     },
     {
+      "op": "mouse_down",
+      "control": "NetworkSeatApplicant0",
+      "item": 0
+    },
+    {
+      "op": "wait",
+      "renders": 3
+    },
+    {
+      "op": "mouse_up",
+      "control": "NetworkSeatApplicant0",
+      "item": 0
+    },
+    {
+      "op": "wait",
+      "renders": 4
+    },
+    {
       "op": "assert_control",
       "control": "NetworkSeatName0",
       "text_contains": "leaver"
