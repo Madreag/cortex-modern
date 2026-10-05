@@ -24294,6 +24294,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	}
 
 	struct SeatSuccessionTestAccess {
+		static void RunLive(NetLockstepCoordinator& peer) { peer.m_Playback = false; }
 		static void Depart(NetLockstepCoordinator& peer, uint8_t seat, uint64_t frame, uint64_t now = 0) {
 			peer.ApplyPeerLeave(seat, frame, "committed departure", now, true, false, false, true);
 		}
@@ -24402,12 +24403,13 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			config.startFrame = 99;
 			std::string why;
 			if (!live.StartReplay(wire, config, &why)) return fail(why);
+			SeatSuccessionTestAccess::RunLive(live);
 			SeatSuccessionTestAccess::Depart(live, 2, 100);
 			std::map<uint64_t, NetLockstepReadyFrame> history;
 			for (uint64_t tick = 99; tick <= 107; ++tick) {
 				std::vector<NetGameCommand> commands;
 				if (tick == 104) { NetGameWorldTransition release; release.kind = NetGameWorldTransition::Release; release.peerId = 2; release.holderGeneration = 1; release.membershipRevision = 1; release.activationFrame = tick; commands.push_back({1, release}); }
-				if (!live.QueueReplayFrame(tick, {}, commands, &why, {}, {}, 1)) return fail(why);
+				if (!live.QueueLocalInput(tick, {}, commands, &why)) return fail(why);
 				live.Tick(0); NetLockstepReadyFrame ready;
 				if (!live.PopReadyFrame(ready)) return fail(live.GetStats().timeoutReason);
 				history[tick] = ready; live.FinishSimulationTick(tick);
