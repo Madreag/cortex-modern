@@ -180,8 +180,10 @@ def roster_reads(prefix, rows):
     return steps
 
 
-def players_probes(root, peers, base, moderate):
-    """The Players panel on every peer; with moderate the host keeps, gives away and removes places by hand."""
+def players_probes(root, peers, base, moderate, cancel=False):
+    """The Players panel on every peer; with moderate the host keeps, gives away and removes places by hand. Cancel turns the
+    newcomer away (the host's withdrawal closes its join), so with cancel the host cancels the approval instead of letting it
+    through, and removes and bans nobody."""
     host = NAMES[0]
     names = NAMES[:peers]
     steps = [{"op": "wait", "service": "Running", "sim_at_least": 150}, {"op": "wait", "elapsed_ms": 1500}, *keys("F6"),
@@ -208,17 +210,22 @@ def players_probes(root, peers, base, moderate):
             # A newcomer asks for the place; the driver freezes it so the approval stays open long enough to cancel.
             steps += [signal("ready-for-newcomer"), {"op": "wait", "control": "NetworkSeatApplicant0", "text_contains": NEWCOMER},
                       {"op": "wait", "renders": 4}, read("NetworkSeatApplicant0", tag="request-list"), shot("players-host-request"),
-                      *click("NetworkSeatApplicant0", item=0), read("NetworkSeatSubstitute0", tag="let-caption"),
-                      signal("request-seen"), wait_file(root / "newcomer-frozen.json"),
-                      *click("NetworkSeatSubstitute0"), read("NetworkSeatSubstitute0", tag="let-armed"), read("NetworkSeatsStatus", tag="let-armed-status"),
-                      shot("players-host-let-armed"), *click("NetworkSeatSubstitute0"), read("NetworkSeatsStatus", tag="let-status"),
-                      {"op": "wait", "control": "NetworkSeatCancel0", "equals": {"enabled": True}}, read("NetworkSeatCancel0", tag="cancel-caption"),
-                      *click("NetworkSeatCancel0"), read("NetworkSeatsStatus", tag="cancel-status"), signal("approval-cancelled"),
-                      wait_file(root / "newcomer-thawed.json"), {"op": "wait", "control": "NetworkSeatSubstitute0", "equals": {"enabled": True}},
-                      *click("NetworkSeatSubstitute0"), *click("NetworkSeatSubstitute0"), read("NetworkSeatsStatus", tag="let-again-status"),
-                      wait_file(probe_root(root, NEWCOMER) / "seated.json"), {"op": "wait", "elapsed_ms": 1500}, {"op": "wait", "renders": 6},
-                      *roster_reads("host-after-join", 3), shot("players-host-after-join")]
-            if peers >= 3:
+                      *click("NetworkSeatApplicant0", item=0), read("NetworkSeatSubstitute0", tag="let-caption")]
+            if cancel:
+                # The driver freezes the newcomer once the host has read the request, so the approval stays open for Cancel.
+                steps += [signal("request-seen"), wait_file(root / "newcomer-frozen.json"),
+                          *click("NetworkSeatSubstitute0"), read("NetworkSeatSubstitute0", tag="let-armed"), read("NetworkSeatsStatus", tag="let-armed-status"),
+                          shot("players-host-let-armed"), *click("NetworkSeatSubstitute0"), read("NetworkSeatsStatus", tag="let-status"),
+                          {"op": "wait", "control": "NetworkSeatCancel0", "equals": {"enabled": True}}, read("NetworkSeatCancel0", tag="cancel-caption"),
+                          shot("players-host-cancel"), *click("NetworkSeatCancel0"), read("NetworkSeatsStatus", tag="cancel-status"),
+                          signal("approval-cancelled"), wait_file(root / "newcomer-thawed.json"), {"op": "wait", "elapsed_ms": 3000},
+                          *roster_reads("host-after-cancel", 3), shot("players-host-after-cancel")]
+            else:
+                steps += [*click("NetworkSeatSubstitute0"), read("NetworkSeatSubstitute0", tag="let-armed"), read("NetworkSeatsStatus", tag="let-armed-status"),
+                          shot("players-host-let-armed"), *click("NetworkSeatSubstitute0"), read("NetworkSeatsStatus", tag="let-status"),
+                          wait_file(probe_root(root, NEWCOMER) / "seated.json"), {"op": "wait", "elapsed_ms": 1500}, {"op": "wait", "renders": 6},
+                          *roster_reads("host-after-join", 3), shot("players-host-after-join")]
+            if peers >= 3 and not cancel:
                 target = names[2]
                 steps += [*click(f"NetworkSeatRemove@{target}"), read(f"NetworkSeatRemove@{target}", tag="remove-armed"),
                           read("NetworkSeatsStatus", tag="remove-armed-status"), shot("players-host-remove-armed"),
@@ -324,8 +331,8 @@ def host_leave_probes(root, peers):
     steps = [{"op": "wait", "service": "Running", "sim_at_least": 200}, *keys("Escape"), *on_screen("Pause"),
              *hand("ButtonLeaveMatch"), *on_screen("PauseLeaveConfirm"), menu("dump_host_options"), shot("leave-host"),
              *hand("ButtonLeaveConfirm"), {"op": "wait", "service": "Completed", "scope": "menu"}, signal("left", "menu"),
-             *[{"op": "wait_file", "path": str(probe_root(root, client) / "checked.json"), "scope": "menu"} for client in clients],
-             signal("done", "menu"), {"op": "finish"}]
+             # A client whose match ends with the host's leave has no menu to return to here, so the host waits a fixed span.
+             {"op": "wait", "elapsed_ms": 12000, "scope": "menu"}, signal("done", "menu"), {"op": "finish"}]
     probes = {host: {"schema": 1, "timeout_ms": 170000, "steps": steps}}
     for client in clients:
         probes[client] = {"schema": 1, "timeout_ms": 170000, "steps": [
@@ -343,6 +350,10 @@ def check_repair(checks, reads, logs):
     checks.check("repair-second-press-repairs", started, f"the client reloaded the host's snapshot: {started}")
 
 
+TOOK_OVER = r"now hosting|hosting the match alone|Handover complete"
+HOST_LEFT = r"Host left the match at frame \d+"
+
+
 def check_host_leave(checks, captures, logs, peers):
     host, clients = NAMES[0], list(NAMES[1:peers])
     confirm = next((capture for capture in captures[host] if capture["screen"] == "PauseLeaveConfirm"), None)
@@ -350,9 +361,9 @@ def check_host_leave(checks, captures, logs, peers):
     text = label["text"] if label else ""
     plays_on = "Another player becomes the host" in text
     ends = "The match ends for everyone" in text
-    took_over = [client for client in clients if re.search(r"now hosting|hosting the match alone|Handover complete", logs[client], re.I)]
-    ended = [client for client in clients if re.search(r"the match is over for this seat|PeerLeft:The host left the match", logs[client])]
-    checks.check("leave-text-host-true", (plays_on and took_over and not ended) or (ends and not took_over),
+    took_over = [client for client in clients if re.search(TOOK_OVER, logs[client], re.I)]
+    ended = [client for client in clients if client not in took_over and re.search(HOST_LEFT, logs[client])]
+    checks.check("leave-text-host-true", (plays_on and took_over and not ended) or (ends and not took_over and len(ended) == len(clients)),
                  f"confirmation {text!r}; a client took the match over: {took_over}; the match ended for: {ended}")
 
 
@@ -468,7 +479,7 @@ def roster_names(text):
     return [line.split("  /  ")[0].replace(" (you)", "").strip() for line in text.splitlines() if line.strip() and "  /  " in line]
 
 
-def check_players(checks, reads, peers, logs, base, moderate):
+def check_players(checks, reads, peers, logs, base, moderate, cancel=False):
     host = NAMES[0]
     names = list(NAMES[:peers])
     title = reads[host].get("host-open-title", {})
@@ -522,12 +533,19 @@ def check_players(checks, reads, peers, logs, base, moderate):
     checks.check("let-names-the-newcomer", let_caption.get("text") == f"Let {NEWCOMER} join" and let_caption.get("enabled"), f"{let_caption.get('text')!r}")
     armed = reads[host].get("let-armed-status", {})
     checks.check("let-says-the-consequence-first", f"{NEWCOMER} takes {leaver}'s place" in armed.get("text", "") and "press again" in armed.get("text", ""), f"{armed.get('text')!r}")
-    cancel = reads[host].get("cancel-caption", {})
-    checks.check("cancel-is-offered-while-pending", cancel.get("text") == "Cancel this approval" and cancel.get("enabled"), f"{cancel.get('text')!r}")
-    cancelled = reads[host].get("cancel-status", {})
-    checks.check("cancel-operates", f"{NEWCOMER} will not join" in cancelled.get("text", ""), f"{cancelled.get('text')!r}")
-    again = reads[host].get("let-again-status", {})
-    checks.check("let-operates", f"{NEWCOMER} is joining in {leaver}'s place" in again.get("text", ""), f"{again.get('text')!r}")
+    if cancel:
+        offered = reads[host].get("cancel-caption", {})
+        checks.check("cancel-is-offered-while-pending", offered.get("text") == "Cancel this approval" and offered.get("enabled"), f"{offered.get('text')!r}")
+        cancelled = reads[host].get("cancel-status", {})
+        checks.check("cancel-operates", f"{NEWCOMER} will not join" in cancelled.get("text", ""), f"{cancelled.get('text')!r}")
+        turned_away = "the host withdrew this substitution" in logs[NEWCOMER]
+        checks.check("cancelled-newcomer-is-told", turned_away, f"{NEWCOMER}'s log names the withdrawal: {turned_away}")
+        after = reads[host].get("host-after-cancel-roster", {}).get("text", "") + " ".join(
+            reads[host].get(f"host-after-cancel-name{row}", {}).get("text", "") for row in range(3))
+        checks.check("cancelled-place-stays-held", leaver in after and NEWCOMER not in after, f"after the cancel: {after!r}")
+        return
+    let_status = reads[host].get("let-status", {})
+    checks.check("let-operates", f"{NEWCOMER} is joining in {leaver}'s place" in let_status.get("text", ""), f"{let_status.get('text')!r}")
     joined = [reads[host].get(f"host-after-join-name{row}", {}).get("text", "") for row in range(3)]
     checks.check("newcomer-takes-the-place", any(NEWCOMER in text for text in joined) or NEWCOMER in reads[host].get("host-after-join-roster", {}).get("text", ""), f"rows {joined}")
     if peers < 3:
@@ -572,7 +590,7 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         who_list = list(NAMES[:peers])
         ticks = 3600
     else:
-        probes = players_probes(root, peers, base, moderate)
+        probes = players_probes(root, peers, base, moderate, options.cancel)
         who_list = list(NAMES[:peers])
         ticks = 12000
     runs, records = {}, {}
@@ -652,10 +670,18 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
     checks = Checks()
     for who in runs:
         result = results[who]
-        checks.check(f"probe-{who}-complete", result.get("pass") and result.get("complete"),
-                     f"error {result.get('error')!r} at step {len(result.get('steps', []))}")
+        # The command-line match has no menu to return to: a client whose match ended with the host's leave stops its probe there.
+        ended_with_host = (case == "host-leave" and who != NAMES[0] and re.search(HOST_LEFT, logs[who]) is not None
+                           and re.search(TOOK_OVER, logs[who], re.I) is None)
+        # A newcomer whose approval the host cancelled is turned away before it plays: cancelled-newcomer-is-told reads it.
+        turned_away = case == "players" and options.cancel and who == NEWCOMER and "the host withdrew this substitution" in logs[who]
+        checks.check(f"probe-{who}-complete", (result.get("pass") and result.get("complete")) or ended_with_host or turned_away,
+                     f"error {result.get('error')!r} at step {len(result.get('steps', []))}" + (" - its match ended with the host's leave" if ended_with_host else "")
+                     + (" - turned away by the host's cancel" if turned_away else ""))
     reads = {who: tagged_reads(probes[who], results[who]) for who in runs}
     for who in runs:
+        if case == "players" and options.cancel and who == NEWCOMER:
+            continue
         armed = re.findall(r"^\[text-watch\] armed (.*)$", logs[who], re.M)
         offences = re.findall(r"^\[text-watch\] violation (\S+) (.*)$", logs[who], re.M)
         checks.check(f"screen-watches-{who}", bool(armed) and not offences,
@@ -669,7 +695,7 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
     elif case == "host-leave":
         check_host_leave(checks, captures, logs, peers)
     else:
-        check_players(checks, reads, peers, logs, base, moderate)
+        check_players(checks, reads, peers, logs, base, moderate, options.cancel)
     return {"case": case, "size": size, "peers": peers, "moderate": moderate, "base": base, "checks": checks.rows,
             "pass": all(row["pass"] for row in checks.rows), "pictures": sorted(str(path) for path in pictures.glob("*.png")),
             "records": {who: {key: record.get(key) for key in ("exit_code", "timed_out", "error")} for who, record in records.items()}}
@@ -727,6 +753,7 @@ def main():
     parser.add_argument("--all-sizes", action="store_true")
     parser.add_argument("--peers", type=int, choices=(2, 3, 4), default=3)
     parser.add_argument("--moderate", action="store_true", help="the host keeps, gives away, removes and bans places by hand")
+    parser.add_argument("--cancel", action="store_true", help="with --moderate: the host cancels the approval instead")
     parser.add_argument("--base", action="store_true", help="drive a build from before this menu work")
     parser.add_argument("--compare", type=Path, help="an earlier sp-pause result.json to hold the single-player menu against")
     parser.add_argument("--port", type=int, required=True)
