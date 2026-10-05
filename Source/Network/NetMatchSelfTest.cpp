@@ -15609,7 +15609,7 @@ namespace RTE {
 			if (!listener.StartHost(47548, error)) return false;
 			config.sessionConfig.port = 47548;
 			config.sessionConfig.timeoutMs = 30000;
-			config.sessionConfig.p2pJoin.connect = true;
+			config.sessionConfig.p2pJoin.connect = [](INetTransport&, std::string*) { return true; };
 			std::string shown;
 			config.publishLobby = [&](const NetLobbySnapshot&) { shown = service.GetStatusText(); };
 			service.ArmIceConnectingLine(config, session);
