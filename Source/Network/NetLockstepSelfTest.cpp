@@ -23624,10 +23624,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			for (int turn = 0; turn < 40; ++turn) pump(false);
 			hostWire.Deliver();
 			for (int turn = 0; turn < 3000 && !(hostView.ended && survivorView.ended && host.GetStats().nextFrame > std::max(*hostView.ended, *survivorView.ended) + 20); ++turn) pump(false);
-			std::string differs;
+			// Both comparisons are made and named, so one run shows every peer that disagrees.
+			std::string failures, differs;
 			if (!hostView.ended || !survivorView.ended || *hostView.ended != *survivorView.ended || !SameClaimsEveryFrame(hostView, survivorView, &differs)) {
-				return fail("the released seat's claim ended at frame " + hostView.Ended() + " on the host and " + survivorView.Ended() +
-				            " on the survivor that heard the release late" + (differs.empty() ? std::string() : "; " + differs));
+				failures = "the released seat's claim ended at frame " + hostView.Ended() + " on the host and " + survivorView.Ended() +
+				           " on the survivor that heard the release late" + (differs.empty() ? std::string() : "; " + differs);
 			}
 			// The committed stream replayed from before the release, as a watcher or a returning seat replays it.
 			LoopbackTransport replayWire;
@@ -23651,10 +23652,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				replay.Tick(now);
 				ApplyReadyFrames(replay, replayView);
 			}
-			if (!replayView.ended || *replayView.ended != *hostView.ended || !SameClaimsEveryFrame(hostView, replayView, &differs)) {
-				return fail("the released seat's claim ended at frame " + hostView.Ended() + " live and " + replayView.Ended() + " in the replay of the committed stream" +
-				            (differs.empty() ? std::string() : "; " + differs));
+			differs.clear();
+			if (!replayView.ended || replayView.ended != hostView.ended || !SameClaimsEveryFrame(hostView, replayView, &differs)) {
+				failures += (failures.empty() ? "" : "; ") + std::string("the released seat's claim ended at frame ") + hostView.Ended() + " live and " + replayView.Ended() +
+				            " in the replay of the committed stream" + (differs.empty() ? std::string() : "; " + differs);
 			}
+			if (!failures.empty()) return fail(failures);
 			std::cout << "[net-lockstep-selftest] released_claim_frame=" << *hostView.ended << " host=survivor=replay" << std::endl;
 			return fail("");
 		}
