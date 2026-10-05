@@ -2596,8 +2596,12 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	if (m_HostRelayHint) {
 		std::string hint = NetHostRelayHint(g_SettingsMan, m_HostComputerDraft.relay, m_HostComputerDraft.ice);
 		const std::string relayError = g_NetMatchService.GetRelayError();
-		if (!m_HostOptionsSetupDraft && !relayError.empty()) hint += "\n" + relayError;
-		if (m_HostOptionsReadOnly) hint = "This row shows your saved hosting preference; only the host sets up this match.\nCurrent match: " + g_NetMatchService.GetNatModeText() + ". Choose your route in Settings > Network > Connection.\n" + relayError;
+		// The row holds two lines: a relay error takes the second.
+		if (!m_HostOptionsSetupDraft && !relayError.empty()) hint = hint.substr(0, hint.find('\n')) + "\n" + relayError;
+		if (m_HostOptionsReadOnly) {
+			hint = "Only the host sets up this match: this row shows your saved hosting preference.\n" +
+			       (relayError.empty() ? "Current match: " + g_NetMatchService.GetNatModeText() + ". Change your route in Settings > Network." : relayError);
+		}
 		m_HostRelayHint->SetText(hint);
 	}
 	// The port box stays pressable while hosted so the attempt can name the refusal.
