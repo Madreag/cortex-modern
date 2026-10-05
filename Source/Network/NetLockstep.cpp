@@ -6732,7 +6732,11 @@ namespace RTE {
 		auto found = m_TimingDecisions.find(revision);
 		if (found == m_TimingDecisions.end() || found->second.committed || m_Config.localPeerId != GetHostPeerId()) return;
 		auto& decision = found->second;
-		if ((decision.acknowledgedPeers & decision.proposal.requiredPeers) != decision.proposal.requiredPeers) return;
+		uint8_t required = decision.proposal.requiredPeers;
+		// A seat gone by the boundary produces no acknowledgement for that boundary.
+		for (uint8_t peer = 1; peer <= decision.proposal.seatIncarnations.size(); ++peer)
+			if (IsPeerGoneAtFrame(peer, decision.proposal.applyFrame)) required &= static_cast<uint8_t>(~(1U << (peer - 1)));
+		if ((decision.acknowledgedPeers & required) != required) return;
 		NetLockstepTiming commit = decision.proposal;
 		commit.phase = NetTimingPhase::Commit;
 		QueueTiming(commit);
@@ -11865,6 +11869,11 @@ namespace RTE {
 			if (it->second.empty()) it = m_RemoteCommands.erase(it); else ++it;
 		}
 		m_LastLeaveMessage = message;
+		if (m_Config.localPeerId == GetHostPeerId()) {
+			std::vector<uint64_t> pending;
+			for (const auto& [revision, decision]: m_TimingDecisions) if (!decision.committed) pending.push_back(revision);
+			for (uint64_t revision: pending) CommitTiming(revision);
+		}
 		if (agreedBoundary) {
 			return;
 		}
