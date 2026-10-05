@@ -4183,10 +4183,11 @@ namespace RTE {
 		}
 		m_PeerLeaveFrames = leaves;
 		m_SeatTransitions = seatTransitions;
-		// A release past the boundary was agreed with the lost host on some survivors only: the successor proposes it afresh.
+		// A departure keeps its input boundary; a held release past the boundary is proposed again.
 		for (const auto& [peer, releases]: seatReleases)
 			for (const auto& [frame, release]: releases) {
-				if (frame <= m_MigrationBoundary) m_SeatReleases[peer][frame] = release;
+				const bool departure = leaves.contains(peer) && leaves.at(peer) == frame && (!heldSeats.contains(peer) || frame < heldSeats.at(peer));
+				if (frame <= m_MigrationBoundary || departure) m_SeatReleases[peer][frame] = release;
 				else if (m_AiHeldSeats.contains(peer) && frame >= m_AiHeldSeats.at(peer)) m_ReleasedAiSeats.insert(peer);
 			}
 		for (const uint8_t peer: passedReturns)
@@ -11854,7 +11855,10 @@ namespace RTE {
 			m_ReclaimTransactions.erase(back);
 			m_PeerLeaveFrames.erase(peerId);
 		}
-		if (!m_PeerLeaveFrames.emplace(peerId, firstFrameWithout).second) {
+		const auto [leave, inserted] = m_PeerLeaveFrames.emplace(peerId, firstFrameWithout);
+		if (!inserted) {
+			// Restored membership keeps the departure's original committed frame.
+			if (UsesBoundedWait() || announced || removed) RecordSeatDeparture(peerId, leave->second);
 			return;
 		}
 		NoteSeatTransition(peerId, firstFrameWithout, m_AiHeldSeats.contains(peerId) ? SeatTransition::Held : SeatTransition::Left);
