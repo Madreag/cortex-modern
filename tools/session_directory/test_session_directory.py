@@ -427,6 +427,7 @@ class DirectoryTests(unittest.TestCase):
     def test_successor_token_outlives_the_discovery_lease(self) -> None:
         directory = session_directory.SessionDirectory(15, 5)
         created = directory.register(sample_register(), "192.0.2.1", 0)
+        directory.heartbeat(created["session_id"], {"token": created["token"], "peer_count": 2, "seats_free": 1}, 0)
         directory.prune(20)
         resumed = directory.register(sample_register(
             resume_session_id=created["session_id"], resume_token=created["token"],
@@ -662,6 +663,7 @@ class DirectoryTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assert_keys(body, REGISTER_RESP_KEYS)
             last_ok = body
+            self.assertEqual(self.beat(body["session_id"], body["token"], key=key_a)[0], 200)
         self.assertIsNotNone(last_ok)
         status, limited = self.register(key=key_a)
         self.assertEqual(status, 429)
@@ -1191,6 +1193,7 @@ class DirectoryTests(unittest.TestCase):
             status, body = self.register(key=f"{i:016d}")
             self.assertEqual(status, 200, msg=f"register {i+1}")
             self.assert_keys(body, REGISTER_RESP_KEYS)
+            self.assertEqual(self.beat(body["session_id"], body["token"], key=f"{i:016d}")[0], 200)
         status, limited = self.register(key=f"{30:016d}")
         self.assertEqual(status, 429)
         self.assert_keys(limited, RATE_KEYS)
@@ -1227,6 +1230,8 @@ class DirectoryTests(unittest.TestCase):
             status, body = register_from("203.0.113.7", i)
             self.assertEqual(status, 200, msg=f"register {i+1} from the first client")
             self.assertEqual(body["observed_ip"], "203.0.113.7")
+            headers = {"X-Install-Key": f"T20301137{i:04d}".ljust(16, "0")[:16], "CF-Connecting-IP": "203.0.113.7"}
+            self.assertEqual(self.call("POST", f'/v1/sessions/{body["session_id"]}/heartbeat', {"token": body["token"], "peer_count": 2, "seats_free": 1}, headers=headers)[0], 200)
         status, _ = register_from("203.0.113.7", IP_REG_PER_MIN)
         self.assertEqual(status, 429)
         status, body = register_from("198.51.100.9", 0)
@@ -1595,6 +1600,7 @@ class DirectoryTests(unittest.TestCase):
                 sample_register(name=f"n{i:03d}"), "127.0.0.1", base + i * 0.001
             )
             ids.append(created["session_id"])
+            self.server.store.heartbeat(created["session_id"], {"token": created["token"], "peer_count": 2, "seats_free": 1}, base + i * 0.001)
         status, page1 = self.list_sessions("limit=100")
         self.assertEqual(status, 200)
         self.assertEqual(len(page1["sessions"]), 100)
@@ -2125,7 +2131,9 @@ class DirectoryTests(unittest.TestCase):
             request = sample_register(persistent_world=True, world_id=world, world_boot=1)
             with self.assertRaises(PermissionError, msg="S4: tokenless claim bypassed the first-upgrade lease quarantine"):
                 store.register(request, "203.0.113.1", 0, INSTALL_KEY)
-            restored = store.register(dict(request, resume_session_id=world, resume_token="legacyOpaqueOwnerProof01234567890"), "192.0.2.1", 0, INSTALL_KEY)
+            with self.assertRaises(PermissionError, msg="S4: a public caller forged a legacy proof during the upgrade"):
+                store.register(dict(request, resume_session_id=world, resume_token="X" * 32), "203.0.113.1", 0, INSTALL_KEY)
+            restored = store.register(dict(request, resume_session_id=world, resume_token="O" * 32), "127.0.0.1", 0, INSTALL_KEY)
             store.heartbeat(world, {"token": restored["token"], "peer_count": 2, "seats_free": 1}, 1, INSTALL_KEY)
             store.stop()
             restarted = session_directory.SessionDirectory(15, 5, owner_state=owner_file)
@@ -2206,6 +2214,7 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(len(store.list_sessions(26, None, None, None)["sessions"]), 1, "F2: register retries duplicated the world")
         self.assertEqual(len(store.get_signals(world_id, "host", 0, moved["token"], 26)["signals"]), 1,
                          "F2: a repeated register discarded a joiner's pending signal")
+        store.heartbeat(world_id, {"token": moved["token"], "peer_count": 1, "seats_free": 1}, 26, INSTALL_KEY)
         with self.assertRaises(PermissionError, msg="F2: another install replayed a tokenless world claim"):
             store.register(first_request, "192.0.2.1", 27, "fedcba9876543210")
         with self.assertRaises(PermissionError, msg="F2: an old register replay outlived its retry window"):
@@ -2220,8 +2229,8 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(repeated, first, "F2: an identical first register retry changed its lease")
         short = session_directory.SessionDirectory(3, 1)
         first = short.register(first_request, "192.0.2.1", 10, INSTALL_KEY)
-        self.assertEqual(short.register(first_request, "192.0.2.1", 15, INSTALL_KEY), first,
-                         "F2: a lost register reply changed the lease after discovery expiry inside the retry window")
+        self.assertEqual(short.register(first_request, "192.0.2.1", 15, INSTALL_KEY)["session_id"], first["session_id"],
+                         "F2: a lost register reply changed the world id after its unacknowledged lease expired")
 
     def test_world_owner_survives_a_directory_restart(self) -> None:
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(session_directory, "configure_logging"):
@@ -2229,10 +2238,11 @@ class DirectoryTests(unittest.TestCase):
             world_id = str(uuid.uuid4())
             request = sample_register(persistent_world=True, world_id=world_id,
                                       world_boot=1, resume_session_id=world_id)
-            first = spawn_server(log_file=log_file)
+            first = spawn_server(log_file=log_file, first_upgrade_worlds=0)
             try:
                 now = time.monotonic()
                 created = first.store.register(request, "192.0.2.1", now, INSTALL_KEY)
+                first.store.heartbeat(world_id, {"token": created["token"], "peer_count": 1, "seats_free": 1}, now, INSTALL_KEY)
             finally:
                 first.stop()
             second = spawn_server(log_file=log_file)
@@ -2247,6 +2257,7 @@ class DirectoryTests(unittest.TestCase):
                 resumed = second.store.register(dict(request, world_boot=2, resume_token=created["token"]),
                                                 "192.0.2.1", now + 1, INSTALL_KEY)
                 self.assertEqual(resumed["session_id"], world_id, "F3: the proven owner lost its world id after restart")
+                second.store.heartbeat(world_id, {"token": resumed["token"], "peer_count": 1, "seats_free": 1}, now + 1, INSTALL_KEY)
                 proof = Path(folder) / "world-owners.json"
                 self.assertTrue(proof.is_file(), "F3: no durable world owner file was written")
                 self.assertNotIn(created["token"], proof.read_text(), "F3: the owner file exposed the original token")
@@ -2268,7 +2279,7 @@ class DirectoryTests(unittest.TestCase):
             world_id = str(uuid.uuid4())
             request = sample_register(persistent_world=True, world_id=world_id,
                                       world_boot=1, resume_session_id=world_id)
-            first = spawn_server(log_file=log)
+            first = spawn_server(log_file=log, first_upgrade_worlds=0)
             try:
                 created = first.store.register(request, "192.0.2.1", time.monotonic(), INSTALL_KEY)
             finally:
@@ -2300,6 +2311,7 @@ class DirectoryTests(unittest.TestCase):
         moved = store.register(moved_request, "192.0.2.2", 20, "fedcba9876543210")
         current = dict(moved_request, resume_token=moved["token"])
         own = store.register(current, "192.0.2.2", 21, "fedcba9876543210")
+        store.heartbeat(world_id, {"token": own["token"], "peer_count": 1, "seats_free": 1}, 21, "fedcba9876543210")
         self.assertEqual(own["session_id"], world_id, "F3: the current world host could not refresh its own generation")
         with self.assertRaises(session_directory.Superseded, msg="F3: a different host refreshed the same world generation"):
             store.register(dict(current, resume_token=own["token"]), "192.0.2.3", 22, "cccccccccccccccc")
@@ -2317,10 +2329,12 @@ class DirectoryTests(unittest.TestCase):
             own = store.register(dict(current, resume_token=own["token"]), "192.0.2.2", 322, "abababababababab")
         except session_directory.Superseded:
             self.fail("F3: stored owner proof could not resume an expired world when the install identity changed")
+        store.heartbeat(world_id, {"token": own["token"], "peer_count": 1, "seats_free": 1}, 322, "abababababababab")
         with tempfile.TemporaryDirectory() as temporary:
             owner_file = Path(temporary) / "world-owners.json"
             owner_file.write_text(json.dumps({world_id.upper(): store._world_owners[world_id]}), encoding="utf-8")
-            restarted = session_directory.SessionDirectory(300, 5, owner_state=owner_file)
+            restarted = session_directory.SessionDirectory(300, 5, owner_state=owner_file, first_upgrade_worlds=0)
+            self.addCleanup(restarted.stop)
             with self.assertRaises(PermissionError, msg="F3: a noncanonical saved owner allowed a tokenless claim"):
                 restarted.register(request, "192.0.2.3", 26, "cccccccccccccccc")
             try:
@@ -2329,6 +2343,7 @@ class DirectoryTests(unittest.TestCase):
             except session_directory.Superseded:
                 self.fail("F3: stored owner proof could not resume after restart when the install identity changed")
             self.assertEqual(resumed["session_id"], world_id, "F3: a proved alternate spelling changed the world id")
+            restarted.heartbeat(world_id, {"token": resumed["token"], "peer_count": 1, "seats_free": 1}, 27, "edededededededed")
             self.assertEqual(list(json.loads(owner_file.read_text(encoding="utf-8"))), [world_id], "F3: saved ownership retained duplicate spellings")
 
     def test_lost_register_reply_survives_live_updates_and_a_long_outage(self) -> None:

@@ -16,6 +16,7 @@ import re
 import secrets
 import socket
 import ssl
+import struct
 import threading
 import time
 import uuid
@@ -33,6 +34,20 @@ USER_AGENT = "cccp-session-directory/1"
 LOGGER = logging.getLogger("session_directory")
 
 MAX_ROWS = 4096
+# Unproved registrations cannot reserve the directory's whole live capacity.
+MAX_PENDING_REGISTRATIONS = 256
+MAX_PENDING_PER_SOURCE = 8
+MAX_PENDING_BYTES = 8 * 1024 * 1024
+SESSION_METADATA_BYTES = 4096
+# A month covers a returning host without making abandoned ownership permanent.
+OWNER_IDLE_S = 30 * 24 * 60 * 60
+MAX_WORLD_OWNERS = MAX_ROWS
+MAX_OWNER_STATE_BYTES = 8 * 1024 * 1024
+# One batched write per second stays inside the five-second heartbeat cadence.
+OWNER_WRITE_INTERVAL_S = 1.0
+OWNER_WRITE_WAIT_S = 5.0
+SERVICE_KEY_BYTES = 32
+TOKEN_TAG_BYTES = 16
 RESUME_GRACE_S = 120.0
 MAX_STR = 64
 MAX_ARR = 8
@@ -62,8 +77,10 @@ MAX_STORED_SIGNAL_BYTES = 64 * 1024 * 1024
 SIGNAL_METADATA_BYTES = 256
 QUEUE_IDLE_S = 120.0
 HANDLER_TIMEOUT_S = 10
+MAX_ACTIVE_HANDLERS = 64
 HANDSHAKE_TIMEOUT_S = 5
 MAX_SIGNAL_WAIT_S = 25.0
+HANDLER_LIFETIME_S = MAX_SIGNAL_WAIT_S + 2 * HANDLER_TIMEOUT_S
 INSTALL_KEY_MIN = 16
 INSTALL_KEY_MAX = 32
 INSTALL_KEY_CHARS = frozenset(
@@ -327,6 +344,10 @@ class RateLimiter:
     def probe(
         self, key: str, now: float, is_register: bool
     ) -> Optional[tuple[int, dict[str, Any]]]:
+        if key not in self._last and len(self._last) >= PRUNE_MAP_MAX:
+            self.prune_idle(now)
+            if len(self._last) >= PRUNE_MAP_MAX:
+                return 429, {"error": "rate_limited", "retry_after_s": max(1, int(RATE_IDLE_S - (now - min(self._last.values()))) + 1)}
         reqs = self._trim(self._requests, key, now)
         if len(reqs) >= self.req_per_min:
             return (
@@ -468,6 +489,9 @@ class Session:
         self.migration_gen = 0  # the host handover generation that holds the row
         self.register_fingerprint = ""
         self.register_retry_until = 0.0
+        self.register_previous_sha256 = ""
+        self.acknowledged = False
+        self.stored_bytes = SESSION_METADATA_BYTES + len(json.dumps(fields, ensure_ascii=False).encode("utf-8"))
 
     def age_s(self, now: float) -> int:
         return max(0, int(now - self.created_at))
@@ -489,6 +513,7 @@ class SessionDirectory:
         self, expiry_s: float, heartbeat_s: float, queue_idle_s: float = QUEUE_IDLE_S,
         turn_config: Optional[dict[str, Any]] = None, turn_max_ttl: int = TURN_MAX_TTL,
         owner_state: Optional[Path] = None,
+        owner_key: Optional[Path] = None, first_upgrade_worlds: Optional[int] = None,
     ) -> None:
         self.expiry_s = expiry_s
         # The longest relay credential this directory mints; a client asking for longer gets this much.
@@ -502,10 +527,20 @@ class SessionDirectory:
         self._register_replays: dict[str, Session] = {}
         self._stored_signal_bytes = 0
         self._owner_state = Path(owner_state) if owner_state is not None else None
+        self._pending_state = self._owner_state.with_suffix(".pending.json") if self._owner_state else None
+        self._pending_worlds: dict[str, dict[str, Any]] = {}
+        self._owner_key = Path(owner_key) if owner_key is not None else self._owner_state.with_suffix(".key") if self._owner_state else None
+        self._legacy_remaining = 0
+        self._legacy_until = 0.0
+        self._service_era = 1
+        self._next_owner = 0
+        self._service_key = self._load_service_key(first_upgrade_worlds)
         self._world_owners: dict[str, dict[str, Any]] = {}
         if self._owner_state is not None and self._owner_state.exists():
+            if self._owner_state.stat().st_size > MAX_OWNER_STATE_BYTES:
+                raise ValueError("world owner state exceeds its byte bound")
             owners = json.loads(self._owner_state.read_text(encoding="utf-8"))
-            if not isinstance(owners, dict):
+            if not isinstance(owners, dict) or len(owners) > MAX_WORLD_OWNERS:
                 raise ValueError("invalid world owner state")
             normalized_owners: dict[str, dict[str, Any]] = {}
             for sid, owner in owners.items():
@@ -522,12 +557,62 @@ class SessionDirectory:
                     raise ValueError("invalid world owner state")
                 if canonical_id in normalized_owners and normalized_owners[canonical_id] != owner:
                     raise ValueError("conflicting world owner state")
+                allowed = {"token_sha256", "migration_gen", "install_sha256", "world_boot", "retry_token_sha256", "retry_fingerprint", "retry_until_unix", "last_heartbeat_unix", "owner_nonce_sha256", "owner_birth", "acked_lease", "acked_era"}
+                if set(owner) - allowed:
+                    raise ValueError("invalid world owner state")
+                owner.setdefault("last_heartbeat_unix", self._owner_state.stat().st_mtime)
+                if type(owner["last_heartbeat_unix"]) not in (int, float) or not 0 <= owner["last_heartbeat_unix"] < 10**12:
+                    raise ValueError("invalid world owner heartbeat")
+                if "owner_nonce_sha256" in owner and (not re.fullmatch(r"[0-9a-f]{64}", owner["owner_nonce_sha256"])
+                        or type(owner.get("owner_birth")) is not int or not 0 <= owner["owner_birth"] < 2**64
+                        or type(owner.get("acked_lease")) is not int or not 0 <= owner["acked_lease"] < 2**32
+                        or type(owner.get("acked_era")) is not int or not 0 <= owner["acked_era"] < 2**32):
+                    raise ValueError("invalid signed world owner state")
+                if time.time() - owner["last_heartbeat_unix"] >= OWNER_IDLE_S:
+                    continue
                 normalized_owners[canonical_id] = owner
             self._world_owners = normalized_owners
         self.limiter = DualRateLimiter()
         self.turn_provider = TurnCredentialProvider(turn_config)
         self.turn_limiter = RateLimiter(TURN_REQUESTS_PER_MIN, TURN_REQUESTS_PER_MIN)
         self._stop = threading.Event()
+        self._owner_changed = threading.Condition(self._lock)
+        self._owner_revision = 0
+        self._owner_written = 0
+        self._owner_failure: Optional[BaseException] = None
+        self._owner_writer = threading.Thread(target=self._write_owners_loop, name="world-owner-write", daemon=True)
+        if self._owner_state is not None:
+            self._owner_writer.start()
+        if self._pending_state is not None and self._pending_state.exists():
+            if self._pending_state.stat().st_size > MAX_PENDING_BYTES:
+                raise ValueError("pending world state exceeds its byte bound")
+            pending = json.loads(self._pending_state.read_text())
+            if not isinstance(pending, dict) or len(pending) > MAX_PENDING_REGISTRATIONS:
+                raise ValueError("invalid pending world state")
+            now, wall = time.monotonic(), time.time()
+            for sid, record in pending.items():
+                sid = str(uuid.UUID(sid))
+                if not isinstance(record, dict) or type(record.get("expires_unix")) not in (int, float):
+                    raise ValueError("invalid pending world state")
+                if record["expires_unix"] <= wall:
+                    continue
+                fields = record.get("fields")
+                payload = base64.b64decode(record.get("token_payload", ""), validate=True)
+                if (not isinstance(fields, dict) or len(payload) != 28
+                        or not re.fullmatch(r"[0-9a-f]{64}", record.get("fingerprint", ""))
+                        or not re.fullmatch(r"[0-9a-f]{64}", record.get("install_sha256", ""))
+                        or not isinstance(record.get("source"), str) or len(record["source"]) > MAX_STR):
+                    raise ValueError("invalid pending world state")
+                tag = hmac.new(self._service_key, b"world-proof\0" + uuid.UUID(sid).bytes + payload, hashlib.sha256).digest()[:TOKEN_TAG_BYTES]
+                token = "w1_" + base64.urlsafe_b64encode(payload + tag).decode().rstrip("=")
+                sess = Session(sid, token, fields, record["source"], now - max(0, self.expiry_s - min(self.expiry_s, record["expires_unix"] - wall)))
+                sess.register_fingerprint = record["fingerprint"]
+                sess.register_previous_sha256 = record.get("previous_sha256", "")
+                sess.install_key_sha256 = record["install_sha256"]
+                sess.migration_gen = record["migration_gen"]
+                self._sessions[sid] = sess
+                self._register_replays[sid] = sess
+                self._pending_worlds[sid] = record
         self._pruner = threading.Thread(
             target=self._prune_loop, name="session-prune", daemon=True
         )
@@ -536,49 +621,212 @@ class SessionDirectory:
         if not self._pruner.is_alive():
             self._pruner.start()
 
+    def _load_service_key(self, first_upgrade_worlds: Optional[int]) -> bytes:
+        if first_upgrade_worlds is not None and (type(first_upgrade_worlds) is not int or not 0 <= first_upgrade_worlds <= MAX_ROWS):
+            raise ValueError("first-upgrade-worlds must name the observed world count")
+        if self._owner_key is None:
+            return secrets.token_bytes(SERVICE_KEY_BYTES)
+        if self._owner_key.exists():
+            if self._owner_key.stat().st_size not in (SERVICE_KEY_BYTES, SERVICE_KEY_BYTES + 4):
+                raise ValueError("invalid service signing key")
+            key = self._owner_key.read_bytes()
+            self._service_era = (struct.unpack(">I", key[SERVICE_KEY_BYTES:])[0] if len(key) > SERVICE_KEY_BYTES else 0) + 1
+            if self._service_era >= 2**32:
+                raise ValueError("service signing era exhausted")
+            self._replace_secret(self._owner_key, key[:SERVICE_KEY_BYTES] + struct.pack(">I", self._service_era))
+            return key[:SERVICE_KEY_BYTES]
+        if first_upgrade_worlds is None:
+            raise ValueError("first-upgrade-worlds is required before creating the service key")
+        self._owner_key.parent.mkdir(parents=True, exist_ok=True)
+        key = secrets.token_bytes(SERVICE_KEY_BYTES)
+        descriptor = os.open(self._owner_key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(key + struct.pack(">I", self._service_era))
+            stream.flush()
+            os.fsync(stream.fileno())
+        self._legacy_remaining = first_upgrade_worlds
+        self._legacy_until = time.time() + self.expiry_s if first_upgrade_worlds else 0
+        return key
+
+    @staticmethod
+    def _replace_secret(path: Path, raw: bytes) -> None:
+        temporary = path.with_name(path.name + "." + secrets.token_hex(8) + ".tmp")
+        try:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+            if os.name != "nt":
+                descriptor = os.open(path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _token_proof(self, sid: str, token: Any) -> Optional[tuple[int, bytes, int, int, int, bool]]:
+        if not isinstance(token, str) or not token.startswith("w1_") or len(token) != 62:
+            return None
+        try:
+            raw = base64.b64decode(token[3:] + "=" * (-len(token[3:]) % 4), altchars=b"-_", validate=True)
+            payload, tag = raw[:-TOKEN_TAG_BYTES], raw[-TOKEN_TAG_BYTES:]
+            expected = hmac.new(self._service_key, b"world-proof\0" + uuid.UUID(sid).bytes + payload, hashlib.sha256).digest()[:TOKEN_TAG_BYTES]
+            if len(payload) != 28 or not hmac.compare_digest(tag, expected):
+                return None
+            birth, nonce, era, generation, lease = struct.unpack(">Q8sIII", payload)
+            return birth, nonce, generation & 0x7fffffff, lease, era, bool(generation & 0x80000000)
+        except (ValueError, binascii.Error, struct.error):
+            return None
+
+    def _issue_token(self, sid: str, generation: int, previous: str = "", owner: Optional[dict[str, Any]] = None, world: bool = False) -> str:
+        proof = self._token_proof(sid, previous)
+        if proof:
+            birth, nonce, _generation, lease, _era, _world = proof
+            if lease == 2**32 - 1:
+                raise PermissionError("forbidden")
+            lease += 1
+        elif previous:
+            birth = 0
+            nonce = hmac.new(self._service_key, b"legacy-owner\0" + uuid.UUID(sid).bytes + previous.encode(), hashlib.sha256).digest()[:8]
+            lease = 1
+        else:
+            self._next_owner += 1
+            if self._next_owner >= 2**32:
+                raise OverflowError("full")
+            birth, nonce, lease = (self._service_era << 32) | self._next_owner, secrets.token_bytes(8), 0
+        payload = struct.pack(">Q8sIII", birth, nonce, self._service_era, generation | (0x80000000 if world else 0), lease)
+        tag = hmac.new(self._service_key, b"world-proof\0" + uuid.UUID(sid).bytes + payload, hashlib.sha256).digest()[:TOKEN_TAG_BYTES]
+        return "w1_" + base64.urlsafe_b64encode(payload + tag).decode().rstrip("=")
+
+    def _write_owners_loop(self) -> None:
+        next_write = 0.0
+        while True:
+            with self._owner_changed:
+                while self._owner_written >= self._owner_revision and not self._stop.is_set():
+                    self._owner_changed.wait()
+                if self._stop.is_set() and self._owner_written >= self._owner_revision:
+                    return
+                delay = next_write - time.monotonic()
+                if delay > 0 and not self._stop.is_set():
+                    self._owner_changed.wait(delay)
+                    continue
+                revision = self._owner_revision
+                owners = {sid: dict(owner) for sid, owner in self._world_owners.items()}
+                pending = {sid: dict(record) for sid, record in self._pending_worlds.items()}
+            try:
+                self._write_owner_file(owners)
+                raw_pending = json.dumps(pending, sort_keys=True).encode()
+                if len(raw_pending) > MAX_PENDING_BYTES:
+                    raise ValueError("pending world state exceeds its byte bound")
+                self._replace_secret(self._pending_state, raw_pending)
+            except BaseException as error:
+                with self._owner_changed:
+                    self._owner_failure = error
+                    self._owner_changed.notify_all()
+                return
+            with self._owner_changed:
+                self._owner_written = revision
+                self._owner_changed.notify_all()
+            next_write = time.monotonic() + OWNER_WRITE_INTERVAL_S
+
+    def _write_owner_file(self, owners: dict[str, dict[str, Any]]) -> None:
+        raw = json.dumps(owners, sort_keys=True).encode("utf-8")
+        if len(raw) > MAX_OWNER_STATE_BYTES:
+            raise ValueError("world owner state exceeds its byte bound")
+        self._owner_state.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self._owner_state.with_name(self._owner_state.name + "." + secrets.token_hex(8) + ".tmp")
+        try:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self._owner_state)
+            if os.name != "nt":
+                descriptor = os.open(self._owner_state.parent, os.O_RDONLY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _wait_owner_write(self, revision: int) -> None:
+        if self._owner_state is None or revision == 0:
+            return
+        deadline = time.monotonic() + OWNER_WRITE_WAIT_S
+        with self._owner_changed:
+            while self._owner_written < revision and self._owner_failure is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("world owner acknowledgement is still waiting for storage")
+                self._owner_changed.wait(remaining)
+            if self._owner_failure is not None:
+                raise OSError("world owner acknowledgement could not be stored") from self._owner_failure
+
     def _remember_world_owner(self, sid: str, token: str, generation: int, presented: str = "", fingerprint: str = "",
                               install_key: str = "", world_boot: int = 0) -> None:
-        owner = {"token_sha256": hashlib.sha256(token.encode()).hexdigest(), "migration_gen": generation}
+        owner = {"token_sha256": hashlib.sha256(token.encode()).hexdigest(), "migration_gen": generation, "last_heartbeat_unix": time.time()}
+        proof = self._token_proof(sid, token)
+        if proof:
+            owner.update(owner_birth=proof[0], owner_nonce_sha256=hashlib.sha256(struct.pack(">Q", proof[0]) + proof[1]).hexdigest(), acked_lease=proof[3], acked_era=proof[4])
         if install_key:
             owner.update(install_sha256=hashlib.sha256(install_key.encode()).hexdigest(), world_boot=world_boot)
         if fingerprint:
             owner.update(retry_token_sha256=hashlib.sha256(presented.encode()).hexdigest(),
-                         retry_fingerprint=fingerprint, retry_until_unix=0)
+                         retry_fingerprint=fingerprint, retry_until_unix=time.time() + RESUME_GRACE_S)
         self._save_world_owner(sid, owner)
 
     def _save_world_owner(self, sid: str, owner: dict[str, Any]) -> None:
         if self._world_owners.get(sid) == owner:
             return
-        owners = dict(self._world_owners, **{sid: owner})
-        if self._owner_state is not None:
-            self._owner_state.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self._owner_state.with_name(self._owner_state.name + "." + secrets.token_hex(8) + ".tmp")
-            try:
-                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                    json.dump(owners, stream, sort_keys=True)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.replace(temporary, self._owner_state)
-                if os.name != "nt":
-                    directory_fd = os.open(self._owner_state.parent, os.O_RDONLY)
-                    try:
-                        os.fsync(directory_fd)
-                    finally:
-                        os.close(directory_fd)
-            finally:
-                temporary.unlink(missing_ok=True)
-        self._world_owners = owners
+        if sid not in self._world_owners and len(self._world_owners) >= MAX_WORLD_OWNERS:
+            raise OverflowError("full")
+        self._world_owners[sid] = owner
+        self._owner_revision += 1
+        self._owner_changed.notify_all()
 
-    def _ack_world_register(self, sess: Session, now: float) -> None:
-        owner = self._world_owners.get(sess.session_id)
-        if owner is None or owner.get("retry_until_unix", -1) != 0:
-            return
-        self._save_world_owner(sess.session_id, dict(owner, retry_until_unix=time.time() + RESUME_GRACE_S))
-        sess.register_retry_until = now + RESUME_GRACE_S
+    def _ack_world_register(self, sess: Session, now: float) -> int:
+        if sess.fields.get("persistent_world") is True:
+            owner = self._world_owners.get(sess.session_id)
+            if not sess.acknowledged or owner is None or time.time() - owner["last_heartbeat_unix"] >= OWNER_WRITE_INTERVAL_S:
+                self._remember_world_owner(sess.session_id, sess.token, sess.migration_gen,
+                                           fingerprint=sess.register_fingerprint, install_key=sess.install_key,
+                                           world_boot=sess.fields.get("world_boot", 0))
+                if sess.register_previous_sha256:
+                    self._world_owners[sess.session_id]["retry_token_sha256"] = sess.register_previous_sha256
+            if self._pending_worlds.pop(sess.session_id, None) is not None:
+                self._owner_revision += 1
+                self._owner_changed.notify_all()
+        sess.acknowledged = True
+        if sess.register_retry_until == 0:
+            sess.register_retry_until = now + RESUME_GRACE_S
+        return self._owner_revision
+
+    def _remember_pending_world(self, sess: Session, now: float) -> int:
+        if sess.fields.get("persistent_world") is not True or sess.acknowledged:
+            return 0
+        raw = base64.b64decode(sess.token[3:] + "=" * (-len(sess.token[3:]) % 4), altchars=b"-_", validate=True)
+        self._pending_worlds[sess.session_id] = {
+            "fields": dict(sess.fields), "source": sess.observed_ip, "fingerprint": sess.register_fingerprint,
+            "install_sha256": sess.install_key_sha256, "migration_gen": sess.migration_gen,
+            "previous_sha256": sess.register_previous_sha256, "token_payload": base64.b64encode(raw[:-TOKEN_TAG_BYTES]).decode(),
+            "expires_unix": time.time() + max(0, self.expiry_s - (now - sess.created_at)),
+        }
+        self._owner_revision += 1
+        self._owner_changed.notify_all()
+        return self._owner_revision
 
     def stop(self) -> None:
         self._stop.set()
+        with self._owner_changed:
+            self._owner_changed.notify_all()
+            self._signals_changed.notify_all()
+        if self._owner_writer.is_alive():
+            self._owner_writer.join(OWNER_WRITE_WAIT_S)
 
     def _prune_loop(self) -> None:
         while not self._stop.wait(1.0):
@@ -611,21 +859,31 @@ class SessionDirectory:
             dead = [
                 sid
                 for sid, sess in self._sessions.items()
-                if now - sess.last_beat >= self.expiry_s
+                if now - (sess.last_beat if sess.acknowledged else sess.created_at) >= self.expiry_s
             ]
             for sid in dead:
                 sess = self._sessions[sid]
                 self._clear_signals(sess)
-                self._resume_tokens[sid] = (sess.token, sess.last_beat + self.expiry_s + RESUME_GRACE_S, sess.migration_gen)
+                if sess.acknowledged:
+                    self._resume_tokens[sid] = (sess.token, sess.last_beat + self.expiry_s + RESUME_GRACE_S, sess.migration_gen)
                 del self._sessions[sid]
+                if self._pending_worlds.pop(sid, None) is not None:
+                    self._owner_revision += 1
+                    self._owner_changed.notify_all()
             for sid, (_, deadline, _) in list(self._resume_tokens.items()):
                 if now >= deadline:
                     del self._resume_tokens[sid]
             while len(self._resume_tokens) > MAX_ROWS:
                 del self._resume_tokens[next(iter(self._resume_tokens))]
             for sid, replay in list(self._register_replays.items()):
-                if replay.register_retry_until != 0 and now >= replay.register_retry_until:
+                if self._sessions.get(sid) is not replay or (replay.register_retry_until != 0 and now >= replay.register_retry_until):
                     del self._register_replays[sid]
+            old_owners = [sid for sid, owner in self._world_owners.items() if time.time() - owner["last_heartbeat_unix"] >= OWNER_IDLE_S]
+            if old_owners:
+                for sid in old_owners:
+                    del self._world_owners[sid]
+                self._owner_revision += 1
+                self._owner_changed.notify_all()
             for sess in self._sessions.values():
                 self._prune_idle_queues(sess, now)
 
@@ -686,20 +944,22 @@ class SessionDirectory:
                 data = dict(data, resume_session_id=world_id)
             claimed = optional_generation(data)
             generation = claimed or 0
+            world = fields.get("persistent_world") is True
+            legacy = False
             if resume is not None:
                 session_id = require_str(data, "resume_session_id")
                 try:
-                    uuid.UUID(session_id)
+                    session_id = str(uuid.UUID(session_id))
                 except ValueError:
                     raise FieldError("invalid_field", "resume_session_id")
                 presented = data.get("resume_token")
                 previous = self._sessions.get(session_id)
-                fingerprint = hashlib.sha256(json.dumps([session_id, fields.get("world_boot", 0), claimed or 0, presented or "", install_key]).encode()).hexdigest()
+                fingerprint = hashlib.sha256(json.dumps([session_id, None if presented else fields.get("world_boot", 0), claimed or 0, presented or "", install_key]).encode()).hexdigest()
                 replay = self._register_replays.get(session_id)
                 owner = self._world_owners.get(session_id)
                 if (replay and fields.get("persistent_world") is True and valid_install_key(install_key)
                         and replay.register_fingerprint == fingerprint and (replay.register_retry_until == 0 or now < replay.register_retry_until)
-                        and owner and tokens_equal(owner["token_sha256"], hashlib.sha256(replay.token.encode()).hexdigest())):
+                        and fields.get("world_boot", 0) >= replay.fields.get("world_boot", 0)):
                     replay.last_beat = now
                     replay.fields = fields
                     replay.observed_ip = observed_ip
@@ -712,6 +972,11 @@ class SessionDirectory:
                 owner = self._world_owners.get(session_id)
                 if owner is not None and not world:
                     raise PermissionError("forbidden")
+                proof = self._token_proof(session_id, presented)
+                if proof is not None and proof[5] != world:
+                    raise PermissionError("forbidden")
+                same_signed_owner = world and proof is not None and (owner is None or tokens_equal(hashlib.sha256(struct.pack(">Q", proof[0]) + proof[1]).hexdigest(), owner.get("owner_nonce_sha256", "")))
+                original_signed_owner = proof is not None and owner is not None and proof[0] < owner.get("owner_birth", 0)
                 # A replacement proof is kept until its host acknowledges it, then for one retry window.
                 replayed_owner = (world and owner is not None and previous is None and retained is None
                                   and (presented is None or isinstance(presented, str))
@@ -720,54 +985,77 @@ class SessionDirectory:
                                   and fields.get("world_boot", 0) >= owner.get("world_boot", 0)
                                   and (owner.get("retry_until_unix", -1) == 0 or time.time() < owner.get("retry_until_unix", 0))
                                   and tokens_equal(hashlib.sha256((presented or "").encode()).hexdigest(), owner.get("retry_token_sha256", "")))
-                proven = (owner is not None and isinstance(presented, str)
-                          and tokens_equal(hashlib.sha256(presented.encode()).hexdigest(), owner["token_sha256"]))
+                proven = (isinstance(presented, str) and ((owner is not None and tokens_equal(hashlib.sha256(presented.encode()).hexdigest(), owner["token_sha256"]))
+                          or (previous is not None and tokens_equal(presented, previous.token))
+                          or (same_signed_owner and (owner is None or (proof[4], proof[3]) >= (owner.get("acked_era", 0), owner.get("acked_lease", 0))))
+                          or original_signed_owner))
                 same_host = (world and proven and valid_install_key(install_key)
-                             and (previous is None
-                                  or tokens_equal(hashlib.sha256(install_key.encode()).hexdigest(), owner.get("install_sha256", ""))))
+                             and (previous is None or tokens_equal(hashlib.sha256(install_key.encode()).hexdigest(), getattr(previous, "install_key_sha256", hashlib.sha256(previous.install_key.encode()).hexdigest())) or original_signed_owner))
                 first_world = world and not token and owner is None and presented in (None, "")
-                if not first_world and not replayed_owner and not (proven if owner is not None else token and isinstance(presented, str) and tokens_equal(presented, token)):
+                if first_world and time.time() < self._legacy_until:
+                    raise PermissionError("forbidden")
+                legacy = (world and previous is None and owner is None and isinstance(presented, str)
+                          and re.fullmatch(r"[A-Za-z0-9_-]{32}", presented) is not None
+                          and time.time() < self._legacy_until and self._legacy_remaining > 0
+                          and ipaddress.ip_address(observed_ip).is_loopback and valid_install_key(install_key))
+                if previous is not None and not previous.acknowledged and same_host and presented != previous.token and (claimed is None or claimed == previous.migration_gen):
+                    previous.fields = fields
+                    previous.observed_ip = observed_ip
+                    return self._register_reply(previous)
+                if same_signed_owner and owner is not None and not proven and claimed is not None and proof[2] < owner["migration_gen"] and claimed <= owner["migration_gen"]:
+                    raise Superseded("already_migrated", owner["migration_gen"])
+                if not first_world and not replayed_owner and not legacy and not (proven or (token and isinstance(presented, str) and tokens_equal(presented, token))):
                     raise PermissionError("forbidden")
                 # One host per handover generation: the first successor's claim takes the row, any later claim at that generation
                 # or below is told the match already went on; a resume that names no generation is a host reopening its own.
                 held = previous.migration_gen if previous else retained[2] if retained else owner["migration_gen"] if owner else 0
-                if same_host and fields.get("world_boot", 0) > owner.get("world_boot", 0):
+                if original_signed_owner or (same_host and owner is not None and fields.get("world_boot", 0) > owner.get("world_boot", 0)):
                     held = generation
-                if claimed is not None and claimed <= held and not ((replayed_owner or same_host) and claimed == held):
+                if world and owner is None and previous is None and proof is not None:
+                    held = proof[2]
+                if claimed is not None and claimed <= held and not ((replayed_owner or same_host or legacy or first_world) and claimed == held):
                     raise Superseded("already_migrated", held)
-                if claimed is None and held > 0 and not (replayed_owner or same_host):
+                if claimed is None and held > 0 and not (replayed_owner or same_host or legacy):
                     raise Superseded("already_migrated", held)
                 if claimed is None:
                     generation = held
                 if world:
-                    token = secrets.token_urlsafe(24)
+                    token = self._issue_token(session_id, generation, presented if isinstance(presented, str) else "", owner, True)
                 elif proven:
                     token = presented
             else:
                 if "resume_token" in data:
                     raise PermissionError("forbidden")
                 session_id = str(uuid.uuid4())
-                token = secrets.token_urlsafe(24)
+                token = self._issue_token(session_id, generation)
             previous_session = self._sessions.get(session_id)
             if previous_session is not None:
                 self._clear_signals(previous_session)
+            pending = [item for sid, item in self._sessions.items() if sid != session_id and not item.acknowledged]
+            if (len(pending) >= MAX_PENDING_REGISTRATIONS or sum(item.observed_ip == observed_ip for item in pending) >= MAX_PENDING_PER_SOURCE
+                    or sum(item.stored_bytes for item in pending) + SESSION_METADATA_BYTES + len(json.dumps(fields).encode()) > MAX_PENDING_BYTES):
+                raise OverflowError("full")
+            if world and session_id not in self._world_owners and len(self._world_owners) >= MAX_WORLD_OWNERS:
+                raise OverflowError("full")
             sess = Session(session_id, token, fields, observed_ip, now)
             sess.install_key = install_key
+            sess.install_key_sha256 = hashlib.sha256(install_key.encode()).hexdigest()
             sess.migration_gen = generation
-            if fields.get("persistent_world") is True or session_id in self._world_owners:
-                self._remember_world_owner(session_id, token, generation,
-                                           presented if resume is not None and isinstance(presented, str) else "",
-                                           fingerprint if resume is not None and fields.get("persistent_world") is True else "",
-                                           install_key, fields.get("world_boot", 0))
+            if legacy:
+                self._legacy_remaining -= 1
             if fields.get("persistent_world") is True and resume is not None:
                 sess.register_fingerprint = fingerprint
                 sess.register_retry_until = 0
+                sess.register_previous_sha256 = hashlib.sha256((presented or "").encode()).hexdigest()
                 self._register_replays[session_id] = sess
             if resume is not None:
                 if not first_world:
                     sess.state = "running"
                 self._resume_tokens.pop(session_id, None)
             self._sessions[session_id] = sess
+            revision = self._remember_pending_world(sess, now)
+            self._signals_changed.notify_all()
+        self._wait_owner_write(revision)
         return self._register_reply(sess)
 
     def _register_reply(self, sess: Session) -> dict[str, Any]:
@@ -872,12 +1160,12 @@ class SessionDirectory:
                 raise KeyError("not_found")
             if not tokens_equal(token, sess.token):
                 raise PermissionError("forbidden")
-            self._ack_world_register(sess, now)
             # A host the match left behind no longer keeps the row its successor holds.
             if generation is not None and generation < sess.migration_gen:
                 raise Superseded("superseded", sess.migration_gen)
             if valid_install_key(install_key):
                 sess.install_key = install_key
+                sess.install_key_sha256 = hashlib.sha256(install_key.encode()).hexdigest()
             sess.fields["peer_count"] = peer_count
             sess.fields["seats_free"] = seats_free
             if spectator_free is not None:
@@ -891,8 +1179,10 @@ class SessionDirectory:
             if listed is not None:
                 sess.listed = listed
             sess.last_beat = now
+            revision = self._ack_world_register(sess, now)
             listed_now = sess.listed
             held = sess.migration_gen
+        self._wait_owner_write(revision)
         answer: dict[str, Any] = {
             "expires_in_s": as_json_int(self.expiry_s),
             "heartbeat_s": as_json_int(self.heartbeat_s),
@@ -918,6 +1208,9 @@ class SessionDirectory:
             self._clear_signals(sess)
             self._register_replays.pop(session_id, None)
             self._resume_tokens.pop(session_id, None)
+            if self._pending_worlds.pop(session_id, None) is not None:
+                self._owner_revision += 1
+                self._owner_changed.notify_all()
             self._signals_changed.notify_all()
         return {"ok": True}
 
@@ -1050,12 +1343,13 @@ class SessionDirectory:
             if peer == "host":
                 if host_token is None or not tokens_equal(host_token, sess.token):
                     raise PermissionError("forbidden")
-                self._ack_world_register(sess, now)
             authenticated_lease = sess
             deadline = now + wait_s
             # Long-poll: hold the request until this peer's queue gains a signal past
             # `after`, the session goes away, or the wait elapses.
             while wait_s > 0:
+                if self._stop.is_set():
+                    raise KeyError("not_found")
                 queue = sess.queues.get(peer)
                 if queue is not None and any(item.seq > after for item in queue):
                     break
@@ -1156,6 +1450,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--log-file", type=Path, default=None)
     parser.add_argument("--owner-state", type=Path, default=None,
                         help="durable world owner hashes; defaults to world-owners.json beside the log, or in the working directory")
+    parser.add_argument("--owner-key", type=Path, default=None, help="persistent service signing key; defaults beside owner-state with .key suffix")
+    parser.add_argument("--first-upgrade-worlds", type=int, default=None, help="listed world count observed before the first upgraded start")
     parser.add_argument("--turn-config", type=Path, default=None)
     parser.add_argument("--turn-max-ttl", type=int, default=TURN_MAX_TTL,
                         help=f"the longest relay credential minted, {TURN_MIN_TTL}-{TURN_MAX_TTL} s")
@@ -1462,9 +1758,38 @@ class SessionHTTPServer(ThreadingHTTPServer):
 
     tls_context: Optional[ssl.SSLContext] = None
 
+    def __init__(self, *args, **kwargs) -> None:
+        self._handler_slots = threading.BoundedSemaphore(MAX_ACTIVE_HANDLERS)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request: socket.socket, client_address: Any) -> None:
+        if not self._handler_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._handler_slots.release()
+            raise
+
     def process_request_thread(
         self, request: socket.socket, client_address: Any
     ) -> None:
+        def expire():
+            try:
+                request.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        timer = threading.Timer(HANDLER_LIFETIME_S, expire)
+        timer.daemon = True
+        timer.start()
+        try:
+            self._serve_request(request, client_address)
+        finally:
+            timer.cancel()
+            self._handler_slots.release()
+
+    def _serve_request(self, request: socket.socket, client_address: Any) -> None:
         ctx = self.tls_context
         if ctx is not None:
             request.settimeout(HANDSHAKE_TIMEOUT_S)
@@ -1524,6 +1849,8 @@ def spawn_server(
     turn_config: Optional[dict[str, Any]] = None,
     turn_max_ttl: int = TURN_MAX_TTL,
     owner_state: Optional[Path] = None,
+    owner_key: Optional[Path] = None,
+    first_upgrade_worlds: Optional[int] = None,
 ) -> RunningServer:
     configure_logging(log_file)
     if cert is None or key is None:
@@ -1534,6 +1861,7 @@ def spawn_server(
     store = SessionDirectory(
         expiry_s=expiry_s, heartbeat_s=heartbeat_s, queue_idle_s=queue_idle_s, turn_config=turn_config, turn_max_ttl=turn_max_ttl,
         owner_state=owner_state if owner_state is not None else log_file.parent / "world-owners.json" if log_file else None,
+        owner_key=owner_key, first_upgrade_worlds=first_upgrade_worlds,
     )
     store.start_pruner()
     httpd = build_httpd(bind, port, store, cert, key)
@@ -1571,6 +1899,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         turn_config=turn_config,
         turn_max_ttl=args.turn_max_ttl,
         owner_state=args.owner_state or (args.log_file.parent if args.log_file else Path.cwd()) / "world-owners.json",
+        owner_key=args.owner_key, first_upgrade_worlds=args.first_upgrade_worlds,
     )
     print(f"session_directory listening on {args.bind}:{server.port}", flush=True)
     try:
