@@ -56,9 +56,12 @@ namespace RTE::NetPlayerPresentation {
 
 	inline std::string State(uint8_t peer, bool aiHeld, bool dropped, bool reclaiming, bool joining = false) {
 		const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
-		const bool released = ScenarioRunner::IsLockstepSeatReleased(peer) || Opened(peer);
-		// A seat the AI plays for its player is held, however its player went; only the host's release makes it Left.
-		const bool held = !released && (aiHeld || ScenarioRunner::IsLockstepSeatUnderAI(peer, frame));
+		const auto view = g_NetMatchService.GetSeatView(peer);
+		const bool released = ScenarioRunner::IsLockstepSeatReleased(peer) || (view && view->seat.owner == 0);
+		// A seat the AI plays for its player is held, however its player went; only the host's release makes it Left. The roster
+		// keeps holding a seat whose player dropped with the old host's round, where the round itself no longer reads it.
+		const bool rosterHeld = view && view->seat.owner != 0 && view->seat.phase == NetSeatPhase::Held && g_NetMatchService.GetState() == NetMatchServiceState::Running;
+		const bool held = !released && (aiHeld || rosterHeld || ScenarioRunner::IsLockstepSeatUnderAI(peer, frame));
 		const bool left = !held && Departed(peer);
 		const bool ai = held || (left && (ScenarioRunner::IsLockstepSeatUnderAI(peer, frame) || (Seated(peer) && ScenarioRunner::IsLockstepPeerGone(peer, frame))));
 		if (left) return ai ? "Left - AI in control" : "Left";
