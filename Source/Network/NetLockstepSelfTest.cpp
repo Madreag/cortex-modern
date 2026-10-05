@@ -22288,7 +22288,19 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			         std::to_string(required(lowerer)) + " park=" + std::to_string(required(parked)) + " link_only=" + std::to_string(linkOnly);
 			return false;
 		}
-		std::cout << "[net-lockstep-selftest] PASS a_links_silence_keeps_its_cover link_only=" << linkOnly << " covered=" << covered << std::endl;
+		// A link's silences are not all as short as its first (2026-10-04 9:09 PM: 67 and 83 ms, then a 152 ms one held the seat).
+		NetLockstepCoordinator growing;
+		Feed growingFeed;
+		prepare(growing);
+		for (int step = 0; step < 120; ++step) play(growing, growingFeed, true);
+		for (int step = 0; step < 5; ++step) play(growing, growingFeed, false);
+		for (int step = 0; step < 60; ++step) play(growing, growingFeed, true);
+		const uint32_t afterShort = required(growing);
+		if (afterShort < linkOnly + static_cast<uint32_t>(std::ceil(152.0 / tick))) {
+			*error = "an 83 ms silence left no cover for the 152 ms one the same link went on to: required=" + std::to_string(afterShort) + " link_only=" + std::to_string(linkOnly);
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_links_silence_keeps_its_cover link_only=" << linkOnly << " covered=" << covered << " after_short=" << afterShort << std::endl;
 		return true;
 	}
 
