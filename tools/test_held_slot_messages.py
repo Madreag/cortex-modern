@@ -139,7 +139,7 @@ def returner_arm(repo, root, port, result):
         checks["returner_told_its_slot_is_held"] = f'assert_error "{OWN_SEAT_LINE}"' in log and f'status="{OWN_SEAT_LINE}" PASS' in log
         checks["returner_offered_apply_to_rejoin"] = 'assert_label ButtonMultiplayerReconnect "Apply to Rejoin" text="Apply to Rejoin" PASS' in log
         checks["returner_offered_no_wait"] = "assert_enabled ButtonMultiplayerWaitSlot expected=0 actual=0 PASS" in log
-        checks["returner_apply_pressed"] = "activate ButtonMultiplayerReconnect ok=1" in log
+        checks["returner_apply_pressed"] = "activate ButtonMultiplayerReconnect click ButtonMultiplayerReconnect PASS" in log
         checks["returner_script_ran_clean"] = "[menu-script] FAILED:" not in log
         checks["host_sees_the_request_beside_the_seat"] = probe_result.get("pass") is True
         checks["returner_host_exit"] = exits["host"] == 0
@@ -186,7 +186,10 @@ def world_arm(repo, root, port, result):
                  f"assert_label LabelMultiplayerStatus {WAIT_LINE}", "assert_label ButtonMultiplayerLeave Cancel",
                  "wait_ms 10000", f"assert_label LabelMultiplayerStatus {WAIT_LINE}",
                  "activate ButtonMultiplayerLeave", "wait 10", "assert_substate Landing",
-                 "activate ButtonMultiplayerJoinGame", "wait 10", "activate ButtonJoinAddressGo",
+                 "activate ButtonMultiplayerJoinGame", "wait 10",
+                 # A join made again goes through Join by address, whose address box starts empty.
+                 "activate ButtonJoinByAddress", "wait 4", "settext TextJoinAddress 127.0.0.1", f"settext TextJoinPort {port}",
+                 "activate ButtonJoinAddressGo",
                  "wait_state Failed 240", "wait 5", f"assert_error {SLOTS_HELD_LINE}",
                  "activate ButtonMultiplayerReconnect", "wait_ms 12000", "dump_lobby", "exit"]
         (root / "newcomer.txt").write_text(join_script("Newcomer", port, lines), encoding="utf-8")
@@ -211,7 +214,7 @@ def world_arm(repo, root, port, result):
         # Between rounds the host takes no application (moderation is a running match's); the Apply is answered, never left silent.
         answered = "[net-reconnect] applicant" in host_log or "admission refused reason=SeatNotSubstitutable" in host_log
         result["details"]["world"]["apply_answer"] = next((line.split("status=", 1)[1][:120] for line in log.splitlines() if line.startswith("[menu-script] dump_lobby")), "")
-        checks["newcomer_apply_answered_by_the_host"] = "activate ButtonMultiplayerReconnect ok=1" in log and answered
+        checks["newcomer_apply_answered_by_the_host"] = "activate ButtonMultiplayerReconnect click ButtonMultiplayerReconnect PASS" in log and answered
         # The wait knocks every two seconds; each knock must reach the host's answer, never trip on the last knock's leftovers.
         knocks = log.count("admission refused reason=SessionFull role=client key=slots_held")
         result["details"]["world"]["slots_held_answers"] = knocks
