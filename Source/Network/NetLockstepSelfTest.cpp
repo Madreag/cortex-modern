@@ -2179,7 +2179,14 @@ namespace RTE {
 			uint64_t firstWait = 10;
 			if (!WarmBoundedInputFixture({{&host, &hostWire}, {&client, &clientWire}}, firstWait, error) || !host.QueueLocalInput(101, {}, {}, error)) return false;
 			NetLockstepReadyFrame ready;
-			for (uint64_t now = firstWait; now < firstWait + 48; ++now) { host.Tick(now); if (host.PopReadyFrame(ready)) return false; }
+			for (uint64_t now = firstWait; now < firstWait + 48; ++now) {
+				host.Tick(now);
+				if (host.PopReadyFrame(ready)) {
+					*error = "consumer-free hold committed early: frame=" + std::to_string(ready.frame) + " now=" + std::to_string(now) +
+					         " first_wait=" + std::to_string(firstWait) + " holds=" + std::to_string(host.GetStats().peers.at(2).holds);
+					return false;
+				}
+			}
 			host.Tick(firstWait + 48);
 			if (!host.PopReadyFrame(ready) || !host.IsSeatUnderAI(2, 101) || host.GetStats().blockingFrameWaits != 0 ||
 			    host.GetStats().lastHoldDeclarationMs + host.GetStats().holdNoticeBudgetMs > 50) {
@@ -2629,7 +2636,7 @@ namespace RTE {
 				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(20 + frame);
 				if (!host.PopReadyFrame(ready) || ready.frame != frame) { *error = "the acknowledgement fixture lost an input before its timing boundary"; return false; }
 			}
-			if (!client.QueueLocalInput(20, {}, {}, error)) return false;
+			// Producer 19 already sent target 20 on the client's agreed one-tick lookahead.
 			hostWire.AdvanceTimeMs(1); host.Tick(40);
 			std::string pending;
 			if (host.QueueLocalInput(20, {}, {}, &pending) || pending != "input is waiting for a timing decision") {
@@ -2776,7 +2783,11 @@ namespace RTE {
 			returnWire.AdvanceTimeMs(30);
 			returnWire.PollEvents();
 			b.startFrame = 10; b.joinsRunningRound = true; b.initialSeatHolds = held;
-			b.initialSeatReclaims[2] = NetGameSeatReclaim{2, 0, 2, 2, 10, 0, 10};
+			b.initialSeatReclaims[2] = host.ReclaimTransactions().at(2);
+			b.peerIncarnations[2] = b.initialSeatReclaims[2].seatIncarnation;
+			b.inputDelayFrames = b.initialSeatReclaims[2].delayFrames;
+			b.peerInputDelayFrames = host.GetConfig().peerInputDelayFrames;
+			b.matchConfig = host.GetConfig().matchConfig;
 			b.remoteTransportPeerId = 1;
 			if (!returning.Start(returnWire, b, error)) return false;
 			for (uint64_t now = 30; now < 50; ++now) { hostWire.AdvanceTimeMs(1); returnWire.AdvanceTimeMs(1); host.Tick(now); returning.Tick(now); }
@@ -2788,10 +2799,19 @@ namespace RTE {
 			NetLockstepReadyFrame second;
 			if (!host.PopReadyFrame(ready) || !returning.PopReadyFrame(second) || ready.reclaimedPeerIds != std::vector<uint8_t>{2} ||
 			    ready.reclaimedPeerIds != second.reclaimedPeerIds || ready.localCommands != second.remoteCommands ||
-			    host.IsPeerGoneAtFrame(2, 10) || returning.IsPeerGoneAtFrame(2, 10) || !host.IsSeatReclaimGap(2, 10) || host.IsSeatReclaimGap(2, 11)) {
+			    host.IsPeerGoneAtFrame(2, 10) || returning.IsPeerGoneAtFrame(2, 10) || !host.IsSeatReclaimGap(2, 10) ||
+			    !host.IsSeatReclaimGap(2, b.initialSeatReclaims[2].neutralThroughFrame) || host.IsSeatReclaimGap(2, b.initialSeatReclaims[2].neutralThroughFrame + 1)) {
 				*error = "private reclaim disagreed on its committed authority or neutral gap"; return false;
 			}
 			if (!VerifyReclaimedSeatControllerState(host, ready, returning, second, error)) return false;
+			(void)host.FinishSimulationTick(ready.frame); (void)returning.FinishSimulationTick(second.frame);
+			const uint64_t firstRequired = b.initialSeatReclaims[2].neutralThroughFrame + 1;
+			for (uint64_t frame = 11; frame < firstRequired; ++frame) {
+				if (!host.QueueLocalInput(frame, {}, {}, error)) return false;
+				host.Tick(60);
+				if (!host.PopReadyFrame(ready) || ready.frame != frame) { *error = "the survivor did not commit the agreed neutral reclaim range"; return false; }
+				(void)host.FinishSimulationTick(frame);
+			}
 			NetLockstepFrame stale; stale.senderPeerId = 2; stale.roundId = 32; stale.targetFrame = 11;
 			stale.commands = {{2, NetGameSetTeamFunds{1, 999}, 1}};
 			NetTransportEvent event; event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
@@ -2801,15 +2821,15 @@ namespace RTE {
 			if (host.PeekQueuedCommands(11, 2, queued) && !queued.empty()) { *error = "the fenced transport replayed a stale purchase after reclaim"; return false; }
 			if (boundedReturn) {
 				host.NoteLocalStartPark(1000);
-				if (!host.QueueLocalInput(11, {}, {}, error)) return false;
-				for (uint64_t now = 62; now <= 112; ++now) { host.Tick(now); host.NoteFrameWait(11, now); }
-				if (!host.IsPeerGoneAtFrame(2, 11) || !host.IsRunning()) {
+				if (!host.QueueLocalInput(firstRequired, {}, {}, error)) return false;
+				for (uint64_t now = 62; now <= 112; ++now) { host.Tick(now); host.NoteFrameWait(firstRequired, now); }
+				if (!host.IsPeerGoneAtFrame(2, firstRequired) || !host.IsRunning()) {
 					*error = "a reclaimed seat received another startup allowance beyond the wait bound";
 					return false;
 				}
 				return true;
 			}
-			if (!host.ProposePeerHold(2, 62, error) || !host.IsPeerGoneAtFrame(2, 11)) {
+			if (!host.ProposePeerHold(2, 62, error) || !host.IsPeerGoneAtFrame(2, firstRequired)) {
 				*error = "a previous reclaim prevented the next incarnation from being held"; return false;
 			}
 			return host.IsRunning();
@@ -5317,7 +5337,7 @@ namespace RTE {
 			const auto held = host.HeldTransactions();
 			NetLockstepReadyFrame ready, otherReady;
 			for (uint64_t frame = 0; frame < 10; ++frame) {
-				if (!host.QueueLocalInput(frame, {}, {}, error) || (frame < 5 && !other.QueueLocalInput(frame, {}, {}, error))) return false;
+				if (!host.QueueLocalInput(frame, {}, {}, error) || (frame + other.GetConfig().inputDelayFrames < 5 && !other.QueueLocalInput(frame, {}, {}, error))) return false;
 				if (frame == 5 && !host.ProposePeerHold(3, now, error)) return false;
 				bool popped = false;
 				for (const uint64_t until = now + 40; now < until && !popped; ++now) {
@@ -5342,7 +5362,10 @@ namespace RTE {
 			returnWire.PollEvents();
 			auto back = config(2, {{1, 1}});
 			back.startFrame = 15; back.joinsRunningRound = true; back.initialSeatHolds = held;
-			back.initialSeatReclaims[2] = NetGameSeatReclaim{2, 0, 3, 2, 15, 0, 15};
+			back.initialSeatReclaims[2] = host.ReclaimTransactions().at(2);
+			back.inputDelayFrames = back.initialSeatReclaims[2].delayFrames;
+			back.peerInputDelayFrames = host.GetConfig().peerInputDelayFrames;
+			back.matchConfig = host.GetConfig().matchConfig;
 			back.peerIncarnations = {{1, 1}, {2, 2}, {3, 1}};
 			back.seatStateThroughFrame = 0;
 			if (!returning.Start(returnWire, back, error)) return false;
