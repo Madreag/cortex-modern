@@ -49,7 +49,7 @@ clears every CPU team (no funds, no brains). Human brains are parked out of
 Battle Rifle reach so the 1200-tick window cannot be decided. It uses the same
 input script and records the controller log. Network runs launch that same
 fixture with `-net-match-humans 2 -net-match-cpu-slots 0`. The input seam is
-the same one used by `record_ak47_fire.py`; no desktop input is synthesized.
+the engine's own `-input-script`; no desktop input is synthesized.
 Each three-tick firing pulse shares its press and release with a distinct aim
 change, so those input packets have an operationally defined render-pose probe.
 The generated input-schedule.json requires every planned edge stamp to be present.
