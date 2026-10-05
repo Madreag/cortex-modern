@@ -1744,7 +1744,9 @@ namespace RTE {
 		bool m_RelayReady = false;
 		bool m_RelayPublishPending = false;
 		bool m_RelayAttempted = false;
-		uint64_t m_IceDialStartedMs = 0; //!< Worker thread: the joiner's current ICE dial, for the line it reads while it connects.
+		uint64_t m_IceDialStartedMs = 0; //!< Worker thread: the current connection attempt starts its own clock.
+		uint32_t m_ConnectingLimitMs = 0;
+		bool m_ConnectingDirect = false;
 		bool m_IceDialRetrying = false;
 		uint64_t m_IceSignalsAtDial = 0; //!< The host's signals before this dial, so a retry waits for an answer of its own.
 		std::string m_IceConnectingPhase; //!< The phase the log last named, so a phase is logged once, not each second.

@@ -10116,6 +10116,7 @@ static std::string ResyncSaveName() {
 		config.joinAddress = target.address;
 		// SessionFull retries must keep this leg instead of resolving back to ICE.
 		config.resolveJoinAddress = {};
+		ArmIceConnectingLine(config, session);
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_IceRoute = "ip";
@@ -10134,8 +10135,12 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::ArmIceConnectingLine(NetMatchRunnerConfig& config, NetSession& session) {
 		m_IceDialStartedMs = SteadyNowMs();
+		m_ConnectingDirect = !config.sessionConfig.p2pJoin.connect;
+		m_ConnectingLimitMs = m_ConnectingDirect ? config.sessionConfig.timeoutMs : GnsTransport::IceConnectTimeoutMs();
 		m_IceConnectingPhase.clear();
 		m_IceSignalsAtDial = 0;
+		// The existing publisher follows the attempt; a direct fallback needs no second wrapper.
+		if (m_ConnectingDirect) return;
 #ifdef CCCP_WITH_GNS
 		if (m_Dispatcher) m_IceSignalsAtDial = m_Dispatcher->GetCounters().signalsIn;
 #endif
@@ -10155,8 +10160,11 @@ static std::string ResyncSaveName() {
 #ifdef CCCP_WITH_GNS
 		answered = m_Dispatcher && m_Dispatcher->GetCounters().signalsIn > m_IceSignalsAtDial;
 #endif
-		const std::string phase = m_IceDialRetrying ? (answered ? "retry, testing routes" : "retry, waiting for the host") : (answered ? "testing routes" : "waiting for the host's answer");
-		const std::string line = NetIceConnectingLine(SteadyNowMs() - m_IceDialStartedMs, GnsTransport::IceConnectTimeoutMs(), answered, m_RelayAttempted, m_IceDialRetrying);
+		const std::string phase = m_ConnectingDirect ? "direct UDP" : m_IceDialRetrying ? (answered ? "retry, testing routes" : "retry, waiting for the host") : (answered ? "testing routes" : "waiting for the host's answer");
+		const uint64_t elapsedMs = SteadyNowMs() - m_IceDialStartedMs;
+		const std::string line = m_ConnectingDirect
+		    ? "Connecting (" + std::to_string(elapsedMs / 1000) + " of " + std::to_string(m_ConnectingLimitMs / 1000) + " s) - trying the host's UDP address"
+		    : NetIceConnectingLine(elapsedMs, m_ConnectingLimitMs, answered, m_RelayAttempted, m_IceDialRetrying);
 		if (phase != m_IceConnectingPhase) {
 			m_IceConnectingPhase = phase;
 			System::PrintDiagnosticLine("[net-ice] connecting: " + line);
