@@ -894,6 +894,7 @@ namespace RTE {
 		struct ReadResult { std::vector<std::vector<uint8_t>> records; uint64_t last = 0; };
 		struct Job {
 			uint64_t frame = 0, maxBytes = 0;
+			uint64_t retain = 0, bound = 0;
 			size_t maxRecords = 0;
 			bool prune = false; //!< Drops the segments wholly before frame.
 			std::vector<uint8_t> bytes;
@@ -958,9 +959,10 @@ namespace RTE {
 			if (failure.empty()) failure = why;
 			failed = true;
 		}
-		void Prune(uint64_t before) {
+		void Prune(uint64_t before, uint64_t retain, uint64_t bound) {
 			std::lock_guard lock(mutex);
 			Job job; job.frame = before; job.prune = true;
+			job.retain = retain; job.bound = bound;
 			jobs.push_back(std::move(job));
 			changed.notify_one();
 		}
@@ -1003,31 +1005,71 @@ namespace RTE {
 		}
 		void Run() {
 			std::deque<Segment> segments;
+			std::deque<Segment> pendingDeletes;
+			Job lastPrune;
+			auto nextDeleteRetry = std::chrono::steady_clock::now();
 			uint64_t opened = 0;
 			const auto close = [](Segment& segment) {
 				segment.stream.reset();
-				std::error_code ignored;
-				std::filesystem::remove(segment.path, ignored);
+				std::error_code error;
+				std::filesystem::remove(segment.path, error);
+				return !error;
+			};
+			const auto publish = [&](bool receipt, uint64_t dropped) {
+				uint64_t bytes = 0, index = 0, frames = 0, first = 0, last = 0, unreadable = 0;
+				for (const auto* files: {&segments, &pendingDeletes}) for (const Segment& segment: *files) {
+					if (receipt) {
+						if (segment.stream) segment.stream->flush();
+						std::error_code error;
+						const uint64_t size = std::filesystem::file_size(segment.path, error);
+						if (error) ++unreadable; else bytes += size;
+					} else bytes += segment.endOffset;
+					index += segment.records.capacity() * sizeof(decltype(segment.records)::value_type);
+					frames += segment.records.size();
+					if (first == 0 || segment.first < first) first = segment.first;
+					last = std::max(last, segment.first + segment.records.size() - 1);
+				}
+				bytesOnDisk = bytes; filesOnDisk = static_cast<uint32_t>(segments.size() + pendingDeletes.size()); indexBytes = index;
+				if (receipt && lastPrune.prune)
+					System::PrintDiagnosticLine("[round-history] journal pruned file=" + std::filesystem::path(path).filename().string() + " first=" + std::to_string(first) +
+					    " last=" + std::to_string(last) + " frames=" + std::to_string(frames) + " dropped_frames=" + std::to_string(dropped) +
+					    " bound_frames=" + std::to_string(lastPrune.bound) + " retain_frames=" + std::to_string(lastPrune.retain) + " file_frames=" + std::to_string(c_JournalSegmentFrames) +
+					    " disk_files=" + std::to_string(filesOnDisk.load()) + " disk_bytes=" + std::to_string(bytes) + " pending_delete_files=" + std::to_string(pendingDeletes.size()) +
+					    " unreadable_files=" + std::to_string(unreadable) + " within_bound=" + (unreadable == 0 && (lastPrune.bound == 0 || frames <= lastPrune.bound) ? "1" : "0"));
 			};
 			try {
 				std::filesystem::create_directories(std::filesystem::path(path).parent_path());
 				while (true) {
 					Job job;
+					bool haveJob = false;
 					{
 						std::unique_lock lock(mutex);
 						// The lever's stalled writer leaves frame stallAt and everything after it queued.
 						const auto stalled = [&] { return fault.stallAt != 0 && !jobs.front().prune && !jobs.front().result && jobs.front().frame >= fault.stallAt; };
-						changed.wait(lock, [&] { return stopping || (!jobs.empty() && !stalled()); });
+						const auto ready = [&] { return stopping || (!jobs.empty() && !stalled()); };
+						if (pendingDeletes.empty()) changed.wait(lock, ready);
+						else changed.wait_for(lock, std::chrono::seconds(1), ready);
 						if (stopping) break;
-						job = std::move(jobs.front()); jobs.pop_front(); queuedBytes -= job.bytes.size();
+						if (!jobs.empty() && !stalled()) {
+							job = std::move(jobs.front()); jobs.pop_front(); queuedBytes -= job.bytes.size(); haveJob = true;
+						}
 					}
-					if (job.prune) {
+					uint64_t dropped = 0;
+					bool receipt = false;
+					if (!pendingDeletes.empty() && std::chrono::steady_clock::now() >= nextDeleteRetry) {
+						receipt = true;
+						std::erase_if(pendingDeletes, [&](Segment& segment) { if (!close(segment)) return false; dropped += segment.records.size(); return true; });
+						nextDeleteRetry = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+					}
+					if (haveJob && job.prune) {
+						lastPrune = job; receipt = true;
 						// The segment being written stays: frames only ever join the newest one.
 						while (segments.size() > 1 && segments.front().first + segments.front().records.size() <= job.frame) {
-							close(segments.front());
+							if (close(segments.front())) dropped += segments.front().records.size();
+							else { pendingDeletes.push_back(std::move(segments.front())); nextDeleteRetry = std::chrono::steady_clock::now() + std::chrono::seconds(1); }
 							segments.pop_front();
 						}
-					} else if (!job.result) {
+					} else if (haveJob && !job.result) {
 						if (segments.empty() || segments.back().records.size() >= c_JournalSegmentFrames) {
 							Segment segment;
 							segment.first = job.frame;
@@ -1044,7 +1086,7 @@ namespace RTE {
 						if (!*segment.stream) { Fail("its write of frame " + std::to_string(job.frame) + " failed"); break; }
 						segment.records.emplace_back(segment.endOffset, static_cast<uint32_t>(job.bytes.size()));
 						segment.endOffset += job.bytes.size();
-					} else {
+					} else if (haveJob) {
 						ReadResult result;
 						uint64_t total = 0, expected = job.frame;
 						for (Segment& segment: segments) {
@@ -1063,21 +1105,15 @@ namespace RTE {
 						}
 						job.result->set_value(std::move(result));
 					}
-					if (!job.result) {
-						uint64_t bytes = 0, index = 0;
-						for (const Segment& segment: segments) {
-							bytes += segment.endOffset;
-							index += segment.records.capacity() * sizeof(decltype(segment.records)::value_type);
-						}
-						bytesOnDisk = bytes;
-						filesOnDisk = static_cast<uint32_t>(segments.size());
-						indexBytes = index;
-					}
+					if (!job.result || receipt) publish(receipt, dropped);
 				}
 			} catch (const std::exception& error) {
 				Fail(std::string("its writer stopped: ") + error.what());
 			} catch (...) { Fail("its writer stopped"); }
-			for (Segment& segment: segments) close(segment);
+			for (Segment& segment: segments) if (!close(segment)) pendingDeletes.push_back(std::move(segment));
+			segments.clear();
+			std::erase_if(pendingDeletes, [&](Segment& segment) { return close(segment); });
+			publish(!pendingDeletes.empty(), 0);
 			finished = true;
 		}
 	};
@@ -1245,14 +1281,8 @@ namespace RTE {
 		const auto fileStart = [this](uint64_t at) { return m_JournalBase + (at - m_JournalBase) / c_JournalSegmentFrames * c_JournalSegmentFrames; };
 		const uint64_t first = std::min(fileStart(frame), fileStart(m_JournalLast));
 		if (first <= m_JournalFirst) return;
-		const uint64_t dropped = first - m_JournalFirst;
 		m_JournalFirst = first;
-		m_Journal->Prune(first);
-		const uint64_t frames = m_JournalLast + 1 - m_JournalFirst;
-		System::PrintDiagnosticLine("[round-history] journal pruned first=" + std::to_string(m_JournalFirst) + " last=" + std::to_string(m_JournalLast) +
-		                            " frames=" + std::to_string(frames) + " dropped_frames=" + std::to_string(dropped) + " bound_frames=" + std::to_string(JournalBoundFrames()) +
-		                            " retain_frames=" + std::to_string(m_JournalRetain) + " file_frames=" + std::to_string(c_JournalSegmentFrames) +
-		                            " disk_bytes_before=" + std::to_string(m_Journal->bytesOnDisk.load()) + " within_bound=" + (JournalBoundFrames() == 0 || frames <= JournalBoundFrames() ? "1" : "0"));
+		m_Journal->Prune(first, m_JournalRetain, JournalBoundFrames());
 	}
 
 	bool NetWorldFrameLog::AdoptRecords(const NetWorldFrameLog& other) {
