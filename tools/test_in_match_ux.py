@@ -70,6 +70,13 @@ def hand(control):
     return [menu(f"hand_press {control}"), {"op": "wait", "renders": 3}, menu(f"hand_release {control}"), {"op": "wait", "renders": 4}]
 
 
+def end_match():
+    """The host's End match by hand, its last steps: a match launched from the command line has no lobby to land in, so
+    neither loop steps the probe once the round has ended; the run's menu script gives the end its few frames."""
+    return [menu("hand_press ButtonEndMatch"), {"op": "wait", "renders": 3}, menu("hand_release ButtonEndMatch"), signal("done"),
+            {"op": "finish"}]
+
+
 def click(control, item=None):
     """A real mouse press on a Players panel control: the button reads pushed before the mouse comes up."""
     down = {"op": "mouse_down", "control": control}
@@ -112,9 +119,10 @@ def probe_root(root, who):
     return root / f"{who}_probe"
 
 
-def match_args(port, peers, who, ticks, extra=()):
+def match_args(port, peers, who, ticks, extra=(), name=None):
+    # The match takes its seat names from the command line, not from Settings.ini.
     args = ["-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", str(peers), "-net-match-ticks", str(ticks),
-            "-net-match-input-delay", "3", "-net-autosave-seconds", "0", "-num-lua-states", "4", *extra]
+            "-net-match-input-delay", "3", "-net-autosave-seconds", "0", "-num-lua-states", "4", "-net-player-name", name or who, *extra]
     return args + (["-net-host"] if who == NAMES[0] else ["-net-join", "127.0.0.1"])
 
 
@@ -150,8 +158,7 @@ def pause_probes(root, base):
               {"op": "wait", "renders": 6}, shot("status-host-live"), signal("host-checked"),
               wait_file(probe_root(root, client) / "left.json"), {"op": "wait", "elapsed_ms": 1500},
               {"op": "wait", "renders": 6}, shot("status-host-held"),
-              *keys("Escape"), *on_screen("Pause"), *hand("ButtonEndMatch"),
-              {"op": "wait", "service": "Starting", "scope": "menu"}, signal("done", "menu"), {"op": "finish"}]
+              *keys("Escape"), *on_screen("Pause"), *end_match()]
     host_steps = steps
     steps = [{"op": "wait", "service": "Running", "sim_at_least": 150}, *keys("Escape"), *on_screen("Pause"),
              menu("dump_host_options"), shot("pause-client")]
@@ -222,8 +229,7 @@ def players_probes(root, peers, base, moderate):
                           read("NetworkSeatsStatus", tag="ban-status"), {"op": "wait", "elapsed_ms": 1500},
                           *roster_reads("host-after-ban", 3), shot("players-host-after-ban")]
         steps += [*click("NetworkSeatsClose"), {"op": "wait", "panel_open": False}, {"op": "wait", "elapsed_ms": 1500}]
-    steps += [*keys("Escape"), *on_screen("Pause"), *hand("ButtonEndMatch"), {"op": "wait", "service": "Starting", "scope": "menu"},
-              signal("done", "menu"), {"op": "finish"}]
+    steps += [*keys("Escape"), *on_screen("Pause"), *end_match()]
     probes = {host: {"schema": 1, "timeout_ms": 175000, "steps": steps}}
     for index, name in enumerate(names[1:], start=1):
         steps = [{"op": "wait", "service": "Running", "sim_at_least": 150}, wait_file(probe_root(root, host) / "host-read.json"),
@@ -259,8 +265,7 @@ def status_probes(root, base):
              {"op": "wait", "elapsed_ms": 1500} if base else {"op": "wait", "scope": "menu", "control": "LabelMatchLive", "text_contains": LIVE_RUNNING},
              *hand("ButtonResume"),
              *on_screen("Gameplay"), signal("host-read"), wait_file(probe_root(root, client) / "read.json"),
-             *keys("Escape"), *on_screen("Pause"), *hand("ButtonEndMatch"), {"op": "wait", "service": "Starting", "scope": "menu"},
-             signal("done", "menu"), {"op": "finish"}]
+             *keys("Escape"), *on_screen("Pause"), *end_match()]
     client_steps = [{"op": "wait", "service": "Running", "sim_at_least": 240}, {"op": "wait", "elapsed_ms": 1200}, {"op": "wait", "renders": 6},
                     read("LabelNetMatchStatus", tag="status-live"), shot("status-live-client"),
                     wait_file(probe_root(root, host) / "host-read.json"), signal("read"), {"op": "finish"}]
@@ -567,9 +572,9 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         directory.mkdir()
         (directory / "probe.json").write_text(json.dumps(probes[who], indent=2) + "\n", encoding="utf-8")
         script = root / f"{who}-menu.txt"
-        script.write_text(f"wait_file {menu_done} 300\nexit\n", encoding="utf-8")
+        script.write_text(f"wait_file {menu_done} 300\nwait_ms 4000\nexit\n", encoding="utf-8")
         extra = ["-net-h4-apply", "1"] if who == NEWCOMER else []
-        args = ["-menu-script", str(script), *match_args(port, peers if case == "players" else 2, who if who != NEWCOMER else "joiner", ticks, extra)]
+        args = ["-menu-script", str(script), *match_args(port, peers if case == "players" else 2, who if who != NEWCOMER else "joiner", ticks, extra, name=who)]
         diagnostics = "1" if case == "status" and options.diagnostics else "0"
         env = {"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(directory / "probe.json"), "CCCP_TEST_SCREEN_WATCHES": str(watches)}
         runs[who] = make_run(options.repo, args, root / who, 420, env=env)
