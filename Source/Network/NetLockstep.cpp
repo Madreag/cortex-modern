@@ -67,7 +67,7 @@ namespace RTE {
 		// A host playing to its round's agreed end stops waiting for it after this long at most.
 		constexpr uint64_t c_AgreedEndBoundMs = 3000;
 		constexpr uint32_t c_RecoveryInputMagic = 0x314e4952;
-		constexpr uint16_t c_RecoveryInputVersion = 6;
+		constexpr uint16_t c_RecoveryInputVersion = 7;
 
 		std::optional<uint64_t> TestFrameFromEnvironment(const char* name) {
 			const char* text = std::getenv(name);
@@ -830,6 +830,13 @@ namespace RTE {
 						AppendU64LE(out, checkpoint.tick);
 						break;
 					}
+					case NetGameCommandType::SeatRelease: {
+						const auto& release = std::get<NetGameSeatRelease>(command.payload);
+						if (!holdIdentity || command.sequence != 0 || !ValidatePeerId(release.peerId, error, "released peer") || release.eventSequence == 0) return false;
+						AppendU8(out, release.peerId); AppendU64LE(out, release.authorityGeneration); AppendU64LE(out, release.eventSequence);
+						AppendU32LE(out, release.seatIncarnation); AppendU64LE(out, release.releaseFrame);
+						break;
+					}
 					case NetGameCommandType::SeatHold: {
 						const auto& hold = std::get<NetGameSeatHold>(command.payload);
 						if (command.sequence != 0 || !ValidatePeerId(hold.peerId, error, "held peer")) return false;
@@ -1135,6 +1142,14 @@ namespace RTE {
 
 		bool EncodePayload(const NetLockstepTiming& timing, std::vector<uint8_t>& out, NetLockstepError* error);
 
+		// A committed release record, in the tick or in any older tick the packet repeats, needs the release wire.
+		bool CarriesSeatRelease(const NetLockstepFrame& frame) {
+			const auto carries = [](const NetLockstepFrame& tick) {
+				return std::any_of(tick.commands.begin(), tick.commands.end(), [](const NetGameCommand& command) { return std::holds_alternative<NetGameSeatRelease>(command.payload); });
+			};
+			return carries(frame) || std::any_of(frame.priorWindow.begin(), frame.priorWindow.end(), carries);
+		}
+
 		bool HasHostHold(const NetLockstepFrame& frame) {
 			return frame.hostHold || std::any_of(frame.priorWindow.begin(), frame.priorWindow.end(), [](const auto& older) { return older.hostHold.has_value(); });
 		}
@@ -1289,8 +1304,8 @@ namespace RTE {
 			const auto action = static_cast<uint8_t>(timing.action);
 			const auto phase = static_cast<uint8_t>(timing.phase);
 			if (!ValidatePeerId(timing.senderPeerId, error, "timing sender") || !ValidatePeerId(timing.peerId, error, "timing subject")) return false;
-			if (action < 1 || action > 5 || phase < 1 || phase > 7 || timing.sessionId == 0 || timing.roundId == 0 ||
-			    (action == 1 && phase > 4) || (action == 2 && phase > 6) || (action == 3 && phase != 7) || (action == 4 && (phase > 3 || !timing.worldTransition)) ||
+			if (action < 1 || action > 6 || phase < 1 || phase > 7 || timing.sessionId == 0 || timing.roundId == 0 ||
+			    (action == 1 && phase > 4) || (action == 6 && (phase > 3 || timing.heldPeers != 0 || timing.peerId > timing.seatIncarnations.size())) || (action == 2 && phase > 6) || (action == 3 && phase != 7) || (action == 4 && (phase > 3 || !timing.worldTransition)) ||
 			    (action == 5 && phase != static_cast<uint8_t>(NetTimingPhase::Commit) && phase != static_cast<uint8_t>(NetTimingPhase::Status)) ||
 			    timing.delayFrames > NetLockstepCodec::c_MaxInputDelayFrames || (timing.requiredPeers & 0xF0U) != 0 ||
 			    (timing.heldPeers & 0xF0U) != 0 || (timing.heldPeers & timing.requiredPeers) != 0 ||
@@ -1359,6 +1374,10 @@ namespace RTE {
 			    reader.ReadU8(timing.requiredPeers) && reader.ReadU8(timing.heldPeers) && reader.ReadU32LE(timing.pingMs) && reader.ReadU32LE(timing.jitterMs), reader, error, "timing decision")) return false;
 			timing.action = static_cast<NetTimingAction>(action);
 			timing.phase = static_cast<NetTimingPhase>(phase);
+			if (timing.action == NetTimingAction::Release && version < NetLockstepCodec::c_SeatReleaseVersion) {
+				SetError(error, NetLockstepErrorCode::UnsupportedVersion, 0, "seat releases require the release wire");
+				return false;
+			}
 			if (version >= NetLockstepCodec::c_HoldTransactionVersion) {
 				if (!ReadOrTruncated(reader.ReadU64LE(timing.authorityGeneration) && reader.ReadU64LE(timing.cutoffFrame), reader, error, "timing authority")) return false;
 				for (auto& incarnation: timing.seatIncarnations)
@@ -1747,6 +1766,18 @@ namespace RTE {
 							return false;
 						}
 						command.payload = checkpoint;
+						break;
+					}
+					case NetGameCommandType::SeatRelease: {
+						NetGameSeatRelease release;
+						if (version < NetLockstepCodec::c_SeatReleaseVersion || command.sequence != 0) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "seat release requires the release wire and a system sequence");
+							return false;
+						}
+						if (!ReadOrTruncated(reader.ReadU8(release.peerId) && reader.ReadU64LE(release.authorityGeneration) && reader.ReadU64LE(release.eventSequence) &&
+						    reader.ReadU32LE(release.seatIncarnation) && reader.ReadU64LE(release.releaseFrame), reader, error, "seat release") ||
+						    !ValidatePeerId(release.peerId, error, "released peer") || release.eventSequence == 0) return false;
+						command.payload = release;
 						break;
 					}
 					case NetGameCommandType::SeatHold: {
@@ -2672,7 +2703,7 @@ namespace RTE {
 		std::vector<uint8_t> payloadBytes;
 		const bool payloadOk = std::visit(Overloaded{
 			[&](const NetLockstepStart& payload) { return EncodePayload(payload, payloadBytes, error); },
-			[&](const NetLockstepFrame& payload) { return EncodePayload(payload, payloadBytes, error, dictionary, outObservationsEncoded, false, outValueObservationsEncoded, blocks, true, true, HasHostHold(payload)); },
+			[&](const NetLockstepFrame& payload) { return EncodePayload(payload, payloadBytes, error, dictionary, outObservationsEncoded, false, outValueObservationsEncoded, blocks, true, true, HasHostHold(payload) || CarriesSeatRelease(payload)); },
 			[&](const NetLockstepAck& payload) { return EncodePayload(payload, payloadBytes, error); },
 			[&](const NetLockstepStop& payload) { return EncodePayload(payload, payloadBytes, error); },
 			[&](const NetLockstepChecksum& payload) { return EncodePayload(payload, payloadBytes, error); },
@@ -2705,7 +2736,9 @@ namespace RTE {
 			};
 			if (carriesCheckpoint(*frame) || std::any_of(frame->priorWindow.begin(), frame->priorWindow.end(), carriesCheckpoint)) encodeVersion = c_CheckpointVersion;
 			if (HasHostHold(*frame)) encodeVersion = c_HoldMarkerVersion;
+			if (CarriesSeatRelease(*frame)) encodeVersion = c_SeatReleaseVersion;
 		}
+		if (const auto* timing = std::get_if<NetLockstepTiming>(&packet.payload); timing && timing->action == NetTimingAction::Release) encodeVersion = c_SeatReleaseVersion;
 
 		outBytes.clear();
 		outBytes.reserve(c_HeaderBytes + payloadBytes.size());
@@ -2722,8 +2755,8 @@ namespace RTE {
 	bool NetLockstepCodec::EncodeRecoveryInput(const NetLockstepFrame& frame, std::vector<uint8_t>& outBytes, NetLockstepError* error) {
 		std::vector<uint8_t> bytes;
 		AppendU32LE(bytes, c_RecoveryInputMagic);
-		const bool holdMarker = HasHostHold(frame);
-		AppendU16LE(bytes, holdMarker ? c_RecoveryInputVersion : 5);
+		const bool release = CarriesSeatRelease(frame), holdMarker = release || HasHostHold(frame);
+		AppendU16LE(bytes, release ? c_RecoveryInputVersion : holdMarker ? 6 : 5);
 		AppendU16LE(bytes, ControllerFrame::c_Version);
 		if (!EncodePayload(frame, bytes, error, nullptr, nullptr, true, nullptr, nullptr, true, true, holdMarker)) return false;
 		if (bytes.size() > c_MaxRecoveryInputBytes) {
@@ -2751,7 +2784,7 @@ namespace RTE {
 		}
 		NetLockstepPayload payload;
 		// Each recovery layout keeps the command vocabulary it recorded.
-		if (!DecodeFrame(reader, payload, error, controllerVersion, version == 1 ? c_WorldTransitionVersion : version == 2 ? 25 : version == 3 ? 27 : version == 4 ? c_WorldVersion : version == 5 ? c_CheckpointVersion : c_HoldMarkerVersion, nullptr, true) || !reader.AtEnd()) return false;
+		if (!DecodeFrame(reader, payload, error, controllerVersion, version == 1 ? c_WorldTransitionVersion : version == 2 ? 25 : version == 3 ? 27 : version == 4 ? c_WorldVersion : version == 5 ? c_CheckpointVersion : version == 6 ? c_HoldMarkerVersion : c_SeatReleaseVersion, nullptr, true) || !reader.AtEnd()) return false;
 		NetLockstepFrame frame = std::get<NetLockstepFrame>(std::move(payload));
 		std::vector<uint8_t> canonical;
 		AppendU32LE(canonical, c_RecoveryInputMagic);
@@ -2794,7 +2827,7 @@ namespace RTE {
 		if (magic != c_Magic) {
 			return Fail(NetLockstepErrorCode::BadMagic, 0, "packet magic mismatch");
 		}
-		if (version < c_MinVersion || version > c_HoldMarkerVersion) {
+		if (version < c_MinVersion || version > c_SeatReleaseVersion) {
 			return Fail(NetLockstepErrorCode::UnsupportedVersion, 4, "unsupported lockstep packet version");
 		}
 		if (headerBytes != c_HeaderBytes) {
@@ -2903,7 +2936,7 @@ namespace RTE {
 			default:
 				return false;
 		}
-		return magic == c_Magic && version >= c_MinVersion && version <= c_HoldMarkerVersion && headerBytes == c_HeaderBytes &&
+		return magic == c_Magic && version >= c_MinVersion && version <= c_SeatReleaseVersion && headerBytes == c_HeaderBytes &&
 		       flags == 0 && bytes.size() == static_cast<size_t>(c_HeaderBytes) + payloadLength;
 	}
 
@@ -4087,6 +4120,7 @@ namespace RTE {
 		const auto seatTransitions = m_SeatTransitions;
 		const auto heldSeats = m_AiHeldSeats;
 		const auto releasedSeats = m_ReleasedAiSeats;
+		const auto seatReleases = m_SeatReleases;
 		const auto holdTransactions = m_HoldTransactions;
 		const auto reclaimTransactions = m_ReclaimTransactions;
 		const auto heldResolutions = m_DroppedSeatResolutions;
@@ -4149,6 +4183,9 @@ namespace RTE {
 		}
 		m_PeerLeaveFrames = leaves;
 		m_SeatTransitions = seatTransitions;
+		// A release past the boundary was agreed with the lost host on some survivors only: the successor proposes it afresh.
+		for (const auto& [peer, releases]: seatReleases)
+			for (const auto& [frame, release]: releases) if (frame <= m_MigrationBoundary) m_SeatReleases[peer][frame] = release;
 		for (const uint8_t peer: passedReturns)
 			if (const auto seat = m_SeatTransitions.find(peer); seat != m_SeatTransitions.end()) seat->second.erase(seat->second.upper_bound(m_MigrationBoundary), seat->second.end());
 		for (uint8_t peer: m_Config.activePeerIds) {
@@ -4873,6 +4910,7 @@ namespace RTE {
 		m_CaptureParkFinalized = false;
 		m_AiHeldSeats.clear();
 		m_ReleasedAiSeats.clear();
+		m_SeatReleases.clear();
 		m_AnnouncedLeavers.clear();
 		m_SlowMachineHolds.clear();
 		m_PendingMemberEnds.clear();
@@ -5312,6 +5350,10 @@ namespace RTE {
 				seat = m_AiHeldSeats.erase(seat);
 			} else ++seat;
 		}
+		for (auto seat = m_SeatReleases.begin(); seat != m_SeatReleases.end();) {
+			seat->second.erase(seat->second.lower_bound(firstFrame), seat->second.end());
+			seat = seat->second.empty() ? m_SeatReleases.erase(seat) : std::next(seat);
+		}
 		m_LastDeliveredFrame = firstFrame > 0 ? std::optional<uint64_t>{firstFrame - 1} : std::nullopt;
 		m_Config.matchConfig = m_OpeningMatchConfig;
 		std::set<uint64_t> retainedChanges;
@@ -5571,6 +5613,9 @@ namespace RTE {
 				DiagnosticLine() << "[net-lockstep] took peer " << static_cast<int>(peer) << "'s delay " << delay << " at " << frame << " from the replayed tail" << std::endl;
 			}
 		}
+		// A release the replay read from the tail is the round's too: its seat's claims already ended there.
+		for (const auto& [peer, releases]: replay.m_SeatReleases)
+			for (const auto& [frame, release]: releases) m_SeatReleases[peer].emplace(frame, release);
 		const auto knowTaken = [&](uint64_t revision, NetLockstepTiming proposal) {
 			if (m_TimingDecisions.contains(revision)) return;
 			proposal.phase = NetTimingPhase::Propose;
@@ -5877,6 +5922,11 @@ namespace RTE {
 				m_AnnouncedLeavers.erase(peer);
 			}
 			for (auto& [revision, pending]: m_TimingDecisions) pending.acknowledgedPeers |= timing.heldPeers;
+		} else if (timing.action == NetTimingAction::Release) {
+			// Every peer ends the seat's claims at this frame; a replay reads it from the record the frame carries.
+			m_SeatReleases[timing.peerId][timing.applyFrame] = {timing.peerId, timing.authorityGeneration, timing.revision, timing.seatIncarnations[timing.peerId - 1], timing.applyFrame};
+			DiagnosticLine() << "[net-lockstep] release of peer " << static_cast<int>(timing.peerId) << " at " << timing.applyFrame << " revision=" << timing.revision
+			          << " next=" << m_Stats.nextFrame << std::endl;
 		}
 	}
 
@@ -6944,8 +6994,10 @@ namespace RTE {
 			auto found = m_TimingDecisions.find(timing.revision);
 			NetLockstepTiming proposed = timing;
 			proposed.phase = NetTimingPhase::Propose;
-			// The tail's proposal can predate the link this round listens on; its commit alone is the host's decision.
-			if (found == m_TimingDecisions.end() && tailDelay) found = m_TimingDecisions.try_emplace(timing.revision, TimingDecision{proposed}).first;
+			// The tail's proposal can predate the link this round listens on; its commit alone is the host's decision. So is a release's
+			// for a peer that joined after it was proposed, unless it already played past the frame.
+			const bool lateRelease = timing.action == NetTimingAction::Release && timing.applyFrame >= m_Stats.nextFrame;
+			if (found == m_TimingDecisions.end() && (tailDelay || lateRelease)) found = m_TimingDecisions.try_emplace(timing.revision, TimingDecision{proposed}).first;
 			if (found == m_TimingDecisions.end() || proposed != found->second.proposal) {
 				Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "timing commit has no matching proposal");
 				return;
@@ -7112,7 +7164,8 @@ namespace RTE {
 		const bool heldSeatMayReturn = host && !m_AiHeldSeats.empty();
 		std::erase_if(m_TimingDecisions, [&](const auto& entry) {
 			const auto& decision = entry.second;
-			if (heldSeatMayReturn && (decision.proposal.phase == NetTimingPhase::HoldAtFrame || decision.proposal.phase == NetTimingPhase::ReclaimAtFrame) &&
+			if (heldSeatMayReturn && (decision.proposal.phase == NetTimingPhase::HoldAtFrame || decision.proposal.phase == NetTimingPhase::ReclaimAtFrame ||
+			    decision.proposal.action == NetTimingAction::Release) &&
 			    decision.proposal.applyFrame >= m_ReturnHistoryFloor) return false;
 			if (!DecisionSettled(decision)) return false;
 			m_SettledTimings[entry.first] = decision.proposal;
@@ -8036,6 +8089,7 @@ namespace RTE {
 		for (const auto& input: authoritativeInputs) {
 			for (const auto& command: input.commands) {
 				if (const auto* delay = std::get_if<NetGameInputDelay>(&command.payload)) m_DelayChanges[delay->peerId][input.targetFrame] = delay->frames;
+				if (const auto* release = std::get_if<NetGameSeatRelease>(&command.payload)) m_SeatReleases[release->peerId][input.targetFrame] = *release;
 				if (const auto* hold = std::get_if<NetGameSeatHold>(&command.payload)) {
 					m_AiHeldSeats[hold->peerId] = input.targetFrame;
 					NoteSeatTransition(hold->peerId, input.targetFrame, SeatTransition::Held);
@@ -8896,6 +8950,7 @@ namespace RTE {
 			// survivors stop committing.  The window is extended ahead of the horizon until the park closes.
 			if (m_CaptureParkDeadlineMs != 0 && nowMs >= m_CaptureParkDeadlineMs) PublishCapturePark(m_SynchronizedCaptureStartFrame);
 		}
+		ProposeOwedSeatReleases(nowMs);
 		TickTiming(nowMs);
 		FlushDeferredParkTimings();
 		AdvanceReadyFrames(nowMs);
@@ -9186,6 +9241,16 @@ namespace RTE {
 		if (m_Playback || IsMigrationCatchUp() || m_Config.resumeFromSnapshot) {
 			for (const auto* commands: {&outFrame.localCommands, &outFrame.remoteCommands}) {
 				for (const NetGameCommand& command: *commands) {
+					if (const auto* release = std::get_if<NetGameSeatRelease>(&command.payload)) {
+						if (command.senderPeerId != GetHostPeerId() || release->peerId == 0 || release->peerId > m_Config.peerCount || release->releaseFrame != outFrame.frame) {
+							Fail(NetLockstepStopReason::ProtocolError, outFrame.frame, "recorded seat release has invalid authority or frame");
+							return false;
+						}
+						m_SeatReleases[release->peerId][outFrame.frame] = *release;
+						if (std::find(outFrame.releasedPeerIds.begin(), outFrame.releasedPeerIds.end(), release->peerId) == outFrame.releasedPeerIds.end())
+							outFrame.releasedPeerIds.push_back(release->peerId);
+						continue;
+					}
 					if (const auto* hold = std::get_if<NetGameSeatHold>(&command.payload)) {
 						if (command.senderPeerId != GetHostPeerId() || hold->peerId == 0 || hold->peerId > m_Config.peerCount) {
 							Fail(NetLockstepStopReason::ProtocolError, outFrame.frame, "recorded seat hold has invalid authority");
@@ -10885,7 +10950,7 @@ namespace RTE {
 				if (decision.proposal.applyFrame < start.startFrame) continue;
 				auto proposal = decision.proposal;
 				SendPacket({proposal}, NetTransportLane::ControlReliable, nullptr, nullptr, nullptr, start.localPeerId);
-				if ((proposal.action == NetTimingAction::Delay || proposal.action == NetTimingAction::WorldAdmission) && decision.committed) {
+				if ((proposal.action == NetTimingAction::Delay || proposal.action == NetTimingAction::WorldAdmission || proposal.action == NetTimingAction::Release) && decision.committed) {
 					proposal.phase = NetTimingPhase::Commit;
 					SendPacket({proposal}, NetTransportLane::ControlReliable, nullptr, nullptr, nullptr, start.localPeerId);
 				}
@@ -11046,7 +11111,7 @@ namespace RTE {
 			          << " from=" << fromTransport << " bound=" << (bound == m_RemoteTransports.end() ? std::string("none") : std::to_string(bound->second)) << std::endl;
 			return;
 		}
-		if (std::any_of(frame.commands.begin(), frame.commands.end(), [](const auto& command) { return std::holds_alternative<NetGameSeatHold>(command.payload) || std::holds_alternative<NetGameInputDelay>(command.payload) || std::holds_alternative<NetGameSeatReclaim>(command.payload); }) &&
+		if (std::any_of(frame.commands.begin(), frame.commands.end(), [](const auto& command) { return std::holds_alternative<NetGameSeatHold>(command.payload) || std::holds_alternative<NetGameInputDelay>(command.payload) || std::holds_alternative<NetGameSeatReclaim>(command.payload) || std::holds_alternative<NetGameSeatRelease>(command.payload); }) &&
 		    !(recovered && m_Config.resumeFromSnapshot && m_InstalledResyncTargets.contains({frame.targetFrame, frame.senderPeerId}))) {
 			if (m_Config.localPeerId == GetHostPeerId()) ApplyPeerLeave(frame.senderPeerId, FirstFrameWithout(frame.senderPeerId), "unacknowledged seat hold", nowMs, false, true);
 			else Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "seat holds must use the acknowledged decision lane");
@@ -11515,7 +11580,8 @@ namespace RTE {
 		if (m_PeerLeaveFrames.find(peerId) != m_PeerLeaveFrames.end()) {
 			return;
 		}
-		ApplyPeerLeave(peerId, m_Stats.nextFrame, message, nowMs, true, false, false, true);
+		// Its inputs this host already relayed may be committed by a survivor ahead of it: the seat leaves at the first frame it never relayed.
+		ApplyPeerLeave(peerId, FirstFrameWithout(peerId), message, nowMs, true, false, false, true);
 	}
 
 	void NetLockstepCoordinator::ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay) {
@@ -11593,6 +11659,7 @@ namespace RTE {
 		m_EvictAfterReclaim.erase(peerId);
 		RefreshLeftSeatHolds();
 		DiagnosticLine() << "[net-match] seat released peer=" << static_cast<int>(peerId) << " - the AI keeps its units (" << why << ")" << std::endl;
+		if (host) ProposeOwedSeatReleases(nowMs);
 		if (host && m_Transport) {
 			NetLockstepStop notice;
 			notice.senderPeerId = peerId;
@@ -11619,6 +11686,55 @@ namespace RTE {
 		NET_PLANE_CHECK();
 		// A replay drops no seat (an unbounded one would pause on it): a seat its record holds is held for reclaim as it was live.
 		return m_LeftSeatsHeld.find(peerId) != m_LeftSeatsHeld.end() || (m_Playback && peerId != GetHostPeerId() && m_AiHeldSeats.contains(peerId));
+	}
+
+	bool NetLockstepCoordinator::IsSeatReclaimableAt(uint8_t peerId, uint64_t frame) const {
+		NET_PLANE_CHECK();
+		// The unbounded policies stop every peer's commits until the host resolves a dropped seat, so their set reads the same everywhere.
+		if (!UsesBoundedWait()) return IsSeatHeldForReclaim(peerId);
+		const auto seat = m_SeatTransitions.find(peerId);
+		if (seat == m_SeatTransitions.end() || seat->second.empty() || seat->second.begin()->first > frame) return false;
+		if (const auto past = SeatStateBeforeNewest(peerId, frame)) return *past == SeatTransition::Held;
+		// At or past the seat's newest transition the round's current seat state answers, as it does for the other seat readers.
+		return seat->second.rbegin()->second != SeatTransition::Left && IsSeatUnderAI(peerId, frame);
+	}
+
+	bool NetLockstepCoordinator::HasReleaseSinceHold(uint8_t peerId) const {
+		const auto held = m_AiHeldSeats.find(peerId);
+		const auto releases = m_SeatReleases.find(peerId);
+		return held != m_AiHeldSeats.end() && releases != m_SeatReleases.end() && !releases->second.empty() && releases->second.rbegin()->first >= held->second;
+	}
+
+	void NetLockstepCoordinator::ProposeOwedSeatReleases(uint64_t nowMs) {
+		if (!UsesBoundedWait() || m_Config.localPeerId != GetHostPeerId() || !m_RelayHost || !IsRunning() || IsMigrating() || m_NextTimingRevision == UINT64_MAX) return;
+		for (uint8_t peer: m_ReleasedAiSeats) {
+			if (peer > NetLockstepTiming{}.seatIncarnations.size()) continue;
+			if (!m_AiHeldSeats.contains(peer) || HasReleaseSinceHold(peer) ||
+			    std::any_of(m_TimingDecisions.begin(), m_TimingDecisions.end(), [&](const auto& decision) {
+				    return decision.second.proposal.action == NetTimingAction::Release && decision.second.proposal.peerId == peer;
+			    })) continue;
+			NetLockstepTiming timing;
+			timing.senderPeerId = m_Config.localPeerId;
+			timing.peerId = peer;
+			timing.action = NetTimingAction::Release;
+			timing.phase = NetTimingPhase::Propose;
+			timing.sessionId = m_Config.sessionId;
+			timing.roundId = m_RoundId;
+			timing.authorityGeneration = m_Config.migrationGeneration;
+			timing.revision = m_NextTimingRevision++;
+			// Past every peer's horizon, so none has committed it, and after the hold it ends.
+			timing.applyFrame = std::max(FutureTimingFrame(), m_AiHeldSeats.at(peer) + 1);
+			timing.nextFrame = m_Stats.nextFrame;
+			const auto incarnation = m_Config.peerIncarnations.find(peer);
+			timing.seatIncarnations[peer - 1] = incarnation == m_Config.peerIncarnations.end() ? 1 : incarnation->second;
+			timing.requiredPeers = static_cast<uint8_t>(1U << (m_Config.localPeerId - 1));
+			for (uint8_t remote: m_RemotePeerIds)
+				if (remote != peer && m_RemoteStartsReceived.contains(remote) && !IsPeerGoneAtFrame(remote, timing.applyFrame)) timing.requiredPeers |= static_cast<uint8_t>(1U << (remote - 1));
+			m_TimingDecisions[timing.revision] = {timing, static_cast<uint8_t>(1U << (m_Config.localPeerId - 1)), false, nowMs};
+			DiagnosticLine() << "[net-lockstep] release of peer " << static_cast<int>(peer) << " proposed for " << timing.applyFrame << " revision=" << timing.revision << std::endl;
+			QueueTiming(timing);
+			CommitTiming(timing.revision);
+		}
 	}
 
 	bool NetLockstepCoordinator::IgnoreStaleRefillLeave(uint8_t peerId, uint64_t) const {
@@ -12037,6 +12153,14 @@ namespace RTE {
 				ready.aiHeldPeerIds.push_back(peer);
 				auto& commands = m_Config.localPeerId == GetHostPeerId() ? ready.localCommands : ready.remoteCommands;
 				const NetGameCommand event{GetHostPeerId(), m_HoldTransactions.contains(peer) ? m_HoldTransactions.at(peer) : NetGameSeatHold{peer}};
+				if (std::find(commands.begin(), commands.end(), event) == commands.end()) commands.push_back(event);
+			}
+			if (!m_Playback) for (const auto& [peer, releases]: m_SeatReleases) {
+				const auto release = releases.find(ready.frame);
+				if (release == releases.end()) continue;
+				if (std::find(ready.releasedPeerIds.begin(), ready.releasedPeerIds.end(), peer) == ready.releasedPeerIds.end()) ready.releasedPeerIds.push_back(peer);
+				auto& commands = m_Config.localPeerId == GetHostPeerId() ? ready.localCommands : ready.remoteCommands;
+				const NetGameCommand event{GetHostPeerId(), release->second};
 				if (std::find(commands.begin(), commands.end(), event) == commands.end()) commands.push_back(event);
 			}
 			if (!m_Playback && !m_StartupHeldSeatStamps.empty() && ready.frame >= m_AgreedStartRecord.value_or(NetLockstepStart{}).agreedFirstFrame) {
