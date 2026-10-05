@@ -1001,7 +1001,14 @@ class Directory:
                                           turn_config=backend, turn_max_ttl=ttl_cap)
         class PrivateLogFilter(logging.Filter):
             def filter(self, record):
-                record.msg, record.args = book.redact(record.getMessage()), ()
+                text = record.getMessage()
+                for address in re.findall(r'\bclient=([^\s,]+)', text):
+                    try:
+                        if not ipaddress.ip_address(address).is_loopback:
+                            book.add('owner-address', address)
+                    except ValueError:
+                        pass
+                record.msg, record.args = book.redact(text), ()
                 return True
         self.private_log_filters = [(handler, PrivateLogFilter()) for handler in module.LOGGER.handlers]
         for handler, filter_ in self.private_log_filters:

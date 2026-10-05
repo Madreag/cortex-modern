@@ -579,6 +579,26 @@ class DirectoryPerRun(unittest.TestCase):
     """Two runs in one driver process: each run's offer receipt lands in its own service.log (a run's verdict reads only
     its own root, so a receipt logged into the previous run's file reads as 'no offer issued')."""
 
+    def test_observed_peer_addresses_are_private_before_retention(self):
+        import tempfile
+        import relay_cloudflare_match as match
+        from relay_secrets import SecretBook
+        addresses = ('192.0.2.29', '2001:db8::29')
+        book = SecretBook()
+        with tempfile.TemporaryDirectory() as folder, mock.patch('sys.stderr', io.StringIO()):
+            root = Path(folder)
+            run = match.Directory(root, 0, None, 86400, book)
+            try:
+                for address in addresses:
+                    run.module.LOGGER.info('signal session_id=unit client=%s peer_via=header', address)
+                retained = (root / 'service.log').read_text(encoding='utf-8')
+                for address in addresses:
+                    self.assertNotIn(address, retained)
+                self.assertEqual(retained.count('client=<owner-address>'), 2)
+                self.assertIn('owner-address', book.kinds())
+            finally:
+                run.stop()
+
     def test_each_run_logs_its_offer_receipt_to_its_own_root(self):
         import tempfile
         import relay_cloudflare_match as match
