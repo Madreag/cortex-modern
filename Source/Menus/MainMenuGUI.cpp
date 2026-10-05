@@ -4303,8 +4303,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		int contentWidth = 300;
 		int contentHeight = 250;
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::JoinSetup && m_MultiplayerLanGamesLabel) {
-			// A long state line scrolls inside the list's width rather than widening the screen.
-			const bool scroll = m_MultiplayerLanGamesLabel->GetTextWidth() > m_MultiplayerLanGamesLabel->GetWidth();
+			// The state line wraps onto its second line; only a word wider than the list scrolls, inside the list's width.
+			const bool scroll = m_MultiplayerLanGamesLabel->GetMaxWordWidth() > m_MultiplayerLanGamesLabel->GetWidth();
 			m_MultiplayerLanGamesLabel->SetHorizontalOverflowScroll(scroll);
 			m_MultiplayerLanGamesLabel->ActivateDeactivateOverflowScroll(scroll);
 			const bool joining = m_JoinAttemptActive;
@@ -5330,6 +5330,12 @@ void MainMenuGUI::RefreshGamesList() {
 			         (row.source == "LAN" ? "this network" : "internet") + (row.joinable ? std::string() : "\nCannot be joined: " + GameRowReasonWords(row.reason));
 		}
 		if (m_JoinSelectedLabel->GetText() != detail) m_JoinSelectedLabel->SetText(detail);
+		// A reason longer than the lines under the list scrolls down inside them, so all of it is read.
+		const bool tall = m_JoinSelectedLabel->GetTextHeight() > m_JoinSelectedLabel->GetHeight();
+		if (m_JoinSelectedLabel->GetVerticalOverflowScroll() != tall) {
+			m_JoinSelectedLabel->SetVerticalOverflowScroll(tall);
+			m_JoinSelectedLabel->ActivateDeactivateOverflowScroll(tall);
+		}
 	}
 	// A NET row can only be judged against the local identity; build it once, on first need.
 	if (!m_DirectoryIdentity && !m_DirectoryIdentityTried) {
