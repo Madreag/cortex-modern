@@ -24309,6 +24309,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				auto frames = committed.localFrames; frames.insert(frames.end(), committed.remoteFrames.begin(), committed.remoteFrames.end());
 				auto commands = committed.localCommands; commands.insert(commands.end(), committed.remoteCommands.begin(), committed.remoteCommands.end());
 				if (!tail.QueueReplayFrame(frame, frames, commands, &error)) return false;
+				tail.Tick(pair.now);
 				NetLockstepReadyFrame ready;
 				if (!tail.PopReadyFrame(ready)) { error = "private tail waited on acceptance"; return false; }
 				pair.clientWorld.Apply(ready); tail.FinishSimulationTick(frame);
@@ -24379,6 +24380,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			const auto config = [&](uint8_t peer) {
 				NetLockstepConfig value; value.sessionId = match.sessionId; value.matchConfig = match; value.peerCount = 3; value.localPeerId = peer;
 				value.startFrame = 1; value.roundId = peer == 1 ? 0xACC778 : 0; value.timeoutMs = 20000; value.substituteSlowPeers = true;
+				value.simTickMs = 1000.0 / 60; value.slowPlayerBoundTicks = 3;
 				value.inputDelayFrames = peer == 1 ? 0 : 4; value.peerInputDelayFrames = {{1, 0}, {2, 4}, {3, 4}}; value.peerIncarnations = {{1, 1}, {2, 1}, {3, 1}};
 				value.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}} : std::map<uint8_t, NetPeerId>{{1, 1}};
 				value.relayToOtherPeers = peer == 1; value.migrationKey.fill(0x39); value.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); }; return value;
@@ -24409,6 +24411,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				if (!playback.StartReplay(wire, config, &error)) return false;
 				for (uint64_t frame = config.startFrame; frame < config.startFrame + 8; ++frame) {
 					if (!playback.QueueReplayFrame(frame, {MakeFrame(102, frame)}, {}, &error)) return false;
+					playback.Tick(frame);
 					NetLockstepReadyFrame ready; if (!playback.PopReadyFrame(ready)) { error = "committed playback waited on network acceptance"; return false; }
 					playback.FinishSimulationTick(frame);
 				}
