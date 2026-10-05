@@ -24654,7 +24654,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		std::string error;
 		// These rows each report their own failure, so one run names every red among them.
 		bool rowsPassed = true;
-		const auto row = [&](bool (*test)(std::string*), const char* name) {
+		const auto row = [&](const auto& test, const char* name) {
 			std::string rowError;
 			if (test(&rowError)) return;
 			std::cerr << "[net-lockstep-selftest] FAIL " << name << ": " << rowError << std::endl;
@@ -24783,236 +24783,236 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		followupsPassed &= TestMidLeaveSaveAgreesAcrossPeers(&followupError);
 		if (!leavePassed) return fail(error);
 		if (!followupsPassed) return fail(followupError);
-		if (!TestSilentHostResumesWithinTwoSeconds(&error) ||
-		    !TestALongLinkedHostIsJudgedByItsSilenceAlone(&error) ||
-		    !TestALoneSurvivorConfirmsTheHostIsGone(&error) ||
-		    !TestASilentHostIsReportedOnceASecond(&error) ||
-		    !TestAHostQuietPastTheLastTickIsNotLost(&error) ||
-		    !TestAHostClosingAfterItsEndIsNotLost(&error) ||
-		    !TestLoadingHostKeepsItsAuthority(&error) ||
-		    !TestHoldArrivesBeforeFailedSend(&error) ||
-		    !TestSlowMachineWarningCadence(&error) ||
-		    !TestRestoredControllerKeepsItsProductionBaseline(&error) ||
-		    !TestProducingPassSurvivesAnOverride(&error) ||
-		    !TestSoundIdentityPinAgreesAcrossHistories(&error) ||
-		    !TestSoundRegistrySurvivesConcurrentRelease(&error) ||
-		    !TestSoundRegistrySurvivesConcurrentRegistration(&error) ||
-		    !TestRoundTrips(&error) ||
-		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
-		    !TestTimingDecisionCodec(&error) ||
-		    !TestTimingBeforeStartIsRetained(&error) ||
-		    !TestLiveDelayChangesAtOneFrame(&error) ||
-		    !TestAutomaticDelayKeepsFourPeersCommitting(&error) ||
-			!TestSenderWaitsForHostAcceptance(&error) ||
-			!TestSynchronizedCapturePark(&error) ||
-			!TestCaptureParkCommitsCanonicalEmptyFrames(&error) ||
-		    !TestARestampWithdrawsItsProposal(&error) ||
-		    !TestCaptureParkWindowIsTheHostsAlone(&error) ||
-		    !TestAgreedStartKeepsARejoinedHorizon(&error) ||
-		    !TestOverdueBoundWaitsForTheCommittedRunway(&error) ||
-		    !TestBoundedHoldKeepsCommitting(&error) ||
-		    !TestHoldDeadlinePrecedesConsumerWait(&error) ||
-		    !TestBoundedWaitGivesASenderItsRampIn(&error) ||
-		    !TestASlowStartingPeerIsJudgedByItsOwnRestart(&error) ||
-		    !TestFirstStartWaitsForPublishedStartup(&error) ||
-		    !TestALongLinkedSurvivorDoesNotCollapseTheBound(&error) ||
-		    !TestAStarvedSeatIsNotLate(&error) ||
-		    !TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(&error) ||
-		    !TestAReturnerOnTheReliableLaneHearsItsHost(&error) ||
-		    !TestAReturnCopyKeepsTheCommittedObservations(&error) ||
-		    !TestOldSeatTransitionsAreLetGo(&error) ||
-		    !TestOldHoldDecisionsGoBelowTheReturnFloor(&error) ||
-		    !TestAReturnersRoundSkipsTheRoundsEarlierTicks(&error) ||
-		    !TestAReturnedSeatThatLeavesAgainIsGone(&error) ||
-		    !TestARoundsOwnEndIsNoHold(&error) ||
-		    !TestAHostsOwnLateSeatIsHeldAndTakenBack(&error) ||
-		    !TestAHostWithNoOtherPlayingSeatIsNotHeld(&error) ||
-		    !TestAHostNobodyWaitsOnKeepsItsSeat(&error) ||
-		    !TestACaptureNotYetBegunExcusesNoStall(&error) ||
-		    !TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(&error) ||
-		    !TestAHeldClientsHashIsNotTheRounds(&error) ||
-		    !TestAReplayTakesTheRecordedSeatPolicy(&error) ||
-		    !TestALaggingPeerReadsASeatAtItsFrame(&error) ||
-		    !TestEveryHoldProducerWritesTheSeatLog(&error) ||
-		    !TestAnOlderDeliveryLeavesTheNewerSeatState(&error) ||
-		    !TestEveryGapStaysForASimulationBehind(&error) ||
-		    !TestADeferredStopDoesNotExcuseASeatPastTheBound(&error) ||
-		    !TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(&error) ||
-		    !TestARecordedHoldKeepsItsSeatsClaims(&error) ||
-		    !TestAQueuedReturnLeavesALaterHold(&error) ||
-		    !TestAHostIsJudgedAgainAfterItsOwnReturn(&error) ||
-		    !TestARepeatedStartHoldsNoFramesBehindIt(&error) ||
-		    !TestALaggingSimulationReadsTheFrameItTook(&error) ||
-		    !TestAHeldHostsFrameCrossesAMigration(&error) ||
-		    !TestAHeldMapReadKeepsNoLiveReference(&error) ||
-		    !TestASurvivorsRunwayIsTheRounds(&error) ||
-		    !TestTheGoodbyeDrainJudgesNoSeat(&error) ||
-		    !TestNoSeatIsJudgedPastTheLastTick(&error) ||
-		    !TestTimingAcknowledgementLossIsBounded(&error) ||
-		    !TestHoldWaitsForSurvivorDecision(&error) ||
-		    !TestHoldWaitsForSurvivorDecision(&error, true) ||
-		    !TestHoldWaitsForSurvivorDecision(&error, false, true) ||
-		    !TestRecordedHoldReplaysAtItsFrame(&error) ||
-		    !TestARecordedHoldAfterAReturnHoldsTheSeat(&error) ||
-		    !TestCommittedCatchUpKeepsSharedState(&error) ||
-		    !TestAWorldTailHandsAHeldSeatToTheAI(&error) ||
-		    !TestCatchUpFencesTheReclaimGap(&error) ||
-		    !TestCatchUpFencesTheHoldGap(&error) ||
-		    !TestWorldTailKeepsItsLiveCoordinatorSeparate(&error) ||
-		    !TestLateStartPreservesHoldBoundary(&error) ||
-		    !TestALateStartsReclaimIsRetriedUntilAdmitted(&error) ||
-		    !TestDelayPaddingPassesAParkedFrame(&error) ||
-		    !TestAnEndedRoundHandsAReturnToTheSession(&error) ||
-		    !TestACaptureReportsToItsOwnPark(&error) ||
-		    !TestAParkCoversTheBoxsSlowCaptures(&error) ||
-		    !TestPrivateCheckpointKeepsDepartures(&error) ||
-		    !TestFinalRelayDrainIncludesPrivateTail(&error) ||
-		    !TestTheDrainWaitsOnARejoinsOwnProgress(&error) ||
-		    !TestPlaybackNeverOpensACapturePark(&error) ||
-		    !TestPrivateReclaimKeepsRoundRunning(&error) || !TestPrivateReclaimKeepsRoundRunning(&error, true) ||
-		    !TestRejoinWindowClearsTheRestart(&error) ||
-		    !TestReturningSeatSurvivesItsFirstTrip(&error) ||
-		    !TestShiftedFirstFrameAdmitsTheRamp(&error) ||
-		    !TestZeroRestartStillPublishesTheStartup(&error) ||
-		    !TestUnpublishedStartupCannotParkTheRound(&error) ||
-		    !TestBufferedReturnIsNotAnAnswer(&error) ||
-		    !TestReturnOnAFreshLinkKeepsItsWindow(&error) ||
-		    !TestReturnKeepsTheLinkItLastMeasured(&error) ||
-		    !TestOwnStartReturnedDoesNotFailTheRound(&error) ||
-		    !TestAJoinerTakesADelayDecidedForItsTail(&error) ||
-		    !TestAJoinerTakesASeatReturnedBeforeIt(&error) ||
-		    !TestAReturnerStartsAtItsReturnsDelay(&error) ||
-		    !TestAReturnerTakesAMemberDelayResizedAfterItsTail(&error) ||
-		    !TestAHandoverEndpointCarriesItsIceRoute(&error) ||
-		    !TestAJoinerTakesAReturnDecidedAfterItsStart(&error) ||
-		    !TestAJoinerTakesTheSeatsAsTheyStandAtItsFirstFrame(&error) ||
-		    !TestAReturnerHearsAHoldTheHostAlreadyApplied(&error) ||
-		    !TestAJoinerIgnoresTransitionsItsStateAlreadyHolds(&error) ||
-		    !TestAJoinerEndsAHoldItsStateStillCarries(&error) ||
-		    !TestAHoldKeepsTheGapItsReturnLeftBehindIt(&error) ||
-		    !TestReclaimedSeatRestartsItsWaitReadings(&error) ||
-		    !TestFutureDelaySurvivesSplitMigration(&error) ||
-		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
-		    !TestAIWaypointAddsCrossTheWire(&error) ||
-		    !TestAIWaypointReadThroughSamePass(&error) ||
-		    !TestLastWaypointAnswersUnderLockstep(&error) ||
-		    !TestAIWaypointCrossActorWrites(&error) ||
-		    !TestAICraftHatchCrossesTheWire(&error) ||
-		    !TestAIDropAllInventoryIsReported(&error) ||
-		    !TestAIModeCrossesTheWire(&error) ||
-		    !RunAIOffWireArms(&error) ||
-		    !TestHostRunCpuActorOnAHumanTeamPopsItsWaypoint(&error) ||
-		    !TestAStrangerMayNotWriteAQueue(&error) ||
-		    !TestPathUpdateStaysArmedWhileWaypointAddIsInFlight(&error) ||
-		    !TestCoordinatorOwedFrameRetryEndsWithTheRound(&error) ||
-		    !TestCoordinatorOwedFrameKeepsItsCommands(&error) ||
-		    !TestCoordinatorStoppedRoundStopsResending(&error) ||
-		    !TestCoordinatorFailedRoundStopsResending(&error) ||
-		    !TestCoordinatorOwedFrameOutlivesItsLocalCommit(&error) ||
-		    !TestCoordinatorReadoptResendSurvivesARefusedSend(&error) ||
-		    !TestReviewAuthorityStartDoesNotFailTheRound(&error) ||
-		    !TestReviewReadoptClearsTheLeftPeer(&error) ||
-		    !TestReviewReadoptClearsTheDeferredStop(&error) ||
-		    !TestReviewFourPeerStrayStartRate(&error) ||
-		    !TestCoordinatorClientFollowsTheHostsNewRound(&error) ||
-		    !TestCoordinatorRestartedPeerIsNotHandedTheOldRound(&error) ||
-		    !TestCoordinatorRepeatedStartCarriesTheRound(&error) ||
-		    !TestCoordinatorRepeatedStartsDoNotAmplify(&error) ||
-		    !TestObservationSlotCodec(&error) ||
-		    !TestCanonicalHeader(&error) ||
-		    !TestDecodeFailures(&error) ||
-		    !TestSemanticFailures(&error) ||
-		    !TestRecoveryStopsAtCompletedTick(&error) ||
-		    !TestResyncAppliesOnlyAtCompletedTick(&error) ||
-		    !TestCompletionDrainsAppliedTicks(&error) ||
-		    !TestCoordinatorDelayedHappyPath(&error) ||
-		    !TestCoordinatorFrameBeforeStart(&error) ||
-		    !TestCoordinatorIgnoresStaleRound(&error) ||
-		    !TestCoordinatorPerSenderDelay(&error) ||
-		    !TestCoordinatorPerSenderDelayMismatch(&error) ||
-		    !TestCoordinatorIgnoresSessionPacketsAtHandoff(&error) ||
-		    !TestCoordinatorUnreliableOutOfOrderDuplicate(&error) ||
-		    !TestCoordinatorMissingFrameTimeout(&error) ||
-		    !TestFrameWindowKeepsClassicReservedZero(&error) ||
-		    !TestFrameWindowCodecRoundTrip(&error) ||
-		    !TestFrameWindowRepeatsObservationBlocks(&error) ||
-		    !TestFrameWindowDeltaRefusesInvalidFields(&error) ||
-		    !TestFrameWindowCapabilityBitIsTheTopAckBit(&error) ||
-		    !TestFrameWindowDegradesWhenItOutgrowsThePacket(&error) ||
-		    !TestFrameWindowStaysClassicWithoutCapability(&error) ||
-		    !TestFrameWindowSurvivesUnreliableLoss(&error) ||
-		    !TestAWindowReachesBackARoundTrip(&error) ||
-		    !TestALateTickIsReadPast(&error) ||
-		    !TestTheRelayForwardsATickItFirstReadInAWindow(&error) ||
-		    !TestTheRelayDropsEveryRejectedTickTheWayItsReceiversDo(&error) ||
-		    !TestFrameWindowStripsRelayWithoutCapability(&error) ||
-		    !TestFrameWindowHoldHeartbeatKeepsTicksOne(&error) ||
-		    !TestActivityGateAgreesAcrossPeers(&error) ||
-		    !TestRecoveryWireRefusals(&error) ||
-		    !TestRecoveryWireRelayRetry(&error) ||
-		    !TestRecoveryInputMembership(&error) ||
-		    !TestADepartedTransportCannotStopTheSurvivors(&error) ||
-		    !TestAnnouncedLeaveHoldsNothing(&error) ||
-		    !TestAClassicLeaverDrivesItsUnitsUntilItsFrame(&error) ||
-		    !TestHoldPauseCommitsNothing(&error) ||
-		    !TestHoldExpiredResumesWithoutSeat(&error) ||
-		    !TestHoldReclaimedResyncsAtLeaveFrame(&error) ||
-		    !TestTwoPeerReclaimedRequestsResync(&error) ||
-		    !TestTwoPeerSubstitutedRequestsResync(&error) ||
-		    !TestTwoPeerExpiredEndsLastPlayer(&error) ||
-		    !TestThreePeerReclaimedRequestsResync(&error) ||
-		    !TestResyncRoundCommitsAfterReclaimed(&error) ||
-		    !TestHoldHeartbeatsKeepPeersUnadjudicated(&error) ||
-		    !TestWaitDoesNotGiveUpDuringHoldPause(&error) ||
-		    !TestWaitSurvivesHoldAfterPreHoldStall(&error) ||
-		    !TestParkedWaitAppliesPendingResync(&error) ||
-		    !TestFencedPeerWaivedAtTheParkedTick(&error) ||
-		    !TestAnnouncedLeaveStillClosesAtOnce(&error) ||
-		    !TestCoordinatorHeldSeatWithASurvivor(&error) ||
-		    !TestCoordinatorThreePeer(&error) ||
-		    !TestCoordinatorSeatlessRelayHost(&error) ||
-		    !TestCoordinatorRejectsUnboundPackets(&error) ||
-		    !TestCoordinatorPeerLeave(&error) ||
-		    !TestCoordinatorHostAdjudicatesSilentPeer(&error) ||
-		    !TestCoordinatorSilentHostStillTimesOut(&error) ||
-		    !TestCoordinatorClientProtocolErrorIsALeave(&error) ||
-		    !TestCoordinatorHostProtocolErrorFailsClients(&error) ||
-		    !TestCoordinatorRelayBacklogHeals(&error) ||
-		    !TestCoordinatorRelayFailureDropsPeer(&error) ||
-		    !TestCoordinatorDroppedSeatHold(&error) ||
-		    !TestCoordinatorHeldSeatKeepsPlaying(&error) ||
-		    !TestSeatStateNeverReadUnderTheServiceLock(&error) ||
-		    !TestSeatStateNeverReadUnderTheServiceLock(&error, true) ||
-		    !TestHeldSeatOwnershipAgreesAcrossPeers(&error) ||
-		    !TestSessionPumpRunsWhileTheRoundWaits(&error) ||
-		    !TestCoordinatorAdjudicatedPeerKeepsItsSeat(&error) ||
-		    !TestRelayHostFinishesWhatItOwes(&error) ||
-		    !TestObservationOverflowCarry(&error) ||
-		    !TestValueObservationCodec(&error) ||
-		    !TestValueObservationV19StillDecodes(&error) ||
-		    !TestValueObservationRelay(&error) ||
-		    !TestValueObservationReplay(&error) ||
-		    !TestReplayPlayerBindings(&error) ||
-		    !TestReplayTrailersFollowTheirPackets(&error) ||
-		    !TestAMergedTickOfManyControllersReplays(&error) ||
-		    !TestValueObservationNonOwnerDropped(&error) ||
-		    !TestValueObservationOverflowCarry(&error) ||
-		    !TestStaleRoundFrameStillCountsAsTraffic(&error) ||
-		    !TestObservationFaultsAreToldApart(&error) ||
-		    !TestStaleRoundFrameLeavesTheLiveTable(&error) ||
-		    !TestResyncStragglersAreNotHoles(&error) ||
-		    !TestRefusedBlockLeavesNoBindings(&error) ||
-		    !TestFourPeerObservationRelayBytes(&error) ||
-		    !TestCongestedRelayHoldsEveryPeer(&error) ||
-		    !TestFourPeerRoundRunsToLength(&error) ||
-		    !TestDeadLinkLosesOnlyItsOwnSeat(&error) ||
-		    !TestDeadLinkHealedInTimeKeepsEverySeat(&error) ||
-		    !TestSoloRoundRunsWithoutRemotes(&error) ||
-		    !TestTheBudgetStartsAtTheHostsOwnStartup(&error) ||
-		    !TestAParkClosesOnItsBudget(&error) ||
-		    !TestADeferredDecisionWaitsForTheFinalEnd(&error)) {
-			return fail(error);
-		}
+		row([](std::string* rowError) { return TestSilentHostResumesWithinTwoSeconds(rowError); }, "TestSilentHostResumesWithinTwoSeconds");
+		row([](std::string* rowError) { return TestALongLinkedHostIsJudgedByItsSilenceAlone(rowError); }, "TestALongLinkedHostIsJudgedByItsSilenceAlone");
+		row([](std::string* rowError) { return TestALoneSurvivorConfirmsTheHostIsGone(rowError); }, "TestALoneSurvivorConfirmsTheHostIsGone");
+		row([](std::string* rowError) { return TestASilentHostIsReportedOnceASecond(rowError); }, "TestASilentHostIsReportedOnceASecond");
+		row([](std::string* rowError) { return TestAHostQuietPastTheLastTickIsNotLost(rowError); }, "TestAHostQuietPastTheLastTickIsNotLost");
+		row([](std::string* rowError) { return TestAHostClosingAfterItsEndIsNotLost(rowError); }, "TestAHostClosingAfterItsEndIsNotLost");
+		row([](std::string* rowError) { return TestLoadingHostKeepsItsAuthority(rowError); }, "TestLoadingHostKeepsItsAuthority");
+		row([](std::string* rowError) { return TestHoldArrivesBeforeFailedSend(rowError); }, "TestHoldArrivesBeforeFailedSend");
+		row([](std::string* rowError) { return TestSlowMachineWarningCadence(rowError); }, "TestSlowMachineWarningCadence");
+		row([](std::string* rowError) { return TestRestoredControllerKeepsItsProductionBaseline(rowError); }, "TestRestoredControllerKeepsItsProductionBaseline");
+		row([](std::string* rowError) { return TestProducingPassSurvivesAnOverride(rowError); }, "TestProducingPassSurvivesAnOverride");
+		row([](std::string* rowError) { return TestSoundIdentityPinAgreesAcrossHistories(rowError); }, "TestSoundIdentityPinAgreesAcrossHistories");
+		row([](std::string* rowError) { return TestSoundRegistrySurvivesConcurrentRelease(rowError); }, "TestSoundRegistrySurvivesConcurrentRelease");
+		row([](std::string* rowError) { return TestSoundRegistrySurvivesConcurrentRegistration(rowError); }, "TestSoundRegistrySurvivesConcurrentRegistration");
+		row([](std::string* rowError) { return TestRoundTrips(rowError); }, "TestRoundTrips");
+		row([](std::string* rowError) { return TestSnapshotConstructionKeepsPendingCommands(rowError); }, "TestSnapshotConstructionKeepsPendingCommands");
+		row([](std::string* rowError) { return TestTimingDecisionCodec(rowError); }, "TestTimingDecisionCodec");
+		row([](std::string* rowError) { return TestTimingBeforeStartIsRetained(rowError); }, "TestTimingBeforeStartIsRetained");
+		row([](std::string* rowError) { return TestLiveDelayChangesAtOneFrame(rowError); }, "TestLiveDelayChangesAtOneFrame");
+		row([](std::string* rowError) { return TestAutomaticDelayKeepsFourPeersCommitting(rowError); }, "TestAutomaticDelayKeepsFourPeersCommitting");
+		row([](std::string* rowError) { return TestSenderWaitsForHostAcceptance(rowError); }, "TestSenderWaitsForHostAcceptance");
+		row([](std::string* rowError) { return TestSynchronizedCapturePark(rowError); }, "TestSynchronizedCapturePark");
+		row([](std::string* rowError) { return TestCaptureParkCommitsCanonicalEmptyFrames(rowError); }, "TestCaptureParkCommitsCanonicalEmptyFrames");
+		row([](std::string* rowError) { return TestARestampWithdrawsItsProposal(rowError); }, "TestARestampWithdrawsItsProposal");
+		row([](std::string* rowError) { return TestCaptureParkWindowIsTheHostsAlone(rowError); }, "TestCaptureParkWindowIsTheHostsAlone");
+		row([](std::string* rowError) { return TestAgreedStartKeepsARejoinedHorizon(rowError); }, "TestAgreedStartKeepsARejoinedHorizon");
+		row([](std::string* rowError) { return TestOverdueBoundWaitsForTheCommittedRunway(rowError); }, "TestOverdueBoundWaitsForTheCommittedRunway");
+		row([](std::string* rowError) { return TestBoundedHoldKeepsCommitting(rowError); }, "TestBoundedHoldKeepsCommitting");
+		row([](std::string* rowError) { return TestHoldDeadlinePrecedesConsumerWait(rowError); }, "TestHoldDeadlinePrecedesConsumerWait");
+		row([](std::string* rowError) { return TestBoundedWaitGivesASenderItsRampIn(rowError); }, "TestBoundedWaitGivesASenderItsRampIn");
+		row([](std::string* rowError) { return TestASlowStartingPeerIsJudgedByItsOwnRestart(rowError); }, "TestASlowStartingPeerIsJudgedByItsOwnRestart");
+		row([](std::string* rowError) { return TestFirstStartWaitsForPublishedStartup(rowError); }, "TestFirstStartWaitsForPublishedStartup");
+		row([](std::string* rowError) { return TestALongLinkedSurvivorDoesNotCollapseTheBound(rowError); }, "TestALongLinkedSurvivorDoesNotCollapseTheBound");
+		row([](std::string* rowError) { return TestAStarvedSeatIsNotLate(rowError); }, "TestAStarvedSeatIsNotLate");
+		row([](std::string* rowError) { return TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(rowError); }, "TestAHeldSeatHearsItsHostUntilItsCatchUpOpens");
+		row([](std::string* rowError) { return TestAReturnerOnTheReliableLaneHearsItsHost(rowError); }, "TestAReturnerOnTheReliableLaneHearsItsHost");
+		row([](std::string* rowError) { return TestAReturnCopyKeepsTheCommittedObservations(rowError); }, "TestAReturnCopyKeepsTheCommittedObservations");
+		row([](std::string* rowError) { return TestOldSeatTransitionsAreLetGo(rowError); }, "TestOldSeatTransitionsAreLetGo");
+		row([](std::string* rowError) { return TestOldHoldDecisionsGoBelowTheReturnFloor(rowError); }, "TestOldHoldDecisionsGoBelowTheReturnFloor");
+		row([](std::string* rowError) { return TestAReturnersRoundSkipsTheRoundsEarlierTicks(rowError); }, "TestAReturnersRoundSkipsTheRoundsEarlierTicks");
+		row([](std::string* rowError) { return TestAReturnedSeatThatLeavesAgainIsGone(rowError); }, "TestAReturnedSeatThatLeavesAgainIsGone");
+		row([](std::string* rowError) { return TestARoundsOwnEndIsNoHold(rowError); }, "TestARoundsOwnEndIsNoHold");
+		row([](std::string* rowError) { return TestAHostsOwnLateSeatIsHeldAndTakenBack(rowError); }, "TestAHostsOwnLateSeatIsHeldAndTakenBack");
+		row([](std::string* rowError) { return TestAHostWithNoOtherPlayingSeatIsNotHeld(rowError); }, "TestAHostWithNoOtherPlayingSeatIsNotHeld");
+		row([](std::string* rowError) { return TestAHostNobodyWaitsOnKeepsItsSeat(rowError); }, "TestAHostNobodyWaitsOnKeepsItsSeat");
+		row([](std::string* rowError) { return TestACaptureNotYetBegunExcusesNoStall(rowError); }, "TestACaptureNotYetBegunExcusesNoStall");
+		row([](std::string* rowError) { return TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(rowError); }, "TestAnEarlyReturnIsAdmittedOnTheRoundsDelay");
+		row([](std::string* rowError) { return TestAHeldClientsHashIsNotTheRounds(rowError); }, "TestAHeldClientsHashIsNotTheRounds");
+		row([](std::string* rowError) { return TestAReplayTakesTheRecordedSeatPolicy(rowError); }, "TestAReplayTakesTheRecordedSeatPolicy");
+		row([](std::string* rowError) { return TestALaggingPeerReadsASeatAtItsFrame(rowError); }, "TestALaggingPeerReadsASeatAtItsFrame");
+		row([](std::string* rowError) { return TestEveryHoldProducerWritesTheSeatLog(rowError); }, "TestEveryHoldProducerWritesTheSeatLog");
+		row([](std::string* rowError) { return TestAnOlderDeliveryLeavesTheNewerSeatState(rowError); }, "TestAnOlderDeliveryLeavesTheNewerSeatState");
+		row([](std::string* rowError) { return TestEveryGapStaysForASimulationBehind(rowError); }, "TestEveryGapStaysForASimulationBehind");
+		row([](std::string* rowError) { return TestADeferredStopDoesNotExcuseASeatPastTheBound(rowError); }, "TestADeferredStopDoesNotExcuseASeatPastTheBound");
+		row([](std::string* rowError) { return TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(rowError); }, "TestAReturnerSeesItsSeatHeldAgainBeforeItsStart");
+		row([](std::string* rowError) { return TestARecordedHoldKeepsItsSeatsClaims(rowError); }, "TestARecordedHoldKeepsItsSeatsClaims");
+		row([](std::string* rowError) { return TestAQueuedReturnLeavesALaterHold(rowError); }, "TestAQueuedReturnLeavesALaterHold");
+		row([](std::string* rowError) { return TestAHostIsJudgedAgainAfterItsOwnReturn(rowError); }, "TestAHostIsJudgedAgainAfterItsOwnReturn");
+		row([](std::string* rowError) { return TestARepeatedStartHoldsNoFramesBehindIt(rowError); }, "TestARepeatedStartHoldsNoFramesBehindIt");
+		row([](std::string* rowError) { return TestALaggingSimulationReadsTheFrameItTook(rowError); }, "TestALaggingSimulationReadsTheFrameItTook");
+		row([](std::string* rowError) { return TestAHeldHostsFrameCrossesAMigration(rowError); }, "TestAHeldHostsFrameCrossesAMigration");
+		row([](std::string* rowError) { return TestAHeldMapReadKeepsNoLiveReference(rowError); }, "TestAHeldMapReadKeepsNoLiveReference");
+		row([](std::string* rowError) { return TestASurvivorsRunwayIsTheRounds(rowError); }, "TestASurvivorsRunwayIsTheRounds");
+		row([](std::string* rowError) { return TestTheGoodbyeDrainJudgesNoSeat(rowError); }, "TestTheGoodbyeDrainJudgesNoSeat");
+		row([](std::string* rowError) { return TestNoSeatIsJudgedPastTheLastTick(rowError); }, "TestNoSeatIsJudgedPastTheLastTick");
+		row([](std::string* rowError) { return TestTimingAcknowledgementLossIsBounded(rowError); }, "TestTimingAcknowledgementLossIsBounded");
+		row([](std::string* rowError) { return TestHoldWaitsForSurvivorDecision(rowError); }, "TestHoldWaitsForSurvivorDecision");
+		row([](std::string* rowError) { return TestHoldWaitsForSurvivorDecision(rowError, true); }, "TestHoldWaitsForSurvivorDecision:true");
+		row([](std::string* rowError) { return TestHoldWaitsForSurvivorDecision(rowError, false, true); }, "TestHoldWaitsForSurvivorDecision:false, true");
+		row([](std::string* rowError) { return TestRecordedHoldReplaysAtItsFrame(rowError); }, "TestRecordedHoldReplaysAtItsFrame");
+		row([](std::string* rowError) { return TestARecordedHoldAfterAReturnHoldsTheSeat(rowError); }, "TestARecordedHoldAfterAReturnHoldsTheSeat");
+		row([](std::string* rowError) { return TestCommittedCatchUpKeepsSharedState(rowError); }, "TestCommittedCatchUpKeepsSharedState");
+		row([](std::string* rowError) { return TestAWorldTailHandsAHeldSeatToTheAI(rowError); }, "TestAWorldTailHandsAHeldSeatToTheAI");
+		row([](std::string* rowError) { return TestCatchUpFencesTheReclaimGap(rowError); }, "TestCatchUpFencesTheReclaimGap");
+		row([](std::string* rowError) { return TestCatchUpFencesTheHoldGap(rowError); }, "TestCatchUpFencesTheHoldGap");
+		row([](std::string* rowError) { return TestWorldTailKeepsItsLiveCoordinatorSeparate(rowError); }, "TestWorldTailKeepsItsLiveCoordinatorSeparate");
+		row([](std::string* rowError) { return TestLateStartPreservesHoldBoundary(rowError); }, "TestLateStartPreservesHoldBoundary");
+		row([](std::string* rowError) { return TestALateStartsReclaimIsRetriedUntilAdmitted(rowError); }, "TestALateStartsReclaimIsRetriedUntilAdmitted");
+		row([](std::string* rowError) { return TestDelayPaddingPassesAParkedFrame(rowError); }, "TestDelayPaddingPassesAParkedFrame");
+		row([](std::string* rowError) { return TestAnEndedRoundHandsAReturnToTheSession(rowError); }, "TestAnEndedRoundHandsAReturnToTheSession");
+		row([](std::string* rowError) { return TestACaptureReportsToItsOwnPark(rowError); }, "TestACaptureReportsToItsOwnPark");
+		row([](std::string* rowError) { return TestAParkCoversTheBoxsSlowCaptures(rowError); }, "TestAParkCoversTheBoxsSlowCaptures");
+		row([](std::string* rowError) { return TestPrivateCheckpointKeepsDepartures(rowError); }, "TestPrivateCheckpointKeepsDepartures");
+		row([](std::string* rowError) { return TestFinalRelayDrainIncludesPrivateTail(rowError); }, "TestFinalRelayDrainIncludesPrivateTail");
+		row([](std::string* rowError) { return TestTheDrainWaitsOnARejoinsOwnProgress(rowError); }, "TestTheDrainWaitsOnARejoinsOwnProgress");
+		row([](std::string* rowError) { return TestPlaybackNeverOpensACapturePark(rowError); }, "TestPlaybackNeverOpensACapturePark");
+		row([](std::string* rowError) { return TestPrivateReclaimKeepsRoundRunning(rowError); }, "TestPrivateReclaimKeepsRoundRunning");
+		row([](std::string* rowError) { return TestPrivateReclaimKeepsRoundRunning(rowError, true); }, "TestPrivateReclaimKeepsRoundRunning:true");
+		row([](std::string* rowError) { return TestRejoinWindowClearsTheRestart(rowError); }, "TestRejoinWindowClearsTheRestart");
+		row([](std::string* rowError) { return TestReturningSeatSurvivesItsFirstTrip(rowError); }, "TestReturningSeatSurvivesItsFirstTrip");
+		row([](std::string* rowError) { return TestShiftedFirstFrameAdmitsTheRamp(rowError); }, "TestShiftedFirstFrameAdmitsTheRamp");
+		row([](std::string* rowError) { return TestZeroRestartStillPublishesTheStartup(rowError); }, "TestZeroRestartStillPublishesTheStartup");
+		row([](std::string* rowError) { return TestUnpublishedStartupCannotParkTheRound(rowError); }, "TestUnpublishedStartupCannotParkTheRound");
+		row([](std::string* rowError) { return TestBufferedReturnIsNotAnAnswer(rowError); }, "TestBufferedReturnIsNotAnAnswer");
+		row([](std::string* rowError) { return TestReturnOnAFreshLinkKeepsItsWindow(rowError); }, "TestReturnOnAFreshLinkKeepsItsWindow");
+		row([](std::string* rowError) { return TestReturnKeepsTheLinkItLastMeasured(rowError); }, "TestReturnKeepsTheLinkItLastMeasured");
+		row([](std::string* rowError) { return TestOwnStartReturnedDoesNotFailTheRound(rowError); }, "TestOwnStartReturnedDoesNotFailTheRound");
+		row([](std::string* rowError) { return TestAJoinerTakesADelayDecidedForItsTail(rowError); }, "TestAJoinerTakesADelayDecidedForItsTail");
+		row([](std::string* rowError) { return TestAJoinerTakesASeatReturnedBeforeIt(rowError); }, "TestAJoinerTakesASeatReturnedBeforeIt");
+		row([](std::string* rowError) { return TestAReturnerStartsAtItsReturnsDelay(rowError); }, "TestAReturnerStartsAtItsReturnsDelay");
+		row([](std::string* rowError) { return TestAReturnerTakesAMemberDelayResizedAfterItsTail(rowError); }, "TestAReturnerTakesAMemberDelayResizedAfterItsTail");
+		row([](std::string* rowError) { return TestAHandoverEndpointCarriesItsIceRoute(rowError); }, "TestAHandoverEndpointCarriesItsIceRoute");
+		row([](std::string* rowError) { return TestAJoinerTakesAReturnDecidedAfterItsStart(rowError); }, "TestAJoinerTakesAReturnDecidedAfterItsStart");
+		row([](std::string* rowError) { return TestAJoinerTakesTheSeatsAsTheyStandAtItsFirstFrame(rowError); }, "TestAJoinerTakesTheSeatsAsTheyStandAtItsFirstFrame");
+		row([](std::string* rowError) { return TestAReturnerHearsAHoldTheHostAlreadyApplied(rowError); }, "TestAReturnerHearsAHoldTheHostAlreadyApplied");
+		row([](std::string* rowError) { return TestAJoinerIgnoresTransitionsItsStateAlreadyHolds(rowError); }, "TestAJoinerIgnoresTransitionsItsStateAlreadyHolds");
+		row([](std::string* rowError) { return TestAJoinerEndsAHoldItsStateStillCarries(rowError); }, "TestAJoinerEndsAHoldItsStateStillCarries");
+		row([](std::string* rowError) { return TestAHoldKeepsTheGapItsReturnLeftBehindIt(rowError); }, "TestAHoldKeepsTheGapItsReturnLeftBehindIt");
+		row([](std::string* rowError) { return TestReclaimedSeatRestartsItsWaitReadings(rowError); }, "TestReclaimedSeatRestartsItsWaitReadings");
+		row([](std::string* rowError) { return TestFutureDelaySurvivesSplitMigration(rowError); }, "TestFutureDelaySurvivesSplitMigration");
+		row([](std::string* rowError) { return TestSenderDropsUncontrolledTeamCommands(rowError); }, "TestSenderDropsUncontrolledTeamCommands");
+		row([](std::string* rowError) { return TestAIWaypointAddsCrossTheWire(rowError); }, "TestAIWaypointAddsCrossTheWire");
+		row([](std::string* rowError) { return TestAIWaypointReadThroughSamePass(rowError); }, "TestAIWaypointReadThroughSamePass");
+		row([](std::string* rowError) { return TestLastWaypointAnswersUnderLockstep(rowError); }, "TestLastWaypointAnswersUnderLockstep");
+		row([](std::string* rowError) { return TestAIWaypointCrossActorWrites(rowError); }, "TestAIWaypointCrossActorWrites");
+		row([](std::string* rowError) { return TestAICraftHatchCrossesTheWire(rowError); }, "TestAICraftHatchCrossesTheWire");
+		row([](std::string* rowError) { return TestAIDropAllInventoryIsReported(rowError); }, "TestAIDropAllInventoryIsReported");
+		row([](std::string* rowError) { return TestAIModeCrossesTheWire(rowError); }, "TestAIModeCrossesTheWire");
+		row([](std::string* rowError) { return RunAIOffWireArms(rowError); }, "RunAIOffWireArms");
+		row([](std::string* rowError) { return TestHostRunCpuActorOnAHumanTeamPopsItsWaypoint(rowError); }, "TestHostRunCpuActorOnAHumanTeamPopsItsWaypoint");
+		row([](std::string* rowError) { return TestAStrangerMayNotWriteAQueue(rowError); }, "TestAStrangerMayNotWriteAQueue");
+		row([](std::string* rowError) { return TestPathUpdateStaysArmedWhileWaypointAddIsInFlight(rowError); }, "TestPathUpdateStaysArmedWhileWaypointAddIsInFlight");
+		row([](std::string* rowError) { return TestCoordinatorOwedFrameRetryEndsWithTheRound(rowError); }, "TestCoordinatorOwedFrameRetryEndsWithTheRound");
+		row([](std::string* rowError) { return TestCoordinatorOwedFrameKeepsItsCommands(rowError); }, "TestCoordinatorOwedFrameKeepsItsCommands");
+		row([](std::string* rowError) { return TestCoordinatorStoppedRoundStopsResending(rowError); }, "TestCoordinatorStoppedRoundStopsResending");
+		row([](std::string* rowError) { return TestCoordinatorFailedRoundStopsResending(rowError); }, "TestCoordinatorFailedRoundStopsResending");
+		row([](std::string* rowError) { return TestCoordinatorOwedFrameOutlivesItsLocalCommit(rowError); }, "TestCoordinatorOwedFrameOutlivesItsLocalCommit");
+		row([](std::string* rowError) { return TestCoordinatorReadoptResendSurvivesARefusedSend(rowError); }, "TestCoordinatorReadoptResendSurvivesARefusedSend");
+		row([](std::string* rowError) { return TestReviewAuthorityStartDoesNotFailTheRound(rowError); }, "TestReviewAuthorityStartDoesNotFailTheRound");
+		row([](std::string* rowError) { return TestReviewReadoptClearsTheLeftPeer(rowError); }, "TestReviewReadoptClearsTheLeftPeer");
+		row([](std::string* rowError) { return TestReviewReadoptClearsTheDeferredStop(rowError); }, "TestReviewReadoptClearsTheDeferredStop");
+		row([](std::string* rowError) { return TestReviewFourPeerStrayStartRate(rowError); }, "TestReviewFourPeerStrayStartRate");
+		row([](std::string* rowError) { return TestCoordinatorClientFollowsTheHostsNewRound(rowError); }, "TestCoordinatorClientFollowsTheHostsNewRound");
+		row([](std::string* rowError) { return TestCoordinatorRestartedPeerIsNotHandedTheOldRound(rowError); }, "TestCoordinatorRestartedPeerIsNotHandedTheOldRound");
+		row([](std::string* rowError) { return TestCoordinatorRepeatedStartCarriesTheRound(rowError); }, "TestCoordinatorRepeatedStartCarriesTheRound");
+		row([](std::string* rowError) { return TestCoordinatorRepeatedStartsDoNotAmplify(rowError); }, "TestCoordinatorRepeatedStartsDoNotAmplify");
+		row([](std::string* rowError) { return TestObservationSlotCodec(rowError); }, "TestObservationSlotCodec");
+		row([](std::string* rowError) { return TestCanonicalHeader(rowError); }, "TestCanonicalHeader");
+		row([](std::string* rowError) { return TestDecodeFailures(rowError); }, "TestDecodeFailures");
+		row([](std::string* rowError) { return TestSemanticFailures(rowError); }, "TestSemanticFailures");
+		row([](std::string* rowError) { return TestRecoveryStopsAtCompletedTick(rowError); }, "TestRecoveryStopsAtCompletedTick");
+		row([](std::string* rowError) { return TestResyncAppliesOnlyAtCompletedTick(rowError); }, "TestResyncAppliesOnlyAtCompletedTick");
+		row([](std::string* rowError) { return TestCompletionDrainsAppliedTicks(rowError); }, "TestCompletionDrainsAppliedTicks");
+		row([](std::string* rowError) { return TestCoordinatorDelayedHappyPath(rowError); }, "TestCoordinatorDelayedHappyPath");
+		row([](std::string* rowError) { return TestCoordinatorFrameBeforeStart(rowError); }, "TestCoordinatorFrameBeforeStart");
+		row([](std::string* rowError) { return TestCoordinatorIgnoresStaleRound(rowError); }, "TestCoordinatorIgnoresStaleRound");
+		row([](std::string* rowError) { return TestCoordinatorPerSenderDelay(rowError); }, "TestCoordinatorPerSenderDelay");
+		row([](std::string* rowError) { return TestCoordinatorPerSenderDelayMismatch(rowError); }, "TestCoordinatorPerSenderDelayMismatch");
+		row([](std::string* rowError) { return TestCoordinatorIgnoresSessionPacketsAtHandoff(rowError); }, "TestCoordinatorIgnoresSessionPacketsAtHandoff");
+		row([](std::string* rowError) { return TestCoordinatorUnreliableOutOfOrderDuplicate(rowError); }, "TestCoordinatorUnreliableOutOfOrderDuplicate");
+		row([](std::string* rowError) { return TestCoordinatorMissingFrameTimeout(rowError); }, "TestCoordinatorMissingFrameTimeout");
+		row([](std::string* rowError) { return TestFrameWindowKeepsClassicReservedZero(rowError); }, "TestFrameWindowKeepsClassicReservedZero");
+		row([](std::string* rowError) { return TestFrameWindowCodecRoundTrip(rowError); }, "TestFrameWindowCodecRoundTrip");
+		row([](std::string* rowError) { return TestFrameWindowRepeatsObservationBlocks(rowError); }, "TestFrameWindowRepeatsObservationBlocks");
+		row([](std::string* rowError) { return TestFrameWindowDeltaRefusesInvalidFields(rowError); }, "TestFrameWindowDeltaRefusesInvalidFields");
+		row([](std::string* rowError) { return TestFrameWindowCapabilityBitIsTheTopAckBit(rowError); }, "TestFrameWindowCapabilityBitIsTheTopAckBit");
+		row([](std::string* rowError) { return TestFrameWindowDegradesWhenItOutgrowsThePacket(rowError); }, "TestFrameWindowDegradesWhenItOutgrowsThePacket");
+		row([](std::string* rowError) { return TestFrameWindowStaysClassicWithoutCapability(rowError); }, "TestFrameWindowStaysClassicWithoutCapability");
+		row([](std::string* rowError) { return TestFrameWindowSurvivesUnreliableLoss(rowError); }, "TestFrameWindowSurvivesUnreliableLoss");
+		row([](std::string* rowError) { return TestAWindowReachesBackARoundTrip(rowError); }, "TestAWindowReachesBackARoundTrip");
+		row([](std::string* rowError) { return TestALateTickIsReadPast(rowError); }, "TestALateTickIsReadPast");
+		row([](std::string* rowError) { return TestTheRelayForwardsATickItFirstReadInAWindow(rowError); }, "TestTheRelayForwardsATickItFirstReadInAWindow");
+		row([](std::string* rowError) { return TestTheRelayDropsEveryRejectedTickTheWayItsReceiversDo(rowError); }, "TestTheRelayDropsEveryRejectedTickTheWayItsReceiversDo");
+		row([](std::string* rowError) { return TestFrameWindowStripsRelayWithoutCapability(rowError); }, "TestFrameWindowStripsRelayWithoutCapability");
+		row([](std::string* rowError) { return TestFrameWindowHoldHeartbeatKeepsTicksOne(rowError); }, "TestFrameWindowHoldHeartbeatKeepsTicksOne");
+		row([](std::string* rowError) { return TestActivityGateAgreesAcrossPeers(rowError); }, "TestActivityGateAgreesAcrossPeers");
+		row([](std::string* rowError) { return TestRecoveryWireRefusals(rowError); }, "TestRecoveryWireRefusals");
+		row([](std::string* rowError) { return TestRecoveryWireRelayRetry(rowError); }, "TestRecoveryWireRelayRetry");
+		row([](std::string* rowError) { return TestRecoveryInputMembership(rowError); }, "TestRecoveryInputMembership");
+		row([](std::string* rowError) { return TestADepartedTransportCannotStopTheSurvivors(rowError); }, "TestADepartedTransportCannotStopTheSurvivors");
+		row([](std::string* rowError) { return TestAnnouncedLeaveHoldsNothing(rowError); }, "TestAnnouncedLeaveHoldsNothing");
+		row([](std::string* rowError) { return TestAClassicLeaverDrivesItsUnitsUntilItsFrame(rowError); }, "TestAClassicLeaverDrivesItsUnitsUntilItsFrame");
+		row([](std::string* rowError) { return TestHoldPauseCommitsNothing(rowError); }, "TestHoldPauseCommitsNothing");
+		row([](std::string* rowError) { return TestHoldExpiredResumesWithoutSeat(rowError); }, "TestHoldExpiredResumesWithoutSeat");
+		row([](std::string* rowError) { return TestHoldReclaimedResyncsAtLeaveFrame(rowError); }, "TestHoldReclaimedResyncsAtLeaveFrame");
+		row([](std::string* rowError) { return TestTwoPeerReclaimedRequestsResync(rowError); }, "TestTwoPeerReclaimedRequestsResync");
+		row([](std::string* rowError) { return TestTwoPeerSubstitutedRequestsResync(rowError); }, "TestTwoPeerSubstitutedRequestsResync");
+		row([](std::string* rowError) { return TestTwoPeerExpiredEndsLastPlayer(rowError); }, "TestTwoPeerExpiredEndsLastPlayer");
+		row([](std::string* rowError) { return TestThreePeerReclaimedRequestsResync(rowError); }, "TestThreePeerReclaimedRequestsResync");
+		row([](std::string* rowError) { return TestResyncRoundCommitsAfterReclaimed(rowError); }, "TestResyncRoundCommitsAfterReclaimed");
+		row([](std::string* rowError) { return TestHoldHeartbeatsKeepPeersUnadjudicated(rowError); }, "TestHoldHeartbeatsKeepPeersUnadjudicated");
+		row([](std::string* rowError) { return TestWaitDoesNotGiveUpDuringHoldPause(rowError); }, "TestWaitDoesNotGiveUpDuringHoldPause");
+		row([](std::string* rowError) { return TestWaitSurvivesHoldAfterPreHoldStall(rowError); }, "TestWaitSurvivesHoldAfterPreHoldStall");
+		row([](std::string* rowError) { return TestParkedWaitAppliesPendingResync(rowError); }, "TestParkedWaitAppliesPendingResync");
+		row([](std::string* rowError) { return TestFencedPeerWaivedAtTheParkedTick(rowError); }, "TestFencedPeerWaivedAtTheParkedTick");
+		row([](std::string* rowError) { return TestAnnouncedLeaveStillClosesAtOnce(rowError); }, "TestAnnouncedLeaveStillClosesAtOnce");
+		row([](std::string* rowError) { return TestCoordinatorHeldSeatWithASurvivor(rowError); }, "TestCoordinatorHeldSeatWithASurvivor");
+		row([](std::string* rowError) { return TestCoordinatorThreePeer(rowError); }, "TestCoordinatorThreePeer");
+		row([](std::string* rowError) { return TestCoordinatorSeatlessRelayHost(rowError); }, "TestCoordinatorSeatlessRelayHost");
+		row([](std::string* rowError) { return TestCoordinatorRejectsUnboundPackets(rowError); }, "TestCoordinatorRejectsUnboundPackets");
+		row([](std::string* rowError) { return TestCoordinatorPeerLeave(rowError); }, "TestCoordinatorPeerLeave");
+		row([](std::string* rowError) { return TestCoordinatorHostAdjudicatesSilentPeer(rowError); }, "TestCoordinatorHostAdjudicatesSilentPeer");
+		row([](std::string* rowError) { return TestCoordinatorSilentHostStillTimesOut(rowError); }, "TestCoordinatorSilentHostStillTimesOut");
+		row([](std::string* rowError) { return TestCoordinatorClientProtocolErrorIsALeave(rowError); }, "TestCoordinatorClientProtocolErrorIsALeave");
+		row([](std::string* rowError) { return TestCoordinatorHostProtocolErrorFailsClients(rowError); }, "TestCoordinatorHostProtocolErrorFailsClients");
+		row([](std::string* rowError) { return TestCoordinatorRelayBacklogHeals(rowError); }, "TestCoordinatorRelayBacklogHeals");
+		row([](std::string* rowError) { return TestCoordinatorRelayFailureDropsPeer(rowError); }, "TestCoordinatorRelayFailureDropsPeer");
+		row([](std::string* rowError) { return TestCoordinatorDroppedSeatHold(rowError); }, "TestCoordinatorDroppedSeatHold");
+		row([](std::string* rowError) { return TestCoordinatorHeldSeatKeepsPlaying(rowError); }, "TestCoordinatorHeldSeatKeepsPlaying");
+		row([](std::string* rowError) { return TestSeatStateNeverReadUnderTheServiceLock(rowError); }, "TestSeatStateNeverReadUnderTheServiceLock");
+		row([](std::string* rowError) { return TestSeatStateNeverReadUnderTheServiceLock(rowError, true); }, "TestSeatStateNeverReadUnderTheServiceLock:true");
+		row([](std::string* rowError) { return TestHeldSeatOwnershipAgreesAcrossPeers(rowError); }, "TestHeldSeatOwnershipAgreesAcrossPeers");
+		row([](std::string* rowError) { return TestSessionPumpRunsWhileTheRoundWaits(rowError); }, "TestSessionPumpRunsWhileTheRoundWaits");
+		row([](std::string* rowError) { return TestCoordinatorAdjudicatedPeerKeepsItsSeat(rowError); }, "TestCoordinatorAdjudicatedPeerKeepsItsSeat");
+		row([](std::string* rowError) { return TestRelayHostFinishesWhatItOwes(rowError); }, "TestRelayHostFinishesWhatItOwes");
+		row([](std::string* rowError) { return TestObservationOverflowCarry(rowError); }, "TestObservationOverflowCarry");
+		row([](std::string* rowError) { return TestValueObservationCodec(rowError); }, "TestValueObservationCodec");
+		row([](std::string* rowError) { return TestValueObservationV19StillDecodes(rowError); }, "TestValueObservationV19StillDecodes");
+		row([](std::string* rowError) { return TestValueObservationRelay(rowError); }, "TestValueObservationRelay");
+		row([](std::string* rowError) { return TestValueObservationReplay(rowError); }, "TestValueObservationReplay");
+		row([](std::string* rowError) { return TestReplayPlayerBindings(rowError); }, "TestReplayPlayerBindings");
+		row([](std::string* rowError) { return TestReplayTrailersFollowTheirPackets(rowError); }, "TestReplayTrailersFollowTheirPackets");
+		row([](std::string* rowError) { return TestAMergedTickOfManyControllersReplays(rowError); }, "TestAMergedTickOfManyControllersReplays");
+		row([](std::string* rowError) { return TestValueObservationNonOwnerDropped(rowError); }, "TestValueObservationNonOwnerDropped");
+		row([](std::string* rowError) { return TestValueObservationOverflowCarry(rowError); }, "TestValueObservationOverflowCarry");
+		row([](std::string* rowError) { return TestStaleRoundFrameStillCountsAsTraffic(rowError); }, "TestStaleRoundFrameStillCountsAsTraffic");
+		row([](std::string* rowError) { return TestObservationFaultsAreToldApart(rowError); }, "TestObservationFaultsAreToldApart");
+		row([](std::string* rowError) { return TestStaleRoundFrameLeavesTheLiveTable(rowError); }, "TestStaleRoundFrameLeavesTheLiveTable");
+		row([](std::string* rowError) { return TestResyncStragglersAreNotHoles(rowError); }, "TestResyncStragglersAreNotHoles");
+		row([](std::string* rowError) { return TestRefusedBlockLeavesNoBindings(rowError); }, "TestRefusedBlockLeavesNoBindings");
+		row([](std::string* rowError) { return TestFourPeerObservationRelayBytes(rowError); }, "TestFourPeerObservationRelayBytes");
+		row([](std::string* rowError) { return TestCongestedRelayHoldsEveryPeer(rowError); }, "TestCongestedRelayHoldsEveryPeer");
+		row([](std::string* rowError) { return TestFourPeerRoundRunsToLength(rowError); }, "TestFourPeerRoundRunsToLength");
+		row([](std::string* rowError) { return TestDeadLinkLosesOnlyItsOwnSeat(rowError); }, "TestDeadLinkLosesOnlyItsOwnSeat");
+		row([](std::string* rowError) { return TestDeadLinkHealedInTimeKeepsEverySeat(rowError); }, "TestDeadLinkHealedInTimeKeepsEverySeat");
+		row([](std::string* rowError) { return TestSoloRoundRunsWithoutRemotes(rowError); }, "TestSoloRoundRunsWithoutRemotes");
+		row([](std::string* rowError) { return TestTheBudgetStartsAtTheHostsOwnStartup(rowError); }, "TestTheBudgetStartsAtTheHostsOwnStartup");
+		row([](std::string* rowError) { return TestAParkClosesOnItsBudget(rowError); }, "TestAParkClosesOnItsBudget");
+		row([](std::string* rowError) { return TestADeferredDecisionWaitsForTheFinalEnd(rowError); }, "TestADeferredDecisionWaitsForTheFinalEnd");
+		if (!rowsPassed) return fail("lockstep regression rows failed");
 
 		if (NetResyncSelfTest::Run() != 0 || NetResyncRuntimeSelfTest::Run() != 0) return fail("resync regression suite failed");
 
