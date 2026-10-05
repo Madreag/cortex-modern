@@ -4309,6 +4309,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		}
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup && m_MultiplayerHostPanel) {
 			contentHeight = m_MultiplayerHostPanel->GetHeight();
+			// Stepping through an open list writes the whole name into the closed line, so it is refitted every frame.
+			FitClosedComboText(m_MultiplayerHostActivityCombo);
+			FitClosedComboText(m_MultiplayerHostSceneCombo);
 		}
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::ResumeSetup && m_MultiplayerResumePanel) {
 			RefreshResumeControls();
