@@ -3792,6 +3792,7 @@ namespace RTE {
 			std::vector<std::unique_ptr<QuorumWire>> wires;
 			std::vector<std::unique_ptr<NetLockstepCoordinator>> peers;
 			std::vector<uint64_t> queued, simulated;
+			std::vector<std::string> queueErrors;
 			std::vector<bool> live;
 			std::vector<std::map<uint64_t, uint64_t>> folds; // frame -> the frame's committed membership, as each peer applied it.
 			bool keepalives = false; // every client's session talks on its link every 50 ms, whatever its round is doing.
@@ -3803,7 +3804,9 @@ namespace RTE {
 				std::string text;
 				for (size_t i = 0; i < peers.size(); ++i)
 					text += " p" + std::to_string(i + 1) + "=" + NetLockstepCoordinator::StateName(peers[i]->GetState()) + "/host" + std::to_string(peers[i]->GetHostPeerId()) + "/sim" +
-					        std::to_string(simulated[i]) + "/gen" + std::to_string(peers[i]->GetMigrationResult().generation) + " \"" + peers[i]->GetStats().timeoutReason + "\"";
+					        std::to_string(simulated[i]) + "/gen" + std::to_string(peers[i]->GetMigrationResult().generation) + "/queue" + std::to_string(queued[i]) +
+					        "/sent" + std::to_string(peers[i]->SentInputThrough()) + "/next" + std::to_string(peers[i]->GetStats().nextFrame) +
+					        " \"" + peers[i]->GetStats().timeoutReason + "\" queue_error=\"" + queueErrors[i] + "\"";
 				return text;
 			}
 		};
@@ -3839,6 +3842,7 @@ namespace RTE {
 			r.count = count;
 			r.port = port;
 			r.queued.assign(count, 1);
+			r.queueErrors.assign(count, "");
 			r.simulated.assign(count, 0);
 			r.live.assign(count, true);
 			r.folds.assign(count, {});
@@ -3871,7 +3875,7 @@ namespace RTE {
 				NetLockstepCoordinator& peer = *r.peers[i];
 				if (!r.live[i] || !peer.IsRunning() || peer.IsMigrating()) continue;
 				for (; r.queued[i] <= r.simulated[i] + 6; ++r.queued[i])
-					if (!peer.QueueLocalInput(r.queued[i], {}, {}, &ignored)) break;
+					if (!peer.QueueLocalInput(r.queued[i], {}, {}, &r.queueErrors[i])) break;
 			}
 			if (r.keepalives && r.now % 50 == 0) {
 				std::vector<uint8_t> heartbeat;
@@ -4337,7 +4341,8 @@ namespace RTE {
 				if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
 				uint64_t hostQueued = 0, clientQueued = 0;
 				const auto feed = [&](NetLockstepCoordinator& peer, uint64_t& queued, uint64_t through) {
-					for (; queued <= through; ++queued) if (!peer.QueueLocalInput(queued, {}, {}, error)) return false;
+					for (; queued + peer.InputDelayAt(peer.GetConfig().localPeerId, queued) <= through; ++queued)
+						if (!peer.DeferLocalInput(queued, {}) && !peer.QueueLocalInput(queued, {}, {}, error)) return false;
 					return true;
 				};
 				const auto holdsOfPeerTwo = [&] { const auto& peers = host.GetStats().peers; const auto found = peers.find(2); return found == peers.end() ? 0U : found->second.holds; };
@@ -4620,10 +4625,13 @@ namespace RTE {
 			hostConfig.substituteSlowPeers = clientConfig.substituteSlowPeers = true;
 			hostConfig.relayToOtherPeers = true;
 			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			hostConfig.peerInputDelayFrames = clientConfig.peerInputDelayFrames = {{1, 0}, {2, 5}};
+			clientConfig.inputDelayFrames = 5;
 			if (!StartCoordinatorPair(48909, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
 			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
 			for (uint64_t frame = 0; frame < 200; ++frame) if (!host.QueueLocalInput(frame, {}, {}, error)) return false;
-			for (uint64_t frame = 0; frame < 40; ++frame) if (!client.QueueLocalInput(frame, {}, {}, error)) return false;
+			const uint16_t delay = client.InputDelayAt(2, 0);
+			for (uint64_t frame = 0; frame + delay < 40; ++frame) if (!client.QueueLocalInput(frame, {}, {}, error)) return false;
 			uint64_t now = 0;
 			for (; now < 600 && host.GetStats().nextFrame < 40; now += 2) { hostWire.AdvanceTimeMs(2); clientWire.AdvanceTimeMs(2); host.Tick(now); client.Tick(now); }
 			if (host.GetStats().nextFrame != 40) { *error = "the host did not reach the frame the seat skips: next=" + std::to_string(host.GetStats().nextFrame); return false; }
@@ -4638,7 +4646,7 @@ namespace RTE {
 			};
 			// Frame 40 is late, but the seat keeps sending the ticks after it: within the bound the round waits on it.
 			for (uint64_t frame = 41; frame <= 40 + hostConfig.slowPlayerBoundTicks; ++frame) {
-				if (!client.QueueLocalInput(frame, {}, {}, error)) return false;
+				if (!client.QueueLocalInput(frame - delay, {}, {}, error)) return false;
 				step(now + 30);
 				if (holdsOfPeerTwo() != 0) {
 					*error = "a seat still sending ticks within the bound of the frame the round waits on was held: sent_through=" + std::to_string(frame) +
@@ -4648,7 +4656,7 @@ namespace RTE {
 			}
 			// One tick past the bound, and the stream that never answered the frame is judged like any other.
 			const uint64_t stray = 41 + hostConfig.slowPlayerBoundTicks;
-			if (!client.QueueLocalInput(stray, {}, {}, error)) return false;
+			if (!client.QueueLocalInput(stray - delay, {}, {}, error)) return false;
 			step(now + 30);
 			if (holdsOfPeerTwo() == 0) {
 				*error = "a seat whose stream strayed past the bound of the frame the round waits on was not held: sent_through=" + std::to_string(stray);
@@ -21901,6 +21909,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			NetLockstepCoordinator host, client;
 			auto a = MakeCoordinatorConfig(1, 2, 0x9A60, 2, NetTransportLane::InputUnreliable);
 			a.roundId = 0x9A60; a.relayToOtherPeers = true; a.authorityPeerId = 1;
+			a.startFrame = 98;
 			a.substituteSlowPeers = true; a.simTickMs = 1000.0 / 60.0;
 			a.remoteTransportPeerIds = {{2, 1}};
 			auto b = a; b.localPeerId = 2; b.remotePeerId = 1; b.relayToOtherPeers = false;
@@ -21913,8 +21922,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			}
 			host.m_RemoteStartsReceived.insert(2); client.m_RemoteStartsReceived.insert(1);
 			host.m_LastQueuedTargetFrame = 99;
-			host.m_RemoteFrames[100][2] = {}; client.m_LocalFrames[100] = {};
+			host.m_RemoteFrames[100][2] = {};
+			if (!client.QueueLocalInput(98, {}, {}, error)) return false;
 			(void)hostWire.PollEvents(); (void)clientWire.PollEvents();
+			host.AcknowledgeAcceptedInput(2, 100);
 			if (!host.ProposePeerHold(1, 1000, error)) return false;
 			host.AdvanceReadyFrames(1000);
 			hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10);
@@ -21928,6 +21939,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					continue;
 				}
 				const auto decoded = NetLockstepCodec::Decode(event.bytes);
+				if (decoded.ok && std::holds_alternative<NetLockstepAck>(decoded.packet.payload)) { client.HandleEvent(event, 1010); continue; }
 				if (!decoded.ok || !std::holds_alternative<NetLockstepFrame>(decoded.packet.payload)) continue;
 				marker = true;
 				NetTransportEvent delivered = event;
@@ -23940,6 +23952,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			uint64_t now = 0;
 			std::array<uint64_t, 3> produced{};
 			std::map<uint64_t, NetLockstepReadyFrame> hostCommitted, survivorCommitted;
+			bool hostSimulates = true;
 			const auto pump = [&](bool kickedPlays) {
 				FeedReleasedClaimsPeer(host, produced[0]);
 				FeedReleasedClaimsPeer(survivor, produced[1]);
@@ -23947,7 +23960,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				host.Tick(now);
 				survivor.Tick(now);
 				if (kickedPlays) kicked.Tick(now);
-				ApplyReadyFrames(host, hostView, &hostCommitted);
+				if (hostSimulates) ApplyReadyFrames(host, hostView, &hostCommitted);
 				ApplyReadyFrames(survivor, survivorView, &survivorCommitted);
 				if (kickedPlays) {
 					NetLockstepReadyFrame ready;
@@ -23961,14 +23974,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			for (int turn = 0; turn < 400 && !(host.IsRunning() && survivor.IsRunning() && kicked.IsRunning()); ++turn) pump(true);
 			for (int turn = 0; turn < 400 && host.GetStats().nextFrame < 10; ++turn) pump(true);
 			if (!host.IsRunning() || host.GetStats().nextFrame < 10) return fail("the three seats never played: " + host.BuildReportJson());
-			// The host stops hearing the survivor for a while; the survivor plays on to the end of the host's sent input.
-			survivorWire.holding = true;
+			// Inputs are accepted while the host's simulation pauses, so the survivor can play ahead safely.
+			hostSimulates = false;
 			for (int turn = 0; turn < 30; ++turn) pump(true);
-			const uint64_t hostNext = host.GetStats().nextFrame, survivorNext = survivor.GetStats().nextFrame;
+			const uint64_t hostNext = host.GetResumeFrame(), survivorNext = survivor.GetResumeFrame();
 			if (survivorNext <= hostNext) return fail("the survivor did not get ahead of the host: host " + std::to_string(hostNext) + " survivor " + std::to_string(survivorNext));
 			host.EvictRemovedPeer(3, "removed by the host", now);
+			hostSimulates = true;
 			for (int turn = 0; turn < 10; ++turn) pump(false);
-			survivorWire.Deliver();
 			for (int turn = 0; turn < 3000 && !(hostView.ended && survivorView.ended && host.GetStats().nextFrame > std::max(*hostView.ended, *survivorView.ended) + 20 &&
 			                                   survivor.GetStats().nextFrame > std::max(*hostView.ended, *survivorView.ended) + 20); ++turn) pump(false);
 			const auto hostLeave = host.GetPeerLeaveFrames(), survivorLeave = survivor.GetPeerLeaveFrames();
