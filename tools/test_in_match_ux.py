@@ -582,7 +582,8 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         (directory / "probe.json").write_text(json.dumps(probes[who], indent=2) + "\n", encoding="utf-8")
         script = root / f"{who}-menu.txt"
         script.write_text(f"wait_file {menu_done} 300\nwait_ms 4000\nexit\n", encoding="utf-8")
-        extra = ["-net-h4-apply", "1"] if who == NEWCOMER else []
+        # The newcomer asks for whichever place is free to give: the order the others joined in decides who holds which seat.
+        extra = ["-net-h4-apply", "65535"] if who == NEWCOMER else []
         # The command-line match reloads a live snapshot only with this lever, as the readback's repair case runs it.
         if case == "repair":
             extra = [*extra, "-net-match-e2e-resync"]
