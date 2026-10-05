@@ -1374,7 +1374,7 @@ namespace RTE {
 			    reader.ReadU8(timing.requiredPeers) && reader.ReadU8(timing.heldPeers) && reader.ReadU32LE(timing.pingMs) && reader.ReadU32LE(timing.jitterMs), reader, error, "timing decision")) return false;
 			timing.action = static_cast<NetTimingAction>(action);
 			timing.phase = static_cast<NetTimingPhase>(phase);
-			if (timing.action == NetTimingAction::Release && version < NetLockstepCodec::c_SeatReleaseVersion) {
+			if (timing.action == NetTimingAction::Release && version < NetLockstepCodec::c_SeatReleaseRecordVersion) {
 				SetError(error, NetLockstepErrorCode::UnsupportedVersion, 0, "seat releases require the release wire");
 				return false;
 			}
@@ -1770,7 +1770,7 @@ namespace RTE {
 					}
 					case NetGameCommandType::SeatRelease: {
 						NetGameSeatRelease release;
-						if (version < NetLockstepCodec::c_SeatReleaseVersion || command.sequence != 0) {
+						if (version < NetLockstepCodec::c_SeatReleaseRecordVersion || command.sequence != 0) {
 							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "seat release requires the release wire and a system sequence");
 							return false;
 						}
@@ -2784,7 +2784,7 @@ namespace RTE {
 		}
 		NetLockstepPayload payload;
 		// Each recovery layout keeps the command vocabulary it recorded.
-		if (!DecodeFrame(reader, payload, error, controllerVersion, version == 1 ? c_WorldTransitionVersion : version == 2 ? 25 : version == 3 ? 27 : version == 4 ? c_WorldVersion : version == 5 ? c_CheckpointVersion : version == 6 ? c_HoldMarkerVersion : c_SeatReleaseVersion, nullptr, true) || !reader.AtEnd()) return false;
+		if (!DecodeFrame(reader, payload, error, controllerVersion, version == 1 ? c_WorldTransitionVersion : version == 2 ? 25 : version == 3 ? 27 : version == 4 ? c_WorldVersion : version == 5 ? c_CheckpointVersion : version == 6 ? c_HoldMarkerVersion : c_SeatReleaseRecordVersion, nullptr, true) || !reader.AtEnd()) return false;
 		NetLockstepFrame frame = std::get<NetLockstepFrame>(std::move(payload));
 		std::vector<uint8_t> canonical;
 		AppendU32LE(canonical, c_RecoveryInputMagic);

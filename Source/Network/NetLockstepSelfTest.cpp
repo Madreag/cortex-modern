@@ -12,6 +12,7 @@
 #include "NetMatchReplay.h"
 #include "NetProtocol.h"
 #include "NetIdentity.h"
+#include "NetSession.h"
 #include "NetResyncState.h"
 #include "NetReconnectLedger.h"
 #include "NetReconnectUx.h"
@@ -23919,6 +23920,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			const auto* frame = decoded.ok ? std::get_if<NetLockstepFrame>(&decoded.packet.payload) : nullptr;
 			if (!frame || frame->commands != record.commands || packet[4] != NetLockstepCodec::c_SeatReleaseVersion) return fail("the release record's packet did not decode at its layout");
 			if (NetLockstepCodec::Decode(olderLayout(packet)).ok) return fail("a decoder before the release layout read its record");
+			auto legacy = packet; legacy[4] = 43; legacy[5] = 0;
+			const auto legacyRead = NetLockstepCodec::Decode(legacy);
+			const auto* legacyFrame = legacyRead.ok ? std::get_if<NetLockstepFrame>(&legacyRead.packet.payload) : nullptr;
+			if (!legacyFrame || legacyFrame->commands != record.commands) return fail("the previous release layout no longer decodes its recording");
 			NetLockstepTiming timing;
 			timing.senderPeerId = 1;
 			timing.peerId = 2;
@@ -24536,10 +24541,39 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		}
 	}
 
+	namespace {
+		bool TestPreviousClaimRulesAreRefused(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("previous_claim_rules_are_refused", why, error); };
+			NetIdentityManifest current;
+			std::string why;
+			if (!NetIdentity::BuildCurrentManifest(current, &why)) return fail(why);
+			NetIdentityManifest previous = current;
+			previous.deterministicConfig.supportedLockstepCodecVersion = 43;
+			previous.deterministicConfigHash = NetIdentity::HashDeterministicConfig(previous.deterministicConfig);
+			previous.sessionIdentityHash = NetIdentity::HashSessionIdentity(previous);
+			LoopbackTransport hostWire, clientWire; NetSession host, client;
+			NetSessionConfig hostConfig, clientConfig;
+			for (auto* config: {&hostConfig, &clientConfig}) {
+				config->sessionId = 0x9D08; config->port = 47450; config->maxPeers = 1;
+				config->heartbeatIntervalMs = 50; config->timeoutMs = 1000;
+			}
+			hostConfig.localNonce = 1; hostConfig.localIdentity = current; hostConfig.displayName = "Current host";
+			clientConfig.localNonce = 2; clientConfig.localIdentity = previous; clientConfig.displayName = "Previous peer";
+			if (!host.StartHost(hostWire, hostConfig, &why) || !client.StartClient(clientWire, "loopback", clientConfig, &why)) return fail(why);
+			for (uint64_t now = 0; now < 2000 && !client.IsRejected() && !(client.IsReady() && host.IsReady()); now += 5) {
+				host.Tick(now); client.Tick(now); hostWire.AdvanceTimeMs(5); clientWire.AdvanceTimeMs(5);
+			}
+			if (!client.IsRejected() || client.GetRejectReason() != NetRejectReason::DeterministicConfigMismatch || host.IsReady() || client.BuildPlayerRefusalText() != "This host runs a newer game version.")
+				return fail("previous claim rules entered or refusal did not name the newer version: " + client.BuildPlayerRefusalText());
+			std::cout << "[net-lockstep-selftest] claim_rules_refusal previous=43 current=" << current.deterministicConfig.supportedLockstepCodecVersion << " text=\"" << client.BuildPlayerRefusalText() << "\"" << std::endl;
+			return fail("");
+		}
+	}
+
 	int NetLockstepSelfTest::RunSeatSuccession() {
 		EnsureSwitchTestManagers();
 		bool passed = true;
-		for (bool (*test)(std::string*): {TestPlayingDepartureSurvivesSuccession, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity}) {
+		for (bool (*test)(std::string*): {TestPlayingDepartureSurvivesSuccession, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestPreviousClaimRulesAreRefused}) {
 			std::string error;
 			passed &= test(&error);
 		}

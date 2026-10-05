@@ -703,8 +703,9 @@ namespace RTE {
 		static constexpr uint16_t c_InputAcceptanceVersion = 34;
 		static constexpr uint16_t c_CheckpointVersion = 40; //!< Frames carrying the checkpoint schedule.
 		static constexpr uint16_t c_HoldMarkerVersion = 42; //!< A host marker carries its hold before its input.
-		/// Version 43 carries a held seat's release as an agreed decision and as the committed record of it; the newest layout.
-		static constexpr uint16_t c_SeatReleaseVersion = 43;
+		/// Version 44 distinguishes departure and succession semantics during admission.
+		static constexpr uint16_t c_SeatReleaseVersion = 44;
+		static constexpr uint16_t c_SeatReleaseRecordVersion = 43; //!< First layout carrying a seat release.
 		static constexpr uint16_t c_RecoveryDatagramVersion = 41; //!< Complete recovery inputs may use the unreliable lane.
 		/// A committed tick and a replay record may name one actor once per sender, in sender order; a build that reads them as unique
 		/// per actor is refused at admission through the deterministic config hash.
