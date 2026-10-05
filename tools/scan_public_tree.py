@@ -286,19 +286,20 @@ def self_test() -> int:
     example = box_facts.load(box_facts.EXAMPLE)
     machine, user = 'harbor' + '-pc', 'jd' + 'oe'
     made_up = {'users': [user], 'boxes': [{'role': 'pc', 'name': machine.upper(), 'instance': 'harbor', 'ssh': None,
-                                           'user': user, 'home': 'C:/Users/' + user, 'tree': 'E' + ':/Work/tree'}]}
+                                           'user': user, 'home': 'C:/Users/' + user, 'tree': 'E' + ':/Work/tree'},
+                                          {'role': 'linux', 'name': 'harbor-linux', 'instance': 'tux', 'ssh': '40' + '71'}]}
     planted = {
         'tool-name': 'Written with ' + TOOL_NAMES[0].capitalize() + '.',
         'internal-name': 'see ' + 'lead' + '-tools/run.sh',
         'process-tag': 'fixes W' + '97 and F' + '85',
-        'machine-name': f'ssh {machine} hostname',
+        'machine-name': f'ssh {machine} hostname, ssh ' + '40' + '71' + ' uptime',
         'user-name': f'owner {user}',
         'abs-path': 'E' + ':/' + 'Work/tree/file.txt and /home/' + 'someone/x',
         'ipv4': 'connect to ' + '.'.join(['10', '9', '8', '7']) + ' and ' + '.'.join(['172', '20', '10', '1']),
     }
     clean = ('loopback 127.0.0.1, any 0.0.0.0, documentation 192.0.2.10 and 203.0.113.7, range prefix 10.0.0.8, '
              'version 4.4.3.1, SSDP 239.255.255.250, F6 opens the panel, C:/Windows/System32/tar.exe, /usr/bin/python3, '
-             'a synthetic E:/x/out, the example home C:/Users/player')
+             'a synthetic E:/x/out, the example home C:/Users/player, tick 4071 of the round, # noqa: F401')
     with tempfile.TemporaryDirectory() as temp:
         repo = Path(temp)
         def run(*args):
@@ -333,6 +334,9 @@ def self_test() -> int:
                 failures.append(f'{kind}: the planted case was not found')
         wrong = [hit for hit in hits if hit.path in ('clean.txt', 'upstream.txt', 'neutral.txt') or hit.path.startswith('external/')]
         failures += [f'flagged an allowed form: {hit.path}:{hit.line} {hit.kind} {hit.text!r}' for hit in wrong]
+        names = [hit.text for hit in hits if hit.path == 'machine-name.txt' and hit.kind == 'machine-name']
+        if len(names) != 2:
+            failures.append(f'machine-name: expected the name and the numeric alias, got {names}')
         tags = [hit.text for hit in hits if hit.path == 'process-tag.txt']
         if len(tags) != 2:
             failures.append(f'process-tag: expected both tags, got {tags}')
