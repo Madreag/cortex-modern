@@ -522,6 +522,32 @@ class LeakScrub(unittest.TestCase):
         self.assertEqual(result['revokes'], [204])
         self.assertNotIn('unit-minted', json.dumps(result))
 
+    def test_an_archive_whose_bytes_spell_an_escape_is_read_as_its_members(self):
+        """2026-10-04: an engine autosave (a zip) whose bytes held a backslash-u escape run was unescaped as if it were text; the
+        mangled copy no longer parsed as a zip and the sweep called the whole run INCOMPLETE. A login inside a member is still found."""
+        import io
+        import tempfile
+        import zipfile
+        from relay_secrets import SecretBook, sweep
+        def archive(member: bytes) -> bytes:
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_STORED) as out:
+                out.writestr('Save.ini', member)
+            return buffer.getvalue()
+        book = SecretBook()
+        book.add_offer({'iceServers': SERVERS})
+        with tempfile.TemporaryDirectory() as folder:
+            clean = Path(folder) / 'clean' / 'tick-791.ccsave'
+            clean.parent.mkdir()
+            clean.write_bytes(archive(b'Name = \\u00e9t\\u00e9\n'))
+            self.assertIn(b'\\u00e9', clean.read_bytes())
+            scan = sweep([clean.parent], book.finder())
+            self.assertEqual(scan['status'], 'CLEAN', scan)
+            leaked = Path(folder) / 'leaked' / 'tick-792.ccsave'
+            leaked.parent.mkdir()
+            leaked.write_bytes(archive(b'Name = \\u00e9\nTurnPass = unit-minted-credential\n'))
+            self.assertNotEqual(sweep([leaked.parent], book.finder())['status'], 'CLEAN')
+
     def test_a_file_without_a_login_is_left_byte_for_byte(self):
         import tempfile
         import relay_scrub as scrub
