@@ -201,6 +201,11 @@ def tokens_equal(left: str, right: str) -> bool:
     return hmac.compare_digest(left, right)
 
 
+def redact_log_url(text: str) -> str:
+    text = re.sub(r"(?i)(token|token_or_join_nonce|join_nonce|nonce)=[^&\s\"#]*", r"\1=redacted", text)
+    return re.sub(r"peer=(?!host(?:[&\s\"#]|$))[^&\s\"#]*", "peer=redacted", text)
+
+
 def valid_install_key(key: str) -> bool:
     if not INSTALL_KEY_MIN <= len(key) <= INSTALL_KEY_MAX:
         return False
@@ -1122,11 +1127,7 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
         timeout = HANDLER_TIMEOUT_S
 
         def log_message(self, fmt: str, *args: object) -> None:
-            text = fmt % args
-            text = re.sub(r"token=[^&\s]+", "token=redacted", text)
-            # A client peer is client:<join nonce>, the joiner's bearer credential; only "host" is public.
-            text = re.sub(r"peer=(?!host(?:[&\s]|$))[^&\s]+", "peer=redacted", text)
-            LOGGER.info("%s %s", self.address_string(), text)
+            LOGGER.info("%s %s", self.address_string(), redact_log_url(fmt % args))
 
         def parse_request(self) -> bool:
             self._body_read = False
@@ -1246,7 +1247,7 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                 self._send(400, {"error": "malformed_json"})
             elif isinstance(exc, ConnectionError):
                 # The peer drops a long poll it no longer needs; that is the client's call, not a server error.
-                LOGGER.info("client aborted %s", self.path)
+                LOGGER.info("client aborted %s", redact_log_url(self.path))
                 self.close_connection = True
             else:
                 LOGGER.exception("handler error")
