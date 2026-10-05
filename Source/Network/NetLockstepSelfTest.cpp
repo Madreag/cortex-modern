@@ -23796,9 +23796,95 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return fail("");
 		}
 
+		// The host releases a held seat and is lost before every survivor has heard: one survivor knows of the release, the other never
+		// does. The survivors carry the same seat state into the successor's round, so the seat's claims end on one frame on both.
+		bool TestAReleaseTheHostTookWithItEndsOnOneFrame(std::string* error) {
+			const char* name = "a_release_the_host_took_with_it_ends_on_one_frame";
+			EnsureSwitchTestManagers();
+			NetActorOwnership::ClearSeededOwners();
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow(name, why, error); };
+			LateSeatNoticeWire hostWire;
+			LoopbackTransport firstWire, secondWire, heldWire;
+			std::string setup;
+			const uint16_t port = 49620;
+			if (!hostWire.StartHost(port, &setup) || !firstWire.Connect("loopback", port, &setup) || !secondWire.Connect("loopback", port, &setup) ||
+			    !heldWire.Connect("loopback", port, &setup)) return fail(setup);
+			NetMatchConfig match = ReleasedClaimsMatch(0x9B14, 4);
+			match.successorOrder = {2, 3};
+			for (uint8_t peer = 1; peer <= 4; ++peer) match.migrationPeers.push_back({peer, static_cast<uint16_t>(port + peer), {"loopback"}});
+			const auto config = [&](uint8_t local, std::map<uint8_t, NetPeerId> remotes) {
+				NetLockstepConfig value = ReleasedClaimsConfig(match, local, std::move(remotes), true);
+				value.startFrame = 1;
+				value.migrationKey.fill(0x39);
+				value.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); };
+				return value;
+			};
+			NetLockstepCoordinator host, first, second, held;
+			if (!host.Start(hostWire, config(1, {{2, 1}, {3, 2}, {4, 3}}), &setup) || !first.Start(firstWire, config(2, {{1, 1}}), &setup) ||
+			    !second.Start(secondWire, config(3, {{1, 1}}), &setup) || !held.Start(heldWire, config(4, {{1, 1}}), &setup)) return fail(setup);
+			for (auto* peer: {&host, &first, &second, &held}) peer->DeferStopsToTickBoundary();
+			ClaimView firstView, secondView;
+			if (!firstView.Create("first survivor", first, 3, 4, 4) || !secondView.Create("second survivor", second, 3, 4, 4)) return fail("the views' actors could not be created");
+			uint64_t now = 0;
+			std::array<uint64_t, 4> produced{1, 1, 1, 1};
+			bool hostAlive = true, heldPlays = true;
+			const auto pump = [&] {
+				if (hostAlive) FeedReleasedClaimsPeer(host, produced[0]);
+				FeedReleasedClaimsPeer(first, produced[1]);
+				FeedReleasedClaimsPeer(second, produced[2]);
+				if (heldPlays) FeedReleasedClaimsPeer(held, produced[3]);
+				if (hostAlive) host.Tick(now);
+				first.Tick(now);
+				second.Tick(now);
+				if (heldPlays) held.Tick(now);
+				NetLockstepReadyFrame ready;
+				if (hostAlive) while (host.PopReadyFrame(ready)) host.FinishSimulationTick(ready.frame);
+				if (heldPlays) while (held.PopReadyFrame(ready)) held.FinishSimulationTick(ready.frame);
+				ApplyReadyFrames(first, firstView);
+				ApplyReadyFrames(second, secondView);
+				if (hostAlive) hostWire.AdvanceTimeMs(5);
+				firstWire.AdvanceTimeMs(5);
+				secondWire.AdvanceTimeMs(5);
+				if (heldPlays) heldWire.AdvanceTimeMs(5);
+				now += 5;
+			};
+			for (int turn = 0; turn < 400 && !(host.IsRunning() && first.IsRunning() && second.IsRunning() && held.IsRunning()); ++turn) pump();
+			for (int turn = 0; turn < 400 && host.GetStats().nextFrame < 10; ++turn) pump();
+			if (!host.IsRunning() || host.GetStats().nextFrame < 10) return fail("the four seats never played: " + host.BuildReportJson());
+			std::string decision;
+			if (!host.ProposePeerHold(4, now, &decision)) return fail("the host could not hold seat 4: " + decision);
+			heldPlays = false;
+			for (int turn = 0; turn < 600 && !(firstView.claimant == 4 && secondView.claimant == 4); ++turn) pump();
+			if (firstView.claimant != 4 || secondView.claimant != 4) {
+				return fail("the held seat's actor never got its claim: first " + std::to_string(firstView.claimant) + " second " + std::to_string(secondView.claimant));
+			}
+			for (int turn = 0; turn < 20; ++turn) pump();
+			// The second survivor never hears the release; then the host's process dies without a word.
+			hostWire.lateTo = {2};
+			host.EvictRemovedPeer(4, "removed by the host", now);
+			for (int turn = 0; turn < 10; ++turn) pump();
+			hostWire.Deliver(true);
+			hostAlive = false;
+			hostWire.Stop();
+			for (int turn = 0; turn < 4000 && !(first.GetHostPeerId() == 2 && second.GetHostPeerId() == 2 && !first.IsMigrating() && !second.IsMigrating() &&
+			                                   firstView.ended && secondView.ended && first.GetStats().nextFrame > std::max(*firstView.ended, *secondView.ended) + 20 &&
+			                                   second.GetStats().nextFrame > std::max(*firstView.ended, *secondView.ended) + 20); ++turn) pump();
+			if (first.GetHostPeerId() != 2 || second.GetHostPeerId() != 2 || first.IsFailed() || second.IsFailed()) {
+				return fail("the survivors did not hand the round to the first survivor: first=" + first.BuildReportJson() + " second=" + second.BuildReportJson());
+			}
+			std::string differs;
+			if (!firstView.ended || !secondView.ended || firstView.ended != secondView.ended || !SameClaimsEveryFrame(firstView, secondView, &differs)) {
+				return fail("the released seat's claim ended at frame " + firstView.Ended() + " on the survivor that heard the release and " + secondView.Ended() +
+				            " on the one that did not" + (differs.empty() ? std::string() : "; " + differs));
+			}
+			std::cout << "[net-lockstep-selftest] migrated_release_claim_frame=" << firstView.Ended() << " boundary=" << first.GetMigrationResult().boundary << std::endl;
+			return fail("");
+		}
+
 		bool RunReleasedClaimsRows() {
 			bool passed = true;
-			for (bool (*test)(std::string*): {TestHeldSeatReleaseEndsItsClaimsOnOneFrame, TestKickedPlayingSeatLeavesOnOneFrame, TestUnboundedDropEndsItsClaimsOnOneFrame}) {
+			for (bool (*test)(std::string*): {TestHeldSeatReleaseEndsItsClaimsOnOneFrame, TestKickedPlayingSeatLeavesOnOneFrame, TestUnboundedDropEndsItsClaimsOnOneFrame,
+			                                  TestAReleaseTheHostTookWithItEndsOnOneFrame}) {
 				std::string error;
 				passed &= test(&error);
 			}
@@ -23891,6 +23977,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestHeldSeatReleaseEndsItsClaimsOnOneFrame, "held_seat_release_ends_its_claims_on_one_frame");
 		row(&TestKickedPlayingSeatLeavesOnOneFrame, "kicked_playing_seat_leaves_on_one_frame");
 		row(&TestUnboundedDropEndsItsClaimsOnOneFrame, "unbounded_drop_ends_its_claims_on_one_frame");
+		row(&TestAReleaseTheHostTookWithItEndsOnOneFrame, "a_release_the_host_took_with_it_ends_on_one_frame");
 		row(&TestAReturnGapDoesNotStartTheHostsClock, "a_return_gap_does_not_start_the_hosts_clock");
 		row(&TestAHoldLandsAtTheFirstFrameItsSeatOwes, "a_hold_lands_at_the_first_frame_its_seat_owes");
 		row(&TestALinklessMemberIsHeldByTheStart, "a_linkless_member_is_held_by_the_start");
