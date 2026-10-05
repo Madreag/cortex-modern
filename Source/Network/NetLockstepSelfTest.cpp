@@ -19414,7 +19414,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					*error = "successor abandoned a permitted 25000 ms dial at " + std::to_string(clock->now - started) + " ms: " + second.GetStats().timeoutReason;
 					return false;
 				}
-				if (second.GetMigrationResult().generation == 1 && third.GetMigrationResult().generation == 1 && second.IsRunning() && third.IsRunning()) {
+				if (!second.IsMigrating() && !third.IsMigrating() && second.GetMigrationResult().generation == 1 && third.GetMigrationResult().generation == 1 && second.IsRunning() && third.IsRunning()) {
 					if (second.GetHostPeerId() != 2 || third.GetHostPeerId() != 2) { *error = "delayed successor produced different authorities"; return false; }
 					std::cout << "[net-lockstep-selftest] PASS successor_waits_for_a_thirty_second_dial connected_ms=25000 completed_ms=" << clock->now - started << std::endl;
 					return true;
