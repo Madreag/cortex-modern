@@ -1143,6 +1143,7 @@ static std::string ResyncSaveName() {
 	static bool ClientSessionLossIsHostDeparture(const NetSession& session) {
 		if (session.IsReady()) return false;
 		if (!session.HasReject()) return true;
+		if (session.GetMismatchKey() == "host_disconnect" && std::string(NetProtocol::RejectReasonName(session.GetRejectReason())) == "Unknown") return true;
 		switch (session.GetRejectReason()) {
 			case NetRejectReason::SessionEnded:
 			case NetRejectReason::Timeout:

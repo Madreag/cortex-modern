@@ -7301,17 +7301,20 @@ namespace RTE {
 		const uint16_t port = watcher ? 47470 : 47471;
 		if (!host.StartHost(hostWire, MakeWorldSessionConfig(port, 11, "World"), error) ||
 		    !service.m_Session->StartClient(joinWire, "loopback", MakeWorldSessionConfig(port, 22, "Joiner"), error)) return false;
-		for (uint64_t now = 0; now < 1000 && !service.m_Session->IsReady(); now += 10) {
+		for (uint64_t now = 0; now < 1000 && !(host.IsReady() && service.m_Session->IsReady()); now += 10) {
 			host.Tick(now); service.m_Session->Tick(now); hostWire.AdvanceTimeMs(10); joinWire.AdvanceTimeMs(10);
 		}
-		if (!service.m_Session->IsReady()) { *error = "disconnect fixture never completed its session handshake"; return false; }
+		if (!host.IsReady() || !service.m_Session->IsReady()) { *error = "disconnect fixture never completed both session handshakes"; return false; }
 		const NetRejectReason reason = watcher ? NetRejectReason::HostNotAccepting : NetRejectReason::Timeout;
 		const std::string detail = watcher ? "the world join deadline expired" : "heartbeat timeout";
-		host.DisconnectReadyPeer(service.m_Session->GetLocalPeerId(), reason, detail);
+		host.DisconnectReadyPeer(host.GetReadyPeers().front().transportPeerId, reason, detail);
 		for (uint64_t now = 1000; now < 1200; now += 10) {
 			service.m_Session->Tick(now); hostWire.AdvanceTimeMs(10); joinWire.AdvanceTimeMs(10);
 		}
 		const std::string name = watcher ? "C1" : "C2";
+		if (!service.m_Session->HasReject() || service.m_Session->GetRejectSummary() != detail) {
+			*error = name + " fixture did not receive the host's disconnect packet"; return false;
+		}
 		if (!service.m_Session->HasReject() || service.m_Session->GetRejectReason() != reason) {
 			*error = name + ": host disconnect reason " + NetProtocol::RejectReasonName(reason) + " became " + NetProtocol::RejectReasonName(service.m_Session->GetRejectReason());
 			return false;
@@ -7384,10 +7387,21 @@ namespace RTE {
 			if constexpr (requires { value.pendingDeleteFiles; }) return value.pendingDeleteFiles;
 			else return value.files - 1;
 		}(stats);
+		if (pending > 32) { unlock(); return Fail("B1: failed-delete worker retained " + std::to_string(pending) + " pending files beyond its 32-file cap"); }
+		if (stats.files != oldFiles + 1) { unlock(); return Fail("B1: dropping retry metadata hid files still on disk"); }
+		if (stats.indexBytes > 2 * NetWorldFrameLog::c_JournalSegmentFrames * sizeof(std::pair<uint64_t, uint32_t>)) { unlock(); return Fail("B1: pruned failed deletes retained full per-frame indexes"); }
+		const auto attempts = []<typename Stats>(const Stats& value) {
+			if constexpr (requires { value.deleteAttempts; }) return value.deleteAttempts;
+			else return uint64_t{0};
+		};
+		const auto retryDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(12);
+		while (attempts(tail.GetJournalStats()) < oldFiles + 32 * 7 && std::chrono::steady_clock::now() < retryDeadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		const auto stopped = tail.GetJournalStats();
+		std::this_thread::sleep_for(std::chrono::milliseconds(1250));
+		const auto later = tail.GetJournalStats();
 		unlock();
-		if (pending > 32) return Fail("B1: failed-delete worker retained " + std::to_string(pending) + " pending files beyond its 32-file cap");
-		if (stats.files != oldFiles + 1) return Fail("B1: dropping retry metadata hid files still on disk");
-		if (stats.indexBytes > 2 * NetWorldFrameLog::c_JournalSegmentFrames * sizeof(std::pair<uint64_t, uint32_t>)) return Fail("B1: pruned failed deletes retained full per-frame indexes");
+		if (attempts(stopped) == 0 || attempts(stopped) > oldFiles + 32 * 7 || attempts(later) != attempts(stopped)) return Fail("B1: a permanent delete refusal kept retrying past its attempt limit");
+		if (later.files != oldFiles + 1) return Fail("B1: retry exhaustion hid files that still exist");
 		std::cout << "[net-world-join-selftest] PASS failed_journal_deletes_have_bounds" << std::endl;
 		return 0;
 	}

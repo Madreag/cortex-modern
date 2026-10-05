@@ -217,6 +217,9 @@ namespace RTE {
 		static constexpr size_t c_JournalSegmentFrames = 3600;          //!< The journal's frames per file; the oldest go a file at a time.
 		static constexpr uint64_t c_JournalQueueBytes = 32ULL * 1024 * 1024; //!< Frames waiting for the journal's writer; past it the journal fails.
 		static constexpr uint64_t c_JournalReopenFrames = 600;          //!< The first wait before a failed journal is opened again; it doubles per failure.
+		static constexpr uint32_t c_JournalPendingDeleteFiles = 32;     //!< Failed files keep bounded paths, not frame indexes.
+		static constexpr uint32_t c_JournalDeleteAttempts = 8;          //!< Brief locks get retries; permanent refusals become explicit cleanup files.
+		static constexpr uint32_t c_JournalInventoryBatchFiles = 64;    //!< Stranded files do not grow one inventory pass without bound.
 
 		/// The frames a peer's record of its round keeps: the slow-player bound, the delay margin and one capture interval of frames.
 		static size_t RingFrames(uint32_t boundTicks, uint32_t delayMarginFrames, uint64_t captureIntervalMs, double tickMs);
@@ -247,6 +250,8 @@ namespace RTE {
 			uint64_t indexBytes = 0;      //!< Memory: the files' per-frame offsets.
 			uint32_t cachedReads = 0;     //!< Memory: the reads kept for the joiners asking again.
 			uint64_t cachedReadBytes = 0;
+			uint32_t pendingDeleteFiles = 0, orphanedFiles = 0;
+			uint64_t deleteAttempts = 0;
 		};
 		JournalStats GetJournalStats() const;
 		size_t MaxFrames() const { return m_MaxFrames; }
