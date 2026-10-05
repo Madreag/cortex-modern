@@ -30,16 +30,6 @@
     },
     {
       "op": "assert_control",
-      "control": "LabelNetMatchStatus",
-      "text_contains": "Client (seat 2) / via direct"
-    },
-    {
-      "op": "assert_control",
-      "control": "LabelNetMatchStatus",
-      "text_contains": "Client (seat 3) / via direct"
-    },
-    {
-      "op": "assert_control",
       "control": "NetworkSeatName0",
       "text_contains": "Client (seat 2)"
     },

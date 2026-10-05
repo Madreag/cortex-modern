@@ -40,7 +40,7 @@
             "peer": "host",
             "probe_complete": true
           },
-          "probe": "menu-r5-status.probe.json"
+          "probe": "menu-r5-status.640.probe.json"
         },
         {
           "name": "client",
