@@ -24080,13 +24080,20 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				if (round.firstWire.lost == 0) return fail("peer 2 did not lose its decision acknowledgement");
 				round.peers[0].EvictRemovedPeer(2, "removed before acknowledgement", round.now);
 				round.alive[1] = false;
-				for (int turn = 0; turn < 300 && round.peers[0].GetStats().nextFrame <= proposal->applyFrame + 10; ++turn) round.Pump();
+				size_t blocked = 0;
+				for (int turn = 0; turn < 300 && round.peers[0].GetStats().nextFrame <= proposal->applyFrame + 10; ++turn) {
+					round.Pump();
+					for (size_t index: {size_t{0}, size_t{2}}) if (round.peers[index].GetStats().nextFrame >= proposal->applyFrame &&
+					    round.peers[index].TimingDecisionPendingAt(proposal->applyFrame)) ++blocked;
+				}
+				if (blocked != 0) failures += std::string(release ? "Release" : "Delay") + " blocks " + std::to_string(blocked) + " frames after required peer 2 is removed; ";
 				for (size_t index: {size_t{0}, size_t{2}}) if (round.peers[index].GetStats().nextFrame <= proposal->applyFrame || round.peers[index].TimingDecisionPendingAt(proposal->applyFrame)) {
 					if (!failures.empty()) failures += "; ";
 					failures += std::string(release ? "Release" : "Delay") + " waits for removed peer 2 at apply=" + std::to_string(proposal->applyFrame) +
 					    " on peer " + std::to_string(index + 1) + " next=" + std::to_string(round.peers[index].GetStats().nextFrame);
 				}
 			}
+			if (failures.empty()) std::cout << "[net-lockstep-selftest] removed_peer_decision_blocked_frames=0 kinds=Release,Delay" << std::endl;
 			return fail(failures);
 		}
 
