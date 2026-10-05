@@ -65,6 +65,7 @@
 #include <memory>
 #include <unordered_map>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <set>
 #include <string>
@@ -24470,6 +24471,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 
 		class AuthorityReadingActivity final : public Activity {
 		public:
+			static void* operator new(size_t bytes) { return ::operator new(bytes); }
+			static void operator delete(void* instance) { ::operator delete(instance); }
 			SoundContainer* sound = nullptr;
 			int mutations = 0;
 			Entity* Clone(Entity* cloneTo = nullptr) const override {
