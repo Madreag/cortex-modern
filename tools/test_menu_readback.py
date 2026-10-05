@@ -162,6 +162,8 @@ SIZE_GATES = (
     ("lobby-name", "1280x720"),
     ("lobby-name", "1920x1080"),
     ("live", "1280x720"),
+    # Every screen's controls by hand at the three sizes and in the 2560x1440 window a 960x540 screen is shown in.
+    *((case, size) for case in CASES if case.startswith("sweep-") for size in ("640x360", "1280x720", "960x540@2.6667")),
 )
 # CalculateWidth adds each printable glyph's m_Width (GUIFont.cpp:333). FontSmall's
 # thinnest printable cell is 2 px, so 139 characters exceed the 276 px status row.
