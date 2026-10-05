@@ -22,6 +22,7 @@ namespace RTE {
 		SeatAssign = 9,
 		Migration = 10,
 		Resume = 11,
+		StartCountdown = 12,
 	};
 
 	enum class NetLobbyErrorCode {
@@ -138,6 +139,14 @@ namespace RTE {
 		bool operator==(const NetLobbyMigration&) const = default;
 	};
 
+	// The host's start countdown: the milliseconds left when it was sent, 0 when none runs. The host repeats it
+	// with its peer states, so a peer that arrives mid-count reads what is left.
+	struct NetLobbyStartCountdown {
+		uint32_t remainingMs = 0;
+
+		bool operator==(const NetLobbyStartCountdown&) const = default;
+	};
+
 	// A lobby that resumes a match from disk: the host offers the checkpoint it stands on (kind 1) and
 	// each peer answers whether it already holds that very archive (kind 2). A peer that holds it loads
 	// its own copy and the host streams it nothing.
@@ -166,7 +175,8 @@ namespace RTE {
 		NetLobbyStateChunk,
 		NetLobbySeatAssign,
 		NetLobbyMigration,
-		NetLobbyResume>;
+		NetLobbyResume,
+		NetLobbyStartCountdown>;
 
 	struct NetLobbyMessage {
 		NetLobbyPayload payload;
@@ -188,7 +198,10 @@ namespace RTE {
 	public:
 		static constexpr uint32_t c_Magic = 0x344C4343U;
 		// 5 widens the player_count range to c_MaxPlayers; older peers refuse a roster past their own.
-		static constexpr uint16_t c_Version = 9;
+		// 10 carries the host's start countdown, a message type older peers do not know.
+		static constexpr uint16_t c_Version = 10;
+		// The longest start countdown a host may announce.
+		static constexpr uint32_t c_MaxStartCountdownMs = 10U * 60U * 1000U;
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxShortTextBytes = 128;

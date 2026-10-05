@@ -48,6 +48,8 @@ namespace RTE {
 		std::string platform = "unknown";
 		bool autoReady = true;
 		bool autoStart = true;
+		/// Host: a Start with someone not ready counts down this long and then starts with everyone present; 0 waits for every Ready.
+		uint32_t startCountdownMs = 0;
 		NetSession* session = nullptr; //!< Shared admission state while the lobby owns transport events.
 		std::function<uint64_t()> sessionNowMs; //!< Shared session clock; absent callers use the round's captured base.
 		bool autoInputDelay = false;
@@ -127,6 +129,16 @@ namespace RTE {
 
 		void SetLocalReady(bool ready);
 		void RequestStart();
+		/// Host: withdraws its Start and stops a running countdown; the round waits for the next Start.
+		void CancelStart();
+		/// The host's start countdown as this peer reads it: the milliseconds left, 0 when none runs.
+		uint32_t StartCountdownRemainingMs() const;
+		/// Whether the host's start countdown runs on this peer.
+		bool IsStartCountdownRunning() const { return m_StartCountdownDeadlineMs != 0; }
+		/// Whether the round has every player it waits for, so the host's Start can begin.
+		bool IsOccupancyComplete() const { return m_State != NetLobbyState::Idle && HasRequiredOccupancy(); }
+		/// Client: whether the host's new setup took back this player's Ready since the last call.
+		bool TakeReadyClearedBySetup() { return std::exchange(m_ReadyClearedBySetup, false); }
 
 		/// Host: adopts an accepted host-options draft as this round's next configuration revision and
 		/// republishes it to every peer. Every ack and readiness is reset, so the hash-checked Start
@@ -253,6 +265,7 @@ namespace RTE {
 		void HandleConfigAck(const NetLobbyConfigAck& message);
 		void HandleReady(const NetLobbyReady& message);
 		void HandleStart(const NetLobbyStart& message);
+		void HandleStartCountdown(const NetLobbyStartCountdown& message);
 		void HandlePeerState(const NetLobbyPeerState& message);
 		void SyncSessionPeers();
 		void RemoveRemote(NetPeerId transportPeerId);
@@ -311,6 +324,8 @@ namespace RTE {
 		bool m_ReadySent = false;
 		bool m_StartRequested = false; //!< The automatic start; re-armed from the config at every change the lobby makes.
 		bool m_StartIntent = false; //!< The host's own Start: no automatic change withdraws it, the round's start or a new round ends it.
+		uint64_t m_StartCountdownDeadlineMs = 0; //!< When the host's start countdown ends on this peer's lobby clock; 0 when none runs.
+		bool m_ReadyClearedBySetup = false; //!< Client: the host's new setup took back this player's Ready.
 		std::string m_FailureReason;
 		std::vector<uint8_t> m_RemotePeerIds; //!< Every remote lockstep peerId; derived at Start.
 		std::map<uint8_t, NetPeerId> m_RemoteTransports; //!< Lockstep peerId -> transport id for each remote.

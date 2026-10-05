@@ -134,6 +134,10 @@ namespace RTE {
 		bool resumeHeldLocally = false; //!< Whether this peer holds that checkpoint and will load its own copy.
 		bool localReady = false;
 		bool remoteReady = false;
+		bool occupancyComplete = false;     //!< Every player the round waits for is in the lobby, so the host's Start can begin.
+		bool startCountdownRunning = false; //!< The host's start countdown runs.
+		uint32_t startCountdownMs = 0;      //!< What is left of it on this peer.
+		bool readyClearedBySetup = false;   //!< The host's new setup took back this player's Ready, until the player readies again.
 		std::vector<NetLobbyMember> members;
 	};
 

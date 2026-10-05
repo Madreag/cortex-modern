@@ -99,8 +99,10 @@ namespace RTE {
 		bool autoReady = true;
 		bool autoStart = true;
 		bool waitForSlot = false; //!< A joiner a world refused because its slots are held knocks again for one to open, within the join's wait.
-		const std::atomic<bool>* readyRequested = nullptr;
+		std::atomic<bool>* readyRequested = nullptr;
 		std::atomic<bool>* startRequested = nullptr;
+		std::atomic<bool>* cancelStartRequested = nullptr; //!< Host: withdraws its Start and its countdown.
+		uint32_t startCountdownMs = 0; //!< Host: how long a Start with someone not ready counts down; 0 waits for every Ready.
 		// Host: the round's start scripts, streamed ahead of the lobby start the first time a start is asked for.
 		std::function<std::vector<uint8_t>()> roundStartScripts;
 		const std::atomic<bool>* cancelRequested = nullptr;
@@ -294,6 +296,7 @@ namespace RTE {
 		bool m_HostOptionsRefused = false;
 		bool m_RematchOwed = false; //!< Client: its last round ended into a rematch lobby; consumed by the next round.
 		std::string m_LastRosterStampRefusal; //!< Host: a refused roster republish, named once.
+		bool m_ReadyClearedBySetup = false; //!< Client: the host's new setup took back this player's Ready and the player has not readied again.
 		/// Host: takes the lobby's published config when the lobby republished it on its own, so the next draft starts from it.
 		void AdoptLobbyConfig();
 		std::deque<NetTransportEvent> m_SessionTraffic; //!< Session traffic the coordinator owned the wire for, waiting for a reader.

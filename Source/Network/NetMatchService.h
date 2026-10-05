@@ -225,6 +225,7 @@ namespace RTE {
 		// run's AutosaveSeconds setting/override, so a request that names nothing changes nothing.
 		std::optional<uint32_t> autosaveSeconds;
 		bool resyncOnDesync = false; // A runtime desync reloads everyone from the host's snapshot instead of aborting the match.
+		bool startCountdown = false; // Host: a Start with someone not ready counts down for every peer, then starts with everyone present.
 		bool rejoin = false; // A seat coming back on its ticket: its fresh session walks the rejoin phases.
 		bool dedicated = false; // Host only: keep lockstep peer hostPeerId but seat no human slot there.
 		bool persistentWorld = false; // Host only: an indefinitely running world, never a last-brain or rematch.
@@ -445,6 +446,8 @@ namespace RTE {
 		/// Gets this run's checkpoint cadence, including its command-line override.
 		static uint32_t GetAutosaveSeconds() { return s_AutosaveSeconds; }
 		static constexpr uint32_t c_MaxAutosaveIntervalSeconds = 3600; // An hour is the longest cadence a host may announce.
+		/// How long the host's Start counts down when someone in the lobby is not ready.
+		static constexpr uint32_t c_StartCountdownMs = 30000;
 		static constexpr uint32_t c_MinAutosaveIntervalSeconds = 60; // A minute is the shortest; 0 stays off.
 		/// The cadence a running match keeps: the command-line override when one was given, else the host's announced option.
 		static uint32_t MatchAutosaveSeconds(const NetMatchConfig& config) {
@@ -659,8 +662,13 @@ namespace RTE {
 		bool SetWorldSpectatorDeclinesPromotion(bool declines);
 		/// What this watcher last told the world; false means it wants the next free seat.
 		bool WorldSpectatorDeclinesPromotion() const { return m_WorldSpectatorDeclinesPromotion; }
-		void SetReady();
+		/// Readies this player for the lobby's match, or takes the Ready back.
+		void SetReady(bool ready = true);
+		/// Whether this player asked to be ready and has not taken it back.
+		bool IsReadyRequested() const { return m_ReadyRequested.load(); }
 		void RequestStart();
+		/// Host: withdraws the Start and stops a running countdown.
+		void CancelStart();
 		void ReportRuntimeError(const std::string& error);
 		void Complete(const std::string& reason);
 		void FinishMatch(const std::string& result);
@@ -1788,6 +1796,7 @@ namespace RTE {
 		uint8_t m_BeaconMaxPlayers = 2;
 		std::atomic<bool> m_ReadyRequested{false};
 		std::atomic<bool> m_StartRequested{false};
+		std::atomic<bool> m_CancelStartRequested{false};
 		std::atomic<bool> m_CancelRequested{false};
 		std::atomic<bool> m_EverStarted{false};
 		std::string m_CapturedRunnerReport;

@@ -498,6 +498,7 @@ static std::string ResyncSaveName() {
 		// A seat rejoining its own running match has nothing to choose in the lobby round: it is ready once it connects.
 		m_ReadyRequested.store(rejoinOfARunningMatch);
 		m_StartRequested.store(false);
+		m_CancelStartRequested.store(false);
 		if (request.dedicated && !request.host) {
 			if (error) *error = "dedicated service requires the host role";
 			return false;
@@ -922,6 +923,7 @@ static std::string ResyncSaveName() {
 		m_CancelRequested.store(false);
 		m_ReadyRequested.store(false);
 		m_StartRequested.store(false);
+		m_CancelStartRequested.store(false);
 		m_Worker = std::thread(&NetMatchService::WorkerRematchMain, this, std::move(link), session.release(), coordinator.release(), runner.release(), departedHost);
 		return true;
 	}
@@ -3043,13 +3045,18 @@ static std::string ResyncSaveName() {
 		}
 	}
 
-	void NetMatchService::SetReady() {
-		m_ReadyRequested.store(true);
+	void NetMatchService::SetReady(bool ready) {
+		m_ReadyRequested.store(ready);
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_State == NetMatchServiceState::Starting) {
-			m_StatusText = "Ready; waiting for host start";
+			m_StatusText = ready ? "Ready; waiting for host start" : "Not ready";
 			m_ErrorText.clear();
 		}
+	}
+
+	void NetMatchService::CancelStart() {
+		m_StartRequested.store(false);
+		m_CancelStartRequested.store(true);
 	}
 
 	void NetMatchService::RequestStart() {
@@ -10020,6 +10027,7 @@ static std::string ResyncSaveName() {
 		config.autoStart = config.host && config.matchConfig.persistentWorld;
 		config.readyRequested = &m_ReadyRequested;
 		config.startRequested = &m_StartRequested;
+		config.cancelStartRequested = &m_CancelStartRequested;
 		config.roundStartScripts = [this] {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			return std::exchange(m_RoundStartScriptsToStream, {});
@@ -10128,6 +10136,7 @@ static std::string ResyncSaveName() {
 		runnerConfig.autoInputDelay = request.autoInputDelay;
 		runnerConfig.useLobbyProtocol = true;
 		ConfigureLobbyStart(runnerConfig);
+		runnerConfig.startCountdownMs = request.host && request.startCountdown && !runnerConfig.matchConfig.persistentWorld ? c_StartCountdownMs : 0;
 		// First lockstep tick is 1: RestartActivity zeroes the sim count, UpdateSim increments it before MovableMan reads it.
 		runnerConfig.startFrame = 1;
 		// A resumed match starts on the tick after the checkpoint, exactly as a healed round resumes

@@ -571,6 +571,7 @@ namespace RTE {
 		lobbyConfig.platform = m_Config.sessionConfig.localIdentity.platform;
 		lobbyConfig.autoReady = m_Config.autoReady;
 		lobbyConfig.autoStart = m_Config.autoStart && relayReady;
+		lobbyConfig.startCountdownMs = m_Config.startCountdownMs;
 		lobbyConfig.session = &session;
 		lobbyConfig.sessionNowMs = m_Config.nowMs;
 		lobbyConfig.autoInputDelay = m_Config.autoInputDelay;
@@ -608,14 +609,31 @@ namespace RTE {
 		const uint64_t roundStartSessionMs = m_Config.nowMs ? m_Config.nowMs() : 0;
 		uint64_t transferProgress = m_Lobby.GetStateTransferProgressSerial(), lastTransferProgressMs = 0;
 		NetMatchConfig stagedOptions;
+		bool readyAsked = false; // A Ready only the player can take back: an automatic one is never withdrawn here.
 		while (true) {
 			if (m_Config.cancelRequested && m_Config.cancelRequested->load()) {
 				SetFailed("match setup canceled");
 				if (error) *error = m_SetupError;
 				return false;
 			}
-			if (m_Config.readyRequested && m_Config.readyRequested->load()) {
-				m_Lobby.SetLocalReady(true);
+			// The host's new setup takes back a player's Ready: the player readies again for the match as it now is.
+			if (m_Lobby.TakeReadyClearedBySetup() && m_Config.readyRequested) {
+				m_Config.readyRequested->store(false);
+				readyAsked = false;
+				m_ReadyClearedBySetup = true;
+			}
+			if (m_Config.readyRequested) {
+				const bool ready = m_Config.readyRequested->load();
+				if (ready) {
+					m_Lobby.SetLocalReady(true);
+					m_ReadyClearedBySetup = false;
+				} else if (readyAsked) {
+					m_Lobby.SetLocalReady(false);
+				}
+				readyAsked = ready;
+			}
+			if (m_Config.host && m_Config.cancelStartRequested && m_Config.cancelStartRequested->exchange(false)) {
+				m_Lobby.CancelStart();
 			}
 			if (m_Config.host && m_Config.relayOffer) {
 				NetRelayConfig offer;
@@ -639,6 +657,8 @@ namespace RTE {
 			if (m_Config.host && m_Config.hostOptions && m_Config.hostOptions->Take(stagedOptions)) {
 				std::string republishError;
 				if (m_Lobby.RepublishMatchConfig(stagedOptions, &republishError)) {
+					// A new setup stops the host's countdown: the players ready again for the match as it now is.
+					m_Lobby.CancelStart();
 					m_MatchConfig = stagedOptions;
 					m_Config.matchConfig = stagedOptions;
 					m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
@@ -918,6 +938,10 @@ namespace RTE {
 		snapshot.modeName = NetMatchConfigUtil::ModeName(rosterConfig.mode);
 		snapshot.modeLabel = NetMatchConfigUtil::ModeLabel(rosterConfig.mode);
 		snapshot.localReady = m_Lobby.IsLocalReady();
+		snapshot.occupancyComplete = m_Lobby.IsOccupancyComplete();
+		snapshot.startCountdownRunning = m_Lobby.IsStartCountdownRunning();
+		snapshot.startCountdownMs = m_Lobby.StartCountdownRemainingMs();
+		snapshot.readyClearedBySetup = m_ReadyClearedBySetup;
 		// A lobby that resumes a match from disk names its checkpoint, so every peer's UI can say which
 		// one it stands on and whether this peer is loading its own copy.
 		snapshot.resumeMatchId = m_Config.resumeMatchId;

@@ -138,6 +138,8 @@ namespace RTE {
 		m_ReadySent = false;
 		m_StartRequested = config.autoStart;
 		m_StartIntent = false;
+		m_StartCountdownDeadlineMs = 0;
+		m_ReadyClearedBySetup = false;
 		m_FailureReason.clear();
 		m_RemoteLobbyUp.clear();
 		m_LobbyUpConnections.clear();
@@ -254,6 +256,7 @@ namespace RTE {
 			}
 			GiveUpWaitingForResumeAnswers(nowMs);
 			SendQueuedStateChunks();
+			if (m_StartCountdownDeadlineMs != 0 && !HasRequiredOccupancy()) CancelStart();
 			SendStartIfReady();
 		} else {
 			if (m_Config.snapshotProviderPeerId == m_Config.localPeerId) {
@@ -699,12 +702,35 @@ namespace RTE {
 		return report.dump(-1, ' ', false, json::error_handler_t::replace);
 	}
 
+	namespace {
+		/// Whether two revisions describe a different match to play: its rules, its seats or its session options. A revision
+		/// that only re-seats a returning player, re-sizes a delay or renews a relay is the same match.
+		bool SetupDiffers(const NetMatchConfig& before, const NetMatchConfig& after) {
+			if (static_cast<const NetMatchStandardRules&>(before) != static_cast<const NetMatchStandardRules&>(after) || before.players.size() != after.players.size()) return true;
+			for (size_t slot = 0; slot < before.players.size(); ++slot) {
+				if (before.players[slot].team != after.players[slot].team || before.players[slot].cpu != after.players[slot].cpu) return true;
+			}
+			return before.autosaveEnabled != after.autosaveEnabled || before.autosaveIntervalSeconds != after.autosaveIntervalSeconds ||
+			       before.automaticRepair != after.automaticRepair || before.delayPolicy != after.delayPolicy ||
+			       before.slowPlayerBoundTicks != after.slowPlayerBoundTicks || before.idleWaitMinutes != after.idleWaitMinutes ||
+			       before.returnWindowMinutes != after.returnWindowMinutes || before.frameRedundancyTicks != after.frameRedundancyTicks;
+		}
+	} // namespace
+
 	void NetLobbySession::SetLocalReady(bool ready) {
 		if (IsTerminal(m_State)) {
 			return;
 		}
 		m_LocalReady = ready;
 		if (!ready) {
+			// A Ready the host holds is taken back on the wire; one never sent just stays unsent.
+			if (m_ReadySent && !m_Config.host && m_State == NetLobbyState::WaitingForReady) {
+				std::string error;
+				if (!Send(NetLobbyReady{m_Config.localPeerId, false}, &error)) {
+					Fail(error);
+					return;
+				}
+			}
 			m_ReadySent = false;
 			return;
 		}
@@ -716,6 +742,26 @@ namespace RTE {
 			return;
 		}
 		m_StartIntent = true;
+		// With everyone ready the round starts at once; otherwise the host's Start counts down, which every peer sees.
+		if (m_Config.host && m_Config.startCountdownMs != 0 && m_StartCountdownDeadlineMs == 0 && !AllRemoteReady() && HasRequiredOccupancy()) {
+			m_StartCountdownDeadlineMs = m_TimingClockMs + m_Config.startCountdownMs;
+			m_PeerStatePending = true;
+		}
+	}
+
+	void NetLobbySession::CancelStart() {
+		if (!m_Config.host || IsTerminal(m_State)) {
+			return;
+		}
+		m_StartIntent = false;
+		if (m_StartCountdownDeadlineMs != 0) {
+			m_StartCountdownDeadlineMs = 0;
+			m_PeerStatePending = true;
+		}
+	}
+
+	uint32_t NetLobbySession::StartCountdownRemainingMs() const {
+		return m_StartCountdownDeadlineMs > m_TimingClockMs ? static_cast<uint32_t>(m_StartCountdownDeadlineMs - m_TimingClockMs) : 0;
 	}
 
 	bool NetLobbySession::RepublishMatchConfig(const NetMatchConfig& config, std::string* error) {
@@ -1191,6 +1237,7 @@ namespace RTE {
 				if (m_RemotePlatformsByPeer.contains(slot.peerId)) remote.platform = m_RemotePlatformsByPeer.at(slot.peerId);
 				(void)Send(remote, &error);
 			}
+			if (m_Config.startCountdownMs != 0) (void)Send(NetLobbyStartCountdown{StartCountdownRemainingMs()}, &error);
 		}
 		m_PeerStatePending = false;
 	}
@@ -1287,7 +1334,9 @@ namespace RTE {
 		if (m_Config.host && m_Config.snapshotProviderPeerId != 0 && !m_IncomingStateComplete)
 			return;
 		// The Start rides the same ordered lane as the state chunks, so it must queue behind them.
-		if (!m_Config.host || !AllConfigAcked() || !AllRemoteReady() || !IsStartRequested() || HasPendingStateChunks() || IsTerminal(m_State)) {
+		// The host's countdown at zero starts the round with everyone present, ready or not.
+		const bool countedDown = m_StartCountdownDeadlineMs != 0 && m_TimingClockMs >= m_StartCountdownDeadlineMs && HasRequiredOccupancy();
+		if (!m_Config.host || !AllConfigAcked() || !(AllRemoteReady() || countedDown) || !IsStartRequested() || HasPendingStateChunks() || IsTerminal(m_State)) {
 			ReportStartWait();
 			return;
 		}
@@ -1312,6 +1361,7 @@ namespace RTE {
 		m_StartSendStall = 0;
 		++m_Stats.startPacketsSent;
 		m_StartIntent = false;
+		m_StartCountdownDeadlineMs = 0;
 		m_State = NetLobbyState::Started;
 	}
 
@@ -1552,6 +1602,8 @@ namespace RTE {
 				HandleSeatAssign(payload);
 			} else if constexpr (std::is_same_v<Payload, NetLobbyResume>) {
 				HandleResume(payload);
+			} else if constexpr (std::is_same_v<Payload, NetLobbyStartCountdown>) {
+				HandleStartCountdown(payload);
 			}
 		}, message.payload);
 	}
@@ -1733,6 +1785,10 @@ namespace RTE {
 			Reject(validateError);
 			return;
 		}
+		if (m_State != NetLobbyState::WaitingForConfig && m_LocalReady && !m_Config.autoReady && SetupDiffers(m_Config.matchConfig, message.config)) {
+			m_LocalReady = false;
+			m_ReadyClearedBySetup = true;
+		}
 		m_Config.matchConfig = message.config;
 		if (!m_Config.matchConfig.relay.Usable(RelayWallSeconds())) m_Config.matchConfig.relay = {};
 		m_MatchConfigHash = incomingHash;
@@ -1787,6 +1843,13 @@ namespace RTE {
 		}
 		m_StartFrame = message.startFrame;
 		m_State = NetLobbyState::Started;
+	}
+
+	void NetLobbySession::HandleStartCountdown(const NetLobbyStartCountdown& message) {
+		if (m_Config.host) {
+			return;
+		}
+		m_StartCountdownDeadlineMs = message.remainingMs == 0 ? 0 : m_TimingClockMs + message.remainingMs;
 	}
 
 	void NetLobbySession::HandlePeerState(const NetLobbyPeerState& message) {

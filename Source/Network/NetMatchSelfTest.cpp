@@ -1737,6 +1737,10 @@ namespace RTE {
 			    !RoundTrip(NetLobbyMatchConfig{config}, error) ||
 			    !RoundTrip(NetLobbyConfigAck{2, true, configHash, ""}, error) ||
 			    !RoundTrip(NetLobbyReady{2, true}, error) ||
+			    !RoundTrip(NetLobbyReady{2, false}, error) ||
+			    !RoundTrip(NetLobbyStartCountdown{0}, error) ||
+			    !RoundTrip(NetLobbyStartCountdown{27000}, error) ||
+			    !RoundTrip(NetLobbyStartCountdown{NetLobbyProtocol::c_MaxStartCountdownMs}, error) ||
 			    !RoundTrip(NetLobbyStart{config.sessionId, 120, 0, configHash}, error) ||
 			    !RoundTrip(NetLobbyAbort{1, "user cancelled"}, error) ||
 			    !RoundTrip(NetLobbySeatAssign{2}, error) ||
@@ -1764,6 +1768,25 @@ namespace RTE {
 				}
 				if (decoded.error.message.find("peer id") == std::string::npos) {
 					*error = "the refusal of seat assignment peer id " + std::to_string(assigned) + " did not name the field: " + decoded.error.message;
+					return false;
+				}
+			}
+			// A countdown past the longest a host may announce, or a reserved field in use, is refused by name.
+			for (const bool reserved: {false, true}) {
+				NetLobbyMessage message;
+				message.payload = NetLobbyStartCountdown{1000};
+				std::vector<uint8_t> bytes;
+				if (!NetLobbyProtocol::Encode(message, bytes)) {
+					*error = "could not encode a start countdown";
+					return false;
+				}
+				const uint32_t poked = reserved ? 1U : NetLobbyProtocol::c_MaxStartCountdownMs + 1U;
+				const size_t offset = NetLobbyProtocol::c_HeaderBytes + (reserved ? 4 : 0);
+				for (size_t byte = 0; byte < 4; ++byte) bytes.at(offset + byte) = static_cast<uint8_t>(poked >> (8 * byte));
+				const NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(bytes);
+				const NetLobbyErrorCode expected = reserved ? NetLobbyErrorCode::ReservedFieldNonZero : NetLobbyErrorCode::InvalidValue;
+				if (decoded.ok || decoded.error.code != expected) {
+					*error = reserved ? "a start countdown with its reserved field set was not refused" : "a start countdown past the longest was not refused";
 					return false;
 				}
 			}
