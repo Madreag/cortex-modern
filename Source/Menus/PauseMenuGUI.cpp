@@ -360,10 +360,12 @@ void PauseMenuGUI::UpdateMatchPauseRow(bool force) {
 
 std::string PauseMenuGUI::LeaveConsequenceText() const {
 	if (g_NetMatchService.IsHost()) {
-		return "Leave the match?\nThe match ends for everyone.";
+		// The host's leave hands the round to the next host the match agreed on, and ends it when there is none.
+		return g_NetMatchService.GetLobbyMatchConfig().successorOrder.empty() ? "Leave the match?\nThe match ends for everyone."
+		                                                                     : "Leave the match?\nAnother player becomes the host and the match plays on.";
 	}
-	// An announced leave holds nothing: the drop window is for peers that vanish, not for this one.
-	return "Leave the match?\nThe others play on; your units fall to a teammate or to the AI. Your seat cannot be reclaimed.";
+	// A leave is held like a drop: the seat and its ticket stay this player's while the match runs.
+	return "Leave the match?\nThe AI plays your units and your seat stays yours.\nRejoin Match on the Multiplayer screen brings you back while the match runs.";
 }
 
 void PauseMenuGUI::ShowLeaveConfirm(bool show) {
