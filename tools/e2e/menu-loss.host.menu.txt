@@ -4,7 +4,7 @@ wait_ms 300
 settext TextMultiplayerName Host
 activate ButtonMultiplayerHostGame
 wait_ms 300
-combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+combo_select ComboHostActivity P4 Alpha Duel
 observe assert_text_fits ComboHostActivity
 setup_host_port {PORT}
 combo_select ComboHostPlayers 2

@@ -11,7 +11,7 @@ activate ButtonMultiplayerHostGame
 video_mark mp-host-setup
 wait_ms 450
 assert_substate HostSetup
-combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+combo_select ComboHostActivity P4 Alpha Duel
 wait_ms 500
 setup_host_port {PORT}
 combo_select ComboHostPlayers 2

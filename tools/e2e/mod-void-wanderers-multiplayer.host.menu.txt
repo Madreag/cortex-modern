@@ -13,9 +13,9 @@ wait_ms 450
 assert_substate HostSetup
 video_mark vw-mp-activity-picker
 dump_host_options
-observe combo_select ComboHostActivity Void Wanderers - VoidWanderers.rte
+observe combo_select ComboHostActivity Void Wanderers
 wait_ms 900
-assert_label ComboHostActivity Void Wanderers - VoidWanderers.rte
+assert_label ComboHostActivity Void Wanderers
 wait_ms 500
 setup_host_port {PORT}
 combo_select ComboHostPlayers 2

@@ -6,7 +6,7 @@ settext TextMultiplayerName Host
 activate ButtonMultiplayerHostGame
 wait_ms 660
 assert_substate HostSetup
-combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+combo_select ComboHostActivity P4 Alpha Duel
 setup_host_port {PORT}
 combo_select ComboHostPlayers 2
 activate ButtonMultiplayerCreate

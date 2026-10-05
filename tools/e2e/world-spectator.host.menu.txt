@@ -3,7 +3,7 @@ activate ButtonMainToMultiplayer
 wait_ms 495
 activate ButtonMultiplayerHostGame
 wait_ms 495
-combo_select ComboHostActivity Persistent World - Base.rte
+combo_select ComboHostActivity Persistent World
 wait_ms 900
 combo_select ComboHostPlayers 4
 setup_host_port {PORT}

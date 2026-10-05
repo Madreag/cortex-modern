@@ -26,7 +26,7 @@ assert_no_overlap LabelLobbyPlayer0 LabelLobbyPlayer1
 assert_label LabelLobbyPlayer1 Joiner
 dump_lobby
 video_mark mp-details-read-only
-activate ButtonLobbyOptions
+activate ButtonLobbyEditSetup
 wait_ms 495
 assert_substate HostOptions
 assert_label LabelHostOptionsTitle M A T C H   D E T A I L S

@@ -138,7 +138,7 @@ observe assert_text_fits ComboHostActivity
 observe assert_not_drawn MultiplayerLandingPanel
 observe assert_label ComboHostActivity Skirmish Defense
 wait_ms 400
-combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+combo_select ComboHostActivity P4 Alpha Duel
 wait_ms 250
 setup_host_port {PORT}
 combo_select ComboHostPlayers 3

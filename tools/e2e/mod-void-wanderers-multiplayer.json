@@ -52,7 +52,7 @@
       "screen": "MultiplayerScreen",
       "what": "The host selects the installed Void Wanderers activity in the real multiplayer picker.",
       "events": [
-        "combo_select ComboHostActivity Void Wanderers - VoidWanderers.rte PASS",
+        "combo_select ComboHostActivity Void Wanderers.*PASS",
         "assert_label ComboHostActivity.*Void Wanderers.*PASS"
       ]
     },

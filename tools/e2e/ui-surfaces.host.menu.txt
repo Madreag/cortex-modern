@@ -11,7 +11,7 @@ wait_ms 495
 activate ButtonMultiplayerHostGame
 wait_ms 495
 assert_substate HostSetup
-observe combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+observe combo_select ComboHostActivity P4 Alpha Duel
 wait_ms 500
 setup_host_port {PORT}
 combo_select ComboHostPlayers 2
