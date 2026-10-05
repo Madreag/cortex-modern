@@ -203,10 +203,6 @@
       ],
       "probe_steps": [
         8,
-        9,
-        10,
-        11,
-        12,
         13,
         14,
         15,
@@ -214,7 +210,11 @@
         17,
         18,
         19,
-        20
+        20,
+        21,
+        22,
+        23,
+        24
       ],
       "readback": [
         {
@@ -226,7 +226,7 @@
           "contains": "newcomer"
         },
         {
-          "step": 9,
+          "step": 13,
           "path": [
             "control",
             "text"
@@ -234,7 +234,7 @@
           "contains": "leaver"
         },
         {
-          "step": 10,
+          "step": 14,
           "path": [
             "control",
             "enabled"
@@ -242,7 +242,7 @@
           "equals": true
         },
         {
-          "step": 16,
+          "step": 20,
           "path": [
             "control",
             "text"
