@@ -357,9 +357,13 @@ def check_host_leave(checks, captures, logs, peers):
 
 
 def sp_pause_probe():
-    # Single player's pause menu runs in the menu loop, which steps only menu-scope steps.
+    # The title screen's own scene reads as Gameplay too, paused, so the probe waits for the started skirmish: a build with the
+    # probe's paused wait waits for it outright, an earlier one by the menu script's seven seconds of waits. Escape goes in at
+    # frame 120, as the single-player smoke scene presses it, since the duel ends on its own a few hundred frames in and an
+    # ended activity pauses to the scenario screen. Single player's pause menu runs in the menu loop: menu-scope steps.
     return {"schema": 1, "timeout_ms": 120000, "steps": [
-        {"op": "wait", "screen": "Gameplay", "sim_at_least": 120}, *keys("Escape"), {"op": "wait", "screen": "Pause", "scope": "menu"},
+        {"op": "wait", "elapsed_ms": 9000, "scope": "menu"}, {"op": "wait", "paused": False, "sim_at_least": 120},
+        *keys("Escape"), {"op": "wait", "screen": "Pause", "scope": "menu"},
         {"op": "wait", "elapsed_ms": 600, "scope": "menu"}, menu("dump_host_options"), signal("done", "menu"), {"op": "finish"}]}
 
 
@@ -679,9 +683,7 @@ def run_sp_pause(options, root, size):
     (directory / "probe.json").write_text(json.dumps(sp_pause_probe(), indent=2) + "\n", encoding="utf-8")
     script = root / "sp-menu.txt"
     script.write_text(SP_MENU.format(done=directory / "done.json"), encoding="utf-8")
-    # Launched as the single-player smoke scene launches its skirmish (tools/e2e/sp-smoke.json), whose Escape opens this menu.
-    play_input = options.repo / "tools/e2e/play-input.txt"
-    run = make_run(options.repo, ["-input-script", str(play_input), "-menu-script", str(script)], root / "sp", 240,
+    run = make_run(options.repo, ["-menu-script", str(script)], root / "sp", 240,
                    env={"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(directory / "probe.json")})
     set_visual_resolution(run, width, height)
     try:
