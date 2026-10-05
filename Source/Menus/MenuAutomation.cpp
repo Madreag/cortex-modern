@@ -1101,10 +1101,12 @@ namespace RTE::MenuAutomation {
 		const auto rect = Rectangle(control->GetPanel());
 		observation += " text=" + Json(Captured(Credential(control), text)).dump() + " rect=" + Json(rect).dump();
 		if (auto* label = dynamic_cast<GUILabel*>(control)) {
-			observation += " height=" + std::to_string(label->GetTextHeight()) + " word_width=" + std::to_string(label->GetMaxWordWidth());
+			observation += " height=" + std::to_string(label->GetTextHeight()) + " word_width=" + std::to_string(label->GetMaxWordWidth()) + " width=" + std::to_string(label->GetTextWidth());
 			if (label->GetHorizontalOverflowScroll() && control->GetName() == "LabelMultiplayerStatus") {
 				return label->GetTextHeight() <= rect[3];
 			}
+			// A label scrolling sideways draws its text on one line, which shows whole only when it is no wider than the label.
+			if (label->GetHorizontalOverflowScroll() && label->GetTextWidth() > rect[2]) return false;
 			return label->GetTextHeight() <= rect[3] && label->GetMaxWordWidth() <= rect[2];
 		}
 		std::string section = dynamic_cast<GUIButton*>(control) ? "Button_Up" : dynamic_cast<GUITab*>(control) ? "Tab" :
@@ -1433,9 +1435,10 @@ namespace RTE::MenuAutomation {
 				if (!Shown(control) || !Text(control, text) || text.empty()) continue;
 				Rect rect = Rectangle(control->GetPanel());
 				std::string fit;
-				// A label that scrolls its overflow shows the whole text by design; only its placement is judged.
+				// A label that scrolls its overflow shows the whole text by design, so only its placement is judged; sideways that holds
+				// only for a word wider than the label (an address or a path), since a sentence that cannot wrap is never read whole.
 				auto* label = dynamic_cast<GUILabel*>(control);
-				const bool scrolls = label && (label->GetHorizontalOverflowScroll() || label->GetVerticalOverflowScroll());
+				const bool scrolls = label && ((label->GetHorizontalOverflowScroll() && label->GetMaxWordWidth() > rect[2]) || label->GetVerticalOverflowScroll());
 				// A text box scrolls its one line sideways under the caret, so only the line's height is judged against it.
 				const bool fits = scrolls || (dynamic_cast<GUITextBox*>(control) ? LineFits(manager, control, text, fit) : TextFits(manager, control, fit));
 				if (label) rect = LabelTextRect(label, rect);
