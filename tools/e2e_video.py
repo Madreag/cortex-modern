@@ -1076,6 +1076,7 @@ def probe_verdict(probe_dir, item):
 # every distinct offence once, so one capture lists them all.
 SCREEN_WATCH_RULES = {
     "layout": ("Every shown label's text fits its own rect, its rect sits inside its panel and the screen.", "layout always"),
+    "overlap": ("No shown caption draws over or under another shown control of its panel.", "overlap always"),
     "duplicates": ("No two shown overlay controls carry the same line at once (the status strip and a toast never stack one event).", "duplicates always"),
     "held-reads-held": ("A seat kept for its player never reads 'Left' on another screen while it is held.", "forbid remote_held Left - AI in control"),
     "own-hold-line": ("The held player's own screen says it is held from the hold's first frame to the frame its control returns.", "require local_held Held - AI in control"),

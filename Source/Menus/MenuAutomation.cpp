@@ -1336,6 +1336,47 @@ namespace RTE::MenuAutomation {
 		return "summary RTT " + std::to_string(shown) + " ms against " + std::to_string(expected) + " ms listed";
 	}
 
+	/// Where a label's text lands: its alignment places it inside a rect that may be larger.
+	Rect LabelTextRect(GUILabel* label, Rect rect) {
+		const int width = std::min(label->GetTextWidth(), rect[2]), height = label->GetTextHeight();
+		const int h = label->GetHAlignment(), v = label->GetVAlignment();
+		rect[0] += h == GUIFont::Centre ? (rect[2] - width) / 2 : h == GUIFont::Right ? rect[2] - width : 0;
+		rect[1] += v == GUIFont::Middle ? (rect[3] - height) / 2 : v == GUIFont::Bottom ? rect[3] - height : 0;
+		rect[2] = std::max(1, width);
+		rect[3] = std::max(1, height);
+		return rect;
+	}
+
+	/// Each pair of shown controls of one panel that draw over each other where one of them carries a caption.
+	Json OverlapOffenders(GUIControlManager* menu) {
+		Json offenders = Json::array();
+		for (const auto& [source, manager]: WatchedManagers(menu)) {
+			// A box holds controls rather than covering them, so the controls each box holds are judged against each other.
+			std::map<GUIPanel*, std::vector<std::tuple<GUIControl*, Rect, bool>>> panels;
+			for (GUIControl* control: *manager->GetControlList()) {
+				if (!Shown(control) || dynamic_cast<GUICollectionBox*>(control)) continue;
+				std::string text;
+				const bool captioned = Text(control, text) && !text.empty();
+				auto* label = dynamic_cast<GUILabel*>(control);
+				// A label draws nothing but its text.
+				if (label && !captioned) continue;
+				const Rect rect = label ? LabelTextRect(label, Rectangle(control->GetPanel())) : Rectangle(control->GetPanel());
+				panels[control->GetPanel()->GetParentPanel()].emplace_back(control, rect, captioned);
+			}
+			for (const auto& [parent, shown]: panels) {
+				for (size_t i = 0; i < shown.size(); ++i) {
+					for (size_t j = i + 1; j < shown.size(); ++j) {
+						const auto& [first, a, firstCaptioned] = shown[i];
+						const auto& [second, b, secondCaptioned] = shown[j];
+						if (!(firstCaptioned || secondCaptioned) || a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1]) continue;
+						offenders.push_back({{"source", source}, {"control", first->GetName() + " / " + second->GetName()}, {"rects", Json::array({Json(a), Json(b)})}});
+					}
+				}
+			}
+		}
+		return offenders;
+	}
+
 	/// Each shown control whose text runs out of its own rect, out of the panel it sits in or off the screen.
 	Json LayoutOffenders(GUIControlManager* menu) {
 		Json offenders = Json::array();
@@ -1351,15 +1392,7 @@ namespace RTE::MenuAutomation {
 				auto* label = dynamic_cast<GUILabel*>(control);
 				const bool scrolls = label && (label->GetHorizontalOverflowScroll() || label->GetVerticalOverflowScroll());
 				const bool fits = scrolls || TextFits(manager, control, fit);
-				if (label) {
-					// A label is judged where its text lands, which its alignment places inside a rect that may be larger.
-					const int width = std::min(label->GetTextWidth(), rect[2]), height = label->GetTextHeight();
-					const int h = label->GetHAlignment(), v = label->GetVAlignment();
-					rect[0] += h == GUIFont::Centre ? (rect[2] - width) / 2 : h == GUIFont::Right ? rect[2] - width : 0;
-					rect[1] += v == GUIFont::Middle ? (rect[3] - height) / 2 : v == GUIFont::Bottom ? rect[3] - height : 0;
-					rect[2] = std::max(1, width);
-					rect[3] = std::max(1, height);
-				}
+				if (label) rect = LabelTextRect(label, rect);
 				GUIPanel* parent = control->GetPanel()->GetParentPanel();
 				const bool inParent = !parent || Inside(rect, Rectangle(parent));
 				const bool onScreen = Inside(rect, screenRect);
@@ -1416,7 +1449,7 @@ namespace RTE::MenuAutomation {
 			} cost{watch, {}};
 			if (!WatchStateHolds(watch.state)) continue;
 			++watch.active;
-			if (!linesRead && watch.rule != "layout" && watch.rule != "rtt" && watch.rule != "seat_rows") {
+			if (!linesRead && watch.rule != "layout" && watch.rule != "overlap" && watch.rule != "rtt" && watch.rule != "seat_rows") {
 				lines = ShownLines(menu);
 				linesRead = true;
 			}
@@ -1440,6 +1473,8 @@ namespace RTE::MenuAutomation {
 				if (const std::string contradiction = RttContradiction(menu); !contradiction.empty()) detail = contradiction;
 			} else if (watch.rule == "layout") {
 				if (Json offenders = LayoutOffenders(menu); !offenders.empty()) detail = offenders;
+			} else if (watch.rule == "overlap") {
+				if (Json offenders = OverlapOffenders(menu); !offenders.empty()) detail = offenders;
 			} else if (watch.rule == "seat_rows") {
 				auto* panel = g_MenuMan.GetNetworkPanel();
 				GUIControl* box = panel ? panel->GetControl("NetworkSeats") : nullptr;
@@ -1457,7 +1492,7 @@ namespace RTE::MenuAutomation {
 			if (detail.is_null()) continue;
 			Json shown = Json::array();
 			if (watch.violations++ == 0) {
-				if (!linesRead && watch.rule != "layout") lines = ShownLines(menu), linesRead = true;
+				if (!linesRead && watch.rule != "layout" && watch.rule != "overlap") lines = ShownLines(menu), linesRead = true;
 				for (size_t index = 0; index < lines.size() && index < 24; ++index) shown.push_back(lines[index].source + "/" + lines[index].control + ": " + lines[index].text);
 			}
 			const Json cases = detail.is_array() ? detail : Json::array({detail});
@@ -1772,7 +1807,7 @@ namespace RTE::MenuAutomation {
 				if (watch.rule == "equals" || watch.rule == "shown") args >> watch.control;
 				std::getline(args >> std::ws, watch.text);
 				const bool textRule = watch.rule == "require" || watch.rule == "forbid" || watch.rule == "equals";
-				const bool known = textRule || watch.rule == "shown" || watch.rule == "duplicates" || watch.rule == "rtt" || watch.rule == "layout" || watch.rule == "seat_rows";
+				const bool known = textRule || watch.rule == "shown" || watch.rule == "duplicates" || watch.rule == "rtt" || watch.rule == "layout" || watch.rule == "overlap" || watch.rule == "seat_rows";
 				if (!known || watch.state.empty() || (textRule && watch.text.empty()) || ((watch.rule == "equals" || watch.rule == "shown") && watch.control.empty())) {
 					observation = "unknown or incomplete watch";
 					return false;

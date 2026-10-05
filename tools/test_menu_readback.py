@@ -150,6 +150,7 @@ PAUSE_PAGE_FIRST_VALUE = {
     "Gameplay": "CheckboxBlipOnRevealUnseen",
     "Misc": "CheckboxShowToolTips",
 }
+PICTURE_WATCHES = "picture-layout layout always\npicture-overlap overlap always\n"
 SIZE_GATES = (
     *((case, size) for case in ("lobby", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "pause", "pause-save", "network", "net-host-left", "net-host-left-early")
       for size in ("640x360", "960x540", "1280x720")),
@@ -2226,6 +2227,12 @@ def run_case(options, case, root, failing=None):
                 if case == "repair":
                     args += ["-net-match-e2e-resync"]
             env = {"CCCP_HEADLESS": "1"}
+            if not BASE_WORDS:
+                # The picture rules every screen is held to, on every frame drawn, at every size: a caption fits its control and
+                # its panel and the screen, and no caption draws over or under another control of its panel.
+                watches = root / "picture-watches.txt"
+                watches.write_text(PICTURE_WATCHES, encoding="utf-8")
+                env["CCCP_TEST_SCREEN_WATCHES"] = str(watches)
             if who in probes:
                 directory = probe_root(root, who)
                 directory.mkdir()
@@ -2319,6 +2326,12 @@ def run_case(options, case, root, failing=None):
                     rest = [line.strip() for line in tail.splitlines()[1:] if line.strip()]
                     in_round = bool(waits_for_round) and rest in ([], ["exit"]) and "state:Running -> OK" in logs[who]
                     assert "[menu-script] complete" in logs[who] or in_round, logs[who][-3000:]
+                if not BASE_WORDS:
+                    armed = re.findall(r"\[text-watch\] armed .*\"(picture-[\w-]+)\"", logs[who])
+                    violations = [line for line in logs[who].splitlines() if "[text-watch] violation picture-" in line]
+                    result.setdefault("pictures", {})[who] = {"armed": armed, "violations": violations[:20]}
+                    assert sorted(set(armed)) == ["picture-layout", "picture-overlap"], (who, armed)
+                    assert not violations, (who, violations[:20])
         if not failing:
             if case == "lobby":
                 # The picks drive this host's history policy, in frames of the round's tick.
