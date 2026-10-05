@@ -1043,6 +1043,21 @@ namespace RTE {
 				return true;
 			}
 
+			bool TestWorldProofSurvivesOneRefusal(std::string* error) {
+				ScriptedClient s;
+				NetDirectoryRegisterRequest row = SampleRegisterRequest();
+				row.persistentWorld = true; row.worldId = "7b8c9d2e-1111-4222-8333-444455556666";
+				row.worldBoot = 2; row.resumeSessionId = row.worldId; row.resumeToken = "previous-proof";
+				s.replies->push_back({403, R"({"error":"forbidden"})", ""});
+				s.client.Advertise(row, true); s.client.Update(0); s.client.Update(0);
+				s.client.Update(5000);
+				if (s.sent->size() != 2 || json::parse(s.sent->back().body).value("resume_token", std::string()) != "previous-proof") {
+					*error = "S5: one refusal discarded the world's last stored proof"; return false;
+				}
+				std::cout << "[net-directory-selftest] PASS world_proof_survives_one_refusal" << std::endl;
+				return true;
+			}
+
 			bool TestListedRefusalsKeepRetrying(std::string* error) {
 				for (const bool heartbeat : {false, true}) for (const int status : {400, 401, 403, 404, 405, 408, 410, 422}) {
 					ScriptedClient s;
@@ -3092,7 +3107,7 @@ namespace RTE {
 
 			std::string error;
 			const char* selected = std::getenv("CCCP_TEST_DIRECTORY_CASE");
-			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}}) {
+			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
 				if (!selected || std::string(selected) == test.first) {
 					if (!test.second(&error)) return fail(error);
 					if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
