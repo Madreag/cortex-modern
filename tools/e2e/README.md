@@ -2,8 +2,7 @@
 
 Each `<name>.json` here is one play-through `tools/e2e_video.py` can run on private hidden desktops. The engine's
 `-record-video <dir>` flag writes the frames; the driver encodes them, tiles a contact sheet and writes `review.json`.
-A reviewing agent reads `review.json` first, then the contact sheet, then the video, and only an agent-approved
-capture is parked for the user.
+A reviewer reads `review.json` first, then the contact sheet, then the video; only an approved capture is kept.
 
     python tools/e2e_video.py --repo <tree> --out <dir>\<name> --scenario <name>
     python tools/e2e_video.py --repo <tree> --review-only <dir>\<name>
@@ -211,7 +210,7 @@ Pillow supplies labelled contact sheets; the ffmpeg fallback is unlabelled. The 
 `dump_match_identity` and the recorder flags. `CCCP_TEST_DATA` and `CCCP_TEST_SETTINGS` can select the data and settings.
 The POSIX runner supplies the runtime, `CCCP_HEADLESS=1`, `SDL_MAC_BACKGROUND_APP=1` and its dylib search path;
 a working native display/GL context is still required. The engine requests an SDL hidden window in both creation paths.
-Windows private-desktop isolation has no POSIX equivalent in this driver. The Mac lane must verify its own display
+Windows private-desktop isolation has no POSIX equivalent in this driver. A Mac run must verify its own display
 isolation, GL frame readback, encoding and runtime dependencies. No Mac execution is implied by these definitions.
 Reading the scripts and runtime setup reveals no additional Mac-specific change needed by `sp-smoke`.
 

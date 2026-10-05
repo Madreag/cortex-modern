@@ -2,8 +2,7 @@
 
 These fixtures detect stale player input on AI actors and local pie-state
 mutations. They do not repair the engine. Run `run_arm.py` through the existing
-isolated runner with a fresh output directory and an already firewall-ruled
-executable. It uses headless mode, separate peer runtimes, input delay 3, 320
+isolated runner with a fresh output directory and the executable to test. It uses headless mode, separate peer runtimes, input delay 3, 320
 ticks, and dumps ticks 27..320. It never builds or copies an executable.
 
 ```powershell

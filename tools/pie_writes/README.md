@@ -22,7 +22,7 @@ python tools/pie_writes/verify_peer_pie.py full_inventory <out>/<name> --out <ou
 
 The runner uses the existing isolated runner (`tools/run_sim_test.py` `make_run`), headless, separate peer
 runtimes, input delay 3, 320 ticks, dumps 27..320, ports 48181-48189. It never builds or copies an
-executable and refuses one with no inbound firewall rule.
+executable and refuses one the Windows firewall would block.
 
 The detector requires complete `manifest.json`, `run_result.json` and per-peer `launch.json` evidence, a
 complete dump for every actor over ticks 27..320, and then compares the two peers: `pie`, `ctrl`, `mode`
