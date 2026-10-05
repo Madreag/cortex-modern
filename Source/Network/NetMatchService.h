@@ -876,6 +876,9 @@ namespace RTE {
 		/// Ends the joiner's catch-up the moment its own coordinator runs: the round owns the wire and
 		/// the pacing from there. Returns whether this call released it.
 		static bool ReleaseWorldCatchUpOnceRunning(bool coordinatorRunning, NetWorldCatchUpClient& catchUp);
+		/// The tick of the image a world's joiner arriving now is sent: the published one while the round's history still holds the frames
+		/// after it; none when the join must wait for the capture it asks for.
+		static std::optional<uint64_t> WorldServedBase(const NetWorldJoinHost& host);
 		/// The oldest frame a returner arriving now could be served from, from its parts: the base it would get (none when it would take a new
 		/// one), the returns under way and the holds, each hold kept for the host's return window.
 		static uint64_t ReturnHistoryFloor(uint64_t tick, std::optional<uint64_t> servedBaseTick, const std::vector<NetWorldJoinSession>& sessions,
@@ -1706,6 +1709,17 @@ namespace RTE {
 			std::shared_ptr<const NetRelayConfig> value;
 		};
 		RelaySnapshotSlot m_RelaySnapshot;
+		struct HostSignalCredential {
+			std::string sessionId;
+			std::string token;
+		};
+		struct HostSignalSlot {
+			std::shared_ptr<const HostSignalCredential> load() const { std::lock_guard<std::mutex> lock(mutex); return value; }
+			void store(std::shared_ptr<const HostSignalCredential> next) { std::lock_guard<std::mutex> lock(mutex); value = std::move(next); }
+			mutable std::mutex mutex;
+			std::shared_ptr<const HostSignalCredential> value;
+		};
+		HostSignalSlot m_HostSignalCredential; //!< The row the host's ICE signal channel answers on; the worker's pump rebinds to a re-registered one.
 		NetRelayConfig m_FixedRelayOffer;
 		std::string m_RelayError;
 		int m_HostRelayMode = 1;
