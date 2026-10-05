@@ -120,6 +120,16 @@ def role_of(box_name: str) -> str | None:
     return next((entry.role for entry in load().boxes if entry.name == box_name), None)
 
 
+def by_instance(instance_name: str) -> Facts | None:
+    """The box whose instance (peer) name this is, or None."""
+    return next((entry for entry in load().boxes if entry.get('instance') == instance_name), None)
+
+
+def cross_manifest() -> Facts:
+    """The cross-match machine list (cross_peers.py's --boxes document) the box file carries."""
+    return load().cross_peers
+
+
 def path(key: str) -> str:
     """A named path outside any box entry (paths.<key>), as written in the file."""
     return load().paths[key]

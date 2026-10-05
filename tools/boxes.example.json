@@ -1,37 +1,217 @@
 {
   "about": "The shape of the box file the multi-machine tools read (tools/box_facts.py). Copy it to ~/.cortex-modern/boxes.json (or point CORTEX_BOXES at a copy) and write your own machines in; that copy stays outside every work tree. Names, aliases and paths here are neutral and the addresses are documentation addresses; the unit tests run against this file.",
   "schema": 1,
-  "users": ["player"],
+  "users": [
+    "player"
+  ],
   "boxes": [
     {
-      "role": "pc", "name": "box-a", "instance": "peer-a", "hostname": "BOX-A", "ssh": null, "aliases": [],
-      "os": "windows", "user": "player", "home": "C:/Users/player", "scratch": "C:/scratch",
-      "markers": {"timing": "C:/scratch/TIMING-RUN", "cross-free": "C:/scratch/FREE-FOR-CROSS", "verification": "C:/scratch/VERIFICATION.lock",
-                  "battery": "C:/scratch/BATTERY.lock", "exclusive": "C:/scratch/EXCLUSIVE.lock", "harness": "C:/scratch/HARNESS.lock"}
+      "role": "pc",
+      "name": "box-a",
+      "instance": "peer-a",
+      "hostname": "BOX-A",
+      "ssh": null,
+      "aliases": [],
+      "os": "windows",
+      "user": "player",
+      "home": "C:/Users/player",
+      "scratch": "C:/scratch",
+      "markers": {
+        "timing": "C:/scratch/TIMING-RUN",
+        "cross-free": "C:/scratch/FREE-FOR-CROSS",
+        "verification": "C:/scratch/VERIFICATION.lock",
+        "battery": "C:/scratch/BATTERY.lock",
+        "exclusive": "C:/scratch/EXCLUSIVE.lock",
+        "harness": "C:/scratch/HARNESS.lock"
+      }
     },
     {
-      "role": "remote", "name": "box-b", "instance": "peer-b", "hostname": "BOX-B", "ssh": "host-b", "aliases": ["host-b-lan"],
-      "os": "windows", "user": "player", "home": "C:/Users/player"
+      "role": "remote",
+      "name": "box-b",
+      "instance": "peer-b",
+      "hostname": "BOX-B",
+      "ssh": "host-b",
+      "aliases": [
+        "host-b-lan"
+      ],
+      "os": "windows",
+      "user": "player",
+      "home": "C:/Users/player"
     },
     {
-      "role": "mac", "name": "box-c", "instance": "peer-c", "hostname": "BOX-C", "ssh": "host-c", "aliases": [],
-      "os": "macos", "user": "player", "home": "/Users/player"
+      "role": "mac",
+      "name": "box-c",
+      "instance": "peer-c",
+      "hostname": "BOX-C",
+      "ssh": "host-c",
+      "aliases": [],
+      "os": "macos",
+      "user": "player",
+      "home": "/Users/player"
     },
     {
-      "role": "linux", "name": "box-d", "instance": "peer-d", "hostname": "BOX-D", "ssh": "host-d", "aliases": ["host-d.local"],
-      "os": "linux", "user": "player", "home": "/home/player"
+      "role": "linux",
+      "name": "box-d",
+      "instance": "peer-d",
+      "hostname": "BOX-D",
+      "ssh": "host-d",
+      "aliases": [
+        "host-d.local"
+      ],
+      "os": "linux",
+      "user": "player",
+      "home": "/home/player"
     },
     {
-      "role": "laptop", "name": "box-e", "instance": "peer-e", "hostname": "BOX-E", "ssh": "host-e", "aliases": ["host-e-vpn"],
-      "os": "windows", "user": "player", "home": "C:/Users/player"
+      "role": "laptop",
+      "name": "box-e",
+      "instance": "peer-e",
+      "hostname": "BOX-E",
+      "ssh": "host-e",
+      "aliases": [
+        "host-e-vpn"
+      ],
+      "os": "windows",
+      "user": "player",
+      "home": "C:/Users/player"
     },
     {
-      "role": "handheld", "name": "box-f", "instance": "peer-f", "hostname": "BOX-F", "ssh": "host-f", "aliases": ["host-f-vpn"],
-      "os": "windows", "user": "player", "home": "C:/Users/player"
+      "role": "handheld",
+      "name": "box-f",
+      "instance": "peer-f",
+      "hostname": "BOX-F",
+      "ssh": "host-f",
+      "aliases": [
+        "host-f-vpn"
+      ],
+      "os": "windows",
+      "user": "player",
+      "home": "C:/Users/player"
     }
   ],
   "paths": {
     "relay_coturn_config": "C:/scratch/relay/directory-coturn.json",
     "relay_cloudflare_config": "C:/scratch/relay/turn-config-cloudflare.json"
+  },
+  "cross_peers": {
+    "version": 1,
+    "boxes": [
+      {
+        "name": "box-a",
+        "kind": "windows-local",
+        "peers_per_box": 1,
+        "guard_file": "C:/scratch/FREE-FOR-CROSS",
+        "exclusive_marker": "C:/scratch/TIMING-RUN",
+        "tree": "C:/work/cross-tree",
+        "executable": "C:/work/cross-tree/Cortex Command.exe",
+        "runner": "tools/win32_test_runner.py via run_sim_test.make_run",
+        "ports": [
+          49900,
+          49919
+        ],
+        "directory_port": 49918,
+        "sampler": "engine-process-handle",
+        "scratch": "C:/scratch/{lane}",
+        "python": "python"
+      },
+      {
+        "name": "box-b",
+        "kind": "windows-task",
+        "ssh": "host-b",
+        "peers_per_box": 1,
+        "tree": "C:/scratch/{lane}/engine",
+        "executable": "C:/scratch/{lane}/engine/Cortex Command.exe",
+        "runner": "cortex-session1",
+        "task_script": "C:/scratch/session1/run.ps1",
+        "ports": [
+          49900,
+          49919
+        ],
+        "directory_port": 49985,
+        "sampler": "engine-process-handle",
+        "scratch": "C:/scratch/{lane}",
+        "python": "python"
+      },
+      {
+        "name": "box-d",
+        "kind": "posix-ssh",
+        "ssh": "host-d",
+        "environment": {
+          "DISPLAY": ":0"
+        },
+        "peers_per_box": 1,
+        "tree": "/home/player/workers/cross-linux/repo",
+        "executable": "/home/player/workers/cross-linux/repo/build-gcc/CortexCommand",
+        "runner": "tools/posix_test_runner.py via run_sim_test.make_run over ssh",
+        "ports": [
+          50310,
+          50319
+        ],
+        "directory_port": 50318,
+        "sampler": "engine-pid-ps",
+        "scratch": "/home/player/workers/cross-linux/runs/{lane}",
+        "python": "/usr/bin/python3",
+        "guard_file": "/home/player/workers/cross-linux/BOX-FREE-FOR-CROSS"
+      },
+      {
+        "name": "box-c",
+        "kind": "posix-ssh",
+        "ssh": "host-c",
+        "peers_per_box": 1,
+        "tree": "/Users/player/workers/{lane}/repo",
+        "executable": "/Users/player/workers/{lane}/repo/build-gcc/CortexCommand",
+        "runner": "tools/posix_test_runner.py via run_sim_test.make_run over ssh",
+        "ports": [
+          49900,
+          49919
+        ],
+        "directory_port": 49918,
+        "sampler": "engine-pid-ps",
+        "scratch": "/Users/player/workers/{lane}",
+        "python": "/opt/homebrew/bin/python3",
+        "guard_file": "{mac_guard}"
+      }
+    ],
+    "instances": [
+      {
+        "name": "peer-a",
+        "box": "box-a",
+        "port_block": [
+          49900,
+          49904
+        ],
+        "seat": "player"
+      },
+      {
+        "name": "peer-b",
+        "box": "box-b",
+        "port_block": [
+          49900,
+          49904
+        ],
+        "seat": "player"
+      },
+      {
+        "name": "peer-c",
+        "box": "box-c",
+        "port_block": [
+          49900,
+          49904
+        ],
+        "seat": "player"
+      },
+      {
+        "name": "peer-d",
+        "box": "box-d",
+        "port_block": [
+          50310,
+          50314
+        ],
+        "seat": "player",
+        "rosters": [
+          "four-way"
+        ]
+      }
+    ]
   }
 }
