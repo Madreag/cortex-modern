@@ -364,7 +364,7 @@ namespace RTE {
 		return WriteFrame(frame, frames, commands, observations, {}, error);
 	}
 
-	bool NetMatchReplayWriter::WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations, std::string* error, uint8_t authorityPeerId) {
+	bool NetMatchReplayWriter::WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations, std::string* error, uint8_t authorityPeerId, uint8_t updateAuthorityPeerId) {
 		ReplayWorkTimer work{frame, "frame"};
 		if (!IsOpen()) {
 			if (error) *error = GetWriteError().empty() ? "replay writer is not open" : GetWriteError();
@@ -373,6 +373,11 @@ namespace RTE {
 		NetLockstepFrame record;
 		// The frame names its host; sender trailers retain each producer.
 		record.senderPeerId = authorityPeerId != 0 ? authorityPeerId : m_OpeningAuthorityPeerId;
+		const uint8_t updateAuthority = updateAuthorityPeerId != 0 ? updateAuthorityPeerId : record.senderPeerId;
+		if (updateAuthority == 0 || updateAuthority > NetLockstepCodec::c_MaxPeerCount) {
+			if (error) *error = "invalid replay update authority";
+			return false;
+		}
 		record.targetFrame = frame;
 		record.frames = frames;
 		record.commands = commands;
@@ -453,7 +458,7 @@ namespace RTE {
 			}
 		}
 		std::vector<uint8_t> bytes;
-		bytes.reserve(4 + wireBytes.size() + commands.size() + observations.size() + valueObservations.size());
+		bytes.reserve(5 + wireBytes.size() + commands.size() + observations.size() + valueObservations.size());
 		AppendU32(bytes, static_cast<uint32_t>(wireBytes.size()));
 		bytes.insert(bytes.end(), wireBytes.begin(), wireBytes.end());
 		for (const NetGameCommand& command : commands) {
@@ -465,6 +470,7 @@ namespace RTE {
 		for (const NetValueObservation& observation : valueObservations) {
 			bytes.push_back(observation.senderPeerId);
 		}
+		bytes.push_back(updateAuthority);
 		if (!WriteRecordPayload(bytes, error)) return false;
 		++m_FramesWritten;
 		return true;
@@ -745,7 +751,7 @@ namespace RTE {
 		}
 		if (m_Version >= 5) {
 			const size_t senderOffset = wireOffset + wireLength;
-			if (bytes.size() - senderOffset != outFrame.commands.size() + outFrame.observations.size() + outFrame.valueObservations.size()) {
+			if (bytes.size() - senderOffset != outFrame.commands.size() + outFrame.observations.size() + outFrame.valueObservations.size() + (m_Version >= 8 ? 1 : 0)) {
 				if (error) *error = "replay command sender count mismatch";
 				return false;
 			}
@@ -777,11 +783,12 @@ namespace RTE {
 			}
 		}
 		if (m_Version >= 8) {
-			if (outFrame.senderPeerId == 0 || outFrame.senderPeerId > m_Config.peerCount) {
+			if (outFrame.senderPeerId == 0 || outFrame.senderPeerId > m_Config.peerCount || bytes.back() == 0 || bytes.back() > m_Config.peerCount) {
 				if (error) *error = "invalid replay frame authority";
 				return false;
 			}
 			outFrame.replayAuthorityPeerId = outFrame.senderPeerId;
+			outFrame.replayUpdateAuthorityPeerId = bytes.back();
 		}
 		m_LastStatus = NetReplayReadStatus::Frame;
 		return true;

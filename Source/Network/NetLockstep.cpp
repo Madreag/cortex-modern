@@ -5304,7 +5304,7 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetLockstepCoordinator::QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error, std::vector<NetSoundObservation> observations, std::vector<NetValueObservation> valueObservations, uint8_t authorityPeerId) {
+	bool NetLockstepCoordinator::QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error, std::vector<NetSoundObservation> observations, std::vector<NetValueObservation> valueObservations, uint8_t authorityPeerId, uint8_t updateAuthorityPeerId) {
 		NET_PLANE_CHECK();
 		if (m_State != NetLockstepState::Running) {
 			if (error) *error = m_Stats.timeoutReason.empty() ? "replay coordinator is not running" : m_Stats.timeoutReason;
@@ -5314,7 +5314,7 @@ namespace RTE {
 			if (error) *error = "replay frame is duplicate or already accepted";
 			return false;
 		}
-		if (authorityPeerId > m_Config.peerCount) {
+		if (authorityPeerId > m_Config.peerCount || updateAuthorityPeerId > m_Config.peerCount || (authorityPeerId == 0 && updateAuthorityPeerId != 0)) {
 			if (error) *error = "replay frame authority is outside the roster";
 			return false;
 		}
@@ -5327,7 +5327,7 @@ namespace RTE {
 		// Playback owns no actor: every recorded frame rides the REMOTE side so the apply drives
 		// every actor from the file; the empty local entry satisfies the advance.
 		m_LocalFrames[frame] = {};
-		if (authorityPeerId != 0) m_ReplayAuthorities[frame] = authorityPeerId;
+		if (authorityPeerId != 0) m_ReplayAuthorities[frame] = {authorityPeerId, updateAuthorityPeerId != 0 ? updateAuthorityPeerId : authorityPeerId};
 		const uint8_t bucketPeer = m_Config.localPeerId == 1 ? 2 : 1;
 		m_RemoteFrames[frame][bucketPeer] = std::move(frames);
 		if (!commands.empty()) {
@@ -5342,21 +5342,25 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetLockstepCoordinator::PrepareReplayFrame(uint64_t frame, std::string* error) {
+	bool NetLockstepCoordinator::PrepareReplayFrame(uint64_t frame, std::string* error, bool delivering) {
 		NET_PLANE_CHECK();
 		if (!m_Playback || !HasReadyFrame(frame)) {
 			if (error) *error = "the recorded frame is not ready for simulation";
 			return false;
 		}
-		const uint8_t authority = m_ReadyFrames.front().authorityPeerId == 0 ? GetHostPeerId() : m_ReadyFrames.front().authorityPeerId;
+		const auto& ready = m_ReadyFrames.front();
+		const uint8_t committed = ready.authorityPeerId == 0 ? GetHostPeerId() : ready.authorityPeerId;
+		const uint8_t authority = delivering || ready.updateAuthorityPeerId == 0 ? committed : ready.updateAuthorityPeerId;
 		if (authority == 0 || authority > m_Config.peerCount) {
 			if (error) *error = "the recorded frame authority is outside the roster";
 			return false;
 		}
-		if (m_ReplayAuthorityHistory.empty() || m_ReplayAuthorityHistory.rbegin()->second != authority) m_ReplayAuthorityHistory[frame] = authority;
-		const uint8_t former = GetHostPeerId();
+		// An in-tick handover changes membership only when the committed frame is delivered.
+		if (!delivering && authority != committed) { m_Config.authorityPeerId = authority; return true; }
+		const uint8_t former = m_ReplayAuthorityHistory.empty() ? m_ReplayOpeningAuthority : m_ReplayAuthorityHistory.rbegin()->second;
+		if (m_ReplayAuthorityHistory.empty() || former != authority) m_ReplayAuthorityHistory[frame] = authority;
+		m_Config.authorityPeerId = authority;
 		if (former != authority) {
-			m_Config.authorityPeerId = authority;
 			// The authority boundary also carries the lost host's membership, including its held claims.
 			ApplyPeerLeave(former, frame, "recorded host handover", 0, true, false, true);
 		}
@@ -9239,14 +9243,22 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetLockstepCoordinator::PopReadyFrame(NetLockstepReadyFrame& outFrame) {
+	bool NetLockstepCoordinator::PopReadyFrame(NetLockstepReadyFrame& outFrame, std::optional<std::pair<uint64_t, uint8_t>> updateAuthority) {
 		NET_PLANE_CHECK();
 		if (NeedsMigrationSnapshot())
 			return false;
 		if (m_ReadyFrames.empty()) {
 			return false;
 		}
-		if (m_Playback && !PrepareReplayFrame(m_ReadyFrames.front().frame)) return false;
+		if (m_Playback && !PrepareReplayFrame(m_ReadyFrames.front().frame, nullptr, true)) return false;
+		if (!m_Playback && updateAuthority && updateAuthority->first == m_ReadyFrames.front().frame) {
+			if (updateAuthority->second == 0 || updateAuthority->second > m_Config.peerCount) {
+				Fail(NetLockstepStopReason::InternalError, updateAuthority->first, "activity update authority is outside the roster");
+				return false;
+			}
+			m_ReadyFrames.front().updateAuthorityPeerId = updateAuthority->second;
+			if (auto history = m_ReadyHistory.find(updateAuthority->first); history != m_ReadyHistory.end()) history->second.updateAuthorityPeerId = updateAuthority->second;
+		}
 		outFrame = std::move(m_ReadyFrames.front());
 		m_ReadyFrames.pop_front();
 		m_LastDeliveredFrame = outFrame.frame;
@@ -12057,7 +12069,8 @@ namespace RTE {
 
 	void NetLockstepCoordinator::StampFrameAuthority(NetLockstepReadyFrame& ready) {
 		const auto authority = m_ReplayAuthorities.find(ready.frame);
-		ready.authorityPeerId = authority == m_ReplayAuthorities.end() ? GetHostPeerId() : authority->second;
+		ready.authorityPeerId = authority == m_ReplayAuthorities.end() ? GetHostPeerId() : authority->second.first;
+		ready.updateAuthorityPeerId = authority == m_ReplayAuthorities.end() ? 0 : authority->second.second;
 		if (authority != m_ReplayAuthorities.end()) m_ReplayAuthorities.erase(authority);
 	}
 

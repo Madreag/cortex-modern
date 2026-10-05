@@ -189,6 +189,7 @@ namespace RTE {
 		uint64_t s_ReplayFramesConsumed = 0;
 		uint64_t s_ReplayLastTick = 0;
 		std::optional<uint64_t> s_ReplayQueuedTick;
+		std::optional<std::pair<uint64_t, uint8_t>> s_UpdateAuthority;
 		bool s_ReplayEndMarkerSeen = false;
 		uint64_t s_ReplayRecordFrames = 0;
 		bool s_ReplayRecordClosed = false;
@@ -200,6 +201,7 @@ namespace RTE {
 			std::vector<NetSoundObservation> observations;
 			std::vector<NetValueObservation> valueObservations;
 			uint8_t authorityPeerId = 0;
+			uint8_t updateAuthorityPeerId = 0;
 		};
 		struct PendingWorldSegment {
 			NetWorldSegmentHeader header;
@@ -1100,6 +1102,7 @@ namespace RTE {
 
 	void ScenarioRunner::SetLockstepCoordinator(NetLockstepCoordinator* coordinator, bool preserveCommands) {
 		NetLockstepPlaneGuard plane;
+		if (!coordinator || !s_LockstepCoordinator || coordinator->GetConfig().sessionId != s_LockstepCoordinator->GetConfig().sessionId) s_UpdateAuthority.reset();
 		// Every coordinator reaches the sim here, a menu-started session's too; its peers' Lua worlds must agree.
 		if (coordinator) {
 			LuaMan::SetDeterministicCollection(true);
@@ -1516,7 +1519,7 @@ namespace RTE {
 			std::string error;
 			if (!s_LockstepCoordinator->HasReadyFrame(nextSimTick)) {
 				const auto frame = std::find_if(s_WorldCatchUpTail.begin(), s_WorldCatchUpTail.end(), [nextSimTick](const NetLockstepFrame& frame) { return frame.targetFrame == nextSimTick; });
-				if (frame == s_WorldCatchUpTail.end() || !s_LockstepCoordinator->QueueReplayFrame(nextSimTick, frame->frames, frame->commands, &error, frame->observations, frame->valueObservations, frame->senderPeerId)) {
+				if (frame == s_WorldCatchUpTail.end() || !s_LockstepCoordinator->QueueReplayFrame(nextSimTick, frame->frames, frame->commands, &error, frame->observations, frame->valueObservations, frame->senderPeerId, frame->replayUpdateAuthorityPeerId)) {
 					SetControllerReplayError("world replay preparation: " + error);
 					return false;
 				}
@@ -1559,13 +1562,14 @@ namespace RTE {
 		outFrame = {};
 		outFrame.frame = simTick;
 		outFrame.authorityPeerId = frame.senderPeerId;
+		outFrame.updateAuthorityPeerId = frame.replayUpdateAuthorityPeerId;
 		outFrame.remoteFrames = std::move(frame.frames);
 		outFrame.remoteCommands = std::move(frame.commands);
 		outFrame.remoteObservations = std::move(frame.observations);
 		outFrame.remoteValueObservations = std::move(frame.valueObservations);
 		if (s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() && s_LockstepCoordinator->IsReplayPlayback()) {
 			if (!s_LockstepCoordinator->HasReadyFrame(simTick) && !s_LockstepCoordinator->QueueReplayFrame(simTick, std::move(outFrame.remoteFrames), std::move(outFrame.remoteCommands), error,
-			    std::move(outFrame.remoteObservations), std::move(outFrame.remoteValueObservations), frame.senderPeerId)) return false;
+			    std::move(outFrame.remoteObservations), std::move(outFrame.remoteValueObservations), frame.senderPeerId, frame.replayUpdateAuthorityPeerId)) return false;
 			s_LockstepCoordinator->Tick(0);
 			if (!s_LockstepCoordinator->PopReadyFrame(outFrame)) return false;
 		} else {
@@ -2093,7 +2097,7 @@ namespace RTE {
 			// The pre-simulation poll and the later input producer consume the same recorded tick.
 			if (s_ReplayQueuedTick == tick) return true;
 			const auto queue = [&](NetLockstepFrame record) {
-				const bool queued = s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error, std::move(record.observations), std::move(record.valueObservations), record.replayAuthorityPeerId);
+				const bool queued = s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error, std::move(record.observations), std::move(record.valueObservations), record.replayAuthorityPeerId, record.replayUpdateAuthorityPeerId);
 				if (queued) s_ReplayQueuedTick = tick;
 				return queued;
 			};
@@ -2968,7 +2972,7 @@ namespace RTE {
 		s_ReplayRecordClosed = false;
 		for (const HeldReplayFrame& held: pending.frames) {
 			std::string writeError;
-			if (!s_ReplayWriter.WriteFrame(held.tick, held.frames, held.commands, held.observations, held.valueObservations, &writeError, held.authorityPeerId)) {
+			if (!s_ReplayWriter.WriteFrame(held.tick, held.frames, held.commands, held.observations, held.valueObservations, &writeError, held.authorityPeerId, held.updateAuthorityPeerId)) {
 				std::cout << "[net-world] segment recording stopped: " << writeError << std::endl;
 				s_ReplayWriter.Close();
 				s_WorldSegment = {};
@@ -3206,6 +3210,7 @@ namespace RTE {
 			                                             " ticks were due before their inputs") +
 			                            "; the clock drops what it owes and holds back " + std::to_string(slide) + " ticks");
 		}
+		s_UpdateAuthority = {tick, s_LockstepCoordinator->GetHostPeerId()};
 		return true;
 	}
 
@@ -3296,7 +3301,7 @@ namespace RTE {
 					                               std::to_string(c_MaxPendingSegmentFrames) + " committed ticks");
 				} else {
 					s_PendingWorldSegment->frames.push_back({tick, std::move(allFrames), std::move(allCommands),
-					                                        std::move(allObservations), std::move(allValueObservations), ready.authorityPeerId});
+					                                        std::move(allObservations), std::move(allValueObservations), ready.authorityPeerId, ready.updateAuthorityPeerId});
 				}
 				return;
 			}
@@ -3312,7 +3317,7 @@ namespace RTE {
 			}
 			std::string writeError;
 			if (!s_ReplayWriter.WriteFrame(tick, allFrames, allCommands, allObservations, allValueObservations, &writeError,
-			    ready.authorityPeerId != 0 ? ready.authorityPeerId : GetLockstepHostPeerId())) {
+			    ready.authorityPeerId != 0 ? ready.authorityPeerId : GetLockstepHostPeerId(), ready.updateAuthorityPeerId)) {
 				std::cout << "[net-match] replay recording stopped: " << writeError << std::endl;
 				s_ReplayWriter.Close();
 			}
@@ -3324,6 +3329,7 @@ namespace RTE {
 		if (tick < s_LockstepCoordinator->GetStats().effectiveStartFrame) {
 			outFrame = NetLockstepReadyFrame{};
 			outFrame.frame = tick;
+			if (s_UpdateAuthority && s_UpdateAuthority->first == tick) outFrame.updateAuthorityPeerId = s_UpdateAuthority->second;
 			// A world segment carries every committed frame from its checkpoint on, these empty ones included.
 			const uint64_t segmentTick = s_PendingWorldSegment ? s_PendingWorldSegment->header.tick : (s_ReplayWriter.IsOpen() ? s_WorldSegment.tick : 0);
 			if (segmentTick != 0 && tick > segmentTick) record(outFrame);
@@ -3369,7 +3375,7 @@ namespace RTE {
 				return false;
 			}
 			NetLockstepReadyFrame ready;
-			while (s_LockstepCoordinator->PopReadyFrame(ready)) {
+			while (s_LockstepCoordinator->PopReadyFrame(ready, s_UpdateAuthority)) {
 				if (ready.frame == tick) {
 					FilterReclaimControllerInputs(ready);
 					s_LockstepCoordinator->FinishFrameWait(NetLockstepNowMs());

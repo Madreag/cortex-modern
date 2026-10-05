@@ -280,6 +280,7 @@ namespace RTE {
 		bool observationsReadPast = false;
 		std::optional<NetLockstepTiming> hostHold;
 		uint8_t replayAuthorityPeerId = 0; //!< Recording metadata, never a lockstep wire field; zero on legacy files.
+		uint8_t replayUpdateAuthorityPeerId = 0; //!< The host read by the recorded activity update.
 
 		bool operator==(const NetLockstepFrame& rhs) const;
 	};
@@ -519,6 +520,7 @@ namespace RTE {
 		std::vector<NetValueObservation> localValueObservations;
 		std::vector<NetValueObservation> remoteValueObservations;
 		uint8_t authorityPeerId = 0; //!< The host of this committed frame, including frames held for later recording.
+		uint8_t updateAuthorityPeerId = 0; //!< The host in effect before the activity update.
 	};
 
 	/// Applies the committed frame's departures before its game commands.
@@ -985,7 +987,7 @@ namespace RTE {
 		std::string MemoryCensus() const;
 		/// Feeds one recorded tick straight into the commit path: command senders preserved, no
 		/// delay math, no wire — the replay's committed frame is exactly the recording's.
-		bool QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error = nullptr, std::vector<NetSoundObservation> observations = {}, std::vector<NetValueObservation> valueObservations = {}, uint8_t authorityPeerId = 0);
+		bool QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error = nullptr, std::vector<NetSoundObservation> observations = {}, std::vector<NetValueObservation> valueObservations = {}, uint8_t authorityPeerId = 0, uint8_t updateAuthorityPeerId = 0);
 		/// Rewinds a playback coordinator to re-commit from an earlier frame (the rollback
 		/// fidelity gate re-runs a window). Replay mode only — there is no wire to rewind.
 		bool RewindReplay(uint64_t firstFrame, std::string* error = nullptr);
@@ -1050,9 +1052,9 @@ namespace RTE {
 		/// The H4 seat state, asked for by lockstep peer id and (on a disconnect) the transport that
 		/// went away. Without one every seat reads as neither fenced nor held, which is the pre-H4 round.
 		void SetSeatStateSource(NetLockstepSeatState (*source)(void*, uint8_t, NetPeerId), void* context);
-		bool PopReadyFrame(NetLockstepReadyFrame& outFrame);
+		bool PopReadyFrame(NetLockstepReadyFrame& outFrame, std::optional<std::pair<uint64_t, uint8_t>> updateAuthority = std::nullopt);
 		/// Installs the recorded frame's host before any simulation reads it.
-		bool PrepareReplayFrame(uint64_t frame, std::string* error = nullptr);
+		bool PrepareReplayFrame(uint64_t frame, std::string* error = nullptr, bool delivering = false);
 		//! The timing proposals this peer is holding, by revision.
 		std::vector<uint64_t> PendingTimingRevisions() const {
 			NET_PLANE_CHECK();
@@ -2015,7 +2017,7 @@ namespace RTE {
 		std::map<std::pair<uint8_t, uint64_t>, uint64_t> m_CaptureExcuseUntilMs;
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;
-		std::map<uint64_t, uint8_t> m_ReplayAuthorities;
+		std::map<uint64_t, std::pair<uint8_t, uint8_t>> m_ReplayAuthorities;
 		std::map<uint64_t, uint8_t> m_ReplayAuthorityHistory;
 		uint8_t m_ReplayOpeningAuthority = 0;
 		std::map<uint64_t, std::map<uint8_t, std::vector<ControllerFrame>>> m_RemoteFrames; //!< frame -> (peerId -> frames)

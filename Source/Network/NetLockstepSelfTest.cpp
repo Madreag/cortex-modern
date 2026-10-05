@@ -24697,7 +24697,13 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					if (!ScenarioRunner::WaitForLockstepControllerFrame(current, ready, &round.failure)) return fail("the live controller wait failed: " + round.failure);
 					if (current >= 121 && (!migrationCompleted || round.peers[2].GetHostPeerId() != 2 || round.peers[2].GetMigrationResult().boundary != 120)) return fail("the real wait did not complete succession at 120");
 					g_AudioMan.CommitSoundObservations(current, ready.localObservations, ready.remoteObservations);
-					tail.push_back(PackWorldJoinReadyFrame(ready));
+					if (ready.authorityPeerId != (current == 120 ? 1 : 2) || ready.updateAuthorityPeerId != liveUpdates.back().second) return fail("the live recorder lost an update or committing host");
+					NetLockstepReadyFrame retained;
+					if (!round.peers[2].PeekReadyFrame(current, retained) || retained.updateAuthorityPeerId != ready.updateAuthorityPeerId) return fail("retained catch-up history lost the update host");
+					std::vector<uint8_t> bytes;
+					NetLockstepFrame packed;
+					if (!EncodeCommittedJoinFrame(PackWorldJoinReadyFrame(ready), bytes, &round.failure) || !DecodeCommittedJoinFrame(bytes, packed, &round.failure)) return fail(round.failure);
+					tail.push_back(std::move(packed));
 					round.peers[2].FinishSimulationTick(current);
 					round.drainThrough = current;
 					for (int turn = 0; turn < 4; ++turn) round.Pump();
@@ -24728,6 +24734,26 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 						g_AudioMan.CommitSoundObservations(tick, ready.localObservations, ready.remoteObservations);
 						replay.FinishSimulationTick(tick);
 					}
+				}
+				ScenarioRunner::CloseLockstepReplayPlayback();
+				LoopbackTransport tailWire;
+				NetLockstepCoordinator catchUp;
+				if (!catchUp.StartReplay(tailWire, config, &round.failure)) return fail(round.failure);
+				ScenarioRunner::SetLockstepCoordinator(&catchUp);
+				if (!ScenarioRunner::InstallWorldCatchUp(119, tail, &round.failure)) return fail(round.failure);
+				activity->mutations = 0;
+				g_AudioMan.CommitSoundObservations(119, {}, observations);
+				g_TimerMan.RewindSimTo(119, 119 * g_TimerMan.GetDeltaTimeTicks());
+				ScenarioRunner::BeginWorldCatchUpFrame();
+				for (uint64_t tick = 120; tick <= 123; ++tick) {
+					if (!ScenarioRunner::TakeWorldCatchUpGrant(tick)) return fail("the committed tail did not grant its activity tick");
+					g_TimerMan.GrantSimUpdates(1); g_TimerMan.UpdateSim(); g_ActivityMan.Update();
+					if (std::pair{activity->mutations, catchUp.GetHostPeerId()} != liveUpdates[tick - 120]) return fail("tail update differs from live at " + std::to_string(tick));
+					NetLockstepReadyFrame ready;
+					if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(tick, ready, &round.failure)) return fail(round.failure);
+					if (catchUp.GetHostPeerId() != (tick == 120 ? 1 : 2)) return fail("the tail lost the committing host");
+					g_AudioMan.CommitSoundObservations(tick, ready.localObservations, ready.remoteObservations);
+					catchUp.FinishSimulationTick(tick);
 				}
 			}
 			return fail(failures);

@@ -61,7 +61,7 @@ namespace RTE {
 		static constexpr uint32_t c_Magic = 0x50524343U; // "CCRP"
 		// Version 7 lets a committed tick name one actor once per sender, in sender order; version 6 carries the world checkpoint
 		// a segment stands on; version 5 preserved each committed command's sender beside the checksummed wire frame.
-		// Version 8 names each committed frame's host in its sender field.
+		// Version 8 names the committing host in the sender field and the update host after the sender trailers.
 		static constexpr uint16_t c_Version = 8;
 		/// The longest world id and digest a segment header may carry; both are bounded strings already.
 		static constexpr size_t c_MaxSegmentFieldBytes = 64;
@@ -77,7 +77,7 @@ namespace RTE {
 		bool WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error = nullptr);
 		/// A committed tick with every peer's sound observations; their senders trail the record like the commands'.
 		bool WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, std::string* error);
-		bool WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations, std::string* error, uint8_t authorityPeerId = 0);
+		bool WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations, std::string* error, uint8_t authorityPeerId = 0, uint8_t updateAuthorityPeerId = 0);
 		/// Stores the host's one-time agreed-start boundary before the first recorded tick.
 		bool SetAgreedStart(const NetLockstepStart& start, std::string* error = nullptr);
 		bool HasAgreedStart() const { return m_AgreedStart.has_value(); }
@@ -119,8 +119,8 @@ namespace RTE {
 		/// The first record's frame number — the playback coordinator starts there, so recordings
 		/// replay regardless of which sim tick the recorder's match began on.
 		uint64_t GetStartFrame() const { return m_StartFrame; }
-		/// The first committed frame's authority; legacy recordings keep their opening host.
-		uint8_t GetStartAuthorityPeerId() const { return m_Lookahead.replayAuthorityPeerId != 0 ? m_Lookahead.replayAuthorityPeerId : m_Config.hostPeerId; }
+		/// The first update's authority; legacy recordings keep their opening host.
+		uint8_t GetStartAuthorityPeerId() const { return m_Lookahead.replayUpdateAuthorityPeerId != 0 ? m_Lookahead.replayUpdateAuthorityPeerId : m_Config.hostPeerId; }
 		/// Reads the next record. Returns false with outEof=true at the clean end of the file.
 		bool ReadFrame(NetLockstepFrame& outFrame, bool& outEof, std::string* error = nullptr);
 		NetReplayReadStatus GetLastReadStatus() const { return m_LastStatus; }
