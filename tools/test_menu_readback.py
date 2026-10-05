@@ -874,11 +874,12 @@ def sweep_options(readonly=False, live=False):
     """Advanced, page by page: the footer and the selector, then every page's own controls; a dialog a page opens is closed by Escape."""
     own = FOOTER + (",ButtonHostSessEnd" if live and not readonly else "")
     text = f"sweep MultiplayerHostOptionsPanel depth=1 label=advanced-frame own={own}\n" if not readonly else "sweep MultiplayerHostOptionsPanel depth=1 label=advanced-frame readonly own=ButtonHostOptBack\n"
+    # Each page and dialog is pictured as it opens, before the sweep changes anything on it.
     for tab, page in OPTION_PAGES:
-        text += f"activate {tab}\nwait 4\nsweep {page} label={page} restore=back_options" + (" readonly" if readonly else "") + (" own=ButtonHostSessEnd" if live and not readonly and page.endswith("Session") else "") + "\n"
+        text += f"activate {tab}\nwait 4\ndump_host_options\nsweep {page} label={page} restore=back_options" + (" readonly" if readonly else "") + (" own=ButtonHostSessEnd" if live and not readonly and page.endswith("Session") else "") + "\n"
     if not readonly:
         # The seat dialog a Details button opens is a screen of its own.
-        text += "activate TabHostPageSeats\nwait 4\nactivate ButtonHostSeatDetails0\nwait 6\nsweep HostSeatDialog label=seat-dialog own=ButtonHostSeatDlgClose\nactivate ButtonHostSeatDlgClose\nwait 4\n"
+        text += "activate TabHostPageSeats\nwait 4\nactivate ButtonHostSeatDetails0\nwait 6\ndump_host_options\nsweep HostSeatDialog label=seat-dialog own=ButtonHostSeatDlgClose\nactivate ButtonHostSeatDlgClose\nwait 4\n"
         text += "activate ButtonHostOptRestore\nwait 4\nactivate ButtonHostOptDefaults\nwait 4\nactivate ButtonHostOptApply\nwait 6\n"
     return text
 
@@ -887,21 +888,21 @@ def sweep_case(case, port, root):
     """The sweep of one screen; the screen's own control list says what is visited."""
     host_screen = LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\nassert_substate HostSetup\n" + f"setup_host_port {port}\n"
     if case == "sweep-landing":
-        text = LANDING + SWEEP_MACROS + "sweep MultiplayerLandingPanel label=landing restore=back_landing\nexit\n"
+        text = LANDING + SWEEP_MACROS + "dump_host_options\nsweep MultiplayerLandingPanel label=landing restore=back_landing\nexit\n"
     elif case == "sweep-host":
-        text = (host_screen + SWEEP_MACROS + "sweep MultiplayerHostPanel label=host restore=back_host own=ButtonHostBack,ButtonMultiplayerCreate\n"
+        text = (host_screen + SWEEP_MACROS + "dump_host_options\nsweep MultiplayerHostPanel label=host restore=back_host own=ButtonHostBack,ButtonMultiplayerCreate\n"
                 "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\nactivate ButtonMultiplayerLeave\nwait 8\nassert_substate Landing\n"
                 "activate ButtonMultiplayerHostGame\nwait 6\nactivate ButtonHostBack\nwait 6\nassert_substate Landing\nexit\n")
     elif case == "sweep-join":
         text = (LANDING + "activate ButtonMultiplayerJoinGame\nwait_ms 400\nassert_substate JoinSetup\n" + SWEEP_MACROS +
-                "sweep MultiplayerJoinPanel label=join restore=back_join own=ButtonJoinBack\n"
-                "activate ButtonJoinByAddress\nwait 4\nsweep JoinAddressDialog label=join-address own=ButtonJoinAddressCancel,ButtonJoinAddressGo\n"
+                "dump_host_options\nsweep MultiplayerJoinPanel label=join restore=back_join own=ButtonJoinBack\n"
+                "activate ButtonJoinByAddress\nwait 4\ndump_host_options\nsweep JoinAddressDialog label=join-address own=ButtonJoinAddressCancel,ButtonJoinAddressGo\n"
                 "activate ButtonJoinAddressCancel\nwait 4\nactivate ButtonJoinByAddress\nwait 4\nactivate ButtonJoinAddressGo\nwait 6\n"
                 "wait_label LabelJoinSelected Enter the address the host gave you\nassert_substate JoinSetup\n"
                 "activate ButtonJoinBack\nwait 6\nassert_substate Landing\nexit\n")
     elif case == "sweep-lobby":
         text = (host_screen + SWEEP_MACROS + "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
-                "sweep MultiplayerLobbyPanel label=lobby restore=back_lobby quiet=TextLobbyChat own=ButtonMultiplayerLeave\n"
+                "dump_host_options\nsweep MultiplayerLobbyPanel label=lobby restore=back_lobby quiet=TextLobbyChat own=ButtonMultiplayerLeave\n"
                 "activate ButtonMultiplayerLeave\nwait 8\nassert_substate Landing\nexit\n")
     elif case == "sweep-advanced-setup":
         text = (host_screen + SWEEP_MACROS + "activate ButtonHostOptions\nwait_ms 400\nassert_substate HostOptions\n" + sweep_options() +
@@ -915,23 +916,23 @@ def sweep_case(case, port, root):
         host = (host_screen + "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\nwait_connected 2 60\n" + f"wait_file {done} 300\nexit\n")
         client = (LANDING + "activate ButtonMultiplayerJoinGame\nwait_ms 400\nactivate ButtonJoinByAddress\nwait 4\n"
                   f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\nactivate ButtonJoinAddressGo\nwait_connected 2 60\nwait_substate Lobby 30\nwait 5\n" + SWEEP_MACROS +
-                  "activate ButtonLobbyEditSetup\nwait_ms 400\nassert_substate HostOptions\n" + sweep_options(readonly=True) +
+                  "dump_host_options\nactivate ButtonLobbyEditSetup\nwait_ms 400\nassert_substate HostOptions\n" + sweep_options(readonly=True) +
                   f"activate ButtonHostOptBack\nwait 6\nassert_substate Lobby\ntouch_file {done}\nexit\n")
         return {"host": host, "client": client}, {}
     elif case == "sweep-settings-network":
         pages = ("Player", "Chat", "Recovery", "Files", "Internet", "Connection")
         text = (OPTIONS + SWEEP_MACROS + "select_settings_page Network\nwait 4\nassert_settings_page Network:Basics\n"
-                "sweep CollectionBoxNetPageBasics label=network-basics restore=back_basics\n")
+                "dump_player_options\nsweep CollectionBoxNetPageBasics label=network-basics restore=back_basics\n")
         # The boxes that take a key name or a digest are given one they take.
         takes = {"Chat": " with=TextNetworkChatKey:Y", "Internet": " with=TextNetworkDirPin:" + "0123456789abcdef" * 4}
         for page in pages:
-            text += (f"activate TabNetPage{page}\nwait 4\nsweep CollectionBoxNetPage{page} label=network-{page.lower()} restore=back_basics"
+            text += (f"activate TabNetPage{page}\nwait 4\ndump_player_options\nsweep CollectionBoxNetPage{page} label=network-{page.lower()} restore=back_basics"
                      f"{takes.get(page, '')}\nactivate TabNetPage{page}\nwait 4\n")
         text += "activate TabNetPageBasics\nwait 4\nexit\n"
     else:  # sweep-browsers
-        text = (LANDING + SWEEP_MACROS + "activate ButtonMultiplayerReplays\nwait 6\nsweep ReplayBrowserPanel label=replays own=ButtonReplayBack\n"
+        text = (LANDING + SWEEP_MACROS + "activate ButtonMultiplayerReplays\nwait 6\ndump_host_options\nsweep ReplayBrowserPanel label=replays own=ButtonReplayBack\n"
                 "activate ButtonReplayBack\nwait 6\nassert_substate Landing\nactivate ButtonMultiplayerResumeGame\nwait 6\n"
-                "sweep MultiplayerResumePanel label=saved-matches own=ButtonResumeBack\nactivate ButtonResumeBack\nwait 6\nassert_substate Landing\nexit\n")
+                "dump_host_options\nsweep MultiplayerResumePanel label=saved-matches own=ButtonResumeBack\nactivate ButtonResumeBack\nwait 6\nassert_substate Landing\nexit\n")
     return {"host": text}, {}
 
 
