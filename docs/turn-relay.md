@@ -4,7 +4,7 @@ Public STUN is enabled by default. Host Options > Network > Connection controls 
 
 ## Cloudflare Realtime TURN
 
-Create a TURN key in the Cloudflare dashboard, then put its key ID and credential-generation API token in a JSON file readable only by the session directory's account. Add `--turn-config /absolute/path/turn-config.json` to the existing directory launchd job's `ProgramArguments`, keeping its current TLS certificate, listener and other arguments. Restart that service during the deployment window. No deployment is performed by this change. [Cloudflare credential setup](https://developers.cloudflare.com/realtime/turn/generate-credentials/).
+Create a TURN key in the Cloudflare dashboard, then put its key ID and credential-generation API token in a JSON file readable only by the session directory's account. Pass `--turn-config /absolute/path/turn-config.json` to the session directory (`tools/session_directory/session_directory.py`), keeping its TLS certificate, listener and other arguments, and restart it. [Cloudflare credential setup](https://developers.cloudflare.com/realtime/turn/generate-credentials/).
 
 ```json
 {
@@ -106,7 +106,7 @@ cert=/absolute/path/fullchain.pem
 pkey=/absolute/path/privkey.pem
 ```
 
-Use a public DNS name and a matching TLS certificate. If coturn is behind NAT, also set its advertised `external-ip=PUBLIC_IP/PRIVATE_IP` and forward its ports. Permit 3478 UDP/TCP, 5349 TCP, and 49160-49200 UDP through the server, cloud and router firewalls. The chosen small allocation range is for this measurement setup; size it for production capacity. [coturn configuration and authentication](https://github.com/coturn/coturn/blob/master/README.turnserver).
+Use a public DNS name and a matching TLS certificate. If coturn is behind NAT, also set its advertised `external-ip=PUBLIC_IP/PRIVATE_IP` and forward its ports. Permit 3478 UDP/TCP, 5349 TCP, and 49160-49200 UDP through the server, cloud and router firewalls. The small allocation range above suits a test relay; size it for the number of players it serves. [coturn configuration and authentication](https://github.com/coturn/coturn/blob/master/README.turnserver).
 
 On a Debian/Ubuntu Linux VPS, install the distribution's coturn package, place the config at `/etc/turnserver.conf`, then enable/start the service:
 
@@ -117,7 +117,7 @@ sudo systemctl enable --now coturn
 
 The VPS must have usable public connectivity and permit the relay allocation range. [coturn installation](https://github.com/coturn/coturn#installation).
 
-For this PC, start with Ubuntu under WSL and the same package/config. WSL's default NAT adds another boundary; use mirrored networking where supported and explicit Windows/Hyper-V firewall rules for the ports above. The Mac must be able to reach the listener and allocated UDP ports. A TCP-only port proxy cannot prove UDP relay connectivity. [WSL networking](https://learn.microsoft.com/en-us/windows/wsl/networking).
+On Windows, Ubuntu under WSL with the same package and config works. WSL's default NAT adds another boundary; use mirrored networking where supported and open the ports above in the Windows and Hyper-V firewalls. Every peer must be able to reach the listener and the allocated UDP ports. A TCP-only port proxy cannot prove UDP relay connectivity. [WSL networking](https://learn.microsoft.com/en-us/windows/wsl/networking).
 
 Alternatively, use the Linux Docker engine with a read-only config mount:
 
@@ -158,10 +158,10 @@ The TCP/TLS limit remains unfinished. The menu must not imply that selecting Rel
 
 ## GameNetworkingSockets build
 
-The engine builds against GameNetworkingSockets v1.6.0 (upstream commit `2cb93a06350bb065db53abdb0d87cf297e0bfd34`) with `external/patches/gns-turn-lifetime.patch` applied. The patch defines `STEAMNETWORKINGSOCKETS_TURN_LIFETIME` in `steamnetworkingtypes.h`; `GnsTransport.cpp` refuses to compile against a GNS without it. The patched library installs beside the stock prefix, as `<stock prefix>-turnfix`: `RTEA.vcxproj` and `meson.build` use that sibling whenever it exists, so `GNS_ROOT` / `-Dgns_root` keep naming the stock prefix and the dependency prefix does not change. On this PC:
+The engine builds against GameNetworkingSockets v1.6.0 (upstream commit `2cb93a06350bb065db53abdb0d87cf297e0bfd34`) with `external/patches/gns-turn-lifetime.patch` applied. The patch defines `STEAMNETWORKINGSOCKETS_TURN_LIFETIME` in `steamnetworkingtypes.h`; `GnsTransport.cpp` refuses to compile against a GNS without it. The patched library installs beside the stock prefix, as `<stock prefix>-turnfix`: `RTEA.vcxproj` and `meson.build` use that sibling whenever it exists, so `GNS_ROOT` / `-Dgns_root` keep naming the stock prefix and the dependency prefix does not change:
 
-- `GNS_ROOT = D:\Projects\stage2_p2\gns_spike\install-win-vcpkg-release` (the build uses `D:\Projects\stage2_p2\gns_spike\install-win-vcpkg-release-turnfix`)
-- `GNS_DEP_ROOT = D:\Projects\stage2_p2\gns_spike\build-win-vcpkg-release\vcpkg_installed\x64-windows` (unchanged: protobuf 6.33.4, abseil 20260107.1, OpenSSL 3.6.2)
+- `GNS_ROOT` names the stock install prefix; the build uses `<GNS_ROOT>-turnfix` beside it
+- `GNS_DEP_ROOT` names the vcpkg dependency prefix (the Windows builds use protobuf 6.33.4, abseil 20260107.1, OpenSSL 3.6.2)
 
 Pointing `GNS_ROOT` at the `-turnfix` prefix directly works as well. Rebuild on Windows (VS 2026 CMake; the dependency prefix is only read):
 
@@ -169,13 +169,13 @@ Pointing `GNS_ROOT` at the `-turnfix` prefix directly works as well. Rebuild on 
 git clone https://github.com/ValveSoftware/GameNetworkingSockets.git gns-src
 git -C gns-src checkout v1.6.0
 git -C gns-src apply <repo>/external/patches/gns-turn-lifetime.patch
-cmake -S gns-src -B D:/Projects/stage2_p2/gns_spike/build-win-vcpkg-release-turnfix -G "Visual Studio 18 2026" -A x64 \
+cmake -S gns-src -B gns-build-turnfix -G "Visual Studio 18 2026" -A x64 \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIB=OFF -DBUILD_STATIC_LIB=ON -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF \
   -DBUILD_TOOLS=OFF -DENABLE_ICE=ON -DUSE_CRYPTO=OpenSSL -DUSE_STEAMWEBRTC=OFF -DLTO=OFF \
   -DCMAKE_PREFIX_PATH=<GNS_DEP_ROOT> -DProtobuf_PROTOC_EXECUTABLE=<GNS_DEP_ROOT>/tools/protobuf/protoc.exe \
-  -DOPENSSL_ROOT_DIR=<GNS_DEP_ROOT> -DCMAKE_INSTALL_PREFIX=D:/Projects/stage2_p2/gns_spike/install-win-vcpkg-release-turnfix
-cmake --build D:/Projects/stage2_p2/gns_spike/build-win-vcpkg-release-turnfix --config Release
-cmake --install D:/Projects/stage2_p2/gns_spike/build-win-vcpkg-release-turnfix --config Release
+  -DOPENSSL_ROOT_DIR=<GNS_DEP_ROOT> -DCMAKE_INSTALL_PREFIX=<GNS_ROOT>-turnfix
+cmake --build gns-build-turnfix --config Release
+cmake --install gns-build-turnfix --config Release
 ```
 
 On macOS and Linux build the same checkout and patch with the flags the stock prefix used, install into `<stock prefix>-turnfix`, and keep passing the stock prefix as `-Dgns_root`.
@@ -195,16 +195,4 @@ ninja -C build-gns-ubsan install
 
 `tools/turn_relay_rows.py hold|renew --turn <host:port> --out <dir>` runs the two relay rows (`-net-p2p-selftest relay-hold <seconds> <server>` and `relay-renew <server>`) through the runner against a real TURN server, with the login from `CC_TEST_TURN_USER` / `CC_TEST_TURN_PASS` or a coturn `user=` line; `--coturn-log <ssh host>:<log>` adds the server's own log lines for the run.
 
-Ordinary match config is version 6; persistent-world config is version 7. Versions 2-5 remain readable as recordings. The relay JSON suffix is appended after migration data; `NetLobbyProtocol` owns that encoder/decoder. Relay metadata is outside the deterministic simulation hash so rotating a login cannot alter simulation identity. Transport authorization comes from the host connection. Lua names and behavior are unchanged.
-
-## Phase 3b WAN measurement plan
-
-Do not execute this plan until the completion pass is authorized. First close the TCP/TLS gap above, then compile the same revisions on both peers.
-
-1. Use this PC as host and the Mac as the second peer. Begin with coturn in WSL and its directory HMAC backend. Record firewall rules, public/advertised addresses and allocation ports. A Mac on the same home LAN is a LAN baseline; use a genuinely separate WAN connection for the WAN rows.
-2. Capture the host Network routing page and player Connection page at 640x360, 960x540 and 1280x720. Exercise every state, custom STUN list, empty list, Fixed credentials, masking, save/reopen, and personal-relay precedence.
-3. Measure Automatic and Direct only with a direct route, then block the host's direct UDP path while leaving the relay reachable. Automatic must connect by relay; Direct only must refuse; Relay only must report a relay route and never use IP. Record GNS route flags, RTT distribution, loss, throughput, connection time and gameplay stall data beside video.
-4. Repeat with the Cloudflare backend. Do not select a city; record the measured path and RTT. Exercise provider refusal and expiry, both peers' adopted offer, rematch, repair, late join and at least two credential rotations in one round. No signing secret or token may occur in captures, logs, config wire or diagnostics.
-5. Once the SDK supports TCP/TLS, block relay UDP while preserving TCP 3478 and TLS 5349/443. Prove each fallback and uninterrupted renewal separately. An updated JSON offer alone is insufficient evidence.
-
-All detecting rows are written; they have not been run.
+An ordinary match config is version 8 and a persistent world's is version 9; a live session refuses an older config, and versions back to 2 still decode for recordings. The relay JSON suffix is appended after migration data; `NetLobbyProtocol` owns that encoder/decoder. Relay metadata is outside the deterministic simulation hash so rotating a login cannot alter simulation identity. Transport authorization comes from the host connection. Lua names and behavior are unchanged.
