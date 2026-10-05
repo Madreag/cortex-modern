@@ -9,7 +9,7 @@ if sys.platform == 'win32':
     import win32_test_runner as runner
 else:
     import ctypes
-    with patch.object(ctypes, 'WinDLL', create=True, return_value=MagicMock()):
+    with patch.object(ctypes, 'WinDLL', create=True, return_value=MagicMock()), patch.object(ctypes, 'HRESULT', ctypes.c_long, create=True):
         import win32_test_runner as runner
 
 EXE = r"D:\nowhere\inventory-build\Cortex Command.exe"
