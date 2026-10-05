@@ -628,7 +628,7 @@
             "control",
             "text"
           ],
-          "contains": "Left - AI in control"
+          "contains": "Held - AI in control"
         },
         {
           "step": 6,
@@ -655,7 +655,7 @@
           "not_contains": "RTT -- ms"
         }
       ],
-      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box names the AI playing for the lost host; the old top-left roster does not cover Funds.",
+      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads held for its player, the AI playing it, RTT names the new link and the box names the AI playing for the lost host; the old top-left roster does not cover Funds.",
       "assert": "Native status text at the loss and after the handover, completed probe, first and later screenshots, and dump_network_layout."
     },
     {
@@ -711,7 +711,7 @@
             "control",
             "text"
           ],
-          "contains": "Left - AI in control"
+          "contains": "Held - AI in control"
         },
         {
           "step": 6,
@@ -738,7 +738,7 @@
           "not_contains": "RTT -- ms"
         }
       ],
-      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box names the AI playing for the lost host; the old top-left roster does not cover Funds.",
+      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads held for its player, the AI playing it, RTT names the new link and the box names the AI playing for the lost host; the old top-left roster does not cover Funds.",
       "assert": "Native status text at the loss and after the handover, completed probe, first and later screenshots, and dump_network_layout."
     },
     {
@@ -794,7 +794,7 @@
             "control",
             "text"
           ],
-          "contains": "Left - AI in control"
+          "contains": "Held - AI in control"
         },
         {
           "step": 6,
@@ -821,7 +821,7 @@
           "not_contains": "RTT -- ms"
         }
       ],
-      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box names the AI playing for the lost host; the old top-left roster does not cover Funds.",
+      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads held for its player, the AI playing it, RTT names the new link and the box names the AI playing for the lost host; the old top-left roster does not cover Funds.",
       "assert": "Native status text at the loss and after the handover, completed probe, first and later screenshots, and dump_network_layout."
     },
     {
@@ -877,7 +877,7 @@
             "control",
             "text"
           ],
-          "contains": "Left - AI in control"
+          "contains": "Held - AI in control"
         },
         {
           "step": 6,
@@ -904,7 +904,7 @@
           "not_contains": "RTT -- ms"
         }
       ],
-      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box names the AI playing for the lost host; the old top-left roster does not cover Funds.",
+      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads held for its player, the AI playing it, RTT names the new link and the box names the AI playing for the lost host; the old top-left roster does not cover Funds.",
       "assert": "Native status text at the loss and after the handover, completed probe, first and later screenshots, and dump_network_layout."
     },
     {
@@ -960,7 +960,7 @@
             "control",
             "text"
           ],
-          "contains": "Left - AI in control"
+          "contains": "Held - AI in control"
         },
         {
           "step": 6,
@@ -987,7 +987,7 @@
           "not_contains": "RTT -- ms"
         }
       ],
-      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box names the AI playing for the lost host; the old top-left roster does not cover Funds.",
+      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads held for its player, the AI playing it, RTT names the new link and the box names the AI playing for the lost host; the old top-left roster does not cover Funds.",
       "assert": "Native status text at the loss and after the handover, completed probe, first and later screenshots, and dump_network_layout."
     },
     {
@@ -1043,7 +1043,7 @@
             "control",
             "text"
           ],
-          "contains": "Left - AI in control"
+          "contains": "Held - AI in control"
         },
         {
           "step": 6,
@@ -1070,7 +1070,7 @@
           "not_contains": "RTT -- ms"
         }
       ],
-      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box names the AI playing for the lost host; the old top-left roster does not cover Funds.",
+      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads held for its player, the AI playing it, RTT names the new link and the box names the AI playing for the lost host; the old top-left roster does not cover Funds.",
       "assert": "Native status text at the loss and after the handover, completed probe, first and later screenshots, and dump_network_layout."
     },
     {

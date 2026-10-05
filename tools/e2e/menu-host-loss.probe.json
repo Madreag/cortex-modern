@@ -34,7 +34,7 @@
     {
       "op": "wait",
       "control": "LabelNetMatchStatus",
-      "text_contains": "Left - AI in control",
+      "text_contains": "Held - AI in control",
       "equals": {
         "visible": true
       }
