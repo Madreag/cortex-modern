@@ -1373,7 +1373,10 @@ namespace RTE::MenuAutomation {
 		manager->GetSkin()->GetValue(section, "Base", base, 4);
 		const int box = base[2] + (checkbox ? 2 : 0);
 		const int width = std::min(rect[2] - box, font->CalculateWidth(" " + text));
-		return {{rect[0], rect[1], std::min(rect[2], box + std::max(0, width)), rect[3]}, {rect[0] + box, top, std::max(1, width), std::max(1, height)}};
+		// Its box and caption are centred on the rect's height, which may be taller than either.
+		const int drawnHeight = std::min(rect[3], std::max(base[3], height));
+		const Rect drawn{rect[0], rect[1] + (rect[3] - drawnHeight) / 2, std::min(rect[2], box + std::max(0, width)), std::max(1, drawnHeight)};
+		return {drawn, {rect[0] + box, top, std::max(1, width), std::max(1, height)}};
 	}
 
 	/// Each pair of shown controls of one panel where the caption of one meets what the other draws.
