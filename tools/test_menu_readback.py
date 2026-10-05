@@ -1751,7 +1751,7 @@ def pixel_luma(rgb):
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
 
-# TabBlue.png on 6447c4c2e3: Base and MouseOver RGB slice identity. Selected
+# TabBlue.png as first committed: Base and MouseOver RGB slice identity. Selected
 # fill was panel grey (59, 65, 83), luma 65.024; the floor sits above that.
 TABBLUE_SIZE = (63, 59)
 TABBLUE_BASE_SHA256 = "4f8ea8767d5c1762dcc9e2adea0f0cffeeee72ca770211ed855095ab2be14a4b"

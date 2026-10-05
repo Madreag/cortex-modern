@@ -1769,8 +1769,8 @@ class CheckpointWaitTests(unittest.TestCase):
         self.assertEqual(landed_checkpoints(self.capture_lines([130, 751, 1186, 1346])), ([130, 751, 1186, 1346], 0))
 
     def test_a_restore_with_one_written_checkpoint_is_short(self):
-        # The Mac on a758f2f4e0, 3:2x PM: each write took 8.7 s, so both peers had only 239 on disk at the tick-700 restore.
-        # The process exits 1 on the restore check while its match report stays at 0 (h8-green restore-all-1's client, 10-03).
+        # A slow Mac run: each write took 8.7 s, so both peers had only 239 on disk at the tick-700 restore.
+        # The process exits 1 on the restore check while its match report stays at 0.
         line = (f"[autosave-store-selftest] FAIL match={self.MATCH} restorable=1 (two checkpoints are needed)\n"
                 f"[autosave] restore_check FAIL match={self.MATCH} tick=239 sim_update_count=239 world_hash=ab expected=ab policy=0\n")
         texts = {who: self.capture_lines([239]) + line for who in ("host", "client")}
@@ -1886,7 +1886,7 @@ class CheckpointWaitTests(unittest.TestCase):
         self.assertEqual(details["host"]["captures"], [133, 253, 373, 493])
 
     def test_a_peer_that_wrote_no_checkpoint_waits(self):
-        # The Mac on 66d4f5e147, 5:4x PM: in 700 ticks the host wrote 152 behind 6-9 s writes and the held client took none.
+        # A slow Mac run: in 700 ticks the host wrote 152 behind 6-9 s writes and the held client took none.
         records = {"host": {"exit_code": 0}, "client": {"exit_code": 0}}
         texts = {"host": self.capture_lines([152]), "client": "[autosave] named tick=152 not taken: catch_up=true running=true\n"}
         with self.assertRaises(CheckpointsShort) as raised:
@@ -1894,7 +1894,7 @@ class CheckpointWaitTests(unittest.TestCase):
         self.assertIn("client wrote no checkpoint", str(raised.exception))
 
     def test_a_reclaim_set_past_the_run_waits_and_a_missing_one_fails(self):
-        # The Mac on de8e196578, 5:52 PM: the client held at 46 caught up in place and set its reclaim for 789 in a 700-tick run.
+        # A Mac run: the client held at 46 caught up in place and set its reclaim for 789 in a 700-tick run.
         import tempfile
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1907,7 +1907,7 @@ class CheckpointWaitTests(unittest.TestCase):
             with self.assertRaises(CheckpointsShort) as raised:
                 forced_hold_evidence(root, "40:1500", ticks=700)
             self.assertIn("set its reclaim for tick 789, past the run's 700", str(raised.exception))
-            # The Mac on 95df52ba14: the restore run's client had applied 700 of the 775 its reclaim needed when the 800-tick run ended.
+            # A Mac run: the restore run's client had applied 700 of the 775 its reclaim needed when the 800-tick run ended.
             (root / "client" / "stdout.log").write_text(client.replace("applied=282 activation=789", "applied=700 activation=775"), encoding="utf-8")
             with self.assertRaises(CheckpointsShort) as raised:
                 forced_hold_evidence(root, "40:1500", ticks=800)
@@ -1941,7 +1941,7 @@ class CheckpointWaitTests(unittest.TestCase):
 
 
 class SubstanceFirstTests(unittest.TestCase):
-    """The checklist read of d177a3ea74 (its finding 2): a run the arms took for short was retried, and a later passing run hid a
+    """A run the arms took for short used to be retried, and a later passing run hid a
     real restore or autosave failure. Each first run here is short AND broken; the arm fails it at once and never retries it."""
     MATCH = CheckpointWaitTests.MATCH
     POLICY_PASS = f"[autosave-store-selftest] PASS match={MATCH} restorable=3 same_set=1\n"
