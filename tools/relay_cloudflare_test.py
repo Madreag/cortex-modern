@@ -390,6 +390,16 @@ class HotspotRows(unittest.TestCase):
         self.assertFalse(renewal(logs, [dict(status=201, epoch=1000.0), dict(status=403, epoch=1160.0, provider_error_code='1010')], ['host', 'client'], **timed)['passed'])
         self.assertFalse(renewal(logs, calls, ['host', 'client'], **dict(timed, line_times={}))['passed'])
 
+    def test_d_a_login_that_expired_before_the_run_ended_is_already_revoked(self):
+        """2026-10-04 row d: the first of three five-minute logins expired mid-match; Cloudflare answered its revoke 404."""
+        revoked = self.match().revoked_every_login
+        minted = [dict(username='one', expires_at=1000), dict(username='two', expires_at=1300), dict(username='three', expires_at=1600)]
+        self.assertTrue(revoked(minted, [404, 204, 204], 1500))
+        self.assertFalse(revoked(minted, [204, 404, 204], 1200))
+        self.assertFalse(revoked(minted, [204, 204], 1500))
+        self.assertFalse(revoked(minted, [], 1500))
+        self.assertTrue(revoked(minted + [dict(username='one', expires_at=1000)], [204, 204, 204], 1500))
+
     def test_e_the_survivors_name_one_successor_after_the_relayed_host_is_lost(self):
         migration = self.match().migration_declarations
         line = '[net-match] Host left - Client is now hosting; boundary=640 round=1'

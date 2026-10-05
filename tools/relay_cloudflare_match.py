@@ -1937,8 +1937,7 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         'offer_fresh': lambda: bool(relay['offer_fresh']),
         'direct_expected': lambda: bool(relay['direct_as_expected']),
         'provider_201': lambda: bool(facts['provider_calls']) and all(call['status'] == 201 for call in facts['provider_calls']),
-        'logins_revoked': lambda: bool(facts['revokes']) and len(facts['revokes']) == len({row['username'] for row in minted})
-                                  and all(status == 204 for status in facts['revokes']),
+        'logins_revoked': lambda: revoked_every_login(minted, facts['revokes'], facts['ended_epoch']),
         'logins_short_lived': short_lived,
         'relay_registrant': registrants,
         'menu_entered': lambda: detail('menu_entered', menu_choice(logs.get('host', ''), 'Relay only', session) if session
@@ -1973,6 +1972,15 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         f'sanitize={[(row["box"], row["status"], row.get("hits_before"), row.get("hits_after")) for row in sanitize]} '
         f'relay_reasons={relay["reasons"][:3]}')
     return verdict
+
+
+def revoked_every_login(minted: list[dict], statuses: list[int], ended_at: float) -> bool:
+    """Every login the run minted or observed was revoked (204), in the order the driver revoked them; a login whose own expiry
+    passed before the run ended is already gone, and Cloudflare answers its revoke 404."""
+    logins = list({row['username']: row for row in minted}.values())
+    return bool(statuses) and len(statuses) == len(logins) and all(
+        status == 204 or (status == 404 and isinstance(row.get('expires_at'), (int, float)) and row['expires_at'] <= ended_at)
+        for row, status in zip(logins, statuses))
 
 
 def pair_ttl_receipt(target, pair, secret: str, book, now=time.time, sleep=time.sleep, allocate=None) -> dict:
@@ -2178,7 +2186,8 @@ def evidence_list(root: Path, out: Path) -> int:
     """The small files a run keeps (after its sweep): 8 MiB each at most; the sweep itself read everything."""
     from relay_secrets import walk
     files = [path.relative_to(root).as_posix() for path, reason in walk(root) if reason is None
-             and not path.name.lower().endswith(('.exe', '.dll', '.pdb', '.png', '.mp4', '.tar')) and path.stat().st_size <= 8 << 20
+             and not path.name.lower().endswith(('.exe', '.dll', '.pdb', '.png', '.mp4', '.tar'))
+             and path.stat().st_size <= (64 << 20 if path.name.endswith('-live.jsonl') else 8 << 20)
              and 'Data' not in path.relative_to(root).parts[:-1]]
     out.write_text('\n'.join(files) + '\n', encoding='utf-8')
     print(json.dumps(dict(files=len(files))))
