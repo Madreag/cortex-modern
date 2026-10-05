@@ -821,9 +821,11 @@ namespace RTE {
 		}
 
 		bool TestLockstepCodecAdmission(std::string* error) {
-			const std::array<std::pair<uint16_t, uint16_t>, 3> versions{{
-				{NetLockstepCodec::c_Version, NetLockstepCodec::c_Version},
-				{NetLockstepCodec::c_Version, 15}, {15, NetLockstepCodec::c_Version}}};
+			const std::array<std::pair<uint16_t, uint16_t>, 5> versions{{
+				{NetLockstepCodec::c_AdmissionVersion, NetLockstepCodec::c_AdmissionVersion},
+				{NetLockstepCodec::c_AdmissionVersion, 15}, {15, NetLockstepCodec::c_AdmissionVersion},
+				{NetLockstepCodec::c_AdmissionVersion, NetLockstepCodec::c_AdmissionVersion - 1},
+				{NetLockstepCodec::c_AdmissionVersion - 1, NetLockstepCodec::c_AdmissionVersion}}};
 			for (size_t index = 0; index < versions.size(); ++index) {
 				const uint16_t port = static_cast<uint16_t>(42150 + index);
 				LoopbackTransport hostTransport, clientTransport;

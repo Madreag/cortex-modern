@@ -4227,6 +4227,7 @@ namespace RTE {
 		m_PeerLinkHeardMs.clear();
 		for (uint8_t peer: m_Config.activePeerIds) {
 			m_PeerEffectiveStart[peer] = m_Config.startFrame;
+			SeedInputAcceptance(peer, m_Config.startFrame);
 			m_PeerLastHeardMs[peer] = nowMs;
 		}
 		m_RemoteStartsReceived.insert(m_RemotePeerIds.begin(), m_RemotePeerIds.end());
@@ -4539,7 +4540,19 @@ namespace RTE {
 		}
 	}
 
-	bool NetLockstepCoordinator::Start(INetTransport& transport, const NetLockstepConfig& config, std::string* error) {
+	bool NetLockstepCoordinator::Start(INetTransport& transport, const NetLockstepConfig& requested, std::string* error) {
+		NetLockstepConfig config = requested;
+		if (config.substituteSlowPeers) {
+			const uint8_t host = config.authorityPeerId != 0 ? config.authorityPeerId : config.matchConfig.hostPeerId;
+			// One tick of lookahead publishes a client's input before its simulation starts.
+			for (uint8_t peer = 1; peer <= config.peerCount; ++peer) {
+				const auto found = config.peerInputDelayFrames.find(peer);
+				const uint16_t delay = found == config.peerInputDelayFrames.end() ? config.inputDelayFrames : found->second;
+				if (peer != host && delay == 0) config.peerInputDelayFrames[peer] = 1;
+				if (peer != host) for (auto& [frame, value] : config.initialDelayChanges[peer]) if (value == 0) value = 1;
+			}
+			if (config.localPeerId != host) config.inputDelayFrames = config.peerInputDelayFrames.contains(config.localPeerId) ? config.peerInputDelayFrames.at(config.localPeerId) : config.inputDelayFrames;
+		}
 		NET_PLANE_CHECK();
 		m_HostLeaveRecordFrom = 0;
 		m_SuccessorProbe.reset();
@@ -4897,6 +4910,17 @@ namespace RTE {
 		m_LeavesHeardAhead.clear();
 		m_PeerDeviceClasses.fill(0);
 		m_HostAcceptedLocalFrames.clear();
+		m_InputAcceptance.clear();
+		m_LastInputAcceptanceSendMs = 0;
+		m_InputAcceptanceWaits = 0;
+		m_LastInputAcceptanceWait.reset();
+		m_InputAcceptanceLeadFrames.clear();
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+			uint64_t first = m_Config.startFrame + (m_Config.resumeFromSnapshot ? 0 : PeerInputDelay(peer));
+			if (const auto reclaim = m_Config.initialSeatReclaims.find(peer); reclaim != m_Config.initialSeatReclaims.end())
+				first = std::max(reclaim->second.neutralThroughFrame, reclaim->second.activationFrame + reclaim->second.delayFrames) + 1;
+			SeedInputAcceptance(peer, first);
+		}
 		m_ResumeAdmissionPending = m_Config.resumeFromSnapshot;
 		m_SynchronizedCaptureStartFrame = UINT64_MAX;
 		m_SynchronizedCaptureEndFrame = 0;
@@ -5788,6 +5812,7 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error) {
+		if (UsesBoundedWait() && peerId != GetHostPeerId() && delayFrames == 0) delayFrames = 1;
 		NET_PLANE_CHECK();
 		if (std::any_of(m_MigrationFutureDelays.begin(), m_MigrationFutureDelays.end(), [&](const auto& decision) { return decision.peerId == peerId && decision.applyFrame >= GetResumeFrame(); })) {
 			if (error) *error = "the peer still has a recovered future delay";
@@ -5860,6 +5885,7 @@ namespace RTE {
 			m_Config.peerIncarnations[timing.peerId] = timing.seatIncarnations[timing.peerId - 1];
 			m_PeerEffectiveStart[timing.peerId] = timing.applyFrame + timing.delayFrames;
 			m_PeerAdmissions[timing.peerId] = {timing.applyFrame, timing.delayFrames};
+			SeedInputAcceptance(timing.peerId, std::max(timing.neutralThroughFrame, timing.applyFrame + timing.delayFrames) + 1);
 			// The host's own seat comes back without a restart: its start stands and every table that reads its stream, or that it
 			// reads the others' with, is still the one in use.
 			if (timing.peerId != GetHostPeerId()) {
@@ -6543,6 +6569,12 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision) {
+		if (m_LocalFrames.contains(frame) && !LocalInputAccepted(frame) && m_LastInputAcceptanceWait != frame) {
+			m_LastInputAcceptanceWait = frame;
+			++m_InputAcceptanceWaits;
+			DiagnosticLine() << "[input-acceptance-wait] frame=" << frame << " accepted_through="
+			                 << (m_HostAcceptedLocalFrames.empty() ? "none" : std::to_string(*m_HostAcceptedLocalFrames.rbegin())) << std::endl;
+		}
 		NET_PLANE_CHECK();
 		if (!UsesBoundedWait()) return false;
 		if (frame < m_Stats.nextFrame) return true;
@@ -6782,6 +6814,7 @@ namespace RTE {
 		NoteSeatTransition(peer, reclaim.applyFrame, SeatTransition::Back);
 		m_Config.peerIncarnations[peer] = reclaim.seatIncarnations[peer - 1];
 		m_PeerEffectiveStart[peer] = std::max(m_Config.startFrame, reclaim.applyFrame + reclaim.delayFrames);
+		SeedInputAcceptance(peer, std::max(reclaim.neutralThroughFrame, reclaim.applyFrame + reclaim.delayFrames) + 1);
 		// A return names the delay its seat produces at from the reclaim on, the same on every peer.
 		if (reclaim.delayFrames != 0 && reclaim.delayFrames != InputDelayAt(peer, reclaim.applyFrame)) m_DelayChanges[peer][reclaim.applyFrame] = reclaim.delayFrames;
 		m_PeerAdmissions[peer] = reclaim.applyFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, InputDelayAt(peer, m_Config.startFrame)} :
@@ -7457,6 +7490,7 @@ namespace RTE {
 		m_ParkCarriedCommands = std::move(carried);
 		if (recovery) return true;
 		RememberLocalInput(packet);
+		AcknowledgeAcceptedInput(m_Config.localPeerId, targetFrame);
 		m_LocalFrames[targetFrame] = frames;
 		if (!packet.commands.empty()) {
 			m_LocalCommands[targetFrame] = packet.commands;
@@ -7580,7 +7614,23 @@ namespace RTE {
 			return;
 		}
 		if (ack.receivedMask == NetLockstepCodec::c_InputAcceptedMask) {
-			// Kept as a wire-compatible no-op; local input commits without a per-frame round trip.
+			const auto incarnation = m_Config.peerIncarnations.find(m_Config.localPeerId);
+			const uint32_t ownIncarnation = incarnation == m_Config.peerIncarnations.end() ? 1 : incarnation->second;
+			if (m_Playback || !UsesBoundedWait() || m_Config.localPeerId == GetHostPeerId() || ack.senderPeerId != GetHostPeerId() ||
+			    ack.sessionId != m_Config.sessionId || ack.roundId != m_RoundId || ack.authorityGeneration != m_Config.migrationGeneration || ack.seatIncarnation != ownIncarnation) return;
+			uint64_t neutral = EffectiveStartOf(m_Config.localPeerId) == 0 ? 0 : EffectiveStartOf(m_Config.localPeerId) - 1;
+			if (const auto reclaim = m_ReclaimTransactions.find(m_Config.localPeerId); reclaim != m_ReclaimTransactions.end())
+				neutral = std::max(neutral, std::max(reclaim->second.neutralThroughFrame, reclaim->second.activationFrame + reclaim->second.delayFrames));
+			if (ack.highestContiguousFrame > std::max(neutral, SentInputThrough())) return;
+			const uint64_t before = m_HostAcceptedLocalFrames.empty() ? m_Config.startFrame : *m_HostAcceptedLocalFrames.rbegin() + 1;
+			if (!m_HostAcceptedLocalFrames.empty() && ack.highestContiguousFrame < *m_HostAcceptedLocalFrames.rbegin()) return;
+			for (uint64_t frame = before; frame <= ack.highestContiguousFrame; ++frame) {
+				const int64_t lead = static_cast<int64_t>(frame) - static_cast<int64_t>(GetResumeFrame());
+				++m_InputAcceptanceLeadFrames[lead];
+				if (frame == UINT64_MAX) break;
+			}
+			m_HostAcceptedLocalFrames = {ack.highestContiguousFrame};
+			AdvanceReadyFrames(m_TimingNowMs);
 			return;
 		}
 		if ((ack.receivedMask & NetLockstepCodec::c_CapacityMask) != 0) {
@@ -7741,8 +7791,42 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::AcknowledgeAcceptedInput(uint8_t peerId, uint64_t frame) {
-		(void)peerId;
-		(void)frame;
+		if (m_Playback || !UsesBoundedWait() || m_Config.localPeerId != GetHostPeerId() || !CommitsRemoteInput(peerId, frame) || frame < EffectiveStartOf(peerId)) return;
+		auto found = m_InputAcceptance.find(peerId);
+		if (found == m_InputAcceptance.end()) { SeedInputAcceptance(peerId, EffectiveStartOf(peerId)); found = m_InputAcceptance.find(peerId); }
+		auto& accepted = found->second;
+		if (frame >= accepted.nextFrame) accepted.ahead.insert(frame);
+		while (accepted.ahead.erase(accepted.nextFrame) != 0) ++accepted.nextFrame;
+		if (peerId == m_Config.localPeerId) {
+			if (accepted.nextFrame != 0) m_HostAcceptedLocalFrames = {accepted.nextFrame - 1};
+		} else SendInputAcceptance(peerId);
+	}
+
+	void NetLockstepCoordinator::SeedInputAcceptance(uint8_t peerId, uint64_t firstInputFrame) {
+		const auto incarnation = m_Config.peerIncarnations.find(peerId);
+		m_InputAcceptance[peerId] = {firstInputFrame, incarnation == m_Config.peerIncarnations.end() ? 1 : incarnation->second, {}};
+		if (peerId == m_Config.localPeerId) {
+			m_HostAcceptedLocalFrames.clear();
+			if (firstInputFrame != 0) m_HostAcceptedLocalFrames.insert(firstInputFrame - 1);
+		}
+	}
+
+	void NetLockstepCoordinator::SendInputAcceptance(uint8_t peerId) {
+		const auto accepted = m_InputAcceptance.find(peerId);
+		if (m_Playback || !UsesBoundedWait() || m_Config.localPeerId != GetHostPeerId() || peerId == m_Config.localPeerId || m_RoundId == 0 ||
+		    accepted == m_InputAcceptance.end() || accepted->second.nextFrame == 0) return;
+		NetLockstepAck ack;
+		ack.senderPeerId = GetHostPeerId(); ack.receivedMask = NetLockstepCodec::c_InputAcceptedMask;
+		ack.highestContiguousFrame = accepted->second.nextFrame - 1; ack.roundId = m_RoundId;
+		ack.sessionId = m_Config.sessionId; ack.authorityGeneration = m_Config.migrationGeneration; ack.seatIncarnation = accepted->second.incarnation;
+		std::string ignored;
+		(void)SendPacket({ack}, NetTransportLane::InputUnreliable, &ignored, nullptr, nullptr, peerId);
+	}
+
+	bool NetLockstepCoordinator::LocalInputAccepted(uint64_t frame) const {
+		if (m_Playback || !UsesBoundedWait() || m_Config.localPeerId == GetHostPeerId() || frame < EffectiveStartOf(m_Config.localPeerId) ||
+		    IsSeatReclaimGap(m_Config.localPeerId, frame) || IsSeatUnderAI(m_Config.localPeerId, frame)) return true;
+		return !m_HostAcceptedLocalFrames.empty() && frame <= *m_HostAcceptedLocalFrames.rbegin();
 	}
 
 	uint8_t NetLockstepCoordinator::ConfiguredWindowTicks() const {
@@ -8789,6 +8873,11 @@ namespace RTE {
 			const uint64_t effective = start.peerEffectiveStartFrames[peer - 1];
 			m_PeerEffectiveStart[peer] = effective;
 			m_Config.peerInputDelayFrames[peer] = start.peerInputDelays[peer - 1];
+			SeedInputAcceptance(peer, effective);
+			if (m_Config.localPeerId == GetHostPeerId()) {
+				for (const auto& [frame, inputs] : m_RemoteFrames) if (inputs.contains(peer)) AcknowledgeAcceptedInput(peer, frame);
+				if (peer == m_Config.localPeerId) for (const auto& [frame, inputs] : m_LocalFrames) AcknowledgeAcceptedInput(peer, frame);
+			}
 			if (m_Config.matchConfig.peerInputDelayFrames.size() < m_Config.peerCount)
 				m_Config.matchConfig.peerInputDelayFrames.resize(m_Config.peerCount, m_Config.inputDelayFrames);
 			m_Config.matchConfig.peerInputDelayFrames[peer - 1] = start.peerInputDelays[peer - 1];
@@ -9004,6 +9093,10 @@ namespace RTE {
 		TickTiming(nowMs);
 		FlushDeferredParkTimings();
 		AdvanceReadyFrames(nowMs);
+		if (!m_Playback && UsesBoundedWait() && m_Config.localPeerId == GetHostPeerId() && nowMs >= m_LastInputAcceptanceSendMs + static_cast<uint64_t>(std::max(1.0, m_Config.simTickMs))) {
+			m_LastInputAcceptanceSendMs = nowMs;
+			for (uint8_t peer : m_RemotePeerIds) SendInputAcceptance(peer);
+		}
 		for (auto it = m_EvictAfterReclaim.begin(); it != m_EvictAfterReclaim.end();) {
 			const auto reclaim = m_ReclaimTransactions.find(it->first);
 			if (reclaim != m_ReclaimTransactions.end() && m_LastDeliveredFrame.value_or(0) < reclaim->second.activationFrame) { ++it; continue; }
@@ -9834,6 +9927,15 @@ namespace RTE {
 		out << "\"configured_start_frame\":" << m_Stats.configuredStartFrame << ",";
 		out << "\"effective_start_frame\":" << m_Stats.effectiveStartFrame << ",";
 		out << "\"input_delay_frames\":" << m_Stats.inputDelayFrames << ",";
+		out << "\"input_acceptance_waits\":" << m_InputAcceptanceWaits << ",";
+		out << "\"input_acceptance_ack_lead_frames\":{";
+		bool firstAcceptanceLead = true;
+		for (const auto& [lead, count] : m_InputAcceptanceLeadFrames) {
+			if (!firstAcceptanceLead) out << ",";
+			firstAcceptanceLead = false;
+			out << "\"" << lead << "\":" << count;
+		}
+		out << "},";
 		out << "\"peer_input_delays\":{";
 		for (uint8_t peerId = 1; peerId <= m_Config.peerCount; ++peerId) {
 			out << (peerId == 1 ? "" : ",") << "\"" << static_cast<int>(peerId) << "\":" << InputDelayAt(peerId, m_LastDeliveredFrame.value_or(m_Config.startFrame));
@@ -12082,7 +12184,10 @@ namespace RTE {
 				break;
 			}
 			m_OwnMissingFrame.reset();
-			// Local input commits optimistically after the restored input batch has been admitted.
+			if (!LocalInputAccepted(m_Stats.nextFrame)) {
+				m_AdvanceBlock = "own-input-acceptance";
+				break;
+			}
 			// Advance only when every REQUIRED remote's frame is in — a cleanly-left peer stops being
 			// required past its announced last frame.
 			auto remoteIt = m_RemoteFrames.find(m_Stats.nextFrame);
@@ -12246,7 +12351,6 @@ namespace RTE {
 			}
 			RememberCommittedFrame(ready);
 			m_ReadyFrames.push_back(std::move(ready));
-			m_HostAcceptedLocalFrames.erase(m_Stats.nextFrame);
 			if (UsesBoundedWait() && m_Config.localPeerId == GetHostPeerId()) {
 				m_CommittedAtMs[m_Stats.nextFrame] = nowMs;
 				while (m_CommittedAtMs.size() > 512) m_CommittedAtMs.erase(m_CommittedAtMs.begin());
@@ -12422,7 +12526,7 @@ namespace RTE {
 		CENSUS(m_LocalObservations); CENSUS(m_RemoteObservations); CENSUS(m_LocalValueObservations); CENSUS(m_RemoteValueObservations);
 		CENSUS(m_ResendFrames); CENSUS(m_RecoveryOutgoing); CENSUS(m_LocalInputHistory); CENSUS(m_LocalChecksums); CENSUS(m_RemoteChecksums);
 		CENSUS(m_ReadyFrames); CENSUS(m_ReadyHistory); CENSUS(m_RelayedTicks); CENSUS(m_RelayedTickFrames); CENSUS(m_RelayBacklog);
-		CENSUS(m_ObservationEpochs); CENSUS(m_HostAcceptedLocalFrames); CENSUS(m_MigrationHistory); CENSUS(m_MigrationIncoming);
+		CENSUS(m_ObservationEpochs); CENSUS(m_HostAcceptedLocalFrames); CENSUS(m_InputAcceptance); CENSUS(m_InputAcceptanceLeadFrames); CENSUS(m_MigrationHistory); CENSUS(m_MigrationIncoming);
 		CENSUS(m_PreStartFrames); CENSUS(m_ArrivalLeads); CENSUS(m_ArrivalLateness); CENSUS(m_TimingOutgoing);
 		CENSUS(m_ParkCaptureHistoryMs); CENSUS(m_DropReasonsNamed); CENSUS(m_PlaneDeferredEvents); CENSUS(m_InstalledResyncTargets);
 		CENSUS(m_ResyncPrimeInputs); CENSUS(m_RetiredReclaimGaps); CENSUS(m_PreStartTiming);

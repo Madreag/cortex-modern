@@ -702,6 +702,7 @@ namespace RTE {
 		static constexpr uint32_t c_Magic = 0x334C4343U;
 		/// Version 39 carries each seat's device class in the start and the agreed-start record; admission refuses a peer below it.
 		static constexpr uint16_t c_Version = 39;
+		static constexpr uint16_t c_AdmissionVersion = 44; //!< Admission requires cumulative input acceptance without changing packet layouts.
 		static constexpr uint16_t c_WorldVersion = 39;
 		static constexpr uint16_t c_SeatDeviceVersion = 39;
 		/// Version 37 carries input frames on the unreliable lane: a window reaches back a round trip, and a tick that
@@ -1581,6 +1582,9 @@ namespace RTE {
 		void AdvertiseFrameWindow();
 		void HandleAck(const NetLockstepAck& ack, NetPeerId fromTransport);
 		void AcknowledgeAcceptedInput(uint8_t peerId, uint64_t frame);
+		void SeedInputAcceptance(uint8_t peerId, uint64_t firstInputFrame);
+		void SendInputAcceptance(uint8_t peerId);
+		bool LocalInputAccepted(uint64_t frame) const;
 		bool FrameWindowAllRemotesAdvertised() const;
 		bool FrameWindowAgreedFor(uint8_t peerId) const;
 		uint8_t ConfiguredWindowTicks() const;
@@ -1910,6 +1914,16 @@ namespace RTE {
 		uint64_t m_LastQueuedTargetFrame = UINT64_MAX; //!< Highest produced target frame; UINT64_MAX until the first queue.
 		std::set<uint64_t> m_ObservationEpochs;        //!< Every announced frame senders spell their keys out from again.
 		std::set<uint64_t> m_HostAcceptedLocalFrames;
+		struct InputAcceptance {
+			uint64_t nextFrame = 0;
+			uint32_t incarnation = 1;
+			std::set<uint64_t> ahead;
+		};
+		std::map<uint8_t, InputAcceptance> m_InputAcceptance;
+		uint64_t m_LastInputAcceptanceSendMs = 0;
+		uint64_t m_InputAcceptanceWaits = 0;
+		std::optional<uint64_t> m_LastInputAcceptanceWait;
+		std::map<int64_t, uint64_t> m_InputAcceptanceLeadFrames;
 		std::map<uint8_t, uint64_t> m_ObservationEpochApplied; //!< sender -> the newest epoch its encode table was reset at.
 		size_t m_LastAdmissionReplayFrames = 0;        //!< What the last admission replayed, for the report.
 		std::function<void(const NetTransportEvent&)> m_SessionEventSink; //!< Forwards session traffic (reconnect handshakes) mid-match.

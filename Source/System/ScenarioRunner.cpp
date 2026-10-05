@@ -3217,7 +3217,8 @@ namespace RTE {
 		if (!PrimeRestoredLockstepInputs(&primeError)) { SetControllerReplayError(primeError); return false; }
 		const auto& config = s_LockstepCoordinator->GetConfig();
 		if (s_LockstepCoordinator->HasReadyFrame(tick) || tick < s_LockstepCoordinator->GetStats().effectiveStartFrame ||
-		    (!s_LockstepCoordinator->IsMigrating() && (!s_LockstepCoordinator->UsesBoundedWait() || s_LockstepCoordinator->InputDelayAt(config.localPeerId, tick) == 0))) return RunPacedTick(tick);
+		    (!s_LockstepCoordinator->IsMigrating() && (!s_LockstepCoordinator->UsesBoundedWait() || (config.localPeerId == s_LockstepCoordinator->GetHostPeerId() &&
+		     s_LockstepCoordinator->InputDelayAt(config.localPeerId, tick) == 0)))) return RunPacedTick(tick);
 		(void)s_LockstepCoordinator->NoteFrameWait(tick, NetLockstepNowMs());
 		if (s_LockstepCoordinator->HasReadyFrame(tick)) return RunPacedTick(tick);
 		// The clock says this tick is due and its inputs are not here: it runs ahead of them.

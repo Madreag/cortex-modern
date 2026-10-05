@@ -494,8 +494,8 @@ namespace RTE {
 		manifest.deterministicConfig.scenarioTestModuleLoaded = g_PresetMan.GetModuleID("Tests.rte") >= 0;
 		manifest.deterministicConfig.lockstepCodecVersion = options.lockstepCodecVersion;
 		manifest.deterministicConfig.matchConfigVersion = options.matchConfigVersion;
-		// Every layout this build decodes; a checkpoint frame goes out on the newest.
-		manifest.deterministicConfig.supportedLockstepCodecVersion = NetLockstepCodec::c_SeatReleaseVersion;
+		// Admission also requires the input-acceptance semantics of this build.
+		manifest.deterministicConfig.supportedLockstepCodecVersion = NetLockstepCodec::c_AdmissionVersion;
 		manifest.deterministicConfig.supportedWorldLockstepCodecVersion = NetLockstepCodec::c_WorldVersion;
 		manifest.deterministicConfig.supportedMatchConfigVersion = NetMatchConfigUtil::c_Version;
 		manifest.deterministicConfig.supportedWorldMatchConfigVersion = NetMatchConfigUtil::c_PersistentWorldVersion;
