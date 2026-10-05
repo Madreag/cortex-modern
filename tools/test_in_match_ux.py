@@ -339,7 +339,7 @@ def check_repair(checks, reads, logs):
     host, client = NAMES[0], NAMES[1]
     armed = reads[host].get("repair-armed", {}).get("text", "")
     checks.check("repair-first-press-names-the-cost", "press again" in armed, f"hint {armed!r}")
-    started = "[net-match] resync: reloading from the host snapshot" in logs[client]
+    started = all("[net-match] resync: match relaunched from the snapshot" in logs[who] for who in (host, client))
     checks.check("repair-second-press-repairs", started, f"the client reloaded the host's snapshot: {started}")
 
 
@@ -583,6 +583,9 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         script = root / f"{who}-menu.txt"
         script.write_text(f"wait_file {menu_done} 300\nwait_ms 4000\nexit\n", encoding="utf-8")
         extra = ["-net-h4-apply", "1"] if who == NEWCOMER else []
+        # The command-line match reloads a live snapshot only with this lever, as the readback's repair case runs it.
+        if case == "repair":
+            extra = [*extra, "-net-match-e2e-resync"]
         args = ["-menu-script", str(script), *match_args(port, peers if case in ("players", "host-leave") else 2, who if who != NEWCOMER else "joiner", ticks, extra, name=who)]
         diagnostics = "1" if case == "status" and options.diagnostics else "0"
         env = {"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(directory / "probe.json"), "CCCP_TEST_SCREEN_WATCHES": str(watches)}
