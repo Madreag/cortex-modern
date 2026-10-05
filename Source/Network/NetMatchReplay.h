@@ -61,7 +61,7 @@ namespace RTE {
 		static constexpr uint32_t c_Magic = 0x50524343U; // "CCRP"
 		// Version 7 lets a committed tick name one actor once per sender, in sender order; version 6 carries the world checkpoint
 		// a segment stands on; version 5 preserved each committed command's sender beside the checksummed wire frame.
-		// Version 8 names the committing host in the sender field and the update host after the sender trailers.
+		// Version 8 names the committing host in the sender field and a differing update host in the frame envelope.
 		static constexpr uint16_t c_Version = 8;
 		/// The longest world id and digest a segment header may carry; both are bounded strings already.
 		static constexpr size_t c_MaxSegmentFieldBytes = 64;

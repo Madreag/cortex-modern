@@ -458,8 +458,12 @@ namespace RTE {
 			}
 		}
 		std::vector<uint8_t> bytes;
-		bytes.reserve(5 + wireBytes.size() + commands.size() + observations.size() + valueObservations.size());
-		AppendU32(bytes, static_cast<uint32_t>(wireBytes.size()));
+		static_assert(c_MaxRecordBytes <= (1U << 24));
+		if (wireBytes.size() >= (1U << 24)) { if (error) *error = "replay frame exceeds its record-size limit"; return false; }
+		bytes.reserve(4 + wireBytes.size() + commands.size() + observations.size() + valueObservations.size());
+		// The record bound leaves the envelope's high byte for a differing update host.
+		const uint32_t updateHost = updateAuthority != record.senderPeerId ? static_cast<uint32_t>(updateAuthority) << 24 : 0;
+		AppendU32(bytes, static_cast<uint32_t>(wireBytes.size()) | updateHost);
 		bytes.insert(bytes.end(), wireBytes.begin(), wireBytes.end());
 		for (const NetGameCommand& command : commands) {
 			bytes.push_back(command.senderPeerId);
@@ -470,7 +474,6 @@ namespace RTE {
 		for (const NetValueObservation& observation : valueObservations) {
 			bytes.push_back(observation.senderPeerId);
 		}
-		bytes.push_back(updateAuthority);
 		if (!WriteRecordPayload(bytes, error)) return false;
 		++m_FramesWritten;
 		return true;
@@ -693,6 +696,7 @@ namespace RTE {
 		}
 		size_t wireOffset = 0;
 		size_t wireLength = bytes.size();
+		uint8_t updateAuthority = 0;
 		if (m_Version >= 5) {
 			if (bytes.size() < 4) {
 				if (error) *error = "truncated replay frame envelope";
@@ -700,6 +704,10 @@ namespace RTE {
 			}
 			wireOffset = 4;
 			wireLength = ReadU32(bytes.data());
+			if (m_Version >= 8) {
+				updateAuthority = static_cast<uint8_t>(wireLength >> 24);
+				wireLength &= 0xFFFFFFU;
+			}
 			if (wireLength == 0 || wireLength > bytes.size() - wireOffset) {
 				if (error) *error = "invalid replay wire frame length";
 				return false;
@@ -751,7 +759,7 @@ namespace RTE {
 		}
 		if (m_Version >= 5) {
 			const size_t senderOffset = wireOffset + wireLength;
-			if (bytes.size() - senderOffset != outFrame.commands.size() + outFrame.observations.size() + outFrame.valueObservations.size() + (m_Version >= 8 ? 1 : 0)) {
+			if (bytes.size() - senderOffset != outFrame.commands.size() + outFrame.observations.size() + outFrame.valueObservations.size()) {
 				if (error) *error = "replay command sender count mismatch";
 				return false;
 			}
@@ -783,12 +791,12 @@ namespace RTE {
 			}
 		}
 		if (m_Version >= 8) {
-			if (outFrame.senderPeerId == 0 || outFrame.senderPeerId > m_Config.peerCount || bytes.back() == 0 || bytes.back() > m_Config.peerCount) {
+			if (outFrame.senderPeerId == 0 || outFrame.senderPeerId > m_Config.peerCount || updateAuthority > m_Config.peerCount) {
 				if (error) *error = "invalid replay frame authority";
 				return false;
 			}
 			outFrame.replayAuthorityPeerId = outFrame.senderPeerId;
-			outFrame.replayUpdateAuthorityPeerId = bytes.back();
+			outFrame.replayUpdateAuthorityPeerId = updateAuthority != 0 ? updateAuthority : outFrame.senderPeerId;
 		}
 		m_LastStatus = NetReplayReadStatus::Frame;
 		return true;
