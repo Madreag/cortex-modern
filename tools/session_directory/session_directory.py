@@ -477,6 +477,10 @@ class SessionDirectory:
         self._signals_changed = threading.Condition(self._lock)
         self._sessions: dict[str, Session] = {}
         self._resume_tokens: dict[str, tuple[str, float, int]] = {}
+        # A running match's row whose host stopped beating leaves the listing at once, but the survivors of that host meet on its
+        # signals to hand the match over, and a rendezvous across relays outlasts the lease: its queues stay reachable as long
+        # as its successor may still claim it.
+        self._retired: dict[str, tuple[Session, float]] = {}
         self.limiter = DualRateLimiter()
         self.turn_provider = TurnCredentialProvider(turn_config)
         self.turn_limiter = RateLimiter(TURN_REQUESTS_PER_MIN, TURN_REQUESTS_PER_MIN)
@@ -520,18 +524,34 @@ class SessionDirectory:
             for sid in dead:
                 sess = self._sessions[sid]
                 self._resume_tokens[sid] = (sess.token, sess.last_beat + self.expiry_s + RESUME_GRACE_S, sess.migration_gen)
+                if sess.state == "running":
+                    self._retired[sid] = (sess, sess.last_beat + self.expiry_s + RESUME_GRACE_S)
                 del self._sessions[sid]
             for sid, (_, deadline, _) in list(self._resume_tokens.items()):
                 if now >= deadline:
                     del self._resume_tokens[sid]
             while len(self._resume_tokens) > MAX_ROWS:
                 del self._resume_tokens[next(iter(self._resume_tokens))]
+            for sid, (_, deadline) in list(self._retired.items()):
+                if now >= deadline:
+                    del self._retired[sid]
+            while len(self._retired) > MAX_ROWS:
+                del self._retired[next(iter(self._retired))]
             for sess in self._sessions.values():
                 self._prune_idle_queues(sess, now)
 
     def _get(self, session_id: str, now: float) -> Optional[Session]:
         self.prune(now)
         return self._sessions.get(session_id)
+
+    def _signalling(self, session_id: str, now: float, pruned: bool = False) -> Optional[Session]:
+        """The live row, or the expired one whose signals its survivors may still need."""
+        sess = self._sessions.get(session_id) if pruned else self._get(session_id, now)
+        if sess is None and session_id in self._retired:
+            retired, deadline = self._retired[session_id]
+            if now < deadline:
+                return retired
+        return sess
 
     def register(self, data: dict[str, Any], observed_ip: str, now: float, install_key: str = "") -> dict[str, Any]:
         self.prune(now)
@@ -606,6 +626,12 @@ class SessionDirectory:
                 if not first_world:
                     sess.state = "running"
                 self._resume_tokens.pop(session_id, None)
+                # The row's pending signals follow it to the host that claims it.
+                carried = self._sessions.get(session_id) or self._retired.get(session_id, (None, 0.0))[0]
+                if carried is not None:
+                    sess.queues, sess.next_seq = carried.queues, carried.next_seq
+                    sess.queue_drain_at, sess.undrained_bytes = carried.queue_drain_at, carried.undrained_bytes
+                self._retired.pop(session_id, None)
             self._sessions[session_id] = sess
         return {
             "session_id": session_id,
@@ -751,6 +777,7 @@ class SessionDirectory:
                 raise Superseded("superseded", sess.migration_gen)
             del self._sessions[session_id]
             self._resume_tokens.pop(session_id, None)
+            self._retired.pop(session_id, None)
             self._signals_changed.notify_all()
         return {"ok": True}
 
@@ -815,7 +842,7 @@ class SessionDirectory:
         if len(raw) > MAX_PAYLOAD:
             raise ValueError("payload_too_large")
         with self._lock:
-            sess = self._get(session_id, now)
+            sess = self._signalling(session_id, now)
             if sess is None:
                 raise KeyError("not_found")
             if from_peer == "host":
@@ -851,7 +878,7 @@ class SessionDirectory:
         if not valid_peer(peer):
             raise FieldError("invalid_field", "peer")
         with self._lock:
-            sess = self._get(session_id, now)
+            sess = self._signalling(session_id, now)
             if sess is None:
                 raise KeyError("not_found")
             if peer == "host":
@@ -868,7 +895,7 @@ class SessionDirectory:
                 if remaining <= 0:
                     break
                 self._signals_changed.wait(remaining)
-                sess = self._sessions.get(session_id)
+                sess = self._signalling(session_id, time.monotonic(), pruned=True)
                 if sess is None:
                     raise KeyError("not_found")
             now = time.monotonic()

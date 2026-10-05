@@ -471,6 +471,47 @@ class DirectoryTests(unittest.TestCase):
         directory.delete(sid, {"token": token, "migration_gen": 2}, 33)
         self.assertNotIn(sid, directory._sessions)
 
+    def test_a_lost_hosts_signals_outlive_its_lease_for_the_handover(self) -> None:
+        # The survivors of a host that died meet on its row's signals, and a rendezvous across relays outlasts the lease
+        # (2026-10-04 LTE row e: the row expired 15 s after the dead host's last beat while the survivors' relayed dial ran).
+        directory = session_directory.SessionDirectory(15, 5)
+        running = {"peer_count": 3, "seats_free": 0, "state": "running"}
+        created = directory.register(sample_register(), "192.0.2.1", 0)
+        sid, token = created["session_id"], created["token"]
+        directory.heartbeat(sid, {"token": token, **running}, 0)
+        nonce = "joinNonce7"
+        dialer = f"client:{nonce}"
+        offer = base64.b64encode(b"successor-offer").decode("ascii")
+        directory.prune(20)
+        self.assertNotIn(sid, directory._sessions, "a row whose host stopped beating stayed listed")
+        self.assertEqual(directory.post_signal(sid, {"token_or_join_nonce": nonce, "from": dialer, "to": "host", "payload_b64": offer}, 21)["seq"], 1)
+        polled = directory.get_signals(sid, "host", 0, token, 22)["signals"]
+        self.assertEqual([item["payload_b64"] for item in polled], [offer], "the successor could not read the dial posted after the lease")
+        directory.post_signal(sid, {"token_or_join_nonce": token, "from": "host", "to": dialer, "payload_b64": offer}, 23)
+        self.assertEqual(len(directory.get_signals(sid, dialer, 0, None, 24)["signals"]), 1)
+        with self.assertRaises(PermissionError, msg="an expired row answered its host signals without the row token"):
+            directory.get_signals(sid, "host", 0, "not-the-token", 25)
+        # The successor's claim takes the row with what is still owed to its host end.
+        directory.post_signal(sid, {"token_or_join_nonce": nonce, "from": dialer, "to": "host", "payload_b64": offer}, 26)
+        claimed = directory.register(sample_register(resume_session_id=sid, resume_token=token, migration_gen=1), "192.0.2.2", 27)
+        self.assertEqual(claimed["session_id"], sid)
+        owed = directory.get_signals(sid, "host", 1, claimed["token"], 28)["signals"]
+        self.assertEqual([item["seq"] for item in owed], [2], "the claim dropped a signal posted while the row was out of its lease")
+        # A row nobody claims is gone with its resume window; a row its host deleted is gone at once.
+        lapsed = directory.register(sample_register(), "192.0.2.3", 30)
+        directory.heartbeat(lapsed["session_id"], {"token": lapsed["token"], **running}, 30)
+        directory.prune(30 + 15 + session_directory.RESUME_GRACE_S + 1)
+        with self.assertRaises(KeyError):
+            directory.get_signals(lapsed["session_id"], "host", 0, lapsed["token"], 30 + 15 + session_directory.RESUME_GRACE_S + 2)
+        lobby = directory.register(sample_register(), "192.0.2.5", 200)
+        directory.prune(216)
+        with self.assertRaises(KeyError, msg="a lobby row nobody plays in kept its signals past its lease"):
+            directory.get_signals(lobby["session_id"], "host", 0, lobby["token"], 216)
+        ended = directory.register(sample_register(), "192.0.2.4", 200)
+        directory.delete(ended["session_id"], {"token": ended["token"]}, 201)
+        with self.assertRaises(KeyError):
+            directory.post_signal(ended["session_id"], {"token_or_join_nonce": nonce, "from": dialer, "to": "host", "payload_b64": offer}, 202)
+
     def test_live_resume_wrong_token_leaves_the_row_unchanged(self) -> None:
         self.start(port=45810)
         status, created = self.register()
