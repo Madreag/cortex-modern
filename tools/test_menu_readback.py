@@ -941,12 +941,14 @@ def sweep_case(case, port, root):
         return {"host": host, "client": client}, {}
     elif case == "sweep-settings-network":
         pages = ("Player", "Chat", "Recovery", "Files", "Internet", "Connection")
-        text = (OPTIONS + SWEEP_MACROS + "select_settings_page Network\nwait 4\nassert_settings_page Network:Basics\n"
+        # A button's way back is to the page its sweep stands on, so the page's next button is still under the hand.
+        backs = "".join(f"define back_net_{page.lower()}\nactivate TabNetPage{page}\nwait 4\nassert_settings_page Network:{page}\nend\n" for page in pages)
+        text = (OPTIONS + SWEEP_MACROS + backs + "select_settings_page Network\nwait 4\nassert_settings_page Network:Basics\n"
                 "dump_player_options\nsweep CollectionBoxNetPageBasics label=network-basics restore=back_basics\n")
         # The boxes that take a key name or a digest are given one they take.
         takes = {"Chat": " with=TextNetworkChatKey:Y", "Internet": " with=TextNetworkDirPin:" + "0123456789abcdef" * 4}
         for page in pages:
-            text += (f"activate TabNetPage{page}\nwait 4\ndump_player_options\nsweep CollectionBoxNetPage{page} label=network-{page.lower()} restore=back_basics"
+            text += (f"activate TabNetPage{page}\nwait 4\ndump_player_options\nsweep CollectionBoxNetPage{page} label=network-{page.lower()} restore=back_net_{page.lower()}"
                      f"{takes.get(page, '')}\nactivate TabNetPage{page}\nwait 4\n")
         text += "activate TabNetPageBasics\nwait 4\nexit\n"
     else:  # sweep-browsers
