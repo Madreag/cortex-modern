@@ -696,7 +696,8 @@ class SessionDirectory:
                 proven = (owner is not None and isinstance(presented, str)
                           and tokens_equal(hashlib.sha256(presented.encode()).hexdigest(), owner["token_sha256"]))
                 same_host = (world and proven and valid_install_key(install_key)
-                             and tokens_equal(hashlib.sha256(install_key.encode()).hexdigest(), owner.get("install_sha256", "")))
+                             and (previous is None
+                                  or tokens_equal(hashlib.sha256(install_key.encode()).hexdigest(), owner.get("install_sha256", ""))))
                 first_world = world and not token and owner is None and presented in (None, "")
                 if not first_world and not replayed_owner and not (proven if owner is not None else token and isinstance(presented, str) and tokens_equal(presented, token)):
                     raise PermissionError("forbidden")

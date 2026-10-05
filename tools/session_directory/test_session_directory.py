@@ -2163,14 +2163,22 @@ class DirectoryTests(unittest.TestCase):
         for alternate in (world_id.upper(), world_id.replace("-", "")):
             with self.assertRaises(PermissionError, msg="F3: an alternate UUID spelling duplicated a known world's owner"):
                 store.register(dict(request, world_id=alternate, resume_session_id=alternate), "192.0.2.3", 25, "cccccccccccccccc")
+        store.prune(321)
+        try:
+            own = store.register(dict(current, resume_token=own["token"]), "192.0.2.2", 322, "abababababababab")
+        except session_directory.Superseded:
+            self.fail("F3: stored owner proof could not resume an expired world when the install identity changed")
         with tempfile.TemporaryDirectory() as temporary:
             owner_file = Path(temporary) / "world-owners.json"
             owner_file.write_text(json.dumps({world_id.upper(): store._world_owners[world_id]}), encoding="utf-8")
             restarted = session_directory.SessionDirectory(300, 5, owner_state=owner_file)
             with self.assertRaises(PermissionError, msg="F3: a noncanonical saved owner allowed a tokenless claim"):
                 restarted.register(request, "192.0.2.3", 26, "cccccccccccccccc")
-            resumed = restarted.register(dict(current, world_id=world_id.upper(), resume_session_id=world_id.upper(), resume_token=own["token"]),
-                                         "192.0.2.2", 27, "fedcba9876543210")
+            try:
+                resumed = restarted.register(dict(current, world_id=world_id.upper(), resume_session_id=world_id.upper(), resume_token=own["token"]),
+                                             "192.0.2.2", 27, "edededededededed")
+            except session_directory.Superseded:
+                self.fail("F3: stored owner proof could not resume after restart when the install identity changed")
             self.assertEqual(resumed["session_id"], world_id, "F3: a proved alternate spelling changed the world id")
             self.assertEqual(list(json.loads(owner_file.read_text(encoding="utf-8"))), [world_id], "F3: saved ownership retained duplicate spellings")
 
