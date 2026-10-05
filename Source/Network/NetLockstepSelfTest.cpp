@@ -22396,7 +22396,36 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			*error = "a single 150 ms silence was carried as more than itself: required=" + std::to_string(covered) + " link_only=" + std::to_string(linkOnly);
 			return false;
 		}
-		std::cout << "[net-lockstep-selftest] PASS a_links_silence_keeps_its_cover link_only=" << linkOnly << " covered=" << covered << " after_short=" << afterShort << std::endl;
+		const auto threePeers = [&](NetLockstepCoordinator& host) {
+			prepare(host); host.m_Config.peerCount = 3; host.m_Config.substituteSlowPeers = true;
+			host.m_RemotePeerIds = {2, 3}; host.m_Config.peerInputDelayFrames[3] = 9;
+			for (uint64_t now = 0; now <= 6000; now += 100) host.m_DelayEstimators[3].Observe(now, 50);
+		};
+		const auto thirdInput = [&](NetLockstepCoordinator& host, const Feed& clock) {
+			NetLockstepFrame frame; frame.senderPeerId = 3; frame.targetFrame = 609 + clock.k;
+			host.AcceptRemoteTick(frame, at(clock), false);
+		};
+		NetLockstepCoordinator shared, separate;
+		Feed sharedFeed, separateFeed;
+		threePeers(shared); threePeers(separate);
+		for (int step = 0; step < 120; ++step) {
+			thirdInput(shared, sharedFeed); play(shared, sharedFeed, true);
+			thirdInput(separate, separateFeed); play(separate, separateFeed, true);
+		}
+		for (int step = 0; step < 9; ++step) {
+			play(shared, sharedFeed, false);
+			thirdInput(separate, separateFeed); play(separate, separateFeed, false);
+		}
+		for (int step = 0; step < 60; ++step) {
+			thirdInput(shared, sharedFeed); play(shared, sharedFeed, true);
+			thirdInput(separate, separateFeed); play(separate, separateFeed, true);
+		}
+		if (required(shared) != linkOnly || shared.m_DelayEstimators.at(3).RequiredFrames(tick, 1) != linkOnly || required(separate) <= linkOnly) {
+			*error = "common input silence is charged to a client, or individual silence is discarded: shared=" + std::to_string(required(shared)) +
+			         "/" + std::to_string(shared.m_DelayEstimators.at(3).RequiredFrames(tick, 1)) + " separate=" + std::to_string(required(separate)) + " link_only=" + std::to_string(linkOnly);
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_links_silence_keeps_its_cover link_only=" << linkOnly << " covered=" << covered << " after_short=" << afterShort << " common=0" << std::endl;
 		return true;
 	}
 
