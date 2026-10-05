@@ -3875,6 +3875,7 @@ namespace RTE {
 			for (uint8_t i = 0; i < r.count; ++i) {
 				NetLockstepCoordinator& peer = *r.peers[i];
 				if (!r.live[i] || !peer.IsRunning() || peer.IsMigrating()) continue;
+				r.queued[i] = std::max(r.queued[i], peer.GetConfig().startFrame);
 				for (; r.queued[i] <= r.simulated[i] + 6; ++r.queued[i])
 					if (!peer.QueueLocalInput(r.queued[i], {}, {}, &r.queueErrors[i])) break;
 			}
@@ -4630,23 +4631,24 @@ namespace RTE {
 			clientConfig.inputDelayFrames = 5;
 			if (!StartCoordinatorPair(48909, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
 			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
-			for (uint64_t frame = 0; frame < 200; ++frame) if (!host.QueueLocalInput(frame, {}, {}, error)) return false;
+			constexpr uint64_t gap = 200;
+			for (uint64_t frame = 0; frame < gap + 40; ++frame) if (!host.QueueLocalInput(frame, {}, {}, error)) return false;
 			const uint16_t delay = client.InputDelayAt(2, 0);
-			for (uint64_t frame = 0; frame + delay < 40; ++frame) if (!client.QueueLocalInput(frame, {}, {}, error)) return false;
+			for (uint64_t frame = 0; frame + delay < gap; ++frame) if (!client.QueueLocalInput(frame, {}, {}, error)) return false;
 			uint64_t now = 0;
-			for (; now < 600 && host.GetStats().nextFrame < 40; now += 2) { hostWire.AdvanceTimeMs(2); clientWire.AdvanceTimeMs(2); host.Tick(now); client.Tick(now); }
-			if (host.GetStats().nextFrame != 40) { *error = "the host did not reach the frame the seat skips: next=" + std::to_string(host.GetStats().nextFrame); return false; }
+			for (; now < 600 && host.GetStats().nextFrame < gap; now += 2) { hostWire.AdvanceTimeMs(2); clientWire.AdvanceTimeMs(2); host.Tick(now); client.Tick(now); }
+			if (host.GetStats().nextFrame != gap) { *error = "the host did not reach the frame the seat skips: next=" + std::to_string(host.GetStats().nextFrame); return false; }
 			const auto holdsOfPeerTwo = [&] { const auto& peers = host.GetStats().peers; const auto found = peers.find(2); return found == peers.end() ? 0U : found->second.holds; };
 			NetLockstepReadyFrame ready;
 			while (host.PopReadyFrame(ready)) (void)host.FinishSimulationTick(ready.frame);
 			const auto step = [&](uint64_t until) {
 				for (; now < until; ++now) {
 					hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
-					(void)host.NoteFrameWait(40, now);
+					(void)host.NoteFrameWait(gap, now);
 				}
 			};
-			// Frame 40 is late, but the seat keeps sending the ticks after it: within the bound the round waits on it.
-			for (uint64_t frame = 41; frame <= 40 + hostConfig.slowPlayerBoundTicks; ++frame) {
+			// Past startup, the seat feeds beyond one missing input: within the bound the round waits on it.
+			for (uint64_t frame = gap + 1; frame <= gap + hostConfig.slowPlayerBoundTicks; ++frame) {
 				if (!client.QueueLocalInput(frame - delay, {}, {}, error)) return false;
 				step(now + 30);
 				if (holdsOfPeerTwo() != 0) {
@@ -4656,7 +4658,7 @@ namespace RTE {
 				}
 			}
 			// One tick past the bound, and the stream that never answered the frame is judged like any other.
-			const uint64_t stray = 41 + hostConfig.slowPlayerBoundTicks;
+			const uint64_t stray = gap + 1 + hostConfig.slowPlayerBoundTicks;
 			if (!client.QueueLocalInput(stray - delay, {}, {}, error)) return false;
 			step(now + 30);
 			if (holdsOfPeerTwo() == 0) {
