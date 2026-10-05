@@ -330,6 +330,21 @@ namespace {
 		return std::max(widest, run);
 	}
 
+	/// "Ana", "Ana and Ben", "Ana, Ben and Cleo".
+	std::string NamesInWords(const std::vector<std::string>& names) {
+		std::string words;
+		for (size_t index = 0; index < names.size(); ++index) {
+			words += (index == 0 ? "" : index + 1 == names.size() ? " and " : ", ") + names[index];
+		}
+		return words;
+	}
+
+	std::string SecondsInWords(long long milliseconds) {
+		char text[32];
+		std::snprintf(text, sizeof(text), "%.1f s", static_cast<double>(std::max(0LL, milliseconds)) / 1000.0);
+		return text;
+	}
+
 	std::string WrapText(GUIFont* font, const std::string& text, int width) {
 		std::string wrapped, line;
 		for (char c: text) {
@@ -1183,23 +1198,121 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	if (menuLobby) LobbyMenuColumn(editor);
 	const std::string countOnly = std::to_string(placed) + " of " + std::to_string(seats);
 	const int countNeed = font->CalculateWidth(countOnly) + 14;
+	const bool diagnostics = g_SettingsMan.GetNetworkShowDiagnostics();
+	// What the player reads first is what is happening and who must act, in the player's words; the numbers follow behind
+	// the detailed statistics setting.
+	bool localUnplaced = false;
+	std::vector<std::string> othersPlacing;
+	if (placing) {
+		// The activity names a seat by the roster's non-CPU slots in order, so the same names read here.
+		std::vector<std::string> slotNames;
+		if (const auto config = ScenarioRunner::GetLockstepMatchConfig()) {
+			for (const NetMatchPlayerSlot& slot: config->players) {
+				if (!slot.cpu) slotNames.push_back(slot.displayName);
+			}
+		}
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+			if (!(setupActivity->IsSeatActive(player) && setupActivity->IsHumanSeat(player)) || setupActivity->IsReadyToStart(player)) continue;
+			if (setupActivity->IsLocalHumanSeat(player)) {
+				localUnplaced = true;
+			} else {
+				const size_t slot = static_cast<size_t>(player);
+				othersPlacing.push_back(DisplayName(slot < slotNames.size() && !slotNames[slot].empty() ? slotNames[slot] : "Player " + std::to_string(player + 1)));
+			}
+		}
+	}
+	// This player's own seat on its way back, and the other seats the AI plays while their players are away.
+	const bool ownRejoin = !menuLobby && !hostLost && (resyncing || ScenarioRunner::WorldCatchUpActive()) &&
+	                       (OwnRosterSeatHeld() || ScenarioRunner::IsLockstepOwnSeatHeld());
+	std::vector<std::string> heldNames, heldCauses, returningNames, lostNames;
+	if (!menuLobby && !hostLost) {
+		for (const auto& member: snapshot.members) {
+			if (member.cpu || member.isLocal || member.peerId == snapshot.localPeerId) continue;
+			// A place its player gave up and nobody plays is no longer a player of this match.
+			const std::string state = NetPlayerPresentation::State(member);
+			const std::string name = DisplayName(NetPlayerPresentation::Name(member));
+			if (state.find("AI in control") != std::string::npos) heldNames.push_back(name);
+			else if (state == "Rejoining" || state == "Joining") returningNames.push_back(name);
+			else if (state == "Disconnected") lostNames.push_back(name);
+		}
+		if (!heldNames.empty() && snapshot.isHost) {
+			for (const NetH4ModerationSeat& seat: g_NetMatchService.GetModerationSeats()) {
+				const std::string cause = NetModerationUx::HoldCause(seat);
+				const std::string name = DisplayName(NetPlayerPresentation::Name(seat.lockstepPeerId, seat.displayName));
+				if (!seat.cpu && !cause.empty() && std::find(heldNames.begin(), heldNames.end(), name) != heldNames.end()) heldCauses.push_back(name + ": " + cause);
+			}
+		}
+	}
+	const std::string missingPeers = missingFrames && !hostLost ? DisplayName(ScenarioRunner::GetLockstepMissingPeers()) : std::string();
+	// The headline names whoever the reading is about; a short line fits each name into nameRoom pixels, 0 keeps them whole.
+	const auto headline = [&](int nameRoom) -> std::string {
+		const auto fit = [&](const std::string& name) { return nameRoom > 0 ? FitLine(font, name, nameRoom) : DisplayName(name); };
+		const auto fitAll = [&](const std::vector<std::string>& names) {
+			std::vector<std::string> fitted;
+			for (const std::string& name: names) fitted.push_back(fit(name));
+			return NamesInWords(fitted);
+		};
+		if (menuLobby) return "In the lobby";
+		if (hostLost) return snapshot.statusText.starts_with("Changing hosts") ? "Changing hosts - the match picks up in a moment" : "Host lost - contacting the next host...";
+		// The toast and the full-screen wait say the rest; the box's line never repeats theirs.
+		if (ownRejoin) return "Rejoining - catching up with the match";
+		if (resyncing) return "Match repair in progress";
+		if (placing) {
+			if (localUnplaced) return "Place your brain";
+			if (othersPlacing.empty()) return "All brains placed";
+			return "Waiting for " + fitAll(othersPlacing) + (othersPlacing.size() == 1 ? " to place their brain" : " to place their brains");
+		}
+		if (holdPause) return "Waiting for " + fit(holdName.empty() ? std::string("a player") : holdName) + " to return - " + std::to_string(holdSeconds) + " s left";
+		if (missingFrames) {
+			if (missingPeers.empty()) return "Waiting for the other players' connections";
+			return missingPeers.find(", ") == std::string::npos ? "Waiting for " + fit(missingPeers) + "'s connection" : "Waiting for the connections of " + fit(missingPeers);
+		}
+		if (paused) return countdown > 0 ? "Resuming in " + std::to_string((countdown + 59) / 60) + " s" : "Match paused - press P to resume";
+		if (!heldNames.empty()) return "The AI is playing for " + fitAll(heldNames);
+		if (!returningNames.empty()) return fitAll(returningNames) + (returningNames.size() == 1 ? " is joining the match" : " are joining the match");
+		if (!lostNames.empty()) return fitAll(lostNames) + " lost connection";
+		return "Everyone is connected";
+	};
+	// The lines under the headline: the wait so far, who else is placing, why a seat is held and how each player is connected.
+	const auto details = [&](int textWidth) {
+		std::vector<std::string> lines;
+		if (hostLost || (missingFrames && !paused)) lines.push_back("Waiting " + SecondsInWords(currentWaitMs));
+		if (placing) {
+			if (localUnplaced && !othersPlacing.empty()) lines.push_back(FitLine(font, "Also placing: " + NamesInWords(othersPlacing), textWidth));
+			lines.push_back(countOnly + " brains placed");
+		}
+		if (!resyncing && !placing && !hostLost) {
+			for (const std::string& cause: heldCauses) lines.push_back(FitLine(font, cause, textWidth));
+		}
+		if (!diagnostics && !hostLost && !menuLobby) {
+			for (const auto& member: snapshot.members) {
+				if (member.cpu || member.isLocal || member.connectedRoute.empty() || !member.connected || NetPlayerPresentation::Departed(member.peerId)) continue;
+				lines.push_back(FitLine(font, NetPlayerPresentation::Name(member), textWidth / 2) +
+				                (member.connectedRoute == "relay" ? ": connected through a relay" : ": direct connection"));
+			}
+		}
+		return lines;
+	};
 	// The box is laid out again only when an input it reads changes; otherwise the kept box and line are drawn as they were.
 	const auto layoutKey = [&](char mode, std::initializer_list<long long> geometry) {
 		char pace[32];
 		std::snprintf(pace, sizeof(pace), "%.1f", s_paceTps);
 		std::string key{mode};
 		for (const long long value: {static_cast<long long>(backbuffer->w), static_cast<long long>(backbuffer->h), static_cast<long long>(reinterpret_cast<intptr_t>(font)),
-		                             static_cast<long long>(m_Open), static_cast<long long>(g_SettingsMan.GetNetworkShowDiagnostics()), static_cast<long long>(menuLobby),
+		                             static_cast<long long>(m_Open), static_cast<long long>(diagnostics), static_cast<long long>(menuLobby),
 		                             static_cast<long long>(hostLost), static_cast<long long>(resyncing), static_cast<long long>(placing), static_cast<long long>(placed),
 		                             static_cast<long long>(seats), static_cast<long long>(holdPause), static_cast<long long>(holdSeconds), static_cast<long long>(missingFrames),
 		                             static_cast<long long>(paused), static_cast<long long>((countdown + 59) / 60), static_cast<long long>(waiting),
-		                             hostLost || missingFrames ? currentWaitMs : 0LL, static_cast<long long>(m_MatchDelayFrames), static_cast<long long>(m_BaseDelayFrames),
-		                             ping ? static_cast<long long>(*ping) : -1LL, static_cast<long long>(snapshot.isHost), static_cast<long long>(snapshot.hostPeerId)}) {
+		                             hostLost || missingFrames ? currentWaitMs / 100 : 0LL, static_cast<long long>(m_MatchDelayFrames), static_cast<long long>(m_BaseDelayFrames),
+		                             ping ? static_cast<long long>(*ping) : -1LL, static_cast<long long>(snapshot.isHost), static_cast<long long>(snapshot.hostPeerId),
+		                             static_cast<long long>(localUnplaced), static_cast<long long>(ownRejoin)}) {
 			key += ' ' + std::to_string(value);
 		}
 		for (const long long value: geometry) key += ' ' + std::to_string(value);
-		key += '|' + std::string(pace) + '|' + placementNames + '|' + holdName + '|' + snapshot.statusText + '|' + m_StatusProbeLine;
-		if (missingFrames) key += '|' + ScenarioRunner::GetLockstepMissingPeers();
+		key += '|' + std::string(pace) + '|' + placementNames + '|' + holdName + '|' + snapshot.statusText + '|' + m_StatusProbeLine + '|' + missingPeers;
+		for (const std::string& name: othersPlacing) key += '|' + name;
+		for (const std::string& cause: heldCauses) key += '|' + cause;
+		for (const std::string& name: heldNames) key += "|ai " + name;
 		for (const auto& member: snapshot.members) {
 			key += '|' + std::to_string(member.peerId) + ',' + member.displayName + ',' + std::to_string(member.team) + ',' + std::to_string(member.cpu) + ',' +
 			       std::to_string(member.isLocal) + ',' + std::to_string(member.ready) + ',' + std::to_string(member.connected) + ',' + std::to_string(member.pingMs) + ',' +
@@ -1260,33 +1373,12 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		const std::string pingText = !hostLost && ping ? std::to_string(*ping) : "--";
 		char tail[96];
 		std::snprintf(tail, sizeof(tail), " / delay %u / RTT %s ms / PACE %.1f tps", static_cast<unsigned>(m_MatchDelayFrames), pingText.c_str(), s_paceTps);
-		auto compose = [&](const std::string& metrics, bool shortenNames) {
-			std::string line = "NET [F6] / ";
-			if (menuLobby) {
-				// The lobby's status line is the lobby menu's own; the widget names the state only.
-				line += "LOBBY";
-			} else if (hostLost) {
-				line += "HOST LOST / CHOOSING A NEW HOST / " + std::to_string(currentWaitMs) + " ms";
-			} else if (resyncing) {
-				line += "RESYNCING MATCH";
-			} else if (placing) {
-				const std::string count = " / " + std::to_string(placed) + " of " + std::to_string(seats);
-				const int room = maxTextWidth - font->CalculateWidth(line + "WAITING FOR  TO PLACE" + count + metrics);
-				const std::string names = shortenNames ? FitLine(font, placementNames, room) : DisplayName(placementNames);
-				line += placementNames.empty() ? "ALL BRAINS PLACED" : "WAITING FOR " + names + " TO PLACE";
-				line += count;
-			} else if (holdPause) {
-				const std::string who = holdName.empty() ? "a player" : holdName;
-				const int room = maxTextWidth - font->CalculateWidth(line + "WAITING FOR  " + metrics) - font->CalculateWidth(" (999 s)");
-				line += "WAITING FOR " + (shortenNames ? FitLine(font, who, room) : DisplayName(who)) + " (" + std::to_string(holdSeconds) + " s)";
-			} else if (missingFrames) {
-				line += "WAITING FOR FRAMES";
-			} else if (paused) {
-				line += countdown > 0 ? "RESUMING IN " + std::to_string((countdown + 59) / 60) + " S" : "PAUSED / P RESUMES";
-			} else {
-				line += "LIVE";
-			}
-			return line + metrics;
+		auto compose = [&](bool withTail, bool withKey, bool shortenNames) {
+			const std::string count = placing ? " / " + countOnly : std::string();
+			const std::string key = withKey ? " / F6: Players" : std::string();
+			const std::string numbers = withTail && diagnostics ? std::string(tail) : std::string();
+			const int room = maxTextWidth - font->CalculateWidth(headline(1) + count + key + numbers) + font->CalculateWidth("...");
+			return headline(shortenNames ? std::max(24, room) : 0) + count + key + numbers;
 		};
 		// An open picker leaves a short screen 280 px, so the line gives way in this order: the whole line,
 		// then a shortening pass, then whatever remains. The count ends the line, so it outlives all of
@@ -1294,12 +1386,15 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		if (topBand) {
 			m_StripText = countOnly;
 		} else {
-			m_StripText = compose(tail, false);
+			m_StripText = compose(true, true, false);
 			if (font->CalculateWidth(m_StripText) > maxTextWidth) {
-				m_StripText = compose("", false);
+				m_StripText = compose(false, true, false);
 			}
 			if (font->CalculateWidth(m_StripText) > maxTextWidth) {
-				m_StripText = compose("", true);
+				m_StripText = compose(false, false, false);
+			}
+			if (font->CalculateWidth(m_StripText) > maxTextWidth) {
+				m_StripText = compose(false, false, true);
 			}
 			if (placing && font->CalculateWidth(m_StripText) > maxTextWidth) {
 				m_StripText = font->CalculateWidth(countOnly) <= maxTextWidth ? countOnly : m_StripText;
@@ -1353,19 +1448,22 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	m_NetStatusBox->SetVisible(true);
 	m_NetStatus->SetFont(font);
 	const auto compose = [&](int textWidth) {
-		std::string composed = std::string("NET STATUS  /  SEATS [F6]\n") + metrics;
-		if (m_MatchDelayFrames != m_BaseDelayFrames) {
-			composed += " (base " + std::to_string(m_BaseDelayFrames) + ")";
-		}
-		for (const auto& member: snapshot.members) {
-			if (member.cpu || member.isLocal || member.connectedRoute.empty()) continue;
-			composed += "\n" + FitLine(font, NetPlayerPresentation::Name(member), textWidth) + " / via " + member.connectedRoute;
-		}
-		composed += "\nRTT " + (!hostLost && ping ? std::to_string(*ping) : "--") + " ms / " + (hostLost ? "host lost" : snapshot.isHost ? "max peer" : "host link");
-		std::snprintf(metrics, sizeof(metrics), "\nPACE %.1f tps", s_paceTps);
-		composed += metrics;
-		// The slow-machine notice has one surface, the toast band; this panel keeps the pace numbers.
-		if (g_SettingsMan.GetNetworkShowDiagnostics()) {
+		std::string composed = headline(0);
+		for (const std::string& line: details(textWidth)) composed += "\n" + line;
+		composed += "\nF6: Players";
+		if (diagnostics) {
+			composed += "\n" + std::string(metrics);
+			if (m_MatchDelayFrames != m_BaseDelayFrames) {
+				composed += " (base " + std::to_string(m_BaseDelayFrames) + ")";
+			}
+			for (const auto& member: snapshot.members) {
+				if (member.cpu || member.isLocal || member.connectedRoute.empty()) continue;
+				composed += "\n" + FitLine(font, NetPlayerPresentation::Name(member), textWidth) + " / via " + member.connectedRoute;
+			}
+			composed += "\nRTT " + (!hostLost && ping ? std::to_string(*ping) : "--") + " ms / " + (hostLost ? "host lost" : snapshot.isHost ? "max peer" : "host link");
+			char pace[32];
+			std::snprintf(pace, sizeof(pace), "\nPACE %.1f tps", s_paceTps);
+			composed += pace;
 			for (const auto& member: snapshot.members) {
 				if (member.cpu) continue;
 				composed += "\nP" + std::to_string(member.peerId) + ": Ping " + ((hostLost && member.peerId == snapshot.hostPeerId) || member.pingMs == 0 ? "--" : std::to_string(member.pingMs)) + " ms / delay " + std::to_string(member.inputDelayFrames) + " frames";
@@ -1373,27 +1471,6 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 				composed += "\nP" + std::to_string(member.peerId) + " waits " + std::to_string(member.waits) + " / longest " + std::to_string(member.longestWaitMs) + " ms";
 				if (member.reclaiming || member.aiHeld || !member.connected) composed += " / " + NetPlayerPresentation::State(member);
 			}
-		}
-		if (hostLost) {
-			composed += "\nHost connection lost - choosing a new host...\nCurrent wait " + std::to_string(currentWaitMs) + " ms";
-		} else if (resyncing) {
-			composed += "\nRESYNCING MATCH";
-		} else if (placing) {
-			const int room = textWidth - font->CalculateWidth("Waiting for  to place their brains");
-			composed += placementNames.empty() ? "\nAll brains placed" : "\nWaiting for " + FitLine(font, placementNames, room) + " to place their brains";
-			composed += "\n" + std::to_string(placed) + " of " + std::to_string(seats) + " placed";
-		} else if (holdPause) {
-			const int room = textWidth - font->CalculateWidth("Waiting for  to reconnect");
-			composed += "\nWaiting for " + FitLine(font, holdName.empty() ? "a player" : holdName, room) + " to reconnect\n" + std::to_string(holdSeconds) + " s left";
-		} else if (missingFrames) {
-			composed += "\nWAITING FOR FRAMES\n" + FitLine(font, ScenarioRunner::GetLockstepMissingPeers(), textWidth);
-			composed += "\nCurrent wait " + std::to_string(currentWaitMs) + " ms";
-		} else if (paused) {
-			composed += countdown > 0 ? "\nResuming in " + std::to_string((countdown + 59) / 60) + " s" : "\nPAUSED / P to resume";
-		} else if (menuLobby) {
-			composed += "\nLOBBY";
-		} else {
-			composed += "\nLIVE";
 		}
 		if (!m_StatusProbeLine.empty()) composed += "\n" + m_StatusProbeLine;
 		return composed;
