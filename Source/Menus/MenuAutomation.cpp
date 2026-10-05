@@ -1336,6 +1336,18 @@ namespace RTE::MenuAutomation {
 		return "summary RTT " + std::to_string(shown) + " ms against " + std::to_string(expected) + " ms listed";
 	}
 
+	/// Whether a text box's line is as tall as the box shows, under the box's top margin.
+	bool LineFits(GUIControlManager* manager, GUIControl* control, const std::string& text, std::string& observation) {
+		std::string fontName;
+		GUIFont* font = manager->GetSkin()->GetValue("TextBox", "Font", &fontName) ? manager->GetSkin()->GetFont(fontName) : nullptr;
+		if (!font) return false;
+		int top = 0;
+		manager->GetSkin()->GetValue("TextBox", "HeightMargin", &top);
+		const int height = font->CalculateHeight(text), available = Rectangle(control->GetPanel())[3] - top;
+		observation += " line_height=" + std::to_string(height) + " available_height=" + std::to_string(available);
+		return height <= available;
+	}
+
 	/// Where a label's text lands: its alignment places it inside a rect that may be larger.
 	Rect LabelTextRect(GUILabel* label, Rect rect) {
 		const int width = std::min(label->GetTextWidth(), rect[2]), height = label->GetTextHeight();
@@ -1424,7 +1436,8 @@ namespace RTE::MenuAutomation {
 				// A label that scrolls its overflow shows the whole text by design; only its placement is judged.
 				auto* label = dynamic_cast<GUILabel*>(control);
 				const bool scrolls = label && (label->GetHorizontalOverflowScroll() || label->GetVerticalOverflowScroll());
-				const bool fits = scrolls || TextFits(manager, control, fit);
+				// A text box scrolls its one line sideways under the caret, so only the line's height is judged against it.
+				const bool fits = scrolls || (dynamic_cast<GUITextBox*>(control) ? LineFits(manager, control, text, fit) : TextFits(manager, control, fit));
 				if (label) rect = LabelTextRect(label, rect);
 				GUIPanel* parent = control->GetPanel()->GetParentPanel();
 				const bool inParent = !parent || Inside(rect, Rectangle(parent));
