@@ -27,7 +27,7 @@
       "what": "The host opens ClientA's seat dialog and presses Kick.",
       "events": [
         "assert_label LabelHostSeatDlgName.*ClientA.*PASS",
-        "activate ButtonHostSeatDlgKick ok=1"
+        "activate ButtonHostSeatDlgKick .*PASS"
       ],
       "run": "kick-ban"
     },
@@ -62,7 +62,7 @@
       "what": "The host opens ClientB's seat dialog and presses Ban.",
       "events": [
         "assert_label LabelHostSeatDlgName.*ClientB.*PASS",
-        "activate ButtonHostSeatDlgBan ok=1"
+        "activate ButtonHostSeatDlgBan .*PASS"
       ],
       "run": "kick-ban"
     },
@@ -96,8 +96,8 @@
       "screen": "MultiplayerScreen",
       "what": "ClientB uses Join Game again with the same process identity and host address.",
       "events": [
-        "activate ButtonMultiplayerJoinGame ok=1",
-        "activate ButtonMultiplayerConnect ok=1"
+        "activate ButtonMultiplayerJoinGame .*PASS",
+        "activate ButtonMultiplayerConnect .*PASS"
       ],
       "run": "kick-ban"
     },

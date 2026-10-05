@@ -108,7 +108,7 @@
       "what": "The host opens the Network options page.",
       "assert": "recorded menu/probe assertions in this marked interval",
       "events": [
-        "assert_visible CollectionBoxHostPageNetwork 1 actual=1 PASS"
+        "assert_visible CollectionBoxHostPageConnection 1 actual=1 PASS"
       ]
     },
     {
@@ -176,7 +176,7 @@
       "assert": "recorded menu/probe assertions in this marked interval",
       "events": [
         "assert_enabled ButtonMultiplayerStart expected=1 actual=1 PASS",
-        "activate ButtonMultiplayerStart ok=1"
+        "activate ButtonMultiplayerStart .*PASS"
       ]
     },
     {

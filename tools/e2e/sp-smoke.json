@@ -260,8 +260,8 @@
       "assert": "activate P1T1Box; activate P2T2Box; assert_visible ButtonStartGame 1",
       "run": "skirmish",
       "events": [
-        "activate P1T1Box ok=1",
-        "activate P2T2Box ok=1",
+        "activate P1T1Box .*PASS",
+        "activate P2T2Box .*PASS",
         "assert_visible ButtonStartGame 1 actual=1 PASS"
       ]
     },
@@ -274,7 +274,7 @@
       "assert": "activate ButtonStartGame; scripted input; visual motion review",
       "run": "skirmish",
       "events": [
-        "activate ButtonStartGame ok=1"
+        "activate ButtonStartGame .*PASS"
       ]
     },
     {

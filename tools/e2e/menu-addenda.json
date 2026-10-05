@@ -60,8 +60,8 @@
       "what": "The host panel shows the corrected labels and geometry.",
       "assert": "Recorded control readbacks and first-frame screenshots.",
       "log_regex": [
-        "\\[menu-script\\] assert_no_overlap CheckHostPortMap ButtonHostOptions .* PASS",
-        "\\[menu-script\\] assert_text_fits CheckHostPortMap .* PASS",
+        "\\[menu-script\\] assert_no_overlap ButtonHostOptions ButtonMultiplayerCreate .* PASS",
+        "\\[menu-script\\] assert_text_fits LabelHostActivityAbout .* PASS",
         "\\[menu-script\\] assert_label ComboHostActivity .*Skirmish Defense.* PASS"
       ]
     },
@@ -73,8 +73,7 @@
       "what": "The lobby panel shows the corrected labels and geometry.",
       "assert": "Recorded control readbacks and first-frame screenshots.",
       "events": [
-        "(?s)^assert_label LabelMultiplayerStatus .*Waiting for 2 players.* PASS",
-        "(?s)^assert_label LabelMultiplayerStatus .*LAN address:.* PASS",
+        "(?s)^assert_label LabelMultiplayerStatus .*Waiting for 2 more players.* PASS",
         "^assert_text_fits LabelHostSeatHeader .* PASS"
       ]
     },
@@ -229,8 +228,8 @@
       "what": "The host panel shows the corrected labels and geometry.",
       "assert": "Recorded control readbacks and first-frame screenshots.",
       "log_regex": [
-        "\\[menu-script\\] assert_no_overlap CheckHostPortMap ButtonHostOptions .* PASS",
-        "\\[menu-script\\] assert_text_fits CheckHostPortMap .* PASS",
+        "\\[menu-script\\] assert_no_overlap ButtonHostOptions ButtonMultiplayerCreate .* PASS",
+        "\\[menu-script\\] assert_text_fits LabelHostActivityAbout .* PASS",
         "\\[menu-script\\] assert_label ComboHostActivity .*Skirmish Defense.* PASS"
       ]
     },
@@ -242,8 +241,7 @@
       "what": "The lobby panel shows the corrected labels and geometry.",
       "assert": "Recorded control readbacks and first-frame screenshots.",
       "events": [
-        "(?s)^assert_label LabelMultiplayerStatus .*Waiting for 2 players.* PASS",
-        "(?s)^assert_label LabelMultiplayerStatus .*LAN address:.* PASS",
+        "(?s)^assert_label LabelMultiplayerStatus .*Waiting for 2 more players.* PASS",
         "^assert_text_fits LabelHostSeatHeader .* PASS"
       ]
     },
@@ -398,8 +396,8 @@
       "what": "The host panel shows the corrected labels and geometry.",
       "assert": "Recorded control readbacks and first-frame screenshots.",
       "log_regex": [
-        "\\[menu-script\\] assert_no_overlap CheckHostPortMap ButtonHostOptions .* PASS",
-        "\\[menu-script\\] assert_text_fits CheckHostPortMap .* PASS",
+        "\\[menu-script\\] assert_no_overlap ButtonHostOptions ButtonMultiplayerCreate .* PASS",
+        "\\[menu-script\\] assert_text_fits LabelHostActivityAbout .* PASS",
         "\\[menu-script\\] assert_label ComboHostActivity .*Skirmish Defense.* PASS"
       ]
     },
@@ -411,8 +409,7 @@
       "what": "The lobby panel shows the corrected labels and geometry.",
       "assert": "Recorded control readbacks and first-frame screenshots.",
       "events": [
-        "(?s)^assert_label LabelMultiplayerStatus .*Waiting for 2 players.* PASS",
-        "(?s)^assert_label LabelMultiplayerStatus .*LAN address:.* PASS",
+        "(?s)^assert_label LabelMultiplayerStatus .*Waiting for 2 more players.* PASS",
         "^assert_text_fits LabelHostSeatHeader .* PASS"
       ]
     },

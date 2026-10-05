@@ -13,9 +13,10 @@ activate ButtonJoinAddressGo
 wait_state Failed
 wait_ms 495
 video_mark version-client-refusal
-assert_substate Landing
-assert_net_label LabelMultiplayerLandingStatus Your build differs from the host's (host stage2-p2d-local; yours fixture-other-build).
-assert_enabled ButtonMultiplayerJoinGame 1
+assert_substate JoinSetup
+assert_label LabelJoinSelected Your build differs from the host's (host stage2-p2d-local; yours fixture-other-build).
+assert_text_fits LabelJoinSelected
+assert_enabled ButtonJoinByAddress 1
 dump_lobby
 wait_ms 990
 goto_main

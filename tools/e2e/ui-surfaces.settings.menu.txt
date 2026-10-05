@@ -6,13 +6,13 @@ wait_ms 500
 video_mark ui-player-settings
 select_settings_page Network:Basics
 wait 3
+set_text TextNetworkDisplayName VideoScout
+wait_ms 500
+assert_label TextNetworkDisplayName VideoScout
 activate ButtonNetworkAdvanced
 wait 4
 select_settings_page Network:Player
 wait_ms 600
-set_text TextNetworkDisplayName VideoScout
-wait_ms 500
-assert_label TextNetworkDisplayName VideoScout
 post_command RadioNetworkDelayFixed
 wait_ms 500
 assert_visible TextNetworkFixedDelay 1
