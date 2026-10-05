@@ -22224,6 +22224,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		// One tick of this machine; the sender's next input lands in it unless the link is silent.
 		const auto play = [&](NetLockstepCoordinator& host, Feed& feed, bool delivered) {
 			host.m_LastDeliveredFrame = feed.sim - 1;
+			host.m_Stats.nextFrame = feed.sim;
 			if (delivered) {
 				NetLockstepFrame frame;
 				frame.senderPeerId = 2; frame.targetFrame = feed.target++;
@@ -22273,6 +22274,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			NetLockstepFrame frame;
 			frame.senderPeerId = 2; frame.targetFrame = pausedFeed.target++;
 			paused.m_LastDeliveredFrame = pausedFeed.sim - 1;
+			paused.m_Stats.nextFrame = pausedFeed.sim;
 			paused.AcceptRemoteTick(frame, pauseEnd, false);
 		}
 		pausedFeed.sim += 9; pausedFeed.k += 10;
