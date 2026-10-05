@@ -980,8 +980,11 @@ void NetModerationGUI::PressArmed(const PanelRow& row, Armed::Kind kind) {
 }
 
 void NetModerationGUI::HandleEvents() {
-	GUIEvent event;
-	while (m_Controls->GetEvent(&event)) {
+	// The manager hands its events out newest first; read them as they happened, so a release's command comes before its unpush.
+	std::vector<GUIEvent> events;
+	for (GUIEvent event; m_Controls->GetEvent(&event);) events.push_back(event);
+	for (auto it = events.rbegin(); it != events.rend(); ++it) {
+		GUIEvent& event = *it;
 		const auto* control = event.GetControl();
 		if (event.GetType() == GUIEvent::Command && control == m_Close) { SetOpen(false); continue; }
 		if (event.GetType() == GUIEvent::Command && control == m_OptionsToggle) { m_OptionsView = !m_OptionsView; continue; }
