@@ -204,6 +204,31 @@ def registrant(address: str) -> dict:
     return judge_registrant(address, record)
 
 
+def registrants_of(addresses: list[str], lookup=None, attempts: int = 3, pause_s: float = 2.0) -> list[dict]:
+    """Each address's registry record. An address inside a block an earlier lookup of this run resolved reads that block's
+    record (the registry answers the same for the whole block); a lookup the network cut is asked again."""
+    lookup = lookup or registrant
+    records = []
+    for address in addresses:
+        try:
+            ip = ipaddress.ip_address(address)
+            known = next((row for row in records if row.get('start') and row.get('end') and
+                          ipaddress.ip_address(row['start']) <= ip <= ipaddress.ip_address(row['end'])), None)
+        except ValueError:
+            known = None
+        if known is not None:
+            records.append(dict(known, address=address, within=known['address']))
+            continue
+        for attempt in range(attempts):
+            row = lookup(address)
+            if 'error' not in row:
+                break
+            if attempt + 1 < attempts:
+                time.sleep(pause_s)
+        records.append(row)
+    return records
+
+
 def judge_registrant(address: str, record: dict) -> dict:
     def entities(items):
         for entity in items or []:
@@ -1886,7 +1911,7 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
 
     def registrants():
         addresses = sorted({address for entry in relay['peers'].values() for address in entry.get('relay_addresses') or []})
-        registry.extend(registrant(address) for address in addresses)
+        registry.extend(registrants_of(addresses))
         return bool(registry) and all(row.get('cloudflare') for row in registry)
 
     def peer_check(key):
@@ -2241,11 +2266,11 @@ def forget_menu(menu: Path, log: Path, run, budget_s: float = 90) -> None:
 
 
 def evidence_list(root: Path, out: Path) -> int:
-    """The small files a run keeps (after its sweep): 8 MiB each at most; the sweep itself read everything."""
+    """The small files a run keeps (after its sweep): 8 MiB each at most, a long row's hash files 64 MiB; the sweep read everything."""
     from relay_secrets import walk
     files = [path.relative_to(root).as_posix() for path, reason in walk(root) if reason is None
              and not path.name.lower().endswith(('.exe', '.dll', '.pdb', '.png', '.mp4', '.tar'))
-             and path.stat().st_size <= (64 << 20 if path.name.endswith('-live.jsonl') else 8 << 20)
+             and path.stat().st_size <= (64 << 20 if path.name.endswith(('-live.jsonl', '_trace.json')) else 8 << 20)
              and 'Data' not in path.relative_to(root).parts[:-1]]
     out.write_text('\n'.join(files) + '\n', encoding='utf-8')
     print(json.dumps(dict(files=len(files))))

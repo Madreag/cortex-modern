@@ -420,6 +420,24 @@ class HotspotRows(unittest.TestCase):
         verdict = self.match().judge_relay(dict(closed, host_lost=True))
         self.assertTrue(verdict['passed'], verdict['reasons'])
 
+    def test_e_a_cut_registry_lookup_is_asked_again_or_read_from_its_block(self):
+        """2026-10-04 9:37 PM row e: two relay addresses inside a block the run had resolved met 'connection forcibly closed'."""
+        calls = []
+        block = dict(handle='NET-104-16-0-0-1', name='CLOUDFLARENET', start='104.16.0.0', end='104.31.255.255',
+                     registrants=['Cloudflare, Inc.'], inside=True, cloudflare=True)
+
+        def lookup(address):
+            calls.append(address)
+            if address == '104.30.146.20' or calls.count(address) > 1:
+                return dict(block, address=address) if address.startswith('104.') else dict(address=address, start='198.51.100.0',
+                                                                                            end='198.51.100.255', cloudflare=False)
+            return dict(address=address, cloudflare=False, error='URLError: [WinError 10054] forcibly closed')
+        rows = self.match().registrants_of(['104.30.146.20', '104.30.150.12', '198.51.100.7'], lookup=lookup, pause_s=0)
+        self.assertEqual([row['cloudflare'] for row in rows], [True, True, False])
+        self.assertEqual(rows[1]['within'], '104.30.146.20')
+        self.assertEqual(calls, ['104.30.146.20', '198.51.100.7', '198.51.100.7'])
+        self.assertNotIn('error', rows[2])
+
     def test_e_a_killed_host_s_summary_is_its_successor_s(self):
         """2026-10-04 8:02 PM row e: the killed host writes no report; the seats are read from the successor's summary."""
         writers = self.match().summary_writers
