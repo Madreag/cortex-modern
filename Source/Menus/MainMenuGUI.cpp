@@ -2537,7 +2537,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 			ping += ping.empty() ? "" : ", ";
 			ping += m.displayName + " " + std::to_string(m.pingMs) + "ms";
 		}
-		m_HostNetPingLabel->SetText(ping.empty() ? "No peer ping yet" : ping);
+		m_HostNetPingLabel->SetText(ping.empty() ? "No ping measured yet" : ping);
 	}
 	// H34: the adopted config's own words for the host row - mode, capacity and seated humans.
 	if (m_HostNetModeLabel) {
@@ -3363,7 +3363,7 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 	}
 	const NetMatchPlayerSlot& slot = m_HostOptionsDraft.players[m_HostOptionsSeatRow];
 	m_HostSeatDlgName->SetText("Name: " + slot.displayName);
-	m_HostSeatDlgSeat->SetText(slot.peerId == 0 ? "Seat: peerless" : ("Seat: peer " + std::to_string(slot.peerId)));
+	m_HostSeatDlgSeat->SetText("Seat " + std::to_string(m_HostOptionsSeatRow + 1));
 	m_HostSeatDlgTeam->SetText("Team: Team " + std::to_string(slot.team + 1));
 	m_HostSeatDlgState->SetText(slot.cpu ? "Kind: CPU player" : "Kind: human seat");
 	const NetMatchTeamRules& rules = m_HostOptionsDraft.teamRules[slot.team < 4 ? slot.team : 0];
