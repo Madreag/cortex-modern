@@ -3096,7 +3096,7 @@ namespace RTE {
 				return Fail("a connected UX asked for a reconnect attempt");
 			}
 			ux.NoteDropped(nowMs, "connection closed by peer");
-			if (!ux.IsActive() || ux.GetStatusText().find("Reconnecting") == std::string::npos ||
+			if (!ux.IsActive() || ux.GetStatusText().find("Rejoining") == std::string::npos ||
 			    ux.GetStatusText().find("connection closed by peer") == std::string::npos) {
 				return Fail("the drop did not produce a persistent reason-carrying status");
 			}
@@ -3152,7 +3152,7 @@ namespace RTE {
 			ux.RequestManualRetry(nowMs);
 			ux.NoteAttemptStarted(nowMs);
 			ux.NoteReconnected(nowMs);
-			if (ux.GetState() != NetReconnectUxState::Reconnected || ux.IsActive() || ux.GetStatusText() != "Reconnected.") {
+			if (ux.GetState() != NetReconnectUxState::Reconnected || ux.IsActive() || ux.GetStatusText() != "Back in the match.") {
 				return Fail("a successful reconnect did not settle the banner");
 			}
 

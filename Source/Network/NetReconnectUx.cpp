@@ -170,8 +170,8 @@ namespace RTE {
 	std::string NetReconnectUx::GetOfferText() const {
 		switch (m_Offer) {
 			case NetReconnectOffer::Available: return "Rejoin your match at " + m_OfferAddress + "?";
-			case NetReconnectOffer::Corrupt: return "The saved reconnect ticket is damaged and cannot be used.";
-			case NetReconnectOffer::Stale: return "The saved reconnect ticket is too old to use.";
+			case NetReconnectOffer::Corrupt: return "The saved rejoin information is damaged and cannot be used.";
+			case NetReconnectOffer::Stale: return "The saved rejoin information is too old to use.";
 			case NetReconnectOffer::Missing: return "No reconnect record for that match.";
 			case NetReconnectOffer::None: break;
 		}
@@ -183,11 +183,11 @@ namespace RTE {
 		switch (m_State) {
 			case NetReconnectUxState::Waiting:
 			case NetReconnectUxState::Retrying:
-				return "Reconnecting... attempt " + std::to_string(m_Attempts == 0 ? 1U : m_Attempts) + " of " +
+				return "Rejoining the match... attempt " + std::to_string(m_Attempts == 0 ? 1U : m_Attempts) + " of " +
 				       std::to_string(c_MaxAttempts) + tail;
-			case NetReconnectUxState::Reconnected: return "Reconnected.";
-			case NetReconnectUxState::GaveUp: return "Could not reconnect" + tail + ". Retry to try again.";
-			case NetReconnectUxState::Cancelled: return "Reconnecting cancelled. Retry to try again.";
+			case NetReconnectUxState::Reconnected: return "Back in the match.";
+			case NetReconnectUxState::GaveUp: return "Could not rejoin" + tail + ". Retry to try again.";
+			case NetReconnectUxState::Cancelled: return "Stopped rejoining. Retry to try again.";
 			case NetReconnectUxState::Refused: return m_Reason;
 			case NetReconnectUxState::Connected:
 			case NetReconnectUxState::Idle: break;

@@ -4802,11 +4802,14 @@ static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, con
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
 	const int centerX = g_WindowMan.GetResX() / 2;
 	const int centerY = g_WindowMan.GetResY() / 2;
-	const std::string resyncTitle = heldRejoin ? (heldLine.empty() ? std::string("Held - AI in control - rejoining...") : heldLine) : std::string("Resyncing the match...");
+	const std::string resyncTitle = heldRejoin ? (heldLine.empty() ? std::string("Rejoining the match...") : heldLine) : std::string("Restoring the shared match state...");
 	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, resyncTitle, GUIFont::Centre);
 	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncTitle);
-	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8,
-	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]" + (heldRejoin ? "  /  Leave [Esc] - your seat is kept" : ""), GUIFont::Centre);
+	// A held player's units are the AI's until the player is back; a repair pauses every player at once.
+	const std::string resyncLine = heldRejoin ? "The AI plays your units until you are back  /  " + std::to_string(elapsedSeconds) + " s  /  F6: Players  /  Esc: leave - your seat stays yours"
+	                                          : "Every player waits while the match is reloaded  /  " + std::to_string(elapsedSeconds) + " s  /  F6: Players";
+	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8, resyncLine, GUIFont::Centre);
+	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncLine);
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts(resyncTitle);
 	ScenarioRunner::NoteResyncOverlayFrame();
