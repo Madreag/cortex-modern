@@ -2936,6 +2936,8 @@ def main():
                     options.remote_capture.directory_tunnel(directory_port)
                 options.service_tokens = tokens
                 captured = run_one(options, scenario, run, index, out)
+                # Each run is reviewed on its own: it names the tree a check reads the session protocol from.
+                captured["repo"] = capture["repo"]
                 captured["services"] = {key: str(value) for key, value in tokens.items()}
             if options.relay_book is not None:
                 from acceptance_relay_policy import sweep_retained
