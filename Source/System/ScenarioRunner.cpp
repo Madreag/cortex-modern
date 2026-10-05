@@ -1560,6 +1560,10 @@ namespace RTE {
 				    hold && std::find(outFrame.aiHeldPeerIds.begin(), outFrame.aiHeldPeerIds.end(), hold->peerId) == outFrame.aiHeldPeerIds.end()) {
 					outFrame.aiHeldPeerIds.push_back(hold->peerId);
 				}
+				if (const auto* release = std::get_if<NetGameSeatRelease>(&command.payload);
+				    release && std::find(outFrame.releasedPeerIds.begin(), outFrame.releasedPeerIds.end(), release->peerId) == outFrame.releasedPeerIds.end()) {
+					outFrame.releasedPeerIds.push_back(release->peerId);
+				}
 			}
 		}
 		// A replayed tick is committed state like any other: the reclaim gap the survivors fenced is
@@ -1768,7 +1772,7 @@ namespace RTE {
 				// Admission can observe the drop after this frame has released its control handoffs.
 				NoteE2eOwnerTransfer(it->first);
 				const auto claim = s_LockstepDroppedControlOverrides.find(it->first);
-				if (claim != s_LockstepDroppedControlOverrides.end() && s_LockstepCoordinator->HasHeldAISeat(claim->second)) {
+				if (claim != s_LockstepDroppedControlOverrides.end() && s_LockstepCoordinator->IsSeatUnderAI(claim->second, frame)) {
 					it->second = s_LockstepCoordinator->GetHostPeerId();
 					++it;
 				} else {
@@ -1799,7 +1803,7 @@ namespace RTE {
 		std::erase_if(s_LockstepDroppedControlOverrides, [ownerPeerId](const auto& claim) { return claim.second == ownerPeerId; });
 	}
 
-	bool ScenarioRunner::TakeExpiredDroppedClaim(int64_t actorUniqueID, uint64_t frame) {
+	bool ScenarioRunner::TakeExpiredDroppedClaim(int64_t actorUniqueID, uint64_t frame, const std::vector<uint8_t>& releasedSeats) {
 		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {
 			return false;
@@ -1809,11 +1813,18 @@ namespace RTE {
 			return false;
 		}
 		const uint8_t claimant = it->second;
-		if (!s_LockstepCoordinator->IsPeerGoneAtFrame(claimant, frame) || s_LockstepCoordinator->IsSeatHeldForReclaim(claimant)) {
+		// A claim ends on a committed fact every peer reads at the same frame: the seat's release landing here, or the seat gone and not held for its player.
+		const bool released = std::find(releasedSeats.begin(), releasedSeats.end(), claimant) != releasedSeats.end();
+		if (!released && (!s_LockstepCoordinator->IsPeerGoneAtFrame(claimant, frame) || s_LockstepCoordinator->IsSeatReclaimableAt(claimant, frame))) {
 			return false;
 		}
 		s_LockstepDroppedControlOverrides.erase(it);
 		return true;
+	}
+
+	void ScenarioRunner::EndReleasedSeatClaims(uint8_t peerId) {
+		NetLockstepPlaneGuard plane;
+		std::erase_if(s_LockstepDroppedControlOverrides, [peerId](const auto& claim) { return claim.second == peerId; });
 	}
 
 	bool ScenarioRunner::IsLockstepTeamCommandSender(int team, uint8_t senderPeerId, uint64_t atFrame) {

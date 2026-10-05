@@ -451,6 +451,8 @@ namespace RTE {
 		bool m_HostOptionsSetupDraft = false;           //!< True while the draft feeds a new lobby's request.
 		bool m_HostOptionsReadOnly = false;             //!< A client reads the adopted config; it cannot edit it.
 		std::optional<NetMatchConfig> m_HostSetupOptions; //!< The setup draft Apply accepted; the next request carries it.
+		unsigned m_HostRulesTouched = 0;        //!< The activity-seeded rules the host set himself in this draft (NetActivitySetup::SeededRule bits).
+		unsigned m_HostAppliedRulesTouched = 0; //!< The same for the last draft Apply accepted, which the next open continues from.
 		uint64_t m_HostOptionsAwaitedRevision = 0;        //!< The revision a live Apply waits on the adopted config to reach.
 		uint64_t m_HostLastSaveScanMs = 0;                //!< H28's throttle: when the autosave directory was last re-read.
 		std::string m_HostLastSaveText;                   //!< Its latest .ccsave observation, or empty for none.
@@ -630,6 +632,10 @@ namespace RTE {
 		void RefreshHostOptionsControls(const NetLobbySnapshot& snapshot);
 		/// Reads every editable control back into the draft (Apply, and before roster re-derivation).
 		void DraftHostOptionsFromControls();
+		/// Keeps the activity-seeded rules on the activity's own defaults after a draft read: a new activity re-seeds
+		/// them and a new difficulty re-seeds the gold, except a rule the host set himself.
+		/// @param before The draft's rules before the read. @param guiEventControl The control the read answered.
+		void FollowHostActivityDefaults(const NetMatchStandardRules& before, const GUIControl* guiEventControl);
 		/// Rebuilds the draft's roster after a capacity/mode change, keeping the edited rules.
 		void RederiveHostOptionsRoster();
 		/// The request the host-setup fields would send today, so the setup draft seeds the same config.

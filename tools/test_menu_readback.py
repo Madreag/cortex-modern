@@ -21,7 +21,7 @@ from test_telemetry_bundle import set_visual_resolution
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "pause-save", "save-hotkey", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
-         "lobby-name", "net-options", "net-activity", "net-host-left", "net-host-left-early", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "host-by-hand", "oracles")
+         "lobby-name", "net-options", "net-activity", "net-host-left", "net-host-left-early", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "host-by-hand", "host-follows-activity", "oracles")
 PAIRED_CASES = ("pause", "pause-save", "save-hotkey", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
@@ -779,9 +779,11 @@ def scripts(case, port, root, size="960x540"):
                 "assert_substate HostOptions\nactivate TabHostPageSeats\nwait 3\n"
                 + hand_pick("ComboHostSeatPlayers", "3") + hand_pick("ComboHostSeatPlayers", "4")
                 + "activate TabHostPageRules\nwait 3\n"
+                # The draft starts from the activity's own rules: Skirmish Defense names no gold (2,000) and fog of war on.
+                + "assert_label LabelHostRulesGoldValue 2000 oz\nassert_checked CheckHostRulesFog 1\n"
                 + hand_pick("ComboHostRulesMode", "Co-op PvE")
-                + hand_click("CheckHostRulesFog") + "assert_checked CheckHostRulesFog 1\n"
                 + hand_click("CheckHostRulesFog") + "assert_checked CheckHostRulesFog 0\n"
+                + hand_click("CheckHostRulesFog") + "assert_checked CheckHostRulesFog 1\n"
                 + hand_click("CheckHostRulesDeploy") + "assert_checked CheckHostRulesDeploy 1\n"
                 + "slider_set SliderHostRulesDifficulty 80\nwait 4\nassert_label LabelHostRulesDifficultyValue 80\n"
                 + "slider_set SliderHostRulesGold 5000\nwait 4\nassert_label LabelHostRulesGoldValue 5000 oz\n"
@@ -797,6 +799,24 @@ def scripts(case, port, root, size="960x540"):
                 + hand_pick("ComboHostRecReturnWindow", "10 minutes")
                 + "activate TabHostPageSession\nwait 3\n"
                 + hand_pick("ComboHostSessIdle", "20 minutes"))
+        return {"host": text + "exit\n"}, {}
+    if case == "host-follows-activity":
+        # The host's rules start from the activity and follow it, as the Scenario screen's do: a new activity brings its
+        # own gold, fog of war, clear path and deployment, a new difficulty its gold band, and a rule the host set himself stays.
+        text = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\nactivate ButtonHostOptions\nwait_ms 400\n"
+                "assert_substate HostOptions\nactivate TabHostPageRules\nwait 3\n"
+                # Wave Defense: 4,000 in its medium band, fog of war, clear path and deployment on.
+                + hand_pick("ComboHostRulesActivity", "Wave Defense - Base.rte") + "wait 3\n"
+                "assert_label LabelHostRulesGoldValue 4000 oz\nassert_checked CheckHostRulesFog 1\n"
+                "assert_checked CheckHostRulesClearPath 1\nassert_checked CheckHostRulesDeploy 1\n"
+                + "slider_set SliderHostRulesDifficulty 80\nwait 4\nassert_label LabelHostRulesGoldValue 3000 oz\n"
+                + "slider_set SliderHostRulesGold 5000\nwait 4\nassert_label LabelHostRulesGoldValue 5000 oz\n"
+                + hand_click("CheckHostRulesFog") + "assert_checked CheckHostRulesFog 0\n"
+                # Skirmish Defense names no gold and no deployment; the gold and the fog of war are the host's now.
+                + hand_pick("ComboHostRulesActivity", "Skirmish Defense - Base.rte") + "wait 3\n"
+                "assert_label LabelHostRulesGoldValue 5000 oz\nassert_checked CheckHostRulesFog 0\n"
+                "assert_checked CheckHostRulesClearPath 1\nassert_checked CheckHostRulesDeploy 0\n"
+                + "slider_set SliderHostRulesDifficulty 20\nwait 4\nassert_label LabelHostRulesGoldValue 5000 oz\n")
         return {"host": text + "exit\n"}, {}
     if case == "prehost-visibility":
         text = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\n"

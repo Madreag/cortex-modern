@@ -892,6 +892,14 @@ def check_ffmpeg_lookup(results, scratch):
                   f"needs 5 engines at once on {driver.box_name()}; its declared cap is 1 (box manifest memory.max_engines)" in refused[0]["reason"],
                   str(refused))
         ok &= row(results, "engine-cap/admits-a-scene-that-fits", driver.engine_cap_findings(driver.load_scenario("sp-smoke")) == [])
+        # A ruling for one scene seats it past the cap; another scene keeps the cap, and a ruling below the need refuses it.
+        (inventory / "boxes.json").write_text(json.dumps({"boxes": [{"name": "UNIT", "hostname": driver.box_name(), "max_engines": 4,
+                                                                      "ruled_engines": {"world-spectator-promotion": 6, "mp-host-join": 1}}]}), encoding="utf-8")
+        ok &= row(results, "engine-cap/admits-a-ruled-scene", driver.engine_cap_findings(spectator) == [])
+        (inventory / "boxes.json").write_text(json.dumps({"boxes": [{"name": "UNIT", "hostname": driver.box_name(), "max_engines": 4,
+                                                                      "ruled_engines": {"world-spectator-promotion": 4}}]}), encoding="utf-8")
+        short = driver.engine_cap_findings(spectator)
+        ok &= row(results, "engine-cap/a-ruling-below-the-need-refuses", len(short) == 1 and short[0]["cap"] == 4, str(short))
         (inventory / "boxes.json").write_text(json.dumps({"boxes": []}), encoding="utf-8")
         ok &= row(results, "engine-cap/undeclared-cap-refuses-nothing", driver.engine_cap_findings(spectator) == [])
     return ok

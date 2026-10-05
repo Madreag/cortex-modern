@@ -7426,7 +7426,8 @@ void RunGameLoop() {
 				// The isolation and same-tick rows need a live scene, which the standalone flag has not got.
 				RTE::RunCheckpointSceneRows();
 			}
-			if (simTick == 1 && (s_netMatchServiceE2E || !s_netReplayInPath.empty() || ScenarioRunner::IsActive())) {
+			// A match a menu script started reports its rules too: what the menus chose is what the round plays by.
+			if (simTick == 1 && (s_netMatchServiceE2E || !s_netReplayInPath.empty() || ScenarioRunner::IsActive() || !s_menuScriptPath.empty())) {
 				if (auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) {
 					{
 						std::ostringstream line;
@@ -10811,6 +10812,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-seat-log-selftest") {
 			return NetLockstepSelfTest::RunSeatLog();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-released-claims-selftest") {
+			return NetLockstepSelfTest::RunReleasedClaims();
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-selftest") {
 			if (NetMatchSelfTest::RunBeforeInitialization() != 0) return EXIT_FAILURE;
