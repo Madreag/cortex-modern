@@ -17,6 +17,7 @@ namespace RTE {
 	class GUICollectionBox;
 	class GUIControl;
 	class GUIButton;
+	class GUIListBox;
 	class GUILabel;
 	class GUIFont;
 	class GUITextBox;
@@ -43,8 +44,8 @@ namespace RTE {
 		bool AutomationPostCommand(const std::string& name);
 		/// Reads a named label's text for a script assert.
 		bool AutomationLabelText(const std::string& name, std::string& text) const;
-		/// The seat rows the open panel lists, or zero while it is closed or shows the match options.
-		size_t AutomationSeatRowCount() const { return m_Open && !m_OptionsView ? std::min(m_Model.RowCount(), m_Seats.size()) : 0; }
+		/// The player rows the open panel lists, or zero while it is closed or shows the match's rules.
+		size_t AutomationSeatRowCount() const { return m_Open && !m_OptionsView ? m_RowsShown : 0; }
 
 		/// The area an overlay element drew into on the last frame, in screen pixels.
 		struct OverlayRect {
@@ -154,17 +155,44 @@ namespace RTE {
 		/// surfaces the game loop did. The title screen, settings and every other menu leave it off.
 		static bool PostMatchLobbySurfaces();
 
+		/// One player's row on the host's panel: the name and state line, the host's actions and why any is off.
 		struct Controls {
 			GUILabel* name = nullptr;
 			GUILabel* detail = nullptr;
-			GUIButton* applicant = nullptr;
-			std::array<GUIButton*, 3> actions{};
+			GUILabel* hint = nullptr;
+			GUIListBox* requests = nullptr; //!< The people asking for this place; a pick is the one Let names.
+			std::array<GUIButton*, 3> actions{}; //!< Keep, Let join and Cancel, in NetModerationAction order.
+			GUIButton* remove = nullptr;
+			GUIButton* ban = nullptr;
+		};
+		/// A player the host's panel lists: everyone in the match but the host, the held first.
+		struct PanelRow {
+			uint8_t peer = 0;
+			std::string name;
+			std::string state; //!< The state line the roster reads for this player.
+			std::optional<NetModerationUx::Row> decision; //!< The held seat's model row, when the seat waits on the host.
+			std::optional<NetH4ModerationSeat> seat;      //!< The admission row Remove and Ban act on.
+		};
+		/// An action that takes a second press: it names its consequence first.
+		struct Armed {
+			enum class Kind { Let, Remove, Ban } kind = Kind::Remove;
+			uint16_t stableSeat = 0;
+			uint32_t incarnation = 0;
+			NetPeerId applicant = c_InvalidNetPeerId;
+			uint64_t untilMs = 0;
 		};
 		struct Press {
 			const GUIControl* button = nullptr;
-			NetModerationUx::Row row;
+			PanelRow row;
 		};
 		void Refresh();
+		/// Builds the host's rows from the roster and the admission rows.
+		std::vector<PanelRow> BuildRows(const NetLobbySnapshot& snapshot);
+		/// Lays out and fills one row's controls from its top; returns its height.
+		int FillRow(Controls& controls, const PanelRow& row, int top);
+		void HideRow(Controls& controls);
+		/// The second press of an armed action, or the first, which only says what the action will do.
+		void PressArmed(const PanelRow& row, Armed::Kind kind);
 		void HandleEvents();
 		void DrawRoster(const NetLobbySnapshot& snapshot);
 		/// Creates presentation controls only when an online match draws them.
@@ -242,6 +270,10 @@ namespace RTE {
 		GUILabel* m_Options = nullptr;
 		bool m_OptionsView = false;
 		std::array<Controls, 3> m_Seats;
+		std::vector<PanelRow> m_Rows;
+		size_t m_RowsShown = 0;
+		std::optional<Armed> m_Armed;
+		std::string m_PanelStatus; //!< The last action's line; empty leaves the model's.
 		std::optional<Press> m_Press;
 		NetModerationUx m_Model;
 		std::optional<NetH4ModerationResult> m_ActionResult;
