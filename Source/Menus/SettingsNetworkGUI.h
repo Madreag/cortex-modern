@@ -40,7 +40,7 @@ namespace RTE {
 
 	private:
 		/// The pages the tab row inside the network box selects between.
-		enum class Page { Player = 0, Chat, Recovery, Files, Internet, Connection, Count };
+		enum class Page { Player = 0, Chat, Recovery, Files, Internet, Connection, Basics, Count };
 
 		GUIControlManager* m_GUIControlManager; //!< The GUIControlManager which holds all the GUIControls of this menu. Not owned by this.
 
@@ -48,7 +48,11 @@ namespace RTE {
 		GUICollectionBox* m_NetworkSettingsBox;
 		std::array<GUITab*, static_cast<int>(Page::Count)> m_PageTabs; //!< The page selector row.
 		std::array<GUICollectionBox*, static_cast<int>(Page::Count)> m_PageBoxes; //!< One page box per selector tab.
-		Page m_ActivePage = Page::Player; //!< The page the selector currently shows.
+		Page m_ActivePage = Page::Basics; //!< The page the selector currently shows.
+		bool m_AdvancedShown = false; //!< The selector offers the pages behind Advanced settings.
+		GUILabel* m_ConnectionValueLabel = nullptr; //!< The first view's one-line Connection summary.
+		GUIButton* m_ConnectionChangeButton = nullptr;
+		GUIButton* m_AdvancedButton = nullptr;
 
 		// Player page.
 		GUITextBox* m_DisplayNameTextbox;

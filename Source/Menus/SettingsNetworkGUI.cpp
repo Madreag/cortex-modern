@@ -33,7 +33,15 @@ namespace {
 	constexpr int c_FixedDelayRowHeight = 20;
 
 	// The selector row and the page boxes share their names with the page they switch in.
-	constexpr std::array<const char*, 6> c_PageNames{"Player", "Chat", "Recovery", "Files", "Internet", "Connection"};
+	constexpr std::array<const char*, 7> c_PageNames{"Player", "Chat", "Recovery", "Files", "Internet", "Connection", "Basics"};
+	// The first view's one-line summary of the player's own connection choice.
+	const char* ConnectionSummary(SettingsMan::NetworkConnectionMode mode) {
+		switch (mode) {
+			case SettingsMan::NetworkConnectionMode::DirectOnly: return "Direct only - no relay";
+			case SettingsMan::NetworkConnectionMode::RelayOnly: return "Relay only - always relayed";
+			default: return "Automatic - direct, or a relay";
+		}
+	}
 
 	// The boxes take typed digits only, so anything else came from a skin edit and is discarded.
 	bool ParseWholeNumber(const std::string& text, int& value) {
@@ -132,6 +140,9 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 		m_PageBoxes[index] = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("CollectionBoxNetPage" + page));
 	}
 
+	m_ConnectionValueLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkConnectionValue"));
+	m_ConnectionChangeButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonNetworkConnectionChange"));
+	m_AdvancedButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonNetworkAdvanced"));
 	m_DisplayNameTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkDisplayName"));
 	// The lobby's own name box takes 24 characters; both boxes write the same setting.
 	m_DisplayNameTextbox->SetMaxTextLength(24);
@@ -166,7 +177,7 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 
 	m_StatusModeCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboMatchStatusWidget"));
 	m_StatusModeCombo->AddItem("Off");
-	m_StatusModeCombo->AddItem("Auto");
+	m_StatusModeCombo->AddItem("When needed");
 	m_StatusModeCombo->AddItem("Always");
 
 	m_ChatVisibleCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkChatVisible"));
@@ -243,7 +254,7 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 
 	ShowSavedValues();
 	// The skin draws only the player page's box first; checking its tab keeps the selector in step.
-	SetActivePage(Page::Player);
+	SetActivePage(Page::Basics);
 }
 
 void SettingsNetworkGUI::SetEnabled(bool enable) {
@@ -371,10 +382,14 @@ void SettingsNetworkGUI::SetActivePage(Page page) {
 		ApplyTextboxes();
 	}
 	m_ActivePage = page;
+	// The first view leads; the other pages show once the player asks for them, or opens one by name.
+	if (page != Page::Basics) m_AdvancedShown = true;
 	for (int index = 0; index < static_cast<int>(Page::Count); ++index) {
 		m_PageBoxes[index]->SetVisible(index == static_cast<int>(page));
 		m_PageTabs[index]->SetCheck(index == static_cast<int>(page));
+		m_PageTabs[index]->SetVisible(m_AdvancedShown || index == static_cast<int>(Page::Basics));
 	}
+	if (m_ConnectionValueLabel) m_ConnectionValueLabel->SetText(ConnectionSummary(g_SettingsMan.GetNetworkConnectionMode()));
 	m_RecoveryError->SetText("");
 	m_InternetError->SetText("");
 	UpdateStatusLines();
@@ -415,6 +430,14 @@ void SettingsNetworkGUI::UpdateStatusLines() {
 }
 
 void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
+	if (guiEvent.GetType() == GUIEvent::Command && guiEvent.GetControl() == m_ConnectionChangeButton) {
+		SetActivePage(Page::Connection);
+		return;
+	}
+	if (guiEvent.GetType() == GUIEvent::Command && guiEvent.GetControl() == m_AdvancedButton) {
+		SetActivePage(Page::Player);
+		return;
+	}
 	if (guiEvent.GetType() == GUIEvent::Command) {
 		// Action feedback goes on the page's message line AFTER the status refresh,
 		// which owns the line's resting text.
