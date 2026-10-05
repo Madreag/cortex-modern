@@ -1468,6 +1468,7 @@ namespace RTE {
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
 		friend bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error);
+		friend bool TestCommitOnlySuccessorReproposesRelease(std::string* error);
 		friend class ScenarioRunner;
 
 	private:

@@ -33,6 +33,7 @@ SELFTESTS = [
     "net-session",
     "net-lockstep",
     "net-lockstep-released-claims",
+    "net-lockstep-release-paths",
     "net-match",
     "net-auth",
     "net-admission",

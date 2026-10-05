@@ -23957,6 +23957,316 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		}
 	}
 
+	namespace {
+		class ReleasePathHostWire final : public LoopbackTransport {
+		public:
+			bool commitOnlyToFirst = false;
+			std::vector<NetLockstepTiming> decisions;
+			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
+				const auto decoded = NetLockstepCodec::Decode(bytes);
+				if (decoded.ok) {
+					if (const auto* timing = std::get_if<NetLockstepTiming>(&decoded.packet.payload)) {
+						decisions.push_back(*timing);
+						if (commitOnlyToFirst && peer == 1 && timing->action == NetTimingAction::Release && timing->phase == NetTimingPhase::Propose) return true;
+					}
+					if (const auto* stop = std::get_if<NetLockstepStop>(&decoded.packet.payload);
+					    commitOnlyToFirst && peer == 1 && stop && stop->reason == NetLockstepStopReason::Expired) return true;
+				}
+				return LoopbackTransport::Send(peer, lane, bytes, error, congested);
+			}
+			std::optional<NetLockstepTiming> Last(NetTimingAction action, NetTimingPhase phase) const {
+				for (auto it = decisions.rbegin(); it != decisions.rend(); ++it) if (it->action == action && it->phase == phase) return *it;
+				return std::nullopt;
+			}
+		};
+
+		class ReleasePathAckWire final : public LoopbackTransport {
+		public:
+			bool loseAcks = false;
+			size_t lost = 0;
+			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
+				const auto decoded = NetLockstepCodec::Decode(bytes);
+				const auto* timing = decoded.ok ? std::get_if<NetLockstepTiming>(&decoded.packet.payload) : nullptr;
+				if (loseAcks && timing && timing->phase == NetTimingPhase::Acknowledge) { ++lost; return true; }
+				return LoopbackTransport::Send(peer, lane, bytes, error, congested);
+			}
+		};
+
+		struct ReleasePathRound {
+			ReleasePathHostWire hostWire;
+			ReleasePathAckWire firstWire;
+			LoopbackTransport secondWire, fourthWire;
+			std::array<INetTransport*, 4> wires{&hostWire, &firstWire, &secondWire, &fourthWire};
+			std::array<NetLockstepCoordinator, 4> peers;
+			std::array<uint64_t, 4> produced{1, 1, 1, 1};
+			std::array<bool, 4> alive{true, true, true, true};
+			std::array<std::map<uint64_t, NetLockstepReadyFrame>, 4> committed;
+			NetMatchConfig match;
+			uint64_t now = 0;
+			bool recording = false;
+			std::string failure;
+
+			bool Start(uint16_t port, bool bounded = true) {
+				match = ReleasedClaimsMatch(0x9C00 + port, 4);
+				match.successorOrder = {2, 3, 4};
+				for (uint8_t peer = 1; peer <= 4; ++peer) match.migrationPeers.push_back({peer, static_cast<uint16_t>(port + peer), {"loopback"}});
+				if (!hostWire.StartHost(port, &failure) || !firstWire.Connect("loopback", port, &failure) ||
+				    !secondWire.Connect("loopback", port, &failure) || !fourthWire.Connect("loopback", port, &failure)) return false;
+				for (size_t index = 0; index < peers.size(); ++index) {
+					auto config = ReleasedClaimsConfig(match, static_cast<uint8_t>(index + 1), index == 0 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}, {4, 3}} : std::map<uint8_t, NetPeerId>{{1, 1}}, bounded);
+					config.startFrame = 1;
+					config.migrationKey.fill(0x39);
+					config.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); };
+					if (!peers[index].Start(*wires[index], config, &failure)) return false;
+					peers[index].DeferStopsToTickBoundary();
+				}
+				for (int turn = 0; turn < 400 && peers[0].GetStats().nextFrame < 15; ++turn) Pump();
+				return peers[0].IsRunning() && peers[0].GetStats().nextFrame >= 15;
+			}
+			void Pump() {
+				for (size_t index = 0; index < peers.size(); ++index) if (alive[index]) FeedReleasedClaimsPeer(peers[index], produced[index]);
+				for (size_t index = 0; index < peers.size(); ++index) if (alive[index]) peers[index].Tick(now);
+				for (size_t index = 0; index < peers.size(); ++index) {
+					if (!alive[index]) continue;
+					NetLockstepReadyFrame ready;
+					if (recording && index == 2) {
+						while (peers[index].HasReadyFrame(peers[index].GetResumeFrame())) {
+							const uint64_t tick = peers[index].GetResumeFrame();
+							if (!ScenarioRunner::WaitForLockstepControllerFrame(tick, ready, &failure)) break;
+							committed[index][ready.frame] = ready;
+							peers[index].FinishSimulationTick(ready.frame);
+						}
+					} else while (peers[index].PopReadyFrame(ready)) {
+						committed[index][ready.frame] = ready;
+						peers[index].FinishSimulationTick(ready.frame);
+					}
+				}
+				hostWire.AdvanceTimeMs(5); firstWire.AdvanceTimeMs(5); secondWire.AdvanceTimeMs(5); fourthWire.AdvanceTimeMs(5);
+				now += 5;
+			}
+			bool HoldFourth() {
+				if (!peers[0].ProposePeerHold(4, now, &failure)) return false;
+				alive[3] = false;
+				for (int turn = 0; turn < 400 && !peers[2].HasHeldAISeat(4); ++turn) Pump();
+				for (int turn = 0; turn < 10; ++turn) Pump();
+				return peers[0].HasHeldAISeat(4) && peers[2].HasHeldAISeat(4);
+			}
+			bool Migrate() {
+				alive[0] = false;
+				hostWire.Stop();
+				for (int turn = 0; turn < 4000 && !(peers[1].GetHostPeerId() == 2 && peers[2].GetHostPeerId() == 2 &&
+				    !peers[1].IsMigrating() && !peers[2].IsMigrating()); ++turn) Pump();
+				return peers[1].GetHostPeerId() == 2 && peers[2].GetHostPeerId() == 2 && peers[1].IsRunning() && peers[2].IsRunning();
+			}
+			~ReleasePathRound() { ScenarioRunner::SetLockstepCoordinator(nullptr); }
+		};
+
+		bool TestDecisionsCompleteWithoutRemovedPeer(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("decisions_complete_without_removed_peer", why, error); };
+			std::string failures;
+			for (const bool release: {true, false}) {
+				ReleasePathRound round;
+				if (!round.Start(release ? 47420 : 47425) || !round.HoldFourth()) return fail("the decision fixture did not start or hold seat 4: " + round.failure);
+				round.firstWire.loseAcks = true;
+				if (release) round.peers[0].EvictRemovedPeer(4, "removed while held", round.now);
+				else if (!round.peers[0].ProposeInputDelay(3, 2, round.peers[0].GetStats().nextFrame + 30, &round.failure)) return fail(round.failure);
+				const auto proposal = round.hostWire.Last(release ? NetTimingAction::Release : NetTimingAction::Delay, NetTimingPhase::Propose);
+				if (!proposal || (proposal->requiredPeers & 2) == 0) return fail("the decision did not require peer 2");
+				for (int turn = 0; turn < 3; ++turn) round.Pump();
+				if (round.firstWire.lost == 0) return fail("peer 2 did not lose its decision acknowledgement");
+				round.peers[0].EvictRemovedPeer(2, "removed before acknowledgement", round.now);
+				round.alive[1] = false;
+				for (int turn = 0; turn < 300 && round.peers[0].GetStats().nextFrame <= proposal->applyFrame + 10; ++turn) round.Pump();
+				for (size_t index: {size_t{0}, size_t{2}}) if (round.peers[index].GetStats().nextFrame <= proposal->applyFrame || round.peers[index].TimingDecisionPendingAt(proposal->applyFrame)) {
+					if (!failures.empty()) failures += "; ";
+					failures += std::string(release ? "Release" : "Delay") + " waits for removed peer 2 at apply=" + std::to_string(proposal->applyFrame) +
+					    " on peer " + std::to_string(index + 1) + " next=" + std::to_string(round.peers[index].GetStats().nextFrame);
+				}
+			}
+			return fail(failures);
+		}
+
+		struct ReleasePathClaimView : ClaimView {
+			std::map<uint64_t, SimChecksum::Hash> hashes;
+			void ApplyTick(const NetLockstepReadyFrame& ready) {
+				Apply(ready);
+				NetLockstepFrame frame = PackWorldJoinReadyFrame(ready);
+				std::vector<uint8_t> bytes;
+				std::string failure;
+				if (!EncodeCommittedJoinFrame(frame, bytes, &failure)) { after[ready.frame] += failure; return; }
+				g_SimChecksum.BeginTick(ready.frame);
+				g_SimChecksum.Update("actors", after.at(ready.frame).data(), after.at(ready.frame).size());
+				g_SimChecksum.Update("inputs", bytes.data(), bytes.size());
+				hashes[ready.frame] = g_SimChecksum.EndTick().total;
+			}
+		};
+
+		bool TestPlayingDepartureReachesRecordingAndTail(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("playing_departure_reaches_recording_and_tail", why, error); };
+			std::string failures;
+			for (const bool bounded: {true, false}) {
+				ReleasePathRound round;
+				if (!round.Start(bounded ? 47430 : 47435, bounded)) return fail("the departure fixture did not start: " + round.failure);
+				const uint64_t from = round.peers[0].GetResumeFrame();
+				if (bounded) round.peers[0].EvictRemovedPeer(4, "playing seat kicked", round.now);
+				round.alive[3] = false;
+				if (!bounded) {
+					for (int turn = 0; turn < 400 && !round.peers[0].AnyDroppedSeatHeld(); ++turn) round.Pump();
+					if (!round.peers[0].AnyDroppedSeatHeld()) return fail("the unbounded seat was not held for expiry");
+					round.peers[0].ResolveHeldSeat(4, NetLockstepHoldResolution::Expired, round.now);
+				}
+				for (int turn = 0; turn < 70; ++turn) round.Pump();
+				const uint64_t leave = round.peers[0].GetPeerLeaveFrames().at(4);
+				LoopbackTransport replayWire, tailWire;
+				NetLockstepCoordinator replay, tail;
+				auto config = ReleasedClaimsConfig(round.match, 3, {}, bounded);
+				config.startFrame = from;
+				if (!replay.StartReplay(replayWire, config, &round.failure) || !tail.StartReplay(tailWire, config, &round.failure)) return fail(round.failure);
+				std::array<ReleasePathClaimView, 4> views;
+				std::array<NetLockstepCoordinator*, 4> coordinators{&round.peers[0], &round.peers[2], &replay, &tail};
+				for (size_t index = 0; index < views.size(); ++index) {
+					if (!views[index].Create("copy " + std::to_string(index), *coordinators[index], 0, 1, 4)) return fail("the departure actor could not be created");
+					views[index].handoff = 4;
+				}
+				const auto path = std::filesystem::path("seat-departure-" + std::to_string(bounded) + ".ccreplay");
+				NetMatchReplayWriter writer;
+				if (!writer.Open(path.string(), round.match, &round.failure)) return fail(round.failure);
+				std::vector<NetLockstepFrame> tailFrames;
+				for (const auto& [tick, ready]: round.committed[0]) {
+					if (tick < from) continue;
+					NetLockstepFrame packed = PackWorldJoinReadyFrame(ready);
+					std::vector<uint8_t> bytes;
+					NetLockstepFrame decoded;
+					if (!EncodeCommittedJoinFrame(packed, bytes, &round.failure) || !DecodeCommittedJoinFrame(bytes, decoded, &round.failure)) return fail(round.failure);
+					tailFrames.push_back(decoded);
+					if (!writer.WriteFrame(tick, packed.frames, packed.commands, packed.observations, packed.valueObservations, &round.failure)) return fail(round.failure);
+					views[0].ApplyTick(ready);
+					if (!round.committed[2].contains(tick)) return fail("the survivor did not pass the departure frame");
+					views[1].ApplyTick(round.committed[2].at(tick));
+				}
+				writer.Close(); if (!WaitForReplayCloseForTest(writer, &round.failure)) return fail(round.failure);
+				NetMatchReplayReader reader;
+				if (!reader.Open(path.string(), &round.failure)) return fail(round.failure);
+				NetLockstepFrame recorded;
+				bool eof = false;
+				while (reader.ReadFrame(recorded, eof, &round.failure)) {
+					if (!replay.QueueReplayFrame(recorded.targetFrame, recorded.frames, recorded.commands, &round.failure, recorded.observations, recorded.valueObservations)) return fail(round.failure);
+					replay.Tick(0);
+					NetLockstepReadyFrame ready;
+					if (!replay.PopReadyFrame(ready)) return fail("the recorded departure stopped playback: " + replay.GetStats().timeoutReason);
+					views[2].ApplyTick(ready); replay.FinishSimulationTick(ready.frame);
+				}
+				if (!eof) return fail(round.failure);
+				ScenarioRunner::SetLockstepCoordinator(&tail);
+				if (!ScenarioRunner::InstallWorldCatchUp(from - 1, tailFrames, &round.failure)) return fail(round.failure);
+				for (const auto& frame: tailFrames) {
+					NetLockstepReadyFrame ready;
+					if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(frame.targetFrame, ready, &round.failure)) return fail("the join tail refused the departure: " + round.failure);
+					views[3].ApplyTick(ready); tail.FinishSimulationTick(ready.frame);
+				}
+				ScenarioRunner::ReleaseWorldCatchUp();
+				for (size_t index = 0; index < views.size(); ++index) if (!views[index].ended || *views[index].ended != leave || views[index].hashes != views[0].hashes) {
+					if (!failures.empty()) failures += "; ";
+					failures += std::string(bounded ? "playing kick" : "unbounded expiry") + " at " + std::to_string(leave) + " ends control at " + views[index].Ended() + " on " + views[index].who;
+				}
+			}
+			return fail(failures);
+		}
+
+		bool TestSuccessorRecordsPlayThroughHostChange(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("successor_records_play_through_host_change", why, error); };
+			ReleasePathRound round;
+			if (!round.Start(47440)) return fail("the recording fixture did not start: " + round.failure);
+			ScenarioRunner::SetLockstepCoordinator(&round.peers[2]);
+			ScenarioRunner::ArmLockstepReplayRecord("host-change.ccreplay");
+			if (!ScenarioRunner::BeginLockstepReplayRecord(round.match, &round.failure)) return fail(round.failure);
+			round.recording = true;
+			for (int turn = 0; turn < 15; ++turn) round.Pump();
+			if (!round.Migrate()) return fail("the recording fixture did not migrate");
+			const uint64_t boundary = round.peers[1].GetMigrationResult().boundary;
+			if (!round.peers[1].ProposePeerHold(4, round.now, &round.failure)) return fail(round.failure);
+			round.alive[3] = false;
+			for (int turn = 0; turn < 25; ++turn) round.Pump();
+			round.peers[1].EvictRemovedPeer(4, "successor releases seat", round.now);
+			for (int turn = 0; turn < 80; ++turn) round.Pump();
+			ScenarioRunner::CloseLockstepReplayRecord();
+			round.recording = false;
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			NetReplayVerifyReport verify;
+			if (!NetMatchReplayReader::Verify("host-change.ccreplay", verify)) return fail("the recording failed verification: " + verify.error);
+			if (!ScenarioRunner::SetLockstepReplaySource("host-change.ccreplay", &round.failure)) return fail(round.failure);
+			LoopbackTransport wire;
+			NetLockstepCoordinator replay;
+			auto config = ReleasedClaimsConfig(round.match, 3, {}, true);
+			config.startFrame = ScenarioRunner::GetLockstepReplayStartFrame();
+			if (!replay.StartReplay(wire, config, &round.failure)) return fail(round.failure);
+			ScenarioRunner::SetLockstepCoordinator(&replay);
+			bool holdSeen = false, releaseSeen = false;
+			for (uint64_t frame = config.startFrame; frame <= verify.lastFrame; ++frame) {
+				if (!ScenarioRunner::QueueLockstepLocalControllerFrames(frame, {}, &round.failure)) return fail("playback refused frame " + std::to_string(frame) + ": " + round.failure);
+				replay.Tick(0);
+				NetLockstepReadyFrame ready;
+				if (!replay.PopReadyFrame(ready)) { ScenarioRunner::CloseLockstepReplayPlayback(); return fail("successor record at " + std::to_string(frame) + " after boundary " + std::to_string(boundary) + " stopped playback: " + replay.GetStats().timeoutReason); }
+				for (const auto& command: ready.remoteCommands) if (command.senderPeerId == 2 && frame > boundary) {
+					holdSeen |= std::holds_alternative<NetGameSeatHold>(command.payload);
+					releaseSeen |= std::holds_alternative<NetGameSeatRelease>(command.payload);
+				}
+				replay.FinishSimulationTick(ready.frame);
+			}
+			ScenarioRunner::CloseLockstepReplayPlayback();
+			if (!holdSeen || !releaseSeen || replay.GetResumeFrame() != verify.lastFrame + 1) return fail("the recording did not play its successor's hold and release through its last frame");
+			return fail("");
+		}
+	}
+
+	bool TestCommitOnlySuccessorReproposesRelease(std::string* error) {
+		const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("commit_only_successor_reproposes_release", why, error); };
+		ReleasePathRound round;
+		if (!round.Start(47445) || !round.HoldFourth()) return fail("the migration fixture did not start or hold seat 4: " + round.failure);
+		// A returned subscriber takes the Commit; the proposal and the session notice predate its listener.
+		round.hostWire.commitOnlyToFirst = true;
+		round.peers[0].m_RemoteStartsReceived.erase(2);
+		round.peers[0].EvictRemovedPeer(4, "release predates returning listener", round.now);
+		for (int turn = 0; turn < 5 && round.peers[1].SeatReleases().empty(); ++turn) round.Pump();
+		const auto agreed = round.hostWire.Last(NetTimingAction::Release, NetTimingPhase::Commit);
+		if (!agreed || round.peers[1].SeatReleases().empty() || round.peers[1].m_ReleasedAiSeats.contains(4) ||
+		    round.peers[1].GetResumeFrame() >= agreed->applyFrame) return fail("the successor did not learn only a future release Commit");
+		if (!round.Migrate()) return fail("the commit-only survivor did not become host");
+		const uint64_t boundary = round.peers[1].GetMigrationResult().boundary;
+		if (boundary >= agreed->applyFrame) return fail("the migration did not drop the future release");
+		for (int turn = 0; turn < 150; ++turn) round.Pump();
+		std::array<ReleasePathClaimView, 2> views;
+		for (size_t index = 0; index < views.size(); ++index) {
+			if (!views[index].Create("survivor " + std::to_string(index + 2), round.peers[index + 1], 3, 4, 4)) return fail("the released actor could not be created");
+			views[index].claimant = 4;
+			views[index].handoff = 1;
+			for (const auto& [frame, ready]: round.committed[index + 1]) if (frame > boundary) views[index].ApplyTick(ready);
+		}
+		if (!views[0].ended || views[0].ended != views[1].ended || views[0].hashes != views[1].hashes) return fail("a release known only as Commit was lost after boundary=" +
+		    std::to_string(boundary) + ": successor ends claims at " + views[0].Ended() + ", survivor at " + views[1].Ended());
+		return fail("");
+	}
+
+	int NetLockstepSelfTest::RunReleasePaths() {
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		if (!LuaMan::IsConstructed()) LuaMan::Construct();
+		if (!SimChecksum::IsConstructed()) SimChecksum::Construct();
+		if (!MovableMan::IsConstructed()) MovableMan::Construct();
+		if (!ActivityMan::IsConstructed()) ActivityMan::Construct();
+		if (!AudioMan::IsConstructed()) AudioMan::Construct();
+		if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
+		install_allegro(SYSTEM_NONE, &errno, std::atexit);
+		if (!SceneMan::IsConstructed()) SceneMan::Construct();
+		bool passed = true;
+		for (bool (*test)(std::string*): {TestDecisionsCompleteWithoutRemovedPeer, TestPlayingDepartureReachesRecordingAndTail,
+		    TestSuccessorRecordsPlayThroughHostChange, TestCommitOnlySuccessorReproposesRelease}) {
+			std::string error;
+			passed &= test(&error);
+		}
+		std::cout << "[net-lockstep-release-paths-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
+		return passed ? 0 : 1;
+	}
+
 	int NetLockstepSelfTest::RunReleasedClaims() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		if (!LuaMan::IsConstructed()) LuaMan::Construct();
@@ -24049,6 +24359,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestUnboundedDropEndsItsClaimsOnOneFrame, "unbounded_drop_ends_its_claims_on_one_frame");
 		row(&TestAReleaseTheHostTookWithItEndsOnOneFrame, "a_release_the_host_took_with_it_ends_on_one_frame");
 		row(&TestASeatReleaseCrossesEveryEncoding, "a_seat_release_crosses_every_encoding");
+		row(&TestDecisionsCompleteWithoutRemovedPeer, "decisions_complete_without_removed_peer");
+		row(&TestPlayingDepartureReachesRecordingAndTail, "playing_departure_reaches_recording_and_tail");
+		row(&TestSuccessorRecordsPlayThroughHostChange, "successor_records_play_through_host_change");
+		row(&TestCommitOnlySuccessorReproposesRelease, "commit_only_successor_reproposes_release");
 		row(&TestAReturnGapDoesNotStartTheHostsClock, "a_return_gap_does_not_start_the_hosts_clock");
 		row(&TestAHoldLandsAtTheFirstFrameItsSeatOwes, "a_hold_lands_at_the_first_frame_its_seat_owes");
 		row(&TestALinklessMemberIsHeldByTheStart, "a_linkless_member_is_held_by_the_start");
