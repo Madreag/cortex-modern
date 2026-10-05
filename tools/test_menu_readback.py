@@ -800,8 +800,8 @@ def lobby_case(case, port, root):
         client = (join_by_address(port) + "activate ButtonMultiplayerReady\nwait 4\nassert_label ButtonMultiplayerReady Cancel Ready\n"
                   "wait_label LabelMultiplayerStatus You're ready - waiting for the host\nwait_state Running 20\nexit\n")
     elif case == "lobby-countdown":
-        # The joined player counts once the lobby names it as the one to press Ready; Start is live from then.
-        host = (host_lobby(port) + "wait_connected 2 60\nwait_label LabelMultiplayerStatus to press Ready - Start Match starts in 30 s\n"
+        # The joined player counts once the lobby says Start Match would count down for that player's Ready; Start is live from then.
+        host = (host_lobby(port) + "wait_connected 2 60\nwait_label LabelMultiplayerStatus Start Match starts in 30 s\n"
                 "assert_enabled ButtonMultiplayerStart 1\n"
                 "activate ButtonMultiplayerStart\nwait_label LabelMultiplayerStatus Starting in\nassert_label ButtonMultiplayerStart Cancel Start\n"
                 f"wait_file {marks['saw']} 30\nactivate ButtonMultiplayerStart\nwait_label LabelMultiplayerStatus Start Match starts in 30 s\n"
@@ -813,7 +813,7 @@ def lobby_case(case, port, root):
                   "wait_label LabelMultiplayerStatus The host is starting the match in\nwait_state Running 50\nexit\n")
     elif case == "lobby-last-ready":
         # The last Ready ends the count: the round starts well before its thirty seconds.
-        host = (host_lobby(port) + "wait_connected 2 60\nwait_label LabelMultiplayerStatus to press Ready - Start Match starts in 30 s\n"
+        host = (host_lobby(port) + "wait_connected 2 60\nwait_label LabelMultiplayerStatus Start Match starts in 30 s\n"
                 "activate ButtonMultiplayerStart\nwait_label LabelMultiplayerStatus Starting in\n"
                 "wait_state Running 20\nexit\n")
         client = (join_by_address(port) + "wait_label LabelMultiplayerStatus The host is starting the match in\n"

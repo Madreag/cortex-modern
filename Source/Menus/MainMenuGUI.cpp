@@ -4453,6 +4453,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			sentence = "Press Ready when you're ready to play";
 		}
 	}
+	// A sentence wider than its row breaks at its last " - " into two lines rather than lose its end.
+	if (m_MultiplayerLobbyPlayerRowFont && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(sentence, m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
+		if (const size_t dash = sentence.rfind(" - "); dash != std::string::npos) sentence.replace(dash, 3, "\n");
+	}
 	m_MultiplayerStatusLabel->SetText(sentence);
 	m_MultiplayerStatusLabel->SetPositionRel(12, 160 + rowsExtra);
 	m_MultiplayerStatusLabel->SetHorizontalOverflowScroll(false);
