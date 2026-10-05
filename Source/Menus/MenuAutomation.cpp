@@ -1361,7 +1361,8 @@ namespace RTE::MenuAutomation {
 
 	/// Where a label's text lands: its alignment places it inside a rect that may be larger.
 	Rect LabelTextRect(GUILabel* label, Rect rect) {
-		const int width = std::min(label->GetTextWidth(), rect[2]), height = label->GetTextHeight();
+		// A label clips its text to its own rect (GUILabel::Draw); text it cannot hold is the fit check's to find.
+		const int width = std::min(label->GetTextWidth(), rect[2]), height = std::min(label->GetTextHeight(), rect[3]);
 		const int h = label->GetHAlignment(), v = label->GetVAlignment();
 		rect[0] += h == GUIFont::Centre ? (rect[2] - width) / 2 : h == GUIFont::Right ? rect[2] - width : 0;
 		rect[1] += v == GUIFont::Middle ? (rect[3] - height) / 2 : v == GUIFont::Bottom ? rect[3] - height : 0;
