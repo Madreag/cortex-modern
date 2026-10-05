@@ -7199,6 +7199,32 @@ static std::string ResyncSaveName() {
 		RefreshSeatViewsLocked(AdmissionNowMs());
 	}
 
+	void NetMatchService::KickHeldSeatsForTestLocked(uint64_t nowMs) {
+		static const std::optional<uint64_t> afterMs = []() -> std::optional<uint64_t> {
+			const char* text = std::getenv("CCCP_TEST_KICK_HELD_AFTER_MS");
+			if (!text || !*text) return std::nullopt;
+			char* end = nullptr;
+			const unsigned long long value = std::strtoull(text, &end, 10);
+			return end && *end == ' ' ? std::optional<uint64_t>{value} : std::nullopt;
+		}();
+		if (!afterMs || !m_IsHost || !m_Session || !m_Coordinator || !m_Coordinator->IsRunning() || m_State != NetMatchServiceState::Running) return;
+		// A removal republishes the seats, so the walk reads a copy.
+		const std::vector<NetH4ModerationSeat> seats = m_ModerationSeats;
+		for (const NetH4ModerationSeat& seat: seats) {
+			const uint8_t peer = seat.lockstepPeerId;
+			if (seat.cpu || peer == 0 || m_TestKickedSeats.contains(peer)) continue;
+			if (!m_Coordinator->HasHeldAISeat(peer)) {
+				m_TestHeldSinceMs.erase(peer);
+				continue;
+			}
+			const uint64_t since = m_TestHeldSinceMs.try_emplace(peer, nowMs).first->second;
+			if (nowMs < since + *afterMs) continue;
+			m_TestKickedSeats.insert(peer);
+			const NetKickBanResult result = ApplyRemovalLocked(NetSelectModerationSeat(seat), NetParticipantRemovalAction::Kick, *m_Session);
+			System::PrintDiagnosticLine("[net-test] kicked held seat " + std::to_string(peer) + " after " + std::to_string(nowMs - since) + "ms: " + NetKickBanResultName(result));
+		}
+	}
+
 	void NetMatchService::PublishLobbyModerationViewLocked() {
 		if (!m_IsHost || !m_AdmissionAttached || m_State != NetMatchServiceState::Starting) {
 			return;
@@ -8266,6 +8292,7 @@ static std::string ResyncSaveName() {
 			}
 			m_SeatStatuses = m_ReconnectHost.GetSeatStatuses();
 			PublishModerationView();
+			KickHeldSeatsForTestLocked(nowMs);
 			CaptureA7SeatView();
 		}
 		if (m_IsHost && m_Coordinator && m_Coordinator->IsRunning() && (m_Coordinator->IsPersistentWorldRound() || m_WorldJoin.IsPrivateMatch())) {
