@@ -751,7 +751,7 @@ namespace RTE {
 		/// The peers whose joins were cancelled since the last call, oldest first.
 		std::vector<uint8_t> TakeCancelledJoins();
 		/// Cancels every bootstrap past its deadline. Returns how many it ended.
-		size_t ExpireStaleJoins(uint64_t nowMs);
+		size_t ExpireStaleJoins(uint64_t nowMs, std::vector<NetPeerId>* expired = nullptr);
 		/// Ends every bootstrap whose connection is gone, so a spectator's lobby id returns to the pool.
 		/// Returns how many it ended.
 		size_t ReleaseLostConnections(const std::vector<NetPeerId>& liveConnections);

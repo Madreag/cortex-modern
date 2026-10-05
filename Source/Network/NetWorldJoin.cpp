@@ -2473,11 +2473,11 @@ namespace RTE {
 		return slow;
 	}
 
-	size_t NetWorldJoinHost::ExpireStaleJoins(uint64_t nowMs) {
+	size_t NetWorldJoinHost::ExpireStaleJoins(uint64_t nowMs, std::vector<NetPeerId>* expired) {
 		std::vector<NetPeerId> stale;
 		for (const NetWorldJoinSession& session: m_Sessions) {
 			if (session.phase == NetWorldJoinPhase::Active || session.phase == NetWorldJoinPhase::Spectating ||
-			    session.spectator || session.openedAtMs == 0) {
+			    session.openedAtMs == 0) {
 				continue;
 			}
 			const uint64_t progress = IsPrivateMatch() ? std::max(session.openedAtMs, session.lastCatchUpReportMs) : session.openedAtMs;
@@ -2488,6 +2488,7 @@ namespace RTE {
 		for (const NetPeerId connection: stale) {
 			CancelJoin(connection, "the world join deadline expired");
 		}
+		if (expired) expired->insert(expired->end(), stale.begin(), stale.end());
 		return stale.size();
 	}
 

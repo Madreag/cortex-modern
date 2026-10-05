@@ -4536,7 +4536,8 @@ static std::string ResyncSaveName() {
 		}
 		// An image the round's history has moved past could never be caught up from: the join waits for the capture it asked for.
 		if (!m_WorldJoin.IsPrivateMatch() && m_WorldJoin.ImageHistoryLost()) {
-			if (error) *error = "the published image is older than the round's history; waiting for the capture this join asked for";
+			NoteWorldJoinWantsCapture();
+			if (error) *error = "the published image is older than the round's history; a fresh capture is requested";
 			return false;
 		}
 		// Every cheap refusal is answered before the archive is touched: this runs on the sim thread
@@ -5198,7 +5199,10 @@ static std::string ResyncSaveName() {
 		if (!m_WorldJoin.IsConfigured() || !m_Coordinator || !m_Session) {
 			return;
 		}
-		m_WorldJoin.ExpireStaleJoins(nowMs);
+		std::vector<NetPeerId> expired;
+		m_WorldJoin.ExpireStaleJoins(nowMs, &expired);
+		for (const NetPeerId connection: expired)
+			m_Session->DisconnectReadyPeer(connection, NetRejectReason::HostNotAccepting, "the world join deadline expired");
 		AnswerStalledReturnersLocked(nowMs);
 		// The opening checkpoint is the round's state only at its anchor; past it a returning seat takes the newest image.
 		if (m_Runner && m_Coordinator->IsRunning()) {

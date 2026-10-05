@@ -520,9 +520,10 @@ namespace RTE {
 			if (host.ExpireStaleJoins(3000 + c_NetWorldJoinDeadlineMs + 1) == 0) {
 				return Fail("a stalled bootstrap did not expire");
 			}
-			if (host.FindSession(9) == nullptr) {
-				return Fail("a spectator was expired by the join deadline");
+			if (host.FindSession(9) != nullptr) {
+				return Fail("a waiting spectator stayed past the join deadline");
 			}
+			if (host.FindSession(10) == nullptr) return Fail("a waiting spectator expired before its own deadline");
 			const std::string report = host.BuildReportJson();
 			if (report.find("\"capture_p99_ms\"") == std::string::npos || report.find("\"catch_up_ratio\"") == std::string::npos) {
 				return Fail("instrumentation report lost a baseline field");
@@ -7240,8 +7241,10 @@ namespace RTE {
 		(void)service.StartJoinerImageTransfer(*service.m_WorldJoin.FindSession(43), &waiting, &unstartable);
 		std::string misses;
 		if (!service.m_WorldCapturePending || unstartable) misses = "stale image refusal left no replacement capture requested";
-		service.m_WorldJoin.ExpireStaleJoins(1000 + c_NetWorldJoinDeadlineMs + 1);
+		std::vector<NetPeerId> expired;
+		service.m_WorldJoin.ExpireStaleJoins(1000 + c_NetWorldJoinDeadlineMs + 1, &expired);
 		if (service.m_WorldJoin.FindSession(43)) misses += "; watcher waited past the player's join deadline";
+		if (expired != std::vector<NetPeerId>{42, 43}) misses += "; the host had no expired connections to notify";
 		if (!misses.empty()) { *error = "F4: " + misses; return false; }
 		std::cout << "[net-world-join-selftest] PASS stale_world_image_recaptures_and_watcher_wait_ends" << std::endl;
 		return true;
