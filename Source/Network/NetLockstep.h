@@ -236,7 +236,7 @@ namespace RTE {
 		void Reset() { bySender.clear(); roundId = 0; }
 	};
 
-	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2, Reclaim = 3, WorldAdmission = 4, CapturePark = 5 };
+	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2, Reclaim = 3, WorldAdmission = 4, CapturePark = 5, Release = 6 };
 	enum class NetTimingPhase : uint8_t { Propose = 1, Acknowledge = 2, Commit = 3, Status = 4, HoldAtFrame = 5, HoldAppliedAck = 6, ReclaimAtFrame = 7 };
 
 	/// A round-scoped delay agreement or host-authored hold and its application acknowledgement.
@@ -503,6 +503,7 @@ namespace RTE {
 		std::vector<uint8_t> departedPeerIds;
 		std::vector<uint8_t> aiHeldPeerIds;
 		std::vector<uint8_t> reclaimedPeerIds;
+		std::vector<uint8_t> releasedPeerIds; //!< Held seats the host released at this frame: the claims they kept end here.
 		std::map<uint8_t, uint64_t> committedPeerLeaves;
 		std::map<uint8_t, uint64_t> committedFrameWaivers;
 		bool hasLocalInput = false;
@@ -701,6 +702,8 @@ namespace RTE {
 		static constexpr uint16_t c_InputAcceptanceVersion = 34;
 		static constexpr uint16_t c_CheckpointVersion = 40; //!< Frames carrying the checkpoint schedule.
 		static constexpr uint16_t c_HoldMarkerVersion = 42; //!< A host marker carries its hold before its input.
+		/// Version 43 carries a held seat's release as an agreed decision and as the committed record of it; the newest layout.
+		static constexpr uint16_t c_SeatReleaseVersion = 43;
 		static constexpr uint16_t c_RecoveryDatagramVersion = 41; //!< Complete recovery inputs may use the unreliable lane.
 		/// A committed tick and a replay record may name one actor once per sender, in sender order; a build that reads them as unique
 		/// per actor is refused at admission through the deterministic config hash.
@@ -1297,6 +1300,11 @@ namespace RTE {
 		bool IsHoldingSeatForReclaim() const;
 		/// Whether this peer's left seat is still held, from the same set AnyLeftSeatHeld reads.
 		bool IsSeatHeldForReclaim(uint8_t peerId) const;
+		/// Whether a seat gone at a frame still waits there for its player: the claims it keeps on the AI's actors stay until it
+		/// comes back or the host releases it. Read from the round's committed seat history, never from a notice's arrival.
+		bool IsSeatReclaimableAt(uint8_t peerId, uint64_t frame) const;
+		/// The frames each held seat's agreed release lands on.
+		std::map<uint8_t, std::map<uint64_t, NetGameSeatRelease>> SeatReleases() const { NET_PLANE_CHECK(); return m_SeatReleases; }
 		/// Whether a seat the AI holds comes back to its player by a frame: its agreed return lands at or before it.
 		bool HeldSeatReturnsBy(uint8_t peerId, uint64_t frame) const;
 		// Kept for estimates that still speak in frames (1200 frames = 20 s). The hold itself
@@ -1608,6 +1616,10 @@ namespace RTE {
 		void ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay);
 		/// Ends an AI-held seat's wait for its returner: an agreed reclaim still ahead of every peer is withdrawn, the AI keeps the units.
 		void ReleaseHeldSeat(uint8_t peerId, uint64_t nowMs, bool relay, const char* why = "released");
+		/// Host: proposes the agreed frame for every seat it released whose release no frame carries yet.
+		void ProposeOwedSeatReleases(uint64_t nowMs);
+		/// Whether a release of the seat lands at or after the seat's newest hold.
+		bool HasReleaseSinceHold(uint8_t peerId) const;
 		void MaybeSendHoldHeartbeats(uint64_t nowMs);
 		static bool IsHoldResolutionReason(NetLockstepStopReason reason);
 		static NetLockstepStopReason StopReasonOf(NetLockstepHoldResolution resolution);
@@ -1801,6 +1813,7 @@ namespace RTE {
 		uint64_t m_ProductionWaitBaseUs = 0;
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;
 		std::set<uint8_t> m_ReleasedAiSeats; //!< AI-held seats no returner may reclaim; the AI keeps their units.
+		std::map<uint8_t, std::map<uint64_t, NetGameSeatRelease>> m_SeatReleases; //!< The agreed frames the host's releases land on, every peer the same.
 		std::set<uint8_t> m_AnnouncedLeavers; //!< Host: clean leavers being held, whose closing links are not sent their hold.
 		std::set<uint8_t> m_SlowMachineHolds; //!< Host: seats whose latest hold was for a machine that cannot keep up.
 		std::map<uint8_t, std::pair<NetLockstepStop, NetPeerId>> m_PendingMemberEnds; //!< Host: members' own ends this round has not played past yet.

@@ -188,10 +188,9 @@ namespace RTE {
 		}
 		line("Seats: " + std::to_string(humans) + " human, " + std::to_string(cpus) + " CPU of " +
 		     std::to_string(config.peerCount) + " peers");
-		line("Difficulty: " + std::to_string(config.difficulty));
-		line("Starting gold: " + (config.startingGold >= NetMatchConfigUtil::c_InfiniteGold
-		                              ? std::string("Infinite")
-		                              : std::to_string(config.startingGold) + " oz"));
+		// Short rows share a line, so the summary fits the smallest panel that shows it.
+		line("Difficulty: " + std::to_string(config.difficulty) + "   Starting gold: " +
+		     (config.startingGold >= NetMatchConfigUtil::c_InfiniteGold ? std::string("Infinite") : std::to_string(config.startingGold) + " oz"));
 		line(std::string("Fog of war: ") + (config.fogOfWar ? "on" : "off") +
 		     "   Clear path to orbit: " + (config.requireClearPathToOrbit ? "on" : "off") +
 		     "   Deploy units: " + (config.deployUnits ? "on" : "off"));
@@ -205,8 +204,8 @@ namespace RTE {
 		     (config.delayPolicy == NetMatchDelayPolicy::Fixed
 		          ? "Fixed " + std::to_string(config.inputDelayFrames) + " ticks"
 		          : "Automatic, " + NetAutoDelayText(config.slowPlayerBoundTicks) + (live.empty() ? "" : " - now " + live)));
-		line("Frame redundancy: " + std::to_string(config.frameRedundancyTicks) + " ticks");
-		line("Slow player bound: " + std::to_string(config.slowPlayerBoundTicks) + " ticks");
+		line("Frame redundancy: " + std::to_string(config.frameRedundancyTicks) + " ticks   Slow player bound: " +
+		     std::to_string(config.slowPlayerBoundTicks) + " ticks");
 		line(std::string("When a player falls behind: ") + NetSlowPlayerPolicyText(config.slowPlayerPolicy));
 		line(config.autosaveEnabled
 		         ? "Autosaves: every " + std::to_string(config.autosaveIntervalSeconds) + " sim seconds"

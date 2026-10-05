@@ -21,7 +21,7 @@ from test_telemetry_bundle import set_visual_resolution
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "pause-save", "save-hotkey", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
-         "lobby-name", "net-options", "net-activity", "net-host-left", "net-host-left-early", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "oracles")
+         "lobby-name", "net-options", "net-activity", "net-host-left", "net-host-left-early", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "host-by-hand", "host-follows-activity", "oracles")
 PAIRED_CASES = ("pause", "pause-save", "save-hotkey", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
@@ -305,7 +305,7 @@ def read_settings(path, names):
 
 
 def seeds(case):
-    if case == "prehost-visibility":
+    if case in ("prehost-visibility", "host-by-hand"):
         return {"host": {"SessionDirectoryUrl": "https://127.0.0.1:49479"}}
     if case in ("host-relay", "net-connection"):
         return {"host": {"SessionDirectoryUrl": ""}}
@@ -351,6 +351,17 @@ def menu_step(command):
     return {"op": "menu", "command": command}
 
 
+def hand_pick(combo, item):
+    """A hand's pick from a drop-down: the list opens, the mouse goes down on the row, frames pass, the mouse comes up."""
+    return (f"combo_drop {combo}\nwait 3\ncombo_press {combo} {item}\nwait 4\ncombo_release {combo}\nwait 4\n"
+            f"assert_label {combo} {item}\n")
+
+
+def hand_click(control):
+    """A hand's click: down on one frame, up on a later one."""
+    return f"hand_press {control}\nwait 3\nhand_release {control}\nwait 4\n"
+
+
 def roster_fit_observations(observation):
     found = []
     for step in observation.get("steps", []):
@@ -367,6 +378,11 @@ def status_wrap_notes(observation):
         if isinstance(note, str) and (note == "status: no wrap surface" or '"surface":"status"' in note):
             notes.append(note)
     return notes
+
+
+def paired_round_ticks(case):
+    """How many ticks a paired case's round runs: long enough for what its probes walk through before its end."""
+    return 2400 if case == "repair" else 1200 if case in ("pause", "pause-save", "save-hotkey") else 400
 
 
 def probe_root(root, who):
@@ -460,8 +476,8 @@ def pause_probe(who, root):
         *pause_rows(), menu_step("dump_host_options"), running]
     if who == "client":
         # The leaver's drive starts only once the host's checks are done, so the clean leave cannot
-        # beat the running-match assertions. Gate the leave on a later sim tick so it still has
-        # margin before the 400-tick cap. The menu pump that follows the leave still serves the
+        # beat the running-match assertions. Gate the leave on a later sim tick; the round runs 1200
+        # ticks so the host's page tour never meets its end first. The menu pump that follows the leave still serves the
         # probe's menu-scope steps, so its finish lands there.
         steps += [{"op": "wait_file", "path": str(probe_root(root, "host") / "done.json")},
                   {"op": "wait", "sim_at_least": 220},
@@ -756,6 +772,52 @@ def scripts(case, port, root, size="960x540"):
             probes[who] = {"schema": 1, "timeout_ms": 45000, "steps": steps}
         return ({who: text + f"wait_file {probe_root(root, who) / 'done.json'} 60\nassert_substate Lobby\nexit\n"
                  for who, text in (("host", host), ("client", client))}, probes)
+    if case == "host-by-hand":
+        # Every kind of control on the host options, operated the way a hand does: a press and its release on different
+        # frames with the panel's own per-frame refresh in between, and the value read back frames after.
+        text = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\nactivate ButtonHostOptions\nwait_ms 400\n"
+                "assert_substate HostOptions\nactivate TabHostPageSeats\nwait 3\n"
+                + hand_pick("ComboHostSeatPlayers", "3") + hand_pick("ComboHostSeatPlayers", "4")
+                + "activate TabHostPageRules\nwait 3\n"
+                # The draft starts from the activity's own rules: Skirmish Defense names no gold (2,000) and fog of war on.
+                + "assert_label LabelHostRulesGoldValue 2000 oz\nassert_checked CheckHostRulesFog 1\n"
+                + hand_pick("ComboHostRulesMode", "Co-op PvE")
+                + hand_click("CheckHostRulesFog") + "assert_checked CheckHostRulesFog 0\n"
+                + hand_click("CheckHostRulesFog") + "assert_checked CheckHostRulesFog 1\n"
+                + hand_click("CheckHostRulesDeploy") + "assert_checked CheckHostRulesDeploy 1\n"
+                + "slider_set SliderHostRulesDifficulty 80\nwait 4\nassert_label LabelHostRulesDifficultyValue 80\n"
+                + "slider_set SliderHostRulesGold 5000\nwait 4\nassert_label LabelHostRulesGoldValue 5000 oz\n"
+                # A team's rules stay its own: picking another team shows that team's and writes nothing onto it.
+                + "slider_set SliderHostRulesSkill 30\nwait 4\nassert_label LabelHostRulesSkillValue 30\n"
+                + hand_pick("ComboHostRulesTeam", "Team 2") + "assert_label LabelHostRulesSkillValue 50\n"
+                + hand_pick("ComboHostRulesTeam", "Team 1") + "assert_label LabelHostRulesSkillValue 30\n"
+                + "activate TabHostPageNetwork\nwait 3\nscreenshot hand_net_connection\nwait 2\n"
+                + "activate TabHostNetTuning\nwait 3\nscreenshot hand_net_delay\nwait 2\n"
+                + hand_pick("ComboHostNetRedundancy", "7 ticks")
+                + "activate TabHostPageRecovery\nwait 3\n"
+                + hand_click("CheckHostRecRepair") + "assert_checked CheckHostRecRepair 0\n"
+                + hand_pick("ComboHostRecReturnWindow", "10 minutes")
+                + "activate TabHostPageSession\nwait 3\n"
+                + hand_pick("ComboHostSessIdle", "20 minutes"))
+        return {"host": text + "exit\n"}, {}
+    if case == "host-follows-activity":
+        # The host's rules start from the activity and follow it, as the Scenario screen's do: a new activity brings its
+        # own gold, fog of war, clear path and deployment, a new difficulty its gold band, and a rule the host set himself stays.
+        text = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\nactivate ButtonHostOptions\nwait_ms 400\n"
+                "assert_substate HostOptions\nactivate TabHostPageRules\nwait 3\n"
+                # Wave Defense: 4,000 in its medium band, fog of war, clear path and deployment on.
+                + hand_pick("ComboHostRulesActivity", "Wave Defense - Base.rte") + "wait 3\n"
+                "assert_label LabelHostRulesGoldValue 4000 oz\nassert_checked CheckHostRulesFog 1\n"
+                "assert_checked CheckHostRulesClearPath 1\nassert_checked CheckHostRulesDeploy 1\n"
+                + "slider_set SliderHostRulesDifficulty 80\nwait 4\nassert_label LabelHostRulesGoldValue 3000 oz\n"
+                + "slider_set SliderHostRulesGold 5000\nwait 4\nassert_label LabelHostRulesGoldValue 5000 oz\n"
+                + hand_click("CheckHostRulesFog") + "assert_checked CheckHostRulesFog 0\n"
+                # Skirmish Defense names no gold and no deployment; the gold and the fog of war are the host's now.
+                + hand_pick("ComboHostRulesActivity", "Skirmish Defense - Base.rte") + "wait 3\n"
+                "assert_label LabelHostRulesGoldValue 5000 oz\nassert_checked CheckHostRulesFog 0\n"
+                "assert_checked CheckHostRulesClearPath 1\nassert_checked CheckHostRulesDeploy 0\n"
+                + "slider_set SliderHostRulesDifficulty 20\nwait 4\nassert_label LabelHostRulesGoldValue 5000 oz\n")
+        return {"host": text + "exit\n"}, {}
     if case == "prehost-visibility":
         text = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\n"
                 "activate ButtonHostOptions\nwait_ms 400\nactivate TabHostPageNetwork\n"
@@ -951,7 +1013,7 @@ def scripts(case, port, root, size="960x540"):
         # OS side effects (a shell window, a clipboard write) a readback run must not take.
         text = OPTIONS + net_page("Files")
         for control in ("LabelNetAutosaveTitle", "LabelNetAutosave", "LabelNetAutosaveHost",
-                        "LabelNetAutosaveIntTitle", "LabelNetAutosaveInterval", "LabelNetAutosaveIntervalHost",
+                        "LabelNetAutosaveIntTitle", "LabelNetAutosaveInterval",
                         "LabelNetAutosavesKeptTitle", "TextNetworkAutosavesKept", "LabelNetAutosavesKeptHint",
                         "LabelNetAutosaveInfo", "ButtonNetOpenAutosaves", "ButtonNetCopyAutosavesPath",
                         "LabelNetDiagDirTitle", "TextNetworkDiagDir", "ButtonNetOpenDiagnostics",
@@ -960,8 +1022,7 @@ def scripts(case, port, root, size="960x540"):
         # The seeded 45 is under the minute a hosted match clamps to; the page shows that 60 s.
         text += ("assert_label LabelNetAutosave Enabled\n"
                  "assert_label LabelNetAutosaveInterval 60 s\n"
-                 "assert_label LabelNetAutosaveHost Set by the host\n"
-                 "assert_label LabelNetAutosaveIntervalHost Set by the host\n"
+                 "assert_label LabelNetAutosaveHost Both set by the host\n"
                  "assert_label LabelNetAutosavesKeptTitle Autosaves kept:\n"
                  "assert_label LabelNetAutosavesKeptHint " + AUTOSAVES_KEPT_HINT + "\n"
                  "assert_label TextNetworkAutosavesKept " + FILES_SEED["NetworkAutosavesKept"] + "\n"
@@ -1903,7 +1964,7 @@ def run_case(options, case, root, failing=None):
                 args += ["-net-player-name", "F" * (DISPLAY_NAME_MAX_BYTES + 1)]
             if paired and not menu_driven:
                 # A repair round is long enough for a seat held at its start to finish its rejoin before the repair runs.
-                round_ticks = "2400" if case == "repair" else "1200" if case in ("pause-save", "save-hotkey") else "400"
+                round_ticks = str(paired_round_ticks(case))
                 args += ["-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
                          "-net-match-ticks", round_ticks, "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
                          "-input-script", str(inputs), "-net-match-report", str(root / f"{who}-match.json")]
@@ -2203,10 +2264,11 @@ def run_case(options, case, root, failing=None):
             assert f"[net-match] hold peer=2 frame={leave_frame} AI in control" in logs["host"], leave_frame
             host = reports["host"]
             lockstep = host["service"]["runner"]["lockstep"]
-            assert lockstep["peer_leave_frames"] == {"2": leave_frame} and 0 < leave_frame < 400, lockstep
+            ticks = paired_round_ticks(case)
+            assert lockstep["peer_leave_frames"] == {"2": leave_frame} and 0 < leave_frame < ticks, lockstep
             assert host["service"]["is_host"] is True and lockstep["host_peer_id"] == 1, host["service"]["is_host"]
-            assert host["frames_planned"] == 400 and host["running_ticks"] >= 400, host["running_ticks"]
-            assert lockstep["completed_simulation_tick"] >= 400, lockstep["completed_simulation_tick"]
+            assert host["frames_planned"] == ticks and host["running_ticks"] >= ticks, host["running_ticks"]
+            assert lockstep["completed_simulation_tick"] >= ticks, lockstep["completed_simulation_tick"]
             assert host["service"]["status"] == "e2e complete", host["service"]["status"]
             result["announced_leave"] = {"peer_id": 2, "frame": leave_frame, "leave_acks": leave["client_leave_acks"],
                 "ticket_cleared": not leave["ticket_stored"], "completed_tick": lockstep["completed_simulation_tick"]}
@@ -2343,7 +2405,7 @@ def run_case(options, case, root, failing=None):
                                          "LabelNetRecoveryStatusTitle", "LabelNetRecoveryStatus",
                                          "ButtonNetRejoin", "ButtonNetCancelRecovery"),
                         "net-files": ("LabelNetAutosave", "LabelNetAutosaveInterval", "LabelNetAutosaveHost",
-                                      "LabelNetAutosaveIntervalHost", "LabelNetAutosavesKeptTitle",
+                                      "LabelNetAutosavesKeptTitle",
                                       "TextNetworkAutosavesKept", "LabelNetAutosavesKeptHint", "LabelNetAutosaveInfo",
                                       "ButtonNetOpenAutosaves", "ButtonNetCopyAutosavesPath",
                                       "TextNetworkDiagDir", "ButtonNetOpenDiagnostics",
@@ -2400,9 +2462,11 @@ def run_case(options, case, root, failing=None):
                     assert all(rect[0] == column for rect in opens) and all(rect[0] == action_column for rect in copies), (opens, copies)
                     assert opens[0][2:] == opens[1][2:] and copies[0][2:] == copies[1][2:], (opens, copies)
                     assert opens[1][1] - opens[0][1] == copies[1][1] - copies[0][1] == 40, (opens, copies)
-                    for name in ("LabelNetAutosaveHost", "LabelNetAutosaveIntervalHost"):
-                        assert rows[name]["text"] == "Set by the host", rows[name]
-                        assert rows[name]["enabled"] is False, rows[name]
+                    # One note covers both host-set rows: it spans them, so the page never says it twice.
+                    note, first, second = (rows[name] for name in ("LabelNetAutosaveHost", "LabelNetAutosave", "LabelNetAutosaveInterval"))
+                    assert note["text"] == "Both set by the host" and note["enabled"] is False, note
+                    assert note["rect"][1] == first["rect"][1] and note["rect"][1] + note["rect"][3] == second["rect"][1] + second["rect"][3], (note, first, second)
+                    assert "LabelNetAutosaveIntervalHost" not in rows, rows.get("LabelNetAutosaveIntervalHost")
                     widths = {rows[name]["rect"][2] for name in FILES_BUTTONS}
                     assert len(widths) == 1, {name: rows[name]["rect"][2] for name in FILES_BUTTONS}
             captioned = [control for control in images[0]["controls"] if control["text"]]

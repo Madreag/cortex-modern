@@ -1233,6 +1233,8 @@ static bool s_frameRecorderSelfTest = false;
 static bool s_saveIoSelfTest = false;
 static bool s_saveIoSelfTestQueued = false;
 static std::string s_saveIoSelfTestName;
+static uint64_t s_saveIoSelfTestAfter = 0;
+static uint64_t s_saveIoSelfTestFirstTick = 0;
 static bool s_saveMenuSelfTest = false;
 static bool s_saveMenuSelfTestPassed = true;
 static bool s_menuScriptFailed = false;
@@ -2246,6 +2248,12 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if ((currentArg == "-load-io-selftest" || currentArg == "-load-io-success-selftest") && i + 1 < argCount) {
 			s_loadSelfTestName = argValue[i + 1];
 			s_loadSelfTestExpected = currentArg == "-load-io-success-selftest";
+			i += 2;
+			continue;
+		}
+		// The save waits this many ticks past the first one this run simulates.
+		if (currentArg == "-save-io-selftest-after" && i + 1 < argCount) {
+			s_saveIoSelfTestAfter = std::strtoull(argValue[i + 1], nullptr, 10);
 			i += 2;
 			continue;
 		}
@@ -4800,7 +4808,7 @@ static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, con
 	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8,
 	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]" + (heldRejoin ? "  /  Leave [Esc] - your seat is kept" : ""), GUIFont::Centre);
 	g_MenuMan.DrawNetworkUI();
-	ScenarioRunner::DrawNetUiToasts();
+	ScenarioRunner::DrawNetUiToasts(resyncTitle);
 	ScenarioRunner::NoteResyncOverlayFrame();
 	g_MenuMan.DrawLocalPauseMenu();
 	g_WindowMan.UploadFrame();
@@ -6770,7 +6778,13 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				s_netMatchHeals.Note(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
 				g_ConsoleMan.PrintString("NETWORK: Resyncing from the host (" + std::to_string(s_netMatchHeals.Total()) + "): " + error);
 				System::PrintDiagnosticLine("[net-match] resync: reloading from the host snapshot");
-				ScenarioRunner::PushNetUiToast("resync_start", "Resyncing the match...");
+				const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
+				const auto seatName = [&snapshot](uint8_t peer) {
+					if (const auto view = g_NetMatchService.GetSeatView(peer); view && !view->name.empty()) return view->name;
+					const auto member = std::find_if(snapshot.members.begin(), snapshot.members.end(), [peer](const NetLobbyMember& row) { return row.peerId == peer; });
+					return member != snapshot.members.end() ? member->displayName : std::string();
+				};
+				ScenarioRunner::PushNetUiToast("resync_start", NetRepairStartLine(error, seatName(snapshot.localPeerId), seatName(snapshot.hostPeerId), snapshot.isHost));
 			}
 			ScenarioRunner::ClearControllerReplayError();
 			std::string resyncError;
@@ -6782,9 +6796,15 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			const size_t heldAt = error.find("PeerHeld:");
 			const std::string stopLine = heldAt == std::string::npos ? std::string() : error.substr(heldAt + 9);
 			const std::string unreachableAtStop = stopLine.rfind("The host is unreachable", 0) == 0 ? stopLine : std::string();
+			// The wait's screen goes up before the host's snapshot save holds this thread, so the stopped match says why at once.
+			const bool leaveAtOnce = UpdateResyncUI(0, heldRejoin, unreachableAtStop);
 			if (heldRejoin) {
 				resyncOk = g_NetMatchService.BeginHeldRejoin(&resyncError);
 			} else resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
+			if (leaveAtOnce) {
+				leftTheWait = true;
+				resyncOk = false;
+			}
 			std::string launchPreset;
 			for (bool attempt = resyncOk; attempt;) {
 				attempt = false;
@@ -7406,7 +7426,8 @@ void RunGameLoop() {
 				// The isolation and same-tick rows need a live scene, which the standalone flag has not got.
 				RTE::RunCheckpointSceneRows();
 			}
-			if (simTick == 1 && (s_netMatchServiceE2E || !s_netReplayInPath.empty() || ScenarioRunner::IsActive())) {
+			// A match a menu script started reports its rules too: what the menus chose is what the round plays by.
+			if (simTick == 1 && (s_netMatchServiceE2E || !s_netReplayInPath.empty() || ScenarioRunner::IsActive() || !s_menuScriptPath.empty())) {
 				if (auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) {
 					{
 						std::ostringstream line;
@@ -8647,7 +8668,11 @@ void RunGameLoop() {
 				g_MetricsCollector.SetResult(s_loadSelfTestPassed);
 				break;
 			}
-			if (s_saveIoSelfTest && simTick > 0) {
+			if (s_saveIoSelfTest && simTick > 0 && s_saveIoSelfTestFirstTick == 0) s_saveIoSelfTestFirstTick = simTick;
+			if (s_saveIoSelfTest && simTick > 0 && simTick >= s_saveIoSelfTestFirstTick + s_saveIoSelfTestAfter) {
+				if (s_saveIoSelfTestAfter > 0) {
+					System::PrintDiagnosticLine("[save-selftest] played " + std::to_string(simTick - s_saveIoSelfTestFirstTick) + " ticks from " + std::to_string(s_saveIoSelfTestFirstTick));
+				}
 				if (s_saveMenuSelfTest) s_saveMenuSelfTestPassed = SaveLoadMenuGUI::RunSaveSelfTest(s_saveIoSelfTestName, s_saveIoSelfTestQueued);
 				else s_saveIoSelfTestQueued = g_ActivityMan.SaveCurrentGame(s_saveIoSelfTestName);
 				{
@@ -10787,6 +10812,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-seat-log-selftest") {
 			return NetLockstepSelfTest::RunSeatLog();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-released-claims-selftest") {
+			return NetLockstepSelfTest::RunReleasedClaims();
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-selftest") {
 			if (NetMatchSelfTest::RunBeforeInitialization() != 0) return EXIT_FAILURE;

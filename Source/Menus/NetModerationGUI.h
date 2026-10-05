@@ -30,7 +30,8 @@ namespace RTE {
 		void Update();
 		void Draw();
 		/// Draws the bounded toast rows after the rest of the network UI.
-		void DrawMatchToasts();
+		/// @param screenLine The line the screen beneath already shows; the rows never repeat it.
+		void DrawMatchToasts(const std::string& screenLine = {});
 		bool SetOpen(bool open);
 		bool IsOpen() const { return m_Open; }
 		bool AutomationModerate(const std::string& action, int stableSeat);

@@ -26,6 +26,18 @@ A community fork of the [Cortex Command Community Project](https://github.com/co
 
 ---
 
+> [!NOTE]
+> **Alpha 1 status, October 4.** Playable today, built from source on Windows, macOS and Linux. The full acceptance run on this exact build has not finished yet.
+>
+> **Being fixed right now**
+> - A join refused as "modules" does not say which mod differs.
+> - Memory use in hour-long persistent worlds is being measured.
+>
+> **Not proven yet**
+> - On a phone hotspot, two-player matches work on LTE, both with Automatic and with Relay only. Four players, a relay login expiring mid-match and the host leaving mid-match are not proven over mobile data yet.
+>
+> The whole list is in [Known issues](#known-issues).
+
 ## What's new
 
 | | | |
@@ -44,7 +56,9 @@ A community fork of the [Cortex Command Community Project](https://github.com/co
 
 ## Play in five minutes
 
-> **Both players need the same Cortex Modern version and the same mods.** The version is printed at the bottom left of the main menu and in `VERSION.txt` beside the game.
+> No second player handy? [Run a host and a client side by side on one Windows PC](docs/handtest.md).
+>
+> **Both players need the same Cortex Modern version and the same mods.** The version is printed at the bottom left of the main menu and in `VERSION.txt` beside the game. If a join is refused as "modules", the two `Data` folders differ: the same mods in the same versions on both sides fixes it.
 >
 > <img src="docs/images/version-line.png" alt="The version line on the main menu: Community Project v7.0.0, multiplayer 0.1.0-alpha.1 (protocol 5)" width="300">
 
@@ -55,7 +69,7 @@ A community fork of the [Cortex Command Community Project](https://github.com/co
 2. Unpack anywhere. Start `Cortex Command.exe`. If SmartScreen asks, choose **More info → Run anyway**.
 3. **Host:** Main Menu → **Multiplayer** → type your name → **Host Game** → set the activity, scene and the number of players → **Create Lobby**.
 4. **Join:** Main Menu → **Multiplayer** → type your name → **Join Game** → pick the match from the list (or type the host's address and port) → **Connect**.
-5. The match starts when every seat is filled. In the match, **F6** opens the seats panel; the network overlay in the corner shows input delay, route (direct or relay) and pace.
+5. When everyone is in the lobby, each joining player presses **Ready**, then the host presses **Start Match**. In the match, **F6** opens the seats panel; the network overlay in the corner shows input delay, route (direct or relay) and pace.
 
 </details>
 
@@ -185,7 +199,8 @@ Void Wanderers, the most-played mod, is part of the test set: it is played in si
 | Checkpoints and resume from disk for the whole match | Resume scenes; both peers killed and reloaded |
 | Persistent worlds with late joiners and watchers | World join, world restart and segment tests |
 | Host moderation: seats, applications, kick, ban | Moderation scenes, on video |
-| Direct connection with STUN; Cloudflare relay fallback; your own relay | Relay comparison and relay-only matches |
+| Direct connection with STUN; Cloudflare relay fallback; your own relay | Relay comparison and relay-only matches, and a phone-hotspot session on LTE |
+| Saves from the original game and from earlier builds load, play and save again | Old-save tests on Windows and Linux |
 | Windows, macOS and Linux in one match | Cross-platform determinism tests on every build |
 | Mods unchanged, Void Wanderers tested | The mod battery and the Void Wanderers scenes |
 
@@ -197,10 +212,13 @@ Alpha means alpha. Everything below is tracked; items marked *being fixed* have 
 
 | Issue | What you would see | State |
 |---|---|---|
-| Host and client disagree under lag | The first full test run of this alpha found the two machines' states diverging under artificial lag. Players would see a repair, or a desync. | **Being fixed** (the first priority) |
-| The same message shown twice | During a repair, "Resyncing the match..." can appear twice at once. Cosmetic. | **Being fixed** |
+| A refused join says only "modules" | Two players whose game data differ by a single byte cannot join each other, and the message does not say which mod differs. Both need identical `Data` folders. | **Being fixed** |
+| A relayed connection can give up early | Setting up a relayed connection over a slow path can take longer than the 10 seconds it is given. Trying again, or Automatic, gets through. | **Being fixed** |
+| Hour-long worlds | Memory use grows over a long persistent world. Being measured to tell a leak from a cache that stops growing. | **Being measured** |
+| Mobile data | Two players: proven on LTE, direct and through the relay. Four players, relay login renewal and host loss over mobile data: not proven yet. | Being tested |
+| Your stop may show a fraction late, rarely | On a joined machine, in moments that depend on randomness (debris at your feet), your own stop can show one input delay late: 1 to 3 times in 32 in a heavy-debris test. | Under review |
+| A joiner can pause a busy world for a moment | When someone joins a busy persistent world on a loaded host, everyone can see a pause of about a third of a second while the snapshot is taken. | Next alpha |
 | Mac hosts write checkpoints slowly | A joiner of a Mac-hosted world waits about 5 seconds for the snapshot instead of 2. | Next alpha |
-| Your stop may show a fraction late, rarely | On a joined machine, in moments that depend on randomness (debris at your feet), your own stop can show one input delay late. | Being measured |
 | Held seat between rounds | A newcomer cannot apply for a dropped player's seat between rounds, only during play. | Next alpha |
 | Watching a brand-new world | A watcher joining a world created moments ago gets no status line. | Next alpha |
 | Autosave on a slow host | A 2014-class host with checkpoints on can give others a brief pause once per save. | Next alpha |
@@ -224,8 +242,8 @@ Public names first; the names used inside the project in parentheses.
 
 ## Branches and releases
 
-- `alpha/v1-20260923`: the alpha. Every reviewed fix lands here. This README describes this branch.
-- `stage2/*`: work branches, one per change, merged into the alpha as they are reviewed and built.
+- `main`: the alpha. A plain clone gives you this branch, and this README describes it.
+- `cm-dev`: the integration branch. Every change lands here first, reviewed and built, and `main` is fast-forwarded from it.
 - `development`: the Community Project's upstream branch, untouched, kept for merging their work in.
 - Releases will be tags with packages for the three operating systems, checksums and the matching source. Pre-releases are flagged, so "latest" never points at an alpha.
 
@@ -239,7 +257,7 @@ Multiplayer needs the GameNetworkingSockets library (GNS). A build without it is
 <summary><b>Windows (Visual Studio)</b></summary>
 
 1. Install [Visual Studio Community](https://visualstudio.microsoft.com/downloads/) 2019 (16.10 or newer) or 2022 with the C++ workload, and both x86 and x64 [Visual C++ Redistributables](https://support.microsoft.com/en-us/help/2977003/the-latest-supported-visual-c-downloads).
-2. Clone this repository and check out the alpha branch.
+2. Clone this repository. The default branch, `main`, is the alpha.
 3. Build or install GNS and point `GNS_ROOT` and `GNS_DEP_ROOT` at it (`RTEA.common.props` reads them).
 4. Copy `fmod.dll` from `external\lib\win` into the root directory.
 5. Open `RTEA.sln`, choose x64 and a configuration, build and run.
@@ -258,7 +276,6 @@ Dependencies: `meson` (0.60+), `ninja`, a C++17 compiler (GCC 11+ or Clang 13+),
 ```sh
 git clone https://github.com/Madreag/cortex-modern.git
 cd cortex-modern
-git checkout alpha/v1-20260923
 meson setup build --buildtype=release
 ninja -C build
 ```
@@ -282,7 +299,7 @@ The full upstream build notes, including recommended Visual Studio plugins, debu
 
 This fork follows the Community Project's engineering rules: controller-sync multiplayer (never deterministic AI), standardized floating point for cross-platform determinism (never expanded fixed-point), and small, single-purpose commits. Changes that would break existing mods are not accepted; the engine is fixed instead.
 
-Issues and pull requests are welcome here. Changes that belong upstream are prepared as focused pull requests to the Community Project once they are proven here.
+Issues and pull requests are welcome here. Changes that belong upstream are prepared as focused pull requests to the Community Project once they are proven here. The rules and the checks to run first are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Reporting a bug
 
@@ -292,6 +309,8 @@ Open an issue with:
 2. Your operating system and the other players' operating systems.
 3. The connection mode the overlay showed: *via direct* or *via relay*.
 4. **Save Diagnostics** (the button under the Multiplayer and Host screens, also in Settings → Network): attach the diagnostics it saves. Check the bundle for anything you consider private before attaching it.
+
+For anything that could be used against other players, use the private route in [SECURITY.md](SECURITY.md) instead of a public issue.
 
 ## Credits and license
 

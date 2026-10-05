@@ -9,6 +9,7 @@
 #include "ScenarioRunner.h"
 
 #include <iostream>
+#include <utility>
 
 bool HarnessMatchRunActive(); // Main.cpp: a -net-match-service-e2e match or the -net-replay playback of one.
 
@@ -49,6 +50,41 @@ namespace RTE {
 			}
 			activity.SetTeamTech(team, tech);
 			activity.SetTeamAISkill(team, teamRules.aiSkill);
+		}
+		return true;
+	}
+
+	bool NetActivitySetup::SeedRulesFromActivity(NetMatchStandardRules& rules, unsigned which) {
+		const GameActivity* activity = dynamic_cast<const GameActivity*>(FindInModule(rules.activityType, rules.activityModule, rules.activityPreset));
+		if (!activity) {
+			return false;
+		}
+		if (which & StartingGold) {
+			const std::pair<int, int> bands[] = {
+			    {Activity::DifficultySetting::CakeDifficulty, activity->GetDefaultGoldCakeDifficulty()},
+			    {Activity::DifficultySetting::EasyDifficulty, activity->GetDefaultGoldEasyDifficulty()},
+			    {Activity::DifficultySetting::MediumDifficulty, activity->GetDefaultGoldMediumDifficulty()},
+			    {Activity::DifficultySetting::HardDifficulty, activity->GetDefaultGoldHardDifficulty()},
+			    {Activity::DifficultySetting::NutsDifficulty, activity->GetDefaultGoldNutsDifficulty()},
+			    {Activity::DifficultySetting::MaxDifficulty, activity->GetDefaultGoldMaxDifficulty()}};
+			int gold = activity->GetDefaultGoldMaxDifficulty() > -1 ? activity->GetDefaultGoldMaxDifficulty() : 2000;
+			for (const auto& [ceiling, bandGold] : bands) {
+				if (rules.difficulty <= ceiling && bandGold > -1) {
+					gold = bandGold;
+					break;
+				}
+			}
+			// The top of the Scenario screen's gold slider is its infinite value; the config carries that sentinel.
+			rules.startingGold = gold > static_cast<int>(NetMatchConfigUtil::c_MaxFiniteStartingGold) ? NetMatchConfigUtil::c_InfiniteGold : static_cast<uint32_t>(gold);
+		}
+		if (which & FogOfWar) {
+			rules.fogOfWar = activity->GetDefaultFogOfWar() > 0;
+		}
+		if (which & ClearPathToOrbit) {
+			rules.requireClearPathToOrbit = activity->GetDefaultRequireClearPathToOrbit() > 0;
+		}
+		if (which & DeployUnits) {
+			rules.deployUnits = activity->GetDefaultDeployUnits() > 0;
 		}
 		return true;
 	}

@@ -373,7 +373,8 @@ namespace RTE {
 		/// Reclaims of the local seat so far; a surface restarts its own reading when this moves.
 		static uint32_t GetLockstepSeatReclaimEpoch();
 		/// Draws at most three unexpired toast rows at bottom centre, outside simulation state.
-		static void DrawNetUiToasts();
+		/// @param screenLine The line the screen beneath already shows; the rows never repeat it.
+		static void DrawNetUiToasts(const std::string& screenLine = {});
 		/// Every banner queued this run, in order — the report's ui.toasts source.
 		static const std::vector<NetUiToastRecord>& GetNetUiToastLog();
 		/// Unexpired presentation events, oldest first. A toast with no shown stamp is still waiting.
@@ -410,7 +411,9 @@ namespace RTE {
 		/// unowned. A committed transition applies it, so the map moves the same way on every peer.
 		static void ReleaseLockstepControlOverridesOf(uint8_t ownerPeerId);
 		/// Erases a dropped claim whose claimant is gone and whose seat is no longer held.
-		static bool TakeExpiredDroppedClaim(int64_t actorUniqueID, uint64_t frame);
+		static bool TakeExpiredDroppedClaim(int64_t actorUniqueID, uint64_t frame, const std::vector<uint8_t>& releasedSeats = {});
+		/// Ends every claim a released seat still keeps, the actors' outside the world included, at the frame its release lands on.
+		static void EndReleasedSeatClaims(uint8_t peerId);
 		/// Whether this peer may issue team commands for the team (any of a shared team's human peers may).
 		static bool IsLockstepTeamCommandSender(int team, uint8_t senderPeerId, uint64_t atFrame = 0);
 		/// Team authority, or the sender owns the target, or writerUID names a same-team actor the sender owns.

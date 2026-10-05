@@ -1986,6 +1986,11 @@ bool ActivityMan::LoadAndLaunchGame(const std::string& fileName) {
 		return false;
 	}
 	g_ConsoleMan.PrintString("SYSTEM: Game \"" + fileName + "\" loaded!");
+	if (std::getenv("CC_TEST_UID_CENSUS")) {
+		long highest = 0;
+		for (const MovableObject* object: g_MovableMan.SnapshotKnownObjects()) highest = std::max(highest, object->GetUniqueID());
+		System::PrintDiagnosticLine("[load-game] uid_counter=" + std::to_string(MovableObject::GetUniqueIDCounter()) + " highest_known=" + std::to_string(highest));
+	}
 	return true;
 }
 
@@ -2034,11 +2039,20 @@ bool ActivityMan::LoadArchiveToRestart(const std::string& archivePath, const std
 	const long uidCounter = MovableObject::GetUniqueIDCounter();
 	const bool wasRestoring = g_MovableMan.IsRestoringSnapshot();
 	g_MovableMan.SetRestoringSnapshot(true);
+	MovableObject::TakeHighestPersistedUniqueIDRead();
 	const bool read = ReadSavedGameArchive(archivePath, fileName, candidate);
+	const long highestSavedUID = MovableObject::TakeHighestPersistedUniqueIDRead();
 	g_MovableMan.SetRestoringSnapshot(wasRestoring);
 	if (!read) {
 		MovableObject::PinUniqueIDCounter(uidCounter);
 		return false;
+	}
+	if (candidate.uniqueIDCounter < 0) {
+		// A save without saved IDs keeps the ones its objects drew while it was read.
+		registryScope.KeepDrawnUniqueIDs();
+	} else {
+		// A save may carry IDs above the counter it recorded; the counter resumes past every one of them.
+		candidate.uniqueIDCounter = std::max(candidate.uniqueIDCounter, highestSavedUID);
 	}
 	m_RestartRestoresSnapshot = true;
 	{

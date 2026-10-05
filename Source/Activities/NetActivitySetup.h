@@ -23,6 +23,15 @@ namespace RTE {
 		/// Applies the agreed standard rules to an activity before it starts, mirroring the setter order of
 		/// ScenarioActivityConfigGUI::StartGame. False with a reason when a rule names something uninstalled.
 		static bool ApplyStandardRules(const NetMatchStandardRules& rules, GameActivity& activity, std::string* error);
+
+		/// The rules an activity names its own defaults for.
+		enum SeededRule : unsigned { StartingGold = 1, FogOfWar = 2, ClearPathToOrbit = 4, DeployUnits = 8, AllSeededRules = 15 };
+
+		/// Seeds the chosen rules from the rules' activity exactly as ScenarioActivityConfigGUI seeds its controls:
+		/// the gold of the first difficulty band at or above the rules' difficulty that names one, then the Max band's,
+		/// then 2,000; fog of war, clear path to orbit and unit deployment from the activity's defaults.
+		/// False, the rules untouched, when the rules name no installed game activity.
+		static bool SeedRulesFromActivity(NetMatchStandardRules& rules, unsigned which = AllSeededRules);
 	};
 
 } // namespace RTE

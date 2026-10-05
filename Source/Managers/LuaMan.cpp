@@ -6838,12 +6838,15 @@ bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<st
 			lua_pop(m_State, 1);
 		}
 	}
-	RestoreScriptCallbacks(problems, !reuseHeld);
+	std::unordered_set<const MovableObject*> rebound;
+	RestoreScriptCallbacks(problems, !reuseHeld, &rebound);
 	if (this == &g_LuaMan.GetMasterScriptState()) {
 		if (const char* probe = std::getenv("CC_TEST_F21_INVENTORY"); probe && std::strcmp(probe, "1") == 0) GameActivity::RunNetInventoryRelaunchProbe("held");
 	}
 	// The archive's horizon is where the state counts on from, whatever the wiring above allocated.
 	luaJIT_set_state_serial(m_State, horizon);
+	// Objects the graph did not carry still hold functions of the cache it replaced; whatever they load now is born past the horizon.
+	RebindScriptFunctionsFromCache(rebound);
 	lua_settop(m_State, top);
 	return problems.size() == before;
 }
@@ -7000,7 +7003,32 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 	lua_settop(m_State, top);
 }
 
-void LuaStateWrapper::RestoreScriptCallbacks(std::vector<std::string>& problems, bool restoreAsync) {
+// Whether every function of an object's callback record comes from a script the object runs; a malformed record fits, so its problem is reported where it is read.
+static bool CallbacksFitScripts(lua_State* L, int index, const std::unordered_map<std::string, bool>& scripts) {
+	const int top = lua_gettop(L);
+	const int record = index < 0 ? top + index + 1 : index;
+	bool fits = true;
+	lua_pushnil(L);
+	while (fits && lua_next(L, record)) {
+		if (lua_istable(L, -1)) {
+			const int count = static_cast<int>(lua_objlen(L, -1));
+			for (int entry = 1; fits && entry <= count; ++entry) {
+				lua_rawgeti(L, -1, entry);
+				if (lua_istable(L, -1)) {
+					lua_getfield(L, -1, "path");
+					if (lua_isstring(L, -1) && !scripts.contains(lua_tostring(L, -1))) fits = false;
+					lua_pop(L, 1);
+				}
+				lua_pop(L, 1);
+			}
+		}
+		lua_pop(L, 1);
+	}
+	lua_settop(L, top);
+	return fits;
+}
+
+void LuaStateWrapper::RestoreScriptCallbacks(std::vector<std::string>& problems, bool restoreAsync, std::unordered_set<const MovableObject*>* rebound) {
 	// A round's start scripts carry no activity: the one in play is about to be replaced, and its pending paths go with it.
 	restoreAsync = restoreAsync && !s_RoundStartScripts;
 	const int top = lua_gettop(m_State);
@@ -7106,7 +7134,10 @@ void LuaStateWrapper::RestoreScriptCallbacks(std::vector<std::string>& problems,
 		while (lua_next(m_State, -2)) {
 			const long uid = lua_isstring(m_State, -2) ? static_cast<long>(std::strtol(lua_tostring(m_State, -2), nullptr, 10)) : 0;
 			MovableObject* mo = g_MovableMan.FindObjectByUniqueID(uid);
+			// Objects outside the world draw their IDs per process, so a record names this object only if it runs the scripts the record does.
+			if (mo && mo->GetLuaState() == this && lua_istable(m_State, -1) && !CallbacksFitScripts(m_State, -1, mo->m_EnabledScripts)) mo = nullptr;
 			if (mo && mo->GetLuaState() == this && lua_istable(m_State, -1)) {
+				if (rebound) rebound->insert(mo);
 				mo->m_FunctionsAndScripts.clear();
 				lua_pushnil(m_State);
 				while (lua_next(m_State, -2)) {
@@ -7147,6 +7178,37 @@ void LuaStateWrapper::RestoreScriptCallbacks(std::vector<std::string>& problems,
 		}
 	}
 	lua_settop(m_State, top);
+}
+
+void LuaStateWrapper::RebindScriptFunctionsFromCache(const std::unordered_set<const MovableObject*>& rebound) {
+	std::vector<MovableObject*> objects;
+	for (MovableObject* mo: g_MovableMan.SnapshotKnownObjects()) {
+		if (mo->GetLuaState() == this && !mo->IsOriginalPreset() && !mo->m_FunctionsAndScripts.empty() && !rebound.contains(mo) && !LuaMan::IsPreviewClone(mo)) objects.push_back(mo);
+	}
+	// Any script a rebind has to run again is born in the same order on every peer restoring the same image.
+	std::sort(objects.begin(), objects.end(), [](const MovableObject* left, const MovableObject* right) { return left->GetUniqueID() < right->GetUniqueID(); });
+	for (MovableObject* mo: objects) {
+		std::unordered_map<std::string, std::vector<MovableObject::LuaFunction>> functions;
+		const std::vector<std::string> names = mo->GetSupportedScriptFunctionNames();
+		for (const std::string& name: names) functions.try_emplace(name);
+		bool loaded = true;
+		for (const std::string& path: mo->m_AllLoadedScripts) {
+			std::unordered_map<std::string, LuabindObjectWrapper*> found;
+			if (RunScriptFileAndRetrieveFunctions(path, names, found) < 0) {
+				for (const auto& [name, function]: found) delete function;
+				loaded = false;
+				break;
+			}
+			const auto enabled = mo->m_EnabledScripts.find(path);
+			for (const auto& [name, function]: found) {
+				MovableObject::LuaFunction& entry = functions[name].emplace_back();
+				entry.m_ScriptIsEnabled = enabled != mo->m_EnabledScripts.end() && enabled->second;
+				entry.m_LuaFunction.reset(function);
+			}
+		}
+		// A script that no longer runs leaves the object as it was, as a failed load would.
+		if (loaded) mo->m_FunctionsAndScripts = std::move(functions);
+	}
 }
 
 void LuaStateWrapper::StashScriptObject(long uniqueID) {

@@ -309,7 +309,12 @@ namespace RTE {
 		void CaptureScriptCallbacks(uint64_t liveSerial = 0);
 
 		/// Rebinds cached functions and object callbacks from the restored graph.
-		void RestoreScriptCallbacks(std::vector<std::string>& problems, bool restoreAsync = true);
+		/// @param rebound Filled with the objects whose callbacks the graph carried and that took them.
+		void RestoreScriptCallbacks(std::vector<std::string>& problems, bool restoreAsync = true, std::unordered_set<const MovableObject*>* rebound = nullptr);
+
+		/// Rebinds every object of this state the restored graph did not, from the restored script cache as a fresh load would.
+		/// @param rebound The objects the graph's callbacks already rebound.
+		void RebindScriptFunctionsFromCache(const std::unordered_set<const MovableObject*>& rebound);
 
 		/// Moves _ScriptedObjects[uid] into a stash so a stand-in self can take the slot; UnstashScriptObject puts it back.
 		void StashScriptObject(long uniqueID);

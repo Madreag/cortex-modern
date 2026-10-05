@@ -240,6 +240,10 @@ def engine_cap_findings(scenario):
     if not declared:
         return []
     cap, field = min(declared)
+    # A ruling may seat one named scene past the box's cap, as the planner's run_split.py reads it.
+    ruled = (entry.get("ruled_engines") or {}).get(scenario.get("name"))
+    if isinstance(ruled, int) and ruled > cap:
+        cap, field = ruled, f"ruled_engines.{scenario.get('name')}"
     runs = scenario.get("runs") or [{"peers": scenario.get("peers", [])}]
     need = max(len(run.get("peers", [])) for run in runs)
     if need <= cap:
@@ -860,6 +864,35 @@ def await_recorder(video_dir, stop, timeout_s=RECORDER_FLUSH_S):
             return {"target_wall_ms": target, "flushed": False, "last_frame_wall_ms": latest, "reason": "capture stopping"}
 
 
+WATCH_FLUSH_S = 3.0
+WATCH_KILL_SUMMARY = re.compile(r'^\[text-watch\] summary .*"flush":"kill"', re.M)
+
+
+def await_watch_flush(log, stop, timeout_s=WATCH_FLUSH_S):
+    """A peer told of its drop (injected-drop.json) prints its screen watches' summaries within a few drawn frames; waits for
+    them, bounded by timeout_s, so a dropped peer's watches end with a summary. None when the peer armed no watch."""
+    log = Path(log)
+    try:
+        start = log.stat().st_size
+        armed = "[text-watch] armed " in log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    if not armed:
+        return None
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            with open(log, "rb") as handle:
+                handle.seek(max(0, start - 4096))
+                tail = handle.read().decode("utf-8", errors="replace")
+        except OSError:
+            tail = ""
+        if WATCH_KILL_SUMMARY.search(tail):
+            return True
+        if time.monotonic() >= deadline or stop.wait(.05):
+            return False
+
+
 def read_manifest(video_dir):
     path = Path(video_dir) / "manifest.json"
     if not path.is_file():
@@ -1166,18 +1199,23 @@ def capture_evidence_items(scenario, capture, peer):
         for arm in range(1, result.get('arms', 0) + 1):
             own = [row for row in summaries if row.get('_arm') == arm]
             if killed:
-                own = [row for row in own if type(row.get('through_tick')) is int and kill_tick is not None
-                       and 0 <= row['through_tick'] <= kill_tick]
-                if own: selected.append(max(own, key=lambda row: row['through_tick']))
+                timed = [row for row in own if type(row.get('through_tick')) is int and kill_tick is not None]
+                within = [row for row in timed if 0 <= row['through_tick'] <= kill_tick]
+                # The drop's own flush is printed after the peer reads the drop notice, so it reaches a few ticks past the kill:
+                # it covers the judged span, and its count is read from the offences listed up to the kill.
+                drop_flush = [row for row in timed if row.get('flush') == 'kill' and row['through_tick'] > kill_tick]
+                if within: selected.append(max(within, key=lambda row: row['through_tick']))
+                elif drop_flush: selected.append(min(drop_flush, key=lambda row: row['through_tick']))
             else:
                 final = [row for row in own if row.get('flush') != 'periodic']
                 if len(final) == 1: selected.append(final[0])
         complete = bool(result.get('arms')) and len(selected) == result['arms']
         if not complete: offences.append(dict(detail=f'watch {watch}: arms={result.get("arms", 0)}, summaries={len(summaries)}'))
         for summary in selected:
+            past_kill = killed and kill_tick is not None and summary.get('flush') == 'kill' and type(summary.get('through_tick')) is int and summary['through_tick'] > kill_tick
             if type(summary.get('frames')) is not int or summary['frames'] <= 0 or type(summary.get('violations')) is not int:
                 complete = False; offences.append(dict(detail=f'watch {watch}: invalid summary {summary}'))
-            elif summary['violations'] > 0: offences.append(dict(detail=f'watch {watch}: summary violations={summary["violations"]}'))
+            elif summary['violations'] > 0 and not past_kill: offences.append(dict(detail=f'watch {watch}: summary violations={summary["violations"]}'))
             if watch.startswith('scene-') and summary.get('active_frames', 0) == 0:
                 offences.append(dict(detail='its state never held while it was armed'))
         rule = SCREEN_WATCH_RULES.get(watch, (f'Every armed {watch} screen check has a terminal summary', ''))[0]
@@ -1965,6 +2003,9 @@ def run_one(options, scenario, run, run_index, out):
                                                                                   "recorder_flush": flushed})
                 description = ("completed peer probe" if gate.get("probe_complete") else "peer log line " + gate["log"] if gate.get("log")
                                else f"{gate['peer']} sim tick {gate['sim_tick']}" if "sim_tick" in gate else "peer event " + gate["event"])
+                # The scenario is over: the peer prints its screen watches' summaries before it goes.
+                if gate.get("probe_complete"):
+                    await_watch_flush(root / name / "stdout.log", stop_watchers)
                 drop_peer(runs[name], "scenario drop after " + description)
                 return
 

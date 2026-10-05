@@ -17,7 +17,7 @@ set -u
 : "${SHA:?set SHA to the full tip sha}"
 HERE=$(cd "$(dirname "$0")" && pwd)
 LANE=${LANE:-$HERE}
-BRANCH=${BRANCH:-stage2/fixgroup-6-lead-wave-a}
+BRANCH=${BRANCH:-cm-dev}
 STEPS=${STEPS:-repo gcc s5 libcxx s1 readback tsan asan rerun defects}
 export PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
 export PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 CCCP_HEADLESS=1

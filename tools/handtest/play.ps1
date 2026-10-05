@@ -8,7 +8,7 @@
 
   Headed (default, for the user at this PC): windowed 1280x720 instances with
   sound on, placed left-to-right (host left, clients right). The lobby is driven
-  by hand through the game's own menu - see HANDTEST.md. Run it from the user's
+  by hand through the game's own menu - see docs/handtest.md. Run it from the user's
   own terminal: the headed path refuses to run when CCCP_HEADLESS is set in the
   environment (automation shells export it; a headed window raised from one would
   be hidden with no timeout and no job object).
@@ -411,5 +411,5 @@ foreach ($inst in $instances) {
 if (-not $buildSha) { $buildSha = '<unknown - not a git checkout>' }
 if ($Mac) { Write-MacInstructions $buildSha }
 Write-Host "Lobby port for this session: $Port  (host enters it in Host Setup; joiners dial it in Join Game)"
-Write-Host 'Next: follow HANDTEST.md - Multiplayer -> Host Game / Join Game -> Ready -> Start Match.'
+Write-Host 'Next: follow docs/handtest.md - Multiplayer -> Host Game / Join Game -> Ready -> Start Match.'
 Write-Host 'When finished, collect evidence:  pwsh tools\handtest\collect_logs.ps1 -Out <dir>'
