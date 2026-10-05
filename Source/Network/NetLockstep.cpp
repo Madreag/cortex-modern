@@ -4183,15 +4183,14 @@ namespace RTE {
 		}
 		m_PeerLeaveFrames = leaves;
 		m_SeatTransitions = seatTransitions;
-		// A departure keeps its input boundary; a held release past the boundary is proposed again.
+		// Only the agreed prefix survives; successor membership names every later departure.
+		std::erase_if(m_PeerLeaveFrames, [&](const auto& leave) { return leave.second > m_MigrationBoundary; });
+		for (auto& [peer, transitions]: m_SeatTransitions) transitions.erase(transitions.upper_bound(m_MigrationBoundary), transitions.end());
 		for (const auto& [peer, releases]: seatReleases)
 			for (const auto& [frame, release]: releases) {
-				const bool departure = leaves.contains(peer) && leaves.at(peer) == frame && (!heldSeats.contains(peer) || frame < heldSeats.at(peer));
-				if (frame <= m_MigrationBoundary || departure) m_SeatReleases[peer][frame] = release;
+				if (frame <= m_MigrationBoundary) m_SeatReleases[peer][frame] = release;
 				else if (m_AiHeldSeats.contains(peer) && frame >= m_AiHeldSeats.at(peer)) m_ReleasedAiSeats.insert(peer);
 			}
-		for (const uint8_t peer: passedReturns)
-			if (const auto seat = m_SeatTransitions.find(peer); seat != m_SeatTransitions.end()) seat->second.erase(seat->second.upper_bound(m_MigrationBoundary), seat->second.end());
 		for (uint8_t peer: m_Config.activePeerIds) {
 			m_PeerLeaveFrames.erase(peer);
 			// A member of the successor's round is in it from its first frame, whatever the old round last recorded of its seat.
