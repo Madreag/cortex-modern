@@ -24123,7 +24123,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			for (const bool bounded: {true, false}) {
 				ReleasePathRound round;
 				if (!round.Start(bounded ? 47430 : 47435, bounded)) return fail("the departure fixture did not start: " + round.failure);
-				const uint64_t from = round.peers[0].GetResumeFrame();
+				const uint64_t from = round.peers[0].GetResumeFrame() - 5;
 				if (bounded) round.peers[0].EvictRemovedPeer(4, "playing seat kicked", round.now);
 				round.alive[3] = false;
 				if (!bounded) {
@@ -24133,11 +24133,16 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				}
 				for (int turn = 0; turn < 70; ++turn) round.Pump();
 				const uint64_t leave = round.peers[0].GetPeerLeaveFrames().at(4);
-				LoopbackTransport replayWire, tailWire;
+				LoopbackTransport replayWire, tailHostWire, tailWire;
 				NetLockstepCoordinator replay, tail;
 				auto config = ReleasedClaimsConfig(round.match, 3, {}, bounded);
 				config.startFrame = from;
-				if (!replay.StartReplay(replayWire, config, &round.failure) || !tail.StartReplay(tailWire, config, &round.failure)) return fail(round.failure);
+				if (!replay.StartReplay(replayWire, config, &round.failure)) return fail(round.failure);
+				const uint16_t tailPort = bounded ? 47434 : 47439;
+				if (!tailHostWire.StartHost(tailPort, &round.failure) || !tailWire.Connect("loopback", tailPort, &round.failure)) return fail(round.failure);
+				auto tailConfig = ReleasedClaimsConfig(round.match, 3, {{1, 1}}, bounded);
+				tailConfig.startFrame = from;
+				if (!tail.Start(tailWire, tailConfig, &round.failure) || tail.IsRunning()) return fail("the catch-up coordinator already runs");
 				std::array<ReleasePathClaimView, 4> views;
 				std::array<NetLockstepCoordinator*, 4> coordinators{&round.peers[0], &round.peers[2], &replay, &tail};
 				for (size_t index = 0; index < views.size(); ++index) {
