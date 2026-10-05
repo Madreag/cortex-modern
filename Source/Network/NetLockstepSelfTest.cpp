@@ -24393,7 +24393,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("world_departure_uses_input_boundary", why, error); };
 			NetMatchConfig world = ReleasedClaimsMatch(0x9D02, 4);
 			world.version = NetMatchConfigUtil::c_PersistentWorldVersion;
-			world.persistentWorld = true; world.worldId = "departure-boundary"; world.worldBoot = 1;
+			world.persistentWorld = true; world.dedicated = true; world.worldId = "departure-boundary"; world.worldBoot = 1;
+			world.players[0].peerId = 0; world.players[0].cpu = true;
 			LoopbackTransport wire;
 			NetLockstepCoordinator live;
 			auto config = ReleasedClaimsConfig(world, 1, {}, true);
