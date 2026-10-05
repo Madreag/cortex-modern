@@ -8,19 +8,20 @@ def read_world_ticks(directory: Path) -> dict[str, dict[int, str]]:
     phases: dict[str, dict[int, str]] = {"live": {}, "catchup": {}}
     recorded: dict[int, str] = {}
     for path in sorted(directory.glob("live.jsonl*")):
-        for number, line in enumerate(path.open(encoding="utf-8"), 1):
-            item = json.loads(line)
-            if not isinstance(item, dict):
-                raise ValueError(f"invalid world receipt at {path.name}:{number}")
-            if "tick" not in item:
-                continue
-            tick, phase, value = item["tick"], item.get("phase"), item.get("sim_gated")
-            if type(tick) is not int or tick < 0 or phase not in phases or not isinstance(value, str) or len(value) != 64:
-                raise ValueError(f"invalid world tick at {path.name}:{number}")
-            if tick in recorded and recorded[tick] != value:
-                raise ValueError(f"contradictory world tick {tick}")
-            recorded[tick] = value
-            phases[phase][tick] = value
+        with path.open(encoding="utf-8") as stream:
+            for number, line in enumerate(stream, 1):
+                item = json.loads(line)
+                if not isinstance(item, dict):
+                    raise ValueError(f"invalid world receipt at {path.name}:{number}")
+                if "tick" not in item:
+                    continue
+                tick, phase, value = item["tick"], item.get("phase"), item.get("sim_gated")
+                if type(tick) is not int or tick < 0 or phase not in phases or not isinstance(value, str) or len(value) != 64:
+                    raise ValueError(f"invalid world tick at {path.name}:{number}")
+                if tick in recorded and recorded[tick] != value:
+                    raise ValueError(f"contradictory world tick {tick}")
+                recorded[tick] = value
+                phases[phase][tick] = value
     return phases
 
 
