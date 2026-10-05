@@ -7284,7 +7284,17 @@ namespace RTE {
 
 	bool TestWorldDisconnectReason(bool watcher, std::string* error) {
 		if (!MetricsCollector::IsConstructed()) MetricsCollector::Construct();
+		class CauseWire final : public INetTransport {
+		public:
+			bool StartHost(uint16_t, std::string*) override { return true; }
+			bool Connect(const std::string&, uint16_t, std::string*) override { return true; }
+			bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string*, bool*) override { return true; }
+			void Disconnect(NetPeerId, const std::string&) override {}
+			void Stop() override {}
+			std::vector<NetTransportEvent> PollEvents() override { return {}; }
+		};
 		LoopbackTransport hostWire, joinWire;
+		CauseWire unknownWire;
 		NetSession host;
 		NetMatchService service;
 		service.m_Session = std::make_unique<NetSession>();
@@ -7313,18 +7323,9 @@ namespace RTE {
 		ScenarioRunner::ClearControllerReplayError();
 		if (!told) { *error = name + ": the player lost the host's disconnect cause"; return false; }
 		if (!watcher) {
-			class CauseWire final : public INetTransport {
-			public:
-				bool StartHost(uint16_t, std::string*) override { return true; }
-				bool Connect(const std::string&, uint16_t, std::string*) override { return true; }
-				bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string*, bool*) override { return true; }
-				void Disconnect(NetPeerId, const std::string&) override {}
-				void Stop() override {}
-				std::vector<NetTransportEvent> PollEvents() override { return {}; }
-			};
 			for (uint16_t code = 1; code <= static_cast<uint16_t>(NetRejectReason::SeatReleased); ++code) {
-				NetSession known;
 				CauseWire wire;
+				NetSession known;
 				NetSessionConfig config = MakeWorldSessionConfig(port, 22, "Joiner");
 				if (!known.StartClient(wire, "loopback", config, error)) return false;
 				known.InjectEvent({NetTransportEventType::PeerConnected, 1, NetTransportLane::ControlReliable, {}, ""}, 0);
@@ -7336,7 +7337,6 @@ namespace RTE {
 					*error = "C2: a host disconnect lost its reason or text at code " + std::to_string(code); return false;
 				}
 			}
-			CauseWire unknownWire;
 			NetSessionConfig config = MakeWorldSessionConfig(port, 22, "Joiner");
 			if (!service.m_Session->StartClient(unknownWire, "loopback", config, error)) return false;
 			service.m_Session->InjectEvent({NetTransportEventType::PeerConnected, 1, NetTransportLane::ControlReliable, {}, ""}, 0);
