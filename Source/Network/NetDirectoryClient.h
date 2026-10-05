@@ -115,6 +115,8 @@ namespace RTE {
 		/// selects discovery visibility; a false intent needs the service's supports_unlisted
 		/// capability, otherwise the row is deleted once and the intent stays Failed.
 		void Advertise(const NetDirectoryRegisterRequest& row, bool running, bool listed = true);
+		/// Refreshes discovery fields under the held lease, after the ordinary retry backoff.
+		void RefreshRegistration(const NetDirectoryRegisterRequest& row, bool running, uint64_t nowMs);
 		bool Resume(const NetDirectoryRegisterRequest& row, const std::string& sessionId, const std::string& token, bool running = true, bool listed = true);
 		/// The session id a register of this row would claim: its resume id, unless the directory refused that claim; empty for a new id.
 		std::string ClaimedSessionId(const NetDirectoryRegisterRequest& row) const;

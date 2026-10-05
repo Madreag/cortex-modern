@@ -186,6 +186,15 @@ namespace RTE {
 		m_Listed = true;
 	}
 
+	void NetDirectoryClient::RefreshRegistration(const NetDirectoryRegisterRequest& row, bool running, uint64_t nowMs) {
+		if (!m_Listed || !m_DesiredListed || m_State != State::Registered) return;
+		m_Row = row;
+		m_Row.resumeSessionId = m_SessionId;
+		m_Row.resumeToken = m_Token;
+		m_Running = running;
+		SetState(State::Registering);
+		ScheduleRetry(nowMs);
+	}
 
 	void NetDirectoryClient::AbandonLease() {
 		if (m_Request) {

@@ -61,25 +61,45 @@ namespace RTE {
 		const std::string newId = "8c9d2e1f-2222-4333-8444-555566667777";
 		class Answer final : public NetDirectoryClient::Transport {
 		public:
-			void Start(const NetDirectoryClient::Request&) override {}
+			explicit Answer(std::shared_ptr<std::vector<NetDirectoryClient::Request>> sent): m_Sent(std::move(sent)) {}
+			void Start(const NetDirectoryClient::Request& request) override { m_Sent->push_back(request); }
 			bool Finished() override { return true; }
 			NetDirectoryClient::Reply Take() override { return {200, R"({"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"new-token","heartbeat_s":5,"expires_in_s":15,"observed_ip":"127.0.0.1"})", ""}; }
 			void Abort() override {}
+			std::shared_ptr<std::vector<NetDirectoryClient::Request>> m_Sent;
 		};
 		NetMatchService service;
 		service.m_IsHost = true;
 		service.m_IceBoundSessionId = oldId;
+		service.m_IceEnabled = true;
+		service.m_DirectoryRow.persistentWorld = true; service.m_DirectoryRow.worldId = oldId;
+		service.m_DirectoryRow.listenAddrs = {"127.0.0.1"}; service.m_DirectoryRow.listenPort = 47460;
 		service.m_HostSignalCredential.store(std::make_shared<const NetMatchService::HostSignalCredential>(NetMatchService::HostSignalCredential{oldId, "old-token"}));
-		service.m_Directory.SetTransportFactory([] { return std::make_unique<Answer>(); });
+		auto sent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
+		service.m_Directory.SetTransportFactory([sent] { return std::make_unique<Answer>(sent); });
 		service.m_Directory.Configure("https://dir.test", "0123456789abcdef", "");
 		service.m_Directory.Advertise({}, true);
 		service.m_Directory.Update(0); service.m_Directory.Update(0);
-		service.RefreshDirectorySignalCredentialLocked();
+		service.RefreshDirectorySignalCredentialLocked(0);
 		const auto bound = service.m_HostSignalCredential.load();
 		if (!bound || bound->sessionId != newId || bound->token != "new-token" || service.m_IceBoundSessionId != newId) {
 			*error = "F2: recovered directory id left the signal channel or ICE binding on the previous id";
 			return false;
 		}
+		service.m_Directory.Update(4999);
+		if (sent->size() != 1) { *error = "F2: the identity refresh ignored its backoff"; return false; }
+		service.m_Directory.Update(5000);
+		const auto body = nlohmann::json::parse(sent->back().body);
+		if (sent->size() != 2 || body["resume_session_id"] != newId || body["resume_token"] != "new-token" || body["join_mode"] != "either") {
+			*error = "F2: the changed world id was never advertised with its recovered ICE binding"; return false;
+		}
+		NetDirectorySessionRow row;
+		row.sessionId = newId; row.persistentWorld = true; row.worldId = oldId; row.worldBoot = 1;
+		row.joinMode = "ice"; row.seatsFree = 1; row.listenPort = 47460;
+		NetDirectoryLocalIdentity local;
+		NetIceJoinTarget target;
+		const std::string reason = NetIceResolveSessionRow({row}, local, newId, &target, &local);
+		if (!reason.empty() || target.identity != NetIceHostIdentity(oldId)) { *error = "F2: a joiner on the changed row id dialed a different world listener: " + reason; return false; }
 		std::cout << "[net-directory-selftest] PASS recovered_directory_binding" << std::endl;
 		return true;
 	}
@@ -90,6 +110,14 @@ namespace RTE {
 		NetMuxTransport mux;
 		NetMatchService service;
 		service.m_Dispatcher = std::make_unique<GnsDirectorySignalDispatcher>();
+		class PollAnswer final : public NetDirectoryClient::Transport {
+		public:
+			void Start(const NetDirectoryClient::Request&) override {}
+			bool Finished() override { return true; }
+			NetDirectoryClient::Reply Take() override { return {200, R"({"signals":[]})", ""}; }
+			void Abort() override {}
+		};
+		const_cast<NetDirectorySignalChannel&>(service.m_Dispatcher->Channel()).SetTransportFactory([] { return std::make_unique<PollAnswer>(); });
 		GnsDirectorySignalDispatcher::Config config;
 		config.role = GnsDirectorySignalDispatcher::Role::Host;
 		config.baseUrl = "https://dir.test"; config.installKey = "0123456789abcdef";

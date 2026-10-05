@@ -293,7 +293,7 @@ namespace RTE {
 				return merged.front().reason.empty() ? "refused" : merged.front().reason;
 			}
 			if (out) {
-				out->identity = NetIceHostIdentity(row.sessionId);
+				out->identity = NetIceHostIdentity(row.persistentWorld && !row.worldId.empty() ? row.worldId : row.sessionId);
 				out->joinMode = row.joinMode;
 				out->address = merged.front().address;
 				out->port = merged.front().port;
@@ -2785,7 +2785,7 @@ static std::string ResyncSaveName() {
 		{
 			// The worker cannot touch the directory client, so what it needs is published here.
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			reboundSignal = RefreshDirectorySignalCredentialLocked();
+			reboundSignal = RefreshDirectorySignalCredentialLocked(nowMs);
 		}
 		if (!reboundSignal.empty()) System::PrintDiagnosticLine("[net-ice] host signal channel follows the re-registered row session=" + reboundSignal);
 		// The world's image follows the writer thread, never a file read on this one.
@@ -2806,12 +2806,21 @@ static std::string ResyncSaveName() {
 		UpdateCompletedLobbyExpiry(nowMs);
 	}
 
-	std::string NetMatchService::RefreshDirectorySignalCredentialLocked() {
+	std::string NetMatchService::RefreshDirectorySignalCredentialLocked(uint64_t nowMs) {
 		m_DirectorySessionId = m_Directory.GetSessionId();
 		m_DirectoryToken = m_Directory.GetToken();
 		m_DirectoryRegistered = m_Directory.GetState() == NetDirectoryClient::State::Registered;
-		if (m_IsHost && m_DirectoryRegistered && !m_DirectoryToken.empty() && !m_IceBoundSessionId.empty() && m_DirectorySessionId == m_IceBoundSessionId) {
-			if (const auto signal = m_HostSignalCredential.load(); signal && signal->token != m_DirectoryToken) {
+		if (m_IsHost && m_DirectoryRegistered && !m_DirectoryToken.empty() && !m_IceBoundSessionId.empty()) {
+			const bool changedId = m_DirectorySessionId != m_IceBoundSessionId;
+			if (changedId && !m_DirectoryRow.persistentWorld) return {};
+			m_IceBoundSessionId = m_DirectorySessionId;
+			if (changedId && m_DirectoryRow.persistentWorld) {
+				m_DirectoryRow.resumeSessionId = m_DirectorySessionId;
+				m_DirectoryRow.resumeToken = m_DirectoryToken;
+				m_DirectoryRow.joinMode = NetIceRowJoinMode(m_IceEnabled, !m_DirectoryRow.listenAddrs.empty(), m_IceBoundSessionId, m_DirectorySessionId);
+				m_Directory.RefreshRegistration(m_DirectoryRow, m_State == NetMatchServiceState::Running, nowMs);
+			}
+			if (const auto signal = m_HostSignalCredential.load(); signal && (signal->sessionId != m_DirectorySessionId || signal->token != m_DirectoryToken)) {
 				m_HostSignalCredential.store(std::make_shared<const HostSignalCredential>(HostSignalCredential{m_DirectorySessionId, m_DirectoryToken}));
 				return m_DirectorySessionId;
 			}
@@ -9784,13 +9793,13 @@ static std::string ResyncSaveName() {
 	void NetMatchService::InstallIcePump(NetMuxTransport& mux, bool host) {
 #ifdef CCCP_WITH_GNS
 		GnsDirectorySignalDispatcher* dispatcher = m_Dispatcher.get();
-		// The mux calls a copy of its pump every poll, so what the pump remembers between polls lives here.
+		// Every copy of the pump shares what the dispatcher has applied.
 		struct PumpMemory {
 			NetRelayConfig previous;
 			std::shared_ptr<const HostSignalCredential> appliedSignal;
 		};
 		auto memory = std::make_shared<PumpMemory>();
-		memory->appliedSignal = m_HostSignalCredential.load();
+		memory->appliedSignal = std::make_shared<const HostSignalCredential>(HostSignalCredential{dispatcher->BoundSessionId(), dispatcher->BoundSessionToken()});
 		mux.SetPump([this, dispatcher, p2p = mux.P2PGns(), memory,
 		              initial = host ? mux.HostP2PConfig() : mux.GetJoinSpec().p2p,
 		              personal = !g_SettingsMan.GetNetworkPlayerTurnServers().empty() || g_SettingsMan.HasNetworkTurnServersOverride(),

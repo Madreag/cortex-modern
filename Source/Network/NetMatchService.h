@@ -1362,7 +1362,7 @@ namespace RTE {
 		friend bool TestWorldCatchUpRefusal(std::string* error);
 		void InstallIcePump(NetMuxTransport& mux, bool host);
 		void RefuseWorldCatchUpLocked(const std::string& rejectText);
-		std::string RefreshDirectorySignalCredentialLocked();
+		std::string RefreshDirectorySignalCredentialLocked(uint64_t nowMs);
 		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
 		friend bool TestIceDefaultsAndOverrides(std::string* error);
 		friend bool TestRelayOfferAndPolicy(std::string* error);
