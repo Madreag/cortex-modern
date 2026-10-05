@@ -9251,6 +9251,15 @@ namespace RTE {
 							return false;
 						}
 						m_SeatReleases[release->peerId][outFrame.frame] = *release;
+						m_ReleasedAiSeats.insert(release->peerId);
+						m_DroppedSeats.erase(release->peerId);
+						RefreshLeftSeatHolds();
+						if (!IsSeatUnderAI(release->peerId, outFrame.frame)) {
+							m_PeerLeaveFrames[release->peerId] = outFrame.frame;
+							NoteSeatTransition(release->peerId, outFrame.frame, SeatTransition::Left);
+							if (std::find(outFrame.departedPeerIds.begin(), outFrame.departedPeerIds.end(), release->peerId) == outFrame.departedPeerIds.end())
+								outFrame.departedPeerIds.push_back(release->peerId);
+						}
 						if (std::find(outFrame.releasedPeerIds.begin(), outFrame.releasedPeerIds.end(), release->peerId) == outFrame.releasedPeerIds.end())
 							outFrame.releasedPeerIds.push_back(release->peerId);
 						continue;
@@ -11616,6 +11625,7 @@ namespace RTE {
 			(void)SendPacket({notice}, NetTransportLane::ControlReliable, &ignored);
 		}
 		if (resolution == NetLockstepHoldResolution::Expired) {
+			RecordSeatDeparture(peerId, heldFrame);
 			if (!IsPersistentWorldRound() && m_AiHeldSeats.empty() && LeftPeersNotRefilling() >= m_RemotePeerIds.size() && !AnyLeftSeatHeld() && !ReclaimResyncPending()) {
 				m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) + ":" + m_LastLeaveMessage;
 				m_State = NetLockstepState::Stopped;
@@ -11676,6 +11686,14 @@ namespace RTE {
 		}
 	}
 
+	void NetLockstepCoordinator::RecordSeatDeparture(uint8_t peerId, uint64_t frame) {
+		// The world's Release command already ends the seat's claims at its own committed boundary.
+		if (IsPersistentWorldRound() || m_AiHeldSeats.contains(peerId)) return;
+		const auto incarnation = m_Config.peerIncarnations.find(peerId);
+		m_SeatReleases[peerId][frame] = {peerId, m_Config.migrationGeneration, frame == UINT64_MAX ? frame : frame + 1,
+		    incarnation == m_Config.peerIncarnations.end() ? 1 : incarnation->second, frame};
+	}
+
 	bool NetLockstepCoordinator::AnyLeftSeatHeld() const {
 		return !m_LeftSeatsHeld.empty();
 	}
@@ -11694,6 +11712,11 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::IsSeatReclaimableAt(uint8_t peerId, uint64_t frame) const {
 		NET_PLANE_CHECK();
+		if (const auto releases = m_SeatReleases.find(peerId); releases != m_SeatReleases.end()) {
+			const auto after = releases->second.upper_bound(frame);
+			const auto held = m_AiHeldSeats.find(peerId);
+			if (after != releases->second.begin() && (held == m_AiHeldSeats.end() || std::prev(after)->first >= held->second)) return false;
+		}
 		// The unbounded policies stop every peer's commits until the host resolves a dropped seat, so their set reads the same everywhere.
 		if (!UsesBoundedWait()) return IsSeatHeldForReclaim(peerId);
 		const auto seat = m_SeatTransitions.find(peerId);
@@ -11821,7 +11844,7 @@ namespace RTE {
 		if (!m_PeerLeaveFrames.emplace(peerId, firstFrameWithout).second) {
 			return;
 		}
-		NoteSeatTransition(peerId, firstFrameWithout, SeatTransition::Left);
+		NoteSeatTransition(peerId, firstFrameWithout, m_AiHeldSeats.contains(peerId) ? SeatTransition::Held : SeatTransition::Left);
 		if (!announced) {
 			m_DroppedSeats.insert(peerId);
 			m_DroppedAtMs[peerId] = nowMs;
@@ -11830,6 +11853,7 @@ namespace RTE {
 		if (firstFrameWithout > m_Stats.nextFrame) m_LeavesHeardAhead.insert(peerId);
 		RefreshLeftSeatHolds();
 		DiagnosticLine() << "[net-match] " << DescribePeer(peerId) << " left the match at frame " << firstFrameWithout << " (" << message << ")" << std::endl;
+		if (UsesBoundedWait() || announced || removed) RecordSeatDeparture(peerId, firstFrameWithout);
 		NetLockstepStop notice;
 		notice.senderPeerId = peerId;
 		notice.reason = removed ? NetLockstepStopReason::PeerRemoved : announced ? NetLockstepStopReason::PeerLeft : NetLockstepStopReason::PeerDropped;
@@ -12168,6 +12192,9 @@ namespace RTE {
 			if (!m_Playback) for (const auto& [peer, releases]: m_SeatReleases) {
 				const auto release = releases.find(ready.frame);
 				if (release == releases.end()) continue;
+				m_ReleasedAiSeats.insert(peer);
+				m_DroppedSeats.erase(peer);
+				RefreshLeftSeatHolds();
 				if (std::find(ready.releasedPeerIds.begin(), ready.releasedPeerIds.end(), peer) == ready.releasedPeerIds.end()) ready.releasedPeerIds.push_back(peer);
 				auto& commands = m_Config.localPeerId == GetHostPeerId() ? ready.localCommands : ready.remoteCommands;
 				const NetGameCommand event{GetHostPeerId(), release->second};

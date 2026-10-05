@@ -1824,7 +1824,7 @@ namespace RTE {
 
 	void ScenarioRunner::EndReleasedSeatClaims(uint8_t peerId) {
 		NetLockstepPlaneGuard plane;
-		std::erase_if(s_LockstepDroppedControlOverrides, [peerId](const auto& claim) { return claim.second == peerId; });
+		ReleaseLockstepControlOverridesOf(peerId);
 	}
 
 	bool ScenarioRunner::IsLockstepTeamCommandSender(int team, uint8_t senderPeerId, uint64_t atFrame) {

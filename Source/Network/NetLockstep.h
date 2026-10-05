@@ -1614,6 +1614,8 @@ namespace RTE {
 		void ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay);
 		/// Ends an AI-held seat's wait for its returner: an agreed reclaim still ahead of every peer is withdrawn, the AI keeps the units.
 		void ReleaseHeldSeat(uint8_t peerId, uint64_t nowMs, bool relay, const char* why = "released");
+		/// Records a permanent departure at the frame the seat's input ends.
+		void RecordSeatDeparture(uint8_t peerId, uint64_t frame);
 		/// Host: proposes the agreed frame for every seat it released whose release no frame carries yet.
 		void ProposeOwedSeatReleases(uint64_t nowMs);
 		/// Whether a release of the seat lands at or after the seat's newest hold.
