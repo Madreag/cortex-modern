@@ -24667,7 +24667,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			writer.Close(); if (!WaitForReplayCloseForTest(writer, &why)) return fail(why);
 			NetMatchReplayReader reader; NetLockstepFrame recorded; bool eof = false;
 			if (!reader.Open("multipart-observations.ccreplay", &why) || !reader.ReadFrame(recorded, eof, &why)) return fail(why);
-			if (recorded.frames != controllers || recorded.observations != sounds || recorded.valueObservations != values || recorded.replayAuthorityPeerId != 2)
+			const bool sameControllers = recorded.frames.size() == controllers.size() && std::equal(recorded.frames.begin(), recorded.frames.end(), controllers.begin(),
+			    [](const ControllerFrame& read, const ControllerFrame& written) { return ControllerFrameCodec::Encode(read) == ControllerFrameCodec::Encode(written); });
+			if (!sameControllers || recorded.observations != sounds || recorded.valueObservations != values || recorded.replayAuthorityPeerId != 2)
 				return fail("multipart playback lost controller, sound or value sender data while recording authority 2");
 			return fail("");
 		}
