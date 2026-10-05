@@ -7234,7 +7234,8 @@ namespace RTE {
 				}
 			}
 		}
-		if ((m_Config.adaptiveInputDelay || UsesBoundedWait()) && (m_LastTimingStatusMs == UINT64_MAX || nowMs - m_LastTimingStatusMs >= 500)) {
+		// A status with no adopted round cannot encode and would block the reliable input queue.
+		if (m_RoundId != 0 && (m_Config.adaptiveInputDelay || UsesBoundedWait()) && (m_LastTimingStatusMs == UINT64_MAX || nowMs - m_LastTimingStatusMs >= 500)) {
 			m_LastTimingStatusMs = nowMs;
 			const auto status = [&](uint8_t peer) {
 				NetLockstepTiming timing;
