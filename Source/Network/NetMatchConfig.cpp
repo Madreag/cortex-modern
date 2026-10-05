@@ -838,9 +838,9 @@ namespace RTE {
 
 	const char* NetMatchConfigUtil::ModeLabel(NetMatchMode mode) {
 		switch (mode) {
-			case NetMatchMode::PvPSkirmish: return "PvP";
-			case NetMatchMode::CoopPvE: return "Co-op PvE";
-			case NetMatchMode::PvPvE: return "PvPvE";
+			case NetMatchMode::PvPSkirmish: return "Players versus players";
+			case NetMatchMode::CoopPvE: return "Players versus AI";
+			case NetMatchMode::PvPvE: return "Players and AI opponents";
 		}
 		return "Unknown";
 	}

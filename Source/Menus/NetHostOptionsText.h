@@ -87,39 +87,34 @@ namespace RTE {
 		return settings.GetNetworkStunServersSetting().empty() ? "Port forwarding required" : "NAT: STUN";
 	}
 
-	inline std::string NetHostRelayHint(const SettingsMan& settings) {
-		if (settings.HasNetworkTurnServersOverride()) return "A command-line TURN override applies to this run. This row saves your hosting preference.\nDirect is lowest latency; a relay adds its round trip.";
-		if (!settings.GetNetworkIceEnableSetting()) return "NAT traversal is Off, so this match offers no relay. Enable Automatic above to offer one.";
-		switch (settings.GetNetworkHostRelayMode()) {
-			case SettingsMan::NetworkHostRelayMode::Off: return "Off: direct connections have the lowest latency. Some routers need port forwarding.";
-			case SettingsMan::NetworkHostRelayMode::Fixed: return "Offer this private relay when direct fails; it adds the relay's round trip.\nAddress: host:port or comma-separated TURN URLs. Enter a login, never a signing secret.\nEach player can choose Direct only or their own relay in Settings > Network > Connection.";
-			default: return "The directory supplies a short-lived relay login; direct first has the lowest latency.\nRelay adds its round trip. A directory without relay credentials leaves direct only.\nUDP TURN only in this build; the login renews itself while the session runs.";
+	/// The relay row's hint for the drafted choice: what it does, then what the choice needs.
+	inline std::string NetHostRelayHint(const SettingsMan& settings, SettingsMan::NetworkHostRelayMode mode, bool directOn) {
+		if (settings.HasNetworkTurnServersOverride()) return "A command-line TURN override applies to this run; this row saves your hosting preference.\nDirect is lowest latency; a relay adds its round trip.";
+		if (!directOn) return "Automatic direct connection is off, so this match offers no relay. Turn it on above to offer one.";
+		switch (mode) {
+			case SettingsMan::NetworkHostRelayMode::Off: return "No relay: a player who cannot connect directly cannot join.\nDirect connections have the lowest latency; some routers need port forwarding.";
+			case SettingsMan::NetworkHostRelayMode::Fixed: return "If a direct connection fails, your own relay carries it, adding its round trip.\nAddress: host:port or TURN URLs. Use a login, never a signing secret. Players may pick Direct only.";
+			default: return "If a direct connection fails, the game service relays it, adding its round trip.\nUDP relays only in this build; the game service's login renews itself while the session runs.";
 		}
 	}
 
-	inline std::string NetHostNatTraversalHint(const SettingsMan& settings, bool setup, bool readOnly, const std::string& route) {
-		std::string text = "Players behind home routers connect directly. Off means they need your port forwarded.\n";
-		if (!settings.GetNetworkIceEnableSetting()) {
-			text += "Off: use LAN or forward the host's UDP port.";
-		} else if (settings.GetNetworkStunServersSetting().empty()) {
-			text += "STUN list empty: direct candidates are LAN-only. Edit Settings > Network > Connection.";
-		} else {
-			text += "STUN finds direct routes. The Relay row offers a fallback for stricter routers.";
-		}
-		text += "\n";
-		if (readOnly) return text + "This is your saved preference; only the host sets up this session.";
+	/// The direct-connection row's hint for the drafted choice, then what this computer's settings and the live session mean for it.
+	inline std::string NetHostNatTraversalHint(const SettingsMan& settings, bool directOn, bool setup, bool readOnly, const std::string& route) {
+		// Two lines fit the row: with no STUN server to ask, what the choice does is reach this network only.
+		std::string text = !directOn ? "Players reach you only at your public address and port; many home networks cannot.\n"
+		                 : settings.GetNetworkStunServersSetting().empty() ? "The STUN server list is empty, so only players on your network connect directly (Settings - Network - Connection).\n"
+		                 : "Tries a direct connection through each player's router first. Recommended.\n";
+		if (readOnly) return text + "This is your saved preference; only the host sets up this match.";
 		if (settings.GetNetworkIceEnable() != settings.GetNetworkIceEnableSetting() || settings.GetNetworkStunServers() != settings.GetNetworkStunServersSetting()) {
 			return text + "Command-line ICE/STUN overrides apply to this run; this row saves your preference.";
 		}
 		if (!setup) {
-			if (route == "ip") return text + "Current session uses direct IP: forward the host's UDP port or use LAN.";
-			if (route == "ice") return text + "This session is using this preference. End it to change the setting.";
-			if (!settings.GetNetworkIceEnableSetting()) return text + "NAT traversal is Off for this session. End it to change the setting.";
+			if (route == "ip") return text + "This lobby connects by address: players need your UDP port forwarded, or the same network.";
+			if (route == "ice") return text + "This lobby connects players directly. Close it to change this.";
+			if (!settings.GetNetworkIceEnableSetting()) return text + "Direct connection is off for this lobby. Close it to change this.";
 		}
-		return text + (settings.GetSessionDirectoryUrl().empty()
-		                   ? "Internet NAT traversal needs a session directory URL in Network settings."
-		                   : !setup ? "No ICE listener is active yet; the lobby is still setting up."
-		                            : "Applied when you create the lobby; direct address joins use the host's UDP port.");
+		return text + (settings.GetSessionDirectoryUrl().empty() ? "A direct connection over the internet needs the online game list service (Settings - Network - Internet)."
+		                                                          : !setup ? "The lobby is still setting up its connection." : "Applied when you create the lobby.");
 	}
 
 	inline const char* NetHostOptionsApplyText(NetMatchServiceState state) {

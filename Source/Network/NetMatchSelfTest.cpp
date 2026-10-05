@@ -15916,10 +15916,10 @@ namespace RTE {
 			return false;
 		}
 		// A fresh install ships a directory, so the hint asks for one only when the player cleared it.
-		const bool shippedDirectoryHint = NetHostNatTraversalHint(settings, true, false, "").find("session directory URL") == std::string::npos;
+		const bool shippedDirectoryHint = NetHostNatTraversalHint(settings, true, true, false, "").find("online game list service") == std::string::npos;
 		settings.SetSessionDirectoryUrl("");
-		if (!shippedDirectoryHint || NetHostNatTraversalHint(settings, true, false, "").find("session directory URL") == std::string::npos ||
-		    NetHostNatTraversalHint(settings, false, false, "ip").find("Current session uses direct IP:") == std::string::npos) {
+		if (!shippedDirectoryHint || NetHostNatTraversalHint(settings, true, true, false, "").find("online game list service") == std::string::npos ||
+		    NetHostNatTraversalHint(settings, true, false, false, "ip").find("This lobby connects by address:") == std::string::npos) {
 			*error = "NAT hint hid the directory requirement or the direct route after host handover";
 			return false;
 		}

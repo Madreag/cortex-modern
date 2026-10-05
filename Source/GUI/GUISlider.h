@@ -133,6 +133,10 @@ namespace RTE {
 		/// @param valueRes The new value resolution
 		void SetValueResolution(int valueRes);
 
+		/// Gets the step the wheel moves this slider by.
+		/// @return The value resolution.
+		int GetValueResolution() const { return m_ValueResolution; }
+
 	private:
 		GUIBitmap* m_DrawBitmap;
 		GUIBitmap* m_KnobImage;
