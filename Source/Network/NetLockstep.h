@@ -1427,6 +1427,8 @@ namespace RTE {
 		friend bool TestAReadyFrameKeepsItsLocalInputForThePreview(std::string* error);
 		friend bool TestAFeedingSeatIsNotHeldForLateness(std::string* error);
 		friend bool TestAReturnRebuildsArrivalSlack(std::string* error);
+		friend bool TestALinksSilenceKeepsItsCover(std::string* error);
+		friend bool TestAHeldSeatsSilenceCarriesItsReturn(std::string* error);
 		friend bool TestReturnFramesBypassReliableLoss(std::string* error);
 		friend bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error);
 		friend bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);

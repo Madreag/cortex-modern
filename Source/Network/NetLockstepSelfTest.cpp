@@ -22206,6 +22206,121 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// A phone hotspot's link stops for ~150 ms every few tens of seconds and then delivers everything at once; its smoothed round
+	// trip never shows it (2026-10-04 LTE rows: 17 holds, each after a 116-168 ms silence, at a measured jitter of 2-9 ms).
+	bool TestALinksSilenceKeepsItsCover(std::string* error) {
+		const double tick = 1000.0 / 60.0;
+		struct Feed { uint64_t sim = 600, target = 609, k = 0; };
+		const auto prepare = [&](NetLockstepCoordinator& host) {
+			host.m_Config.localPeerId = 1; host.m_Config.peerCount = 2;
+			host.m_Config.adaptiveInputDelay = true;
+			host.m_Config.simTickMs = tick;
+			host.m_Config.slowPlayerBoundTicks = 3;
+			host.m_Config.peerInputDelayFrames = {{1, 9}, {2, 9}};
+			host.m_RemotePeerIds = {2};
+			for (uint64_t at = 0; at <= 6000; at += 100) host.m_DelayEstimators[2].Observe(at, 50);
+		};
+		const auto at = [](const Feed& feed) { return 6000 + static_cast<uint64_t>(std::llround(static_cast<double>(feed.k) * 1000.0 / 60.0)); };
+		// One tick of this machine; the sender's next input lands in it unless the link is silent.
+		const auto play = [&](NetLockstepCoordinator& host, Feed& feed, bool delivered) {
+			host.m_LastDeliveredFrame = feed.sim - 1;
+			if (delivered) {
+				NetLockstepFrame frame;
+				frame.senderPeerId = 2; frame.targetFrame = feed.target++;
+				host.AcceptRemoteTick(frame, at(feed), false);
+			}
+			++feed.sim; ++feed.k;
+		};
+		const auto required = [&](const NetLockstepCoordinator& host) { return host.m_DelayEstimators.at(2).RequiredFrames(tick, 1); };
+		NetLockstepCoordinator silent;
+		Feed feed;
+		prepare(silent);
+		const uint32_t linkOnly = required(silent);
+		for (int step = 0; step < 120; ++step) play(silent, feed, true);
+		for (int step = 0; step < 9; ++step) play(silent, feed, false);
+		for (int step = 0; step < 120; ++step) play(silent, feed, true);
+		const uint32_t covered = required(silent);
+		const uint32_t silenceFrames = static_cast<uint32_t>(std::ceil(140.0 / tick));
+		if (covered < linkOnly + silenceFrames) {
+			*error = "a 150 ms silence of the sender's stream left no cover in its delay: required=" + std::to_string(covered) + " link_only=" + std::to_string(linkOnly);
+			return false;
+		}
+		// Thirty seconds of a clean link later the cover still stands: the next silence comes.
+		auto& link = silent.m_DelayEstimators[2];
+		const uint64_t silencedAt = at(feed);
+		std::optional<uint16_t> lowered;
+		for (uint64_t now = silencedAt; now <= silencedAt + 30000; now += 100) {
+			link.Observe(now, 50);
+			if (const auto change = link.Change(now, static_cast<uint16_t>(covered), tick, 1); change && *change < covered) lowered = change;
+		}
+		if (lowered) {
+			*error = "the delay gave back a silence's cover after a clean half minute: lowered to " + std::to_string(*lowered) + " from " + std::to_string(covered);
+			return false;
+		}
+		// Two minutes after it, a silence no longer sizes the link.
+		for (uint64_t now = silencedAt + 30100; now <= silencedAt + 125000; now += 100) link.Observe(now, 50);
+		if (required(silent) != linkOnly) {
+			*error = "a silence over two minutes old still sized the delay: required=" + std::to_string(required(silent)) + " link_only=" + std::to_string(linkOnly);
+			return false;
+		}
+		// Not silences of the sender's link: this machine's own pause, the frames a lowered delay already sent, a park's restart.
+		NetLockstepCoordinator paused, lowerer, parked;
+		Feed pausedFeed, lowererFeed, parkedFeed;
+		prepare(paused); prepare(lowerer); prepare(parked);
+		for (int step = 0; step < 120; ++step) { play(paused, pausedFeed, true); play(lowerer, lowererFeed, true); play(parked, parkedFeed, true); }
+		const uint64_t pauseEnd = at(pausedFeed) + 150;
+		for (int step = 0; step < 9; ++step) {
+			NetLockstepFrame frame;
+			frame.senderPeerId = 2; frame.targetFrame = pausedFeed.target++;
+			paused.m_LastDeliveredFrame = pausedFeed.sim - 1;
+			paused.AcceptRemoteTick(frame, pauseEnd, false);
+		}
+		pausedFeed.sim += 9; pausedFeed.k += 10;
+		lowerer.m_DelayChanges[2][lowererFeed.sim] = 6;
+		for (int step = 0; step < 3; ++step) play(lowerer, lowererFeed, false);
+		parked.m_ParkFrameSimulatedMs = at(parkedFeed);
+		for (int step = 0; step < 9; ++step) play(parked, parkedFeed, false);
+		for (int step = 0; step < 60; ++step) { play(paused, pausedFeed, true); play(lowerer, lowererFeed, true); play(parked, parkedFeed, true); }
+		if (required(paused) != linkOnly || required(lowerer) != linkOnly || required(parked) != linkOnly) {
+			*error = "a gap that was not the sender's link was carried as its silence: own_pause=" + std::to_string(required(paused)) + " lowered_delay=" +
+			         std::to_string(required(lowerer)) + " park=" + std::to_string(required(parked)) + " link_only=" + std::to_string(linkOnly);
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_links_silence_keeps_its_cover link_only=" << linkOnly << " covered=" << covered << std::endl;
+		return true;
+	}
+
+	// The seat held for going silent comes back on the delay that would have carried that silence, not on one it will be held at again.
+	bool TestAHeldSeatsSilenceCarriesItsReturn(std::string* error) {
+		LoopbackTransport hostWire, clientWire;
+		NetLockstepCoordinator host, client;
+		auto a = MakeCoordinatorConfig(1, 2, 0x9A7D, 0, NetTransportLane::ControlReliable);
+		auto b = MakeCoordinatorConfig(2, 1, 0x9A7D, 0, NetTransportLane::ControlReliable);
+		a.roundId = b.roundId = 77; a.relayToOtherPeers = true;
+		a.substituteSlowPeers = b.substituteSlowPeers = true;
+		a.timeoutMs = b.timeoutMs = 20000;
+		a.simTickMs = b.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+		a.peerIncarnations = b.peerIncarnations = {{1, 1}, {2, 1}};
+		if (!StartCoordinatorPair(48897, hostWire, clientWire, host, client, a, b, error)) return false;
+		for (uint64_t now = 0; now < 10; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
+		const uint32_t before = host.RejoinDelayFrames(2, host.m_DelayEstimators[2]);
+		// The seat last delivered at 1000 ms, is held for silence, and its next input lands 150 ms after its last.
+		host.m_Stats.peers[2].lastProgressMs = 1000;
+		if (!host.QueueLocalInput(0, {}, {}, error) || !host.ProposePeerHold(2, 1080, error, 0, "late_stream")) return false;
+		NetLockstepFrame late;
+		late.senderPeerId = 2; late.targetFrame = 3; late.roundId = 77;
+		host.HandleFrame(late, 1150, 1, false, false);
+		const uint32_t after = host.RejoinDelayFrames(2, host.m_DelayEstimators[2]);
+		const uint32_t silenceFrames = static_cast<uint32_t>(std::ceil(150.0 / a.simTickMs));
+		if (after < before + silenceFrames - 1) {
+			*error = "the held seat's return does not carry the silence that held it: return_frames=" + std::to_string(after) + " before=" + std::to_string(before) +
+			         " silence_frames=" + std::to_string(silenceFrames);
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_held_seats_silence_carries_its_return before=" << before << " after=" << after << std::endl;
+		return true;
+	}
+
 	// A hold is for a seat gone silent; a seat still feeding but late is answered by the delay re-size. With a survivor's notice at
 	// 45 ms the declaration deadline was 5 ms, so a seat whose frames kept landing each tick 5 ms late was held (r3-mac-match: seats held
 	// 15-21 ms after their input went missing).
@@ -23476,6 +23591,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestHostStatusKeepsTheReceiversLinkMeasurement, "host_status_keeps_the_receivers_link_measurement");
 		row(&TestEachSurvivorsRunwayUsesItsOwnLink, "each_survivors_runway_uses_its_own_link");
 		row(&TestAReturnRebuildsArrivalSlack, "a_return_rebuilds_arrival_slack");
+		row(&TestALinksSilenceKeepsItsCover, "a_links_silence_keeps_its_cover");
+		row(&TestAHeldSeatsSilenceCarriesItsReturn, "a_held_seats_silence_carries_its_return");
 		row(&TestANeutralGapLeavesNoCommandsToResend, "a_neutral_gap_leaves_no_commands_to_resend");
 		row(&TestFreshRoundDropsRetainedCollisionResults, "fresh_round_drops_retained_collision_results");
 		row(&TestReturnFramesBypassReliableLoss, "return_frames_bypass_reliable_loss");
