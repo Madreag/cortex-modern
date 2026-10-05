@@ -464,20 +464,46 @@ FEEL_BARS = ('item9a_wall_tps', 'item9a_net_wait', 'item9a_steady_stalls', 'item
 LIVE_SPIKE_PINS = ('item9a_steady_stalls', 'item9a_missing_frame_stalls')
 
 
+def observed_input_spikes(log: str, tick_ms: float = 1000 / 60, bound_ticks: int = 3) -> dict:
+    proposals, observed = {}, {}
+    for line in log.splitlines():
+        if line.startswith('[net-lockstep] propose hold peer='):
+            fields = dict(re.findall(r'(\w+)=(\S+)', line))
+            if fields.get('cause') != 'late_stream' or fields.get('played') != '1':
+                continue
+            try:
+                peer, frame, first, now = (int(fields[key]) for key in ('peer', 'next_frame', 'first_missing_ms', 'now'))
+            except (KeyError, ValueError):
+                continue
+            if first > 0 and now - first > bound_ticks * tick_ms:
+                proposals[peer] = dict(frame=frame, peer=peer, elapsed_ms=now-first, bound_ms=bound_ticks*tick_ms,
+                                       observed=True, evidence=line)
+        elif held := re.match(r'\[net-match\] hold peer=(\d+) frame=(\d+)', line):
+            peer, frame = map(int, held.groups())
+            proof = proposals.pop(peer, None)
+            if proof and proof['frame'] == frame:
+                observed[frame] = dict(proof, hold_evidence=line)
+    return observed
+
+
 def feel_bars(timing: dict, peer: str, log: str | None = None, spikes=(), ticks: int | None = None) -> dict:
     """The feel driver's own measured pins for one peer (its thresholds, unchanged): every one present and PASS. The pins this
     match cannot measure are listed with their reasons: the harness-cost receipt no current engine prints, and the input
     pins of the feel recorder a lean match does not run.
 
-    The steady pins count every wait before an injected spike; a live row injects none, so its carrier's spike is the frame
-    a hold answered (spikes), and one wait of the peer at that frame is the spike's, which the longest-wait pin still bounds
-    at 50 ms. Every other wait stays a steady stall; both readings are kept (live_spike_reading)."""
+    One wait at a held frame belongs to a spike only with the run's observed stream-silence record. Every other wait
+    remains steady, and a missing measured pin or log fails."""
     pins = (timing.get('peers', {}).get(peer) or {}).get('pins', {})
     failed = {name: (pins.get(name) or {}).get('status', 'MISS') for name in FEEL_BARS if (pins.get(name) or {}).get('status') != 'PASS'}
     unmeasured = {name: str(pin.get('reason', ''))[:160] for name, pin in pins.items() if name not in FEEL_BARS and pin.get('status') == 'MISS'}
     reading = None
-    if log is not None and any(name in failed for name in LIVE_SPIKE_PINS):
-        left, steady, at_spikes = set(spikes), [], []
+    if not isinstance(log, str) or not log.strip():
+        failed['log'] = 'MISS'
+    proofs = {frame: proof for frame, proof in spikes.items() if isinstance(proof, dict) and proof.get('observed') is True
+              and type(proof.get('elapsed_ms')) is int and isinstance(proof.get('bound_ms'), (int, float))
+              and proof['elapsed_ms'] > proof['bound_ms'] and proof.get('evidence') and proof.get('hold_evidence')} if isinstance(spikes, dict) else {}
+    if isinstance(log, str) and log.strip() and any(failed.get(name) == 'FAIL' for name in LIVE_SPIKE_PINS):
+        left, steady, at_spikes = set(proofs), [], []
         for tick, ms in ((int(tick), int(ms)) for tick, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', log)):
             if 300 < tick <= (tick if ticks is None else ticks) and ms > 0:
                 if tick in left:
@@ -485,11 +511,13 @@ def feel_bars(timing: dict, peer: str, log: str | None = None, spikes=(), ticks:
                     at_spikes.append((tick, ms))
                 else:
                     steady.append((tick, ms))
-        reading = dict(steady=len(steady), spike_waits=at_spikes, pins={name: failed[name] for name in LIVE_SPIKE_PINS if name in failed})
+        reading = dict(steady=len(steady), spike_waits=at_spikes, pins={name: failed[name] for name in LIVE_SPIKE_PINS if name in failed},
+                       evidence={frame: proofs[frame] for frame, _ in at_spikes})
         missing = (pins.get('item9a_missing_frame_stalls') or {}).get('value')
-        if not steady:
-            failed.pop('item9a_steady_stalls', None)
-            if type(missing) is int and missing <= len(at_spikes):
+        if not steady and at_spikes:
+            if failed.get('item9a_steady_stalls') == 'FAIL' and (pins.get('item9a_steady_stalls') or {}).get('value') == len(at_spikes):
+                failed.pop('item9a_steady_stalls', None)
+            if failed.get('item9a_missing_frame_stalls') == 'FAIL' and type(missing) is int and missing == len(at_spikes):
                 failed.pop('item9a_missing_frame_stalls', None)
     return dict(passed=not failed, failed=failed, values={name: (pins.get(name) or {}).get('value') for name in FEEL_BARS},
                 unmeasured=unmeasured, pass_check=(timing.get('peers', {}).get(peer) or {}).get('pass_check'), live_spike_reading=reading)
@@ -1923,7 +1951,7 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
     builds = edith_cross.pair_build_evidence(root, dict(source_sha=next(iter({value['head'] for value in facts['identities'].values()}))), records)
     rtts = transport_rtts(host_log)
     judged = run.get('timing_peers') or hash_peers
-    spikes = {int(frame) for frame in re.findall(r'\[net-match\] hold peer=\d+ frame=(\d+)', host_log)}
+    spikes = observed_input_spikes(host_log)
     sanitize = facts['sanitize']
     minted = facts.get('minted') or []
     clocks = {}
@@ -2068,11 +2096,23 @@ def feel_around_loss(live_rows: list[dict], log: str, boundary: int | None, fina
     committed = [dict(tick=row['tick'], wall_ms=row['wall_ms']) for row in live_rows if isinstance(row.get('tick'), int) and 'wall_ms' in row]
     waits = [dict(tick=int(tick), wait_ms=int(ms)) for tick, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', log)]
     windows, reasons = {}, []
-    times = sorted((row['tick'], row['wall_ms']) for row in committed if abs(row['tick'] - boundary) <= warmup)
-    gaps = [(later[1] - earlier[1], earlier[0]) for earlier, later in zip(times, times[1:])]
-    pause, at = max(gaps, default=(None, None))
-    # The survivors stop where the dead host's input runs out, which can be frames before the boundary: that wait is the pause.
-    before_end = at if pause is not None and pause > 50 and at < boundary - 2 else boundary - 2
+    losses, matched, pending = [], [], None
+    for line in log.splitlines():
+        if loss := re.match(r'\[net-match\] host lost; collecting surviving peers at applied frame (\d+)', line):
+            pending = dict(frame=int(loss.group(1)), evidence=line)
+            losses.append(pending)
+        elif declaration := re.match(r'\[net-match\] Host left - .*; boundary=(\d+)', line):
+            if int(declaration.group(1)) == boundary and pending:
+                matched.append(dict(pending, declaration=line))
+            pending = None
+    proof = matched[0] if len(matched) == 1 else losses[0] if not matched and len(losses) == 1 else None
+    if not proof or not warmup <= proof['frame'] <= boundary:
+        return dict(passed=False, reasons=['no unambiguous host-loss record for this succession'], windows={})
+    before_end = proof['frame']
+    by_tick = {row['tick']: row['wall_ms'] for row in committed}
+    after_loss = min((tick for tick in by_tick if tick > before_end), default=None)
+    pause = by_tick[after_loss] - by_tick[before_end] if after_loss is not None and before_end in by_tick else None
+    at = before_end
     for name, first, last in (('before', warmup, before_end), ('after', boundary + warmup, final_tick)):
         if last - first < 60:
             reasons.append(f'the {name} window {first}..{last} is shorter than a second')
@@ -2086,7 +2126,7 @@ def feel_around_loss(live_rows: list[dict], log: str, boundary: int | None, fina
                                            ('horizon', window['confirmed_horizon_lag_ms'] is None or window['confirmed_horizon_lag_ms'] > 50)) if bad]
         if failed:
             reasons.append(f'the {name} window {first}..{last} fails {failed}: {json.dumps({k: window[k] for k in ("steady_wall_tps", "waiting_percent", "longest_stall_ms", "confirmed_horizon_lag_ms")})}')
-    return dict(passed=not reasons, reasons=reasons, windows=windows, pause_ms=pause, pause_after_tick=at)
+    return dict(passed=not reasons, reasons=reasons, windows=windows, pause_ms=pause, pause_after_tick=at, loss_evidence=proof)
 
 
 def revoked_every_login(minted: list[dict], statuses: list[int], ended_at: float) -> bool:

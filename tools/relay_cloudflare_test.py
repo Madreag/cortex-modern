@@ -402,12 +402,13 @@ class HotspotRows(unittest.TestCase):
         around = self.match().feel_around_loss
         tick = 1000 / 60
         rows = [dict(tick=t, wall_ms=t * tick + (7500 if t >= 618 else 0)) for t in range(1, 1802)]
-        verdict = around(rows, '', 618, 1801)
+        loss = '[net-match] host lost; collecting surviving peers at applied frame 617 final_frame=1802\n'
+        verdict = around(rows, loss, 618, 1801)
         self.assertTrue(verdict['passed'], verdict['reasons'])
         self.assertGreater(verdict['pause_ms'], 7500)
         slow = [dict(row, wall_ms=row['wall_ms'] + (row['tick'] - 1000) * 2 if row['tick'] > 1000 else row['wall_ms']) for row in rows]
-        self.assertFalse(around(slow, '', 618, 1801)['passed'])
-        waited = around(rows, '[net-frame-wait] frame=1200 wait_ms=80 on=x\n', 618, 1801)
+        self.assertFalse(around(slow, loss, 618, 1801)['passed'])
+        waited = around(rows, loss + '[net-frame-wait] frame=1200 wait_ms=80 on=x\n', 618, 1801)
         self.assertFalse(waited['passed'])
         self.assertFalse(around(rows, '', None, 1801)['passed'])
 
@@ -416,12 +417,13 @@ class HotspotRows(unittest.TestCase):
         around = self.match().feel_around_loss
         tick = 1000 / 60
         rows = [dict(tick=t, wall_ms=t * tick + (7888 if t >= 628 else 0)) for t in range(1, 1802)]
-        verdict = around(rows, '[net-frame-wait] frame=628 wait_ms=7888\n', 630, 1801)
+        loss = '[net-match] host lost; collecting surviving peers at applied frame 627 final_frame=1802\n'
+        verdict = around(rows, loss + '[net-frame-wait] frame=628 wait_ms=7888\n', 630, 1801)
         self.assertTrue(verdict['passed'], verdict['reasons'])
         self.assertEqual(verdict['windows']['before']['last_tick'], 627)
         self.assertGreater(verdict['pause_ms'], 7888)
         # A stall before the loss's pause is still the before window's.
-        self.assertFalse(around(rows, '[net-frame-wait] frame=500 wait_ms=80\n[net-frame-wait] frame=628 wait_ms=7888\n', 630, 1801)['passed'])
+        self.assertFalse(around(rows, loss + '[net-frame-wait] frame=500 wait_ms=80\n[net-frame-wait] frame=628 wait_ms=7888\n', 630, 1801)['passed'])
 
     def test_an_earlier_larger_gap_is_not_the_recorded_host_loss(self):
         tick = 1000 / 60
@@ -727,7 +729,7 @@ class FeelBars(unittest.TestCase):
 
     def test_the_six_measured_pins_decide_and_the_unmeasurable_ones_are_listed(self):
         import relay_cloudflare_match as match
-        verdict = match.feel_bars(self.timing(), 'host')
+        verdict = match.feel_bars(self.timing(), 'host', log='[net-match] end record received final=1201\n')
         self.assertTrue(verdict['passed'], verdict)
         self.assertEqual(sorted(verdict['unmeasured']), ['input_carried', 'item9a_harness_cost'])
         self.assertIs(verdict['pass_check'], False)
@@ -756,16 +758,18 @@ class FeelBars(unittest.TestCase):
         import relay_cloudflare_match as match
         steady = dict(item9a_steady_stalls={'status': 'FAIL', 'value': 1}, item9a_missing_frame_stalls={'status': 'FAIL', 'value': 1})
         log = '[net-frame-wait] frame=1120 wait_ms=2\n[net-frame-wait] frame=200 wait_ms=40\n'
-        verdict = match.feel_bars(self.timing(**steady), 'host', log=log, spikes={1120}, ticks=1201)
+        observed = match.observed_input_spikes('[net-lockstep] propose hold peer=4 next_frame=1120 played=1 first_missing_ms=2000 now=2100 cause=late_stream\n'
+                                                '[net-match] hold peer=4 frame=1120 AI in control\n')
+        verdict = match.feel_bars(self.timing(**steady), 'host', log=log, spikes=observed, ticks=1201)
         self.assertTrue(verdict['passed'], verdict)
         self.assertEqual(verdict['live_spike_reading'], dict(steady=0, spike_waits=[(1120, 2)],
-                                                             pins={'item9a_steady_stalls': 'FAIL', 'item9a_missing_frame_stalls': 'FAIL'}))
+                                                             pins={'item9a_steady_stalls': 'FAIL', 'item9a_missing_frame_stalls': 'FAIL'}, evidence=observed))
         # A wait at a frame no hold answered, a second wait at a held frame, or a spike's wait over 50 ms stays a failure.
-        self.assertFalse(match.feel_bars(self.timing(**steady), 'host', log='[net-frame-wait] frame=1119 wait_ms=2\n', spikes={1120}, ticks=1201)['passed'])
-        self.assertFalse(match.feel_bars(self.timing(**steady), 'host', log=log + '[net-frame-wait] frame=1120 wait_ms=3\n', spikes={1120},
+        self.assertFalse(match.feel_bars(self.timing(**steady), 'host', log='[net-frame-wait] frame=1119 wait_ms=2\n', spikes=observed, ticks=1201)['passed'])
+        self.assertFalse(match.feel_bars(self.timing(**steady), 'host', log=log + '[net-frame-wait] frame=1120 wait_ms=3\n', spikes=observed,
                                          ticks=1201)['passed'])
         self.assertFalse(match.feel_bars(self.timing(item9a_longest_wait={'status': 'FAIL', 'value': 97}, **steady), 'host', log=log,
-                                         spikes={1120}, ticks=1201)['passed'])
+                                         spikes=observed, ticks=1201)['passed'])
         self.assertFalse(match.feel_bars(self.timing(**steady), 'host')['passed'])
 
 

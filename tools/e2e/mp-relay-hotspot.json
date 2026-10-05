@@ -169,9 +169,7 @@
       "timing_peers": [
         "host"
       ],
-      "holds_allowed": [
-        "client"
-      ]
+      "holds_allowed": []
     },
     {
       "name": "e-migration-relayed",
@@ -423,7 +421,7 @@
       "id": "d-holds",
       "run": "d-credential-expiry",
       "check": "seat_holds",
-      "what": "No seat but the hotspot's was held across the renewal."
+      "what": "No seat was held across the renewal."
     },
     {
       "id": "d-route-client",
