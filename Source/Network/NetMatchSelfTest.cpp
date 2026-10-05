@@ -16342,6 +16342,8 @@ namespace RTE {
 			rowsPassed = false;
 		};
 		row(&TestTheDrainSaysGoodbyeAtItsCap, "the_drain_says_goodbye_at_its_cap");
+		row(&TestSessionIdJoinRefusals, "rejoin_end_requires_host_evidence");
+		row(&TestIceConnectingLine, "direct_fallback_attempt_clock");
 		row(&TestReplayStorageDoesNotBlockTicks, "replay_storage_does_not_block_ticks");
 		row(&TestDirectoryRowTakesTheLateRouterAnswer, "directory_row_takes_the_late_router_answer");
 		row(&TestAHostMappingOutlastsItsPendingIdentity, "a_host_mapping_outlasts_its_pending_identity");
@@ -16381,7 +16383,6 @@ namespace RTE {
 		if (!TestHandoverSnapshotStatus(&error)) return fail(error);
 		if (!TestDiscoveryOccupancy(&error)) return fail(error);
 		if (!TestReservedSeatDirectoryResolve(&error)) return fail(error);
-		if (!TestIceConnectingLine(&error)) return fail(error);
 		if (!TestRelayOfferRefresh(&error)) return fail(error);
 		if (!TestIceConnectionFallback(&error)) return fail(error);
 		if (!TestInternetMenuJoinUsesSession(&error)) return fail(error);
@@ -16642,7 +16643,6 @@ namespace RTE {
 		if (!TestIceRowJoinMode(&iceRowError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << iceRowError << std::endl;
 		}
-		if (!TestSessionIdJoinRefusals(&error)) return fail(error);
 		if (!TestIceSettingsOverrideIsNotPersisted(&error)) return fail(error);
 		if (!TestP2PJoinSpecRidesTheSessionConfig(&error)) return fail(error);
 		if (!TestServiceDirectoryIceLeaseKeepsIdentity(&error)) return fail(error);
