@@ -1050,6 +1050,8 @@ namespace RTE {
 		/// went away. Without one every seat reads as neither fenced nor held, which is the pre-H4 round.
 		void SetSeatStateSource(NetLockstepSeatState (*source)(void*, uint8_t, NetPeerId), void* context);
 		bool PopReadyFrame(NetLockstepReadyFrame& outFrame);
+		/// Installs the recorded frame's host before any simulation reads it.
+		bool PrepareReplayFrame(uint64_t frame, std::string* error = nullptr);
 		//! The timing proposals this peer is holding, by revision.
 		std::vector<uint64_t> PendingTimingRevisions() const {
 			NET_PLANE_CHECK();
@@ -1613,6 +1615,7 @@ namespace RTE {
 		bool SenderOwnsTransport(uint8_t claimedPeerId, NetPeerId fromTransport) const;
 		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
+		void StampFrameAuthority(NetLockstepReadyFrame& ready);
 		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false, bool agreedBoundary = false, bool removed = false, bool cleanLeave = true);
 		void ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay);
 		/// Ends an AI-held seat's wait for its returner: an agreed reclaim still ahead of every peer is withdrawn, the AI keeps the units.
@@ -2012,6 +2015,8 @@ namespace RTE {
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;
 		std::map<uint64_t, uint8_t> m_ReplayAuthorities;
+		std::map<uint64_t, uint8_t> m_ReplayAuthorityHistory;
+		uint8_t m_ReplayOpeningAuthority = 0;
 		std::map<uint64_t, std::map<uint8_t, std::vector<ControllerFrame>>> m_RemoteFrames; //!< frame -> (peerId -> frames)
 		std::map<uint64_t, std::vector<NetGameCommand>> m_LocalCommands;
 		std::map<uint64_t, std::map<uint8_t, std::vector<NetGameCommand>>> m_RemoteCommands; //!< frame -> (peerId -> commands)
