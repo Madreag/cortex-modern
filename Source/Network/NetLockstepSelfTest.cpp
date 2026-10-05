@@ -24026,6 +24026,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			std::array<uint64_t, 4> produceThrough{UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX};
 			std::array<bool, 4> alive{true, true, true, true};
 			std::array<std::map<uint64_t, NetLockstepReadyFrame>, 4> committed;
+			std::vector<NetSoundObservation> inputReadings;
 			NetMatchConfig match;
 			uint64_t now = 0;
 			bool recording = false;
@@ -24059,9 +24060,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			}
 			void Pump() {
 				for (size_t index = 0; index < peers.size(); ++index) if (alive[index] && produced[index] <= produceThrough[index]) {
-					if (index == 3 && hostWire.fourthFutureOnlyToFirst) {
+					if (!inputReadings.empty() || (index == 3 && hostWire.fourthFutureOnlyToFirst)) {
+						std::vector<NetSoundObservation> readings;
+						for (const auto& reading: inputReadings) if (reading.senderPeerId == index + 1) readings.push_back(reading);
+						const auto inputs = index == 3 && hostWire.fourthFutureOnlyToFirst ? std::vector{MakeFrame(400, produced[index])} : std::vector<ControllerFrame>{};
 						if (peers[index].IsRunning() && produced[index] <= peers[index].GetStats().nextFrame + 4 &&
-						    peers[index].QueueLocalInput(produced[index], {MakeFrame(400, produced[index])}, {}, &failure)) ++produced[index];
+						    peers[index].QueueLocalInput(produced[index], inputs, {}, &failure, readings)) ++produced[index];
 					} else FeedReleasedClaimsPeer(peers[index], produced[index]);
 				}
 				for (size_t index = 0; index < peers.size(); ++index) if (alive[index]) {
@@ -24634,6 +24638,101 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	}
 
 	namespace {
+		bool TestReplayMatchesSuccessionDuringActivityTick(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("replay_matches_succession_during_activity_tick", why, error); };
+			std::string failures;
+			for (const bool insideTick: {false, true}) {
+				SuccessionReplayScope scope;
+				ReleasePathRound round;
+				round.now = NetLockstepNowMs();
+				if (!round.Start(47425)) return fail("the zero-delay round did not start: " + round.failure);
+				round.drainThrough = 119;
+				round.produceThrough.fill(119);
+				for (int turn = 0; turn < 400 && (round.peers[1].GetResumeFrame() != 120 || round.peers[2].GetResumeFrame() != 120 || round.peers[3].GetResumeFrame() != 120); ++turn) round.Pump();
+				for (size_t index: {size_t{1}, size_t{2}, size_t{3}}) if (round.peers[index].GetResumeFrame() != 120) return fail("a survivor did not apply through 119");
+				g_TimerMan.RewindSimTo(119, 119 * g_TimerMan.GetDeltaTimeTicks());
+				SoundContainer sound;
+				if (sound.Create("Base.rte/Sounds/GUIs/ButtonPress.flac", false, true, SoundContainer::SFX) < 0) return fail("the live activity sound did not create");
+				{ SoundSimulationScope shared(0, 0x9D04); sound.SetLoopSetting(-1); if (!sound.Play()) return fail("the live activity sound did not play logically"); }
+				const auto key = sound.GetSharedPlaybackIdentity();
+				if (!key.ordinal) return fail("the live activity sound has no identity");
+				std::vector<NetSoundObservation> observations;
+				for (uint8_t sender: {uint8_t{1}, uint8_t{2}}) {
+					NetSoundObservation reading;
+					reading.senderPeerId = sender; reading.objectUID = key.objectUID; reading.tick = key.tick; reading.phase = key.phase;
+					reading.occurrence = key.occurrence; reading.ordinal = key.ordinal; reading.value = sender == 1 ? 0.2F : 0.8F;
+					observations.push_back(reading);
+				}
+				round.inputReadings = observations;
+				ScenarioRunner::SetLockstepCoordinator(&round.peers[2]);
+				g_AudioMan.CommitSoundObservations(119, {}, observations);
+				auto* start = new AuthorityReadingActivity; start->sound = &sound;
+				if (g_ActivityMan.StartActivity(start) < 0) return fail("the live authority activity did not start");
+				auto* activity = dynamic_cast<AuthorityReadingActivity*>(g_ActivityMan.GetActivity());
+				if (!activity) return fail("the live activity clone was lost");
+				const std::string path = insideTick ? "succession-inside-update.ccreplay" : "succession-before-update.ccreplay";
+				ScenarioRunner::ArmLockstepReplayRecordForRound(path);
+				if (!ScenarioRunner::BeginLockstepReplayRecord(round.match, &round.failure)) return fail(round.failure);
+				g_TimerMan.RewindSimTo(119, 119 * g_TimerMan.GetDeltaTimeTicks());
+				std::vector<std::pair<int, uint8_t>> liveUpdates;
+				std::vector<NetLockstepFrame> tail;
+				bool migrateInWait = false, migrationCompleted = false, feedCurrent = false;
+				uint64_t current = 120;
+				ScenarioRunner::SetSessionPump([&] {
+					if (migrateInWait && !migrationCompleted) { migrationCompleted = round.Migrate(); migrateInWait = false; }
+					if (feedCurrent) for (size_t index: {size_t{0}, size_t{1}, size_t{3}}) round.produceThrough[index] = current;
+					round.Pump();
+				});
+				struct PumpScope { ~PumpScope() { ScenarioRunner::SetSessionPump({}); ScenarioRunner::CloseLockstepReplayRecord(); } } pumpScope;
+				for (current = 120; current <= 123; ++current) {
+					feedCurrent = false;
+					if (current == 121 && !insideTick) migrationCompleted = round.Migrate();
+					if (!ScenarioRunner::PollLockstepSimulationTick(current) || round.peers[2].HasReadyFrame(current)) return fail("zero delay did not grant an update before its input was ready");
+					g_TimerMan.GrantSimUpdates(1); g_TimerMan.UpdateSim(); g_ActivityMan.Update();
+					liveUpdates.emplace_back(activity->mutations, round.peers[2].GetHostPeerId());
+					if (current == 121 && insideTick) migrateInWait = true;
+					if (!ScenarioRunner::QueueLockstepLocalControllerFrames(current, {}, &round.failure)) return fail(round.failure);
+					feedCurrent = true;
+					NetLockstepReadyFrame ready;
+					if (!ScenarioRunner::WaitForLockstepControllerFrame(current, ready, &round.failure)) return fail("the live controller wait failed: " + round.failure);
+					if (current >= 121 && (!migrationCompleted || round.peers[2].GetHostPeerId() != 2 || round.peers[2].GetMigrationResult().boundary != 120)) return fail("the real wait did not complete succession at 120");
+					g_AudioMan.CommitSoundObservations(current, ready.localObservations, ready.remoteObservations);
+					tail.push_back(PackWorldJoinReadyFrame(ready));
+					round.peers[2].FinishSimulationTick(current);
+					round.drainThrough = current;
+					for (int turn = 0; turn < 4; ++turn) round.Pump();
+				}
+				ScenarioRunner::SetSessionPump({});
+				ScenarioRunner::CloseLockstepReplayRecord();
+				if (!ScenarioRunner::WasLockstepReplayRecordClosed() || ScenarioRunner::GetLockstepReplayRecordFrames() != 4) return fail("the live recording did not close with four committed ticks");
+				if (liveUpdates[1].second != (insideTick ? 1 : 2) || liveUpdates[1].first != (insideTick ? 0 : 1)) return fail("the live activity did not exercise the requested host ordering");
+				LoopbackTransport replayWire;
+				NetLockstepCoordinator replay;
+				auto config = ReleasedClaimsConfig(round.match, 3, {}, true); config.startFrame = 120;
+				if (!replay.StartReplay(replayWire, config, &round.failure) || !ScenarioRunner::SetLockstepReplaySource(path, &round.failure)) return fail(round.failure);
+				ScenarioRunner::SetLockstepCoordinator(&replay);
+				ScenarioRunner::ArmReplayRewindBuffer(120, 4);
+				for (int pass = 0; pass < 2; ++pass) {
+					activity->mutations = 0;
+					g_AudioMan.CommitSoundObservations(119, {}, observations);
+					g_TimerMan.RewindSimTo(119, 119 * g_TimerMan.GetDeltaTimeTicks());
+					if (pass && !ScenarioRunner::RewindReplayForProbe(120, &round.failure)) return fail(round.failure);
+					for (uint64_t tick = 120; tick <= 123; ++tick) {
+						if (!ScenarioRunner::PollLockstepSimulationTick(tick)) return fail("the recorded activity tick was refused");
+						g_TimerMan.GrantSimUpdates(1); g_TimerMan.UpdateSim(); g_ActivityMan.Update();
+						const auto actual = std::pair{activity->mutations, replay.GetHostPeerId()};
+						if (actual != liveUpdates[tick - 120]) failures += std::string(insideTick ? "inside tick" : "before tick") + (pass ? " rewind" : " playback") + " frame " + std::to_string(tick) + " update host=" + std::to_string(actual.second) + " mutations=" + std::to_string(actual.first) + " live host=" + std::to_string(liveUpdates[tick - 120].second) + " mutations=" + std::to_string(liveUpdates[tick - 120].first) + "; ";
+						NetLockstepReadyFrame ready;
+						if (!ScenarioRunner::WaitForLockstepControllerFrame(tick, ready, &round.failure)) return fail(round.failure);
+						if (replay.GetHostPeerId() != (tick == 120 ? 1 : 2)) return fail("playback did not install the committing host at delivery");
+						g_AudioMan.CommitSoundObservations(tick, ready.localObservations, ready.remoteObservations);
+						replay.FinishSimulationTick(tick);
+					}
+				}
+			}
+			return fail(failures);
+		}
+
 		bool TestPreviousClaimRulesAreRefused(std::string* error) {
 			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("previous_claim_rules_are_refused", why, error); };
 			NetIdentityManifest current;
@@ -24743,7 +24842,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	int NetLockstepSelfTest::RunSeatSuccession() {
 		EnsureSwitchTestManagers();
 		bool passed = true;
-		for (bool (*test)(std::string*): {TestPlayingDepartureSurvivesSuccession, TestUnequalFutureDeparturesConvergeAtSuccession, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
+		for (bool (*test)(std::string*): {TestPlayingDepartureSurvivesSuccession, TestUnequalFutureDeparturesConvergeAtSuccession, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestReplayMatchesSuccessionDuringActivityTick, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
 			std::string error;
 			passed &= test(&error);
 		}
