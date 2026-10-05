@@ -14,7 +14,7 @@ import uuid
 import e2e_video as video
 import edith_cross as cross
 import acceptance_relay_policy as policy
-import turn_relay_rows as turn
+import turn_relay_checks as turn
 from feel import relay_join
 
 def pair():return 'fixture-'+uuid.uuid4().hex,uuid.uuid4().hex+uuid.uuid4().hex

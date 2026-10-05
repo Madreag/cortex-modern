@@ -35,7 +35,7 @@ def run(options, mode, repo):
         print(json.dumps(declaration)); return 0
     import edith_cross as cross
     import test_directory_ice_join as directory
-    from turn_relay_rows import read_login
+    from turn_relay_checks import read_login
     from acceptance_relay_policy import CredentialBook, sweep_retained,directory_config,COTURN_CONFIG
     book=getattr(options,'credential_book',None) or CredentialBook()
     backend=getattr(options,'directory_backend',None) or directory_config(

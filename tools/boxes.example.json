@@ -30,5 +30,8 @@
       "os": "windows", "user": "player", "home": "C:/Users/player"
     }
   ],
-  "paths": {}
+  "paths": {
+    "relay_coturn_config": "C:/scratch/relay/directory-coturn.json",
+    "relay_cloudflare_config": "C:/scratch/relay/turn-config-cloudflare.json"
+  }
 }

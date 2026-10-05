@@ -125,6 +125,14 @@ def path(key: str) -> str:
     return load().paths[key]
 
 
+def optional_path(key: str) -> Path | None:
+    """A named path from the box file, or None without a box file or that entry: a tool's default, never its only source."""
+    if not present():
+        return None
+    value = (load().get('paths') or {}).get(key)
+    return Path(value) if value else None
+
+
 def this_box() -> Facts | None:
     """The box this process runs on (its hostname matches the entry's), or None without a box file or a match."""
     if not present():

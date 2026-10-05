@@ -1,4 +1,4 @@
-"""One detecting unit test per named harness-bundle RED.
+"""Regression checks for the harness's drivers, fixtures and runners: one test per defect the base tree had.
 
 Each case asserts the changed behaviour and records what the base tree did.
 """

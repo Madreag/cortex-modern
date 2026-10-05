@@ -1,6 +1,6 @@
 """A relay login an engine wrote into a file, found, revoked with Cloudflare and blanked in place.
 
-    python tools/relay_scrub.py <file or dir> [...] [--turn-config D:/mx/coturn-20260920/turn-config-cloudflare.json]
+    python tools/relay_scrub.py <file or dir> [...] [--turn-config <cloudflare key file>]
                                 [--no-revoke] --out <receipt.json>
 
 Every login the files hold in any form relay_secrets.sweep reads (raw, escaped JSON, INI, hex payloads, archive members)

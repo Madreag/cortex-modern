@@ -13,7 +13,7 @@ import os
 
 import acceptance_remote as remote
 import acceptance_relay_policy as policy
-import turn_relay_rows as turn
+import turn_relay_checks as turn
 import acceptance_peer_session as sessions
 from feel import relay_join
 from test_acceptance_resume3 import build_plan

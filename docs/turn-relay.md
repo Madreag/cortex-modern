@@ -193,6 +193,6 @@ cmake -S gns-src -B build-gns-ubsan -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ninja -C build-gns-ubsan install
 ```
 
-`tools/turn_relay_rows.py hold|renew --turn <host:port> --out <dir>` runs the two relay rows (`-net-p2p-selftest relay-hold <seconds> <server>` and `relay-renew <server>`) through the runner against a real TURN server, with the login from `CC_TEST_TURN_USER` / `CC_TEST_TURN_PASS` or a coturn `user=` line; `--coturn-log <ssh host>:<log>` adds the server's own log lines for the run.
+`tools/turn_relay_checks.py hold|renew --turn <host:port> --out <dir>` runs the two relay checks (`-net-p2p-selftest relay-hold <seconds> <server>` and `relay-renew <server>`) through the runner against a real TURN server, with the login from `CC_TEST_TURN_USER` / `CC_TEST_TURN_PASS` or a coturn `user=` line; `--coturn-log <ssh host>:<log>` adds the server's own log lines for the run.
 
 An ordinary match config is version 8 and a persistent world's is version 9; a live session refuses an older config, and versions back to 2 still decode for recordings. The relay JSON suffix is appended after migration data; `NetLobbyProtocol` owns that encoder/decoder. Relay metadata is outside the deterministic simulation hash so rotating a login cannot alter simulation identity. Transport authorization comes from the host connection. Lua names and behavior are unchanged.
