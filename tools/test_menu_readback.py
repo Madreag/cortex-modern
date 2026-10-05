@@ -944,6 +944,8 @@ def sweep_case(case, port, root):
     elif case == "sweep-advanced-lobby":
         text = (host_screen + SWEEP_MACROS + "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
                 "activate ButtonLobbyOptions\nwait_ms 400\nassert_substate HostOptions\n" + sweep_options(live=True) +
+                # Back returns to the lobby; Advanced again, and the session's own end button.
+                "activate ButtonHostOptBack\nwait 6\nassert_substate Lobby\nactivate ButtonLobbyOptions\nwait_ms 400\nassert_substate HostOptions\n"
                 "activate TabHostPageSession\nwait 4\nactivate ButtonHostSessEnd\nwait 8\nassert_substate Landing\nexit\n")
     elif case == "sweep-advanced-client":
         done = probe_root(root, "host") / "client-swept.mark"
