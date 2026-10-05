@@ -373,10 +373,11 @@ def judge_relay(run: dict) -> dict:
             report_states[peer] = state
             entry['report'] = {key: (report or {}).get(key) for key in ('found', 'state', 'relayed', 'remote_identity', 'remote_address')}
             # A survivor of a lost host reports the connection it lost; its route after the loss is the migration check's.
-            if state != 'open' and not (run.get('host_lost') and state == 'closed'):
+            if state == 'open':
+                if chosen is not None and bool(report.get('relayed')) != (chosen == 'relay'):
+                    reasons.append(f'{peer}: its report says relayed={report.get("relayed")} where its route is {chosen}')
+            elif not (run.get('host_lost') and state == 'closed'):
                 reasons.append(f'{peer}: its report holds no live connection ({state}): a lost report fails the row')
-            elif chosen is not None and bool(report.get('relayed')) != (chosen == 'relay'):
-                reasons.append(f'{peer}: its report says relayed={report.get("relayed")} where its route is {chosen}')
         if connection == 'RelayOnly':
             if chosen != 'relay' or receipts['other_allowed'] or any(row['route'] != 'relay' for row in receipts['accepted']):
                 reasons.append(f'{peer}: Relay only but routes {[row.get("route") for row in receipts["accepted"] + receipts["other_allowed"]]}')
@@ -541,6 +542,14 @@ def listing_evidence(lines: list[str], session: str | None, listed: bool) -> dic
     reasons = (([] if listed else [f'session {session!r} was never seen in the directory listing'])
                + ([] if offers else [f'no Cloudflare relay offer was issued for session {session!r}']))
     return dict(passed=not reasons, reasons=reasons, offers=offers)
+
+
+def summary_writers(run: dict, logs: dict[str, str]) -> list[str]:
+    """Whose report carries the match summary: the host's, and when the row kills its host, its successor's after it."""
+    if not run.get('kill_host_at_tick'):
+        return ['host']
+    successor = next(iter(re.findall(r'\[net-match\] Host left - (\S+) is now hosting', '\n'.join(logs.values()))), None)
+    return ['host'] + [peer['name'] for peer in run['peers'] if display_name(run, peer) == successor]
 
 
 def seat_holds(peers: list[dict], allowed: set[str], expected: set[str] | None = None) -> dict:
@@ -1909,7 +1918,8 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
 
     def seat_holds_check():
         # The service writes its match summary under 'service' (the e2e report); an older report had it at the top.
-        last_match = edith_cross.find_key(reports.get('host') or {}, 'last_match')
+        last_match = next((found for found in (edith_cross.find_key(reports.get(name) or {}, 'last_match') for name in summary_writers(run, logs))
+                           if isinstance(found, dict)), None)
         summary = (last_match if isinstance(last_match, dict) else {}).get('peers') or []
         named = [dict(row, name=next((peer['name'] for peer in run['peers'] if display_name(run, peer) == row.get('name')), row.get('name')))
                  for row in summary]

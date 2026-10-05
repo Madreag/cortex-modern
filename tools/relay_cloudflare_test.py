@@ -415,6 +415,18 @@ class HotspotRows(unittest.TestCase):
         run = cloudflare_run(reports={'client': {'found': False, 'state': 5, 'relayed': True}})
         self.assertFalse(self.match().judge_relay(run)['passed'])
         self.assertTrue(self.match().judge_relay(dict(run, host_lost=True))['passed'])
+        # 2026-10-04 8:02 PM: a survivor's closed report says nothing of the route it plays on after the loss.
+        closed = cloudflare_run(reports={'client': {'found': False, 'state': 0, 'relayed': False}})
+        verdict = self.match().judge_relay(dict(closed, host_lost=True))
+        self.assertTrue(verdict['passed'], verdict['reasons'])
+
+    def test_e_a_killed_host_s_summary_is_its_successor_s(self):
+        """2026-10-04 8:02 PM row e: the killed host writes no report; the seats are read from the successor's summary."""
+        writers = self.match().summary_writers
+        run = {'tag': 'rp', 'kill_host_at_tick': 620, 'peers': [{'name': 'host'}, {'name': 'client'}, {'name': 'client2'}]}
+        logs = {'client': '[net-match] Host left - rp-client is now hosting; boundary=630 round=9\n', 'client2': ''}
+        self.assertEqual(writers(run, logs), ['host', 'client'])
+        self.assertEqual(writers(dict(run, kill_host_at_tick=None), logs), ['host'])
 
     def test_d_a_login_that_expired_before_the_run_ended_is_already_revoked(self):
         """2026-10-04 row d: the first of three five-minute logins expired mid-match; Cloudflare answered its revoke 404."""
