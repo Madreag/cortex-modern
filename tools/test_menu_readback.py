@@ -43,6 +43,12 @@ def layout_readback(capture):
         if name in rows:
             results.append({"control": name, "rect": rows[name]["rect"], "text": rows[name].get("text"),
                             "measurement": rows[name].get("text_measure"), "pass": rows[name].get("text_fits") is True})
+    # The seat dialog's hold line is one of the sentences a player reads, whole, never a developer's note.
+    hold = rows.get("LabelHostSeatDlgReclaim", {})
+    if hold.get("text"):
+        results.append({"control": "LabelHostSeatDlgReclaim", "kind": "seat-hold-line", "text": hold["text"],
+                        "pass": re.fullmatch(r"Not held|Not held - its player is in the match|Held for its player, who is coming back now|"
+                                             r"Held for its player( - .+)?", hold["text"]) is not None})
     hint = rows.get("LabelHostSeatDlgActionHint", {})
     if rows.get("ButtonHostSeatDlgKick", {}).get("enabled"):
         results.append({"control": "LabelHostSeatDlgActionHint", "kind": "selected-seat-hint", "text": hint.get("text"),
@@ -1203,6 +1209,7 @@ def scripts(case, port, root, size="960x540"):
                 "activate ButtonHostSeatDetails0\nwait 3\nassert_visible HostSeatDialog 1\n"
                 "assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
                 "assert_label LabelHostSeatDlgActionHint The host's own seat is never kicked or banned.\n"
+                "assert_label LabelHostSeatDlgReclaim Not held\n"
                 "activate ButtonHostSeatDlgClose\nwait 3\nassert_visible HostSeatDialog 0\n"
                 # H34 on the two-peer fixture: the adopted config names both seated humans, the
                 # lobby sits LAN only, and the bound port refuses the edit mid-session.
@@ -1317,6 +1324,7 @@ def scripts(case, port, root, size="960x540"):
                   "activate TabHostPageSeats\nwait 3\nassert_visible CollectionBoxHostPageSeats 1\n"
                   "activate ButtonHostSeatDetails1\nwait 3\nassert_visible HostSeatDialog 1\n"
                   "assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
+                  "assert_label LabelHostSeatDlgActionHint Only the host can change who plays here.\n"
                   "activate ButtonHostSeatDlgClose\nwait 3\nassert_visible HostSeatDialog 0\n"
                   "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
                   "dump_lobby\ndump_host_options\n"
@@ -1445,6 +1453,7 @@ def scripts(case, port, root, size="960x540"):
             text += checks(control, "HostSeatDialog")
         # H09/H10: the host's own seat is never kickable - the row stays pressable-looking but off.
         text += ("assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
+                 "assert_label LabelHostSeatDlgReclaim Not held\n"
                  "dump_host_options\nactivate ButtonHostSeatDlgClose\nwait 3\n"
                  "assert_visible HostSeatDialog 0\n")
         # H07-H20 Rules: the L33 row keeps the ledger's exact label and pair of answers.
