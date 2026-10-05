@@ -103,26 +103,39 @@ Allow inbound TCP 8443 for that Python executable (elevated firewall rule). Clie
 Self-signed certificate (same `openssl` command as above, including the SAN) unless a public DNS name exists for Let's Encrypt. Clients pin that certificate as in step 3.
 # World ownership across restarts
 
-Keep `world-owners.json` across deployments and restarts. The command-line service
-stores it beside `--log-file`, or in its working directory when no log is supplied;
-`--owner-state PATH` selects an explicit location. Deploy with the supplied service
-argument `--owner-state /Users/erol/cortex-directory/world-owners.json`. Back up this file with the
-service configuration. It contains SHA-256 token proofs and host generations, never
-the tokens. An unreadable or malformed existing file prevents startup.
+Keep `/Users/erol/cortex-directory/world-owners.json` and
+`/Users/erol/cortex-directory/world-owners.key` across deployments. The supplied
+service arguments select the owner file; the key defaults beside it with `.key`
+suffix. The key contains a private signing secret and a service-start era. Never
+log or replace it. Owner records contain hashes and generations, never tokens.
+Malformed existing state prevents startup.
 
-A known world id requires its owner proof even while its discovery lease is
-absent. A register's claim key uses the existing install identity, world id, boot,
-generation and presented proof. Live counts and address updates keep that key.
-Its result replays without another rotation or discarding pending signals until
-the host acknowledges the new token, then for 120 seconds. After a restart its
-hashed retry proof recovers the
-same id and issues a fresh token, since tokens are never stored on disk.
-A different host, request or expired retry receives the
-ordinary ownership checks.
+The first upgrade has three operator steps:
 
-Worlds registered before this change have no durable proof until their next
-successful registration. On the first upgraded restart, an older game retries its
-stored token, receives a refusal, and reclaims its id without that token as on first
-boot; this first claim establishes the proof. Those previously unrecorded ids have
-the first-claim ownership window until their host registers. Removing the owner
-file deliberately restores that first-boot behavior for all absent worlds.
+1. Hold public ingress while counting every listed `persistent_world=true` row,
+   including later list pages, immediately before stopping the old service.
+   Prefer stopping/unlisting world hosts first and observing **zero** rows. Record
+   the observed count; a count alone cannot authenticate an old opaque token.
+2. Start the upgraded service with its normal TLS arguments, `--owner-state
+   /Users/erol/cortex-directory/world-owners.json`, and the explicit observed
+   `--first-upgrade-worlds 0` (or the actual nonzero count). With no key file the
+   count is mandatory. A nonzero count quarantines tokenless world claims for one
+   discovery lease. Unknown old proofs are accepted once per observed allowance
+   **only from loopback**, so use controlled forwarding for those known hosts;
+   public guesses cannot claim their worlds. Existing saved hashes authenticate
+   their holders normally. Keep ingress held until those hosts receive signed
+   proofs and successfully heartbeat within the quarantine.
+3. Remove the one-time count argument, restore normal host URLs/public ingress,
+   and verify the intended worlds register, heartbeat and list. Back up both
+   permanent files together and preserve them on every restart. Keep the adjacent
+   `world-owners.pending.json` through an in-progress restart too: it holds bounded,
+   lease-expiring registration metadata and unsigned token payloads, not bearer
+   tokens. It is emptied after acknowledgement or expiry.
+
+Signed opaque proofs stay within the existing token size. A returning holder can
+prove its original ownership after restart; an older game's normal requests keep
+working. Only heartbeat acknowledges a registration and creates its durable
+owner. Owners expire after 30 days without one, with bounded, batched writes on a
+separate worker. Pending registrations have global/source/byte caps and live no
+longer than their own lease. Previous proofs recover an unacknowledged replacement
+across host boot changes; a successful heartbeat retires them.

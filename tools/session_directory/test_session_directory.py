@@ -2212,13 +2212,15 @@ class DirectoryTests(unittest.TestCase):
         LOGGER.setLevel(logging.INFO)
         try:
             with mock.patch.object(store, "get_signals", side_effect=observed_get):
-                connection = socket.create_connection(("127.0.0.1", self.server.port), timeout=3)
-                path = f'/v1/sessions/{row["session_id"]}/signals?peer=client:{nonce}&token={row["token"]}&wait=0.2'
-                connection.sendall(f"GET {path} HTTP/1.1\r\nHost: localhost\r\nX-Install-Key: {INSTALL_KEY}\r\nConnection: close\r\n\r\n".encode())
-                self.assertTrue(entered.wait(2), "B2: GET never entered the signal long poll")
-                connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("hh" if os.name == "nt" else "ii", 1, 0))
-                connection.close()
-                self.assertTrue(aborted.wait(3), "B2: reset GET never reached the abort logging path")
+                for peer_key, token_key in (("peer", "token"), ("%70eer", "t%6fken")):
+                    entered.clear(); aborted.clear()
+                    connection = socket.create_connection(("127.0.0.1", self.server.port), timeout=3)
+                    path = f'/v1/sessions/{row["session_id"]}/signals?{peer_key}=client:{nonce}&{token_key}={row["token"]}&wait=0.2'
+                    connection.sendall(f"GET {path} HTTP/1.1\r\nHost: localhost\r\nX-Install-Key: {INSTALL_KEY}\r\nConnection: close\r\n\r\n".encode())
+                    self.assertTrue(entered.wait(2), "B2: GET never entered the signal long poll")
+                    connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("hh" if os.name == "nt" else "ii", 1, 0))
+                    connection.close()
+                    self.assertTrue(aborted.wait(3), "B2: reset GET never reached the abort logging path")
         finally:
             LOGGER.handlers = previous_handlers
             LOGGER.setLevel(previous_level)
