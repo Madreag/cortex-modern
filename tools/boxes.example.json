@@ -1,0 +1,32 @@
+{
+  "about": "The shape of the box file the multi-machine tools read (tools/box_facts.py). Copy it to ~/.cortex-modern/boxes.json (or point CORTEX_BOXES at a copy) and write your own machines in; that copy stays outside every work tree. Names, aliases and paths here are neutral and the addresses are documentation addresses; the unit tests run against this file.",
+  "schema": 1,
+  "users": ["player"],
+  "boxes": [
+    {
+      "role": "pc", "name": "box-a", "instance": "peer-a", "hostname": "BOX-A", "ssh": null, "aliases": [],
+      "os": "windows", "user": "player", "home": "C:/Users/player"
+    },
+    {
+      "role": "remote", "name": "box-b", "instance": "peer-b", "hostname": "BOX-B", "ssh": "host-b", "aliases": ["host-b-lan"],
+      "os": "windows", "user": "player", "home": "C:/Users/player"
+    },
+    {
+      "role": "mac", "name": "box-c", "instance": "peer-c", "hostname": "BOX-C", "ssh": "host-c", "aliases": [],
+      "os": "macos", "user": "player", "home": "/Users/player"
+    },
+    {
+      "role": "linux", "name": "box-d", "instance": "peer-d", "hostname": "BOX-D", "ssh": "host-d", "aliases": ["host-d.local"],
+      "os": "linux", "user": "player", "home": "/home/player"
+    },
+    {
+      "role": "laptop", "name": "box-e", "instance": "peer-e", "hostname": "BOX-E", "ssh": "host-e", "aliases": ["host-e-vpn"],
+      "os": "windows", "user": "player", "home": "C:/Users/player"
+    },
+    {
+      "role": "handheld", "name": "box-f", "instance": "peer-f", "hostname": "BOX-F", "ssh": "host-f", "aliases": ["host-f-vpn"],
+      "os": "windows", "user": "player", "home": "C:/Users/player"
+    }
+  ],
+  "paths": {}
+}
