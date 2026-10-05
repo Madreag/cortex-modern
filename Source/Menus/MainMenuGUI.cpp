@@ -1911,8 +1911,9 @@ void MainMenuGUI::ShowHostOptionsPage(int page) {
 }
 
 namespace {
+	// An open list holds the player's pick until its close commits it, so the refresh leaves it alone.
 	void HostOptSelectCombo(GUIComboBox* combo, const std::string& text) {
-		if (!combo) return;
+		if (!combo || combo->IsDropped()) return;
 		for (int i = 0; i < combo->GetCount(); ++i) {
 			if (combo->GetItem(i) && combo->GetItem(i)->m_Name == text) {
 				combo->SetSelectedIndex(i);
@@ -1923,7 +1924,7 @@ namespace {
 	}
 
 	void HostOptSelectComboIndex(GUIComboBox* combo, int index) {
-		if (combo) combo->SetSelectedIndex(std::clamp(index, 0, std::max(0, combo->GetCount() - 1)));
+		if (combo && !combo->IsDropped()) combo->SetSelectedIndex(std::clamp(index, 0, std::max(0, combo->GetCount() - 1)));
 	}
 
 	void HostOptSetEditable(GUIControl* control, bool editable) {
@@ -1939,7 +1940,7 @@ namespace {
 
 	/// Shows a return window, offering a saved value the list lacks in its place among the others.
 	void HostOptSelectReturnWindow(GUIComboBox* combo, uint8_t minutes) {
-		if (!combo) return;
+		if (!combo || combo->IsDropped()) return;
 		std::vector<uint8_t> offered;
 		for (int i = 0; i < combo->GetCount(); ++i) {
 			const GUIListPanel::Item* item = combo->GetItem(i);
@@ -1970,7 +1971,7 @@ namespace {
 
 	/// Shows a world history or catch-up limit, offering a saved value the list lacks in its place among the others.
 	void HostOptSelectJoinHistory(GUIComboBox* combo, int seconds) {
-		if (!combo) return;
+		if (!combo || combo->IsDropped()) return;
 		std::vector<int> offered;
 		for (int i = 0; i < combo->GetCount(); ++i) {
 			const int listed = HostOptJoinHistorySecondsOf(combo->GetItem(i));
@@ -2958,6 +2959,16 @@ void MainMenuGUI::ShowHostBannedDialog() {
 }
 
 void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl) {
+	// The refresh writes the draft back into every control each frame, so a change is read into the draft as it
+	// arrives. A list still open holds an uncommitted pick, and the team row's controls still show the team it left.
+	if (!m_HostOptionsReadOnly && guiEventControl != m_HostRulesTeamCombo) {
+		const std::vector<GUIControl*>& controls = *m_ActiveGUIControlManager->GetControlList();
+		const bool listOpen = std::any_of(controls.begin(), controls.end(), [](GUIControl* control) {
+			GUIComboBox* combo = dynamic_cast<GUIComboBox*>(control);
+			return combo && combo->IsDropped();
+		});
+		if (!listOpen) DraftHostOptionsFromControls();
+	}
 	for (size_t i = 0; i < m_HostNetworkTabs.size(); ++i) {
 		if (guiEventControl != m_HostNetworkTabs[i]) continue;
 		CommitHostRelay();
@@ -3155,8 +3166,7 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		return;
 	}
 	if (guiEventControl == m_HostRulesTeamCombo) {
-		// Switching the team re-reads its rules row; the prior pick is already in the draft.
-		DraftHostOptionsFromControls();
+		// The refresh fills the row from the team just picked; every earlier pick is already in the draft.
 		return;
 	}
 	if (guiEventControl == m_HostSeatPlayersCombo) {
