@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "name": "mp-version-mismatch",
-  "port_base": 49700,
+  "port_base": 49420,
   "title": "Refuse mismatched advertised builds and protocols in the lobby",
   "size": "640x360",
   "timeout_s": 100,
