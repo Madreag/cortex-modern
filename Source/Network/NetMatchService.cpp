@@ -7205,7 +7205,7 @@ static std::string ResyncSaveName() {
 			if (!text || !*text) return std::nullopt;
 			char* end = nullptr;
 			const unsigned long long value = std::strtoull(text, &end, 10);
-			return end && *end == ' ' ? std::optional<uint64_t>{value} : std::nullopt;
+			return end && *end == 0 ? std::optional<uint64_t>{value} : std::nullopt;
 		}();
 		if (!afterMs || !m_IsHost || !m_Session || !m_Coordinator || !m_Coordinator->IsRunning() || m_State != NetMatchServiceState::Running) return;
 		// A removal republishes the seats, so the walk reads a copy.
