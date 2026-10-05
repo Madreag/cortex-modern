@@ -185,7 +185,7 @@
       "run": "640x360",
       "peer": "client",
       "mark": "loss-lan-list",
-      "what": "The join Port field offers the port the first listed joinable session advertises, not the stock default.",
+      "what": "Join by address's port offers the port the first listed joinable game advertises, not the stock default.",
       "assert": "Native text-box readback before the script types a port, against the list's own row order.",
       "join_port_follows_list": {
         "control": "ListLanGames",
@@ -232,7 +232,7 @@
       "run": "960x540",
       "peer": "client",
       "mark": "loss-lan-list",
-      "what": "The join Port field offers the port the first listed joinable session advertises, not the stock default.",
+      "what": "Join by address's port offers the port the first listed joinable game advertises, not the stock default.",
       "assert": "Native text-box readback before the script types a port, against the list's own row order.",
       "join_port_follows_list": {
         "control": "ListLanGames",
@@ -279,7 +279,7 @@
       "run": "1280x720",
       "peer": "client",
       "mark": "loss-lan-list",
-      "what": "The join Port field offers the port the first listed joinable session advertises, not the stock default.",
+      "what": "Join by address's port offers the port the first listed joinable game advertises, not the stock default.",
       "assert": "Native text-box readback before the script types a port, against the list's own row order.",
       "join_port_follows_list": {
         "control": "ListLanGames",
