@@ -50,6 +50,7 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <atomic>
@@ -69,6 +70,7 @@
 #include <system_error>
 #include <thread>
 #include <tuple>
+#include <variant>
 #include <vector>
 
 namespace RTE {
@@ -24008,6 +24010,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 
 			bool Start(uint16_t port, bool bounded = true) {
 				match = ReleasedClaimsMatch(0x9C00 + port, 4);
+				match.slowPlayerPolicy = bounded ? NetSlowPlayerPolicy::Substitute : NetSlowPlayerPolicy::Pause;
 				match.successorOrder = {2, 3, 4};
 				for (uint8_t peer = 1; peer <= 4; ++peer) match.migrationPeers.push_back({peer, static_cast<uint16_t>(port + peer), {"loopback"}});
 				if (!hostWire.StartHost(port, &failure) || !firstWire.Connect("loopback", port, &failure) ||
@@ -24090,6 +24093,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			std::map<uint64_t, SimChecksum::Hash> hashes;
 			void ApplyTick(const NetLockstepReadyFrame& ready) {
 				Apply(ready);
+				after[ready.frame] += ControlTuple(*actor, ScenarioRunner::GetLockstepActorOwner(uid, team, true, ready.frame));
 				NetLockstepFrame frame = PackWorldJoinReadyFrame(ready);
 				std::vector<uint8_t> bytes;
 				std::string failure;
@@ -24208,8 +24212,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				NetLockstepReadyFrame ready;
 				if (!replay.PopReadyFrame(ready)) { ScenarioRunner::CloseLockstepReplayPlayback(); return fail("successor record at " + std::to_string(frame) + " after boundary " + std::to_string(boundary) + " stopped playback: " + replay.GetStats().timeoutReason); }
 				for (const auto& command: ready.remoteCommands) if (command.senderPeerId == 2 && frame > boundary) {
-					holdSeen |= std::holds_alternative<NetGameSeatHold>(command.payload);
-					releaseSeen |= std::holds_alternative<NetGameSeatRelease>(command.payload);
+					if (const auto* hold = std::get_if<NetGameSeatHold>(&command.payload)) holdSeen |= hold->peerId == 4;
+					if (const auto* release = std::get_if<NetGameSeatRelease>(&command.payload)) releaseSeen |= release->peerId == 4;
 				}
 				replay.FinishSimulationTick(ready.frame);
 			}
