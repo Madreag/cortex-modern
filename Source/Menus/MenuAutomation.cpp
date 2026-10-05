@@ -371,7 +371,7 @@ namespace RTE::MenuAutomation {
 			if (!covered.empty()) {
 				why += "; centre " + std::to_string(r[0] + r[2] / 2) + "," + std::to_string(r[1] + r[3] / 2) + " in";
 				for (GUIPanel* node = panel; node; node = node->GetParentPanel()) {
-					const auto* named = dynamic_cast<GUIControl*>(node);
+					auto* named = dynamic_cast<GUIControl*>(node);
 					why += " " + (named ? named->GetName() : std::string("panel")) + Json(Rectangle(node)).dump() + (node->_GetVisible() ? "" : "(hidden)");
 				}
 			}
