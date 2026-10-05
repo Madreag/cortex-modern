@@ -1347,40 +1347,59 @@ namespace RTE::MenuAutomation {
 		return rect;
 	}
 
-	/// Each pair of shown controls of one panel that draw over each other where one of them carries a caption.
+	/// Where a control draws, and where its caption sits in that: a label draws only its text, a check box or a radio button its box
+	/// and its caption beside it, a button its face with the caption centred on it, any other control its whole rect.
+	std::pair<Rect, Rect> DrawnAndCaption(GUIControlManager* manager, GUIControl* control, const std::string& text) {
+		const Rect rect = Rectangle(control->GetPanel());
+		if (auto* label = dynamic_cast<GUILabel*>(control)) {
+			const Rect drawn = LabelTextRect(label, rect);
+			return {drawn, drawn};
+		}
+		const bool checkbox = dynamic_cast<GUICheckbox*>(control);
+		const bool radio = dynamic_cast<GUIRadioButton*>(control);
+		const bool button = dynamic_cast<GUIButton*>(control);
+		if (text.empty() || !(checkbox || radio || button)) return {rect, rect};
+		const std::string section = checkbox ? "Checkbox" : radio ? "RadioButton" : "Button_Up";
+		std::string fontName;
+		GUIFont* font = manager->GetSkin()->GetValue(section, "Font", &fontName) ? manager->GetSkin()->GetFont(fontName) : nullptr;
+		if (!font) return {rect, rect};
+		const int height = std::min(rect[3], font->GetFontHeight());
+		const int top = rect[1] + (rect[3] - height) / 2;
+		if (button) {
+			const int width = std::min(rect[2], font->CalculateWidth(text));
+			return {rect, {rect[0] + (rect[2] - width) / 2, top, std::max(1, width), std::max(1, height)}};
+		}
+		int base[4]{};
+		manager->GetSkin()->GetValue(section, "Base", base, 4);
+		const int box = base[2] + (checkbox ? 2 : 0);
+		const int width = std::min(rect[2] - box, font->CalculateWidth(" " + text));
+		return {{rect[0], rect[1], std::min(rect[2], box + std::max(0, width)), rect[3]}, {rect[0] + box, top, std::max(1, width), std::max(1, height)}};
+	}
+
+	/// Each pair of shown controls of one panel where the caption of one meets what the other draws.
 	Json OverlapOffenders(GUIControlManager* menu) {
 		Json offenders = Json::array();
+		const auto meet = [](const Rect& a, const Rect& b) { return a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]; };
 		for (const auto& [source, manager]: WatchedManagers(menu)) {
 			// A box holds controls rather than covering them, so the controls each box holds are judged against each other.
-			std::map<GUIPanel*, std::vector<std::tuple<GUIControl*, Rect, bool>>> panels;
+			std::map<GUIPanel*, std::vector<std::tuple<GUIControl*, Rect, Rect, bool>>> panels;
 			for (GUIControl* control: *manager->GetControlList()) {
 				if (!Shown(control) || dynamic_cast<GUICollectionBox*>(control)) continue;
 				std::string text;
 				const bool captioned = Text(control, text) && !text.empty();
-				auto* label = dynamic_cast<GUILabel*>(control);
-				// A label draws nothing but its text.
-				if (label && !captioned) continue;
-				Rect rect = label ? LabelTextRect(label, Rectangle(control->GetPanel())) : Rectangle(control->GetPanel());
-				// A check box or a radio button draws its box and its caption, not the rest of its rect.
-				const bool checkbox = dynamic_cast<GUICheckbox*>(control);
-				if (captioned && (checkbox || dynamic_cast<GUIRadioButton*>(control))) {
-					const std::string section = checkbox ? "Checkbox" : "RadioButton";
-					std::string fontName;
-					int base[4]{};
-					manager->GetSkin()->GetValue(section, "Base", base, 4);
-					if (manager->GetSkin()->GetValue(section, "Font", &fontName)) {
-						if (GUIFont* font = manager->GetSkin()->GetFont(fontName)) rect[2] = std::min(rect[2], base[2] + (checkbox ? 2 : 0) + font->CalculateWidth(" " + text));
-					}
-				}
-				panels[control->GetPanel()->GetParentPanel()].emplace_back(control, rect, captioned);
+				// A label with nothing to say draws nothing.
+				if (dynamic_cast<GUILabel*>(control) && !captioned) continue;
+				const auto [drawn, caption] = DrawnAndCaption(manager, control, captioned ? text : std::string());
+				panels[control->GetPanel()->GetParentPanel()].emplace_back(control, drawn, caption, captioned);
 			}
 			for (const auto& [parent, shown]: panels) {
 				for (size_t i = 0; i < shown.size(); ++i) {
 					for (size_t j = i + 1; j < shown.size(); ++j) {
-						const auto& [first, a, firstCaptioned] = shown[i];
-						const auto& [second, b, secondCaptioned] = shown[j];
-						if (!(firstCaptioned || secondCaptioned) || a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1]) continue;
-						offenders.push_back({{"source", source}, {"control", first->GetName() + " / " + second->GetName()}, {"rects", Json::array({Json(a), Json(b)})}});
+						const auto& [first, firstDrawn, firstCaption, firstCaptioned] = shown[i];
+						const auto& [second, secondDrawn, secondCaption, secondCaptioned] = shown[j];
+						if (!(firstCaptioned && meet(firstCaption, secondDrawn)) && !(secondCaptioned && meet(secondCaption, firstDrawn))) continue;
+						offenders.push_back({{"source", source}, {"control", first->GetName() + " / " + second->GetName()},
+						    {"rects", Json::array({Json(firstDrawn), Json(secondDrawn)})}, {"captions", Json::array({Json(firstCaption), Json(secondCaption)})}});
 					}
 				}
 			}
