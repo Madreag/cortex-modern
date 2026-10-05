@@ -24032,7 +24032,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			uint64_t drainThrough = UINT64_MAX;
 			std::string failure;
 
-			bool Start(uint16_t port, bool bounded = true, bool world = false, uint64_t heldHostFrame = 0) {
+			bool Start(uint16_t port, bool bounded = true, bool world = false) {
 				match = ReleasedClaimsMatch(0x9C00 + port, 4);
 				match.slowPlayerPolicy = bounded ? NetSlowPlayerPolicy::Substitute : NetSlowPlayerPolicy::Pause;
 				match.successorOrder = {2, 3, 4};
@@ -24048,7 +24048,6 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				for (size_t index = 0; index < peers.size(); ++index) {
 					auto config = ReleasedClaimsConfig(match, static_cast<uint8_t>(index + 1), index == 0 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}, {4, 3}} : std::map<uint8_t, NetPeerId>{{1, 1}}, bounded);
 					config.startFrame = 1;
-					if (heldHostFrame) config.initialSeatHolds[1] = {1, 0, 1, 1, heldHostFrame};
 					config.migrationKey.fill(0x39);
 					config.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); };
 					if (!peers[index].Start(*wires[index], config, &failure)) return false;
@@ -24444,14 +24443,19 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		bool TestUnequalFutureDeparturesConvergeAtSuccession(std::string* error) {
 			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("unequal_future_departures_converge_at_succession", why, error); };
 			ReleasePathRound round;
-			if (!round.Start(47420, true, false, 20)) return fail("the held-host fixture did not start: " + round.failure);
+			if (!round.Start(47420)) return fail("the held-host fixture did not start: " + round.failure);
+			round.produceThrough[0] = 19;
+			for (int turn = 0; turn < 400 && round.peers[0].GetResumeFrame() < 20; ++turn) round.Pump();
+			if (round.peers[0].GetResumeFrame() != 20 || !round.peers[0].ProposePeerHold(1, round.now, &round.failure, 20)) return fail("host 1 was not held at 20: " + round.failure);
 			round.drainThrough = 29;
 			round.produceThrough[3] = 31;
 			round.hostWire.fourthFutureOnlyToFirst = true;
 			for (int turn = 0; turn < 400 && (round.peers[1].GetResumeFrame() != 30 || round.peers[2].GetResumeFrame() != 30 || round.produced[3] != 32); ++turn) round.Pump();
 			if (round.peers[1].GetResumeFrame() != 30 || round.peers[2].GetResumeFrame() != 30 || round.produced[3] != 32 ||
 			    round.hostWire.fourthFutureInputsToFirst < 2 || !round.peers[1].IsSeatUnderAI(1, 29) || !round.peers[2].IsSeatUnderAI(1, 29))
-				return fail("the survivors did not apply 29 with host 1 held at 20 and only peer 2 receiving seat 4's inputs 30/31");
+				return fail("the survivors did not apply 29 with host 1 held at 20 and only peer 2 receiving seat 4's inputs 30/31: resume=" +
+				    std::to_string(round.peers[1].GetResumeFrame()) + "/" + std::to_string(round.peers[2].GetResumeFrame()) + " produced4=" + std::to_string(round.produced[3]) +
+				    " relayed=" + std::to_string(round.hostWire.fourthFutureInputsToFirst) + " held=" + std::to_string(round.peers[1].IsSeatUnderAI(1, 29)) + "/" + std::to_string(round.peers[2].IsSeatUnderAI(1, 29)));
 			round.peers[0].EvictRemovedPeer(4, "playing seat removed after input 31", round.now);
 			round.alive[3] = false;
 			for (int turn = 0; turn < 5; ++turn) round.Pump();
