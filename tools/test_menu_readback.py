@@ -773,7 +773,9 @@ BASE_TRANSLATION = (("setup_host_port ", "settext TextHost" + "Port "), ("combo_
 def in_base_words(text):
     for new, old in BASE_TRANSLATION:
         text = text.replace(new, old)
-    return text
+    # The base hand has no marks: leaving one is dropped, and waiting for one is a fixed wait long enough for the other engine.
+    text = re.sub(r"(?m)^touch_file \S+\n", "", text)
+    return re.sub(r"(?m)^wait_file (\S+) \d+\n", lambda match: f"wait_ms {12000 if match[1].endswith('readied.mark') else 40000}\n", text)
 
 
 def host_lobby(port, players=2, mode=None):
