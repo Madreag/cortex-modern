@@ -404,6 +404,18 @@ class HotspotRows(unittest.TestCase):
         self.assertFalse(waited['passed'])
         self.assertFalse(around(rows, '', None, 1801)['passed'])
 
+    def test_e_a_pause_that_starts_before_the_boundary_is_the_loss_s(self):
+        """2026-10-05 5:12 AM row e: the survivors ran out of the dead host's input at 628, two frames before the boundary at 630."""
+        around = self.match().feel_around_loss
+        tick = 1000 / 60
+        rows = [dict(tick=t, wall_ms=t * tick + (7888 if t >= 628 else 0)) for t in range(1, 1802)]
+        verdict = around(rows, '[net-frame-wait] frame=628 wait_ms=7888\n', 630, 1801)
+        self.assertTrue(verdict['passed'], verdict['reasons'])
+        self.assertEqual(verdict['windows']['before']['last_tick'], 627)
+        self.assertGreater(verdict['pause_ms'], 7888)
+        # A stall before the loss's pause is still the before window's.
+        self.assertFalse(around(rows, '[net-frame-wait] frame=500 wait_ms=80\n[net-frame-wait] frame=628 wait_ms=7888\n', 630, 1801)['passed'])
+
     def test_e_a_survivor_s_second_dial_is_its_own(self):
         """2026-10-04 row e: a survivor dials its successor as a second identity; its connect receipt names it."""
         senders = self.match().sender_peers

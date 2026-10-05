@@ -2068,7 +2068,12 @@ def feel_around_loss(live_rows: list[dict], log: str, boundary: int | None, fina
     committed = [dict(tick=row['tick'], wall_ms=row['wall_ms']) for row in live_rows if isinstance(row.get('tick'), int) and 'wall_ms' in row]
     waits = [dict(tick=int(tick), wait_ms=int(ms)) for tick, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', log)]
     windows, reasons = {}, []
-    for name, first, last in (('before', warmup, boundary - 2), ('after', boundary + warmup, final_tick)):
+    times = sorted((row['tick'], row['wall_ms']) for row in committed if abs(row['tick'] - boundary) <= warmup)
+    gaps = [(later[1] - earlier[1], earlier[0]) for earlier, later in zip(times, times[1:])]
+    pause, at = max(gaps, default=(None, None))
+    # The survivors stop where the dead host's input runs out, which can be frames before the boundary: that wait is the pause.
+    before_end = at if pause is not None and pause > 50 and at < boundary - 2 else boundary - 2
+    for name, first, last in (('before', warmup, before_end), ('after', boundary + warmup, final_tick)):
         if last - first < 60:
             reasons.append(f'the {name} window {first}..{last} is shorter than a second')
             continue
@@ -2081,9 +2086,6 @@ def feel_around_loss(live_rows: list[dict], log: str, boundary: int | None, fina
                                            ('horizon', window['confirmed_horizon_lag_ms'] is None or window['confirmed_horizon_lag_ms'] > 50)) if bad]
         if failed:
             reasons.append(f'the {name} window {first}..{last} fails {failed}: {json.dumps({k: window[k] for k in ("steady_wall_tps", "waiting_percent", "longest_stall_ms", "confirmed_horizon_lag_ms")})}')
-    times = sorted((row['tick'], row['wall_ms']) for row in committed if abs(row['tick'] - boundary) <= warmup)
-    gaps = [(later[1] - earlier[1], earlier[0]) for earlier, later in zip(times, times[1:])]
-    pause, at = max(gaps, default=(None, None))
     return dict(passed=not reasons, reasons=reasons, windows=windows, pause_ms=pause, pause_after_tick=at)
 
 
