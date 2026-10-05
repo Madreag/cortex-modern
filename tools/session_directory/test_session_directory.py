@@ -2078,7 +2078,10 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(len(store.get_signals(sid, "client:legacy", 0, None, 1)["signals"]), 1)
         store.post_signal(sid, {"token_or_join_nonce": "legitimate", "from": "client:legitimate", "to": "host", "payload_b64": payload}, 1, source_ip="198.51.100.1")
         for index in range(session_directory.MAX_QUEUE * 2):
-            store.post_signal(sid, {"token_or_join_nonce": f"attack{index}", "from": f"client:attack{index}", "to": "host", "payload_b64": payload}, 1, source_ip="203.0.113.1")
+            try:
+                store.post_signal(sid, {"token_or_join_nonce": f"attack{index}", "from": f"client:attack{index}", "to": "host", "payload_b64": payload}, 1, source_ip="203.0.113.1")
+            except BufferError:
+                pass
         signals = store.get_signals(sid, "host", 0, row["token"], 2)["signals"]
         self.assertTrue(any(signal["from"] == "client:legitimate" for signal in signals), "S2: queue pressure removed a legitimate joiner's only offer")
         self.assertLessEqual(len(signals), session_directory.MAX_QUEUE, "S2: fair queue admission exceeded the queue bound")

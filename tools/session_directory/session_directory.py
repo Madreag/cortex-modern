@@ -19,6 +19,7 @@ import ssl
 import threading
 import time
 import uuid
+from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -51,6 +52,14 @@ LIST_LIMIT_DEFAULT = 100
 LIST_LIMIT_MAX = 200
 MAX_DEST_QUEUES = 16
 MAX_SESSION_PAYLOAD = 1024 * 1024
+# Four installs behind a NAT keep sixteen outstanding frames each.
+MAX_SIGNAL_SOURCE_MESSAGES = 64
+MAX_SIGNAL_NONCE_MESSAGES = 16
+MAX_SIGNAL_SOURCE_BYTES = 256 * 1024
+MAX_ANONYMOUS_SIGNAL_BYTES = MAX_SESSION_PAYLOAD // 2
+# Encoded payloads and their metadata share a service-wide memory budget.
+MAX_STORED_SIGNAL_BYTES = 64 * 1024 * 1024
+SIGNAL_METADATA_BYTES = 256
 QUEUE_IDLE_S = 120.0
 HANDLER_TIMEOUT_S = 10
 HANDSHAKE_TIMEOUT_S = 5
@@ -412,12 +421,15 @@ class Signal:
         to_peer: str,
         payload_b64: str,
         payload_len: int,
+        source_ip: str = "",
     ) -> None:
         self.seq = seq
         self.from_peer = from_peer
         self.to_peer = to_peer
         self.payload_b64 = payload_b64
         self.payload_len = payload_len
+        self.source_ip = source_ip
+        self.stored_bytes = len(payload_b64) + SIGNAL_METADATA_BYTES
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -488,6 +500,7 @@ class SessionDirectory:
         self._sessions: dict[str, Session] = {}
         self._resume_tokens: dict[str, tuple[str, float, int]] = {}
         self._register_replays: dict[str, Session] = {}
+        self._stored_signal_bytes = 0
         self._owner_state = Path(owner_state) if owner_state is not None else None
         self._world_owners: dict[str, dict[str, Any]] = {}
         if self._owner_state is not None and self._owner_state.exists():
@@ -580,9 +593,17 @@ class SessionDirectory:
         for peer in drop:
             for item in sess.queues.get(peer, []):
                 sess.undrained_bytes -= item.payload_len
+                self._stored_signal_bytes -= item.stored_bytes
             sess.queues.pop(peer, None)
             sess.queue_drain_at.pop(peer, None)
             sess.next_seq.pop(peer, None)
+
+    def _clear_signals(self, sess: Session) -> None:
+        self._stored_signal_bytes -= sum(item.stored_bytes for queue in sess.queues.values() for item in queue)
+        sess.queues.clear()
+        sess.next_seq.clear()
+        sess.queue_drain_at.clear()
+        sess.undrained_bytes = 0
 
     def prune(self, now: float) -> None:
         with self._lock:
@@ -594,6 +615,7 @@ class SessionDirectory:
             ]
             for sid in dead:
                 sess = self._sessions[sid]
+                self._clear_signals(sess)
                 self._resume_tokens[sid] = (sess.token, sess.last_beat + self.expiry_s + RESUME_GRACE_S, sess.migration_gen)
                 del self._sessions[sid]
             for sid, (_, deadline, _) in list(self._resume_tokens.items()):
@@ -726,6 +748,9 @@ class SessionDirectory:
                     raise PermissionError("forbidden")
                 session_id = str(uuid.uuid4())
                 token = secrets.token_urlsafe(24)
+            previous_session = self._sessions.get(session_id)
+            if previous_session is not None:
+                self._clear_signals(previous_session)
             sess = Session(session_id, token, fields, observed_ip, now)
             sess.install_key = install_key
             sess.migration_gen = generation
@@ -890,6 +915,7 @@ class SessionDirectory:
             if generation is not None and generation < sess.migration_gen:
                 raise Superseded("superseded", sess.migration_gen)
             del self._sessions[session_id]
+            self._clear_signals(sess)
             self._register_replays.pop(session_id, None)
             self._resume_tokens.pop(session_id, None)
             self._signals_changed.notify_all()
@@ -939,7 +965,7 @@ class SessionDirectory:
         return body
 
     def post_signal(
-        self, session_id: str, data: dict[str, Any], now: float
+        self, session_id: str, data: dict[str, Any], now: float, source_ip: str = ""
     ) -> dict[str, Any]:
         token_or_nonce = require_str(data, "token_or_join_nonce")
         from_peer = require_str(data, "from")
@@ -949,6 +975,8 @@ class SessionDirectory:
             raise FieldError("invalid_field", "from")
         if not valid_peer(to_peer):
             raise FieldError("invalid_field", "to")
+        if len(payload_b64) > 4 * ((MAX_PAYLOAD + 2) // 3):
+            raise ValueError("payload_too_large")
         try:
             raw = base64.b64decode(payload_b64, validate=True)
         except (ValueError, binascii.Error) as exc:
@@ -964,19 +992,43 @@ class SessionDirectory:
                     raise PermissionError("forbidden")
             elif not tokens_equal(token_or_nonce, client_nonce(from_peer)):
                 raise PermissionError("forbidden")
+            elif to_peer != "host":
+                raise PermissionError("forbidden")
             if to_peer not in sess.queues and len(sess.queues) >= MAX_DEST_QUEUES:
                 raise BufferError("queue_full")
-            if sess.undrained_bytes + len(raw) > MAX_SESSION_PAYLOAD:
-                raise BufferError("queue_full")
             queue = sess.queues.setdefault(to_peer, [])
-            if len(queue) >= MAX_QUEUE:
-                raise BufferError("queue_full")
+            charge = len(payload_b64) + SIGNAL_METADATA_BYTES
+            while True:
+                anonymous = [item for item in sess.queues.get("host", []) if item.from_peer != "host"]
+                source = [item for item in anonymous if item.source_ip == source_ip]
+                nonce = [item for item in source if item.from_peer == from_peer]
+                source_full = from_peer != "host" and (len(source) >= MAX_SIGNAL_SOURCE_MESSAGES or sum(item.stored_bytes for item in source) + charge > MAX_SIGNAL_SOURCE_BYTES)
+                nonce_full = from_peer != "host" and len(nonce) >= MAX_SIGNAL_NONCE_MESSAGES
+                anonymous_full = from_peer != "host" and sum(item.payload_len for item in anonymous) + len(raw) > MAX_ANONYMOUS_SIGNAL_BYTES
+                if not (source_full or nonce_full or anonymous_full or len(queue) >= MAX_QUEUE or sess.undrained_bytes + len(raw) > MAX_SESSION_PAYLOAD
+                        or self._stored_signal_bytes + charge > MAX_STORED_SIGNAL_BYTES):
+                    break
+                counts = Counter((item.source_ip, item.from_peer) for item in anonymous)
+                candidates = [item for item in anonymous if counts[item.source_ip, item.from_peer] > 1
+                              and (not source_full or item.source_ip == source_ip)
+                              and (not nonce_full or (item.source_ip == source_ip and item.from_peer == from_peer))]
+                if not candidates:
+                    raise BufferError("queue_full")
+                weights = Counter()
+                for item in anonymous:
+                    weights[item.source_ip] += item.stored_bytes
+                heaviest = min({item.source_ip for item in candidates}, key=lambda address: (-weights[address], next(item.seq for item in candidates if item.source_ip == address)))
+                victim = next(item for item in candidates if item.source_ip == heaviest)
+                sess.queues["host"].remove(victim)
+                sess.undrained_bytes -= victim.payload_len
+                self._stored_signal_bytes -= victim.stored_bytes
             if to_peer not in sess.queue_drain_at:
                 sess.queue_drain_at[to_peer] = now
             seq = sess.next_seq.get(to_peer, 1)
             sess.next_seq[to_peer] = seq + 1
-            queue.append(Signal(seq, from_peer, to_peer, payload_b64, len(raw)))
+            queue.append(Signal(seq, from_peer, to_peer, payload_b64, len(raw), source_ip))
             sess.undrained_bytes += len(raw)
+            self._stored_signal_bytes += charge
             self._signals_changed.notify_all()
         return {"ok": True, "seq": seq}
 
@@ -1023,6 +1075,7 @@ class SessionDirectory:
             kept = [item for item in queue if item.seq > after]
             dropped = [item for item in queue if item.seq <= after]
             sess.undrained_bytes -= sum(item.payload_len for item in dropped)
+            self._stored_signal_bytes -= sum(item.stored_bytes for item in dropped)
             sess.queue_drain_at[peer] = now
             if kept:
                 sess.queues[peer] = kept
@@ -1375,7 +1428,7 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                     LOGGER.info(
                         "signal session_id=%s client=%s", sid, self._observed_ip()
                     )
-                    self._send(200, store.post_signal(sid, body, now))
+                    self._send(200, store.post_signal(sid, body, now, self._observed_ip()))
                     return
                 self._send(404, {"error": "not_found"})
             except TimeoutError:
