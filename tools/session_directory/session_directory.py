@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, unquote_plus
 from urllib.request import Request, urlopen
 
 # Cloudflare refuses urllib's default agent (403, error code 1010), so the relay request names the product.
@@ -228,8 +228,12 @@ def tokens_equal(left: str, right: str) -> bool:
 
 
 def redact_log_url(text: str) -> str:
-    text = re.sub(r"(?i)(token|token_or_join_nonce|join_nonce|nonce)=[^&\s\"#]*", r"\1=redacted", text)
-    return re.sub(r"peer=(?!host(?:[&\s\"#]|$))[^&\s\"#]*", "peer=redacted", text)
+    def redact(match):
+        key = unquote_plus(match.group(2)).lower()
+        if key in {"token", "token_or_join_nonce", "join_nonce", "nonce"} or (key == "peer" and unquote_plus(match.group(3)) != "host"):
+            return match.group(1) + match.group(2) + "=redacted"
+        return match.group(0)
+    return re.sub(r'([?&])([^=&\s"#]+)=([^&\s"#]*)', redact, text)
 
 
 def valid_install_key(key: str) -> bool:
@@ -1775,26 +1779,28 @@ class SessionHTTPServer(ThreadingHTTPServer):
     def process_request_thread(
         self, request: socket.socket, client_address: Any
     ) -> None:
+        current = [request]
         def expire():
             try:
-                request.shutdown(socket.SHUT_RDWR)
+                current[0].shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
         timer = threading.Timer(HANDLER_LIFETIME_S, expire)
         timer.daemon = True
         timer.start()
         try:
-            self._serve_request(request, client_address)
+            self._serve_request(request, client_address, current)
         finally:
             timer.cancel()
             self._handler_slots.release()
 
-    def _serve_request(self, request: socket.socket, client_address: Any) -> None:
+    def _serve_request(self, request: socket.socket, client_address: Any, current: list[socket.socket]) -> None:
         ctx = self.tls_context
         if ctx is not None:
             request.settimeout(HANDSHAKE_TIMEOUT_S)
             try:
                 request = ctx.wrap_socket(request, server_side=True)
+                current[0] = request
             except (socket.timeout, TimeoutError):
                 LOGGER.info("tls handshake timeout from %s", client_address[0])
                 self.shutdown_request(request)

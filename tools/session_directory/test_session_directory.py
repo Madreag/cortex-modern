@@ -2072,6 +2072,35 @@ class DirectoryTests(unittest.TestCase):
         self.assertLessEqual(peak_total, total_cap, "S1: many sources retained more pending registrations than the global cap")
         self.assertEqual(owners_before_ack, 0, "S1: unacknowledged registrations wrote durable owner records")
         self.assertEqual((len(store._register_replays), retained_payload), (0, 0), "S1: expired unacknowledged registrations retained their signal queues")
+        with mock.patch.object(session_directory, "PRUNE_MAP_MAX", 8):
+            limiter = DualRateLimiter()
+            for index in range(24):
+                limiter.check(f"{index:016d}", f"203.0.113.{index}", 0, False)
+            self.assertLessEqual(limiter._map_size(), 8, "S1: sparse callers grew rate buckets beyond the map cap")
+
+    def test_owner_writes_are_bounded_batched_and_outside_the_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 4):
+            store = session_directory.SessionDirectory(15, 5, owner_state=Path(directory) / "world-owners.json", first_upgrade_worlds=0)
+            self.addCleanup(store.stop)
+            writes = []
+            original = store._write_owner_file
+            def observe(owners):
+                writes.append((store._lock._is_owned(), time.monotonic(), len(owners), len(json.dumps(owners).encode())))
+                return original(owners)
+            with mock.patch.object(store, "_write_owner_file", side_effect=observe):
+                for index in range(4):
+                    row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), f"192.0.2.{index}", index, INSTALL_KEY)
+                    store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 2, "seats_free": 1}, index, INSTALL_KEY)
+                with self.assertRaises(OverflowError, msg="S1: durable ownership grew beyond its count cap"):
+                    store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.99", 5, INSTALL_KEY)
+                last = max(owner["last_heartbeat_unix"] for owner in store._world_owners.values())
+                with mock.patch.object(session_directory.time, "time", return_value=last + session_directory.OWNER_IDLE_S + 1):
+                    store.prune(30)
+                store._wait_owner_write(store._owner_revision)
+            self.assertTrue(writes and all(not held for held, _when, _count, _bytes in writes), "S1: a durable owner write held the directory lock")
+            self.assertTrue(all(count <= 4 and size <= session_directory.MAX_OWNER_STATE_BYTES for _held, _when, count, size in writes), "S1: an owner write exceeded its count or byte cap")
+            self.assertTrue(all(right[1] - left[1] >= session_directory.OWNER_WRITE_INTERVAL_S for left, right in zip(writes, writes[1:])), "S1: owner writes bypassed the batch interval")
+            self.assertEqual(len(store._world_owners), 0, "S1: ownership remained after thirty days without a heartbeat")
 
     def test_signaling_requires_host_proof_and_preserves_a_joiners_offer(self) -> None:
         store = session_directory.SessionDirectory(300, 5)
