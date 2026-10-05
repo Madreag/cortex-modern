@@ -1412,7 +1412,9 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		g_GUISound.BackButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::JoinAddressGoButton]) {
 		CloseMultiplayerDialog();
-		m_JoinTargetName = m_MultiplayerJoinAddressTextBox->GetText();
+		// A session id names nothing a player knows; the joining line says the game.
+		const std::string& address = m_MultiplayerJoinAddressTextBox->GetText();
+		m_JoinTargetName = address.starts_with("session:") ? std::string() : address;
 		m_JoinTargetPersistentWorld = false;
 		m_JoinTargetActivity.clear();
 		StartMultiplayer(false);
@@ -4044,8 +4046,10 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 			return;
 		}
 		if (!snapshot.running && (snapshot.lobbyPhase.empty() || snapshot.lobbyPhase == "Idle" || snapshot.lobbyPhase == "SessionStarting") && snapshot.transferLine.empty() && snapshot.waitLine.empty()) {
+			// The service's own phase ("Joining direct-IP match") says nothing the line does not.
+			const std::string status = snapshot.statusText.ends_with("direct-IP match") ? std::string() : PlayerFacingStatus(snapshot.statusText);
 			m_JoinStatusText = "Joining " + (m_JoinTargetName.empty() ? std::string("the game") : m_JoinTargetName) + "..." +
-			                   (snapshot.statusText.empty() ? std::string() : " " + PlayerFacingStatus(snapshot.statusText));
+			                   (status.empty() ? std::string() : " " + status);
 			m_MultiplayerSubScreen = MultiplayerSubScreen::JoinSetup;
 			RefreshMultiplayerScreenControls(snapshot);
 			return;
