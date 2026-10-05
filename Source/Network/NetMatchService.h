@@ -1941,6 +1941,8 @@ namespace RTE {
 		bool m_PrivateImageRecaptured = false; //!< Host: this wait already took its one fresh base.
 		bool m_PrivateImageSeatHeld = false;
 		std::map<NetPeerId, std::string> m_PrivateTransferHeldReasons; //!< Host: why a returner's image has not left, reported once per reason.
+		static constexpr uint64_t c_ReturnerLinkSettleMs = 1000; //!< How long a returner's round trip still carries our image's queue after it lands.
+		std::map<NetPeerId, uint64_t> m_ReturnerLinkSettlesMs; //!< Host: until when each returner's link still carries the image we sent it.
 		const char* m_PrivateBaseHeldReason = nullptr; //!< Host: why the last pass could not take a base, reported once per reason.
 		std::string m_PrivateJoinError;
 		std::shared_ptr<const std::vector<uint8_t>> m_WorldJoinImageArchive; //!< The writer's own buffer, shared.

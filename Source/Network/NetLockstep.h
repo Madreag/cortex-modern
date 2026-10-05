@@ -1763,6 +1763,7 @@ namespace RTE {
 			uint64_t ms = 0; //!< When the input arrived.
 			uint64_t frame = 0; //!< The frame it was for.
 			uint64_t lead = 0; //!< Frames it arrived ahead of our sim's next tick.
+			uint64_t simNext = 0; //!< Our sim's next tick when it arrived; 0 when not measured.
 		};
 		std::map<uint8_t, std::deque<ArrivalLead>> m_ArrivalLeads; //!< Per remote sender, the recent arrivals of its new input.
 		std::map<uint8_t, std::deque<uint32_t>> m_ArrivalLateness; //!< Per remote sender, how long its recent ticks landed after we first missed them.
@@ -1773,6 +1774,8 @@ namespace RTE {
 		/// The rise a live delay change makes so the sender's inputs keep the slow-player bound's worth of lead: what the least lead over the last
 		/// window lacked, never past the bound above the delay the link's round trip requires.
 		std::optional<uint16_t> MarginKeepingIncrease(uint8_t peerId, uint16_t current, uint32_t required, uint64_t nowMs) const;
+		/// Records, for the sender's delay to carry, how long its stream fell silent between its previous new input and this one.
+		void NoteStreamSilence(uint8_t senderPeerId, const ArrivalLead& previous, uint64_t targetFrame, uint64_t simNext, uint64_t nowMs);
 		/// Whether the blip test lever drops this unreliable frame send.
 		bool TestBlipDropsFrameSend(uint64_t targetFrame);
 		static constexpr uint64_t c_MarginWindowMs = 1000; //!< The arrivals a rise is judged over: short, so it lands before a spike finds the seat.
@@ -1977,6 +1980,7 @@ namespace RTE {
 		uint64_t m_AuthorityLastHeardMs = 0;
 		uint64_t m_LastLivenessMs = 0; //!< Host: when it last told its clients it is alive while its round waited.
 		std::map<uint8_t, std::pair<NetPeerId, uint64_t>> m_HeldPeerLinks; //!< Host: each held seat's link it still talks on, and when the hold took it.
+		std::set<uint8_t> m_SilenceUnmeasured; //!< Host: seats held for going silent whose next input has not landed: it measures that silence.
 		std::map<uint8_t, NetPeerId> m_ReturningLinks; //!< Host: the new link each held seat's player came back on, until it closes.
 		uint64_t m_LastHeldLinkMs = 0; //!< Host: when it last told its held seats it is alive.
 		uint64_t m_LastReliableWindowAliveMs = 0; //!< Host: when it last told the seats reading its frames on the reliable lane it is alive.

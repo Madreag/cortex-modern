@@ -4975,6 +4975,7 @@ static std::string ResyncSaveName() {
 		m_WorldJoin.ReleaseLostConnections(live);
 		std::erase_if(m_PrivateActivations, [&](NetPeerId connection) { return m_WorldJoin.FindSession(connection) == nullptr; });
 		std::erase_if(m_PrivateTransferHeldReasons, [&](const auto& entry) { return m_WorldJoin.FindSession(entry.first) == nullptr; });
+		std::erase_if(m_ReturnerLinkSettlesMs, [&](const auto& entry) { return m_WorldJoin.FindSession(entry.first) == nullptr; });
 		std::erase_if(m_PrivateJoinBlobs, [&](const auto& task) { return m_WorldJoin.FindSession(task.first) == nullptr &&
 		    task.second.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; });
 		for (const auto& session: m_WorldJoin.Sessions()) {
@@ -4986,7 +4987,12 @@ static std::string ResyncSaveName() {
 				m_WorldJoin.NoteMatchConfigSent(session.connection);
 			}
 			m_Coordinator->NoteReturningLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
-			m_WorldJoin.NoteRejoinLinkFit(session.connection, PrepareHeldPeerRejoinLocked(session.assignedPeerId));
+			// Our image to a returner fills its link, and the link's smoothed round trip takes a moment to come back once the image has
+			// landed: a sample taken then times our own queue, never the link the seat will play on.
+			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && session.transferStarted) m_ReturnerLinkSettlesMs[session.connection] = nowMs + c_ReturnerLinkSettleMs;
+			const auto settles = m_ReturnerLinkSettlesMs.find(session.connection);
+			const bool linkCarriesOurImage = settles != m_ReturnerLinkSettlesMs.end() && nowMs < settles->second;
+			m_WorldJoin.NoteRejoinLinkFit(session.connection, !linkCarriesOurImage && PrepareHeldPeerRejoinLocked(session.assignedPeerId));
 			if (INetTransport* wire = ActiveWireLocked()) m_WorldJoin.NoteTailLinkRtt(session.connection, wire->GetPeerPingMs(session.connection));
 			// A returning seat takes the base being captured for it, not the older one that capture replaces.
 			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted) {

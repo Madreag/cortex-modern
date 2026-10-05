@@ -4939,6 +4939,7 @@ namespace RTE {
 		m_DroppedAtMs.clear();
 		m_LastHoldHeartbeatMs = 0;
 		m_HeldPeerLinks.clear();
+		m_SilenceUnmeasured.clear();
 		m_ReturningLinks.clear();
 		m_LastHeldLinkMs = 0;
 		m_LastReliableWindowAliveMs = 0;
@@ -5914,6 +5915,7 @@ namespace RTE {
 		          << " peer_park=" << m_Stats.peers[peerId].startParkMs << " ready=" << m_ReadyFrames.size()
 		          << " heard_through=" << m_Stats.peers[peerId].highestTargetFrame << " accepted_through=" << m_Stats.peers[peerId].acceptedThroughFrame
 		          << " last_heard_ms=" << m_Stats.peers[peerId].lastProgressMs << " cause=" << cause << std::endl;
+		if (cause && std::string_view(cause) == "late_stream") m_SilenceUnmeasured.insert(peerId);
 		NetLockstepTiming timing;
 		timing.senderPeerId = m_Config.localPeerId; timing.peerId = peerId;
 		timing.action = NetTimingAction::Hold;
@@ -6283,7 +6285,7 @@ namespace RTE {
 		if (ProposeInputDelay(peerId, static_cast<uint16_t>(needed), FutureTimingFrame())) {
 			const auto stats = m_Stats.peers.find(peerId);
 			DiagnosticLine() << "[net-lockstep] delay proposal peer=" << static_cast<int>(peerId) << " from=" << current << " to=" << needed << " reason=rejoin"
-			                 << " rtt_p95_ms=" << estimate.P95Ms() << " jitter_ms=" << estimate.JitterMs() << " ping_ms=" << rttMs
+			                 << " rtt_p95_ms=" << estimate.P95Ms() << " jitter_ms=" << estimate.JitterMs() << " silence_ms=" << estimate.SilenceMs() << " ping_ms=" << rttMs
 			                 << " start_park_ms=" << (stats == m_Stats.peers.end() ? 0 : stats->second.startParkMs) << std::endl;
 		}
 		if (error) *error = "Rejoining: waiting for the agreed input delay to take effect";
@@ -7028,6 +7030,27 @@ namespace RTE {
 		return delay > current ? std::optional<uint16_t>{static_cast<uint16_t>(delay)} : std::nullopt;
 	}
 
+	void NetLockstepCoordinator::NoteStreamSilence(uint8_t senderPeerId, const ArrivalLead& previous, uint64_t targetFrame, uint64_t simNext, uint64_t nowMs) {
+		if (targetFrame <= previous.frame || simNext <= previous.simNext || nowMs <= previous.ms || !std::isfinite(m_Config.simTickMs) || m_Config.simTickMs <= 0) return;
+		// Silent means this machine played frames the sender did not deliver while the wall clock ran: a pause of our own plays
+		// nothing, and the burst after it delivers nothing new.
+		const uint64_t delivered = targetFrame - previous.frame, played = simNext - previous.simNext;
+		if (played < delivered + 2) return;
+		const double silenceMs = std::min(static_cast<double>(played - delivered) * m_Config.simTickMs,
+		                                  static_cast<double>(nowMs - previous.ms) - static_cast<double>(delivered) * m_Config.simTickMs);
+		if (silenceMs < 2 * m_Config.simTickMs) return;
+		// A lowered delay leaves the sender nothing new to send for the frames it already sent, and a park's first inputs fall due a
+		// delay after it: neither is its link.
+		const uint64_t span = std::max<uint64_t>(InputDelayAt(senderPeerId, previous.simNext), InputDelayAt(senderPeerId, simNext)) + 1;
+		if (const auto changes = m_DelayChanges.find(senderPeerId); changes != m_DelayChanges.end()) {
+			const auto change = changes->second.lower_bound(previous.simNext > span ? previous.simNext - span : 0);
+			if (change != changes->second.end() && change->first <= simNext + span) return;
+		}
+		if (m_ParkFrameSimulatedMs != 0 && m_ParkFrameSimulatedMs <= nowMs &&
+		    m_ParkFrameSimulatedMs + static_cast<uint64_t>(std::ceil(span * m_Config.simTickMs)) >= previous.ms) return;
+		m_DelayEstimators[senderPeerId].ObserveSilence(nowMs, static_cast<uint32_t>(std::lround(silenceMs)));
+	}
+
 	void NetLockstepCoordinator::TickTiming(uint64_t nowMs) {
 		if (!IsRunning() || m_Playback) return;
 		const bool host = m_Config.localPeerId == GetHostPeerId();
@@ -7059,7 +7082,8 @@ namespace RTE {
 					if (delay && ProposeInputDelay(peer, *delay, FutureTimingFrame())) {
 						if (startSkew) m_StartSkewSized.insert(peer);
 						DiagnosticLine() << "[net-lockstep] delay proposal peer=" << static_cast<int>(peer) << " from=" << stats.delayFrames << " to=" << *delay << " reason=" << reason
-						                 << " rtt_p95_ms=" << estimator.P95Ms() << " jitter_ms=" << estimator.JitterMs() << " ping_ms=" << ping << " start_park_ms=" << stats.startParkMs << std::endl;
+						                 << " rtt_p95_ms=" << estimator.P95Ms() << " jitter_ms=" << estimator.JitterMs() << " silence_ms=" << estimator.SilenceMs()
+						                 << " ping_ms=" << ping << " start_park_ms=" << stats.startParkMs << std::endl;
 					}
 				}
 			}
@@ -7833,7 +7857,8 @@ namespace RTE {
 				if (produced >= delay) simNext = std::max(simNext, produced - delay + 1 + trip);
 			}
 			auto& leads = m_ArrivalLeads[frame.senderPeerId];
-			leads.push_back({nowMs, frame.targetFrame, frame.targetFrame > simNext ? frame.targetFrame - simNext : 0});
+			if (!leads.empty() && leads.back().simNext != 0) NoteStreamSilence(frame.senderPeerId, leads.back(), frame.targetFrame, simNext, nowMs);
+			leads.push_back({nowMs, frame.targetFrame, frame.targetFrame > simNext ? frame.targetFrame - simNext : 0, simNext});
 			++peerStats.arrivalLeadFrames[std::min<uint64_t>(leads.back().lead, peerStats.arrivalLeadFrames.size() - 1)];
 			while (!leads.empty() && nowMs - leads.front().ms > 2 * NetInputDelayEstimator::c_WindowMs) leads.pop_front();
 		}
@@ -11055,6 +11080,16 @@ namespace RTE {
 				          << " as=" << (newest == waitedFrame ? "newest" : "window") << " taken=" << holdsWaited() << " gone=" << IsPeerGoneAtFrame(sender, waitedFrame)
 				          << " required=" << IsRemoteRequiredForFrame(sender, waitedFrame) << " next=" << m_Stats.nextFrame << std::endl;
 			};
+		}
+		// The first input of a seat held for going silent lands when its link is back: how long that took is what its return carries.
+		if (const auto open = m_SilenceUnmeasured.find(frame.senderPeerId); open != m_SilenceUnmeasured.end()) {
+			const auto held = m_HeldPeerLinks.find(frame.senderPeerId);
+			const auto live = m_RemoteTransports.find(frame.senderPeerId);
+			if ((held != m_HeldPeerLinks.end() && held->second.first == fromTransport) || (live != m_RemoteTransports.end() && live->second == fromTransport)) {
+				const uint64_t since = m_Stats.peers[frame.senderPeerId].lastProgressMs;
+				if (since != 0 && nowMs > since) m_DelayEstimators[frame.senderPeerId].ObserveSilence(nowMs, static_cast<uint32_t>(std::min<uint64_t>(nowMs - since, UINT32_MAX)));
+				m_SilenceUnmeasured.erase(open);
+			}
 		}
 		if (!SenderOwnsTransport(frame.senderPeerId, fromTransport)) {
 			const auto bound = m_RemoteTransports.find(frame.senderPeerId);

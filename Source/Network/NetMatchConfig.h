@@ -44,15 +44,25 @@ namespace RTE {
 	public:
 		static constexpr uint64_t c_WindowMs = 5000;
 		static constexpr uint64_t c_SampleMs = 100;
+		/// A link that fell silent once falls silent again: its longest silence is carried this long.
+		static constexpr uint64_t c_SilenceWindowMs = 120000;
+		/// A silence longer than half the largest delay is an outage the hold answers, not jitter a delay should carry.
+		static constexpr uint32_t c_MaxCarriedSilenceMs = 500;
 		void Observe(uint64_t nowMs, uint32_t rttMs);
+		/// Records how long the sender's input stream fell silent beyond its cadence.
+		void ObserveSilence(uint64_t nowMs, uint32_t silenceMs);
 		void Rebase(uint64_t nowMs);
 		uint32_t RequiredFrames(double tickMs, uint16_t floor = 0) const;
 		uint32_t P95Ms() const;
 		uint32_t JitterMs() const;
+		/// The longest silence of the input stream within the window; 0 when none was seen.
+		uint32_t SilenceMs() const;
 		std::optional<uint16_t> Change(uint64_t nowMs, uint16_t current, double tickMs, uint16_t floor = 0);
 	private:
 		uint32_t Percentile(unsigned percent) const;
+		void ForgetSilencesBefore(uint64_t nowMs);
 		std::deque<std::pair<uint64_t, uint32_t>> m_Samples;
+		std::deque<std::pair<uint64_t, uint32_t>> m_Silences;
 		std::optional<uint64_t> m_BelowSince;
 	};
 	struct NetMatchMigrationPeer {
