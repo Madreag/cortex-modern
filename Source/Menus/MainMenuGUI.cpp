@@ -1604,6 +1604,12 @@ void MainMenuGUI::FitHostActivityCombo() {
 	}
 	if (m_MultiplayerHostPlayersCombo) {
 		m_MultiplayerHostPlayersCombo->SetPositionRel(valueX, m_MultiplayerHostPlayersCombo->GetRelYPos());
+		// Its hint keeps the layout's gap after it.
+		if (auto* hint = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager ? m_SubMenuScreenGUIControlManager->GetControl("LabelHostPlayersHint") : nullptr)) {
+			const int hintX = valueX + m_MultiplayerHostPlayersCombo->GetWidth() + 6;
+			hint->SetPositionRel(hintX, hint->GetRelYPos());
+			hint->Resize(std::max(1, m_MultiplayerHostPanel->GetWidth() - hintX - panelPad), hint->GetHeight());
+		}
 	}
 }
 
