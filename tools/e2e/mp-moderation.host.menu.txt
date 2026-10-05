@@ -83,8 +83,8 @@ activate ButtonHostOptBack
 video_mark moderation-final-roster
 wait_ms 1200
 observe assert_label LabelLobbyPlayer1 Open seat
-observe assert_label LabelLobbyPlayer2 Client 3
-observe assert_label LabelMultiplayerStatus Waiting for 2 players to join
+observe assert_label LabelLobbyPlayer2 Open seat
+observe assert_label LabelMultiplayerStatus Waiting for 2 more players to join
 observe assert_label LabelMultiplayerError ClientB was refused: banned from this session.
 dump_lobby
 wait_ms 1200

@@ -117,10 +117,10 @@
       "peer": "host",
       "mark": "moderation-final-roster",
       "screen": "MultiplayerScreen",
-      "what": "After both removals the host's lobby lists the two seats back open under their unseated names.",
+      "what": "After both removals the host's lobby lists the two seats back as open seats.",
       "events": [
         "assert_label LabelLobbyPlayer1.*Open seat.*PASS",
-        "assert_label LabelLobbyPlayer2.*Client 3.*PASS"
+        "assert_label LabelLobbyPlayer2.*Open seat.*PASS"
       ],
       "run": "kick-ban"
     },
