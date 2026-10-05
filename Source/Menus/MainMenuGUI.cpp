@@ -1650,7 +1650,8 @@ void MainMenuGUI::ApplyMultiplayerHostActivity() {
 	if (m_MultiplayerHostAboutLabel) {
 		// The activity's own description, its first sentence, as one line under its name.
 		std::string about;
-		if (const Entity* activity = g_PresetMan.GetEntityPreset(HostActivityType(preset, module), preset, g_PresetMan.GetModuleID(module))) {
+		// An Activity keeps its own description; the Entity one it hides stays empty.
+		if (const auto* activity = dynamic_cast<const Activity*>(g_PresetMan.GetEntityPreset(HostActivityType(preset, module), preset, g_PresetMan.GetModuleID(module)))) {
 			about = activity->GetDescription();
 			const size_t stop = about.find_first_of(".!?");
 			if (stop != std::string::npos) about.resize(stop + 1);

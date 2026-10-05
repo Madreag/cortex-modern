@@ -1032,8 +1032,10 @@ def scripts(case, port, root, size="960x540"):
     if case == "host-by-hand":
         # Every kind of control on the host options, operated the way a hand does: a press and its release on different
         # frames with the panel's own per-frame refresh in between, and the value read back frames after.
-        text = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\nactivate ButtonHostOptions\nwait_ms 400\n"
-                "assert_substate HostOptions\n"
+        text = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\n"
+                # Under the activity, the first words of what it is (MENU-UX 3.2: a one-line description).
+                "assert_label LabelHostActivityAbout Survive waves of AI-controlled enemies\n"
+                "activate ButtonHostOptions\nwait_ms 400\nassert_substate HostOptions\n"
                 # The draft starts from the activity's own rules: Skirmish Defense names no gold (2,000) and fog of war on.
                 "activate TabHostPageRules\nwait 3\nassert_label LabelHostRulesGoldValue 2000 oz\nassert_checked CheckHostRulesFog 1\n"
                 "activate TabHostPageSeats\nwait 3\n"
