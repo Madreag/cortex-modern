@@ -11515,7 +11515,8 @@ namespace RTE {
 		if (m_PeerLeaveFrames.find(peerId) != m_PeerLeaveFrames.end()) {
 			return;
 		}
-		ApplyPeerLeave(peerId, m_Stats.nextFrame, message, nowMs, true, false, false, true);
+		// Its inputs this host already relayed may be committed by a survivor ahead of it: the seat leaves at the first frame it never relayed.
+		ApplyPeerLeave(peerId, FirstFrameWithout(peerId), message, nowMs, true, false, false, true);
 	}
 
 	void NetLockstepCoordinator::ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay) {
