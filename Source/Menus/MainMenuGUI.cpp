@@ -1803,6 +1803,29 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	}
 }
 
+// The class that defines a host-pickable activity, empty when the list does not offer it.
+static std::string HostActivityType(const std::string& preset, const std::string& module) {
+	for (const NetHostActivityChoice& row : NetMatchService::ListHostActivities()) {
+		if (row.preset == preset && row.module == module) return row.activityType;
+	}
+	return {};
+}
+
+// A host who staged no rules plays by the activity's own: the gold, fog of war, clear path and deployment the Scenario
+// screen seeds for it. A request whose activity or scene does not resolve keeps today's path and its refusal.
+static void SeedHostRulesFromActivity(NetMatchServiceRequest& request) {
+	if (request.standardRules || request.persistentWorld || request.activityPreset == "Persistent World") return;
+	if (!NetMatchService::SeatActivityModule(request) || !NetMatchService::SeatHostScene(request)) return;
+	NetMatchStandardRules rules;
+	rules.mode = request.mode;
+	rules.activityPreset = request.activityPreset;
+	rules.activityModule = request.activityModule;
+	if (!request.activityType.empty()) rules.activityType = request.activityType;
+	rules.sceneName = request.sceneName;
+	if (!request.sceneModule.empty()) rules.sceneModule = request.sceneModule;
+	if (NetActivitySetup::SeedRulesFromActivity(rules)) request.standardRules = rules;
+}
+
 NetMatchServiceRequest MainMenuGUI::HostRequestDraft() const {
 	NetMatchServiceRequest request;
 	request.host = true;
@@ -1814,7 +1837,13 @@ NetMatchServiceRequest MainMenuGUI::HostRequestDraft() const {
 	if (m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size()) {
 		request.activityPreset = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].first;
 		request.activityModule = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].second;
+		request.activityType = HostActivityType(request.activityPreset, request.activityModule);
 	}
+	if (m_MultiplayerHostSceneIndex < m_MultiplayerHostScenes.size()) {
+		request.sceneName = m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex].first;
+		request.sceneModule = m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex].second;
+	}
+	NetMatchService::ApplyHostActivityFallback(request);
 	const long parsedPlayers = std::strtol(m_MultiplayerHostPlayersTextBox->GetText().c_str(), nullptr, 10);
 	request.peerCount = static_cast<uint8_t>(std::clamp<long>(parsedPlayers, NetMatchConfigUtil::c_MinPeerCount, NetMatchConfigUtil::c_MaxPeerCount));
 	request.mode = m_MultiplayerHostMode;
@@ -1850,6 +1879,7 @@ NetMatchServiceRequest MainMenuGUI::HostRequestDraft() const {
 	} else {
 		NetHostDefaultsTemplate saved;
 		if (NetHostDefaults::Load(saved, nullptr)) request.frameRedundancyTicks = saved.frameRedundancyTicks;
+		SeedHostRulesFromActivity(request);
 	}
 	NetMatchService::SeatSavedOptions(request);
 	return request;
@@ -1865,6 +1895,8 @@ void MainMenuGUI::OpenHostOptions(bool setupDraft) {
 	m_HostRecRepairArmed = false;
 	m_HostRecRepairRefusal.clear();
 	m_HostOptionsAwaitedRevision = 0;
+	// A fresh setup draft starts with no rule set by hand; any other continues from the last draft Apply accepted.
+	m_HostRulesTouched = setupDraft && !m_HostSetupOptions ? 0 : m_HostAppliedRulesTouched;
 	if (m_HostNetPortBox && m_MultiplayerHostPortTextBox) {
 		// H34's port field edits the setup draft's port - the value the next hosted request carries.
 		m_HostNetPortBox->SetText(m_MultiplayerHostPortTextBox->GetText());
@@ -1911,8 +1943,9 @@ void MainMenuGUI::ShowHostOptionsPage(int page) {
 }
 
 namespace {
+	// An open list holds the player's pick until its close commits it, so the refresh leaves it alone.
 	void HostOptSelectCombo(GUIComboBox* combo, const std::string& text) {
-		if (!combo) return;
+		if (!combo || combo->IsDropped()) return;
 		for (int i = 0; i < combo->GetCount(); ++i) {
 			if (combo->GetItem(i) && combo->GetItem(i)->m_Name == text) {
 				combo->SetSelectedIndex(i);
@@ -1923,7 +1956,7 @@ namespace {
 	}
 
 	void HostOptSelectComboIndex(GUIComboBox* combo, int index) {
-		if (combo) combo->SetSelectedIndex(std::clamp(index, 0, std::max(0, combo->GetCount() - 1)));
+		if (combo && !combo->IsDropped()) combo->SetSelectedIndex(std::clamp(index, 0, std::max(0, combo->GetCount() - 1)));
 	}
 
 	void HostOptSetEditable(GUIControl* control, bool editable) {
@@ -1939,7 +1972,7 @@ namespace {
 
 	/// Shows a return window, offering a saved value the list lacks in its place among the others.
 	void HostOptSelectReturnWindow(GUIComboBox* combo, uint8_t minutes) {
-		if (!combo) return;
+		if (!combo || combo->IsDropped()) return;
 		std::vector<uint8_t> offered;
 		for (int i = 0; i < combo->GetCount(); ++i) {
 			const GUIListPanel::Item* item = combo->GetItem(i);
@@ -1970,7 +2003,7 @@ namespace {
 
 	/// Shows a world history or catch-up limit, offering a saved value the list lacks in its place among the others.
 	void HostOptSelectJoinHistory(GUIComboBox* combo, int seconds) {
-		if (!combo) return;
+		if (!combo || combo->IsDropped()) return;
 		std::vector<int> offered;
 		for (int i = 0; i < combo->GetCount(); ++i) {
 			const int listed = HostOptJoinHistorySecondsOf(combo->GetItem(i));
@@ -2555,6 +2588,31 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 	}
 }
 
+void MainMenuGUI::FollowHostActivityDefaults(const NetMatchStandardRules& before, const GUIControl* guiEventControl) {
+	// A rule the host moved himself stays his; the read is what tells a hand from the refresh writing the draft back.
+	const std::pair<const GUIControl*, bool> moved[] = {
+	    {m_HostRulesGoldSlider, m_HostOptionsDraft.startingGold != before.startingGold},
+	    {m_HostRulesFogCheck, m_HostOptionsDraft.fogOfWar != before.fogOfWar},
+	    {m_HostRulesClearPathCheck, m_HostOptionsDraft.requireClearPathToOrbit != before.requireClearPathToOrbit},
+	    {m_HostRulesDeployCheck, m_HostOptionsDraft.deployUnits != before.deployUnits}};
+	const unsigned rules[] = {NetActivitySetup::StartingGold, NetActivitySetup::FogOfWar, NetActivitySetup::ClearPathToOrbit, NetActivitySetup::DeployUnits};
+	for (size_t i = 0; i < std::size(moved); ++i) {
+		if (guiEventControl && guiEventControl == moved[i].first && moved[i].second) m_HostRulesTouched |= rules[i];
+	}
+	unsigned reseed = 0;
+	if (m_HostOptionsDraft.activityPreset != before.activityPreset || m_HostOptionsDraft.activityModule != before.activityModule) {
+		// The launch resolves the activity by its class too, so the class follows the pick.
+		if (std::string type = HostActivityType(m_HostOptionsDraft.activityPreset, m_HostOptionsDraft.activityModule); !type.empty()) {
+			m_HostOptionsDraft.activityType = std::move(type);
+		}
+		reseed = NetActivitySetup::AllSeededRules;
+	} else if (m_HostOptionsDraft.difficulty != before.difficulty) {
+		reseed = NetActivitySetup::StartingGold;
+	}
+	reseed &= ~m_HostRulesTouched;
+	if (reseed != 0) NetActivitySetup::SeedRulesFromActivity(m_HostOptionsDraft, reseed);
+}
+
 void MainMenuGUI::RederiveHostOptionsRoster() {
 	// Rebuild the seat list for the drafted capacity/mode, keeping the rules the panel edited.
 	NetMatchServiceRequest request = HostRequestDraft();
@@ -2602,6 +2660,7 @@ void MainMenuGUI::ApplyHostOptions() {
 	}
 	if (m_HostOptionsSetupDraft) {
 		m_HostSetupOptions = m_HostOptionsDraft;
+		m_HostAppliedRulesTouched = m_HostRulesTouched;
 		m_HostOptionsStatusLabel->SetText("Staged for the next lobby.");
 	} else {
 		if (!g_NetMatchService.SubmitHostOptions(m_HostOptionsBaseRevision, m_HostOptionsDraft, &error)) {
@@ -2611,6 +2670,7 @@ void MainMenuGUI::ApplyHostOptions() {
 		}
 		// The adopted revision keeps Apply pending until the runner publishes it.
 		m_HostOptionsAwaitedRevision = m_HostOptionsBaseRevision + 1;
+		m_HostAppliedRulesTouched = m_HostRulesTouched;
 		m_HostOptionsStatusLabel->SetText(NetHostOptionsApplyText(g_NetMatchService.GetState()));
 	}
 	g_GUISound.ButtonPressSound()->Play();
@@ -2958,6 +3018,20 @@ void MainMenuGUI::ShowHostBannedDialog() {
 }
 
 void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl) {
+	// The refresh writes the draft back into every control each frame, so a change is read into the draft as it
+	// arrives. A list still open holds an uncommitted pick, and the team row's controls still show the team it left.
+	if (!m_HostOptionsReadOnly && guiEventControl != m_HostRulesTeamCombo) {
+		const std::vector<GUIControl*>& controls = *m_ActiveGUIControlManager->GetControlList();
+		const bool listOpen = std::any_of(controls.begin(), controls.end(), [](GUIControl* control) {
+			GUIComboBox* combo = dynamic_cast<GUIComboBox*>(control);
+			return combo && combo->IsDropped();
+		});
+		if (!listOpen) {
+			const NetMatchStandardRules before = m_HostOptionsDraft;
+			DraftHostOptionsFromControls();
+			FollowHostActivityDefaults(before, guiEventControl);
+		}
+	}
 	for (size_t i = 0; i < m_HostNetworkTabs.size(); ++i) {
 		if (guiEventControl != m_HostNetworkTabs[i]) continue;
 		CommitHostRelay();
@@ -3155,8 +3229,7 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		return;
 	}
 	if (guiEventControl == m_HostRulesTeamCombo) {
-		// Switching the team re-reads its rules row; the prior pick is already in the draft.
-		DraftHostOptionsFromControls();
+		// The refresh fills the row from the team just picked; every earlier pick is already in the draft.
 		return;
 	}
 	if (guiEventControl == m_HostSeatPlayersCombo) {
@@ -3339,6 +3412,7 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 			g_SettingsMan.SetNetworkInputDelayFrames(inputDelay);
 			request.inputDelayFrames = static_cast<uint16_t>(inputDelay);
 		}
+		SeedHostRulesFromActivity(request);
 	}
 
 	std::string error;
