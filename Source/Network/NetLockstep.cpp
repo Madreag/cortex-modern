@@ -6280,7 +6280,12 @@ namespace RTE {
 			if (error) *error = "Your connection needs " + std::to_string(needed) + " delay frames; the match currently allows " + std::to_string(current) + ". Your seat remains under AI control.";
 			return false;
 		}
-		ProposeInputDelay(peerId, static_cast<uint16_t>(needed), FutureTimingFrame());
+		if (ProposeInputDelay(peerId, static_cast<uint16_t>(needed), FutureTimingFrame())) {
+			const auto stats = m_Stats.peers.find(peerId);
+			DiagnosticLine() << "[net-lockstep] delay proposal peer=" << static_cast<int>(peerId) << " from=" << current << " to=" << needed << " reason=rejoin"
+			                 << " rtt_p95_ms=" << estimate.P95Ms() << " jitter_ms=" << estimate.JitterMs() << " ping_ms=" << rttMs
+			                 << " start_park_ms=" << (stats == m_Stats.peers.end() ? 0 : stats->second.startParkMs) << std::endl;
+		}
 		if (error) *error = "Rejoining: waiting for the agreed input delay to take effect";
 		return false;
 	}
@@ -7040,17 +7045,22 @@ namespace RTE {
 				stats.delayFrames = InputDelayAt(peer, m_Stats.nextFrame);
 				if (host && m_Config.adaptiveInputDelay) {
 					std::optional<uint16_t> delay = estimator.Change(nowMs, stats.delayFrames, m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames);
+					const char* reason = "link";
 					if (delay && *delay < stats.delayFrames) delay = SlackLimitedDecrease(peer, *delay, stats.delayFrames, nowMs);
 					const uint32_t required = estimator.RequiredFrames(m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames);
-					if (const auto kept = MarginKeepingIncrease(peer, stats.delayFrames, required, nowMs); kept && (!delay || *kept > *delay)) delay = kept;
+					if (const auto kept = MarginKeepingIncrease(peer, stats.delayFrames, required, nowMs); kept && (!delay || *kept > *delay)) delay = kept, reason = "lead";
 					// A sender whose start took longer than ours plays the round that much behind; its delay covers it once, from its own measurement.
 					bool startSkew = false;
 					if (m_PeerStartupPublished.contains(peer) && stats.startParkMs > 0 && !m_StartSkewSized.contains(peer)) {
 						const uint32_t started = std::min<uint32_t>(StartSkewDelayFrames(required, stats.startParkMs, m_LocalStartParkMs, m_Config.simTickMs), NetLockstepCodec::c_MaxInputDelayFrames);
 						if (started <= stats.delayFrames) m_StartSkewSized.insert(peer);
-						else if (!delay || started > *delay) delay = static_cast<uint16_t>(started), startSkew = true;
+						else if (!delay || started > *delay) delay = static_cast<uint16_t>(started), startSkew = true, reason = "start";
 					}
-					if (delay && ProposeInputDelay(peer, *delay, FutureTimingFrame()) && startSkew) m_StartSkewSized.insert(peer);
+					if (delay && ProposeInputDelay(peer, *delay, FutureTimingFrame())) {
+						if (startSkew) m_StartSkewSized.insert(peer);
+						DiagnosticLine() << "[net-lockstep] delay proposal peer=" << static_cast<int>(peer) << " from=" << stats.delayFrames << " to=" << *delay << " reason=" << reason
+						                 << " rtt_p95_ms=" << estimator.P95Ms() << " jitter_ms=" << estimator.JitterMs() << " ping_ms=" << ping << " start_park_ms=" << stats.startParkMs << std::endl;
+					}
 				}
 			}
 		}
