@@ -3034,7 +3034,7 @@ def run_case(options, case, root, failing=None):
             # The two header rows carry the friendly mode label, and both peers' panels are the
             # same rectangle for the same lobby state - no peer's own status text widens its panel.
             # The host's port-map row is the host's own line, and its height is the only one a panel may add.
-            panels, port_map_rows = {}, {}
+            panels, port_map_rows, sentences = {}, {}, {}
             for who in ("host", "client"):
                 matches = [image for image in images if image["peer"] == who
                            and any(c["name"] == "LabelLobbyMatchMode" for c in image["controls"])]
@@ -3050,14 +3050,15 @@ def run_case(options, case, root, failing=None):
                     assert controls[name]["text_fits"] is True, (who, name, controls[name])
                 panels[who] = controls["MultiplayerLobbyPanel"]["rect"]
                 port_map_rows[who] = bool(controls.get("LabelLobbyPortMap", {}).get("visible"))
+                sentences[who] = controls["LabelMultiplayerStatus"]["rect"][3]
             host_panel, client_panel = panels["host"], panels["client"]
             assert not port_map_rows["client"], port_map_rows
-            if port_map_rows["host"]:
-                assert [host_panel[0], host_panel[2]] == [client_panel[0], client_panel[2]], panels
-                assert 0 <= host_panel[3] - client_panel[3] <= LOBBY_PORT_MAP_ROW, panels
-                assert abs(2 * host_panel[1] + host_panel[3] - 2 * client_panel[1] - client_panel[3]) <= 1, panels
-            else:
-                assert host_panel == client_panel, panels
+            # Each peer reads its own next-action sentence (the host's breaks onto a second line): the height the two
+            # sentences differ by and the host's port-map row are the only height one panel may add over the other.
+            own = sentences["host"] - sentences["client"]
+            assert [host_panel[0], host_panel[2]] == [client_panel[0], client_panel[2]], panels
+            assert own + (LOBBY_PORT_MAP_ROW if port_map_rows["host"] else 0) == host_panel[3] - client_panel[3], (panels, sentences)
+            assert abs(2 * host_panel[1] + host_panel[3] - 2 * client_panel[1] - client_panel[3]) <= 1, panels
             result["lobby_panel_rects"] = panels
             result["lobby_port_map_rows"] = port_map_rows
             result["key_committed"] = {"preset": preset, "scene": key_scene, "combo": picked_scene}
