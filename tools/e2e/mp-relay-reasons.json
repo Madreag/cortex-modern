@@ -89,7 +89,7 @@
       "screen": "MultiplayerScreen",
       "what": "The Relay-only joiner reads why it cannot join and what to change: 'The host's relay refused the credentials - ask the host to check the relay setting'.",
       "events": [
-        "assert_label LabelMultiplayerLandingStatus .*The host.s relay refused the credentials - ask the host to check the relay setting.*PASS"
+        "assert_label LabelJoinSelected .*The host.s relay refused the credentials - ask the host to check the relay setting.*PASS"
       ]
     },
     {
@@ -100,7 +100,7 @@
       "screen": "MultiplayerScreen",
       "what": "The Relay-only joiner reads why it cannot join and what to change: 'No relay is configured for this match - switch Connection to Automatic or Direct only'.",
       "events": [
-        "assert_label LabelMultiplayerLandingStatus .*No relay is configured for this match - switch Connection to Automatic or Direct only.*PASS"
+        "assert_label LabelJoinSelected .*No relay is configured for this match - switch Connection to Automatic or Direct only.*PASS"
       ]
     },
     {
