@@ -679,7 +679,9 @@ def run_sp_pause(options, root, size):
     (directory / "probe.json").write_text(json.dumps(sp_pause_probe(), indent=2) + "\n", encoding="utf-8")
     script = root / "sp-menu.txt"
     script.write_text(SP_MENU.format(done=directory / "done.json"), encoding="utf-8")
-    run = make_run(options.repo, ["-menu-script", str(script)], root / "sp", 240,
+    # Launched as the single-player smoke scene launches its skirmish (tools/e2e/sp-smoke.json), whose Escape opens this menu.
+    play_input = options.repo / "tools/e2e/play-input.txt"
+    run = make_run(options.repo, ["-input-script", str(play_input), "-menu-script", str(script)], root / "sp", 240,
                    env={"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(directory / "probe.json")})
     set_visual_resolution(run, width, height)
     try:
