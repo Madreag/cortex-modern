@@ -158,7 +158,11 @@ namespace RTE {
 	GnsDirectorySignalDispatcher::~GnsDirectorySignalDispatcher() { Stop(); }
 
 	std::shared_ptr<GnsDirectorySignalDispatcher> GnsDirectorySignalDispatcher::MakeMigrationStandby() {
-		return std::make_shared<GnsDirectorySignalDispatcher>();
+		// Its last poll would hold the simulation up to the drain budget, and the host's own end answers what it leaves.
+		return std::shared_ptr<GnsDirectorySignalDispatcher>(new GnsDirectorySignalDispatcher(), [](GnsDirectorySignalDispatcher* standby) {
+			standby->Stop(false);
+			delete standby;
+		});
 	}
 
 	bool GnsDirectorySignalDispatcher::Start(GnsTransport& transport, const Config& config) {
@@ -221,7 +225,7 @@ namespace RTE {
 		m_Channel.Update(nowMs);
 	}
 
-	void GnsDirectorySignalDispatcher::Stop() {
+	void GnsDirectorySignalDispatcher::Stop(bool drain) {
 		if (!m_Transport) {
 			return;
 		}
@@ -229,7 +233,11 @@ namespace RTE {
 		PumpOutboxes();
 		m_Counters.unpostedAtStop = m_Channel.PendingPosts();
 		SetPolling(false, SteadyNowMs());
-		m_Channel.Drain();
+		if (drain) {
+			m_Channel.Drain();
+		} else {
+			m_Channel.Abandon();
+		}
 		for (GnsDirectorySignaling* signaling : m_Signalings) {
 			signaling->Detach();
 		}
