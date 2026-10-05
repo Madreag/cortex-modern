@@ -22293,11 +22293,18 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		Feed growingFeed;
 		prepare(growing);
 		for (int step = 0; step < 120; ++step) play(growing, growingFeed, true);
+		for (int step = 0; step < 4; ++step) play(growing, growingFeed, false);
+		for (int step = 0; step < 120; ++step) play(growing, growingFeed, true);
 		for (int step = 0; step < 5; ++step) play(growing, growingFeed, false);
 		for (int step = 0; step < 60; ++step) play(growing, growingFeed, true);
 		const uint32_t afterShort = required(growing);
 		if (afterShort < linkOnly + static_cast<uint32_t>(std::ceil(152.0 / tick))) {
-			*error = "an 83 ms silence left no cover for the 152 ms one the same link went on to: required=" + std::to_string(afterShort) + " link_only=" + std::to_string(linkOnly);
+			*error = "silences of 67 and 83 ms left no cover for the 152 ms one the same link went on to: required=" + std::to_string(afterShort) + " link_only=" + std::to_string(linkOnly);
+			return false;
+		}
+		// One silence alone is carried as it was: a machine's single spike costs its delay no more than the spike (the thin-lead row).
+		if (covered > linkOnly + static_cast<uint32_t>(std::ceil(151.0 / tick))) {
+			*error = "a single 150 ms silence was carried as more than itself: required=" + std::to_string(covered) + " link_only=" + std::to_string(linkOnly);
 			return false;
 		}
 		std::cout << "[net-lockstep-selftest] PASS a_links_silence_keeps_its_cover link_only=" << linkOnly << " covered=" << covered << " after_short=" << afterShort << std::endl;
