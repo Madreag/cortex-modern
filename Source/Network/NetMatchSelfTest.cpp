@@ -5153,9 +5153,23 @@ namespace RTE {
 					*error = what + " opened as v" + std::to_string(opened->config.version) + (opened->config.persistentWorld ? " world" : " ordinary");
 					return false;
 				}
+				// The writer's own protocol stands in the header (bytes 4-5); every other byte is the recording's own layout.
+				std::vector<uint8_t> expected = bytes;
+				expected[4] = static_cast<uint8_t>(NetLobbyProtocol::c_Version & 0xFF);
+				expected[5] = static_cast<uint8_t>(NetLobbyProtocol::c_Version >> 8);
 				std::vector<uint8_t> again;
-				if (!NetLobbyProtocol::Encode({*opened}, again) || again != bytes) {
+				if (!NetLobbyProtocol::Encode({*opened}, again) || again != expected) {
 					*error = what + " was not written back in its own layout";
+					return false;
+				}
+				const auto reopened = NetLobbyProtocol::Decode(again, NetLobbyDecodeOptions{true});
+				const auto* back = reopened.ok ? std::get_if<NetLobbyMatchConfig>(&reopened.message.payload) : nullptr;
+				if (!back || !(*back == *opened)) {
+					*error = what + " written back did not reopen as itself";
+					return false;
+				}
+				if (NetLobbyProtocol::Decode(again).ok) {
+					*error = what + " written back opened as a live config";
 					return false;
 				}
 				if (NetLobbyProtocol::Decode(bytes).ok) {
