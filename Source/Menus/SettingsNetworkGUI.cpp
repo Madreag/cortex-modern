@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 
@@ -59,6 +60,16 @@ namespace {
 		return AutosaveStore::Directory().string();
 	}
 
+	// A run with no desktop of its own opens no window on the player's and leaves their clipboard alone.
+	bool Headless() {
+		const char* value = std::getenv("CCCP_HEADLESS");
+		return value && *value && std::string(value) != "0";
+	}
+
+	bool CopyPath(const std::string& path) {
+		return Headless() || GUIUtil::SetClipboardText(path);
+	}
+
 	// Creates the directory when absent so the opened folder always exists, then
 	// hands a file URI to the OS browser.
 	bool OpenFolder(const std::string& directory) {
@@ -66,6 +77,9 @@ namespace {
 		std::filesystem::create_directories(directory, error);
 		if (error) {
 			return false;
+		}
+		if (Headless()) {
+			return true;
 		}
 		std::string uri = "file:///";
 		for (char character: std::filesystem::path(directory).generic_string()) {
@@ -462,21 +476,17 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 				message = "Diagnostics are already being saved.";
 			}
 		} else if (guiEvent.GetControl()->GetName() == "ButtonNetOpenAutosaves") {
-			if (!OpenFolder(AutosavesDirectory())) {
-				message = "Could not open the autosaves folder.";
-			}
+			message = OpenFolder(AutosavesDirectory()) ? "Opened the autosaves folder." : "Could not open the autosaves folder.";
 		} else if (guiEvent.GetControl()->GetName() == "ButtonNetCopyAutosavesPath") {
-			if (!GUIUtil::SetClipboardText(AutosavesDirectory())) {
+			if (!CopyPath(AutosavesDirectory())) {
 				message = "Could not copy the folder path.";
 			} else {
 				message = "Copied " + AutosavesDirectory();
 			}
 		} else if (guiEvent.GetControl()->GetName() == "ButtonNetOpenDiagnostics") {
-			if (!OpenFolder(EffectiveTelemetryDirectory())) {
-				message = "Could not open the diagnostics folder.";
-			}
+			message = OpenFolder(EffectiveTelemetryDirectory()) ? "Opened the support reports folder." : "Could not open the support reports folder.";
 		} else if (guiEvent.GetControl()->GetName() == "ButtonNetCopyDiagPath") {
-			if (!GUIUtil::SetClipboardText(EffectiveTelemetryDirectory())) {
+			if (!CopyPath(EffectiveTelemetryDirectory())) {
 				message = "Could not copy the folder path.";
 			} else {
 				message = "Copied " + EffectiveTelemetryDirectory();
