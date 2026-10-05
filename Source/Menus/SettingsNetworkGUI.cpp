@@ -88,6 +88,14 @@ namespace {
 		return SDL_OpenURL(uri.c_str());
 	}
 
+	/// A message with a word wider than its row (a long folder path) scrolls along its one line instead of wrapping onto the rows above.
+	void ShowMessage(GUILabel* label, const std::string& text) {
+		label->SetText(text);
+		const bool wide = label->GetMaxWordWidth() > label->GetWidth();
+		label->SetHorizontalOverflowScroll(wide);
+		label->ActivateDeactivateOverflowScroll(wide);
+	}
+
 	std::string LatestFileName(const std::string& directory, const std::string& extension) {
 		std::error_code error;
 		std::string latest;
@@ -367,7 +375,7 @@ void SettingsNetworkGUI::ApplyTextboxes() {
 	// A refused value never stays on screen: the settings are what the page states.
 	ShowSavedValues();
 	if (diagDirRefused) {
-		m_FilesMessage->SetText("Diagnostics folder refused: no control characters allowed.");
+		ShowMessage(m_FilesMessage, "Diagnostics folder refused: no control characters allowed.");
 	}
 	m_InternetError->SetText(internetError);
 	m_NetworkSettingsBox->SetFocus();
@@ -434,10 +442,10 @@ void SettingsNetworkGUI::UpdateStatusLines() {
 
 	m_SaveDiagButton->SetEnabled(!TelemetryBundle::IsBusy());
 	if (TelemetryBundle::IsBusy()) {
-		m_FilesMessage->SetText("Saving diagnostics...");
+		ShowMessage(m_FilesMessage, "Saving diagnostics...");
 	} else {
 		const std::string latest = LatestFileName(EffectiveTelemetryDirectory(), ".zip");
-		m_FilesMessage->SetText(latest.empty() ? "No diagnostics saved yet." : "Latest: " + latest);
+		ShowMessage(m_FilesMessage, latest.empty() ? "No diagnostics saved yet." : "Latest: " + latest);
 	}
 
 	m_DirStatusLabel->SetText(g_SettingsMan.GetSessionDirectoryUrl().empty() ? "Not configured" : "Configured");
@@ -496,7 +504,7 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		}
 		UpdateStatusLines();
 		if (!message.empty()) {
-			m_FilesMessage->SetText(message);
+			ShowMessage(m_FilesMessage, message);
 		}
 		return;
 	}
