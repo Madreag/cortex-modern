@@ -692,7 +692,8 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 		return lhs.senderPeerId < rhs.senderPeerId;
 	});
 	for (const NetGameCommand& command: commands) {
-		if (std::holds_alternative<NetGameSeatHold>(command.payload) || std::holds_alternative<NetGameInputDelay>(command.payload) || std::holds_alternative<NetGameSeatReclaim>(command.payload)) continue;
+		if (std::holds_alternative<NetGameSeatHold>(command.payload) || std::holds_alternative<NetGameInputDelay>(command.payload) || std::holds_alternative<NetGameSeatReclaim>(command.payload) ||
+		    std::holds_alternative<NetGameSeatRelease>(command.payload)) continue;
 		if (const auto* bindings = std::get_if<NetGamePlayerBindings>(&command.payload)) {
 			ScenarioRunner::ObserveLockstepPlayerBindings(command.senderPeerId, readyFrame.frame, *bindings);
 			continue;
@@ -1244,7 +1245,7 @@ void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, co
 			}
 			ScenarioRunner::NoteE2eOwnerTransfer(uid);
 		}
-		if (ScenarioRunner::TakeExpiredDroppedClaim(uid, readyFrame.frame)) {
+		if (ScenarioRunner::TakeExpiredDroppedClaim(uid, readyFrame.frame, readyFrame.releasedPeerIds)) {
 			const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
 			if (seeded != 0 && ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), true) == seeded) {
 				MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
@@ -1257,6 +1258,10 @@ void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, co
 		if (ScenarioRunner::IsLockstepActorOwnerGone(uid, actor->GetTeam(), !actor->IsPlayerControlled(), readyFrame.frame)) {
 			actor->GetController()->SetDisabled(true);
 		}
+	}
+	for (uint8_t peer: readyFrame.releasedPeerIds) {
+		ScenarioRunner::EndReleasedSeatClaims(peer);
+		std::cout << "[net-match] seat " << static_cast<int>(peer) << " released at frame " << readyFrame.frame << ": its claims end" << std::endl;
 	}
 }
 

@@ -49,13 +49,15 @@ namespace RTE {
 				return NetGameCommandType::SeatReclaim;
 			} else if constexpr (std::is_same_v<T, NetGameCheckpoint>) {
 				return NetGameCommandType::Checkpoint;
+			} else if constexpr (std::is_same_v<T, NetGameSeatRelease>) {
+				return NetGameCommandType::SeatRelease;
 			}
 		}, payload);
 	}
 
 	int32_t NetGameCommandTeam(const NetGameCommandPayload& payload) {
 		return std::visit([](const auto& specific) -> int32_t {
-			if constexpr (std::is_same_v<std::decay_t<decltype(specific)>, NetGamePlayerBindings> || std::is_same_v<std::decay_t<decltype(specific)>, NetGameSeatHold> || std::is_same_v<std::decay_t<decltype(specific)>, NetGameInputDelay> || std::is_same_v<std::decay_t<decltype(specific)>, NetGameSeatReclaim> || std::is_same_v<std::decay_t<decltype(specific)>, NetGameCheckpoint>) return -1;
+			if constexpr (std::is_same_v<std::decay_t<decltype(specific)>, NetGamePlayerBindings> || std::is_same_v<std::decay_t<decltype(specific)>, NetGameSeatHold> || std::is_same_v<std::decay_t<decltype(specific)>, NetGameInputDelay> || std::is_same_v<std::decay_t<decltype(specific)>, NetGameSeatReclaim> || std::is_same_v<std::decay_t<decltype(specific)>, NetGameCheckpoint> || std::is_same_v<std::decay_t<decltype(specific)>, NetGameSeatRelease>) return -1;
 			else return specific.team;
 		}, payload);
 	}
@@ -103,6 +105,8 @@ namespace RTE {
 				return "InputDelay";
 			case NetGameCommandType::Checkpoint:
 				return "Checkpoint";
+			case NetGameCommandType::SeatRelease:
+				return "SeatRelease";
 		}
 		return "Unknown";
 	}

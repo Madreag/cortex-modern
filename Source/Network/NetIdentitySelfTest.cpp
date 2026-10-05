@@ -566,7 +566,7 @@ namespace RTE {
 			world.deterministicConfig = worldInputs.deterministicConfig;
 			joiner.deterministicConfig = defaultInputs.deterministicConfig;
 			const auto& supported = world.deterministicConfig;
-			if (supported.supportedLockstepCodecVersion != NetLockstepCodec::c_HoldMarkerVersion ||
+			if (supported.supportedLockstepCodecVersion != NetLockstepCodec::c_SeatReleaseVersion ||
 			    supported.supportedWorldLockstepCodecVersion != NetLockstepCodec::c_WorldVersion ||
 			    supported.supportedMatchConfigVersion != NetMatchConfigUtil::c_Version ||
 			    supported.supportedWorldMatchConfigVersion != NetMatchConfigUtil::c_PersistentWorldVersion) {
