@@ -317,17 +317,22 @@ def repair_probes(root):
     return {host: {"schema": 1, "timeout_ms": 170000, "steps": steps}, client: {"schema": 1, "timeout_ms": 170000, "steps": client_steps}}
 
 
-def host_leave_probes(root):
-    """The host leaves by hand; the sentence it read must be what happens to the client."""
-    host, client = NAMES[0], NAMES[1]
+def host_leave_probes(root, peers):
+    """The host leaves by hand; the sentence it read must be what happens to the others. Once the host has left, a client
+    may be in the menus (its match ended) or still playing (a new host took it), so its steps from there are menu-scope."""
+    host, clients = NAMES[0], list(NAMES[1:peers])
     steps = [{"op": "wait", "service": "Running", "sim_at_least": 200}, *keys("Escape"), *on_screen("Pause"),
              *hand("ButtonLeaveMatch"), *on_screen("PauseLeaveConfirm"), menu("dump_host_options"), shot("leave-host"),
              *hand("ButtonLeaveConfirm"), {"op": "wait", "service": "Completed", "scope": "menu"}, signal("left", "menu"),
-             {"op": "wait_file", "path": str(probe_root(root, client) / "read.json"), "scope": "menu"}, signal("done", "menu"), {"op": "finish"}]
-    client_steps = [{"op": "wait", "service": "Running", "sim_at_least": 200}, wait_file(probe_root(root, host) / "left.json"),
-                    {"op": "wait", "elapsed_ms": 8000}, read("LabelNetMatchStatus", tag="after-host-left"), shot("after-host-left-client"),
-                    signal("read"), {"op": "finish"}]
-    return {host: {"schema": 1, "timeout_ms": 170000, "steps": steps}, client: {"schema": 1, "timeout_ms": 170000, "steps": client_steps}}
+             *[{"op": "wait_file", "path": str(probe_root(root, client) / "checked.json"), "scope": "menu"} for client in clients],
+             signal("done", "menu"), {"op": "finish"}]
+    probes = {host: {"schema": 1, "timeout_ms": 170000, "steps": steps}}
+    for client in clients:
+        probes[client] = {"schema": 1, "timeout_ms": 170000, "steps": [
+            {"op": "wait", "service": "Running", "sim_at_least": 200},
+            {"op": "wait_file", "path": str(probe_root(root, host) / "left.json"), "scope": "menu"},
+            {"op": "wait", "elapsed_ms": 8000, "scope": "menu"}, signal("checked", "menu"), {"op": "finish"}]}
+    return probes
 
 
 def check_repair(checks, reads, logs):
@@ -338,17 +343,17 @@ def check_repair(checks, reads, logs):
     checks.check("repair-second-press-repairs", started, f"the client reloaded the host's snapshot: {started}")
 
 
-def check_host_leave(checks, captures, reads, logs, results):
-    host, client = NAMES[0], NAMES[1]
+def check_host_leave(checks, captures, logs, peers):
+    host, clients = NAMES[0], list(NAMES[1:peers])
     confirm = next((capture for capture in captures[host] if capture["screen"] == "PauseLeaveConfirm"), None)
     label = control_of(confirm, "LabelLeaveConfirm") if confirm else None
     text = label["text"] if label else ""
     plays_on = "Another player becomes the host" in text
     ends = "The match ends for everyone" in text
-    took_over = re.search(r"now hosting|hosting the match alone|Handover complete", logs[client], re.I) is not None
-    client_running = reads[client].get("after-host-left") is not None and results[client].get("pass")
-    checks.check("leave-text-host-true", (plays_on and took_over and client_running) or (ends and not took_over),
-                 f"confirmation {text!r}; the client took the match over: {took_over}; client still in the match: {bool(client_running)}")
+    took_over = [client for client in clients if re.search(r"now hosting|hosting the match alone|Handover complete", logs[client], re.I)]
+    ended = [client for client in clients if re.search(r"the match is over for this seat|PeerLeft:The host left the match", logs[client])]
+    checks.check("leave-text-host-true", (plays_on and took_over and not ended) or (ends and not took_over),
+                 f"confirmation {text!r}; a client took the match over: {took_over}; the match ended for: {ended}")
 
 
 def sp_pause_probe():
@@ -559,8 +564,8 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         who_list = list(NAMES[:2])
         ticks = 2400
     elif case == "host-leave":
-        probes = host_leave_probes(root)
-        who_list = list(NAMES[:2])
+        probes = host_leave_probes(root, peers)
+        who_list = list(NAMES[:peers])
         ticks = 3600
     else:
         probes = players_probes(root, peers, base, moderate)
@@ -578,7 +583,7 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         script = root / f"{who}-menu.txt"
         script.write_text(f"wait_file {menu_done} 300\nwait_ms 4000\nexit\n", encoding="utf-8")
         extra = ["-net-h4-apply", "1"] if who == NEWCOMER else []
-        args = ["-menu-script", str(script), *match_args(port, peers if case == "players" else 2, who if who != NEWCOMER else "joiner", ticks, extra, name=who)]
+        args = ["-menu-script", str(script), *match_args(port, peers if case in ("players", "host-leave") else 2, who if who != NEWCOMER else "joiner", ticks, extra, name=who)]
         diagnostics = "1" if case == "status" and options.diagnostics else "0"
         env = {"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(directory / "probe.json"), "CCCP_TEST_SCREEN_WATCHES": str(watches)}
         runs[who] = make_run(options.repo, args, root / who, 420, env=env)
@@ -654,7 +659,7 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
     elif case == "repair":
         check_repair(checks, reads, logs)
     elif case == "host-leave":
-        check_host_leave(checks, captures, reads, logs, results)
+        check_host_leave(checks, captures, logs, peers)
     else:
         check_players(checks, reads, peers, logs, base, moderate)
     return {"case": case, "size": size, "peers": peers, "moderate": moderate, "base": base, "checks": checks.rows,
@@ -736,7 +741,7 @@ def main():
             if case == "sp-pause":
                 rows.append(run_sp_pause(options, options.out / f"sp-pause-{size}", size))
             else:
-                rows.append(run_peers(options, options.out / f"{case}-{size}-{options.peers if case == 'players' else 2}p{'-diag' if case == 'status' and options.diagnostics else ''}", case, size,
+                rows.append(run_peers(options, options.out / f"{case}-{size}-{options.peers if case in ('players', 'host-leave') else 2}p{'-diag' if case == 'status' and options.diagnostics else ''}", case, size,
                                       options.peers, options.base, options.moderate and case == "players"))
             options.port += 1
     result = {"pass": all(row["pass"] for row in rows), "revision": subprocess.check_output(["git", "-C", str(options.repo), "rev-parse", "HEAD"], text=True).strip(),
