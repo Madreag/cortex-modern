@@ -2301,6 +2301,8 @@ def main(argv=None) -> int:
                         help="the host records no replay (no -net-replay-out, NetworkRecordReplays off): an engine that persists the relay "
                              "login in its replay is told apart from every other file it writes")
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--directory', choices=('public', 'lane', 'tunnel'),
+                        help="every selected row meets this directory instead of its own (lane: the run's directory through each box's ssh -R)")
     parser.add_argument('--table', type=Path, nargs='+')
     parser.add_argument('--remote-peers')
     parser.add_argument('--evidence-list', type=Path)
@@ -2344,6 +2346,8 @@ def main(argv=None) -> int:
         resolved = resolve_run(scenario, run, placement)
         if options.no_replay:
             resolved['record_replay'] = False
+        if options.directory:
+            resolved['directory'] = options.directory
         ticks = options.ticks or int(run.get('ticks') or scenario.get('ticks') or MATCH_TICKS)
         try:
             verdicts.append(run_one(scenario, resolved, out, boxes, ticks, book))
