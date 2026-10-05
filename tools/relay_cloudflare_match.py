@@ -2424,6 +2424,11 @@ def main(argv=None) -> int:
             resolved['record_replay'] = False
         if options.directory:
             resolved['directory'] = options.directory
+        # The lane directory is reached over the tailnet: a peer whose tunnel the row takes down could never list the session.
+        if resolved.get('directory') == 'lane' and any(peer.get('tailscale_down') for peer in resolved['peers']):
+            say(f'{run["name"]}: REFUSED: the lane directory is reached over the tailnet, and this row takes a peer\'s tunnel down')
+            verdicts.append(dict(name=run['name'], root=str(out / run['name']), passed=False, refused='lane directory with a tunnel taken down'))
+            continue
         ticks = options.ticks or int(run.get('ticks') or scenario.get('ticks') or MATCH_TICKS)
         try:
             verdicts.append(run_one(scenario, resolved, out, boxes, ticks, book))
