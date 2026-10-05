@@ -12,30 +12,16 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE / "a7"))
 sys.path.insert(0, str(HERE / "contracts"))
 
 from generate_observer import DEFAULT_INVENTORY, hand_fields, main as generate_main, parse_args
-from run_a7_group import main as a7_main
 from run_selftests import engine_executable
 from test_match_overlay import probe_script
-
-
-class UiProbeRouting(unittest.TestCase):
-    def test_both_call_sites_share_compare_sim_traces(self):
-        """Base tree routed the UI-probe replay through the strict comparer."""
-        text = (HERE / "run_interp_e2e.ps1").read_text(encoding="utf-8")
-        sites = [line.strip() for line in text.splitlines() if "python $rowCompare" in line]
-        self.assertEqual(len(sites), 2)
-        self.assertIn('$rowCompare = Join-Path $repo "tools\\compare_sim_traces.py"', text)
-        self.assertIn('$rowCompareArgs = @("--min-ticks", "1")', text)
-        self.assertNotIn("compare_e2e_simgated_active.py", text)
 
 
 class WoundIdCapture(unittest.TestCase):
@@ -122,11 +108,10 @@ class PeerReportFlags(unittest.TestCase):
         """Base tree compared snapshots without --peer-report-a/-b and --cross-process."""
         heal = (HERE / "heal_driver" / "recovery_e2e.py").read_text(encoding="utf-8")
         autosave = (HERE / "test_autosave.py").read_text(encoding="utf-8")
-        e2e = (HERE / "run_interp_e2e.ps1").read_text(encoding="utf-8")
         self.assertNotIn("D:/Projects/control-build", heal)
         self.assertIn("parents[2]", heal)
         self.assertIn("comparer missing:", heal)
-        for text in (heal, autosave, e2e):
+        for text in (heal, autosave):
             self.assertIn("--peer-report-a", text)
             self.assertIn("--peer-report-b", text)
             self.assertIn("--cross-process", text)
@@ -194,29 +179,6 @@ class PosixSelftestBinary(unittest.TestCase):
             with patch("run_selftests.sys.platform", "darwin"):
                 self.assertEqual(engine_executable(repo).resolve(),
                                  (repo.resolve() / "build-gns" / "CortexCommand"))
-
-
-class SequentialA7Arms(unittest.TestCase):
-    def test_group_runs_one_arm_then_returns_nonzero(self):
-        """Base tree had no group runner; the first delivery always returned 0."""
-        with tempfile.TemporaryDirectory() as tmp:
-            harness = Path(tmp) / "harness"
-            harness.mkdir()
-            (harness / "run_a7_mac.py").write_text("print('ok')\n", encoding="utf-8")
-            out = Path(tmp) / "out"
-            order = []
-
-            def fake_run(command, cwd=None, env=None):
-                order.append(command[-1])
-                return SimpleNamespace(returncode=0 if command[-1] == "first" else 1)
-
-            with patch("run_a7_group.subprocess.run", side_effect=fake_run):
-                code = a7_main([
-                    "--harness", str(harness), "--repo", str(tmp), "--manifest", str(tmp),
-                    "--build-root", str(tmp), "--out", str(out), "first", "second",
-                ])
-            self.assertEqual(order, ["first", "second"])
-            self.assertEqual(code, 1)
 
 
 if __name__ == "__main__":

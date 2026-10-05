@@ -1,6 +1,6 @@
 """Discarded previews must leave the canonical world byte-identical.
 
-Plays tools/fixtures/pickup_fire.ccreplay (recorded 2026-09-06 by run_interp_e2e.ps1: the dummy picks up the dropped
+Plays tools/fixtures/pickup_fire.ccreplay (a recorded two-peer duel: the dummy picks up the dropped
 Battle Rifle at tick 144 and fires at 161) and at tick 153 runs and discards previews of depths 1, 4, 7 and 12, once
 and three times each; every case must leave the canonical state as it found it, the Lua states included.
 """

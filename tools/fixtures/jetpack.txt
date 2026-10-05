@@ -1,3 +1,0 @@
-# Jetpack (host, player 0): switch to the dummy and hold jump for half a second; the jetpack burns fuel and lifts it.
-30 31 NEXT
-100 130 JUMP
