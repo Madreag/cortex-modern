@@ -283,7 +283,7 @@ namespace {
 	}
 
 	std::string ShownName(uint8_t peer, const std::string& name) {
-		return s_SharedNames.contains(name) ? name + " (" + std::to_string(peer) + ")" : name;
+		return s_SharedNames.contains(name) ? name + " (seat " + std::to_string(peer) + ")" : name;
 	}
 
 	std::string ShownName(const NetLobbyMember& member) { return ShownName(member.peerId, NetPlayerPresentation::Name(member)); }
@@ -291,7 +291,7 @@ namespace {
 	std::string ShownRow(const NetLobbyMember& member) {
 		std::string row = NetPlayerPresentation::Row(member);
 		const std::string name = NetPlayerPresentation::Name(member);
-		if (s_SharedNames.contains(name) && row.starts_with(name)) row.insert(name.size(), " (" + std::to_string(member.peerId) + ")");
+		if (s_SharedNames.contains(name) && row.starts_with(name)) row.insert(name.size(), " (seat " + std::to_string(member.peerId) + ")");
 		return row;
 	}
 
