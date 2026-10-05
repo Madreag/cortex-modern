@@ -1793,9 +1793,14 @@ def public_directory_lines(session: str | None) -> list[str]:
     if not session or not re.fullmatch(r'[0-9a-fA-F-]{8,64}', session):
         return []
     host, logs = PUBLIC_DIRECTORY_LOGS
-    done = subprocess.run(['ssh', '-o', 'BatchMode=yes', host, f"grep -h -F '{session}' {logs}/* 2>/dev/null | tail -400"],
+    done = subprocess.run(['ssh', '-o', 'BatchMode=yes', host, f"grep -h -F '{session}' {logs}/* 2>/dev/null"],
                           capture_output=True, text=True, timeout=120, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-    return done.stdout.splitlines()
+    # A long or busy match polls its signals thousands of times: the polls are kept for its last 400 lines only, and every other
+    # line (the session's creation, its relay offer, its listing) whenever it came.
+    lines = done.stdout.splitlines()
+    start = max(0, len(lines) - 400)
+    polls = ('/signals?', '/heartbeat', ' heartbeat session_id=', ' signal session_id=')
+    return [line for index, line in enumerate(lines) if index >= start or not any(mark in line for mark in polls)]
 
 
 def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> dict:

@@ -490,6 +490,24 @@ class HotspotRows(unittest.TestCase):
                   item['check'] not in judged_apart and item['check'] not in required[item['run']]]
         self.assertEqual(unread, [], 'items whose check their row never computes read as absent and fail every run')
 
+    def test_a_busy_session_keeps_its_offer_in_the_directory_lines(self):
+        match = self.match()
+        session = '9dc65d53-88b9-48d8-bc3f-6efd89225510'
+        offer = f'2026-10-05 04:43:30,000 INFO relay_offer_issued {{"session_id": "{session}", "provider": "cloudflare"}}'
+        polls = [f'2026-10-05 04:45:41,408 INFO 127.0.0.1 "GET /v1/sessions/{session}/signals?peer=host&after={n}&wait=2 HTTP/1.1" 200 -'
+                 for n in range(600)]
+        lines = [offer, *polls, f'2026-10-05 04:48:10,000 INFO 127.0.0.1 "DELETE /v1/sessions/{session} HTTP/1.1" 204 -']
+
+        def ssh(argv, **_):
+            # The Mac's shell runs the command's own pipeline.
+            tail = re.search(r'\| tail -(\d+)\s*$', argv[-1])
+            return mock.Mock(stdout='\n'.join(lines[-int(tail.group(1)):] if tail else lines) + '\n')
+        with mock.patch.object(match.subprocess, 'run', side_effect=ssh):
+            got = match.public_directory_lines(session)
+        self.assertIn(offer, got, 'a four-player session logs more polls than the window: its offer must stay')
+        self.assertIn(lines[-1], got)
+        self.assertLessEqual(len(got), 402)
+
     def test_every_hotspot_row_is_declared_with_its_lever(self):
         scenario = json.loads((Path(__file__).resolve().parent / 'e2e/mp-relay-hotspot.json').read_text(encoding='utf-8'))
         named = {run['name']: run for run in scenario['runs']}
