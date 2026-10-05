@@ -1360,7 +1360,18 @@ namespace RTE::MenuAutomation {
 				auto* label = dynamic_cast<GUILabel*>(control);
 				// A label draws nothing but its text.
 				if (label && !captioned) continue;
-				const Rect rect = label ? LabelTextRect(label, Rectangle(control->GetPanel())) : Rectangle(control->GetPanel());
+				Rect rect = label ? LabelTextRect(label, Rectangle(control->GetPanel())) : Rectangle(control->GetPanel());
+				// A check box or a radio button draws its box and its caption, not the rest of its rect.
+				const bool checkbox = dynamic_cast<GUICheckbox*>(control);
+				if (captioned && (checkbox || dynamic_cast<GUIRadioButton*>(control))) {
+					const std::string section = checkbox ? "Checkbox" : "RadioButton";
+					std::string fontName;
+					int base[4]{};
+					manager->GetSkin()->GetValue(section, "Base", base, 4);
+					if (manager->GetSkin()->GetValue(section, "Font", &fontName)) {
+						if (GUIFont* font = manager->GetSkin()->GetFont(fontName)) rect[2] = std::min(rect[2], base[2] + (checkbox ? 2 : 0) + font->CalculateWidth(" " + text));
+					}
+				}
 				panels[control->GetPanel()->GetParentPanel()].emplace_back(control, rect, captioned);
 			}
 			for (const auto& [parent, shown]: panels) {
