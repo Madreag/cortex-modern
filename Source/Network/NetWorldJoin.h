@@ -227,6 +227,8 @@ namespace RTE {
 		/// frames plus one file. 0 leaves it to PruneJournalBefore alone.
 		void SetJournalRetention(uint64_t frames) { m_JournalRetain = frames; }
 		uint64_t JournalRetention() const { return m_JournalRetain; }
+		/// The most frames the journal ever holds: its retention plus the file being written. 0 while no retention bounds it.
+		uint64_t JournalBoundFrames() const { return m_JournalRetain == 0 ? 0 : m_JournalRetain + c_JournalSegmentFrames; }
 		/// Why the journal stopped taking frames; empty while it works.
 		std::string JournalFailure() const;
 		/// Replaces a failed journal with a fresh one beside it, seeded with the frames still in memory. Refuses until its retry frame,
@@ -686,6 +688,11 @@ namespace RTE {
 		/// Binds the frozen image to every bootstrap still waiting for one.
 		void PublishImage(const NetWorldCheckpointImage& image);
 		const NetWorldCheckpointImage& Image() const { return m_Image; }
+		/// Whether the round's history, on disk or in memory, still holds every frame after the published image, so a joiner sent it
+		/// can catch up from it; false without an image or a history.
+		bool ImageHistoryServable() const { return m_Image.IsValid() && m_Tail.Count() != 0 && m_Image.tick + 1 >= m_Tail.FirstServableFrame(); }
+		/// Whether the round's history has moved past the frame after the published image, so no joiner can catch up from it.
+		bool ImageHistoryLost() const { return m_Image.IsValid() && m_Tail.Count() != 0 && m_Image.tick + 1 < m_Tail.FirstServableFrame(); }
 		/// Records that the joiner has the whole image and has begun replaying the tail.
 		bool NoteTransferComplete(NetPeerId connection, uint64_t bytes, std::string* error = nullptr);
 		bool NoteTransferProgress(NetPeerId connection, uint16_t ackedChunks, uint16_t totalChunks);

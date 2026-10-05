@@ -1077,6 +1077,7 @@ namespace RTE {
 				s.replies->push_back({404, R"({"error":"not_found"})", ""});
 				s.replies->push_back({200, R"({"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				s.replies->push_back({404, R"({"error":"not_found"})", ""});
+				s.replies->push_back({200, R"({"session_id":"9d2e1f3a-3333-4444-8555-666677778888","token":"tok3","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 
 				s.client.Advertise(SampleRegisterRequest(), false);
 				s.client.Update(0);
@@ -1093,11 +1094,83 @@ namespace RTE {
 					return false;
 				}
 				s.client.Update(10000); // heartbeat against the new session -> 404 again
-				s.client.Update(10000); // the once-only re-register is spent: the client fails closed
-				if (s.client.GetState() != NetDirectoryClient::State::Failed || s.sent->size() != 4) {
-					*error = "a second 404 did not fail closed";
+				s.client.Update(10000); // lost again before it beat: no register at once, the backoff first
+				if (s.client.GetState() != NetDirectoryClient::State::Registering || s.sent->size() != 4) {
+					*error = std::string("a second 404 before the row beat was not held to the backoff: state=") + NetDirectoryClient::StateName(s.client.GetState()) +
+					         " requests=" + std::to_string(s.sent->size());
 					return false;
 				}
+				s.client.Update(14999);
+				s.client.Update(15000); // the backoff is over: the row registers again, never given up
+				s.client.Update(15000);
+				if (s.sent->size() != 5 || !RequestIs(s.sent->at(4), "POST", "/v1/sessions", error) || s.client.GetState() != NetDirectoryClient::State::Registered ||
+				    s.client.GetSessionId() != "9d2e1f3a-3333-4444-8555-666677778888") {
+					*error = std::string("the row lost twice was given up: state=") + NetDirectoryClient::StateName(s.client.GetState()) + " requests=" + std::to_string(s.sent->size()) +
+					         (error->empty() ? std::string() : " " + *error);
+					return false;
+				}
+				return true;
+			}
+
+			// A persistent world outlives directory restarts: a service that forgot the row (heartbeat 404) and so holds no token for it
+			// refuses the world's stored token (403); the world then claims its own id as on its first boot, though the host hands the
+			// client the refused token again every frame, and its row comes back under the same id. A later restart is answered the same way.
+			bool TestAWorldTakesItsRowBackFromAForgetfulDirectory(std::string* error) {
+				const std::string world = "5e6f7a8b-1111-4222-8333-444455556666";
+				const auto granted = [&](const char* token) {
+					return NetDirectoryClient::Reply{200, R"({"session_id":")" + world + R"(","token":")" + token + R"(","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""};
+				};
+				const NetDirectoryClient::Reply beat{200, R"({"expires_in_s":15,"heartbeat_s":5})", ""};
+				const NetDirectoryClient::Reply gone{404, R"({"error":"not_found"})", ""};
+				const NetDirectoryClient::Reply forbidden{403, R"({"error":"forbidden"})", ""};
+				ScriptedClient s;
+				for (const NetDirectoryClient::Reply& reply: {granted("tok-1"), beat, gone, forbidden, granted("tok-2"), beat, gone, forbidden, granted("tok-3")}) s.replies->push_back(reply);
+				NetDirectoryRegisterRequest row = SampleRegisterRequest();
+				row.persistentWorld = true;
+				row.worldId = world;
+				row.worldBoot = 1;
+				if (!s.client.Resume(row, world, "", true, true)) {
+					*error = "world-reclaim: the first boot's claim of its own id was refused by the client";
+					return false;
+				}
+				// What the host does every frame: it hands the client its row, whose resume token is the last one the service issued.
+				const auto frame = [&](uint64_t nowMs) {
+					row.resumeSessionId = world;
+					if (!s.client.GetToken().empty()) row.resumeToken = s.client.GetToken();
+					s.client.Advertise(row, true, true);
+					s.client.Update(nowMs);
+				};
+				for (uint64_t now: {0, 0, 5000, 5000, 10000, 10000, 10000, 10000, 15000, 15000, 20000, 20000, 25000, 25000, 25000, 25000, 30000, 30000}) frame(now);
+				std::vector<std::string> claims;
+				for (const NetDirectoryClient::Request& request: *s.sent) {
+					if (request.method != "POST" || request.path != "/v1/sessions") continue;
+					NetDirectoryRegisterRequest sent;
+					std::string reason;
+					if (!NetDirectoryCodec::DecodeRegisterRequest(request.body, sent, reason)) {
+						*error = "world-reclaim: a register body did not decode: " + reason;
+						return false;
+					}
+					claims.push_back(sent.resumeSessionId + "/" + (sent.resumeToken.empty() ? "-" : sent.resumeToken));
+				}
+				std::string seen;
+				for (const std::string& claim: claims) seen += (seen.empty() ? "" : ",") + claim;
+				const std::vector<std::string> wanted = {world + "/-", world + "/tok-1", world + "/-", world + "/tok-2", world + "/-"};
+				if (claims != wanted) {
+					*error = "world-reclaim: the world's registers claimed " + seen + "; a token the directory refused must give way to the world's own id";
+					return false;
+				}
+				if (s.client.GetState() != NetDirectoryClient::State::Registered || s.client.GetSessionId() != world || s.client.GetToken() != "tok-3") {
+					*error = std::string("world-reclaim: after two directory restarts the client is ") + NetDirectoryClient::StateName(s.client.GetState()) + " on '" +
+					         s.client.GetSessionId() + "' (claims " + seen + ")";
+					return false;
+				}
+				NetDirectoryRegisterRequest stale = row;
+				stale.resumeToken = "tok-1";
+				if (s.client.ClaimedSessionId(stale) != world) {
+					*error = "world-reclaim: a row carrying the refused token is not named as claiming the world's id";
+					return false;
+				}
+				std::cout << "[net-directory-selftest] PASS a_world_takes_its_row_back_from_a_forgetful_directory claims=" << seen << std::endl;
 				return true;
 			}
 
@@ -2930,6 +3003,7 @@ namespace RTE {
 			if (!TestClientLifecycle(&error)) return fail(error);
 			if (!TestRelayCredentialRequest(&error)) return fail(error);
 			if (!TestHeartbeat404Reregisters(&error)) return fail(error);
+			if (!TestAWorldTakesItsRowBackFromAForgetfulDirectory(&error)) return fail(error);
 			if (!TestASupersededHostKeepsTheRowNoMore(&error)) return fail(error);
 			if (!TestHeartbeat429HonorsRetryAfter(&error)) return fail(error);
 			if (!TestTransportErrorBackoff(&error)) return fail(error);

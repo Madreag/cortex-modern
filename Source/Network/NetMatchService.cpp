@@ -2792,8 +2792,8 @@ static std::string ResyncSaveName() {
 				m_DirectoryRow.spectatorFree = m_WorldSpectatorsFree;
 				m_DirectoryRow.joinMode = NetIceRowJoinMode(m_IceEnabled, !m_DirectoryRow.listenAddrs.empty(), m_IceBoundSessionId, m_Directory.GetSessionId());
 				advertised = m_DirectoryRow;
-				// A register receives a new id; only the existing bound row can advertise ICE.
-				advertised.joinMode = NetIceRowJoinMode(m_IceEnabled, !advertised.listenAddrs.empty(), m_IceBoundSessionId, std::string());
+				// A register receives a new id unless it claims the row's own again; only the bound id can advertise ICE.
+				advertised.joinMode = NetIceRowJoinMode(m_IceEnabled, !advertised.listenAddrs.empty(), m_IceBoundSessionId, m_Directory.ClaimedSessionId(advertised));
 			}
 			if (!advertised.resumeSessionId.empty() && m_Directory.GetState() == NetDirectoryClient::State::Idle && m_Directory.GetSessionId().empty()) {
 				(void)m_Directory.Resume(advertised, advertised.resumeSessionId, advertised.resumeToken, directoryRunning, directoryListed);
@@ -2810,13 +2810,22 @@ static std::string ResyncSaveName() {
 		// The directory holds the row at a later generation: the match went on without this host.
 		if (m_IsHost && m_Coordinator && m_Directory.GetState() == NetDirectoryClient::State::Superseded) m_Coordinator->NoteSuperseded(static_cast<uint64_t>(m_Directory.GetSupersededGeneration()));
 		UpdateRelayOffer(nowMs);
+		std::string reboundSignal;
 		{
 			// The worker cannot touch the directory client, so what it needs is published here.
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_DirectorySessionId = m_Directory.GetSessionId();
 			m_DirectoryToken = m_Directory.GetToken();
 			m_DirectoryRegistered = m_Directory.GetState() == NetDirectoryClient::State::Registered;
+			// A directory that lost the row and took it back issued it a new token: the host's signal channel answers on that one.
+			if (m_IsHost && m_DirectoryRegistered && !m_DirectoryToken.empty() && !m_IceBoundSessionId.empty() && m_DirectorySessionId == m_IceBoundSessionId) {
+				if (const auto signal = m_HostSignalCredential.load(); signal && signal->token != m_DirectoryToken) {
+					m_HostSignalCredential.store(std::make_shared<const HostSignalCredential>(HostSignalCredential{m_DirectorySessionId, m_DirectoryToken}));
+					reboundSignal = m_DirectorySessionId;
+				}
+			}
 		}
+		if (!reboundSignal.empty()) System::PrintDiagnosticLine("[net-ice] host signal channel follows the re-registered row session=" + reboundSignal);
 		// The world's image follows the writer thread, never a file read on this one.
 		if (m_IsHost) {
 			PublishFinishedWorldJoinImage();
@@ -3812,13 +3821,18 @@ static std::string ResyncSaveName() {
 		if (tick % 60 == 0) PruneReturnHistory(tick);
 	}
 
+	std::optional<uint64_t> NetMatchService::WorldServedBase(const NetWorldJoinHost& host) {
+		// A world's joiner starts from the published image while the round's history still holds the frames after it; past that it
+		// waits for the capture its join asks for.
+		return host.ImageHistoryServable() ? std::optional<uint64_t>(host.Image().tick) : std::nullopt;
+	}
+
 	std::optional<uint64_t> NetMatchService::ServedReturnBaseLocked(uint64_t nowMs) const {
 		// A returner arriving now is served the published base, unless it would take a new one.
 		std::optional<uint64_t> served;
 		const NetWorldCheckpointImage& image = m_WorldJoin.Image();
 		if (image.IsValid() && !m_WorldJoin.IsPrivateMatch()) {
-			// A world's joiner starts from the published image while its tail is still in memory; an older one waits for the capture its join asks for.
-			if (m_WorldJoin.Tail().Count() != 0 && image.tick + 1 >= m_WorldJoin.Tail().FirstFrame()) served = image.tick;
+			served = WorldServedBase(m_WorldJoin);
 		} else if (image.IsValid()) {
 			const bool fresh = m_PrivateImageTakenMs != 0 && nowMs - m_PrivateImageTakenMs < c_PrivateImageMinIntervalMs;
 			if (!m_PrivateImageRecapture && (fresh || !PrivateBaseRefreshDue(true, 0, image.tick, SteadyCaptureMs(m_PrivateCaptureCosts)))) served = image.tick;
@@ -4032,7 +4046,7 @@ static std::string ResyncSaveName() {
 					const NetWorldFrameLog::JournalStats journal = tail.GetJournalStats();
 					uint64_t journalBound = m_LastReturnHistoryFloor != 0 && journal.last >= m_LastReturnHistoryFloor ? journal.last + 1 - m_LastReturnHistoryFloor + NetWorldFrameLog::c_JournalSegmentFrames : 0;
 					// The host's retained history caps it whatever the floor reads.
-					if (tail.JournalRetention() != 0) journalBound = std::min(journalBound, tail.JournalRetention() + NetWorldFrameLog::c_JournalSegmentFrames);
+					if (tail.JournalBoundFrames() != 0) journalBound = std::min(journalBound, tail.JournalBoundFrames());
 					System::PrintDiagnosticLine(std::format("[round-history] tick={} memory_frames={} memory_bytes={} memory_bound_frames={} memory_bound_bytes={} journal_files={} journal_bytes={} "
 					                                        "journal_first={} journal_last={} floor={} journal_bound_frames={} journal_index_bytes={} journal_cached_reads={} journal_cached_read_bytes={} "
 					                                        "journal_retain_frames={} journal_failed={} journal_reopens={} journal_retain_by={}",
@@ -4534,6 +4548,11 @@ static std::string ResyncSaveName() {
 		}
 		if (!m_Runner || !m_WorldJoin.Image().IsValid()) {
 			if (error) *error = "the joiner has no image yet";
+			return false;
+		}
+		// An image the round's history has moved past could never be caught up from: the join waits for the capture it asked for.
+		if (!m_WorldJoin.IsPrivateMatch() && m_WorldJoin.ImageHistoryLost()) {
+			if (error) *error = "the published image is older than the round's history; waiting for the capture this join asked for";
 			return false;
 		}
 		// Every cheap refusal is answered before the archive is touched: this runs on the sim thread
@@ -9820,6 +9839,7 @@ static std::string ResyncSaveName() {
 				if (error) *error = "the host signal channel would not open";
 				return false;
 			}
+			m_HostSignalCredential.store(std::make_shared<const HostSignalCredential>(HostSignalCredential{sessionId, token}));
 			const std::string iceSeed = (request.persistentWorld && !request.worldId.empty()) ? request.worldId : sessionId;
 			const std::string identity = NetIceHostIdentity(iceSeed);
 			NetRelayConfig relay;
@@ -10411,13 +10431,28 @@ static std::string ResyncSaveName() {
 			}
 			if (started && m_Dispatcher) {
 				GnsDirectorySignalDispatcher* dispatcher = m_Dispatcher.get();
-				mux->SetPump([this, dispatcher, p2p = mux->P2PGns(), previous = NetRelayConfig{},
+				// The mux calls a copy of its pump every poll, so what the pump remembers between polls lives here.
+				struct PumpMemory {
+					NetRelayConfig previous;
+					std::shared_ptr<const HostSignalCredential> appliedSignal;
+				};
+				auto memory = std::make_shared<PumpMemory>();
+				memory->appliedSignal = m_HostSignalCredential.load();
+				mux->SetPump([this, dispatcher, p2p = mux->P2PGns(), memory,
 				              initial = request.host ? mux->HostP2PConfig() : mux->GetJoinSpec().p2p,
-				              personal = !g_SettingsMan.GetNetworkPlayerTurnServers().empty() || g_SettingsMan.HasNetworkTurnServersOverride()]() mutable {
+				              personal = !g_SettingsMan.GetNetworkPlayerTurnServers().empty() || g_SettingsMan.HasNetworkTurnServersOverride(),
+				              host = request.host]() {
+					if (host) {
+						if (auto signal = m_HostSignalCredential.load(); signal && signal != memory->appliedSignal) {
+							if (memory->appliedSignal && (signal->sessionId != memory->appliedSignal->sessionId || signal->token != memory->appliedSignal->token))
+								dispatcher->RebindHost(signal->sessionId, signal->token);
+							memory->appliedSignal = std::move(signal);
+						}
+					}
 					dispatcher->Update(SteadyNowMs());
 					const auto snapshot = m_RelaySnapshot.load();
 					NetRelayConfig offer = snapshot ? *snapshot : NetRelayConfig{};
-					if (offer != previous) {
+					if (offer != memory->previous) {
 						GnsP2PConfig update = initial;
 						if (!personal && initial.connectionMode != 1) {
 							update.turnServerList.clear(); update.turnUserList.clear(); update.turnPassList.clear();
@@ -10429,7 +10464,7 @@ static std::string ResyncSaveName() {
 							update.iceEnable = initial.connectionMode == 2 ? 1 : (initial.stunServerList.empty() ? 2 : 6) | (update.turnServerList.empty() ? 0 : 1);
 						}
 						p2p->UpdateListenerIceServers(update);
-						previous = std::move(offer);
+						memory->previous = std::move(offer);
 					}
 				});
 			}

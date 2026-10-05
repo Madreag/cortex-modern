@@ -169,6 +169,7 @@ namespace RTE {
 		Stop();
 		m_Transport = &transport;
 		m_Role = config.role;
+		m_Config = config;
 		m_SessionId = config.sessionId;
 		m_Stopping = false;
 		m_Counters = {};
@@ -223,6 +224,18 @@ namespace RTE {
 		}
 		PumpOutboxes();
 		m_Channel.Update(nowMs);
+	}
+
+	void GnsDirectorySignalDispatcher::RebindHost(const std::string& sessionId, const std::string& sessionToken) {
+		if (!m_Transport || m_Role != Role::Host || m_Stopping) {
+			return;
+		}
+		m_Config.sessionId = sessionId;
+		m_Config.sessionToken = sessionToken;
+		m_SessionId = sessionId;
+		m_Channel.ConfigureHost(m_Config.baseUrl, m_Config.installKey, m_Config.certPinSha256, sessionId, sessionToken);
+		m_Channel.SetPolling(m_PollArmed);
+		Note("host channel rebound to session " + sessionId + ": " + NetDirectorySignalChannel::StateName(m_Channel.GetState()));
 	}
 
 	void GnsDirectorySignalDispatcher::Stop(bool drain) {
