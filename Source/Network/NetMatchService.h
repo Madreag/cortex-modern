@@ -1655,7 +1655,7 @@ namespace RTE {
 		void DriveAutoSubstitution(uint64_t nowMs);
 		/// Called with the service lock on the game thread, when it owns the admission plane.
 		void PublishModerationView();
-		/// CCCP_TEST_KICK_HELD_AFTER_MS: the host kicks a seat the AI has held that long, through the Seats panel's own removal.
+		/// CCCP_TEST_KICK_HELD_AFTER_MS=MS[:SEAT]: the host kicks a seat the AI has held that long, through the Seats panel's own removal.
 		void KickHeldSeatsForTestLocked(uint64_t nowMs);
 		std::map<uint8_t, uint64_t> m_TestHeldSinceMs; //!< Host, under the kick lever: when each held seat was first seen held.
 		std::set<uint8_t> m_TestKickedSeats; //!< Host, under the kick lever: the seats it kicked.

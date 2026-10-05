@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import feel_measure as measure
-from feel.retained_resume import compare_live_hashes
+from feel.retained_resume import compare_live_hashes_or_fail
 
 KICKED = re.compile(r'\[net-test\] kicked held seat (\d+) after (\d+)ms: (\w+)')
 RELEASED = re.compile(r'\[net-match\] seat (\d+) released at frame (\d+): its claims end')
@@ -36,17 +36,17 @@ def judge(run: Path) -> dict:
     kicked = [dict(seat=int(seat), after_ms=int(after), result=result) for seat, after, result in KICKED.findall(logs['host'])]
     released = {peer: [dict(seat=int(seat), frame=int(frame)) for seat, frame in RELEASED.findall(logs[peer])] for peer in ('host', 'survivor')}
     desyncs = {peer: [line for line in logs[peer].splitlines() if DESYNC.search(line)] for peer in ('host', 'survivor')}
-    comparison = compare_live_hashes(run / 'host-live.jsonl', run / 'survivor-live.jsonl', 1)
+    comparison = compare_live_hashes_or_fail(run / 'host-live.jsonl', run / 'survivor-live.jsonl', 1)
     records = json.loads(read(run / 'run-result.json') or '{}')
     exits = {peer: records.get(peer, {}).get('exit_code') for peer in ('host', 'client', 'survivor')}
     release_frames = {peer: [row['frame'] for row in rows] for peer, rows in released.items()}
-    last_compared = max((row['last_tick'] for row in comparison), default=0)
+    last_compared = max((row['last_tick'] or 0 for row in comparison), default=0)
     reasons = []
     if not kicked or kicked[0]['result'] != 'Ok':
         reasons.append(f'the host did not kick the held seat: {kicked}')
     if not release_frames['host'] or release_frames['host'] != release_frames['survivor']:
         reasons.append(f'the release frames differ: host {release_frames["host"]} survivor {release_frames["survivor"]}')
-    if not comparison or any(row['mismatched_ticks'] or row['mismatched_applied_input_ticks'] or not row['compared_ticks'] for row in comparison):
+    if not comparison or any(row.get('status') == 'FAIL' or row['mismatched_ticks'] or row['mismatched_applied_input_ticks'] or not row['compared_ticks'] for row in comparison):
         reasons.append(f'the per-tick hashes differ: {comparison}')
     elif release_frames['host'] and last_compared <= release_frames['host'][0]:
         reasons.append(f'the hashes stop at {last_compared}, before the release at {release_frames["host"][0]}')
@@ -65,7 +65,7 @@ def main() -> int:
     parser.add_argument('--lag', type=int, default=100, help='fake one-way lag on every peer, ms')
     parser.add_argument('--jitter', type=int, default=40, help='fake jitter on every peer, ms')
     parser.add_argument('--stall-tick', type=int, default=600, help='the tick the client stalls at')
-    parser.add_argument('--kick-after-ms', type=int, default=2000, help='how long the AI holds the seat before the host kicks it')
+    parser.add_argument('--kick-after-ms', type=int, default=2000, help='how long the AI holds the seat before the host kicks it (under 20 s)')
     parser.add_argument('--ticks', type=int, default=2400)
     parser.add_argument('--timeout', type=int, default=600)
     parser.add_argument('--judge-only', type=Path, help='judge an earlier run directory instead of launching')
@@ -78,10 +78,10 @@ def main() -> int:
     root.mkdir(parents=True, exist_ok=False)
     script = root / 'input.txt'
     measure.input_pattern(script)
-    # Every engine inherits the lever; only a host kicks.
-    os.environ['CCCP_TEST_KICK_HELD_AFTER_MS'] = str(args.kick_after_ms)
-    # The client stays stalled past the match's end, so the kick meets a seat still held.
-    stall_ms = int((args.ticks - args.stall_tick) * 1000 / 60) + 10000
+    # Every engine inherits the lever; only a host kicks, and only the client's seat (lockstep seat 2).
+    os.environ['CCCP_TEST_KICK_HELD_AFTER_MS'] = f'{args.kick_after_ms}:2'
+    # The longest stall the lever takes: the kick meets the seat still held, well before it could come back.
+    stall_ms = 20000
     run = measure.launch_case(root, 'release', args.lag, 60, False, args.port, script,
                               measure.file_record(measure.engine_executable(measure.REPO))['sha256'], args.timeout,
                               three_peers=True, live_stalls=[(args.stall_tick, stall_ms)], jitter_ms=args.jitter, window_ticks=args.ticks)
