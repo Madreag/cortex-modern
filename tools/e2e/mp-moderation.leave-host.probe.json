@@ -50,7 +50,10 @@
     },
     {
       "op": "wait",
-      "renders": 3
+      "control": "NetworkSeatApplicant0",
+      "equals": {
+        "selected": 0
+      }
     },
     {
       "op": "mouse_up",
