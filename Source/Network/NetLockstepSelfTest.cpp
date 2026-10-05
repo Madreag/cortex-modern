@@ -2071,8 +2071,13 @@ namespace RTE {
 
 		bool WarmBoundedInputFixture(std::initializer_list<std::pair<NetLockstepCoordinator*, LoopbackTransport*>> peers, uint64_t& now, std::string* error) {
 			for (const auto& [peer, wire]: peers) {
-				for (uint64_t producer = 0; producer + peer->GetConfig().inputDelayFrames <= 100; ++producer)
-					if (!peer->QueueLocalInput(producer, {}, {}, error)) return false;
+				for (uint64_t producer = 0; producer + peer->GetConfig().inputDelayFrames <= 100; ++producer) {
+					if (!peer->QueueLocalInput(producer, {}, {}, error)) {
+						*error = "startup prefix queue failed: peer=" + std::to_string(peer->GetConfig().localPeerId) + " producer=" + std::to_string(producer) +
+						         " state=" + NetLockstepCoordinator::StateName(peer->GetState()) + " " + *error;
+						return false;
+					}
+				}
 			}
 			for (const uint64_t deadline = now + 100; now < deadline; ++now) {
 				for (const auto& [peer, wire]: peers) { wire->AdvanceTimeMs(1); peer->Tick(now); }
@@ -2632,7 +2637,9 @@ namespace RTE {
 			if (!host.ProposeInputDelay(2, 4, 20, error)) return false;
 			NetLockstepReadyFrame ready;
 			for (uint64_t frame = 0; frame < 20; ++frame) {
-				if (!host.QueueLocalInput(frame, {}, {}, error) || !client.QueueLocalInput(frame, {}, {}, error)) return false;
+				if (!host.QueueLocalInput(frame, {}, {}, error) || !client.QueueLocalInput(frame, {}, {}, error)) {
+					*error = "timing fixture prefix at producer " + std::to_string(frame) + ": " + *error; return false;
+				}
 				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(20 + frame);
 				if (!host.PopReadyFrame(ready) || ready.frame != frame) { *error = "the acknowledgement fixture lost an input before its timing boundary"; return false; }
 			}
@@ -2644,7 +2651,10 @@ namespace RTE {
 			}
 			host.NoteFrameWait(20, 100, true);
 			host.NoteFrameWait(20, 150, true);
-			if (!host.QueueLocalInput(20, {}, {}, error)) return false;
+			if (!host.QueueLocalInput(20, {}, {}, error)) {
+				*error = "timing fixture after deadline: " + *error + " next=" + std::to_string(host.GetStats().nextFrame) +
+				         " holds=" + std::to_string(host.GetStats().peers.at(2).holds); return false;
+			}
 			host.Tick(151);
 			if (host.TimingDecisionPendingAt(20) || !host.PopReadyFrame(ready) || ready.frame != 20 ||
 			    host.IsPeerGoneAtFrame(2, 20) || !host.IsPeerGoneAtFrame(2, 21) || host.InputDelayAt(2, 20) != 4) {
@@ -2820,10 +2830,19 @@ namespace RTE {
 			std::vector<NetGameCommand> queued;
 			if (host.PeekQueuedCommands(11, 2, queued) && !queued.empty()) { *error = "the fenced transport replayed a stale purchase after reclaim"; return false; }
 			if (boundedReturn) {
+				if (!host.QueueLocalInput(firstRequired, {}, {}, error) || !returning.QueueLocalInput(firstRequired - b.inputDelayFrames, {}, {}, error)) return false;
+				bool hostTook = false, clientTook = false;
+				for (uint64_t now = 62; now < 72 && !(hostTook && clientTook); ++now) {
+					hostWire.AdvanceTimeMs(1); returnWire.AdvanceTimeMs(1); host.Tick(now); returning.Tick(now);
+					if (!hostTook && host.PopReadyFrame(ready)) { hostTook = ready.frame == firstRequired; (void)host.FinishSimulationTick(ready.frame); }
+					while (!clientTook && returning.PopReadyFrame(second)) { clientTook = second.frame == firstRequired; (void)returning.FinishSimulationTick(second.frame); }
+				}
+				if (!hostTook || !clientTook) { *error = "the return did not establish its accepted input stream"; return false; }
+				const uint64_t missing = firstRequired + 1;
 				host.NoteLocalStartPark(1000);
-				if (!host.QueueLocalInput(firstRequired, {}, {}, error)) return false;
-				for (uint64_t now = 62; now <= 112; ++now) { host.Tick(now); host.NoteFrameWait(firstRequired, now); }
-				if (!host.IsPeerGoneAtFrame(2, firstRequired) || !host.IsRunning()) {
+				if (!host.QueueLocalInput(missing, {}, {}, error)) return false;
+				for (uint64_t now = 72; now <= 122; ++now) { host.Tick(now); host.NoteFrameWait(missing, now); }
+				if (!host.IsPeerGoneAtFrame(2, missing) || !host.IsRunning()) {
 					*error = "a reclaimed seat received another startup allowance beyond the wait bound";
 					return false;
 				}
