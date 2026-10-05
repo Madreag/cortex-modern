@@ -1465,7 +1465,7 @@ def build_specs(h, run: dict, root: Path, ports: dict, boxes: dict, pin: str, lo
         spec['flags'] = flags
         if not run.get('persist_tickets', True) and '-net-reconnect-ticket' in flags:
             at = flags.index('-net-reconnect-ticket')
-            del flags[at:at + 2]
+            flags[at + 1] = str(Path(run['private_ticket_root']) / f'{peer["name"]}.ticket')
         if peer['name'] == 'host' and run.get('kill_host_at_tick'):
             spec['kill_at_tick'] = int(run['kill_host_at_tick'])
         if peer.get('panel_probe'):
