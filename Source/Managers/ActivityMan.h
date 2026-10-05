@@ -478,6 +478,7 @@ namespace RTE {
 		std::unordered_set<std::string> m_ReportedAutosaveKeys;
 		std::mutex m_DeferredRefusalMutex; //!< The checkpoint worker hands its refusals through it.
 		std::vector<std::pair<SaveKind, std::vector<std::string>>> m_DeferredRefusals; //!< Found off the simulation thread, reported on it.
+		std::vector<std::string> m_DeferredSaveErrors; //!< The writer reports file errors on the simulation thread.
 		std::deque<AutosaveVerdict> m_AutosaveVerdicts; //!< One per finished automatic capture, in the order the writer finished them.
 		void QueueDeferredSaveRefusal(SaveKind kind, std::vector<std::string> problems);
 		void NoteAutosaveVerdict(uint64_t tick, bool archived);

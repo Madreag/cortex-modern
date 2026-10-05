@@ -583,6 +583,7 @@ void ActivityMan::Clear() {
 	{
 		std::lock_guard lock(m_DeferredRefusalMutex);
 		m_DeferredRefusals.clear();
+		m_DeferredSaveErrors.clear();
 	}
 	m_InActivity = false;
 	m_ActivityNeedsRestart = false;
@@ -656,11 +657,14 @@ std::optional<ActivityMan::AutosaveVerdict> ActivityMan::TakeAutosaveVerdict() {
 // The worker walks the graph off the simulation thread, so its refusal reaches the player a tick later.
 void ActivityMan::ReportDeferredSaveRefusals() {
 	std::vector<std::pair<SaveKind, std::vector<std::string>>> refusals;
+	std::vector<std::string> errors;
 	{
 		std::lock_guard lock(m_DeferredRefusalMutex);
 		refusals.swap(m_DeferredRefusals);
+		errors.swap(m_DeferredSaveErrors);
 	}
 	for (const auto& [kind, problems]: refusals) ReportScriptGraphSaveRefusal(kind, problems);
+	for (const std::string& error: errors) g_ConsoleMan.PrintString(error);
 }
 
 bool ActivityMan::SaveCurrentGame(const std::string& fileName, SaveCompression compression) {
@@ -1211,6 +1215,10 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		} catch (const std::exception& error) {
 			CheckpointCow::Get().RecordWorker(sinceStart());
 			System::PrintDiagnosticLine("[autosave] failed tick=" + std::to_string(tick) + " reason=" + error.what() + "\n");
+			if (!automatic) {
+				std::lock_guard lock(m_DeferredRefusalMutex);
+				m_DeferredSaveErrors.push_back("ERROR: Could not save game \"" + fileName + "\": " + error.what());
+			}
 			if (automatic) NoteAutosaveVerdict(tick, false);
 			image.reset();
 			return false;
