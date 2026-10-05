@@ -10172,7 +10172,8 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded, uint8_t onlyPeerId, size_t* outValueObservationsEncoded, NetLockstepObservationBlocks* blocks) {
-		if (const auto* outgoing = std::get_if<NetLockstepFrame>(&packet.payload); outgoing && dynamic_cast<GnsTransport*>(m_Transport))
+		// A session multiplexes the native transport, so its outer pointer does not identify the sending socket.
+		if (const auto* outgoing = std::get_if<NetLockstepFrame>(&packet.payload))
 			GnsTransport::ObserveOutgoingLockstepFrame(outgoing->targetFrame);
 		std::vector<uint8_t> windowBytes;
 		std::vector<uint8_t> classicBytes;
