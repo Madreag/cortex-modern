@@ -151,7 +151,7 @@ def pause_probes(root, base):
               wait_file(probe_root(root, client) / "left.json"), {"op": "wait", "elapsed_ms": 1500},
               {"op": "wait", "renders": 6}, shot("status-host-held"),
               *keys("Escape"), *on_screen("Pause"), *hand("ButtonEndMatch"),
-              {"op": "wait", "service": "Completed", "scope": "menu"}, signal("done", "menu"), {"op": "finish"}]
+              {"op": "wait", "service": "Starting", "scope": "menu"}, signal("done", "menu"), {"op": "finish"}]
     host_steps = steps
     steps = [{"op": "wait", "service": "Running", "sim_at_least": 150}, *keys("Escape"), *on_screen("Pause"),
              menu("dump_host_options"), shot("pause-client")]
@@ -222,7 +222,7 @@ def players_probes(root, peers, base, moderate):
                           read("NetworkSeatsStatus", tag="ban-status"), {"op": "wait", "elapsed_ms": 1500},
                           *roster_reads("host-after-ban", 3), shot("players-host-after-ban")]
         steps += [*click("NetworkSeatsClose"), {"op": "wait", "panel_open": False}, {"op": "wait", "elapsed_ms": 1500}]
-    steps += [*keys("Escape"), *on_screen("Pause"), *hand("ButtonEndMatch"), {"op": "wait", "service": "Completed", "scope": "menu"},
+    steps += [*keys("Escape"), *on_screen("Pause"), *hand("ButtonEndMatch"), {"op": "wait", "service": "Starting", "scope": "menu"},
               signal("done", "menu"), {"op": "finish"}]
     probes = {host: {"schema": 1, "timeout_ms": 175000, "steps": steps}}
     for index, name in enumerate(names[1:], start=1):
@@ -259,7 +259,7 @@ def status_probes(root, base):
              {"op": "wait", "elapsed_ms": 1500} if base else {"op": "wait", "scope": "menu", "control": "LabelMatchLive", "text_contains": LIVE_RUNNING},
              *hand("ButtonResume"),
              *on_screen("Gameplay"), signal("host-read"), wait_file(probe_root(root, client) / "read.json"),
-             *keys("Escape"), *on_screen("Pause"), *hand("ButtonEndMatch"), {"op": "wait", "service": "Completed", "scope": "menu"},
+             *keys("Escape"), *on_screen("Pause"), *hand("ButtonEndMatch"), {"op": "wait", "service": "Starting", "scope": "menu"},
              signal("done", "menu"), {"op": "finish"}]
     client_steps = [{"op": "wait", "service": "Running", "sim_at_least": 240}, {"op": "wait", "elapsed_ms": 1200}, {"op": "wait", "renders": 6},
                     read("LabelNetMatchStatus", tag="status-live"), shot("status-live-client"),
@@ -441,7 +441,8 @@ def check_pause(checks, captures, reads, logs, runtimes):
     checks.check("save-diagnostics-row-saves", bool(bundles), f"{[path.name for path in bundles]}")
     screens = [capture["screen"] for capture in captures[host]]
     checks.check("match-details-row-opens-details", "PauseMatchOptions" in screens, f"host dump screens {screens}")
-    ended = re.search(r"Match ended by host", logs[host]) is not None
+    # The pause menu's End match is the only caller of the agreed end (MenuMan -> EndMatchAtAgreedFrame -> CompleteAtAgreedEnd).
+    ended = re.search(r"\[net-match\] the host ends the round at frame \d+", logs[host]) is not None
     checks.check("end-match-row-ends-the-match", ended, "the host log names the host's end" if ended else "no host end in the log")
 
 
