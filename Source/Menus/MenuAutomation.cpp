@@ -2234,7 +2234,12 @@ namespace RTE::MenuAutomation {
 				std::string target;
 				int row = -1;
 				args >> std::quoted(target) >> row;
-				if (command == "click_row") return HandRow(manager, target, row, 1, nullptr, observation);
+				if (command == "click_row") {
+					// A row named by the game it lists (wait_row's name) is clicked in the list that shows it now.
+					std::string listName;
+					if (row < 0 && g_MenuMan.GetMainMenu() && g_MenuMan.GetMainMenu()->AutomationRowOf(target, listName, row)) return HandRow(manager, listName, row, 1, nullptr, observation);
+					return HandRow(manager, target, row, 1, nullptr, observation);
+				}
 				auto* list = dynamic_cast<GUIListBox*>(manager->GetControl(target));
 				observation = target + " expected=" + std::to_string(row) + " actual=" + (list ? std::to_string(list->GetSelectedIndex()) : std::string("none"));
 				return list && list->GetSelectedIndex() == row;
