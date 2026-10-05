@@ -22397,7 +22397,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return false;
 		}
 		const auto threePeers = [&](NetLockstepCoordinator& host) {
-			prepare(host); host.m_Config.peerCount = 3; host.m_Config.substituteSlowPeers = true;
+			prepare(host); host.m_Config.peerCount = 3; host.m_Config.substituteSlowPeers = true; host.m_State = NetLockstepState::Running;
 			host.m_RemotePeerIds = {2, 3}; host.m_Config.peerInputDelayFrames[3] = 9;
 			for (uint64_t now = 0; now <= 6000; now += 100) host.m_DelayEstimators[3].Observe(now, 50);
 		};

@@ -5016,6 +5016,8 @@ namespace RTE {
 		m_LastHoldHeartbeatMs = 0;
 		m_HeldPeerLinks.clear();
 		m_SilenceUnmeasured.clear();
+		m_HostInputSilences.clear();
+		m_OpenHostInputSilence.reset();
 		m_ReturningLinks.clear();
 		m_LastHeldLinkMs = 0;
 		m_LastReliableWindowAliveMs = 0;
@@ -7129,6 +7131,47 @@ namespace RTE {
 		return delay > current ? std::optional<uint16_t>{static_cast<uint16_t>(delay)} : std::nullopt;
 	}
 
+	void NetLockstepCoordinator::ObserveHostInputSilence(uint64_t nowMs) {
+		if (!UsesBoundedWait() || !IsRunning() || m_Config.localPeerId != GetHostPeerId() || m_Config.peerCount < 3) return;
+		while (!m_HostInputSilences.empty() && nowMs > m_HostInputSilences.front().lastMs + NetInputDelayEstimator::c_SilenceWindowMs)
+			m_HostInputSilences.pop_front();
+		std::set<uint8_t> required;
+		uint64_t latest = 0;
+		for (uint8_t peer : m_RemotePeerIds) if (IsRemoteRequiredForFrame(peer, GetResumeFrame())) {
+			required.insert(peer);
+			const auto stats = m_Stats.peers.find(peer);
+			if (stats == m_Stats.peers.end() || stats->second.lastProgressMs == 0 || stats->second.lastProgressMs > nowMs) return;
+			latest = std::max(latest, stats->second.lastProgressMs);
+		}
+		if (m_OpenHostInputSilence) {
+			const bool changed = std::any_of(required.begin(), required.end(), [&](uint8_t peer) { return !m_OpenHostInputSilence->peers.contains(peer); }) ||
+			    std::any_of(m_OpenHostInputSilence->peers.begin(), m_OpenHostInputSilence->peers.end(), [&](uint8_t peer) { return m_AnnouncedLeavers.contains(peer); });
+			if (!changed) return;
+			m_OpenHostInputSilence->lastMs = nowMs;
+			m_HostInputSilences.push_back(std::move(*m_OpenHostInputSilence)); m_OpenHostInputSilence.reset();
+		}
+		if (required.size() >= 2 && static_cast<double>(nowMs - latest) >= 2 * m_Config.simTickMs)
+			m_OpenHostInputSilence = HostInputSilence{latest, nowMs, std::move(required)};
+	}
+
+	void NetLockstepCoordinator::EndHostInputSilence(uint8_t senderPeerId, uint64_t nowMs) {
+		if (!m_OpenHostInputSilence || !m_OpenHostInputSilence->peers.contains(senderPeerId)) return;
+		m_OpenHostInputSilence->lastMs = nowMs;
+		m_HostInputSilences.push_back(std::move(*m_OpenHostInputSilence)); m_OpenHostInputSilence.reset();
+	}
+
+	uint64_t NetLockstepCoordinator::HostInputSilenceMs(uint8_t senderPeerId, uint64_t firstMs, uint64_t lastMs) const {
+		uint64_t total = 0, coveredThrough = firstMs;
+		const auto add = [&](const HostInputSilence& silence, uint64_t end) {
+			if (!silence.peers.contains(senderPeerId)) return;
+			const uint64_t first = std::max({firstMs, silence.firstMs, coveredThrough}), last = std::min(lastMs, end);
+			if (last > first) { total += last - first; coveredThrough = last; }
+		};
+		for (const auto& silence : m_HostInputSilences) add(silence, silence.lastMs);
+		if (m_OpenHostInputSilence) add(*m_OpenHostInputSilence, lastMs);
+		return total;
+	}
+
 	void NetLockstepCoordinator::NoteStreamSilence(uint8_t senderPeerId, const ArrivalLead& previous, uint64_t targetFrame, uint64_t simNext, uint64_t nowMs) {
 		if (targetFrame <= previous.frame || simNext <= previous.simNext || nowMs <= previous.ms || !std::isfinite(m_Config.simTickMs) || m_Config.simTickMs <= 0) return;
 		// Silent means this machine played frames the sender did not deliver while the wall clock ran: a pause of our own plays
@@ -7147,11 +7190,14 @@ namespace RTE {
 		}
 		if (m_ParkFrameSimulatedMs != 0 && m_ParkFrameSimulatedMs <= nowMs &&
 		    m_ParkFrameSimulatedMs + static_cast<uint64_t>(std::ceil(span * m_Config.simTickMs)) >= previous.ms) return;
-		m_DelayEstimators[senderPeerId].ObserveSilence(nowMs, static_cast<uint32_t>(std::lround(silenceMs)));
+		const double own = HostInputSilenceMs(senderPeerId, previous.ms, nowMs);
+		if (silenceMs - own >= 2 * m_Config.simTickMs)
+			m_DelayEstimators[senderPeerId].ObserveSilence(nowMs, static_cast<uint32_t>(std::lround(silenceMs - own)));
 	}
 
 	void NetLockstepCoordinator::TickTiming(uint64_t nowMs) {
 		if (!IsRunning() || m_Playback) return;
+		ObserveHostInputSilence(nowMs);
 		const bool host = m_Config.localPeerId == GetHostPeerId();
 		if (m_LastTimingSampleMs == UINT64_MAX || nowMs - m_LastTimingSampleMs >= NetInputDelayEstimator::c_SampleMs) {
 			m_LastTimingSampleMs = nowMs;
@@ -7939,6 +7985,8 @@ namespace RTE {
 		if (IsPeerGoneAtFrame(frame.senderPeerId, frame.targetFrame)) return;
 		NetLockstepPeerStats& peerStats = m_Stats.peers[frame.senderPeerId];
 		if (frame.targetFrame > peerStats.highestTargetFrame) {
+			ObserveHostInputSilence(nowMs);
+			EndHostInputSilence(frame.senderPeerId, nowMs);
 			peerStats.highestTargetFrame = frame.targetFrame;
 			peerStats.lastProgressMs = nowMs;
 			NoteArrival(peerStats, nowMs, frame.targetFrame);
@@ -11293,7 +11341,10 @@ namespace RTE {
 			const auto live = m_RemoteTransports.find(frame.senderPeerId);
 			if ((held != m_HeldPeerLinks.end() && held->second.first == fromTransport) || (live != m_RemoteTransports.end() && live->second == fromTransport)) {
 				const uint64_t since = m_Stats.peers[frame.senderPeerId].lastProgressMs;
-				if (since != 0 && nowMs > since) m_DelayEstimators[frame.senderPeerId].ObserveSilence(nowMs, static_cast<uint32_t>(std::min<uint64_t>(nowMs - since, UINT32_MAX)));
+				ObserveHostInputSilence(nowMs); EndHostInputSilence(frame.senderPeerId, nowMs);
+				const uint64_t own = HostInputSilenceMs(frame.senderPeerId, since, nowMs);
+				if (since != 0 && nowMs > since && nowMs - since > own + 2 * m_Config.simTickMs)
+					m_DelayEstimators[frame.senderPeerId].ObserveSilence(nowMs, static_cast<uint32_t>(std::min<uint64_t>(nowMs - since - own, UINT32_MAX)));
 				m_SilenceUnmeasured.erase(open);
 			}
 		}
@@ -12552,6 +12603,7 @@ namespace RTE {
 		CENSUS(m_ResendFrames); CENSUS(m_RecoveryOutgoing); CENSUS(m_LocalInputHistory); CENSUS(m_LocalChecksums); CENSUS(m_RemoteChecksums);
 		CENSUS(m_ReadyFrames); CENSUS(m_ReadyHistory); CENSUS(m_RelayedTicks); CENSUS(m_RelayedTickFrames); CENSUS(m_RelayBacklog);
 		CENSUS(m_ObservationEpochs); CENSUS(m_HostAcceptedLocalFrames); CENSUS(m_InputAcceptance); CENSUS(m_InputAcceptanceLeadFrames); CENSUS(m_InputAcceptanceRejections); CENSUS(m_MigrationHistory); CENSUS(m_MigrationIncoming);
+		CENSUS(m_HostInputSilences);
 		CENSUS(m_PreStartFrames); CENSUS(m_ArrivalLeads); CENSUS(m_ArrivalLateness); CENSUS(m_TimingOutgoing);
 		CENSUS(m_ParkCaptureHistoryMs); CENSUS(m_DropReasonsNamed); CENSUS(m_PlaneDeferredEvents); CENSUS(m_InstalledResyncTargets);
 		CENSUS(m_ResyncPrimeInputs); CENSUS(m_RetiredReclaimGaps); CENSUS(m_PreStartTiming);

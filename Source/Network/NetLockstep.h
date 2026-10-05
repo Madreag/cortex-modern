@@ -1811,6 +1811,9 @@ namespace RTE {
 		std::optional<uint16_t> MarginKeepingIncrease(uint8_t peerId, uint16_t current, uint32_t required, uint64_t nowMs) const;
 		/// Records, for the sender's delay to carry, how long its stream fell silent between its previous new input and this one.
 		void NoteStreamSilence(uint8_t senderPeerId, const ArrivalLead& previous, uint64_t targetFrame, uint64_t simNext, uint64_t nowMs);
+		void ObserveHostInputSilence(uint64_t nowMs);
+		void EndHostInputSilence(uint8_t senderPeerId, uint64_t nowMs);
+		uint64_t HostInputSilenceMs(uint8_t senderPeerId, uint64_t firstMs, uint64_t lastMs) const;
 		/// Whether the blip test lever drops this unreliable frame send.
 		bool TestBlipDropsFrameSend(uint64_t targetFrame);
 		static constexpr uint64_t c_MarginWindowMs = 1000; //!< The arrivals a rise is judged over: short, so it lands before a spike finds the seat.
@@ -2029,6 +2032,9 @@ namespace RTE {
 		uint64_t m_LastLivenessMs = 0; //!< Host: when it last told its clients it is alive while its round waited.
 		std::map<uint8_t, std::pair<NetPeerId, uint64_t>> m_HeldPeerLinks; //!< Host: each held seat's link it still talks on, and when the hold took it.
 		std::set<uint8_t> m_SilenceUnmeasured; //!< Host: seats held for going silent whose next input has not landed: it measures that silence.
+		struct HostInputSilence { uint64_t firstMs, lastMs; std::set<uint8_t> peers; };
+		std::deque<HostInputSilence> m_HostInputSilences;
+		std::optional<HostInputSilence> m_OpenHostInputSilence;
 		std::map<uint8_t, NetPeerId> m_ReturningLinks; //!< Host: the new link each held seat's player came back on, until it closes.
 		uint64_t m_LastHeldLinkMs = 0; //!< Host: when it last told its held seats it is alive.
 		uint64_t m_LastReliableWindowAliveMs = 0; //!< Host: when it last told the seats reading its frames on the reliable lane it is alive.
