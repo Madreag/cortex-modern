@@ -447,6 +447,7 @@ namespace RTE {
 		GUILabel* m_HostBannedStatusLabel = nullptr;
 		std::vector<NetHostBanRecord> m_HostBannedRecords; //!< The store's rows, indexed like the pick combo.
 		NetMatchConfig m_HostOptionsDraft;              //!< The complete config the panel edits.
+		NetMatchConfig m_HostOptionsShownDraft;         //!< The draft as the controls last showed it: only then does a change event read them back.
 		uint64_t m_HostOptionsBaseRevision = 0;         //!< The adopted revision the draft was seeded from.
 		bool m_HostOptionsSetupDraft = false;           //!< True while the draft feeds a new lobby's request.
 		bool m_HostOptionsReadOnly = false;             //!< A client reads the adopted config; it cannot edit it.

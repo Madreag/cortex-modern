@@ -3043,7 +3043,8 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 			GUIComboBox* combo = dynamic_cast<GUIComboBox*>(control);
 			return combo && combo->IsDropped();
 		});
-		if (!listOpen) {
+		// Controls that do not yet show the draft (it moved in code since the last refresh) hold nothing of the player's.
+		if (!listOpen && m_HostOptionsDraft == m_HostOptionsShownDraft) {
 			const NetMatchStandardRules before = m_HostOptionsDraft;
 			DraftHostOptionsFromControls();
 			FollowHostActivityDefaults(before, guiEventControl);
@@ -3784,6 +3785,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions) {
 			// The panel includes the NAT row and its routing hint at every size.
 			RefreshHostOptionsControls(snapshot);
+			m_HostOptionsShownDraft = m_HostOptionsDraft;
 			const int panelHeight = m_HostOptionsPanel->GetHeight();
 			FitMultiplayerScreen(545, panelHeight + m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5);
 			LayoutMultiplayerFooter(545, panelHeight);
