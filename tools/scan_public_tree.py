@@ -178,9 +178,15 @@ class Scanner:
             self.patterns.append(('internal-name', re.compile(pattern)))
         for pattern in TAG_PATTERNS:
             self.patterns.append(('process-tag', re.compile(pattern)))
-        if machine_names:
+        words_only = [name for name in machine_names if not name.isdigit()]
+        numbers = [name for name in machine_names if name.isdigit()]
+        if words_only:
             self.patterns.append(('machine-name', re.compile('(?i)' + EDGE_L + '(?:' + alternation(
-                [re.escape(name) for name in machine_names]) + ')' + EDGE_R)))
+                [re.escape(name) for name in words_only]) + ')' + EDGE_R)))
+        if numbers:
+            # A numeric alias is a machine name only where a host name stands: quoted alone, or after ssh/scp.
+            self.patterns.append(('machine-name', re.compile(r'(?:(?<=["\'])|(?<=\bssh )|(?<=\bscp ))(?:' + alternation(
+                [re.escape(name) for name in numbers]) + r')(?=["\':\s/]|$)')))
         if user_names:
             self.patterns.append(('user-name', re.compile('(?i)' + EDGE_L + '(?:' + alternation(
                 [re.escape(name) for name in user_names]) + ')' + EDGE_R)))
@@ -191,6 +197,9 @@ class Scanner:
         hits = []
         for kind, pattern in self.patterns:
             for match in pattern.finditer(text):
+                # A linter's rule code after noqa is not a ticket.
+                if kind == 'process-tag' and re.search(r'noqa[:\s][\w, ]*$', text[:match.start()]):
+                    continue
                 hits.append(Hit(path, number, kind, match.group(0)))
         for match in DRIVE_PATH.finditer(text):
             if (match.group(1).lower(), match.group(2).lower()) in self.machine_roots:
