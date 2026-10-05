@@ -23898,6 +23898,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		if (!SimChecksum::IsConstructed()) SimChecksum::Construct();
 		if (!MovableMan::IsConstructed()) MovableMan::Construct();
 		if (!ActivityMan::IsConstructed()) ActivityMan::Construct();
+		if (!AudioMan::IsConstructed()) AudioMan::Construct();
+		if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
+		install_allegro(SYSTEM_NONE, &errno, std::atexit); // SceneMan::Clear creates a bitmap.
+		if (!SceneMan::IsConstructed()) SceneMan::Construct();
+		std::cout << "[net-lockstep-released-claims-selftest] start" << std::endl;
 		const bool passed = RunReleasedClaimsRows();
 		std::cout << "[net-lockstep-released-claims-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 		return passed ? 0 : 1;
