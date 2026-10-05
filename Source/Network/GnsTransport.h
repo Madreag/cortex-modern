@@ -1,6 +1,7 @@
 #pragma once
 
 #include "NetTransport.h"
+#include "NetMatchConfig.h"
 
 #include <cstdint>
 #include <map>
@@ -14,7 +15,7 @@ namespace RTE {
 
 	/// How long an ICE connect may take to reach Connected: a relayed connect whose candidates cross a slow signalling path
 	/// outlasts GNS's 10 s default, while a dead session still fails inside it.
-	constexpr uint32_t c_IceConnectTimeoutMs = 30000;
+	constexpr uint32_t c_IceConnectTimeoutMs = NetHostMigrationTimeouts::c_IceDialMs;
 
 	/// The route each connection last named in a receipt; a connection whose live route differs has moved.
 	class GnsRouteTracker {

@@ -36,19 +36,6 @@ namespace RTE {
 	/// The machine's monotonic clock in milliseconds, the same in every process on it; diagnostics that compare peers read it.
 	uint64_t NetLockstepSharedClockMs();
 
-	struct NetHostMigrationTimeouts {
-		static constexpr uint64_t c_IceStepMs = 8000;
-		static constexpr uint64_t c_IceDialMs = 30000;
-		static constexpr uint64_t c_DirectStepMs = 1000;
-		static constexpr uint64_t c_RetryMs = 250;
-		static constexpr uint64_t c_ProbeMs = 1000;
-		uint64_t stepMs, quorumMs, recoveryMs, readyMs, publicationMs;
-		static NetHostMigrationTimeouts For(uint32_t timeoutMs, bool ice, uint64_t routeBudgetMs) {
-			const uint64_t step = ice ? c_IceStepMs : std::clamp<uint64_t>(timeoutMs, 1, c_DirectStepMs);
-			return {step, std::max(3 * step, routeBudgetMs + step), step, 2 * step, 3 * step};
-		}
-	};
-
 	enum class NetLockstepPacketType : uint16_t {
 		Start = 1,
 		Frame = 2,
