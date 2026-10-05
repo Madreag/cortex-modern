@@ -4222,7 +4222,8 @@ namespace RTE {
 				const std::string counts = role + " RoundEnded=" + std::to_string(ended) + " RematchFormed=" + std::to_string(formed) + " RoundStarted=" + std::to_string(started);
 				std::cout << "[net-reconnect-session-selftest] held_round_end " << counts << " passes=300" << std::endl;
 				if (ended != 1 || formed > 1 || started > 1) failures += counts + "; ";
-				if (!host->HoldsSeatsForReturn() || !host->RosterSeatOfPeer(3) || host->RosterSeatOfPeer(3)->phase != NetSeatPhase::Held) return Fail(role + " ended the held player's wait");
+				if (!host->HoldsSeatsForReturn() || !host->RosterSeatOfPeer(3) || host->RosterSeatOfPeer(3)->phase != NetSeatPhase::RoundEnd ||
+				    host->RosterSeatOfPeer(3)->link != NetSeatLink::Dropped || host->RosterSeatOfPeer(3)->owner != wire.host.RosterSeatOfPeer(3)->owner) return Fail(role + " ended the held player's wait");
 				if (!failures.empty()) continue;
 				host->FormRematch();
 				host->SetLiveMatch(true);
