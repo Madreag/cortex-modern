@@ -711,6 +711,22 @@ class FeelBars(unittest.TestCase):
         self.assertFalse(match.feel_bars(self.timing(item9a_longest_wait={'status': 'MISS', 'value': None}), 'host')['passed'])
         self.assertFalse(match.feel_bars({'peers': {}}, 'host')['passed'])
 
+    def test_a_live_rows_one_wait_at_a_held_frame_is_the_spikes(self):
+        import relay_cloudflare_match as match
+        steady = dict(item9a_steady_stalls={'status': 'FAIL', 'value': 1}, item9a_missing_frame_stalls={'status': 'FAIL', 'value': 1})
+        log = '[net-frame-wait] frame=1120 wait_ms=2\n[net-frame-wait] frame=200 wait_ms=40\n'
+        verdict = match.feel_bars(self.timing(**steady), 'host', log=log, spikes={1120}, ticks=1201)
+        self.assertTrue(verdict['passed'], verdict)
+        self.assertEqual(verdict['live_spike_reading'], dict(steady=0, spike_waits=[(1120, 2)],
+                                                             pins={'item9a_steady_stalls': 'FAIL', 'item9a_missing_frame_stalls': 'FAIL'}))
+        # A wait at a frame no hold answered, a second wait at a held frame, or a spike's wait over 50 ms stays a failure.
+        self.assertFalse(match.feel_bars(self.timing(**steady), 'host', log='[net-frame-wait] frame=1119 wait_ms=2\n', spikes={1120}, ticks=1201)['passed'])
+        self.assertFalse(match.feel_bars(self.timing(**steady), 'host', log=log + '[net-frame-wait] frame=1120 wait_ms=3\n', spikes={1120},
+                                         ticks=1201)['passed'])
+        self.assertFalse(match.feel_bars(self.timing(item9a_longest_wait={'status': 'FAIL', 'value': 97}, **steady), 'host', log=log,
+                                         spikes={1120}, ticks=1201)['passed'])
+        self.assertFalse(match.feel_bars(self.timing(**steady), 'host')['passed'])
+
 
 class LoginSweep(unittest.TestCase):
     """The pattern sweep finds a relay login in the clear without being told any secret, and passes a blanked one."""

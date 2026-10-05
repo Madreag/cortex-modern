@@ -461,17 +461,38 @@ def judge_relay(run: dict) -> dict:
 
 FEEL_BARS = ('item9a_wall_tps', 'item9a_net_wait', 'item9a_steady_stalls', 'item9a_missing_frame_stalls', 'item9a_longest_wait',
              'item9a_confirmed_horizon_lag')
+LIVE_SPIKE_PINS = ('item9a_steady_stalls', 'item9a_missing_frame_stalls')
 
 
-def feel_bars(timing: dict, peer: str) -> dict:
+def feel_bars(timing: dict, peer: str, log: str | None = None, spikes=(), ticks: int | None = None) -> dict:
     """The feel driver's own measured pins for one peer (its thresholds, unchanged): every one present and PASS. The pins this
     match cannot measure are listed with their reasons: the harness-cost receipt no current engine prints, and the input
-    pins of the feel recorder a lean match does not run."""
+    pins of the feel recorder a lean match does not run.
+
+    The steady pins count every wait before an injected spike; a live row injects none, so its carrier's spike is the frame
+    a hold answered (spikes), and one wait of the peer at that frame is the spike's, which the longest-wait pin still bounds
+    at 50 ms. Every other wait stays a steady stall; both readings are kept (live_spike_reading)."""
     pins = (timing.get('peers', {}).get(peer) or {}).get('pins', {})
     failed = {name: (pins.get(name) or {}).get('status', 'MISS') for name in FEEL_BARS if (pins.get(name) or {}).get('status') != 'PASS'}
     unmeasured = {name: str(pin.get('reason', ''))[:160] for name, pin in pins.items() if name not in FEEL_BARS and pin.get('status') == 'MISS'}
+    reading = None
+    if log is not None and any(name in failed for name in LIVE_SPIKE_PINS):
+        left, steady, at_spikes = set(spikes), [], []
+        for tick, ms in ((int(tick), int(ms)) for tick, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', log)):
+            if 300 < tick <= (tick if ticks is None else ticks) and ms > 0:
+                if tick in left:
+                    left.discard(tick)
+                    at_spikes.append((tick, ms))
+                else:
+                    steady.append((tick, ms))
+        reading = dict(steady=len(steady), spike_waits=at_spikes, pins={name: failed[name] for name in LIVE_SPIKE_PINS if name in failed})
+        missing = (pins.get('item9a_missing_frame_stalls') or {}).get('value')
+        if not steady:
+            failed.pop('item9a_steady_stalls', None)
+            if type(missing) is int and missing <= len(at_spikes):
+                failed.pop('item9a_missing_frame_stalls', None)
     return dict(passed=not failed, failed=failed, values={name: (pins.get(name) or {}).get('value') for name in FEEL_BARS},
-                unmeasured=unmeasured, pass_check=(timing.get('peers', {}).get(peer) or {}).get('pass_check'))
+                unmeasured=unmeasured, pass_check=(timing.get('peers', {}).get(peer) or {}).get('pass_check'), live_spike_reading=reading)
 
 
 def tunnel_receipt(rows: list[dict], peers: list[str] | None = None, min_seconds: float | None = None) -> dict:
@@ -1902,6 +1923,7 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
     builds = edith_cross.pair_build_evidence(root, dict(source_sha=next(iter({value['head'] for value in facts['identities'].values()}))), records)
     rtts = transport_rtts(host_log)
     judged = run.get('timing_peers') or hash_peers
+    spikes = {int(frame) for frame in re.findall(r'\[net-match\] hold peer=\d+ frame=(\d+)', host_log)}
     sanitize = facts['sanitize']
     minted = facts.get('minted') or []
     clocks = {}
@@ -1984,7 +2006,7 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         'hashes_equal': lambda: bool(live) and mismatched == 0 and trace_pass is not False and covered and all(
             value >= ticks - int(run.get('kill_host_at_tick') or 0) for value in compared.values()),
         'holds': lambda: all(peers[name]['holds'] == 0 for name in judged),
-        'feel_bars': lambda: all(feel_bars(timing, name)['passed'] for name in judged),
+        'feel_bars': lambda: all(feel_bars(timing, name, logs.get(name, ''), spikes, ticks)['passed'] for name in judged),
         'relay': lambda: relay['passed'],
         'route_receipts': lambda: relay['receipts_complete'],
         'endpoint': lambda: relay['endpoint'],
@@ -2016,7 +2038,7 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         checks[name] = bool(producer()) if producer else False  # a check the run cannot produce fails
     if 'pair_blanked' in required:
         details['pair_on_disk'] = dict(passed=True, files=[(row['box'], row.get('hits_before')) for row in sanitize])
-    details.update({f'feel:{name}': feel_bars(timing, name) for name in judged})
+    details.update({f'feel:{name}': feel_bars(timing, name, logs.get(name, ''), spikes, ticks) for name in judged})
     details['history'] = dict(contiguous=contiguous, covered=covered, compared=compared)
     passed = all(checks.values())
     verdict = dict(name=run['name'], scenario=scenario['name'], relay=run['relay'], root=str(root), passed=passed, checks=checks,
