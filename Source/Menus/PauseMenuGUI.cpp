@@ -360,6 +360,11 @@ void PauseMenuGUI::UpdateMatchPauseRow(bool force) {
 	pauseMatchButton->SetText(m_HoveredButton == pauseMatchButton ? m_ButtonHoveredText[PauseMenuButton::PauseMatchButton] : m_ButtonUnhoveredText[PauseMenuButton::PauseMatchButton]);
 }
 
+std::string PauseMenuGUI::GetShownSaveLine() const {
+	const bool shown = m_SaveMatchHint && m_SaveMatchHint->GetVisible() && m_PauseMenuBox->GetVisible() && !m_LeaveConfirmShown && !m_MatchOptionsShown;
+	return shown ? m_SaveMatchHint->GetText() : std::string();
+}
+
 std::string PauseMenuGUI::LeaveConsequenceText() const {
 	if (g_NetMatchService.IsHost()) {
 		// The host's leave hands the round to the next host the match agreed on. The handover is the survivors' election, and a

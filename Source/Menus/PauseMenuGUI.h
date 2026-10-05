@@ -76,6 +76,9 @@ namespace RTE {
 		/// @param drawPostProcessBuffer Whether to present the post-process buffer first; a live match frame already has.
 		void Draw(bool drawPostProcessBuffer = true);
 
+		/// The match's save line under the Save Match row while it is on screen, or empty.
+		std::string GetShownSaveLine() const;
+
 		/// Posts a command through the visible pause menu's event queue.
 		bool AutomationPostCommand(const std::string& controlName);
 		GUIControlManager* AutomationManager() const;

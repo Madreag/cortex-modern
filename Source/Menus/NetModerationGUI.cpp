@@ -6,6 +6,7 @@
 #include "GameActivity.h"
 #include "MainMenuGUI.h"
 #include "MenuMan.h"
+#include "PauseMenuGUI.h"
 #include "NetMatchService.h"
 #include "NetSession.h"
 #include "NetHostOptionsText.h"
@@ -1852,6 +1853,8 @@ void NetModerationGUI::DrawMatchToasts(const std::string& screenLine) {
 	std::vector<std::string> lines;
 	const auto sentence = [](const std::string& text) { return text.substr(0, text.find_last_not_of(". ") + 1); };
 	const uint8_t localPeer = ScenarioRunner::GetLockstepLocalPeerId();
+	const PauseMenuGUI* pauseMenu = g_MenuMan.GetActivePauseMenu();
+	const std::string menuSaveLine = pauseMenu ? pauseMenu->GetShownSaveLine() : std::string();
 	for (size_t index = 0; index < queued.size(); ++index) {
 		if (!ToastStillApplies(queued[index])) continue;
 		// A seat's toast reads its current state, so two events about one seat can read alike: the band shows that line once.
@@ -1862,6 +1865,8 @@ void NetModerationGUI::DrawMatchToasts(const std::string& screenLine) {
 		// The wait's own screen already says this seat is on its way back.
 		if (!screenLine.empty() && (sentence(line) == sentence(screenLine) ||
 		                            (ownSeat && (queued[index].kind == "seat_held" || sentence(queued[index].text) == sentence(screenLine))))) continue;
+		// The open pause menu reads the save under its Save Match row; the band does not say it a second time.
+		if (!menuSaveLine.empty() && queued[index].kind == "match_save" && sentence(line) == sentence(menuSaveLine)) continue;
 		lines.push_back(std::move(line));
 		visible.push_back(queued[index]);
 		indices.push_back(index);
