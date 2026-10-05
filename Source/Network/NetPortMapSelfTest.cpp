@@ -85,8 +85,8 @@ namespace RTE {
 			/// The no-socket Wan: each method consults the installed script and appends to `calls`.
 			class ScriptedWan : public NetPortMapWan {
 			public:
-				std::string gateway = "192.168.1.1";
-				std::string local = "192.168.1.20";
+				std::string gateway = "192.0.2.1";
+				std::string local = "192.0.2.20";
 				std::vector<std::string> calls;
 				std::vector<std::vector<uint8_t>> udpRequests;
 				std::function<bool(const std::vector<uint8_t>&, std::vector<uint8_t>&)> udpScript;
@@ -187,7 +187,7 @@ namespace RTE {
 
 			bool TestPcpCodec(std::string* error) {
 				const uint8_t nonce[12] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
-				const std::vector<uint8_t> request = NetPortMapCodec::EncodePcpMapRequest(AddrOf("192.168.1.20"), 47603, 47603, 600, nonce);
+				const std::vector<uint8_t> request = NetPortMapCodec::EncodePcpMapRequest(AddrOf("192.0.2.20"), 47603, 47603, 600, nonce);
 				if (request.size() != 60) {
 					*error = "pcp map request is not 60 bytes";
 					return false;
@@ -196,8 +196,8 @@ namespace RTE {
 					*error = "pcp request header fields differ (version/opcode/protocol)";
 					return false;
 				}
-				if (request[18] != 0xFF || request[19] != 0xFF || std::memcmp(&request[20], "\xC0\xA8\x01\x14", 4) != 0) {
-					*error = "pcp request client address is not ::ffff:192.168.1.20";
+				if (request[18] != 0xFF || request[19] != 0xFF || std::memcmp(&request[20], "\xC0\x00\x02\x14", 4) != 0) {
+					*error = "pcp request client address is not ::ffff:192.0.2.20";
 					return false;
 				}
 				if (std::memcmp(&request[24], nonce, 12) != 0 || request[40] != 0xB9 || request[41] != 0xF3 || request[42] != 0xB9 || request[43] != 0xF3) {
@@ -227,10 +227,10 @@ namespace RTE {
 			}
 
 			bool TestIgdSoap(std::string* error) {
-				const std::string add = NetPortMapCodec::BuildIgdSoapAddPortMapping(kServiceType, 47603, 47603, "192.168.1.20", 600);
+				const std::string add = NetPortMapCodec::BuildIgdSoapAddPortMapping(kServiceType, 47603, 47603, "192.0.2.20", 600);
 				for (const char* needle : {"<u:AddPortMapping xmlns:u=\"urn:schemas-upnp-org:service:WANIPConnection:1\">",
 				                           "<NewExternalPort>47603</NewExternalPort>", "<NewProtocol>UDP</NewProtocol>",
-				                           "<NewInternalPort>47603</NewInternalPort>", "<NewInternalClient>192.168.1.20</NewInternalClient>",
+				                           "<NewInternalPort>47603</NewInternalPort>", "<NewInternalClient>192.0.2.20</NewInternalClient>",
 				                           "<NewEnabled>1</NewEnabled>", "<NewLeaseDuration>600</NewLeaseDuration>"}) {
 					if (add.find(needle) == std::string::npos) {
 						*error = std::string("AddPortMapping body is missing ") + needle;
@@ -261,8 +261,8 @@ namespace RTE {
 			}
 
 			bool TestDiscoveryParsers(std::string* error) {
-				const std::string reply = "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=1800\r\nLOCATION: http://192.168.1.1:80/rootDesc.xml\r\nST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n\r\n";
-				if (NetPortMapCodec::ParseSsdpLocation(reply) != "http://192.168.1.1:80/rootDesc.xml") {
+				const std::string reply = "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=1800\r\nLOCATION: http://192.0.2.1:80/rootDesc.xml\r\nST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n\r\n";
+				if (NetPortMapCodec::ParseSsdpLocation(reply) != "http://192.0.2.1:80/rootDesc.xml") {
 					*error = "the SSDP LOCATION header did not parse";
 					return false;
 				}
@@ -280,13 +280,13 @@ namespace RTE {
 					*error = "a document with no IGD service produced one";
 					return false;
 				}
-				if (NetPortMapCodec::ResolveIgdUrl("http://192.168.1.1:80/rootDesc.xml", "/ctl/IPConn") != "http://192.168.1.1:80/ctl/IPConn" ||
-				    NetPortMapCodec::ResolveIgdUrl("http://192.168.1.1/rootDesc.xml", "http://10.0.0.1/x") != "http://10.0.0.1/x") {
+				if (NetPortMapCodec::ResolveIgdUrl("http://192.0.2.1:80/rootDesc.xml", "/ctl/IPConn") != "http://192.0.2.1:80/ctl/IPConn" ||
+				    NetPortMapCodec::ResolveIgdUrl("http://192.0.2.1/rootDesc.xml", "http://10.0.0.1/x") != "http://10.0.0.1/x") {
 					*error = "control URL resolution is wrong";
 					return false;
 				}
-				if (!NetPortMapCodec::SameSlash24("192.168.1.20", "192.168.1.1") || NetPortMapCodec::SameSlash24("192.168.1.20", "192.168.2.1") ||
-				    NetPortMapCodec::SameSlash24("192.168.1.20", "not-an-ip")) {
+				if (!NetPortMapCodec::SameSlash24("192.0.2.20", "192.0.2.1") || NetPortMapCodec::SameSlash24("192.0.2.20", "198.51.100.1") ||
+				    NetPortMapCodec::SameSlash24("192.0.2.20", "not-an-ip")) {
 					*error = "the /24 gate misjudged its cases";
 					return false;
 				}
@@ -331,7 +331,7 @@ namespace RTE {
 						}
 						return true;
 					};
-					wan.ssdpReplies = {"HTTP/1.1 200 OK\r\nLOCATION: http://192.168.1.1:8467/rootDesc.xml\r\n\r\n"};
+					wan.ssdpReplies = {"HTTP/1.1 200 OK\r\nLOCATION: http://192.0.2.1:8467/rootDesc.xml\r\n\r\n"};
 					wan.getScript = [](const std::string&, std::string& body) {
 						body = kDescription;
 						return true;
@@ -343,7 +343,7 @@ namespace RTE {
 					};
 					const NetPortMap::Result result = NetPortMap::RunMappingChain(wan, 47603, 600, NetPortMap::Options{}, nullptr);
 					if (result.method != NetPortMap::Method::Upnp || result.externalIp != "203.0.113.7" || result.externalPort != 47603 ||
-					    result.controlUrl != "http://192.168.1.1:8467/ctl/IPConn") {
+					    result.controlUrl != "http://192.0.2.1:8467/ctl/IPConn") {
 						*error = "the upnp fallback produced a wrong result";
 						return false;
 					}
@@ -375,7 +375,7 @@ namespace RTE {
 						}
 						return true;
 					};
-					wan.ssdpReplies = {"HTTP/1.1 200 OK\r\nLOCATION: http://10.9.9.9:80/rootDesc.xml\r\n\r\n"};
+					wan.ssdpReplies = {"HTTP/1.1 200 OK\r\nLOCATION: http://203.0.113.9:80/rootDesc.xml\r\n\r\n"};
 					const NetPortMap::Result result = NetPortMap::RunMappingChain(wan, 47603, 600, NetPortMap::Options{}, nullptr);
 					if (result.method != NetPortMap::Method::None || result.error.empty()) {
 						*error = "an off-subnet IGD was accepted";
@@ -414,7 +414,7 @@ namespace RTE {
 				};
 				NetPortMap::Options options;
 				options.wan = &wan;
-				options.gateway = "192.168.1.1:5351";
+				options.gateway = "192.0.2.1:5351";
 				NetPortMap mapper;
 				mapper.Request(47603, 1, options); // a 1 s lease renews at its half-life
 				for (int i = 0; i < 400 && !mapper.Done(); ++i) {
@@ -499,7 +499,7 @@ namespace RTE {
 				};
 				NetPortMap::Options options;
 				options.wan = &wan;
-				options.gateway = "192.168.1.1:5351";
+				options.gateway = "192.0.2.1:5351";
 				NetPortMap mapper;
 				mapper.Request(47603, 2, options);
 				if (!WaitUntil(mapper, [&]() { return mapper.Mapped(); }, 400, 5)) {
@@ -546,7 +546,7 @@ namespace RTE {
 				};
 				NetPortMap::Options options;
 				options.wan = &wan;
-				options.gateway = "192.168.1.1:5351";
+				options.gateway = "192.0.2.1:5351";
 				NetPortMap mapper;
 				mapper.Request(47603, 2, options);
 				struct ReleaseHold {
@@ -605,11 +605,11 @@ namespace RTE {
 					}
 					return true;
 				};
-				wan.ssdpReplies = {"HTTP/1.1 200 OK\r\nLOCATION: http://192.168.1.1:8467/rootDesc.xml\r\n\r\n"};
+				wan.ssdpReplies = {"HTTP/1.1 200 OK\r\nLOCATION: http://192.0.2.1:8467/rootDesc.xml\r\n\r\n"};
 				wan.getScript = [](const std::string&, std::string& body) {
 					body = "<?xml version=\"1.0\"?><root><device><serviceList>"
 					       "<service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType>"
-					       "<controlURL>http://10.9.9.9/ctl/IPConn</controlURL></service></serviceList></device></root>";
+					       "<controlURL>http://203.0.113.9/ctl/IPConn</controlURL></service></serviceList></device></root>";
 					return true;
 				};
 				wan.postScript = [](const std::string&, const std::string&, const std::string&, long& status, std::string&) {
@@ -718,7 +718,7 @@ namespace RTE {
 			};
 			NetPortMap::Options options;
 			options.wan = &wan;
-			options.gateway = "192.168.1.1:5351";
+			options.gateway = "192.0.2.1:5351";
 			NetPortMap mapper;
 			mapper.m_Options = options;
 			mapper.m_Port = 47603;

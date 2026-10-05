@@ -148,7 +148,7 @@ namespace RTE {
 			const bool activeLike = s == State::Active || s == State::Parked;
 			// The client's session reading when the event does not concern it: a rejoin keeps its phase, a handshake keeps going.
 			const std::string quiet = s == State::RejoinConnecting ? "sess=alive" : rejoin ? std::string("sess=phase:") + PhaseOf(s) : "sess=ready";
-			// R6v2: a clean leaver's seat is held for it like a dropped one's (the AI plays it); its return is a reclaim.
+			// LEAVE-HELD: a clean leaver's seat is held for it like a dropped one's (the AI plays it); its return is a reclaim.
 			const std::string held = s == State::Left ? "seat=Held peer=left" : rejoin ? "seat=Held" : "seat=Held peer=held";
 			const auto set = [&x](std::string expect, std::string source, std::string gap = {}) {
 				x.expect = std::move(expect);
@@ -160,29 +160,29 @@ namespace RTE {
 			if (s == State::Migrating) {
 				const std::string migrationGap = "an event other than the migration's own steps arriving while the host is being replaced";
 				switch (e) {
-					case Event::MigrationComplete: set("sub=run subhost=2", "R1-392ii"); break;
+					case Event::MigrationComplete: set("sub=run subhost=2", "HOSTLOSS-HELD"); break;
 					case Event::MigrationFail:
-						set("legal: the survivors leave to the landing with 'The host left the match'", "R1-392ii");
+						set("legal: the survivors leave to the landing with 'The host left the match'", "HOSTLOSS-HELD");
 						x.notWalked = "no in-process lever fails a migration short of losing every successor";
 						break;
-					case Event::SuccessorLost: set("sub=unreachable subhost=1", "R6-sss"); break;
+					case Event::SuccessorLost: set("sub=unreachable subhost=1", "SUCCESSOR-LOST"); break;
 					case Event::MigrationBegin: set("sub=run subhost=2", "DESIGN-MIGRATION"); break;
-					case Event::HostLost: set("sub=run subhost=2", "R1-392ii"); break;
+					case Event::HostLost: set("sub=run subhost=2", "HOSTLOSS-HELD"); break;
 					case Event::HostGoodbye:
-						set("n/a: the host is already gone", "R1-392ii");
+						set("n/a: the host is already gone", "HOSTLOSS-HELD");
 						x.notWalked = "the lost host sends nothing";
 						break;
 					case Event::MatchOver:
 						set("refuse: no host remains to end the match until the successor hosts", "GAP", "an end of match requested while the host is being replaced");
 						x.notWalked = "no peer is the host while the migration runs, so nothing authors a match end";
 						break;
-					case Event::OwnCap: set("sub=over", "R1F7 R-B"); break;
+					case Event::OwnCap: set("sub=over", "LEAVE MATCH-END"); break;
 					case Event::HoldProposed:
 					case Event::HeldRejoin:
-					case Event::LateJoin: set("api=refused sub=run subhost=2", e == Event::LateJoin ? "H4-7" : "GAP", e == Event::LateJoin ? "" : migrationGap); break;
-					case Event::TicketRejoin: set("sub=run subhost=2", "H4-0"); break;
+					case Event::LateJoin: set("api=refused sub=run subhost=2", e == Event::LateJoin ? "TICKET" : "GAP", e == Event::LateJoin ? "" : migrationGap); break;
+					case Event::TicketRejoin: set("sub=run subhost=2", "ADMISSION"); break;
 					case Event::LinkBlip:
-					case Event::LinkRestore: set("sub=run subhost=2", "RB2"); break;
+					case Event::LinkRestore: set("sub=run subhost=2", "HOLD"); break;
 					case Event::PrivateCaptureComplete:
 					case Event::WorldImageOffered:
 					case Event::OpeningResumeOffer:
@@ -198,24 +198,24 @@ namespace RTE {
 
 			switch (e) {
 				case Event::HoldProposed:
-					if (s == State::Active) set("seat=Held round=run peer=held holds>0 " + quiet, "RB2");
-					else if (s == State::Parked) set("seat=Held round=run peer=held " + quiet, "RB2 LS-PARK");
+					if (s == State::Active) set("seat=Held round=run peer=held holds>0 " + quiet, "HOLD");
+					else if (s == State::Parked) set("seat=Held round=run peer=held " + quiet, "HOLD LS-PARK");
 					else if (s == State::Draining) set("seat=Active round=run holds=0 " + quiet, "LS-DRAIN");
-					else if (heldLike) set(held + " round=run holds=0 " + quiet, "RB2");
+					else if (heldLike) set(held + " round=run holds=0 " + quiet, "HOLD");
 					else if (s == State::Reclaiming) set("seat=Reclaiming round=run " + quiet, "GAP", "a hold proposed for a seat whose reclaim is agreed but not active yet (nothing is owed by it before E)");
 					else set("api=refused round=relaunch " + quiet, "LS-STOP");
 					break;
 				case Event::HoldResolved:
 					if (activeLike || s == State::Draining) set("seat=Active round=run holds=0 " + quiet, "LS-STOP");
-					else if (heldLike) set(held + " round=run " + quiet, "RB3 R2D3");
-					else if (s == State::Reclaiming) set("seat=Reclaiming round=run " + quiet, "RB3 R2D3");
+					else if (heldLike) set(held + " round=run " + quiet, "RETURN RECLAIM");
+					else if (s == State::Reclaiming) set("seat=Reclaiming round=run " + quiet, "RETURN RECLAIM");
 					else set("round=relaunch " + quiet, "LS-STOP");
 					break;
 				case Event::ParkBegin:
 					if (activeLike) set("seat=Active round=run peer=run holds=0 " + quiet, "LS-PARK");
 					else if (s == State::Draining) set("round=run holds=0 " + quiet, "GAP", "a capture park opened after the round's last tick");
 					else if (heldLike) set(held + " round=run holds=0 " + quiet, "LS-PARK");
-					else if (s == State::Reclaiming) set("seat=Reclaiming round=run holds=0 " + quiet, "C5102");
+					else if (s == State::Reclaiming) set("seat=Reclaiming round=run holds=0 " + quiet, "PARK-START");
 					else set("round=relaunch " + quiet, "LS-STOP");
 					break;
 				case Event::ParkEnd:
@@ -228,51 +228,51 @@ namespace RTE {
 					break;
 				case Event::PrivateCaptureComplete:
 					x.notWalked = serviceStep;
-					if (s == State::RejoinImagePending) set("legal: ImagePending -> Loading on the newest base image", "R2-206 R2D2");
-					else if (s == State::Held) set("ignore: the base image is kept for the seat's next rejoin (the steady-cost refresh rule)", "R2-206");
+					if (s == State::RejoinImagePending) set("legal: ImagePending -> Loading on the newest base image", "BASE-REFRESH WORLD-IMAGE");
+					else if (s == State::Held) set("ignore: the base image is kept for the seat's next rejoin (the steady-cost refresh rule)", "BASE-REFRESH");
 					else set("ignore: no seat waits on that image (conservative)", "GAP", "a private image completing for a seat that is not waiting on one");
 					break;
 				case Event::WorldImageOffered:
 					x.notWalked = serviceStep;
-					if (s == State::RejoinImagePending) set("legal: ImagePending -> Loading on the newest image; coverage starts at the loaded image", "R2D2");
+					if (s == State::RejoinImagePending) set("legal: ImagePending -> Loading on the newest image; coverage starts at the loaded image", "WORLD-IMAGE");
 					else if (s == State::RejoinLoading || s == State::RejoinTailReplay) set("ignore: the load in progress finishes first (conservative)", "GAP", "a newer world image offered while an older one loads or replays");
 					else set("ignore: no seat waits on an image (conservative)", "GAP", "a world image offered to a seat that is not waiting on one");
 					break;
 				case Event::OpeningResumeOffer:
 					x.notWalked = serviceStep;
-					set("refuse: the opening resume offer is retired once the round runs past its anchor; a rejoin takes the image path with the newest image", "R2WAY2");
+					set("refuse: the opening resume offer is retired once the round runs past its anchor; a rejoin takes the image path with the newest image", "WORLD-RESUME");
 					break;
 				case Event::TailReplayComplete:
 					x.notWalked = serviceStep;
-					if (s == State::RejoinTailReplay) set("legal: TailReplay -> Active; the seat plays live from its activation", "R2D2 RB3");
+					if (s == State::RejoinTailReplay) set("legal: TailReplay -> Active; the seat plays live from its activation", "WORLD-IMAGE RETURN");
 					else set("n/a: the completion is raised only by the seat's own tail replay", "NS-PHASE");
 					break;
 				case Event::ResyncRelaunch:
 					if (activeLike) set("round=relaunch peer=relaunch " + quiet, "LS-STOP");
 					else if (s == State::Draining) set("round=run " + quiet, "GAP", "a relaunch requested after the round's last tick");
 					else if (s == State::Held) set("round=relaunch seat=Held " + quiet, "LS-STOP");
-					else if (s == State::Left) set("round=relaunch seat=Held " + quiet, "LS-STOP R6v2");
+					else if (s == State::Left) set("round=relaunch seat=Held " + quiet, "LS-STOP LEAVE-HELD");
 					else if (s == State::Reclaiming) set("round=relaunch " + quiet, "LS-STOP", "what an agreed reclaim becomes across a relaunch is not ruled");
 					else if (rejoin) set("round=relaunch " + quiet, "LS-STOP", "a relaunch while the seat's rejoin is in flight: the conservative expectation keeps the rejoin's session");
 					else set("round=relaunch " + quiet, "LS-STOP");
 					break;
 				case Event::HostGoodbye:
-					if (activeLike || s == State::Draining) set("round=ended peer=noresync sess=ended", "R1-392ii R2-392 H4-7");
-					else if (s == State::Held || s == State::Reclaiming) set("round=ended peer=held sess=ended", "R1-392ii H4-7");
-					else if (s == State::Left) set("round=ended peer=left sess=ended", "R1-392ii H4-7");
-					else if (rejoin) set("round=ended sess=ended", "NS-PHASE R1-392ii");
-					else set("sess=ended", "H4-7 R1-392ii");
+					if (activeLike || s == State::Draining) set("round=ended peer=noresync sess=ended", "HOSTLOSS-HELD HOSTDROP TICKET");
+					else if (s == State::Held || s == State::Reclaiming) set("round=ended peer=held sess=ended", "HOSTLOSS-HELD TICKET");
+					else if (s == State::Left) set("round=ended peer=left sess=ended", "HOSTLOSS-HELD TICKET");
+					else if (rejoin) set("round=ended sess=ended", "NS-PHASE HOSTLOSS-HELD");
+					else set("sess=ended", "TICKET HOSTLOSS-HELD");
 					break;
 				case Event::HostLost:
-					if (activeLike || s == State::Draining) set("peer=noresync sess=ended", "R1-392ii R2-392");
-					else if (s == State::Held || s == State::Reclaiming) set("peer=held sess=ended", "R1-392ii");
-					else if (s == State::Left) set("peer=left sess=ended", "R1-392ii");
+					if (activeLike || s == State::Draining) set("peer=noresync sess=ended", "HOSTLOSS-HELD HOSTDROP");
+					else if (s == State::Held || s == State::Reclaiming) set("peer=held sess=ended", "HOSTLOSS-HELD");
+					else if (s == State::Left) set("peer=left sess=ended", "HOSTLOSS-HELD");
 					else if (rejoin) set("sess=ended", "NS-PHASE");
-					else set("sess=ended", "R1-392ii");
+					else set("sess=ended", "HOSTLOSS-HELD");
 					break;
 				case Event::MigrationBegin:
-					if (s == State::Relaunching) set("api=refused round=relaunch", "R1-392ii");
-					else set("api=refused round=run", "R1-392ii");
+					if (s == State::Relaunching) set("api=refused round=relaunch", "HOSTLOSS-HELD");
+					else set("api=refused round=run", "HOSTLOSS-HELD");
 					break;
 				case Event::MigrationComplete:
 				case Event::MigrationFail:
@@ -281,50 +281,50 @@ namespace RTE {
 					set("n/a: raised only while a host migration runs", "DESIGN-MIGRATION");
 					break;
 				case Event::LateJoin:
-					if (s == State::Relaunching) set("api=refused round=relaunch", "H4-7 R2D3");
-					else set("api=refused round=run " + quiet, "H4-7 R2D3");
+					if (s == State::Relaunching) set("api=refused round=relaunch", "TICKET RECLAIM");
+					else set("api=refused round=run " + quiet, "TICKET RECLAIM");
 					break;
 				case Event::TicketRejoin:
-					if (activeLike) set("seat=Active round=run peer=run holds=0 " + quiet, "H4-0 H4-6");
-					else if (s == State::Draining) set("round=run holds=0 " + quiet, "H4-0");
-					else if (heldLike) set(held + " round=run " + quiet, "H4-0");
-					else if (s == State::Reclaiming) set("seat=Reclaiming round=run " + quiet, "H4-0");
-					else set("round=relaunch " + quiet, "H4-0");
+					if (activeLike) set("seat=Active round=run peer=run holds=0 " + quiet, "ADMISSION TRANSPORT");
+					else if (s == State::Draining) set("round=run holds=0 " + quiet, "ADMISSION");
+					else if (heldLike) set(held + " round=run " + quiet, "ADMISSION");
+					else if (s == State::Reclaiming) set("seat=Reclaiming round=run " + quiet, "ADMISSION");
+					else set("round=relaunch " + quiet, "ADMISSION");
 					break;
 				case Event::HeldRejoin:
-					if (activeLike || s == State::Draining) set("api=refused seat=Active round=run " + quiet, "H4-4 R2D3");
-					else if (s == State::Held || rejoin) set("api=ok seat=Reclaiming round=run " + quiet, "RB3 R2D3");
-					else if (s == State::Left) set("api=ok seat=Reclaiming round=run " + quiet, "R6v2 RB3");
-					else if (s == State::Reclaiming) set("api=ok seat=Reclaiming round=run " + quiet, "H4-6");
+					if (activeLike || s == State::Draining) set("api=refused seat=Active round=run " + quiet, "SEAT-ID RECLAIM");
+					else if (s == State::Held || rejoin) set("api=ok seat=Reclaiming round=run " + quiet, "RETURN RECLAIM");
+					else if (s == State::Left) set("api=ok seat=Reclaiming round=run " + quiet, "LEAVE-HELD RETURN");
+					else if (s == State::Reclaiming) set("api=ok seat=Reclaiming round=run " + quiet, "TRANSPORT");
 					else set("api=refused round=relaunch " + quiet, "GAP", "a returner arriving during a relaunch (conservative: the running round refuses; the relaunch's own admission carries it)");
 					break;
 				case Event::Kick:
 				case Event::Ban: {
 					const std::string reason = e == Event::Kick ? "ParticipantRemoved" : "ParticipantBanned";
-					if (s == State::Relaunching) set("round=relaunch sess=ended:" + reason, "NP-KICK R-B");
+					if (s == State::Relaunching) set("round=relaunch sess=ended:" + reason, "NP-KICK MATCH-END");
 					else if (s == State::RejoinConnecting) {
-						set("seat=Left round=run", "NP-KICK R-B");
+						set("seat=Left round=run", "NP-KICK MATCH-END");
 						x.note = "coordinator half only: the handshaking returner is refused by the admission plane (NetReconnectHost), which the rig does not compose";
-					} else set("seat=Left round=run sess=ended:" + reason, "NP-KICK R-B");
+					} else set("seat=Left round=run sess=ended:" + reason, "NP-KICK MATCH-END");
 					break;
 				}
 				case Event::SeatRelease:
 					if (activeLike || s == State::Draining) set("seat=Active round=run holds=0 " + quiet, "LS-STOP");
-					else if (s == State::Held || s == State::Left) set("seat=Left round=run " + quiet, "LS-STOP R-B");
-					else if (rejoin) set("seat=Left round=run", "LS-STOP R-B");
+					else if (s == State::Held || s == State::Left) set("seat=Left round=run " + quiet, "LS-STOP MATCH-END");
+					else if (rejoin) set("seat=Left round=run", "LS-STOP MATCH-END");
 					else if (s == State::Reclaiming) set("seat=Reclaiming round=run " + quiet, "GAP", "a release of a seat whose reclaim is agreed");
 					else set("round=relaunch " + quiet, "LS-STOP");
 					break;
 				case Event::OwnCap:
-					if (activeLike) set("seat=Held round=run sess=ended", "R1F7 R6v2");
+					if (activeLike) set("seat=Held round=run sess=ended", "LEAVE LEAVE-HELD");
 					else if (s == State::Draining) set("peer=over sess=ended", "LS-DRAIN");
-					else if (heldLike) set("seat=Held round=run sess=ended", "R1F7 R6v2");
+					else if (heldLike) set("seat=Held round=run sess=ended", "LEAVE LEAVE-HELD");
 					else if (s == State::Reclaiming) set("seat=Reclaiming round=run sess=ended", "GAP", "a returner that reaches its own cap before its activation frame");
-					else set("round=relaunch sess=ended", "R1F7");
+					else set("round=relaunch sess=ended", "LEAVE");
 					break;
 				case Event::ResumeFromDisk:
 					x.notWalked = serviceStep;
-					if (s == State::Relaunching) set("legal: the relaunch loads the match's newest checkpoint from disk on every peer", "READY-4");
+					if (s == State::Relaunching) set("legal: the relaunch loads the match's newest checkpoint from disk on every peer", "DISK-RESUME");
 					else set("refuse: a running round is not replaced by a disk resume (conservative)", "GAP", "a resume from disk requested while a round runs");
 					break;
 				case Event::MatchOver:
@@ -334,11 +334,11 @@ namespace RTE {
 					break;
 				case Event::LinkBlip:
 				case Event::LinkRestore: {
-					const std::string source = e == Event::LinkBlip ? "RB2" : "RB3";
+					const std::string source = e == Event::LinkBlip ? "HOLD" : "RETURN";
 					if (activeLike) set("seat=Active round=run peer=run holds=0 " + quiet, source);
 					else if (s == State::Draining) set("round=run holds=0 " + quiet, "LS-DRAIN");
-					else if (heldLike) set(held + " round=run " + quiet, "RB3");
-					else if (s == State::Reclaiming) set("seat=Reclaiming round=run " + quiet, "RB3");
+					else if (heldLike) set(held + " round=run " + quiet, "RETURN");
+					else if (s == State::Reclaiming) set("seat=Reclaiming round=run " + quiet, "RETURN");
 					else set("round=relaunch " + quiet, "NS-PHASE");
 					break;
 				}
@@ -1176,7 +1176,7 @@ namespace RTE {
 		const Row stuckImage{"a_stuck_private_image_is_retaken_once_then_refused", &TestAStuckPrivateImageIsRetakenOnceThenRefused}, rematchCatchUp{"a_rematch_starts_without_the_ended_rounds_catch_up", &TestARematchStartsWithoutTheEndedRoundsCatchUp};
 		const Row recordOnce{"a_caught_up_seat_takes_its_rounds_record_once", &TestACaughtUpSeatTakesItsRoundsRecordOnce}, nextRoster{"service_return_to_lobby_forms_the_next_roster", &TestServiceReturnToLobbyFormsTheNextRoster};
 		const Row imageClose{"a_link_closed_for_the_image_keeps_the_seat_at_the_rematch", &TestALinkClosedForTheImageKeepsTheSeatAtTheRematch}, landing{"a_next_round_landing_ends_the_rejoin_phase", &TestANextRoundLandingEndsTheRejoinPhase};
-		const char* fs4 = "FS4: the relaunched process's births twice need the two-process relaunch with the birth probe (ruling ggg)";
+		const char* fs4 = "a relaunched process's births twice need the two-process relaunch with the birth probe";
 		const char* twoProcess = "needs a host and a returning process with an activity and the image transfer (the two-process harness)";
 		const std::vector<Cell> cells = {
 			{"1a", nullptr, {}, {linkless}, nullptr, "the seat's listing in the first lobby"},
@@ -1236,7 +1236,7 @@ namespace RTE {
 			{"5c", nullptr, {P(State::RejoinImagePending, Event::TicketRejoin)}},
 			{"5d", nullptr, {P(State::RejoinImagePending, Event::Kick), P(State::RejoinImagePending, Event::Ban)}},
 			{"5e", nullptr, {}, {stuckImage}},
-			{"5f", nullptr, {}, {laterLobby, landing}, nullptr, "RT4: the end record during the image, the next round held and the return there (two-process)"},
+			{"5f", nullptr, {}, {laterLobby, landing}, nullptr, "the end record during the image, the next round held and the return there (two-process)"},
 			{"5g", nullptr, {}, {}, nullptr, twoProcess},
 			{"5h", nullptr, {}, {}, nullptr, "the image prepared off the host's sim thread"},
 			{"5i", nullptr, {}, {}, nullptr, "the returner dialling the successor"},
@@ -1249,7 +1249,7 @@ namespace RTE {
 			{"6b", nullptr, {}, {}, nullptr, fs4},
 			{"6c", nullptr, {P(State::RejoinTailReplay, Event::TicketRejoin)}},
 			{"6d", nullptr, {P(State::RejoinTailReplay, Event::Kick), P(State::RejoinTailReplay, Event::Ban)}},
-			{"6e", nullptr, {}, {}, nullptr, "DS1's release row lives inside the world-join row's fixture"},
+			{"6e", nullptr, {}, {}, nullptr, "the seat release row lives inside the world-join row's fixture"},
 			{"6f", nullptr, {P(State::RejoinTailReplay, Event::MatchOver)}, {rematchCatchUp, recordOnce}},
 			{"6g", nullptr, {}, {startHeld}},
 			{"6h", nullptr, {}, {}, nullptr, "the replay while the host's own seat is held for a stall"},
@@ -1260,7 +1260,7 @@ namespace RTE {
 			{"6m", nullptr, {}, {}, nullptr, "two drops while one replays"},
 			{"6n", nullptr, {}, {}, nullptr, "the headroom rows live in another row's own fixtures"},
 			{"7a", nullptr, {}, {lobbyHold}},
-			{"7b", nullptr, {}, {}, nullptr, "RT4 form A: a relaunched seat's end record and the next lobby (two-process)"},
+			{"7b", nullptr, {}, {}, nullptr, "a relaunched seat's end record and the next lobby (two-process)"},
 			{"7c", nullptr, {}, {toldOver}},
 			{"7d", nullptr, {}, {}, nullptr, "a kick at the round's end"},
 			{"7e", "the same cell as 7c from the other seat"}, {"7f", "this is the end"}, {"7g", "row 8"},
@@ -1289,7 +1289,7 @@ namespace RTE {
 			{"9c", nullptr, {P(State::Relaunching, Event::TicketRejoin)}, {}, nullptr, fs4},
 			{"9d", nullptr, {P(State::Relaunching, Event::Kick), P(State::Relaunching, Event::Ban)}},
 			{"9e", nullptr, {}, {}, nullptr, twoProcess},
-			{"9f", nullptr, {}, {}, nullptr, "RT4 form A (two-process)"},
+			{"9f", nullptr, {}, {}, nullptr, "a relaunched seat's end record (two-process)"},
 			{"9g", nullptr, {}, {}, nullptr, twoProcess},
 			{"9h", nullptr, {}, {}, nullptr, twoProcess},
 			{"9i", nullptr, {}, {}, nullptr, twoProcess},

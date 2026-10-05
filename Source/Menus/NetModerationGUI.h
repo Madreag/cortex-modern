@@ -70,7 +70,7 @@ namespace RTE {
 		/// Extra status line. Empty leaves the box unchanged.
 		void SetStatusProbeLine(const std::string& line) { m_StatusProbeLine = line; }
 		/// A toast-fill run no live overlay rect covers: the pixels a moved band left on a layer
-		/// nothing cleared that frame (ENGINE 195's second band).
+		/// nothing cleared that frame (the second band a moved toast leaves behind).
 		struct GhostBandHit {
 			bool found = false;
 			int x = 0, y = 0, run = 0;

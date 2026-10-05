@@ -1436,7 +1436,7 @@ namespace RTE {
 		m_Admission.DropConnection(connection);
 		const bool liveLeave = m_LiveMatch && !m_MatchEnded;
 		// From the first start on a leave is a drop the player chose, in a match and in a world: the seat stays theirs and the AI plays it
-		// until they rejoin or the host gives it away (A12); before the first start it frees the seat (ruling iii).
+		// until they rejoin or the host gives it away; before the first start it frees the seat.
 		const bool heldLeave = m_Roster.stage != NetRosterStage::Lobby;
 		if (heldLeave) {
 			// The link may stay up at the leaver's menu, so the drop runs now.
@@ -2011,7 +2011,7 @@ namespace RTE {
 			entry.seatGeneration = seat.seatGeneration;
 			entry.incarnation = seat.incarnation;
 			entry.epoch = m_ConfiguredEpoch;
-			// A held seat waits for its player with no deadline; only the host's click releases it (A12).
+			// A held seat waits for its player with no deadline; only the host's click releases it.
 			entry.holdUntilMs = 0;
 			entry.substituteName = seat.substituteName;
 			entry.displayName = seat.holderName;

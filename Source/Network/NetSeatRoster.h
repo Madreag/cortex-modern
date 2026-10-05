@@ -155,7 +155,7 @@ namespace RTE {
 		std::vector<std::pair<uint32_t, std::array<uint8_t, 32>>> m_Recent; //!< The last revisions' hashes, oldest first.
 	};
 
-	/// The net-roster self-test: drives every reachable cell of REJOIN-GRID.md through ApplyRosterEvent.
+	/// The net-roster self-test: drives every reachable cell of the seat state grid (phase x event) through ApplyRosterEvent.
 	class NetSeatRosterSelfTest {
 	public:
 		static int Run();
