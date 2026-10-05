@@ -7832,7 +7832,8 @@ static std::string ResyncSaveName() {
 			if (m_MigrationStatusUntilMs != 0 && SteadyNowMs() >= m_MigrationStatusUntilMs) {
 				m_StatusText = "LIVE";
 				m_MigrationStatusUntilMs = 0;
-				ScenarioRunner::PushNetUiToast("host_handover_live", m_StatusText);
+				// The status widget reads LIVE itself; the toast tells the event.
+				ScenarioRunner::PushNetUiToast("host_handover_live", "Handover complete - the match plays on");
 			}
 			return;
 		}

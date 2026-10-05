@@ -4808,7 +4808,7 @@ static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, con
 	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8,
 	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]" + (heldRejoin ? "  /  Leave [Esc] - your seat is kept" : ""), GUIFont::Centre);
 	g_MenuMan.DrawNetworkUI();
-	ScenarioRunner::DrawNetUiToasts();
+	ScenarioRunner::DrawNetUiToasts(resyncTitle);
 	ScenarioRunner::NoteResyncOverlayFrame();
 	g_MenuMan.DrawLocalPauseMenu();
 	g_WindowMan.UploadFrame();
@@ -6778,7 +6778,13 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				s_netMatchHeals.Note(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
 				g_ConsoleMan.PrintString("NETWORK: Resyncing from the host (" + std::to_string(s_netMatchHeals.Total()) + "): " + error);
 				System::PrintDiagnosticLine("[net-match] resync: reloading from the host snapshot");
-				ScenarioRunner::PushNetUiToast("resync_start", "Resyncing the match...");
+				const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
+				const auto seatName = [&snapshot](uint8_t peer) {
+					if (const auto view = g_NetMatchService.GetSeatView(peer); view && !view->name.empty()) return view->name;
+					const auto member = std::find_if(snapshot.members.begin(), snapshot.members.end(), [peer](const NetLobbyMember& row) { return row.peerId == peer; });
+					return member != snapshot.members.end() ? member->displayName : std::string();
+				};
+				ScenarioRunner::PushNetUiToast("resync_start", NetRepairStartLine(error, seatName(snapshot.localPeerId), seatName(snapshot.hostPeerId), snapshot.isHost));
 			}
 			ScenarioRunner::ClearControllerReplayError();
 			std::string resyncError;
@@ -6790,9 +6796,15 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			const size_t heldAt = error.find("PeerHeld:");
 			const std::string stopLine = heldAt == std::string::npos ? std::string() : error.substr(heldAt + 9);
 			const std::string unreachableAtStop = stopLine.rfind("The host is unreachable", 0) == 0 ? stopLine : std::string();
+			// The wait's screen goes up before the host's snapshot save holds this thread, so the stopped match says why at once.
+			const bool leaveAtOnce = UpdateResyncUI(0, heldRejoin, unreachableAtStop);
 			if (heldRejoin) {
 				resyncOk = g_NetMatchService.BeginHeldRejoin(&resyncError);
 			} else resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
+			if (leaveAtOnce) {
+				leftTheWait = true;
+				resyncOk = false;
+			}
 			std::string launchPreset;
 			for (bool attempt = resyncOk; attempt;) {
 				attempt = false;
