@@ -366,6 +366,15 @@ namespace RTE::MenuAutomation {
 				}
 			}
 			why = control->GetName() + (covered.empty() ? " lies off the screen" : " is covered: a press there reaches " + covered);
+			if (GUIPanel* held = manager->GetManager()->GetCapturedPanel()) why += " (the mouse is held by " + Reached(held) + ")";
+			// The panels a press at the centre passes through on its way down, so the one that does not hold the point shows.
+			if (!covered.empty()) {
+				why += "; centre " + std::to_string(r[0] + r[2] / 2) + "," + std::to_string(r[1] + r[3] / 2) + " in";
+				for (GUIPanel* node = panel; node; node = node->GetParentPanel()) {
+					const auto* named = dynamic_cast<GUIControl*>(node);
+					why += " " + (named ? named->GetName() : std::string("panel")) + Json(Rectangle(node)).dump() + (node->_GetVisible() ? "" : "(hidden)");
+				}
+			}
 			return std::nullopt;
 		}
 
