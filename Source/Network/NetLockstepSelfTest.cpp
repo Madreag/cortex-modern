@@ -2069,6 +2069,25 @@ namespace RTE {
 			return true;
 		}
 
+		bool WarmBoundedInputFixture(std::initializer_list<std::pair<NetLockstepCoordinator*, LoopbackTransport*>> peers, uint64_t& now, std::string* error) {
+			for (const auto& [peer, wire]: peers) {
+				for (uint64_t producer = 0; producer + peer->GetConfig().inputDelayFrames <= 100; ++producer)
+					if (!peer->QueueLocalInput(producer, {}, {}, error)) return false;
+			}
+			for (const uint64_t deadline = now + 100; now < deadline; ++now) {
+				for (const auto& [peer, wire]: peers) { wire->AdvanceTimeMs(1); peer->Tick(now); }
+				bool complete = true;
+				for (const auto& [peer, wire]: peers) {
+					NetLockstepReadyFrame ready;
+					while (peer->PopReadyFrame(ready)) (void)peer->FinishSimulationTick(ready.frame);
+					complete &= peer->GetResumeFrame() == 101;
+				}
+				if (complete) { ++now; return true; }
+			}
+			*error = "the bounded-input fixture did not finish its accepted startup prefix";
+			return false;
+		}
+
 		bool TestBoundedHoldKeepsCommitting(std::string* error) {
 			LoopbackTransport hostTransport, clientTransport;
 			NetLockstepCoordinator host, client;
@@ -2082,19 +2101,21 @@ namespace RTE {
 			if (!StartCoordinatorPair(48892, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) return false;
 			host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
 			for (uint64_t now = 0; now < 10; ++now) { hostTransport.AdvanceTimeMs(1); clientTransport.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
-			if (!host.IsRunning() || !client.IsRunning() || !host.QueueLocalInput(0, {}, {}, error)) return false;
+			uint64_t firstWait = 10;
+			if (!host.IsRunning() || !client.IsRunning() || !WarmBoundedInputFixture({{&host, &hostTransport}, {&client, &clientTransport}}, firstWait, error) ||
+			    !host.QueueLocalInput(101, {}, {}, error)) return false;
 			NetLockstepReadyFrame ready;
-			for (uint64_t now = 10; now < 58; ++now) {
+			for (uint64_t now = firstWait; now < firstWait + 48; ++now) {
 				host.Tick(now);
-				host.NoteFrameWait(0, now);
+				host.NoteFrameWait(101, now);
 				if (host.PopReadyFrame(ready)) { *error = "the held peer lost its input before the configured wait bound"; return false; }
 			}
-			if (!host.NoteFrameWait(0, 58) || !host.PopReadyFrame(ready) || ready.frame != 0 || !host.AnyDroppedSeatHeld() ||
-			    !host.IsSeatUnderAI(2, 0) || host.HeldSeatResolution(2) != NetLockstepHoldResolution::Substituted || host.GetStats().longestStallMs > 50) {
+			if (!host.NoteFrameWait(101, firstWait + 48) || !host.PopReadyFrame(ready) || ready.frame != 101 || !host.AnyDroppedSeatHeld() ||
+			    !host.IsSeatUnderAI(2, 101) || host.HeldSeatResolution(2) != NetLockstepHoldResolution::Substituted || host.GetStats().longestStallMs > 50) {
 				*error = "a missing peer did not become an AI-held seat at the three-tick bound"; return false;
 			}
-			host.FinishFrameWait(58);
-			(void)host.FinishSimulationTick(0);
+			host.FinishFrameWait(firstWait + 48);
+			(void)host.FinishSimulationTick(101);
 			for (uint64_t tick = 0; tick < 16; ++tick) {
 				host.NoteLocalTickCost(tick, 40.0);
 				host.NoteLocalInputProduced(tick, tick * 40000, 0);
@@ -2116,7 +2137,7 @@ namespace RTE {
 			    report.find("\"longest_wait_ms\":48") == std::string::npos || report.find("\"blocking_frame_waits\":1") == std::string::npos) {
 				*error = "a held peer's report omitted its hold, AI handoff or wait"; return false;
 			}
-			for (uint64_t tick = 1; tick <= 5; ++tick) {
+			for (uint64_t tick = 102; tick <= 105; ++tick) {
 				if (!host.QueueLocalInput(tick, {}, {}, error)) return false;
 				host.Tick(60 + tick);
 				if (!host.PopReadyFrame(ready) || ready.frame != tick || !ready.remoteFrames.empty()) {
@@ -2129,7 +2150,7 @@ namespace RTE {
 				*error = "a held seat reclaimed before its RTT-derived delay took effect: " + rejoinError; return false;
 			}
 			uint64_t applyFrame = 0;
-			for (uint64_t tick = 6; tick <= 80; ++tick) {
+			for (uint64_t tick = 106; tick <= 180; ++tick) {
 				if (!host.QueueLocalInput(tick, {}, {}, error)) return false;
 				host.Tick(500 + tick);
 				if (!host.PopReadyFrame(ready) || ready.frame != tick) { *error = "rejoin delay negotiation stalled the survivor"; return false; }
@@ -2139,7 +2160,7 @@ namespace RTE {
 				}
 				(void)host.FinishSimulationTick(tick);
 			}
-			if (applyFrame <= 5) { *error = "readmission did not commit its future delay boundary"; return false; }
+			if (applyFrame <= 105) { *error = "readmission did not commit its future delay boundary"; return false; }
 			if (!host.PreparePeerRejoin(2, 401, 600, &rejoinError) || host.PreparePeerRejoin(2, 4000, 700, &rejoinError)) {
 				*error = "rejoin delay fit admitted an over-cap link or refused a fitted one"; return false;
 			}
@@ -2155,11 +2176,12 @@ namespace RTE {
 			a.simTickMs = b.simTickMs = 1000.0 / 60.0;
 			if (!StartCoordinatorPair(48902, hostWire, clientWire, host, client, a, b, error)) return false;
 			for (uint64_t now = 0; now < 10; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
-			if (!host.QueueLocalInput(0, {}, {}, error)) return false;
+			uint64_t firstWait = 10;
+			if (!WarmBoundedInputFixture({{&host, &hostWire}, {&client, &clientWire}}, firstWait, error) || !host.QueueLocalInput(101, {}, {}, error)) return false;
 			NetLockstepReadyFrame ready;
-			for (uint64_t now = 10; now < 58; ++now) { host.Tick(now); if (host.PopReadyFrame(ready)) return false; }
-			host.Tick(58);
-			if (!host.PopReadyFrame(ready) || !host.IsSeatUnderAI(2, 0) || host.GetStats().blockingFrameWaits != 0 ||
+			for (uint64_t now = firstWait; now < firstWait + 48; ++now) { host.Tick(now); if (host.PopReadyFrame(ready)) return false; }
+			host.Tick(firstWait + 48);
+			if (!host.PopReadyFrame(ready) || !host.IsSeatUnderAI(2, 101) || host.GetStats().blockingFrameWaits != 0 ||
 			    host.GetStats().lastHoldDeclarationMs + host.GetStats().holdNoticeBudgetMs > 50) {
 				*error = "the first-missing deadline waited for a render consumer or spent a second wait budget"; return false;
 			}
@@ -2188,10 +2210,12 @@ namespace RTE {
 				hostTransport.AdvanceTimeMs(1); slowTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
 				host.Tick(now); slow.Tick(now); survivor.Tick(now);
 			}
-			if (!host.QueueLocalInput(0, {}, {}, error) || (!bothSilent && !survivor.QueueLocalInput(0, {}, {}, error))) return false;
+			uint64_t warmedAt = 10;
+			if (!WarmBoundedInputFixture({{&host, &hostTransport}, {&slow, &slowTransport}, {&survivor, &survivorTransport}}, warmedAt, error) ||
+			    !host.QueueLocalInput(101, {}, {}, error) || (!bothSilent && !survivor.QueueLocalInput(100, {}, {}, error))) return false;
 			host.Tick(20);
-			host.NoteFrameWait(0, 100);
-			host.NoteFrameWait(0, 150);
+			host.NoteFrameWait(101, 100);
+			host.NoteFrameWait(101, 150);
 			host.Tick(150);
 			NetLockstepReadyFrame hostFrame, survivorFrame;
 			if (bothSilent) {
@@ -2201,16 +2225,16 @@ namespace RTE {
 				}
 				return true;
 			}
-			if (!host.PopReadyFrame(hostFrame) || host.TimingDecisionPendingAt(0) || survivor.PopReadyFrame(survivorFrame)) {
+			if (!host.PopReadyFrame(hostFrame) || host.TimingDecisionPendingAt(101) || survivor.PopReadyFrame(survivorFrame)) {
 				*error = "the host waited for an application acknowledgement or a survivor guessed the hold"; return false;
 			}
 			const auto held = std::find_if(hostFrame.localCommands.begin(), hostFrame.localCommands.end(), [](const auto& command) { return std::holds_alternative<NetGameSeatHold>(command.payload); });
-			if (held == hostFrame.localCommands.end() || std::get<NetGameSeatHold>(held->payload) != NetGameSeatHold{2, 7, 1, 3, 0}) {
+			if (held == hostFrame.localCommands.end() || std::get<NetGameSeatHold>(held->payload) != NetGameSeatHold{2, 7, 1, 3, 101}) {
 				*error = "the committed hold lost its authority, event sequence, incarnation or cutoff"; return false;
 			}
 			if (lostAck) {
 				host.Tick(201);
-				if (!host.IsRunning() || hostFrame.aiHeldPeerIds != std::vector<uint8_t>{2} || host.IsSeatUnderAI(3, 0)) {
+				if (!host.IsRunning() || hostFrame.aiHeldPeerIds != std::vector<uint8_t>{2} || host.IsSeatUnderAI(3, 101)) {
 					*error = "a missing application acknowledgement changed another seat or stopped the survivor"; return false;
 				}
 				return true;
@@ -2219,7 +2243,7 @@ namespace RTE {
 				hostTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
 				host.Tick(now); survivor.Tick(now);
 			}
-			if (!survivor.PopReadyFrame(survivorFrame) || hostFrame.frame != 0 || survivorFrame.frame != 0 ||
+			if (!survivor.PopReadyFrame(survivorFrame) || hostFrame.frame != 101 || survivorFrame.frame != 101 ||
 			    hostFrame.aiHeldPeerIds != std::vector<uint8_t>{2} || survivorFrame.aiHeldPeerIds != hostFrame.aiHeldPeerIds ||
 			    host.ResolveActorOwner(987654321, 1, false) != 1 || survivor.ResolveActorOwner(987654321, 1, false) != 1 ||
 			    hostFrame.localCommands != survivorFrame.remoteCommands) {
