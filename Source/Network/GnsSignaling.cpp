@@ -217,6 +217,13 @@ namespace RTE {
 		}
 		PumpOutboxes();
 		m_Channel.Update(nowMs);
+		if (m_Role == Role::Joiner && m_Channel.GetState() == NetDirectorySignalChannel::State::Failed) {
+			const auto peer = m_Transport->GetPeerConnectionInfo(c_HostPeer);
+			if (peer.found && (peer.state == k_ESteamNetworkingConnectionState_Connecting || peer.state == k_ESteamNetworkingConnectionState_FindingRoute))
+				m_Transport->Disconnect(c_HostPeer, m_Channel.GetLastError() == "session gone"
+				    ? "That listing changed while you were joining. Refresh the list and try again."
+				    : "The directory could not finish your join. Refresh the list and try again.");
+		}
 	}
 
 	void GnsDirectorySignalDispatcher::RebindHost(const std::string& sessionId, const std::string& sessionToken) {

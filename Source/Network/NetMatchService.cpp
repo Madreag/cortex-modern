@@ -6655,7 +6655,9 @@ static std::string ResyncSaveName() {
 			return m_Session && m_Session->HasReject() ? m_Session->GetRejectReason() == reason : contains(NetProtocol::RejectReasonName(reason));
 		};
 		m_ErrorText = m_Session && m_Session->GetMismatchKey() == "host_disconnect" && std::string(NetProtocol::RejectReasonName(m_Session->GetRejectReason())) == "Unknown" && !m_Session->GetRejectSummary().empty()
-		    ? m_Session->GetRejectSummary() : contains(c_HistoryPassedDetail) ? "The host could not bring you into the world: you were too far behind. Try again."
+		    ? m_Session->GetRejectSummary() : contains("listing changed") ? "That listing changed while you were joining. Refresh the list and try again."
+		    : contains("directory could not finish") ? "The directory could not finish your join. Refresh the list and try again."
+		    : contains(c_HistoryPassedDetail) ? "The host could not bring you into the world: you were too far behind. Try again."
 		    : contains("deadline") ? "The host could not bring you into the world in time. Try again."
 		    : rejected(NetRejectReason::ParticipantRemoved) || contains("The host removed") ? "The host removed you from the world."
 		    : rejected(NetRejectReason::ParticipantBanned) || contains("The host banned") ? "The host banned you from the world."
@@ -10544,6 +10546,13 @@ static std::string ResyncSaveName() {
 					m_WorkerDone = true;
 					return;
 				}
+#ifdef CCCP_WITH_GNS
+				if (!request.host && m_DirectoryJoinIsWorld && m_Dispatcher && m_Dispatcher->Channel().GetState() == NetDirectorySignalChannel::State::Failed) {
+					RefuseWorldCatchUpLocked(m_Dispatcher->Channel().GetLastError() == "session gone" ? "listing changed" : "directory could not finish");
+					m_WorkerDone = true;
+					return;
+				}
+#endif
 				if (!request.host && (m_DirectoryJoinIsWorld || request.persistentWorld) && m_Session && m_Session->HasReject() && m_Session->GetMismatchKey() == "host_disconnect") {
 					RefuseWorldCatchUpLocked(m_Session->GetRejectSummary());
 					m_WorkerDone = true;
