@@ -24010,6 +24010,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			NetMatchConfig match;
 			uint64_t now = 0;
 			bool recording = false;
+			uint64_t drainThrough = UINT64_MAX;
 			std::string failure;
 
 			bool Start(uint16_t port, bool bounded = true) {
@@ -24037,13 +24038,13 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					if (!alive[index]) continue;
 					NetLockstepReadyFrame ready;
 					if (recording && index == 2) {
-						while (peers[index].HasReadyFrame(peers[index].GetResumeFrame())) {
+						while (peers[index].GetResumeFrame() <= drainThrough && peers[index].HasReadyFrame(peers[index].GetResumeFrame())) {
 							const uint64_t tick = peers[index].GetResumeFrame();
 							if (!ScenarioRunner::WaitForLockstepControllerFrame(tick, ready, &failure)) break;
 							committed[index][ready.frame] = ready;
 							peers[index].FinishSimulationTick(ready.frame);
 						}
-					} else while (peers[index].PopReadyFrame(ready)) {
+					} else while (peers[index].GetResumeFrame() <= drainThrough && peers[index].PopReadyFrame(ready)) {
 						committed[index][ready.frame] = ready;
 						peers[index].FinishSimulationTick(ready.frame);
 					}
@@ -24289,6 +24290,233 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		if (!views[0].ended || views[0].ended != views[1].ended || views[0].hashes != views[1].hashes) return fail("a release known only as Commit was lost after boundary=" +
 		    std::to_string(boundary) + ": successor ends claims at " + views[0].Ended() + ", survivor at " + views[1].Ended());
 		return fail("");
+	}
+
+	struct SeatSuccessionTestAccess {
+		static void Depart(NetLockstepCoordinator& peer, uint8_t seat, uint64_t frame, uint64_t now = 0) {
+			peer.ApplyPeerLeave(seat, frame, "committed departure", now, true, false, false, true);
+		}
+		static void Succeed(NetLockstepCoordinator& peer, uint8_t host, uint64_t boundary) {
+			peer.m_Config.authorityPeerId = host;
+			peer.m_MigrationBoundary = boundary;
+			peer.m_MigrationResult.members = {2, 3};
+			peer.ApplyMigrationMembership(0);
+		}
+	};
+
+	namespace {
+		struct SuccessionReplayScope {
+			~SuccessionReplayScope() { ScenarioRunner::CloseLockstepReplayPlayback(); ScenarioRunner::ReleaseWorldCatchUp(); ScenarioRunner::SetLockstepCoordinator(nullptr); }
+		};
+
+		bool CompareDepartureHistory(const NetMatchConfig& match, uint8_t seat, uint64_t leave,
+		    const std::vector<std::pair<NetLockstepCoordinator*, std::map<uint64_t, NetLockstepReadyFrame>>>& live,
+		    const std::string& path, std::string* error) {
+			SuccessionReplayScope scope;
+			const uint64_t from = leave - 1, through = leave + 3;
+			std::vector<ReleasePathClaimView> views(live.size() + 3);
+			LoopbackTransport replayWire, tailWire, directWire;
+			NetLockstepCoordinator replay, tail, direct;
+			auto config = ReleasedClaimsConfig(match, 3, {}, true);
+			config.startFrame = from;
+			if (!replay.StartReplay(replayWire, config, error) || !tail.StartReplay(tailWire, config, error)) return false;
+			NetMatchReplayWriter writer;
+			if (!writer.Open(path, match, error)) return false;
+			std::vector<NetLockstepFrame> frames;
+			for (size_t index = 0; index < views.size(); ++index) {
+				NetLockstepCoordinator* peer = index < live.size() ? live[index].first : index == live.size() ? &replay : index == live.size() + 1 ? &tail : &direct;
+				if (!views[index].Create("copy " + std::to_string(index), *peer, seat - 1, seat, seat)) { *error = "the departure actor could not be created"; return false; }
+				views[index].handoff = seat;
+			}
+			for (uint64_t tick = from; tick <= through; ++tick) {
+				for (size_t index = 0; index < live.size(); ++index) {
+					if (!live[index].second.contains(tick)) { *error = "survivor lacks frame " + std::to_string(tick); return false; }
+					views[index].ApplyTick(live[index].second.at(tick));
+				}
+				NetLockstepFrame packed;
+				if (!PackWorldJoinReadyFrame(live[0].second.at(tick), packed, error) ||
+				    !writer.WriteFrame(tick, packed.frames, packed.commands, packed.observations, packed.valueObservations, error, packed.senderPeerId)) return false;
+				frames.push_back(std::move(packed));
+			}
+			writer.Close(); if (!WaitForReplayCloseForTest(writer, error)) return false;
+			NetMatchReplayReader reader;
+			if (!reader.Open(path, error)) return false;
+			NetLockstepFrame recorded;
+			bool eof = false;
+			while (reader.ReadFrame(recorded, eof, error)) {
+				if (!replay.QueueReplayFrame(recorded.targetFrame, recorded.frames, recorded.commands, error, recorded.observations, recorded.valueObservations, recorded.replayAuthorityPeerId)) return false;
+				replay.Tick(0);
+				NetLockstepReadyFrame ready;
+				if (!replay.PopReadyFrame(ready)) { *error = "departure playback stopped: " + replay.GetStats().timeoutReason; return false; }
+				views[live.size()].ApplyTick(ready); replay.FinishSimulationTick(ready.frame);
+			}
+			if (!eof) return false;
+			for (size_t index = live.size() + 1; index < views.size(); ++index) {
+				ScenarioRunner::SetLockstepCoordinator(views[index].coordinator);
+				if (!ScenarioRunner::InstallWorldCatchUp(from - 1, frames, error)) return false;
+				for (const auto& frame: frames) {
+					NetLockstepReadyFrame ready;
+					if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(frame.targetFrame, ready, error)) return false;
+					views[index].ApplyTick(ready); views[index].coordinator->FinishSimulationTick(ready.frame);
+				}
+				ScenarioRunner::ReleaseWorldCatchUp();
+			}
+			std::string failure;
+			for (const auto& view: views) if (view.ended != std::optional<uint64_t>{leave} || view.hashes != views[0].hashes)
+				failure += view.who + " ends control at " + view.Ended() + " expected " + std::to_string(leave) + "; ";
+			if (!failure.empty()) *error = failure;
+			return failure.empty();
+		}
+
+		bool TestPlayingDepartureSurvivesSuccession(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("playing_departure_survives_succession", why, error); };
+			ReleasePathRound round;
+			if (!round.Start(47420)) return fail("the succession fixture did not start: " + round.failure);
+			round.drainThrough = 29;
+			for (int turn = 0; turn < 400 && (round.peers[1].GetResumeFrame() != 30 || round.peers[2].GetResumeFrame() != 30); ++turn) round.Pump();
+			if (round.peers[1].GetResumeFrame() != 30 || round.peers[2].GetResumeFrame() != 30) return fail("the survivors did not apply through 29");
+			SeatSuccessionTestAccess::Depart(round.peers[0], 4, 30, round.now);
+			round.alive[3] = false;
+			for (int turn = 0; turn < 5; ++turn) round.Pump();
+			for (size_t index: {size_t{1}, size_t{2}}) if (!round.peers[index].IsPeerGoneAtFrame(4, 30) || round.peers[index].HasHeldAISeat(4)) return fail("a survivor did not hear the playing departure");
+			if (!round.Migrate() || round.peers[1].GetMigrationResult().boundary != 29) return fail("the survivors did not succeed at boundary 29");
+			round.drainThrough = UINT64_MAX;
+			for (int turn = 0; turn < 30; ++turn) round.Pump();
+			if (!CompareDepartureHistory(round.match, 4, 30, {{&round.peers[1], round.committed[1]}, {&round.peers[2], round.committed[2]}}, "succession-departure.ccreplay", &round.failure)) return fail("playing departure 30 after succession 29: " + round.failure);
+			return fail("");
+		}
+
+		bool TestWorldDepartureUsesInputBoundary(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("world_departure_uses_input_boundary", why, error); };
+			NetMatchConfig world = ReleasedClaimsMatch(0x9D02, 4);
+			world.version = NetMatchConfigUtil::c_PersistentWorldVersion;
+			world.persistentWorld = true; world.worldId = "departure-boundary"; world.worldBoot = 1;
+			LoopbackTransport wire;
+			NetLockstepCoordinator live;
+			auto config = ReleasedClaimsConfig(world, 1, {}, true);
+			config.startFrame = 99;
+			std::string why;
+			if (!live.StartReplay(wire, config, &why)) return fail(why);
+			SeatSuccessionTestAccess::Depart(live, 2, 100);
+			std::map<uint64_t, NetLockstepReadyFrame> history;
+			for (uint64_t tick = 99; tick <= 107; ++tick) {
+				std::vector<NetGameCommand> commands;
+				if (tick == 104) { NetGameWorldTransition release; release.kind = NetGameWorldTransition::Release; release.peerId = 2; release.holderGeneration = 1; release.membershipRevision = 1; release.activationFrame = tick; commands.push_back({1, release}); }
+				if (!live.QueueReplayFrame(tick, {}, commands, &why, {}, {}, 1)) return fail(why);
+				live.Tick(0); NetLockstepReadyFrame ready;
+				if (!live.PopReadyFrame(ready)) return fail(live.GetStats().timeoutReason);
+				history[tick] = ready; live.FinishSimulationTick(tick);
+			}
+			if (!CompareDepartureHistory(world, 2, 100, {{&live, history}}, "world-departure.ccreplay", &why)) return fail("world input ends at 100 before transition 104: " + why);
+			return fail("");
+		}
+
+		bool TestHeldHostDepartureReplays(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("held_host_departure_replays", why, error); };
+			SuccessionReplayScope scope;
+			const auto match = ReleasedClaimsMatch(0x9D03, 3);
+			std::array<LoopbackTransport, 2> wires;
+			std::array<NetLockstepCoordinator, 2> peers;
+			std::array<std::unique_ptr<Actor>, 2> actors;
+			std::array<uint8_t, 2> handoffs{};
+			std::array<uint64_t, 2> rejected{};
+			std::string why;
+			for (size_t index = 0; index < peers.size(); ++index) {
+				auto config = ReleasedClaimsConfig(match, 3, {}, true); config.startFrame = 100;
+				if (!peers[index].StartReplay(wires[index], config, &why)) return fail(why);
+				if (!peers[index].QueueReplayFrame(100, {}, {{1, NetGameSeatHold{1, 0, 1, 1, 100}}}, &why, {}, {}, 1)) return fail(why);
+				peers[index].Tick(0); NetLockstepReadyFrame ready;
+				if (!peers[index].PopReadyFrame(ready)) return fail(peers[index].GetStats().timeoutReason);
+				peers[index].FinishSimulationTick(100);
+				ScenarioRunner::SetLockstepCoordinator(&peers[index]);
+				actors[index].reset(MakeSwitchTestActor(0)); if (!actors[index]) return fail("the held actor could not be created");
+				g_MovableMan.RegisterObject(actors[index].get());
+				const auto uid = static_cast<int64_t>(actors[index]->GetUniqueID());
+				NetActorOwnership::SeedOwner(uid, 1, 0);
+				ScenarioRunner::HandLockstepActorToAI(uid, 1);
+				for (uint64_t tick = 101; tick <= 120; ++tick) {
+					if (!peers[index].QueueReplayFrame(tick, {}, {}, &why, {}, {}, 1)) return fail(why);
+					peers[index].Tick(0); if (!peers[index].PopReadyFrame(ready)) return fail("the held interval stopped");
+					peers[index].FinishSimulationTick(tick);
+				}
+				if (index == 0) SeatSuccessionTestAccess::Succeed(peers[index], 2, 120);
+				if (!peers[index].QueueReplayFrame(121, {}, {}, &why, {}, {}, 2)) return fail(why);
+				peers[index].Tick(0); if (!peers[index].PopReadyFrame(ready)) return fail("the boundary frame stopped");
+				ApplyLockstepLeaveHandoffs(ready, {actors[index].get()}, false);
+				const auto state = ScenarioRunner::CaptureAgreedSideState();
+				handoffs[index] = state.controlOwners.contains(uid) ? state.controlOwners.at(uid) : 0;
+				const uint64_t before = g_MovableMan.GetValueObservationsRejected();
+				g_MovableMan.CommitValueObservations(121, {}, {MakeValueObservation(2, uid, 121, 1, "successor-write", 7)});
+				rejected[index] = g_MovableMan.GetValueObservationsRejected() - before;
+				g_MovableMan.UnregisterObject(actors[index].get());
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+			}
+			if (!peers[0].IsPeerGoneAtFrame(1, 121) || handoffs[0] != 2 || rejected[0] != 0) return fail("the live membership oracle did not hand AI to successor 2");
+			if (!peers[1].IsPeerGoneAtFrame(1, 121) || handoffs[1] != handoffs[0] || rejected[1] != 0)
+				return fail("held former host at 121: playback gone=" + std::to_string(peers[1].IsPeerGoneAtFrame(1, 121)) + " handoff=" + std::to_string(handoffs[1]) + " rejected successor writes=" + std::to_string(rejected[1]));
+			return fail("");
+		}
+
+		class AuthorityReadingActivity final : public Activity {
+		public:
+			SoundContainer* sound = nullptr;
+			int mutations = 0;
+			void Update() override { SoundSimulationScope shared(0, 0x9D04); if (sound->GetAudibleVolume() > 0.5F) ++mutations; }
+		};
+
+		bool TestReplayAuthorityPrecedesActivity(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("replay_authority_precedes_activity", why, error); };
+			SuccessionReplayScope scope;
+			SoundContainer sound;
+			if (sound.Create("Base.rte/Sounds/GUIs/ButtonPress.flac", false, true, SoundContainer::SFX) < 0) return fail("the activity sound could not be created");
+			{ SoundSimulationScope shared(0, 0x9D04); sound.SetLoopSetting(-1); if (!sound.Play()) return fail("the activity sound did not play logically"); }
+			const auto key = sound.GetSharedPlaybackIdentity();
+			if (key.ordinal == 0) return fail("the activity sound has no shared identity");
+			std::vector<NetSoundObservation> observations;
+			for (uint8_t sender: {uint8_t{1}, uint8_t{2}}) { NetSoundObservation reading; reading.senderPeerId = sender; reading.objectUID = key.objectUID; reading.tick = key.tick; reading.phase = key.phase; reading.occurrence = key.occurrence; reading.ordinal = key.ordinal; reading.value = sender == 1 ? 0.2F : 0.8F; observations.push_back(reading); }
+			const auto match = ReleasedClaimsMatch(0x9D04, 3);
+			NetMatchReplayWriter writer;
+			std::string why;
+			if (!writer.Open("activity-authority.ccreplay", match, &why)) return fail(why);
+			for (uint64_t tick = 120; tick <= 122; ++tick) if (!writer.WriteFrame(tick, {}, {}, observations, {}, &why, tick == 120 ? 1 : 2)) return fail(why);
+			writer.Close(); if (!WaitForReplayCloseForTest(writer, &why)) return fail(why);
+			if (!ScenarioRunner::SetLockstepReplaySource("activity-authority.ccreplay", &why)) return fail(why);
+			ScenarioRunner::ArmReplayRewindBuffer(120, 3);
+			LoopbackTransport wire;
+			NetLockstepCoordinator replay;
+			auto config = ReleasedClaimsConfig(match, 3, {}, true); config.startFrame = 120;
+			if (!replay.StartReplay(wire, config, &why)) return fail(why);
+			ScenarioRunner::SetLockstepCoordinator(&replay);
+			g_AudioMan.CommitSoundObservations(119, {}, observations);
+			AuthorityReadingActivity activity; activity.sound = &sound;
+			std::string failures;
+			for (int pass = 0; pass < 2; ++pass) {
+				activity.mutations = 0;
+				if (pass && !ScenarioRunner::RewindReplayForProbe(120, &why)) return fail(why);
+				for (uint64_t tick = 120; tick <= 122; ++tick) {
+					if (!ScenarioRunner::PollLockstepSimulationTick(tick)) return fail("playback did not grant activity tick " + std::to_string(tick));
+					activity.Update();
+					if (activity.mutations != static_cast<int>(tick - 120)) failures += std::string(pass ? "rewind" : "first pass") + " activity tick " + std::to_string(tick) + " host=" + std::to_string(replay.GetHostPeerId()) + " mutations=" + std::to_string(activity.mutations) + " expected=" + std::to_string(tick - 120) + "; ";
+					if (!ScenarioRunner::QueueLockstepLocalControllerFrames(tick, {}, &why)) return fail(why);
+					replay.Tick(0); NetLockstepReadyFrame ready;
+					if (!replay.PopReadyFrame(ready)) return fail(replay.GetStats().timeoutReason);
+					g_AudioMan.CommitSoundObservations(tick, ready.localObservations, ready.remoteObservations);
+					replay.FinishSimulationTick(tick);
+				}
+			}
+			return fail(failures);
+		}
+	}
+
+	int NetLockstepSelfTest::RunSeatSuccession() {
+		EnsureSwitchTestManagers();
+		bool passed = true;
+		for (bool (*test)(std::string*): {TestPlayingDepartureSurvivesSuccession, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity}) {
+			std::string error;
+			passed &= test(&error);
+		}
+		std::cout << "[net-lockstep-seat-succession-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
+		return passed ? 0 : 1;
 	}
 
 	int NetLockstepSelfTest::RunReleasePaths() {

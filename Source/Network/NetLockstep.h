@@ -1471,6 +1471,7 @@ namespace RTE {
 		friend bool TestServiceKick(std::string* error);
 		friend bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error);
 		friend bool TestCommitOnlySuccessorReproposesRelease(std::string* error);
+		friend struct SeatSuccessionTestAccess;
 		friend class ScenarioRunner;
 
 	private:

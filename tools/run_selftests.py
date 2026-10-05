@@ -34,6 +34,7 @@ SELFTESTS = [
     "net-lockstep",
     "net-lockstep-released-claims",
     "net-lockstep-release-paths",
+    "net-lockstep-seat-succession",
     "net-match",
     "net-auth",
     "net-admission",
