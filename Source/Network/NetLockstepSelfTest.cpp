@@ -23524,7 +23524,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			match.hostPeerId = 1;
 			match.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 			match.players.clear();
-			for (uint8_t peer = 1; peer <= peers; ++peer) match.players.push_back({peer, static_cast<int>(peer - 1), false, "Seat " + std::to_string(peer)});
+			for (uint8_t peer = 1; peer <= peers; ++peer) match.players.push_back({peer, static_cast<uint8_t>(peer - 1), false, "Seat " + std::to_string(peer)});
 			return match;
 		}
 

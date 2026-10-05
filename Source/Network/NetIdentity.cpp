@@ -495,7 +495,7 @@ namespace RTE {
 		manifest.deterministicConfig.lockstepCodecVersion = options.lockstepCodecVersion;
 		manifest.deterministicConfig.matchConfigVersion = options.matchConfigVersion;
 		// Every layout this build decodes; a checkpoint frame goes out on the newest.
-		manifest.deterministicConfig.supportedLockstepCodecVersion = NetLockstepCodec::c_SeatReleaseVersion;
+		manifest.deterministicConfig.supportedLockstepCodecVersion = NetLockstepCodec::c_HoldMarkerVersion;
 		manifest.deterministicConfig.supportedWorldLockstepCodecVersion = NetLockstepCodec::c_WorldVersion;
 		manifest.deterministicConfig.supportedMatchConfigVersion = NetMatchConfigUtil::c_Version;
 		manifest.deterministicConfig.supportedWorldMatchConfigVersion = NetMatchConfigUtil::c_PersistentWorldVersion;
