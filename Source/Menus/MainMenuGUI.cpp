@@ -1465,7 +1465,9 @@ void MainMenuGUI::RefreshMultiplayerHostActivities() {
 	if (m_MultiplayerHostActivityCombo) {
 		m_MultiplayerHostActivityCombo->ClearList();
 		for (const auto& [preset, module] : m_MultiplayerHostActivities) {
-			m_MultiplayerHostActivityCombo->AddItem(preset + (module.empty() ? "" : " - " + module));
+			// The module is named only to tell apart two activities of one name.
+			const bool shared = std::count_if(m_MultiplayerHostActivities.begin(), m_MultiplayerHostActivities.end(), [&preset](const auto& other) { return other.first == preset; }) > 1;
+			m_MultiplayerHostActivityCombo->AddItem(preset + (shared && !module.empty() ? " - " + module : ""));
 		}
 	}
 	RefreshMultiplayerHostScenes();

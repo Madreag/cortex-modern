@@ -558,9 +558,11 @@ def save_hotkey_probe(who, root):
     return {"schema": 1, "timeout_ms": 90000, "steps": steps}
 
 
-def host_activity_label(row):
+def host_activity_label(row, rows=()):
+    """The host screen names an activity's module only to tell apart two activities of one name (MENU-UX 3.2)."""
     module = row.get("module") or ""
-    return row["preset"] + (f" - {module}" if module else "")
+    shared = sum(other["preset"] == row["preset"] for other in rows) > 1
+    return row["preset"] + (f" - {module}" if module and shared else "")
 
 
 def repair_probe(who, root, roomy=True):
@@ -656,7 +658,8 @@ def combo_item_names(picker):
 
 
 def assert_combo_matches_loaded_activities(picker, dump):
-    allowed = [host_activity_label(row) for row in allowed_host_activities(dump)]
+    rows = allowed_host_activities(dump)
+    allowed = [host_activity_label(row, rows) for row in rows]
     items = combo_item_names(picker)
     extras = [item for item in items if item not in allowed]
     missing = [label for label in allowed if label not in items]
@@ -990,7 +993,7 @@ def scripts(case, port, root, size="960x540"):
         return {"host": in_base_words(text) if BASE_WORDS else text}, {}
     if case == "local-end-match":
         host = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\n"
-                "combo_select ComboHostActivity P4 Alpha Duel - Base.rte\nwait_ms 400\n"
+                "combo_select ComboHostActivity P4 Alpha Duel\nwait_ms 400\n"
                 f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait_connected 2 60\nwait_remote_ready 60\n"
                 # The Start button takes the remote ready on the menu's next update.
@@ -1346,7 +1349,7 @@ def scripts(case, port, root, size="960x540"):
         done = probe_root(root, "host") / "done.json"
         client_frame = probe_root(root, "client") / "client_frame.json"
         host = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
-                "combo_select ComboHostActivity P4 Alpha Duel - Base.rte\nwait 5\n"
+                "combo_select ComboHostActivity P4 Alpha Duel\nwait 5\n"
                 f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait_connected 2 60\nwait_remote_ready 60\n"
                 # The Start button takes the remote ready on the menu's next update.
@@ -1418,7 +1421,7 @@ def scripts(case, port, root, size="960x540"):
         # uses those picks, not a later mouse Select.
         host = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
                 "assert_visible LabelHostActivity 1\nassert_label LabelHostActivity Activity\n"
-                "assert_label ComboHostActivity Skirmish Defense - Base.rte\n"
+                "assert_label ComboHostActivity Skirmish Defense\n"
                 "assert_text_fits ComboHostActivity\n"
                 "dump_host_options\n"
                 "assert_visible LabelHostScene 1\nassert_label LabelHostScene Scene\n"
@@ -1426,12 +1429,12 @@ def scripts(case, port, root, size="960x540"):
                 "assert_text_fits ComboHostScene\n"
                 "assert_visible ComboHostMode 1\nassert_label ComboHostMode Players versus players\n"
                 "assert_label LabelHostInfo Grasslands - 2 players on separate teams\n"
-                "combo_select ComboHostActivity Persistent World - Base.rte\nwait 3\n"
+                "combo_select ComboHostActivity Persistent World\nwait 3\n"
                 # A hand opens the list; the arrow keys and Return pick in it.
                 "combo_drop ComboHostActivity\nwait 3\ndump_host_options\n"
                 "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
                 "key_down Return\nwait 2\nkey_up Return\nwait 3\n"
-                "assert_label ComboHostActivity Brain vs Brain - Base.rte\ndump_host_options\n"
+                "assert_label ComboHostActivity Brain vs Brain\ndump_host_options\n"
                 "combo_drop ComboHostScene\nwait 3\ndump_host_options\n"
                 "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
                 "key_down Return\nwait 2\nkey_up Return\nwait 3\n"
@@ -2955,10 +2958,12 @@ def run_case(options, case, root, failing=None):
             scenes = [next(c for c in image["controls"] if c["name"] == "ComboHostScene")
                       for image in host_setup if any(c["name"] == "ComboHostScene" for c in image["controls"])]
             assert scenes, "ComboHostScene missing from host dumps"
-            assert picker[0]["text"] == "Skirmish Defense - Base.rte" and picker[0]["dropped"] is False, picker[0]
-            assert picker[1]["text"] == "Persistent World - Base.rte" and picker[1]["dropped"] is True, picker[1]
-            assert any(row["text"] == "Brain vs Brain - Base.rte" and row["dropped"] is False for row in picker), picker
-            assert any(row["text"] == f"{preset} - {module}" and not row["dropped"] for row in picker), picker
+            assert picker[0]["text"] == "Skirmish Defense" and picker[0]["dropped"] is False, picker[0]
+            assert picker[1]["text"] == "Persistent World" and picker[1]["dropped"] is True, picker[1]
+            assert any(row["text"] == "Brain vs Brain" and row["dropped"] is False for row in picker), picker
+            listed = allowed_host_activities(host_setup[0])
+            picked = host_activity_label({"preset": preset, "module": module}, listed)
+            assert any(row["text"] == picked and not row["dropped"] for row in picker), (picked, picker)
             assert picker[0]["item_count"] > 1, picker[0]
             assert picker[0]["item_count"] == len(picker[0].get("items", [])), picker[0]
             # Every drawn row of the dropped list fits its name room, and only an overlong name is ellipsized.
@@ -2989,7 +2994,7 @@ def run_case(options, case, root, failing=None):
                 controls = {c["name"]: c for c in image["controls"]}
                 activity = controls.get("ComboHostActivity") or {}
                 scene_row = controls.get("ComboHostScene")
-                if (activity.get("text") == "Brain vs Brain - Base.rte" and activity.get("dropped") is False
+                if (activity.get("text") == "Brain vs Brain" and activity.get("dropped") is False
                         and scene_row and not scene_row["dropped"]):
                     bvb_closed.append(scene_row)
             assert bvb_closed, "no closed Brain vs Brain scene dump"
