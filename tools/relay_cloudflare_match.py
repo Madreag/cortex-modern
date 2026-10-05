@@ -113,7 +113,9 @@ REQUIRED = {
     'b-hotspot-host': BASE + ('offer_fresh', 'logins_revoked', 'tunnel:host', 'listing'),
     'c-four-players': tuple(check for check in BASE if check != 'holds') + ('offer_fresh', 'logins_revoked', 'tunnel:hotspot', 'seat_holds'),
     'd-credential-expiry': SEATED + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'renewal'),
-    'e-migration-relayed': SEATED + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'migration'),
+    # Through a host loss the survivors' feel is judged on either side of it and the pause reported (ROLLBACK 3.1.2).
+    'e-migration-relayed': tuple(check for check in SEATED if check != 'feel_bars') + ('feel_around_loss', 'offer_fresh', 'endpoint',
+                                                                                     'relay_registrant', 'provider_201', 'logins_revoked', 'migration'),
     'f-relay-by-hand': SEATED + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'menu_choice:client'),
     # A public row sees no candidate (the directory is not this run's): the relay is bound by the engine's own receipt and the
     # directory's offer line, and its holds are the hotspot seat's own (the fast peer's feel is the row's bar).
@@ -305,9 +307,10 @@ def route_history(log: str, session: str | None, report: dict | None, watch: dic
     return dict(passed=not reasons, reasons=reasons, history=history, moves=moves, probe_moves=seen)
 
 
-def sender_peers(signals, identities: dict[str, str], peers: list[str]) -> dict[str, str]:
-    """Each signal sender's peer: 'host' is the host; a joiner 'client:<nonce>' is the peer whose own report names
-    'str:c-<the nonce's prefix>'; with one joiner and no report, that joiner. An unmatched sender stays unmatched."""
+def sender_peers(signals, identities: dict[str, str | list[str]], peers: list[str]) -> dict[str, str]:
+    """Each signal sender's peer: 'host' is the host; a joiner 'client:<nonce>' is the peer whose own report or connect
+    receipts name 'str:c-<the nonce's prefix>' (a survivor dials again after a host loss, as another identity); with one
+    joiner and no report, that joiner. An unmatched sender stays unmatched."""
     joiners = [peer for peer in peers if peer != 'host']
     mapped = {}
     for sender, _ in signals:
@@ -317,7 +320,9 @@ def sender_peers(signals, identities: dict[str, str], peers: list[str]) -> dict[
             mapped[sender] = 'host'
             continue
         nonce = sender.split(':', 1)[1] if sender.startswith('client:') else sender
-        owners = [peer for peer, identity in identities.items() if identity and identity.startswith('str:c-') and nonce.startswith(identity[6:])]
+        owners = [peer for peer, named in identities.items()
+                  if any(identity and identity.startswith('str:c-') and nonce.startswith(identity[6:])
+                         for identity in ([named] if isinstance(named, str) or named is None else named))]
         mapped[sender] = owners[0] if len(owners) == 1 else joiners[0] if not identities and len(joiners) == 1 else f'unmatched:{sender[:16]}'
     return mapped
 
@@ -367,7 +372,8 @@ def judge_relay(run: dict) -> dict:
             state = 'missing' if not isinstance(report, dict) or not report else 'closed' if report.get('found') is not True else 'open'
             report_states[peer] = state
             entry['report'] = {key: (report or {}).get(key) for key in ('found', 'state', 'relayed', 'remote_identity', 'remote_address')}
-            if state != 'open':
+            # A survivor of a lost host reports the connection it lost; its route after the loss is the migration check's.
+            if state != 'open' and not (run.get('host_lost') and state == 'closed'):
                 reasons.append(f'{peer}: its report holds no live connection ({state}): a lost report fails the row')
             elif chosen is not None and bool(report.get('relayed')) != (chosen == 'relay'):
                 reasons.append(f'{peer}: its report says relayed={report.get("relayed")} where its route is {chosen}')
@@ -1819,7 +1825,9 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
     covered = set(range(1, ticks + 1)) <= common
     joiner = next((name for name in names if name != 'host'), 'client')
     connections = {name: edith_cross.find_key(reports.get(name) or {}, 'connection') for name in names}
-    identities = {name: edith_cross.find_key(reports.get(name) or {}, 'local_identity') for name in names if name != 'host'}
+    identities = {name: [edith_cross.find_key(reports.get(name) or {}, 'local_identity'),
+                         *re.findall(r'\[net-ice\] connected connection=\d+ .*? local=(str:c-\S+)', logs.get(name, ''))]
+                  for name in names if name != 'host'}
     if facts.get('public'):
         directory_lines = public_directory_lines(session)
         (root / 'public-directory.log').write_text('\n'.join(directory_lines) + '\n', encoding='utf-8')
@@ -1842,7 +1850,8 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
                              expect_routes=run.get('expect_routes'),
                              relay_addresses=[facts['coturn_address']] if facts.get('coturn_address') else None,
                              relay_hosts=facts.get('relay_hosts'), run_ends_at=int(facts['ended_epoch']),
-                             overrides_cleared=facts.get('overrides_cleared'), signals_observed=not facts.get('public')))
+                             overrides_cleared=facts.get('overrides_cleared'), signals_observed=not facts.get('public'),
+                             host_lost=bool(run.get('kill_host_at_tick'))))
     owners = sender_peers(facts['signals'], identities, names)
     write_json(root / 'signals-candidates.json', [dict(peer=owners[sender], sender=sender, candidates=[
         f'{address}:{port} {kind}' for address, port, kind in signal_candidates(payload)],
@@ -1905,6 +1914,13 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
                  for row in summary]
         return detail('seat_holds', seat_holds(named, set(run.get('holds_allowed') or []), set(names)))
 
+    def feel_around_loss_check():
+        from feel.retained_resume import read_live_hashes
+        boundary = migration_declarations(logs, hash_peers, session, {peer['name']: display_name(run, peer) for peer in run['peers']}, last_ticks)['boundary']
+        verdicts = {name: feel_around_loss(read_live_hashes(root / f'{name}-live.jsonl'), logs.get(name, ''), boundary, ticks) for name in judged}
+        return detail('feel_around_loss', dict(passed=bool(verdicts) and all(row['passed'] for row in verdicts.values()),
+                                               reasons=[f'{name}: {reason}' for name, row in verdicts.items() for reason in row['reasons']], peers=verdicts))
+
     def listing():
         listed = (read_json(root / f'{joiner}-listed.json') or {}).get('session_id') == session
         return detail('listing', listing_evidence(directory_lines, session, listed))
@@ -1946,6 +1962,7 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         'renewal': renewal,
         'migration': lambda: detail('migration', migration_declarations(
             logs, hash_peers, session, {peer['name']: display_name(run, peer) for peer in run['peers']}, last_ticks)),
+        'feel_around_loss': feel_around_loss_check,
         'listing': listing,
         'seat_holds': seat_holds_check,
     }
@@ -1972,6 +1989,36 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         f'sanitize={[(row["box"], row["status"], row.get("hits_before"), row.get("hits_after")) for row in sanitize]} '
         f'relay_reasons={relay["reasons"][:3]}')
     return verdict
+
+
+def feel_around_loss(live_rows: list[dict], log: str, boundary: int | None, final_tick: int, tick_ms: float = 1000 / 60, warmup: int = 300) -> dict:
+    """A survivor's feel through a host loss (ROLLBACK 3.1.2: the host itself falling silent is host migration, measured on
+    its own): the feel driver's bars on the steady window before the loss and on the one after the successor runs, each past
+    the driver's own 300-tick warmup, and the pause between them reported. Bars: 59.5 tps, under 1 % waiting, no wait over
+    50 ms, a confirmed horizon lag of 50 ms at most."""
+    from feel.report import reduce_net_window
+    if boundary is None:
+        return dict(passed=False, reasons=['no handover boundary'], windows={})
+    committed = [dict(tick=row['tick'], wall_ms=row['wall_ms']) for row in live_rows if isinstance(row.get('tick'), int) and 'wall_ms' in row]
+    waits = [dict(tick=int(tick), wait_ms=int(ms)) for tick, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', log)]
+    windows, reasons = {}, []
+    for name, first, last in (('before', warmup, boundary - 2), ('after', boundary + warmup, final_tick)):
+        if last - first < 60:
+            reasons.append(f'the {name} window {first}..{last} is shorter than a second')
+            continue
+        window = reduce_net_window(committed, waits, first, last, tick_ms)
+        windows[name] = window
+        failed = [label for label, bad in (('incomplete', not window['complete']),
+                                           ('tps', (window['steady_wall_tps'] or 0) < 59.5),
+                                           ('waiting', window['waiting_percent'] is None or window['waiting_percent'] >= 1),
+                                           ('longest wait', window['longest_stall_ms'] is None or window['longest_stall_ms'] > 50),
+                                           ('horizon', window['confirmed_horizon_lag_ms'] is None or window['confirmed_horizon_lag_ms'] > 50)) if bad]
+        if failed:
+            reasons.append(f'the {name} window {first}..{last} fails {failed}: {json.dumps({k: window[k] for k in ("steady_wall_tps", "waiting_percent", "longest_stall_ms", "confirmed_horizon_lag_ms")})}')
+    times = sorted((row['tick'], row['wall_ms']) for row in committed if abs(row['tick'] - boundary) <= warmup)
+    gaps = [(later[1] - earlier[1], earlier[0]) for earlier, later in zip(times, times[1:])]
+    pause, at = max(gaps, default=(None, None))
+    return dict(passed=not reasons, reasons=reasons, windows=windows, pause_ms=pause, pause_after_tick=at)
 
 
 def revoked_every_login(minted: list[dict], statuses: list[int], ended_at: float) -> bool:

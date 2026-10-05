@@ -390,6 +390,32 @@ class HotspotRows(unittest.TestCase):
         self.assertFalse(renewal(logs, [dict(status=201, epoch=1000.0), dict(status=403, epoch=1160.0, provider_error_code='1010')], ['host', 'client'], **timed)['passed'])
         self.assertFalse(renewal(logs, calls, ['host', 'client'], **dict(timed, line_times={}))['passed'])
 
+    def test_e_the_survivors_feel_is_judged_on_either_side_of_the_loss(self):
+        """2026-10-04 row e: the whole-match bars read 47.5 tps and a 7.5 s wait, both the host loss's own pause."""
+        around = self.match().feel_around_loss
+        tick = 1000 / 60
+        rows = [dict(tick=t, wall_ms=t * tick + (7500 if t >= 618 else 0)) for t in range(1, 1802)]
+        verdict = around(rows, '', 618, 1801)
+        self.assertTrue(verdict['passed'], verdict['reasons'])
+        self.assertGreater(verdict['pause_ms'], 7500)
+        slow = [dict(row, wall_ms=row['wall_ms'] + (row['tick'] - 1000) * 2 if row['tick'] > 1000 else row['wall_ms']) for row in rows]
+        self.assertFalse(around(slow, '', 618, 1801)['passed'])
+        waited = around(rows, '[net-frame-wait] frame=1200 wait_ms=80 on=x\n', 618, 1801)
+        self.assertFalse(waited['passed'])
+        self.assertFalse(around(rows, '', None, 1801)['passed'])
+
+    def test_e_a_survivor_s_second_dial_is_its_own(self):
+        """2026-10-04 row e: a survivor dials its successor as a second identity; its connect receipt names it."""
+        senders = self.match().sender_peers
+        signals = [('host', 'x'), ('client:aaaa1111bbbb2222cccc', 'x'), ('client:dddd3333eeee4444ffff', 'x')]
+        mapped = senders(signals, {'client': ['str:c-aaaa1111bbbb2222', 'str:c-dddd3333eeee4444']}, ['host', 'client'])
+        self.assertEqual(mapped['client:dddd3333eeee4444ffff'], 'client')
+        mapped = senders(signals, {'client': 'str:c-aaaa1111bbbb2222', 'client2': 'str:c-9999'}, ['host', 'client', 'client2'])
+        self.assertTrue(mapped['client:dddd3333eeee4444ffff'].startswith('unmatched:'))
+        run = cloudflare_run(reports={'client': {'found': False, 'state': 5, 'relayed': True}})
+        self.assertFalse(self.match().judge_relay(run)['passed'])
+        self.assertTrue(self.match().judge_relay(dict(run, host_lost=True))['passed'])
+
     def test_d_a_login_that_expired_before_the_run_ended_is_already_revoked(self):
         """2026-10-04 row d: the first of three five-minute logins expired mid-match; Cloudflare answered its revoke 404."""
         revoked = self.match().revoked_every_login
