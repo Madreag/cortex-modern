@@ -1093,7 +1093,8 @@ namespace RTE {
 			m_RelayOffer = config.relayOffer;
 			if (m_ListenSocket == k_HSteamListenSocket_Invalid) return;
 			auto* utils = SteamNetworkingUtils();
-			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_Int32, &config.iceEnable);
+			const int32 iceEnable = GatheredIceEnable(config.iceEnable);
+			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_Int32, &iceEnable);
 			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_ServerList, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_String, config.turnServerList.c_str());
 			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_UserList, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_String, config.turnUserList.c_str());
 			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_PassList, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_String, config.turnPassList.c_str());
@@ -1116,6 +1117,13 @@ namespace RTE {
 			if (renewed > 0) DiagnosticLine() << "[net-relay] relay login renewed on " << renewed << " live connection(s)" << std::endl;
 		}
 
+		/// CC_TEST_ICE_GATHER_RELAY_ONLY=1 stands for a network no direct route can cross: this end offers relay candidates only, while
+		/// the player's Connection setting, and so the route policy, stays what it is.
+		static int32 GatheredIceEnable(int iceEnable) {
+			const char* lever = std::getenv("CC_TEST_ICE_GATHER_RELAY_ONLY");
+			return lever && std::string_view(lever) == "1" ? k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_Relay : iceEnable;
+		}
+
 		static std::vector<SteamNetworkingConfigValue_t> P2PConnectionConfigs(const GnsP2PConfig& config) {
 			GnsTransport::ApplyIceServers(config);
 			std::vector<SteamNetworkingConfigValue_t> connectionConfigs(11);
@@ -1125,7 +1133,7 @@ namespace RTE {
 			connectionConfigs[2].SetInt32(k_ESteamNetworkingConfig_SendRateMin, 2 * 1024 * 1024);
 			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, 32 * 1024 * 1024);
 			connectionConfigs[4].SetInt32(k_ESteamNetworkingConfig_TimeoutConnected, c_NetLinkTimeoutMs);
-			connectionConfigs[5].SetInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable, config.iceEnable);
+			connectionConfigs[5].SetInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable, GatheredIceEnable(config.iceEnable));
 			connectionConfigs[6].SetString(k_ESteamNetworkingConfig_P2P_STUN_ServerList, config.stunServerList.c_str());
 			connectionConfigs[7].SetInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Implementation, config.iceImplementation);
 			connectionConfigs[8].SetString(k_ESteamNetworkingConfig_P2P_TURN_ServerList, config.turnServerList.c_str());
