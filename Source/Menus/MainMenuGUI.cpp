@@ -2849,8 +2849,10 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 		const int shown = static_cast<int>(std::min(m_HostOptionsDraft.startingGold, static_cast<uint32_t>(31000)));
 		const int raw = m_HostRulesGoldSlider->GetValue();
 		const int slider = raw == shown ? raw : (raw + step / 2) / step * step;
-		m_HostOptionsDraft.startingGold = slider >= 31000 ? NetMatchConfigUtil::c_InfiniteGold
-		                                                : static_cast<uint32_t>(std::clamp(slider, 0, static_cast<int>(NetMatchConfigUtil::c_MaxFiniteStartingGold)));
+		// Past the finite top lies infinite gold: a move up from the top reaches it, as a press at the slider's end does.
+		const int finiteTop = static_cast<int>(NetMatchConfigUtil::c_MaxFiniteStartingGold);
+		const bool infinite = slider >= 31000 || (slider > finiteTop && shown >= finiteTop && raw > shown);
+		m_HostOptionsDraft.startingGold = infinite ? NetMatchConfigUtil::c_InfiniteGold : static_cast<uint32_t>(std::clamp(slider, 0, finiteTop));
 	}
 	if (m_HostRulesFogCheck) m_HostOptionsDraft.fogOfWar = m_HostRulesFogCheck->GetCheck() == GUICheckbox::Checked;
 	if (m_HostRulesClearPathCheck) m_HostOptionsDraft.requireClearPathToOrbit = m_HostRulesClearPathCheck->GetCheck() == GUICheckbox::Checked;
