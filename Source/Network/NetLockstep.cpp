@@ -3936,6 +3936,7 @@ namespace RTE {
 				break;
 			case NetHostMigrationMessageType::Rejoin:
 				if (!hosting && IsMigrating()) {
+					const uint8_t formerHost = GetHostPeerId();
 					m_MigrationAuthoritySeen = true;
 					m_MigrationNeedsResync = true;
 					m_MigrationBoundary = message.boundary;
@@ -3949,7 +3950,7 @@ namespace RTE {
 					m_Config.remoteTransportPeerIds = m_RemoteTransports;
 					m_Transport = m_MigrationTransport.get();
 					m_MigrationResult = {m_MigrationGeneration, message.boundary, m_MigrationSuccessor, message.members, {m_Config.localPeerId}, {{m_MigrationSuccessor, event.peerId}}};
-					ApplyMigrationMembership(nowMs);
+					ApplyMigrationMembership(nowMs, formerHost);
 					m_MigrationPhase = NetHostMigrationPhase::ResyncAdmission;
 					m_MigrationNotice = true;
 				}
@@ -4098,15 +4099,29 @@ namespace RTE {
 		}
 	}
 
-	void NetLockstepCoordinator::ApplyMigrationMembership(uint64_t nowMs) {
+	void NetLockstepCoordinator::HoldFormerHostSeat(uint8_t peer, uint64_t frame, const NetGameSeatHold* record) {
+		if (const auto held = m_AiHeldSeats.find(peer); held != m_AiHeldSeats.end() && held->second <= frame) return;
+		// A dropped host keeps its claims for its ticketed return under the successor.
+		m_AiHeldSeats[peer] = frame;
+		m_ReleasedAiSeats.erase(peer);
+		const uint32_t incarnation = m_Config.peerIncarnations.contains(peer) ? m_Config.peerIncarnations.at(peer) : 1;
+		m_HoldTransactions[peer] = record ? *record : NetGameSeatHold{peer, m_Config.migrationGeneration, m_NextTimingRevision++, incarnation, frame};
+		m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
+		NoteSeatTransition(peer, frame, SeatTransition::Held);
+		++m_Stats.peers[peer].holds;
+	}
+
+	void NetLockstepCoordinator::ApplyMigrationMembership(uint64_t nowMs, uint8_t formerHost) {
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 			if (std::find(m_MigrationResult.members.begin(), m_MigrationResult.members.end(), peer) == m_MigrationResult.members.end()) {
+				if (peer == formerHost) HoldFormerHostSeat(peer, m_MigrationBoundary + 1);
 				ApplyPeerLeave(peer, m_MigrationBoundary + 1, "absent from host handover", nowMs, true, false, true);
 			}
 		}
 	}
 
 	void NetLockstepCoordinator::CompleteHostMigration(uint64_t nowMs) {
+		const uint8_t formerHost = GetHostPeerId();
 		auto pending = m_LocalInputHistory;
 		for (const auto& outgoing: m_RecoveryOutgoing)
 			if (outgoing.frame.senderPeerId == m_Config.localPeerId)
@@ -4160,14 +4175,12 @@ namespace RTE {
 		m_ReclaimTransactions = reclaimTransactions;
 		// A return the lost host agreed for a seat that did not come over with the round passes without it: the seat stays held, and
 		// this round agrees its own return when the seat reaches it.
-		std::set<uint8_t> passedReturns;
 		for (auto back = m_ReclaimTransactions.begin(); back != m_ReclaimTransactions.end();) {
 			const uint8_t peer = back->first;
 			if (back->second.activationFrame <= m_MigrationBoundary || !heldSeats.contains(peer) ||
 			    std::find(m_Config.activePeerIds.begin(), m_Config.activePeerIds.end(), peer) != m_Config.activePeerIds.end()) { ++back; continue; }
 			DiagnosticLine() << "[net-lockstep] return of peer " << static_cast<int>(peer) << " at " << back->second.activationFrame
 			          << " was agreed with the lost host; the seat stays held from " << heldSeats.at(peer) << std::endl;
-			passedReturns.insert(peer);
 			back = m_ReclaimTransactions.erase(back);
 		}
 		m_LastCompletedSimulationTick = completed;
@@ -4198,7 +4211,7 @@ namespace RTE {
 				NoteSeatTransition(peer, m_Config.startFrame, SeatTransition::Back);
 		}
 		m_AuthoritativeCommandAcks = commandAcks;
-		ApplyMigrationMembership(nowMs);
+		ApplyMigrationMembership(nowMs, formerHost);
 		m_LocalFrames.clear();
 		m_LocalCommands.clear();
 		m_LocalObservations.clear();
@@ -5361,6 +5374,14 @@ namespace RTE {
 		if (m_ReplayAuthorityHistory.empty() || former != authority) m_ReplayAuthorityHistory[frame] = authority;
 		m_Config.authorityPeerId = authority;
 		if (former != authority) {
+			const NetGameSeatHold* heldRecord = nullptr;
+			bool released = false;
+			for (const auto* commands: {&ready.localCommands, &ready.remoteCommands}) for (const auto& command: *commands) {
+				if (command.senderPeerId != committed) continue;
+				if (const auto* hold = std::get_if<NetGameSeatHold>(&command.payload); hold && hold->peerId == former && hold->cutoffFrame == frame) heldRecord = hold;
+				if (const auto* release = std::get_if<NetGameSeatRelease>(&command.payload); release && release->peerId == former && release->releaseFrame == frame) released = true;
+			}
+			if (!released) HoldFormerHostSeat(former, frame, heldRecord);
 			// The authority boundary also carries the lost host's membership, including its held claims.
 			ApplyPeerLeave(former, frame, "recorded host handover", 0, true, false, true);
 		}

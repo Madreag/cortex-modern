@@ -1500,7 +1500,8 @@ namespace RTE {
 		bool HoldsLiveMigrationCandidate(uint64_t nowMs, uint64_t budget) const;
 		void PublishMigrationPlan(uint64_t nowMs);
 		void CompleteHostMigration(uint64_t nowMs);
-		void ApplyMigrationMembership(uint64_t nowMs);
+		void ApplyMigrationMembership(uint64_t nowMs, uint8_t formerHost = 0);
+		void HoldFormerHostSeat(uint8_t peer, uint64_t frame, const NetGameSeatHold* record = nullptr);
 		void FailHostMigration(const std::string& reason);
 		bool EncodeMigrationFrame(const NetLockstepReadyFrame& frame, std::vector<uint8_t>& bytes) const;
 		bool DecodeMigrationFrame(const std::vector<uint8_t>& bytes, uint64_t frame, NetLockstepReadyFrame& ready) const;
