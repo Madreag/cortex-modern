@@ -482,6 +482,14 @@ class HotspotRows(unittest.TestCase):
         self.assertFalse(chosen(log.replace('PASS', 'FAIL'), 'Relay only')['passed'])
         self.assertFalse(chosen('', 'Relay only')['passed'])
 
+    def test_every_hotspot_item_reads_a_check_its_row_computes(self):
+        scenario = json.loads((Path(__file__).resolve().parent / 'e2e/mp-relay-hotspot.json').read_text(encoding='utf-8'))
+        required = self.match().REQUIRED
+        judged_apart = ('offer', 'direct_expected')
+        unread = [item['id'] for item in scenario['checklist'] if item['run'] in required and ':' not in item['check'] and
+                  item['check'] not in judged_apart and item['check'] not in required[item['run']]]
+        self.assertEqual(unread, [], 'items whose check their row never computes read as absent and fail every run')
+
     def test_every_hotspot_row_is_declared_with_its_lever(self):
         scenario = json.loads((Path(__file__).resolve().parent / 'e2e/mp-relay-hotspot.json').read_text(encoding='utf-8'))
         named = {run['name']: run for run in scenario['runs']}

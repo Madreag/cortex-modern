@@ -422,8 +422,8 @@
     {
       "id": "d-holds",
       "run": "d-credential-expiry",
-      "check": "holds",
-      "what": "No seat was held across the renewal."
+      "check": "seat_holds",
+      "what": "No seat but the hotspot's was held across the renewal."
     },
     {
       "id": "d-route-client",
