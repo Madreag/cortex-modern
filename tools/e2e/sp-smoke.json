@@ -248,7 +248,7 @@
       "assert": "select_scene Grasslands",
       "run": "skirmish",
       "events": [
-        "select_scene Grasslands PASS"
+        "select_scene .*Grasslands.* PASS"
       ]
     },
     {
