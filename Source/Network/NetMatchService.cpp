@@ -10109,6 +10109,7 @@ static std::string ResyncSaveName() {
 			m_DirectoryRow.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
 		}
 		CacheDiagnosticIdentity(manifest);
+		if (request.host) NetReportGameData(manifest);
 		if (request.host) {
 			// Arm the off-sim reconnect-auth epoch; without real crypto nothing is issued (fail closed).
 			std::lock_guard<std::mutex> lock(m_Mutex);
@@ -10164,7 +10165,6 @@ static std::string ResyncSaveName() {
 			runnerConfig.resolveJoinAddress = [this, sessionId, address, iceWanted, local, ticketPath, installKey, baseUrl, certPin]() {
 				NetH4TicketRecord record;
 				{
-		if (request.host) NetReportGameData(manifest);
 					std::lock_guard<std::mutex> lock(m_Mutex);
 					m_TicketStore.SetPath(ticketPath);
 					if (m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) != NetH4TicketLoadResult::Loaded) {

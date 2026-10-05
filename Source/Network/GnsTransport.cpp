@@ -1139,6 +1139,9 @@ namespace RTE {
 			connectionConfigs[8].SetString(k_ESteamNetworkingConfig_P2P_TURN_ServerList, config.turnServerList.c_str());
 			connectionConfigs[9].SetString(k_ESteamNetworkingConfig_P2P_TURN_UserList, config.turnUserList.c_str());
 			connectionConfigs[10].SetString(k_ESteamNetworkingConfig_P2P_TURN_PassList, config.turnPassList.c_str());
+			// Candidates cross the directory before a route can be tried, so a relayed connect outlasts GNS's 10 s default.
+			connectionConfigs.emplace_back();
+			connectionConfigs.back().SetInt32(k_ESteamNetworkingConfig_TimeoutInitial, static_cast<int32>(GnsTransport::IceConnectTimeoutMs()));
 			if (config.rendezvousLogLevel > 0) {
 				connectionConfigs.emplace_back();
 				connectionConfigs.back().SetInt32(k_ESteamNetworkingConfig_LogLevel_P2PRendezvous, config.rendezvousLogLevel);
@@ -1147,9 +1150,6 @@ namespace RTE {
 		}
 
 		static int ConnectionConfigInt32(HSteamNetConnection connection, ESteamNetworkingConfigValue value) {
-			// Candidates cross the directory before a route can be tried, so a relayed connect outlasts GNS's 10 s default.
-			connectionConfigs.emplace_back();
-			connectionConfigs.back().SetInt32(k_ESteamNetworkingConfig_TimeoutInitial, static_cast<int32>(GnsTransport::IceConnectTimeoutMs()));
 			int32 number = -1;
 			size_t size = sizeof(number);
 			ESteamNetworkingConfigDataType type = k_ESteamNetworkingConfig_Int32;
