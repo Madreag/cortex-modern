@@ -1544,6 +1544,7 @@ namespace RTE {
 		s_WorldCatchUpLastApplied = frame;
 		outFrame = {};
 		outFrame.frame = simTick;
+		outFrame.authorityPeerId = frame.senderPeerId;
 		outFrame.remoteFrames = std::move(frame.frames);
 		outFrame.remoteCommands = std::move(frame.commands);
 		outFrame.remoteObservations = std::move(frame.observations);

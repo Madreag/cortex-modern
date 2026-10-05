@@ -24133,18 +24133,18 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				}
 				for (int turn = 0; turn < 70; ++turn) round.Pump();
 				const uint64_t leave = round.peers[0].GetPeerLeaveFrames().at(4);
-				LoopbackTransport replayWire, tailHostWire, tailWire;
-				NetLockstepCoordinator replay, tail;
+				LoopbackTransport replayWire, tailWire, coldHostWire, coldWire;
+				NetLockstepCoordinator replay, tail, cold;
 				auto config = ReleasedClaimsConfig(round.match, 3, {}, bounded);
 				config.startFrame = from;
-				if (!replay.StartReplay(replayWire, config, &round.failure)) return fail(round.failure);
+				if (!replay.StartReplay(replayWire, config, &round.failure) || !tail.StartReplay(tailWire, config, &round.failure)) return fail(round.failure);
 				const uint16_t tailPort = bounded ? 47434 : 47439;
-				if (!tailHostWire.StartHost(tailPort, &round.failure) || !tailWire.Connect("loopback", tailPort, &round.failure)) return fail(round.failure);
+				if (!coldHostWire.StartHost(tailPort, &round.failure) || !coldWire.Connect("loopback", tailPort, &round.failure)) return fail(round.failure);
 				auto tailConfig = ReleasedClaimsConfig(round.match, 3, {{1, 1}}, bounded);
 				tailConfig.startFrame = from;
-				if (!tail.Start(tailWire, tailConfig, &round.failure) || tail.IsRunning()) return fail("the catch-up coordinator already runs");
-				std::array<ReleasePathClaimView, 4> views;
-				std::array<NetLockstepCoordinator*, 4> coordinators{&round.peers[0], &round.peers[2], &replay, &tail};
+				if (!cold.Start(coldWire, tailConfig, &round.failure) || cold.IsRunning()) return fail("the direct catch-up coordinator already runs");
+				std::array<ReleasePathClaimView, 5> views;
+				std::array<NetLockstepCoordinator*, 5> coordinators{&round.peers[0], &round.peers[2], &replay, &tail, &cold};
 				for (size_t index = 0; index < views.size(); ++index) {
 					if (!views[index].Create("copy " + std::to_string(index), *coordinators[index], 0, 1, 4)) return fail("the departure actor could not be created");
 					views[index].handoff = 4;
@@ -24178,14 +24178,16 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					views[2].ApplyTick(ready); replay.FinishSimulationTick(ready.frame);
 				}
 				if (!eof) return fail(round.failure);
-				ScenarioRunner::SetLockstepCoordinator(&tail);
-				if (!ScenarioRunner::InstallWorldCatchUp(from - 1, tailFrames, &round.failure)) return fail(round.failure);
-				for (const auto& frame: tailFrames) {
-					NetLockstepReadyFrame ready;
-					if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(frame.targetFrame, ready, &round.failure)) return fail("the join tail refused the departure: " + round.failure);
-					views[3].ApplyTick(ready); tail.FinishSimulationTick(ready.frame);
+				for (size_t index: {size_t{3}, size_t{4}}) {
+					ScenarioRunner::SetLockstepCoordinator(coordinators[index]);
+					if (!ScenarioRunner::InstallWorldCatchUp(from - 1, tailFrames, &round.failure)) return fail(round.failure);
+					for (const auto& frame: tailFrames) {
+						NetLockstepReadyFrame ready;
+						if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(frame.targetFrame, ready, &round.failure)) return fail("the join tail refused the departure: " + round.failure);
+						views[index].ApplyTick(ready); coordinators[index]->FinishSimulationTick(ready.frame);
+					}
+					ScenarioRunner::ReleaseWorldCatchUp();
 				}
-				ScenarioRunner::ReleaseWorldCatchUp();
 				for (size_t index = 0; index < views.size(); ++index) {
 					const std::string context = std::string(bounded ? "playing kick" : "unbounded expiry") + " at " + std::to_string(leave);
 					if (!views[index].ended || *views[index].ended != leave) {
