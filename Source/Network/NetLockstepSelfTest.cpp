@@ -24205,6 +24205,218 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return passed ? 0 : 1;
 	}
 
+	int NetLockstepSelfTest::RunAcceptance() {
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		struct Wire : LoopbackTransport {
+			uint64_t dropSentFrom = UINT64_MAX, dropReceivedFrom = UINT64_MAX;
+			bool dropOneAck = false;
+			uint64_t acceptanceSent = 0, acceptanceReceived = 0, lostAcks = 0;
+			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
+				const auto decoded = NetLockstepCodec::Decode(bytes);
+				if (decoded.ok) {
+					if (const auto* frame = std::get_if<NetLockstepFrame>(&decoded.packet.payload); frame && frame->targetFrame >= dropSentFrom) return true;
+					if (const auto* ack = std::get_if<NetLockstepAck>(&decoded.packet.payload); ack && ack->receivedMask == NetLockstepCodec::c_InputAcceptedMask) {
+						++acceptanceSent;
+						if (dropOneAck) { dropOneAck = false; ++lostAcks; return true; }
+					}
+				}
+				return LoopbackTransport::Send(peer, lane, bytes, error, congested);
+			}
+			std::vector<NetTransportEvent> PollEvents() override {
+				auto events = LoopbackTransport::PollEvents();
+				std::erase_if(events, [&](const NetTransportEvent& event) {
+					const auto decoded = NetLockstepCodec::Decode(event.bytes);
+					if (!decoded.ok) return false;
+					if (const auto* ack = std::get_if<NetLockstepAck>(&decoded.packet.payload); ack && ack->receivedMask == NetLockstepCodec::c_InputAcceptedMask) ++acceptanceReceived;
+					const auto* frame = std::get_if<NetLockstepFrame>(&decoded.packet.payload);
+					return frame && frame->targetFrame >= dropReceivedFrom;
+				});
+				return events;
+			}
+		};
+		struct Pair {
+			Wire hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			MigrationSimFixture hostWorld, clientWorld;
+			std::map<uint64_t, NetLockstepReadyFrame> history;
+			uint64_t now = 0;
+			bool Start(uint16_t port, uint16_t delay, std::string& error) {
+				auto config = [&](uint8_t peer) {
+					auto value = MakeCoordinatorConfig(peer, peer == 1 ? 2 : 1, 0xACC000 + port, peer == 1 ? 0 : delay, NetTransportLane::InputUnreliable);
+					value.startFrame = 1; value.timeoutMs = 60000; value.roundId = peer == 1 ? value.sessionId + 1 : 0;
+					value.substituteSlowPeers = true; value.slowPlayerBoundTicks = 3; value.simTickMs = 1000.0 / 60;
+					value.relayToOtherPeers = peer == 1; value.peerInputDelayFrames = {{1, 0}, {2, delay}}; value.peerIncarnations = {{1, 1}, {2, 1}};
+					value.matchConfig = NetMatchConfigUtil::MakeDefault(value.sessionId); value.matchConfig.delayPolicy = NetMatchDelayPolicy::Fixed;
+					value.matchConfig.inputDelayFrames = 0; value.matchConfig.peerInputDelayFrames = value.peerInputDelayFrames;
+					return value;
+				};
+				if (!StartCoordinatorPair(port, hostWire, clientWire, host, client, config(1), config(2), &error)) return false;
+				for (int turn = 0; turn < 20; ++turn) Step(1);
+				if (!host.IsRunning() || !client.IsRunning()) { error = "acceptance fixture did not start"; return false; }
+				return true;
+			}
+			void Step(uint64_t ms = 1) {
+				now += ms; hostWire.AdvanceTimeMs(ms); clientWire.AdvanceTimeMs(ms);
+				host.Tick(now); client.Tick(now);
+			}
+			bool Drive(uint64_t frame, std::string& error) {
+				if (!host.QueueLocalInput(frame, {MakeFrame(101, frame)}, {}, &error)) return false;
+				for (int turn = 0; turn < 5; ++turn) Step();
+				NetLockstepReadyFrame ready;
+				while (host.PopReadyFrame(ready)) { history[ready.frame] = ready; hostWorld.Apply(ready); host.FinishSimulationTick(ready.frame); }
+				while (client.PopReadyFrame(ready)) {
+					clientWorld.Apply(ready); client.FinishSimulationTick(ready.frame);
+					if (!client.QueueLocalInput(ready.frame, {MakeFrame(102, ready.frame)}, {}, &error)) return false;
+				}
+				Step(12);
+				return true;
+			}
+			bool Warm(std::string& error) {
+				for (uint64_t frame = 1; frame <= 100; ++frame) if (!Drive(frame, error)) return false;
+				if (hostWorld.applied != 100 || clientWorld.applied != 100 || hostWorld.Hash() != clientWorld.Hash()) { error = "acceptance fixture lost its shared warmup"; return false; }
+				return true;
+			}
+		};
+		int passed = 0, failed = 0;
+		const auto row = [&](const char* name, const std::function<bool(std::string&)>& test) {
+			std::string error;
+			const bool ok = test(error);
+			std::cout << "[net-input-acceptance-selftest] " << (ok ? "PASS " : "FAIL ") << name << (error.empty() ? "" : ": " + error) << std::endl;
+			if (ok) ++passed; else ++failed;
+		};
+		const auto stall = [&](bool receiving, std::string& error) {
+			Pair pair;
+			if (!pair.Start(receiving ? 47551 : 47550, 4, error) || !pair.Warm(error)) return false;
+			constexpr uint64_t missing = 105;
+			if (receiving) pair.hostWire.dropReceivedFrom = missing; else pair.clientWire.dropSentFrom = missing;
+			for (uint64_t frame = 101; frame <= missing; ++frame) if (!pair.Drive(frame, error)) return false;
+			if (pair.clientWorld.applied >= missing) { error = "client simulated first unaccepted frame " + std::to_string(missing) + " through " + std::to_string(pair.clientWorld.applied); return false; }
+			for (int turn = 0; turn < 200 && !pair.client.IsLocalSeatHeld(); ++turn) {
+				pair.host.NoteFrameWait(missing, pair.now); pair.Step(5);
+			}
+			if (!pair.client.IsLocalSeatHeld() || pair.client.GetLocalHoldFrame() != missing || pair.client.GetResumeFrame() != missing) {
+				error = "held frame disagrees with the client's in-place boundary"; return false;
+			}
+			for (uint64_t frame = pair.hostWorld.applied + 1; frame <= missing + 20; ++frame) if (!pair.Drive(frame, error)) return false;
+			NetLockstepCoordinator tail;
+			LoopbackTransport tailWire;
+			auto playback = pair.client.GetConfig(); playback.startFrame = missing; playback.roundId = pair.host.GetRoundId();
+			if (!tail.StartReplay(tailWire, playback, &error)) return false;
+			for (uint64_t frame = missing; frame <= pair.hostWorld.applied; ++frame) {
+				const auto found = pair.history.find(frame);
+				if (found == pair.history.end()) { error = "host tail lost a held frame"; return false; }
+				const auto& committed = found->second;
+				auto frames = committed.localFrames; frames.insert(frames.end(), committed.remoteFrames.begin(), committed.remoteFrames.end());
+				auto commands = committed.localCommands; commands.insert(commands.end(), committed.remoteCommands.begin(), committed.remoteCommands.end());
+				if (!tail.QueueReplayFrame(frame, frames, commands, &error)) return false;
+				NetLockstepReadyFrame ready;
+				if (!tail.PopReadyFrame(ready)) { error = "private tail waited on acceptance"; return false; }
+				pair.clientWorld.Apply(ready); tail.FinishSimulationTick(frame);
+			}
+			if (pair.clientWorld.Hash() != pair.hostWorld.Hash()) { error = "in-place tail differs from the host"; return false; }
+			std::cout << "[acceptance-stall] held=" << missing << " stopped_before=" << missing << " tail_in_place=1 images=0" << std::endl;
+			return true;
+		};
+		row("uplink_stall", [&](std::string& error) { return stall(false, error); });
+		row("host_receive_stall", [&](std::string& error) { return stall(true, error); });
+		row("contiguous_acceptance", [&](std::string& error) {
+			Pair pair; if (!pair.Start(47552, 4, error) || !pair.Warm(error)) return false;
+			pair.clientWire.dropSentFrom = 105;
+			if (!pair.client.QueueLocalInput(101, {MakeFrame(102, 101)}, {}, &error)) return false;
+			if (!pair.client.QueueLocalInput(102, {MakeFrame(102, 102)}, {}, &error)) return false;
+			pair.clientWire.dropSentFrom = UINT64_MAX;
+			NetLockstepFrame later; later.senderPeerId = 2; later.roundId = pair.host.GetRoundId(); later.targetFrame = 106; later.frames = {MakeFrame(102, 102)};
+			std::vector<uint8_t> bytes; if (!EncodePacket({later}, bytes, &error) || !pair.clientWire.LoopbackTransport::Send(1, NetTransportLane::InputUnreliable, bytes, &error)) return false;
+			for (int turn = 0; turn < 10; ++turn) pair.Step();
+			if (pair.client.m_HostAcceptedLocalFrames.empty() || *pair.client.m_HostAcceptedLocalFrames.rbegin() != 104) { error = "a later input filled the host acceptance gap, or no cumulative mark arrived"; return false; }
+			later.targetFrame = 105;
+			later.frames = {MakeFrame(102, 101)};
+			if (!EncodePacket({later}, bytes, &error) || !pair.clientWire.LoopbackTransport::Send(1, NetTransportLane::InputUnreliable, bytes, &error)) return false;
+			for (int turn = 0; turn < 10; ++turn) pair.Step();
+			if (pair.client.m_HostAcceptedLocalFrames.empty() || *pair.client.m_HostAcceptedLocalFrames.rbegin() < 106) { error = "filling the gap did not release the contiguous prefix"; return false; }
+			return true;
+		});
+		row("lost_ack_repair", [&](std::string& error) {
+			Pair pair; if (!pair.Start(47553, 4, error) || !pair.Warm(error)) return false;
+			pair.hostWire.dropOneAck = true;
+			if (!pair.Drive(101, error) || !pair.Drive(102, error)) return false;
+			if (pair.hostWire.lostAcks != 1 || pair.clientWire.acceptanceReceived == 0 || pair.client.m_HostAcceptedLocalFrames.empty() ||
+			    *pair.client.m_HostAcceptedLocalFrames.rbegin() < 106) { error = "the next cumulative acknowledgement did not repair the lost one"; return false; }
+			return true;
+		});
+		row("round_seed", [&](std::string& error) {
+			Pair pair; if (!pair.Start(47554, 4, error)) return false;
+			if (pair.client.m_HostAcceptedLocalFrames.empty() || *pair.client.m_HostAcceptedLocalFrames.rbegin() != 4) { error = "the agreed startup neutral range has no acceptance seed"; return false; }
+			NetLockstepAck stale; stale.senderPeerId = 1; stale.receivedMask = NetLockstepCodec::c_InputAcceptedMask; stale.highestContiguousFrame = 1000;
+			stale.sessionId = pair.client.GetConfig().sessionId; stale.roundId = pair.client.GetRoundId() + 1; stale.seatIncarnation = 1;
+			pair.client.HandleAck(stale, 1);
+			if (*pair.client.m_HostAcceptedLocalFrames.rbegin() != 4) { error = "another round supplied acceptance"; return false; }
+			stale.roundId = pair.client.GetRoundId(); ++stale.sessionId; pair.client.HandleAck(stale, 1);
+			if (*pair.client.m_HostAcceptedLocalFrames.rbegin() != 4) { error = "another session supplied acceptance"; return false; }
+			return true;
+		});
+		row("reclaim_seed", [&](std::string& error) {
+			Pair pair; if (!pair.Start(47555, 4, error) || !pair.Warm(error)) return false;
+			if (!pair.host.ProposePeerHold(2, pair.now, &error, 105, "late_stream")) return false;
+			for (int turn = 0; turn < 10; ++turn) pair.Step();
+			if (!pair.host.SchedulePeerReclaim(2, 1, 2, 120, &error)) return false;
+			for (int turn = 0; turn < 10; ++turn) pair.Step();
+			const auto reclaim = pair.host.ReclaimTransactions().at(2);
+			if (pair.client.m_HostAcceptedLocalFrames.empty() || *pair.client.m_HostAcceptedLocalFrames.rbegin() != reclaim.neutralThroughFrame) { error = "a reclaim did not seed its agreed neutral range"; return false; }
+			NetLockstepAck stale; stale.senderPeerId = 1; stale.receivedMask = NetLockstepCodec::c_InputAcceptedMask; stale.highestContiguousFrame = 1000;
+			stale.sessionId = pair.client.GetConfig().sessionId; stale.roundId = pair.client.GetRoundId(); stale.seatIncarnation = 1;
+			pair.client.HandleAck(stale, 1);
+			if (*pair.client.m_HostAcceptedLocalFrames.rbegin() != reclaim.neutralThroughFrame) { error = "an old incarnation supplied acceptance after reclaim"; return false; }
+			return true;
+		});
+		row("succession_seed", [&](std::string& error) {
+			LoopbackTransport hostWire, aWire, bWire;
+			if (!hostWire.StartHost(47563, &error) || !aWire.Connect("loopback", 47563, &error) || !bWire.Connect("loopback", 47563, &error)) return false;
+			auto match = NetMatchConfigUtil::MakeDefault(0xACC777); match.peerCount = 3; match.players.push_back({3, 2, false, "Third"}); match.successorOrder = {2, 3};
+			for (uint8_t peer = 1; peer <= 3; ++peer) match.migrationPeers.push_back({peer, static_cast<uint16_t>(47563 + peer), {"loopback"}});
+			const auto config = [&](uint8_t peer) {
+				NetLockstepConfig value; value.sessionId = match.sessionId; value.matchConfig = match; value.peerCount = 3; value.localPeerId = peer;
+				value.startFrame = 1; value.roundId = peer == 1 ? 0xACC778 : 0; value.timeoutMs = 20000; value.substituteSlowPeers = true;
+				value.inputDelayFrames = peer == 1 ? 0 : 4; value.peerInputDelayFrames = {{1, 0}, {2, 4}, {3, 4}}; value.peerIncarnations = {{1, 1}, {2, 1}, {3, 1}};
+				value.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}} : std::map<uint8_t, NetPeerId>{{1, 1}};
+				value.relayToOtherPeers = peer == 1; value.migrationKey.fill(0x39); value.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); }; return value;
+			};
+			NetLockstepCoordinator host, a, b;
+			if (!host.Start(hostWire, config(1), &error) || !a.Start(aWire, config(2), &error) || !b.Start(bWire, config(3), &error)) return false;
+			uint64_t now = 0;
+			const auto collect = [](NetLockstepCoordinator& peer) { NetLockstepReadyFrame ready; while (peer.PopReadyFrame(ready)) peer.FinishSimulationTick(ready.frame); };
+			for (int turn = 0; turn < 20; ++turn, now += 5) { host.Tick(now); a.Tick(now); b.Tick(now); }
+			for (uint64_t frame = 1; frame <= 5; ++frame) {
+				for (auto* peer : {&host, &a, &b}) if (!peer->QueueLocalInput(frame, {}, {}, &error)) return false;
+				for (int turn = 0; turn < 10; ++turn, now += 5) { host.Tick(now); a.Tick(now); b.Tick(now); collect(host); collect(a); collect(b); }
+			}
+			hostWire.Stop();
+			for (int turn = 0; turn < 1500 && (a.GetHostPeerId() != 2 || b.GetHostPeerId() != 2 || a.IsMigrating() || b.IsMigrating()); ++turn, now += 5) { a.Tick(now); b.Tick(now); collect(a); collect(b); }
+			if (b.IsMigrating() || b.GetHostPeerId() != 2 || b.m_HostAcceptedLocalFrames.empty()) { error = "succession did not reset and seed the surviving client's acceptance"; return false; }
+			const auto seeded = *b.m_HostAcceptedLocalFrames.rbegin();
+			NetLockstepAck stale; stale.senderPeerId = 2; stale.receivedMask = NetLockstepCodec::c_InputAcceptedMask; stale.highestContiguousFrame = 1000;
+			stale.sessionId = b.GetConfig().sessionId; stale.roundId = b.GetRoundId(); stale.seatIncarnation = 1; stale.authorityGeneration = 0;
+			b.HandleAck(stale, b.GetConfig().remoteTransportPeerIds.at(2));
+			if (*b.m_HostAcceptedLocalFrames.rbegin() != seeded) { error = "an old authority generation supplied acceptance"; return false; }
+			return true;
+		});
+		row("playback_tail_bypass", [&](std::string& error) {
+			for (bool tail : {false, true}) {
+				LoopbackTransport wire; NetLockstepCoordinator playback;
+				auto config = MakeCoordinatorConfig(2, 1, 0xACC888, 0, NetTransportLane::InputUnreliable); config.startFrame = tail ? 500 : 1; config.roundId = 77; config.substituteSlowPeers = true;
+				if (!playback.StartReplay(wire, config, &error)) return false;
+				for (uint64_t frame = config.startFrame; frame < config.startFrame + 8; ++frame) {
+					if (!playback.QueueReplayFrame(frame, {MakeFrame(102, frame)}, {}, &error)) return false;
+					NetLockstepReadyFrame ready; if (!playback.PopReadyFrame(ready)) { error = "committed playback waited on network acceptance"; return false; }
+					playback.FinishSimulationTick(frame);
+				}
+			}
+			return true;
+		});
+		std::cout << "[net-input-acceptance-selftest] " << passed << " of " << passed + failed << " passed" << std::endl;
+		return failed == 0 ? 0 : 1;
+	}
+
 	int NetLockstepSelfTest::RunFirstStart() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		std::string error;
