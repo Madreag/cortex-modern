@@ -2121,6 +2121,20 @@ class DirectoryTests(unittest.TestCase):
         self.assertTrue(any(signal["from"] == "client:legitimate" for signal in signals), "S2: queue pressure removed a legitimate joiner's only offer")
         self.assertLessEqual(len(signals), session_directory.MAX_QUEUE, "S2: fair queue admission exceeded the queue bound")
 
+    def test_capacity_refusal_preserves_the_active_lease_and_signals(self) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        world = str(uuid.uuid4())
+        request = sample_register(persistent_world=True, world_id=world, world_boot=1)
+        host = store.register(request, "192.0.2.1", 0, INSTALL_KEY)
+        store.heartbeat(world, {"token": host["token"], "peer_count": 2, "seats_free": 1}, 1, INSTALL_KEY)
+        store.post_signal(world, {"token_or_join_nonce": "joiner", "from": "client:joiner", "to": "host", "payload_b64": "b2ZmZXI="}, 1)
+        with mock.patch.object(session_directory, "MAX_PENDING_REGISTRATIONS", 1):
+            store.register(sample_register(), "198.51.100.1", 2, INSTALL_KEY)
+            with self.assertRaises(OverflowError):
+                store.register(dict(request, resume_session_id=world, resume_token=host["token"]), "192.0.2.1", 3, INSTALL_KEY)
+        signals = store.get_signals(world, "host", 0, host["token"], 4)["signals"]
+        self.assertEqual(len(signals), 1, "S2: a capacity-refused registration discarded the active joiner's offer")
+
     def test_rotated_lease_refuses_an_old_long_poll_before_draining(self) -> None:
         store = session_directory.SessionDirectory(300, 5)
         now = time.monotonic()

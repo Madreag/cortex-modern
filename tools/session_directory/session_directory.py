@@ -1033,14 +1033,14 @@ class SessionDirectory:
                 session_id = str(uuid.uuid4())
                 token = self._issue_token(session_id, generation)
             previous_session = self._sessions.get(session_id)
-            if previous_session is not None:
-                self._clear_signals(previous_session)
             pending = [item for sid, item in self._sessions.items() if sid != session_id and not item.acknowledged]
             if (len(pending) >= MAX_PENDING_REGISTRATIONS or sum(item.observed_ip == observed_ip for item in pending) >= MAX_PENDING_PER_SOURCE
                     or sum(item.stored_bytes for item in pending) + SESSION_METADATA_BYTES + len(json.dumps(fields).encode()) > MAX_PENDING_BYTES):
                 raise OverflowError("full")
             if world and session_id not in self._world_owners and len(self._world_owners) >= MAX_WORLD_OWNERS:
                 raise OverflowError("full")
+            if previous_session is not None:
+                self._clear_signals(previous_session)
             sess = Session(session_id, token, fields, observed_ip, now)
             sess.install_key = install_key
             sess.install_key_sha256 = hashlib.sha256(install_key.encode()).hexdigest()
