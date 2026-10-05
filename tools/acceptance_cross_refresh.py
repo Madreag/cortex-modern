@@ -16,6 +16,7 @@ import sys
 from acceptance_collection import read, write
 import acceptance_remote as remote
 import cross_peers as cross
+from inventory_location import inventory_dir
 
 
 def resolve(plan_path, row_id, boxes_path):
@@ -105,7 +106,7 @@ def main(argv=None):
     parser.add_argument('--plan',type=Path,required=True);parser.add_argument('--row',required=True)
     parser.add_argument('--boxes',type=Path,required=True)
     parser.add_argument('--repo',type=Path,default=Path(os.environ.get('CC_CROSS_PEERS_REPO','D:/Projects/alias-walk')))
-    parser.add_argument('--inventory',type=Path,default=Path(os.environ.get('CC_INVENTORY_DIR','D:/Projects/reviews/takeover-20260909/grok-workers/lead-tools/inventory')))
+    parser.add_argument('--inventory',type=Path,default=inventory_dir())
     parser.add_argument('--work',type=Path)
     parser.add_argument('--lane',default=os.environ.get('CC_CROSS_PEERS_LANE','acceptance-refresh'))
     parser.add_argument('--mac-guard',default=os.environ.get('CC_CROSS_PEERS_MAC_GUARD'))
