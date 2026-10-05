@@ -82,7 +82,7 @@ TAG_PATTERNS = [
     EDGE_L + r'L[0-9]{2}' + EDGE_R,
     EDGE_L + r'Source[0-9]{2}' + EDGE_R,
     EDGE_L + r'R[0-9](?:F[0-9]+|D[0-9]+|WAY[0-9]+|-[0-9]{3})',
-    # A ruling named by its letters, and the numbered rules of the maintainer's own rule list (A0-A16).
+    # A ruling named by its letters, and a numbered rule of the maintainer's own rule list cited in parentheses.
     r'(?i)' + EDGE_L + r'rulings?\s+(?:[a-z]{1,4}|[A-Z]?[0-9]{1,2}(?:\.[0-9]+)?)' + EDGE_R,
     EDGE_L + r'A(?:1[0-6]|[0-9])' + EDGE_R + r'(?=[:)])',
 ]
