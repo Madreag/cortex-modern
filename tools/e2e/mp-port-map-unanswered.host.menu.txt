@@ -16,10 +16,14 @@ wait_ms 495
 activate ButtonMultiplayerCreate
 wait_ms 600
 assert_substate Lobby
+# The router's answer stands beside the game port, in Advanced - Connection.
+activate ButtonLobbyOptions
+wait_ms 600
+assert_visible CollectionBoxHostPageConnection 1
 video_mark port-map-pending
-assert_label LabelLobbyPortMap Mapping the port...
+assert_label LabelHostNetPortHint Mapping the port...
 wait_ms 8000
 video_mark port-map-unanswered
-assert_label LabelLobbyPortMap No router mapping (no method answered)
+assert_label LabelHostNetPortHint No router mapping (no method answered)
 wait_ms 2000
 exit

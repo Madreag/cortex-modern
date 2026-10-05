@@ -6,7 +6,7 @@
   "size": "960x540",
   "timeout_s": 120,
   "title": "The host's router mapping line in the lobby: mapped while the lobby is listed, and kept",
-  "capture_policy": "The routers are loopback fakes started beside the run (tools/net_port_map_fake.py), so no packet reaches a real router; every runner seeds NetworkPortMapEnable = 0 and only this scene's host turns the mapping on by its argv. The lobby line is read from the label the player sees.",
+  "capture_policy": "The routers are loopback fakes started beside the run (tools/net_port_map_fake.py), so no packet reaches a real router; every runner seeds NetworkPortMapEnable = 0 and only this scene's host turns the mapping on by its argv. The router's answer is read from the line the host sees beside the game port in Advanced - Connection.",
   "requires_tokens": [
     "PORTMAP_OK_GATEWAY",
     "PORTMAP_OK_IGD"
@@ -44,8 +44,8 @@
       "screen": "MultiplayerScreen",
       "what": "The listed lobby's router line reads the public endpoint the router mapped, through NAT-PMP, while the listing waits for the lobby's identity.",
       "events": [
-        "assert_label LabelLobbyPortMap \"Public endpoint: 203\\.0\\.113\\.7:\" text=\"Public endpoint: 203\\.0\\.113\\.7:\\d+ via natpmp\" PASS",
-        "assert_label LabelLobbyPortMap \"via natpmp\" text=\"Public endpoint: 203\\.0\\.113\\.7:\\d+ via natpmp\" PASS"
+        "assert_label LabelHostNetPortHint \"Public endpoint: 203\\.0\\.113\\.7:\" text=\".*Public endpoint: 203\\.0\\.113\\.7:\\d+ via natpmp\" PASS",
+        "assert_label LabelHostNetPortHint \"via natpmp\" text=\".*Public endpoint: 203\\.0\\.113\\.7:\\d+ via natpmp\" PASS"
       ]
     },
     {
@@ -56,7 +56,7 @@
       "screen": "MultiplayerScreen",
       "what": "Three seconds later the line still reads the mapped endpoint: the mapping is not released while the lobby is listed.",
       "events": [
-        "assert_label LabelLobbyPortMap \"Public endpoint: 203\\.0\\.113\\.7:\" text=\"Public endpoint: 203\\.0\\.113\\.7:\\d+ via natpmp\" PASS"
+        "assert_label LabelHostNetPortHint \"Public endpoint: 203\\.0\\.113\\.7:\" text=\".*Public endpoint: 203\\.0\\.113\\.7:\\d+ via natpmp\" PASS"
       ]
     }
   ]

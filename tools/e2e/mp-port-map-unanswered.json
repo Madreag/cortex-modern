@@ -5,7 +5,7 @@
   "size": "960x540",
   "timeout_s": 120,
   "title": "The host's router mapping line in the lobby when no router answers: under way, then no answer",
-  "capture_policy": "The routers are loopback fakes started beside the run (tools/net_port_map_fake.py), so no packet reaches a real router; every runner seeds NetworkPortMapEnable = 0 and only this scene's host turns the mapping on by its argv. The lobby line is read from the label the player sees.",
+  "capture_policy": "The routers are loopback fakes started beside the run (tools/net_port_map_fake.py), so no packet reaches a real router; every runner seeds NetworkPortMapEnable = 0 and only this scene's host turns the mapping on by its argv. The router's answer is read from the line the host sees beside the game port in Advanced - Connection.",
   "requires_tokens": [
     "PORTMAP_SILENT_GATEWAY",
     "PORTMAP_DEAD_IGD"
@@ -41,7 +41,7 @@
       "screen": "MultiplayerScreen",
       "what": "Right after the lobby opens, the router line says the mapping is under way.",
       "events": [
-        "assert_label LabelLobbyPortMap \"Mapping the port\\.\\.\\.\" text=\"Mapping the port\\.\\.\\.\" PASS"
+        "assert_label LabelHostNetPortHint \"Mapping the port\\.\\.\\.\" text=\".*Mapping the port\\.\\.\\.\" PASS"
       ]
     },
     {
@@ -52,7 +52,7 @@
       "screen": "MultiplayerScreen",
       "what": "With no router answering, the line says so in the player's words.",
       "events": [
-        "assert_label LabelLobbyPortMap \"No router mapping \\(no method answered\\)\" text=\"No router mapping \\(no method answered\\)\" PASS"
+        "assert_label LabelHostNetPortHint \"No router mapping \\(no method answered\\)\" text=\".*No router mapping \\(no method answered\\)\" PASS"
       ]
     }
   ]
