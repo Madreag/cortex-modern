@@ -2523,7 +2523,7 @@ namespace RTE {
 				dispatcher.Update(0);
 				dispatcher.RebindHost("8c9d2e1f-2222-4333-8444-555566667777", "renewed-token");
 				if (channel.PendingPosts() != 2) { *error = "F7: rebinding discarded the outstanding response and queued refusal for a joiner"; return false; }
-				replies->push_back({200, R"({"ok":true})", ""}); replies->push_back({200, R"({"ok":true})", ""});
+				replies->push_back(kPostOk); replies->push_back(kPostOk);
 				dispatcher.Update(1); dispatcher.Update(2); dispatcher.Update(3);
 				if (sent->size() != 3 || channel.PendingPosts() != 0) { *error = "F7: the moved channel did not send both queued posts"; return false; }
 				for (size_t i = 1; i < 3; ++i) {

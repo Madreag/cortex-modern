@@ -139,6 +139,20 @@ namespace RTE {
 		Configure(std::move(baseUrl), std::move(installKey), std::move(certPinSha256), std::move(sessionId), "client:" + m_JoinNonce, m_JoinNonce);
 	}
 
+	void NetDirectorySignalChannel::RebindHost(const std::string& sessionId, const std::string& sessionToken) {
+		if (m_LocalPeer != "host" || m_BaseUrl.empty() || !IsSessionId(sessionId) || !IsPeerSecret(sessionToken)) return;
+		AbortRequest();
+		m_SessionPath = "/v1/sessions/" + sessionId;
+		m_Credential = sessionToken;
+		for (auto& header: m_Headers) if (header.first == "X-Session-Token") header.second = sessionToken;
+		// A recovered service can start its per-peer sequences over.
+		m_Cursor = 0;
+		m_NextPollMs = 0;
+		m_DrainPolled = false;
+		m_LastError.clear();
+		SetState(State::Open);
+	}
+
 	void NetDirectorySignalChannel::Configure(std::string baseUrl, std::string installKey, std::string certPinSha256, std::string sessionId, std::string localPeer, std::string credential) {
 		AbortRequest();
 		m_Outbox.clear();
@@ -283,7 +297,7 @@ namespace RTE {
 		m_LastError = reason;
 		DiagnosticLine() << "[net-directory-signal] " << Role() << " failed: " << reason << (detail.empty() ? "" : " (" + detail + ")") << std::endl;
 		AbortRequest();
-		m_Outbox.clear();
+		if (m_LocalPeer != "host") m_Outbox.clear();
 		SetState(State::Failed);
 	}
 

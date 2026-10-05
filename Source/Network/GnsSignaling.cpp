@@ -96,6 +96,7 @@ namespace RTE {
 		std::vector<Frame> frames;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (channel.GetLocalPeer() == "host" && channel.GetState() == NetDirectorySignalChannel::State::Failed && !m_Outbox.empty()) return result;
 			frames.swap(m_Outbox);
 			result.done = m_Released;
 		}
@@ -225,7 +226,7 @@ namespace RTE {
 		m_Config.sessionId = sessionId;
 		m_Config.sessionToken = sessionToken;
 		m_SessionId = sessionId;
-		m_Channel.ConfigureHost(m_Config.baseUrl, m_Config.installKey, m_Config.certPinSha256, sessionId, sessionToken);
+		m_Channel.RebindHost(sessionId, sessionToken);
 		m_Channel.SetPolling(m_PollArmed);
 		Note("host channel rebound to session " + sessionId + ": " + NetDirectorySignalChannel::StateName(m_Channel.GetState()));
 	}
