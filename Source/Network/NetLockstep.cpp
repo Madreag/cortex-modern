@@ -4542,19 +4542,6 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::Start(INetTransport& transport, const NetLockstepConfig& requested, std::string* error) {
 		NetLockstepConfig config = requested;
-		if (config.substituteSlowPeers) {
-			const uint8_t host = config.authorityPeerId != 0 ? config.authorityPeerId : config.matchConfig.hostPeerId;
-			if (config.peerInputDelayFrames.empty())
-				for (uint8_t peer = 1; peer <= config.peerCount; ++peer) config.peerInputDelayFrames[peer] = config.inputDelayFrames;
-			// One tick of lookahead publishes a client's input before its simulation starts.
-			for (uint8_t peer = 1; peer <= config.peerCount; ++peer) {
-				const auto found = config.peerInputDelayFrames.find(peer);
-				const uint16_t delay = found == config.peerInputDelayFrames.end() ? config.inputDelayFrames : found->second;
-				if (peer != host && delay == 0) config.peerInputDelayFrames[peer] = 1;
-				if (peer != host) for (auto& [frame, value] : config.initialDelayChanges[peer]) if (value == 0) value = 1;
-			}
-			if (config.localPeerId != host) config.inputDelayFrames = config.peerInputDelayFrames.contains(config.localPeerId) ? config.peerInputDelayFrames.at(config.localPeerId) : config.inputDelayFrames;
-		}
 		NET_PLANE_CHECK();
 		m_HostLeaveRecordFrom = 0;
 		m_SuccessorProbe.reset();
@@ -4678,6 +4665,15 @@ namespace RTE {
 				if (error) *error = "lockstep local input delay disagrees with the per-peer set";
 				return false;
 			}
+		}
+		if (config.substituteSlowPeers) {
+			if (config.peerInputDelayFrames.empty())
+				for (uint8_t peer = 1; peer <= config.peerCount; ++peer) config.peerInputDelayFrames[peer] = config.inputDelayFrames;
+			// One tick of lookahead publishes a client's input before its simulation starts.
+			for (auto& [peer, delay] : config.peerInputDelayFrames) if (peer != authority && delay == 0) delay = 1;
+			for (auto& [peer, changes] : config.initialDelayChanges) if (peer != authority)
+				for (auto& [frame, delay] : changes) if (delay == 0) delay = 1;
+			config.inputDelayFrames = config.peerInputDelayFrames.at(config.localPeerId);
 		}
 		NetLockstepStart start;
 		start.sessionId = config.sessionId;
