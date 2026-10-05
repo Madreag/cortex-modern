@@ -1,4 +1,4 @@
-"""Row 516: the Network page retains a community directory URL exactly across save."""
+"""The Network page retains a community directory URL exactly across save."""
 
 import argparse
 import json

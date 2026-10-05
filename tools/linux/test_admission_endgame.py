@@ -1,4 +1,4 @@
-"""Row 512: transport refusal cases and real mod-mismatch join/host UI checks.
+"""Transport refusal cases and real mod-mismatch join/host UI checks.
 
 The version arms deliberately remain incomplete until supplied UI runs show both the
 joiner and host reason. A transport selftest alone cannot prove a visible menu message.

@@ -6,7 +6,7 @@ tick each peer prints the rules it plays by; the run passes when, on both peers,
 path to orbit and unit deployment are the activity's own defaults - the values the single-player setup seeds from the
 same activity - and every seated team's funds equal that gold.
 
-  python tools/test_activity_rules.py --out D:/mx/<lane>/activity-rules [--port 47350] [--runs 1]
+  python tools/test_activity_rules.py --out <scratch>/activity-rules [--port 47350] [--runs 1]
 """
 
 from __future__ import annotations

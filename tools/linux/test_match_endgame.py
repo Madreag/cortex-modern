@@ -1,4 +1,4 @@
-"""Rows 510, 511 and 514: focus, comma locale, chat and a graceful host departure.
+"""Focus, comma locale, chat and a graceful host departure.
 
 Every launch goes through run_sim_test's platform runner. Each case retains its menu/probe
 scripts, process records, complete tick hashes and match reports. No desktop automation.

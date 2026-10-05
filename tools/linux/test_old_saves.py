@@ -1,4 +1,4 @@
-"""Row 513: load retained 7.0 and September 20 saves and play 600 ticks from each.
+"""Load retained 7.0 and September 20 saves and play 600 ticks from each.
 
 Inputs must be retained .ccsave files; this check never manufactures an old save. The
 source path, bytes, timestamp and SHA-256 are recorded before staging the individual file.
