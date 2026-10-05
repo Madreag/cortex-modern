@@ -2879,7 +2879,7 @@ namespace RTE {
 				GnsDirectorySignalDispatcher dispatcher;
 				GnsDirectorySignalDispatcher::Config config;
 				config.role = GnsDirectorySignalDispatcher::Role::Joiner; config.baseUrl = "https://dir.test";
-				config.sessionId = "7b8c9d2e-1111-4222-8333-444455556666"; config.joinNonce = "joiner-on-old-row";
+				config.sessionId = "7b8c9d2e-1111-4222-8333-444455556666";
 				if (!dispatcher.Start(transport, config)) { *error = "old-row fixture could not start signaling"; return false; }
 				class Gone final : public NetDirectoryClient::Transport {
 				public:
