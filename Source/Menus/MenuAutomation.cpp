@@ -2382,6 +2382,14 @@ namespace RTE::MenuAutomation {
 						{"max_res_x", g_WindowMan.GetMaxResX()}, {"max_res_y", g_WindowMan.GetMaxResY()},
 						{"fullscreen", g_WindowMan.IsFullscreen()}}},
 					{"show_metascenes", g_SettingsMan.ShowMetascenes()}, {"controls", Json::array()}};
+				// The games the Join screen lists, with the join target each row stands for: the rows show words, not addresses.
+				if (const MainMenuGUI* main = g_MenuMan.GetMainMenu()) {
+					Json rows = Json::array();
+					for (const NetDirectoryClient::GameRow& game : main->AutomationGameRows()) {
+						rows.push_back({{"name", game.name}, {"source", game.source}, {"address", game.address}, {"port", game.port}, {"joinable", game.joinable}});
+					}
+					result["game_rows"] = rows;
+				}
 				for (auto* item : *manager->GetControlList()) {
 					const bool dumpHiddenPreset = item->GetName() == "ComboPresetResolution";
 					if (!Visible(item) && !dumpHiddenPreset) continue;

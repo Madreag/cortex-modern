@@ -1267,9 +1267,34 @@ def listed_rows(peer_root, control):
     return [json.loads(row) for row in LISTED_ROW.findall(lines[-1])] if lines else None
 
 
+def listed_games(peer_root):
+    """The Join screen's rows as the join targets they stand for, from the script's last dump that lists them."""
+    path = Path(peer_root) / "stdout.log"
+    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    for line in reversed(text.splitlines()):
+        if not line.startswith(("[menu-script] dump_host_options {", "[menu-script] dump_player_options {")):
+            continue
+        body = line[line.index("{"):].removesuffix(" PASS")
+        try:
+            games = json.loads(body).get("game_rows")
+        except json.JSONDecodeError:
+            continue
+        if games is not None:
+            return games
+    return None
+
+
 def own_session_evidence(peer_root, spec, port):
     """A LAN listing shows every engine beaconing on the network, so the count is of this run's own session only."""
     rows = listed_rows(peer_root, spec["control"])
+    games = listed_games(peer_root)
+    if games is not None:
+        # The rows read in words; each one's join target comes with the dump.
+        own = [game for game in games if game.get("port") == port]
+        address = spec.get("address")
+        return {"control": spec["control"], "port": port, "rows": rows, "games": games, "own_rows": own,
+                "other_sessions": [game for game in games if game.get("port") != port], "expected": spec.get("expected", 1),
+                "address": address, "pass": len(own) == spec.get("expected", 1) and all(game.get("address") == address for game in own if address)}
     endpoints = [(row, ROW_ENDPOINT.search(row)) for row in rows or []]
     own = [row for row, found in endpoints if found and int(found[2]) == port]
     others = [row for row, found in endpoints if not (found and int(found[2]) == port)]
@@ -1283,11 +1308,17 @@ def own_session_evidence(peer_root, spec, port):
 def join_port_evidence(peer_root, spec):
     """The Port field follows the first joinable listed row, whichever session that is."""
     rows = listed_rows(peer_root, spec["control"])
-    joinable = [found for found in (ROW_ENDPOINT.search(row) for row in rows or []) if found and not found[3]]
+    games = listed_games(peer_root)
+    if games is not None:
+        # The rows read in words; the dump names each one's port.
+        joinable = [game for game in games if game.get("joinable")]
+        expected = str(joinable[0]["port"]) if joinable else None
+    else:
+        joinable = [found for found in (ROW_ENDPOINT.search(row) for row in rows or []) if found and not found[3]]
+        expected = joinable[0][2] if joinable else None
     path = Path(peer_root) / "stdout.log"
     text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
     shown = re.findall(rf'^\[menu-script\] assert_label {re.escape(spec["field"])} ".*?" text="([^"]*)" PASS$', text, re.M)
-    expected = joinable[0][2] if joinable else None
     return {"control": spec["control"], "field": spec["field"], "rows": rows, "first_joinable_port": expected,
             "shown": shown[-1] if shown else None, "pass": bool(expected) and bool(shown) and shown[-1] == expected}
 
