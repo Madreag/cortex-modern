@@ -3328,12 +3328,23 @@ namespace RTE {
 	}
 
 	uint64_t NetLockstepCoordinator::MigrationStepBudgetMs() const {
-		const uint64_t budget = std::clamp<uint32_t>(m_Config.timeoutMs, 1, 1000);
-		// A roster that answers through ICE needs the rendezvous's time before the successor closes it.
+		return MigrationTimeouts().stepMs;
+	}
+
+	NetHostMigrationTimeouts NetLockstepCoordinator::MigrationTimeouts() const {
 		const bool ice = std::any_of(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [](const NetMatchMigrationPeer& peer) {
 			return std::any_of(peer.listenAddrs.begin(), peer.listenAddrs.end(), [](const std::string& address) { return IsMigrationIceEndpoint(address); });
 		});
-		return ice ? std::max<uint64_t>(budget, c_MigrationIceStepMs) : budget;
+		const uint64_t step = NetHostMigrationTimeouts::For(m_Config.timeoutMs, ice, 0).stepMs;
+		uint64_t routes = 0;
+		// A successor stays available through the dials that can reach it, including earlier candidates.
+		for (uint8_t candidate : m_Config.matchConfig.successorOrder) {
+			const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == candidate; });
+			if (endpoint != m_Config.matchConfig.migrationPeers.end())
+				for (const auto& address : endpoint->listenAddrs) routes += IsMigrationIceEndpoint(address) ? c_MigrationIceDialMs : step;
+			if (candidate == m_MigrationSuccessor || m_MigrationSuccessor == 0) break;
+		}
+		return NetHostMigrationTimeouts::For(m_Config.timeoutMs, ice, routes);
 	}
 
 	bool NetLockstepCoordinator::ContactMigrationSuccessor(uint64_t nowMs) {
@@ -3533,7 +3544,7 @@ namespace RTE {
 			}
 		}
 		if (nowMs < m_SuccessorProbeAtMs) return;
-		m_SuccessorProbeAtMs = nowMs + 1000;
+		m_SuccessorProbeAtMs = nowMs + NetHostMigrationTimeouts::c_ProbeMs;
 		for (size_t tried = 0; tried < order.size(); ++tried) {
 			const uint8_t peer = order[m_SuccessorProbeTurn++ % order.size()];
 			if (peer == m_Config.localPeerId || m_RemovedPeers.contains(peer)) continue;
@@ -3555,7 +3566,8 @@ namespace RTE {
 	// An open handover link is the candidate answering for itself: a stalled exchange must not elect a
 	// second host past a peer that is plainly alive, so the candidate is kept until the whole election expires.
 	bool NetLockstepCoordinator::HoldsLiveMigrationCandidate(uint64_t nowMs, uint64_t budget) const {
-		return m_MigrationHostTransport != c_InvalidNetPeerId && nowMs >= m_MigrationStartedMs && nowMs - m_MigrationStartedMs < 3 * budget;
+		(void)budget;
+		return m_MigrationHostTransport != c_InvalidNetPeerId && nowMs >= m_MigrationStartedMs && nowMs - m_MigrationStartedMs < MigrationTimeouts().quorumMs;
 	}
 
 	// A peer the successor left out of its roster waits for the commit; when the successor dies first the
@@ -3620,7 +3632,7 @@ namespace RTE {
 			if (!probe)
 				continue;
 			const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& entry) { return entry.peerId == peer; });
-			if (!dial.answered && endpoint != m_Config.matchConfig.migrationPeers.end() && dial.nextAddress < endpoint->listenAddrs.size() && nowMs >= dial.lastDialMs + 250) {
+			if (!dial.answered && endpoint != m_Config.matchConfig.migrationPeers.end() && dial.nextAddress < endpoint->listenAddrs.size() && nowMs >= dial.lastDialMs + NetHostMigrationTimeouts::c_RetryMs) {
 				probe->Stop();
 				(void)ConnectMigrationEndpoint(*probe, *endpoint, dial.nextAddress, dial.address);
 				dial.lastDialMs = nowMs;
@@ -4003,10 +4015,11 @@ namespace RTE {
 		if (!IsMigrating())
 			return;
 		const bool hosting = m_MigrationSuccessor == m_Config.localPeerId;
-		const uint64_t budget = MigrationStepBudgetMs();
+		const auto limits = MigrationTimeouts();
+		const uint64_t budget = limits.stepMs;
 		const bool expired = nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= budget;
 		if (m_MigrationPhase == NetHostMigrationPhase::Contacting) {
-			if (!hosting && m_MigrationAuthoritySeen && nowMs >= m_MigrationStartedMs && nowMs - m_MigrationStartedMs >= 3 * budget) {
+			if (!hosting && m_MigrationAuthoritySeen && nowMs >= m_MigrationStartedMs && nowMs - m_MigrationStartedMs >= limits.quorumMs) {
 				// The successor found no quorum: the host may be alive and this side the one cut off.
 				StopHostUnreachable();
 				return;
@@ -4020,7 +4033,7 @@ namespace RTE {
 				}
 				if (quorum && m_MigrationAnswers.size() == m_MigrationExpected.size()) {
 					PublishMigrationPlan(nowMs);
-				} else if (!quorum && nowMs >= m_MigrationStartedMs && nowMs - m_MigrationStartedMs >= 3 * budget) {
+				} else if (!quorum && nowMs >= m_MigrationStartedMs && nowMs - m_MigrationStartedMs >= limits.quorumMs) {
 					StopHostUnreachable();
 				}
 			} else if (nowMs >= m_MigrationSinceMs && MigrationDialSpent(m_MigrationAddress, nowMs - m_MigrationSinceMs, budget) && !m_MigrationAuthoritySeen &&
@@ -4031,7 +4044,7 @@ namespace RTE {
 				}
 				m_MigrationTransport.reset();
 				(void)ContactMigrationSuccessor(nowMs);
-			} else if (!hosting && nowMs >= m_MigrationLastSendMs + 250 && m_MigrationHostTransport != c_InvalidNetPeerId) {
+			} else if (!hosting && nowMs >= m_MigrationLastSendMs + NetHostMigrationTimeouts::c_RetryMs && m_MigrationHostTransport != c_InvalidNetPeerId) {
 				(void)SendMigration(m_MigrationHostTransport, MigrationMessage(NetHostMigrationMessageType::Hello));
 				m_MigrationLastSendMs = nowMs;
 			} else if (!hosting && m_MigrationHostTransport == c_InvalidNetPeerId && nowMs >= m_MigrationLastSendMs + MigrationDialPatienceMs()) {
@@ -4055,7 +4068,7 @@ namespace RTE {
 				}
 			}
 		}
-		if (expired && GetResumeFrame() <= m_MigrationBoundary)
+		if (nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= limits.recoveryMs && GetResumeFrame() <= m_MigrationBoundary)
 			m_MigrationNeedsResync = true;
 		if (GetResumeFrame() == m_MigrationBoundary + 1 || m_MigrationNeedsResync) {
 			if (hosting) {
@@ -4084,10 +4097,10 @@ namespace RTE {
 			}
 			if (std::all_of(m_MigrationOutbox.begin(), m_MigrationOutbox.end(), [](const auto& peer) { return peer.second.empty(); }))
 				CompleteHostMigration(nowMs);
-		} else if (hosting && nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= 2 * budget && m_MigrationReady.size() != m_MigrationAnswers.size()) {
+		} else if (hosting && nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= limits.readyMs && m_MigrationReady.size() != m_MigrationAnswers.size()) {
 			FailHostMigration("a surviving peer did not finish boundary recovery");
 		}
-		if (IsMigrating() && nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= 3 * budget) {
+		if (IsMigrating() && nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= limits.publicationMs) {
 			const bool member = std::find(m_MigrationResult.members.begin(), m_MigrationResult.members.end(), m_Config.localPeerId) != m_MigrationResult.members.end();
 			if (hosting) {
 				FailHostMigration("handover publication timed out");

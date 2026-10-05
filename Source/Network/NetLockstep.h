@@ -36,6 +36,19 @@ namespace RTE {
 	/// The machine's monotonic clock in milliseconds, the same in every process on it; diagnostics that compare peers read it.
 	uint64_t NetLockstepSharedClockMs();
 
+	struct NetHostMigrationTimeouts {
+		static constexpr uint64_t c_IceStepMs = 8000;
+		static constexpr uint64_t c_IceDialMs = 30000;
+		static constexpr uint64_t c_DirectStepMs = 1000;
+		static constexpr uint64_t c_RetryMs = 250;
+		static constexpr uint64_t c_ProbeMs = 1000;
+		uint64_t stepMs, quorumMs, recoveryMs, readyMs, publicationMs;
+		static NetHostMigrationTimeouts For(uint32_t timeoutMs, bool ice, uint64_t routeBudgetMs) {
+			const uint64_t step = ice ? c_IceStepMs : std::clamp<uint64_t>(timeoutMs, 1, c_DirectStepMs);
+			return {step, std::max(3 * step, routeBudgetMs + step), step, 2 * step, 3 * step};
+		}
+	};
+
 	enum class NetLockstepPacketType : uint16_t {
 		Start = 1,
 		Frame = 2,
@@ -1247,9 +1260,9 @@ namespace RTE {
 		/// A handover endpoint entry that names the listener's ICE route: this prefix and the listener's GNS identity.
 		static constexpr std::string_view c_MigrationIcePrefix = "ice:";
 		/// The successor's step when its roster answers through ICE: candidates are gathered and traded through the directory first.
-		static constexpr uint64_t c_MigrationIceStepMs = 8000;
+		static constexpr uint64_t c_MigrationIceStepMs = NetHostMigrationTimeouts::c_IceStepMs;
 		/// How long a survivor gives an ICE dial to the successor: a relayed one can take most of the ICE connect limit.
-		static constexpr uint64_t c_MigrationIceDialMs = 30000;
+		static constexpr uint64_t c_MigrationIceDialMs = NetHostMigrationTimeouts::c_IceDialMs;
 		static bool IsMigrationIceEndpoint(const std::string& address) { return address.starts_with(c_MigrationIcePrefix); }
 		/// Whether a survivor gives up its dial of the successor at this address after elapsedMs: an ICE dial runs to its own limit.
 		static bool MigrationDialSpent(const std::string& address, uint64_t elapsedMs, uint64_t stepMs) { return elapsedMs >= (IsMigrationIceEndpoint(address) ? c_MigrationIceDialMs : stepMs); }
@@ -1493,8 +1506,9 @@ namespace RTE {
 		/// A side without the quorum hosts nothing: its seat is held by whoever hosts, and it returns later.
 		void StopHostUnreachable();
 		uint64_t MigrationStepBudgetMs() const;
+		NetHostMigrationTimeouts MigrationTimeouts() const;
 		/// How long a survivor waits on its dial to the successor before it dials the next entry.
-		uint64_t MigrationDialPatienceMs() const { return IsMigrationIceEndpoint(m_MigrationAddress) ? c_MigrationIceDialMs : 250; }
+		uint64_t MigrationDialPatienceMs() const { return IsMigrationIceEndpoint(m_MigrationAddress) ? c_MigrationIceDialMs : NetHostMigrationTimeouts::c_RetryMs; }
 		bool HoldsLiveMigrationCandidate(uint64_t nowMs, uint64_t budget) const;
 		void PublishMigrationPlan(uint64_t nowMs);
 		void CompleteHostMigration(uint64_t nowMs);

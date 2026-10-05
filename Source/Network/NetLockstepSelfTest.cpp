@@ -19351,6 +19351,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		};
 
 		bool TestSuccessorWaitsForAThirtySecondDial(std::string* error) {
+			for (bool ice : {false, true}) {
+				const uint64_t dial = ice ? NetHostMigrationTimeouts::c_IceDialMs : NetHostMigrationTimeouts::c_DirectStepMs;
+				const auto limits = NetHostMigrationTimeouts::For(1000, ice, 2 * dial);
+				if (!(NetHostMigrationTimeouts::c_RetryMs < limits.stepMs && limits.stepMs <= dial && 2 * dial < limits.quorumMs &&
+				      limits.recoveryMs < limits.readyMs && limits.readyMs < limits.publicationMs)) {
+					*error = "succession deadlines contradict a permitted dial or boundary recovery"; return false;
+				}
+			}
 			struct Clock { uint64_t now = 0; uint64_t connectedAt = UINT64_MAX; };
 			class DelayedConnection : public LoopbackTransport {
 			public:
