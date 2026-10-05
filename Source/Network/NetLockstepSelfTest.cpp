@@ -15,6 +15,9 @@
 #include "NetSession.h"
 #include "NetResyncState.h"
 #include "NetReconnectLedger.h"
+#include "NetReconnectSession.h"
+#include "NetSeatAuth.h"
+#include "NetSeatRoster.h"
 #include "NetReconnectUx.h"
 #include "NetResyncSelfTest.h"
 #include "NetResyncRuntimeSelfTest.h"
@@ -24865,10 +24868,241 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 
 	}
 
+namespace {
+	bool StartPlainHostSuccession(ReleasePathRound& round, std::string* error) {
+		if (!round.Start(47430)) { *error = "the playing-host fixture did not start: " + round.failure; return false; }
+		round.drainThrough = 29;
+		for (int pass = 0; pass < 400 && (round.peers[1].GetResumeFrame() != 30 || round.peers[2].GetResumeFrame() != 30 || round.peers[3].GetResumeFrame() != 30); ++pass) round.Pump();
+		for (size_t index: {size_t{1}, size_t{2}, size_t{3}}) if (round.peers[index].GetResumeFrame() != 30) { *error = "a survivor did not apply boundary 29"; return false; }
+		if (!round.Migrate() || round.peers[1].GetMigrationResult().boundary != 29) { *error = "the playing host was not succeeded at 29"; return false; }
+		round.drainThrough = UINT64_MAX;
+		for (int pass = 0; pass < 30; ++pass) round.Pump();
+		for (size_t index: {size_t{1}, size_t{2}, size_t{3}}) if (round.peers[index].GetHostPeerId() != 2 || !round.committed[index].contains(37)) { *error = "a survivor did not continue through 37"; return false; }
+		return true;
+	}
+
+	NetSeatRoster HostLossRoster(const NetMatchConfig& match) {
+		NetSeatRoster roster;
+		roster.matchId = match.sessionId; roster.hostSeat = 1; roster.stage = NetRosterStage::Running;
+		for (uint8_t peer = 1; peer <= match.peerCount; ++peer) {
+			NetRosterSeat seat; seat.seatId = peer; seat.owner = 100 + peer; seat.ticket = 200 + peer;
+			seat.phase = NetSeatPhase::Running; seat.link = NetSeatLink::Connected; roster.seats.push_back(seat);
+		}
+		NetRosterEvent lost; lost.kind = NetRosterEventKind::HostLinkLost; lost.quorum = true; lost.nowMs = 100;
+		roster = ApplyRosterEvent(roster, lost).roster;
+		NetRosterEvent changed; changed.kind = NetRosterEventKind::HostChanged; changed.seat = 2;
+		return ApplyRosterEvent(roster, changed).roster;
+	}
+
+	bool TestPlayingHostLossKeepsLiveClaims(std::string* error) {
+		const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("playing_host_loss_keeps_live_claims", why, error); };
+		ReleasePathRound round;
+		if (!StartPlainHostSuccession(round, &round.failure)) return fail(round.failure);
+		const auto roster = HostLossRoster(round.match);
+		if (!roster.Find(1) || roster.Find(1)->phase != NetSeatPhase::Held || roster.Find(1)->owner != 101 || roster.Find(1)->ticket != 201) return fail("the roster's host-loss cell gave away its owner or ticket");
+		std::array<ReleasePathClaimView, 3> views;
+		std::string failures;
+		for (size_t index = 0; index < views.size(); ++index) {
+			auto& core = round.peers[index + 1];
+			NetSeatRoster replica;
+			if (!DecodeRoster(EncodeRoster(roster), replica, &round.failure) || !replica.Find(1) || replica.Find(1)->phase != NetSeatPhase::Held || replica.Find(1)->owner != 101 || std::string(RosterSeatStateWord(*replica.Find(1))) != "Held") return fail("a survivor's replicated roster did not retain the held owner");
+			if (!views[index].Create("survivor " + std::to_string(index + 2), core, 1, 2, 1)) return fail("the host's claimed actor did not create");
+			views[index].handoff = 1;
+			for (uint64_t tick = 29; tick <= 37; ++tick) {
+				views[index].ApplyTick(round.committed[index + 1].at(tick));
+				if (tick >= 30 && (!core.IsSeatUnderAI(1, tick) || !core.IsSeatReclaimableAt(1, tick) || core.IsSeatReleased(1) || views[index].claimant != 1 || views[index].ended)) failures += "survivor " + std::to_string(index + 2) + " frame " + std::to_string(tick) + " lost host held=" + std::to_string(core.IsSeatUnderAI(1, tick)) + " reclaimable=" + std::to_string(core.IsSeatReclaimableAt(1, tick)) + " claim=" + std::to_string(views[index].claimant) + " ends=" + views[index].Ended() + "; ";
+			}
+		}
+		for (const auto& view: views) if (view.hashes != views[0].hashes) failures += "claim, control or input hashes differ from boundary 29; ";
+		return fail(failures);
+	}
+
+	bool TestPlayingHostLossRecordsHeldClaims(std::string* error) {
+		const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("playing_host_loss_records_held_claims", why, error); };
+		SuccessionReplayScope scope;
+		ReleasePathRound round;
+		if (!StartPlainHostSuccession(round, &round.failure)) return fail(round.failure);
+		LoopbackTransport replayWire, tailWire;
+		NetLockstepCoordinator replay, tail;
+		auto config = ReleasedClaimsConfig(round.match, 3, {}, true); config.startFrame = 29;
+		if (!replay.StartReplay(replayWire, config, &round.failure) || !tail.StartReplay(tailWire, config, &round.failure)) return fail(round.failure);
+		std::array<ReleasePathClaimView, 3> views;
+		for (size_t index = 0; index < views.size(); ++index) {
+			auto& core = index == 0 ? round.peers[1] : index == 1 ? replay : tail;
+			if (!views[index].Create(index == 0 ? "live" : index == 1 ? "record" : "tail", core, 1, 2, 1)) return fail("the recorded host claim did not create");
+			views[index].handoff = 1;
+		}
+		NetMatchReplayWriter writer;
+		if (!writer.Open("playing-host-held.ccreplay", round.match, &round.failure)) return fail(round.failure);
+		std::vector<NetLockstepFrame> frames;
+		size_t holds = 0, releases = 0;
+		for (uint64_t tick = 29; tick <= 37; ++tick) {
+			const auto& ready = round.committed[1].at(tick);
+			views[0].ApplyTick(ready);
+			auto frame = PackWorldJoinReadyFrame(ready);
+			for (const auto& command: frame.commands) {
+				if (const auto* hold = std::get_if<NetGameSeatHold>(&command.payload); hold && hold->peerId == 1 && hold->cutoffFrame == 30) ++holds;
+				if (const auto* release = std::get_if<NetGameSeatRelease>(&command.payload); release && release->peerId == 1) ++releases;
+			}
+			if (!writer.WriteFrame(tick, frame.frames, frame.commands, frame.observations, frame.valueObservations, &round.failure, frame.senderPeerId)) return fail(round.failure);
+			std::vector<uint8_t> bytes;
+			NetLockstepFrame decoded;
+			if (!EncodeCommittedJoinFrame(frame, bytes, &round.failure) || !DecodeCommittedJoinFrame(bytes, decoded, &round.failure)) return fail(round.failure);
+			frames.push_back(std::move(decoded));
+		}
+		writer.Close(); if (!WaitForReplayCloseForTest(writer, &round.failure)) return fail(round.failure);
+		NetMatchReplayReader reader;
+		if (!reader.Open("playing-host-held.ccreplay", &round.failure)) return fail(round.failure);
+		NetLockstepFrame record; bool eof = false;
+		while (reader.ReadFrame(record, eof, &round.failure)) {
+			if (!replay.QueueReplayFrame(record.targetFrame, record.frames, record.commands, &round.failure, record.observations, record.valueObservations, record.replayAuthorityPeerId)) return fail(round.failure);
+			replay.Tick(0); NetLockstepReadyFrame ready;
+			if (!replay.PopReadyFrame(ready)) return fail(replay.GetStats().timeoutReason);
+			views[1].ApplyTick(ready); replay.FinishSimulationTick(ready.frame);
+		}
+		if (!eof) return fail("host recording did not reach its end");
+		ScenarioRunner::SetLockstepCoordinator(&tail);
+		if (!ScenarioRunner::InstallWorldCatchUp(28, frames, &round.failure)) return fail(round.failure);
+		for (const auto& frame: frames) {
+			NetLockstepReadyFrame ready;
+			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(frame.targetFrame, ready, &round.failure)) return fail(round.failure);
+			views[2].ApplyTick(ready); tail.FinishSimulationTick(ready.frame);
+		}
+		std::string failures;
+		if (holds != 1 || releases) failures = "lost host record has holds=" + std::to_string(holds) + " releases=" + std::to_string(releases) + " expected one hold at 30 and no release; ";
+		for (const auto& view: views) if (view.ended || view.claimant != 1 || view.hashes != views[0].hashes) failures += view.who + " host claim=" + std::to_string(view.claimant) + " ends=" + view.Ended() + "; ";
+		return fail(failures);
+	}
+
+	struct HostReturnAdmission {
+		NetSeatAuthRegistry registry, successorRegistry;
+		NetReconnectHost host, successor;
+		std::array<NetReconnectClient, 3> clients;
+		std::array<NetReconnectTicketStore, 3> stores;
+		NetH4Identity identity;
+		NetH4TicketRecord hostTicket;
+		uint64_t wallMs = 1700000000000ULL, nowMs = 0;
+		static uint64_t WallClock(void* context) { return static_cast<HostReturnAdmission*>(context)->wallMs; }
+		bool RoundTrip(const NetPayload& input, NetPayload& output, std::string* error) {
+			NetMessage message; message.sequence = 1; message.payload = input;
+			std::vector<uint8_t> bytes; NetProtocolError encodeError;
+			if (!NetProtocol::Encode(message, bytes, &encodeError)) { *error = encodeError.message; return false; }
+			const auto decoded = NetProtocol::Decode(bytes);
+			if (!decoded.ok) { *error = decoded.error.message; return false; }
+			output = decoded.message.payload; return true;
+		}
+		bool Pump(NetReconnectHost& plane, const std::vector<std::pair<NetPeerId, NetReconnectClient*>>& peers, std::string* error) {
+			for (int pass = 0; pass < 40; ++pass) {
+				plane.Tick(nowMs); for (const auto& [connection, client]: peers) client->Tick(nowMs);
+				bool moved = false;
+				for (const auto& outbound: plane.TakeOutbound()) {
+					NetPayload payload; if (!RoundTrip(outbound.payload, payload, error)) return false; moved = true;
+					for (const auto& [connection, client]: peers) if (connection == outbound.connection) client->HandleMessage(payload, nowMs);
+				}
+				for (const auto& [connection, client]: peers) for (const auto& outbound: client->TakeOutbound()) {
+					NetPayload payload; if (!RoundTrip(outbound.payload, payload, error)) return false; moved = true;
+					plane.HandleMessage(connection, payload, nowMs);
+				}
+				if (!moved) return true;
+			}
+			*error = "the ticket admission did not settle"; return false;
+		}
+		bool Start(const NetMatchConfig& match, std::string* error) {
+			identity.controllerFrameVersion = ControllerFrame::c_Version; identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+			identity.gameVersion = "7.0.0-test"; identity.buildId = "ticket-return-test";
+			identity.deterministicConfigHash.fill(11); identity.moduleManifestHash.fill(22); identity.sessionRulesHash.fill(33); identity.sessionIdentityHash.fill(44);
+			if (!registry.BeginHostedSession()) { *error = "the ticket registry did not start"; return false; }
+			host.Configure(&registry, match.sessionId, identity); host.SetUnixClock(&WallClock, this);
+			host.SetSeatTable(NetH4BuildSeatTable(match), match.mode); host.SetLiveMatch(false);
+			if (!host.EnsureLocalTicket(hostTicket)) { *error = "the playing host did not receive its ticket"; return false; }
+			std::error_code code; std::filesystem::create_directories("Userdata/host-ticket-return", code);
+			if (code) { *error = code.message(); return false; }
+			std::vector<std::pair<NetPeerId, NetReconnectClient*>> peers;
+			for (size_t index = 0; index < clients.size(); ++index) {
+				stores[index].SetPath("Userdata/host-ticket-return/member-" + std::to_string(index + 2) + ".ticket");
+				clients[index].Configure(&stores[index], identity, "Survivor " + std::to_string(index + 2)); clients[index].SetUnixClock(&WallClock, this);
+				peers.emplace_back(index + 1, &clients[index]); nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+				if (!clients[index].BeginNewJoin(nowMs, error) || !Pump(host, peers, error) || clients[index].GetState() != NetH4ClientState::Joined) { if (error->empty()) *error = "survivor ticket admission failed"; return false; }
+			}
+			host.SetLiveMatch(true); return Pump(host, peers, error);
+		}
+	};
+
+	bool TestPlayingHostReturnsWithItsTicket(std::string* error) {
+		const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("playing_host_returns_with_its_ticket", why, error); };
+		ReleasePathRound round;
+		if (!StartPlainHostSuccession(round, &round.failure)) return fail(round.failure);
+		HostReturnAdmission admission;
+		if (!admission.Start(round.match, &round.failure)) return fail(round.failure);
+		ReleasePathClaimView view;
+		if (!view.Create("host's original actor", round.peers[1], 0, 1, 1)) return fail("the returning host's unit did not create");
+		view.handoff = 1;
+		for (uint64_t tick = 29; tick <= 30; ++tick) view.ApplyTick(round.committed[1].at(tick));
+		const int64_t originalUID = view.uid;
+		auto match = round.match; match.hostPeerId = 2;
+		admission.successor.SetUnixClock(&HostReturnAdmission::WallClock, &admission);
+		admission.successor.SetDropOwnershipSource([](void* context) {
+			const auto& actor = *static_cast<ReleasePathClaimView*>(context);
+			return std::vector<NetH4LedgerActor>{{actor.uid, actor.team, ScenarioRunner::GetLockstepDropTimeActorOwner(actor.uid, actor.team, true), true}};
+		}, &view);
+		if (!admission.successor.ImportMigrationState(admission.host.ExportMigrationState(), admission.successorRegistry, match, 2, round.peers[1].GetConfig().remoteTransportPeerIds, admission.nowMs)) return fail("the successor did not carry ticketed ownership");
+		const auto* before = admission.host.GetRoster().Find(1); const auto* after = admission.successor.GetRoster().Find(1);
+		if (!before || !after || after->phase != NetSeatPhase::Held || !after->owner || after->owner != before->owner || after->ticket != before->ticket) return fail("the successor roster lost the former host's held owner or ticket");
+		admission.successor.RecordMigrationDepartures(30);
+		LoopbackTransport returnWire;
+		NetPeerId connection = 1;
+		for (const auto& [peer, transport]: round.peers[1].GetConfig().remoteTransportPeerIds) connection = std::max(connection, transport + 1);
+		if (!returnWire.Connect("loopback", 47432, &round.failure)) return fail(round.failure);
+		NetReconnectTicketStore store; store.SetPath("Userdata/host-ticket-return/former-host.ticket");
+		admission.hostTicket.hostAddress = "loopback"; admission.hostTicket.issuedAtUnixMs = admission.wallMs;
+		if (!store.Store(admission.hostTicket, &round.failure)) return fail(round.failure);
+		NetH4TicketRecord ticket;
+		if (store.Load(admission.wallMs, ticket, &round.failure) != NetH4TicketLoadResult::Loaded) return fail("the former host's ticket did not survive its loss");
+		NetReconnectClient returning; returning.Configure(&store, admission.identity, "Former host"); returning.SetUnixClock(&HostReturnAdmission::WallClock, &admission);
+		admission.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+		if (!returning.BeginReclaim(ticket, admission.nowMs, &round.failure) || !admission.Pump(admission.successor, {{connection, &returning}}, &round.failure) || returning.GetState() != NetH4ClientState::Joined || admission.successor.GetStats().reclaimsAccepted != 1) return fail("the former host's valid ticket was refused: " + round.failure);
+		const uint64_t activation = round.peers[1].GetStats().nextFrame + 20;
+		if (!round.peers[1].SchedulePeerReclaim(1, connection, returning.GetIncarnation(), activation, &round.failure)) return fail("ticket accepted but lost host cannot reclaim its original unit: " + round.failure + " claim ends=" + view.Ended());
+		const auto reseats = admission.successor.TakePendingReseats();
+		if (reseats.size() != 1 || reseats.front().newOwnerPeerId != 1 || reseats.front().actorUIDs != std::vector<int64_t>{originalUID}) return fail("the ticket return did not name exactly the original actor");
+		auto config = round.peers[1].GetConfig(); config.localPeerId = 1; config.authorityPeerId = 2; config.roundId = round.peers[1].GetRoundId();
+		config.startFrame = activation; config.joinsRunningRound = true; config.relayToOtherPeers = false;
+		config.activePeerIds = {1, 2, 3, 4}; config.remoteTransportPeerIds = {{2, 1}, {3, 1}, {4, 1}};
+		config.initialSeatHolds = round.peers[1].HeldTransactions(); config.initialSeatReclaims = round.peers[1].ReclaimTransactions();
+		config.peerIncarnations[1] = returning.GetIncarnation(); config.inputDelayFrames = round.peers[1].InputDelayAt(1, activation);
+		returnWire.AdvanceTimeMs(30); returnWire.PollEvents();
+		NetLockstepCoordinator returned;
+		if (!returned.Start(returnWire, config, &round.failure)) return fail(round.failure);
+		uint64_t produced = activation, applied = 31; bool drove = false, reclaimed = false;
+		for (int pass = 0; pass < 500 && !drove; ++pass) {
+			if (returned.IsRunning() && produced <= returned.GetStats().nextFrame + 4 && returned.QueueLocalInput(produced, {MakeFrame(originalUID, uint64_t{1} << WEAPON_FIRE)}, {}, &round.failure)) ++produced;
+			returned.Tick(round.now); round.Pump(); returnWire.AdvanceTimeMs(5);
+			for (NetLockstepReadyFrame ready; returned.PopReadyFrame(ready);) returned.FinishSimulationTick(ready.frame);
+			while (round.committed[1].contains(applied)) {
+				const auto& ready = round.committed[1].at(applied);
+				view.ApplyTick(ready);
+				if (!ready.reclaimedPeerIds.empty()) {
+					ApplyLockstepSeatReclaims(ready, {view.actor.get()}); reclaimed = true;
+					const auto state = ScenarioRunner::CaptureAgreedSideState();
+					view.claimant = state.droppedControlOwners.contains(originalUID) ? state.droppedControlOwners.at(originalUID) : 0;
+					view.handoff = state.controlOwners.contains(originalUID) ? state.controlOwners.at(originalUID) : 0;
+				}
+				for (const auto& frame: ready.remoteFrames) if (frame.actorUniqueID == originalUID && applied > activation && !round.peers[1].IsSeatReclaimGap(1, applied)) {
+					if (ScenarioRunner::GetLockstepActorOwner(originalUID, 0, true, applied) != 1 || !ControllerFrameCodec::Apply(frame, *view.actor->GetController(), &round.failure)) return fail("returned input did not own the original actor: " + round.failure);
+					drove = view.actor->GetController()->IsState(WEAPON_FIRE) && view.actor->GetUniqueID() == static_cast<uint64_t>(originalUID);
+				}
+				++applied;
+			}
+		}
+		if (!reclaimed || !drove || returned.GetHostPeerId() != 2 || !returned.IsRunning()) return fail("ticketed former host did not reclaim and drive its original unit: " + returned.GetStats().timeoutReason);
+		return fail("");
+	}
+}
+
 	int NetLockstepSelfTest::RunSeatSuccession() {
 		EnsureSwitchTestManagers();
 		bool passed = true;
-		for (bool (*test)(std::string*): {TestPlayingDepartureSurvivesSuccession, TestUnequalFutureDeparturesConvergeAtSuccession, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestReplayMatchesSuccessionDuringActivityTick, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
+		for (bool (*test)(std::string*): {TestPlayingDepartureSurvivesSuccession, TestUnequalFutureDeparturesConvergeAtSuccession, TestPlayingHostLossKeepsLiveClaims, TestPlayingHostLossRecordsHeldClaims, TestPlayingHostReturnsWithItsTicket, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestReplayMatchesSuccessionDuringActivityTick, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
 			std::string error;
 			passed &= test(&error);
 		}
