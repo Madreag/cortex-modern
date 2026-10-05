@@ -685,7 +685,10 @@ namespace RTE {
 				for (uint8_t sender: {1, 2}) for (uint64_t target: {41ULL, 42ULL}) inputs.push_back(RecoveryWireInput(sender, target, host.GetRoundId()));
 				if (!host.InstallResyncInputs(inputs, error) || !host.PrimeResyncInputs({}, error)) return false;
 				host.Tick(++round.now);
-				if (!RecoveryWireCheck(host.IsRunning() && host.GetStats().nextFrame == 43 && SameRecoveryInputs(host.CapturePendingInputs(40), inputs),
+				auto committed = inputs;
+				for (auto& input: committed) if (input.senderPeerId == 1 && input.targetFrame == 41)
+					input.commands.push_back({1, NetGameSeatRelease{3, 0, 42, 1, 41}});
+				if (!RecoveryWireCheck(host.IsRunning() && host.GetStats().nextFrame == 43 && SameRecoveryInputs(host.CapturePendingInputs(40), committed),
 				                       error, "restoration dropped a configured departed sender's accepted controller, commands or observations")) return false;
 			}
 			std::cout << "[net-lockstep-selftest] PASS recovery_input_membership never_member=refused accepted_departed=preserved" << std::endl;
