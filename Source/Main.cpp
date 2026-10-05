@@ -3303,6 +3303,9 @@ static bool RunFrameRecorderSelfTest() {
 	FrameRecorder pacedRecorder;
 	if (!pacedRecorder.Start(paced.string(), 5, &error)) return FrameRecorderSelfTestFail("the paced recorder refused to start: " + error);
 	if (pacedRecorder.Start(paced.string(), 5, &error)) return FrameRecorderSelfTestFail("a second Start on the same recorder was accepted");
+	// A recording whose engine is killed never reaches Finish: its manifest is on disk from the start.
+	nlohmann::json started;
+	if (!manifestOf(paced, started) || started.value("fps", 0) != 5) return FrameRecorderSelfTestFail("no manifest with the capture rate before Finish in " + paced.string());
 	int finishActions = 0;
 	pacedRecorder.SetFinishAction([&finishActions] { ++finishActions; });
 	feed(pacedRecorder);
