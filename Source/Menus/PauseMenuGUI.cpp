@@ -30,6 +30,8 @@
 
 #include "AllegroTools.h"
 
+#include <algorithm>
+
 using namespace RTE;
 
 void PauseMenuGUI::Clear() {
@@ -360,9 +362,14 @@ void PauseMenuGUI::UpdateMatchPauseRow(bool force) {
 
 std::string PauseMenuGUI::LeaveConsequenceText() const {
 	if (g_NetMatchService.IsHost()) {
-		// The host's leave hands the round to the next host the match agreed on, and ends it when there is none.
-		return g_NetMatchService.GetLobbyMatchConfig().successorOrder.empty() ? "Leave the match?\nThe match ends for everyone."
-		                                                                     : "Leave the match?\nAnother player becomes the host and the match plays on.";
+		// The host's leave hands the round to the next host the match agreed on. The handover is the survivors' election, and a
+		// lone survivor of an announced leave ends the match rather than host it alone, so it takes two players still connected.
+		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
+		const auto survivors = std::count_if(snapshot.members.begin(), snapshot.members.end(), [&snapshot](const auto& member) {
+			return !member.cpu && !member.isLocal && member.peerId != snapshot.localPeerId && member.connected;
+		});
+		return g_NetMatchService.GetLobbyMatchConfig().successorOrder.empty() || survivors < 2 ? "Leave the match?\nThe match ends for everyone."
+		                                                                                     : "Leave the match?\nAnother player becomes the host and the match plays on.";
 	}
 	// A leave is held like a drop: the seat and its ticket stay this player's while the match runs.
 	return "Leave the match?\nThe AI plays your units and your seat stays yours.\nRejoin Match on the Multiplayer screen brings you back while the match runs.";
