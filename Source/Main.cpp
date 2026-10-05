@@ -95,6 +95,7 @@
 #endif
 #endif
 
+#include "Controller.h"
 #include "ControllerFrame.h"
 #include "GnsP2PSelfTest.h"
 #include "GnsTransport.h"
@@ -967,6 +968,25 @@ static bool CrossEffectsChanged(uint64_t& seenGeneration, nlohmann::json& effect
 	effects = latest;
 	seenGeneration = generation.load();
 	return true;
+}
+
+static void CrossConfirmLocalControllerInputs(uint64_t tick) {
+	if (!g_MetricsCollector.EventsEnabled() || !ScenarioRunner::IsLockstepControllerSyncActive() || ScenarioRunner::WorldCatchUpActive()) return;
+	const uint64_t target = tick + ScenarioRunner::GetLockstepInputDelayFrames();
+	const uint64_t round = ScenarioRunner::GetLockstepRoundId();
+	std::vector<ControllerFrame> queued;
+	std::vector<long> actors;
+	if (ScenarioRunner::PeekLockstepLocalControllerFrames(target, queued)) {
+		for (const ControllerFrame& input: queued) {
+			if (input.inputMode != Controller::CIM_PLAYER || input.playerRaw < Players::PlayerOne || input.playerRaw >= Players::MaxPlayerCount) continue;
+			const long actor = static_cast<long>(input.actorUniqueID);
+			actors.push_back(actor);
+			// A returning player's first sample precedes its first committed human frame.
+			if (g_MetricsCollector.ProducedControllerFor(round, target, actor).empty())
+				g_MetricsCollector.RecordProducedController(round, tick, target, actor, input.playerRaw);
+		}
+	}
+	g_MetricsCollector.ConfirmProducedControllers(round, tick, target, actors, s_crossRestoredInputThrough[round]);
 }
 
 static void CrossRecoveryAtCommittedTick(uint64_t tick, bool paused = false) {
@@ -8040,6 +8060,7 @@ void RunGameLoop() {
 				s_crossContext["wall_ms"] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
 				g_MetricsCollector.UpdateEventContext(s_crossContext);
 			}
+			CrossConfirmLocalControllerInputs(simTick);
 			g_MetricsCollector.FlushEventTick();
 			if (g_MetricsCollector.EventsEnabled() && !lockstepPausedTick && !ScenarioRunner::WorldCatchUpActive() && s_crossContext.value("gameplay_tick", false)) {
 				const uint64_t sourceRound = CrossRecordRound(s_crossContext.value("round", uint64_t{0}), s_crossContext.value("source_round", uint64_t{0}));
@@ -8056,14 +8077,6 @@ void RunGameLoop() {
 			}
 			CrossEliminationAtCommittedTick(simTick);
 			CrossEndTargetObservation(simTick);
-			if (g_MetricsCollector.EventsEnabled() && ScenarioRunner::IsLockstepControllerSyncActive() && !ScenarioRunner::WorldCatchUpActive()) {
-				const uint64_t target = simTick + ScenarioRunner::GetLockstepInputDelayFrames();
-				std::vector<ControllerFrame> queued; std::vector<long> actors;
-				if (ScenarioRunner::PeekLockstepLocalControllerFrames(target, queued))
-					for (const auto& input: queued) actors.push_back(static_cast<long>(input.actorUniqueID));
-				const uint64_t round = ScenarioRunner::GetLockstepRoundId();
-				g_MetricsCollector.ConfirmProducedControllers(round, simTick, target, actors, s_crossRestoredInputThrough[round]);
-			}
 			CrossRecoveryAtCommittedTick(simTick, lockstepPausedTick);
 			if (hashThisTick) {
 				const HarnessCost::SimulationSpan harnessSpan;
