@@ -757,7 +757,7 @@ class Directory:
         if backend and backend.get('backend', 'cloudflare') == 'cloudflare':
             module.urlopen = urlopen
         self.server = module.spawn_server(port=port, cert=self.cert, key=key, insecure_http=False, log_file=root / 'service.log',
-                                          turn_config=backend, turn_max_ttl=ttl_cap)
+                                          turn_config=backend, turn_max_ttl=ttl_cap, first_upgrade_worlds=0)
         key.unlink()
         store = self.server.store
         mint, post, register, mint_offer = store.turn_provider.mint, store.post_signal, store.register, store.mint_ice_servers
@@ -769,9 +769,9 @@ class Directory:
                             for server in offer.get('iceServers', []) if server.get('username')]
             return offer
 
-        def posted(session_id, data, now):
+        def posted(session_id, data, now, source_ip=''):
             self.signals.append((str(data.get('from')), str(data.get('payload_b64', ''))))
-            return post(session_id, data, now)
+            return post(session_id, data, now, source_ip)
 
         def registered(*args, **kwargs):
             row = register(*args, **kwargs)

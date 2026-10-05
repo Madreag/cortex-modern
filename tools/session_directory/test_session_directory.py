@@ -16,11 +16,13 @@ import socket
 import struct
 import ssl
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import unittest
 import uuid
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
@@ -2135,6 +2137,74 @@ class DirectoryTests(unittest.TestCase):
                 store.register(dict(request, resume_session_id=world, resume_token=host["token"]), "192.0.2.1", 3, INSTALL_KEY)
         signals = store.get_signals(world, "host", 0, host["token"], 4)["signals"]
         self.assertEqual(len(signals), 1, "S2: a capacity-refused registration discarded the active joiner's offer")
+
+    def test_relay_helper_preserves_the_source_and_declares_an_empty_upgrade(self) -> None:
+        tools = str(Path(__file__).resolve().parents[1])
+        with mock.patch.object(sys, "path", [tools, *sys.path]):
+            import relay_cloudflare_match as relay
+            import edith_cross
+            from relay_secrets import SecretBook
+        server = mock.MagicMock()
+        original_post = server.store.post_signal
+        packet = dict(token_or_join_nonce="joiner", **{"from": "client:joiner", "to": "host", "payload_b64": "YQ=="})
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            cert, key = root / "cert.pem", root / "key.pem"
+            key.write_text("fixture")
+            package = SimpleNamespace(session_directory=session_directory)
+            with mock.patch.dict(sys.modules, {"session_directory": package}), \
+                 mock.patch.object(edith_cross, "make_cert", return_value=(cert, key, "0" * 64)), \
+                 mock.patch.object(session_directory, "spawn_server", return_value=server) as factory:
+                helper = relay.Directory(root, 0, None, 600, SecretBook())
+            try:
+                try:
+                    server.store.post_signal("session", packet, 10, "192.0.2.42")
+                except TypeError:
+                    self.fail("S2: relay helper rejected the handler's source address")
+                original_post.assert_called_once_with("session", packet, 10, "192.0.2.42")
+                self.assertEqual(factory.call_args.kwargs.get("first_upgrade_worlds"), 0,
+                                 "S4: fresh relay directory omitted its declared empty first upgrade")
+            finally:
+                helper.stop()
+
+    def test_local_video_and_mint_helpers_declare_an_empty_upgrade(self) -> None:
+        tools = str(Path(__file__).resolve().parents[1])
+        nested = "session_directory.session_directory"
+        previous = sys.modules.get(nested)
+        sys.modules[nested] = session_directory
+        try:
+            with mock.patch.object(sys, "path", [tools, *sys.path]):
+                from e2e import directory as video
+        finally:
+            if previous is None:
+                del sys.modules[nested]
+            else:
+                sys.modules[nested] = previous
+        with mock.patch.object(sys, "path", [tools, *sys.path]):
+            import relay_cloudflare_mint as mint
+        class StartupCaptured(Exception):
+            pass
+        missing = []
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for name in ("video", "mint"):
+                arguments = {}
+                def capture(**kwargs):
+                    arguments.update(kwargs)
+                    raise StartupCaptured()
+                if name == "video":
+                    with mock.patch.object(video, "spawn_server", side_effect=capture), self.assertRaises(StartupCaptured):
+                        with video.serve(root / name, 47497, block=(47460, 47499)):
+                            pass
+                else:
+                    with mock.patch.object(mint, "load_directory", return_value=session_directory), \
+                         mock.patch.object(mint, "read_turn_config", return_value={}), \
+                         mock.patch.object(mint, "record_provider"), \
+                         mock.patch.object(session_directory, "spawn_server", side_effect=capture), self.assertRaises(StartupCaptured):
+                        mint.main(["--turn-config", str(root / "unused.json"), "--out", str(root / name)])
+                if arguments.get("first_upgrade_worlds") != 0:
+                    missing.append(name)
+        self.assertEqual(missing, [], "S4: fresh local helpers omitted their declared empty first upgrade: " + ",".join(missing))
 
     def test_world_tick_receipts_keep_live_and_private_replay_comparisons(self) -> None:
         host = {"live": {1: "a" * 64, 2: "b" * 64, 3: "c" * 64}, "catchup": {}}
