@@ -1311,6 +1311,8 @@ def scripts(case, port, root, size="960x540"):
                  "activate ButtonHostOptBack\nwait 4\nassert_substate HostSetup\n"
                  f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
                  "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
+                 # The listing keeps its public default, but a run's settings name no directory: this host registers nowhere.
+                 "assert_label LabelLobbyPortMap Shown to players on your network only\n"
                  "assert_text_fits LabelLobbyPortMap\n"
                  "dump_host_options\nexit\n")
     elif case in ("net-host-left", "net-host-left-early"):
@@ -2782,8 +2784,9 @@ def run_case(options, case, root, failing=None):
                 assert pair_gap == 8, pair_gap
         if case == "lobby-name":
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == NETWORK_SEED["NetworkDisplayName"]
-            result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", {"NetworkDisplayName"})
-            assert result["saved"] == {"NetworkDisplayName": "Recon7"}, result["saved"]
+            # Saving the name writes the product's own listing default beside it: public.
+            result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", {"NetworkDisplayName", "NetworkHostGameListing"})
+            assert result["saved"] == {"NetworkDisplayName": "Recon7", "NetworkHostGameListing": "Public"}, result["saved"]
             # The host's own row names it the host, in words; ping and delay live in the row's details.
             result["lobby_row"] = next(c["text"] for c in images[-1]["controls"] if c["name"] == "LabelLobbyPlayer0")
             assert "Host" in result["lobby_row"], result["lobby_row"]
