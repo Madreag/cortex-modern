@@ -5089,6 +5089,13 @@ namespace RTE {
 				*error = "a dial without a rendezvous took the ICE route as an address: dialed " + std::to_string(probe.dialed.size()) + " entries, reached=" + std::to_string(probed);
 				return false;
 			}
+			// Relayed connects over a phone hotspot took up to 18,717 ms through the directory; a survivor that drops its dial sooner
+			// takes the successor's place itself and neither side reaches a quorum.
+			if (NetLockstepCoordinator::c_MigrationIceDialMs < 18717) {
+				*error = "a survivor gives an ICE dial to the successor " + std::to_string(NetLockstepCoordinator::c_MigrationIceDialMs) +
+				         " ms, under the 18717 ms a relayed connect over a carrier took";
+				return false;
+			}
 			std::cout << "[net-lockstep-selftest] PASS a_handover_endpoint_carries_its_ice_route published=" << published.back() << " ice_dials=" << iceDials.size() << std::endl;
 			return true;
 		}
