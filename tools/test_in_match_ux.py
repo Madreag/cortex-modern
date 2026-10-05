@@ -343,9 +343,10 @@ def check_host_leave(checks, captures, reads, logs, results):
 
 
 def sp_pause_probe():
+    # Single player's pause menu runs in the menu loop, which steps only menu-scope steps.
     return {"schema": 1, "timeout_ms": 120000, "steps": [
-        {"op": "wait", "screen": "Gameplay", "sim_at_least": 120}, *keys("Escape"), *on_screen("Pause"), {"op": "wait", "elapsed_ms": 600},
-        menu("dump_host_options"), signal("done", "menu"), {"op": "finish"}]}
+        {"op": "wait", "screen": "Gameplay", "sim_at_least": 120}, *keys("Escape"), {"op": "wait", "screen": "Pause", "scope": "menu"},
+        {"op": "wait", "elapsed_ms": 600, "scope": "menu"}, menu("dump_host_options"), signal("done", "menu"), {"op": "finish"}]}
 
 
 SP_MENU = ("wait_ms 2000\nassert_screen MainScreen\nactivate ButtonMainToSkirmish\nwait_ms 1600\nassert_screen ScenarioPicker\n"
