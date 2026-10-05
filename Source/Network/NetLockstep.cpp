@@ -11701,8 +11701,8 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::RecordSeatDeparture(uint8_t peerId, uint64_t frame) {
-		// The world's Release command already ends the seat's claims at its own committed boundary.
-		if (IsPersistentWorldRound() || m_AiHeldSeats.contains(peerId)) return;
+		// Held seats keep their claims with the AI until their agreed release.
+		if (m_AiHeldSeats.contains(peerId)) return;
 		const auto incarnation = m_Config.peerIncarnations.find(peerId);
 		m_SeatReleases[peerId][frame] = {peerId, m_Config.migrationGeneration, frame == UINT64_MAX ? frame : frame + 1,
 		    incarnation == m_Config.peerIncarnations.end() ? 1 : incarnation->second, frame};
