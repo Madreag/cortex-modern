@@ -67,7 +67,7 @@ def main():
         for run in runs.values():
             run.start()
         for run in runs.values():
-            run.wait()
+            run.finish()
         result = inspect(root)
         result["argv"] = ARGV
         result["driver_sha256"] = sha(Path(__file__))
