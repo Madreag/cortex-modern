@@ -5215,6 +5215,14 @@ static std::string ResyncSaveName() {
 		// Every activation this pump announces is chosen ahead of what the round has already sent.
 		m_WorldJoin.NoteSentInputThrough(m_Coordinator->SentInputThrough());
 		PumpWorldJoinLobby(nowMs);
+		static const bool refuseJoin = [] {
+			const char* value = std::getenv("CCCP_TEST_WORLD_JOIN_REFUSE");
+			return value && std::string(value) == "history";
+		}();
+		if (refuseJoin)
+			for (const auto& join: m_WorldJoin.Sessions())
+				if (join.phase == NetWorldJoinPhase::CatchingUp && join.acknowledgedThrough > join.snapshotTick)
+					m_Session->DisconnectReadyPeer(join.connection, NetRejectReason::HostNotAccepting, c_HistoryPassedDetail);
 		const std::vector<NetSessionPeerInfo> readyPeers = m_Session->GetReadyPeers();
 		std::vector<NetPeerId> liveConnections;
 		liveConnections.reserve(readyPeers.size());
@@ -6636,10 +6644,38 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::RefuseWorldCatchUpLocked(const std::string& rejectText) {
-		ScenarioRunner::SetControllerReplayError(!m_HeldUnreachableText.empty() ? m_HeldUnreachableText : m_WorldCatchUp.privateMatch
-		    ? "PeerHeld:Held - AI in control - reconnecting the private catch-up link"
-		    : rejectText.find(c_HistoryPassedDetail) != std::string::npos ? "PeerLeft:The world moved on past your catch-up - join again"
-		    : "PeerLeft:The host connection was lost while joining the world");
+		if (m_WorldCatchUp.privateMatch) {
+			ScenarioRunner::SetControllerReplayError(!m_HeldUnreachableText.empty() ? m_HeldUnreachableText : "PeerHeld:Held - AI in control - reconnecting the private catch-up link");
+			return;
+		}
+		const auto contains = [&](const char* value) { return rejectText.find(value) != std::string::npos; };
+		const auto rejected = [&](NetRejectReason reason) {
+			return m_Session && m_Session->HasReject() ? m_Session->GetRejectReason() == reason : contains(NetProtocol::RejectReasonName(reason));
+		};
+		m_ErrorText = contains(c_HistoryPassedDetail) ? "The host could not bring you into the world: you were too far behind. Try again."
+		    : contains("deadline") ? "The host could not bring you into the world in time. Try again."
+		    : rejected(NetRejectReason::ParticipantRemoved) || contains("The host removed") ? "The host removed you from the world."
+		    : rejected(NetRejectReason::ParticipantBanned) || contains("The host banned") ? "The host banned you from the world."
+		    : rejected(NetRejectReason::SeatReassigned) ? "The host gave your seat to another player."
+		    : rejected(NetRejectReason::SeatReleased) ? "The host released your seat in the world."
+		    : rejected(NetRejectReason::SessionFull) || contains("the world is full") ? "That world is full. Try another world or ask the host for a seat."
+		    : contains("seat is held") ? "That seat is held for its player. Ask the host for another seat."
+		    : rejected(NetRejectReason::SessionEnded) ? "The host closed the world while you were joining."
+		    : rejected(NetRejectReason::Timeout) ? "Your connection to the host timed out while joining the world. Try again."
+		    : rejected(NetRejectReason::IdentityUnproven) ? "The host could not verify your saved place in the world. Join again."
+		    : rejected(NetRejectReason::ModuleManifestMismatch) || rejected(NetRejectReason::UserdataModulesNotAllowed) ? "Your mods do not match the host's world. Use the host's mods and try again."
+		    : rejected(NetRejectReason::GameVersionMismatch) ? "Your game version does not match the host's world. Update the game and try again."
+		    : rejected(NetRejectReason::DeterministicConfigMismatch) || rejected(NetRejectReason::SessionRulesMismatch) ? "Your game settings do not match the host's world. Join again to refresh them."
+		    : rejected(NetRejectReason::ProtocolMismatch) || rejected(NetRejectReason::BuildMismatch) || rejected(NetRejectReason::ControllerFrameVersionMismatch) || rejected(NetRejectReason::ControllerFrameSizeMismatch)
+		        ? "Your multiplayer version does not match the host's world. Update the game and try again."
+		    : rejected(NetRejectReason::DuplicateClientNonce) ? "The host already has a connection from this player. Close the other connection and try again."
+		    : rejected(NetRejectReason::MalformedMessage) ? "The host could not read your join request. Restart the game and try again."
+		    : rejected(NetRejectReason::InternalError) ? "The world could not finish your join. Try again."
+		    : rejected(NetRejectReason::HostNotAccepting) ? "The host could not bring you into the world. Try again."
+		    : "Your connection to the host was lost while joining the world. Try again.";
+		m_State = NetMatchServiceState::Failed;
+		m_StatusText = m_ErrorText;
+		ScenarioRunner::SetControllerReplayError("WorldJoinRefused:" + m_ErrorText);
 	}
 
 	void NetMatchService::DriveWorldJoinClient(uint64_t nowMs) {
@@ -6751,7 +6787,7 @@ static std::string ResyncSaveName() {
 			DropReturnStartLocked("the host moved this seat's return");
 		}
 		if (refusal != 0) {
-			m_State = NetMatchServiceState::Failed; m_ErrorText = NetWorldJoinRefusalText(refusal); return;
+			RefuseWorldCatchUpLocked(NetWorldJoinRefusalText(refusal)); return;
 		}
 		// The host's link is its liveness, never its tail: a host that closes the link or says nothing at all past the host-loss bound
 		// is gone, and the seat rejoins the next host, or hosts the match itself when only held seats are left.

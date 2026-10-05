@@ -52,6 +52,7 @@
 #include <system_error>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <variant>
 #include <vector>
 #ifdef _WIN32
@@ -7261,6 +7262,22 @@ namespace RTE {
 			*error = "F6: catch-up refusal left a completed-match path or lost the host's reason: " + told;
 			return false;
 		}
+		for (const auto& refusal: std::vector<std::pair<const char*, const char*>>{
+		    {"the world join deadline expired", "The host could not bring you into the world in time. Try again."},
+		    {"The host banned you from this session", "The host banned you from the world."},
+		    {"The host removed you from this session", "The host removed you from the world."},
+		    {"SeatReassigned", "The host gave your seat to another player."},
+		    {"SeatReleased", "The host released your seat in the world."},
+		    {"the world is full", "That world is full. Try another world or ask the host for a seat."},
+		    {"that seat is held for its player", "That seat is held for its player. Ask the host for another seat."}}) {
+			service.m_State = NetMatchServiceState::Running;
+			service.RefuseWorldCatchUpLocked(refusal.first);
+			if (service.m_State != NetMatchServiceState::Failed || service.m_ErrorText != refusal.second) { *error = "F6: a host refusal lost its cause: " + std::string(refusal.first); return false; }
+		}
+		service.m_State = NetMatchServiceState::Running; service.m_WorldCatchUp.privateMatch = true;
+		service.RefuseWorldCatchUpLocked("the world's history moved past this catch-up");
+		if (service.m_State != NetMatchServiceState::Running || !ScenarioRunner::GetControllerReplayError().starts_with("PeerHeld:")) { *error = "F6: an ordinary private return lost its reconnect path"; return false; }
+		ScenarioRunner::ClearControllerReplayError();
 		std::cout << "[net-world-join-selftest] PASS world_catch_up_refusal_is_a_failure_with_its_reason" << std::endl;
 		return true;
 	}
