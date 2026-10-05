@@ -356,6 +356,9 @@ namespace RTE::MenuAutomation {
 	struct ShownLine {
 		std::string source, control, text;
 		bool caption = false; //!< A control's own caption - a button, a box, a tab, a choice - which repeats on every row it serves.
+		bool label = false; //!< A label, whose place says which row's value it shows.
+		Rect rect{}, parentRect{}; //!< Where the control and its parent stand on the screen.
+		const void* parent = nullptr; //!< The parent panel, so two labels can be told to share one.
 	};
 	struct TextWatch {
 		std::string rule, state, control, text;
@@ -401,12 +404,21 @@ namespace RTE::MenuAutomation {
 	/// Every line of text the screen shows this frame, one entry per drawn line of each shown control and of the game's own screen message.
 	std::vector<ShownLine> ShownLines(GUIControlManager* menu) {
 		std::vector<ShownLine> lines;
-		const auto add = [&lines](const std::string& source, const std::string& control, const std::string& text, bool caption = false) {
+		const auto add = [&lines](const std::string& source, const std::string& control, const std::string& text, bool caption = false, GUIControl* owner = nullptr) {
+			ShownLine line{source, control, "", caption};
+			if (owner && owner->GetPanel()) {
+				GUIPanel* parent = owner->GetPanel()->GetParentPanel();
+				line.label = dynamic_cast<GUILabel*>(owner) != nullptr;
+				line.rect = Rectangle(owner->GetPanel());
+				line.parentRect = Rectangle(parent);
+				line.parent = parent;
+			}
 			std::istringstream rows(text);
 			for (std::string row; std::getline(rows, row);) {
 				const auto start = row.find_first_not_of(" \t\r");
 				if (start == std::string::npos) continue;
-				lines.push_back({source, control, row.substr(start, row.find_last_not_of(" \t\r") - start + 1), caption});
+				line.text = row.substr(start, row.find_last_not_of(" \t\r") - start + 1);
+				lines.push_back(line);
 			}
 		};
 		for (const auto& [source, manager]: WatchedManagers(menu)) {
@@ -414,7 +426,7 @@ namespace RTE::MenuAutomation {
 				std::string text;
 				const bool caption = dynamic_cast<GUIButton*>(control) || dynamic_cast<GUICheckbox*>(control) || dynamic_cast<GUIRadioButton*>(control) ||
 				                     dynamic_cast<GUITab*>(control) || dynamic_cast<GUIComboBox*>(control);
-				if (Shown(control) && Text(control, text)) add(source, control->GetName(), text, caption);
+				if (Shown(control) && Text(control, text)) add(source, control->GetName(), text, caption, control);
 			}
 		}
 		if (g_ActivityMan.IsInActivity()) add("screen", "ScreenText", g_FrameMan.GetScreenText(0));
@@ -428,19 +440,49 @@ namespace RTE::MenuAutomation {
 		return lines.dump();
 	}
 
-	/// The first visible line shown twice at once, naming both controls; null when every line is shown once. What may repeat: chat
-	/// (players repeat themselves), a control's caption (a row's verb), one column's value on its rows (a control name differing only
-	/// by its row number), an open seat beside another, and a line with no letter in it.
+	/// A control name's words and numbers: LabelP3Sensitivity reads Label, P, 3, Sensitivity.
+	std::vector<std::string> NameWords(const std::string& name) {
+		std::vector<std::string> words;
+		for (size_t start = 0; start < name.size();) {
+			size_t end = start + 1;
+			const bool digits = std::isdigit(static_cast<unsigned char>(name[start])) != 0;
+			while (end < name.size() && (digits ? std::isdigit(static_cast<unsigned char>(name[end])) : std::islower(static_cast<unsigned char>(name[end]))) != 0) ++end;
+			words.push_back(name.substr(start, end - start));
+			start = end;
+		}
+		return words;
+	}
+
+	/// Two labels showing one column's values on their rows: names that differ in one word or number (LabelMasterVolume and
+	/// LabelMusicVolume, LabelP3Sensitivity and LabelP4Sensitivity) standing in one column - under one parent at one x and width
+	/// on different rows, or at one place in two boxes of one size.
+	bool OneColumnRows(const ShownLine& a, const ShownLine& b) {
+		if (!a.label || !b.label || a.source != b.source || a.control == b.control || !a.parent || !b.parent) return false;
+		const std::vector<std::string> first = NameWords(a.control), second = NameWords(b.control);
+		if (first.size() != second.size()) return false;
+		size_t differing = 0;
+		for (size_t word = 0; word < first.size(); ++word) differing += first[word] != second[word];
+		if (differing != 1) return false;
+		if (a.rect[0] - a.parentRect[0] != b.rect[0] - b.parentRect[0] || a.rect[2] != b.rect[2]) return false;
+		if (a.parent == b.parent) return a.rect[1] != b.rect[1];
+		return a.parentRect[2] == b.parentRect[2] && a.parentRect[3] == b.parentRect[3] && a.rect[1] - a.parentRect[1] == b.rect[1] - b.parentRect[1];
+	}
+
+	/// The first visible line shown twice at once, naming both controls; null when every line is shown once. A line read with or without
+	/// its closing dots is one line. What may repeat: chat (players repeat themselves), a control's caption (a row's verb), one column's
+	/// value on its rows (a control name differing only by its row number, or labels standing in one column), an open seat beside
+	/// another, and a line with no letter in it.
 	Json DuplicateLine(const std::vector<ShownLine>& lines) {
 		const auto column = [](const std::string& control) { return control.substr(0, control.find_last_not_of("0123456789") + 1); };
+		const auto sentence = [](const std::string& text) { return text.substr(0, text.find_last_not_of(". ") + 1); };
 		std::map<std::string, std::vector<const ShownLine*>> seen;
 		for (const ShownLine& line: lines) {
 			if (line.caption || line.control.starts_with("LabelMatchChat") || line.control == "TextMatchChatInput" || line.text == "Open seat") continue;
 			if (std::none_of(line.text.begin(), line.text.end(), [](unsigned char c) { return std::isalpha(c) != 0; })) continue;
-			std::vector<const ShownLine*>& shown = seen[line.text];
+			std::vector<const ShownLine*>& shown = seen[sentence(line.text)];
 			for (const ShownLine* earlier: shown) {
 				const bool rows = earlier->control != line.control && column(earlier->control) == column(line.control) && column(line.control) != line.control;
-				if (!rows) return Json{{"text", line.text}, {"controls", {earlier->source + "/" + earlier->control, line.source + "/" + line.control}}};
+				if (!rows && !OneColumnRows(*earlier, line)) return Json{{"text", line.text}, {"controls", {earlier->source + "/" + earlier->control, line.source + "/" + line.control}}};
 			}
 			shown.push_back(&line);
 		}
@@ -1620,6 +1662,8 @@ namespace RTE::MenuAutomation {
 			check("hint_summary_policy", summary.find("\nWhen a player falls behind: Give the seat to the AI (host too) until they catch up\n") != std::string::npos, summary);
 			check("hint_summary_delay", summary.find("\nInput delay: Automatic, ping plus a 3-tick margin, raised live if inputs arrive late - now 4 (auto, 50ms ping)\n") != std::string::npos, summary);
 			check("hint_summary_no_rejoin", summary.find("rejoin") == std::string::npos, summary);
+			check("summary_short_rows_share_lines", summary.find(" ticks   Slow player bound: 3 ticks\n") != std::string::npos && summary.find("\nDifficulty: ") != std::string::npos &&
+			      summary.find("   Starting gold: ") != std::string::npos, summary);
 			same("transfer_line_measured", NetImageTransferLine(3250585, 8598323, 1468006.0), "Receiving the world: 3.1 of 8.2 MB - 1.4 MB/s - 4 s left");
 			same("transfer_line_before_a_rate", NetImageTransferLine(0, 8598323, 0.0), "Receiving the world: 0.0 of 8.2 MB");
 			same("transfer_line_complete", NetImageTransferLine(8598323, 8598323, 1468006.0), "Receiving the world: 8.2 of 8.2 MB");
@@ -1629,6 +1673,17 @@ namespace RTE::MenuAutomation {
 			same("seat_join_receiving", NetSeatJoinProgress(3250585, 8598323, false), "receiving the world 3.1 of 8.2 MB");
 			same("seat_join_catching_up", NetSeatJoinProgress(0, 8598323, true), "catching up");
 			same("changing_host_line", c_NetMatchChangingHostLine, "The match is changing host - try again in a moment");
+			// The repair toast names why and whose game, never the repair screen's own line.
+			const std::string diverged = "tick 243 lockstep stopped: Desync:sim state diverged at tick 240 (Client)";
+			same("repair_toast_names_the_player", NetRepairStartLine(diverged, "Host", "Host", true), "Match repair started: Client fell out of step at frame 240");
+			same("repair_toast_on_the_named_screen", NetRepairStartLine(diverged, "Client", "Host", false), "Match repair started: your game fell out of step at frame 240");
+			same("repair_toast_naming_the_host", NetRepairStartLine("Desync:sim state diverged at tick 60 (Host)", "Ana", "Host", false), "Match repair started: out of step with the host at frame 60");
+			same("repair_toast_on_the_host_it_names", NetRepairStartLine("Desync:sim state diverged at tick 60 (Host)", "Host", "Host", true), "Match repair started: a player fell out of step at frame 60");
+			same("repair_toast_host_request", NetRepairStartLine("ResyncRequested:host requested repair", "Ana", "Host", false), "Match repair started by the host");
+			same("repair_toast_own_request", NetRepairStartLine("ResyncRequested:host requested repair", "Host", "Host", true), "Match repair started by you");
+			same("repair_toast_rejoin", NetRepairStartLine("tick 900 lockstep stopped: ResyncRequested:player rejoined", "Ana", "Host", false), "Match repair started: a player rejoined");
+			same("repair_toast_unnamed", NetRepairStartLine("Desync", "Ana", "Host", false), "Match repair started");
+			check("repair_toast_never_the_screen_line", NetRepairStartLine(diverged, "Host", "Host", true).find("Resyncing") == std::string::npos, "");
 		}
 		{
 			// A state line shown twice is caught wherever the two copies are; what a screen repeats by design is not.
@@ -1642,6 +1697,39 @@ namespace RTE::MenuAutomation {
 			                                     line("network", "NetworkSeatKick0", "Kick", true), line("network", "NetworkSeatKick1", "Kick", true),
 			                                     line("menu", "LabelMatchChat0", "gg"), line("menu", "LabelMatchChat1", "gg"), line("overlay", "NetworkPing", "--"), line("overlay", "NetworkLoss", "--")});
 			check("duplicates_by_design_pass", byDesign.is_null(), byDesign.dump());
+			const Json closingDots = DuplicateLine({line("overlay", "LabelNetMatchToast0", "Held - AI in control - rejoining"), line("drawn", "RejoinOverlay", "Held - AI in control - rejoining...")});
+			check("duplicates_closing_dots_are_one_line", !closingDots.is_null(), closingDots.dump());
+			// The settings pages' value columns, laid out as the game lays them out: the audio channels in one box, the players' boxes alike.
+			const int boxes[5] = {};
+			const void* const audioBox = &boxes[0];
+			const void* const boxP3 = &boxes[1];
+			const void* const boxP4 = &boxes[2];
+			const void* const filesBox = &boxes[3];
+			const void* const lobbyBox = &boxes[4];
+			const auto placed = [](const char* source, const char* control, const char* text, Rect rect, Rect parentRect, const void* parent) {
+				ShownLine shown{source, control, text};
+				shown.label = true;
+				shown.rect = rect;
+				shown.parentRect = parentRect;
+				shown.parent = parent;
+				return shown;
+			};
+			const Rect audio{100, 80, 480, 230}, p3{110, 216, 470, 47}, p4{110, 269, 470, 47}, files{100, 136, 480, 210};
+			const Json valueColumns = DuplicateLine({placed("menu", "LabelMasterVolume", "Volume: 0", {150, 130, 80, 20}, audio, audioBox),
+			                                         placed("menu", "LabelMusicVolume", "Volume: 0", {150, 180, 80, 20}, audio, audioBox),
+			                                         placed("menu", "LabelSoundVolume", "Volume: 0", {150, 230, 80, 20}, audio, audioBox),
+			                                         placed("menu", "LabelP3Sensitivity", "Stick Deadzone: 1", {120, 241, 120, 20}, p3, boxP3),
+			                                         placed("menu", "LabelP4Sensitivity", "Stick Deadzone: 1", {120, 294, 120, 20}, p4, boxP4)});
+			check("duplicates_value_columns_pass", valueColumns.is_null(), valueColumns.dump());
+			const Json twoNotes = DuplicateLine({placed("menu", "LabelNetAutosaveHost", "Set by the host", {400, 148, 165, 20}, files, filesBox),
+			                                     placed("menu", "LabelNetAutosaveIntervalHost", "Set by the host", {400, 168, 165, 20}, files, filesBox)});
+			check("duplicates_note_repeated_down_rows", !twoNotes.is_null(), twoNotes.dump());
+			const Json offColumn = DuplicateLine({placed("menu", "LabelLobbyStatus", "Match ended", {100, 100, 200, 20}, audio, lobbyBox),
+			                                      placed("menu", "LabelMatchStatus", "Match ended", {140, 140, 200, 20}, audio, lobbyBox)});
+			check("duplicates_off_one_column", !offColumn.is_null(), offColumn.dump());
+			const Json acrossSources = DuplicateLine({placed("menu", "LabelMultiplayerStatus", "Match ended", {100, 100, 200, 20}, audio, lobbyBox),
+			                                          placed("overlay", "LabelNetMatchStatus", "Match ended", {100, 140, 200, 20}, audio, lobbyBox)});
+			check("duplicates_one_column_never_spans_two_surfaces", !acrossSources.is_null(), acrossSources.dump());
 		}
 		{
 			// A relay login's boxes capture as their mask and their set_text record is masked, on the host's page and the player's; each

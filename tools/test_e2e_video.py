@@ -206,6 +206,47 @@ def check_screen_watches(results, scratch):
     ok &= row(results, "screen/clean-watch-has-summary", watches["duplicates"]["offences"] == [] and watches["duplicates"]["summary"]["frames"] == 900)
     ok &= row(results, "screen/nothing-armed-is-not-judged", driver.screen_watch_results(scratch / "screen-watch-none") is None)
     ok &= row(results, "screen/every-peer-arms-them", all(f"h15-{name} " in driver.SCREEN_WATCHES for name in driver.SCREEN_WATCH_RULES))
+    # A peer dropped at the scenario's end prints its watches' summaries before the kill; the wait is bounded.
+    dropped = scratch / "screen-watch-drop"
+    dropped.mkdir(parents=True, exist_ok=True)
+    log = dropped / "stdout.log"
+    log.write_text(lines[0] + "\n", encoding="utf-8")
+    never = threading.Event()
+
+    def summarize():
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write('[text-watch] summary {"active_frames":235,"flush":"kill","frames":235,"rule":"layout","watch":"h15-layout"}\n')
+    late = threading.Timer(.2, summarize)
+    late.start()
+    flushed = driver.await_watch_flush(log, never, timeout_s=5.0)
+    late.join()
+    ok &= row(results, "screen/drop-waits-for-the-kill-summary", flushed is True)
+    log.write_text(lines[0] + "\n" + '[text-watch] summary {"flush":"periodic","watch":"h15-layout"}\n', encoding="utf-8")
+    ok &= row(results, "screen/drop-wait-is-bounded", driver.await_watch_flush(log, never, timeout_s=.3) is False)
+    log.write_text("no watches here\n", encoding="utf-8")
+    ok &= row(results, "screen/unarmed-peer-is-not-waited-for", driver.await_watch_flush(log, never, timeout_s=5.0) is None)
+    # A peer dropped at tick 233 whose only summary is the drop's own flush, printed through tick 235 after it read the notice.
+    def dropped_items(case, flush_violations, offence_frames):
+        peer_root = scratch / f"screen-watch-dropped-{case}" / "client"
+        video = peer_root / "video"
+        video.mkdir(parents=True, exist_ok=True)
+        (video / "injected-drop.json").write_text(json.dumps({"last_recorded_frame": {"sim_tick": 233}}), encoding="utf-8")
+        watch_lines = ['[text-watch] armed {"armed": "h15-duplicates", "rule": "duplicates", "state": "always", "control": "", "text": ""}']
+        watch_lines += ['[text-watch] violation h15-duplicates duplicates ' + json.dumps({"lockstep_frame": frame, "detail": {"text": f"line {frame}", "controls": ["a", "b"]}})
+                        for frame in offence_frames]
+        watch_lines.append('[text-watch] summary ' + json.dumps({"watch": "h15-duplicates", "rule": "duplicates", "frames": 224, "active_frames": 224,
+                                                                 "violations": flush_violations, "flush": "kill", "through_tick": 235}))
+        (peer_root / "stdout.log").write_text("\n".join(watch_lines) + "\n", encoding="utf-8")
+        peer = {"peer": "client", "root": str(peer_root), "video_dir": str(video), "video": None, "expected_termination": True,
+                "record": {"injected_termination": "scenario drop after completed peer probe"}}
+        items = driver.capture_evidence_items({"runs": []}, {"name": "640x360"}, peer)
+        return next(item for item in items if item["id"] == "screen-duplicates-client")
+    clean = dropped_items("clean", 0, [])
+    ok &= row(results, "screen/drop-flush-is-the-terminal-summary", clean["probe"] == "pass", json.dumps(clean.get("finding")))
+    after = dropped_items("after", 1, [234])
+    ok &= row(results, "screen/drop-flush-offence-past-the-kill-not-counted", after["probe"] == "pass", json.dumps(after.get("finding")))
+    before = dropped_items("before", 1, [200])
+    ok &= row(results, "screen/drop-flush-offence-before-the-kill-fails", before["probe"] == "fail", json.dumps(before.get("finding")))
     return ok
 
 
