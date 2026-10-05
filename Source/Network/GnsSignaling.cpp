@@ -157,6 +157,10 @@ namespace RTE {
 
 	GnsDirectorySignalDispatcher::~GnsDirectorySignalDispatcher() { Stop(); }
 
+	std::shared_ptr<GnsDirectorySignalDispatcher> GnsDirectorySignalDispatcher::MakeMigrationStandby() {
+		return std::make_shared<GnsDirectorySignalDispatcher>();
+	}
+
 	bool GnsDirectorySignalDispatcher::Start(GnsTransport& transport, const Config& config) {
 		Stop();
 		m_Transport = &transport;

@@ -9682,7 +9682,7 @@ static std::string ResyncSaveName() {
 			System::PrintDiagnosticLine("[net-migration] the successor's ICE route stays closed: " + std::string(!mux || !mux->P2PGns() ? "its listener has no ICE half" : "no directory credential reached this peer"));
 			return;
 		}
-		auto dispatcher = std::make_shared<GnsDirectorySignalDispatcher>();
+		auto dispatcher = GnsDirectorySignalDispatcher::MakeMigrationStandby();
 		GnsDirectorySignalDispatcher::Config config;
 		config.role = GnsDirectorySignalDispatcher::Role::Host;
 		config.baseUrl = g_SettingsMan.GetSessionDirectoryUrl();

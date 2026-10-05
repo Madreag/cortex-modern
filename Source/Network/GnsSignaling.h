@@ -137,6 +137,8 @@ namespace RTE {
 		void SetPolling(bool armed, uint64_t nowMs);
 		void Update(uint64_t nowMs);
 		void Stop();
+		/// The host end a successor opens for its ICE route while its match runs, dropped with the listener that pumps it.
+		static std::shared_ptr<GnsDirectorySignalDispatcher> MakeMigrationStandby();
 
 		static std::string HostIdentity(const std::string& sessionId);
 		static std::string JoinerIdentity(const std::string& joinNonce);
