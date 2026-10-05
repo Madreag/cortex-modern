@@ -1895,6 +1895,8 @@ void MainMenuGUI::OpenHostOptions(bool setupDraft) {
 	m_HostRecRepairArmed = false;
 	m_HostRecRepairRefusal.clear();
 	m_HostOptionsAwaitedRevision = 0;
+	// A fresh setup draft starts with no rule set by hand; any other continues from the last draft Apply accepted.
+	m_HostRulesTouched = setupDraft && !m_HostSetupOptions ? 0 : m_HostAppliedRulesTouched;
 	if (m_HostNetPortBox && m_MultiplayerHostPortTextBox) {
 		// H34's port field edits the setup draft's port - the value the next hosted request carries.
 		m_HostNetPortBox->SetText(m_MultiplayerHostPortTextBox->GetText());
@@ -2586,6 +2588,31 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 	}
 }
 
+void MainMenuGUI::FollowHostActivityDefaults(const NetMatchStandardRules& before, const GUIControl* guiEventControl) {
+	// A rule the host moved himself stays his; the read is what tells a hand from the refresh writing the draft back.
+	const std::pair<const GUIControl*, bool> moved[] = {
+	    {m_HostRulesGoldSlider, m_HostOptionsDraft.startingGold != before.startingGold},
+	    {m_HostRulesFogCheck, m_HostOptionsDraft.fogOfWar != before.fogOfWar},
+	    {m_HostRulesClearPathCheck, m_HostOptionsDraft.requireClearPathToOrbit != before.requireClearPathToOrbit},
+	    {m_HostRulesDeployCheck, m_HostOptionsDraft.deployUnits != before.deployUnits}};
+	const unsigned rules[] = {NetActivitySetup::StartingGold, NetActivitySetup::FogOfWar, NetActivitySetup::ClearPathToOrbit, NetActivitySetup::DeployUnits};
+	for (size_t i = 0; i < std::size(moved); ++i) {
+		if (guiEventControl && guiEventControl == moved[i].first && moved[i].second) m_HostRulesTouched |= rules[i];
+	}
+	unsigned reseed = 0;
+	if (m_HostOptionsDraft.activityPreset != before.activityPreset || m_HostOptionsDraft.activityModule != before.activityModule) {
+		// The launch resolves the activity by its class too, so the class follows the pick.
+		if (std::string type = HostActivityType(m_HostOptionsDraft.activityPreset, m_HostOptionsDraft.activityModule); !type.empty()) {
+			m_HostOptionsDraft.activityType = std::move(type);
+		}
+		reseed = NetActivitySetup::AllSeededRules;
+	} else if (m_HostOptionsDraft.difficulty != before.difficulty) {
+		reseed = NetActivitySetup::StartingGold;
+	}
+	reseed &= ~m_HostRulesTouched;
+	if (reseed != 0) NetActivitySetup::SeedRulesFromActivity(m_HostOptionsDraft, reseed);
+}
+
 void MainMenuGUI::RederiveHostOptionsRoster() {
 	// Rebuild the seat list for the drafted capacity/mode, keeping the rules the panel edited.
 	NetMatchServiceRequest request = HostRequestDraft();
@@ -2633,6 +2660,7 @@ void MainMenuGUI::ApplyHostOptions() {
 	}
 	if (m_HostOptionsSetupDraft) {
 		m_HostSetupOptions = m_HostOptionsDraft;
+		m_HostAppliedRulesTouched = m_HostRulesTouched;
 		m_HostOptionsStatusLabel->SetText("Staged for the next lobby.");
 	} else {
 		if (!g_NetMatchService.SubmitHostOptions(m_HostOptionsBaseRevision, m_HostOptionsDraft, &error)) {
@@ -2642,6 +2670,7 @@ void MainMenuGUI::ApplyHostOptions() {
 		}
 		// The adopted revision keeps Apply pending until the runner publishes it.
 		m_HostOptionsAwaitedRevision = m_HostOptionsBaseRevision + 1;
+		m_HostAppliedRulesTouched = m_HostRulesTouched;
 		m_HostOptionsStatusLabel->SetText(NetHostOptionsApplyText(g_NetMatchService.GetState()));
 	}
 	g_GUISound.ButtonPressSound()->Play();
@@ -2997,7 +3026,11 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 			GUIComboBox* combo = dynamic_cast<GUIComboBox*>(control);
 			return combo && combo->IsDropped();
 		});
-		if (!listOpen) DraftHostOptionsFromControls();
+		if (!listOpen) {
+			const NetMatchStandardRules before = m_HostOptionsDraft;
+			DraftHostOptionsFromControls();
+			FollowHostActivityDefaults(before, guiEventControl);
+		}
 	}
 	for (size_t i = 0; i < m_HostNetworkTabs.size(); ++i) {
 		if (guiEventControl != m_HostNetworkTabs[i]) continue;
