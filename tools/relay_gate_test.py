@@ -846,6 +846,10 @@ class GreenTipProbes(unittest.TestCase):
                 dict(step='up', at=at(41), exit_code=0, backend_state='Running')]), encoding='utf-8')
             (root / 'client-panel').mkdir()
             (root / 'client-panel' / 'net-ui-result.json').write_text(json.dumps({'pass': True, 'complete': True}), encoding='utf-8')
+            # The host's match summary, where the service report writes it: the hotspot seat may be held, no other.
+            report = json.loads((root / 'host_report.json').read_text(encoding='utf-8'))
+            report['service']['last_match'] = dict(peers=[dict(name='host', holds=0), dict(name='client', holds=1)])
+            (root / 'host_report.json').write_text(json.dumps(report), encoding='utf-8')
             verdict = full_judge(run, root, judge_facts([], public=True), [f'INFO relay_offer_issued {json.dumps(offer)}'])
         self.assertTrue(verdict['passed'], {key: value for key, value in verdict['checks'].items() if not value})
 

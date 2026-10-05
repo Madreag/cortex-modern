@@ -93,6 +93,10 @@ REDACTOR = None  # the run's SecretBook: no booked value reaches a printed line 
 # --- the mandatory checks, once (R-b) --------------------------------------------------------------------------------
 BASE = ('identities', 'builds', 'exits', 'full_history', 'hashes_equal', 'holds', 'feel_bars', 'relay', 'route_receipts',
         'rtt_recorded', 'secrets_observed', 'no_secret_in_files', 'sanitizer_clean')
+# A row with a hotspot seat judges the seats by the match summary: only the hotspot's seat may be held (A1: the player with the
+# problem carries its cost), the fast peers' feel is the row's bar ('timing_peers'). A peer log's hold lines name the seats
+# that peer held, never its own, so the per-log count cannot judge it.
+SEATED = tuple(check for check in BASE if check != 'holds') + ('seat_holds',)
 REQUIRED = {
     'cloudflare': BASE + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked'),
     'coturn': BASE + ('offer_fresh', 'endpoint', 'logins_short_lived'),
@@ -103,18 +107,17 @@ REQUIRED = {
                                                                                'menu_choice:client'),
     # Automatic on a carrier NAT ends on the best route ICE completes (direct where the NAT can be punched): the history of its
     # route receipts and the panel's agreement with the live route at every frame are its evidence, whichever route it ends on.
-    'a-automatic-fallback': BASE + ('offer_fresh', 'logins_revoked', 'tunnel:client', 'panel:client', 'route_history:client'),
+    'a-automatic-fallback': SEATED + ('offer_fresh', 'logins_revoked', 'tunnel:client', 'panel:client', 'route_history:client'),
     # The forced form: the hotspot end offers relay candidates only, so no direct route completes and Automatic holds the relay.
-    'a-automatic-forced': BASE + ('offer_fresh', 'endpoint', 'logins_revoked', 'tunnel:client', 'panel:client', 'route_history:client'),
+    'a-automatic-forced': SEATED + ('offer_fresh', 'endpoint', 'logins_revoked', 'tunnel:client', 'panel:client', 'route_history:client'),
     'b-hotspot-host': BASE + ('offer_fresh', 'logins_revoked', 'tunnel:host', 'listing'),
     'c-four-players': tuple(check for check in BASE if check != 'holds') + ('offer_fresh', 'logins_revoked', 'tunnel:hotspot', 'seat_holds'),
-    'd-credential-expiry': BASE + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'renewal'),
-    'e-migration-relayed': BASE + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'migration'),
-    'f-relay-by-hand': BASE + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'menu_choice:client'),
+    'd-credential-expiry': SEATED + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'renewal'),
+    'e-migration-relayed': SEATED + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'migration'),
+    'f-relay-by-hand': SEATED + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'menu_choice:client'),
     # A public row sees no candidate (the directory is not this run's): the relay is bound by the engine's own receipt and the
     # directory's offer line, and its holds are the hotspot seat's own (the fast peer's feel is the row's bar).
-    'g-relay-only-public': tuple(check for check in BASE if check != 'holds') + ('offer_fresh', 'endpoint', 'logins_revoked', 'tunnel:client',
-                                                                                 'seat_holds', 'route_history:client'),
+    'g-relay-only-public': SEATED + ('offer_fresh', 'endpoint', 'logins_revoked', 'tunnel:client', 'route_history:client'),
 }
 
 
@@ -613,8 +616,10 @@ def migration_declarations(logs: dict[str, str], survivors: list[str], session: 
         for peer in survivors:
             lines = logs.get(peer, '').splitlines()
             declared = next(index for index, line in enumerate(lines) if 'is now hosting; boundary=' in line)
-            seen_before = {match for line in lines[:declared] for match in re.findall(r'connection=(\d+)', line)}
-            post = [key for key, row in route_receipts('\n'.join(lines[declared:]), None, any_session=True)['connections'].items()
+            # A survivor dials its successor as soon as it finds the host lost, before the handover is declared.
+            lost = next((index for index, line in enumerate(lines[:declared]) if 'host lost; collecting surviving peers' in line), declared)
+            seen_before = {match for line in lines[:lost] for match in re.findall(r'connection=(\d+)', line)}
+            post = [key for key, row in route_receipts('\n'.join(lines[lost:]), None, any_session=True)['connections'].items()
                     if key not in seen_before and row.get('candidate') == 'relay' and row.get('route') == 'relay' and row.get('allowed')
                     and row.get('selected_at', -1) >= 0 and row.get('allowed_at', -1) >= 0]
             successors[peer] = post

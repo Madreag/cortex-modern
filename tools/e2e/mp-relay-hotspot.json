@@ -37,6 +37,12 @@
           "tailscale_down": true,
           "panel_probe": "mp-relay-hotspot.route.probe.json"
         }
+      ],
+      "timing_peers": [
+        "host"
+      ],
+      "holds_allowed": [
+        "client"
       ]
     },
     {
@@ -67,7 +73,13 @@
       "expect_routes": {
         "client": "relay"
       },
-      "lever_note": "CC_TEST_ICE_GATHER_RELAY_ONLY=1 on the hotspot end: it offers relay candidates only, as a network no direct route crosses; the player's Connection setting stays Automatic, so the route policy is Automatic's."
+      "lever_note": "CC_TEST_ICE_GATHER_RELAY_ONLY=1 on the hotspot end: it offers relay candidates only, as a network no direct route crosses; the player's Connection setting stays Automatic, so the route policy is Automatic's.",
+      "timing_peers": [
+        "host"
+      ],
+      "holds_allowed": [
+        "client"
+      ]
     },
     {
       "name": "b-hotspot-host",
@@ -153,7 +165,13 @@
           "hotspot": true
         }
       ],
-      "directory_note": "This run's directory, met by every box at a Cloudflare quick tunnel's public name: the Ally reaches it over the carrier as a player would, never through the tailnet's relay."
+      "directory_note": "This run's directory, met by every box at a Cloudflare quick tunnel's public name: the Ally reaches it over the carrier as a player would, never through the tailnet's relay.",
+      "timing_peers": [
+        "host"
+      ],
+      "holds_allowed": [
+        "client"
+      ]
     },
     {
       "name": "e-migration-relayed",
@@ -181,7 +199,13 @@
           "hotspot": true
         }
       ],
-      "directory_note": "This run's directory, met by every box at a Cloudflare quick tunnel's public name: the Ally reaches it over the carrier as a player would, never through the tailnet's relay."
+      "directory_note": "This run's directory, met by every box at a Cloudflare quick tunnel's public name: the Ally reaches it over the carrier as a player would, never through the tailnet's relay.",
+      "timing_peers": [
+        "client"
+      ],
+      "holds_allowed": [
+        "client2"
+      ]
     },
     {
       "name": "f-relay-by-hand",
@@ -206,7 +230,13 @@
           "menu_choice": "Relay only"
         }
       ],
-      "directory_note": "This run's directory, met by every box at a Cloudflare quick tunnel's public name: the Ally reaches it over the carrier as a player would, never through the tailnet's relay."
+      "directory_note": "This run's directory, met by every box at a Cloudflare quick tunnel's public name: the Ally reaches it over the carrier as a player would, never through the tailnet's relay.",
+      "timing_peers": [
+        "host"
+      ],
+      "holds_allowed": [
+        "client"
+      ]
     },
     {
       "name": "g-relay-only-public",

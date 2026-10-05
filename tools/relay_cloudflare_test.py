@@ -402,6 +402,12 @@ class HotspotRows(unittest.TestCase):
         self.assertFalse(migration({'client': line + successor, 'client2': other + successor}, ['client', 'client2'], 's', seats, ticks)['passed'])
         self.assertFalse(migration({'client': line + successor, 'client2': ''}, ['client', 'client2'], 's', seats, ticks)['passed'])
         self.assertFalse(migration({'client': line + '\n' + line + successor, 'client2': line + successor}, ['client', 'client2'], 's', seats, ticks)['passed'])
+        # 2026-10-04 row e: each survivor dials its successor when it finds the host lost, before the handover line.
+        lost = '[net-match] host lost; collecting surviving peers at applied frame 617 final_frame=1802'
+        early = {name: lost + successor + '\n' + line for name in ('client', 'client2')}
+        self.assertTrue(migration(early, ['client', 'client2'], 's', seats, ticks)['passed'])
+        stale = {name: successor.lstrip('\n') + '\n' + lost + '\n' + line for name in ('client', 'client2')}
+        self.assertFalse(migration(stale, ['client', 'client2'], 's', seats, ticks)['passed'])
 
     def test_f_relay_only_chosen_by_hand_is_read_from_the_menu_script(self):
         chosen = self.match().menu_choice
