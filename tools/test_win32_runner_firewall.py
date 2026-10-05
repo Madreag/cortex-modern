@@ -2,10 +2,15 @@
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import win32_test_runner as runner  # noqa: E402
+if sys.platform == 'win32':
+    import win32_test_runner as runner
+else:
+    import ctypes
+    with patch.object(ctypes, 'WinDLL', create=True, return_value=MagicMock()):
+        import win32_test_runner as runner
 
 EXE = r"D:\nowhere\inventory-build\Cortex Command.exe"
 
