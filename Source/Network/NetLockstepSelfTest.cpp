@@ -24188,6 +24188,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 
 		bool TestSuccessorRecordsPlayThroughHostChange(std::string* error) {
 			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("successor_records_play_through_host_change", why, error); };
+			struct RecordingScope { ~RecordingScope() { ScenarioRunner::CloseLockstepReplayPlayback(); ScenarioRunner::ArmLockstepReplayRecord(""); } } recordingScope;
 			ReleasePathRound round;
 			if (!round.Start(47440)) return fail("the recording fixture did not start: " + round.failure);
 			ScenarioRunner::SetLockstepCoordinator(&round.peers[2]);
