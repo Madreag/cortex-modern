@@ -97,7 +97,7 @@
       "what": "ClientB uses Join Game again with the same process identity and host address.",
       "events": [
         "activate ButtonMultiplayerJoinGame .*PASS",
-        "activate ButtonMultiplayerConnect .*PASS"
+        "activate ButtonJoinAddressGo .*PASS"
       ],
       "run": "kick-ban"
     },
@@ -142,7 +142,7 @@
       "screen": "MultiplayerScreen",
       "what": "After Kick and Ban the host counts the two open seats and shows a plain refusal notice.",
       "events": [
-        "(?s)assert_label LabelMultiplayerStatus.*Waiting for 2 players to join.*PASS",
+        "(?s)assert_label LabelMultiplayerStatus.*Waiting for 2 more players to join.*PASS",
         "assert_label LabelMultiplayerError.*ClientB was refused: banned from this session.*PASS"
       ],
       "run": "kick-ban"
