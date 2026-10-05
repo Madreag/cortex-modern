@@ -26,6 +26,7 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 import session_directory
+from world_ticks import compare_world_ticks, read_world_ticks
 from session_directory import IP_REG_PER_MIN, IP_REQ_PER_MIN, DualRateLimiter, LOGGER, RunningServer, spawn_server
 from unittest import mock
 
@@ -2134,6 +2135,30 @@ class DirectoryTests(unittest.TestCase):
                 store.register(dict(request, resume_session_id=world, resume_token=host["token"]), "192.0.2.1", 3, INSTALL_KEY)
         signals = store.get_signals(world, "host", 0, host["token"], 4)["signals"]
         self.assertEqual(len(signals), 1, "S2: a capacity-refused registration discarded the active joiner's offer")
+
+    def test_world_tick_receipts_keep_live_and_private_replay_comparisons(self) -> None:
+        host = {"live": {1: "a" * 64, 2: "b" * 64, 3: "c" * 64}, "catchup": {}}
+        peer = {"live": {1: "a" * 64, 3: "c" * 64}, "catchup": {2: "b" * 64}}
+        scored = compare_world_ticks(host, peer)
+        self.assertTrue(scored["pass"], "world ticks: recorded private replay tick 2 was reported missing")
+        self.assertEqual((scored["compared"], scored["compared_catchup"], scored["live_only_holes"]), (2, 1, 1))
+        with self.subTest("missing_replay"):
+            self.assertFalse(compare_world_ticks(host, dict(peer, catchup={}))["pass"], "world ticks: an unrecorded gap passed")
+        with self.subTest("wrong_replay"):
+            self.assertFalse(compare_world_ticks(host, dict(peer, catchup={2: "d" * 64}))["pass"], "world ticks: a mismatching replay passed")
+        with self.subTest("wrong_live"):
+            self.assertFalse(compare_world_ticks(host, dict(peer, live={1: "d" * 64, 3: "c" * 64}))["pass"], "world ticks: a mismatching live tick passed")
+        with self.subTest("never_played"):
+            self.assertFalse(compare_world_ticks(host, dict(peer, live={}))["pass"], "world ticks: a peer that never played passed")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "live.jsonl"
+            rows = [{"tick": tick, "phase": phase, "sim_gated": value} for phase, ticks in peer.items() for tick, value in ticks.items()]
+            path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+            self.assertTrue(compare_world_ticks(host, read_world_ticks(path.parent))["pass"])
+            with path.open("a") as stream:
+                stream.write(json.dumps({"tick": 2, "phase": "live", "sim_gated": "d" * 64}) + "\n")
+            with self.assertRaisesRegex(ValueError, "contradictory world tick", msg="world ticks: contradictory phases hid a mismatching tick"):
+                read_world_ticks(path.parent)
 
     def test_rotated_lease_refuses_an_old_long_poll_before_draining(self) -> None:
         store = session_directory.SessionDirectory(300, 5)
