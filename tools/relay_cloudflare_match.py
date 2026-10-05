@@ -1003,8 +1003,9 @@ class Directory:
             def filter(self, record):
                 record.msg, record.args = book.redact(record.getMessage()), ()
                 return True
-        for handler in module.LOGGER.handlers:
-            handler.addFilter(PrivateLogFilter())
+        self.private_log_filters = [(handler, PrivateLogFilter()) for handler in module.LOGGER.handlers]
+        for handler, filter_ in self.private_log_filters:
+            handler.addFilter(filter_)
         key.unlink()
         store = self.server.store
         mint, post, register, mint_offer = store.turn_provider.mint, store.post_signal, store.register, store.mint_ice_servers
@@ -1051,6 +1052,8 @@ class Directory:
                 self.revokes = revoke_cloudflare(self.backend, [row['username'] for row in self.minted], self.real_urlopen,
                                                  self.module.USER_AGENT)
             self.module.urlopen = self.real_urlopen
+            for handler, filter_ in self.private_log_filters:
+                handler.removeFilter(filter_)
             for handler in set(self.module.LOGGER.handlers) - self.handlers:
                 self.module.LOGGER.removeHandler(handler)
                 handler.close()
