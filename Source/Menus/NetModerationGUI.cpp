@@ -648,15 +648,16 @@ void NetModerationGUI::LayoutPanel() {
 	m_Roster->ActivateDeactivateOverflowScroll(lost != 0);
 	m_Options->SetVerticalOverflowScroll(true);
 	m_Options->ActivateDeactivateOverflowScroll(true);
-	const int statusY = std::max(0, 282 - std::max(0, lost - 20));
+	const int closeY = std::max(0, 318 - lost);
+	// One line of the status always shows; it keeps its gap above the close row.
+	const int statusHeight = std::max(m_LabelFont->GetFontHeight(), 30 - lost);
+	const int statusY = std::max(0, std::min(282, closeY - 6 - statusHeight));
 	if (m_Status->GetRelYPos() != statusY) {
 		m_Status->SetPositionRel(10, statusY);
 	}
-	const int statusHeight = 30 - std::min(lost, 20);
 	if (m_Status->GetHeight() != statusHeight) {
 		m_Status->Resize(m_Status->GetWidth(), statusHeight);
 	}
-	const int closeY = std::max(0, 318 - lost);
 	if (m_Close->GetRelYPos() != closeY) {
 		m_Close->SetPositionRel(width - 224, closeY);
 		m_OptionsToggle->SetPositionRel(10, closeY);
