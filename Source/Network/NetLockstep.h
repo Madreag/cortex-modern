@@ -279,6 +279,7 @@ namespace RTE {
 		/// they were read past and the tick is already in this peer's stream.
 		bool observationsReadPast = false;
 		std::optional<NetLockstepTiming> hostHold;
+		uint8_t replayAuthorityPeerId = 0; //!< Recording metadata, never a lockstep wire field; zero on legacy files.
 
 		bool operator==(const NetLockstepFrame& rhs) const;
 	};
@@ -517,6 +518,7 @@ namespace RTE {
 		std::vector<NetSoundObservation> remoteObservations;
 		std::vector<NetValueObservation> localValueObservations;
 		std::vector<NetValueObservation> remoteValueObservations;
+		uint8_t authorityPeerId = 0; //!< The host of this committed frame, including frames held for later recording.
 	};
 
 	/// Applies the committed frame's departures before its game commands.
@@ -982,7 +984,7 @@ namespace RTE {
 		std::string MemoryCensus() const;
 		/// Feeds one recorded tick straight into the commit path: command senders preserved, no
 		/// delay math, no wire — the replay's committed frame is exactly the recording's.
-		bool QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error = nullptr, std::vector<NetSoundObservation> observations = {}, std::vector<NetValueObservation> valueObservations = {});
+		bool QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error = nullptr, std::vector<NetSoundObservation> observations = {}, std::vector<NetValueObservation> valueObservations = {}, uint8_t authorityPeerId = 0);
 		/// Rewinds a playback coordinator to re-commit from an earlier frame (the rollback
 		/// fidelity gate re-runs a window). Replay mode only — there is no wire to rewind.
 		bool RewindReplay(uint64_t firstFrame, std::string* error = nullptr);
@@ -2008,6 +2010,7 @@ namespace RTE {
 		std::map<std::pair<uint8_t, uint64_t>, uint64_t> m_CaptureExcuseUntilMs;
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;
+		std::map<uint64_t, uint8_t> m_ReplayAuthorities;
 		std::map<uint64_t, std::map<uint8_t, std::vector<ControllerFrame>>> m_RemoteFrames; //!< frame -> (peerId -> frames)
 		std::map<uint64_t, std::vector<NetGameCommand>> m_LocalCommands;
 		std::map<uint64_t, std::map<uint8_t, std::vector<NetGameCommand>>> m_RemoteCommands; //!< frame -> (peerId -> commands)

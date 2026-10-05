@@ -24235,6 +24235,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			}
 			ScenarioRunner::CloseLockstepReplayPlayback();
 			if (!holdSeen || !releaseSeen || replay.GetResumeFrame() != verify.lastFrame + 1) return fail("the recording did not play its successor's hold and release through its last frame");
+			if (!replay.QueueReplayFrame(verify.lastFrame + 1, {}, {{1, NetGameSeatRelease{4, 1, 999, 1, verify.lastFrame + 1}}}, &round.failure)) return fail(round.failure);
+			replay.Tick(0);
+			NetLockstepReadyFrame forged;
+			if (replay.PopReadyFrame(forged) || !replay.IsFailed() || replay.GetStats().timeoutReason.find("invalid authority") == std::string::npos)
+				return fail("playback accepted the former host's release after the authority boundary");
 			return fail("");
 		}
 	}

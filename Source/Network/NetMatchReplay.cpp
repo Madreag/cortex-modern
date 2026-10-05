@@ -276,6 +276,7 @@ namespace RTE {
 		m_AgreedStart.reset();
 		m_AgreedStartWritten = false;
 		// The synced config rides the lobby codec, so the replayer rebuilds the identical roster; a recording players share never holds a relay login.
+		m_OpeningAuthorityPeerId = config.hostPeerId;
 		std::vector<uint8_t> configBytes;
 		NetLobbyError lobbyError;
 		if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{NetMatchConfigUtil::WithoutRelay(config)}}, configBytes, &lobbyError)) {
@@ -363,15 +364,15 @@ namespace RTE {
 		return WriteFrame(frame, frames, commands, observations, {}, error);
 	}
 
-	bool NetMatchReplayWriter::WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations, std::string* error) {
+	bool NetMatchReplayWriter::WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations, std::string* error, uint8_t authorityPeerId) {
 		ReplayWorkTimer work{frame, "frame"};
 		if (!IsOpen()) {
 			if (error) *error = GetWriteError().empty() ? "replay writer is not open" : GetWriteError();
 			return false;
 		}
 		NetLockstepFrame record;
-		// The wire codec authenticates one sender; a committed tick can contain several.
-		record.senderPeerId = 1;
+		// The frame names its host; sender trailers retain each producer.
+		record.senderPeerId = authorityPeerId != 0 ? authorityPeerId : m_OpeningAuthorityPeerId;
 		record.targetFrame = frame;
 		record.frames = frames;
 		record.commands = commands;
@@ -435,6 +436,7 @@ namespace RTE {
 				partFor(1);
 			}
 			parts.front().frames = frameRuns.front();
+			parts.front().senderPeerId = record.senderPeerId;
 			const uint8_t inputSender = parts.front().senderPeerId;
 			for (size_t run = 1; run < frameRuns.size(); ++run) {
 				NetLockstepFrame& part = parts.emplace_back();
@@ -773,6 +775,13 @@ namespace RTE {
 				}
 				outFrame.valueObservations[i].senderPeerId = sender;
 			}
+		}
+		if (m_Version >= 8) {
+			if (outFrame.senderPeerId == 0 || outFrame.senderPeerId > m_Config.peerCount) {
+				if (error) *error = "invalid replay frame authority";
+				return false;
+			}
+			outFrame.replayAuthorityPeerId = outFrame.senderPeerId;
 		}
 		m_LastStatus = NetReplayReadStatus::Frame;
 		return true;

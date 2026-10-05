@@ -464,6 +464,7 @@ namespace RTE {
 		static bool IsLockstepReplayPlayback();
 		static const NetMatchConfig& GetLockstepReplayConfig();
 		static uint64_t GetLockstepReplayStartFrame();
+		static uint8_t GetLockstepReplayStartAuthorityPeerId();
 		static const std::optional<NetLockstepStart>& GetLockstepReplayAgreedStart();
 		/// Whether the recording being played is a world segment, and the checkpoint it stands on.
 		static bool IsLockstepReplayWorldSegment();

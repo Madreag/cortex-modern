@@ -4882,6 +4882,7 @@ namespace RTE {
 	// field a round carries cannot be reset in two of the three and forgotten in the last. What stays
 	// out: the local production a follower keeps, and the deferred-stop mode the launch path sets.
 	void NetLockstepCoordinator::ResetRoundState() {
+		m_ReplayAuthorities.clear();
 		m_PeerAdmissions.clear();
 		m_LeavesHeardAhead.clear();
 		m_PeerDeviceClasses.fill(0);
@@ -5301,7 +5302,7 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetLockstepCoordinator::QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error, std::vector<NetSoundObservation> observations, std::vector<NetValueObservation> valueObservations) {
+	bool NetLockstepCoordinator::QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error, std::vector<NetSoundObservation> observations, std::vector<NetValueObservation> valueObservations, uint8_t authorityPeerId) {
 		NET_PLANE_CHECK();
 		if (m_State != NetLockstepState::Running) {
 			if (error) *error = m_Stats.timeoutReason.empty() ? "replay coordinator is not running" : m_Stats.timeoutReason;
@@ -5309,6 +5310,10 @@ namespace RTE {
 		}
 		if (frame < m_Stats.nextFrame || m_LocalFrames.find(frame) != m_LocalFrames.end()) {
 			if (error) *error = "replay frame is duplicate or already accepted";
+			return false;
+		}
+		if (authorityPeerId > m_Config.peerCount) {
+			if (error) *error = "replay frame authority is outside the roster";
 			return false;
 		}
 		NetLockstepError frameError;
@@ -5320,6 +5325,7 @@ namespace RTE {
 		// Playback owns no actor: every recorded frame rides the REMOTE side so the apply drives
 		// every actor from the file; the empty local entry satisfies the advance.
 		m_LocalFrames[frame] = {};
+		if (authorityPeerId != 0) m_ReplayAuthorities[frame] = authorityPeerId;
 		const uint8_t bucketPeer = m_Config.localPeerId == 1 ? 2 : 1;
 		m_RemoteFrames[frame][bucketPeer] = std::move(frames);
 		if (!commands.empty()) {
@@ -5344,6 +5350,7 @@ namespace RTE {
 			if (error) *error = "rewind requires a running replay coordinator";
 			return false;
 		}
+		m_ReplayAuthorities.erase(m_ReplayAuthorities.lower_bound(firstFrame), m_ReplayAuthorities.end());
 		for (auto seat = m_AiHeldSeats.begin(); seat != m_AiHeldSeats.end();) {
 			if (seat->second >= firstFrame) {
 				m_PeerLeaveFrames.erase(seat->first);
@@ -9207,6 +9214,7 @@ namespace RTE {
 		}
 		outFrame = std::move(m_ReadyFrames.front());
 		m_ReadyFrames.pop_front();
+		if (m_Playback && outFrame.authorityPeerId != 0) m_Config.authorityPeerId = outFrame.authorityPeerId;
 		m_LastDeliveredFrame = outFrame.frame;
 		// A retired gap the simulation has passed covers nothing it will apply again.
 		for (auto seat = m_RetiredReclaimGaps.begin(); seat != m_RetiredReclaimGaps.end();) {
@@ -12126,6 +12134,9 @@ namespace RTE {
 			NetLockstepReadyFrame ready;
 			ready.frame = m_Stats.nextFrame;
 			ready.localPeerId = m_Config.localPeerId;
+			const auto authority = m_ReplayAuthorities.find(ready.frame);
+			ready.authorityPeerId = authority == m_ReplayAuthorities.end() ? GetHostPeerId() : authority->second;
+			if (authority != m_ReplayAuthorities.end()) m_ReplayAuthorities.erase(authority);
 			if (localIt != m_LocalFrames.end()) {
 				ready.hasLocalInput = true;
 				if (m_Playback || !IsSeatReclaimGap(m_Config.localPeerId, ready.frame)) ready.localFrames = std::move(localIt->second);

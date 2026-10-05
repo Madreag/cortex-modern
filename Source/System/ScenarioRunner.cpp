@@ -198,6 +198,7 @@ namespace RTE {
 			std::vector<NetGameCommand> commands;
 			std::vector<NetSoundObservation> observations;
 			std::vector<NetValueObservation> valueObservations;
+			uint8_t authorityPeerId = 0;
 		};
 		struct PendingWorldSegment {
 			NetWorldSegmentHeader header;
@@ -1549,7 +1550,7 @@ namespace RTE {
 		outFrame.remoteValueObservations = std::move(frame.valueObservations);
 		if (s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() && s_LockstepCoordinator->IsReplayPlayback()) {
 			if (!s_LockstepCoordinator->QueueReplayFrame(simTick, std::move(outFrame.remoteFrames), std::move(outFrame.remoteCommands), error,
-			    std::move(outFrame.remoteObservations), std::move(outFrame.remoteValueObservations))) return false;
+			    std::move(outFrame.remoteObservations), std::move(outFrame.remoteValueObservations), frame.senderPeerId)) return false;
 			s_LockstepCoordinator->Tick(0);
 			if (!s_LockstepCoordinator->PopReadyFrame(outFrame)) return false;
 		} else {
@@ -2083,7 +2084,7 @@ namespace RTE {
 			if (!s_ReplayRewindBuffer.empty() && s_ReplayRewindBuffer.front().targetFrame == tick) {
 				NetLockstepFrame buffered = s_ReplayRewindBuffer.front();
 				s_ReplayRewindBuffer.pop_front();
-				return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(buffered.frames), std::move(buffered.commands), error, std::move(buffered.observations), std::move(buffered.valueObservations));
+				return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(buffered.frames), std::move(buffered.commands), error, std::move(buffered.observations), std::move(buffered.valueObservations), buffered.replayAuthorityPeerId);
 			}
 			NetLockstepFrame record;
 			NetReplayReadStatus status = NetReplayReadStatus::None;
@@ -2138,7 +2139,7 @@ namespace RTE {
 			if (record.targetFrame >= s_ReplayRewindFrom && record.targetFrame < s_ReplayRewindFrom + s_ReplayRewindCount) {
 				s_ReplayRewindKeep.push_back(record);
 			}
-			return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error, std::move(record.observations), std::move(record.valueObservations));
+			return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error, std::move(record.observations), std::move(record.valueObservations), record.replayAuthorityPeerId);
 		}
 		if (MenuMan::IsConstructed() && g_MenuMan.IsLocalPauseMenuOpen()) frames.clear();
 		NetLockstepCoordinator* producing = s_LockstepCoordinator;
@@ -2943,7 +2944,7 @@ namespace RTE {
 		s_ReplayRecordClosed = false;
 		for (const HeldReplayFrame& held: pending.frames) {
 			std::string writeError;
-			if (!s_ReplayWriter.WriteFrame(held.tick, held.frames, held.commands, held.observations, held.valueObservations, &writeError)) {
+			if (!s_ReplayWriter.WriteFrame(held.tick, held.frames, held.commands, held.observations, held.valueObservations, &writeError, held.authorityPeerId)) {
 				std::cout << "[net-world] segment recording stopped: " << writeError << std::endl;
 				s_ReplayWriter.Close();
 				s_WorldSegment = {};
@@ -3049,6 +3050,10 @@ namespace RTE {
 
 	uint64_t ScenarioRunner::GetLockstepReplayStartFrame() {
 		return s_ReplayReader.GetStartFrame();
+	}
+
+	uint8_t ScenarioRunner::GetLockstepReplayStartAuthorityPeerId() {
+		return s_ReplayReader.GetStartAuthorityPeerId();
 	}
 
 	const std::optional<NetLockstepStart>& ScenarioRunner::GetLockstepReplayAgreedStart() {
@@ -3256,7 +3261,7 @@ namespace RTE {
 					                               std::to_string(c_MaxPendingSegmentFrames) + " committed ticks");
 				} else {
 					s_PendingWorldSegment->frames.push_back({tick, std::move(allFrames), std::move(allCommands),
-					                                        std::move(allObservations), std::move(allValueObservations)});
+					                                        std::move(allObservations), std::move(allValueObservations), ready.authorityPeerId});
 				}
 				return;
 			}
@@ -3271,7 +3276,8 @@ namespace RTE {
 				}
 			}
 			std::string writeError;
-			if (!s_ReplayWriter.WriteFrame(tick, allFrames, allCommands, allObservations, allValueObservations, &writeError)) {
+			if (!s_ReplayWriter.WriteFrame(tick, allFrames, allCommands, allObservations, allValueObservations, &writeError,
+			    ready.authorityPeerId != 0 ? ready.authorityPeerId : GetLockstepHostPeerId())) {
 				std::cout << "[net-match] replay recording stopped: " << writeError << std::endl;
 				s_ReplayWriter.Close();
 			}

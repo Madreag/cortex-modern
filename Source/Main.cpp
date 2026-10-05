@@ -9745,6 +9745,7 @@ bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string*
 	lockstepConfig.localPeerId = 1;
 	lockstepConfig.peerCount = replayConfig.peerCount;
 	lockstepConfig.scenario = "replay";
+	lockstepConfig.authorityPeerId = ScenarioRunner::GetLockstepReplayStartAuthorityPeerId();
 	lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(replayConfig.ownershipPolicy);
 	lockstepConfig.matchConfig = replayConfig;
 	if (!s_replayCoordinator.StartReplay(s_nullTransport, lockstepConfig, &setupError)) {

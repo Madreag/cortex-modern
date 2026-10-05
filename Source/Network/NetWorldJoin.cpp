@@ -455,6 +455,7 @@ namespace RTE {
 
 	NetLockstepFrame PackWorldJoinReadyFrame(const NetLockstepReadyFrame& ready) {
 		NetLockstepFrame frame;
+		frame.senderPeerId = ready.authorityPeerId;
 		frame.targetFrame = ready.frame;
 		// Two inputs for one actor keep the order every live peer applies them in, so a replay of the tail ends on the same one.
 		for (const ControllerFrame* input: CommittedControllerFramesInSenderOrder(ready)) frame.frames.push_back(*input);
