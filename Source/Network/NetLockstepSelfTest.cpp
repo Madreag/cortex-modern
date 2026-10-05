@@ -5096,6 +5096,13 @@ namespace RTE {
 				         " ms, under the 18717 ms a relayed connect over a carrier took";
 				return false;
 			}
+			const std::string iceRoute = successor.listenAddrs.back();
+			if (NetLockstepCoordinator::MigrationDialSpent(iceRoute, 18717, NetLockstepCoordinator::c_MigrationIceStepMs) ||
+			    !NetLockstepCoordinator::MigrationDialSpent(iceRoute, NetLockstepCoordinator::c_MigrationIceDialMs, NetLockstepCoordinator::c_MigrationIceStepMs) ||
+			    !NetLockstepCoordinator::MigrationDialSpent("192.168.7.20", 1000, 1000)) {
+				*error = "a survivor's dial of the successor ended on the wrong limit: a relayed ICE dial at 18717 ms, or a LAN dial past its step";
+				return false;
+			}
 			std::cout << "[net-lockstep-selftest] PASS a_handover_endpoint_carries_its_ice_route published=" << published.back() << " ice_dials=" << iceDials.size() << std::endl;
 			return true;
 		}

@@ -1246,9 +1246,13 @@ namespace RTE {
 		std::string GetMigrationAddress() const { NET_PLANE_CHECK(); return m_MigrationAddress; }
 		/// A handover endpoint entry that names the listener's ICE route: this prefix and the listener's GNS identity.
 		static constexpr std::string_view c_MigrationIcePrefix = "ice:";
-		/// How long a survivor gives an ICE dial to the successor: candidates are gathered and traded through the directory first.
-		static constexpr uint64_t c_MigrationIceDialMs = 8000;
+		/// The successor's step when its roster answers through ICE: candidates are gathered and traded through the directory first.
+		static constexpr uint64_t c_MigrationIceStepMs = 8000;
+		/// How long a survivor gives an ICE dial to the successor: a relayed one can take most of the ICE connect limit.
+		static constexpr uint64_t c_MigrationIceDialMs = 30000;
 		static bool IsMigrationIceEndpoint(const std::string& address) { return address.starts_with(c_MigrationIcePrefix); }
+		/// Whether a survivor gives up its dial of the successor at this address after elapsedMs: an ICE dial runs to its own limit.
+		static bool MigrationDialSpent(const std::string& address, uint64_t elapsedMs, uint64_t stepMs) { return elapsedMs >= (IsMigrationIceEndpoint(address) ? c_MigrationIceDialMs : stepMs); }
 		/// What a peer publishes for its handover listener, in ICE order: its LAN address (the host candidate a direct dial
 		/// reaches), then, when the match's links run through the session directory, its ICE route, whose rendezvous offers
 		/// the listener's host, server-reflexive (STUN) and relay (TURN) candidates.

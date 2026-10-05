@@ -3333,7 +3333,7 @@ namespace RTE {
 		const bool ice = std::any_of(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [](const NetMatchMigrationPeer& peer) {
 			return std::any_of(peer.listenAddrs.begin(), peer.listenAddrs.end(), [](const std::string& address) { return IsMigrationIceEndpoint(address); });
 		});
-		return ice ? std::max<uint64_t>(budget, c_MigrationIceDialMs) : budget;
+		return ice ? std::max<uint64_t>(budget, c_MigrationIceStepMs) : budget;
 	}
 
 	bool NetLockstepCoordinator::ContactMigrationSuccessor(uint64_t nowMs) {
@@ -4023,7 +4023,8 @@ namespace RTE {
 				} else if (!quorum && nowMs >= m_MigrationStartedMs && nowMs - m_MigrationStartedMs >= 3 * budget) {
 					StopHostUnreachable();
 				}
-			} else if (expired && !m_MigrationAuthoritySeen && !HoldsLiveMigrationCandidate(nowMs, budget)) {
+			} else if (nowMs >= m_MigrationSinceMs && MigrationDialSpent(m_MigrationAddress, nowMs - m_MigrationSinceMs, budget) && !m_MigrationAuthoritySeen &&
+			           !HoldsLiveMigrationCandidate(nowMs, budget)) {
 				const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == m_MigrationSuccessor; });
 				if (endpoint == m_Config.matchConfig.migrationPeers.end() || m_MigrationNextAddress >= endpoint->listenAddrs.size()) {
 					++m_MigrationCandidateIndex;
