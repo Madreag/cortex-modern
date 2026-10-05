@@ -63,6 +63,7 @@
 #include <memory>
 #include <unordered_map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <system_error>
