@@ -564,7 +564,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 		}
 	}
 	m_MultiplayerLobbyChatInput = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->AddControl(
-	    "TextLobbyChat", "TEXTBOX", m_MultiplayerLobbyPanel, 8, 0, 284, 13));
+	    "TextLobbyChat", "TEXTBOX", m_MultiplayerLobbyPanel, 8, 0, 284, 15));
 	if (m_MultiplayerLobbyChatInput) {
 		if (chatFont) m_MultiplayerLobbyChatInput->SetFont(chatFont);
 		m_MultiplayerLobbyChatInput->SetMaxTextLength(static_cast<int>(NetProtocol::c_MaxShortTextBytes));
@@ -4553,7 +4553,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	const int backReserve = m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
 	const int fixedExtra = statusExtra + portMapHeight + summaryHeight;
 	const int panelCap = g_WindowMan.GetResY() - backReserve; // the Back button's band sits under the panel
-	const int inputBlock = 37;                     // textbox 13 px, the 10 px version line 2 px under it, a bottom margin matching its sides
+	const int inputBlock = 39;                     // textbox 15 px (its font's height), the 10 px version line 2 px under it, a bottom margin matching its sides
 	// The Leave/Advanced row ends at rel 240; the first chat row keeps a 4px gap under it and the
 	// error block must not reach into that band.
 	const int c_LobbyChatTop = 261;
@@ -4609,12 +4609,12 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	if (m_MultiplayerLobbyChatInput) {
 		m_MultiplayerLobbyChatInput->SetPositionRel(chatX, chatTop + chatRows * 10);
 		if (m_MultiplayerLobbyChatInput->GetWidth() != chatW) {
-			m_MultiplayerLobbyChatInput->Resize(chatW, 13);
+			m_MultiplayerLobbyChatInput->Resize(chatW, 15);
 		}
 		m_MultiplayerLobbyChatInput->SetVisible(true);
 	}
 	if (m_MultiplayerLobbyVersionLabel) {
-		m_MultiplayerLobbyVersionLabel->SetPositionRel(chatX, chatTop + chatRows * 10 + 15);
+		m_MultiplayerLobbyVersionLabel->SetPositionRel(chatX, chatTop + chatRows * 10 + 17);
 		if (m_MultiplayerLobbyVersionLabel->GetWidth() != chatW) {
 			m_MultiplayerLobbyVersionLabel->Resize(chatW, 10);
 		}
