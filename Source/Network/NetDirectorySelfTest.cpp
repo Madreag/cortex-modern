@@ -1054,6 +1054,25 @@ namespace RTE {
 				if (s.sent->size() != 2 || json::parse(s.sent->back().body).value("resume_token", std::string()) != "previous-proof") {
 					*error = "S5: one refusal discarded the world's last stored proof"; return false;
 				}
+				ScriptedClient recovered;
+				recovered.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"replacement-proof","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				recovered.client.Advertise(row, true); recovered.client.Update(0); recovered.client.Update(0);
+				recovered.client.RefreshRegistration(row, true, 1);
+				recovered.replies->push_back({403, R"({"error":"forbidden"})", ""});
+				recovered.replies->push_back({403, R"({"error":"forbidden"})", ""});
+				for (uint64_t now: {5001ULL, 10001ULL}) { recovered.client.Update(now); recovered.client.Update(now); }
+				recovered.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"latest-proof","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				recovered.client.Update(20001);
+				if (json::parse(recovered.sent->back().body).value("resume_token", std::string()) != "previous-proof") { *error = "S5: recovery lost its second retained proof"; return false; }
+				recovered.client.Update(20001);
+				recovered.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
+				recovered.client.Update(25001); recovered.client.Update(25001);
+				recovered.client.RefreshRegistration(row, true, 25002);
+				recovered.replies->push_back({403, R"({"error":"forbidden"})", ""});
+				recovered.replies->push_back({403, R"({"error":"forbidden"})", ""});
+				for (uint64_t now: {30002ULL, 35002ULL}) { recovered.client.Update(now); recovered.client.Update(now); }
+				recovered.client.Update(45002);
+				if (json::parse(recovered.sent->back().body).contains("resume_token")) { *error = "S5: an acknowledged replacement retained an older proof"; return false; }
 				std::cout << "[net-directory-selftest] PASS world_proof_survives_one_refusal" << std::endl;
 				return true;
 			}

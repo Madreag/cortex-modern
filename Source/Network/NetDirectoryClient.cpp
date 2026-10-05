@@ -145,7 +145,19 @@ namespace RTE {
 		}
 	}
 
+	void NetDirectoryClient::RememberWorldProof(const std::string& sessionId, const std::string& token) {
+		if (sessionId.empty() || token.empty()) return;
+		const auto proof = std::make_pair(sessionId, token);
+		if (std::find(m_WorldProofs.begin(), m_WorldProofs.end(), proof) != m_WorldProofs.end()) return;
+		m_WorldProofs.insert(m_WorldProofs.begin(), proof);
+		if (m_WorldProofs.size() > c_MaxWorldProofs) m_WorldProofs.pop_back();
+	}
+
 	void NetDirectoryClient::ApplyRefusedResumes(NetDirectoryRegisterRequest& row) const {
+		if (row.persistentWorld && row.worldId == m_ProofWorldId) {
+			if (m_WorldProofAttempt) { row.resumeSessionId = m_WorldProofAttempt->first; row.resumeToken = m_WorldProofAttempt->second; }
+			return;
+		}
 		const auto refused = [&] { return std::find(m_RefusedResumes.begin(), m_RefusedResumes.end(), std::make_pair(row.resumeSessionId, row.resumeToken)) != m_RefusedResumes.end(); };
 		while (!row.resumeSessionId.empty() && refused()) {
 			if (row.persistentWorld && row.worldId == row.resumeSessionId) {
@@ -166,7 +178,10 @@ namespace RTE {
 
 	void NetDirectoryClient::Advertise(const NetDirectoryRegisterRequest& row, bool running, bool listed) {
 		m_Row = row;
-		// A refused stored token gives way to the world's first-boot claim.
+		if (row.persistentWorld) {
+			if (m_ProofWorldId != row.worldId) { m_ProofWorldId = row.worldId; m_WorldProofs.clear(); m_WorldProofAttempt.reset(); m_WorldProofRefusals = 0; }
+			if (m_WorldProofs.empty()) RememberWorldProof(row.resumeSessionId, row.resumeToken);
+		}
 		ApplyRefusedResumes(m_Row);
 		m_Running = running;
 		m_DesiredListed = listed;
@@ -206,6 +221,7 @@ namespace RTE {
 		m_SessionId.clear();
 		m_Token.clear();
 		m_ConfirmedListed.reset();
+		m_ProofWorldId.clear(); m_WorldProofs.clear(); m_WorldProofAttempt.reset(); m_WorldProofRefusals = 0;
 		if (m_State != State::Disabled)
 			SetState(State::Idle);
 	}
@@ -463,6 +479,11 @@ namespace RTE {
 			}
 			m_SessionId = response.sessionId;
 			m_Token = response.token;
+			if (m_Row.persistentWorld) {
+				RememberWorldProof(m_Row.resumeSessionId, m_Row.resumeToken);
+				RememberWorldProof(m_SessionId, m_Token);
+				m_WorldProofAttempt = std::make_pair(m_SessionId, m_Token); m_WorldProofRefusals = 0;
+			}
 			m_ObservedIp = response.observedIp;
 			// The register schema is unchanged, so a fresh row starts visible on either service.
 			m_Capable = response.supportsUnlisted;
@@ -491,6 +512,17 @@ namespace RTE {
 			return;
 		}
 		if (reply.statusCode == 403 && !m_Row.resumeSessionId.empty()) {
+			if (m_Row.persistentWorld) {
+				++m_WorldProofRefusals;
+				if (m_WorldProofRefusals % 2 == 0) {
+					const size_t next = (m_WorldProofRefusals / 2) % (m_WorldProofs.size() + 1);
+					m_WorldProofAttempt = next < m_WorldProofs.size() ? m_WorldProofs[next] : std::make_pair(m_Row.worldId, std::string());
+				}
+				ApplyRefusedResumes(m_Row);
+				NoteError("register refused (403): retrying the world's retained proofs after the backoff");
+				ScheduleRetry(nowMs);
+				return;
+			}
 			// The stored row token is not this row's any more (a directory that restarted holds none): a world claims its own id
 			// again, anything else registers fresh, instead of leaving the row unlisted for the rest of its life.
 			const auto claim = std::make_pair(m_Row.resumeSessionId, m_Row.resumeToken);
@@ -545,6 +577,10 @@ namespace RTE {
 			m_ExpiresInS = response.expiresInS;
 			m_NextHeartbeatMs = nowMs + static_cast<uint64_t>(m_HeartbeatS) * 1000;
 			m_BackoffMs = 0;
+			if (m_Row.persistentWorld) {
+				m_WorldProofs.clear(); RememberWorldProof(m_SessionId, m_Token);
+				m_WorldProofAttempt = std::make_pair(m_SessionId, m_Token); m_WorldProofRefusals = 0;
+			}
 			return;
 		}
 		if (reply.statusCode == 404) {
@@ -572,6 +608,14 @@ namespace RTE {
 			m_NextHeartbeatMs = nowMs + static_cast<uint64_t>(retryS) * 1000;
 			// The deadline also gates a dirty visibility resend and a retract's delete.
 			m_NextAttemptMs = nowMs + static_cast<uint64_t>(retryS) * 1000;
+			return;
+		}
+		if (reply.statusCode == 403 && m_Row.persistentWorld && m_DesiredListed) {
+			m_Row.resumeSessionId = m_SessionId; m_Row.resumeToken = m_Token;
+			m_WorldProofAttempt = std::make_pair(m_SessionId, m_Token);
+			SetState(State::Registering);
+			NoteError("heartbeat refused (403): recovering the world's retained proof after the backoff");
+			ScheduleRetry(nowMs);
 			return;
 		}
 		if (reply.statusCode >= 500) {

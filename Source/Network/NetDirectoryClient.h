@@ -221,8 +221,13 @@ namespace RTE {
 		uint64_t m_BackoffMs = 0;
 		std::vector<std::pair<std::string, std::string>> m_RefusedResumes; //!< Resume claims (session, token) the directory refused.
 		static constexpr size_t c_MaxRefusedResumes = 8;
-		/// Steps a row's resume claim past every claim the directory refused: a world drops a token the directory no longer holds and
-		/// claims its own id as on its first boot; any other refused claim registers a new id.
+		static constexpr size_t c_MaxWorldProofs = 2;
+		std::string m_ProofWorldId;
+		std::vector<std::pair<std::string, std::string>> m_WorldProofs;
+		std::optional<std::pair<std::string, std::string>> m_WorldProofAttempt;
+		uint32_t m_WorldProofRefusals = 0;
+		void RememberWorldProof(const std::string& sessionId, const std::string& token);
+		/// A world's proofs survive refusals until its heartbeat acknowledges the replacement.
 		void ApplyRefusedResumes(NetDirectoryRegisterRequest& row) const;
 		uint64_t m_BrowseNextMs = 0;
 		std::vector<NetDirectorySessionRow> m_Rows;
