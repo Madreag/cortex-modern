@@ -7824,6 +7824,7 @@ namespace RTE {
 			}
 			auto& leads = m_ArrivalLeads[frame.senderPeerId];
 			leads.push_back({nowMs, frame.targetFrame, frame.targetFrame > simNext ? frame.targetFrame - simNext : 0});
+			++peerStats.arrivalLeadFrames[std::min<uint64_t>(leads.back().lead, peerStats.arrivalLeadFrames.size() - 1)];
 			while (!leads.empty() && nowMs - leads.front().ms > 2 * NetInputDelayEstimator::c_WindowMs) leads.pop_front();
 		}
 		static const auto observeTarget = TestFrameFromEnvironment("CC_TEST_LOCKSTEP_OBSERVE_TARGET");
@@ -9854,6 +9855,11 @@ namespace RTE {
 			    << ",\"delay_frames\":" << InputDelayAt(it->first, m_LastDeliveredFrame.value_or(m_Config.startFrame))
 			    << ",\"waits\":" << peer.waits << ",\"longest_wait_ms\":" << peer.longestWaitMs
 			    << ",\"holds\":" << peer.holds << ",\"substitutions\":" << peer.substitutions << ",\"rejoins\":" << peer.rejoins
+			    << ",\"arrival_lead_frames\":[" << [&peer] {
+			           std::string counts;
+			           for (const uint32_t count : peer.arrivalLeadFrames) counts += (counts.empty() ? "" : ",") + std::to_string(count);
+			           return counts;
+			       }() << "]"
 			    << ",\"last_heard_ms\":" << peer.lastHeardMs << "}";
 		}
 		out << "},";

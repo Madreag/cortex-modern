@@ -555,6 +555,7 @@ namespace RTE {
 		uint32_t futureFrameDrops = 0;
 		uint32_t staleRoundPackets = 0;
 		uint32_t preStartBuffered = 0;
+		std::array<uint32_t, 33> arrivalLeadFrames{}; //!< Host: this sender's new inputs by the ticks they arrived ahead of need (32 = 32 or more).
 		uint32_t relayPacketsSent = 0; //!< Host: packets forwarded TO this peer.
 		uint32_t relaySendFailures = 0; //!< Host: forwards the transport refused for this peer.
 		uint32_t relayResends = 0; //!< Host: refused forwards a later retry did deliver.
