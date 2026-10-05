@@ -658,6 +658,7 @@ static std::string ResyncSaveName() {
 			m_IceJoinSessionId = request.sessionId;
 			m_IceReport.clear();
 			m_IceRoute.clear();
+			m_DirectoryJoinIsWorld = false;
 			SetRelayOfferLocked({});
 			m_RelayError.clear();
 			m_RelayReady = false;
@@ -6652,7 +6653,8 @@ static std::string ResyncSaveName() {
 		const auto rejected = [&](NetRejectReason reason) {
 			return m_Session && m_Session->HasReject() ? m_Session->GetRejectReason() == reason : contains(NetProtocol::RejectReasonName(reason));
 		};
-		m_ErrorText = contains(c_HistoryPassedDetail) ? "The host could not bring you into the world: you were too far behind. Try again."
+		m_ErrorText = m_Session && m_Session->GetMismatchKey() == "host_disconnect" && std::string(NetProtocol::RejectReasonName(m_Session->GetRejectReason())) == "Unknown" && !m_Session->GetRejectSummary().empty()
+		    ? m_Session->GetRejectSummary() : contains(c_HistoryPassedDetail) ? "The host could not bring you into the world: you were too far behind. Try again."
 		    : contains("deadline") ? "The host could not bring you into the world in time. Try again."
 		    : rejected(NetRejectReason::ParticipantRemoved) || contains("The host removed") ? "The host removed you from the world."
 		    : rejected(NetRejectReason::ParticipantBanned) || contains("The host banned") ? "The host banned you from the world."
@@ -9975,6 +9977,10 @@ static std::string ResyncSaveName() {
 		if (target.persistentWorld && worldIdentityBuilt) {
 			sessionConfig.localIdentity = worldManifest;
 		}
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_DirectoryJoinIsWorld = target.persistentWorld;
+		}
 
 		// Automatic prefers ICE because a directory address can be private.
 		if (!NetIcePrefersP2P(target, m_IceEnabled)) {
@@ -10534,6 +10540,11 @@ static std::string ResyncSaveName() {
 					m_ErrorText.clear();
 					System::PrintDiagnosticLine("[net-match] end record received final=" + std::to_string(m_CompletedRoundFinalFrame) +
 					                            " winner_team=" + std::to_string(RoundEndedWinnerTeam(*record)) + " local_team=" + std::to_string(m_LocalTeam));
+					m_WorkerDone = true;
+					return;
+				}
+				if (!request.host && (m_DirectoryJoinIsWorld || request.persistentWorld) && m_Session && m_Session->HasReject() && m_Session->GetMismatchKey() == "host_disconnect") {
+					RefuseWorldCatchUpLocked(m_Session->GetRejectSummary());
 					m_WorkerDone = true;
 					return;
 				}

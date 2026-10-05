@@ -1424,11 +1424,8 @@ namespace RTE {
 				m_ReconnectClient->NotifyParticipantRemoved(static_cast<NetRejectReason>(disconnect->disconnectReason));
 			}
 			if (m_State != NetSessionState::Rejected && m_State != NetSessionState::Failed) {
-				if (!m_HasReject && !disconnect->message.empty()) {
-					// A removal is why this link closed; the kicked player is owed that word rather than a
-					// generic fault. Every other disconnect reason stays unattributed as before.
-					RecordReject(removal ? static_cast<NetRejectReason>(disconnect->disconnectReason) : NetRejectReason::InternalError,
-					             "", "", "", disconnect->message);
+				if (!m_HasReject) {
+					RecordReject(static_cast<NetRejectReason>(disconnect->disconnectReason), "host_disconnect", "", "", disconnect->message);
 				}
 				m_State = NetSessionState::Closed;
 			}
@@ -1650,6 +1647,7 @@ namespace RTE {
 
 	std::string NetSession::BuildPlayerRefusalText() const {
 		if (!m_HasReject) return {};
+		if (m_MismatchKey == "host_disconnect" && std::string(NetProtocol::RejectReasonName(m_RejectReason)) == "Unknown" && !m_RejectSummary.empty()) return m_RejectSummary;
 		if (m_Role == NetSessionRole::Host) {
 			// The host refused a joiner: its notice names what differed, the joiner's value against this host's own.
 			switch (m_RejectReason) {

@@ -1704,6 +1704,7 @@ namespace RTE {
 #endif
 		bool m_IceEnabled = false;          //!< This run offers (host) or takes (client) a session-id join.
 		std::string m_IceBoundSessionId;    //!< The session id the process's GNS identity is pinned to.
+		bool m_DirectoryJoinIsWorld = false;
 		std::string m_IceIdentity;
 		std::string m_IceJoinSessionId;     //!< Client: the session id -net-join-session named.
 		std::string m_IceReport;            //!< The dispatcher's last report, taken when a worker or teardown takes the dispatcher.

@@ -7312,6 +7312,42 @@ namespace RTE {
 		const bool told = service.m_State == NetMatchServiceState::Failed && service.m_ErrorText == expected;
 		ScenarioRunner::ClearControllerReplayError();
 		if (!told) { *error = name + ": the player lost the host's disconnect cause"; return false; }
+		if (!watcher) {
+			class CauseWire final : public INetTransport {
+			public:
+				bool StartHost(uint16_t, std::string*) override { return true; }
+				bool Connect(const std::string&, uint16_t, std::string*) override { return true; }
+				bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string*, bool*) override { return true; }
+				void Disconnect(NetPeerId, const std::string&) override {}
+				void Stop() override {}
+				std::vector<NetTransportEvent> PollEvents() override { return {}; }
+			};
+			for (uint16_t code = 1; code <= static_cast<uint16_t>(NetRejectReason::SeatReleased); ++code) {
+				NetSession known;
+				CauseWire wire;
+				NetSessionConfig config = MakeWorldSessionConfig(port, 22, "Joiner");
+				if (!known.StartClient(wire, "loopback", config, error)) return false;
+				known.InjectEvent({NetTransportEventType::PeerConnected, 1, NetTransportLane::ControlReliable, {}, ""}, 0);
+				NetMessage message; message.sequence = 1; message.payload = NetDisconnect{code, "the host's stated cause"};
+				std::vector<uint8_t> bytes;
+				if (!NetProtocol::Encode(message, bytes)) { *error = "C2 fixture could not encode a host disconnect"; return false; }
+				known.InjectEvent({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, ""}, 0);
+				if (!known.HasReject() || static_cast<uint16_t>(known.GetRejectReason()) != code || known.GetRejectSummary() != "the host's stated cause") {
+					*error = "C2: a host disconnect lost its reason or text at code " + std::to_string(code); return false;
+				}
+			}
+			CauseWire unknownWire;
+			NetSessionConfig config = MakeWorldSessionConfig(port, 22, "Joiner");
+			if (!service.m_Session->StartClient(unknownWire, "loopback", config, error)) return false;
+			service.m_Session->InjectEvent({NetTransportEventType::PeerConnected, 1, NetTransportLane::ControlReliable, {}, ""}, 0);
+			NetMessage message; message.sequence = 1; message.payload = NetDisconnect{65530, "This host needs you to try another seat."};
+			std::vector<uint8_t> bytes;
+			if (!NetProtocol::Encode(message, bytes)) return false;
+			service.m_Session->InjectEvent({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, ""}, 0);
+			service.RefuseWorldCatchUpLocked(service.m_Session->GetRejectSummary());
+			ScenarioRunner::ClearControllerReplayError();
+			if (service.m_ErrorText != "This host needs you to try another seat.") { *error = "C2: an unknown host reason lost the host's own words"; return false; }
+		}
 		std::cout << "[net-world-join-selftest] PASS " << (watcher ? "watcher_disconnect_keeps_deadline" : "catch_up_disconnect_keeps_timeout") << std::endl;
 		return true;
 	}
