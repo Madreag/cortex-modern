@@ -556,10 +556,12 @@ std::vector<MovableMan::LockstepActorOwner> MovableMan::BuildLockstepOwnershipCe
 static std::vector<ControllerFrame> SnapshotLockstepControllerFrames(const std::deque<Actor*>& actors, bool localOwned) {
 	std::vector<ControllerFrame> frames;
 	frames.reserve(actors.size());
+	const uint64_t target = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + (localOwned ? ScenarioRunner::GetLockstepInputDelayFrames() : 0);
 	for (Actor* actor: actors) {
 		const int64_t actorID = static_cast<int64_t>(actor->GetUniqueID());
 		const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(actorID, actor->GetTeam(), !actor->IsPlayerControlled());
-		if (ScenarioRunner::IsLockstepSeatReclaimGap(owner, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()))) continue;
+		// Local samples land after the producing tick's reclaim gap.
+		if (ScenarioRunner::IsLockstepSeatReclaimGap(owner, target)) continue;
 		if (IsLockstepLocalActor(actor) == localOwned) {
 			frames.push_back(ControllerFrameCodec::Snapshot(actorID, *actor->GetController(), actor));
 		}
@@ -1300,7 +1302,11 @@ void MovableMan::ReconcileLockstepControlBindings() {
 		}
 		const int64_t uid = static_cast<int64_t>(controlled->GetUniqueID());
 		const bool localHuman = activity->IsLocalHumanSeat(player);
-		if (ScenarioRunner::GetLockstepActorOwner(uid, controlled->GetTeam(), !localHuman && !controlled->IsPlayerControlled()) != localPeerId) {
+		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		// The activation tick produces before its committed reclaim changes the actor's owner.
+		const bool returning = ScenarioRunner::IsLockstepSeatReclaimGap(localPeerId, tick) &&
+		    ScenarioRunner::GetLockstepReclaimSeat(uid, controlled->GetTeam(), !controlled->IsPlayerControlled(), tick) == localPeerId;
+		if (!returning && ScenarioRunner::GetLockstepActorOwner(uid, controlled->GetTeam(), !localHuman && !controlled->IsPlayerControlled()) != localPeerId) {
 			activity->ReleaseLockstepControlOfActor(player);
 		} else if (localHuman && !ScenarioRunner::WorldCatchUpActive() &&
 		           !ScenarioRunner::IsLockstepSeatUnderAI(localPeerId, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()))) {
