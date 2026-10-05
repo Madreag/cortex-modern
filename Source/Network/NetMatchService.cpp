@@ -2785,16 +2785,7 @@ static std::string ResyncSaveName() {
 		{
 			// The worker cannot touch the directory client, so what it needs is published here.
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			m_DirectorySessionId = m_Directory.GetSessionId();
-			m_DirectoryToken = m_Directory.GetToken();
-			m_DirectoryRegistered = m_Directory.GetState() == NetDirectoryClient::State::Registered;
-			// A directory that lost the row and took it back issued it a new token: the host's signal channel answers on that one.
-			if (m_IsHost && m_DirectoryRegistered && !m_DirectoryToken.empty() && !m_IceBoundSessionId.empty() && m_DirectorySessionId == m_IceBoundSessionId) {
-				if (const auto signal = m_HostSignalCredential.load(); signal && signal->token != m_DirectoryToken) {
-					m_HostSignalCredential.store(std::make_shared<const HostSignalCredential>(HostSignalCredential{m_DirectorySessionId, m_DirectoryToken}));
-					reboundSignal = m_DirectorySessionId;
-				}
-			}
+			reboundSignal = RefreshDirectorySignalCredentialLocked();
 		}
 		if (!reboundSignal.empty()) System::PrintDiagnosticLine("[net-ice] host signal channel follows the re-registered row session=" + reboundSignal);
 		// The world's image follows the writer thread, never a file read on this one.
@@ -2813,6 +2804,19 @@ static std::string ResyncSaveName() {
 		PumpHostReturnWatch(nowMs);
 		// Last: the expiry destroys the service, so nothing in this pump may run after it.
 		UpdateCompletedLobbyExpiry(nowMs);
+	}
+
+	std::string NetMatchService::RefreshDirectorySignalCredentialLocked() {
+		m_DirectorySessionId = m_Directory.GetSessionId();
+		m_DirectoryToken = m_Directory.GetToken();
+		m_DirectoryRegistered = m_Directory.GetState() == NetDirectoryClient::State::Registered;
+		if (m_IsHost && m_DirectoryRegistered && !m_DirectoryToken.empty() && !m_IceBoundSessionId.empty() && m_DirectorySessionId == m_IceBoundSessionId) {
+			if (const auto signal = m_HostSignalCredential.load(); signal && signal->token != m_DirectoryToken) {
+				m_HostSignalCredential.store(std::make_shared<const HostSignalCredential>(HostSignalCredential{m_DirectorySessionId, m_DirectoryToken}));
+				return m_DirectorySessionId;
+			}
+		}
+		return {};
 	}
 
 	bool NetMatchService::RematchLobbySeatedLocked() const {
@@ -6618,6 +6622,13 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	void NetMatchService::RefuseWorldCatchUpLocked(const std::string& rejectText) {
+		ScenarioRunner::SetControllerReplayError(!m_HeldUnreachableText.empty() ? m_HeldUnreachableText : m_WorldCatchUp.privateMatch
+		    ? "PeerHeld:Held - AI in control - reconnecting the private catch-up link"
+		    : rejectText.find(c_HistoryPassedDetail) != std::string::npos ? "PeerLeft:The world moved on past your catch-up - join again"
+		    : "PeerLeft:The host connection was lost while joining the world");
+	}
+
 	void NetMatchService::DriveWorldJoinClient(uint64_t nowMs) {
 		// This runs under m_Mutex and hands lobby messages to the session below, so the service calls
 		// those messages make have to take the locked path.
@@ -6712,10 +6723,7 @@ static std::string ResyncSaveName() {
 			if (m_InPlaceCatchUp && hostGone) m_StatusText = "Host lost - arranging handover";
 			if (m_InPlaceCatchUp && hostGone && HeldSeatHostsLocked() && HostHeldMatchLocked()) return;
 			if (m_InPlaceCatchUp && hostGone && BeginInPlaceMoveLocked(nowMs)) return;
-			ScenarioRunner::SetControllerReplayError(!m_HeldUnreachableText.empty() ? m_HeldUnreachableText : m_WorldCatchUp.privateMatch
-			    ? "PeerHeld:Held - AI in control - reconnecting the private catch-up link"
-			    : rejectText.find(c_HistoryPassedDetail) != std::string::npos ? "PeerLeft:The world moved on past your catch-up - join again"
-			    : "PeerLeft:The host connection was lost while joining the world");
+			RefuseWorldCatchUpLocked(rejectText);
 			return;
 		}
 		uint64_t refusal = 0;
@@ -9773,6 +9781,50 @@ static std::string ResyncSaveName() {
 		m_RelayPublishPending = !sent;
 	}
 
+	void NetMatchService::InstallIcePump(NetMuxTransport& mux, bool host) {
+#ifdef CCCP_WITH_GNS
+		GnsDirectorySignalDispatcher* dispatcher = m_Dispatcher.get();
+		// The mux calls a copy of its pump every poll, so what the pump remembers between polls lives here.
+		struct PumpMemory {
+			NetRelayConfig previous;
+			std::shared_ptr<const HostSignalCredential> appliedSignal;
+		};
+		auto memory = std::make_shared<PumpMemory>();
+		memory->appliedSignal = m_HostSignalCredential.load();
+		mux.SetPump([this, dispatcher, p2p = mux.P2PGns(), memory,
+		              initial = host ? mux.HostP2PConfig() : mux.GetJoinSpec().p2p,
+		              personal = !g_SettingsMan.GetNetworkPlayerTurnServers().empty() || g_SettingsMan.HasNetworkTurnServersOverride(),
+		              host]() {
+			if (host) {
+				if (auto signal = m_HostSignalCredential.load(); signal && signal != memory->appliedSignal) {
+					if (memory->appliedSignal && (signal->sessionId != memory->appliedSignal->sessionId || signal->token != memory->appliedSignal->token))
+						dispatcher->RebindHost(signal->sessionId, signal->token);
+					memory->appliedSignal = std::move(signal);
+				}
+			}
+			dispatcher->Update(SteadyNowMs());
+			const auto snapshot = m_RelaySnapshot.load();
+			NetRelayConfig offer = snapshot ? *snapshot : NetRelayConfig{};
+			if (offer != memory->previous) {
+				GnsP2PConfig update = initial;
+				if (!personal && initial.connectionMode != 1) {
+					update.turnServerList.clear(); update.turnUserList.clear(); update.turnPassList.clear();
+					update.relayOffer = "none";
+					if (offer.Usable(UnixNowMs(nullptr) / 1000)) {
+						offer.UdpLists(update.turnServerList, update.turnUserList, update.turnPassList);
+						update.relayOffer = RelayOfferName(offer);
+					}
+					update.iceEnable = initial.connectionMode == 2 ? 1 : (initial.stunServerList.empty() ? 2 : 6) | (update.turnServerList.empty() ? 0 : 1);
+				}
+				p2p->UpdateListenerIceServers(update);
+				memory->previous = std::move(offer);
+			}
+		});
+#else
+		(void)mux; (void)host;
+#endif
+	}
+
 	bool NetMatchService::SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, NetIceJoinTarget& target, std::string* error) {
 #ifndef CCCP_WITH_GNS
 		(void)request; (void)manifest; (void)mux; (void)sessionConfig; (void)joinAddress; (void)target;
@@ -10321,45 +10373,7 @@ static std::string ResyncSaveName() {
 				std::lock_guard<std::mutex> iceLock(m_MigrationIceMutex);
 				m_MigrationIce.route = true;
 			}
-			if (started && m_Dispatcher) {
-				GnsDirectorySignalDispatcher* dispatcher = m_Dispatcher.get();
-				// The mux calls a copy of its pump every poll, so what the pump remembers between polls lives here.
-				struct PumpMemory {
-					NetRelayConfig previous;
-					std::shared_ptr<const HostSignalCredential> appliedSignal;
-				};
-				auto memory = std::make_shared<PumpMemory>();
-				memory->appliedSignal = m_HostSignalCredential.load();
-				mux->SetPump([this, dispatcher, p2p = mux->P2PGns(), memory,
-				              initial = request.host ? mux->HostP2PConfig() : mux->GetJoinSpec().p2p,
-				              personal = !g_SettingsMan.GetNetworkPlayerTurnServers().empty() || g_SettingsMan.HasNetworkTurnServersOverride(),
-				              host = request.host]() {
-					if (host) {
-						if (auto signal = m_HostSignalCredential.load(); signal && signal != memory->appliedSignal) {
-							if (memory->appliedSignal && (signal->sessionId != memory->appliedSignal->sessionId || signal->token != memory->appliedSignal->token))
-								dispatcher->RebindHost(signal->sessionId, signal->token);
-							memory->appliedSignal = std::move(signal);
-						}
-					}
-					dispatcher->Update(SteadyNowMs());
-					const auto snapshot = m_RelaySnapshot.load();
-					NetRelayConfig offer = snapshot ? *snapshot : NetRelayConfig{};
-					if (offer != memory->previous) {
-						GnsP2PConfig update = initial;
-						if (!personal && initial.connectionMode != 1) {
-							update.turnServerList.clear(); update.turnUserList.clear(); update.turnPassList.clear();
-							update.relayOffer = "none";
-							if (offer.Usable(UnixNowMs(nullptr) / 1000)) {
-								offer.UdpLists(update.turnServerList, update.turnUserList, update.turnPassList);
-								update.relayOffer = RelayOfferName(offer);
-							}
-							update.iceEnable = initial.connectionMode == 2 ? 1 : (initial.stunServerList.empty() ? 2 : 6) | (update.turnServerList.empty() ? 0 : 1);
-						}
-						p2p->UpdateListenerIceServers(update);
-						memory->previous = std::move(offer);
-					}
-				});
-			}
+			if (started && m_Dispatcher) InstallIcePump(*mux, request.host);
 #endif
 		}
 		if (request.rejoin) {

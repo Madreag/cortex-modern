@@ -1356,6 +1356,13 @@ namespace RTE {
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestGnsStopCancelContracts(std::string* error);
 		friend bool TestEndedWorldLateAdmission(std::string* error);
+		friend bool TestRecoveredDirectoryBinding(std::string* error);
+		friend bool TestSignalPumpInitialCredential(std::string* error);
+		friend bool TestStaleWorldImageRecaptures(std::string* error);
+		friend bool TestWorldCatchUpRefusal(std::string* error);
+		void InstallIcePump(NetMuxTransport& mux, bool host);
+		void RefuseWorldCatchUpLocked(const std::string& rejectText);
+		std::string RefreshDirectorySignalCredentialLocked();
 		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
 		friend bool TestIceDefaultsAndOverrides(std::string* error);
 		friend bool TestRelayOfferAndPolicy(std::string* error);

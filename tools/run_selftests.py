@@ -39,6 +39,7 @@ SELFTESTS = [
     "net-reconnect",
     "net-reconnect-session",
     "net-world-join",
+    "net-directory",
     "net-rejoin-matrix",
     "net-roster",
     "camera-null-scene",

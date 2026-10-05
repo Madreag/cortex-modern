@@ -2,6 +2,8 @@
 #include "NetDirectoryCodec.h"
 #include "NetDirectorySignalChannel.h"
 #include "NetHttpClient.h"
+#include "NetMatchService.h"
+#include "NetMuxTransport.h"
 #ifdef CCCP_WITH_GNS
 #include "GnsSignaling.h"
 #include "GnsTransport.h"
@@ -42,15 +44,71 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <deque>
 #include <iostream>
 #include <iterator>
 #include <memory>
 #include <string>
 #include <system_error>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace RTE {
+
+	bool TestRecoveredDirectoryBinding(std::string* error) {
+		const std::string oldId = "7b8c9d2e-1111-4222-8333-444455556666";
+		const std::string newId = "8c9d2e1f-2222-4333-8444-555566667777";
+		class Answer final : public NetDirectoryClient::Transport {
+		public:
+			void Start(const NetDirectoryClient::Request&) override {}
+			bool Finished() override { return true; }
+			NetDirectoryClient::Reply Take() override { return {200, R"({"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"new-token","heartbeat_s":5,"expires_in_s":15,"observed_ip":"127.0.0.1"})", ""}; }
+			void Abort() override {}
+		};
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_IceBoundSessionId = oldId;
+		service.m_HostSignalCredential.store(std::make_shared<const NetMatchService::HostSignalCredential>(NetMatchService::HostSignalCredential{oldId, "old-token"}));
+		service.m_Directory.SetTransportFactory([] { return std::make_unique<Answer>(); });
+		service.m_Directory.Configure("https://dir.test", "0123456789abcdef", "");
+		service.m_Directory.Advertise({}, true);
+		service.m_Directory.Update(0); service.m_Directory.Update(0);
+		service.RefreshDirectorySignalCredentialLocked();
+		const auto bound = service.m_HostSignalCredential.load();
+		if (!bound || bound->sessionId != newId || bound->token != "new-token" || service.m_IceBoundSessionId != newId) {
+			*error = "F2: recovered directory id left the signal channel or ICE binding on the previous id";
+			return false;
+		}
+		std::cout << "[net-directory-selftest] PASS recovered_directory_binding" << std::endl;
+		return true;
+	}
+
+	bool TestSignalPumpInitialCredential(std::string* error) {
+#ifdef CCCP_WITH_GNS
+		if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
+		NetMuxTransport mux;
+		NetMatchService service;
+		service.m_Dispatcher = std::make_unique<GnsDirectorySignalDispatcher>();
+		GnsDirectorySignalDispatcher::Config config;
+		config.role = GnsDirectorySignalDispatcher::Role::Host;
+		config.baseUrl = "https://dir.test"; config.installKey = "0123456789abcdef";
+		config.sessionId = "7b8c9d2e-1111-4222-8333-444455556666"; config.sessionToken = "first-token";
+		if (!service.m_Dispatcher->Start(*mux.P2PGns(), config)) { *error = "F5 fixture could not bind its dispatcher"; return false; }
+		service.m_HostSignalCredential.store(std::make_shared<const NetMatchService::HostSignalCredential>(NetMatchService::HostSignalCredential{config.sessionId, "recovered-token"}));
+		service.InstallIcePump(mux, true);
+		(void)mux.PollEvents();
+		const auto& headers = service.m_Dispatcher->Channel().RequestHeaders();
+		const auto token = std::find_if(headers.begin(), headers.end(), [](const auto& value) { return value.first == "X-Session-Token"; });
+		if (token == headers.end() || token->second != "recovered-token") {
+			*error = "F5: the first pump treated the recovered credential as already bound while the dispatcher kept the first token";
+			return false;
+		}
+		mux.SetPump({});
+#endif
+		std::cout << "[net-directory-selftest] PASS signal_pump_initial_credential" << std::endl;
+		return true;
+	}
 
 	namespace NetDirectorySelfTest {
 
@@ -954,6 +1012,32 @@ namespace RTE {
 				joiner.client.Update(0);
 				if (!joiner.client.IceServers().Empty() || joiner.client.IceError().empty()) { *error = "expired directory credential was offered"; return false; }
 				if (s.client.BuildReportJson().find("temporary-password") != std::string::npos) { *error = "directory diagnostics exposed a credential"; return false; }
+				return true;
+			}
+
+			bool TestListedRefusalsKeepRetrying(std::string* error) {
+				for (const bool heartbeat : {false, true}) for (const int status : {400, 401, 403, 404, 405, 408, 410, 422}) {
+					ScriptedClient s;
+					const NetDirectoryClient::Reply success{200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""};
+					if (heartbeat) s.replies->push_back(success);
+					s.replies->push_back({status, R"({"error":"refused"})", ""});
+					s.replies->push_back(heartbeat && status != 404 ? NetDirectoryClient::Reply{200, R"({"expires_in_s":15,"heartbeat_s":5})", ""} : success);
+					s.client.Advertise(SampleRegisterRequest(), true);
+					s.client.Update(0); s.client.Update(0);
+					const uint64_t refusedAt = heartbeat ? 5000 : 0;
+					if (heartbeat) { s.client.Update(refusedAt); s.client.Update(refusedAt); }
+					const size_t sentAtRefusal = s.sent->size();
+					for (uint64_t now = refusedAt + 1; now < refusedAt + 5000; ++now) {
+						s.client.Advertise(SampleRegisterRequest(), true); s.client.Update(now);
+						if (s.sent->size() != sentAtRefusal) { *error = "F1: a refusal retry ignored its backoff"; return false; }
+					}
+					s.client.Update(refusedAt + 5000); s.client.Update(refusedAt + 5000);
+					if (s.client.GetState() != NetDirectoryClient::State::Registered || s.sent->size() <= (heartbeat ? 2U : 1U)) {
+						*error = "F1: listed " + std::string(heartbeat ? "heartbeat" : "register") + " HTTP " + std::to_string(status) + " stopped requesting a healthy directory";
+						return false;
+					}
+				}
+				std::cout << "[net-directory-selftest] PASS listed_refusals_keep_retrying" << std::endl;
 				return true;
 			}
 
@@ -2391,6 +2475,36 @@ namespace RTE {
 				return true;
 			}
 
+			bool TestSignalRebindKeepsQueuedPosts(std::string* error) {
+#ifdef CCCP_WITH_GNS
+				GnsTransport transport;
+				GnsDirectorySignalDispatcher dispatcher;
+				auto replies = std::make_shared<std::deque<NetDirectoryClient::Reply>>();
+				auto sent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
+				auto& channel = const_cast<NetDirectorySignalChannel&>(dispatcher.Channel());
+				channel.SetTransportFactory([replies, sent] { return std::make_unique<ScriptedTransport>(replies, sent); });
+				GnsDirectorySignalDispatcher::Config config;
+				config.role = GnsDirectorySignalDispatcher::Role::Host; config.baseUrl = "https://dir.test";
+				config.installKey = "0123456789abcdef"; config.sessionId = "7b8c9d2e-1111-4222-8333-444455556666"; config.sessionToken = "first-token";
+				if (!dispatcher.Start(transport, config)) { *error = "F7 fixture could not open its dispatcher"; return false; }
+				channel.Post("client:joiner", "response");
+				channel.Post("client:joiner", "refusal");
+				dispatcher.Update(0);
+				dispatcher.RebindHost("8c9d2e1f-2222-4333-8444-555566667777", "renewed-token");
+				if (channel.PendingPosts() != 2) { *error = "F7: rebinding discarded the outstanding response and queued refusal for a joiner"; return false; }
+				replies->push_back({200, R"({"ok":true})", ""}); replies->push_back({200, R"({"ok":true})", ""});
+				dispatcher.Update(1); dispatcher.Update(2); dispatcher.Update(3);
+				if (sent->size() != 3 || channel.PendingPosts() != 0) { *error = "F7: the moved channel did not send both queued posts"; return false; }
+				for (size_t i = 1; i < 3; ++i) {
+					const json body = json::parse(sent->at(i).body);
+					if (sent->at(i).path != "/v1/sessions/8c9d2e1f-2222-4333-8444-555566667777/signal" || body["token_or_join_nonce"] != "renewed-token" ||
+					    body["payload_b64"] != B64(i == 1 ? "response" : "refusal")) { *error = "F7: a queued post kept its old path, token or changed payload"; return false; }
+				}
+#endif
+				std::cout << "[net-directory-selftest] PASS signal_rebind_keeps_queued_posts" << std::endl;
+				return true;
+			}
+
 			bool TestSignalCadenceLeavesAdmissionBudget(std::string* error) {
 				ScriptedChannel s(true);
 				for (int i = 0; i < 200; ++i) s.replies->push_back({200, SignalListBody({}), ""});
@@ -2937,6 +3051,13 @@ namespace RTE {
 			};
 
 			std::string error;
+			const char* selected = std::getenv("CCCP_TEST_DIRECTORY_CASE");
+			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}}) {
+				if (!selected || std::string(selected) == test.first) {
+					if (!test.second(&error)) return fail(error);
+					if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
+				}
+			}
 			if (!TestRoundTrips(&error)) return fail(error);
 			if (!TestMissingFieldsRefused(&error)) return fail(error);
 			if (!TestWrongTypesRefused(&error)) return fail(error);

@@ -45,6 +45,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -53,6 +54,9 @@
 #include <tuple>
 #include <variant>
 #include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace RTE {
 
@@ -7218,6 +7222,80 @@ namespace RTE {
 	// A frozen capture's refusal arrives a tick or more after the simulation queued it, so the world
 	// bookkeeping it stood for follows that verdict: a refused capture leaves the request pending and
 	// opens no segment, and only an archive that landed clears it.
+	bool TestStaleWorldImageRecaptures(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_Runner = std::make_unique<NetMatchRunner>();
+		NetMatchConfig config = MakeWorldConfig(); config.worldMaxSpectators = 1;
+		if (!service.m_WorldJoin.Configure(config, MakeIdentity(), error) ||
+		    !service.m_WorldJoin.BeginJoin(42, 42, "player", 1000, error) || !service.m_WorldJoin.BeginJoin(43, 43, "watcher", 1000, error)) return false;
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId; image.boot = 1; image.round = 1; image.tick = 100; image.bytes = 8; image.digest = "abc";
+		service.m_WorldJoin.PublishImage(image);
+		service.m_WorldJoin.Tail().Configure(1, 1024 * 1024);
+		if (!service.m_WorldJoin.Tail().Append(MakeCommittedFrame(101), error) || !service.m_WorldJoin.Tail().Append(MakeCommittedFrame(102), error)) return false;
+		service.ApplyAutosaveVerdict(100, true, true);
+		bool unstartable = false;
+		std::string waiting;
+		(void)service.StartJoinerImageTransfer(*service.m_WorldJoin.FindSession(43), &waiting, &unstartable);
+		std::string misses;
+		if (!service.m_WorldCapturePending || unstartable) misses = "stale image refusal left no replacement capture requested";
+		service.m_WorldJoin.ExpireStaleJoins(1000 + c_NetWorldJoinDeadlineMs + 1);
+		if (service.m_WorldJoin.FindSession(43)) misses += "; watcher waited past the player's join deadline";
+		if (!misses.empty()) { *error = "F4: " + misses; return false; }
+		std::cout << "[net-world-join-selftest] PASS stale_world_image_recaptures_and_watcher_wait_ends" << std::endl;
+		return true;
+	}
+
+	bool TestWorldCatchUpRefusal(std::string* error) {
+		if (!MetricsCollector::IsConstructed()) MetricsCollector::Construct();
+		NetMatchService service;
+		service.m_State = NetMatchServiceState::Running;
+		service.RefuseWorldCatchUpLocked("HostNotAccepting: the world's history moved past this catch-up");
+		const std::string told = ScenarioRunner::GetControllerReplayError();
+		ScenarioRunner::ClearControllerReplayError();
+		if (service.m_State != NetMatchServiceState::Failed || told != "WorldJoinRefused:The host could not bring you into the world: you were too far behind. Try again.") {
+			*error = "F6: catch-up refusal left a completed-match path or lost the host's reason: " + told;
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS world_catch_up_refusal_is_a_failure_with_its_reason" << std::endl;
+		return true;
+	}
+
+	int TestJournalDeleteIsRetriedAndCounted() {
+		ResumeScratchDirectory scratch;
+		const auto path = scratch.path / "delete.inputs";
+		NetWorldFrameLog tail;
+		tail.EnableJournal(path.string());
+		std::string error;
+		for (uint64_t tick = 1; tick <= NetWorldFrameLog::c_JournalSegmentFrames + 1; ++tick)
+			if (!tail.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
+		const auto settle = [&] { return SettledJournalStats(tail); };
+		(void)settle();
+#ifdef _WIN32
+		HANDLE held = CreateFileW(path.wstring().c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+		if (held == INVALID_HANDLE_VALUE) return Fail("F8 fixture could not hold its old segment open");
+		const auto unlock = [&] { CloseHandle(held); };
+#else
+		const auto permissions = std::filesystem::status(scratch.path).permissions();
+		std::filesystem::permissions(scratch.path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec);
+		const auto unlock = [&] { std::filesystem::permissions(scratch.path, permissions); };
+#endif
+		tail.PruneJournalBefore(NetWorldFrameLog::c_JournalSegmentFrames + 1);
+		const auto refused = settle();
+		const bool remains = std::filesystem::is_regular_file(path);
+		unlock();
+		if (!remains) return Fail("F8 fixture failed to prevent an actual segment deletion");
+		if (refused.files != 2) return Fail("F8: failed segment deletion left a file on disk that the journal forgot (reported files=" + std::to_string(refused.files) + ")");
+		// A second prune has the same floor; a transient delete failure still needs a retry.
+		tail.PruneJournalBefore(NetWorldFrameLog::c_JournalSegmentFrames + 1);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while (std::filesystem::exists(path) && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		if (std::filesystem::exists(path) || settle().files != 1) return Fail("F8: the failed segment deletion was never retried after the disk allowed it");
+		std::cout << "[net-world-join-selftest] PASS journal_delete_is_retried_and_counted" << std::endl;
+		return 0;
+	}
+
 	bool TestWorldCaptureFollowsTheDeferredVerdict(std::string* error) {
 		WorldSegmentScratch scratch;
 		const std::string worldId = "aaaaaaaa-0000-0000-0000-0000000000c6";
@@ -9312,6 +9390,20 @@ namespace RTE {
 	int NetWorldJoinSelfTest::Run() {
 		s_FailTag = "net-world-join-selftest";
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		const char* selected = std::getenv("CCCP_TEST_WORLD_CASE");
+		std::string findingError;
+		if (!selected || std::string(selected) == "F4") {
+			if (!TestStaleWorldImageRecaptures(&findingError)) return Fail(findingError);
+			if (selected) return Pass();
+		}
+		if (!selected || std::string(selected) == "F6") {
+			if (!TestWorldCatchUpRefusal(&findingError)) return Fail(findingError);
+			if (selected) return Pass();
+		}
+		if (!selected || std::string(selected) == "F8") {
+			if (const int result = TestJournalDeleteIsRetriedAndCounted(); result != 0) return result;
+			if (selected) return Pass();
+		}
 		// The Lua states a row brings up close with the suite, not at the process exit.
 		struct LuaTakeDown {
 			bool owned = !LuaMan::IsConstructed();
