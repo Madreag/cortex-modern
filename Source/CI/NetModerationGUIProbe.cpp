@@ -10,6 +10,7 @@
 #include "GUIButton.h"
 #include "GUIFont.h"
 #include "GUILabel.h"
+#include "GUIListBox.h"
 #include "GUIInputWrapper.h"
 #include "MainMenuGUI.h"
 #include "PauseMenuGUI.h"
@@ -426,6 +427,16 @@ namespace {
 		} else if (auto* button = dynamic_cast<GUIButton*>(control)) {
 			value["text"] = button->GetText();
 			value["pushed"] = button->IsPushed();
+		} else if (auto* list = dynamic_cast<GUIListBox*>(control)) {
+			// A list reads as its rows, one per line, and the row it has selected.
+			std::string text;
+			value["items"] = Json::array();
+			for (const auto* item: *list->GetItemList()) {
+				text += (text.empty() ? "" : "\n") + item->m_Name;
+				value["items"].push_back(item->m_Name);
+			}
+			value["text"] = text;
+			value["selected"] = list->GetSelectedIndex();
 		}
 		return value;
 	}
@@ -628,8 +639,17 @@ namespace {
 			Require((step.value("scope", "") == "menu" ? MenuAutomation::Visible(control) : g_MenuMan.IsNetworkPanelOpen() && control->GetVisible()), "mouse target is not visible");
 			int x, y, w, h;
 			control->GetControlRect(&x, &y, &w, &h);
+			int pointY = y + h / 2;
+			if (step.contains("item")) {
+				// A list row is pressed on the row itself: the list's own top, the rows above it and half its height.
+				auto* list = dynamic_cast<GUIListBox*>(control);
+				Require(list != nullptr, "an item press needs a list");
+				auto* item = list->GetItem(step["item"].get<int>());
+				Require(item != nullptr, "the list has no such row");
+				pointY = y + 1 + list->GetStackHeight(item) + list->GetItemHeight(item) / 2 - list->GetScrollVerticalValue();
+			}
 			const float mouseX = static_cast<float>((x + w / 2) * g_WindowMan.GetResMultiplier());
-			const float mouseY = static_cast<float>((y + h / 2) * g_WindowMan.GetResMultiplier());
+			const float mouseY = static_cast<float>(pointY * g_WindowMan.GetResMultiplier());
 			SDL_Event motion{};
 			motion.type = SDL_EVENT_MOUSE_MOTION;
 			motion.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
