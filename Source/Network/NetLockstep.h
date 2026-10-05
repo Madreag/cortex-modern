@@ -1819,6 +1819,7 @@ namespace RTE {
 		uint64_t m_ProductionBaseUs = 0;
 		uint64_t m_ProductionWaitBaseUs = 0;
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;
+		std::map<uint8_t, uint64_t> m_SuccessionHoldFrames; //!< Membership holds survive a later election at the same boundary.
 		std::set<uint8_t> m_ReleasedAiSeats; //!< AI-held seats no returner may reclaim; the AI keeps their units.
 		std::map<uint8_t, std::map<uint64_t, NetGameSeatRelease>> m_SeatReleases; //!< The agreed frames the host's releases land on, every peer the same.
 		std::set<uint8_t> m_AnnouncedLeavers; //!< Host: clean leavers being held, whose closing links are not sent their hold.

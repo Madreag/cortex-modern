@@ -4103,6 +4103,7 @@ namespace RTE {
 		if (const auto held = m_AiHeldSeats.find(peer); held != m_AiHeldSeats.end() && held->second <= frame) return;
 		// A dropped host keeps its claims for its ticketed return under the successor.
 		m_AiHeldSeats[peer] = frame;
+		m_SuccessionHoldFrames[peer] = frame;
 		m_ReleasedAiSeats.erase(peer);
 		const uint32_t incarnation = m_Config.peerIncarnations.contains(peer) ? m_Config.peerIncarnations.at(peer) : 1;
 		m_HoldTransactions[peer] = record ? *record : NetGameSeatHold{peer, m_Config.migrationGeneration, m_NextTimingRevision++, incarnation, frame};
@@ -4134,6 +4135,7 @@ namespace RTE {
 		const auto leaves = m_PeerLeaveFrames;
 		const auto seatTransitions = m_SeatTransitions;
 		const auto heldSeats = m_AiHeldSeats;
+		const auto successionHolds = m_SuccessionHoldFrames;
 		const auto releasedSeats = m_ReleasedAiSeats;
 		const auto seatReleases = m_SeatReleases;
 		const auto holdTransactions = m_HoldTransactions;
@@ -4186,8 +4188,10 @@ namespace RTE {
 		m_LastCompletedSimulationTick = completed;
 		m_LastDeliveredFrame = m_MigrationBoundary;
 		for (const auto& [peer, frame]: heldSeats) {
-			if (frame > m_MigrationBoundary || std::find(m_Config.activePeerIds.begin(), m_Config.activePeerIds.end(), peer) != m_Config.activePeerIds.end()) continue;
+			const bool membershipHold = successionHolds.contains(peer) && successionHolds.at(peer) == frame;
+			if ((!membershipHold && frame > m_MigrationBoundary) || std::find(m_Config.activePeerIds.begin(), m_Config.activePeerIds.end(), peer) != m_Config.activePeerIds.end()) continue;
 			m_AiHeldSeats[peer] = frame;
+			if (membershipHold) m_SuccessionHoldFrames[peer] = frame;
 			if (releasedSeats.contains(peer)) m_ReleasedAiSeats.insert(peer);
 			if (const auto transaction = holdTransactions.find(peer); transaction != holdTransactions.end()) m_HoldTransactions[peer] = transaction->second;
 			if (const auto resolution = heldResolutions.find(peer); resolution != heldResolutions.end()) m_DroppedSeatResolutions[peer] = resolution->second;
@@ -4928,6 +4932,7 @@ namespace RTE {
 		m_CaptureParkAwaitingReports = false;
 		m_CaptureParkFinalized = false;
 		m_AiHeldSeats.clear();
+		m_SuccessionHoldFrames.clear();
 		m_ReleasedAiSeats.clear();
 		m_SeatReleases.clear();
 		m_AnnouncedLeavers.clear();
