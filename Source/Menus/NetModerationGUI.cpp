@@ -2087,10 +2087,27 @@ bool NetModerationGUI::AutomationLabelText(const std::string& name, std::string&
 }
 
 GUIControl* NetModerationGUI::GetControl(const std::string& name) const {
+	if (const auto at = name.find('@'); at != std::string::npos && name.starts_with("NetworkSeat")) {
+		const std::string part = name.substr(11, at - 11), player = name.substr(at + 1);
+		for (size_t row = 0; row < m_RowsShown && row < m_Seats.size(); ++row) {
+			if (m_Rows[row].name != player) continue;
+			const Controls& controls = m_Seats[row];
+			if (part == "Name") return controls.name;
+			if (part == "Detail") return controls.detail;
+			if (part == "Hint") return controls.hint;
+			if (part == "Applicant") return controls.requests;
+			if (part == "Wait") return controls.actions[0];
+			if (part == "Substitute") return controls.actions[1];
+			if (part == "Cancel") return controls.actions[2];
+			if (part == "Remove") return controls.remove;
+			if (part == "Ban") return controls.ban;
+		}
+		return nullptr;
+	}
 	if (name.starts_with("NetworkPeerDetail") && name.size() == 18 && name.back() >= '1' && name.back() <= '4') {
 		const uint8_t peer = static_cast<uint8_t>(name.back() - '0');
-		for (size_t row = 0; row < m_Model.RowCount() && row < m_Seats.size(); ++row) {
-			if (m_Model.GetRow(row).lockstepPeerId == peer) return m_Seats[row].detail;
+		for (size_t row = 0; row < m_RowsShown && row < m_Seats.size(); ++row) {
+			if (m_Rows[row].peer == peer) return m_Seats[row].detail;
 		}
 		return nullptr;
 	}
