@@ -11,6 +11,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import os
 import re
 import secrets
 import socket
@@ -448,6 +449,8 @@ class Session:
         self.ice_generation = 0
         self.ice_refused = False  # the host's last mint was refused by its relay backend
         self.migration_gen = 0  # the host handover generation that holds the row
+        self.register_fingerprint = ""
+        self.register_retry_until = 0.0
 
     def age_s(self, now: float) -> int:
         return max(0, int(now - self.created_at))
@@ -468,6 +471,7 @@ class SessionDirectory:
     def __init__(
         self, expiry_s: float, heartbeat_s: float, queue_idle_s: float = QUEUE_IDLE_S,
         turn_config: Optional[dict[str, Any]] = None, turn_max_ttl: int = TURN_MAX_TTL,
+        owner_state: Optional[Path] = None,
     ) -> None:
         self.expiry_s = expiry_s
         # The longest relay credential this directory mints; a client asking for longer gets this much.
@@ -478,6 +482,19 @@ class SessionDirectory:
         self._signals_changed = threading.Condition(self._lock)
         self._sessions: dict[str, Session] = {}
         self._resume_tokens: dict[str, tuple[str, float, int]] = {}
+        self._register_replays: dict[str, Session] = {}
+        self._owner_state = Path(owner_state) if owner_state is not None else None
+        self._world_owners: dict[str, dict[str, Any]] = {}
+        if self._owner_state is not None and self._owner_state.exists():
+            owners = json.loads(self._owner_state.read_text(encoding="utf-8"))
+            if not isinstance(owners, dict):
+                raise ValueError("invalid world owner state")
+            for sid, owner in owners.items():
+                uuid.UUID(sid)
+                if (not isinstance(owner, dict) or not re.fullmatch(r"[0-9a-f]{64}", owner.get("token_sha256", ""))
+                        or type(owner.get("migration_gen")) is not int or not 0 <= owner["migration_gen"] <= 10**9):
+                    raise ValueError("invalid world owner state")
+            self._world_owners = owners
         self.limiter = DualRateLimiter()
         self.turn_provider = TurnCredentialProvider(turn_config)
         self.turn_limiter = RateLimiter(TURN_REQUESTS_PER_MIN, TURN_REQUESTS_PER_MIN)
@@ -489,6 +506,31 @@ class SessionDirectory:
     def start_pruner(self) -> None:
         if not self._pruner.is_alive():
             self._pruner.start()
+
+    def _remember_world_owner(self, sid: str, token: str, generation: int) -> None:
+        owner = {"token_sha256": hashlib.sha256(token.encode()).hexdigest(), "migration_gen": generation}
+        if self._world_owners.get(sid) == owner:
+            return
+        owners = dict(self._world_owners, **{sid: owner})
+        if self._owner_state is not None:
+            self._owner_state.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self._owner_state.with_name(self._owner_state.name + "." + secrets.token_hex(8) + ".tmp")
+            try:
+                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                    json.dump(owners, stream, sort_keys=True)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, self._owner_state)
+                if os.name != "nt":
+                    directory_fd = os.open(self._owner_state.parent, os.O_RDONLY)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+            finally:
+                temporary.unlink(missing_ok=True)
+        self._world_owners = owners
 
     def stop(self) -> None:
         self._stop.set()
@@ -527,6 +569,9 @@ class SessionDirectory:
                     del self._resume_tokens[sid]
             while len(self._resume_tokens) > MAX_ROWS:
                 del self._resume_tokens[next(iter(self._resume_tokens))]
+            for sid, replay in list(self._register_replays.items()):
+                if now >= replay.register_retry_until:
+                    del self._register_replays[sid]
             for sess in self._sessions.values():
                 self._prune_idle_queues(sess, now)
 
@@ -578,15 +623,28 @@ class SessionDirectory:
                     raise FieldError("invalid_field", "resume_session_id")
                 presented = data.get("resume_token")
                 previous = self._sessions.get(session_id)
+                fingerprint = hashlib.sha256(json.dumps([data, install_key, observed_ip], sort_keys=True).encode()).hexdigest()
+                replay = self._register_replays.get(session_id)
+                owner = self._world_owners.get(session_id)
+                if (replay and fields.get("persistent_world") is True and valid_install_key(install_key)
+                        and replay.register_fingerprint == fingerprint and now < replay.register_retry_until
+                        and owner and tokens_equal(owner["token_sha256"], hashlib.sha256(replay.token.encode()).hexdigest())):
+                    replay.last_beat = now
+                    self._sessions[session_id] = replay
+                    self._resume_tokens.pop(session_id, None)
+                    return self._register_reply(replay)
                 retained = self._resume_tokens.get(session_id)
                 token = previous.token if previous else retained[0] if retained else ""
                 world = fields.get("persistent_world") is True and fields.get("world_id") == session_id
-                first_world = world and not token and presented in (None, "")
-                if not first_world and (not token or not isinstance(presented, str) or not tokens_equal(presented, token)):
+                owner = self._world_owners.get(session_id)
+                proven = (owner is not None and isinstance(presented, str)
+                          and tokens_equal(hashlib.sha256(presented.encode()).hexdigest(), owner["token_sha256"]))
+                first_world = world and not token and owner is None and presented in (None, "")
+                if not first_world and not (proven if owner is not None else token and isinstance(presented, str) and tokens_equal(presented, token)):
                     raise PermissionError("forbidden")
                 # One host per handover generation: the first successor's claim takes the row, any later claim at that generation
                 # or below is told the match already went on; a resume that names no generation is a host reopening its own.
-                held = previous.migration_gen if previous else retained[2] if retained else 0
+                held = previous.migration_gen if previous else retained[2] if retained else owner["migration_gen"] if owner else 0
                 if claimed is not None and claimed <= held:
                     raise Superseded("already_migrated", held)
                 if claimed is None and held > 0:
@@ -595,6 +653,8 @@ class SessionDirectory:
                     generation = held
                 if world:
                     token = secrets.token_urlsafe(24)
+                elif proven:
+                    token = presented
             else:
                 if "resume_token" in data:
                     raise PermissionError("forbidden")
@@ -603,17 +663,26 @@ class SessionDirectory:
             sess = Session(session_id, token, fields, observed_ip, now)
             sess.install_key = install_key
             sess.migration_gen = generation
+            if fields.get("persistent_world") is True or session_id in self._world_owners:
+                self._remember_world_owner(session_id, token, generation)
+            if fields.get("persistent_world") is True and resume is not None:
+                sess.register_fingerprint = fingerprint
+                sess.register_retry_until = now + RESUME_GRACE_S
+                self._register_replays[session_id] = sess
             if resume is not None:
                 if not first_world:
                     sess.state = "running"
                 self._resume_tokens.pop(session_id, None)
             self._sessions[session_id] = sess
+        return self._register_reply(sess)
+
+    def _register_reply(self, sess: Session) -> dict[str, Any]:
         return {
-            "session_id": session_id,
-            "token": token,
+            "session_id": sess.session_id,
+            "token": sess.token,
             "expires_in_s": as_json_int(self.expiry_s),
             "heartbeat_s": as_json_int(self.heartbeat_s),
-            "observed_ip": observed_ip,
+            "observed_ip": sess.observed_ip,
             "supports_unlisted": True,
         }
 
@@ -751,6 +820,7 @@ class SessionDirectory:
             if generation is not None and generation < sess.migration_gen:
                 raise Superseded("superseded", sess.migration_gen)
             del self._sessions[session_id]
+            self._register_replays.pop(session_id, None)
             self._resume_tokens.pop(session_id, None)
             self._signals_changed.notify_all()
         return {"ok": True}
@@ -957,6 +1027,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--expiry-s", type=float, default=15)
     parser.add_argument("--heartbeat-s", type=float, default=5)
     parser.add_argument("--log-file", type=Path, default=None)
+    parser.add_argument("--owner-state", type=Path, default=None,
+                        help="durable world owner hashes; defaults to world-owners.json beside the log, or in the working directory")
     parser.add_argument("--turn-config", type=Path, default=None)
     parser.add_argument("--turn-max-ttl", type=int, default=TURN_MAX_TTL,
                         help=f"the longest relay credential minted, {TURN_MIN_TTL}-{TURN_MAX_TTL} s")
@@ -1328,6 +1400,7 @@ def spawn_server(
     queue_idle_s: float = QUEUE_IDLE_S,
     turn_config: Optional[dict[str, Any]] = None,
     turn_max_ttl: int = TURN_MAX_TTL,
+    owner_state: Optional[Path] = None,
 ) -> RunningServer:
     configure_logging(log_file)
     if cert is None or key is None:
@@ -1336,7 +1409,8 @@ def spawn_server(
         cert = None
         key = None
     store = SessionDirectory(
-        expiry_s=expiry_s, heartbeat_s=heartbeat_s, queue_idle_s=queue_idle_s, turn_config=turn_config, turn_max_ttl=turn_max_ttl
+        expiry_s=expiry_s, heartbeat_s=heartbeat_s, queue_idle_s=queue_idle_s, turn_config=turn_config, turn_max_ttl=turn_max_ttl,
+        owner_state=owner_state if owner_state is not None else log_file.parent / "world-owners.json" if log_file else None,
     )
     store.start_pruner()
     httpd = build_httpd(bind, port, store, cert, key)
@@ -1373,6 +1447,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         log_file=args.log_file,
         turn_config=turn_config,
         turn_max_ttl=args.turn_max_ttl,
+        owner_state=args.owner_state or (args.log_file.parent if args.log_file else Path.cwd()) / "world-owners.json",
     )
     print(f"session_directory listening on {args.bind}:{server.port}", flush=True)
     try:

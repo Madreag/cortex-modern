@@ -101,3 +101,24 @@ Start in: D:\path\to
 Allow inbound TCP 8443 for that Python executable (elevated firewall rule). Clients set the directory URL to this PC. There is no launchd job and no `gui/501` requirement.
 
 Self-signed certificate (same `openssl` command as above, including the SAN) unless a public DNS name exists for Let's Encrypt. Clients pin that certificate as in step 3.
+# World ownership across restarts
+
+Keep `world-owners.json` across deployments and restarts. The command-line service
+stores it beside `--log-file`, or in its working directory when no log is supplied;
+`--owner-state PATH` selects an explicit location. The supplied service layout uses
+`/Users/erol/cortex-directory/logs/world-owners.json`. Back up this file with the
+service configuration. It contains SHA-256 token proofs and host generations, never
+the tokens. An unreadable or malformed existing file prevents startup.
+
+A known world id requires its current token even while its discovery lease is
+absent. An identical register from the same install and source replays its result
+for 120 seconds, including after discovery expiry, without rotating again or
+discarding pending signals. A different host, request or expired retry receives the
+ordinary ownership checks.
+
+Worlds registered before this change have no durable proof until their next
+successful registration. On the first upgraded restart, an older game retries its
+stored token, receives a refusal, and reclaims its id without that token as on first
+boot; this first claim establishes the proof. Those previously unrecorded ids have
+the first-claim ownership window until their host registers. Removing the owner
+file deliberately restores that first-boot behavior for all absent worlds.

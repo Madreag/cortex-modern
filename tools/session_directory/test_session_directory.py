@@ -2039,6 +2039,80 @@ class DirectoryTests(unittest.TestCase):
         status, ok = self.beat(world_id, second["token"])
         self.assertEqual(status, 200, ok)
 
+    def test_lost_world_register_reply_replays_the_same_lease(self) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        world_id = str(uuid.uuid4())
+        first_request = sample_register(persistent_world=True, world_id=world_id,
+                                        world_boot=1, resume_session_id=world_id)
+        first = store.register(first_request, "192.0.2.1", 10, INSTALL_KEY)
+        resume = dict(first_request, world_boot=2, resume_token=first["token"])
+        moved = store.register(resume, "192.0.2.1", 20, INSTALL_KEY)
+        store.post_signal(world_id, {"from": "client:joiner", "to": "host",
+                                     "token_or_join_nonce": "joiner", "payload_b64": "YQ=="}, 21)
+        try:
+            retried = store.register(resume, "192.0.2.1", 25, INSTALL_KEY)
+        except PermissionError:
+            self.fail("F2: a lost successful resume reply made the old-token retry forbidden")
+        self.assertEqual(retried, moved, "F2: a repeated successful resume issued another lease")
+        self.assertEqual(len(store.list_sessions(26, None, None, None)["sessions"]), 1, "F2: register retries duplicated the world")
+        self.assertEqual(len(store.get_signals(world_id, "host", 0, moved["token"], 26)["signals"]), 1,
+                         "F2: a repeated register discarded a joiner's pending signal")
+        with self.assertRaises(PermissionError, msg="F2: another install replayed a tokenless world claim"):
+            store.register(first_request, "192.0.2.1", 27, "fedcba9876543210")
+        with self.assertRaises(PermissionError, msg="F2: an old register replay outlived its retry window"):
+            store.register(resume, "192.0.2.1", 20 + session_directory.RESUME_GRACE_S + 1, INSTALL_KEY)
+        first_request = dict(first_request, world_id=str(uuid.uuid4()))
+        first_request["resume_session_id"] = first_request["world_id"]
+        first = store.register(first_request, "192.0.2.1", 200, INSTALL_KEY)
+        try:
+            repeated = store.register(first_request, "192.0.2.1", 205, INSTALL_KEY)
+        except PermissionError:
+            self.fail("F2: a lost first world register reply made the identical retry forbidden")
+        self.assertEqual(repeated, first, "F2: an identical first register retry changed its lease")
+        short = session_directory.SessionDirectory(3, 1)
+        first = short.register(first_request, "192.0.2.1", 10, INSTALL_KEY)
+        self.assertEqual(short.register(first_request, "192.0.2.1", 15, INSTALL_KEY), first,
+                         "F2: a lost register reply changed the lease after discovery expiry inside the retry window")
+
+    def test_world_owner_survives_a_directory_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(session_directory, "configure_logging"):
+            log_file = Path(folder) / "directory.log"
+            world_id = str(uuid.uuid4())
+            request = sample_register(persistent_world=True, world_id=world_id,
+                                      world_boot=1, resume_session_id=world_id)
+            first = spawn_server(log_file=log_file)
+            try:
+                now = time.monotonic()
+                created = first.store.register(request, "192.0.2.1", now, INSTALL_KEY)
+            finally:
+                first.stop()
+            second = spawn_server(log_file=log_file)
+            try:
+                now = time.monotonic()
+                try:
+                    second.store.register(request, "192.0.2.2", now, "fedcba9876543210")
+                except PermissionError:
+                    pass
+                else:
+                    self.fail("F3: a tokenless host claimed a known world id after the directory restarted")
+                resumed = second.store.register(dict(request, world_boot=2, resume_token=created["token"]),
+                                                "192.0.2.1", now + 1, INSTALL_KEY)
+                self.assertEqual(resumed["session_id"], world_id, "F3: the proven owner lost its world id after restart")
+                proof = Path(folder) / "world-owners.json"
+                self.assertTrue(proof.is_file(), "F3: no durable world owner file was written")
+                self.assertNotIn(created["token"], proof.read_text(), "F3: the owner file exposed the original token")
+                self.assertNotIn(resumed["token"], proof.read_text(), "F3: the owner file exposed the resumed token")
+            finally:
+                second.stop()
+            third = spawn_server(log_file=log_file)
+            try:
+                with self.assertRaises(PermissionError, msg="F3: a rotated token recovered ownership after another restart"):
+                    third.store.register(dict(request, resume_token=created["token"]), "192.0.2.1", time.monotonic(), INSTALL_KEY)
+                third.store.register(dict(request, world_boot=3, resume_token=resumed["token"]),
+                                     "192.0.2.1", time.monotonic(), INSTALL_KEY)
+            finally:
+                third.stop()
+
     def test_world_resume_without_the_row_token_is_refused(self) -> None:
         self.start()
         world_id = str(uuid.uuid4())
