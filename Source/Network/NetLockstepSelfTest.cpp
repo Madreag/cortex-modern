@@ -24424,6 +24424,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			std::array<std::unique_ptr<Actor>, 2> actors;
 			std::array<uint8_t, 2> handoffs{};
 			std::array<uint64_t, 2> rejected{};
+			std::array<double, 2> written{};
 			std::string why;
 			for (size_t index = 0; index < peers.size(); ++index) {
 				auto config = ReleasedClaimsConfig(match, 3, {}, true); config.startFrame = 100;
@@ -24444,19 +24445,25 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					peers[index].FinishSimulationTick(tick);
 				}
 				if (index == 0) SeatSuccessionTestAccess::Succeed(peers[index], 2, 120);
-				if (!peers[index].QueueReplayFrame(121, {}, {}, &why, {}, {}, 2)) return fail(why);
+				const std::string path = "held-host-write-" + std::to_string(index) + ".ccreplay";
+				NetMatchReplayWriter writer;
+				if (!writer.Open(path, match, &why) || !writer.WriteFrame(121, {}, {}, {}, {MakeValueObservation(2, uid, 121, 1, "successor-write", 7)}, &why, 2)) return fail(why);
+				writer.Close(); if (!WaitForReplayCloseForTest(writer, &why)) return fail(why);
+				NetMatchReplayReader reader; NetLockstepFrame record; bool eof = false;
+				if (!reader.Open(path, &why) || !reader.ReadFrame(record, eof, &why) || !peers[index].QueueReplayFrame(record.targetFrame, record.frames, record.commands, &why, record.observations, record.valueObservations, record.replayAuthorityPeerId)) return fail(why);
 				peers[index].Tick(0); if (!peers[index].PopReadyFrame(ready)) return fail("the boundary frame stopped");
 				ApplyLockstepLeaveHandoffs(ready, {actors[index].get()}, false);
 				const auto state = ScenarioRunner::CaptureAgreedSideState();
 				handoffs[index] = state.controlOwners.contains(uid) ? state.controlOwners.at(uid) : 0;
 				const uint64_t before = g_MovableMan.GetValueObservationsRejected();
-				g_MovableMan.CommitValueObservations(121, {}, {MakeValueObservation(2, uid, 121, 1, "successor-write", 7)});
+				g_MovableMan.CommitValueObservations(121, ready.localValueObservations, ready.remoteValueObservations);
 				rejected[index] = g_MovableMan.GetValueObservationsRejected() - before;
+				written[index] = actors[index]->GetNumberValue("successor-write");
 				g_MovableMan.UnregisterObject(actors[index].get());
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
 			}
-			if (!peers[0].IsPeerGoneAtFrame(1, 121) || handoffs[0] != 2 || rejected[0] != 0) return fail("the live membership oracle did not hand AI to successor 2");
-			if (!peers[1].IsPeerGoneAtFrame(1, 121) || handoffs[1] != handoffs[0] || rejected[1] != 0)
+			if (!peers[0].IsPeerGoneAtFrame(1, 121) || handoffs[0] != 2 || rejected[0] != 0 || written[0] != 7) return fail("the live membership oracle did not hand AI to successor 2");
+			if (!peers[1].IsPeerGoneAtFrame(1, 121) || handoffs[1] != handoffs[0] || rejected[1] != 0 || written[1] != written[0])
 				return fail("held former host at 121: playback gone=" + std::to_string(peers[1].IsPeerGoneAtFrame(1, 121)) + " handoff=" + std::to_string(handoffs[1]) + " rejected successor writes=" + std::to_string(rejected[1]));
 			return fail("");
 		}
