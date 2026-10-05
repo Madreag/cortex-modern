@@ -145,6 +145,21 @@ class DirectoryTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             store.get_signals(sid, "host", 0, token, 635)
 
+    def test_host_end_reply_is_distinct_from_an_unknown_session(self) -> None:
+        self.start(port=47549)
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        endpoint = f"/v1/sessions/{sid}/host-end"
+        self.assertEqual(self.call("GET", endpoint), (200, {"session_id": sid, "ended_by_host": False}))
+        self.assertEqual(self.call("DELETE", f"/v1/sessions/{sid}", {"token": "wrong-token"})[0], 403)
+        self.assertEqual(self.call("GET", endpoint)[1]["ended_by_host"], False)
+        self.assertEqual(self.call("DELETE", f"/v1/sessions/{sid}", {"token": token})[0], 200)
+        self.assertEqual(self.call("GET", endpoint), (200, {"session_id": sid, "ended_by_host": True}))
+        unknown = str(uuid.uuid4())
+        self.assertEqual(self.call("GET", f"/v1/sessions/{unknown}/host-end"), (200, {"session_id": unknown, "ended_by_host": False}))
+        self.assertEqual(self.call("GET", f"/v1/sessions/{unknown}/signals?peer=client:someone")[0], 404)
+
     def setUp(self) -> None:
         self.server: Optional[RunningServer] = None
         self.tls_dir: Optional[tempfile.TemporaryDirectory[str]] = None

@@ -1013,13 +1013,34 @@ static std::string ResyncSaveName() {
 	}
 
 	std::string NetMatchService::IceSessionRefusalText(bool rejoin, const std::string& sessionId, const std::string& why) {
-		// The rejoin reads it as the host's goodbye: the round ended while the seat was on its way back.
-		if (rejoin && why == "no such session") return "match over: the host's session is gone";
+		if (rejoin && why == "ended by host") return "match over: the host ended the session";
 		return "session " + sessionId + ": " + why;
 	}
 
 	bool NetMatchService::RejoinFoundHostRowGone(bool rejoin, bool signalSessionGone, const std::string& setupError) {
-		return rejoin && (signalSessionGone || setupError.rfind("match over", 0) == 0);
+		(void)signalSessionGone;
+		return rejoin && setupError.rfind("match over", 0) == 0;
+	}
+
+	bool NetMatchService::DirectoryHostEndReply(const std::string& sessionId, long status, const std::string& body) {
+		if (status != 200) return false;
+		const auto reply = nlohmann::json::parse(body, nullptr, false);
+		return reply.is_object() && reply.contains("session_id") && reply["session_id"].is_string() && reply["session_id"] == sessionId &&
+		       reply.contains("ended_by_host") && reply["ended_by_host"].is_boolean() && reply["ended_by_host"] == true;
+	}
+
+	bool NetMatchService::QueryDirectoryHostEnd(const std::string& sessionId) {
+		if (sessionId.empty() || m_CancelRequested.load()) return false;
+		std::string base = g_SettingsMan.GetSessionDirectoryUrl();
+		while (!base.empty() && base.back() == '/') base.pop_back();
+		if (base.empty()) return false;
+		NetHttpClient query;
+		query.Start("GET", base + "/v1/sessions/" + sessionId + "/host-end",
+		            {{"X-Install-Key", g_SettingsMan.GetOrCreateSessionDirectoryInstallKey()}}, "", g_SettingsMan.GetSessionDirectoryCertSha256());
+		while (!m_CancelRequested.load() && query.Poll() == NetHttpClient::PollResult::Pending) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		if (m_CancelRequested.load()) { query.Cancel(); return false; }
+		const auto reply = query.GetResponse();
+		return DirectoryHostEndReply(sessionId, reply.statusCode, reply.body);
 	}
 
 	bool NetMatchService::TakeRoundEndRecord(uint64_t& record) {
@@ -9889,9 +9910,21 @@ static std::string ResyncSaveName() {
 			    TicketMatchesRequest(record, request.sessionId, request.address);
 		}
 		std::string why = "no such session";
+		std::unique_ptr<NetHttpClient> hostEnd;
+		uint64_t nextHostEndProbe = 0;
 		const uint64_t deadline = SteadyNowMs() + c_IceResolveBudgetMs;
 		while (SteadyNowMs() < deadline && !m_CancelRequested.load()) {
 			const uint64_t nowMs = SteadyNowMs();
+			if (request.rejoin && !hostEnd && nowMs >= nextHostEndProbe) {
+				hostEnd = std::make_unique<NetHttpClient>();
+				hostEnd->Start("GET", baseUrl + "/v1/sessions/" + request.sessionId + "/host-end", {{"X-Install-Key", installKey}}, "", certPin);
+				nextHostEndProbe = nowMs + 5000;
+			}
+			if (hostEnd && hostEnd->Poll() == NetHttpClient::PollResult::Done) {
+				const auto reply = hostEnd->GetResponse();
+				if (DirectoryHostEndReply(request.sessionId, reply.statusCode, reply.body)) { why = "ended by host"; break; }
+				hostEnd.reset();
+			}
 			browse.PollList(nowMs);
 			browse.Update(nowMs);
 			if (browse.ListReplies() > 0) {
@@ -9903,6 +9936,7 @@ static std::string ResyncSaveName() {
 			std::this_thread::sleep_for(std::chrono::milliseconds(50));
 		}
 		browse.StopBrowsing();
+		if (hostEnd) hostEnd->Cancel();
 		if (!why.empty()) {
 			if (why == "modules") {
 				NetReportGameData(manifest);
@@ -10521,15 +10555,11 @@ static std::string ResyncSaveName() {
 				}
 			}
 		}
+		const bool hostEnded = !started && !request.host && request.rejoin &&
+		    (RejoinFoundHostRowGone(true, false, error) || QueryDirectoryHostEnd(request.sessionId));
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			// The directory answers a returning seat whose host ended the round and left with no row: the signal poll's 404, or the ticket lookup's.
-			bool signalSessionGone = false;
-#ifdef CCCP_WITH_GNS
-			signalSessionGone = m_Dispatcher && m_Dispatcher->Channel().GetState() == NetDirectorySignalChannel::State::Failed &&
-			                    m_Dispatcher->Channel().GetLastError() == "session gone";
-#endif
-			m_RejoinFoundHostRowGone = !started && !request.host && RejoinFoundHostRowGone(request.rejoin, signalSessionGone, error);
+			m_RejoinFoundHostRowGone = hostEnded;
 			if (started) {
 				// The lockstep peer id is the session-assigned id + 1; the team comes from that slot.
 				const uint8_t localLockstepId = static_cast<uint8_t>(session->GetLocalPeerId() + 1);
@@ -11157,6 +11187,7 @@ static std::string ResyncSaveName() {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_HeldRejoinDriving = true;
+			m_HeldRejoinStartedMs = SteadyNowMs();
 			m_HeldRejoinFailedAttempts = 0;
 			m_HeldRejoinRetryAtMs = 0;
 			m_RejoinFoundHostRowGone = false;
@@ -11178,6 +11209,7 @@ static std::string ResyncSaveName() {
 	void NetMatchService::EndHeldRejoinInNextRound() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_HeldRejoinDriving = false;
+		m_HeldRejoinStartedMs = 0;
 		m_HeldRejoinFailedAttempts = 0;
 		m_HeldRejoinRetryAtMs = 0;
 		m_HeldRejoinRoutes.clear();
@@ -11216,12 +11248,8 @@ static std::string ResyncSaveName() {
 			step.stop = rejectText.empty() ? "Could not rejoin - the host refused the seat" : rejectText;
 			return step;
 		}
-		if (failedAttempts >= c_RosterReturnAttempts) {
-			step.stop = "Could not rejoin - the host did not take the seat back after " + std::to_string(failedAttempts) + " tries";
-			return step;
-		}
 		step.retry = true;
-		step.delayMs = static_cast<uint32_t>(c_RosterReturnBackoffMs << (failedAttempts > 0 ? failedAttempts - 1 : 0));
+		step.delayMs = static_cast<uint32_t>(std::min<uint64_t>(30000, c_RosterReturnBackoffMs << std::min<unsigned>(failedAttempts > 0 ? failedAttempts - 1 : 0, 4)));
 		return step;
 	}
 
@@ -11230,8 +11258,7 @@ static std::string ResyncSaveName() {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_IsHost) return false;
-			// With no successor to ask, a round whose host's row is gone is over: the seat completes as on the host's goodbye.
-			if (m_RejoinFoundHostRowGone && m_HeldRejoinRoutes.empty()) {
+			if (m_RejoinFoundHostRowGone || NoteHostGoodbyeLocked(m_Session.get())) {
 				m_HostGoodbyeSeen = true;
 				return false;
 			}
@@ -11241,11 +11268,9 @@ static std::string ResyncSaveName() {
 			// A host that did not answer one dial is not gone; only a host that is gone sends the seat on.
 			const bool helloUnanswered = m_Session && HeldRejoinRetriesTheHost(lostDuringSetup, hasReject, reason, m_Session->GetRejectSummary());
 			const bool hostGone = !helloUnanswered && (lostDuringSetup || (m_Session && ClientSessionLossIsHostDeparture(*m_Session)));
-			if (hostGone) {
-				// A host that answered the round is over is not gone: the seat completes on what it holds.
-				if (NoteHostGoodbyeLocked(m_Session.get()) || m_HeldRejoinRoutes.empty()) return false;
-			} else {
-				step = NextHeldRejoinStep(++m_HeldRejoinFailedAttempts, hasReject, reason, hasReject ? m_Session->BuildRejectText() : std::string());
+			if (!hostGone || m_HeldRejoinRoutes.empty()) {
+				if (m_HeldRejoinFailedAttempts < UINT8_MAX) ++m_HeldRejoinFailedAttempts;
+				step = NextHeldRejoinStep(m_HeldRejoinFailedAttempts, hasReject, reason, hasReject ? m_Session->BuildRejectText() : std::string());
 				if (!step.retry) {
 					m_HeldRejoinRetryAtMs = 0;
 					m_StatusText = step.stop;
@@ -11267,11 +11292,13 @@ static std::string ResyncSaveName() {
 			System::PrintDiagnosticLine("[net-match] held rejoin: the host is gone; rejoining the successor at " + route.address + ":" + std::to_string(route.port));
 			if (RejoinSuccessorRoute(route, error)) return true;
 		}
-		return false;
+		return BeginHeldRejoinOnNextHost(error);
 	}
 
 	std::string NetMatchService::GetHostUnreachableLine() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (m_HeldRejoinDriving && m_HeldRejoinStartedMs != 0 && (!m_Session || !m_Session->IsReady()) && SteadyNowMs() - m_HeldRejoinStartedMs >= 30000)
+			return "The host cannot be found. You can leave or keep trying.";
 		static const std::string c_Prefix = "PeerHeld:";
 		return m_HeldUnreachableText.rfind(c_Prefix, 0) == 0 ? m_HeldUnreachableText.substr(c_Prefix.size()) : m_HeldUnreachableText;
 	}

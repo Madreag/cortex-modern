@@ -807,10 +807,11 @@ namespace RTE {
 		bool TakeRoundEndRecord(uint64_t& record);
 		/// The result line a seat reads for a round's winner team, as its own team sees it.
 		static std::string RoundEndResultText(int winnerTeam, int localTeam);
-		/// Why a session-id join found no row to dial; a seat coming back on its ticket to a row its host no longer keeps reads the match as over.
+		/// Only an authenticated host end completes a ticket rejoin.
 		static std::string IceSessionRefusalText(bool rejoin, const std::string& sessionId, const std::string& why);
-		/// Whether a returning seat's failed start found its host's directory row gone: the host ended the round and left.
+		/// A missing listing or signal queue never proves a host end.
 		static bool RejoinFoundHostRowGone(bool rejoin, bool signalSessionGone, const std::string& setupError);
+		static bool DirectoryHostEndReply(const std::string& sessionId, long status, const std::string& body);
 		/// The request a stored ticket rejoins with. The world flag is the ticket's own, so a relaunch
 		/// against a world host still hellos on the world plane.
 		static NetMatchServiceRequest BuildTicketRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget);
@@ -1317,6 +1318,7 @@ namespace RTE {
 		void HostMigrationIce(INetTransport& listener);
 		static constexpr uint64_t c_IceRegisterBudgetMs = 30000;
 		static constexpr uint64_t c_IceResolveBudgetMs = 30000;
+		bool QueryDirectoryHostEnd(const std::string& sessionId);
 		static constexpr uint32_t c_IceConnectBudgetMs = 15000;
 		static constexpr uint32_t c_IceHandshakeMarginMs = 5000; //!< The session's hello after the transport connects, on top of its connect limit.
 		void JoinWorkerIfDone();
@@ -1882,7 +1884,8 @@ namespace RTE {
 		/// Held client: the hosts its rejoin may still find when its own is gone, in the match's published successor order.
 		std::deque<NetMatchServiceRequest> m_HeldRejoinRoutes;
 		uint8_t m_HeldRejoinFailedAttempts = 0; //!< The attempts of this held rejoin that failed with its host still there.
-		bool m_RejoinFoundHostRowGone = false; //!< The last start was a rejoin that found its host's directory row gone.
+		bool m_RejoinFoundHostRowGone = false; //!< The directory confirms that this session ended by its host.
+		uint64_t m_HeldRejoinStartedMs = 0;
 		uint64_t m_HeldRejoinRetryAtMs = 0;     //!< When the armed retry of the host begins; 0 when none is armed.
 		uint64_t m_HeldRejoinPriorInput = 0;
 		std::string m_HostEndReason; //!< The host's End Match reason while its round plays to the agreed end frame.

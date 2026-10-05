@@ -7715,8 +7715,7 @@ namespace RTE {
 		return true;
 	}
 
-	// SEAT-ROSTER S2/S3 on the client: a held rejoin that failed with its host still there asks that host again after the seat roster's
-	// backoff - armed in the service, never slept on the game thread - and stops at the roster's bound or at the host's final word.
+	// A failed rejoin keeps its backoff until the host gives its final word.
 	bool TestAHeldRejoinAsksItsHostAgainOffTheGameThread(std::string* error) {
 		struct Case {
 			const char* name;
@@ -7730,7 +7729,8 @@ namespace RTE {
 		    {"a first failure the host gave no reason for", 1, false, NetRejectReason::InternalError, true, 2000},
 		    {"a first host link lost", 1, true, NetRejectReason::HostLinkLost, true, 2000},
 		    {"the roster's backoff refusal", 2, true, NetRejectReason::HostNotAccepting, true, 4000},
-		    {"a third failure", 3, true, NetRejectReason::Timeout, false, 0},
+		    {"a third failure", 3, true, NetRejectReason::Timeout, true, 8000},
+		    {"a sustained outage", 255, false, NetRejectReason::InternalError, true, 30000},
 		    {"the seat given away", 1, true, NetRejectReason::SeatReassigned, false, 0},
 		    {"a ban", 1, true, NetRejectReason::ParticipantBanned, false, 0},
 		};
@@ -7759,10 +7759,14 @@ namespace RTE {
 		}
 		(void)client.BeginHeldRejoinOnNextHost(&why);
 		why.clear();
-		if (client.BeginHeldRejoinOnNextHost(&why) || why.empty() || client.m_HeldRejoinRetryAtMs != 0) {
-			*error = "a held rejoin past the roster's bound was asked again: why='" + why + "'";
+		if (!client.BeginHeldRejoinOnNextHost(&why) || client.m_HeldRejoinRetryAtMs == 0) {
+			*error = "a held rejoin gave up after three unanswered attempts: why='" + why + "'";
 			return false;
 		}
+		client.m_HeldRejoinDriving = true;
+		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		client.m_HeldRejoinStartedMs = now - 30001;
+		if (client.GetHostUnreachableLine() != "The host cannot be found. You can leave or keep trying.") { *error = "an unanswered rejoin has no thirty-second leave line"; return false; }
 		std::cout << "PASS a_held_rejoin_asks_its_host_again_off_the_game_thread cases=" << sizeof(cases) / sizeof(cases[0]) << " armed_in=" << elapsedMs
 		          << "ms stop='" << why << "'" << std::endl;
 		return true;
@@ -15688,6 +15692,10 @@ namespace RTE {
 		const bool endedByHost = NetMatchService::RejoinFoundHostRowGone(true, false, hostEnd);
 		std::cout << "[net-match-selftest] " << (endedByHost ? "PASS" : "FAIL") << " rejoin_ended_by_host ended=" << endedByHost << std::endl;
 		if (!evidencePassed || !endedByHost) { *error = "rejoin completion accepts listing absence or misses the host's authenticated end"; return false; }
+		for (const auto& body : {std::string("{}"), std::string("{\"session_id\":\"other\",\"ended_by_host\":true}"), std::string("{\"session_id\":\"ended\",\"ended_by_host\":\"true\"}")})
+			if (NetMatchService::DirectoryHostEndReply("ended", 200, body)) { *error = "directory end reader accepted missing, mismatched or untyped evidence"; return false; }
+		if (!NetMatchService::DirectoryHostEndReply("ended", 200, "{\"session_id\":\"ended\",\"ended_by_host\":true}") ||
+		    NetMatchService::DirectoryHostEndReply("ended", 404, "{\"session_id\":\"ended\",\"ended_by_host\":true}")) { *error = "directory end reader used a failed reply or lost the authenticated fact"; return false; }
 		NetDirectoryLocalIdentity local;
 		local.networkProtocolVersion = 1;
 		local.lockstepCodecVersion = 20;
@@ -15754,19 +15762,17 @@ namespace RTE {
 			*error = "session-id join: an either row did not carry its direct address too";
 			return false;
 		}
-		// 2026-10-04 row f: a held seat whose host ended the round while it rejoined found no row and stayed failed.
-		if (NetMatchService::IceSessionRefusalText(true, "gone", "no such session").rfind("match over", 0) != 0 ||
+		if (NetMatchService::IceSessionRefusalText(true, "gone", "no such session").rfind("match over", 0) == 0 ||
 		    NetMatchService::IceSessionRefusalText(false, "gone", "no such session") != "session gone: no such session" ||
 		    NetMatchService::IceSessionRefusalText(true, "full", "full") != "session full: full") {
-			*error = "session-id join: a rejoin to a row its host no longer keeps read as a failure: " + NetMatchService::IceSessionRefusalText(true, "gone", "no such session");
+			*error = "session-id join: a missing listing fabricated a host end";
 			return false;
 		}
-		// The signal poll's 404 says the same mid-rendezvous, after the link to the leaving host has dropped.
 		const std::string dropped = "Relay connection failed: Connection dropped; check the relay or choose Automatic";
-		if (!NetMatchService::RejoinFoundHostRowGone(true, true, dropped) ||
-		    !NetMatchService::RejoinFoundHostRowGone(true, false, NetMatchService::IceSessionRefusalText(true, "gone", "no such session")) ||
+		if (NetMatchService::RejoinFoundHostRowGone(true, true, dropped) ||
+		    NetMatchService::RejoinFoundHostRowGone(true, false, NetMatchService::IceSessionRefusalText(true, "gone", "no such session")) ||
 		    NetMatchService::RejoinFoundHostRowGone(false, true, dropped) || NetMatchService::RejoinFoundHostRowGone(true, false, dropped)) {
-			*error = "session-id join: a returning seat whose host's row was gone read its host as lost instead of its round as over";
+			*error = "session-id join: a missing signal queue fabricated a host end";
 			return false;
 		}
 		std::cout << "[net-match-selftest] PASS session-id join: an absent, full, mismatched or ip-only row is refused with the join list's own label; an ice row resolves to str:h-<session>, an either row keeps its address" << std::endl;
