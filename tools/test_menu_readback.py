@@ -21,7 +21,7 @@ from test_telemetry_bundle import set_visual_resolution
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "pause-save", "save-hotkey", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
-         "lobby-name", "net-options", "net-activity", "net-host-left", "net-host-left-early", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "oracles")
+         "lobby-name", "net-options", "net-activity", "net-host-left", "net-host-left-early", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "host-by-hand", "oracles")
 PAIRED_CASES = ("pause", "pause-save", "save-hotkey", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
@@ -305,7 +305,7 @@ def read_settings(path, names):
 
 
 def seeds(case):
-    if case == "prehost-visibility":
+    if case in ("prehost-visibility", "host-by-hand"):
         return {"host": {"SessionDirectoryUrl": "https://127.0.0.1:49479"}}
     if case in ("host-relay", "net-connection"):
         return {"host": {"SessionDirectoryUrl": ""}}
@@ -349,6 +349,17 @@ def net_page(page):
 
 def menu_step(command):
     return {"op": "menu", "command": command}
+
+
+def hand_pick(combo, item):
+    """A hand's pick from a drop-down: the list opens, the mouse goes down on the row, frames pass, the mouse comes up."""
+    return (f"combo_drop {combo}\nwait 3\ncombo_press {combo} {item}\nwait 4\ncombo_release {combo}\nwait 4\n"
+            f"assert_label {combo} {item}\n")
+
+
+def hand_click(control):
+    """A hand's click: down on one frame, up on a later one."""
+    return f"hand_press {control}\nwait 3\nhand_release {control}\nwait 4\n"
 
 
 def roster_fit_observations(observation):
@@ -761,6 +772,32 @@ def scripts(case, port, root, size="960x540"):
             probes[who] = {"schema": 1, "timeout_ms": 45000, "steps": steps}
         return ({who: text + f"wait_file {probe_root(root, who) / 'done.json'} 60\nassert_substate Lobby\nexit\n"
                  for who, text in (("host", host), ("client", client))}, probes)
+    if case == "host-by-hand":
+        # Every kind of control on the host options, operated the way a hand does: a press and its release on different
+        # frames with the panel's own per-frame refresh in between, and the value read back frames after.
+        text = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\nactivate ButtonHostOptions\nwait_ms 400\n"
+                "assert_substate HostOptions\nactivate TabHostPageSeats\nwait 3\n"
+                + hand_pick("ComboHostSeatPlayers", "3") + hand_pick("ComboHostSeatPlayers", "4")
+                + "activate TabHostPageRules\nwait 3\n"
+                + hand_pick("ComboHostRulesMode", "Co-op PvE")
+                + hand_click("CheckHostRulesFog") + "assert_checked CheckHostRulesFog 1\n"
+                + hand_click("CheckHostRulesFog") + "assert_checked CheckHostRulesFog 0\n"
+                + hand_click("CheckHostRulesDeploy") + "assert_checked CheckHostRulesDeploy 1\n"
+                + "slider_set SliderHostRulesDifficulty 80\nwait 4\nassert_label LabelHostRulesDifficultyValue 80\n"
+                + "slider_set SliderHostRulesGold 5000\nwait 4\nassert_label LabelHostRulesGoldValue 5000 oz\n"
+                # A team's rules stay its own: picking another team shows that team's and writes nothing onto it.
+                + "slider_set SliderHostRulesSkill 30\nwait 4\nassert_label LabelHostRulesSkillValue 30\n"
+                + hand_pick("ComboHostRulesTeam", "Team 2") + "assert_label LabelHostRulesSkillValue 50\n"
+                + hand_pick("ComboHostRulesTeam", "Team 1") + "assert_label LabelHostRulesSkillValue 30\n"
+                + "activate TabHostPageNetwork\nwait 3\nscreenshot hand_net_connection\nwait 2\n"
+                + "activate TabHostNetTuning\nwait 3\nscreenshot hand_net_delay\nwait 2\n"
+                + hand_pick("ComboHostNetRedundancy", "7 ticks")
+                + "activate TabHostPageRecovery\nwait 3\n"
+                + hand_click("CheckHostRecRepair") + "assert_checked CheckHostRecRepair 0\n"
+                + hand_pick("ComboHostRecReturnWindow", "10 minutes")
+                + "activate TabHostPageSession\nwait 3\n"
+                + hand_pick("ComboHostSessIdle", "20 minutes"))
+        return {"host": text + "exit\n"}, {}
     if case == "prehost-visibility":
         text = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\n"
                 "activate ButtonHostOptions\nwait_ms 400\nactivate TabHostPageNetwork\n"

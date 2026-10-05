@@ -21,6 +21,7 @@
 #include "GUILabel.h"
 #include "GUIListPanel.h"
 #include "GUIRadioButton.h"
+#include "GUISlider.h"
 #include "GUITab.h"
 #include "GUITextBox.h"
 #include "FrameMan.h"
@@ -697,7 +698,8 @@ namespace RTE::MenuAutomation {
 			command == "dump_refresh_count" || command == "dump_enter_state" ||
 			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad" ||
 			command == "key_down" || command == "key_up" || command == "focus" ||
-			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" || command == "assert_combo_items" ||
+			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" || command == "combo_press" || command == "combo_release" || command == "assert_combo_items" ||
+			command == "hand_press" || command == "hand_release" || command == "slider_set" ||
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
@@ -1313,7 +1315,9 @@ namespace RTE::MenuAutomation {
 				observation = comboName + " items=\"" + items + "\"";
 				return items == expected;
 			}
-			if (command == "combo_drop" || command == "combo_select") {
+			if (command == "combo_drop" || command == "combo_select" || command == "combo_press" || command == "combo_release") {
+				// Where a hand's press landed, for the release that follows it on a later frame.
+				static int s_HandPressX = 0, s_HandPressY = 0;
 				std::string comboName;
 				args >> std::quoted(comboName);
 				std::string item;
@@ -1335,12 +1339,39 @@ namespace RTE::MenuAutomation {
 						combo->AddEvent(GUIEvent::Notification, GUIComboBox::Dropped, 0);
 					});
 				}
+				if (command == "combo_release") {
+					// The second half of a hand's row click, on a later frame than the press: the list signals the
+					// mouse-up where the press landed and the combo commits whatever row is selected by then.
+					if (!combo->IsDropped()) { observation += " list not open"; return false; }
+					auto* input = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
+					return input && input->QueueAutomationCommand([combo] {
+						combo->GetListPanel()->OnMouseUp(s_HandPressX, s_HandPressY, GUIPanel::MOUSE_LEFT, 0);
+					});
+				}
 				if (item.empty()) { observation += " no item"; return false; }
 				int index = -1;
 				for (int i = 0; i < combo->GetCount(); ++i) {
 					if (const GUIListPanel::Item* entry = combo->GetItem(i); entry && entry->m_Name == item) { index = i; break; }
 				}
 				if (index < 0) { observation += " no such item"; return false; }
+				if (command == "combo_press") {
+					// The first half: the mouse goes down on the row, which selects it. Nothing commits until the release.
+					if (!combo->IsDropped()) { observation += " list not open"; return false; }
+					auto* pressInput = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
+					return pressInput && pressInput->QueueAutomationCommand([combo, index] {
+						GUIListPanel* list = combo->GetListPanel();
+						const auto r = Rectangle(list);
+						const GUIListPanel::Item* wanted = combo->GetItem(index);
+						for (int y = r[1] + 1; y < r[1] + r[3]; ++y) {
+							if (list->GetItem(r[0] + 4, y) != wanted) continue;
+							s_HandPressX = r[0] + 4;
+							s_HandPressY = y + 1;
+							g_UInputMan.SetAbsoluteMousePosition(Vector(static_cast<float>(s_HandPressX), static_cast<float>(s_HandPressY)) * g_WindowMan.GetResMultiplier());
+							list->OnMouseDown(s_HandPressX, s_HandPressY, GUIPanel::MOUSE_LEFT, 0);
+							return;
+						}
+					});
+				}
 				auto* input = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
 				GUIManager* gui = manager->GetManager();
 				return input && input->QueueAutomationCommand([combo, index, gui] {
@@ -1351,6 +1382,35 @@ namespace RTE::MenuAutomation {
 					gui->SetFocus(nullptr);
 					combo->SetSelectedIndex(index);
 					combo->AddEvent(GUIEvent::Notification, GUIComboBox::Closed, 0);
+				});
+			}
+			if (command == "hand_press" || command == "hand_release" || command == "slider_set") {
+				// A hand's input reaches a control one phase per frame, with the screen's own refresh running in between.
+				std::string target;
+				int value = 0;
+				args >> std::quoted(target);
+				if (command == "slider_set" && !(args >> value)) { observation = target + " needs a value"; return false; }
+				auto* handControl = manager->GetControl(target);
+				if (!handControl || !Enabled(handControl) || !handControl->GetPanel()) { observation = target + " missing or disabled"; return false; }
+				observation = target;
+				auto* handInput = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
+				if (command == "slider_set") {
+					auto* slider = dynamic_cast<GUISlider*>(handControl);
+					if (!slider) { observation += " is not a slider"; return false; }
+					// What one step of a drag does: the value moves and the slider notifies.
+					return handInput && handInput->QueueAutomationCommand([slider, value] {
+						slider->SetValue(value);
+						slider->AddEvent(GUIEvent::Notification, GUISlider::Changed, 0);
+					});
+				}
+				GUIPanel* panel = handControl->GetPanel();
+				const bool press = command == "hand_press";
+				return handInput && handInput->QueueAutomationCommand([panel, press] {
+					const auto r = Rectangle(panel);
+					const int x = r[0] + r[2] / 2, y = r[1] + r[3] / 2;
+					g_UInputMan.SetAbsoluteMousePosition(Vector(static_cast<float>(x), static_cast<float>(y)) * g_WindowMan.GetResMultiplier());
+					if (press) panel->OnMouseDown(x, y, GUIPanel::MOUSE_LEFT, 0);
+					else panel->OnMouseUp(x, y, GUIPanel::MOUSE_LEFT, 0);
 				});
 			}
 			std::string name, argument, extra;
