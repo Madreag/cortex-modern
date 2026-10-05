@@ -15,6 +15,7 @@ from pathlib import Path
 from PIL import Image
 
 from run_sim_test import make_run, engine_executable, file_sha256
+import box_facts
 from test_lobby_lifecycle import wait_for_log
 from test_telemetry_bundle import set_visual_resolution
 
@@ -2824,8 +2825,8 @@ def main():
     if options.dry_run:
         print(json.dumps(dict(cases=selected, engine_count=max(2 if name in PAIRED_CASES else 1 for name, _ in selected))))
         return 0
-    if Path("D:/mx/LEAD_FAMILY.lock").exists():
-        parser.error("LEAD_FAMILY.lock exists; no engine launch")
+    if box_facts.held("verification"):
+        parser.error("another run reserves this machine; no engine launch")
     if not (any(low <= options.port <= low + 9 for low in (48270, 48380, 48390, 48530, 48540, 48550, 48840, 48850, 49180, 49190))
             or 49440 <= options.port <= 49459 or 49470 <= options.port <= 49478 or 49820 <= options.port <= 49839):
         parser.error("this detector owns ports 48270-48279, 48380-48389, 48390-48399, 48530-48539, 48540-48549, 48550-48559, 48840-48849, 48850-48859, 49180-49199, 49440-49459, 49470-49478 and 49820-49839")

@@ -21,14 +21,12 @@ import re
 import sys
 from pathlib import Path
 from run_sim_test import engine_executable, file_sha256  # noqa: E402
+import box_facts
 
 REPO = Path(__file__).resolve().parents[1]
 ACTIVITY = REPO / "tools/fixtures/ai_pass_writes_activity.lua"
 WRITER = REPO / "tools/fixtures/ai_pass_writer.lua"
-HARNESS = Path("D:/Projects/stage2_p4/recovery_e2e.py")
-FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
-BATTERY_LOCK = Path("D:/mx/LEAD_BATTERY.lock")
-EXCLUSIVE_LOCK = Path("D:/mx/LEAD_EXCLUSIVE.lock")
+HARNESS = REPO / "tools/heal_driver/recovery_e2e.py"
 PORT_RANGE = range(48400, 48420)
 LANE_PORT_RANGE = range(48670, 48680)  # A second lane range, so this arm can run beside another one.
 PRESET = "Determinism AI Pass Writes"
@@ -56,7 +54,7 @@ def sha256(path: Path) -> str:
 
 
 def refuse_on_locks() -> None:
-    for lock in (FAMILY_LOCK, BATTERY_LOCK, EXCLUSIVE_LOCK):
+    for lock in box_facts.held("verification", "battery", "exclusive"):
         if lock.exists():
             raise SystemExit(f"refusing to run: {lock} exists")
 

@@ -59,6 +59,7 @@ from compare_sim_traces import FULLSTATE, compare_fullstate, load_fullstate
 from feel.report import own_hold_windows
 from feel.retained_resume import PER_PEER_SUBSYSTEMS, read_live_hashes, split_passes
 from run_sim_test import make_run, engine_executable, file_sha256
+import box_facts
 from feel_measure import stage_baseline
 
 CAPTURE = re.compile(r"^\[autosave\] tick=(\d+) capture_ms=(\d+(?:\.\d+)?) bytes=(\d+)$", re.MULTILINE)
@@ -76,7 +77,6 @@ RESUMING = re.compile(r"^\[autosave\] resuming match=(\S+) tick=(\d+) activity=(
 OFFER = re.compile(r"^\[autosave\] resume offer match=(\S+) tick=(\d+) (held locally|not held: .*)$", re.MULTILINE)
 HELD_LAUNCH = re.compile(r"^\[net-match\] launching from the held checkpoint: (\S+)$", re.MULTILINE)
 RECEIVED_LAUNCH = re.compile(r"^\[net-match\] launching from the received snapshot: (\S+)$", re.MULTILINE)
-FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
 # Every N committed ticks each peer hashes its whole capture (-net-fullstate-hash-every); 0 is off. Set by --fullstate-every.
 FULLSTATE_EVERY = 0
 # Both peers' archive writers pause this long before each task (CC_TEST_SAVER_DELAY_MS); 0 is off. Set by --saver-delay-ms.
@@ -373,8 +373,8 @@ def saver_delay_ms(who: str) -> int:
 
 def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra: dict, settings: dict | None = None, load_objects: int = 0) -> dict:
     """Two peers of one match, each with the arm's own extra flags and Settings.ini values."""
-    if FAMILY_LOCK.exists():
-        raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
+    if box_facts.held("verification"):
+        raise RuntimeError(f"engine launch prohibited while {box_facts.held('verification')[0]} exists")
     root.mkdir(parents=True, exist_ok=False)
     runs, records = {}, {}
     for who in ("host", "client"):
@@ -946,8 +946,8 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "") -> dic
     resumable and the restarted host refuses with "checkpoint refused"; -net-resume-match itself does
     not parse, so the run ends before a lobby exists.
     """
-    if FAMILY_LOCK.exists():
-        raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
+    if box_facts.held("verification"):
+        raise RuntimeError(f"engine launch prohibited while {box_facts.held('verification')[0]} exists")
     root.mkdir(parents=True, exist_ok=False)
     first, second = root / "died", root / "resumed"
     first.mkdir(parents=True, exist_ok=False)
@@ -1158,8 +1158,8 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
     copied into each staged runtime after the runner prepares it and before the process starts;
     `after_carry(who, runtime)` then edits what that peer finds on its disk. `return_wait_ticks` bounds the kill's wait on a
     held seat's return by the round's ticks since the hold instead of by wall time."""
-    if FAMILY_LOCK.exists():
-        raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
+    if box_facts.held("verification"):
+        raise RuntimeError(f"engine launch prohibited while {box_facts.held('verification')[0]} exists")
     timeout = world_round_timeout_s(own_ticks or ticks)
     runs, records = {}, {}
     def drive(who: str) -> None:
@@ -1282,8 +1282,8 @@ def measure_world_write(repo: Path, root: Path, port: int) -> dict:
     """One checkpoint write of the world arms' own world on this machine: a two-peer world round with the arms' flags runs until
     the host's writer has finished its first checkpoint, then both peers are stopped. The peers run as probe-host and probe-client,
     outside the rounds the full-state oracle judges, and take no full-state samples."""
-    if FAMILY_LOCK.exists():
-        raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
+    if box_facts.held("verification"):
+        raise RuntimeError(f"engine launch prohibited while {box_facts.held('verification')[0]} exists")
     root.mkdir(parents=True, exist_ok=False)
     names = {"host": "probe-host", "client": "probe-client"}
     autosaves = root / "probe-host/runtime/Autosaves"

@@ -6,7 +6,7 @@ socket itself and no STUN or TURN server is contacted: the only outbound traffic
 directory. Every engine process goes through tools/run_sim_test.py's make_run, which gives it a
 private writable runtime, a muted private desktop and its own Temp.
 
-  python tools/test_directory_ice_join.py --out D:/mx/w123/ice-e2e
+  python tools/test_directory_ice_join.py --out <dir>
 """
 
 from __future__ import annotations
@@ -26,6 +26,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 from run_sim_test import make_run, engine_executable, file_sha256  # noqa: E402
+import box_facts
+from edith_cross import make_cert  # noqa: E402
 
 SERVICE = REPO / "tools" / "session_directory" / "session_directory.py"
 
@@ -50,7 +52,7 @@ def patch_settings(runtime: Path, values: dict[str, str]) -> None:
 def wait_engine_free(budget_s: float = 7200) -> None:
     start = time.time()
     while time.time() - start < budget_s:
-        for lock in (Path(r"D:\mx\LEAD_BATTERY.lock"), Path(r"D:\mx\LEAD_EXCLUSIVE.lock")):
+        for lock in box_facts.markers("battery") + box_facts.markers("exclusive"):
             if lock.exists():
                 break
         else:
@@ -108,8 +110,8 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=0, help="0 picks a free loopback port")
     parser.add_argument("--game-port", type=int, default=41210)
     parser.add_argument("--ticks", type=int, default=600)
-    parser.add_argument("--cert", type=Path, default=Path(r"D:\mx\w75\cert.pem"))
-    parser.add_argument("--key", type=Path, default=Path(r"D:\mx\w75\key.pem"))
+    parser.add_argument("--cert", type=Path, help="the loopback directory's certificate (default: a throwaway one)")
+    parser.add_argument("--key", type=Path)
     parser.add_argument("--timeout", type=float, default=420)
     options = parser.parse_args()
 
@@ -121,7 +123,10 @@ def main() -> int:
             probe.bind(("127.0.0.1", 0))
             options.port = probe.getsockname()[1]
         print(f"[ice-e2e] picked loopback port {options.port}", flush=True)
-    pin = sha256(options.cert.with_suffix(".der")) if options.cert.with_suffix(".der").exists() else ""
+    if options.cert is None:
+        options.cert, options.key, pin = make_cert(out)
+    else:
+        pin = sha256(options.cert.with_suffix(".der")) if options.cert.with_suffix(".der").exists() else ""
     # The settings reader treats "//" as a line comment, so the value is written without a scheme;
     # NetDirectoryClient puts https:// back on.
     directory_url = f"127.0.0.1:{options.port}"

@@ -14,6 +14,7 @@ import subprocess
 from compare_sim_traces import strict_compare
 import net_lobby_wire
 from run_sim_test import make_run, engine_executable
+import box_facts
 
 # Magic, envelope version, header size, message type, payload length.
 ENVELOPE = "<IHHHHI"
@@ -638,8 +639,8 @@ def census_compare(offline_dump, match_dump):
 
 
 def launch(options):
-    if Path("D:/mx/LEAD_FAMILY.lock").exists():
-        raise RuntimeError("family lock exists; launch is deferred")
+    if box_facts.held("verification"):
+        raise RuntimeError("another run reserves this machine; launch is deferred")
     if not any(low <= options.port <= high for low, high in PORT_BLOCKS):
         raise ValueError("port must be in " + " or ".join(f"{low}..{high}" for low, high in PORT_BLOCKS))
     os.environ["CCCP_HEADLESS"] = "1"
@@ -1012,8 +1013,8 @@ def _funds_fields(log, tick):
 def funds_preview(options):
     """Two-process D=7 funds arm: each peer reads the buying team from its own seat - the host previewed at P+1,
     the client still committed, both equal at P+D."""
-    if Path("D:/mx/LEAD_FAMILY.lock").exists():
-        raise RuntimeError("family lock exists; launch is deferred")
+    if box_facts.held("verification"):
+        raise RuntimeError("another run reserves this machine; launch is deferred")
     if not any(low <= options.port <= high for low, high in PORT_BLOCKS):
         raise ValueError("port must be in " + " or ".join(f"{low}..{high}" for low, high in PORT_BLOCKS))
     os.environ["CCCP_HEADLESS"] = "1"

@@ -28,8 +28,9 @@ import sys
 import threading
 import time
 from run_sim_test import engine_executable, file_sha256  # noqa: E402
+import box_facts
 
-SCRATCH = Path("D:/mx/swe-overlay-layout-20260914")
+SCRATCH = box_facts.scratch_dir("match-overlay")
 PORT_BASE, PORT_COUNT = 48260, 10
 TICKS = 900
 DROP_SIGNAL = "host-past-290"
@@ -953,8 +954,8 @@ def main():
     parser.add_argument("--modes", default=",".join(MODES), help="status modes to run, in order")
     parser.add_argument("--arms", default=",".join(ARMS), help="arms to run, in order")
     options = parser.parse_args()
-    if Path("D:/mx/LEAD_FAMILY.lock").exists():
-        parser.error("verification family owns the machine; no driver may start")
+    if box_facts.held("verification"):
+        parser.error("another run reserves this machine; no driver may start")
     repo, root = options.repo.resolve(), options.out.resolve()
     scratch = options.scratch.resolve()
     if not root.is_relative_to(scratch) or root == scratch:

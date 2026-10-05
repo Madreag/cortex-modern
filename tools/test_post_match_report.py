@@ -15,6 +15,7 @@ import re
 import subprocess
 
 from run_sim_test import make_run, engine_executable, file_sha256
+import box_facts
 from test_lobby_chat import read_log, set_resolution
 from test_lobby_lifecycle import wait_for_log
 from test_viewport_fit import panel_extent, panel_vertical, png_size
@@ -241,8 +242,8 @@ def main():
     args = parser.parse_args()
     if not 48211 <= args.port <= 48218:
         parser.error("two ports must fit 48211-48219")
-    if Path("D:/mx/LEAD_FAMILY.lock").exists():
-        parser.error("family lock exists; no driver may run")
+    if box_facts.held("verification"):
+        parser.error("another run reserves this machine; no driver may run")
     os.environ["CCCP_HEADLESS"] = "1"
     root = args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)

@@ -15,6 +15,7 @@ import re
 import shutil
 
 import test_post_match_report as report_driver
+import box_facts
 from test_lobby_chat import read_log
 from test_replay_browser import FIXTURE, duration_agreement
 
@@ -49,8 +50,8 @@ def main():
     parser.add_argument('--exe-sha256', required=True)
     parser.add_argument('--size', choices=('both', '640x360', '960x540'), default='both')
     options = parser.parse_args()
-    if Path('D:/mx/LEAD_FAMILY.lock').exists():
-        parser.error('family lock exists; no driver may run')
+    if box_facts.held("verification"):
+        parser.error('another run reserves this machine; no driver may run')
     sizes = report_driver.SIZES if options.size == 'both' else (tuple(map(int, options.size.split('x'))),)
     if not 1 <= options.port <= 65536 - len(sizes):
         parser.error('one UDP port per size must fit 1-65535')

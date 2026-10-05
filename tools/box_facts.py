@@ -125,6 +125,40 @@ def path(key: str) -> str:
     return load().paths[key]
 
 
+def this_box() -> Facts | None:
+    """The box this process runs on (its hostname matches the entry's), or None without a box file or a match."""
+    if not present():
+        return None
+    import socket
+    here = {value.lower() for value in (os.environ.get('COMPUTERNAME'), socket.gethostname()) if value}
+    return next((entry for entry in load().boxes if str(entry.get('hostname') or '').lower() in here), None)
+
+
+def markers(kind: str) -> list[Path]:
+    """This box's reservation markers of one kind (each box entry's markers.<kind>: one path or a list); a box the file
+    does not describe has none, so a run there waits on nothing."""
+    entry = this_box()
+    value = (entry.get('markers') or {}).get(kind) if entry else None
+    return [Path(item) for item in ([value] if isinstance(value, str) else value or [])]
+
+
+def scratch_root() -> Path | None:
+    """This box's scratch root (the entry's scratch), or None."""
+    entry = this_box()
+    return Path(entry.scratch) if entry and entry.get('scratch') else None
+
+
+def scratch_dir(name: str) -> Path:
+    """A default output directory for one tool: under this box's scratch root, else under the system temp directory."""
+    import tempfile
+    return (scratch_root() or Path(tempfile.gettempdir()) / 'cortex-scratch') / name
+
+
+def held(*kinds: str) -> list[Path]:
+    """The markers of these kinds that exist now on this box (an empty list lets a run start)."""
+    return [path for kind in kinds for path in markers(kind) if path.exists()]
+
+
 def identifying_names(facts: Facts | None = None) -> set[str]:
     """Every name, instance, hostname and alias the file gives a machine, minus plain platform and role words."""
     facts = facts or load()

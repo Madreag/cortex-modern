@@ -5,7 +5,9 @@
   "boxes": [
     {
       "role": "pc", "name": "box-a", "instance": "peer-a", "hostname": "BOX-A", "ssh": null, "aliases": [],
-      "os": "windows", "user": "player", "home": "C:/Users/player"
+      "os": "windows", "user": "player", "home": "C:/Users/player", "scratch": "C:/scratch",
+      "markers": {"timing": "C:/scratch/TIMING-RUN", "cross-free": "C:/scratch/FREE-FOR-CROSS", "verification": "C:/scratch/VERIFICATION.lock",
+                  "battery": "C:/scratch/BATTERY.lock", "exclusive": "C:/scratch/EXCLUSIVE.lock", "harness": "C:/scratch/HARNESS.lock"}
     },
     {
       "role": "remote", "name": "box-b", "instance": "peer-b", "hostname": "BOX-B", "ssh": "host-b", "aliases": ["host-b-lan"],
