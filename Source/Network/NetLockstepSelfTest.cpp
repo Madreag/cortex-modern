@@ -53,6 +53,7 @@
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <atomic>
 #include <barrier>
 #include <cstring>
@@ -24193,12 +24194,18 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			for (int turn = 0; turn < 25; ++turn) round.Pump();
 			round.peers[1].EvictRemovedPeer(4, "successor releases seat", round.now);
 			for (int turn = 0; turn < 80; ++turn) round.Pump();
+			std::string recordedBytes;
+			bool truncated = false;
+			if (!ScenarioRunner::CopyLockstepReplayForDiagnostics(recordedBytes, truncated) || truncated) return fail("the committed recording could not be copied");
+			std::ofstream saved("host-change-committed.ccreplay", std::ios::binary);
+			saved.write(recordedBytes.data(), static_cast<std::streamsize>(recordedBytes.size()));
+			saved.close();
 			ScenarioRunner::CloseLockstepReplayRecord();
 			round.recording = false;
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			NetReplayVerifyReport verify;
-			if (!NetMatchReplayReader::Verify("host-change.ccreplay", verify)) return fail("the recording failed verification: " + verify.error);
-			if (!ScenarioRunner::SetLockstepReplaySource("host-change.ccreplay", &round.failure)) return fail(round.failure);
+			if (!NetMatchReplayReader::Verify("host-change-committed.ccreplay", verify)) return fail("the recording failed verification: " + verify.error);
+			if (!ScenarioRunner::SetLockstepReplaySource("host-change-committed.ccreplay", &round.failure)) return fail(round.failure);
 			LoopbackTransport wire;
 			NetLockstepCoordinator replay;
 			auto config = ReleasedClaimsConfig(round.match, 3, {}, true);
@@ -24261,6 +24268,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
 		install_allegro(SYSTEM_NONE, &errno, std::atexit);
 		if (!SceneMan::IsConstructed()) SceneMan::Construct();
+		EnsureSwitchTestManagers();
 		bool passed = true;
 		for (bool (*test)(std::string*): {TestDecisionsCompleteWithoutRemovedPeer, TestPlayingDepartureReachesRecordingAndTail,
 		    TestSuccessorRecordsPlayThroughHostChange, TestCommitOnlySuccessorReproposesRelease}) {
