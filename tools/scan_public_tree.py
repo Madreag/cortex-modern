@@ -60,11 +60,14 @@ TOOL_PATTERNS = [EDGE_L + '(?:' + alternation(TOOL_NAMES) + ')' + EDGE_R, EDGE_L
                  EDGE_L + 's' 'we-2' + EDGE_R, EDGE_L + 'cur' 'sor[-_ ](?:agent|cli)' + EDGE_R]
 INTERNAL_NAMES = words('cli+_runs', 'lead+-tools', 'lead+_tools', 'reviews/+takeover', 'takeover-+2026', 'fix+group',
                        'wave+-a', 'alpha/+v1', 'stage+2/', 'flag+ship/', 'live+-lanes', 'RE+PORT-final', 'inventory-+confirming',
-                       'mx/+session1') + [name + '.md' for name in words('AGE+NTS', 'RES+UME', 'STA+TUS', 'ROLL+BACK', 'SEAT-+ROSTER',
-                       'BOX+ES', 'REJOIN-+GRID', 'HAND+OFF', 'MAC_+RESUME', 'V1-+GAPS', 'V1-+PLAN', 'V1-+ACCEPTANCE')] + \
-                 words('RULE+BOOK', 'SPAWN+_LOG', 'LEAD-+REVIEW', 'LEAD_+PLAN', 'WORKER+_RULES', '_RUN+BOOK', 'ENGINE-+FOLLOWUPS',
-                       'INTEGRATION+_33', 'STAGE2_+H4')
+                       'mx/+session1')
+# The private documents, by the capitalised names they go by.
+INTERNAL_DOCUMENTS = [name + '.md' for name in words('AGE+NTS', 'RES+UME', 'STA+TUS', 'ROLL+BACK', 'BOX+ES', 'HAND+OFF',
+                      'MAC_+RESUME', 'V1-+GAPS', 'V1-+PLAN', 'V1-+ACCEPTANCE')] + \
+                     words('RULE+BOOK', 'SPAWN+_LOG', 'LEAD-+REVIEW', 'LEAD_+PLAN', 'WORKER+_RULES', '_RUN+BOOK',
+                           'ENGINE-+FOLLOWUPS', 'INTEGRATION+_33', 'STAGE2_+H4', 'SEAT-+ROSTER', 'REJOIN-+GRID', 'SWARM-+COMMON')
 INTERNAL_PATTERNS = ['(?i)' + EDGE_L + '(?:' + alternation([re.escape(name) for name in INTERNAL_NAMES]) + ')',
+                     EDGE_L + '(?:' + alternation([re.escape(name) for name in INTERNAL_DOCUMENTS]) + ')',
                      r'(?i)' + EDGE_L + r'[a-z]:[/\\]+mx' + EDGE_R]
 TAG_PATTERNS = [
     EDGE_L + r'(?:ENGINE|NOTE|ADDENDUM|RESUME|RULING)\s+[0-9]+' + EDGE_R,
@@ -79,6 +82,9 @@ TAG_PATTERNS = [
     EDGE_L + r'L[0-9]{2}' + EDGE_R,
     EDGE_L + r'Source[0-9]{2}' + EDGE_R,
     EDGE_L + r'R[0-9](?:F[0-9]+|D[0-9]+|WAY[0-9]+|-[0-9]{3})',
+    # A ruling named by its letters ("ruling ppp"), and the numbered user rules A0-A16.
+    r'(?i)' + EDGE_L + r'rulings?\s+(?:[a-z]{1,4}|[A-Z]?[0-9]{1,2}(?:\.[0-9]+)?)' + EDGE_R,
+    EDGE_L + r'A(?:1[0-6]|[0-9])' + EDGE_R + r'(?=[:)])',
 ]
 DRIVE_PATH = re.compile(r'(?<![A-Za-z0-9])([A-Za-z]):[/\\]{1,2}([^/\\"\'`\s,;:)\]}*?<>|]+)')
 HOME_PATH = re.compile(r'(?:(?<![A-Za-z0-9])[A-Za-z]:[/\\]{1,2}Users[/\\]{1,2}|(?<![A-Za-z0-9.~])/(?:Users|home)/)([A-Za-z0-9._-]+)')
@@ -102,6 +108,13 @@ CLOUDFLARE_RANGES = ('173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '1
                      '162.158.0.0/15', '104.16.0.0/13', '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22')
 for _net in CLOUDFLARE_RANGES:
     ALLOWED_IPV4[_net.split('/')[0]] = "a Cloudflare published range's prefix"
+# Hits that stay, each with its reason: (path, class, matched text) -> reason.
+ALLOWED_HITS = {
+    ('Source/Activities/GameActivity.cpp', 'process-tag', 'F' '21'):
+        "part of a test lever's environment name the harness sets; renaming it changes engine behaviour, not text",
+    ('Data/Base.rte/GUIs/MainMenuSubMenuGUI.ini', 'process-tag', 'L' '20'):
+        'a comment inside the Data module, which this pass leaves untouched',
+}
 BINARY_RUN = re.compile(rb'[\x20-\x7e]{6,}')
 
 
@@ -228,7 +241,8 @@ def scan(repo: Path, base: str, scanner: Scanner, rev: str | None = None) -> lis
         for number, text in file_lines(repo, base, status, path, rev):
             found = scanner.line(path, number, text)
             # Tag-shaped runs in a binary file are noise.
-            hits += [hit for hit in found if number >= 0 or hit.kind != 'process-tag']
+            hits += [hit for hit in found if (number >= 0 or hit.kind != 'process-tag') and
+                     (hit.path, hit.kind, hit.text) not in ALLOWED_HITS]
     return hits
 
 
