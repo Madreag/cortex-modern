@@ -624,11 +624,21 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
             records[who] = {"error": repr(error)}
 
     threads = {}
-    for who in who_list:
+    for index, who in enumerate(who_list):
         threads[who] = threading.Thread(target=drive, args=(who,))
         threads[who].start()
         if who == NAMES[0]:
             time.sleep(2.0)
+        elif index + 1 < len(who_list):
+            # Seats follow the order the clients reach the host: one at a time, so every size plays the same teams (the
+            # AI that keeps a held place can win the duel for its team before the case ends).
+            log = runs[who].out / "stdout.log"
+            deadline = time.monotonic() + 90
+            while time.monotonic() < deadline and threads[who].is_alive():
+                if log.exists() and "[net-route] RouteAllowed" in log.read_text(encoding="utf-8", errors="replace"):
+                    break
+                time.sleep(0.2)
+            time.sleep(1.0)
     if NEWCOMER in runs:
         # The newcomer asks for the held place once the host has kept it; frozen once the host has read the request so the
         # approval stays open long enough for Cancel, then thawed to take the place.
