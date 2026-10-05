@@ -77,6 +77,9 @@ void PauseMenuGUI::Clear() {
 	m_MatchOptionsShown = false;
 	m_MatchRepairHint = nullptr;
 	m_SaveMatchHint = nullptr;
+	m_MatchLiveLine = nullptr;
+	m_EndMatchHint = nullptr;
+	m_PauseMenuBoxHomeHeight = 0;
 	m_MatchRepairArmed = false;
 	m_MatchRepairRefusal.clear();
 }
@@ -116,6 +119,21 @@ void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 	m_SaveMatchHint->SetFont(m_GUIControlManager->GetSkin()->GetFont("FontSmall.png"));
 	m_SaveMatchHint->SetHAlignment(GUIFont::Centre);
 	m_SaveMatchHint->SetVisible(false);
+	m_PauseMenuButtons[PauseMenuButton::PlayersButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->AddControl(
+	    "ButtonPlayers", "BUTTON", m_PauseMenuBox, 0, 0, 224, 20));
+	m_PauseMenuButtons[PauseMenuButton::PlayersButton]->SetText("Players");
+	m_PauseMenuButtons[PauseMenuButton::PlayersButton]->SetVisible(false);
+	m_PauseMenuButtons[PauseMenuButton::PlayersButton]->SetEnabled(false);
+	const auto smallLine = [this](const std::string& name) {
+		auto* label = dynamic_cast<GUILabel*>(m_GUIControlManager->AddControl(name, "LABEL", m_PauseMenuBox, 0, 0, 300, 20));
+		label->SetFont(m_GUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+		label->SetHAlignment(GUIFont::Centre);
+		label->SetVisible(false);
+		return label;
+	};
+	m_MatchLiveLine = smallLine("LabelMatchLive");
+	m_EndMatchHint = smallLine("LabelEndMatchHint");
+	m_EndMatchHint->SetText("Only the host can end the match");
 
 	m_PauseMenuButtons[PauseMenuButton::BackToMainButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonBackToMain"));
 	m_PauseMenuButtons[PauseMenuButton::SaveOrLoadGameButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonSaveOrLoadGame"));
@@ -165,6 +183,7 @@ void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 	int boxHeight = 0;
 	m_PauseMenuBox->GetControlRect(&boxPosX, &boxPosY, &boxWidth, &boxHeight);
 	m_PauseMenuBoxHomeY = boxPosY;
+	m_PauseMenuBoxHomeHeight = boxHeight;
 	for (int pauseMenuButton = 0; pauseMenuButton < PauseMenuButton::LeaveConfirmButton; ++pauseMenuButton) {
 		int buttonPosX = 0;
 		int buttonPosY = 0;
@@ -249,50 +268,61 @@ void PauseMenuGUI::SetNetworkMatchMode(bool networkMatch) {
 	ShowMatchOptions(false);
 	SetActiveMenuScreen(PauseMenuScreen::MainScreen, false);
 
-	// The match rows take the slots and the half row shift of the pause menu without its mod manager row.
+	// Back to the game comes first and the ways out of the match come last, set apart from the rest.
 	const auto matchRowOffset = [](int button) {
 		switch (button) {
-			case PauseMenuButton::LeaveMatchButton:
-				return 0;
-			case PauseMenuButton::MatchOptionsButton:
-				return 20;
-			case PauseMenuButton::PauseMatchButton:
-				return 40;
-			case PauseMenuButton::SaveMatchButton:
-				return 60;
-			case PauseMenuButton::SettingsButton:
-				return 100;
-			case PauseMenuButton::SaveDiagnosticsButton:
-				return 120;
-			case PauseMenuButton::EndMatchButton:
-				return 140;
 			case PauseMenuButton::ResumeButton:
+				return 20;
+			case PauseMenuButton::PlayersButton:
+				return 40;
+			case PauseMenuButton::PauseMatchButton:
+				return 60;
+			case PauseMenuButton::MatchOptionsButton:
+				return 80;
+			case PauseMenuButton::SaveMatchButton:
+				return 100;
+			case PauseMenuButton::SettingsButton:
+				return 140;
+			case PauseMenuButton::SaveDiagnosticsButton:
 				return 160;
+			case PauseMenuButton::LeaveMatchButton:
+				return 190;
+			case PauseMenuButton::EndMatchButton:
+				return 210;
 			default:
 				return -1;
 		}
 	};
+	constexpr int c_MatchRowsHeight = 250;
 
 	int boxPosX = 0;
 	int boxPosY = 0;
 	int boxWidth = 0;
 	int boxHeight = 0;
 	m_PauseMenuBox->GetControlRect(&boxPosX, &boxPosY, &boxWidth, &boxHeight);
-	m_PauseMenuBox->MoveRelative(0, m_PauseMenuBoxHomeY + (networkMatch ? -10 : 0) - boxPosY);
+	const int height = networkMatch ? c_MatchRowsHeight : m_PauseMenuBoxHomeHeight;
+	if (boxHeight != height) {
+		m_PauseMenuBox->Resize(boxWidth, height);
+	}
+	m_PauseMenuBox->MoveRelative(0, m_PauseMenuBoxHomeY + (networkMatch ? (m_PauseMenuBoxHomeHeight - c_MatchRowsHeight) / 2 : 0) - boxPosY);
 
 	for (int button = 0; button < PauseMenuButton::LeaveConfirmButton; ++button) {
 		const int matchRow = matchRowOffset(button);
 		const bool onMenu = networkMatch ? matchRow >= 0
 		                                 : button != PauseMenuButton::PauseMatchButton && button != PauseMenuButton::LeaveMatchButton &&
 		                                       button != PauseMenuButton::MatchOptionsButton && button != PauseMenuButton::EndMatchButton &&
-		                                       button != PauseMenuButton::SaveMatchButton;
+		                                       button != PauseMenuButton::SaveMatchButton && button != PauseMenuButton::PlayersButton;
 		PlaceButtonRow(button, networkMatch && onMenu ? matchRow : m_ButtonHomeY[button]);
 		m_PauseMenuButtons[button]->SetEnabled(onMenu);
 		m_PauseMenuButtons[button]->SetVisible(onMenu);
 	}
-	// The save row's hint takes the slot under it.
-	m_SaveMatchHint->SetPositionRel(0, 80);
+	// The line over the rows and the hints under the save and end rows take the slots beside them.
+	m_MatchLiveLine->SetPositionRel(0, 0);
+	m_MatchLiveLine->SetVisible(networkMatch);
+	m_SaveMatchHint->SetPositionRel(0, 120);
 	m_SaveMatchHint->SetVisible(networkMatch);
+	m_EndMatchHint->SetPositionRel(0, 230);
+	m_EndMatchHint->SetVisible(false);
 	// The single-player pass owns the mod manager row again and re-derives it from the Activity.
 	m_ModManagerButtonDisabled = false;
 	UpdateMatchPauseRow(true);
@@ -304,7 +334,16 @@ void PauseMenuGUI::UpdateMatchPauseRow(bool force) {
 	}
 	const bool matchPaused = ScenarioRunner::IsLockstepPaused();
 	// End Match is the host's: it finishes the round the way the match's own end would.
-	m_PauseMenuButtons[PauseMenuButton::EndMatchButton]->SetEnabled(g_NetMatchService.IsHost() && g_NetMatchService.GetState() == NetMatchServiceState::Running);
+	const bool host = g_NetMatchService.IsHost();
+	m_PauseMenuButtons[PauseMenuButton::EndMatchButton]->SetEnabled(host && g_NetMatchService.GetState() == NetMatchServiceState::Running);
+	if (m_EndMatchHint->GetVisible() == host) {
+		m_EndMatchHint->SetVisible(!host);
+	}
+	// This menu is the player's own: the shared match runs under it unless someone paused it for everyone.
+	const std::string liveLine = matchPaused ? "The match is paused for everyone" : "The match continues while this menu is open";
+	if (m_MatchLiveLine->GetText() != liveLine) {
+		m_MatchLiveLine->SetText(liveLine);
+	}
 	// Saving is the host's too; every peer reads when the match was last saved.
 	const NetMatchService::MatchSaveRow saveRow = g_NetMatchService.GetMatchSaveRow();
 	m_PauseMenuButtons[PauseMenuButton::SaveMatchButton]->SetEnabled(saveRow.enabled);
@@ -516,6 +555,8 @@ bool PauseMenuGUI::HandleInputEvents() {
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::PauseMatchButton]) {
 				// The one pause every peer shares, on this player's own team authority, like the P shortcut.
 				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{g_NetMatchService.GetLocalTeam(), !ScenarioRunner::IsLockstepPaused()}});
+			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::PlayersButton]) {
+				m_UpdateResult = PauseMenuUpdateResult::PlayersPanel;
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::LeaveMatchButton]) {
 				ShowLeaveConfirm(true);
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::MatchOptionsButton]) {
