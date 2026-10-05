@@ -30,7 +30,6 @@ A community fork of the [Cortex Command Community Project](https://github.com/co
 > **Alpha 1 status, October 4.** Playable today, built from source on Windows, macOS and Linux. The full acceptance run on this exact build has not finished yet.
 >
 > **Being fixed right now**
-> - "Resyncing the match..." can show twice at once during a repair.
 > - A join refused as "modules" does not say which mod differs.
 > - Memory use in hour-long persistent worlds is being measured.
 >
@@ -213,7 +212,6 @@ Alpha means alpha. Everything below is tracked; items marked *being fixed* have 
 
 | Issue | What you would see | State |
 |---|---|---|
-| The same message shown twice | During a repair, "Resyncing the match..." can appear twice at once. Cosmetic. | **Being fixed** |
 | A refused join says only "modules" | Two players whose game data differ by a single byte cannot join each other, and the message does not say which mod differs. Both need identical `Data` folders. | **Being fixed** |
 | A relayed connection can give up early | Setting up a relayed connection over a slow path can take longer than the 10 seconds it is given. Trying again, or Automatic, gets through. | **Being fixed** |
 | Hour-long worlds | Memory use grows over a long persistent world. Being measured to tell a leak from a cache that stops growing. | **Being measured** |
