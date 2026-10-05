@@ -23538,7 +23538,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			config.substituteSlowPeers = bounded;
 			if (bounded) {
 				config.simTickMs = 1000.0 / 60.0;
-				config.slowPlayerBoundTicks = 600;
+				config.slowPlayerBoundTicks = NetMatchConfigUtil::c_MaxSlowPlayerBoundTicks;
 			}
 			config.remoteTransportPeerIds = std::move(remotes);
 			config.relayToOtherPeers = local == match.hostPeerId;
