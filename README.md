@@ -258,8 +258,8 @@ Multiplayer needs the GameNetworkingSockets library (GNS). A build without it is
 
 1. Install [Visual Studio Community](https://visualstudio.microsoft.com/downloads/) 2019 (16.10 or newer) or 2022 with the C++ workload, and both x86 and x64 [Visual C++ Redistributables](https://support.microsoft.com/en-us/help/2977003/the-latest-supported-visual-c-downloads).
 2. Clone this repository. The default branch, `main`, is the alpha.
-3. Build or install GNS and point `GNS_ROOT` and `GNS_DEP_ROOT` at it (`RTEA.common.props` reads them).
-4. Copy `fmod.dll` from `external\lib\win` into the root directory.
+3. [Build GNS with its vcpkg dependencies](https://github.com/ValveSoftware/GameNetworkingSockets/blob/master/BUILDING.md) for `x64-windows`. Point `GNS_ROOT` at the GNS install prefix and `GNS_DEP_ROOT` at vcpkg's `x64-windows` install directory (`RTEA.vcxproj` reads them). The project links `GameNetworkingSockets_s.lib` statically, with shared protobuf, Abseil and OpenSSL dependencies.
+4. Copy `fmod.dll` from `external\lib\win`, and `libprotobuf.dll`, `abseil_dll.dll` and `libcrypto-3-x64.dll` from `%GNS_DEP_ROOT%\bin`, into the root directory beside `Cortex Command.exe`. Use DLLs from the same dependency build used at link time. A static GNS build does not need `GameNetworkingSockets.dll`.
 5. Open `RTEA.sln`, choose x64 and a configuration, build and run.
    - `Debug Full`: debugging with all visuals (builds fast, runs slow).
    - `Debug Minimal`: debugging with visuals off.

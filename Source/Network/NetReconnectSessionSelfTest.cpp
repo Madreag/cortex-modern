@@ -40,6 +40,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <variant>
@@ -1757,10 +1758,10 @@ namespace RTE {
 			return census;
 		}
 
-		std::vector<int64_t> CollectOwnedActorUIDs(const NetLockstepCoordinator& coordinator, uint8_t ownerPeer, const std::vector<CensusActor>& world) {
+		std::vector<int64_t> CollectOwnedActorUIDs(const NetLockstepCoordinator& coordinator, uint8_t ownerPeer, const std::vector<CensusActor>& world, std::optional<uint64_t> atFrame = std::nullopt) {
 			std::vector<int64_t> uids;
 			for (const CensusActor& actor : world) {
-				if (coordinator.ResolveActorOwner(actor.uid, actor.team, actor.cpu) == ownerPeer) {
+				if (coordinator.ResolveActorOwner(actor.uid, actor.team, actor.cpu, atFrame) == ownerPeer) {
 					uids.push_back(actor.uid);
 				}
 			}
@@ -8368,17 +8369,26 @@ namespace RTE {
 				leaveCensus();
 				return Fail("the eviction dropped the keeper's committed commands");
 			}
-			std::vector<NetGameCommand> afterEvictedCommands;
-			if (censusRound.host.PeekQueuedCommands(committed, 3, afterEvictedCommands) || !afterEvictedCommands.empty()) {
+			// The seat leaves at the first frame this host never received from it: what it sent before was relayed on, and a survivor
+			// ahead of this host may already have committed it, so every peer applies it there.
+			const auto leaves = censusRound.host.GetPeerLeaveFrames();
+			if (!leaves.contains(3) || leaves.at(3) != committed + 1) {
 				leaveCensus();
-				return Fail("the evicted seat's committed commands survived");
+				return Fail("the evicted seat did not leave at the first frame it never sent");
+			}
+			const uint64_t leaveFrame = leaves.at(3);
+			std::vector<NetGameCommand> afterEvictedCommands;
+			if (!censusRound.host.PeekQueuedCommands(committed, 3, afterEvictedCommands) || afterEvictedCommands != beforeKickedCommands) {
+				leaveCensus();
+				return Fail("the evicted seat's relayed commands were dropped before its leave frame");
 			}
 			if (censusRound.host.ResolveActorOwner(101, 1, false) != 2 || censusRound.host.ResolveActorOwner(102, 1, false) != 2) {
 				leaveCensus();
 				return Fail("the eviction moved the keeper's actors off their seat");
 			}
-			const uint8_t evictedOwner = censusRound.host.ResolveActorOwner(201, 2, false);
-			if (CollectOwnedActorUIDs(censusRound.host, 3, world) == beforeEvictedUIDs || evictedOwner != 1) {
+			const uint8_t evictedOwner = censusRound.host.ResolveActorOwner(201, 2, false, leaveFrame);
+			if (censusRound.host.ResolveActorOwner(201, 2, false, committed) != 3 || CollectOwnedActorUIDs(censusRound.host, 3, world, leaveFrame) == beforeEvictedUIDs ||
+			    evictedOwner != 1) {
 				leaveCensus();
 				return Fail("the evicted seat's actors went to peer " + std::to_string(evictedOwner) + " instead of the host takeover");
 			}

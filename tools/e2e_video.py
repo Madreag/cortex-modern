@@ -240,6 +240,10 @@ def engine_cap_findings(scenario):
     if not declared:
         return []
     cap, field = min(declared)
+    # A ruling may seat one named scene past the box's cap, as the planner's run_split.py reads it.
+    ruled = (entry.get("ruled_engines") or {}).get(scenario.get("name"))
+    if isinstance(ruled, int) and ruled > cap:
+        cap, field = ruled, f"ruled_engines.{scenario.get('name')}"
     runs = scenario.get("runs") or [{"peers": scenario.get("peers", [])}]
     need = max(len(run.get("peers", [])) for run in runs)
     if need <= cap:
