@@ -1,6 +1,8 @@
 #include "GUI.h"
 #include "GUITab.h"
 
+#include <algorithm>
+
 using namespace RTE;
 
 GUITab::GUITab(GUIManager* Manager, GUIControlManager* ControlManager) :
@@ -136,13 +138,41 @@ void GUITab::Draw(GUIScreen* Screen) {
 	// Make it centered vertically
 	int YPos = m_Height / 2 - (m_ImageRects[0].bottom - m_ImageRects[0].top) / 2 + m_Y;
 
+	// A caption wider than the skin's tab gets a tab as wide as it needs: the two ends as drawn, the middle repeated.
+	const int imageWidth = m_ImageRects[0].right - m_ImageRects[0].left;
+	int tabWidth = imageWidth;
+	if (m_Font) {
+		m_Font->SetKerning(m_FontKerning);
+		tabWidth = std::min(m_Width, std::max(imageWidth, m_Font->CalculateWidth(" " + m_Text) + 8));
+	}
+	const auto drawTab = [&](GUIRect& source) {
+		const int end = 2;
+		if (tabWidth <= imageWidth || source.right - source.left <= 2 * end) {
+			m_Image->DrawTrans(Screen->GetBitmap(), m_X, YPos, &source);
+			return;
+		}
+		GUIRect left = source, middle = source, right = source;
+		left.right = source.left + end;
+		middle.left = source.left + end;
+		middle.right = source.right - end;
+		right.left = source.right - end;
+		m_Image->DrawTrans(Screen->GetBitmap(), m_X, YPos, &left);
+		const int span = middle.right - middle.left;
+		for (int x = m_X + end; x < m_X + tabWidth - end; x += span) {
+			GUIRect piece = middle;
+			piece.right = middle.left + std::min(span, m_X + tabWidth - end - x);
+			m_Image->DrawTrans(Screen->GetBitmap(), x, YPos, &piece);
+		}
+		m_Image->DrawTrans(Screen->GetBitmap(), m_X + tabWidth - end, YPos, &right);
+	};
+
 	// Draw the base
-	m_Image->DrawTrans(Screen->GetBitmap(), m_X, YPos, &m_ImageRects[0]);
+	drawTab(m_ImageRects[0]);
 
 	// Draw the selected one
 	if (m_Selected) {
 		if (m_Enabled) {
-			m_Image->DrawTrans(Screen->GetBitmap(), m_X, YPos, &m_ImageRects[2]);
+			drawTab(m_ImageRects[2]);
 		} // else
 		  // m_Image->DrawTrans(Screen->GetBitmap(), m_X, YPos, &m_ImageRects[3]);
 		//}
@@ -150,7 +180,7 @@ void GUITab::Draw(GUIScreen* Screen) {
 
 	// Hover chrome stays off a selected tab so the selected slice stays visible.
 	if (m_Enabled && (m_Mouseover || m_GotFocus) && !m_Selected) {
-		m_Image->DrawTrans(Screen->GetBitmap(), m_X, YPos, &m_ImageRects[1]);
+		drawTab(m_ImageRects[1]);
 	} else if (!m_Enabled) {
 		const int disabledW = m_ImageRects[3].right - m_ImageRects[3].left;
 		const int disabledH = m_ImageRects[3].bottom - m_ImageRects[3].top;
