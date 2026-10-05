@@ -2184,6 +2184,7 @@ namespace RTE {
 			NetLockstepCoordinator host, client;
 			auto a = MakeCoordinatorConfig(1, 2, 0x9A37, 0, NetTransportLane::ControlReliable);
 			auto b = MakeCoordinatorConfig(2, 1, 0x9A37, 0, NetTransportLane::ControlReliable);
+			a.roundId = 0x9A37; // The host names the round; the client adopts that tag from its start.
 			a.substituteSlowPeers = b.substituteSlowPeers = true; a.relayToOtherPeers = true;
 			a.simTickMs = b.simTickMs = 1000.0 / 60.0;
 			if (!StartCoordinatorPair(48902, hostWire, clientWire, host, client, a, b, error)) return false;
@@ -2656,9 +2657,10 @@ namespace RTE {
 			if (host.QueueLocalInput(20, {}, {}, &pending) || pending != "input is waiting for a timing decision") {
 				*error = "local production crossed an unacknowledged timing boundary"; return false;
 			}
-			host.NoteFrameWait(20, 100, true);
-			host.NoteFrameWait(20, 150, true);
-			host.Tick(150);
+			for (uint64_t now = 41; now <= 150; ++now) {
+				hostWire.AdvanceTimeMs(1); host.Tick(now);
+				if (now >= 100) host.NoteFrameWait(20, now, true);
+			}
 			if (!host.QueueLocalInput(20, {}, {}, error)) {
 				*error = "timing fixture after deadline: " + *error + " next=" + std::to_string(host.GetStats().nextFrame) +
 				         " holds=" + std::to_string(host.GetStats().peers.at(2).holds) + " " + host.DescribePendingTimingDecisions(20); return false;
