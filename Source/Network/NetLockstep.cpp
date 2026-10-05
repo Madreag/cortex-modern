@@ -11343,7 +11343,7 @@ namespace RTE {
 				const uint64_t since = m_Stats.peers[frame.senderPeerId].lastProgressMs;
 				ObserveHostInputSilence(nowMs); EndHostInputSilence(frame.senderPeerId, nowMs);
 				const uint64_t own = HostInputSilenceMs(frame.senderPeerId, since, nowMs);
-				if (since != 0 && nowMs > since && nowMs - since > own + 2 * m_Config.simTickMs)
+				if (since != 0 && nowMs > since && nowMs - since > own)
 					m_DelayEstimators[frame.senderPeerId].ObserveSilence(nowMs, static_cast<uint32_t>(std::min<uint64_t>(nowMs - since - own, UINT32_MAX)));
 				m_SilenceUnmeasured.erase(open);
 			}
