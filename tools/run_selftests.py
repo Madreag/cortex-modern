@@ -376,7 +376,7 @@ def run_lockstep_cli(repo, make_run, case, timeout):
     failures, hashes = [], []
     for role, record, trace in zip(("host", "client"), records, traces):
         if record.get("exit_code") != 0 or record.get("timed_out") or not record.get("evidence_complete"):
-            stdout = (case / role / "stdout.log").read_text(errors="replace")
+            stdout = (case / role / "stdout.log").read_text(errors="replace") + (case / role / "stderr.log").read_text(errors="replace")
             reason = next((line for line in stdout.splitlines() if "requires" in line or "failed" in line.lower()), stdout[-600:])
             failures.append(f"delay 1 {role} does not finish its round: {reason}")
         try:

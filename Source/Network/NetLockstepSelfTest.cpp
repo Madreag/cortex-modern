@@ -25613,6 +25613,11 @@ namespace {
 			service.m_DirectoryRow.listenPort = service.m_BeaconGamePort;
 			service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
 			service.m_DirectoryRow.joinMode = "ip";
+			auto localTicket = admission.hostTicket;
+			localTicket.hostAddress = "loopback:" + std::to_string(round.match.migrationPeers.front().listenPort - 1);
+			localTicket.issuedAtUnixMs = admission.wallMs;
+			service.m_TicketStore.SetPath(NetMatchService::s_TicketStorePath);
+			if (!service.m_TicketStore.Store(localTicket, error)) return false;
 			return true;
 		}
 
@@ -25709,7 +25714,8 @@ namespace {
 			if (!release || release->applyFrame != 32) return done("the service removal did not commit a future release at frame 32");
 			NetLobbyMigration capsule;
 			capsule.kind = 2; capsule.peerId = 2; capsule.configHash = round.peers[0].GetRoundConfigHash();
-			if (!host.SealMigrationCapsule(2, capsule.configHash, capsule.sealedState) || !successor.OpenMigrationCapsule(capsule)) return done("the prospective successor did not take the removal's capsule");
+			if (!host.SealMigrationCapsule(2, capsule.configHash, capsule.sealedState)) return done("the host did not seal the removal's capsule");
+			if (!successor.OpenMigrationCapsule(capsule)) return done("the prospective successor did not open the removal's capsule");
 			round.drainThrough = 29; round.produceThrough.fill(29);
 			for (int pass = 0; pass < 100 && round.peers[2].GetResumeFrame() != 30; ++pass) round.Pump();
 			if (!round.Migrate() || round.peers[1].GetMigrationResult().boundary != 29) return done("the succession did not use boundary 29");
@@ -25783,9 +25789,10 @@ namespace {
 			NetReconnectTicketStore store; store.SetPath("Userdata/host-ticket-return/newcomer.ticket");
 			NetReconnectClient newcomer; newcomer.Configure(&store, admission.identity, "Newcomer");
 			newcomer.SetUnixClock(&HostReturnAdmission::WallClock, &admission);
+			admission.nowMs = NetMatchService::AdmissionNowMs();
 			admission.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
 			if (!newcomer.BeginApplication(3, admission.nowMs, &round.failure) || !admission.Pump(host.m_ReconnectHost, {{connection, &newcomer}}, &round.failure)) return done(round.failure);
-			for (const auto& seat: host.m_ReconnectHost.GetModerationView()) if (seat.lockstepPeerId == 4) selected = NetSelectModerationSeat(seat);
+			for (const auto& seat: host.m_ReconnectHost.GetModerationView()) if (seat.lockstepPeerId == 4) selected = NetSelectModerationSeat(seat, connection);
 			if (host.ApplyModeration(selected, NetModerationAction::Substitute) != NetH4ModerationResult::Ok ||
 			    !admission.Pump(host.m_ReconnectHost, {{connection, &newcomer}}, &round.failure) || newcomer.GetState() != NetH4ClientState::Joined) return done("the host did not admit the opened seat's applicant: " + round.failure);
 			auto remotes = round.peers[0].RemoteTransports(); remotes[4] = connection;
