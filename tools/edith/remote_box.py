@@ -102,9 +102,15 @@ class RemoteBox:
             time.sleep(poll_s)
 
     def start_task(self, local_script: Path, budget_s: float = 900) -> None:
-        """Waits for the task to be free, installs the rendered payload as the task's script and starts it."""
-        self.wait_task_idle(budget_s)
-        self.scp_to(local_script, self.session_script)
+        """Installs a payload without replacing the registered session wrapper."""
+        state = self.wait_task_idle(budget_s)
+        if state != 'Ready':
+            raise RuntimeError(f'{self.task} is {state}; payload installation requires Ready')
+        wrapper = self.read_text(self.session_script) if not self.dry_run else None
+        target = self.session_script
+        if wrapper and 'command.ps1' in wrapper.lower():
+            target = (PureWindowsPath(self.session_script).parent / 'command.ps1').as_posix()
+        self.scp_to(local_script, target)
         self.ssh(f'Start-ScheduledTask -TaskName {self.task}')
 
     def wait_done(self, done: Path | str, budget_s: float, slice_cap_s: int = 540) -> str:
