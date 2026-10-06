@@ -3599,7 +3599,8 @@ def main():
     if any(case in SPREAD_CASES for case, _ in selected):
         if not spread:
             parser.error("selected menu readback requires the shared spread executor")
-        options.spread = True
+        if getattr(options, "spread", False) or not getattr(options, "peer_boxes", None):
+            parser.error("selected menu readback requires the test lead's explicit --peer-boxes")
     if spread:
         spread.configure(options)
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
