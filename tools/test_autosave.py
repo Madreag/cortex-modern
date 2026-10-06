@@ -2,6 +2,7 @@
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -18,10 +19,13 @@ CAPTURE = re.compile(r"^\[autosave\] tick=(\d+) capture_ms=(\d+(?:\.\d+)?) bytes
 FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
 
 
-def run_pair(repo: Path, root: Path, port: int, seconds: dict, ticks: int, *, prepare=None) -> dict:
+def run_pair(repo: Path, root: Path, port: int, seconds: dict, ticks: int, *, prepare=None, case=None) -> dict:
     if FAMILY_LOCK.exists():
         raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
-    root.mkdir(parents=True, exist_ok=False)
+    if case:
+        case.stage_root(root)
+    else:
+        root.mkdir(parents=True, exist_ok=False)
     runs, records = {}, {}
     for who in ("host", "client"):
         args = ["-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", "2",
@@ -34,7 +38,8 @@ def run_pair(repo: Path, root: Path, port: int, seconds: dict, ticks: int, *, pr
         env = {"CCCP_HEADLESS": "1"}
         if minimum := os.environ.get("CC_TEST_AUTOSAVE_STARTUP_MIN_FRAMES"):
             env["CC_TEST_AUTOSAVE_STARTUP_MIN_FRAMES"] = minimum
-        runs[who] = make_run(repo, args, root / who, 360, env=env)
+        factory = case.make_run if case else make_run
+        runs[who] = factory(repo, args, root / who, 360, env=env)
         if prepare:
             prepare(who, runs[who].cwd)
 
@@ -147,7 +152,27 @@ def exact_role_compare(control: Path, saved: Path, ticks: int) -> None:
 
 
 def main() -> int:
+    # The explicit helper directory is the lead's shared main worktree. Do not
+    # vendor or patch the mechanism in an autosave-specific transport wrapper.
+    helper_parser = argparse.ArgumentParser(add_help=False)
+    helper_parser.add_argument("--spread-tools", type=Path)
+    helper_args, _ = helper_parser.parse_known_args()
+    spread = None
+    helper_files = []
+    if helper_args.spread_tools:
+        folder = helper_args.spread_tools.resolve()
+        helper_files = [folder / "spread_peers.py", folder / "cross_peers.py"]
+        if not all(path.is_file() for path in helper_files):
+            helper_parser.error("spread-tools must contain the shared spread_peers.py and cross_peers.py")
+        sys.path.insert(0, str(folder))
+        spec = importlib.util.spec_from_file_location("spread_peers", helper_files[0])
+        spread = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = spread
+        spec.loader.exec_module(spread)
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--spread-tools", type=Path, help="lead's shared main tools directory; use its unmodified named transport")
+    if spread:
+        spread.add_arguments(parser)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=48212)
@@ -156,6 +181,8 @@ def main() -> int:
     parser.add_argument("--startup-min-frames", type=int, default=0,
                         help="test control: common input boundary, still bounded by actual measured startup (default unchanged)")
     args = parser.parse_args()
+    if spread:
+        spread.configure(args)
     if not (48211 <= args.port <= 48216 or 48500 <= args.port <= 48516) or args.ticks < 400:
         parser.error("four ports must fit 48211..48219 or 48500..48519; at least 400 ticks are required")
     if not 0 <= args.startup_min_frames <= 4096:
@@ -168,6 +195,16 @@ def main() -> int:
     with engine_executable(repo).open("rb") as exe:
         exe_sha = file_sha256(exe)
     result = {"exe_sha256": exe_sha, "arms": {}}
+    protected = [repo / "tools" / name for name in
+                 ("test_autosave.py", "compare_sim_traces.py", "run_sim_test.py", "compare_snapshots.py", "snapshot_runtime.py")]
+    protected += [repo / "Data/Base.rte/Devices/Shared/Scripts/MuzzleSmoke.lua", *helper_files]
+    before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in protected}
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    named = bool(spread and spread.enabled())
+    result.update(source_head=head, topology="spread" if named else "single-box", proof=False, protected_hashes=before)
+    if named:
+        result.update(interface_version=spread.INTERFACE_VERSION, peer_boxes=spread.pairs(args.peer_boxes))
+    native_refused = False
     arms = {"off": {"host": 0, "client": 0}, "on": {"host": 2, "client": 2},
             "asymmetric": {"host": 2, "client": 0}, "rotation": {"host": 1, "client": 1}}
     if args.arm == "default":
@@ -197,7 +234,24 @@ def main() -> int:
                     prepare_setting(runtime, setting)
 
             autosaving = arm in ("host-option", "setting")
-            records = run_pair(repo, arm_root, args.port + index, cadence, args.ticks, prepare=prepare)
+            if named:
+                port = args.port + index
+                peers = [spread.Peer("host", os="posix", memory=6, timeout=360,
+                                     lane="sol-checkpoint-restore-20261006", share_ok=False),
+                         spread.Peer("client", os="windows", memory=6, timeout=360,
+                                     lane="sol-checkpoint-restore-20261006", share_ok=False)]
+                match = spread.Match(port, directory_port=48216 + port - 48212,
+                                     parameters={"network": "ice", "lane": "sol-checkpoint-restore-20261006",
+                                                 "label": args.runner_label, "runner_wait": args.runner_wait})
+                with spread.prepare_case(repo, arm_root, peers, match) as case:
+                    records = run_pair(repo, arm_root, port, cadence, args.ticks, prepare=prepare, case=case)
+                    details["placement"] = case.result()
+                    if case.refusals:
+                        raise spread.SpreadRefusal("; ".join(item["text"] for item in case.refusals))
+                    identities = [item.get("machine_id") for item in details["placement"]["identities"].values()]
+                    assert len(identities) == 2 and all(identities) and len(set(identities)) == 2, "named peers lack distinct native machine identities"
+            else:
+                records = run_pair(repo, arm_root, args.port + index, cadence, args.ticks, prepare=prepare)
             details["records"] = records
             for who in cadence:
                 assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
@@ -265,7 +319,22 @@ def main() -> int:
         except Exception as error:
             details.update(passed=False, error=str(error))
             print(f"FAIL {arm}: {error}", flush=True)
+            if named and isinstance(error, spread.SpreadRefusal):
+                native_refused = True
+                break
+    after = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in protected}
+    result["harness_unchanged"] = before == after
+    result["source_unchanged"] = head == subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    with engine_executable(repo).open("rb") as exe:
+        result["binary_unchanged"] = exe_sha == file_sha256(exe)
+    result["proof"] = named and len(result["arms"]) == len(arms) and all(
+        details.get("passed", False) and details.get("placement", {}).get("topology") == "spread"
+        for details in result["arms"].values()) and all(result[key] for key in
+        ("harness_unchanged", "source_unchanged", "binary_unchanged"))
+    result["native_refused"] = native_refused
     (root / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    if native_refused:
+        return 3
     return 0 if all(arm["passed"] for arm in result["arms"].values()) else 1
 
 
