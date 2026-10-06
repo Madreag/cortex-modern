@@ -1,22 +1,31 @@
-"""One pool-backed execution interface for cases with peers on separate machines.
+"""One pool-backed execution interface for real-network cases with native peers.
 
-Contract (version 1)
+Contract (version 2, compatible with version 1 calls)
 --------------------
 run_case(repo, out, peers, match, *, drive=None, peer_boxes=None,
          dispatcher=None, registry=None) -> dict
 
 ``peers`` is a sequence of Peer objects. Each declares its name, OS, engine
 count (one), required free memory, display size, quiet/exclusive requirement,
-and whether its screen is reviewed on the controller's Windows machine. The
+and whether its screen is reviewed. Peer.share_ok defaults to True for screen
+peers; quiet, reviewed, held and recorder peers always reserve a box alone.
+Peer.held declares any target of a hold or stall lever before allocation.
+Peer.recorder requires the controller's private Windows video recorder.
+An explicitly pinned reviewed screen peer may use its own box's readback;
+an unpinned reviewed peer retains the version 1 controller placement.
+The
 case supplies arguments, environment and fixtures through Peer or by calling
 case.make_run() in ``drive(case)``. ``match`` is a Match with the game's port,
 the lane's directory port, and optional unchanged case parameters. The pool
-chooses and claims distinct machines, freezes committed inputs, verifies the
+chooses and claims fitting machines, freezes committed inputs, verifies the
 shipped/native executable hash, and starts native runners/tasks. ``drive``
 still stages the case's scripts, orders starts and applies its own assertions.
 Without ``drive``, the call starts host first and finishes every declared peer.
 It collects verified evidence into ``out`` and returns topology="spread",
 peer_boxes, native identities, executable hashes, records and driver_result.
+Shareable peers may use one box within the pool's memory, engine and CPU limits;
+quiet/timing peers remain on distinct idle boxes. The existing pool chooses
+the least loaded fitting box for a shareable group and admits each native claim.
 
 prepare_case(...), the same arguments except drive, exposes the same Case for
 drivers whose existing control loop needs runner-compatible handles. Always
@@ -126,12 +135,19 @@ class Peer:
     output_name: str | None = None
     block_udp: tuple[int, ...] = ()
     lane: str | None = None
+    share_ok: bool = True
+    held: bool = False
+    recorder: bool = False
 
     def __post_init__(self):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", self.name):
             raise ValueError("peer name must be a safe path component")
         if self.engines != 1:
-            raise ValueError("a spread peer reserves exactly one engine on its own machine")
+            raise ValueError("a spread peer reserves exactly one engine")
+        if type(self.share_ok) is not bool:
+            raise ValueError("share_ok must be a boolean")
+        if self.quiet or self.reviewed or self.held or self.recorder:
+            object.__setattr__(self, "share_ok", False)
         if self.output_name is not None and (not self.output_name or self.output_name in (".", "..") or any(char in self.output_name for char in '/\\\0<>:"|?*')):
             raise ValueError("output name must be one safe directory component")
         if any(type(port) is not int or not 1024 <= port <= 65535 for port in self.block_udp):
@@ -166,6 +182,13 @@ def native_address_probe():
                 if not address.is_loopback and not address.is_unspecified:
                     return str(address)
     addresses = {row[4][0] for row in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET)}
+    if sys.platform.startswith("linux"):
+        result = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            for value in result.stdout.split():
+                address = ipaddress.ip_address(value)
+                if address.version == 4:
+                    addresses.add(str(address))
     fitting = sorted(address for address in addresses if not ipaddress.ip_address(address).is_loopback and not ipaddress.ip_address(address).is_link_local)
     if not fitting:
         raise RuntimeError("native host has no routable address")
@@ -243,6 +266,16 @@ def configure(options):
 
 def topology(options=None, count=2):
     return "spread" if enabled(options) else TOPOLOGY_LOCAL if count > 1 else "single-peer"
+
+
+def check_port_block(port, block, count=1):
+    """Keep every declared case port inside its caller's game-port allocation."""
+    if not re.fullmatch(r"\d+-\d+", block):
+        raise ValueError("port block must be LO-HI")
+    low, high = map(int, block.split("-"))
+    if not 1024 <= low <= port <= port + count - 1 <= high <= 65535:
+        raise ValueError("case ports are outside the declared lane-owned block")
+    return low, high
 
 
 def managed_case(function):
@@ -519,17 +552,17 @@ class Case:
         return backend
 
     def allocate(self):
-        from cross_peers import require_distinct_machines
-        used = []
+        used, exclusive = [], []
         identities = {}
         catalog = self.pool.load_registry(self.registry)["boxes"]
         reviewed_box = next((box["name"] for box in catalog if box["kind"] == "local" and box["os"] == "windows"), None)
         # Claim constrained peers first while retaining the case's seat order.
-        ordered = sorted(self.peers, key=lambda peer: (not peer.reviewed, role_value(self.pins, self.names, peer.name) is None, peer.os == "any"))
+        ordered = sorted(self.peers, key=lambda peer: (peer.share_ok, not peer.reviewed, role_value(self.pins, self.names, peer.name) is None, peer.os == "any"))
+        share_target = None
         for peer in ordered:
             backend = self.backend()
             pin = role_value(self.pins, self.names, peer.name)
-            if peer.reviewed:
+            if peer.recorder or peer.reviewed and not pin:
                 if pin and pin.casefold() != (reviewed_box or "").casefold():
                     raise self.refuse(peer.name, pin, "reviewed screen requires the controller's private Windows recorder")
                 pin = reviewed_box
@@ -537,9 +570,10 @@ class Case:
                     raise self.refuse(peer.name, "unassigned", "reviewed screen requires a registered local Windows recorder")
             if pin and peer.quiet and any(box["name"].casefold() == pin.casefold() and box.get("timing") is False for box in catalog):
                 raise self.refuse(peer.name, pin, "catalog does not permit timing measurements on this box")
-            excluded = used + [box["name"] for box in catalog if peer.quiet and box.get("timing") is False]
+            excluded = (exclusive if peer.share_ok else used) + [box["name"] for box in catalog if peer.quiet and box.get("timing") is False]
             needs = self.pool.Needs(os=peer.os, engines=peer.engines, gpu=bool(peer.size), memory=peer.memory,
-                                    alone=peer.quiet, size=peer.size, only_box=pin, excluded=tuple(excluded))
+                                    alone=peer.quiet, size=peer.size, only_box=pin, excluded=tuple(excluded),
+                                    case_id=self.id, peer_id=peer.name, share_ok=peer.share_ok, reviewed=peer.reviewed or peer.recorder, held=peer.held)
             caller_lane = peer.lane or self.match.parameters.get("lane")
             label = f"{caller_lane}: spread" if caller_lane else "spread"
             request = dict(run_id=uuid.uuid4().hex, token=uuid.uuid4().hex, label=f"{label}: {self.out.name}/{peer.name}",
@@ -550,8 +584,23 @@ class Case:
             with self.transport_module.worker.mutex(self.pool.queue_root(self.registry)/".admission.lock", wait=60):
                 ticket = self.pool.write_ticket(self.registry, needs, request)
             self.pending.append((ticket, request["token"]))
+            self.pending_peers = getattr(self, "pending_peers", {})
+            self.pending_peers[request["token"]] = peer.name
             self.stack.callback(self.transport_module.worker.facts.release_reservation, ticket, request["token"])
+            if peer.share_ok and not pin and share_target is None:
+                group = [item for item in ordered if item.share_ok and item.name not in self.members and
+                         role_value(self.pins, self.names, item.name) is None and item.os in (peer.os, "any")]
+                if len(group) > 1:
+                    sizes = [item.size for item in group if item.size]
+                    together = self.pool.Needs(os=peer.os, engines=len(group), gpu=bool(sizes), memory=max(item.memory for item in group),
+                                               size=tuple(map(max, zip(*sizes))) if sizes else None, excluded=tuple(excluded),
+                                               case_id=self.id, share_ok=True)
+                    grouped, _, _ = self.pool.candidates(self.registry, together, backend)
+                    if grouped:
+                        share_target = grouped[0][1]["name"]
             fitting, reasons, states = self.pool.candidates(self.registry, needs, backend)
+            if peer.share_ok and not pin and share_target:
+                fitting.sort(key=lambda item: item[1]["name"].casefold() != share_target.casefold())
             chosen = None
             for _, box, state in fitting:
                 try:
@@ -573,15 +622,31 @@ class Case:
                 raise self.refuse(peer.name, pin or "unassigned", "no distinct fitting box; " + details)
             self.members[peer.name] = chosen
             used.append(chosen[0]["name"])
+            if not peer.share_ok:
+                exclusive.append(chosen[0]["name"])
             hostname = chosen[0].get("hostname") or states[chosen[0]["name"]].get("hostname")
             if not hostname:
                 raise self.refuse(peer.name, chosen[0]["name"], "native machine identity is unavailable")
             identities[peer.name] = dict(machine_id=hostname.casefold())
-        require_distinct_machines(identities)
+        self.check_identities(identities)
         for name in self.names:
             port = int(role_value(self.peer_ports, self.names, name) or self.match.port)
             if port != self.match.port:
                 raise self.refuse(name, self.members[name][0]["name"], f"match port {port} differs from host port {self.match.port}")
+
+    def check_identities(self, identities):
+        from cross_peers import require_distinct_machines
+        groups = {}
+        for name, identity in identities.items():
+            box = self.members[name][0]["name"]
+            if box in groups and groups[box]["machine_id"] != identity["machine_id"]:
+                raise self.refuse(name, box, "native peers assigned one box report different machines")
+            groups[box] = identity
+        try:
+            require_distinct_machines(groups)
+        except RuntimeError as error:
+            name = next(reversed(identities))
+            raise self.refuse(name, self.members[name][0]["name"], str(error)) from error
 
     def guard(self):
         now = time.monotonic()
@@ -751,8 +816,7 @@ class Case:
                 handle.native_progress = progress
                 if progress.get("identity"):
                     self.identities[handle.role] = progress["identity"]
-                    from cross_peers import require_distinct_machines
-                    require_distinct_machines(self.identities)
+                    self.check_identities(self.identities)
                 files = (json.loads(zlib.decompress(base64.b64decode(progress["packed_files"], validate=True)))
                          if progress.get("packed_files") else progress.get("files", {}))
                 for relative, encoded in files.items():
@@ -781,6 +845,8 @@ class Case:
     def result(self):
         return dict(schema=1, topology="spread", peer_boxes={name: item[0]["name"] for name, item in self.members.items()},
                     interface_sha256=self.interface_sha256,
+                    sharing={peer.name: dict(share_ok=peer.share_ok, reviewed=peer.reviewed, held=peer.held, quiet=peer.quiet,
+                                              recorder=peer.recorder) for peer in self.peers},
                     executable_hashes={name: item[1].get("exe_sha256") for name, item in self.members.items()},
                     identities=self.identities, records={name: run.record for name, run in self.runs.items()},
                     match=dict(port=self.match.port, parameters=json.loads(json.dumps(self.match.parameters, default=str))), refusals=self.refusals)
@@ -814,10 +880,14 @@ class Case:
                     cleanup.callback(backend.stop, box, claim)
             self.save()
 
-    def release_pending(self):
+    def release_pending(self, role=None):
+        remaining = []
         for ticket, token in self.pending:
-            self.transport_module.worker.facts.release_reservation(ticket, token)
-        self.pending.clear()
+            if role is None or getattr(self, "pending_peers", {}).get(token) == role:
+                self.transport_module.worker.facts.release_reservation(ticket, token)
+            else:
+                remaining.append((ticket, token))
+        self.pending[:] = remaining
 
     def __enter__(self):
         return self
@@ -935,7 +1005,7 @@ class Run:
         except Exception as error:
             raise self.case.refuse(self.role, box["name"], str(error)) from error
         self.started = True
-        self.case.release_pending()
+        self.case.release_pending(self.role)
         self.deadline = time.monotonic() + self.timeout + 180
         return self
 
@@ -999,6 +1069,8 @@ class Run:
             return dict(action=action, box=box["name"], pid=self.process, already_finished=True)
         if action in ("suspend", "resume") and box["os"] != "windows":
             raise self.case.refuse(self.role, box["name"], "Windows process suspension is unavailable")
+        if action in ("suspend", "resume") and next(peer for peer in self.case.peers if peer.name == self.role).share_ok:
+            raise self.case.refuse(self.role, box["name"], "hold lever requires held=True or share_ok=False before allocation")
         token = uuid.uuid4().hex
         backend.rpc(box, "write", dict(path=claim["root"] + "/action.json", value=dict(action=action, token=token, **values)))
         deadline = time.monotonic() + 30
@@ -1109,8 +1181,7 @@ def native_execute(spec_path, result_out):
     if spec["directory"]:
         settings = dict(SessionDirectoryUrl=f"127.0.0.1:{spec['signal_port']}", SessionDirectoryCertSha256=spec["directory"]["DIRECTORY_PIN"])
         if not spec["directory"].get("preserve_settings"):
-            settings.update(SessionDirectoryInstallKey="spread-" + role + "-install", NetworkIceEnable="1",
-                            NetworkConnectionMode="DirectOnly", NetworkHostRelayMode="Off", NetworkPortMapEnable="0")
+            settings.update(SessionDirectoryInstallKey="spread-" + role + "-install", NetworkIceEnable="1", NetworkPortMapEnable="0")
         seed_settings(run, settings)
     for flag in ("-record-video", "-feel-measure"):
         if flag in run.argv:
