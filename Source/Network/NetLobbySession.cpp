@@ -1266,6 +1266,8 @@ namespace RTE {
 		m_LastStartWaitLogMs = m_TimingClockMs == 0 ? 1 : m_TimingClockMs;
 		std::ostringstream line;
 		line << "[net-lobby] waiting at " << StateName(m_State) << " role=" << (m_Config.host ? "host" : "client")
+		     << " clock_ms=" << m_TimingClockMs << " session_ms=" << (m_Config.session ? m_Config.session->GetClockMs() : 0)
+		     << " received=" << m_Stats.messagesReceived << " ignored=" << m_Stats.ignoredSessionPackets << " unbound=" << m_Stats.unboundSenderPackets
 		     << " hash=" << HashText(m_MatchConfigHash) << " revision=" << m_Config.matchConfig.configRevision
 		     << " republishes=" << m_Stats.configRepublishes << " config_sent=" << m_Stats.configPacketsSent
 		     << " acks=" << m_Stats.configAcksReceived;
@@ -1314,7 +1316,8 @@ namespace RTE {
 		++m_Stats.startPacketsSent;
 		m_StartIntent = false;
 		m_State = NetLobbyState::Started;
-		DiagnosticLine() << "[net-lobby] agreed start queued remotes=" << m_RemotePeerIds.size() << " frame=" << m_StartFrame << std::endl;
+		DiagnosticLine() << "[net-lobby] agreed start queued remotes=" << m_RemotePeerIds.size() << " frame=" << m_StartFrame
+		                 << " clock_ms=" << m_TimingClockMs << " session_ms=" << (m_Config.session ? m_Config.session->GetClockMs() : 0) << std::endl;
 	}
 
 	bool NetLobbySession::RepeatStartIfDue(uint64_t elapsedMs, std::string* error) {

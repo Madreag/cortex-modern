@@ -858,6 +858,7 @@ namespace RTE {
 		const uint64_t startMs = NetLockstepNowMs();
 		const uint64_t sessionBaseMs = session ? session->GetClockMs() : 0;
 		DiagnosticLine() << "[net-match] round start handshake host=" << m_Config.host << " lobby=" << m_UseLobbyProtocol
+		                 << " clock_ms=" << startMs << " session_ms=" << sessionBaseMs
 		                 << " lobby_state=" << static_cast<int>(m_Lobby.GetState()) << " peers=" << static_cast<int>(coordinator.GetConfig().peerCount)
 		                 << " routes=" << coordinator.GetConfig().remoteTransportPeerIds.size() << std::endl;
 		while (!coordinator.IsRunning()) {
@@ -886,6 +887,7 @@ namespace RTE {
 			}
 			if (nowMs - startMs > maxWaitMs) {
 				DiagnosticLine() << "[net-match] round start timeout lobby_sent=" << m_Lobby.GetStats().startPacketsSent
+				                 << " clock_ms=" << nowMs << " session_ms=" << (session ? session->GetClockMs() : 0)
 				                 << " lobby_received=" << m_Lobby.GetStats().startPacketsReceived << " round_received=" << coordinator.GetStats().startPacketsReceived << std::endl;
 				m_HostLostDuringSetup = !m_Config.host;
 				SetFailed("timed out waiting for lockstep start");
