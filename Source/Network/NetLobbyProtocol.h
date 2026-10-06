@@ -140,9 +140,12 @@ namespace RTE {
 	};
 
 	// The host's start countdown: the milliseconds left when it was sent, 0 when none runs. The host repeats it
-	// with its peer states, so a peer that arrives mid-count reads what is left.
+	// with its peer states, so a peer that arrives mid-count reads what is left. It names the setup it counts for
+	// (the agreed config hash's first three bytes, never 0) and whether the host has that setup open.
 	struct NetLobbyStartCountdown {
 		uint32_t remainingMs = 0;
+		uint32_t setupTag = 0;
+		uint8_t cause = 0;
 
 		bool operator==(const NetLobbyStartCountdown&) const = default;
 	};
@@ -202,6 +205,8 @@ namespace RTE {
 		static constexpr uint16_t c_Version = 10;
 		// The longest start countdown a host may announce.
 		static constexpr uint32_t c_MaxStartCountdownMs = 10U * 60U * 1000U;
+		static constexpr uint32_t c_StartCountdownTagMask = 0x00FFFFFFU;
+		static constexpr uint8_t c_CountdownSetupOpen = 1; //!< The host has the setup open: no count runs until it closes it.
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxShortTextBytes = 128;

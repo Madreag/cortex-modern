@@ -1340,8 +1340,12 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		LeaveLobby();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::LobbyEditSetupButton]) {
 		// The setup is ordinary: the host edits it here, everyone else reads the agreed one.
+		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		OpenHostOptions(false);
 		ShowHostOptionsPage(c_HostOptionsRulesPage);
+		if (snapshot.isHost && snapshot.startCountdownRunning && !snapshot.startCommitted) {
+			m_HostOptionsStatusLabel->SetText("The start countdown stopped while you change the setup.");
+		}
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReconnectButton] &&
 	           m_MultiplayerApplyOffered && g_NetMatchService.JoinRefusalOffer() != NetJoinRefusalOffer::None &&
 	           g_NetMatchService.GetReconnectUx().GetOffer() != NetReconnectOffer::Available &&
@@ -4239,6 +4243,8 @@ void MainMenuGUI::TakeLobbyChat(const NetLobbySnapshot& snapshot) {
 
 void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot) {
 	NetPlayerPresentation::Remember(snapshot, m_MultiplayerNameTextBox ? m_MultiplayerNameTextBox->GetText() : SavedMultiplayerName());
+	// The match never starts under the host's open setup: the lobby holds its count while the host edits it.
+	g_NetMatchService.SetHostSetupOpen(snapshot.isHost && m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions && !m_HostOptionsSetupDraft);
 	const bool savingDiagnostics = TelemetryBundle::IsBusy();
 	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetEnabled(!savingDiagnostics);
 	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetText(savingDiagnostics ? "Saving report..." : "Save Support Report");
@@ -4691,8 +4697,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	// A seat nobody has taken keeps it disabled, and the sentence above says who is missing.
 	GUIButton* start = m_MainMenuButtons[MenuButton::MultiplayerStartButton];
 	start->SetVisible(snapshot.isHost);
-	start->SetEnabled(snapshot.isHost && snapshot.inLobby && (snapshot.startCountdownRunning || snapshot.occupancyComplete));
-	start->SetText(snapshot.startCountdownRunning ? "Cancel Start" : "Start Match");
+	start->SetEnabled(snapshot.isHost && snapshot.inLobby && !snapshot.startCommitted && (snapshot.startCountdownRunning || snapshot.occupancyComplete));
+	start->SetText(snapshot.startCommitted ? "Starting..." : snapshot.startCountdownRunning ? "Cancel Start" : "Start Match");
 	leave->SetEnabled(true);
 	// While the world's image comes, or a held slot is waited for, the exit cancels the join, and says so.
 	leave->SetText(snapshot.transferLine.empty() && snapshot.waitLine.empty() ? "Leave" : "Cancel");

@@ -669,6 +669,9 @@ namespace RTE {
 		void RequestStart();
 		/// Host: withdraws the Start and stops a running countdown.
 		void CancelStart();
+
+		/// Host: its setup screen is open or closed. Opening it stops a running count, and nothing starts while it is open.
+		void SetHostSetupOpen(bool open) { m_HostSetupOpen.store(open); }
 		void ReportRuntimeError(const std::string& error);
 		void Complete(const std::string& reason);
 		void FinishMatch(const std::string& result);
@@ -1815,6 +1818,7 @@ namespace RTE {
 		std::atomic<bool> m_ReadyRequested{false};
 		std::atomic<bool> m_StartRequested{false};
 		std::atomic<bool> m_CancelStartRequested{false};
+		std::atomic<bool> m_HostSetupOpen{false};
 		std::atomic<bool> m_CancelRequested{false};
 		std::atomic<bool> m_EverStarted{false};
 		std::string m_CapturedRunnerReport;

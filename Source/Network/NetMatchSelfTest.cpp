@@ -1771,7 +1771,7 @@ namespace RTE {
 					return false;
 				}
 			}
-			// A countdown past the longest a host may announce, or a reserved field in use, is refused by name.
+			// A countdown past the longest a host may announce, or with a cause this version does not know, is refused by name.
 			for (const bool reserved: {false, true}) {
 				NetLobbyMessage message;
 				message.payload = NetLobbyStartCountdown{1000};
@@ -1780,13 +1780,13 @@ namespace RTE {
 					*error = "could not encode a start countdown";
 					return false;
 				}
-				const uint32_t poked = reserved ? 1U : NetLobbyProtocol::c_MaxStartCountdownMs + 1U;
+				const uint32_t poked = reserved ? (uint32_t{NetLobbyProtocol::c_CountdownSetupOpen} + 1U) << 24 : NetLobbyProtocol::c_MaxStartCountdownMs + 1U;
 				const size_t offset = NetLobbyProtocol::c_HeaderBytes + (reserved ? 4 : 0);
 				for (size_t byte = 0; byte < 4; ++byte) bytes.at(offset + byte) = static_cast<uint8_t>(poked >> (8 * byte));
 				const NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(bytes);
 				const NetLobbyErrorCode expected = reserved ? NetLobbyErrorCode::ReservedFieldNonZero : NetLobbyErrorCode::InvalidValue;
 				if (decoded.ok || decoded.error.code != expected) {
-					*error = reserved ? "a start countdown with its reserved field set was not refused" : "a start countdown past the longest was not refused";
+					*error = reserved ? "a start countdown with an unknown cause was not refused" : "a start countdown past the longest was not refused";
 					return false;
 				}
 			}
@@ -6586,6 +6586,163 @@ namespace RTE {
 				*error = "host lobby did not track both clients' names and readies";
 				return false;
 			}
+			return true;
+		}
+
+		// Three peers count down unready; the Start reaches A while B's queue refuses it as congested, and the host then
+		// presses Cancel Start: the Start already sent commits the round, so B and the host start as A did.
+		bool TestLobbyStartCommitted(std::string* error) {
+			const uint16_t port = 43018;
+			LoopbackTransport hostT, clientAT, clientBT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) || !clientBT.Connect("loopback", port, error)) return false;
+			NetMatchConfig matchConfig = MakeConfig();
+			matchConfig.peerCount = 3;
+			matchConfig.players.push_back(NetMatchPlayerSlot{3, 2, false, "Client B"});
+			auto cfg = [&](bool host, uint8_t local, std::map<uint8_t, NetPeerId> transports, const char* name) {
+				NetLobbySessionConfig c;
+				c.host = host;
+				c.localPeerId = local;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.matchConfig = matchConfig;
+				c.startFrame = 5;
+				c.displayName = name;
+				c.platform = "windows";
+				c.peerStateIntervalMs = 10;
+				c.autoReady = false;
+				c.autoStart = false;
+				c.startCountdownMs = host ? 300 : 0;
+				return c;
+			};
+			NetLobbySession host, clientA, clientB;
+			if (!host.Start(hostT, cfg(true, 1, {{2, 1}, {3, 2}}, "Host"), error) || !clientA.Start(clientAT, cfg(false, 2, {{1, 1}}, "Client A"), error) ||
+			    !clientB.Start(clientBT, cfg(false, 3, {{1, 1}}, "Client B"), error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			const auto step = [&](uint64_t ms) {
+				for (uint64_t until = now + ms; now < until; now += 10) {
+					host.Tick(now);
+					clientA.Tick(now);
+					clientB.Tick(now);
+					hostT.AdvanceTimeMs(10);
+					clientAT.AdvanceTimeMs(10);
+					clientBT.AdvanceTimeMs(10);
+				}
+			};
+			const auto states = [&] {
+				return std::string(" host=") + NetLobbySession::StateName(host.GetState()) + " a=" + NetLobbySession::StateName(clientA.GetState()) +
+				       " b=" + NetLobbySession::StateName(clientB.GetState());
+			};
+			step(500);
+			if (host.GetState() != NetLobbyState::WaitingForReady) {
+				*error = "start committed: the three-peer lobby never reached its Ready wait;" + states();
+				return false;
+			}
+			host.RequestStart();
+			while (host.StartCountdownRemainingMs() > 20 && now < 2000) step(10);
+			LoopbackTransportConfig congested;
+			congested.sendBufferBytes = 1;
+			congested.meterOnlyPeer = 2;
+			hostT.SetFaultConfig(congested);
+			for (uint64_t waited = 0; !clientA.IsStarted() && waited < 1000; waited += 10) step(10);
+			if (!clientA.IsStarted() || clientB.IsStarted() || host.IsStarted()) {
+				*error = "start committed: the congested send never left the Start with A alone;" + states();
+				return false;
+			}
+			host.CancelStart();
+			step(100);
+			hostT.SetFaultConfig({});
+			for (uint64_t waited = 0; !(host.IsStarted() && clientB.IsStarted()) && waited < 2000; waited += 10) step(10);
+			if (!host.IsStarted() || !clientB.IsStarted()) {
+				*error = "start committed: Cancel Start after the Start reached A left the others waiting;" + states();
+				return false;
+			}
+			if (host.GetMatchConfigHash() != clientA.GetMatchConfigHash() || host.GetMatchConfigHash() != clientB.GetMatchConfigHash() ||
+			    clientA.GetStartFrame() != clientB.GetStartFrame()) {
+				*error = "start committed: the three peers started on different setups";
+				return false;
+			}
+			std::cout << "PASS lobby_start_committed" << std::endl;
+			return true;
+		}
+
+		// A countdown names the setup it counts for: one sent for any other setup neither starts nor clears the client's count.
+		bool TestLobbyCountdownBelongsToSetup(std::string* error) {
+			const uint16_t port = 43028;
+			LoopbackTransport hostT, clientT;
+			NetPeerId hostRemotePeer = c_InvalidNetPeerId;
+			NetPeerId clientRemotePeer = c_InvalidNetPeerId;
+			if (!StartLoopbackTransports(port, hostT, clientT, hostRemotePeer, clientRemotePeer, error)) return false;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.remotePeerId = 2;
+			hostConfig.remoteTransportPeerId = hostRemotePeer;
+			hostConfig.matchConfig = MakeConfig();
+			hostConfig.startFrame = 5;
+			hostConfig.displayName = "Host";
+			hostConfig.platform = "windows";
+			// Only a change is broadcast: the host's periodic state carries its own count and would overwrite an injected one.
+			hostConfig.peerStateIntervalMs = 600000;
+			hostConfig.autoReady = false;
+			hostConfig.autoStart = false;
+			hostConfig.startCountdownMs = 60000;
+			NetLobbySessionConfig clientConfig = hostConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemotePeer;
+			clientConfig.displayName = "Client";
+			clientConfig.startCountdownMs = 0;
+			NetLobbySession host, client;
+			if (!host.Start(hostT, hostConfig, error) || !client.Start(clientT, clientConfig, error)) return false;
+			uint64_t now = 0;
+			const auto step = [&](uint64_t ms) {
+				for (uint64_t until = now + ms; now < until; now += 10) {
+					host.Tick(now);
+					client.Tick(now);
+					hostT.AdvanceTimeMs(10);
+					clientT.AdvanceTimeMs(10);
+				}
+			};
+			const auto inject = [&](uint32_t remainingMs) {
+				NetLobbyMessage message;
+				message.payload = NetLobbyStartCountdown{remainingMs};
+				std::vector<uint8_t> bytes;
+				return NetLobbyProtocol::Encode(message, bytes) && hostT.Send(hostRemotePeer, NetTransportLane::ControlReliable, bytes);
+			};
+			step(300);
+			if (client.IsStartCountdownRunning()) {
+				*error = "countdown setup: a count ran before the host pressed Start";
+				return false;
+			}
+			// A count announced for no setup the client holds is not this lobby's count.
+			if (!inject(45000)) {
+				*error = "countdown setup: could not send a countdown";
+				return false;
+			}
+			step(50);
+			if (client.IsStartCountdownRunning()) {
+				*error = "countdown setup: the client took a count for another setup (remaining " + std::to_string(client.StartCountdownRemainingMs()) + " ms)";
+				return false;
+			}
+			host.RequestStart();
+			step(100);
+			if (!client.IsStartCountdownRunning()) {
+				*error = "countdown setup: the host's own count never reached the client";
+				return false;
+			}
+			const uint32_t before = client.StartCountdownRemainingMs();
+			if (!inject(0)) {
+				*error = "countdown setup: could not send a countdown";
+				return false;
+			}
+			step(50);
+			if (!client.IsStartCountdownRunning() || client.StartCountdownRemainingMs() + 200 < before) {
+				*error = "countdown setup: a stopped count for another setup cleared the client's count";
+				return false;
+			}
+			std::cout << "PASS lobby_countdown_belongs_to_setup" << std::endl;
 			return true;
 		}
 
@@ -16477,6 +16634,8 @@ namespace RTE {
 		if (!hardDropError.empty()) return fail(hardDropError);
 		if (!reclaimError.empty()) return fail(reclaimError);
 		if (!TestLobbyThreePeer(&error)) return fail(error);
+		if (!TestLobbyStartCommitted(&error)) return fail(error);
+		if (!TestLobbyCountdownBelongsToSetup(&error)) return fail(error);
 		if (!TestServiceDedicatedRequest(&error)) return fail(error);
 		if (!TestLobbyThreePeerDedicated(&error)) return fail(error);
 		if (!TestLobbyLateJoinerRosterRace(&error)) return fail(error);

@@ -635,6 +635,7 @@ namespace RTE {
 			if (m_Config.host && m_Config.cancelStartRequested && m_Config.cancelStartRequested->exchange(false)) {
 				m_Lobby.CancelStart();
 			}
+			if (m_Config.host && m_Config.hostSetupOpen) m_Lobby.SetSetupOpen(m_Config.hostSetupOpen->load());
 			if (m_Config.host && m_Config.relayOffer) {
 				NetRelayConfig offer;
 				const bool wasReady = relayReady;
@@ -941,6 +942,8 @@ namespace RTE {
 		snapshot.occupancyComplete = m_Lobby.IsOccupancyComplete();
 		snapshot.startCountdownRunning = m_Lobby.IsStartCountdownRunning();
 		snapshot.startCountdownMs = m_Lobby.StartCountdownRemainingMs();
+		snapshot.startCommitted = m_Lobby.IsStartCommitted();
+		snapshot.hostSetupOpen = m_Lobby.IsSetupOpen();
 		snapshot.readyClearedBySetup = m_ReadyClearedBySetup;
 		// A lobby that resumes a match from disk names its checkpoint, so every peer's UI can say which
 		// one it stands on and whether this peer is loading its own copy.

@@ -139,6 +139,7 @@ namespace RTE {
 		m_StartRequested = config.autoStart;
 		m_StartIntent = false;
 		m_StartCountdownDeadlineMs = 0;
+		m_SetupOpen = false;
 		m_ReadyClearedBySetup = false;
 		m_FailureReason.clear();
 		m_RemoteLobbyUp.clear();
@@ -738,7 +739,7 @@ namespace RTE {
 	}
 
 	void NetLobbySession::RequestStart() {
-		if (IsTerminal(m_State)) {
+		if (IsTerminal(m_State) || (m_Config.host && m_SetupOpen)) {
 			return;
 		}
 		m_StartIntent = true;
@@ -750,7 +751,8 @@ namespace RTE {
 	}
 
 	void NetLobbySession::CancelStart() {
-		if (!m_Config.host || IsTerminal(m_State)) {
+		// A Start that has reached any peer starts the round for all of them: a cancel then would split it.
+		if (!m_Config.host || IsTerminal(m_State) || IsStartCommitted()) {
 			return;
 		}
 		m_StartIntent = false;
@@ -758,6 +760,20 @@ namespace RTE {
 			m_StartCountdownDeadlineMs = 0;
 			m_PeerStatePending = true;
 		}
+	}
+
+	void NetLobbySession::SetSetupOpen(bool open) {
+		if (!m_Config.host || open == m_SetupOpen) {
+			return;
+		}
+		if (open) CancelStart();
+		m_SetupOpen = open;
+		m_PeerStatePending = true;
+	}
+
+	uint32_t NetLobbySession::SetupTag(const NetHash32& configHash) {
+		const uint32_t tag = static_cast<uint32_t>(configHash[0]) | static_cast<uint32_t>(configHash[1]) << 8 | static_cast<uint32_t>(configHash[2]) << 16;
+		return tag == 0 ? 1 : tag;
 	}
 
 	uint32_t NetLobbySession::StartCountdownRemainingMs() const {
@@ -1237,7 +1253,9 @@ namespace RTE {
 				if (m_RemotePlatformsByPeer.contains(slot.peerId)) remote.platform = m_RemotePlatformsByPeer.at(slot.peerId);
 				(void)Send(remote, &error);
 			}
-			if (m_Config.startCountdownMs != 0) (void)Send(NetLobbyStartCountdown{StartCountdownRemainingMs()}, &error);
+			if (m_Config.startCountdownMs != 0) {
+				(void)Send(NetLobbyStartCountdown{StartCountdownRemainingMs(), SetupTag(m_MatchConfigHash), m_SetupOpen ? NetLobbyProtocol::c_CountdownSetupOpen : uint8_t{0}}, &error);
+			}
 		}
 		m_PeerStatePending = false;
 	}
@@ -1336,7 +1354,8 @@ namespace RTE {
 		// The Start rides the same ordered lane as the state chunks, so it must queue behind them.
 		// The host's countdown at zero starts the round with everyone present, ready or not.
 		const bool countedDown = m_StartCountdownDeadlineMs != 0 && m_TimingClockMs >= m_StartCountdownDeadlineMs && HasRequiredOccupancy();
-		if (!m_Config.host || !AllConfigAcked() || !(AllRemoteReady() || countedDown) || !IsStartRequested() || HasPendingStateChunks() || IsTerminal(m_State)) {
+		if (!m_Config.host || !AllConfigAcked() || !(AllRemoteReady() || countedDown) || !IsStartRequested() || HasPendingStateChunks() || IsTerminal(m_State) ||
+		    (m_SetupOpen && !IsStartCommitted())) {
 			ReportStartWait();
 			return;
 		}
@@ -1849,7 +1868,12 @@ namespace RTE {
 		if (m_Config.host) {
 			return;
 		}
+		if (message.setupTag != SetupTag(m_MatchConfigHash)) {
+			++m_Stats.otherSetupCountdowns;
+			return;
+		}
 		m_StartCountdownDeadlineMs = message.remainingMs == 0 ? 0 : m_TimingClockMs + message.remainingMs;
+		m_SetupOpen = message.cause == NetLobbyProtocol::c_CountdownSetupOpen;
 	}
 
 	void NetLobbySession::HandlePeerState(const NetLobbyPeerState& message) {

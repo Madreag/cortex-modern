@@ -499,6 +499,7 @@ static std::string ResyncSaveName() {
 		m_ReadyRequested.store(rejoinOfARunningMatch);
 		m_StartRequested.store(false);
 		m_CancelStartRequested.store(false);
+		m_HostSetupOpen.store(false);
 		if (request.dedicated && !request.host) {
 			if (error) *error = "dedicated service requires the host role";
 			return false;
@@ -924,6 +925,7 @@ static std::string ResyncSaveName() {
 		m_ReadyRequested.store(false);
 		m_StartRequested.store(false);
 		m_CancelStartRequested.store(false);
+		m_HostSetupOpen.store(false);
 		m_Worker = std::thread(&NetMatchService::WorkerRematchMain, this, std::move(link), session.release(), coordinator.release(), runner.release(), departedHost);
 		return true;
 	}
@@ -10079,6 +10081,7 @@ static std::string ResyncSaveName() {
 		config.readyRequested = &m_ReadyRequested;
 		config.startRequested = &m_StartRequested;
 		config.cancelStartRequested = &m_CancelStartRequested;
+		config.hostSetupOpen = &m_HostSetupOpen;
 		config.roundStartScripts = [this] {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			return std::exchange(m_RoundStartScriptsToStream, {});

@@ -136,6 +136,8 @@ namespace RTE {
 		bool remoteReady = false;
 		bool occupancyComplete = false;     //!< Every player the round waits for is in the lobby, so the host's Start can begin.
 		bool startCountdownRunning = false; //!< The host's start countdown runs.
+		bool startCommitted = false;        //!< Host: the round's Start has reached a peer; it starts for everyone.
+		bool hostSetupOpen = false;         //!< The host has the setup open; no count runs until it closes it.
 		uint32_t startCountdownMs = 0;      //!< What is left of it on this peer.
 		bool readyClearedBySetup = false;   //!< The host's new setup took back this player's Ready, until the player readies again.
 		std::vector<NetLobbyMember> members;

@@ -705,9 +705,10 @@ namespace RTE {
 		}
 
 		bool EncodePayload(const NetLobbyStartCountdown& payload, std::vector<uint8_t>& out, NetLobbyError*) {
-			if (payload.remainingMs > NetLobbyProtocol::c_MaxStartCountdownMs) return false;
+			if (payload.remainingMs > NetLobbyProtocol::c_MaxStartCountdownMs || payload.setupTag > NetLobbyProtocol::c_StartCountdownTagMask ||
+			    payload.cause > NetLobbyProtocol::c_CountdownSetupOpen) return false;
 			AppendU32LE(out, payload.remainingMs);
-			AppendU32LE(out, 0);
+			AppendU32LE(out, payload.setupTag | (static_cast<uint32_t>(payload.cause) << 24));
 			return true;
 		}
 
@@ -743,11 +744,13 @@ namespace RTE {
 				}
 				case NetLobbyMessageType::StartCountdown: {
 					NetLobbyStartCountdown payload;
-					uint32_t reserved = 0;
+					uint32_t setup = 0;
 					if (!ReadOrTruncated(reader.ReadU32LE(payload.remainingMs), reader, error, "remaining_ms") ||
-					    !ReadOrTruncated(reader.ReadU32LE(reserved), reader, error, "reserved")) return false;
-					if (reserved != 0) {
-						SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 4, "reserved field must be zero");
+					    !ReadOrTruncated(reader.ReadU32LE(setup), reader, error, "setup")) return false;
+					payload.setupTag = setup & NetLobbyProtocol::c_StartCountdownTagMask;
+					payload.cause = static_cast<uint8_t>(setup >> 24);
+					if (payload.cause > NetLobbyProtocol::c_CountdownSetupOpen) {
+						SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 1, "countdown cause is not one this version knows");
 						return false;
 					}
 					if (payload.remainingMs > NetLobbyProtocol::c_MaxStartCountdownMs) {

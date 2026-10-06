@@ -102,6 +102,7 @@ namespace RTE {
 		std::atomic<bool>* readyRequested = nullptr;
 		std::atomic<bool>* startRequested = nullptr;
 		std::atomic<bool>* cancelStartRequested = nullptr; //!< Host: withdraws its Start and its countdown.
+		std::atomic<bool>* hostSetupOpen = nullptr; //!< Host: its setup screen is open.
 		uint32_t startCountdownMs = 0; //!< Host: how long a Start with someone not ready counts down; 0 waits for every Ready.
 		// Host: the round's start scripts, streamed ahead of the lobby start the first time a start is asked for.
 		std::function<std::vector<uint8_t>()> roundStartScripts;
