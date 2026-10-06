@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import ast
 import hashlib
 import hmac
 import http.client
@@ -475,6 +476,16 @@ class DirectoryTests(unittest.TestCase):
             store._wait_owner_write(store._owner_revision)
             self.assertEqual(json.loads(path.read_text())[row["session_id"]]["listed_s"], 62,
                              "U1: durable accounting lost credited or hidden intervals")
+
+
+    def test_U2_ice_launcher_supplies_required_startup_flags(self) -> None:
+        source = Path(__file__).resolve().parents[1] / "test_directory_ice_join.py"
+        tree = ast.parse(source.read_text())
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "start_service")
+        strings = [node.value for node in ast.walk(function) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+        self.assertIn("--caller-mode", strings, "U2: the ICE launcher omits the required caller mode")
+        self.assertIn("direct", strings, "U2: the local ICE launcher does not choose direct mode")
+        self.assertIn("--create-owner-key", strings, "U2: the fresh ICE directory omits owner-key creation")
 
 
     def test_T4_subnet_churn_cannot_claim_an_established_world(self) -> None:
