@@ -34,6 +34,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <streambuf>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -147,13 +148,14 @@ namespace RTE {
 		}
 
 		bool SecretSettingsKey(std::string_view name) {
-			if (name == "SessionDirectoryInstallKey" || name == "NetworkTurnPass" || name == "NetworkTurnUser" || name == "NetworkPlayerTurnUser" ||
-			    name == "SessionDirectoryCertSha256") {
+			std::string lower(name);
+			std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+			if (lower == "networkturnuser" || lower == "networkplayerturnuser" || lower == "sessiondirectorycertsha256") {
 				return true;
 			}
-			static constexpr std::string_view needles[] = {"Pass", "Password", "Secret", "Token", "PrivateKey", "Credential", "Ticket"};
+			static constexpr std::string_view needles[] = {"pass", "secret", "key", "token", "credential", "ticket"};
 			for (std::string_view needle: needles) {
-				if (name.find(needle) != std::string_view::npos) return true;
+				if (lower.find(needle) != std::string_view::npos) return true;
 			}
 			return false;
 		}
@@ -176,29 +178,44 @@ namespace RTE {
 			std::string out;
 			out.reserve(bytes.size());
 			size_t offset = 0;
+			bool redactContinuation = false;
+			size_t secretIndent = 0;
 			while (offset < bytes.size()) {
-				const size_t nl = bytes.find('\n', offset);
-				const size_t next = (nl == std::string::npos) ? bytes.size() : nl + 1;
-				const size_t ending = (nl != std::string::npos && nl > offset && bytes[nl - 1] == '\r') ? 2 : (nl != std::string::npos ? 1 : 0);
-				const size_t lineLen = next - offset - ending;
+				const size_t nl = bytes.find_first_of("\r\n", offset);
+				const size_t end = (nl == std::string::npos) ? bytes.size() : nl;
+				size_t next = end;
+				if (next < bytes.size()) {
+					++next;
+					if (bytes[end] == '\r' && next < bytes.size() && bytes[next] == '\n') ++next;
+				}
+				const size_t ending = next - end;
+				const size_t lineLen = end - offset;
 				const std::string_view line(bytes.data() + offset, lineLen);
 				size_t indent = 0;
 				while (indent < line.size() && (line[indent] == ' ' || line[indent] == '\t')) ++indent;
 				const std::string_view body = line.substr(indent);
 				const size_t eq = (body.empty() || body[0] == '/' || body[0] == ';' || body[0] == '#') ? std::string_view::npos : body.find('=');
-				if (eq == std::string_view::npos) {
-					out.append(bytes, offset, next - offset);
-					offset = next;
-					continue;
-				}
-				size_t keyEnd = eq;
+				size_t keyEnd = (eq == std::string_view::npos) ? 0 : eq;
 				while (keyEnd > 0 && (body[keyEnd - 1] == ' ' || body[keyEnd - 1] == '\t')) --keyEnd;
 				const std::string key(body.substr(0, keyEnd));
-				if (!SecretSettingsKey(key)) {
+				const bool secret = eq != std::string_view::npos && SecretSettingsKey(key);
+				// Writer streams strings verbatim. Blank/comment lines and deeper assignments can
+				// belong to the preceding value; only a sibling or parent property ends it.
+				if (redactContinuation && !secret && (eq == std::string_view::npos || indent > secretIndent)) {
+					out.append(bytes, offset, indent);
+					if (!body.empty()) out += "<redacted>";
+					out.append(bytes, end, ending);
+					offset = next;
+					continue;
+				}
+				if (!secret) {
+					redactContinuation = false;
 					out.append(bytes, offset, next - offset);
 					offset = next;
 					continue;
 				}
+				if (!redactContinuation || indent < secretIndent) secretIndent = indent;
+				redactContinuation = true;
 				size_t valueStart = eq + 1;
 				while (valueStart < body.size() && (body[valueStart] == ' ' || body[valueStart] == '\t')) ++valueStart;
 				out.append(bytes, offset, indent + valueStart);
