@@ -23880,6 +23880,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return fail("the held seat's actor never got its claim: first " + std::to_string(firstView.claimant) + " second " + std::to_string(secondView.claimant));
 			}
 			for (int turn = 0; turn < 20; ++turn) pump();
+			// The lagging survivor contributes the release tick before its commit is withheld.
+			const uint64_t contributedThrough = second.GetStats().nextFrame + 4;
+			for (int turn = 0; turn < 5 && produced[2] <= contributedThrough; ++turn) FeedReleasedClaimsPeer(second, produced[2]);
+			second.Tick(now);
+			if (produced[2] <= contributedThrough) return fail("the lagging survivor did not contribute the release tick before the decision");
 			// The second survivor never hears the release; then the host's process dies without a word.
 			hostWire.lateTo = {2};
 			hostWire.committedReleasesOnly = true;
