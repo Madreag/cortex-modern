@@ -24702,6 +24702,24 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return fail(failures);
 		}
 
+		bool TestZeroDelayCannotRunAnUncommittedClientTick(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("zero_delay_cannot_run_an_uncommitted_client_tick", why, error); };
+			for (const auto policy: {NetSlowPlayerPolicy::Pause, NetSlowPlayerPolicy::Substitute}) {
+				NetMatchServiceRequest request;
+				request.host = true; request.inputDelayFrames = 0; request.delayPolicy = NetMatchDelayPolicy::Fixed; request.slowPlayerPolicy = policy;
+				NetMatchConfig configured;
+				std::string reason;
+				if (NetMatchService::BuildMatchConfig(request, 0x9F02, configured, &reason)) return fail("a fixed input delay 0 match with " + std::string(policy == NetSlowPlayerPolicy::Pause ? "unbounded" : "bounded") + " slow-player policy is accepted");
+				if (reason.find("fixed input delay 0") == std::string::npos || (policy == NetSlowPlayerPolicy::Pause && reason.find("unbounded") == std::string::npos)) return fail("the configuration refusal does not name its cause: " + reason);
+				auto match = ReleasedClaimsMatch(0x9F02, 2);
+				auto saved = NetHostDefaults::FromConfig(match);
+				saved.delayPolicy = NetMatchDelayPolicy::Fixed; saved.inputDelayFrames = 0; saved.slowPlayerPolicy = policy;
+				for (auto& seat: saved.seats) seat.delayFrames = 0;
+				if (NetHostDefaults::ApplyTo(saved, match, &reason) || reason.find("fixed input delay 0") == std::string::npos) return fail("saved fixed-zero timing is accepted without its refusal: " + reason);
+			}
+			return fail("");
+		}
+
 		bool TestSurvivorsReadOneAuthorityDuringHandover(std::string* error) {
 			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("survivors_read_one_authority_during_handover", why, error); };
 			SuccessionReplayScope scope;
@@ -25443,7 +25461,7 @@ namespace {
 	int NetLockstepSelfTest::RunSeatSuccession() {
 		EnsureSwitchTestManagers();
 		bool passed = true;
-		for (bool (*test)(std::string*): {TestTwoSuccessionsKeepBothFormerHosts, TestSurvivorsReadOneAuthorityDuringHandover, TestFutureReleaseIsVoidOnEverySurvivor, TestAnnouncedLeaveLoneOutcome, TestAnnouncedHostLeaveKeepsOneSurvivor, TestAnnouncedHostReturnsByTicket, TestAnnouncedHostLeaveKeepsTwoSurvivors, TestAnnouncedHostLeaveEndsAnEmptyMatch, TestPlayingDepartureSurvivesSuccession, TestUnequalFutureDeparturesConvergeAtSuccession, TestPlayingHostLossKeepsLiveClaims, TestPlayingHostLossRecordsHeldClaims, TestPlayingHostReturnsWithItsTicket, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestReplayMatchesSuccessionDuringActivityTick, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
+		for (bool (*test)(std::string*): {TestTwoSuccessionsKeepBothFormerHosts, TestZeroDelayCannotRunAnUncommittedClientTick, TestSurvivorsReadOneAuthorityDuringHandover, TestFutureReleaseIsVoidOnEverySurvivor, TestAnnouncedLeaveLoneOutcome, TestAnnouncedHostLeaveKeepsOneSurvivor, TestAnnouncedHostReturnsByTicket, TestAnnouncedHostLeaveKeepsTwoSurvivors, TestAnnouncedHostLeaveEndsAnEmptyMatch, TestPlayingDepartureSurvivesSuccession, TestUnequalFutureDeparturesConvergeAtSuccession, TestPlayingHostLossKeepsLiveClaims, TestPlayingHostLossRecordsHeldClaims, TestPlayingHostReturnsWithItsTicket, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestReplayMatchesSuccessionDuringActivityTick, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
 			std::string error;
 			passed &= test(&error);
 		}
