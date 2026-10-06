@@ -16715,6 +16715,105 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		// devices for it: ACrab's mouse-aim clamp hands the seat's input slot to UInputMan::AnalogAimValues,
 		// whose m_ControlScheme.at() throws out of the sim tick on NoPlayer.
 
+		bool TestPendingClaimSurvivesAcknowledgementAndDelayDecrease(std::string* error) {
+			EnsureSwitchTestManagers();
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			const uint16_t port = 43222;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, port, 5, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, port, 5, NetTransportLane::ControlReliable);
+			for (auto* config: {&hostConfig, &clientConfig}) {
+				config->matchConfig = NetMatchConfigUtil::MakeDefault(0x483162434C41494DULL);
+				config->matchConfig.ownershipPolicy = NetActorOwnershipPolicy::HostCpuRemoteHuman;
+				config->ownershipPolicy = "host-cpu-remote-human";
+				config->initialDelayChanges[2] = {{0, 5}, {117, 2}};
+			}
+			const long long savedTick = g_TimerMan.GetSimUpdateCount(), savedTime = g_TimerMan.GetSimTickCount();
+			const auto finish = [&](const std::string& message) {
+				g_TimerMan.RestoreSimTickAfterPreview(savedTick, savedTime);
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				std::cout << "[net-lockstep-selftest] " << (message.empty() ? "PASS" : "FAIL")
+				          << " h1b_claim_survives_early_ack_and_delay_decrease" << (message.empty() ? "" : ": " + message) << std::endl;
+				if (error) *error = message;
+				return message.empty();
+			};
+			if (!StartCoordinatorPair(port, hostWire, clientWire, host, client, hostConfig, clientConfig, error) ||
+			    !DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 4000))
+				return finish(error && !error->empty() ? *error : "the pair did not start");
+			std::unique_ptr<Activity> activity(new Activity());
+			activity->AddPlayer(Players::PlayerOne, true, Activity::TeamTwo, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Actor* actor = MakeSwitchTestActor(Activity::TeamTwo);
+			if (!actor) return finish("the selected actor could not be created");
+			ScenarioRunner::SetLockstepCoordinator(&client);
+			AddSwitchTestActor(actor);
+			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+			NetActorOwnership::SeedOwner(uid, 1, Activity::TeamTwo);
+			for (uint64_t tick = 0; tick < 115; ++tick)
+				if (!host.QueueLocalInput(tick, {}, {}, error) || !client.QueueLocalInput(tick, {}, {}, error))
+					return finish(error ? *error : "the input prefix did not queue");
+			g_TimerMan.RewindSimTo(115, savedTime);
+			if (!g_ActivityMan.GetActivity()->SwitchToActor(actor, Players::PlayerOne, Activity::TeamTwo))
+				return finish("the player could not select the foreign actor");
+			ControllerFrame human = MakeFrame(uid, uint64_t{1} << WEAPON_FIRE);
+			human.inputMode = Controller::CIM_PLAYER; human.playerRaw = Players::PlayerOne;
+			if (!host.QueueLocalInput(115, {}, {}, error) || !ScenarioRunner::QueueLockstepLocalControllerFrames(115, {human}, error))
+				return finish(error ? *error : "the switch input did not queue");
+			NetLockstepFrame retained;
+			if (!client.PeekLocalInput(120, retained)) return finish("the claim did not target frame120");
+			const auto claim = std::find_if(retained.commands.begin(), retained.commands.end(), [&](const auto& command) {
+				const auto* value = std::get_if<NetGameSwitchControl>(&command.payload);
+				return value && value->actorUID == uid && value->newOwnerPeerId == 2 && command.sequence != 0;
+			});
+			if (claim == retained.commands.end()) return finish("the frame120 claim has no local sequence");
+			const uint64_t sequence = claim->sequence;
+			if (ScenarioRunner::CaptureUnacknowledgedLocalCommands().empty()) return finish("the claim had no outbox entry before its acknowledgement");
+			NetHash32 hash{};
+			if (!host.SubmitLocalChecksum(120, hash, error, {{2, sequence}}) ||
+			    !DriveCoordinators(hostWire, clientWire, host, client, [&] {
+				    const auto& acks = client.GetAuthoritativeCommandAcks();
+				    return acks.contains(2) && acks.at(2) >= sequence;
+			    }, error, 4000)) return finish(error ? *error : "the early host checksum did not arrive");
+			for (uint64_t tick = 115; tick <= 120; ++tick) {
+				g_TimerMan.RewindSimTo(tick, savedTime);
+				if (tick > 115 && (!host.QueueLocalInput(tick, {}, {}, error) ||
+				    !ScenarioRunner::QueueLockstepLocalControllerFrames(tick, {human}, error)))
+					return finish(error ? *error : "the later input did not queue");
+				if (tick == 116 && !ScenarioRunner::CaptureUnacknowledgedLocalCommands().empty())
+					return finish("the acknowledgement did not clear the outbox before the decrease");
+				if (tick == 117 && client.InputDelayAt(2, tick) != 2) return finish("the committed delay did not decrease to2 at117");
+				MovableMan::ReconcileLockstepControlBindings();
+				if (g_ActivityMan.GetActivity()->GetLocallyControlledActor(Players::PlayerOne) != actor)
+					return finish("selected binding released at tick=" + std::to_string(tick) + " before local claim120 applies");
+				if (!ScenarioRunner::IsLocalControlClaimPending(uid)) return finish("claim120 retired before local application at tick=" + std::to_string(tick));
+				if (tick < 120) { ScenarioRunner::FinishLockstepSimulationTick(tick); continue; }
+				NetLockstepReadyFrame applied;
+				if (!DriveCoordinators(hostWire, clientWire, host, client, [&] {
+					    NetLockstepReadyFrame ready;
+					    while (client.PopReadyFrame(ready)) { if (ready.frame == 120) { applied = ready; return true; } }
+					    return false;
+				    }, error, 4000)) return finish(error ? *error : "local frame120 did not become ready");
+				for (const auto& command: applied.localCommands)
+					if (const auto* value = std::get_if<NetGameSwitchControl>(&command.payload)) {
+						if (!ScenarioRunner::ConsumeLockstepGameCommand(command) ||
+						    !MovableMan::ApplyLockstepControlClaim(value->actorUID, command.senderPeerId, value->newOwnerPeerId, 120))
+							return finish("the local frame120 claim did not apply");
+					}
+				for (const auto& frame: applied.localFrames)
+					if (frame.actorUniqueID == uid && !MovableMan::ApplyLockstepFrameToActor(*actor, frame, 120, error))
+						return finish(error ? *error : "the first human frame did not apply");
+				ScenarioRunner::FinishLockstepSimulationTick(120);
+				MovableMan::ReconcileLockstepControlBindings();
+				if (g_ActivityMan.GetActivity()->GetLocallyControlledActor(Players::PlayerOne) != actor ||
+				    actor->GetController()->GetInputMode() != Controller::CIM_PLAYER || !actor->GetController()->IsState(WEAPON_FIRE))
+					return finish("the selected actor is not human-controlled from frame120");
+				if (ScenarioRunner::IsLocalControlClaimPending(uid)) return finish("claim120 remains pending after local frame120 applies");
+			}
+			return finish("");
+		}
+
 		bool TestLocalReclaimPreparationRunsOnce(std::string* error) {
 			EnsureSwitchTestManagers();
 			LoopbackTransport wire;
@@ -24540,6 +24639,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		const bool ordinaryModes = TestOrdinaryMenusKeepTheirSampler(&ordinaryModesError);
 		std::string reclaimOnceError;
 		const bool reclaimOnce = TestLocalReclaimPreparationRunsOnce(&reclaimOnceError);
+		std::string pendingAcrossAckError;
+		const bool pendingAcrossAck = TestPendingClaimSurvivesAcknowledgementAndDelayDecrease(&pendingAcrossAckError);
 		const bool claimTie = TestSimultaneousClaimTieBreak(&claimTieError);
 		const bool switchHold = TestSwitchUnderSyncedHold(&switchHoldError);
 		const bool coopTakeover = TestCoopTakeoverOfHostCpuActor(&coopTakeoverError);
@@ -24566,7 +24667,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		const bool producingSet = TestProducingPassEndsTheSetItBeganWith(&producingSetError);
 		std::string readdedError;
 		const bool readdedFromWire = TestReaddedActorBeginsFromTheWire(&readdedError);
-		if (!reclaimOnce || !pendingSwitches || !ordinaryModes || !switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry || !teamChangeOwner || !remoteSeatInput || !seatMapSurvivesEnd ||
+		if (!pendingAcrossAck || !reclaimOnce || !pendingSwitches || !ordinaryModes || !switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry || !teamChangeOwner || !remoteSeatInput || !seatMapSurvivesEnd ||
 		    !sharedSeatAnswer || !speculativeBinding || !startWindow || !checkpointBinding || !producingSet || !readdedFromWire) {
 			return 1;
 		}
