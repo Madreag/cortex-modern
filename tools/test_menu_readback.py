@@ -2100,10 +2100,12 @@ def scripts(case, port, root, size="960x540"):
                  "assert_label LabelHostRecLastSave No autosaves while this is off\n"
                  "assert_label LabelHostRecAutosaveHint Every 60 s to 60 min, or off (default)\n"
                  # A typed 0 is off at Apply too: the service accepts off instead of refusing an enabled zero.
-                 # No peer has joined, so the accepted draft waits for the lobby round to republish it.
+                 # Apply publishes an open-seat lobby too; read both its action hint and the
+                 # committed revision's confirmation, rather than accepting a pending draft.
+                 "assert_label LabelHostOptStatus Apply republishes this lobby.\n"
                  "activate ButtonHostOptApply\nwait_ms 500\n"
                  "assert_label_absent LabelHostOptStatus requires a nonzero interval\n"
-                 "assert_label LabelHostOptStatus Apply republishes this lobby.\n"
+                 "assert_label LabelHostOptStatus Applied: this lobby was republished.\n"
                  "assert_checked CheckHostRecAutosave 0\n"
                  "assert_label LabelHostRecLastSave No autosaves while this is off\n"
                  # The applied draft keeps the picked window.
