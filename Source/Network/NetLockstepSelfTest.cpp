@@ -24044,6 +24044,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			bool Start(uint16_t port, bool bounded = true, bool world = false, uint8_t count = 4, uint16_t delay = 0) {
 				match = ReleasedClaimsMatch(0x9C00 + port, count);
 				match.inputDelayFrames = delay;
+				if (delay) match.delayPolicy = NetMatchDelayPolicy::Fixed;
 				match.slowPlayerPolicy = bounded ? NetSlowPlayerPolicy::Substitute : NetSlowPlayerPolicy::Pause;
 				for (uint8_t peer = 2; peer <= count; ++peer) match.successorOrder.push_back(peer);
 				for (uint8_t peer = 1; peer <= count; ++peer) match.migrationPeers.push_back({peer, static_cast<uint16_t>(port + peer), {"loopback"}});
