@@ -4529,49 +4529,71 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		if (label->GetHeight() != rowPitch - 2) label->Resize(label->GetWidth(), rowPitch - 2);
 	}
 
-	// One sentence says what the lobby waits for and what to press.
+	// One sentence says what the lobby waits for and what to press. Names too long for it shorten in their middle, each
+	// keeping its start and its end so two players stay told apart; the sentence itself is never cut.
 	const auto seconds = [](uint32_t ms) { return std::to_string((ms + 999) / 1000); };
-	const auto names = [](const std::vector<std::string>& list) {
-		if (list.empty()) return std::string();
-		if (list.size() == 1) return list.front();
-		if (list.size() == 2) return list[0] + " and " + list[1];
-		return list[0] + ", " + list[1] + " and " + std::to_string(list.size() - 2) + " more";
+	size_t nameBudget = std::string::npos;
+	const auto shortName = [&nameBudget](const std::string& name) {
+		if (name.size() <= nameBudget) return name;
+		const size_t tail = (nameBudget - 3) / 2;
+		return name.substr(0, nameBudget - 3 - tail) + "..." + name.substr(name.size() - tail);
 	};
-	std::string sentence;
-	if (!snapshot.transferLine.empty() || !snapshot.waitLine.empty()) {
-		// A join in progress names what it waits on: the world's image, or one of its held slots and the seconds left.
-		sentence = !snapshot.transferLine.empty() ? snapshot.transferLine : snapshot.waitLine;
-	} else if (!snapshot.inLobby) {
-		sentence = PlayerFacingStatus(snapshot.statusText);
-	} else if (snapshot.isHost) {
-		if (seatsToFill > 0 || !snapshot.occupancyComplete) {
-			const size_t missing = std::max<size_t>(seatsToFill, 1);
-			sentence = "Waiting for " + std::to_string(missing) + (missing == 1 ? " more player to join" : " more players to join");
-		} else if (snapshot.startCountdownRunning) {
-			sentence = notReady.empty() ? std::string("Starting the match...")
-			                            : "Starting in " + seconds(snapshot.startCountdownMs) + " s - waiting for " + names(notReady) + " to press Ready";
-		} else if (snapshot.remoteReady || notReady.empty()) {
-			sentence = "Everyone is ready - press Start Match";
+	const auto names = [&shortName](const std::vector<std::string>& list) {
+		if (list.empty()) return std::string();
+		if (list.size() == 1) return shortName(list.front());
+		if (list.size() == 2) return shortName(list[0]) + " and " + shortName(list[1]);
+		return shortName(list[0]) + ", " + shortName(list[1]) + " and " + std::to_string(list.size() - 2) + " more";
+	};
+	const auto compose = [&]() {
+		std::string sentence;
+		if (!snapshot.transferLine.empty() || !snapshot.waitLine.empty()) {
+			// A join in progress names what it waits on: the world's image, or one of its held slots and the seconds left.
+			sentence = !snapshot.transferLine.empty() ? snapshot.transferLine : snapshot.waitLine;
+		} else if (!snapshot.inLobby) {
+			sentence = PlayerFacingStatus(snapshot.statusText);
+		} else if (snapshot.isHost) {
+			if (seatsToFill > 0 || !snapshot.occupancyComplete) {
+				const size_t missing = std::max<size_t>(seatsToFill, 1);
+				sentence = "Waiting for " + std::to_string(missing) + (missing == 1 ? " more player to join" : " more players to join");
+			} else if (snapshot.startCommitted) {
+				sentence = "Starting the match...";
+			} else if (snapshot.startCountdownRunning) {
+				sentence = notReady.empty() ? std::string("Starting the match...")
+				                            : "Starting in " + seconds(snapshot.startCountdownMs) + " s - waiting for " + names(notReady) + " to press Ready";
+			} else if (snapshot.remoteReady || notReady.empty()) {
+				sentence = "Everyone is ready - press Start Match";
+			} else {
+				sentence = "Waiting for " + names(notReady) + " to press Ready - Start Match starts in 30 s";
+			}
+		} else if (snapshot.joiningWorld) {
+			sentence = PlayerFacingStatus(snapshot.statusText);
 		} else {
-			sentence = "Waiting for " + names(notReady) + " to press Ready - Start Match starts in 30 s";
+			const bool ready = g_NetMatchService.IsReadyRequested();
+			if (snapshot.hostSetupOpen) {
+				sentence = "The host is changing the setup - the start waits for it";
+			} else if (snapshot.startCountdownRunning) {
+				sentence = "The host is starting the match in " + seconds(snapshot.startCountdownMs) + " s" + (ready ? std::string() : " - press Ready");
+			} else if (snapshot.readyClearedBySetup) {
+				sentence = "The host changed the setup - check it and press Ready again";
+			} else if (ready) {
+				sentence = "You're ready - waiting for the host to start the match";
+			} else {
+				sentence = "Press Ready when you're ready to play";
+			}
 		}
-	} else if (snapshot.joiningWorld) {
-		sentence = PlayerFacingStatus(snapshot.statusText);
-	} else {
-		const bool ready = g_NetMatchService.IsReadyRequested();
-		if (snapshot.startCountdownRunning) {
-			sentence = "The host is starting the match in " + seconds(snapshot.startCountdownMs) + " s" + (ready ? std::string() : " - press Ready");
-		} else if (snapshot.readyClearedBySetup) {
-			sentence = "The host changed the setup - check it and press Ready again";
-		} else if (ready) {
-			sentence = "You're ready - waiting for the host to start the match";
-		} else {
-			sentence = "Press Ready when you're ready to play";
+		// A sentence wider than its row breaks at its last " - " into two lines rather than lose its end.
+		if (m_MultiplayerLobbyPlayerRowFont && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(sentence, m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
+			if (const size_t dash = sentence.rfind(" - "); dash != std::string::npos) sentence.replace(dash, 3, "\n");
 		}
-	}
-	// A sentence wider than its row breaks at its last " - " into two lines rather than lose its end.
-	if (m_MultiplayerLobbyPlayerRowFont && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(sentence, m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
-		if (const size_t dash = sentence.rfind(" - "); dash != std::string::npos) sentence.replace(dash, 3, "\n");
+		return sentence;
+	};
+	std::string sentence = compose();
+	size_t longest = 0;
+	for (const std::string& name: notReady) longest = std::max(longest, name.size());
+	while (m_MultiplayerLobbyPlayerRowFont && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(sentence, m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth &&
+	       std::min(nameBudget, longest) > 6) {
+		nameBudget = std::min(nameBudget, longest) - 1;
+		sentence = compose();
 	}
 	m_MultiplayerStatusLabel->SetText(sentence);
 	m_MultiplayerStatusLabel->SetPositionRel(12, 160 + rowsExtra);
