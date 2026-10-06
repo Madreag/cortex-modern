@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import spread_peers as spread
 
@@ -17,6 +18,26 @@ class ContractTests(unittest.TestCase):
     def test_safe_peer_name(self):
         with self.assertRaises(ValueError):
             spread.Peer("../owner")
+
+    def test_declared_unicode_output_alias_preserves_the_logical_peer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            case = object.__new__(spread.Case)
+            case.out = Path(temporary).resolve()
+            alias = '\u00e9' * 64
+            peer = spread.Peer('host', output_name=alias)
+            case.output_names, case.members, case.runs = {peer.name: peer.output_name}, {'host': ()}, {}
+            with patch.object(spread, 'Run') as factory:
+                case.make_run(case.out, [], case.out / alias)
+            self.assertEqual(factory.call_args.kwargs['role'], 'host')
+
+    def test_output_alias_cannot_escape_the_case(self):
+        with self.assertRaises(ValueError):
+            spread.Peer('host', output_name='../owner')
+
+    def test_legacy_script_bytes_are_not_transcoded(self):
+        data = b'mark ' + bytes(range(128, 256)) + b'\nwait_file D:\\mx\\lane\\ready.json 5000\n'
+        mapped = spread.map_script(data, [('D:\\mx\\lane', '/native/lane')])
+        self.assertEqual(mapped, data.replace(b'D:\\mx\\lane\\ready.json', b'/native/lane/ready.json'))
 
     def test_control_port_is_not_game_port(self):
         with self.assertRaises(ValueError):
