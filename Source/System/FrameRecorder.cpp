@@ -1,4 +1,5 @@
 #include "FrameRecorder.h"
+#include "FrameCaptureStream.h"
 
 #include "System.h"
 
@@ -393,7 +394,7 @@ namespace RTE {
 		return line.dump();
 	}
 
-	std::string FrameRecorder::EncodeFrame(QueuedFrame& frame) {
+	std::string FrameRecorder::EncodeFrame(const QueuedFrame& frame) {
 		if (!m_EncoderTried) {
 			m_EncoderTried = true;
 			m_EncodedWidth = frame.meta.width;
@@ -401,22 +402,24 @@ namespace RTE {
 			m_FirstSlot = frame.slot;
 			m_NextSlot = frame.slot;
 			const std::string preset = m_EncoderCodec.find("nvenc") != std::string::npos ? "-preset p1 -cq 23" : "-preset ultrafast -crf 20";
-			const std::string command = "\"" + m_EncoderPath + "\" -hide_banner -loglevel warning -y -f rawvideo -pix_fmt rgb24 -s " +
-			    std::to_string(m_EncodedWidth) + "x" + std::to_string(m_EncodedHeight) + " -framerate " + std::to_string(m_Fps) +
-			    " -i - -vf \"pad=ceil(iw/2)*2:ceil(ih/2)*2\" -c:v " + m_EncoderCodec + " " + preset + " -pix_fmt yuv420p \"" +
+			const std::string command = "\"" + m_EncoderPath + "\" -hide_banner -loglevel warning -y -f matroska -i - -vf \"fps=" +
+			    std::to_string(m_Fps) + ":round=near,pad=ceil(iw/2)*2:ceil(ih/2)*2\" -c:v " + m_EncoderCodec + " " + preset + " -pix_fmt yuv420p \"" +
 			    (std::filesystem::path(m_Directory) / "capture.mp4").string() + "\"";
 			auto encoder = std::make_unique<EncoderPipe>();
-			if (encoder->Open(command, (std::filesystem::path(m_Directory) / "encoder.log").string(), m_EncoderError)) m_Encoder = std::move(encoder);
+			if (encoder->Open(command, (std::filesystem::path(m_Directory) / "encoder.log").string(), m_EncoderError)) {
+				const auto header = FrameCaptureStream::Header(m_EncodedWidth, m_EncodedHeight, m_Fps);
+				if (!header.empty() && encoder->Write(header.data(), header.size())) m_Encoder = std::move(encoder);
+				else m_EncoderError = "the encoder refused the stream header";
+			}
 			RecordEvent("encoder " + m_EncoderCodec + (m_Encoder ? " started" : " refused: " + m_EncoderError));
 		}
 		bool written = false;
 		if (m_Encoder && frame.meta.width == m_EncodedWidth && frame.meta.height == m_EncodedHeight) {
-			// Slots nothing filled keep the last picture, so the video runs on the wall clock the index is stamped with.
-			written = true;
-			for (; written && !m_LastPicture.empty() && m_NextSlot < frame.slot; ++m_NextSlot, ++m_Repeated) written = m_Encoder->Write(m_LastPicture.data(), m_LastPicture.size());
-			written = written && m_Encoder->Write(frame.pixels.data(), frame.pixels.size());
+			// The encoder holds the same last picture for empty slots; only new pixels cross the pipe.
+			const auto header = FrameCaptureStream::FrameHeader(frame.slot - m_FirstSlot, m_Fps, frame.pixels.size());
+			written = !header.empty() && m_Encoder->Write(header.data(), header.size()) && m_Encoder->Write(frame.pixels.data(), frame.pixels.size());
+			if (written && frame.slot > m_NextSlot) m_Repeated += frame.slot - m_NextSlot;
 			m_NextSlot = frame.slot + 1;
-			std::swap(frame.pixels, m_LastPicture);
 			if (!written) m_EncoderError = "the encoder stopped reading";
 		}
 		nlohmann::json line = {{"frame", frame.index}, {"video_frame", frame.slot - m_FirstSlot}, {"wall_ms", frame.meta.wallMS}, {"sim_tick", frame.meta.simTick},

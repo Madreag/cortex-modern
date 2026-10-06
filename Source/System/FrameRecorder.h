@@ -103,8 +103,8 @@ namespace RTE {
 		void WriterLoop();
 		/// Encodes the frame; returns its index row, which the caller files in frame order.
 		std::string WriteFrame(const QueuedFrame& frame);
-		/// Streams the frame into the encoder, the last picture repeated for the slots before it that nothing filled.
-		std::string EncodeFrame(QueuedFrame& frame);
+		/// Streams the frame's timestamp and pixels; the encoder holds its previous picture across empty slots.
+		std::string EncodeFrame(const QueuedFrame& frame);
 		void WritePendingDrops();
 		void WriteManifest();
 
@@ -148,7 +148,6 @@ namespace RTE {
 		std::size_t m_FirstSlot = 0;
 		std::size_t m_NextSlot = 0;
 		std::size_t m_Repeated = 0;
-		std::vector<unsigned char> m_LastPicture;
 
 		mutable std::mutex m_Mutex;
 		std::condition_variable m_Wake;
