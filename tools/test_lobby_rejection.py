@@ -9,18 +9,27 @@ import re
 from compare_sim_traces import strict_compare
 from run_sim_test import make_run, seed_settings
 from test_lobby_lifecycle import wait_for_log
+from test_menu_readback import spread, managed_case
 
 
+@managed_case
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, required=True)
+    if spread:
+        spread.add_arguments(parser)
     options = parser.parse_args()
+    if not spread:
+        parser.error("lobby rejection requires the shared spread executor")
+    options.spread = True
+    spread.configure(options)
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     runs, records = {}, {}
     result = {"pass": False}
+    execution = None
     reason = "deterministic config"
 
     def start(name, host, suffix, extra=(), trace=False):
@@ -34,13 +43,17 @@ def main():
         args = ["-menu-script", path, "-num-lua-states", 4, *extra]
         if trace:
             args += ["-tick-hashes", "-max-ticks", 180, "-out", root / name / "trace.json"]
-        run = make_run(options.repo, args, root / name, 150)
+        run = execution.make_run(options.repo, args, root / name, 150)
         # The delay box is read-only under the auto policy; the floor the host sends is a setting.
         seed_settings(run, {"NetworkInputDelayFrames": 3})
         runs[name] = run.start()
         return run
 
     try:
+        execution = spread.prepare_case(options.repo, root,
+            [spread.Peer("host", os="windows", reviewed=True, output_name="Host"),
+             spread.Peer("rejected", os="windows", output_name="Rejected"),
+             spread.Peer("replacement", os="windows", output_name="Replacement")], spread.Match(options.port))
         host = start("Host", True,
             f"wait_error {reason}\nassert_substate Lobby\nassert_enabled ButtonMultiplayerStart 0\nassert_error {reason}\ndump_lobby\nscreenshot rejected-join\n"
             "wait_connected 2\nwait_remote_ready\nwait_all_ready\nassert_enabled ButtonMultiplayerStart 1\ndump_lobby\nactivate ButtonMultiplayerStart\nwait 99999\n", trace=True)
@@ -84,6 +97,9 @@ def main():
         result["error"] = str(error)
     finally:
         for run in runs.values(): run.close()
+        receipt = execution.result() if execution else spread.read_json(root / "spread-result.json", {})
+        result.update(topology="spread", peer_boxes=receipt.get("peer_boxes", {}), spread=receipt,
+                      proof=result["pass"])
         (root / "result.json").write_text(json.dumps(result, indent=2))
     print(json.dumps({"pass": result["pass"], "error": result.get("error"), "failed": [key for key, ok in result.get("checks", {}).items() if not ok], "out": str(root)}), flush=True)
     return 0 if result["pass"] else 1
