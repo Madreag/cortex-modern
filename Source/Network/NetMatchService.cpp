@@ -2570,6 +2570,22 @@ static std::string ResyncSaveName() {
 					return !m_Coordinator->IsPeerGoneAtFrame(link.first, m_Coordinator->GetResumeFrame()) && !m_Coordinator->HasHeldAISeat(link.first);
 				});
 			}
+			if (handover && m_TicketStore.HasRecord()) {
+				const auto& config = m_Coordinator->GetConfig().matchConfig;
+				for (uint8_t peer: config.successorOrder) {
+					if (m_Coordinator->IsPeerGoneAtFrame(peer, m_Coordinator->GetResumeFrame()) || m_Coordinator->HasHeldAISeat(peer)) continue;
+					const auto endpoint = std::find_if(config.migrationPeers.begin(), config.migrationPeers.end(), [peer](const auto& item) { return item.peerId == peer; });
+					if (endpoint == config.migrationPeers.end() || endpoint->listenPort == 0 || endpoint->listenAddrs.empty()) continue;
+					NetH4TicketRecord ticket;
+					if (m_TicketStore.Load(UnixNowMs(nullptr), ticket) == NetH4TicketLoadResult::Loaded) {
+						// A leaver no longer hears the election's endpoint on its closing link.
+						ticket.hostAddress = endpoint->listenAddrs.front() + ":" + std::to_string(endpoint->listenPort);
+						std::string error;
+						if (!m_TicketStore.Store(ticket, &error)) System::PrintDiagnosticLine("[net-match] cannot save the successor's rejoin address: " + error);
+					}
+					break;
+				}
+			}
 			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
 			if (m_IsHost && !handover) m_ReconnectHost.SetMatchEnded();
 			m_LeftMatch = true;
