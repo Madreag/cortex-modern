@@ -212,11 +212,12 @@ class ContractTests(unittest.TestCase):
             value = example.video.run_one(SimpleNamespace(repo=Path('.'), size='960x540', port=51580),
                                           dict(size='960x540', timeout_s=170), dict(name='run0'), 0, Path('.'))
             self.assertEqual(value['peer_boxes'], dict(host='EROL-PC', client='Linux'))
+            self.assertTrue(all(peer['record']['topology']=='spread' and peer['record']['box']==peer['box'] for peer in value['peers']))
             return 0
         with tempfile.TemporaryDirectory() as directory, patch.object(sys, 'argv', ['spread_example.py', '--out', directory,
                 '--peer-boxes', 'host=EROL-PC,seat2=Linux', '--port', '51580', '--port-block', '51580-51589']), \
                 patch.object(example, 'run_case', side_effect=run_case), patch.object(example.video, 'main', video_main), \
-                patch.object(example.video, '_run_one', return_value=dict(peers=[dict(peer='host'),dict(peer='client')])) as staged, \
+                patch.object(example.video, '_run_one', return_value=dict(peers=[dict(peer='host',record={}),dict(peer='client',record={})])) as staged, \
                 patch.object(example.video, 'run_one'):
             self.assertEqual(example.main(), 0)
             staged.assert_called_once()
