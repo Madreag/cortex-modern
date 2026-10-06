@@ -28,6 +28,8 @@ peer_boxes, native identities, executable hashes, records and driver_result.
 Shareable peers may use one box within the pool's memory, engine and CPU limits;
 quiet/timing peers remain on distinct idle boxes. The existing pool chooses
 the least loaded fitting box for a shareable group and admits each native claim.
+Reviewed and held peers request the pool's whole-box claim to keep their
+isolation when an installed pool scopes its screen-sharing rule to one case.
 
 prepare_case(...), the same arguments except drive, exposes the same Case for
 drivers whose existing control loop needs runner-compatible handles. Always
@@ -598,7 +600,7 @@ class Case:
                     raise self.refuse(peer.name, pin, "spread match requires at least two physical boxes")
                 excluded += used
             needs = self.pool.Needs(os=peer.os, engines=peer.engines, gpu=bool(peer.size), memory=peer.memory,
-                                    alone=peer.quiet, size=peer.size, only_box=pin, excluded=tuple(excluded),
+                                    alone=peer.quiet or peer.reviewed or peer.held or peer.recorder, size=peer.size, only_box=pin, excluded=tuple(excluded),
                                     case_id=self.id, peer_id=peer.name, share_ok=peer.share_ok, reviewed=peer.reviewed or peer.recorder, held=peer.held)
             caller_lane = peer.lane or self.match.parameters.get("lane")
             label = f"{caller_lane}: spread" if caller_lane else "spread"
