@@ -454,12 +454,15 @@ class Case:
                         raise
 
     def prepare(self):
+        self.input_snapshot = self.members[self.names[0]][3].committed_inputs()
         for name in self.names:
             box, claim, request, backend = self.members[name]
             backend.active_claim, backend.active_box = claim, box
             backend.snapshot = getattr(self, "input_snapshot", None)
             backend.prepare(box, claim, request)
             self.input_snapshot = backend.snapshot
+            if claim["head"] != self.input_snapshot["head"]:
+                raise self.refuse(name, box["name"], "source changed after the case input snapshot was frozen")
             native_root = box["scratch"].rstrip("/") + "/" + self.lane + "/native-" + self.id
             claim["case_root"] = native_root
             # Read the pool's port assignment. Each peer has a separate machine;
@@ -651,7 +654,7 @@ class Run:
                 args[args.index("-net-ice") + 1] = "on"
             else:
                 args += ["-net-ice", "on"]
-            if "-net-join" in args:
+            if "-net-join" in args and args[args.index("-net-join") + 1] in ("127.0.0.1", "localhost"):
                 index = args.index("-net-join")
                 args[index:index + 2] = ["-net-join-session", session]
         mappings = [(str(self.case.out), claim["case_root"]), (self.case.out.as_posix(), claim["case_root"]),
@@ -725,6 +728,8 @@ class Run:
         self.finished = True
         backend.end()
         backend.fetch(box, claim, request, result)
+        if result.get("reroute") or result.get("lost") or result.get("refused"):
+            raise self.case.refuse(self.role, box["name"], result.get("routing_reason") or result.get("reason") or "native capacity invalidated the run")
         from acceptance_remote import unpack_evidence
         manifest = self.native_progress.get("archive")
         if not manifest:

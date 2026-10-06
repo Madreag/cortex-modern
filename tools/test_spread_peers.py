@@ -82,6 +82,9 @@ class ContractTests(unittest.TestCase):
                 if self.snapshot is None:
                     self.snapshot = {"head": "frozen"}
                 claim.update(exe_sha256=self.digest, head=self.snapshot["head"])
+            def committed_inputs(self):
+                self.snapshot = {"head": "frozen"}
+                return self.snapshot
         case = object.__new__(spread.Case)
         case.names = ["host", "client"]
         case.lane = "example"

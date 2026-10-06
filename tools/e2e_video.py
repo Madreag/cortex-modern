@@ -1706,6 +1706,9 @@ def review(scenario, capture, out):
                 "run_findings": run_findings,
                 "failures": {row["peer"]: row["menu_script_failures"] for row in capture["peers"]},
                 "verdict": "agent-review-required"}
+    document["topology"] = capture.get("topology", "single-box: not proof" if len(capture["peers"]) > 1 else "single-peer")
+    if capture.get("peer_boxes"):
+        document["peer_boxes"] = capture["peer_boxes"]
     if capture.get("feel_window"):
         document["feel_window"] = capture["feel_window"]
     for key in ("footprint_peak_bytes", "retained", "retired"):
@@ -1787,7 +1790,7 @@ def gameplay_signals(video, stage, epochs=1):
             write_json(path, row)
 
 
-def run_one(options, scenario, run, run_index, out):
+def _run_one(options, scenario, run, run_index, out):
     """One scenario run: its peers launched together, each recording its own video."""
     root = Path(out) / run.get("name", f"run{run_index}")
     dry = getattr(options, "dry_run", False)
@@ -2138,6 +2141,44 @@ def run_one(options, scenario, run, run_index, out):
             "fullstate": fullstate, "footprint_peak_bytes": footprint_peak}
 
 
+def run_one(options, scenario, run, run_index, out):
+    """Keep case staging and assertions intact behind the shared peer interface."""
+    import spread_peers as spread
+    definitions = run.get("peers") or scenario.get("peers") or []
+    count = len(definitions)
+    if not spread.enabled(options) or getattr(options, "dry_run", False):
+        result = _run_one(options, scenario, run, run_index, out)
+        if not getattr(options, "dry_run", False):
+            result["topology"] = "spread" if getattr(options, "remote_capture", None) else spread.topology(options, count)
+            for peer in result.get("peers", []):
+                peer["topology"] = result["topology"]
+        return result
+    root = Path(out)/run.get("name", f"run{run_index}")
+    size = tuple(map(int, (options.size or run.get("size") or scenario.get("size") or DEFAULT_SIZE).split("x")))
+    capture_peer = getattr(options, "capture_peer", None) or definitions[0]["name"]
+    if capture_peer not in {peer["name"] for peer in definitions}:
+        raise ValueError("--capture-peer must name a peer of this run")
+    peers = [spread.Peer(peer["name"], os="windows" if peer["name"] == capture_peer else "any", size=size,
+                         reviewed=peer["name"] == capture_peer, timeout=run.get("timeout_s") or scenario.get("timeout_s") or 300)
+             for peer in definitions]
+    previous = getattr(options, "remote_capture", None)
+    def drive(case):
+        options.remote_capture = case
+        try:
+            result = _run_one(options, scenario, run, run_index, out)
+            result.update(topology="spread", peer_boxes=case.result()["peer_boxes"])
+            for peer in result["peers"]:
+                peer.update(topology="spread", box=result["peer_boxes"][peer["peer"]])
+                peer["record"]["topology"] = "spread"
+            return result
+        finally:
+            options.remote_capture = previous
+    result = spread.run_case(options.repo, root, peers, spread.Match(port_for(run_index, options.port), PORT_HI), drive=drive,
+                             peer_boxes=getattr(options, "peer_boxes", None), dispatcher=getattr(options, "pool_dispatcher", None),
+                             registry=getattr(options, "pool_registry", None))
+    return result["driver_result"]
+
+
 def render(capture_run, fps, every):
     """Encodes missing media while preserving a completed peer's retained output."""
     ffmpeg = find_ffmpeg()
@@ -2321,6 +2362,10 @@ def scenario_manifest(capture, out, elapsed):
                 "requires_findings": capture.get("requires_findings", []),
                 "scratch_root": capture.get("scratch_root"), "scratch_limit_bytes": capture.get("scratch_limit_bytes", SCRATCH_LIMIT),
                 "peer_selection": capture.get("scenario_definition", {}).get("peer_selection"), "platform": capture.get("platform", sys.platform)}
+    manifest["topology"] = capture.get("topology", "single-box: not proof" if len(peers) > 1 else "single-peer")
+    for peer in peers:
+        peer["topology"] = manifest["topology"]
+        peer["box"] = next((row.get("box") for run in capture["runs"] for row in run["peers"] if run["name"] == peer["run"] and row["peer"] == peer["peer"]), None)
     if capture.get("scenario_definition", {}).get("cross_machine"):
         from e2e.cross import record_auxiliary_evidence
         manifest["cross_auxiliary"] = record_auxiliary_evidence(capture, peers)
@@ -2354,6 +2399,8 @@ def aggregate_review(capture, out):
                 "checklist": items, "interrupted": capture.get("interrupted"),
                 "run_findings": [finding for document in documents for finding in document.get("run_findings", [])],
                 "reviews": [str(Path(run["root"]) / "review.json") for run in capture["runs"]]}
+    document["topology"] = capture.get("topology", "single-box: not proof" if any(len(run.get("peers", [])) > 1 for run in capture["runs"]) else "single-peer")
+    document["peer_boxes"] = {run["name"]: run.get("peer_boxes", {}) for run in capture["runs"]}
     write_json(Path(out) / "review.json", document)
     return document
 
@@ -2696,6 +2743,9 @@ def peer_completed(peer):
 def main():
     global PORT_LO, PORT_HI
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    import spread_peers as spread
+    spread.add_arguments(parser)
+    parser.add_argument("--capture-peer", help="reviewed peer on the controller's private Windows recorder; defaults to the first peer")
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path)
     parser.add_argument("--scenario")
@@ -2729,6 +2779,9 @@ def main():
                         help="multi-peer runs: every N committed ticks each peer hashes its whole capture (-net-fullstate-hash-every); "
                              "a pair that differs is an engine finding; 0 is off")
     options = parser.parse_args()
+    spread.configure(options)
+    if spread.enabled(options) and (options.host_box or options.client_box or options.peer):
+        parser.error("--spread/--peer-boxes use the shared peer interface; select its boxes with --peer-boxes")
 
     if options.merge_peer_captures:
         if not options.out:
@@ -2825,10 +2878,11 @@ def main():
                "settings": dict(options.setting), "render_cap": options.render_cap,
                "scratch_root": str(options.scratch_root), "scratch_limit_bytes": options.scratch_limit_bytes,
                "started": stamp(), "command": [sys.executable, *sys.argv], "scenario_definition": scenario}
+    capture["topology"] = ("spread" if options.host_box else spread.topology(options, max(len(run.get("peers") or scenario.get("peers") or []) for run in runs)))
     from relay_private import public_value
     capture=public_value(capture,capture_book.values if scenario.get('relay_secret_scan') else ())
     missing = requirement_findings(options.repo, scenario)
-    if not options.host_box and not scenario.get("cross_machine"):
+    if not options.host_box and not scenario.get("cross_machine") and not spread.enabled(options):
         missing += engine_cap_findings(scenario)
     if missing:
         capture["requires_findings"] = missing
