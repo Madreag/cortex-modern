@@ -380,6 +380,17 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(spread.map_script(script, [], 'own-code'),
                              b'settext TextJoinAddress session:own-code\nsettext TextJoinAddress deliberately-invalid\n')
 
+    def test_public_settings_key_is_accepted_by_the_directorys_actual_parser(self):
+        from session_directory.session_directory import valid_install_key
+        repo = Path(__file__).resolve().parents[1]
+        host = spread.public_directory_settings(repo, 'a'*32, 'host')
+        client = spread.public_directory_settings(repo, 'a'*32, 'client')
+        self.assertTrue(valid_install_key(host['SessionDirectoryInstallKey']))
+        self.assertTrue(valid_install_key(client['SessionDirectoryInstallKey']))
+        self.assertNotEqual(host['SessionDirectoryInstallKey'], client['SessionDirectoryInstallKey'])
+        self.assertEqual(host['SessionDirectoryCertSha256'], '')
+        self.assertEqual((host['NetworkIceEnable'],host['NetworkHostGameListing']),('1','unlisted'))
+
     def test_native_load_exit_preserves_peer_box_and_exact_reason(self):
         class LoadExit(SystemExit):
             def __str__(self):

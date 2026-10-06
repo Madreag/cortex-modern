@@ -907,6 +907,17 @@ def named_task_box(box, tasks, names, name):
     return dict(box, task_slots=slots)
 
 
+def public_directory_settings(repo, case_id, role):
+    header = (Path(repo) / "Source/Managers/SettingsMan.h").read_text(encoding="utf-8")
+    default = re.search(r'c_DefaultSessionDirectoryUrl\s*=\s*"([^"]+)"', header)
+    if not default:
+        raise RuntimeError("the build names no default public directory")
+    key = hashlib.sha256((case_id + "/" + role).encode()).hexdigest()[:32]
+    return dict(SessionDirectoryUrl=default[1], SessionDirectoryCertSha256="",
+                SessionDirectoryInstallKey=key, NetworkIceEnable="1", NetworkPortMapEnable="0",
+                NetworkHostGameListing="unlisted")
+
+
 class Case:
     def __init__(self, repo, out, peers, match, *, peer_boxes=None, dispatcher=None, registry=None, peer_ports=None):
         self.repo, self.out = Path(repo).resolve(), Path(out).resolve()
@@ -1771,13 +1782,7 @@ def _native_execute(spec_path, result_out, peer, ownership):
             settings.update(SessionDirectoryInstallKey="spread-" + role + "-install", NetworkIceEnable="1", NetworkPortMapEnable="0")
         seed_settings(run, settings)
     elif spec.get("public_directory"):
-        header = (Path(spec["repo"]) / "Source/Managers/SettingsMan.h").read_text(encoding="utf-8")
-        default = re.search(r'c_DefaultSessionDirectoryUrl\s*=\s*"([^"]+)"', header)
-        if not default:
-            raise RuntimeError("the build names no default public directory")
-        seed_settings(run, dict(SessionDirectoryUrl=default[1], SessionDirectoryCertSha256="",
-                                SessionDirectoryInstallKey="spread-" + spec["case_id"] + "-" + role,
-                                NetworkIceEnable="1", NetworkPortMapEnable="0", NetworkHostGameListing="unlisted"))
+        seed_settings(run, public_directory_settings(spec["repo"], spec["case_id"], role))
     for flag in ("-record-video", "-feel-measure"):
         if flag in run.argv:
             Path(run.argv[run.argv.index(flag) + 1]).mkdir(parents=True, exist_ok=True)
