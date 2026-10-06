@@ -30,7 +30,7 @@ PURGE_VIEW = """    if self.steps == 39 then
     if self.steps == 42 then
         for player = 0, 3 do
             if self:ScreenOfPlayer(player) >= 0 then
-                assert(self:GetViewState(player) == Activity.NORMAL, "purge leaves an actor-dependent view active");
+                assert(self:GetViewState(player) == Activity.NORMAL, "purge leaves view=" .. self:GetViewState(player) .. " on player=" .. player);
                 assert(self:GetPlayerBrain(player) ~= nil, "replacement brain is absent");
             end
         end
@@ -95,6 +95,12 @@ def stage_activity(run, case):
     if case == "purge-view":
         source = source.replace("    if self.steps > 60 then", PURGE_VIEW + "    if self.steps > 60 then")
         source = source.replace("                self:SwitchToActor(actor, player, 0);", "                if self.steps == 10 then self:SwitchToActor(actor, player, 0); end")
+        source = source.replace("            self.purgeClear = true;", """            self.purgeClear = true;
+            for player = 0, 3 do
+                if self:ScreenOfPlayer(player) >= 0 then
+                    print("[resume-detector] player=" .. player .. " immediate_purge_view=" .. self:GetViewState(player));
+                end
+            end""")
     if case == "team-change":
         source = source.replace("self.steps == 10 or self.steps == 40", "self.steps == 10")
         source = source.replace("                self:SwitchToActor(actor, player, 0);", "")
