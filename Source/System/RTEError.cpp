@@ -5,9 +5,12 @@
 #include "ConsoleMan.h"
 #include "ActivityMan.h"
 #include "System.h"
+#include "RenderTarget.h"
+#include "GLFrameReadback.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_messagebox.h>
+#include <SDL3_image/SDL_image.h>
 
 #ifdef _WIN32
 #include "Windows.h"
@@ -881,49 +884,26 @@ void RTEError::DumpHardwareInfo() {
 }
 
 bool RTEError::DumpAbortScreen() {
-	// Only the thread whose context is current can read the window; an abort anywhere else has no frame to dump.
-	if (glReadPixels == nullptr || glBindFramebuffer == nullptr || glBindBuffer == nullptr || !g_WindowMan.GetWindow() || SDL_GL_GetCurrentContext() == nullptr) {
+	const auto screenBuffer = g_WindowMan.GetScreenBuffer();
+	if (!screenBuffer) return false; // A startup abort can precede the first rendered frame.
+	const auto& texture = screenBuffer->GetColorTexture();
+	if (texture.width <= 0 || texture.height <= 0) return false;
+	const std::size_t rowBytes = static_cast<std::size_t>(texture.width) * 3;
+	std::vector<unsigned char> pixels(rowBytes * texture.height);
+	std::string readbackError;
+	if (!ReadTextureRGB(texture.id, texture.width, texture.height, pixels, readbackError)) {
+		System::PrintFaultToCLI("The rendered frame could not be dumped: " + readbackError);
 		return false;
 	}
-	int w = 0;
-	int h = 0;
-	SDL_GetWindowSizeInPixels(g_WindowMan.GetWindow(), &w, &h);
-	if (!(w > 0 && h > 0)) {
-		return false;
+	for (int y = 0; y < texture.height / 2; ++y) {
+		std::swap_ranges(pixels.data() + y * rowBytes, pixels.data() + (y + 1) * rowBytes,
+		                 pixels.data() + (texture.height - y - 1) * rowBytes);
 	}
-	// A lost context reports an error on every call, so the old errors are drained a bounded number of times.
-	for (int drained = 0; drained < 32 && glGetError() != GL_NO_ERROR; ++drained) {}
-	// The renderer may have left its own framebuffer, pack buffer or row layout bound; this read is the default framebuffer, tightly packed.
-	glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-	glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-	glPixelStorei(GL_PACK_ALIGNMENT, 1);
-	glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-	glPixelStorei(GL_PACK_SKIP_ROWS, 0);
-	glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
-	// Read screen from the front buffer since that is the only framebuffer guaranteed to exist at this point.
-	glReadBuffer(GL_FRONT);
-	if (const GLenum error = glGetError(); error != GL_NO_ERROR) {
-		System::PrintFaultToCLI("The last frame was not dumped: GL error " + std::to_string(error) + " selecting the front buffer.");
-		return false;
-	}
-	BITMAP* readBuffer = create_bitmap_ex(24, w, h);
-	BITMAP* flipBuffer = readBuffer ? create_bitmap_ex(24, w, h) : nullptr;
-	if (!flipBuffer) {
-		return false;
-	}
-	// Read twice because front buffer content is technically undefined, but most drivers still eventually give up the contents correctly.
-	glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, readBuffer->line[0]);
-	glFinish();
-	glReadBuffer(GL_BACK);
-	glReadBuffer(GL_FRONT);
-	glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, readBuffer->line[0]);
-	glFinish();
-	if (const GLenum error = glGetError(); error != GL_NO_ERROR) {
-		System::PrintFaultToCLI("The last frame was not dumped: GL error " + std::to_string(error) + " reading it.");
-		return false;
-	}
-	draw_sprite_v_flip(flipBuffer, readBuffer, 0, 0);
-	return save_png("AbortScreen.png", flipBuffer, nullptr) == 0;
+	SDL_Surface* surface = SDL_CreateSurfaceFrom(texture.width, texture.height, SDL_PIXELFORMAT_RGB24, pixels.data(), static_cast<int>(rowBytes));
+	if (!surface) return false;
+	const bool saved = IMG_SavePNG(surface, "AbortScreen.png");
+	SDL_DestroySurface(surface);
+	return saved;
 }
 
 bool RTEError::DumpAbortSave() {

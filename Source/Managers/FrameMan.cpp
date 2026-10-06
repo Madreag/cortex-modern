@@ -36,6 +36,7 @@
 #include "MetricsCollector.h"
 
 #include "RenderTarget.h"
+#include "GLFrameReadback.h"
 
 #include "GUI.h"
 #include "GUICheckpoint.h"
@@ -1352,11 +1353,12 @@ void FrameMan::RecordVideoFrame(const std::string& screen, const std::string& se
 	unsigned char* pixels = recorder.BeginFrame(wallMS, pitch * static_cast<std::size_t>(height));
 	if (!pixels) return;
 
-	// Tight rows, so the buffer's pitch is the recorder's and any width reads back whole.
-	glPixelStorei(GL_PACK_ALIGNMENT, 1);
-	GL_CHECK(glBindTexture(GL_TEXTURE_2D, g_WindowMan.GetScreenBuffer()->GetColorTexture().id));
-	GL_CHECK(glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, pixels));
-	glPixelStorei(GL_PACK_ALIGNMENT, 4);
+	std::string readbackError;
+	const auto screenBuffer = g_WindowMan.GetScreenBuffer();
+	if (!screenBuffer || !ReadTextureRGB(screenBuffer->GetColorTexture().id, width, height,
+	                                    {pixels, pitch * static_cast<std::size_t>(height)}, readbackError)) {
+		RTEAbort("Frame recorder texture readback failed: " + readbackError);
+	}
 	// The texture is bottom-up and the PNG is not.
 	for (int y = 0; y < height / 2; ++y) {
 		std::swap_ranges(pixels + y * pitch, pixels + (y + 1) * pitch, pixels + (height - y - 1) * pitch);
@@ -1377,16 +1379,16 @@ void FrameMan::SaveScreenToBitmap() {
 		return;
 	}
 
-	glPixelStorei(GL_PACK_ALIGNMENT, 4);
-	GL_CHECK(glBindTexture(GL_TEXTURE_2D, g_WindowMan.GetScreenBuffer()->GetColorTexture().id));
-	GL_CHECK(glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, m_ScreenDumpBuffer->pixels));
-
-	// Flip the pixels
-	std::vector<char*> temp(m_ScreenDumpBuffer->pitch);
-	char* pixels = reinterpret_cast<char*>(m_ScreenDumpBuffer->pixels);
-	size_t pitch = m_ScreenDumpBuffer->pitch;
-	for (size_t y = 0; y < m_ScreenDumpBuffer->h / 2; ++y) {
-		std::swap_ranges(pixels + y * pitch, pixels + (y + 1) * pitch, pixels + (m_ScreenDumpBuffer->h - y - 1) * pitch);
+	const std::size_t rowBytes = static_cast<std::size_t>(m_ScreenDumpBuffer->w) * 3;
+	std::vector<unsigned char> pixels(rowBytes * m_ScreenDumpBuffer->h);
+	std::string readbackError;
+	const auto screenBuffer = g_WindowMan.GetScreenBuffer();
+	if (!screenBuffer || !ReadTextureRGB(screenBuffer->GetColorTexture().id, m_ScreenDumpBuffer->w, m_ScreenDumpBuffer->h, pixels, readbackError)) {
+		RTEAbort("Screenshot texture readback failed: " + readbackError);
+	}
+	for (int y = 0; y < m_ScreenDumpBuffer->h; ++y) {
+		auto* destination = static_cast<unsigned char*>(m_ScreenDumpBuffer->pixels) + y * m_ScreenDumpBuffer->pitch;
+		std::copy_n(pixels.data() + (m_ScreenDumpBuffer->h - y - 1) * rowBytes, rowBytes, destination);
 	}
 }
 
