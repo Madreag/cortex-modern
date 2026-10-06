@@ -153,8 +153,11 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--case", choices=["purge-view", "team-change", "held-switch", "file-closed", "external-root", "camera", "feel"], required=True)
     parser.add_argument("--single", action="store_true", help="also check the legacy single-player setter")
+    parser.add_argument("--paired", action="store_true", help="check purge cancellation on both peers")
     parser.add_argument("--port", type=int, default=47650)
     args = parser.parse_args()
+    if args.paired and (args.single or args.case != "purge-view"):
+        parser.error("--paired is only for the purge-view detector")
     repo, out = args.repo.resolve(), args.out.resolve()
     sys.path.insert(0, str(repo / "tools"))
     from run_sim_test import make_run
@@ -166,7 +169,7 @@ def main():
         return int(not result["pass"])
 
     out.mkdir(parents=True, exist_ok=False)
-    paired = args.case in ["team-change", "held-switch", "camera"] and not args.single
+    paired = args.paired or (args.case in ["team-change", "held-switch", "camera"] and not args.single)
     script = out / "presses.txt"
     script.write_text("" if args.case == "camera" else "player=0 80 240 L_LEFT\n", encoding="utf-8")
     common = ["-module", "VoidWanderers.rte", "-seed", "42", "-input-script", str(script)]
@@ -213,7 +216,9 @@ def main():
                              [out / peer / "stdout.log", Path(run.cwd) / "LogConsole.txt", Path(run.cwd) / "AbortLog.txt"] if path.is_file())
             errors = []
             record = records[peer]
-            if record.get("exit_code") != 0 or record.get("timed_out"):
+            expected_leave = (args.case == "held-switch" and peer == "client" and record.get("exit_code") == 1
+                              and "[net-match] leave: quitting to menu at tick 80" in logs)
+            if (record.get("exit_code") != 0 and not expected_leave) or record.get("timed_out"):
                 errors.append(f"engine exit={record.get('exit_code')} timeout={record.get('timed_out')}")
             witness = args.case.replace("-", "_")
             if args.case == "feel":
@@ -222,13 +227,17 @@ def main():
             elif args.case == "camera":
                 from PIL import Image
                 checks = load_sibling("mod-void-wanderers-scenes")
-                pictures = sorted((out / f"{peer}-probe").glob("unassisted_menu_*.png"))
+                pictures = sorted((Path(run.cwd) / "ScreenShots").glob("unassisted_menu_*.png"))
                 menu = [[checks.find_words(Image.open(picture), repo / "Data/VoidWanderers.rte", word) for word in ["New game", "Load game"]] for picture in pictures]
                 if not menu or not any(all(word["pass"] for word in words) for words in menu):
                     errors.append("unassisted joining camera omits visible New game / Load game")
             elif not (args.case == "held-switch" and peer == "client") and f"[resume-detector] PASS {witness}" not in logs:
                 errors.append(f"{witness} witness missing")
             bad = [line[:350] for line in logs.splitlines() if re.search(r"RTE Abort|RTE Assert|stack traceback|stopped a preview hook|\bdesync\b", line, re.I)]
+            rejected = {"ERROR: Failed to create directory UnroutedCreate",
+                        "ERROR: Failed to rename oldPath UnroutedRename to newPath UnroutedMoved",
+                        "ERROR: Failed to remove directory Mods/UnroutedRemove/"} if args.case == "file-closed" else set()
+            bad += [line[:350] for line in logs.splitlines() if line.startswith("ERROR:") and line not in rejected]
             if bad:
                 errors.append(bad[0])
             if args.case == "file-closed":
