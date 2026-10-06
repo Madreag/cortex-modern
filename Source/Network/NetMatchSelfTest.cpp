@@ -45,6 +45,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <future>
 #include <deque>
 #include <filesystem>
@@ -15958,6 +15959,30 @@ namespace RTE {
 				return false;
 			}
 		}
+		const std::string hiddenCode = "7b8c9d2e-1111-4222-8333-444455556666";
+		NetIceJoinTarget hiddenTarget;
+		if (NetIceResolveSessionRow(rows, local, hiddenCode, &hiddenTarget) != "no such session" ||
+		    !NetIceResolveSessionRow(rows, local, hiddenCode, &hiddenTarget, nullptr, false, true).empty() ||
+		    hiddenTarget.identity != NetIceHostIdentity(hiddenCode) || hiddenTarget.joinMode != "ice" ||
+		    !hiddenTarget.address.empty() || hiddenTarget.port != 0) {
+			*error = "an explicit Unlisted ICE code did not dial its host without changing ordinary browse resolution";
+			return false;
+		}
+		for (const std::string& invalid : {std::string("absent"), hiddenCode + "/extra", std::string(36, 'g')}) {
+			if (NetIceResolveSessionRow(rows, local, invalid, &hiddenTarget, nullptr, false, true) != "no such session") {
+				*error = "an invalid session code acquired an ICE route";
+				return false;
+			}
+		}
+		for (bool incompatible : {false, true}) {
+			NetDirectorySessionRow known = sample(hiddenCode);
+			if (incompatible) known.lockstepCodecVersion = 99; else known.seatsFree = 0;
+			if (NetIceResolveSessionRow({known}, local, hiddenCode, &hiddenTarget, nullptr, false, true) != (incompatible ? "codec" : "full")) {
+				*error = "an explicit code bypassed a known directory refusal";
+				return false;
+			}
+		}
+		std::cout << "[net-match-selftest] PASS unlisted_session_code_ice ordinary_browse=unchanged listed_refusals=preserved invalid_codes=refused" << std::endl;
 		NetIceJoinTarget target;
 		if (!NetIceResolveSessionRow(rows, local, "live", &target).empty() || target.identity != "str:h-live" || target.joinMode != "ice") {
 			*error = "session-id join: the joinable ice row did not resolve to its host identity";
@@ -16539,6 +16564,12 @@ namespace RTE {
 		};
 
 		std::string error;
+		if (const char* selected = std::getenv("CC_NET_MATCH_SELFTEST_ROW")) {
+			if (std::string(selected) != "session-id-join") return fail("unknown selected self-test row");
+			if (!TestSessionIdJoinRefusals(&error)) return fail(error);
+			std::cout << "[net-match-selftest] PASS selected_row session-id-join" << std::endl;
+			return 0;
+		}
 		// These rows each report their own failure, so one run names every red among them.
 		bool rowsPassed = true;
 		const auto row = [&](bool (*test)(std::string*), const char* name) {

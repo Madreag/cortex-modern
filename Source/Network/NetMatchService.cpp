@@ -279,7 +279,7 @@ namespace RTE {
 		return NetIdentity::BuildCurrentManifest(manifest, error, options);
 	}
 
-	std::string NetIceResolveSessionRow(const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, const std::string& sessionId, NetIceJoinTarget* out, const NetDirectoryLocalIdentity* worldLocal, bool reservedSeat) {
+	std::string NetIceResolveSessionRow(const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, const std::string& sessionId, NetIceJoinTarget* out, const NetDirectoryLocalIdentity* worldLocal, bool reservedSeat, bool allowUnlistedIce) {
 		for (const NetDirectorySessionRow& row : rows) {
 			if (row.sessionId != sessionId) {
 				continue;
@@ -287,7 +287,7 @@ namespace RTE {
 			// The join list decides joinability, so a session-id join is refused with its labels.
 			const std::vector<NetDirectoryClient::GameRow> merged = NetDirectoryClient::MergeGameLists({}, {row}, local, worldLocal);
 			if (merged.empty()) {
-				break;
+				return "no such session";
 			}
 			if (!merged.front().joinable && !(reservedSeat && merged.front().reason == "full")) {
 				return merged.front().reason.empty() ? "refused" : merged.front().reason;
@@ -298,6 +298,20 @@ namespace RTE {
 				out->address = merged.front().address;
 				out->port = merged.front().port;
 				out->persistentWorld = row.persistentWorld;
+			}
+			return {};
+		}
+		// A full Unlisted code names the ICE listener; its handshake checks identity and admission.
+		bool fullCode = sessionId.size() == 36;
+		for (size_t i = 0; fullCode && i < sessionId.size(); ++i) {
+			const bool separator = i == 8 || i == 13 || i == 18 || i == 23;
+			fullCode = separator ? sessionId[i] == '-' : std::isxdigit(static_cast<unsigned char>(sessionId[i])) != 0;
+		}
+		if (allowUnlistedIce && fullCode) {
+			if (out) {
+				*out = {};
+				out->identity = NetIceHostIdentity(sessionId);
+				out->joinMode = "ice";
 			}
 			return {};
 		}
@@ -9900,7 +9914,8 @@ static std::string ResyncSaveName() {
 			browse.PollList(nowMs);
 			browse.Update(nowMs);
 			if (browse.ListReplies() > 0) {
-				why = NetIceResolveSessionRow(browse.Rows(), local, request.sessionId, &target, worldIdentityBuilt ? &worldLocal : nullptr, reservedSeat);
+				why = NetIceResolveSessionRow(browse.Rows(), local, request.sessionId, &target, worldIdentityBuilt ? &worldLocal : nullptr, reservedSeat,
+				                              m_IceEnabled && g_SettingsMan.GetNetworkConnectionMode() != SettingsMan::NetworkConnectionMode::DirectOnly);
 				if (why.empty() || why != "no such session") {
 					break;
 				}
