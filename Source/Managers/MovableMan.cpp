@@ -3926,6 +3926,9 @@ void MovableMan::PurgeAllMOs() {
 		while (!objects.empty()) {
 			auto* object = objects.front();
 			objects.pop_front();
+			if (const Actor* actor = dynamic_cast<Actor*>(object)) {
+				if (Activity* activity = g_ActivityMan.GetActivity()) activity->ForgetDestroyedActor(actor);
+			}
 			delete object;
 		}
 	};
