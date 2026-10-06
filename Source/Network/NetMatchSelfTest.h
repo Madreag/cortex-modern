@@ -8,6 +8,7 @@ namespace RTE {
 		static int RunBeforeInitialization();
 		static int Run();
 		static int RunLobbyLifecycle();
+		static int RunLeaveCatchUp();
 	};
 
 } // namespace RTE

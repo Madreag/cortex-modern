@@ -10819,6 +10819,7 @@ int main(int argc, char** argv) {
 	bool netMatchSelfTest = false;
 	bool netRejoinGridSelfTest = false;
 	bool netMatchLobbyLifecycleSelfTest = false;
+	bool netMatchLeaveCatchUpSelfTest = false;
 	for (int i = 1; i < argc; ++i) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-rotate-primitive-selftest") {
 			return RotatePrimitiveSelfTest::Run();
@@ -10895,6 +10896,10 @@ int main(int argc, char** argv) {
 			std::cout << "[cross-capabilities] " << nlohmann::json{{"peer_limit", NetMatchConfigUtil::c_MaxPeerCount},
 			    {"player_slots", Players::MaxPlayerCount}, {"team_members", false}, {"schema", 1}}.dump() << std::endl;
 			return EXIT_SUCCESS;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-leave-catch-up-selftest") {
+			netMatchSelfTest = true;
+			netMatchLeaveCatchUpSelfTest = true;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-lobby-lifecycle-selftest") {
 			netMatchSelfTest = true;
@@ -11205,7 +11210,8 @@ int main(int argc, char** argv) {
 	}
 	if (netMatchSelfTest) {
 		NetMatchService::Destruct();
-		const int result = netMatchLobbyLifecycleSelfTest ? NetMatchSelfTest::RunLobbyLifecycle() : NetMatchSelfTest::Run();
+		const int result = netMatchLeaveCatchUpSelfTest ? NetMatchSelfTest::RunLeaveCatchUp() :
+		                   netMatchLobbyLifecycleSelfTest ? NetMatchSelfTest::RunLobbyLifecycle() : NetMatchSelfTest::Run();
 		NetMatchService::Construct();
 		return ShutDown(result);
 	}
