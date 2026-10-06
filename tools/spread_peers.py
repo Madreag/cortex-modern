@@ -538,8 +538,10 @@ class Case:
             needs = self.pool.Needs(os=peer.os, engines=peer.engines, gpu=bool(peer.size), memory=peer.memory,
                                     alone=peer.quiet, size=peer.size, only_box=pin, excluded=tuple(excluded))
             fitting, reasons, states = self.pool.candidates(self.registry, needs, backend)
-            request = dict(run_id=uuid.uuid4().hex, token=uuid.uuid4().hex, label=f"spread: {self.out.name}/{peer.name}",
-                           lane=peer.lane or self.match.parameters.get("lane", self.lane),
+            caller_lane = peer.lane or self.match.parameters.get("lane")
+            label = f"{caller_lane}: spread" if caller_lane else "spread"
+            request = dict(run_id=uuid.uuid4().hex, token=uuid.uuid4().hex, label=f"{label}: {self.out.name}/{peer.name}",
+                           lane=caller_lane or self.lane,
                            owner=dict(pid=os.getpid(), machine=self.transport_module.worker.facts.machine_name(),
                                       process_start=self.transport_module.worker.facts.process_start(os.getpid())),
                            out=str(self.control/peer.name/"results"), command=[], hang_guard=max(600, peer.timeout + 300))
