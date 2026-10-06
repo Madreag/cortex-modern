@@ -63,8 +63,9 @@ namespace RTE::NetPlayerPresentation {
 		// place the host gave to a newcomer is released in the round until the newcomer is in.
 		const bool released = view ? opened : ScenarioRunner::IsLockstepSeatReleased(peer);
 		// A seat the AI plays for its player is held, however its player went; only the host's release makes it Left. The roster
-		// keeps holding a place for its away player through the round and between rounds, where the round itself no longer reads it.
-		const bool rosterHeld = view && !opened && view->state == "Held";
+		// keeps holding a place for its away player through the round and between rounds, where the round itself no longer reads it,
+		// and for the player coming back or coming in until they are playing.
+		const bool rosterHeld = view && !opened && (view->state == "Held" || view->state == "Reconnecting");
 		const bool held = !released && (aiHeld || rosterHeld || ScenarioRunner::IsLockstepSeatUnderAI(peer, frame));
 		const bool gone = Seated(peer) && ScenarioRunner::IsLockstepPeerGone(peer, frame);
 		const bool left = !held && (opened || gone);
