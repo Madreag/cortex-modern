@@ -69,9 +69,10 @@ namespace RTE {
 		}
 		template <class... Values> void operator()(const Values&... values) {
 			if (!m_Recording || s_ReplayingFields || sizeof...(Values) == 0) { (Value(values), ...); return; }
+			RefuseDivertedValue();
 			// Copy the fields while the world is fenced. Visiting containers and
 			// packing their scalar tokens belongs to the saver, over these copies.
-			auto frozen = std::make_tuple(FreezeField(values)...);
+			auto frozen = std::tuple{FreezeField(values)...};
 			m_Capture.Child(CheckpointText::Fields(std::make_shared<FieldPack<decltype(frozen)>>(std::move(frozen))));
 		}
 		/// Writes values only this machine holds (its clocks, pacing, seat or view): the archive carries them as before,
@@ -142,6 +143,14 @@ namespace RTE {
 		}
 
 	private:
+		struct FrozenTimer {
+			int64_t simStart, simLimit, realStart, realLimit;
+			bool operator==(const FrozenTimer&) const = default;
+		};
+		void Value(const FrozenTimer& value) {
+			(*this)(value.simStart, value.simLimit);
+			PerPeer(value.realStart, value.realLimit);
+		}
 		struct FieldsOnly {};
 		explicit CheckpointWriter(FieldsOnly) : m_Recording(true) {}
 		inline static thread_local bool s_ReplayingFields = false;
@@ -159,10 +168,11 @@ namespace RTE {
 				return std::pair{FreezeField(value.m_Corner), std::pair{value.m_Width, value.m_Height}};
 			} else if constexpr (std::is_same_v<T, Timer>) {
 				// Read both anchors now, including their per-peer boundaries.
-				CaptureScope scope; CheckpointWriter fields(FieldsOnly{}); fields.Value(value); return fields.m_Capture.Finish();
+				return FrozenTimer{value.GetStartSimTimeMS(), value.GetSimTimeLimitTicks(), value.GetStartRealTimeMS(), value.GetRealTimeLimitTicks()};
 			} else if constexpr (requires { value.SaveCheckpoint(); }) {
-				return Native([&value] { return value.SaveCheckpoint(); });
-			} else if constexpr (std::is_same_v<T, CheckpointText> || std::is_same_v<T, std::string> ||
+				CheckpointText captured = Native([&value] { return value.SaveCheckpoint(); });
+				return s_Cache ? s_Cache->Remember(&value, 0, std::move(captured)) : std::move(captured);
+			} else if constexpr (std::is_same_v<T, FrozenTimer> || std::is_same_v<T, CheckpointText> || std::is_same_v<T, std::string> ||
 			                     std::is_arithmetic_v<T> || std::is_enum_v<T>) {
 				return value;
 			} else if constexpr (requires { typename T::first_type; typename T::second_type; }) {
@@ -214,6 +224,7 @@ namespace RTE {
 		}
 		template<class T> static bool FieldFlag(const T& value, bool peers) {
 			if constexpr (std::is_same_v<T, CheckpointText>) return peers ? value.HasPeerRuns() : value.UsesSimTime();
+			else if constexpr (std::is_same_v<T, FrozenTimer>) return peers;
 			else if constexpr (requires { typename T::first_type; typename T::second_type; }) return FieldFlag(value.first, peers) || FieldFlag(value.second, peers);
 			else if constexpr (!std::is_same_v<T, std::string> && requires { value.begin(); value.size(); }) {
 				for (const auto& item: value) if (FieldFlag(item, peers)) return true; return false;

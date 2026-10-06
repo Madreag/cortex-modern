@@ -803,6 +803,20 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		value = 91; binary.assign("changed");
 		check(captured.Text() == reference, "owned_checkpoint_copies_native_values");
 
+		{
+			Timer timer;
+			timer.SetStartSimTimeTicks(17); timer.SetSimTimeLimitTicks(29);
+			timer.SetStartRealTimeTicks(41); timer.SetRealTimeLimitTicks(53);
+			std::vector<std::pair<int, Timer>> timers{{7, timer}, {9, timer}};
+			const auto saveTimers = [&] { CheckpointWriter writer("OwnedTimers1"); writer(timer, timers); return writer.Text(); };
+			const std::string before = saveTimers();
+			const CheckpointText frozen = CheckpointWriter::CaptureNative(saveTimers);
+			timer.SetStartSimTimeTicks(61); timers[0].second.SetStartRealTimeTicks(71); timers.clear();
+			const std::string shared = frozen.SharedText();
+			check(frozen.HasPeerRuns() && frozen.Text() == before && shared == "12 OwnedTimers1 17 29 2 7 17 29 9 17 29 ",
+			      "owned_checkpoint_copies_inline_timers_and_container_peer_runs");
+		}
+
 		const CheckpointText bytes(std::string("x\0y", 3));
 		CheckpointBuffer tokens;
 		tokens.Raw("prefix|"); tokens.GraphString(bytes); tokens.Raw("|"); tokens.Base64(bytes, true);
