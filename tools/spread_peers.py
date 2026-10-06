@@ -556,7 +556,7 @@ def launch_native(backend, box, claim, request, wait=0):
     wait = float(wait or 0)
     if not math.isfinite(wait) or wait < 0:
         raise ValueError("runner wait must be finite and nonnegative")
-    if box["kind"] != "local" or not wait:
+    if not wait or box["kind"] != "local":
         return backend.launch(box, claim, request)
     original = backend.rpc
     def rpc(target, action, body, **kwargs):
