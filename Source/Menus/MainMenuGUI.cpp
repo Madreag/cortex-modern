@@ -14,9 +14,11 @@
 #include "NetActivitySetup.h"
 #include "NetMatchService.h"
 #include "NetIdentity.h"
+#include "NetAuthCrypto.h"
 #include "NetMatchReplay.h"
 #include "NetConnectionQuality.h"
 #include "PresetMan.h"
+#include "DataModule.h"
 #include "SceneMan.h"
 #include "System.h"
 #include "NetProtocol.h"
@@ -46,6 +48,7 @@
 
 #include <algorithm>
 #include <map>
+#include <random>
 #include <set>
 #include <tuple>
 #include <chrono>
@@ -1854,18 +1857,6 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		combo->AddItem("Closed");
 		combo->AddItem("CPU");
 	}
-	if (m_HostRulesTechCombo) {
-		m_HostRulesTechCombo->ClearList();
-		m_HostOptionsTechModules.clear();
-		m_HostOptionsTechModules.push_back("-All-");
-		m_HostOptionsTechModules.push_back("-Random-");
-		for (int moduleId = 0; moduleId < g_PresetMan.GetTotalModuleCount(); ++moduleId) {
-			m_HostOptionsTechModules.push_back(g_PresetMan.GetDataModuleName(moduleId));
-		}
-		for (const std::string& module : m_HostOptionsTechModules) {
-			m_HostRulesTechCombo->AddItem(module);
-		}
-	}
 	if (m_HostNetPolicyCombo) {
 		m_HostNetPolicyCombo->ClearList();
 		m_HostNetPolicyCombo->AddItem("Automatic (default)");
@@ -2023,6 +2014,7 @@ NetMatchServiceRequest MainMenuGUI::HostRequestDraft() const {
 		request.humans = humanSeats;
 		request.cpuSlots = cpuSeats;
 		request.frameRedundancyTicks = m_HostSetupOptions->frameRedundancyTicks;
+		request.hostDraft = *m_HostSetupOptions;
 	} else {
 		NetHostDefaultsTemplate saved;
 		if (NetHostDefaults::Load(saved, nullptr)) request.frameRedundancyTicks = saved.frameRedundancyTicks;
@@ -2473,10 +2465,12 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	const int rulesTeam = std::clamp<int>(m_HostRulesTeamCombo ? m_HostRulesTeamCombo->GetSelectedIndex() : 0, 0, 3);
 	const NetMatchTeamRules& teamRules = m_HostOptionsDraft.teamRules[rulesTeam];
 	HostOptSelectComboIndex(m_HostRulesTeamCombo, rulesTeam);
-	{
-		const std::string tech = teamRules.technologyModule.empty() ? teamRules.technologyIntent
-		                                                            : teamRules.technologyIntent + " - " + teamRules.technologyModule;
-		HostOptSelectCombo(m_HostRulesTechCombo, tech);
+	if (teamRules.technologyIntent == "-Random-" && !teamRules.technologyModule.empty()) {
+		// The row stays -Random-; its caption names the faction the host drew.
+		HostOptSelectComboIndex(m_HostRulesTechCombo, 1);
+		if (m_HostRulesTechCombo && !m_HostRulesTechCombo->IsDropped()) m_HostRulesTechCombo->SetText("-Random- - " + teamRules.technologyModule);
+	} else {
+		HostOptSelectCombo(m_HostRulesTechCombo, teamRules.technologyIntent);
 	}
 	if (m_HostRulesSkillSlider) m_HostRulesSkillSlider->SetValue(teamRules.aiSkill);
 	if (m_HostRulesSkillValue) m_HostRulesSkillValue->SetText(std::to_string(teamRules.aiSkill));
@@ -2796,6 +2790,20 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 }
 
 void MainMenuGUI::RefreshHostOptionsActivities() {
+	// The modules load after the menu is built, so a team's technology list is filled each time Advanced opens.
+	if (m_HostRulesTechCombo) {
+		m_HostRulesTechCombo->ClearList();
+		m_HostOptionsTechModules.clear();
+		m_HostOptionsTechModules.push_back("-All-");
+		m_HostOptionsTechModules.push_back("-Random-");
+		// The factions only, as the single-player screen lists them.
+		for (int moduleId = 0; moduleId < g_PresetMan.GetTotalModuleCount(); ++moduleId) {
+			if (const DataModule* module = g_PresetMan.GetDataModule(moduleId); module && module->IsFaction()) m_HostOptionsTechModules.push_back(module->GetFileName());
+		}
+		for (const std::string& module : m_HostOptionsTechModules) {
+			m_HostRulesTechCombo->AddItem(module);
+		}
+	}
 	// The census the host screen offers, by module; an agreed activity outside it still displays by name.
 	m_HostOptionsActivities = NetMatchService::ListHostActivities();
 	if (!m_HostRulesActivityCombo) return;
@@ -2885,8 +2893,21 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 	if (m_HostRulesTechCombo && m_HostRulesTechCombo->GetSelectedIndex() >= 0) {
 		const int picked = m_HostRulesTechCombo->GetSelectedIndex();
 		if (picked < static_cast<int>(m_HostOptionsTechModules.size())) {
-			m_HostOptionsDraft.teamRules[rulesTeam].technologyIntent = m_HostOptionsTechModules[picked];
-			m_HostOptionsDraft.teamRules[rulesTeam].technologyModule.clear();
+			// The host resolves the choice before the config ships: a faction is itself, -Random- one faction drawn once, -All- none.
+			NetMatchTeamRules& rules = m_HostOptionsDraft.teamRules[rulesTeam];
+			const std::string& choice = m_HostOptionsTechModules[picked];
+			if (choice == "-All-") {
+				rules.technologyIntent = choice;
+				rules.technologyModule.clear();
+			} else if (choice != "-Random-") {
+				rules.technologyIntent = choice;
+				rules.technologyModule = choice;
+			} else if (rules.technologyIntent != choice || rules.technologyModule.empty()) {
+				const size_t factions = m_HostOptionsTechModules.size() - 2;
+				static std::mt19937 draw(std::random_device{}());
+				rules.technologyIntent = factions > 0 ? choice : "-All-";
+				rules.technologyModule = factions > 0 ? m_HostOptionsTechModules[2 + std::uniform_int_distribution<size_t>(0, factions - 1)(draw)] : std::string();
+			}
 		} else if (const GUIListPanel::Item* item = m_HostRulesTechCombo->GetItem(picked)) {
 			m_HostOptionsDraft.teamRules[rulesTeam].technologyIntent = item->m_Name;
 		}
@@ -2984,6 +3005,8 @@ void MainMenuGUI::FollowHostActivityDefaults(const NetMatchStandardRules& before
 void MainMenuGUI::RederiveHostOptionsRoster() {
 	// Rebuild the seat list for the drafted capacity/mode, keeping the rules the panel edited.
 	NetMatchServiceRequest request = HostRequestDraft();
+	// The roster is built for the drafted capacity and mode, never copied back from the staged one.
+	request.hostDraft.reset();
 	request.peerCount = m_HostOptionsDraft.peerCount;
 	request.mode = m_HostOptionsDraft.mode;
 	NetMatchStandardRules rules = static_cast<const NetMatchStandardRules&>(m_HostOptionsDraft);
@@ -3875,6 +3898,8 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		for (const NetMatchPlayerSlot& slot : m_HostSetupOptions->players) cpuSeats += slot.cpu ? 1 : 0;
 		request.cpuSlots = cpuSeats;
 		request.frameRedundancyTicks = m_HostSetupOptions->frameRedundancyTicks;
+		// What Advanced accepted is what the lobby gets: the seats, their teams and delays, the rule for a lost brain, all of it.
+		request.hostDraft = *m_HostSetupOptions;
 	} else if (host) {
 		NetHostDefaultsTemplate saved;
 		if (NetHostDefaults::Load(saved, nullptr)) request.frameRedundancyTicks = saved.frameRedundancyTicks;

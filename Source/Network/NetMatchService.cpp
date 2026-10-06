@@ -11388,6 +11388,11 @@ static std::string ResyncSaveName() {
 			cpuSlot.displayName = cpuCount == 1 ? "CPU" : "CPU " + std::to_string(cpu + 1);
 			config.players.push_back(cpuSlot);
 		}
+		// The host's accepted Advanced draft is the lobby's setup, every field of its list; the request keeps the session's identity.
+		if (request.hostDraft && !world) {
+			NetMatchConfigUtil::CopyHostDraft(*request.hostDraft, config);
+			config.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
+		}
 		if (world && rosterHumans == 0) {
 			for (uint8_t peerId = firstHumanPeer; peerId <= config.peerCount; ++peerId) {
 				NetMatchPlayerSlot slot;

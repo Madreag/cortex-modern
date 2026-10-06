@@ -204,6 +204,7 @@ namespace RTE {
 		std::string sceneName; // Empty resolves to the first compatible scene (Grasslands when the activity allows it).
 		std::string sceneModule;
 		std::optional<NetMatchStandardRules> standardRules;
+		std::optional<NetMatchConfig> hostDraft; // The host's accepted Advanced draft: every field of its list is the lobby's.
 		NetActorOwnershipPolicy ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 		uint16_t inputDelayFrames = 0; // Lockstep input-delay buffer; the host picks it, the client agrees at the start handshake.
 		bool autoInputDelay = false; // Host: raise the delay to cover the measured peer RTT (the manual value stays the floor).
