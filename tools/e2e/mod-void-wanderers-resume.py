@@ -31,7 +31,7 @@ PURGE_VIEW = """    if self.steps == 39 then
         for player = 0, 3 do
             if self:ScreenOfPlayer(player) >= 0 then
                 local view = self:GetViewState(player);
-                assert(view ~= Activity.AIGOTOPOINT and view ~= Activity.UNITSELECTCIRCLE, "purge leaves actor-dependent view=" .. view .. " on player=" .. player);
+                assert(view == Activity.NORMAL or view == Activity.DEATHWATCH, "purge leaves unsafe view=" .. view .. " on player=" .. player);
                 assert(self:GetPlayerBrain(player) ~= nil, "replacement brain is absent");
             end
         end
