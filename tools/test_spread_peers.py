@@ -16,6 +16,41 @@ from test_peer_run_guards import PeerRunGuardTests
 
 
 class ContractTests(unittest.TestCase):
+    def staging_case(self, root, token='owned'):
+        case = object.__new__(spread.Case)
+        case.out, case.id, case.closed = root.resolve(), 'owned', False
+        root.mkdir()
+        (root/'.spread-case-owner.json').write_text(json.dumps(dict(token=token, case_id=token)))
+        return case
+
+    def test_video_stages_in_its_own_live_controller_root(self):
+        import e2e_video as video
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)/'run0'
+            case = self.staging_case(root)
+            video.prepare_run_root(root, case)
+            self.assertEqual(json.loads((root/'.spread-case-owner.json').read_text())['token'], 'owned')
+
+    def test_video_refuses_a_replaced_or_closed_controller_claim(self):
+        import e2e_video as video
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)/'run0'
+            case = self.staging_case(root, token='foreign')
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'RUN ROOT CONFLICT'):
+                video.prepare_run_root(root, case)
+            self.assertEqual(json.loads((root/'.spread-case-owner.json').read_text())['token'], 'foreign')
+            case.closed = True
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'RUN ROOT CONFLICT'):
+                video.prepare_run_root(root, case)
+
+    def test_single_box_video_still_requires_a_fresh_run_root(self):
+        import e2e_video as video
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)/'run0'
+            video.prepare_run_root(root)
+            with self.assertRaises(FileExistsError):
+                video.prepare_run_root(root)
+
     def test_named_fifo_wait_covers_its_predecessor_window_on_the_same_box(self):
         box = dict(name='EROL-PC', kind='local')
         before = RuntimeError('capacity refused: earlier work request is waiting: restore')

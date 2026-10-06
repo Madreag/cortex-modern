@@ -23,6 +23,8 @@ the lane's directory port, and optional unchanged case parameters. The helper
 freezes committed inputs, verifies the
 shipped/native executable hash, and starts native runners/tasks. ``drive``
 still stages the case's scripts, orders starts and applies its own assertions.
+Case.stage_root(out) validates the live owned controller marker before a driver
+stages in that already created root; a foreign or closed claim refuses.
 Without ``drive``, the call starts host first and finishes every declared peer.
 It collects verified evidence into ``out`` and returns topology="spread",
 peer_boxes, native identities, executable hashes, records and driver_result.
@@ -696,6 +698,13 @@ class Case:
         print(text, flush=True)
         self.save(error=text)
         return SpreadRefusal(text)
+
+    def stage_root(self, root):
+        """Let a driver stage in this case's already claimed controller root."""
+        root = Path(root).resolve()
+        owner = read_json(root/".spread-case-owner.json", {}) or {}
+        if self.closed or root != self.out or owner.get("token") != self.id or owner.get("case_id") != self.id:
+            raise SpreadRefusal(f"RUN ROOT CONFLICT {root}; staging does not own the live case marker")
 
     def backend(self):
         module = self.transport_module
