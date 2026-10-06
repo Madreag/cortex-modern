@@ -4235,17 +4235,17 @@ namespace RTE {
 		return 0;
 	}
 
-	/// A lone survivor carries the match after either kind of host departure.
+	/// A lone survivor carries a lost host's match; an announced host leave ends it.
 	int TestALoneSurvivorWithAHeldSeatHostsTheMatch() {
 		using Outcome = NetMatchService::LoneElection;
 		if (NetMatchService::LoneElectionOutcome(false, false) != Outcome::HostAlone) {
 			return Fail("lone-survivor-left-a-two-player-match: the survivor of a lost host did not host the match it carries alone");
 		}
-		if (NetMatchService::LoneElectionOutcome(true, false) != Outcome::HostAlone) {
-			return Fail("lone-survivor-announced-leave: the survivor of an announced host leave did not host the match alone");
+		if (NetMatchService::LoneElectionOutcome(true, false) != Outcome::EndMatch) {
+			return Fail("lone-survivor-announced-leave: the survivor of an announced host leave did not end the match");
 		}
 		// l4p-34: the Mac, cut off by its own lag, heard neither the host nor Linux and, with EDITH's seat held, took the match over.
-		if (NetMatchService::LoneElectionOutcome(false, true) != Outcome::RejoinHost || NetMatchService::LoneElectionOutcome(true, true) != Outcome::RejoinHost) {
+		if (NetMatchService::LoneElectionOutcome(false, true) != Outcome::RejoinHost || NetMatchService::LoneElectionOutcome(true, true) != Outcome::EndMatch) {
 			return Fail("lone-survivor-split-the-match: a peer that heard no live member and no host hosted a match of its own instead of rejoining");
 		}
 		std::cout << "[net-world-join-selftest] PASS a_lone_survivor_with_a_held_seat_hosts_the_match" << std::endl;
@@ -8831,27 +8831,30 @@ namespace RTE {
 			NetMatchService::SetAdmissionEnabled(true);
 			NetSeatAuthRegistry registry;
 			NetMatchService leaver;
-			LoopbackTransport hostWire, survivorWire;
-			NetLockstepCoordinator survivor;
+			LoopbackTransport hostWire, survivorWire, otherWire;
+			NetLockstepCoordinator survivor, other;
 			NetMatchConfig match = NetMatchConfigUtil::MakeDefault(0xFAF4);
-			match.successorOrder = {2}; match.migrationPeers = {{1, 47437, {"loopback"}}, {2, 47438, {"loopback"}}};
+			match.peerCount = 3; match.players.push_back({3, 2, false, "Third"}); match.activePeerIds = {1, 2, 3};
+			match.successorOrder = {2, 3}; match.migrationPeers = {{1, 47437, {"loopback"}}, {2, 47438, {"loopback"}}, {3, 47439, {"loopback"}}};
 			NetLockstepConfig config;
-			config.sessionId = match.sessionId; config.roundId = 1; config.startFrame = 1; config.localPeerId = 1; config.peerCount = 2;
-			config.matchConfig = match; config.remoteTransportPeerIds = {{2, 1}}; config.relayToOtherPeers = true; config.timeoutMs = 30000;
+			config.sessionId = match.sessionId; config.roundId = 1; config.startFrame = 1; config.localPeerId = 1; config.peerCount = 3;
+			config.matchConfig = match; config.remoteTransportPeerIds = {{2, 1}, {3, 2}}; config.relayToOtherPeers = true; config.timeoutMs = 30000;
 			config.migrationKey.fill(0x39); config.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); };
 			leaver.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
-			if (!hostWire.StartHost(47436, &why) || !survivorWire.Connect("loopback", 47436, &why) || !leaver.m_Coordinator->Start(hostWire, config, &why)) return false;
+			if (!hostWire.StartHost(47436, &why) || !survivorWire.Connect("loopback", 47436, &why) || !otherWire.Connect("loopback", 47436, &why) || !leaver.m_Coordinator->Start(hostWire, config, &why)) return false;
 			config.localPeerId = 2; config.remoteTransportPeerIds = {{1, 1}}; config.relayToOtherPeers = false;
 			if (!survivor.Start(survivorWire, config, &why)) return false;
+			config.localPeerId = 3;
+			if (!other.Start(otherWire, config, &why)) return false;
 			uint64_t produced = 1;
 			for (uint64_t now = 0; now < 1000 && leaver.m_Coordinator->GetResumeFrame() < 15; now += 5) {
-				if (leaver.m_Coordinator->IsRunning() && survivor.IsRunning()) {
-					if (!leaver.m_Coordinator->QueueLocalInput(produced, {}, {}, &why) || !survivor.QueueLocalInput(produced, {}, {}, &why)) return false;
+				if (leaver.m_Coordinator->IsRunning() && survivor.IsRunning() && other.IsRunning()) {
+					if (!leaver.m_Coordinator->QueueLocalInput(produced, {}, {}, &why) || !survivor.QueueLocalInput(produced, {}, {}, &why) || !other.QueueLocalInput(produced, {}, {}, &why)) return false;
 					++produced;
 				}
-				leaver.m_Coordinator->Tick(now); survivor.Tick(now);
-				for (auto* peer: {leaver.m_Coordinator.get(), &survivor}) for (NetLockstepReadyFrame frame; peer->PopReadyFrame(frame);) peer->FinishSimulationTick(frame.frame);
-				hostWire.AdvanceTimeMs(5); survivorWire.AdvanceTimeMs(5);
+				leaver.m_Coordinator->Tick(now); survivor.Tick(now); other.Tick(now);
+				for (auto* peer: {leaver.m_Coordinator.get(), &survivor, &other}) for (NetLockstepReadyFrame frame; peer->PopReadyFrame(frame);) peer->FinishSimulationTick(frame.frame);
+				hostWire.AdvanceTimeMs(5); survivorWire.AdvanceTimeMs(5); otherWire.AdvanceTimeMs(5);
 			}
 			if (!leaver.m_Coordinator->IsRunning() || leaver.m_Coordinator->GetResumeFrame() < 15) { why = "the leaver's service has no running round"; return false; }
 			if (!registry.BeginHostedSession()) { why = "the leaver's ticket registry did not start"; return false; }
@@ -8864,6 +8867,13 @@ namespace RTE {
 			leaver.m_TicketStore.SetPath(ticketPath.string());
 			if (!leaver.m_TicketStore.Store(ticket, &why)) return false;
 			leaver.m_IsHost = true; leaver.m_State = NetMatchServiceState::Running; leaver.m_MatchWasRunning = true;
+			leaver.m_LocalPeerId = 1; leaver.m_MatchConfig = match;
+			for (const auto& slot: match.players) {
+				NetLobbyMember member;
+				member.peerId = slot.peerId; member.cpu = slot.cpu; member.isLocal = slot.peerId == 1; member.connected = true;
+				leaver.m_LobbySnapshot.members.push_back(member);
+			}
+			if (leaver.HostLeaveOutcome() != NetHostLeaveOutcome::HandsOver) { why = "two connected survivors do not permit handover"; return false; }
 			leaver.LeaveMatch("Left the match");
 			NetH4TicketRecord retained;
 			const auto load = leaver.m_TicketStore.Load(ticket.issuedAtUnixMs, retained, &why);

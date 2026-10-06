@@ -4973,7 +4973,9 @@ static std::string ResyncSaveName() {
 		return NetHostLinkLost(false, hostSilentMs, hostRttMs);
 	}
 
-	NetMatchService::LoneElection NetMatchService::LoneElectionOutcome(bool, bool liveMembersUnheard) {
+	NetMatchService::LoneElection NetMatchService::LoneElectionOutcome(bool hostAnnounced, bool liveMembersUnheard) {
+		// An announced leave is the host's decision; a lost host is absent, and the match goes on.
+		if (hostAnnounced) return LoneElection::EndMatch;
 		// Live members that went silent with the host say this peer lost its own link: it rejoins rather than host a match of its own.
 		return liveMembersUnheard ? LoneElection::RejoinHost : LoneElection::HostAlone;
 	}
