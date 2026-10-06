@@ -1876,9 +1876,8 @@ def _run_one(options, scenario, run, run_index, out):
         stage.mkdir(parents=True, exist_ok=False)
         environment = stage_peer(scenario, peer, stage, tokens)
         if getattr(options, 'win_cause_log', False):
-            environment.update(CC_TEST_CROSS_RECORDS=str(peer_root / 'win-events.jsonl'),
-                               CC_TEST_CROSS_RUN=scenario['name'], CC_TEST_CROSS_INSTANCE=name,
-                               CC_TEST_CROSS_EXECUTION=root.name, CC_TEST_CROSS_EVENT_RAW_LIMIT='16777216')
+            from e2e.win_diagnostics import configure_environment
+            environment = configure_environment(environment, peer_root, scenario['name'], name, root.name)
         retained = None
         if reference:
             previous = prior_peer(getattr(options, "completed_runs", []), reference)

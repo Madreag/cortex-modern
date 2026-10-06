@@ -111,23 +111,38 @@ def stage(repo, runtime):
                 staged_sha256=hashlib.sha256(data).hexdigest(), observer_only=True)
 
 
+def configure_environment(environment, peer_root, scenario, peer, execution):
+    """Share an existing case stream, retaining its path and process identity."""
+    configured = dict(environment)
+    defaults = dict(CC_TEST_CROSS_RECORDS=str(Path(peer_root) / 'win-events.jsonl'),
+                    CC_TEST_CROSS_RUN=scenario, CC_TEST_CROSS_INSTANCE=peer,
+                    CC_TEST_CROSS_EXECUTION=execution, CC_TEST_CROSS_EVENT_RAW_LIMIT='16777216')
+    for key, value in defaults.items():
+        configured.setdefault(key, value)
+    return configured
+
+
 def collect(peer_root):
+    from cross_report import event_paths, source_rows
     root = Path(peer_root)
     lines = list(dict.fromkeys(line[line.index('[win-cause]'):] for name in ('stdout.log', 'console.log')
                              if (root / name).is_file()
                              for line in (root / name).read_text(encoding='utf-8-sig', errors='replace').splitlines()
                              if '[win-cause]' in line))
-    ids = {int(value) for line in lines for value in re.findall(r'(?:uid|head_uid)=(-?\d+)', line)}
-    events = []
-    path = root / 'win-events.jsonl'
-    if path.is_file():
-        for line in path.read_text(encoding='utf-8-sig').splitlines():
-            row = json.loads(line)
-            if row.get('event') in ('wound_added', 'wound_damage', 'impact_damage', 'gibbed', 'dying', 'dead') and (
+    ids = {int(value) for line in lines for value in re.findall(r'(?:uid|head_uid)=(-?\d+)', line) if int(value) >= 0}
+    events, errors = [], []
+    paths = [path for filename in ('events.jsonl', 'win-events.jsonl') for path in event_paths(root, filename)]
+    for path in paths:
+        for row in source_rows(path, root):
+            kind = row.get('event', row.get('type'))
+            if kind == 'malformed_record':
+                errors.append(row)
+            elif kind in ('wound_added', 'wound_damage', 'impact_damage', 'gibbed', 'dying', 'dead') and (
                     row.get('actor') in ids or row.get('object') in ids):
                 events.append(row)
     result = dict(lines=lines, brain_loss_logged=any('brain-lost' in line for line in lines),
-                  native_events=events, native_events_path=str(path),
+                  native_events=events, native_events_path=str(root / 'win-events.jsonl'),
+                  native_events_paths=[str(path) for path in paths], native_errors=errors,
                   cause_attribution='Native unattributed damage does not identify a killer.')
     (root / 'win-cause.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
     return result

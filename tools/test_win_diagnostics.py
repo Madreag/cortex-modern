@@ -1,9 +1,12 @@
 """Check win diagnostics without starting an engine or changing the duel rules."""
 from pathlib import Path
+import gzip
+import json
 import tempfile
 import unittest
 import spread_peers
 
+from e2e import win_diagnostics
 from e2e.win_diagnostics import diagnostic_script, stage
 
 try:
@@ -107,6 +110,51 @@ class PrivateStagingTests(unittest.TestCase):
                 else:
                     link.rmdir()
             self.assertEqual(source.read_bytes(), original)
+
+
+class NativeReceiptTests(unittest.TestCase):
+    def test_case_event_stream_and_identity_are_preserved(self):
+        original = dict(CC_TEST_CROSS_RECORDS='case/events.jsonl',
+                        CC_TEST_CROSS_INSTANCE='returned-player', CC_TEST_CROSS_INCARNATION='7',
+                        CC_TEST_CROSS_RUN='case-run', CC_TEST_CROSS_EVENT_RAW_LIMIT='4096')
+        configured = win_diagnostics.configure_environment(original, Path('peer'), 'duel', 'leaver', 'held')
+        self.assertEqual({key: configured[key] for key in original}, original)
+        self.assertEqual(original['CC_TEST_CROSS_RECORDS'], 'case/events.jsonl')
+        self.assertEqual(configured['CC_TEST_CROSS_EXECUTION'], 'held')
+
+    def test_peer_without_a_case_stream_gets_a_diagnostic_stream(self):
+        configured = win_diagnostics.configure_environment({}, Path('peer'), 'duel', 'host', 'run0')
+        self.assertEqual(configured['CC_TEST_CROSS_RECORDS'], str(Path('peer/win-events.jsonl')))
+        self.assertEqual(configured['CC_TEST_CROSS_RUN'], 'duel')
+        self.assertEqual(configured['CC_TEST_CROSS_INSTANCE'], 'host')
+
+    def test_rotated_case_and_diagnostic_streams_retain_relevant_native_events(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'console.log').write_text('[win-cause] brain-lost team=1 uid=20 head_uid=120\n')
+            case_rows = [dict(type='ownership_reclaim', actor=20),
+                         dict(type='wound_added', object=120, tick=17),
+                         dict(type='dead', actor=999, tick=18)]
+            with gzip.open(root / 'events.jsonl.part1.gz', 'wt', encoding='utf-8') as stream:
+                stream.write(''.join(json.dumps(row) + '\n' for row in case_rows))
+            diagnostic_rows = [dict(event='dying', actor=20, tick=19)]
+            (root / 'win-events.jsonl.part2').write_text(''.join(json.dumps(row) + '\n' for row in diagnostic_rows))
+            (root / 'win-events.jsonl.part3.partial').write_text('{incomplete')
+            collected = win_diagnostics.collect(root)
+            self.assertEqual([row['tick'] for row in collected['native_events']], [17, 19])
+            self.assertEqual(collected['native_events'][0]['_path'], 'events.jsonl.part1.gz')
+            self.assertEqual(collected['native_events'][1]['_path'], 'win-events.jsonl.part2')
+            self.assertEqual(collected['native_errors'], [])
+            self.assertEqual(json.loads(gzip.open(root / 'events.jsonl.part1.gz', 'rt').readline()), case_rows[0])
+
+    def test_malformed_native_stream_is_reported(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'events.jsonl.part1').write_text('{invalid\n')
+            collected = win_diagnostics.collect(root)
+            self.assertEqual(len(collected['native_errors']), 1)
+            self.assertEqual(collected['native_errors'][0]['_path'], 'events.jsonl.part1')
+            self.assertEqual(collected['native_errors'][0]['_line'], 1)
 
 
 if __name__ == '__main__':

@@ -500,9 +500,9 @@ def rows(path):
                     yield dict(type='malformed_record',error=str(error),_line=number)
 
 
-def event_paths(own):
-    bases={str(p)[:-3] if str(p).endswith('.gz') else str(p) for p in own.glob('events.jsonl.part*') if not str(p).endswith('.partial')}
-    return [own/'events.jsonl', *[Path(p) for p in sorted(bases,key=lambda p:int(p.rsplit('.part',1)[1]))]]
+def event_paths(own, filename='events.jsonl'):
+    bases={str(p)[:-3] if str(p).endswith('.gz') else str(p) for p in own.glob(filename + '.part*') if not str(p).endswith('.partial')}
+    return [own/filename, *[Path(p) for p in sorted(bases,key=lambda p:int(p.rsplit('.part',1)[1]))]]
 
 
 def source_rows(path, root):
