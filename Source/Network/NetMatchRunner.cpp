@@ -75,8 +75,10 @@ namespace RTE {
 		}
 
 		NetSessionConfig sessionConfig = config.sessionConfig;
-		// A one-peer roster has no remote to wait for: the host is the whole round.
-		sessionConfig.readyWithoutPeers = config.host && (m_MatchConfig.peerCount == 1 || m_MatchConfig.persistentWorld);
+		// A manual lobby publishes its setup while seats are still open. The lobby's occupancy
+		// and Ready gates decide when it can start; session admission must not withhold its config.
+		const bool formingLobby = config.useLobbyProtocol && !config.autoStart;
+		sessionConfig.readyWithoutPeers = config.host && (m_MatchConfig.peerCount == 1 || m_MatchConfig.persistentWorld || formingLobby);
 		const bool sessionStarted = config.host
 			? session.StartHost(transport, std::move(sessionConfig), error)
 			: session.StartClient(transport, config.joinAddress, std::move(sessionConfig), error);
