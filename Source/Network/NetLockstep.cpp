@@ -3433,9 +3433,7 @@ namespace RTE {
 			if (released != m_SeatReleases.end() && released->second.upper_bound(*m_LastCompletedSimulationTick) != released->second.begin() &&
 			    !SeatPlaysAtFrame(peer, *m_LastCompletedSimulationTick) && !IsSeatReclaimableAt(peer, *m_LastCompletedSimulationTick)) continue;
 			// Held seats can succeed too; a checksum proves applied simulation, unlike a frame receipt.
-			uint64_t applied = 0;
-			for (auto frame = m_RemoteChecksums.rbegin(); frame != m_RemoteChecksums.rend(); ++frame)
-				if (frame->second.contains(peer)) { applied = frame->first; break; }
+			const uint64_t applied = m_VerifiedAppliedFrames.contains(peer) ? m_VerifiedAppliedFrames.at(peer) : 0;
 			floor = std::min(floor, applied);
 		}
 		return floor;
@@ -5065,6 +5063,7 @@ namespace RTE {
 		m_RemoteCommands.clear();
 		m_RemoteObservations.clear();
 		m_RemoteChecksums.clear();
+		m_VerifiedAppliedFrames.clear();
 		m_LocalChecksums.clear();
 		m_PendingObservations.clear();
 		m_DroppedObservations.clear();
@@ -8457,6 +8456,8 @@ namespace RTE {
 			}
 		}
 		// Matched — drop this tick and any older so the maps stay bounded.
+		for (const auto& [peer, hash]: remoteIt->second)
+			if (hash == localIt->second) m_VerifiedAppliedFrames[peer] = std::max(m_VerifiedAppliedFrames[peer], frame);
 		m_LocalChecksums.erase(m_LocalChecksums.begin(), m_LocalChecksums.upper_bound(frame));
 		m_RemoteChecksums.erase(m_RemoteChecksums.begin(), m_RemoteChecksums.upper_bound(frame));
 	}

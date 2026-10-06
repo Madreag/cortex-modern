@@ -2080,6 +2080,7 @@ namespace RTE {
 		std::map<uint64_t, std::array<uint8_t, 32>> m_LocalChecksums;
 		std::map<uint8_t, uint64_t> m_AuthoritativeCommandAcks;
 		std::map<uint64_t, std::map<uint8_t, std::array<uint8_t, 32>>> m_RemoteChecksums; //!< frame -> (peerId -> hash)
+		std::map<uint8_t, uint64_t> m_VerifiedAppliedFrames; //!< Matching hashes keep their applied prefix after the hash buffers are pruned.
 		std::deque<NetLockstepReadyFrame> m_ReadyFrames;
 		std::map<uint64_t, NetLockstepReadyFrame> m_ReadyHistory;
 
