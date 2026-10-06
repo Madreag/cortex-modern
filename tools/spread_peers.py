@@ -1270,8 +1270,10 @@ class Run:
                                   wait_for_holder=self.case.match.parameters.get("wait_for_holder", getattr(_options, "wait_for_holder", None)))
             request["hang_guard"] = max(request.get("hang_guard", 600), self.timeout + 300 + float(wait or 0))
             launch_native(backend, box, claim, request, wait)
-        except SpreadRefusal:
-            raise
+        except SpreadRefusal as error:
+            if str(error).startswith(f"spread peer {self.role} on {box['name']}: "):
+                raise
+            raise self.case.refuse(self.role, box["name"], str(error)) from error
         except Exception as error:
             raise self.case.refuse(self.role, box["name"], str(error)) from error
         self.started = True

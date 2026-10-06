@@ -591,6 +591,31 @@ class ContractTests(unittest.TestCase):
             self.assertFalse(run.started)
             self.assertTrue(run.launch_attempted)
 
+    def test_prelaunch_capacity_refusal_is_named_and_recorded_before_start(self):
+        reason = 'capacity changed before launch: CPU 100.0% exceeds 90% over the last 10 seconds'
+        with tempfile.TemporaryDirectory() as temporary:
+            root, refusals = Path(temporary), []
+            backend = SimpleNamespace(rpc=lambda *args:None, launch=unittest.mock.Mock())
+            box = dict(name='EROL-PC', kind='local')
+            claim = dict(case_root='/native', repo='/repo', root='/owned', control='/control', exe_sha256='same')
+            def refuse(peer, box, text):
+                refusals.append(dict(peer=peer, box=box, reason=text))
+                return spread.SpreadRefusal(f'spread peer {peer} on {box}: {text}')
+            run = object.__new__(spread.Run)
+            run.retained = None
+            run.role, run.output_name, run.started, run.argv = 'host', 'host', False, ['engine','-headless']
+            run.cwd, run.repo, run.env, run.expected, run.fixtures, run.timeout = root/'host/runtime', root/'repo', {}, [], [], 30
+            run.case = SimpleNamespace(id='fake-case', lane='one-lane', members={'host':(box,claim,{},backend)},
+                names=['host'], peer_ports={}, match=spread.Match(51580, parameters=dict(runner_wait=1800)),
+                directory=None, out=root, peers=[spread.Peer('host')], signals=lambda:[], pool=None,
+                transport_module=SimpleNamespace(worker=None, Transport=SimpleNamespace(native_claim=lambda value:value)), refuse=refuse)
+            with patch.object(spread, 'wait_named_launch', side_effect=spread.SpreadRefusal(reason)):
+                with self.assertRaisesRegex(spread.SpreadRefusal, 'spread peer host on EROL-PC: capacity changed'):
+                    run.start()
+            self.assertEqual(refusals, [dict(peer='host', box='EROL-PC', reason=reason)])
+            self.assertFalse(run.started)
+            backend.launch.assert_not_called()
+
     def test_native_holder_refusal_preserves_its_reason_without_other_log_bytes(self):
         log = 'private-value\n[box-hold] waiting: earlier owned job settles\n[box-hold] REFUSED: no turn within the wait\n'
         reason = spread.native_refusal(dict(reason='native launch refused', exit_code=3), log)
