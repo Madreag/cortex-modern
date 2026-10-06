@@ -2557,13 +2557,40 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	NetHostLeaveOutcome NetMatchService::HostLeaveOutcome() const {
+		// The frame's menus call this inside the plane's window, and it reads the round without the plane's lock.
+		NetLockstepPlane::Gap plane("host leave outcome");
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (!m_IsHost || !m_Coordinator || !m_Coordinator->IsRunning() || m_Coordinator->GetConfig().matchConfig.successorOrder.empty()) {
+				return NetHostLeaveOutcome::EndsMatch;
+			}
+		}
+		const NetLobbySnapshot snapshot = GetLobbySnapshot();
+		const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
+		// The election waits on every seat that has not left the round; a seat answers while its link is up, held or not.
+		const auto survivors = std::count_if(snapshot.members.begin(), snapshot.members.end(), [&](const NetLobbyMember& member) {
+			if (member.cpu || member.isLocal || member.peerId == snapshot.localPeerId) return false;
+			if (ScenarioRunner::IsLockstepPeerGone(member.peerId, frame) || ScenarioRunner::IsLockstepSeatReleased(member.peerId)) return false;
+			const auto view = GetSeatView(member.peerId);
+			return view ? view->seat.owner != 0 && view->seat.link == NetSeatLink::Connected : member.connected;
+		});
+		return survivors >= 2 ? NetHostLeaveOutcome::HandsOver : NetHostLeaveOutcome::EndsMatch;
+	}
+
+	bool NetMatchService::LeaveKeepsRejoin() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		// The same reading the landing's offer takes after the leave: admission on, and a ticket kept for this match.
+		return s_AdmissionEnabled && !m_IsHost && m_TicketStore.HasRecord();
+	}
+
 	void NetMatchService::LeaveMatch(const std::string& result) {
 		std::string displayResult = result;
-		bool handover = false;
+		// The host's leave does what its confirmation said at this frame.
+		const bool handover = HostLeaveOutcome() == NetHostLeaveOutcome::HandsOver;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			CaptureMatchSummaryLocked(result);
-			handover = m_IsHost && m_Coordinator && m_Coordinator->IsRunning() && !m_Coordinator->GetConfig().matchConfig.successorOrder.empty();
 			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
 			if (m_IsHost) m_ReconnectHost.SetMatchEnded();
 			m_LeftMatch = true;

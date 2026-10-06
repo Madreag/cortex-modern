@@ -346,6 +346,10 @@ void PauseMenuGUI::UpdateMatchPauseRow(bool force) {
 	if (m_MatchLiveLine->GetText() != liveLine) {
 		m_MatchLiveLine->SetText(liveLine);
 	}
+	// The leave's sentence is read again every frame it is open: a player who drops meanwhile changes what the press does.
+	if (m_LeaveConfirmShown) {
+		if (const std::string consequence = LeaveConsequenceText(); m_LeaveConfirmLabel->GetText() != consequence) m_LeaveConfirmLabel->SetText(consequence);
+	}
 	// Saving is the host's too; every peer reads when the match was last saved.
 	const NetMatchService::MatchSaveRow saveRow = g_NetMatchService.GetMatchSaveRow();
 	m_PauseMenuButtons[PauseMenuButton::SaveMatchButton]->SetEnabled(saveRow.enabled);
@@ -367,17 +371,17 @@ std::string PauseMenuGUI::GetShownSaveLine() const {
 
 std::string PauseMenuGUI::LeaveConsequenceText() const {
 	if (g_NetMatchService.IsHost()) {
-		// The host's leave hands the round to the next host the match agreed on. The handover is the survivors' election, and a
-		// lone survivor of an announced leave ends the match rather than host it alone, so it takes two players still connected.
-		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
-		const auto survivors = std::count_if(snapshot.members.begin(), snapshot.members.end(), [&snapshot](const auto& member) {
-			return !member.cpu && !member.isLocal && member.peerId != snapshot.localPeerId && member.connected;
-		});
-		return g_NetMatchService.GetLobbyMatchConfig().successorOrder.empty() || survivors < 2 ? "Leave the match?\nThe match ends for everyone."
-		                                                                                     : "Leave the match?\nAnother player becomes the host and the match plays on.";
+		// The host's leave reads what the survivors' election does at this frame, and the press acts on the same answer.
+		return g_NetMatchService.HostLeaveOutcome() == NetHostLeaveOutcome::HandsOver ? "Leave the match?\nAnother player becomes the host and the match plays on."
+		                                                                             : "Leave the match?\nThe match ends for everyone.";
 	}
 	// A leave is held like a drop: the seat and its ticket stay this player's while the match runs.
-	return "Leave the match?\nThe AI plays your units and your seat stays yours.\nRejoin Match on the Multiplayer screen brings you back while the match runs.";
+	if (g_NetMatchService.LeaveKeepsRejoin()) {
+		return "Leave the match?\nThe AI plays your units and your seat stays yours.\nRejoin Match on the Multiplayer screen brings you back while the match runs.";
+	}
+	// No ticket is kept: the AI still plays the place, and the way back is the one any newcomer has, where the match offers one.
+	return NetMatchService::AdmissionEnabled() ? "Leave the match?\nThe AI plays your units for the rest of the match.\nTo come back, join it again from the Multiplayer screen and ask the host for a place."
+	                                           : "Leave the match?\nThe AI plays your units for the rest of the match.\nThis match cannot take you back.";
 }
 
 void PauseMenuGUI::ShowLeaveConfirm(bool show) {
