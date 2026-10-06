@@ -73,6 +73,8 @@ class ContractTests(unittest.TestCase):
         case.transport_module = SimpleNamespace(worker=SimpleNamespace(facts=facts, mutex=lambda *args,**kwargs:contextlib.nullcontext()))
         case.refuse = lambda name, box, reason:spread.SpreadRefusal(f'{name} on {box}: {reason}')
         case.allocate()
+        self.assertTrue(all(request['case_id'] == case.id for request in requests))
+        self.assertEqual({request['peer_id'] for request in requests}, set(case.names))
         return case, claims
 
     def test_shareable_screen_peers_use_one_fitting_box_without_reviewed_peer(self):
