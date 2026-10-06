@@ -811,6 +811,9 @@ def native_execute(spec_path, result_out):
     identity = read_json(preflight_root/"preflight.json")
     if identity["executable_sha256"] != spec["executable_sha256"]:
         raise SpreadRefusal("native executable hash differs from preparation")
+    # Keep the full existing hash preflight in the fetched artifact. Live gates
+    # need only physical identity and the executable receipt, not every Data hash.
+    identity = {key: identity[key] for key in ("machine_id", "hostname", "os", "head", "executable_sha256")}
     runtime_files = {}
     for relative, encoded in spec["files"].items():
         data = base64.b64decode(encoded, validate=True)
