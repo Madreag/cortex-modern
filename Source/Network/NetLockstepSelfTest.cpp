@@ -63,6 +63,7 @@
 #include <atomic>
 #include <barrier>
 #include <cstring>
+#include <cstdlib>
 #include <functional>
 #include <future>
 #include <iostream>
@@ -26296,22 +26297,18 @@ namespace {
 	int NetLockstepSelfTest::RunSeatAdmission() {
 		EnsureSwitchTestManagers();
 		std::string error;
-		SeatAdmissionServiceTest::Reset();
-		bool passed = SeatAdmissionServiceTest::FutureRemovalRollsBack(&error);
-		SeatAdmissionServiceTest::Reset();
-		passed &= SeatAdmissionServiceTest::LeaverFindsSuccessor(&error);
-		SeatAdmissionServiceTest::Reset();
-		passed &= SeatAdmissionServiceTest::OpenedSeatJoinsThroughImage(&error);
-		SeatAdmissionServiceTest::Reset();
-		passed &= SeatAdmissionServiceTest::EncodedRemovalFitsBothCapsules(&error);
-		SeatAdmissionServiceTest::Reset();
-		passed &= SeatAdmissionServiceTest::KickWithdrawsOpenedActivation(&error);
-		SeatAdmissionServiceTest::Reset();
-		passed &= SeatAdmissionServiceTest::RepeatedRemovalKeepsCapacity(&error);
-		SeatAdmissionServiceTest::Reset();
-		passed &= SeatAdmissionServiceTest::LeaverWalksTwoSuccessors(&error);
-		SeatAdmissionServiceTest::Reset();
-		passed &= SeatAdmissionServiceTest::AuthenticatedAdmissionRaces(&error);
+		const char* selected = std::getenv("CCCP_SEAT_ADMISSION_CASE");
+		bool passed = true, ran = false;
+		for (const auto& [name, test]: std::array<std::pair<const char*, bool (*)(std::string*)>, 8>{{
+		    {"G1", SeatAdmissionServiceTest::FutureRemovalRollsBack}, {"G3", SeatAdmissionServiceTest::LeaverFindsSuccessor},
+		    {"G4", SeatAdmissionServiceTest::OpenedSeatJoinsThroughImage}, {"K2", SeatAdmissionServiceTest::EncodedRemovalFitsBothCapsules},
+		    {"K3", SeatAdmissionServiceTest::KickWithdrawsOpenedActivation}, {"K4", SeatAdmissionServiceTest::RepeatedRemovalKeepsCapacity},
+		    {"K1", SeatAdmissionServiceTest::LeaverWalksTwoSuccessors}, {"K5", SeatAdmissionServiceTest::AuthenticatedAdmissionRaces}}}) {
+			if (selected && *selected && std::strcmp(selected, name) != 0) continue;
+			SeatAdmissionServiceTest::Reset();
+			passed &= test(&error); ran = true;
+		}
+		if (!ran) passed = ReportReleasedClaimsRow("selected_admission_case", "unknown CCCP_SEAT_ADMISSION_CASE", &error);
 		SeatAdmissionServiceTest::Reset();
 		std::cout << "[net-lockstep-seat-admission-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 		return passed ? 0 : 1;
