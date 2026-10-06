@@ -44,6 +44,8 @@ OWNER_IDLE_S = 30 * 24 * 60 * 60
 MAX_WORLD_OWNERS = MAX_ROWS
 # One address keeps at most one sixty-fourth of retained ownership.
 MAX_WORLD_OWNERS_PER_SOURCE = 64
+# Neighbouring addresses share the same creation budget.
+MAX_WORLD_OWNERS_PER_NETWORK = 64
 # A minute distinguishes established worlds from register-heartbeat-delete churn.
 OWNER_MIN_LISTED_S = 60.0
 MAX_OWNER_STATE_BYTES = 8 * 1024 * 1024
@@ -551,6 +553,8 @@ class SessionDirectory:
         self._next_owner = 0
         self._service_key = self._load_service_key(create_owner_key)
         self._world_owners: dict[str, dict[str, Any]] = {}
+        self._owner_replacements: dict[str, tuple[str, dict[str, Any], int]] = {}
+        self._registering_sessions: dict[str, Session] = {}
         if self._owner_state is not None and self._owner_state.exists():
             if self._owner_state.stat().st_size > MAX_OWNER_STATE_BYTES:
                 raise ValueError("world owner state exceeds its byte bound")
@@ -732,19 +736,29 @@ class SessionDirectory:
                     continue
                 revision = self._owner_revision
                 owners = {sid: dict(owner) for sid, owner in self._world_owners.items()}
+                replacements = dict(self._owner_replacements)
+                for sid, (victim, owner, _) in replacements.items():
+                    owners.pop(victim, None)
+                    owners[sid] = dict(owner)
                 pending = {sid: dict(record) for sid, record in self._pending_worlds.items()}
             try:
-                self._write_owner_file(owners)
                 raw_pending = json.dumps(pending, sort_keys=True).encode()
                 if len(raw_pending) > MAX_PENDING_BYTES:
                     raise ValueError("pending world state exceeds its byte bound")
                 self._replace_secret(self._pending_state, raw_pending)
+                self._write_owner_file(owners)
             except BaseException as error:
                 with self._owner_changed:
                     self._owner_failure = error
                     self._owner_changed.notify_all()
                 return
             with self._owner_changed:
+                for sid, replacement in replacements.items():
+                    victim, owner, _ = replacement
+                    self._world_owners.pop(victim, None)
+                    self._world_owners[sid] = owner
+                    if self._owner_replacements.get(sid) is replacement:
+                        del self._owner_replacements[sid]
                 self._owner_written = revision
                 self._owner_changed.notify_all()
             next_write = time.monotonic() + OWNER_WRITE_INTERVAL_S
@@ -785,7 +799,8 @@ class SessionDirectory:
                 raise OSError("world owner acknowledgement could not be stored") from self._owner_failure
 
     def _remember_world_owner(self, sid: str, token: str, generation: int, presented: str = "", fingerprint: str = "",
-                              install_key: str = "", world_boot: int = 0, source_ip: str = "", listed_s: float = 0) -> None:
+                              install_key: str = "", world_boot: int = 0, source_ip: str = "", listed_s: float = 0,
+                              previous_sha256: str = "") -> None:
         owner = {"token_sha256": hashlib.sha256(token.encode()).hexdigest(), "migration_gen": generation, "last_heartbeat_unix": time.time()}
         owner.update(source_ip=source_ip, listed_s=listed_s)
         proof = self._token_proof(sid, token)
@@ -796,21 +811,58 @@ class SessionDirectory:
         if fingerprint:
             owner.update(retry_token_sha256=hashlib.sha256(presented.encode()).hexdigest(),
                          retry_fingerprint=fingerprint, retry_until_unix=time.time() + RESUME_GRACE_S)
+        if previous_sha256:
+            owner["retry_token_sha256"] = previous_sha256
         self._save_world_owner(sid, owner)
 
+    @staticmethod
+    def _owner_network(source: str) -> str:
+        if not source:
+            return ""
+        address = ipaddress.ip_address(source)
+        return str(ipaddress.ip_network(f"{address}/{24 if address.version == 4 else 48}", strict=False))
+
+    def _projected_owners(self) -> dict[str, dict[str, Any]]:
+        owners = dict(self._world_owners)
+        for sid, (victim, owner, _) in self._owner_replacements.items():
+            owners.pop(victim, None)
+            owners[sid] = owner
+        return owners
+
+    def _owner_retirement_candidate(self, sid: str, source: str) -> Optional[str]:
+        owners = self._projected_owners()
+        if sid in owners:
+            return None
+        network = self._owner_network(source)
+        same_source = [key for key, value in owners.items() if value.get("source_ip", "") == source]
+        same_network = [key for key, value in owners.items() if self._owner_network(value.get("source_ip", "")) == network]
+        candidates = (same_source if len(same_source) >= MAX_WORLD_OWNERS_PER_SOURCE else
+                      same_network if len(same_network) >= MAX_WORLD_OWNERS_PER_NETWORK else
+                      list(owners) if len(owners) >= MAX_WORLD_OWNERS else [])
+        if not candidates:
+            return None
+        candidates = [key for key in candidates if owners[key].get("listed_s", 0) < OWNER_MIN_LISTED_S]
+        if not candidates:
+            raise OverflowError("full")
+        return min(candidates, key=lambda key: (key in self._sessions, owners[key]["last_heartbeat_unix"]))
+
     def _save_world_owner(self, sid: str, owner: dict[str, Any]) -> None:
-        if self._world_owners.get(sid) == owner:
+        projected = self._projected_owners()
+        previous = projected.get(sid)
+        if previous is not None:
+            # A resume keeps the creation share even when its host changes address.
+            owner["source_ip"] = previous.get("source_ip", owner.get("source_ip", ""))
+        if previous == owner:
             return
-        source = owner.get("source_ip", "")
-        same_source = [key for key, value in self._world_owners.items() if key != sid and value.get("source_ip", "") == source]
-        candidates = same_source if len(same_source) >= MAX_WORLD_OWNERS_PER_SOURCE else (
-            [key for key in self._world_owners if key != sid] if sid not in self._world_owners and len(self._world_owners) >= MAX_WORLD_OWNERS else [])
-        if candidates:
-            victim = min(candidates, key=lambda key: (self._world_owners[key].get("listed_s", 0) >= OWNER_MIN_LISTED_S,
-                         key in self._sessions, self._world_owners[key]["last_heartbeat_unix"]))
-            del self._world_owners[victim]
-        self._world_owners[sid] = owner
+        victim = self._owner_retirement_candidate(sid, owner.get("source_ip", ""))
+        existing = self._owner_replacements.get(sid)
         self._owner_revision += 1
+        if self._owner_state is not None and (victim is not None or existing is not None):
+            self._owner_replacements[sid] = (victim if victim is not None else existing[0], owner, self._owner_revision)
+        else:
+            if victim is not None:
+                self._world_owners.pop(victim, None)
+            self._world_owners[sid] = owner
         self._owner_changed.notify_all()
 
     def _ack_world_register(self, sess: Session, now: float) -> int:
@@ -820,10 +872,9 @@ class SessionDirectory:
                 self._remember_world_owner(sess.session_id, sess.token, sess.migration_gen,
                                            fingerprint=sess.register_fingerprint, install_key=sess.install_key,
                                            world_boot=sess.fields.get("world_boot", 0), source_ip=sess.observed_ip,
-                                           listed_s=(owner or {}).get("listed_s", 0) + (max(0, now - sess.owner_listed_at) if sess.listed else 0))
+                                           listed_s=(owner or {}).get("listed_s", 0) + (max(0, now - sess.owner_listed_at) if sess.listed else 0),
+                                           previous_sha256=sess.register_previous_sha256)
                 sess.owner_listed_at = now
-                if sess.register_previous_sha256:
-                    self._world_owners[sess.session_id]["retry_token_sha256"] = sess.register_previous_sha256
             if self._pending_worlds.pop(sess.session_id, None) is not None:
                 self._owner_revision += 1
                 self._owner_changed.notify_all()
@@ -923,7 +974,8 @@ class SessionDirectory:
             # Capacity is answered before any field work: a full directory must not spend parsing.
             resume_id = data.get("resume_session_id", data.get("world_id") if data.get("persistent_world") is True else None)
             resuming = isinstance(resume_id, str) and resume_id in self._sessions
-            if not resuming and len(self._sessions) >= MAX_ROWS:
+            reserved_rows = sum(sid not in self._sessions for sid in self._registering_sessions)
+            if not resuming and len(self._sessions) + reserved_rows >= MAX_ROWS:
                 raise OverflowError("full")
             fields: dict[str, Any] = {}
             for name in REGISTER_STR_FIELDS:
@@ -1017,6 +1069,8 @@ class SessionDirectory:
                 same_host = (world and proven and valid_install_key(install_key)
                              and (previous is None or tokens_equal(hashlib.sha256(install_key.encode()).hexdigest(), getattr(previous, "install_key_sha256", hashlib.sha256(previous.install_key.encode()).hexdigest())) or original_signed_owner))
                 first_world = world and not token and owner is None and presented in (None, "")
+                if first_world:
+                    self._owner_retirement_candidate(session_id, observed_ip)
                 if previous is not None and not previous.acknowledged and same_host and presented != previous.token and (claimed is None or claimed == previous.migration_gen):
                     previous.fields = fields
                     previous.observed_ip = observed_ip
@@ -1048,12 +1102,13 @@ class SessionDirectory:
                 session_id = str(uuid.uuid4())
                 token = self._issue_token(session_id, generation)
             previous_session = self._sessions.get(session_id)
+            if session_id in self._registering_sessions:
+                raise OverflowError("full")
             pending = [item for sid, item in self._sessions.items() if sid != session_id and not item.acknowledged]
+            pending += [item for sid, item in self._registering_sessions.items() if sid != session_id and sid not in self._sessions]
             if (len(pending) >= MAX_PENDING_REGISTRATIONS or sum(item.observed_ip == observed_ip for item in pending) >= MAX_PENDING_PER_SOURCE
                     or sum(item.stored_bytes for item in pending) + SESSION_METADATA_BYTES + len(json.dumps(fields).encode()) > MAX_PENDING_BYTES):
                 raise OverflowError("full")
-            if previous_session is not None:
-                self._clear_signals(previous_session)
             sess = Session(session_id, token, fields, observed_ip, now)
             sess.install_key = install_key
             sess.install_key_sha256 = hashlib.sha256(install_key.encode()).hexdigest()
@@ -1062,15 +1117,32 @@ class SessionDirectory:
                 sess.register_fingerprint = fingerprint
                 sess.register_retry_until = 0
                 sess.register_previous_sha256 = hashlib.sha256((presented or "").encode()).hexdigest()
-                self._register_replays[session_id] = sess
             if resume is not None:
                 if not first_world:
                     sess.state = "running"
-                self._resume_tokens.pop(session_id, None)
-            self._sessions[session_id] = sess
+            previous_pending = self._pending_worlds.get(session_id)
+            self._registering_sessions[session_id] = sess
             revision = self._remember_pending_world(sess, now)
+        try:
+            self._wait_owner_write(revision)
+        except BaseException:
+            with self._lock:
+                self._registering_sessions.pop(session_id, None)
+                if previous_pending is None:
+                    self._pending_worlds.pop(session_id, None)
+                else:
+                    self._pending_worlds[session_id] = previous_pending
+            raise
+        with self._lock:
+            self._registering_sessions.pop(session_id, None)
+            if previous_session is not None:
+                self._clear_signals(previous_session)
+            self._sessions[session_id] = sess
+            if fields.get("persistent_world") is True:
+                self._register_replays[session_id] = sess
+            if resume is not None:
+                self._resume_tokens.pop(session_id, None)
             self._signals_changed.notify_all()
-        self._wait_owner_write(revision)
         return self._register_reply(sess)
 
     def _register_reply(self, sess: Session) -> dict[str, Any]:

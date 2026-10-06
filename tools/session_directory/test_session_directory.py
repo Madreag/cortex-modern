@@ -414,6 +414,88 @@ class DirectoryTests(unittest.TestCase):
             running = spawn_server(bind="127.0.0.1", port=47465, caller_mode=mode)
             running.stop()
 
+    def test_T4_subnet_churn_cannot_claim_an_established_world(self) -> None:
+        with mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 64):
+            store = session_directory.SessionDirectory(300, 5)
+            self.addCleanup(store.stop)
+            request = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
+            original = store.register(request, "192.0.2.200", 0, INSTALL_KEY)
+            store.heartbeat(original["session_id"], {"token": original["token"], "peer_count": 1, "seats_free": 1}, 60, INSTALL_KEY)
+            store.delete(original["session_id"], {"token": original["token"]}, 61)
+            for index in range(65):
+                key = f"{index:016x}"
+                try:
+                    row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), f"192.0.2.{index + 1}", 61, key)
+                    store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 121, key)
+                    store.delete(row["session_id"], {"token": row["token"]}, 122)
+                except OverflowError:
+                    pass
+            stolen = False
+            try:
+                store.register(request, "192.0.2.70", 122, "0123456789abcdee")
+                stolen = True
+            except (PermissionError, OverflowError):
+                pass
+            recovered = store.register(dict(request, world_boot=2, resume_session_id=original["session_id"], resume_token=original["token"]), "192.0.2.200", 122, INSTALL_KEY)
+            self.assertFalse(stolen, "T4: subnet churn let a stranger claim an established world")
+            self.assertEqual(recovered["session_id"], original["session_id"], "T4: retained capacity refused an established owner's resume")
+            self.assertIn(original["session_id"], store._world_owners, "T4: subnet churn evicted an established owner")
+
+    def test_T4_established_capacity_refuses_new_worlds(self) -> None:
+        with mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 1):
+            store = session_directory.SessionDirectory(300, 5)
+            self.addCleanup(store.stop)
+            request = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
+            row = store.register(request, "192.0.2.1", 0, INSTALL_KEY)
+            store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 60, INSTALL_KEY)
+            store.delete(row["session_id"], {"token": row["token"]}, 61)
+            with self.assertRaises(OverflowError, msg="T4: a table of established owners admitted a new world"):
+                store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "198.51.100.1", 61, INSTALL_KEY)
+            resumed = store.register(dict(request, world_boot=2, resume_session_id=row["session_id"], resume_token=row["token"]), "192.0.2.1", 61, INSTALL_KEY)
+            self.assertEqual(resumed["session_id"], row["session_id"])
+
+    def test_T4_retained_shares_cover_ipv4_and_ipv6_subnets(self) -> None:
+        for prefix in ("198.51.100.", "2001:db8:abcd:"):
+            store = session_directory.SessionDirectory(300, 5)
+            self.addCleanup(store.stop)
+            for index in range(65):
+                source = prefix + (str(index + 1) if prefix.endswith(".") else f"{index + 1:x}::1")
+                row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), source, 0, INSTALL_KEY)
+                store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 0, INSTALL_KEY)
+                store.delete(row["session_id"], {"token": row["token"]}, 1)
+            self.assertLessEqual(len(store._world_owners), session_directory.MAX_WORLD_OWNERS_PER_SOURCE,
+                                 "T4: addresses in one subnet exceeded its retained-owner share")
+
+    def test_T4_failed_retirement_preserves_the_old_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 1):
+            store = session_directory.SessionDirectory(300, 5, owner_state=Path(directory) / "owners.json", create_owner_key=True)
+            self.addCleanup(store.stop)
+            original = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.1", 0, INSTALL_KEY)
+            store.heartbeat(original["session_id"], {"token": original["token"], "peer_count": 1, "seats_free": 1}, 0, INSTALL_KEY)
+            store.delete(original["session_id"], {"token": original["token"]}, 1)
+            incoming = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "198.51.100.1", 1, INSTALL_KEY)
+            before = {sid: dict(owner) for sid, owner in store._world_owners.items()}
+            with mock.patch.object(store, "_write_owner_file", side_effect=OSError("storage unavailable")):
+                with self.assertRaises(OSError):
+                    store.heartbeat(incoming["session_id"], {"token": incoming["token"], "peer_count": 1, "seats_free": 1}, 2, INSTALL_KEY)
+            self.assertTrue(store._world_owners == before, "T4: a refused storage write retired the old owner")
+
+    def test_T4_failed_return_preserves_the_old_signals(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = session_directory.SessionDirectory(300, 5, owner_state=Path(directory) / "owners.json", create_owner_key=True)
+            self.addCleanup(store.stop)
+            request = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
+            row = store.register(request, "192.0.2.1", 0, INSTALL_KEY)
+            store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 0, INSTALL_KEY)
+            store.post_signal(row["session_id"], {"from": "client:returning", "to": "host", "token_or_join_nonce": "returning", "payload_b64": "eA=="}, 1, "192.0.2.2")
+            previous = store._sessions[row["session_id"]]
+            before = store.get_signals(row["session_id"], "host", 0, row["token"], 1)
+            with mock.patch.object(store, "_write_owner_file", side_effect=OSError("storage unavailable")):
+                with self.assertRaises(OSError):
+                    store.register(dict(request, world_boot=2, resume_session_id=row["session_id"], resume_token=row["token"]), "192.0.2.1", 1, INSTALL_KEY)
+            self.assertTrue(store._sessions.get(row["session_id"]) is previous, "T4: a refused returning registration replaced its old lease")
+            self.assertTrue(store.get_signals(row["session_id"], "host", 0, row["token"], 1) == before, "T4: a refused returning registration removed queued signaling")
+
     def test_R1_tunnel_requires_the_callers_address(self) -> None:
         self.start(port=47460)
         self.server.store.caller_mode = "tunnel"

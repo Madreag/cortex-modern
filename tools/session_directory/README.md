@@ -139,6 +139,11 @@ with four per caller; excess polls answer immediately with a one-second retry
 hint. One caller retains at most 64 of 4,096 owners. Under pressure, worlds
 listed for less than 60 seconds retire first; signed returning proofs remain
 verifiable. These shares prevent one address from reserving the whole service.
+The owner share also applies to a /24 for
+IPv4 and a /48 for IPv6. Owners listed for at least 60 seconds are never retired
+for capacity: a table of established owners refuses a new world with 503/full.
+Retirement of a shorter listing and replacement of a returning lease wait for
+their storage acknowledgement before discarding the previous owner or signals.
 
 Signed opaque proofs stay within the existing token size. A returning holder can
 prove its original ownership after restart; an older game's normal requests keep
