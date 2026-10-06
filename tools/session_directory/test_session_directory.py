@@ -461,6 +461,32 @@ class DirectoryTests(unittest.TestCase):
                 worker.join(3)
         self.assertTrue(all(status == 200 for status, _ in completed), "R2: bounded waiters dropped an honest polling request")
 
+    def test_R3_one_source_cannot_exhaust_retained_owners(self) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        self.addCleanup(store.stop)
+        now = time.monotonic()
+        returning_request = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
+        returning = store.register(returning_request, "192.0.2.200", now, INSTALL_KEY)
+        store.heartbeat(returning["session_id"], {"token": returning["token"], "peer_count": 1, "seats_free": 1}, now, INSTALL_KEY)
+        store.delete(returning["session_id"], {"token": returning["token"]}, now)
+        for index in range(session_directory.MAX_WORLD_OWNERS):
+            request = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
+            try:
+                row = store.register(request, "192.0.2.1", now, f"{index:016x}")
+                store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, now, f"{index:016x}")
+                store.delete(row["session_id"], {"token": row["token"]}, now)
+            except OverflowError:
+                self.fail("R3: one caller filled retained ownership before honest worlds could register")
+        honest = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
+        try:
+            fresh = store.register(honest, "192.0.2.201", now, INSTALL_KEY)
+            recovered = store.register(dict(returning_request, world_boot=2, resume_session_id=returning["session_id"], resume_token=returning["token"]), "192.0.2.200", now, INSTALL_KEY)
+        except OverflowError:
+            self.fail("R3: strangers' retained owners refused an honest new or returning world")
+        self.assertEqual(recovered["session_id"], returning["session_id"])
+        self.assertNotEqual(fresh["session_id"], recovered["session_id"])
+        self.assertLess(len(store._world_owners), session_directory.MAX_WORLD_OWNERS, "R3: one source kept the whole owner table")
+
     def test_successor_resumes_row_only_with_its_sealed_token(self) -> None:
         self.start(port=45799)
         status, created = self.register()

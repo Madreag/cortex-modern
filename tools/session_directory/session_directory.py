@@ -42,6 +42,10 @@ SESSION_METADATA_BYTES = 4096
 # A month covers a returning host without making abandoned ownership permanent.
 OWNER_IDLE_S = 30 * 24 * 60 * 60
 MAX_WORLD_OWNERS = MAX_ROWS
+# One address keeps at most one sixty-fourth of retained ownership.
+MAX_WORLD_OWNERS_PER_SOURCE = 64
+# A minute distinguishes established worlds from register-heartbeat-delete churn.
+OWNER_MIN_LISTED_S = 60.0
 MAX_OWNER_STATE_BYTES = 8 * 1024 * 1024
 # One batched write per second stays inside the five-second heartbeat cadence.
 OWNER_WRITE_INTERVAL_S = 1.0
@@ -499,6 +503,7 @@ class Session:
         self.register_retry_until = 0.0
         self.register_previous_sha256 = ""
         self.acknowledged = False
+        self.owner_listed_at = created_at
         self.stored_bytes = SESSION_METADATA_BYTES + len(json.dumps(fields, ensure_ascii=False).encode("utf-8"))
 
     def age_s(self, now: float) -> int:
@@ -569,9 +574,16 @@ class SessionDirectory:
                     raise ValueError("invalid world owner state")
                 if canonical_id in normalized_owners and normalized_owners[canonical_id] != owner:
                     raise ValueError("conflicting world owner state")
-                allowed = {"token_sha256", "migration_gen", "install_sha256", "world_boot", "retry_token_sha256", "retry_fingerprint", "retry_until_unix", "last_heartbeat_unix", "owner_nonce_sha256", "owner_birth", "acked_lease", "acked_era"}
+                allowed = {"token_sha256", "migration_gen", "install_sha256", "world_boot", "retry_token_sha256", "retry_fingerprint", "retry_until_unix", "last_heartbeat_unix", "owner_nonce_sha256", "owner_birth", "acked_lease", "acked_era", "source_ip", "listed_s"}
                 if set(owner) - allowed:
                     raise ValueError("invalid world owner state")
+                if "source_ip" in owner:
+                    try:
+                        ipaddress.ip_address(owner["source_ip"])
+                    except (ValueError, TypeError):
+                        raise ValueError("invalid world owner source") from None
+                if "listed_s" in owner and (type(owner["listed_s"]) not in (int, float) or not 0 <= owner["listed_s"] < 10**12):
+                    raise ValueError("invalid world owner listed age")
                 owner.setdefault("last_heartbeat_unix", self._owner_state.stat().st_mtime)
                 if type(owner["last_heartbeat_unix"]) not in (int, float) or not 0 <= owner["last_heartbeat_unix"] < 10**12:
                     raise ValueError("invalid world owner heartbeat")
@@ -780,8 +792,9 @@ class SessionDirectory:
                 raise OSError("world owner acknowledgement could not be stored") from self._owner_failure
 
     def _remember_world_owner(self, sid: str, token: str, generation: int, presented: str = "", fingerprint: str = "",
-                              install_key: str = "", world_boot: int = 0) -> None:
+                              install_key: str = "", world_boot: int = 0, source_ip: str = "", listed_s: float = 0) -> None:
         owner = {"token_sha256": hashlib.sha256(token.encode()).hexdigest(), "migration_gen": generation, "last_heartbeat_unix": time.time()}
+        owner.update(source_ip=source_ip, listed_s=listed_s)
         proof = self._token_proof(sid, token)
         if proof:
             owner.update(owner_birth=proof[0], owner_nonce_sha256=hashlib.sha256(struct.pack(">Q", proof[0]) + proof[1]).hexdigest(), acked_lease=proof[3], acked_era=proof[4])
@@ -795,8 +808,14 @@ class SessionDirectory:
     def _save_world_owner(self, sid: str, owner: dict[str, Any]) -> None:
         if self._world_owners.get(sid) == owner:
             return
-        if sid not in self._world_owners and len(self._world_owners) >= MAX_WORLD_OWNERS:
-            raise OverflowError("full")
+        source = owner.get("source_ip", "")
+        same_source = [key for key, value in self._world_owners.items() if key != sid and value.get("source_ip", "") == source]
+        candidates = same_source if len(same_source) >= MAX_WORLD_OWNERS_PER_SOURCE else (
+            [key for key in self._world_owners if key != sid] if sid not in self._world_owners and len(self._world_owners) >= MAX_WORLD_OWNERS else [])
+        if candidates:
+            victim = min(candidates, key=lambda key: (self._world_owners[key].get("listed_s", 0) >= OWNER_MIN_LISTED_S,
+                         key in self._sessions, self._world_owners[key]["last_heartbeat_unix"]))
+            del self._world_owners[victim]
         self._world_owners[sid] = owner
         self._owner_revision += 1
         self._owner_changed.notify_all()
@@ -807,7 +826,9 @@ class SessionDirectory:
             if not sess.acknowledged or owner is None or time.time() - owner["last_heartbeat_unix"] >= OWNER_WRITE_INTERVAL_S:
                 self._remember_world_owner(sess.session_id, sess.token, sess.migration_gen,
                                            fingerprint=sess.register_fingerprint, install_key=sess.install_key,
-                                           world_boot=sess.fields.get("world_boot", 0))
+                                           world_boot=sess.fields.get("world_boot", 0), source_ip=sess.observed_ip,
+                                           listed_s=(owner or {}).get("listed_s", 0) + (max(0, now - sess.owner_listed_at) if sess.listed else 0))
+                sess.owner_listed_at = now
                 if sess.register_previous_sha256:
                     self._world_owners[sess.session_id]["retry_token_sha256"] = sess.register_previous_sha256
             if self._pending_worlds.pop(sess.session_id, None) is not None:
@@ -1044,8 +1065,6 @@ class SessionDirectory:
             pending = [item for sid, item in self._sessions.items() if sid != session_id and not item.acknowledged]
             if (len(pending) >= MAX_PENDING_REGISTRATIONS or sum(item.observed_ip == observed_ip for item in pending) >= MAX_PENDING_PER_SOURCE
                     or sum(item.stored_bytes for item in pending) + SESSION_METADATA_BYTES + len(json.dumps(fields).encode()) > MAX_PENDING_BYTES):
-                raise OverflowError("full")
-            if world and session_id not in self._world_owners and len(self._world_owners) >= MAX_WORLD_OWNERS:
                 raise OverflowError("full")
             if previous_session is not None:
                 self._clear_signals(previous_session)
