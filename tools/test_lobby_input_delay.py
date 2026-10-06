@@ -12,7 +12,8 @@ from pathlib import Path
 import re
 import time
 
-from run_sim_test import make_run, seed_settings
+from run_sim_test import seed_settings
+from test_menu_readback import spread, managed_case
 
 
 def menu_script(name, host, players, port):
@@ -34,29 +35,40 @@ def wait_for_log(run, marker, seconds=45):
     raise RuntimeError(f"{run.out.name} did not reach {marker}")
 
 
+@managed_case
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=47613)
+    if spread:
+        spread.add_arguments(parser)
     options = parser.parse_args()
+    if not spread:
+        parser.error("lobby input delay requires the shared spread executor")
+    options.spread = True
+    spread.configure(options)
     players = 2
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    result = {"pass": False, "checks": {}, "details": {}}
+    result = {"pass": False, "checks": {}, "details": {}, "topology": "spread", "proof": False}
     runs = {}
+    executor = None
 
     def start(name, script):
         path = root / f"{name}.txt"
         path.write_text(script, encoding="utf-8")
         out = root / name
         # The delay box is read-only under the auto policy; the floor the lobby sends is a setting.
-        run = make_run(options.repo, ["-menu-script", path], out, 120)
+        run = executor.make_run(options.repo, ["-menu-script", path], out, 120)
         seed_settings(run, {"NetworkInputDelayFrames": 3})
         runs[name] = run.start()
         return runs[name]
 
     try:
+        executor = spread.prepare_case(options.repo, root,
+                                      [spread.Peer("host", os="windows", reviewed=True), spread.Peer("client", os="windows")],
+                                      spread.Match(options.port))
         host_script = menu_script("Host", True, players, options.port) + \
             f"wait_connected {players}\nwait_remote_ready\nwait_all_ready\ndump_lobby\nwait 10\nexit\n"
         host_run = start("host", host_script)
@@ -84,6 +96,8 @@ def main():
     finally:
         for run in runs.values():
             run.close()
+        if executor:
+            result.update(topology="spread", peer_boxes=executor.result()["peer_boxes"], spread=executor.result(), proof=result["pass"])
         (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps({"pass": result["pass"], "error": result.get("error"),
                       "failed": [k for k, v in result["checks"].items() if not v], "out": str(root)}), flush=True)
