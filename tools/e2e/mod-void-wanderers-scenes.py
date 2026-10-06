@@ -53,7 +53,8 @@ def find_words(picture: Image.Image, package: Path, text: str) -> dict:
         bits = 0
         for x in range(rgb.width):
             r, g, b = rgb.getpixel((x, y))
-            if r >= 170 and g >= 150 and r >= b + 30:
+            # A join flash also draws the same glyphs in white.
+            if r >= 170 and g >= 150 and r >= b + 30 or min(r, g, b) >= 170:
                 bits |= 1 << x
         rows.append(bits)
     anchors = [pixels[i * (len(pixels) - 1) // 3] for i in range(4)]
