@@ -53,6 +53,7 @@ def main():
     parser.add_argument("--case", choices=["purge-view", "team-change", "held-switch", "camera"])
     parser.add_argument("--boundary", choices=["single", "pair", "local", "nested", "revived"])
     parser.add_argument("--peer-boxes")
+    parser.add_argument("--host-os", choices=["windows", "linux", "darwin", "any"], default="windows")
     parser.add_argument("--network", choices=["ice", "direct"], default="ice")
     parser.add_argument("--port", type=int, default=47650)
     parser.add_argument("--directory-port", type=int, default=47659)
@@ -69,7 +70,7 @@ def main():
             parser.error("a detector needs --out and exactly one case, without scene arguments")
         single = options.boundary in ["single", "nested"]
         names = ["single"] if single else ["host", "client"]
-        peers = [spread.Peer(name, os="windows" if name == names[0] else "any", size=(960, 540), timeout=120) for name in names]
+        peers = [spread.Peer(name, os=options.host_os if name == names[0] else "any", size=(960, 540), timeout=120) for name in names]
         filename = "mod-void-wanderers-resume.py" if options.case else "mod-void-wanderers-engine.py"
         detector = load("vw_spread_detector", Path(__file__).with_name(filename))
 
@@ -111,7 +112,7 @@ def main():
             return driver._run_one(arguments, scenario, run, index, out)
         root = Path(out) / run.get("name", f"run{index}")
         size = tuple(map(int, (arguments.size or run.get("size") or scenario.get("size") or "960x540").split("x")))
-        peers = [spread.Peer(peer["name"], os="windows" if peer == definitions[0] else "any", size=size,
+        peers = [spread.Peer(peer["name"], os=options.host_os if peer == definitions[0] else "any", size=size,
                              timeout=run.get("timeout_s") or scenario.get("timeout_s") or 300) for peer in definitions]
 
         def drive(case):
