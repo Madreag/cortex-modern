@@ -66,6 +66,10 @@ Match.parameters["label"] may specify the lead's exact native holder label.
 Match.parameters["runner_wait"] or --runner-wait may specify that holder's
 wait in seconds. It updates only the existing local holder command, without
 an enclosing holder or a second slot. Engine/script timeouts remain unchanged.
+Before the native capacity claim, the same wait also covers the named local
+holder's FIFO line. Match.parameters["wait_for_holder"] / --wait-for-holder
+may name a holder the lead explicitly said to wait behind while it runs alone.
+Other markers, memory/CPU/engine limits and task refusals remain refusals.
 Peer.block_udp reserves only
 declared discovery ports on that peer's native machine for the case's lever.
 The default network is ICE. Match.parameters["network"]="direct" preserves
@@ -296,6 +300,7 @@ def add_arguments(parser):
     parser.add_argument("--pool-registry", type=Path, help="box facts for the lead's named peers")
     parser.add_argument("--runner-label", help="the lead's exact label for the native run holder")
     parser.add_argument("--runner-wait", type=float, help="the lead's wait in seconds for the existing local holder")
+    parser.add_argument("--wait-for-holder", help="exact holder label the lead explicitly authorized waiting behind")
     parser.add_argument("--peer-port", action="append", default=[], metavar="PEER=PORT", help="explicit peer match port (also supports a wrong-parameter detecting run)")
 
 
@@ -579,6 +584,39 @@ def launch_native(backend, box, claim, request, wait=0):
         backend.rpc = original
 
 
+def claim_named_peer(backend, box, needs, request, *, wait=0, wait_for_holder=None):
+    """Honor native work-slot FIFO on this named box; never choose or bypass."""
+    import math
+    wait = float(wait or 0)
+    if not math.isfinite(wait) or wait < 0:
+        raise ValueError("runner wait must be finite and nonnegative")
+    deadline = time.monotonic() + wait
+    holders = {wait_for_holder} if wait_for_holder else set()
+    announced = None
+    while True:
+        try:
+            return backend.rpc(box, "claim", dict(box=box, needs=needs.__dict__, request=request), timeout=30)
+        except RuntimeError as error:
+            text = str(error)
+            marker = "capacity refused: earlier work request is waiting: "
+            fifo = marker in text
+            if fifo:
+                holders.add(text.split(marker, 1)[1].splitlines()[0])
+            # A FIFO predecessor can then own the exclusive window. Only a
+            # known or expressly named predecessor is allowed to remain a wait.
+            owned_window = any(("; owner=" + label + " (") in text or
+                               ("; owner=" + label + ";") in text for label in holders)
+            waiting = box["kind"] == "local" and wait and (fifo or owned_window)
+            if not waiting:
+                raise
+            if time.monotonic() >= deadline:
+                raise SpreadRefusal(f"native holder wait expired after {wait:g}s: {text}") from error
+            if text != announced:
+                print(f"WAITING NAMED: {box['name']}; peer {needs.peer_id}; {text}", flush=True)
+                announced = text
+            time.sleep(min(2, max(0, deadline-time.monotonic())))
+
+
 class Case:
     def __init__(self, repo, out, peers, match, *, peer_boxes=None, dispatcher=None, registry=None, peer_ports=None):
         self.repo, self.out = Path(repo).resolve(), Path(out).resolve()
@@ -723,7 +761,9 @@ class Case:
                            out=str(self.control/peer.name/"results"), command=[], hang_guard=max(600, peer.timeout + 300))
             try:
                 state = backend.probe(box, read_only=True)
-                claim = backend.rpc(box, "claim", dict(box=box, needs=needs.__dict__, request=request), timeout=30)
+                wait = self.match.parameters.get("runner_wait", getattr(_options, "runner_wait", 0))
+                holder = self.match.parameters.get("wait_for_holder", getattr(_options, "wait_for_holder", None))
+                claim = claim_named_peer(backend, box, needs, request, wait=wait, wait_for_holder=holder)
             except Exception as error:
                 raise self.refuse(peer.name, box["name"], str(error)) from error
             claim.update(control=backend.control(box), started=time.time(), needs=needs.__dict__)

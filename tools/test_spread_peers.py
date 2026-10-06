@@ -16,6 +16,27 @@ from test_peer_run_guards import PeerRunGuardTests
 
 
 class ContractTests(unittest.TestCase):
+    def test_named_fifo_wait_covers_its_predecessor_window_on_the_same_box(self):
+        box = dict(name='EROL-PC', kind='local')
+        before = RuntimeError('capacity refused: earlier work request is waiting: restore')
+        held = RuntimeError('capacity refused: box launch refused: own-marker; owner=restore (pid=7, machine=EROL-PC); since now')
+        backend = SimpleNamespace(rpc=unittest.mock.Mock(side_effect=[before, held, dict(token='owned')]))
+        with patch.object(spread.time, 'sleep'):
+            claim = spread.claim_named_peer(backend, box, SimpleNamespace(peer_id='host'), {}, wait=1800)
+        self.assertEqual(claim, dict(token='owned'))
+        self.assertEqual([call.args[0] for call in backend.rpc.call_args_list], [box, box, box])
+
+    def test_named_wait_never_retries_a_floor_or_unknown_marker_refusal(self):
+        for reason in ('capacity refused: free memory 11 GB is below floor 12 GB',
+                       'capacity refused: box launch refused: other-marker; owner=other (pid=9); since now'):
+            backend = SimpleNamespace(rpc=unittest.mock.Mock(side_effect=RuntimeError(reason)))
+            with self.subTest(reason=reason), patch.object(spread.time, 'sleep') as pause:
+                with self.assertRaisesRegex(RuntimeError, 'capacity refused'):
+                    spread.claim_named_peer(backend, dict(name='EROL-PC', kind='local'),
+                                            SimpleNamespace(peer_id='host'), {}, wait=1800, wait_for_holder='restore')
+                pause.assert_not_called()
+                self.assertEqual(backend.rpc.call_count, 1)
+
     def test_native_load_exit_preserves_peer_box_and_exact_reason(self):
         class LoadExit(SystemExit):
             def __str__(self):

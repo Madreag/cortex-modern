@@ -43,14 +43,15 @@ def main():
                 peer["record"].update(topology="spread", box=peer["box"])
             return result
         result = run_case(options.repo, root, peers, Match(options.port, options.port + 9,
-                          parameters={'label': args.runner_label, 'runner_wait': args.runner_wait}), drive=drive,
+                          parameters={'label': args.runner_label, 'runner_wait': args.runner_wait,
+                                      'wait_for_holder': args.wait_for_holder}), drive=drive,
                           peer_boxes=args.peer_boxes, dispatcher=args.pool_dispatcher, registry=args.pool_registry)
         return result["driver_result"]
     video.run_one = spread_run
     sys.argv = [str(Path(video.__file__)), "--repo", str(args.repo), "--out", str(args.out), "--scenario", "mp-host-join",
                 "--port", str(args.port), "--port-block", args.port_block, "--scratch-limit-bytes", str(3 << 30)]
     sys.argv += ['--peer-boxes', args.peer_boxes]
-    for option in ('pool_dispatcher', 'pool_registry', 'runner_label', 'runner_wait'):
+    for option in ('pool_dispatcher', 'pool_registry', 'runner_label', 'runner_wait', 'wait_for_holder'):
         if getattr(args, option):
             sys.argv += ['--' + option.replace('_', '-'), str(getattr(args, option))]
     for peer_port in args.peer_port:
