@@ -116,7 +116,6 @@ namespace RTE {
 		for (const auto& seat: state.at("roster_host")) if (seat.at(0) == RosterIdOf(stableSeat)) undo["roster_host"] = seat;
 		if (!undo.contains("seat") || !undo.contains("registry") || !undo.contains("roster_host")) return false;
 		auto encoded = json::to_cbor(undo);
-		if (bytes.size() + encoded.size() + 16 > 32 * 1024) return false;
 		m_SeatRemovalUndo.push_back(std::move(encoded));
 		NoteStateChanged();
 		return true;
@@ -378,6 +377,7 @@ namespace RTE {
 			registry = std::move(nextRegistry);
 			next.m_Registry = &registry;
 			next.m_DropOwnershipSource = m_DropOwnershipSource;
+			next.m_MigrationCapacityCheck = m_MigrationCapacityCheck;
 			next.m_DropOwnershipContext = m_DropOwnershipContext;
 			next.m_SeatSimIdentitySource = m_SeatSimIdentitySource;
 			next.m_SeatSimIdentityContext = m_SeatSimIdentityContext;
@@ -1744,35 +1744,62 @@ namespace RTE {
 			return NetKickBanResult::ActionUnavailable;
 		}
 		const bool retainRemoval = m_LiveMatch && round != 0;
-		if (retainRemoval && !RememberSeatRemoval(seat->seat.stableSeat, boundaryFrame)) return NetKickBanResult::ActionUnavailable;
-		if (action != NetParticipantRemovalAction::Kick) {
-			const NetHostBanScope scope = action == NetParticipantRemovalAction::BanUntilRemoved ? NetHostBanScope::UntilRemoved : NetHostBanScope::Session;
-			std::string persistError;
-			NoteStateChanged();
-			if (!m_BanStore->Ban(issued.participantId, scope, seat->holderName, "host ban", m_HostSessionId, unixNowMs, &persistError)) {
-				if (retainRemoval) m_SeatRemovalUndo.pop_back();
-				return NetKickBanResult::PersistenceFailed;
-			}
-		}
+		if (!m_Registry) return NetKickBanResult::ActionUnavailable;
+		NetSeatAuthRegistry nextRegistry = *m_Registry;
+		NetReconnectHost next = *this;
+		next.m_Registry = &nextRegistry;
+		SeatState* nextSeat = next.FindSeat(selection.stableSeat);
+		if (retainRemoval && !next.RememberSeatRemoval(selection.stableSeat, boundaryFrame)) return NetKickBanResult::ActionUnavailable;
+		const std::string alias = seat->holderName;
 		// A kick opens the seat for anyone to take - including the player it just removed. Only the
 		// ban list above holds an identity out of a rejoin; m_RemovedParticipants stays for
 		// pre-fix migration state that still carries one.
 		if (issued.connection != c_InvalidNetPeerId) {
-			m_Admission.DropConnection(issued.connection);
+			next.m_Admission.DropConnection(issued.connection);
 		}
-		CancelHolderTransactions(seat->seat.stableSeat, nowMs);
+		next.CancelHolderTransactions(selection.stableSeat, nowMs);
 		const NetRosterEventKind removedBy = action == NetParticipantRemovalAction::Kick ? NetRosterEventKind::Kicked : NetRosterEventKind::Banned;
-		if (m_Roster.stage != NetRosterStage::Lobby || IsHolderAway(*seat)) {
+		if (next.m_Roster.stage != NetRosterStage::Lobby || next.IsHolderAway(*nextSeat)) {
 			// From the first start on the seat keeps its number and the AI plays it, closed to its former player and open to an applicant.
-			CloseSeatWithoutHold(*seat, removedBy);
+			next.CloseSeatWithoutHold(*nextSeat, removedBy);
 		} else {
 			// Before the first start a removal frees the seat for a newcomer.
-			ReleaseSeat(*seat, removedBy);
+			next.ReleaseSeat(*nextSeat, removedBy);
 		}
-		m_LastRemovalTx = issued.notice.txId;
-		m_HasRemovalTx = true;
-		m_LastRemovedConnection = issued.connection;
-		++m_Stats.seatsRemoved;
+		const NetHostBanScope scope = action == NetParticipantRemovalAction::BanUntilRemoved ? NetHostBanScope::UntilRemoved : NetHostBanScope::Session;
+		auto proposed = next.ExportMigrationState();
+		if (action != NetParticipantRemovalAction::Kick) {
+			// Reserve the ban's encoded row before its persistent write can change the live policy.
+			auto bans = m_BanStore->List();
+			const auto existing = std::find_if(bans.begin(), bans.end(), [&](const auto& ban) { return ban.identity == issued.participantId; });
+			if (existing == bans.end()) bans.push_back({issued.participantId, scope, unixNowMs, m_HostSessionId, alias, "host ban"});
+			else if (scope == NetHostBanScope::UntilRemoved && existing->scope != NetHostBanScope::UntilRemoved) {
+				existing->scope = scope; existing->displayAlias = alias; existing->reason = "host ban";
+			}
+			auto state = nlohmann::json::from_cbor(proposed);
+			state["bans"] = nlohmann::json::array();
+			for (const auto& ban: bans) if (ban.scope == NetHostBanScope::UntilRemoved || ban.sessionId == m_HostSessionId)
+				state["bans"].push_back({ban.identity, static_cast<uint8_t>(ban.scope), ban.createdUnixMs, ban.displayAlias, ban.reason});
+			proposed = nlohmann::json::to_cbor(state);
+		}
+		if (proposed.empty() || proposed.size() > 32 * 1024) issued.refusal = "Removal refused: the encoded admission capsule exceeds 32 KiB.";
+		else if (m_MigrationCapacityCheck && !m_MigrationCapacityCheck(proposed, issued.refusal) && issued.refusal.empty())
+			issued.refusal = "Removal refused: the encoded migration capsule has no remaining capacity.";
+		if (!issued.refusal.empty()) {
+			DiagnosticLine() << "[net-reconnect] " << issued.refusal << std::endl;
+			return NetKickBanResult::ActionUnavailable;
+		}
+		if (action != NetParticipantRemovalAction::Kick) {
+			std::string persistError;
+			if (!m_BanStore->Ban(issued.participantId, scope, alias, "host ban", m_HostSessionId, unixNowMs, &persistError)) return NetKickBanResult::PersistenceFailed;
+		}
+		next.m_LastRemovalTx = issued.notice.txId;
+		next.m_HasRemovalTx = true;
+		next.m_LastRemovedConnection = issued.connection;
+		++next.m_Stats.seatsRemoved;
+		*m_Registry = std::move(nextRegistry);
+		next.m_Registry = m_Registry;
+		*this = std::move(next);
 		return NetKickBanResult::Ok;
 	}
 

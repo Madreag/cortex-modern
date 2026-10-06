@@ -1190,6 +1190,8 @@ namespace RTE {
 			                                                                                                     : m_Transport.get(); }
 		bool SealMigrationCapsule(uint8_t peerId, const NetHash32& configHash, std::vector<uint8_t>& sealed);
 		bool SealMigrationCapsuleLocked(uint8_t peerId, const NetHash32& configHash, std::vector<uint8_t>& sealed);
+		std::vector<uint8_t> BuildMigrationPlaintextLocked(const NetHash32& configHash, const std::vector<uint8_t>& admission) const;
+		void SetAdmissionCapacityCheckLocked();
 		bool OpenMigrationCapsule(const NetLobbyMigration& capsule);
 		bool OpenMigrationCapsuleLocked(const NetLobbyMigration& capsule);
 		void PumpHostMigration();

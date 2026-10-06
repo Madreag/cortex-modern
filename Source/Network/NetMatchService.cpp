@@ -7347,6 +7347,7 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::SealMigrationCapsuleLocked(uint8_t peerId, const NetHash32& configHash, std::vector<uint8_t>& sealed) {
+		SetAdmissionCapacityCheckLocked();
 		NoteAdmissionReleasesLocked();
 		if (!g_SettingsMan.GetSessionDirectoryUrl().empty() && !m_DirectoryRegistered)
 			return false;
@@ -7368,6 +7369,16 @@ static std::string ResyncSaveName() {
 		const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& entry) { return entry.lockstepPeerId == peerId; });
 		if (seat == seats.end())
 			return false;
+		const auto admission = m_ReconnectHost.ExportMigrationState();
+		if (admission.empty() || admission.size() > 32 * 1024)
+			return false;
+		const auto plaintext = BuildMigrationPlaintextLocked(configHash, admission);
+		std::vector<uint8_t> context(configHash.begin(), configHash.end());
+		context.push_back(peerId);
+		return m_SeatAuth.SealForSeat(seat->stableSeat, context, plaintext, sealed);
+	}
+
+	std::vector<uint8_t> NetMatchService::BuildMigrationPlaintextLocked(const NetHash32& configHash, const std::vector<uint8_t>& admission) const {
 		NetDirectoryRegisterRequest row = m_DirectoryRow;
 		row.matchConfigHash = NetIdentity::HashHex(configHash);
 		const uint8_t authority = m_ChatSession ? static_cast<uint8_t>(m_ChatSession->GetLocalPeerId() + 1) : m_LocalPeerId;
@@ -7378,13 +7389,16 @@ static std::string ResyncSaveName() {
 		std::sort(members.begin(), members.end());
 		// A seat can have two live links at once - its leaver's, still up at its menu, and its substitute's - but it is one member.
 		members.erase(std::unique(members.begin(), members.end()), members.end());
-		const auto admission = m_ReconnectHost.ExportMigrationState();
-		if (admission.empty())
+		return nlohmann::json::to_cbor(nlohmann::json{{"version", 1}, {"key", m_MigrationKey}, {"admission", admission}, {"directory_row", NetDirectoryCodec::EncodeRegisterRequest(row)}, {"directory_session", m_DirectorySessionId}, {"directory_token", m_DirectoryToken}, {"authority", authority}, {"members", members}, {"generation", m_MigrationGeneration}, {"autosave_match_id", m_AutosaveMatchId}, {"autosave_round", m_AutosaveIdentity.roundId}, {"autosave_interval", m_AutosaveIdentity.intervalSeconds}});
+	}
+
+	void NetMatchService::SetAdmissionCapacityCheckLocked() {
+		m_ReconnectHost.SetMigrationCapacityCheck([this](const std::vector<uint8_t>& admission, std::string& refusal) {
+			const NetHash32 hash = m_Coordinator ? m_Coordinator->GetRoundConfigHash() : NetHash32{};
+			if (BuildMigrationPlaintextLocked(hash, admission).size() <= 48 * 1024) return true;
+			refusal = "Removal refused: the encoded sealed migration capsule exceeds 48 KiB.";
 			return false;
-		const auto plaintext = nlohmann::json::to_cbor(nlohmann::json{{"version", 1}, {"key", m_MigrationKey}, {"admission", admission}, {"directory_row", NetDirectoryCodec::EncodeRegisterRequest(row)}, {"directory_session", m_DirectorySessionId}, {"directory_token", m_DirectoryToken}, {"authority", authority}, {"members", members}, {"generation", m_MigrationGeneration}, {"autosave_match_id", m_AutosaveMatchId}, {"autosave_round", m_AutosaveIdentity.roundId}, {"autosave_interval", m_AutosaveIdentity.intervalSeconds}});
-		std::vector<uint8_t> context(configHash.begin(), configHash.end());
-		context.push_back(peerId);
-		return m_SeatAuth.SealForSeat(seat->stableSeat, context, plaintext, sealed);
+		});
 	}
 
 	NetResyncState NetMatchService::BuildResumeState(const NetMatchConfig& config, uint64_t savedTick, uint64_t sourceRound, const std::string& matchId, const AutosaveSideState& sideState) {
@@ -10677,6 +10691,7 @@ static std::string ResyncSaveName() {
 	}
 
 	NetKickBanResult NetMatchService::ApplyRemovalLocked(const NetModerationSelection& selection, NetParticipantRemovalAction action, NetSession& session) {
+		SetAdmissionCapacityCheckLocked();
 		const uint64_t nowMs = AdmissionNowMs();
 		const uint64_t sessionId = session.GetSessionId();
 		// Between rounds the coordinator is gone and both peers still hold the round they played, so
@@ -10685,6 +10700,7 @@ static std::string ResyncSaveName() {
 		const uint64_t boundary = m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0;
 		m_LastKickBanResult = m_ReconnectHost.RemoveParticipant(selection, action, nowMs, UnixNowMs(nullptr), sessionId, round, boundary, m_LastRemovalIssue);
 		if (m_LastKickBanResult != NetKickBanResult::Ok) {
+			if (!m_LastRemovalIssue.refusal.empty()) m_ErrorText = m_LastRemovalIssue.refusal;
 			return m_LastKickBanResult;
 		}
 		session.BroadcastControl(m_LastRemovalIssue.notice);

@@ -11,6 +11,7 @@
 #include "NetTransport.h"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <set>
 #include <string>
@@ -157,6 +158,7 @@ namespace RTE {
 		NetH4Identity identity;
 		NetAuthBytes32 participantId{};
 		bool hasParticipantId = false;
+		std::string refusal;
 	};
 
 	/// A seat that just became this connection's. The session turns it into a ready peer so the
@@ -450,6 +452,7 @@ namespace RTE {
 		/// removed; the seat was never given away, so there is nothing to take back.
 		NetH4ModerationResult CancelSubstitution(uint16_t stableSeat, uint64_t nowMs);
 		void SetBanStore(NetHostBanStore* store) { m_BanStore = store; ++m_StateRevision; }
+		void SetMigrationCapacityCheck(std::function<bool(const std::vector<uint8_t>&, std::string&)> check) { m_MigrationCapacityCheck = std::move(check); }
 		/// Rises with every change ExportMigrationState would render, so a caller can tell a plane that
 		/// moved from one that did not without paying for the export itself.
 		uint64_t GetStateRevision() const { return m_StateRevision; }
@@ -735,6 +738,7 @@ namespace RTE {
 		NetReconnectLedger m_Ledger;
 		std::vector<SeatState> m_Seats;
 		std::vector<std::vector<uint8_t>> m_SeatRemovalUndo;
+		std::function<bool(const std::vector<uint8_t>&, std::string&)> m_MigrationCapacityCheck;
 		bool RememberSeatRemoval(uint16_t stableSeat, uint64_t frame);
 		NetSeatRoster m_Roster; //!< Whether each seat's holder is away, why and since when; changed only through ApplyRosterEvent.
 		uint64_t (*m_UnixClock)(void*) = nullptr;

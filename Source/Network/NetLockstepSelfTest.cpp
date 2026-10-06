@@ -25896,6 +25896,7 @@ namespace {
 				std::vector<uint8_t> before;
 				if (!service.SealMigrationCapsule(2, round.peers[0].GetRoundConfigHash(), before)) break;
 				for (const auto& seat: service.m_ReconnectHost.GetModerationView()) if (seat.lockstepPeerId == 4) selected = NetSelectModerationSeat(seat);
+				const auto snapshot = service.m_ReconnectHost.ExportMigrationState();
 				const auto result = service.m_ReconnectHost.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, admission.nowMs, admission.wallMs,
 				    round.match.sessionId, static_cast<uint32_t>(round.peers[0].GetRoundId()), 100000, issue);
 				std::vector<uint8_t> after;
@@ -25904,6 +25905,7 @@ namespace {
 					return done("a permitted high-byte undo history exceeds the encoded capsule cap: inner=" + std::to_string(retained.size()) + " prior_undo=" + std::to_string(count));
 				if (result == NetKickBanResult::ActionUnavailable) {
 					refused = true;
+					if (issue.refusal.find("encoded") == std::string::npos || retained != snapshot) return done("capacity refusal changes admission state or has no named encoded-capacity reason");
 					if (!service.m_SeatAuth.MatchesActiveCredential(admission.clients[2].GetRecord().stableSeat, admission.clients[2].GetRecord().holderGeneration, admission.clients[2].GetRecord().credential)) return done("capacity refusal revokes the retained credential");
 					if (!service.SealMigrationCapsule(2, round.peers[0].GetRoundConfigHash(), after)) return done("capacity refusal leaves an unsealable capsule");
 				}
@@ -25932,7 +25934,7 @@ namespace {
 					if (round.peers[index].GetResumeFrame() <= activation) return done(std::string(action) + " leaves the round blocked at the revoked activation");
 					if (atHorizon) {
 						if (!round.committed[index].contains(activation) || round.peers[index].SeatPlaysAtFrame(4, activation + 1) ||
-						    !round.peers[index].PeerLeaveFrames().contains(4) || round.peers[index].PeerLeaveFrames().at(4) != activation + 1)
+						    !round.peers[index].GetPeerLeaveFrames().contains(4) || round.peers[index].GetPeerLeaveFrames().at(4) != activation + 1)
 							return done(std::string(action) + " does not evict the committed admission before its first controllable input");
 					} else if (round.peers[index].SeatPlaysAtFrame(4, activation) || round.peers[index].ReclaimTransactions().contains(4)) return done(std::string(action) + " installs the revoked newcomer at E=" + std::to_string(activation));
 					for (const auto& [tick, ready]: round.committed[index]) for (const auto* commands: {&ready.localCommands, &ready.remoteCommands}) for (const auto& command: *commands)
