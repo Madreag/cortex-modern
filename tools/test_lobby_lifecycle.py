@@ -148,7 +148,7 @@ def main():
         if match and not early_drop:
             names.append("replacement")
         execution = spread.prepare_case(options.repo, root,
-            [spread.Peer(name, share_ok=False, os="windows" if name == "host" else "any", reviewed=name == "host") for name in names],
+            [spread.Peer(name, share_ok=name != "host", os="windows" if name == "host" else "any", reviewed=name == "host") for name in names],
             spread.Match(options.port, parameters={"lane": "menus"}))
         host = menu_script("Host", True, players, options.port)
         if not early_drop:
