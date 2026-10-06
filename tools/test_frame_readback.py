@@ -10,6 +10,8 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import signal
+import sys
 
 from PIL import Image
 
@@ -36,7 +38,8 @@ def run_case(repo: Path, out: Path, timeout: float = 90) -> dict:
                      (out / "run/stdout.log", out / "run/stderr.log") if path.is_file())
     aborted = out / "run/runtime/AbortScreen.png"
     defects = []
-    if launched.get("exit_code") != 3 or launched.get("timed_out"):
+    expected_exit = 3 if sys.platform == "win32" else -signal.SIGABRT
+    if launched.get("exit_code") != expected_exit or launched.get("timed_out"):
         defects.append(f"abort exit {launched.get('exit_code')}, timeout={launched.get('timed_out')}")
     if "deliberate frame readback probe" not in logs or "because:" not in logs:
         defects.append("original abort reason absent")

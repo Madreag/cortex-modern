@@ -947,6 +947,13 @@ def check_review(results, scratch):
               flagged["probe"] == "fail" and "continued like Ignore" in flagged["finding"]["reason"]
               and flagged["assert_dialogs"][0]["peer"] == "host", str(flagged.get("assert_dialogs")))
     (scratch / "host/stdout.log").unlink()
+    (scratch / "host/stderr.log").write_text(
+        "RTE Assert (headless, continued like Ignore): Assertion in file 'Y.cpp'\n", encoding="utf-8")
+    fired = driver.review(scenario, capture, out)
+    flagged = next(item for item in fired["checklist"] if item["id"] == "no-assert-dialogs")
+    ok &= row(results, "review/assert-dialog-in-stderr-fails",
+              flagged["probe"] == "fail" and flagged["assert_dialogs"][0]["log"].endswith("stderr.log"))
+    (scratch / "host/stderr.log").unlink()
     document = driver.review(scenario, capture, out)
     ok &= row(results, "review/verdict-is-not-a-pass", document["verdict"] == "agent-review-required")
     ok &= row(results, "review/no-mp4-is-not-video-evidence", all(item["frames"] is None for item in document["checklist"]))

@@ -1641,13 +1641,14 @@ def review(scenario, capture, out):
     # run continues past an assert the way a player's Ignore does, so the line it logged is the evidence.
     dialogs = []
     for peer in capture["peers"]:
-        log = Path(peer["root"]) / "stdout.log"
-        text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
-        dialogs += [{"peer": peer["peer"], "line": line.strip(), "log": str(log)}
-                    for line in text.splitlines() if "RTE Assert (headless" in line]
+        for name in ("stdout.log", "stderr.log"):
+            log = Path(peer["root"]) / name
+            text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+            dialogs += [{"peer": peer["peer"], "line": line.strip(), "log": str(log)}
+                        for line in text.splitlines() if "RTE Assert (headless" in line]
     items.append({"id": "no-assert-dialogs", "run": capture["name"], "peer": "all", "screen": "any",
                   "what": "No peer had to answer an assert dialog: a player would have seen one for each line below.",
-                  "assert": "No 'RTE Assert (headless' line in any peer's stdout.",
+                  "assert": "No 'RTE Assert (headless' line in any peer's stdout or stderr.",
                   "frames": None, "capture_frames": None, "video_seconds": None, "video": None,
                   "contact_sheet": None, "state": "checked", "probe": "fail" if dialogs else "pass",
                   "assert_dialogs": dialogs,
