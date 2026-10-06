@@ -51,7 +51,7 @@ def plant_bundle_secrets(run) -> dict:
         "NetworkInputDelayFrames": "0",
     }
     for key, value in planted.items():
-        written = "\n\t\t" + value if key == "NetworkTurnPass" else value
+        written = value + "\n\t\t//" + value if key == "NetworkTurnPass" else value
         settings, count = re.subn(rf"(?m)^([ \t]*{key}[ \t]*=[ \t]*)[^\r\n]*",
                                   lambda match, value=written: match[1] + value, settings)
         if count == 0:
