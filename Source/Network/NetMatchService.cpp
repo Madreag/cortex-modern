@@ -9444,6 +9444,10 @@ static std::string ResyncSaveName() {
 		// ever built there, so reading it here is safe.
 		{
 			json directoryReport = json::parse(m_Directory.BuildReportJson());
+			directoryReport["identity_pending"] = m_IdentityPending;
+			directoryReport["retracted"] = m_DirectoryRetracted;
+			directoryReport["this_network_only"] = m_HostThisNetworkOnly;
+			directoryReport["last_update_ms"] = m_LastUpdateMs;
 			if (s_PortMapRequested) directoryReport["observed_ip"] = m_Directory.GetObservedIp();
 			report["directory"] = std::move(directoryReport);
 		}
