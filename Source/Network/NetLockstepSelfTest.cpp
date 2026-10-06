@@ -13,6 +13,7 @@
 #include "NetProtocol.h"
 #include "NetIdentity.h"
 #include "NetSession.h"
+#include "NetParticipantCrypto.h"
 #include "NetResyncState.h"
 #include "NetReconnectLedger.h"
 #include "NetReconnectSession.h"
@@ -25812,6 +25813,249 @@ namespace {
 			return done("");
 		}
 
+		static bool LeaverWalksTwoSuccessors(std::string* error) {
+			const auto done = [&](const std::string& why) { return ReportReleasedClaimsRow("ordinary_rejoin_walks_two_successions", why, error); };
+			ReleasePathRound round;
+			if (!round.Start(47430) || !round.HoldFourth()) return done(round.failure);
+			HostReturnAdmission admission;
+			admission.wallMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+			if (!admission.Start(round.match, &round.failure)) return done(round.failure);
+			TicketPath path("Userdata/host-ticket-return/two-successions-leaver.ticket");
+			auto& service = g_NetMatchService;
+			{
+				Borrow borrowed(service, round.peers[3]);
+				if (!Install(service, round, admission, 4, &round.failure)) return done(round.failure);
+				auto ticket = admission.clients[2].GetRecord(); ticket.hostAddress = "loopback:47430"; ticket.issuedAtUnixMs = admission.wallMs;
+				service.m_TicketStore.SetPath(NetMatchService::s_TicketStorePath);
+				if (!service.m_TicketStore.Store(ticket, &round.failure)) return done(round.failure);
+				service.LeaveMatch("Left the match");
+			}
+			Reset(); round.drainThrough = 29;
+			for (int pass = 0; pass < 400 && round.peers[2].GetResumeFrame() != 30; ++pass) round.Pump();
+			if (!round.Migrate()) return done("first succession failed: " + round.failure);
+			round.alive[1] = false;
+			auto firstSuccessor = round.peers[1].TakeMigrationTransport();
+			if (!firstSuccessor) return done("the first successor has no transport");
+			firstSuccessor->Stop();
+			for (int pass = 0; pass < 4000 && (round.peers[2].GetHostPeerId() != 3 || round.peers[2].IsMigrating()); ++pass) round.Pump();
+			if (!round.peers[2].IsRunning() || round.peers[2].GetHostPeerId() != 3) return done("the second successor did not carry the round");
+			NetH4TicketRecord retained;
+			service.m_TicketStore.SetPath(NetMatchService::s_TicketStorePath);
+			if (service.m_TicketStore.Load(admission.wallMs, retained, &round.failure) != NetH4TicketLoadResult::Loaded) return done("the client leaver lost its ticket");
+			std::string startError;
+			(void)service.BeginTicketRejoin(&startError);
+			std::deque<NetMatchServiceRequest> routes;
+			{ std::lock_guard<std::mutex> lock(service.m_Mutex); routes = service.m_HeldRejoinRoutes; }
+			service.Destroy(); Reset();
+			const auto elected = std::find_if(routes.begin(), routes.end(), [](const auto& route) { return route.address == "loopback" && route.port == 47433; });
+			if (elected == routes.end()) return done("ordinary Rejoin retains only " + retained.hostAddress + "; it has no route to the second successor at loopback:47433");
+			ReleasePathClaimView view;
+			if (!view.Create("client leaver's original unit", round.peers[2], 3, 4, 4)) return done("the client leaver's unit did not create");
+			view.handoff = 1; view.claimant = 4;
+			NetReconnectHost intermediate; NetSeatAuthRegistry registry;
+			auto config = round.peers[2].GetConfig().matchConfig; config.hostPeerId = 2;
+			if (!intermediate.ImportMigrationState(admission.host.ExportMigrationState(), registry, config, 2, {}, admission.nowMs)) return done("the first successor did not retain admission");
+			intermediate.RecordMigrationDepartures(30); config.hostPeerId = 3;
+			admission.successor.SetUnixClock(&HostReturnAdmission::WallClock, &admission);
+			if (!admission.successor.ImportMigrationState(intermediate.ExportMigrationState(), admission.successorRegistry, config, 3, {}, admission.nowMs)) return done("the second successor did not retain admission");
+			admission.successor.RecordMigrationDepartures(30);
+			if (!ReturnAndDrive(round, admission.successor, admission, retained, 4, elected->port, view, &round.failure)) return done(round.failure);
+			return done("");
+		}
+
+		static bool EncodedRemovalFitsBothCapsules(std::string* error) {
+			const auto done = [&](const std::string& why) { return ReportReleasedClaimsRow("encoded_removal_fits_inner_and_outer_capsules", why, error); };
+			ReleasePathRound round;
+			if (!round.Start(47420) || !round.HoldFourth()) return done(round.failure);
+			HostReturnAdmission admission;
+			admission.wallMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+			if (!admission.Start(round.match, &round.failure)) return done(round.failure);
+			admission.host.NotifyDisconnect(3, 20);
+			auto& service = g_NetMatchService;
+			Borrow borrowed(service, round.peers[0]); TicketPath path("Userdata/host-ticket-return/capacity-host.ticket");
+			if (!Install(service, round, admission, 1, &round.failure)) return done(round.failure);
+			using json = nlohmann::json;
+			const auto initial = json::from_cbor(service.m_ReconnectHost.ExportMigrationState());
+			NetModerationSelection selected;
+			for (const auto& seat: service.m_ReconnectHost.GetModerationView()) if (seat.lockstepPeerId == 4) selected = NetSelectModerationSeat(seat);
+			NetParticipantRemovalIssue issue;
+			if (service.m_ReconnectHost.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, admission.nowMs, admission.wallMs,
+			    round.match.sessionId, static_cast<uint32_t>(round.peers[0].GetRoundId()), 100000, issue) != NetKickBanResult::Ok) return done("the seed removal did not reserve an undo record");
+			const auto seeded = json::from_cbor(service.m_ReconnectHost.ExportMigrationState());
+			if (seeded.at("seat_removal_undo").empty()) return done("the seed removal has no rollback record");
+			const auto undo = seeded.at("seat_removal_undo").at(0);
+			bool refused = false, crossed = false;
+			for (size_t count = 1; count < 40; ++count) {
+				auto state = initial; state["seat_removal_undo"] = json::array();
+				for (size_t index = 0; index < count; ++index) state["seat_removal_undo"].push_back(undo);
+				const auto bytes = json::to_cbor(state);
+				if (bytes.size() > 32 * 1024) break;
+				if (!service.m_ReconnectHost.ImportMigrationState(bytes, service.m_SeatAuth, round.match, 1, round.peers[0].RemoteTransports(), admission.nowMs)) return done("the legal high-byte history did not import");
+				std::vector<uint8_t> before;
+				if (!service.SealMigrationCapsule(2, round.peers[0].GetRoundConfigHash(), before)) break;
+				for (const auto& seat: service.m_ReconnectHost.GetModerationView()) if (seat.lockstepPeerId == 4) selected = NetSelectModerationSeat(seat);
+				const auto result = service.m_ReconnectHost.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, admission.nowMs, admission.wallMs,
+				    round.match.sessionId, static_cast<uint32_t>(round.peers[0].GetRoundId()), 100000, issue);
+				std::vector<uint8_t> after;
+				const auto retained = service.m_ReconnectHost.ExportMigrationState();
+				if (result == NetKickBanResult::Ok && (retained.size() > 32 * 1024 || !service.SealMigrationCapsule(2, round.peers[0].GetRoundConfigHash(), after)))
+					return done("a permitted high-byte undo history exceeds the encoded capsule cap: inner=" + std::to_string(retained.size()) + " prior_undo=" + std::to_string(count));
+				if (result == NetKickBanResult::ActionUnavailable) {
+					refused = true;
+					if (!service.m_SeatAuth.MatchesActiveCredential(admission.clients[2].GetRecord().stableSeat, admission.clients[2].GetRecord().holderGeneration, admission.clients[2].GetRecord().credential)) return done("capacity refusal revokes the retained credential");
+					if (!service.SealMigrationCapsule(2, round.peers[0].GetRoundConfigHash(), after)) return done("capacity refusal leaves an unsealable capsule");
+				}
+				crossed |= retained.size() > bytes.size();
+			}
+			if (!refused || !crossed) return done("the high-byte detector did not reach the reservation boundary");
+			return done("");
+		}
+
+		static bool KickWithdrawsOpenedActivation(std::string* error) {
+			const auto done = [&](const std::string& why) { return ReportReleasedClaimsRow("kick_withdraws_an_opened_seats_activation", why, error); };
+			for (const char* action: {"host kick", "host ban"}) {
+				ReleasePathRound round;
+				if (!round.Start(47440) || !round.HoldFourth()) return done(round.failure);
+				round.peers[0].EvictRemovedPeer(4, "the host opens the place", round.now);
+				for (int pass = 0; pass < 80; ++pass) round.Pump();
+				LoopbackTransport newcomer;
+				if (!newcomer.Connect("loopback", 47440, &round.failure)) return done(round.failure);
+				const uint64_t activation = round.peers[0].GetResumeFrame() + 60;
+				round.peers[0].NoteAdmissionLink(4, 4, round.now);
+				if (!round.peers[0].SchedulePeerAdmission(4, 4, 2, activation, &round.failure)) return done("the opened place did not agree its activation: " + round.failure);
+				for (int pass = 0; pass < 4; ++pass) round.Pump();
+				round.peers[0].EvictRemovedPeer(4, action, round.now);
+				for (int pass = 0; pass < 200 && round.peers[2].GetResumeFrame() <= activation + 3; ++pass) round.Pump();
+				for (size_t index: {size_t{0}, size_t{1}, size_t{2}}) {
+					if (round.peers[index].GetResumeFrame() <= activation) return done(std::string(action) + " leaves the round blocked at the revoked activation");
+					if (round.peers[index].SeatPlaysAtFrame(4, activation) || round.peers[index].ReclaimTransactions().contains(4)) return done(std::string(action) + " installs the revoked newcomer at E=" + std::to_string(activation));
+					for (const auto& [tick, ready]: round.committed[index]) for (const auto* commands: {&ready.localCommands, &ready.remoteCommands}) for (const auto& command: *commands)
+						if (const auto* reclaim = std::get_if<NetGameSeatReclaim>(&command.payload); reclaim && reclaim->peerId == 4 && tick >= activation) return done("the withdrawn activation remains in the recording and tail");
+				}
+			}
+			return done("");
+		}
+
+		static bool RepeatedRemovalKeepsCapacity(std::string* error) {
+			const auto done = [&](const std::string& why) { return ReportReleasedClaimsRow("fifty_refills_keep_removal_capacity", why, error); };
+			ReleasePathRound round;
+			if (!round.Start(47420) || !round.HoldFourth()) return done(round.failure);
+			HostReturnAdmission admission;
+			admission.wallMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+			if (!admission.Start(round.match, &round.failure)) return done(round.failure);
+			auto& service = g_NetMatchService;
+			Borrow borrowed(service, round.peers[0]); TicketPath path("Userdata/host-ticket-return/refill-host.ticket");
+			if (!Install(service, round, admission, 1, &round.failure)) return done(round.failure);
+			for (size_t cycle = 0; cycle <= 50; ++cycle) {
+				for (int pass = 0; pass < 10; ++pass) round.Pump();
+				const uint64_t frame = round.peers[0].GetResumeFrame() - 1;
+				std::array<uint8_t, 32> hash{};
+				for (size_t index: {size_t{0}, size_t{1}, size_t{2}}) if (!round.peers[index].SubmitLocalChecksum(frame, hash, &round.failure)) return done(round.failure);
+				for (int pass = 0; pass < 3; ++pass) round.Pump();
+				service.NoteAdmissionReleasesLocked();
+				NetModerationSelection selected;
+				for (const auto& seat: service.m_ReconnectHost.GetModerationView()) if (seat.lockstepPeerId == 4) selected = NetSelectModerationSeat(seat);
+				NetParticipantRemovalIssue issue;
+				if (service.m_ReconnectHost.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, admission.nowMs, admission.wallMs, round.match.sessionId,
+				    static_cast<uint32_t>(round.peers[0].GetRoundId()), frame, issue) != NetKickBanResult::Ok) return done("undo history refuses removal after refill " + std::to_string(cycle));
+				service.m_ReconnectHost.NoteSeatRelease(4, frame);
+				if (cycle == 50) break;
+				NetReconnectTicketStore store; store.SetPath("Userdata/host-ticket-return/refill-" + std::to_string(cycle) + ".ticket");
+				NetReconnectClient applicant; applicant.Configure(&store, admission.identity, "Refill"); applicant.SetUnixClock(&HostReturnAdmission::WallClock, &admission);
+				admission.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+				const NetPeerId connection = 100 + cycle;
+				if (!applicant.BeginApplication(3, admission.nowMs, &round.failure) || !admission.Pump(service.m_ReconnectHost, {{connection, &applicant}}, &round.failure) ||
+				    service.m_ReconnectHost.SubstituteApplicant(3, connection, admission.nowMs) != NetH4ModerationResult::Ok ||
+				    !admission.Pump(service.m_ReconnectHost, {{connection, &applicant}}, &round.failure) || applicant.GetState() != NetH4ClientState::Joined) return done("refill " + std::to_string(cycle) + " did not commit: " + round.failure);
+			}
+			return done("");
+		}
+
+		static bool AuthenticatedAdmissionRaces(std::string* error) {
+			const auto done = [&](const std::string& why) { return ReportReleasedClaimsRow("authenticated_opened_seat_races_follow_the_hosts_click", why, error); };
+			ReleasePathRound round;
+			if (!round.Start(47440) || !round.HoldFourth()) return done(round.failure);
+			HostReturnAdmission admission;
+			if (!admission.Start(round.match, &round.failure)) return done(round.failure);
+			// The sessions authenticate every connection; no migration adoption creates a ready peer.
+			NetReconnectHost host; NetSeatAuthRegistry registry;
+			if (!registry.BeginHostedSession()) return done("the authenticated registry did not start");
+			host.Configure(&registry, round.match.sessionId, admission.identity); host.SetUnixClock(&HostReturnAdmission::WallClock, &admission);
+			auto seats = NetH4BuildSeatTable(round.match);
+			std::erase_if(seats, [](const auto& seat) { return !seat.local && seat.lockstepPeerId != 4; });
+			host.SetSeatTable(seats, round.match.mode);
+			NetIdentityManifest identity;
+			identity.gameVersion = admission.identity.gameVersion; identity.buildId = admission.identity.buildId;
+			identity.controllerFrameVersion = admission.identity.controllerFrameVersion; identity.controllerFrameEncodedSize = admission.identity.controllerFrameEncodedSize;
+			identity.deterministicConfigHash = admission.identity.deterministicConfigHash; identity.moduleManifestHash = admission.identity.moduleManifestHash;
+			identity.sessionRulesHash = admission.identity.sessionRulesHash; identity.sessionIdentityHash = admission.identity.sessionIdentityHash;
+			const auto config = [&](const std::string& name, uint64_t nonce) {
+				NetSessionConfig value; value.localIdentity = identity; value.displayName = name; value.port = 47454;
+				value.sessionId = round.match.sessionId; value.localNonce = nonce; value.maxPeers = 3; value.timeoutMs = 20000; return value;
+			};
+			LoopbackTransport hostWire; NetSession hostSession;
+			hostSession.SetReconnectHost(&host); hostSession.EnableParticipantProof(nullptr);
+			if (!hostSession.StartHost(hostWire, config("Host", 1), &round.failure)) return done(round.failure);
+			struct Applicant {
+				LoopbackTransport wire; NetSession session; NetReconnectClient client; NetReconnectTicketStore store; NetParticipantIdentityStore identity;
+			};
+			std::array<Applicant, 4> applicants;
+			std::vector<size_t> active;
+			const auto start = [&](size_t index, bool apply, const NetH4TicketRecord* ticket = nullptr, size_t identityIndex = SIZE_MAX) {
+				auto& player = applicants[index]; const auto prefix = "Userdata/host-ticket-return/auth-" + std::to_string(index);
+				player.store.SetPath(prefix + ".ticket");
+				if (ticket) { if (!player.store.Store(*ticket, &round.failure)) return false; } else (void)player.store.Clear();
+				player.identity.SetPath("Userdata/host-ticket-return/auth-" + std::to_string(identityIndex == SIZE_MAX ? index : identityIndex) + ".key");
+				if (!player.identity.LoadOrCreate(&round.failure)) return false;
+				player.client.Configure(&player.store, admission.identity, "Applicant " + std::to_string(index));
+				player.client.SetUnixClock(&HostReturnAdmission::WallClock, &admission); player.client.SetApplyForSeat(apply, 3);
+				player.session.SetReconnectClient(&player.client); player.session.EnableParticipantProof(&player.identity);
+				if (!player.session.StartClient(player.wire, "loopback", config("Applicant " + std::to_string(index), index + 100), &round.failure)) return false;
+				active.push_back(index); return true;
+			};
+			const auto pump = [&](int turns) {
+				for (int pass = 0; pass < turns; ++pass) {
+					hostSession.Tick(admission.nowMs);
+					for (size_t index: active) applicants[index].session.Tick(admission.nowMs);
+					hostWire.AdvanceTimeMs(10); for (size_t index: active) applicants[index].wire.AdvanceTimeMs(10);
+					admission.nowMs += 10;
+				}
+			};
+			if (!start(0, false)) return done(round.failure);
+			pump(200);
+			if (!applicants[0].session.IsReady() || applicants[0].client.GetAssignedPeerId() != 3) return done("authenticated HELLO/proof did not seat the original player: " + applicants[0].session.BuildReportJson(admission.nowMs));
+			NetParticipantId participant{};
+			if (!hostSession.GetPeerParticipantId(1, participant) || participant != applicants[0].identity.PublicId()) return done("HELLO did not bind the proved participant identity");
+			const auto original = applicants[0].client.GetRecord();
+			host.SetLiveMatch(true); host.NotifyDisconnect(1, round.peers[0].GetResumeFrame()); applicants[0].wire.Stop(); active.clear(); pump(10);
+			if (!start(1, true) || !start(2, true)) return done(round.failure);
+			pump(200);
+			if (host.GetApplicantCount() != 2) return done("the two authenticated applications did not compete for the held seat");
+			// A valid return commits before the host gives the seat away.
+			if (!start(3, false, &original, 0)) return done(round.failure);
+			pump(200);
+			if (!applicants[3].session.IsReady() || !registry.MatchesActiveCredential(3, applicants[3].client.GetRecord().holderGeneration, applicants[3].client.GetRecord().credential)) return done("the original player's valid ticket loses to an unapproved application");
+			host.NotifyDisconnect(4, round.peers[0].GetResumeFrame()); applicants[3].wire.Stop(); std::erase(active, size_t{3}); pump(10);
+			if (host.SubstituteApplicant(3, 2, admission.nowMs) != NetH4ModerationResult::Ok) return done("the host cannot choose the first authenticated applicant");
+			pump(100);
+			if (!applicants[1].session.IsReady() || applicants[2].client.GetState() == NetH4ClientState::Joined ||
+			    !registry.MatchesActiveCredential(3, applicants[1].client.GetRecord().holderGeneration, applicants[1].client.GetRecord().credential)) return done("the second newcomer overwrites the host's chosen owner");
+			NetModerationSelection selected;
+			for (const auto& seat: host.GetModerationView()) if (seat.lockstepPeerId == 4) selected = NetSelectModerationSeat(seat);
+			NetParticipantRemovalIssue issue;
+			if (host.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, admission.nowMs, admission.wallMs, round.match.sessionId,
+			    static_cast<uint32_t>(round.peers[0].GetRoundId()), round.peers[0].GetStats().nextFrame, issue) != NetKickBanResult::Ok) return done("the authenticated owner cannot be kicked");
+			round.peers[0].EvictRemovedPeer(4, "open the seat", round.now); for (int pass = 0; pass < 80; ++pass) round.Pump();
+			LoopbackTransport coorWire; if (!coorWire.Connect("loopback", 47440, &round.failure)) return done(round.failure);
+			const uint64_t activation = round.peers[0].GetResumeFrame() + 60;
+			round.peers[0].NoteAdmissionLink(4, 4, round.now);
+			if (!round.peers[0].SchedulePeerAdmission(4, 4, applicants[1].client.GetIncarnation(), activation, &round.failure)) return done(round.failure);
+			round.peers[0].EvictRemovedPeer(4, "host withdraws the authenticated newcomer", round.now);
+			for (int pass = 0; pass < 200 && round.peers[2].GetResumeFrame() <= activation; ++pass) round.Pump();
+			for (size_t index: {size_t{0}, size_t{1}, size_t{2}}) if (round.peers[index].SeatPlaysAtFrame(4, activation) || round.peers[index].ReclaimTransactions().contains(4)) return done("the authenticated host kick still installs the revoked owner at its agreed activation");
+			return done("");
+		}
+
 		static bool OpenedSeatJoinsThroughImage(std::string* error) {
 			const auto done = [&](const std::string& why) { return ReportReleasedClaimsRow("an_opened_seats_newcomer_plays_through_the_image", why, error); };
 			SuccessionReplayScope scope;
@@ -25995,6 +26239,16 @@ namespace {
 		passed &= SeatAdmissionServiceTest::LeaverFindsSuccessor(&error);
 		SeatAdmissionServiceTest::Reset();
 		passed &= SeatAdmissionServiceTest::OpenedSeatJoinsThroughImage(&error);
+		SeatAdmissionServiceTest::Reset();
+		passed &= SeatAdmissionServiceTest::EncodedRemovalFitsBothCapsules(&error);
+		SeatAdmissionServiceTest::Reset();
+		passed &= SeatAdmissionServiceTest::KickWithdrawsOpenedActivation(&error);
+		SeatAdmissionServiceTest::Reset();
+		passed &= SeatAdmissionServiceTest::RepeatedRemovalKeepsCapacity(&error);
+		SeatAdmissionServiceTest::Reset();
+		passed &= SeatAdmissionServiceTest::LeaverWalksTwoSuccessors(&error);
+		SeatAdmissionServiceTest::Reset();
+		passed &= SeatAdmissionServiceTest::AuthenticatedAdmissionRaces(&error);
 		SeatAdmissionServiceTest::Reset();
 		std::cout << "[net-lockstep-seat-admission-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 		return passed ? 0 : 1;
