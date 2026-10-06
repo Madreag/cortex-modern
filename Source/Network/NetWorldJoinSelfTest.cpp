@@ -8427,6 +8427,9 @@ namespace RTE {
 		};
 		NetMatchService service;
 		service.m_IsHost = true;
+		// This loopback round owns no directory transport or settings-file dependencies.
+		// Keep the fixture local, just as its two transports are.
+		service.m_HostThisNetworkOnly = true;
 		service.m_MatchWasRunning = true;
 		service.m_State = NetMatchServiceState::Running;
 		LoopbackTransport hostOne, clientOne, hostTwo, clientTwo;
