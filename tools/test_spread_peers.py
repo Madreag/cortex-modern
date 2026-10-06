@@ -14,6 +14,26 @@ import spread_peers as spread
 
 
 class ContractTests(unittest.TestCase):
+    def test_launching_peer_releases_only_its_pending_ticket(self):
+        released = []
+        case = object.__new__(spread.Case)
+        case.pending = [(Path('host-ticket'), 'host'), (Path('seat-ticket'), 'seat')]
+        case.pending_peers = dict(host='host', seat='seat')
+        case.transport_module = SimpleNamespace(worker=SimpleNamespace(facts=SimpleNamespace(release_reservation=lambda *args:released.append(args))))
+        case.release_pending('host')
+        self.assertEqual(released, [(Path('host-ticket'), 'host')])
+        self.assertEqual(case.pending, [(Path('seat-ticket'), 'seat')])
+        case.release_pending()
+        self.assertEqual(released[-1], (Path('seat-ticket'), 'seat'))
+        self.assertEqual(case.pending, [])
+
+    def test_linux_host_with_loopback_hostname_uses_its_native_interface(self):
+        with patch.object(spread.sys, 'platform', 'linux'), patch.object(spread.shutil, 'which', return_value=None), \
+                patch.object(spread.socket, 'getaddrinfo', return_value=[(None, None, None, None, ('127.0.1.1', 0))]), \
+                patch.object(spread.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='192.168.50.128 127.0.0.1 ')) as read:
+            self.assertEqual(spread.native_address_probe(), '192.168.50.128')
+        self.assertEqual(read.call_args.args[0], ['hostname', '-I'])
+
     def place_fake(self, peers, pins=None):
         case = object.__new__(spread.Case)
         case.registry, case.out, case.control = Path('fake.json'), Path('fake'), Path('fake/control')
@@ -230,7 +250,7 @@ class ContractTests(unittest.TestCase):
             case = SimpleNamespace(out=root, peer_ports={}, names=['host', 'client'], match=spread.Match(51580),
                                    directory=None, network='direct', host_address='100.64.1.2',
                                    members={'client': ({'name': 'SEAT', 'os': 'windows'}, claim, {}, backend)},
-                                   peers=[spread.Peer('client')], signals=lambda: [], release_pending=lambda: None,
+                                   peers=[spread.Peer('client')], signals=lambda: [], release_pending=lambda *args: None,
                                    transport_module=SimpleNamespace(Transport=SimpleNamespace(native_claim=lambda value: value)))
             run = object.__new__(spread.Run)
             run.case, run.role, run.output_name = case, 'client', 'client'
@@ -262,7 +282,7 @@ class ContractTests(unittest.TestCase):
             run.argv = ['engine', '-headless', '-net-match-service-config', str(config)]
             run.env, run.expected, run.fixtures, run.timeout = {}, [], [], 30
             run.case = SimpleNamespace(out=root, members={'host':({'name':'HOST'},claim,{},backend)}, names=['host'], peer_ports={},
-                match=spread.Match(51580), directory=None, peers=[spread.Peer('host')], signals=lambda:[], release_pending=lambda:None,
+                match=spread.Match(51580), directory=None, peers=[spread.Peer('host')], signals=lambda:[], release_pending=lambda *args:None,
                 transport_module=SimpleNamespace(Transport=SimpleNamespace(native_claim=lambda value:value)))
             run.start()
             self.assertEqual(base64.b64decode(specs[0]['files']['launch-config.bin']), data)

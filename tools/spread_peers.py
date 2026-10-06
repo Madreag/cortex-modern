@@ -182,6 +182,13 @@ def native_address_probe():
                 if not address.is_loopback and not address.is_unspecified:
                     return str(address)
     addresses = {row[4][0] for row in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET)}
+    if sys.platform.startswith("linux"):
+        result = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            for value in result.stdout.split():
+                address = ipaddress.ip_address(value)
+                if address.version == 4:
+                    addresses.add(str(address))
     fitting = sorted(address for address in addresses if not ipaddress.ip_address(address).is_loopback and not ipaddress.ip_address(address).is_link_local)
     if not fitting:
         raise RuntimeError("native host has no routable address")
@@ -577,6 +584,8 @@ class Case:
             with self.transport_module.worker.mutex(self.pool.queue_root(self.registry)/".admission.lock", wait=60):
                 ticket = self.pool.write_ticket(self.registry, needs, request)
             self.pending.append((ticket, request["token"]))
+            self.pending_peers = getattr(self, "pending_peers", {})
+            self.pending_peers[request["token"]] = peer.name
             self.stack.callback(self.transport_module.worker.facts.release_reservation, ticket, request["token"])
             if peer.share_ok and not pin and share_target is None:
                 group = [item for item in ordered if item.share_ok and item.name not in self.members and
@@ -871,10 +880,14 @@ class Case:
                     cleanup.callback(backend.stop, box, claim)
             self.save()
 
-    def release_pending(self):
+    def release_pending(self, role=None):
+        remaining = []
         for ticket, token in self.pending:
-            self.transport_module.worker.facts.release_reservation(ticket, token)
-        self.pending.clear()
+            if role is None or getattr(self, "pending_peers", {}).get(token) == role:
+                self.transport_module.worker.facts.release_reservation(ticket, token)
+            else:
+                remaining.append((ticket, token))
+        self.pending[:] = remaining
 
     def __enter__(self):
         return self
@@ -992,7 +1005,7 @@ class Run:
         except Exception as error:
             raise self.case.refuse(self.role, box["name"], str(error)) from error
         self.started = True
-        self.case.release_pending()
+        self.case.release_pending(self.role)
         self.deadline = time.monotonic() + self.timeout + 180
         return self
 
@@ -1168,8 +1181,7 @@ def native_execute(spec_path, result_out):
     if spec["directory"]:
         settings = dict(SessionDirectoryUrl=f"127.0.0.1:{spec['signal_port']}", SessionDirectoryCertSha256=spec["directory"]["DIRECTORY_PIN"])
         if not spec["directory"].get("preserve_settings"):
-            settings.update(SessionDirectoryInstallKey="spread-" + role + "-install", NetworkIceEnable="1",
-                            NetworkConnectionMode="DirectOnly", NetworkHostRelayMode="Off", NetworkPortMapEnable="0")
+            settings.update(SessionDirectoryInstallKey="spread-" + role + "-install", NetworkIceEnable="1", NetworkPortMapEnable="0")
         seed_settings(run, settings)
     for flag in ("-record-video", "-feel-measure"):
         if flag in run.argv:
