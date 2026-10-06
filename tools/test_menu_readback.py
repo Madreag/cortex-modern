@@ -2504,7 +2504,8 @@ def run_case(options, case, root, failing=None):
             width, height, multiplier = size_parts(options.size)
             reviewed = "client" if case in ("host-draft-roundtrip", "sweep-advanced-client") else "host"
             peers = [spread.Peer(who, share_ok=False, os="windows" if who == reviewed or case == "net-host-left-early" else "any",
-                                 size=(int(width * multiplier), int(height * multiplier)), reviewed=who == reviewed) for who in texts]
+                                 size=(int(width * multiplier), int(height * multiplier)), reviewed=who == reviewed,
+                                 held=(case == "net-host-left-early" and who == "client")) for who in texts]
             parameters = {"lane": "menus"}
             if case == "host-draft-roundtrip":
                 # This case deliberately reads back Unlisted with traversal and relay Off.
