@@ -6407,7 +6407,7 @@ namespace RTE::CheckpointLua {
 			}
 			explicit DescriptorRootScope(lua_State* source, int originalTop, int roots, const TValue& callbacks) : state(source) {
 				if (!lua_checkstack(state, 32)) throw std::runtime_error("native descriptor roots exhausted the Lua stack");
-				seen.reserve(std::min<size_t>(G(state)->gc.total / 64, 262144));
+				seen.reserve(2048);
 				if (GCobj* last = gcref(G(state)->gc.mmudata)) {
 					GCobj* object = last;
 					do {
