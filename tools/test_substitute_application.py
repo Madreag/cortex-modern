@@ -12,6 +12,7 @@ from pathlib import Path
 import time
 
 from run_sim_test import make_run
+from test_menu_readback import spread, managed_case
 
 
 def peer_args(port, ticket, report, extra, players, ticks):
@@ -20,21 +21,29 @@ def peer_args(port, ticket, report, extra, players, ticks):
             "-net-match-report", report, *extra]
 
 
+@managed_case
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=47617)
+    if spread:
+        spread.add_arguments(parser)
     options = parser.parse_args()
+    if not spread:
+        parser.error("substitute application requires the shared spread executor")
+    options.spread = True
+    spread.configure(options)
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     players, ticks = 3, 2400
     trigger = root / "apply.trigger"
     runs = {}
+    execution = None
     result = {"pass": False, "checks": {}, "details": {}}
 
     def start(name, argv, timeout=420, env=None):
-        runs[name] = make_run(options.repo, argv, root / name, timeout, env=env).start()
+        runs[name] = execution.make_run(options.repo, argv, root / name, timeout, env=env).start()
         return runs[name]
 
     def wait_for(run, marker, seconds):
@@ -49,6 +58,10 @@ def main():
         raise RuntimeError(f"{run.out.name} did not reach {marker}")
 
     try:
+        execution = spread.prepare_case(options.repo, root,
+            [spread.Peer(name, os="windows", reviewed=name == "host")
+             for name in ("host", "departing", "stayer", "applicant")],
+            spread.Match(options.port, parameters={"lane": "menus", "network": "direct"}))
         # The host's own seats panel is the moderation view; it is pumped by the lockstep wait while
         # the dropped seat is held, which is exactly the window the applicant arrives in.
         signal = root / "applicant.signal.json"
@@ -129,6 +142,8 @@ def main():
     finally:
         for run in runs.values():
             run.close()
+        receipt = execution.result() if execution else spread.read_json(root / "spread-result.json", {})
+        result.update(topology="spread", peer_boxes=receipt.get("peer_boxes", {}), spread=receipt, proof=result["pass"])
         (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps({"pass": result["pass"], "error": result.get("error"),
                       "failed": [k for k, v in result["checks"].items() if not v], "out": str(root)}), flush=True)
