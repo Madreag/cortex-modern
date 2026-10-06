@@ -76,6 +76,11 @@ removed by this wait. An ownerless exclusive marker refuses by its full path.
 Match.parameters["wait_for_holder"] / --wait-for-holder remains compatible.
 Memory/engine limits and task refusals remain refusals. Waiting releases the
 capacity mutex and renews only this peer's own claim, before case timers start.
+The initial claim and final launch wait for their native capacity mutex for up
+to 180 seconds, bounded by the remaining positive runner-wait budget. An
+omitted/zero runner-wait retains the old 15-second mutex budget for old calls.
+Only an expired mutex wait refuses, naming its box, peer and lock path. The
+claim RPC has that mutex allowance in addition to its original probe budget.
 Transient CPU refusals re-probe that same named box every 30 seconds for up to
 600 seconds. Quiet peers also wait for an idle box and retain the strict CPU
 guard. The native launch check releases its capacity mutex between probes;
@@ -779,13 +784,46 @@ def claim_native_exclusive_marker(box, claim, marker, label, *, facts, renew):
         renew(claim)
 
 
+def capacity_lock_seconds(wait, remaining=None):
+    import math
+    wait = float(wait or 0)
+    if not math.isfinite(wait) or wait < 0:
+        raise ValueError('runner wait must be finite and nonnegative')
+    if not wait:
+        return 15.0  # preserve callers that do not request a holder wait
+    if remaining is not None:
+        remaining = float(remaining)
+        if not math.isfinite(remaining):
+            raise ValueError('remaining runner wait must be finite')
+        wait = min(wait, max(0, remaining))
+    return min(180.0, wait)
+
+
+@contextlib.contextmanager
+def named_capacity_mutex(path, *, mutex, box, peer, wait=0, remaining=None):
+    """Use the native capacity lock with the lead's bounded contention wait."""
+    budget = capacity_lock_seconds(wait, remaining)
+    stack = contextlib.ExitStack()
+    try:
+        stack.enter_context(mutex(path, wait=budget))
+    except RuntimeError as error:
+        stack.close()
+        if str(error) == 'capacity update is busy; skip this box':
+            raise SpreadRefusal(f"{box['name']}; peer {peer}; capacity lock {path}; "
+                                f"wait expired after {budget:g}s: {error}") from error
+        raise
+    with stack:
+        yield
+
+
 @contextlib.contextmanager
 def named_launch_capacity(box, needs, claim, *, probe, live_reason, mutex, root, renew):
     """Keep the native final guard and release its lock while waiting to retry."""
     retry = NamedCpuWait(box, needs)
     holder = NamedHolderWait(box, needs, claim.get('runner_wait', 0))
     while True:
-        with mutex(root/".capacity.lock", wait=15):
+        with named_capacity_mutex(root/'.capacity.lock', mutex=mutex, box=box, peer=needs.peer_id,
+                                  wait=claim.get('runner_wait', 0), remaining=holder.deadline-time.monotonic()):
             retry.probe_started()
             state = probe(box, refresh_display=False, ignore_token=claim["token"])
             reason = live_reason(box, needs, state)
@@ -806,6 +844,13 @@ def native_cpu_wait_source(source):
              "                if reason:=live_reason(box,Needs(**claim['needs']),before):raise RuntimeError('capacity changed before launch: '+reason)\n")
     if source.count(guard) != 1:
         raise SpreadRefusal("native worker capacity guard differs from the supported kit")
+    claim_guard = "    with mutex(root/'.capacity.lock',wait=15):\n"
+    if 'def capacity_claim(' in source and source.count(claim_guard) != 1:
+        raise SpreadRefusal('native worker capacity claim guard differs from the supported kit')
+    source = source.replace(claim_guard,
+                "    from spread_peers import named_capacity_mutex\n"
+                "    with named_capacity_mutex(root/'.capacity.lock',mutex=mutex,box=box,peer=needs['peer_id'],\n"
+                "            wait=request.get('runner_wait',0),remaining=request.get('capacity_wait_remaining')):\n", 1)
     marker_guard = ("            existing=facts.read_reservation(marker)\n"
                     "            if not existing:facts.write_reservation(marker,request['label'],token=claim['token'])\n"
                     "            elif existing.get('token')!=claim['token']:raise RuntimeError('another owner reserves this box alone')\n")
@@ -923,7 +968,10 @@ def claim_named_peer(backend, box, needs, request, *, wait=0, wait_for_holder=No
     while True:
         cpu.probe_started()
         try:
-            return backend.rpc(box, "claim", dict(box=box, needs=needs.__dict__, request=request), timeout=30)
+            remaining = max(0, deadline-time.monotonic())
+            native_request = dict(request, runner_wait=wait, capacity_wait_remaining=remaining)
+            return backend.rpc(box, "claim", dict(box=box, needs=needs.__dict__, request=native_request),
+                               timeout=30 + capacity_lock_seconds(wait, remaining))
         except RuntimeError as error:
             text = str(error)
             reason = text.split("capacity refused: ", 1)[-1]
