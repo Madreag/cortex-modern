@@ -12586,8 +12586,48 @@ LuaMan::~LuaMan() {
 	Destroy();
 }
 
+namespace {
+	std::string ScriptFilePath(const std::string& path, bool write = false, bool rawPath = false) {
+		const std::string original = System::GetWorkingDirectory() + (rawPath ? path : g_PresetMan.GetFullModulePath(path));
+		static const std::filesystem::path fileRoot = [] {
+			const char* root = std::getenv("CC_LUA_FILE_ROOT");
+			return root && *root ? std::filesystem::absolute(root).lexically_normal() : std::filesystem::path();
+		}();
+		if (fileRoot.empty() || path.find("..") != std::string::npos) return original;
+
+		std::string modulePath = std::filesystem::path(path).generic_string();
+		std::replace(modulePath.begin(), modulePath.end(), '\\', '/');
+		const std::string module = g_PresetMan.GetModuleNameFromPath(modulePath + "/");
+		if (module.empty() || !module.ends_with(System::GetModulePackageExtension())) return original;
+		modulePath = g_PresetMan.GetFullModulePath(modulePath.substr(modulePath.find(module)));
+		const std::filesystem::path moduleRelative = g_PresetMan.GetFullModulePath(module);
+		std::filesystem::path installed = System::GetWorkingDirectory() + moduleRelative.generic_string();
+#ifndef _WIN32
+		installed = GetCaseInsensitiveFullPath(installed.generic_string());
+#endif
+		const std::filesystem::path stored = fileRoot / installed.filename();
+		const std::filesystem::path suffix = std::filesystem::path(modulePath).lexically_relative(moduleRelative);
+		static std::mutex fileStoreMutex;
+		std::lock_guard<std::mutex> lock(fileStoreMutex);
+		std::error_code error;
+		// Clone on the first write so later removal and rename never fall back to installed files.
+		if (write && !std::filesystem::exists(stored)) {
+			std::filesystem::create_directories(fileRoot, error);
+			if (!error && std::filesystem::is_directory(installed)) {
+				std::filesystem::copy(installed, stored, std::filesystem::copy_options::recursive, error);
+			}
+			if (error) {
+				g_ConsoleMan.PrintString("ERROR: Cannot prepare private Lua file store for " + module + ": " + error.message());
+				return {};
+			}
+		}
+		return write || std::filesystem::exists(stored) ? (stored / suffix).generic_string()
+		                                                 : System::GetWorkingDirectory() + modulePath;
+	}
+}
+
 const std::vector<std::string>* LuaMan::DirectoryList(const std::string& path) {
-	std::string fullPath = System::GetWorkingDirectory() + path;
+	std::string fullPath = ScriptFilePath(path, false, true);
 	auto* directoryPaths = new std::vector<std::string>();
 
 	if (fullPath.find("..") == std::string::npos) {
@@ -12606,7 +12646,7 @@ const std::vector<std::string>* LuaMan::DirectoryList(const std::string& path) {
 }
 
 const std::vector<std::string>* LuaMan::FileList(const std::string& path) {
-	std::string fullPath = System::GetWorkingDirectory() + path;
+	std::string fullPath = ScriptFilePath(path, false, true);
 	auto* filePaths = new std::vector<std::string>();
 
 	if (fullPath.find("..") == std::string::npos) {
@@ -12625,7 +12665,7 @@ const std::vector<std::string>* LuaMan::FileList(const std::string& path) {
 }
 
 bool LuaMan::FileExists(const std::string& path) {
-	std::string fullPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(path);
+	std::string fullPath = ScriptFilePath(path);
 	if (fullPath.find("..") == std::string::npos) {
 #ifndef _WIN32
 		fullPath = GetCaseInsensitiveFullPath(fullPath);
@@ -12636,7 +12676,7 @@ bool LuaMan::FileExists(const std::string& path) {
 }
 
 bool LuaMan::DirectoryExists(const std::string& path) {
-	std::string fullPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(path);
+	std::string fullPath = ScriptFilePath(path);
 	if (fullPath.find("..") == std::string::npos) {
 #ifndef _WIN32
 		fullPath = GetCaseInsensitiveFullPath(fullPath);
@@ -12669,7 +12709,7 @@ int LuaMan::FileOpen(const std::string& path, const std::string& accessMode) {
 		return -1;
 	}
 
-	std::string fullPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(path);
+	std::string fullPath = ScriptFilePath(path, accessMode != "r" && accessMode != "rt");
 	if (IsValidModulePath(fullPath)) {
 #ifdef _WIN32
 		FILE* file = fopen(fullPath.c_str(), accessMode.c_str());
@@ -12736,7 +12776,7 @@ void LuaMan::FileCloseAll() {
 }
 
 bool LuaMan::FileRemove(const std::string& path) {
-	std::string fullPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(path);
+	std::string fullPath = ScriptFilePath(path, true);
 	if (IsValidModulePath(fullPath)) {
 #ifndef _WIN32
 		fullPath = GetCaseInsensitiveFullPath(fullPath);
@@ -12750,7 +12790,7 @@ bool LuaMan::FileRemove(const std::string& path) {
 }
 
 bool LuaMan::DirectoryCreate(const std::string& path, bool recursive) {
-	std::string fullPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(path);
+	std::string fullPath = ScriptFilePath(path, true);
 	if (fullPath.find("..") == std::string::npos) {
 #ifndef _WIN32
 		fullPath = GetCaseInsensitiveFullPath(fullPath);
@@ -12768,7 +12808,7 @@ bool LuaMan::DirectoryCreate(const std::string& path, bool recursive) {
 }
 
 bool LuaMan::DirectoryRemove(const std::string& path, bool recursive) {
-	std::string fullPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(path);
+	std::string fullPath = ScriptFilePath(path, true);
 	if (fullPath.find("..") == std::string::npos) {
 #ifndef _WIN32
 		fullPath = GetCaseInsensitiveFullPath(fullPath);
@@ -12788,8 +12828,8 @@ bool LuaMan::DirectoryRemove(const std::string& path, bool recursive) {
 }
 
 bool LuaMan::FileRename(const std::string& oldPath, const std::string& newPath) {
-	std::string fullOldPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(oldPath);
-	std::string fullNewPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(newPath);
+	std::string fullOldPath = ScriptFilePath(oldPath, true);
+	std::string fullNewPath = ScriptFilePath(newPath, true);
 	if (IsValidModulePath(fullOldPath) && IsValidModulePath(fullNewPath)) {
 #ifndef _WIN32
 		fullOldPath = GetCaseInsensitiveFullPath(fullOldPath);
@@ -12809,8 +12849,8 @@ bool LuaMan::FileRename(const std::string& oldPath, const std::string& newPath) 
 }
 
 bool LuaMan::DirectoryRename(const std::string& oldPath, const std::string& newPath) {
-	std::string fullOldPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(oldPath);
-	std::string fullNewPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(newPath);
+	std::string fullOldPath = ScriptFilePath(oldPath, true);
+	std::string fullNewPath = ScriptFilePath(newPath, true);
 	if (fullOldPath.find("..") == std::string::npos && fullNewPath.find("..") == std::string::npos) {
 #ifndef _WIN32
 		fullOldPath = GetCaseInsensitiveFullPath(fullOldPath);
