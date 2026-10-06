@@ -245,6 +245,16 @@ def topology(options=None, count=2):
     return "spread" if enabled(options) else TOPOLOGY_LOCAL if count > 1 else "single-peer"
 
 
+def check_port_block(port, block, count=1):
+    """Keep every declared case port inside its caller's game-port allocation."""
+    if not re.fullmatch(r"\d+-\d+", block):
+        raise ValueError("port block must be LO-HI")
+    low, high = map(int, block.split("-"))
+    if not 1024 <= low <= port <= port + count - 1 <= high <= 65535:
+        raise ValueError("case ports are outside the declared lane-owned block")
+    return low, high
+
+
 def managed_case(function):
     """Release all claims even if the caller's unchanged assertion raises."""
     @functools.wraps(function)

@@ -452,6 +452,8 @@ def run_delegated(options, case, size):
         for name in ("pool_dispatcher", "pool_registry"):
             if getattr(options, name, None):
                 argv += ["--" + name.replace("_", "-"), str(getattr(options, name))]
+        if getattr(options, "port_block", None):
+            argv += ["--port-block", options.port_block]
         for peer_port in options.peer_port:
             argv += ["--peer-port", peer_port]
     process = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace")
@@ -2964,6 +2966,7 @@ def main():
     else:
         parser.add_argument("--spread", action="store_true", help="requires the shared spread executor")
     parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--port-block", help="lane-owned game ports LO-HI for spread mode")
     options = parser.parse_args()
     selected = planned_cases(options.case, options.size, options.all_sizes)
     if not selected:
@@ -2975,7 +2978,14 @@ def main():
         spread.configure(options)
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("LEAD_FAMILY.lock exists; no engine launch")
-    if not (any(low <= options.port <= low + 9 for low in (48270, 48380, 48390, 48530, 48540, 48550, 48840, 48850, 49180, 49190))
+    if options.port_block:
+        if not spread or not spread.enabled(options):
+            parser.error("--port-block requires spread mode")
+        try:
+            spread.check_port_block(options.port, options.port_block)
+        except ValueError as error:
+            parser.error(str(error))
+    elif not (any(low <= options.port <= low + 9 for low in (48270, 48380, 48390, 48530, 48540, 48550, 48840, 48850, 49180, 49190))
             or 49440 <= options.port <= 49459 or 49470 <= options.port <= 49478 or 49820 <= options.port <= 49839):
         parser.error("this detector owns ports 48270-48279, 48380-48389, 48390-48399, 48530-48539, 48540-48549, 48550-48559, 48840-48849, 48850-48859, 49180-49199, 49440-49459, 49470-49478 and 49820-49839")
     options.repo = options.repo.resolve()

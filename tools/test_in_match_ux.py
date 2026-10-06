@@ -1242,6 +1242,7 @@ def main():
     parser.add_argument("--base", action="store_true", help="drive a build from before this menu work")
     parser.add_argument("--compare", type=Path, help="an earlier sp-pause result.json to hold the single-player menu against")
     parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--port-block", help="lane-owned game ports LO-HI for spread mode")
     parser.add_argument("--dry-run", action="store_true", help="print each probe's step count and stop")
     spread.add_arguments(parser)
     options = parser.parse_args()
@@ -1251,7 +1252,15 @@ def main():
         plans = {"pause": pause_probes(root, options.base), "players": players_probes(root, options.peers, options.base, options.moderate)}
         print(json.dumps({case: {who: len(probe["steps"]) for who, probe in probes.items()} for case, probes in plans.items()}))
         return 0
-    if not 1024 < options.port < 50000:
+    if options.port_block:
+        if not spread.enabled(options):
+            parser.error("--port-block requires spread mode")
+        count = len(SIZES if options.all_sizes else (options.size,)) * (6 + len(NEW_CASES) if options.case == "all" else 1)
+        try:
+            spread.check_port_block(options.port, options.port_block, count)
+        except ValueError as error:
+            parser.error(str(error))
+    elif not 1024 < options.port < 50000:
         parser.error("take the port from the lane's own block below 50000")
     options.repo = options.repo.resolve()
     options.out.mkdir(parents=True, exist_ok=False)

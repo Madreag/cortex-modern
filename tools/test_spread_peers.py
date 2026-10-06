@@ -291,6 +291,13 @@ class ContractTests(unittest.TestCase):
     def test_default_proof_mark(self):
         self.assertEqual(spread.topology(count=4), "single-box: not proof")
 
+    def test_declared_game_port_block_bounds_all_case_ports(self):
+        self.assertEqual(spread.check_port_block(51580, '51580-51589', 10), (51580, 51589))
+        for port, block, count in ((51580, '51580-51589', 11), (51579, '51580-51589', 1), (80, '80-89', 1),
+                                   (65535, '65535-65536', 1), (51580, '51580:51589', 1)):
+            with self.assertRaises(ValueError):
+                spread.check_port_block(port, block, count)
+
     def cohort(self, client_hash="same"):
         class Transport:
             def __init__(self, digest):
