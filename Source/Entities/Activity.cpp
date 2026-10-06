@@ -14,6 +14,7 @@
 #include "MetaMan.h"
 #include "SceneMan.h"
 #include "ScenarioRunner.h"
+#include "SoundSimulation.h"
 #include "NetActorOwnership.h"
 #include "NetGameCommand.h"
 #include "LuaMan.h"
@@ -963,8 +964,14 @@ void Activity::SetPlayerBrain(Actor* newBrain, int player) {
 	SetPlayerBrainImpl(newBrain, player, false);
 }
 
+static bool SharedScriptControl() {
+	const auto key = SoundSimulationScope::CurrentKey();
+	// Activity startup runs on every peer before the tick scope opens.
+	return key.domain == SoundExecutionDomain::SharedSimulation || (key.domain == SoundExecutionDomain::Presentation && key.objectUID == 0);
+}
+
 void Activity::SetPlayerBrainFromScript(Actor* newBrain, int player) {
-	SetPlayerBrainImpl(newBrain, player, m_SharedPlayerSeats && newBrain && newBrain->GetTeam() >= Teams::TeamOne);
+	SetPlayerBrainImpl(newBrain, player, m_SharedPlayerSeats && SharedScriptControl() && newBrain && newBrain->GetTeam() >= Teams::TeamOne);
 }
 
 void Activity::SetPlayerBrainImpl(Actor* newBrain, int player, bool preserveTeam) {
@@ -1300,7 +1307,7 @@ void Activity::NoteLockstepControlBinding(int64_t uid, int player) {
 }
 
 bool Activity::SwitchToActorFromScript(Actor* actor, int player, int team) {
-	if (!m_SharedPlayerSeats || !ScenarioRunner::IsLockstepControllerSyncActive()) return SwitchToActor(actor, player, team);
+	if (!m_SharedPlayerSeats || !ScenarioRunner::IsLockstepControllerSyncActive() || !SharedScriptControl()) return SwitchToActor(actor, player, team);
 	if (LuaMan::AreScriptsFrozen() || player < Players::PlayerOne || player >= Players::MaxPlayerCount ||
 	    !IsSeatActive(player) || !IsHumanSeat(player) || team < Teams::TeamOne || team >= Teams::MaxTeamCount ||
 	    !actor || !g_MovableMan.IsActor(actor) || !actor->IsPlayerControllable()) return false;
