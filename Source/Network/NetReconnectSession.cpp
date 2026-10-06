@@ -1743,18 +1743,20 @@ namespace RTE {
 		if (!NetH4DrawTxId(issued.notice.txId)) {
 			return NetKickBanResult::ActionUnavailable;
 		}
+		const bool retainRemoval = m_LiveMatch && round != 0;
+		if (retainRemoval && !RememberSeatRemoval(seat->seat.stableSeat, boundaryFrame)) return NetKickBanResult::ActionUnavailable;
 		if (action != NetParticipantRemovalAction::Kick) {
 			const NetHostBanScope scope = action == NetParticipantRemovalAction::BanUntilRemoved ? NetHostBanScope::UntilRemoved : NetHostBanScope::Session;
 			std::string persistError;
 			NoteStateChanged();
 			if (!m_BanStore->Ban(issued.participantId, scope, seat->holderName, "host ban", m_HostSessionId, unixNowMs, &persistError)) {
+				if (retainRemoval) m_SeatRemovalUndo.pop_back();
 				return NetKickBanResult::PersistenceFailed;
 			}
 		}
 		// A kick opens the seat for anyone to take - including the player it just removed. Only the
 		// ban list above holds an identity out of a rejoin; m_RemovedParticipants stays for
 		// pre-fix migration state that still carries one.
-		if (m_LiveMatch && round != 0 && !RememberSeatRemoval(seat->seat.stableSeat, boundaryFrame)) return NetKickBanResult::ActionUnavailable;
 		if (issued.connection != c_InvalidNetPeerId) {
 			m_Admission.DropConnection(issued.connection);
 		}
