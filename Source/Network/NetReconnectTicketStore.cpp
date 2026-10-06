@@ -1,5 +1,6 @@
 #include "NetReconnectTicketStore.h"
 #include "NetA7Journal.h"
+#include "NetMatchConfig.h"
 
 #include "NetReconnectTranscript.h"
 #include "System/System.h"
@@ -301,8 +302,66 @@ namespace RTE {
 			SetError(error, "could not delete the recovery record: " + code.message());
 			return false;
 		}
+		std::filesystem::remove(m_Path + ".routes", code);
+		if (code) { SetError(error, "could not delete the recovery routes: " + code.message()); return false; }
 		++m_Clears;
 		return true;
+	}
+
+	bool NetReconnectTicketStore::StoreRoutes(const NetH4TicketRecord& record, const std::vector<NetH4TicketRoute>& routes, std::string* error) {
+		if (record.holderGeneration == 0 || routes.size() > NetMatchConfigUtil::c_MaxPeerCount * NetMatchConfigUtil::c_MaxMigrationAddresses) return false;
+		std::vector<uint8_t> bytes{'C', 'C', 'C', 'P', 'H', '4', 'R', 'T'};
+		bytes.insert(bytes.end(), record.epoch.begin(), record.epoch.end());
+		AppendU16LE(bytes, record.stableSeat); AppendU32LE(bytes, record.holderGeneration);
+		AppendU64LE(bytes, record.hostSessionId); AppendU64LE(bytes, record.issuedAtUnixMs);
+		AppendU16LE(bytes, static_cast<uint16_t>(routes.size()));
+		for (const auto& route: routes) {
+			if (route.address.empty() || route.address.size() > c_MaxHostAddressBytes || route.port == 0) return false;
+			AppendU16LE(bytes, static_cast<uint16_t>(route.address.size()));
+			bytes.insert(bytes.end(), route.address.begin(), route.address.end()); AppendU16LE(bytes, route.port);
+		}
+		NetAuthBytes32 mac{};
+		if (!NetH4MacTicketRecord(record.credential, bytes, mac)) return false;
+		bytes.insert(bytes.end(), mac.begin(), mac.end());
+		const std::filesystem::path path(m_Path + ".routes"), temporary(m_Path + ".routes.tmp");
+		if (!WriteFileDurably(temporary, bytes, error)) return false;
+		std::error_code code;
+		std::filesystem::rename(temporary, path, code);
+		if (code) { std::error_code ignored; std::filesystem::remove(temporary, ignored); SetError(error, "could not replace the recovery routes: " + code.message()); return false; }
+		std::filesystem::permissions(path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write, std::filesystem::perm_options::replace, code);
+		return true;
+	}
+
+	std::vector<NetH4TicketRoute> NetReconnectTicketStore::LoadRoutes(const NetH4TicketRecord& record) const {
+		constexpr size_t header = 48;
+		constexpr size_t maximum = header + NetMatchConfigUtil::c_MaxPeerCount * NetMatchConfigUtil::c_MaxMigrationAddresses * (c_MaxHostAddressBytes + 4) + 32;
+		std::error_code code;
+		const auto size = std::filesystem::file_size(m_Path + ".routes", code);
+		if (code || size < header + 32 || size > maximum) return {};
+		std::ifstream file(m_Path + ".routes", std::ios::binary);
+		const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+		if (bytes.size() != size || std::memcmp(bytes.data(), "CCCPH4RT", 8) != 0) return {};
+		const std::vector<uint8_t> body(bytes.begin(), bytes.end() - 32);
+		NetAuthBytes32 mac{}; std::memcpy(mac.data(), bytes.data() + body.size(), mac.size());
+		if (!NetH4VerifyTicketRecord(record.credential, body, mac) ||
+		    std::memcmp(body.data() + 8, record.epoch.data(), record.epoch.size()) != 0 ||
+		    ReadU16LE(body.data() + 24) != record.stableSeat || ReadU32LE(body.data() + 26) != record.holderGeneration ||
+		    ReadU64LE(body.data() + 30) != record.hostSessionId || ReadU64LE(body.data() + 38) != record.issuedAtUnixMs) return {};
+		const auto count = ReadU16LE(body.data() + 46);
+		if (count > NetMatchConfigUtil::c_MaxPeerCount * NetMatchConfigUtil::c_MaxMigrationAddresses) return {};
+		std::vector<NetH4TicketRoute> routes;
+		size_t offset = header;
+		for (size_t index = 0; index < count; ++index) {
+			if (offset + 2 > body.size()) return {};
+			const auto length = ReadU16LE(body.data() + offset); offset += 2;
+			if (length == 0 || length > c_MaxHostAddressBytes || offset + length + 2 > body.size()) return {};
+			NetH4TicketRoute route;
+			route.address.assign(reinterpret_cast<const char*>(body.data() + offset), length); offset += length;
+			route.port = ReadU16LE(body.data() + offset); offset += 2;
+			if (route.port == 0) return {};
+			routes.push_back(std::move(route));
+		}
+		return offset == body.size() ? routes : std::vector<NetH4TicketRoute>{};
 	}
 
 	bool NetReconnectTicketStore::HasRecord() const {
