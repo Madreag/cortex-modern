@@ -11,6 +11,7 @@ import re
 import secrets
 import struct
 import threading
+import time
 import zipfile
 from pathlib import Path
 
@@ -27,7 +28,7 @@ IDENTITY_FIELDS = {"game_version", "network_protocol_version", "controller_frame
                    "scenario_test_module_loaded", "lockstep_codec_version", "match_config_version",
                    "supported_lockstep_codec_version", "supported_world_lockstep_codec_version",
                    "supported_match_config_version", "supported_world_match_config_version",
-                   "lobby_protocol_version", "enabled_global_scripts"}
+                   "lobby_protocol_version", "committed_record_version", "enabled_global_scripts"}
 SECRET_KEYS = ("SessionDirectoryInstallKey", "NetworkTurnPass", "NetworkTurnUser", "NetworkPlayerTurnPass", "NetworkPlayerTurnUser", "SessionDirectoryCertSha256")
 SECRET_NEEDLES = ("Pass", "Password", "Secret", "Token", "PrivateKey", "Credential", "Ticket")
 
@@ -50,15 +51,18 @@ def plant_bundle_secrets(run) -> dict:
         "NetworkInputDelayFrames": "0",
     }
     for key, value in planted.items():
-        settings, count = re.subn(rf"(?m)^(\s*{key}\s*=\s*)[^\r\n]*", lambda match, value=value: match[1] + value, settings)
+        written = "\n\t\t" + value if key == "NetworkTurnPass" else value
+        settings, count = re.subn(rf"(?m)^([ \t]*{key}[ \t]*=[ \t]*)[^\r\n]*",
+                                  lambda match, value=written: match[1] + value, settings)
         if count == 0:
-            settings += f"\n\t{key} = {value}\n"
+            settings += f"\n\t{key} = {written}\n"
     path.write_text(settings, encoding="utf-8")
     metadata_path = run.out / "runtime.json"
     if metadata_path.exists():
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         metadata["settings_sha256"] = sha(path)
-        metadata.setdefault("settings_overrides", {}).update(planted)
+        metadata.setdefault("settings_overrides", {}).update(
+            {key: "<redacted>" if key != "NetworkInputDelayFrames" else value for key, value in planted.items()})
         metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     return planted
 
@@ -77,8 +81,7 @@ def check_no_secrets(contents: dict, original: bytes, planted: dict | None) -> N
             token = value.encode("utf-8")
             for name, data in contents.items():
                 if token in data:
-                    leaked = next((row.decode("utf-8", errors="replace") for row in data.splitlines() if token in row), name)
-                    raise AssertionError(f"no_secrets: {key} leaked in {name}: {leaked}")
+                    raise AssertionError(f"no_secrets: {key} leaked in {name}")
     assert delay_line is not None, "NetworkInputDelayFrames missing from private Settings.ini"
     assert delay_line in contents["Settings.ini"].splitlines(), "harmless NetworkInputDelayFrames line was rewritten"
     if not planted:
@@ -90,8 +93,7 @@ def check_no_secrets(contents: dict, original: bytes, planted: dict | None) -> N
         token = value.encode("utf-8")
         for name, data in contents.items():
             if token in data:
-                leaked = next((row.decode("utf-8", errors="replace") for row in data.splitlines() if token in row), name)
-                raise AssertionError(f"no_secrets: {key} leaked in {name}: {leaked}")
+                raise AssertionError(f"no_secrets: {key} leaked in {name}")
     listed = json.loads(contents["manifest.json"]).get("redacted")
     assert isinstance(listed, list), "manifest.json missing redacted key names"
     missing = [key for key in planted if key != "NetworkInputDelayFrames" and key not in listed]
@@ -189,6 +191,93 @@ def run_menu(repo: Path, root: Path, exe_sha: str) -> dict:
     assert record.get("exit_code") == 0 and not record.get("timed_out"), f"menu run failed: {log[-6000:]}"
     assert "ButtonSaveDiagnostics" in log, "diagnostics command was not exercised"
     return inspect_bundle(run.cwd, exe_sha, secrets=planted, require_identity_build=True)
+
+
+def credential_fields(repo: Path) -> list[str]:
+    fields = {"NetworkTurnUser", "NetworkPlayerTurnUser"}
+    for leaf in ("Managers/SettingsMan.cpp", "System/InputScheme.cpp", "System/InputMapping.cpp"):
+        source = (repo / "Source" / leaf).read_text(encoding="utf-8")
+        fields.update(name for name in re.findall(r'NewProperty(?:WithValue)?\("([^"]+)"', source)
+                      if any(part in name.lower() for part in ("pass", "secret", "key", "token", "credential", "ticket")))
+    return sorted(fields)
+
+
+def credential_corpus(repo: Path) -> tuple[bytes, list[tuple[str, str, bytes]], list[bytes], list[str]]:
+    # Writer streams string bytes verbatim; LF, CRLF and CR can all occur inside them.
+    forms = {
+        "ordinary": lambda a, b: a,
+        "next-line": lambda a, b: "\n" + a,
+        "continuation": lambda a, b: a + "\n" + b,
+        "indented-assignment": lambda a, b: a + "\n\t\t\t\tvalue = " + b,
+        "comment-lines": lambda a, b: a + "\n//" + b + "\n#" + a + "\n;" + b,
+        "blank-lines": lambda a, b: "\n\n\t\t\t\t" + a + "\n\n" + b,
+        "quoted": lambda a, b: '"' + a + "\n" + b + '"',
+        "backslash": lambda a, b: a + "\\\n" + b,
+    }
+    fields = credential_fields(repo) + ["NetworkRelaySecret", "NetworkRelayKey", "NetworkRelayToken",
+                                      "NetworkRelayPassword", "networkrelaysecret", "NETWORKRELAYTOKEN"]
+    parts, needles, harmless = [b"SettingsMan\r\n\tNetworkInputDelayFrames = 0\r\n"], [], []
+    for index, field in enumerate(fields):
+        for form, render in forms.items():
+            a, b = secrets.token_hex(24), secrets.token_hex(24)
+            for token in (a, b):
+                needles.append((field, form, token.encode("ascii")))
+            for ending in ("\n", "\r\n", "\r"):
+                value = render(a, b).replace("\n", ending)
+                parts.append(f"\t{field} = {value}{ending}".encode("utf-8"))
+                marker = f"\tSupportMarker{index} = preserved {form}{ending}".encode("ascii")
+                parts.append(marker)
+                harmless.append(marker)
+    # The last value has neither a closing line ending nor a following property.
+    tail = secrets.token_hex(24).encode("ascii")
+    parts.append(b"\tNetworkTurnPass =\n\t\t" + tail)
+    needles.append(("NetworkTurnPass", "end-of-file", tail))
+    original = b"".join(parts)
+    needles = [row for row in needles if row[2] in original]
+    return original, needles, harmless, fields
+
+
+def run_credentials(repo: Path, root: Path, exe_sha: str) -> dict:
+    root.mkdir(parents=True, exist_ok=False)
+    script = root / "credentials.txt"
+    script.write_text("wait 40\nassert_control ButtonMainToMultiplayer\n"
+                      "wait_file Temp/telemetry-seeded.signal 120\nexit\n", encoding="utf-8")
+    run = make_run(repo, ["-menu-script", str(script), "-telemetry-bundle"], root / "credentials", 240,
+                   env={"CCCP_HEADLESS": "1"})
+    original, needles, harmless, fields = credential_corpus(repo)
+    try:
+        run.start()
+        deadline = time.monotonic() + 120
+        while "assert_control ButtonMainToMultiplayer PASS" not in read_log(run.out):
+            if run.poll() is not None or time.monotonic() >= deadline:
+                raise AssertionError("credential detector did not reach its settings staging barrier")
+            threading.Event().wait(0.1)
+        settings = run.cwd / "Userdata/Settings.ini"
+        settings.write_bytes(original)
+        (run.cwd / "Temp/telemetry-seeded.signal").write_text("ready\n", encoding="ascii")
+        record = run.finish()
+    finally:
+        run.close()
+    assert record.get("exit_code") == 0 and not record.get("timed_out"), "credential detector engine failed"
+    archives = list((run.cwd / "Telemetry").glob("diag-*.zip"))
+    assert len(archives) == 1, "credential detector needs exactly one bundle"
+    with zipfile.ZipFile(archives[0]) as archive:
+        contents = {name: archive.read(name) for name in archive.namelist()}
+    bundled = contents["Settings.ini"]
+    manifest = json.loads(contents["manifest.json"])
+    leaked = sorted({(field, form, name) for field, form, token in needles
+                     for name, data in contents.items() if token in data})
+    missing = sorted({field for field in fields if ("\t" + field + " =").encode() not in bundled
+                      or field not in manifest.get("redacted", [])})
+    changed = [index for index, marker in enumerate(harmless) if bundled.count(marker) != original.count(marker)]
+    assert settings.read_bytes() == original, "credential detector private settings were rewritten"
+    assert not leaked and not missing and not changed, (
+        f"credential_values: leaked field/form/member {leaked}; missing names {missing}; changed harmless lines {changed}")
+    details = inspect_bundle(run.cwd, exe_sha, require_identity_build=True)
+    details.update(credential_fields=fields, forms=sorted({form for field, form, token in needles}),
+                   line_endings=["LF", "CRLF", "CR"], planted_fragments=len(needles),
+                   harmless_lines=len(harmless), private_settings_unchanged=True)
+    return details
 
 
 def run_replay(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
@@ -383,7 +472,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--arm", choices=("menu", "replay", "pause", "all"), default="all",
+    parser.add_argument("--arm", choices=("menu", "replay", "pause", "credentials", "all"), default="all",
                         help="all runs menu+replay; use --arm pause for both pause-menu resolutions (no replay recording)")
     parser.add_argument("--port", type=int, default=48211)
     args = parser.parse_args()
@@ -398,7 +487,9 @@ def main() -> int:
     result = {"exe_sha256": sha(engine_executable(repo)), "arms": {}}
     for arm in (("menu", "replay") if args.arm == "all" else (args.arm,)):
         try:
-            if arm == "pause":
+            if arm == "credentials":
+                details = run_credentials(repo, root / arm, result["exe_sha256"])
+            elif arm == "pause":
                 details = run_pause(repo, root / arm, args.port, result["exe_sha256"])
             else:
                 details = (run_menu(repo, root / arm, result["exe_sha256"]) if arm == "menu" else
