@@ -514,7 +514,7 @@ namespace RTE {
 
 		for (const Preview& preview: targets) {
 			if (preview.screen >= 0) {
-				Vector scrollPos = preview.clone->GetPos();
+				Vector scrollPos = g_CameraMan.GetActorScrollTarget(*preview.original, preview.clone->GetPos(), preview.screen);
 				g_SceneMan.ForceBounds(scrollPos);
 				g_CameraMan.SetScrollTarget(scrollPos, 0.1F, preview.screen);
 			}

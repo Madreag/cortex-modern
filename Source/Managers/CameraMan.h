@@ -75,7 +75,7 @@ namespace RTE {
 		void SetScrollFromScript(const Vector& center, int screenId = 0);
 
 		/// Gets the actor's view target with its script-supplied camera offset.
-		Vector GetActorScrollTarget(const Actor& actor, int screenId = 0);
+		Vector GetActorScrollTarget(const Actor& actor, const Vector& target, int screenId = 0);
 
 		/// Gets the team associated with a specific screen.
 		/// @param screenId Which screen you want to get the team of.

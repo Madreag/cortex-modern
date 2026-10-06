@@ -99,8 +99,8 @@ void CameraMan::SetScrollFromScript(const Vector& center, int screenId) {
 	}
 }
 
-Vector CameraMan::GetActorScrollTarget(const Actor& actor, int screenId) {
-	if (!IsValidScreen(screenId)) return actor.GetViewPoint();
+Vector CameraMan::GetActorScrollTarget(const Actor& actor, const Vector& target, int screenId) {
+	if (!IsValidScreen(screenId)) return target;
 	Screen& screen = m_Screens[screenId];
 	const bool scriptedController = ScenarioRunner::IsLockstepControllerSyncActive() && actor.GetScale() == 0;
 	if (screen.RestoredScrollTarget && scriptedController) {
@@ -109,9 +109,9 @@ Vector CameraMan::GetActorScrollTarget(const Actor& actor, int screenId) {
 		screen.ScriptViewOffset = screen.ScrollTarget - actor.GetViewPoint();
 	}
 	screen.RestoredScrollTarget = false;
-	if (scriptedController && screen.ScriptActorUID == actor.GetUniqueID()) return actor.GetViewPoint() + screen.ScriptViewOffset;
+	if (scriptedController && screen.ScriptActorUID == actor.GetUniqueID()) return target + screen.ScriptViewOffset;
 	screen.ScriptActorUID = 0;
-	return actor.GetViewPoint();
+	return target;
 }
 
 Vector CameraMan::GetScrollTarget(int screenId) const {
