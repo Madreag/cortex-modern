@@ -358,15 +358,17 @@ def run_single_player_reference(repo, make_run, case, timeout):
 def run_lockstep_cli(repo, make_run, case, timeout):
     """The two-peer gameplay entry runs a whole round with one frame of input delay."""
     case.mkdir(parents=True, exist_ok=False)
-    runs, traces = [], []
+    runs, traces, reports = [], [], []
     common = ["-net-lockstep", "-net-allow-userdata", "-net-port", "47459", "-net-lockstep-input-delay", "1",
               "-scenario", "SimBaseline", "-seed", "42", "-max-ticks", "120", "-tick-hashes"]
     try:
         for role, network in (("host", ["-net-host"]), ("client", ["-net-join", "127.0.0.1"])):
             trace = case / (role + ".json")
+            report = case / (role + "-net.json")
             traces.append(trace)
-            run = make_run(repo, common + network + ["-out", str(trace)], case / role, timeout,
-                           env={"CCCP_HEADLESS": "1"}, expected=[trace])
+            reports.append(report)
+            run = make_run(repo, common + network + ["-out", str(trace), "-net-lockstep-report", str(report)],
+                           case / role, timeout, env={"CCCP_HEADLESS": "1"}, expected=[trace, report])
             runs.append(run)
             run.start()
         records = [run.finish() for run in runs]
@@ -374,7 +376,7 @@ def run_lockstep_cli(repo, make_run, case, timeout):
         for run in runs:
             run.close()
     failures, hashes = [], []
-    for role, record, trace in zip(("host", "client"), records, traces):
+    for role, record, trace, report in zip(("host", "client"), records, traces, reports):
         if record.get("exit_code") != 0 or record.get("timed_out") or not record.get("evidence_complete"):
             stdout = (case / role / "stdout.log").read_text(errors="replace") + (case / role / "stderr.log").read_text(errors="replace")
             reason = next((line for line in stdout.splitlines() if "requires" in line or "failed" in line.lower()), stdout[-600:])
@@ -389,6 +391,22 @@ def run_lockstep_cli(repo, make_run, case, timeout):
             hashes.append(tick_hashes)
         except (OSError, ValueError, KeyError, IndexError, TypeError) as error:
             failures.append(f"{role} has no valid round trace: {error}")
+        try:
+            network = json.loads(report.read_text(encoding="utf-8-sig"))
+            lockstep = network["lockstep"]
+            if lockstep["completed_simulation_tick"] != 121 or lockstep["next_frame"] != 122:
+                failures.append(f"{role} does not commit and simulate its complete round")
+            if lockstep["input_delay_frames"] != 1 or lockstep["agreed_start_applied"] is not True or lockstep["published_start_mask"] != 3:
+                failures.append(f"{role} does not agree its requested delay and measured start")
+            if any(peer["holds"] != 0 for peer in lockstep["peers"].values()):
+                failures.append(f"{role} completes by holding a peer")
+            desync = network["desync_check"]
+            if desync["submissions"] == 0 or desync["mismatches"] != 0:
+                failures.append(f"{role} has missing or mismatching desync checks")
+            if not network["lockstep_stop_reason"].startswith("Complete:"):
+                failures.append(f"{role} does not stop at round completion")
+        except (OSError, ValueError, KeyError, IndexError, TypeError) as error:
+            failures.append(f"{role} has no valid committed-round report: {error}")
     if len(hashes) == 2 and hashes[0] != hashes[1]:
         failures.append("the two delay 1 peers have different tick hashes")
     verdict = "FAIL" if failures else "PASS"
