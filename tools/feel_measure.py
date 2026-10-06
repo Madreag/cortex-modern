@@ -177,6 +177,7 @@ TIMING_CASES = (
     ('100ms-loss5-silent600', 100, 5, 600),
     ('200ms-loss5-silent600', 200, 5, 600),
 )
+ONE_ARM_CASES = (('100ms-60hz', 100, 0, None),)
 
 # Jittery links on both peers (the user, 2026-09-30: 'add jitter to V1'): judged by the same item9a bars as the loss arms.
 JITTER_CASES = (
@@ -339,7 +340,10 @@ def _launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, 
                                  autosave_seconds=autosave_seconds, ticks=final_tick, peers=['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)))
         return None
     out = root / name
-    out.mkdir(exist_ok=False)
+    if spread_case:
+        spread_case.stage_root(out)
+    else:
+        out.mkdir(exist_ok=False)
     # The engine's Lua state count is a build constant; the flags are kept, accepted and ignored.
     lua_states = {'host': host_lua_states, 'client': client_lua_states}
     pre_match_history = {'host': host_pre_match_history, 'client': client_pre_match_history}
@@ -456,19 +460,25 @@ def _launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, 
                     launches_complete=all(row.get('exit_code') == 0 and row.get('evidence_complete') and not row.get('timed_out') for row in records.values()))
     write_json(out / 'manifest.json', manifest)
     print(f'{manifest["finished"]} {name}: launches_complete={manifest["launches_complete"]}', flush=True)
-    if not sp and record and (out / 'match.ccreplay').is_file():
-        finish_replay(['-net-replay-verify', str(out / 'match.ccreplay'), '-net-replay-dump', f'1:{final_tick}',
-                                 '-out', str(out / 'replay-report.json')], out / 'replay-inspect', timeout=timeout,
-                      expected=[out / 'replay-report.json'])
-        # The recorder's off-wire proof on one committed timeline: the recording played back with no recorder.
-        finish_replay(['-net-replay', str(out / 'match.ccreplay'), '-tick-hashes', '-out', str(out / 'replay_trace.json'),
-                                   '-max-ticks', str(final_tick), '-seed', '42'], out / 'replay-off', timeout=timeout,
-                      expected=[out / 'replay_trace.json'], baseline_ticks=final_tick)
+    if not spread_case and not sp and record:
+        finish_case_replays(out, final_tick, timeout)
     return out
 
 
+def finish_case_replays(out, final_tick, timeout):
+    if not (out / 'match.ccreplay').is_file():
+        return
+    finish_replay(['-net-replay-verify', str(out / 'match.ccreplay'), '-net-replay-dump', f'1:{final_tick}',
+                             '-out', str(out / 'replay-report.json')], out / 'replay-inspect', timeout=timeout,
+                  expected=[out / 'replay-report.json'])
+    # The recorder's off-wire proof uses the same committed timeline with no recorder.
+    finish_replay(['-net-replay', str(out / 'match.ccreplay'), '-tick-hashes', '-out', str(out / 'replay_trace.json'),
+                               '-max-ticks', str(final_tick), '-seed', '42'], out / 'replay-off', timeout=timeout,
+                  expected=[out / 'replay_trace.json'], baseline_ticks=final_tick)
+
+
 def launch_case(*args, **kwargs):
-    """All original levers and assertions, with native peers assigned by the pool."""
+    """All original levers and assertions, with native peers named by the lead."""
     bound = inspect.signature(_launch_case).bind(*args, **kwargs)
     bound.apply_defaults()
     values = bound.arguments
@@ -482,11 +492,14 @@ def launch_case(*args, **kwargs):
                               spread.Match(values['port'] or SPREAD_OPTIONS.port), drive=drive,
                               peer_boxes=SPREAD_OPTIONS.peer_boxes, dispatcher=SPREAD_OPTIONS.pool_dispatcher,
                               registry=SPREAD_OPTIONS.pool_registry)
-    return Path(receipt['driver_result'])
+    out = Path(receipt['driver_result'])
+    if not values['sp'] and values['record'] and (out / 'match.ccreplay').is_file():
+        finish_case_replays(out, json.loads((out/'manifest.json').read_text())['ticks'], values['timeout'])
+    return out
 
 
 def finish_replay(args, out, *, timeout, expected, baseline_ticks=None):
-    """Replay verification is a separate one-engine pool claim in spread mode."""
+    """Replay verification has a separate owned root on the named host box."""
     out = Path(out)
     def drive(case=None):
         factory = case.make_run if case else make_run
@@ -499,10 +512,31 @@ def finish_replay(args, out, *, timeout, expected, baseline_ticks=None):
             run.close()
     if not spread.enabled(SPREAD_OPTIONS):
         return drive()
-    # Keep the reducer's output layout while claiming a fresh native replay peer.
-    receipt = spread.run_case(REPO, out.parent, [spread.Peer(out.name, os='any', size=(960, 540), quiet=True, timeout=timeout)],
-                              spread.Match(SPREAD_OPTIONS.port), drive=drive,
+    original_args, original_expected = list(args), list(map(Path, expected))
+    staged = {str(path): str(out/path.name) for path in original_expected}
+    args = [staged.get(str(value), value) for value in original_args]
+    expected = list(map(Path, staged.values()))
+    peer_out = out/'replay'
+    def native_drive(case):
+        run = case.make_run(REPO, args, peer_out, timeout=timeout, env={'CCCP_HEADLESS':'1'}, expected=expected)
+        if baseline_ticks is not None:
+            stage_baseline(run, baseline_ticks, 2)
+        try:
+            return run.start().finish()
+        finally:
+            run.close()
+    receipt = spread.run_case(REPO, out, [spread.Peer('replay', os='any', size=(960, 540), quiet=True, timeout=timeout)],
+                              spread.Match(SPREAD_OPTIONS.port), drive=native_drive,
+                              peer_boxes=SPREAD_OPTIONS.peer_boxes,
                               dispatcher=SPREAD_OPTIONS.pool_dispatcher, registry=SPREAD_OPTIONS.pool_registry)
+    for original in original_expected:
+        for path in out.glob(original.name+'*'):
+            if path.is_file():
+                spread.atomic_bytes(original.parent/path.name, path.read_bytes())
+    for name in ('record.json', 'runtime.json', 'stdout.log', 'stderr.log', 'launch.json'):
+        path = peer_out/name
+        if path.is_file():
+            spread.atomic_bytes(out/name, path.read_bytes())
     write_json(out / 'spread-result.json', receipt)
     return receipt['driver_result']
 
@@ -1170,7 +1204,7 @@ def parse_args(argv=None):
     parser.add_argument('--client-lua-states', type=int, default=4, help='retired: the build fixes the Lua state count')
     parser.add_argument('--host-pre-match-history', type=int, default=0, help='objects the host runtime spends before the match')
     parser.add_argument('--client-pre-match-history', type=int, default=0, help='objects the joining client spends before the match')
-    parser.add_argument('--cases', nargs='+', choices=[name for name, *_ in AUTOSAVE_CASES + AUTOSAVE_THREE_CASES] + [name for name, *_ in TIMING_CASES + JITTER_CASES],
+    parser.add_argument('--cases', nargs='+', choices=[name for name, *_ in AUTOSAVE_CASES + AUTOSAVE_THREE_CASES] + [name for name, *_ in TIMING_CASES + JITTER_CASES + ONE_ARM_CASES],
                         help='run only the selected autosave or timing arms, without baselines or the full matrix')
     parser.add_argument('--lag-arms', nargs='+', choices=LAG_ARMS,
                         help='run only these lag arms (each on and off) and the single-player baselines of their caps')
@@ -1259,7 +1293,7 @@ def _main(argv=None):
                   host_pre_match_history=args.host_pre_match_history, client_pre_match_history=args.client_pre_match_history)
     if args.cases and not args.lag_arms:
         selected = [(index, case) for index, case in enumerate(AUTOSAVE_CASES + AUTOSAVE_THREE_CASES) if case[0] in args.cases] + \
-                   [(index, case) for index, case in enumerate(TIMING_CASES + JITTER_CASES) if case[0] in args.cases]
+                   [(index, case) for index, case in enumerate(TIMING_CASES + JITTER_CASES + ONE_ARM_CASES) if case[0] in args.cases]
         launch_selected = lambda script, exe_hash: [(launch_autosave_arm if len(case) == 3 else launch_timing_arm)(root, index, case, args.port, script, exe_hash, args.timeout, counts)
                                                     for index, case in selected]
         if args.dry_run:
