@@ -10083,7 +10083,8 @@ static std::string ResyncSaveName() {
 		if (config.nowMs) session.Tick(config.nowMs(), false);
 		if (transportReady && runner.Start(wire, session, coordinator, config, error)) return true;
 #ifdef CCCP_WITH_GNS
-		if (m_Dispatcher && m_Dispatcher->Channel().GetLastError() == NetDirectoryClient::c_CapacityNotice) {
+		if (m_Dispatcher && m_Dispatcher->Channel().GetLastError() == NetDirectoryClient::c_CapacityNotice &&
+		    !session.IsRejected() && session.GetMismatchKey() != "host_disconnect") {
 			if (error) *error = NetDirectoryClient::c_CapacityNotice;
 			return false;
 		}
