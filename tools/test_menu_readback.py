@@ -995,7 +995,8 @@ def sweep_case(case, port, root):
 
 # Every field of the seven host pages, each set by hand to something other than its default, and the words that read it back.
 # A match field rides the lobby's config to every peer; a computer field is this machine's own. Order matters only where one
-# field opens another: the mode and the activity before the seats and the rules they seed, Fixed before a seat's delay,
+# field opens another: the mode and the activity before the seats and the rules they seed, the count before the seat it
+# opens, Fixed before a seat's delay,
 # autosave on before its interval.
 def draft_fields(port):
     match = (
@@ -1015,7 +1016,7 @@ def draft_fields(port):
         ("players", "Seats", hand_pick("ComboHostSeatPlayers", "3"), "assert_label ComboHostSeatPlayers 3\n"),
         ("seat_teams", "Seats", hand_pick("ComboHostSeatTeam0", "Team 2") + hand_pick("ComboHostSeatTeam1", "Team 1"),
          "assert_label ComboHostSeatTeam0 Team 2\nassert_label ComboHostSeatTeam1 Team 1\n"),
-        ("closed_seat", "Seats", hand_pick("ComboHostSeatType2", "Closed"), "assert_label ComboHostSeatType2 Closed\n"),
+        ("open_seat", "Seats", hand_pick("ComboHostSeatType2", "Open"), "assert_label ComboHostSeatType2 Open\n"),
         ("delay_policy", "Timing", hand_pick("ComboHostNetPolicy", "Fixed"), "assert_label ComboHostNetPolicy Fixed\n"),
         ("slow_bound", "Timing", "settext TextHostNetSlowBound 7\nwait 4\n", "assert_label TextHostNetSlowBound 7\n"),
         ("redundancy", "Timing", hand_pick("ComboHostNetRedundancy", "7 ticks"), "assert_label ComboHostNetRedundancy 7 ticks\n"),
@@ -1068,7 +1069,8 @@ def third_pass_case(case, port, root, size):
     if case == "host-draft-apply":
         # After an earlier Apply, each field changed alone enables Apply and is applied.
         host = setup + advanced + page("Timing") + hand_pick("ComboHostNetRedundancy", "6 ticks") + "activate ButtonHostOptApply\nwait 6\n"
-        for _, tab, change, check in match + computer:
+        # The setup already listens on the run's port: another one is the change.
+        for _, tab, change, check in match + draft_fields(port + 1)[1]:
             host += (page(tab) + change + "assert_enabled ButtonHostOptApply 1\nactivate ButtonHostOptApply\nwait 6\n"
                      "assert_enabled ButtonHostOptApply 0\n" + check)
         return {"host": host + "exit\n"}, {}
