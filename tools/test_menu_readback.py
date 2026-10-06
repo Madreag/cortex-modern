@@ -19,6 +19,15 @@ from run_sim_test import make_run, engine_executable, file_sha256
 from test_lobby_lifecycle import wait_for_log
 from test_telemetry_bundle import set_visual_resolution
 
+try:
+    import spread_peers as spread
+except ModuleNotFoundError as error:
+    if error.name != "spread_peers":
+        raise
+    spread = None
+
+managed_case = spread.managed_case if spread else lambda function: function
+
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "pause-save", "save-hotkey", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
@@ -418,6 +427,8 @@ def ntdll():
 def suspend_run(run):
     """Freeze every thread of a live run's process; a suspended peer is absent to the wire but its
     failure path carries no fixture error of its own the way an in-engine hold would."""
+    if hasattr(run, "suspend"):
+        return run.suspend()
     if run.process is None:
         raise RuntimeError("suspend asked for a process that has not started")
     if ntdll().NtSuspendProcess(ctypes.c_void_p(run.process)) != 0:
@@ -425,13 +436,15 @@ def suspend_run(run):
 
 
 def resume_run(run):
+    if hasattr(run, "resume"):
+        return run.resume()
     if ntdll().NtResumeProcess(ctypes.c_void_p(run.process)) != 0:
         raise RuntimeError("NtResumeProcess failed")
 
 
 def unavailable_reason(case, platform=None):
     """Why this platform cannot drive a case, or None. The case is refused with that reason as its verdict."""
-    if (platform or os.name) != "nt" and case == "net-host-left-early":
+    if (platform or os.name) != "nt" and case == "net-host-left-early" and not (spread and spread.enabled()):
         return "suspends the client mid-launch through ntdll's NtSuspendProcess on the win32 runner's process handle (Windows only)"
     return None
 
@@ -2460,6 +2473,7 @@ def timing_options_geometry(images):
     return measured
 
 
+@managed_case
 def run_case(options, case, root, failing=None):
     root.mkdir(parents=True, exist_ok=False)
     texts, probes = scripts(case, options.port, root, options.size)
@@ -2474,10 +2488,22 @@ def run_case(options, case, root, failing=None):
                            "lobby-last-ready", "lobby-ready-back", "lobby-seat-missing", "sweep-advanced-client", *THIRD_PASS_CASES)
     seeded = {} if failing else seeds(case)
     runs, records, argv, images = {}, {}, {}, []
+    executor = None
     result = {"pass": False, "case": case, "scripts": {}, "records": records, "probes": {}, "seeds": seeded}
+    result.update(topology="single-box" if paired else "single-peer", proof=False)
     picture_watches = not BASE_WORDS and case not in OLD_SKINS
     result["picture_watch_scope"] = "all current controls" if picture_watches else "compatibility notices" if case in OLD_SKINS else "base controls"
     try:
+        factory = make_run
+        if paired:
+            if not spread or not spread.enabled(options):
+                raise RuntimeError("paired menu readback requires the shared spread executor")
+            width, height, multiplier = size_parts(options.size)
+            reviewed = "client" if case in ("host-draft-roundtrip", "sweep-advanced-client") else "host"
+            peers = [spread.Peer(who, os="windows", size=(int(width * multiplier), int(height * multiplier)),
+                                 reviewed=who == reviewed) for who in texts]
+            executor = spread.prepare_case(options.repo, root, peers, spread.Match(options.port))
+            factory = executor.make_run
         # A pair runs host and client; a case may seat a second joiner beside them.
         for who in (tuple(texts) if paired else ("host",)):
             script = root / f"{who}-menu.txt"
@@ -2531,9 +2557,9 @@ def run_case(options, case, root, failing=None):
                 env["CCCP_TEST_SWEEP_DECLARED"] = str(options.repo / "tools" / "menu_declared" / ("sweep-landing" if case == "sweep-fault" else case))
             argv[who] = args
             if case in OLD_SKINS:
-                runs[who] = make_run(options.repo, args, root / who, 180, env=env, runtime=stage_old_skin_runtime(options.repo, root / f"{who}-staged", OLD_SKINS[case]))
+                runs[who] = factory(options.repo, args, root / who, 180, env=env, runtime=stage_old_skin_runtime(options.repo, root / f"{who}-staged", OLD_SKINS[case]))
             else:
-                runs[who] = make_run(options.repo, args, root / who, 180, env=env)
+                runs[who] = factory(options.repo, args, root / who, 180, env=env)
             if case == "host-long-names":
                 fixture = Path(options.repo) / "tools/fixtures" / LONG_MODULE
                 for item in fixture.rglob("*"):
@@ -3371,6 +3397,9 @@ def run_case(options, case, root, failing=None):
     finally:
         for run in runs.values():
             run.close()
+        if executor:
+            result.update(topology="spread", peer_boxes=executor.result()["peer_boxes"], spread=executor.result())
+            result["proof"] = result["pass"] and len(set(result["peer_boxes"].values())) == len(runs)
         result["captures"] = images
         (root / "result.json").write_text(json.dumps(retain_capture_detail(root, result), indent=2) + "\n", encoding="utf-8")
     return result
@@ -3458,6 +3487,10 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--harvest-declared", action="store_true", help="write each sweep's controls as drafts for tools/menu_declared; the sweeps then prove nothing")
     parser.add_argument("--base-words", action="store_true", help="write the new lobby, Escape and one-draft cases in the base screens' words, for their RED on the base build")
+    if spread:
+        spread.add_arguments(parser)
+    else:
+        parser.add_argument("--spread", action="store_true", help="requires the shared spread executor")
     parser.add_argument("--port", type=int, required=True)
     options = parser.parse_args()
     global BASE_WORDS
@@ -3468,6 +3501,12 @@ def main():
     if options.dry_run:
         print(json.dumps(dict(cases=selected, engine_count=max(2 if name in PAIRED_CASES else 1 for name, _ in selected))))
         return 0
+    if any(case in PAIRED_CASES for case, _ in selected):
+        if not spread:
+            parser.error("paired menu readback requires the shared spread executor")
+        options.spread = True
+    if spread:
+        spread.configure(options)
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("LEAD_FAMILY.lock exists; no engine launch")
     if not (any(low <= options.port <= low + 9 for low in (48270, 48380, 48390, 48530, 48540, 48550, 48840, 48850, 49180, 49190))
