@@ -69,9 +69,12 @@ Match.parameters["runner_wait"] or --runner-wait may specify that holder's
 wait in seconds. It updates only the existing local holder command, without
 an enclosing holder or a second slot. Engine/script timeouts remain unchanged.
 Before the native capacity claim, the same wait also covers the named local
-holder's FIFO line. Match.parameters["wait_for_holder"] / --wait-for-holder
-may name a holder the lead explicitly said to wait behind while it runs alone.
-Other markers, memory/engine limits and task refusals remain refusals.
+holder's FIFO line. Live owned local exclusive windows defer to that holder's
+queue within runner_wait; bare markers, floors and task refusals still refuse.
+Match.parameters["peer_tasks"] may pin a named Windows task for each peer.
+Match.parameters["public_directory"]=True uses the game's default public
+directory without a signaling tunnel. The host's registration log supplies
+its session code; only deliberate loopback joins are replaced by that code.
 After shipment and before launch, the same native capacity check waits on that
 named local claim's FIFO before starting case timers; all other guards remain.
 Transient CPU refusals re-probe that same named box every 30 seconds for up to
@@ -369,6 +372,8 @@ def add_arguments(parser):
     parser.add_argument("--runner-label", help="the lead's exact label for the native run holder")
     parser.add_argument("--runner-wait", type=float, help="the lead's wait in seconds for the existing local holder")
     parser.add_argument("--wait-for-holder", help="exact holder label the lead explicitly authorized waiting behind")
+    parser.add_argument("--peer-task", action="append", default=[], metavar="PEER=TASK", help="the lead's exact registered Windows task for a peer")
+    parser.add_argument("--public-directory", action="store_true", help="join through the game's default public directory without a private signaling tunnel")
     parser.add_argument("--peer-port", action="append", default=[], metavar="PEER=PORT", help="explicit peer match port (also supports a wrong-parameter detecting run)")
 
 
@@ -707,6 +712,16 @@ def native_cpu_wait_source(source):
     return source.replace(guard, replacement, 1)
 
 
+def native_holder_preflight_source(source):
+    """Let the local runner queue behind live owners while retaining load checks."""
+    original = "        state=capacity_state(box)\n"
+    if source.count(original) != 1:
+        raise SpreadRefusal("native worker claim preflight differs from the supported kit")
+    replacement = ("        from spread_peers import holder_preflight_state\n"
+                   "        state=holder_preflight_state(box,capacity_state(box))\n")
+    return source.replace(original, replacement, 1)
+
+
 def native_adapter_sources(facts_path, existing=None):
     """Ship the existing facts adapter's route reader before its launch adapter."""
     folder = Path(facts_path).parent
@@ -791,7 +806,6 @@ def claim_named_peer(backend, box, needs, request, *, wait=0, wait_for_holder=No
     if not math.isfinite(wait) or wait < 0:
         raise ValueError("runner wait must be finite and nonnegative")
     deadline = time.monotonic() + wait
-    holders = {wait_for_holder} if wait_for_holder else set()
     announced = None
     cpu = NamedCpuWait(box, needs)
     while True:
@@ -806,12 +820,7 @@ def claim_named_peer(backend, box, needs, request, *, wait=0, wait_for_holder=No
                 continue
             marker = "capacity refused: earlier work request is waiting: "
             fifo = marker in text
-            if fifo:
-                holders.add(text.split(marker, 1)[1].splitlines()[0])
-            # A FIFO predecessor can then own the exclusive window. Only a
-            # known or expressly named predecessor is allowed to remain a wait.
-            owned_window = any(("; owner=" + label + " (") in text or
-                               ("; owner=" + label + ";") in text for label in holders)
+            owned_window = live_owned_window(text)
             waiting = box["kind"] == "local" and wait and (fifo or owned_window)
             if not waiting:
                 raise
@@ -832,7 +841,6 @@ def wait_named_launch(worker, pool, box, claim, *, wait=0, wait_for_holder=None)
     if not wait or box["kind"] != "local":
         return
     deadline = time.monotonic() + wait
-    holders = {wait_for_holder} if wait_for_holder else set()
     announced = None
     needs = pool.Needs(**claim["needs"])
     cpu = NamedCpuWait(box, needs)
@@ -848,10 +856,10 @@ def wait_named_launch(worker, pool, box, claim, *, wait=0, wait_for_holder=None)
             continue
         marker = "earlier work request is waiting: "
         fifo = reason.startswith(marker)
-        if fifo:
-            holders.add(reason[len(marker):].splitlines()[0])
-        owned_window = any(("; owner=" + label + " (") in reason or
-                           ("; owner=" + label + ";") in reason for label in holders)
+        owned_window = live_owned_window(reason)
+        if owned_window:
+            # The existing local holder owns the actual admission and wait.
+            return
         if not (fifo or owned_window):
             raise SpreadRefusal("capacity changed before launch: " + reason)
         if time.monotonic() >= deadline:
@@ -861,6 +869,28 @@ def wait_named_launch(worker, pool, box, claim, *, wait=0, wait_for_holder=None)
             announced = reason
         time.sleep(min(2, max(0, deadline-time.monotonic())))
         worker.renew_claim(claim)
+
+
+def live_owned_window(reason):
+    """The native facts reader reports a PID only for a live owner or lease."""
+    return "box launch refused" in reason and bool(re.search(r"; owner=[^;\r\n]+ \(pid=[1-9]\d*(?:, machine=[^)]+)?\);", reason))
+
+
+def holder_preflight_state(box, state):
+    if box["kind"] == "local" and live_owned_window(state.get("refusal") or ""):
+        return dict(state, refusal=None, alone=False)
+    return state
+
+
+def named_task_box(box, tasks, names, name):
+    """Narrow this peer's task list without changing the shared catalog."""
+    task = role_value({key.casefold(): value for key, value in tasks.items()}, names, name)
+    if task is None:
+        return box
+    slots = [slot for slot in box.get("task_slots", ()) if slot["task"] == task]
+    if box["kind"] != "windows-task" or len(slots) != 1:
+        raise SpreadRefusal(f"named task {task} is not registered on {box['name']}")
+    return dict(box, task_slots=slots)
 
 
 class Case:
@@ -957,7 +987,7 @@ class Case:
         backend = module.Transport(repo=source_repo, work=self.lane_root/".spread-inputs", registry=self.registry)
         backend.repo = self.repo
         backend.sources["spread_peers.py"] = self.interface_source
-        backend.sources["pool_worker.py"] = native_cpu_wait_source(backend.sources["pool_worker.py"])
+        backend.sources["pool_worker.py"] = native_holder_preflight_source(native_cpu_wait_source(backend.sources["pool_worker.py"]))
         # The existing facts reader lazily imports pool_cohort under a named
         # assignment. It reads that assignment only; it does not select boxes.
         backend.sources = native_adapter_sources(module.worker.facts.__file__, backend.sources)
@@ -999,7 +1029,8 @@ class Case:
             if port != self.match.port:
                 raise self.refuse(peer.name, box["name"], f"match port {port} differs from host port {self.match.port}")
         for peer in self.peers:
-            box = boxes[self.assigned_boxes[peer.name].casefold()]
+            box = named_task_box(boxes[self.assigned_boxes[peer.name].casefold()],
+                                 self.match.parameters.get("peer_tasks", {}), self.names, peer.name)
             backend = self.backend()
             needs = self.pool.Needs(os=peer.os, engines=peer.engines, gpu=bool(peer.size), memory=peer.memory,
                                     alone=peer.quiet, size=peer.size, only_box=box["name"],
@@ -1098,6 +1129,12 @@ class Case:
         self.network = self.match.parameters.get("network", "ice")
         if self.network not in ("ice", "direct"):
             raise self.refuse(self.names[0], self.members[self.names[0]][0]["name"], "unknown declared network mode")
+        self.public_directory = bool(self.match.parameters.get("public_directory"))
+        if self.public_directory:
+            if self.network != "ice" or self.match.parameters.get("directory"):
+                raise SpreadRefusal("public directory requires ICE without a private directory descriptor")
+            self.directory = None
+            return
         if self.network == "direct":
             box, claim, _, backend = self.members[self.names[0]]
             address = self.match.parameters.get("host_address")
@@ -1176,7 +1213,14 @@ class Case:
         deadline = time.monotonic() + 80
         while time.monotonic() < deadline:
             self.synchronize()
-            session = directory_session(self.directory["DIRECTORY_ROOT"], port)
+            if getattr(self, "public_directory", False):
+                host = self.runs.get(self.names[0])
+                log = host.out / "stdout.log" if host else None
+                text = log.read_text(encoding="utf-8", errors="replace") if log and log.is_file() else ""
+                registered = re.findall(r"\[net-directory\] registered session_id=([A-Za-z0-9_-]+) heartbeat_s=", text)
+                session = registered[-1] if registered else None
+            else:
+                session = directory_session(self.directory["DIRECTORY_ROOT"], port)
             if session:
                 return session
             host = self.runs.get(self.names[0])
@@ -1260,6 +1304,7 @@ class Case:
                     preflight_sha256=hashlib.sha256(self.preflight_source.encode()).hexdigest() if getattr(self, "preflight_source", None) else None,
                     sharing={peer.name: dict(share_ok=peer.share_ok, reviewed=peer.reviewed, held=peer.held, quiet=peer.quiet,
                                               recorder=peer.recorder, readback=peer.readback) for peer in self.peers},
+                    peer_tasks={name: item[1].get("slot") for name, item in self.members.items()},
                     executable_hashes={name: item[1].get("exe_sha256") for name, item in self.members.items()},
                     identities=self.identities, records={name: run.record for name, run in self.runs.items()},
                     match=dict(port=self.match.port, parameters=json.loads(json.dumps(self.match.parameters, default=str))), refusals=self.refusals)
@@ -1408,7 +1453,7 @@ class Run:
         if "-net-port" in args and int(args[args.index("-net-port") + 1]) != port:
             raise self.case.refuse(self.role, box["name"], f"match port {args[args.index('-net-port') + 1]} differs from host port {port}")
         session = None
-        session_routing = self.case.directory and getattr(self.case, "network", "ice") == "ice" and self.case.match.parameters.get("join_by_session", True)
+        session_routing = (self.case.directory or getattr(self.case, "public_directory", False)) and getattr(self.case, "network", "ice") == "ice" and self.case.match.parameters.get("join_by_session", True)
         if session_routing and self.role != self.case.names[0]:
             session = self.case.published_session(self.role)
         if session_routing:
@@ -1468,6 +1513,7 @@ class Run:
                       timeout=self.timeout, expected=[map_text(path, mappings) for path in self.expected],
                       fixtures=self.fixtures, files=files, signals=signals, retained_runtime=self.retained is not None,
                       executable_sha256=claim["exe_sha256"], directory=self.case.directory,
+                      public_directory=getattr(self.case, "public_directory", False),
                       signal_port=claim.get("signal_port"), session=session)
         native["block_udp"] = next(peer.block_udp for peer in self.case.peers if peer.name == self.role)
         if getattr(self, "private_menu", None) or getattr(self, "private_environment", None):
@@ -1710,6 +1756,14 @@ def _native_execute(spec_path, result_out, peer, ownership):
         if not spec["directory"].get("preserve_settings"):
             settings.update(SessionDirectoryInstallKey="spread-" + role + "-install", NetworkIceEnable="1", NetworkPortMapEnable="0")
         seed_settings(run, settings)
+    elif spec.get("public_directory"):
+        header = (Path(spec["repo"]) / "Source/Managers/SettingsMan.h").read_text(encoding="utf-8")
+        default = re.search(r'c_DefaultSessionDirectoryUrl\s*=\s*"([^"]+)"', header)
+        if not default:
+            raise RuntimeError("the build names no default public directory")
+        seed_settings(run, dict(SessionDirectoryUrl=default[1], SessionDirectoryCertSha256="",
+                                SessionDirectoryInstallKey="spread-" + spec["case_id"] + "-" + role,
+                                NetworkIceEnable="1", NetworkPortMapEnable="0", NetworkHostGameListing="unlisted"))
     for flag in ("-record-video", "-feel-measure"):
         if flag in run.argv:
             Path(run.argv[run.argv.index(flag) + 1]).mkdir(parents=True, exist_ok=True)

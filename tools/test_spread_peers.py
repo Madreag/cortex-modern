@@ -239,13 +239,13 @@ class ContractTests(unittest.TestCase):
         claim = dict(token='owned', needs=dict(peer_id='host'))
         with patch.object(spread.time, 'sleep'):
             spread.wait_named_launch(worker, pool, box, claim, wait=1800)
-        self.assertEqual([row[0] for row in seen], [box, box, box])
+        self.assertEqual([row[0] for row in seen], [box, box])
         self.assertTrue(all(row[1]['ignore_token']=='owned' and row[1]['read_only'] for row in seen))
-        self.assertEqual(renewed, [claim, claim])
+        self.assertEqual(renewed, [claim])
 
     def test_post_shipment_wait_preserves_real_refusals(self):
         for reason in ('free memory 11 GB is below floor 12 GB',
-                       'box launch refused; owner=other (pid=7); since now'):
+                       'box launch refused; owner=unrecorded owner; since now'):
             worker = SimpleNamespace(capacity_state=unittest.mock.Mock(return_value={'reason':reason}),
                                      renew_claim=unittest.mock.Mock())
             pool = SimpleNamespace(Needs=lambda **values:SimpleNamespace(**values),
@@ -303,9 +303,9 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(claim, dict(token='owned'))
         self.assertEqual([call.args[0] for call in backend.rpc.call_args_list], [box, box, box])
 
-    def test_named_wait_never_retries_a_floor_or_unknown_marker_refusal(self):
+    def test_named_wait_never_retries_a_floor_or_ownerless_marker_refusal(self):
         for reason in ('capacity refused: free memory 11 GB is below floor 12 GB',
-                       'capacity refused: box launch refused: other-marker; owner=other (pid=9); since now'):
+                       'capacity refused: box launch refused: other-marker; owner=unrecorded owner; since now'):
             backend = SimpleNamespace(rpc=unittest.mock.Mock(side_effect=RuntimeError(reason)))
             with self.subTest(reason=reason), patch.object(spread.time, 'sleep') as pause:
                 with self.assertRaisesRegex(RuntimeError, 'capacity refused'):
@@ -313,6 +313,60 @@ class ContractTests(unittest.TestCase):
                                             SimpleNamespace(peer_id='host'), {}, wait=1800, wait_for_holder='restore')
                 pause.assert_not_called()
                 self.assertEqual(backend.rpc.call_count, 1)
+
+    def test_live_owned_window_waits_without_a_known_predecessor(self):
+        held = RuntimeError('capacity refused: box launch refused: live-marker; owner=another (pid=9, machine=RecorderBox); since now')
+        backend = SimpleNamespace(rpc=unittest.mock.Mock(side_effect=[held, dict(token='owned')]))
+        box = dict(name='RecorderBox', kind='local')
+        with patch.object(spread.time, 'sleep'):
+            claim = spread.claim_named_peer(backend, box, SimpleNamespace(peer_id='host'), {}, wait=1800)
+        self.assertEqual(claim, dict(token='owned'))
+        self.assertEqual([call.args[0] for call in backend.rpc.call_args_list], [box, box])
+
+    def test_live_owner_defers_to_holder_without_hiding_load_or_bare_markers(self):
+        state = dict(refusal='box launch refused: live-marker; owner=another (pid=9, machine=RecorderBox); since now',
+                     alone=True, free_gb=11, engines=10, jobs=[dict(alone=True)])
+        updated = spread.holder_preflight_state(dict(kind='local'), state)
+        self.assertIsNone(updated['refusal'])
+        self.assertFalse(updated['alone'])
+        self.assertEqual((updated['free_gb'], updated['engines'], updated['jobs']), (11,10,state['jobs']))
+        self.assertIs(spread.holder_preflight_state(dict(kind='windows-task'), state), state)
+        state['refusal'] = 'box launch refused: bare-marker; owner=unrecorded owner; since now'
+        self.assertIs(spread.holder_preflight_state(dict(kind='local'), state), state)
+
+    def test_explicit_task_keeps_only_the_registered_named_payload(self):
+        slots = [dict(slot=1, task='session-one'), dict(slot=2, task='session-two')]
+        box = dict(name='HostBox', kind='windows-task', task_slots=slots, engines_max=4)
+        selected = spread.named_task_box(box, {'host':'session-two'}, ['host','seat'], 'host')
+        self.assertEqual(selected['task_slots'], [slots[1]])
+        self.assertEqual(selected['engines_max'], box['engines_max'])
+        self.assertEqual(box['task_slots'], slots)
+        with self.assertRaisesRegex(spread.SpreadRefusal, 'not registered'):
+            spread.named_task_box(box, {'host':'missing-task'}, ['host','seat'], 'host')
+
+    def test_public_directory_has_no_fixture_service_or_tunnel(self):
+        case = object.__new__(spread.Case)
+        case.match = spread.Match(51580, parameters=dict(public_directory=True))
+        case.names, case.members = ['host','seat'], {'host': ({'name':'HostBox'},)}
+        case.stack = unittest.mock.Mock()
+        case.connect_directory()
+        self.assertEqual(case.network, 'ice')
+        self.assertTrue(case.public_directory)
+        self.assertIsNone(case.directory)
+        case.stack.enter_context.assert_not_called()
+
+    def test_public_code_comes_from_that_hosts_registration_log(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'stdout.log').write_text('[net-directory] registered session_id=own-code heartbeat_s=15\n', encoding='utf-8')
+            case = object.__new__(spread.Case)
+            case.public_directory, case.match, case.peer_ports = True, spread.Match(51580), {}
+            case.names, case.runs = ['host','seat'], {'host': SimpleNamespace(out=root, finished=False)}
+            case.synchronize = unittest.mock.Mock()
+            self.assertEqual(case.published_session('seat'), 'own-code')
+            script = b'settext TextJoinAddress 127.0.0.1\nsettext TextJoinAddress deliberately-invalid\n'
+            self.assertEqual(spread.map_script(script, [], 'own-code'),
+                             b'settext TextJoinAddress session:own-code\nsettext TextJoinAddress deliberately-invalid\n')
 
     def test_native_load_exit_preserves_peer_box_and_exact_reason(self):
         class LoadExit(SystemExit):
