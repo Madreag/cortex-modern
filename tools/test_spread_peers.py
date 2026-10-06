@@ -149,6 +149,43 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(result.exception.code, 0)
             self.assertEqual(seen, [dict(read_only=True, refresh_display=False, ignore_token='owned')])
 
+    def test_posix_quiet_marker_waits_for_its_live_owner_and_preserves_ownerless_evidence(self):
+        for live in (True, False):
+            with self.subTest(live=live), tempfile.TemporaryDirectory() as temporary:
+                clock, writes, renewals = [0.0], [], []
+                marker = Path(temporary)/'quiet.lock'
+                marker.write_text('previous owner evidence')
+                previous = dict(pid=7, process_start=12.0, machine='NAMED', label='previous window', token='other')
+                def read(path, **kwargs):
+                    self.assertFalse(kwargs['archive'])
+                    if live and clock[0] >= 20:
+                        marker.unlink(missing_ok=True)
+                    return previous if marker.exists() else None
+                def write(path, label, **kwargs):
+                    self.assertFalse(marker.exists())
+                    self.assertEqual(clock[0], 20)
+                    self.assertEqual(kwargs['token'], 'owned')
+                    marker.write_text('owned window')
+                    writes.append(label)
+                facts = SimpleNamespace(read_reservation=read, write_reservation=write,
+                                        machine_name=lambda:'NAMED', process_start=lambda pid:12.0 if live else None)
+                box = dict(name='NAMED', kind='posix')
+                claim = dict(token='owned', needs=dict(peer_id='client'), runner_wait=60)
+                with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+                     patch.object(spread.time, 'sleep', side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)) as sleep:
+                    if live:
+                        spread.claim_native_exclusive_marker(box, claim, marker, 'own window', facts=facts,
+                                                             renew=lambda value:renewals.append(value))
+                        self.assertEqual(writes, ['own window'])
+                        self.assertEqual(len(renewals), 10)
+                    else:
+                        with self.assertRaisesRegex(spread.SpreadRefusal, 'ownerless exclusive marker.*quiet.lock'):
+                            spread.claim_native_exclusive_marker(box, claim, marker, 'own window', facts=facts,
+                                                                 renew=lambda value:renewals.append(value))
+                        sleep.assert_not_called()
+                        self.assertEqual(marker.read_text(), 'previous owner evidence')
+                        self.assertEqual((writes, renewals), ([], []))
+
     def test_direct_host_route_to_named_lan_peer_does_not_select_its_overlay(self):
         with patch.object(spread.sys, 'platform', 'win32'), \
              patch.object(spread.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='192.168.50.130\n')) as query:
@@ -180,6 +217,20 @@ class ContractTests(unittest.TestCase):
         host.launch_attempted, host.start_failure = True, 'named native floor refused'
         with self.assertRaisesRegex(spread.SpreadRefusal, 'requested host did not start.*floor'):
             spread.wait_started_host(case, 'seat')
+
+    def test_session_wait_returns_the_hosts_named_admission_failure_without_launching_a_seat(self):
+        case = object.__new__(spread.Case)
+        case.names, case.peer_ports, case.match = ['host','seat'], {}, spread.Match(51580)
+        case.members = {'host':(dict(name='EROL-PC'),), 'seat':(dict(name='Linux'),)}
+        case.runs = {'host':SimpleNamespace(start_failure='capacity update is busy; skip this box')}
+        case.synchronize = unittest.mock.Mock()
+        case.refuse = lambda name, box, reason:spread.SpreadRefusal(f'spread peer {name} on {box}: {reason}')
+        with patch('e2e_video.directory_session') as query, patch.object(spread.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'seat on Linux.*host on EROL-PC.*capacity update is busy'):
+                case.published_session('seat')
+            query.assert_not_called()
+            sleep.assert_not_called()
+            case.synchronize.assert_not_called()
 
     def test_native_adapter_ships_its_existing_named_route_dependency(self):
         with tempfile.TemporaryDirectory() as temporary:

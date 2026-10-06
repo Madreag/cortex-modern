@@ -684,6 +684,15 @@ class NamedCpuWait:
         time.sleep(max(0, min(next_probe-now, self.deadline-now)))
 
 
+def exclusive_owner(path, value, facts):
+    live = bool(value and not getattr(value, 'bare', False) and value.get('pid')
+                and value.get('process_start') is not None and value.get('machine'))
+    if live and str(value['machine']).casefold() == facts.machine_name().casefold():
+        live = facts.process_start(value['pid']) == value['process_start']
+    return dict(path=str(path), live=live, **({key:value.get(key) for key in
+                ('pid', 'process_start', 'machine', 'label', 'token')} if value else {}))
+
+
 def native_exclusive_state(probe, box, *, facts, root, **kwargs):
     """Attach read-only exclusive ownership evidence to the native facts probe."""
     holders, ownerless = [], []
@@ -702,14 +711,9 @@ def native_exclusive_state(probe, box, *, facts, root, **kwargs):
             continue
         if not path.exists():
             continue
-        live = bool(value and not getattr(value, 'bare', False) and value.get('pid')
-                    and value.get('process_start') is not None and value.get('machine'))
-        if live and str(value['machine']).casefold() == facts.machine_name().casefold():
-            live = facts.process_start(value['pid']) == value['process_start']
-        holder = dict(path=str(path), live=live, **({key:value.get(key) for key in
-                      ('pid', 'process_start', 'machine', 'label', 'token')} if value else {}))
+        holder = exclusive_owner(path, value, facts)
         holders.append(holder)
-        if not live:
+        if not holder['live']:
             ownerless.append(f"ownerless exclusive marker {path}; no live recorded owner")
     # An ownerless marker is evidence for the lead; the facts probe must not
     # archive it as a stale reservation. Other capacity checks stay unchanged.
@@ -751,6 +755,30 @@ class NamedHolderWait:
         time.sleep(min(2, remaining))
 
 
+def claim_native_exclusive_marker(box, claim, marker, label, *, facts, renew):
+    """Wait for a POSIX quiet holder before publishing this peer's own marker."""
+    from types import SimpleNamespace
+    wait = NamedHolderWait(box, SimpleNamespace(peer_id=claim['needs']['peer_id']), claim.get('runner_wait', 0))
+    while True:
+        existing = facts.read_reservation(marker, archive=False)
+        if not Path(marker).exists():
+            try:
+                facts.write_reservation(marker, label, token=claim['token'])
+            except FileExistsError:
+                continue  # the atomic writer lost to a new holder; check its owner
+            return
+        owner = exclusive_owner(marker, existing, facts)
+        if not owner['live']:
+            raise SpreadRefusal(f'ownerless exclusive marker {marker}; no live recorded owner')
+        if existing.get('token') == claim['token']:
+            return
+        reason = f"box launch refused: {marker}; owner={owner['label']} (pid={owner['pid']}, machine={owner['machine']})"
+        if not wait.accepts(reason, dict(exclusive_holders=[owner])):
+            raise RuntimeError('another owner reserves this box alone')
+        wait.pause(reason)
+        renew(claim)
+
+
 @contextlib.contextmanager
 def named_launch_capacity(box, needs, claim, *, probe, live_reason, mutex, root, renew):
     """Keep the native final guard and release its lock while waiting to retry."""
@@ -778,6 +806,15 @@ def native_cpu_wait_source(source):
              "                if reason:=live_reason(box,Needs(**claim['needs']),before):raise RuntimeError('capacity changed before launch: '+reason)\n")
     if source.count(guard) != 1:
         raise SpreadRefusal("native worker capacity guard differs from the supported kit")
+    marker_guard = ("            existing=facts.read_reservation(marker)\n"
+                    "            if not existing:facts.write_reservation(marker,request['label'],token=claim['token'])\n"
+                    "            elif existing.get('token')!=claim['token']:raise RuntimeError('another owner reserves this box alone')\n")
+    if 'another owner reserves this box alone' in source and source.count(marker_guard) != 1:
+        raise SpreadRefusal('native worker exclusive marker guard differs from the supported kit')
+    if source.count(marker_guard) == 1:
+        source = source.replace(marker_guard,
+                 "            from spread_peers import claim_native_exclusive_marker\n"
+                 "            claim_native_exclusive_marker(box,claim,marker,request['label'],facts=facts,renew=renew_claim)\n", 1)
     replacement = ("            from spread_peers import named_launch_capacity\n"
                    "            with named_launch_capacity(box,Needs(**claim['needs']),claim,probe=capacity_state,\n"
                    "                    live_reason=live_reason,mutex=mutex,root=root_for(box),renew=renew_claim) as before:\n"
@@ -1283,6 +1320,11 @@ class Case:
         port = int(role_value(self.peer_ports, self.names, name) or self.match.port)
         deadline = time.monotonic() + 80
         while time.monotonic() < deadline:
+            host = self.runs.get(self.names[0])
+            if host and getattr(host, 'start_failure', None):
+                host_box = self.members[self.names[0]][0]['name']
+                raise self.refuse(name, self.members[name][0]['name'],
+                                  f'requested host on {host_box} did not start: {host.start_failure}')
             self.synchronize()
             session = directory_session(self.directory["DIRECTORY_ROOT"], port)
             if session:
