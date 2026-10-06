@@ -248,6 +248,7 @@ namespace RTE {
 			uint32_t files = 0;
 			uint64_t first = 0, last = 0;
 			uint64_t indexBytes = 0;      //!< Memory: the files' per-frame offsets.
+			uint64_t pendingJobs = 0;     //!< Includes work whose result the writer has not published.
 			uint32_t cachedReads = 0;     //!< Memory: the reads kept for the joiners asking again.
 			uint64_t cachedReadBytes = 0;
 			uint32_t pendingDeleteFiles = 0, orphanedFiles = 0;

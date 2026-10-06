@@ -937,6 +937,7 @@ namespace RTE {
 		std::deque<Job> jobs;
 		uint64_t queuedBytes = 0;
 		bool stopping = false;
+		bool activeJob = false; //!< Under mutex; a popped job is not finished until its stats are published.
 		std::atomic<bool> failed{false};
 		std::atomic<bool> finished{false}; //!< Its writer has returned and removed its files.
 		std::string failure; //!< Why it failed, under mutex; the first reason stands.
@@ -1112,6 +1113,7 @@ namespace RTE {
 						if (stopping) break;
 						if (!jobs.empty() && !stalled()) {
 							job = std::move(jobs.front()); jobs.pop_front(); queuedBytes -= job.bytes.size(); haveJob = true;
+							activeJob = true;
 						}
 					}
 					uint64_t dropped = 0;
@@ -1171,6 +1173,7 @@ namespace RTE {
 						job.result->set_value(std::move(result));
 					}
 					if (!job.result || receipt) publish(receipt, dropped);
+					{ std::lock_guard lock(mutex); activeJob = false; }
 				}
 			} catch (const std::exception& error) {
 				Fail(std::string("its writer stopped: ") + error.what());
@@ -1179,6 +1182,7 @@ namespace RTE {
 			segments.clear();
 			std::erase_if(pendingDeletes, [&](Segment& segment) { return close(segment); });
 			publish(!pendingDeletes.empty(), 0);
+			{ std::lock_guard lock(mutex); activeJob = false; }
 			finished = true;
 		}
 	};
@@ -1284,6 +1288,10 @@ namespace RTE {
 	NetWorldFrameLog::JournalStats NetWorldFrameLog::GetJournalStats() const {
 		JournalStats stats;
 		if (!m_Journal) return stats;
+		{
+			std::lock_guard lock(m_Journal->mutex);
+			stats.pendingJobs = m_Journal->jobs.size() + (m_Journal->activeJob ? 1 : 0);
+		}
 		stats.bytes = m_Journal->bytesOnDisk;
 		stats.files = m_Journal->filesOnDisk;
 		stats.first = m_JournalFirst;
@@ -2639,6 +2647,7 @@ namespace RTE {
 		     << " refused=" << m_Refused.size() << " cancelled=" << m_CancelledJoins.size() << " slots=" << m_Membership.Slots().size()
 		     << " history_frames=" << m_Tail.Count() << " history_bytes=" << m_Tail.Bytes() << " history_evicted=" << m_Tail.Evicted()
 		     << " journal_files=" << journal.files << " journal_disk_bytes=" << journal.bytes << " journal_index_bytes=" << journal.indexBytes
+		     << " journal_pending_jobs=" << journal.pendingJobs
 		     << " journal_cached_reads=" << journal.cachedReads << " journal_cached_read_bytes=" << journal.cachedReadBytes
 		     << " image_tick=" << m_Image.tick << " image_bytes=" << m_Image.bytes;
 		return line.str();

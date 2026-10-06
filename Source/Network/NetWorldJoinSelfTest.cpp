@@ -3682,7 +3682,7 @@ namespace RTE {
 		for (int still = 0, polls = 0; still < 3 && polls < 2000; ++polls) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(5));
 			const NetWorldFrameLog::JournalStats next = log.GetJournalStats();
-			still = next.bytes == stats.bytes && next.files == stats.files ? still + 1 : 0;
+			still = next.pendingJobs == 0 && next.bytes == stats.bytes && next.files == stats.files && next.indexBytes == stats.indexBytes ? still + 1 : 0;
 			stats = next;
 		}
 		return stats;
