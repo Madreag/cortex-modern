@@ -2628,12 +2628,16 @@ static std::string ResyncSaveName() {
 		bool exchangeOwed = false;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			// Leaving ends this machine's replay of its held seat, while its ticket still keeps the seat.
+			EndRoundCatchUpLocked();
 			// The round hears the leave at once: this seat stopped producing here, and a leave that waited on §7's
 			// ack would be held as a slow player first. The notice leaves the link up, so §7 still runs on it.
 			exchangeOwed = !m_LeaveExchangeRun && m_AdmissionAttached && !m_IsHost && m_Session &&
 			               m_Session->IsReady() && m_TicketStore.HasRecord();
 			if (m_Coordinator) {
 				m_Coordinator->Leave(reason);
+				// A held returner hears the same end as a player still in the round.
+				if (m_IsHost && m_State == NetMatchServiceState::Running && !handover) SayGoodbyeToRejoinersLocked();
 			}
 			if (m_State == NetMatchServiceState::Running) {
 				m_State = NetMatchServiceState::Completed;
