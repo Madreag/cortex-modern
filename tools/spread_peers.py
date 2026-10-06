@@ -11,6 +11,8 @@ and whether its screen is reviewed. Peer.share_ok defaults to True for screen
 peers; quiet, reviewed, held and recorder peers always reserve a box alone.
 Peer.held declares any target of a hold or stall lever before allocation.
 Peer.recorder requires the controller's private Windows video recorder.
+Peer.readback=True lets the pool choose an unpinned reviewed screen's native
+readback box; its False default keeps the version 1 controller placement.
 An explicitly pinned reviewed screen peer may use its own box's readback;
 an unpinned reviewed peer retains the version 1 controller placement.
 The
@@ -69,6 +71,12 @@ Set join_by_session=False when the caller joins through directory rows itself.
 The byte-pinned interface is shipped as a pool control input, so callers do
 not need it committed into their own branch before using the published call.
 Declared .bin protocol inputs in peer arguments retain their exact bytes.
+make_run(..., runtime=...) copies owned retained regular files, settings and
+Data overlays without following links into the immutable game tree. Native
+overlay ancestors are private; other Data directories remain linked inputs.
+Incomplete retained runtimes and private tickets refuse before launch.
+A multi-peer spread match uses at least two physical boxes even when no
+reviewed peer is declared. Pinning every peer to one box refuses by name.
 Configured dispatcher discovery uses CORTEX_POOL_DISPATCHER, the installed
 box_facts adapter, or --pool-dispatcher. There is no alternate dispatcher.
 """
@@ -138,6 +146,7 @@ class Peer:
     share_ok: bool = True
     held: bool = False
     recorder: bool = False
+    readback: bool = False
 
     def __post_init__(self):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", self.name):
@@ -183,6 +192,14 @@ def native_address_probe():
                     return str(address)
     addresses = {row[4][0] for row in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET)}
     if sys.platform.startswith("linux"):
+        try:
+            route = subprocess.run(["ip", "-j", "route", "get", "192.0.2.1"], capture_output=True, text=True, timeout=10)
+            for item in json.loads(route.stdout) if route.returncode == 0 else ():
+                address = ipaddress.ip_address(item.get("prefsrc") or item.get("src") or "127.0.0.1")
+                if address.version == 4 and not address.is_loopback and not address.is_link_local and not address.is_unspecified:
+                    return str(address)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
         result = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
             for value in result.stdout.split():
@@ -534,7 +551,9 @@ class Case:
         adapter = Path(module.worker.facts.__file__).with_name("pool_run.py")
         if adapter.is_file():
             backend.sources["pool_run.py"] = adapter.read_text(encoding="utf-8")
-        backend.control_id = hashlib.sha256(json.dumps(backend.sources, sort_keys=True).encode()).hexdigest()[:20]
+        preflight = Path(__file__).with_name("cross_peers.py")
+        self.preflight_source = preflight.read_text(encoding="utf-8") if preflight.is_file() else None
+        backend.control_id = hashlib.sha256(json.dumps(dict(backend.sources, preflight=self.preflight_source), sort_keys=True).encode()).hexdigest()[:20]
         backend.guard = self.guard
         limits = read_json(os.environ.get("CORTEX_SPREAD_LIMITS", ""), {})
         if limits:
@@ -562,7 +581,7 @@ class Case:
         for peer in ordered:
             backend = self.backend()
             pin = role_value(self.pins, self.names, peer.name)
-            if peer.recorder or peer.reviewed and not pin:
+            if peer.recorder or peer.reviewed and not peer.readback and not pin:
                 if pin and pin.casefold() != (reviewed_box or "").casefold():
                     raise self.refuse(peer.name, pin, "reviewed screen requires the controller's private Windows recorder")
                 pin = reviewed_box
@@ -571,6 +590,13 @@ class Case:
             if pin and peer.quiet and any(box["name"].casefold() == pin.casefold() and box.get("timing") is False for box in catalog):
                 raise self.refuse(peer.name, pin, "catalog does not permit timing measurements on this box")
             excluded = (exclusive if peer.share_ok else used) + [box["name"] for box in catalog if peer.quiet and box.get("timing") is False]
+            if not pin:
+                excluded += [value for other in ordered if other.name != peer.name and
+                             (value := role_value(self.pins, self.names, other.name)) and not (peer.share_ok and other.share_ok)]
+            if peer.share_ok and len(ordered) > 1 and len(self.members) == len(ordered) - 1 and len(set(used)) == 1:
+                if pin and pin.casefold() == used[0].casefold():
+                    raise self.refuse(peer.name, pin, "spread match requires at least two physical boxes")
+                excluded += used
             needs = self.pool.Needs(os=peer.os, engines=peer.engines, gpu=bool(peer.size), memory=peer.memory,
                                     alone=peer.quiet, size=peer.size, only_box=pin, excluded=tuple(excluded),
                                     case_id=self.id, peer_id=peer.name, share_ok=peer.share_ok, reviewed=peer.reviewed or peer.recorder, held=peer.held)
@@ -678,6 +704,8 @@ class Case:
             backend.active_claim, backend.active_box = claim, box
             backend.snapshot = getattr(self, "input_snapshot", None)
             backend.prepare(box, claim, request)
+            if getattr(self, "preflight_source", None):
+                backend.rpc(box, "install", dict(root=claim["control"], sources={"cross_peers.py": self.preflight_source}))
             self.input_snapshot = backend.snapshot
             if claim["head"] != self.input_snapshot["head"]:
                 raise self.refuse(name, box["name"], "source changed after the case input snapshot was frozen")
@@ -845,8 +873,9 @@ class Case:
     def result(self):
         return dict(schema=1, topology="spread", peer_boxes={name: item[0]["name"] for name, item in self.members.items()},
                     interface_sha256=self.interface_sha256,
+                    preflight_sha256=hashlib.sha256(self.preflight_source.encode()).hexdigest() if getattr(self, "preflight_source", None) else None,
                     sharing={peer.name: dict(share_ok=peer.share_ok, reviewed=peer.reviewed, held=peer.held, quiet=peer.quiet,
-                                              recorder=peer.recorder) for peer in self.peers},
+                                              recorder=peer.recorder, readback=peer.readback) for peer in self.peers},
                     executable_hashes={name: item[1].get("exe_sha256") for name, item in self.members.items()},
                     identities=self.identities, records={name: run.record for name, run in self.runs.items()},
                     match=dict(port=self.match.port, parameters=json.loads(json.dumps(self.match.parameters, default=str))), refusals=self.refusals)
@@ -896,6 +925,67 @@ class Case:
         self.close()
 
 
+def retained_files(runtime):
+    """Read owned regular state and exclude links to the immutable game tree."""
+    runtime = Path(runtime).resolve()
+    if not runtime.is_dir() or not (runtime / "Userdata/Settings.ini").is_file():
+        raise ValueError(f"retained runtime is incomplete: {runtime}")
+    result = {}
+    for directory, names, files in os.walk(runtime, followlinks=False):
+        names[:] = [name for name in names if public_file(Path(directory) / name)]
+        for name in files:
+            path = Path(directory) / name
+            if path.is_symlink():
+                continue
+            if not public_file(path):
+                raise SpreadRefusal("retained private credentials or tickets require the existing credential delivery channel")
+            result[path.relative_to(runtime)] = path.read_bytes()
+    return result
+
+
+def link_directory(source, target):
+    """Link immutable directories without modifying their files."""
+    if sys.platform == "win32":
+        quoted = lambda path: "'" + str(path).replace("'", "''") + "'"
+        subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                        "New-Item -ItemType Junction -Path " + quoted(target) + " -Target " + quoted(source) + " | Out-Null"],
+                       check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    else:
+        target.symlink_to(source, target_is_directory=True)
+
+
+def overlay_data(source, target, paths):
+    """Give each overlay a private ancestor while linking other data directories."""
+    target.mkdir(parents=True, exist_ok=False)
+    for child in source.iterdir():
+        destination = target / child.name
+        below = [path for path in paths if path.parts[0] == child.name]
+        if child.is_dir():
+            if below:
+                overlay_data(child, destination, [Path(*path.parts[1:]) for path in below if len(path.parts) > 1])
+            else:
+                link_directory(child, destination)
+        else:
+            shutil.copyfile(child, destination)
+
+
+def native_retained_runtime(repo, out, files, fixtures):
+    """Materialize retained state with private data overlays for the native runner."""
+    runtime = out.parent / (out.name + "-retained-runtime")
+    runtime.mkdir(parents=True, exist_ok=False)
+    for name in ("Userdata", "Mods", "ScreenShots", "Temp"):
+        (runtime / name).mkdir()
+    overlay_data(Path(repo) / "Data", runtime / "Data", [Path(*path.parts[1:]) for path in files if path.parts[0] == "Data"])
+    staged = ["preview_window_modcompat.lua", *fixtures]
+    for name in staged:
+        source = Path(repo) / "tools/fixtures" / name
+        if source.is_file():
+            atomic_bytes(runtime / "tools/fixtures" / Path(name).name, source.read_bytes())
+    for relative, data in files.items():
+        atomic_bytes(runtime / relative, data)
+    return runtime
+
+
 class Run:
     """A native-runner handle with local staging paths for existing case logic."""
     def __init__(self, case, repo, args, out, timeout, env, expected, fixtures, runtime, *, role=None):
@@ -908,14 +998,20 @@ class Run:
         for name in ("Userdata", "Mods", "ScreenShots", "Temp"):
             (self.cwd/name).mkdir(parents=True, exist_ok=True)
         # Stage only private settings; the native runner creates its Data link.
-        source = self.repo/"Userdata/Settings.ini"
-        text = source.read_text(encoding="utf-8-sig") if source.is_file() else "SettingsMan\n"
-        (self.cwd/"Userdata/Settings.ini").write_text(text, encoding="utf-8")
         from run_sim_test import RUNTIME_SETTINGS, seed_settings
-        seed_settings(self, RUNTIME_SETTINGS)
+        if runtime is not None:
+            self.retained = Path(runtime).resolve()
+            for relative, data in retained_files(self.retained).items():
+                atomic_bytes(self.cwd / relative, data)
+        else:
+            source = self.repo/"Userdata/Settings.ini"
+            text = source.read_text(encoding="utf-8-sig") if source.is_file() else "SettingsMan\n"
+            (self.cwd/"Userdata/Settings.ini").write_text(text, encoding="utf-8")
+            seed_settings(self, RUNTIME_SETTINGS)
         self.argv = [str(engine_executable(repo)), "-headless", *map(str, args)]
-        write_json(self.out/"runtime.json", dict(executable=self.argv[0], cwd=str(self.cwd), settings_overrides=RUNTIME_SETTINGS,
-                                                topology="spread", box=case.members[self.role][0]["name"]))
+        write_json(self.out/"runtime.json", dict(executable=self.argv[0], cwd=str(self.cwd), settings_overrides=RUNTIME_SETTINGS if runtime is None else {},
+                                                topology="spread", box=case.members[self.role][0]["name"],
+                                                retained_runtime=str(self.retained) if self.retained is not None else None, copied=self.retained is not None))
 
     @property
     def process(self):
@@ -948,6 +1044,9 @@ class Run:
             args[args.index("-net-join") + 1] = self.case.host_address
         mappings = [(str(self.case.out), claim["case_root"]), (self.case.out.as_posix(), claim["case_root"]),
                     (str(self.repo), claim["repo"]), (self.repo.as_posix(), claim["repo"])]
+        if self.retained is not None:
+            mappings += [(str(self.retained), claim["case_root"] + "/" + self.output_name + "/runtime"),
+                         (self.retained.as_posix(), claim["case_root"] + "/" + self.output_name + "/runtime")]
         files = {}
         roots = [self.cwd, self.case.out/(self.output_name + "-stage"), self.case.out/(self.output_name + "-probe"), self.case.out/(self.output_name + "_probe")]
         paths = set(self.case.out.glob("*.txt"))
@@ -981,11 +1080,12 @@ class Run:
         signals = self.case.signals()
         self.case.extra_signals = sorted(set(getattr(self.case, "extra_signals", ())) | set(signals))
         native = dict(schema=1, role=self.role, output_name=self.output_name, root=claim["case_root"], repo=claim["repo"], box=box,
+                      case_id=self.case.id,
                       control=claim["control"], claim=self.case.transport_module.Transport.native_claim(claim),
                       args=[map_text(argument, mappings) for argument in args],
                       env={key: map_text(value, mappings) for key, value in self.env.items()},
                       timeout=self.timeout, expected=[map_text(path, mappings) for path in self.expected],
-                      fixtures=self.fixtures, files=files, signals=signals,
+                      fixtures=self.fixtures, files=files, signals=signals, retained_runtime=self.retained is not None,
                       executable_sha256=claim["exe_sha256"], directory=self.case.directory,
                       signal_port=claim.get("signal_port"), session=session)
         native["block_udp"] = next(peer.block_udp for peer in self.case.peers if peer.name == self.role)
@@ -1153,7 +1253,10 @@ def native_execute(spec_path, result_out):
     box = dict(spec["box"], tree=spec["repo"], executable=os.environ["CCCP_TEST_BINARY"], scratch=str(root),
                kind="windows-local" if spec["box"]["kind"] == "local" else spec["box"]["kind"])
     write_json(preflight_root/"payload.json", dict(box=box, specs=[]))
-    preflight_payload(preflight_root/"payload.json")
+    if "pool_peer" in preflight_payload.__code__.co_varnames:
+        preflight_payload(preflight_root/"payload.json", pool_peer=dict(case_id=spec.get("case_id"), peer_id=role))
+    else:
+        preflight_payload(preflight_root/"payload.json")
     identity = read_json(preflight_root/"preflight.json")
     if identity["executable_sha256"] != spec["executable_sha256"]:
         raise SpreadRefusal("native executable hash differs from preparation")
@@ -1174,10 +1277,16 @@ def native_execute(spec_path, result_out):
         encoder = find_ffmpeg()
         if encoder:
             environment.update(CCCP_TEST_RECORD_ENCODER=str(encoder), CCCP_TEST_RECORD_CODEC=encoder_codec(encoder))
+    retained = None
+    if spec.get("retained_runtime") or any(path.parts[0] == "Data" for path in runtime_files):
+        retained = native_retained_runtime(spec["repo"], out, runtime_files, spec["fixtures"])
     run = make_run(spec["repo"], spec["args"], out, timeout=spec["timeout"], env=environment,
-                   expected=spec["expected"], fixtures=spec["fixtures"])
-    for relative, data in runtime_files.items():
-        atomic_bytes(Path(run.cwd)/relative, data)
+                   expected=spec["expected"], fixtures=spec["fixtures"], runtime=retained)
+    if retained is not None:
+        link_directory(retained, out / "runtime")
+    else:
+        for relative, data in runtime_files.items():
+            atomic_bytes(Path(run.cwd)/relative, data)
     if spec["directory"]:
         settings = dict(SessionDirectoryUrl=f"127.0.0.1:{spec['signal_port']}", SessionDirectoryCertSha256=spec["directory"]["DIRECTORY_PIN"])
         if not spec["directory"].get("preserve_settings"):

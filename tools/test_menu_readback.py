@@ -2475,18 +2475,66 @@ def timing_options_geometry(images):
     return measured
 
 
+def spread_menu_scripts(case, texts, port, root):
+    """Keep each page oracle and add a real remote lobby participant."""
+    if case not in ("net-chat", "lobby-name"):
+        return texts
+    hosting = probe_root(root, "host") / "hosting.json"
+    client_done = root / "client-done.mark"
+    host = texts["host"]
+    if not host.endswith("exit\n"):
+        raise ValueError("paired page script must retain its final exit")
+    host = host[:-len("exit\n")]
+    if case == "net-chat":
+        host += (LANDING + "settext TextMultiplayerName MenuHost\n"
+                 "activate ButtonMultiplayerHostGame\nwait 5\n"
+                 f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
+                 "activate ButtonMultiplayerCreate\n")
+    else:
+        host = host.replace("activate ButtonMultiplayerCreate\n", "activate ButtonMultiplayerCreate\nwait_connected 2 60\n", 1)
+    name = "MenuHost" if case == "net-chat" else "Recon7"
+    if case == "net-chat":
+        host += "wait_connected 2 60\n"
+    host += "wait_label LabelLobbyPlayer1 Joiner\n"
+    client = (LANDING + "settext TextMultiplayerName Joiner\n"
+              f"wait_file {hosting} 60\nactivate ButtonMultiplayerJoinGame\nwait 5\n"
+              "activate ButtonJoinByAddress\nwait 4\n"
+              f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
+              "activate ButtonJoinAddressGo\nwait_connected 2 60\n"
+              f"wait_label LabelLobbyPlayer0 {name}\n")
+    if case == "net-chat":
+        host += "chat all hello-from-host\nwait_label LabelLobbyChatAny hello-from-client\nchat all host-received-client\n"
+        client += "wait_label LabelLobbyChatAny hello-from-host\nchat all hello-from-client\nwait_label LabelLobbyChatAny host-received-client\n"
+    else:
+        client += f"wait_file {probe_root(root, 'host') / 'host-read.json'} 60\n"
+    host += f"wait_file {client_done} 60\nexit\n"
+    client += "exit\n"
+    probes = {"host": {"schema": 1, "timeout_ms": 90000, "steps": [
+        {"op": "wait", "screen": "MultiplayerScreen", "control": "LabelLobbyPlayer0", "text_contains": name,
+         "equals": {"visible": True}, "scope": "menu"},
+        {"op": "signal", "name": "hosting", "scope": "menu"}, {"op": "finish"}]}}
+    if case == "lobby-name":
+        probes["host"]["steps"][-1:-1] = [
+            {"op": "wait_file", "path": str(root / "host/runtime/ScreenShots/dump_host_options_4.json"), "scope": "menu"},
+            {"op": "signal", "name": "host-read", "scope": "menu"}]
+    return {"host": host, "client": client}, probes
+
+
 @managed_case
 def run_case(options, case, root, failing=None):
     root.mkdir(parents=True, exist_ok=False)
     texts, probes = scripts(case, options.port, root, options.size)
+    network_page_pair = case in ("net-chat", "lobby-name") and spread and spread.enabled(options) and not failing
+    if network_page_pair:
+        texts, probes = spread_menu_scripts(case, texts, options.port, root)
     if failing:
         prelude, setup, assertion = failing
         texts, probes = {"host": prelude + setup + assertion + "\nexit\n"}, {}
     inputs = root / "input.txt"
     inputs.write_text(INPUT_SCRIPT, encoding="utf-8")
-    paired = case in PAIRED_CASES
+    paired = case in PAIRED_CASES or network_page_pair
     # A menu-driven pair joins through the real UI, so it carries no service-e2e flags.
-    menu_driven = case in ("net-activity", "local-end-match", "net-host-left", "net-host-left-early", "lobby-ready-all", "lobby-countdown",
+    menu_driven = network_page_pair or case in ("net-activity", "local-end-match", "net-host-left", "net-host-left-early", "lobby-ready-all", "lobby-countdown",
                            "lobby-last-ready", "lobby-ready-back", "lobby-seat-missing", "sweep-advanced-client", *THIRD_PASS_CASES)
     seeded = {} if failing else seeds(case)
     runs, records, argv, images = {}, {}, {}, []
@@ -2507,7 +2555,7 @@ def run_case(options, case, root, failing=None):
                                  size=(int(width * multiplier), int(height * multiplier)), reviewed=who == reviewed,
                                  held=(case == "net-host-left-early" and who == "client")) for who in texts]
             parameters = {"lane": "menus"}
-            if case == "host-draft-roundtrip":
+            if case == "host-draft-roundtrip" or network_page_pair:
                 # This case deliberately reads back Unlisted with traversal and relay Off.
                 parameters["network"] = "direct"
             executor = spread.prepare_case(options.repo, root, peers, spread.Match(options.port, parameters=parameters))
@@ -2602,6 +2650,8 @@ def run_case(options, case, root, failing=None):
                     wait_for_log(run, "[e2e] rules tick=1", 120)
                     (probe_root(root, who) / "started.mark").write_text("first gameplay tick\n", encoding="utf-8")
                 records[who] = run.finish()
+                if network_page_pair and who == "client":
+                    spread.atomic_bytes(root / "client-done.mark", b"complete\n")
             except Exception as error:
                 records[who] = {"error": repr(error)}
 
@@ -2648,10 +2698,15 @@ def run_case(options, case, root, failing=None):
                 assert f"[menu-script] FAILED: {assertion.split()[0]}" in logs[who], logs[who][-3000:]
                 assert "unknown command" not in logs[who], logs[who][-3000:]
             else:
-                images += captures(run.cwd, {"source_revision": options.revision,
+                provenance = {"source_revision": options.revision,
                     "executable": str(engine_executable(options.repo)), "exe_sha256": options.exe_sha,
                     "os": os.name, "configuration": "Final", "argv": record.get("argv", argv[who]),
-                    "peer": who, "case": case, "logical_size": options.size})
+                    "peer": who, "case": case, "logical_size": options.size}
+                if executor:
+                    box, claim = executor.members[who][:2]
+                    provenance.update(box=box["name"], os=box["os"], executable=claim["exe"],
+                                      exe_sha256=claim["exe_sha256"], source_revision=claim["head"])
+                images += captures(run.cwd, provenance)
                 if case == "net-activity" and who == "host":
                     host_setup = [image for image in images if image["peer"] == "host"
                                   and any(c["name"] == "ComboHostActivity" for c in image["controls"])]
