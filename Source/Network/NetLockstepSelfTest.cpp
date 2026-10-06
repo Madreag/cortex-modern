@@ -16646,11 +16646,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				g_TimerMan.RewindSimTo(switchFrame, savedTime);
 				MovableMan::ReconcileLockstepControlBindings();
 			}
-			const std::vector<NetGameCommand> switchCommands = ScenarioRunner::DrainLocalGameCommands();
 			ControllerFrame hostSnap = ControllerFrameCodec::Snapshot(uid, *hostView->GetController(), hostView);
 			hostSnap.actorUniqueID = uid;
 			if (!host.QueueLocalInput(switchFrame, {hostSnap}, {}, &queueError) ||
-			    !client.QueueLocalInput(switchFrame, {MakeFrame(200, switchFrame + 1)}, switchCommands, &queueError)) {
+			    !ScenarioRunner::QueueLockstepLocalControllerFrames(switchFrame, {MakeFrame(200, switchFrame + 1)}, &queueError)) {
 				return finish(queueError.c_str());
 			}
 			for (uint64_t produced = switchFrame + 1; produced <= switchFrame + 2 * delay; ++produced) {
