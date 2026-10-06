@@ -310,11 +310,22 @@ namespace RTE {
 
 	bool FrameRecorder::StageTextureReadback(unsigned int texture, int width, int height, std::string& error) {
 		if (!m_StagingHeld) { error = "no admitted frame"; return false; }
+#if defined(__linux__)
+		if (!ReadTextureRGB(texture, width, height, m_Staging, error)) return false;
+		const std::size_t rowBytes = static_cast<std::size_t>(width) * 3;
+		for (int y = 0; y < height / 2; ++y) {
+			auto* first = m_Staging.data() + static_cast<std::size_t>(y) * rowBytes;
+			auto* last = m_Staging.data() + static_cast<std::size_t>(height - y - 1) * rowBytes;
+			std::swap_ranges(first, first + rowBytes, last);
+		}
+		return true;
+#else
 		m_StagedTextureReadback = true;
 		if (!m_ReadbackContext) m_ReadbackContext = FrameReadbackContext::Create(error);
 		if (!m_ReadbackContext) return false;
 		m_StagedReadback = m_ReadbackContext->Submit(texture, width, height, error);
 		return m_StagedReadback != nullptr;
+#endif
 	}
 
 	std::string FrameRecorder::ReadbackError() const {
