@@ -1690,6 +1690,40 @@ namespace RTE {
 		return seeded != 0 && s_LockstepCoordinator->IsSeatReclaimGap(seeded, frame) ? seeded : owner;
 	}
 
+	std::optional<NetGameSeatReclaim> ScenarioRunner::GetLocalReclaimInputWindow(uint64_t frame) {
+		NetLockstepPlaneGuard plane;
+		if (!s_LockstepCoordinator || s_WorldCatchUpActive) return std::nullopt;
+		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
+		if (!s_LockstepCoordinator->IsSeatReclaimGap(local, frame)) return std::nullopt;
+		const auto reclaims = s_LockstepCoordinator->ReclaimTransactions();
+		const auto own = reclaims.find(local);
+		return own != reclaims.end() ? std::optional{own->second} : std::nullopt;
+	}
+
+	bool ScenarioRunner::IsLocalControlClaimPending(int64_t actorUniqueID) {
+		NetLockstepPlaneGuard plane;
+		if (!s_LockstepCoordinator) return false;
+		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
+		const auto pending = [&](const NetGameCommand& command) {
+			const auto* claim = std::get_if<NetGameSwitchControl>(&command.payload);
+			const auto applied = s_AppliedCommandSequences.find(local);
+			return claim && claim->actorUID == actorUniqueID && claim->newOwnerPeerId == local &&
+			    (command.senderPeerId == 0 || command.senderPeerId == local) &&
+			    (command.sequence == 0 || applied == s_AppliedCommandSequences.end() || command.sequence > applied->second);
+		};
+		if (std::any_of(s_PendingLocalGameCommands.begin(), s_PendingLocalGameCommands.end(), pending)) return true;
+		for (const auto& [sequence, entry]: s_LocalCommandOutbox) if (pending(entry.command)) return true;
+		for (const auto& [frame, commands]: s_RequeuedCommands)
+			if (std::any_of(commands.begin(), commands.end(), pending)) return true;
+		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		const uint64_t through = tick + s_LockstepCoordinator->InputDelayAt(local, tick);
+		std::vector<NetGameCommand> commands;
+		for (uint64_t frame = tick; frame <= through; ++frame)
+			if (s_LockstepCoordinator->PeekQueuedCommands(frame, local, commands) &&
+			    std::any_of(commands.begin(), commands.end(), pending)) return true;
+		return false;
+	}
+
 	uint8_t ScenarioRunner::GetLockstepHeldSeat(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) {
 		NetLockstepPlaneGuard plane;
 		const uint8_t owner = GetLockstepDropTimeActorOwner(actorUniqueID, actorTeam, cpuControlled);

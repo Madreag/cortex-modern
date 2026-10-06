@@ -215,6 +215,8 @@ namespace RTE {
 		/// The seat a reclaim at this frame covers an actor for; outside a reclaim gap the drop-time owner.
 		static uint8_t GetLockstepHeldSeat(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame);
 		static uint8_t GetLockstepReclaimSeat(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame);
+		static std::optional<NetGameSeatReclaim> GetLocalReclaimInputWindow(uint64_t frame);
+		static bool IsLocalControlClaimPending(int64_t actorUniqueID);
 		/// The synced match's host peer; 0 without a coordinator.
 		static uint8_t GetLockstepHostPeerId();
 		static uint8_t ResolveTeamCommandAuthority(int team);
