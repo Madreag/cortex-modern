@@ -59,6 +59,7 @@ are forwarded. Their staged connection settings and install keys are retained.
 Set join_by_session=False when the caller joins through directory rows itself.
 The byte-pinned interface is shipped as a pool control input, so callers do
 not need it committed into their own branch before using the published call.
+Declared .bin protocol inputs in peer arguments retain their exact bytes.
 Configured dispatcher discovery uses CORTEX_POOL_DISPATCHER, the installed
 box_facts adapter, or --pool-dispatcher. There is no alternate dispatcher.
 """
@@ -561,6 +562,7 @@ class Case:
                             continue
                         claim = backend.claim(box, needs, request)
                 except Exception as error:
+                    reasons[box["name"]] = str(error)
                     self.refuse(peer.name, box["name"], str(error))
                     continue
                 print(f"ROUTED: {box['name']} - engines {state.get('engines', 0)}/{box['engines_max']}, free {state['free_gb']:.2f} GB; peer {peer.name}", flush=True)
@@ -884,7 +886,9 @@ class Run:
                 paths.update(path for path in root.rglob("*") if path.is_file())
         for argument in [*args, *self.env.values()]:
             path = Path(str(argument))
-            if path.is_file() and path.suffix.lower() in (".txt", ".json", ".lua", ".ini", ".ccreplay"):
+            if path.is_file() and path.suffix.lower() in (".txt", ".json", ".lua", ".ini", ".ccreplay", ".bin"):
+                if not public_file(path):
+                    raise self.case.refuse(self.role, box["name"], "private credentials or tickets cannot be staged as case inputs")
                 if path.resolve().is_relative_to(self.case.out):
                     paths.add(path.resolve())
                 elif path.resolve().is_relative_to(self.repo):
