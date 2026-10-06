@@ -935,7 +935,8 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
     placement = spread.prepare_case(
         options.repo, root,
         [spread.Peer(who, os="windows" if who == NEWCOMER else "any", engines=1, size=(width, height),
-                     reviewed=who == NAMES[0], held=who == NEWCOMER, quiet=case == "cost" and who == NAMES[0])
+                     reviewed=who == NAMES[0], readback=who == NAMES[0], held=who == NEWCOMER,
+                     share_ok=case != "cost", quiet=case == "cost" and who == NAMES[0])
          for who in who_list + newcomers],
         spread.Match(port, parameters={"lane": "in-match", "network": "direct",
                                        "case": case, "players": peers, "moderate": moderate, "cancel": options.cancel}))

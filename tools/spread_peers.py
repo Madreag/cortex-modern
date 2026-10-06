@@ -11,6 +11,8 @@ and whether its screen is reviewed. Peer.share_ok defaults to True for screen
 peers; quiet, reviewed, held and recorder peers always reserve a box alone.
 Peer.held declares any target of a hold or stall lever before allocation.
 Peer.recorder requires the controller's private Windows video recorder.
+Peer.readback=True lets the pool choose an unpinned reviewed screen's native
+readback box; its False default keeps the version 1 controller placement.
 An explicitly pinned reviewed screen peer may use its own box's readback;
 an unpinned reviewed peer retains the version 1 controller placement.
 The
@@ -138,6 +140,7 @@ class Peer:
     share_ok: bool = True
     held: bool = False
     recorder: bool = False
+    readback: bool = False
 
     def __post_init__(self):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", self.name):
@@ -562,7 +565,7 @@ class Case:
         for peer in ordered:
             backend = self.backend()
             pin = role_value(self.pins, self.names, peer.name)
-            if peer.recorder or peer.reviewed and not pin:
+            if peer.recorder or peer.reviewed and not peer.readback and not pin:
                 if pin and pin.casefold() != (reviewed_box or "").casefold():
                     raise self.refuse(peer.name, pin, "reviewed screen requires the controller's private Windows recorder")
                 pin = reviewed_box
@@ -571,6 +574,9 @@ class Case:
             if pin and peer.quiet and any(box["name"].casefold() == pin.casefold() and box.get("timing") is False for box in catalog):
                 raise self.refuse(peer.name, pin, "catalog does not permit timing measurements on this box")
             excluded = (exclusive if peer.share_ok else used) + [box["name"] for box in catalog if peer.quiet and box.get("timing") is False]
+            if not pin:
+                excluded += [value for other in ordered if other.name != peer.name and
+                             (value := role_value(self.pins, self.names, other.name)) and not (peer.share_ok and other.share_ok)]
             needs = self.pool.Needs(os=peer.os, engines=peer.engines, gpu=bool(peer.size), memory=peer.memory,
                                     alone=peer.quiet, size=peer.size, only_box=pin, excluded=tuple(excluded),
                                     case_id=self.id, peer_id=peer.name, share_ok=peer.share_ok, reviewed=peer.reviewed or peer.recorder, held=peer.held)
@@ -846,7 +852,7 @@ class Case:
         return dict(schema=1, topology="spread", peer_boxes={name: item[0]["name"] for name, item in self.members.items()},
                     interface_sha256=self.interface_sha256,
                     sharing={peer.name: dict(share_ok=peer.share_ok, reviewed=peer.reviewed, held=peer.held, quiet=peer.quiet,
-                                              recorder=peer.recorder) for peer in self.peers},
+                                              recorder=peer.recorder, readback=peer.readback) for peer in self.peers},
                     executable_hashes={name: item[1].get("exe_sha256") for name, item in self.members.items()},
                     identities=self.identities, records={name: run.record for name, run in self.runs.items()},
                     match=dict(port=self.match.port, parameters=json.loads(json.dumps(self.match.parameters, default=str))), refusals=self.refusals)

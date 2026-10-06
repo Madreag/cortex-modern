@@ -99,6 +99,13 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(spread.SpreadRefusal, 'alone run needs an idle box|no distinct fitting box'):
             self.place_fake(peers, dict(host='EROL-PC', held='EROL-PC'))
 
+    def test_pool_reviewed_readback_preserves_boxes_pinned_for_other_peers(self):
+        case, _ = self.place_fake([spread.Peer('host', reviewed=True, readback=True), spread.Peer('a'), spread.Peer('b')],
+                                  dict(a='EROL-PC', b='EROL-PC'))
+        self.assertEqual(case.members['host'][0]['name'], 'EDITH')
+        self.assertEqual(case.members['a'][0]['name'], 'EROL-PC')
+        self.assertEqual(case.members['b'][0]['name'], 'EROL-PC')
+
     def test_worked_example_retains_wrong_peer_port_after_video_parses(self):
         import argparse
         import spread_example as example
