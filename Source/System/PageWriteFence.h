@@ -33,6 +33,14 @@ namespace RTE {
 		/// Pages first written under a fence since the process started.
 		static uint64_t GetFaultCount();
 
+		using CopyObserver = bool (*)(void*, uintptr_t) noexcept;
+		/// The owner keeps the observer alive until UnwatchCopies; buffers cover whole system pages.
+		static bool WatchCopies(void* owner, Buffer buffer, CopyObserver observer, void* context);
+		static void UnwatchCopies(void* owner);
+		static size_t SystemPageBytes();
+		/// Opens a page only after the observer or its copy worker has saved it.
+		static bool OpenCopiedPage(uintptr_t address, size_t bytes) noexcept;
+
 		/// Empty when the fence puts back exactly what was written, else the first mismatch; for -cow-checkpoint-selftest.
 		static std::string SelfTestMismatch();
 	};

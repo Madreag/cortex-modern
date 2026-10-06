@@ -1,9 +1,11 @@
 #include "PageWriteFence.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstring>
 #include <memory>
+#include <mutex>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -51,6 +53,26 @@ namespace RTE {
 			~SpinLock() { flag.clear(std::memory_order_release); }
 			std::atomic_flag& flag;
 		};
+
+		struct CopyWatch {
+			void* owner = nullptr;
+			uintptr_t begin = 0, end = 0;
+			PageWriteFence::CopyObserver observer = nullptr;
+			void* context = nullptr;
+		};
+		struct CopyWatches {
+			std::array<CopyWatch, 256> watches{};
+			std::atomic<size_t> count{0};
+			std::atomic_flag lock = ATOMIC_FLAG_INIT;
+		};
+		CopyWatches& Watches() {
+			static CopyWatches watches;
+			return watches;
+		}
+		std::mutex& HandlerMutex() {
+			static std::mutex mutex;
+			return mutex;
+		}
 
 #ifdef _WIN32
 		size_t PageBytes() {
@@ -138,6 +160,14 @@ namespace RTE {
 
 		// Runs on the faulting thread, before its write lands: the page is copied aside and opened for writing.
 		bool Take(uintptr_t address) {
+			CopyWatches& copies = Watches();
+			if (copies.count.load(std::memory_order_acquire)) {
+				SpinLock guard(copies.lock);
+				for (const CopyWatch& watch: copies.watches) {
+					if (watch.owner && address >= watch.begin && address < watch.end)
+						return watch.observer(watch.context, address);
+				}
+			}
 			State& fence = Fence();
 			if (!fence.armed.load(std::memory_order_acquire)) {
 				return false;
@@ -169,14 +199,54 @@ namespace RTE {
 		}
 	} // namespace
 
+	bool PageWriteFence::WatchCopies(void* owner, Buffer buffer, CopyObserver observer, void* context) {
+		const size_t page = PageBytes();
+		const uintptr_t begin = reinterpret_cast<uintptr_t>(buffer.data);
+		if (!owner || !observer || !page || !buffer.bytes || begin % page || buffer.bytes % page || buffer.bytes > UINTPTR_MAX - begin) return false;
+		std::lock_guard setup(HandlerMutex());
+		if (!InstallHandler()) return false;
+		CopyWatches& copies = Watches();
+		SpinLock guard(copies.lock);
+		CopyWatch* vacant = nullptr;
+		for (CopyWatch& watch: copies.watches) {
+			if (watch.owner == owner || (watch.owner && begin < watch.end && begin + buffer.bytes > watch.begin)) return false;
+			if (!watch.owner && !vacant) vacant = &watch;
+		}
+		if (!vacant) return false;
+		*vacant = {owner, begin, begin + buffer.bytes, observer, context};
+		copies.count.fetch_add(1, std::memory_order_release);
+		if (Protect(begin, buffer.bytes, true)) return true;
+		Protect(begin, buffer.bytes, false);
+		*vacant = {};
+		copies.count.fetch_sub(1, std::memory_order_release);
+		return false;
+	}
+
+	void PageWriteFence::UnwatchCopies(void* owner) {
+		CopyWatches& copies = Watches();
+		if (!copies.count.load(std::memory_order_acquire)) return;
+		SpinLock guard(copies.lock);
+		for (CopyWatch& watch: copies.watches) {
+			if (watch.owner != owner) continue;
+			Protect(watch.begin, watch.end - watch.begin, false);
+			watch = {};
+			copies.count.fetch_sub(1, std::memory_order_release);
+			return;
+		}
+	}
+
+	size_t PageWriteFence::SystemPageBytes() { return PageBytes(); }
+	bool PageWriteFence::OpenCopiedPage(uintptr_t address, size_t bytes) noexcept { return Protect(address, bytes, false); }
+
 	bool PageWriteFence::Arm(const std::vector<Buffer>& buffers) {
 		State& fence = Fence();
 		if (fence.armed.load(std::memory_order_acquire)) {
 			// A fence nobody restored keeps its writes, as a copy nobody put back would have.
 			Release();
 		}
-		if (!InstallHandler()) {
-			return false;
+		{
+			std::lock_guard setup(HandlerMutex());
+			if (!InstallHandler()) return false;
 		}
 		fence.pageBytes = PageBytes();
 		if (fence.pageBytes == 0) {
@@ -267,6 +337,7 @@ namespace RTE {
 	}
 
 	bool PageWriteFence::IsSupported() {
+		std::lock_guard setup(HandlerMutex());
 		return InstallHandler() && PageBytes() != 0;
 	}
 

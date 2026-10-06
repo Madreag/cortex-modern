@@ -6728,9 +6728,9 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		image->scratch = scratch.values;
 		// The stack and the birth counter go back before the protect; the objects the image names stay as they are until written.
 		restore.Run();
-		// The copy runs off this thread; the gate holds every way into this VM until it lands.
+		// A later VM write saves its page first, so the copy needs no whole-heap wait at VM entry.
 		span.emplace("graph_heap_freeze", std::to_string(g_LuaMan.GetStateIndex(this)));
-		image->heap = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit);
+		image->heap = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit, true);
 		span.reset();
 		const size_t bytes = image->heap.ByteCount();
 		const auto frozenUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
@@ -9352,6 +9352,46 @@ end
 		std::cout << "[script-graph-selftest] " << (gated ? "PASS" : "FAIL") << " a_state_entered_during_its_page_copy_waits_for_it image_held="
 		          << imageHeld << " live_written=" << liveWritten << " entry_waited_ms=" << waitedMs << std::endl;
 		checkpointValues = gated && checkpointValues;
+	}
+
+	if (m_CheckpointHeap) {
+		RunScriptString("_ScriptGraphCowProbe = {} for index = 1, 4096 do _ScriptGraphCowProbe[index] = index end");
+		lua_getglobal(m_State, "_ScriptGraphCowProbe");
+		const auto* table = static_cast<const GCtab*>(lua_topointer(m_State, -1));
+		lua_pop(m_State, 1);
+		const TValue* array = table ? tvref(table->array) : nullptr;
+		const size_t bytes = table ? table->asize * sizeof(TValue) : 0;
+		std::vector<std::byte> before(bytes);
+		if (bytes) std::memcpy(before.data(), array, bytes);
+		std::optional<std::packaged_task<void()>> queued;
+		const auto defer = [&](std::function<void()> copy) {
+			queued.emplace(std::move(copy));
+			return queued->get_future();
+		};
+		CheckpointLua::Snapshot frozen;
+		{
+			std::lock_guard<std::recursive_mutex> lock(GetMutex());
+			frozen = m_CheckpointHeap->Freeze(defer, true);
+		}
+		const int64_t beforeWait = CheckpointLua::HeapOwner::ThisThreadGateWaitMicroseconds();
+		// The copy is deliberately not running; VM writes must finish before that task can start.
+		const int changed = RunScriptString("for index = 1, 4096 do _ScriptGraphCowProbe[index] = -index end local t = {} for i = 1, 4096 do t[i] = tostring(i) end");
+		const bool pendingDuringWrite = m_CheckpointHeap->CopyPending();
+		const int64_t entryWait = CheckpointLua::HeapOwner::ThisThreadGateWaitMicroseconds() - beforeWait;
+		if (queued) (*queued)();
+		bool imageHeld = false, liveWritten = false;
+		try {
+			const auto image = frozen.ReadBytes(array, bytes);
+			imageHeld = bytes > 0 && image.size() == bytes && std::memcmp(image.data(), before.data(), bytes) == 0;
+			liveWritten = bytes > 0 && std::memcmp(array, before.data(), bytes) != 0;
+		} catch (const std::exception& error) {
+			std::cout << "[script-graph-selftest] page copy probe: " << error.what() << std::endl;
+		}
+		RunScriptString("_ScriptGraphCowProbe = nil");
+		const bool held = changed == 0 && imageHeld && liveWritten && pendingDuringWrite && entryWait == 0 && frozen.FaultCount() > 0;
+		std::cout << "[script-graph-selftest] " << (held ? "PASS" : "FAIL") << " a_checkpoint_copy_preserves_pages_without_waiting_at_vm_entry image_held="
+		          << imageHeld << " live_written=" << liveWritten << " copy_still_queued=" << pendingDuringWrite << " entry_wait_us=" << entryWait << " faults=" << frozen.FaultCount() << std::endl;
+		checkpointValues = held && checkpointValues;
 	}
 
 	if (m_CheckpointHeap) {
