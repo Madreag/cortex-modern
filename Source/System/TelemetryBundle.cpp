@@ -199,8 +199,7 @@ namespace RTE {
 				while (keyEnd > 0 && (body[keyEnd - 1] == ' ' || body[keyEnd - 1] == '\t')) --keyEnd;
 				const std::string key(body.substr(0, keyEnd));
 				const bool secret = eq != std::string_view::npos && SecretSettingsKey(key);
-				// Writer streams strings verbatim. Blank/comment lines and deeper assignments can
-				// belong to the preceding value; only a sibling or parent property ends it.
+				// Writer's raw values can span blank/comment lines and deeper assignments.
 				if (redactContinuation && !secret && (eq == std::string_view::npos || indent > secretIndent)) {
 					out.append(bytes, offset, indent);
 					if (!body.empty()) out += "<redacted>";
