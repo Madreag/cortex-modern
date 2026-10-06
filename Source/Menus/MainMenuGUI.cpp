@@ -2255,6 +2255,32 @@ namespace {
 		combo->SetText(text);
 	}
 
+	/// Shortens a closed list's caption in its middle until it fits beside the drop-down button; a module suffix that tells
+	/// two of one name apart stays whole, and the open list keeps every name whole.
+	void HostOptFitComboCaption(GUISkin* skin, GUIComboBox* combo) {
+		if (!skin || !combo || combo->IsDropped()) return;
+		const GUIListPanel::Item* item = combo->GetSelectedItem();
+		const std::string full = item ? item->m_Name : combo->GetText();
+		std::string fontName;
+		GUIFont* font = skin->GetValue("TextBox", "Font", &fontName) ? skin->GetFont(fontName) : nullptr;
+		if (!font) return;
+		int kerning = 0, margin = 3;
+		skin->GetValue("TextBox", "FontKerning", &kerning);
+		skin->GetValue("TextBox", "WidthMargin", &margin);
+		const int savedKerning = font->GetKerning();
+		font->SetKerning(kerning);
+		const int room = combo->GetWidth() - 2 * margin - 17;
+		const size_t split = full.rfind(" - ");
+		const bool moduleSuffix = split != std::string::npos && full.ends_with(".rte");
+		const std::string name = moduleSuffix ? full.substr(0, split) : full, suffix = moduleSuffix ? full.substr(split) : std::string();
+		std::string shown = full;
+		for (size_t keep = name.size(); keep > 6 && font->CalculateWidth(shown) > room; --keep) {
+			shown = name.substr(0, (keep + 1) / 2) + "..." + name.substr(name.size() - keep / 2) + suffix;
+		}
+		font->SetKerning(savedKerning);
+		if (shown != combo->GetText()) combo->SetText(shown);
+	}
+
 	void HostOptSelectComboIndex(GUIComboBox* combo, int index) {
 		if (combo && !combo->IsDropped()) combo->SetSelectedIndex(std::clamp(index, 0, std::max(0, combo->GetCount() - 1)));
 	}
@@ -2486,6 +2512,8 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	} else {
 		HostOptSelectCombo(m_HostRulesSceneCombo, m_HostOptionsDraft.sceneName);
 	}
+	HostOptFitComboCaption(m_SubMenuScreenGUIControlManager->GetSkin(), m_HostRulesActivityCombo);
+	HostOptFitComboCaption(m_SubMenuScreenGUIControlManager->GetSkin(), m_HostRulesSceneCombo);
 	const int modeIndex = m_HostOptionsDraft.mode == NetMatchMode::CoopPvE ? 1 : (m_HostOptionsDraft.mode == NetMatchMode::PvPvE ? 2 : 0);
 	HostOptSelectComboIndex(m_HostRulesModeCombo, modeIndex);
 	if (m_HostRulesDifficultySlider) m_HostRulesDifficultySlider->SetValue(m_HostOptionsDraft.difficulty);
