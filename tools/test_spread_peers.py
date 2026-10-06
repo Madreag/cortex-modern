@@ -16,6 +16,130 @@ from test_peer_run_guards import PeerRunGuardTests
 
 
 class ContractTests(unittest.TestCase):
+    def test_cpu_guard_waits_on_the_named_box_and_quiet_peer_waits_for_idle(self):
+        for quiet, loads in ((False, [(100, 1), (20, 1)]),
+                             (True, [(100, 1), (20, 1), (20, 0)])):
+            with self.subTest(quiet=quiet):
+                clock, locked, launched, seen, renewed = [0.0], [False], [], [], []
+                box, claim = dict(name='NAMED', kind='local'), dict(token='owned')
+                needs = SimpleNamespace(peer_id='host', alone=quiet)
+                @contextlib.contextmanager
+                def mutex(*args, **kwargs):
+                    self.assertFalse(locked[0])
+                    locked[0] = True
+                    try: yield
+                    finally: locked[0] = False
+                def probe(target, **kwargs):
+                    self.assertTrue(locked[0])
+                    self.assertIs(target, box)
+                    self.assertEqual(kwargs['ignore_token'], 'owned')
+                    seen.append(clock[0])
+                    cpu, engines = loads[len(seen)-1]
+                    clock[0] += 10  # the native CPU sample takes ten seconds
+                    return dict(cpu=cpu, engines=engines)
+                def reason(target, requested, state):
+                    if state['cpu'] > 90:
+                        return 'CPU 100.0% exceeds 90% over the last 10 seconds'
+                    if requested.alone and state['engines']:
+                        return 'alone run needs an idle box'
+                def sleep(seconds):
+                    self.assertFalse(locked[0])
+                    self.assertEqual(launched, [])
+                    self.assertEqual(seconds, 20)
+                    clock[0] += seconds
+                with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+                     patch.object(spread.time, 'sleep', side_effect=sleep):
+                    with spread.named_launch_capacity(box, needs, claim, probe=probe, live_reason=reason,
+                            mutex=mutex, root=Path('/own'), renew=lambda value:renewed.append(value)) as state:
+                        self.assertTrue(locked[0])
+                        launched.append(state)
+                self.assertEqual(seen, [0, 30, 60] if quiet else [0, 30])
+                self.assertEqual(renewed, [claim]*(len(seen)-1))
+                self.assertEqual(len(launched), 1)
+                self.assertFalse(locked[0])
+
+    def test_named_cpu_retry_expires_after_ten_minutes_and_preserves_other_guards(self):
+        clock = [0.0]
+        box = dict(name='NAMED', kind='posix')
+        needs = SimpleNamespace(peer_id='seat2', alone=False)
+        reason = 'capacity refused: CPU 100.0% exceeds 90% over the last 10 seconds'
+        backend = SimpleNamespace(rpc=unittest.mock.Mock(side_effect=RuntimeError(reason)))
+        with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+             patch.object(spread.time, 'sleep', side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)):
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'expired after 600s.*CPU 100'):
+                spread.claim_named_peer(backend, box, needs, {})
+        self.assertEqual(clock[0], 600)
+        self.assertEqual(backend.rpc.call_count, 21)
+        self.assertTrue(all(call.args[0] is box for call in backend.rpc.call_args_list))
+        for refusal in ('capacity refused: live engine capacity is in use',
+                        'capacity refused: free memory 11 GB is below floor 12 GB'):
+            backend.rpc.reset_mock(side_effect=True)
+            backend.rpc.side_effect = RuntimeError(refusal)
+            with self.subTest(refusal=refusal), patch.object(spread.time, 'sleep') as sleep:
+                with self.assertRaisesRegex(RuntimeError, 'capacity refused'):
+                    spread.claim_named_peer(backend, box, needs, {})
+                sleep.assert_not_called()
+
+    def test_native_admission_wait_ends_before_the_case_timer_and_checks_ownership(self):
+        states = [dict(token='owned'), dict(token='owned', driver_pid=7)]
+        def rpc(box, action, body, **kwargs):
+            if action == 'run-state':
+                return dict(state=states.pop(0))
+            if body['path'].endswith('/progress.json') and not states:
+                return dict(text=json.dumps(dict(pid=11, identity=dict(machine_id='named'))))
+            return dict(text=None)
+        backend = SimpleNamespace(rpc=rpc)
+        with patch.object(spread.time, 'sleep') as sleep:
+            spread.wait_native_admission(backend, dict(name='NAMED'), dict(token='owned', root='/own'))
+        sleep.assert_called_once_with(2)
+        backend.rpc = lambda *args, **kwargs:dict(state=dict(token='foreign', driver_pid=7))
+        with self.assertRaisesRegex(spread.SpreadRefusal, 'changed owner'):
+            spread.wait_native_admission(backend, dict(name='NAMED'), dict(token='owned', root='/own'))
+
+    def test_final_engine_admission_retries_only_cpu_and_retains_its_receipt(self):
+        class LoadRefusal(SystemExit): pass
+        values = dict(engines=0, max_engines=4, free_gb=20, free_floor_gb=12,
+                      cpu_busy_percent=100, cpu_busy_limit=90, cpu_sample_s=10, alone=None)
+        calls, clock, entered, renewed = [], [0.0], [False], []
+        @contextlib.contextmanager
+        def admission(argv, environment, record, save):
+            calls.append(clock[0])
+            if len(calls) == 1:
+                record.update(not_started='box overburdened', result_status='not started', exit_code=3,
+                              refusal=dict(values=values))
+                raise LoadRefusal(3)
+            entered[0] = True
+            try: yield dict(values, cpu_busy_percent=20)
+            finally: entered[0] = False
+        load = SimpleNamespace(admission=admission, LoadRefusal=LoadRefusal)
+        record = {}
+        def sleep(seconds):
+            self.assertFalse(entered[0])
+            clock[0] += seconds
+        with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+             patch.object(spread.time, 'sleep', side_effect=sleep), \
+             spread.named_engine_cpu_wait(load, dict(name='NAMED'), SimpleNamespace(peer_id='host', alone=False),
+                                          lambda:renewed.append('owned')):
+            with load.admission(['engine'], {}, record, lambda:None):
+                self.assertTrue(entered[0])
+                self.assertNotIn('not_started', record)
+                self.assertEqual(record['admission_retries'][0]['values']['cpu_busy_percent'], 100)
+        self.assertEqual(calls, [0, 30])
+        self.assertEqual(renewed, ['owned'])
+        self.assertIs(load.admission, admission)
+        calls.clear()
+        values['free_gb'] = 11
+        with patch.object(spread.time, 'sleep') as pause, \
+             spread.named_engine_cpu_wait(load, dict(name='NAMED'), SimpleNamespace(peer_id='host', alone=False), lambda:None):
+            with self.assertRaises(LoadRefusal):
+                with load.admission(['engine'], {}, {}, lambda:None):
+                    self.fail('memory floor must refuse before launch')
+            pause.assert_not_called()
+
+    def test_native_worker_extension_refuses_an_unrecognized_guard(self):
+        with self.assertRaisesRegex(spread.SpreadRefusal, 'guard differs'):
+            spread.native_cpu_wait_source('def run_request(request):\n    start_without_guard(request)\n')
+
     def test_native_claim_keeps_the_runners_fresh_root_and_live_ownership(self):
         import cross_peers as cross
         with tempfile.TemporaryDirectory() as temporary:
@@ -539,7 +663,8 @@ class ContractTests(unittest.TestCase):
             run.repo, run.cwd, run.started = root/'repo', root/'client/runtime', False
             run.argv = ['engine', '-headless', '-net-ice', 'off', '-net-join', 'localhost', '-net-port', '51580']
             run.env, run.expected, run.fixtures, run.timeout = {}, [], [], 30
-            run.start()
+            with patch.object(spread, 'wait_native_admission'):
+                run.start()
             spec = specs[0]
             self.assertEqual(spec['args'], ['-net-ice', 'off', '-net-join', '100.64.1.2', '-net-port', '51580'])
             self.assertEqual(base64.b64decode(spec['files']['client-stage/menu.txt']),
@@ -567,7 +692,8 @@ class ContractTests(unittest.TestCase):
             run.case = SimpleNamespace(id='fake-case', lane='one-lane', out=root, members={'host':({'name':'HOST'},claim,{},backend)}, names=['host'], peer_ports={},
                 match=spread.Match(51580), directory=None, peers=[spread.Peer('host')], signals=lambda:[], release_pending=lambda *args:None,
                 transport_module=SimpleNamespace(Transport=SimpleNamespace(native_claim=lambda value:value)))
-            run.start()
+            with patch.object(spread, 'wait_native_admission'):
+                run.start()
             self.assertEqual(base64.b64decode(specs[0]['files']['launch-config.bin']), data)
             self.assertEqual(specs[0]['args'], ['-net-match-service-config', '/native/case/launch-config.bin'])
 
@@ -670,10 +796,13 @@ class ContractTests(unittest.TestCase):
             case.transport_module = SimpleNamespace(worker=SimpleNamespace(facts=facts, mutex=lambda *args,**kwargs:contextlib.nullcontext()))
             case.backend = lambda:SimpleNamespace(probe=probe,rpc=claim)
             case.refuse = lambda peer, box, reason:spread.SpreadRefusal(f'{peer} on {box}: {reason}')
-            with self.assertRaisesRegex(spread.SpreadRefusal, 'alone run needs an idle box'):
+            clock = [0.0]
+            with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+                 patch.object(spread.time, 'sleep', side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)), \
+                 self.assertRaisesRegex(spread.SpreadRefusal, 'expired after 600s.*alone run needs an idle box'):
                 case.allocate()
             case.stack.close()
-            self.assertEqual(events, [('probe', 'ONE'), ('claim', 'ONE', 'in-match: spread')])
+            self.assertEqual(events, [('probe', 'ONE')]+[('claim', 'ONE', 'in-match: spread')]*21)
             self.assertEqual(case.pending, [])
 
     def test_credentials_and_tickets_do_not_travel_as_evidence(self):
