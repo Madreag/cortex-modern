@@ -17,6 +17,8 @@ using namespace RTE;
 
 namespace {
 	bool automationDriving = false;
+	bool probeDriving = false;
+	bool menuScriptDriving = false;
 	// The menu script and the net UI probe share one virtual pad; the hint they need is process-global.
 	int joystickBackgroundEventHolders = 0;
 	int scriptedPadHolders = 0;
@@ -116,11 +118,22 @@ namespace {
 			}
 		}
 	};
+
+	void UpdateAutomationDriving() {
+		const bool enabled = probeDriving || menuScriptDriving;
+		if (!enabled) for (auto* input : automationInputs) input->ReleaseAutomationInput();
+		automationDriving = enabled;
+	}
 }
 
 void GUIInputWrapper::SetAutomationDriving(bool enabled) {
-	if (!enabled) for (auto* input : automationInputs) input->ReleaseAutomationInput();
-	automationDriving = enabled;
+	probeDriving = enabled;
+	UpdateAutomationDriving();
+}
+
+void GUIInputWrapper::SetMenuScriptDriving(bool enabled) {
+	menuScriptDriving = enabled;
+	UpdateAutomationDriving();
 }
 
 bool GUIInputWrapper::AutomationDriving() {

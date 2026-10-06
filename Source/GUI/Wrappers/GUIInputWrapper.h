@@ -17,8 +17,10 @@ namespace RTE {
 	public:
 		std::string SaveCheckpoint() const override;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false) override;
-		/// Enables scoped input only for an active automation driver.
+		/// Enables scoped input for the net UI probe independently of the menu script.
 		static void SetAutomationDriving(bool enabled);
+		/// Keeps menu-script input active when a simultaneous net UI probe finishes.
+		static void SetMenuScriptDriving(bool enabled);
 		/// Whether an automation driver is running this process's menus.
 		static bool AutomationDriving();
 		/// Presses or releases a key for every menu input, as the keyboard does; refused while no driver runs.
