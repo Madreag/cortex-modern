@@ -1109,6 +1109,56 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'declared test ports'):
             spread.Peer('seat', block_udp=(80,))
 
+    def test_declared_posix_line_scripts_keep_command_text_without_carriage_returns(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            menu, inputs, watches = (root / name for name in ('menu.txt', 'input.txt', 'screen-watches.txt'))
+            selected = spread.line_script_inputs(['-menu-script', str(menu), '-input-script', str(inputs)],
+                                                 {'CCCP_TEST_SCREEN_WATCHES': str(watches)})
+            data = b'h15-own-hold-line require local_held until you are back\r\nlegacy-byte=\x96\r\n'
+            for path in (menu, inputs, watches):
+                normalized = spread.native_line_script(data, path, {'os': 'posix'}, selected)
+                self.assertEqual(normalized, b'h15-own-hold-line require local_held until you are back\nlegacy-byte=\x96\n')
+                self.assertEqual(normalized.split(b'\n')[0].split(b' ', 3)[3], b'until you are back')
+                self.assertEqual(spread.native_line_script(data, path, {'os': 'windows'}, selected), data)
+
+    def test_line_script_normalization_keeps_protocol_module_and_unselected_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data = bytes(range(256)) + b'\r\n\x00\xff'
+            protected = [root/'launch.bin', root/'input.ccreplay', root/'Data/Base.rte/fixture.txt']
+            selected = {path.resolve() for path in protected}
+            for path in (*protected, root/'unselected.txt'):
+                self.assertEqual(spread.native_line_script(data, path, {'os':'posix'}, selected), data)
+
+    def test_native_spec_normalizes_owned_and_external_posix_line_scripts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            out, external = root/'case', root/'external-input.txt'
+            stage = out/'host-stage'; stage.mkdir(parents=True)
+            watch = stage/'screen-watches.txt'
+            watch.write_bytes(b'h15-own-hold-line require local_held until you are back\r\n')
+            external.write_bytes(b'0 60 MOVE_RIGHT\r\n')
+            specs = []
+            backend = SimpleNamespace(rpc=lambda box, action, body:specs.append(body['value']), launch=lambda *args:None)
+            claim = dict(case_root='/native/case', repo='/native/repo', root='/owned', control='/control', exe_sha256='same')
+            run = object.__new__(spread.Run)
+            run.retained, run.role, run.output_name, run.started = None, 'host', 'host', False
+            run.repo, run.cwd = root/'repo', out/'host/runtime'
+            run.argv = ['engine','-headless','-input-script',str(external)]
+            run.env, run.expected, run.fixtures, run.timeout = {'CCCP_TEST_SCREEN_WATCHES':str(watch)}, [], [], 30
+            run.case = SimpleNamespace(id='fake-case',lane='one-lane',out=out,peer_ports={},names=['host'],match=spread.Match(51580),
+                directory=None,members={'host':({'name':'POSIX','os':'posix'},claim,{},backend)},peers=[spread.Peer('host')],
+                signals=lambda:[],release_pending=lambda *args:None,
+                transport_module=SimpleNamespace(Transport=SimpleNamespace(native_claim=lambda value:value)))
+            with patch.object(spread, 'wait_native_admission'):
+                run.start()
+            self.assertEqual(base64.b64decode(specs[0]['files']['host-stage/screen-watches.txt']),
+                             b'h15-own-hold-line require local_held until you are back\n')
+            self.assertEqual(base64.b64decode(specs[0]['files']['.inputs/external-input.txt']),b'0 60 MOVE_RIGHT\n')
+            self.assertEqual(watch.read_bytes(),b'h15-own-hold-line require local_held until you are back\r\n')
+            self.assertEqual(external.read_bytes(),b'0 60 MOVE_RIGHT\r\n')
+
     def test_declared_binary_match_config_keeps_every_byte(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

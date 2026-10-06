@@ -68,6 +68,10 @@ No case assertion, oracle, timeout or default single-box launch is changed.
 Peer.output_name optionally declares an existing non-ASCII output directory;
 make_run(..., role=...) also accepts its declared logical peer explicitly.
 Text scripts retain their original UTF-8 or legacy Windows byte encoding.
+Named line scripts (-menu-script, -input-script, -net-chat-script and
+CCCP_TEST_SCREEN_WATCHES) staged for POSIX use LF terminators, so Windows
+CRLF never becomes part of a native command's text. Binary/replay inputs and
+immutable module content are unchanged; single-box staging is unchanged.
 Peer.lane (or Match.parameters["lane"]) supplies the caller's run label.
 Match.parameters["label"] may specify the lead's exact native holder label.
 Match.parameters["runner_wait"] or --runner-wait may specify that holder's
@@ -554,6 +558,24 @@ def complete_signal(data, relative=None):
         return True
     except ValueError:
         return False
+
+
+def line_script_inputs(args, environment):
+    """Only files consumed by the native line-oriented command parsers."""
+    paths = {Path(args[index + 1]).resolve() for index, argument in enumerate(args[:-1])
+             if argument in ('-menu-script', '-input-script', '-net-chat-script')}
+    if environment.get('CCCP_TEST_SCREEN_WATCHES'):
+        paths.add(Path(environment['CCCP_TEST_SCREEN_WATCHES']).resolve())
+    return paths
+
+
+def native_line_script(data, path, box, inputs):
+    """Preserve bytes except CRLF terminators in a declared POSIX line script."""
+    path = Path(path)
+    module_content = any(part.casefold().endswith('.rte') for part in path.parts)
+    if path.resolve() in inputs and box['os'] != 'windows' and not module_content and path.suffix.lower() not in ('.bin', '.ccreplay'):
+        return data.replace(b'\r\n', b'\n')
+    return data
 
 
 def map_script(data, mappings, session=None):
@@ -1655,6 +1677,7 @@ class Run:
             mappings += [(str(self.retained), claim["case_root"] + "/" + self.output_name + "/runtime"),
                          (self.retained.as_posix(), claim["case_root"] + "/" + self.output_name + "/runtime")]
         files = {}
+        line_inputs = line_script_inputs(args, self.env)
         roots = [self.cwd, self.case.out/(self.output_name + "-stage"), self.case.out/(self.output_name + "-probe"), self.case.out/(self.output_name + "_probe")]
         paths = set(self.case.out.glob("*.txt"))
         for root in roots:
@@ -1672,12 +1695,13 @@ class Run:
                 else:
                     # Feel input schedules are staged one level above each arm.
                     relative = ".inputs/" + path.name
-                    files[relative] = base64.b64encode(path.read_bytes()).decode()
+                    files[relative] = base64.b64encode(native_line_script(path.read_bytes(), path, box, line_inputs)).decode()
                     mappings.append((str(path.resolve()), claim["case_root"] + "/" + relative))
         for path in paths:
             if not public_file(path):
                 raise self.case.refuse(self.role, box["name"], "private credentials or tickets cannot be staged as case inputs")
             data = path.read_bytes()
+            data = native_line_script(data, path, box, line_inputs)
             if path.suffix.lower() in (".txt", ".json", ".ini", ".lua"):
                 data = map_script(data, mappings, session)
                 if getattr(self.case, "network", "ice") == "direct":
