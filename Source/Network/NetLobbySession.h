@@ -127,6 +127,8 @@ namespace RTE {
 
 		void SetLocalReady(bool ready);
 		void RequestStart();
+		// The coordinator owns the queue after Start; repeat the agreed start until its peers answer.
+		bool RepeatStartIfDue(uint64_t elapsedMs, std::string* error);
 
 		/// Host: adopts an accepted host-options draft as this round's next configuration revision and
 		/// republishes it to every peer. Every ack and readiness is reset, so the hash-checked Start
@@ -301,6 +303,7 @@ namespace RTE {
 		NetHash32 m_MatchConfigHash{};
 		uint64_t m_StartFrame = 0;
 		uint64_t m_LastConfigSentMs = 0;
+		uint64_t m_LastStartRepeatMs = 0;
 		uint64_t m_LastPeerStateSentMs = 0;
 		uint64_t m_LastReceiveMs = 0;
 		uint64_t m_LastStartWaitLogMs = 0;

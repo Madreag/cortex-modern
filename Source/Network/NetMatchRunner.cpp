@@ -856,6 +856,7 @@ namespace RTE {
 		// The handshake and the round must feed the coordinator ONE clock, or its per-peer liveness
 		// and retransmit timers see time run backwards at the handoff into the sim loop.
 		const uint64_t startMs = NetLockstepNowMs();
+		const uint64_t sessionBaseMs = session ? session->GetClockMs() : 0;
 		while (!coordinator.IsRunning()) {
 			if (m_Config.cancelRequested && m_Config.cancelRequested->load()) {
 				SetFailed("match setup canceled");
@@ -864,7 +865,11 @@ namespace RTE {
 			}
 			const uint64_t nowMs = NetLockstepNowMs();
 			coordinator.Tick(nowMs);
-			if (session) DeliverSessionTraffic(*session, m_Config.nowMs ? m_Config.nowMs() : session->GetClockMs());
+			if (session) {
+				const uint64_t sessionMs = m_Config.nowMs ? m_Config.nowMs() : sessionBaseMs + nowMs - startMs;
+				DeliverSessionTraffic(*session, sessionMs);
+				session->TickKeepalive(sessionMs);
+			}
 			if (coordinator.IsFailed() || coordinator.IsStopped()) {
 				m_HostLostDuringSetup = !m_Config.host && coordinator.GetStats().timeoutReason.starts_with("PeerDisconnected:");
 				SetFailed(coordinator.GetStats().timeoutReason);
@@ -880,6 +885,10 @@ namespace RTE {
 				m_HostLostDuringSetup = !m_Config.host;
 				SetFailed("timed out waiting for lockstep start");
 				if (error) *error = m_SetupError;
+				return false;
+			}
+			if (m_UseLobbyProtocol && m_Config.host && !m_Lobby.RepeatStartIfDue(nowMs - startMs, error)) {
+				SetFailed(error ? *error : "could not repeat the lobby start");
 				return false;
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));

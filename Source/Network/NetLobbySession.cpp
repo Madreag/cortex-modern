@@ -129,6 +129,7 @@ namespace RTE {
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_Config.matchConfig);
 		m_StartFrame = config.startFrame;
 		m_LastConfigSentMs = 0;
+		m_LastStartRepeatMs = 0;
 		m_LastPeerStateSentMs = 0;
 		m_LastReceiveMs = 0;
 		m_SessionClockBaseMs = config.session ? config.session->GetClockMs() : 0;
@@ -1313,6 +1314,24 @@ namespace RTE {
 		++m_Stats.startPacketsSent;
 		m_StartIntent = false;
 		m_State = NetLobbyState::Started;
+	}
+
+	bool NetLobbySession::RepeatStartIfDue(uint64_t elapsedMs, std::string* error) {
+		if (!m_Config.host || !IsStarted() || elapsedMs < m_LastStartRepeatMs + m_Config.resendIntervalMs) return true;
+		m_LastStartRepeatMs = elapsedMs;
+		NetLobbyStart start;
+		start.sessionId = m_Config.matchConfig.sessionId;
+		start.startFrame = m_StartFrame;
+		start.inputDelayFrames = m_Config.matchConfig.inputDelayFrames;
+		start.matchConfigHash = m_MatchConfigHash;
+		bool sent = false;
+		for (uint8_t peerId: m_RemotePeerIds) {
+			bool congested = false;
+			if (SendTo(m_RemoteTransports[peerId], start, error, &congested)) sent = true;
+			else if (!congested) return false;
+		}
+		if (sent) ++m_Stats.startPacketsSent;
+		return true;
 	}
 
 	void NetLobbySession::HandleEvent(const NetTransportEvent& event, uint64_t nowMs) {
