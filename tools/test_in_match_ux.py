@@ -53,9 +53,9 @@ HELD_BETWEEN_ROUNDS = "Held - the seat is kept"
 COST_BUDGET_US = {"closed": 100, "open": 500}
 NEW_CASES = ("stale-press", "reach", "open-place", "host-leave-live", "leave-no-ticket", "long-names", "between-rounds", "cost")
 # The place each newcomer asks for, by stable seat (a peer's is its number less one); any held place otherwise.
-APPLY_SEATS = {"reach": {NEWCOMER: "1", SECOND: "2"}}
+APPLY_SEATS = {"reach": {NEWCOMER: "1", SECOND: "2"}, "away-names": {NEWCOMER: "1"}}
 # Cases whose newcomers only ask: they are still asking when the host ends the match, and never reach its screen.
-ASK_ONLY = ("reach", "long-names")
+ASK_ONLY = ("reach", "long-names", "away-names")
 CASE_PEERS = {"stale-press": 4, "reach": 4, "open-place": 3, "host-leave-live": 3, "leave-no-ticket": 2, "long-names": 3, "between-rounds": 2, "cost": 4}
 
 
@@ -761,6 +761,32 @@ def check_host_leave_live(checks, reads, logs):
     checks.check("host-leave-press-does-what-it-says", ended and not took_over, f"{ana}: the match ended {ended}, taken over {took_over}")
 
 
+def away_names_probes(root, base):
+    """The host removes Ana; a newcomer asks for her opened place; then Ben leaves. The summary names Ben as the one away."""
+    host, ana, ben = NAMES[:3]
+    steps = [{"op": "wait", "service": "Running", "sim_at_least": 150}, *open_panel(), *find_row(ana, base),
+             *click(f"NetworkSeatRemove@{ana}"), *click(f"NetworkSeatRemove@{ana}"), read("NetworkSeatsStatus", tag="removed"),
+             {"op": "wait", "elapsed_ms": 1500}, signal("ready-for-newcomer"),
+             {"op": "wait", "control": "NetworkSeatsSummary", "text_contains": "1 request to join"}, signal("ben-may-leave"),
+             wait_file(probe_root(root, ben) / "left.json"), {"op": "wait", "control": "NetworkSeatsSummary", "text_contains": "is away"},
+             {"op": "wait", "renders": 6}, read("NetworkSeatsSummary", tag="away-summary"), shot("away-names"), *close_and_end()]
+    probes = {host: {"schema": 1, "timeout_ms": 175000, "steps": steps}}
+    # Ana's match ends when the host removes her: her probe is done once she plays.
+    probes[ana] = {"schema": 1, "timeout_ms": 175000, "steps": [{"op": "wait", "service": "Running", "sim_at_least": 100}, {"op": "finish"}]}
+    probes[ben] = {"schema": 1, "timeout_ms": 175000, "steps": [{"op": "wait", "service": "Running", "sim_at_least": 150},
+                                                                wait_file(probe_root(root, host) / "ben-may-leave.json"), *at_leave_confirm("at-confirm"),
+                                                                *confirm_leave()]}
+    probes[NEWCOMER] = {"schema": 1, "timeout_ms": 175000, "steps": [wait_file(probe_root(root, host) / "done-reading.json"), {"op": "finish"}]}
+    return probes
+
+def check_away_names(checks, reads):
+    host, ben = NAMES[0], NAMES[2]
+    removed = " ".join(reads[host].get("removed", {}).get("text", "").split())
+    checks.check("away-names-removal-done", removed == f"{NAMES[1]} was removed from the match.", f"status {removed!r}")
+    summary = " ".join(reads[host].get("away-summary", {}).get("text", "").split())
+    checks.check("away-names-the-player-away", summary == f"{ben} is away - 1 request to join", f"summary {summary!r}")
+
+
 def leave_no_ticket_probes(root):
     """A match with authenticated admission off keeps no ticket: the client's leave must not promise Rejoin Match."""
     host, client = NAMES[:2]
@@ -913,15 +939,15 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         probes = host_leave_probes(root, peers)
         who_list = list(NAMES[:peers])
         ticks = 3600
-    elif case in NEW_CASES:
-        peers = CASE_PEERS[case]
+    elif case in NEW_CASES or case == "away-names":
+        peers = 3 if case == "away-names" else CASE_PEERS[case]
         who_list = list(NAMES[:peers])
         ticks = 12000
         plan = between_rounds_plan(root, port) if case == "between-rounds" else {}
         probes = plan.get("probes") or {"stale-press": lambda: stale_press_probes(root, base), "reach": lambda: reach_probes(root, base),
                                          "open-place": lambda: open_place_probes(root, base), "host-leave-live": lambda: host_leave_live_probes(root),
                                          "leave-no-ticket": lambda: leave_no_ticket_probes(root), "long-names": lambda: long_names_probes(root),
-                                         "cost": lambda: cost_probes(root)}[case]()
+                                         "cost": lambda: cost_probes(root), "away-names": lambda: away_names_probes(root, base)}[case]()
     else:
         probes = players_probes(root, peers, base, moderate, options.cancel)
         who_list = list(NAMES[:peers])
@@ -961,7 +987,7 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         # A match with authenticated admission off keeps no ticket for a leave.
         if case == "leave-no-ticket":
             extra = [*extra, "-net-no-reconnect-admission", "1"]
-        match_peers = peers if case in ("players", "host-leave", *NEW_CASES) else 2
+        match_peers = peers if case in ("players", "host-leave", "away-names", *NEW_CASES) else 2
         args = ["-menu-script", str(script)] if lobby else ["-menu-script", str(script), *match_args(port, match_peers, who if who not in newcomers else "joiner", ticks, extra, name=names[who])]
         diagnostics = "1" if case == "status" and options.diagnostics else "0"
         env = {"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(directory / "probe.json"), "CCCP_TEST_SCREEN_WATCHES": str(watches)}
@@ -1091,6 +1117,8 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         check_between_rounds(checks, logs)
     elif case == "cost":
         check_cost(checks, logs)
+    elif case == "away-names":
+        check_away_names(checks, reads)
     else:
         check_players(checks, reads, peers, logs, base, moderate, options.cancel)
     row = {"case": case, "size": size, "peers": peers, "moderate": moderate, "base": base, "checks": checks.rows,
@@ -1233,7 +1261,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--case", choices=("pause", "players", "status", "repair", "host-leave", "sp-pause", *NEW_CASES, "all"), required=True)
+    parser.add_argument("--case", choices=("pause", "players", "status", "repair", "host-leave", "sp-pause", *NEW_CASES, "away-names", "all"), required=True)
     parser.add_argument("--diagnostics", action="store_true", help="the status case with detailed network statistics on")
     parser.add_argument("--size", choices=SIZES, default="960x540")
     parser.add_argument("--all-sizes", action="store_true")
@@ -1248,6 +1276,8 @@ def main():
     spread.add_arguments(parser)
     options = parser.parse_args()
     spread.configure(options)
+    if options.case == "away-names" and not spread.enabled(options):
+        parser.error("away-names requires spread mode")
     if options.dry_run:
         root = Path("dry")
         plans = {"pause": pause_probes(root, options.base), "players": players_probes(root, options.peers, options.base, options.moderate)}
@@ -1273,7 +1303,7 @@ def main():
             if case == "sp-pause":
                 rows.append(run_sp_pause(options, options.out / f"sp-pause-{size}", size))
             else:
-                peers = CASE_PEERS.get(case, options.peers if case in ("players", "host-leave") else 2)
+                peers = 3 if case == "away-names" else CASE_PEERS.get(case, options.peers if case in ("players", "host-leave") else 2)
                 root = options.out / f"{case}-{size}-{peers}p{'-diag' if case == 'status' and options.diagnostics else ''}"
                 try:
                     rows.append(run_peers(options, root, case, size, options.peers, options.base, options.moderate and case == "players"))

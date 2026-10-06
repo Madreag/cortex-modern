@@ -30,9 +30,17 @@ class ContractTests(unittest.TestCase):
     def test_linux_host_with_loopback_hostname_uses_its_native_interface(self):
         with patch.object(spread.sys, 'platform', 'linux'), patch.object(spread.shutil, 'which', return_value=None), \
                 patch.object(spread.socket, 'getaddrinfo', return_value=[(None, None, None, None, ('127.0.1.1', 0))]), \
-                patch.object(spread.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='192.168.50.128 127.0.0.1 ')) as read:
+                patch.object(spread.subprocess, 'run', side_effect=[SimpleNamespace(returncode=1, stdout=''),
+                                                                  SimpleNamespace(returncode=0, stdout='192.168.50.128 127.0.0.1 ')]) as read:
             self.assertEqual(spread.native_address_probe(), '192.168.50.128')
         self.assertEqual(read.call_args.args[0], ['hostname', '-I'])
+
+    def test_linux_route_source_wins_over_a_docker_bridge(self):
+        with patch.object(spread.sys, 'platform', 'linux'), patch.object(spread.shutil, 'which', return_value=None), \
+                patch.object(spread.socket, 'getaddrinfo', return_value=[(None, None, None, None, ('172.17.0.1', 0))]), \
+                patch.object(spread.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='[{"prefsrc":"192.168.50.36"}]')) as read:
+            self.assertEqual(spread.native_address_probe(), '192.168.50.36')
+        self.assertEqual(read.call_args.args[0], ['ip', '-j', 'route', 'get', '192.0.2.1'])
 
     def place_fake(self, peers, pins=None):
         case = object.__new__(spread.Case)

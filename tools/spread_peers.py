@@ -186,6 +186,14 @@ def native_address_probe():
                     return str(address)
     addresses = {row[4][0] for row in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET)}
     if sys.platform.startswith("linux"):
+        try:
+            route = subprocess.run(["ip", "-j", "route", "get", "192.0.2.1"], capture_output=True, text=True, timeout=10)
+            for item in json.loads(route.stdout) if route.returncode == 0 else ():
+                address = ipaddress.ip_address(item.get("prefsrc") or item.get("src") or "127.0.0.1")
+                if address.version == 4 and not address.is_loopback and not address.is_link_local and not address.is_unspecified:
+                    return str(address)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
         result = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
             for value in result.stdout.split():
