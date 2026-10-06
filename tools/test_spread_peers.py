@@ -165,6 +165,37 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'declared test ports'):
             spread.Peer('seat', block_udp=(80,))
 
+    def test_native_holder_refusal_preserves_its_reason_without_other_log_bytes(self):
+        log = 'private-value\n[box-hold] waiting: earlier owned job settles\n[box-hold] REFUSED: no turn within the wait\n'
+        reason = spread.native_refusal(dict(reason='native launch refused', exit_code=3), log)
+        self.assertEqual(reason, '[box-hold] waiting: earlier owned job settles\n[box-hold] REFUSED: no turn within the wait')
+        self.assertNotIn('private-value', reason)
+
+    def test_caller_directory_forwards_the_clients_own_proxy_without_replacing_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            descriptor = dict(DIRECTORY_URL='127.0.0.1:51581', DIRECTORY_PIN='a'*64, DIRECTORY_ROOT=str(root))
+            case = object.__new__(spread.Case)
+            case.match = spread.Match(51580, parameters=dict(directory=descriptor, peer_directory_urls={'client':'127.0.0.1:51582'}, join_by_session=False))
+            case.names, case.peers, case.control, case.tunnels = ['host', 'client'], [spread.Peer('host'), spread.Peer('client')], root, []
+            case.members = {'host': ({'name':'HOST', 'kind':'local'}, {'directory_port':51585}, {}, None),
+                            'client': ({'name':'SEAT', 'kind':'windows-task', 'ssh':'native-seat'}, {'directory_port':51586}, {}, None)}
+            with patch.object(spread.subprocess, 'Popen', return_value=SimpleNamespace(poll=lambda: None)) as popen, patch.object(spread.time, 'sleep'):
+                case.connect_directory()
+            for process, log in case.tunnels:
+                log.close()
+            self.assertEqual(case.members['host'][1]['signal_port'], 51581)
+            self.assertEqual(case.members['client'][1]['signal_port'], 51586)
+            self.assertIn('127.0.0.1:51586:127.0.0.1:51582', popen.call_args.args[0])
+            self.assertEqual(case.directory['DIRECTORY_PIN'], descriptor['DIRECTORY_PIN'])
+            self.assertEqual(descriptor, dict(DIRECTORY_URL='127.0.0.1:51581', DIRECTORY_PIN='a'*64, DIRECTORY_ROOT=str(root)))
+            self.assertTrue(case.directory['preserve_settings'])
+
+    def test_caller_directory_rejects_credentials_or_a_nonlocal_service(self):
+        for endpoint in ['https://user:password@localhost:51581', 'https://remote.example:51581', 'http://localhost:51581']:
+            with self.assertRaisesRegex(ValueError, 'loopback TLS test endpoint'):
+                spread.directory_endpoint(endpoint)
+
     def test_credentials_and_tickets_do_not_travel_as_evidence(self):
         for name in (".env", "key.pem", "host.ticket", "id_ed25519"):
             self.assertFalse(spread.public_file(Path(name)))

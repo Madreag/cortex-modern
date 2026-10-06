@@ -497,8 +497,7 @@ def finish_replay(args, out, *, timeout, expected, baseline_ticks=None):
             run.close()
     if not spread.enabled(SPREAD_OPTIONS):
         return drive()
-    # The output layout remains the reducer's existing layout. Only this replay
-    # role owns the fresh claim; no match peer or local process handle is reused.
+    # Keep the reducer's output layout while claiming a fresh native replay peer.
     receipt = spread.run_case(REPO, out.parent, [spread.Peer(out.name, os='any', size=(960, 540), quiet=True, timeout=timeout)],
                               spread.Match(SPREAD_OPTIONS.port), drive=drive,
                               dispatcher=SPREAD_OPTIONS.pool_dispatcher, registry=SPREAD_OPTIONS.pool_registry)
