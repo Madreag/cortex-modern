@@ -36,7 +36,14 @@ import time
 
 from compare_sim_traces import load_trace, strict_compare
 from run_sim_test import make_run, seed_settings
-from test_menu_readback import spread, managed_case
+try:
+    import spread_peers as spread
+except ModuleNotFoundError as error:
+    if error.name != "spread_peers":
+        raise
+    spread = None
+
+managed_case = spread.managed_case if spread else lambda function: function
 
 
 def menu_script(name, host, players, port):
