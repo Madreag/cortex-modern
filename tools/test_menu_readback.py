@@ -2505,7 +2505,11 @@ def run_case(options, case, root, failing=None):
             reviewed = "client" if case in ("host-draft-roundtrip", "sweep-advanced-client") else "host"
             peers = [spread.Peer(who, os="windows", size=(int(width * multiplier), int(height * multiplier)),
                                  reviewed=who == reviewed) for who in texts]
-            executor = spread.prepare_case(options.repo, root, peers, spread.Match(options.port))
+            parameters = {"lane": "menus"}
+            if case == "host-draft-roundtrip":
+                # This case deliberately reads back Unlisted with traversal and relay Off.
+                parameters["network"] = "direct"
+            executor = spread.prepare_case(options.repo, root, peers, spread.Match(options.port, parameters=parameters))
             factory = executor.make_run
         # A pair runs host and client; a case may seat a second joiner beside them.
         for who in (tuple(texts) if paired else ("host",)):

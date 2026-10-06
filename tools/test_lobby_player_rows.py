@@ -172,7 +172,7 @@ def main():
                              size=(options.width, options.height))]
         peers.extend(spread.Peer(f"joiner{index + 1}", os="windows", output_name=name,
                                  size=(options.width, options.height)) for index, name in enumerate(JOINER_NAMES))
-        executor = spread.prepare_case(repo, root, peers, spread.Match(options.port))
+        executor = spread.prepare_case(repo, root, peers, spread.Match(options.port, parameters={"lane": "menus"}))
         host_suffix = ("wait_connected 4\nwait 120\ndump_lobby\n"
                        "assert_label LabelLobbyPlayer0 auto\nassert_label LabelLobbyPlayer1 Team\n"
                        "assert_label LabelLobbyPlayer2 Team\nassert_label LabelLobbyPlayer3 Team\n"

@@ -99,7 +99,7 @@ def run_once(options, root: Path) -> dict:
             raise RuntimeError("activity rules requires the shared spread executor")
         executor = spread.prepare_case(options.repo, root,
                                       [spread.Peer("host", os="windows", reviewed=True), spread.Peer("client", os="windows")],
-                                      spread.Match(options.port))
+                                      spread.Match(options.port, parameters={"lane": "menus"}))
         for who, text in (newcomer_scripts if options.path == "newcomer" else scripts)(options.port).items():
             script = root / f"{who}-menu.txt"
             script.write_text(text, encoding="utf-8")
