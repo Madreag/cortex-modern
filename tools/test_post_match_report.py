@@ -109,7 +109,7 @@ def menu_script(who, port):
     script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {who}\n"
     if who == "Host":
         script += (f"activate ButtonMultiplayerHostGame\nwait 10\nsetup_host_port {port}\n"
-                   "combo_select ComboHostPlayers 2\nsettext TextHostInputDelay 3\nsetcheck CheckHostPortMap 0\n"
+                   "combo_select ComboHostPlayers 2\nwait 4\n"
                    "activate ButtonMultiplayerCreate\nwait_connected 2\nwait_remote_ready\nwait_all_ready\n")
         for row in range(1, 9):
             script += f"chat all chatrow{row}\nwait_ms 600\n"
