@@ -84,7 +84,7 @@ void CameraMan::SetScrollFromScript(const Vector& center, int screenId) {
 	const auto key = SoundSimulationScope::CurrentKey();
 	if (key.domain != SoundExecutionDomain::SharedSimulation &&
 	    !(key.domain == SoundExecutionDomain::Presentation && key.objectUID == 0)) return;
-	const Activity* activity = g_ActivityMan.GetActivity();
+	Activity* activity = g_ActivityMan.GetActivity();
 	if (!activity) return;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (!activity->IsLocalHumanSeat(player) || activity->ScreenOfPlayer(player) != screenId) continue;
