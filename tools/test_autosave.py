@@ -31,7 +31,10 @@ def run_pair(repo: Path, root: Path, port: int, seconds: dict, ticks: int, *, pr
         args += ["-tick-hashes", "-max-ticks", str(ticks), "-out", str(root / f"{who}_trace.json"),
                  "-net-match-report", str(root / f"{who}_report.json")]
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
-        runs[who] = make_run(repo, args, root / who, 360, env={"CCCP_HEADLESS": "1"})
+        env = {"CCCP_HEADLESS": "1"}
+        if minimum := os.environ.get("CC_TEST_AUTOSAVE_STARTUP_MIN_FRAMES"):
+            env["CC_TEST_AUTOSAVE_STARTUP_MIN_FRAMES"] = minimum
+        runs[who] = make_run(repo, args, root / who, 360, env=env)
         if prepare:
             prepare(who, runs[who].cwd)
 
@@ -150,9 +153,15 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=48212)
     parser.add_argument("--ticks", type=int, default=400)
     parser.add_argument("--arm", choices=("all", "default", "host-option"), default="all")
+    parser.add_argument("--startup-min-frames", type=int, default=0,
+                        help="test control: common input boundary, still bounded by actual measured startup (default unchanged)")
     args = parser.parse_args()
     if not (48211 <= args.port <= 48216 or 48500 <= args.port <= 48516) or args.ticks < 400:
         parser.error("four ports must fit 48211..48219 or 48500..48519; at least 400 ticks are required")
+    if not 0 <= args.startup_min_frames <= 4096:
+        parser.error("startup-min-frames must be 0..4096")
+    if args.startup_min_frames:
+        os.environ["CC_TEST_AUTOSAVE_STARTUP_MIN_FRAMES"] = str(args.startup_min_frames)
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = args.repo.resolve(), args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -170,6 +179,8 @@ def main() -> int:
     for index, (arm, cadence) in enumerate(arms.items()):
         arm_root = root / arm
         details = {"cadence_seconds": cadence}
+        if args.startup_min_frames:
+            details["startup_min_frames"] = args.startup_min_frames
         result["arms"][arm] = details
         try:
             prepare, setting = None, None
@@ -190,7 +201,8 @@ def main() -> int:
             details["records"] = records
             for who in cadence:
                 assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
-                enabled = autosaving or cadence[who] is not None and cadence[who] > 0
+                # NetMatchService publishes the host's cadence; both peers write it even when the client's own option is off.
+                enabled = autosaving or cadence["host"] is not None and cadence["host"] > 0
                 details[who] = inspect_autosaves(arm_root, who, enabled)
                 if args.arm == "default":
                     if arm in ("setting", "flag-off"):
@@ -225,6 +237,7 @@ def main() -> int:
             client_files = {Path(path).name: Path(path) for path in details.get("client", {}).get("files", [])}
             shared = sorted(set(host_files) & set(client_files))
             if host_files or client_files:
+                assert set(host_files) == set(client_files), "peer autosave file sets differ at the host's cadence"
                 assert shared, "peer autosaves share no file names for the comparer"
                 details["snapshot_compares"] = []
                 for name in shared:
@@ -233,7 +246,7 @@ def main() -> int:
                         repo, host_files[name], client_files[name],
                         arm_root / "host_report.json", arm_root / "client_report.json", log)
                     details["snapshot_compares"].append(str(log))
-            if arm == "host-option":
+            if enabled:
                 ticks_by_peer = {who: [row["tick"] for row in details[who]["captures"]] for who in cadence}
                 details["capture_ticks"] = ticks_by_peer
                 assert ticks_by_peer["host"] == ticks_by_peer["client"], ticks_by_peer
