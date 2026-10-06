@@ -53,6 +53,24 @@ thread_local Vector s_LastRayHitPos;
 thread_local bool s_ReadTerrainFromCopy = false;
 
 namespace {
+	class SceneLoadWork {
+	public:
+		SceneLoadWork() {
+			if (Depth() == 0) {
+				m_Frame = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+				m_Ordinal = ScenarioRunner::BeginSharedSceneLoad(m_Frame);
+			}
+			++Depth();
+		}
+		~SceneLoadWork() {
+			if (--Depth() == 0 && m_Ordinal != 0) ScenarioRunner::CompleteSharedSceneLoad(m_Frame, m_Ordinal);
+		}
+	private:
+		// The preset overload delegates to the object overload inside the same work operation.
+		static unsigned& Depth() { thread_local unsigned depth = 0; return depth; }
+		uint64_t m_Frame = 0, m_Ordinal = 0;
+	};
+
 	struct TerrainEvent {
 		uint32_t Tick;
 		char Tag[6];
@@ -299,11 +317,7 @@ int SceneMan::LoadScene(Scene* pNewScene, bool placeObjects, bool placeUnits) {
 	if (!pNewScene) {
 		return -1;
 	}
-	const uint64_t loadFrame = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-	struct LoadWork {
-		uint64_t frame, ordinal;
-		~LoadWork() { ScenarioRunner::CompleteSharedSceneLoad(frame, ordinal); }
-	} loadWork{loadFrame, ScenarioRunner::BeginSharedSceneLoad(loadFrame)};
+	SceneLoadWork loadWork;
 
 	g_MovableMan.PurgeAllMOs();
 	g_LuaMan.ResetPathCallbacks(true);
@@ -396,6 +410,7 @@ int SceneMan::LoadScene() {
 		}
 	}
 
+	SceneLoadWork loadWork;
 	return LoadScene(dynamic_cast<Scene*>(m_pSceneToLoad->Clone()), m_PlaceObjects, m_PlaceUnits);
 }
 

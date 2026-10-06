@@ -8430,24 +8430,27 @@ namespace RTE {
 	bool NetLockstepCoordinator::SceneLoadInputPending(uint8_t peer, uint64_t frame, uint64_t nowMs) {
 		if (m_SceneLoadFrame == UINT64_MAX || frame < m_SceneLoadFrame ||
 		    frame - m_SceneLoadFrame < InputDelayAt(peer, m_SceneLoadFrame)) return false;
+		const auto found = m_SceneLoadStatus.find(peer);
+		if (found != m_SceneLoadStatus.end()) {
+			const auto& status = found->second;
+			if (status.frame > m_SceneLoadFrame) return false;
+			if (status.frame == m_SceneLoadFrame && status.ordinal >= m_SceneLoadOrdinal && status.complete) {
+				// The input becomes answerable when completion crosses its link; the report may precede that input.
+				const uint64_t boundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
+				return nowMs < status.completedAtMs || nowMs - status.completedAtMs < boundMs;
+			}
+		}
 		// Loading is a discrete world operation. It uses the existing startup answer budget, never an enlarged input bound.
 		const uint64_t budgetMs = std::min<uint64_t>(m_Config.timeoutMs, c_StartupAnswerBudgetMs);
 		if (nowMs >= m_SceneLoadStartedMs && nowMs - m_SceneLoadStartedMs >= budgetMs) {
 			if (!m_SceneLoadBudgetNamed) {
 				m_SceneLoadBudgetNamed = true;
-				DiagnosticLine() << "[net-lockstep] scene load frame=" << m_SceneLoadFrame << " answer budget expired after " << budgetMs << "ms" << std::endl;
+				DiagnosticLine() << "[net-lockstep] scene load frame=" << m_SceneLoadFrame << " still awaits peer=" << static_cast<int>(peer)
+				                 << " readiness after the " << budgetMs << "ms answer budget" << std::endl;
 			}
 			return false;
 		}
-		const auto found = m_SceneLoadStatus.find(peer);
-		if (found == m_SceneLoadStatus.end() || found->second.frame < m_SceneLoadFrame ||
-		    (found->second.frame == m_SceneLoadFrame && found->second.ordinal < m_SceneLoadOrdinal)) return true;
-		const auto& status = found->second;
-		if (status.frame > m_SceneLoadFrame) return false;
-		if (!status.complete) return true;
-		// The input becomes answerable when the completion crosses its link; a ready report may precede that input.
-		const uint64_t boundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
-		return nowMs < status.completedAtMs || nowMs - status.completedAtMs < boundMs;
+		return true;
 	}
 
 	void NetLockstepCoordinator::BeginSynchronizedCapture(uint64_t completedFrame) {
