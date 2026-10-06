@@ -43,7 +43,7 @@
             }
           ],
           "env": {
-            "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
+            "CC_LUA_FILE_ROOT": "../ScriptFiles"
           }
         }
       ]
@@ -102,7 +102,7 @@
             }
           ],
           "env": {
-            "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
+            "CC_LUA_FILE_ROOT": "../ScriptFiles"
           },
           "probe": "mod-void-wanderers-host.probe.json"
         },
@@ -159,7 +159,7 @@
             }
           ],
           "env": {
-            "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
+            "CC_LUA_FILE_ROOT": "../ScriptFiles"
           },
           "probe": "mod-void-wanderers-client.probe.json"
         }
