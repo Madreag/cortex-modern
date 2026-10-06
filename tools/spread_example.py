@@ -55,7 +55,9 @@ def main():
         if path.is_file():
             value = json.loads(path.read_text(encoding="utf-8"))
             value["topology"] = "spread"
-            value["peer_boxes"] = {"host": "EROL-PC", "client": args.seat_box}
+            receipt = args.out/"run0/spread-result.json"
+            value["peer_boxes"] = json.loads(receipt.read_text(encoding="utf-8")).get("peer_boxes", {}) if receipt.is_file() else {}
+            value["requested_peer_boxes"] = {"host": "EROL-PC", "client": args.seat_box}
             video.write_json(path, value)
     return code
 

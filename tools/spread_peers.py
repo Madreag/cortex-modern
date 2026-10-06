@@ -695,6 +695,7 @@ class Run:
             raise self.case.refuse(self.role, box["name"], "native runner did not finish")
         self.case.synchronize(force=True)
         self.finished = True
+        backend.end()
         backend.fetch(box, claim, request, result)
         from acceptance_remote import unpack_evidence
         manifest = self.native_progress.get("archive")
