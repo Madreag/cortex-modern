@@ -5,11 +5,14 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import ipaddress
 import json
+import queue
+import socket
 from pathlib import Path
 import ssl
 import threading
 import time
 import urllib.request
+from urllib.parse import urlsplit, parse_qs
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -19,11 +22,62 @@ from cryptography.x509.oid import NameOID
 from session_directory.session_directory import LOGGER, spawn_server
 
 
+class RelayUnavailable(RuntimeError):
+    pass
+
+
+def require_coturn(config, book=None):
+    """Refuse a dead relay before a scene spends its start budget waiting for inputs."""
+    if not config or config.get('backend') != 'coturn':
+        return
+    from relay_cloudflare_match import coturn_rest_login, turn_allocate
+    deadline = time.monotonic() + 8
+    if not isinstance(config.get('static_auth_secret'), str) or not config['static_auth_secret']:
+        raise RelayUnavailable('Self-hosted relay has no authentication key. Configure it before running this scene.')
+    for url in config.get('relay_urls') or []:
+        try:
+            parsed = urlsplit(url.replace('turn:', 'turn://', 1).replace('turns:', 'turns://', 1))
+            mode = 'tls' if parsed.scheme == 'turns' else parse_qs(parsed.query).get('transport', ['udp'])[0]
+            if parsed.scheme not in ('turn', 'turns') or mode not in ('udp', 'tcp', 'tls') or not parsed.hostname:
+                continue
+            host, port = parsed.hostname, parsed.port or (5349 if mode == 'tls' else 3478)
+            found = queue.Queue()
+            def resolve(host=host, port=port, found=found, mode=mode):
+                try:
+                    found.put(socket.getaddrinfo(host, port, 0, socket.SOCK_DGRAM if mode == 'udp' else socket.SOCK_STREAM))
+                except OSError:
+                    found.put([])
+            threading.Thread(target=resolve, daemon=True).start()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            addresses = found.get(timeout=min(2, remaining))
+            user, password = coturn_rest_login(config['static_auth_secret'], 60)
+            if book is not None:
+                book.add('relay-preflight-username', user)
+                book.add('relay-preflight-credential', password)
+            for address in addresses:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    receipt = turn_allocate((address[4][0], port), user, password, timeout=min(2, remaining / 2),
+                                            transport=mode, tls_hostname=host)
+                except (OSError, ValueError):
+                    continue
+                if receipt.get('result') == 'allocated':
+                    return
+        except (OSError, ValueError, KeyError, queue.Empty):
+            continue
+    raise RelayUnavailable('Self-hosted relay is unavailable or refuses a connection. Start it before running this scene.')
+
+
 @contextmanager
 def serve(root, port, block=(49400, 49479), turn_config=None, secret_book=None):
     """The directory on the given port, which must lie in the video driver's block (its default or a lane's own)."""
     if not block[0] <= port <= block[1]:
         raise ValueError(f"the directory must stay in the video driver's port block {block[0]}-{block[1]}")
+    require_coturn(turn_config, secret_book)
     root = Path(root)
     root.mkdir()
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)

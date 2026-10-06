@@ -2926,6 +2926,8 @@ def main():
                 break
     except (KeyboardInterrupt, Exception) as error:
         capture["interrupted"] = public_value(f"{type(error).__name__}: {error}",getattr(getattr(options,'relay_book',None),'values',{}))
+        if type(error).__name__ == 'RelayUnavailable':
+            print(str(error), flush=True)
         complete = False
         for captured in capture["runs"]:
             captured["interrupted"] = capture["interrupted"]

@@ -766,7 +766,8 @@ def coturn_rest_login(secret: str, ttl_s: int, now: int | None = None) -> tuple[
 
 # --- a TURN Allocate, enough to ask our relay whether a login is alive ------------------------------------------------
 
-def turn_allocate(server: tuple[str, int], username: str, password: str, timeout: float = 4.0) -> dict:
+def turn_allocate(server: tuple[str, int], username: str, password: str, timeout: float = 4.0,
+                  transport: str = 'udp', tls_hostname: str | None = None) -> dict:
     """RFC 5766 Allocate with the long-term credential: the first answer's realm and nonce, then the signed request.
     Returns the final message class and error code; the login is used for the HMAC only and never returned."""
     def attribute(kind: int, value: bytes) -> bytes:
@@ -781,26 +782,71 @@ def turn_allocate(server: tuple[str, int], username: str, password: str, timeout
         return struct.pack('!HHI', 0x0003, len(body), 0x2112A442) + txn + body
 
     def parse(data: bytes) -> tuple[int, dict]:
+        if len(data) < 20:
+            raise ValueError('relay sends an incomplete response')
         kind, length = struct.unpack('!HH', data[:4])
+        if length % 4 or len(data) != 20 + length or data[4:8] != struct.pack('!I', 0x2112A442):
+            raise ValueError('relay sends an invalid response')
         fields, offset = {}, 20
         while offset + 4 <= 20 + length:
             name, size = struct.unpack('!HH', data[offset:offset + 4])
+            if offset + 4 + size > len(data):
+                raise ValueError('relay truncates a response field')
             fields[name] = data[offset + 4:offset + 4 + size]
             offset += 4 + size + ((4 - size % 4) % 4)
+        if offset != len(data):
+            raise ValueError('relay sends an incomplete response field')
         return kind, fields
 
-    transport = attribute(0x0019, b'\x11\x00\x00\x00')
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.settimeout(timeout)
-        sock.sendto(message(transport, os.urandom(12), None), server)
-        kind, fields = parse(sock.recvfrom(4096)[0])
+    from contextlib import ExitStack
+    requested_transport = attribute(0x0019, b'\x11\x00\x00\x00')
+    deadline = time.monotonic() + 2 * timeout
+    family = socket.AF_INET6 if ':' in server[0] else socket.AF_INET
+    stream = transport in ('tcp', 'tls')
+    with ExitStack() as closer:
+        raw = closer.enter_context(socket.socket(family, socket.SOCK_STREAM if stream else socket.SOCK_DGRAM))
+        sock = raw
+        def limit():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('relay does not complete its response')
+            sock.settimeout(remaining)
+        limit()
+        if stream:
+            sock.connect(server)
+            if transport == 'tls':
+                limit()
+                sock = closer.enter_context(ssl.create_default_context().wrap_socket(sock, server_hostname=tls_hostname or server[0]))
+        def exchange(payload):
+            limit()
+            if not stream:
+                sock.sendto(payload, server)
+                response = sock.recvfrom(4096)[0]
+                if len(response) < 20 or response[8:20] != payload[8:20]:
+                    raise ValueError('relay answers another request')
+                return response
+            sock.sendall(payload)
+            def exact(size):
+                data = bytearray()
+                while len(data) < size:
+                    limit()
+                    part = sock.recv(size - len(data))
+                    if not part:
+                        raise ConnectionError('relay closes its response')
+                    data.extend(part)
+                return bytes(data)
+            header = exact(20)
+            if header[8:20] != payload[8:20]:
+                raise ValueError('relay answers another request')
+            length = struct.unpack('!H', header[2:4])[0]
+            return header + exact(length)
+        kind, fields = parse(exchange(message(requested_transport, os.urandom(12), None)))
         realm, nonce = fields.get(0x0014, b''), fields.get(0x0015, b'')
         if kind != 0x0113 or not realm or not nonce:
             return dict(first=hex(kind), result='no challenge')
         key = hashlib.md5(username.encode() + b':' + realm + b':' + password.encode()).digest()
-        signed = transport + attribute(0x0006, username.encode()) + attribute(0x0014, realm) + attribute(0x0015, nonce)
-        sock.sendto(message(signed, os.urandom(12), key), server)
-        kind, fields = parse(sock.recvfrom(4096)[0])
+        signed = requested_transport + attribute(0x0006, username.encode()) + attribute(0x0014, realm) + attribute(0x0015, nonce)
+        kind, fields = parse(exchange(message(signed, os.urandom(12), key)))
     error = fields.get(0x0009)
     code = (error[2] & 0x7) * 100 + error[3] if error and len(error) >= 4 else None
     return dict(result='allocated' if kind == 0x0103 else 'refused', message_class=hex(kind), error_code=code)

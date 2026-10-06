@@ -777,6 +777,48 @@ def check_directory_port_block(results):
     return ok
 
 
+def check_coturn_start_preflight(results, scratch):
+    from e2e import directory
+    import relay_cloudflare_match
+    import time
+    backend = dict(backend='coturn', static_auth_secret='unit-preflight-secret',
+                   relay_urls=['turn:127.0.0.1:47579?transport=udp'])
+    provider = SimpleNamespace(mint=lambda *args, **kwargs: {})
+    fake = SimpleNamespace(store=SimpleNamespace(turn_provider=provider), stop=lambda: None)
+    began = time.monotonic()
+    yielded, refusal = False, ''
+    with patch.object(relay_cloudflare_match, 'turn_allocate', side_effect=TimeoutError), \
+         patch.object(directory, 'spawn_server', return_value=fake) as started:
+        try:
+            with directory.serve(scratch / 'coturn-down', 47578, (47540, 47579), turn_config=backend):
+                yielded = True
+        except RuntimeError as error:
+            refusal = str(error)
+    ok = row(results, 'relay/dead-coturn-refuses-before-directory-and-engines',
+             not yielded and not started.called and 'Self-hosted relay' in refusal
+             and time.monotonic() - began < 10, refusal)
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as silent:
+        silent.bind(('127.0.0.1', 47579))
+        began = time.monotonic()
+        refused = False
+        with patch.object(directory, 'spawn_server', return_value=fake) as started:
+            try:
+                with directory.serve(scratch / 'coturn-silent', 47578, (47540, 47579), turn_config=backend):
+                    pass
+            except directory.RelayUnavailable:
+                refused = True
+        elapsed = time.monotonic() - began
+        ok &= row(results, 'relay/silent-coturn-refuses-within-ten-seconds',
+                  refused and not started.called and elapsed < 10, f'{elapsed:.3f}s')
+    with patch.object(relay_cloudflare_match, 'turn_allocate', return_value=dict(result='allocated')), \
+         patch.object(directory, 'spawn_server', return_value=fake) as started:
+        with directory.serve(scratch / 'coturn-up', 47578, (47540, 47579), turn_config=backend):
+            yielded = True
+    ok &= row(results, 'relay/live-coturn-admits-the-scene', yielded and started.call_count == 1)
+    return ok
+
+
 def check_launch_contract(results, scratch):
     stage = scratch / "launch"
     stage.mkdir()
@@ -2141,6 +2183,7 @@ def main():
         ok &= check_probe_clicks_seen(results)
         ok &= check_substitution(results)
         ok &= check_directory_port_block(results)
+        ok &= check_coturn_start_preflight(results, scratch)
         ok &= check_launch_contract(results, scratch)
         ok &= check_index_and_checklist(results, scratch)
         ok &= check_encode(results, scratch)

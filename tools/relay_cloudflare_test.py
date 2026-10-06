@@ -801,6 +801,64 @@ class FeelBars(unittest.TestCase):
         self.assertFalse(match.feel_bars(self.timing(**steady), 'host')['passed'])
 
 
+class TurnProbe(unittest.TestCase):
+    def test_a_malformed_allocation_does_not_admit_a_scene(self):
+        import relay_cloudflare_match as match
+        import struct
+        transaction = b'0' * 12
+        def packet(kind, body):
+            return struct.pack('!HHI', kind, len(body), 0x2112A442) + transaction + body
+        challenge = packet(0x0113, b'\x00\x14\x00\x04test\x00\x15\x00\x04once')
+        malformed = packet(0x0103, b'\x00\x00')
+        fake = mock.MagicMock()
+        fake.__enter__.return_value = fake
+        fake.recvfrom.side_effect = [(challenge, ('127.0.0.1', 47579)), (malformed, ('127.0.0.1', 47579))]
+        with mock.patch.object(match.socket, 'socket', return_value=fake), mock.patch.object(match.os, 'urandom', return_value=transaction):
+            with self.assertRaises(ValueError):
+                match.turn_allocate(('127.0.0.1', 47579), 'test-user', 'test-password')
+        self.assertEqual(fake.sendto.call_count, 2)
+
+    def test_a_stream_probe_reads_partial_challenge_and_success(self):
+        import relay_cloudflare_match as match
+        import struct
+        import socket
+        import threading
+        errors = []
+        requests = []
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen(1)
+            listener.settimeout(3)
+            def serve():
+                try:
+                    with listener.accept()[0] as client:
+                        client.settimeout(3)
+                        for kind, body in ((0x0113, b'\x00\x14\x00\x04test\x00\x15\x00\x04once'), (0x0103, b'')):
+                            packet = bytearray()
+                            while len(packet) < 20:
+                                packet.extend(client.recv(20 - len(packet)))
+                            length = struct.unpack('!H', packet[2:4])[0]
+                            while len(packet) < 20 + length:
+                                packet.extend(client.recv(20 + length - len(packet)))
+                            requests.append(bytes(packet))
+                            response = struct.pack('!HHI', kind, len(body), 0x2112A442) + packet[8:20] + body
+                            for byte in response:
+                                client.sendall(bytes([byte]))
+                except Exception as error:
+                    errors.append(type(error).__name__)
+            worker = threading.Thread(target=serve)
+            worker.start()
+            try:
+                receipt = match.turn_allocate(listener.getsockname(), 'test-user', 'test-password', timeout=2, transport='tcp')
+            finally:
+                worker.join(4)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(receipt['result'], 'allocated')
+        self.assertEqual(len(requests), 2)
+        self.assertIn(b'\x00\x08\x00\x14', requests[1])
+
+
 class LoginSweep(unittest.TestCase):
     """The pattern sweep finds a relay login in the clear without being told any secret, and passes a blanked one."""
 
