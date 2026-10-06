@@ -3039,23 +3039,27 @@ void MainMenuGUI::RederiveHostOptionsRoster() {
 void MainMenuGUI::ApplyHostOptions() {
 	if (m_HostOptionsReadOnly) return;
 	DraftHostOptionsFromControls();
-	// This computer's choices commit on the same click; one that cannot be taken now names its reason and stays.
-	if (!CommitHostComputerDraft()) {
-		g_GUISound.BackButtonPressSound()->Play();
-		return;
-	}
+	// Apply takes the whole draft or none of it: the match's own check and this computer's checks run before anything commits.
 	std::string error;
 	if (!NetMatchConfigUtil::ValidateLocalAlpha(m_HostOptionsDraft, &error)) {
 		m_HostOptionsStatusLabel->SetText(error);
 		g_GUISound.BackButtonPressSound()->Play();
 		return;
 	}
+	if (!CommitHostComputerDraft(false)) {
+		g_GUISound.BackButtonPressSound()->Play();
+		return;
+	}
 	if (m_HostOptionsSetupDraft) {
-		m_HostSetupOptions = m_HostOptionsDraft;
-		m_HostAppliedRulesTouched = m_HostRulesTouched;
-		SyncHostScreenFromDraft(*m_HostSetupOptions);
-		m_HostOptionsStatusLabel->SetText("Staged for the next lobby.");
-	} else {
+		// A match draft nobody changed is not staged: the lobby is built from the setup rows as it would have been.
+		const bool staged = m_HostSetupOptions || !NetMatchConfigUtil::SameHostDraft(m_HostOptionsDraft, m_HostOptionsOpenedDraft);
+		if (staged) {
+			m_HostSetupOptions = m_HostOptionsDraft;
+			m_HostAppliedRulesTouched = m_HostRulesTouched;
+			SyncHostScreenFromDraft(*m_HostSetupOptions);
+		}
+		m_HostOptionsStatusLabel->SetText(staged ? "Staged for the next lobby." : "Applied.");
+	} else if (!(m_HostOptionsDraft == g_NetMatchService.GetLobbyMatchConfig())) {
 		if (!g_NetMatchService.SubmitHostOptions(m_HostOptionsBaseRevision, m_HostOptionsDraft, &error)) {
 			m_HostOptionsStatusLabel->SetText(error);
 			g_GUISound.BackButtonPressSound()->Play();
@@ -3065,6 +3069,11 @@ void MainMenuGUI::ApplyHostOptions() {
 		m_HostOptionsAwaitedRevision = m_HostOptionsBaseRevision + 1;
 		m_HostAppliedRulesTouched = m_HostRulesTouched;
 		m_HostOptionsStatusLabel->SetText(NetHostOptionsApplyText(g_NetMatchService.GetState()));
+	}
+	// This computer's choices commit on the same click, once the rest has been taken.
+	if (!CommitHostComputerDraft(true)) {
+		g_GUISound.BackButtonPressSound()->Play();
+		return;
 	}
 	m_HostComputerLoaded = m_HostComputerDraft;
 	g_GUISound.ButtonPressSound()->Play();
@@ -3093,7 +3102,8 @@ void MainMenuGUI::LoadHostComputerDraft() {
 	draft.statusWidget = g_SettingsMan.GetNetworkMatchStatusMode();
 }
 
-bool MainMenuGUI::CommitHostComputerDraft() {
+bool MainMenuGUI::CommitHostComputerDraft(bool commit) {
+	// Every refusal comes before anything is taken: a check alone (commit false) says whether all of it can be.
 	const HostComputerDraft& draft = m_HostComputerDraft;
 	const bool hosting = g_NetMatchService.IsHost();
 	if (draft.port != (m_MultiplayerHostPortTextBox ? m_MultiplayerHostPortTextBox->GetText() : draft.port)) {
@@ -3109,7 +3119,7 @@ bool MainMenuGUI::CommitHostComputerDraft() {
 			ShowHostOptionsPage(c_HostOptionsConnectionPage);
 			return false;
 		}
-		m_MultiplayerHostPortTextBox->SetText(std::to_string(static_cast<int>(parsed)));
+		if (commit) m_MultiplayerHostPortTextBox->SetText(std::to_string(static_cast<int>(parsed)));
 	}
 	if (hosting && !m_HostOptionsSetupDraft && draft.ice != m_HostComputerLoaded.ice) {
 		// The session's routes were set up when it opened.
@@ -3124,12 +3134,13 @@ bool MainMenuGUI::CommitHostComputerDraft() {
 			ShowHostOptionsPage(c_HostOptionsConnectionPage);
 			return false;
 		}
-		if (!g_NetMatchService.SetDirectoryVisibility(vis)) {
+		if (commit && !g_NetMatchService.SetDirectoryVisibility(vis)) {
 			m_HostOptionsStatusLabel->SetText("This lobby cannot be listed online again: create a new lobby to list it.");
 			ShowHostOptionsPage(c_HostOptionsConnectionPage);
 			return false;
 		}
 	}
+	if (!commit) return true;
 	g_SettingsMan.SetNetworkHostVisibility(draft.listing);
 	g_SettingsMan.SetNetworkPortMapEnable(draft.portMap);
 	if (m_HostOptionsSetupDraft) {

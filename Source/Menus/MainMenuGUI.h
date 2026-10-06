@@ -713,7 +713,8 @@ namespace RTE {
 		/// Loads this computer's hosting choices into the draft Advanced edits.
 		void LoadHostComputerDraft();
 		/// Saves the edited hosting choices; false with the reason on the panel when one cannot be taken now.
-		bool CommitHostComputerDraft();
+		/// @param commit False checks every choice and saves none.
+		bool CommitHostComputerDraft(bool commit = true);
 		/// Stages the shown page's factory values; Apply commits them as any edit.
 		void RestoreHostOptionsPageDefaults();
 		/// Leaves Advanced for the screen it was opened from.
