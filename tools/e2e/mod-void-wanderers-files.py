@@ -99,7 +99,7 @@ end
 """
 
 
-def file_probe(repo: Path, out: Path, private_store: bool = True, roots: bool = False, read_only: bool = False) -> dict:
+def file_probe(repo: Path, out: Path, private_store: bool = True, roots: bool = False, read_only: bool = False, external_root: bool = False) -> dict:
     """Run the file bindings against a generated package in the private runtime."""
     sys.path.insert(0, str(repo / "tools"))
     from run_sim_test import make_run, seed_settings
@@ -108,8 +108,9 @@ def file_probe(repo: Path, out: Path, private_store: bool = True, roots: bool = 
     trace = out / "trace.json"
     args = ["-module", "VoidWanderers.rte", "-scenario", "VoidWanderers.rte/Void Wanderers",
             "-seed", "42", "-max-ticks", "120", "-tick-hashes", "-out", str(trace)]
+    store = out / "external-store" if external_root else Path("Userdata/ScriptFiles")
     run = make_run(repo, args, out / "run", 120,
-                   env={"CC_LUA_FILE_ROOT": "Userdata/ScriptFiles" if private_store else ""})
+                   env={"CC_LUA_FILE_ROOT": str(store) if private_store else ""})
     try:
         runtime = Path(run.cwd)
         package = runtime / "Mods/LuaFileProbe.rte/CampaignData"
@@ -136,7 +137,7 @@ def file_probe(repo: Path, out: Path, private_store: bool = True, roots: bool = 
         expected = b"installed\n" if private_store or read_only else written
         if (package / "seed.dat").read_bytes() != expected or sorted(path.name for path in package.iterdir()) != ["seed.dat"]:
             errors.append("Lua file writes alter the installed package" if private_store else "default Lua file operations differ")
-        shadow = runtime / "Userdata/ScriptFiles/LuaFileProbe.rte/CampaignData"
+        shadow = (store if external_root else runtime / store) / "LuaFileProbe.rte/CampaignData"
         if read_only:
             if shadow.parent.exists():
                 errors.append("read-only text open creates a private file store")
@@ -150,7 +151,7 @@ def file_probe(repo: Path, out: Path, private_store: bool = True, roots: bool = 
             errors.append("unset file-root lever creates a private file store")
         if re.search(r"^ERROR:|RTE Aborted|RTE Assert|Assertion failed|stack traceback:", console, re.M):
             errors.append("engine or Lua error in the file probe log")
-        case = "module_file_read_only" if read_only else "module_file_root_aliases" if roots else "module_file_isolation" if private_store else "module_file_defaults"
+        case = "module_file_external_root" if external_root else "module_file_read_only" if read_only else "module_file_root_aliases" if roots else "module_file_isolation" if private_store else "module_file_defaults"
         result = {"case": case,
                   "pass": not errors, "errors": errors, "record": record}
         (out / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
