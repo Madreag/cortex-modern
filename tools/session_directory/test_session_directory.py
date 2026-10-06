@@ -208,7 +208,7 @@ class DirectoryTests(unittest.TestCase):
         self.assertTrue(offer["iceServers"][0]["username"].startswith("1300:"))
         self.assertEqual(session_directory.SessionDirectory(300, 5).turn_max_ttl, session_directory.TURN_MAX_TTL)
         with self.assertRaises(SystemExit):
-            session_directory.parse_args(["--turn-max-ttl", "299"])
+            session_directory.parse_args(["--caller-mode", "direct", "--turn-max-ttl", "299"])
 
     def test_main_hands_the_ttl_cap_to_its_server(self) -> None:
         seen = {}
@@ -218,7 +218,7 @@ class DirectoryTests(unittest.TestCase):
             raise SystemExit(0)
         with mock.patch.object(session_directory, "spawn_server", side_effect=spawn):
             with self.assertRaises(SystemExit):
-                session_directory.main(["--insecure-http", "--port", "0", "--turn-max-ttl", "300"])
+                session_directory.main(["--caller-mode", "direct", "--insecure-http", "--port", "0", "--turn-max-ttl", "300"])
         self.assertEqual(seen.get("turn_max_ttl"), 300)
 
     def test_fixed_offer_and_secret_refusal(self) -> None:
