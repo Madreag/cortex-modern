@@ -1402,7 +1402,7 @@ static constexpr uint64_t c_NetMatchE2EAdmissionWaitTicks = 1800; //!< How long 
 static uint64_t s_netMatchE2EOwedSampleFrame = 0; //!< The full-state sample frame a round owes a seat admitted late; 0 when none.
 static uint64_t s_netLockstepTicks = 0;
 static std::unordered_set<uint64_t> s_netMatchScreenshotTicks;
-static uint16_t s_netLockstepInputDelay = 0;
+static uint16_t s_netLockstepInputDelay = 1;
 static uint8_t s_netMatchPeers = 2;
 static std::optional<bool> s_netMatchBrainlessSpectate;
 static std::optional<uint32_t> s_netMatchHumans;
@@ -9404,8 +9404,8 @@ bool PrepareNetLockstepScenario(GnsTransport& transport, NetSession& session, Ne
 		if (error) *error = "network gameplay requires exactly one of -net-host or -net-join <address>";
 		return false;
 	}
-	if (s_netLockstepInputDelay != 0) {
-		if (error) *error = s_netMatch ? "local alpha gameplay currently requires -net-match-input-delay 0" : "P3 gameplay lockstep currently requires -net-lockstep-input-delay 0";
+	if (s_netLockstepInputDelay == 0) {
+		if (error) *error = "network gameplay requires at least 1 frame of input delay before its committed simulation tick";
 		return false;
 	}
 
