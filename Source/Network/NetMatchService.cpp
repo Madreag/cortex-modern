@@ -1,4 +1,5 @@
 #include "NetMatchService.h"
+#include "Controller.h"
 #include "LoopbackTransport.h"
 #include "NetA7Journal.h"
 #include "NetAuthCrypto.h"
@@ -6925,8 +6926,23 @@ static std::string ResyncSaveName() {
 				}
 			}
 			g_UInputMan.ClearMouseButtons();
-			for (MovableObject* object: g_MovableMan.SnapshotKnownObjects()) if (auto* actor = dynamic_cast<Actor*>(object))
-				actor->GetController()->ResetLocalInputState(actor->GetController()->GetInputMode());
+			// A local human seat resumes sampling before its first human frame is committed.
+			Activity* activity = g_ActivityMan.GetActivity();
+			for (MovableObject* object: g_MovableMan.SnapshotKnownObjects()) if (auto* actor = dynamic_cast<Actor*>(object)) {
+				Controller* controller = actor->GetController();
+				Controller::InputMode mode = controller->GetSeatMode();
+				int player = controller->GetSeatPlayerRaw();
+				for (int seat = Players::PlayerOne; activity && seat < Players::MaxPlayerCount; ++seat) {
+					if (activity->IsLocalHumanSeat(seat) && activity->GetLocallyControlledActor(seat) == actor &&
+					    ScenarioRunner::GetLockstepActorOwner(actor->GetUniqueID(), actor->GetTeam(), false, m_WorldCatchUp.activationTick) == m_LocalPeerId) {
+						mode = Controller::CIM_PLAYER;
+						player = seat;
+						break;
+					}
+				}
+				controller->DropLocalProduction();
+				controller->ResetLocalInputState(mode, player);
+			}
 			const auto activationLocal = std::chrono::steady_clock::now();
 			for (const auto& event: m_CatchUpWirePackets) {
 				if (event.bytes.size() > 17 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) {

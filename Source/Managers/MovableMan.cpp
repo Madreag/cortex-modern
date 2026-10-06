@@ -556,10 +556,12 @@ std::vector<MovableMan::LockstepActorOwner> MovableMan::BuildLockstepOwnershipCe
 static std::vector<ControllerFrame> SnapshotLockstepControllerFrames(const std::deque<Actor*>& actors, bool localOwned) {
 	std::vector<ControllerFrame> frames;
 	frames.reserve(actors.size());
+	const uint64_t target = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + (localOwned ? ScenarioRunner::GetLockstepInputDelayFrames() : 0);
 	for (Actor* actor: actors) {
 		const int64_t actorID = static_cast<int64_t>(actor->GetUniqueID());
 		const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(actorID, actor->GetTeam(), !actor->IsPlayerControlled());
-		if (ScenarioRunner::IsLockstepSeatReclaimGap(owner, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()))) continue;
+		// Local samples land after the producing tick's reclaim gap.
+		if (ScenarioRunner::IsLockstepSeatReclaimGap(owner, target)) continue;
 		if (IsLockstepLocalActor(actor) == localOwned) {
 			frames.push_back(ControllerFrameCodec::Snapshot(actorID, *actor->GetController(), actor));
 		}
@@ -1286,23 +1288,47 @@ void MovableMan::EndLockstepProducingPass(const std::vector<long int>& producing
 	}
 }
 
-void MovableMan::ReconcileLockstepControlBindings() {
+size_t MovableMan::PrepareLockstepReclaimInput(uint64_t frame) {
+	const auto reclaim = ScenarioRunner::GetLocalReclaimInputWindow(frame);
 	Activity* activity = g_ActivityMan.GetActivity();
-	if (!activity || !ScenarioRunner::IsLockstepControllerSyncActive()) {
-		return;
+	if (!reclaim || !activity) return 0;
+	using ReclaimKey = std::tuple<uint64_t, uint64_t, uint64_t, uint8_t>;
+	static std::array<ReclaimKey, Players::MaxPlayerCount> prepared{};
+	const ReclaimKey key{ScenarioRunner::GetLockstepRoundId(), reclaim->activationFrame, reclaim->eventSequence, reclaim->peerId};
+	size_t repairs = 0;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		Actor* controlled = activity->GetLocallyControlledActor(player);
+		if (prepared[player] == key || !activity->IsLocalHumanSeat(player) || !controlled || !g_MovableMan.IsActor(controlled)) continue;
+		const int64_t uid = static_cast<int64_t>(controlled->GetUniqueID());
+		if (ScenarioRunner::GetLockstepReclaimSeat(uid, controlled->GetTeam(), !controlled->IsPlayerControlled(), frame) != reclaim->peerId) continue;
+		// A later menu mode belongs to ordinary play, even during this return's remaining gap.
+		prepared[player] = key;
+		const Actor* brain = activity->GetPlayerBrain(player);
+		if ((activity->GetViewState(player) == Activity::Observe || activity->GetViewState(player) == Activity::DeathWatch) &&
+		    brain && g_MovableMan.IsActor(const_cast<Actor*>(brain)) && !brain->IsDead() && brain->GetHealth() > 0 &&
+		    !controlled->IsDead() && controlled->GetHealth() > 0) activity->SetViewState(Activity::Normal, player);
+		Controller* controller = controlled->GetController();
+		if (controller->GetSeatMode() != Controller::CIM_PLAYER || controller->GetSeatPlayerRaw() != player) {
+			controller->DropLocalProduction();
+			controller->ResetLocalInputState(Controller::CIM_PLAYER, player);
+			++repairs;
+		}
 	}
+	return repairs;
+}
+
+size_t MovableMan::ReconcileLockstepControlBindings() {
+	Activity* activity = g_ActivityMan.GetActivity();
+	if (!activity || !ScenarioRunner::IsLockstepControllerSyncActive()) return 0;
 	const uint8_t localPeerId = ScenarioRunner::GetLockstepLocalPeerId();
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		// Only a seat this machine presents holds a binding to release; the shared one belongs to its owner.
 		const Actor* controlled = activity->GetLocallyControlledActor(player);
-		if (!controlled || !g_MovableMan.IsActor(const_cast<Actor*>(controlled))) {
-			continue;
-		}
+		if (!controlled || !g_MovableMan.IsActor(const_cast<Actor*>(controlled))) continue;
 		const int64_t uid = static_cast<int64_t>(controlled->GetUniqueID());
-		if (ScenarioRunner::GetLockstepActorOwner(uid, controlled->GetTeam(), !controlled->IsPlayerControlled()) != localPeerId) {
-			activity->ReleaseLockstepControlOfActor(player);
-		}
+		if (ScenarioRunner::GetLockstepActorOwner(uid, controlled->GetTeam(), !controlled->IsPlayerControlled()) != localPeerId &&
+		    !ScenarioRunner::IsLocalControlClaimPending(uid)) activity->ReleaseLockstepControlOfActor(player);
 	}
+	return 0;
 }
 
 static bool CanonicalizeControllerFramesThroughWire(std::vector<ControllerFrame>& frames, std::string& error) {
@@ -7336,6 +7362,7 @@ void MovableMan::UpdateControllers() {
 	}
 
 	const bool lockstepActive = ScenarioRunner::IsLockstepControllerSyncActive();
+	if (lockstepActive) PrepareLockstepReclaimInput(simTick);
 	// A stopped coordinator still owns the sim: surface its stop reason so the match-level
 	// handling (resync, clean end, error) runs — never silently degrade to per-machine control.
 	if (ScenarioRunner::LockstepStopHoldsControllers()) {

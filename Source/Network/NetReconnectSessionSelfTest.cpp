@@ -4099,6 +4099,7 @@ namespace RTE {
 			// The old host plays a round and starts the next before it is lost.
 			wire.host.SetLiveMatch(true);
 			wire.host.SetMatchEnded();
+			wire.host.FormRematch();
 			wire.host.SetLiveMatch(true);
 			if (!wire.Pump(&error)) {
 				return Fail(error);
@@ -4142,6 +4143,95 @@ namespace RTE {
 			}
 			std::cout << "[net-reconnect-session-selftest] PASS roster_numbers_on_across_a_migration old_revision=" << old.revision << " successor_revision=" << hosted.revision
 			          << " generation=" << hosted.migrationGen << std::endl;
+			return 0;
+		}
+
+		int TestSuccessorHeldRoundEndsOnce() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) return Fail(error);
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			NetMatchConfig match = NetMatchConfigUtil::MakeDefault(0x136);
+			match.players = {{1, 0, false, "Host"}, {2, 1, false, "Successor"}, {3, 2, false, "Held"}};
+			match.peerCount = 3;
+			Wire wire;
+			if (!wire.registry.BeginHostedSession()) return Fail("the held-round fixture drew no epoch");
+			wire.host.Configure(&wire.registry, match.sessionId, MakeIdentity());
+			wire.host.SetSeatTable(NetH4BuildSeatTable(match), match.mode);
+			NetH4TicketRecord hostTicket;
+			if (!wire.host.EnsureLocalTicket(hostTicket)) return Fail("the old host took no ticket");
+			Endpoint successor, held;
+			successor.connection = 143;
+			held.connection = 144;
+			ConfigureEndpoint(successor, "held-round-successor", &unixNow);
+			ConfigureEndpoint(held, "held-round-player", &unixNow);
+			wire.Add(&successor);
+			wire.Add(&held);
+			if (!successor.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) return Fail("the successor was not seated: " + error);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!held.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) return Fail("the held player was not seated: " + error);
+			wire.host.SetLiveMatch(true);
+			wire.host.NotifyDisconnect(held.connection, 1200);
+			held.connected = false;
+			if (!wire.host.RosterSeatOfPeer(3) || wire.host.RosterSeatOfPeer(3)->phase != NetSeatPhase::Held) return Fail("the round's third seat was not held");
+			NetMatchConfig successorMatch = match;
+			successorMatch.hostPeerId = 2;
+			NetReconnectHost next;
+			NetSeatAuthRegistry nextRegistry;
+			if (!next.ImportMigrationState(wire.host.ExportMigrationState(), nextRegistry, successorMatch, 2, {}, wire.nowMs)) return Fail("the successor did not import the held round");
+			if (next.GetRoster().migrationGen != wire.host.GetRoster().migrationGen + 1 || next.GetRoster().hostSeat != 2 ||
+			    !next.RosterSeatOfPeer(3) || next.RosterSeatOfPeer(3)->phase != NetSeatPhase::Held) return Fail("the succession lost the held seat or host generation");
+			std::string failures;
+			for (NetReconnectHost* host: {&wire.host, &next}) {
+				uint32_t observedRevision = host->GetRoster().revision;
+				NetRosterStage observedStage = host->GetRoster().stage;
+				std::array<unsigned, 5> transitions{};
+				const auto observe = [&]() {
+					(void)host->TakeOutbound();
+					const uint32_t last = host->GetRoster().revision;
+					for (uint32_t revision = observedRevision + 1; revision <= last; ++revision) {
+						host->HandleMessage(145, NetH4RosterRevisionRequest{c_NetH4Version, revision}, wire.nowMs);
+						bool found = false;
+						for (const NetH4Outbound& outbound: host->TakeOutbound()) {
+							if (const auto* update = std::get_if<NetH4RosterRevision>(&outbound.payload)) {
+								NetSeatRoster decoded;
+								if (!DecodeRoster(update->roster, decoded, &error) || decoded.revision != revision) continue;
+								found = true;
+								if (decoded.stage != observedStage) ++transitions[static_cast<size_t>(decoded.stage)];
+								observedStage = decoded.stage;
+							}
+						}
+						if (!found) return false;
+					}
+					observedRevision = last;
+					return true;
+				};
+				host->SetMatchEnded();
+				if (!observe()) return Fail("the round-end revision was not retained");
+				for (unsigned pass = 0; pass < 300; ++pass) {
+					host->SetLiveMatch(true);
+					if (!observe()) return Fail("the admission pump lost a roster revision");
+					host->Tick(wire.nowMs + pass * 17);
+					host->SetMatchEnded();
+					if (!observe()) return Fail("the end pump lost a roster revision");
+				}
+				const unsigned ended = transitions[static_cast<size_t>(NetRosterStage::Ended)];
+				const unsigned formed = transitions[static_cast<size_t>(NetRosterStage::Starting)];
+				const unsigned started = transitions[static_cast<size_t>(NetRosterStage::Running)];
+				const std::string role = host == &next ? "successor" : "ordinary";
+				const std::string counts = role + " RoundEnded=" + std::to_string(ended) + " RematchFormed=" + std::to_string(formed) + " RoundStarted=" + std::to_string(started);
+				std::cout << "[net-reconnect-session-selftest] held_round_end " << counts << " passes=300" << std::endl;
+				if (ended != 1 || formed > 1 || started > 1) failures += counts + "; ";
+				if (!host->HoldsSeatsForReturn() || !host->RosterSeatOfPeer(3) || host->RosterSeatOfPeer(3)->phase != NetSeatPhase::RoundEnd ||
+				    host->RosterSeatOfPeer(3)->link != NetSeatLink::Dropped || host->RosterSeatOfPeer(3)->owner != wire.host.RosterSeatOfPeer(3)->owner) return Fail(role + " ended the held player's wait");
+				if (!failures.empty()) continue;
+				host->FormRematch();
+				host->SetLiveMatch(true);
+				if (!host->IsLiveMatch() || host->GetRoster().stage != NetRosterStage::Running || host->RosterSeatOfPeer(3)->phase != NetSeatPhase::Held) return Fail(role + " could not start an explicit rematch with the seat held");
+			}
+			if (!failures.empty()) return Fail("ended held rounds restart during admission updates: " + failures);
+			std::cout << "[net-reconnect-session-selftest] PASS successor_held_round_ends_once" << std::endl;
 			return 0;
 		}
 
@@ -4573,6 +4663,7 @@ namespace RTE {
 			// The rematch keeps the held seat and its holder, and the next round runs: the round-one ticket still names it.
 			if (nextRound) {
 				admission.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+				admission.FormRematch();
 				admission.SetLiveMatch(true);
 			}
 			LoopbackTransport secondTransport;
@@ -9189,6 +9280,7 @@ namespace RTE {
 		if (const int result = TestRosterNumbersOnAcrossAMigration(); result != 0) {
 			return result;
 		}
+		if (const int result = TestSuccessorHeldRoundEndsOnce(); result != 0) return result;
 		if (const int result = TestReturnPhasesFollowTheRound(); result != 0) {
 			return result;
 		}
