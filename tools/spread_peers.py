@@ -84,7 +84,11 @@ The default network is ICE. Match.parameters["network"]="direct" preserves
 explicit ICE-Off/Unlisted inputs and substitutes only deliberate loopback
 join addresses with the host's existing network address. An optional
 Match.parameters["host_address"] supplies that address; otherwise it is read
-on the native host. Loopback/unspecified host addresses refuse with the box
+on the native host's route to each named peer's saved SSH endpoint. This keeps
+LAN peers on the LAN and overlay peers on their existing overlay, without
+changing either network. Concurrent seats wait for an already requested host
+to have its native PID before launching; callers still order their starts.
+Loopback/unspecified host addresses refuse with the box
 named. Explicit ICE-Off in the default ICE mode also refuses instead of being
 overwritten. Scratch placement derives from the installed box catalog.
 Match.parameters["directory"] may instead supply an already running caller's
@@ -214,8 +218,34 @@ class Match:
             raise ValueError("directory port must be a different lane-owned test port")
 
 
-def native_address_probe():
+def native_address_probe(destination=None):
     """Read the host's existing network address without changing its network."""
+    if destination:
+        destination = str(ipaddress.IPv4Address(destination))
+        if sys.platform == "win32":
+            command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                       f"Find-NetRoute -RemoteIPAddress {destination} | Where-Object {{ $_.IPAddress }} | Select-Object -ExpandProperty IPAddress"]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10, creationflags=NO_WINDOW)
+            candidates = result.stdout.splitlines() if result.returncode == 0 else []
+        elif sys.platform.startswith("linux"):
+            result = subprocess.run(["ip", "-j", "route", "get", destination], capture_output=True, text=True, timeout=10)
+            candidates = [row.get("prefsrc") or row.get("src") for row in json.loads(result.stdout)] if result.returncode == 0 else []
+        elif sys.platform == "darwin":
+            result = subprocess.run(["/sbin/route", "-n", "get", destination], capture_output=True, text=True, timeout=10)
+            interface = re.search(r"(?m)^\s*interface:\s*(\S+)", result.stdout)
+            if not interface:
+                raise RuntimeError("native host route to the named peer is unavailable")
+            result = subprocess.run(["/usr/sbin/ipconfig", "getifaddr", interface[1]], capture_output=True, text=True, timeout=10)
+            candidates = result.stdout.splitlines() if result.returncode == 0 else []
+        else:
+            raise RuntimeError("native route probe is unavailable on this platform")
+        for value in candidates:
+            if not value:
+                continue
+            address = ipaddress.IPv4Address(value.strip())
+            if not address.is_loopback and not address.is_link_local and not address.is_unspecified:
+                return str(address)
+        raise RuntimeError("native host has no route address to the named peer")
     program = shutil.which("tailscale")
     if not program and sys.platform == "win32":
         candidate = Path("C:/Program Files/Tailscale/tailscale.exe")
@@ -248,6 +278,36 @@ def native_address_probe():
     if not fitting:
         raise RuntimeError("native host has no routable address")
     return fitting[0]
+
+
+def named_box_endpoint(box):
+    """Read the named box's existing transport endpoint; never select a box."""
+    if box["kind"] == "local":
+        return native_address_probe("192.0.2.1")
+    result = subprocess.run(["ssh", "-G", box["ssh"]], capture_output=True, text=True, timeout=10, creationflags=NO_WINDOW)
+    hostname = next((line.split(None, 1)[1] for line in result.stdout.splitlines() if line.startswith("hostname ")), None)
+    if result.returncode or not hostname:
+        raise RuntimeError("named box's saved SSH endpoint is unavailable")
+    for row in socket.getaddrinfo(hostname, None, family=socket.AF_INET):
+        address = ipaddress.IPv4Address(row[4][0])
+        if not address.is_loopback and not address.is_link_local and not address.is_unspecified:
+            return str(address)
+    raise RuntimeError("named box's SSH endpoint is not a network address")
+
+
+def wait_started_host(case, role, wait=0):
+    """Keep a concurrently requested seat behind its host's actual start."""
+    host = getattr(case, "runs", {}).get(case.names[0])
+    if role == case.names[0] or not host or not getattr(host, "launch_attempted", False):
+        return
+    deadline = time.monotonic() + 1320 + float(wait or 0)
+    while not host.started:
+        if getattr(host, "start_failure", None):
+            raise SpreadRefusal("requested host did not start: " + host.start_failure)
+        if time.monotonic() >= deadline:
+            raise SpreadRefusal("requested host did not return within its admission wait")
+        case.guard()
+        time.sleep(.1)
 
 
 def atomic_bytes(path, data):
@@ -1041,17 +1101,23 @@ class Case:
         if self.network == "direct":
             box, claim, _, backend = self.members[self.names[0]]
             address = self.match.parameters.get("host_address")
-            if not address:
+            self.host_addresses = {}
+            if address:
+                self.host_addresses = {name: address for name in self.names}
+            else:
                 from cross_peers import remote_command
-                script = "import sys;sys.path.insert(0,sys.argv[1]);from spread_peers import native_address_probe;print(native_address_probe())"
-                command = [box["python"], "-c", script, claim["control"]]
-                if box["kind"] != "local":
-                    command = remote_command(box, command)
-                    command[1:1] = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
-                try:
-                    address = backend.guarded_run(command, timeout=20).decode().strip()
-                except Exception as error:
-                    raise self.refuse(self.names[0], box["name"], str(error))
+                script = "import sys;sys.path.insert(0,sys.argv[1]);from spread_peers import native_address_probe;print(native_address_probe(sys.argv[2]))"
+                for name in self.names[1:]:
+                    try:
+                        endpoint = named_box_endpoint(self.members[name][0])
+                        command = [box["python"], "-c", script, claim["control"], endpoint]
+                        if box["kind"] != "local":
+                            command = remote_command(box, command)
+                            command[1:1] = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
+                        self.host_addresses[name] = backend.guarded_run(command, timeout=20).decode().strip()
+                    except Exception as error:
+                        raise self.refuse(name, self.members[name][0]["name"], str(error)) from error
+                address = next(iter(self.host_addresses.values()), None) or native_address_probe()
             try:
                 parsed = ipaddress.ip_address(address)
             except ValueError:
@@ -1334,6 +1400,7 @@ class Run:
         if self.started:
             raise RuntimeError("spread runner was already started")
         box, claim, request, backend = self.case.members[self.role]
+        host_address = getattr(self.case, "host_addresses", {}).get(self.role, getattr(self.case, "host_address", None))
         port = int(role_value(self.case.peer_ports, self.case.names, self.role) or self.case.match.port)
         if port != self.case.match.port:
             raise self.case.refuse(self.role, box["name"], f"match port {port} differs from host port {self.case.match.port}")
@@ -1354,7 +1421,7 @@ class Run:
                 index = args.index("-net-join")
                 args[index:index + 2] = ["-net-join-session", session]
         elif getattr(self.case, "network", "ice") == "direct" and "-net-join" in args and args[args.index("-net-join") + 1] in ("127.0.0.1", "localhost"):
-            args[args.index("-net-join") + 1] = self.case.host_address
+            args[args.index("-net-join") + 1] = host_address
         mappings = [(str(self.case.out), claim["case_root"]), (self.case.out.as_posix(), claim["case_root"]),
                     (str(self.repo), claim["repo"]), (self.repo.as_posix(), claim["repo"])]
         if self.retained is not None:
@@ -1388,7 +1455,7 @@ class Run:
                 data = map_script(data, mappings, session)
                 if getattr(self.case, "network", "ice") == "direct":
                     data = re.sub(rb"(?m)^(settext TextJoinAddress)\s+(?:127\.0\.0\.1|localhost)\s*$",
-                                  lambda match: match[1] + b" " + self.case.host_address.encode(), data)
+                                  lambda match: match[1] + b" " + host_address.encode(), data)
             files[path.relative_to(self.case.out).as_posix()] = base64.b64encode(data).decode()
         signals = self.case.signals()
         self.case.extra_signals = sorted(set(getattr(self.case, "extra_signals", ())) | set(signals))
@@ -1414,6 +1481,7 @@ class Run:
             request["command"] = ["python", claim["control"] + "/spread_peers.py", "--native", path, "--out", "{OUT}"]
             self.launch_attempted = True
             wait = self.case.match.parameters.get("runner_wait", getattr(_options, "runner_wait", 0))
+            wait_started_host(self.case, self.role, wait)
             if wait and box["kind"] == "local":
                 wait_named_launch(self.case.transport_module.worker, self.case.pool, box, claim, wait=wait,
                                   wait_for_holder=self.case.match.parameters.get("wait_for_holder", getattr(_options, "wait_for_holder", None)))
@@ -1421,10 +1489,12 @@ class Run:
             launch_native(backend, box, claim, request, wait)
             wait_native_admission(backend, box, claim, wait)
         except SpreadRefusal as error:
+            self.start_failure = str(error)
             if str(error).startswith(f"spread peer {self.role} on {box['name']}: "):
                 raise
             raise self.case.refuse(self.role, box["name"], str(error)) from error
         except Exception as error:
+            self.start_failure = str(error)
             raise self.case.refuse(self.role, box["name"], str(error)) from error
         self.started = True
         self.case.release_pending(self.role)
