@@ -166,6 +166,25 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'declared test ports'):
             spread.Peer('seat', block_udp=(80,))
 
+    def test_native_submit_refusal_names_the_peer_and_box_before_start(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            def launch(*args):
+                raise RuntimeError('native memory 4.4 GB is below floor 4.5 GB')
+            backend = SimpleNamespace(rpc=lambda *args:None, launch=launch)
+            claim = dict(case_root='/native', repo='/repo', root='/owned', control='/control', exe_sha256='same')
+            run = object.__new__(spread.Run)
+            run.role, run.output_name, run.started, run.argv = 'seat', 'seat', False, ['engine','-headless']
+            run.cwd, run.repo, run.env, run.expected, run.fixtures, run.timeout = root/'seat/runtime', root/'repo', {}, [], [], 30
+            run.case = SimpleNamespace(members={'seat':({'name':'REMOTE'},claim,{},backend)}, names=['seat'], peer_ports={},
+                                       match=spread.Match(51580), directory=None, out=root, peers=[spread.Peer('seat')], signals=lambda:[],
+                                       transport_module=SimpleNamespace(Transport=SimpleNamespace(native_claim=lambda value:value)),
+                                       refuse=lambda peer,box,reason:spread.SpreadRefusal(f'spread peer {peer} on {box}: {reason}'))
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'spread peer seat on REMOTE: native memory 4.4 GB is below floor 4.5 GB'):
+                run.start()
+            self.assertFalse(run.started)
+            self.assertTrue(run.launch_attempted)
+
     def test_native_holder_refusal_preserves_its_reason_without_other_log_bytes(self):
         log = 'private-value\n[box-hold] waiting: earlier owned job settles\n[box-hold] REFUSED: no turn within the wait\n'
         reason = spread.native_refusal(dict(reason='native launch refused', exit_code=3), log)

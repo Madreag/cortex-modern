@@ -808,7 +808,7 @@ class Case:
             for name, (box, claim, _, backend) in self.members.items():
                 cleanup.callback(backend.release, box, claim)
                 handle = self.runs.get(name)
-                if handle and handle.started and not handle.finished:
+                if handle and (handle.started or getattr(handle, "launch_attempted", False)) and not handle.finished:
                     cleanup.callback(backend.stop, box, claim)
             self.save()
 
@@ -921,9 +921,15 @@ class Run:
         if native["directory"]:
             native["directory"] = {key: value for key, value in native["directory"].items() if key != "DIRECTORY_ROOT"}
         path = claim["root"] + "/peer-spec.json"
-        backend.rpc(box, "write", dict(path=path, value=native))
-        request["command"] = ["python", claim["control"] + "/spread_peers.py", "--native", path, "--out", "{OUT}"]
-        backend.launch(box, claim, request)
+        try:
+            backend.rpc(box, "write", dict(path=path, value=native))
+            request["command"] = ["python", claim["control"] + "/spread_peers.py", "--native", path, "--out", "{OUT}"]
+            self.launch_attempted = True
+            backend.launch(box, claim, request)
+        except SpreadRefusal:
+            raise
+        except Exception as error:
+            raise self.case.refuse(self.role, box["name"], str(error)) from error
         self.started = True
         self.case.release_pending()
         self.deadline = time.monotonic() + self.timeout + 180
