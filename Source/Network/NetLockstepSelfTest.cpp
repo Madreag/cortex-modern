@@ -16571,10 +16571,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return finish(nullptr);
 		}
 
-		bool TestSwitchLandsOnOneTick(std::string* error) {
-			const char* name = "switch_lands_on_one_tick";
+		bool TestSwitchLandsOnOneTick(std::string* error, uint16_t delay = 2, bool watchBinding = false) {
+			const char* name = watchBinding ? "h1_cross_owner_switch" : "switch_lands_on_one_tick";
 			EnsureSwitchTestManagers();
-			const uint16_t delay = 2;
 			const uint64_t switchFrame = 4;
 			const uint16_t port = 43221;
 			LoopbackTransport hostTransport;
@@ -16637,9 +16636,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return finish(queueError.c_str());
 			}
 			ScenarioRunner::DrainLocalGameCommands();
+			if (watchBinding) NetActorOwnership::SeedOwner(uid, 1, Activity::TeamTwo);
 			if (!g_ActivityMan.GetActivity()->SwitchToActor(clientView, Players::PlayerOne, Activity::TeamTwo)) {
 				return finish("SwitchToActor refused the client takeover");
 			}
+			if (watchBinding) MovableMan::ReconcileLockstepControlBindings();
 			const std::vector<NetGameCommand> switchCommands = ScenarioRunner::DrainLocalGameCommands();
 			ControllerFrame hostSnap = ControllerFrameCodec::Snapshot(uid, *hostView->GetController(), hostView);
 			hostSnap.actorUniqueID = uid;
@@ -16685,6 +16686,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					const bool modeLanded = hostView->GetController()->GetInputMode() == Controller::CIM_PLAYER &&
 					                        clientView->GetController()->GetInputMode() == Controller::CIM_PLAYER;
 					const bool ownerFlipped = owner == 2;
+					if (watchBinding && g_ActivityMan.GetActivity()->GetLocallyControlledActor(Players::PlayerOne) != clientView) {
+						return finish(("delay=" + std::to_string(delay) + " selected binding lost before claim frame=" + std::to_string(switchFrame + delay)).c_str());
+					}
 					if (!modeLanded || !ownerFlipped) {
 						return finish(("first differ frame=" + std::to_string(frame) + " host=" + hostTuple + " client=" + clientTuple +
 						               " expected mode=CIM_PLAYER owner=2").c_str());
@@ -16701,6 +16705,75 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		// peer no longer plays can still read as player-seated here. Nothing may sample this machine's
 		// devices for it: ACrab's mouse-aim clamp hands the seat's input slot to UInputMan::AnalogAimValues,
 		// whose m_ControlScheme.at() throws out of the sim tick on NoPlayer.
+
+		bool TestOrdinaryMenusKeepTheirSampler(std::string* error) {
+			const char* name = "h1_ordinary_modes_600_ticks";
+			EnsureSwitchTestManagers();
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			const uint16_t port = 43229;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, port, 0, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, port, 0, NetTransportLane::ControlReliable);
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x48314D4F444553ULL);
+			hostConfig.matchConfig = clientConfig.matchConfig = matchConfig;
+			std::string failure;
+			size_t repairs = 0, mismatches = 0;
+			const auto finish = [&](const std::string& detail) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				NetActorOwnership::ClearSeededOwners();
+				std::cout << "[net-lockstep-selftest] " << (detail.empty() ? "PASS " : "FAIL ") << name
+				          << " ticks=600 mode_mismatches=" << mismatches << " DropLocalProduction=" << repairs
+				          << " ResetLocalInputState=" << repairs;
+				if (!detail.empty()) std::cout << ": " << detail;
+				std::cout << std::endl;
+				if (error && !detail.empty()) *error = detail;
+				return detail.empty();
+			};
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error) ||
+			    !DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error))
+				return finish(error ? *error : "coordinators did not start");
+			ScenarioRunner::SetLockstepCoordinator(&client);
+			std::unique_ptr<Activity> activity = std::make_unique<Activity>();
+			activity->AddPlayer(Players::PlayerOne, true, Activity::TeamTwo, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Actor* actor = MakeSwitchTestActor(Activity::TeamTwo);
+			if (!actor) return finish("actor creation failed");
+			AddSwitchTestActor(actor);
+			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+			NetActorOwnership::SeedOwner(uid, 2, Activity::TeamTwo);
+			if (!g_ActivityMan.GetActivity()->SwitchToActor(actor, Players::PlayerOne, Activity::TeamTwo)) return finish("local binding failed");
+			ScenarioRunner::DrainLocalGameCommands();
+			for (uint64_t tick = 0; tick < 600; ++tick) {
+				// These are GameActivity's buy/select, inventory and Lua-lock modes on its bound actor.
+				const Controller::InputMode expected = tick < 100 || tick >= 500 ? Controller::CIM_PLAYER :
+				    tick >= 300 && tick < 400 ? Controller::CIM_DISABLED : Controller::CIM_AI;
+				actor->GetController()->SetInputMode(expected);
+				repairs += MovableMan::ReconcileLockstepControlBindings();
+				if (actor->GetController()->GetSeatMode() != expected) {
+					++mismatches;
+					if (failure.empty()) failure = "first mode override at tick=" + std::to_string(tick) + " expected=" + std::to_string(expected) +
+					    " actual=" + std::to_string(actor->GetController()->GetSeatMode());
+				}
+				const ControllerFrame sampled = ControllerFrameCodec::Snapshot(uid, *actor->GetController(), actor);
+				std::string queueError;
+				if (!host.QueueLocalInput(tick, {}, {}, &queueError) || !client.QueueLocalInput(tick, {sampled}, {}, &queueError)) return finish(queueError);
+				NetLockstepReadyFrame hostReady, clientReady;
+				bool hostHas = false, clientHas = false;
+				if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					if (!hostHas) hostHas = host.PopReadyFrame(hostReady);
+					if (!clientHas) clientHas = client.PopReadyFrame(clientReady);
+					return hostHas && clientHas;
+				}, &queueError)) return finish(queueError);
+				if (hostReady.frame != tick || clientReady.frame != tick) return finish("frame coverage differs at tick=" + std::to_string(tick));
+				if (!MovableMan::ApplyLockstepFrameToActor(*actor, sampled, tick, &queueError)) return finish(queueError);
+				repairs += MovableMan::ReconcileLockstepControlBindings();
+			}
+			if (repairs != 0 && failure.empty()) failure = "ordinary reconciliation reset the local input sampler";
+			return finish(failure);
+		}
+
 		bool TestRemoteSeatNeverSamplesLocalInput(std::string* error) {
 			const char* name = "remote_seat_never_samples_local_input";
 			EnsureSwitchTestManagers();
@@ -24399,6 +24472,13 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		std::string switchHoldError;
 		std::string coopTakeoverError;
 		const bool switchLands = TestSwitchLandsOnOneTick(&switchLandsError);
+		bool pendingSwitches = true;
+		for (const uint16_t delay: {uint16_t{0}, uint16_t{1}, uint16_t{3}}) {
+			std::string pendingError;
+			pendingSwitches &= TestSwitchLandsOnOneTick(&pendingError, delay, true);
+		}
+		std::string ordinaryModesError;
+		const bool ordinaryModes = TestOrdinaryMenusKeepTheirSampler(&ordinaryModesError);
 		const bool claimTie = TestSimultaneousClaimTieBreak(&claimTieError);
 		const bool switchHold = TestSwitchUnderSyncedHold(&switchHoldError);
 		const bool coopTakeover = TestCoopTakeoverOfHostCpuActor(&coopTakeoverError);
@@ -24425,7 +24505,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		const bool producingSet = TestProducingPassEndsTheSetItBeganWith(&producingSetError);
 		std::string readdedError;
 		const bool readdedFromWire = TestReaddedActorBeginsFromTheWire(&readdedError);
-		if (!switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry || !teamChangeOwner || !remoteSeatInput || !seatMapSurvivesEnd ||
+		if (!pendingSwitches || !ordinaryModes || !switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry || !teamChangeOwner || !remoteSeatInput || !seatMapSurvivesEnd ||
 		    !sharedSeatAnswer || !speculativeBinding || !startWindow || !checkpointBinding || !producingSet || !readdedFromWire) {
 			return 1;
 		}

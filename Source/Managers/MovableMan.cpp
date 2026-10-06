@@ -1288,10 +1288,11 @@ void MovableMan::EndLockstepProducingPass(const std::vector<long int>& producing
 	}
 }
 
-void MovableMan::ReconcileLockstepControlBindings() {
+size_t MovableMan::ReconcileLockstepControlBindings() {
+	size_t inputRepairs = 0;
 	Activity* activity = g_ActivityMan.GetActivity();
 	if (!activity || !ScenarioRunner::IsLockstepControllerSyncActive()) {
-		return;
+		return inputRepairs;
 	}
 	const uint8_t localPeerId = ScenarioRunner::GetLockstepLocalPeerId();
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
@@ -1315,9 +1316,11 @@ void MovableMan::ReconcileLockstepControlBindings() {
 				// The local binding can appear after the reclaim event has passed.
 				controller->DropLocalProduction();
 				controller->ResetLocalInputState(Controller::CIM_PLAYER, player);
+				++inputRepairs;
 			}
 		}
 	}
+	return inputRepairs;
 }
 
 static bool CanonicalizeControllerFramesThroughWire(std::vector<ControllerFrame>& frames, std::string& error) {
