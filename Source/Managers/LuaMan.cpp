@@ -1532,15 +1532,12 @@ local function reference(ctx, id)
 end
 
 -- Owned values are nodes, so two fields holding one Vector share it again after the restore.
-local function userdataNode(value, ctx, payload, carriesValue)
+local function userdataNode(value, ctx, payload)
 	local id = birthId(ctx, value, "value")
 	if not id then return "z;" end
 	ctx.ids[value] = id
 	local instance = _ScriptGraphInstance(value)
 	noteNode(ctx, id, "U" .. outputNumber(id) .. ";" .. payload .. "I" .. visit(instance, ctx))
-	-- Native property reads can consume a mutable-reference trap while capture writes are paused.
-	-- Rearm after all payload and instance reads so the next gameplay write reaches this root.
-	if carriesValue and _ScriptGraphNoteValue then _ScriptGraphNoteValue(value) end
 	return reference(ctx, id)
 end
 
@@ -1560,9 +1557,9 @@ local function visitUserdata(value, ctx)
 		for index, address in ipairs(_ScriptGraphAreaBoxes(value)) do ctx.areaBoxes[address] = { owner = value, index = index } end
 	end
 	if kind == "vector" then
-		return userdataNode(value, ctx, "v" .. numberText(value.X) .. "," .. numberText(value.Y) .. ";", true)
+		return userdataNode(value, ctx, "v" .. numberText(value.X) .. "," .. numberText(value.Y) .. ";")
 	elseif kind == "alarm" then
-		return userdataNode(value, ctx, "c" .. "n" .. numberText(value.ScenePos.X) .. ";n" .. numberText(value.ScenePos.Y) .. ";n" .. outputNumber(value.Team) .. ";n" .. numberText(value.Range) .. ";", true)
+		return userdataNode(value, ctx, "c" .. "n" .. numberText(value.ScenePos.X) .. ";n" .. numberText(value.ScenePos.Y) .. ";n" .. outputNumber(value.Team) .. ";n" .. numberText(value.Range) .. ";")
 	elseif kind == "module-ref" then
 		return userdataNode(value, ctx, "d" .. stringToken(native[2]))
 	elseif kind == "material-ref" then
@@ -1570,9 +1567,9 @@ local function visitUserdata(value, ctx)
 	elseif kind == "path-request" then
 		local fields = {}
 		for _, number in ipairs(native[2]) do fields[#fields + 1] = "n" .. numberText(number) .. ";" end
-		return userdataNode(value, ctx, "P" .. outputNumber(#fields) .. ";" .. concatenate(fields), true)
+		return userdataNode(value, ctx, "P" .. outputNumber(#fields) .. ";" .. concatenate(fields))
 	elseif kind == "timer" then
-		return userdataNode(value, ctx, "m" .. numberText(value.StartSimTimeTicks) .. "," .. numberText(value.SimTimeLimitTicks) .. peerText("," .. numberText(value.StartRealTimeTicks) .. "," .. numberText(value.RealTimeLimitTicks)) .. ";", true)
+		return userdataNode(value, ctx, "m" .. numberText(value.StartSimTimeTicks) .. "," .. numberText(value.SimTimeLimitTicks) .. peerText("," .. numberText(value.StartRealTimeTicks) .. "," .. numberText(value.RealTimeLimitTicks)) .. ";")
 	elseif kind == "vector-ref" then
 		return userdataNode(value, ctx, "w" .. numberText(native[2]) .. ":" .. stringToken(native[3]))
 	elseif kind == "controller-ref" then
@@ -1592,7 +1589,6 @@ local function visitUserdata(value, ctx)
 			end
 		end
 		noteNode(ctx, id, "U" .. outputNumber(id) .. ";" .. payload .. "I" .. visit(_ScriptGraphInstance(value), ctx))
-		if kind == "controller-value" and _ScriptGraphNoteValue then _ScriptGraphNoteValue(value) end
 		return reference(ctx, id)
 	elseif kind == "gib-ref" then
 		local owner, index = _ScriptGraphGibOwner(value)
@@ -1652,7 +1648,7 @@ local function visitUserdata(value, ctx)
 			header = "O" .. numberText(native[5]) .. ";"
 			liveOwned[native[5]] = value
 		end
-		return userdataNode(value, ctx, header .. stringToken(native[2]) .. stringToken(native[3]) .. stringToken(native[4]) .. stringToken(ini), true)
+		return userdataNode(value, ctx, header .. stringToken(native[2]) .. stringToken(native[3]) .. stringToken(native[4]) .. stringToken(ini))
 	elseif kind == "invalid" then
 		return userdataNode(value, ctx, "D" .. stringToken(native[2]))
 	elseif kind == "vector-ref-unresolved" or kind == "timer-ref" then
@@ -4428,6 +4424,10 @@ static thread_local std::unordered_map<lua_State*, std::vector<std::unique_ptr<L
 static thread_local std::unordered_map<lua_State*, std::vector<std::unique_ptr<ScriptGraphScratchScope>>> s_GraphScratchScopes;
 
 static int ScriptGraphBeginCapture(lua_State* L) {
+	// Graph-only callers can capture before the world snapshot manager installs the write barriers.
+	// Install once here too, before a walk arms any table or native value for later invalidation.
+	static const bool armed = [] { ArmLuaCheckpointBarrier(); return true; }();
+	(void)armed;
 	// The walk the index records is the capture itself, so every caller gets one, nested or not; one
 	// opened by a single state's capture covers that state alone, unless a world walk encloses it.
 	CheckpointGraphIndex::Get().BeginWalk(true, false);
