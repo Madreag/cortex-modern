@@ -50,7 +50,8 @@ def plant_bundle_secrets(run) -> dict:
         "NetworkInputDelayFrames": "0",
     }
     for key, value in planted.items():
-        settings, count = re.subn(rf"(?m)^(\s*{key}\s*=\s*)[^\r\n]*", lambda match, value=value: match[1] + value, settings)
+        # A blank value ends at its line break; planting must retain adjacent settings.
+        settings, count = re.subn(rf"(?m)^([ \t]*{key}[ \t]*=[ \t]*)[^\r\n]*", lambda match, value=value: match[1] + value, settings)
         if count == 0:
             settings += f"\n\t{key} = {value}\n"
     path.write_text(settings, encoding="utf-8")
