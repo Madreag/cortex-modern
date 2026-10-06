@@ -857,6 +857,9 @@ namespace RTE {
 		// and retransmit timers see time run backwards at the handoff into the sim loop.
 		const uint64_t startMs = NetLockstepNowMs();
 		const uint64_t sessionBaseMs = session ? session->GetClockMs() : 0;
+		DiagnosticLine() << "[net-match] round start handshake host=" << m_Config.host << " lobby=" << m_UseLobbyProtocol
+		                 << " lobby_state=" << static_cast<int>(m_Lobby.GetState()) << " peers=" << static_cast<int>(coordinator.GetConfig().peerCount)
+		                 << " routes=" << coordinator.GetConfig().remoteTransportPeerIds.size() << std::endl;
 		while (!coordinator.IsRunning()) {
 			if (m_Config.cancelRequested && m_Config.cancelRequested->load()) {
 				SetFailed("match setup canceled");
@@ -882,6 +885,8 @@ namespace RTE {
 				return true;
 			}
 			if (nowMs - startMs > maxWaitMs) {
+				DiagnosticLine() << "[net-match] round start timeout lobby_sent=" << m_Lobby.GetStats().startPacketsSent
+				                 << " lobby_received=" << m_Lobby.GetStats().startPacketsReceived << " round_received=" << coordinator.GetStats().startPacketsReceived << std::endl;
 				m_HostLostDuringSetup = !m_Config.host;
 				SetFailed("timed out waiting for lockstep start");
 				if (error) *error = m_SetupError;

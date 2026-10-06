@@ -1314,6 +1314,7 @@ namespace RTE {
 		++m_Stats.startPacketsSent;
 		m_StartIntent = false;
 		m_State = NetLobbyState::Started;
+		DiagnosticLine() << "[net-lobby] agreed start queued remotes=" << m_RemotePeerIds.size() << " frame=" << m_StartFrame << std::endl;
 	}
 
 	bool NetLobbySession::RepeatStartIfDue(uint64_t elapsedMs, std::string* error) {
@@ -1330,7 +1331,10 @@ namespace RTE {
 			if (SendTo(m_RemoteTransports[peerId], start, error, &congested)) sent = true;
 			else if (!congested) return false;
 		}
-		if (sent) ++m_Stats.startPacketsSent;
+		if (sent) {
+			++m_Stats.startPacketsSent;
+			if (m_Stats.startPacketsSent == 2) DiagnosticLine() << "[net-lobby] agreed start repeated elapsed_ms=" << elapsedMs << std::endl;
+		}
 		return true;
 	}
 
