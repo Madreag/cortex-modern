@@ -381,7 +381,7 @@ def run_lockstep_cli(repo, make_run, case, timeout):
             failures.append(f"delay 1 {role} does not finish its round: {reason}")
         try:
             result = json.loads(trace.read_text(encoding="utf-8-sig"))["runs"][0]
-            if result["passed"] is not True or result["ticks"] != 120:
+            if result["passed"] is not True or result["ticks"] != 121:
                 failures.append(f"{role} does not complete all 120 ticks")
             tick_hashes = result["tick_hashes"]
             if [item["tick"] for item in tick_hashes] != list(range(1, 121)):

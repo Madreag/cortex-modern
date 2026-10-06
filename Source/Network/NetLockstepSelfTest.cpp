@@ -25826,20 +25826,27 @@ namespace {
 			if (!NetLobbyProtocol::Encode(NetLobbyMessage{hello}, helloBytes)) return done("the newcomer lobby hello did not encode");
 			hostLobby.HandleTransportEvent({NetTransportEventType::PacketReceived, connection, NetTransportLane::ControlReliable, std::move(helloBytes), {}}, round.now);
 			if (!hostLobby.IsRemoteConnectionLobbyUp(4)) return done("the admitted newcomer's lobby did not answer its hello");
+			ScenarioRunner::SetLockstepCoordinator(&round.peers[0]);
+			if (g_SceneMan.SetSceneToLoad(round.match.sceneName, false, false) < 0 || g_ActivityMan.StartActivity("GAScripted", round.match.activityPreset) < 0)
+				return done("the newcomer image's running scene did not start");
 			host.DrivePrivateMatchRejoins(round.now);
 			const auto* imageJoin = host.m_WorldJoin.FindSession(connection);
 			if (!imageJoin || imageJoin->assignedPeerId != 4 || imageJoin->phase != NetWorldJoinPhase::SnapshotTransfer)
 				return done("the admitted opened seat has no image join; PrepareHeldPeerRejoin accepts it while the private join driver skips it");
 			ReleasePathClaimView view;
 			if (!view.Create("newcomer's controllable actor", round.peers[0], 3, 4, 4)) return done("the newcomer actor did not create");
+			Actor* live = view.actor.release(); g_MovableMan.AddActor(live); view.actor.reset(live);
+			struct ActorBorrow { ReleasePathClaimView& view; ~ActorBorrow() { view.actor.release(); } } actorBorrow{view};
 			ScenarioRunner::SetLockstepCoordinator(&round.peers[0]);
 			NetWorldCheckpointImage image;
 			if (!host.ReadPrivateBaseLocked(round.peers[0].GetResumeFrame() - 1, image, &round.failure)) return done("the opened-seat base did not capture: " + round.failure);
-			NetLockstepFrame nativeState;
-			nativeState.targetFrame = image.tick; nativeState.roundId = image.round; nativeState.senderPeerId = 1;
-			nativeState.frames = {MakeFrame(view.uid, 0)};
-			auto archive = std::make_shared<std::vector<uint8_t>>();
-			if (!EncodeCommittedJoinFrame(nativeState, *archive, &round.failure)) return done(round.failure);
+			g_TimerMan.RewindSimTo(image.tick, image.tick * g_TimerMan.GetDeltaTimeTicks());
+			const std::string save = "opened-seat-image";
+			if (!g_ActivityMan.SaveCurrentGame(save) || !g_ActivityMan.WaitForSaveGameTask()) return done("the opened-seat scene archive did not capture");
+			std::ifstream input(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + save + ".ccsave", std::ios::binary);
+			auto archive = std::make_shared<std::vector<uint8_t>>(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+			input.close();
+			if (archive->empty()) return done("the captured newcomer scene archive is empty");
 			image.bytes = archive->size(); image.digest = DigestWorldJoinBytes(*archive);
 			host.m_WorldJoin.PublishImage(image); host.m_WorldJoinImageArchive = archive; host.m_WorldJoinImageDigest = image.digest;
 			host.m_PrivateImageTakenMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -25877,6 +25884,11 @@ namespace {
 			std::string pendingLoad;
 			if (!joiner.PrepareReceivedWorldJoin(received, round.match, pendingLoad, &round.failure) || joiner.m_WorldCatchUp.initialHolds.contains(4))
 				return done("the opened-seat image restores the removed holder's AI hold: " + round.failure);
+			view.actor.release();
+			if (!g_ActivityMan.LoadAndLaunchGame(pendingLoad)) return done("the newcomer does not load its received scene image");
+			view.actor.reset(dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(view.uid)));
+			if (!view.actor || view.actor->GetTeam() != view.team) return done("the newcomer image loses its controllable unit");
+			g_ActivityMan.RemoveSavedGame(save); g_ActivityMan.RemoveSavedGame(pendingLoad);
 			if (!ScenarioRunner::InstallWorldCatchUp(image.tick, std::move(joiner.m_WorldCatchUp.tail), &round.failure, true)) return done(round.failure);
 			uint64_t replayed = image.tick;
 			for (int pass = 0; pass < 4000 && !round.peers[0].HasAgreedSeatReclaim(4); ++pass) {
