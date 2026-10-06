@@ -11,6 +11,7 @@ build does not have and reports every check, so the same list is RED there and G
 """
 
 import argparse
+import contextlib
 import ctypes
 import json
 import re
@@ -1056,7 +1057,7 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
                      reviewed=who == NAMES[0], readback=who == NAMES[0], held=who == NEWCOMER,
                      share_ok=case != "cost", quiet=case == "cost" and who == NAMES[0])
          for who in who_list + newcomers],
-        spread.Match(port, parameters={"lane": "in-match", "network": "ice",
+        spread.Match(port, parameters={"lane": "in-match", "network": "ice", "directory": getattr(options, "spread_directory", None),
                                        "case": case, "players": peers, "moderate": moderate, "cancel": options.cancel}))
     make_peer_run = placement.make_run if placement else make_run
     runs, records = {}, {}
@@ -1093,6 +1094,9 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         set_visual_resolution(runs[who], width, height)
         seed_settings(runs[who].cwd / "Userdata/Settings.ini", {"NetworkDisplayName": names[who], "NetworkMatchStatusMode": "Always",
                                                                  "NetworkShowDiagnostics": diagnostics, "NetworkIceEnable": "1" if placement else "0"})
+        if placement:
+            seed_settings(runs[who].cwd / "Userdata/Settings.ini", {"NetworkConnectionMode": "Automatic", "NetworkHostRelayMode": "Directory",
+                                                                      "NetworkPortMapEnable": "0", "SessionDirectoryInstallKey": f"in-match-{who}-install"})
 
     def drive(who):
         try:
@@ -1443,7 +1447,14 @@ def main():
                 peers = 3 if case == "away-names" else CASE_PEERS.get(case, options.peers if case in ("players", "host-leave") else 2)
                 root = options.out / f"{case}-{size}-{peers}p{'-diag' if case == 'status' and options.diagnostics else ''}"
                 try:
-                    rows.append(run_peers(options, root, case, size, options.peers, options.base, options.moderate and case == "players"))
+                    directory_context = contextlib.nullcontext(None)
+                    if spread.enabled(options):
+                        from e2e.directory import serve
+                        directory_context = serve(options.out / f"directory-{case}-{size}", options.port + 1,
+                                                  block=(options.port + 1, options.port + 1))
+                    with directory_context as directory:
+                        options.spread_directory = directory
+                        rows.append(run_peers(options, root, case, size, options.peers, options.base, options.moderate and case == "players"))
                 except spread.SpreadRefusal as error:
                     if not spread.enabled(options):
                         raise
