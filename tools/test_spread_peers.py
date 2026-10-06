@@ -1,6 +1,7 @@
 """Detect boundary and ownership defects in the shared peer interface, without engines."""
 import base64
 import contextlib
+import errno
 import json
 from pathlib import Path
 import tempfile
@@ -743,6 +744,57 @@ class ContractTests(unittest.TestCase):
             (root/'Userdata/host.ticket').write_bytes(b'private fixture')
             with self.assertRaisesRegex(spread.SpreadRefusal, 'existing credential delivery channel'):
                 spread.retained_files(root)
+
+    def exercise_private_module_contents(self, platform, link_error=None):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, base = root/'repo', root/'repo/Data/Base.rte'
+            (base/'Actors').mkdir(parents=True)
+            (base/'Activities').mkdir()
+            (base/'Actors/actor.bin').write_bytes(b'actor pixels')
+            (base/'Activities/P4AlphaDuel.lua').write_bytes(b'unchanged duel')
+            (base/'Index.ini').write_bytes(b'DataModule')
+            other = repo/'Data/Other.rte'
+            other.mkdir()
+            (other/'Index.ini').write_bytes(b'Other')
+            aliases = []
+            def alias(source, target):
+                aliases.append(target)
+                target.mkdir()
+            files = {Path('Data/Base.rte/Activities/P4AlphaDuel.lua'): b'observed duel',
+                     Path('Userdata/Settings.ini'): b'owned settings'}
+            with patch.object(spread.sys, 'platform', platform), patch.object(spread, 'link_directory', side_effect=alias):
+                if link_error:
+                    with patch.object(spread.os, 'link', side_effect=link_error):
+                        runtime = spread.native_retained_runtime(repo, root/'native/seat', files, [])
+                else:
+                    runtime = spread.native_retained_runtime(repo, root/'native/seat', files, [])
+            native_base = runtime/'Data/Base.rte'
+            if platform != 'win32':
+                self.assertFalse([path for path in aliases if path.is_relative_to(native_base)],
+                                 'module content must have no directory links')
+                self.assertEqual((native_base/'Actors/actor.bin').read_bytes(), b'actor pixels')
+                self.assertEqual((native_base/'Index.ini').read_bytes(), b'DataModule')
+                self.assertEqual({path.relative_to(native_base).as_posix() for path in native_base.rglob('*') if path.is_file()},
+                                 {'Index.ini', 'Actors/actor.bin', 'Activities/P4AlphaDuel.lua'})
+            else:
+                self.assertIn(native_base/'Actors', aliases)
+            self.assertIn(runtime/'Data/Other.rte', aliases)
+            self.assertEqual((native_base/'Activities/P4AlphaDuel.lua').read_bytes(), b'observed duel')
+            (native_base/'Activities/P4AlphaDuel.lua').write_bytes(b'private later edit')
+            self.assertEqual((base/'Activities/P4AlphaDuel.lua').read_bytes(), b'unchanged duel',
+                             'overlay never writes to immutable source')
+
+    def test_posix_private_module_preserves_all_files_without_content_links(self):
+        for platform in ('linux', 'darwin'):
+            with self.subTest(platform=platform):
+                self.exercise_private_module_contents(platform)
+
+    def test_posix_private_module_cross_filesystem_fallback_preserves_contents(self):
+        self.exercise_private_module_contents('linux', OSError(errno.EXDEV, 'different filesystem'))
+
+    def test_windows_private_module_keeps_existing_directory_aliases(self):
+        self.exercise_private_module_contents('win32')
 
     def test_real_menu_pairs_keep_every_original_page_assertion_and_capture(self):
         import test_menu_readback as menu

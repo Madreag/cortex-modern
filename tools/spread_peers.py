@@ -45,6 +45,10 @@ files, logs and video indices. Gameplay travels over real network sockets;
 SSH carries signaling and evidence only. No router mapping is requested.
 Caller paths are private staging
 paths; the helper maps them to the native case root, never to an owner's tree.
+Selected retained data files stay private. Inside a modified POSIX .rte module,
+directories are real and unchanged files use regular file links or copies;
+no directory symlink is placed inside the engine's content identity walk.
+Windows retained staging and aliases for unmodified module roots stay unchanged.
 
 Refusals raise SpreadRefusal and write spread-result.json with topology,
 peer_boxes, refused_peer, refused_box and the exact reason. Prefixes are
@@ -1532,17 +1536,29 @@ def link_directory(source, target):
         target.symlink_to(source, target_is_directory=True)
 
 
-def overlay_data(source, target, paths):
-    """Give each overlay a private ancestor while linking other data directories."""
+def overlay_data(source, target, paths, *, module_content=False):
+    """Give overlays private ancestors and keep POSIX module contents regular."""
     target.mkdir(parents=True, exist_ok=False)
+    posix_content = sys.platform != "win32" and module_content
     for child in source.iterdir():
         destination = target / child.name
         below = [path for path in paths if path.parts[0] == child.name]
+        if posix_content and child.is_symlink():
+            raise SpreadRefusal(f"private module input contains a symlink: {child}")
         if child.is_dir():
-            if below:
-                overlay_data(child, destination, [Path(*path.parts[1:]) for path in below if len(path.parts) > 1])
+            if below or posix_content:
+                overlay_data(child, destination, [Path(*path.parts[1:]) for path in below if len(path.parts) > 1],
+                             module_content=module_content or child.suffix.casefold() == ".rte")
             else:
                 link_directory(child, destination)
+        elif posix_content and not below:
+            import errno
+            try:
+                os.link(child, destination)
+            except OSError as error:
+                if error.errno not in (errno.EXDEV, errno.EPERM, errno.EACCES, errno.ENOTSUP):
+                    raise
+                shutil.copyfile(child, destination)
         else:
             shutil.copyfile(child, destination)
 
