@@ -2069,6 +2069,7 @@ namespace RTE {
 			NetMatchRunnerConfig config;
 			config.host = true;
 			config.matchConfig = MakeWorldConfig();
+			config.matchConfig.inputDelayFrames = 1;
 			config.useLobbyProtocol = false;
 			config.sessionConfig = MakeWorldSessionConfig(port, 0x11ULL, "World");
 			config.sessionWaitMs = 2000;
@@ -2138,6 +2139,7 @@ namespace RTE {
 			joinerConfig.peerCount = config.matchConfig.peerCount;
 			joinerConfig.timeoutMs = 1000000;
 			joinerConfig.startFrame = e;
+			joinerConfig.inputDelayFrames = config.matchConfig.inputDelayFrames;
 			joinerConfig.matchConfig = config.matchConfig;
 			joinerConfig.scenario = config.scenario;
 			joinerConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(config.matchConfig.ownershipPolicy);
