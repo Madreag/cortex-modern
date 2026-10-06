@@ -1100,6 +1100,7 @@ namespace RTE {
 		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr, uint64_t fromFrame = 0, const char* cause = "unnamed");
 		/// trailFrames: how far the returner's replay trails the round at the round's pace; its first required frame comes that much later.
 		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
+		bool SchedulePeerAdmission(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
 		bool ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error = nullptr);
 		bool HasWorldAdmission(uint8_t peer, uint64_t frame) const { NET_PLANE_CHECK(); const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame && it->second.worldTransition.has_value(); }
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs) { NET_PLANE_CHECK(); HandleEvent(event, nowMs); }
@@ -1140,6 +1141,7 @@ namespace RTE {
 		void NoteReturnerCatchingUp(uint8_t peerId, uint64_t nowMs);
 		/// Host: a held seat's player is back on a new link, waiting for its image; what arrives on it counts as hearing that player.
 		void NoteReturningLink(uint8_t peerId, NetPeerId transportPeerId, uint64_t nowMs);
+		void NoteAdmissionLink(uint8_t peerId, NetPeerId transportPeerId, uint64_t nowMs);
 		/// Host: a returning seat whose catch-up reached its reclaim frame; its first input is judged like any seat's from here.
 		void NoteReturnerCaughtUp(uint8_t peerId, uint64_t nowMs);
 		/// Host: a held seat that catches up in place on its own state and connection pays no restart, so none is owed to its return.
@@ -1220,6 +1222,7 @@ namespace RTE {
 		/// Whether the host held this seat at or after a frame: a hold this round took, or one still waiting for its start.
 		bool HeldLocalSeatSince(uint64_t frame) const;
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
+		bool PreparePeerAdmission(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
 		/// Delay window a returning seat needs: the measured round trip plus the restart its first tick pays.
 		uint32_t RejoinDelayFrames(uint8_t peerId, const NetInputDelayEstimator& estimate) const;
 		/// Delay a sender needs once its start work is published: its link's need plus the start work its machine did beyond ours,
@@ -1631,6 +1634,8 @@ namespace RTE {
 		void RecordSeatDeparture(uint8_t peerId, uint64_t frame);
 		/// Host: proposes the agreed frame for every seat it released whose release no frame carries yet.
 		void ProposeOwedSeatReleases(uint64_t nowMs);
+		bool ScheduleSeatActivation(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error, uint64_t trailFrames);
+		bool PrepareSeatImageJoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error);
 		/// Whether a release of the seat lands at or after the seat's newest hold.
 		bool HasReleaseSinceHold(uint8_t peerId) const;
 		void MaybeSendHoldHeartbeats(uint64_t nowMs);

@@ -3408,7 +3408,8 @@ static std::string ResyncSaveName() {
 		image.sideState = ResumeHex(side);
 		NetLockstepFrame holds;
 		holds.targetFrame = tick; holds.roundId = round;
-		for (const auto& [peer, hold]: m_Coordinator->HeldTransactions()) holds.commands.push_back({m_Coordinator->GetHostPeerId(), hold});
+		for (const auto& [peer, hold]: m_Coordinator->HeldTransactions())
+			if (m_Coordinator->HasHeldAISeat(peer)) holds.commands.push_back({m_Coordinator->GetHostPeerId(), hold});
 		if (!EncodeCommittedJoinFrame(holds, side, error)) return false;
 		image.heldState = ResumeHex(side);
 		return true;
@@ -3522,7 +3523,8 @@ static std::string ResyncSaveName() {
 		image.sideState = ResumeHex(side);
 		NetLockstepFrame holds;
 		holds.targetFrame = tick; holds.roundId = round;
-		for (const auto& [peer, hold]: m_Coordinator->HeldTransactions()) holds.commands.push_back({m_Coordinator->GetHostPeerId(), hold});
+		for (const auto& [peer, hold]: m_Coordinator->HeldTransactions())
+			if (m_Coordinator->HasHeldAISeat(peer)) holds.commands.push_back({m_Coordinator->GetHostPeerId(), hold});
 		if (!EncodeCommittedJoinFrame(holds, side, &error)) { m_PrivateJoinError = error; return; }
 		image.heldState = ResumeHex(side);
 		image.path = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + name + ".ccsave";
@@ -4960,7 +4962,8 @@ static std::string ResyncSaveName() {
 			const NetWorldJoinSession* open = m_WorldJoin.FindSession(peer.transportPeerId);
 			if (open && open->phase != NetWorldJoinPhase::Active) continue;
 			const uint8_t member = static_cast<uint8_t>(peer.assignedPeerId + 1);
-			if (!m_Coordinator->HasHeldAISeat(member)) continue;
+			const bool opened = m_Coordinator->IsSeatReleased(member);
+			if (!m_Coordinator->HasHeldAISeat(member) && !opened) continue;
 			// A returner told this round is over waits for the next round's start, which offers its seat again.
 			if (m_ToldMatchOver.contains(peer.transportPeerId)) continue;
 			const std::optional<uint16_t> seat = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
@@ -4969,7 +4972,7 @@ static std::string ResyncSaveName() {
 			if (const auto bumps = m_InPlaceIncarnationBumps.find(member); bumps != m_InPlaceIncarnationBumps.end()) incarnation += bumps->second;
 			// The held seat's own connection stays up: its player catches up in place on it, so its reports must reach the round.
 			// A relaunched returner is a new incarnation and rejoins through the image.
-			if (const auto holds = m_Coordinator->HeldTransactions(); holds.contains(member) && incarnation <= holds.at(member).seatIncarnation) {
+			if (const auto holds = m_Coordinator->HeldTransactions(); !opened && holds.contains(member) && incarnation <= holds.at(member).seatIncarnation) {
 				(void)m_Runner->GetLobbySession().BindWorldTransferRemote(member, holder, nullptr);
 				continue;
 			}
@@ -5006,7 +5009,8 @@ static std::string ResyncSaveName() {
 				SendSuccessorCapsuleToLocked(session.assignedPeerId);
 				m_WorldJoin.NoteMatchConfigSent(session.connection);
 			}
-			m_Coordinator->NoteReturningLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
+			if (m_Coordinator->IsSeatReleased(session.assignedPeerId)) m_Coordinator->NoteAdmissionLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
+			else m_Coordinator->NoteReturningLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
 			m_WorldJoin.NoteRejoinLinkFit(session.connection, PrepareHeldPeerRejoinLocked(session.assignedPeerId));
 			if (INetTransport* wire = ActiveWireLocked()) m_WorldJoin.NoteTailLinkRtt(session.connection, wire->GetPeerPingMs(session.connection));
 			// A returning seat takes the base being captured for it, not the older one that capture replaces.
@@ -5055,7 +5059,10 @@ static std::string ResyncSaveName() {
 					continue;
 				}
 				std::string error;
-				if (!m_Coordinator->SchedulePeerReclaim(session.assignedPeerId, session.connection, session.incarnation, session.activationTick, &error, session.activationTrailFrames)) {
+				const bool scheduled = m_Coordinator->IsSeatReleased(session.assignedPeerId)
+				    ? m_Coordinator->SchedulePeerAdmission(session.assignedPeerId, session.connection, session.incarnation, session.activationTick, &error, session.activationTrailFrames)
+				    : m_Coordinator->SchedulePeerReclaim(session.assignedPeerId, session.connection, session.incarnation, session.activationTick, &error, session.activationTrailFrames);
+				if (!scheduled) {
 					if (m_PrivateTransferHeldReasons[session.connection] != error) {
 						m_PrivateTransferHeldReasons[session.connection] = error;
 						System::PrintDiagnosticLine("[net-match] reclaim not scheduled peer=" + std::to_string(session.assignedPeerId) + " e=" + std::to_string(session.activationTick) +
@@ -8321,7 +8328,7 @@ static std::string ResyncSaveName() {
 			for (auto it = m_PendingHeldReseats.begin(); it != m_PendingHeldReseats.end();) {
 				const NetGameReseat& reseat = *it;
 				if (m_Coordinator && m_Coordinator->HasAgreedSeatReclaim(reseat.newOwnerPeerId)) { it = m_PendingHeldReseats.erase(it); continue; }
-				if (m_Coordinator && m_Coordinator->UsesBoundedWait() && m_Coordinator->HasHeldAISeat(reseat.newOwnerPeerId)) { ++it; continue; }
+				if (m_Coordinator && m_Coordinator->UsesBoundedWait() && (m_Coordinator->HasHeldAISeat(reseat.newOwnerPeerId) || m_Coordinator->IsSeatReleased(reseat.newOwnerPeerId))) { ++it; continue; }
 				if (!PrepareHeldPeerRejoinLocked(reseat.newOwnerPeerId)) { ++it; continue; }
 				{
 					std::ostringstream line;
@@ -8403,12 +8410,18 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::PrepareHeldPeerRejoinLocked(uint8_t peerId) {
-		if (!m_Coordinator || !m_Coordinator->UsesBoundedWait() || !m_Coordinator->HasHeldAISeat(peerId)) return true;
+		if (!m_Coordinator || !m_Coordinator->UsesBoundedWait()) return true;
+		const bool opened = m_Coordinator->IsSeatReleased(peerId);
+		if (!m_Coordinator->HasHeldAISeat(peerId) && !opened) return true;
 		if (!m_Session || !ActiveWireLocked()) return false;
 		for (const auto& peer: m_Session->GetReadyPeers()) {
 			if (peer.assignedPeerId + 1 != peerId) continue;
+			if (opened && !m_WorldJoin.FindSession(peer.transportPeerId)) return false;
 			std::string reason;
-			if (m_Coordinator->PreparePeerRejoin(peerId, ActiveWireLocked()->GetPeerPingMs(peer.transportPeerId), NetLockstepNowMs(), &reason)) {
+			const bool fits = opened
+			    ? m_Coordinator->PreparePeerAdmission(peerId, ActiveWireLocked()->GetPeerPingMs(peer.transportPeerId), NetLockstepNowMs(), &reason)
+			    : m_Coordinator->PreparePeerRejoin(peerId, ActiveWireLocked()->GetPeerPingMs(peer.transportPeerId), NetLockstepNowMs(), &reason);
+			if (fits) {
 				m_RejoinFitReasons.erase(peerId);
 				return true;
 			}

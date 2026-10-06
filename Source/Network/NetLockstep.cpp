@@ -5718,6 +5718,12 @@ namespace RTE {
 		if (m_ReturningLinks.insert_or_assign(peerId, transportPeerId).second) m_PeerLinkHeardMs[peerId] = nowMs;
 	}
 
+	void NetLockstepCoordinator::NoteAdmissionLink(uint8_t peerId, NetPeerId transportPeerId, uint64_t nowMs) {
+		NET_PLANE_CHECK();
+		if (m_Config.localPeerId != GetHostPeerId() || transportPeerId == c_InvalidNetPeerId || !IsSeatReleased(peerId) || !m_SeatReleases.contains(peerId)) return;
+		if (m_ReturningLinks.insert_or_assign(peerId, transportPeerId).second) m_PeerLinkHeardMs[peerId] = nowMs;
+	}
+
 	void NetLockstepCoordinator::NoteInPlaceReturn(uint8_t peerId) {
 		NET_PLANE_CHECK();
 		// Its catch-up is open: it has the hold, and the return's own traffic carries it from here.
@@ -6188,6 +6194,23 @@ namespace RTE {
 			if (error) *error = "private reclaim requires a held incarnation and a future activation";
 			return false;
 		}
+		return ScheduleSeatActivation(peerId, transport, incarnation, frame, error, trailFrames);
+	}
+
+	bool NetLockstepCoordinator::SchedulePeerAdmission(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error, uint64_t trailFrames) {
+		NET_PLANE_CHECK();
+		const auto releases = m_SeatReleases.find(peerId);
+		if (!IsRunning() || !UsesBoundedWait() || m_Config.localPeerId != GetHostPeerId() || !IsSeatReleased(peerId) ||
+		    peerId == 0 || peerId > 4 || transport == c_InvalidNetPeerId || incarnation <= m_Config.peerIncarnations[peerId] ||
+		    frame <= std::max(m_Stats.nextFrame, SentInputThrough()) || m_NextTimingRevision == UINT64_MAX ||
+		    releases == m_SeatReleases.end() || releases->second.empty() || releases->second.rbegin()->first >= frame) {
+			if (error) *error = "private admission requires an agreed released seat, a new incarnation and a future activation";
+			return false;
+		}
+		return ScheduleSeatActivation(peerId, transport, incarnation, frame, error, trailFrames);
+	}
+
+	bool NetLockstepCoordinator::ScheduleSeatActivation(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error, uint64_t trailFrames) {
 		NetLockstepTiming timing;
 		timing.senderPeerId = GetHostPeerId(); timing.peerId = peerId;
 		timing.action = NetTimingAction::Reclaim; timing.phase = NetTimingPhase::ReclaimAtFrame;
@@ -6405,6 +6428,21 @@ namespace RTE {
 			if (error) *error = "Rejoining: waiting for the agreed AI handoff frame";
 			return false;
 		}
+		return PrepareSeatImageJoin(peerId, rttMs, nowMs, error);
+	}
+
+	bool NetLockstepCoordinator::PreparePeerAdmission(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error) {
+		NET_PLANE_CHECK();
+		const auto releases = m_SeatReleases.find(peerId);
+		if (!UsesBoundedWait() || m_Config.localPeerId != GetHostPeerId() || !IsSeatReleased(peerId) || releases == m_SeatReleases.end() ||
+		    releases->second.empty() || !m_LastDeliveredFrame || *m_LastDeliveredFrame < releases->second.rbegin()->first) {
+			if (error) *error = "Joining: waiting for the agreed opened-seat frame";
+			return false;
+		}
+		return PrepareSeatImageJoin(peerId, rttMs, nowMs, error);
+	}
+
+	bool NetLockstepCoordinator::PrepareSeatImageJoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error) {
 		auto& estimate = m_DelayEstimators[peerId];
 		estimate.Observe(nowMs, rttMs);
 		const uint32_t needed = RejoinDelayFrames(peerId, estimate);
@@ -6856,6 +6894,7 @@ namespace RTE {
 		// The seat state this round started from may still hold the seat; the return ends that hold here, as the frame that
 		// carried it did on every peer that simulated it, or our first frame would hand the returned seat to the AI again.
 		m_AiHeldSeats.erase(peer); m_HoldTransactions.erase(peer); m_ReleasedAiSeats.erase(peer);
+		m_RemovedPeers.erase(peer);
 		m_PeerLeaveFrames.erase(peer); m_PeerFrameWaivers.erase(peer);
 		m_DroppedSeats.erase(peer); m_LeftSeatsHeld.erase(peer); m_DroppedAtMs.erase(peer);
 		m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Reclaimed;
@@ -9437,6 +9476,7 @@ namespace RTE {
 					NoteSeatTransition(reclaim->peerId, outFrame.frame, SeatTransition::Back);
 					m_Config.peerIncarnations[reclaim->peerId] = reclaim->seatIncarnation;
 					m_AiHeldSeats.erase(reclaim->peerId); m_ReleasedAiSeats.erase(reclaim->peerId); m_HoldTransactions.erase(reclaim->peerId);
+					m_RemovedPeers.erase(reclaim->peerId);
 					m_PeerLeaveFrames.erase(reclaim->peerId); m_PeerFrameWaivers.erase(reclaim->peerId);
 					m_DroppedSeats.erase(reclaim->peerId); m_LeftSeatsHeld.erase(reclaim->peerId); m_DroppedAtMs.erase(reclaim->peerId);
 					m_DroppedSeatResolutions[reclaim->peerId] = NetLockstepHoldResolution::Reclaimed;
