@@ -151,7 +151,7 @@ class ContractTests(unittest.TestCase):
         sent = []
         box = dict(name='RecorderBox', kind='local')
         claim = dict(root='/own/run', token='owned')
-        argv = ['python', '/lead/box_hold.py', '--wait', '0', '--label', 'sol-multibox', '--', 'python', 'peer.py']
+        argv = ['python', '/lead/box_hold.py', '--wait', '0', '--label', 'fixture', '--', 'python', 'peer.py']
         def rpc(box, action, body, **kwargs):
             sent.append(body)
         backend = SimpleNamespace(rpc=rpc)
