@@ -25635,6 +25635,8 @@ namespace {
 			NetReconnectClient returning;
 			returning.Configure(&store, admission.identity, "Returning player");
 			returning.SetUnixClock(&HostReturnAdmission::WallClock, &admission);
+			NetAuthBytes32 participant{}; participant.fill(seat);
+			host.BindParticipantId(connection, participant);
 			admission.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
 			if (!returning.BeginReclaim(ticket, admission.nowMs, error) || !admission.Pump(host, {{connection, &returning}}, error)) return false;
 			if (returning.GetState() != NetH4ClientState::Joined) return fail("the successor refused the retained ticket: " + returning.GetError());
@@ -25721,6 +25723,8 @@ namespace {
 			if (!round.Migrate() || round.peers[1].GetMigrationResult().boundary != 29) return done("the succession did not use boundary 29");
 			successor.PumpHostMigration();
 			if (!successor.m_IsHost || !round.peers[1].HasHeldAISeat(4)) return done("the successor did not keep seat four held");
+			if (!successor.m_SeatAuth.MatchesActiveCredential(ticket.stableSeat, ticket.holderGeneration, ticket.credential))
+				return done("the future frame 32 removal revokes seat four's retained credential at boundary 29");
 			std::string returning;
 			if (!ReturnAndDrive(round, successor.m_ReconnectHost, admission, ticket, 4, 47422, view, &returning)) return done(returning);
 			return done("");
