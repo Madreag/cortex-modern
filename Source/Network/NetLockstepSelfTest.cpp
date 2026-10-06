@@ -26046,9 +26046,11 @@ namespace {
 			    static_cast<uint32_t>(round.peers[0].GetRoundId()), round.peers[0].GetStats().nextFrame, issue) != NetKickBanResult::Ok) return done("the host cannot open the original holder's seat");
 			if (registry.MatchesActiveCredential(3, original.holderGeneration, original.credential)) return done("the host's opening click leaves the old ticket active");
 			round.peers[0].EvictRemovedPeer(4, "open the seat", round.now); for (int pass = 0; pass < 80; ++pass) round.Pump();
-			for (size_t index: {size_t{1}, size_t{2}}) if (!applicants[index].client.BeginApplication(3, admission.nowMs, &round.failure)) return done(round.failure);
-			pump(100);
-			if (host.SubstituteApplicant(3, 2, admission.nowMs) != NetH4ModerationResult::Ok) return done("the host cannot choose the first authenticated applicant");
+			active.clear();
+			if (!start(1, true) || !start(2, true)) return done(round.failure);
+			pump(200);
+			if (host.GetApplicantCount() != 2) return done("fresh authenticated HELLOs did not replace the applications displaced by the return");
+			if (host.SubstituteApplicant(3, 5, admission.nowMs) != NetH4ModerationResult::Ok) return done("the host cannot choose the first authenticated applicant");
 			pump(100);
 			if (!applicants[1].session.IsReady() || applicants[2].client.GetState() == NetH4ClientState::Joined ||
 			    !registry.MatchesActiveCredential(3, applicants[1].client.GetRecord().holderGeneration, applicants[1].client.GetRecord().credential)) return done("the second newcomer overwrites the host's chosen owner");
