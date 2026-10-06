@@ -1498,8 +1498,8 @@ end
 -- Live nodes keep their births; capture-owned nodes take names in walk order.
 local function birthId(ctx, value, what)
 	local id = _ScriptGraphValueSerial(value)
-	-- Capture scratch is born after the horizon, so only a value above it can be scratch.
-	if id > ctx.base and _ScriptGraphScratchValue(value) then
+	-- Native capture helpers allocate in the shared domain, below SG7's peer horizon.
+	if id > ctx.scratchBase and _ScriptGraphScratchValue(value) then
 		ctx.scratch = ctx.scratch + 1
 		ctx.rootUnwatched = ctx.rootUnwatched or "capture scratch"
 		return SCRATCH_BAND + ctx.scratch
@@ -1892,7 +1892,9 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		if cache and not samePaths(paths, cache.paths) then cache = nil end
 	end
 	phase("paths")
-	local ctx = { ids = {}, cells = {}, rootCells = {}, nodes = {}, order = {}, defined = {}, refs = {}, chunks = {}, base = base, scratch = 0, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
+	local callbacks = rawget(_G, "_ScriptGraphCallbacks")
+	local scratchBase = base >= PEER_BIRTH_BAND and callbacks and callbacks.liveSerial or base
+	local ctx = { ids = {}, cells = {}, rootCells = {}, nodes = {}, order = {}, defined = {}, refs = {}, chunks = {}, base = base, scratchBase = scratchBase, scratch = 0, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
 	local chunks, rootIds, uids = {}, {}, {}
 	local reused, rewritten, uncacheable = 0, 0, 0
 	local globalReused, globalUnwatched = true, false
