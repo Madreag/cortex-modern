@@ -31,7 +31,7 @@
       },
       "observe_after_failure": true,
       "env": {
-        "CC_LUA_FILE_ROOT": "../ScriptFiles"
+        "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
       },
       "runtime_files": [
         {
@@ -74,7 +74,7 @@
       },
       "observe_after_failure": true,
       "env": {
-        "CC_LUA_FILE_ROOT": "../ScriptFiles"
+        "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
       },
       "runtime_files": [
         {
