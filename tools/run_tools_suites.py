@@ -24,6 +24,7 @@ SUITES = (
     ("session-directory", ["session_directory/test_session_directory.py"]),
     ("acceptance-harness", ["test_acceptance_harness.py"]),
     ("e2e-video", ["test_e2e_video.py"]),
+    ("spread-peers", ["test_spread_peers.py"]),
     ("lobby-wire", ["test_net_lobby_wire.py"]),
     ("settings-seed", ["test_settings_seed.py"]),
     ("package-contents", ["test_package_contents.py"]),

@@ -28,6 +28,34 @@ class MatrixSelection(unittest.TestCase):
         plan = self.plan('--lag-arms', '100ms-60hz')
         self.assertEqual([arm['arm'] for arm in plan['arms']], ['baseline-60hz', 'baseline-60hz-off', '100ms-60hz-on', '100ms-60hz-off'])
 
+    def test_spread_keeps_the_original_arm_and_lag_plan(self):
+        self.assertEqual(self.plan('--peer-boxes', 'host=ONE,seat2=TWO', '--lag-arms', '100ms-60hz'), self.plan('--lag-arms', '100ms-60hz'))
+
+    def test_spread_keeps_the_original_loss_and_silent_levers(self):
+        self.assertEqual(self.plan('--peer-boxes', 'host=ONE,seat2=TWO,seat3=THREE', '--cases', '100ms-loss5-silent600'),
+                         self.plan('--cases', '100ms-loss5-silent600'))
+
+    def test_result_records_keep_peer_shape_and_mark_single_box(self):
+        import feel_measure
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'manifest.json').write_text(json.dumps({'per_peer_lag_ms': {'host': 100, 'client': 100}}))
+            feel_measure.write_json(root / 'run-result.json', {'host': {'exit_code': 0}, 'client': {'exit_code': 0}})
+            result = json.loads((root / 'run-result.json').read_text())
+        self.assertEqual(set(result), {'host', 'client'})
+        self.assertTrue(all(row['topology'] == 'single-box: not proof' for row in result.values()))
+
+    def test_analysis_keeps_recorded_spread_assignments(self):
+        import feel_measure
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'manifest.json').write_text(json.dumps({'topology': 'spread', 'peer_boxes': {'host': 'ONE', 'client': 'TWO'}}))
+            feel_measure.write_json(root / 'feel-report.json', {'name': '100ms-loss5', 'item9a_pass': False})
+            result = json.loads((root / 'feel-report.json').read_text())
+        self.assertEqual(result['topology'], 'spread')
+        self.assertEqual(result['peer_boxes'], {'host': 'ONE', 'client': 'TWO'})
+        self.assertIs(result['item9a_pass'], False)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -491,7 +491,8 @@ def self_test():
 
 
 def write_result(out, summary):
-    (out / "result.json").write_text(json.dumps(summary, indent=2))
+    document = {**summary, "topology": "single-box: not proof"}
+    (out / "result.json").write_text(json.dumps(document, indent=2))
 
 
 def main():
@@ -527,6 +528,7 @@ def main():
         if options.sanitizer and not scored["pass"] and row in WALL_CLOCK_CHECKS:
             scored = score_wall_clock_informational(stdout, {"exit_code": options.exit_code, "timed_out": options.timed_out},
                                                     row, options.sanitizer)
+        scored["topology"] = "single-box: not proof" if row.startswith("net-") else "single-peer"
         if options.result_json:
             options.result_json.write_text(json.dumps({**scored, "case": row, "scored_by": "run_selftests.py --score-stdout"},
                                                       indent=2), encoding="utf-8")
@@ -573,6 +575,7 @@ def main():
             except Exception as exc:  # noqa: BLE001 - a runner failure is this row's red, never an empty result
                 scored = {"pass": False, "reason": f"runner error: {exc!r}"}
             results[name] = scored
+            scored["topology"] = "single-box: not proof" if name.startswith("net-") else "single-peer"
             summary["passed"] = sum(1 for row in results.values() if row["pass"])
             print(json.dumps({"selftest": name, **{k: v for k, v in scored.items() if k != "binary"}}), flush=True)
     except Interrupted as stop:

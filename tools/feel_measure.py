@@ -5,6 +5,7 @@ import argparse
 import concurrent.futures
 from datetime import datetime, timedelta, timezone
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -16,13 +17,14 @@ import time
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from feel.report import EarlyDecision, TICKS, file_record, json_native, pin, record_path, reduce_peer, item9a_gates, apply_tps_call, write_json
+from feel.report import EarlyDecision, TICKS, file_record, json_native, pin, record_path, reduce_peer, item9a_gates, apply_tps_call, write_json as write_report_json
 from feel.retained_resume import PER_PEER_SUBSYSTEMS, compare_live_hashes_or_fail as compare_live_hashes
 from feel.records import compress_case_records, record_path
 from run_sim_test import make_run, engine_executable
 from feel.launch_budget import install_memory_guard, exclusive_matrix
 from run_selftests import SELFTESTS
 from compare_sim_traces import compare_fullstate, strict_compare
+import spread_peers as spread
 
 REPO = Path(__file__).resolve().parents[1]
 install_memory_guard()
@@ -42,6 +44,41 @@ PIN_SWAPPED = False
 # --sp-one-screen: the single-player arms draw one screen, as each match peer does (CCCP_TEST_SINGLE_SCREEN).
 SP_ONE_SCREEN = False
 LAG_ARMS = tuple(f'{lag}ms-{cap}' for lag in (100, 200) for cap in ('60hz', 'uncapped'))
+SPREAD_OPTIONS = None
+
+
+def result_fields(folder):
+    """Proof metadata follows saved native assignments, including analyze-only."""
+    folder = Path(folder)
+    manifest = folder / 'manifest.json'
+    plan = folder / 'matrix-plan.json'
+    source = json.loads((manifest if manifest.is_file() else plan).read_text(encoding='utf-8')) if manifest.is_file() or plan.is_file() else {}
+    count = len(source.get('per_peer_lag_ms') or {}) or (1 if source.get('mode', '').startswith('local single-player') else 2)
+    fields = dict(topology=source.get('topology') or spread.topology(SPREAD_OPTIONS, count))
+    if source.get('peer_boxes'):
+        fields['peer_boxes'] = source['peer_boxes']
+    elif plan.is_file():
+        fields['peer_boxes'] = {path.parent.name: json.loads(path.read_text(encoding='utf-8')).get('peer_boxes', {})
+                               for path in folder.glob('*/manifest.json')}
+    return fields
+
+
+def write_json(path, value):
+    """Keep result shapes while marking every driver's multiplayer verdict."""
+    path = Path(path)
+    names = {'manifest.json', 'matrix-plan.json', 'run-result.json', 'feel-report.json', 'matrix-report.json', 'completion.json', 'gates.json'}
+    if path.name in names:
+        fields = result_fields(path.parent)
+        if path.name == 'run-result.json':
+            value = {peer: dict(record, topology=fields['topology']) for peer, record in value.items()}
+        elif isinstance(value, list):
+            value = [dict(row, **result_fields(Path(row.get('report_path', path)).parent)) for row in value]
+        elif isinstance(value, dict):
+            if path.name == 'feel-report.json' and value and all(isinstance(row, dict) and 'pins' in row for row in value.values()):
+                value = {peer: dict(row, **fields) for peer, row in value.items()}
+            else:
+                value = dict(fields, **value)
+    write_report_json(path, value)
 
 
 def stamp():
@@ -293,7 +330,7 @@ DRY_RUN_PLAN = None
 PEER_SIM_COST = {}
 
 
-def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0, three_peers=False, prediction=True, jitter_ms=0, reorder_percent=0, dup_percent=0):
+def _launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0, three_peers=False, prediction=True, jitter_ms=0, reorder_percent=0, dup_percent=0, *, spread_case=None):
     if not matrix_arm_selected(name, MATRIX_GROUP):
         return None
     final_tick = window_ticks if window_ticks is not None else 2 * TICKS if silent_tick else TICKS
@@ -315,12 +352,16 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                     lua_states_note='retired: the engine fixes the count at build time')
     write_json(out / 'manifest.json', manifest)
     peers = ['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)
+    manifest['topology'] = 'spread' if spread_case else spread.topology(count=len(peers))
+    if spread_case:
+        manifest['peer_boxes'] = spread_case.result()['peer_boxes']
+        manifest['executable_hashes'] = spread_case.result()['executable_hashes']
     manifest['heavy_scene_levers'] = {peer: dict(lever='CCCP_TEST_SIM_COST_US', cost_us=PEER_SIM_COST[peer][0],
                                                from_tick=PEER_SIM_COST[peer][1]) for peer in peers if peer in PEER_SIM_COST}
     manifest['per_peer_lag_ms'] = {peer: (2 * lag if peer == 'client' else 0) if loss_percent or silent_tick else lag for peer in peers}
     # The jitter rides with the lag: the peer that carries the link's delay jitters both of its directions, as a cross fault does.
     manifest['per_peer_jitter_ms'] = {peer: jitter_ms if manifest['per_peer_lag_ms'][peer] else 0 for peer in peers}
-    basis = runner_cpu_basis() if (len(peers) == 3 or PIN_ALIKE and len(peers) in (1, 2)) and sys.platform == 'win32' else None
+    basis = runner_cpu_basis() if not spread_case and (len(peers) == 3 or PIN_ALIKE and len(peers) in (1, 2)) and sys.platform == 'win32' else None
     placements = engine_placements(peers, basis, alike=PIN_ALIKE and len(peers) in (1, 2), swapped=PIN_SWAPPED)
     manifest['engine_placement'] = {}
     if basis:
@@ -380,7 +421,8 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                     flags += ['-net-test-live-stall', f'{tick}:{duration}']
             elif peer == 'client' and silent_tick:
                 flags += ['-selftest-frame-stall', f'{silent_tick}:1500']
-            run = make_run(REPO, flags, run_out, timeout=timeout, env=environment,
+            factory = spread_case.make_run if spread_case else make_run
+            run = factory(REPO, flags, run_out, timeout=timeout, env=environment,
                            expected=[trace, Path(str(trace) + '.simdump.txt'), out / f'{peer}_controller.jsonl'])
             runs[peer] = run
             private_settings(run, cap)
@@ -402,8 +444,12 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
             run.close()
         for peer, run in runs.items():
             records[peer] = run.record
+            records[peer]['topology'] = manifest['topology']
+            if not spread_case:
+                write_json(run.out / 'record.json', records[peer])
         write_json(out / 'run-result.json', records)
-    if any(record.get('exe_sha256') != exe_hash for record in records.values()):
+    expected_hashes = manifest.get('executable_hashes') or {peer: exe_hash for peer in peers}
+    if any(record.get('exe_sha256') != expected_hashes[peer] for peer, record in records.items()):
         raise RuntimeError('the executable changed during the matrix')
     compress_case_records(out)
     manifest.update(finished=stamp(), scratch_bytes=scratch_bytes(out),
@@ -411,23 +457,54 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     write_json(out / 'manifest.json', manifest)
     print(f'{manifest["finished"]} {name}: launches_complete={manifest["launches_complete"]}', flush=True)
     if not sp and record and (out / 'match.ccreplay').is_file():
-        inspect = make_run(REPO, ['-net-replay-verify', str(out / 'match.ccreplay'), '-net-replay-dump', f'1:{final_tick}',
+        finish_replay(['-net-replay-verify', str(out / 'match.ccreplay'), '-net-replay-dump', f'1:{final_tick}',
                                  '-out', str(out / 'replay-report.json')], out / 'replay-inspect', timeout=timeout,
-                           env={'CCCP_HEADLESS': '1'}, expected=[out / 'replay-report.json'])
-        try:
-            inspect.start().finish()
-        finally:
-            inspect.close()
+                      expected=[out / 'replay-report.json'])
         # The recorder's off-wire proof on one committed timeline: the recording played back with no recorder.
-        playback = make_run(REPO, ['-net-replay', str(out / 'match.ccreplay'), '-tick-hashes', '-out', str(out / 'replay_trace.json'),
+        finish_replay(['-net-replay', str(out / 'match.ccreplay'), '-tick-hashes', '-out', str(out / 'replay_trace.json'),
                                    '-max-ticks', str(final_tick), '-seed', '42'], out / 'replay-off', timeout=timeout,
-                            env={'CCCP_HEADLESS': '1'}, expected=[out / 'replay_trace.json'])
-        stage_baseline(playback, final_tick, 2)
-        try:
-            playback.start().finish()
-        finally:
-            playback.close()
+                      expected=[out / 'replay_trace.json'], baseline_ticks=final_tick)
     return out
+
+
+def launch_case(*args, **kwargs):
+    """All original levers and assertions, with native peers assigned by the pool."""
+    bound = inspect.signature(_launch_case).bind(*args, **kwargs)
+    bound.apply_defaults()
+    values = bound.arguments
+    if not spread.enabled(SPREAD_OPTIONS) or DRY_RUN_PLAN is not None or not matrix_arm_selected(values['name'], MATRIX_GROUP):
+        return _launch_case(*args, **kwargs)
+    names = ['host', 'client', 'survivor'] if values['three_peers'] else case_peers(values['sp'], values['silent_tick'])
+    peers = [spread.Peer(name, os='any', size=(960, 540), quiet=True, timeout=values['timeout']) for name in names]
+    def drive(case):
+        return str(_launch_case(*args, **kwargs, spread_case=case))
+    receipt = spread.run_case(REPO, Path(values['root']) / values['name'], peers,
+                              spread.Match(values['port'] or SPREAD_OPTIONS.port), drive=drive,
+                              peer_boxes=SPREAD_OPTIONS.peer_boxes, dispatcher=SPREAD_OPTIONS.pool_dispatcher,
+                              registry=SPREAD_OPTIONS.pool_registry)
+    return Path(receipt['driver_result'])
+
+
+def finish_replay(args, out, *, timeout, expected, baseline_ticks=None):
+    """Replay verification is a separate one-engine pool claim in spread mode."""
+    out = Path(out)
+    def drive(case=None):
+        factory = case.make_run if case else make_run
+        run = factory(REPO, args, out, timeout=timeout, env={'CCCP_HEADLESS': '1'}, expected=expected)
+        if baseline_ticks is not None:
+            stage_baseline(run, baseline_ticks, 2)
+        try:
+            return run.start().finish()
+        finally:
+            run.close()
+    if not spread.enabled(SPREAD_OPTIONS):
+        return drive()
+    # Keep the reducer's output layout while claiming a fresh native replay peer.
+    receipt = spread.run_case(REPO, out.parent, [spread.Peer(out.name, os='any', size=(960, 540), quiet=True, timeout=timeout)],
+                              spread.Match(SPREAD_OPTIONS.port), drive=drive,
+                              dispatcher=SPREAD_OPTIONS.pool_dispatcher, registry=SPREAD_OPTIONS.pool_registry)
+    write_json(out / 'spread-result.json', receipt)
+    return receipt['driver_result']
 
 
 def held_client_images(log, live=None):
@@ -1076,6 +1153,7 @@ def gates(root, control, timeout):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    spread.add_arguments(parser)
     parser.add_argument('--repo', type=Path, default=REPO)
     parser.add_argument('--matrix', action='store_true', help='run the complete matrix (the default)')
     parser.add_argument('--matrix-group', choices=('all', 'pair', 'three'), default='all',
@@ -1141,6 +1219,11 @@ def dry_run_plan(launch_all):
 
 def _main(argv=None):
     parser, args = parse_args(argv)
+    global SPREAD_OPTIONS
+    SPREAD_OPTIONS = args
+    spread.configure(args)
+    if spread.enabled(args) and args.pin_alike:
+        parser.error('--pin-alike divides one machine and is unavailable for peers on separate machines')
     global MATRIX_GROUP
     MATRIX_GROUP = args.matrix_group
     if args.matrix_group != 'all' and (args.cases or args.lag_arms):
@@ -1325,17 +1408,20 @@ def _main(argv=None):
 
 
 def main(argv=None):
-    global MATRIX_GROUP
+    global MATRIX_GROUP, SPREAD_OPTIONS
     previous = MATRIX_GROUP
+    previous_options, previous_spread_options = SPREAD_OPTIONS, spread._options
     try:
         return _main(argv)
     finally:
         MATRIX_GROUP = previous
+        SPREAD_OPTIONS = previous_options
+        spread.configure(previous_spread_options)
 
 
 if __name__ == '__main__':
     _, arguments = parse_args()
-    if arguments.analyze_only or arguments.dry_run:
+    if arguments.analyze_only or arguments.dry_run or spread.enabled(arguments):
         raise SystemExit(main())
     with exclusive_matrix():
         raise SystemExit(main())

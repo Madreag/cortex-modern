@@ -2,6 +2,7 @@
 and nothing else about the row is excused. Pure scoring; no engine."""
 
 import contextlib
+import json
 import io
 import tempfile
 import unittest
@@ -10,6 +11,16 @@ from pathlib import Path
 import run_selftests as runner
 
 TAG = "[script-graph-selftest]"
+
+
+class ProofMarking(unittest.TestCase):
+    def test_detector_collection_never_claims_play_proof(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            count = len(runner.SELFTESTS)
+            runner.write_result(Path(temporary), {'passed': count, 'total': count})
+            result = json.loads((Path(temporary) / 'result.json').read_text())
+        self.assertEqual(result['topology'], 'single-box: not proof')
+        self.assertEqual((result['passed'], result['total']), (count, count))
 TIMING = f"{TAG} FAIL threaded_synced_update_pass_timing registered=1024 states=32 before_us=30171 after_us=32740 added_us=2569 budget_us=150 delta_pct=8.51"
 LOADED = f"{TAG} FAIL threaded_synced_update_pass_timing_under_load registered=5000 states=32 before_us=1219 after_us=5180 added_us=3961 budget_us=732"
 

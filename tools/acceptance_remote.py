@@ -86,10 +86,10 @@ def pack_evidence(root, archive):
     paths = []
     for directory, names, files in os.walk(root, followlinks=False):
         names[:] = [name for name in names if name not in ('runtime', 'Data', '.git')
-                    and not (Path(directory)/name).is_symlink() and not (Path(directory)/name).is_junction()]
+                    and not (Path(directory)/name).is_symlink() and not getattr(Path(directory)/name, 'is_junction', lambda: False)()]
         for name in files:
             path = Path(directory)/name
-            if path == archive or path.suffix == '.tar' or path.is_symlink() or path.is_junction():
+            if path == archive or path.suffix == '.tar' or path.is_symlink() or getattr(path, 'is_junction', lambda: False)():
                 continue
             paths.append(path)
     with tarfile.open(archive, 'w') as bundle:

@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_sim_test import make_run, engine_executable, file_sha256  # noqa: E402
 from test_telemetry_bundle import set_visual_resolution  # noqa: E402
 from e2e_video import SCREEN_WATCHES  # noqa: E402
+import spread_peers as spread  # noqa: E402
 
 SIZES = ("640x360", "960x540", "1280x720")
 NAMES = ("Host", "Ana", "Ben", "Cleo")
@@ -52,9 +53,9 @@ HELD_BETWEEN_ROUNDS = "Held - the seat is kept"
 COST_BUDGET_US = {"closed": 100, "open": 500}
 NEW_CASES = ("stale-press", "reach", "open-place", "host-leave-live", "leave-no-ticket", "long-names", "between-rounds", "cost")
 # The place each newcomer asks for, by stable seat (a peer's is its number less one); any held place otherwise.
-APPLY_SEATS = {"reach": {NEWCOMER: "1", SECOND: "2"}}
+APPLY_SEATS = {"reach": {NEWCOMER: "1", SECOND: "2"}, "away-names": {NEWCOMER: "1"}}
 # Cases whose newcomers only ask: they are still asking when the host ends the match, and never reach its screen.
-ASK_ONLY = ("reach", "long-names")
+ASK_ONLY = ("reach", "long-names", "away-names")
 CASE_PEERS = {"stale-press": 4, "reach": 4, "open-place": 3, "host-leave-live": 3, "leave-no-ticket": 2, "long-names": 3, "between-rounds": 2, "cost": 4}
 
 
@@ -760,6 +761,32 @@ def check_host_leave_live(checks, reads, logs):
     checks.check("host-leave-press-does-what-it-says", ended and not took_over, f"{ana}: the match ended {ended}, taken over {took_over}")
 
 
+def away_names_probes(root, base):
+    """The host removes Ana; a newcomer asks for her opened place; then Ben leaves. The summary names Ben as the one away."""
+    host, ana, ben = NAMES[:3]
+    steps = [{"op": "wait", "service": "Running", "sim_at_least": 150}, *open_panel(), *find_row(ana, base),
+             *click(f"NetworkSeatRemove@{ana}"), *click(f"NetworkSeatRemove@{ana}"), read("NetworkSeatsStatus", tag="removed"),
+             {"op": "wait", "elapsed_ms": 1500}, signal("ready-for-newcomer"),
+             {"op": "wait", "control": "NetworkSeatsSummary", "text_contains": "1 request to join"}, signal("ben-may-leave"),
+             wait_file(probe_root(root, ben) / "left.json"), {"op": "wait", "control": "NetworkSeatsSummary", "text_contains": "is away"},
+             {"op": "wait", "renders": 6}, read("NetworkSeatsSummary", tag="away-summary"), shot("away-names"), *close_and_end()]
+    probes = {host: {"schema": 1, "timeout_ms": 175000, "steps": steps}}
+    # Ana's match ends when the host removes her: her probe is done once she plays.
+    probes[ana] = {"schema": 1, "timeout_ms": 175000, "steps": [{"op": "wait", "service": "Running", "sim_at_least": 100}, {"op": "finish"}]}
+    probes[ben] = {"schema": 1, "timeout_ms": 175000, "steps": [{"op": "wait", "service": "Running", "sim_at_least": 150},
+                                                                wait_file(probe_root(root, host) / "ben-may-leave.json"), *at_leave_confirm("at-confirm"),
+                                                                *confirm_leave()]}
+    probes[NEWCOMER] = {"schema": 1, "timeout_ms": 175000, "steps": [wait_file(probe_root(root, host) / "done-reading.json"), {"op": "finish"}]}
+    return probes
+
+def check_away_names(checks, reads):
+    host, ben = NAMES[0], NAMES[2]
+    removed = " ".join(reads[host].get("removed", {}).get("text", "").split())
+    checks.check("away-names-removal-done", removed == f"{NAMES[1]} was removed from the match.", f"status {removed!r}")
+    summary = " ".join(reads[host].get("away-summary", {}).get("text", "").split())
+    checks.check("away-names-the-player-away", summary == f"{ben} is away - 1 request to join", f"summary {summary!r}")
+
+
 def leave_no_ticket_probes(root):
     """A match with authenticated admission off keeps no ticket: the client's leave must not promise Rejoin Match."""
     host, client = NAMES[:2]
@@ -889,7 +916,9 @@ def ntdll():
     return ctypes.WinDLL("ntdll")
 
 
+@spread.managed_case
 def run_peers(options, root, case, size, peers, base, moderate=False):
+    spread.configure(options)
     root.mkdir(parents=True, exist_ok=False)
     width, height = map(int, size.split("x"))
     port = options.port
@@ -910,15 +939,15 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         probes = host_leave_probes(root, peers)
         who_list = list(NAMES[:peers])
         ticks = 3600
-    elif case in NEW_CASES:
-        peers = CASE_PEERS[case]
+    elif case in NEW_CASES or case == "away-names":
+        peers = 3 if case == "away-names" else CASE_PEERS[case]
         who_list = list(NAMES[:peers])
         ticks = 12000
         plan = between_rounds_plan(root, port) if case == "between-rounds" else {}
         probes = plan.get("probes") or {"stale-press": lambda: stale_press_probes(root, base), "reach": lambda: reach_probes(root, base),
                                          "open-place": lambda: open_place_probes(root, base), "host-leave-live": lambda: host_leave_live_probes(root),
                                          "leave-no-ticket": lambda: leave_no_ticket_probes(root), "long-names": lambda: long_names_probes(root),
-                                         "cost": lambda: cost_probes(root)}[case]()
+                                         "cost": lambda: cost_probes(root), "away-names": lambda: away_names_probes(root, base)}[case]()
     else:
         probes = players_probes(root, peers, base, moderate, options.cancel)
         who_list = list(NAMES[:peers])
@@ -927,6 +956,17 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
     names = {who: who for who in who_list + newcomers}
     if case == "long-names":
         names.update({NAMES[1]: LONG_SHARED, NAMES[2]: LONG_SHARED, NEWCOMER: LONG_NEWCOMER})
+    if spread.enabled(options) and case == "leave-bad-ticket":
+        raise spread.SpreadRefusal("leave-bad-ticket requires a native private-ticket damage lever")
+    placement = spread.prepare_case(
+        options.repo, root,
+        [spread.Peer(who, os="windows" if who == NEWCOMER else "any", engines=1, size=(width, height),
+                     reviewed=who == NAMES[0], readback=who == NAMES[0], held=who == NEWCOMER,
+                     share_ok=case != "cost", quiet=case == "cost" and who == NAMES[0])
+         for who in who_list + newcomers],
+        spread.Match(port, parameters={"lane": "in-match", "network": "direct",
+                                       "case": case, "players": peers, "moderate": moderate, "cancel": options.cancel}))
+    make_peer_run = placement.make_run if placement else make_run
     runs, records = {}, {}
     menu_done = probe_root(root, NAMES[0]) / "done.json"
     # The screen checks every scene carries: layout, duplicate lines, the held lines, the seat rows.
@@ -947,14 +987,14 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         # A match with authenticated admission off keeps no ticket for a leave.
         if case == "leave-no-ticket":
             extra = [*extra, "-net-no-reconnect-admission", "1"]
-        match_peers = peers if case in ("players", "host-leave", *NEW_CASES) else 2
+        match_peers = peers if case in ("players", "host-leave", "away-names", *NEW_CASES) else 2
         args = ["-menu-script", str(script)] if lobby else ["-menu-script", str(script), *match_args(port, match_peers, who if who not in newcomers else "joiner", ticks, extra, name=names[who])]
         diagnostics = "1" if case == "status" and options.diagnostics else "0"
         env = {"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(directory / "probe.json"), "CCCP_TEST_SCREEN_WATCHES": str(watches)}
         if case == "cost" and who == NAMES[0]:
             env["CC_TEST_PANEL_COST"] = "1"
             env["CCCP_TEST_DRAW_PHASES"] = "1"
-        runs[who] = make_run(options.repo, args, root / who, 420, env=env)
+        runs[who] = make_peer_run(options.repo, args, root / who, 420, env=env)
         set_visual_resolution(runs[who], width, height)
         seed_settings(runs[who].cwd / "Userdata/Settings.ini", {"NetworkDisplayName": names[who], "NetworkMatchStatusMode": "Always",
                                                                  "NetworkShowDiagnostics": diagnostics, "NetworkIceEnable": "0"})
@@ -962,8 +1002,11 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
     def drive(who):
         try:
             records[who] = runs[who].start().finish()
+            if not placement:
+                records[who]["topology"] = spread.TOPOLOGY_LOCAL
+                spread.write_json(runs[who].out / "record.json", records[who])
         except Exception as error:  # the verdict names it
-            records[who] = {"error": repr(error)}
+            records[who] = {"error": repr(error), "topology": "spread" if placement else spread.TOPOLOGY_LOCAL}
 
     threads = {}
     for index, who in enumerate(who_list):
@@ -998,12 +1041,18 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
             while not seen.exists() and time.monotonic() < deadline and threads[NAMES[0]].is_alive():
                 time.sleep(0.1)
             if seen.exists() and runs[NEWCOMER].process is not None:
-                ntdll().NtSuspendProcess(ctypes.c_void_p(runs[NEWCOMER].process))
+                if placement:
+                    runs[NEWCOMER].suspend()
+                else:
+                    ntdll().NtSuspendProcess(ctypes.c_void_p(runs[NEWCOMER].process))
                 (root / "newcomer-frozen.json").write_text("{}\n", encoding="utf-8")
                 cancelled = probe_root(root, NAMES[0]) / "approval-cancelled.json"
                 while not cancelled.exists() and time.monotonic() < deadline and threads[NAMES[0]].is_alive():
                     time.sleep(0.1)
-                ntdll().NtResumeProcess(ctypes.c_void_p(runs[NEWCOMER].process))
+                if placement:
+                    runs[NEWCOMER].resume()
+                else:
+                    ntdll().NtResumeProcess(ctypes.c_void_p(runs[NEWCOMER].process))
                 (root / "newcomer-thawed.json").write_text("{}\n", encoding="utf-8")
     for thread in threads.values():
         thread.join()
@@ -1068,11 +1117,22 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         check_between_rounds(checks, logs)
     elif case == "cost":
         check_cost(checks, logs)
+    elif case == "away-names":
+        check_away_names(checks, reads)
     else:
         check_players(checks, reads, peers, logs, base, moderate, options.cancel)
-    return {"case": case, "size": size, "peers": peers, "moderate": moderate, "base": base, "checks": checks.rows,
-            "pass": all(row["pass"] for row in checks.rows), "pictures": sorted(str(path) for path in pictures.glob("*.png")),
-            "records": {who: {key: record.get(key) for key in ("exit_code", "timed_out", "error")} for who, record in records.items()}}
+    row = {"case": case, "size": size, "peers": peers, "moderate": moderate, "base": base, "checks": checks.rows,
+           "pass": all(row["pass"] for row in checks.rows), "pictures": sorted(str(path) for path in pictures.glob("*.png")),
+           "records": {who: {key: record.get(key) for key in ("exit_code", "timed_out", "error")} for who, record in records.items()},
+           "topology": spread.TOPOLOGY_LOCAL, "proof": False}
+    if placement:
+        receipt = placement.result()
+        row.update(topology="spread", peer_boxes=receipt["peer_boxes"], identities=receipt["identities"],
+                   executable_hashes=receipt["executable_hashes"], refusals=receipt["refusals"])
+        row["proof"] = (row["pass"] and set(receipt["identities"]) == set(runs) and
+                        all(records.get(who, {}).get("box") == receipt["peer_boxes"][who] and
+                            records[who].get("exe_sha256") == receipt["executable_hashes"][who] for who in runs))
+    return row
 
 
 def run_sp_pause(options, root, size):
@@ -1201,7 +1261,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--case", choices=("pause", "players", "status", "repair", "host-leave", "sp-pause", *NEW_CASES, "all"), required=True)
+    parser.add_argument("--case", choices=("pause", "players", "status", "repair", "host-leave", "sp-pause", *NEW_CASES, "away-names", "all"), required=True)
     parser.add_argument("--diagnostics", action="store_true", help="the status case with detailed network statistics on")
     parser.add_argument("--size", choices=SIZES, default="960x540")
     parser.add_argument("--all-sizes", action="store_true")
@@ -1211,14 +1271,27 @@ def main():
     parser.add_argument("--base", action="store_true", help="drive a build from before this menu work")
     parser.add_argument("--compare", type=Path, help="an earlier sp-pause result.json to hold the single-player menu against")
     parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--port-block", help="lane-owned game ports LO-HI for spread mode")
     parser.add_argument("--dry-run", action="store_true", help="print each probe's step count and stop")
+    spread.add_arguments(parser)
     options = parser.parse_args()
+    spread.configure(options)
+    if options.case == "away-names" and not spread.enabled(options):
+        parser.error("away-names requires spread mode")
     if options.dry_run:
         root = Path("dry")
         plans = {"pause": pause_probes(root, options.base), "players": players_probes(root, options.peers, options.base, options.moderate)}
         print(json.dumps({case: {who: len(probe["steps"]) for who, probe in probes.items()} for case, probes in plans.items()}))
         return 0
-    if not 1024 < options.port < 50000:
+    if options.port_block:
+        if not spread.enabled(options):
+            parser.error("--port-block requires spread mode")
+        count = len(SIZES if options.all_sizes else (options.size,)) * (6 + len(NEW_CASES) if options.case == "all" else 1)
+        try:
+            spread.check_port_block(options.port, options.port_block, count)
+        except ValueError as error:
+            parser.error(str(error))
+    elif not 1024 < options.port < 50000:
         parser.error("take the port from the lane's own block below 50000")
     options.repo = options.repo.resolve()
     options.out.mkdir(parents=True, exist_ok=False)
@@ -1230,15 +1303,31 @@ def main():
             if case == "sp-pause":
                 rows.append(run_sp_pause(options, options.out / f"sp-pause-{size}", size))
             else:
-                peers = CASE_PEERS.get(case, options.peers if case in ("players", "host-leave") else 2)
-                rows.append(run_peers(options, options.out / f"{case}-{size}-{peers}p{'-diag' if case == 'status' and options.diagnostics else ''}", case, size,
-                                      options.peers, options.base, options.moderate and case == "players"))
+                peers = 3 if case == "away-names" else CASE_PEERS.get(case, options.peers if case in ("players", "host-leave") else 2)
+                root = options.out / f"{case}-{size}-{peers}p{'-diag' if case == 'status' and options.diagnostics else ''}"
+                try:
+                    rows.append(run_peers(options, root, case, size, options.peers, options.base, options.moderate and case == "players"))
+                except spread.SpreadRefusal as error:
+                    if not spread.enabled(options):
+                        raise
+                    receipt = spread.read_json(root / "spread-result.json", {})
+                    rows.append({"case": case, "size": size, "peers": peers, "base": options.base, "pass": False,
+                                 "checks": [], "records": receipt.get("records", {}), "pictures": [], "topology": "spread", "proof": False,
+                                 "peer_boxes": receipt.get("peer_boxes", {}), "error": str(error), "status": "HARNESS BLOCKED",
+                                 "refusals": receipt.get("refusals", []), "refused_peer": receipt.get("refused_peer"),
+                                 "refused_box": receipt.get("refused_box"), "reason": receipt.get("reason", str(error))})
             options.port += 1
     result = {"pass": all(row["pass"] for row in rows), "revision": subprocess.check_output(["git", "-C", str(options.repo), "rev-parse", "HEAD"], text=True).strip(),
               "exe_sha256": sha(engine_executable(options.repo)), "driver_sha256": sha(__file__), "base": options.base, "rows": rows,
               "sp_pause": [row["snapshot"] for row in rows if row["case"] == "sp-pause"]}
+    multiplayer = [row for row in rows if row["case"] != "sp-pause"]
+    if multiplayer:
+        result.update(topology="spread" if all(row["topology"] == "spread" for row in multiplayer) else spread.TOPOLOGY_LOCAL,
+                      proof=all(row["proof"] for row in multiplayer),
+                      peer_boxes={f"{row['case']}/{row['size']}": row.get("peer_boxes", {}) for row in multiplayer})
     (options.out / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     red = [f"{row['case']}/{row['size']}: {check['check']}" for row in rows for check in row["checks"] if not check["pass"]]
+    red += [f"{row['case']}/{row['size']}: {row['error']}" for row in rows if row.get("error")]
     print(f"[in-match-ux] {'PASS' if result['pass'] else 'FAIL'} {options.out / 'result.json'}" + (f" red: {red}" if red else ""))
     return 0 if result["pass"] else 1
 
