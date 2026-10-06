@@ -18,6 +18,7 @@ from run_sim_test import make_run, engine_executable, file_sha256
 from test_lobby_chat import read_log, set_resolution
 from test_lobby_lifecycle import wait_for_log
 from test_viewport_fit import panel_extent, panel_vertical, png_size
+from test_menu_readback import spread, managed_case
 
 
 SIZES = ((640, 360), (960, 540))
@@ -150,15 +151,21 @@ def menu_script(who, port):
     return script
 
 
+@managed_case
 def run_size(repo, root, size, port, expected):
     root.mkdir(parents=True, exist_ok=False)
     runs, records, checks, details = {}, {}, {}, {}
     before = pin(repo, expected)
+    execution = None
     try:
+        execution = spread.prepare_case(repo, root,
+            [spread.Peer("host", os="windows", reviewed=True, output_name="Host", size=size),
+             spread.Peer("client", os="windows", output_name="Guest", size=size)],
+            spread.Match(port, parameters={"lane": "menus"}))
         for who in ("Host", "Guest"):
             script = root / f"{who}.txt"
             script.write_text(menu_script(who, port), encoding="utf-8")
-            runs[who] = make_run(repo, ["-menu-script", script, "-num-lua-states", 4,
+            runs[who] = execution.make_run(repo, ["-menu-script", script, "-num-lua-states", 4,
                                        "-net-match-ticks", TICKS, "-net-match-report", root / f"{who}_report.json"],
                                   root / who, 480, env={"CCCP_HEADLESS": "1"})
             set_resolution(runs[who].cwd, *size)
@@ -228,6 +235,8 @@ def run_size(repo, root, size, port, expected):
         for run in runs.values():
             run.close()
     result = {"pass": bool(checks) and all(checks.values()), "checks": checks, "details": details, "pin": before}
+    receipt = execution.result() if execution else spread.read_json(root / "spread-result.json", {})
+    result.update(topology="spread", peer_boxes=receipt.get("peer_boxes", {}), spread=receipt, proof=result["pass"])
     (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result
 
@@ -238,7 +247,13 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--exe-sha256", required=True)
     parser.add_argument("--port", type=int, default=48211)
+    if spread:
+        spread.add_arguments(parser)
     args = parser.parse_args()
+    if not spread:
+        parser.error("post-match report requires the shared spread executor")
+    args.spread = True
+    spread.configure(args)
     if not 48211 <= args.port <= 48218:
         parser.error("two ports must fit 48211-48219")
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
@@ -250,6 +265,7 @@ def main():
                for index, (w, h) in enumerate(SIZES)}
     result = {"pass": all(row["pass"] for row in results.values()), "runs": results,
               "driver_sha256": sha256(__file__), "match_end": "menu -net-match-ticks 120; rematch routing required"}
+    result.update(topology="spread", peer_boxes={name: row["peer_boxes"] for name, row in results.items()}, proof=result["pass"])
     (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps({"pass": result["pass"], "out": str(root), "exe_sha256": args.exe_sha256}), flush=True)
     return 0 if result["pass"] else 1
