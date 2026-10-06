@@ -66,7 +66,14 @@ import time
 import uuid
 import zlib
 
-from run_sim_test import RUNTIME_SETTINGS, engine_executable, file_sha256
+def engine_executable(repo):
+    from run_sim_test import engine_executable as resolve
+    return resolve(repo)
+
+
+def file_sha256(path):
+    from run_sim_test import file_sha256 as digest
+    return digest(path)
 
 
 TOPOLOGY_LOCAL = "single-box: not proof"
@@ -693,7 +700,7 @@ class Run:
         source = self.repo/"Userdata/Settings.ini"
         text = source.read_text(encoding="utf-8-sig") if source.is_file() else "SettingsMan\n"
         (self.cwd/"Userdata/Settings.ini").write_text(text, encoding="utf-8")
-        from run_sim_test import seed_settings
+        from run_sim_test import RUNTIME_SETTINGS, seed_settings
         seed_settings(self, RUNTIME_SETTINGS)
         self.argv = [str(engine_executable(repo)), "-headless", *map(str, args)]
         write_json(self.out/"runtime.json", dict(executable=self.argv[0], cwd=str(self.cwd), settings_overrides=RUNTIME_SETTINGS,

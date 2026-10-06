@@ -5,12 +5,19 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+import subprocess
+import sys
 from unittest.mock import patch
 
 import spread_peers as spread
 
 
 class ContractTests(unittest.TestCase):
+    def test_pool_control_bootstrap_needs_no_caller_repository_imports(self):
+        script = "import pathlib,sys,types; p=pathlib.Path(sys.argv[1]); m=types.ModuleType('spread_peers'); m.__file__=str(p); sys.modules[m.__name__]=m; exec(compile(p.read_text(encoding='utf-8'),str(p),'exec'),m.__dict__)"
+        done = subprocess.run([sys.executable, '-I', '-c', script, str(Path(spread.__file__).resolve())], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+
     def test_peer_cannot_hide_two_engines_on_one_machine(self):
         with self.assertRaisesRegex(ValueError, "exactly one"):
             spread.Peer("host", engines=2)
