@@ -120,6 +120,7 @@ namespace RTE {
 			std::vector<uint64_t> tableVersion;
 			std::vector<uint8_t> building;
 			std::vector<uint8_t> same;
+			std::vector<uint8_t> zero;
 			std::vector<uint8_t> stillCalls;
 			std::vector<std::unique_ptr<RowBlockTable>> table;
 			std::shared_ptr<RowBlockSink> sink = std::make_shared<RowBlockSink>();
@@ -225,6 +226,7 @@ namespace RTE {
 			fresh.tableVersion.assign(blocks, 0);
 			fresh.building.assign(blocks, 0);
 			fresh.stillCalls.assign(blocks, 0);
+			fresh.zero.assign(blocks, 0);
 			fresh.table.resize(blocks);
 		}
 		RowBlockCache& cache = **found;
@@ -257,6 +259,7 @@ namespace RTE {
 					cache.same[block] = same ? 1 : 0;
 					if (!same) {
 						std::memcpy(saved, live, length);
+						cache.zero[block] = std::all_of(live, live + length, [](uint8_t byte) { return byte == 0; });
 					}
 				}
 			}
@@ -302,6 +305,11 @@ namespace RTE {
 					cache.stillCalls[block] = 0;
 				} else if (cache.stillCalls[block] < c_RowBlockStillCalls) {
 					++cache.stillCalls[block];
+				}
+				// Zero bytes only multiply FNV's state, so empty terrain needs no cold table build.
+				if (cache.zero[block]) {
+					state *= column + 1 == cache.blocksPerRow ? cache.tailPower : cache.fullPower;
+					continue;
 				}
 				if (same && cache.table[block] && cache.tableVersion[block] == cache.version[block]) {
 					const uint64_t power = column + 1 == cache.blocksPerRow ? cache.tailPower : cache.fullPower;
@@ -513,6 +521,33 @@ namespace RTE {
 			passed = passed && shapePassed;
 			std::cout << Tag << (shapePassed ? " PASS" : " FAIL") << " row_blocks_hash_as_rows width=" << width << " height=" << height
 			          << " ticks_matched=" << matched << "/" << c_Ticks << " table_folds=" << folds << (folds > 0 ? "" : " (the table path never ran)") << std::endl;
+		}
+		for (const auto& [width, height]: std::array<std::pair<int, int>, 2>{{{3840, 1080}, {4097, 7}}}) {
+			std::vector<uint8_t> pixels(static_cast<size_t>(width) * height, 0);
+			std::vector<const uint8_t*> rows(height);
+			for (int y = 0; y < height; ++y) rows[y] = pixels.data() + static_cast<size_t>(y) * width;
+			SimChecksum byRow, byBlock;
+			byBlock.m_Impl->buildRowTablesInPlace = true;
+			bool matched = true;
+			for (uint64_t tick = 1; tick <= 8; ++tick) {
+				// A hole, its restoration and a row tail exercise both directions of the empty-block transition.
+				pixels[pixels.size() / 2] = tick == 2 || tick == 3 ? 173 : 0;
+				pixels.back() = tick == 5 || tick == 6 ? 255 : 0;
+				const uint64_t prefix = random();
+				for (SimChecksum* checksum: {&byRow, &byBlock}) {
+					checksum->BeginTick(tick);
+					checksum->Update("terrain", &prefix, sizeof(prefix));
+				}
+				for (const uint8_t* row: rows) byRow.Update("terrain", row, width);
+				byBlock.UpdateRows("terrain", pixels.data(), rows.data(), width, height);
+				const Result expected = byRow.EndTick(), actual = byBlock.EndTick();
+				if (actual.total != expected.total || actual.per_subsystem != expected.per_subsystem) {
+					matched = false;
+					std::cout << Tag << " FAIL empty_rows_hash_as_bytes width=" << width << " height=" << height << " tick=" << tick << std::endl;
+				}
+			}
+			passed = passed && matched;
+			std::cout << Tag << (matched ? " PASS" : " FAIL") << " empty_rows_hash_as_bytes width=" << width << " height=" << height << " ticks=8" << std::endl;
 		}
 		{
 			// A world with no actors feeds no actor subsystems; its row still names every subsystem, the total unchanged.
