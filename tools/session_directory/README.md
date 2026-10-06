@@ -115,7 +115,7 @@ distributing a new game build**: a positive-generation world resume against the
 old service receives 409 and reads as superseded.
 
 1. Stop the old service. Recreate the project's disposable test worlds.
-2. Start the new service on loopback with its normal TLS arguments, `--caller-mode tunnel`,
+2. Start the new service on loopback behind the existing tunnel with `--insecure-http`, `--caller-mode tunnel`,
    `--owner-state /Users/erol/cortex-directory/world-owners.json`, and
    `--create-owner-key` once. The Cloudflare edge must overwrite
    `CF-Connecting-IP`; missing or invalid addresses receive 400. Direct deployments
@@ -126,7 +126,7 @@ old service receives 409 and reads as superseded.
    The public deployment's first-start command is:
 
    ```bash
-   /usr/bin/python3 /Users/erol/cortex-directory/session_directory.py --bind 127.0.0.1 --port 8443 --caller-mode tunnel --cert /Users/erol/cortex-directory/cert.pem --key /Users/erol/cortex-directory/key.pem --log-file /Users/erol/cortex-directory/logs/session-directory.log --owner-state /Users/erol/cortex-directory/world-owners.json --create-owner-key
+   /usr/bin/python3 /Users/erol/cortex-directory/session_directory.py --bind 127.0.0.1 --port 8443 --caller-mode tunnel --insecure-http --log-file /Users/erol/cortex-directory/logs/session-directory.log --owner-state /Users/erol/cortex-directory/world-owners.json --create-owner-key
    ```
 3. Remove the one-time create flag. Keep `world-owners.key` and `world-owners.json`
    permanently, back them up together, and preserve `world-owners.pending.json`
