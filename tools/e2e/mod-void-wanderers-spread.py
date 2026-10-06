@@ -59,7 +59,7 @@ def main():
     parser.add_argument("--out", type=Path)
     parser.add_argument("--case", choices=["purge-view", "team-change", "held-switch", "camera"])
     parser.add_argument("--boundary", choices=["single", "pair", "local", "nested", "revived"])
-    parser.add_argument("--peer-boxes")
+    parser.add_argument("--peer-boxes", required=True, help="the caller names every peer box")
     parser.add_argument("--host-os", choices=["windows", "linux", "darwin", "any"], default="windows")
     parser.add_argument("--network", choices=["ice", "direct"], default="ice")
     parser.add_argument("--port", type=int, default=47650)
@@ -143,7 +143,7 @@ def main():
 
     driver.run_one = run_scene
     remaining = options.arguments[1:] if options.arguments[0] == "--" else options.arguments
-    sys.argv = [str(options.driver), "--repo", str(repo), "--spread", *remaining]
+    sys.argv = [str(options.driver), "--repo", str(repo), "--peer-boxes", options.peer_boxes, *remaining]
     return driver.main()
 
 
