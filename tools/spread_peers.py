@@ -15,7 +15,16 @@ Peer.held declares any target of a hold or stall lever before allocation.
 Peer.recorder requires the controller's private Windows video recorder.
 Peer.readback permits the named reviewed screen's native readback.
 Every peer must be named in peer_boxes, by actual name or host/seatN alias.
-The lead supplies those boxes; this interface never chooses another box.
+A value may contain the lead's first and second named boxes (BOX|SECOND).
+Only those candidates are tried, in that order; the next is tried only after
+NO or the first candidate's runner-wait expires. Input/hash/root/port conflicts
+remain case defects and never trigger an alternative. Sharing, native OS and
+reviewed-recorder policy are checked on the actual assignment. Receipts retain
+requested_peer_boxes and route_attempts alongside the actual peer_boxes.
+The lead supplies those boxes; this interface never chooses an unnamed box.
+Peer.task_slot, Match.parameters["peer_task_slots"], or --peer-task-slot PEER=N
+may pin a registered Windows payload slot named by the lead. No slot is claimed
+through preparation; its ownership is checked before the payload is changed.
 Extra assignments for another arm are unused, as in the published interface.
 The case supplies arguments, environment and fixtures through Peer or by calling
 case.make_run() in ``drive(case)``. ``match`` is a Match with the game's port,
@@ -63,7 +72,7 @@ Live result-root and port conflicts refuse "RUN ROOT CONFLICT" and
 "PORT CONFLICT <port>", naming the box and conflicting peer/case. Native
 ownership markers use the existing facts writer and capacity mutex; no queue
 or placement layer is added. INTERFACE_VERSION is recorded in each result.
-Any native refusal is returned for the lead to route; no other box is tried.
+Exhausted named candidates return their boxes and exact reasons to the lead.
 No case assertion, oracle, timeout or default single-box launch is changed.
 Peer.output_name optionally declares an existing non-ASCII output directory;
 make_run(..., role=...) also accepts its declared logical peer explicitly.
@@ -212,8 +221,11 @@ class Peer:
     held: bool = False
     recorder: bool = False
     readback: bool = False
+    task_slot: int | None = None
 
     def __post_init__(self):
+        if self.task_slot is not None and (type(self.task_slot) is not int or self.task_slot < 1):
+            raise ValueError('task_slot must name a positive native session slot')
         if not re.fullmatch(r"[A-Za-z0-9_-]+", self.name):
             raise ValueError("peer name must be a safe path component")
         if self.engines != 1:
@@ -386,13 +398,14 @@ def directory_endpoint(value):
 def add_arguments(parser):
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--spread", action="store_true", help="retired: the lead must name every peer with --peer-boxes")
-    group.add_argument("--peer-boxes", help="host=BOX,seat2=BOX,... (actual peer names also accepted)")
+    group.add_argument("--peer-boxes", help="host=BOX|SECOND,seat2=BOX,... (only lead-named boxes; actual peer names accepted)")
     parser.add_argument("--pool-dispatcher", type=Path, help="compatible hint to the existing per-box transport kit; never executed")
     parser.add_argument("--pool-registry", type=Path, help="box facts for the lead's named peers")
     parser.add_argument("--runner-label", help="the lead's exact label for the native run holder")
     parser.add_argument("--runner-wait", type=float, help="the lead's wait in seconds for the existing local holder")
     parser.add_argument("--wait-for-holder", help="exact holder label the lead explicitly authorized waiting behind")
     parser.add_argument("--peer-port", action="append", default=[], metavar="PEER=PORT", help="explicit peer match port (also supports a wrong-parameter detecting run)")
+    parser.add_argument('--peer-task-slot', action='append', default=[], metavar='PEER=SLOT', help='the lead\'s registered Windows session slot')
 
 
 def enabled(options=None):
@@ -456,8 +469,8 @@ def role_value(values, names, name):
     return next((values[key] for key in aliases if key in values), None)
 
 
-def named_peer_boxes(peers, values):
-    """Validate the lead's complete assignment before contacting any box."""
+def named_peer_choices(peers, values):
+    """Parse only the lead's ordered named candidates; no catalog ranking."""
     names = [peer.name for peer in peers]
     assignments = {}
     for index, name in enumerate(names):
@@ -467,11 +480,27 @@ def named_peer_boxes(peers, values):
             raise SpreadUsageError()
         if len({box.casefold() for box in boxes}) != 1:
             raise SpreadUsageError(f"conflicting boxes for peer {name}")
-        assignments[name] = next(iter(boxes))
+        choices = tuple(part.strip() for part in next(iter(boxes)).split('|'))
+        if not 1 <= len(choices) <= 2 or any(not part for part in choices) or len({part.casefold() for part in choices}) != len(choices):
+            raise SpreadUsageError(f'peer {name} needs one or two distinct named boxes')
+        assignments[name] = choices
+    return assignments
+
+
+def sharing_reason(peers, assignments, name, box):
+    siblings = [peer for peer in peers if assignments.get(peer.name, '').casefold() == box.casefold() and peer.name != name]
+    peer = next(peer for peer in peers if peer.name == name)
+    if siblings and not all(other.share_ok for other in [peer, *siblings]):
+        return 'TWO PEERS ON ONE BOX WITHOUT share_ok'
+
+
+def named_peer_boxes(peers, values):
+    """Keep complete one-box calls unchanged; ranked candidates resolve at admission."""
+    choices = named_peer_choices(peers, values)
+    assignments = {name: boxes[0] for name, boxes in choices.items()}
     for peer in peers:
         box = assignments[peer.name]
-        siblings = [other for other in peers if assignments[other.name].casefold() == box.casefold()]
-        if len(siblings) > 1 and not all(other.share_ok for other in siblings):
+        if all(len(boxes) == 1 for boxes in choices.values()) and sharing_reason(peers, assignments, peer.name, box):
             error = SpreadRefusal(f"spread peer {peer.name} on {box}: TWO PEERS ON ONE BOX WITHOUT share_ok")
             error.peer, error.box, error.reason = peer.name, box, "TWO PEERS ON ONE BOX WITHOUT share_ok"
             raise error
@@ -1374,54 +1403,89 @@ class Case:
         return backend
 
     def allocate(self):
+        self.peer_choices = named_peer_choices(self.peers, self.pins)
         self.assigned_boxes = named_peer_boxes(self.peers, self.pins)
-        identities = {}
-        catalog = self.pool.load_registry(self.registry)["boxes"]
-        boxes = {box["name"].casefold(): box for box in catalog}
+        self.route_attempts, self.route_indices, self.retired_members = {}, {}, []
         for peer in self.peers:
-            pin = self.assigned_boxes[peer.name]
-            box = boxes.get(pin.casefold())
-            if not box:
-                raise self.refuse(peer.name, pin, "named box is absent from the catalog")
-            self.assigned_boxes[peer.name] = box["name"]
-            if peer.recorder and not (box["kind"] == "local" and box["os"] == "windows"):
-                raise self.refuse(peer.name, box["name"], "reviewed screen requires the controller's private Windows recorder")
-            if peer.quiet and box.get("timing") is False:
-                raise self.refuse(peer.name, pin, "catalog does not permit timing measurements on this box")
             port = int(role_value(self.peer_ports, self.names, peer.name) or self.match.port)
             if port != self.match.port:
-                raise self.refuse(peer.name, box["name"], f"match port {port} differs from host port {self.match.port}")
+                raise self.refuse(peer.name, self.assigned_boxes[peer.name],
+                                  f'match port {port} differs from host port {self.match.port}')
         for peer in self.peers:
-            box = boxes[self.assigned_boxes[peer.name].casefold()]
-            backend = self.backend()
+            self.allocate_peer(peer)
+        self.check_identities({name:dict(machine_id=item[0]['hostname'].casefold()) for name,item in self.members.items()})
+
+    def allocate_peer(self, peer, start=0):
+        catalog = {box['name'].casefold():box for box in self.pool.load_registry(self.registry)['boxes']}
+        for index, pin in enumerate(self.peer_choices[peer.name][start:], start):
+            box = catalog.get(pin.casefold())
+            if not box:
+                raise self.refuse(peer.name, pin, 'named box is absent from the catalog')
+            box = dict(box)
+            slots = self.match.parameters.get('peer_task_slots', pairs(getattr(_options, 'peer_task_slot', [])))
+            task_slot = peer.task_slot or role_value(slots, self.names, peer.name)
+            if task_slot is not None:
+                box['requested_task_slot'] = int(task_slot)
+            other_assignments = {name:item[0]['name'] for name,item in self.members.items() if name != peer.name}
+            reason = sharing_reason(self.peers, other_assignments, peer.name, box['name'])
+            if peer.recorder and not (box['kind'] == 'local' and box['os'] == 'windows'):
+                reason = "reviewed screen requires the controller's private Windows recorder"
+            if peer.quiet and box.get('timing') is False:
+                reason = 'catalog does not permit timing measurements on this box'
             needs = self.pool.Needs(os=peer.os, engines=peer.engines, gpu=bool(peer.size), memory=peer.memory,
-                                    alone=peer.quiet, size=peer.size, only_box=box["name"],
-                                    case_id=self.id, peer_id=peer.name, share_ok=peer.share_ok, reviewed=peer.reviewed or peer.recorder, held=peer.held)
-            if reason := self.pool.static_reason(box, needs):
-                raise self.refuse(peer.name, box["name"], reason)
-            caller_lane = peer.lane or self.match.parameters.get("lane")
-            label = self.match.parameters.get("label") or getattr(_options, "runner_label", None) or (f"{caller_lane}: spread" if caller_lane else "spread")
+                                    alone=peer.quiet, size=peer.size, only_box=box['name'],
+                                    case_id=self.id, peer_id=peer.name, share_ok=peer.share_ok,
+                                    reviewed=peer.reviewed or peer.recorder, held=peer.held)
+            reason = reason or self.pool.static_reason(box, needs)
+            attempt = dict(box=box['name'], rank=index+1, status='NO' if reason else 'CHECKING')
+            self.route_attempts.setdefault(peer.name, []).append(attempt)
+            if reason:
+                attempt['reason'] = reason
+                continue
+            caller_lane = peer.lane or self.match.parameters.get('lane')
+            label = self.match.parameters.get('label') or getattr(_options, 'runner_label', None) or (f'{caller_lane}: spread' if caller_lane else 'spread')
             request = dict(run_id=uuid.uuid4().hex, token=uuid.uuid4().hex, label=label,
                            lane=caller_lane or self.lane, case_id=self.id, peer_id=peer.name,
                            owner=dict(pid=os.getpid(), machine=self.transport_module.worker.facts.machine_name(),
-                                      process_start=self.transport_module.worker.facts.process_start(os.getpid())),
-                           out=str(self.control/peer.name/"results"), command=[], hang_guard=max(600, peer.timeout + 300))
+                                      process_start=self.transport_module.worker.facts.process_start(os.getpid())))
+            if hasattr(self, 'control'):
+                request.update(out=str(self.control/peer.name/'results'), command=[], hang_guard=max(600, peer.timeout+300))
+            backend = self.backend()
+            wait = self.match.parameters.get('runner_wait', getattr(_options, 'runner_wait', 0))
+            retry = bind_admission_transport(backend, box, needs, wait)
             try:
-                wait = self.match.parameters.get("runner_wait", getattr(_options, "runner_wait", 0))
-                bind_admission_transport(backend, box, needs, wait)
-                state = backend.probe(box, read_only=True)
-                holder = self.match.parameters.get("wait_for_holder", getattr(_options, "wait_for_holder", None))
-                claim = claim_named_peer(backend, box, needs, request, wait=wait, wait_for_holder=holder)
-            except Exception as error:
-                raise self.refuse(peer.name, box["name"], str(error)) from error
+                state = retry.call(lambda:backend.probe(box, read_only=True))
+                claim = claim_named_peer(backend, box, needs, request, wait=wait,
+                                        wait_for_holder=self.match.parameters.get('wait_for_holder', getattr(_options, 'wait_for_holder', None)))
+            except RuntimeError as error:
+                attempt.update(status='WAIT EXPIRED' if isinstance(error, AdmissionExpired) else 'NO', reason=str(error))
+                if isinstance(error, AdmissionExpired) or hard_admission_refusal(error):
+                    continue
+                raise self.refuse(peer.name, box['name'], str(error)) from error
             claim.update(control=backend.control(box), started=time.time(), needs=needs.__dict__, runner_wait=wait)
+            box['hostname'] = box.get('hostname') or state.get('hostname')
+            if not box['hostname']:
+                raise self.refuse(peer.name, box['name'], 'native machine identity is unavailable')
             self.members[peer.name] = (box, claim, request, backend)
-            print(f"NAMED: {box['name']}; peer {peer.name}", flush=True)
-            hostname = box.get("hostname") or state.get("hostname")
-            if not hostname:
-                raise self.refuse(peer.name, box["name"], "native machine identity is unavailable")
-            identities[peer.name] = dict(machine_id=hostname.casefold())
-        self.check_identities(identities)
+            self.assigned_boxes[peer.name], self.route_indices[peer.name] = box['name'], index
+            attempt['status'] = 'ADMITTED'
+            print(f"NAMED: {box['name']}; peer {peer.name}; rank {index+1}", flush=True)
+            return
+        attempted = self.route_attempts[peer.name]
+        reasons = '; '.join(f"{row['box']} -> {row.get('reason', row['status'])}" for row in attempted)
+        raise self.refuse(peer.name, attempted[-1]['box'], reasons if len(attempted)>1 else attempted[-1]['reason'])
+
+    def fallback_peer(self, name, error):
+        if not (isinstance(error, AdmissionExpired) or hard_admission_refusal(error)):
+            return False
+        index = self.route_indices[name]+1
+        if index >= len(self.peer_choices[name]):
+            return False
+        old = self.members.pop(name)
+        self.retired_members.append(old)
+        self.route_attempts[name][-1].update(status='WAIT EXPIRED' if isinstance(error, AdmissionExpired) else 'NO', reason=str(error))
+        self.allocate_peer(next(peer for peer in self.peers if peer.name == name), index)
+        return True
 
     def check_identities(self, identities):
         from cross_peers import require_distinct_machines
@@ -1458,35 +1522,52 @@ class Case:
     def prepare(self):
         self.input_snapshot = self.members[self.names[0]][3].committed_inputs()
         for name in self.names:
-            box, claim, request, backend = self.members[name]
-            backend.active_claim, backend.active_box = claim, box
-            backend.snapshot = getattr(self, "input_snapshot", None)
-            backend.prepare(box, claim, request)
-            if getattr(self, "preflight_source", None):
-                backend.rpc(box, "install", dict(root=claim["control"], sources={"cross_peers.py": self.preflight_source}))
-            self.input_snapshot = backend.snapshot
-            if claim["head"] != self.input_snapshot["head"]:
-                raise self.refuse(name, box["name"], "source changed after the case input snapshot was frozen")
-            native_root = box["scratch"].rstrip("/") + "/" + self.lane + "/native-" + self.id
-            claim["case_root"] = native_root
-            # Keep the driver's game port outside the pool's control assignment.
-            if self.match.port in range(*[claim["ports"][0], claim["ports"][1] + 1]):
-                raise self.refuse(name, box["name"], "driver match port overlaps the pool's control port map")
-            self.guard()
-        windows_hashes = {claim["exe_sha256"] for box, claim, _, _ in self.members.values() if box["os"] == "windows"}
+            while True:
+                try:
+                    self.prepare_peer(name)
+                    break
+                except RuntimeError as error:
+                    if hasattr(self, 'peer_choices') and self.fallback_peer(name, error):
+                        continue
+                    box = self.members[name][0]
+                    if hasattr(self, 'refuse'):
+                        raise self.refuse(name, box['name'], str(error)) from error
+                    raise
+        self.check_prepared_hashes()
+        if hasattr(self, 'peer_choices'):
+            self.check_identities({name:dict(machine_id=item[0]['hostname'].casefold()) for name,item in self.members.items()})
+
+    def check_prepared_hashes(self):
+        windows_hashes = {claim['exe_sha256'] for box,claim,_,_ in self.members.values()
+                          if box['os'] == 'windows' and claim.get('exe_sha256')}
         if len(windows_hashes) > 1:
-            raise SpreadRefusal("Windows executable changed between peer shipments")
-        wait = self.match.parameters.get("runner_wait", getattr(_options, "runner_wait", 0))
-        for name in self.names:
-            box, claim, _, backend = self.members[name]
-            if not wait or box["kind"] != "local":
-                continue
-            try:
-                wait_named_launch(self.transport_module.worker, self.pool, box, claim,
-                                  wait=backend.admission_wait.remaining() if hasattr(backend, 'admission_wait') else wait,
-                                  wait_for_holder=self.match.parameters.get("wait_for_holder", getattr(_options, "wait_for_holder", None)))
-            except SpreadRefusal as error:
-                raise self.refuse(name, box["name"], str(error)) from error
+            raise SpreadRefusal('Windows executable changed between peer shipments')
+
+    def prepare_peer(self, name):
+        box, claim, request, backend = self.members[name]
+        backend.active_claim, backend.active_box = claim, box
+        backend.snapshot = self.input_snapshot
+        backend.prepare(box, claim, request)
+        if getattr(self, 'preflight_source', None):
+            backend.rpc(box, 'install', dict(root=claim['control'], sources={'cross_peers.py':self.preflight_source}))
+        if claim['head'] != self.input_snapshot['head']:
+            raise SpreadRefusal('source changed after the case input snapshot was frozen')
+        claim['case_root'] = box['scratch'].rstrip('/')+'/'+self.lane+'/native-'+self.id
+        if self.match.port in range(claim['ports'][0], claim['ports'][1]+1):
+            raise SpreadRefusal('driver match port overlaps the pool control port map')
+        if hasattr(backend, 'admission_wait') and hasattr(self.pool, 'live_reason'):
+            needs, retry = self.pool.Needs(**claim['needs']), backend.admission_wait
+            while True:
+                retry.probe_started()
+                state = backend.probe(box, read_only=True, refresh_display=False)
+                reason = named_live_reason(self.pool.live_reason, box, needs, state)
+                if not reason:
+                    break
+                if not retry.accepts(reason):
+                    raise SpreadRefusal('capacity changed before launch: '+reason)
+                retry.pause(reason)
+                self.guard()
+        self.guard()
 
     def connect_directory(self):
         self.network = self.match.parameters.get("network", "ice")
@@ -1666,6 +1747,8 @@ class Case:
         return dict(schema=1, topology="spread", interface_version=INTERFACE_VERSION,
                     native_ship_set=getattr(self, 'native_ship_set', {}),
                     peer_boxes=getattr(self, "assigned_boxes", {name: item[0]["name"] for name, item in self.members.items()}),
+                    requested_peer_boxes=getattr(self, 'pins', {}),
+                    route_attempts=getattr(self, 'route_attempts', {}),
                     interface_sha256=self.interface_sha256,
                     preflight_sha256=hashlib.sha256(self.preflight_source.encode()).hexdigest() if getattr(self, "preflight_source", None) else None,
                     sharing={peer.name: dict(share_ok=peer.share_ok, reviewed=peer.reviewed, held=peer.held, quiet=peer.quiet,
@@ -1701,6 +1784,8 @@ class Case:
                 handle = self.runs.get(name)
                 if handle and (handle.started or getattr(handle, "launch_attempted", False)) and not handle.finished:
                     cleanup.callback(backend.stop, box, claim)
+            for box, claim, _, backend in getattr(self, 'retired_members', []):
+                cleanup.callback(backend.release, box, claim)
             self.save()
 
     def release_pending(self, role=None):

@@ -15,6 +15,7 @@ import spread_peers as spread
 from test_named_spread import NamedRoutingTests
 from test_peer_run_guards import PeerRunGuardTests
 from test_spread_admission import TransientTests
+from test_spread_ranked import RankedTests
 
 
 class ContractTests(unittest.TestCase):
