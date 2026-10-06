@@ -25736,6 +25736,16 @@ namespace {
 			survivorCapsule = successorCapsule; survivorCapsule.peerId = 3;
 			if (!host.SealMigrationCapsule(2, successorCapsule.configHash, successorCapsule.sealedState) ||
 			    !host.SealMigrationCapsule(3, survivorCapsule.configHash, survivorCapsule.sealedState)) return done("the host did not seal the removal's capsules");
+			Reset(); host.m_Coordinator.reset(&round.peers[1]);
+			if (!Install(host, round, admission, 2, &round.failure) || !host.OpenMigrationCapsule(successorCapsule))
+				return done("the prospective successor did not open the removal's capsule");
+			const auto successorAdmission = host.m_MigrationAdmissionState;
+			const auto successorClient = host.m_ReconnectClient;
+			const auto successorKey = host.m_MigrationKey;
+			const auto successorRow = host.m_DirectoryRow;
+			const auto successorMembers = host.m_MigrationMembers;
+			const auto successorAuthority = host.m_MigrationAuthority;
+			const auto successorGeneration = host.m_MigrationGeneration;
 			Reset(); host.m_Coordinator.reset(&round.peers[2]);
 			if (!Install(host, round, admission, 3, &round.failure) || !host.OpenMigrationCapsule(survivorCapsule))
 				return done("the other survivor did not carry the removal's capsule");
@@ -25746,8 +25756,10 @@ namespace {
 			const auto carried = host.m_MigrationAdmissionState;
 			survivorWire = std::move(host.m_MigratedTransport); round.peers[2].SetSessionEventSink({});
 			Reset(); host.m_Coordinator.reset(&round.peers[1]);
-			if (!Install(host, round, admission, 2, &round.failure) || !host.OpenMigrationCapsule(successorCapsule))
-				return done("the prospective successor did not open the removal's capsule");
+			if (!Install(host, round, admission, 2, &round.failure)) return done(round.failure);
+			host.m_MigrationAdmissionState = successorAdmission; host.m_ReconnectClient = successorClient;
+			host.m_MigrationKey = successorKey; host.m_DirectoryRow = successorRow;
+			host.m_MigrationMembers = successorMembers; host.m_MigrationAuthority = successorAuthority; host.m_MigrationGeneration = successorGeneration;
 			host.PumpHostMigration();
 			if (!host.m_IsHost || !round.peers[1].HasHeldAISeat(4)) return done("the successor did not keep seat four held");
 			if (!host.m_SeatAuth.MatchesActiveCredential(ticket.stableSeat, ticket.holderGeneration, ticket.credential))
