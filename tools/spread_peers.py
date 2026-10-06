@@ -850,6 +850,9 @@ def wait_named_launch(worker, pool, box, claim, *, wait=0, wait_for_holder=None)
         reason = pool.live_reason(box, needs, state)
         if not reason:
             return
+        if pool.live_reason(box, needs, holder_preflight_state(box, state)) is None:
+            # A live local owner is admitted by the holder's queue, not here.
+            return
         if cpu.accepts(reason):
             cpu.pause(reason)
             worker.renew_claim(claim)
@@ -877,8 +880,19 @@ def live_owned_window(reason):
 
 
 def holder_preflight_state(box, state):
-    if box["kind"] == "local" and live_owned_window(state.get("refusal") or ""):
-        return dict(state, refusal=None, alone=False)
+    if box["kind"] != "local":
+        return state
+    reason = state.get("refusal") or ""
+    window = live_owned_window(reason)
+    if reason and not window:
+        return state
+    jobs = state.get("jobs", ())
+    def live(job):
+        return bool(job.get("alone") and type(job.get("pid")) is int and job["pid"] > 0
+                    and job.get("machine") and job.get("process_start"))
+    if window or any(live(job) for job in jobs):
+        return dict(state, refusal=None, alone=False,
+                    jobs=[dict(job, alone=False) if live(job) else job for job in jobs])
     return state
 
 

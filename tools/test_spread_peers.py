@@ -334,6 +334,18 @@ class ContractTests(unittest.TestCase):
         state['refusal'] = 'box launch refused: bare-marker; owner=unrecorded owner; since now'
         self.assertIs(spread.holder_preflight_state(dict(kind='local'), state), state)
 
+    def test_live_native_alone_claim_defers_but_keeps_its_engine_reservation(self):
+        job = dict(alone=True,pid=9,process_start=1,machine='RecorderBox',engines=1,case_id='another-case')
+        state = dict(refusal=None,alone=False,jobs=[job],free_gb=11,engines=4)
+        updated = spread.holder_preflight_state(dict(kind='local'), state)
+        self.assertFalse(updated['jobs'][0]['alone'])
+        self.assertEqual(updated['jobs'][0]['engines'],1)
+        self.assertEqual(updated['jobs'][0]['case_id'],'another-case')
+        self.assertEqual((updated['free_gb'],updated['engines']),(11,4))
+        self.assertTrue(job['alone'])
+        bare = dict(state,jobs=[dict(alone=True,engines=1)])
+        self.assertIs(spread.holder_preflight_state(dict(kind='local'),bare),bare)
+
     def test_explicit_task_keeps_only_the_registered_named_payload(self):
         slots = [dict(slot=1, task='session-one'), dict(slot=2, task='session-two')]
         box = dict(name='HostBox', kind='windows-task', task_slots=slots, engines_max=4)
