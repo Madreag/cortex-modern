@@ -14,6 +14,7 @@ from unittest.mock import patch
 import spread_peers as spread
 from test_named_spread import NamedRoutingTests
 from test_peer_run_guards import PeerRunGuardTests
+from test_spread_admission import TransientTests
 
 
 class ContractTests(unittest.TestCase):
@@ -98,7 +99,7 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(clock[0], wait)
                 self.assertTrue(marker.exists())
 
-    def test_ownerless_exclusive_marker_refuses_by_name_without_wait_or_archive(self):
+    def test_ownerless_exclusive_marker_waits_to_budget_and_preserves_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
             box, marker, probe = self.exclusive_fake(Path(temporary), [0.0], live=False)
             claim = dict(token='owned', needs=dict(peer_id='host', alone=False), runner_wait=60)
@@ -108,7 +109,9 @@ class ContractTests(unittest.TestCase):
                 raise RuntimeError('capacity refused: '+reason(target, needs, probe(target)))
             worker = SimpleNamespace(capacity_state=probe, renew_claim=unittest.mock.Mock())
             pool = SimpleNamespace(Needs=lambda **values:SimpleNamespace(**values), live_reason=reason)
-            with patch.object(spread.time, 'sleep') as sleep:
+            clock = [0.0]
+            with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+                 patch.object(spread.time, 'sleep', side_effect=lambda seconds:clock.__setitem__(0, clock[0]+seconds)) as sleep:
                 for phase in ('claim', 'prepared', 'final'):
                     with self.subTest(phase=phase), self.assertRaisesRegex(RuntimeError, 'ownerless exclusive marker.*exclusive.lock'):
                         if phase == 'claim':
@@ -119,8 +122,8 @@ class ContractTests(unittest.TestCase):
                             with spread.named_launch_capacity(box, needs, claim, probe=probe, live_reason=reason,
                                     mutex=lambda *args, **kwargs:contextlib.nullcontext(), root=Path(temporary), renew=worker.renew_claim):
                                 self.fail('an ownerless marker cannot launch')
-                sleep.assert_not_called()
-                worker.renew_claim.assert_not_called()
+                self.assertEqual(clock[0], 180)
+                self.assertTrue(sleep.called)
             self.assertEqual(marker.read_text(), 'owner evidence')
 
     def test_worker_exclusive_extension_runs_before_main_and_keeps_positional_probe_calls(self):
@@ -183,9 +186,10 @@ class ContractTests(unittest.TestCase):
                         with self.assertRaisesRegex(spread.SpreadRefusal, 'ownerless exclusive marker.*quiet.lock'):
                             spread.claim_native_exclusive_marker(box, claim, marker, 'own window', facts=facts,
                                                                  renew=lambda value:renewals.append(value))
-                        sleep.assert_not_called()
+                        self.assertEqual(clock[0], 60)
+                        self.assertTrue(sleep.called)
                         self.assertEqual(marker.read_text(), 'previous owner evidence')
-                        self.assertEqual((writes, renewals), ([], []))
+                        self.assertEqual(writes, [])
 
     def test_direct_host_route_to_named_lan_peer_does_not_select_its_overlay(self):
         with patch.object(spread.sys, 'platform', 'win32'), \
@@ -327,7 +331,7 @@ class ContractTests(unittest.TestCase):
                              (True, [(100, 1), (20, 1), (20, 0)])):
             with self.subTest(quiet=quiet):
                 clock, locked, launched, seen, renewed = [0.0], [False], [], [], []
-                box, claim = dict(name='NAMED', kind='local'), dict(token='owned')
+                box, claim = dict(name='NAMED', kind='local'), dict(token='owned', runner_wait=90)
                 needs = SimpleNamespace(peer_id='host', alone=quiet)
                 @contextlib.contextmanager
                 def mutex(*args, **kwargs):
@@ -351,7 +355,7 @@ class ContractTests(unittest.TestCase):
                 def sleep(seconds):
                     self.assertFalse(locked[0])
                     self.assertEqual(launched, [])
-                    self.assertEqual(seconds, 20)
+                    self.assertIn(seconds, (0, 20))
                     clock[0] += seconds
                 with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
                      patch.object(spread.time, 'sleep', side_effect=sleep):
@@ -359,14 +363,14 @@ class ContractTests(unittest.TestCase):
                             mutex=mutex, root=Path('/own'), renew=lambda value:renewed.append(value)) as state:
                         self.assertTrue(locked[0])
                         launched.append(state)
-                self.assertEqual(seen, [0, 30, 60] if quiet else [0, 30])
+                self.assertEqual(seen, [0, 30, 40] if quiet else [0, 30])
                 self.assertEqual(renewed, [claim]*(len(seen)-1))
                 self.assertEqual(len(launched), 1)
                 self.assertFalse(locked[0])
 
     def test_capacity_lock_waits_forty_seconds_then_launches_within_the_runner_budget(self):
         for wait, held, expected in ((1800, 40, 'start'), (20, 40, 'expire'),
-                                     (1800, 200, 'expire'), (0, 40, 'legacy')):
+                                     (1800, 200, 'start'), (0, 40, 'legacy')):
             with self.subTest(wait=wait, held=held):
                 clock, locked, starts, budgets = [0.0], [False], [], []
                 box = dict(name='NAMED', kind='local')
@@ -393,18 +397,18 @@ class ContractTests(unittest.TestCase):
                         with spread.named_launch_capacity(box, needs, claim, probe=probe, live_reason=lambda *args:None,
                                 mutex=mutex, root=Path('/named'), renew=lambda value:None):
                             starts.append(clock[0])
-                        self.assertEqual(starts, [40])
-                        self.assertEqual(budgets, [180])
+                        self.assertEqual(starts, [held])
+                        self.assertEqual(budgets, [180] if held == 40 else [180, 180])
                     else:
-                        with self.assertRaisesRegex(RuntimeError, r'NAMED.*host.*capacity.lock.*expired'):
+                        with self.assertRaisesRegex(RuntimeError, r'NAMED.*host.*expired.*capacity.lock'):
                             with spread.named_launch_capacity(box, needs, claim, probe=probe, live_reason=lambda *args:None,
                                     mutex=mutex, root=Path('/named'), renew=lambda value:None):
                                 self.fail('capacity lock cannot admit before it is free')
                         self.assertEqual(starts, [])
-                        self.assertEqual(clock[0], 15 if expected == 'legacy' else min(wait,180))
+                        self.assertEqual(clock[0], 0 if expected == 'legacy' else wait)
                 self.assertFalse(locked[0])
 
-    def test_named_cpu_retry_expires_after_ten_minutes_and_preserves_other_guards(self):
+    def test_named_cpu_retry_uses_runner_budget_and_preserves_hard_guards(self):
         clock = [0.0]
         box = dict(name='NAMED', kind='posix')
         needs = SimpleNamespace(peer_id='seat2', alone=False)
@@ -412,10 +416,10 @@ class ContractTests(unittest.TestCase):
         backend = SimpleNamespace(rpc=unittest.mock.Mock(side_effect=RuntimeError(reason)))
         with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
              patch.object(spread.time, 'sleep', side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)):
-            with self.assertRaisesRegex(spread.SpreadRefusal, 'expired after 600s.*CPU 100'):
-                spread.claim_named_peer(backend, box, needs, {})
-        self.assertEqual(clock[0], 600)
-        self.assertEqual(backend.rpc.call_count, 21)
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'expired after 10s.*CPU 100'):
+                spread.claim_named_peer(backend, box, needs, {}, wait=10)
+        self.assertEqual(clock[0], 10)
+        self.assertEqual(backend.rpc.call_count, 2)
         self.assertTrue(all(call.args[0] is box for call in backend.rpc.call_args_list))
         for refusal in ('capacity refused: live engine capacity is in use',
                         'capacity refused: free memory 11 GB is below floor 12 GB'):
@@ -503,7 +507,7 @@ class ContractTests(unittest.TestCase):
         with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
              patch.object(spread.time, 'sleep', side_effect=sleep), \
              spread.named_engine_cpu_wait(load, dict(name='NAMED'), SimpleNamespace(peer_id='host', alone=False),
-                                          lambda:renewed.append('owned')):
+                                          lambda:renewed.append('owned'), wait=90):
             with load.admission(['engine'], {}, record, lambda:None):
                 self.assertTrue(entered[0])
                 self.assertNotIn('not_started', record)
@@ -570,7 +574,7 @@ class ContractTests(unittest.TestCase):
 
     def test_post_shipment_wait_preserves_real_refusals(self):
         for reason in ('free memory 11 GB is below floor 12 GB',
-                       'box launch refused; owner=other (pid=7); since now'):
+                       'PORT CONFLICT 51580; case other'):
             worker = SimpleNamespace(capacity_state=unittest.mock.Mock(return_value={'reason':reason}),
                                      renew_claim=unittest.mock.Mock())
             pool = SimpleNamespace(Needs=lambda **values:SimpleNamespace(**values),
@@ -628,9 +632,9 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(claim, dict(token='owned'))
         self.assertEqual([call.args[0] for call in backend.rpc.call_args_list], [box, box, box])
 
-    def test_named_wait_never_retries_a_floor_or_unknown_marker_refusal(self):
+    def test_named_wait_never_retries_a_floor_or_port_conflict(self):
         for reason in ('capacity refused: free memory 11 GB is below floor 12 GB',
-                       'capacity refused: box launch refused: other-marker; owner=other (pid=9); since now'):
+                       'capacity refused: PORT CONFLICT 51580; case other'):
             backend = SimpleNamespace(rpc=unittest.mock.Mock(side_effect=RuntimeError(reason)))
             with self.subTest(reason=reason), patch.object(spread.time, 'sleep') as pause:
                 with self.assertRaisesRegex(RuntimeError, 'capacity refused'):
@@ -1284,10 +1288,10 @@ class ContractTests(unittest.TestCase):
             clock = [0.0]
             with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
                  patch.object(spread.time, 'sleep', side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)), \
-                 self.assertRaisesRegex(spread.SpreadRefusal, 'expired after 600s.*alone run needs an idle box'):
+                 self.assertRaisesRegex(spread.SpreadRefusal, 'expired after 0s.*alone run needs an idle box'):
                 case.allocate()
             case.stack.close()
-            self.assertEqual(events, [('probe', 'ONE')]+[('claim', 'ONE', 'in-match: spread')]*21)
+            self.assertEqual(events, [('probe', 'ONE')]+[('claim', 'ONE', 'in-match: spread')])
             self.assertEqual(case.pending, [])
 
     def test_credentials_and_tickets_do_not_travel_as_evidence(self):

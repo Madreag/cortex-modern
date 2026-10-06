@@ -77,24 +77,22 @@ Match.parameters["label"] may specify the lead's exact native holder label.
 Match.parameters["runner_wait"] or --runner-wait may specify that holder's
 wait in seconds. It updates only the existing local holder command, without
 an enclosing holder or a second slot. Engine/script timeouts remain unchanged.
-Before admission, after shipment and at the final native launch check, the same
-wait covers a live exclusive holder on the named box and the local FIFO line.
-Local ownership requires the recorded PID and process start; a foreign native
-claim requires the existing facts reader's live ownership lease. No marker is
-removed by this wait. An ownerless exclusive marker refuses by its full path.
+Admission uses one runner-wait budget on each named box, shared across probes,
+shipment and launch. NO is limited to off-limits, incompatible OS, physical
+engine ceiling, or physical free memory below the native required floor. Other
+admission conditions wait: FIFO/start spacing, exclusive holders (including an
+ownerless marker, preserved for the lead), capacity mutexes, CPU, SSH, payload
+slots, builds and quiet-box availability. Every retry checks the original
+native guard, renews this peer's ownership and releases locks between probes.
+Quiet peers launch only alone and below the strict CPU guard. Preparation
+claims retain root/control-port ownership but consume no engine share, payload
+slot or alone marker; those are acquired at native launch. The unchanged
+native engine-start mutex checks real engines and memory atomically. Root,
+port, hash and ownership conflicts remain fatal case defects. A zero wait
+allows the first guard check and no transient retries. The capacity lock uses
+at most 180 seconds per attempt within the remaining runner-wait budget.
 Match.parameters["wait_for_holder"] / --wait-for-holder remains compatible.
-Memory/engine limits and task refusals remain refusals. Waiting releases the
-capacity mutex and renews only this peer's own claim, before case timers start.
-The initial claim and final launch wait for their native capacity mutex for up
-to 180 seconds, bounded by the remaining positive runner-wait budget. An
-omitted/zero runner-wait retains the old 15-second mutex budget for old calls.
-Only an expired mutex wait refuses, naming its box, peer and lock path. The
-claim RPC has that mutex allowance in addition to its original probe budget.
-Transient CPU refusals re-probe that same named box every 30 seconds for up to
-600 seconds. Quiet peers also wait for an idle box and retain the strict CPU
-guard. The native launch check releases its capacity mutex between probes;
-the engine is never started while any guard fails. No assertion time is added.
-Peer.block_udp reserves only
+No case assertion time is added. Peer.block_udp reserves only
 declared discovery ports on that peer's native machine for the case's lever.
 The default network is ICE. Match.parameters["network"]="direct" preserves
 explicit ICE-Off/Unlisted inputs and substitutes only deliberate loopback
@@ -695,27 +693,135 @@ def launch_native(backend, box, claim, request, wait=0):
         backend.rpc = original
 
 
-class NamedCpuWait:
-    """Retry only the lead's transient CPU/quiet row, on the same named box."""
-    def __init__(self, box, needs):
-        self.box, self.needs, self.deadline, self.probed_at = box, needs, None, None
+class AdmissionExpired(SpreadRefusal):
+    """The named candidate exhausted its caller-supplied admission budget."""
+
+
+def hard_admission_refusal(reason):
+    """NO means that the named machine cannot run the peer now."""
+    text = str(reason).casefold()
+    return any(value in text for value in (
+        'off limits', 'below floor', 'operating system does not fit',
+        'live engine capacity is in use', 'engines at its ceiling',
+    )) or bool(re.search(r'needs \d+ engines; capacity is \d+', text)
+               or re.search(r'free memory .*\bneeds \d+(?:\.\d+)? gb', text))
+
+
+def transient_admission(reason):
+    """Keep input/identity defects fatal; every other admission precondition waits."""
+    text = str(reason).casefold()
+    if hard_admission_refusal(text):
+        return False
+    if any(value in text for value in ('run root conflict', 'port conflict', 'hash differs',
+                                      'owner changed', 'lost its capacity claim', 'changed owner',
+                                      'artifact changed', 'snapshot differs', 'match port ')):
+        return False
+    return any(value in text for value in (
+        'capacity refused:', 'capacity changed before launch:', 'capacity update is busy',
+        'capacity lock ', 'another run holds the box alone', 'alone run needs an idle box',
+        'earlier work request is waiting:', 'start spacing', 'box launch refused',
+        'ownerless exclusive marker', 'ssh does not answer', 'ssh failed', 'connection timed out',
+        'connection refused', 'connection reset', 'box does not answer', 'probe failed:',
+        'box answered late', 'box returned no response', 'native operation answers late',
+        'box returned an unreadable response', 'saved ssh endpoint is unavailable',
+        'native engine admission is busy', 'native load check failed',
+        'payload slots are busy', 'slot runs another payload', 'payload-submit.lock',
+        'a build is running', 'compiler shares are in use', 'test shares are in use',
+        'cpu ', 'display probe failed', 'live display is not measured',
+        'requested ',
+    ))
+
+
+class AdmissionWait:
+    """One deadline for every transient on one lead-named candidate, before its timer."""
+    def __init__(self, box, needs, wait=0, *, renew=None):
+        import math
+        self.wait = float(wait or 0)
+        if not math.isfinite(self.wait) or self.wait < 0:
+            raise ValueError('runner wait must be finite and nonnegative')
+        self.box, self.needs, self.renew = box, needs, renew
+        self.deadline = time.monotonic() + self.wait
+        self.probed_at, self.announced = None, None
+
+    def remaining(self):
+        return max(0, self.deadline-time.monotonic())
 
     def probe_started(self):
         self.probed_at = time.monotonic()
 
-    def accepts(self, reason):
-        return bool(re.fullmatch(r"CPU \d+(?:\.\d+)?% exceeds \d+(?:\.\d+)?% over the last \d+(?:\.\d+)? seconds", reason)
-                    or getattr(self.needs, "alone", False) and reason == "alone run needs an idle box")
+    def accepts(self, reason, state=None):
+        return transient_admission(reason)
 
     def pause(self, reason):
-        now = time.monotonic()
-        if self.deadline is None:
-            self.deadline = (self.probed_at if self.probed_at is not None else now) + 600
-        if now >= self.deadline:
-            raise SpreadRefusal("native CPU/quiet wait expired after 600s: " + reason)
-        print(f"WAITING CPU/QUIET: {self.box['name']}; peer {self.needs.peer_id}; {reason}", flush=True)
-        next_probe = (self.probed_at if self.probed_at is not None else now) + 30
-        time.sleep(max(0, min(next_probe-now, self.deadline-now)))
+        remaining = self.remaining()
+        if not self.wait:
+            raise AdmissionExpired(f"{self.box['name']}; peer {self.needs.peer_id}; "
+                                   f"admission wait expired after 0s: {reason}")
+        if remaining <= 0:
+            raise AdmissionExpired(f"{self.box['name']}; peer {self.needs.peer_id}; "
+                                   f"admission wait expired after {self.wait:g}s: {reason}")
+        if str(reason) != self.announced:
+            print(f"WAITING NAMED: {self.box['name']}; peer {self.needs.peer_id}; {reason}", flush=True)
+            self.announced = str(reason)
+        if self.renew:
+            self.renew()
+        interval = 30 if 'cpu ' in str(reason).casefold() else 2
+        next_probe = (self.probed_at if self.probed_at is not None else time.monotonic()) + interval
+        time.sleep(min(remaining, max(0, next_probe-time.monotonic())))
+        self.probed_at = None
+
+    def call(self, operation):
+        while True:
+            self.probe_started()
+            try:
+                return operation()
+            except AdmissionExpired:
+                raise
+            except (RuntimeError, subprocess.TimeoutExpired) as error:
+                if not isinstance(error, subprocess.TimeoutExpired) and not self.accepts(error):
+                    raise
+                self.pause(str(error))
+
+
+class NamedCpuWait(AdmissionWait):
+    """Compatible name; CPU waits now use the same runner-wait budget."""
+
+
+def real_engine_capacity(raw):
+    """A preparation claim retains its root/ports, but consumes no engine share."""
+    if 'actual_engines' not in raw:
+        return raw
+    state = dict(raw)
+    state['engines'] = state['slots_in_use'] = raw['actual_engines']
+    state['builds_in_use'] = raw.get('actual_builds', raw.get('builds_in_use', 0))
+    state['jobs'] = []
+    for job in raw.get('jobs', []):
+        value = dict(job)
+        value['preparing'] = job.get('preparing', not bool(job.get('started_engines')))
+        if value['preparing']:
+            value['alone'] = False
+            # This suppresses the kit's reservation-memory deduction. Every
+            # actual launch still probes physical memory under its native lock.
+            value['started_engines'] = value.get('engines', 0)
+        state['jobs'].append(value)
+    return state
+
+
+def named_live_reason(original, box, needs, state):
+    state = real_engine_capacity(state)
+    state = dict(state, jobs=[job for job in state.get('jobs', []) if not job.get('preparing')])
+    if state.get('present'):
+        if 'engines_max' in box and getattr(needs, 'engines', 0) + state.get('engines', 0) > box['engines_max']:
+            return 'live engine capacity is in use'
+        if 'free_floor_gb' in box:
+            required = max(box['free_floor_gb'], getattr(needs, 'memory', 0),
+                           getattr(needs, 'engines', 0)*box.get('engine_peak_gb', 3.4)+.5)
+            if state.get('free_gb', 0) < required:
+                return f"free memory {state.get('free_gb', 0):.1f} GB; needs {required:.1f} GB"
+    # A compilation is transient, even when it has not spawned an engine.
+    if state.get('builds_in_use'):
+        return original(box, needs, state) or 'a build is running on the box'
+    return original(box, needs, state)
 
 
 def exclusive_owner(path, value, facts):
@@ -736,7 +842,6 @@ def native_exclusive_state(probe, box, *, facts, root, **kwargs):
         paths = box.get('markers', {}).get(kind, [])
         markers.extend(Path(path) for path in ([paths] if isinstance(paths, str) else paths))
     paths = [(path, True) for path in markers]
-    paths.extend((path, False) for path in (Path(root)/'claims').glob('run-*.json'))
     for path, marker in paths:
         value = facts.read_reservation(path, archive=False)
         if value and ignore and value.get('token') == ignore:
@@ -751,48 +856,23 @@ def native_exclusive_state(probe, box, *, facts, root, **kwargs):
             ownerless.append(f"ownerless exclusive marker {path}; no live recorded owner")
     # An ownerless marker is evidence for the lead; the facts probe must not
     # archive it as a stale reservation. Other capacity checks stay unchanged.
-    if ownerless:
-        kwargs = dict(kwargs, read_only=True)
+    kwargs = dict(kwargs, read_only=True)
     state = probe(box, **kwargs)
     state['exclusive_holders'] = holders
     if ownerless:
         state['refusal'] = '; '.join(ownerless)
-    return state
+    return real_engine_capacity(state)
 
 
-class NamedHolderWait:
-    """Wait within the caller's existing budget, never granting admission."""
-    def __init__(self, box, needs, wait):
-        import math
-        self.wait = float(wait or 0)
-        if not math.isfinite(self.wait) or self.wait < 0:
-            raise ValueError('runner wait must be finite and nonnegative')
-        self.box, self.needs = box, needs
-        self.deadline, self.announced = time.monotonic()+self.wait, None
-
-    def accepts(self, reason, state):
-        if not self.wait:
-            return False
-        if self.box['kind'] == 'local' and reason.startswith('earlier work request is waiting: '):
-            return True
-        exclusive = reason == 'another run holds the box alone' or reason.startswith('box launch refused: ')
-        owners = state.get('exclusive_holders', [])
-        return bool(exclusive and owners and all(owner.get('live') for owner in owners))
-
-    def pause(self, reason):
-        remaining = self.deadline-time.monotonic()
-        if remaining <= 0:
-            raise SpreadRefusal(f'native holder wait expired after {self.wait:g}s: {reason}')
-        if reason != self.announced:
-            print(f"WAITING NAMED: {self.box['name']}; peer {self.needs.peer_id}; {reason}", flush=True)
-            self.announced = reason
-        time.sleep(min(2, remaining))
+class NamedHolderWait(AdmissionWait):
+    """Compatible name for the common admission path."""
 
 
 def claim_native_exclusive_marker(box, claim, marker, label, *, facts, renew):
     """Wait for a POSIX quiet holder before publishing this peer's own marker."""
     from types import SimpleNamespace
-    wait = NamedHolderWait(box, SimpleNamespace(peer_id=claim['needs']['peer_id']), claim.get('runner_wait', 0))
+    wait = AdmissionWait(box, SimpleNamespace(peer_id=claim['needs']['peer_id']),
+                         admission_seconds(claim))
     while True:
         existing = facts.read_reservation(marker, archive=False)
         if not Path(marker).exists():
@@ -802,13 +882,11 @@ def claim_native_exclusive_marker(box, claim, marker, label, *, facts, renew):
                 continue  # the atomic writer lost to a new holder; check its owner
             return
         owner = exclusive_owner(marker, existing, facts)
-        if not owner['live']:
-            raise SpreadRefusal(f'ownerless exclusive marker {marker}; no live recorded owner')
-        if existing.get('token') == claim['token']:
+        if existing and existing.get('token') == claim['token']:
             return
-        reason = f"box launch refused: {marker}; owner={owner['label']} (pid={owner['pid']}, machine={owner['machine']})"
-        if not wait.accepts(reason, dict(exclusive_holders=[owner])):
-            raise RuntimeError('another owner reserves this box alone')
+        reason = (f"box launch refused: {marker}; owner={owner.get('label')} "
+                  f"(pid={owner.get('pid')}, machine={owner.get('machine')})" if owner['live'] else
+                  f'ownerless exclusive marker {marker}; no live recorded owner')
         wait.pause(reason)
         renew(claim)
 
@@ -819,7 +897,7 @@ def capacity_lock_seconds(wait, remaining=None):
     if not math.isfinite(wait) or wait < 0:
         raise ValueError('runner wait must be finite and nonnegative')
     if not wait:
-        return 15.0  # preserve callers that do not request a holder wait
+        return 0.0
     if remaining is not None:
         remaining = float(remaining)
         if not math.isfinite(remaining):
@@ -831,16 +909,21 @@ def capacity_lock_seconds(wait, remaining=None):
 @contextlib.contextmanager
 def named_capacity_mutex(path, *, mutex, box, peer, wait=0, remaining=None):
     """Use the native capacity lock with the lead's bounded contention wait."""
-    budget = capacity_lock_seconds(wait, remaining)
-    stack = contextlib.ExitStack()
-    try:
-        stack.enter_context(mutex(path, wait=budget))
-    except RuntimeError as error:
-        stack.close()
-        if str(error) == 'capacity update is busy; skip this box':
-            raise SpreadRefusal(f"{box['name']}; peer {peer}; capacity lock {path}; "
-                                f"wait expired after {budget:g}s: {error}") from error
-        raise
+    from types import SimpleNamespace
+    retry = AdmissionWait(box, SimpleNamespace(peer_id=peer), wait)
+    if remaining is not None:
+        retry.deadline = min(retry.deadline, time.monotonic()+max(0, remaining))
+    while True:
+        budget = capacity_lock_seconds(wait, retry.remaining())
+        stack = contextlib.ExitStack()
+        try:
+            stack.enter_context(mutex(path, wait=budget))
+            break
+        except RuntimeError as error:
+            stack.close()
+            if str(error) != 'capacity update is busy; skip this box':
+                raise
+            retry.pause(f"capacity lock {path}; {error}")
     with stack:
         yield
 
@@ -848,21 +931,19 @@ def named_capacity_mutex(path, *, mutex, box, peer, wait=0, remaining=None):
 @contextlib.contextmanager
 def named_launch_capacity(box, needs, claim, *, probe, live_reason, mutex, root, renew):
     """Keep the native final guard and release its lock while waiting to retry."""
-    retry = NamedCpuWait(box, needs)
-    holder = NamedHolderWait(box, needs, claim.get('runner_wait', 0))
+    retry = AdmissionWait(box, needs, admission_seconds(claim))
     while True:
         with named_capacity_mutex(root/'.capacity.lock', mutex=mutex, box=box, peer=needs.peer_id,
-                                  wait=claim.get('runner_wait', 0), remaining=holder.deadline-time.monotonic()):
+                                  wait=retry.wait, remaining=retry.remaining()):
             retry.probe_started()
             state = probe(box, refresh_display=False, ignore_token=claim["token"])
-            reason = live_reason(box, needs, state)
+            reason = named_live_reason(live_reason, box, needs, state)
             if not reason:
                 yield state
                 return
-            cpu_wait = retry.accepts(reason)
-            if not cpu_wait and not holder.accepts(reason, state):
+            if not retry.accepts(reason):
                 raise RuntimeError("capacity changed before launch: " + reason)
-        (retry if cpu_wait else holder).pause(reason)
+        retry.pause(reason)
         renew(claim)
 
 
@@ -880,6 +961,18 @@ def native_cpu_wait_source(source):
                 "    from spread_peers import named_capacity_mutex\n"
                 "    with named_capacity_mutex(root/'.capacity.lock',mutex=mutex,box=box,peer=needs['peer_id'],\n"
                 "            wait=request.get('runner_wait',0),remaining=request.get('capacity_wait_remaining')):\n", 1)
+    slot_guard = ("        slot=None\n"
+                  "        if needs['os']!='compiler' and box.get('kind')=='windows-task' and state.get('slots'):\n"
+                  "            occupied={job.get('slot') for job in state['jobs']}\n"
+                  "            chosen=next(row for row in state['slots'] if row['state']=='Ready' and row['slot'] not in occupied)\n"
+                  "            slot=chosen['slot']\n")
+    if slot_guard in source:
+        source = source.replace(slot_guard, "        slot=None\n", 1)
+        source = source.replace("slot_marker=chosen['owner_marker'] if slot is not None else None", "slot_marker=None", 1)
+        source = source.replace("alone_marker=box.get('markers',{}).get('timing') if needs['alone'] and box['kind']!='local' else None",
+                                "alone_marker=None", 1)
+    source = source.replace("builds_in_use=sum(bool(job.get('compiler')) for job in jobs)+foreign_builds,",
+                            "actual_builds=len(builds),builds_in_use=len(builds),", 1)
     marker_guard = ("            existing=facts.read_reservation(marker)\n"
                     "            if not existing:facts.write_reservation(marker,request['label'],token=claim['token'])\n"
                     "            elif existing.get('token')!=claim['token']:raise RuntimeError('another owner reserves this box alone')\n")
@@ -901,7 +994,138 @@ def native_cpu_wait_source(source):
                  "    from spread_peers import native_exclusive_state\n"
                  "    return native_exclusive_state(_native_capacity_state,box,facts=facts,root=root_for(box),\n"
                  "            read_only=read_only,refresh_display=refresh_display,ignore_token=ignore_token)\n")
+    if 'def capacity_claim(' in source and 'facts.write_reservation(marker' in source:
+        extension += ("\n_native_capacity_claim = capacity_claim\n"
+                      "def capacity_claim(box,needs,request):\n"
+                      "    from spread_peers import existing_native_claim\n"
+                      "    return existing_native_claim(box,needs,request,facts,root_for(box)) or _native_capacity_claim(box,needs,request)\n")
+    if 'def submit_task(' in source:
+        extension += ("\n_native_submit_task = submit_task\n"
+                      "def submit_task(value):\n"
+                      "    from spread_peers import submit_named_task\n"
+                      "    return submit_named_task(_native_submit_task,value,globals())\n")
     return source.replace(guard, replacement, 1).replace(entry, extension+'\n'+entry, 1)
+
+
+def native_pool_source(source):
+    """Preserve native limits while correcting preparation-only accounting."""
+    extension = ("\n_native_live_reason = live_reason\n"
+                 "def live_reason(box,needs,state):\n"
+                 "    from spread_peers import named_live_reason\n"
+                 "    return named_live_reason(_native_live_reason,box,needs,state)\n")
+    return source + extension
+
+
+def existing_native_claim(box, needs, request, facts, root):
+    """An SSH reply may be lost after the atomic native claim succeeded."""
+    marker = Path(root)/'claims'/('run-'+request['run_id']+'.json')
+    owner = facts.read_reservation(marker, archive=False)
+    if not owner:
+        if marker.exists():
+            raise SpreadRefusal(f'RUN ROOT CONFLICT {marker}; native claim has no live recorded owner')
+        return None
+    if (owner.get('token') != request.get('token')
+            or any(owner.get(key) != needs.get(key) for key in ('case_id', 'peer_id'))):
+        raise SpreadRefusal(f'RUN ROOT CONFLICT {marker}; native claim changed owner')
+    return dict(claim=str(marker).replace('\\', '/'), token=owner['token'],
+                root=str(Path(root)/'runs'/request['run_id']).replace('\\', '/'), box=box['name'],
+                slot=owner.get('slot'), slot_marker=None, alone_marker=None,
+                ports=owner['ports'], directory_port=owner['directory_port'])
+
+
+def admission_seconds(claim):
+    if claim.get('admission_deadline') is not None:
+        return max(0, float(claim['admission_deadline'])-time.time())
+    return claim.get('runner_wait_remaining', claim.get('runner_wait', 0))
+
+
+def bind_admission_transport(backend, box, needs, wait):
+    """Adapt the installed transport's waits; retain its hash, task and RPC paths."""
+    retry = backend.admission_wait = AdmissionWait(box, needs, wait)
+    original_rpc = backend.rpc
+    def rpc(target, action, body, **kwargs):
+        if action == 'write' and body.get('path', '').endswith(('/request.json', '/peer-spec.json')):
+            value = body.get('value', {})
+            if 'claim' in value:
+                value['claim']['runner_wait_remaining'] = retry.remaining()
+                value['claim']['admission_deadline'] = time.time()+retry.remaining()
+        result = retry.call(lambda:original_rpc(target, action, body, **kwargs))
+        if action == 'submit-task':
+            body['claim'].update(slot=result['slot'], slot_marker=result['slot_marker'])
+        return result
+    backend.rpc = rpc
+    if hasattr(backend, 'stop'):
+        original_stop = backend.stop
+        def stop(target, claim):
+            # A failed preparation SSH operation is retried on its own root;
+            # cancelling that root would poison the eventual native launch.
+            if getattr(backend, '_admission_operation', False) and not claim.get('launched'):
+                return
+            return original_stop(target, claim)
+        backend.stop = stop
+    if hasattr(backend, 'guarded_run'):
+        original_run = backend.guarded_run
+        def guarded_run(argv, **kwargs):
+            def attempt():
+                backend._admission_operation = True
+                try:
+                    return original_run(argv, **kwargs)
+                except RuntimeError as error:
+                    if Path(str(argv[0])).name in ('ssh', 'scp') and 'command failed (255)' in str(error):
+                        raise RuntimeError('SSH does not answer or the saved connection is unavailable') from error
+                    raise
+                finally:
+                    backend._admission_operation = False
+            return retry.call(attempt)
+        backend.guarded_run = guarded_run
+    return retry
+
+
+def submit_named_task(original, value, worker):
+    """Claim a ready native payload slot only at this owned launch."""
+    from pool import Needs, live_reason
+    box, claim = value['box'], value['claim']
+    facts, root = worker['facts'], worker['root_for'](box)
+    needs = Needs(**claim['needs'])
+    retry = AdmissionWait(box, needs, admission_seconds(claim))
+    while True:
+        with named_capacity_mutex(root/'.capacity.lock', mutex=worker['mutex'], box=box,
+                                  peer=needs.peer_id, wait=retry.wait, remaining=retry.remaining()):
+            slots = worker['task_slots'](box)
+            selected, reason = None, 'all registered payload slots are busy or unavailable'
+            for row in slots:
+                if box.get('requested_task_slot') and row['slot'] != box['requested_task_slot']:
+                    continue
+                owner = facts.read_reservation(row['owner_marker'], archive=False)
+                owned = owner and owner.get('token') == claim['token']
+                if owned and row['state'] == 'Running':
+                    return dict(started=True, slot=row['slot'], slot_marker=row['owner_marker'],
+                                free_gb=worker['memory_gb'](), floor_gb=box['free_floor_gb'])
+                if row['state'] in ('Ready', 'Reserved') and (owned or not Path(row['owner_marker']).exists()):
+                    selected = row
+                    break
+            if selected:
+                retry.probe_started()
+                state = worker['capacity_state'](box, ignore_token=claim['token'])
+                reason = live_reason(box, needs, state)
+                if not reason:
+                    claim['slot'] = selected['slot']
+                    path = Path(value['request'])
+                    request = json.loads(path.read_text(encoding='utf-8-sig'))
+                    if request['claim']['token'] != claim['token']:
+                        raise SpreadRefusal('native task request changed owner')
+                    request['claim']['slot'] = selected['slot']
+                    worker['atomic_json'](path, request)
+                    try:
+                        return original(value)
+                    except RuntimeError as error:
+                        if not retry.accepts(error):
+                            raise
+                        reason = str(error)
+            if not retry.accepts(reason):
+                raise SpreadRefusal('capacity changed before launch: '+reason)
+        retry.pause(reason)
+        worker['renew_claim'](claim)
 
 
 def native_adapter_sources(facts_path, existing=None, *, kit=None):
@@ -917,28 +1141,39 @@ def native_adapter_sources(facts_path, existing=None, *, kit=None):
 
 
 @contextlib.contextmanager
-def named_engine_cpu_wait(load, box, needs, renew):
+def named_engine_cpu_wait(load, box, needs, renew, wait=0):
     """Retry the runner's unchanged admission, only in this native peer process."""
     original = load.admission
     @contextlib.contextmanager
     def admission(argv, environment, record, save):
-        retry = NamedCpuWait(box, needs)
+        retry = AdmissionWait(box, needs, wait)
         while True:
             stack = contextlib.ExitStack()
             retry.probe_started()
             try:
                 value = stack.enter_context(original(argv, environment, record, save))
-            except load.LoadRefusal:
+            except load.LoadRefusal as error:
                 stack.close()
                 values = record.get("refusal", {}).get("values", {})
-                if (record.get("pid") or not values or values.get("alone")
-                        or values["engines"] + 1 > values["max_engines"]
-                        or values["free_gb"] < values["free_floor_gb"]
-                        or values["cpu_busy_percent"] <= values["cpu_busy_limit"]):
+                if record.get('pid') or (values and (values['engines'] + 1 > values['max_engines']
+                                         or values['free_gb'] < values['free_floor_gb'])):
                     raise
-                reason = (f"CPU {values['cpu_busy_percent']:.1f}% exceeds {values['cpu_busy_limit']:g}% "
-                          f"over the last {values['cpu_sample_s']:g} seconds")
+                reason = str(error)
+                if values:
+                    reason = ('capacity refused: another run holds the box alone' if values.get('alone') else
+                              f"CPU {values['cpu_busy_percent']:.1f}% exceeds {values['cpu_busy_limit']:g}% "
+                              f"over the last {values['cpu_sample_s']:g} seconds")
+                if not retry.accepts(reason):
+                    raise
                 record.setdefault("admission_retries", []).append(dict(reason=reason, values=values))
+                save()
+                retry.pause(reason)
+                renew()
+                continue
+            if getattr(needs, 'alone', False) and value and value.get('engines'):
+                stack.close()
+                reason = 'alone run needs an idle box'
+                record.setdefault('admission_retries', []).append(dict(reason=reason, values=value))
                 save()
                 retry.pause(reason)
                 renew()
@@ -984,101 +1219,36 @@ def wait_native_admission(backend, box, claim, wait=0):
 
 
 def claim_named_peer(backend, box, needs, request, *, wait=0, wait_for_holder=None):
-    """Honor native work-slot FIFO on this named box; never choose or bypass."""
-    import math
-    wait = float(wait or 0)
-    if not math.isfinite(wait) or wait < 0:
-        raise ValueError("runner wait must be finite and nonnegative")
-    deadline = time.monotonic() + wait
-    holders = {wait_for_holder} if wait_for_holder else set()
-    announced = None
-    cpu = NamedCpuWait(box, needs)
-    live_holder = NamedHolderWait(box, needs, wait)
-    while True:
-        cpu.probe_started()
-        try:
-            remaining = max(0, deadline-time.monotonic())
-            native_request = dict(request, runner_wait=wait, capacity_wait_remaining=remaining)
-            return backend.rpc(box, "claim", dict(box=box, needs=needs.__dict__, request=native_request),
-                               timeout=30 + capacity_lock_seconds(wait, remaining))
-        except RuntimeError as error:
-            text = str(error)
-            reason = text.split("capacity refused: ", 1)[-1]
-            if cpu.accepts(reason):
-                cpu.pause(reason)
-                continue
-            marker = "capacity refused: earlier work request is waiting: "
-            fifo = marker in text
-            if fifo:
-                holders.add(text.split(marker, 1)[1].splitlines()[0])
-            # A FIFO predecessor can then own the exclusive window. Only a
-            # known or expressly named predecessor is allowed to remain a wait.
-            owned_window = any(("; owner=" + label + " (") in text or
-                               ("; owner=" + label + ";") in text for label in holders)
-            waiting = box["kind"] == "local" and wait and (fifo or owned_window)
-            if not waiting:
-                if not wait or not hasattr(backend, 'probe') or not (reason == 'another run holds the box alone' or reason.startswith('box launch refused: ')):
-                    raise
-                state = backend.probe(box, read_only=True, refresh_display=False)
-                if not live_holder.accepts(reason, state):
-                    raise
-                live_holder.pause(text)
-                continue
-            if time.monotonic() >= deadline:
-                raise SpreadRefusal(f"native holder wait expired after {wait:g}s: {text}") from error
-            if text != announced:
-                print(f"WAITING NAMED: {box['name']}; peer {needs.peer_id}; {text}", flush=True)
-                announced = text
-            time.sleep(min(2, max(0, deadline-time.monotonic())))
+    """Retry every native admission transient within one named candidate's budget."""
+    retry = getattr(backend, 'admission_wait', None) or AdmissionWait(box, needs, wait)
+    def attempt():
+        remaining = retry.remaining()
+        native_request = dict(request, runner_wait=retry.wait, capacity_wait_remaining=remaining)
+        return backend.rpc(box, 'claim', dict(box=box, needs=needs.__dict__, request=native_request),
+                           timeout=30 + capacity_lock_seconds(retry.wait, remaining))
+    return retry.call(attempt)
 
 
 def wait_named_launch(worker, pool, box, claim, *, wait=0, wait_for_holder=None):
-    """Recheck native FIFO after shipping, before the case starts its timers."""
-    import math
-    wait = float(wait or 0)
-    if not math.isfinite(wait) or wait < 0:
-        raise ValueError("runner wait must be finite and nonnegative")
-    if not wait or box["kind"] != "local":
+    """Recheck the existing native guard after shipping, before case timers."""
+    if not wait or box['kind'] != 'local':
         return
-    deadline = time.monotonic() + wait
-    holders = {wait_for_holder} if wait_for_holder else set()
-    announced = None
-    needs = pool.Needs(**claim["needs"])
-    cpu = NamedCpuWait(box, needs)
-    live_holder = NamedHolderWait(box, needs, wait)
+    needs = pool.Needs(**claim['needs'])
+    retry = AdmissionWait(box, needs, wait)
     while True:
-        cpu.probe_started()
+        retry.probe_started()
         probe = worker.capacity_state
         if hasattr(worker, 'facts'):
             state = native_exclusive_state(probe, box, facts=worker.facts, root=worker.root_for(box),
                                            read_only=True, refresh_display=False, ignore_token=claim['token'])
         else:
             state = probe(box, read_only=True, refresh_display=False, ignore_token=claim['token'])
-        reason = pool.live_reason(box, needs, state)
+        reason = named_live_reason(pool.live_reason, box, needs, state)
         if not reason:
             return
-        if cpu.accepts(reason):
-            cpu.pause(reason)
-            worker.renew_claim(claim)
-            continue
-        marker = "earlier work request is waiting: "
-        fifo = reason.startswith(marker)
-        if fifo:
-            holders.add(reason[len(marker):].splitlines()[0])
-        owned_window = any(("; owner=" + label + " (") in reason or
-                           ("; owner=" + label + ";") in reason for label in holders)
-        if not (fifo or owned_window):
-            if not live_holder.accepts(reason, state):
-                raise SpreadRefusal("capacity changed before launch: " + reason)
-            live_holder.pause(reason)
-            worker.renew_claim(claim)
-            continue
-        if time.monotonic() >= deadline:
-            raise SpreadRefusal(f"native holder wait expired after {wait:g}s: {reason}")
-        if reason != announced:
-            print(f"WAITING NAMED: {box['name']}; peer {needs.peer_id}; {reason}", flush=True)
-            announced = reason
-        time.sleep(min(2, max(0, deadline-time.monotonic())))
+        if not retry.accepts(reason):
+            raise SpreadRefusal('capacity changed before launch: '+reason)
+        retry.pause(reason)
         worker.renew_claim(claim)
 
 
@@ -1177,6 +1347,7 @@ class Case:
         backend.repo = self.repo
         backend.sources["spread_peers.py"] = self.interface_source
         backend.sources["pool_worker.py"] = native_cpu_wait_source(backend.sources["pool_worker.py"])
+        backend.sources['pool.py'] = native_pool_source(backend.sources['pool.py'])
         # The existing facts reader lazily imports pool_cohort under a named
         # assignment. It reads that assignment only; it does not select boxes.
         backend.sources = native_adapter_sources(module.worker.facts.__file__, backend.sources, kit=module.LEAD)
@@ -1236,8 +1407,9 @@ class Case:
                                       process_start=self.transport_module.worker.facts.process_start(os.getpid())),
                            out=str(self.control/peer.name/"results"), command=[], hang_guard=max(600, peer.timeout + 300))
             try:
-                state = backend.probe(box, read_only=True)
                 wait = self.match.parameters.get("runner_wait", getattr(_options, "runner_wait", 0))
+                bind_admission_transport(backend, box, needs, wait)
+                state = backend.probe(box, read_only=True)
                 holder = self.match.parameters.get("wait_for_holder", getattr(_options, "wait_for_holder", None))
                 claim = claim_named_peer(backend, box, needs, request, wait=wait, wait_for_holder=holder)
             except Exception as error:
@@ -1306,12 +1478,12 @@ class Case:
             raise SpreadRefusal("Windows executable changed between peer shipments")
         wait = self.match.parameters.get("runner_wait", getattr(_options, "runner_wait", 0))
         for name in self.names:
-            box, claim, _, _ = self.members[name]
+            box, claim, _, backend = self.members[name]
             if not wait or box["kind"] != "local":
                 continue
             try:
                 wait_named_launch(self.transport_module.worker, self.pool, box, claim,
-                                  wait=wait,
+                                  wait=backend.admission_wait.remaining() if hasattr(backend, 'admission_wait') else wait,
                                   wait_for_holder=self.match.parameters.get("wait_for_holder", getattr(_options, "wait_for_holder", None)))
             except SpreadRefusal as error:
                 raise self.refuse(name, box["name"], str(error)) from error
@@ -1372,7 +1544,7 @@ class Case:
         self.directory_port = directory_port
         peer_urls = self.match.parameters.get("peer_directory_urls", {})
         for name in self.names:
-            box, claim, _, _ = self.members[name]
+            box, claim, _, backend = self.members[name]
             target = role_value(peer_urls, self.names, name) or self.directory["DIRECTORY_URL"]
             try:
                 target_port = directory_endpoint(target)
@@ -1734,11 +1906,13 @@ class Run:
             wait = self.case.match.parameters.get("runner_wait", getattr(_options, "runner_wait", 0))
             wait_started_host(self.case, self.role, wait)
             if wait and box["kind"] == "local":
-                wait_named_launch(self.case.transport_module.worker, self.case.pool, box, claim, wait=wait,
+                wait_named_launch(self.case.transport_module.worker, self.case.pool, box, claim,
+                                  wait=backend.admission_wait.remaining() if hasattr(backend, 'admission_wait') else wait,
                                   wait_for_holder=self.case.match.parameters.get("wait_for_holder", getattr(_options, "wait_for_holder", None)))
             request["hang_guard"] = max(request.get("hang_guard", 600), self.timeout + 1500 + float(wait or 0))
-            launch_native(backend, box, claim, request, wait)
-            wait_native_admission(backend, box, claim, wait)
+            remaining = backend.admission_wait.remaining() if hasattr(backend, 'admission_wait') else wait
+            launch_native(backend, box, claim, request, remaining)
+            wait_native_admission(backend, box, claim, remaining)
         except SpreadRefusal as error:
             self.start_failure = str(error)
             if str(error).startswith(f"spread peer {self.role} on {box['name']}: "):
@@ -1982,7 +2156,8 @@ def _native_execute(spec_path, result_out, peer, ownership):
         import box_load as native_load
         from pool import Needs
         with named_engine_cpu_wait(native_load, spec["box"], Needs(**spec["claim"]["needs"]),
-                                   lambda:pool_worker.renew_claim(spec["claim"])), \
+                                   lambda:pool_worker.renew_claim(spec["claim"]),
+                                   admission_seconds(spec['claim'])), \
                 contextlib.nullcontext() if hooked else pool_run.launch_scope(run.argv, run.env) as scope, \
                 contextlib.nullcontext() if hooked else native_load.admission(run.argv, run.env, run.record, run._save):
             run.start()
