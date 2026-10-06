@@ -488,7 +488,9 @@ namespace RTE {
 
 	void NetLobbySession::SendStateReceiptIfDue(uint64_t nowMs) {
 		if (!m_IncomingStateReceipt || (m_LastStateReceiptSentMs != UINT64_MAX && nowMs < m_LastStateReceiptSentMs + m_Config.resendIntervalMs)) return;
-		const uint8_t remote = m_Config.host ? m_Config.snapshotProviderPeerId : m_Config.matchConfig.hostPeerId;
+		// A handover keeps the agreed config while the client's bound host changes.
+		const uint8_t remote = m_Config.host ? m_Config.snapshotProviderPeerId
+		    : m_RemoteTransports.size() == 1 ? m_RemoteTransports.begin()->first : m_Config.matchConfig.hostPeerId;
 		const auto route = m_RemoteTransports.find(remote);
 		if (route == m_RemoteTransports.end()) return;
 		std::string error;
