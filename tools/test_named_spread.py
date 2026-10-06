@@ -1,5 +1,6 @@
 """Detect the lead-routed peer contract without starting an engine."""
 import argparse
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -38,8 +39,17 @@ class NamedRoutingTests(unittest.TestCase):
     def test_explicit_sharing_without_share_ok_is_refused(self):
         for first in (spread.Peer('a', share_ok=False), spread.Peer('a', reviewed=True),
                       spread.Peer('a', held=True), spread.Peer('a', quiet=True)):
-            with self.subTest(peer=first), self.assertRaisesRegex(spread.SpreadRefusal, 'TWO PEERS ON ONE BOX WITHOUT share_ok'):
-                spread.named_peer_boxes([first, spread.Peer('b')], spread.pairs('a=EROL-PC,b=EROL-PC'))
+            with self.subTest(peer=first), tempfile.TemporaryDirectory() as temporary:
+                out = Path(temporary)/'out'
+                with self.assertRaisesRegex(spread.SpreadRefusal, 'TWO PEERS ON ONE BOX WITHOUT share_ok'), \
+                        patch.object(spread, 'installed_pool', side_effect=AssertionError('no transport before refusal')):
+                    spread.Case(Path(temporary), out, [first, spread.Peer('b')], spread.Match(51580),
+                                peer_boxes='a=EROL-PC,b=EROL-PC')
+                receipt = json.loads((out/'spread-result.json').read_text())
+                self.assertEqual(receipt['topology'], 'spread')
+                self.assertEqual(receipt['peer_boxes'], {'a':'EROL-PC','b':'EROL-PC'})
+                self.assertEqual((receipt['refused_peer'], receipt['refused_box'], receipt['reason']),
+                                 ('a','EROL-PC','TWO PEERS ON ONE BOX WITHOUT share_ok'))
 
     def test_retired_spread_exits_two_with_exact_routing_message(self):
         parser = argparse.ArgumentParser()

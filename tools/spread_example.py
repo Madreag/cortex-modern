@@ -40,6 +40,7 @@ def main():
             result.update(topology="spread", peer_boxes=case.result()["peer_boxes"])
             for peer in result["peers"]:
                 peer.update(topology="spread", box=case.result()["peer_boxes"][peer["peer"]])
+                peer["record"].update(topology="spread", box=peer["box"])
             return result
         result = run_case(options.repo, root, peers, Match(options.port, options.port + 9, parameters={'label': args.runner_label}), drive=drive,
                           peer_boxes=args.peer_boxes, dispatcher=args.pool_dispatcher, registry=args.pool_registry)

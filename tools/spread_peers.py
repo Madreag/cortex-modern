@@ -363,7 +363,9 @@ def named_peer_boxes(peers, values):
         box = assignments[peer.name]
         siblings = [other for other in peers if assignments[other.name].casefold() == box.casefold()]
         if len(siblings) > 1 and not all(other.share_ok for other in siblings):
-            raise SpreadRefusal(f"spread peer {peer.name} on {box}: TWO PEERS ON ONE BOX WITHOUT share_ok")
+            error = SpreadRefusal(f"spread peer {peer.name} on {box}: TWO PEERS ON ONE BOX WITHOUT share_ok")
+            error.peer, error.box, error.reason = peer.name, box, "TWO PEERS ON ONE BOX WITHOUT share_ok"
+            raise error
     return assignments
 
 
@@ -551,8 +553,13 @@ class Case:
         try:
             self.assigned_boxes = named_peer_boxes(self.peers, self.pins)
         except (SpreadUsageError, SpreadRefusal) as error:
-            write_json(self.out/"spread-result.json", dict(topology="spread", passed=False, error=str(error),
-                                                         peer_boxes={}, requested_peer_boxes=self.pins))
+            value = dict(schema=1, topology="spread", passed=False, error=str(error),
+                         peer_boxes={peer.name: role_value(self.pins, self.names, peer.name) for peer in self.peers},
+                         requested_peer_boxes=self.pins, refusals=[])
+            if getattr(error, "peer", None):
+                value.update(refused_peer=error.peer, refused_box=error.box, reason=error.reason,
+                             refusals=[dict(peer=error.peer, box=error.box, reason=error.reason, text=str(error))])
+            write_json(self.out/"spread-result.json", value)
             raise
         self.pool, self.transport_module, self.dispatcher = installed_pool(dispatcher, registry)
         self.registry = Path(registry or self.dispatcher.with_name("boxes.json"))
