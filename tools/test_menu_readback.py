@@ -2524,6 +2524,18 @@ def spread_menu_scripts(case, texts, port, root):
     return {"host": host, "client": client}, probes
 
 
+def public_readback_scripts(case, texts):
+    if case == "host-draft-roundtrip":
+        # Read back the original Off draft before enabling its separate Internet arm.
+        create = "activate ButtonMultiplayerCreate\n"
+        connection = ("activate ButtonHostOptions\nwait 10\nassert_substate HostOptions\n" + page("Connection")
+                      + hand_pick("ComboHostNetIce", NAT_STATES[0]) + "activate ButtonHostOptApply\nwait 6\n"
+                      "activate ButtonHostOptBack\nwait 6\nassert_substate HostSetup\n")
+        assert texts["host"].count(create) == 1
+        return dict(texts, host=texts["host"].replace(create, connection + create))
+    return texts
+
+
 @managed_case
 def run_case(options, case, root, failing=None):
     root.mkdir(parents=True, exist_ok=False)
@@ -2533,14 +2545,8 @@ def run_case(options, case, root, failing=None):
     if network_page_pair:
         texts, probes = spread_menu_scripts(case, texts, options.port, root)
     public_directory = bool(getattr(options, "public_directory", False)) and not smoke
-    if public_directory and case == "host-draft-roundtrip":
-        # Read back the original Off draft before enabling its separate Internet arm.
-        create = "activate ButtonMultiplayerCreate\n"
-        connection = ("activate ButtonHostOptions\nwait 10\nassert_substate HostOptions\n" + page("Connection")
-                      + hand_pick("ComboHostNetIce", NAT_STATES[0]) + "activate ButtonHostOptApply\nwait 6\n"
-                      "activate ButtonHostOptBack\nwait 6\nassert_substate HostSetup\n")
-        assert texts["host"].count(create) == 1
-        texts["host"] = texts["host"].replace(create, connection + create)
+    if public_directory:
+        texts = public_readback_scripts(case, texts)
     if failing:
         prelude, setup, assertion = failing
         texts, probes = {"host": prelude + setup + assertion + "\nexit\n"}, {}
