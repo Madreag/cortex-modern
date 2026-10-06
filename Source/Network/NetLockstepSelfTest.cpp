@@ -23394,9 +23394,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		class LateSeatNoticeWire final : public LoopbackTransport {
 		public:
 			std::set<NetPeerId> lateTo;
+			bool committedReleasesOnly = false;
 
 			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
-				if (lateTo.contains(peer) && IsSeatNotice(bytes)) {
+				if (lateTo.contains(peer) && IsSeatNotice(bytes, committedReleasesOnly)) {
 					m_Held.push_back({peer, lane, bytes});
 					return true;
 				}
@@ -23421,12 +23422,16 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			};
 			std::vector<Packet> m_Held;
 
-			static bool IsSeatNotice(const std::vector<uint8_t>& bytes) {
+			static bool IsSeatNotice(const std::vector<uint8_t>& bytes, bool committedReleasesOnly) {
 				const auto packet = NetLockstepCodec::Decode(bytes);
 				if (!packet.ok) return false;
 				if (std::holds_alternative<NetLockstepStop>(packet.packet.payload)) return true;
+				if (committedReleasesOnly) if (const auto* frame = std::get_if<NetLockstepFrame>(&packet.packet.payload)) {
+					return std::any_of(frame->commands.begin(), frame->commands.end(), [](const auto& command) { return std::holds_alternative<NetGameSeatRelease>(command.payload); });
+				}
 				const auto* timing = std::get_if<NetLockstepTiming>(&packet.packet.payload);
-				return timing && timing->phase != NetTimingPhase::Status;
+				return timing && timing->phase != NetTimingPhase::Status &&
+				    (!committedReleasesOnly || (timing->action == NetTimingAction::Release && timing->phase == NetTimingPhase::Commit));
 			}
 		};
 
@@ -23813,8 +23818,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return fail("");
 		}
 
-		// The host releases a held seat and is lost before every survivor has heard: one survivor knows of the release, the other never
-		// does. The survivors carry the same seat state into the successor's round, so the seat's claims end on one frame on both.
+		// Recovery carries an applied release to the survivor that missed its commit.
 		bool TestAReleaseTheHostTookWithItEndsOnOneFrame(std::string* error) {
 			const char* name = "a_release_the_host_took_with_it_ends_on_one_frame";
 			EnsureSwitchTestManagers();
@@ -23878,8 +23882,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			for (int turn = 0; turn < 20; ++turn) pump();
 			// The second survivor never hears the release; then the host's process dies without a word.
 			hostWire.lateTo = {2};
+			hostWire.committedReleasesOnly = true;
 			host.EvictRemovedPeer(4, "removed by the host", now);
-			for (int turn = 0; turn < 10; ++turn) pump();
+			for (int turn = 0; turn < 600 && !firstView.ended; ++turn) pump();
+			if (!firstView.ended || secondView.ended || !hostWire.Held()) return fail("the release is not applied only on the first survivor before host loss");
 			hostWire.Deliver(true);
 			hostAlive = false;
 			hostWire.Stop();
@@ -23889,6 +23895,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (first.GetHostPeerId() != 2 || second.GetHostPeerId() != 2 || first.IsFailed() || second.IsFailed()) {
 				return fail("the survivors did not hand the round to the first survivor: first=" + first.BuildReportJson() + " second=" + second.BuildReportJson());
 			}
+			if (first.GetMigrationResult().boundary < *firstView.ended) return fail("the release falls outside the recovered committed prefix");
 			std::string differs;
 			if (!firstView.ended || !secondView.ended || firstView.ended != secondView.ended || !SameClaimsEveryFrame(firstView, secondView, &differs)) {
 				return fail("the released seat's claim ended at frame " + firstView.Ended() + " on the survivor that heard the release and " + secondView.Ended() +
