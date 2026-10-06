@@ -508,7 +508,7 @@ def declared_signals(root):
 
 
 def prepare_case(repo, out, peers, match, *, peer_boxes=None, dispatcher=None, registry=None, force=False):
-    if not force and not enabled():
+    if not force and peer_boxes is None and not enabled():
         return None
     options = _options
     case = Case(repo, out, peers, match,
