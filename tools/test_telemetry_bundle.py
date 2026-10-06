@@ -193,13 +193,20 @@ def run_menu(repo: Path, root: Path, exe_sha: str) -> dict:
     return inspect_bundle(run.cwd, exe_sha, secrets=planted, require_identity_build=True)
 
 
-def credential_fields(repo: Path) -> list[str]:
-    fields = {"NetworkTurnUser", "NetworkPlayerTurnUser"}
+def settings_writer_fields(repo: Path) -> list[str]:
+    fields = set()
     for leaf in ("Managers/SettingsMan.cpp", "System/InputScheme.cpp", "System/InputMapping.cpp"):
         source = (repo / "Source" / leaf).read_text(encoding="utf-8")
-        fields.update(name for name in re.findall(r'NewProperty(?:WithValue)?\("([^"]+)"', source)
-                      if any(part in name.lower() for part in ("pass", "secret", "key", "token", "credential", "ticket")))
+        fields.update(re.findall(r'NewProperty(?:WithValue)?\("([^"]+)"', source))
+    fields.discard("Player")
+    fields.update(f"Player{number}Scheme" for number in range(1, 5))
     return sorted(fields)
+
+
+def credential_fields(repo: Path) -> list[str]:
+    return [name for name in settings_writer_fields(repo)
+            if name in ("NetworkTurnUser", "NetworkPlayerTurnUser")
+            or any(part in name.lower() for part in ("pass", "secret", "key", "token", "credential", "ticket"))]
 
 
 def credential_corpus(repo: Path) -> tuple[bytes, list[tuple[str, str, bytes]], list[bytes], list[str]]:
@@ -213,9 +220,15 @@ def credential_corpus(repo: Path) -> tuple[bytes, list[tuple[str, str, bytes]], 
         "blank-lines": lambda a, b: "\n\n\t\t\t\t" + a + "\n\n" + b,
         "quoted": lambda a, b: '"' + a + "\n" + b + '"',
         "backslash": lambda a, b: a + "\\\n" + b,
+        "unindented-assignment": lambda a, b: a + "\nvalue = " + b,
+        "sibling-assignment": lambda a, b: a + "\n\tvalue = " + b,
+        "padded-continuation": lambda a, b: a + "\n" + b + "=",
+        "keyword-assignment": lambda a, b: a + "\n\t\t\t\t" + b + "Secret = " + a,
     }
     fields = credential_fields(repo) + ["NetworkRelaySecret", "NetworkRelayKey", "NetworkRelayToken",
                                       "NetworkRelayPassword", "networkrelaysecret", "NETWORKRELAYTOKEN"]
+    harmless_fields = [name for name in settings_writer_fields(repo)
+                       if name not in fields and name != "SessionDirectoryCertSha256"]
     parts, needles, harmless = [b"SettingsMan\r\n\tNetworkInputDelayFrames = 0\r\n"], [], []
     for index, field in enumerate(fields):
         for form, render in forms.items():
@@ -225,7 +238,7 @@ def credential_corpus(repo: Path) -> tuple[bytes, list[tuple[str, str, bytes]], 
             for ending in ("\n", "\r\n", "\r"):
                 value = render(a, b).replace("\n", ending)
                 parts.append(f"\t{field} = {value}{ending}".encode("utf-8"))
-                marker = f"\tSupportMarker{index} = preserved {form}{ending}".encode("ascii")
+                marker = f"\t{harmless_fields[len(harmless) % len(harmless_fields)]} = {1000 + len(harmless)}{ending}".encode("ascii")
                 parts.append(marker)
                 harmless.append(marker)
     # The last value has neither a closing line ending nor a following property.
@@ -277,6 +290,7 @@ def run_credentials(repo: Path, root: Path, exe_sha: str) -> dict:
     details.update(credential_fields=fields, forms=sorted({form for field, form, token in needles}),
                    line_endings=["LF", "CRLF", "CR"], planted_fragments=len(needles),
                    harmless_lines=len(harmless), private_settings_unchanged=True)
+    details["harmless_fields"] = harmless_fields
     return details
 
 
