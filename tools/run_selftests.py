@@ -269,13 +269,8 @@ def attempt_summary(scored, case):
     return {"dir": str(case), **{key: scored.get(key) for key in keys}}
 
 
-SP_REFERENCE = {
-    "dump_sha256": "f2c46632cd337cfd5bc2eec5307bc4661c715d54a4ce3c251c4b6e9f86bcce79",
-    "dump_bytes": 5445623,
-    "portable_dump_sha256": "e0f297dbab31209869b02f1274cfb7fc208d3c6793b58d8517aee04750581a1b",
-    "tick_hashes_sha256": "ddd5a0c7a4d20b9ef5f3be9cdd6d30376f97304c4feaa93283409adc0dc0d89f",
-    "compared_trace_sha256": "fecd87e5e76c4419b0ef74b2ca73a03526dab9214532fe5cbbb98c5a2ff6f9a1",
-}
+SP_REFERENCE_FILE = Path(__file__).with_name("single_player_reference_v2.json")
+SP_REFERENCE = json.loads(SP_REFERENCE_FILE.read_text(encoding="utf-8"))
 SP_REFERENCE_INDEX = (
     "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n"
     "\tAddActivity = GAScripted\n\t\tPresetName = Determinism PieSwitchSP\n\t\tSceneName = Grasslands\n"
@@ -283,6 +278,12 @@ SP_REFERENCE_INDEX = (
     "\t\tIsTestActivity = 1\n\t\tDefaultRequireClearPathToOrbit = 0\n\t\tDefaultFogOfWar = 0\n\t\tDefaultDeployUnits = 0\n"
 )
 SP_REFERENCE_HEXFLOAT = re.compile(rb"[-+]?0x[0-9a-f]+(?:\.[0-9a-f]*)?p[-+][0-9]+", re.I)
+
+
+def canonical_single_player_dump(raw):
+    """Keep every field and exact float value with one LF record terminator."""
+    exact = SP_REFERENCE_HEXFLOAT.sub(lambda match: float.fromhex(match[0].decode("ascii")).hex().encode("ascii"), raw)
+    return exact.replace(b"\r\n", b"\n")
 
 
 def reference_json_digest(value):
@@ -317,10 +318,10 @@ def run_single_player_reference(repo, make_run, case, timeout):
         raw = dump.read_bytes()
         observed["dump_sha256"] = hashlib.sha256(raw).hexdigest()
         observed["dump_bytes"] = len(raw)
-        # Hexadecimal float spellings vary between standard libraries; their exact values stay in the portable dump.
-        portable = SP_REFERENCE_HEXFLOAT.sub(lambda match: float.fromhex(match[0].decode("ascii")).hex().encode("ascii"), raw)
+        portable = canonical_single_player_dump(raw)
+        dump.with_suffix(".canonical.txt").write_bytes(portable)
         observed["portable_dump_sha256"] = hashlib.sha256(portable).hexdigest()
-        wanted_dump = ("dump_sha256", "dump_bytes") if sys.platform == "win32" else ("portable_dump_sha256",)
+        wanted_dump = ("dump_sha256", "dump_bytes", "portable_dump_sha256") if sys.platform == "win32" else ("portable_dump_sha256",)
         for key in wanted_dump:
             if observed[key] != SP_REFERENCE[key]:
                 failures.append(f"single-player {key} differs: got {observed[key]}, reference {SP_REFERENCE[key]}")
