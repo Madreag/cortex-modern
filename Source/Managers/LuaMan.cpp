@@ -8659,6 +8659,32 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		lua_close(second);
 	}
 	{
+		LuaStateWrapper domainState;
+		domainState.Initialize();
+		bool planted = false;
+		{
+			ScriptBirthDomainScope local(domainState.GetLuaState(), true);
+			planted = domainState.RunScriptString("_PeerBirthProbe = { position = Vector(3, 7) }") == 0;
+		}
+		std::string saved, restored;
+		CheckpointText frozen;
+		std::vector<std::string> problems;
+		const bool captured = planted && domainState.SerializeScriptGraph(saved, problems) && domainState.CaptureScriptGraph(frozen, problems, true);
+		{
+			ScriptBirthDomainScope local(domainState.GetLuaState(), true);
+			domainState.RunScriptString("_PeerBirthProbe.position = Vector(11, 13)");
+		}
+		const bool roundtrip = captured && saved.starts_with("SG7;") && saved == frozen.Text() && domainState.RestoreScriptGraph(saved, problems) && domainState.SerializeScriptGraph(restored, problems) && saved == restored;
+		std::cout << "[script-graph-selftest] " << (roundtrip ? "PASS" : "FAIL") << " sg7_peer_birth_horizon_roundtrip" << std::endl;
+		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] SG7: " << problem << std::endl;
+		checkpointValues = roundtrip && checkpointValues;
+		std::vector<std::string> refused;
+		const bool accepted = domainState.RestoreScriptGraph("SG8;", refused);
+		const bool named = !accepted && std::any_of(refused.begin(), refused.end(), [](const std::string& problem) { return problem.find("unsupported script graph version SG8") != std::string::npos; });
+		std::cout << "[script-graph-selftest] " << (named ? "PASS" : "FAIL") << " unknown_script_graph_version_refused_by_name" << std::endl;
+		checkpointValues = named && checkpointValues;
+	}
+	{
 		const uint64_t serialBefore = luaJIT_state_serial(m_State);
 		std::string first, repeated;
 		CheckpointText image;
