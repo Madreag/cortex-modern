@@ -989,13 +989,18 @@ void NetModerationGUI::Refresh() {
 	}
 	m_Rows = BuildRows(snapshot);
 	size_t away = 0, requests = 0;
+	// An opened place leads the rows but nobody is away from it: the sentence names the player who is.
+	const PanelRow* awayRow = nullptr;
 	for (const PanelRow& row: m_Rows) {
 		if (row.decision) {
-			away += row.opened ? 0 : 1;
+			if (!row.opened) {
+				++away;
+				awayRow = &row;
+			}
 			requests += row.decision->applicants;
 		}
 	}
-	std::string summary = away == 0 ? "Everyone is playing" : away == 1 ? m_Rows.front().name + " is away" : std::to_string(away) + " players are away";
+	std::string summary = away == 0 ? "Everyone is playing" : away == 1 ? awayRow->name + " is away" : std::to_string(away) + " players are away";
 	if (requests) summary += requests == 1 ? " - 1 request to join" : " - " + std::to_string(requests) + " requests to join";
 	m_Summary->SetText(FitLine(m_LabelFont, summary, m_Summary->GetWidth()));
 	// The host's own line leads, then a page of the other players' rows, above the status line that says what an action will do
