@@ -565,6 +565,61 @@ namespace RTE::MenuAutomation {
 		return text + "x";
 	}
 
+	// The controls a player must find on a screen in its state, each declared enabled or disabled (a disabled one with its reason),
+	// live in the case's own list (tools/menu_declared), never read off the screen they check. A declared control missing,
+	// hidden or in the other state fails the sweep, and so does a control on the screen the list does not name.
+	bool DeclaredControlsFound(GUIControlManager* manager, GUIControl* root, int depth, const std::string& label, const std::vector<std::vector<GUIControl*>*>& shown,
+	                           Json& record, std::string& observation) {
+		std::vector<GUIControl*> found;
+		for (const std::vector<GUIControl*>* group: shown) found.insert(found.end(), group->begin(), group->end());
+		// Test lever: CCCP_TEST_SWEEP_HARVEST=<dir> writes what the screen shows as a draft for a person to declare from. Unset, nothing changes.
+		static const std::string s_Harvest = [] { const char* lever = std::getenv("CCCP_TEST_SWEEP_HARVEST"); return std::string(lever ? lever : ""); }();
+		if (!s_Harvest.empty()) {
+			Json draft = {{"label", label}, {"controls", Json::array()}};
+			for (GUIControl* control: found) draft["controls"].push_back({{"name", control->GetName()}, {"enabled", Enabled(control)}});
+			std::ofstream(std::filesystem::path(s_Harvest) / (label + ".json")) << draft.dump(1) << "\n";
+			record["harvested"] = true;
+			return true;
+		}
+		static const std::string s_Declared = [] { const char* lists = std::getenv("CCCP_TEST_SWEEP_DECLARED"); return std::string(lists ? lists : ""); }();
+		const std::filesystem::path path = std::filesystem::path(s_Declared) / (label + ".json");
+		std::ifstream file(path);
+		if (s_Declared.empty() || !file) {
+			observation = "no declared list for " + label + (s_Declared.empty() ? std::string() : " at " + path.generic_string());
+			return false;
+		}
+		const Json declared = Json::parse(file, nullptr, false);
+		if (declared.is_discarded() || !declared.contains("controls") || !declared["controls"].is_array()) {
+			observation = "the declared list for " + label + " is not a list of controls";
+			return false;
+		}
+		std::set<std::string> names;
+		std::string faults;
+		const auto fault = [&faults](const std::string& text) { faults += (faults.empty() ? "" : "; ") + text; };
+		for (const Json& entry: declared["controls"]) {
+			const std::string name = entry.value("name", std::string());
+			const bool enabled = entry.value("enabled", true);
+			const std::string reason = entry.value("reason", std::string());
+			names.insert(name);
+			GUIControl* control = manager->GetControl(name);
+			if (!enabled && reason.empty()) fault(name + " is declared disabled with no reason");
+			if (!control || !Under(control, root, depth)) {
+				fault(name + " is missing");
+			} else if (!Visible(control) || !PanelDrawnInLatestPass(control->GetPanel(), c_DrawWindowSeconds)) {
+				fault(name + " is hidden");
+			} else if (Enabled(control) != enabled) {
+				fault(name + (enabled ? " is disabled" : " is enabled though declared disabled: " + reason));
+			}
+		}
+		for (GUIControl* control: found) {
+			if (!names.count(control->GetName())) fault(control->GetName() + " is not declared");
+		}
+		record["declared"] = names.size();
+		if (faults.empty()) return true;
+		observation = label + ": " + faults;
+		return false;
+	}
+
 	bool SweepSteps(GUIControlManager* manager, std::istream& args, std::vector<std::string>& steps, std::string& observation) {
 		std::string rootName;
 		args >> rootName;
@@ -591,6 +646,17 @@ namespace RTE::MenuAutomation {
 			observation = rootName + " is not on the screen";
 			return false;
 		}
+		// Test lever: CCCP_TEST_MENU_FAULT="hide:<control>,disable:<control>" breaks the screen as the sweep reads it, so the
+		// sweep's own verdict is tested against a control a player cannot find and one it cannot use. Unset, nothing changes.
+		static const std::string s_MenuFault = [] { const char* lever = std::getenv("CCCP_TEST_MENU_FAULT"); return std::string(lever ? lever : ""); }();
+		for (const std::string& fault: NameList(s_MenuFault)) {
+			const size_t colon = fault.find(':');
+			GUIControl* broken = colon == std::string::npos ? nullptr : manager->GetControl(fault.substr(colon + 1));
+			if (!broken || !Under(broken, root, depth)) continue;
+			if (fault.compare(0, colon, "hide") == 0) broken->SetVisible(false);
+			if (fault.compare(0, colon, "disable") == 0) broken->SetEnabled(false);
+			System::PrintDiagnosticLine("[sweep] test fault " + fault);
+		}
 		std::vector<GUIControl*> values, tabs, buttons, disabled;
 		for (GUIControl* control: *manager->GetControlList()) {
 			if (!Interactive(control) || !Under(control, root, depth) || !Visible(control) || !PanelDrawnInLatestPass(control->GetPanel(), c_DrawWindowSeconds)) continue;
@@ -601,17 +667,34 @@ namespace RTE::MenuAutomation {
 		}
 		Json record = {{"label", label}, {"root", rootName}, {"values", Json::array()}, {"tabs", Json::array()}, {"buttons", Json::array()},
 		               {"disabled", Json::array()}, {"owed", Json::array()}, {"quiet", Json::array()}};
+		if (!DeclaredControlsFound(manager, root, depth, label, {&values, &tabs, &buttons, &disabled}, record, observation)) return false;
 		for (GUIControl* control: disabled) {
 			record["disabled"].push_back(control->GetName());
 			steps.push_back("assert_enabled " + control->GetName() + " 0");
 		}
 		if (readOnly) {
-			const size_t enabled = values.size() + tabs.size() + buttons.size();
-			record["enabled"] = enabled;
+			record["enabled"] = values.size() + tabs.size() + buttons.size();
+			// A screen shown to read changes nothing: every value is disabled, and its tabs only move about it - each is pressed.
+			for (GUIControl* control: values) steps.push_back("assert_enabled " + control->GetName() + " 0");
+			GUITab* shown = nullptr;
+			for (GUIControl* control: tabs) {
+				if (dynamic_cast<GUITab*>(control)->GetCheck()) shown = dynamic_cast<GUITab*>(control);
+			}
+			for (GUIControl* control: tabs) {
+				record["tabs"].push_back(control->GetName());
+				steps.insert(steps.end(), {"activate " + control->GetName(), "wait 3", "assert_checked " + control->GetName() + " 1"});
+				if (shown && control != shown) steps.insert(steps.end(), {"activate " + shown->GetName(), "wait 3", "assert_checked " + shown->GetName() + " 1"});
+			}
+			for (GUIControl* control: buttons) {
+				if (!own.count(control->GetName())) {
+					observation = "the read-only view's button " + control->GetName() + " is left to no one: name it with own=";
+					return false;
+				}
+				record["owed"].push_back(control->GetName());
+				s_Owed.insert(control->GetName());
+			}
 			observation = record.dump();
 			System::PrintDiagnosticLine("[sweep] " + observation);
-			// A screen shown to read changes nothing: every value is disabled, and its tabs and buttons only move about it.
-			for (GUIControl* control: values) steps.push_back("assert_enabled " + control->GetName() + " 0");
 			return true;
 		}
 		const auto changed = [&](const std::string& name) {
@@ -747,7 +830,8 @@ namespace RTE::MenuAutomation {
 			else steps.push_back("assert_screen_changed " + name);
 			steps.push_back("run " + restore);
 		}
-		record["enabled"] = values.size() + tabs.size() + buttons.size() + record["owed"].size();
+		// Each control once: an owned button is one of the buttons, left to the case to press.
+		record["enabled"] = values.size() + tabs.size() + buttons.size();
 		observation = record.dump();
 		System::PrintDiagnosticLine("[sweep] " + observation);
 		return true;
@@ -2167,6 +2251,11 @@ namespace RTE::MenuAutomation {
 				if (!found && main && manager == main->AutomationManager()) found = main->AutomationLabelText(name, text);
 				const bool credential = CredentialName(name) || Credential(manager->GetControl(name));
 				observation = name + " \"" + Captured(credential, expected) + "\" text=\"" + Captured(credential, text) + "\"";
+				// A word a player cannot see is not read: a control off the screen fails whatever it holds.
+				if (GUIControl* control = manager->GetControl(name); control && !Visible(control)) {
+					observation += " (not on the screen)";
+					return false;
+				}
 				return found && text.find(expected) != std::string::npos;
 			}
 			if (command == "key_down" || command == "key_up") {
@@ -2248,16 +2337,16 @@ namespace RTE::MenuAutomation {
 				auto* box = dynamic_cast<GUITextBox*>(manager->GetControl(target));
 				const bool credential = Credential(box) || CredentialName(target);
 				const std::string text = box ? box->GetText() : "";
-				observation = target + " \"" + Captured(credential, expected) + "\" text=\"" + Captured(credential, text) + "\"";
-				return box && text == expected;
+				observation = target + " \"" + Captured(credential, expected) + "\" text=\"" + Captured(credential, text) + "\"" + (box && !Visible(box) ? " (not on the screen)" : "");
+				return box && Visible(box) && text == expected;
 			}
 			if (command == "assert_value") {
 				std::string target;
 				int expected = 0;
 				args >> std::quoted(target) >> expected;
 				auto* slider = dynamic_cast<GUISlider*>(manager->GetControl(target));
-				observation = target + " expected=" + std::to_string(expected) + " actual=" + (slider ? std::to_string(slider->GetValue()) : std::string("none"));
-				return slider && slider->GetValue() == expected;
+				observation = target + " expected=" + std::to_string(expected) + " actual=" + (slider ? std::to_string(slider->GetValue()) : std::string("none")) + (slider && !Visible(slider) ? " (not on the screen)" : "");
+				return slider && Visible(slider) && slider->GetValue() == expected;
 			}
 			if (command == "assert_selected" || command == "click_row") {
 				std::string target;
@@ -2270,8 +2359,8 @@ namespace RTE::MenuAutomation {
 					return HandRow(manager, target, row, 1, nullptr, observation);
 				}
 				auto* list = dynamic_cast<GUIListBox*>(manager->GetControl(target));
-				observation = target + " expected=" + std::to_string(row) + " actual=" + (list ? std::to_string(list->GetSelectedIndex()) : std::string("none"));
-				return list && list->GetSelectedIndex() == row;
+				observation = target + " expected=" + std::to_string(row) + " actual=" + (list ? std::to_string(list->GetSelectedIndex()) : std::string("none")) + (list && !Visible(list) ? " (not on the screen)" : "");
+				return list && Visible(list) && list->GetSelectedIndex() == row;
 			}
 			if (command == "slider_set") {
 				std::string target;

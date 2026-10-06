@@ -4045,6 +4045,7 @@ void ProcessMenuScript() {
 		GUIControlManager* manager = MenuScriptHandManager(&modal);
 		auto* box = manager ? dynamic_cast<GUICheckbox*>(manager->GetControl(control)) : nullptr;
 		if (!box) { return MenuScriptFail("setcheck " + control + " is not a checkbox on this screen"); }
+		if (!MenuAutomation::Visible(box)) { return MenuScriptFail("setcheck " + control + " is not on the screen"); }
 		if ((box->GetCheck() == GUICheckbox::Checked) == (checked != 0)) {
 			// A hand leaves a box that already reads right alone.
 			MenuScriptPrint("setcheck " + control + " " + std::to_string(checked) + " already PASS");
@@ -4161,9 +4162,13 @@ void ProcessMenuScript() {
 		int expected = 0;
 		iss >> control >> expected;
 		const int actual = (pauseMenu ? pauseMenu->AutomationControlEnabled(control) : menu->AutomationControlEnabled(control)) ? 1 : 0;
-		const bool pass = actual == expected;
-		MenuScriptPrint("assert_enabled " + control + " expected=" + std::to_string(expected) + " actual=" + std::to_string(actual) + " " + (pass ? "PASS" : "FAIL"));
-		if (!pass) { return MenuScriptFail("assert_enabled " + control + " expected " + std::to_string(expected)); }
+		// A control a player cannot see is neither usable nor unusable to them: the read fails.
+		GUIControlManager* manager = pauseMenu ? pauseMenu->AutomationManager() : menu->AutomationManager();
+		GUIControl* shown = manager ? manager->GetControl(control) : nullptr;
+		const bool onScreen = !shown || MenuAutomation::Visible(shown);
+		const bool pass = onScreen && actual == expected;
+		MenuScriptPrint("assert_enabled " + control + " expected=" + std::to_string(expected) + " actual=" + std::to_string(actual) + (onScreen ? "" : " (not on the screen)") + " " + (pass ? "PASS" : "FAIL"));
+		if (!pass) { return MenuScriptFail("assert_enabled " + control + (onScreen ? " is " + std::string(actual ? "enabled" : "disabled") : std::string(" is not on the screen"))); }
 	} else if (cmd == "exit") {
 		std::string owed;
 		if (!MenuAutomation::OwedPressed(owed)) return MenuScriptFail("the script never pressed what its sweeps left to it: " + owed);
