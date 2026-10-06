@@ -24782,6 +24782,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			for (int turn = 0; turn < 2000 && (round.peers[2].GetHostPeerId() != 2 || round.peers[1].IsMigrating() || round.peers[2].IsMigrating()); ++turn) round.Pump();
 			if (round.peers[2].GetHostPeerId() != 2 || round.peers[1].IsMigrating() || round.peers[2].IsMigrating()) return fail("the committed tick did not finish before succession");
 			for (size_t index: {size_t{1}, size_t{2}}) if (round.peers[index].GetMigrationResult().boundary != 121) return fail("succession discarded the granted tick from its completed prefix");
+			for (size_t index: {size_t{1}, size_t{2}, size_t{3}}) round.produced[index] = std::max(round.produced[index], round.peers[index].GetConfig().startFrame);
 			for (uint64_t tick = 122; tick <= 125; ++tick) {
 				round.produceThrough.fill(tick - 1);
 				for (int turn = 0; turn < 200 && (!round.peers[1].HasReadyFrame(tick) || !round.peers[2].HasReadyFrame(tick)); ++turn) round.Pump();
