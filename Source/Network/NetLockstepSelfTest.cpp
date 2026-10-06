@@ -25953,6 +25953,7 @@ namespace {
 			config.initialSeatHolds = catchUp.initialHolds; config.initialPeerLeaves = image.departedPeers;
 			config.initialSeatReclaims = round.peers[0].ReclaimTransactions(); config.peerIncarnations[4] = reclaim->second.seatIncarnation;
 			config.inputDelayFrames = round.peers[0].InputDelayAt(4, activation);
+			for (uint8_t peer = 1; peer <= config.peerCount; ++peer) config.peerInputDelayFrames[peer] = round.peers[0].InputDelayAt(peer, activation);
 			ScenarioRunner::ReleaseWorldCatchUp();
 			NetLockstepCoordinator joined;
 			if (!joined.Start(newcomerWire, config, &round.failure)) return done(round.failure);
@@ -25960,7 +25961,11 @@ namespace {
 			uint64_t produced = activation, applied = activation;
 			bool drove = false;
 			for (int pass = 0; pass < 1000 && !drove; ++pass) {
-				if (produced <= joined.GetStats().nextFrame + 4 && joined.QueueLocalInput(produced, {MakeFrame(view.uid, uint64_t{1} << WEAPON_FIRE)}, {}, &round.failure)) ++produced;
+				if (produced <= joined.GetStats().nextFrame + 4) {
+					if (!joined.QueueLocalInput(produced, {MakeFrame(view.uid, uint64_t{1} << WEAPON_FIRE)}, {}, &round.failure))
+						return done("the newcomer cannot queue input at " + std::to_string(produced) + ": " + round.failure + "; " + joined.BuildReportJson());
+					++produced;
+				}
 				joined.Tick(round.now); round.Pump(); newcomerWire.AdvanceTimeMs(5);
 				for (NetLockstepReadyFrame ready; joined.PopReadyFrame(ready);) joined.FinishSimulationTick(ready.frame);
 				while (round.committed[0].contains(applied)) {
