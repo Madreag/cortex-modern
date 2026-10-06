@@ -3734,6 +3734,13 @@ bool GameActivity::PlaceUnassignedBrain(int player) {
 }
 
 void GameActivity::ForgetDestroyedActor(const Actor* actor) {
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (m_ControlledActor[player] == actor &&
+		    (m_ViewState[player] == ViewState::AIGoToPoint || m_ViewState[player] == ViewState::UnitSelectCircle)) {
+			// These views need the control slot that deletion clears.
+			m_ViewState[player] = ViewState::Normal;
+		}
+	}
 	Activity::ForgetDestroyedActor(actor);
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (m_pLastMarkedActor[player] == actor) m_pLastMarkedActor[player] = nullptr;
