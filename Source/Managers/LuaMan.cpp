@@ -12,6 +12,7 @@
 #include "LuaThreadCodec.h"
 #include "CheckpointImage.h"
 #include "ScenarioRunner.h"
+#include "SoundSimulation.h"
 #include "AtomGroup.h"
 #include "PieMenu.h"
 #include "PieSlice.h"
@@ -140,6 +141,55 @@ struct RTE::LuaPathCallbackContext {
 const std::unordered_set<std::string> LuaMan::c_FileAccessModes = {"r", "r+", "w", "w+", "a", "a+", "rt", "wt"};
 
 namespace {
+	constexpr uint64_t c_PeerScriptBirthBand = uint64_t{1} << 36;
+	char s_PeerScriptBirthKey;
+	char s_SharedScriptBirthKey;
+
+	uint64_t ScriptBirthCounter(lua_State* state, const void* key) {
+		lua_pushlightuserdata(state, const_cast<void*>(key));
+		lua_rawget(state, LUA_REGISTRYINDEX);
+		const uint64_t serial = lua_isnumber(state, -1) ? static_cast<uint64_t>(lua_tonumber(state, -1)) : 0;
+		lua_pop(state, 1);
+		return serial;
+	}
+
+	void SetScriptBirthCounter(lua_State* state, const void* key, uint64_t serial) {
+		lua_pushlightuserdata(state, const_cast<void*>(key));
+		if (serial) lua_pushnumber(state, static_cast<lua_Number>(serial));
+		else lua_pushnil(state);
+		lua_rawset(state, LUA_REGISTRYINDEX);
+	}
+
+	uint64_t ScriptGraphBirthHorizon(lua_State* state, uint64_t sharedSerial) {
+		return std::max(sharedSerial, ScriptBirthCounter(state, &s_PeerScriptBirthKey));
+	}
+
+	class ScriptBirthDomainScope {
+	public:
+		ScriptBirthDomainScope(lua_State* state, bool local) : m_State(state), m_Local(local) {
+			const uint64_t current = luaJIT_state_serial(state);
+			m_Changed = local != (current >= c_PeerScriptBirthBand);
+			if (!m_Changed) return;
+			m_Previous = current;
+			if (local) {
+				SetScriptBirthCounter(state, &s_SharedScriptBirthKey, current);
+				luaJIT_set_state_serial(state, std::max(c_PeerScriptBirthBand, ScriptBirthCounter(state, &s_PeerScriptBirthKey)));
+			} else {
+				luaJIT_set_state_serial(state, ScriptBirthCounter(state, &s_SharedScriptBirthKey));
+			}
+		}
+		~ScriptBirthDomainScope() {
+			if (!m_Changed) return;
+			SetScriptBirthCounter(m_State, m_Local ? &s_PeerScriptBirthKey : &s_SharedScriptBirthKey, luaJIT_state_serial(m_State));
+			luaJIT_set_state_serial(m_State, m_Local ? ScriptBirthCounter(m_State, &s_SharedScriptBirthKey) : m_Previous);
+		}
+	private:
+		lua_State* m_State;
+		uint64_t m_Previous = 0;
+		bool m_Local;
+		bool m_Changed = false;
+	};
+
 	// os.time / os.clock replacements returning sim-tick seconds instead of the wall clock.
 	int det_os_time(lua_State* L) {
 		lua_pushnumber(L, static_cast<lua_Number>(g_TimerMan.GetSimUpdateCount()) / 60.0);
@@ -1269,6 +1319,7 @@ local SEAT_INTERFACE = { ["player-controller"] = true, ["buy-menu"] = true, ["ed
 -- Capture-owned nodes are numbered in walk order in a band of their own above every birth, so the
 -- bytes of an unchanged state do not follow where its birth counter stands.
 local SCRATCH_BAND = 1099511627776
+local PEER_BIRTH_BAND = 68719476736
 
 local function outputNumber(value)
 	return capturing and captureNative.number(value, false) or value
@@ -2026,7 +2077,8 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		_ScriptGraphEndCapture()
 		return serializeGraph(roots, true, base)
 	end
-	local out = { "SG6;", "S", outputNumber(base), ";", "r", #rootIds, ";", concatenate(rootIds), "G", #globals, ";", concatenate(globals), "L", #loaded, ";", concatenate(loaded), patches, "R", rng, "X", #gibReferences, ";", concatenate(gibReferences), "N", ctx.count, ";" }
+	local version = base >= PEER_BIRTH_BAND and "SG7;" or "SG6;"
+	local out = { version, "S", outputNumber(base), ";", "r", #rootIds, ";", concatenate(rootIds), "G", #globals, ";", concatenate(globals), "L", #loaded, ";", concatenate(loaded), patches, "R", rng, "X", #gibReferences, ";", concatenate(gibReferences), "N", ctx.count, ";" }
 	for _, text in ipairs(ctx.chunks) do out[#out + 1] = text end
 	for index = tailFirst, #ctx.order do out[#out + 1] = ctx.nodes[ctx.order[index]] end
 	local byId = {}
@@ -2191,9 +2243,9 @@ end
 local function parse(text)
 	local reader = newReader(text)
 	local version = reader:readUntil(";")
-	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" and version ~= "SG5" and version ~= "SG6" then reader:bad("bad header") end
+	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" and version ~= "SG5" and version ~= "SG6" and version ~= "SG7" then reader:bad("unsupported script graph version " .. version) end
 	local graph = { roots = {}, globals = {}, loaded = {}, nodes = {}, order = {}, enginePatches = {}, gibReferences = {}, nativeReferences = {}, version = version }
-	local birthNumbered = version == "SG5" or version == "SG6"
+	local birthNumbered = version == "SG5" or version == "SG6" or version == "SG7"
 	if birthNumbered then
 		reader:expect("S")
 		graph.serial = reader:integer(reader:readUntil(";"), 1)
@@ -2216,7 +2268,7 @@ local function parse(text)
 		for _ = 1, reader:count() do
 			-- Only SG6 ever wrote an engine patch that a reader can apply: the older shape named a
 			-- node holding the pairs, and no archive with one exists.
-			if version ~= "SG6" then reader:bad("engine patch before SG6") end
+			if version ~= "SG6" and version ~= "SG7" then reader:bad("engine patch before SG6") end
 			local target = reader:typed("path")
 			reader:expect("c")
 			local pairsIn = {}
@@ -2934,8 +2986,8 @@ end
 function Graph.roots(text)
 	local reader = newReader(text)
 	local version = reader:readUntil(";")
-	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" and version ~= "SG5" and version ~= "SG6" then error("script graph: bad header") end
-	if version == "SG5" or version == "SG6" then
+	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" and version ~= "SG5" and version ~= "SG6" and version ~= "SG7" then error("script graph: unsupported script graph version " .. version) end
+	if version == "SG5" or version == "SG6" or version == "SG7" then
 		reader:expect("S")
 		reader:readUntil(";")
 	end
@@ -6394,7 +6446,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		LuaCheckpointBarrierPause barrierPause;
 		ScriptGraphScratchScope scratch(m_State);
 		auto image = std::make_shared<CheckpointLua::GraphImage>();
-		image->liveSerial = restore.serial;
+		image->liveSerial = ScriptGraphBirthHorizon(m_State, restore.serial);
 		image->rng = CaptureRandomGeneratorCheckpoint();
 		const auto callbacksStarted = std::chrono::steady_clock::now();
 		CaptureScriptCallbacks(restore.serial);
@@ -6645,7 +6697,7 @@ bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText
 	lua_getglobal(m_State, "_ScriptGraph");
 	lua_getfield(m_State, -1, "serialize");
 	lua_pushvalue(m_State, -3);
-	lua_pushnumber(m_State, static_cast<lua_Number>(captureSerial.value));
+	lua_pushnumber(m_State, static_cast<lua_Number>(ScriptGraphBirthHorizon(m_State, captureSerial.value)));
 	std::unordered_set<const MovableObject*> carried;
 	struct CarriedScope {
 		explicit CarriedScope(std::unordered_set<const MovableObject*>& objects) { s_CarriedScriptOwnedObjects = &objects; }
@@ -6776,6 +6828,14 @@ bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<st
 	}
 	CollectStrings(m_State, -1, problems);
 	const uint64_t horizon = luaJIT_state_serial(m_State);
+	uint64_t peerHorizon = 0;
+	if (text.starts_with("SG7;S")) {
+		const char* first = text.data() + 5;
+		const auto parsed = std::from_chars(first, text.data() + text.size(), peerHorizon);
+		if (parsed.ec != std::errc{} || parsed.ptr == text.data() + text.size() || *parsed.ptr != ';' || peerHorizon < c_PeerScriptBirthBand || peerHorizon >= (uint64_t{1} << 40)) {
+			problems.emplace_back("invalid SG7 peer birth horizon");
+		}
+	}
 	const int roots = lua_gettop(m_State) - 1;
 	// The script receiver is a graph object even when no saved field or coroutine refers to it yet.
 	lua_getglobal(m_State, "_ScriptGraphCallbacks");
@@ -6845,6 +6905,7 @@ bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<st
 	}
 	// The archive's horizon is where the state counts on from, whatever the wiring above allocated.
 	luaJIT_set_state_serial(m_State, horizon);
+	SetScriptBirthCounter(m_State, &s_PeerScriptBirthKey, peerHorizon);
 	// Objects the graph did not carry still hold functions of the cache it replaced; whatever they load now is born past the horizon.
 	RebindScriptFunctionsFromCache(rebound);
 	lua_settop(m_State, top);
@@ -8572,6 +8633,31 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 #endif
 	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
+	{
+		lua_State* first = luaL_newstate();
+		lua_State* second = luaL_newstate();
+		const auto sharedBirth = [](lua_State* state, int localCount) {
+			{
+				ScriptBirthDomainScope local(state, true);
+				for (int index = 0; index < localCount; ++index) { lua_newtable(state); lua_pop(state, 1); }
+			}
+			lua_newtable(state);
+			const uint64_t serial = luaJIT_value_serial(state, -1);
+			lua_pop(state, 1);
+			return serial;
+		};
+		const uint64_t beforeFirst = luaJIT_state_serial(first);
+		const uint64_t beforeSecond = luaJIT_state_serial(second);
+		const uint64_t birthFirst = sharedBirth(first, 3);
+		const uint64_t birthSecond = sharedBirth(second, 31);
+		const bool separate = beforeFirst == beforeSecond && birthFirst == birthSecond &&
+			ScriptBirthCounter(first, &s_PeerScriptBirthKey) != ScriptBirthCounter(second, &s_PeerScriptBirthKey) &&
+			ScriptGraphBirthHorizon(first, birthFirst) >= c_PeerScriptBirthBand;
+		std::cout << "[script-graph-selftest] " << (separate ? "PASS" : "FAIL") << " shared_births_survive_unequal_local_ai_allocations" << std::endl;
+		checkpointValues = separate && checkpointValues;
+		lua_close(first);
+		lua_close(second);
+	}
 	{
 		const uint64_t serialBefore = luaJIT_state_serial(m_State);
 		std::string first, repeated;
@@ -12048,6 +12134,9 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 	int status = 0;
 
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
+	// Peer AI births do not advance the shared script identity sequence.
+	std::optional<ScriptBirthDomainScope> birthDomain;
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) birthDomain.emplace(m_State, SoundSimulationScope::Domain() == SoundSimulationDomain::LocalSimulation);
 	s_currentLuaState = this;
 	m_CurrentlyRunningScriptPath = functionObject->GetFilePath();
 
