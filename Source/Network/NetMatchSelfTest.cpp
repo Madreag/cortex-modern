@@ -7711,6 +7711,46 @@ namespace RTE {
 				return false;
 			}
 		}
+
+		// A retained admission session must not restart an ended held round while the service finishes its readback.
+		for (bool ended: {false, true}) {
+			LoopbackTransport wire;
+			NetMatchService service;
+			service.m_IsHost = true;
+			service.m_AdmissionAttached = true;
+			service.m_State = NetMatchServiceState::Running;
+			service.m_MatchWasRunning = true;
+			service.m_LocalPeerId = 1;
+			service.m_Session = std::make_unique<NetSession>();
+			service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+			NetLockstepConfig config;
+			config.sessionId = 0x454E444544524F53ULL;
+			config.roundId = 61;
+			config.startFrame = 80;
+			config.localPeerId = 1;
+			config.peerCount = 2;
+			config.substituteSlowPeers = true;
+			config.initialSeatHolds[2].peerId = 2;
+			config.initialSeatHolds[2].cutoffFrame = 1;
+			if (!service.m_Coordinator->StartReplay(wire, config, error)) return false;
+			const NetMatchConfig matchConfig;
+			service.m_ReconnectHost.SetSeatTable(NetH4BuildSeatTable(matchConfig), matchConfig.mode);
+			service.m_ReconnectHost.SetLiveMatch(true);
+			if (ended) service.Complete("match over");
+			const NetRosterStage expected = ended ? NetRosterStage::Ended : NetRosterStage::Running;
+			const uint64_t revision = service.m_ReconnectHost.GetRoster().revision;
+			if (service.m_ReconnectHost.GetRoster().stage != expected || service.m_Coordinator->IsStopped() != ended) {
+				*error = "the ended-roster fixture did not reach its requested round state";
+				return false;
+			}
+			for (int pump = 0; pump < 3; ++pump) service.PumpSessionEvents();
+			if (service.m_ReconnectHost.GetRoster().stage != expected || service.m_ReconnectHost.GetRoster().revision != revision) {
+				*error = ended ? "pumping retained admission restarted the ended roster" : "pumping a live round changed its roster stage";
+				return false;
+			}
+		}
+		std::cout << "[net-match-leave-catch-up-selftest] PASS an_ended_held_roster_stays_ended pumps=3 live_control=1" << std::endl;
+
 		std::cout << "[net-match-leave-catch-up-selftest] PASS leaving_ends_the_seats_catch_up cases=5" << std::endl;
 		return true;
 	}
@@ -16317,9 +16357,12 @@ namespace RTE {
 
 	int NetMatchSelfTest::RunLeaveCatchUp() {
 		std::string error;
-		const bool passed = TestLeavingEndsTheSeatsCatchUp(&error);
-		std::cout << "[net-match-leave-catch-up-selftest] " << (passed ? "PASS" : "FAIL: " + error) << std::endl;
-		return passed ? 0 : 1;
+		const bool leavePassed = TestLeavingEndsTheSeatsCatchUp(&error);
+		std::cout << "[net-match-leave-catch-up-selftest] " << (leavePassed ? "PASS" : "FAIL: " + error) << std::endl;
+		std::string probeError;
+		const bool probePassed = NetModerationGUIProbe::RunCrossScopeSelfTest(&probeError);
+		if (!probePassed) std::cout << "[net-match-leave-catch-up-selftest] FAIL: " << probeError << std::endl;
+		return leavePassed && probePassed ? 0 : 1;
 	}
 
 	int NetMatchSelfTest::Run() {
