@@ -961,7 +961,7 @@ float Activity::GetPlayerFundsShare(int player) const {
 }
 
 void Activity::SetPlayerBrain(Actor* newBrain, int player) {
-	SetPlayerBrainImpl(newBrain, player, false);
+	SetPlayerBrainImpl(newBrain, player);
 }
 
 static bool SharedScriptControl() {
@@ -971,14 +971,14 @@ static bool SharedScriptControl() {
 }
 
 void Activity::SetPlayerBrainFromScript(Actor* newBrain, int player) {
-	SetPlayerBrainImpl(newBrain, player, m_SharedPlayerSeats && SharedScriptControl() && newBrain && newBrain->GetTeam() >= Teams::TeamOne);
+	SetPlayerBrain(newBrain, player);
 }
 
-void Activity::SetPlayerBrainImpl(Actor* newBrain, int player, bool preserveTeam) {
+void Activity::SetPlayerBrainImpl(Actor* newBrain, int player) {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_HadBrain); });
 	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) return;
 	if (newBrain) {
-		if (!preserveTeam && newBrain->GetTeam() != m_Team[player]) {
+		if (newBrain->GetTeam() != m_Team[player]) {
 			newBrain->SetTeam(m_Team[player]);
 		}
 		m_HadBrain[player] = true;

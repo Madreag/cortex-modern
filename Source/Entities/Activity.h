@@ -868,7 +868,7 @@ namespace RTE {
 
 	private:
 		void ConfigureHumanRoster(const NetMatchConfig& config, uint8_t localPeer);
-		void SetPlayerBrainImpl(Actor* newBrain, int player, bool preserveTeam);
+		void SetPlayerBrainImpl(Actor* newBrain, int player);
 		void MapLocalPlayers(const NetMatchConfig& config, uint8_t localPeer);
 
 		// The screens, the seats' view states, the players' controllers and their death and message timers are what a network
