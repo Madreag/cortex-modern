@@ -9426,7 +9426,6 @@ bool PrepareNetLockstepScenario(GnsTransport& transport, NetSession& session, Ne
 	runnerConfig.matchConfig = BuildNetMatchCliConfig(s_netMatch);
 	runnerConfig.useLobbyProtocol = s_netMatch;
 	runnerConfig.requirePublishedStart = true;
-	runnerConfig.autoInputDelay = runnerConfig.matchConfig.delayPolicy == NetMatchDelayPolicy::Auto;
 	runnerConfig.startFrame = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1U;
 	runnerConfig.scenario = ScenarioRunner::ResolvePresetName(ScenarioRunner::GetArgs().scenario);
 	runnerConfig.lockstepWaitMs = 5000;
