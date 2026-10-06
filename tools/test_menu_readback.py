@@ -2492,7 +2492,8 @@ def run_case(options, case, root, failing=None):
     runs, records, argv, images = {}, {}, {}, []
     executor = None
     result = {"pass": False, "case": case, "scripts": {}, "records": records, "probes": {}, "seeds": seeded}
-    result.update(topology="single-box" if paired else "single-peer", proof=False)
+    spread_requested = case in SPREAD_CASES and spread and spread.enabled(options)
+    result.update(topology="spread" if spread_requested else "single-box" if paired else "single-peer", proof=False)
     picture_watches = not BASE_WORDS and case not in OLD_SKINS
     result["picture_watch_scope"] = "all current controls" if picture_watches else "compatibility notices" if case in OLD_SKINS else "base controls"
     try:
@@ -3398,9 +3399,16 @@ def run_case(options, case, root, failing=None):
                                if frame.filename == __file__][-1:]
     finally:
         for run in runs.values():
-            run.close()
-        if executor:
-            result.update(topology="spread", peer_boxes=executor.result()["peer_boxes"], spread=executor.result())
+            try:
+                run.close()
+            except Exception as error:
+                result["pass"] = False
+                result.setdefault("cleanup_errors", []).append(str(error))
+        receipt = executor.result() if executor else None
+        if not receipt and spread_requested and (root / "spread-result.json").is_file():
+            receipt = json.loads((root / "spread-result.json").read_text(encoding="utf-8"))
+        if receipt:
+            result.update(topology="spread", peer_boxes=receipt["peer_boxes"], spread=receipt)
             result["execution_scope"] = "match peers" if paired else "standalone UI"
             result["proof"] = paired and result["pass"] and len(set(result["peer_boxes"].values())) == len(runs)
         result["captures"] = images
@@ -3586,6 +3594,9 @@ def main():
               "source_revision": options.revision, "exe_sha256": options.exe_sha, "port": options.port,
               "cases": [{key: value for key, value in row.items() if key != 'captures'} |
                         {'capture_checks': capture_checks(row.get('captures',[]))} for row in rows]}
+    if all(case in SPREAD_CASES for case, _ in selected):
+        result.update(topology="spread", peer_boxes=[row.get("peer_boxes", {}) for row in rows],
+                      proof=passed and all(row.get("proof", False) for row in rows))
     captures = [image for row in rows for image in row.get('captures', [])]
     (options.out / "captures.json").write_text(json.dumps(captures, indent=2) + "\n", encoding="utf-8")
     result['captures_ref'] = dict(path='captures.json', sha256=sha(options.out/'captures.json'), count=len(captures))
