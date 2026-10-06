@@ -25235,6 +25235,131 @@ namespace {
 		return ReportReleasedClaimsRow("playing_host_returns_with_its_ticket", "", error);
 	}
 
+	bool StartAnnouncedHostSuccession(ReleasePathRound& round, uint8_t count, std::string* error) {
+		round.drainThrough = 29; round.produceThrough.fill(29);
+		if (!round.Start(47430, true, false, count)) { *error = "announced-leave fixture did not start: " + round.failure; return false; }
+		for (int pass = 0; pass < 400 && round.peers[count - 1].GetResumeFrame() != 30; ++pass) round.Pump();
+		for (uint8_t peer = 2; peer <= count; ++peer) if (round.peers[peer - 1].GetResumeFrame() != 30) { *error = "a survivor did not finish boundary 29"; return false; }
+		round.peers[0].Leave("player deliberately leaves");
+		if (!round.peers[0].IsStopped() || !round.peers[0].GetStats().timeoutReason.starts_with("PeerLeft:")) { *error = "the leaver did not end as a player who left"; return false; }
+		round.alive[0] = false; round.hostWire.Stop();
+		const auto succeeded = [&] {
+			for (uint8_t peer = 2; peer <= count; ++peer)
+				if (round.peers[peer - 1].GetHostPeerId() != 2 || round.peers[peer - 1].IsMigrating() || !round.peers[peer - 1].IsRunning()) return false;
+			return true;
+		};
+		for (int pass = 0; pass < 2000 && !succeeded(); ++pass) round.Pump();
+		if (!succeeded()) { *error = "announced host leave ends the survivor's match: " + round.peers[1].GetStats().timeoutReason; return false; }
+		if (round.peers[1].GetMigrationResult().boundary != 29) { *error = "announced succession has a different boundary"; return false; }
+		round.produceThrough.fill(UINT64_MAX); round.drainThrough = UINT64_MAX;
+		for (int pass = 0; pass < 30; ++pass) round.Pump();
+		for (uint8_t peer = 2; peer <= count; ++peer) if (!round.committed[peer - 1].contains(37)) { *error = "a survivor did not play through frame 37"; return false; }
+		return true;
+	}
+
+	bool TestAnnouncedLeaveLoneOutcome(std::string* error) {
+		const auto result = NetMatchService::LoneElectionOutcome(true, false);
+		return ReportReleasedClaimsRow("announced_leave_lone_outcome", result == NetMatchService::LoneElection::HostAlone ? "" : "an announced leave with one connected survivor returns EndMatch instead of HostAlone", error);
+	}
+
+	bool TestAnnouncedHostLeaveKeepsOneSurvivor(std::string* error) {
+		const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("announced_host_leave_keeps_one_survivor", why, error); };
+		SuccessionReplayScope scope;
+		ReleasePathRound round;
+		if (!StartAnnouncedHostSuccession(round, 2, &round.failure)) return fail(round.failure);
+		LoopbackTransport replayWire, tailWire;
+		NetLockstepCoordinator replay, tail;
+		auto config = ReleasedClaimsConfig(round.match, 2, {}, true); config.startFrame = 29;
+		if (!replay.StartReplay(replayWire, config, &round.failure) || !tail.StartReplay(tailWire, config, &round.failure)) return fail(round.failure);
+		std::array<ReleasePathClaimView, 3> views;
+		for (size_t index = 0; index < views.size(); ++index) {
+			auto& core = index == 0 ? round.peers[1] : index == 1 ? replay : tail;
+			if (!views[index].Create("announced copy " + std::to_string(index), core, 1, 2, 1)) return fail("the leaver's claimed unit did not create");
+			views[index].handoff = 1;
+		}
+		NetMatchReplayWriter writer;
+		if (!writer.Open("announced-host-held.ccreplay", round.match, &round.failure)) return fail(round.failure);
+		std::vector<NetLockstepFrame> tailFrames;
+		size_t holds = 0, releases = 0;
+		for (uint64_t tick = 29; tick <= 37; ++tick) {
+			const auto& ready = round.committed[1].at(tick); views[0].ApplyTick(ready);
+			if (tick >= 30 && (!round.peers[1].IsSeatUnderAI(1, tick) || !round.peers[1].IsSeatReclaimableAt(1, tick) || views[0].ended)) return fail("the announced leaver loses its held claims at " + std::to_string(tick));
+			auto frame = PackWorldJoinReadyFrame(ready);
+			for (const auto& command: frame.commands) {
+				if (const auto* held = std::get_if<NetGameSeatHold>(&command.payload); held && held->peerId == 1 && held->cutoffFrame == 30) ++holds;
+				if (const auto* left = std::get_if<NetGameSeatRelease>(&command.payload); left && left->peerId == 1) ++releases;
+			}
+			if (!writer.WriteFrame(tick, frame.frames, frame.commands, frame.observations, frame.valueObservations, &round.failure, frame.senderPeerId)) return fail(round.failure);
+			std::vector<uint8_t> bytes; NetLockstepFrame decoded;
+			if (!EncodeCommittedJoinFrame(frame, bytes, &round.failure) || !DecodeCommittedJoinFrame(bytes, decoded, &round.failure)) return fail(round.failure);
+			tailFrames.push_back(std::move(decoded));
+		}
+		writer.Close(); if (!WaitForReplayCloseForTest(writer, &round.failure)) return fail(round.failure);
+		NetMatchReplayReader reader;
+		if (!reader.Open("announced-host-held.ccreplay", &round.failure)) return fail(round.failure);
+		NetLockstepFrame recorded; bool eof = false;
+		while (reader.ReadFrame(recorded, eof, &round.failure)) {
+			if (!replay.QueueReplayFrame(recorded.targetFrame, recorded.frames, recorded.commands, &round.failure, recorded.observations, recorded.valueObservations, recorded.replayAuthorityPeerId)) return fail(round.failure);
+			replay.Tick(0); NetLockstepReadyFrame ready;
+			if (!replay.PopReadyFrame(ready)) return fail(replay.GetStats().timeoutReason);
+			views[1].ApplyTick(ready); replay.FinishSimulationTick(ready.frame);
+		}
+		if (!eof || holds != 1 || releases) return fail("the announced-leave recording does not carry one hold and no release");
+		ScenarioRunner::SetLockstepCoordinator(&tail);
+		if (!ScenarioRunner::InstallWorldCatchUp(28, tailFrames, &round.failure)) return fail(round.failure);
+		for (const auto& frame: tailFrames) {
+			NetLockstepReadyFrame ready;
+			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(frame.targetFrame, ready, &round.failure)) return fail(round.failure);
+			views[2].ApplyTick(ready); tail.FinishSimulationTick(ready.frame);
+		}
+		for (const auto& view: views) if (view.claimant != 1 || view.ended || view.hashes != views[0].hashes) return fail("live, recording and tail disagree on the leaver's claims/control/input hashes");
+		return fail("");
+	}
+
+	bool TestAnnouncedHostReturnsByTicket(std::string* error) {
+		ReleasePathRound round; std::string failure;
+		if (!StartAnnouncedHostSuccession(round, 2, &failure) || !DriveTicketedFormerHost(round, 1, 47432, false, &failure))
+			return ReportReleasedClaimsRow("announced_host_returns_by_ticket", failure, error);
+		return ReportReleasedClaimsRow("announced_host_returns_by_ticket", "", error);
+	}
+
+	bool TestAnnouncedHostLeaveKeepsTwoSurvivors(std::string* error) {
+		const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("announced_host_leave_keeps_two_survivors", why, error); };
+		ReleasePathRound round;
+		if (!StartAnnouncedHostSuccession(round, 3, &round.failure)) return fail(round.failure);
+		const auto roster = HostLossRoster(round.match);
+		if (!roster.Find(1) || roster.Find(1)->phase != NetSeatPhase::Held || roster.Find(1)->owner != 101 || roster.Find(1)->ticket != 201) return fail("announced leaver's roster does not retain held owner and ticket");
+		std::array<ReleasePathClaimView, 2> views;
+		for (size_t index = 0; index < views.size(); ++index) {
+			auto& core = round.peers[index + 1];
+			if (!views[index].Create("announced survivor " + std::to_string(index + 2), core, 1, 2, 1)) return fail("the leaver's claimed actor did not create");
+			views[index].handoff = 1;
+			for (uint64_t tick = 29; tick <= 37; ++tick) {
+				views[index].ApplyTick(round.committed[index + 1].at(tick));
+				if (tick >= 30 && (!core.IsSeatUnderAI(1, tick) || !core.IsSeatReclaimableAt(1, tick) || core.IsSeatReleased(1) || views[index].claimant != 1 || views[index].ended)) return fail("the announced leaver is not held on both survivors");
+			}
+		}
+		return fail(views[0].hashes == views[1].hashes ? "" : "survivors have unequal claim/control/input hashes");
+	}
+
+	bool TestAnnouncedHostLeaveEndsAnEmptyMatch(std::string* error) {
+		const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("announced_host_leave_ends_an_empty_match", why, error); };
+		for (const bool heldOther: {false, true}) {
+			ReleasePathRound round;
+			if (!round.Start(47430, true, false, heldOther ? 2 : 1)) return fail("the empty-match fixture did not start: " + round.failure);
+			if (heldOther) {
+				if (!round.peers[0].ProposePeerHold(2, round.now, &round.failure)) return fail(round.failure);
+				round.alive[1] = false;
+				for (int turn = 0; turn < 80; ++turn) round.Pump();
+				if (!round.peers[0].HasHeldAISeat(2)) return fail("the only other player was not held");
+			}
+			round.peers[0].Leave("player deliberately leaves");
+			if (!round.peers[0].IsStopped()) return fail("the host's empty match stays running after its leave");
+			for (const auto& peer: round.peers) if (peer.GetHostPeerId() == 2) return fail("a held seat succeeds an empty match");
+		}
+		return fail("");
+	}
+
 	bool TestTwoSuccessionsKeepBothFormerHosts(std::string* error) {
 		const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("two_successions_keep_both_former_hosts", why, error); };
 		ReleasePathRound round;
@@ -25314,7 +25439,7 @@ namespace {
 	int NetLockstepSelfTest::RunSeatSuccession() {
 		EnsureSwitchTestManagers();
 		bool passed = true;
-		for (bool (*test)(std::string*): {TestTwoSuccessionsKeepBothFormerHosts, TestSurvivorsReadOneAuthorityDuringHandover, TestFutureReleaseIsVoidOnEverySurvivor, TestPlayingDepartureSurvivesSuccession, TestUnequalFutureDeparturesConvergeAtSuccession, TestPlayingHostLossKeepsLiveClaims, TestPlayingHostLossRecordsHeldClaims, TestPlayingHostReturnsWithItsTicket, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestReplayMatchesSuccessionDuringActivityTick, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
+		for (bool (*test)(std::string*): {TestTwoSuccessionsKeepBothFormerHosts, TestSurvivorsReadOneAuthorityDuringHandover, TestFutureReleaseIsVoidOnEverySurvivor, TestAnnouncedLeaveLoneOutcome, TestAnnouncedHostLeaveKeepsOneSurvivor, TestAnnouncedHostReturnsByTicket, TestAnnouncedHostLeaveKeepsTwoSurvivors, TestAnnouncedHostLeaveEndsAnEmptyMatch, TestPlayingDepartureSurvivesSuccession, TestUnequalFutureDeparturesConvergeAtSuccession, TestPlayingHostLossKeepsLiveClaims, TestPlayingHostLossRecordsHeldClaims, TestPlayingHostReturnsWithItsTicket, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestReplayMatchesSuccessionDuringActivityTick, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
 			std::string error;
 			passed &= test(&error);
 		}
