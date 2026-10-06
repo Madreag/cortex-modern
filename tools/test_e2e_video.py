@@ -785,8 +785,8 @@ def check_launch_contract(results, scratch):
     stage = scratch / "launch"
     stage.mkdir()
     scenario = {"scripts": {"probe.json": json.dumps({"schema": 1, "steps": [
-        {"op": "wait_file", "path": "{PROBE_DIR_client}/done.json"}]}), "menu.txt": "exit\n"}}
-    peer = {"probe": "probe.json", "menu_script": "menu.txt", "args": ["-net-port", "{PORT}"]}
+        {"op": "wait_file", "path": "{PROBE_DIR_client}/done.json"}]}), "menu.txt": "exit\n", "input.txt": "1 key_down A\n"}}
+    peer = {"probe": "probe.json", "menu_script": "menu.txt", "input_script": "input.txt", "args": ["-net-port", "{PORT}"]}
     tokens = {"PROBE_DIR_client": r"D:\mx\client-stage\probe", "VIDEO": stage / "video",
               "MENU_SCRIPT": stage / "menu.txt", "PORT": 49400}
     env = driver.stage_peer(scenario, peer, stage, tokens)
@@ -797,6 +797,10 @@ def check_launch_contract(results, scratch):
     ok &= row(results, "launch/menu-script-passed",
               args[args.index("-menu-script") + 1] == str(stage / "menu.txt"), str(args))
     ok &= row(results, "launch/headless", env["CCCP_HEADLESS"] == "1")
+    for leaf, expected in (("menu.txt", b"exit\n"), ("input.txt", b"1 key_down A\n"),
+                           ("screen-watches.txt", driver.SCREEN_WATCHES.encode("utf-8"))):
+        ok &= row(results, "launch/portable-line-endings-" + leaf, (stage / leaf).read_bytes() == expected,
+                  "The logical commands and watch text survive a POSIX reader unchanged.")
     return ok
 
 
