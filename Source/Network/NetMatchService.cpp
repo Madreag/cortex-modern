@@ -9976,7 +9976,7 @@ static std::string ResyncSaveName() {
 		if (browse.ListError() == NetDirectoryClient::c_CapacityNotice) why = browse.ListError();
 		browse.StopBrowsing();
 		if (!why.empty()) {
-			if (error) *error = "session " + request.sessionId + ": " + why;
+			if (error) *error = why == NetDirectoryClient::c_CapacityNotice ? why : "session " + request.sessionId + ": " + why;
 			return false;
 		}
 		if (target.persistentWorld && worldIdentityBuilt) {

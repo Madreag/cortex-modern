@@ -1723,7 +1723,7 @@ namespace RTE {
 			}
 		}
 		switch (m_RejectReason) {
-			case NetRejectReason::ModuleManifestMismatch: return m_RejectSummary.empty() ? "This host's mods do not match yours." : m_RejectSummary;
+			case NetRejectReason::ModuleManifestMismatch: return m_MismatchKey == "host_disconnect" || m_RejectSummary.empty() ? "This host's mods do not match yours." : m_RejectSummary;
 			case NetRejectReason::ProtocolMismatch:
 			case NetRejectReason::GameVersionMismatch:
 			case NetRejectReason::BuildMismatch:

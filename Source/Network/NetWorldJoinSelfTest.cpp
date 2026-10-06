@@ -7339,6 +7339,9 @@ namespace RTE {
 				if (!known.HasReject() || static_cast<uint16_t>(known.GetRejectReason()) != code || known.GetRejectSummary() != "the host's stated cause") {
 					*error = "C2: a host disconnect lost its reason or text at code " + std::to_string(code); return false;
 				}
+				if (code == static_cast<uint16_t>(NetRejectReason::ModuleManifestMismatch) && known.BuildPlayerRefusalText() == "the host's stated cause") {
+					*error = "R6: a known disconnect presented host-authored text as the game's own notice"; return false;
+				}
 			}
 			NetSessionConfig config = MakeWorldSessionConfig(port, 22, "Joiner");
 			if (!service.m_Session->StartClient(unknownWire, "loopback", config, error)) return false;
