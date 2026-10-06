@@ -36,6 +36,7 @@ import time
 
 from compare_sim_traces import load_trace, strict_compare
 from run_sim_test import make_run, seed_settings
+from test_menu_readback import spread, managed_case
 
 
 def menu_script(name, host, players, port):
@@ -74,6 +75,7 @@ def read_lockstep(out):
     return lockstep
 
 
+@managed_case
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -85,7 +87,13 @@ def main():
     parser.add_argument("--fake-lag-ms", type=int, default=0)
     parser.add_argument("--leave-at-frame", type=int, default=0,
                         help="hold the departing peer before it sends this target frame, wait until the host receives its preceding frame, then kill it; require this exact effective leave frame. No replacement joins.")
+    if spread:
+        spread.add_arguments(parser)
     options = parser.parse_args()
+    if not spread:
+        parser.error("lobby lifecycle requires the shared spread executor")
+    options.spread = True
+    spread.configure(options)
     if options.short_trace_control and options.action == "leave":
         parser.error("--short-trace-control requires a replacement")
     early_drop = options.leave_at_frame > 0
@@ -104,6 +112,7 @@ def main():
     records = {}
     match = options.action != "leave"
     result = {"pass": False, "action": options.action, "players": options.players}
+    execution = None
 
     def start(name, script, trace=False):
         path = root / f"{name}.txt"
@@ -120,13 +129,19 @@ def main():
         if early_drop and name == "host":
             environment["CC_TEST_LOCKSTEP_OBSERVE_TARGET"] = str(options.leave_at_frame - 1)
         # The delay box is read-only under the auto policy; the floor the host sends is a setting.
-        run = make_run(options.repo, args, out, 120, env=environment)
+        run = execution.make_run(options.repo, args, out, 120, env=environment)
         seed_settings(run, {"NetworkInputDelayFrames": 3})
         runs[name] = run.start()
         return runs[name]
 
     try:
         players = options.players
+        names = ["host", "departing", *(f"stayer{index}" for index in range(2, players))]
+        if match and not early_drop:
+            names.append("replacement")
+        execution = spread.prepare_case(options.repo, root,
+            [spread.Peer(name, os="windows", reviewed=name == "host") for name in names],
+            spread.Match(options.port, parameters={"lane": "menus"}))
         host = menu_script("Host", True, players, options.port)
         if not early_drop:
             host += f"wait_connected {players}\nwait_remote_ready\nwait_all_ready\ndump_lobby\nwait_connected {players - 1}\nassert_substate Lobby\nassert_enabled ButtonMultiplayerStart 0\ndump_lobby\n"
@@ -226,6 +241,8 @@ def main():
     finally:
         for run in runs.values():
             run.close()
+        receipt = execution.result() if execution else spread.read_json(root / "spread-result.json", {})
+        result.update(topology="spread", peer_boxes=receipt.get("peer_boxes", {}), spread=receipt, proof=result["pass"])
         (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps({"pass": result["pass"], "error": result.get("error"),
                       "failed": [key for key, value in result.get("checks", {}).items() if not value], "out": str(root)}), flush=True)

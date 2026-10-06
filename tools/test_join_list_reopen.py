@@ -31,6 +31,7 @@ sys.path.insert(0, str(REPO / "tools"))
 from run_sim_test import make_run, engine_executable  # noqa: E402
 import test_directory_ice_join as directory  # noqa: E402
 from edith_cross import make_cert  # noqa: E402
+from test_menu_readback import spread, managed_case  # noqa: E402
 
 DISCOVERY_PORT = 42115
 
@@ -91,13 +92,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     do_GET = do_POST = do_PUT = do_DELETE = forward
 
 
+@managed_case
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=REPO)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--check", choices=("reopen", "unreachable"), required=True)
     parser.add_argument("--port", type=int, default=49832, help="the first of four lane ports: directory, proxy, two game ports")
+    if spread:
+        spread.add_arguments(parser)
     options = parser.parse_args()
+    if not spread:
+        parser.error("join-list gates require the shared spread executor")
+    options.spread = True
+    spread.configure(options)
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     dir_port, proxy_port, first, second = options.port, options.port + 1, options.port + 2, options.port + 3
@@ -129,16 +137,19 @@ def main() -> int:
                    f"touch_file {marks['joined']}\nexit\n")
     result = {"pass": False, "check": options.check, "exe_sha256": directory.sha256(engine_executable(options.repo)), "steps": []}
     runs = {}
-    # The joiner hears no LAN beacon (this driver holds the discovery port, NetLanDiscovery's c_DiscoveryPort), so every row it
-    # lists is the directory's: a beacon from the same machine would otherwise list the reopened game beside it.
-    lan_block = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    lan_block.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-    lan_block.bind(("0.0.0.0", DISCOVERY_PORT))
+    execution = None
     try:
+        # Hold the same discovery port on the joiner's native machine, so every listed row remains the directory's.
+        execution = spread.prepare_case(options.repo, root,
+            [spread.Peer("host", os="windows"),
+             spread.Peer("client", os="windows", reviewed=True, block_udp=(DISCOVERY_PORT,))],
+            spread.Match(first, dir_port, parameters={"lane": "menus",
+                "directory": {"DIRECTORY_URL": f"127.0.0.1:{dir_port}", "DIRECTORY_PIN": pin, "DIRECTORY_ROOT": root},
+                "peer_directory_urls": {"client": f"127.0.0.1:{proxy_port}"}, "join_by_session": False}))
         for who, text, url in (("host", host, f"127.0.0.1:{dir_port}"), ("client", client, f"127.0.0.1:{proxy_port}")):
             script = root / f"{who}-menu.txt"
             script.write_text(text, encoding="utf-8")
-            run = make_run(options.repo, ["-menu-script", str(script)], root / who, 600, env={"CCCP_HEADLESS": "1"})
+            run = execution.make_run(options.repo, ["-menu-script", str(script)], root / who, 600, env={"CCCP_HEADLESS": "1"})
             directory.patch_settings(Path(run.cwd), {**common, "SessionDirectoryUrl": url, "SessionDirectoryInstallKey": f"join-reopen-{who}-key"})
             runs[who] = run.start()
             time.sleep(2)
@@ -185,10 +196,14 @@ def main() -> int:
     finally:
         proxy.shutdown()
         service.terminate()
+        for run in runs.values():
+            run.close()
     for who, run in runs.items():
         log = run.out / "stdout.log"
         if log.exists():
             result.setdefault("failures", {})[who] = [line for line in log.read_text(errors="replace").splitlines() if "[menu-script] FAILED" in line][-3:]
+    receipt = execution.result() if execution else spread.read_json(root / "spread-result.json", {})
+    result.update(topology="spread", peer_boxes=receipt.get("peer_boxes", {}), spread=receipt, proof=result["pass"])
     (root / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(f"[join-list] {options.check} {'PASS' if result['pass'] else 'FAIL'} {root / 'result.json'}")
     return 0 if result["pass"] else 1
