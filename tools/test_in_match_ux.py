@@ -1052,11 +1052,11 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         raise spread.SpreadRefusal("leave-bad-ticket requires a native private-ticket damage lever")
     placement = spread.prepare_case(
         options.repo, root,
-        [spread.Peer(who, os="windows" if who == NEWCOMER else "any", engines=1, size=(width, height),
+        [spread.Peer(who, os="windows" if who in (NAMES[0], NEWCOMER) else "any", engines=1, size=(width, height),
                      reviewed=who == NAMES[0], readback=who == NAMES[0], held=who == NEWCOMER,
                      share_ok=case != "cost", quiet=case == "cost" and who == NAMES[0])
          for who in who_list + newcomers],
-        spread.Match(port, parameters={"lane": "in-match", "network": "direct",
+        spread.Match(port, parameters={"lane": "in-match", "network": "ice",
                                        "case": case, "players": peers, "moderate": moderate, "cancel": options.cancel}))
     make_peer_run = placement.make_run if placement else make_run
     runs, records = {}, {}
@@ -1092,7 +1092,7 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         runs[who] = make_peer_run(options.repo, args, root / who, 420, env=env)
         set_visual_resolution(runs[who], width, height)
         seed_settings(runs[who].cwd / "Userdata/Settings.ini", {"NetworkDisplayName": names[who], "NetworkMatchStatusMode": "Always",
-                                                                 "NetworkShowDiagnostics": diagnostics, "NetworkIceEnable": "0"})
+                                                                 "NetworkShowDiagnostics": diagnostics, "NetworkIceEnable": "1" if placement else "0"})
 
     def drive(who):
         try:
