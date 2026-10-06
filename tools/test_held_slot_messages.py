@@ -110,7 +110,7 @@ def returner_arm(repo, root, port, result):
         if not identity.is_file():
             raise RuntimeError("the departing peer wrote no identity to return with")
         lines = [f"assert_error {OWN_SEAT_LINE}", "assert_label ButtonMultiplayerReconnect Apply to Rejoin",
-                 "assert_enabled ButtonMultiplayerReconnect 1", "assert_enabled ButtonMultiplayerWaitSlot 0", "dump_host_options",
+                 "assert_enabled ButtonMultiplayerReconnect 1", "assert_visible ButtonMultiplayerWaitSlot 0", "dump_host_options",
                  "activate ButtonMultiplayerReconnect", "wait_ms 12000", "dump_lobby", "exit"]
         (root / "returner.txt").write_text(join_script("Client", port, lines), encoding="utf-8")
         # The same player: its identity comes back with it, its ticket does not.
@@ -138,7 +138,7 @@ def returner_arm(repo, root, port, result):
         checks = result["checks"]
         checks["returner_told_its_slot_is_held"] = f'assert_error "{OWN_SEAT_LINE}"' in log and f'status="{OWN_SEAT_LINE}" PASS' in log
         checks["returner_offered_apply_to_rejoin"] = 'assert_label ButtonMultiplayerReconnect "Apply to Rejoin" text="Apply to Rejoin" PASS' in log
-        checks["returner_offered_no_wait"] = "assert_enabled ButtonMultiplayerWaitSlot expected=0 actual=0 PASS" in log
+        checks["returner_offered_no_wait"] = "assert_visible ButtonMultiplayerWaitSlot 0 actual=0 PASS" in log
         checks["returner_apply_pressed"] = "activate ButtonMultiplayerReconnect click ButtonMultiplayerReconnect PASS" in log
         checks["returner_script_ran_clean"] = "[menu-script] FAILED:" not in log
         checks["host_sees_the_request_beside_the_seat"] = probe_result.get("pass") is True

@@ -21,7 +21,7 @@ observe focus TextHostRecAutosaveInterval
 observe set_text TextHostRecAutosaveInterval 1
 wait_ms 600
 observe assert_label TextHostRecAutosaveInterval 60
-activate ButtonHostOptApply
+observe assert_enabled ButtonHostOptApply 0
 wait_ms 900
 dump_host_options
 activate ButtonHostOptBack

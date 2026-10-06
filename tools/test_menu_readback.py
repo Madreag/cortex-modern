@@ -1559,13 +1559,12 @@ def scripts(case, port, root, size="960x540"):
         text = OPTIONS + net_page("Internet")
         for control in ("LabelNetDirUrl", "TextNetworkDirUrl", "LabelNetDirUrlHint", "LabelNetDirPin",
                         "TextNetworkDirPin", "LabelNetDirStatusTitle", "LabelNetDirStatus",
-                        "ButtonNetReplays", "ButtonNetConnDetails", "ButtonNetNatRelay",
                         "LabelNetInternetReason"):
             text += checks(control, "CollectionBoxNetPageInternet")
-        text += ("assert_enabled ButtonNetReplays 0\nassert_enabled ButtonNetConnDetails 0\n"
-                 "assert_enabled ButtonNetNatRelay 0\nassert_label LabelNetDirStatus Configured\n"
+        # Replays, connection details and the relay live on the multiplayer screens: the page hides their buttons.
+        text += ("assert_visible ButtonNetReplays 0\nassert_visible ButtonNetConnDetails 0\n"
+                 "assert_visible ButtonNetNatRelay 0\nassert_label LabelNetDirStatus Configured\n"
                  "assert_label LabelNetDirUrlHint " + INTERNET_HINT + "\n"
-                 "assert_label ButtonNetNatRelay NAT setup\n"
                  "assert_label LabelNetInternetReason " + INTERNET_REASON + "\n"
                  "set_text TextNetworkDirPin nothex\n"
                  "assert_label LabelNetInternetError 64 hexadecimal\n"
@@ -1946,7 +1945,7 @@ def scripts(case, port, root, size="960x540"):
         # A two-peer lobby has no free peer id, so the closed tail turns a hand's human seat down
         # with the reason in the status line, then accepts the peerless CPU seat the same row offers.
         text += ("combo_refused ComboHostSeatType2 Open\nwait 3\n"
-                 "assert_label LabelHostOptStatus No free peer seat\n")
+                 "assert_label LabelHostOptStatus No free seat\n")
         text += ("combo_select ComboHostSeatType2 CPU\nwait 3\n"
                  "assert_label LabelHostOptStatus Unsaved changes\n"
                  "assert_label LabelHostSeatState2 CPU / Skill\n")
@@ -2991,8 +2990,7 @@ def run_case(options, case, root, failing=None):
                                       "ButtonNetCopyDiagPath", "ButtonNetSaveDiagnostics",
                                       "CheckboxNetworkRecordReplays"),
                         "net-internet": ("TextNetworkDirUrl", "LabelNetDirUrlHint", "TextNetworkDirPin",
-                                         "LabelNetDirStatus", "ButtonNetReplays", "ButtonNetConnDetails",
-                                         "ButtonNetNatRelay", "LabelNetInternetReason"),
+                                         "LabelNetDirStatus", "LabelNetInternetReason"),
                         "misc-page": MISC_ROWS}[case]
             assert set(expected) <= rows.keys(), (case, sorted(rows))
             if case != "misc-page":
@@ -3007,8 +3005,7 @@ def run_case(options, case, root, failing=None):
                     "net-files": ("LabelNetAutosave", "LabelNetAutosaveInterval", "TextNetworkAutosavesKept",
                                   "ButtonNetOpenAutosaves", "TextNetworkDiagDir",
                                   "ButtonNetOpenDiagnostics", "ButtonNetSaveDiagnostics"),
-                    "net-internet": ("TextNetworkDirUrl", "LabelNetDirUrlHint", "LabelNetDirStatus",
-                                     "ButtonNetReplays")}[case]
+                    "net-internet": ("TextNetworkDirUrl", "LabelNetDirUrlHint", "LabelNetDirStatus")}[case]
                 for name in on_column:
                     assert rows[name]["rect"][0] == column, (name, rows[name]["rect"], column)
                 grid_rows = {
@@ -3023,12 +3020,12 @@ def run_case(options, case, root, failing=None):
                                   "LabelNetDiagDirTitle", "ButtonNetOpenDiagnostics",
                                   "CheckboxNetworkRecordReplays", "LabelNetFilesMessage"),
                     "net-internet": ("LabelNetDirUrl", "LabelNetDirUrlHint", "LabelNetDirPin",
-                                     "LabelNetDirStatusTitle", "ButtonNetReplays",
+                                     "LabelNetDirStatusTitle",
                                      "LabelNetInternetReason", "LabelNetInternetError")}[case]
                 deltas = [rows[b]["rect"][1] - rows[a]["rect"][1] for a, b in zip(grid_rows, grid_rows[1:])]
                 # The internet pin box's own row sits between its label and the status row; the chat
                 # page's muted stub waits one row under its rows.
-                expected_pitch = [20, 20, 40, 20, 20, 20] if case == "net-internet" else \
+                expected_pitch = [20, 20, 40, 40, 20] if case == "net-internet" else \
                     [20] * 3 + [40] if case == "net-chat" else [20] * (len(grid_rows) - 1)
                 assert deltas == expected_pitch, (case, deltas)
                 if case == "net-files":
@@ -3051,8 +3048,7 @@ def run_case(options, case, root, failing=None):
             result["unfit"] = [control["name"] for control in captioned if control["text_fits"] is False]
             assert not result["unfit"], result["unfit"]
             disabled = {"net-chat": ("ButtonNetMutedPlayers",),
-                        "net-recovery": ("ButtonNetRejoin", "ButtonNetCancelRecovery"),
-                        "net-internet": ("ButtonNetReplays", "ButtonNetConnDetails", "ButtonNetNatRelay")}.get(case, ())
+                        "net-recovery": ("ButtonNetRejoin", "ButtonNetCancelRecovery")}.get(case, ())
             for name in disabled:
                 assert rows[name]["enabled"] is False, (name, rows[name])
             result["page_text"] = {name: rows[name]["text"] for name in expected if rows[name]["text"]}
