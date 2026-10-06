@@ -3264,7 +3264,8 @@ namespace RTE {
 		if (!PrimeRestoredLockstepInputs(&primeError)) { SetControllerReplayError(primeError); return false; }
 		const auto& config = s_LockstepCoordinator->GetConfig();
 		if (s_LockstepCoordinator->HasReadyFrame(tick) || tick < s_LockstepCoordinator->GetStats().effectiveStartFrame ||
-		    (!s_LockstepCoordinator->IsMigrating() && config.localPeerId == s_LockstepCoordinator->GetHostPeerId())) return RunPacedTick(tick);
+		    (!s_LockstepCoordinator->IsMigrating() && config.localPeerId == s_LockstepCoordinator->GetHostPeerId() &&
+		     (!s_LockstepCoordinator->UsesBoundedWait() || s_LockstepCoordinator->InputDelayAt(config.localPeerId, tick) == 0))) return RunPacedTick(tick);
 		if (!s_LockstepCoordinator->IsMigrating() && s_LockstepCoordinator->InputDelayAt(config.localPeerId, tick) == 0) {
 			SetControllerReplayError("fixed input delay 0 for a client cannot begin a tick before its committed frame; choose at least 1 frame");
 			return false;
