@@ -1354,6 +1354,7 @@ class DirectoryTests(unittest.TestCase):
         # Behind the Cloudflare tunnel every request reaches the service from loopback: each client is limited and
         # reported by the address the tunnel names, never pooled into one loopback bucket.
         self.start()
+        self.server.store.caller_mode = "tunnel"
 
         def register_from(ip: str, i: int) -> tuple[int, dict[str, Any]]:
             status_i, body_i = self.call("POST", "/v1/sessions", sample_register(),
@@ -1374,8 +1375,8 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(body["observed_ip"], "198.51.100.9")
         status, body = self.call("POST", "/v1/sessions", sample_register(),
                                  headers={"X-Install-Key": "Tbadheader000000", "CF-Connecting-IP": "not-an-address"})
-        self.assertEqual(status, 200)
-        self.assertEqual(body["observed_ip"], "127.0.0.1")
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"], "invalid_caller_address")
 
     def test_signal_session_queue_caps_and_idle_drop(self) -> None:
         self.start(queue_idle_s=1.5)
