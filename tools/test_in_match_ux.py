@@ -1096,6 +1096,7 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
                                                                  "NetworkShowDiagnostics": diagnostics, "NetworkIceEnable": "1" if placement else "0"})
         if placement:
             seed_settings(runs[who].cwd / "Userdata/Settings.ini", {"NetworkConnectionMode": "Automatic", "NetworkHostRelayMode": "Directory",
+                                                                      "NetworkStunServers": "stun.l.google.com:19302,stun.cloudflare.com:3478,stun.nextcloud.com:443",
                                                                       "NetworkPortMapEnable": "0", "SessionDirectoryInstallKey": f"in-match-{who}-install"})
 
     def drive(who):
