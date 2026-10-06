@@ -443,7 +443,15 @@ class Case:
             if boxes[box["name"]]["off_limits"]:
                 raise self.refuse(name, box["name"], "went off limits during the case")
             if (name not in self.runs or not self.runs[name].finished) and not (name in self.runs and self.runs[name].native_progress.get("record")):
-                backend.rpc(box, "renew", dict(claim=claim), timeout=15)
+                try:
+                    backend.rpc(box, "renew", dict(claim=claim), timeout=15)
+                except RuntimeError:
+                    # Native workers release completed claims immediately. A
+                    # matching terminal receipt distinguishes completion from
+                    # losing a live reservation; never extend a finished claim.
+                    raw = backend.rpc(box, "text", dict(path=claim["root"] + "/finished.json"), timeout=15)["text"]
+                    if not raw or json.loads(raw).get("token") != claim["token"]:
+                        raise
 
     def prepare(self):
         for name in self.names:
@@ -728,7 +736,7 @@ class Run:
         if box["kind"] == "local":
             shutil.copyfile(manifest["path"], archive)
         else:
-            backend.guarded_run(["scp", "-q", "-o", "BatchMode=yes", box["ssh"] + ":" + manifest["path"], str(archive)], timeout=300)
+            backend.guarded_run(["scp", "-q", "-o", "BatchMode=yes", box["ssh"] + ":" + manifest["path"].replace("\\", "/"), str(archive)], timeout=300)
         if file_sha256(archive) != manifest["sha256"]:
             raise self.case.refuse(self.role, box["name"], "fetched evidence archive hash differs")
         unpack_evidence(archive, destination, manifest["files"])
@@ -951,7 +959,7 @@ def native_execute(spec_path, result_out):
             atomic_bytes(archive_root/path.name, path.read_bytes())
     archive = control/"peer-evidence.tar"
     files = pack_evidence(archive_root, archive)
-    archive_receipt = dict(path=str(archive), sha256=file_sha256(archive), files=files)
+    archive_receipt = dict(path=archive.as_posix(), sha256=file_sha256(archive), files=files)
     write_json(result_out/"peer-result.json", dict(topology="spread", peer=role, box=box["name"], record=record,
                                                executable_sha256=spec["executable_sha256"], archive=archive_receipt))
     write_json(control/"progress.json", dict(identity=identity, pid=run.record["pid"], action=action_receipt, record=record,
