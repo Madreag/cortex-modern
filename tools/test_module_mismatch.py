@@ -1,4 +1,4 @@
-"""Show a mod-mismatch refusal on the joiner's landing status label, four cases on loopback.
+"""Show a mod-mismatch refusal on the joiner's landing status label across separate machines.
 
 Each phase is a real host plus one joiner:
 
@@ -25,6 +25,7 @@ import re
 
 from run_sim_test import make_run, seed_settings
 from test_lobby_lifecycle import wait_for_log
+from test_menu_readback import spread, managed_case
 
 
 LABEL = "LabelMultiplayerLandingStatus"
@@ -74,6 +75,7 @@ def label_text(log):
     return match.group(1) if match else None
 
 
+@managed_case
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -82,13 +84,20 @@ def main():
     parser.add_argument("--port-host-extra", type=int, default=47726)
     parser.add_argument("--port-mixed", type=int, default=47727)
     parser.add_argument("--port-overflow", type=int, default=47728)
+    if spread:
+        spread.add_arguments(parser)
     options = parser.parse_args()
+    if not spread:
+        parser.error("module mismatch requires the shared spread executor")
+    options.spread = True
+    spread.configure(options)
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     version = game_version(options.repo)
     result = {"pass": False, "version": version}
     checks, details = {}, {}
     runs, records = {}, {}
+    executions = {}
 
     def start(phase, name, host, port, suffix, modules):
         script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
@@ -100,7 +109,7 @@ def main():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(script + suffix, encoding="utf-8")
         args = ["-menu-script", path, "-num-lua-states", 4]
-        run = make_run(options.repo, args, root / phase / name, 150)
+        run = executions[phase].make_run(options.repo, args, root / phase / name, 150)
         # The delay box is read-only under the auto policy; the floor the host sends is a setting.
         seed_settings(run, {"NetworkInputDelayFrames": 3})
         staged = [str(stage_module(run, dir_name, friendly, version, mod_version))
@@ -133,6 +142,9 @@ def main():
         ]
         for spec in phases:
             phase = spec["name"]
+            executions[phase] = spread.prepare_case(options.repo, root / phase,
+                [spread.Peer("host", os="windows", output_name="Host"),
+                 spread.Peer("client", os="windows", reviewed=True, output_name="Joiner")], spread.Match(spec["port"]))
             details[phase] = {"port": spec["port"], "expect": {"install": spec["install"], "others": spec["others"]}}
             host_script = ("wait_error could not join\nassert_substate Lobby\n"
                            "assert_enabled ButtonMultiplayerStart 0\nassert_error could not join\n"
@@ -213,6 +225,8 @@ def main():
     finally:
         for run in runs.values():
             run.close()
+        result.update(topology="spread", peer_boxes={name: case.result()["peer_boxes"] for name, case in executions.items()},
+                      spread=[case.result() for case in executions.values()], proof=result["pass"])
         (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps({"pass": result["pass"], "error": result.get("error"),
                       "failed": [key for key, ok in result.get("checks", {}).items() if not ok],
