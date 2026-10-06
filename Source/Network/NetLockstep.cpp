@@ -3232,6 +3232,8 @@ namespace RTE {
 		if (!IsRunning() || m_Config.matchConfig.dedicated || m_Config.matchConfig.persistentWorld || m_Config.matchConfig.successorOrder.empty() || !m_Config.migrationTransportFactory ||
 		    m_Config.localPeerId == GetHostPeerId() || m_RoundId == 0 || m_MigrationGeneration == UINT64_MAX || std::all_of(m_Config.migrationKey.begin(), m_Config.migrationKey.end(), [](uint8_t value) { return value == 0; }))
 			return false;
+		// A granted update belongs to the prefix every successor must recover.
+		if (m_GrantedSimulationTick) { m_DeferredMigrationMs = nowMs; return true; }
 		++m_MigrationGeneration;
 		m_MigrationWireRound = m_RoundId;
 		m_MigrationPhase = NetHostMigrationPhase::Contacting;
@@ -4983,6 +4985,8 @@ namespace RTE {
 		m_PendingRecoveryStop.reset();
 		m_PendingCompleteStop.reset();
 		m_LastCompletedSimulationTick.reset();
+		m_GrantedSimulationTick.reset();
+		m_DeferredMigrationMs.reset();
 		m_RemoteStartsReceived.clear();
 		m_PeersPlayedThisRound.clear();
 		m_RemoteStarts.clear();
@@ -9172,6 +9176,28 @@ namespace RTE {
 		}
 	}
 
+	bool NetLockstepCoordinator::ValidateSimulationTiming(const NetMatchConfig& config, std::string* error) {
+		if (config.dedicated || config.persistentWorld || config.delayPolicy != NetMatchDelayPolicy::Fixed) return true;
+		for (uint8_t peer = 1; peer <= config.peerCount; ++peer) {
+			if (peer == config.hostPeerId || NetMatchConfigUtil::PeerInputDelay(config, peer) != 0) continue;
+			if (error) *error = config.slowPlayerPolicy == NetSlowPlayerPolicy::Pause
+			    ? "fixed input delay 0 with the unbounded slow-player policy cannot simulate a client tick before its commit; choose at least 1 frame"
+			    : "fixed input delay 0 for a client cannot simulate a tick before its commit; choose at least 1 frame";
+			return false;
+		}
+		return true;
+	}
+
+	bool NetLockstepCoordinator::BeginSimulationTick(uint64_t tick, std::string* error) {
+		NET_PLANE_CHECK();
+		if (m_GrantedSimulationTick && *m_GrantedSimulationTick != tick) {
+			if (error) *error = "the previous granted simulation tick is unfinished";
+			return false;
+		}
+		m_GrantedSimulationTick = tick;
+		return true;
+	}
+
 	bool NetLockstepCoordinator::FinishSimulationTick(uint64_t completedTick) {
 		NET_PLANE_CHECK();
 		if (IsRunning() && !m_Playback) for (auto& [revision, decision]: m_TimingDecisions) {
@@ -9187,6 +9213,14 @@ namespace RTE {
 		FlushTimingOutgoing();
 		// A tick the sim applied counts even once the round has failed: the heal resumes from it.
 		if (IsRunning() || IsFailed()) m_LastCompletedSimulationTick = completedTick;
+		if (m_GrantedSimulationTick && *m_GrantedSimulationTick == completedTick) {
+			m_GrantedSimulationTick.reset();
+			if (m_DeferredMigrationMs) {
+				const uint64_t nowMs = std::max(*m_DeferredMigrationMs, m_TimingNowMs);
+				m_DeferredMigrationMs.reset();
+				(void)BeginHostMigration(nowMs);
+			}
+		}
 		if (completedTick % 60 == 0) PruneSeatTransitions(completedTick);
 		if (IsRunning() && !m_Playback && IsSynchronizedCapturePark(completedTick)) {
 			m_ParkFrameSimulated = completedTick;

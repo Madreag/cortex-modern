@@ -8615,7 +8615,7 @@ static std::string ResyncSaveName() {
 			return refuse("the draft names a stale configuration revision");
 		}
 		std::string validation;
-		if (!NetMatchConfigUtil::ValidateLocalAlpha(draft, &validation)) {
+		if (!NetMatchConfigUtil::ValidateLocalAlpha(draft, &validation) || !NetLockstepCoordinator::ValidateSimulationTiming(draft, &validation)) {
 			return refuse(validation);
 		}
 		if (draft.sessionId != adopted.sessionId || draft.hostPeerId != adopted.hostPeerId || draft.peerCount != adopted.peerCount) {
@@ -8717,7 +8717,7 @@ static std::string ResyncSaveName() {
 		} else {
 			seeded.peerInputDelayFrames.clear();
 		}
-		if (!NetMatchConfigUtil::ValidateLocalAlpha(seeded, error)) {
+		if (!NetMatchConfigUtil::ValidateLocalAlpha(seeded, error) || !NetLockstepCoordinator::ValidateSimulationTiming(seeded, error)) {
 			return false;
 		}
 		config = std::move(seeded);
@@ -11363,7 +11363,7 @@ static std::string ResyncSaveName() {
 				config.players.push_back(slot);
 			}
 		}
-		if (!NetMatchConfigUtil::ValidateLocalAlpha(config, error)) return false;
+		if (!NetMatchConfigUtil::ValidateLocalAlpha(config, error) || !NetLockstepCoordinator::ValidateSimulationTiming(config, error)) return false;
 		outConfig = std::move(config);
 		return true;
 	}

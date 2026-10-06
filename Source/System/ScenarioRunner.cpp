@@ -3197,6 +3197,8 @@ namespace RTE {
 	// of the tick that needs them waiting on each; never so far that its own inputs land late. A seat whose reclaim gap has just closed
 	// caught up to the newest input it holds, so it stands there by construction and gives the inputs their lead at once.
 	static bool RunPacedTick(uint64_t tick) {
+		std::string error;
+		if (!s_LockstepCoordinator->BeginSimulationTick(tick, &error)) { ScenarioRunner::SetControllerReplayError(error); return false; }
 		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
 		const bool gapClosed = tick > 0 && s_LockstepCoordinator->IsSeatReclaimGap(local, tick - 1) && !s_LockstepCoordinator->IsSeatReclaimGap(local, tick);
 		if (gapClosed) s_PaceSlide.Reset();
@@ -3262,7 +3264,11 @@ namespace RTE {
 		if (!PrimeRestoredLockstepInputs(&primeError)) { SetControllerReplayError(primeError); return false; }
 		const auto& config = s_LockstepCoordinator->GetConfig();
 		if (s_LockstepCoordinator->HasReadyFrame(tick) || tick < s_LockstepCoordinator->GetStats().effectiveStartFrame ||
-		    (!s_LockstepCoordinator->IsMigrating() && (!s_LockstepCoordinator->UsesBoundedWait() || s_LockstepCoordinator->InputDelayAt(config.localPeerId, tick) == 0))) return RunPacedTick(tick);
+		    (!s_LockstepCoordinator->IsMigrating() && config.localPeerId == s_LockstepCoordinator->GetHostPeerId())) return RunPacedTick(tick);
+		if (!s_LockstepCoordinator->IsMigrating() && s_LockstepCoordinator->InputDelayAt(config.localPeerId, tick) == 0) {
+			SetControllerReplayError("fixed input delay 0 for a client cannot begin a tick before its committed frame; choose at least 1 frame");
+			return false;
+		}
 		(void)s_LockstepCoordinator->NoteFrameWait(tick, NetLockstepNowMs());
 		if (s_LockstepCoordinator->HasReadyFrame(tick)) return RunPacedTick(tick);
 		// The clock says this tick is due and its inputs are not here: it runs ahead of them.

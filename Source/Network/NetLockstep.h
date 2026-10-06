@@ -1041,6 +1041,9 @@ namespace RTE {
 		/// The oldest frame a returning seat may still be served from: older hold and return decisions are in every base it can get.
 		void SetReturnHistoryFloor(uint64_t frame) { NET_PLANE_CHECK(); m_ReturnHistoryFloor = frame; }
 		bool FinishSimulationTick(uint64_t completedTick);
+		/// Keeps a granted tick in the completed prefix before a host election starts.
+		bool BeginSimulationTick(uint64_t tick, std::string* error = nullptr);
+		static bool ValidateSimulationTiming(const NetMatchConfig& config, std::string* error = nullptr);
 		/// Waives the parked tick's frames for every peer it still needs whose transport the admission
 		/// plane has fenced or forgotten, so the tick commits and the pending stop fires at its boundary.
 		/// The seat is untouched: the waived peer is a superseded incarnation, not a leaver.
@@ -1988,6 +1991,8 @@ namespace RTE {
 		void UpdateHostReach(uint64_t nowMs);
 		uint64_t m_AgreedEndDeadlineMs = 0; //!< When a host playing to its agreed end stops waiting for it.
 		std::optional<uint64_t> m_LastCompletedSimulationTick;
+		std::optional<uint64_t> m_GrantedSimulationTick;
+		std::optional<uint64_t> m_DeferredMigrationMs;
 		uint64_t m_ReturnHistoryFloor = 0; //!< Host: the oldest frame a returning seat may still be served from.
 		/// The least delay a seat comes back or into a world at: the margin every seat's delay keeps, sized from its own link's ping.
 		uint16_t ReturnDelayFloor(uint8_t peerId, NetPeerId transport) const;
