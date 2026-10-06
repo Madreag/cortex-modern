@@ -11407,6 +11407,8 @@ int main(int argc, char** argv) {
 				if (NetGameplayRequested()) {
 					(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
 					netLockstepCoordinator.Complete(scenarioExitCode == 0 ? "scenario complete" : "scenario failed");
+					// The completion needs the same goodbye flush as an interactive capped round.
+					(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, c_CappedStopLingerMs);
 				}
 			}
 			if (NetGameplayRequested()) {
