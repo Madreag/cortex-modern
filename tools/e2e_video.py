@@ -1875,6 +1875,10 @@ def _run_one(options, scenario, run, run_index, out):
             continue
         stage.mkdir(parents=True, exist_ok=False)
         environment = stage_peer(scenario, peer, stage, tokens)
+        if getattr(options, 'win_cause_log', False):
+            environment.update(CC_TEST_CROSS_RECORDS=str(peer_root / 'win-events.jsonl'),
+                               CC_TEST_CROSS_RUN=scenario['name'], CC_TEST_CROSS_INSTANCE=name,
+                               CC_TEST_CROSS_EXECUTION=root.name, CC_TEST_CROSS_EVENT_RAW_LIMIT='16777216')
         retained = None
         if reference:
             previous = prior_peer(getattr(options, "completed_runs", []), reference)
@@ -1929,6 +1933,9 @@ def _run_one(options, scenario, run, run_index, out):
             else:
                 destination.write_text(entry["write"], encoding="utf-8")
         runs[name] = run_handle
+        if getattr(options, 'win_cause_log', False):
+            from e2e.win_diagnostics import stage as stage_win_diagnostics
+            write_json(peer_root / 'win-diagnostics.json', stage_win_diagnostics(options.repo, run_handle.cwd))
         staged[name] = {**arm, "args": args, "env": {k: str(v) for k, v in environment.items()},
                         "runtime": str(run_handle.cwd), "retain_runtime_from": reference,
                         "stage": str(stage), "probe_dir": str(stage / "probe"),
@@ -1959,6 +1966,9 @@ def _run_one(options, scenario, run, run_index, out):
                     data=public_native_bytes(data,options.relay_book)
                 (Path(runs[name].out) / "console.log").write_bytes(data)
             records[name] = record
+            if getattr(options, 'win_cause_log', False):
+                from e2e.win_diagnostics import collect as collect_win_diagnostics
+                collect_win_diagnostics(runs[name].out)
         except Exception as error:  # the peer's record carries the failure; the others still finish
             records[name] = {"error": public_value(repr(error),getattr(getattr(options,'relay_book',None),'values',{}))}
         finally:
@@ -2763,6 +2773,7 @@ def main():
     import spread_peers as spread
     spread.add_arguments(parser)
     parser.add_argument("--capture-peer", help="reviewed peer on the controller's private Windows recorder; defaults to the first peer")
+    parser.add_argument('--win-cause-log', action='store_true', help='observe duel brain loss and retain native death events in a private spread runtime')
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path)
     parser.add_argument("--scenario")
@@ -2797,6 +2808,8 @@ def main():
                              "a pair that differs is an engine finding; 0 is off")
     options = parser.parse_args()
     spread.configure(options)
+    if options.win_cause_log and not spread.enabled(options):
+        parser.error('--win-cause-log requires --peer-boxes and private native Data overlays')
     if spread.enabled(options) and (options.host_box or options.client_box or options.peer):
         parser.error("--spread/--peer-boxes use the shared peer interface; select its boxes with --peer-boxes")
 
