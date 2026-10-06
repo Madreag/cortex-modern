@@ -2320,6 +2320,7 @@ static std::string ResyncSaveName() {
 			m_HostEndedTheMatch = false;
 			m_LeftMatch = false;
 			m_HostLeaveConfirmed.reset();
+			m_LeaveRejoinRead.reset();
 			m_HostEndReason.clear();
 			m_CompletedLobbySinceMs = 0;
 			m_PendingLobbyEvents.clear();
@@ -2589,8 +2590,14 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::LeaveKeepsRejoin() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		// The same reading the landing's offer takes after the leave: admission on, and a ticket kept for this match.
-		return s_AdmissionEnabled && !m_IsHost && m_TicketStore.HasRecord();
+		if (!s_AdmissionEnabled || m_IsHost) return false;
+		// The same reading the landing's offer takes after the leave: a ticket that loads, not a file that is there. A menu asks
+		// every pass while it is open, so the ticket is read again at most every half second.
+		const uint64_t nowMs = UnixNowMs(nullptr);
+		if (!m_LeaveRejoinRead || nowMs < m_LeaveRejoinRead->first || nowMs - m_LeaveRejoinRead->first >= 500) {
+			m_LeaveRejoinRead = std::make_pair(nowMs, m_TicketStore.Check(nowMs) == NetH4TicketLoadResult::Loaded);
+		}
+		return m_LeaveRejoinRead->second;
 	}
 
 	void NetMatchService::LeaveMatch(const std::string& result) {

@@ -247,8 +247,7 @@ namespace RTE {
 		return true;
 	}
 
-	NetH4TicketLoadResult NetReconnectTicketStore::Load(uint64_t nowUnixMs, NetH4TicketRecord& out, std::string* error) {
-		if (NetA7Journal::Enabled()) m_A7LoadedSha256.clear();
+	NetH4TicketLoadResult NetReconnectTicketStore::Read(uint64_t nowUnixMs, NetH4TicketRecord& out, std::string* error, std::vector<uint8_t>& bytes) const {
 		std::error_code code;
 		if (!std::filesystem::exists(m_Path, code)) {
 			SetError(error, "no recovery record");
@@ -256,13 +255,11 @@ namespace RTE {
 		}
 		std::ifstream file(m_Path, std::ios::binary);
 		if (!file) {
-			++m_RefusedLoads;
 			SetError(error, "the recovery record could not be read");
 			return NetH4TicketLoadResult::Corrupt;
 		}
-		const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+		bytes.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 		if (bytes.size() < sizeof(NetAuthBytes32)) {
-			++m_RefusedLoads;
 			SetError(error, "the recovery record is truncated");
 			return NetH4TicketLoadResult::Corrupt;
 		}
@@ -271,21 +268,36 @@ namespace RTE {
 		std::memcpy(mac.data(), bytes.data() + body.size(), mac.size());
 		NetH4TicketRecord record;
 		if (!Deserialize(body, record)) {
-			++m_RefusedLoads;
 			SetError(error, "the recovery record is damaged");
 			return NetH4TicketLoadResult::Corrupt;
 		}
 		if (!NetH4VerifyTicketRecord(record.credential, body, mac)) {
-			++m_RefusedLoads;
 			SetError(error, "the recovery record failed its integrity check");
 			return NetH4TicketLoadResult::Corrupt;
 		}
 		if (nowUnixMs >= record.issuedAtUnixMs && nowUnixMs - record.issuedAtUnixMs > c_MaxRecordAgeMs) {
-			++m_RefusedLoads;
 			SetError(error, "the recovery record is too old to offer");
 			return NetH4TicketLoadResult::Stale;
 		}
 		out = record;
+		return NetH4TicketLoadResult::Loaded;
+	}
+
+	NetH4TicketLoadResult NetReconnectTicketStore::Check(uint64_t nowUnixMs) const {
+		NetH4TicketRecord record;
+		std::vector<uint8_t> bytes;
+		return Read(nowUnixMs, record, nullptr, bytes);
+	}
+
+	NetH4TicketLoadResult NetReconnectTicketStore::Load(uint64_t nowUnixMs, NetH4TicketRecord& out, std::string* error) {
+		if (NetA7Journal::Enabled()) m_A7LoadedSha256.clear();
+		std::vector<uint8_t> bytes;
+		const NetH4TicketLoadResult result = Read(nowUnixMs, out, error, bytes);
+		if (result == NetH4TicketLoadResult::Missing) return result;
+		if (result != NetH4TicketLoadResult::Loaded) {
+			++m_RefusedLoads;
+			return result;
+		}
 		if (NetA7Journal::Enabled()) {
 			m_A7LoadedSha256 = NetA7Journal::Sha256(bytes.data(), bytes.size());
 			if (m_A7LoadedSha256.empty()) NetA7Journal::Gap("loaded ticket SHA-256 unavailable");
