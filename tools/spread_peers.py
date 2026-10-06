@@ -35,6 +35,11 @@ peer_boxes, refused_peer, refused_box and the exact reason. Prefixes are
 differs from preparation", and "Windows process suspension is unavailable".
 No fitting box means immediate refusal; the caller may retry after routing.
 No case assertion, oracle, timeout or default single-box launch is changed.
+Peer.output_name optionally declares an existing non-ASCII output directory;
+make_run(..., role=...) also accepts its declared logical peer explicitly.
+Text scripts retain their original UTF-8 or legacy Windows byte encoding.
+The byte-pinned interface is shipped as a pool control input, so callers do
+not need it committed into their own branch before using the published call.
 Configured dispatcher discovery uses CORTEX_POOL_DISPATCHER, the installed
 box_facts adapter, or --pool-dispatcher. There is no alternate dispatcher.
 """
@@ -88,12 +93,15 @@ class Peer:
     timeout: float = 300
     expected: tuple = ()
     fixtures: tuple = ()
+    output_name: str | None = None
 
     def __post_init__(self):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", self.name):
             raise ValueError("peer name must be a safe path component")
         if self.engines != 1:
             raise ValueError("a spread peer reserves exactly one engine on its own machine")
+        if self.output_name is not None and (not self.output_name or self.output_name in (".", "..") or any(char in self.output_name for char in '/\\\0<>:"|?*')):
+            raise ValueError("output name must be one safe directory component")
 
 
 @dataclass(frozen=True)
@@ -274,6 +282,18 @@ def complete_signal(data):
         return False
 
 
+def map_script(data, mappings, session=None):
+    """Map private paths without transcoding the caller's script bytes."""
+    try:
+        text, encoding = data.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        text, encoding = data.decode("cp1252", errors="surrogateescape"), "cp1252"
+    text = map_text(text, mappings)
+    if session and "TextJoinAddress" in text:
+        text = re.sub(r"(?m)^(settext TextJoinAddress)\s+127\.0\.0\.1(?::\d+)?\s*$", lambda match: match[1] + " session:" + session, text)
+    return text.encode(encoding, errors="surrogateescape")
+
+
 def declared_signals(root):
     """Extract actual wait/signal declarations, never mirror arbitrary JSON files."""
     root = Path(root).resolve()
@@ -357,6 +377,11 @@ class Case:
         self.names = [peer.name for peer in self.peers]
         if not self.names or len(set(name.casefold() for name in self.names)) != len(self.names):
             raise ValueError("a spread case declares unique peers")
+        self.output_names = {peer.name: peer.output_name or peer.name for peer in self.peers}
+        if len({name.casefold() for name in self.output_names.values()}) != len(self.names):
+            raise ValueError("a spread case declares unique output names")
+        self.interface_source = Path(__file__).read_text(encoding="utf-8")
+        self.interface_sha256 = hashlib.sha256(self.interface_source.encode()).hexdigest()
         self.pool, self.transport_module, self.dispatcher = installed_pool(dispatcher)
         self.registry = Path(registry or self.dispatcher.with_name("boxes.json"))
         self.pins, self.peer_ports = pairs(peer_boxes), peer_ports or {}
@@ -397,10 +422,11 @@ class Case:
         source_repo = self.repo if (self.repo/"tools/box_facts.py").is_file() else Path(module.worker.facts.__file__).resolve().parents[1]
         backend = module.Transport(repo=source_repo, work=self.lane_root/".spread-inputs")
         backend.repo = self.repo
+        backend.sources["spread_peers.py"] = self.interface_source
         adapter = Path(module.worker.facts.__file__).with_name("pool_run.py")
         if adapter.is_file():
             backend.sources["pool_run.py"] = adapter.read_text(encoding="utf-8")
-            backend.control_id = hashlib.sha256(json.dumps(backend.sources, sort_keys=True).encode()).hexdigest()[:20]
+        backend.control_id = hashlib.sha256(json.dumps(backend.sources, sort_keys=True).encode()).hexdigest()[:20]
         backend.guard = self.guard
         limits = read_json(os.environ.get("CORTEX_SPREAD_LIMITS", ""), {})
         if limits:
@@ -435,6 +461,8 @@ class Case:
                 pin = reviewed_box
                 if not pin:
                     raise self.refuse(peer.name, "unassigned", "reviewed screen requires a registered local Windows recorder")
+            if pin and peer.quiet and any(box["name"].casefold() == pin.casefold() and box.get("timing") is False for box in catalog):
+                raise self.refuse(peer.name, pin, "catalog does not permit timing measurements on this box")
             excluded = used + [box["name"] for box in catalog if peer.quiet and box.get("timing") is False]
             needs = self.pool.Needs(os=peer.os, engines=peer.engines, gpu=bool(peer.size), memory=peer.memory,
                                     alone=peer.quiet, size=peer.size, only_box=pin, excluded=tuple(excluded))
@@ -550,13 +578,16 @@ class Case:
             time.sleep(.25)
         raise self.refuse(name, self.members[name][0]["name"], f"host published no session on match port {port}")
 
-    def make_run(self, repo, args, out, timeout=120, env=None, expected=None, *, runtime=None, fixtures=None):
-        role = Path(out).name
+    def make_run(self, repo, args, out, timeout=120, env=None, expected=None, *, runtime=None, fixtures=None, role=None):
+        component = Path(out).name
+        role = role or next((name for name, output in self.output_names.items() if output == component), component)
         if role not in self.members:
             raise ValueError(f"undeclared spread peer {role}")
+        if Path(out).resolve().parent != self.out or component != self.output_names[role]:
+            raise ValueError("runner output must be the peer's declared directory under the case folder")
         if role in self.runs:
             raise ValueError(f"spread peer {role} already has a runner")
-        handle = Run(self, repo, args, out, timeout, env or {}, expected or (), fixtures or (), runtime)
+        handle = Run(self, repo, args, out, timeout, env or {}, expected or (), fixtures or (), runtime, role=role)
         self.runs[role] = handle
         return handle
 
@@ -606,6 +637,7 @@ class Case:
 
     def result(self):
         return dict(schema=1, topology="spread", peer_boxes={name: item[0]["name"] for name, item in self.members.items()},
+                    interface_sha256=self.interface_sha256,
                     executable_hashes={name: item[1].get("exe_sha256") for name, item in self.members.items()},
                     identities=self.identities, records={name: run.record for name, run in self.runs.items()},
                     match=dict(port=self.match.port, parameters=self.match.parameters), refusals=self.refusals)
@@ -648,9 +680,9 @@ class Case:
 
 class Run:
     """A native-runner handle with local staging paths for existing case logic."""
-    def __init__(self, case, repo, args, out, timeout, env, expected, fixtures, runtime):
+    def __init__(self, case, repo, args, out, timeout, env, expected, fixtures, runtime, *, role=None):
         self.case, self.repo, self.out = case, Path(repo).resolve(), Path(out).resolve()
-        self.role, self.timeout, self.env = self.out.name, timeout, dict(env)
+        self.role, self.output_name, self.timeout, self.env = role or self.out.name, self.out.name, timeout, dict(env)
         self.expected, self.fixtures, self.retained = list(expected), list(fixtures), runtime
         self.cwd = self.out/"runtime"
         self.started = self.finished = False
@@ -693,14 +725,14 @@ class Run:
         mappings = [(str(self.case.out), claim["case_root"]), (self.case.out.as_posix(), claim["case_root"]),
                     (str(self.repo), claim["repo"]), (self.repo.as_posix(), claim["repo"])]
         files = {}
-        roots = [self.cwd, self.case.out/(self.role + "-stage"), self.case.out/(self.role + "-probe"), self.case.out/(self.role + "_probe")]
+        roots = [self.cwd, self.case.out/(self.output_name + "-stage"), self.case.out/(self.output_name + "-probe"), self.case.out/(self.output_name + "_probe")]
         paths = set(self.case.out.glob("*.txt"))
         for root in roots:
             if root.is_dir():
                 paths.update(path for path in root.rglob("*") if path.is_file())
         for argument in [*args, *self.env.values()]:
             path = Path(str(argument))
-            if path.is_file() and path.suffix.lower() in (".txt", ".json", ".lua", ".ini"):
+            if path.is_file() and path.suffix.lower() in (".txt", ".json", ".lua", ".ini", ".ccreplay"):
                 if path.resolve().is_relative_to(self.case.out):
                     paths.add(path.resolve())
                 elif path.resolve().is_relative_to(self.repo):
@@ -715,14 +747,11 @@ class Run:
                 raise self.case.refuse(self.role, box["name"], "private credentials or tickets cannot be staged as case inputs")
             data = path.read_bytes()
             if path.suffix.lower() in (".txt", ".json", ".ini", ".lua"):
-                text = map_text(data.decode("utf-8-sig"), mappings)
-                if session and "TextJoinAddress" in text:
-                    text = re.sub(r"(?m)^(settext TextJoinAddress)\s+127\.0\.0\.1(?::\d+)?\s*$", lambda match: match[1] + " session:" + session, text)
-                data = text.encode()
+                data = map_script(data, mappings, session)
             files[path.relative_to(self.case.out).as_posix()] = base64.b64encode(data).decode()
         signals = self.case.signals()
         self.case.extra_signals = sorted(set(getattr(self.case, "extra_signals", ())) | set(signals))
-        native = dict(schema=1, role=self.role, root=claim["case_root"], repo=claim["repo"], box=box,
+        native = dict(schema=1, role=self.role, output_name=self.output_name, root=claim["case_root"], repo=claim["repo"], box=box,
                       control=claim["control"], claim=self.case.transport_module.Transport.native_claim(claim),
                       args=[map_text(argument, mappings) for argument in args],
                       env={key: map_text(value, mappings) for key, value in self.env.items()},
@@ -737,7 +766,7 @@ class Run:
             native["directory"] = {key: value for key, value in native["directory"].items() if key != "DIRECTORY_ROOT"}
         path = claim["root"] + "/peer-spec.json"
         backend.rpc(box, "write", dict(path=path, value=native))
-        request["command"] = ["python", "{REPO}/tools/spread_peers.py", "--native", path, "--out", "{OUT}"]
+        request["command"] = ["python", claim["control"] + "/spread_peers.py", "--native", path, "--out", "{OUT}"]
         backend.launch(box, claim, request)
         self.started = True
         self.deadline = time.monotonic() + self.timeout + 180
@@ -782,7 +811,7 @@ class Run:
             source = destination/safe_relative(relative)
             # Runtime Data links never travel. Selected writable artifacts are
             # exported by the native owner as ordinary verified files.
-            output_relative = relative.replace(self.role + "/runtime-evidence/", self.role + "/runtime/", 1)
+            output_relative = relative.replace(self.output_name + "/runtime-evidence/", self.output_name + "/runtime/", 1)
             atomic_bytes(self.case.out/safe_relative(output_relative), source.read_bytes())
         self.record = read_json(self.out/"record.json", {})
         self.record.update(topology="spread", box=box["name"], native_root=claim["case_root"], native_task_exit=result.get("exit_code"))
@@ -875,7 +904,8 @@ def native_execute(spec_path, result_out):
     from acceptance_remote import pack_evidence
     root = Path(spec["root"]).resolve()
     role = spec["role"]
-    out = root/role
+    output_name = spec.get("output_name", role)
+    out = root/output_name
     control = Path(spec_path).parent
     result_out = Path(result_out)
     result_out.mkdir(parents=True, exist_ok=True)
@@ -959,7 +989,7 @@ def native_execute(spec_path, result_out):
                 run.record["timed_out"] = True
             if "-record-video" in run.argv:
                 from e2e_video import gameplay_signals
-                gameplay_signals(Path(run.argv[run.argv.index("-record-video") + 1]), root/(role + "-stage"))
+                gameplay_signals(Path(run.argv[run.argv.index("-record-video") + 1]), root/(output_name + "-stage"))
             if time.monotonic() - last_progress >= .25:
                 last_progress = time.monotonic()
                 write_json(control/"progress.json", dict(identity=identity, pid=run.record["pid"], action=action_receipt,
@@ -983,7 +1013,7 @@ def native_execute(spec_path, result_out):
     # Native private inputs were scrubbed at staging and tickets stay private.
     archive_root = root/"exports"/role
     archive_root.mkdir(parents=True, exist_ok=True)
-    candidates = [out, root/(role + "-stage"), root/(role + "-probe"), root/(role + "_probe"), preflight_root]
+    candidates = [out, root/(output_name + "-stage"), root/(output_name + "-probe"), root/(output_name + "_probe"), preflight_root]
     for candidate in candidates:
         if not candidate.is_dir():
             continue
