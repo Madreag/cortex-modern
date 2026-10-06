@@ -35,6 +35,23 @@ namespace RTE {
 	uint64_t NetLockstepSharedClockMs();
 	static std::atomic<uint64_t> s_CrossTransportResetMs{0};
 
+	std::string GnsTransport::TurnHostReceipts(const std::string& servers) {
+		std::istringstream input(servers);
+		std::string server, result;
+		while (std::getline(input, server, ',')) {
+			if (server.empty()) continue;
+			std::string host = server;
+			if (server.front() == '[') {
+				const auto end = server.find(']');
+				if (end == std::string::npos) return {};
+				host = server.substr(1, end - 1);
+			} else if (std::count(server.begin(), server.end(), ':') == 1) host = server.substr(0, server.find(':'));
+			if (!result.empty()) result += ',';
+			result += System::Sha256Hex(host.data(), host.size());
+		}
+		return result;
+	}
+
 	namespace {
 		void SetError(std::string* error, const std::string& message) {
 			if (error) {
@@ -714,16 +731,15 @@ namespace RTE {
 			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 		}
 
-		// The endpoint in use (GNS reports none for a relayed route) and, for a relayed route, the TURN servers this connection runs with
-		// and the relay offer they came from; a change names the move and how long after the dial it came.
+		// Digests bind the relay to its offer without writing the player's addresses.
 		void WriteRouteReceipt(HSteamNetConnection connection, const SteamNetConnectionInfo_t& info, bool relayed, bool allowed, const char* change) const {
 			DiagnosticLine() << "[net-ice] selected candidate=" << CandidateType(info) << " connection=" << connection << std::endl;
 			char address[SteamNetworkingIPAddr::k_cchMaxString]{};
 			info.m_addrRemote.ToString(address, sizeof(address), true);
 			std::ostringstream line;
 			line << "[net-route] RouteAllowed route=" << (relayed ? "relay" : "direct") << " allowed=" << (allowed ? 1 : 0) << " connection=" << connection
-			     << " remote=" << (info.m_addrRemote.IsIPv6AllZeros() ? std::string("none") : std::string(address));
-			if (relayed) line << " turn=" << ConnectionConfigString(connection, k_ESteamNetworkingConfig_P2P_TURN_ServerList);
+			     << " remote_sha256=" << (info.m_addrRemote.IsIPv6AllZeros() ? std::string("none") : System::Sha256Hex(address, std::char_traits<char>::length(address)));
+			if (relayed) line << " turn_sha256=" << TurnHostReceipts(ConnectionConfigString(connection, k_ESteamNetworkingConfig_P2P_TURN_ServerList));
 			line << " offer=" << RouteOffer(connection, relayed);
 			if (change) {
 				line << " change=" << change;

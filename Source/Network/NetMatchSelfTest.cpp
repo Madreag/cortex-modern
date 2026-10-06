@@ -4130,6 +4130,20 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestRouteHostReceipts(std::string* error) {
+			const std::string first = "37fcff24bf62035b2b08020afc08b4fecd4fcffce57ab23518e3561ff0fe76b9";
+			const std::string second = "5afd19e856d1c18d17d600dfd2b5f534992333985e126c2a951047102c1ed536";
+			const std::string third = "84a60010564e121a833d1c4a745d1669783696f065b8a6f6523b0e6952dadd0a";
+			if (GnsTransport::TurnHostReceipts("192.0.2.1:3478,[2001:db8::1]:443,relay.example.test:3479") != first + ',' + second + ',' + third ||
+			    GnsTransport::TurnHostReceipts("192.0.2.1:443") != first || !GnsTransport::TurnHostReceipts("").empty() ||
+			    !GnsTransport::TurnHostReceipts("[2001:db8::1").empty()) {
+				*error = "relay host receipts do not match independent address digests";
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS relay_host_receipts_keep_addresses_out_of_the_log" << std::endl;
+			return true;
+		}
+
 		bool TestRunnerRecoversAMissedLobbyStart(std::string* error) {
 			LoopbackTransport hostTransport, clientTransport;
 			StateTransferTap tap(hostTransport);
@@ -16529,6 +16543,7 @@ namespace RTE {
 		if (!TestLobbyStateTransferRestart(&error)) return fail(error);
 		if (!TestLobbyStateTransferBackpressure(&error)) return fail(error);
 		if (!TestLobbyStartWaitsOutAFullSendQueue(&error)) return fail(error);
+		if (!TestRouteHostReceipts(&error)) return fail(error);
 		if (!TestRunnerRecoversAMissedLobbyStart(&error)) return fail(error);
 		if (!TestRunnerStateTransferProgress(&error)) return fail(error);
 		if (!TestRunnerStateTransferProgress(&error, true)) return fail("resync after private return: " + error);

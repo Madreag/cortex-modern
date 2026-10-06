@@ -299,7 +299,7 @@ class HotspotRows(unittest.TestCase):
         relay = ('[net-ice] selected candidate=relay connection=7\n[net-route] RouteAllowed route=relay allowed=1 connection=7 remote=none '
                  'turn=turn.cloudflare.com:3478 offer=s:0@2000\n')
         moved = ('[net-ice] selected candidate=srflx connection=7\n[net-route] RouteAllowed route=direct allowed=1 connection=7 '
-                 'remote=24.251.145.96:5000 offer=none change=relay->direct after_ms=4100\n')
+                 'remote=192.0.2.103:5000 offer=none change=relay->direct after_ms=4100\n')
         direct_report = {'found': True, 'relayed': False}
         verdict = history(opening + relay + moved, 's', direct_report, None)
         self.assertTrue(verdict['passed'], verdict['reasons'])
@@ -330,6 +330,21 @@ class HotspotRows(unittest.TestCase):
                 swapped = log.replace(line, changed)
                 self.assertFalse(self.match().judge_relay(dict(run, logs={'host': swapped, 'client': swapped}))['passed'])
         self.assertFalse(self.match().judge_relay(dict(run, signals_observed=True))['passed'])
+
+    def test_hashed_relay_hosts_keep_the_offer_and_provider_binding(self):
+        import hashlib
+        match = self.match()
+        host = 'relay.example.test'
+        digest = hashlib.sha256(host.encode()).hexdigest()
+        line = f'[net-route] RouteAllowed route=relay allowed=1 connection=7 remote=none turn_sha256={digest} offer=s:0@2000'
+        offers = [dict(session_id='s', match_id='s:0', provider='coturn', expires_at=2000)]
+        self.assertIsNotNone(match.receipt_binding(line, offers, 's', 'coturn', {host}))
+        for changed in (line.replace(digest, hashlib.sha256(b'other.example.test').hexdigest()),
+                        line.replace('@2000', '@1999'), line.replace(digest, digest + ',bad'),
+                        line.replace('turn_sha256=' + digest, 'turn_sha256=')):
+            self.assertIsNone(match.receipt_binding(changed, offers, 's', 'coturn', {host}))
+        self.assertIsNone(match.receipt_binding(line, offers, 's', 'cloudflare', {host}))
+        self.assertIsNone(match.receipt_binding(line + ' turn=other.example.test:3478', offers, 's', 'coturn', {host}))
 
     def test_every_box_holds_the_same_game_data_before_an_engine_starts(self):
         """2026-10-04: six Data text files with CRLF on two boxes were refused as 'modules' by the directory after a 10-minute wait."""

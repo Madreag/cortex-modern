@@ -131,6 +131,7 @@ namespace RTE {
 		/// Also hands a changed relay login to the TURN allocations of the live P2P connections.
 		void UpdateListenerIceServers(const GnsP2PConfig& config);
 		static bool ConnectionPolicyAllowsRoute(int mode, bool relayed) { return mode == 1 ? !relayed : mode != 2 || relayed; }
+		static std::string TurnHostReceipts(const std::string& servers);
 		/// The connect limit ICE connections run with: c_IceConnectTimeoutMs, or CC_TEST_ICE_CONNECT_TIMEOUT_MS when a measurement sets it.
 		static uint32_t IceConnectTimeoutMs();
 

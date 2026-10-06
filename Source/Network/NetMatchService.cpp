@@ -109,6 +109,10 @@ namespace RTE {
 	}
 
 	namespace {
+		std::string EndpointReceipt(const std::string& address) {
+			return "endpoint_sha256=" + System::Sha256Hex(address.data(), address.size());
+		}
+
 		/// A seat is away while its owner's link is gone, its return is in flight or the host opened it; a hold in place keeps its player.
 		bool SeatViewAway(const NetMatchService::SeatView& view) {
 			return view.peerId != 0 && (view.seat.owner == 0 || view.seat.link == NetSeatLink::Dropped || view.state == "Reconnecting");
@@ -3116,7 +3120,7 @@ static std::string ResyncSaveName() {
 				m_HeldRejoinRoutes.push_back(*successor);
 			}
 		}
-		if (successor) System::PrintDiagnosticLine("[net-match] reconnect: trying the successor at " + successor->address + ":" + std::to_string(successor->port));
+		if (successor) System::PrintDiagnosticLine("[net-match] reconnect: trying the successor " + EndpointReceipt(successor->address) + " port=" + std::to_string(successor->port));
 		if (!(successor ? RejoinSuccessorRoute(*successor, &attemptError) : BeginTicketRejoin(&attemptError))) {
 			m_ReconnectUx.NoteAttemptFailed(nowMs, attemptError);
 		}
@@ -6385,7 +6389,7 @@ static std::string ResyncSaveName() {
 			auto transport = std::make_unique<GnsTransport>();
 			if (!AttachAdmissionPlane(*m_Session, request, m_Coordinator->GetConfig().matchConfig, sessionConfig, sessionConfig.localIdentity, &error) ||
 			    !m_Session->StartClient(*transport, address, sessionConfig, &error)) {
-				System::PrintDiagnosticLine("[net-match] held client: the successor at " + address + ":" + std::to_string(route.endpoint.listenPort) + " could not be dialed: " + error);
+				System::PrintDiagnosticLine("[net-match] held client: the successor " + EndpointReceipt(address) + " could not be dialed: " + error);
 				continue;
 			}
 			m_MigratedTransport = std::move(transport);
@@ -6394,7 +6398,7 @@ static std::string ResyncSaveName() {
 			m_InPlaceMoveSinceMs = SteadyNowMs();
 			m_HeldRecordPackets.clear(); m_HeldRecordQueued = false;
 			std::ostringstream line;
-			line << "[net-match] held client: the host is gone; the catch-up moves to the successor at " << m_InPlaceMoveAddress << " peer=" << static_cast<int>(route.peerId)
+			line << "[net-match] held client: the host is gone; the catch-up moves to the successor " << EndpointReceipt(m_InPlaceMoveAddress) << " peer=" << static_cast<int>(route.peerId)
 			     << " from=" << m_WorldCatchUp.appliedThrough;
 			System::PrintDiagnosticLine(line.str());
 			return true;
@@ -6534,7 +6538,7 @@ static std::string ResyncSaveName() {
 		}
 		const bool failed = m_Session->IsFailed() || m_Session->GetState() == NetSessionState::Closed || m_Session->GetState() == NetSessionState::Rejected;
 		if (!failed && SteadyNowMs() - m_InPlaceMoveSinceMs < c_InPlaceMoveBudgetMs) return true;
-		System::PrintDiagnosticLine("[net-match] held client: the successor at " + m_InPlaceMoveAddress + " did not admit the seat: " +
+		System::PrintDiagnosticLine("[net-match] held client: the successor " + EndpointReceipt(m_InPlaceMoveAddress) + " did not admit the seat: " +
 		                            (failed ? m_Session->BuildRejectText() : std::string("no answer in time")));
 		return DialNextInPlaceRouteLocked(nowMs);
 	}
@@ -10135,7 +10139,7 @@ static std::string ResyncSaveName() {
 			}
 			{
 				std::ostringstream line;
-				line << "[net-ice] session " << request.sessionId << " join_mode=" << target.joinMode << " resolved to " << target.address << ":" << target.port << "; taking the IP half";
+				line << "[net-ice] session " << request.sessionId << " join_mode=" << target.joinMode << " resolved to " << EndpointReceipt(target.address) << "; taking the IP half";
 				System::PrintDiagnosticLine(line.str());
 			}
 			return true;
@@ -10288,7 +10292,7 @@ static std::string ResyncSaveName() {
 			m_IceRoute = "ip";
 			m_StatusText = "NAT traversal failed; trying the host's UDP address";
 		}
-		System::PrintDiagnosticLine("[net-ice] " + iceError + "; retrying IP " + target.address + ":" + std::to_string(target.port));
+		System::PrintDiagnosticLine("[net-ice] " + iceError + "; retrying IP " + EndpointReceipt(target.address));
 		if (error) error->clear();
 		if (config.nowMs) session.Tick(config.nowMs(), false);
 		const bool started = runner.Start(ip, session, coordinator, config, error);
@@ -11438,7 +11442,7 @@ static std::string ResyncSaveName() {
 		while (!m_HeldRejoinRoutes.empty()) {
 			const NetMatchServiceRequest route = m_HeldRejoinRoutes.front();
 			m_HeldRejoinRoutes.pop_front();
-			System::PrintDiagnosticLine("[net-match] held rejoin: the host is gone; rejoining the successor at " + route.address + ":" + std::to_string(route.port));
+			System::PrintDiagnosticLine("[net-match] held rejoin: the host is gone; rejoining the successor " + EndpointReceipt(route.address) + " port=" + std::to_string(route.port));
 			if (RejoinSuccessorRoute(route, error)) return true;
 		}
 		return BeginHeldRejoinOnNextHost(error);

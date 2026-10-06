@@ -296,11 +296,18 @@ def receipt_binding(line: str, offers: list[dict], session: str | None, provider
     """A relayed route bound by the engine's own receipt: its TURN servers are the provider's alone and its offer is one the
     directory logged issuing for this session (match id and expiry). None when the receipt does not bind it."""
     servers = re.search(r' turn=(\S+)', line or '')
+    hashed = re.search(r' turn_sha256=(\S+)', line or '')
     offer = re.search(r' offer=(\S+)', line or '')
     named = {host_of(server) for server in servers[1].split(',')} if servers else set()
+    digests = set(hashed[1].split(',')) if hashed else set()
+    expected = {hashlib.sha256(host.encode()).hexdigest() for host in hosts}
+    hashes_valid = bool(digests) and all(re.fullmatch(r'[0-9a-f]{64}', value) for value in digests) and digests <= expected
+    hosts_valid = bool(named) and named <= hosts
+    if hashed and servers:
+        hashes_valid = hashes_valid and hosts_valid and digests == {hashlib.sha256(host.encode()).hexdigest() for host in named}
     issued = {f'{row.get("match_id")}@{row.get("expires_at")}' for row in offers if row.get('session_id') == session and row.get('provider') == provider}
-    if named and named <= hosts and offer and offer[1] in issued:
-        return f'by its route receipt: turn {sorted(named)} on offer {offer[1]}'
+    if (hashes_valid if hashed else hosts_valid) and offer and offer[1] in issued:
+        return f'by its route receipt: turn {sorted(digests) if hashed else sorted(named)} on offer {offer[1]}'
     return None
 
 
