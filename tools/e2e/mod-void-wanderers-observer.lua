@@ -11,6 +11,12 @@ function VWSceneObserver:UpdateScript()
 	local scene = SceneMan.Scene and SceneMan.Scene.PresetName or "none";
 	local mode = CF and CF.GS and CF.GS["Mode"] or "none";
 	local form = VoidWanderers and VoidWanderers.UI and VoidWanderers.UI[1] and VoidWanderers.UI[1].Text or "none";
+	if self.ticks <= 80 and VoidWanderers and VoidWanderers.Mouse then
+		local cursor = VoidWanderers.PlayerCount == 1 and VoidWanderers.CurCursorMO or VoidWanderers.brain;
+		if cursor and MovableMan:IsActor(cursor) then
+			print("[vw-hand] tick=" .. self.ticks .. " x=" .. VoidWanderers.Mouse.X .. " y=" .. VoidWanderers.Mouse.Y .. " fire=" .. tostring(cursor:GetController():IsState(Controller.WEAPON_FIRE)) .. " pressed=" .. tostring(VoidWanderers.MouseFirePressed) .. " form=" .. form);
+		end
+	end
 	if form ~= self.lastForm then
 		print("[vw-form] tick=" .. self.ticks .. " form=" .. form);
 		self.lastForm = form;
