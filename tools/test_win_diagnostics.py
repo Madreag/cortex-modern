@@ -101,7 +101,11 @@ class PrivateStagingTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'private Data'):
                     stage(root / 'repo', linked)
             finally:
-                (linked / 'Data').rmdir()
+                link = linked / 'Data'
+                if link.is_symlink():
+                    link.unlink()
+                else:
+                    link.rmdir()
             self.assertEqual(source.read_bytes(), original)
 
 
