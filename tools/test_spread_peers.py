@@ -16,6 +16,32 @@ from test_peer_run_guards import PeerRunGuardTests
 
 
 class ContractTests(unittest.TestCase):
+    def test_native_claim_keeps_the_runners_fresh_root_and_live_ownership(self):
+        import cross_peers as cross
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)/'host'
+            marker = out/'.spread-run-owner.json'
+            events = []
+            def factory():
+                out.mkdir(exist_ok=False)
+                events.append('staged')
+                return SimpleNamespace(close=lambda:events.append('closed'))
+            @contextlib.contextmanager
+            def claim(box, peer):
+                self.assertTrue(out.is_dir())
+                marker.write_text('owned')
+                events.append('claimed')
+                try: yield
+                finally:
+                    marker.unlink()
+                    events.append('released')
+            with patch.object(cross, 'peer_run_scope', side_effect=claim), contextlib.ExitStack() as ownership:
+                run = spread.stage_native_run(factory, ownership, {}, {})
+                self.assertTrue(marker.is_file())
+                self.assertEqual(events, ['staged','claimed'])
+            self.assertEqual(events, ['staged','claimed','released'])
+            self.assertFalse(marker.exists())
+
     def test_post_shipment_fifo_wait_uses_the_same_box_and_claim(self):
         states = [{'reason':'earlier work request is waiting: menus'},
                   {'reason':'box launch refused; owner=menus (pid=7); since now'},

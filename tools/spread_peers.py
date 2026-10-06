@@ -1399,23 +1399,32 @@ def publish_signals(root, signals, allowed):
             atomic_bytes(target, data)
 
 
+def stage_native_run(factory, ownership, box, peer, *args, **kwargs):
+    """Stage with the existing runner, then claim its root before any start."""
+    from cross_peers import peer_run_scope
+    run = factory(*args, **kwargs)
+    try:
+        ownership.enter_context(peer_run_scope(box, peer))
+    except BaseException:
+        run.close()
+        raise
+    return run
+
+
 def native_execute(spec_path, result_out):
     spec = read_json(spec_path)
     if not spec or spec.get("schema") != 1:
         raise ValueError("invalid native peer specification")
     sys.path.insert(0, spec["control"])
-    from cross_peers import peer_run_scope
     root = Path(spec["root"]).resolve()
-    box = dict(spec["box"], executable=os.environ["CCCP_TEST_BINARY"], scratch=str(root),
-               kind="windows-local" if spec["box"]["kind"] == "local" else spec["box"]["kind"])
     peer = dict(case_id=spec["case_id"], peer_id=spec["role"], lane=spec.get("lane"),
                 run_root=str(root/spec.get("output_name", spec["role"])), controller_root=spec.get("controller_root"),
                 ports=spec["case_ports"], executable_sha256=spec["executable_sha256"])
-    with peer_run_scope(box, peer):
-        return _native_execute(spec_path, result_out, peer)
+    with contextlib.ExitStack() as ownership:
+        return _native_execute(spec_path, result_out, peer, ownership)
 
 
-def _native_execute(spec_path, result_out, peer):
+def _native_execute(spec_path, result_out, peer, ownership):
     spec = read_json(spec_path)
     if not spec or spec.get("schema") != 1:
         raise ValueError("invalid native peer specification")
@@ -1466,8 +1475,9 @@ def _native_execute(spec_path, result_out, peer):
     retained = None
     if spec.get("retained_runtime") or any(path.parts[0] == "Data" for path in runtime_files):
         retained = native_retained_runtime(spec["repo"], out, runtime_files, spec["fixtures"])
-    run = make_run(spec["repo"], spec["args"], out, timeout=spec["timeout"], env=environment,
-                   expected=spec["expected"], fixtures=spec["fixtures"], runtime=retained)
+    run = stage_native_run(make_run, ownership, box, peer, spec["repo"], spec["args"], out,
+                           timeout=spec["timeout"], env=environment,
+                           expected=spec["expected"], fixtures=spec["fixtures"], runtime=retained)
     if retained is not None:
         link_directory(retained, out / "runtime")
     else:
