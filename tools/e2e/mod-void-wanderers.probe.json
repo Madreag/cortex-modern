@@ -4,7 +4,7 @@
   "steps": [
     {
       "op": "wait",
-      "screen": "game",
+      "screen": "Gameplay",
       "sim_at_least": 32
     },
     {
