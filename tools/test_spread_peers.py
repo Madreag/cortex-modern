@@ -822,20 +822,19 @@ class ContractTests(unittest.TestCase):
                 else:
                     runtime = spread.native_retained_runtime(repo, root/'native/seat', files, [])
             native_base = runtime/'Data/Base.rte'
-            if platform != 'win32':
-                self.assertFalse([path for path in aliases if path.is_relative_to(native_base)],
-                                 'module content must have no directory links')
-                self.assertEqual((native_base/'Actors/actor.bin').read_bytes(), b'actor pixels')
-                self.assertEqual((native_base/'Index.ini').read_bytes(), b'DataModule')
-                self.assertEqual({path.relative_to(native_base).as_posix() for path in native_base.rglob('*') if path.is_file()},
-                                 {'Index.ini', 'Actors/actor.bin', 'Activities/P4AlphaDuel.lua'})
-            else:
-                self.assertIn(native_base/'Actors', aliases)
+            self.assertFalse([path for path in aliases if path.is_relative_to(native_base)],
+                             'module content must have no directory links')
+            self.assertEqual((native_base/'Actors/actor.bin').read_bytes(), b'actor pixels')
+            self.assertEqual((native_base/'Index.ini').read_bytes(), b'DataModule')
+            contents = {path.relative_to(native_base).as_posix():path.read_bytes()
+                        for path in native_base.rglob('*') if path.is_file()}
+            self.assertEqual(set(contents), {'Index.ini', 'Actors/actor.bin', 'Activities/P4AlphaDuel.lua'})
             self.assertIn(runtime/'Data/Other.rte', aliases)
             self.assertEqual((native_base/'Activities/P4AlphaDuel.lua').read_bytes(), b'observed duel')
             (native_base/'Activities/P4AlphaDuel.lua').write_bytes(b'private later edit')
             self.assertEqual((base/'Activities/P4AlphaDuel.lua').read_bytes(), b'unchanged duel',
                              'overlay never writes to immutable source')
+            return contents
 
     def test_posix_private_module_preserves_all_files_without_content_links(self):
         for platform in ('linux', 'darwin'):
@@ -845,8 +844,9 @@ class ContractTests(unittest.TestCase):
     def test_posix_private_module_cross_filesystem_fallback_preserves_contents(self):
         self.exercise_private_module_contents('linux', OSError(errno.EXDEV, 'different filesystem'))
 
-    def test_windows_private_module_keeps_existing_directory_aliases(self):
-        self.exercise_private_module_contents('win32')
+    def test_windows_and_posix_private_modules_have_identical_content_manifests(self):
+        windows = self.exercise_private_module_contents('win32')
+        self.assertEqual(windows, self.exercise_private_module_contents('linux'))
 
     def test_real_menu_pairs_keep_every_original_page_assertion_and_capture(self):
         import test_menu_readback as menu
