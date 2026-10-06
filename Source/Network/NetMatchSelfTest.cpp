@@ -3830,6 +3830,10 @@ namespace RTE {
 			void Stop() override { m_Transport.Stop(); }
 			std::vector<NetTransportEvent> PollEvents() override { if (beforePoll) beforePoll(); return m_Transport.PollEvents(); }
 			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error, bool* congested) override {
+				if (dropSend && dropSend(lane, bytes)) {
+					if (congested) *congested = false;
+					return true;
+				}
 				if (!m_Transport.Send(peer, lane, bytes, error, congested)) return false;
 				const auto decoded = NetLobbyProtocol::Decode(bytes);
 				if (decoded.ok) {
@@ -3846,6 +3850,7 @@ namespace RTE {
 			std::function<bool(uint16_t, std::string*)> afterHostStart;
 			std::function<void()> beforePoll;
 			std::function<void()> afterLobbyStart;
+			std::function<bool(NetTransportLane, const std::vector<uint8_t>&)> dropSend;
 		private:
 			LoopbackTransport& m_Transport;
 		};
@@ -4122,6 +4127,98 @@ namespace RTE {
 				         "; host started " + std::to_string(host.IsStarted()) + ", client started with the whole state " + std::to_string(received);
 				return false;
 			}
+			return true;
+		}
+
+		bool TestRunnerRecoversAMissedLobbyStart(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			StateTransferTap tap(hostTransport);
+			NetSession hostSession, clientSession;
+			NetLobbySession clientLobby;
+			NetLockstepCoordinator hostCoordinator, clientCoordinator;
+			NetMatchRunner runner;
+			const auto startedAt = std::chrono::steady_clock::now();
+			const auto nowMs = [&] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count()); };
+			NetMatchRunnerConfig config;
+			config.host = true;
+			config.matchConfig = MakeConfig();
+			config.useLobbyProtocol = true;
+			config.lobbyWaitMs = 1000;
+			config.sessionWaitMs = 1000;
+			config.lockstepWaitMs = 800;
+			config.postSessionSettleMs = config.postLobbySettleMs = 0;
+			config.nowMs = nowMs;
+			config.sessionConfig.port = 47569;
+			config.sessionConfig.sessionId = config.matchConfig.sessionId;
+			config.sessionConfig.displayName = "Host";
+			config.sessionConfig.heartbeatIntervalMs = 25;
+			config.sessionConfig.timeoutMs = 120;
+			auto& identity = config.sessionConfig.localIdentity;
+			identity.gameVersion = "7.0.0-test";
+			identity.networkProtocolVersion = NetProtocol::c_Version;
+			identity.controllerFrameVersion = ControllerFrame::c_Version;
+			identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+			identity.buildId = "lobby-start-selftest";
+			identity.platform = "test";
+			NetSessionConfig clientConfig = config.sessionConfig;
+			clientConfig.displayName = "Client";
+			++clientConfig.localNonce;
+			tap.afterHostStart = [&](uint16_t, std::string* startError) { return clientSession.StartClient(clientTransport, "loopback", clientConfig, startError); };
+			uint64_t transportClock = 0, lobbyStartedAt = 0, firstStartAt = 0;
+			bool lobbyActive = false, coordinatorActive = false, changedStart = false, wrongLane = false;
+			uint32_t startAttempts = 0;
+			std::vector<uint8_t> firstStart;
+			std::string peerError;
+			tap.dropSend = [&](NetTransportLane lane, const std::vector<uint8_t>& bytes) {
+				const auto decoded = NetLobbyProtocol::Decode(bytes);
+				if (!decoded.ok || !std::holds_alternative<NetLobbyStart>(decoded.message.payload)) return false;
+				wrongLane = wrongLane || lane != NetTransportLane::ControlReliable;
+				if (++startAttempts == 1) { firstStart = bytes; firstStartAt = nowMs(); return true; }
+				changedStart = changedStart || bytes != firstStart;
+				return false;
+			};
+			tap.beforePoll = [&] {
+				const uint64_t now = nowMs();
+				hostTransport.AdvanceTimeMs(now - transportClock);
+				clientTransport.AdvanceTimeMs(now - transportClock);
+				transportClock = now;
+				if (!clientSession.IsReady()) clientSession.Tick(now);
+				if (!clientSession.IsReady() || !peerError.empty()) return;
+				if (!lobbyActive) {
+					NetLobbySessionConfig lobbyConfig;
+					lobbyConfig.localPeerId = 2;
+					lobbyConfig.remotePeerId = 1;
+					lobbyConfig.remoteTransportPeerId = clientSession.GetRemoteTransportPeerId();
+					lobbyConfig.matchConfig = config.matchConfig;
+					lobbyConfig.session = &clientSession;
+					lobbyConfig.sessionNowMs = nowMs;
+					lobbyActive = clientLobby.Start(clientTransport, lobbyConfig, &peerError);
+					lobbyStartedAt = now;
+				}
+				if (!lobbyActive) return;
+				if (!coordinatorActive) {
+					clientLobby.Tick(now - lobbyStartedAt);
+					if (!clientLobby.IsStarted()) return;
+					NetLockstepConfig lockstepConfig;
+					lockstepConfig.sessionId = clientSession.GetSessionId();
+					lockstepConfig.localPeerId = 2;
+					lockstepConfig.remoteTransportPeerIds = {{1, clientSession.GetRemoteTransportPeerId()}};
+					lockstepConfig.matchConfig = clientLobby.GetMatchConfig();
+					lockstepConfig.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(lockstepConfig.matchConfig, 2);
+					lockstepConfig.startFrame = clientLobby.GetStartFrame();
+					lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(lockstepConfig.matchConfig.ownershipPolicy);
+					lockstepConfig.scenario = lockstepConfig.matchConfig.activityPreset;
+					coordinatorActive = clientCoordinator.Start(clientTransport, lockstepConfig, &peerError);
+				}
+				if (coordinatorActive) clientCoordinator.Tick(NetLockstepNowMs());
+			};
+			if (!runner.Start(tap, hostSession, hostCoordinator, config, error) || !coordinatorActive || !clientCoordinator.IsRunning() ||
+			    !clientSession.IsReady() || startAttempts < 2 || changedStart || wrongLane || nowMs() - firstStartAt < 250) {
+				*error = "a missed lobby start was not repaired with live session keepalives: " + *error + "; attempts=" + std::to_string(startAttempts) +
+				         "; client_started=" + std::to_string(coordinatorActive) + "; client_ready=" + std::to_string(clientSession.IsReady()) + "; peer=" + peerError;
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS a_missed_lobby_start_is_repeated_without_losing_the_session attempts=" << startAttempts << std::endl;
 			return true;
 		}
 
@@ -16432,6 +16529,7 @@ namespace RTE {
 		if (!TestLobbyStateTransferRestart(&error)) return fail(error);
 		if (!TestLobbyStateTransferBackpressure(&error)) return fail(error);
 		if (!TestLobbyStartWaitsOutAFullSendQueue(&error)) return fail(error);
+		if (!TestRunnerRecoversAMissedLobbyStart(&error)) return fail(error);
 		if (!TestRunnerStateTransferProgress(&error)) return fail(error);
 		if (!TestRunnerStateTransferProgress(&error, true)) return fail("resync after private return: " + error);
 		// The host options transaction: each arm reports its own verdict so one red cannot hide another.
