@@ -59,6 +59,7 @@ import sys
 import threading
 import time
 import uuid
+import zlib
 
 from run_sim_test import RUNTIME_SETTINGS, engine_executable, file_sha256
 
@@ -114,7 +115,18 @@ def atomic_bytes(path, data):
     temporary = path.with_name(path.name + ".incoming-" + uuid.uuid4().hex)
     try:
         temporary.write_bytes(data)
-        os.replace(temporary, path)
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                # Windows readers can briefly omit delete sharing. Keep the
+                # complete incoming file and retry publication, never expose a
+                # partial JSON/log to a case's unchanged gate reader.
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(.01)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -521,7 +533,9 @@ class Case:
                     self.identities[handle.role] = progress["identity"]
                     from cross_peers import require_distinct_machines
                     require_distinct_machines(self.identities)
-                for relative, encoded in progress.get("files", {}).items():
+                files = (json.loads(zlib.decompress(base64.b64decode(progress["packed_files"], validate=True)))
+                         if progress.get("packed_files") else progress.get("files", {}))
+                for relative, encoded in files.items():
                     target = self.out/safe_relative(relative)
                     atomic_bytes(target, base64.b64decode(encoded, validate=True))
                 if progress.get("record"):
@@ -740,6 +754,8 @@ class Run:
         if not self.started or self.finished:
             return
         box, claim, _, backend = self.case.members[self.role]
+        if self.native_progress.get("record", {}).get("exit_code") is not None:
+            return dict(action=action, box=box["name"], pid=self.process, already_finished=True)
         if action in ("suspend", "resume") and box["os"] != "windows":
             raise self.case.refuse(self.role, box["name"], "Windows process suspension is unavailable")
         token = uuid.uuid4().hex
@@ -747,6 +763,8 @@ class Run:
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             self.case.synchronize(force=True)
+            if self.native_progress.get("record", {}).get("exit_code") is not None:
+                return dict(action=action, box=box["name"], pid=self.process, already_finished=True)
             receipt = self.native_progress.get("action", {})
             if receipt.get("token") == token:
                 if receipt.get("error"):
@@ -779,6 +797,11 @@ def native_snapshot(root, out, signals):
         if path.is_file() and public_file(path) and path.stat().st_size <= 16 << 20:
             result[path.relative_to(root).as_posix()] = base64.b64encode(path.read_bytes()).decode()
     return result
+
+
+def packed_snapshot(root, out, signals):
+    """Lossless transport of the existing snapshot; all asserted bytes survive."""
+    return base64.b64encode(zlib.compress(json.dumps(native_snapshot(root, out, signals)).encode())).decode()
 
 
 def publish_signals(root, signals, allowed):
@@ -844,7 +867,7 @@ def native_execute(spec_path, result_out):
     if spec["directory"]:
         seed_settings(run, dict(SessionDirectoryUrl=f"127.0.0.1:{spec['signal_port']}",
                                 SessionDirectoryCertSha256=spec["directory"]["DIRECTORY_PIN"],
-                                SessionDirectoryInstallKey="spread-" + role, NetworkIceEnable="1",
+                                SessionDirectoryInstallKey="spread-" + role + "-install", NetworkIceEnable="1",
                                 NetworkConnectionMode="DirectOnly", NetworkHostRelayMode="Off", NetworkPortMapEnable="0"))
     for flag in ("-record-video", "-feel-measure"):
         if flag in run.argv:
@@ -893,7 +916,7 @@ def native_execute(spec_path, result_out):
             if time.monotonic() - last_progress >= .25:
                 last_progress = time.monotonic()
                 write_json(control/"progress.json", dict(identity=identity, pid=run.record["pid"], action=action_receipt,
-                                                        files=native_snapshot(root, out, spec["signals"])))
+                                                        packed_files=packed_snapshot(root, out, spec["signals"])))
             time.sleep(.05)
         record = run.finish()
     finally:
@@ -932,7 +955,7 @@ def native_execute(spec_path, result_out):
     write_json(result_out/"peer-result.json", dict(topology="spread", peer=role, box=box["name"], record=record,
                                                executable_sha256=spec["executable_sha256"], archive=archive_receipt))
     write_json(control/"progress.json", dict(identity=identity, pid=run.record["pid"], action=action_receipt, record=record,
-                                            archive=archive_receipt, files=native_snapshot(root, out, spec["signals"])))
+                                            archive=archive_receipt, packed_files=packed_snapshot(root, out, spec["signals"])))
     return 0 if record.get("exit_code") == 0 and not record.get("timed_out") else 1
 
 
