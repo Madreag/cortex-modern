@@ -1,5 +1,6 @@
 """Detect boundary and ownership defects in the shared peer interface, without engines."""
 import base64
+import contextlib
 import json
 from pathlib import Path
 import tempfile
@@ -148,7 +149,7 @@ class ContractTests(unittest.TestCase):
             case = SimpleNamespace(out=root, peer_ports={}, names=['host', 'client'], match=spread.Match(51580),
                                    directory=None, network='direct', host_address='100.64.1.2',
                                    members={'client': ({'name': 'SEAT', 'os': 'windows'}, claim, {}, backend)},
-                                   peers=[spread.Peer('client')], signals=lambda: [],
+                                   peers=[spread.Peer('client')], signals=lambda: [], release_pending=lambda: None,
                                    transport_module=SimpleNamespace(Transport=SimpleNamespace(native_claim=lambda value: value)))
             run = object.__new__(spread.Run)
             run.case, run.role, run.output_name = case, 'client', 'client'
@@ -195,6 +196,35 @@ class ContractTests(unittest.TestCase):
         for endpoint in ['https://user:password@localhost:51581', 'https://remote.example:51581', 'http://localhost:51581']:
             with self.assertRaisesRegex(ValueError, 'loopback TLS test endpoint'):
                 spread.directory_endpoint(endpoint)
+
+    def test_busy_quiet_peer_publishes_priority_before_probe_and_releases_only_its_ticket(self):
+        events = []
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            facts = SimpleNamespace(machine_name=lambda:'controller', process_start=lambda pid:1,
+                                    release_reservation=lambda path, token:events.append(('release',path,token)))
+            case = object.__new__(spread.Case)
+            case.registry, case.names, case.members, case.pending, case.control, case.out = root/'catalog.json', ['host'], {}, [], root, root
+            case.peers, case.pins, case.match, case.lane, case.peer_ports = [spread.Peer('host', reviewed=True, quiet=True, lane='in-match')], {}, spread.Match(51580), 'case', {}
+            case.stack = contextlib.ExitStack()
+            def ticket(registry, needs, request):
+                events.append(('ticket',request['label'],request['token']))
+                return root/'owned-pending.json'
+            def candidates(*args):
+                events.append(('probe',))
+                return [], {'ONE':'alone run needs an idle box'}, {}
+            case.pool = SimpleNamespace(load_registry=lambda path:{'boxes':[{'name':'ONE','kind':'local','os':'windows'}]},
+                                        Needs=lambda **kwargs:SimpleNamespace(**kwargs), queue_root=lambda path:root,
+                                        write_ticket=ticket, candidates=candidates)
+            case.transport_module = SimpleNamespace(worker=SimpleNamespace(facts=facts, mutex=lambda *args,**kwargs:contextlib.nullcontext()))
+            case.backend = lambda:None
+            case.refuse = lambda peer, box, reason:spread.SpreadRefusal(f'{peer} on {box}: {reason}')
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'alone run needs an idle box'):
+                case.allocate()
+            case.stack.close()
+            self.assertEqual([event[0] for event in events], ['ticket','probe','release'])
+            self.assertTrue(events[0][1].startswith('in-match:'))
+            self.assertEqual(events[-1][1:], (root/'owned-pending.json',events[0][2]))
 
     def test_credentials_and_tickets_do_not_travel_as_evidence(self):
         for name in (".env", "key.pem", "host.ticket", "id_ed25519"):
