@@ -359,7 +359,7 @@ def run_lockstep_cli(repo, make_run, case, timeout):
     """The two-peer gameplay entry runs a whole round with one frame of input delay."""
     case.mkdir(parents=True, exist_ok=False)
     runs, traces = [], []
-    common = ["-net-lockstep", "-net-port", "47459", "-net-lockstep-input-delay", "1",
+    common = ["-net-lockstep", "-net-allow-userdata", "-net-port", "47459", "-net-lockstep-input-delay", "1",
               "-scenario", "SimBaseline", "-seed", "42", "-max-ticks", "120", "-tick-hashes"]
     try:
         for role, network in (("host", ["-net-host"]), ("client", ["-net-join", "127.0.0.1"])):

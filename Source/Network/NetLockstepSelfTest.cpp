@@ -25639,6 +25639,7 @@ namespace {
 			NetReconnectClient returning;
 			returning.Configure(&store, admission.identity, "Returning player");
 			returning.SetUnixClock(&HostReturnAdmission::WallClock, &admission);
+			host.SetDropOwnershipSource([](void* actor) { const auto& view = *static_cast<ReleasePathClaimView*>(actor); return std::vector<NetH4LedgerActor>{{view.uid, view.team, view.seeded, true}}; }, &view);
 			NetAuthBytes32 participant{}; participant.fill(seat);
 			host.BindParticipantId(connection, participant);
 			admission.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
@@ -25855,7 +25856,8 @@ namespace {
 				round.Pump(); newcomerWire.AdvanceTimeMs(5);
 				while (round.committed[0].contains(copied + 1)) {
 					++copied;
-					if (!host.m_WorldJoin.Tail().Append(PackWorldJoinReadyFrame(round.committed[0].at(copied)), &round.failure)) return false;
+					auto frame = PackWorldJoinReadyFrame(round.committed[0].at(copied)); frame.roundId = image.round;
+					if (!host.m_WorldJoin.Tail().Append(frame, &round.failure)) return false;
 				}
 				host.DrivePrivateMatchRejoins(round.now); joinLobby.Tick(round.now);
 				return true;
