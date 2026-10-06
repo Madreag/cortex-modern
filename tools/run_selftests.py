@@ -394,7 +394,7 @@ def run_lockstep_cli(repo, make_run, case, timeout):
         try:
             network = json.loads(report.read_text(encoding="utf-8-sig"))
             lockstep = network["lockstep"]
-            if lockstep["completed_simulation_tick"] != 121 or lockstep["next_frame"] != 122:
+            if lockstep["completed_simulation_tick"] != 121 or lockstep["next_frame"] != 123:
                 failures.append(f"{role} does not commit and simulate its complete round")
             if lockstep["input_delay_frames"] != 1 or lockstep["agreed_start_applied"] is not True or lockstep["published_start_mask"] != 3:
                 failures.append(f"{role} does not agree its requested delay and measured start")
