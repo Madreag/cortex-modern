@@ -4228,7 +4228,16 @@ namespace RTE {
 				}
 				if (coordinatorActive) clientCoordinator.Tick(NetLockstepNowMs());
 			};
-			if (!runner.Start(tap, hostSession, hostCoordinator, config, error) || !coordinatorActive || !clientCoordinator.IsRunning() ||
+			const bool setup = runner.Start(tap, hostSession, hostCoordinator, config, error);
+			if (setup && coordinatorActive) {
+				// The game publishes its measured startup after the runner completes the handshake.
+				hostCoordinator.NoteLocalStartPark(0);
+				for (int pump = 0; pump < 5 && !clientCoordinator.IsRunning(); ++pump) {
+					tap.beforePoll();
+					hostCoordinator.Tick(NetLockstepNowMs());
+				}
+			}
+			if (!setup || !coordinatorActive || !clientCoordinator.IsRunning() ||
 			    !clientSession.IsReady() || startAttempts < 2 || changedStart || wrongLane || nowMs() - firstStartAt < 250) {
 				*error = "a missed lobby start was not repaired with live session keepalives: " + *error + "; attempts=" + std::to_string(startAttempts) +
 				         "; client_started=" + std::to_string(coordinatorActive) + "; client_running=" + std::to_string(clientCoordinator.IsRunning()) +
