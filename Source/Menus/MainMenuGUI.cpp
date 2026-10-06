@@ -2544,10 +2544,12 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	                            static_cast<GUIControl*>(m_HostRulesModeCombo), static_cast<GUIControl*>(m_HostRulesDifficultySlider),
 	                            static_cast<GUIControl*>(m_HostRulesGoldSlider), static_cast<GUIControl*>(m_HostRulesFogCheck),
 	                            static_cast<GUIControl*>(m_HostRulesClearPathCheck), static_cast<GUIControl*>(m_HostRulesDeployCheck),
-	                            static_cast<GUIControl*>(m_HostRulesBrainlessCombo), static_cast<GUIControl*>(m_HostRulesTeamCombo),
+	                            static_cast<GUIControl*>(m_HostRulesBrainlessCombo),
 	                            static_cast<GUIControl*>(m_HostRulesTechCombo), static_cast<GUIControl*>(m_HostRulesSkillSlider)}) {
 		HostOptSetEditable(control, editable);
 	}
+	// This chooses which team's rules are shown; it does not edit the match.
+	HostOptSetEditable(m_HostRulesTeamCombo, true);
 
 	// Network page.
 	HostOptSelectComboIndex(m_HostNetPolicyCombo, m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Fixed ? 1 : 0);
