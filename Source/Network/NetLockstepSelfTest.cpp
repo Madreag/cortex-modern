@@ -25640,7 +25640,9 @@ namespace {
 		static bool ReturnAndDrive(ReleasePathRound& round, NetReconnectHost& host, HostReturnAdmission& admission, const NetH4TicketRecord& ticket,
 		    uint8_t seat, uint16_t port, ReleasePathClaimView& view, std::string* error) {
 			const auto fail = [&](const std::string& why) { *error = why; return false; };
-			const size_t hostIndex = round.peers[1].GetHostPeerId() - 1;
+			size_t hostIndex = round.peers[1].GetHostPeerId() - 1;
+			for (size_t index = 0; index < round.peers.size(); ++index)
+				if (round.alive[index] && round.peers[index].IsRunning() && round.peers[index].GetHostPeerId() == index + 1) hostIndex = index;
 			NetPeerId connection = 1;
 			for (const auto& [peer, transport]: round.peers[hostIndex].RemoteTransports()) connection = std::max(connection, transport + 1);
 			LoopbackTransport wire;
@@ -25948,7 +25950,8 @@ namespace {
 			if (!Install(service, round, admission, 1, &round.failure)) return done(round.failure);
 			for (size_t cycle = 0; cycle <= 50; ++cycle) {
 				for (int pass = 0; pass < 10; ++pass) round.Pump();
-				const uint64_t frame = round.peers[0].GetResumeFrame() - 1;
+				uint64_t frame = round.peers[0].GetResumeFrame() - 1;
+				for (size_t index: {size_t{1}, size_t{2}}) frame = std::min(frame, round.peers[index].GetResumeFrame() - 1);
 				std::array<uint8_t, 32> hash{};
 				for (size_t index: {size_t{0}, size_t{1}, size_t{2}}) if (!round.peers[index].SubmitLocalChecksum(frame, hash, &round.failure)) return done(round.failure);
 				for (int pass = 0; pass < 3; ++pass) round.Pump();
