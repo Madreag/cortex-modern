@@ -7,6 +7,7 @@ repo and receipt paths; otherwise the existing transport builds those inputs.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -71,6 +72,36 @@ def configure_backend(backend) -> None:
         backend.work.mkdir(parents=True, exist_ok=True)
         (backend.work / (request["run_id"] + "-native-build.json")).write_text(json.dumps(record, indent=2) + "\n")
     backend.native_build = native_build
+
+
+@contextlib.contextmanager
+def reuse_native_builds(spread, *, dispatcher=None, registry=None):
+    """Bind verified capture builds without changing the shared peer interface.
+
+    Capacity, ownership, staging and launch stay with the installed transport.
+    Only its native compile operation can reuse an exact caller-owned receipt.
+    """
+    if not os.environ.get("CORTEX_CAPTURE_NATIVE_BUILDS"):
+        yield
+        return
+    _, transport, _ = spread.installed_pool(dispatcher, registry)
+    original = transport.Transport
+    if getattr(original, "_capture_build_reuse", False):
+        yield
+        return
+
+    class CaptureBuildTransport(original):
+        _capture_build_reuse = True
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            configure_backend(self)
+
+    transport.Transport = CaptureBuildTransport
+    try:
+        yield
+    finally:
+        transport.Transport = original
 
 
 def main() -> None:

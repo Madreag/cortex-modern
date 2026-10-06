@@ -1,6 +1,7 @@
 """A native capture may only reuse the exact clean build it declares."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -79,6 +80,75 @@ class NativeReceiptTests(unittest.TestCase):
         self.assertEqual([peer.os for peer in peers], ["any", "any"])
         self.assertEqual([peer.reviewed for peer in peers], [True, False])
         self.assertTrue(all(peer.readback and not peer.share_ok for peer in peers))
+
+
+class CaptureTransportTests(unittest.TestCase):
+    def test_without_mapping_keeps_shared_transport_untouched(self):
+        with patch.dict(os.environ, {"CORTEX_CAPTURE_NATIVE_BUILDS": ""}), \
+             patch.object(spread_peers, "installed_pool") as installed:
+            with capture_native.reuse_native_builds(spread_peers):
+                pass
+        installed.assert_not_called()
+
+    def test_verified_reuse_preserves_guards_and_restores_factory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mapping = root / "builds.json"
+            mapping.write_text(json.dumps({"Linux": {"repo": "/caller/repo", "receipt": "/caller/build/build.json"}}))
+            verified = {"repo": "/caller/repo", "exe": "/caller/repo/build-gcc/CortexCommand",
+                        "commit": "frozen", "executable_sha256": "exact", "verified": True}
+
+            class SharedTransport:
+                def __init__(self, **kwargs):
+                    self.sources = {"pool_worker.py": "unchanged native capacity and ownership guards"}
+                    self.control_id = "original"
+                    self.work = root / "work"
+                    self.calls = []
+
+                def native_build(self, box, claim, request):
+                    self.calls.append(("compile", box["name"]))
+
+                def rpc(self, box, action, values, timeout):
+                    self.calls.append((action, box["name"]))
+
+                def guarded_run(self, command, timeout):
+                    self.calls.append(("verify", command))
+                    return json.dumps(verified).encode()
+
+                def guard(self):
+                    return "original guard"
+
+            module = SimpleNamespace(Transport=SharedTransport)
+            box = {"name": "Linux", "python": "python3", "ssh": "named-linux", "exe": "build-gcc/CortexCommand"}
+            claim = {"control": "/control", "head": "frozen"}
+            with patch.dict(os.environ, {"CORTEX_CAPTURE_NATIVE_BUILDS": str(mapping)}), \
+                 patch.object(spread_peers, "installed_pool", return_value=(None, module, None)):
+                with capture_native.reuse_native_builds(spread_peers, registry="named-catalog"):
+                    backend = module.Transport()
+                    factory = module.Transport
+                    with capture_native.reuse_native_builds(spread_peers):
+                        self.assertIs(module.Transport, factory)
+                    self.assertIs(backend.guard.__func__, SharedTransport.guard)
+                    self.assertEqual(backend.sources["pool_worker.py"], "unchanged native capacity and ownership guards")
+                    self.assertEqual(backend.sources["capture_native.py"], Path(capture_native.__file__).read_text())
+                    backend.native_build(box, claim, {"run_id": "capture"})
+                    self.assertEqual(claim["native_build"], verified)
+                    self.assertEqual(backend.calls[0], ("renew", "Linux"))
+                    self.assertEqual(backend.calls[1][0], "verify")
+                    self.assertEqual(json.loads((backend.work / "capture-native-build.json").read_text()), verified)
+                    backend.native_build({"name": "Other"}, {}, {})
+                    self.assertEqual(backend.calls[-1], ("compile", "Other"))
+                self.assertIs(module.Transport, SharedTransport)
+
+    def test_failure_restores_shared_factory(self):
+        module = SimpleNamespace(Transport=type("SharedTransport", (), {}))
+        original = module.Transport
+        with patch.dict(os.environ, {"CORTEX_CAPTURE_NATIVE_BUILDS": "caller-map"}), \
+             patch.object(spread_peers, "installed_pool", return_value=(None, module, None)):
+            with self.assertRaisesRegex(RuntimeError, "case failure"):
+                with capture_native.reuse_native_builds(spread_peers):
+                    raise RuntimeError("case failure")
+        self.assertIs(module.Transport, original)
 
 
 if __name__ == "__main__":

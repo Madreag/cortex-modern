@@ -1792,6 +1792,14 @@ def gameplay_signals(video, stage, epochs=1):
             write_json(path, row)
 
 
+def prepare_run_root(root, remote_capture=None):
+    import spread_peers as spread
+    if isinstance(remote_capture, spread.Case):
+        remote_capture.stage_root(root)
+    else:
+        root.mkdir(parents=True, exist_ok=False)
+
+
 def _run_one(options, scenario, run, run_index, out, case_root=None):
     """One scenario run: its peers launched together, each recording its own video."""
     root = Path(out) / run.get("name", f"run{run_index}")
@@ -2191,9 +2199,12 @@ def run_one(options, scenario, run, run_index, out):
             return result
         finally:
             options.remote_capture = previous
-    result = spread.run_case(options.repo, root, peers, spread.Match(port_for(run_index, options.port), PORT_HI), drive=drive,
-                             peer_boxes=getattr(options, "peer_boxes", None), dispatcher=getattr(options, "pool_dispatcher", None),
-                             registry=getattr(options, "pool_registry", None))
+    from capture_native import reuse_native_builds
+    with reuse_native_builds(spread, dispatcher=getattr(options, "pool_dispatcher", None),
+                            registry=getattr(options, "pool_registry", None)):
+        result = spread.run_case(options.repo, root, peers, spread.Match(port_for(run_index, options.port), PORT_HI), drive=drive,
+                                 peer_boxes=getattr(options, "peer_boxes", None), dispatcher=getattr(options, "pool_dispatcher", None),
+                                 registry=getattr(options, "pool_registry", None))
     return result["driver_result"]
 
 
