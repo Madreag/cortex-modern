@@ -4,6 +4,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <string>
 
 struct BITMAP;
@@ -158,6 +159,16 @@ namespace RTE {
 		bool m_LeaveConfirmShown; //!< Whether the leave confirmation is up instead of the menu rows.
 		bool m_BackRequested; //!< A back navigation asked for by the pad's start button.
 
+		/// What the leave confirmation says and, for the host, whether its press hands the match over.
+		struct LeaveConsequence {
+			std::string text;
+			bool handsOver = false;
+		};
+		LeaveConsequence m_LeaveShown; //!< What the confirmation reads now.
+		std::optional<LeaveConsequence> m_LeaveDrawn; //!< What it read the last frame it was drawn.
+		std::optional<LeaveConsequence> m_LeavePressed; //!< What it read when its button went down.
+		bool m_LeaveChanged = false; //!< A press found the sentence changed under it, and the confirmation says so.
+
 		/// GUI elements that compose the pause menu screen.
 		GUICollectionBox* m_PauseMenuBox;
 		std::array<GUIButton*, PauseMenuButton::ButtonCount> m_PauseMenuButtons;
@@ -218,7 +229,10 @@ namespace RTE {
 		void FitMatchOptionsBox();
 
 		/// The one line of what leaving costs this player, from the session's own hold.
-		std::string LeaveConsequenceText() const;
+		LeaveConsequence ReadLeaveConsequence() const;
+
+		/// Puts what leaving does on the confirmation, with the line a changed press adds.
+		void RefreshLeaveConfirm();
 
 		/// Follows the shared pause state on the match pause row's label.
 		/// @param force Whether to write the label even when the shared state has not changed.

@@ -347,9 +347,7 @@ void PauseMenuGUI::UpdateMatchPauseRow(bool force) {
 		m_MatchLiveLine->SetText(liveLine);
 	}
 	// The leave's sentence is read again every frame it is open: a player who drops meanwhile changes what the press does.
-	if (m_LeaveConfirmShown) {
-		if (const std::string consequence = LeaveConsequenceText(); m_LeaveConfirmLabel->GetText() != consequence) m_LeaveConfirmLabel->SetText(consequence);
-	}
+	if (m_LeaveConfirmShown) RefreshLeaveConfirm();
 	// Saving is the host's too; every peer reads when the match was last saved.
 	const NetMatchService::MatchSaveRow saveRow = g_NetMatchService.GetMatchSaveRow();
 	m_PauseMenuButtons[PauseMenuButton::SaveMatchButton]->SetEnabled(saveRow.enabled);
@@ -369,25 +367,35 @@ std::string PauseMenuGUI::GetShownSaveLine() const {
 	return shown ? m_SaveMatchHint->GetText() : std::string();
 }
 
-std::string PauseMenuGUI::LeaveConsequenceText() const {
+PauseMenuGUI::LeaveConsequence PauseMenuGUI::ReadLeaveConsequence() const {
 	if (g_NetMatchService.IsHost()) {
-		// The host's leave reads what the survivors' election does at this frame, and the press acts on the same answer.
-		return g_NetMatchService.HostLeaveOutcome() == NetHostLeaveOutcome::HandsOver ? "Leave the match?\nAnother player becomes the host and the match plays on."
-		                                                                             : "Leave the match?\nThe match ends for everyone.";
+		// The host's leave reads what the survivors' election does at this frame, and the press acts on the answer it showed.
+		const bool handsOver = g_NetMatchService.HostLeaveOutcome() == NetHostLeaveOutcome::HandsOver;
+		return {handsOver ? "Leave the match?\nAnother player becomes the host and the match plays on." : "Leave the match?\nThe match ends for everyone.", handsOver};
 	}
 	// A leave is held like a drop: the seat and its ticket stay this player's while the match runs.
 	if (g_NetMatchService.LeaveKeepsRejoin()) {
-		return "Leave the match?\nThe AI plays your units and your seat stays yours.\nRejoin Match on the Multiplayer screen brings you back while the match runs.";
+		return {"Leave the match?\nThe AI plays your units and your seat stays yours.\nRejoin Match on the Multiplayer screen brings you back while the match runs."};
 	}
 	// No ticket is kept: the AI still plays the place, and the way back is the one any newcomer has, where the match offers one.
-	return NetMatchService::AdmissionEnabled() ? "Leave the match?\nThe AI plays your units for the rest of the match.\nTo come back, join it again from the Multiplayer screen and ask the host for a place."
-	                                           : "Leave the match?\nThe AI plays your units for the rest of the match.\nThis match cannot take you back.";
+	return {NetMatchService::AdmissionEnabled() ? "Leave the match?\nThe AI plays your units for the rest of the match.\nTo come back, join it again from the Multiplayer screen and ask the host for a place."
+	                                            : "Leave the match?\nThe AI plays your units for the rest of the match.\nThis match cannot take you back."};
+}
+
+void PauseMenuGUI::RefreshLeaveConfirm() {
+	m_LeaveShown = ReadLeaveConsequence();
+	// A press that found the sentence changed under it says so beneath the new one until the confirmation closes.
+	const std::string text = m_LeaveChanged ? m_LeaveShown.text + "\nWhat leaving does changed as you pressed, so you are still in the match." : m_LeaveShown.text;
+	if (m_LeaveConfirmLabel->GetText() != text) m_LeaveConfirmLabel->SetText(text);
 }
 
 void PauseMenuGUI::ShowLeaveConfirm(bool show) {
 	m_LeaveConfirmShown = show;
 	if (show) {
-		m_LeaveConfirmLabel->SetText(LeaveConsequenceText());
+		m_LeaveChanged = false;
+		m_LeaveDrawn.reset();
+		m_LeavePressed.reset();
+		RefreshLeaveConfirm();
 	}
 	m_LeaveConfirmBox->SetVisible(show);
 	m_LeaveConfirmBox->SetEnabled(show);
@@ -601,7 +609,17 @@ bool PauseMenuGUI::HandleInputEvents() {
 				// same rematch path a played-out match takes. Leave stays the session's way out.
 				m_UpdateResult = PauseMenuUpdateResult::MatchEnded;
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::LeaveConfirmButton]) {
-				m_UpdateResult = PauseMenuUpdateResult::MatchLeft;
+				// The press does what the sentence showed when it went down; if that changed since, nothing happens and the new sentence says so.
+				const std::optional<LeaveConsequence> shown = m_LeavePressed ? m_LeavePressed : m_LeaveDrawn;
+				m_LeavePressed.reset();
+				if (shown && shown->text != m_LeaveShown.text) {
+					m_LeaveChanged = true;
+					RefreshLeaveConfirm();
+					g_GUISound.UserErrorSound()->Play();
+				} else {
+					if (g_NetMatchService.IsHost()) g_NetMatchService.ConfirmHostLeave((shown ? *shown : m_LeaveShown).handsOver ? NetHostLeaveOutcome::HandsOver : NetHostLeaveOutcome::EndsMatch);
+					m_UpdateResult = PauseMenuUpdateResult::MatchLeft;
+				}
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::LeaveCancelButton]) {
 				g_GUISound.BackButtonPressSound()->Play();
 				ShowLeaveConfirm(false);
@@ -613,7 +631,14 @@ bool PauseMenuGUI::HandleInputEvents() {
 		if (guiEvent.GetType() == GUIEvent::Notification && (guiEvent.GetMsg() == GUIButton::Focused && dynamic_cast<GUIButton*>(guiEvent.GetControl()))) {
 			g_GUISound.SelectionChangeSound()->Play();
 		}
+		// The leave's press holds what its sentence showed from the frame the button went down.
+		if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUIButton::Pushed && guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::LeaveConfirmButton]) {
+			m_LeavePressed = m_LeaveDrawn;
+		}
 	}
+	// A press released off the button did nothing, and what it showed goes with it. The queue hands a release's events back last
+	// first, so this waits until the release's command has been read.
+	if (m_LeavePressed && !m_PauseMenuButtons[PauseMenuButton::LeaveConfirmButton]->IsPushed()) m_LeavePressed.reset();
 	return false;
 }
 
@@ -697,6 +722,8 @@ void PauseMenuGUI::Draw(bool drawPostProcessBuffer) {
 			System::PrintDiagnosticLine("[video-ui] " + event);
 		}
 	}
+	// What the player has seen of the leave is what this frame draws.
+	if (m_LeaveConfirmShown) m_LeaveDrawn = m_LeaveShown;
 	if (drawPostProcessBuffer) {
 		g_WindowMan.DrawPostProcessBuffer();
 	}

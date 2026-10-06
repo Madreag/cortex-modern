@@ -2319,6 +2319,7 @@ static std::string ResyncSaveName() {
 			m_RejoinOfRunningMatch = false;
 			m_HostEndedTheMatch = false;
 			m_LeftMatch = false;
+			m_HostLeaveConfirmed.reset();
 			m_HostEndReason.clear();
 			m_CompletedLobbySinceMs = 0;
 			m_PendingLobbyEvents.clear();
@@ -2581,6 +2582,11 @@ static std::string ResyncSaveName() {
 		return survivors >= 2 ? NetHostLeaveOutcome::HandsOver : NetHostLeaveOutcome::EndsMatch;
 	}
 
+	void NetMatchService::ConfirmHostLeave(NetHostLeaveOutcome outcome) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_HostLeaveConfirmed = outcome;
+	}
+
 	bool NetMatchService::LeaveKeepsRejoin() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		// The same reading the landing's offer takes after the leave: admission on, and a ticket kept for this match.
@@ -2589,8 +2595,13 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::LeaveMatch(const std::string& result) {
 		std::string displayResult = result;
-		// The host's leave does what its confirmation said at this frame.
-		const bool handover = HostLeaveOutcome() == NetHostLeaveOutcome::HandsOver;
+		// The host's leave does what its confirmation showed when it was pressed, or what it reads now when no menu asked.
+		std::optional<NetHostLeaveOutcome> confirmed;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			confirmed = std::exchange(m_HostLeaveConfirmed, std::nullopt);
+		}
+		const bool handover = (confirmed ? *confirmed : HostLeaveOutcome()) == NetHostLeaveOutcome::HandsOver;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			CaptureMatchSummaryLocked(result);
