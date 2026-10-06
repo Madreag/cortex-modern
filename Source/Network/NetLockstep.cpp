@@ -11472,9 +11472,8 @@ namespace RTE {
 			Fail(stop.reason, stop.frame, "successor receives the boundary snapshot");
 			return;
 		}
-		// A host that announces its leave hands the match to the survivors; with no other survivor there is no one to hand it to,
-		// and the leave ends this seat's match as the host's own decision.
-		const bool otherSurvivor = std::any_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {
+		// The local playing seat is a survivor even when it has no other client on its receive list.
+		const bool otherSurvivor = (m_Config.localPeerId != GetHostPeerId() && !IsPeerGoneAtFrame(m_Config.localPeerId, m_Stats.nextFrame) && !m_AiHeldSeats.contains(m_Config.localPeerId)) || std::any_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {
 			return peer != GetHostPeerId() && !IsPeerGoneAtFrame(peer, m_Stats.nextFrame) && !m_AiHeldSeats.contains(peer);
 		});
 		if (stop.senderPeerId == GetHostPeerId() && IsRoundAuthority(stop.senderPeerId, fromTransport) && stop.reason == NetLockstepStopReason::PeerLeft) m_HostLeaveRecordFrom = stop.senderPeerId;

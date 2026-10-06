@@ -2528,7 +2528,7 @@ static std::string ResyncSaveName() {
 			m_HeldRejoinDriving = false;
 			heldSeatNeedsAnswer = m_IsHost && m_Coordinator && m_Coordinator->AnyHeldAISeat();
 			if (m_IsHost) m_ReconnectHost.SetMatchEnded();
-			// The round ended because its host announced its leave: that is the host's end of the match for this seat.
+			// A terminal host departure without a successor ends the round for this seat.
 			if (!m_IsHost && m_Coordinator && m_Coordinator->GetPeerLeaveFrames().contains(m_Coordinator->GetHostPeerId())) NoteHostEndedTheMatchLocked();
 			if (heldSeatNeedsAnswer) m_KeepEndedDirectoryLease = true;
 			DrainPendingSessionEventsLocked(false);
@@ -2564,8 +2564,14 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			CaptureMatchSummaryLocked(result);
 			handover = m_IsHost && m_Coordinator && m_Coordinator->IsRunning() && !m_Coordinator->GetConfig().matchConfig.successorOrder.empty();
+			if (handover) {
+				const auto& config = m_Coordinator->GetConfig();
+				handover = std::any_of(config.remoteTransportPeerIds.begin(), config.remoteTransportPeerIds.end(), [&](const auto& link) {
+					return !m_Coordinator->IsPeerGoneAtFrame(link.first, m_Coordinator->GetResumeFrame()) && !m_Coordinator->HasHeldAISeat(link.first);
+				});
+			}
 			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
-			if (m_IsHost) m_ReconnectHost.SetMatchEnded();
+			if (m_IsHost && !handover) m_ReconnectHost.SetMatchEnded();
 			m_LeftMatch = true;
 			DrainPendingSessionEventsLocked(false);
 		}
@@ -2587,6 +2593,7 @@ static std::string ResyncSaveName() {
 			if (m_Coordinator) {
 				m_Coordinator->Leave(reason);
 			}
+			if (handover) m_IsHost = false;
 			if (m_State == NetMatchServiceState::Running) {
 				m_State = NetMatchServiceState::Completed;
 				m_StatusText = displayResult.empty() ? "Left the match" : displayResult;
@@ -4899,9 +4906,7 @@ static std::string ResyncSaveName() {
 		return NetHostLinkLost(false, hostSilentMs, hostRttMs);
 	}
 
-	NetMatchService::LoneElection NetMatchService::LoneElectionOutcome(bool hostAnnounced, bool liveMembersUnheard) {
-		// An announced leave is the host's decision; a lost host is absent, and the match goes on.
-		if (hostAnnounced) return LoneElection::EndMatch;
+	NetMatchService::LoneElection NetMatchService::LoneElectionOutcome(bool, bool liveMembersUnheard) {
 		// Live members that went silent with the host say this peer lost its own link: it rejoins rather than host a match of its own.
 		return liveMembersUnheard ? LoneElection::RejoinHost : LoneElection::HostAlone;
 	}

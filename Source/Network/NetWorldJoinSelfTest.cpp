@@ -4229,18 +4229,17 @@ namespace RTE {
 		return 0;
 	}
 
-	/// A survivor that published a handover alone never ends the match because its host was lost: its quorum (the two-seat
-	/// exception, or every other connected seat gone or held) lets it host; only the host's leave record ends it.
+	/// A lone survivor carries the match after either kind of host departure.
 	int TestALoneSurvivorWithAHeldSeatHostsTheMatch() {
 		using Outcome = NetMatchService::LoneElection;
 		if (NetMatchService::LoneElectionOutcome(false, false) != Outcome::HostAlone) {
 			return Fail("lone-survivor-left-a-two-player-match: the survivor of a lost host did not host the match it carries alone");
 		}
-		if (NetMatchService::LoneElectionOutcome(true, false) != Outcome::EndMatch) {
-			return Fail("lone-survivor-overruled-the-host: the host's leave record did not end the match");
+		if (NetMatchService::LoneElectionOutcome(true, false) != Outcome::HostAlone) {
+			return Fail("lone-survivor-announced-leave: the survivor of an announced host leave did not host the match alone");
 		}
 		// l4p-34: the Mac, cut off by its own lag, heard neither the host nor Linux and, with EDITH's seat held, took the match over.
-		if (NetMatchService::LoneElectionOutcome(false, true) != Outcome::RejoinHost) {
+		if (NetMatchService::LoneElectionOutcome(false, true) != Outcome::RejoinHost || NetMatchService::LoneElectionOutcome(true, true) != Outcome::RejoinHost) {
 			return Fail("lone-survivor-split-the-match: a peer that heard no live member and no host hosted a match of its own instead of rejoining");
 		}
 		std::cout << "[net-world-join-selftest] PASS a_lone_survivor_with_a_held_seat_hosts_the_match" << std::endl;
