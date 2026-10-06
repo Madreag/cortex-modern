@@ -25575,6 +25575,8 @@ namespace {
 			service.Destroy();
 			service.m_MigrationGeneration = 0; service.m_MigrationAuthority = 0; service.m_MigrationMembers.clear();
 			service.m_CancelRequested.store(false);
+			service.m_OrdinaryTicketRejoin = service.m_HeldRejoinDriving = false;
+			service.m_HeldRejoinRoutes.clear(); service.m_HeldRejoinRetryAtMs = 0;
 		}
 
 		struct Borrow {
@@ -25848,9 +25850,34 @@ namespace {
 			(void)service.BeginTicketRejoin(&startError);
 			std::deque<NetMatchServiceRequest> routes;
 			{ std::lock_guard<std::mutex> lock(service.m_Mutex); routes = service.m_HeldRejoinRoutes; }
-			service.Destroy(); Reset();
+			service.Destroy();
 			const auto elected = std::find_if(routes.begin(), routes.end(), [](const auto& route) { return route.address == "loopback" && route.port == 47433; });
 			if (elected == routes.end()) return done("ordinary Rejoin retains only " + retained.hostAddress + "; it has no route to the second successor at loopback:47433");
+			for (uint16_t port: {uint16_t{47432}, uint16_t{47433}}) {
+				service.m_State = NetMatchServiceState::Failed;
+				if (!service.BeginHeldRejoinOnNextHost(&startError) || !service.m_LastJoinRoute || service.m_LastJoinRoute->port != port)
+					return done("ordinary Rejoin does not walk the published successor order: " + startError);
+				service.Destroy();
+			}
+			Reset();
+			NetIdentityManifest manifest;
+			manifest.gameVersion = admission.identity.gameVersion; manifest.buildId = admission.identity.buildId;
+			manifest.controllerFrameVersion = admission.identity.controllerFrameVersion; manifest.controllerFrameEncodedSize = admission.identity.controllerFrameEncodedSize;
+			manifest.deterministicConfigHash = admission.identity.deterministicConfigHash; manifest.moduleManifestHash = admission.identity.moduleManifestHash;
+			manifest.sessionRulesHash = admission.identity.sessionRulesHash; manifest.sessionIdentityHash = admission.identity.sessionIdentityHash;
+			NetSessionConfig strangerConfig; strangerConfig.localIdentity = manifest; strangerConfig.port = 47439; strangerConfig.sessionId = retained.hostSessionId + 1;
+			LoopbackTransport strangerWire, dial; NetSession stranger, rejected;
+			if (!stranger.StartHost(strangerWire, strangerConfig, &round.failure)) return done(round.failure);
+			NetReconnectClient client; client.Configure(&service.m_TicketStore, admission.identity, "Returning"); client.SetRequireStoredTicket(true);
+			rejected.SetReconnectClient(&client); strangerConfig.expectedHostSessionId = retained.hostSessionId;
+			if (!rejected.StartClient(dial, "loopback", strangerConfig, &round.failure)) return done(round.failure);
+			for (int pass = 0; pass < 40 && !rejected.HasReject(); ++pass) {
+				stranger.Tick(admission.nowMs); rejected.Tick(admission.nowMs); strangerWire.AdvanceTimeMs(10); dial.AdvanceTimeMs(10); admission.nowMs += 10;
+			}
+			NetH4TicketRecord intact;
+			if (!rejected.HasReject() || rejected.GetRejectSummary() != "The address belongs to another hosted session." ||
+			    service.m_TicketStore.Load(admission.wallMs, intact) != NetH4TicketLoadResult::Loaded || intact.credential != retained.credential || intact.holderGeneration != retained.holderGeneration)
+				return done("a stranger at a stale successor address accepts or overwrites the retained identity");
 			ReleasePathClaimView view;
 			if (!view.Create("client leaver's original unit", round.peers[2], 3, 4, 4)) return done("the client leaver's unit did not create");
 			view.handoff = 1; view.claimant = 4;

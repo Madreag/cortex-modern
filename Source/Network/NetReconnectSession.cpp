@@ -2735,6 +2735,7 @@ namespace RTE {
 
 	void NetReconnectClient::Configure(NetReconnectTicketStore* store, NetH4Identity identity, std::string displayName) {
 		m_Store = store;
+		m_RequireStoredTicket = false;
 		m_Identity = std::move(identity);
 		m_DisplayName = std::move(displayName);
 		// Attaching to a hosted session starts this peer's copy of its seat roster there.
@@ -2914,13 +2915,14 @@ namespace RTE {
 		// The ticket is tried for the hosted session it names, at whatever address that host answered from: the reclaim's credential
 		// proves the seat, a host that does not hold it refuses and the fresh join follows. A directory match keeps its binding the same way.
 		const bool sameSession = record.hostSessionId != 0 && record.hostSessionId == m_AcceptedHostSessionId;
-		if (m_LastLoad == NetH4TicketLoadResult::Loaded && (record.hostAddress == m_HostAddress || sameSession || (!m_DirectorySessionId.empty() && record.directorySessionId == m_DirectorySessionId))) {
+		if (m_LastLoad == NetH4TicketLoadResult::Loaded && (m_RequireStoredTicket || record.hostAddress == m_HostAddress || sameSession || (!m_DirectorySessionId.empty() && record.directorySessionId == m_DirectorySessionId))) {
 			m_UsedStoredTicket = true;
 			record.matchConfigHash = m_MatchConfigHash;
 			// The ticket the host issues for the return names the address it was reached at.
 			record.hostAddress = m_HostAddress;
 			return BeginReclaim(record, nowMs, error);
 		}
+		if (m_RequireStoredTicket) { Fail("Rejoin requires the retained seat ticket."); if (error) *error = m_Error; return false; }
 		return BeginNewJoin(nowMs, error);
 	}
 
@@ -2948,6 +2950,7 @@ namespace RTE {
 			return true;
 		}
 		// The stored ticket named a hosted session that is gone (or a seat this host no longer knows).
+		if (m_RequireStoredTicket) return false;
 		// A fresh join is what a ticketless client would have sent, so try it once and let the seat
 		// protection decide; a second refusal is a real refusal.
 		m_FellBackToNewJoin = true;

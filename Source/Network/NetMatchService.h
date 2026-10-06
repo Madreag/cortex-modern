@@ -1864,6 +1864,10 @@ namespace RTE {
 		bool m_LastJoinTargetPersistentWorld = false;
 		std::optional<NetMatchServiceRequest> m_LastJoinRoute;
 		bool BeginTicketRejoinOnRoute(std::string* error, const NetMatchServiceRequest* liveRoute);
+		void RememberTicketRoutesLocked(bool force = false);
+		void DriveOrdinaryTicketRejoin();
+		uint64_t m_TicketRoutesRefreshAtMs = 0;
+		bool m_OrdinaryTicketRejoin = false;
 		/// Held client: the hosts its rejoin may still find when its own is gone, in the match's published successor order.
 		std::deque<NetMatchServiceRequest> m_HeldRejoinRoutes;
 		uint8_t m_HeldRejoinFailedAttempts = 0; //!< The attempts of this held rejoin that failed with its host still there.

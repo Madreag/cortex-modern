@@ -853,6 +853,7 @@ namespace RTE {
 
 		/// The hosted session the host's join answer named; a stored record of that session is its own whatever address reached it.
 		void NoteAcceptedHostSession(uint64_t hostSessionId) { m_AcceptedHostSessionId = hostSessionId; }
+		void SetRequireStoredTicket(bool required) { m_RequireStoredTicket = required; }
 		/// Starts the §4 transaction the session was accepted into: a stored record for THIS host is
 		/// reclaimed, anything else is a fresh join.
 		/// @return Whether a transaction is now running; false leaves the session's ordinary Ready path.
@@ -954,6 +955,7 @@ namespace RTE {
 		NetH4ClientState m_State = NetH4ClientState::Idle;
 		NetH4TicketLoadResult m_LastLoad = NetH4TicketLoadResult::Missing;
 		bool m_UsedStoredTicket = false;
+		bool m_RequireStoredTicket = false;
 		uint64_t m_A7PreviousLeaveElapsedMs = 0;
 		bool m_FellBackToNewJoin = false;
 		bool m_ApplyForSeat = false;

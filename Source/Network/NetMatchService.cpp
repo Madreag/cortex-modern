@@ -482,6 +482,11 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::Start(const NetMatchServiceRequest& incoming, std::string* error) {
 		NetMatchServiceRequest request = incoming;
+		if (!request.rejoin) {
+			m_OrdinaryTicketRejoin = m_HeldRejoinDriving = false;
+			m_HeldRejoinRoutes.clear();
+			m_HeldRejoinRetryAtMs = 0;
+		}
 		// A seat rejoining the match it was playing is still that match's: a failed attempt is retried, never dropped.
 		bool rejoinOfARunningMatch = false;
 		{
@@ -2225,6 +2230,7 @@ static std::string ResyncSaveName() {
 		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateImageStaleFrom = 0; m_PrivateImageSeatHeld = false; m_PrivateImageTakenMs = 0; m_PrivateImageLastCaptureMs = 0.0; m_PrivateCaptureCosts.clear(); m_PrivateCaptureCold = false; m_PrivateJoinError.clear();
 		m_WorldJoin.Reset(); m_WorldCatchUp = {};
 		m_LastJoinRoute.reset();
+		m_TicketRoutesRefreshAtMs = 0;
 		m_WorldCaptureRequestedTick = 0;
 		m_WorldWatcherSeatedAt = 0;
 		m_WorldCapturePending = false;
@@ -2564,6 +2570,7 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			CaptureMatchSummaryLocked(result);
 			handover = m_IsHost && m_Coordinator && m_Coordinator->IsRunning() && !m_Coordinator->GetConfig().matchConfig.successorOrder.empty();
+			RememberTicketRoutesLocked(true);
 			if (handover) {
 				const auto& config = m_Coordinator->GetConfig();
 				handover = std::any_of(config.remoteTransportPeerIds.begin(), config.remoteTransportPeerIds.end(), [&](const auto& link) {
@@ -2660,6 +2667,7 @@ static std::string ResyncSaveName() {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			PumpCompletedSessionLocked();
+			RememberTicketRoutesLocked();
 		}
 		SettleKeptDirectoryLease();
 		// A hosting lobby advertises itself on the LAN until the match launches.
@@ -2834,6 +2842,7 @@ static std::string ResyncSaveName() {
 		SweepRestartAdmission();
 		// 7e: while the prompt waits for a host to come back, this is what watches for its row.
 		PumpHostReturnWatch(nowMs);
+		DriveOrdinaryTicketRejoin();
 		// Last: the expiry destroys the service, so nothing in this pump may run after it.
 		UpdateCompletedLobbyExpiry(nowMs);
 	}
@@ -3271,6 +3280,7 @@ static std::string ResyncSaveName() {
 		ResetRoundGoodbyeLocked();
 		m_HeldRejoinDriving = false;
 		m_HeldRejoinRoutes.clear();
+		m_OrdinaryTicketRejoin = false;
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
 		m_MatchAutosaveSeconds = m_Runner ? MatchAutosaveSeconds(m_Runner->GetMatchConfig()) : 0;
@@ -8252,6 +8262,7 @@ static std::string ResyncSaveName() {
 			// between heartbeats would date a chat line by the last heartbeat's frame.
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_Session && m_Coordinator && m_State == NetMatchServiceState::Running) {
+				RememberTicketRoutesLocked();
 				m_Session->SetLockstepFrame(m_Coordinator->GetStats().nextFrame);
 				m_LastRoundId = static_cast<uint32_t>(m_Coordinator->GetRoundId());
 				m_ReconnectClient.SetRound(m_LastRoundId);
@@ -10976,6 +10987,7 @@ static std::string ResyncSaveName() {
 		m_ParticipantStore.SetPath(NetParticipantIdentityStore::DefaultPath());
 		(void)m_ParticipantStore.LoadOrCreate(nullptr);
 		m_ReconnectClient.Configure(&m_TicketStore, identity, request.playerName.empty() ? "Client" : request.playerName);
+		m_ReconnectClient.SetRequireStoredTicket(request.rejoin);
 		m_ReconnectClient.SetUnixClock(&UnixNowMs, nullptr);
 		// The record names the host it belongs to; the config hash is context, not a gate - a client
 		// adopts the host's match config in the lobby round that follows.
@@ -11070,6 +11082,7 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::BeginHeldRejoin(std::string* error) {
+		m_OrdinaryTicketRejoin = false;
 		const uint64_t prior = m_Coordinator ? m_Coordinator->SentInputThrough() : 0;
 		auto liveRoute = m_LastJoinRoute;
 		// A host whose match went on under a successor returns to that successor as a player, with its own seat's ticket.
@@ -11189,7 +11202,9 @@ static std::string ResyncSaveName() {
 			const NetRejectReason reason = hasReject ? m_Session->GetRejectReason() : NetRejectReason::InternalError;
 			// A host that did not answer one dial is not gone; only a host that is gone sends the seat on.
 			const bool helloUnanswered = m_Session && HeldRejoinRetriesTheHost(lostDuringSetup, hasReject, reason, m_Session->GetRejectSummary());
-			const bool hostGone = !helloUnanswered && (lostDuringSetup || (m_Session && ClientSessionLossIsHostDeparture(*m_Session)));
+			const bool obsoleteRoute = m_OrdinaryTicketRejoin && m_State == NetMatchServiceState::Failed &&
+			    (!hasReject || reason == NetRejectReason::Timeout || (reason == NetRejectReason::HostNotAccepting && m_Session->GetRejectSummary() == "The address belongs to another hosted session."));
+			const bool hostGone = obsoleteRoute || (!helloUnanswered && (lostDuringSetup || (m_Session && ClientSessionLossIsHostDeparture(*m_Session))));
 			if (hostGone) {
 				// A host that answered the round is over is not gone: the seat completes on what it holds.
 				if (NoteHostGoodbyeLocked(m_Session.get()) || m_HeldRejoinRoutes.empty()) return false;
@@ -11264,7 +11279,62 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::BeginTicketRejoin(std::string* error) {
+		if (!m_HeldRejoinDriving) {
+			NetH4TicketRecord record;
+			m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+			if (m_TicketStore.Load(UnixNowMs(nullptr), record) == NetH4TicketLoadResult::Loaded) {
+				m_HeldRejoinRoutes.clear();
+				const auto routes = m_TicketStore.LoadRoutes(record);
+				for (int pass = 0; pass < 2; ++pass) for (const auto& endpoint: routes) {
+					NetMatchServiceRequest route;
+					route.address = endpoint.address; route.port = endpoint.port;
+					m_HeldRejoinRoutes.push_back(std::move(route));
+				}
+				m_OrdinaryTicketRejoin = !routes.empty();
+				m_HeldRejoinDriving = m_OrdinaryTicketRejoin;
+				m_HeldRejoinFailedAttempts = 0; m_HeldRejoinRetryAtMs = 0;
+			}
+		}
 		return BeginTicketRejoinOnRoute(error, nullptr);
+	}
+
+	void NetMatchService::RememberTicketRoutesLocked(bool force) {
+		if (!m_Coordinator || !m_MatchWasRunning || !m_Session || !m_Session->IsReady()) return;
+		const uint64_t now = SteadyNowMs();
+		if (!force && now < m_TicketRoutesRefreshAtMs) return;
+		m_TicketRoutesRefreshAtMs = now + 1000;
+		NetH4TicketRecord record;
+		m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+		if (m_TicketStore.Load(UnixNowMs(nullptr), record) != NetH4TicketLoadResult::Loaded) return;
+		const auto& config = m_Coordinator->GetConfig().matchConfig;
+		std::vector<NetH4TicketRoute> routes;
+		for (const uint8_t peer: config.successorOrder) {
+			if (peer == m_LocalPeerId) continue;
+			const auto endpoint = std::find_if(config.migrationPeers.begin(), config.migrationPeers.end(), [peer](const auto& item) { return item.peerId == peer; });
+			if (endpoint == config.migrationPeers.end() || endpoint->listenPort == 0) continue;
+			for (const auto& address: endpoint->listenAddrs) routes.push_back({address, endpoint->listenPort});
+		}
+		if (routes == m_TicketStore.LoadRoutes(record)) return;
+		std::string error;
+		if (!m_TicketStore.StoreRoutes(record, routes, &error)) System::PrintDiagnosticLine("[net-match] cannot save the successor rejoin routes: " + error);
+	}
+
+	void NetMatchService::DriveOrdinaryTicketRejoin() {
+		bool failed = false, retry = false;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (!m_OrdinaryTicketRejoin || !m_HeldRejoinDriving) return;
+			if (m_State == NetMatchServiceState::Running || m_State == NetMatchServiceState::ReadyToLaunch) {
+				m_OrdinaryTicketRejoin = m_HeldRejoinDriving = false;
+				m_HeldRejoinRoutes.clear(); return;
+			}
+			retry = m_HeldRejoinRetryAtMs != 0;
+			failed = m_State == NetMatchServiceState::Failed && !m_Worker.joinable();
+		}
+		if (retry) { (void)PumpHeldRejoin(); return; }
+		if (!failed || BeginHeldRejoinOnNextHost()) return;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_OrdinaryTicketRejoin = m_HeldRejoinDriving = false;
 	}
 
 	bool NetMatchService::BeginTicketRejoinOnRoute(std::string* error, const NetMatchServiceRequest* liveRoute) {
@@ -11286,6 +11356,12 @@ static std::string ResyncSaveName() {
 		config.displayName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
 		config.port = request.port;
 		config.sessionId = c_UiSessionId;
+		if (request.rejoin && !request.persistentWorld) {
+			NetReconnectTicketStore store;
+			store.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+			NetH4TicketRecord record;
+			if (store.Load(UnixNowMs(nullptr), record) == NetH4TicketLoadResult::Loaded && !record.persistentWorld) config.expectedHostSessionId = record.hostSessionId;
+		}
 		config.localNonce = request.host ? c_HostNonce : MakeClientNonce();
 		// Seats come from the adopted roster, never from the request: a round the host plays alone offers none.
 		config.maxPeers = matchConfig.persistentWorld

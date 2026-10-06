@@ -1381,6 +1381,11 @@ namespace RTE {
 			return;
 		}
 		if (const auto* accepted = std::get_if<NetJoinAccepted>(&message.payload)) {
+			if (m_Config.expectedHostSessionId != 0 && accepted->sessionId != m_Config.expectedHostSessionId) {
+				SetRejected(NetRejectReason::HostNotAccepting, "host_session", std::to_string(m_Config.expectedHostSessionId), std::to_string(accepted->sessionId), "The address belongs to another hosted session.");
+				m_Transport->Disconnect(peerId, "The address belongs to another hosted session.");
+				return;
+			}
 			if (accepted->sessionId == 0 || accepted->selectedProtocolVersion != NetProtocol::c_Version || accepted->assignedPeerId == 0) {
 				SetRejected(NetRejectReason::ProtocolMismatch, "join_accepted", "valid JoinAccepted", "invalid", "invalid JoinAccepted");
 				m_Transport->Disconnect(peerId, "invalid JoinAccepted");
@@ -1947,6 +1952,8 @@ namespace RTE {
 	}
 
 	NetIdentityMismatch NetSession::ValidateHostHello(const NetHostHello& hello) const {
+		if (m_Config.expectedHostSessionId != 0 && hello.sessionId != m_Config.expectedHostSessionId)
+			return MakeMismatch("host_session", NetRejectReason::HostNotAccepting, std::to_string(m_Config.expectedHostSessionId), std::to_string(hello.sessionId), "The address belongs to another hosted session.");
 		if (hello.selectedProtocolVersion != NetProtocol::c_Version) {
 			return MakeMismatch("network_protocol_version", NetRejectReason::ProtocolMismatch, std::to_string(NetProtocol::c_Version), std::to_string(hello.selectedProtocolVersion), "selected protocol version does not match");
 		}
