@@ -1169,7 +1169,7 @@ def third_pass_case(case, port, root, size):
                 f"wait_file {probe / 'done.json'} 120\nwait 10\nassert_screen MainScreen\nexit\n")
         # The match runs a while, then the pause menu takes the player back to the main menu, where the script ends the run.
         return {"host": text}, {"host": {"schema": 1, "timeout_ms": 150000, "steps": [
-            {"op": "wait_file", "path": str(probe / "started.mark")}, {"op": "wait", "renders": 180},
+            {"op": "wait_file", "path": str(probe / "started.mark")}, {"op": "wait", "screen": "Gameplay", "sim_at_least": 120},
             {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"}, {"op": "wait", "screen": "Pause"},
             menu_step("activate ButtonBackToMain"), {"op": "wait", "renders": 30}, {"op": "signal", "name": "done"}, {"op": "finish"}]}}
     raise ValueError(case)
