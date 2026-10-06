@@ -222,6 +222,13 @@ def compare_every_tick(host: Path | list[dict], client: Path | list[dict]) -> di
     return result
 
 
+def recording_failures(review: dict, peers: list[str]) -> list[str]:
+    probes = {row["id"]: row.get("probe") for row in review["checklist"]}
+    return [f"{name}: expected pass, got {probes.get(name, 'missing')}"
+            for peer in peers for kind in ["rate", "stills"]
+            if probes.get(name := f"recording-{kind}-{peer}") != "pass"]
+
+
 def checker_self_test(package: Path) -> bool:
     import copy
 
@@ -229,6 +236,12 @@ def checker_self_test(package: Path) -> bool:
     checks = [("black_has_no_menu", not find_words(picture, package, "New game")["pass"])]
     checks.append(("solid_has_no_short_button", not find_words(Image.new("RGB", (960, 540), "white"), package, "OK")["pass"]))
     checks.append(("preview_lua_error_fails", bool(ERROR_LINES.search("PREVIEW: script stopped a preview hook after an arithmetic error"))))
+    recorded = {"checklist": [{"id": "recording-rate-sp", "probe": "pass"}, {"id": "recording-stills-sp", "probe": "pass"}]}
+    checks.append(("complete_recording_passes", not recording_failures(recorded, ["sp"])))
+    incomplete = copy.deepcopy(recorded)
+    incomplete["checklist"][1]["probe"] = "incomplete"
+    checks.append(("unrecorded_stills_fail", bool(recording_failures(incomplete, ["sp"]))))
+    checks.append(("missing_recording_rate_fails", bool(recording_failures({"checklist": recorded["checklist"][1:]}, ["sp"]))))
     left = [{"round": 1, "tick": tick, "total": "a" * 64, "sim_gated": "a" * 64, "paused": False,
              "subsystems": {name: "b" * 64 for name in HASH_SUBSYSTEMS}} for tick in range(1, 4)]
     checks.append(("every_equal_hash_passes", compare_every_tick(left, copy.deepcopy(left))["pass"]))
@@ -255,6 +268,7 @@ def grade_capture(repo: Path, capture: Path) -> dict:
     results = []
     for run in data["runs"]:
         if not run.get("peers"):
+            results.append({"name": run["name"], "pass": False, "errors": ["no engine peer is recorded"]})
             continue
         root = Path(run["root"])
         arm = {"name": run["name"], "pass": True, "peers": []}
@@ -351,6 +365,10 @@ def grade_capture(repo: Path, capture: Path) -> dict:
                 arm["pass"] = False
                 arm.setdefault("errors", []).append("the peers observe different player actors or play responses")
         review = json.loads((root / "review.json").read_text(encoding="utf-8"))
+        incomplete = recording_failures(review, [peer["peer"] for peer in run["peers"]])
+        if incomplete:
+            arm["pass"] = False
+            arm.setdefault("errors", []).extend(incomplete)
         failed = [row["id"] for row in review["checklist"] if row.get("probe") == "fail"]
         if failed or review.get("run_findings"):
             arm["pass"] = False
