@@ -11,16 +11,6 @@ function VWSceneObserver:UpdateScript()
 	local scene = SceneMan.Scene and SceneMan.Scene.PresetName or "none";
 	local mode = CF and CF.GS and CF.GS["Mode"] or "none";
 	local form = VoidWanderers and VoidWanderers.UI and VoidWanderers.UI[1] and VoidWanderers.UI[1].Text or "none";
-	if scene == "VoidWanderers Strategy Screen" and VoidWanderers and VoidWanderers.Mid then
-		local activity = ActivityMan:GetActivity();
-		for player = 0, 3 do
-			local screen = activity:ScreenOfPlayer(player);
-			if screen >= 0 then
-				CameraMan:SetScrollTarget(VoidWanderers.Mid, 1, screen);
-				CameraMan:SetScroll(VoidWanderers.Mid, screen);
-			end
-		end
-	end
 	if self.ticks <= 80 and VoidWanderers and VoidWanderers.Mouse then
 		local cursor = VoidWanderers.PlayerCount == 1 and VoidWanderers.CurCursorMO or VoidWanderers.brain;
 		if cursor and MovableMan:IsActor(cursor) then

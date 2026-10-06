@@ -2,12 +2,16 @@
 #include "CameraMan.h"
 
 #include "Activity.h"
+#include "ActivityMan.h"
+#include "Actor.h"
 #include "WindowMan.h"
 #include "FrameMan.h"
 #include "Scene.h"
 #include "SceneMan.h"
 #include "SLTerrain.h"
 #include "TimerMan.h"
+#include "ScenarioRunner.h"
+#include "ScopedSoundSimulationScope.h"
 
 using namespace RTE;
 
@@ -37,6 +41,9 @@ void CameraMan::Clear() {
 		screen.Offset.Reset();
 		screen.DeltaOffset.Reset();
 		screen.ScrollTarget.Reset();
+		screen.ScriptActorUID = 0;
+		screen.ScriptViewOffset.Reset();
+		screen.RestoredScrollTarget = false;
 		screen.ScreenTeam = Activity::NoTeam;
 		screen.ScrollSpeed = 0.1F;
 		screen.ScrollTimer.Reset();
@@ -65,8 +72,46 @@ Vector CameraMan::GetUnwrappedOffset(int screenId) const {
 void CameraMan::SetScroll(const Vector& center, int screenId) {
 	if (!IsValidScreen(screenId)) return;
 	Screen& screen = m_Screens[screenId];
+	screen.ScriptActorUID = 0;
+	screen.RestoredScrollTarget = false;
 	screen.Offset.SetXY(static_cast<float>(center.GetFloorIntX() - (g_WindowMan.GetResX() / 2)), static_cast<float>(center.GetFloorIntY() - (g_WindowMan.GetResY() / 2)));
 	CheckOffset(screenId);
+}
+
+void CameraMan::SetScrollFromScript(const Vector& center, int screenId) {
+	SetScroll(center, screenId);
+	if (!IsValidScreen(screenId) || !ScenarioRunner::IsLockstepControllerSyncActive()) return;
+	const auto key = SoundSimulationScope::CurrentKey();
+	if (key.domain != SoundExecutionDomain::SharedSimulation &&
+	    !(key.domain == SoundExecutionDomain::Presentation && key.objectUID == 0)) return;
+	const Activity* activity = g_ActivityMan.GetActivity();
+	if (!activity) return;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (!activity->IsLocalHumanSeat(player) || activity->ScreenOfPlayer(player) != screenId) continue;
+		const Actor* actor = activity->GetControlledActor(player);
+		if (!actor || actor->GetScale() != 0) return;
+		// An invisible script controller follows from the camera the script places, not its staging position.
+		Screen& screen = m_Screens[screenId];
+		screen.ScriptActorUID = actor->GetUniqueID();
+		screen.ScriptViewOffset = center - actor->GetViewPoint();
+		SetScrollTarget(center, 1, screenId);
+		return;
+	}
+}
+
+Vector CameraMan::GetActorScrollTarget(const Actor& actor, int screenId) {
+	if (!IsValidScreen(screenId)) return actor.GetViewPoint();
+	Screen& screen = m_Screens[screenId];
+	const bool scriptedController = ScenarioRunner::IsLockstepControllerSyncActive() && actor.GetScale() == 0;
+	if (screen.RestoredScrollTarget && scriptedController) {
+		// The retained target carries the local offset, so the cache needs no checkpoint field.
+		screen.ScriptActorUID = actor.GetUniqueID();
+		screen.ScriptViewOffset = screen.ScrollTarget - actor.GetViewPoint();
+	}
+	screen.RestoredScrollTarget = false;
+	if (scriptedController && screen.ScriptActorUID == actor.GetUniqueID()) return actor.GetViewPoint() + screen.ScriptViewOffset;
+	screen.ScriptActorUID = 0;
+	return actor.GetViewPoint();
 }
 
 Vector CameraMan::GetScrollTarget(int screenId) const {
@@ -320,6 +365,10 @@ bool CameraMan::Screen::LoadCheckpoint(std::string_view text, bool validateOnly)
 		CheckpointReader reader(text, "Screen1", validateOnly);
 		reader(ScreenTeam, Offset, PrevOffset, DeltaOffset, ScrollTarget, ScrollTimer, ScrollSpeed, TargetXWrapped, TargetYWrapped, SeamCrossCount, ScreenOcclusion, ScreenShakeMagnitude);
 		reader.Finish();
+		if (!validateOnly) {
+			ScriptActorUID = 0;
+			RestoredScrollTarget = true;
+		}
 		return true;
 	} catch (const std::exception&) { return false; }
 }

@@ -12,6 +12,7 @@
 #define g_CameraMan CameraMan::Instance()
 
 namespace RTE {
+	class Actor;
 
 	/// The singleton manager of the camera for each player.
 	class CameraMan : public Singleton<CameraMan> {
@@ -69,6 +70,12 @@ namespace RTE {
 		/// @param center The coordinates to center the terrain scroll on.
 		/// @param screenId Which screen you want to set the offset of.
 		void SetScroll(const Vector& center, int screenId = 0);
+
+		/// Centers a script's invisible match controller while retaining its camera offset.
+		void SetScrollFromScript(const Vector& center, int screenId = 0);
+
+		/// Gets the actor's view target with its script-supplied camera offset.
+		Vector GetActorScrollTarget(const Actor& actor, int screenId = 0);
 
 		/// Gets the team associated with a specific screen.
 		/// @param screenId Which screen you want to get the team of.
@@ -202,6 +209,9 @@ namespace RTE {
 			Vector PrevOffset; //!< Offset at the start of this sim tick, for render-rate interpolation.
 			Vector DeltaOffset; //!< The difference in current offset and the Update() before.
 			Vector ScrollTarget; //!< The final offset target of the current scroll interpolation, in scene coordinates.
+			long ScriptActorUID = 0;
+			Vector ScriptViewOffset;
+			bool RestoredScrollTarget = false;
 
 			Timer ScrollTimer; //!< Scroll timer for making scrolling work framerate independently.
 			float ScrollSpeed = 0; //!< The normalized speed the screen's view scrolls. 0 being no movement, and 1.0 being instant movement to the target in one frame.
