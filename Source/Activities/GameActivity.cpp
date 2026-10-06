@@ -2664,6 +2664,8 @@ void GameActivity::Update() {
 		///////////////////////////////////////
 		// Configure banners to show when important things happen, like the game over or death of brain
 
+		// A shared scripted scene can replace a living brain after the old world is purged.
+		if (m_SharedPlayerSeats && m_Brain[player] && !m_Brain[player]->IsDead() && m_pBannerRed[player]->GetBannerText() == "DEAD") m_pBannerRed[player]->ClearText();
 		if (IsOver()) {
 			// Override previous messages
 			if (m_pBannerRed[player]->IsVisible() && m_pBannerRed[player]->GetBannerText() != "FAIL")
