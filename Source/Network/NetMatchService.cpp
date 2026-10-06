@@ -10087,7 +10087,6 @@ static std::string ResyncSaveName() {
 		if (m_Dispatcher && m_Dispatcher->Channel().GetLastError() == NetDirectoryClient::c_CapacityNotice &&
 		    !session.IsRejected() && session.GetMismatchKey() != "host_disconnect") {
 			if (error) *error = NetDirectoryClient::c_CapacityNotice;
-			return false;
 		}
 #endif
 		if (config.host || !NetIcePrefersP2P(target, m_IceEnabled) || m_CancelRequested.load()) return false;

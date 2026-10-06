@@ -56,6 +56,77 @@
 #include <vector>
 
 namespace RTE {
+	bool TestDirectoryCapacityFallback(std::string* error) {
+#ifdef CCCP_WITH_GNS
+		class DirectHost final : public INetTransport {
+		public:
+			bool connected = false;
+			std::vector<NetTransportEvent> pending;
+			bool StartHost(uint16_t, std::string*) override { return true; }
+			bool Connect(const std::string& address, uint16_t port, std::string*) override {
+				connected = address == "127.0.0.1" && port == 47468;
+				if (connected) pending.push_back({NetTransportEventType::PeerConnected, 1});
+				return connected;
+			}
+			bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>& bytes, std::string*, bool*) override {
+				const auto session = NetProtocol::Decode(bytes);
+				std::vector<uint8_t> reply;
+				if (session.ok && std::holds_alternative<NetClientHello>(session.message.payload)) {
+					NetMessage accepted;
+					accepted.payload = NetJoinAccepted{73, 1, 2, NetProtocol::c_Version, 1000, 4000};
+					if (!NetProtocol::Encode(accepted, reply)) return false;
+				} else {
+					const auto round = NetLockstepCodec::Decode(bytes);
+					if (round.ok && std::holds_alternative<NetLockstepStart>(round.packet.payload)) {
+						auto start = std::get<NetLockstepStart>(round.packet.payload);
+						start.localPeerId = 1; start.roundId = 73;
+						if (!NetLockstepCodec::Encode({start}, reply)) return false;
+					}
+				}
+				if (!reply.empty()) pending.push_back({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, std::move(reply)});
+				return true;
+			}
+			void Disconnect(NetPeerId, const std::string&) override {}
+			void Stop() override {}
+			std::vector<NetTransportEvent> PollEvents() override { return std::exchange(pending, {}); }
+		};
+		class QueueFull final : public NetDirectoryClient::Transport {
+		public:
+			void Start(const NetDirectoryClient::Request&) override {}
+			bool Finished() override { return true; }
+			NetDirectoryClient::Reply Take() override { return {400, R"({"error":"queue_full"})", ""}; }
+			void Abort() override {}
+		};
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		NetMatchService service;
+		service.m_IceEnabled = true; service.m_ConnectionMode = 0;
+		service.m_Dispatcher = std::make_unique<GnsDirectorySignalDispatcher>();
+		auto& channel = const_cast<NetDirectorySignalChannel&>(service.m_Dispatcher->Channel());
+		channel.SetTransportFactory([] { return std::make_unique<QueueFull>(); });
+		channel.ConfigureClient("https://dir.test", "key0123456789abcd", "", "7b8c9d2e-1111-4222-8333-444455556666");
+		channel.Post("host", "offer"); channel.Update(0); channel.Update(0);
+		if (channel.GetLastError() != NetDirectoryClient::c_CapacityNotice) { *error = "T2: queue_full fixture did not refuse signaling"; return false; }
+		std::unique_ptr<NetMuxTransport> mux;
+		DirectHost ip;
+		NetSession session;
+		NetLockstepCoordinator coordinator;
+		NetMatchRunner runner;
+		NetMatchRunnerConfig config;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(73);
+		config.joinAddress = "session:capacity";
+		config.sessionWaitMs = 1000; config.lockstepWaitMs = 1000;
+		config.sessionConfig.p2pJoin.connect = [](INetTransport&, std::string* why) { if (why) *why = "ICE signaling queue is full"; return false; };
+		bool noDirectRoute = false;
+		NetIceJoinTarget target{"str:h-capacity", "either", "127.0.0.1", 47468};
+		if (!service.StartLobbyConnection(mux, ip, session, coordinator, runner, config, target, true, noDirectRoute, error) ||
+		    !ip.connected || !session.IsReady() || !coordinator.IsRunning() || service.m_IceRoute != "ip") {
+			*error = "T2: queue_full stopped a join that the direct address could complete: " + *error;
+			return false;
+		}
+		std::cout << "[net-directory-selftest] PASS T2 queue_full_direct_join" << std::endl;
+#endif
+		return true;
+	}
 
 	bool TestRecoveredDirectoryBinding(std::string* error) {
 		const std::string oldId = "7b8c9d2e-1111-4222-8333-444455556666";
@@ -3218,7 +3289,7 @@ namespace RTE {
 				if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
 			}
 #endif
-			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"T1", TestDirectoryErrorSnapshot}, {"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
+			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"T1", TestDirectoryErrorSnapshot}, {"T2", TestDirectoryCapacityFallback}, {"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
 				if (!selected || std::string(selected) == test.first) {
 					if (!test.second(&error)) return fail(error);
 					if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }

@@ -1358,6 +1358,7 @@ namespace RTE {
 		friend bool TestEndedWorldLateAdmission(std::string* error);
 		friend bool TestRecoveredDirectoryBinding(std::string* error);
 		friend bool TestSignalPumpInitialCredential(std::string* error);
+		friend bool TestDirectoryCapacityFallback(std::string* error);
 		friend bool TestStaleWorldImageRecaptures(std::string* error);
 		friend bool TestWorldCatchUpRefusal(std::string* error);
 		friend bool TestWorldDisconnectReason(bool watcher, std::string* error);
