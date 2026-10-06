@@ -84,6 +84,9 @@ Match.parameters["peer_tasks"] may pin a named Windows task for each peer.
 Match.parameters["public_directory"]=True uses the game's default public
 directory without a signaling tunnel. The host's registration log supplies
 its session code; only deliberate loopback joins are replaced by that code.
+Public peers finish native preparation before the host starts. The joiner's
+code is delivered as a staged input before its engine starts; original menu
+scripts and their assertion budgets are unchanged.
 The initial claim and final launch wait for their native capacity mutex for up
 to 180 seconds, bounded by the remaining positive runner-wait budget. An
 omitted/zero runner-wait retains the old 15-second mutex budget for old calls.
@@ -942,7 +945,7 @@ def named_engine_cpu_wait(load, box, needs, renew):
         load.admission = original
 
 
-def wait_native_admission(backend, box, claim, wait=0):
+def wait_native_admission(backend, box, claim, wait=0, *, on_prepared=None):
     """Finish native admission before starting a case timer; require its PID."""
     deadline = time.monotonic() + float(wait or 0) + 1320
     while True:
@@ -952,6 +955,10 @@ def wait_native_admission(backend, box, claim, wait=0):
         raw = backend.rpc(box, "text", dict(path=claim["root"] + "/progress.json"), timeout=20)["text"]
         if raw:
             progress = json.loads(raw)
+            if progress.get("public_prepared") and on_prepared:
+                if progress.get("token") != claim["token"]:
+                    raise SpreadRefusal("native preparation changed owner")
+                on_prepared()
             if progress.get("pid") and progress.get("identity"):
                 return
             if progress.get("record", {}).get("error"):
@@ -1096,6 +1103,10 @@ class Case:
         self.repo, self.out = Path(repo).resolve(), Path(out).resolve()
         self.out.parent.mkdir(parents=True, exist_ok=True)
         self.peers, self.match = list(peers), match
+        self.public_launch_lock = threading.Lock()
+        self.public_prepared = {}
+        self.public_host_released = False
+        self.public_released = set()
         self.names = [peer.name for peer in self.peers]
         if not self.names or len(set(name.casefold() for name in self.names)) != len(self.names):
             raise ValueError("a spread case declares unique peers")
@@ -1408,6 +1419,47 @@ class Case:
             if process.poll() is not None:
                 raise self.refuse(name, self.members[name][0]["name"], "private directory signaling tunnel refused")
 
+    def release_public_launch(self, name):
+        """Keep native queue time ahead of the original host menu sequence."""
+        self.guard()
+        with self.public_launch_lock:
+            for role in self.names:
+                handle = self.runs.get(role)
+                if handle and getattr(handle, "start_failure", None):
+                    raise SpreadRefusal(f"requested peer {role} did not start: {handle.start_failure}")
+                if role in self.public_prepared:
+                    continue
+                box, claim, _, backend = self.members[role]
+                raw = backend.rpc(box, "text", dict(path=claim["root"] + "/progress.json"), timeout=20).get("text")
+                progress = json.loads(raw) if raw else {}
+                if not progress.get("public_prepared"):
+                    continue
+                if progress.get("token") != claim["token"] or progress.get("role") != role:
+                    raise SpreadRefusal(f"native preparation changed owner for {role}")
+                identity = progress.get("identity", {})
+                if identity.get("executable_sha256") != claim["exe_sha256"]:
+                    raise SpreadRefusal(f"native preparation changed executable for {role}")
+                self.public_prepared[role] = identity
+            if len(self.public_prepared) != len(self.names):
+                return
+            if not self.public_host_released:
+                self.write_public_release(self.names[0])
+                self.public_host_released = True
+            if name == self.names[0] or name in self.public_released:
+                return
+        session = self.published_session(name)
+        with self.public_launch_lock:
+            if name not in self.public_released:
+                self.write_public_release(name, session)
+
+    def write_public_release(self, name, session=None):
+        box, claim, _, backend = self.members[name]
+        value = dict(case_id=self.id, role=name, token=claim["token"], session=session,
+                     executable_sha256=claim["exe_sha256"])
+        backend.rpc(box, "write", dict(path=claim["root"] + "/public-launch.json", value=value,
+                                      phase_claim=self.transport_module.Transport.native_claim(claim)))
+        self.public_released.add(name)
+
     def published_session(self, name):
         from e2e_video import directory_session
         port = int(role_value(self.peer_ports, self.names, name) or self.match.port)
@@ -1687,8 +1739,9 @@ class Run:
             raise self.case.refuse(self.role, box["name"], f"match port {args[args.index('-net-port') + 1]} differs from host port {port}")
         session = None
         session_routing = (self.case.directory or getattr(self.case, "public_directory", False)) and getattr(self.case, "network", "ice") == "ice" and self.case.match.parameters.get("join_by_session", True)
+        public_gate = bool(session_routing and getattr(self.case, "public_directory", False))
         if session_routing and self.role != self.case.names[0]:
-            session = self.case.published_session(self.role)
+            session = PUBLIC_SESSION_INPUT if public_gate else self.case.published_session(self.role)
         if session_routing:
             if "-net-ice" in args:
                 if args[args.index("-net-ice") + 1].lower() == "off":
@@ -1706,6 +1759,7 @@ class Run:
             mappings += [(str(self.retained), claim["case_root"] + "/" + self.output_name + "/runtime"),
                          (self.retained.as_posix(), claim["case_root"] + "/" + self.output_name + "/runtime")]
         files = {}
+        session_files = []
         roots = [self.cwd, self.case.out/(self.output_name + "-stage"), self.case.out/(self.output_name + "-probe"), self.case.out/(self.output_name + "_probe")]
         paths = set(self.case.out.glob("*.txt"))
         for root in roots:
@@ -1729,12 +1783,16 @@ class Run:
             if not public_file(path):
                 raise self.case.refuse(self.role, box["name"], "private credentials or tickets cannot be staged as case inputs")
             data = path.read_bytes()
+            if public_gate and PUBLIC_SESSION_INPUT.encode() in data:
+                raise self.case.refuse(self.role, box["name"], "case input contains the reserved public session placeholder")
             if path.suffix.lower() in (".txt", ".json", ".ini", ".lua"):
                 data = map_script(data, mappings, session)
                 if getattr(self.case, "network", "ice") == "direct":
                     data = re.sub(rb"(?m)^(settext TextJoinAddress)\s+(?:127\.0\.0\.1|localhost)\s*$",
                                   lambda match: match[1] + b" " + host_address.encode(), data)
             files[path.relative_to(self.case.out).as_posix()] = base64.b64encode(data).decode()
+            if public_gate and PUBLIC_SESSION_INPUT.encode() in data:
+                session_files.append(path.relative_to(self.case.out).as_posix())
         signals = self.case.signals()
         self.case.extra_signals = sorted(set(getattr(self.case, "extra_signals", ())) | set(signals))
         native = dict(schema=1, role=self.role, output_name=self.output_name, root=claim["case_root"], repo=claim["repo"], box=box,
@@ -1748,6 +1806,10 @@ class Run:
                       executable_sha256=claim["exe_sha256"], directory=self.case.directory,
                       public_directory=getattr(self.case, "public_directory", False),
                       signal_port=claim.get("signal_port"), session=session)
+        if public_gate:
+            native["public_launch"] = dict(host=self.case.names[0], wait=float(
+                self.case.match.parameters.get("runner_wait", getattr(_options, "runner_wait", 0)) or 0) + 1320,
+                files=session_files, args=[i for i, argument in enumerate(native["args"]) if PUBLIC_SESSION_INPUT in argument])
         native["block_udp"] = next(peer.block_udp for peer in self.case.peers if peer.name == self.role)
         if getattr(self, "private_menu", None) or getattr(self, "private_environment", None):
             raise self.case.refuse(self.role, box["name"], "private relay inputs require the existing credential delivery channel")
@@ -1760,13 +1822,18 @@ class Run:
             request["command"] = ["python", claim["control"] + "/spread_peers.py", "--native", path, "--out", "{OUT}"]
             self.launch_attempted = True
             wait = self.case.match.parameters.get("runner_wait", getattr(_options, "runner_wait", 0))
-            wait_started_host(self.case, self.role, wait)
+            if not public_gate:
+                wait_started_host(self.case, self.role, wait)
             if wait and box["kind"] == "local":
                 wait_named_launch(self.case.transport_module.worker, self.case.pool, box, claim, wait=wait,
                                   wait_for_holder=self.case.match.parameters.get("wait_for_holder", getattr(_options, "wait_for_holder", None)))
             request["hang_guard"] = max(request.get("hang_guard", 600), self.timeout + 1500 + float(wait or 0))
             launch_native(backend, box, claim, request, wait)
-            wait_native_admission(backend, box, claim, wait)
+            if public_gate:
+                wait_native_admission(backend, box, claim, wait,
+                                      on_prepared=lambda:self.case.release_public_launch(self.role))
+            else:
+                wait_native_admission(backend, box, claim, wait)
         except SpreadRefusal as error:
             self.start_failure = str(error)
             if str(error).startswith(f"spread peer {self.role} on {box['name']}: "):
@@ -1912,6 +1979,55 @@ def stage_native_run(factory, ownership, box, peer, *args, **kwargs):
     return run
 
 
+PUBLIC_SESSION_INPUT = "__PUBLIC_SESSION_INPUT__"
+
+
+def receive_public_launch(spec, control, identity, renew):
+    """Bind the real public code after every native peer has prepared."""
+    gate = spec.get("public_launch")
+    if not gate:
+        return spec
+    token = spec["claim"]["token"]
+    write_json(control / "progress.json", dict(public_prepared=True, token=token,
+                                               role=spec["role"], identity=identity))
+    deadline = time.monotonic() + gate["wait"]
+    last_renewal = 0
+    while True:
+        value = read_json(control / "public-launch.json")
+        if value:
+            if any(value.get(key) != expected for key, expected in (
+                ("case_id", spec["case_id"]), ("role", spec["role"]), ("token", token),
+                ("executable_sha256", spec["executable_sha256"]))):
+                raise SpreadRefusal("public launch input changed native owner or executable")
+            break
+        now = time.monotonic()
+        if now >= deadline:
+            raise SpreadRefusal("public launch did not complete within native admission budget")
+        if now - last_renewal >= 8:
+            renew()
+            last_renewal = now
+        time.sleep(.25)
+    if spec["role"] == gate["host"]:
+        return spec
+    session = value.get("session", "")
+    if not isinstance(session, str) or not re.fullmatch(r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}", session):
+        raise SpreadRefusal("public launch has no full registered session code")
+    result = dict(spec, session=session)
+    result["args"], result["files"] = list(spec["args"]), dict(spec["files"])
+    for index in gate["args"]:
+        if not isinstance(index, int) or not 0 <= index < len(result["args"]) or PUBLIC_SESSION_INPUT not in result["args"][index]:
+            raise SpreadRefusal("public launch has an invalid staged argument binding")
+        result["args"][index] = result["args"][index].replace(PUBLIC_SESSION_INPUT, session)
+    for path in gate["files"]:
+        if path not in result["files"]:
+            raise SpreadRefusal("public launch has an invalid staged file binding")
+        data = base64.b64decode(result["files"][path], validate=True)
+        if PUBLIC_SESSION_INPUT.encode() not in data:
+            raise SpreadRefusal("public launch has no placeholder in its staged file binding")
+        result["files"][path] = base64.b64encode(data.replace(PUBLIC_SESSION_INPUT.encode(), session.encode())).decode()
+    return result
+
+
 def native_execute(spec_path, result_out):
     spec = read_json(spec_path)
     if not spec or spec.get("schema") != 1:
@@ -1958,6 +2074,7 @@ def _native_execute(spec_path, result_out, peer, ownership):
         raise SpreadRefusal("native executable hash differs from preparation")
     # Retain complete hash evidence while publishing a small live identity receipt.
     identity = {key: identity[key] for key in ("machine_id", "hostname", "os", "head", "executable_sha256")}
+    spec = receive_public_launch(spec, control, identity, lambda:pool_worker.renew_claim(spec["claim"]))
     runtime_files = {}
     for relative, encoded in spec["files"].items():
         data = base64.b64decode(encoded, validate=True)

@@ -1372,5 +1372,102 @@ class ContractTests(unittest.TestCase):
         self.assertFalse(hasattr(backend, "target"))
 
 
+class PublicLaunchTests(unittest.TestCase):
+    def specification(self, role="client"):
+        original = b"wait 40\nsettext TextJoinAddress " + spread.PUBLIC_SESSION_INPUT.encode() + b"\nwait_connected 2 60\nassert_label ComboHostRulesMode Players and AI opponents\n"
+        return dict(case_id="case", role=role, claim=dict(token=role + "-owner"), executable_sha256="a" * 64,
+                    public_launch=dict(host="host", wait=24, files=["client-menu.txt"], args=[1]), args=["-net-join-session", spread.PUBLIC_SESSION_INPUT],
+                    files={"client-menu.txt":base64.b64encode(original).decode()}, session=spread.PUBLIC_SESSION_INPUT)
+
+    def release(self, spec):
+        return dict(case_id=spec["case_id"], role=spec["role"], token=spec["claim"]["token"],
+                    executable_sha256=spec["executable_sha256"], session="7b8c9d2e-1111-4222-8333-444455556666")
+
+    def test_late_native_preparation_precedes_original_host_clock(self):
+        case = spread.Case.__new__(spread.Case)
+        case.names = ["host", "client"]
+        case.public_launch_lock = spread.threading.Lock()
+        case.public_prepared, case.public_released = {}, set()
+        case.public_host_released = False
+        case.guard = lambda:None
+        case.runs = {name:SimpleNamespace(start_failure=None) for name in case.names}
+        clock, releases = [0], []
+        prepared = {"host":True, "client":False}
+        def rpc(box, action, body, **kwargs):
+            name = box["name"]
+            value = dict(public_prepared=prepared[name], role=name, token=name,
+                         identity=dict(executable_sha256="a" * 64))
+            return dict(text=json.dumps(value))
+        case.members = {name:(dict(name=name), dict(root="/" + name, token=name, exe_sha256="a" * 64), {}, SimpleNamespace(rpc=rpc)) for name in case.names}
+        def release(name, session=None):
+            releases.append((name, clock[0], session))
+            case.public_released.add(name)
+        case.write_public_release = release
+        case.published_session = lambda _:"7b8c9d2e-1111-4222-8333-444455556666"
+        case.release_public_launch("host")
+        self.assertEqual(releases, [])
+        clock[0] = 106
+        prepared["client"] = True
+        case.release_public_launch("host")
+        self.assertEqual(releases, [("host", 106, None)])
+        clock[0] = 110
+        case.release_public_launch("client")
+        self.assertEqual(releases[-1][:2], ("client", 110))
+        self.assertLess(releases[-1][1] - releases[0][1], 60)
+
+    def test_public_input_changes_only_the_declared_address_binding(self):
+        spec = self.specification()
+        spec["files"]["unrelated.bin"] = base64.b64encode(spread.PUBLIC_SESSION_INPUT.encode()).decode()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            spread.write_json(root / "public-launch.json", self.release(spec))
+            bound = spread.receive_public_launch(spec, root, dict(executable_sha256="a" * 64), lambda:None)
+        original = base64.b64decode(spec["files"]["client-menu.txt"])
+        result = base64.b64decode(bound["files"]["client-menu.txt"])
+        self.assertEqual(result, original.replace(spread.PUBLIC_SESSION_INPUT.encode(), bound["session"].encode()))
+        self.assertIn(b"wait_connected 2 60\n", result)
+        self.assertEqual(bound["args"], ["-net-join-session", bound["session"]])
+        self.assertEqual(spec["session"], spread.PUBLIC_SESSION_INPUT)
+        self.assertEqual(bound["files"]["unrelated.bin"], spec["files"]["unrelated.bin"])
+
+    def test_public_input_refuses_foreign_owner_and_executable(self):
+        spec = self.specification()
+        for field, value in (("token", "foreign"), ("case_id", "other"), ("role", "host"), ("executable_sha256", "b" * 64)):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                release = self.release(spec)
+                release[field] = value
+                spread.write_json(root / "public-launch.json", release)
+                with self.assertRaisesRegex(spread.SpreadRefusal, "changed native owner or executable"):
+                    spread.receive_public_launch(spec, root, {}, lambda:None)
+
+    def test_public_input_refuses_invalid_session_codes(self):
+        spec = self.specification()
+        for value in (None, "absent", "g" * 36):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                release = dict(self.release(spec), session=value)
+                spread.write_json(root / "public-launch.json", release)
+                with self.assertRaisesRegex(spread.SpreadRefusal, "no full registered session code"):
+                    spread.receive_public_launch(spec, root, {}, lambda:None)
+
+    def test_public_preparation_keeps_the_native_admission_deadline(self):
+        spec, clock, renewed = self.specification(), [0], []
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(spread.time, "monotonic", side_effect=lambda:clock[0]), \
+             patch.object(spread.time, "sleep", side_effect=lambda seconds:clock.__setitem__(0, clock[0] + seconds)):
+            with self.assertRaisesRegex(spread.SpreadRefusal, "native admission budget"):
+                spread.receive_public_launch(spec, Path(directory), {}, lambda:renewed.append(clock[0]))
+        self.assertEqual(clock[0], 24)
+        self.assertEqual(renewed, [8, 16])
+
+    def test_ordinary_native_calls_do_not_enter_public_coordination(self):
+        spec = self.specification()
+        del spec["public_launch"]
+        with patch.object(spread, "write_json") as write:
+            self.assertIs(spread.receive_public_launch(spec, Path("unused"), {}, lambda:None), spec)
+        write.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
