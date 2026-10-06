@@ -17,7 +17,6 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
-#include <cstddef>
 
 struct BITMAP;
 
@@ -86,17 +85,6 @@ namespace RTE {
 	struct BitmapSnapshot;
 	class Timer;
 	bool RunOwnedCheckpointSelfTest();
-	class CheckpointText;
-	/// A freeze-owned field pack. Recording it may run later; it never borrows an engine object.
-	class OwnedCheckpointFields {
-	public:
-		virtual ~OwnedCheckpointFields() = default;
-		virtual CheckpointText Record() const = 0;
-		virtual bool Same(const OwnedCheckpointFields& other) const = 0;
-		virtual size_t OwnedBytes() const = 0;
-		virtual bool HasPeerRuns() const = 0;
-		virtual bool UsesSimTime() const = 0;
-	};
 
 	/// Owned checkpoint values whose text is produced by the archive worker.
 	class CheckpointText {
@@ -106,8 +94,6 @@ namespace RTE {
 		const std::string& Text() const;
 		size_t OwnedBytes() const;
 		bool HasPeerRuns() const;
-		bool UsesSimTime() const;
-		static CheckpointText Fields(std::shared_ptr<const OwnedCheckpointFields> fields);
 		bool SameValues(const CheckpointText& other) const;
 		CheckpointText ReuseChildren(const CheckpointText& previous) const;
 		CheckpointText Base64(bool url = true) const;

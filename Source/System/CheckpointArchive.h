@@ -67,19 +67,12 @@ namespace RTE {
 			if (scope.output) throw std::logic_error("checkpoint capture result was not consumed");
 			return result;
 		}
-		template <class... Values> void operator()(const Values&... values) {
-			if (!m_Recording || s_ReplayingFields || sizeof...(Values) == 0) { (Value(values), ...); return; }
-			RefuseDivertedValue();
-			// Copy the fields while the world is fenced. Visiting containers and
-			// packing their scalar tokens belongs to the saver, over these copies.
-			auto frozen = std::tuple{FreezeField(values)...};
-			m_Capture.Child(CheckpointText::Fields(std::make_shared<FieldPack<decltype(frozen)>>(std::move(frozen))));
-		}
+		template <class... Values> void operator()(const Values&... values) { (Value(values), ...); }
 		/// Writes values only this machine holds (its clocks, pacing, seat or view): the archive carries them as before,
 		/// and the shared state a peer is compared on leaves them out.
 		template <class... Values> void PerPeer(const Values&... values) {
 			BeginPerPeer();
-			(*this)(values...);
+			(Value(values), ...);
 			EndPerPeer();
 		}
 		/// Opens and closes such a run around values a visitor writes itself.
@@ -143,113 +136,6 @@ namespace RTE {
 		}
 
 	private:
-		struct FrozenTimer {
-			int64_t simStart, simLimit, realStart, realLimit;
-			bool operator==(const FrozenTimer&) const = default;
-		};
-		void Value(const FrozenTimer& value) {
-			(*this)(value.simStart, value.simLimit);
-			PerPeer(value.realStart, value.realLimit);
-		}
-		struct FieldsOnly {};
-		explicit CheckpointWriter(FieldsOnly) : m_Recording(true) {}
-		inline static thread_local bool s_ReplayingFields = false;
-		struct ReplayFields {
-			bool previous = s_ReplayingFields;
-			ReplayFields() { s_ReplayingFields = true; }
-			~ReplayFields() { s_ReplayingFields = previous; }
-		};
-		template<class T> static auto FreezeField(const T& value) {
-			if constexpr (std::is_same_v<T, bool>) {
-				unsigned char byte; std::memcpy(&byte, &value, sizeof(byte)); return static_cast<unsigned int>(byte);
-			} else if constexpr (std::is_same_v<T, Vector>) {
-				return std::pair{value.m_X, value.m_Y};
-			} else if constexpr (std::is_same_v<T, Box>) {
-				return std::pair{FreezeField(value.m_Corner), std::pair{value.m_Width, value.m_Height}};
-			} else if constexpr (std::is_same_v<T, Timer>) {
-				// Read both anchors now, including their per-peer boundaries.
-				return FrozenTimer{value.GetStartSimTimeMS(), value.GetSimTimeLimitTicks(), value.GetStartRealTimeMS(), value.GetRealTimeLimitTicks()};
-			} else if constexpr (requires { value.SaveCheckpoint(); }) {
-				CheckpointText captured = Native([&value] { return value.SaveCheckpoint(); });
-				return s_Cache ? s_Cache->Remember(&value, 0, std::move(captured)) : std::move(captured);
-			} else if constexpr (std::is_same_v<T, FrozenTimer> || std::is_same_v<T, CheckpointText> || std::is_same_v<T, std::string> ||
-			                     std::is_arithmetic_v<T> || std::is_enum_v<T>) {
-				return value;
-			} else if constexpr (requires { typename T::first_type; typename T::second_type; }) {
-				return std::pair{FreezeField(value.first), FreezeField(value.second)};
-			} else if constexpr (std::is_array_v<T>) {
-				std::array<decltype(FreezeField(value[0])), std::extent_v<T>> frozen;
-				for (size_t index = 0; index < frozen.size(); ++index) frozen[index] = FreezeField(value[index]);
-				return frozen;
-			} else if constexpr (requires { std::tuple_size<T>::value; }) {
-				std::array<decltype(FreezeField(value[0])), std::tuple_size_v<T>> frozen;
-				for (size_t index = 0; index < frozen.size(); ++index) frozen[index] = FreezeField(value[index]);
-				return frozen;
-			} else if constexpr (std::is_same_v<T, std::vector<bool>>) {
-				std::vector<unsigned int> frozen; frozen.reserve(value.size());
-				for (bool bit: value) frozen.push_back(bit ? 1u : 0u); return frozen;
-			} else if constexpr (requires { typename T::hasher; typename T::mapped_type; }) {
-				// Match the existing unordered-map codec's key order.
-				return FreezeField(std::map<typename T::key_type, typename T::mapped_type>(value.begin(), value.end()));
-			} else if constexpr (requires { typename T::value_type; value.begin(); value.size(); }) {
-				using Field = decltype(FreezeField(std::declval<const typename T::value_type&>()));
-				std::vector<Field> frozen; frozen.reserve(value.size());
-				for (const auto& item: value) frozen.push_back(FreezeField(item)); return frozen;
-			} else if constexpr (std::is_convertible_v<T, std::string>) {
-				return std::string(value);
-			} else {
-				static_assert(sizeof(T) == 0, "checkpoint field must own its saved values");
-			}
-		}
-		template<class T> static bool SameField(const T& left, const T& right) {
-			if constexpr (std::is_same_v<T, CheckpointText>) return left.SameValues(right);
-			else if constexpr (std::is_same_v<T, float>) return std::bit_cast<uint32_t>(left) == std::bit_cast<uint32_t>(right);
-			else if constexpr (std::is_same_v<T, double>) return std::bit_cast<uint64_t>(left) == std::bit_cast<uint64_t>(right);
-			else if constexpr (requires { typename T::first_type; typename T::second_type; }) return SameField(left.first, right.first) && SameField(left.second, right.second);
-			else if constexpr (!std::is_same_v<T, std::string> && requires { left.begin(); left.size(); }) {
-				return left.size() == right.size() && std::equal(left.begin(), left.end(), right.begin(), [](const auto& a, const auto& b) { return SameField(a, b); });
-			} else return left == right;
-		}
-		template<class T> static size_t FieldStorage(const T& value) {
-			if constexpr (std::is_same_v<T, CheckpointText>) return value.OwnedBytes();
-			else if constexpr (std::is_same_v<T, std::string>) {
-				const uintptr_t data = reinterpret_cast<uintptr_t>(value.data()), owner = reinterpret_cast<uintptr_t>(&value);
-				return data >= owner && data < owner + sizeof(T) ? 0 : value.capacity() + 1;
-			} else if constexpr (requires { typename T::first_type; typename T::second_type; }) return FieldStorage(value.first) + FieldStorage(value.second);
-			else if constexpr (requires { value.begin(); value.size(); }) {
-				size_t bytes = 0;
-				if constexpr (requires { value.capacity(); }) bytes += value.capacity() * sizeof(typename T::value_type);
-				for (const auto& item: value) bytes += FieldStorage(item); return bytes;
-			} else return 0;
-		}
-		template<class T> static bool FieldFlag(const T& value, bool peers) {
-			if constexpr (std::is_same_v<T, CheckpointText>) return peers ? value.HasPeerRuns() : value.UsesSimTime();
-			else if constexpr (std::is_same_v<T, FrozenTimer>) return peers;
-			else if constexpr (requires { typename T::first_type; typename T::second_type; }) return FieldFlag(value.first, peers) || FieldFlag(value.second, peers);
-			else if constexpr (!std::is_same_v<T, std::string> && requires { value.begin(); value.size(); }) {
-				for (const auto& item: value) if (FieldFlag(item, peers)) return true; return false;
-			} else return false;
-		}
-		template<class Tuple> class FieldPack final : public OwnedCheckpointFields {
-		public:
-			explicit FieldPack(Tuple fields) : m_Fields(std::move(fields)) {}
-			CheckpointText Record() const override {
-				CaptureScope scope; ReplayFields replay; CheckpointWriter writer(FieldsOnly{});
-				std::apply([&writer](const auto&... fields) { (writer.Value(fields), ...); }, m_Fields);
-				return writer.m_Capture.Finish();
-			}
-			bool Same(const OwnedCheckpointFields& other) const override {
-				const auto* right = dynamic_cast<const FieldPack*>(&other);
-				if (!right) return false;
-				return Equal(right->m_Fields, std::make_index_sequence<std::tuple_size_v<Tuple>>{});
-			}
-			size_t OwnedBytes() const override { return sizeof(*this) + std::apply([](const auto&... fields) { return (size_t{0} + ... + FieldStorage(fields)); }, m_Fields); }
-			bool HasPeerRuns() const override { return std::apply([](const auto&... fields) { return (false || ... || FieldFlag(fields, true)); }, m_Fields); }
-			bool UsesSimTime() const override { return std::apply([](const auto&... fields) { return (false || ... || FieldFlag(fields, false)); }, m_Fields); }
-		private:
-			Tuple m_Fields;
-			template<size_t... Index> bool Equal(const Tuple& right, std::index_sequence<Index...>) const { return (SameField(std::get<Index>(m_Fields), std::get<Index>(right)) && ...); }
-		};
 		// A nested writer that already published into this scope was composed by hand, so its text
 		// never reached this writer: name the mistake here instead of losing the value.
 		void RefuseDivertedValue() const {
