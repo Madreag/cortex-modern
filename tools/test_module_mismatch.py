@@ -139,7 +139,7 @@ def main():
                            "dump_lobby\nscreenshot host-mod-mismatch\ngoto_main\n"
                            "assert_screen MainScreen\nexit\n")
             host = start(phase, "Host", True, spec["port"], host_script, spec["host_mods"])
-            wait_for_log(host, "activate ButtonMultiplayerCreate ok=1")
+            wait_for_log(host, "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS")
             joiner_script = (f"wait_state Failed\nwait 5\nassert_substate Landing\n"
                              f"assert_label {LABEL} yours\nassert_enabled ButtonMultiplayerJoinGame 1\n"
                              "dump_lobby\nscreenshot joiner-landing-status\ngoto_main\n"

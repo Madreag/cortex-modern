@@ -55,7 +55,7 @@ def head(name: str, host: bool, port: int) -> str:
                          "wait_all_ready\nactivate ButtonMultiplayerStart\n")
     return script + (f"activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
                      f"settext TextJoinPort {port}\nactivate ButtonJoinAddressGo\n"
-                     "wait_connected 2\nactivate ButtonMultiplayerReady\nwait_remote_ready\n")
+                     "wait_connected 2\nwait_substate Lobby 30\nwait 5\nactivate ButtonMultiplayerReady\nwait_remote_ready\n")
 
 
 # The launch stops the menu loop, so a real-time wait longer than the fade-out cannot finish

@@ -163,7 +163,7 @@ def run_size(repo, root, size, port, expected):
                                   root / who, 480, env={"CCCP_HEADLESS": "1"})
             set_resolution(runs[who].cwd, *size)
         runs["Host"].start()
-        wait_for_log(runs["Host"], "activate ButtonMultiplayerCreate ok=1", 120)
+        wait_for_log(runs["Host"], "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS", 120)
         runs["Guest"].start()
         with ThreadPoolExecutor(max_workers=2) as pool:
             records = dict(pool.map(lambda item: (item[0], item[1].finish()), runs.items()))

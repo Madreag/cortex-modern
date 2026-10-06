@@ -36,7 +36,7 @@ def check(repo, root, port, url):
             seed_settings(run, {"SessionDirectoryUrl": url, "NetworkIceEnable": 0})
             runs[who] = run.start()
             if who == "host":
-                wait_for_log(run, "activate ButtonMultiplayerCreate ok=1", 90)
+                wait_for_log(run, "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS", 90)
         records["guest"] = runs["guest"].finish()
         if records["guest"].get("exit_code") == 0:
             records["host"] = runs["host"].finish()

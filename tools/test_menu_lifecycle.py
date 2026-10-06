@@ -20,7 +20,7 @@ SCRIPTS = {
 
 REQUIRED = {
     "main_exit": "assert_screen expected=MainScreen actual=MainScreen PASS",
-    "quit_button": "activate ButtonQuit ok=1",
+    "quit_button": "activate ButtonQuit click ButtonQuit PASS",
     "join_exit": "assert_substate expected=Landing actual=Landing PASS",
     "credits_exit": "assert_screen expected=CreditsScreen actual=CreditsScreen PASS",
     "moderation_panel": "assert_control ButtonModerationCancel2 PASS",

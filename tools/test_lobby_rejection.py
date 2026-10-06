@@ -44,7 +44,7 @@ def main():
         host = start("Host", True,
             f"wait_error {reason}\nassert_substate Lobby\nassert_enabled ButtonMultiplayerStart 0\nassert_error {reason}\ndump_lobby\nscreenshot rejected-join\n"
             "wait_connected 2\nwait_remote_ready\nwait_all_ready\nassert_enabled ButtonMultiplayerStart 1\ndump_lobby\nactivate ButtonMultiplayerStart\nwait 99999\n", trace=True)
-        wait_for_log(host, "activate ButtonMultiplayerCreate ok=1")
+        wait_for_log(host, "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS")
         # selected_module is hashed; -module Dummy.rte leaves the official set unchanged
         wrong = start("Rejected", False,
             f"wait_state Failed\nwait 5\nassert_substate Landing\nassert_error {reason}\ndump_lobby\nscreenshot rejected-client\nexit\n", extra=("-module", "Dummy.rte"))
@@ -73,7 +73,7 @@ def main():
         checks["host_reason_visible"] = f'assert_error "{reason}"' in host_log and 'A player could not join:' in host_log
         checks["client_reason_visible"] = f'assert_error "{reason}"' in wrong_log and 'assert_substate expected=Landing actual=Landing PASS' in wrong_log
         checks["rejected_peer_never_launched"] = 'dump_lobby state=Failed' in wrong_log and '[menu-mp]' not in wrong_log
-        checks["replacement_launched"] = "Replacement(team" in host_log and "activate ButtonMultiplayerStart ok=1" in host_log
+        checks["replacement_launched"] = "Replacement(team" in host_log and "activate ButtonMultiplayerStart click ButtonMultiplayerStart PASS" in host_log
         checks["simulation"], details["simulation"] = strict_compare(root / "Host/trace.json", root / "Replacement/trace.json", 180)
         for name, image in (("Host", "rejected-join.png"), ("Rejected", "rejected-client.png")):
             images = list((root / name / "runtime/ScreenShots").glob(Path(image).stem + "_*.png"))

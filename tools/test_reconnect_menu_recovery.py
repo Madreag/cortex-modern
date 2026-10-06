@@ -79,9 +79,9 @@ def main():
         tail += "exit\n"
         host = start("Host", True, "wait_connected 2\nwait_remote_ready\nwait_all_ready\n"
                                    "activate ButtonMultiplayerStart\nwait 99999\n")
-        wait_for_log(host, "activate ButtonMultiplayerCreate ok=1")
+        wait_for_log(host, "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS")
         client = start("Client", False, tail)
-        wait_for_log(host, "activate ButtonMultiplayerStart ok=1")
+        wait_for_log(host, "activate ButtonMultiplayerStart click ButtonMultiplayerStart PASS")
         wait_for_log(client, "[menu-mp] launching the match")
         time.sleep(options.play_seconds)
         result["checks"]["client_stored_a_ticket"] = ticket.exists()

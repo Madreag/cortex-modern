@@ -504,7 +504,7 @@ def main():
                        "dump_lobby\nscreenshot host-lobby-t0\nwait_ms 13000\nscreenshot host-lobby-t1\n"
                        "goto_main\nassert_screen MainScreen\nexit\n")
         host = start("Host", True, options.port, host_script, [(BASE_NAME, "Base1")])
-        wait_for_log(host, "activate ButtonMultiplayerCreate ok=1")
+        wait_for_log(host, "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS")
         # post_command raises the button's Command event after the GUI update,
         # the same route a real click takes through HandleInputEvents. The
         # timed t1-t3 frames are the scripted scroll input; --no-scroll-input
@@ -533,7 +533,7 @@ def main():
             start("TallHost", True, options.port + 1,
                   "wait_error could not join\nwait_ms 3000\ngoto_main\nassert_screen MainScreen\nexit\n",
                   [(d, f, v) for d, f, v in TALL_HOST_MODS], phase="tall")
-            wait_for_log(runs["TallHost"], "activate ButtonMultiplayerCreate ok=1")
+            wait_for_log(runs["TallHost"], "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS")
             tall_script = ("wait_state Failed\nwait 5\nassert_substate Landing\n"
                            "assert_label %s yours\nscreenshot tall-t0\n" % LABEL +
                            "".join("wait_ms 750\nscreenshot tall-t%d\n" % n for n in range(1, 9)) +
@@ -551,7 +551,7 @@ def main():
             details["tall_screenshots"] = [str(p) for p in tall_shots]
             checks["tall_landed"] = "assert_substate expected=Landing actual=Landing PASS" in tall_log
             checks["tall_shot_count"] = len(tall_shots) == 9
-            checks["tall_back_command_posted"] = "post_command ButtonBackToMain ok=1" in tall_log
+            checks["tall_back_command_posted"] = "post_command ButtonBackToMain click ButtonBackToMain PASS" in tall_log
             checks["tall_returned_to_main"] = "assert_screen expected=MainScreen actual=MainScreen PASS" in tall_log
         else:
             details["tall_scroll_input"] = "omitted by --no-scroll-input"
@@ -571,7 +571,7 @@ def main():
             start(tag + "Host", True, options.port + 2 + attempt * 3,
                   "wait_error could not join\nwait_ms 3000\ngoto_main\nassert_screen MainScreen\nexit\n",
                   [(BASE_NAME, "Base1")], phase="seam")
-            wait_for_log(runs[tag + "Host"], "activate ButtonMultiplayerCreate ok=1")
+            wait_for_log(runs[tag + "Host"], "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS")
             seam_script = ("wait_state Failed\nwait 5\nassert_substate Landing\n"
                            "assert_label %s yours\nscreenshot seam-t0\nwait_ms 3000\n"
                            "screenshot seam-t1\npost_command ButtonBackToMain\nwait 12\n"
@@ -633,7 +633,7 @@ def main():
         checks["host_stayed_in_lobby"] = "assert_substate expected=Lobby actual=Lobby PASS" in logs["Host"]
         checks["host_returned_to_main"] = "assert_screen expected=MainScreen actual=MainScreen PASS" in logs["Host"]
         checks["joiner_returned_to_main"] = "assert_screen expected=MainScreen actual=MainScreen PASS" in logs["Joiner"]
-        checks["back_command_posted"] = "post_command ButtonBackToMain ok=1" in logs["Joiner"]
+        checks["back_command_posted"] = "post_command ButtonBackToMain click ButtonBackToMain PASS" in logs["Joiner"]
 
         from PIL import Image
         joiner_shots = sorted((root / phase / "Joiner" / "runtime/ScreenShots").glob("viewport-t*_*.png"))

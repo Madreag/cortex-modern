@@ -130,7 +130,7 @@ def main() -> int:
         result["checks"]["host_deleted_its_row"] = "[net-directory] state: registered -> deleting" in host_log
         applicant_log = (root / "applicant/stdout.log").read_text(errors="replace")
         result["checks"]["refused_as_running"] = 'assert_error "The match is already in progress"' in applicant_log
-        result["checks"]["apply_pressed"] = "activate ButtonMultiplayerReconnect ok=1" in applicant_log
+        result["checks"]["apply_pressed"] = "activate ButtonMultiplayerReconnect click ButtonMultiplayerReconnect PASS" in applicant_log
         result["checks"]["no_script_failure"] = "[menu-script] FAILED:" not in applicant_log
         applicant_report = json.loads((root / "applicant_report.json").read_text(errors="replace"))
         result["details"]["applications_sent"] = applicant_report.get("reconnect", {}).get("client_applications_sent")

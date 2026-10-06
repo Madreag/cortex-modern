@@ -110,7 +110,7 @@ def main():
         result["details"]["applications_sent"] = applicant_reconnect.get("client_applications_sent")
         result["checks"]["offer_shown"] = 'assert_error "The match is already in progress"' in applicant_log
         result["checks"]["apply_button_enabled"] = "assert_enabled ButtonMultiplayerReconnect expected=1 actual=1 PASS" in applicant_log
-        result["checks"]["apply_pressed"] = "activate ButtonMultiplayerReconnect ok=1" in applicant_log
+        result["checks"]["apply_pressed"] = "activate ButtonMultiplayerReconnect click ButtonMultiplayerReconnect PASS" in applicant_log
         result["checks"]["no_script_failure"] = "[menu-script] FAILED:" not in applicant_log
         result["checks"]["applications_sent"] = (applicant_reconnect.get("client_applications_sent") or 0) >= 1
         admission = service.get("runner", {}).get("session", {}).get("admission", {})

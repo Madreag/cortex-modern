@@ -358,7 +358,7 @@ def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
                 assert centre["passed"], f"pause busy row is {centre['offset']:.1f} px from its axis"
                 log = read_log(run.out)
                 assert "assert_screen expected=Pause actual=Pause PASS" in log, "pause screen was not asserted"
-                assert "post_command ButtonSaveDiagnostics ok=1" in log, "diagnostics command was not accepted"
+                assert "post_command ButtonSaveDiagnostics click ButtonSaveDiagnostics PASS" in log, "diagnostics command was not accepted"
                 assert "file:Telemetry/diag-*.zip -> OK" in log, "diagnostics file wait did not complete"
                 assert log.count("assert_enabled ButtonSaveDiagnostics expected=1 actual=1 PASS") == 2, "terminal button was not enabled"
                 assert log.count('assert_label ButtonSaveDiagnostics "save diagnostics" text="save diagnostics" PASS') == 2, "terminal label differs"

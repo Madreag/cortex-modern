@@ -60,7 +60,7 @@ def main():
         host_script = menu_script("Host", True, players, options.port) + \
             f"wait_connected {players}\nwait_remote_ready\nwait_all_ready\ndump_lobby\nwait 10\nexit\n"
         host_run = start("host", host_script)
-        wait_for_log(host_run, "activate ButtonMultiplayerCreate ok=1")
+        wait_for_log(host_run, "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS")
         client_script = menu_script("Client", False, players, options.port) + "wait_all_ready\ndump_lobby\nwait 10\nexit\n"
         start("client", client_script)
         for name, run in runs.items():

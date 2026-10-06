@@ -105,9 +105,9 @@ def run_case(repo, root, case, port):
                                 "NetworkChatVisible": 1, "NetworkSlowPlayerPolicy": "Substitute"})
             runs[who] = run.start()
             if host:
-                wait_for_log(run, "activate ButtonMultiplayerCreate ok=1", 90)
+                wait_for_log(run, "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS", 90)
             elif who == "clienta" and len(names) == 3:
-                wait_for_log(run, "activate ButtonMultiplayerConnect ok=1", 90)
+                wait_for_log(run, "activate ButtonMultiplayerConnect click ButtonMultiplayerConnect PASS", 90)
         with ThreadPoolExecutor(max_workers=len(names)) as pool:
             futures = {who: pool.submit(run.finish) for who, run in runs.items()}
             records = {who: future.result() for who, future in futures.items()}

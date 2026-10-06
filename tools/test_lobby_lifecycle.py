@@ -135,7 +135,7 @@ def main():
         else:
             host += "wait 50\nactivate ButtonMultiplayerLeave\nwait 15\nassert_substate Landing\nexit\n"
         host_run = start("host", host, match)
-        wait_for_log(host_run, "activate ButtonMultiplayerCreate ok=1")
+        wait_for_log(host_run, "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS")
         for index in range(1, players):
             name = "departing" if index == 1 else f"stayer{index}"
             display = "Departing" if index == 1 else f"Stayer{index}"

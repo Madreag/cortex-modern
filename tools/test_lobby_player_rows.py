@@ -164,7 +164,7 @@ def main():
                        "assert_label LabelLobbyPlayer2 Team\nassert_label LabelLobbyPlayer3 Team\n"
                        "screenshot rows-t0\nwait 40\nscreenshot rows-t1\nexit\n")
         host = start(HOST_NAME, True, host_suffix)
-        wait_for_log(host, "activate ButtonMultiplayerCreate ok=1")
+        wait_for_log(host, "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS")
         for index, name in enumerate(JOINER_NAMES):
             ready = index < 2
             suffix = "wait_connected 4\n"
@@ -195,7 +195,7 @@ def main():
             checks[f"row{i}_label_verdict"] = bool(m) and m.group(2) == b"PASS"
         m0 = re.search(rb'assert_label LabelLobbyPlayer0 "[^"]*" text="(.*?)" (PASS|FAIL)', host_log, re.S)
         checks["row0_delay_text_whole"] = bool(m0 and b"(auto," in m0.group(1) and b"ping)" in m0.group(1))
-        checks["host_reached_lobby"] = "activate ButtonMultiplayerCreate ok=1" in host_log.decode("cp1252", errors="replace")
+        checks["host_reached_lobby"] = "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS" in host_log.decode("cp1252", errors="replace")
 
         if shots:
             im = Image.open(shots[0]).convert("RGB")
