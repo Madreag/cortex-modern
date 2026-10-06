@@ -36,6 +36,18 @@ class NamedRoutingTests(unittest.TestCase):
         self.assertEqual(spread.named_peer_boxes([spread.Peer('host'), spread.Peer('client')], values),
                          {'host': 'ONE', 'client': 'TWO'})
 
+    def test_explicit_programmatic_names_need_no_global_cli_options(self):
+        previous = spread._options
+        spread.configure(None)
+        try:
+            with patch.object(spread, 'Case') as factory:
+                result = spread.prepare_case(Path('.'), Path('out'), [spread.Peer('host')], spread.Match(51580),
+                                             peer_boxes='host=ONE')
+                self.assertIs(result, factory.return_value)
+                self.assertEqual(factory.call_args.kwargs['peer_boxes'], 'host=ONE')
+        finally:
+            spread.configure(previous)
+
     def test_explicit_sharing_without_share_ok_is_refused(self):
         for first in (spread.Peer('a', share_ok=False), spread.Peer('a', reviewed=True),
                       spread.Peer('a', held=True), spread.Peer('a', quiet=True)):
