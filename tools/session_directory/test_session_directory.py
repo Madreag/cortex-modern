@@ -415,6 +415,68 @@ class DirectoryTests(unittest.TestCase):
             running = spawn_server(bind="127.0.0.1", port=47465, caller_mode=mode)
             running.stop()
 
+    def _U1_owner_transition(self, unlist: bool) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        self.addCleanup(store.stop)
+        request = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
+        original = store.register(request, "192.0.2.200", 0, INSTALL_KEY)
+        beat = {"token": original["token"], "peer_count": 1, "seats_free": 1}
+        store.heartbeat(original["session_id"], beat, 55, INSTALL_KEY)
+        if unlist:
+            store.heartbeat(original["session_id"], dict(beat, listed=False), 60, INSTALL_KEY)
+        store.delete(original["session_id"], {"token": original["token"]}, 60)
+        for index in range(63):
+            key = f"{index:016x}"
+            row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), f"192.0.2.{index + 1}", 61, key)
+            store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 121, key)
+            store.delete(row["session_id"], {"token": row["token"]}, 121)
+        try:
+            row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.64", 122, INSTALL_KEY)
+            store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 122, INSTALL_KEY)
+        except OverflowError:
+            pass
+        stolen = False
+        try:
+            store.register(request, "192.0.2.70", 122, "0123456789abcdee")
+            stolen = True
+        except (PermissionError, OverflowError):
+            pass
+        cause = "unlisting" if unlist else "deletion"
+        self.assertFalse(stolen, f"U1: {cause} lost the final listed interval and let a stranger claim the world")
+        self.assertGreaterEqual(store._world_owners[original["session_id"]]["listed_s"], 60,
+                                f"U1: {cause} failed to retain established ownership")
+        resumed = store.register(dict(request, world_boot=2, resume_session_id=original["session_id"], resume_token=original["token"]), "192.0.2.200", 122, INSTALL_KEY)
+        self.assertEqual(resumed["session_id"], original["session_id"])
+
+
+    def test_U1_unlisting_preserves_the_final_listed_interval(self) -> None:
+        self._U1_owner_transition(True)
+
+
+    def test_U1_deletion_preserves_the_final_listed_interval(self) -> None:
+        self._U1_owner_transition(False)
+
+
+    def test_U1_every_heartbeat_credits_monotonic_durable_time(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "owners.json"
+            store = session_directory.SessionDirectory(300, 5, owner_state=path, create_owner_key=True)
+            self.addCleanup(store.stop)
+            row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.1", 0, INSTALL_KEY)
+            beat = {"token": row["token"], "peer_count": 1, "seats_free": 1}
+            store.heartbeat(row["session_id"], beat, 55, INSTALL_KEY)
+            for now in range(56, 61):
+                store.heartbeat(row["session_id"], beat, now, INSTALL_KEY)
+                self.assertEqual(store._world_owners[row["session_id"]]["listed_s"], now,
+                                 "U1: a heartbeat skipped listed-time credit in memory")
+            store.heartbeat(row["session_id"], dict(beat, listed=False), 61, INSTALL_KEY)
+            store.heartbeat(row["session_id"], dict(beat, listed=True), 70, INSTALL_KEY)
+            store.delete(row["session_id"], {"token": row["token"]}, 71)
+            store._wait_owner_write(store._owner_revision)
+            self.assertEqual(json.loads(path.read_text())[row["session_id"]]["listed_s"], 62,
+                             "U1: durable accounting lost credited or hidden intervals")
+
+
     def test_T4_subnet_churn_cannot_claim_an_established_world(self) -> None:
         with mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 64):
             store = session_directory.SessionDirectory(300, 5)

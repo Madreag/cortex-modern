@@ -855,6 +855,7 @@ class SessionDirectory:
         if previous is not None:
             # A resume keeps the creation share even when its host changes address.
             owner["source_ip"] = previous.get("source_ip", owner.get("source_ip", ""))
+            owner["listed_s"] = max(previous.get("listed_s", 0), owner.get("listed_s", 0))
         if previous == owner:
             return
         victim = self._owner_retirement_candidate(sid, owner.get("source_ip", ""))
@@ -868,16 +869,28 @@ class SessionDirectory:
             self._world_owners[sid] = owner
         self._owner_changed.notify_all()
 
+    def _credit_world_listing(self, sess: Session, now: float) -> float:
+        pending = self._owner_replacements.get(sess.session_id)
+        owner = pending[1] if pending else self._world_owners.get(sess.session_id)
+        credited = (owner or {}).get("listed_s", 0)
+        if sess.listed:
+            credited += max(0, now - sess.owner_listed_at)
+        sess.owner_listed_at = max(now, sess.owner_listed_at)
+        if owner is not None and credited > owner.get("listed_s", 0):
+            self._save_world_owner(sess.session_id, dict(owner, listed_s=credited))
+        return credited
+
+
     def _ack_world_register(self, sess: Session, now: float) -> int:
         if sess.fields.get("persistent_world") is True:
+            credited = self._credit_world_listing(sess, now)
             owner = self._world_owners.get(sess.session_id)
             if not sess.acknowledged or owner is None or time.time() - owner["last_heartbeat_unix"] >= OWNER_WRITE_INTERVAL_S:
                 self._remember_world_owner(sess.session_id, sess.token, sess.migration_gen,
                                            fingerprint=sess.register_fingerprint, install_key=sess.install_key,
                                            world_boot=sess.fields.get("world_boot", 0), source_ip=sess.observed_ip,
-                                           listed_s=(owner or {}).get("listed_s", 0) + (max(0, now - sess.owner_listed_at) if sess.listed else 0),
+                                           listed_s=credited,
                                            previous_sha256=sess.register_previous_sha256)
-                sess.owner_listed_at = now
             if self._pending_worlds.pop(sess.session_id, None) is not None:
                 self._owner_revision += 1
                 self._owner_changed.notify_all()
@@ -943,6 +956,8 @@ class SessionDirectory:
             ]
             for sid in dead:
                 sess = self._sessions[sid]
+                if sess.acknowledged and sess.fields.get("persistent_world") is True:
+                    self._credit_world_listing(sess, min(now, sess.last_beat + self.expiry_s))
                 self._clear_signals(sess)
                 if sess.acknowledged:
                     self._resume_tokens[sid] = (sess.token, sess.last_beat + self.expiry_s + RESUME_GRACE_S, sess.migration_gen)
@@ -1266,10 +1281,10 @@ class SessionDirectory:
                 sess.fields["listen_addrs"] = listen_addrs
             if state is not None:
                 sess.state = state
+            revision = self._ack_world_register(sess, now)
             if listed is not None:
                 sess.listed = listed
             sess.last_beat = now
-            revision = self._ack_world_register(sess, now)
             listed_now = sess.listed
             held = sess.migration_gen
         self._wait_owner_write(revision)
@@ -1294,6 +1309,8 @@ class SessionDirectory:
                 raise PermissionError("forbidden")
             if generation is not None and generation < sess.migration_gen:
                 raise Superseded("superseded", sess.migration_gen)
+            if sess.acknowledged and sess.fields.get("persistent_world") is True:
+                self._credit_world_listing(sess, now)
             del self._sessions[session_id]
             self._clear_signals(sess)
             self._register_replays.pop(session_id, None)
@@ -1302,6 +1319,8 @@ class SessionDirectory:
                 self._owner_revision += 1
                 self._owner_changed.notify_all()
             self._signals_changed.notify_all()
+            revision = self._owner_revision
+        self._wait_owner_write(revision)
         return {"ok": True}
 
     def list_sessions(
