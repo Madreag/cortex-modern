@@ -1488,7 +1488,9 @@ def main(argv=None):
     options = parser.parse_args(argv)
     try:
         return native_execute(options.native, options.out)
-    except Exception as error:
+    except (Exception, SystemExit) as error:
+        if isinstance(error, SystemExit) and error.code == 0:
+            raise
         spec = read_json(options.native, {})
         record = dict(topology="spread", interface_version=INTERFACE_VERSION,
                       peer=spec.get("role"), box=spec.get("box", {}).get("name"),

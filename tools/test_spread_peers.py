@@ -16,6 +16,22 @@ from test_peer_run_guards import PeerRunGuardTests
 
 
 class ContractTests(unittest.TestCase):
+    def test_native_load_exit_preserves_peer_box_and_exact_reason(self):
+        class LoadExit(SystemExit):
+            def __str__(self):
+                return 'EROL-PC: not started: memory is below the floor'
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec = root/'peer-spec.json'
+            spec.write_text(json.dumps(dict(role='host', box=dict(name='EROL-PC'))))
+            with patch.object(spread, 'native_execute', side_effect=LoadExit(3)):
+                with self.assertRaises(LoadExit):
+                    spread.main(['--native', str(spec), '--out', str(root/'results')])
+            receipt = json.loads((root/'results/peer-result.json').read_text())
+            self.assertEqual((receipt['topology'], receipt['peer'], receipt['box']), ('spread', 'host', 'EROL-PC'))
+            self.assertIn('EROL-PC: not started: memory is below the floor', receipt['error'])
+            self.assertEqual(json.loads((root/'progress.json').read_text())['record'], receipt)
+
     def test_routed_wait_updates_one_existing_holder_and_keeps_its_claim(self):
         sent = []
         box = dict(name='EROL-PC', kind='local')
