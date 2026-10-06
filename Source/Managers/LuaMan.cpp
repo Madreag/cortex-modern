@@ -6297,14 +6297,16 @@ namespace RTE::CheckpointLua {
 			std::unordered_set<const void*> seen, userdata, functions, opaque;
 			std::unordered_set<const void*> queuedFinalizers;
 			std::vector<TValue> pending;
+			void Queue(const TValue& value) {
+				if (!tvistab(&value) && !tvisfunc(&value) && !tvisudata(&value) && !tvisthread(&value)) return;
+				if (tvisudata(&value)) userdata.insert(gcval(&value));
+				if (tvisfunc(&value)) functions.insert(gcval(&value));
+				const void* pointer = tvisudata(&value) ? uddata(udataV(&value)) : gcval(&value);
+				if (!opaque.contains(pointer) && seen.insert(pointer).second) pending.push_back(value);
+			}
 			void Queue(int index) {
 				if (index < 0) index += lua_gettop(state) + 1;
-				const int kind = lua_type(state, index);
-				if (kind != LUA_TTABLE && kind != LUA_TFUNCTION && kind != LUA_TUSERDATA && kind != LUA_TTHREAD) return;
-				if (kind == LUA_TUSERDATA) userdata.insert(gcval(&state->base[index - 1]));
-				if (kind == LUA_TFUNCTION) functions.insert(gcval(&state->base[index - 1]));
-				if (opaque.contains(lua_topointer(state, index))) return;
-				if (seen.insert(lua_topointer(state, index)).second) pending.push_back(state->base[index - 1]);
+				Queue(state->base[index - 1]);
 			}
 			// The saver walks the copied graph. Here only values which that graph can
 			// serialize need answers from live C++; baseline engine symbols are opaque.
@@ -6405,6 +6407,7 @@ namespace RTE::CheckpointLua {
 			}
 			explicit DescriptorRootScope(lua_State* source, int originalTop, int roots, const TValue& callbacks) : state(source) {
 				if (!lua_checkstack(state, 32)) throw std::runtime_error("native descriptor roots exhausted the Lua stack");
+				seen.reserve(std::min<size_t>(G(state)->gc.total / 64, 262144));
 				if (GCobj* last = gcref(G(state)->gc.mmudata)) {
 					GCobj* object = last;
 					do {
@@ -6423,10 +6426,20 @@ namespace RTE::CheckpointLua {
 					copyTV(state, state->top, &value); incr_top(state);
 					const int index = lua_gettop(state), kind = lua_type(state, index);
 					if (kind == LUA_TTABLE) {
-						lua_pushnil(state);
-						while (lua_next(state, index)) { Queue(-2); Queue(-1); lua_pop(state, 1); }
+						// The VM is fenced. Read the same array and live hash entries
+						// directly, without pushing every key and value on its stack.
+						const GCtab* table = tabV(&value);
+						const TValue* array = tvref(table->array);
+						for (MSize item = 0; item < table->asize; ++item) Queue(array[item]);
+						const Node* nodes = noderef(table->node);
+						for (MSize item = 0; item <= table->hmask; ++item) if (!tvisnil(&nodes[item].val)) {
+							Queue(nodes[item].key); Queue(nodes[item].val);
+						}
 					} else if (kind == LUA_TFUNCTION) {
-						for (int upvalue = 1; lua_getupvalue(state, index, upvalue); ++upvalue) { Queue(-1); lua_pop(state, 1); }
+						const GCfunc* function = funcV(&value);
+						for (MSize upvalue = 0; upvalue < function->c.nupvalues; ++upvalue) {
+							Queue(isluafunc(function) ? *uvval(gco2uv(gcref(function->l.uvptr[upvalue]))) : function->c.upvalue[upvalue]);
+						}
 					} else if (kind == LUA_TUSERDATA) {
 						userdata.insert(gcval(&value));
 						if ((gcval(&value)->gch.marked & LJ_GC_FINALIZED) && !queuedFinalizers.contains(gcval(&value))) {
@@ -6445,7 +6458,10 @@ namespace RTE::CheckpointLua {
 							static_cast<DescriptorRootScope*>(scope)->Queue(-1); return false;
 						}, this);
 					}
-					if (kind != LUA_TTABLE) { lua_getfenv(state, index); Queue(-1); lua_pop(state, 1); }
+					// Only functions serialize an environment. A userdata's registry
+					// environment can name the whole binding store, which the graph
+					// does not carry; its instance and dependency tables are above.
+					if (kind == LUA_TFUNCTION) { lua_getfenv(state, index); Queue(-1); lua_pop(state, 1); }
 					if (lua_getmetatable(state, index)) { Queue(-1); lua_pop(state, 1); }
 					lua_settop(state, top);
 				}
