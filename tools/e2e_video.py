@@ -2165,7 +2165,10 @@ def run_one(options, scenario, run, run_index, out):
     if capture_peer not in {peer["name"] for peer in definitions}:
         raise ValueError("--capture-peer must name a peer of this run")
     peers = [spread.Peer(peer["name"], os="windows" if peer["name"] == capture_peer else "any", size=size,
-                         reviewed=peer["name"] == capture_peer, timeout=run.get("timeout_s") or scenario.get("timeout_s") or 300)
+                         reviewed=peer["name"] == capture_peer, recorder=peer["name"] == capture_peer,
+                         held=bool(peer.get("kill_after_s") or peer.get("kill_at_tick") or peer.get("kill_when") or
+                                   any("stall" in str(value) for value in peer.get("args", []) if str(value).startswith("-net-test"))),
+                         timeout=run.get("timeout_s") or scenario.get("timeout_s") or 300)
              for peer in definitions]
     previous = getattr(options, "remote_capture", None)
     def drive(case):

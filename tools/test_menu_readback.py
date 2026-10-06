@@ -2012,7 +2012,7 @@ def run_case(options, case, root, failing=None):
                 raise RuntimeError("selected menu readback requires the shared spread executor")
             width, height = map(int, options.size.split("x"))
             peers = [spread.Peer(who, os="windows" if who == "host" or case == "net-host-left-early" else "any",
-                                 size=(width, height), reviewed=who == "host") for who in texts]
+                                 size=(width, height), reviewed=who == "host", held=case == "net-host-left-early") for who in texts]
             executor = spread.prepare_case(options.repo, root, peers, spread.Match(options.port, parameters={"lane": "menus"}))
             factory = executor.make_run
         for who in (("host", "client") if paired else ("host",)):

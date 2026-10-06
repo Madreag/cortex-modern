@@ -14,6 +14,69 @@ import spread_peers as spread
 
 
 class ContractTests(unittest.TestCase):
+    def place_fake(self, peers, pins=None):
+        case = object.__new__(spread.Case)
+        case.registry, case.out, case.control = Path('fake.json'), Path('fake'), Path('fake/control')
+        case.peers, case.names, case.pins = peers, [peer.name for peer in peers], pins or {}
+        case.id = 'fake-case'
+        case.members, case.pending, case.match, case.lane, case.peer_ports = {}, [], spread.Match(51580), 'fake', {}
+        case.stack = contextlib.ExitStack()
+        self.addCleanup(case.stack.close)
+        boxes = [dict(name=name, kind='local' if name == 'EROL-PC' else 'windows-task', os='windows',
+                      hostname=name, engines_max=6) for name in ('EROL-PC', 'EDITH', 'Z13')]
+        claims, requests = {}, []
+        def candidates(registry, needs, backend):
+            rows, reasons, states = [], {}, {}
+            for box in boxes:
+                name = box['name']
+                busy = claims.get(name, [])
+                state = dict(engines=len(busy), free_gb=25, hostname=name)
+                states[name] = state
+                if name in needs.excluded or needs.only_box and needs.only_box != name:
+                    reasons[name] = 'excluded by the caller'
+                elif (needs.alone or needs.reviewed or needs.held) and busy or any(value.alone or value.reviewed or value.held for value in busy):
+                    reasons[name] = 'alone run needs an idle box'
+                elif len(busy) + needs.engines > box['engines_max']:
+                    reasons[name] = 'live engine capacity is in use'
+                else:
+                    rows.append(((len(busy),), box, state))
+            return sorted(rows, key=lambda row: row[0]), reasons, states
+        def claim(box, needs, request):
+            claims.setdefault(box['name'], []).append(needs)
+            requests.append(request)
+            return dict(token=request['token'])
+        case.backend = lambda: SimpleNamespace(claim=claim)
+        case.pool = SimpleNamespace(load_registry=lambda path:dict(boxes=boxes), Needs=lambda **kwargs:SimpleNamespace(**(dict(alone=False, only_box=None, excluded=(), share_ok=False, reviewed=False, held=False) | kwargs)),
+                                    queue_root=lambda path:Path('fake'), write_ticket=lambda *args:Path('fake/ticket'),
+                                    candidates=candidates, priority_blocker=lambda *args:None)
+        facts = SimpleNamespace(machine_name=lambda:'controller', process_start=lambda pid:1, release_reservation=lambda *args:None)
+        case.transport_module = SimpleNamespace(worker=SimpleNamespace(facts=facts, mutex=lambda *args,**kwargs:contextlib.nullcontext()))
+        case.refuse = lambda name, box, reason:spread.SpreadRefusal(f'{name} on {box}: {reason}')
+        case.allocate()
+        return case, claims
+
+    def test_shareable_screen_peers_use_one_fitting_box_without_reviewed_peer(self):
+        case, claims = self.place_fake([spread.Peer('host', reviewed=True), spread.Peer('a'), spread.Peer('b'), spread.Peer('c')],
+                                      dict(host='EDITH', a='EROL-PC', b='EROL-PC', c='Z13'))
+        self.assertEqual([item[0]['name'] for item in case.members.values()], ['EDITH', 'EROL-PC', 'EROL-PC', 'Z13'])
+        self.assertEqual(len(claims['EROL-PC']), 2)
+        self.assertTrue(all(not needs.alone for needs in claims['EROL-PC']))
+        packed, _ = self.place_fake([spread.Peer('a'), spread.Peer('b'), spread.Peer('c')])
+        self.assertEqual({item[0]['name'] for item in packed.members.values()}, {'EROL-PC'})
+
+    def test_unshareable_and_quiet_peers_reserve_distinct_idle_boxes(self):
+        case, claims = self.place_fake([spread.Peer('host', share_ok=False), spread.Peer('seat', quiet=True)])
+        self.assertEqual(len({item[0]['name'] for item in case.members.values()}), 2)
+        self.assertTrue(claims[case.members['seat'][0]['name']][0].alone)
+        self.assertTrue(all(not needs.share_ok for rows in claims.values() for needs in rows))
+        self.assertFalse(case.peers[1].share_ok)
+
+    def test_reviewed_and_held_peers_cannot_share_even_when_requested(self):
+        peers = [spread.Peer('host', reviewed=True, share_ok=True), spread.Peer('held', held=True, share_ok=True)]
+        self.assertTrue(all(not peer.share_ok for peer in peers))
+        with self.assertRaisesRegex(spread.SpreadRefusal, 'alone run needs an idle box|no distinct fitting box'):
+            self.place_fake(peers, dict(host='EROL-PC', held='EROL-PC'))
+
     def test_worked_example_retains_wrong_peer_port_after_video_parses(self):
         import argparse
         import spread_example as example
@@ -264,6 +327,7 @@ class ContractTests(unittest.TestCase):
             case = object.__new__(spread.Case)
             case.registry, case.names, case.members, case.pending, case.control, case.out = root/'catalog.json', ['host'], {}, [], root, root
             case.peers, case.pins, case.match, case.lane, case.peer_ports = [spread.Peer('host', reviewed=True, quiet=True, lane='in-match')], {}, spread.Match(51580), 'case', {}
+            case.id = 'fake-case'
             case.stack = contextlib.ExitStack()
             def ticket(registry, needs, request):
                 events.append(('ticket',request['label'],request['token']))
@@ -343,7 +407,7 @@ class ContractTests(unittest.TestCase):
             run.native_progress["action"] = {**backend.body["value"], "box": backend.target, "pid": 77}
         def refuse(peer, box, reason):
             return spread.SpreadRefusal(f"{peer} on {box}: {reason}")
-        run.case = SimpleNamespace(members={"seat2": ({"name": "REMOTE", "os": os_name}, {"root": "/owned"}, {}, backend)},
+        run.case = SimpleNamespace(peers=[spread.Peer("seat2", held=True)], members={"seat2": ({"name": "REMOTE", "os": os_name}, {"root": "/owned"}, {}, backend)},
                                    synchronize=synchronize, refuse=refuse)
         return run, backend
 

@@ -33,7 +33,7 @@ def main():
     def spread_run(options, scenario, definition, index, out):
         root = Path(out)/definition.get("name", f"run{index}")
         size = tuple(map(int, (options.size or scenario["size"]).split("x")))
-        peers = [Peer("host", os="windows", size=size, reviewed=True, timeout=scenario["timeout_s"]),
+        peers = [Peer("host", os="windows", size=size, reviewed=True, recorder=True, timeout=scenario["timeout_s"]),
                  Peer("client", os="windows", size=size, timeout=scenario["timeout_s"])]
         def drive(case):
             options.remote_capture = case
