@@ -236,7 +236,7 @@ namespace RTE {
 		void Reset() { bySender.clear(); roundId = 0; }
 	};
 
-	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2, Reclaim = 3, WorldAdmission = 4, CapturePark = 5, Release = 6 };
+	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2, Reclaim = 3, WorldAdmission = 4, CapturePark = 5, Release = 6, SceneLoad = 7 };
 	enum class NetTimingPhase : uint8_t { Propose = 1, Acknowledge = 2, Commit = 3, Status = 4, HoldAtFrame = 5, HoldAppliedAck = 6, ReclaimAtFrame = 7 };
 
 	/// A round-scoped delay agreement or host-authored hold and its application acknowledgement.
@@ -686,8 +686,8 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		/// Version 39 carries each seat's device class in the start and the agreed-start record; admission refuses a peer below it.
-		static constexpr uint16_t c_Version = 39;
+		/// Version 40 carries scene-load readiness; version 39 carries each seat's device class.
+		static constexpr uint16_t c_Version = 40;
 		static constexpr uint16_t c_WorldVersion = 39;
 		static constexpr uint16_t c_SeatDeviceVersion = 39;
 		/// Version 37 carries input frames on the unreliable lane: a window reaches back a round trip, and a tick that
@@ -1007,6 +1007,9 @@ namespace RTE {
 
 		/// This machine's own measured start work, published so every peer judges us by it and not by theirs.
 		void NoteLocalStartPark(uint32_t restartMs);
+		/// A shared scene load precedes this tick's input on every machine.
+		uint64_t NoteSharedSceneLoad(uint64_t frame);
+		void CompleteSharedSceneLoad(uint64_t frame, uint64_t ordinal, uint64_t nowMs);
 		/// This machine's seat device (Controller::WireDeviceClass), published with the start so the agreed record names every seat's.
 		void NoteLocalDeviceClass(uint8_t deviceClass) { NET_PLANE_CHECK(); m_LocalDeviceClass = deviceClass; }
 		/// The device class the agreed start names for a seat (a human slot in roster order); 0 before the record or for an unnamed seat.
@@ -1748,6 +1751,8 @@ namespace RTE {
 		bool DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing);
 		/// Host: holds its own seat when every other seat's input for the frame is in hand and its own simulation has not produced its input within the bound.
 		bool JudgeOwnSeat(uint64_t frame, uint64_t nowMs);
+		bool SceneLoadInputPending(uint8_t peer, uint64_t frame, uint64_t nowMs);
+		void TakeSceneLoadStatus(const NetLockstepTiming& timing, uint64_t nowMs);
 		uint64_t CaptureExcuseUntil(uint8_t peerId, uint64_t frame, uint64_t firstMissingMs);
 		/// Host: takes its own held seat back once its simulation has caught up to the committed frames.
 		void ReclaimOwnSeat(uint64_t nowMs);
@@ -2002,6 +2007,10 @@ namespace RTE {
 		uint64_t m_LocalCaptureStartedMs = 0;
 		double m_LocalCaptureCostMs = 0;
 		bool m_LocalCaptureRunning = false; //!< This engine's synchronized capture has begun and not yet completed.
+		struct SceneLoadStatus { uint64_t frame = 0, ordinal = 0, completedAtMs = 0; bool complete = false; };
+		std::map<uint8_t, SceneLoadStatus> m_SceneLoadStatus;
+		uint64_t m_SceneLoadFrame = UINT64_MAX, m_SceneLoadOrdinal = 0, m_SceneLoadStartedMs = 0;
+		bool m_SceneLoadBudgetNamed = false;
 		std::map<std::pair<uint8_t, uint64_t>, uint64_t> m_CaptureExcuseUntilMs;
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;

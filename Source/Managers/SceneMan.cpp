@@ -24,6 +24,7 @@
 #include "SimChecksum.h"
 #include "TimerMan.h"
 #include "LuaMan.h"
+#include "System/ScenarioRunner.h"
 
 #include "tracy/Tracy.hpp"
 
@@ -298,6 +299,11 @@ int SceneMan::LoadScene(Scene* pNewScene, bool placeObjects, bool placeUnits) {
 	if (!pNewScene) {
 		return -1;
 	}
+	const uint64_t loadFrame = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+	struct LoadWork {
+		uint64_t frame, ordinal;
+		~LoadWork() { ScenarioRunner::CompleteSharedSceneLoad(frame, ordinal); }
+	} loadWork{loadFrame, ScenarioRunner::BeginSharedSceneLoad(loadFrame)};
 
 	g_MovableMan.PurgeAllMOs();
 	g_LuaMan.ResetPathCallbacks(true);

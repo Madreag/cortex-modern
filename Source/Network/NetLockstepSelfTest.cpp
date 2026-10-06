@@ -2378,9 +2378,15 @@ namespace RTE {
 			constexpr uint64_t loadFrame = 80, loadMs = 670;
 			// The same input schedule also detects engines without a scene-load notification.
 			const auto notify = []<typename Coordinator>(Coordinator& coordinator) {
-				if constexpr (requires { coordinator.NoteSharedSceneLoad(loadFrame); }) coordinator.NoteSharedSceneLoad(loadFrame);
+				if constexpr (requires { coordinator.NoteSharedSceneLoad(loadFrame); }) return coordinator.NoteSharedSceneLoad(loadFrame);
+				else return uint64_t{0};
+			};
+			const auto complete = []<typename Coordinator>(Coordinator& coordinator, uint64_t ordinal, uint64_t now) {
+				if constexpr (requires { coordinator.CompleteSharedSceneLoad(loadFrame, ordinal, now); })
+					coordinator.CompleteSharedSceneLoad(loadFrame, ordinal, now);
 			};
 			uint64_t hostProduced = 1, clientProduced = 1, loadBeganMs = 0, resumedAtMs = 0;
+			uint64_t clientLoadOrdinal = 0;
 			bool clientLoading = false, clientStopped = false;
 			std::string queueError;
 			const auto canSimulate = [](NetLockstepCoordinator& peer, uint64_t frame) {
@@ -2400,13 +2406,13 @@ namespace RTE {
 				host.Tick(now); client.Tick(now);
 				if (now % 17 == 0) {
 					if (canSimulate(host, hostProduced)) {
-						if (hostProduced == loadFrame) notify(host);
+						if (hostProduced == loadFrame) complete(host, notify(host), now);
 						if (!simulate(host, hostProduced, 100)) { *error = queueError; return false; }
 					} else (void)host.NoteFrameWait(hostProduced, now, true);
 					if (!clientStopped && canSimulate(client, clientProduced)) {
-						if (clientProduced == loadFrame && !clientLoading) { clientLoading = true; loadBeganMs = now; notify(client); }
+						if (clientProduced == loadFrame && !clientLoading) { clientLoading = true; loadBeganMs = now; clientLoadOrdinal = notify(client); }
 						if (!clientLoading || now - loadBeganMs >= loadMs) {
-							if (clientLoading && resumedAtMs == 0) resumedAtMs = now;
+							if (clientLoading && resumedAtMs == 0) { resumedAtMs = now; complete(client, clientLoadOrdinal, now); }
 							if (!simulate(client, clientProduced, 200)) { *error = queueError; return false; }
 						}
 					}
