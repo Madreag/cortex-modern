@@ -25567,8 +25567,12 @@ namespace {
 	struct SeatAdmissionServiceTest {
 		struct Borrow {
 			NetMatchService& service;
-			Borrow(NetMatchService& owner, NetLockstepCoordinator& coordinator): service(owner) { service.m_Coordinator.reset(&coordinator); }
-			~Borrow() { service.m_Coordinator.release(); }
+			INetTransport* wire;
+			Borrow(NetMatchService& owner, NetLockstepCoordinator& coordinator, INetTransport* transport = nullptr): service(owner), wire(transport) {
+				service.m_Coordinator.reset(&coordinator);
+				if (wire) service.m_MigratedTransport.reset(wire);
+			}
+			~Borrow() { service.m_Coordinator.release(); if (wire && service.m_MigratedTransport.get() == wire) service.m_MigratedTransport.release(); }
 		};
 
 		struct TicketPath {
@@ -25704,10 +25708,11 @@ namespace {
 			admission.host.SetDropOwnershipSource([](void* actor) { const auto& view = *static_cast<ReleasePathClaimView*>(actor); return std::vector<NetH4LedgerActor>{{view.uid, view.team, 4, true}}; }, &view);
 			admission.host.NotifyDisconnect(3, 20);
 			const auto ticket = admission.clients[2].GetRecord();
-			NetMatchService host, successor;
-			Borrow hostBorrow(host, round.peers[0]), successorBorrow(successor, round.peers[1]);
+			NetMatchService host, successor, survivor;
+			Borrow hostBorrow(host, round.peers[0]), successorBorrow(successor, round.peers[1]), survivorBorrow(survivor, round.peers[2]);
 			TicketPath ticketPath("Userdata/host-ticket-return/removing-host.ticket");
-			if (!Install(host, round, admission, 1, &round.failure) || !Install(successor, round, admission, 2, &round.failure)) return done(round.failure);
+			if (!Install(host, round, admission, 1, &round.failure) || !Install(successor, round, admission, 2, &round.failure) ||
+			    !Install(survivor, round, admission, 3, &round.failure)) return done(round.failure);
 			NetModerationSelection selected;
 			for (const auto& seat: host.m_ReconnectHost.GetModerationView()) if (seat.lockstepPeerId == 4) selected = NetSelectModerationSeat(seat);
 			if (host.RemoveParticipant(selected, NetParticipantRemovalAction::Kick) != NetKickBanResult::Ok) return done("the service did not remove held seat four");
@@ -25718,13 +25723,19 @@ namespace {
 			capsule.kind = 2; capsule.peerId = 2; capsule.configHash = round.peers[0].GetRoundConfigHash();
 			if (!host.SealMigrationCapsule(2, capsule.configHash, capsule.sealedState)) return done("the host did not seal the removal's capsule");
 			if (!successor.OpenMigrationCapsule(capsule)) return done("the prospective successor did not open the removal's capsule");
+			capsule.peerId = 3;
+			if (!host.SealMigrationCapsule(3, capsule.configHash, capsule.sealedState) || !survivor.OpenMigrationCapsule(capsule))
+				return done("the other survivor did not carry the removal's capsule");
 			round.drainThrough = 29; round.produceThrough.fill(29);
 			for (int pass = 0; pass < 100 && round.peers[2].GetResumeFrame() != 30; ++pass) round.Pump();
 			if (!round.Migrate() || round.peers[1].GetMigrationResult().boundary != 29) return done("the succession did not use boundary 29");
 			successor.PumpHostMigration();
+			survivor.PumpHostMigration();
 			if (!successor.m_IsHost || !round.peers[1].HasHeldAISeat(4)) return done("the successor did not keep seat four held");
 			if (!successor.m_SeatAuth.MatchesActiveCredential(ticket.stableSeat, ticket.holderGeneration, ticket.credential))
 				return done("the future frame 32 removal revokes seat four's retained credential at boundary 29");
+			if (successor.m_MigrationAdmissionState != survivor.m_MigrationAdmissionState || !round.peers[2].HasHeldAISeat(4))
+				return done("the survivors import different admission membership at boundary 29");
 			std::string returning;
 			if (!ReturnAndDrive(round, successor.m_ReconnectHost, admission, ticket, 4, 47422, view, &returning)) return done(returning);
 			return done("");
@@ -25773,13 +25784,14 @@ namespace {
 
 		static bool OpenedSeatJoinsThroughImage(std::string* error) {
 			const auto done = [&](const std::string& why) { return ReportReleasedClaimsRow("an_opened_seats_newcomer_plays_through_the_image", why, error); };
+			SuccessionReplayScope scope;
 			ReleasePathRound round;
 			if (!round.Start(47440) || !round.HoldFourth()) return done("the opened-seat round did not start: " + round.failure);
 			HostReturnAdmission admission;
 			if (!admission.Start(round.match, &round.failure)) return done(round.failure);
 			admission.host.NotifyDisconnect(3, round.peers[0].GetResumeFrame());
 			NetMatchService host;
-			Borrow borrowed(host, round.peers[0]);
+			Borrow borrowed(host, round.peers[0], &round.hostWire);
 			TicketPath path("Userdata/host-ticket-return/opened-host.ticket");
 			if (!Install(host, round, admission, 1, &round.failure)) return done(round.failure);
 			NetModerationSelection selected;
@@ -25817,6 +25829,100 @@ namespace {
 			const auto* imageJoin = host.m_WorldJoin.FindSession(connection);
 			if (!imageJoin || imageJoin->assignedPeerId != 4 || imageJoin->phase != NetWorldJoinPhase::SnapshotTransfer)
 				return done("the admitted opened seat has no image join; PrepareHeldPeerRejoin accepts it while the private join driver skips it");
+			ReleasePathClaimView view;
+			if (!view.Create("newcomer's controllable actor", round.peers[0], 3, 4, 4)) return done("the newcomer actor did not create");
+			ScenarioRunner::SetLockstepCoordinator(&round.peers[0]);
+			NetWorldCheckpointImage image;
+			if (!host.ReadPrivateBaseLocked(round.peers[0].GetResumeFrame() - 1, image, &round.failure)) return done("the opened-seat base did not capture: " + round.failure);
+			NetLockstepFrame nativeState;
+			nativeState.targetFrame = image.tick; nativeState.roundId = image.round; nativeState.senderPeerId = 1;
+			nativeState.frames = {MakeFrame(view.uid, 0)};
+			auto archive = std::make_shared<std::vector<uint8_t>>();
+			if (!EncodeCommittedJoinFrame(nativeState, *archive, &round.failure)) return done(round.failure);
+			image.bytes = archive->size(); image.digest = DigestWorldJoinBytes(*archive);
+			host.m_WorldJoin.PublishImage(image); host.m_WorldJoinImageArchive = archive; host.m_WorldJoinImageDigest = image.digest;
+			host.m_PrivateImageTakenMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			round.peers[0].SetSessionEventSink([&](const NetTransportEvent& event) {
+				if (event.type == NetTransportEventType::PacketReceived) host.m_PendingLobbyEvents.push_back(event);
+			});
+			NetLobbySession joinLobby;
+			NetLobbySessionConfig joining;
+			joining.localPeerId = 4; joining.remotePeerId = 1; joining.remoteTransportPeerId = 1;
+			joining.matchConfig = round.match; joining.autoReady = false; joining.autoStart = false;
+			if (!joinLobby.Start(newcomerWire, joining, &round.failure)) return done(round.failure);
+			uint64_t copied = image.tick;
+			const auto pump = [&] {
+				round.Pump(); newcomerWire.AdvanceTimeMs(5);
+				while (round.committed[0].contains(copied + 1)) {
+					++copied;
+					if (!host.m_WorldJoin.Tail().Append(PackWorldJoinReadyFrame(round.committed[0].at(copied)), &round.failure)) return false;
+				}
+				host.DrivePrivateMatchRejoins(round.now); joinLobby.Tick(round.now);
+				return true;
+			};
+			for (int pass = 0; pass < 4000 && !joinLobby.HasCompleteStateTransfer(); ++pass) {
+				if (!pump()) return done(round.failure);
+				std::this_thread::yield();
+			}
+			if (!joinLobby.HasCompleteStateTransfer()) return done("the admitted newcomer never receives its image");
+			const auto received = joinLobby.TakeReceivedState();
+			NetWorldCheckpointImage decoded;
+			std::vector<uint8_t> restored;
+			std::vector<std::vector<uint8_t>> initialTail;
+			if (!DecodeWorldJoinImageBlob(received, decoded, restored, initialTail, &round.failure) || restored != *archive || decoded.digest != image.digest)
+				return done("the newcomer's received image differs from the host's base: " + round.failure);
+			NetMatchService joiner;
+			std::string pendingLoad;
+			if (!joiner.PrepareReceivedWorldJoin(received, round.match, pendingLoad, &round.failure) || joiner.m_WorldCatchUp.initialHolds.contains(4))
+				return done("the opened-seat image restores the removed holder's AI hold: " + round.failure);
+			if (!ScenarioRunner::InstallWorldCatchUp(image.tick, std::move(joiner.m_WorldCatchUp.tail), &round.failure, true)) return done(round.failure);
+			uint64_t replayed = image.tick;
+			for (int pass = 0; pass < 4000 && !round.peers[0].HasAgreedSeatReclaim(4); ++pass) {
+				if (!pump()) return done(round.failure);
+				NetMatchService::StepWorldJoinCatchUpClient(joinLobby, joiner.m_WorldCatchUp);
+				for (NetLockstepReadyFrame ready; ScenarioRunner::TakeWorldCatchUpReadyFrame(replayed + 1, ready, &round.failure);) {
+					const auto began = std::chrono::steady_clock::now();
+					view.ApplyTick(ready); ++replayed;
+					const auto work = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count());
+					ScenarioRunner::NoteWorldCatchUpTickCost(replayed, std::max<uint64_t>(work, 1));
+				}
+				NetMatchService::StepWorldJoinCatchUpClient(joinLobby, joiner.m_WorldCatchUp);
+			}
+			const auto reclaims = round.peers[0].ReclaimTransactions();
+			const auto reclaim = reclaims.find(4);
+			if (reclaim == reclaims.end()) return done("the image catch-up never reaches agreed newcomer activation: " + host.m_PrivateJoinError);
+			const uint64_t activation = reclaim->second.activationFrame;
+			const uint64_t firstRequired = reclaim->second.neutralThroughFrame + 1;
+			auto config = round.peers[0].GetConfig();
+			config.localPeerId = 4; config.authorityPeerId = 1; config.startFrame = activation; config.joinsRunningRound = true; config.relayToOtherPeers = false;
+			config.activePeerIds = {1, 2, 3, 4}; config.remoteTransportPeerIds = {{1, 1}, {2, 1}, {3, 1}};
+			config.initialSeatHolds = joiner.m_WorldCatchUp.initialHolds; config.initialPeerLeaves = image.departedPeers;
+			config.initialSeatReclaims = round.peers[0].ReclaimTransactions(); config.peerIncarnations[4] = reclaim->second.seatIncarnation;
+			config.inputDelayFrames = round.peers[0].InputDelayAt(4, activation);
+			ScenarioRunner::ReleaseWorldCatchUp();
+			NetLockstepCoordinator joined;
+			if (!joined.Start(newcomerWire, config, &round.failure)) return done(round.failure);
+			ScenarioRunner::SetLockstepCoordinator(&round.peers[0]);
+			uint64_t produced = activation, applied = activation;
+			bool drove = false;
+			for (int pass = 0; pass < 1000 && !drove; ++pass) {
+				if (produced <= joined.GetStats().nextFrame + 4 && joined.QueueLocalInput(produced, {MakeFrame(view.uid, uint64_t{1} << WEAPON_FIRE)}, {}, &round.failure)) ++produced;
+				joined.Tick(round.now); round.Pump(); newcomerWire.AdvanceTimeMs(5);
+				for (NetLockstepReadyFrame ready; joined.PopReadyFrame(ready);) joined.FinishSimulationTick(ready.frame);
+				while (round.committed[0].contains(applied)) {
+					const auto& ready = round.committed[0].at(applied);
+					view.ApplyTick(ready);
+					for (const auto& input: ready.remoteFrames) if (input.actorUniqueID == view.uid) {
+						if (applied < firstRequired || ScenarioRunner::GetLockstepActorOwner(view.uid, view.team, true, applied) != 4 ||
+						    !ControllerFrameCodec::Apply(input, *view.actor->GetController(), &round.failure)) return done("the newcomer's input crosses the agreed gap or controls another seat");
+						drove = view.actor->GetController()->IsState(WEAPON_FIRE);
+					}
+					if (drove) break;
+					++applied;
+				}
+			}
+			if (!drove || applied != firstRequired || !round.peers[0].SeatPlaysAtFrame(4, applied)) return done("the newcomer's first controllable input misses the first frame after its agreed gap");
+			std::cout << "[net-lockstep-selftest] opened_seat_image_tick=" << image.tick << " activation=" << activation << " first_control=" << applied << " first_required=" << firstRequired << std::endl;
 			return done("");
 		}
 	};
