@@ -4873,6 +4873,7 @@ static std::string ResyncSaveName() {
 				return events;
 			}
 			uint32_t GetPeerPingMs(NetPeerId peerId) const override { return m_Inner->GetPeerPingMs(peerId); }
+			bool IsPeerPingMeasured(NetPeerId peerId) const override { return m_Inner->IsPeerPingMeasured(peerId); }
 			std::string GetConnectedRoute(NetPeerId peerId) const override { return m_Inner->GetConnectedRoute(peerId); }
 
 		private:
@@ -8564,6 +8565,7 @@ static std::string ResyncSaveName() {
 				member.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_Coordinator->GetConfig().matchConfig, member.peerId);
 				if (const auto stats = m_Coordinator->GetStats().peers.find(member.peerId); stats != m_Coordinator->GetStats().peers.end()) {
 					member.pingMs = stats->second.pingMs;
+					member.pingMeasured = stats->second.pingMeasured;
 					// The panel shows this seat's current standing, not the totals a rejoined seat left behind.
 					member.waits = m_Coordinator->WaitsSinceReclaim(member.peerId);
 					member.longestWaitMs = m_Coordinator->LongestWaitMsSinceReclaim(member.peerId);
