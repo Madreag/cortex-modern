@@ -24951,8 +24951,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			NetIdentityManifest current;
 			std::string why;
 			if (!NetIdentity::BuildCurrentManifest(current, &why)) return fail(why);
+			for (uint16_t previousVersion: {uint16_t{43}, uint16_t{44}}) {
 			NetIdentityManifest previous = current;
-			previous.deterministicConfig.supportedLockstepCodecVersion = 43;
+			previous.deterministicConfig.supportedLockstepCodecVersion = previousVersion;
 			previous.deterministicConfigHash = NetIdentity::HashDeterministicConfig(previous.deterministicConfig);
 			previous.sessionIdentityHash = NetIdentity::HashSessionIdentity(previous);
 			LoopbackTransport hostWire, clientWire; NetSession host, client;
@@ -24969,7 +24970,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			}
 			if (!client.IsRejected() || client.GetRejectReason() != NetRejectReason::DeterministicConfigMismatch || host.IsReady() || client.BuildPlayerRefusalText() != "This host runs a newer game version.")
 				return fail("previous claim rules entered or refusal did not name the newer version: " + client.BuildPlayerRefusalText());
-			std::cout << "[net-lockstep-selftest] claim_rules_refusal previous=43 current=" << current.deterministicConfig.supportedLockstepCodecVersion << " text=\"" << client.BuildPlayerRefusalText() << "\"" << std::endl;
+			std::cout << "[net-lockstep-selftest] claim_rules_refusal previous=" << previousVersion << " current=" << current.deterministicConfig.supportedLockstepCodecVersion << " text=\"" << client.BuildPlayerRefusalText() << "\"" << std::endl;
+			}
 			return fail("");
 		}
 	}
