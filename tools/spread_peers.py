@@ -341,6 +341,7 @@ class Case:
         text = f"spread peer {name} on {box}: {reason}"
         self.refusals.append(dict(peer=name, box=box, reason=reason, text=text))
         print(text, flush=True)
+        self.save(error=text)
         return SpreadRefusal(text)
 
     def backend(self):
@@ -705,7 +706,8 @@ class Run:
         from acceptance_remote import unpack_evidence
         manifest = self.native_progress.get("archive")
         if not manifest:
-            raise self.case.refuse(self.role, box["name"], "native runner ended without a verified evidence archive")
+            reason = self.native_progress.get("record", {}).get("error") or "native runner ended without a verified evidence archive"
+            raise self.case.refuse(self.role, box["name"], reason)
         destination = self.case.control/self.role/"evidence"
         destination.mkdir(parents=True, exist_ok=True)
         archive = destination/"evidence.tar"
