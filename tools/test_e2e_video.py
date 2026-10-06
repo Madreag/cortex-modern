@@ -962,6 +962,12 @@ def check_review(results, scratch):
     out.mkdir()
     document = driver.review(scenario, capture, out)
     ok = row(results, "review/written", (out / "review.json").is_file())
+    provider_review = driver.review({"name": "relay-provider-review", "checklist": [
+        {"id": "coturn-offer", "peer": "host", "directory_relay_offer": "coturn"}]}, capture, out)
+    provider_row = next(item for item in provider_review["checklist"] if item["id"] == "coturn-offer")
+    ok &= row(results, "review/missing-offer-names-selected-provider",
+              provider_row["probe"] == "fail" and "provider=coturn" in provider_row["finding"]["reason"],
+              provider_row["finding"]["reason"])
     ok &= row(results, "review/every-item-resolved", all("state" in item for item in document["checklist"]))
     unpeered = [item for item in document["checklist"] if item["id"] == "mp-play"]
     ok &= row(results, "review/peerless-item-covers-both", len(unpeered) == 2, str(len(unpeered)))

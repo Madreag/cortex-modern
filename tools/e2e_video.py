@@ -1606,7 +1606,7 @@ def review(scenario, capture, out):
                 passed = directory_offer(capture, item['directory_relay_offer'])
                 assertions['directory_relay_offer'] = dict(passed=passed, provider=item['directory_relay_offer'])
                 if not passed:
-                    assertions.update(probe='fail', reason='relay_offer_issued provider=cloudflare for this session is absent')
+                    assertions.update(probe='fail', reason=f"relay_offer_issued provider={item['directory_relay_offer']} for this session is absent")
             if item.get("peer_drop"):
                 required = item["peer_drop"]
                 witness = next((row for row in capture["peers"] if row["peer"] == required["peer"]), None)
