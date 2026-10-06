@@ -6,6 +6,7 @@
 #include "GUIInput.h"
 #include "GUISound.h"
 #include "CheckpointArchive.h"
+#include "BitmapCheckpoint.h"
 #include "NetIdentity.h"
 #include "LuaMan.h"
 #include "Base64/base64.h"
@@ -781,6 +782,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	AudioMan::SoundCheckpointSaveScope carriedSounds(false);
 	ContentFile::LoadedBitmapIndexScope bitmapIndex;
 	const uint64_t liveSoundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+	BitmapPixelCaptureScope pixels;
 	auto& cow = CheckpointCow::Get();
 	cow.BeginImage();
 	CheckpointWriter::CacheScope cache(&cow.Cache());

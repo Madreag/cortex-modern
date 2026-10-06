@@ -2,6 +2,7 @@
 #include "System.h"
 #include "CheckpointArchive.h"
 #include "CheckpointImage.h"
+#include "BitmapCheckpoint.h"
 #include "Base64/base64.h"
 #include "SceneLayer.h"
 #include "Scene.h"
@@ -578,6 +579,12 @@ CheckpointText CheckpointCache::CapturePixels(const BITMAP* bitmap) {
 	if (!bitmap) return CheckpointText(std::string());
 	Pixels& previous = m_Pixels[bitmap];
 	previous.generation = m_Generation;
+	if (const auto shared = BitmapPixelCaptureScope::Capture(bitmap, previous.snapshot)) {
+		m_Retired.push_back(std::move(previous.text));
+		previous.snapshot = shared->first;
+		previous.text = shared->second;
+		return previous.text;
+	}
 	auto snapshot = BitmapSnapshot::Capture(bitmap, previous.snapshot);
 	if (previous.snapshot && snapshot->SamePixels(*previous.snapshot)) return previous.text;
 	CheckpointText text = CheckpointText::Deferred([snapshot] { return snapshot->PixelBytes(); }, snapshot->LogicalBytes());
@@ -585,6 +592,32 @@ CheckpointText CheckpointCache::CapturePixels(const BITMAP* bitmap) {
 	previous.snapshot = std::move(snapshot);
 	previous.text = std::move(text);
 	return previous.text;
+}
+
+struct BitmapPixelCaptureScope::State {
+	struct Cell { std::once_flag once; std::shared_ptr<const BitmapSnapshot> snapshot; CheckpointText text; };
+	std::mutex mutex;
+	std::unordered_map<const BITMAP*, std::shared_ptr<Cell>> cells;
+};
+std::atomic<BitmapPixelCaptureScope::State*> BitmapPixelCaptureScope::s_Current{nullptr};
+BitmapPixelCaptureScope::BitmapPixelCaptureScope() : m_State(std::make_unique<State>()), m_Previous(s_Current.exchange(m_State.get())) {}
+BitmapPixelCaptureScope::~BitmapPixelCaptureScope() { s_Current.store(m_Previous); }
+std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> BitmapPixelCaptureScope::Capture(
+    const BITMAP* bitmap, const std::shared_ptr<const BitmapSnapshot>& previous) {
+	State* state = s_Current.load();
+	if (!state) return std::nullopt;
+	std::shared_ptr<State::Cell> cell;
+	{
+		std::lock_guard lock(state->mutex);
+		auto& entry = state->cells[bitmap];
+		if (!entry) entry = std::make_shared<State::Cell>();
+		cell = entry;
+	}
+	std::call_once(cell->once, [&] {
+		cell->snapshot = BitmapSnapshot::Capture(bitmap, previous);
+		cell->text = CheckpointText::Deferred([snapshot = cell->snapshot] { return snapshot->PixelBytes(); }, cell->snapshot->LogicalBytes());
+	});
+	return std::pair{cell->snapshot, cell->text};
 }
 
 size_t CheckpointCache::PixelBytes() const {

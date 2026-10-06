@@ -390,6 +390,12 @@ namespace RTE::CheckpointLua {
 				}
 				TValue value; setgcVraw(&value, object, LJ_TUDATA); Enqueue(value);
 			});
+			// A suspended script can hold a native range iterator which was not
+			// constructed by IteratorFromValues. Describe reachable stack closures too.
+			ForEachCapturedFunction(State(), [&](const GCfunc* function) {
+				if (!IteratorCandidate(function)) return;
+				TValue value; setgcVraw(&value, reinterpret_cast<GCobj*>(const_cast<GCfunc*>(function)), LJ_TFUNC); Enqueue(value);
+			});
 			// The value iterators registered themselves when made; nothing else the walk asks about is a function.
 			lua_getfield(State(), LUA_REGISTRYINDEX, "_ScriptGraphIterators");
 			if (lua_istable(State(), -1)) {

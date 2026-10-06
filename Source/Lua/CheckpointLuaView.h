@@ -457,7 +457,8 @@ namespace RTE::CheckpointLua {
 			const auto function = view.Function(state, 1);
 			lua_newtable(state);
 			lua_pushstring(state, isluafunc(&function) ? "Lua" : "C"); lua_setfield(state, -2, "what");
-			lua_pushinteger(state, function.c.nupvalues); lua_setfield(state, -2, "nups"); return 1;
+			lua_pushinteger(state, function.c.nupvalues); lua_setfield(state, -2, "nups");
+			lua_pushinteger(state, function.c.ffid); lua_setfield(state, -2, "ffid"); return 1;
 		}
 		const GCupval* UpvalueAddress(lua_State* state, int functionIndex, int number) {
 			const auto value = Value(state, functionIndex);

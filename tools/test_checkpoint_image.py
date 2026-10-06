@@ -473,7 +473,7 @@ def main() -> int:
     def run_scene(name: str, scenario: str, dirty: bool, extras: list[str], env: dict | None = None) -> dict:
         return launch(
             repo, root / name,
-            ["-scenario", scenario, "-seed", "42", "-max-ticks", str(TICKS), "-scenario-run-past-end", *extras],
+            ["-scenario", scenario, "-seed", "42", "-max-ticks", str(TICKS), "-scenario-run-past-end", "-checkpoint-fixture-prime-scripts", *extras],
             args.timeout,
             env=env,
             prepare=lambda cwd: install_fixture(cwd, dirty_all=dirty),

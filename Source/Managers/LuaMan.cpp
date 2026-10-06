@@ -1289,8 +1289,7 @@ end
 function Graph.releaseObjects() heldObjects = nil end
 local nativeClosures = {
 	wrap = function() return coroutine.wrap(function() end) end,
-	gmatch = function() return string.gmatch("", ".") end,
-	ipairs = function() local iterator = ipairs({}); return iterator end
+	gmatch = function() return string.gmatch("", ".") end
 }
 local nativePrototypes = {}
 for name, create in pairs(nativeClosures) do nativePrototypes[name] = create() end
@@ -1725,7 +1724,7 @@ local function visitFunction(value, ctx)
 			end
 		end
 		if path then return pathToken(path) end
-		problem(ctx, "a native function with no global name")
+		problem(ctx, "a native function with no global name" .. (info.ffid and (" (ffid=" .. info.ffid .. ")") or ""))
 		return "z;"
 	end
 	local ok, code = pcall(function() return capturing and captureNative.bytecode(value) or string.dump(value, "d") end)
@@ -6282,12 +6281,14 @@ namespace RTE::CheckpointLua {
 	namespace {
 		thread_local lua_State* s_DescriptorState = nullptr;
 		thread_local const std::unordered_set<const void*>* s_DescriptorRoots = nullptr;
+		thread_local const std::unordered_set<const void*>* s_DescriptorFunctions = nullptr;
 
 		struct DescriptorRootScope {
 			lua_State* state;
 			lua_State* previousState = s_DescriptorState;
 			const std::unordered_set<const void*>* previousRoots = s_DescriptorRoots;
-			std::unordered_set<const void*> seen, userdata, opaque;
+			const std::unordered_set<const void*>* previousFunctions = s_DescriptorFunctions;
+			std::unordered_set<const void*> seen, userdata, functions, opaque;
 			std::unordered_set<const void*> queuedFinalizers;
 			std::vector<TValue> pending;
 			void Queue(int index) {
@@ -6295,6 +6296,7 @@ namespace RTE::CheckpointLua {
 				const int kind = lua_type(state, index);
 				if (kind != LUA_TTABLE && kind != LUA_TFUNCTION && kind != LUA_TUSERDATA && kind != LUA_TTHREAD) return;
 				if (kind == LUA_TUSERDATA) userdata.insert(gcval(&state->base[index - 1]));
+				if (kind == LUA_TFUNCTION) functions.insert(gcval(&state->base[index - 1]));
 				if (opaque.contains(lua_topointer(state, index))) return;
 				if (seen.insert(lua_topointer(state, index)).second) pending.push_back(state->base[index - 1]);
 			}
@@ -6443,8 +6445,9 @@ namespace RTE::CheckpointLua {
 				}
 				s_DescriptorState = state;
 				s_DescriptorRoots = &userdata;
+				s_DescriptorFunctions = &functions;
 			}
-			~DescriptorRootScope() { s_DescriptorState = previousState; s_DescriptorRoots = previousRoots; }
+			~DescriptorRootScope() { s_DescriptorState = previousState; s_DescriptorRoots = previousRoots; s_DescriptorFunctions = previousFunctions; }
 		};
 	}
 
@@ -6461,6 +6464,11 @@ namespace RTE::CheckpointLua {
 			lua_settop(state, top);
 			if (owned) visit(data);
 		});
+	}
+	template<class Visit> void ForEachCapturedFunction(lua_State* state, Visit visit) {
+		if (s_DescriptorState == state && s_DescriptorFunctions) {
+			for (const void* address: *s_DescriptorFunctions) visit(static_cast<const GCfunc*>(address));
+		}
 	}
 }
 

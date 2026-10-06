@@ -1244,6 +1244,7 @@ struct MenuTraceCoverage {
 };
 static MenuTraceCoverage s_menuTraceCoverage;
 static bool s_cowCheckpointAutosave = false;
+static bool s_checkpointFixturePrimeScripts = false;
 static bool s_checkpointAudioEffects = false;
 static bool s_checkpointAudioEffectsPassed = false;
 static bool s_checkpointWorldAudio = false;
@@ -2113,6 +2114,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		}
 		if (currentArg == "-cow-checkpoint-autosave") {
 			s_cowCheckpointAutosave = true;
+			++i;
+			continue;
+		}
+		if (currentArg == "-checkpoint-fixture-prime-scripts") {
+			s_checkpointFixturePrimeScripts = true;
 			++i;
 			continue;
 		}
@@ -7534,6 +7540,13 @@ void RunGameLoop() {
 
 			const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 			BeginCrossTick(simTick);
+			if (s_checkpointFixturePrimeScripts && simTick == 1) {
+				// Both arms of the checkpoint fixture start with the same scripted
+				// actors. Priming does not run an extra Update on a live actor.
+				std::list<SceneObject*> actors;
+				g_MovableMan.GetAllActors(true, actors);
+				for (SceneObject* object: actors) if (auto* actor = dynamic_cast<Actor*>(object)) actor->InitializeObjectScriptsIfNeeded();
+			}
 			if (!s_loadGameName.empty() && ScenarioRunner::GetArgs().maxTicks > 0 &&
 			    simTick >= static_cast<uint64_t>(ScenarioRunner::GetArgs().maxTicks)) {
 				System::SetQuit(true);
@@ -11471,6 +11484,13 @@ int main(int argc, char** argv) {
 				}
 				if (!loadedSavedGame) {
 					s_loadGameFailed = true;
+					System::SetQuit(true);
+				}
+				if (loadedSavedGame && s_cowCheckpointAutosave) {
+					// Recapture the restored instant before simulation advances. The
+					// fixture's absolute two-tick cap can precede the saved tick.
+					const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+					if (!g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", tick) || !g_ActivityMan.WaitForAutosaveVerdict()) s_loadGameFailed = true;
 					System::SetQuit(true);
 				}
 			}
