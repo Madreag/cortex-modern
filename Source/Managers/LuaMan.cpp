@@ -12136,7 +12136,7 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	// Peer AI births do not advance the shared script identity sequence.
 	std::optional<ScriptBirthDomainScope> birthDomain;
-	if (ScenarioRunner::IsLockstepControllerSyncActive()) birthDomain.emplace(m_State, SoundSimulationScope::Domain() == SoundSimulationDomain::LocalSimulation);
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) birthDomain.emplace(m_State, SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation);
 	s_currentLuaState = this;
 	m_CurrentlyRunningScriptPath = functionObject->GetFilePath();
 
