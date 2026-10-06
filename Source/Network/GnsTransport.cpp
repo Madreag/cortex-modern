@@ -469,27 +469,32 @@ namespace RTE {
 				return false;
 			}
 			m_BytesHandedOver[peerId] += bytes.size();
-			TraceLobbyStart(connectionIt->second, bytes, "sent");
+			TraceLobbyDelivery(connectionIt->second, bytes, "sent");
 			return true;
 		}
 
-		void TraceLobbyStart(HSteamNetConnection connection, const std::vector<uint8_t>& bytes, const char* direction) {
-			// A short header check keeps frame sends out of the lobby decoder.
-			if (bytes.size() < NetLobbyProtocol::c_HeaderBytes || bytes.size() > 128) return;
+		void TraceLobbyDelivery(HSteamNetConnection connection, const std::vector<uint8_t>& bytes, const char* direction) {
+			// The header keeps frame sends out of the lobby decoder.
+			if (bytes.size() < NetLobbyProtocol::c_HeaderBytes || bytes.size() > NetLobbyProtocol::c_MaxStateChunkBytes + 128) return;
 			uint32_t magic = 0;
 			for (size_t i = 0; i < 4; ++i) magic |= static_cast<uint32_t>(bytes[i]) << (8 * i);
 			if (magic != NetLobbyProtocol::c_Magic) return;
 			const auto decoded = NetLobbyProtocol::Decode(bytes);
-			if (!decoded.ok || !std::holds_alternative<NetLobbyStart>(decoded.message.payload)) return;
+			if (!decoded.ok || (!std::holds_alternative<NetLobbyStart>(decoded.message.payload) &&
+			    !std::holds_alternative<NetLobbyStateChunk>(decoded.message.payload) &&
+			    !(std::holds_alternative<NetLobbyConfigAck>(decoded.message.payload) && std::get<NetLobbyConfigAck>(decoded.message.payload).reason.starts_with("state:")))) return;
 			const auto nowUs = SteamNetworkingUtils()->GetLocalTimestamp();
-			auto& lastUs = m_LastStartTraceUs[connection];
+			auto& lastUs = m_LastDeliveryTraceUs[connection];
 			if (lastUs != 0 && nowUs - lastUs < 1000000) return;
 			lastUs = nowUs;
 			SteamNetConnectionRealTimeStatus_t status{};
 			if (m_Interface->GetConnectionRealTimeStatus(connection, &status, 0, nullptr) != k_EResultOK) return;
-			DiagnosticLine() << "[net-start-delivery] " << direction << " connection=" << connection << " clock_ms=" << nowUs / 1000
+			DiagnosticLine() << "[net-start-delivery] " << direction << " type=" << NetLobbyProtocol::MessageTypeName(NetLobbyProtocol::MessageTypeOf(decoded.message.payload))
+			                 << " bytes=" << bytes.size() << " connection=" << connection << " clock_ms=" << nowUs / 1000
 			                 << " pending_reliable=" << status.m_cbPendingReliable << " unacked_reliable=" << status.m_cbSentUnackedReliable
-			                 << " queue_ms=" << status.m_usecQueueTime / 1000 << " ping_ms=" << status.m_nPing << std::endl;
+			                 << " queue_ms=" << status.m_usecQueueTime / 1000 << " ping_ms=" << status.m_nPing
+			                 << " send_rate=" << status.m_nSendRateBytesPerSecond << " local_quality=" << status.m_flConnectionQualityLocal
+			                 << " remote_quality=" << status.m_flConnectionQualityRemote << std::endl;
 		}
 
 		// What the connection was holding when it refused. k_EResultLimitExceeded (25) means the
@@ -594,7 +599,7 @@ namespace RTE {
 			m_NextPeerId = 1;
 			m_BytesHandedOver.clear();
 			m_LastDetailUs.clear();
-			m_LastStartTraceUs.clear();
+			m_LastDeliveryTraceUs.clear();
 			m_LiveTurnLogin.clear();
 			m_PendingEvents.clear();
 		}
@@ -702,7 +707,7 @@ namespace RTE {
 						LaneFromMessage(*message),
 						std::vector<uint8_t>(data, data + message->m_cbSize),
 						{}};
-					TraceLobbyStart(message->m_conn, received.bytes, "received");
+					TraceLobbyDelivery(message->m_conn, received.bytes, "received");
 					// GNS decrypts a P2P peer's payload as soon as the rendezvous is done, which over a
 					// relay routinely beats our own Connected callback. Handing it up before the session
 					// has been told the peer exists loses it, so it waits behind that announcement.
@@ -936,7 +941,7 @@ namespace RTE {
 			}
 			s_ConnectionOwners.erase(connection);
 			m_LastDetailUs.erase(connection);
-			m_LastStartTraceUs.erase(connection);
+			m_LastDeliveryTraceUs.erase(connection);
 			if (connection == m_ServerConnection) {
 				m_ServerConnection = k_HSteamNetConnection_Invalid;
 			}
@@ -1344,7 +1349,7 @@ namespace RTE {
 		std::vector<NetTransportEvent> m_PendingEvents;
 		std::map<NetPeerId, uint64_t> m_BytesHandedOver; //!< What we actually gave the socket, to read the pending figure against.
 		std::map<HSteamNetConnection, SteamNetworkingMicroseconds> m_LastDetailUs; //!< When each connection last produced a detailed status.
-		std::map<HSteamNetConnection, SteamNetworkingMicroseconds> m_LastStartTraceUs;
+		std::map<HSteamNetConnection, SteamNetworkingMicroseconds> m_LastDeliveryTraceUs;
 		std::set<HSteamNetConnection> m_Announced; //!< Connections whose PeerConnected we have already handed up.
 		std::map<HSteamNetConnection, std::vector<NetTransportEvent>> m_HeldPackets; //!< Payloads GNS delivered before that.
 		std::string m_LiveTurnLogin; //!< The TURN server, user and password lists the live connections run with.

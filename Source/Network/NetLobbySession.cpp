@@ -1336,12 +1336,14 @@ namespace RTE {
 			for (uint8_t peerId: m_RemotePeerIds) {
 				line << " peer" << static_cast<int>(peerId) << "=[acked=" << (m_ConfigAckedByPeer.count(peerId) && m_ConfigAckedByPeer.at(peerId) ? 1 : 0)
 				     << " ready=" << (IsRemoteReady(peerId) ? 1 : 0) << " lobby_up=" << (IsRemoteLobbyUp(peerId) ? 1 : 0)
+				     << " state_sent=" << OutgoingChunkIndex(peerId)
 				     << " state_received=" << (m_ReceivedChunkCountByPeer.contains(peerId) ? m_ReceivedChunkCountByPeer.at(peerId) : 0) << "/" << m_OutgoingChunkCount
 				     << " delay=" << NetMatchConfigUtil::PeerInputDelay(m_Config.matchConfig, peerId) << "]";
 			}
 		} else {
 			line << " ready_sent=" << (m_ReadySent ? 1 : 0) << " local_ready=" << (m_LocalReady ? 1 : 0)
-			     << " seat_assigned=" << (m_SeatAssigned ? 1 : 0) << " starts_seen=" << m_Stats.startPacketsReceived;
+			     << " seat_assigned=" << (m_SeatAssigned ? 1 : 0) << " starts_seen=" << m_Stats.startPacketsReceived
+			     << " state_received=" << m_IncomingNextChunkIndex << "/" << m_IncomingChunkCount;
 		}
 		DiagnosticLine() << line.str() << std::endl;
 	}
