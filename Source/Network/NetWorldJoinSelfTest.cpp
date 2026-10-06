@@ -7408,6 +7408,13 @@ namespace RTE {
 		const auto unlock = [&] { std::filesystem::permissions(scratch.path, permissions); };
 #endif
 		tail.PruneJournalBefore(last);
+		// Failed deletes leave byte counts unchanged; their published receipt confirms the prune finished.
+		auto receipt = tail.GetJournalStats();
+		while (receipt.pendingDeleteFiles == 0 && receipt.orphanedFiles == 0 && std::chrono::steady_clock::now() < deadline) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+			receipt = tail.GetJournalStats();
+		}
+		if (receipt.pendingDeleteFiles == 0 && receipt.orphanedFiles == 0) { unlock(); return Fail("B1: the writer did not publish its failed-delete prune"); }
 		const auto stats = SettledJournalStats(tail);
 		const auto pending = []<typename Stats>(const Stats& value) {
 			if constexpr (requires { value.pendingDeleteFiles; }) return value.pendingDeleteFiles;
