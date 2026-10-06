@@ -148,6 +148,8 @@ def parse_graph(data):
     if version in ("SG5", "SG6", "SG7"):
         reader.expect("S")
         serial = reader.integer(minimum=1)
+        if version == "SG7" and not (1 << 36) <= serial < SCRATCH_BAND:
+            raise ValueError("invalid SG7 peer birth horizon")
     for tag, label in (("r", "roots"), ("G", "globals"), ("L", "loaded")):
         reader.expect(tag)
         entries = {}
@@ -561,7 +563,7 @@ def compare_graphs(first, second, actor_uids=None, cross_process=False, lockstep
     b = {key: value for key, value in second.items() if key not in ("nodes", "serial")}
     mapping, _, _ = solve([(a, b, "graph")], [], {}, {}, set())
     report = {"matched_nodes": len(mapping), "local_ai_boundaries": len(cuts[0])}
-    # SG6 is the only birth-numbered archive the engine writes; SG5 was never released.
+    # SG6 and SG7 carry birth identities; SG7 separates peer and shared horizons.
     if first.get("version") in ("SG6", "SG7") and first.get("version") == second.get("version"):
         report["serial"] = {"a": first["serial"], "b": second["serial"]}
         report["lockstep_master"] = lockstep_master
