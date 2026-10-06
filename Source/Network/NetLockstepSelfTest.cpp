@@ -25976,6 +25976,13 @@ namespace {
 				NetParticipantRemovalIssue issue;
 				if (service.m_ReconnectHost.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, admission.nowMs, admission.wallMs, round.match.sessionId,
 				    static_cast<uint32_t>(round.peers[0].GetRoundId()), frame, issue) != NetKickBanResult::Ok) return done("undo history refuses removal after refill " + std::to_string(cycle));
+				if (cycle == 0) {
+					if (round.peers[0].AdmissionRollbackFloor() != 0) return done("an unreported held survivor is excluded from the rollback floor");
+					round.peers[0].EvictRemovedPeer(4, "the host opens the repeatedly filled place", round.now);
+					for (int pass = 0; pass < 12; ++pass) round.Pump();
+					if (!round.peers[0].IsSeatReleased(4)) return done("the first removal does not open the place in the committed round");
+					frame = round.peers[0].SeatReleases().at(4).rbegin()->first;
+				}
 				service.m_ReconnectHost.NoteSeatRelease(4, frame);
 				if (cycle == 50) break;
 				NetReconnectTicketStore store; store.SetPath("Userdata/host-ticket-return/refill-" + std::to_string(cycle) + ".ticket");
@@ -25986,6 +25993,8 @@ namespace {
 				    service.m_ReconnectHost.SubstituteApplicant(3, connection, admission.nowMs) != NetH4ModerationResult::Ok ||
 				    !admission.Pump(service.m_ReconnectHost, {{connection, &applicant}}, &round.failure) || applicant.GetState() != NetH4ClientState::Joined) return done("refill " + std::to_string(cycle) + " did not commit: " + round.failure);
 			}
+			const auto retained = nlohmann::json::from_cbor(service.m_ReconnectHost.ExportMigrationState());
+			if (retained.at("seat_removal_undo").size() > 2) return done("completed removal history remains after fifty refills");
 			return done("");
 		}
 

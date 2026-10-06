@@ -7895,6 +7895,7 @@ static std::string ResyncSaveName() {
 		if (!m_Coordinator) return;
 		for (const auto& [peer, records]: m_Coordinator->SeatReleases())
 			for (const auto& [frame, release]: records) m_ReconnectHost.NoteSeatRelease(peer, frame);
+		m_ReconnectHost.PruneSeatRemovals(m_Coordinator->AdmissionRollbackFloor());
 	}
 
 	void NetMatchService::PumpHostMigration() {

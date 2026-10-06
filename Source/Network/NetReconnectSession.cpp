@@ -131,6 +131,15 @@ namespace RTE {
 		}
 	}
 
+	void NetReconnectHost::PruneSeatRemovals(uint64_t retainedBoundary) {
+		// Every possible successor has applied this prefix, including a seat the round holds.
+		const size_t count = m_SeatRemovalUndo.size();
+		std::erase_if(m_SeatRemovalUndo, [&](const auto& bytes) {
+			return nlohmann::json::from_cbor(bytes).at("frame").template get<uint64_t>() < retainedBoundary;
+		});
+		if (m_SeatRemovalUndo.size() != count) NoteStateChanged();
+	}
+
 	std::vector<uint8_t> NetReconnectHost::MigrationStateAtFrame(const std::vector<uint8_t>& bytes, uint64_t frame) {
 		if (bytes.empty() || bytes.size() > 32 * 1024) return {};
 		try {

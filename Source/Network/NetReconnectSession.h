@@ -438,6 +438,7 @@ namespace RTE {
 		std::vector<NetH4ModerationSeat> GetModerationView() const;
 		/// The round's frame, which a leave's drop is recorded at.
 		void NoteLockstepFrame(uint64_t frame) { m_LockstepFrame = frame; }
+		void PruneSeatRemovals(uint64_t retainedBoundary);
 		/// Folds every field GetModerationView shows into one stamp, without allocating, so a caller
 		/// polling at the lobby's cadence rebuilds the view only when a row actually changed.
 		uint64_t GetModerationSignature() const;

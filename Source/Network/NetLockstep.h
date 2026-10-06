@@ -1038,6 +1038,7 @@ namespace RTE {
 		uint64_t GetResumeFrame() const { NET_PLANE_CHECK(); return m_LastCompletedSimulationTick ? *m_LastCompletedSimulationTick + 1 : m_Config.startFrame; }
 		/// Whether this peer has simulated any frame of the round.
 		bool HasCompletedSimulationTick() const { NET_PLANE_CHECK(); return m_LastCompletedSimulationTick.has_value(); }
+		uint64_t AdmissionRollbackFloor() const;
 		/// The oldest frame a returning seat may still be served from: older hold and return decisions are in every base it can get.
 		void SetReturnHistoryFloor(uint64_t frame) { NET_PLANE_CHECK(); m_ReturnHistoryFloor = frame; }
 		bool FinishSimulationTick(uint64_t completedTick);

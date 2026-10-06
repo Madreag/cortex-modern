@@ -3423,6 +3423,24 @@ namespace RTE {
 		return mask;
 	}
 
+	uint64_t NetLockstepCoordinator::AdmissionRollbackFloor() const {
+		NET_PLANE_CHECK();
+		if (!m_LastCompletedSimulationTick) return 0;
+		uint64_t floor = *m_LastCompletedSimulationTick;
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+			if (peer == m_Config.localPeerId) continue;
+			const auto released = m_SeatReleases.find(peer);
+			if (released != m_SeatReleases.end() && released->second.upper_bound(*m_LastCompletedSimulationTick) != released->second.begin() &&
+			    !SeatPlaysAtFrame(peer, *m_LastCompletedSimulationTick) && !IsSeatReclaimableAt(peer, *m_LastCompletedSimulationTick)) continue;
+			// Held seats can succeed too; a checksum proves applied simulation, unlike a frame receipt.
+			uint64_t applied = 0;
+			for (auto frame = m_RemoteChecksums.rbegin(); frame != m_RemoteChecksums.rend(); ++frame)
+				if (frame->second.contains(peer)) { applied = frame->first; break; }
+			floor = std::min(floor, applied);
+		}
+		return floor;
+	}
+
 	bool NetLockstepCoordinator::MigrationQuorum(NetHostMigrationReach& reach) {
 		// The most advanced voter's committed round is the roster every survivor that reached it agrees on; the others hold older forms of it.
 		uint64_t mostAdvanced = 0;
