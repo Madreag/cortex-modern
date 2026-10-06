@@ -23,9 +23,10 @@ drivers whose existing control loop needs runner-compatible handles. Always
 use it in a with statement (or in @managed_case). Case.make_run() returns a
 handle with start/finish/poll/terminate/close/suspend/resume. Levers execute in
 the native runner owning that peer; a Windows suspend requires os="windows".
-Case.synchronize() mirrors only declared JSON or empty presence rendezvous files, logs and video
-indices. Gameplay travels over real ICE sockets; SSH carries signaling and
-evidence only. No router mapping is requested. Caller paths are private staging
+Case.synchronize() mirrors declared complete JSON and exact .mark/.txt presence
+files, logs and video indices. Gameplay travels over real network sockets;
+SSH carries signaling and evidence only. No router mapping is requested.
+Caller paths are private staging
 paths; the helper maps them to the native case root, never to an owner's tree.
 
 Refusals raise SpreadRefusal and write spread-result.json with topology,
@@ -38,6 +39,16 @@ No case assertion, oracle, timeout or default single-box launch is changed.
 Peer.output_name optionally declares an existing non-ASCII output directory;
 make_run(..., role=...) also accepts its declared logical peer explicitly.
 Text scripts retain their original UTF-8 or legacy Windows byte encoding.
+Peer.lane (or Match.parameters["lane"]) supplies the caller's pool priority
+lane; the existing pool still decides admission. Peer.block_udp reserves only
+declared discovery ports on that peer's native machine for the case's lever.
+The default network is ICE. Match.parameters["network"]="direct" preserves
+explicit ICE-Off/Unlisted inputs and substitutes only deliberate loopback
+join addresses with the host's existing network address. An optional
+Match.parameters["host_address"] supplies that address; otherwise it is read
+on the native host. Loopback/unspecified host addresses refuse with the box
+named. Explicit ICE-Off in the default ICE mode also refuses instead of being
+overwritten. Scratch placement derives from the installed box catalog.
 The byte-pinned interface is shipped as a pool control input, so callers do
 not need it committed into their own branch before using the published call.
 Configured dispatcher discovery uses CORTEX_POOL_DISPATCHER, the installed
@@ -54,11 +65,13 @@ from dataclasses import dataclass, field
 import functools
 import hashlib
 import importlib
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -66,7 +79,14 @@ import time
 import uuid
 import zlib
 
-from run_sim_test import RUNTIME_SETTINGS, engine_executable, file_sha256
+def engine_executable(repo):
+    from run_sim_test import engine_executable as resolve
+    return resolve(repo)
+
+
+def file_sha256(path):
+    from run_sim_test import file_sha256 as digest
+    return digest(path)
 
 
 TOPOLOGY_LOCAL = "single-box: not proof"
@@ -94,6 +114,8 @@ class Peer:
     expected: tuple = ()
     fixtures: tuple = ()
     output_name: str | None = None
+    block_udp: tuple[int, ...] = ()
+    lane: str | None = None
 
     def __post_init__(self):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", self.name):
@@ -102,6 +124,8 @@ class Peer:
             raise ValueError("a spread peer reserves exactly one engine on its own machine")
         if self.output_name is not None and (not self.output_name or self.output_name in (".", "..") or any(char in self.output_name for char in '/\\\0<>:"|?*')):
             raise ValueError("output name must be one safe directory component")
+        if any(type(port) is not int or not 1024 <= port <= 65535 for port in self.block_udp):
+            raise ValueError("blocked discovery ports must be declared test ports")
 
 
 @dataclass(frozen=True)
@@ -115,6 +139,27 @@ class Match:
             raise ValueError("match port is outside the test range")
         if self.directory_port is not None and (not 1024 <= self.directory_port <= 65535 or self.directory_port == self.port):
             raise ValueError("directory port must be a different lane-owned test port")
+
+
+def native_address_probe():
+    """Read the host's existing network address without changing its network."""
+    program = shutil.which("tailscale")
+    if not program and sys.platform == "win32":
+        candidate = Path("C:/Program Files/Tailscale/tailscale.exe")
+        if candidate.is_file():
+            program = str(candidate)
+    if program:
+        result = subprocess.run([program, "ip", "-4"], capture_output=True, text=True, timeout=10, creationflags=NO_WINDOW)
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                address = ipaddress.ip_address(line.strip())
+                if not address.is_loopback and not address.is_unspecified:
+                    return str(address)
+    addresses = {row[4][0] for row in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET)}
+    fitting = sorted(address for address in addresses if not ipaddress.ip_address(address).is_loopback and not ipaddress.ip_address(address).is_link_local)
+    if not fitting:
+        raise RuntimeError("native host has no routable address")
+    return fitting[0]
 
 
 def atomic_bytes(path, data):
@@ -271,8 +316,10 @@ def map_text(value, mappings):
     return mapped(text)
 
 
-def complete_signal(data):
-    """An empty touch marker is complete; nonempty signals must be complete JSON."""
+def complete_signal(data, relative=None):
+    """Keep declared presence bytes; publish JSON only after its write completes."""
+    if relative and Path(relative).suffix in (".mark", ".txt"):
+        return True
     if data == b"":
         return True
     try:
@@ -307,6 +354,7 @@ def declared_signals(root):
             continue
         text = path.read_text(encoding="utf-8-sig", errors="replace")
         candidates = re.findall(r"(?m)^wait_file\s+(.+?)\s+\d+\s*$", text)
+        candidates += re.findall(r"(?m)^touch_file\s+(.+?)\s*$", text)
         try:
             value = json.loads(text)
         except ValueError:
@@ -318,7 +366,7 @@ def declared_signals(root):
                 if node.get("op") == "signal" and isinstance(node.get("name"), str):
                     candidates.append(str(path.parent/(node["name"] + ".json")))
                 for key, child in node.items():
-                    if key in ("wait_file", "signal", "file") and isinstance(child, str) and child.endswith(".json"):
+                    if key in ("wait_file", "signal", "file") and isinstance(child, str) and Path(child).suffix in (".json", ".mark", ".txt"):
                         candidates.append(child)
                     walk(child)
             elif isinstance(node, list):
@@ -330,7 +378,7 @@ def declared_signals(root):
             if not target.is_absolute():
                 target = path.parent / target
             target = target.resolve()
-            if target.is_relative_to(root) and target.suffix == ".json":
+            if target.is_relative_to(root) and target.suffix in (".json", ".mark", ".txt"):
                 result.add(target.relative_to(root).as_posix())
     # The existing video and net-ui probe protocols publish these exact names.
     for directory in [*root.glob("*-stage/probe"), *root.glob("*-probe"), *root.glob("*_probe")]:
@@ -395,7 +443,10 @@ class Case:
         self.control.mkdir(exist_ok=True)
         # The pool owns its own claims/control cache. Engine artifacts belong to
         # this lane's sole scratch root, not to the pool lane's run folders.
-        self.lane_root = next((parent for parent in (self.out, *self.out.parents) if parent.parent.as_posix().casefold() == "d:/mx"), self.out.parent)
+        catalog = self.pool.load_registry(self.registry)["boxes"]
+        local = next((box for box in catalog if box["kind"] == "local"), None)
+        scratch = Path(local["scratch"]).resolve() if local else self.out.parent
+        self.lane_root = next((parent for parent in (self.out, *self.out.parents) if parent.parent == scratch), self.out.parent)
         self.lane = self.lane_root.name
         try:
             self.allocate()
@@ -468,6 +519,7 @@ class Case:
                                     alone=peer.quiet, size=peer.size, only_box=pin, excluded=tuple(excluded))
             fitting, reasons, states = self.pool.candidates(self.registry, needs, backend)
             request = dict(run_id=uuid.uuid4().hex, token=uuid.uuid4().hex, label=f"spread: {self.out.name}/{peer.name}",
+                           lane=peer.lane or self.match.parameters.get("lane", self.lane),
                            owner=dict(pid=os.getpid(), machine=self.transport_module.worker.facts.machine_name(),
                                       process_start=self.transport_module.worker.facts.process_start(os.getpid())),
                            out=str(self.control/peer.name/"results"), command=[], hang_guard=max(600, peer.timeout + 300))
@@ -538,6 +590,31 @@ class Case:
             raise SpreadRefusal("Windows executable changed between peer shipments")
 
     def connect_directory(self):
+        self.network = self.match.parameters.get("network", "ice")
+        if self.network not in ("ice", "direct"):
+            raise self.refuse(self.names[0], self.members[self.names[0]][0]["name"], "unknown declared network mode")
+        if self.network == "direct":
+            box, claim, _, backend = self.members[self.names[0]]
+            address = self.match.parameters.get("host_address")
+            if not address:
+                from cross_peers import remote_command
+                script = "import sys;sys.path.insert(0,sys.argv[1]);from spread_peers import native_address_probe;print(native_address_probe())"
+                command = [box["python"], "-c", script, claim["control"]]
+                if box["kind"] != "local":
+                    command = remote_command(box, command)
+                    command[1:1] = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
+                try:
+                    address = backend.guarded_run(command, timeout=20).decode().strip()
+                except Exception as error:
+                    raise self.refuse(self.names[0], box["name"], str(error))
+            try:
+                parsed = ipaddress.ip_address(address)
+            except ValueError:
+                raise self.refuse(self.names[0], box["name"], "direct host address must be a native network address")
+            if parsed.is_loopback or parsed.is_unspecified:
+                raise self.refuse(self.names[0], box["name"], "direct host address must identify its real machine")
+            self.host_address, self.directory = str(parsed), None
+            return
         if len(self.peers) < 2:
             self.directory = None
             return
@@ -603,6 +680,13 @@ class Case:
                 box, claim, _, backend = self.members[handle.role]
                 raw = backend.rpc(box, "text", dict(path=claim["root"] + "/progress.json"), timeout=20)["text"]
                 if not raw:
+                    terminal = backend.rpc(box, "text", dict(path=claim["root"] + "/finished.json"), timeout=20)["text"]
+                    if terminal:
+                        result = json.loads(terminal)
+                        if result.get("token") == claim["token"] and result.get("exit_code") != 0:
+                            handle.finished = True
+                            reason = result.get("routing_reason") or result.get("reason") or f"native task exited {result.get('exit_code')} before the peer runner started"
+                            raise self.refuse(handle.role, box["name"], reason)
                     continue
                 progress = json.loads(raw)
                 handle.native_progress = progress
@@ -622,7 +706,7 @@ class Case:
                 path = self.out/safe_relative(relative)
                 if path.is_file():
                     data = path.read_bytes()
-                    if not complete_signal(data):
+                    if not complete_signal(data, relative):
                         continue
                     signals[relative] = base64.b64encode(data).decode()
             for handle in list(self.runs.values()):
@@ -693,7 +777,7 @@ class Run:
         source = self.repo/"Userdata/Settings.ini"
         text = source.read_text(encoding="utf-8-sig") if source.is_file() else "SettingsMan\n"
         (self.cwd/"Userdata/Settings.ini").write_text(text, encoding="utf-8")
-        from run_sim_test import seed_settings
+        from run_sim_test import RUNTIME_SETTINGS, seed_settings
         seed_settings(self, RUNTIME_SETTINGS)
         self.argv = [str(engine_executable(repo)), "-headless", *map(str, args)]
         write_json(self.out/"runtime.json", dict(executable=self.argv[0], cwd=str(self.cwd), settings_overrides=RUNTIME_SETTINGS,
@@ -711,17 +795,22 @@ class Run:
         if port != self.case.match.port:
             raise self.case.refuse(self.role, box["name"], f"match port {port} differs from host port {self.case.match.port}")
         args = list(self.argv[2:])
+        if "-net-port" in args and int(args[args.index("-net-port") + 1]) != port:
+            raise self.case.refuse(self.role, box["name"], f"match port {args[args.index('-net-port') + 1]} differs from host port {port}")
         session = None
         if self.case.directory and self.role != self.case.names[0]:
             session = self.case.published_session(self.role)
         if self.case.directory:
             if "-net-ice" in args:
-                args[args.index("-net-ice") + 1] = "on"
+                if args[args.index("-net-ice") + 1].lower() == "off":
+                    raise self.case.refuse(self.role, box["name"], "explicit ICE-Off requires the declared direct network mode")
             else:
                 args += ["-net-ice", "on"]
             if "-net-join" in args and args[args.index("-net-join") + 1] in ("127.0.0.1", "localhost"):
                 index = args.index("-net-join")
                 args[index:index + 2] = ["-net-join-session", session]
+        elif getattr(self.case, "network", "ice") == "direct" and "-net-join" in args and args[args.index("-net-join") + 1] in ("127.0.0.1", "localhost"):
+            args[args.index("-net-join") + 1] = self.case.host_address
         mappings = [(str(self.case.out), claim["case_root"]), (self.case.out.as_posix(), claim["case_root"]),
                     (str(self.repo), claim["repo"]), (self.repo.as_posix(), claim["repo"])]
         files = {}
@@ -748,6 +837,9 @@ class Run:
             data = path.read_bytes()
             if path.suffix.lower() in (".txt", ".json", ".ini", ".lua"):
                 data = map_script(data, mappings, session)
+                if getattr(self.case, "network", "ice") == "direct":
+                    data = re.sub(rb"(?m)^(settext TextJoinAddress)\s+(?:127\.0\.0\.1|localhost)\s*$",
+                                  lambda match: match[1] + b" " + self.case.host_address.encode(), data)
             files[path.relative_to(self.case.out).as_posix()] = base64.b64encode(data).decode()
         signals = self.case.signals()
         self.case.extra_signals = sorted(set(getattr(self.case, "extra_signals", ())) | set(signals))
@@ -759,6 +851,7 @@ class Run:
                       fixtures=self.fixtures, files=files, signals=signals,
                       executable_sha256=claim["exe_sha256"], directory=self.case.directory,
                       signal_port=claim.get("signal_port"), session=session)
+        native["block_udp"] = next(peer.block_udp for peer in self.case.peers if peer.name == self.role)
         if getattr(self, "private_menu", None) or getattr(self, "private_environment", None):
             raise self.case.refuse(self.role, box["name"], "private relay inputs require the existing credential delivery channel")
         # No credentials, directory private key or ticket bytes enter this spec.
@@ -884,7 +977,7 @@ def publish_signals(root, signals, allowed):
         if relative not in allowed:
             raise ValueError("only declared peer gate signals may be mirrored")
         data = base64.b64decode(encoded, validate=True)
-        if not complete_signal(data):
+        if not complete_signal(data, relative):
             raise ValueError("peer gate signal is incomplete JSON")
         target = root/safe_relative(relative)
         if not target.is_file() or target.read_bytes() != data:
@@ -952,7 +1045,14 @@ def native_execute(spec_path, result_out):
     action_receipt, archive_receipt = {}, None
     record = {}
     last_progress, action_token = 0, None
+    blockers = []
     try:
+        for port in spec.get("block_udp", ()):
+            blocker = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            blockers.append(blocker)
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                blocker.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            blocker.bind(("", port))
         # Older runners do not have the portable pool hooks yet. Use the same
         # installed launch scope, preserving exact PID/creation-time ownership.
         hooked = hasattr(sys.modules[run.__class__.__module__], "launch_scope")
@@ -998,6 +1098,8 @@ def native_execute(spec_path, result_out):
         record = run.finish()
     finally:
         run.close()
+        for blocker in blockers:
+            blocker.close()
     record.update(topology="spread", box=box["name"])
     write_json(out/"record.json", record)
     # Export only private writable evidence, never the linked Data tree or a
