@@ -134,9 +134,16 @@ old service receives 409 and reads as superseded.
    resume from old games; then distribute new builds. Pending metadata expires
    within its row's lease and contains no bearer proof.
 
-Short HTTP requests have 64 handlers. Long polls use a separate pool of 64,
+Short HTTP requests have 256 handlers. Long polls use a separate pool of 64,
 with four per caller; excess polls answer immediately with a one-second retry
-hint. One caller retains at most 64 of 4,096 owners. Under pressure, worlds
+hint. Accepted polls wait at most one second; an empty answer also asks for a
+one-second retry. The 512-connection backlog and 512 header handlers admit a
+simultaneous heartbeat and poll from each of 200 callers. Even two three-second
+body waves plus a retry fit inside the unchanged 15-second lease. Parsed
+saturation answers 503 with `Retry-After: 1`; it logs once per caller per minute.
+Unfinished headers use at most two connections per socket address, separate
+from short handlers; complete buffered tunnel headers bypass that share.
+One caller retains at most 64 of 4,096 owners. Under pressure, worlds
 listed for less than 60 seconds retire first; signed returning proofs remain
 verifiable. These shares prevent one address from reserving the whole service.
 Short requests have a three-second deadline from accept through body end,

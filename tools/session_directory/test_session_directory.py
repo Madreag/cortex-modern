@@ -449,14 +449,11 @@ class DirectoryTests(unittest.TestCase):
         resumed = store.register(dict(request, world_boot=2, resume_session_id=original["session_id"], resume_token=original["token"]), "192.0.2.200", 122, INSTALL_KEY)
         self.assertEqual(resumed["session_id"], original["session_id"])
 
-
     def test_U1_unlisting_preserves_the_final_listed_interval(self) -> None:
         self._U1_owner_transition(True)
 
-
     def test_U1_deletion_preserves_the_final_listed_interval(self) -> None:
         self._U1_owner_transition(False)
-
 
     def test_U1_every_heartbeat_credits_monotonic_durable_time(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -477,7 +474,6 @@ class DirectoryTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text())[row["session_id"]]["listed_s"], 62,
                              "U1: durable accounting lost credited or hidden intervals")
 
-
     def test_U2_ice_launcher_supplies_required_startup_flags(self) -> None:
         source = Path(__file__).resolve().parents[1] / "test_directory_ice_join.py"
         tree = ast.parse(source.read_text())
@@ -487,6 +483,148 @@ class DirectoryTests(unittest.TestCase):
         self.assertIn("direct", strings, "U2: the local ICE launcher does not choose direct mode")
         self.assertIn("--create-owner-key", strings, "U2: the fresh ICE directory omits owner-key creation")
 
+    def test_U3_parsed_saturation_answers_503_with_retry(self) -> None:
+        self.start(port=47470)
+        slots = self.server.httpd._handler_slots
+        held = 0
+        while held < session_directory.MAX_ACTIVE_HANDLERS:
+            self.assertTrue(slots.acquire(timeout=1), "U3: the initial fixture request did not release its handler")
+            held += 1
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=2)
+            conn.request("GET", "/v1/sessions", headers={"X-Install-Key": INSTALL_KEY})
+            try:
+                response = conn.getresponse()
+                body = json.loads(response.read())
+            except (OSError, http.client.HTTPException):
+                self.fail("U3: saturation closed a complete parsed request without an HTTP answer")
+            finally:
+                conn.close()
+            self.assertEqual(response.status, 503, "U3: parsed saturation did not answer 503")
+            self.assertEqual(body.get("error"), "full")
+            self.assertEqual(response.getheader("Retry-After"), "1", "U3: saturation omitted Retry-After")
+        finally:
+            for _ in range(held): slots.release()
+
+    def test_U3_saturation_logs_once_per_caller_per_minute(self) -> None:
+        self.start(port=47475)
+        slots = self.server.httpd._handler_slots
+        held = 0
+        while held < session_directory.MAX_ACTIVE_HANDLERS:
+            self.assertTrue(slots.acquire(timeout=1), "U3: the initial fixture request did not release its handler")
+            held += 1
+        try:
+            with mock.patch.object(LOGGER, "info") as logged:
+                for _ in range(2):
+                    self.assertEqual(self.call("GET", "/v1/sessions")[0], 503)
+                notices = [call for call in logged.call_args_list if call.args[0].startswith("request capacity full")]
+                self.assertEqual(len(notices), 1, "U3: repeated saturation logged the caller more than once in a minute")
+                self.server.httpd._capacity_logged["127.0.0.1"] -= 60
+                self.assertEqual(self.call("GET", "/v1/sessions")[0], 503)
+                notices = [call for call in logged.call_args_list if call.args[0].startswith("request capacity full")]
+                self.assertEqual(len(notices), 2, "U3: saturation did not log the caller in the next minute")
+        finally:
+            for _ in range(held): slots.release()
+
+    def test_U4_unfinished_headers_leave_honest_capacity(self) -> None:
+        self.start(port=47471)
+        sockets = []
+        try:
+            for _ in range(64):
+                connection = socket.create_connection(("127.0.0.1", self.port), timeout=1)
+                sockets.append(connection)
+                try: connection.sendall(b"GET /v1/sessions HTTP/1.1\r\nX-Test: ")
+                except OSError: pass
+            time.sleep(0.15)
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=1, source_address=("127.0.0.2", 0))
+            started = time.monotonic()
+            try:
+                conn.request("GET", "/v1/sessions", headers={"X-Install-Key": INSTALL_KEY})
+                response = conn.getresponse()
+                response.read()
+            except (OSError, http.client.HTTPException):
+                self.fail("U4: one caller's unfinished headers occupied every honest short handler")
+            finally:
+                conn.close()
+            self.assertEqual(response.status, 200, "U4: unfinished headers blocked another caller")
+            self.assertLess(time.monotonic() - started, 1, "U4: the honest caller waited for the attacker's header deadline")
+            live = 0
+            for connection in sockets:
+                connection.settimeout(0.02)
+                try:
+                    if connection.recv(1): live += 1
+                except socket.timeout: live += 1
+                except OSError: pass
+            self.assertLessEqual(live, 2, "U4: one socket address kept more than two unfinished headers")
+        finally:
+            for connection in sockets: connection.close()
+
+    def test_U3_all_200_callers_heartbeat_with_repeated_polls(self) -> None:
+        self.start(port=47472)
+        self.server.store.caller_mode = "tunnel"
+        rows = []
+        def request(index, method, path, body=None):
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30 if method == "GET" else 14)
+            headers = {"X-Install-Key": f"{index + 1000:016x}", "CF-Connecting-IP": f"198.51.{index // 250}.{index % 250 + 1}"}
+            try:
+                conn.request(method, path, body=json.dumps(body) if body is not None else None, headers=headers)
+                response = conn.getresponse()
+                return response.status, json.loads(response.read()), response.getheader("Retry-After")
+            finally:
+                conn.close()
+        for index in range(200):
+            status, row, _ = request(index, "POST", "/v1/sessions", sample_register())
+            self.assertEqual(status, 200)
+            rows.append(row)
+        gate = threading.Barrier(401)
+        stop = threading.Event()
+        beats, polls, errors = {}, [], []
+        result_lock = threading.Lock()
+        def polling(index):
+            gate.wait()
+            while not stop.is_set():
+                try:
+                    status, body, retry = request(index, "GET", f"/v1/sessions/{rows[index]['session_id']}/signals?peer=client:{index:016x}&wait=25")
+                    with result_lock: polls.append((index, status, body.get("error"), retry))
+                    pause = int(retry or body.get("retry_after_s", 0))
+                    if pause: stop.wait(pause)
+                except (OSError, http.client.HTTPException) as error:
+                    with result_lock: errors.append((index, "poll", type(error).__name__))
+                    return
+        def heartbeat(index):
+            gate.wait()
+            for wave in range(3):
+                started = time.monotonic()
+                deadline = started + 15
+                try:
+                    while True:
+                        status, _, retry = request(index, "POST", f"/v1/sessions/{rows[index]['session_id']}/heartbeat",
+                                                   {"token": rows[index]["token"], "peer_count": 1, "seats_free": 1})
+                        if status != 503 or time.monotonic() + int(retry or 1) >= deadline: break
+                        time.sleep(int(retry or 1))
+                    with result_lock: beats[index, wave] = (status, time.monotonic() - started)
+                    if wave < 2: time.sleep(1)
+                except (OSError, http.client.HTTPException) as error:
+                    with result_lock: errors.append((index, "heartbeat", type(error).__name__))
+                    return
+        pollers = [threading.Thread(target=polling, args=(index,)) for index in range(200)]
+        workers = [threading.Thread(target=heartbeat, args=(index,)) for index in range(200)]
+        try:
+            for worker in pollers + workers: worker.start()
+            gate.wait()
+            for worker in workers: worker.join(45)
+        finally:
+            stop.set()
+            for worker in pollers + workers: worker.join(30)
+        self.assertFalse(any(worker.is_alive() for worker in pollers + workers), "U3: a worker still ran when the results were scored")
+        self.assertEqual(len(errors), 0, "U3: saturation dropped an honest caller instead of answering: " + str(errors[:3]))
+        answered = sum(all(beats.get((index, wave), (0, 15))[0] == 200 and beats[index, wave][1] < 15 for wave in range(3)) for index in range(200))
+        self.assertEqual(answered, 200, f"U3: only {answered}/200 honest callers received all heartbeat answers inside the 15 s lease")
+        self.assertEqual({index for index, *_ in polls}, set(range(200)), "U3: not every polling caller completed a response")
+        self.assertTrue(all(status == 200 or (status == 503 and retry == "1") for _, status, _, retry in polls),
+                        "U3: a saturated poll omitted its 503 retry answer")
+        self.assertGreater(len(polls), 200, "U3: the 200-caller run did not exercise repeated polling")
+        print(f"[directory-load] PASS U3 heartbeats={answered}/200 waves=3 replies={len(beats)} polls={len(polls)} max_heartbeat_s={max(value[1] for value in beats.values()):.3f}", flush=True)
 
     def test_T4_subnet_churn_cannot_claim_an_established_world(self) -> None:
         with mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 64):
@@ -573,12 +711,13 @@ class DirectoryTests(unittest.TestCase):
     def test_T5_accept_deadline_closes_dripping_headers_and_bodies(self) -> None:
         self.start(port=47467)
         self.server.store.caller_mode = "tunnel"
+        accepted_since = time.monotonic()
         connections = [socket.create_connection(("127.0.0.1", self.port), timeout=1) for _ in range(2)]
         try:
             connections[0].sendall(b"POST /v1/sessions HTTP/1.1\r\nX-Test: ")
             connections[1].sendall((f"POST /v1/sessions HTTP/1.1\r\nX-Install-Key: {INSTALL_KEY}\r\nCF-Connecting-IP: 192.0.2.1\r\nContent-Length: 4096\r\n\r\n{{").encode())
             live = list(connections)
-            deadline = time.monotonic() + 5
+            deadline = accepted_since + 3.25
             while live and time.monotonic() < deadline:
                 for connection in live:
                     try: connection.sendall(b" ")

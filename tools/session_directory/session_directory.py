@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import secrets
+import select
 import socket
 import ssl
 import struct
@@ -86,7 +87,13 @@ HANDLER_TIMEOUT_S = 10
 # Three seconds bounds body readers well inside a fifteen-second lease.
 HANDLER_BODY_DEADLINE_S = 3.0
 MAX_SHORT_CONNECTIONS_PER_SOURCE = 4
-MAX_ACTIVE_HANDLERS = 64
+MAX_ACTIVE_HANDLERS = 256
+# Two simultaneous requests from 200 callers fit before parsed overload gets a retry answer.
+MAX_HEADER_HANDLERS = 512
+SIGNAL_POLL_WINDOW_S = 1.0
+MAX_UNFINISHED_HEADERS_PER_ADDRESS = 2
+SATURATION_LOG_INTERVAL_S = 60.0
+MAX_SATURATION_LOG_SOURCES = MAX_ROWS
 # Waiters have their own capacity, leaving all short handlers available.
 MAX_SIGNAL_WAITERS = 64
 MAX_SIGNAL_WAITERS_PER_SOURCE = 4
@@ -880,7 +887,6 @@ class SessionDirectory:
             self._save_world_owner(sess.session_id, dict(owner, listed_s=credited))
         return credited
 
-
     def _ack_world_register(self, sess: Session, now: float) -> int:
         if sess.fields.get("persistent_world") is True:
             credited = self._credit_world_listing(sess, now)
@@ -1618,6 +1624,10 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
         def log_message(self, fmt: str, *args: object) -> None:
             LOGGER.info("%s %s", self.address_string(), redact_log_url(fmt % args))
 
+        def log_request(self, code="-", size="-") -> None:
+            if not getattr(self, "_capacity_answer", False):
+                super().log_request(code, size)
+
         def parse_request(self) -> bool:
             self._body_read = False
             if not super().parse_request():
@@ -1629,6 +1639,7 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                 self.close_connection = True
                 return False
             if not self.server.begin_short_request(source):
+                self._send(503, {"error": "full"})
                 self.close_connection = True
                 return False
             try:
@@ -1659,6 +1670,9 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
             self.server.body_complete()
 
         def _send(self, status: int, body: dict[str, Any]) -> None:
+            self._capacity_answer = status == 503 and body.get("error") == "full"
+            if self._capacity_answer:
+                self.server.log_capacity(self._observed_ip())
             if not getattr(self, "_body_read", True):
                 self._drain_body()
             raw = json.dumps(body).encode("utf-8")
@@ -1667,6 +1681,8 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(raw)))
             self.send_header("Connection", "close")
+            if self._capacity_answer:
+                self.send_header("Retry-After", str(SIGNAL_WAIT_RETRY_S))
             self.end_headers()
             self.wfile.write(raw)
 
@@ -1831,8 +1847,8 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                     )
                     waiting = wait_s > 0 and self.server.begin_signal_wait(self._observed_ip())
                     try:
-                        answer = store.get_signals(sid, peer, after, token, now, wait_s if waiting else 0)
-                        if wait_s > 0 and not waiting:
+                        answer = store.get_signals(sid, peer, after, token, now, min(wait_s, SIGNAL_POLL_WINDOW_S) if waiting else 0)
+                        if wait_s > 0 and (not waiting or not answer["signals"]):
                             answer["retry_after_s"] = SIGNAL_WAIT_RETRY_S
                         self._send(200, answer)
                     finally:
@@ -1920,12 +1936,17 @@ class SessionHTTPServer(ThreadingHTTPServer):
     """ThreadingHTTPServer that wraps each accepted socket in TLS on its own handler thread."""
 
     tls_context: Optional[ssl.SSLContext] = None
+    request_queue_size = MAX_HEADER_HANDLERS
 
     def __init__(self, *args, **kwargs) -> None:
         self._handler_slots = threading.BoundedSemaphore(MAX_ACTIVE_HANDLERS)
+        self._header_slots = threading.BoundedSemaphore(MAX_HEADER_HANDLERS)
         self._handler_capacity = threading.local()
         self._connection_lock = threading.Lock()
         self._short_sources = Counter()
+        self._unfinished_sources = Counter()
+        self._unfinished_connections: dict[str, list[list[socket.socket]]] = {}
+        self._capacity_logged: dict[str, float] = {}
         self._request_started: dict[socket.socket, float] = {}
         self._waiter_lock = threading.Lock()
         self._waiter_sources = Counter()
@@ -1933,7 +1954,7 @@ class SessionHTTPServer(ThreadingHTTPServer):
         super().__init__(*args, **kwargs)
 
     def process_request(self, request: socket.socket, client_address: Any) -> None:
-        if not self._handler_slots.acquire(blocking=False):
+        if not self._header_slots.acquire(blocking=False):
             self.shutdown_request(request)
             return
         with self._connection_lock:
@@ -1943,18 +1964,21 @@ class SessionHTTPServer(ThreadingHTTPServer):
         except BaseException:
             with self._connection_lock:
                 self._request_started.pop(request, None)
-            self._handler_slots.release()
+            self._header_slots.release()
             raise
 
     def process_request_thread(
         self, request: socket.socket, client_address: Any
     ) -> None:
-        self._handler_capacity.held = True
+        self._handler_capacity.held = False
+        self._handler_capacity.header_held = True
+        self._handler_capacity.unfinished_source = ""
         self._handler_capacity.source = ""
         with self._connection_lock:
             accepted_at = self._request_started.pop(request)
         self._handler_capacity.body_deadline = accepted_at + HANDLER_BODY_DEADLINE_S
         current = [request]
+        self._handler_capacity.current_header = current
         def expire():
             try:
                 current[0].shutdown(socket.SHUT_RDWR)
@@ -1973,6 +1997,7 @@ class SessionHTTPServer(ThreadingHTTPServer):
             timer.cancel()
             body_timer.cancel()
             self.end_short_request()
+            self.end_header_request()
             if self._handler_capacity.held:
                 self._handler_slots.release()
 
@@ -1980,9 +2005,55 @@ class SessionHTTPServer(ThreadingHTTPServer):
         with self._connection_lock:
             if self._short_sources[source] >= MAX_SHORT_CONNECTIONS_PER_SOURCE:
                 return False
+            if not self._handler_slots.acquire(blocking=False):
+                return False
+            self._handler_capacity.held = True
             self._short_sources[source] += 1
             self._handler_capacity.source = source
-            return True
+        self.end_header_request()
+        return True
+
+    def end_header_request(self) -> None:
+        source = self._handler_capacity.unfinished_source
+        if source:
+            with self._connection_lock:
+                connections = self._unfinished_connections.get(source, [])
+                current = self._handler_capacity.current_header
+                if current in connections:
+                    connections.remove(current)
+                    self._unfinished_sources[source] -= 1
+                if not connections:
+                    self._unfinished_sources.pop(source, None)
+                    self._unfinished_connections.pop(source, None)
+            self._handler_capacity.unfinished_source = ""
+        if self._handler_capacity.header_held:
+            self._header_slots.release()
+            self._handler_capacity.header_held = False
+
+    def log_capacity(self, source: str) -> None:
+        now = time.monotonic()
+        with self._connection_lock:
+            last = self._capacity_logged.get(source)
+            if last is not None and now - last < SATURATION_LOG_INTERVAL_S:
+                return
+            if last is None and len(self._capacity_logged) >= MAX_SATURATION_LOG_SOURCES:
+                self._capacity_logged = {key: value for key, value in self._capacity_logged.items()
+                                         if now - value < SATURATION_LOG_INTERVAL_S}
+                if len(self._capacity_logged) >= MAX_SATURATION_LOG_SOURCES:
+                    return
+            self._capacity_logged[source] = now
+        LOGGER.info("request capacity full from %s; retry in %s s", source, SIGNAL_WAIT_RETRY_S)
+
+    def _headers_ready(self, request: socket.socket) -> bool:
+        if self.tls_context is not None:
+            return False
+        readable, _, _ = select.select([request], [], [], 0.02)
+        if not readable:
+            return False
+        try:
+            return b"\r\n\r\n" in request.recv(65536, socket.MSG_PEEK)
+        except OSError:
+            return False
 
     def end_short_request(self) -> None:
         source = self._handler_capacity.source
@@ -2015,6 +2086,23 @@ class SessionHTTPServer(ThreadingHTTPServer):
                 del self._waiter_sources[source]
 
     def _serve_request(self, request: socket.socket, client_address: Any, current: list[socket.socket]) -> None:
+        # Ready tunnel headers already identify a caller; slow headers share only their socket address.
+        if not self._headers_ready(request):
+            source = client_address[0]
+            with self._connection_lock:
+                if self._unfinished_sources[source] >= MAX_UNFINISHED_HEADERS_PER_ADDRESS:
+                    readable, _, _ = select.select([request], [], [], 0)
+                    if not readable:
+                        self.shutdown_request(request)
+                        return
+                    # A ready request displaces an idle header from the same address.
+                    oldest = self._unfinished_connections[source].pop(0)
+                    try: oldest[0].shutdown(socket.SHUT_RDWR)
+                    except OSError: pass
+                    self._unfinished_sources[source] -= 1
+                self._unfinished_sources[source] += 1
+                self._unfinished_connections.setdefault(source, []).append(current)
+                self._handler_capacity.unfinished_source = source
         ctx = self.tls_context
         if ctx is not None:
             remaining = self._handler_capacity.body_deadline - time.monotonic()
@@ -2023,8 +2111,9 @@ class SessionHTTPServer(ThreadingHTTPServer):
                 return
             request.settimeout(min(HANDSHAKE_TIMEOUT_S, remaining))
             try:
-                request = ctx.wrap_socket(request, server_side=True)
+                request = ctx.wrap_socket(request, server_side=True, do_handshake_on_connect=False)
                 current[0] = request
+                request.do_handshake()
             except (socket.timeout, TimeoutError):
                 LOGGER.info("tls handshake timeout from %s", client_address[0])
                 self.shutdown_request(request)
