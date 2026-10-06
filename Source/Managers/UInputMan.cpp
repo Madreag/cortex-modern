@@ -2104,7 +2104,7 @@ bool UInputMan::RunCheckpointSelfTest() {
 }
 
 bool UInputMan::RunScriptedInputEdgeSelfTest() {
-	bool passed = true;
+	bool passed = InputScript::RunTimelineSelfTest();
 	const auto check = [&passed](const char* name, bool valid, const std::string& observed = "") {
 		passed = valid && passed;
 		std::cout << "[input-edge-selftest] " << (valid ? "PASS " : "FAIL ") << name;
