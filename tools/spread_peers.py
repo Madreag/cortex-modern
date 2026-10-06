@@ -23,6 +23,8 @@ the lane's directory port, and optional unchanged case parameters. The helper
 freezes committed inputs, verifies the
 shipped/native executable hash, and starts native runners/tasks. ``drive``
 still stages the case's scripts, orders starts and applies its own assertions.
+Case.stage_root(out) validates the live owned controller marker before a driver
+stages in that already created root; a foreign or closed claim refuses.
 Without ``drive``, the call starts host first and finishes every declared peer.
 It collects verified evidence into ``out`` and returns topology="spread",
 peer_boxes, native identities, executable hashes, records and driver_result.
@@ -66,6 +68,12 @@ Match.parameters["label"] may specify the lead's exact native holder label.
 Match.parameters["runner_wait"] or --runner-wait may specify that holder's
 wait in seconds. It updates only the existing local holder command, without
 an enclosing holder or a second slot. Engine/script timeouts remain unchanged.
+Before the native capacity claim, the same wait also covers the named local
+holder's FIFO line. Match.parameters["wait_for_holder"] / --wait-for-holder
+may name a holder the lead explicitly said to wait behind while it runs alone.
+Other markers, memory/CPU/engine limits and task refusals remain refusals.
+After shipment and before launch, the same native capacity check waits on that
+named local claim's FIFO before starting case timers; all other guards remain.
 Peer.block_udp reserves only
 declared discovery ports on that peer's native machine for the case's lever.
 The default network is ICE. Match.parameters["network"]="direct" preserves
@@ -296,6 +304,7 @@ def add_arguments(parser):
     parser.add_argument("--pool-registry", type=Path, help="box facts for the lead's named peers")
     parser.add_argument("--runner-label", help="the lead's exact label for the native run holder")
     parser.add_argument("--runner-wait", type=float, help="the lead's wait in seconds for the existing local holder")
+    parser.add_argument("--wait-for-holder", help="exact holder label the lead explicitly authorized waiting behind")
     parser.add_argument("--peer-port", action="append", default=[], metavar="PEER=PORT", help="explicit peer match port (also supports a wrong-parameter detecting run)")
 
 
@@ -579,6 +588,73 @@ def launch_native(backend, box, claim, request, wait=0):
         backend.rpc = original
 
 
+def claim_named_peer(backend, box, needs, request, *, wait=0, wait_for_holder=None):
+    """Honor native work-slot FIFO on this named box; never choose or bypass."""
+    import math
+    wait = float(wait or 0)
+    if not math.isfinite(wait) or wait < 0:
+        raise ValueError("runner wait must be finite and nonnegative")
+    deadline = time.monotonic() + wait
+    holders = {wait_for_holder} if wait_for_holder else set()
+    announced = None
+    while True:
+        try:
+            return backend.rpc(box, "claim", dict(box=box, needs=needs.__dict__, request=request), timeout=30)
+        except RuntimeError as error:
+            text = str(error)
+            marker = "capacity refused: earlier work request is waiting: "
+            fifo = marker in text
+            if fifo:
+                holders.add(text.split(marker, 1)[1].splitlines()[0])
+            # A FIFO predecessor can then own the exclusive window. Only a
+            # known or expressly named predecessor is allowed to remain a wait.
+            owned_window = any(("; owner=" + label + " (") in text or
+                               ("; owner=" + label + ";") in text for label in holders)
+            waiting = box["kind"] == "local" and wait and (fifo or owned_window)
+            if not waiting:
+                raise
+            if time.monotonic() >= deadline:
+                raise SpreadRefusal(f"native holder wait expired after {wait:g}s: {text}") from error
+            if text != announced:
+                print(f"WAITING NAMED: {box['name']}; peer {needs.peer_id}; {text}", flush=True)
+                announced = text
+            time.sleep(min(2, max(0, deadline-time.monotonic())))
+
+
+def wait_named_launch(worker, pool, box, claim, *, wait=0, wait_for_holder=None):
+    """Recheck native FIFO after shipping, before the case starts its timers."""
+    import math
+    wait = float(wait or 0)
+    if not math.isfinite(wait) or wait < 0:
+        raise ValueError("runner wait must be finite and nonnegative")
+    if not wait or box["kind"] != "local":
+        return
+    deadline = time.monotonic() + wait
+    holders = {wait_for_holder} if wait_for_holder else set()
+    announced = None
+    needs = pool.Needs(**claim["needs"])
+    while True:
+        state = worker.capacity_state(box, read_only=True, refresh_display=False, ignore_token=claim["token"])
+        reason = pool.live_reason(box, needs, state)
+        if not reason:
+            return
+        marker = "earlier work request is waiting: "
+        fifo = reason.startswith(marker)
+        if fifo:
+            holders.add(reason[len(marker):].splitlines()[0])
+        owned_window = any(("; owner=" + label + " (") in reason or
+                           ("; owner=" + label + ";") in reason for label in holders)
+        if not (fifo or owned_window):
+            raise SpreadRefusal("capacity changed before launch: " + reason)
+        if time.monotonic() >= deadline:
+            raise SpreadRefusal(f"native holder wait expired after {wait:g}s: {reason}")
+        if reason != announced:
+            print(f"WAITING NAMED: {box['name']}; peer {needs.peer_id}; {reason}", flush=True)
+            announced = reason
+        time.sleep(min(2, max(0, deadline-time.monotonic())))
+        worker.renew_claim(claim)
+
+
 class Case:
     def __init__(self, repo, out, peers, match, *, peer_boxes=None, dispatcher=None, registry=None, peer_ports=None):
         self.repo, self.out = Path(repo).resolve(), Path(out).resolve()
@@ -659,6 +735,13 @@ class Case:
         self.save(error=text)
         return SpreadRefusal(text)
 
+    def stage_root(self, root):
+        """Let a driver stage in this case's already claimed controller root."""
+        root = Path(root).resolve()
+        owner = read_json(root/".spread-case-owner.json", {}) or {}
+        if self.closed or root != self.out or owner.get("token") != self.id or owner.get("case_id") != self.id:
+            raise SpreadRefusal(f"RUN ROOT CONFLICT {root}; staging does not own the live case marker")
+
     def backend(self):
         module = self.transport_module
         # Use the installed facts adapter with this caller's immutable inputs.
@@ -723,7 +806,9 @@ class Case:
                            out=str(self.control/peer.name/"results"), command=[], hang_guard=max(600, peer.timeout + 300))
             try:
                 state = backend.probe(box, read_only=True)
-                claim = backend.rpc(box, "claim", dict(box=box, needs=needs.__dict__, request=request), timeout=30)
+                wait = self.match.parameters.get("runner_wait", getattr(_options, "runner_wait", 0))
+                holder = self.match.parameters.get("wait_for_holder", getattr(_options, "wait_for_holder", None))
+                claim = claim_named_peer(backend, box, needs, request, wait=wait, wait_for_holder=holder)
             except Exception as error:
                 raise self.refuse(peer.name, box["name"], str(error)) from error
             claim.update(control=backend.control(box), started=time.time(), needs=needs.__dict__)
@@ -788,6 +873,17 @@ class Case:
         windows_hashes = {claim["exe_sha256"] for box, claim, _, _ in self.members.values() if box["os"] == "windows"}
         if len(windows_hashes) > 1:
             raise SpreadRefusal("Windows executable changed between peer shipments")
+        wait = self.match.parameters.get("runner_wait", getattr(_options, "runner_wait", 0))
+        for name in self.names:
+            box, claim, _, _ = self.members[name]
+            if not wait or box["kind"] != "local":
+                continue
+            try:
+                wait_named_launch(self.transport_module.worker, self.pool, box, claim,
+                                  wait=wait,
+                                  wait_for_holder=self.match.parameters.get("wait_for_holder", getattr(_options, "wait_for_holder", None)))
+            except SpreadRefusal as error:
+                raise self.refuse(name, box["name"], str(error)) from error
 
     def connect_directory(self):
         self.network = self.match.parameters.get("network", "ice")
@@ -1169,6 +1265,9 @@ class Run:
             request["command"] = ["python", claim["control"] + "/spread_peers.py", "--native", path, "--out", "{OUT}"]
             self.launch_attempted = True
             wait = self.case.match.parameters.get("runner_wait", getattr(_options, "runner_wait", 0))
+            if wait and box["kind"] == "local":
+                wait_named_launch(self.case.transport_module.worker, self.case.pool, box, claim, wait=wait,
+                                  wait_for_holder=self.case.match.parameters.get("wait_for_holder", getattr(_options, "wait_for_holder", None)))
             request["hang_guard"] = max(request.get("hang_guard", 600), self.timeout + 300 + float(wait or 0))
             launch_native(backend, box, claim, request, wait)
         except SpreadRefusal:
@@ -1300,23 +1399,32 @@ def publish_signals(root, signals, allowed):
             atomic_bytes(target, data)
 
 
+def stage_native_run(factory, ownership, box, peer, *args, **kwargs):
+    """Stage with the existing runner, then claim its root before any start."""
+    from cross_peers import peer_run_scope
+    run = factory(*args, **kwargs)
+    try:
+        ownership.enter_context(peer_run_scope(box, peer))
+    except BaseException:
+        run.close()
+        raise
+    return run
+
+
 def native_execute(spec_path, result_out):
     spec = read_json(spec_path)
     if not spec or spec.get("schema") != 1:
         raise ValueError("invalid native peer specification")
     sys.path.insert(0, spec["control"])
-    from cross_peers import peer_run_scope
     root = Path(spec["root"]).resolve()
-    box = dict(spec["box"], executable=os.environ["CCCP_TEST_BINARY"], scratch=str(root),
-               kind="windows-local" if spec["box"]["kind"] == "local" else spec["box"]["kind"])
     peer = dict(case_id=spec["case_id"], peer_id=spec["role"], lane=spec.get("lane"),
                 run_root=str(root/spec.get("output_name", spec["role"])), controller_root=spec.get("controller_root"),
                 ports=spec["case_ports"], executable_sha256=spec["executable_sha256"])
-    with peer_run_scope(box, peer):
-        return _native_execute(spec_path, result_out, peer)
+    with contextlib.ExitStack() as ownership:
+        return _native_execute(spec_path, result_out, peer, ownership)
 
 
-def _native_execute(spec_path, result_out, peer):
+def _native_execute(spec_path, result_out, peer, ownership):
     spec = read_json(spec_path)
     if not spec or spec.get("schema") != 1:
         raise ValueError("invalid native peer specification")
@@ -1367,8 +1475,9 @@ def _native_execute(spec_path, result_out, peer):
     retained = None
     if spec.get("retained_runtime") or any(path.parts[0] == "Data" for path in runtime_files):
         retained = native_retained_runtime(spec["repo"], out, runtime_files, spec["fixtures"])
-    run = make_run(spec["repo"], spec["args"], out, timeout=spec["timeout"], env=environment,
-                   expected=spec["expected"], fixtures=spec["fixtures"], runtime=retained)
+    run = stage_native_run(make_run, ownership, box, peer, spec["repo"], spec["args"], out,
+                           timeout=spec["timeout"], env=environment,
+                           expected=spec["expected"], fixtures=spec["fixtures"], runtime=retained)
     if retained is not None:
         link_directory(retained, out / "runtime")
     else:

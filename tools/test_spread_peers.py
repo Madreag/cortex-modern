@@ -16,6 +16,121 @@ from test_peer_run_guards import PeerRunGuardTests
 
 
 class ContractTests(unittest.TestCase):
+    def test_native_claim_keeps_the_runners_fresh_root_and_live_ownership(self):
+        import cross_peers as cross
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)/'host'
+            marker = out/'.spread-run-owner.json'
+            events = []
+            def factory():
+                out.mkdir(exist_ok=False)
+                events.append('staged')
+                return SimpleNamespace(close=lambda:events.append('closed'))
+            @contextlib.contextmanager
+            def claim(box, peer):
+                self.assertTrue(out.is_dir())
+                marker.write_text('owned')
+                events.append('claimed')
+                try: yield
+                finally:
+                    marker.unlink()
+                    events.append('released')
+            with patch.object(cross, 'peer_run_scope', side_effect=claim), contextlib.ExitStack() as ownership:
+                run = spread.stage_native_run(factory, ownership, {}, {})
+                self.assertTrue(marker.is_file())
+                self.assertEqual(events, ['staged','claimed'])
+            self.assertEqual(events, ['staged','claimed','released'])
+            self.assertFalse(marker.exists())
+
+    def test_post_shipment_fifo_wait_uses_the_same_box_and_claim(self):
+        states = [{'reason':'earlier work request is waiting: menus'},
+                  {'reason':'box launch refused; owner=menus (pid=7); since now'},
+                  {'reason':None}]
+        seen, renewed = [], []
+        def capacity(box, **kwargs):
+            seen.append((box, kwargs))
+            return states.pop(0)
+        worker = SimpleNamespace(capacity_state=capacity, renew_claim=lambda claim:renewed.append(claim))
+        pool = SimpleNamespace(Needs=lambda **values:SimpleNamespace(**values), live_reason=lambda box, needs, state:state['reason'])
+        box = dict(name='RecorderBox', kind='local')
+        claim = dict(token='owned', needs=dict(peer_id='host'))
+        with patch.object(spread.time, 'sleep'):
+            spread.wait_named_launch(worker, pool, box, claim, wait=1800)
+        self.assertEqual([row[0] for row in seen], [box, box, box])
+        self.assertTrue(all(row[1]['ignore_token']=='owned' and row[1]['read_only'] for row in seen))
+        self.assertEqual(renewed, [claim, claim])
+
+    def test_post_shipment_wait_preserves_real_refusals(self):
+        for reason in ('free memory 11 GB is below floor 12 GB',
+                       'box launch refused; owner=other (pid=7); since now'):
+            worker = SimpleNamespace(capacity_state=unittest.mock.Mock(return_value={'reason':reason}),
+                                     renew_claim=unittest.mock.Mock())
+            pool = SimpleNamespace(Needs=lambda **values:SimpleNamespace(**values),
+                                   live_reason=lambda box, needs, state:state['reason'])
+            with self.subTest(reason=reason), patch.object(spread.time, 'sleep') as pause:
+                with self.assertRaisesRegex(spread.SpreadRefusal, 'capacity changed before launch'):
+                    spread.wait_named_launch(worker, pool, dict(name='RecorderBox', kind='local'),
+                                             dict(token='owned', needs=dict(peer_id='host')),
+                                             wait=1800, wait_for_holder='restore')
+                pause.assert_not_called()
+                worker.renew_claim.assert_not_called()
+
+    def staging_case(self, root, token='owned'):
+        case = object.__new__(spread.Case)
+        case.out, case.id, case.closed = root.resolve(), 'owned', False
+        root.mkdir()
+        (root/'.spread-case-owner.json').write_text(json.dumps(dict(token=token, case_id=token)))
+        return case
+
+    def test_video_stages_in_its_own_live_controller_root(self):
+        import e2e_video as video
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)/'run0'
+            case = self.staging_case(root)
+            video.prepare_run_root(root, case)
+            self.assertEqual(json.loads((root/'.spread-case-owner.json').read_text())['token'], 'owned')
+
+    def test_video_refuses_a_replaced_or_closed_controller_claim(self):
+        import e2e_video as video
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)/'run0'
+            case = self.staging_case(root, token='foreign')
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'RUN ROOT CONFLICT'):
+                video.prepare_run_root(root, case)
+            self.assertEqual(json.loads((root/'.spread-case-owner.json').read_text())['token'], 'foreign')
+            case.closed = True
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'RUN ROOT CONFLICT'):
+                video.prepare_run_root(root, case)
+
+    def test_single_box_video_still_requires_a_fresh_run_root(self):
+        import e2e_video as video
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)/'run0'
+            video.prepare_run_root(root)
+            with self.assertRaises(FileExistsError):
+                video.prepare_run_root(root)
+
+    def test_named_fifo_wait_covers_its_predecessor_window_on_the_same_box(self):
+        box = dict(name='RecorderBox', kind='local')
+        before = RuntimeError('capacity refused: earlier work request is waiting: restore')
+        held = RuntimeError('capacity refused: box launch refused: own-marker; owner=restore (pid=7, machine=RecorderBox); since now')
+        backend = SimpleNamespace(rpc=unittest.mock.Mock(side_effect=[before, held, dict(token='owned')]))
+        with patch.object(spread.time, 'sleep'):
+            claim = spread.claim_named_peer(backend, box, SimpleNamespace(peer_id='host'), {}, wait=1800)
+        self.assertEqual(claim, dict(token='owned'))
+        self.assertEqual([call.args[0] for call in backend.rpc.call_args_list], [box, box, box])
+
+    def test_named_wait_never_retries_a_floor_or_unknown_marker_refusal(self):
+        for reason in ('capacity refused: free memory 11 GB is below floor 12 GB',
+                       'capacity refused: box launch refused: other-marker; owner=other (pid=9); since now'):
+            backend = SimpleNamespace(rpc=unittest.mock.Mock(side_effect=RuntimeError(reason)))
+            with self.subTest(reason=reason), patch.object(spread.time, 'sleep') as pause:
+                with self.assertRaisesRegex(RuntimeError, 'capacity refused'):
+                    spread.claim_named_peer(backend, dict(name='RecorderBox', kind='local'),
+                                            SimpleNamespace(peer_id='host'), {}, wait=1800, wait_for_holder='restore')
+                pause.assert_not_called()
+                self.assertEqual(backend.rpc.call_count, 1)
+
     def test_native_load_exit_preserves_peer_box_and_exact_reason(self):
         class LoadExit(SystemExit):
             def __str__(self):
@@ -310,9 +425,9 @@ class ContractTests(unittest.TestCase):
             spread.Peer('host', output_name='../owner')
 
     def test_legacy_script_bytes_are_not_transcoded(self):
-        data = b'mark ' + bytes(range(128, 256)) + b'\nwait_file X:\\test-inputs\\lane\\ready.json 5000\n'
-        mapped = spread.map_script(data, [('X:\\test-inputs\\lane', '/native/lane')])
-        self.assertEqual(mapped, data.replace(b'X:\\test-inputs\\lane\\ready.json', b'/native/lane/ready.json'))
+        data = b'mark ' + bytes(range(128, 256)) + b'\nwait_file D:\\mx\\lane\\ready.json 5000\n'
+        mapped = spread.map_script(data, [('D:\\mx\\lane', '/native/lane')])
+        self.assertEqual(mapped, data.replace(b'D:\\mx\\lane\\ready.json', b'/native/lane/ready.json'))
 
     def test_control_port_is_not_game_port(self):
         with self.assertRaises(ValueError):
@@ -328,22 +443,22 @@ class ContractTests(unittest.TestCase):
             spread.pairs("host=ONE,HOST=TWO")
 
     def test_windows_paths_inside_probe_json_map_to_native_root(self):
-        text = json.dumps({"path": "X:\\test-inputs\\lane\\host_probe\\done.json"})
-        mapped = spread.map_text(text, [("X:\\test-inputs\\lane", "/native/lane")])
+        text = json.dumps({"path": "D:\\mx\\lane\\host_probe\\done.json"})
+        mapped = spread.map_text(text, [("D:\\mx\\lane", "/native/lane")])
         self.assertEqual(json.loads(mapped)["path"], "/native/lane/host_probe/done.json")
 
     def test_script_and_argument_paths_map_the_whole_windows_tail(self):
-        mappings = [("X:\\test-inputs\\lane", "/native/lane")]
-        self.assertEqual(spread.map_text("X:\\test-inputs\\lane\\host\\feel", mappings), "/native/lane/host/feel")
-        self.assertEqual(spread.map_text("wait_file X:\\test-inputs\\lane\\ready.json 5000\n", mappings),
+        mappings = [("D:\\mx\\lane", "/native/lane")]
+        self.assertEqual(spread.map_text("D:\\mx\\lane\\host\\feel", mappings), "/native/lane/host/feel")
+        self.assertEqual(spread.map_text("wait_file D:\\mx\\lane\\ready.json 5000\n", mappings),
                          "wait_file /native/lane/ready.json 5000\n")
 
     def test_probe_path_mapping_preserves_unrelated_regex_escapes(self):
-        text = json.dumps({"path": "X:\\test-inputs\\lane\\done.json", "regex": r"\d+\s+"})
-        self.assertEqual(json.loads(spread.map_text(text, [("X:\\test-inputs\\lane", "/native/lane")]))["regex"], r"\d+\s+")
+        text = json.dumps({"path": "D:\\mx\\lane\\done.json", "regex": r"\d+\s+"})
+        self.assertEqual(json.loads(spread.map_text(text, [("D:\\mx\\lane", "/native/lane")]))["regex"], r"\d+\s+")
 
     def test_mapping_prefers_case_input_over_case_root(self):
-        result = spread.map_text("X:/test-inputs/lane/input.txt", [("X:/test-inputs/lane", "/root"), ("X:/test-inputs/lane/input.txt", "/input/schedule.txt")])
+        result = spread.map_text("D:/mx/lane/input.txt", [("D:/mx/lane", "/root"), ("D:/mx/lane/input.txt", "/input/schedule.txt")])
         self.assertEqual(result, "/input/schedule.txt")
 
     def test_signals_include_probe_and_controller_rendezvous(self):
@@ -568,7 +683,7 @@ class ContractTests(unittest.TestCase):
         case.id = "unique"
         case.match = spread.Match(51580)
         case.guard = lambda: None
-        case.members = {name: ({"name": name, "os": "windows", "scratch": "X:/test-inputs"}, {"ports": [47660, 47664]}, {}, Transport(digest))
+        case.members = {name: ({"name": name, "os": "windows", "scratch": "D:/mx"}, {"ports": [47660, 47664]}, {}, Transport(digest))
                         for name, digest in (("host", "same"), ("client", client_hash))}
         return case
 
