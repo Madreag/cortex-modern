@@ -121,9 +121,8 @@ def compile_choices(package: Path, menu: Path, factions: Path, output: Path) -> 
     x, y, width, height = witnesses[0]["rect"]
     target = [x + width // 2, y + height // 2]
     cursor = [menu_image.width // 2, menu_image.height // 2]
-    lines = ["# Coordinates come from the captured mod lettering and faction banner borders."]
-    # The first press follows the controller's existing release debounce.
-    for index, (tick, point) in enumerate([(20, target), *[(24 + index * 2, point) for index, point in enumerate(buttons[:6])]]):
+    lines = ["timeline=lockstep-start min=17", "# Coordinates come from the captured mod lettering and faction banner borders."]
+    for index, (tick, point) in enumerate([(1, target), *[(5 + index * 2, point) for index, point in enumerate(buttons[:6])]]):
         delta = [point[0] - cursor[0], point[1] - cursor[1]]
         press = tick + 2 if index == 0 else tick
         lines += [f"player=0 {tick} {tick} MOUSE={delta[0]},{delta[1]}", f"player=0 {press} {press} FIRE"]
@@ -146,15 +145,15 @@ def compile_play(package: Path, chosen: Path, layout: Path, host: Path, client: 
     prefix = []
     for line in host.read_text(encoding="utf-8").splitlines():
         match = re.match(r"player=0 (\d+) ", line)
-        if line.startswith("# Coordinates") or match and int(match[1]) <= 34:
+        if line.startswith(("# Coordinates", "timeline=")) or match and int(match[1]) <= 15:
             prefix.append(line)
-    prefix += [f"player=0 36 36 MOUSE={target[0] - cursor[0]},{target[1] - cursor[1]}", "player=0 36 37 FIRE"]
+    prefix += [f"player=0 17 17 MOUSE={target[0] - cursor[0]},{target[1] - cursor[1]}", "player=0 17 18 FIRE"]
     for peer, path in [(0, host), (1, client)]:
-        lines = prefix.copy() if peer == 0 else ["# The joining player's local slot drives stable seat 1 in the match."]
-        detach = 90 if peer == 0 else 125
+        lines = prefix.copy() if peer == 0 else ["timeline=lockstep-start min=17", "# The joining player's local slot drives stable seat 1 in the match."]
+        detach = 55 if peer == 0 else 75
         lines += ["# DOWN detaches this player's brain through the mod's own brain panel.", f"player=0 {detach} {detach + 4} L_DOWN"]
         for index in range(10):
-            start = 160 + index * 250
+            start = 110 + index * 250
             forward, back = ("L_RIGHT", "L_LEFT") if peer == 0 else ("L_LEFT", "L_RIGHT")
             lines += [f"player=0 {start} {start + 89} {forward}", f"player=0 {start + 110} {start + 199} {back}",
                       f"player=0 {start + 35} {start + 39} JUMP", f"player=0 {start + 145} {start + 149} JUMP"]
@@ -163,8 +162,11 @@ def compile_play(package: Path, chosen: Path, layout: Path, host: Path, client: 
         lines = []
         for line in host.read_text(encoding="utf-8").splitlines():
             match = re.fullmatch(r"player=0 (\d+) (\d+) (.+)", line)
-            if match and int(match[1]) <= 37:
-                line = f"player=0 {int(match[1]) + 26} {int(match[2]) + 26} {match[3]}"
+            if line.startswith("timeline="):
+                continue
+            if match:
+                shift = 45 if int(match[1]) <= 18 else 35 if int(match[1]) == 55 else 50
+                line = f"player=0 {int(match[1]) + shift} {int(match[2]) + shift} {match[3]}"
             lines.append(line)
         single.write_text("# Keep the offline menu visible for its native picture.\n" + "\n".join(lines) + "\n", encoding="utf-8")
     return {"chosen": str(chosen), "witnesses": words, "ok": target, "host": str(host), "client": str(client)}
