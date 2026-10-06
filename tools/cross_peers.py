@@ -483,7 +483,23 @@ def release_reservation(claim):
     return removed
 
 
-def assert_box_guard(box):
+def admitted_shared_peer(box, peer):
+    """Recognize an existing native capacity claim for an ordinary shared peer."""
+    if not peer or not peer.get('case_id') or not peer.get('peer_id'):
+        return False
+    import pool_run
+    assignment = pool_run.assignment_for_launch()
+    if assignment is None:
+        return False
+    claim = pool_run.box_facts.read_reservation(assignment['claim'])
+    return bool(claim and claim.get('share_ok') is True and claim.get('engines') == 1
+                and not any(claim.get(name) for name in ('alone', 'reviewed', 'held'))
+                and claim.get('case_id') == peer['case_id'] and claim.get('peer_id') == peer['peer_id']
+                and assignment['box']['name'] == box['name']
+                and Path(assignment['executable']).resolve() == Path(box['executable']).resolve())
+
+
+def assert_box_guard(box, *, pool_peer=None):
     if box['kind']=='posix-ssh':
         from acceptance_posix_guard import assert_available
         assert_available({**os.environ,**box.get('environment',{})},required_free=box.get('guard_file'))
@@ -495,15 +511,16 @@ def assert_box_guard(box):
         if reason := inventory_guard(): raise RuntimeError(reason)
         engines = [r for r in box_load() if 'Cortex Command' in r['Name'] and
                    str(r.get('ExecutablePath', '')).replace('\\', '/').lower() == box['executable'].lower()]
-        if engines: raise RuntimeError('an engine of this lane is already running')
+        if engines and not admitted_shared_peer(box, pool_peer):
+            raise RuntimeError('an engine of this lane is already running')
     size = scratch_bytes(box['scratch'])
     if size >= LIMIT: raise RuntimeError(f'scratch reached 4 GB: {box["scratch"]} bytes={size}; stopped without deletion')
 
 
-def preflight_payload(path):
+def preflight_payload(path, *, pool_peer=None):
     payload = json.loads(Path(path).read_text(encoding='utf-8'))
     box = payload['box']
-    assert_box_guard(box)
+    assert_box_guard(box, pool_peer=pool_peer)
     repo = Path(box['tree'])
     content = content_manifest(repo)
     head = command(['git', '-C', repo, 'rev-parse', 'HEAD'], check=False).strip()

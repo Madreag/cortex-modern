@@ -92,7 +92,80 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(len(claims['EROL-PC']), 2)
         self.assertTrue(all(not needs.alone for needs in claims['EROL-PC']))
         packed, _ = self.place_fake([spread.Peer('a'), spread.Peer('b'), spread.Peer('c')])
-        self.assertEqual({item[0]['name'] for item in packed.members.values()}, {'EROL-PC'})
+        self.assertEqual([item[0]['name'] for item in packed.members.values()], ['EROL-PC', 'EROL-PC', 'EDITH'])
+
+    def test_all_peers_pinned_to_one_box_refuse_spread_proof(self):
+        with self.assertRaisesRegex(spread.SpreadRefusal, 'b on EROL-PC: spread match requires at least two physical boxes'):
+            self.place_fake([spread.Peer('a'), spread.Peer('b')], dict(a='EROL-PC', b='EROL-PC'))
+
+    def test_retained_runtime_keeps_settings_and_private_overlay_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings = root/'Userdata/Settings.ini'
+            settings.parent.mkdir()
+            settings.write_bytes(b'SettingsMan\n\tNetworkDisplayName = retained\n')
+            overlay = root/'Data/Base.rte/GUIs/old.ini'
+            overlay.parent.mkdir(parents=True)
+            overlay.write_bytes(b'old GUI bytes\x00\xff')
+            files = spread.retained_files(root)
+            self.assertEqual(files[Path('Userdata/Settings.ini')], settings.read_bytes())
+            self.assertEqual(files[Path('Data/Base.rte/GUIs/old.ini')], overlay.read_bytes())
+            repo = root/'repo'
+            (repo/'Data/Base.rte/GUIs').mkdir(parents=True)
+            source = repo/'Data/Base.rte/GUIs/old.ini'
+            source.write_bytes(b'current GUI')
+            runtime = spread.native_retained_runtime(repo, root/'native/host', files, [])
+            self.assertEqual((runtime/'Data/Base.rte/GUIs/old.ini').read_bytes(), overlay.read_bytes())
+            self.assertEqual(source.read_bytes(), b'current GUI')
+
+    def test_retained_incomplete_runtime_and_private_ticket_refuse(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaisesRegex(ValueError, 'retained runtime is incomplete'):
+                spread.retained_files(root)
+            (root/'Userdata').mkdir()
+            (root/'Userdata/Settings.ini').write_text('SettingsMan\n')
+            (root/'Userdata/host.ticket').write_bytes(b'private fixture')
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'existing credential delivery channel'):
+                spread.retained_files(root)
+
+    def test_real_menu_pairs_keep_every_original_page_assertion_and_capture(self):
+        import test_menu_readback as menu
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for case in ('net-chat', 'lobby-name'):
+                original, _ = menu.scripts(case, 51580, root, '1280x720')
+                texts, probes = menu.spread_menu_scripts(case, original, 51580, root)
+                self.assertEqual(original['host'].count('dump_'), texts['host'].count('dump_'))
+                self.assertTrue(all(line in texts['host'] for line in original['host'].splitlines() if line.startswith('assert_')))
+                self.assertIn('wait_connected 2 60', texts['client'])
+                self.assertIn('wait_label LabelLobbyPlayer0 ', texts['client'])
+                self.assertNotIn('dump_', texts['client'])
+                self.assertEqual(probes['host']['steps'][0]['screen'], 'MultiplayerScreen')
+                if case == 'net-chat':
+                    self.assertIn('hello-from-client', texts['host'])
+                    self.assertIn('hello-from-host', texts['client'])
+                    self.assertIn('host-received-client', texts['client'])
+
+    def test_only_matching_live_pool_share_admits_an_existing_lane_engine(self):
+        import cross_peers as cross
+        box = dict(name='EROL-PC', kind='windows-local', executable='D:/own/game.exe', scratch='D:/own')
+        peer = dict(case_id='case', peer_id='seat')
+        claim = dict(case_id='case', peer_id='seat', share_ok=True, engines=1)
+        assignment = dict(claim='owned-claim', box=box, executable=box['executable'])
+        module = SimpleNamespace(assignment_for_launch=lambda:assignment, box_facts=SimpleNamespace(read_reservation=lambda path:claim))
+        with patch.dict(sys.modules, pool_run=module), patch.object(cross,'inventory_guard',return_value=None), \
+                patch.object(cross,'box_load',return_value=[dict(Name='Cortex Command',ExecutablePath=box['executable'])]), \
+                patch.object(cross,'scratch_bytes',return_value=0):
+            with self.assertRaisesRegex(RuntimeError,'an engine of this lane is already running'):
+                cross.assert_box_guard(box)
+            cross.assert_box_guard(box,pool_peer=peer)
+            for change in (dict(case_id='other'),dict(peer_id='other'),dict(share_ok=False),dict(reviewed=True),dict(held=True),dict(alone=True)):
+                before = dict(claim)
+                claim.update(change)
+                with self.assertRaisesRegex(RuntimeError,'an engine of this lane is already running'):
+                    cross.assert_box_guard(box,pool_peer=peer)
+                claim.clear(); claim.update(before)
 
     def test_unshareable_and_quiet_peers_reserve_distinct_idle_boxes(self):
         case, claims = self.place_fake([spread.Peer('host', share_ok=False), spread.Peer('seat', quiet=True)])
@@ -264,12 +337,13 @@ class ContractTests(unittest.TestCase):
             specs = []
             backend = SimpleNamespace(rpc=lambda box, action, body: specs.append(body['value']), launch=lambda *args: None)
             claim = dict(case_root='/native/case', repo='/native/repo', root='/owned', control='/control', exe_sha256='same')
-            case = SimpleNamespace(out=root, peer_ports={}, names=['host', 'client'], match=spread.Match(51580),
+            case = SimpleNamespace(id='fake-case', out=root, peer_ports={}, names=['host', 'client'], match=spread.Match(51580),
                                    directory=None, network='direct', host_address='100.64.1.2',
                                    members={'client': ({'name': 'SEAT', 'os': 'windows'}, claim, {}, backend)},
                                    peers=[spread.Peer('client')], signals=lambda: [], release_pending=lambda *args: None,
                                    transport_module=SimpleNamespace(Transport=SimpleNamespace(native_claim=lambda value: value)))
             run = object.__new__(spread.Run)
+            run.retained = None
             run.case, run.role, run.output_name = case, 'client', 'client'
             run.repo, run.cwd, run.started = root/'repo', root/'client/runtime', False
             run.argv = ['engine', '-headless', '-net-ice', 'off', '-net-join', 'localhost', '-net-port', '51580']
@@ -294,11 +368,12 @@ class ContractTests(unittest.TestCase):
             backend = SimpleNamespace(rpc=lambda box, action, body:specs.append(body['value']), launch=lambda *args:None)
             claim = dict(case_root='/native/case', repo='/native/repo', root='/owned', control='/control', exe_sha256='same')
             run = object.__new__(spread.Run)
+            run.retained = None
             run.role, run.output_name, run.started = 'host', 'host', False
             run.repo, run.cwd = root/'repo', root/'host/runtime'
             run.argv = ['engine', '-headless', '-net-match-service-config', str(config)]
             run.env, run.expected, run.fixtures, run.timeout = {}, [], [], 30
-            run.case = SimpleNamespace(out=root, members={'host':({'name':'HOST'},claim,{},backend)}, names=['host'], peer_ports={},
+            run.case = SimpleNamespace(id='fake-case', out=root, members={'host':({'name':'HOST'},claim,{},backend)}, names=['host'], peer_ports={},
                 match=spread.Match(51580), directory=None, peers=[spread.Peer('host')], signals=lambda:[], release_pending=lambda *args:None,
                 transport_module=SimpleNamespace(Transport=SimpleNamespace(native_claim=lambda value:value)))
             run.start()
@@ -313,9 +388,10 @@ class ContractTests(unittest.TestCase):
             backend = SimpleNamespace(rpc=lambda *args:None, launch=launch)
             claim = dict(case_root='/native', repo='/repo', root='/owned', control='/control', exe_sha256='same')
             run = object.__new__(spread.Run)
+            run.retained = None
             run.role, run.output_name, run.started, run.argv = 'seat', 'seat', False, ['engine','-headless']
             run.cwd, run.repo, run.env, run.expected, run.fixtures, run.timeout = root/'seat/runtime', root/'repo', {}, [], [], 30
-            run.case = SimpleNamespace(members={'seat':({'name':'REMOTE'},claim,{},backend)}, names=['seat'], peer_ports={},
+            run.case = SimpleNamespace(id='fake-case', members={'seat':({'name':'REMOTE'},claim,{},backend)}, names=['seat'], peer_ports={},
                                        match=spread.Match(51580), directory=None, out=root, peers=[spread.Peer('seat')], signals=lambda:[],
                                        transport_module=SimpleNamespace(Transport=SimpleNamespace(native_claim=lambda value:value)),
                                        refuse=lambda peer,box,reason:spread.SpreadRefusal(f'spread peer {peer} on {box}: {reason}'))

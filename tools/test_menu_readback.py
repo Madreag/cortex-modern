@@ -1985,20 +1985,67 @@ def timing_options_geometry(images):
     return measured
 
 
+def spread_menu_scripts(case, texts, port, root):
+    """Keep each page oracle and add a real remote lobby participant."""
+    if case not in ("net-chat", "lobby-name"):
+        return texts
+    hosting = probe_root(root, "host") / "hosting.json"
+    client_done = root / "client-done.mark"
+    host = texts["host"]
+    if not host.endswith("exit\n"):
+        raise ValueError("paired page script must retain its final exit")
+    host = host[:-len("exit\n")]
+    if case == "net-chat":
+        host += (LANDING + "settext TextMultiplayerName MenuHost\n"
+                 "activate ButtonMultiplayerHostGame\nwait 5\n"
+                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
+                 "activate ButtonMultiplayerCreate\n")
+    else:
+        host = host.replace("activate ButtonMultiplayerCreate\n", "activate ButtonMultiplayerCreate\nwait_connected 2 60\n", 1)
+    name = "MenuHost" if case == "net-chat" else "Recon7"
+    if case == "net-chat":
+        host += "wait_connected 2 60\n"
+    host += "wait_label LabelLobbyPlayer1 Joiner\n"
+    client = (LANDING + "settext TextMultiplayerName Joiner\n"
+              f"wait_file {hosting} 60\nactivate ButtonMultiplayerJoinGame\nwait 5\n"
+              f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
+              "activate ButtonMultiplayerConnect\nwait_connected 2 60\n"
+              f"wait_label LabelLobbyPlayer0 {name}\n")
+    if case == "net-chat":
+        host += "set_text TextLobbyChat hello-from-host\nwait_label LabelLobbyChatAny hello-from-client\nset_text TextLobbyChat host-received-client\n"
+        client += "wait_label LabelLobbyChatAny hello-from-host\nset_text TextLobbyChat hello-from-client\nwait_label LabelLobbyChatAny host-received-client\n"
+    else:
+        client += f"wait_file {probe_root(root, 'host') / 'host-read.json'} 60\n"
+    host += f"wait_file {client_done} 60\nexit\n"
+    client += "exit\n"
+    probes = {"host": {"schema": 1, "timeout_ms": 90000, "steps": [
+        {"op": "wait", "screen": "MultiplayerScreen", "control": "LabelLobbyPlayer0", "text_contains": name,
+         "equals": {"visible": True}, "scope": "menu"},
+        {"op": "signal", "name": "hosting", "scope": "menu"}, {"op": "finish"}]}}
+    if case == "lobby-name":
+        probes["host"]["steps"][-1:-1] = [
+            {"op": "wait_file", "path": str(root / "host/runtime/ScreenShots/dump_host_options_3.json"), "scope": "menu"},
+            {"op": "signal", "name": "host-read", "scope": "menu"}]
+    return {"host": host, "client": client}, probes
+
+
 @managed_case
 def run_case(options, case, root, failing=None):
     if spread:
         spread.configure(options)
     root.mkdir(parents=True, exist_ok=False)
     texts, probes = scripts(case, options.port, root, options.size)
+    network_page_pair = case in ("net-chat", "lobby-name") and spread and spread.enabled(options) and not failing
+    if network_page_pair:
+        texts, probes = spread_menu_scripts(case, texts, options.port, root)
     if failing:
         prelude, setup, assertion = failing
         texts, probes = {"host": prelude + setup + assertion + "\nexit\n"}, {}
     inputs = root / "input.txt"
     inputs.write_text(INPUT_SCRIPT, encoding="utf-8")
-    paired = case in PAIRED_CASES
+    paired = case in PAIRED_CASES or network_page_pair
     # A menu-driven pair joins through the real UI, so it carries no service-e2e flags.
-    menu_driven = case in ("net-activity", "local-end-match", "net-host-left", "net-host-left-early")
+    menu_driven = network_page_pair or case in ("net-activity", "local-end-match", "net-host-left", "net-host-left-early")
     seeded = {} if failing else seeds(case)
     runs, records, argv, images = {}, {}, {}, []
     executor = None
@@ -2064,6 +2111,8 @@ def run_case(options, case, root, failing=None):
         def drive(who):
             try:
                 records[who] = runs[who].start().finish()
+                if network_page_pair and who == "client":
+                    spread.atomic_bytes(root / "client-done.mark", b"complete\n")
                 if not executor:
                     records[who]["topology"] = result["topology"]
                     (runs[who].out / "record.json").write_text(json.dumps(records[who], indent=2) + "\n", encoding="utf-8")
@@ -2113,10 +2162,15 @@ def run_case(options, case, root, failing=None):
                 assert f"[menu-script] FAILED: {assertion.split()[0]}" in logs[who], logs[who][-3000:]
                 assert "unknown command" not in logs[who], logs[who][-3000:]
             else:
-                images += captures(run.cwd, {"source_revision": options.revision,
+                provenance = {"source_revision": options.revision,
                     "executable": str(engine_executable(options.repo)), "exe_sha256": options.exe_sha,
                     "os": os.name, "configuration": "Final", "argv": record.get("argv", argv[who]),
-                    "peer": who, "case": case, "logical_size": options.size})
+                    "peer": who, "case": case, "logical_size": options.size}
+                if executor:
+                    box, claim = executor.members[who][:2]
+                    provenance.update(box=box["name"], os=box["os"], executable=claim["exe"],
+                                      exe_sha256=claim["exe_sha256"], source_revision=claim["head"])
+                images += captures(run.cwd, provenance)
                 if case == "net-activity" and who == "host":
                     host_setup = [image for image in images if image["peer"] == "host"
                                   and any(c["name"] == "ComboHostActivity" for c in image["controls"])]
@@ -2961,6 +3015,7 @@ def main():
     parser.add_argument("--all-sizes", action="store_true",
                         help="also run every SIZE_GATES row; net-chat and lobby-name always do this")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--requested-size-only", action="store_true", help="select only --size in spread mode")
     if spread:
         spread.add_arguments(parser)
     else:
@@ -2968,11 +3023,13 @@ def main():
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--port-block", help="lane-owned game ports LO-HI for spread mode")
     options = parser.parse_args()
-    selected = planned_cases(options.case, options.size, options.all_sizes)
+    if options.requested_size_only and (not spread or not spread.enabled(options) or options.all_sizes):
+        parser.error("--requested-size-only requires spread mode without --all-sizes")
+    selected = [(case, options.size) for case in (CASES if options.case == "all" else (options.case,))] if options.requested_size_only else planned_cases(options.case, options.size, options.all_sizes)
     if not selected:
         parser.error('the selected size partition has no cases')
     if options.dry_run:
-        print(json.dumps(dict(cases=selected, engine_count=max(4 if name in DELEGATED_CASES else 2 if name in PAIRED_CASES else 1 for name, _ in selected))))
+        print(json.dumps(dict(cases=selected, engine_count=max(4 if name in DELEGATED_CASES else 2 if name in PAIRED_CASES or (spread and spread.enabled(options) and name in ("net-chat", "lobby-name")) else 1 for name, _ in selected))))
         return 0
     if spread:
         spread.configure(options)

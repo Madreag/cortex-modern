@@ -525,10 +525,10 @@ def main():
             options.exit_code, options.timed_out = launched.get("exit_code"), bool(launched.get("timed_out"))
         scored = score_selftest(stdout, options.exit_code, options.timed_out, options.name)
         row = options.name.removesuffix("-selftest")
-        scored["topology"] = "single-box: not proof" if row.startswith("net-") else "single-peer"
         if options.sanitizer and not scored["pass"] and row in WALL_CLOCK_CHECKS:
             scored = score_wall_clock_informational(stdout, {"exit_code": options.exit_code, "timed_out": options.timed_out},
                                                     row, options.sanitizer)
+        scored["topology"] = "single-box: not proof" if row.startswith("net-") else "single-peer"
         if options.result_json:
             options.result_json.write_text(json.dumps({**scored, "case": row, "scored_by": "run_selftests.py --score-stdout"},
                                                       indent=2), encoding="utf-8")
