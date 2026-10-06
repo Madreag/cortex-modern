@@ -15,6 +15,7 @@ from compare_sim_traces import strict_compare, load_trace
 from feel.retained_resume import PER_PEER_SUBSYSTEMS
 from run_sim_test import make_run, seed_settings
 from test_lobby_lifecycle import menu_script, wait_for_log
+from test_menu_readback import spread, managed_case
 
 TICKS = 900
 
@@ -67,6 +68,7 @@ def probe_steps(case, who):
     return steps + [wait(850), {"op": "finish"}]
 
 
+@managed_case
 def run_case(repo, root, case, port):
     root.mkdir(parents=True, exist_ok=False)
     names = ("host", "clienta", "clientb") if case == "graceful" else ("host", "clienta")
@@ -75,7 +77,11 @@ def run_case(repo, root, case, port):
     inputs = root / "input.txt"
     inputs.write_text("".join(f"player={seat} 1 899 AIM=0.8,0.6\nplayer={seat} 100 500 L_RIGHT\n"
                               for seat in range(len(names))), encoding="utf-8")
+    execution = None
     try:
+        execution = spread.prepare_case(repo, root,
+            [spread.Peer(who, os="windows", reviewed=who == "host") for who in names],
+            spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
         for who in names:
             host = who == "host"
             name = "Host" if host else "ClientA" if who == "clienta" else "ClientB"
@@ -100,7 +106,7 @@ def run_case(repo, root, case, port):
             if case == "locale":
                 env.update(LANG="C" if host else "de_DE.UTF-8", LC_ALL="C" if host else "de_DE.UTF-8")
                 env["CC_TEST_PROCESS_LOCALE"] = "C" if host else "German_Germany.1252" if sys.platform == "win32" else "de_DE.UTF-8"
-            run = make_run(repo, args, root / who, 210, env=env)
+            run = execution.make_run(repo, args, root / who, 210, env=env)
             seed_settings(run, {"NetworkDisplayName": name, "NetworkInputDelayFrames": 3, "NetworkIceEnable": 0,
                                 "NetworkChatVisible": 1, "NetworkSlowPlayerPolicy": "Substitute"})
             runs[who] = run.start()
@@ -149,6 +155,8 @@ def run_case(repo, root, case, port):
         for run in runs.values():
             run.close()
     result.update(records=records, probes=probes)
+    receipt = execution.result() if execution else spread.read_json(root / "spread-result.json", {})
+    result.update(topology="spread", peer_boxes=receipt.get("peer_boxes", {}), spread=receipt, proof=result["pass"])
     (root / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps({"case": case, "pass": result["pass"], "error": result.get("error"),
                       "failed": [name for name, ok in result["checks"].items() if not ok]}), flush=True)
@@ -161,7 +169,13 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--case", choices=("focus", "locale", "chat", "graceful"), required=True)
     parser.add_argument("--port", type=int, default=50302)
+    if spread:
+        spread.add_arguments(parser)
     args = parser.parse_args()
+    if not spread:
+        parser.error("match endgame requires the shared spread executor")
+    args.spread = True
+    spread.configure(args)
     return 0 if run_case(args.repo.resolve(), args.out.resolve(), args.case, args.port) else 1
 
 

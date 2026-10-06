@@ -24,20 +24,29 @@ sys.path.insert(0, str(REPO / "tools"))
 from run_sim_test import make_run  # noqa: E402
 import test_directory_ice_join as directory  # noqa: E402
 from edith_cross import make_cert  # noqa: E402
+from test_menu_readback import spread, managed_case
 
 
+@managed_case
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=REPO)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=46000, help="the directory's loopback port")
     parser.add_argument("--game-port", type=int, default=46001)
+    if spread:
+        spread.add_arguments(parser)
     options = parser.parse_args()
+    if not spread:
+        parser.error("running listing requires the shared spread executor")
+    options.spread = True
+    spread.configure(options)
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     players, ticks = 3, 3600
     trigger = root / "apply.trigger"
     runs = {}
+    execution = None
     result = {"pass": False, "checks": {}, "details": {}}
     cert, key, pin = make_cert(root)
     settings = {"SessionDirectoryUrl": f"127.0.0.1:{options.port}", "SessionDirectoryCertSha256": pin,
@@ -45,7 +54,7 @@ def main() -> int:
     service = directory.start_service(root, options.port, cert, key)
 
     def start(name, argv, timeout=420, env=None):
-        run = make_run(options.repo, argv, root / name, timeout, env=env)
+        run = execution.make_run(options.repo, argv, root / name, timeout, env=env)
         directory.patch_settings(Path(run.cwd), settings)
         runs[name] = run.start()
         return runs[name]
@@ -79,6 +88,12 @@ def main() -> int:
                 "-net-match-report", root / f"{name}_report.json", "-net-ice", "on", "-net-match-e2e-resync", *role]
 
     try:
+        execution = spread.prepare_case(options.repo, root,
+            [spread.Peer(name, os="windows", reviewed=name == "applicant")
+             for name in ("host", "departing", "stayer", "applicant")],
+            spread.Match(options.game_port, options.port, parameters={"lane": "menus",
+                "directory": {"DIRECTORY_URL": f"127.0.0.1:{options.port}", "DIRECTORY_PIN": pin, "DIRECTORY_ROOT": root},
+                "join_by_session": False}))
         host = start("host", peer("host", ["-net-host"]))
         session_id = ""
         deadline = time.monotonic() + 120
@@ -147,6 +162,8 @@ def main() -> int:
             service.wait(timeout=10)
         except subprocess.TimeoutExpired:
             service.kill()
+        receipt = execution.result() if execution else spread.read_json(root / "spread-result.json", {})
+        result.update(topology="spread", peer_boxes=receipt.get("peer_boxes", {}), spread=receipt, proof=result["pass"])
         (root / "result.json").write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
     print(json.dumps({"pass": result["pass"], "error": result.get("error"),
                       "failed": [k for k, v in result["checks"].items() if not v], "out": str(root)}), flush=True)
