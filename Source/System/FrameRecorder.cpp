@@ -367,6 +367,7 @@ namespace RTE {
 			std::string readbackError;
 			const bool pixelsReady = !frame.textureReadback || (frame.readback && m_ReadbackContext->Complete(*frame.readback, frame.pixels, readbackError));
 			if (frame.textureReadback && !frame.readback) readbackError = "admitted texture frame has no queued pixel transfer";
+			const int64_t cpuAfterReadback = profileReadback ? ThreadCpuNanoseconds() : 0;
 			std::string row;
 			if (pixelsReady) row = m_EncoderPath.empty() ? WriteFrame(frame) : EncodeFrame(frame);
 			else {
@@ -383,7 +384,9 @@ namespace RTE {
 			if (profileReadback) {
 				const auto wallUS = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - wallBefore).count();
 				System::PrintDiagnosticLine("[capture-writer-phase] tick=" + std::to_string(frame.meta.simTick) + " frame=" + std::to_string(frame.index) +
-				    " cpu_us=" + std::to_string(cpuNS / 1000) + " wall_us=" + std::to_string(wallUS));
+				    " cpu_us=" + std::to_string(cpuNS / 1000) + " wall_us=" + std::to_string(wallUS) +
+				    " readback_cpu_us=" + std::to_string((cpuAfterReadback - cpuBefore) / 1000) +
+				    " encode_cpu_us=" + std::to_string((cpuNS - (cpuAfterReadback - cpuBefore)) / 1000));
 			}
 			frame.pixels.clear();
 			{
