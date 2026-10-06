@@ -24732,6 +24732,23 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return fail("");
 		}
 
+		bool TestPositiveDelayHostWaitsForCommittedTick(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("positive_delay_host_waits_for_committed_tick", why, error); };
+			SuccessionReplayScope scope;
+			ReleasePathRound round;
+			round.now = NetLockstepNowMs();
+			if (!round.Start(47425, true, false, 2, 1)) return fail("the positive-delay round did not start: " + round.failure);
+			for (size_t index = 0; index < 2; ++index) round.produceThrough[index] = round.produced[index] - 1;
+			for (int turn = 0; turn < 20; ++turn) round.Pump();
+			auto& host = round.peers[0];
+			const uint64_t tick = host.GetResumeFrame();
+			if (host.HasReadyFrame(tick) || host.InputDelayAt(1, tick) != 1) return fail("the host does not await a positive-delay frame");
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			if (ScenarioRunner::PollLockstepSimulationTick(tick)) return fail("the bounded positive-delay host begins an uncommitted tick " + std::to_string(tick));
+			if (host.IsFailed() || host.IsStopped()) return fail("waiting ends the host's match: " + host.GetStats().timeoutReason);
+			return fail("");
+		}
+
 		bool TestSurvivorsReadOneAuthorityDuringHandover(std::string* error) {
 			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("survivors_read_one_authority_during_handover", why, error); };
 			SuccessionReplayScope scope;
@@ -25538,7 +25555,7 @@ namespace {
 	int NetLockstepSelfTest::RunSeatSuccession() {
 		EnsureSwitchTestManagers();
 		bool passed = true;
-		for (bool (*test)(std::string*): {TestTwoSuccessionsKeepBothFormerHosts, TestZeroDelayCannotRunAnUncommittedClientTick, TestSurvivorsReadOneAuthorityDuringHandover, TestFutureReleaseIsVoidOnEverySurvivor, TestAnnouncedLeaveLoneOutcome, TestAnnouncedHostLeaveKeepsOneSurvivor, TestAnnouncedHostReturnsByTicket, TestAnnouncedHostLeaveKeepsTwoSurvivors, TestAnnouncedHostLeaveEndsAnEmptyMatch, TestPlayingDepartureSurvivesSuccession, TestUnequalFutureDeparturesConvergeAtSuccession, TestPlayingHostLossKeepsLiveClaims, TestPlayingHostLossRecordsHeldClaims, TestPlayingHostReturnsWithItsTicket, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestReplayMatchesSuccessionDuringActivityTick, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
+		for (bool (*test)(std::string*): {TestTwoSuccessionsKeepBothFormerHosts, TestZeroDelayCannotRunAnUncommittedClientTick, TestPositiveDelayHostWaitsForCommittedTick, TestSurvivorsReadOneAuthorityDuringHandover, TestFutureReleaseIsVoidOnEverySurvivor, TestAnnouncedLeaveLoneOutcome, TestAnnouncedHostLeaveKeepsOneSurvivor, TestAnnouncedHostReturnsByTicket, TestAnnouncedHostLeaveKeepsTwoSurvivors, TestAnnouncedHostLeaveEndsAnEmptyMatch, TestPlayingDepartureSurvivesSuccession, TestUnequalFutureDeparturesConvergeAtSuccession, TestPlayingHostLossKeepsLiveClaims, TestPlayingHostLossRecordsHeldClaims, TestPlayingHostReturnsWithItsTicket, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestReplayMatchesSuccessionDuringActivityTick, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
 			std::string error;
 			passed &= test(&error);
 		}
