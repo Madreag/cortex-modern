@@ -907,11 +907,20 @@ _ENCODER_CODEC = {}
 
 
 def encoder_codec(ffmpeg):
-    """The codec the engines stream into: the GPU's h264 encoder when this box offers one, libx264 otherwise; probed once."""
+    """The available hardware encoder, with a software fallback; probed once."""
     if ffmpeg not in _ENCODER_CODEC:
         probe = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "color=black:s=320x240:d=0.2",
                                 "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True, text=True) if ffmpeg else None
         _ENCODER_CODEC[ffmpeg] = "h264_nvenc" if probe is not None and probe.returncode == 0 else "libx264"
+        if ffmpeg and sys.platform == 'darwin' and _ENCODER_CODEC[ffmpeg] == 'libx264':
+            try:
+                probe = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "color=black:s=320x240:d=0.2",
+                                        "-c:v", "h264_videotoolbox", "-q:v", "100", "-pix_fmt", "yuv420p", "-f", "null", "-"],
+                                       capture_output=True, text=True, timeout=10)
+            except subprocess.TimeoutExpired:
+                probe = None
+            if probe is not None and probe.returncode == 0:
+                _ENCODER_CODEC[ffmpeg] = 'h264_videotoolbox'
     return _ENCODER_CODEC[ffmpeg]
 
 

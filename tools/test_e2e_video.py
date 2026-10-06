@@ -169,6 +169,28 @@ def check_item_kinds(results):
     return ok
 
 
+def check_encoder_selection(results):
+    def supported(codec):
+        def probe(command, **kwargs):
+            selected = command[command.index('-c:v') + 1]
+            return SimpleNamespace(returncode=0 if selected == codec else 1)
+        return probe
+
+    with patch.object(driver, '_ENCODER_CODEC', {}), patch.object(sys, 'platform', 'darwin'), \
+         patch.object(driver.subprocess, 'run', side_effect=supported('h264_videotoolbox')) as probe:
+        selected = driver.encoder_codec('native-encoder')
+        ok = row(results, 'stream/available-native-hardware-is-selected', selected == 'h264_videotoolbox')
+        count = probe.call_count
+        ok &= row(results, 'stream/hardware-selection-is-cached', driver.encoder_codec('native-encoder') == selected and probe.call_count == count)
+    with patch.object(driver, '_ENCODER_CODEC', {}), patch.object(sys, 'platform', 'darwin'), \
+         patch.object(driver.subprocess, 'run', side_effect=supported('none')):
+        ok &= row(results, 'stream/refused-hardware-keeps-software-fallback', driver.encoder_codec('native-encoder') == 'libx264')
+    with patch.object(driver, '_ENCODER_CODEC', {}), patch.object(sys, 'platform', 'win32'), \
+         patch.object(driver.subprocess, 'run', side_effect=supported('h264_videotoolbox')) as probe:
+        ok &= row(results, 'stream/another-platform-does-not-probe-native-hardware', driver.encoder_codec('native-encoder') == 'libx264' and probe.call_count == 1)
+    return ok
+
+
 def check_streamed_capture(results, scratch):
     video = scratch / "streamed" / "video"
     video.mkdir(parents=True, exist_ok=True)
@@ -185,7 +207,7 @@ def check_streamed_capture(results, scratch):
     environment = driver.stage_peer({"name": "probe-scenario"}, {"name": "host"}, scratch / "streamed" / "stage", tokens)
     ffmpeg = driver.find_ffmpeg()
     ok &= row(results, "stream/every-peer-gets-the-encoder", (not ffmpeg) or (environment.get("CCCP_TEST_RECORD_ENCODER") == str(ffmpeg) and
-              environment.get("CCCP_TEST_RECORD_CODEC") in ("h264_nvenc", "libx264")))
+              environment.get("CCCP_TEST_RECORD_CODEC") in ("h264_nvenc", "h264_videotoolbox", "libx264")))
     return ok
 
 
@@ -2179,6 +2201,7 @@ def main():
         ok &= check_capture_binary(results, scratch)
         ok &= check_recording_health(results, scratch)
         ok &= check_screen_watches(results, scratch)
+        ok &= check_encoder_selection(results)
         ok &= check_streamed_capture(results, scratch)
         ok &= check_item_kinds(results)
         ok &= check_port_claims(results)
