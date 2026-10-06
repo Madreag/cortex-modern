@@ -387,6 +387,10 @@ namespace RTE {
 		std::array<GUICollectionBox*, c_HostOptionsPageCount> m_HostOptionsPages{};
 		int m_HostOptionsPage = 0;
 		GUILabel* m_HostOptionsStatusLabel = nullptr;
+		GUILabel* m_HostNetPortHint = nullptr;     //!< Beside the port: the default, or the router's answer for a hosted lobby.
+		GUILabel* m_HostRecRejoinLabel = nullptr;  //!< Whether this build can prove who a returning player is.
+		std::vector<std::string> m_MultiplayerControlsMissing; //!< Controls the multiplayer screens need that the menu file lacks.
+		GUILabel* m_MultiplayerOffLabel = nullptr; //!< Under the main menu: why multiplayer is off.
 		GUILabel* m_PageChatNotice = nullptr; //!< The newest lobby chat line, drawn above a host page that hides the lobby's chat band.
 		/// Moves the chat the service received into the lobby's lines, whichever sub-screen is showing.
 		void TakeLobbyChat(const NetLobbySnapshot& snapshot);
@@ -519,6 +523,12 @@ namespace RTE {
 		void CreateMainScreen();
 
 		/// Creates all the elements that compose the MetaGame notice menu screen.
+		/// Looks up a control the multiplayer screens use, noting it when the menu file has none of that name.
+		GUIControl* MultiplayerControl(const std::string& name);
+
+		/// Leaves multiplayer off for a menu file without its controls, and says so under the main menu.
+		void TurnMultiplayerOff();
+
 		void CreateMetaGameNoticeScreen();
 
 		/// Creates all the elements that compose the multiplayer menu screen.

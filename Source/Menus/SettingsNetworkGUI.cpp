@@ -152,6 +152,34 @@ namespace {
 	}
 } // namespace
 
+std::vector<std::string> SettingsNetworkGUI::MissingControls(GUIControlManager* parentControlManager) {
+	// Every control the constructor reads by name, besides the page tabs and boxes.
+	static const char* const requiredControls[]{
+	    "CollectionBoxNetworkSettings", "ButtonNetCancelRecovery", "ButtonNetNatRelay", "ButtonNetRejoin", "ButtonNetSaveDiagnostics",
+	    "ButtonNetworkAdvanced", "ButtonNetworkConnectionChange", "CheckboxNetworkAutoReconnect", "CheckboxNetworkAutoRepair",
+	    "CheckboxNetworkChatNotify", "CheckboxNetworkChatSound", "CheckboxNetworkChatVisible", "CheckboxNetworkOfferRejoin",
+	    "CheckboxNetworkPrediction", "CheckboxNetworkRecordReplays", "CheckboxNetworkToasts", "ComboMatchStatusWidget",
+	    "ComboNetworkChatScope", "ComboNetworkChatTextSize", "ComboNetworkConnection", "LabelNetAutosave", "LabelNetAutosaveInfo",
+	    "LabelNetAutosaveInterval", "LabelNetAutosavesKeptHint", "LabelNetAutosavesKeptTitle", "LabelNetDirStatus", "LabelNetDirUrlHint",
+	    "LabelNetFilesMessage", "LabelNetInternetError", "LabelNetInternetReason", "LabelNetLastHost", "LabelNetRecoveryError",
+	    "LabelNetRecoveryRecord", "LabelNetRecoveryStatus", "LabelNetworkConnectionHint", "LabelNetworkConnectionValue",
+	    "LabelNetworkFixedDelay", "LabelNetworkFixedDelayHint", "LabelNetworkIdleWait", "LabelNetworkIdleWaitHint",
+	    "LabelNetworkPathHorizon", "LabelNetworkPathHorizonHint", "LabelNetworkRelayHint", "RadioNetworkDelayAuto",
+	    "RadioNetworkDelayFixed", "TextNetworkAutosavesKept", "TextNetworkChatKey", "TextNetworkDiagDir", "TextNetworkDirPin",
+	    "TextNetworkDirUrl", "TextNetworkDisplayName", "TextNetworkFixedDelay", "TextNetworkIdleWait", "TextNetworkPathHorizon",
+	    "TextNetworkRelayAddress", "TextNetworkRelayPass", "TextNetworkRelayUser", "TextNetworkStunServers"};
+	std::vector<std::string> missing;
+	for (const char* name : requiredControls) {
+		if (!parentControlManager->GetControl(name)) missing.emplace_back(name);
+	}
+	for (const char* page : c_PageNames) {
+		for (const std::string& name : {"TabNetPage" + std::string(page), "CollectionBoxNetPage" + std::string(page)}) {
+			if (!parentControlManager->GetControl(name)) missing.push_back(name);
+		}
+	}
+	return missing;
+}
+
 SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) :
     m_GUIControlManager(parentControlManager) {
 	m_NetworkSettingsBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("CollectionBoxNetworkSettings"));

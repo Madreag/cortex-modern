@@ -1,7 +1,9 @@
 #pragma once
 
 #include <array>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace RTE {
 
@@ -26,6 +28,11 @@ namespace RTE {
 		/// Constructor method used to instantiate a SettingsNetworkGUI object in system memory and make it ready for use.
 		/// @param parentControlManager Pointer to the parent GUIControlManager which owns all the GUIControls of this SettingsNetworkGUI. Ownership is NOT transferred!
 		explicit SettingsNetworkGUI(GUIControlManager* parentControlManager);
+
+		/// Lists the controls this page reads that the menu file lacks; the page is built only when there are none.
+		/// @param parentControlManager The GUIControlManager holding the settings menu's controls.
+		/// @return The names of the missing controls, empty for a menu file of this version.
+		static std::vector<std::string> MissingControls(GUIControlManager* parentControlManager);
 #pragma endregion
 
 #pragma region Concrete Methods

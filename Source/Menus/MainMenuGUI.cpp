@@ -436,49 +436,128 @@ void MainMenuGUI::CreateMainScreen() {
 }
 
 void MainMenuGUI::CreateMultiplayerScreen() {
-	m_MainMenuScreens[MenuScreen::MultiplayerScreen] = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerScreen"));
+	// Every control the multiplayer screens use is looked up once, here, before any of them is used.
+	m_MainMenuScreens[MenuScreen::MultiplayerScreen] = dynamic_cast<GUICollectionBox*>(MultiplayerControl("MultiplayerScreen"));
+
+	m_MultiplayerLandingPanel = dynamic_cast<GUICollectionBox*>(MultiplayerControl("MultiplayerLandingPanel"));
+	m_MultiplayerHostPanel = dynamic_cast<GUICollectionBox*>(MultiplayerControl("MultiplayerHostPanel"));
+	m_MultiplayerJoinPanel = dynamic_cast<GUICollectionBox*>(MultiplayerControl("MultiplayerJoinPanel"));
+	m_MultiplayerLobbyPanel = dynamic_cast<GUICollectionBox*>(MultiplayerControl("MultiplayerLobbyPanel"));
+	m_MultiplayerModerationPanel = dynamic_cast<GUICollectionBox*>(MultiplayerControl("MultiplayerModerationPanel"));
+
+	m_MainMenuButtons[MenuButton::MultiplayerHostGameButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonMultiplayerHostGame"));
+	m_MainMenuButtons[MenuButton::MultiplayerJoinGameButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonMultiplayerJoinGame"));
+	m_MainMenuButtons[MenuButton::MultiplayerCreateButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonMultiplayerCreate"));
+	m_MainMenuButtons[MenuButton::MultiplayerConnectButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonMultiplayerConnect"));
+	m_MainMenuButtons[MenuButton::MultiplayerReadyButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonMultiplayerReady"));
+	m_MainMenuButtons[MenuButton::MultiplayerStartButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonMultiplayerStart"));
+	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonMultiplayerLeave"));
+	m_MainMenuButtons[MenuButton::MultiplayerResumeGameButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonMultiplayerResumeGame"));
+	m_MainMenuButtons[MenuButton::ResumeStartButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonResumeStart"));
+	m_MainMenuButtons[MenuButton::ResumeBackButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonResumeBack"));
+	m_MultiplayerResumePanel = dynamic_cast<GUICollectionBox*>(MultiplayerControl("MultiplayerResumePanel"));
+	m_ResumeMatchesList = dynamic_cast<GUIListBox*>(MultiplayerControl("ListResumeMatches"));
+	m_ResumeSelectedLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelResumeSelected"));
+	m_ResumeStatusLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelResumeStatus"));
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonMultiplayerReconnect"));
+	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonMultiplayerCancelReconnect"));
+	m_MainMenuButtons[MenuButton::MultiplayerWaitSlotButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonMultiplayerWaitSlot"));
+	m_MainMenuButtons[MenuButton::MultiplayerHostBackButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonHostBack"));
+	m_MainMenuButtons[MenuButton::MultiplayerJoinBackButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonJoinBack"));
+	m_MainMenuButtons[MenuButton::MultiplayerModerateButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonMultiplayerModerate"));
+	m_MainMenuButtons[MenuButton::MultiplayerModerationBackButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonModerationBack"));
+	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonSaveDiagnostics"));
+
+	m_MultiplayerNameTextBox = dynamic_cast<GUITextBox*>(MultiplayerControl("TextMultiplayerName"));
+	m_MultiplayerHostPortTextBox = dynamic_cast<GUITextBox*>(MultiplayerControl("TextHostPort"));
+	m_MultiplayerHostPlayersCombo = dynamic_cast<GUIComboBox*>(MultiplayerControl("ComboHostPlayers"));
+	m_MultiplayerHostAboutLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelHostActivityAbout"));
+	m_MultiplayerHostInputDelayTextBox = dynamic_cast<GUITextBox*>(MultiplayerControl("TextHostInputDelay"));
+	m_MultiplayerHostInputDelayPolicyLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelHostInputDelayPolicy"));
+	m_MultiplayerHostPortMapCheckbox = dynamic_cast<GUICheckbox*>(MultiplayerControl("CheckHostPortMap"));
+	m_MultiplayerHostModeCombo = dynamic_cast<GUIComboBox*>(MultiplayerControl("ComboHostMode"));
+	m_MultiplayerHostActivityCombo = dynamic_cast<GUIComboBox*>(MultiplayerControl("ComboHostActivity"));
+	m_MultiplayerHostSceneCombo = dynamic_cast<GUIComboBox*>(MultiplayerControl("ComboHostScene"));
+	m_MultiplayerHostInfoLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelHostInfo"));
+	m_MultiplayerJoinAddressTextBox = dynamic_cast<GUITextBox*>(MultiplayerControl("TextJoinAddress"));
+	m_MultiplayerJoinPortTextBox = dynamic_cast<GUITextBox*>(MultiplayerControl("TextJoinPort"));
+	m_MultiplayerLanGamesList = dynamic_cast<GUIListBox*>(MultiplayerControl("ListLanGames"));
+	m_MultiplayerLanGamesLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelLanGames"));
+	m_JoinSelectedLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelJoinSelected"));
+	m_JoinAddressDialog = dynamic_cast<GUICollectionBox*>(MultiplayerControl("JoinAddressDialog"));
+	m_MainMenuButtons[MenuButton::JoinByAddressButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonJoinByAddress"));
+	m_MainMenuButtons[MenuButton::JoinAddressGoButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonJoinAddressGo"));
+	m_MainMenuButtons[MenuButton::JoinAddressCancelButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonJoinAddressCancel"));
+	if (m_MultiplayerLanGamesLabel) {
+		m_LanGamesLabelText = m_MultiplayerLanGamesLabel->GetText();
+	}
+
+	m_MultiplayerStatusLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelMultiplayerStatus"));
+	m_MultiplayerErrorLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelMultiplayerError"));
+	m_MultiplayerLandingStatusLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelMultiplayerLandingStatus"));
+	m_MultiplayerLobbyMatchLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelLobbyMatch"));
+	m_MultiplayerLobbyMatchModeLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelLobbyMatchMode"));
+	m_LastMatchSummaryLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelLastMatchSummary"));
+	m_LastMatchDetailsLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelLastMatchDetails"));
+	m_LastMatchDialog = dynamic_cast<GUICollectionBox*>(MultiplayerControl("LastMatchDialog"));
+	m_MainMenuButtons[MenuButton::LastMatchDetailsButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonLastMatchDetails"));
+	m_MainMenuButtons[MenuButton::LastMatchCloseButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonLastMatchClose"));
+	m_ReplayBrowserPanel = dynamic_cast<GUICollectionBox*>(MultiplayerControl("ReplayBrowserPanel"));
+	m_ReplayDeleteDialog = dynamic_cast<GUICollectionBox*>(MultiplayerControl("ReplayDeleteDialog"));
+	m_ReplayList = dynamic_cast<GUIListBox*>(MultiplayerControl("ListReplays"));
+	m_ReplaySelectedLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelReplaySelected"));
+	m_ReplayStatusLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelReplayStatus"));
+	m_ReplayDeleteLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelReplayDelete"));
+	m_MainMenuButtons[MenuButton::MultiplayerReplaysButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonMultiplayerReplays"));
+	m_MainMenuButtons[MenuButton::ReplayPlayButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonReplayPlay"));
+	m_MainMenuButtons[MenuButton::ReplayDeleteButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonReplayDelete"));
+	m_MainMenuButtons[MenuButton::ReplayBackButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonReplayBack"));
+	m_MainMenuButtons[MenuButton::ReplayDeleteConfirmButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonReplayDeleteConfirm"));
+	m_MainMenuButtons[MenuButton::ReplayDeleteCancelButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonReplayDeleteCancel"));
+	for (size_t row = 0; row < m_MultiplayerLobbyPlayerLabels.size(); ++row) {
+		m_MultiplayerLobbyPlayerLabels[row] = dynamic_cast<GUILabel*>(MultiplayerControl("LabelLobbyPlayer" + std::to_string(row)));
+	}
+	m_MainMenuButtons[MenuButton::LobbyEditSetupButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonLobbyEditSetup"));
+	m_LobbyLeaveDialog = dynamic_cast<GUICollectionBox*>(MultiplayerControl("LobbyLeaveDialog"));
+	m_LobbyLeaveLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelLobbyLeave"));
+	m_MainMenuButtons[MenuButton::LobbyLeaveStayButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonLobbyLeaveStay"));
+	m_MainMenuButtons[MenuButton::LobbyLeaveConfirmButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonLobbyLeaveConfirm"));
+	m_MultiplayerLobbyPortMapLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelLobbyPortMap"));
+	m_MultiplayerLobbyPlayersHeader = dynamic_cast<GUILabel*>(MultiplayerControl("LabelLobbyPlayersHeader"));
+
+
+	m_MultiplayerModerationSummaryLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelModerationSummary"));
+	m_MultiplayerModerationStatusLabel = dynamic_cast<GUILabel*>(MultiplayerControl("LabelModerationStatus"));
+	for (size_t row = 0; row < m_ModerationSeatLabels.size(); ++row) {
+		const std::string suffix = std::to_string(row);
+		m_ModerationSeatLabels[row] = dynamic_cast<GUILabel*>(MultiplayerControl("LabelModerationSeat" + suffix));
+		m_ModerationApplicantButtons[row] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonModerationApplicant" + suffix));
+		m_ModerationWaitButtons[row] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonModerationWait" + suffix));
+		m_ModerationSubstituteButtons[row] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonModerationSubstitute" + suffix));
+		m_ModerationCancelButtons[row] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonModerationCancel" + suffix));
+	}
+
+
+	m_MainMenuButtons[MenuButton::MultiplayerLobbyOptionsButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonLobbyOptions"));
+	m_MainMenuButtons[MenuButton::MultiplayerHostOptionsButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonHostOptions"));
+	m_MainMenuButtons[MenuButton::HostOptionsBackButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonHostOptBack"));
+	m_MainMenuButtons[MenuButton::HostOptionsApplyButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonHostOptApply"));
+	m_MainMenuButtons[MenuButton::HostOptionsDefaultsButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonHostOptDefaults"));
+	m_MainMenuButtons[MenuButton::HostSeatDialogCloseButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonHostSeatDlgClose"));
+	m_MainMenuButtons[MenuButton::HostRepairNowButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonHostRecRepairNow"));
+	m_MainMenuButtons[MenuButton::HostFilesSaveDiagButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonHostFilesSaveDiag"));
+	m_MainMenuButtons[MenuButton::HostSessionEndButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonHostSessEnd"));
+	m_MainMenuButtons[MenuButton::HostSessionBannedButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonHostSessBanned"));
+	m_MainMenuButtons[MenuButton::HostBannedRemoveButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonHostBannedRemove"));
+	m_MainMenuButtons[MenuButton::HostBannedCloseButton] = dynamic_cast<GUIButton*>(MultiplayerControl("ButtonHostBannedClose"));
+	CreateHostOptionsControls();
+	// A Base menu file replaced by an older version's lacks some of these: multiplayer is then off, said in one sentence on the
+	// main screen, and nothing below touches a control that is not there.
+	if (!m_MultiplayerControlsMissing.empty()) {
+		TurnMultiplayerOff();
+		return;
+	}
 	m_MainMenuScreens[MenuScreen::MultiplayerScreen]->CenterInParent(true, false);
-
-	m_MultiplayerLandingPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerLandingPanel"));
-	m_MultiplayerHostPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerHostPanel"));
-	m_MultiplayerJoinPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerJoinPanel"));
-	m_MultiplayerLobbyPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerLobbyPanel"));
-	m_MultiplayerModerationPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerModerationPanel"));
-
-	m_MainMenuButtons[MenuButton::MultiplayerHostGameButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerHostGame"));
-	m_MainMenuButtons[MenuButton::MultiplayerJoinGameButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerJoinGame"));
-	m_MainMenuButtons[MenuButton::MultiplayerCreateButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerCreate"));
-	m_MainMenuButtons[MenuButton::MultiplayerConnectButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerConnect"));
-	m_MainMenuButtons[MenuButton::MultiplayerReadyButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerReady"));
-	m_MainMenuButtons[MenuButton::MultiplayerStartButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerStart"));
-	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerLeave"));
-	m_MainMenuButtons[MenuButton::MultiplayerResumeGameButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerResumeGame"));
-	m_MainMenuButtons[MenuButton::ResumeStartButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonResumeStart"));
-	m_MainMenuButtons[MenuButton::ResumeBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonResumeBack"));
-	m_MultiplayerResumePanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerResumePanel"));
-	m_ResumeMatchesList = dynamic_cast<GUIListBox*>(m_SubMenuScreenGUIControlManager->GetControl("ListResumeMatches"));
-	m_ResumeSelectedLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelResumeSelected"));
-	m_ResumeStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelResumeStatus"));
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerReconnect"));
-	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerCancelReconnect"));
-	m_MainMenuButtons[MenuButton::MultiplayerWaitSlotButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerWaitSlot"));
-	m_MainMenuButtons[MenuButton::MultiplayerHostBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostBack"));
-	m_MainMenuButtons[MenuButton::MultiplayerJoinBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonJoinBack"));
-	m_MainMenuButtons[MenuButton::MultiplayerModerateButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerModerate"));
-	m_MainMenuButtons[MenuButton::MultiplayerModerationBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonModerationBack"));
-	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonSaveDiagnostics"));
-
-	m_MultiplayerNameTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextMultiplayerName"));
-	m_MultiplayerHostPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostPort"));
-	m_MultiplayerHostPlayersCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostPlayers"));
-	m_MultiplayerHostAboutLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostActivityAbout"));
-	m_MultiplayerHostInputDelayTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostInputDelay"));
-	m_MultiplayerHostInputDelayPolicyLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostInputDelayPolicy"));
-	m_MultiplayerHostPortMapCheckbox = dynamic_cast<GUICheckbox*>(m_SubMenuScreenGUIControlManager->GetControl("CheckHostPortMap"));
-	m_MultiplayerHostModeCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostMode"));
-	m_MultiplayerHostActivityCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostActivity"));
-	m_MultiplayerHostSceneCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostScene"));
-	m_MultiplayerHostInfoLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostInfo"));
 	if (m_MultiplayerHostModeCombo) {
 		m_MultiplayerHostModeCombo->ClearList();
 		m_MultiplayerHostModeCombo->AddItem(NetMatchConfigUtil::ModeLabel(NetMatchMode::PvPSkirmish));
@@ -487,52 +566,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 		m_MultiplayerHostModeCombo->SetSelectedIndex(0);
 	}
 	ApplyMultiplayerHostActivity();
-	m_MultiplayerJoinAddressTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinAddress"));
-	m_MultiplayerJoinPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinPort"));
-	m_MultiplayerLanGamesList = dynamic_cast<GUIListBox*>(m_SubMenuScreenGUIControlManager->GetControl("ListLanGames"));
-	m_MultiplayerLanGamesLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLanGames"));
-	m_JoinSelectedLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelJoinSelected"));
-	m_JoinAddressDialog = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("JoinAddressDialog"));
-	m_MainMenuButtons[MenuButton::JoinByAddressButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonJoinByAddress"));
-	m_MainMenuButtons[MenuButton::JoinAddressGoButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonJoinAddressGo"));
-	m_MainMenuButtons[MenuButton::JoinAddressCancelButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonJoinAddressCancel"));
-	if (m_MultiplayerLanGamesLabel) {
-		m_LanGamesLabelText = m_MultiplayerLanGamesLabel->GetText();
-	}
-
-	m_MultiplayerStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelMultiplayerStatus"));
-	m_MultiplayerErrorLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelMultiplayerError"));
-	m_MultiplayerLandingStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelMultiplayerLandingStatus"));
-	m_MultiplayerLobbyMatchLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyMatch"));
-	m_MultiplayerLobbyMatchModeLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyMatchMode"));
-	m_LastMatchSummaryLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLastMatchSummary"));
-	m_LastMatchDetailsLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLastMatchDetails"));
-	m_LastMatchDialog = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("LastMatchDialog"));
-	m_MainMenuButtons[MenuButton::LastMatchDetailsButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonLastMatchDetails"));
-	m_MainMenuButtons[MenuButton::LastMatchCloseButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonLastMatchClose"));
-	m_ReplayBrowserPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("ReplayBrowserPanel"));
-	m_ReplayDeleteDialog = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("ReplayDeleteDialog"));
-	m_ReplayList = dynamic_cast<GUIListBox*>(m_SubMenuScreenGUIControlManager->GetControl("ListReplays"));
-	m_ReplaySelectedLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelReplaySelected"));
-	m_ReplayStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelReplayStatus"));
-	m_ReplayDeleteLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelReplayDelete"));
-	m_MainMenuButtons[MenuButton::MultiplayerReplaysButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerReplays"));
-	m_MainMenuButtons[MenuButton::ReplayPlayButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonReplayPlay"));
-	m_MainMenuButtons[MenuButton::ReplayDeleteButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonReplayDelete"));
-	m_MainMenuButtons[MenuButton::ReplayBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonReplayBack"));
-	m_MainMenuButtons[MenuButton::ReplayDeleteConfirmButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonReplayDeleteConfirm"));
-	m_MainMenuButtons[MenuButton::ReplayDeleteCancelButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonReplayDeleteCancel"));
 	m_ReplayList->SetHighlightAsIfAlwaysFocused(true);
-	for (size_t row = 0; row < m_MultiplayerLobbyPlayerLabels.size(); ++row) {
-		m_MultiplayerLobbyPlayerLabels[row] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer" + std::to_string(row)));
-	}
-	m_MainMenuButtons[MenuButton::LobbyEditSetupButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonLobbyEditSetup"));
-	m_LobbyLeaveDialog = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("LobbyLeaveDialog"));
-	m_LobbyLeaveLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyLeave"));
-	m_MainMenuButtons[MenuButton::LobbyLeaveStayButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonLobbyLeaveStay"));
-	m_MainMenuButtons[MenuButton::LobbyLeaveConfirmButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonLobbyLeaveConfirm"));
-	m_MultiplayerLobbyPortMapLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPortMap"));
-	m_MultiplayerLobbyPlayersHeader = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayersHeader"));
 
 	m_MultiplayerLobbyPlayerRowFont = m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontLarge.png");
 	m_MultiplayerLobbyPlayerRowFallbackFont = m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png");
@@ -582,17 +616,6 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 		m_MultiplayerLobbyVersionLabel->SetVisible(false);
 	}
 
-	m_MultiplayerModerationSummaryLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelModerationSummary"));
-	m_MultiplayerModerationStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelModerationStatus"));
-	for (size_t row = 0; row < m_ModerationSeatLabels.size(); ++row) {
-		const std::string suffix = std::to_string(row);
-		m_ModerationSeatLabels[row] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelModerationSeat" + suffix));
-		m_ModerationApplicantButtons[row] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonModerationApplicant" + suffix));
-		m_ModerationWaitButtons[row] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonModerationWait" + suffix));
-		m_ModerationSubstituteButtons[row] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonModerationSubstitute" + suffix));
-		m_ModerationCancelButtons[row] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonModerationCancel" + suffix));
-	}
-
 	m_MultiplayerNameTextBox->SetText(SavedMultiplayerName());
 	m_MultiplayerNameTextBox->SetMaxTextLength(24);
 	m_MultiplayerJoinAddressTextBox->SetText("");
@@ -612,20 +635,30 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerJoinPortTextBox->SetNumericOnly(true);
 	m_MultiplayerJoinPortTextBox->SetMaxNumericValue(65535);
 	m_MultiplayerJoinPortTextBox->SetMaxTextLength(5);
+}
 
-	m_MainMenuButtons[MenuButton::MultiplayerLobbyOptionsButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonLobbyOptions"));
-	m_MainMenuButtons[MenuButton::MultiplayerHostOptionsButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostOptions"));
-	m_MainMenuButtons[MenuButton::HostOptionsBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostOptBack"));
-	m_MainMenuButtons[MenuButton::HostOptionsApplyButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostOptApply"));
-	m_MainMenuButtons[MenuButton::HostOptionsDefaultsButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostOptDefaults"));
-	m_MainMenuButtons[MenuButton::HostSeatDialogCloseButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostSeatDlgClose"));
-	m_MainMenuButtons[MenuButton::HostRepairNowButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostRecRepairNow"));
-	m_MainMenuButtons[MenuButton::HostFilesSaveDiagButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostFilesSaveDiag"));
-	m_MainMenuButtons[MenuButton::HostSessionEndButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostSessEnd"));
-	m_MainMenuButtons[MenuButton::HostSessionBannedButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostSessBanned"));
-	m_MainMenuButtons[MenuButton::HostBannedRemoveButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostBannedRemove"));
-	m_MainMenuButtons[MenuButton::HostBannedCloseButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostBannedClose"));
-	CreateHostOptionsControls();
+GUIControl* MainMenuGUI::MultiplayerControl(const std::string& name) {
+	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(name);
+	if (!control) m_MultiplayerControlsMissing.push_back(name);
+	return control;
+}
+
+void MainMenuGUI::TurnMultiplayerOff() {
+	std::string missing;
+	for (size_t i = 0; i < m_MultiplayerControlsMissing.size() && i < 4; ++i) missing += (i ? ", " : "") + m_MultiplayerControlsMissing[i];
+	System::PrintDiagnosticLine("[menu] multiplayer is off: Base.rte/GUIs/MainMenuSubMenuGUI.ini lacks " + std::to_string(m_MultiplayerControlsMissing.size()) +
+	                            " of its controls (" + missing + (m_MultiplayerControlsMissing.size() > 4 ? ", ..." : "") + ")");
+	GUICollectionBox* mainScreen = m_MainMenuScreens[MenuScreen::MainScreen];
+	m_MultiplayerOffLabel = dynamic_cast<GUILabel*>(m_MainMenuScreenGUIControlManager->AddControl("LabelMultiplayerOff", "LABEL", nullptr, 0, 0, 360, 40));
+	if (!m_MultiplayerOffLabel) return;
+	if (GUIFont* small = m_MainMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png")) m_MultiplayerOffLabel->SetFont(small);
+	m_MultiplayerOffLabel->SetHAlignment(GUIFont::Centre);
+	m_MultiplayerOffLabel->SetVAlignment(GUIFont::Top);
+	m_MultiplayerOffLabel->SetText("Multiplayer is off: this game's menu files (Base.rte/GUIs) are from an older version. Reinstall the game, or remove the mod that replaced them.");
+	const int width = std::min(360, m_RootBoxMaxWidth - 20);
+	m_MultiplayerOffLabel->Resize(width, m_MultiplayerOffLabel->GetTextHeight() + 4);
+	const int below = mainScreen ? mainScreen->GetYPos() + mainScreen->GetHeight() + 6 : g_WindowMan.GetResY() / 2;
+	m_MultiplayerOffLabel->SetPositionAbs((m_RootBoxMaxWidth - width) / 2, std::min(below, g_WindowMan.GetResY() - m_MultiplayerOffLabel->GetHeight() - 30));
 }
 
 void MainMenuGUI::CreateMetaGameNoticeScreen() {
@@ -686,6 +719,10 @@ void MainMenuGUI::HideAllScreens() {
 }
 
 void MainMenuGUI::SetActiveMenuScreen(MenuScreen screenToShow, bool playButtonPressSound) {
+	if (screenToShow == MenuScreen::MultiplayerScreen && !m_MultiplayerControlsMissing.empty()) {
+		if (playButtonPressSound) g_GUISound.BackButtonPressSound()->Play();
+		return;
+	}
 	if (screenToShow != m_ActiveMenuScreen) {
 		HideAllScreens();
 		m_ActiveMenuScreen = screenToShow;
@@ -1683,7 +1720,7 @@ void MainMenuGUI::ApplyMultiplayerHostActivity() {
 // next one. The panel edits a complete NetMatchConfig draft; Apply stages it through the service. ----
 
 void MainMenuGUI::CreateHostOptionsControls() {
-	const auto get = [this](const char* name) { return m_SubMenuScreenGUIControlManager->GetControl(name); };
+	const auto get = [this](const char* name) { return MultiplayerControl(name); };
 	m_HostOptionsPanel = dynamic_cast<GUICollectionBox*>(get("MultiplayerHostOptionsPanel"));
 	m_HostOptionsTitle = dynamic_cast<GUILabel*>(get("LabelHostOptionsTitle"));
 	static const char* tabNames[c_HostOptionsPageCount] = {"TabHostPageSeats", "TabHostPageRules", "TabHostPageConnection", "TabHostPageTiming", "TabHostPageRecovery", "TabHostPageFiles", "TabHostPageSession"};
@@ -1694,6 +1731,8 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		m_HostOptionsPages[i] = dynamic_cast<GUICollectionBox*>(get(pageNames[i]));
 	}
 	m_HostOptionsStatusLabel = dynamic_cast<GUILabel*>(get("LabelHostOptStatus"));
+	m_HostNetPortHint = dynamic_cast<GUILabel*>(get("LabelHostNetPortHint"));
+	m_HostRecRejoinLabel = dynamic_cast<GUILabel*>(get("LabelHostRecRejoin"));
 	// Two lines beside the buttons; a longer status scrolls through them rather than run out of the panel.
 	if (m_HostOptionsStatusLabel) {
 		m_HostOptionsStatusLabel->SetVAlignment(GUIFont::Top);
@@ -2572,7 +2611,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	if (m_MultiplayerHostPortMapCheckbox) m_MultiplayerHostPortMapCheckbox->SetCheck(m_HostComputerDraft.portMap ? GUICheckbox::Checked : GUICheckbox::Unchecked);
 	HostOptSetEditable(m_MultiplayerHostPortMapCheckbox, editable);
 	if (m_HostNetPortBox && !HostOptBoxFocused(m_HostNetPortBox)) m_HostNetPortBox->SetText(m_HostComputerDraft.port);
-	if (GUILabel* portHint = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostNetPortHint"))) {
+	if (GUILabel* portHint = m_HostNetPortHint) {
 		// The router's own answer for the lobby being hosted takes the default's place beside the port, which a live lobby cannot change.
 		const std::string hint = snapshot.portMap.empty() ? "default 41010" : snapshot.portMap;
 		if (portHint->GetText() != hint) portHint->SetText(hint);
