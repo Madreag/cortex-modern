@@ -98,6 +98,15 @@ namespace RTE {
 				return nullptr;
 			}
 			auto result = std::make_unique<FrameReadbackContext>();
+#if defined(__APPLE__)
+			if (!result->CreateCGL(error)) return nullptr;
+			return result;
+#elif defined(__linux__)
+			if (void* display = SDL_EGL_GetCurrentDisplay()) {
+				if (!result->CreateEGL(display, error)) return nullptr;
+				return result;
+			}
+#endif
 			SDL_Window* originalWindow = SDL_GL_GetCurrentWindow();
 			SDL_GLContext originalContext = SDL_GL_GetCurrentContext();
 			int originalShare = 0;
@@ -117,6 +126,13 @@ namespace RTE {
 		}
 
 		~FrameReadbackContext() {
+#if defined(__APPLE__)
+			if (m_CGLContext) m_CGLDestroy(m_CGLContext);
+			if (m_CGLLibrary) SDL_UnloadObject(m_CGLLibrary);
+#elif defined(__linux__)
+			if (m_EGLContext) m_EGLDestroyContext(m_EGLDisplay, m_EGLContext);
+			if (m_EGLSurface) m_EGLDestroySurface(m_EGLDisplay, m_EGLSurface);
+#endif
 			if (m_Context) SDL_GL_DestroyContext(m_Context);
 			if (m_Window) SDL_DestroyWindow(m_Window);
 		}
@@ -184,10 +200,7 @@ namespace RTE {
 
 		bool Complete(QueuedTextureReadback& frame, std::span<unsigned char> rgb, std::string& error) {
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			if (!SDL_GL_MakeCurrent(m_Window, m_Context)) {
-				error = "writer capture context: " + std::string(SDL_GetError());
-				return false;
-			}
+			if (!MakeWriterCurrent(error)) return false;
 			bool done = false;
 			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(90);
 			while (std::chrono::steady_clock::now() < deadline) {
@@ -219,11 +232,118 @@ namespace RTE {
 				error += " queued readback cleanup GL error " + std::to_string(cleanupError);
 				done = false;
 			}
-			if (!SDL_GL_MakeCurrent(nullptr, nullptr) && done) { error = "writer capture context release: " + std::string(SDL_GetError()); done = false; }
+			if (!ReleaseWriterContext(error)) done = false;
 			return done;
 		}
 
 	private:
+#if defined(__APPLE__)
+		bool CreateCGL(std::string& error) {
+			// A buffer-only context needs no NSView or display link. Keep the
+			// render context's exact pixel format and share group without creating
+			// another Cocoa drawable or changing SDL's current-context bookkeeping.
+			m_CGLLibrary = SDL_LoadObject("/System/Library/Frameworks/OpenGL.framework/OpenGL");
+			if (!m_CGLLibrary) { error = "CGL readback framework: " + std::string(SDL_GetError()); return false; }
+			auto getCurrent = reinterpret_cast<void* (*)()>(SDL_LoadFunction(m_CGLLibrary, "CGLGetCurrentContext"));
+			auto getFormat = reinterpret_cast<void* (*)(void*)>(SDL_LoadFunction(m_CGLLibrary, "CGLGetPixelFormat"));
+			auto create = reinterpret_cast<int (*)(void*, void*, void**)>(SDL_LoadFunction(m_CGLLibrary, "CGLCreateContext"));
+			m_CGLSetCurrent = reinterpret_cast<int (*)(void*)>(SDL_LoadFunction(m_CGLLibrary, "CGLSetCurrentContext"));
+			m_CGLDestroy = reinterpret_cast<int (*)(void*)>(SDL_LoadFunction(m_CGLLibrary, "CGLDestroyContext"));
+			if (!getCurrent || !getFormat || !create || !m_CGLSetCurrent || !m_CGLDestroy) {
+				error = "CGL shared readback functions: " + std::string(SDL_GetError()); return false;
+			}
+			void* parent = getCurrent();
+			void* format = parent ? getFormat(parent) : nullptr;
+			if (!format) { error = "no current CGL pixel format for shared readback"; return false; }
+			const int status = create(format, parent, &m_CGLContext);
+			if (status || !m_CGLContext) { error = "create CGL readback context: " + std::to_string(status); return false; }
+			return true;
+		}
+		SDL_SharedObject* m_CGLLibrary = nullptr;
+		void* m_CGLContext = nullptr;
+		int (*m_CGLSetCurrent)(void*) = nullptr;
+		int (*m_CGLDestroy)(void*) = nullptr;
+#elif defined(__linux__)
+		template <typename Function> static Function EGLFunction(const char* name) {
+			return reinterpret_cast<Function>(SDL_EGL_GetProcAddress(name));
+		}
+		bool CreateEGL(void* display, std::string& error) {
+			m_EGLDisplay = display;
+			auto getCurrent = EGLFunction<void* (*)()>("eglGetCurrentContext");
+			auto create = EGLFunction<void* (*)(void*, void*, void*, const int*)>("eglCreateContext");
+			auto createSurface = EGLFunction<void* (*)(void*, void*, const int*)>("eglCreatePbufferSurface");
+			m_EGLDestroyContext = EGLFunction<unsigned int (*)(void*, void*)>("eglDestroyContext");
+			m_EGLDestroySurface = EGLFunction<unsigned int (*)(void*, void*)>("eglDestroySurface");
+			m_EGLMakeCurrent = EGLFunction<unsigned int (*)(void*, void*, void*, void*)>("eglMakeCurrent");
+			m_EGLBindAPI = EGLFunction<unsigned int (*)(unsigned int)>("eglBindAPI");
+			m_EGLQueryAPI = EGLFunction<unsigned int (*)()>("eglQueryAPI");
+			m_EGLGetError = EGLFunction<unsigned int (*)()>("eglGetError");
+			if (!getCurrent || !create || !createSurface || !m_EGLDestroyContext || !m_EGLDestroySurface ||
+			    !m_EGLMakeCurrent || !m_EGLBindAPI || !m_EGLQueryAPI || !m_EGLGetError) {
+				error = "EGL shared readback functions: " + std::string(SDL_GetError()); return false;
+			}
+			void* parent = getCurrent();
+			void* config = SDL_EGL_GetCurrentConfig();
+			if (!parent || !config) { error = "no current EGL context/config for shared readback"; return false; }
+			GLint major = 0, minor = 0, profile = 0;
+			glad_glGetIntegerv(GL_MAJOR_VERSION, &major);
+			glad_glGetIntegerv(GL_MINOR_VERSION, &minor);
+			glad_glGetIntegerv(GL_CONTEXT_PROFILE_MASK, &profile);
+			// EGL_KHR_create_context / EGL 1.5 attributes preserve the parent
+			// desktop GL version/profile. The private 1x1 pbuffer is never shown.
+			const int contextAttributes[]{0x3098, major, 0x30FB, minor, 0x30FD, profile, 0x3038};
+			const int surfaceAttributes[]{0x3057, 1, 0x3056, 1, 0x3038};
+			m_EGLContext = create(display, config, parent, contextAttributes);
+			if (!m_EGLContext) { error = "create EGL readback context: " + std::to_string(m_EGLGetError()); return false; }
+			m_EGLSurface = createSurface(display, config, surfaceAttributes);
+			if (!m_EGLSurface) { error = "create EGL readback pbuffer: " + std::to_string(m_EGLGetError()); return false; }
+			return true;
+		}
+		void* m_EGLDisplay = nullptr;
+		void* m_EGLContext = nullptr;
+		void* m_EGLSurface = nullptr;
+		unsigned int m_PreviousEGLAPI = 0;
+		unsigned int (*m_EGLDestroyContext)(void*, void*) = nullptr;
+		unsigned int (*m_EGLDestroySurface)(void*, void*) = nullptr;
+		unsigned int (*m_EGLMakeCurrent)(void*, void*, void*, void*) = nullptr;
+		unsigned int (*m_EGLBindAPI)(unsigned int) = nullptr;
+		unsigned int (*m_EGLQueryAPI)() = nullptr;
+		unsigned int (*m_EGLGetError)() = nullptr;
+#endif
+		bool MakeWriterCurrent(std::string& error) {
+#if defined(__APPLE__)
+			const int status = m_CGLSetCurrent(m_CGLContext);
+			if (status) { error = "writer CGL readback context: " + std::to_string(status); return false; }
+			return true;
+#elif defined(__linux__)
+			if (m_EGLContext) {
+				m_PreviousEGLAPI = m_EGLQueryAPI();
+				if (!m_EGLBindAPI(0x30A2) || !m_EGLMakeCurrent(m_EGLDisplay, m_EGLSurface, m_EGLSurface, m_EGLContext)) {
+					error = "writer EGL readback context: " + std::to_string(m_EGLGetError());
+					m_EGLBindAPI(m_PreviousEGLAPI); return false;
+				}
+				return true;
+			}
+#endif
+			if (!SDL_GL_MakeCurrent(m_Window, m_Context)) { error = "writer capture context: " + std::string(SDL_GetError()); return false; }
+			return true;
+		}
+		bool ReleaseWriterContext(std::string& error) {
+#if defined(__APPLE__)
+			const int status = m_CGLSetCurrent(nullptr);
+			if (status) { error += " writer CGL context release: " + std::to_string(status); return false; }
+			return true;
+#elif defined(__linux__)
+			if (m_EGLContext) {
+				const bool released = m_EGLMakeCurrent(m_EGLDisplay, nullptr, nullptr, nullptr);
+				const bool restored = m_EGLBindAPI(m_PreviousEGLAPI);
+				if (!released || !restored) { error += " writer EGL context release: " + std::to_string(m_EGLGetError()); return false; }
+				return true;
+			}
+#endif
+			if (!SDL_GL_MakeCurrent(nullptr, nullptr)) { error += " writer capture context release: " + std::string(SDL_GetError()); return false; }
+			return true;
+		}
 		SDL_Window* m_Window = nullptr;
 		SDL_GLContext m_Context = nullptr;
 		std::mutex m_Mutex;
