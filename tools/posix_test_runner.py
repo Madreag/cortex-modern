@@ -582,6 +582,9 @@ class IsolatedRun:
             self.env["SDL_VIDEODRIVER"] = "cocoa"
             self.env["SDL_MAC_BACKGROUND_APP"] = "1"
             env_set.update(SDL_VIDEODRIVER="cocoa", SDL_MAC_BACKGROUND_APP="1")
+            if "-record-video" in self.argv:
+                self.env["SDL_MAC_OPENGL_ASYNC_DISPATCH"] = "1"
+                env_set["SDL_MAC_OPENGL_ASYNC_DISPATCH"] = "1"
         # A FATAL writes the minidump at this cwd-relative path, beside AbortCode.txt.
         if "CC_TEST_CRASH_DUMP" not in extra:
             self.env.setdefault("CC_TEST_CRASH_DUMP", "crash.dmp")

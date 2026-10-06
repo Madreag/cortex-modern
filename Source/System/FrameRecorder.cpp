@@ -1,5 +1,6 @@
 #include "FrameRecorder.h"
 #include "FrameCaptureStream.h"
+#include "GLFrameReadback.h"
 
 #include "System.h"
 
@@ -240,7 +241,6 @@ namespace RTE {
 		if (!m_Events) return refuse("could not open the event index in " + directory);
 		m_DroppedIndex.open(std::filesystem::path(directory) / "dropped.jsonl", std::ios::out);
 		if (!m_DroppedIndex) return refuse("could not open the dropped-frame index in " + directory);
-
 		m_Directory = directory;
 		m_FramesDirectory = frames.string();
 		m_Fps = fps;
@@ -308,6 +308,20 @@ namespace RTE {
 		return m_Staging.data();
 	}
 
+	bool FrameRecorder::StageTextureReadback(unsigned int texture, int width, int height, std::string& error) {
+		if (!m_StagingHeld) { error = "no admitted frame"; return false; }
+		m_StagedTextureReadback = true;
+		if (!m_ReadbackContext) m_ReadbackContext = FrameReadbackContext::Create(error);
+		if (!m_ReadbackContext) return false;
+		m_StagedReadback = m_ReadbackContext->Submit(texture, width, height, error);
+		return m_StagedReadback != nullptr;
+	}
+
+	std::string FrameRecorder::ReadbackError() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_ReadbackError;
+	}
+
 	void FrameRecorder::EndFrame(const FrameMeta& meta) {
 		if (!m_StagingHeld) return;
 		m_StagingHeld = false;
@@ -317,6 +331,9 @@ namespace RTE {
 		}
 		QueuedFrame frame;
 		frame.pixels = std::move(m_Staging);
+		frame.readback = std::move(m_StagedReadback);
+		frame.textureReadback = m_StagedTextureReadback;
+		m_StagedTextureReadback = false;
 		frame.meta = meta;
 		frame.slot = m_StagingSlot;
 		{
@@ -347,7 +364,20 @@ namespace RTE {
 			// The writer's processor time is the recorder's cost: a write blocked on the encoder's pipe or the disk takes nothing from a frame.
 			const auto wallBefore = profileReadback ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			const int64_t cpuBefore = ThreadCpuNanoseconds();
-			std::string row = m_EncoderPath.empty() ? WriteFrame(frame) : EncodeFrame(frame);
+			std::string readbackError;
+			const bool pixelsReady = !frame.textureReadback || (frame.readback && m_ReadbackContext->Complete(*frame.readback, frame.pixels, readbackError));
+			if (frame.textureReadback && !frame.readback) readbackError = "admitted texture frame has no queued pixel transfer";
+			std::string row;
+			if (pixelsReady) row = m_EncoderPath.empty() ? WriteFrame(frame) : EncodeFrame(frame);
+			else {
+				row = nlohmann::json({{"frame", frame.index}, {"wall_ms", frame.meta.wallMS}, {"sim_tick", frame.meta.simTick},
+				    {"screen", frame.meta.screen}, {"service_state", frame.meta.serviceState}, {"resolution", {frame.meta.width, frame.meta.height}},
+				    {"saved", false}, {"readback_error", readbackError}}).dump();
+				System::PrintDiagnosticErrorLine("[record-video] pixel readback failed: " + readbackError);
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				if (m_ReadbackError.empty()) m_ReadbackError = readbackError;
+				++m_WriteFailures;
+			}
 			const int64_t cpuNS = ThreadCpuNanoseconds() - cpuBefore;
 			HarnessCost::Charge(HarnessCost::Recorder, cpuNS);
 			if (profileReadback) {
@@ -473,6 +503,9 @@ namespace RTE {
 		m_Finished = true;
 		if (m_StagingHeld) {
 			m_StagingHeld = false;
+			if (m_StagedReadback) FrameReadbackContext::Discard(*m_StagedReadback);
+			m_StagedReadback.reset();
+			m_StagedTextureReadback = false;
 			m_Staging.clear();
 		}
 		{
@@ -484,6 +517,7 @@ namespace RTE {
 			if (writer.joinable()) writer.join();
 		}
 		m_Writers.clear();
+		m_ReadbackContext.reset();
 		if (m_Encoder) {
 			m_EncoderExit = m_Encoder->Close(120000);
 			m_Encoder.reset();

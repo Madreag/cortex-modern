@@ -1345,6 +1345,7 @@ int FrameMan::SaveBitmap(SaveBitmapMode modeToSave, const std::string& nameBase,
 void FrameMan::RecordVideoFrame(const std::string& screen, const std::string& serviceState) {
 	FrameRecorder& recorder = FrameRecorder::Instance();
 	if (!recorder.Enabled()) return;
+	if (const std::string error = recorder.ReadbackError(); !error.empty()) RTEAbort("Frame recorder texture readback failed: " + error);
 	const int width = g_WindowMan.GetResX();
 	const int height = g_WindowMan.GetResY();
 	if (width <= 0 || height <= 0) return;
@@ -1358,15 +1359,11 @@ void FrameMan::RecordVideoFrame(const std::string& screen, const std::string& se
 
 	std::string readbackError;
 	const auto screenBuffer = g_WindowMan.GetScreenBuffer();
-	if (!screenBuffer || !ReadTextureRGB(screenBuffer->GetColorTexture().id, width, height,
-	                                    {pixels, pitch * static_cast<std::size_t>(height)}, readbackError)) {
+	if (!screenBuffer || !recorder.StageTextureReadback(screenBuffer->GetColorTexture().id, width, height, readbackError)) {
 		RTEAbort("Frame recorder texture readback failed: " + readbackError);
 	}
 	const Uint64 beforeFlip = profileReadback ? SDL_GetTicksNS() : 0;
-	// The texture is bottom-up and the PNG is not.
-	for (int y = 0; y < height / 2; ++y) {
-		std::swap_ranges(pixels + y * pitch, pixels + (y + 1) * pitch, pixels + (height - y - 1) * pitch);
-	}
+	// The writer completes the GPU copy and produces the same top-down RGB rows.
 	const Uint64 beforeQueue = profileReadback ? SDL_GetTicksNS() : 0;
 
 	FrameRecorder::FrameMeta meta;

@@ -11,12 +11,13 @@ import posix_test_runner
 
 
 class CaptureEnvironmentTest(unittest.TestCase):
-    def construct(self, platform, extra=None):
+    def construct(self, platform, extra=None, recording=False):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             with patch.object(posix_test_runner.sys, "platform", platform), \
                  patch.object(posix_test_runner, "hop_mode", return_value=False):
-                run = posix_test_runner.IsolatedRun(["dummy", "-headless"], root, root / "out", env=extra)
+                args = ["dummy", "-headless", *(["-record-video", str(root / "video")] if recording else [])]
+                run = posix_test_runner.IsolatedRun(args, root, root / "out", env=extra)
                 try:
                     return dict(run.env), dict(run.record["env_set"])
                 finally:
@@ -40,6 +41,17 @@ class CaptureEnvironmentTest(unittest.TestCase):
         self.assertEqual(env["SDL_VIDEODRIVER"], "cocoa")
         self.assertEqual(env["SDL_MAC_BACKGROUND_APP"], "1")
         self.assertEqual(recorded["SDL_MAC_BACKGROUND_APP"], "1")
+
+    def test_recording_context_updates_do_not_wait_for_the_main_thread(self):
+        env, recorded = self.construct("darwin", recording=True)
+        self.assertEqual(env["SDL_MAC_OPENGL_ASYNC_DISPATCH"], "1")
+        self.assertEqual(recorded["SDL_MAC_OPENGL_ASYNC_DISPATCH"], "1")
+
+    def test_other_runs_keep_the_context_dispatch_policy(self):
+        with patch.dict(os.environ, {"SDL_MAC_OPENGL_ASYNC_DISPATCH": "0"}):
+            env, recorded = self.construct("darwin")
+        self.assertEqual(env["SDL_MAC_OPENGL_ASYNC_DISPATCH"], "0")
+        self.assertNotIn("SDL_MAC_OPENGL_ASYNC_DISPATCH", recorded)
 
 
 if __name__ == "__main__":
