@@ -820,7 +820,11 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// Elapsed timer fields change even when their object's write stamp holds, so the scene keeps a cache of its own.
 	captureAside("scene", {}, [&] {
 		const auto sceneStart = std::chrono::steady_clock::now();
-		image->scene = scene->CaptureSavedScene(fileName);
+		// A loaded archive already gave its scene and terrain a saved identity. A new
+		// storage filename must not replace that identity when the same world is saved again.
+		const SLTerrain* terrain = scene->GetTerrain();
+		const std::string& sceneName = terrain->GetModuleID() == g_PresetMan.GetModuleID(c_UserScriptedSavesModuleName) ? terrain->GetPresetName() : fileName;
+		image->scene = scene->CaptureSavedScene(sceneName);
 		image->movableUs = Scene::LastObjectCaptureUs();
 		image->sceneUs = since(sceneStart);
 	}, sceneCache.get());
@@ -2289,6 +2293,11 @@ bool ActivityMan::RestartActivityCandidate() {
 	}
 	if (restoresSnapshot && activityStarted >= 0 && !m_PendingCheckpoint.sceneRuntime.empty() && (!g_SceneMan.GetScene() || !g_SceneMan.GetScene()->LoadRuntimeCheckpoint(m_PendingCheckpoint.sceneRuntime))) {
 		g_ConsoleMan.PrintString("ERROR: the saved scene runtime did not restore"); activityStarted = -1;
+	}
+	if (restoresSnapshot && activityStarted >= 0 && !m_LockstepRelaunchInProgress && !m_PendingCheckpoint.sceneRuntime.empty()) {
+		// An ordinary load keeps the checkpoint's own seats and views. Only a network
+		// relaunch maps them to the live roster; StartActivity's provisional map is discarded.
+		m_Activity->ClearPlayers(false);
 	}
 	if (restoresSnapshot && activityStarted >= 0 && !m_Activity->ApplyPendingCheckpoint()) {
 		g_ConsoleMan.PrintString("ERROR: the saved activity runtime state did not restore");
