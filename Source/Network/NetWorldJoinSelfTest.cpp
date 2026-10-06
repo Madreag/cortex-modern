@@ -8571,6 +8571,69 @@ namespace RTE {
 			std::filesystem::remove_all(scratch, ignored);
 			return false;
 		}
+		const auto hostLeaveOffer = [&]() {
+			const std::string previousPath = NetMatchService::s_TicketStorePath;
+			const bool previousAdmission = NetMatchService::s_AdmissionEnabled;
+			struct Restore {
+				std::string path; bool admission;
+				~Restore() { NetMatchService::SetTicketStorePath(path); NetMatchService::SetAdmissionEnabled(admission); }
+			} restore{previousPath, previousAdmission};
+			const auto ticketPath = scratch / "announced-host.ticket";
+			NetMatchService::SetTicketStorePath(ticketPath.string());
+			NetMatchService::SetAdmissionEnabled(true);
+			NetSeatAuthRegistry registry;
+			NetMatchService leaver;
+			LoopbackTransport hostWire, survivorWire;
+			NetLockstepCoordinator survivor;
+			NetMatchConfig match = NetMatchConfigUtil::MakeDefault(0xFAF4);
+			match.successorOrder = {2}; match.migrationPeers = {{1, 47437, {"loopback"}}, {2, 47438, {"loopback"}}};
+			NetLockstepConfig config;
+			config.sessionId = match.sessionId; config.roundId = 1; config.startFrame = 1; config.localPeerId = 1; config.peerCount = 2;
+			config.matchConfig = match; config.remoteTransportPeerIds = {{2, 1}}; config.relayToOtherPeers = true; config.timeoutMs = 30000;
+			config.migrationKey.fill(0x39); config.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); };
+			leaver.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+			if (!hostWire.StartHost(47436, &why) || !survivorWire.Connect("loopback", 47436, &why) || !leaver.m_Coordinator->Start(hostWire, config, &why)) return false;
+			config.localPeerId = 2; config.remoteTransportPeerIds = {{1, 1}}; config.relayToOtherPeers = false;
+			if (!survivor.Start(survivorWire, config, &why)) return false;
+			uint64_t produced = 1;
+			for (uint64_t now = 0; now < 1000 && leaver.m_Coordinator->GetResumeFrame() < 15; now += 5) {
+				if (leaver.m_Coordinator->IsRunning() && survivor.IsRunning()) {
+					if (!leaver.m_Coordinator->QueueLocalInput(produced, {}, {}, &why) || !survivor.QueueLocalInput(produced, {}, {}, &why)) return false;
+					++produced;
+				}
+				leaver.m_Coordinator->Tick(now); survivor.Tick(now);
+				for (auto* peer: {leaver.m_Coordinator.get(), &survivor}) for (NetLockstepReadyFrame frame; peer->PopReadyFrame(frame);) peer->FinishSimulationTick(frame.frame);
+				hostWire.AdvanceTimeMs(5); survivorWire.AdvanceTimeMs(5);
+			}
+			if (!leaver.m_Coordinator->IsRunning() || leaver.m_Coordinator->GetResumeFrame() < 15) { why = "the leaver's service has no running round"; return false; }
+			if (!registry.BeginHostedSession()) { why = "the leaver's ticket registry did not start"; return false; }
+			leaver.m_ReconnectHost.Configure(&registry, match.sessionId, MakeH4Identity());
+			leaver.m_ReconnectHost.SetSeatTable(NetH4BuildSeatTable(match), match.mode); leaver.m_ReconnectHost.SetLiveMatch(true);
+			NetH4TicketRecord ticket;
+			if (!leaver.m_ReconnectHost.EnsureLocalTicket(ticket)) { why = "the leaver did not have its own ticket"; return false; }
+			ticket.hostAddress = "loopback";
+			ticket.issuedAtUnixMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+			leaver.m_TicketStore.SetPath(ticketPath.string());
+			if (!leaver.m_TicketStore.Store(ticket, &why)) return false;
+			leaver.m_IsHost = true; leaver.m_State = NetMatchServiceState::Running; leaver.m_MatchWasRunning = true;
+			leaver.LeaveMatch("Left the match");
+			NetH4TicketRecord retained;
+			const auto load = leaver.m_TicketStore.Load(ticket.issuedAtUnixMs, retained, &why);
+			if (leaver.m_IsHost || !leaver.m_LeftMatch || leaver.m_State != NetMatchServiceState::Completed ||
+			    load != NetH4TicketLoadResult::Loaded || retained.ticket != ticket.ticket || leaver.m_ReconnectUx.GetState() == NetReconnectUxState::Idle ||
+			    leaver.m_ReconnectHost.GetRoster().stage != NetRosterStage::Running) {
+				why = "announced host's own Leave ends as host instead of leaver: is_host=" + std::to_string(leaver.m_IsHost) + " rejoin_state=" + std::string(NetReconnectUx::StateName(leaver.m_ReconnectUx.GetState())) + " roster_stage=" + std::to_string(static_cast<int>(leaver.m_ReconnectHost.GetRoster().stage));
+				return false;
+			}
+			std::cout << "[net-world-join-selftest] PASS announced_host_leaver_keeps_rejoin_ticket" << std::endl;
+			return true;
+		};
+		if (!hostLeaveOffer()) {
+			*error = why;
+			std::cout << "[net-world-join-selftest] FAIL announced_host_leaver_keeps_rejoin_ticket " << why << std::endl;
+			std::filesystem::remove_all(scratch, ignored);
+			return false;
+		}
 		std::filesystem::remove_all(scratch, ignored);
 		if (own.landed || own.errorText == "The host left the match" || !own.reconnecting) {
 			*error = "an error on the held client's own side landed its seat as if the host had left: landed=" + std::to_string(own.landed) +
