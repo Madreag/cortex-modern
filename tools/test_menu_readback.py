@@ -24,9 +24,14 @@ CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "pause-s
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
          "lobby-name", "net-options", "net-activity", "net-host-left", "net-host-left-early", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "host-by-hand", "host-follows-activity", "lobby-ready-all", "lobby-countdown", "lobby-last-ready", "lobby-ready-back",
          "lobby-seat-missing", "lobby-escape", "host-one-draft", "host-hand-open",
-         "sweep-landing", "sweep-host", "sweep-join", "sweep-lobby", "sweep-advanced-setup", "sweep-advanced-lobby", "sweep-advanced-client", "sweep-settings-network", "sweep-browsers", "oracles")
+         "sweep-landing", "sweep-host", "sweep-join", "sweep-lobby", "sweep-advanced-setup", "sweep-advanced-lobby", "sweep-advanced-client", "sweep-settings-network", "sweep-browsers",
+         "host-draft-roundtrip", "host-draft-apply", "host-apply-all", "lobby-setup-unready", "lobby-setup-open", "lobby-long-names", "host-words",
+         "host-words-nocrypto", "host-long-names", "port-by-hand", "old-skins-public", "old-skins-original", "sweep-fault", "oracles")
+THIRD_PASS_CASES = ("host-draft-roundtrip", "host-draft-apply", "host-apply-all", "lobby-setup-unready", "lobby-setup-open", "lobby-long-names", "host-words",
+                    "host-words-nocrypto", "host-long-names", "port-by-hand", "old-skins-public", "old-skins-original")
 PAIRED_CASES = ("pause", "pause-save", "save-hotkey", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early",
-                "lobby-ready-all", "lobby-countdown", "lobby-last-ready", "lobby-ready-back", "lobby-seat-missing", "sweep-advanced-client")
+                "lobby-ready-all", "lobby-countdown", "lobby-last-ready", "lobby-ready-back", "lobby-seat-missing", "sweep-advanced-client",
+                "host-draft-roundtrip", "lobby-setup-unready", "lobby-setup-open", "lobby-long-names")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
@@ -913,7 +918,18 @@ def sweep_options(readonly=False, live=False):
         back = f"back_{tab}" if in_place else "back_options"
         if in_place:
             text += f"define {back}\nactivate {tab}\nwait 4\nassert_substate HostOptions\nassert_checked {tab} 1\nend\n"
-        text += f"activate {tab}\nwait 4\ndump_host_options\nsweep {page} label={page} restore={back}" + (" readonly" if readonly else "") + (" own=ButtonHostSessEnd" if live and not readonly and page.endswith("Session") else "") + quiet + "\n"
+        # A reader may open each seat's details: both are pressed below, the first for the seat dialog's sweep.
+        seat_details = " own=ButtonHostSeatDetails0,ButtonHostSeatDetails1" if readonly and page.endswith("Seats") else ""
+        # Saving diagnostics is this computer's own act, open to a reader too: pressed once below.
+        seat_details += " own=ButtonHostFilesSaveDiag" if readonly and page.endswith("Files") else ""
+        # So is this computer's own ban list on the Session page.
+        seat_details += " own=ButtonHostSessBanned" if readonly and page.endswith("Session") else ""
+        text += f"activate {tab}\nwait 4\ndump_host_options\nsweep {page} label={page} restore={back}" + (" readonly" if readonly else "") + (" own=ButtonHostSessEnd" if live and not readonly and page.endswith("Session") else "") + seat_details + quiet + "\n"
+    if readonly:
+        text += "activate TabHostPageFiles\nwait 4\nactivate ButtonHostFilesSaveDiag\nwait 6\nassert_substate HostOptions\n"
+        text += "activate TabHostPageSession\nwait 4\nactivate ButtonHostSessBanned\nwait 6\nactivate ButtonHostBannedClose\nwait 4\nassert_substate HostOptions\n"
+        text += "activate TabHostPageSeats\nwait 4\nactivate ButtonHostSeatDetails0\nwait 6\ndump_host_options\nsweep HostSeatDialog label=seat-dialog readonly own=ButtonHostSeatDlgClose\nactivate ButtonHostSeatDlgClose\nwait 4\n"
+        text += "activate ButtonHostSeatDetails1\nwait 6\nassert_visible HostSeatDialog 1\nactivate ButtonHostSeatDlgClose\nwait 4\nassert_visible HostSeatDialog 0\n"
     if not readonly:
         # The seat dialog a Details button opens is a screen of its own.
         text += "activate TabHostPageSeats\nwait 4\nactivate ButtonHostSeatDetails0\nwait 6\ndump_host_options\nsweep HostSeatDialog label=seat-dialog own=ButtonHostSeatDlgClose\nactivate ButtonHostSeatDlgClose\nwait 4\n"
@@ -977,7 +993,233 @@ def sweep_case(case, port, root):
     return {"host": text}, {}
 
 
+# Every field of the seven host pages, each set by hand to something other than its default, and the words that read it back.
+# A match field rides the lobby's config to every peer; a computer field is this machine's own. Order matters only where one
+# field opens another: the mode and the activity before the seats and the rules they seed, Fixed before a seat's delay,
+# autosave on before its interval.
+def draft_fields(port):
+    match = (
+        ("mode", "Rules", hand_pick("ComboHostRulesMode", "Players and AI opponents"), "assert_label ComboHostRulesMode Players and AI opponents\n"),
+        ("activity", "Rules", "combo_select ComboHostRulesActivity Wave Defense - Base.rte\nwait 4\n", "assert_label ComboHostRulesActivity Wave Defense\n"),
+        ("scene", "Rules", hand_pick("ComboHostRulesScene", "Croco Cave"), "assert_label ComboHostRulesScene Croco Cave\n"),
+        ("difficulty", "Rules", "slider_set SliderHostRulesDifficulty 80\nwait 4\n", "assert_label LabelHostRulesDifficultyValue 80\n"),
+        ("starting_gold", "Rules", "slider_set SliderHostRulesGold 5000\nwait 4\n", "assert_label LabelHostRulesGoldValue 5000 oz\n"),
+        ("fog_of_war", "Rules", "setcheck CheckHostRulesFog 0\nwait 4\n", "assert_checked CheckHostRulesFog 0\n"),
+        ("clear_path", "Rules", "setcheck CheckHostRulesClearPath 0\nwait 4\n", "assert_checked CheckHostRulesClearPath 0\n"),
+        ("deploy_units", "Rules", "setcheck CheckHostRulesDeploy 0\nwait 4\n", "assert_checked CheckHostRulesDeploy 0\n"),
+        ("brain_loss", "Rules", hand_pick("ComboHostRulesBrainless", "End the match"), "assert_label ComboHostRulesBrainless End the match\n"),
+        ("team_technology", "Rules", hand_pick("ComboHostRulesTeam", "Team 2") + hand_pick("ComboHostRulesTech", "Coalition.rte"),
+         hand_pick("ComboHostRulesTeam", "Team 2") + "assert_label ComboHostRulesTech Coalition.rte\n"),
+        ("team_ai_skill", "Rules", hand_pick("ComboHostRulesTeam", "Team 1") + "slider_set SliderHostRulesSkill 30\nwait 4\n",
+         hand_pick("ComboHostRulesTeam", "Team 1") + "assert_label LabelHostRulesSkillValue 30\n"),
+        ("players", "Seats", hand_pick("ComboHostSeatPlayers", "3"), "assert_label ComboHostSeatPlayers 3\n"),
+        ("seat_teams", "Seats", hand_pick("ComboHostSeatTeam0", "Team 2") + hand_pick("ComboHostSeatTeam1", "Team 1"),
+         "assert_label ComboHostSeatTeam0 Team 2\nassert_label ComboHostSeatTeam1 Team 1\n"),
+        ("closed_seat", "Seats", hand_pick("ComboHostSeatType2", "Closed"), "assert_label ComboHostSeatType2 Closed\n"),
+        ("delay_policy", "Timing", hand_pick("ComboHostNetPolicy", "Fixed"), "assert_label ComboHostNetPolicy Fixed\n"),
+        ("slow_bound", "Timing", "settext TextHostNetSlowBound 7\nwait 4\n", "assert_label TextHostNetSlowBound 7\n"),
+        ("redundancy", "Timing", hand_pick("ComboHostNetRedundancy", "7 ticks"), "assert_label ComboHostNetRedundancy 7 ticks\n"),
+        ("input_delay", "Timing", "settext TextHostNetMinDelay 5\nwait 4\n", "assert_label TextHostNetMinDelay 5\n"),
+        ("seat_delay", "Timing", "settext TextHostNetPeerDelay2 6\nwait 4\n", "assert_label TextHostNetPeerDelay2 6\n"),
+        ("repair", "Recovery", "setcheck CheckHostRecRepair 0\nwait 4\n", "assert_checked CheckHostRecRepair 0\n"),
+        ("autosave", "Recovery", "setcheck CheckHostRecAutosave 1\nwait 4\n", "assert_checked CheckHostRecAutosave 1\n"),
+        ("autosave_interval", "Recovery", "settext TextHostRecAutosaveInterval 120\nwait 4\n", "assert_label TextHostRecAutosaveInterval 120\n"),
+        ("return_window", "Recovery", hand_pick("ComboHostRecReturnWindow", "10 minutes"), "assert_label ComboHostRecReturnWindow 10 minutes\n"),
+        ("idle_wait", "Session", hand_pick("ComboHostSessIdle", "20 minutes"), "assert_label ComboHostSessIdle 20 minutes\n"),
+    )
+    computer = (
+        ("listing", "Connection", hand_pick("ComboHostNetVisibility", "Unlisted"), "assert_label ComboHostNetVisibility Unlisted\n"),
+        ("nat_traversal", "Connection", hand_pick("ComboHostNetIce", "Off"), "assert_label ComboHostNetIce Off\n"),
+        ("relay", "Connection", hand_pick("ComboHostNetRelay", "Off"), "assert_label ComboHostNetRelay Off\n"),
+        ("port", "Connection", f"settext TextHostNetPort {port}\nwait 4\n", f"assert_label TextHostNetPort {port}\n"),
+        ("status_widget", "Files", hand_pick("ComboHostFilesWidget", "Always"), "assert_label ComboHostFilesWidget Always\n"),
+    )
+    return match, computer
+
+
+def page(name):
+    return f"activate TabHostPage{name}\nwait 4\n"
+
+
+def read_fields(fields):
+    """Every field's value read back, page by page, as the controls show it."""
+    return "".join(page(tab) + check for _, tab, _, check in fields)
+
+
+def third_pass_case(case, port, root, size):
+    marks = {name: probe_root(root, "host") / f"{name}.mark" for name in
+             ("readied", "applied", "counting", "opened", "read", "back", "done", "client_done", "clientb_done", "hosted")}
+    advanced = "activate ButtonHostOptions\nwait 10\nassert_substate HostOptions\n"
+    setup = LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\nassert_substate HostSetup\n" + f"setup_host_port {port}\n"
+    match, computer = draft_fields(port)
+    if case == "host-draft-roundtrip":
+        # Set by hand, Apply, Back, reopened: the controls show every value; Create Lobby carries every match value into the lobby
+        # (the host's own live view reads the adopted config) and the joined player's read-only view shows each one.
+        host = setup + advanced + "".join(page(tab) + change for _, tab, change, _ in match + computer)
+        # What Apply's own button reads is host-draft-apply's to check; here the values themselves are followed.
+        host += "activate ButtonHostOptApply\nwait 6\n"
+        host += "activate ButtonHostOptBack\nwait 6\nassert_substate HostSetup\n" + advanced + read_fields(match + computer)
+        host += "activate ButtonHostOptBack\nwait 6\nassert_substate HostSetup\nactivate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
+        host += "activate ButtonLobbyEditSetup\nwait 10\nassert_substate HostOptions\n" + read_fields(match + computer)
+        host += f"activate ButtonHostOptBack\nwait 6\nassert_substate Lobby\nwait_connected 2 60\nwait_file {marks['client_done']} 90\nexit\n"
+        client = join_by_address(port) + "assert_label ButtonLobbyEditSetup Match details\nactivate ButtonLobbyEditSetup\nwait 10\nassert_substate HostOptions\n"
+        client += read_fields(match) + f"activate ButtonHostOptBack\nwait 6\nassert_substate Lobby\ntouch_file {marks['client_done']}\nexit\n"
+        return {"host": host, "client": client}, {}
+    if case == "host-draft-apply":
+        # After an earlier Apply, each field changed alone enables Apply and is applied.
+        host = setup + advanced + page("Timing") + hand_pick("ComboHostNetRedundancy", "6 ticks") + "activate ButtonHostOptApply\nwait 6\n"
+        for _, tab, change, check in match + computer:
+            host += (page(tab) + change + "assert_enabled ButtonHostOptApply 1\nactivate ButtonHostOptApply\nwait 6\n"
+                     "assert_enabled ButtonHostOptApply 0\n" + check)
+        return {"host": host + "exit\n"}, {}
+    if case == "host-apply-all":
+        # Apply takes all of a draft or none of it. A refused port keeps the rule changed beside it unapplied; a team's random
+        # technology and a listing change apply together (a match half the base refused after it had taken the listing).
+        host = (setup + advanced + page("Rules") + "setcheck CheckHostRulesFog 0\nwait 4\n"
+                + page("Connection") + "settext TextHostNetPort 80\nwait 4\n"
+                + "activate ButtonHostOptApply\nwait 6\ndump_host_options\nassert_label LabelHostOptStatus The game port must be from 1024 to 65535\n"
+                "assert_enabled ButtonHostOptApply 1\nactivate ButtonHostOptBack\nwait 6\nassert_substate HostSetup\n" + advanced
+                + page("Rules") + "assert_checked CheckHostRulesFog 1\n" + page("Connection") + f"assert_label TextHostNetPort {port}\n"
+                + page("Rules") + hand_pick("ComboHostRulesTech", "-Random-") + page("Connection") + hand_pick("ComboHostNetVisibility", "Unlisted")
+                + "activate ButtonHostOptApply\nwait 6\ndump_host_options\nactivate ButtonHostOptBack\nwait 6\nassert_substate HostSetup\n" + advanced
+                + page("Connection") + "assert_label ComboHostNetVisibility Unlisted\n" + page("Rules") + "assert_label ComboHostRulesTech -Random-\nexit\n")
+        return {"host": host}, {}
+    if case == "lobby-setup-unready":
+        # The normal lobby (its hand-over order on): a setup change takes back the joined player's Ready on both screens,
+        # the player reads why, and Start then counts down instead of starting.
+        host = (host_lobby(port) + "wait_remote_ready 60\nwait_label LabelMultiplayerStatus Everyone is ready\n"
+                "activate ButtonLobbyEditSetup\nwait 10\nassert_substate HostOptions\n" + page("Rules")
+                + "setcheck CheckHostRulesFog 0\nwait 4\nactivate ButtonHostOptApply\nwait 6\nactivate ButtonHostOptBack\nwait 6\nassert_substate Lobby\n"
+                f"touch_file {marks['applied']}\nwait_label LabelMultiplayerStatus to press Ready\nwait_file {marks['read']} 60\nwait 30\n"
+                "wait_label LabelMultiplayerStatus to press Ready\nactivate ButtonMultiplayerStart\nwait_label LabelMultiplayerStatus Starting in\n"
+                f"activate ButtonMultiplayerStart\nwait 6\ntouch_file {marks['done']}\nexit\n")
+        client = (join_by_address(port) + "activate ButtonMultiplayerReady\nwait 4\nassert_label ButtonMultiplayerReady Cancel Ready\n"
+                  f"wait_file {marks['applied']} 60\nwait_label LabelMultiplayerStatus check it and press Ready again\n"
+                  f"assert_label ButtonMultiplayerReady Ready\ntouch_file {marks['read']}\nwait_file {marks['done']} 60\nexit\n")
+        return {"host": host, "client": client}, {}
+    if case == "lobby-setup-open":
+        # Opening the setup during the count stops it: the host's panel says so, the joined player reads why, nothing starts.
+        host = (host_lobby(port) + "wait_connected 2 60\nwait_label LabelMultiplayerStatus Start Match starts in 30 s\n"
+                f"activate ButtonMultiplayerStart\nwait_label LabelMultiplayerStatus Starting in\nwait_file {marks['counting']} 60\n"
+                "activate ButtonLobbyEditSetup\nwait 10\nassert_substate HostOptions\n"
+                f"wait_label LabelHostOptStatus The start countdown stopped while you change the setup\ntouch_file {marks['opened']}\n"
+                f"wait_file {marks['read']} 60\nactivate ButtonHostOptBack\nwait 6\nassert_substate Lobby\n"
+                "wait_label LabelMultiplayerStatus Start Match starts in 30 s\nassert_label ButtonMultiplayerStart Start Match\n"
+                f"touch_file {marks['back']}\nwait_file {marks['client_done']} 60\nexit\n")
+        client = (join_by_address(port) + f"wait_label LabelMultiplayerStatus The host is starting the match in\ntouch_file {marks['counting']}\n"
+                  f"wait_file {marks['opened']} 60\nwait_label LabelMultiplayerStatus The host is changing the setup\ntouch_file {marks['read']}\n"
+                  f"wait_file {marks['back']} 60\nwait_label LabelMultiplayerStatus Press Ready when you're ready to play\n"
+                  f"touch_file {marks['client_done']}\nexit\n")
+        return {"host": host, "client": client}, {}
+    if case == "lobby-long-names":
+        # Two joiners with 24 wide characters each: the names shorten, still told apart, and the sentence keeps its end.
+        names = {"client": "W" * 23 + "A", "clientb": "W" * 23 + "B"}
+        # Both sentences that name the joiners: the one before the count (the longer) and the one during it.
+        host = (host_lobby(port, players=3) + "wait_connected 3 90\nwait_label LabelMultiplayerStatus Start Match starts in 30 s\n"
+                "assert_text_fits LabelMultiplayerStatus\nassert_label LabelMultiplayerStatus WWA\nassert_label LabelMultiplayerStatus WWB\nassert_label LabelMultiplayerStatus to press Ready\n"
+                "assert_enabled ButtonMultiplayerStart 1\nactivate ButtonMultiplayerStart\nwait_label LabelMultiplayerStatus Starting in\n"
+                "wait 4\nassert_label LabelMultiplayerStatus to press Ready\nassert_text_fits LabelMultiplayerStatus\n"
+                "assert_label LabelMultiplayerStatus WWA\nassert_label LabelMultiplayerStatus WWB\nassert_label LabelMultiplayerStatus to press Ready\ndump_host_options\n"
+                f"activate ButtonMultiplayerStart\nwait 6\ntouch_file {marks['done']}\nexit\n")
+        scripts_ = {"host": host}
+        for who, name in names.items():
+            scripts_[who] = (LANDING + f"settext TextMultiplayerName {name}\nwait 3\n" + join_by_address(port)[len(LANDING):]
+                             + f"wait_file {marks['done']} 120\nexit\n")
+        return scripts_, {}
+    if case == "host-words":
+        # Words a player reads: Recalculate offers nothing before a lobby exists; the Internet page points at a page that
+        # exists; the Timing page names seats, not peers; the authentication line says what this build does.
+        host = (setup + advanced + page("Timing") + "assert_enabled ButtonHostNetRecalc 0\n" + hand_pick("ComboHostNetPolicy", "Fixed")
+                + "assert_label_absent LabelHostNetPeer1 Peer\nassert_label LabelHostNetPeer1 Seat 1\n"
+                + page("Recovery") + "assert_label LabelHostRecRejoin Authenticated rejoin: On\n"
+                + "activate ButtonHostOptBack\nwait 6\nactivate ButtonHostBack\nwait 6\nassert_substate Landing\n"
+                "goto_main\nwait 6\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n" + net_page("Internet")
+                + "assert_label_absent LabelNetInternetReason Host Options > Network\n"
+                "assert_label LabelNetInternetReason Host a Game > Advanced > Connection\nexit\n")
+        return {"host": host}, {}
+    if case == "host-words-nocrypto":
+        # A build without its cryptography says so where the host reads the rejoin line.
+        host = setup + advanced + page("Recovery") + "assert_label LabelHostRecRejoin Authenticated rejoin: Off\nexit\n"
+        return {"host": host}, {}
+    if case == "host-long-names":
+        # A mod's 60-character activity and scene names fit the Advanced pages at every size.
+        host = (setup + advanced + page("Rules") + f"combo_select ComboHostRulesActivity {LONG_ACTIVITY} - {LONG_MODULE}\nwait 6\n"
+                f"combo_select ComboHostRulesScene {LONG_SCENE}\nwait 6\nassert_text_fits ComboHostRulesActivity\nassert_text_fits ComboHostRulesScene\n"
+                f"assert_label ComboHostRulesActivity The Extraordinarily\nassert_label ComboHostRulesActivity - {LONG_MODULE}\nassert_label ComboHostRulesScene Northern Mining\n"
+                "dump_host_options\n" + page("Seats") + "dump_host_options\nactivate ButtonHostOptBack\nwait 6\nassert_substate HostSetup\n"
+                "assert_text_fits LabelHostInfo\ndump_host_options\nexit\n")
+        return {"host": host}, {}
+    if case == "port-by-hand":
+        # Run through the failing form in main: the word must fail at the port check.
+        return {"host": setup + "exit\n"}, {}
+    if case in ("old-skins-public", "old-skins-original"):
+        # A replacement of Base's menu files from an older version: no crash; the main menu, every Settings page a player
+        # uses and a single-player start work; the multiplayer part says in one sentence why it is off.
+        probe = probe_root(root, "host")
+        text = ("wait 40\nassert_screen MainScreen\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
+                "assert_label LabelSettingsMultiplayerOff Multiplayer settings are off\nassert_text_fits LabelSettingsMultiplayerOff\n"
+                + "".join(f"select_settings_page {name}\nwait 4\nassert_settings_page {name}\n" for name in ("Video", "Audio", "Input", "Gameplay", "Misc"))
+                + "activate ButtonBackToMainMenu\nwait 8\nassert_screen MainScreen\nactivate ButtonMainToMultiplayer\nwait 8\nassert_screen MainScreen\n"
+                "assert_label LabelMultiplayerOff Multiplayer is off\nassert_text_fits LabelMultiplayerOff\n"
+                "activate ButtonMainToSkirmish\nwait_ms 1600\nassert_screen ScenarioPicker\ncombo_select ComboBoxActivitySelect P4 Alpha Duel\n"
+                "wait_ms 700\nselect_scene Grasslands\nwait_ms 900\nactivate ButtonStartActivityConfig\nwait_ms 700\nassert_screen ScenarioConfig\n"
+                f"activate P1T1Box\nactivate P2T2Box\nwait_ms 1000\ntouch_file {probe / 'started.mark'}\nactivate ButtonStartGame\n"
+                f"wait_file {probe / 'done.json'} 120\nwait 10\nassert_screen MainScreen\nexit\n")
+        # The match runs a while, then the pause menu takes the player back to the main menu, where the script ends the run.
+        return {"host": text}, {"host": {"schema": 1, "timeout_ms": 150000, "steps": [
+            {"op": "wait_file", "path": str(probe / "started.mark")}, {"op": "wait", "renders": 180},
+            {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"}, {"op": "wait", "screen": "Pause"},
+            menu_step("activate ButtonBackToMain"), {"op": "wait", "renders": 30}, {"op": "signal", "name": "done"}, {"op": "finish"}]}}
+    raise ValueError(case)
+
+
+# A mod's long names, at the length mods give them.
+LONG_MODULE = "LongNames.rte"
+LONG_ACTIVITY = "The Extraordinarily Long Siege of the Northern Mining Colony"
+LONG_SCENE = "Northern Mining Colony Outskirts Beneath the Glacier Ridges"
+OLD_SKINS = {"old-skins-public": "d95f5dee05", "old-skins-original": "upstream/development"}
+OLD_SKIN_FILES = ("SettingsGUI.ini", "MainMenuSubMenuGUI.ini")
+
+
+def stage_old_skin_runtime(repo, run_root, revision):
+    """A runtime whose Base.rte/GUIs holds an older version's two menu files, every other file the tree's own: the tree's
+    Data is reached through junctions and never written."""
+    import _winapi
+    data = Path(repo) / "Data"
+    runtime = Path(run_root) / "runtime"
+    for name in ("Data", "Mods", "ScreenShots", "Userdata", "Temp"):
+        (runtime / name).mkdir(parents=True)
+    from run_sim_test import runtime_settings_text
+    source = Path(repo) / "Userdata/Settings.ini"
+    (runtime / "Userdata/Settings.ini").write_text(runtime_settings_text(source.read_text(encoding="utf-8-sig") if source.is_file() else "SettingsMan\n"), encoding="utf-8")
+    for module in data.iterdir():
+        if module.name != "Base.rte":
+            _winapi.CreateJunction(str(module), str(runtime / "Data" / module.name)) if module.is_dir() else None
+    for entry in (data / "Base.rte").iterdir():
+        target = runtime / "Data/Base.rte" / entry.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if entry.name == "GUIs":
+            target.mkdir()
+            for item in entry.iterdir():
+                if item.is_dir():
+                    _winapi.CreateJunction(str(item), str(target / item.name))
+                elif item.name in OLD_SKIN_FILES:
+                    old = subprocess.check_output(["git", "-C", str(repo), "show", f"{revision}:Data/Base.rte/GUIs/{item.name}"])
+                    (target / item.name).write_bytes(old)
+                else:
+                    (target / item.name).write_bytes(item.read_bytes())
+        elif entry.is_dir():
+            _winapi.CreateJunction(str(entry), str(target))
+        else:
+            target.write_bytes(entry.read_bytes())
+    return runtime
+
+
 def scripts(case, port, root, size="960x540"):
+    if case in THIRD_PASS_CASES:
+        return third_pass_case(case, port, root, size)
+    if case == "sweep-fault":
+        return {"host": LANDING + "exit\n"}, {}
     if case.startswith("sweep-"):
         return sweep_case(case, port, root)
     if case in ("lobby-ready-all", "lobby-countdown", "lobby-last-ready", "lobby-ready-back", "lobby-seat-missing"):
@@ -2225,12 +2467,13 @@ def run_case(options, case, root, failing=None):
     paired = case in PAIRED_CASES
     # A menu-driven pair joins through the real UI, so it carries no service-e2e flags.
     menu_driven = case in ("net-activity", "local-end-match", "net-host-left", "net-host-left-early", "lobby-ready-all", "lobby-countdown",
-                           "lobby-last-ready", "lobby-ready-back", "lobby-seat-missing", "sweep-advanced-client")
+                           "lobby-last-ready", "lobby-ready-back", "lobby-seat-missing", "sweep-advanced-client", *THIRD_PASS_CASES)
     seeded = {} if failing else seeds(case)
     runs, records, argv, images = {}, {}, {}, []
     result = {"pass": False, "case": case, "scripts": {}, "records": records, "probes": {}, "seeds": seeded}
     try:
-        for who in (("host", "client") if paired else ("host",)):
+        # A pair runs host and client; a case may seat a second joiner beside them.
+        for who in (tuple(texts) if paired else ("host",)):
             script = root / f"{who}-menu.txt"
             script.write_text(texts[who], encoding="utf-8")
             result["scripts"][str(script)] = sha(script)
@@ -2268,8 +2511,36 @@ def run_case(options, case, root, failing=None):
                 path.write_text(json.dumps(probes[who], indent=2) + "\n", encoding="utf-8")
                 result["scripts"][str(path)] = sha(path)
                 env["CC_TEST_NET_UI_SCRIPT"] = str(path)
+            if case == "host-words-nocrypto":
+                env["CCCP_TEST_FAIL_CLOSED_CRYPTO"] = "1"
+            if case == "sweep-fault":
+                env["CCCP_TEST_MENU_FAULT"] = "hide:ButtonMultiplayerJoinGame,disable:ButtonMultiplayerReplays"
+            if case.startswith("sweep-") and getattr(options, "harvest_declared", False):
+                # A draft run: the sweep writes what each screen shows, for a person to declare from; it proves nothing.
+                harvest = root / f"{who}-declared"
+                harvest.mkdir()
+                env["CCCP_TEST_SWEEP_HARVEST"] = str(harvest)
+            elif case.startswith("sweep-"):
+                # Each screen's controls are declared per state under tools/menu_declared/<case>; the fault case breaks the landing's.
+                env["CCCP_TEST_SWEEP_DECLARED"] = str(options.repo / "tools" / "menu_declared" / ("sweep-landing" if case == "sweep-fault" else case))
             argv[who] = args
-            runs[who] = make_run(options.repo, args, root / who, 180, env=env)
+            if case in OLD_SKINS:
+                runs[who] = make_run(options.repo, args, root / who, 180, env=env, runtime=stage_old_skin_runtime(options.repo, root / f"{who}-staged", OLD_SKINS[case]))
+            else:
+                runs[who] = make_run(options.repo, args, root / who, 180, env=env)
+            if case == "host-long-names":
+                fixture = Path(options.repo) / "tools/fixtures" / LONG_MODULE
+                for item in fixture.rglob("*"):
+                    if item.is_file():
+                        target = runs[who].cwd / "Mods" / LONG_MODULE / item.relative_to(fixture)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(item.read_bytes())
+            if case in OLD_SKINS:
+                # A staged runtime's record starts with no settings overrides; the size is the first.
+                record_path = runs[who].out / "runtime.json"
+                record = json.loads(record_path.read_text(encoding="utf-8"))
+                record.setdefault("settings_overrides", {})
+                record_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
             set_visual_resolution(runs[who], *size_parts(options.size)[:2])
             set_window_multiplier(runs[who], size_parts(options.size)[2])
             if case in ("lobby", "host-defaults"):
@@ -3177,6 +3448,7 @@ def main():
     parser.add_argument("--all-sizes", action="store_true",
                         help="also run every SIZE_GATES row; net-chat and lobby-name always do this")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--harvest-declared", action="store_true", help="write each sweep's controls as drafts for tools/menu_declared; the sweeps then prove nothing")
     parser.add_argument("--base-words", action="store_true", help="write the new lobby, Escape and one-draft cases in the base screens' words, for their RED on the base build")
     parser.add_argument("--port", type=int, required=True)
     options = parser.parse_args()
@@ -3215,6 +3487,21 @@ def main():
                                   "page": (OPTIONS, "select_settings_page Misc\nwait 3\n", "assert_settings_page Gameplay"),
                                   "page-name": (OPTIONS, "", "select_settings_page Nowhere")}.items():
                 rows.append(run_case(options, "landing", options.out / f"oracle-{name}" / options.size, command))
+            continue
+        if case == "sweep-fault":
+            # A screen with one control a player cannot find and one wrongly disabled: the sweep fails and names both.
+            for size in sizes_for(case):
+                options.size = size
+                rows.append(run_case(options, case, options.out / case / size,
+                                     (LANDING + SWEEP_MACROS + "dump_host_options\n", "", "sweep MultiplayerLandingPanel label=landing restore=back_landing")))
+            continue
+        if case == "port-by-hand":
+            # The run's port reaches the lobby through Advanced's own port box and its check: a port below 1024 is refused there,
+            # and the setup keeps the port it had.
+            for size in sizes_for(case):
+                options.size = size
+                rows.append(run_case(options, case, options.out / case / size,
+                                     (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\nassert_substate HostSetup\n", "setup_host_port 80\n", "assert_host_port 80")))
             continue
         for size in sizes_for(case):
             options.size = size
