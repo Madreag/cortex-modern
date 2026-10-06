@@ -1840,8 +1840,11 @@ void MovableMan::DumpMOLines(uint64_t tick, const char* kind, MovableObject* mo,
 				for (const MOID ignored: group->GetIgnoreMOIDs()) {
 					feetHash = fnv(feetHash, static_cast<uint32_t>(ignored));
 				}
-				for (const long long residue: group->GetTravelResidue()) {
-					feetHash = fnv(fnv(feetHash, static_cast<uint32_t>(residue)), static_cast<uint32_t>(static_cast<unsigned long long>(residue) >> 32));
+				// Single player keeps its established diagnostic fingerprint.
+				if (ScenarioRunner::HasLockstepCoordinator()) {
+					for (const long long residue: group->GetTravelResidue()) {
+						feetHash = fnv(fnv(feetHash, static_cast<uint32_t>(residue)), static_cast<uint32_t>(static_cast<unsigned long long>(residue) >> 32));
+					}
 				}
 				feetHash = fnv(feetHash, static_cast<uint32_t>(group->GetAtomCount()));
 			}
