@@ -23978,6 +23978,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		class ReleasePathHostWire final : public LoopbackTransport {
 		public:
 			bool commitOnlyToFirst = false;
+			bool releaseOnlyToThird = false;
 			bool fourthFutureOnlyToFirst = false;
 			size_t fourthFutureInputsToFirst = 0;
 			std::vector<NetLockstepTiming> decisions;
@@ -23987,9 +23988,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					if (const auto* timing = std::get_if<NetLockstepTiming>(&decoded.packet.payload)) {
 						decisions.push_back(*timing);
 						if (commitOnlyToFirst && peer == 1 && timing->action == NetTimingAction::Release && timing->phase == NetTimingPhase::Propose) return true;
+						if (releaseOnlyToThird && peer == 1 && timing->action == NetTimingAction::Release && timing->phase == NetTimingPhase::Commit) return true;
 					}
 					if (const auto* stop = std::get_if<NetLockstepStop>(&decoded.packet.payload);
 					    commitOnlyToFirst && peer == 1 && stop && stop->reason == NetLockstepStopReason::Expired) return true;
+					if (const auto* stop = std::get_if<NetLockstepStop>(&decoded.packet.payload);
+					    releaseOnlyToThird && peer == 1 && stop && stop->reason == NetLockstepStopReason::Expired) return true;
 					if (fourthFutureOnlyToFirst) {
 						if (const auto* stop = std::get_if<NetLockstepStop>(&decoded.packet.payload);
 						    peer == 2 && stop && stop->senderPeerId == 4 && stop->reason == NetLockstepStopReason::PeerRemoved) return true;
@@ -24649,6 +24653,51 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	}
 
 	namespace {
+		bool TestFutureReleaseIsVoidOnEverySurvivor(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("future_release_is_void_on_every_survivor", why, error); };
+			ReleasePathRound round;
+			round.drainThrough = 29; round.produceThrough.fill(29);
+			if (!round.Start(47430) || !round.HoldFourth()) return fail("the held-seat round did not start: " + round.failure);
+			for (int turn = 0; turn < 400 && round.peers[2].GetResumeFrame() != 30; ++turn) round.Pump();
+			if (round.peers[1].GetResumeFrame() != 30 || round.peers[2].GetResumeFrame() != 30) return fail("the survivors did not finish frame 29");
+			round.hostWire.releaseOnlyToThird = true;
+			round.peers[0].EvictRemovedPeer(4, "release known to one survivor", round.now);
+			for (int turn = 0; turn < 20; ++turn) round.Pump();
+			const auto release = round.hostWire.Last(NetTimingAction::Release, NetTimingPhase::Commit);
+			if (!release || release->applyFrame != 32 || round.peers[2].SeatReleases().empty() || !round.peers[1].SeatReleases().empty())
+				return fail("only survivor 3 did not receive the release committed for frame 32");
+			if (!round.Migrate() || round.peers[1].GetMigrationResult().boundary != 29) return fail("the survivors did not succeed at boundary 29");
+			std::string failures;
+			std::array<std::set<uint8_t>, 2> owed;
+			for (size_t index = 0; index < owed.size(); ++index) for (uint8_t seat = 1; seat <= 4; ++seat)
+				if (round.peers[index + 1].IsSeatReleased(seat)) owed[index].insert(seat);
+			if (!owed[0].empty() || owed[0] != owed[1]) failures += "future release leaves unequal owed sets: successor seat4=" + std::to_string(owed[0].contains(4)) + " survivor3 seat4=" + std::to_string(owed[1].contains(4)) + "; ";
+			round.produceThrough.fill(UINT64_MAX); round.drainThrough = UINT64_MAX;
+			for (int turn = 0; turn < 30; ++turn) round.Pump();
+			std::array<ReleasePathClaimView, 2> views;
+			for (size_t index = 0; index < views.size(); ++index) {
+				if (!views[index].Create("survivor " + std::to_string(index + 2), round.peers[index + 1], 3, 4, 4)) return fail("the held actor did not create");
+				views[index].handoff = 1;
+				for (const auto& [tick, ready]: round.committed[index + 1]) if (tick >= 29) {
+					views[index].ApplyTick(ready);
+					if (!round.peers[index + 1].IsSeatReclaimableAt(4, tick) || views[index].claimant != 4 || views[index].ended) failures += "seat 4 does not remain held at " + std::to_string(tick) + "; ";
+				}
+			}
+			if (views[0].hashes != views[1].hashes) failures += "survivors have different held claim/control/input hashes; ";
+			const uint64_t after = round.peers[1].GetResumeFrame();
+			round.peers[1].EvictRemovedPeer(4, "successor's own release", round.now);
+			for (int turn = 0; turn < 60; ++turn) round.Pump();
+			std::array<size_t, 2> releases{};
+			for (size_t index = 0; index < views.size(); ++index) for (const auto& [tick, ready]: round.committed[index + 1]) if (tick >= after) {
+				views[index].ApplyTick(ready);
+				for (const auto* commands: {&ready.localCommands, &ready.remoteCommands}) for (const auto& command: *commands)
+					if (const auto* ended = std::get_if<NetGameSeatRelease>(&command.payload); ended && ended->peerId == 4) ++releases[index];
+			}
+			if (releases[0] != 1 || releases[1] != 1 || !views[0].ended || views[0].ended != views[1].ended || views[0].hashes != views[1].hashes)
+				failures += "the successor's new click does not release once at an equal frame; ";
+			return fail(failures);
+		}
+
 		bool TestSurvivorsReadOneAuthorityDuringHandover(std::string* error) {
 			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("survivors_read_one_authority_during_handover", why, error); };
 			SuccessionReplayScope scope;
@@ -25265,7 +25314,7 @@ namespace {
 	int NetLockstepSelfTest::RunSeatSuccession() {
 		EnsureSwitchTestManagers();
 		bool passed = true;
-		for (bool (*test)(std::string*): {TestTwoSuccessionsKeepBothFormerHosts, TestSurvivorsReadOneAuthorityDuringHandover, TestPlayingDepartureSurvivesSuccession, TestUnequalFutureDeparturesConvergeAtSuccession, TestPlayingHostLossKeepsLiveClaims, TestPlayingHostLossRecordsHeldClaims, TestPlayingHostReturnsWithItsTicket, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestReplayMatchesSuccessionDuringActivityTick, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
+		for (bool (*test)(std::string*): {TestTwoSuccessionsKeepBothFormerHosts, TestSurvivorsReadOneAuthorityDuringHandover, TestFutureReleaseIsVoidOnEverySurvivor, TestPlayingDepartureSurvivesSuccession, TestUnequalFutureDeparturesConvergeAtSuccession, TestPlayingHostLossKeepsLiveClaims, TestPlayingHostLossRecordsHeldClaims, TestPlayingHostReturnsWithItsTicket, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestReplayMatchesSuccessionDuringActivityTick, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
 			std::string error;
 			passed &= test(&error);
 		}
