@@ -15329,6 +15329,47 @@ namespace RTE {
 		std::vector<std::string> misses;
 		SettingsGuard settings;
 
+		for (bool ice : {false, true}) { // An Unlisted lobby registers before ICE has a bound identity.
+			auto wire = std::make_shared<Wire>();
+			wire->replies = {registerReply(idA, "tok-unlisted", 60, true), hidden, deleted};
+			NetMatchService service;
+			service.m_Directory.SetTransportFactory([wire] { return std::make_unique<ScriptedTransport>(wire); });
+			service.m_IsHost = true;
+			service.m_IceEnabled = ice;
+			service.m_State = NetMatchServiceState::Starting;
+			service.m_DirectoryHidden = true;
+			service.m_IdentityPending = true;
+			service.m_BeaconGamePort = 48041;
+			service.m_BeaconMaxPlayers = 2;
+			service.m_DirectoryRow.name = "UnlistedHost";
+			service.m_DirectoryRow.peerCount = 2;
+			service.m_DirectoryRow.listenPort = 48041;
+			service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
+			service.Update();
+			std::string step;
+			if (service.m_DirectoryRetracted || count(*wire, "POST", "/v1/sessions") != 0) {
+				step = "the pending identity lost its Unlisted registration intent";
+			}
+			service.m_IdentityPending = false;
+			const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+			while (step.empty() && confirmed(service) != nlohmann::json(false) && std::chrono::steady_clock::now() < until) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(2));
+				service.Update();
+			}
+			if (step.empty() && (count(*wire, "POST", "/v1/sessions") != 1 || confirmed(service) != nlohmann::json(false) || service.m_DirectoryRetracted)) {
+				step = "the starting Unlisted lobby did not register and confirm its visibility";
+			}
+			for (auto phase : {NetMatchServiceState::ReadyToLaunch, NetMatchServiceState::Running}) {
+				service.m_State = phase;
+				pump(service, 2);
+				if (step.empty() && (service.m_DirectoryRetracted || service.m_Directory.GetSessionId() != idA || count(*wire, "DELETE", "/v1/sessions/" + idA) != 0)) {
+					step = "an active Unlisted lobby lost its directory row before the match ended";
+				}
+			}
+			finish(service);
+			if (!step.empty()) misses.push_back(std::string("unlisted startup ") + (ice ? "ice: " : "ip: ") + step);
+		}
+
 		{   // a natural ICE end hides the bound row, keeps beating it, and the rematch relists that same row
 			auto wire = std::make_shared<Wire>();
 			wire->replies = {registerReply(idA, "tok-a", 1, true), hidden, hidden, listed, deleted};

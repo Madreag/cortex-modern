@@ -2477,6 +2477,11 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::SettleKeptDirectoryLease() {
+		// Unlisted is also a new lobby's visibility. Only an ended lease (or its
+		// pending rematch relist) is subject to the bound-identity cleanup here.
+		if (GetState() != NetMatchServiceState::Completed && !m_DirectoryRelistPending) {
+			return;
+		}
 		if (!m_DirectoryHidden || m_Directory.GetState() == NetDirectoryClient::State::Deleting) {
 			return;
 		}
