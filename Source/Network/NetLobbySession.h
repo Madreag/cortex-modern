@@ -269,6 +269,8 @@ namespace RTE {
 		void HandleSeatAssign(const NetLobbySeatAssign& message);
 		void SendSeatAssign(uint8_t peerId);
 		void RestartStateTransfer();
+		bool HasUnreceivedStartState() const;
+		void SendStateReceiptIfDue(uint64_t nowMs);
 		/// Takes the free pump for the next waiting joiner image. Returns whether one started.
 		bool StartNextQueuedStateTransfer();
 		void SendQueuedStateChunks();
@@ -334,6 +336,11 @@ namespace RTE {
 		std::map<uint8_t, uint16_t> m_OutgoingChunkIndexByPeer; //!< Next chunk each remote still needs.
 		std::vector<std::pair<uint8_t, std::vector<uint8_t>>> m_QueuedStateTransfers; //!< Joiner images waiting for the pump.
 		uint16_t m_OutgoingChunkCount = 0;
+		bool m_StateReceiptRequired = false;
+		static constexpr uint32_t c_StateFlightChunks = 4;
+		std::map<uint8_t, uint16_t> m_ReceivedChunkCountByPeer;
+		std::optional<NetLobbyConfigAck> m_IncomingStateReceipt;
+		uint64_t m_LastStateReceiptSentMs = UINT64_MAX;
 		uint32_t m_ChunkSendStall = 0; //!< Consecutive ticks the transport refused a chunk (backpressure).
 		std::set<uint8_t> m_StartSentTo; //!< Remotes this round's Start reached while a congested one still waits for it.
 		uint32_t m_StartSendStall = 0; //!< Consecutive ticks the transport refused the Start as congested.

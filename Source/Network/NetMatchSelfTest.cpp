@@ -3904,6 +3904,62 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestLobbyStateReceiptsAreBoundAndRepeated(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetPeerId hostPeer = 0, clientPeer = 0;
+			if (!StartLoopbackTransports(47545, hostWire, clientWire, hostPeer, clientPeer, error)) return false;
+			StateTransferTap tap(clientWire);
+			NetLobbySession host, client;
+			NetLobbySessionConfig config;
+			config.host = true; config.localPeerId = 1; config.remotePeerId = 2; config.remoteTransportPeerId = hostPeer;
+			config.matchConfig = MakeConfig(); config.autoStart = false;
+			if (!host.Start(hostWire, config, error)) return false;
+			config.host = false; config.localPeerId = 2; config.remotePeerId = 1; config.remoteTransportPeerId = clientPeer;
+			if (!client.Start(tap, config, error)) return false;
+			uint64_t now = 0;
+			const auto tick = [&] { host.Tick(now); client.Tick(now); now += 50; };
+			for (int i = 0; i < 4; ++i) tick();
+			std::optional<NetLobbyConfigAck> receipt;
+			bool hold = false, loseFinal = false, finalLost = false;
+			const std::vector<uint8_t> state(5 * NetLobbyProtocol::c_MaxStateChunkBytes + 9, 0x6A);
+			tap.dropSend = [&](NetTransportLane, const std::vector<uint8_t>& bytes) {
+				const auto decoded = NetLobbyProtocol::Decode(bytes);
+				const auto* ack = decoded.ok ? std::get_if<NetLobbyConfigAck>(&decoded.message.payload) : nullptr;
+				if (!ack || !ack->reason.starts_with("state:")) return false;
+				receipt = *ack;
+				if (hold) return true;
+				if (loseFinal && !finalLost && ack->reason.ends_with(":" + std::to_string(NetLobbyProtocol::GetStateChunkCount(state.size())))) {
+					finalLost = true; return true;
+				}
+				return false;
+			};
+			host.BeginStateTransfer(state);
+			for (int i = 0; i < 10; ++i) tick();
+			if (!receipt || client.TakeReceivedState() != state) { *error = "the first state has no complete receipt"; return false; }
+			const auto old = *receipt;
+			hold = true;
+			host.BeginStateTransfer(state);
+			host.RequestStart();
+			for (int i = 0; i < 8; ++i) tick();
+			if (!receipt || receipt->reason == old.reason || host.IsStarted()) { *error = "a new transfer reused its receipt or started without one"; return false; }
+			auto corrupt = *receipt;
+			corrupt.matchConfigHash[0] ^= 1;
+			for (const auto& wrong: {old, corrupt}) {
+				std::vector<uint8_t> bytes;
+				if (!NetLobbyProtocol::Encode({wrong}, bytes) || !clientWire.Send(clientPeer, NetTransportLane::ControlReliable, bytes, error)) return false;
+				tick();
+				if (host.IsStarted() || host.IsFailed() || client.IsFailed()) { *error = "a stale or corrupt receipt opens or ends the round"; return false; }
+			}
+			hold = false;
+			loseFinal = true;
+			for (int i = 0; i < 40 && !(host.IsStarted() && client.IsStarted()); ++i) tick();
+			if (!finalLost || !host.IsStarted() || !client.IsStarted() || client.TakeReceivedState() != state) {
+				*error = "a lost final receipt is not repeated or changes the received state"; return false;
+			}
+			std::cout << "[net-match-selftest] PASS state_receipts_bind_transfer_and_bytes_and_repeat" << std::endl;
+			return true;
+		}
+
 		bool TestResumeHeldPeerSkipsTheTransfer(std::string* error) {
 			const std::string matchId = "00000000deadbeef-00000000000000bb";
 			constexpr uint64_t savedTick = 600;
@@ -16600,6 +16656,7 @@ namespace RTE {
 		if (!TestAiOnlyHostSeatsNoJoiner(&error)) return fail(error);
 		if (!TestBootstrapWaitsForReceivingLobby(&error)) return fail(error);
 		if (!TestLobbyStartWaitsForReceivedState(&error)) return fail(error);
+		if (!TestLobbyStateReceiptsAreBoundAndRepeated(&error)) return fail(error);
 		if (!TestLobbyStateTransfer(&error)) return fail(error);
 		if (!TestLobbyStateChunkBounds(&error)) return fail(error);
 		if (!TestLobbyStateChunkConsistency(&error)) return fail(error);
