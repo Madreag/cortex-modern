@@ -119,11 +119,39 @@ def stage_file_closed(run):
     seed_settings(run, {"EnableGlobalScript": "UserSavedGames.rte/Module File Probe"})
 
 
+def stage_camera(run):
+    from run_sim_test import seed_settings
+
+    module = Path(run.cwd) / "Userdata/UserSavedGames.rte"
+    module.mkdir()
+    (module / "Index.ini").write_text(
+        "DataModule\n\tModuleName = Scripted Activity Saves\n\tAddGlobalScript = GlobalScript\n"
+        "\t\tPresetName = Camera Detector\n\t\tLateUpdate = 1\n"
+        "\t\tScriptPath = UserSavedGames.rte/CameraDetector.lua\n\t\tLuaClassName = CameraDetector\n", encoding="utf-8")
+    (module / "CameraDetector.lua").write_text("""function CameraDetector:StartScript() self.ticks = 0; end
+function CameraDetector:UpdateScript()
+    self.ticks = self.ticks + 1;
+    if self.ticks == 60 then
+        local activity = ActivityMan:GetActivity();
+        for player = 0, 3 do
+            local screen = activity:ScreenOfPlayer(player);
+            if screen >= 0 then
+                local target = CameraMan:GetScrollTarget(screen);
+                local offset = CameraMan:GetOffset(screen);
+                print("[resume-camera] player=" .. player .. " target=" .. target.X .. "," .. target.Y .. " offset=" .. offset.X .. "," .. offset.Y .. " menu=" .. VoidWanderers.Mid.X .. "," .. VoidWanderers.Mid.Y);
+            end
+        end
+    end
+end
+""", encoding="utf-8")
+    seed_settings(run, {"EnableGlobalScript": "UserSavedGames.rte/Camera Detector"})
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--case", choices=["purge-view", "team-change", "held-switch", "file-closed", "external-root", "feel"], required=True)
+    parser.add_argument("--case", choices=["purge-view", "team-change", "held-switch", "file-closed", "external-root", "camera", "feel"], required=True)
     parser.add_argument("--single", action="store_true", help="also check the legacy single-player setter")
     parser.add_argument("--port", type=int, default=47650)
     args = parser.parse_args()
@@ -138,13 +166,14 @@ def main():
         return int(not result["pass"])
 
     out.mkdir(parents=True, exist_ok=False)
-    paired = args.case in ["team-change", "held-switch"] and not args.single
+    paired = args.case in ["team-change", "held-switch", "camera"] and not args.single
     script = out / "presses.txt"
-    script.write_text("player=0 80 240 L_LEFT\n", encoding="utf-8")
+    script.write_text("" if args.case == "camera" else "player=0 80 240 L_LEFT\n", encoding="utf-8")
     common = ["-module", "VoidWanderers.rte", "-seed", "42", "-input-script", str(script)]
     runs, records, rows = [], {}, []
     try:
         for peer in (["host", "client"] if paired else ["single"]):
+            environment = {"CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"} if args.case == "file-closed" else {}
             if paired:
                 flags = ["-net-match-service-e2e", "-net-port", str(args.port), "-net-match-peers", "2",
                          "-net-match-ticks", "300", "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
@@ -154,13 +183,24 @@ def main():
                 flags += ["-net-host"] if peer == "host" else ["-net-join", "127.0.0.1"]
                 if args.case == "held-switch" and peer == "client":
                     flags += ["-net-match-e2e-leave", "-net-match-e2e-leave-tick", "80"]
+                if args.case == "camera":
+                    flags[flags.index("-net-match-service-module") + 1] = "VoidWanderers.rte"
+                    flags[flags.index("-net-match-service-preset") + 1] = "Void Wanderers"
+                    flags[flags.index("-net-match-ticks") + 1] = "120"
+                    probe = out / f"{peer}-probe/probe.json"
+                    probe.parent.mkdir()
+                    probe.write_text(json.dumps({"schema": 1, "timeout_ms": 60000, "steps": [
+                        {"op": "wait", "lockstep_frame_at_least": 70},
+                        {"op": "screenshot", "name": "unassisted_menu", "composited": True}, {"op": "finish"}]}), encoding="utf-8")
+                    environment["CC_TEST_NET_UI_SCRIPT"] = str(probe)
             else:
                 scenario = "VoidWanderers.rte/Void Wanderers" if args.case == "file-closed" else "UserSavedGames.rte/Seat Boundary"
                 flags = ["-scenario", scenario, "-max-ticks", "300", "-tick-hashes", "-out", str(out / "trace.json")]
-            run = make_run(repo, common + flags, out / peer, 120,
-                           env={"CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"} if args.case == "file-closed" else None)
+            run = make_run(repo, common + flags, out / peer, 120, env=environment)
             if args.case == "file-closed":
                 stage_file_closed(run)
+            elif args.case == "camera":
+                stage_camera(run)
             else:
                 stage_activity(run, args.case)
             runs.append((peer, run))
@@ -179,6 +219,13 @@ def main():
             if args.case == "feel":
                 if "[seat-boundary] responses=161,0" not in logs:
                     errors.append("ordinary purge/replacement and released movement witness missing")
+            elif args.case == "camera":
+                from PIL import Image
+                checks = load_sibling("mod-void-wanderers-scenes")
+                pictures = sorted((out / f"{peer}-probe").glob("unassisted_menu_*.png"))
+                menu = [[checks.find_words(Image.open(picture), repo / "Data/VoidWanderers.rte", word) for word in ["New game", "Load game"]] for picture in pictures]
+                if not menu or not any(all(word["pass"] for word in words) for words in menu):
+                    errors.append("unassisted joining camera omits visible New game / Load game")
             elif not (args.case == "held-switch" and peer == "client") and f"[resume-detector] PASS {witness}" not in logs:
                 errors.append(f"{witness} witness missing")
             bad = [line[:350] for line in logs.splitlines() if re.search(r"RTE Abort|RTE Assert|stack traceback|stopped a preview hook|\bdesync\b", line, re.I)]
@@ -189,7 +236,7 @@ def main():
                 if not (runtime / "Mods/Generated.rte/sentinel.txt").is_file() or not (runtime / "UnroutedRename/sentinel.txt").is_file() or (runtime / "UnroutedCreate").exists() or (runtime / "UnroutedMoved").exists():
                     errors.append("generated non-module directories were altered")
             rows.append({"peer": peer, "pass": not errors, "errors": errors,
-                         "detector_lines": [line for line in logs.splitlines() if "[resume-detector]" in line],
+                         "detector_lines": [line for line in logs.splitlines() if "[resume-detector]" in line or "[resume-camera]" in line],
                          "binary": record.get("exe_sha256"), "record": record})
         result = {"case": args.case, "pass": all(row["pass"] for row in rows),
                   "proof": not paired, "topology": "single-box: not proof" if paired else "single-peer", "peers": rows}
