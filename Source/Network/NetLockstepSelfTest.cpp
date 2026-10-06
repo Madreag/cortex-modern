@@ -24037,8 +24037,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			uint64_t drainThrough = UINT64_MAX;
 			std::string failure;
 
-			bool Start(uint16_t port, bool bounded = true, bool world = false, uint8_t count = 4) {
+			bool Start(uint16_t port, bool bounded = true, bool world = false, uint8_t count = 4, uint16_t delay = 0) {
 				match = ReleasedClaimsMatch(0x9C00 + port, count);
+				match.inputDelayFrames = delay;
 				match.slowPlayerPolicy = bounded ? NetSlowPlayerPolicy::Substitute : NetSlowPlayerPolicy::Pause;
 				for (uint8_t peer = 2; peer <= count; ++peer) match.successorOrder.push_back(peer);
 				for (uint8_t peer = 1; peer <= count; ++peer) match.migrationPeers.push_back({peer, static_cast<uint16_t>(port + peer), {"loopback"}});
@@ -24057,6 +24058,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				for (size_t index = 0; index < peers.size(); ++index) {
 					if (index >= count) { alive[index] = false; continue; }
 					auto config = ReleasedClaimsConfig(match, static_cast<uint8_t>(index + 1), index == 0 ? remotes : std::map<uint8_t, NetPeerId>{{1, 1}}, bounded);
+					config.inputDelayFrames = delay;
+					if (delay) for (uint8_t peer = 1; peer <= count; ++peer) config.peerInputDelayFrames[peer] = delay;
 					config.startFrame = 1;
 					config.migrationKey.fill(0x39);
 					config.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); };
@@ -24646,6 +24649,69 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	}
 
 	namespace {
+		bool TestSurvivorsReadOneAuthorityDuringHandover(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("survivors_read_one_authority_during_handover", why, error); };
+			SuccessionReplayScope scope;
+			ReleasePathRound round;
+			round.now = NetLockstepNowMs();
+			if (!round.Start(47425, true, false, 4, 1)) return fail("the positive-delay round did not start: " + round.failure);
+			round.drainThrough = 120;
+			round.produceThrough.fill(119);
+			for (int turn = 0; turn < 400 && round.peers[3].GetResumeFrame() != 121; ++turn) round.Pump();
+			for (const auto& peer: round.peers) if (peer.GetResumeFrame() != 121) return fail("a peer did not finish frame 120");
+			g_TimerMan.RewindSimTo(120, 120 * g_TimerMan.GetDeltaTimeTicks());
+			SoundContainer sound;
+			if (sound.Create("Base.rte/Sounds/GUIs/ButtonPress.flac", false, true, SoundContainer::SFX) < 0) return fail("the host-reading sound did not create");
+			{ SoundSimulationScope shared(0, 0x9D04); sound.SetLoopSetting(-1); if (!sound.Play()) return fail("the host-reading sound did not play logically"); }
+			const auto key = sound.GetSharedPlaybackIdentity();
+			if (!key.ordinal) return fail("the host-reading sound has no identity");
+			std::vector<NetSoundObservation> observations;
+			for (uint8_t sender: {uint8_t{1}, uint8_t{2}}) {
+				NetSoundObservation reading;
+				reading.senderPeerId = sender; reading.objectUID = key.objectUID; reading.tick = key.tick; reading.phase = key.phase;
+				reading.occurrence = key.occurrence; reading.ordinal = key.ordinal; reading.value = sender == 1 ? 0.2F : 0.8F;
+				observations.push_back(reading);
+			}
+			round.inputReadings = observations;
+			round.produceThrough.fill(120);
+			for (int turn = 0; turn < 40; ++turn) round.Pump();
+			if (!round.peers[2].HasReadyFrame(121)) return fail("the early survivor has no committed frame 121");
+			ScenarioRunner::SetLockstepCoordinator(&round.peers[2]);
+			g_AudioMan.CommitSoundObservations(120, {}, observations);
+			auto* start = new AuthorityReadingActivity; start->sound = &sound;
+			if (g_ActivityMan.StartActivity(start) < 0) return fail("the host-reading activity did not start");
+			auto* activity = dynamic_cast<AuthorityReadingActivity*>(g_ActivityMan.GetActivity());
+			if (!activity || !ScenarioRunner::PollLockstepSimulationTick(121)) return fail("the early survivor was not granted frame 121");
+			g_TimerMan.GrantSimUpdates(1); g_TimerMan.UpdateSim(); g_ActivityMan.Update();
+			const int earlyMutation = activity->mutations;
+			const uint8_t earlyAuthority = round.peers[2].GetHostPeerId();
+			round.alive[0] = false; round.hostWire.Stop();
+			ScenarioRunner::SetSessionPump([&] { round.Pump(); });
+			struct PumpScope { ~PumpScope() { ScenarioRunner::SetSessionPump({}); } } pumpScope;
+			if (!ScenarioRunner::QueueLockstepLocalControllerFrames(121, {}, &round.failure)) return fail(round.failure);
+			NetLockstepReadyFrame earlyFrame;
+			if (!ScenarioRunner::WaitForLockstepControllerFrame(121, earlyFrame, &round.failure)) return fail("the early survivor did not deliver its tick: " + round.failure);
+			round.peers[2].FinishSimulationTick(121);
+			ScenarioRunner::SetLockstepCoordinator(&round.peers[1]);
+			for (int turn = 0; turn < 2000 && !round.peers[1].HasReadyFrame(121); ++turn) round.Pump();
+			if (!round.peers[1].HasReadyFrame(121) || !ScenarioRunner::PollLockstepSimulationTick(121)) return fail("the late survivor did not receive its activity tick: " + round.peers[1].GetStats().timeoutReason);
+			activity->mutations = 0;
+			g_AudioMan.CommitSoundObservations(120, {}, observations);
+			g_TimerMan.RewindSimTo(120, 120 * g_TimerMan.GetDeltaTimeTicks());
+			g_TimerMan.GrantSimUpdates(1); g_TimerMan.UpdateSim(); g_ActivityMan.Update();
+			const int lateMutation = activity->mutations;
+			const uint8_t lateAuthority = round.peers[1].GetHostPeerId();
+			NetLockstepReadyFrame lateFrame;
+			if (!ScenarioRunner::WaitForLockstepControllerFrame(121, lateFrame, &round.failure)) return fail(round.failure);
+			round.peers[1].FinishSimulationTick(121);
+			if (earlyMutation != lateMutation || earlyAuthority != lateAuthority || earlyFrame.authorityPeerId != earlyAuthority || lateFrame.authorityPeerId != lateAuthority)
+				return fail("frame 121 survivor 3 update host=" + std::to_string(earlyAuthority) + " commit host=" + std::to_string(earlyFrame.authorityPeerId) + " mutation=" + std::to_string(earlyMutation) + "; survivor 2 update host=" + std::to_string(lateAuthority) + " commit host=" + std::to_string(lateFrame.authorityPeerId) + " mutation=" + std::to_string(lateMutation));
+			round.drainThrough = 121;
+			for (int turn = 0; turn < 2000 && (round.peers[2].GetHostPeerId() != 2 || round.peers[1].IsMigrating() || round.peers[2].IsMigrating()); ++turn) round.Pump();
+			if (round.peers[2].GetHostPeerId() != 2 || round.peers[1].IsMigrating() || round.peers[2].IsMigrating()) return fail("the committed tick did not finish before succession");
+			return fail("");
+		}
+
 		bool TestReplayMatchesSuccessionDuringActivityTick(std::string* error) {
 			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("replay_matches_succession_during_activity_tick", why, error); };
 			std::string failures;
@@ -25199,7 +25265,7 @@ namespace {
 	int NetLockstepSelfTest::RunSeatSuccession() {
 		EnsureSwitchTestManagers();
 		bool passed = true;
-		for (bool (*test)(std::string*): {TestTwoSuccessionsKeepBothFormerHosts, TestPlayingDepartureSurvivesSuccession, TestUnequalFutureDeparturesConvergeAtSuccession, TestPlayingHostLossKeepsLiveClaims, TestPlayingHostLossRecordsHeldClaims, TestPlayingHostReturnsWithItsTicket, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestReplayMatchesSuccessionDuringActivityTick, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
+		for (bool (*test)(std::string*): {TestTwoSuccessionsKeepBothFormerHosts, TestSurvivorsReadOneAuthorityDuringHandover, TestPlayingDepartureSurvivesSuccession, TestUnequalFutureDeparturesConvergeAtSuccession, TestPlayingHostLossKeepsLiveClaims, TestPlayingHostLossRecordsHeldClaims, TestPlayingHostReturnsWithItsTicket, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestReplayMatchesSuccessionDuringActivityTick, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
 			std::string error;
 			passed &= test(&error);
 		}
