@@ -3855,6 +3855,55 @@ namespace RTE {
 			LoopbackTransport& m_Transport;
 		};
 
+		bool TestLobbyStartWaitsForReceivedState(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetPeerId hostPeer = 0, clientPeer = 0;
+			if (!StartLoopbackTransports(47544, hostWire, clientWire, hostPeer, clientPeer, error)) return false;
+			StateTransferTap tap(hostWire);
+			NetLobbySession host, client;
+			NetLobbySessionConfig config;
+			config.host = true; config.localPeerId = 1; config.remotePeerId = 2; config.remoteTransportPeerId = hostPeer;
+			config.matchConfig = MakeConfig(); config.autoStart = false;
+			if (!host.Start(tap, config, error)) return false;
+			config.host = false; config.localPeerId = 2; config.remotePeerId = 1; config.remoteTransportPeerId = clientPeer;
+			if (!client.Start(clientWire, config, error)) return false;
+			uint64_t now = 0;
+			const auto tick = [&] { host.Tick(now); client.Tick(now++); };
+			for (int i = 0; i < 4; ++i) tick();
+			std::vector<std::vector<uint8_t>> queued;
+			bool holding = false;
+			tap.dropSend = [&](NetTransportLane lane, const std::vector<uint8_t>& bytes) {
+				const auto decoded = NetLobbyProtocol::Decode(bytes);
+				if (decoded.ok && std::holds_alternative<NetLobbyStateChunk>(decoded.message.payload)) holding = true;
+				if (!holding || lane != NetTransportLane::ControlReliable) return false;
+				queued.push_back(bytes);
+				return true;
+			};
+			const std::vector<uint8_t> state(3 * NetLobbyProtocol::c_MaxStateChunkBytes + 9, 0x73);
+			host.BeginStateTransfer(state);
+			host.RequestStart();
+			for (int i = 0; i < 8; ++i) tick();
+			std::vector<uint8_t> oldAck;
+			if (!NetLobbyProtocol::Encode({NetLobbyConfigAck{2, true, host.GetMatchConfigHash(), ""}}, oldAck) ||
+			    !clientWire.Send(clientPeer, NetTransportLane::ControlReliable, oldAck, error)) return false;
+			tick();
+			if (host.IsStarted() || client.IsStarted() || host.IsFailed() || client.IsFailed() || host.HasPendingStateChunks() ||
+			    client.HasCompleteStateTransfer() || queued.empty()) {
+				*error = "lobby start counts queued state as received: host_started=" + std::to_string(host.IsStarted()) +
+				         " client_complete=" + std::to_string(client.HasCompleteStateTransfer()) + " queued=" + std::to_string(queued.size());
+				return false;
+			}
+			tap.dropSend = {};
+			for (const auto& bytes: queued)
+				if (!hostWire.Send(hostPeer, NetTransportLane::ControlReliable, bytes, error)) return false;
+			for (int i = 0; i < 40 && !(host.IsStarted() && client.IsStarted()); ++i) tick();
+			if (!host.IsStarted() || !client.IsStarted() || client.TakeReceivedState() != state) {
+				*error = "a received state does not open the agreed start"; return false;
+			}
+			std::cout << "[net-match-selftest] PASS lobby_start_waits_for_received_state" << std::endl;
+			return true;
+		}
+
 		bool TestResumeHeldPeerSkipsTheTransfer(std::string* error) {
 			const std::string matchId = "00000000deadbeef-00000000000000bb";
 			constexpr uint64_t savedTick = 600;
@@ -16550,6 +16599,7 @@ namespace RTE {
 		if (!TestLobbyStartsWithoutRemoteHumanSeats(&error)) return fail(error);
 		if (!TestAiOnlyHostSeatsNoJoiner(&error)) return fail(error);
 		if (!TestBootstrapWaitsForReceivingLobby(&error)) return fail(error);
+		if (!TestLobbyStartWaitsForReceivedState(&error)) return fail(error);
 		if (!TestLobbyStateTransfer(&error)) return fail(error);
 		if (!TestLobbyStateChunkBounds(&error)) return fail(error);
 		if (!TestLobbyStateChunkConsistency(&error)) return fail(error);
