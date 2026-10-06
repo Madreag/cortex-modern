@@ -33,7 +33,8 @@ CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "pause-s
          "lobby-name", "net-options", "net-activity", "net-host-left", "net-host-left-early", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "host-by-hand", "host-follows-activity", "oracles")
 PAIRED_CASES = ("pause", "pause-save", "save-hotkey", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early")
 SPREAD_CASES = (*PAIRED_CASES, "net-chat", "lobby-name")
-# Cases another driver owns. They hold up to four engines for about an hour a size, so "all" never selects them: they run by name.
+# Cases another driver owns, at their own three sizes. They hold up to four engines for about an hour a size; "all" runs them
+# too, so a merge's readback runs every in-match case.
 DELEGATED_CASES = ("in-match",)
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
@@ -2986,8 +2987,9 @@ def self_test():
     ran, refused = {"pass": True, "case": "repair", "size": "960x540"}, unavailable_row("net-host-left-early", "960x540", reason)
     row("ran-rows-decide-with-the-refusal-named", summarize([ran, refused]) == (True, "PASS", [f"net-host-left-early/960x540: {reason}"]))
     row("a-red-row-stays-red", summarize([{**ran, "pass": False}, refused])[:2] == (False, "FAIL"))
-    row("in-match-runs-by-name-at-its-three-sizes", not any(name in DELEGATED_CASES for name, _ in planned_cases("all", "640x360", True))
-        and planned_cases("in-match", "640x360") == [("in-match", size) for size in ("640x360", "960x540", "1280x720")])
+    three = [("in-match", size) for size in ("640x360", "960x540", "1280x720")]
+    row("all-runs-the-in-match-case-at-its-three-sizes", [row_ for row_ in planned_cases("all", "640x360") if row_[0] == "in-match"] == three
+        and planned_cases("in-match", "640x360") == three)
     row("posix-refuses-the-in-match-case-by-name", "NtSuspendProcess" in str(unavailable_reason("in-match", "posix")) and not unavailable_reason("in-match", "nt"))
     row("nothing-ran-is-unavailable-not-green", summarize([refused])[:2] == (False, "UNAVAILABLE"))
     print(f"[menu-readback-self-test] {'PASS' if all(results) else 'FAIL'} {sum(results)}/{len(results)}")
@@ -2996,7 +2998,7 @@ def self_test():
 
 def planned_cases(case, requested, all_sizes=False):
     rows = []
-    for name in CASES if case == 'all' else (case,):
+    for name in (*CASES, *DELEGATED_CASES) if case == 'all' else (case,):
         sizes = [requested]
         if name != 'oracles' and (all_sizes or name in ('net-chat', 'lobby-name', 'live', *DELEGATED_CASES)):
             sizes.extend(size for key, size in SIZE_GATES if key == name and size not in sizes)
