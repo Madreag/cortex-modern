@@ -11,7 +11,7 @@
 #include "SLTerrain.h"
 #include "TimerMan.h"
 #include "ScenarioRunner.h"
-#include "ScopedSoundSimulationScope.h"
+#include "SoundSimulation.h"
 
 using namespace RTE;
 
