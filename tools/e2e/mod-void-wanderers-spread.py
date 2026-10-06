@@ -60,6 +60,7 @@ def main():
     parser.add_argument("--case", choices=["purge-view", "team-change", "held-switch", "camera"])
     parser.add_argument("--boundary", choices=["single", "pair", "local", "nested", "revived"])
     parser.add_argument("--peer-boxes", required=True, help="the caller names every peer box")
+    parser.add_argument("--pool-registry", type=Path, required=True, help="the named boxes' transport catalog")
     parser.add_argument("--host-os", choices=["windows", "linux", "darwin", "any"], default="windows")
     parser.add_argument("--network", choices=["ice", "direct"], default="ice")
     parser.add_argument("--port", type=int, default=47650)
@@ -105,7 +106,7 @@ def main():
                 run_sim_test.make_run = original
 
         result = spread.run_case(repo, options.out, peers, spread.Match(options.port, options.directory_port, parameters),
-                                 drive=drive, peer_boxes=options.peer_boxes)
+                                 drive=drive, peer_boxes=options.peer_boxes, registry=options.pool_registry)
         print(json.dumps({key: result[key] for key in ["topology", "peer_boxes", "identities", "driver_result"] if key in result}, indent=2))
         return result["driver_result"]
 
@@ -138,12 +139,13 @@ def main():
                 arguments.remote_capture = None
 
         result = spread.run_case(repo, root, peers, spread.Match(driver.port_for(index, arguments.port), options.directory_port, parameters),
-                                 drive=drive, peer_boxes=options.peer_boxes)
+                                 drive=drive, peer_boxes=options.peer_boxes, registry=options.pool_registry)
         return result["driver_result"]
 
     driver.run_one = run_scene
     remaining = options.arguments[1:] if options.arguments[0] == "--" else options.arguments
-    sys.argv = [str(options.driver), "--repo", str(repo), "--peer-boxes", options.peer_boxes, *remaining]
+    sys.argv = [str(options.driver), "--repo", str(repo), "--peer-boxes", options.peer_boxes,
+                "--pool-registry", str(options.pool_registry), *remaining]
     return driver.main()
 
 
