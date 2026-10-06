@@ -102,7 +102,71 @@ namespace RTE {
 				}
 			}
 		}
-		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"removed", m_RemovedParticipants}, {"roster_bytes", EncodeRoster(m_Roster)}, {"roster_host", rosterHost}, {"roster_banned", m_Roster.banned}, {"applicants", applicants}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
+		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"removed", m_RemovedParticipants}, {"roster_bytes", EncodeRoster(m_Roster)}, {"roster_host", rosterHost}, {"roster_banned", m_Roster.banned}, {"applicants", applicants}, {"seat_removal_undo", m_SeatRemovalUndo}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
+	}
+
+	bool NetReconnectHost::RememberSeatRemoval(uint16_t stableSeat, uint64_t frame) {
+		using json = nlohmann::json;
+		const auto bytes = ExportMigrationState();
+		const auto state = json::from_cbor(bytes);
+		const auto registry = json::from_cbor(state.at("registry").get<std::vector<uint8_t>>());
+		json undo{{"from", frame}, {"frame", UINT64_MAX}, {"epoch", m_ConfiguredEpoch}, {"roster_bytes", state.at("roster_bytes")}};
+		for (const auto& seat: state.at("seats")) if (seat.at("seat") == stableSeat) undo["seat"] = seat;
+		for (const auto& seat: registry.at("seats")) if (seat.at(0) == stableSeat) undo["registry"] = seat;
+		for (const auto& seat: state.at("roster_host")) if (seat.at(0) == RosterIdOf(stableSeat)) undo["roster_host"] = seat;
+		if (!undo.contains("seat") || !undo.contains("registry") || !undo.contains("roster_host")) return false;
+		auto encoded = json::to_cbor(undo);
+		if (bytes.size() + encoded.size() + 16 > 32 * 1024) return false;
+		m_SeatRemovalUndo.push_back(std::move(encoded));
+		NoteStateChanged();
+		return true;
+	}
+
+	void NetReconnectHost::NoteSeatRelease(uint8_t peerId, uint64_t frame) {
+		for (auto& bytes: m_SeatRemovalUndo) {
+			auto undo = nlohmann::json::from_cbor(bytes);
+			if (undo.at("seat").at("slot").at(1) != peerId || frame < undo.at("from").get<uint64_t>() || frame >= undo.at("frame").get<uint64_t>()) continue;
+			undo["frame"] = frame;
+			bytes = nlohmann::json::to_cbor(undo);
+			NoteStateChanged();
+		}
+	}
+
+	std::vector<uint8_t> NetReconnectHost::MigrationStateAtFrame(const std::vector<uint8_t>& bytes, uint64_t frame) {
+		if (bytes.empty() || bytes.size() > 32 * 1024) return {};
+		try {
+			using json = nlohmann::json;
+			auto state = json::from_cbor(bytes);
+			auto registry = json::from_cbor(state.at("registry").get<std::vector<uint8_t>>());
+			NetSeatRoster roster;
+			std::string error;
+			if (!DecodeRoster(state.at("roster_bytes").get<std::vector<uint8_t>>(), roster, &error)) return {};
+			const auto history = state.value("seat_removal_undo", std::vector<std::vector<uint8_t>>{});
+			// Undo in reverse order: a seat can change owners more than once in the old round.
+			for (auto it = history.rbegin(); it != history.rend(); ++it) {
+				const auto undo = json::from_cbor(*it);
+				if (undo.at("frame").get<uint64_t>() <= frame) continue;
+				if (undo.at("epoch") != registry.at("epoch")) return {};
+				const uint16_t stable = undo.at("seat").at("seat").get<uint16_t>();
+				NetSeatRoster before;
+				if (!DecodeRoster(undo.at("roster_bytes").get<std::vector<uint8_t>>(), before, &error) || before.matchId != roster.matchId) return {};
+				auto* target = roster.Find(RosterIdOf(stable));
+				const auto* prior = before.Find(RosterIdOf(stable));
+				if (!target || !prior) return {};
+				*target = *prior;
+				bool foundSeat = false, foundCredential = false, foundTicket = false;
+				for (auto& seat: state.at("seats")) if (seat.at("seat") == stable) { seat = undo.at("seat"); foundSeat = true; }
+				for (auto& seat: registry.at("seats")) if (seat.at(0) == stable) { seat = undo.at("registry"); foundCredential = true; }
+				for (auto& seat: state.at("roster_host")) if (seat.at(0) == RosterIdOf(stable)) { seat = undo.at("roster_host"); foundTicket = true; }
+				if (!foundSeat || !foundCredential || !foundTicket) return {};
+			}
+			state["registry"] = json::to_cbor(registry);
+			state["roster_bytes"] = EncodeRoster(roster);
+			state.erase("seat_removal_undo");
+			return json::to_cbor(state);
+		} catch (const nlohmann::json::exception&) {
+			return {};
+		}
 	}
 
 	int64_t NetReconnectHost::CountExportedOpenSeats(const std::vector<uint8_t>& bytes, uint8_t localPeerId) {
@@ -174,6 +238,18 @@ namespace RTE {
 			next.SetMatchConfigHash(NetMatchConfigUtil::HashConfig(config));
 			next.m_NowMs = nowMs;
 			next.m_LiveMatch = true;
+			next.m_SeatRemovalUndo = object.value("seat_removal_undo", std::vector<std::vector<uint8_t>>{});
+			for (const auto& bytes: next.m_SeatRemovalUndo) {
+				const auto undo = nlohmann::json::from_cbor(bytes);
+				const uint16_t stable = undo.at("seat").at("seat").get<uint16_t>();
+				const uint8_t peer = undo.at("seat").at("slot").at(1).get<uint8_t>();
+				NetSeatRoster prior;
+				std::string error;
+				if (!next.FindSeat(stable) || next.FindSeat(stable)->seat.lockstepPeerId != peer || undo.at("epoch").get<NetAuthEpoch>() != nextRegistry.GetEpoch() ||
+				    undo.at("registry").at(0).get<uint16_t>() != stable || undo.at("roster_host").at(0).get<uint8_t>() != RosterIdOf(stable) ||
+				    undo.at("frame").get<uint64_t>() < undo.at("from").get<uint64_t>() || !DecodeRoster(undo.at("roster_bytes").get<std::vector<uint8_t>>(), prior, &error) ||
+				    prior.matchId != next.m_Roster.matchId || !prior.Find(RosterIdOf(stable))) return false;
+			}
 			std::set<uint16_t> seen;
 			for (const auto& row: object.at("seats")) {
 				const uint16_t seat = row.at("seat").get<uint16_t>();
@@ -466,6 +542,7 @@ namespace RTE {
 			m_Admission.Reset();
 			m_TxCache.Clear();
 			m_Ledger.Clear();
+			m_SeatRemovalUndo.clear();
 			for (Substitution& pending: m_Substitutions) pending.credential.fill(0);
 			m_Substitutions.clear();
 			m_Applicants.clear();
@@ -1677,6 +1754,7 @@ namespace RTE {
 		// A kick opens the seat for anyone to take - including the player it just removed. Only the
 		// ban list above holds an identity out of a rejoin; m_RemovedParticipants stays for
 		// pre-fix migration state that still carries one.
+		if (m_LiveMatch && round != 0 && !RememberSeatRemoval(seat->seat.stableSeat, boundaryFrame)) return NetKickBanResult::ActionUnavailable;
 		if (issued.connection != c_InvalidNetPeerId) {
 			m_Admission.DropConnection(issued.connection);
 		}

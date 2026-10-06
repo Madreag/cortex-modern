@@ -502,6 +502,8 @@ namespace RTE {
 		/// The seat table as the plane holds it now, in table order.
 		std::vector<NetH4Seat> GetSeatTable() const;
 		std::vector<uint8_t> ExportMigrationState() const;
+		void NoteSeatRelease(uint8_t peerId, uint64_t frame);
+		static std::vector<uint8_t> MigrationStateAtFrame(const std::vector<uint8_t>& bytes, uint64_t frame);
 		/// The wall clock the plane writes the roster's host-side times by when it hands them to another machine; the system clock unset.
 		void SetUnixClock(uint64_t (*clock)(void*), void* context);
 		/// How many seats an exported plane still offers a joiner, read without importing it, so a
@@ -732,6 +734,8 @@ namespace RTE {
 		NetReconnectTxCache m_TxCache;
 		NetReconnectLedger m_Ledger;
 		std::vector<SeatState> m_Seats;
+		std::vector<std::vector<uint8_t>> m_SeatRemovalUndo;
+		bool RememberSeatRemoval(uint16_t stableSeat, uint64_t frame);
 		NetSeatRoster m_Roster; //!< Whether each seat's holder is away, why and since when; changed only through ApplyRosterEvent.
 		uint64_t (*m_UnixClock)(void*) = nullptr;
 		void* m_UnixClockContext = nullptr;

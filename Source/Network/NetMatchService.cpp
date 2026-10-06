@@ -6125,6 +6125,7 @@ static std::string ResyncSaveName() {
 		m_MigrationGeneration = m_Coordinator->GetConfig().migrationGeneration;
 		m_IsHost = true;
 		m_HandoverFrame = handoverFrame;
+		m_MigrationAdmissionState = NetReconnectHost::MigrationStateAtFrame(m_MigrationAdmissionState, handoverFrame - 1);
 		m_PendingModeration.clear();
 		m_PendingHostOptions.reset();
 		m_HostOptionsRequest.Clear();
@@ -7339,6 +7340,7 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::SealMigrationCapsuleLocked(uint8_t peerId, const NetHash32& configHash, std::vector<uint8_t>& sealed) {
+		NoteAdmissionReleasesLocked();
 		if (!g_SettingsMan.GetSessionDirectoryUrl().empty() && !m_DirectoryRegistered)
 			return false;
 		NetH4TicketRecord localTicket;
@@ -7849,6 +7851,7 @@ static std::string ResyncSaveName() {
 	void NetMatchService::PublishMigrationCapsulesLocked() {
 		if (!m_IsHost || !m_Coordinator || m_Coordinator->GetConfig().matchConfig.successorOrder.empty() || !m_Session)
 			return;
+		NoteAdmissionReleasesLocked();
 		const auto state = m_ReconnectHost.ExportMigrationState();
 		if (state == m_LastMigrationAdmissionState && m_MigrationDirectorySession == m_DirectorySessionId && m_MigrationDirectoryToken == m_DirectoryToken)
 			return;
@@ -7865,6 +7868,12 @@ static std::string ResyncSaveName() {
 		m_LastMigrationAdmissionState = state;
 		m_MigrationDirectorySession = m_DirectorySessionId;
 		m_MigrationDirectoryToken = m_DirectoryToken;
+	}
+
+	void NetMatchService::NoteAdmissionReleasesLocked() {
+		if (!m_Coordinator) return;
+		for (const auto& [peer, records]: m_Coordinator->SeatReleases())
+			for (const auto& [frame, release]: records) m_ReconnectHost.NoteSeatRelease(peer, frame);
 	}
 
 	void NetMatchService::PumpHostMigration() {
@@ -7946,6 +7955,16 @@ static std::string ResyncSaveName() {
 		m_MigrationGeneration = result.generation;
 		m_IsHost = result.hostPeerId == m_LocalPeerId;
 		m_HandoverFrame = result.boundary + 1;
+		m_MigrationAdmissionState = NetReconnectHost::MigrationStateAtFrame(m_MigrationAdmissionState, result.boundary);
+		if (!m_MigrationAdmissionState.empty()) {
+			const auto carried = nlohmann::json::from_cbor(m_MigrationAdmissionState);
+			NetSeatRoster roster;
+			std::string error;
+			if (DecodeRoster(carried.at("roster_bytes").get<std::vector<uint8_t>>(), roster, &error)) {
+				roster.banned = carried.value("roster_banned", std::vector<uint64_t>{});
+				m_CarriedModerationState = ModerationStateOf(roster);
+			}
+		}
 		m_PendingModeration.clear();
 		m_PendingHostOptions.reset();
 		m_HostOptionsRequest.Clear();
