@@ -9,7 +9,7 @@ same activity - and every seated team's funds equal that gold.
   python tools/test_activity_rules.py --out <output-dir> [--port 47350] [--runs 1] [--path address|newcomer]
 
 The newcomer path joins through the game list - the host's row, Join Game - instead of by address; the
-host's port is the one setup word, so two runs on one machine never meet.
+host's port is the one setup word. Each peer runs on a separate machine.
 """
 
 from __future__ import annotations
@@ -23,7 +23,15 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
-from run_sim_test import make_run, engine_executable, file_sha256  # noqa: E402
+from run_sim_test import engine_executable, file_sha256  # noqa: E402
+try:
+    import spread_peers as spread
+except ModuleNotFoundError as error:
+    if error.name != "spread_peers":
+        raise
+    spread = None
+
+managed_case = spread.managed_case if spread else lambda function: function
 
 RULES = re.compile(r"\[e2e\] rules tick=1 difficulty=(\d+) gold=(-?\d+) fog=(\d) orbit=(\d) deploy=(\d)(.*?) cpu_team=(-?\d+) activity=\"([^\"]*)\"")
 FUNDS = re.compile(r"team(\d)\.funds=(-?[\d.]+)")
@@ -67,7 +75,7 @@ def newcomer_scripts(port: int) -> dict:
 def scripts(port: int) -> dict:
     host = ("wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\nsettext TextMultiplayerName Host\n"
             "activate ButtonMultiplayerHostGame\nwait 6\nassert_substate HostSetup\n"
-            # The run's own port, so two runs on one machine never meet; nothing else on the screen is touched.
+            # The run's own port; nothing else on the screen is touched.
             f"setup_host_port {port}\n"
             "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\nwait_remote_ready 120\nwait 10\n"
             "activate ButtonMultiplayerStart\nwait_state Running 60\nwait_ms 600000\nexit\n")
@@ -79,15 +87,23 @@ def scripts(port: int) -> dict:
     return {"host": host, "client": client}
 
 
+@managed_case
 def run_once(options, root: Path) -> dict:
     root.mkdir(parents=True, exist_ok=False)
     runs, logs, result = {}, {}, {"peers": {}}
     started = set()
+    executor = None
+    collection_errors = []
     try:
+        if not spread or not spread.enabled(options):
+            raise RuntimeError("activity rules requires the shared spread executor")
+        executor = spread.prepare_case(options.repo, root,
+                                      [spread.Peer("host", os="windows", reviewed=True), spread.Peer("client", os="windows")],
+                                      spread.Match(options.port))
         for who, text in (newcomer_scripts if options.path == "newcomer" else scripts)(options.port).items():
             script = root / f"{who}-menu.txt"
             script.write_text(text, encoding="utf-8")
-            runs[who] = make_run(options.repo, ["-menu-script", str(script)], root / who, options.timeout, env={"CCCP_HEADLESS": "1"})
+            runs[who] = executor.make_run(options.repo, ["-menu-script", str(script)], root / who, options.timeout, env={"CCCP_HEADLESS": "1"})
             runs[who].start()
             started.add(who)
             if who == "host":
@@ -108,13 +124,17 @@ def run_once(options, root: Path) -> dict:
             if who in started and run.poll() is None:
                 run.terminate(0, "the rules were read")
             try:
+                if who in started:
+                    run.finish()
                 run.close()
-            except Exception:
-                pass
+            except Exception as error:
+                collection_errors.append(f"{who}: {error}")
     for who in runs:
         log = runs[who].out / "stdout.log"
         logs[who] = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
-    passed = True
+    passed = not collection_errors
+    if collection_errors:
+        result["collection_errors"] = collection_errors
     for who, text in logs.items():
         match = RULES.search(text)
         failed = re.findall(r"\[menu-script\] FAILED: [^\r\n]*", text)
@@ -134,6 +154,7 @@ def run_once(options, root: Path) -> dict:
                                 "observed": observed, "expected": expected, "seated_team_funds": {team: funds.get(team) for team in seated},
                                 "defaults_from": defaults["file"], "menu_failures": failed}
     result["pass"] = passed
+    result.update(topology="spread", peer_boxes=executor.result()["peer_boxes"], spread=executor.result(), proof=passed)
     return result
 
 
@@ -145,12 +166,19 @@ def main() -> int:
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--path", choices=("address", "newcomer"), default="address", help="join by address, or the newcomer's way through the game list")
+    if spread:
+        spread.add_arguments(parser)
     options = parser.parse_args()
+    if not spread:
+        parser.error("activity rules requires the shared spread executor")
+    options.spread = True
+    spread.configure(options)
     options.repo = options.repo.resolve()
     options.out.mkdir(parents=True, exist_ok=False)
     rows = [run_once(options, options.out / f"run{index + 1}") for index in range(options.runs)]
     summary = {"pass": all(row["pass"] for row in rows), "passed_runs": sum(row["pass"] for row in rows), "runs": len(rows),
-               "exe_sha256": file_sha256(engine_executable(options.repo)), "rows": rows}
+               "exe_sha256": file_sha256(engine_executable(options.repo)), "rows": rows,
+               "topology": "spread", "peer_boxes": [row["peer_boxes"] for row in rows], "proof": all(row["pass"] for row in rows)}
     (options.out / "result.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     print(f"[activity-rules] {'PASS' if summary['pass'] else 'FAIL'} {summary['passed_runs']} of {summary['runs']} {options.out / 'result.json'}")
     for row in rows:
