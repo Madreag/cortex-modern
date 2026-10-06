@@ -2565,6 +2565,8 @@ namespace RTE {
 			hostConfig.matchConfig = clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A0D);
 			hostConfig.requirePublishedStart = clientConfig.requirePublishedStart = true;
 			if (!StartCoordinatorPair(48899, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			const auto formingConfig = host.GetConfig().matchConfig;
+			const auto formingHash = NetMatchConfigUtil::HashConfig(formingConfig);
 			host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
 			host.NoteLocalStartPark(1000);
 			for (uint64_t now = 0; now < 200; ++now) {
@@ -2588,6 +2590,17 @@ namespace RTE {
 				         " effective=" + std::to_string(host.GetStats().effectiveStartFrame) + " expected_at_least=" + std::to_string(expectedAgreedFrame) +
 				         " peer_start_ms=" + std::to_string(host.GetStats().peers.at(2).startParkMs) +
 				         " holds=" + std::to_string(host.GetStats().peers.at(2).holds);
+				return false;
+			}
+			if (NetMatchConfigUtil::HashConfig(host.GetConfig().matchConfig) != formingHash ||
+			    NetMatchConfigUtil::HashConfig(client.GetConfig().matchConfig) != formingHash) {
+				*error = "published startup changed the agreed effective configuration: forming=" + NetMatchConfigUtil::BuildReportJson(formingConfig) +
+				         " running=" + NetMatchConfigUtil::BuildReportJson(client.GetConfig().matchConfig);
+				return false;
+			}
+			if (host.GetRoundConfigHash() != NetMatchConfigUtil::HashConfig(hostConfig.matchConfig) ||
+			    client.GetRoundConfigHash() != NetMatchConfigUtil::HashConfig(clientConfig.matchConfig)) {
+				*error = "effective delays replaced the opening round identity";
 				return false;
 			}
 			std::cout << "[net-lockstep-selftest] PASS first_start_waits_for_published_startup startup_ms=1000 peer_start_ms=200 agreed_frame_at_least="
