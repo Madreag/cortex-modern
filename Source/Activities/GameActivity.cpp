@@ -3734,8 +3734,9 @@ bool GameActivity::PlaceUnassignedBrain(int player) {
 }
 
 void GameActivity::ForgetDestroyedActor(const Actor* actor) {
+	if (!actor) return;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (m_ControlledActor[player] == actor &&
+		if ((m_ControlledActor[player] == actor || (m_SharedPlayerSeats && m_LockstepControlUID[player] == actor->GetUniqueID())) &&
 		    (m_ViewState[player] == ViewState::AIGoToPoint || m_ViewState[player] == ViewState::UnitSelectCircle)) {
 			// These views need the control slot that deletion clears.
 			m_ViewState[player] = ViewState::Normal;
