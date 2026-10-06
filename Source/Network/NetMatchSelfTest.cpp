@@ -806,6 +806,48 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestLobbyOpenSeatConfig(std::string* error) {
+			const uint16_t port = 45810;
+			LoopbackTransport hostWire, clientWire;
+			if (!hostWire.StartHost(port, error) || !clientWire.Connect("loopback", port, error)) return false;
+			hostWire.PollEvents();
+			clientWire.PollEvents();
+			NetMatchConfig draft = MakeConfig();
+			draft.peerCount = 3;
+			draft.players.push_back(NetMatchPlayerSlot{3, 2, false, "Open seat"});
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.remoteTransportPeerIds = {{2, 1}};
+			hostConfig.matchConfig = draft;
+			hostConfig.enableMigration = true;
+			hostConfig.migrationListenPort = port;
+			hostConfig.migrationListenAddrs = {"loopback"};
+			NetLobbySessionConfig clientConfig = hostConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remoteTransportPeerIds = {{1, 1}};
+			NetLobbySession host, client;
+			if (!host.Start(hostWire, hostConfig, error) || !client.Start(clientWire, clientConfig, error)) return false;
+			for (uint64_t now = 0; now <= 2000; now += 10) {
+				host.Tick(now);
+				client.Tick(now);
+				if (host.IsStarted() || client.IsStarted() || host.IsFailed() || client.IsFailed()) {
+					*error = "open-seat lobby started or failed while publishing its draft";
+					return false;
+				}
+				hostWire.AdvanceTimeMs(10);
+				clientWire.AdvanceTimeMs(10);
+			}
+			if (client.GetState() != NetLobbyState::WaitingForReady || client.GetMatchConfigHash() != host.GetMatchConfigHash() ||
+			    host.GetStats().configAcksReceived == 0 || host.GetStats().startPacketsSent != 0) {
+				*error = "open-seat lobby withheld its draft or bypassed its start gate";
+				return false;
+			}
+			std::cout << "PASS lobby_open_seat_config" << std::endl;
+			return true;
+		}
+
 		bool TestLobbyRefusesDivergentRosterOrder(std::string* error) {
 			// The roster's order seats the players, so one roster in two wire orders is two configs.
 			const NetMatchConfig agreed = MakeConfig();
@@ -16513,6 +16555,7 @@ namespace RTE {
 			return fail(error);
 		if (!TestMigrationEndpointTimeout(&error))
 			return fail(error);
+		if (!TestLobbyOpenSeatConfig(&error)) return fail(error);
 		if (!TestDisplayNameUtf8(&error)) return fail(error);
 		if (!TestMatchConfigDedicated(&error)) return fail(error);
 		if (!TestActivityModuleResolution(&error)) return fail(error);

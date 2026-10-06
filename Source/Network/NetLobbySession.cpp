@@ -1184,7 +1184,9 @@ namespace RTE {
 				(void)Send(request);
 				m_LastMigrationRequestMs = nowMs;
 			}
-			return;
+			// An open seat has no handover endpoint yet. Joined players can still read the
+			// draft; a full lobby keeps waiting for its migration credentials before Start.
+			if (HasRequiredOccupancy()) return;
 		}
 		if (!m_ConfigResendDue && m_Stats.configPacketsSent > 0 && nowMs < m_LastConfigSentMs + m_Config.resendIntervalMs) {
 			return;
