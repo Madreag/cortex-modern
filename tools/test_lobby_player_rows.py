@@ -170,7 +170,7 @@ def main():
     try:
         peers = [spread.Peer("host", os="windows", reviewed=True, output_name=HOST_NAME,
                              size=(options.width, options.height))]
-        peers.extend(spread.Peer(f"joiner{index + 1}", os="windows", output_name=name,
+        peers.extend(spread.Peer(f"joiner{index + 1}", os="any", output_name=name,
                                  size=(options.width, options.height)) for index, name in enumerate(JOINER_NAMES))
         executor = spread.prepare_case(repo, root, peers, spread.Match(options.port, parameters={"lane": "menus"}))
         host_suffix = ("wait_connected 4\nwait 120\ndump_lobby\n"

@@ -59,7 +59,7 @@ def main():
 
     try:
         execution = spread.prepare_case(options.repo, root,
-            [spread.Peer(name, os="windows", reviewed=name == "host")
+            [spread.Peer(name, os="windows" if name == "host" else "any", reviewed=name == "host")
              for name in ("host", "departing", "stayer", "applicant")],
             spread.Match(options.port, parameters={"lane": "menus", "network": "direct"}))
         # The host's own seats panel is the moderation view; it is pumped by the lockstep wait while

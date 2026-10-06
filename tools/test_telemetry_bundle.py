@@ -207,7 +207,7 @@ def run_replay(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
     runs, records, recordings = {}, {}, {}
     # These private credential fixtures must remain intact for the archive privacy oracle.
     execution = spread.prepare_case(repo, root,
-        [spread.Peer("host", os="windows", reviewed=True), spread.Peer("client", os="windows")],
+        [spread.Peer("host", os="windows", reviewed=True), spread.Peer("client", os="any")],
         spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
     for who in ("host", "client"):
         recordings[who] = root / f"{who}.ccrp"
@@ -337,7 +337,7 @@ def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
         runs, records = {}, {}
         execution = spread.prepare_case(repo, case,
             [spread.Peer("host", os="windows", reviewed=True, size=(width, height)),
-             spread.Peer("client", os="windows", size=(width, height))],
+             spread.Peer("client", os="any", size=(width, height))],
             spread.Match(port + index, parameters={"lane": "menus", "network": "direct"}))
         for who in ("host", "client"):
             args = ["-net-match-service-e2e", "-net-port", str(port + index), "-net-match-peers", "2",

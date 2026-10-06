@@ -67,7 +67,7 @@ def main():
 
     try:
         executor = spread.prepare_case(options.repo, root,
-                                      [spread.Peer("host", os="windows", reviewed=True), spread.Peer("client", os="windows")],
+                                      [spread.Peer("host", os="windows", reviewed=True), spread.Peer("client", os="any")],
                                       spread.Match(options.port, parameters={"lane": "menus"}))
         host_script = menu_script("Host", True, players, options.port) + \
             f"wait_connected {players}\nwait_remote_ready\nwait_all_ready\ndump_lobby\nwait 10\nexit\n"

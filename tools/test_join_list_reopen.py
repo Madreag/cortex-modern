@@ -141,7 +141,7 @@ def main() -> int:
     try:
         # Hold the same discovery port on the joiner's native machine, so every listed row remains the directory's.
         execution = spread.prepare_case(options.repo, root,
-            [spread.Peer("host", os="windows"),
+            [spread.Peer("host", os="any"),
              spread.Peer("client", os="windows", reviewed=True, block_udp=(DISCOVERY_PORT,))],
             spread.Match(first, dir_port, parameters={"lane": "menus",
                 "directory": {"DIRECTORY_URL": f"127.0.0.1:{dir_port}", "DIRECTORY_PIN": pin, "DIRECTORY_ROOT": root},

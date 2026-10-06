@@ -496,7 +496,7 @@ def main():
                 raise RuntimeError("viewport phase must stage its host first")
             joiner = name.removesuffix("Host") + "Joiner"
             executions[key] = spread.prepare_case(repo, root / phase,
-                [spread.Peer("host", os="windows", output_name=name, size=(options.width, options.height)),
+                [spread.Peer("host", os="any", output_name=name, size=(options.width, options.height)),
                  spread.Peer("client", os="windows", reviewed=True, output_name=joiner, size=(options.width, options.height))],
                 spread.Match(port, parameters={"lane": "menus"}))
         require_pin(repo, options.exe_sha256, before, checks, f"{name}_prelaunch")

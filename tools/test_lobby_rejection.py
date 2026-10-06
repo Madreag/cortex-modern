@@ -52,8 +52,8 @@ def main():
     try:
         execution = spread.prepare_case(options.repo, root,
             [spread.Peer("host", os="windows", reviewed=True, output_name="Host"),
-             spread.Peer("rejected", os="windows", output_name="Rejected"),
-             spread.Peer("replacement", os="windows", output_name="Replacement")], spread.Match(options.port, parameters={"lane": "menus"}))
+             spread.Peer("rejected", os="any", output_name="Rejected"),
+             spread.Peer("replacement", os="any", output_name="Replacement")], spread.Match(options.port, parameters={"lane": "menus"}))
         host = start("Host", True,
             f"wait_error {reason}\nassert_substate Lobby\nassert_enabled ButtonMultiplayerStart 0\nassert_error {reason}\ndump_lobby\nscreenshot rejected-join\n"
             "wait_connected 2\nwait_remote_ready\nwait_all_ready\nassert_enabled ButtonMultiplayerStart 1\ndump_lobby\nactivate ButtonMultiplayerStart\nwait 99999\n", trace=True)

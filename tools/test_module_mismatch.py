@@ -143,7 +143,7 @@ def main():
         for spec in phases:
             phase = spec["name"]
             executions[phase] = spread.prepare_case(options.repo, root / phase,
-                [spread.Peer("host", os="windows", output_name="Host"),
+                [spread.Peer("host", os="any", output_name="Host"),
                  spread.Peer("client", os="windows", reviewed=True, output_name="Joiner")], spread.Match(spec["port"], parameters={"lane": "menus"}))
             details[phase] = {"port": spec["port"], "expect": {"install": spec["install"], "others": spec["others"]}}
             host_script = ("wait_error could not join\nassert_substate Lobby\n"

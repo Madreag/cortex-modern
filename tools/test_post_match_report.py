@@ -160,7 +160,7 @@ def run_size(repo, root, size, port, expected):
     try:
         execution = spread.prepare_case(repo, root,
             [spread.Peer("host", os="windows", reviewed=True, output_name="Host", size=size),
-             spread.Peer("client", os="windows", output_name="Guest", size=size)],
+             spread.Peer("client", os="any", output_name="Guest", size=size)],
             spread.Match(port, parameters={"lane": "menus"}))
         for who in ("Host", "Guest"):
             script = root / f"{who}.txt"
