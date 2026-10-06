@@ -2166,7 +2166,7 @@ def run_one(options, scenario, run, run_index, out):
         options.remote_capture = case
         try:
             result = _run_one(options, scenario, run, run_index, out)
-            result.update(topology="spread", peer_boxes=case.result()["peer_boxes"])
+            result.update(topology="spread", peer_boxes=case.result()["peer_boxes"], repo=str(Path(options.repo).resolve()))
             for peer in result["peers"]:
                 peer.update(topology="spread", box=result["peer_boxes"][peer["peer"]])
                 peer["record"]["topology"] = "spread"
