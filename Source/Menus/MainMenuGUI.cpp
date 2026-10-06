@@ -3628,6 +3628,11 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 			FollowHostActivityDefaults(before, guiEventControl);
 		}
 	}
+	// A pick closes its list on the whole name: the caption is fitted before the frame draws.
+	if (guiEventControl == m_HostRulesActivityCombo || guiEventControl == m_HostRulesSceneCombo) {
+		HostOptFitComboCaption(m_SubMenuScreenGUIControlManager->GetSkin(), m_HostRulesActivityCombo);
+		HostOptFitComboCaption(m_SubMenuScreenGUIControlManager->GetSkin(), m_HostRulesSceneCombo);
+	}
 	if (guiEventControl == m_HostRelayCombo) {
 		if (m_HostOptionsReadOnly || !m_HostOptionsSetupDraft) return;
 		m_HostComputerDraft.relay = static_cast<SettingsMan::NetworkHostRelayMode>(std::clamp(m_HostRelayCombo->GetSelectedIndex(), 0, 2));
