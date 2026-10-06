@@ -11313,7 +11313,23 @@ end
 		bool frozen = true;
 		int previewCount = -1;
 		int liveCount = -1;
+		bool coldWaits = false;
 		if (actor && actor->LoadScript(g_PresetMan.GetFullModulePath("Tests.rte/PreviewUpdateHook.lua")) >= 0) {
+			LuaMan::CapturePreviewSelfCopies({actor.get()}, false);
+			MovableObject* cold = nullptr;
+			{
+				MovableObject::FaithfulCloneScope scope(false);
+				cold = dynamic_cast<MovableObject*>(actor->Clone());
+			}
+			if (auto* previewed = dynamic_cast<Actor*>(cold)) {
+				LuaMan::BeginPreviewScripts({previewed}, false, {actor.get()});
+				coldWaits = !LuaMan::ShouldRunPreviewHook(previewed, "Update") && !actor->ObjectScriptsInitialized();
+				LuaMan::SetScriptsFrozen(true);
+				previewed->UpdateScripts();
+				LuaMan::SetScriptsFrozen(false);
+			}
+			LuaMan::EndPreviewScripts();
+			delete cold;
 			loaded = actor->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"init"}) >= 0;
 			LuaMan::CapturePreviewSelfCopies({actor.get()}, false);
 			MovableObject* clone = nullptr;
@@ -11338,7 +11354,8 @@ end
 			previewCount = count("preview");
 			liveCount = count("live");
 		}
-		const bool passed = loaded && !frozen && previewCount == 2 && liveCount == 0;
+		const bool passed = coldWaits && loaded && !frozen && previewCount == 2 && liveCount == 0;
+		std::cout << "[script-graph-selftest] " << (coldWaits ? "PASS" : "FAIL") << " preview_copy_waits_for_committed_create" << std::endl;
 		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " preview_copy_runs_its_update_hook loaded=" << loaded << " frozen=" << frozen
 		          << " preview_updates=" << previewCount << " live_updates=" << liveCount << std::endl;
 		checkpointValues = passed && checkpointValues;
@@ -13572,6 +13589,7 @@ static std::vector<uint64_t> HashScriptObjectGraphs(LuaStateWrapper& master, Lua
 
 std::unordered_set<const MovableObject*> LuaMan::s_PreviewClones;
 std::unordered_set<long> LuaMan::s_PreviewFrozenUIDs;
+static std::unordered_set<long> s_PreviewUninitializedUIDs;
 // What BeginPreviewScripts bound into a state, so EndPreviewScripts can undo exactly that.
 struct PreviewCloneBinding {
 	long uid;
@@ -15117,7 +15135,8 @@ bool LuaMan::ShouldRunPreviewHook(const MovableObject* mo, const std::string& fu
 	if (!mo || !IsPreviewClone(mo) || !(IsPreviewEdgeHook(functionName) || IsPreviewTickHook(functionName))) {
 		return false;
 	}
-	return s_PreviewSharedSlot || s_PreviewFrozenUIDs.count(mo->GetUniqueID()) == 0;
+	return !s_PreviewUninitializedUIDs.contains(mo->GetUniqueID()) &&
+	       (s_PreviewSharedSlot || s_PreviewFrozenUIDs.count(mo->GetUniqueID()) == 0);
 }
 
 std::vector<std::pair<MovableObject*, LuaStateWrapper*>> LuaMan::PreviewBindingsUnder(const MovableObject* root) {
@@ -15219,6 +15238,7 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 	s_PreviewPartByUID.clear();
 	s_PreviewCloneBindings.clear();
 	s_PreviewSharedSlot = sharedSlot;
+	s_PreviewUninitializedUIDs.clear();
 	for (MovableObject* clone: clones) {
 		if (clone) {
 			s_PreviewRootByUID[clone->GetUniqueID()] = clone;
@@ -15239,6 +15259,8 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 		WalkOwned(originals[i], [](MovableObject* part) {
 			if (const auto copy = s_PreviewPartByUID.find(part->GetUniqueID()); copy != s_PreviewPartByUID.end() && copy->second != part) {
 				s_PreviewCloneOf[part] = copy->second;
+				// Create belongs to the committed instance; its cold copy waits for the next initialized hold.
+				if (!part->ObjectScriptsInitialized()) s_PreviewUninitializedUIDs.insert(part->GetUniqueID());
 			}
 		});
 	}
@@ -15313,6 +15335,7 @@ void LuaMan::EndPreviewScripts() {
 	s_PreviewRootByUID.clear();
 	s_PreviewPartByUID.clear();
 	s_PreviewFrozenUIDs.clear();
+	s_PreviewUninitializedUIDs.clear();
 	s_PreviewSharedSlot = false;
 	s_RunningPreviewHook = false;
 	DropPreviewSoundCopies();
