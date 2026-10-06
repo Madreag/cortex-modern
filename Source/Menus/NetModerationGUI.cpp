@@ -868,7 +868,7 @@ void NetModerationGUI::Refresh() {
 	uint32_t holdSeconds = 0;
 	const bool holdPause = ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds);
 	m_Title->SetText(m_OptionsView ? "MATCH DETAILS" :
-	    NetModerationPanelTitle(snapshot.serviceState == "Running", holdPause, DisplayName(holdName), holdSeconds));
+	    NetModerationPanelTitle(snapshot.serviceState == "Running", holdPause, DisplayName(holdName), holdSeconds, ScenarioRunner::IsLockstepPaused()));
 	m_OptionsToggle->SetText(m_OptionsView ? "Back to players" : "Rules for this round");
 	m_Options->SetVisible(m_OptionsView);
 	if (m_Armed && PanelNowMs() > m_Armed->untilMs) {

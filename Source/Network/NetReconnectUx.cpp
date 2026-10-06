@@ -207,12 +207,12 @@ namespace RTE {
 		return dropped ? " - Disconnected" : "";
 	}
 
-	std::string NetModerationPanelTitle(bool running, bool holdPause, const std::string& holdName, uint32_t holdSeconds) {
+	std::string NetModerationPanelTitle(bool running, bool holdPause, const std::string& holdName, uint32_t holdSeconds, bool sharedPause) {
 		if (!running) {
 			return "PLAYERS  /  Restoring the shared match state...";
 		}
 		if (!holdPause) {
-			return "PLAYERS  /  The match continues while this panel is open";
+			return sharedPause ? "PLAYERS  /  The match is paused for everyone" : "PLAYERS  /  The match continues while this panel is open";
 		}
 		return "PLAYERS  /  Match paused: waiting for " + (holdName.empty() ? std::string("a player") : holdName) +
 		       " to return (" + std::to_string(holdSeconds) + "s left)";

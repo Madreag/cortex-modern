@@ -4926,16 +4926,19 @@ namespace RTE {
 			if (ScenarioRunner::DescribeLockstepHoldPause(who, seconds) || !who.empty() || seconds != 0) {
 				return Fail("a round with no coordinator reported a hold pause");
 			}
-			if (NetModerationPanelTitle(true, false, "Alice", 0) != "PLAYERS  /  The match continues while this panel is open") {
+			if (NetModerationPanelTitle(true, false, "Alice", 0, false) != "PLAYERS  /  The match continues while this panel is open") {
 				return Fail("the panel claimed a pause the round is not in");
 			}
-			if (NetModerationPanelTitle(true, true, "Alice", 7) != "PLAYERS  /  Match paused: waiting for Alice to return (7s left)") {
+			if (NetModerationPanelTitle(true, false, "Alice", 0, true) != "PLAYERS  /  The match is paused for everyone") {
+				return Fail("the panel said the match continues while it is paused for everyone");
+			}
+			if (NetModerationPanelTitle(true, true, "Alice", 7, false) != "PLAYERS  /  Match paused: waiting for Alice to return (7s left)") {
 				return Fail("the panel did not name the held player and the countdown");
 			}
-			if (NetModerationPanelTitle(true, true, "", 3) != "PLAYERS  /  Match paused: waiting for a player to return (3s left)") {
+			if (NetModerationPanelTitle(true, true, "", 3, false) != "PLAYERS  /  Match paused: waiting for a player to return (3s left)") {
 				return Fail("a nameless hold lost its wording");
 			}
-			if (NetModerationPanelTitle(false, true, "Alice", 7) != "PLAYERS  /  Restoring the shared match state...") {
+			if (NetModerationPanelTitle(false, true, "Alice", 7, false) != "PLAYERS  /  Restoring the shared match state...") {
 				return Fail("a resyncing round did not say so");
 			}
 			return 0;
