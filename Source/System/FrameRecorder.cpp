@@ -310,7 +310,7 @@ namespace RTE {
 
 	bool FrameRecorder::StageTextureReadback(unsigned int texture, int width, int height, std::string& error) {
 		if (!m_StagingHeld) { error = "no admitted frame"; return false; }
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
 		if (!ReadTextureRGB(texture, width, height, m_Staging, error)) return false;
 		const std::size_t rowBytes = static_cast<std::size_t>(width) * 3;
 		for (int y = 0; y < height / 2; ++y) {

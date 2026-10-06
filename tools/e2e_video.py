@@ -1738,14 +1738,14 @@ def stage_peer(scenario, peer, root, tokens):
         environment["CC_TEST_NET_UI_SCRIPT"] = str(path)
     if peer.get("input_script"):
         path = Path(root) / "input.txt"
-        path.write_text(public_value(substitute(scenario_text(scenario, peer["input_script"]), tokens),private_values), encoding="utf-8", newline="\n")
+        path.write_bytes(public_value(substitute(scenario_text(scenario, peer["input_script"]), tokens),private_values).encode("utf-8"))
     if peer.get("menu_script"):
         path = Path(root) / "menu.txt"
-        path.write_text(public_value(substitute(scenario_text(scenario, peer["menu_script"]), tokens),private_values), encoding="utf-8", newline="\n")
+        path.write_bytes(public_value(substitute(scenario_text(scenario, peer["menu_script"]), tokens),private_values).encode("utf-8"))
     # Every peer's engine arms the shared screen watches from this file on its first drawn frame.
     watches = Path(root) / "screen-watches.txt"
     # These inputs may be consumed on POSIX; CRLF leaves a literal CR in a watch's required text there.
-    watches.write_text(SCREEN_WATCHES, encoding="utf-8", newline="\n")
+    watches.write_bytes(SCREEN_WATCHES.encode("utf-8"))
     environment["CCCP_TEST_SCREEN_WATCHES"] = str(watches)
     if any('ownership_reclaim' in item and item.get('peer') == peer['name'] for item in scenario.get('checklist', [])):
         environment.update(CC_TEST_CROSS_RECORDS=str(Path(tokens['VIDEO']).parent / 'events.jsonl'),
