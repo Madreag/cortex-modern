@@ -97,6 +97,7 @@ extern "C" {
 #include <optional>
 #include <set>
 #include <sstream>
+#include <system_error>
 #include <thread>
 #include <type_traits>
 #include <typeinfo>
@@ -6266,6 +6267,78 @@ static int ScriptGraphRandomState(lua_State* L) {
 }
 } // namespace
 
+namespace RTE::CheckpointLua {
+	namespace {
+		thread_local lua_State* s_DescriptorState = nullptr;
+		thread_local const std::unordered_set<const void*>* s_DescriptorRoots = nullptr;
+
+		struct DescriptorRootScope {
+			lua_State* state;
+			lua_State* previousState = s_DescriptorState;
+			const std::unordered_set<const void*>* previousRoots = s_DescriptorRoots;
+			std::unordered_set<const void*> seen, userdata;
+			std::vector<TValue> pending;
+			void Queue(int index) {
+				if (index < 0) index += lua_gettop(state) + 1;
+				const int kind = lua_type(state, index);
+				if (kind != LUA_TTABLE && kind != LUA_TFUNCTION && kind != LUA_TUSERDATA && kind != LUA_TTHREAD) return;
+				if (seen.insert(lua_topointer(state, index)).second) pending.push_back(state->base[index - 1]);
+			}
+			explicit DescriptorRootScope(lua_State* source) : state(source) {
+				const int top = lua_gettop(state);
+				for (int index = 1; index <= top; ++index) Queue(index);
+				lua_pushvalue(state, LUA_GLOBALSINDEX); Queue(-1); lua_settop(state, top);
+				while (!pending.empty()) {
+					if (!lua_checkstack(state, 8)) throw std::runtime_error("native descriptor roots exhausted the Lua stack");
+					const TValue value = pending.back(); pending.pop_back();
+					copyTV(state, state->top, &value); incr_top(state);
+					const int index = lua_gettop(state), kind = lua_type(state, index);
+					if (kind == LUA_TTABLE) {
+						lua_pushnil(state);
+						while (lua_next(state, index)) { Queue(-2); Queue(-1); lua_pop(state, 1); }
+					} else if (kind == LUA_TFUNCTION) {
+						for (int upvalue = 1; lua_getupvalue(state, index, upvalue); ++upvalue) { Queue(-1); lua_pop(state, 1); }
+					} else if (kind == LUA_TUSERDATA) {
+						userdata.insert(gcval(&value));
+						if (auto* rep = luabind::detail::is_class_object(state, index)) {
+							if (rep->get_lua_table().is_valid()) { rep->get_lua_table().get(state); Queue(-1); lua_pop(state, 1); }
+							if (rep->get_dependencies().is_valid()) { rep->get_dependencies().get(state); Queue(-1); lua_pop(state, 1); }
+						} else if (luabind::detail::is_class_rep(state, index)) {
+							static_cast<luabind::detail::class_rep*>(lua_touserdata(state, index))->get_table(state);
+							Queue(-1); lua_pop(state, 1);
+						}
+					} else if (lua_State* thread = lua_tothread(state, index); thread && thread != state) {
+						LuaThreadCodec::VisitThreadStack(thread, state, [](lua_State*, void* scope) {
+							static_cast<DescriptorRootScope*>(scope)->Queue(-1); return false;
+						}, this);
+					}
+					if (kind != LUA_TTABLE) { lua_getfenv(state, index); Queue(-1); lua_pop(state, 1); }
+					if (lua_getmetatable(state, index)) { Queue(-1); lua_pop(state, 1); }
+					lua_settop(state, top);
+				}
+				s_DescriptorState = state;
+				s_DescriptorRoots = &userdata;
+			}
+			~DescriptorRootScope() { s_DescriptorState = previousState; s_DescriptorRoots = previousRoots; }
+		};
+	}
+
+	// Heap garbage needs no descriptors; Lua-owned movable objects still receive the ownership check.
+	template<class Visit> requires true
+	void ForEachCapturedUserdata(lua_State* state, Visit visit) {
+		ForEachUserdata(state, false, true, [&](GCudata* data) {
+			if (s_DescriptorState != state || !s_DescriptorRoots || s_DescriptorRoots->contains(data)) { visit(data); return; }
+			const int top = lua_gettop(state);
+			TValue value; setgcVraw(&value, obj2gco(data), LJ_TUDATA);
+			copyTV(state, state->top, &value); incr_top(state);
+			const auto* rep = luabind::detail::is_class_object(state, -1);
+			const bool owned = rep && (rep->flags() & luabind::detail::object_rep::owner) && ClassDerivesFrom(rep->crep(), "MovableObject");
+			lua_settop(state, top);
+			if (owned) visit(data);
+		});
+	}
+}
+
 #include "CheckpointLuaGraph.h"
 
 void LuaStateWrapper::LoadScriptGraphHelper() {
@@ -6488,6 +6561,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		if (!m_NativeCache) m_NativeCache = std::make_shared<CheckpointLua::NativeCache>(m_State);
 		std::optional<CaptureTrace::Span> span(std::in_place, "graph_natives", std::to_string(g_LuaMan.GetStateIndex(this)));
 		CheckpointLua::CaptureScope natives(m_State, *m_NativeCache);
+		CheckpointLua::DescriptorRootScope descriptorRoots(m_State);
 		natives.Capture();
 		span.reset();
 		const auto nativeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();
