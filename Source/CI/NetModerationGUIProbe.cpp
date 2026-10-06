@@ -70,6 +70,9 @@ namespace {
 		bool phaseArmed = false;
 		bool roundEndArmed = false;
 		std::vector<std::string> roundEndSignals;
+		bool pageDown = false; //!< show_row holds the More players press it made.
+		uint64_t pageRender = 0; //!< The render show_row acts again at.
+		int pageTurns = 0; //!< Pages show_row has turned for the row it looks for.
 	};
 	Probe probe;
 	std::atomic<uint64_t> rendezvousCount{0};
@@ -637,6 +640,44 @@ namespace {
 			observed["accepted"] = accepted;
 			observed["menu_observation"] = detail;
 			Require(accepted == step.value("accepted", true), "menu operation refused: " + step.at("command").get<std::string>() + " " + detail);
+		} else if (op == "show_row") {
+			// A player's row on the open host panel, reached as a hand reaches it: More players, its press and its release on
+			// separate frames, until the row shows or every page has been seen.
+			auto* menu = g_MenuMan.GetNetworkPanel();
+			Require(menu != nullptr && g_MenuMan.IsNetworkPanelOpen(), "the players panel is not open");
+			const std::string name = step.at("name").get<std::string>();
+			if (GUIControl* row = menu->GetControl("NetworkSeatName@" + name); row && row->GetVisible() && !probe.pageDown) {
+				probe.pageTurns = 0;
+				observed["control"] = ReadControl(row);
+				observed["page_turns"] = probe.pageTurns;
+				return true;
+			}
+			if (probe.renders < probe.pageRender) return false;
+			GUIControl* more = menu->GetControl("NetworkSeatsMore");
+			Require(more != nullptr && (probe.pageDown || more->GetVisible()), "no row for " + name + " and no more players to turn to");
+			Require(probe.pageTurns < 4, "every page turned and no row for " + name);
+			int x, y, w, h;
+			more->GetControlRect(&x, &y, &w, &h);
+			const float mouseX = static_cast<float>((x + w / 2) * g_WindowMan.GetResMultiplier());
+			const float mouseY = static_cast<float>((y + h / 2) * g_WindowMan.GetResMultiplier());
+			SDL_Event motion{};
+			motion.type = SDL_EVENT_MOUSE_MOTION;
+			motion.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+			motion.motion.x = mouseX;
+			motion.motion.y = mouseY;
+			Push(motion);
+			SDL_Event event{};
+			event.type = probe.pageDown ? SDL_EVENT_MOUSE_BUTTON_UP : SDL_EVENT_MOUSE_BUTTON_DOWN;
+			event.button.windowID = motion.motion.windowID;
+			event.button.button = SDL_BUTTON_LEFT;
+			event.button.down = !probe.pageDown;
+			event.button.x = mouseX;
+			event.button.y = mouseY;
+			Push(event);
+			if (probe.pageDown) ++probe.pageTurns;
+			probe.pageDown = !probe.pageDown;
+			probe.pageRender = probe.renders + (probe.pageDown ? 3 : 4);
+			return false;
 		} else if (op == "mouse_down" || op == "mouse_up" || op == "mouse_move") {
 			auto* control = Control(step);
 			Require((step.value("scope", "") == "menu" ? MenuAutomation::Visible(control) : g_MenuMan.IsNetworkPanelOpen() && control->GetVisible()), "mouse target is not visible");
