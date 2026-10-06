@@ -273,11 +273,12 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_DirPinTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkDirPin"));
 	m_DirStatusLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetDirStatus"));
 	m_InternetError = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetInternetError"));
-	if (auto* natButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonNetNatRelay"))) {
-		natButton->SetText("NAT setup");
+	// Replays, connection details and the match's relay live on the multiplayer screens: these three never lead anywhere from here.
+	for (const char* name : {"ButtonNetReplays", "ButtonNetConnDetails", "ButtonNetNatRelay"}) {
+		if (GUIControl* shortcut = m_GUIControlManager->GetControl(name)) shortcut->SetVisible(false);
 	}
 	if (auto* reason = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetInternetReason"))) {
-		reason->SetText("Connection sets your route. Host Options > Network sets the match's relay.");
+		reason->SetText("Connection sets your route. Host a Game > Advanced > Connection sets the match's relay.");
 	}
 	m_ConnectionCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboNetworkConnection"));
 	for (const char* state : {"Automatic", "Direct only", "Relay only"}) m_ConnectionCombo->AddItem(state);

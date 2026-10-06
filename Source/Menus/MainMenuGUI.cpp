@@ -2548,7 +2548,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		const bool used = peer < capacity;
 		if (m_HostNetPeerLabels[peer]) {
 			m_HostNetPeerLabels[peer]->SetVisible(used && fixedPolicy);
-			m_HostNetPeerLabels[peer]->SetText("Peer " + std::to_string(peer + 1));
+			m_HostNetPeerLabels[peer]->SetText("Seat " + std::to_string(peer + 1));
 		}
 		if (m_HostNetPeerDelayBoxes[peer]) {
 			m_HostNetPeerDelayBoxes[peer]->SetVisible(used && fixedPolicy);
@@ -2568,7 +2568,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	HostOptSetEditable(m_HostNetMinDelayBox, editable);
 	// Recalculate means "re-sample the link for the automatic policy"; under Fixed the host's own
 	// figures are the answer, so the button stays off there.
-	HostOptSetEditable(m_HostNetRecalcButton, editable && !fixedPolicy);
+	HostOptSetEditable(m_HostNetRecalcButton, editable && !fixedPolicy && !m_HostOptionsSetupDraft);
 	if (m_HostNetPingLabel) {
 		std::string ping;
 		for (const NetLobbyMember& m : snapshot.members) {
@@ -3354,7 +3354,7 @@ void MainMenuGUI::ChangeHostSeatType(int row, int typeIndex) {
 		if (typeIndex == 0) {
 			const uint8_t peerId = freePeerId();
 			if (peerId == 0) {
-				return refuse("No free peer seat - raise the Players count first");
+				return refuse("No free seat - raise the Players count first");
 			}
 			NetMatchPlayerSlot seat;
 			seat.peerId = peerId;
@@ -3390,7 +3390,7 @@ void MainMenuGUI::ChangeHostSeatType(int row, int typeIndex) {
 			const NetMatchConfig adopted = g_NetMatchService.GetLobbyMatchConfig();
 			for (const NetMatchPlayerSlot& kept : adopted.players) {
 				if (!kept.cpu && kept.peerId == slot.peerId) {
-					return refuse("An open lobby's human seat stays open for its peer - close it after the match");
+					return refuse("An open lobby's human seat stays open for its player - close it after the match");
 				}
 			}
 		}
@@ -3408,7 +3408,7 @@ void MainMenuGUI::ChangeHostSeatType(int row, int typeIndex) {
 		} else {
 			const uint8_t peerId = freePeerId();
 			if (peerId == 0) {
-				return refuse("No free peer seat - raise the Players count first");
+				return refuse("No free seat - raise the Players count first");
 			}
 			candidate.players[row].peerId = peerId;
 			candidate.players[row].cpu = false;
