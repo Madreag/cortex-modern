@@ -222,12 +222,12 @@ class ContractTests(unittest.TestCase):
     def test_session_wait_returns_the_hosts_named_admission_failure_without_launching_a_seat(self):
         case = object.__new__(spread.Case)
         case.names, case.peer_ports, case.match = ['host','seat'], {}, spread.Match(51580)
-        case.members = {'host':(dict(name='EROL-PC'),), 'seat':(dict(name='Linux'),)}
+        case.members = {'host':(dict(name='host-box'),), 'seat':(dict(name='seat-box'),)}
         case.runs = {'host':SimpleNamespace(start_failure='capacity update is busy; skip this box')}
         case.synchronize = unittest.mock.Mock()
         case.refuse = lambda name, box, reason:spread.SpreadRefusal(f'spread peer {name} on {box}: {reason}')
         with patch('e2e_video.directory_session') as query, patch.object(spread.time, 'sleep') as sleep:
-            with self.assertRaisesRegex(spread.SpreadRefusal, 'seat on Linux.*host on EROL-PC.*capacity update is busy'):
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'seat on seat-box.*host on host-box.*capacity update is busy'):
                 case.published_session('seat')
             query.assert_not_called()
             sleep.assert_not_called()
@@ -239,7 +239,7 @@ class ContractTests(unittest.TestCase):
         case.names, case.peer_ports = ['host', 'seat'], {}
         case.match = spread.Match(51580, parameters={'runner_wait':1800})
         case.directory = {'DIRECTORY_ROOT':'unused'}
-        case.members = {'host':(dict(name='EROL-PC'),), 'seat':(dict(name='Linux'),)}
+        case.members = {'host':(dict(name='host-box'),), 'seat':(dict(name='seat-box'),)}
         case.runs = {'host':host}
         def synchronize():
             if failure and clock[0] >= 20:
@@ -269,7 +269,7 @@ class ContractTests(unittest.TestCase):
         case, host, idle = self.session_admission_fake(clock)
         with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
              patch.object(spread.time, 'sleep', side_effect=idle), patch('e2e_video.directory_session', return_value=None):
-            with self.assertRaisesRegex(spread.SpreadRefusal, 'seat on Linux.*no session.*51580'):
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'seat on seat-box.*no session.*51580'):
                 case.published_session('seat')
         self.assertTrue(host.started)
         self.assertEqual(clock[0], 180.0)
@@ -279,7 +279,7 @@ class ContractTests(unittest.TestCase):
         case, host, idle = self.session_admission_fake(clock, 'named native floor refused')
         with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
              patch.object(spread.time, 'sleep', side_effect=idle), patch('e2e_video.directory_session') as query:
-            with self.assertRaisesRegex(spread.SpreadRefusal, 'seat on Linux.*host on EROL-PC.*floor refused'):
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'seat on seat-box.*host on host-box.*floor refused'):
                 case.published_session('seat')
             query.assert_not_called()
         self.assertFalse(host.started)
