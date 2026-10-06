@@ -16758,6 +16758,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return finish("the player could not select the foreign actor");
 			ControllerFrame human = MakeFrame(uid, uint64_t{1} << WEAPON_FIRE);
 			human.inputMode = Controller::CIM_PLAYER; human.playerRaw = Players::PlayerOne;
+			human.SetQuickDisabled(false);
 			if (!host.QueueLocalInput(115, {}, {}, error) || !ScenarioRunner::QueueLockstepLocalControllerFrames(115, {human}, error))
 				return finish(error ? *error : "the switch input did not queue");
 			NetLockstepFrame retained;
@@ -16807,7 +16808,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				MovableMan::ReconcileLockstepControlBindings();
 				if (g_ActivityMan.GetActivity()->GetLocallyControlledActor(Players::PlayerOne) != actor ||
 				    actor->GetController()->GetInputMode() != Controller::CIM_PLAYER || !actor->GetController()->IsState(WEAPON_FIRE))
-					return finish("the selected actor is not human-controlled from frame120");
+					return finish("the selected actor is not human-controlled from frame120: binding=" +
+					    std::to_string(g_ActivityMan.GetActivity()->GetLocallyControlledActor(Players::PlayerOne) == actor) +
+					    " mode=" + std::to_string(actor->GetController()->GetInputMode()) +
+					    " fire=" + std::to_string(actor->GetController()->IsState(WEAPON_FIRE)));
 				if (ScenarioRunner::IsLocalControlClaimPending(uid)) return finish("claim120 remains pending after local frame120 applies");
 			}
 			return finish("");
