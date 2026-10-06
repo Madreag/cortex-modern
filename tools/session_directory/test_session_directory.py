@@ -519,7 +519,11 @@ class DirectoryTests(unittest.TestCase):
                     self.assertEqual(self.call("GET", "/v1/sessions")[0], 503)
                 notices = [call for call in logged.call_args_list if call.args[0].startswith("request capacity full")]
                 self.assertEqual(len(notices), 1, "U3: repeated saturation logged the caller more than once in a minute")
-                self.server.httpd._capacity_logged["127.0.0.1"] -= 60
+                with self.server.httpd._connection_lock:
+                    self.server.httpd._capacity_logged["127.0.0.1"] -= 60
+                self.server.httpd.service_actions()
+                self.assertNotIn("127.0.0.1", self.server.httpd._capacity_logged,
+                                 "U3: the capacity log retained an expired caller")
                 self.assertEqual(self.call("GET", "/v1/sessions")[0], 503)
                 notices = [call for call in logged.call_args_list if call.args[0].startswith("request capacity full")]
                 self.assertEqual(len(notices), 2, "U3: saturation did not log the caller in the next minute")

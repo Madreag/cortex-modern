@@ -2044,6 +2044,12 @@ class SessionHTTPServer(ThreadingHTTPServer):
             self._capacity_logged[source] = now
         LOGGER.info("request capacity full from %s; retry in %s s", source, SIGNAL_WAIT_RETRY_S)
 
+    def service_actions(self) -> None:
+        now = time.monotonic()
+        with self._connection_lock:
+            self._capacity_logged = {source: last for source, last in self._capacity_logged.items()
+                                     if now - last < SATURATION_LOG_INTERVAL_S}
+
     def _headers_ready(self, request: socket.socket) -> bool:
         if self.tls_context is not None:
             return False
