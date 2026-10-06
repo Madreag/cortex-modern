@@ -45,6 +45,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <future>
 #include <deque>
 #include <filesystem>
@@ -16568,6 +16569,16 @@ namespace RTE {
 		};
 
 		std::string error;
+		if (const char* selected = std::getenv("CCCP_TEST_MATCH_CASE")) {
+			const std::string name(selected);
+			bool passed = false;
+			if (name == "state-delivery") passed = TestLobbyStartWaitsForReceivedState(&error);
+			else if (name == "state-receipts") passed = TestLobbyStateReceiptsAreBoundAndRepeated(&error);
+			else return fail("unknown selected match check");
+			if (!passed) return fail(error);
+			std::cout << "[net-match-selftest] PASS" << std::endl;
+			return 0;
+		}
 		// These rows each report their own failure, so one run names every red among them.
 		bool rowsPassed = true;
 		const auto row = [&](bool (*test)(std::string*), const char* name) {
