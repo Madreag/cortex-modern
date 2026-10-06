@@ -1,6 +1,6 @@
 """One lead-routed execution interface for real-network cases with native peers.
 
-Contract (version 2, compatible with version 1 calls)
+Contract (version 3, compatible with version 1 and 2 calls)
 --------------------
 run_case(repo, out, peers, match, *, drive=None, peer_boxes=None,
          dispatcher=None, registry=None) -> dict
@@ -8,7 +8,9 @@ run_case(repo, out, peers, match, *, drive=None, peer_boxes=None,
 ``peers`` is a sequence of Peer objects. Each declares its name, OS, engine
 count (one), required free memory, display size, quiet/exclusive requirement,
 and whether its screen is reviewed. Peer.share_ok defaults to True for screen
-peers; quiet, reviewed, held and recorder peers always reserve a box alone.
+peers; reviewed, held and recorder peers cannot share their box with another
+peer of this case. Quiet peers reserve the whole box alone. Distinct cases may
+use the same named box through ordinary slots, within native capacity guards.
 Peer.held declares any target of a hold or stall lever before allocation.
 Peer.recorder requires the controller's private Windows video recorder.
 Peer.readback permits the named reviewed screen's native readback.
@@ -25,7 +27,9 @@ Without ``drive``, the call starts host first and finishes every declared peer.
 It collects verified evidence into ``out`` and returns topology="spread",
 peer_boxes, native identities, executable hashes, records and driver_result.
 Shareable peers use one box only when the lead explicitly names it twice.
-Quiet, reviewed and held peers remain alone. Existing per-box runner capacity,
+Quiet peers remain alone; reviewed and held peers remain isolated in their case.
+Distinct cases require distinct live result roots and game ports. A matching
+executable path does not exclude another case. Existing per-box runner capacity,
 memory, CPU and ownership checks remain; no pool queue, admission lock,
 candidate ranking or priority arbitration is consulted.
 
@@ -48,6 +52,10 @@ differs from preparation", and "Windows process suspension is unavailable".
 Missing peer names and retired --spread exit 2 with
 "NO BOX NAMED: the lead routes every peer (ROUTING.md section 6)".
 Forbidden explicit sharing refuses "TWO PEERS ON ONE BOX WITHOUT share_ok".
+Live result-root and port conflicts refuse "RUN ROOT CONFLICT" and
+"PORT CONFLICT <port>", naming the box and conflicting peer/case. Native
+ownership markers use the existing facts writer and capacity mutex; no queue
+or placement layer is added. INTERFACE_VERSION is recorded in each result.
 Any native refusal is returned for the lead to route; no other box is tried.
 No case assertion, oracle, timeout or default single-box launch is changed.
 Peer.output_name optionally declares an existing non-ASCII output directory;
@@ -120,6 +128,7 @@ def file_sha256(path):
 
 
 TOPOLOGY_LOCAL = "single-box: not proof"
+INTERFACE_VERSION = "3.0-named-concurrent-cases"
 NO_BOX_NAMED = "NO BOX NAMED: the lead routes every peer (ROUTING.md section 6)"
 _options = None
 _cases = contextvars.ContextVar("spread_cases", default=None)
@@ -400,7 +409,8 @@ def safe_relative(value):
 def public_file(path):
     path = Path(path)
     return not (path.is_symlink() or (getattr(path, "is_junction", lambda: False)()) or
-                path.suffix.lower() in (".ticket", ".key") or path.name in (".env", "key.pem") or
+                path.suffix.lower() in (".ticket", ".key") or
+                path.name in (".env", "key.pem", ".spread-case-owner.json", ".spread-run-owner.json") or
                 path.name.startswith((".env.", "id_")))
 
 
@@ -553,7 +563,7 @@ class Case:
         try:
             self.assigned_boxes = named_peer_boxes(self.peers, self.pins)
         except (SpreadUsageError, SpreadRefusal) as error:
-            value = dict(schema=1, topology="spread", passed=False, error=str(error),
+            value = dict(schema=1, topology="spread", interface_version=INTERFACE_VERSION, passed=False, error=str(error),
                          peer_boxes={peer.name: role_value(self.pins, self.names, peer.name) for peer in self.peers},
                          requested_peer_boxes=self.pins, refusals=[])
             if getattr(error, "peer", None):
@@ -571,13 +581,34 @@ class Case:
         self.id = uuid.uuid4().hex
         self.control = self.out.parent/(".spread-" + self.id)
         self.control.mkdir(exist_ok=True)
-        # Keep engine artifacts in the caller's catalog-derived scratch lane.
-        catalog = self.pool.load_registry(self.registry)["boxes"]
-        local = next((box for box in catalog if box["kind"] == "local"), None)
-        scratch = Path(local["scratch"]).resolve() if local else self.out.parent
-        self.lane_root = next((parent for parent in (self.out, *self.out.parents) if parent.parent == scratch), self.out.parent)
-        self.lane = self.lane_root.name
+        marker = self.out/".spread-case-owner.json"
+        facts = self.transport_module.worker.facts
+        if marker.exists():
+            owner = read_json(marker, {}) or {}
+            name = self.names[0]
+            box = self.assigned_boxes[name]
+            reason = f"RUN ROOT CONFLICT {self.out}; peer {owner.get('peer_id', 'unknown')} case {owner.get('case_id', 'unknown')}"
+            value = dict(schema=1, topology="spread", interface_version=INTERFACE_VERSION,
+                         peer_boxes=self.assigned_boxes, passed=False, refused_peer=name, refused_box=box, reason=reason)
+            # Never overwrite the live run's receipt to report a conflict.
+            write_json(self.control/"spread-result.json", value)
+            raise SpreadRefusal(f"spread peer {name} on {box}: {reason}")
         try:
+            owner = facts.write_reservation(marker, "named case "+self.id, token=self.id,
+                                            extra=dict(case_id=self.id, peer_id=self.names[0],
+                                                       run_root=str(self.out), peer_boxes=self.assigned_boxes))
+        except FileExistsError as error:
+            # The facts writer arbitrates two simultaneous attempts atomically.
+            raise SpreadRefusal(f"spread peer {self.names[0]} on {self.assigned_boxes[self.names[0]]}: "
+                                f"RUN ROOT CONFLICT {self.out}; {error}") from error
+        self.stack.callback(facts.release_reservation, marker, owner["token"])
+        # Keep engine artifacts in the caller's catalog-derived scratch lane.
+        try:
+            catalog = self.pool.load_registry(self.registry)["boxes"]
+            local = next((box for box in catalog if box["kind"] == "local"), None)
+            scratch = Path(local["scratch"]).resolve() if local else self.out.parent
+            self.lane_root = next((parent for parent in (self.out, *self.out.parents) if parent.parent == scratch), self.out.parent)
+            self.lane = self.lane_root.name
             self.allocate()
             self.prepare()
             self.connect_directory()
@@ -646,7 +677,7 @@ class Case:
             box = boxes[self.assigned_boxes[peer.name].casefold()]
             backend = self.backend()
             needs = self.pool.Needs(os=peer.os, engines=peer.engines, gpu=bool(peer.size), memory=peer.memory,
-                                    alone=peer.quiet or peer.reviewed or peer.held or peer.recorder, size=peer.size, only_box=box["name"],
+                                    alone=peer.quiet, size=peer.size, only_box=box["name"],
                                     case_id=self.id, peer_id=peer.name, share_ok=peer.share_ok, reviewed=peer.reviewed or peer.recorder, held=peer.held)
             if reason := self.pool.static_reason(box, needs):
                 raise self.refuse(peer.name, box["name"], reason)
@@ -858,6 +889,8 @@ class Case:
                     atomic_bytes(target, base64.b64decode(encoded, validate=True))
                 if progress.get("record"):
                     handle.record.update(progress["record"])
+                    if progress["record"].get("error"):
+                        raise self.refuse(handle.role, box["name"], progress["record"]["error"])
             signals = {}
             for relative in self.signals():
                 path = self.out/safe_relative(relative)
@@ -877,7 +910,8 @@ class Case:
         return sorted(set(declared_signals(self.out)) | set(getattr(self, "extra_signals", ())))
 
     def result(self):
-        return dict(schema=1, topology="spread", peer_boxes=getattr(self, "assigned_boxes", {name: item[0]["name"] for name, item in self.members.items()}),
+        return dict(schema=1, topology="spread", interface_version=INTERFACE_VERSION,
+                    peer_boxes=getattr(self, "assigned_boxes", {name: item[0]["name"] for name, item in self.members.items()}),
                     interface_sha256=self.interface_sha256,
                     preflight_sha256=hashlib.sha256(self.preflight_source.encode()).hexdigest() if getattr(self, "preflight_source", None) else None,
                     sharing={peer.name: dict(share_ok=peer.share_ok, reviewed=peer.reviewed, held=peer.held, quiet=peer.quiet,
@@ -1081,7 +1115,8 @@ class Run:
         signals = self.case.signals()
         self.case.extra_signals = sorted(set(getattr(self.case, "extra_signals", ())) | set(signals))
         native = dict(schema=1, role=self.role, output_name=self.output_name, root=claim["case_root"], repo=claim["repo"], box=box,
-                      case_id=self.case.id,
+                      case_id=self.case.id, lane=self.case.lane, controller_root=str(self.case.out),
+                      case_ports=sorted({port, *([claim["signal_port"]] if claim.get("signal_port") else [])}),
                       control=claim["control"], claim=self.case.transport_module.Transport.native_claim(claim),
                       args=[map_text(argument, mappings) for argument in args],
                       env={key: map_text(value, mappings) for key, value in self.env.items()},
@@ -1235,6 +1270,22 @@ def native_execute(spec_path, result_out):
     if not spec or spec.get("schema") != 1:
         raise ValueError("invalid native peer specification")
     sys.path.insert(0, spec["control"])
+    from cross_peers import peer_run_scope
+    root = Path(spec["root"]).resolve()
+    box = dict(spec["box"], executable=os.environ["CCCP_TEST_BINARY"], scratch=str(root),
+               kind="windows-local" if spec["box"]["kind"] == "local" else spec["box"]["kind"])
+    peer = dict(case_id=spec["case_id"], peer_id=spec["role"], lane=spec.get("lane"),
+                run_root=str(root/spec.get("output_name", spec["role"])), controller_root=spec.get("controller_root"),
+                ports=spec["case_ports"], executable_sha256=spec["executable_sha256"])
+    with peer_run_scope(box, peer):
+        return _native_execute(spec_path, result_out, peer)
+
+
+def _native_execute(spec_path, result_out, peer):
+    spec = read_json(spec_path)
+    if not spec or spec.get("schema") != 1:
+        raise ValueError("invalid native peer specification")
+    sys.path.insert(0, spec["control"])
     import pool_worker
     import pool_run
     from run_sim_test import make_run, seed_settings
@@ -1255,7 +1306,7 @@ def native_execute(spec_path, result_out):
                kind="windows-local" if spec["box"]["kind"] == "local" else spec["box"]["kind"])
     write_json(preflight_root/"payload.json", dict(box=box, specs=[]))
     if "pool_peer" in preflight_payload.__code__.co_varnames:
-        preflight_payload(preflight_root/"payload.json", pool_peer=dict(case_id=spec.get("case_id"), peer_id=role))
+        preflight_payload(preflight_root/"payload.json", pool_peer=peer)
     else:
         preflight_payload(preflight_root/"payload.json")
     identity = read_json(preflight_root/"preflight.json")
@@ -1309,7 +1360,11 @@ def native_execute(spec_path, result_out):
             blocker.bind(("", port))
         # Preserve process ownership through the installed scope on older runners.
         hooked = hasattr(sys.modules[run.__class__.__module__], "launch_scope")
-        with contextlib.nullcontext() if hooked else pool_run.launch_scope(run.argv, run.env) as scope:
+        # Older branch runners still get the installed native ceiling/CPU/floor
+        # admission check, under its existing engine-start mutex.
+        import box_load as native_load
+        with contextlib.nullcontext() if hooked else pool_run.launch_scope(run.argv, run.env) as scope, \
+                contextlib.nullcontext() if hooked else native_load.admission(run.argv, run.env, run.record, run._save):
             run.start()
             if not hooked:
                 pool_run.record_launch(scope, run.record["pid"], run.record)
@@ -1353,7 +1408,7 @@ def native_execute(spec_path, result_out):
         run.close()
         for blocker in blockers:
             blocker.close()
-    record.update(topology="spread", box=box["name"])
+    record.update(topology="spread", box=box["name"], interface_version=INTERFACE_VERSION)
     write_json(out/"record.json", record)
     # Export writable evidence through the existing verified acceptance archive.
     for directory, names, files in os.walk(run.cwd, followlinks=False):
@@ -1400,7 +1455,9 @@ def main(argv=None):
         return native_execute(options.native, options.out)
     except Exception as error:
         spec = read_json(options.native, {})
-        record = dict(topology="spread", box=spec.get("box", {}).get("name"), error=f"{type(error).__name__}: {error}")
+        record = dict(topology="spread", interface_version=INTERFACE_VERSION,
+                      peer=spec.get("role"), box=spec.get("box", {}).get("name"),
+                      exit_code=1, error=f"{type(error).__name__}: {error}")
         write_json(options.out/"peer-result.json", record)
         write_json(options.native.parent/"progress.json", dict(record=record))
         raise
