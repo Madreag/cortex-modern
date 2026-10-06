@@ -45,10 +45,11 @@ files, logs and video indices. Gameplay travels over real network sockets;
 SSH carries signaling and evidence only. No router mapping is requested.
 Caller paths are private staging
 paths; the helper maps them to the native case root, never to an owner's tree.
-Selected retained data files stay private. Inside a modified POSIX .rte module,
+Selected retained data files stay private. Inside a modified native .rte module,
 directories are real and unchanged files use regular file links or copies;
 no directory symlink is placed inside the engine's content identity walk.
-Windows retained staging and aliases for unmodified module roots stay unchanged.
+Both platforms retain identical complete module contents. Aliases for unmodified
+module roots and default single-box staging stay unchanged.
 
 Refusals raise SpreadRefusal and write spread-result.json with topology,
 peer_boxes, refused_peer, refused_box and the exact reason. Prefixes are
@@ -84,9 +85,9 @@ Match.parameters["peer_tasks"] may pin a named Windows task for each peer.
 Match.parameters["public_directory"]=True uses the game's default public
 directory without a signaling tunnel. The host's registration log supplies
 its session code; only deliberate loopback joins are replaced by that code.
-Public peers finish native preparation before the host starts. The joiner's
-code is delivered as a staged input before its engine starts; original menu
-scripts and their assertion budgets are unchanged.
+Match.parameters["public_menu_start"]=True coordinates concurrently started
+menu peers before the host starts. The joiner's code is delivered as a staged
+input before its engine starts; original scripts and budgets are unchanged.
 The initial claim and final launch wait for their native capacity mutex for up
 to 180 seconds, bounded by the remaining positive runner-wait budget. An
 omitted/zero runner-wait retains the old 15-second mutex budget for old calls.
@@ -1652,21 +1653,20 @@ def link_directory(source, target):
 
 
 def overlay_data(source, target, paths, *, module_content=False):
-    """Give overlays private ancestors and keep POSIX module contents regular."""
+    """Give overlays private ancestors and identical regular module contents."""
     target.mkdir(parents=True, exist_ok=False)
-    posix_content = sys.platform != "win32" and module_content
     for child in source.iterdir():
         destination = target / child.name
         below = [path for path in paths if path.parts[0] == child.name]
-        if posix_content and child.is_symlink():
+        if module_content and (child.is_symlink() or getattr(child, 'is_junction', lambda:False)()):
             raise SpreadRefusal(f"private module input contains a symlink: {child}")
         if child.is_dir():
-            if below or posix_content:
+            if below or module_content:
                 overlay_data(child, destination, [Path(*path.parts[1:]) for path in below if len(path.parts) > 1],
                              module_content=module_content or child.suffix.casefold() == ".rte")
             else:
                 link_directory(child, destination)
-        elif posix_content and not below:
+        elif module_content and not below:
             import errno
             try:
                 os.link(child, destination)
@@ -1739,7 +1739,8 @@ class Run:
             raise self.case.refuse(self.role, box["name"], f"match port {args[args.index('-net-port') + 1]} differs from host port {port}")
         session = None
         session_routing = (self.case.directory or getattr(self.case, "public_directory", False)) and getattr(self.case, "network", "ice") == "ice" and self.case.match.parameters.get("join_by_session", True)
-        public_gate = bool(session_routing and getattr(self.case, "public_directory", False))
+        public_gate = bool(session_routing and getattr(self.case, "public_directory", False)
+                           and self.case.match.parameters.get("public_menu_start", False))
         if session_routing and self.role != self.case.names[0]:
             session = PUBLIC_SESSION_INPUT if public_gate else self.case.published_session(self.role)
         if session_routing:

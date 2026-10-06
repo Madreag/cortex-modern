@@ -2579,6 +2579,7 @@ def run_case(options, case, root, failing=None):
             parameters = {"lane": "menus"}
             if public_directory:
                 parameters["public_directory"] = True
+                parameters["public_menu_start"] = True
             elif case == "host-draft-roundtrip":
                 # This case deliberately reads back Unlisted with traversal and relay Off.
                 parameters["network"] = "direct"
