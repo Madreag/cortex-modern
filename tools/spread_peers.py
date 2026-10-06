@@ -109,6 +109,13 @@ the result so the topology is reviewable. --pool-registry reads box facts only.
 The dispatcher argument and --pool-dispatcher remain compatible transport-kit
 location hints; their script is never executed. Existing complete peer_boxes
 calls, driver staging, levers, collectors and return fields remain supported.
+
+Native control ship set, in import order: pool_cohort.py, box_facts.py,
+box_load.py, pool.py, pool_worker.py, spread_peers.py, pool_run.py. The cohort
+reader comes from the facts adapter's folder or the installed transport kit.
+cross_peers.py is also pinned for native preflight. The immutable repository
+shipment includes the driver's tools and runner dependencies; its manifest
+hashes every file. Each result publishes native_ship_set with control hashes.
 """
 from __future__ import annotations
 
@@ -707,11 +714,13 @@ def native_cpu_wait_source(source):
     return source.replace(guard, replacement, 1)
 
 
-def native_adapter_sources(facts_path, existing=None):
+def native_adapter_sources(facts_path, existing=None, *, kit=None):
     """Ship the existing facts adapter's route reader before its launch adapter."""
     folder = Path(facts_path).parent
     adapters = {name: (folder/name).read_text(encoding="utf-8")
                 for name in ("pool_cohort.py", "pool_run.py") if (folder/name).is_file()}
+    if 'pool_cohort.py' not in adapters and kit is not None and (Path(kit)/'pool_cohort.py').is_file():
+        adapters['pool_cohort.py'] = (Path(kit)/'pool_cohort.py').read_text(encoding='utf-8')
     return {**({"pool_cohort.py": adapters["pool_cohort.py"]} if "pool_cohort.py" in adapters else {}),
             **(existing or {}),
             **({"pool_run.py": adapters["pool_run.py"]} if "pool_run.py" in adapters else {})}
@@ -960,9 +969,12 @@ class Case:
         backend.sources["pool_worker.py"] = native_cpu_wait_source(backend.sources["pool_worker.py"])
         # The existing facts reader lazily imports pool_cohort under a named
         # assignment. It reads that assignment only; it does not select boxes.
-        backend.sources = native_adapter_sources(module.worker.facts.__file__, backend.sources)
+        backend.sources = native_adapter_sources(module.worker.facts.__file__, backend.sources, kit=module.LEAD)
         preflight = Path(__file__).with_name("cross_peers.py")
         self.preflight_source = preflight.read_text(encoding="utf-8") if preflight.is_file() else None
+        self.native_ship_set = {name: hashlib.sha256(source.encode()).hexdigest() for name, source in backend.sources.items()}
+        if self.preflight_source:
+            self.native_ship_set['cross_peers.py'] = hashlib.sha256(self.preflight_source.encode()).hexdigest()
         backend.control_id = hashlib.sha256(json.dumps(dict(backend.sources, preflight=self.preflight_source), sort_keys=True).encode()).hexdigest()[:20]
         backend.guard = self.guard
         limits = read_json(os.environ.get("CORTEX_SPREAD_LIMITS", ""), {})
@@ -1255,6 +1267,7 @@ class Case:
 
     def result(self):
         return dict(schema=1, topology="spread", interface_version=INTERFACE_VERSION,
+                    native_ship_set=getattr(self, 'native_ship_set', {}),
                     peer_boxes=getattr(self, "assigned_boxes", {name: item[0]["name"] for name, item in self.members.items()}),
                     interface_sha256=self.interface_sha256,
                     preflight_sha256=hashlib.sha256(self.preflight_source.encode()).hexdigest() if getattr(self, "preflight_source", None) else None,

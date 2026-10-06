@@ -59,6 +59,16 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(sources['pool_cohort.py'], (root/'pool_cohort.py').read_text())
             self.assertEqual(sources['pool_run.py'], (root/'pool_run.py').read_text())
 
+    def test_named_route_reader_is_shipped_from_the_installed_kit_when_facts_has_no_copy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            kit = root / 'kit'
+            kit.mkdir()
+            (kit/'pool_cohort.py').write_text('NAME="named"\n')
+            sources = spread.native_adapter_sources(root/'box_facts.py', {'box_facts.py': 'import pool_cohort\n'}, kit=kit)
+            self.assertEqual(list(sources), ['pool_cohort.py', 'box_facts.py'])
+            self.assertEqual(sources['pool_cohort.py'], (kit/'pool_cohort.py').read_text())
+
     def test_native_bootstrap_loads_route_reader_before_facts_and_adapter_after(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
