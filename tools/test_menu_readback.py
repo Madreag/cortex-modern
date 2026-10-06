@@ -1061,7 +1061,7 @@ def third_pass_case(case, port, root, size):
         host += "activate ButtonHostOptApply\nwait 6\n"
         host += "activate ButtonHostOptBack\nwait 6\nassert_substate HostSetup\n" + advanced + read_fields(match + computer)
         host += "activate ButtonHostOptBack\nwait 6\nassert_substate HostSetup\nactivate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
-        host += "activate ButtonLobbyEditSetup\nwait 10\nassert_substate HostOptions\n" + read_fields(match + computer)
+        host += "activate ButtonLobbyEditSetup\nwait 10\nassert_substate HostOptions\n" + read_fields(match)
         host += f"activate ButtonHostOptBack\nwait 6\nassert_substate Lobby\nwait_connected 2 60\nwait_file {marks['client_done']} 90\nexit\n"
         client = join_by_address(port) + "assert_label ButtonLobbyEditSetup Match details\nactivate ButtonLobbyEditSetup\nwait 10\nassert_substate HostOptions\n"
         client += read_fields(match) + f"activate ButtonHostOptBack\nwait 6\nassert_substate Lobby\ntouch_file {marks['client_done']}\nexit\n"
