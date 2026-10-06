@@ -703,7 +703,7 @@ namespace RTE::MenuAutomation {
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
-			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "status_line" || command == "ghost_watch" || command == "text_watch" || command == "assert_list_rows" ||
+			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "assert_roster_text" || command == "status_line" || command == "ghost_watch" || command == "text_watch" || command == "assert_list_rows" ||
 			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "dump_world_ownership" || command == "fire_assert" || command == "fire_abort" || command == "fire_worker_throw" ||
 			command == "window_event" || command == "assert_window_focus" || command == "game_key" || command == "assert_game_input" || command == "open_local_pause" || command == "meta_command";
 	}
@@ -1109,6 +1109,17 @@ namespace RTE::MenuAutomation {
 			panel->SetStatusProbeLine(text);
 			observation = "status line " + std::to_string(text.size());
 			return true;
+		}
+		if (command == "assert_roster_text") {
+			// The players box the lobby draws beside its own column: the text it drew last frame carries the line asked for.
+			auto* panel = g_MenuMan.GetNetworkPanel();
+			if (!panel) return false;
+			const std::string rest{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};
+			const auto start = rest.find_first_not_of(' ');
+			const std::string wanted = start == std::string::npos ? std::string() : rest.substr(start);
+			const auto& drawn = panel->GetRosterWrap();
+			observation = Json{{"active", drawn.active}, {"text", drawn.source}, {"wanted", wanted}}.dump();
+			return drawn.active && !wanted.empty() && drawn.source.find(wanted) != std::string::npos;
 		}
 		if (command == "assert_roster_fits") {
 			auto* panel = g_MenuMan.GetNetworkPanel();
