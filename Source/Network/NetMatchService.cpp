@@ -11363,7 +11363,9 @@ static std::string ResyncSaveName() {
 				config.players.push_back(slot);
 			}
 		}
-		if (!NetMatchConfigUtil::ValidateLocalAlpha(config, error) || !NetLockstepCoordinator::ValidateSimulationTiming(config, error)) return false;
+		auto requestedTiming = config;
+		requestedTiming.slowPlayerPolicy = request.slowPlayerPolicy.value_or(config.slowPlayerPolicy);
+		if (!NetMatchConfigUtil::ValidateLocalAlpha(config, error) || !NetLockstepCoordinator::ValidateSimulationTiming(requestedTiming, error)) return false;
 		outConfig = std::move(config);
 		return true;
 	}

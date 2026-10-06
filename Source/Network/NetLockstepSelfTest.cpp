@@ -24757,6 +24757,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			const int earlyMutation = activity->mutations;
 			const uint8_t earlyAuthority = round.peers[2].GetHostPeerId();
 			if (!ScenarioRunner::QueueLockstepLocalControllerFrames(121, {}, &round.failure)) return fail(round.failure);
+			round.produced[2] = std::max<uint64_t>(round.produced[2], 122);
 			round.alive[0] = false; round.hostWire.Stop();
 			ScenarioRunner::SetSessionPump([&] { round.Pump(); });
 			struct PumpScope { ~PumpScope() { ScenarioRunner::SetSessionPump({}); } } pumpScope;
@@ -24780,6 +24781,25 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			round.drainThrough = 121;
 			for (int turn = 0; turn < 2000 && (round.peers[2].GetHostPeerId() != 2 || round.peers[1].IsMigrating() || round.peers[2].IsMigrating()); ++turn) round.Pump();
 			if (round.peers[2].GetHostPeerId() != 2 || round.peers[1].IsMigrating() || round.peers[2].IsMigrating()) return fail("the committed tick did not finish before succession");
+			for (size_t index: {size_t{1}, size_t{2}}) if (round.peers[index].GetMigrationResult().boundary != 121) return fail("succession discarded the granted tick from its completed prefix");
+			for (uint64_t tick = 122; tick <= 125; ++tick) {
+				round.produceThrough.fill(tick - 1);
+				for (int turn = 0; turn < 200 && (!round.peers[1].HasReadyFrame(tick) || !round.peers[2].HasReadyFrame(tick)); ++turn) round.Pump();
+				for (size_t index: {size_t{1}, size_t{2}}) {
+					ScenarioRunner::SetLockstepCoordinator(&round.peers[index]);
+					if (!ScenarioRunner::PollLockstepSimulationTick(tick)) return fail("the successor tick was not granted");
+					activity->mutations = 0;
+					g_AudioMan.CommitSoundObservations(tick - 1, {}, observations);
+					g_TimerMan.RewindSimTo(tick - 1, (tick - 1) * g_TimerMan.GetDeltaTimeTicks());
+					g_TimerMan.GrantSimUpdates(1); g_TimerMan.UpdateSim(); g_ActivityMan.Update();
+					NetLockstepReadyFrame ready;
+					if (!ScenarioRunner::WaitForLockstepControllerFrame(tick, ready, &round.failure)) return fail(round.failure);
+					if (activity->mutations != 1 || round.peers[index].GetHostPeerId() != 2 || ready.authorityPeerId != 2 || ready.updateAuthorityPeerId != 2) return fail("a survivor's update/commit host or mutation differs after succession at " + std::to_string(tick));
+					round.peers[index].FinishSimulationTick(tick);
+				}
+				round.drainThrough = tick;
+				for (int turn = 0; turn < 4; ++turn) round.Pump();
+			}
 			return fail("");
 		}
 

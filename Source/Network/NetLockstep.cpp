@@ -3093,6 +3093,9 @@ namespace RTE {
 		NetLockstepReadyFrame decoded;
 		decoded.frame = frame;
 		decoded.localPeerId = m_Config.localPeerId;
+		// Recovery finishes the former authority's prefix before the successor takes over.
+		decoded.authorityPeerId = GetHostPeerId();
+		decoded.updateAuthorityPeerId = decoded.authorityPeerId;
 		if (!reader.ReadU8(departures) || departures > m_Config.peerCount || !reader.ReadBytes(data, departures))
 			return false;
 		decoded.departedPeerIds.assign(data, data + departures);
