@@ -29,10 +29,11 @@ class MatrixSelection(unittest.TestCase):
         self.assertEqual([arm['arm'] for arm in plan['arms']], ['baseline-60hz', 'baseline-60hz-off', '100ms-60hz-on', '100ms-60hz-off'])
 
     def test_spread_keeps_the_original_arm_and_lag_plan(self):
-        self.assertEqual(self.plan('--spread', '--lag-arms', '100ms-60hz'), self.plan('--lag-arms', '100ms-60hz'))
+        self.assertEqual(self.plan('--peer-boxes', 'host=ONE,seat2=TWO', '--lag-arms', '100ms-60hz'), self.plan('--lag-arms', '100ms-60hz'))
 
     def test_spread_keeps_the_original_loss_and_silent_levers(self):
-        self.assertEqual(self.plan('--spread', '--cases', '100ms-loss5-silent600'), self.plan('--cases', '100ms-loss5-silent600'))
+        self.assertEqual(self.plan('--peer-boxes', 'host=ONE,seat2=TWO,seat3=THREE', '--cases', '100ms-loss5-silent600'),
+                         self.plan('--cases', '100ms-loss5-silent600'))
 
     def test_result_records_keep_peer_shape_and_mark_single_box(self):
         import feel_measure
