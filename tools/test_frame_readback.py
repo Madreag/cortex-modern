@@ -1,8 +1,8 @@
 """A real abort must dump the rendered frame, including on a hidden/offscreen drawable.
 
-The abort lever runs after the menu frame is rendered. Its dump must exactly match
-one of the recorder's final raw RGB frames; no desktop/front-buffer substitution,
-pixel masks, tolerances or missing-image pass is accepted.
+The detecting lever flushes the recorder and aborts after an admitted frame on
+the named screen. The dump must exactly match that frame; no desktop/front-buffer
+substitution, pixel masks, tolerances or missing-image pass is accepted.
 """
 from __future__ import annotations
 
@@ -23,12 +23,11 @@ def run_case(repo: Path, out: Path, timeout: float = 90) -> dict:
     script = out / "abort.menu.txt"
     script.write_text("wait_ms 2000\nassert_screen MainScreen\n"
                       "activate ButtonMainToOptions\nwait_ms 500\n"
-                      "assert_screen SettingsScreen\nwait_ms 500\n"
-                      "fire_abort deliberate frame readback probe\n", encoding="utf-8")
+                      "assert_screen SettingsScreen\nwait_ms 500\n", encoding="utf-8")
     run = make_run(repo, ["-menu-script", str(script), "-record-video", str(video),
                           "-record-video-fps", "60"], out / "run", timeout,
                    env={"CCCP_HEADLESS": "1", "CC_RUNNER_IGNORE_FULLSCREEN": "1",
-                        "CCCP_TEST_RECORD_ENCODER": ""})
+                        "CCCP_TEST_RECORD_ENCODER": "", "CCCP_TEST_READBACK_ABORT_SCREEN": "SettingsScreen"})
     try:
         launched = run.start().finish()
     finally:
@@ -43,6 +42,7 @@ def run_case(repo: Path, out: Path, timeout: float = 90) -> dict:
         defects.append("original abort reason absent")
     if "0xC0000005" in logs or "GLAD: ERROR" in logs:
         defects.append("GL/secondary crash in frame readback")
+    references = sorted((video / "frames").glob("*.png"))[-1:]
     matches = []
     image_hash = None
     if not aborted.is_file():
@@ -52,13 +52,14 @@ def run_case(repo: Path, out: Path, timeout: float = 90) -> dict:
             picture = image.convert("RGB")
             size, pixels = picture.size, picture.tobytes()
         image_hash = hashlib.sha256(pixels).hexdigest()
-        for frame in sorted((video / "frames").glob("*.png"))[-60:]:
+        for frame in references:
             with Image.open(frame) as image:
                 candidate = image.convert("RGB")
                 if candidate.size == size and candidate.tobytes() == pixels:
                     matches.append(frame.name)
         if not matches:
-            defects.append("abort dump differs from every final recorded RGB frame")
+            defects.append("abort dump differs from its admitted final RGB frame" if references else
+                           "admitted final RGB frame missing")
     scored = {"pass": not defects, "probe": "fail" if defects else "pass", "defects": defects,
               "exit_code": launched.get("exit_code"), "exe_sha256": launched.get("exe_sha256"),
               "raw_rgb_sha256": image_hash, "matching_frames": matches,

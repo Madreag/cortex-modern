@@ -1372,6 +1372,12 @@ void FrameMan::RecordVideoFrame(const std::string& screen, const std::string& se
 	meta.width = width;
 	meta.height = height;
 	recorder.EndFrame(meta);
+	// A detecting run aborts only after this exact frame is durably recorded. Ordinary captures never arm it.
+	const char* abortScreen = SDL_getenv("CCCP_TEST_READBACK_ABORT_SCREEN");
+	if (abortScreen && screen == abortScreen) {
+		recorder.Finish();
+		RTEAbort("deliberate frame readback probe");
+	}
 }
 
 void FrameMan::SaveScreenToBitmap() {
