@@ -150,24 +150,26 @@ def compile_play(package: Path, chosen: Path, layout: Path, host: Path, client: 
     prefix += [f"player=0 17 17 MOUSE={target[0] - cursor[0]},{target[1] - cursor[1]}", "player=0 17 18 FIRE"]
     for peer, path in [(0, host), (1, client)]:
         lines = prefix.copy() if peer == 0 else ["timeline=lockstep-start min=17", "# The joining player's local slot drives stable seat 1 in the match."]
-        detach = 55 if peer == 0 else 75
+        detach = 25 if peer == 0 else 30
         lines += ["# DOWN detaches this player's brain through the mod's own brain panel.", f"player=0 {detach} {detach + 4} L_DOWN"]
         for index in range(10):
-            start = 110 + index * 250
-            forward, back = ("L_RIGHT", "L_LEFT") if peer == 0 else ("L_LEFT", "L_RIGHT")
-            lines += [f"player=0 {start} {start + 89} {forward}", f"player=0 {start + 110} {start + 199} {back}",
-                      f"player=0 {start + 35} {start + 39} JUMP", f"player=0 {start + 145} {start + 149} JUMP"]
+            start = 40 + index * 260
+            lines += [f"player=0 {start} {start + 119} L_LEFT", f"player=0 {start + 130} {start + 249} L_RIGHT"]
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     if single:
         lines = []
-        for line in host.read_text(encoding="utf-8").splitlines():
+        for line in prefix:
             match = re.fullmatch(r"player=0 (\d+) (\d+) (.+)", line)
             if line.startswith("timeline="):
                 continue
             if match:
-                shift = 45 if int(match[1]) <= 18 else 35 if int(match[1]) == 55 else 50
-                line = f"player=0 {int(match[1]) + shift} {int(match[2]) + shift} {match[3]}"
+                line = f"player=0 {int(match[1]) + 45} {int(match[2]) + 45} {match[3]}"
             lines.append(line)
+        lines += ["# DOWN detaches this player's brain through the mod's own brain panel.", "player=0 90 94 L_DOWN"]
+        for index in range(10):
+            start = 160 + index * 250
+            lines += [f"player=0 {start} {start + 89} L_RIGHT", f"player=0 {start + 110} {start + 199} L_LEFT",
+                      f"player=0 {start + 35} {start + 39} JUMP", f"player=0 {start + 145} {start + 149} JUMP"]
         single.write_text("# Keep the offline menu visible for its native picture.\n" + "\n".join(lines) + "\n", encoding="utf-8")
     return {"chosen": str(chosen), "witnesses": words, "ok": target, "host": str(host), "client": str(client)}
 
@@ -311,8 +313,10 @@ def grade_capture(repo: Path, capture: Path) -> dict:
                 errors.append(f"{len(desync)} desync lines")
             shots = runtime / "ScreenShots"
             start = sorted(shots.glob("vw_start_*.png"))
-            menu = [find_words(Image.open(start[0]), package, word) for word in ["New game", "Load game"]] if start else []
-            if peer["peer"] in ["sp", "host"] and (len(menu) != 2 or not all(check["pass"] for check in menu)):
+            menu_frames = [(path, [find_words(Image.open(path), package, word) for word in ["New game", "Load game"]]) for path in start]
+            menu_picture, menu = next((frame for frame in menu_frames if all(check["pass"] for check in frame[1])),
+                                      menu_frames[0] if menu_frames else (None, []))
+            if len(menu) != 2 or not all(check["pass"] for check in menu):
                 errors.append("visible New game / Load game witness missing")
             if "form=START NEW GAME" not in logs:
                 errors.append("the hand press does not reach the mod's new-game form")
@@ -356,6 +360,7 @@ def grade_capture(repo: Path, capture: Path) -> dict:
                 if not rows or not moved:
                     errors.append(f"player {player} detach and movement response missing")
             state = {"peer": peer["peer"], "pass": not errors, "errors": errors, "menu": menu,
+                     "menu_picture": str(menu_picture) if menu_picture else None,
                      "play_ticks": played, "responses": responses, "seats": seats,
                      "desync_lines": len(desync), "ship_picture": str(ship[0]) if ship else None}
             arm["peers"].append(state)

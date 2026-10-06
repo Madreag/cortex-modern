@@ -31,13 +31,12 @@
       },
       "observe_after_failure": true,
       "env": {
-        "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles",
-        "CCCP_TEST_RECORD_CODEC": "libx264"
+        "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
       },
       "runtime_files": [
         {
           "to": "Userdata/UserSavedGames.rte/Index.ini",
-          "write": "DataModule\n\tModuleName = Scripted Activity Saves\n\tAddGlobalScript = GlobalScript\n\t\tPresetName = VW Scene Observer\n\t\tScriptPath = UserSavedGames.rte/VWSceneObserver.lua\n\t\tLuaClassName = VWSceneObserver\n"
+          "write": "DataModule\n\tModuleName = Scripted Activity Saves\n\tAddGlobalScript = GlobalScript\n\t\tPresetName = VW Scene Observer\n\t\tLateUpdate = 1\n\t\tScriptPath = UserSavedGames.rte/VWSceneObserver.lua\n\t\tLuaClassName = VWSceneObserver\n"
         },
         {
           "to": "Userdata/UserSavedGames.rte/VWSceneObserver.lua",
@@ -75,13 +74,12 @@
       },
       "observe_after_failure": true,
       "env": {
-        "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles",
-        "CCCP_TEST_RECORD_CODEC": "libx264"
+        "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
       },
       "runtime_files": [
         {
           "to": "Userdata/UserSavedGames.rte/Index.ini",
-          "write": "DataModule\n\tModuleName = Scripted Activity Saves\n\tAddGlobalScript = GlobalScript\n\t\tPresetName = VW Scene Observer\n\t\tScriptPath = UserSavedGames.rte/VWSceneObserver.lua\n\t\tLuaClassName = VWSceneObserver\n"
+          "write": "DataModule\n\tModuleName = Scripted Activity Saves\n\tAddGlobalScript = GlobalScript\n\t\tPresetName = VW Scene Observer\n\t\tLateUpdate = 1\n\t\tScriptPath = UserSavedGames.rte/VWSceneObserver.lua\n\t\tLuaClassName = VWSceneObserver\n"
         },
         {
           "to": "Userdata/UserSavedGames.rte/VWSceneObserver.lua",
