@@ -8606,6 +8606,10 @@ static std::string ResyncSaveName() {
 		                                                                   : m_Runner                    ? m_Runner->GetMatchConfig().hostPeerId
 		                                                                                                 : 1;
 		snapshot.serviceState = StateName(m_State);
+		// The activity exists before its published boundary starts the shared simulation.
+		if (m_State == NetMatchServiceState::Running && m_Coordinator &&
+		    m_Coordinator->GetState() == NetLockstepState::WaitingForStart && m_Coordinator->GetConfig().requirePublishedStart)
+			snapshot.serviceState = StateName(NetMatchServiceState::Starting);
 		snapshot.statusText = m_StatusText;
 		snapshot.migrating = m_Coordinator && m_Coordinator->IsMigrating();
 		snapshot.hostLost = snapshot.migrating && m_Coordinator->GetMigrationPhase() == NetHostMigrationPhase::Contacting;
