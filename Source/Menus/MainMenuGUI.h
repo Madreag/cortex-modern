@@ -100,8 +100,8 @@ namespace RTE {
 		/// The dialog that takes every click while it is open, or null.
 		GUIControl* AutomationModalDialog() const;
 
-		/// Setup for a scripted host: the port it listens on, which a player sets in Advanced. False when the text is no port.
-		bool AutomationSetupHostPort(const std::string& port);
+		/// Gets the port the next hosted lobby listens on, as the host's setup holds it. False when there is no setup.
+		bool AutomationHostPort(std::string& port) const;
 
 		/// Gets a named control's text (label, button or checkbox) for assert_label; false when it has none.
 		bool AutomationLabelText(const std::string& controlName, std::string& text) const;

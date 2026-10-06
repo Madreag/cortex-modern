@@ -1584,7 +1584,7 @@ namespace RTE::MenuAutomation {
 			command == "dump_refresh_count" || command == "dump_enter_state" ||
 			command == "dump_host_options" || command == "dump_player_options" || command == "key" || command == "pad" ||
 			command == "key_down" || command == "key_up" || command == "focus" ||
-			command == "set_text" || command == "setup_host_port" || command == "combo_drop" || command == "combo_select" || command == "combo_refused" || command == "assert_combo_items" ||
+			command == "set_text" || command == "assert_host_port" || command == "combo_drop" || command == "combo_select" || command == "combo_refused" || command == "assert_combo_items" ||
 			command == "slider_set" || command == "model_mark" || command == "assert_model_changed" || command == "screen_mark" || command == "assert_screen_changed" ||
 			command == "assert_box_text" || command == "type_text" || command == "assert_value" || command == "assert_selected" || command == "click_row" ||
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
@@ -2284,16 +2284,16 @@ namespace RTE::MenuAutomation {
 			args >> std::quoted(name) >> argument >> extra;
 			if (!extra.empty()) { observation = "unexpected arguments"; return false; }
 			auto* control = manager->GetControl(name);
-			if (command == "setup_host_port") {
-				// SETUP, not a gesture: the port a scripted host listens on, which a player sets in Advanced. A run picks its own
-				// so two runs on one machine never meet.
-				if (name.empty() || !argument.empty()) { observation = "need one port"; return false; }
-				if (auto* menu = g_MenuMan.GetMainMenu(); menu && menu->AutomationSetupHostPort(name)) {
-					observation = name;
-					return true;
+			if (command == "assert_host_port") {
+				// The port the next lobby listens on, as the host's setup holds it once Advanced took the typed one or refused it.
+				std::string held;
+				const MainMenuGUI* menu = g_MenuMan.GetMainMenu();
+				if (!menu || !menu->AutomationHostPort(held)) {
+					observation = "no host setup";
+					return false;
 				}
-				observation = name + " is not a port";
-				return false;
+				observation = name + " held=" + held;
+				return held == name;
 			}
 			if (command == "key" || command == "pad") {
 				auto* input = dynamic_cast<GUIInputWrapper*>(manager->GetInput());

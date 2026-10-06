@@ -5139,11 +5139,9 @@ GUIControl* MainMenuGUI::AutomationModalDialog() const {
 	return m_ActiveMenuScreen == MenuScreen::MultiplayerScreen ? m_ActiveDialogBox : nullptr;
 }
 
-bool MainMenuGUI::AutomationSetupHostPort(const std::string& port) {
-	char* end = nullptr;
-	const long parsed = std::strtol(port.c_str(), &end, 10);
-	if (port.empty() || *end != '\0' || parsed < 1 || parsed > 65535 || !m_MultiplayerHostPortTextBox) return false;
-	m_MultiplayerHostPortTextBox->SetText(std::to_string(parsed));
+bool MainMenuGUI::AutomationHostPort(std::string& port) const {
+	if (!m_MultiplayerHostPortTextBox) return false;
+	port = m_MultiplayerHostPortTextBox->GetText();
 	return true;
 }
 

@@ -3868,6 +3868,17 @@ void ProcessMenuScript() {
 		if (!MenuAutomation::SweepSteps(MenuScriptHandManager(&modal), iss, generated, observation)) return MenuScriptFail("sweep " + observation);
 		steps.insert(steps.begin() + static_cast<std::ptrdiff_t>(stepIndex), generated.begin(), generated.end());
 		MenuScriptPrint("sweep steps=" + std::to_string(generated.size()) + " " + observation);
+	} else if (cmd == "setup_host_port") {
+		// The port a scripted host listens on, set as a player sets it: typed into Advanced's port box, taken by Apply and its
+		// check, read back on the setup screen. A run picks its own so two runs on one machine never meet.
+		std::string port;
+		iss >> port;
+		if (port.empty()) return MenuScriptFail("setup_host_port needs a port");
+		const std::vector<std::string> generated = {"activate ButtonHostOptions", "wait 10", "assert_substate HostOptions", "activate TabHostPageConnection", "wait 4",
+		                                            "settext TextHostNetPort " + port, "wait 4", "activate ButtonHostOptApply", "wait 6", "activate ButtonHostOptBack",
+		                                            "wait 6", "assert_substate HostSetup", "assert_host_port " + port};
+		steps.insert(steps.begin() + static_cast<std::ptrdiff_t>(stepIndex), generated.begin(), generated.end());
+		MenuScriptPrint("setup_host_port " + port + " steps=" + std::to_string(generated.size()));
 	} else if (cmd == "wait") {
 		iss >> waitFrames;
 	} else if (cmd == "wait_ms") {
