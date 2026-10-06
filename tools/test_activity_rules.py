@@ -6,7 +6,7 @@ tick each peer prints the rules it plays by; the run passes when, on both peers,
 path to orbit and unit deployment are the activity's own defaults - the values the single-player setup seeds from the
 same activity - and every seated team's funds equal that gold.
 
-  python tools/test_activity_rules.py --out D:/mx/<lane>/activity-rules [--port 47350] [--runs 1] [--path address|newcomer]
+  python tools/test_activity_rules.py --out <output-dir> [--port 47350] [--runs 1] [--path address|newcomer]
 
 The newcomer path joins through the game list - the host's row, Join Game - instead of by address; the
 host's port is the one setup word, so two runs on one machine never meet.

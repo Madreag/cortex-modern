@@ -9,7 +9,7 @@ proxy this script controls, so the list the joiner sees changes exactly when the
   unreachable  the online list fails after the joiner has seen a game from it. The screen must not call that game one
                "on this network".
 
-  python tools/test_join_list_reopen.py --check reopen --out D:/mx/<lane>/join-reopen --port 49832
+  python tools/test_join_list_reopen.py --check reopen --out <output-dir> --port 49832
 """
 
 from __future__ import annotations

@@ -4,7 +4,7 @@ The older build is a tree of the public line (its executable and its own Data); 
 one hosts and the other joins by address. The join is refused; this build's side must read a sentence that says which
 of the two has the newer game. What the older build reads is recorded as it is (its text cannot change).
 
-  python tools/test_version_meeting.py --older D:/Projects/takeover-build --out D:/mx/<lane>/versions --port 49836
+  python tools/test_version_meeting.py --older <older-tree> --out <output-dir> --port 49836
 """
 
 from __future__ import annotations
