@@ -25866,19 +25866,34 @@ namespace {
 			manifest.controllerFrameVersion = admission.identity.controllerFrameVersion; manifest.controllerFrameEncodedSize = admission.identity.controllerFrameEncodedSize;
 			manifest.deterministicConfigHash = admission.identity.deterministicConfigHash; manifest.moduleManifestHash = admission.identity.moduleManifestHash;
 			manifest.sessionRulesHash = admission.identity.sessionRulesHash; manifest.sessionIdentityHash = admission.identity.sessionIdentityHash;
-			NetSessionConfig strangerConfig; strangerConfig.localIdentity = manifest; strangerConfig.port = 47439; strangerConfig.sessionId = retained.hostSessionId + 1;
-			LoopbackTransport strangerWire, dial; NetSession stranger, rejected;
-			if (!stranger.StartHost(strangerWire, strangerConfig, &round.failure)) return done(round.failure);
-			NetReconnectClient client; client.Configure(&service.m_TicketStore, admission.identity, "Returning"); client.SetRequireStoredTicket(true);
-			rejected.SetReconnectClient(&client); strangerConfig.expectedHostSessionId = retained.hostSessionId;
-			if (!rejected.StartClient(dial, "loopback", strangerConfig, &round.failure)) return done(round.failure);
-			for (int pass = 0; pass < 40 && !rejected.HasReject(); ++pass) {
-				stranger.Tick(admission.nowMs); rejected.Tick(admission.nowMs); strangerWire.AdvanceTimeMs(10); dial.AdvanceTimeMs(10); admission.nowMs += 10;
+			for (const bool sameSessionNumber: {false, true}) {
+				NetSessionConfig strangerConfig; strangerConfig.localIdentity = manifest; strangerConfig.port = 47439;
+				strangerConfig.sessionId = retained.hostSessionId + (sameSessionNumber ? 0 : 1);
+				NetSeatAuthRegistry strangerRegistry; NetReconnectHost strangerAdmission;
+				if (!strangerRegistry.BeginHostedSession()) return done("the stranger registry did not start");
+				strangerAdmission.Configure(&strangerRegistry, strangerConfig.sessionId, admission.identity);
+				strangerAdmission.SetSeatTable(NetH4BuildSeatTable(round.match), round.match.mode);
+				LoopbackTransport strangerWire, dial; NetSession stranger;
+				stranger.SetReconnectHost(&strangerAdmission);
+				if (!stranger.StartHost(strangerWire, strangerConfig, &round.failure)) return done(round.failure);
+				NetReconnectClient client; client.Configure(&service.m_TicketStore, admission.identity, "Returning"); client.SetRequireStoredTicket(true);
+				client.SetUnixClock(&HostReturnAdmission::WallClock, &admission);
+				service.m_Session = std::make_unique<NetSession>();
+				service.m_Session->SetReconnectClient(&client); strangerConfig.expectedHostSessionId = retained.hostSessionId;
+				if (!service.m_Session->StartClient(dial, "loopback", strangerConfig, &round.failure)) return done(round.failure);
+				for (int pass = 0; pass < 200 && !service.m_Session->HasReject(); ++pass) {
+					stranger.Tick(admission.nowMs); service.m_Session->Tick(admission.nowMs); strangerWire.AdvanceTimeMs(10); dial.AdvanceTimeMs(10); admission.nowMs += 10;
+				}
+				NetH4TicketRecord intact;
+				const std::string expected = sameSessionNumber ? "reconnect denied" : "The address belongs to another hosted session.";
+				if (!service.m_Session->HasReject() || service.m_Session->GetRejectSummary() != expected || (sameSessionNumber && !client.UsedStoredTicket()) ||
+				    service.m_TicketStore.Load(admission.wallMs, intact) != NetH4TicketLoadResult::Loaded || intact.credential != retained.credential || intact.holderGeneration != retained.holderGeneration)
+					return done("a stranger at a stale successor address accepts or overwrites the retained identity");
+				service.m_State = NetMatchServiceState::Failed; service.m_OrdinaryTicketRejoin = service.m_HeldRejoinDriving = true; service.m_HeldRejoinRoutes = routes;
+				if (!service.BeginHeldRejoinOnNextHost(&startError) || !service.m_LastJoinRoute || service.m_LastJoinRoute->port != 47432)
+					return done("ordinary Rejoin stops walking after the stranger's identity refusal: " + startError);
+				service.Destroy(); Reset();
 			}
-			NetH4TicketRecord intact;
-			if (!rejected.HasReject() || rejected.GetRejectSummary() != "The address belongs to another hosted session." ||
-			    service.m_TicketStore.Load(admission.wallMs, intact) != NetH4TicketLoadResult::Loaded || intact.credential != retained.credential || intact.holderGeneration != retained.holderGeneration)
-				return done("a stranger at a stale successor address accepts or overwrites the retained identity");
 			ReleasePathClaimView view;
 			if (!view.Create("client leaver's original unit", round.peers[2], 3, 4, 4)) return done("the client leaver's unit did not create");
 			view.handoff = 1; view.claimant = 4;

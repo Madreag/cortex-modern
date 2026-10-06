@@ -11203,7 +11203,8 @@ static std::string ResyncSaveName() {
 			// A host that did not answer one dial is not gone; only a host that is gone sends the seat on.
 			const bool helloUnanswered = m_Session && HeldRejoinRetriesTheHost(lostDuringSetup, hasReject, reason, m_Session->GetRejectSummary());
 			const bool obsoleteRoute = m_OrdinaryTicketRejoin && m_State == NetMatchServiceState::Failed &&
-			    (!hasReject || reason == NetRejectReason::Timeout || (reason == NetRejectReason::HostNotAccepting && m_Session->GetRejectSummary() == "The address belongs to another hosted session."));
+			    (!hasReject || reason == NetRejectReason::Timeout || (reason == NetRejectReason::HostNotAccepting &&
+			    (m_Session->GetRejectSummary() == "The address belongs to another hosted session." || m_Session->GetRejectSummary() == "reconnect denied")));
 			const bool hostGone = obsoleteRoute || (!helloUnanswered && (lostDuringSetup || (m_Session && ClientSessionLossIsHostDeparture(*m_Session))));
 			if (hostGone) {
 				// A host that answered the round is over is not gone: the seat completes on what it holds.

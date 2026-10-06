@@ -1398,7 +1398,12 @@ namespace RTE {
 			// §4 expands the handshake: with an admission plane attached, Ready waits for JoinCommitted,
 			// which is also what hands back the seat's own peer id instead of this freshly allocated one.
 			if (m_ReconnectClient) m_ReconnectClient->NoteAcceptedHostSession(accepted->sessionId);
-			if (m_ReconnectClient && m_ReconnectClient->BeginAdmission(m_NowMs)) {
+			if (m_ReconnectClient) {
+				if (!m_ReconnectClient->BeginAdmission(m_NowMs)) {
+					SetRejected(NetRejectReason::HostNotAccepting, "reconnect_auth", "retained seat ticket", "unavailable", m_ReconnectClient->GetError());
+					m_Transport->Disconnect(peerId, "reconnect admission failed closed");
+					return;
+				}
 				m_State = NetSessionState::Accepted;
 				m_StateStartedMs = m_NowMs;
 				FlushReconnectOutbound();
