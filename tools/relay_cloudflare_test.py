@@ -133,10 +133,10 @@ class CloudflareMatchEvidence(unittest.TestCase):
         self.assertFalse(self.judge(run)['passed'])
 
     def test_a_relay_outside_cloudflare_fails(self):
-        run = cloudflare_run(signals=[('host', signal(relay_line('68.3.162.151'))), ('client-nonce', signal(relay_line('162.159.207.9')))])
+        run = cloudflare_run(signals=[('host', signal(relay_line('192.0.2.100'))), ('client-nonce', signal(relay_line('162.159.207.9')))])
         verdict = self.judge(run)
         self.assertFalse(verdict['passed'])
-        self.assertTrue(any('68.3.162.151' in reason for reason in verdict['reasons']), verdict['reasons'])
+        self.assertTrue(any('192.0.2.100' in reason for reason in verdict['reasons']), verdict['reasons'])
 
     def test_a_peer_that_sent_no_relay_candidate_fails(self):
         run = cloudflare_run(signals=[('host', signal(relay_line('141.101.90.17')))])
@@ -161,11 +161,11 @@ class CloudflareMatchEvidence(unittest.TestCase):
         self.assertFalse(self.judge(cloudflare_run(reports={'client': {'found': True, 'relayed': False, 'remote_address': '24.251.145.96:5000'}}))['passed'])
 
     def test_our_relay_passes_only_with_its_own_addresses_and_a_fixed_offer(self):
-        coturn = dict(mode='coturn', relay_addresses=['192.168.50.122', '68.3.162.151'],
-                      signals=[('host', signal(relay_line('192.168.50.122', 49201))), ('client-nonce', signal(relay_line('192.168.50.122', 49202)))],
+        coturn = dict(mode='coturn', relay_addresses=['192.0.2.101', '192.0.2.100'],
+                      signals=[('host', signal(relay_line('192.0.2.101', 49201))), ('client-nonce', signal(relay_line('192.0.2.101', 49202)))],
                       offers=[dict(session_id='session-one', match_id='session-one:1', provider='coturn', generation=1, expires_at=2000, server_count=1)],
-                      offer_urls=['turn:68.3.162.151:3479?transport=udp'],
-                      reports={'client': {'found': True, 'state': 3, 'relayed': True, 'remote_address': '192.168.50.122:49201'}})
+                      offer_urls=['turn:192.0.2.100:3479?transport=udp'],
+                      reports={'client': {'found': True, 'state': 3, 'relayed': True, 'remote_address': '192.0.2.101:49201'}})
         self.assertTrue(self.judge(cloudflare_run(**coturn))['passed'])
         through_cloudflare = dict(coturn, signals=cloudflare_run()['signals'])
         self.assertFalse(self.judge(cloudflare_run(**through_cloudflare))['passed'])
@@ -191,7 +191,7 @@ class CloudflareMatchEvidence(unittest.TestCase):
         import relay_cloudflare_match as match
         self.assertTrue(match.cloudflare_address('141.101.90.1'))
         self.assertTrue(match.cloudflare_address('2a06:98c1:3200::1'))
-        for other in ('68.3.162.151', '24.251.145.96', '192.168.50.122', '8.8.8.8', 'not-an-address'):
+        for other in ('192.0.2.100', '24.251.145.96', '192.0.2.101', '8.8.8.8', 'not-an-address'):
             self.assertFalse(match.cloudflare_address(other), other)
 
 
@@ -633,7 +633,7 @@ class OracleCorrections(unittest.TestCase):
         # Both relay candidates of the live run; ARIN RDAP: NET-104-16-0-0-1 104.16.0.0/12 CLOUDFLARENET, Cloudflare, Inc.
         for address in ('104.30.136.195', '104.30.146.169'):
             self.assertTrue(match.cloudflare_address(address), address)
-        for other in ('104.32.0.1', '68.3.162.151', '192.168.50.122'):
+        for other in ('104.32.0.1', '192.0.2.100', '192.0.2.101'):
             self.assertFalse(match.cloudflare_address(other), other)
 
     def test_a_report_written_after_the_connection_closed_is_no_route_evidence(self):
