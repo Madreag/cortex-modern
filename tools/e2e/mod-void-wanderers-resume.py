@@ -65,7 +65,7 @@ FAIL_CLOSED = """function VWFileProbe:StartScript()
     MetricsCollector:BeginRun("unroutable mutations", 42);
     local created = LuaMan:DirectoryCreate("UnroutedCreate", true);
     local renamed = LuaMan:DirectoryRename("UnroutedRename", "UnroutedMoved");
-    local removed = LuaMan:DirectoryRemove("Mods/", true);
+    local removed = LuaMan:DirectoryRemove("Mods/UnroutedRemove/", true);
     print("[resume-detector] unroutable_create=" .. tostring(created) .. " rename=" .. tostring(renamed) .. " remove=" .. tostring(removed));
     assert(not created and not renamed and not removed, "opted-in store mutates a non-module directory");
     print("[resume-detector] PASS file_closed");
@@ -104,11 +104,11 @@ def stage_file_closed(run):
     mods = runtime / "Mods"
     assert mods.is_dir() and not mods.is_symlink() and not mods.is_junction(), "generated Mods must be a private plain directory"
     assert not any(mods.iterdir()), "generated Mods must contain no installed package"
-    fixture = mods / "Generated.rte"
-    fixture.mkdir()
+    fixture = mods / "UnroutedRemove/Generated.rte"
+    fixture.mkdir(parents=True)
     (fixture / "sentinel.txt").write_bytes(b"generated package\n")
-    (runtime / "UnroutedRename").mkdir()
-    (runtime / "UnroutedRename/sentinel.txt").write_bytes(b"generated directory\n")
+    (mods / "UnroutedRename").mkdir()
+    (mods / "UnroutedRename/sentinel.txt").write_bytes(b"generated directory\n")
     module = runtime / "Userdata/UserSavedGames.rte"
     module.mkdir()
     (module / "Index.ini").write_text(
@@ -233,7 +233,7 @@ def main():
                 errors.append(bad[0])
             if args.case == "file-closed":
                 runtime = Path(run.cwd)
-                if not (runtime / "Mods/Generated.rte/sentinel.txt").is_file() or not (runtime / "UnroutedRename/sentinel.txt").is_file() or (runtime / "UnroutedCreate").exists() or (runtime / "UnroutedMoved").exists():
+                if not (runtime / "Mods/UnroutedRemove/Generated.rte/sentinel.txt").is_file() or not (runtime / "Mods/UnroutedRename/sentinel.txt").is_file() or (runtime / "Mods/UnroutedCreate").exists() or (runtime / "Mods/UnroutedMoved").exists():
                     errors.append("generated non-module directories were altered")
             rows.append({"peer": peer, "pass": not errors, "errors": errors,
                          "detector_lines": [line for line in logs.splitlines() if "[resume-detector]" in line or "[resume-camera]" in line],
