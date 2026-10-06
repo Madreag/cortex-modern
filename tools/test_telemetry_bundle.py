@@ -290,7 +290,7 @@ def run_credentials(repo: Path, root: Path, exe_sha: str) -> dict:
     details.update(credential_fields=fields, forms=sorted({form for field, form, token in needles}),
                    line_endings=["LF", "CRLF", "CR"], planted_fragments=len(needles),
                    harmless_lines=len(harmless), private_settings_unchanged=True)
-    details["harmless_fields"] = harmless_fields
+    details["harmless_fields"] = sorted({marker.split(b" = ", 1)[0].strip().decode("ascii") for marker in harmless})
     return details
 
 
