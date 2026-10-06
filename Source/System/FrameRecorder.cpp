@@ -327,6 +327,7 @@ namespace RTE {
 	}
 
 	void FrameRecorder::WriterLoop() {
+		const bool profileReadback = std::getenv("CCCP_TEST_READBACK_TIMING") != nullptr;
 		for (;;) {
 			QueuedFrame frame;
 			{
@@ -343,9 +344,16 @@ namespace RTE {
 			}
 			WritePendingDrops();
 			// The writer's processor time is the recorder's cost: a write blocked on the encoder's pipe or the disk takes nothing from a frame.
+			const auto wallBefore = profileReadback ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			const int64_t cpuBefore = ThreadCpuNanoseconds();
 			std::string row = m_EncoderPath.empty() ? WriteFrame(frame) : EncodeFrame(frame);
-			HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - cpuBefore);
+			const int64_t cpuNS = ThreadCpuNanoseconds() - cpuBefore;
+			HarnessCost::Charge(HarnessCost::Recorder, cpuNS);
+			if (profileReadback) {
+				const auto wallUS = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - wallBefore).count();
+				System::PrintDiagnosticLine("[capture-writer-phase] tick=" + std::to_string(frame.meta.simTick) + " frame=" + std::to_string(frame.index) +
+				    " cpu_us=" + std::to_string(cpuNS / 1000) + " wall_us=" + std::to_string(wallUS));
+			}
 			frame.pixels.clear();
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
