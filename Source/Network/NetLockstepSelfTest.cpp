@@ -35,6 +35,7 @@
 #include "AudioMan.h"
 #include "CameraMan.h"
 #include "Controller.h"
+#include "Constants.h"
 #include "FrameMan.h"
 #include "GUISound.h"
 #include "LuaMan.h"
