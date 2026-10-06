@@ -24681,7 +24681,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			std::array<ReleasePathClaimView, 2> views;
 			for (size_t index = 0; index < views.size(); ++index) {
 				if (!views[index].Create("survivor " + std::to_string(index + 2), round.peers[index + 1], 3, 4, 4)) return fail("the held actor did not create");
-				views[index].handoff = 1;
+				views[index].handoff = 1; views[index].claimant = 4;
 				for (const auto& [tick, ready]: round.committed[index + 1]) if (tick >= 29) {
 					views[index].ApplyTick(ready);
 					if (!round.peers[index + 1].IsSeatReclaimableAt(4, tick) || views[index].claimant != 4 || views[index].ended) failures += "seat 4 does not remain held at " + std::to_string(tick) + "; ";
