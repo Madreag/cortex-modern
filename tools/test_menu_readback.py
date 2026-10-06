@@ -2532,6 +2532,15 @@ def run_case(options, case, root, failing=None):
     network_page_pair = case in ("net-chat", "lobby-name") and (smoke or (spread and spread.enabled(options))) and not failing
     if network_page_pair:
         texts, probes = spread_menu_scripts(case, texts, options.port, root)
+    public_directory = bool(getattr(options, "public_directory", False)) and not smoke
+    if public_directory and case == "host-draft-roundtrip":
+        # Read back the original Off draft before enabling its separate Internet arm.
+        create = "activate ButtonMultiplayerCreate\n"
+        connection = ("activate ButtonHostOptions\nwait 10\nassert_substate HostOptions\n" + page("Connection")
+                      + hand_pick("ComboHostNetIce", NAT_STATES[0]) + "activate ButtonHostOptApply\nwait 6\n"
+                      "activate ButtonHostOptBack\nwait 6\nassert_substate HostSetup\n")
+        assert texts["host"].count(create) == 1
+        texts["host"] = texts["host"].replace(create, connection + create)
     if failing:
         prelude, setup, assertion = failing
         texts, probes = {"host": prelude + setup + assertion + "\nexit\n"}, {}
@@ -2558,13 +2567,17 @@ def run_case(options, case, root, failing=None):
                 raise RuntimeError(("paired" if paired else "selected") + " menu readback requires the shared spread executor")
             width, height, multiplier = size_parts(options.size)
             reviewed = "client" if case in ("host-draft-roundtrip", "sweep-advanced-client") else "host"
-            peers = [spread.Peer(who, share_ok=False, os="windows" if who == reviewed or case == "net-host-left-early" else "any",
+            peers = [spread.Peer(who, share_ok=case == "lobby-long-names" and who != reviewed, os="windows",
                                  size=(int(width * multiplier), int(height * multiplier)), reviewed=who == reviewed,
                                  held=(case == "net-host-left-early" and who == "client")) for who in texts]
             parameters = {"lane": "menus"}
-            if case == "host-draft-roundtrip":
+            if public_directory:
+                parameters["public_directory"] = True
+            elif case == "host-draft-roundtrip":
                 # This case deliberately reads back Unlisted with traversal and relay Off.
                 parameters["network"] = "direct"
+            if getattr(options, "peer_task", None):
+                parameters["peer_tasks"] = spread.pairs(",".join(options.peer_task))
             executor = spread.prepare_case(options.repo, root, peers, spread.Match(options.port, parameters=parameters))
             factory = executor.make_run
         # A pair runs host and client; a case may seat a second joiner beside them.
@@ -3477,7 +3490,9 @@ def run_case(options, case, root, failing=None):
         if receipt:
             result.update(topology="spread", peer_boxes=receipt["peer_boxes"], spread=receipt)
             result["execution_scope"] = "match peers" if paired else "standalone UI"
-            result["proof"] = paired and result["pass"] and len(set(result["peer_boxes"].values())) == len(runs)
+            # Native allocation checks distinct machines and permits only declared sharing.
+            result["proof"] = bool(paired and result["pass"] and not receipt["refusals"]
+                                   and set(receipt["identities"]) == set(runs))
         result["captures"] = images
         (root / "result.json").write_text(json.dumps(retain_capture_detail(root, result), indent=2) + "\n", encoding="utf-8")
     return result
