@@ -223,7 +223,7 @@ def share_status_row(capture, port, host=None):
     return status
 NETWORK_ACTION_COLUMN = 330
 INTERNET_HINT = "host[:port][/path] - https:// is implied"
-INTERNET_REASON = "Connection sets your route. Host Options > Network sets the match's relay."
+INTERNET_REASON = "Connection sets your route. Host a Game > Advanced > Connection sets the match's relay."
 # The wire's display-name cap; the landing name box and -net-player-name refuse past it.
 DISPLAY_NAME_MAX_BYTES = 64
 # FontSmall measured 125 glyphs of this alphabet at 502 px. Two hundred stay one token and are wider
