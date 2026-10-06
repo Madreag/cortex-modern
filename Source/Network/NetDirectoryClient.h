@@ -8,6 +8,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -94,7 +95,8 @@ namespace RTE {
 
 		static constexpr const char* c_CapacityNotice = "The online list is full right now. Try again in a moment.";
 		static bool IsCapacityReply(const Reply& reply);
-		const std::string& LastError() const { return m_LastError; }
+		/// The worker owns its snapshot while the game thread handles the next reply.
+		std::string LastError() const;
 
 		State GetState() const { return m_State; }
 		/// The held row's last acknowledged visibility; empty before registration or after loss.
@@ -181,6 +183,7 @@ namespace RTE {
 
 		void SetState(State state);
 		void NoteError(const std::string& error);
+		void ClearCapacityError();
 		void ScheduleRetry(uint64_t nowMs); //!< Transport/TLS/5xx: backoff 5s,10s,20s..60s.
 		void StartRequest(RequestKind kind, const Request& request);
 		void HandleReply(RequestKind kind, const Reply& reply, uint64_t nowMs);
@@ -253,6 +256,7 @@ namespace RTE {
 		uint64_t m_Deletes = 0;
 		long m_LastStatus = 0;
 		std::string m_LastError;
+		mutable std::mutex m_LastErrorMutex;
 	};
 
 } // namespace RTE

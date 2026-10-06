@@ -415,8 +415,21 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::NoteError(const std::string& error) {
-		m_LastError = error;
+		{
+			std::lock_guard<std::mutex> lock(m_LastErrorMutex);
+			m_LastError = error;
+		}
 		System::PrintDiagnosticLine("[net-directory] " + error);
+	}
+
+	std::string NetDirectoryClient::LastError() const {
+		std::lock_guard<std::mutex> lock(m_LastErrorMutex);
+		return m_LastError;
+	}
+
+	void NetDirectoryClient::ClearCapacityError() {
+		std::lock_guard<std::mutex> lock(m_LastErrorMutex);
+		if (m_LastError == c_CapacityNotice) m_LastError.clear();
 	}
 
 	void NetDirectoryClient::ScheduleRetry(uint64_t nowMs) {
@@ -505,7 +518,7 @@ namespace RTE {
 			m_HeartbeatS = std::max<int64_t>(c_MinHeartbeatS, response.heartbeatS);
 			m_ExpiresInS = response.expiresInS;
 			m_NextHeartbeatMs = nowMs + static_cast<uint64_t>(m_HeartbeatS) * 1000;
-			if (m_LastError == c_CapacityNotice) m_LastError.clear();
+			ClearCapacityError();
 			m_BackoffMs = 0;
 			System::PrintDiagnosticLine("[net-directory] registered session_id=" + m_SessionId + " heartbeat_s=" + std::to_string(m_HeartbeatS));
 			SetState(State::Registered);
@@ -596,7 +609,7 @@ namespace RTE {
 			m_HeartbeatS = std::max<int64_t>(c_MinHeartbeatS, response.heartbeatS);
 			m_ExpiresInS = response.expiresInS;
 			m_NextHeartbeatMs = nowMs + static_cast<uint64_t>(m_HeartbeatS) * 1000;
-			if (m_LastError == c_CapacityNotice) m_LastError.clear();
+			ClearCapacityError();
 			m_BackoffMs = 0;
 			if (m_Row.persistentWorld) {
 				m_WorldProofs.clear(); RememberWorldProof(m_SessionId, m_Token);
@@ -702,7 +715,7 @@ namespace RTE {
 			m_Rows.insert(m_Rows.end(), list.sessions.begin(), list.sessions.end());
 		}
 		m_ListTotal = list.total;
-		if (m_LastError == c_CapacityNotice) m_LastError.clear();
+		ClearCapacityError();
 		m_ListError.clear();
 		if (!list.nextCursor.empty() && m_ListPages < c_ListMaxPages) {
 			m_ListCursor = list.nextCursor;
@@ -927,7 +940,7 @@ namespace RTE {
 			{"heartbeats", m_Heartbeats},
 			{"deletes", m_Deletes},
 			{"last_status", m_LastStatus},
-			{"last_error", m_LastError},
+			{"last_error", LastError()},
 			{"desired_listed", m_DesiredListed},
 			{"confirmed_listed", m_ConfirmedListed ? json(*m_ConfirmedListed) : json(nullptr)},
 			{"supports_unlisted", m_Capable},

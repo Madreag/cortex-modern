@@ -44,6 +44,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <deque>
 #include <iostream>
 #include <iterator>
@@ -2757,6 +2758,30 @@ namespace RTE {
 				return true;
 			}
 
+			bool TestDirectoryErrorSnapshot(std::string* error) {
+				ScriptedClient host;
+				host.replies->push_back({503, R"({"error":"full"})", ""});
+				host.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				host.client.Advertise(SampleRegisterRequest(), false);
+				host.client.Update(0); host.client.Update(0);
+				std::promise<void> read, changed;
+				auto readDone = read.get_future(); auto changeDone = changed.get_future();
+				bool stable = false;
+				std::thread worker([&] {
+					const std::string& snapshot = host.client.LastError();
+					read.set_value(); changeDone.wait();
+					stable = snapshot == NetDirectoryClient::c_CapacityNotice;
+				});
+				readDone.wait();
+				host.client.Update(5000); host.client.Update(5000);
+				changed.set_value(); worker.join();
+				if (!stable || !host.client.LastError().empty()) {
+					*error = "T1: the worker's directory error changed underneath its captured read"; return false;
+				}
+				std::cout << "[net-directory-selftest] PASS T1 owned_error_interleaving" << std::endl;
+				return true;
+			}
+
 			bool TestDirectoryCapacityWords(std::string* error) {
 				const std::string sentence = "The online list is full right now. Try again in a moment.";
 				ScriptedClient host;
@@ -3193,7 +3218,7 @@ namespace RTE {
 				if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
 			}
 #endif
-			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
+			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"T1", TestDirectoryErrorSnapshot}, {"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
 				if (!selected || std::string(selected) == test.first) {
 					if (!test.second(&error)) return fail(error);
 					if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }

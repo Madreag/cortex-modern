@@ -9900,7 +9900,8 @@ static std::string ResyncSaveName() {
 			std::string token;
 			if (!WaitForDirectorySession(c_IceRegisterBudgetMs, sessionId, token)) {
 				std::lock_guard<std::mutex> lock(m_Mutex);
-				if (error) *error = m_Directory.LastError() == NetDirectoryClient::c_CapacityNotice ? m_Directory.LastError() : "the session directory did not answer the register in time";
+				const std::string directoryError = m_Directory.LastError();
+				if (error) *error = directoryError == NetDirectoryClient::c_CapacityNotice ? directoryError : "the session directory did not answer the register in time";
 				return false;
 			}
 			config.role = GnsDirectorySignalDispatcher::Role::Host;
