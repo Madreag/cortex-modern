@@ -109,6 +109,62 @@ class ContractTests(unittest.TestCase):
             spread.publish_signals(Path(temporary), {"ready.json": ""}, {"ready.json"})
             self.assertEqual((Path(temporary)/"ready.json").read_bytes(), b"")
 
+    def test_presence_markers_are_declared_and_keep_opaque_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'menu.txt').write_text('touch_file client_done.mark\nwait_file client_done.mark 30\n')
+            self.assertIn('client_done.mark', spread.declared_signals(root))
+            data = b'ready\n'
+            spread.publish_signals(root, {'client_done.mark': base64.b64encode(data).decode()}, {'client_done.mark'})
+            self.assertEqual((root / 'client_done.mark').read_bytes(), data)
+
+    def test_explicit_direct_mode_retains_its_host_address_without_directory(self):
+        case = object.__new__(spread.Case)
+        case.names = ['host']
+        case.match = spread.Match(51580, parameters={'network': 'direct', 'host_address': '100.64.1.2'})
+        case.members = {'host': ({'name': 'ONE'}, {}, {}, None)}
+        case.connect_directory()
+        self.assertIsNone(case.directory)
+        self.assertEqual(case.host_address, '100.64.1.2')
+
+    def test_direct_mode_rejects_a_loopback_host(self):
+        case = object.__new__(spread.Case)
+        case.names = ['host']
+        case.match = spread.Match(51580, parameters={'network': 'direct', 'host_address': '127.0.0.1'})
+        case.members = {'host': ({'name': 'ONE'}, {}, {}, None)}
+        case.refuse = lambda name, box, reason: spread.SpreadRefusal(f'{name} on {box}: {reason}')
+        with self.assertRaisesRegex(spread.SpreadRefusal, 'real machine'):
+            case.connect_directory()
+
+    def test_direct_mode_maps_only_loopback_inputs_and_preserves_ice_off(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'client-stage').mkdir()
+            menu = root/'client-stage/menu.txt'
+            menu.write_bytes(b'settext TextJoinAddress 127.0.0.1\nsettext TextJoinAddress invalid-seat\n')
+            specs = []
+            backend = SimpleNamespace(rpc=lambda box, action, body: specs.append(body['value']), launch=lambda *args: None)
+            claim = dict(case_root='/native/case', repo='/native/repo', root='/owned', control='/control', exe_sha256='same')
+            case = SimpleNamespace(out=root, peer_ports={}, names=['host', 'client'], match=spread.Match(51580),
+                                   directory=None, network='direct', host_address='100.64.1.2',
+                                   members={'client': ({'name': 'SEAT', 'os': 'windows'}, claim, {}, backend)},
+                                   peers=[spread.Peer('client')], signals=lambda: [],
+                                   transport_module=SimpleNamespace(Transport=SimpleNamespace(native_claim=lambda value: value)))
+            run = object.__new__(spread.Run)
+            run.case, run.role, run.output_name = case, 'client', 'client'
+            run.repo, run.cwd, run.started = root/'repo', root/'client/runtime', False
+            run.argv = ['engine', '-headless', '-net-ice', 'off', '-net-join', 'localhost', '-net-port', '51580']
+            run.env, run.expected, run.fixtures, run.timeout = {}, [], [], 30
+            run.start()
+            spec = specs[0]
+            self.assertEqual(spec['args'], ['-net-ice', 'off', '-net-join', '100.64.1.2', '-net-port', '51580'])
+            self.assertEqual(base64.b64decode(spec['files']['client-stage/menu.txt']),
+                             b'settext TextJoinAddress 100.64.1.2\nsettext TextJoinAddress invalid-seat\n')
+
+    def test_blocked_port_is_a_declared_test_port(self):
+        with self.assertRaisesRegex(ValueError, 'declared test ports'):
+            spread.Peer('seat', block_udp=(80,))
+
     def test_credentials_and_tickets_do_not_travel_as_evidence(self):
         for name in (".env", "key.pem", "host.ticket", "id_ed25519"):
             self.assertFalse(spread.public_file(Path(name)))
