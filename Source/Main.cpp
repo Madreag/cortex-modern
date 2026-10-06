@@ -1422,7 +1422,7 @@ static constexpr uint64_t c_NetMatchE2EAdmissionWaitTicks = 1800; //!< How long 
 static uint64_t s_netMatchE2EOwedSampleFrame = 0; //!< The full-state sample frame a round owes a seat admitted late; 0 when none.
 static uint64_t s_netLockstepTicks = 0;
 static std::unordered_set<uint64_t> s_netMatchScreenshotTicks;
-static uint16_t s_netLockstepInputDelay = 0;
+static uint16_t s_netLockstepInputDelay = 1;
 static uint8_t s_netMatchPeers = 2;
 static std::optional<bool> s_netMatchBrainlessSpectate;
 static std::optional<uint32_t> s_netMatchHumans;
@@ -9437,8 +9437,8 @@ bool PrepareNetLockstepScenario(GnsTransport& transport, NetSession& session, Ne
 		if (error) *error = "network gameplay requires exactly one of -net-host or -net-join <address>";
 		return false;
 	}
-	if (s_netLockstepInputDelay != 0) {
-		if (error) *error = s_netMatch ? "local alpha gameplay currently requires -net-match-input-delay 0" : "P3 gameplay lockstep currently requires -net-lockstep-input-delay 0";
+	if (s_netLockstepInputDelay == 0) {
+		if (error) *error = "network gameplay requires at least 1 frame of input delay before its committed simulation tick";
 		return false;
 	}
 
@@ -9458,6 +9458,7 @@ bool PrepareNetLockstepScenario(GnsTransport& transport, NetSession& session, Ne
 	runnerConfig.sessionConfig = BuildNetSessionCliConfig(manifest, s_netHost);
 	runnerConfig.matchConfig = BuildNetMatchCliConfig(s_netMatch);
 	runnerConfig.useLobbyProtocol = s_netMatch;
+	runnerConfig.requirePublishedStart = true;
 	runnerConfig.startFrame = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1U;
 	runnerConfig.scenario = ScenarioRunner::ResolvePresetName(ScenarioRunner::GetArgs().scenario);
 	runnerConfig.lockstepWaitMs = 5000;
@@ -9822,6 +9823,7 @@ bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string*
 	lockstepConfig.localPeerId = 1;
 	lockstepConfig.peerCount = replayConfig.peerCount;
 	lockstepConfig.scenario = "replay";
+	lockstepConfig.authorityPeerId = ScenarioRunner::GetLockstepReplayStartAuthorityPeerId();
 	lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(replayConfig.ownershipPolicy);
 	lockstepConfig.matchConfig = replayConfig;
 	if (!s_replayCoordinator.StartReplay(s_nullTransport, lockstepConfig, &setupError)) {
@@ -10820,6 +10822,8 @@ int RunNetPortMapProbe() {
 /// </summary>
 int main(int argc, char** argv) {
 	bool netMatchSelfTest = false;
+	bool netSeatSuccessionSelfTest = false;
+	bool netSeatAdmissionSelfTest = false;
 	bool netRejoinGridSelfTest = false;
 	bool netMatchLobbyLifecycleSelfTest = false;
 	for (int i = 1; i < argc; ++i) {
@@ -10895,6 +10899,15 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-released-claims-selftest") {
 			return NetLockstepSelfTest::RunReleasedClaims();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-release-paths-selftest") {
+			return NetLockstepSelfTest::RunReleasePaths();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-seat-succession-selftest") {
+			netSeatSuccessionSelfTest = true;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-seat-admission-selftest") {
+			netSeatAdmissionSelfTest = true;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-selftest") {
 			if (NetMatchSelfTest::RunBeforeInitialization() != 0) return EXIT_FAILURE;
@@ -11212,6 +11225,8 @@ int main(int argc, char** argv) {
 		NetMatchService::Construct();
 		return ShutDown(result);
 	}
+	if (netSeatSuccessionSelfTest) return ShutDown(NetLockstepSelfTest::RunSeatSuccession());
+	if (netSeatAdmissionSelfTest) return ShutDown(NetLockstepSelfTest::RunSeatAdmission());
 	if (netMatchSelfTest) {
 		NetMatchService::Destruct();
 		const int result = netMatchLobbyLifecycleSelfTest ? NetMatchSelfTest::RunLobbyLifecycle() : NetMatchSelfTest::Run();
@@ -11431,6 +11446,8 @@ int main(int argc, char** argv) {
 				if (NetGameplayRequested()) {
 					(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
 					netLockstepCoordinator.Complete(scenarioExitCode == 0 ? "scenario complete" : "scenario failed");
+					// The completion needs the same goodbye flush as an interactive capped round.
+					(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, c_CappedStopLingerMs);
 				}
 			}
 			if (NetGameplayRequested()) {

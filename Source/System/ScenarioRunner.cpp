@@ -189,6 +189,8 @@ namespace RTE {
 		ScenarioRunner::LockstepReplayOutcome s_ReplayOutcome = ScenarioRunner::LockstepReplayOutcome::None;
 		uint64_t s_ReplayFramesConsumed = 0;
 		uint64_t s_ReplayLastTick = 0;
+		std::optional<uint64_t> s_ReplayQueuedTick;
+		std::optional<std::pair<uint64_t, uint8_t>> s_UpdateAuthority;
 		bool s_ReplayEndMarkerSeen = false;
 		uint64_t s_ReplayRecordFrames = 0;
 		bool s_ReplayRecordClosed = false;
@@ -199,6 +201,8 @@ namespace RTE {
 			std::vector<NetGameCommand> commands;
 			std::vector<NetSoundObservation> observations;
 			std::vector<NetValueObservation> valueObservations;
+			uint8_t authorityPeerId = 0;
+			uint8_t updateAuthorityPeerId = 0;
 		};
 		struct PendingWorldSegment {
 			NetWorldSegmentHeader header;
@@ -1099,6 +1103,7 @@ namespace RTE {
 
 	void ScenarioRunner::SetLockstepCoordinator(NetLockstepCoordinator* coordinator, bool preserveCommands) {
 		NetLockstepPlaneGuard plane;
+		if (!coordinator || !s_LockstepCoordinator || coordinator->GetConfig().sessionId != s_LockstepCoordinator->GetConfig().sessionId) s_UpdateAuthority.reset();
 		// Every coordinator reaches the sim here, a menu-started session's too; its peers' Lua worlds must agree.
 		if (coordinator) {
 			LuaMan::SetDeterministicCollection(true);
@@ -1509,8 +1514,21 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::TakeWorldCatchUpGrant(uint64_t nextSimTick) {
+		NetLockstepPlaneGuard plane;
 		if (!WorldCatchUpMayGrant(nextSimTick, s_WorldCatchUpBudget)) {
 			return false;
+		}
+		if (s_LockstepCoordinator && s_LockstepCoordinator->IsReplayPlayback() && s_LockstepCoordinator->IsRunning()) {
+			std::string error;
+			if (!s_LockstepCoordinator->HasReadyFrame(nextSimTick)) {
+				const auto frame = std::find_if(s_WorldCatchUpTail.begin(), s_WorldCatchUpTail.end(), [nextSimTick](const NetLockstepFrame& frame) { return frame.targetFrame == nextSimTick; });
+				if (frame == s_WorldCatchUpTail.end() || !s_LockstepCoordinator->QueueReplayFrame(nextSimTick, frame->frames, frame->commands, &error, frame->observations, frame->valueObservations, frame->senderPeerId, frame->replayUpdateAuthorityPeerId)) {
+					SetControllerReplayError("world replay preparation: " + error);
+					return false;
+				}
+				s_LockstepCoordinator->Tick(0);
+			}
+			if (!s_LockstepCoordinator->PrepareReplayFrame(nextSimTick, &error)) { SetControllerReplayError(error); return false; }
 		}
 		--s_WorldCatchUpBudget;
 		return true;
@@ -1546,13 +1564,15 @@ namespace RTE {
 		s_WorldCatchUpLastApplied = frame;
 		outFrame = {};
 		outFrame.frame = simTick;
+		outFrame.authorityPeerId = frame.senderPeerId;
+		outFrame.updateAuthorityPeerId = frame.replayUpdateAuthorityPeerId;
 		outFrame.remoteFrames = std::move(frame.frames);
 		outFrame.remoteCommands = std::move(frame.commands);
 		outFrame.remoteObservations = std::move(frame.observations);
 		outFrame.remoteValueObservations = std::move(frame.valueObservations);
 		if (s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() && s_LockstepCoordinator->IsReplayPlayback()) {
-			if (!s_LockstepCoordinator->QueueReplayFrame(simTick, std::move(outFrame.remoteFrames), std::move(outFrame.remoteCommands), error,
-			    std::move(outFrame.remoteObservations), std::move(outFrame.remoteValueObservations))) return false;
+			if (!s_LockstepCoordinator->HasReadyFrame(simTick) && !s_LockstepCoordinator->QueueReplayFrame(simTick, std::move(outFrame.remoteFrames), std::move(outFrame.remoteCommands), error,
+			    std::move(outFrame.remoteObservations), std::move(outFrame.remoteValueObservations), frame.senderPeerId, frame.replayUpdateAuthorityPeerId)) return false;
 			s_LockstepCoordinator->Tick(0);
 			if (!s_LockstepCoordinator->PopReadyFrame(outFrame)) return false;
 		} else {
@@ -1871,7 +1891,7 @@ namespace RTE {
 
 	void ScenarioRunner::EndReleasedSeatClaims(uint8_t peerId) {
 		NetLockstepPlaneGuard plane;
-		std::erase_if(s_LockstepDroppedControlOverrides, [peerId](const auto& claim) { return claim.second == peerId; });
+		ReleaseLockstepControlOverridesOf(peerId);
 	}
 
 	bool ScenarioRunner::IsLockstepTeamCommandSender(int team, uint8_t senderPeerId, uint64_t atFrame) {
@@ -2122,6 +2142,13 @@ namespace RTE {
 		// instead — sender ids preserved so command authority resolves as it did live.
 		if (s_ReplayReader.IsOpen()) {
 			(void)DrainLocalGameCommands();
+			// The pre-simulation poll and the later input producer consume the same recorded tick.
+			if (s_ReplayQueuedTick == tick) return true;
+			const auto queue = [&](NetLockstepFrame record) {
+				const bool queued = s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error, std::move(record.observations), std::move(record.valueObservations), record.replayAuthorityPeerId, record.replayUpdateAuthorityPeerId);
+				if (queued) s_ReplayQueuedTick = tick;
+				return queued;
+			};
 			// A tick before the recording's first frame free-runs with empty input (the wait's
 			// priming path), mirroring how the live match ran it.
 			if (tick < s_ReplayReader.GetStartFrame()) {
@@ -2131,7 +2158,7 @@ namespace RTE {
 			if (!s_ReplayRewindBuffer.empty() && s_ReplayRewindBuffer.front().targetFrame == tick) {
 				NetLockstepFrame buffered = s_ReplayRewindBuffer.front();
 				s_ReplayRewindBuffer.pop_front();
-				return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(buffered.frames), std::move(buffered.commands), error, std::move(buffered.observations), std::move(buffered.valueObservations));
+				return queue(std::move(buffered));
 			}
 			NetLockstepFrame record;
 			NetReplayReadStatus status = NetReplayReadStatus::None;
@@ -2147,6 +2174,7 @@ namespace RTE {
 					if (error) *error = "replay startup frame " + std::to_string(record.targetFrame) + " is not the empty frame of tick " + std::to_string(tick);
 					return false;
 				}
+				s_ReplayQueuedTick = tick;
 				return true;
 			}
 			bool read = NextReplayRecord(record, status, &readError);
@@ -2186,7 +2214,7 @@ namespace RTE {
 			if (record.targetFrame >= s_ReplayRewindFrom && record.targetFrame < s_ReplayRewindFrom + s_ReplayRewindCount) {
 				s_ReplayRewindKeep.push_back(record);
 			}
-			return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error, std::move(record.observations), std::move(record.valueObservations));
+			return queue(std::move(record));
 		}
 		if (MenuMan::IsConstructed() && g_MenuMan.IsLocalPauseMenuOpen()) frames.clear();
 		NetLockstepCoordinator* producing = s_LockstepCoordinator;
@@ -2870,6 +2898,7 @@ namespace RTE {
 		}
 		s_ReplayRewindBuffer = std::move(s_ReplayRewindKeep);
 		s_ReplayRewindKeep.clear();
+		s_ReplayQueuedTick.reset();
 		return s_LockstepCoordinator->RewindReplay(firstFrame, error);
 	}
 
@@ -2997,7 +3026,7 @@ namespace RTE {
 		s_ReplayRecordClosed = false;
 		for (const HeldReplayFrame& held: pending.frames) {
 			std::string writeError;
-			if (!s_ReplayWriter.WriteFrame(held.tick, held.frames, held.commands, held.observations, held.valueObservations, &writeError)) {
+			if (!s_ReplayWriter.WriteFrame(held.tick, held.frames, held.commands, held.observations, held.valueObservations, &writeError, held.authorityPeerId, held.updateAuthorityPeerId)) {
 				std::cout << "[net-world] segment recording stopped: " << writeError << std::endl;
 				s_ReplayWriter.Close();
 				s_WorldSegment = {};
@@ -3065,6 +3094,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::SetLockstepReplaySource(const std::string& path, std::string* error) {
+		s_ReplayQueuedTick.reset();
 		s_ReplayRewindFrom = 0;
 		s_ReplayRewindCount = 0;
 		s_ReplayRewindKeep.clear();
@@ -3086,6 +3116,7 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::CloseLockstepReplayPlayback() {
+		s_ReplayQueuedTick.reset();
 		s_ReplayReader.Close();
 		s_ReplayRewindFrom = 0;
 		s_ReplayRewindCount = 0;
@@ -3103,6 +3134,10 @@ namespace RTE {
 
 	uint64_t ScenarioRunner::GetLockstepReplayStartFrame() {
 		return s_ReplayReader.GetStartFrame();
+	}
+
+	uint8_t ScenarioRunner::GetLockstepReplayStartAuthorityPeerId() {
+		return s_ReplayReader.GetStartAuthorityPeerId();
 	}
 
 	const std::optional<NetLockstepStart>& ScenarioRunner::GetLockstepReplayAgreedStart() {
@@ -3216,6 +3251,8 @@ namespace RTE {
 	// of the tick that needs them waiting on each; never so far that its own inputs land late. A seat whose reclaim gap has just closed
 	// caught up to the newest input it holds, so it stands there by construction and gives the inputs their lead at once.
 	static bool RunPacedTick(uint64_t tick) {
+		std::string error;
+		if (!s_LockstepCoordinator->BeginSimulationTick(tick, &error)) { ScenarioRunner::SetControllerReplayError(error); return false; }
 		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
 		const bool gapClosed = tick > 0 && s_LockstepCoordinator->IsSeatReclaimGap(local, tick - 1) && !s_LockstepCoordinator->IsSeatReclaimGap(local, tick);
 		if (gapClosed) s_PaceSlide.Reset();
@@ -3229,12 +3266,22 @@ namespace RTE {
 			                                             " ticks were due before their inputs") +
 			                            "; the clock drops what it owes and holds back " + std::to_string(slide) + " ticks");
 		}
+		s_UpdateAuthority = {tick, s_LockstepCoordinator->GetHostPeerId()};
 		return true;
 	}
 
 	bool ScenarioRunner::PollLockstepSimulationTick(uint64_t tick) {
 		NetLockstepPlaneGuard plane;
-		if (!s_LockstepCoordinator || s_LockstepCoordinator->IsReplayPlayback() || WorldCatchUpActive()) return true;
+		if (!s_LockstepCoordinator || WorldCatchUpActive()) return true;
+		if (s_LockstepCoordinator->IsReplayPlayback()) {
+			if (!s_ReplayReader.IsOpen()) return true;
+			std::string error;
+			if (!QueueLockstepLocalControllerFrames(tick, {}, &error)) { SetControllerReplayError(error); return false; }
+			if (tick < s_ReplayReader.GetStartFrame() || tick < s_LockstepCoordinator->GetStats().effectiveStartFrame) return true;
+			s_LockstepCoordinator->Tick(0);
+			if (!s_LockstepCoordinator->PrepareReplayFrame(tick, &error)) { SetControllerReplayError(error); return false; }
+			return true;
+		}
 		const auto now = std::chrono::steady_clock::now();
 		if (s_PreSimWait) s_LockstepWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(now - *s_PreSimWait).count();
 		s_PreSimWait.reset();
@@ -3271,8 +3318,12 @@ namespace RTE {
 		if (!PrimeRestoredLockstepInputs(&primeError)) { SetControllerReplayError(primeError); return false; }
 		const auto& config = s_LockstepCoordinator->GetConfig();
 		if (s_LockstepCoordinator->HasReadyFrame(tick) || tick < s_LockstepCoordinator->GetStats().effectiveStartFrame ||
-		    (!s_LockstepCoordinator->IsMigrating() && (!s_LockstepCoordinator->UsesBoundedWait() || (config.localPeerId == s_LockstepCoordinator->GetHostPeerId() &&
-		     s_LockstepCoordinator->InputDelayAt(config.localPeerId, tick) == 0)))) return RunPacedTick(tick);
+		    (!s_LockstepCoordinator->IsMigrating() && config.localPeerId == s_LockstepCoordinator->GetHostPeerId() &&
+		     (!s_LockstepCoordinator->UsesBoundedWait() || s_LockstepCoordinator->InputDelayAt(config.localPeerId, tick) == 0))) return RunPacedTick(tick);
+		if (!s_LockstepCoordinator->IsMigrating() && s_LockstepCoordinator->InputDelayAt(config.localPeerId, tick) == 0) {
+			SetControllerReplayError("fixed input delay 0 for a client cannot begin a tick before its committed frame; choose at least 1 frame");
+			return false;
+		}
 		(void)s_LockstepCoordinator->NoteFrameWait(tick, NetLockstepNowMs());
 		if (s_LockstepCoordinator->HasReadyFrame(tick)) return RunPacedTick(tick);
 		// The clock says this tick is due and its inputs are not here: it runs ahead of them.
@@ -3311,7 +3362,7 @@ namespace RTE {
 					                               std::to_string(c_MaxPendingSegmentFrames) + " committed ticks");
 				} else {
 					s_PendingWorldSegment->frames.push_back({tick, std::move(allFrames), std::move(allCommands),
-					                                        std::move(allObservations), std::move(allValueObservations)});
+					                                        std::move(allObservations), std::move(allValueObservations), ready.authorityPeerId, ready.updateAuthorityPeerId});
 				}
 				return;
 			}
@@ -3326,7 +3377,8 @@ namespace RTE {
 				}
 			}
 			std::string writeError;
-			if (!s_ReplayWriter.WriteFrame(tick, allFrames, allCommands, allObservations, allValueObservations, &writeError)) {
+			if (!s_ReplayWriter.WriteFrame(tick, allFrames, allCommands, allObservations, allValueObservations, &writeError,
+			    ready.authorityPeerId != 0 ? ready.authorityPeerId : GetLockstepHostPeerId(), ready.updateAuthorityPeerId)) {
 				std::cout << "[net-match] replay recording stopped: " << writeError << std::endl;
 				s_ReplayWriter.Close();
 			}
@@ -3338,6 +3390,7 @@ namespace RTE {
 		if (tick < s_LockstepCoordinator->GetStats().effectiveStartFrame) {
 			outFrame = NetLockstepReadyFrame{};
 			outFrame.frame = tick;
+			if (s_UpdateAuthority && s_UpdateAuthority->first == tick) outFrame.updateAuthorityPeerId = s_UpdateAuthority->second;
 			// A world segment carries every committed frame from its checkpoint on, these empty ones included.
 			const uint64_t segmentTick = s_PendingWorldSegment ? s_PendingWorldSegment->header.tick : (s_ReplayWriter.IsOpen() ? s_WorldSegment.tick : 0);
 			if (segmentTick != 0 && tick > segmentTick) record(outFrame);
@@ -3383,7 +3436,7 @@ namespace RTE {
 				return false;
 			}
 			NetLockstepReadyFrame ready;
-			while (s_LockstepCoordinator->PopReadyFrame(ready)) {
+			while (s_LockstepCoordinator->PopReadyFrame(ready, s_UpdateAuthority)) {
 				if (ready.frame == tick) {
 					FilterReclaimControllerInputs(ready);
 					s_LockstepCoordinator->FinishFrameWait(NetLockstepNowMs());

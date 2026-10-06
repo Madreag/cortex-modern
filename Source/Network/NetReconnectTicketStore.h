@@ -32,6 +32,12 @@ namespace RTE {
 		bool operator==(const NetH4TicketRecord&) const = default;
 	};
 
+	struct NetH4TicketRoute {
+		std::string address;
+		uint16_t port = 0;
+		bool operator==(const NetH4TicketRoute&) const = default;
+	};
+
 	/// Why a load produced no record. The UX distinguishes these; the protocol does not.
 	enum class NetH4TicketLoadResult : uint8_t {
 		Loaded = 0,
@@ -73,6 +79,8 @@ namespace RTE {
 		/// Writes the record durably, replacing whatever was there.
 		/// @return Whether the record is on disk; a failure leaves any previous record untouched.
 		bool Store(const NetH4TicketRecord& record, std::string* error = nullptr);
+		bool StoreRoutes(const NetH4TicketRecord& record, const std::vector<NetH4TicketRoute>& routes, std::string* error = nullptr);
+		std::vector<NetH4TicketRoute> LoadRoutes(const NetH4TicketRecord& record) const;
 
 		/// Reads the record back.
 		/// @return Why the load produced nothing, or Loaded.

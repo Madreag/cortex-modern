@@ -229,7 +229,10 @@ class SecretScan(unittest.TestCase):
             except OSError:
                 subprocess.run(['cmd', '/c', 'mklink', '/J', str(link), outside], capture_output=True, check=True)
             scan = book.scan([folder])
-            os.rmdir(link)
+            if link.is_symlink():
+                link.unlink()
+            else:
+                os.rmdir(link)
         self.assertTrue(scan['clean'], scan)
         self.assertEqual(scan['files_scanned'], 0)
 

@@ -279,6 +279,8 @@ namespace RTE {
 		/// they were read past and the tick is already in this peer's stream.
 		bool observationsReadPast = false;
 		std::optional<NetLockstepTiming> hostHold;
+		uint8_t replayAuthorityPeerId = 0; //!< Recording metadata, never a lockstep wire field; zero on legacy files.
+		uint8_t replayUpdateAuthorityPeerId = 0; //!< The host read by the recorded activity update.
 
 		bool operator==(const NetLockstepFrame& rhs) const;
 	};
@@ -517,6 +519,8 @@ namespace RTE {
 		std::vector<NetSoundObservation> remoteObservations;
 		std::vector<NetValueObservation> localValueObservations;
 		std::vector<NetValueObservation> remoteValueObservations;
+		uint8_t authorityPeerId = 0; //!< The host of this committed frame, including frames held for later recording.
+		uint8_t updateAuthorityPeerId = 0; //!< The host in effect before the activity update.
 	};
 
 	/// Applies the committed frame's departures before its game commands.
@@ -690,7 +694,7 @@ namespace RTE {
 		static constexpr uint32_t c_Magic = 0x334C4343U;
 		/// Version 39 carries each seat's device class in the start and the agreed-start record; admission refuses a peer below it.
 		static constexpr uint16_t c_Version = 39;
-		static constexpr uint16_t c_AdmissionVersion = 44; //!< Admission requires cumulative input acceptance without changing packet layouts.
+		static constexpr uint16_t c_AdmissionVersion = 46; //!< Admission requires cumulative input acceptance and committed succession grants.
 		static constexpr uint16_t c_WorldVersion = 39;
 		static constexpr uint16_t c_SeatDeviceVersion = 39;
 		/// Version 37 carries input frames on the unreliable lane: a window reaches back a round trip, and a tick that
@@ -704,8 +708,9 @@ namespace RTE {
 		static constexpr uint16_t c_InputAcceptanceVersion = 34;
 		static constexpr uint16_t c_CheckpointVersion = 40; //!< Frames carrying the checkpoint schedule.
 		static constexpr uint16_t c_HoldMarkerVersion = 42; //!< A host marker carries its hold before its input.
-		/// Version 43 carries a held seat's release as an agreed decision and as the committed record of it; the newest layout.
-		static constexpr uint16_t c_SeatReleaseVersion = 43;
+		/// Version 45 requires committed simulation grants before succession.
+		static constexpr uint16_t c_SeatReleaseVersion = 45;
+		static constexpr uint16_t c_SeatReleaseRecordVersion = 43; //!< First layout carrying a seat release.
 		static constexpr uint16_t c_RecoveryDatagramVersion = 41; //!< Complete recovery inputs may use the unreliable lane.
 		/// A committed tick and a replay record may name one actor once per sender, in sender order; a build that reads them as unique
 		/// per actor is refused at admission through the deterministic config hash.
@@ -985,7 +990,7 @@ namespace RTE {
 		std::string MemoryCensus() const;
 		/// Feeds one recorded tick straight into the commit path: command senders preserved, no
 		/// delay math, no wire — the replay's committed frame is exactly the recording's.
-		bool QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error = nullptr, std::vector<NetSoundObservation> observations = {}, std::vector<NetValueObservation> valueObservations = {});
+		bool QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error = nullptr, std::vector<NetSoundObservation> observations = {}, std::vector<NetValueObservation> valueObservations = {}, uint8_t authorityPeerId = 0, uint8_t updateAuthorityPeerId = 0);
 		/// Rewinds a playback coordinator to re-commit from an earlier frame (the rollback
 		/// fidelity gate re-runs a window). Replay mode only — there is no wire to rewind.
 		bool RewindReplay(uint64_t firstFrame, std::string* error = nullptr);
@@ -1036,9 +1041,13 @@ namespace RTE {
 		uint64_t GetResumeFrame() const { NET_PLANE_CHECK(); return m_LastCompletedSimulationTick ? *m_LastCompletedSimulationTick + 1 : m_Config.startFrame; }
 		/// Whether this peer has simulated any frame of the round.
 		bool HasCompletedSimulationTick() const { NET_PLANE_CHECK(); return m_LastCompletedSimulationTick.has_value(); }
+		uint64_t AdmissionRollbackFloor() const;
 		/// The oldest frame a returning seat may still be served from: older hold and return decisions are in every base it can get.
 		void SetReturnHistoryFloor(uint64_t frame) { NET_PLANE_CHECK(); m_ReturnHistoryFloor = frame; }
 		bool FinishSimulationTick(uint64_t completedTick);
+		/// Keeps a granted tick in the completed prefix before a host election starts.
+		bool BeginSimulationTick(uint64_t tick, std::string* error = nullptr);
+		static bool ValidateSimulationTiming(const NetMatchConfig& config, std::string* error = nullptr);
 		/// Waives the parked tick's frames for every peer it still needs whose transport the admission
 		/// plane has fenced or forgotten, so the tick commits and the pending stop fires at its boundary.
 		/// The seat is untouched: the waived peer is a superseded incarnation, not a leaver.
@@ -1050,7 +1059,9 @@ namespace RTE {
 		/// The H4 seat state, asked for by lockstep peer id and (on a disconnect) the transport that
 		/// went away. Without one every seat reads as neither fenced nor held, which is the pre-H4 round.
 		void SetSeatStateSource(NetLockstepSeatState (*source)(void*, uint8_t, NetPeerId), void* context);
-		bool PopReadyFrame(NetLockstepReadyFrame& outFrame);
+		bool PopReadyFrame(NetLockstepReadyFrame& outFrame, std::optional<std::pair<uint64_t, uint8_t>> updateAuthority = std::nullopt);
+		/// Installs the recorded frame's host before any simulation reads it.
+		bool PrepareReplayFrame(uint64_t frame, std::string* error = nullptr, bool delivering = false);
 		//! The timing proposals this peer is holding, by revision.
 		std::vector<uint64_t> PendingTimingRevisions() const {
 			NET_PLANE_CHECK();
@@ -1093,6 +1104,7 @@ namespace RTE {
 		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr, uint64_t fromFrame = 0, const char* cause = "unnamed");
 		/// trailFrames: how far the returner's replay trails the round at the round's pace; its first required frame comes that much later.
 		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
+		bool SchedulePeerAdmission(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
 		bool ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error = nullptr);
 		bool HasWorldAdmission(uint8_t peer, uint64_t frame) const { NET_PLANE_CHECK(); const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame && it->second.worldTransition.has_value(); }
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs) { NET_PLANE_CHECK(); HandleEvent(event, nowMs); }
@@ -1133,6 +1145,7 @@ namespace RTE {
 		void NoteReturnerCatchingUp(uint8_t peerId, uint64_t nowMs);
 		/// Host: a held seat's player is back on a new link, waiting for its image; what arrives on it counts as hearing that player.
 		void NoteReturningLink(uint8_t peerId, NetPeerId transportPeerId, uint64_t nowMs);
+		void NoteAdmissionLink(uint8_t peerId, NetPeerId transportPeerId, uint64_t nowMs);
 		/// Host: a returning seat whose catch-up reached its reclaim frame; its first input is judged like any seat's from here.
 		void NoteReturnerCaughtUp(uint8_t peerId, uint64_t nowMs);
 		/// Host: a held seat that catches up in place on its own state and connection pays no restart, so none is owed to its return.
@@ -1213,6 +1226,7 @@ namespace RTE {
 		/// Whether the host held this seat at or after a frame: a hold this round took, or one still waiting for its start.
 		bool HeldLocalSeatSince(uint64_t frame) const;
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
+		bool PreparePeerAdmission(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
 		/// Delay window a returning seat needs: the measured round trip plus the restart its first tick pays.
 		uint32_t RejoinDelayFrames(uint8_t peerId, const NetInputDelayEstimator& estimate) const;
 		/// Delay a sender needs once its start work is published: its link's need plus the start work its machine did beyond ours,
@@ -1478,6 +1492,9 @@ namespace RTE {
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
 		friend bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error);
+		friend bool TestCommitOnlySuccessorReproposesRelease(std::string* error);
+		friend struct SeatSuccessionTestAccess;
+		friend struct SeatAdmissionServiceTest;
 		friend class ScenarioRunner;
 
 	private:
@@ -1502,7 +1519,8 @@ namespace RTE {
 		bool HoldsLiveMigrationCandidate(uint64_t nowMs, uint64_t budget) const;
 		void PublishMigrationPlan(uint64_t nowMs);
 		void CompleteHostMigration(uint64_t nowMs);
-		void ApplyMigrationMembership(uint64_t nowMs);
+		void ApplyMigrationMembership(uint64_t nowMs, uint8_t formerHost = 0);
+		void HoldFormerHostSeat(uint8_t peer, uint64_t frame, const NetGameSeatHold* record = nullptr);
 		void FailHostMigration(const std::string& reason);
 		bool EncodeMigrationFrame(const NetLockstepReadyFrame& frame, std::vector<uint8_t>& bytes) const;
 		bool DecodeMigrationFrame(const std::vector<uint8_t>& bytes, uint64_t frame, NetLockstepReadyFrame& ready) const;
@@ -1623,12 +1641,17 @@ namespace RTE {
 		bool SenderOwnsTransport(uint8_t claimedPeerId, NetPeerId fromTransport) const;
 		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
+		void StampFrameAuthority(NetLockstepReadyFrame& ready);
 		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false, bool agreedBoundary = false, bool removed = false, bool cleanLeave = true);
 		void ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay);
 		/// Ends an AI-held seat's wait for its returner: an agreed reclaim still ahead of every peer is withdrawn, the AI keeps the units.
 		void ReleaseHeldSeat(uint8_t peerId, uint64_t nowMs, bool relay, const char* why = "released");
+		/// Records a permanent departure at the frame the seat's input ends.
+		void RecordSeatDeparture(uint8_t peerId, uint64_t frame);
 		/// Host: proposes the agreed frame for every seat it released whose release no frame carries yet.
 		void ProposeOwedSeatReleases(uint64_t nowMs);
+		bool ScheduleSeatActivation(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error, uint64_t trailFrames);
+		bool PrepareSeatImageJoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error);
 		/// Whether a release of the seat lands at or after the seat's newest hold.
 		bool HasReleaseSinceHold(uint8_t peerId) const;
 		void MaybeSendHoldHeartbeats(uint64_t nowMs);
@@ -1826,6 +1849,7 @@ namespace RTE {
 		uint64_t m_ProductionBaseUs = 0;
 		uint64_t m_ProductionWaitBaseUs = 0;
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;
+		std::map<uint8_t, uint64_t> m_SuccessionHoldFrames; //!< Membership holds survive a later election at the same boundary.
 		std::set<uint8_t> m_ReleasedAiSeats; //!< AI-held seats no returner may reclaim; the AI keeps their units.
 		std::map<uint8_t, std::map<uint64_t, NetGameSeatRelease>> m_SeatReleases; //!< The agreed frames the host's releases land on, every peer the same.
 		std::set<uint8_t> m_AnnouncedLeavers; //!< Host: clean leavers being held, whose closing links are not sent their hold.
@@ -2006,6 +2030,8 @@ namespace RTE {
 		void UpdateHostReach(uint64_t nowMs);
 		uint64_t m_AgreedEndDeadlineMs = 0; //!< When a host playing to its agreed end stops waiting for it.
 		std::optional<uint64_t> m_LastCompletedSimulationTick;
+		std::optional<uint64_t> m_GrantedSimulationTick;
+		std::optional<uint64_t> m_DeferredMigrationMs;
 		uint64_t m_ReturnHistoryFloor = 0; //!< Host: the oldest frame a returning seat may still be served from.
 		/// The least delay a seat comes back or into a world at: the margin every seat's delay keeps, sized from its own link's ping.
 		uint16_t ReturnDelayFloor(uint8_t peerId, NetPeerId transport) const;
@@ -2041,6 +2067,9 @@ namespace RTE {
 		std::map<std::pair<uint8_t, uint64_t>, uint64_t> m_CaptureExcuseUntilMs;
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;
+		std::map<uint64_t, std::pair<uint8_t, uint8_t>> m_ReplayAuthorities;
+		std::map<uint64_t, uint8_t> m_ReplayAuthorityHistory;
+		uint8_t m_ReplayOpeningAuthority = 0;
 		std::map<uint64_t, std::map<uint8_t, std::vector<ControllerFrame>>> m_RemoteFrames; //!< frame -> (peerId -> frames)
 		std::map<uint64_t, std::vector<NetGameCommand>> m_LocalCommands;
 		std::map<uint64_t, std::map<uint8_t, std::vector<NetGameCommand>>> m_RemoteCommands; //!< frame -> (peerId -> commands)
@@ -2087,6 +2116,7 @@ namespace RTE {
 		std::map<uint64_t, std::array<uint8_t, 32>> m_LocalChecksums;
 		std::map<uint8_t, uint64_t> m_AuthoritativeCommandAcks;
 		std::map<uint64_t, std::map<uint8_t, std::array<uint8_t, 32>>> m_RemoteChecksums; //!< frame -> (peerId -> hash)
+		std::map<uint8_t, uint64_t> m_VerifiedAppliedFrames; //!< Matching hashes keep their applied prefix after the hash buffers are pruned.
 		std::deque<NetLockstepReadyFrame> m_ReadyFrames;
 		std::map<uint64_t, NetLockstepReadyFrame> m_ReadyHistory;
 

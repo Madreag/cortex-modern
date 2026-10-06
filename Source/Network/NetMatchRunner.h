@@ -78,6 +78,7 @@ namespace RTE {
 		bool autoInputDelay = false; // Host: raise matchConfig.inputDelayFrames to cover the measured RTT.
 		std::function<bool(NetRelayConfig&)> relayOffer;
 		bool useLobbyProtocol = false;
+		bool requirePublishedStart = false; //!< Direct launches publish their measured activity startup before the first committed frame.
 		uint64_t startFrame = 0;
 		uint32_t sessionWaitMs = 15000;
 		// The technical deadline a setup round waits to HEAR from its peers. It is fixed by the

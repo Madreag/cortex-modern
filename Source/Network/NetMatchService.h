@@ -1212,6 +1212,8 @@ namespace RTE {
 			                                                                                                     : m_Transport.get(); }
 		bool SealMigrationCapsule(uint8_t peerId, const NetHash32& configHash, std::vector<uint8_t>& sealed);
 		bool SealMigrationCapsuleLocked(uint8_t peerId, const NetHash32& configHash, std::vector<uint8_t>& sealed);
+		std::vector<uint8_t> BuildMigrationPlaintextLocked(const NetHash32& configHash, const std::vector<uint8_t>& admission) const;
+		void SetAdmissionCapacityCheckLocked();
 		bool OpenMigrationCapsule(const NetLobbyMigration& capsule);
 		bool OpenMigrationCapsuleLocked(const NetLobbyMigration& capsule);
 		void PumpHostMigration();
@@ -1358,6 +1360,8 @@ namespace RTE {
 		friend bool TestAParkReachesTheSessionAWorkerOwns(std::string* error);
 		friend bool TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay(std::string* error);
 		friend struct HostOptionsLobbyRow;
+		friend struct SeatAdmissionServiceTest;
+		void NoteAdmissionReleasesLocked();
 		bool HostOptionsNeedCorrectionLocked() const;
 		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);
 		friend bool TestResumePreparesTheAgreedLobby(std::string* error);
@@ -1904,6 +1908,10 @@ namespace RTE {
 		bool m_LastJoinTargetPersistentWorld = false;
 		std::optional<NetMatchServiceRequest> m_LastJoinRoute;
 		bool BeginTicketRejoinOnRoute(std::string* error, const NetMatchServiceRequest* liveRoute);
+		void RememberTicketRoutesLocked(bool force = false);
+		void DriveOrdinaryTicketRejoin();
+		uint64_t m_TicketRoutesRefreshAtMs = 0;
+		bool m_OrdinaryTicketRejoin = false;
 		/// Held client: the hosts its rejoin may still find when its own is gone, in the match's published successor order.
 		std::deque<NetMatchServiceRequest> m_HeldRejoinRoutes;
 		uint8_t m_HeldRejoinFailedAttempts = 0; //!< The attempts of this held rejoin that failed with its host still there.

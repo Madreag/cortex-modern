@@ -847,8 +847,8 @@ namespace RTE {
 					return false;
 				}
 			}
-			// The build before this lockstep version advertised the wire below it; the two refuse each other either way round.
-			const uint16_t current = NetLockstepCodec::c_SeatReleaseVersion, currentWorld = NetLockstepCodec::c_WorldVersion;
+			// The preceding admission version is refused in either direction.
+			const uint16_t current = NetLockstepCodec::c_AdmissionVersion, currentWorld = NetLockstepCodec::c_WorldVersion;
 			for (size_t index = 0; index < 2; ++index) {
 				const uint16_t port = static_cast<uint16_t>(42156 + index);
 				const bool hostCurrent = index == 0;

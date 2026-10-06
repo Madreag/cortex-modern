@@ -455,6 +455,8 @@ namespace RTE {
 
 	NetLockstepFrame PackWorldJoinReadyFrame(const NetLockstepReadyFrame& ready) {
 		NetLockstepFrame frame;
+		frame.senderPeerId = ready.authorityPeerId;
+		frame.replayUpdateAuthorityPeerId = ready.updateAuthorityPeerId != ready.authorityPeerId ? ready.updateAuthorityPeerId : 0;
 		frame.targetFrame = ready.frame;
 		// Two inputs for one actor keep the order every live peer applies them in, so a replay of the tail ends on the same one.
 		for (const ControllerFrame* input: CommittedControllerFramesInSenderOrder(ready)) frame.frames.push_back(*input);
@@ -479,7 +481,11 @@ namespace RTE {
 		std::vector<uint8_t> encoded;
 		AppendU32LE(encoded, magic);
 		AppendU16LE(encoded, 1);
-		AppendU16LE(encoded, frame.senderPeerId);
+		if (frame.senderPeerId > NetLockstepCodec::c_MaxPeerCount || frame.replayUpdateAuthorityPeerId > NetLockstepCodec::c_MaxPeerCount) {
+			if (error) *error = "invalid committed join authority";
+			return false;
+		}
+		AppendU16LE(encoded, frame.senderPeerId | (static_cast<uint16_t>(frame.replayUpdateAuthorityPeerId) << 8));
 		AppendU64LE(encoded, frame.targetFrame);
 		AppendU64LE(encoded, frame.roundId);
 		AppendU32LE(encoded, 0);
@@ -545,10 +551,11 @@ namespace RTE {
 		NetLockstepFrame decoded;
 		const uint16_t sender = ReadU16LE(cursor, end, ok);
 		decoded.senderPeerId = static_cast<uint8_t>(sender);
+		decoded.replayUpdateAuthorityPeerId = static_cast<uint8_t>(sender >> 8);
 		decoded.targetFrame = ReadU64LE(cursor, end, ok);
 		decoded.roundId = ReadU64LE(cursor, end, ok);
 		const uint32_t count = ReadU32LE(cursor, end, ok);
-		if (!ok || sender > NetLockstepCodec::c_MaxPeerCount || count > bytes.size() / 12) { if (error) *error = "invalid committed join frame header"; return false; }
+		if (!ok || decoded.senderPeerId > NetLockstepCodec::c_MaxPeerCount || decoded.replayUpdateAuthorityPeerId > NetLockstepCodec::c_MaxPeerCount || count > bytes.size() / 12) { if (error) *error = "invalid committed join frame header"; return false; }
 		for (uint32_t index = 0; index < count; ++index) {
 			const uint32_t size = ReadU32LE(cursor, end, ok);
 			if (!ok || size > static_cast<size_t>(end - cursor)) { if (error) *error = "truncated committed join frame"; return false; }

@@ -769,7 +769,7 @@ namespace RTE {
 		};
 		lockstepConfig.substituteSlowPeers = m_MatchConfig.version >= NetMatchConfigUtil::c_TimingOptionsVersion && m_MatchConfig.slowPlayerPolicy == NetSlowPlayerPolicy::Substitute;
 		lockstepConfig.slowPlayerBoundTicks = m_MatchConfig.slowPlayerBoundTicks;
-		lockstepConfig.requirePublishedStart = m_UseLobbyProtocol && !m_WorldJoinStarting;
+		lockstepConfig.requirePublishedStart = (m_UseLobbyProtocol || config.requirePublishedStart) && !m_WorldJoinStarting;
 		// The host's redundancy window rides the agreed config, so every peer repeats the same ticks.
 		lockstepConfig.frameRedundancyTicks = m_MatchConfig.frameRedundancyTicks;
 		if (!m_MatchConfig.peerInputDelayFrames.empty()) {

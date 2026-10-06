@@ -14,7 +14,6 @@ FIXTURES = Path(__file__).resolve().parent / 'fixtures'
 LANE_PORTS = ((47921, 47926), (48291, 48299))
 sys.path.insert(0, str(REPO / 'tools'))
 from run_sim_test import make_run
-from win32_test_runner import firewall_allows_inbound
 
 
 def module_index(sp):
@@ -56,6 +55,7 @@ def main():
         tick, _, ms = args.stall.partition(':')
         if not (tick.isdigit() and ms.isdigit() and int(ms) > 0):
             parser.error('--stall expects TICK:MS')
+    from win32_test_runner import firewall_allows_inbound
     if firewall_allows_inbound(args.exe) is not True:
         parser.error('executable has no verified inbound firewall rule: ' + str(args.exe))
     fixture = FIXTURES / (args.case + '.txt')
