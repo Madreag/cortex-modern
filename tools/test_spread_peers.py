@@ -19,22 +19,22 @@ class ContractTests(unittest.TestCase):
     def test_native_load_exit_preserves_peer_box_and_exact_reason(self):
         class LoadExit(SystemExit):
             def __str__(self):
-                return 'EROL-PC: not started: memory is below the floor'
+                return 'RecorderBox: not started: memory is below the floor'
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             spec = root/'peer-spec.json'
-            spec.write_text(json.dumps(dict(role='host', box=dict(name='EROL-PC'))))
+            spec.write_text(json.dumps(dict(role='host', box=dict(name='RecorderBox'))))
             with patch.object(spread, 'native_execute', side_effect=LoadExit(3)):
                 with self.assertRaises(LoadExit):
                     spread.main(['--native', str(spec), '--out', str(root/'results')])
             receipt = json.loads((root/'results/peer-result.json').read_text())
-            self.assertEqual((receipt['topology'], receipt['peer'], receipt['box']), ('spread', 'host', 'EROL-PC'))
-            self.assertIn('EROL-PC: not started: memory is below the floor', receipt['error'])
+            self.assertEqual((receipt['topology'], receipt['peer'], receipt['box']), ('spread', 'host', 'RecorderBox'))
+            self.assertIn('RecorderBox: not started: memory is below the floor', receipt['error'])
             self.assertEqual(json.loads((root/'progress.json').read_text())['record'], receipt)
 
     def test_routed_wait_updates_one_existing_holder_and_keeps_its_claim(self):
         sent = []
-        box = dict(name='EROL-PC', kind='local')
+        box = dict(name='RecorderBox', kind='local')
         claim = dict(root='/own/run', token='owned')
         argv = ['python', '/lead/box_hold.py', '--wait', '0', '--label', 'sol-multibox', '--', 'python', 'peer.py']
         def rpc(box, action, body, **kwargs):
@@ -61,8 +61,8 @@ class ContractTests(unittest.TestCase):
             receipt.write_bytes(b'existing live receipt')
             transport = SimpleNamespace(worker=SimpleNamespace(facts=SimpleNamespace()))
             with patch.object(spread, 'installed_pool', return_value=(None, transport, Path(temporary)/'kit.py')):
-                with self.assertRaisesRegex(spread.SpreadRefusal, 'host on EROL-PC.*RUN ROOT CONFLICT.*other-case'):
-                    spread.Case(Path(temporary), out, [spread.Peer('host')], spread.Match(51580), peer_boxes='host=EROL-PC')
+                with self.assertRaisesRegex(spread.SpreadRefusal, 'host on RecorderBox.*RUN ROOT CONFLICT.*other-case'):
+                    spread.Case(Path(temporary), out, [spread.Peer('host')], spread.Match(51580), peer_boxes='host=RecorderBox')
             self.assertEqual(receipt.read_bytes(), b'existing live receipt')
             self.assertEqual(json.loads(marker.read_text())['token'], 'foreign')
 
@@ -100,8 +100,8 @@ class ContractTests(unittest.TestCase):
         case.members, case.pending, case.match, case.lane, case.peer_ports = {}, [], spread.Match(51580), 'fake', {}
         case.stack = contextlib.ExitStack()
         self.addCleanup(case.stack.close)
-        boxes = [dict(name=name, kind='local' if name == 'EROL-PC' else 'windows-task', os='windows',
-                      hostname=name, engines_max=6) for name in ('EROL-PC', 'EDITH', 'Z13')]
+        boxes = [dict(name=name, kind='local' if name == 'RecorderBox' else 'windows-task', os='windows',
+                      hostname=name, engines_max=6) for name in ('RecorderBox', 'HostBox', 'PeerBox')]
         claims, requests = {}, []
         def rpc(box, action, value, **kwargs):
             self.assertEqual(action, 'claim')
@@ -132,16 +132,16 @@ class ContractTests(unittest.TestCase):
 
     def test_shareable_screen_peers_use_one_fitting_box_without_reviewed_peer(self):
         case, claims = self.place_fake([spread.Peer('host', reviewed=True), spread.Peer('a'), spread.Peer('b'), spread.Peer('c')],
-                                      dict(host='EDITH', a='EROL-PC', b='EROL-PC', c='Z13'))
-        self.assertEqual([item[0]['name'] for item in case.members.values()], ['EDITH', 'EROL-PC', 'EROL-PC', 'Z13'])
-        self.assertEqual(len(claims['EROL-PC']), 2)
-        self.assertTrue(all(not needs.alone for needs in claims['EROL-PC']))
+                                      dict(host='HostBox', a='RecorderBox', b='RecorderBox', c='PeerBox'))
+        self.assertEqual([item[0]['name'] for item in case.members.values()], ['HostBox', 'RecorderBox', 'RecorderBox', 'PeerBox'])
+        self.assertEqual(len(claims['RecorderBox']), 2)
+        self.assertTrue(all(not needs.alone for needs in claims['RecorderBox']))
         self.assertTrue(all('enqueued_at' not in request for _, _, request, _ in case.members.values()))
 
     def test_only_the_lead_can_explicitly_share_all_eligible_peers(self):
-        case, claims = self.place_fake([spread.Peer('a'), spread.Peer('b')], dict(a='EROL-PC', b='EROL-PC'))
-        self.assertEqual({item[0]['name'] for item in case.members.values()}, {'EROL-PC'})
-        self.assertEqual(len(claims['EROL-PC']), 2)
+        case, claims = self.place_fake([spread.Peer('a'), spread.Peer('b')], dict(a='RecorderBox', b='RecorderBox'))
+        self.assertEqual({item[0]['name'] for item in case.members.values()}, {'RecorderBox'})
+        self.assertEqual(len(claims['RecorderBox']), 2)
 
     def test_retained_runtime_keeps_settings_and_private_overlay_bytes(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -194,7 +194,7 @@ class ContractTests(unittest.TestCase):
 
     def test_named_claim_matches_identity_without_excluding_an_existing_binary(self):
         import cross_peers as cross
-        box = dict(name='EROL-PC', kind='windows-local', executable='D:/own/game.exe', scratch='D:/own')
+        box = dict(name='RecorderBox', kind='windows-local', executable='D:/own/game.exe', scratch='D:/own')
         peer = dict(case_id='case', peer_id='seat')
         claim = dict(case_id='case', peer_id='seat', share_ok=True, engines=1, token='owned')
         assignment = dict(claim='owned-claim', token='owned', box=box, executable=box['executable'])
@@ -220,7 +220,7 @@ class ContractTests(unittest.TestCase):
 
     def test_unshareable_and_quiet_peers_reserve_distinct_idle_boxes(self):
         case, claims = self.place_fake([spread.Peer('host', share_ok=False), spread.Peer('seat', quiet=True)],
-                                      dict(host='EROL-PC', seat='EDITH'))
+                                      dict(host='RecorderBox', seat='HostBox'))
         self.assertEqual(len({item[0]['name'] for item in case.members.values()}), 2)
         self.assertTrue(claims[case.members['seat'][0]['name']][0].alone)
         self.assertTrue(all(not needs.share_ok for rows in claims.values() for needs in rows))
@@ -230,14 +230,14 @@ class ContractTests(unittest.TestCase):
         peers = [spread.Peer('host', reviewed=True, share_ok=True), spread.Peer('held', held=True, share_ok=True)]
         self.assertTrue(all(not peer.share_ok for peer in peers))
         with self.assertRaisesRegex(spread.SpreadRefusal, 'TWO PEERS ON ONE BOX WITHOUT share_ok'):
-            self.place_fake(peers, dict(host='EROL-PC', held='EROL-PC'))
+            self.place_fake(peers, dict(host='RecorderBox', held='RecorderBox'))
 
     def test_reviewed_readback_uses_the_named_box_without_choosing(self):
         case, _ = self.place_fake([spread.Peer('host', reviewed=True, readback=True), spread.Peer('a'), spread.Peer('b')],
-                                  dict(host='EDITH', a='EROL-PC', b='EROL-PC'))
-        self.assertEqual(case.members['host'][0]['name'], 'EDITH')
-        self.assertEqual(case.members['a'][0]['name'], 'EROL-PC')
-        self.assertEqual(case.members['b'][0]['name'], 'EROL-PC')
+                                  dict(host='HostBox', a='RecorderBox', b='RecorderBox'))
+        self.assertEqual(case.members['host'][0]['name'], 'HostBox')
+        self.assertEqual(case.members['a'][0]['name'], 'RecorderBox')
+        self.assertEqual(case.members['b'][0]['name'], 'RecorderBox')
 
     def test_worked_example_retains_wrong_peer_port_after_video_parses(self):
         import argparse
@@ -251,7 +251,7 @@ class ContractTests(unittest.TestCase):
             received.extend(options.peer_port)
             return 2
         with tempfile.TemporaryDirectory() as directory, patch.object(sys, 'argv', ['spread_example.py', '--out', directory,
-                '--peer-boxes', 'host=EROL-PC,seat2=Linux', '--pool-dispatcher', 'dispatcher.py', '--port', '51580', '--port-block', '51580-51589',
+                '--peer-boxes', 'host=RecorderBox,seat2=FirstPosixBox', '--pool-dispatcher', 'dispatcher.py', '--port', '51580', '--port-block', '51580-51589',
                 '--peer-port', 'seat2=51581']), patch.object(example.video, 'main', video_main), patch.object(example.video, 'run_one'):
             self.assertEqual(example.main(), 2)
         self.assertEqual(received, ['seat2=51581'])
@@ -259,7 +259,7 @@ class ContractTests(unittest.TestCase):
 
     def test_worked_example_uses_one_shared_case_and_the_original_staging(self):
         import spread_example as example
-        case = SimpleNamespace(result=lambda:dict(peer_boxes=dict(host='EROL-PC', client='Linux')))
+        case = SimpleNamespace(result=lambda:dict(peer_boxes=dict(host='RecorderBox', client='FirstPosixBox')))
         calls = []
         def run_case(repo, out, peers, match, **kwargs):
             calls.append(kwargs['peer_boxes'])
@@ -268,17 +268,17 @@ class ContractTests(unittest.TestCase):
         def video_main():
             value = example.video.run_one(SimpleNamespace(repo=Path('.'), size='960x540', port=51580),
                                           dict(size='960x540', timeout_s=170), dict(name='run0'), 0, Path('.'))
-            self.assertEqual(value['peer_boxes'], dict(host='EROL-PC', client='Linux'))
+            self.assertEqual(value['peer_boxes'], dict(host='RecorderBox', client='FirstPosixBox'))
             self.assertTrue(all(peer['record']['topology']=='spread' and peer['record']['box']==peer['box'] for peer in value['peers']))
             return 0
         with tempfile.TemporaryDirectory() as directory, patch.object(sys, 'argv', ['spread_example.py', '--out', directory,
-                '--peer-boxes', 'host=EROL-PC,seat2=Linux', '--port', '51580', '--port-block', '51580-51589']), \
+                '--peer-boxes', 'host=RecorderBox,seat2=FirstPosixBox', '--port', '51580', '--port-block', '51580-51589']), \
                 patch.object(example, 'run_case', side_effect=run_case), patch.object(example.video, 'main', video_main), \
                 patch.object(example.video, '_run_one', return_value=dict(peers=[dict(peer='host',record={}),dict(peer='client',record={})])) as staged, \
                 patch.object(example.video, 'run_one'):
             self.assertEqual(example.main(), 0)
             staged.assert_called_once()
-        self.assertEqual(calls, ['host=EROL-PC,seat2=Linux'])
+        self.assertEqual(calls, ['host=RecorderBox,seat2=FirstPosixBox'])
         spread.configure(None)
 
     def test_pool_control_bootstrap_needs_no_caller_repository_imports(self):

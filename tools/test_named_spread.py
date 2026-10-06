@@ -14,21 +14,21 @@ import spread_peers as spread
 class NamedRoutingTests(unittest.TestCase):
     def test_every_peer_runs_on_exactly_the_named_box(self):
         peers = [spread.Peer('Host', reviewed=True), spread.Peer('Ana'), spread.Peer('Ben')]
-        self.assertEqual(spread.named_peer_boxes(peers, spread.pairs('host=Linux,seat2=EROL-PC,Ben=Mac')),
-                         {'Host': 'Linux', 'Ana': 'EROL-PC', 'Ben': 'Mac'})
+        self.assertEqual(spread.named_peer_boxes(peers, spread.pairs('host=FirstPosixBox,seat2=RecorderBox,Ben=SecondPosixBox')),
+                         {'Host': 'FirstPosixBox', 'Ana': 'RecorderBox', 'Ben': 'SecondPosixBox'})
 
     def test_missing_name_exits_two_before_any_transport(self):
         with patch.object(spread, 'installed_pool', side_effect=AssertionError('transport must not be consulted')):
             with self.assertRaises(SystemExit) as refused:
                 with tempfile.TemporaryDirectory() as temporary:
                     spread.Case(Path(temporary), Path(temporary)/'out', [spread.Peer('host'), spread.Peer('client')],
-                                spread.Match(51580), peer_boxes='host=EROL-PC')
+                                spread.Match(51580), peer_boxes='host=RecorderBox')
         self.assertEqual(refused.exception.code, 2)
 
     def test_explicit_sharing_with_share_ok_is_accepted(self):
         self.assertEqual(spread.named_peer_boxes([spread.Peer('a'), spread.Peer('b')],
-                                                spread.pairs('a=EROL-PC,b=EROL-PC')),
-                         {'a': 'EROL-PC', 'b': 'EROL-PC'})
+                                                spread.pairs('a=RecorderBox,b=RecorderBox')),
+                         {'a': 'RecorderBox', 'b': 'RecorderBox'})
 
     def test_complete_assignment_keeps_other_arms_names_compatible(self):
         values = spread.pairs('host=ONE,seat2=TWO,seat3=THREE')
@@ -56,12 +56,12 @@ class NamedRoutingTests(unittest.TestCase):
                 with self.assertRaisesRegex(spread.SpreadRefusal, 'TWO PEERS ON ONE BOX WITHOUT share_ok'), \
                         patch.object(spread, 'installed_pool', side_effect=AssertionError('no transport before refusal')):
                     spread.Case(Path(temporary), out, [first, spread.Peer('b')], spread.Match(51580),
-                                peer_boxes='a=EROL-PC,b=EROL-PC')
+                                peer_boxes='a=RecorderBox,b=RecorderBox')
                 receipt = json.loads((out/'spread-result.json').read_text())
                 self.assertEqual(receipt['topology'], 'spread')
-                self.assertEqual(receipt['peer_boxes'], {'a':'EROL-PC','b':'EROL-PC'})
+                self.assertEqual(receipt['peer_boxes'], {'a':'RecorderBox','b':'RecorderBox'})
                 self.assertEqual((receipt['refused_peer'], receipt['refused_box'], receipt['reason']),
-                                 ('a','EROL-PC','TWO PEERS ON ONE BOX WITHOUT share_ok'))
+                                 ('a','RecorderBox','TWO PEERS ON ONE BOX WITHOUT share_ok'))
 
     def test_retired_spread_exits_two_with_exact_routing_message(self):
         parser = argparse.ArgumentParser()

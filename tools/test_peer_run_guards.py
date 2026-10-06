@@ -17,7 +17,7 @@ class PeerRunGuardTests(unittest.TestCase):
             root = Path(temporary)
             executable = root / 'Cortex Command.exe'
             executable.write_bytes(b'one pinned executable')
-            box = dict(name='EROL-PC', kind='windows-local', executable=str(executable),
+            box = dict(name='RecorderBox', kind='windows-local', executable=str(executable),
                        scratch=str(root), pool_root=str(root/'native'), engines_max=10, free_floor_gb=12)
             current = {}
             def read(path, **kwargs):
@@ -76,7 +76,7 @@ class PeerRunGuardTests(unittest.TestCase):
                     second = peer('case-two', 51580 if conflict == 'port' else 51590,
                                   Path(first['run_root']) if conflict == 'root' else None)
                     reason = 'RUN ROOT CONFLICT' if conflict == 'root' else 'PORT CONFLICT 51580'
-                    with self.assertRaisesRegex(RuntimeError, 'EROL-PC.*'+reason+'.*host.*case-one'):
+                    with self.assertRaisesRegex(RuntimeError, 'RecorderBox.*'+reason+'.*host.*case-one'):
                         with cross.peer_run_scope(box, second):
                             self.fail('a conflicting run must never launch')
                     owner = json.loads((Path(first['run_root'])/'.spread-run-owner.json').read_text())
@@ -86,13 +86,13 @@ class PeerRunGuardTests(unittest.TestCase):
         with self.fake_box() as (box, peer, root):
             value = peer('case', 51580)
             with patch.object(cross, 'box_load', return_value=[dict(Name='Cortex Command.exe')]*10):
-                with self.assertRaisesRegex(RuntimeError, 'EROL-PC.*engine ceiling 10'):
+                with self.assertRaisesRegex(RuntimeError, 'RecorderBox.*engine ceiling 10'):
                     cross.assert_box_guard(box, pool_peer=value)
             with patch.dict('sys.modules', box_load=SimpleNamespace(memory=lambda:(11.9,48))):
-                with self.assertRaisesRegex(RuntimeError, 'EROL-PC.*below floor 12'):
+                with self.assertRaisesRegex(RuntimeError, 'RecorderBox.*below floor 12'):
                     cross.assert_box_guard(box, pool_peer=value)
             value['executable_sha256'] = '0'*64
-            with self.assertRaisesRegex(RuntimeError, 'EROL-PC.*hash differs'):
+            with self.assertRaisesRegex(RuntimeError, 'RecorderBox.*hash differs'):
                 with cross.peer_run_scope(box, value):
                     self.fail('changed executable must never launch')
             self.assertFalse((root/'native/peer-runs').exists())
