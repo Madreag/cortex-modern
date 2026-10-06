@@ -435,6 +435,8 @@ class Case:
                 pin = reviewed_box
                 if not pin:
                     raise self.refuse(peer.name, "unassigned", "reviewed screen requires a registered local Windows recorder")
+            if pin and peer.quiet and any(box["name"].casefold() == pin.casefold() and box.get("timing") is False for box in catalog):
+                raise self.refuse(peer.name, pin, "catalog does not permit timing measurements on this box")
             excluded = used + [box["name"] for box in catalog if peer.quiet and box.get("timing") is False]
             needs = self.pool.Needs(os=peer.os, engines=peer.engines, gpu=bool(peer.size), memory=peer.memory,
                                     alone=peer.quiet, size=peer.size, only_box=pin, excluded=tuple(excluded))
@@ -700,7 +702,7 @@ class Run:
                 paths.update(path for path in root.rglob("*") if path.is_file())
         for argument in [*args, *self.env.values()]:
             path = Path(str(argument))
-            if path.is_file() and path.suffix.lower() in (".txt", ".json", ".lua", ".ini"):
+            if path.is_file() and path.suffix.lower() in (".txt", ".json", ".lua", ".ini", ".ccreplay"):
                 if path.resolve().is_relative_to(self.case.out):
                     paths.add(path.resolve())
                 elif path.resolve().is_relative_to(self.repo):
