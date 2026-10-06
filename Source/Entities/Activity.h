@@ -561,6 +561,7 @@ namespace RTE {
 		/// @param newBrain A pointer to the new brain Actor. Ownership is NOT transferred!
 		/// @param player Which team to set the brain actor for.
 		void SetPlayerBrain(Actor* newBrain, int player = 0);
+		void SetPlayerBrainFromScript(Actor* newBrain, int player = 0);
 
 		/// Gives a seat the brain the engine placed for it and seeds the seat's shared control binding at once;
 		/// a script's SetPlayerBrain only sets this machine's record, which the per-tick brain record seeds from.
@@ -718,6 +719,7 @@ namespace RTE {
 		/// @param team Which team to switch to next actor on.
 		/// @return Whether the focus switch was successful or not.
 		virtual bool SwitchToActor(Actor* actor, int player = 0, int team = 0);
+		bool SwitchToActorFromScript(Actor* actor, int player = 0, int team = 0);
 
 		/// Forces the Activity to focus player control to the previous Actor of a specific team, other than the current one focused on.
 		/// @param player Player to force for.
@@ -866,6 +868,7 @@ namespace RTE {
 
 	private:
 		void ConfigureHumanRoster(const NetMatchConfig& config, uint8_t localPeer);
+		void SetPlayerBrainImpl(Actor* newBrain, int player, bool preserveTeam);
 		void MapLocalPlayers(const NetMatchConfig& config, uint8_t localPeer);
 
 		// The screens, the seats' view states, the players' controllers and their death and message timers are what a network
