@@ -839,8 +839,12 @@ namespace {
 	}
 
 	static int ScriptGraphScratchValue(lua_State* state) {
-		lua_pushboolean(state, s_ScriptGraphScratch && s_ScriptGraphScratch->state == state &&
-		    s_ScriptGraphScratch->values.contains(lua_topointer(state, 1)));
+		// SG7 restores capture-owned nodes with their reserved synthetic IDs. They
+		// remain capture-owned on the next walk, even though this capture did not
+		// allocate them. The reader has already checked this band and its bounds.
+		const bool restoredScratch = luaJIT_value_serial(state, 1) > (uint64_t{1} << 40);
+		lua_pushboolean(state, restoredScratch || (s_ScriptGraphScratch && s_ScriptGraphScratch->state == state &&
+		    s_ScriptGraphScratch->values.contains(lua_topointer(state, 1))));
 		return 1;
 	}
 

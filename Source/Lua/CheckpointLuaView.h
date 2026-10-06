@@ -520,7 +520,8 @@ namespace RTE::CheckpointLua {
 		static int StateSerial(lua_State* state) { lua_pushnumber(state, static_cast<lua_Number>(Self(state).m_Heap.StateSerial())); return 1; }
 		static int Scratch(lua_State* state) {
 			auto& view = Self(state); auto value = view.Value(state, 1);
-			lua_pushboolean(state, value && (view.scratch.contains(gcval(&*value)) || view.scratch.contains(ObjectAddress(*value)))); return 1;
+			lua_pushboolean(state, value && (view.SerialOf(*value) > (uint64_t{1} << 40) ||
+			    view.scratch.contains(gcval(&*value)) || view.scratch.contains(ObjectAddress(*value)))); return 1;
 		}
 		static int Address(lua_State* state) {
 			auto value = Self(state).Value(state, 1);
