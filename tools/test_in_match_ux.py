@@ -934,7 +934,7 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         raise spread.SpreadRefusal("leave-bad-ticket requires a native private-ticket damage lever")
     placement = spread.prepare_case(
         options.repo, root,
-        [spread.Peer(who, os="windows" if who in (NAMES[0], NEWCOMER) else "any", engines=1, size=(width, height),
+        [spread.Peer(who, os="windows" if who == NEWCOMER else "any", engines=1, size=(width, height),
                      reviewed=who == NAMES[0], held=who == NEWCOMER, quiet=case == "cost" and who == NAMES[0])
          for who in who_list + newcomers],
         spread.Match(port, parameters={"lane": "in-match", "network": "direct",
