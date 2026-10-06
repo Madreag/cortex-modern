@@ -233,6 +233,58 @@ class ContractTests(unittest.TestCase):
             sleep.assert_not_called()
             case.synchronize.assert_not_called()
 
+    def session_admission_fake(self, clock, failure=None):
+        host = SimpleNamespace(started=False, launch_attempted=True, finished=False, start_failure=None)
+        case = object.__new__(spread.Case)
+        case.names, case.peer_ports = ['host', 'seat'], {}
+        case.match = spread.Match(51580, parameters={'runner_wait':1800})
+        case.directory = {'DIRECTORY_ROOT':'unused'}
+        case.members = {'host':(dict(name='EROL-PC'),), 'seat':(dict(name='Linux'),)}
+        case.runs = {'host':host}
+        def synchronize():
+            if failure and clock[0] >= 20:
+                host.start_failure = failure
+            elif clock[0] >= 100:
+                host.started = True
+        def idle(seconds):
+            clock[0] = round(clock[0]+seconds, 6)
+            synchronize()
+        case.guard, case.synchronize = synchronize, synchronize
+        case.refuse = lambda name, box, reason: spread.SpreadRefusal(f'spread peer {name} on {box}: {reason}')
+        return case, host, idle
+
+    def test_session_lookup_starts_after_the_requested_host_is_admitted(self):
+        clock, queries = [0.0], []
+        case, host, idle = self.session_admission_fake(clock)
+        def query(*args):
+            queries.append(clock[0])
+            return 'native-session' if host.started else None
+        with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+             patch.object(spread.time, 'sleep', side_effect=idle), patch('e2e_video.directory_session', side_effect=query):
+            self.assertEqual(case.published_session('seat'), 'native-session')
+        self.assertEqual(queries, [100.0])
+
+    def test_session_lookup_still_refuses_after_eighty_seconds_without_publication(self):
+        clock = [0.0]
+        case, host, idle = self.session_admission_fake(clock)
+        with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+             patch.object(spread.time, 'sleep', side_effect=idle), patch('e2e_video.directory_session', return_value=None):
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'seat on Linux.*no session.*51580'):
+                case.published_session('seat')
+        self.assertTrue(host.started)
+        self.assertEqual(clock[0], 180.0)
+
+    def test_host_refusal_during_admission_reaches_session_waiter_before_lookup(self):
+        clock = [0.0]
+        case, host, idle = self.session_admission_fake(clock, 'named native floor refused')
+        with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+             patch.object(spread.time, 'sleep', side_effect=idle), patch('e2e_video.directory_session') as query:
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'seat on Linux.*host on EROL-PC.*floor refused'):
+                case.published_session('seat')
+            query.assert_not_called()
+        self.assertFalse(host.started)
+        self.assertEqual(clock[0], 20.0)
+
     def test_native_adapter_ships_its_existing_named_route_dependency(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -99,6 +99,8 @@ on the native host's route to each named peer's saved SSH endpoint. This keeps
 LAN peers on the LAN and overlay peers on their existing overlay, without
 changing either network. Concurrent seats wait for an already requested host
 to have its native PID before launching; callers still order their starts.
+The same admission barrier precedes session lookup, whose original 80-second
+publication budget begins after that admission and remains unchanged.
 Loopback/unspecified host addresses refuse with the box
 named. Explicit ICE-Off in the default ICE mode also refuses instead of being
 overwritten. Scratch placement derives from the installed box catalog.
@@ -1370,6 +1372,16 @@ class Case:
     def published_session(self, name):
         from e2e_video import directory_session
         port = int(role_value(self.peer_ports, self.names, name) or self.match.port)
+        host = self.runs.get(self.names[0])
+        if host and getattr(host, 'launch_attempted', False):
+            wait = self.match.parameters.get('runner_wait', getattr(_options, 'runner_wait', 0))
+            try:
+                wait_started_host(self, name, wait)
+            except SpreadRefusal as error:
+                host_box = self.members[self.names[0]][0]['name']
+                reason = getattr(host, 'start_failure', None) or str(error)
+                raise self.refuse(name, self.members[name][0]['name'],
+                                  f'requested host on {host_box} did not start: {reason}') from error
         deadline = time.monotonic() + 80
         while time.monotonic() < deadline:
             host = self.runs.get(self.names[0])
