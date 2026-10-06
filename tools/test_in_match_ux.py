@@ -1233,7 +1233,7 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
     if placement:
         receipt = placement.result()
         row.update(topology="spread", peer_boxes=receipt["peer_boxes"], identities=receipt["identities"],
-                   executable_hashes=receipt["executable_hashes"], refusals=receipt["refusals"])
+                   executable_hashes=receipt["executable_hashes"], refusals=receipt["refusals"], sharing=receipt["sharing"])
         row["proof"] = (row["pass"] and set(receipt["identities"]) == set(runs) and
                         all(records.get(who, {}).get("box") == receipt["peer_boxes"][who] and
                             records[who].get("exe_sha256") == receipt["executable_hashes"][who] for who in runs))
