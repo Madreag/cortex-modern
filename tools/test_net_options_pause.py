@@ -168,13 +168,13 @@ def lifecycle_steps(arm, who, tag):
                   menu_step("post_command ButtonResume"), {"op": "wait", "screen": "Gameplay"},
                   {"op": "wait", "sim_at_least": 480}, {"op": "finish"}]
     elif arm == "leave":
-        # The confirmation replaces the rows; its text names what this seat loses when it leaves.
+        # The confirmation replaces the rows; its text says what happens to this seat when it leaves.
         steps += [menu_step("post_command ButtonLeaveMatch"), {"op": "wait", "screen": "PauseLeaveConfirm"},
                   menu_step("assert_visible LabelLeaveConfirm 1"), menu_step("assert_rect_inside LabelLeaveConfirm LeaveConfirmBox"),
                   menu_step("assert_text_fits LabelLeaveConfirm"), menu_step("assert_text_fits ButtonLeaveConfirm"),
                   menu_step("assert_text_fits ButtonLeaveCancel"), menu_step("assert_visible ButtonResume 0"),
                   {"op": "assert_control", "scope": "menu", "control": "LabelLeaveConfirm",
-                   "text_contains": "match ends for everyone" if who == "host" else "fall to a teammate or to the AI",
+                   "text_contains": "match ends for everyone" if who == "host" else "your seat stays yours",
                    "equals": {"visible": True}},
                   menu_step("dump_host_options"), {"op": "screenshot", "name": f"{tag}_confirm"},
                   # Cancel first: the confirmation must be escapable without touching the session.
@@ -191,13 +191,14 @@ def lifecycle_steps(arm, who, tag):
 
 
 def single_player_steps(tag):
+    # Single player's pause menu runs in the menu loop, which pumps only menu-scope steps.
     return {"schema": 1, "timeout_ms": 180000, "steps": [
-        {"op": "wait", "sim_at_least": 200}, *escape(), {"op": "wait", "screen": "Pause"},
-        {"op": "assert", "equals": {"screen": "Pause", "paused": True}},
+        {"op": "wait", "sim_at_least": 200}, *escape(), {"op": "wait", "screen": "Pause", "scope": "menu"},
+        {"op": "assert", "equals": {"screen": "Pause", "paused": True}, "scope": "menu"},
         menu_step("assert_visible ButtonBackToMain 1"), menu_step("assert_visible ButtonSaveOrLoadGame 1"),
         menu_step("assert_visible ButtonPauseMatch 0"), menu_step("assert_visible ButtonLeaveMatch 0"),
-        menu_step("dump_host_options"), {"op": "screenshot", "name": f"{tag}_sp"},
-        {"op": "signal", "name": "done"}, {"op": "finish"}]}
+        menu_step("dump_host_options"), {"op": "screenshot", "name": f"{tag}_sp", "scope": "menu"},
+        {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]}
 
 
 def peer_names(arm):
@@ -390,7 +391,9 @@ def inspect(arm, root, outcome, strict_compare):
                 # Nothing here may leave the match or pause the local activity.
                 checks[f"{who}_activity_never_paused"] = not any(ACTIVITY_PAUSED.match(line) for line in logs[who].splitlines())
                 checks[f"{who}_exit"] = outcome["records"][who].get("exit_code") == 0
-                checks[f"{who}_stayed"] = LEFT_LOCAL not in logs[who] and not any(LEFT_REMOTE.match(line) for line in logs[who].splitlines())
+                # A peer that reaches the run's last tick quits on its own; a leave read there ends the run, not the arm.
+                checks[f"{who}_stayed"] = LEFT_LOCAL not in logs[who] and not any(
+                    (left := LEFT_REMOTE.match(line)) and int(left.group(1)) < TICKS for line in logs[who].splitlines())
             if arm == "resync":
                 # The perturbation must actually be caught and healed: a run that finishes with no resync passed
                 # this arm while the runtime desync check was dead (F77), so the heal is required, not assumed.

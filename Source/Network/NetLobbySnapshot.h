@@ -82,6 +82,7 @@ namespace RTE {
 		bool ready = false;
 		bool connected = false;
 		uint32_t pingMs = 0;
+		bool pingMeasured = false; //!< The link has a measured round trip; 0 ms then reads as under a millisecond.
 		uint16_t inputDelayFrames = 0;
 		uint32_t waits = 0;
 		uint64_t longestWaitMs = 0;

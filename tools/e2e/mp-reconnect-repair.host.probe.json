@@ -48,7 +48,7 @@
     {
       "op": "assert_control",
       "control": "NetworkSeatsOptionsText",
-      "text_contains": "Repair match: Ready - pause menu > Match Options"
+      "text_contains": "Repair match: Ready - pause menu > Match Details"
     },
     {
       "op": "menu",

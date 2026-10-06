@@ -306,7 +306,7 @@
       "peer": "clienta",
       "mark": "migration-host-drop",
       "screen": "game",
-      "what": "During host loss the survivor's status panel shows the loss on screen: it names the loss and blanks RTT, with no LIVE band, and the recorder observes the host-lost status state.",
+      "what": "During host loss the survivor's status panel shows the loss on screen: it names the loss and blanks RTT, with no all-connected line, and the recorder observes the host-lost status state.",
       "assert": "Native readback of LabelNetMatchStatus at the probe's wait for the loss text, plus the recorded host_lost=1 status.",
       "events": [
         "net_status peer=\\d+ host_lost=1"
@@ -318,7 +318,7 @@
             "control",
             "text"
           ],
-          "contains": "Host connection lost - choosing a new host"
+          "contains": "Host lost - contacting the next host"
         },
         {
           "step": 4,
@@ -334,7 +334,7 @@
             "control",
             "text"
           ],
-          "not_contains": "LIVE"
+          "not_contains": "Everyone is connected"
         },
         {
           "step": 4,
@@ -351,7 +351,7 @@
       "peer": "clientb",
       "mark": "migration-host-drop",
       "screen": "game",
-      "what": "During host loss the survivor's status panel shows the loss on screen: it names the loss and blanks RTT, with no LIVE band, and the recorder observes the host-lost status state.",
+      "what": "During host loss the survivor's status panel shows the loss on screen: it names the loss and blanks RTT, with no all-connected line, and the recorder observes the host-lost status state.",
       "assert": "Native readback of LabelNetMatchStatus at the probe's wait for the loss text, plus the recorded host_lost=1 status.",
       "events": [
         "net_status peer=\\d+ host_lost=1"
@@ -363,7 +363,7 @@
             "control",
             "text"
           ],
-          "contains": "Host connection lost - choosing a new host"
+          "contains": "Host lost - contacting the next host"
         },
         {
           "step": 4,
@@ -379,7 +379,7 @@
             "control",
             "text"
           ],
-          "not_contains": "LIVE"
+          "not_contains": "Everyone is connected"
         },
         {
           "step": 4,

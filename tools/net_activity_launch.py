@@ -304,12 +304,12 @@ REFUSED_PRESET = "No Such Brain"
 PLACE_REFUSED = ("Place your brain in a valid spot first", "Pick what you want to place next",
                  "Click to INSTALL your governor brain")
 READY_TEXT = "READY to start"
-# The tall box spells the wait out; the one-line strip a short screen gets says it in its own words.
-WAIT_BANNER = "to place their brains"
-COMPACT_WAIT_BANNER = "TO PLACE"
+# A seat that has placed reads who it waits for, in the tall box and the one-line strip alike; a seat that
+# has not reads what to do.
+WAIT_BANNER = "to place their brain"
+COMPACT_WAIT_BANNER = WAIT_BANNER
+LOCAL_PLACE_BANNER = "Place your brain"
 COMPACT_MAX_HEIGHT = 480
-# Both seats, in the order the roster seats them, as the strip names them while neither has placed.
-PLACEMENT_NAMES = "Host, Client"
 # The client's placement waits on this signal from the host's probe, so the waiting window never
 # depends on either peer's pacing.
 WAITING_SEEN_SIGNAL = "host_waiting_seen"
@@ -364,34 +364,24 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
                   {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                   {"op": "wait", "panel_open": False}]
     if compact(resolution):
-        if long_names:
-            # A 64-char seat name cannot survive the strip whole: FitLine ellides it, and the count
-            # outlives every fallback the line gives way through.
+        # This seat has not placed, so the strip says what to do; the count outlives every fallback the line
+        # gives way through. A shared second picker column can take the words with it, so that arm requires
+        # the count alone.
+        if not shared_seat:
             steps += [{"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
-                       "text_contains": "WAITING FOR "},
-                      {"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
-                       "text_contains": "..."},
-                      {"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
-                       "text_contains": " TO PLACE"},
-                      {"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
-                       "text_contains": "0 of 2"}]
-        else:
-            # An open picker leaves the strip under half a short screen: the metrics tail is what gives way,
-            # the seat names stay whole while it can, and the count outlives every fallback. A shared second
-            # picker column can take the names with it, so that arm requires the count alone.
-            if not shared_seat:
-                steps += [{"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
-                           "text_contains": "WAITING FOR " + PLACEMENT_NAMES + " TO PLACE"}]
-            steps += [{"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
-                       "text_contains": "0 of 2"}]
-    elif long_names:
-        # The tall box spells the wait out; the host's short name leads and the long one ellides.
+                       "text_contains": LOCAL_PLACE_BANNER}]
         steps += [{"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
-                   "text_contains": LONG_HOST_NAME + ", "},
+                   "text_contains": "0 of 2"}]
+    elif long_names:
+        # The tall box says what to do, then who else is placing; the long name ellides on that line.
+        other_name = "Client" if peer == "host" else LONG_HOST_NAME
+        steps += [{"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
+                   "text_contains": LOCAL_PLACE_BANNER},
                   {"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
-                   "text_contains": "..."},
-                  {"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
-                   "text_contains": "to place their brains"}]
+                   "text_contains": "Also placing: " + other_name}]
+        if peer == "host":
+            steps += [{"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
+                       "text_contains": "..."}]
     if long_names and peer == "host":
         # The join banner keeps its verb: the name that fills the line is what gives way.
         steps += [{"op": "assert_control", "control": "LabelNetMatchToastNewest", "equals": {"visible": True},
@@ -432,9 +422,9 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
               {"op": "editor_done", "player": player},
               {"op": "wait", "seat_ready": player}]
     if compact(resolution) and peer != "host":
-        # The compact strip's delay field has to spell its unit: a bare "D 3" reads as "0 3".
+        # The numbers sit behind the detailed statistics setting; the strip ends on the panel's key.
         steps += [{"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True},
-                   "fits": True, "text_contains": "delay 3"}]
+                   "fits": True, "text_contains": "F6: Players"}]
     # The frame the seat's own ready lands on is the one that still says all brains are placed: the editor
     # leaves a tick or two later, so the shot goes before the assertion that reads the same state.
     if capture and peer != "host":

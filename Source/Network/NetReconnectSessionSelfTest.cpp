@@ -3097,7 +3097,7 @@ namespace RTE {
 				return Fail("a connected UX asked for a reconnect attempt");
 			}
 			ux.NoteDropped(nowMs, "connection closed by peer");
-			if (!ux.IsActive() || ux.GetStatusText().find("Reconnecting") == std::string::npos ||
+			if (!ux.IsActive() || ux.GetStatusText().find("Rejoining") == std::string::npos ||
 			    ux.GetStatusText().find("connection closed by peer") == std::string::npos) {
 				return Fail("the drop did not produce a persistent reason-carrying status");
 			}
@@ -3153,7 +3153,7 @@ namespace RTE {
 			ux.RequestManualRetry(nowMs);
 			ux.NoteAttemptStarted(nowMs);
 			ux.NoteReconnected(nowMs);
-			if (ux.GetState() != NetReconnectUxState::Reconnected || ux.IsActive() || ux.GetStatusText() != "Reconnected.") {
+			if (ux.GetState() != NetReconnectUxState::Reconnected || ux.IsActive() || ux.GetStatusText() != "Back in the match.") {
 				return Fail("a successful reconnect did not settle the banner");
 			}
 
@@ -4919,23 +4919,26 @@ namespace RTE {
 			return 0;
 		}
 
-		// The seats panel and the stall overlay must agree about the pause: the round's hold decides.
+		// The Players panel and the stall overlay must agree about the pause: the round's hold decides.
 		int TestModerationPanelTitleFollowsTheRoundHold() {
 			std::string who;
 			uint32_t seconds = 0;
 			if (ScenarioRunner::DescribeLockstepHoldPause(who, seconds) || !who.empty() || seconds != 0) {
 				return Fail("a round with no coordinator reported a hold pause");
 			}
-			if (NetModerationPanelTitle(true, false, "Alice", 0) != "SEATS  /  The match continues while this panel is open") {
+			if (NetModerationPanelTitle(true, false, "Alice", 0, false) != "PLAYERS  /  The match continues while this panel is open") {
 				return Fail("the panel claimed a pause the round is not in");
 			}
-			if (NetModerationPanelTitle(true, true, "Alice", 7) != "SEATS  /  Match paused: waiting for Alice to return (7s left)") {
+			if (NetModerationPanelTitle(true, false, "Alice", 0, true) != "PLAYERS  /  The match is paused for everyone") {
+				return Fail("the panel said the match continues while it is paused for everyone");
+			}
+			if (NetModerationPanelTitle(true, true, "Alice", 7, false) != "PLAYERS  /  Match paused: waiting for Alice to return (7s left)") {
 				return Fail("the panel did not name the held player and the countdown");
 			}
-			if (NetModerationPanelTitle(true, true, "", 3) != "SEATS  /  Match paused: waiting for a player to return (3s left)") {
+			if (NetModerationPanelTitle(true, true, "", 3, false) != "PLAYERS  /  Match paused: waiting for a player to return (3s left)") {
 				return Fail("a nameless hold lost its wording");
 			}
-			if (NetModerationPanelTitle(false, true, "Alice", 7) != "SEATS  /  Resynchronizing the match...") {
+			if (NetModerationPanelTitle(false, true, "Alice", 7, false) != "PLAYERS  /  Restoring the shared match state...") {
 				return Fail("a resyncing round did not say so");
 			}
 			return 0;

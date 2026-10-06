@@ -2,7 +2,7 @@
   "schema": 1,
   "name": "mp-host-draw-stall-menu",
   "port_base": 49479,
-  "title": "A host whose frame draw is held 500 ms while its pause menu's Match Options is open keeps its round at 200 ms RTT with 3 peers, and every pause menu control reads the match service without touching the round inside an open plane window",
+  "title": "A host whose frame draw is held 500 ms while its pause menu's Match Details is open keeps its round at 200 ms RTT with 3 peers, and every pause menu control reads the match service without touching the round inside an open plane window",
   "size": "640x360",
   "timeout_s": 300,
   "runs": [
@@ -159,7 +159,7 @@
         600,
         1200
       ],
-      "what": "The host's draw is held 500 ms at tick 600 with Match Options open; the host's round plays on behind the pause menus its probe keeps open, with no unguarded access to the round.",
+      "what": "The host's draw is held 500 ms at tick 600 with Match Details open; the host's round plays on behind the pause menus its probe keeps open, with no unguarded access to the round.",
       "forbidden_log_regex": [
         "\\[net-plane\\] ASSERT",
         "unguarded coordinator access",
@@ -179,7 +179,7 @@
         600,
         1200
       ],
-      "what": "The host's draw is held 500 ms at tick 600 with Match Options open; the client plays on with no unguarded access to the round.",
+      "what": "The host's draw is held 500 ms at tick 600 with Match Details open; the client plays on with no unguarded access to the round.",
       "forbidden_log_regex": [
         "\\[net-plane\\] ASSERT",
         "unguarded coordinator access",
@@ -199,7 +199,7 @@
         600,
         1200
       ],
-      "what": "The host's draw is held 500 ms at tick 600 with Match Options open; the survivor plays on with no unguarded access to the round.",
+      "what": "The host's draw is held 500 ms at tick 600 with Match Details open; the survivor plays on with no unguarded access to the round.",
       "forbidden_log_regex": [
         "\\[net-plane\\] ASSERT",
         "unguarded coordinator access",
