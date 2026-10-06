@@ -2173,10 +2173,9 @@ def run_one(options, scenario, run, run_index, out):
     capture_peer = getattr(options, "capture_peer", None) or definitions[0]["name"]
     if capture_peer not in {peer["name"] for peer in definitions}:
         raise ValueError("--capture-peer must name a peer of this run")
-    peers = [spread.Peer(peer["name"], os="windows" if peer["name"] == capture_peer else "any", size=size,
-                         reviewed=peer["name"] == capture_peer, recorder=peer["name"] == capture_peer,
-                         held=bool(peer.get("kill_after_s") or peer.get("kill_at_tick") or peer.get("kill_when") or
-                                   any("stall" in str(value) for value in peer.get("args", []) if str(value).startswith("-net-test"))),
+    # The engine records its rendered texture on every platform. The capture
+    # peer's OS and placement are resolved by the same pool as every other peer.
+    peers = [spread.Peer(peer["name"], os="any", size=size,
                          timeout=run.get("timeout_s") or scenario.get("timeout_s") or 300)
              for peer in definitions]
     previous = getattr(options, "remote_capture", None)
@@ -2763,7 +2762,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     import spread_peers as spread
     spread.add_arguments(parser)
-    parser.add_argument("--capture-peer", help="reviewed peer on the controller's private Windows recorder; defaults to the first peer")
+    parser.add_argument("--capture-peer", help="reviewed peer on any box; defaults to the first peer")
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path)
     parser.add_argument("--scenario")
