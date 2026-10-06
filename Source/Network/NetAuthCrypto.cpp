@@ -2,6 +2,7 @@
 
 #include <limits>
 #include <algorithm>
+#include <cstdlib>
 #include <memory>
 
 #ifdef CCCP_WITH_GNS
@@ -32,8 +33,7 @@ namespace RTE {
 				return EVP_Q_mac(nullptr, "HMAC", nullptr, "SHA256", nullptr, key, keyCount, message, messageCount, mac, sizeof(mac), &macCount) != nullptr && macCount == sizeof(mac);
 			}
 		};
-		using DefaultAuthCrypto = OpenSslAuthCrypto;
-#else
+#endif
 		// GNS-less builds carry no crypto library; everything refuses so no auth material can exist.
 		class FailClosedAuthCrypto : public NetAuthCrypto {
 		public:
@@ -41,6 +41,9 @@ namespace RTE {
 			bool RandomBytes(uint8_t*, size_t) override { return false; }
 			bool HmacSha256(const uint8_t*, size_t, const uint8_t*, size_t, uint8_t (&)[32]) override { return false; }
 		};
+#ifdef CCCP_WITH_GNS
+		using DefaultAuthCrypto = OpenSslAuthCrypto;
+#else
 		using DefaultAuthCrypto = FailClosedAuthCrypto;
 #endif
 
@@ -49,7 +52,10 @@ namespace RTE {
 
 	NetAuthCrypto& GetNetAuthCrypto() {
 		static DefaultAuthCrypto defaultProvider;
-		return s_TestOverride != nullptr ? *s_TestOverride : defaultProvider;
+		// Test lever: CCCP_TEST_FAIL_CLOSED_CRYPTO stands this build in for one without its cryptography. Unset, nothing changes.
+		static FailClosedAuthCrypto failClosedProvider;
+		static const bool failClosed = std::getenv("CCCP_TEST_FAIL_CLOSED_CRYPTO") != nullptr;
+		return s_TestOverride != nullptr ? *s_TestOverride : failClosed ? static_cast<NetAuthCrypto&>(failClosedProvider) : defaultProvider;
 	}
 
 	bool NetAuthSeal(const std::array<uint8_t, 32>& key, const std::vector<uint8_t>& context, const std::vector<uint8_t>& plaintext, std::vector<uint8_t>& sealed) {

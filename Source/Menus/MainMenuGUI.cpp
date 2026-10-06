@@ -2787,26 +2787,17 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostSessionBannedButton], true);
 	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostSessionEndButton], editable && !m_HostOptionsSetupDraft);
 
+	if (GUILabel* rejoin = m_HostRecRejoinLabel) {
+		// A build without its cryptography cannot prove who a returning player is: the line says so rather than claim it.
+		const char* line = GetNetAuthCrypto().IsRealCrypto() ? "Authenticated rejoin: On" : "Authenticated rejoin: Off in this build";
+		if (rejoin->GetText() != line) rejoin->SetText(line);
+	}
+
 	// The footer: Apply only when there is a change and the player may make one.
 	bool dirty = false;
-	if (m_HostOptionsSetupDraft && !m_HostSetupOptions) {
-		dirty = !(m_HostOptionsDraft == m_HostOptionsOpenedDraft);
-	} else if (m_HostOptionsSetupDraft) {
-		dirty = static_cast<const NetMatchStandardRules&>(m_HostOptionsDraft) != static_cast<const NetMatchStandardRules&>(*m_HostSetupOptions)
-		        || m_HostOptionsDraft.players != m_HostSetupOptions->players
-		        || m_HostOptionsDraft.mode != m_HostSetupOptions->mode
-		        || m_HostOptionsDraft.activityPreset != m_HostSetupOptions->activityPreset
-		        || m_HostOptionsDraft.activityModule != m_HostSetupOptions->activityModule
-		        || m_HostOptionsDraft.sceneName != m_HostSetupOptions->sceneName
-		        || m_HostOptionsDraft.peerCount != m_HostSetupOptions->peerCount
-		        || m_HostOptionsDraft.delayPolicy != m_HostSetupOptions->delayPolicy
-		        || m_HostOptionsDraft.idleWaitMinutes != m_HostSetupOptions->idleWaitMinutes
-		        || m_HostOptionsDraft.automaticRepair != m_HostSetupOptions->automaticRepair
-		        || m_HostOptionsDraft.frameRedundancyTicks != m_HostSetupOptions->frameRedundancyTicks
-		        || m_HostOptionsDraft.autosaveEnabled != m_HostSetupOptions->autosaveEnabled
-		        || m_HostOptionsDraft.autosaveIntervalSeconds != m_HostSetupOptions->autosaveIntervalSeconds
-		        || m_HostOptionsDraft.returnWindowMinutes != m_HostSetupOptions->returnWindowMinutes
-		        || m_HostOptionsDraft.inputDelayFrames != m_HostSetupOptions->inputDelayFrames;
+	if (m_HostOptionsSetupDraft) {
+		// Any field of the setup's list that differs from what Apply last took (or from what Advanced opened on) is a change.
+		dirty = !NetMatchConfigUtil::SameHostDraft(m_HostOptionsDraft, m_HostSetupOptions ? *m_HostSetupOptions : m_HostOptionsOpenedDraft);
 	} else {
 		const NetMatchConfig adopted = g_NetMatchService.GetLobbyMatchConfig();
 		dirty = !(m_HostOptionsDraft == adopted) && !(g_NetMatchService.GetPendingHostOptions() && m_HostOptionsDraft == *g_NetMatchService.GetPendingHostOptions());
