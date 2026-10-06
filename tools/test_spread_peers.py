@@ -29,11 +29,11 @@ class ContractTests(unittest.TestCase):
                         value=dict(claim=claim, argv=argv, environment={'CCCP_HEADLESS':'1'})))
         backend.launch = launch
         spread.launch_native(backend, box, claim, {}, 1800)
-        self.assertEqual(sent[0]['value']['argv'], argv[:4]+['1800']+argv[5:])
+        self.assertEqual(sent[0]['value']['argv'], argv[:3]+['1800']+argv[4:])
         self.assertEqual(sent[0]['value']['environment'], {'CCCP_HEADLESS':'1'})
         self.assertEqual(sent[0]['value']['claim'], claim)
         self.assertIs(backend.rpc, rpc)
-        self.assertEqual(argv[4], '0')
+        self.assertEqual(argv[3], '0')
 
     def test_live_controller_result_root_refuses_without_overwriting_its_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:
