@@ -3578,12 +3578,11 @@ static uint64_t MenuScriptNowMs() {
 
 static void ConfigureMenuScriptInput(int argc, char** argv) {
 	const char* probe = std::getenv("CC_TEST_NET_UI_SCRIPT");
-	bool driving = false;
+	bool driving = probe && *probe;
 	for (int i = 1; i + 1 < argc; ++i) {
 		if (argv[i] && std::string_view(argv[i]) == "-menu-script" && argv[i + 1] && *argv[i + 1]) driving = true;
 	}
-	GUIInputWrapper::SetMenuScriptDriving(driving);
-	GUIInputWrapper::SetAutomationDriving(probe && *probe);
+	GUIInputWrapper::SetAutomationDriving(driving);
 }
 
 // One write per diagnostic line: a worker thread's own line can never land inside a menu-script line.
@@ -3598,14 +3597,14 @@ static void MenuScriptFail(const std::string& reason) {
 	System::PrintDiagnosticErrorLine("[menu-script] FAILED: " + reason);
 	s_menuScriptFailed = true;
 	if (!s_menuScriptObserveStep) {
-		GUIInputWrapper::SetMenuScriptDriving(false);
+		GUIInputWrapper::SetAutomationDriving(false);
 		System::SetQuit(true);
 	}
 }
 
 static void CompleteMenuScript() {
 	MenuScriptPrint("complete");
-	GUIInputWrapper::SetMenuScriptDriving(false);
+	GUIInputWrapper::SetAutomationDriving(false);
 	s_menuScriptComplete = true;
 	if (!s_menuScriptHoldE2ePause) System::SetQuit(true);
 }

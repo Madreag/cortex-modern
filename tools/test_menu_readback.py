@@ -2100,9 +2100,8 @@ def scripts(case, port, root, size="960x540"):
                  "assert_label LabelHostRecLastSave No autosaves while this is off\n"
                  "assert_label LabelHostRecAutosaveHint Every 60 s to 60 min, or off (default)\n"
                  # A typed 0 is off at Apply too: the service accepts off instead of refusing an enabled zero.
-                 # Apply publishes an open-seat lobby too; read both its action hint and the
-                 # committed revision's confirmation, rather than accepting a pending draft.
-                 "assert_label LabelHostOptStatus Apply republishes this lobby.\n"
+                 # Apply publishes an open-seat lobby too; read the committed revision's
+                 # confirmation rather than accepting a pending draft or stale edit hint.
                  "activate ButtonHostOptApply\nwait_ms 500\n"
                  "assert_label_absent LabelHostOptStatus requires a nonzero interval\n"
                  "assert_label LabelHostOptStatus Applied: this lobby was republished.\n"
@@ -2514,9 +2513,12 @@ def spread_menu_scripts(case, texts, port, root):
     probes = {"host": {"schema": 1, "timeout_ms": 90000, "steps": [
         {"op": "wait", "screen": "MultiplayerScreen", "control": "LabelLobbyPlayer0", "text_contains": name,
          "equals": {"visible": True}, "scope": "menu"},
-        {"op": "signal", "name": "hosting", "scope": "menu"}, {"op": "finish"}]}}
+        {"op": "signal", "name": "hosting", "scope": "menu"},
+        # The publishing probe shares the input scope with the menu script. Its cleanup
+        # belongs after the client's exchange, so that script can still press Enter.
+        {"op": "wait_file", "path": str(client_done), "scope": "menu"}, {"op": "finish"}]}}
     if case == "lobby-name":
-        probes["host"]["steps"][-1:-1] = [
+        probes["host"]["steps"][-2:-2] = [
             {"op": "wait_file", "path": str(root / "host/runtime/ScreenShots/dump_host_options_4.json"), "scope": "menu"},
             {"op": "signal", "name": "host-read", "scope": "menu"}]
     return {"host": host, "client": client}, probes
