@@ -25915,24 +25915,37 @@ namespace {
 
 		static bool KickWithdrawsOpenedActivation(std::string* error) {
 			const auto done = [&](const std::string& why) { return ReportReleasedClaimsRow("kick_withdraws_an_opened_seats_activation", why, error); };
-			for (const char* action: {"host kick", "host ban"}) {
+			for (const char* action: {"host kick", "host ban"}) for (const bool atHorizon: {false, true}) {
 				ReleasePathRound round;
 				if (!round.Start(47440) || !round.HoldFourth()) return done(round.failure);
 				round.peers[0].EvictRemovedPeer(4, "the host opens the place", round.now);
 				for (int pass = 0; pass < 80; ++pass) round.Pump();
 				LoopbackTransport newcomer;
 				if (!newcomer.Connect("loopback", 47440, &round.failure)) return done(round.failure);
-				const uint64_t activation = round.peers[0].GetResumeFrame() + 60;
+				const uint64_t activation = atHorizon ? round.peers[0].FutureTimingFrame() : round.peers[0].GetResumeFrame() + 60;
 				round.peers[0].NoteAdmissionLink(4, 4, round.now);
 				if (!round.peers[0].SchedulePeerAdmission(4, 4, 2, activation, &round.failure)) return done("the opened place did not agree its activation: " + round.failure);
-				for (int pass = 0; pass < 4; ++pass) round.Pump();
+				if (!atHorizon) for (int pass = 0; pass < 4; ++pass) round.Pump();
 				round.peers[0].EvictRemovedPeer(4, action, round.now);
-				for (int pass = 0; pass < 200 && round.peers[2].GetResumeFrame() <= activation + 3; ++pass) round.Pump();
+				for (int pass = 0; pass < 200 && round.peers[2].GetResumeFrame() <= activation + 8; ++pass) round.Pump();
 				for (size_t index: {size_t{0}, size_t{1}, size_t{2}}) {
 					if (round.peers[index].GetResumeFrame() <= activation) return done(std::string(action) + " leaves the round blocked at the revoked activation");
-					if (round.peers[index].SeatPlaysAtFrame(4, activation) || round.peers[index].ReclaimTransactions().contains(4)) return done(std::string(action) + " installs the revoked newcomer at E=" + std::to_string(activation));
+					if (atHorizon) {
+						if (!round.committed[index].contains(activation) || round.peers[index].SeatPlaysAtFrame(4, activation + 1) ||
+						    !round.peers[index].PeerLeaveFrames().contains(4) || round.peers[index].PeerLeaveFrames().at(4) != activation + 1)
+							return done(std::string(action) + " does not evict the committed admission before its first controllable input");
+					} else if (round.peers[index].SeatPlaysAtFrame(4, activation) || round.peers[index].ReclaimTransactions().contains(4)) return done(std::string(action) + " installs the revoked newcomer at E=" + std::to_string(activation));
 					for (const auto& [tick, ready]: round.committed[index]) for (const auto* commands: {&ready.localCommands, &ready.remoteCommands}) for (const auto& command: *commands)
-						if (const auto* reclaim = std::get_if<NetGameSeatReclaim>(&command.payload); reclaim && reclaim->peerId == 4 && tick >= activation) return done("the withdrawn activation remains in the recording and tail");
+						if (!atHorizon) if (const auto* reclaim = std::get_if<NetGameSeatReclaim>(&command.payload); reclaim && reclaim->peerId == 4 && tick >= activation) return done("the withdrawn activation remains in the recording and tail");
+				}
+				for (uint64_t tick = activation; tick <= activation + 7; ++tick) {
+					std::vector<uint8_t> reference;
+					for (size_t index: {size_t{0}, size_t{1}, size_t{2}}) {
+						std::vector<uint8_t> bytes;
+						if (!round.committed[index].contains(tick) || !EncodeCommittedJoinFrame(PackWorldJoinReadyFrame(round.committed[index].at(tick)), bytes, &round.failure)) return done("the revoked admission is absent from a survivor's committed tail");
+						if (index == 0) reference = bytes;
+						else if (reference != bytes) return done("the admission withdrawal differs in the recording and catch-up tail at " + std::to_string(tick));
+					}
 				}
 			}
 			return done("");

@@ -6013,6 +6013,16 @@ namespace RTE {
 			}
 			for (auto& [revision, pending]: m_TimingDecisions) pending.acknowledgedPeers |= timing.heldPeers;
 		} else if (timing.action == NetTimingAction::Release) {
+			// A released place cannot acquire a revoked owner at a later agreed admission.
+			if (const auto back = m_ReclaimTransactions.find(timing.peerId); back != m_ReclaimTransactions.end() &&
+			    back->second.activationFrame > timing.applyFrame && back->second.seatIncarnation == timing.seatIncarnations[timing.peerId - 1]) {
+				const uint64_t activation = back->second.activationFrame;
+				m_TimingDecisions.erase(back->second.eventSequence);
+				m_SeatTransitions[timing.peerId].erase(activation);
+				m_PeerAdmissions.erase(timing.peerId);
+				m_PeerEffectiveStart.erase(timing.peerId);
+				m_ReclaimTransactions.erase(back);
+			}
 			// Every peer ends the seat's claims at this frame; a replay reads it from the record the frame carries.
 			m_SeatReleases[timing.peerId][timing.applyFrame] = {timing.peerId, timing.authorityGeneration, timing.revision, timing.seatIncarnations[timing.peerId - 1], timing.applyFrame};
 			DiagnosticLine() << "[net-lockstep] release of peer " << static_cast<int>(timing.peerId) << " at " << timing.applyFrame << " revision=" << timing.revision
@@ -9476,7 +9486,7 @@ namespace RTE {
 					NoteSeatTransition(reclaim->peerId, outFrame.frame, SeatTransition::Back);
 					m_Config.peerIncarnations[reclaim->peerId] = reclaim->seatIncarnation;
 					m_AiHeldSeats.erase(reclaim->peerId); m_ReleasedAiSeats.erase(reclaim->peerId); m_HoldTransactions.erase(reclaim->peerId);
-					m_RemovedPeers.erase(reclaim->peerId);
+					if (!m_EvictAfterReclaim.contains(reclaim->peerId)) m_RemovedPeers.erase(reclaim->peerId);
 					m_PeerLeaveFrames.erase(reclaim->peerId); m_PeerFrameWaivers.erase(reclaim->peerId);
 					m_DroppedSeats.erase(reclaim->peerId); m_LeftSeatsHeld.erase(reclaim->peerId); m_DroppedAtMs.erase(reclaim->peerId);
 					m_DroppedSeatResolutions[reclaim->peerId] = NetLockstepHoldResolution::Reclaimed;
@@ -11740,13 +11750,36 @@ namespace RTE {
 		if (!IsRunning()) {
 			return;
 		}
-		if (m_AiHeldSeats.contains(peerId)) {
-			if (m_ReleasedAiSeats.contains(peerId)) return;
-			// A return some peer may already have committed stands; the removal meets the seat once it is back.
-			if (const auto reclaim = m_ReclaimTransactions.find(peerId); reclaim != m_ReclaimTransactions.end() && reclaim->second.activationFrame <= FutureTimingFrame()) {
+		if (const auto reclaim = m_ReclaimTransactions.find(peerId); reclaim != m_ReclaimTransactions.end() &&
+		    m_LastDeliveredFrame.value_or(0) < reclaim->second.activationFrame) {
+			const uint64_t withdrawal = FutureTimingFrame();
+			// A return some peer may already have committed stands; the removal meets it after activation.
+			if (reclaim->second.activationFrame <= withdrawal || m_NextTimingRevision == UINT64_MAX) {
 				m_EvictAfterReclaim[peerId] = message;
 				return;
 			}
+			if (m_ReleasedAiSeats.contains(peerId)) {
+				if (std::any_of(m_TimingDecisions.begin(), m_TimingDecisions.end(), [&](const auto& pending) {
+					return pending.second.proposal.action == NetTimingAction::Release && pending.second.proposal.peerId == peerId &&
+					    pending.second.proposal.seatIncarnations[peerId - 1] == reclaim->second.seatIncarnation;
+				})) return;
+				NetLockstepTiming timing;
+				timing.senderPeerId = GetHostPeerId(); timing.peerId = peerId;
+				timing.action = NetTimingAction::Release; timing.phase = NetTimingPhase::Propose;
+				timing.sessionId = m_Config.sessionId; timing.roundId = m_RoundId; timing.authorityGeneration = m_Config.migrationGeneration;
+				timing.revision = m_NextTimingRevision++; timing.applyFrame = withdrawal; timing.nextFrame = m_Stats.nextFrame;
+				timing.seatIncarnations[peerId - 1] = reclaim->second.seatIncarnation;
+				timing.requiredPeers = static_cast<uint8_t>(1U << (m_Config.localPeerId - 1));
+				for (uint8_t peer: m_RemotePeerIds)
+					if (peer != peerId && m_RemoteStartsReceived.contains(peer) && !IsPeerGoneAtFrame(peer, withdrawal)) timing.requiredPeers |= static_cast<uint8_t>(1U << (peer - 1));
+				m_TimingDecisions[timing.revision] = {timing, static_cast<uint8_t>(1U << (m_Config.localPeerId - 1)), false, nowMs};
+				QueueTiming(timing);
+				CommitTiming(timing.revision);
+				return;
+			}
+		}
+		if (m_AiHeldSeats.contains(peerId)) {
+			if (m_ReleasedAiSeats.contains(peerId)) return;
 			ReleaseHeldSeat(peerId, nowMs, true, "removed while held");
 			return;
 		}
