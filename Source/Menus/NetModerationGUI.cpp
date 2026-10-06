@@ -1217,14 +1217,17 @@ bool NetModerationGUI::HandleEvents() {
 }
 
 void NetModerationGUI::Update() {
-	const auto started = std::chrono::steady_clock::now();
+	// Without the cost lever the panel reads no clock for it.
 	struct FrameTime {
-		NetModerationGUI& panel;
-		std::chrono::steady_clock::time_point started;
+		FrameCost* cost;
+		std::chrono::steady_clock::time_point started = cost ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		~FrameTime() {
-			if (panel.m_Cost) panel.m_Cost->frameUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+			if (!cost) return;
+			const long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
+			cost->frameNs += ns;
+			cost->framePartsUs += ns / 1000;
 		}
-	} frameTime{*this, started};
+	} frameTime{m_Cost.get()};
 	if (m_Cost) ++m_Cost->updates;
 	// The loop comes by many times a drawn frame while it waits: the panel follows the match once a drawn frame, from the snapshot
 	// that frame read, or every 16 ms from its own when nothing draws.
@@ -2276,14 +2279,13 @@ namespace {
 }
 
 void NetModerationGUI::Draw() {
-	const auto drawStarted = std::chrono::steady_clock::now();
 	struct DrawTime {
 		NetModerationGUI& panel;
-		std::chrono::steady_clock::time_point started;
+		std::chrono::steady_clock::time_point started = panel.m_Cost ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		~DrawTime() {
-			if (panel.m_Cost) panel.NoteFrameCost(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
+			if (panel.m_Cost) panel.NoteFrameCost(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count());
 		}
-	} drawTime{*this, drawStarted};
+	} drawTime{*this};
 	s_OverlayPhases.Begin();
 	// The panel's update follows the match from this frame's read until the next frame draws.
 	m_FrameSnapshot = std::make_unique<NetLobbySnapshot>(g_NetMatchService.GetLobbySnapshot());
@@ -2368,12 +2370,15 @@ void NetModerationGUI::Draw() {
 	s_OverlayPhases.End();
 }
 
-void NetModerationGUI::NoteFrameCost(long long drawUs) {
-	std::vector<long long>& samples = m_Open ? m_Cost->openUs : m_Cost->closedUs;
-	std::vector<long long>& updates = m_Open ? m_Cost->openUpdateUs : m_Cost->closedUpdateUs;
-	samples.push_back(m_Cost->frameUs + drawUs);
-	updates.push_back(m_Cost->frameUs);
-	m_Cost->frameUs = 0;
+void NetModerationGUI::NoteFrameCost(long long drawNs) {
+	std::vector<long long>& samples = m_Open ? m_Cost->openNs : m_Cost->closedNs;
+	std::vector<long long>& updates = m_Open ? m_Cost->openUpdateNs : m_Cost->closedUpdateNs;
+	std::vector<long long>& parts = m_Open ? m_Cost->openPartsUs : m_Cost->closedPartsUs;
+	samples.push_back(m_Cost->frameNs + drawNs);
+	updates.push_back(m_Cost->frameNs);
+	parts.push_back(m_Cost->framePartsUs + drawNs / 1000);
+	m_Cost->frameNs = 0;
+	m_Cost->framePartsUs = 0;
 	if (samples.size() < 600) return;
 	std::vector<long long> sorted = samples;
 	std::sort(sorted.begin(), sorted.end());
@@ -2384,12 +2389,20 @@ void NetModerationGUI::NoteFrameCost(long long drawUs) {
 	const auto at = [&sorted](double share) { return sorted[std::min(sorted.size() - 1, static_cast<size_t>(share * static_cast<double>(sorted.size())))]; };
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 	const auto players = std::count_if(snapshot.members.begin(), snapshot.members.end(), [](const auto& member) { return !member.cpu; });
+	const auto us = [](long long ns) {
+		char text[32];
+		std::snprintf(text, sizeof(text), "%.1f", static_cast<double>(ns) / 1000.0);
+		return std::string(text);
+	};
+	// parts_median_us is the same frames with every pass rounded down first, to show what such a sum leaves out.
 	System::PrintDiagnosticLine("[panel-cost] " + std::string(m_Open ? "open" : "closed") + " players=" + std::to_string(players) + " frames=" +
-	                            std::to_string(sorted.size()) + " median_us=" + std::to_string(at(0.5)) + " p99_us=" + std::to_string(at(0.99)) +
-	                            " status_shown=" + (m_NetStatus && m_NetStatus->GetVisible() ? "1" : "0") + " update_median_us=" + std::to_string(median(updates)) + " updates=" + std::to_string(m_Cost->updates));
+	                            std::to_string(sorted.size()) + " median_us=" + us(at(0.5)) + " p99_us=" + us(at(0.99)) +
+	                            " status_shown=" + (m_NetStatus && m_NetStatus->GetVisible() ? "1" : "0") + " update_median_us=" + us(median(updates)) +
+	                            " updates=" + std::to_string(m_Cost->updates) + " parts_median_us=" + std::to_string(median(parts)));
 	m_Cost->updates = 0;
 	samples.clear();
 	updates.clear();
+	parts.clear();
 }
 
 bool NetModerationGUI::AutomationModerate(const std::string& action, int stableSeat) {

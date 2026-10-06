@@ -319,13 +319,14 @@ namespace RTE {
 		int m_RefreshChangeCount = 0;
 		uint64_t m_LastRefreshHash = 0;
 		long long m_LastRefreshMs = 0;
-		/// The CC_TEST_PANEL_COST lever: per-frame time of the panel's update and draw, closed and open apart.
+		/// The CC_TEST_PANEL_COST lever: per-frame time of the panel's update and draw, closed and open apart, summed in nanoseconds.
 		struct FrameCost {
-			std::vector<long long> closedUs, openUs, closedUpdateUs, openUpdateUs;
-			long long frameUs = 0;
+			std::vector<long long> closedNs, openNs, closedUpdateNs, openUpdateNs, closedPartsUs, openPartsUs;
+			long long frameNs = 0; //!< The Update passes since the last draw.
+			long long framePartsUs = 0; //!< The same passes each rounded down to whole microseconds, as a sum of rounded passes counts them.
 			long long updates = 0; //!< Update passes in the window: the loop comes by many times a drawn frame.
 		};
 		std::unique_ptr<FrameCost> m_Cost;
-		void NoteFrameCost(long long drawUs);
+		void NoteFrameCost(long long drawNs);
 	};
 }
