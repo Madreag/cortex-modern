@@ -418,6 +418,8 @@ namespace RTE {
 		std::string m_ExpectedValue;
 		std::string m_ActualValue;
 		std::string m_RejectSummary;
+		mutable std::string m_PlacedJoinerHash; //!< The refused joiner's config hash last placed against this build's versions.
+		mutable int m_PlacedJoinerOrder = 0; //!< Negative when that joiner's game is older, positive when newer, zero when unplaced.
 		std::string m_RefusedPlayerName;
 		NetHash32 m_RemoteIdentityHash{};
 		bool m_HasRemoteIdentityHash = false;
