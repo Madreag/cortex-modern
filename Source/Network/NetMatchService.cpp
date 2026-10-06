@@ -2618,7 +2618,10 @@ static std::string ResyncSaveName() {
 				}
 			}
 			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
-			if (m_IsHost && !handover) m_ReconnectHost.SetMatchEnded();
+			if (m_IsHost && !handover) {
+				m_ReconnectHost.SetMatchEnded();
+				if (m_MatchWasRunning) NoteHostEndedTheMatchLocked();
+			}
 			m_LeftMatch = true;
 			DrainPendingSessionEventsLocked(false);
 		}

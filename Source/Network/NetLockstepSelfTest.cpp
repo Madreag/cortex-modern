@@ -26080,8 +26080,10 @@ namespace {
 				if (!Install(service, round, admission, 1, &round.failure)) return done(round.failure);
 				if (service.HostLeaveOutcome() != NetHostLeaveOutcome::EndsMatch) return done("one connected survivor permits an announced handover");
 				service.LeaveMatch("Left the match");
+				service.ScanStoredTicket();
 				if (!service.m_IsHost || service.m_State != NetMatchServiceState::Completed || service.LeaveKeepsRejoin() ||
-				    service.m_ReconnectUx.GetOffer() == NetReconnectOffer::Available || service.m_ReconnectHost.GetRoster().stage != NetRosterStage::Ended)
+				    service.m_TicketStore.HasRecord() || service.m_ReconnectUx.GetOffer() == NetReconnectOffer::Available ||
+				    service.m_ReconnectHost.GetRoster().stage != NetRosterStage::Ended)
 					return done("the announced host with one survivor keeps a live match or a rejoin offer");
 			}
 			Reset();
