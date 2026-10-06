@@ -428,7 +428,7 @@ class DirectoryTests(unittest.TestCase):
             conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
             try:
                 conn.request("GET", f"/v1/sessions/{row['session_id']}/signals?peer=client:{index:016x}&wait=25",
-                             headers={"X-Install-Key": f"{index:016x}", "CF-Connecting-IP": source})
+                             headers={"X-Install-Key": f"{index % 2 if index < 1064 else index:016x}", "CF-Connecting-IP": source})
                 response = conn.getresponse()
                 answers.append((response.status, json.loads(response.read())))
             except (OSError, http.client.HTTPException) as error:
