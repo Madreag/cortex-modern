@@ -6808,6 +6808,18 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			} else {
 				returnToMenuAfterNetworkEnd = true;
 			}
+		} else if (const size_t refused = error.find("WorldJoinRefused:"); refused != std::string::npos) {
+			const std::string reason = error.substr(refused + std::string("WorldJoinRefused:").size());
+			g_ConsoleMan.PrintString("NETWORK: " + reason);
+			g_NetMatchService.ReportRuntimeError(reason);
+			g_ActivityMan.EndActivity();
+			g_ActivityMan.SetInActivity(false);
+			ScenarioRunner::ClearControllerReplayError();
+			if (s_netMatchServiceE2E) {
+				s_netMatchServiceE2EError = reason;
+				s_netMatchServiceE2EExitCode = 1;
+				System::SetQuit(true);
+			} else returnToMenuAfterNetworkEnd = true;
 		} else if (error.find("PeerLeft:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 			// The last peer announced its leave, so the match is over rather than broken: it ends the
 			// way a finished one does, which keeps the seats and the admission counters in the report.

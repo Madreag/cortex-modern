@@ -49,6 +49,8 @@ namespace RTE {
 		void SetTransportFactory(NetDirectoryClient::TransportFactory factory);
 		/// The host end: reads peer=host, proving the session token in X-Session-Token (never the URL).
 		void ConfigureHost(std::string baseUrl, std::string installKey, std::string certPinSha256, std::string sessionId, std::string sessionToken);
+		/// Moves the host's pending posts to its recovered lease, keeping the sink, poll arming and retry deadlines.
+		void RebindHost(const std::string& sessionId, const std::string& sessionToken);
 		/// A joiner end: mints a fresh join nonce (GetJoinNonce) and signals as "client:<nonce>".
 		void ConfigureClient(std::string baseUrl, std::string installKey, std::string certPinSha256, std::string sessionId);
 		void SetSink(Sink sink) { m_Sink = std::move(sink); }

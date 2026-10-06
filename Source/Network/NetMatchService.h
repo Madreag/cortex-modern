@@ -1367,6 +1367,15 @@ namespace RTE {
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestGnsStopCancelContracts(std::string* error);
 		friend bool TestEndedWorldLateAdmission(std::string* error);
+		friend bool TestRecoveredDirectoryBinding(std::string* error);
+		friend bool TestSignalPumpInitialCredential(std::string* error);
+		friend bool TestDirectoryCapacityFallback(std::string* error);
+		friend bool TestStaleWorldImageRecaptures(std::string* error);
+		friend bool TestWorldCatchUpRefusal(std::string* error);
+		friend bool TestWorldDisconnectReason(bool watcher, std::string* error);
+		void InstallIcePump(NetMuxTransport& mux, bool host);
+		void RefuseWorldCatchUpLocked(const std::string& rejectText);
+		std::string RefreshDirectorySignalCredentialLocked(uint64_t nowMs);
 		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
 		friend bool TestIceDefaultsAndOverrides(std::string* error);
 		friend bool TestRelayOfferAndPolicy(std::string* error);
@@ -1707,6 +1716,7 @@ namespace RTE {
 #endif
 		bool m_IceEnabled = false;          //!< This run offers (host) or takes (client) a session-id join.
 		std::string m_IceBoundSessionId;    //!< The session id the process's GNS identity is pinned to.
+		bool m_DirectoryJoinIsWorld = false;
 		std::string m_IceIdentity;
 		std::string m_IceJoinSessionId;     //!< Client: the session id -net-join-session named.
 		std::string m_IceReport;            //!< The dispatcher's last report, taken when a worker or teardown takes the dispatcher.

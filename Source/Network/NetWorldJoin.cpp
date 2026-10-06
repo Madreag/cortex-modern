@@ -894,6 +894,7 @@ namespace RTE {
 		struct ReadResult { std::vector<std::vector<uint8_t>> records; uint64_t last = 0; };
 		struct Job {
 			uint64_t frame = 0, maxBytes = 0;
+			uint64_t retain = 0, bound = 0;
 			size_t maxRecords = 0;
 			bool prune = false; //!< Drops the segments wholly before frame.
 			std::vector<uint8_t> bytes;
@@ -902,9 +903,14 @@ namespace RTE {
 		// One file of consecutive frames; the oldest go a whole file at a time.
 		struct Segment {
 			uint64_t first = 0, endOffset = 0;
+			uint64_t frames = 0, ordinal = 0;
+			uint64_t scanEpoch = 0, scannedBytes = 0;
+			bool scannedPresent = false;
+			uint32_t deleteAttempts = 0;
 			std::string path;
 			std::unique_ptr<std::fstream> stream;
 			std::vector<std::pair<uint64_t, uint32_t>> records; //!< Offset and size of each frame from first on.
+			uint64_t FrameCount() const { return records.empty() ? frames : records.size(); }
 		};
 		// A fault the test lever CCCP_TEST_JOURNAL_FAULT injects into a round's first journal: "write:F" closes the file under frame F's
 		// write, "queue:F" stops the writer before frame F and holds the queue from F to 64 KiB, so it fills. A reopened journal never takes it.
@@ -937,6 +943,8 @@ namespace RTE {
 		std::atomic<uint64_t> bytesOnDisk{0}; //!< Its files' bytes, as the worker last left them.
 		std::atomic<uint32_t> filesOnDisk{0};
 		std::atomic<uint64_t> indexBytes{0}; //!< The worker's per-frame offsets, as it last left them.
+		std::atomic<uint32_t> pendingDeleteCount{0}, orphanedFileCount{0};
+		std::atomic<uint64_t> deleteAttemptCount{0};
 		std::map<std::tuple<uint64_t, size_t, uint64_t>, std::shared_future<ReadResult>> reads;
 		const Fault fault;
 		std::thread worker;
@@ -958,10 +966,13 @@ namespace RTE {
 			if (failure.empty()) failure = why;
 			failed = true;
 		}
-		void Prune(uint64_t before) {
+		void Prune(uint64_t before, uint64_t retain, uint64_t bound) {
 			std::lock_guard lock(mutex);
 			Job job; job.frame = before; job.prune = true;
-			jobs.push_back(std::move(job));
+			job.retain = retain; job.bound = bound;
+			auto pending = std::find_if(jobs.begin(), jobs.end(), [](const Job& value) { return value.prune; });
+			if (pending == jobs.end()) jobs.push_back(std::move(job));
+			else { job.frame = std::max(job.frame, pending->frame); *pending = std::move(job); }
 			changed.notify_one();
 		}
 		bool Append(uint64_t frame, const std::vector<uint8_t>& bytes) {
@@ -1003,34 +1014,130 @@ namespace RTE {
 		}
 		void Run() {
 			std::deque<Segment> segments;
+			std::deque<Segment> pendingDeletes;
+			Job lastPrune;
+			auto nextDeleteRetry = std::chrono::steady_clock::now();
 			uint64_t opened = 0;
-			const auto close = [](Segment& segment) {
+			uint64_t orphanFiles = 0, orphanBytes = 0;
+			uint64_t scanCursor = 0, scanLimit = 0, scanFiles = 0, scanBytes = 0, outsideFiles = 0, outsideBytes = 0;
+			uint64_t scanEpoch = 0;
+			bool inventoryComplete = true;
+			const auto close = [&](Segment& segment) {
 				segment.stream.reset();
-				std::error_code ignored;
-				std::filesystem::remove(segment.path, ignored);
+				++segment.deleteAttempts; ++deleteAttemptCount;
+				std::error_code error;
+				const bool removed = std::filesystem::remove(segment.path, error);
+				if (removed && segment.scanEpoch == scanEpoch && segment.scannedPresent) {
+					--scanFiles; scanBytes -= segment.scannedBytes; segment.scannedPresent = false;
+				}
+				return !error;
+			};
+			const auto retire = [&](const Segment& segment, const char* reason) {
+				++orphanFiles; orphanBytes += segment.endOffset;
+				if (scanCursor != 0 && segment.ordinal >= scanLimit) { ++outsideFiles; outsideBytes += segment.endOffset; }
+				System::PrintDiagnosticLine("[round-history] journal delete retired file=" + std::filesystem::path(segment.path).filename().string() +
+				    " reason=" + reason + " pending_limit=" + std::to_string(c_JournalPendingDeleteFiles) + " attempt_limit=" + std::to_string(c_JournalDeleteAttempts));
+			};
+			const auto defer = [&](Segment& segment) {
+				segment.frames = segment.records.size();
+				decltype(segment.records){}.swap(segment.records);
+				pendingDeletes.push_back(std::move(segment));
+				while (pendingDeletes.size() > c_JournalPendingDeleteFiles) { retire(pendingDeletes.front(), "pending-cap"); pendingDeletes.pop_front(); }
+			};
+			const auto publish = [&](bool receipt, uint64_t dropped) {
+				uint64_t bytes = 0, index = 0, frames = 0, first = 0, last = 0, unreadable = 0;
+				uint64_t trackedFiles = 0, trackedBeforeLimit = 0, bytesBeforeLimit = 0;
+				for (const auto* files: {&segments, &pendingDeletes}) for (const Segment& segment: *files) {
+					bool present = true;
+					uint64_t size = segment.endOffset;
+					if (receipt) {
+						if (segment.stream) segment.stream->flush();
+						std::error_code error;
+						size = std::filesystem::file_size(segment.path, error);
+						if (error) { ++unreadable; size = 0; present = error != std::errc::no_such_file_or_directory; }
+					}
+					if (present) { ++trackedFiles; bytes += size; }
+					if (present && segment.ordinal < scanLimit) { ++trackedBeforeLimit; bytesBeforeLimit += size; }
+					index += segment.records.capacity() * sizeof(decltype(segment.records)::value_type);
+					frames += segment.FrameCount();
+					if (first == 0 || segment.first < first) first = segment.first;
+					last = std::max(last, segment.first + segment.FrameCount() - 1);
+				}
+				if (receipt && orphanFiles != 0) {
+					if (scanCursor == 0) { scanLimit = opened; scanFiles = scanBytes = outsideFiles = outsideBytes = 0; ++scanEpoch; }
+					for (uint32_t count = 0; count < c_JournalInventoryBatchFiles && scanCursor < scanLimit; ++count, ++scanCursor) {
+						const std::string file = scanCursor == 0 ? path : path + "." + std::to_string(scanCursor);
+						std::error_code error; const uint64_t size = std::filesystem::file_size(file, error);
+						if (!error) { ++scanFiles; scanBytes += size; }
+						else if (error != std::errc::no_such_file_or_directory) ++unreadable;
+						for (auto* files: {&segments, &pendingDeletes}) for (Segment& segment: *files) if (segment.ordinal == scanCursor) {
+							segment.scanEpoch = scanEpoch; segment.scannedPresent = !error; segment.scannedBytes = error ? 0 : size;
+						}
+					}
+					inventoryComplete = scanCursor == scanLimit;
+					if (inventoryComplete) {
+						trackedBeforeLimit = 0; bytesBeforeLimit = 0;
+						for (const auto* files: {&segments, &pendingDeletes}) for (const Segment& segment: *files) if (segment.ordinal < scanLimit) {
+							std::error_code error; const uint64_t size = std::filesystem::file_size(segment.path, error);
+							if (!error) { ++trackedBeforeLimit; bytesBeforeLimit += size; }
+						}
+						orphanFiles = (scanFiles > trackedBeforeLimit ? scanFiles - trackedBeforeLimit : 0) + outsideFiles;
+						orphanBytes = (scanBytes > bytesBeforeLimit ? scanBytes - bytesBeforeLimit : 0) + outsideBytes;
+						scanCursor = 0;
+					}
+				}
+				bytes += orphanBytes; frames += orphanFiles * c_JournalSegmentFrames;
+				bytesOnDisk = bytes; filesOnDisk = static_cast<uint32_t>(trackedFiles + orphanFiles); indexBytes = index;
+				pendingDeleteCount = static_cast<uint32_t>(pendingDeletes.size()); orphanedFileCount = static_cast<uint32_t>(orphanFiles);
+				if (receipt && lastPrune.prune)
+					System::PrintDiagnosticLine("[round-history] journal pruned file=" + std::filesystem::path(path).filename().string() + " first=" + std::to_string(first) +
+					    " last=" + std::to_string(last) + " frames=" + std::to_string(frames) + " dropped_frames=" + std::to_string(dropped) +
+					    " bound_frames=" + std::to_string(lastPrune.bound) + " retain_frames=" + std::to_string(lastPrune.retain) + " file_frames=" + std::to_string(c_JournalSegmentFrames) +
+					    " disk_files=" + std::to_string(filesOnDisk.load()) + " disk_bytes=" + std::to_string(bytes) + " pending_delete_files=" + std::to_string(pendingDeletes.size()) +
+					    " orphan_files=" + std::to_string(orphanFiles) + " inventory_complete=" + (inventoryComplete ? "1" : "0") +
+					    " unreadable_files=" + std::to_string(unreadable) + " within_bound=" + (inventoryComplete && unreadable == 0 && (lastPrune.bound == 0 || frames <= lastPrune.bound) ? "1" : "0"));
 			};
 			try {
 				std::filesystem::create_directories(std::filesystem::path(path).parent_path());
 				while (true) {
 					Job job;
+					bool haveJob = false;
 					{
 						std::unique_lock lock(mutex);
 						// The lever's stalled writer leaves frame stallAt and everything after it queued.
 						const auto stalled = [&] { return fault.stallAt != 0 && !jobs.front().prune && !jobs.front().result && jobs.front().frame >= fault.stallAt; };
-						changed.wait(lock, [&] { return stopping || (!jobs.empty() && !stalled()); });
+						const auto ready = [&] { return stopping || (!jobs.empty() && !stalled()); };
+						if (pendingDeletes.empty()) changed.wait(lock, ready);
+						else changed.wait_for(lock, std::chrono::seconds(1), ready);
 						if (stopping) break;
-						job = std::move(jobs.front()); jobs.pop_front(); queuedBytes -= job.bytes.size();
+						if (!jobs.empty() && !stalled()) {
+							job = std::move(jobs.front()); jobs.pop_front(); queuedBytes -= job.bytes.size(); haveJob = true;
+						}
 					}
-					if (job.prune) {
+					uint64_t dropped = 0;
+					bool receipt = false;
+					if (!pendingDeletes.empty() && std::chrono::steady_clock::now() >= nextDeleteRetry) {
+						receipt = true;
+						std::erase_if(pendingDeletes, [&](Segment& segment) {
+							if (close(segment)) { dropped += segment.FrameCount(); return true; }
+							if (segment.deleteAttempts >= c_JournalDeleteAttempts) { retire(segment, "attempt-limit"); return true; }
+							return false;
+						});
+						nextDeleteRetry = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+					}
+					if (haveJob && job.prune) {
+						lastPrune = job; receipt = true;
 						// The segment being written stays: frames only ever join the newest one.
 						while (segments.size() > 1 && segments.front().first + segments.front().records.size() <= job.frame) {
-							close(segments.front());
+							if (close(segments.front())) dropped += segments.front().records.size();
+							else { defer(segments.front()); nextDeleteRetry = std::chrono::steady_clock::now() + std::chrono::seconds(1); }
 							segments.pop_front();
 						}
-					} else if (!job.result) {
+					} else if (haveJob && !job.result) {
 						if (segments.empty() || segments.back().records.size() >= c_JournalSegmentFrames) {
 							Segment segment;
 							segment.first = job.frame;
+							segment.ordinal = opened;
 							segment.path = opened == 0 ? path : path + "." + std::to_string(opened);
 							++opened;
 							segment.stream = std::make_unique<std::fstream>(segment.path, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
@@ -1044,7 +1151,7 @@ namespace RTE {
 						if (!*segment.stream) { Fail("its write of frame " + std::to_string(job.frame) + " failed"); break; }
 						segment.records.emplace_back(segment.endOffset, static_cast<uint32_t>(job.bytes.size()));
 						segment.endOffset += job.bytes.size();
-					} else {
+					} else if (haveJob) {
 						ReadResult result;
 						uint64_t total = 0, expected = job.frame;
 						for (Segment& segment: segments) {
@@ -1063,21 +1170,15 @@ namespace RTE {
 						}
 						job.result->set_value(std::move(result));
 					}
-					if (!job.result) {
-						uint64_t bytes = 0, index = 0;
-						for (const Segment& segment: segments) {
-							bytes += segment.endOffset;
-							index += segment.records.capacity() * sizeof(decltype(segment.records)::value_type);
-						}
-						bytesOnDisk = bytes;
-						filesOnDisk = static_cast<uint32_t>(segments.size());
-						indexBytes = index;
-					}
+					if (!job.result || receipt) publish(receipt, dropped);
 				}
 			} catch (const std::exception& error) {
 				Fail(std::string("its writer stopped: ") + error.what());
 			} catch (...) { Fail("its writer stopped"); }
-			for (Segment& segment: segments) close(segment);
+			for (Segment& segment: segments) if (!close(segment)) defer(segment);
+			segments.clear();
+			std::erase_if(pendingDeletes, [&](Segment& segment) { return close(segment); });
+			publish(!pendingDeletes.empty(), 0);
 			finished = true;
 		}
 	};
@@ -1188,6 +1289,9 @@ namespace RTE {
 		stats.first = m_JournalFirst;
 		stats.last = m_JournalLast;
 		stats.indexBytes = m_Journal->indexBytes;
+		stats.pendingDeleteFiles = m_Journal->pendingDeleteCount;
+		stats.orphanedFiles = m_Journal->orphanedFileCount;
+		stats.deleteAttempts = m_Journal->deleteAttemptCount;
 		// The reads are kept by the caller's thread, which this is.
 		stats.cachedReads = static_cast<uint32_t>(m_Journal->reads.size());
 		for (const auto& [key, read]: m_Journal->reads) {
@@ -1245,14 +1349,8 @@ namespace RTE {
 		const auto fileStart = [this](uint64_t at) { return m_JournalBase + (at - m_JournalBase) / c_JournalSegmentFrames * c_JournalSegmentFrames; };
 		const uint64_t first = std::min(fileStart(frame), fileStart(m_JournalLast));
 		if (first <= m_JournalFirst) return;
-		const uint64_t dropped = first - m_JournalFirst;
 		m_JournalFirst = first;
-		m_Journal->Prune(first);
-		const uint64_t frames = m_JournalLast + 1 - m_JournalFirst;
-		System::PrintDiagnosticLine("[round-history] journal pruned first=" + std::to_string(m_JournalFirst) + " last=" + std::to_string(m_JournalLast) +
-		                            " frames=" + std::to_string(frames) + " dropped_frames=" + std::to_string(dropped) + " bound_frames=" + std::to_string(JournalBoundFrames()) +
-		                            " retain_frames=" + std::to_string(m_JournalRetain) + " file_frames=" + std::to_string(c_JournalSegmentFrames) +
-		                            " disk_bytes_before=" + std::to_string(m_Journal->bytesOnDisk.load()) + " within_bound=" + (JournalBoundFrames() == 0 || frames <= JournalBoundFrames() ? "1" : "0"));
+		m_Journal->Prune(first, m_JournalRetain, JournalBoundFrames());
 	}
 
 	bool NetWorldFrameLog::AdoptRecords(const NetWorldFrameLog& other) {
@@ -2473,11 +2571,11 @@ namespace RTE {
 		return slow;
 	}
 
-	size_t NetWorldJoinHost::ExpireStaleJoins(uint64_t nowMs) {
+	size_t NetWorldJoinHost::ExpireStaleJoins(uint64_t nowMs, std::vector<NetPeerId>* expired) {
 		std::vector<NetPeerId> stale;
 		for (const NetWorldJoinSession& session: m_Sessions) {
 			if (session.phase == NetWorldJoinPhase::Active || session.phase == NetWorldJoinPhase::Spectating ||
-			    session.spectator || session.openedAtMs == 0) {
+			    session.openedAtMs == 0) {
 				continue;
 			}
 			const uint64_t progress = IsPrivateMatch() ? std::max(session.openedAtMs, session.lastCatchUpReportMs) : session.openedAtMs;
@@ -2488,6 +2586,7 @@ namespace RTE {
 		for (const NetPeerId connection: stale) {
 			CancelJoin(connection, "the world join deadline expired");
 		}
+		if (expired) expired->insert(expired->end(), stale.begin(), stale.end());
 		return stale.size();
 	}
 

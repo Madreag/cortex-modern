@@ -39,6 +39,7 @@ SELFTESTS = [
     "net-reconnect",
     "net-reconnect-session",
     "net-world-join",
+    "net-directory",
     "net-rejoin-matrix",
     "net-roster",
     "camera-null-scene",
@@ -413,6 +414,17 @@ def run_row(options, make_run, name, case, sanitizer):
         scored["binary"] = record.get("exe_sha256")
         if walk:
             scored.update(budget_s=budget, elapsed_s=record.get("elapsed_seconds"), walked_classes=len(BINDING_WALK_CLASS.findall(stdout)))
+    if name == "net-directory":
+        service_log = case / "service-tests.log"
+        with service_log.open("w", encoding="utf-8") as stream:
+            service = subprocess.run([sys.executable, str(options.repo / "tools/session_directory/test_session_directory.py")],
+                                     cwd=options.repo, stdout=stream, stderr=subprocess.STDOUT, timeout=options.timeout,
+                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        scored["service_exit_code"] = service.returncode
+        scored["service_log"] = str(service_log)
+        if service.returncode != 0:
+            scored["pass"] = False
+            scored["reason"] += f"; directory service tests exited {service.returncode}: {service_log}"
     return scored
 
 
