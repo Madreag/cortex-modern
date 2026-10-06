@@ -25836,6 +25836,12 @@ namespace {
 				return done("the admitted opened seat has no image join; PrepareHeldPeerRejoin accepts it while the private join driver skips it");
 			ReleasePathClaimView view;
 			if (!view.Create("newcomer's controllable actor", round.peers[0], 3, 4, 4)) return done("the newcomer actor did not create");
+			const Entity* preset = g_PresetMan.GetEntityPreset("AHuman", "Soldier Light", "Coalition.rte");
+			view.actor.reset(preset ? dynamic_cast<Actor*>(preset->Clone()) : nullptr);
+			if (!view.actor) return done("the newcomer gameplay actor did not load");
+			view.actor->SetTeam(view.team); view.actor->SetPos(Vector(500, 100));
+			view.actor->GetController()->ApplyWireMode(Controller::CIM_AI, Players::NoPlayer);
+			view.uid = view.actor->GetUniqueID();
 			Actor* live = view.actor.release(); g_MovableMan.AddActor(live); view.actor.reset(live);
 			struct ActorBorrow { ReleasePathClaimView& view; ~ActorBorrow() { view.actor.release(); } } actorBorrow{view};
 			ScenarioRunner::SetLockstepCoordinator(&round.peers[0]);
