@@ -2524,7 +2524,8 @@ def spread_menu_scripts(case, texts, port, root):
 def run_case(options, case, root, failing=None):
     root.mkdir(parents=True, exist_ok=False)
     texts, probes = scripts(case, options.port, root, options.size)
-    network_page_pair = case in ("net-chat", "lobby-name") and spread and spread.enabled(options) and not failing
+    smoke = getattr(options, "single_box_smoke", False)
+    network_page_pair = case in ("net-chat", "lobby-name") and (smoke or (spread and spread.enabled(options))) and not failing
     if network_page_pair:
         texts, probes = spread_menu_scripts(case, texts, options.port, root)
     if failing:
@@ -2540,13 +2541,15 @@ def run_case(options, case, root, failing=None):
     runs, records, argv, images = {}, {}, {}, []
     executor = None
     result = {"pass": False, "case": case, "scripts": {}, "records": records, "probes": {}, "seeds": seeded}
-    spread_requested = case in SPREAD_CASES and spread and spread.enabled(options)
+    spread_requested = case in SPREAD_CASES and not smoke and spread and spread.enabled(options)
     result.update(topology="spread" if spread_requested else "single-box" if paired else "single-peer", proof=False)
+    if smoke:
+        result.update(execution_scope="LAN smoke", peer_boxes={who: os.environ.get("CC_RUNNER_BOX_NAME", os.environ.get("COMPUTERNAME", "local")) for who in texts})
     picture_watches = not BASE_WORDS and case not in OLD_SKINS
     result["picture_watch_scope"] = "all current controls" if picture_watches else "compatibility notices" if case in OLD_SKINS else "base controls"
     try:
         factory = make_run
-        if case in SPREAD_CASES:
+        if case in SPREAD_CASES and not smoke:
             if not spread or not spread.enabled(options):
                 raise RuntimeError(("paired" if paired else "selected") + " menu readback requires the shared spread executor")
             width, height, multiplier = size_parts(options.size)
@@ -3580,6 +3583,7 @@ def main():
     parser.add_argument("--all-sizes", action="store_true",
                         help="also run every SIZE_GATES row; net-chat and lobby-name always do this")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--single-box-smoke", action="store_true", help="explicit local smoke for direct LAN arms; always proof:false")
     parser.add_argument("--harvest-declared", action="store_true", help="write each sweep's controls as drafts for tools/menu_declared; the sweeps then prove nothing")
     parser.add_argument("--base-words", action="store_true", help="write the new lobby, Escape and one-draft cases in the base screens' words, for their RED on the base build")
     if spread:
@@ -3593,10 +3597,15 @@ def main():
     selected = planned_cases(options.case, options.size, options.all_sizes)
     if not selected:
         parser.error('the selected size partition has no cases')
+    if options.single_box_smoke:
+        if any(case not in ("host-draft-roundtrip", "net-chat", "lobby-name") for case, _ in selected):
+            parser.error("local smoke is restricted to the explicitly direct LAN arms")
+        if getattr(options, "peer_boxes", None) or getattr(options, "spread", False):
+            parser.error("local smoke cannot declare spread peers")
     if options.dry_run:
         print(json.dumps(dict(cases=selected, engine_count=max(2 if name in PAIRED_CASES else 1 for name, _ in selected))))
         return 0
-    if any(case in SPREAD_CASES for case, _ in selected):
+    if not options.single_box_smoke and any(case in SPREAD_CASES for case, _ in selected):
         if not spread:
             parser.error("selected menu readback requires the shared spread executor")
         if getattr(options, "spread", False) or not getattr(options, "peer_boxes", None):
@@ -3655,7 +3664,9 @@ def main():
               "source_revision": options.revision, "exe_sha256": options.exe_sha, "port": options.port,
               "cases": [{key: value for key, value in row.items() if key != 'captures'} |
                         {'capture_checks': capture_checks(row.get('captures',[]))} for row in rows]}
-    if all(case in SPREAD_CASES for case, _ in selected):
+    if options.single_box_smoke:
+        result.update(topology="single-box", peer_boxes=[row.get("peer_boxes", {}) for row in rows], proof=False, execution_scope="LAN smoke")
+    elif all(case in SPREAD_CASES for case, _ in selected):
         result.update(topology="spread", peer_boxes=[row.get("peer_boxes", {}) for row in rows],
                       proof=passed and all(row.get("proof", False) for row in rows))
     captures = [image for row in rows for image in row.get('captures', [])]
