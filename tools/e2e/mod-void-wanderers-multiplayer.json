@@ -31,7 +31,8 @@
       },
       "observe_after_failure": true,
       "env": {
-        "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
+        "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles",
+        "CCCP_TEST_RECORD_CODEC": "libx264"
       },
       "runtime_files": [
         {
@@ -74,7 +75,8 @@
       },
       "observe_after_failure": true,
       "env": {
-        "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
+        "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles",
+        "CCCP_TEST_RECORD_CODEC": "libx264"
       },
       "runtime_files": [
         {

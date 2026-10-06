@@ -133,7 +133,7 @@ def compile_choices(package: Path, menu: Path, factions: Path, output: Path) -> 
             "buttons": buttons, "cursor_after_choices": cursor, "input": str(output)}
 
 
-def compile_play(package: Path, chosen: Path, layout: Path, host: Path, client: Path) -> dict:
+def compile_play(package: Path, chosen: Path, layout: Path, host: Path, client: Path, single: Path | None = None) -> dict:
     """Finish the hand input from the visible confirmation button, then drive both brains."""
     picture = Image.open(chosen)
     words = [find_words(picture, package, word) for word in ["START NEW GAME", "OK"]]
@@ -159,6 +159,14 @@ def compile_play(package: Path, chosen: Path, layout: Path, host: Path, client: 
             lines += [f"player=0 {start} {start + 89} {forward}", f"player=0 {start + 110} {start + 199} {back}",
                       f"player=0 {start + 35} {start + 39} JUMP", f"player=0 {start + 145} {start + 149} JUMP"]
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if single:
+        lines = []
+        for line in host.read_text(encoding="utf-8").splitlines():
+            match = re.fullmatch(r"player=0 (\d+) (\d+) (.+)", line)
+            if match and int(match[1]) <= 37:
+                line = f"player=0 {int(match[1]) + 26} {int(match[2]) + 26} {match[3]}"
+            lines.append(line)
+        single.write_text("# Keep the offline menu visible for its native picture.\n" + "\n".join(lines) + "\n", encoding="utf-8")
     return {"chosen": str(chosen), "witnesses": words, "ok": target, "host": str(host), "client": str(client)}
 
 
@@ -231,6 +239,10 @@ def recording_failures(review: dict, peers: list[str]) -> list[str]:
             if probes.get(name := f"recording-{kind}-{peer}") != "pass"]
 
 
+def explicitly_unselected(run: dict) -> bool:
+    return run.get("skip_finding") == {"class": "harness", "reason": "Outside the explicitly selected named runs"}
+
+
 def checker_self_test(package: Path) -> bool:
     import copy
 
@@ -244,6 +256,9 @@ def checker_self_test(package: Path) -> bool:
     incomplete["checklist"][1]["probe"] = "incomplete"
     checks.append(("unrecorded_stills_fail", bool(recording_failures(incomplete, ["sp"]))))
     checks.append(("missing_recording_rate_fails", bool(recording_failures({"checklist": recorded["checklist"][1:]}, ["sp"]))))
+    checks.append(("explicit_unselected_run_is_omitted", explicitly_unselected({"skip_finding": {
+        "class": "harness", "reason": "Outside the explicitly selected named runs"}})))
+    checks.append(("missing_peer_is_not_unselected", not explicitly_unselected({"name": "single", "peers": []})))
     left = [{"round": 1, "tick": tick, "total": "a" * 64, "sim_gated": "a" * 64, "paused": False,
              "subsystems": {name: "b" * 64 for name in HASH_SUBSYSTEMS}} for tick in range(1, 4)]
     checks.append(("every_equal_hash_passes", compare_every_tick(left, copy.deepcopy(left))["pass"]))
@@ -269,6 +284,8 @@ def grade_capture(repo: Path, capture: Path) -> dict:
     package = repo / "Data/VoidWanderers.rte"
     results = []
     for run in data["runs"]:
+        if explicitly_unselected(run):
+            continue
         if not run.get("peers"):
             results.append({"name": run["name"], "pass": False, "errors": ["no engine peer is recorded"]})
             continue
@@ -392,6 +409,7 @@ def main() -> int:
     parser.add_argument("--compile-play", type=Path, metavar="CHOSEN_FACTIONS_PNG")
     parser.add_argument("--layout", type=Path)
     parser.add_argument("--client-input", type=Path)
+    parser.add_argument("--single-input", type=Path)
     parser.add_argument("--factions", type=Path, metavar="FACTIONS_PNG")
     parser.add_argument("--input-output", type=Path)
     parser.add_argument("--grade", type=Path, metavar="CAPTURE_JSON")
@@ -403,7 +421,7 @@ def main() -> int:
     if options.grade:
         result = grade_capture(options.repo.resolve(), options.grade.resolve())
         summary = {**result, "arms": [{**arm, "peers": [{key: value for key, value in peer.items() if key != "seats"}
-                                                        for peer in arm["peers"]]} for arm in result["arms"]]}
+                                                        for peer in arm.get("peers", [])]} for arm in result["arms"]]}
         print(json.dumps(summary, indent=2))
         return int(not result["pass"])
     if options.compile_choices:
@@ -414,7 +432,8 @@ def main() -> int:
     if options.compile_play:
         if not options.layout or not options.input_output or not options.client_input:
             parser.error("--compile-play requires --layout, --input-output and --client-input")
-        print(json.dumps(compile_play(package, options.compile_play, options.layout, options.input_output, options.client_input), indent=2))
+        print(json.dumps(compile_play(package, options.compile_play, options.layout, options.input_output,
+                                      options.client_input, options.single_input), indent=2))
         return 0
     if options.file_probe or options.file_probe_default:
         spec = importlib.util.spec_from_file_location("vw_files", Path(__file__).with_name("mod-void-wanderers-files.py"))

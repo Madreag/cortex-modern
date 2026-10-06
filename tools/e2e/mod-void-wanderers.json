@@ -26,7 +26,7 @@
             "-seed",
             "42"
           ],
-          "input_script": "mod-void-wanderers-input.txt",
+          "input_script": "mod-void-wanderers-single-input.txt",
           "menu_script": "mod-void-wanderers.menu.txt",
           "probe": "mod-void-wanderers.probe.json",
           "settings": {
@@ -43,7 +43,8 @@
             }
           ],
           "env": {
-            "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
+            "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles",
+            "CCCP_TEST_RECORD_CODEC": "libx264"
           }
         }
       ]
@@ -102,7 +103,8 @@
             }
           ],
           "env": {
-            "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
+            "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles",
+            "CCCP_TEST_RECORD_CODEC": "libx264"
           },
           "probe": "mod-void-wanderers-host.probe.json"
         },
@@ -159,7 +161,8 @@
             }
           ],
           "env": {
-            "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
+            "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles",
+            "CCCP_TEST_RECORD_CODEC": "libx264"
           },
           "probe": "mod-void-wanderers-client.probe.json"
         }
