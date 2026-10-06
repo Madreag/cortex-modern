@@ -1786,6 +1786,13 @@ namespace RTE {
 			return;
 		}
 		const NetHash32 incomingHash = NetMatchConfigUtil::HashConfig(message.config);
+		// A Ready counts only for the setup it was given for: the comparison comes before any path takes the new config.
+		if (m_State != NetLobbyState::WaitingForConfig && m_LocalReady && !m_Config.autoReady && SetupDiffers(m_Config.matchConfig, message.config)) {
+			m_LocalReady = false;
+			m_ReadySent = false;
+			m_ReadyClearedBySetup = true;
+			m_PeerStatePending = true;
+		}
 		if (!message.config.successorOrder.empty() && m_OpenedMigrationHash != incomingHash) {
 			m_Config.matchConfig = message.config;
 			if (!m_Config.matchConfig.relay.Usable(RelayWallSeconds())) m_Config.matchConfig.relay = {};
@@ -1803,10 +1810,6 @@ namespace RTE {
 			Send(NetLobbyConfigAck{m_Config.localPeerId, false, incomingHash, validateError});
 			Reject(validateError);
 			return;
-		}
-		if (m_State != NetLobbyState::WaitingForConfig && m_LocalReady && !m_Config.autoReady && SetupDiffers(m_Config.matchConfig, message.config)) {
-			m_LocalReady = false;
-			m_ReadyClearedBySetup = true;
 		}
 		m_Config.matchConfig = message.config;
 		if (!m_Config.matchConfig.relay.Usable(RelayWallSeconds())) m_Config.matchConfig.relay = {};
@@ -1841,7 +1844,8 @@ namespace RTE {
 			return;
 		}
 		++m_Stats.readyPacketsReceived;
-		m_RemoteReadyByPeer[message.peerId] = message.ready;
+		// A Ready sent before the peer acknowledged this setup was given for an earlier one.
+		m_RemoteReadyByPeer[message.peerId] = message.ready && IsConfigAcked(message.peerId);
 		m_PeerStatePending = true;
 	}
 
@@ -1903,8 +1907,9 @@ namespace RTE {
 		}
 		m_RemoteNamesByPeer[message.peerId] = message.displayName;
 		m_RemotePlatformsByPeer[message.peerId] = message.platform;
-		// The explicit Ready message is the authoritative edge; the periodic state keeps views live.
-		m_RemoteReadyByPeer[message.peerId] = message.ready;
+		// The explicit Ready message is the authoritative edge; the periodic state keeps views live. At the host a Ready counts
+		// once the peer has acknowledged the setup it readies for.
+		m_RemoteReadyByPeer[message.peerId] = message.ready && (!m_Config.host || !IsKnownRemote(message.peerId) || IsConfigAcked(message.peerId));
 		m_RemotePingByPeer[message.peerId] = message.pingMs;
 		// The host forwards each client's state to the others, stamped with its measured ping so
 		// everyone sees an honest star-hub-relative connection quality.
