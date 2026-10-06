@@ -71,9 +71,13 @@ an enclosing holder or a second slot. Engine/script timeouts remain unchanged.
 Before the native capacity claim, the same wait also covers the named local
 holder's FIFO line. Match.parameters["wait_for_holder"] / --wait-for-holder
 may name a holder the lead explicitly said to wait behind while it runs alone.
-Other markers, memory/CPU/engine limits and task refusals remain refusals.
+Other markers, memory/engine limits and task refusals remain refusals.
 After shipment and before launch, the same native capacity check waits on that
 named local claim's FIFO before starting case timers; all other guards remain.
+Transient CPU refusals re-probe that same named box every 30 seconds for up to
+600 seconds. Quiet peers also wait for an idle box and retain the strict CPU
+guard. The native launch check releases its capacity mutex between probes;
+the engine is never started while any guard fails. No assertion time is added.
 Peer.block_udp reserves only
 declared discovery ports on that peer's native machine for the case's lever.
 The default network is ICE. Match.parameters["network"]="direct" preserves
@@ -588,6 +592,138 @@ def launch_native(backend, box, claim, request, wait=0):
         backend.rpc = original
 
 
+class NamedCpuWait:
+    """Retry only the lead's transient CPU/quiet row, on the same named box."""
+    def __init__(self, box, needs):
+        self.box, self.needs, self.deadline, self.probed_at = box, needs, None, None
+
+    def probe_started(self):
+        self.probed_at = time.monotonic()
+
+    def accepts(self, reason):
+        return bool(re.fullmatch(r"CPU \d+(?:\.\d+)?% exceeds \d+(?:\.\d+)?% over the last \d+(?:\.\d+)? seconds", reason)
+                    or getattr(self.needs, "alone", False) and reason == "alone run needs an idle box")
+
+    def pause(self, reason):
+        now = time.monotonic()
+        if self.deadline is None:
+            self.deadline = (self.probed_at if self.probed_at is not None else now) + 600
+        if now >= self.deadline:
+            raise SpreadRefusal("native CPU/quiet wait expired after 600s: " + reason)
+        print(f"WAITING CPU/QUIET: {self.box['name']}; peer {self.needs.peer_id}; {reason}", flush=True)
+        next_probe = (self.probed_at if self.probed_at is not None else now) + 30
+        time.sleep(max(0, min(next_probe-now, self.deadline-now)))
+
+
+@contextlib.contextmanager
+def named_launch_capacity(box, needs, claim, *, probe, live_reason, mutex, root, renew):
+    """Keep the native final guard and release its lock while waiting to retry."""
+    retry = NamedCpuWait(box, needs)
+    while True:
+        with mutex(root/".capacity.lock", wait=15):
+            retry.probe_started()
+            state = probe(box, refresh_display=False, ignore_token=claim["token"])
+            reason = live_reason(box, needs, state)
+            if not reason:
+                yield state
+                return
+            if not retry.accepts(reason):
+                raise RuntimeError("capacity changed before launch: " + reason)
+        retry.pause(reason)
+        renew(claim)
+
+
+def native_cpu_wait_source(source):
+    """Extend this case's hashed existing worker kit; never edit its global copy."""
+    guard = ("            with mutex(root_for(box)/'.capacity.lock',wait=15):\n"
+             "                before=capacity_state(box,refresh_display=False,ignore_token=claim['token'])\n"
+             "                if reason:=live_reason(box,Needs(**claim['needs']),before):raise RuntimeError('capacity changed before launch: '+reason)\n")
+    if source.count(guard) != 1:
+        raise SpreadRefusal("native worker capacity guard differs from the supported kit")
+    replacement = ("            from spread_peers import named_launch_capacity\n"
+                   "            with named_launch_capacity(box,Needs(**claim['needs']),claim,probe=capacity_state,\n"
+                   "                    live_reason=live_reason,mutex=mutex,root=root_for(box),renew=renew_claim) as before:\n"
+                   "                free=before['free_gb']\n")
+    return source.replace(guard, replacement, 1)
+
+
+def native_adapter_sources(facts_path, existing=None):
+    """Ship the existing facts adapter's route reader before its launch adapter."""
+    folder = Path(facts_path).parent
+    adapters = {name: (folder/name).read_text(encoding="utf-8")
+                for name in ("pool_cohort.py", "pool_run.py") if (folder/name).is_file()}
+    return {**({"pool_cohort.py": adapters["pool_cohort.py"]} if "pool_cohort.py" in adapters else {}),
+            **(existing or {}),
+            **({"pool_run.py": adapters["pool_run.py"]} if "pool_run.py" in adapters else {})}
+
+
+@contextlib.contextmanager
+def named_engine_cpu_wait(load, box, needs, renew):
+    """Retry the runner's unchanged admission, only in this native peer process."""
+    original = load.admission
+    @contextlib.contextmanager
+    def admission(argv, environment, record, save):
+        retry = NamedCpuWait(box, needs)
+        while True:
+            stack = contextlib.ExitStack()
+            retry.probe_started()
+            try:
+                value = stack.enter_context(original(argv, environment, record, save))
+            except load.LoadRefusal:
+                stack.close()
+                values = record.get("refusal", {}).get("values", {})
+                if (record.get("pid") or not values or values.get("alone")
+                        or values["engines"] + 1 > values["max_engines"]
+                        or values["free_gb"] < values["free_floor_gb"]
+                        or values["cpu_busy_percent"] <= values["cpu_busy_limit"]):
+                    raise
+                reason = (f"CPU {values['cpu_busy_percent']:.1f}% exceeds {values['cpu_busy_limit']:g}% "
+                          f"over the last {values['cpu_sample_s']:g} seconds")
+                record.setdefault("admission_retries", []).append(dict(reason=reason, values=values))
+                save()
+                retry.pause(reason)
+                renew()
+                continue
+            # Only a successful unchanged guard clears this attempt's temporary
+            # not-started fields. All refused probes remain in admission_retries.
+            if record.get("admission_retries"):
+                for key in ("not_started", "result_status", "exit_code", "refusal"):
+                    record.pop(key, None)
+                save()
+            with stack:
+                yield value
+            return
+    load.admission = admission
+    try:
+        yield
+    finally:
+        load.admission = original
+
+
+def wait_native_admission(backend, box, claim, wait=0):
+    """Finish native admission before starting a case timer; require its PID."""
+    deadline = time.monotonic() + float(wait or 0) + 1320
+    while True:
+        state = backend.rpc(box, "run-state", dict(claim=claim), timeout=20).get("state")
+        if state and state.get("token") != claim["token"]:
+            raise SpreadRefusal("native launch state changed owner")
+        raw = backend.rpc(box, "text", dict(path=claim["root"] + "/progress.json"), timeout=20)["text"]
+        if raw:
+            progress = json.loads(raw)
+            if progress.get("pid") and progress.get("identity"):
+                return
+            if progress.get("record", {}).get("error"):
+                raise SpreadRefusal(progress["record"]["error"])
+        raw = backend.rpc(box, "text", dict(path=claim["root"] + "/finished.json"), timeout=20)["text"]
+        if raw:
+            result = json.loads(raw)
+            if result.get("token") == claim["token"]:
+                raise SpreadRefusal(native_refusal(result))
+        if time.monotonic() >= deadline:
+            raise SpreadRefusal("native admission did not return within its CPU/quiet wait budget")
+        time.sleep(2)
+
+
 def claim_named_peer(backend, box, needs, request, *, wait=0, wait_for_holder=None):
     """Honor native work-slot FIFO on this named box; never choose or bypass."""
     import math
@@ -597,11 +733,17 @@ def claim_named_peer(backend, box, needs, request, *, wait=0, wait_for_holder=No
     deadline = time.monotonic() + wait
     holders = {wait_for_holder} if wait_for_holder else set()
     announced = None
+    cpu = NamedCpuWait(box, needs)
     while True:
+        cpu.probe_started()
         try:
             return backend.rpc(box, "claim", dict(box=box, needs=needs.__dict__, request=request), timeout=30)
         except RuntimeError as error:
             text = str(error)
+            reason = text.split("capacity refused: ", 1)[-1]
+            if cpu.accepts(reason):
+                cpu.pause(reason)
+                continue
             marker = "capacity refused: earlier work request is waiting: "
             fifo = marker in text
             if fifo:
@@ -633,11 +775,17 @@ def wait_named_launch(worker, pool, box, claim, *, wait=0, wait_for_holder=None)
     holders = {wait_for_holder} if wait_for_holder else set()
     announced = None
     needs = pool.Needs(**claim["needs"])
+    cpu = NamedCpuWait(box, needs)
     while True:
+        cpu.probe_started()
         state = worker.capacity_state(box, read_only=True, refresh_display=False, ignore_token=claim["token"])
         reason = pool.live_reason(box, needs, state)
         if not reason:
             return
+        if cpu.accepts(reason):
+            cpu.pause(reason)
+            worker.renew_claim(claim)
+            continue
         marker = "earlier work request is waiting: "
         fifo = reason.startswith(marker)
         if fifo:
@@ -749,9 +897,10 @@ class Case:
         backend = module.Transport(repo=source_repo, work=self.lane_root/".spread-inputs", registry=self.registry)
         backend.repo = self.repo
         backend.sources["spread_peers.py"] = self.interface_source
-        adapter = Path(module.worker.facts.__file__).with_name("pool_run.py")
-        if adapter.is_file():
-            backend.sources["pool_run.py"] = adapter.read_text(encoding="utf-8")
+        backend.sources["pool_worker.py"] = native_cpu_wait_source(backend.sources["pool_worker.py"])
+        # The existing facts reader lazily imports pool_cohort under a named
+        # assignment. It reads that assignment only; it does not select boxes.
+        backend.sources = native_adapter_sources(module.worker.facts.__file__, backend.sources)
         preflight = Path(__file__).with_name("cross_peers.py")
         self.preflight_source = preflight.read_text(encoding="utf-8") if preflight.is_file() else None
         backend.control_id = hashlib.sha256(json.dumps(dict(backend.sources, preflight=self.preflight_source), sort_keys=True).encode()).hexdigest()[:20]
@@ -1268,10 +1417,13 @@ class Run:
             if wait and box["kind"] == "local":
                 wait_named_launch(self.case.transport_module.worker, self.case.pool, box, claim, wait=wait,
                                   wait_for_holder=self.case.match.parameters.get("wait_for_holder", getattr(_options, "wait_for_holder", None)))
-            request["hang_guard"] = max(request.get("hang_guard", 600), self.timeout + 300 + float(wait or 0))
+            request["hang_guard"] = max(request.get("hang_guard", 600), self.timeout + 1500 + float(wait or 0))
             launch_native(backend, box, claim, request, wait)
-        except SpreadRefusal:
-            raise
+            wait_native_admission(backend, box, claim, wait)
+        except SpreadRefusal as error:
+            if str(error).startswith(f"spread peer {self.role} on {box['name']}: "):
+                raise
+            raise self.case.refuse(self.role, box["name"], str(error)) from error
         except Exception as error:
             raise self.case.refuse(self.role, box["name"], str(error)) from error
         self.started = True
@@ -1507,7 +1659,10 @@ def _native_execute(spec_path, result_out, peer, ownership):
         # Older branch runners still get the installed native ceiling/CPU/floor
         # admission check, under its existing engine-start mutex.
         import box_load as native_load
-        with contextlib.nullcontext() if hooked else pool_run.launch_scope(run.argv, run.env) as scope, \
+        from pool import Needs
+        with named_engine_cpu_wait(native_load, spec["box"], Needs(**spec["claim"]["needs"]),
+                                   lambda:pool_worker.renew_claim(spec["claim"])), \
+                contextlib.nullcontext() if hooked else pool_run.launch_scope(run.argv, run.env) as scope, \
                 contextlib.nullcontext() if hooked else native_load.admission(run.argv, run.env, run.record, run._save):
             run.start()
             if not hooked:
