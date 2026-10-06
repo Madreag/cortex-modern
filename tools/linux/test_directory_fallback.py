@@ -77,7 +77,8 @@ def main():
     args = parser.parse_args()
     if not spread:
         parser.error("directory fallback requires the shared spread executor")
-    args.spread = True
+    if getattr(args, "spread", False) or not getattr(args, "peer_boxes", None):
+        parser.error(spread.NO_BOX_NAMED)
     spread.configure(args)
     results = {name: check(args.repo.resolve(), args.out.resolve() / name, args.port + index, url)
                for index, (name, url) in enumerate((("unset", ""), ("unreachable", "https://127.0.0.1:1/custom-directory")))}

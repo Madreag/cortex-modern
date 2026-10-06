@@ -134,7 +134,8 @@ def main():
     options = parser.parse_args()
     if not spread:
         parser.error("lobby player rows requires the shared spread executor")
-    options.spread = True
+    if getattr(options, "spread", False) or not getattr(options, "peer_boxes", None):
+        parser.error(spread.NO_BOX_NAMED)
     spread.configure(options)
     if not re.fullmatch(r"[0-9a-f]{64}", options.exe_sha256):
         parser.error("--exe-sha256 must be 64 lowercase hex chars")

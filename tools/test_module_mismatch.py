@@ -89,7 +89,8 @@ def main():
     options = parser.parse_args()
     if not spread:
         parser.error("module mismatch requires the shared spread executor")
-    options.spread = True
+    if getattr(options, "spread", False) or not getattr(options, "peer_boxes", None):
+        parser.error(spread.NO_BOX_NAMED)
     spread.configure(options)
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)

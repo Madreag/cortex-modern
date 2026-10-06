@@ -414,7 +414,8 @@ def main() -> int:
     if args.arm != "menu":
         if not spread:
             parser.error("paired diagnostics require the shared spread executor")
-        args.spread = True
+        if getattr(args, "spread", False) or not getattr(args, "peer_boxes", None):
+            parser.error(spread.NO_BOX_NAMED)
         spread.configure(args)
     allowed = ((48211, 48219), (48280, 48289))
     if not any(lo <= args.port <= hi for lo, hi in allowed):

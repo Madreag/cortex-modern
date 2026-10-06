@@ -1,4 +1,4 @@
-"""One pool-backed execution interface for real-network cases with native peers.
+"""One lead-routed execution interface for real-network cases with native peers.
 
 Contract (version 2, compatible with version 1 calls)
 --------------------
@@ -11,23 +11,23 @@ and whether its screen is reviewed. Peer.share_ok defaults to True for screen
 peers; quiet, reviewed, held and recorder peers always reserve a box alone.
 Peer.held declares any target of a hold or stall lever before allocation.
 Peer.recorder requires the controller's private Windows video recorder.
-Peer.readback=True lets the pool choose an unpinned reviewed screen's native
-readback box; its False default keeps the version 1 controller placement.
-An explicitly pinned reviewed screen peer may use its own box's readback;
-an unpinned reviewed peer retains the version 1 controller placement.
-The
-case supplies arguments, environment and fixtures through Peer or by calling
+Peer.readback permits the named reviewed screen's native readback.
+Every peer must be named in peer_boxes, by actual name or host/seatN alias.
+The lead supplies those boxes; this interface never chooses another box.
+Extra assignments for another arm are unused, as in the published interface.
+The case supplies arguments, environment and fixtures through Peer or by calling
 case.make_run() in ``drive(case)``. ``match`` is a Match with the game's port,
-the lane's directory port, and optional unchanged case parameters. The pool
-chooses and claims fitting machines, freezes committed inputs, verifies the
+the lane's directory port, and optional unchanged case parameters. The helper
+freezes committed inputs, verifies the
 shipped/native executable hash, and starts native runners/tasks. ``drive``
 still stages the case's scripts, orders starts and applies its own assertions.
 Without ``drive``, the call starts host first and finishes every declared peer.
 It collects verified evidence into ``out`` and returns topology="spread",
 peer_boxes, native identities, executable hashes, records and driver_result.
-Shareable peers may use one box within the pool's memory, engine and CPU limits;
-quiet/timing peers remain on distinct idle boxes. The existing pool chooses
-the least loaded fitting box for a shareable group and admits each native claim.
+Shareable peers use one box only when the lead explicitly names it twice.
+Quiet, reviewed and held peers remain alone. Existing per-box runner capacity,
+memory, CPU and ownership checks remain; no pool queue, admission lock,
+candidate ranking or priority arbitration is consulted.
 
 prepare_case(...), the same arguments except drive, exposes the same Case for
 drivers whose existing control loop needs runner-compatible handles. Always
@@ -42,17 +42,19 @@ paths; the helper maps them to the native case root, never to an owner's tree.
 
 Refusals raise SpreadRefusal and write spread-result.json with topology,
 peer_boxes, refused_peer, refused_box and the exact reason. Prefixes are
-"spread peer <name> on <box>: <pool reason>", "no distinct fitting box",
+"spread peer <name> on <box>: <native reason>",
 "match port <port> differs from host port <port>", "native executable hash
 differs from preparation", and "Windows process suspension is unavailable".
-No fitting box means immediate refusal; the caller may retry after routing.
+Missing peer names and retired --spread exit 2 with
+"NO BOX NAMED: the lead routes every peer (ROUTING.md section 6)".
+Forbidden explicit sharing refuses "TWO PEERS ON ONE BOX WITHOUT share_ok".
+Any native refusal is returned for the lead to route; no other box is tried.
 No case assertion, oracle, timeout or default single-box launch is changed.
 Peer.output_name optionally declares an existing non-ASCII output directory;
 make_run(..., role=...) also accepts its declared logical peer explicitly.
 Text scripts retain their original UTF-8 or legacy Windows byte encoding.
-Peer.lane (or Match.parameters["lane"]) supplies the caller's pool priority
-lane; the existing pool still decides admission. Its owned pending ticket is
-published before probing and is released on refusal or native launch.
+Peer.lane (or Match.parameters["lane"]) supplies the caller's run label.
+Match.parameters["label"] may specify the lead's exact native holder label.
 Peer.block_udp reserves only
 declared discovery ports on that peer's native machine for the case's lever.
 The default network is ICE. Match.parameters["network"]="direct" preserves
@@ -68,17 +70,18 @@ that service alive and owns its assertions. Optional peer_directory_urls maps
 logical peers to the caller's loopback TLS proxies; only those signaling ports
 are forwarded. Their staged connection settings and install keys are retained.
 Set join_by_session=False when the caller joins through directory rows itself.
-The byte-pinned interface is shipped as a pool control input, so callers do
+The byte-pinned interface is shipped as a native control input, so callers do
 not need it committed into their own branch before using the published call.
 Declared .bin protocol inputs in peer arguments retain their exact bytes.
 make_run(..., runtime=...) copies owned retained regular files, settings and
 Data overlays without following links into the immutable game tree. Native
 overlay ancestors are private; other Data directories remain linked inputs.
 Incomplete retained runtimes and private tickets refuse before launch.
-A multi-peer spread match uses at least two physical boxes even when no
-reviewed peer is declared. Pinning every peer to one box refuses by name.
-Configured dispatcher discovery uses CORTEX_POOL_DISPATCHER, the installed
-box_facts adapter, or --pool-dispatcher. There is no alternate dispatcher.
+The lead may explicitly share all eligible peers; box identities remain in
+the result so the topology is reviewable. --pool-registry reads box facts only.
+The dispatcher argument and --pool-dispatcher remain compatible transport-kit
+location hints; their script is never executed. Existing complete peer_boxes
+calls, driver staging, levers, collectors and return fields remain supported.
 """
 from __future__ import annotations
 
@@ -117,6 +120,7 @@ def file_sha256(path):
 
 
 TOPOLOGY_LOCAL = "single-box: not proof"
+NO_BOX_NAMED = "NO BOX NAMED: the lead routes every peer (ROUTING.md section 6)"
 _options = None
 _cases = contextvars.ContextVar("spread_cases", default=None)
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -124,6 +128,16 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 class SpreadRefusal(RuntimeError):
     pass
+
+
+class SpreadUsageError(SystemExit):
+    def __init__(self, message=NO_BOX_NAMED):
+        self.message = message
+        print(message, file=sys.stderr, flush=True)
+        super().__init__(2)
+
+    def __str__(self):
+        return self.message
 
 
 @dataclass(frozen=True)
@@ -264,20 +278,24 @@ def directory_endpoint(value):
 
 def add_arguments(parser):
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--spread", action="store_true", help="one peer per real machine, selected by the installed pool")
+    group.add_argument("--spread", action="store_true", help="retired: the lead must name every peer with --peer-boxes")
     group.add_argument("--peer-boxes", help="host=BOX,seat2=BOX,... (actual peer names also accepted)")
-    parser.add_argument("--pool-dispatcher", type=Path, help="installed run_on_pool.py; defaults to the configured dispatcher")
-    parser.add_argument("--pool-registry", type=Path, help="the dispatcher's single box/port registry")
+    parser.add_argument("--pool-dispatcher", type=Path, help="compatible hint to the existing per-box transport kit; never executed")
+    parser.add_argument("--pool-registry", type=Path, help="box facts for the lead's named peers")
+    parser.add_argument("--runner-label", help="the lead's exact label for the native run holder")
     parser.add_argument("--peer-port", action="append", default=[], metavar="PEER=PORT", help="explicit peer match port (also supports a wrong-parameter detecting run)")
 
 
 def enabled(options=None):
     options = _options if options is None else options
-    return bool(options and (getattr(options, "spread", False) or getattr(options, "peer_boxes", None)))
+    if options and getattr(options, "spread", False):
+        raise SpreadUsageError()
+    return bool(options and getattr(options, "peer_boxes", None) is not None)
 
 
 def configure(options):
     global _options
+    enabled(options)
     _options = options
 
 
@@ -329,8 +347,31 @@ def role_value(values, names, name):
     return next((values[key] for key in aliases if key in values), None)
 
 
-def installed_pool(dispatcher=None):
+def named_peer_boxes(peers, values):
+    """Validate the lead's complete assignment before contacting any box."""
+    names = [peer.name for peer in peers]
+    assignments = {}
+    for index, name in enumerate(names):
+        aliases = (name.casefold(), "host" if index == 0 else f"seat{index + 1}")
+        boxes = {values[key] for key in aliases if key in values}
+        if not boxes:
+            raise SpreadUsageError()
+        if len({box.casefold() for box in boxes}) != 1:
+            raise SpreadUsageError(f"conflicting boxes for peer {name}")
+        assignments[name] = next(iter(boxes))
+    for peer in peers:
+        box = assignments[peer.name]
+        siblings = [other for other in peers if assignments[other.name].casefold() == box.casefold()]
+        if len(siblings) > 1 and not all(other.share_ok for other in siblings):
+            raise SpreadRefusal(f"spread peer {peer.name} on {box}: TWO PEERS ON ONE BOX WITHOUT share_ok")
+    return assignments
+
+
+def installed_pool(dispatcher=None, registry=None):
+    """Locate the existing transport and catalog without running placement."""
     path = dispatcher or os.environ.get("CORTEX_POOL_DISPATCHER")
+    if not path and registry and Path(registry).with_name("pool_transport.py").is_file():
+        path = Path(registry).with_name("pool_transport.py")
     if not path:
         try:
             import box_facts
@@ -338,8 +379,8 @@ def installed_pool(dispatcher=None):
         except ImportError:
             config = read_json(os.environ.get("CORTEX_BOXES", Path.home()/".cortex-modern/boxes.json"), {})
             path = config.get("pool_dispatcher") or config.get("tool_paths", {}).get("pool_dispatcher")
-    if not path or not Path(path).is_file():
-        raise SpreadRefusal("spread requires the installed pool dispatcher; set --pool-dispatcher or CORTEX_POOL_DISPATCHER")
+    if not path or not Path(path).resolve().parent.joinpath("pool_transport.py").is_file():
+        raise SpreadRefusal("named peers require the existing per-box transport kit; set --pool-registry or --pool-dispatcher")
     path = Path(path).resolve()
     sys.path.insert(0, str(path.parent))
     pool = importlib.import_module("pool")
@@ -506,9 +547,15 @@ class Case:
             raise ValueError("a spread case declares unique output names")
         self.interface_source = Path(__file__).read_text(encoding="utf-8")
         self.interface_sha256 = hashlib.sha256(self.interface_source.encode()).hexdigest()
-        self.pool, self.transport_module, self.dispatcher = installed_pool(dispatcher)
-        self.registry = Path(registry or self.dispatcher.with_name("boxes.json"))
         self.pins, self.peer_ports = pairs(peer_boxes), peer_ports or {}
+        try:
+            self.assigned_boxes = named_peer_boxes(self.peers, self.pins)
+        except (SpreadUsageError, SpreadRefusal) as error:
+            write_json(self.out/"spread-result.json", dict(topology="spread", passed=False, error=str(error),
+                                                         peer_boxes={}, requested_peer_boxes=self.pins))
+            raise
+        self.pool, self.transport_module, self.dispatcher = installed_pool(dispatcher, registry)
+        self.registry = Path(registry or self.dispatcher.with_name("boxes.json"))
         self.members, self.runs, self.tunnels, self.refusals, self.identities, self.pending = {}, {}, [], [], {}, []
         self.lock = threading.RLock()
         self.stack = contextlib.ExitStack()
@@ -528,7 +575,7 @@ class Case:
             self.prepare()
             self.connect_directory()
         except BaseException as error:
-            if not isinstance(error, SpreadRefusal):
+            if not isinstance(error, (SpreadRefusal, SpreadUsageError)):
                 error = SpreadRefusal(str(error))
             self.save(error=str(error))
             self.close()
@@ -545,7 +592,7 @@ class Case:
         module = self.transport_module
         # Use the installed facts adapter with this caller's immutable inputs.
         source_repo = self.repo if (self.repo/"tools/box_facts.py").is_file() else Path(module.worker.facts.__file__).resolve().parents[1]
-        backend = module.Transport(repo=source_repo, work=self.lane_root/".spread-inputs")
+        backend = module.Transport(repo=source_repo, work=self.lane_root/".spread-inputs", registry=self.registry)
         backend.repo = self.repo
         backend.sources["spread_peers.py"] = self.interface_source
         adapter = Path(module.worker.facts.__file__).with_name("pool_run.py")
@@ -571,94 +618,51 @@ class Case:
         return backend
 
     def allocate(self):
-        used, exclusive = [], []
+        self.assigned_boxes = named_peer_boxes(self.peers, self.pins)
         identities = {}
         catalog = self.pool.load_registry(self.registry)["boxes"]
-        reviewed_box = next((box["name"] for box in catalog if box["kind"] == "local" and box["os"] == "windows"), None)
-        # Claim constrained peers first while retaining the case's seat order.
-        ordered = sorted(self.peers, key=lambda peer: (peer.share_ok, not peer.reviewed, role_value(self.pins, self.names, peer.name) is None, peer.os == "any"))
-        share_target = None
-        for peer in ordered:
-            backend = self.backend()
-            pin = role_value(self.pins, self.names, peer.name)
-            if peer.recorder or peer.reviewed and not peer.readback and not pin:
-                if pin and pin.casefold() != (reviewed_box or "").casefold():
-                    raise self.refuse(peer.name, pin, "reviewed screen requires the controller's private Windows recorder")
-                pin = reviewed_box
-                if not pin:
-                    raise self.refuse(peer.name, "unassigned", "reviewed screen requires a registered local Windows recorder")
-            if pin and peer.quiet and any(box["name"].casefold() == pin.casefold() and box.get("timing") is False for box in catalog):
+        boxes = {box["name"].casefold(): box for box in catalog}
+        for peer in self.peers:
+            pin = self.assigned_boxes[peer.name]
+            box = boxes.get(pin.casefold())
+            if not box:
+                raise self.refuse(peer.name, pin, "named box is absent from the catalog")
+            self.assigned_boxes[peer.name] = box["name"]
+            if peer.recorder and not (box["kind"] == "local" and box["os"] == "windows"):
+                raise self.refuse(peer.name, box["name"], "reviewed screen requires the controller's private Windows recorder")
+            if peer.quiet and box.get("timing") is False:
                 raise self.refuse(peer.name, pin, "catalog does not permit timing measurements on this box")
-            excluded = (exclusive if peer.share_ok else used) + [box["name"] for box in catalog if peer.quiet and box.get("timing") is False]
-            if not pin:
-                excluded += [value for other in ordered if other.name != peer.name and
-                             (value := role_value(self.pins, self.names, other.name)) and not (peer.share_ok and other.share_ok)]
-            if peer.share_ok and len(ordered) > 1 and len(self.members) == len(ordered) - 1 and len(set(used)) == 1:
-                if pin and pin.casefold() == used[0].casefold():
-                    raise self.refuse(peer.name, pin, "spread match requires at least two physical boxes")
-                excluded += used
+            port = int(role_value(self.peer_ports, self.names, peer.name) or self.match.port)
+            if port != self.match.port:
+                raise self.refuse(peer.name, box["name"], f"match port {port} differs from host port {self.match.port}")
+        for peer in self.peers:
+            box = boxes[self.assigned_boxes[peer.name].casefold()]
+            backend = self.backend()
             needs = self.pool.Needs(os=peer.os, engines=peer.engines, gpu=bool(peer.size), memory=peer.memory,
-                                    alone=peer.quiet, size=peer.size, only_box=pin, excluded=tuple(excluded),
+                                    alone=peer.quiet or peer.reviewed or peer.held or peer.recorder, size=peer.size, only_box=box["name"],
                                     case_id=self.id, peer_id=peer.name, share_ok=peer.share_ok, reviewed=peer.reviewed or peer.recorder, held=peer.held)
+            if reason := self.pool.static_reason(box, needs):
+                raise self.refuse(peer.name, box["name"], reason)
             caller_lane = peer.lane or self.match.parameters.get("lane")
-            label = f"{caller_lane}: spread" if caller_lane else "spread"
-            request = dict(run_id=uuid.uuid4().hex, token=uuid.uuid4().hex, label=f"{label}: {self.out.name}/{peer.name}",
+            label = self.match.parameters.get("label") or getattr(_options, "runner_label", None) or (f"{caller_lane}: spread" if caller_lane else "spread")
+            request = dict(run_id=uuid.uuid4().hex, token=uuid.uuid4().hex, label=label,
                            lane=caller_lane or self.lane, case_id=self.id, peer_id=peer.name,
                            owner=dict(pid=os.getpid(), machine=self.transport_module.worker.facts.machine_name(),
                                       process_start=self.transport_module.worker.facts.process_start(os.getpid())),
-                           out=str(self.control/peer.name/"results"), command=[], hang_guard=max(600, peer.timeout + 300), enqueued_at=time.time())
-            with self.transport_module.worker.mutex(self.pool.queue_root(self.registry)/".admission.lock", wait=60):
-                ticket = self.pool.write_ticket(self.registry, needs, request)
-            self.pending.append((ticket, request["token"]))
-            self.pending_peers = getattr(self, "pending_peers", {})
-            self.pending_peers[request["token"]] = peer.name
-            self.stack.callback(self.transport_module.worker.facts.release_reservation, ticket, request["token"])
-            if peer.share_ok and not pin and share_target is None:
-                group = [item for item in ordered if item.share_ok and item.name not in self.members and
-                         role_value(self.pins, self.names, item.name) is None and item.os in (peer.os, "any")]
-                if len(group) > 1:
-                    sizes = [item.size for item in group if item.size]
-                    together = self.pool.Needs(os=peer.os, engines=len(group), gpu=bool(sizes), memory=max(item.memory for item in group),
-                                               size=tuple(map(max, zip(*sizes))) if sizes else None, excluded=tuple(excluded),
-                                               case_id=self.id, share_ok=True)
-                    grouped, _, _ = self.pool.candidates(self.registry, together, backend)
-                    if grouped:
-                        share_target = grouped[0][1]["name"]
-            fitting, reasons, states = self.pool.candidates(self.registry, needs, backend)
-            if peer.share_ok and not pin and share_target:
-                fitting.sort(key=lambda item: item[1]["name"].casefold() != share_target.casefold())
-            chosen = None
-            for _, box, state in fitting:
-                try:
-                    with self.transport_module.worker.mutex(self.pool.queue_root(self.registry)/".admission.lock", wait=60):
-                        blocker = self.pool.priority_blocker(self.registry, box, state, request)
-                        if blocker:
-                            reasons[box["name"]] = "yielded to " + blocker["label"]
-                            continue
-                        claim = backend.claim(box, needs, request)
-                except Exception as error:
-                    reasons[box["name"]] = str(error)
-                    self.refuse(peer.name, box["name"], str(error))
-                    continue
-                print(f"ROUTED: {box['name']} - engines {state.get('engines', 0)}/{box['engines_max']}, free {state['free_gb']:.2f} GB; peer {peer.name}", flush=True)
-                chosen = (box, claim, request, backend)
-                break
-            if chosen is None:
-                details = "; ".join(f"{name}: {reason}" for name, reason in reasons.items() if reason not in ("excluded by the caller", "another box was pinned"))
-                raise self.refuse(peer.name, pin or "unassigned", "no distinct fitting box; " + details)
-            self.members[peer.name] = chosen
-            used.append(chosen[0]["name"])
-            if not peer.share_ok:
-                exclusive.append(chosen[0]["name"])
-            hostname = chosen[0].get("hostname") or states[chosen[0]["name"]].get("hostname")
+                           out=str(self.control/peer.name/"results"), command=[], hang_guard=max(600, peer.timeout + 300))
+            try:
+                state = backend.probe(box, read_only=True)
+                claim = backend.rpc(box, "claim", dict(box=box, needs=needs.__dict__, request=request), timeout=30)
+            except Exception as error:
+                raise self.refuse(peer.name, box["name"], str(error)) from error
+            claim.update(control=backend.control(box), started=time.time(), needs=needs.__dict__)
+            self.members[peer.name] = (box, claim, request, backend)
+            print(f"NAMED: {box['name']}; peer {peer.name}", flush=True)
+            hostname = box.get("hostname") or state.get("hostname")
             if not hostname:
-                raise self.refuse(peer.name, chosen[0]["name"], "native machine identity is unavailable")
+                raise self.refuse(peer.name, box["name"], "native machine identity is unavailable")
             identities[peer.name] = dict(machine_id=hostname.casefold())
         self.check_identities(identities)
-        for name in self.names:
-            port = int(role_value(self.peer_ports, self.names, name) or self.match.port)
-            if port != self.match.port:
-                raise self.refuse(name, self.members[name][0]["name"], f"match port {port} differs from host port {self.match.port}")
 
     def check_identities(self, identities):
         from cross_peers import require_distinct_machines
@@ -683,11 +687,6 @@ class Case:
         for name, (box, claim, _, backend) in list(self.members.items()):
             if boxes[box["name"]]["off_limits"]:
                 raise self.refuse(name, box["name"], "went off limits during the case")
-            if not any(handle.started for handle in self.runs.values()):
-                request = self.members[name][2]
-                state = getattr(backend, "last_states", {}).get(box["name"])
-                if state and (blocker := self.pool.priority_blocker(self.registry, box, state, request)):
-                    raise self.refuse(name, box["name"], "yielded preparation to " + blocker["label"])
             if (name not in self.runs or not self.runs[name].finished) and not (name in self.runs and self.runs[name].native_progress.get("record")):
                 try:
                     backend.rpc(box, "renew", dict(claim=claim), timeout=15)
@@ -871,7 +870,7 @@ class Case:
         return sorted(set(declared_signals(self.out)) | set(getattr(self, "extra_signals", ())))
 
     def result(self):
-        return dict(schema=1, topology="spread", peer_boxes={name: item[0]["name"] for name, item in self.members.items()},
+        return dict(schema=1, topology="spread", peer_boxes=getattr(self, "assigned_boxes", {name: item[0]["name"] for name, item in self.members.items()}),
                     interface_sha256=self.interface_sha256,
                     preflight_sha256=hashlib.sha256(self.preflight_source.encode()).hexdigest() if getattr(self, "preflight_source", None) else None,
                     sharing={peer.name: dict(share_ok=peer.share_ok, reviewed=peer.reviewed, held=peer.held, quiet=peer.quiet,
@@ -910,13 +909,8 @@ class Case:
             self.save()
 
     def release_pending(self, role=None):
-        remaining = []
-        for ticket, token in self.pending:
-            if role is None or getattr(self, "pending_peers", {}).get(token) == role:
-                self.transport_module.worker.facts.release_reservation(ticket, token)
-            else:
-                remaining.append((ticket, token))
-        self.pending[:] = remaining
+        """Retain the old callable without publishing or reading queue tickets."""
+        return None
 
     def __enter__(self):
         return self
@@ -1389,6 +1383,8 @@ def native_execute(spec_path, result_out):
 
 
 def main(argv=None):
+    if "--spread" in (sys.argv[1:] if argv is None else argv):
+        raise SpreadUsageError()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)

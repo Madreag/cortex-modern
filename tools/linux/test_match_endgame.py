@@ -174,7 +174,8 @@ def main():
     args = parser.parse_args()
     if not spread:
         parser.error("match endgame requires the shared spread executor")
-    args.spread = True
+    if getattr(args, "spread", False) or not getattr(args, "peer_boxes", None):
+        parser.error(spread.NO_BOX_NAMED)
     spread.configure(args)
     return 0 if run_case(args.repo.resolve(), args.out.resolve(), args.case, args.port) else 1
 

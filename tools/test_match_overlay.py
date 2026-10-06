@@ -974,7 +974,8 @@ def main():
     options = parser.parse_args()
     if not spread:
         parser.error("match overlay requires the shared spread executor")
-    options.spread = True
+    if getattr(options, "spread", False) or not getattr(options, "peer_boxes", None):
+        parser.error(spread.NO_BOX_NAMED)
     spread.configure(options)
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("verification family owns the machine; no driver may start")

@@ -463,7 +463,8 @@ def main():
     options = parser.parse_args()
     if not spread:
         parser.error("viewport fit requires the shared spread executor")
-    options.spread = True
+    if getattr(options, "spread", False) or not getattr(options, "peer_boxes", None):
+        parser.error(spread.NO_BOX_NAMED)
     spread.configure(options)
     if not (320 <= options.width <= 7680 and 240 <= options.height <= 4320):
         parser.error("dimensions out of range")

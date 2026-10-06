@@ -252,7 +252,8 @@ def main():
     args = parser.parse_args()
     if not spread:
         parser.error("post-match report requires the shared spread executor")
-    args.spread = True
+    if getattr(args, "spread", False) or not getattr(args, "peer_boxes", None):
+        parser.error(spread.NO_BOX_NAMED)
     spread.configure(args)
     if not 48211 <= args.port <= 48218:
         parser.error("two ports must fit 48211-48219")
