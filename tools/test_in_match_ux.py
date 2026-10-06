@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -51,12 +52,16 @@ LONG_NEWCOMER = "Maximiliana Wolkensteins"
 HELD_BETWEEN_ROUNDS = "Held - the seat is kept"
 # The cost budget per frame with four players, median over at least 600 frames: the status box with the panel closed, the panel open.
 COST_BUDGET_US = {"closed": 100, "open": 500}
-NEW_CASES = ("stale-press", "reach", "open-place", "host-leave-live", "leave-no-ticket", "long-names", "between-rounds", "cost")
+NEW_CASES = ("stale-press", "reach", "open-place", "host-leave-live", "leave-no-ticket", "long-names", "between-rounds", "cost", "leave-press-race",
+             "leave-bad-ticket", "away-names")
 # The place each newcomer asks for, by stable seat (a peer's is its number less one); any held place otherwise.
 APPLY_SEATS = {"reach": {NEWCOMER: "1", SECOND: "2"}, "away-names": {NEWCOMER: "1"}}
 # Cases whose newcomers only ask: they are still asking when the host ends the match, and never reach its screen.
 ASK_ONLY = ("reach", "long-names", "away-names")
-CASE_PEERS = {"stale-press": 4, "reach": 4, "open-place": 3, "host-leave-live": 3, "leave-no-ticket": 2, "long-names": 3, "between-rounds": 2, "cost": 4}
+CASE_PEERS = {"stale-press": 4, "reach": 4, "open-place": 3, "host-leave-live": 3, "leave-no-ticket": 2, "long-names": 3, "between-rounds": 2, "cost": 4,
+              "leave-press-race": 3, "leave-bad-ticket": 2, "away-names": 3}
+# The line a leave confirmation adds when what it does changed under a press.
+LEAVE_CHANGED = "so you are still in the match"
 
 
 def sha(path):
@@ -730,6 +735,9 @@ def check_open_place(checks, reads, logs):
     checks.check("open-place-let-operates", done.startswith(f"{NEWCOMER} is joining in"), f"status {done!r}")
     after = reads[host].get("open-after-roster", {}).get("text", "") + " ".join(reads[host].get(f"open-after-name{row}", {}).get("text", "") for row in range(3))
     checks.check("open-place-newcomer-plays", NEWCOMER in after, f"after the join: {after!r}")
+    # The place is the newcomer's while it comes in: the host's screen watch sees every frame of that.
+    left = re.findall(r"^\[text-watch\] violation h15-held-reads-held (.*)$", logs[host], re.M)
+    checks.check("open-place-newcomer-never-reads-left", not left, f"{len(left)} frames read a held place as Left; first {left[0][:300] if left else ''!r}")
 
 
 def host_leave_live_probes(root):
@@ -761,6 +769,82 @@ def check_host_leave_live(checks, reads, logs):
     checks.check("host-leave-press-does-what-it-says", ended and not took_over, f"{ana}: the match ended {ended}, taken over {took_over}")
 
 
+def leave_press_race_probes(root):
+    """The host presses Leave's confirmation while it promises a handover; a player leaves before the release. The release must
+    not do what the screen no longer says: nothing happens, and the sentence says it changed. The next press leaves."""
+    host, ana, ben = NAMES[:3]
+    steps = [{"op": "wait", "service": "Running", "sim_at_least": 200}, wait_file(probe_root(root, ben) / "at-confirm.json"),
+             *keys("Escape"), *on_screen("Pause"), *hand("ButtonLeaveMatch"), *on_screen("PauseLeaveConfirm"),
+             read("LabelLeaveConfirm", "menu", "race-shown"), menu("hand_press ButtonLeaveConfirm"), {"op": "wait", "renders": 3},
+             signal("host-pressing"), wait_file(probe_root(root, ben) / "left.json"),
+             {"op": "wait", "control": "LabelLeaveConfirm", "scope": "menu", "text_contains": "The match ends for everyone"},
+             menu("hand_release ButtonLeaveConfirm"), {"op": "wait", "elapsed_ms": 1500, "scope": "menu"},
+             read("LabelLeaveConfirm", "menu", "race-after-release"), menu("dump_host_options"), *hand("ButtonLeaveConfirm"),
+             {"op": "wait", "service": "Completed", "scope": "menu"}, signal("left", "menu"), {"op": "wait", "elapsed_ms": 12000, "scope": "menu"},
+             signal("done", "menu"), {"op": "finish"}]
+    probes = {host: {"schema": 1, "timeout_ms": 170000, "steps": steps}}
+    probes[ben] = {"schema": 1, "timeout_ms": 170000, "steps": [{"op": "wait", "service": "Running", "sim_at_least": 200}, *at_leave_confirm("at-confirm"),
+                                                                wait_file(probe_root(root, host) / "host-pressing.json"), *confirm_leave()]}
+    probes[ana] = {"schema": 1, "timeout_ms": 170000, "steps": [
+        {"op": "wait", "service": "Running", "sim_at_least": 200}, {"op": "wait_file", "path": str(probe_root(root, host) / "left.json"), "scope": "menu"},
+        {"op": "wait", "elapsed_ms": 8000, "scope": "menu"}, signal("checked", "menu"), {"op": "finish"}]}
+    return probes
+
+
+def check_leave_press_race(checks, reads, logs):
+    host, ana = NAMES[0], NAMES[1]
+    shown = reads[host].get("race-shown", {}).get("text", "")
+    after = reads[host].get("race-after-release", {})
+    text = after.get("text", "")
+    checks.check("leave-race-pressed-on-a-handover", "Another player becomes the host" in shown, f"at the press {shown!r}")
+    checks.check("leave-race-release-does-nothing-when-it-changed", after.get("visible") and "The match ends for everyone" in text and LEAVE_CHANGED in text,
+                 f"after the release {text!r} visible {after.get('visible')}")
+    took_over = re.search(TOOK_OVER, logs[ana], re.I) is not None
+    ended = re.search(HOST_LEFT, logs[ana]) is not None or "host left with no other survivor" in logs[ana]
+    checks.check("leave-race-next-press-does-what-it-says", ended and not took_over, f"{ana}: the match ended {ended}, taken over {took_over}")
+
+
+def leave_bad_ticket_probes(root):
+    """A client whose kept ticket no longer loads: its leave must not promise the Rejoin Match the landing will not offer."""
+    host, client = NAMES[:2]
+    client_steps = [{"op": "wait", "service": "Running", "sim_at_least": 200}, signal("ticket-ready"), wait_file(root / "ticket-damaged.json"),
+                    *keys("Escape"), *on_screen("Pause"), *hand("ButtonLeaveMatch"), *on_screen("PauseLeaveConfirm"),
+                    read("LabelLeaveConfirm", "menu", "bad-ticket-text"), shot("leave-bad-ticket"), *hand("ButtonLeaveConfirm"),
+                    {"op": "wait", "service": "Completed", "scope": "menu"}, {"op": "wait", "elapsed_ms": 5000, "scope": "menu"}, menu("dump_host_options"),
+                    signal("left", "menu"), {"op": "finish"}]
+    steps = [{"op": "wait", "service": "Running", "sim_at_least": 200}, wait_file(probe_root(root, client) / "left.json"), {"op": "wait", "elapsed_ms": 1500},
+             *keys("Escape"), *on_screen("Pause"), *end_match()]
+    return {host: {"schema": 1, "timeout_ms": 170000, "steps": steps}, client: {"schema": 1, "timeout_ms": 170000, "steps": client_steps}}
+
+
+def damage_ticket(root, client, alive):
+    """Once the client's match runs, its kept ticket stops loading: its last byte, in the record's seal, is flipped."""
+    ready, ticket = probe_root(root, client) / "ticket-ready.json", root / f"{client}.ticket"
+    deadline = time.monotonic() + 200
+    while not ready.exists() and time.monotonic() < deadline and alive():
+        time.sleep(0.2)
+    damaged = ready.exists() and ticket.exists()
+    if damaged:
+        data = bytearray(ticket.read_bytes())
+        data[-1] ^= 0xFF
+        ticket.write_bytes(bytes(data))
+    (root / "ticket-damaged.json").write_text(json.dumps({"damaged": damaged}) + "\n", encoding="utf-8")
+
+
+def check_leave_bad_ticket(checks, reads, captures, root):
+    client = NAMES[1]
+    marker = root / "ticket-damaged.json"
+    damaged = json.loads(marker.read_text(encoding="utf-8")).get("damaged") if marker.exists() else False
+    checks.check("bad-ticket-was-kept-and-damaged", damaged, f"the client's ticket existed and was damaged: {damaged}")
+    text = reads[client].get("bad-ticket-text", {}).get("text", "")
+    promised = "Rejoin Match" in text or "your seat stays yours" in text
+    landing = captures[client][-1] if captures[client] else {"screen": "", "controls": []}
+    rejoin = control_of(landing, "ButtonMultiplayerReconnect") or {}
+    offered = bool(rejoin.get("visible")) and rejoin.get("text") == "Rejoin Match"
+    checks.check("bad-ticket-sentence-matches-the-offer", promised == offered and (promised or "join it again" in text),
+                 f"confirmation {text!r} promises Rejoin {promised}; the landing ({landing['screen']}) offers it {offered}")
+
+
 def away_names_probes(root, base):
     """The host removes Ana; a newcomer asks for her opened place; then Ben leaves. The summary names Ben as the one away."""
     host, ana, ben = NAMES[:3]
@@ -778,6 +862,7 @@ def away_names_probes(root, base):
                                                                 *confirm_leave()]}
     probes[NEWCOMER] = {"schema": 1, "timeout_ms": 175000, "steps": [wait_file(probe_root(root, host) / "done-reading.json"), {"op": "finish"}]}
     return probes
+
 
 def check_away_names(checks, reads):
     host, ben = NAMES[0], NAMES[2]
@@ -898,7 +983,10 @@ def cost_probes(root):
     return probes
 
 
-COST_LINE = re.compile(r"\[panel-cost\] (closed|open) players=(\d+) frames=(\d+) median_us=(\d+) p99_us=(\d+) status_shown=(\d)")
+# A frame's cost is summed in whole time; parts_median_us is the same frames summed the way a pass rounded down to whole
+# microseconds would, which a build that rounds each pass reports as its only number.
+COST_LINE = re.compile(r"\[panel-cost\] (closed|open) players=(\d+) frames=(\d+) median_us=([\d.]+) p99_us=([\d.]+) status_shown=(\d)"
+                       r"(?:[^\n]*? parts_median_us=(\d+))?")
 
 
 def check_cost(checks, logs):
@@ -907,9 +995,12 @@ def check_cost(checks, logs):
         # The last full window of each kind with all four players in the match and the status box up.
         rows = [row for row in lines if row[0] == kind and row[1] == "4" and int(row[2]) >= 600 and row[5] == "1"]
         row = rows[-1] if rows else None
-        median, p99 = (int(row[3]), int(row[4])) if row else (None, None)
+        median, p99 = (float(row[3]), float(row[4])) if row else (None, None)
         checks.check(f"cost-{kind}-within-budget", median is not None and median <= COST_BUDGET_US[kind],
                      f"median {median} us, p99 {p99} us over {row[2] if row else 0} frames (budget {COST_BUDGET_US[kind]} us)")
+        parts = row[6] if row else None
+        checks.check(f"cost-{kind}-summed-whole", parts is not None,
+                     f"whole median {median} us; summed from passes rounded down {parts if parts is not None else median} us")
 
 
 def ntdll():
@@ -947,7 +1038,8 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         probes = plan.get("probes") or {"stale-press": lambda: stale_press_probes(root, base), "reach": lambda: reach_probes(root, base),
                                          "open-place": lambda: open_place_probes(root, base), "host-leave-live": lambda: host_leave_live_probes(root),
                                          "leave-no-ticket": lambda: leave_no_ticket_probes(root), "long-names": lambda: long_names_probes(root),
-                                         "cost": lambda: cost_probes(root), "away-names": lambda: away_names_probes(root, base)}[case]()
+                                         "cost": lambda: cost_probes(root), "leave-press-race": lambda: leave_press_race_probes(root),
+                                         "leave-bad-ticket": lambda: leave_bad_ticket_probes(root), "away-names": lambda: away_names_probes(root, base)}[case]()
     else:
         probes = players_probes(root, peers, base, moderate, options.cancel)
         who_list = list(NAMES[:peers])
@@ -987,6 +1079,9 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         # A match with authenticated admission off keeps no ticket for a leave.
         if case == "leave-no-ticket":
             extra = [*extra, "-net-no-reconnect-admission", "1"]
+        # The client's ticket where the case can damage it.
+        if case == "leave-bad-ticket" and who == NAMES[1]:
+            extra = [*extra, "-net-reconnect-ticket", str(root / f"{who}.ticket")]
         match_peers = peers if case in ("players", "host-leave", "away-names", *NEW_CASES) else 2
         args = ["-menu-script", str(script)] if lobby else ["-menu-script", str(script), *match_args(port, match_peers, who if who not in newcomers else "joiner", ticks, extra, name=names[who])]
         diagnostics = "1" if case == "status" and options.diagnostics else "0"
@@ -1054,6 +1149,8 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
                 else:
                     ntdll().NtResumeProcess(ctypes.c_void_p(runs[NEWCOMER].process))
                 (root / "newcomer-thawed.json").write_text("{}\n", encoding="utf-8")
+    if case == "leave-bad-ticket":
+        damage_ticket(root, NAMES[1], threads[NAMES[1]].is_alive)
     for thread in threads.values():
         thread.join()
     for run in runs.values():
@@ -1075,7 +1172,7 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
     for who in runs:
         result = results[who]
         # The command-line match has no menu to return to: a client whose match ended with the host's leave stops its probe there.
-        ended_with_host = (case in ("host-leave", "host-leave-live") and who != NAMES[0] and
+        ended_with_host = (case in ("host-leave", "host-leave-live", "leave-press-race") and who != NAMES[0] and
                            (re.search(HOST_LEFT, logs[who]) is not None or "host left with no other survivor" in logs[who])
                            and re.search(TOOK_OVER, logs[who], re.I) is None)
         # A newcomer whose approval the host cancelled is turned away before it plays: cancelled-newcomer-is-told reads it.
@@ -1117,6 +1214,10 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         check_between_rounds(checks, logs)
     elif case == "cost":
         check_cost(checks, logs)
+    elif case == "leave-press-race":
+        check_leave_press_race(checks, reads, logs)
+    elif case == "leave-bad-ticket":
+        check_leave_bad_ticket(checks, reads, captures, root)
     elif case == "away-names":
         check_away_names(checks, reads)
     else:
@@ -1231,13 +1332,14 @@ def self_test():
     row("a-same-step-click-is-not-hand-shaped", not hand_shaped([{"op": "mouse_down", "control": "X"}, {"op": "mouse_up", "control": "X"}]))
     row("a-press-never-released-is-not-hand-shaped", not hand_shaped([{"op": "mouse_down", "control": "X"}, {"op": "wait", "renders": 3}]))
     # The cost check reads the last full window of each kind with four players and the status box up.
-    log = ("[panel-cost] closed players=1 frames=600 median_us=900 p99_us=990 status_shown=0\n"
-           "[panel-cost] closed players=4 frames=600 median_us=80 p99_us=150 status_shown=1\n"
+    log = ("[panel-cost] closed players=1 frames=600 median_us=900.0 p99_us=990.0 status_shown=0 parts_median_us=850\n"
+           "[panel-cost] closed players=4 frames=600 median_us=80.4 p99_us=150.2 status_shown=1 update_median_us=30.1 updates=9 parts_median_us=61\n"
            "[panel-cost] open players=4 frames=600 median_us=620 p99_us=900 status_shown=1\n")
     checks = Checks()
     check_cost(checks, {NAMES[0]: log})
     verdicts = {row_["check"]: row_["pass"] for row_ in checks.rows}
-    row("cost-reads-the-four-player-windows", verdicts == {"cost-closed-within-budget": True, "cost-open-within-budget": False})
+    row("cost-reads-the-four-player-windows", verdicts == {"cost-closed-within-budget": True, "cost-closed-summed-whole": True,
+                                                           "cost-open-within-budget": False, "cost-open-summed-whole": False})
     # The stale press: nobody acted on is green; the pressed player removed or named is red.
     host, ana, ben, cleo = NAMES
     reads = {host: {"a-slot-before": {"text": ben}, "a-slot-caption": {"text": f"Remove {ana}"}, "a-status": {"text": LIST_CHANGED},
@@ -1251,6 +1353,41 @@ def self_test():
     checks = Checks()
     check_stale_press(checks, reads, logs)
     row("stale-press-red-when-the-pressed-player-is-removed", not all(row_["pass"] for row_ in checks.rows))
+    # The leave pressed as a handover: the release that found it changed does nothing and says so; one that leaves is red.
+    changed = f"Leave the match?\nThe match ends for everyone.\nWhat leaving does changed as you pressed, {LEAVE_CHANGED}."
+    reads = {host: {"race-shown": {"text": "Leave the match?\nAnother player becomes the host and the match plays on."},
+                    "race-after-release": {"text": changed, "visible": True}}}
+    logs = {who: "" for who in NAMES}
+    logs[ana] = "Host left the match at frame 900"
+    checks = Checks()
+    check_leave_press_race(checks, reads, logs)
+    row("leave-race-green-when-the-release-waits", all(row_["pass"] for row_ in checks.rows))
+    reads[host].pop("race-after-release")
+    checks = Checks()
+    check_leave_press_race(checks, reads, logs)
+    row("leave-race-red-when-the-release-leaves", not all(row_["pass"] for row_ in checks.rows))
+    # The client's sentence against the landing: a promise the landing does not keep is red.
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        (root / "ticket-damaged.json").write_text('{"damaged": true}', encoding="utf-8")
+        landing = {"screen": "MainScreen", "controls": []}
+        honest = "Leave the match?\nThe AI plays your units for the rest of the match.\nTo come back, join it again from the Multiplayer screen and ask the host for a place."
+        checks = Checks()
+        check_leave_bad_ticket(checks, {ana: {"bad-ticket-text": {"text": honest}}}, {ana: [landing]}, root)
+        row("bad-ticket-green-when-no-rejoin-is-promised-or-offered", all(row_["pass"] for row_ in checks.rows))
+        promise = "Leave the match?\nThe AI plays your units and your seat stays yours.\nRejoin Match on the Multiplayer screen brings you back while the match runs."
+        checks = Checks()
+        check_leave_bad_ticket(checks, {ana: {"bad-ticket-text": {"text": promise}}}, {ana: [landing]}, root)
+        row("bad-ticket-red-when-rejoin-is-promised-and-not-offered", not all(row_["pass"] for row_ in checks.rows))
+    # The away summary names the player away, never the opened place before it.
+    reads = {host: {"removed": {"text": f"{ana} was removed from the match."}, "away-summary": {"text": f"{ben} is away - 1 request to join"}}}
+    checks = Checks()
+    check_away_names(checks, reads)
+    row("away-names-green-when-the-player-away-is-named", all(row_["pass"] for row_ in checks.rows))
+    reads[host]["away-summary"] = {"text": "Open place (seat 2) is away - 1 request to join"}
+    checks = Checks()
+    check_away_names(checks, reads)
+    row("away-names-red-when-the-opened-place-is-named", not all(row_["pass"] for row_ in checks.rows))
     print(f"[in-match-ux-self-test] {'PASS' if all(rows) else 'FAIL'} {sum(rows)}/{len(rows)}")
     return 0 if all(rows) else 1
 
