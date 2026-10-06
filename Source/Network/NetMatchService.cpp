@@ -2654,7 +2654,7 @@ static std::string ResyncSaveName() {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			CaptureMatchSummaryLocked(result);
-			RememberTicketRoutesLocked(true);
+			RememberTicketRoutesLocked(true, handover);
 			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
 			if (m_IsHost && !handover) m_ReconnectHost.SetMatchEnded();
 			m_LeftMatch = true;
@@ -11582,7 +11582,7 @@ static std::string ResyncSaveName() {
 		return BeginTicketRejoinOnRoute(error, nullptr);
 	}
 
-	void NetMatchService::RememberTicketRoutesLocked(bool force) {
+	void NetMatchService::RememberTicketRoutesLocked(bool force, bool handsOver) {
 		if (!m_Coordinator || !m_MatchWasRunning || !m_Session || !m_Session->IsReady()) return;
 		const uint64_t now = SteadyNowMs();
 		if (!force && now < m_TicketRoutesRefreshAtMs) return;
@@ -11598,8 +11598,17 @@ static std::string ResyncSaveName() {
 			if (endpoint == config.migrationPeers.end() || endpoint->listenPort == 0) continue;
 			for (const auto& address: endpoint->listenAddrs) routes.push_back({address, endpoint->listenPort});
 		}
-		if (routes == m_TicketStore.LoadRoutes(record)) return;
 		std::string error;
+		// The departing direct host tries the first published successor instead of its closed address.
+		if (handsOver && record.directorySessionId.empty() && !routes.empty()) {
+			auto successor = record;
+			const auto& next = routes.front();
+			successor.hostAddress = next.address.find(':') != std::string::npos && !next.address.starts_with("[") ? "[" + next.address + "]" : next.address;
+			successor.hostAddress += ":" + std::to_string(next.port);
+			if (m_TicketStore.Store(successor, &error)) record = std::move(successor);
+			else System::PrintDiagnosticLine("[net-match] cannot save the direct successor rejoin address: " + error);
+		}
+		if (routes == m_TicketStore.LoadRoutes(record)) return;
 		if (!m_TicketStore.StoreRoutes(record, routes, &error)) System::PrintDiagnosticLine("[net-match] cannot save the successor rejoin routes: " + error);
 	}
 

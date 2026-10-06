@@ -1908,7 +1908,7 @@ namespace RTE {
 		bool m_LastJoinTargetPersistentWorld = false;
 		std::optional<NetMatchServiceRequest> m_LastJoinRoute;
 		bool BeginTicketRejoinOnRoute(std::string* error, const NetMatchServiceRequest* liveRoute);
-		void RememberTicketRoutesLocked(bool force = false);
+		void RememberTicketRoutesLocked(bool force = false, bool handsOver = false);
 		void DriveOrdinaryTicketRejoin();
 		uint64_t m_TicketRoutesRefreshAtMs = 0;
 		bool m_OrdinaryTicketRejoin = false;
