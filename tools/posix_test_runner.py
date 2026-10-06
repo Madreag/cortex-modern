@@ -572,6 +572,15 @@ class IsolatedRun:
         self.env["CCCP_HEADLESS"] = "1"
         env_set = dict(extra)
         env_set["CCCP_HEADLESS"] = "1"
+        # Headless GL must not create even a hidden X11 window on an autologin display.
+        # SDL's offscreen driver uses an EGL device and pbuffer, without a display server.
+        if sys.platform.startswith("linux"):
+            self.env["SDL_VIDEODRIVER"] = "offscreen"
+            env_set["SDL_VIDEODRIVER"] = "offscreen"
+        elif sys.platform == "darwin":
+            self.env["SDL_VIDEODRIVER"] = "cocoa"
+            self.env["SDL_MAC_BACKGROUND_APP"] = "1"
+            env_set.update(SDL_VIDEODRIVER="cocoa", SDL_MAC_BACKGROUND_APP="1")
         # A FATAL writes the minidump at this cwd-relative path, beside AbortCode.txt.
         if "CC_TEST_CRASH_DUMP" not in extra:
             self.env.setdefault("CC_TEST_CRASH_DUMP", "crash.dmp")
