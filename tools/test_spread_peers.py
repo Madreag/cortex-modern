@@ -27,6 +27,22 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(sources['pool_cohort.py'], (root/'pool_cohort.py').read_text())
             self.assertEqual(sources['pool_run.py'], (root/'pool_run.py').read_text())
 
+    def test_native_bootstrap_loads_route_reader_before_facts_and_adapter_after(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'pool_cohort.py').write_text("NAME = 'named'\n")
+            (root/'pool_run.py').write_text('import box_facts\nNAME = box_facts.NAME\n')
+            existing = {'box_facts.py': 'import pool_cohort\nNAME = pool_cohort.NAME\n',
+                        'pool_worker.py': 'import box_facts\n'}
+            sources = spread.native_adapter_sources(root/'box_facts.py', existing)
+            boot = ('import json,sys,types\n'
+                    'for name,source in json.load(sys.stdin).items():\n'
+                    ' m=types.ModuleType(name[:-3]);sys.modules[name[:-3]]=m;exec(source,m.__dict__)\n'
+                    'assert sys.modules["pool_run"].NAME=="named"\n')
+            done = subprocess.run([sys.executable, '-B', '-c', boot], input=json.dumps(sources),
+                                  capture_output=True, text=True, timeout=10)
+            self.assertEqual(done.returncode, 0, done.stderr)
+
     def test_cpu_guard_waits_on_the_named_box_and_quiet_peer_waits_for_idle(self):
         for quiet, loads in ((False, [(100, 1), (20, 1)]),
                              (True, [(100, 1), (20, 1), (20, 0)])):

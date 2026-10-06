@@ -647,11 +647,14 @@ def native_cpu_wait_source(source):
     return source.replace(guard, replacement, 1)
 
 
-def native_adapter_sources(facts_path):
+def native_adapter_sources(facts_path, existing=None):
     """Ship the existing facts adapter's route reader before its launch adapter."""
     folder = Path(facts_path).parent
-    return {name: (folder/name).read_text(encoding="utf-8")
-            for name in ("pool_cohort.py", "pool_run.py") if (folder/name).is_file()}
+    adapters = {name: (folder/name).read_text(encoding="utf-8")
+                for name in ("pool_cohort.py", "pool_run.py") if (folder/name).is_file()}
+    return {**({"pool_cohort.py": adapters["pool_cohort.py"]} if "pool_cohort.py" in adapters else {}),
+            **(existing or {}),
+            **({"pool_run.py": adapters["pool_run.py"]} if "pool_run.py" in adapters else {})}
 
 
 @contextlib.contextmanager
@@ -897,7 +900,7 @@ class Case:
         backend.sources["pool_worker.py"] = native_cpu_wait_source(backend.sources["pool_worker.py"])
         # The existing facts reader lazily imports pool_cohort under a named
         # assignment. It reads that assignment only; it does not select boxes.
-        backend.sources = {**native_adapter_sources(module.worker.facts.__file__), **backend.sources}
+        backend.sources = native_adapter_sources(module.worker.facts.__file__, backend.sources)
         preflight = Path(__file__).with_name("cross_peers.py")
         self.preflight_source = preflight.read_text(encoding="utf-8") if preflight.is_file() else None
         backend.control_id = hashlib.sha256(json.dumps(dict(backend.sources, preflight=self.preflight_source), sort_keys=True).encode()).hexdigest()[:20]
