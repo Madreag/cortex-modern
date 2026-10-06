@@ -16715,6 +16715,56 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		// devices for it: ACrab's mouse-aim clamp hands the seat's input slot to UInputMan::AnalogAimValues,
 		// whose m_ControlScheme.at() throws out of the sim tick on NoPlayer.
 
+		bool TestLocalReclaimPreparationRunsOnce(std::string* error) {
+			EnsureSwitchTestManagers();
+			LoopbackTransport wire;
+			NetLockstepCoordinator replay;
+			auto config = MakeCoordinatorConfig(2, 1, 43230, 3, NetTransportLane::ControlReliable);
+			config.roundId = 0x48314F4E4345ULL;
+			config.startFrame = 100;
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+			config.initialSeatHolds[2] = {2, 0, 1, 1, 90};
+			config.initialSeatReclaims[2] = {2, 0, 2, 2, 100, 3, 103};
+			config.peerIncarnations[2] = 2;
+			const auto finish = [&](const std::string& failure) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				std::cout << "[net-lockstep-selftest] " << (failure.empty() ? "PASS " : "FAIL ") << "h1_reclaim_prepares_once";
+				if (!failure.empty()) std::cout << ": " << failure;
+				std::cout << std::endl;
+				if (error && !failure.empty()) *error = failure;
+				return failure.empty();
+			};
+			if (!replay.StartReplay(wire, config, error)) return finish(error ? *error : "replay did not start");
+			ScenarioRunner::SetLockstepCoordinator(&replay);
+			std::unique_ptr<Activity> activity = std::make_unique<Activity>();
+			activity->AddPlayer(Players::PlayerTwo, true, Activity::TeamTwo, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Actor* actor = MakeSwitchTestActor(Activity::TeamTwo);
+			if (!actor) return finish("actor creation failed");
+			AddSwitchTestActor(actor);
+			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+			NetActorOwnership::SeedOwner(uid, 2, Activity::TeamTwo);
+			if (!g_ActivityMan.GetActivity()->SwitchToActor(actor, Players::PlayerTwo, Activity::TeamTwo)) return finish("binding failed");
+			g_ActivityMan.GetActivity()->SetPlayerBrain(actor, Players::PlayerTwo);
+			g_ActivityMan.GetActivity()->SetViewState(Activity::Observe, Players::PlayerTwo);
+			if (MovableMan::PrepareLockstepReclaimInput(100) != 0) return finish("preparation ran before activation finished");
+			ScenarioRunner::ReclaimLockstepActor(uid, 2);
+			actor->GetController()->ApplyWireMode(Controller::CIM_AI, Players::NoPlayer);
+			actor->GetController()->ResetLocalInputState(Controller::CIM_AI, Players::NoPlayer);
+			if (MovableMan::PrepareLockstepReclaimInput(101) != 1 || actor->GetController()->GetSeatMode() != Controller::CIM_PLAYER ||
+			    actor->GetController()->GetSeatPlayerRaw() != Players::PlayerTwo || g_ActivityMan.GetActivity()->GetViewState(Players::PlayerTwo) != Activity::Normal)
+				return finish("the returning living seat did not regain its sampler and Normal view");
+			actor->GetController()->SetInputMode(Controller::CIM_AI);
+			g_ActivityMan.GetActivity()->SetViewState(Activity::ActorSelect, Players::PlayerTwo);
+			for (const uint64_t frame: {102ULL, 104ULL, 105ULL})
+				if (MovableMan::PrepareLockstepReclaimInput(frame) != 0 || actor->GetController()->GetSeatMode() != Controller::CIM_AI ||
+				    g_ActivityMan.GetActivity()->GetViewState(Players::PlayerTwo) != Activity::ActorSelect)
+					return finish("preparation overrode a later menu or ran outside its return window");
+			return finish("");
+		}
+
 		bool TestOrdinaryMenusKeepTheirSampler(std::string* error) {
 			const char* name = "h1_ordinary_modes_600_ticks";
 			EnsureSwitchTestManagers();
@@ -24488,6 +24538,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		}
 		std::string ordinaryModesError;
 		const bool ordinaryModes = TestOrdinaryMenusKeepTheirSampler(&ordinaryModesError);
+		std::string reclaimOnceError;
+		const bool reclaimOnce = TestLocalReclaimPreparationRunsOnce(&reclaimOnceError);
 		const bool claimTie = TestSimultaneousClaimTieBreak(&claimTieError);
 		const bool switchHold = TestSwitchUnderSyncedHold(&switchHoldError);
 		const bool coopTakeover = TestCoopTakeoverOfHostCpuActor(&coopTakeoverError);
@@ -24514,7 +24566,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		const bool producingSet = TestProducingPassEndsTheSetItBeganWith(&producingSetError);
 		std::string readdedError;
 		const bool readdedFromWire = TestReaddedActorBeginsFromTheWire(&readdedError);
-		if (!pendingSwitches || !ordinaryModes || !switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry || !teamChangeOwner || !remoteSeatInput || !seatMapSurvivesEnd ||
+		if (!reclaimOnce || !pendingSwitches || !ordinaryModes || !switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry || !teamChangeOwner || !remoteSeatInput || !seatMapSurvivesEnd ||
 		    !sharedSeatAnswer || !speculativeBinding || !startWindow || !checkpointBinding || !producingSet || !readdedFromWire) {
 			return 1;
 		}

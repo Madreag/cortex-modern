@@ -1694,10 +1694,14 @@ namespace RTE {
 		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator || s_WorldCatchUpActive) return std::nullopt;
 		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
-		if (!s_LockstepCoordinator->IsSeatReclaimGap(local, frame)) return std::nullopt;
 		const auto reclaims = s_LockstepCoordinator->ReclaimTransactions();
 		const auto own = reclaims.find(local);
-		return own != reclaims.end() ? std::optional{own->second} : std::nullopt;
+		if (own == reclaims.end()) return std::nullopt;
+		const auto& reclaim = own->second;
+		const uint64_t firstHuman = std::max(reclaim.neutralThroughFrame, reclaim.activationFrame + reclaim.delayFrames) + 1;
+		// Activation still applies its controller reset; preparation follows it before the first human sample.
+		if (frame <= reclaim.activationFrame || frame > firstHuman || s_LockstepCoordinator->IsSeatUnderAI(local, frame)) return std::nullopt;
+		return reclaim;
 	}
 
 	bool ScenarioRunner::IsLocalControlClaimPending(int64_t actorUniqueID) {

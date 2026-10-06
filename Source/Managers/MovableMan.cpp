@@ -1303,6 +1303,10 @@ size_t MovableMan::PrepareLockstepReclaimInput(uint64_t frame) {
 		if (ScenarioRunner::GetLockstepReclaimSeat(uid, controlled->GetTeam(), !controlled->IsPlayerControlled(), frame) != reclaim->peerId) continue;
 		// A later menu mode belongs to ordinary play, even during this return's remaining gap.
 		prepared[player] = key;
+		const Actor* brain = activity->GetPlayerBrain(player);
+		if ((activity->GetViewState(player) == Activity::Observe || activity->GetViewState(player) == Activity::DeathWatch) &&
+		    brain && g_MovableMan.IsActor(const_cast<Actor*>(brain)) && !brain->IsDead() && brain->GetHealth() > 0 &&
+		    !controlled->IsDead() && controlled->GetHealth() > 0) activity->SetViewState(Activity::Normal, player);
 		Controller* controller = controlled->GetController();
 		if (controller->GetSeatMode() != Controller::CIM_PLAYER || controller->GetSeatPlayerRaw() != player) {
 			controller->DropLocalProduction();
