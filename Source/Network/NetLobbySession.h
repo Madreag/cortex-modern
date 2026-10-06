@@ -108,6 +108,9 @@ namespace RTE {
 		bool IsRemoteReady(uint8_t peerId) const;
 		/// Host: whether that remote has acknowledged the configuration revision now published.
 		bool IsConfigAcked(uint8_t peerId) const;
+		/// Host: whether that remote has acknowledged the match now set up, so its Ready is for this setup. A revision that only
+		/// re-seats a player or re-sizes a delay keeps it.
+		bool HasAckedSetup(uint8_t peerId) const;
 		const std::string& GetRemoteName() const;
 		const std::string& GetRemoteName(uint8_t peerId) const;
 		uint32_t GetPeerPingMs(uint8_t peerId) const;
@@ -344,6 +347,7 @@ namespace RTE {
 		std::vector<uint8_t> m_RemotePeerIds; //!< Every remote lockstep peerId; derived at Start.
 		std::map<uint8_t, NetPeerId> m_RemoteTransports; //!< Lockstep peerId -> transport id for each remote.
 		std::map<uint8_t, bool> m_ConfigAckedByPeer; //!< Host: which remotes accepted the config.
+		std::map<uint8_t, NetMatchConfig> m_AckedSetupByPeer; //!< Host: the config each remote last accepted.
 		std::map<uint8_t, bool> m_RemoteReadyByPeer; //!< Which peers are ready, from direct or relayed peer-state.
 		std::map<uint8_t, std::string> m_RemoteNamesByPeer; //!< Peer display names from periodic peer-state.
 		std::map<uint8_t, uint32_t> m_RemotePingByPeer; //!< Peer pings; the host stamps relayed states with its measurement.
