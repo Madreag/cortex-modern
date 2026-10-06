@@ -45,6 +45,10 @@ files, logs and video indices. Gameplay travels over real network sockets;
 SSH carries signaling and evidence only. No router mapping is requested.
 Caller paths are private staging
 paths; the helper maps them to the native case root, never to an owner's tree.
+Selected retained data files stay private. Inside a modified POSIX .rte module,
+directories are real and unchanged files use regular file links or copies;
+no directory symlink is placed inside the engine's content identity walk.
+Windows retained staging and aliases for unmodified module roots stay unchanged.
 
 Refusals raise SpreadRefusal and write spread-result.json with topology,
 peer_boxes, refused_peer, refused_box and the exact reason. Prefixes are
@@ -80,6 +84,11 @@ Match.parameters["peer_tasks"] may pin a named Windows task for each peer.
 Match.parameters["public_directory"]=True uses the game's default public
 directory without a signaling tunnel. The host's registration log supplies
 its session code; only deliberate loopback joins are replaced by that code.
+The initial claim and final launch wait for their native capacity mutex for up
+to 180 seconds, bounded by the remaining positive runner-wait budget. An
+omitted/zero runner-wait retains the old 15-second mutex budget for old calls.
+Only an expired mutex wait refuses, naming its box, peer and lock path. The
+claim RPC has that mutex allowance in addition to its original probe budget.
 Transient CPU refusals re-probe that same named box every 30 seconds for up to
 600 seconds. Quiet peers also wait for an idle box and retain the strict CPU
 guard. The native launch check releases its capacity mutex between probes;
@@ -94,6 +103,8 @@ on the native host's route to each named peer's saved SSH endpoint. This keeps
 LAN peers on the LAN and overlay peers on their existing overlay, without
 changing either network. Concurrent seats wait for an already requested host
 to have its native PID before launching; callers still order their starts.
+The same admission barrier precedes session lookup, whose original 80-second
+publication budget begins after that admission and remains unchanged.
 Loopback/unspecified host addresses refuse with the box
 named. Explicit ICE-Off in the default ICE mode also refuses instead of being
 overwritten. Scratch placement derives from the installed box catalog.
@@ -690,6 +701,15 @@ class NamedCpuWait:
         time.sleep(max(0, min(next_probe-now, self.deadline-now)))
 
 
+def exclusive_owner(path, value, facts):
+    live = bool(value and not getattr(value, 'bare', False) and value.get('pid')
+                and value.get('process_start') is not None and value.get('machine'))
+    if live and str(value['machine']).casefold() == facts.machine_name().casefold():
+        live = facts.process_start(value['pid']) == value['process_start']
+    return dict(path=str(path), live=live, **({key:value.get(key) for key in
+                ('pid', 'process_start', 'machine', 'label', 'token')} if value else {}))
+
+
 def native_exclusive_state(probe, box, *, facts, root, **kwargs):
     """Attach read-only exclusive ownership evidence to the native facts probe."""
     holders, ownerless = [], []
@@ -708,14 +728,9 @@ def native_exclusive_state(probe, box, *, facts, root, **kwargs):
             continue
         if not path.exists():
             continue
-        live = bool(value and not getattr(value, 'bare', False) and value.get('pid')
-                    and value.get('process_start') is not None and value.get('machine'))
-        if live and str(value['machine']).casefold() == facts.machine_name().casefold():
-            live = facts.process_start(value['pid']) == value['process_start']
-        holder = dict(path=str(path), live=live, **({key:value.get(key) for key in
-                      ('pid', 'process_start', 'machine', 'label', 'token')} if value else {}))
+        holder = exclusive_owner(path, value, facts)
         holders.append(holder)
-        if not live:
+        if not holder['live']:
             ownerless.append(f"ownerless exclusive marker {path}; no live recorded owner")
     # An ownerless marker is evidence for the lead; the facts probe must not
     # archive it as a stale reservation. Other capacity checks stay unchanged.
@@ -757,13 +772,70 @@ class NamedHolderWait:
         time.sleep(min(2, remaining))
 
 
+def claim_native_exclusive_marker(box, claim, marker, label, *, facts, renew):
+    """Wait for a POSIX quiet holder before publishing this peer's own marker."""
+    from types import SimpleNamespace
+    wait = NamedHolderWait(box, SimpleNamespace(peer_id=claim['needs']['peer_id']), claim.get('runner_wait', 0))
+    while True:
+        existing = facts.read_reservation(marker, archive=False)
+        if not Path(marker).exists():
+            try:
+                facts.write_reservation(marker, label, token=claim['token'])
+            except FileExistsError:
+                continue  # the atomic writer lost to a new holder; check its owner
+            return
+        owner = exclusive_owner(marker, existing, facts)
+        if not owner['live']:
+            raise SpreadRefusal(f'ownerless exclusive marker {marker}; no live recorded owner')
+        if existing.get('token') == claim['token']:
+            return
+        reason = f"box launch refused: {marker}; owner={owner['label']} (pid={owner['pid']}, machine={owner['machine']})"
+        if not wait.accepts(reason, dict(exclusive_holders=[owner])):
+            raise RuntimeError('another owner reserves this box alone')
+        wait.pause(reason)
+        renew(claim)
+
+
+def capacity_lock_seconds(wait, remaining=None):
+    import math
+    wait = float(wait or 0)
+    if not math.isfinite(wait) or wait < 0:
+        raise ValueError('runner wait must be finite and nonnegative')
+    if not wait:
+        return 15.0  # preserve callers that do not request a holder wait
+    if remaining is not None:
+        remaining = float(remaining)
+        if not math.isfinite(remaining):
+            raise ValueError('remaining runner wait must be finite')
+        wait = min(wait, max(0, remaining))
+    return min(180.0, wait)
+
+
+@contextlib.contextmanager
+def named_capacity_mutex(path, *, mutex, box, peer, wait=0, remaining=None):
+    """Use the native capacity lock with the lead's bounded contention wait."""
+    budget = capacity_lock_seconds(wait, remaining)
+    stack = contextlib.ExitStack()
+    try:
+        stack.enter_context(mutex(path, wait=budget))
+    except RuntimeError as error:
+        stack.close()
+        if str(error) == 'capacity update is busy; skip this box':
+            raise SpreadRefusal(f"{box['name']}; peer {peer}; capacity lock {path}; "
+                                f"wait expired after {budget:g}s: {error}") from error
+        raise
+    with stack:
+        yield
+
+
 @contextlib.contextmanager
 def named_launch_capacity(box, needs, claim, *, probe, live_reason, mutex, root, renew):
     """Keep the native final guard and release its lock while waiting to retry."""
     retry = NamedCpuWait(box, needs)
     holder = NamedHolderWait(box, needs, claim.get('runner_wait', 0))
     while True:
-        with mutex(root/".capacity.lock", wait=15):
+        with named_capacity_mutex(root/'.capacity.lock', mutex=mutex, box=box, peer=needs.peer_id,
+                                  wait=claim.get('runner_wait', 0), remaining=holder.deadline-time.monotonic()):
             retry.probe_started()
             state = probe(box, refresh_display=False, ignore_token=claim["token"])
             reason = live_reason(box, needs, state)
@@ -784,6 +856,22 @@ def native_cpu_wait_source(source):
              "                if reason:=live_reason(box,Needs(**claim['needs']),before):raise RuntimeError('capacity changed before launch: '+reason)\n")
     if source.count(guard) != 1:
         raise SpreadRefusal("native worker capacity guard differs from the supported kit")
+    claim_guard = "    with mutex(root/'.capacity.lock',wait=15):\n"
+    if 'def capacity_claim(' in source and source.count(claim_guard) != 1:
+        raise SpreadRefusal('native worker capacity claim guard differs from the supported kit')
+    source = source.replace(claim_guard,
+                "    from spread_peers import named_capacity_mutex\n"
+                "    with named_capacity_mutex(root/'.capacity.lock',mutex=mutex,box=box,peer=needs['peer_id'],\n"
+                "            wait=request.get('runner_wait',0),remaining=request.get('capacity_wait_remaining')):\n", 1)
+    marker_guard = ("            existing=facts.read_reservation(marker)\n"
+                    "            if not existing:facts.write_reservation(marker,request['label'],token=claim['token'])\n"
+                    "            elif existing.get('token')!=claim['token']:raise RuntimeError('another owner reserves this box alone')\n")
+    if 'another owner reserves this box alone' in source and source.count(marker_guard) != 1:
+        raise SpreadRefusal('native worker exclusive marker guard differs from the supported kit')
+    if source.count(marker_guard) == 1:
+        source = source.replace(marker_guard,
+                 "            from spread_peers import claim_native_exclusive_marker\n"
+                 "            claim_native_exclusive_marker(box,claim,marker,request['label'],facts=facts,renew=renew_claim)\n", 1)
     replacement = ("            from spread_peers import named_launch_capacity\n"
                    "            with named_launch_capacity(box,Needs(**claim['needs']),claim,probe=capacity_state,\n"
                    "                    live_reason=live_reason,mutex=mutex,root=root_for(box),renew=renew_claim) as before:\n"
@@ -892,7 +980,10 @@ def claim_named_peer(backend, box, needs, request, *, wait=0, wait_for_holder=No
     while True:
         cpu.probe_started()
         try:
-            return backend.rpc(box, "claim", dict(box=box, needs=needs.__dict__, request=request), timeout=30)
+            remaining = max(0, deadline-time.monotonic())
+            native_request = dict(request, runner_wait=wait, capacity_wait_remaining=remaining)
+            return backend.rpc(box, "claim", dict(box=box, needs=needs.__dict__, request=native_request),
+                               timeout=30 + capacity_lock_seconds(wait, remaining))
         except RuntimeError as error:
             text = str(error)
             reason = text.split("capacity refused: ", 1)[-1]
@@ -1320,8 +1411,23 @@ class Case:
     def published_session(self, name):
         from e2e_video import directory_session
         port = int(role_value(self.peer_ports, self.names, name) or self.match.port)
+        host = self.runs.get(self.names[0])
+        if host and getattr(host, 'launch_attempted', False):
+            wait = self.match.parameters.get('runner_wait', getattr(_options, 'runner_wait', 0))
+            try:
+                wait_started_host(self, name, wait)
+            except SpreadRefusal as error:
+                host_box = self.members[self.names[0]][0]['name']
+                reason = getattr(host, 'start_failure', None) or str(error)
+                raise self.refuse(name, self.members[name][0]['name'],
+                                  f'requested host on {host_box} did not start: {reason}') from error
         deadline = time.monotonic() + 80
         while time.monotonic() < deadline:
+            host = self.runs.get(self.names[0])
+            if host and getattr(host, 'start_failure', None):
+                host_box = self.members[self.names[0]][0]['name']
+                raise self.refuse(name, self.members[name][0]['name'],
+                                  f'requested host on {host_box} did not start: {host.start_failure}')
             if getattr(self, "public_directory", False):
                 self.guard()
                 host = self.runs.get(self.names[0])
@@ -1493,17 +1599,29 @@ def link_directory(source, target):
         target.symlink_to(source, target_is_directory=True)
 
 
-def overlay_data(source, target, paths):
-    """Give each overlay a private ancestor while linking other data directories."""
+def overlay_data(source, target, paths, *, module_content=False):
+    """Give overlays private ancestors and keep POSIX module contents regular."""
     target.mkdir(parents=True, exist_ok=False)
+    posix_content = sys.platform != "win32" and module_content
     for child in source.iterdir():
         destination = target / child.name
         below = [path for path in paths if path.parts[0] == child.name]
+        if posix_content and child.is_symlink():
+            raise SpreadRefusal(f"private module input contains a symlink: {child}")
         if child.is_dir():
-            if below:
-                overlay_data(child, destination, [Path(*path.parts[1:]) for path in below if len(path.parts) > 1])
+            if below or posix_content:
+                overlay_data(child, destination, [Path(*path.parts[1:]) for path in below if len(path.parts) > 1],
+                             module_content=module_content or child.suffix.casefold() == ".rte")
             else:
                 link_directory(child, destination)
+        elif posix_content and not below:
+            import errno
+            try:
+                os.link(child, destination)
+            except OSError as error:
+                if error.errno not in (errno.EXDEV, errno.EPERM, errno.EACCES, errno.ENOTSUP):
+                    raise
+                shutil.copyfile(child, destination)
         else:
             shutil.copyfile(child, destination)
 
