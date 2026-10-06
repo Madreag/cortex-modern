@@ -18,11 +18,21 @@ from run_sim_test import make_run, engine_executable, file_sha256
 from test_lobby_lifecycle import wait_for_log
 from test_telemetry_bundle import set_visual_resolution
 
+try:
+    import spread_peers as spread
+except ModuleNotFoundError as error:
+    if error.name != "spread_peers":
+        raise
+    spread = None
+
+managed_case = spread.managed_case if spread else lambda function: function
+
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "pause-save", "save-hotkey", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
          "lobby-name", "net-options", "net-activity", "net-host-left", "net-host-left-early", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "host-by-hand", "host-follows-activity", "oracles")
 PAIRED_CASES = ("pause", "pause-save", "save-hotkey", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early")
+SPREAD_CASES = (*PAIRED_CASES, "net-chat", "lobby-name")
 # Cases another driver owns. They hold up to four engines for about an hour a size, so "all" never selects them: they run by name.
 DELEGATED_CASES = ("in-match",)
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
@@ -407,6 +417,8 @@ def ntdll():
 def suspend_run(run):
     """Freeze every thread of a live run's process; a suspended peer is absent to the wire but its
     failure path carries no fixture error of its own the way an in-engine hold would."""
+    if hasattr(run, "suspend"):
+        return run.suspend()
     if run.process is None:
         raise RuntimeError("suspend asked for a process that has not started")
     if ntdll().NtSuspendProcess(ctypes.c_void_p(run.process)) != 0:
@@ -414,13 +426,15 @@ def suspend_run(run):
 
 
 def resume_run(run):
+    if hasattr(run, "resume"):
+        return run.resume()
     if ntdll().NtResumeProcess(ctypes.c_void_p(run.process)) != 0:
         raise RuntimeError("NtResumeProcess failed")
 
 
 def unavailable_reason(case, platform=None):
     """Why this platform cannot drive a case, or None. The case is refused with that reason as its verdict."""
-    if (platform or os.name) != "nt" and case == "net-host-left-early":
+    if (platform or os.name) != "nt" and case == "net-host-left-early" and not (spread and spread.enabled()):
         return "suspends the client mid-launch through ntdll's NtSuspendProcess on the win32 runner's process handle (Windows only)"
     if (platform or os.name) != "nt" and case == "in-match":
         return "suspends a newcomer mid-launch through ntdll's NtSuspendProcess on the win32 runner's process handle (Windows only)"
@@ -433,13 +447,21 @@ def run_delegated(options, case, size):
     root.parent.mkdir(parents=True, exist_ok=True)
     argv = [sys.executable, "-u", str(Path(__file__).with_name("test_in_match_ux.py")), "--repo", str(options.repo), "--out", str(root),
             "--case", "all", "--size", size, "--port", str(options.port)]
+    if spread and spread.enabled(options):
+        argv += ["--peer-boxes", options.peer_boxes] if options.peer_boxes else ["--spread"]
+        for name in ("pool_dispatcher", "pool_registry"):
+            if getattr(options, name, None):
+                argv += ["--" + name.replace("_", "-"), str(getattr(options, name))]
+        for peer_port in options.peer_port:
+            argv += ["--peer-port", peer_port]
     process = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace")
     (root.parent / f"{size}-driver.log").write_text(process.stdout + process.stderr, encoding="utf-8")
     result_path = root / "result.json"
     result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.exists() else {}
     red = [f"{row['case']}/{row['size']}: {check['check']}" for row in result.get("rows", []) for check in row.get("checks", []) if not check["pass"]]
     return {"pass": process.returncode == 0 and result.get("pass") is True, "case": case, "size": size, "argv": argv, "exit": process.returncode,
-            "result": str(result_path), "red": red, "captures": []}
+            "result": str(result_path), "red": red, "captures": [], "topology": result.get("topology", "single-box: not proof"),
+            "peer_boxes": result.get("peer_boxes", {}), "proof": result.get("proof", False)}
 
 
 def unavailable_row(case, size, reason):
@@ -1961,7 +1983,10 @@ def timing_options_geometry(images):
     return measured
 
 
+@managed_case
 def run_case(options, case, root, failing=None):
+    if spread:
+        spread.configure(options)
     root.mkdir(parents=True, exist_ok=False)
     texts, probes = scripts(case, options.port, root, options.size)
     if failing:
@@ -1974,8 +1999,20 @@ def run_case(options, case, root, failing=None):
     menu_driven = case in ("net-activity", "local-end-match", "net-host-left", "net-host-left-early")
     seeded = {} if failing else seeds(case)
     runs, records, argv, images = {}, {}, {}, []
+    executor = None
     result = {"pass": False, "case": case, "scripts": {}, "records": records, "probes": {}, "seeds": seeded}
+    spread_requested = case in SPREAD_CASES and bool(getattr(options, "spread", False) or getattr(options, "peer_boxes", None))
+    result.update(topology="spread" if spread_requested else "single-box: not proof" if paired else "single-peer", proof=False)
     try:
+        factory = make_run
+        if spread_requested:
+            if not spread:
+                raise RuntimeError("selected menu readback requires the shared spread executor")
+            width, height = map(int, options.size.split("x"))
+            peers = [spread.Peer(who, os="windows" if who == "host" or case == "net-host-left-early" else "any",
+                                 size=(width, height), reviewed=who == "host") for who in texts]
+            executor = spread.prepare_case(options.repo, root, peers, spread.Match(options.port, parameters={"lane": "menus"}))
+            factory = executor.make_run
         for who in (("host", "client") if paired else ("host",)):
             script = root / f"{who}-menu.txt"
             script.write_text(texts[who], encoding="utf-8")
@@ -2009,7 +2046,7 @@ def run_case(options, case, root, failing=None):
                 result["scripts"][str(path)] = sha(path)
                 env["CC_TEST_NET_UI_SCRIPT"] = str(path)
             argv[who] = args
-            runs[who] = make_run(options.repo, args, root / who, 180, env=env)
+            runs[who] = factory(options.repo, args, root / who, 180, env=env)
             set_visual_resolution(runs[who], *map(int, options.size.split("x")))
             if case in ("lobby", "host-defaults"):
                 (runs[who].cwd / "Userdata/NetworkHostDefaults.ini").write_text(
@@ -2025,8 +2062,11 @@ def run_case(options, case, root, failing=None):
         def drive(who):
             try:
                 records[who] = runs[who].start().finish()
+                if not executor:
+                    records[who]["topology"] = result["topology"]
+                    (runs[who].out / "record.json").write_text(json.dumps(records[who], indent=2) + "\n", encoding="utf-8")
             except Exception as error:
-                records[who] = {"error": repr(error)}
+                records[who] = {"error": repr(error), "topology": result["topology"]}
 
         threads = [threading.Thread(target=drive, args=(who,)) for who in runs]
         for index, thread in enumerate(threads):
@@ -2816,7 +2856,21 @@ def run_case(options, case, root, failing=None):
         result["error"] = str(error)
     finally:
         for run in runs.values():
-            run.close()
+            if not spread_requested:
+                run.close()
+            else:
+                try:
+                    run.close()
+                except Exception as error:
+                    result["pass"] = False
+                    result.setdefault("cleanup_errors", []).append(str(error))
+        receipt = executor.result() if executor else None
+        if not receipt and spread_requested and (root / "spread-result.json").is_file():
+            receipt = json.loads((root / "spread-result.json").read_text(encoding="utf-8"))
+        if receipt:
+            result.update(topology="spread", peer_boxes=receipt["peer_boxes"], spread=receipt)
+            result["execution_scope"] = "match peers" if paired else "standalone UI"
+            result["proof"] = paired and result["pass"] and len(set(result["peer_boxes"].values())) == len(runs)
         result["captures"] = images
         (root / "result.json").write_text(json.dumps(retain_capture_detail(root, result), indent=2) + "\n", encoding="utf-8")
     return result
@@ -2905,6 +2959,10 @@ def main():
     parser.add_argument("--all-sizes", action="store_true",
                         help="also run every SIZE_GATES row; net-chat and lobby-name always do this")
     parser.add_argument("--dry-run", action="store_true")
+    if spread:
+        spread.add_arguments(parser)
+    else:
+        parser.add_argument("--spread", action="store_true", help="requires the shared spread executor")
     parser.add_argument("--port", type=int, required=True)
     options = parser.parse_args()
     selected = planned_cases(options.case, options.size, options.all_sizes)
@@ -2913,6 +2971,8 @@ def main():
     if options.dry_run:
         print(json.dumps(dict(cases=selected, engine_count=max(4 if name in DELEGATED_CASES else 2 if name in PAIRED_CASES else 1 for name, _ in selected))))
         return 0
+    if spread:
+        spread.configure(options)
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("LEAD_FAMILY.lock exists; no engine launch")
     if not (any(low <= options.port <= low + 9 for low in (48270, 48380, 48390, 48530, 48540, 48550, 48840, 48850, 49180, 49190))
@@ -2951,6 +3011,11 @@ def main():
               "source_revision": options.revision, "exe_sha256": options.exe_sha, "port": options.port,
               "cases": [{key: value for key, value in row.items() if key != 'captures'} |
                         {'capture_checks': capture_checks(row.get('captures',[]))} for row in rows]}
+    participating = [row for row in rows if row.get("topology") in ("spread", "single-box: not proof")]
+    if participating:
+        result.update(topology="spread" if all(row["topology"] == "spread" for row in participating) else "single-box: not proof",
+                      peer_boxes=[row.get("peer_boxes", {}) for row in participating],
+                      proof=passed and all(row.get("proof", False) for row in participating))
     captures = [image for row in rows for image in row.get('captures', [])]
     (options.out / "captures.json").write_text(json.dumps(captures, indent=2) + "\n", encoding="utf-8")
     result['captures_ref'] = dict(path='captures.json', sha256=sha(options.out/'captures.json'), count=len(captures))

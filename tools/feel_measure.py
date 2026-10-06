@@ -445,6 +445,8 @@ def _launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, 
         for peer, run in runs.items():
             records[peer] = run.record
             records[peer]['topology'] = manifest['topology']
+            if not spread_case:
+                write_json(run.out / 'record.json', records[peer])
         write_json(out / 'run-result.json', records)
     expected_hashes = manifest.get('executable_hashes') or {peer: exe_hash for peer in peers}
     if any(record.get('exe_sha256') != expected_hashes[peer] for peer, record in records.items()):

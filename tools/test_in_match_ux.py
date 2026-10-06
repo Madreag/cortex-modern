@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_sim_test import make_run, engine_executable, file_sha256  # noqa: E402
 from test_telemetry_bundle import set_visual_resolution  # noqa: E402
 from e2e_video import SCREEN_WATCHES  # noqa: E402
+import spread_peers as spread  # noqa: E402
 
 SIZES = ("640x360", "960x540", "1280x720")
 NAMES = ("Host", "Ana", "Ben", "Cleo")
@@ -889,7 +890,9 @@ def ntdll():
     return ctypes.WinDLL("ntdll")
 
 
+@spread.managed_case
 def run_peers(options, root, case, size, peers, base, moderate=False):
+    spread.configure(options)
     root.mkdir(parents=True, exist_ok=False)
     width, height = map(int, size.split("x"))
     port = options.port
@@ -927,6 +930,16 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
     names = {who: who for who in who_list + newcomers}
     if case == "long-names":
         names.update({NAMES[1]: LONG_SHARED, NAMES[2]: LONG_SHARED, NEWCOMER: LONG_NEWCOMER})
+    if spread.enabled(options) and case == "leave-bad-ticket":
+        raise spread.SpreadRefusal("leave-bad-ticket requires a native private-ticket damage lever")
+    placement = spread.prepare_case(
+        options.repo, root,
+        [spread.Peer(who, os="windows" if who in (NAMES[0], NEWCOMER) else "any", engines=1, size=(width, height),
+                     reviewed=who == NAMES[0], quiet=case == "cost" and who == NAMES[0])
+         for who in who_list + newcomers],
+        spread.Match(port, parameters={"lane": "in-match", "network": "direct",
+                                       "case": case, "players": peers, "moderate": moderate, "cancel": options.cancel}))
+    make_peer_run = placement.make_run if placement else make_run
     runs, records = {}, {}
     menu_done = probe_root(root, NAMES[0]) / "done.json"
     # The screen checks every scene carries: layout, duplicate lines, the held lines, the seat rows.
@@ -954,7 +967,7 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         if case == "cost" and who == NAMES[0]:
             env["CC_TEST_PANEL_COST"] = "1"
             env["CCCP_TEST_DRAW_PHASES"] = "1"
-        runs[who] = make_run(options.repo, args, root / who, 420, env=env)
+        runs[who] = make_peer_run(options.repo, args, root / who, 420, env=env)
         set_visual_resolution(runs[who], width, height)
         seed_settings(runs[who].cwd / "Userdata/Settings.ini", {"NetworkDisplayName": names[who], "NetworkMatchStatusMode": "Always",
                                                                  "NetworkShowDiagnostics": diagnostics, "NetworkIceEnable": "0"})
@@ -962,8 +975,11 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
     def drive(who):
         try:
             records[who] = runs[who].start().finish()
+            if not placement:
+                records[who]["topology"] = spread.TOPOLOGY_LOCAL
+                spread.write_json(runs[who].out / "record.json", records[who])
         except Exception as error:  # the verdict names it
-            records[who] = {"error": repr(error)}
+            records[who] = {"error": repr(error), "topology": "spread" if placement else spread.TOPOLOGY_LOCAL}
 
     threads = {}
     for index, who in enumerate(who_list):
@@ -998,12 +1014,18 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
             while not seen.exists() and time.monotonic() < deadline and threads[NAMES[0]].is_alive():
                 time.sleep(0.1)
             if seen.exists() and runs[NEWCOMER].process is not None:
-                ntdll().NtSuspendProcess(ctypes.c_void_p(runs[NEWCOMER].process))
+                if placement:
+                    runs[NEWCOMER].suspend()
+                else:
+                    ntdll().NtSuspendProcess(ctypes.c_void_p(runs[NEWCOMER].process))
                 (root / "newcomer-frozen.json").write_text("{}\n", encoding="utf-8")
                 cancelled = probe_root(root, NAMES[0]) / "approval-cancelled.json"
                 while not cancelled.exists() and time.monotonic() < deadline and threads[NAMES[0]].is_alive():
                     time.sleep(0.1)
-                ntdll().NtResumeProcess(ctypes.c_void_p(runs[NEWCOMER].process))
+                if placement:
+                    runs[NEWCOMER].resume()
+                else:
+                    ntdll().NtResumeProcess(ctypes.c_void_p(runs[NEWCOMER].process))
                 (root / "newcomer-thawed.json").write_text("{}\n", encoding="utf-8")
     for thread in threads.values():
         thread.join()
@@ -1070,9 +1092,18 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
         check_cost(checks, logs)
     else:
         check_players(checks, reads, peers, logs, base, moderate, options.cancel)
-    return {"case": case, "size": size, "peers": peers, "moderate": moderate, "base": base, "checks": checks.rows,
-            "pass": all(row["pass"] for row in checks.rows), "pictures": sorted(str(path) for path in pictures.glob("*.png")),
-            "records": {who: {key: record.get(key) for key in ("exit_code", "timed_out", "error")} for who, record in records.items()}}
+    row = {"case": case, "size": size, "peers": peers, "moderate": moderate, "base": base, "checks": checks.rows,
+           "pass": all(row["pass"] for row in checks.rows), "pictures": sorted(str(path) for path in pictures.glob("*.png")),
+           "records": {who: {key: record.get(key) for key in ("exit_code", "timed_out", "error")} for who, record in records.items()},
+           "topology": spread.TOPOLOGY_LOCAL, "proof": False}
+    if placement:
+        receipt = placement.result()
+        row.update(topology="spread", peer_boxes=receipt["peer_boxes"], identities=receipt["identities"],
+                   executable_hashes=receipt["executable_hashes"], refusals=receipt["refusals"])
+        row["proof"] = (row["pass"] and set(receipt["identities"]) == set(runs) and
+                        all(records.get(who, {}).get("box") == receipt["peer_boxes"][who] and
+                            records[who].get("exe_sha256") == receipt["executable_hashes"][who] for who in runs))
+    return row
 
 
 def run_sp_pause(options, root, size):
@@ -1212,7 +1243,9 @@ def main():
     parser.add_argument("--compare", type=Path, help="an earlier sp-pause result.json to hold the single-player menu against")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--dry-run", action="store_true", help="print each probe's step count and stop")
+    spread.add_arguments(parser)
     options = parser.parse_args()
+    spread.configure(options)
     if options.dry_run:
         root = Path("dry")
         plans = {"pause": pause_probes(root, options.base), "players": players_probes(root, options.peers, options.base, options.moderate)}
@@ -1231,14 +1264,30 @@ def main():
                 rows.append(run_sp_pause(options, options.out / f"sp-pause-{size}", size))
             else:
                 peers = CASE_PEERS.get(case, options.peers if case in ("players", "host-leave") else 2)
-                rows.append(run_peers(options, options.out / f"{case}-{size}-{peers}p{'-diag' if case == 'status' and options.diagnostics else ''}", case, size,
-                                      options.peers, options.base, options.moderate and case == "players"))
+                root = options.out / f"{case}-{size}-{peers}p{'-diag' if case == 'status' and options.diagnostics else ''}"
+                try:
+                    rows.append(run_peers(options, root, case, size, options.peers, options.base, options.moderate and case == "players"))
+                except spread.SpreadRefusal as error:
+                    if not spread.enabled(options):
+                        raise
+                    receipt = spread.read_json(root / "spread-result.json", {})
+                    rows.append({"case": case, "size": size, "peers": peers, "base": options.base, "pass": False,
+                                 "checks": [], "records": receipt.get("records", {}), "pictures": [], "topology": "spread", "proof": False,
+                                 "peer_boxes": receipt.get("peer_boxes", {}), "error": str(error), "status": "HARNESS BLOCKED",
+                                 "refusals": receipt.get("refusals", []), "refused_peer": receipt.get("refused_peer"),
+                                 "refused_box": receipt.get("refused_box"), "reason": receipt.get("reason", str(error))})
             options.port += 1
     result = {"pass": all(row["pass"] for row in rows), "revision": subprocess.check_output(["git", "-C", str(options.repo), "rev-parse", "HEAD"], text=True).strip(),
               "exe_sha256": sha(engine_executable(options.repo)), "driver_sha256": sha(__file__), "base": options.base, "rows": rows,
               "sp_pause": [row["snapshot"] for row in rows if row["case"] == "sp-pause"]}
+    multiplayer = [row for row in rows if row["case"] != "sp-pause"]
+    if multiplayer:
+        result.update(topology="spread" if all(row["topology"] == "spread" for row in multiplayer) else spread.TOPOLOGY_LOCAL,
+                      proof=all(row["proof"] for row in multiplayer),
+                      peer_boxes={f"{row['case']}/{row['size']}": row.get("peer_boxes", {}) for row in multiplayer})
     (options.out / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     red = [f"{row['case']}/{row['size']}: {check['check']}" for row in rows for check in row["checks"] if not check["pass"]]
+    red += [f"{row['case']}/{row['size']}: {row['error']}" for row in rows if row.get("error")]
     print(f"[in-match-ux] {'PASS' if result['pass'] else 'FAIL'} {options.out / 'result.json'}" + (f" red: {red}" if red else ""))
     return 0 if result["pass"] else 1
 

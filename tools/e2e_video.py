@@ -2152,6 +2152,12 @@ def run_one(options, scenario, run, run_index, out):
             result["topology"] = "spread" if getattr(options, "remote_capture", None) else spread.topology(options, count)
             for peer in result.get("peers", []):
                 peer["topology"] = result["topology"]
+                peer["record"]["topology"] = result["topology"]
+                if not getattr(options, "remote_capture", None):
+                    record_path = Path(peer["root"]) / "record.json"
+                    if record_path.is_file():
+                        record = json.loads(record_path.read_text(encoding="utf-8"))
+                        write_json(record_path, dict(record, topology=result["topology"]))
         return result
     root = Path(out)/run.get("name", f"run{run_index}")
     size = tuple(map(int, (options.size or run.get("size") or scenario.get("size") or DEFAULT_SIZE).split("x")))

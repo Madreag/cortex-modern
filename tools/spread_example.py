@@ -48,6 +48,8 @@ def main():
     video.run_one = spread_run
     sys.argv = [str(Path(video.__file__)), "--repo", str(args.repo), "--out", str(args.out), "--scenario", "mp-host-join",
                 "--port", str(args.port), "--port-block", args.port_block, "--scratch-limit-bytes", str(3 << 30)]
+    for peer_port in args.peer_port:
+        sys.argv += ["--peer-port", peer_port]
     code = video.main()
     # Record proof topology on the ordinary aggregate artifacts too.
     for name in ("capture.json", "manifest.json", "review.json"):
