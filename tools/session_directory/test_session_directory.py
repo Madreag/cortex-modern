@@ -506,6 +506,32 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(after, before, "R4: a refused offer evicted an honest joiner's queued offer")
         self.assertIn(first["seq"], [item["seq"] for item in after["signals"]])
 
+    def test_owner_pressure_retires_short_listings_before_established_worlds(self) -> None:
+        with mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 4):
+            store = session_directory.SessionDirectory(300, 5)
+            self.addCleanup(store.stop)
+            request = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
+            original = store.register(request, "192.0.2.200", 0, INSTALL_KEY)
+            store.heartbeat(original["session_id"], {"token": original["token"], "peer_count": 1, "seats_free": 1}, session_directory.OWNER_MIN_LISTED_S, INSTALL_KEY)
+            store.delete(original["session_id"], {"token": original["token"]}, 61)
+            for index in range(5):
+                row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), f"192.0.2.{index}", 61, INSTALL_KEY)
+                store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 62, INSTALL_KEY)
+                store.delete(row["session_id"], {"token": row["token"]}, 62)
+            self.assertEqual(len(store._world_owners), 4)
+            self.assertIn(original["session_id"], store._world_owners, "R3: short listings displaced an established owner")
+            expired_wall = time.time() + session_directory.OWNER_IDLE_S + 1
+            with mock.patch.object(session_directory.time, "time", return_value=expired_wall):
+                store.prune(62)
+                for index in range(4):
+                    row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), f"198.51.100.{index}", 62, INSTALL_KEY)
+                    store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 62, INSTALL_KEY)
+                    store.delete(row["session_id"], {"token": row["token"]}, 62)
+                recovered = store.register(dict(request, world_boot=2, resume_session_id=original["session_id"], resume_token=original["token"]), "192.0.2.200", 62, INSTALL_KEY)
+                store.heartbeat(recovered["session_id"], {"token": recovered["token"], "peer_count": 1, "seats_free": 1}, 62, INSTALL_KEY)
+            self.assertEqual(recovered["session_id"], original["session_id"], "R3: a full table refused a signed owner whose record expired")
+            self.assertEqual(len(store._world_owners), 4, "R3: recovery exceeded the retained owner cap")
+
     def test_R5_interrupted_key_creation_leaves_a_restartable_service(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "world-owners.json"
