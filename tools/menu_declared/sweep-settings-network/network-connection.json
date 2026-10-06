@@ -1,0 +1,24 @@
+{
+ "controls": [
+  {
+   "name": "ComboNetworkConnection",
+   "enabled": true
+  },
+  {
+   "name": "TextNetworkStunServers",
+   "enabled": true
+  },
+  {
+   "name": "TextNetworkRelayAddress",
+   "enabled": true
+  },
+  {
+   "name": "TextNetworkRelayUser",
+   "enabled": true
+  },
+  {
+   "name": "TextNetworkRelayPass",
+   "enabled": true
+  }
+ ]
+}

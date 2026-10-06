@@ -1,0 +1,49 @@
+{
+ "controls": [
+  {
+   "name": "TabHostPageSeats",
+   "enabled": true
+  },
+  {
+   "name": "TabHostPageRules",
+   "enabled": true
+  },
+  {
+   "name": "TabHostPageConnection",
+   "enabled": true
+  },
+  {
+   "name": "TabHostPageTiming",
+   "enabled": true
+  },
+  {
+   "name": "TabHostPageRecovery",
+   "enabled": true
+  },
+  {
+   "name": "TabHostPageFiles",
+   "enabled": true
+  },
+  {
+   "name": "TabHostPageSession",
+   "enabled": true
+  },
+  {
+   "name": "ButtonHostOptBack",
+   "enabled": true
+  },
+  {
+   "name": "ButtonHostOptRestore",
+   "enabled": true
+  },
+  {
+   "name": "ButtonHostOptDefaults",
+   "enabled": true
+  },
+  {
+   "name": "ButtonHostOptApply",
+   "enabled": false,
+   "reason": "Nothing has changed since Advanced opened."
+  }
+ ]
+}

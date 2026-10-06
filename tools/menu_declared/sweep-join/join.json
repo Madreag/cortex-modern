@@ -1,0 +1,21 @@
+{
+ "controls": [
+  {
+   "name": "ListLanGames",
+   "enabled": true
+  },
+  {
+   "name": "ButtonJoinByAddress",
+   "enabled": true
+  },
+  {
+   "name": "ButtonJoinBack",
+   "enabled": true
+  },
+  {
+   "name": "ButtonMultiplayerConnect",
+   "enabled": false,
+   "reason": "No game is selected."
+  }
+ ]
+}

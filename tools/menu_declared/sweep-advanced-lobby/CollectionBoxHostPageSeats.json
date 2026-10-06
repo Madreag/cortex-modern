@@ -1,0 +1,49 @@
+{
+ "controls": [
+  {
+   "name": "ComboHostSeatTeam0",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostSeatTeam1",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostSeatType2",
+   "enabled": true
+  },
+  {
+   "name": "ButtonHostSeatDetails0",
+   "enabled": true
+  },
+  {
+   "name": "ButtonHostSeatDetails1",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostSeatPlayers",
+   "enabled": false,
+   "reason": "The lobby is open: its capacity is fixed until it closes."
+  },
+  {
+   "name": "ComboHostSeatType0",
+   "enabled": false,
+   "reason": "Seat 1 is the host's: a seated human's seat is not changed while the lobby is open."
+  },
+  {
+   "name": "ComboHostSeatType1",
+   "enabled": false,
+   "reason": "Seat 2 holds a joined player: a seated human's seat is not changed while the lobby is open."
+  },
+  {
+   "name": "ComboHostSeatTeam2",
+   "enabled": false,
+   "reason": "Seat 3 is closed: its team is set when it opens."
+  },
+  {
+   "name": "ButtonHostSeatDetails2",
+   "enabled": false,
+   "reason": "Seat 3 is closed: it has no one to show."
+  }
+ ]
+}

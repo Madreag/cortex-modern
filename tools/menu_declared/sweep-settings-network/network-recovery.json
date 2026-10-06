@@ -1,0 +1,22 @@
+{
+ "controls": [
+  {
+   "name": "CheckboxNetworkAutoReconnect",
+   "enabled": true
+  },
+  {
+   "name": "CheckboxNetworkOfferRejoin",
+   "enabled": true
+  },
+  {
+   "name": "ButtonNetRejoin",
+   "enabled": false,
+   "reason": "No match was left to rejoin."
+  },
+  {
+   "name": "ButtonNetCancelRecovery",
+   "enabled": false,
+   "reason": "No recovery is running."
+  }
+ ]
+}

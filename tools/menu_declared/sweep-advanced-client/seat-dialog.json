@@ -1,0 +1,38 @@
+{
+ "controls": [
+  {
+   "name": "ButtonHostSeatDlgClose",
+   "enabled": true
+  },
+  {
+   "name": "ListHostSeatDlgApplicants",
+   "enabled": false,
+   "reason": "Nobody is asking for this seat."
+  },
+  {
+   "name": "ButtonHostSeatDlgWait",
+   "enabled": false,
+   "reason": "Nobody is asking for this seat."
+  },
+  {
+   "name": "ButtonHostSeatDlgApprove",
+   "enabled": false,
+   "reason": "Nobody is asking for this seat."
+  },
+  {
+   "name": "ButtonHostSeatDlgCancel",
+   "enabled": false,
+   "reason": "Nobody is asking for this seat."
+  },
+  {
+   "name": "ButtonHostSeatDlgKick",
+   "enabled": false,
+   "reason": "Only the host kicks a player."
+  },
+  {
+   "name": "ButtonHostSeatDlgBan",
+   "enabled": false,
+   "reason": "Only the host bans a player."
+  }
+ ]
+}

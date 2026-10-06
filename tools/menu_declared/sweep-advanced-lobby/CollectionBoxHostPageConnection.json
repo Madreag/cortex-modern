@@ -1,0 +1,25 @@
+{
+ "controls": [
+  {
+   "name": "ComboHostNetVisibility",
+   "enabled": true
+  },
+  {
+   "name": "CheckHostPortMap",
+   "enabled": true
+  },
+  {
+   "name": "TextHostNetPort",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostNetIce",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostNetRelay",
+   "enabled": false,
+   "reason": "The match's relay is chosen before the lobby opens."
+  }
+ ]
+}

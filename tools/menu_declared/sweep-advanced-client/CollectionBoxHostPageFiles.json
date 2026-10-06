@@ -1,0 +1,13 @@
+{
+ "controls": [
+  {
+   "name": "ButtonHostFilesSaveDiag",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostFilesWidget",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  }
+ ]
+}

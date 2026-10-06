@@ -1,0 +1,25 @@
+{
+ "controls": [
+  {
+   "name": "CheckboxNetworkChatSound",
+   "enabled": true
+  },
+  {
+   "name": "ComboNetworkChatScope",
+   "enabled": true
+  },
+  {
+   "name": "ComboNetworkChatTextSize",
+   "enabled": true
+  },
+  {
+   "name": "TextNetworkChatKey",
+   "enabled": true
+  },
+  {
+   "name": "ButtonNetMutedPlayers",
+   "enabled": false,
+   "reason": "Nobody is muted."
+  }
+ ]
+}

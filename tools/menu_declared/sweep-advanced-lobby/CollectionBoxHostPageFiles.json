@@ -1,0 +1,12 @@
+{
+ "controls": [
+  {
+   "name": "ComboHostFilesWidget",
+   "enabled": true
+  },
+  {
+   "name": "ButtonHostFilesSaveDiag",
+   "enabled": true
+  }
+ ]
+}

@@ -1,0 +1,28 @@
+{
+ "controls": [
+  {
+   "name": "ComboHostNetPolicy",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostNetRedundancy",
+   "enabled": true
+  },
+  {
+   "name": "TextHostNetMinDelay",
+   "enabled": true
+  },
+  {
+   "name": "TextHostNetSlowBound",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostNetSlowPolicy",
+   "enabled": true
+  },
+  {
+   "name": "ButtonHostNetRecalc",
+   "enabled": true
+  }
+ ]
+}

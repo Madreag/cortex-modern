@@ -1,0 +1,17 @@
+{
+ "controls": [
+  {
+   "name": "ComboHostSessIdle",
+   "enabled": true
+  },
+  {
+   "name": "ButtonHostSessBanned",
+   "enabled": true
+  },
+  {
+   "name": "ButtonHostSessEnd",
+   "enabled": false,
+   "reason": "No session has started to end."
+  }
+ ]
+}

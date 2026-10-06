@@ -1,0 +1,20 @@
+{
+ "controls": [
+  {
+   "name": "TextJoinAddress",
+   "enabled": true
+  },
+  {
+   "name": "TextJoinPort",
+   "enabled": true
+  },
+  {
+   "name": "ButtonJoinAddressCancel",
+   "enabled": true
+  },
+  {
+   "name": "ButtonJoinAddressGo",
+   "enabled": true
+  }
+ ]
+}

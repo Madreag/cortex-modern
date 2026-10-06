@@ -1,0 +1,22 @@
+{
+ "controls": [
+  {
+   "name": "ListReplays",
+   "enabled": true
+  },
+  {
+   "name": "ButtonReplayBack",
+   "enabled": true
+  },
+  {
+   "name": "ButtonReplayPlay",
+   "enabled": false,
+   "reason": "No replay is selected."
+  },
+  {
+   "name": "ButtonReplayDelete",
+   "enabled": false,
+   "reason": "No replay is selected."
+  }
+ ]
+}

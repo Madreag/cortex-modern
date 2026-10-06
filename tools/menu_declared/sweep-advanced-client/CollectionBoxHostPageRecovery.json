@@ -1,0 +1,39 @@
+{
+ "controls": [
+  {
+   "name": "CheckHostRecRepair",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "ComboHostRecReturnWindow",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "CheckHostRecAutosave",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "TextHostRecAutosaveInterval",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "ButtonHostRecRepairNow",
+   "enabled": false,
+   "reason": "Only the host repairs a running match."
+  },
+  {
+   "name": "ComboHostRecJoinHistory",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "ComboHostRecJoinLag",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  }
+ ]
+}

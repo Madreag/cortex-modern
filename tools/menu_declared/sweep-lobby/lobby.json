@@ -1,0 +1,25 @@
+{
+ "controls": [
+  {
+   "name": "TextLobbyChat",
+   "enabled": true
+  },
+  {
+   "name": "ButtonLobbyEditSetup",
+   "enabled": true
+  },
+  {
+   "name": "ButtonMultiplayerLeave",
+   "enabled": true
+  },
+  {
+   "name": "ButtonLobbyOptions",
+   "enabled": true
+  },
+  {
+   "name": "ButtonMultiplayerStart",
+   "enabled": false,
+   "reason": "The lobby waits for its players to join and press Ready."
+  }
+ ]
+}

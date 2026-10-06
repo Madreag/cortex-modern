@@ -1,0 +1,17 @@
+{
+ "controls": [
+  {
+   "name": "ListResumeMatches",
+   "enabled": true
+  },
+  {
+   "name": "ButtonResumeBack",
+   "enabled": true
+  },
+  {
+   "name": "ButtonResumeStart",
+   "enabled": false,
+   "reason": "No saved match is selected."
+  }
+ ]
+}

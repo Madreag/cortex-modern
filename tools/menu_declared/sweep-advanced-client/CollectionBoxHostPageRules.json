@@ -1,0 +1,64 @@
+{
+ "controls": [
+  {
+   "name": "ComboHostRulesActivity",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "ComboHostRulesScene",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "ComboHostRulesMode",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "SliderHostRulesDifficulty",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "SliderHostRulesGold",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "CheckHostRulesFog",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "CheckHostRulesClearPath",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "CheckHostRulesDeploy",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "ComboHostRulesBrainless",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "ComboHostRulesTeam",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "SliderHostRulesSkill",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "ComboHostRulesTech",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  }
+ ]
+}
