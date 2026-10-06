@@ -114,6 +114,7 @@ namespace RTE {
 			NetMatchRunner runner;
 			NetMatchRunnerConfig config;
 			config.matchConfig = NetMatchConfigUtil::MakeDefault(73);
+			config.matchConfig.inputDelayFrames = 1;
 			config.joinAddress = "session:capacity";
 			config.sessionWaitMs = 1000; config.lockstepWaitMs = 1000;
 			config.sessionConfig.p2pJoin.connect = [](INetTransport&, std::string* why) { if (why) *why = "ICE signaling queue is full"; return false; };
