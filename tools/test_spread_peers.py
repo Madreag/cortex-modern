@@ -16,6 +16,17 @@ from test_peer_run_guards import PeerRunGuardTests
 
 
 class ContractTests(unittest.TestCase):
+    def test_native_adapter_ships_its_existing_named_route_dependency(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'box_facts.py').write_text('def facts():\n    from pool_cohort import overlay\n')
+            (root/'pool_run.py').write_text('def launch(): return True\n')
+            (root/'pool_cohort.py').write_text('def overlay(value, target): return value\n')
+            sources = spread.native_adapter_sources(root/'box_facts.py')
+            self.assertEqual(list(sources), ['pool_cohort.py', 'pool_run.py'])
+            self.assertEqual(sources['pool_cohort.py'], (root/'pool_cohort.py').read_text())
+            self.assertEqual(sources['pool_run.py'], (root/'pool_run.py').read_text())
+
     def test_cpu_guard_waits_on_the_named_box_and_quiet_peer_waits_for_idle(self):
         for quiet, loads in ((False, [(100, 1), (20, 1)]),
                              (True, [(100, 1), (20, 1), (20, 0)])):
