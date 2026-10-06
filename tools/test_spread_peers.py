@@ -184,6 +184,27 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'declared test ports'):
             spread.Peer('seat', block_udp=(80,))
 
+    def test_declared_binary_match_config_keeps_every_byte(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / 'launch-config.bin'
+            data = bytes(range(256)) + b'\x00\xff\n\r\x80'
+            config.write_bytes(data)
+            specs = []
+            backend = SimpleNamespace(rpc=lambda box, action, body:specs.append(body['value']), launch=lambda *args:None)
+            claim = dict(case_root='/native/case', repo='/native/repo', root='/owned', control='/control', exe_sha256='same')
+            run = object.__new__(spread.Run)
+            run.role, run.output_name, run.started = 'host', 'host', False
+            run.repo, run.cwd = root/'repo', root/'host/runtime'
+            run.argv = ['engine', '-headless', '-net-match-service-config', str(config)]
+            run.env, run.expected, run.fixtures, run.timeout = {}, [], [], 30
+            run.case = SimpleNamespace(out=root, members={'host':({'name':'HOST'},claim,{},backend)}, names=['host'], peer_ports={},
+                match=spread.Match(51580), directory=None, peers=[spread.Peer('host')], signals=lambda:[], release_pending=lambda:None,
+                transport_module=SimpleNamespace(Transport=SimpleNamespace(native_claim=lambda value:value)))
+            run.start()
+            self.assertEqual(base64.b64decode(specs[0]['files']['launch-config.bin']), data)
+            self.assertEqual(specs[0]['args'], ['-net-match-service-config', '/native/case/launch-config.bin'])
+
     def test_native_submit_refusal_names_the_peer_and_box_before_start(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
