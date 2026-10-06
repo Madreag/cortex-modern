@@ -1,19 +1,19 @@
 # Coordinates come from the captured mod lettering and faction banner borders.
 player=0 20 20 MOUSE=1,-18
 player=0 22 22 FIRE
-player=0 23 23 MOUSE=-151,18
+player=0 24 24 MOUSE=-151,18
 player=0 24 24 FIRE
-player=0 25 25 MOUSE=60,0
+player=0 26 26 MOUSE=60,0
 player=0 26 26 FIRE
-player=0 27 27 MOUSE=60,0
+player=0 28 28 MOUSE=60,0
 player=0 28 28 FIRE
-player=0 29 29 MOUSE=60,0
+player=0 30 30 MOUSE=60,0
 player=0 30 30 FIRE
-player=0 31 31 MOUSE=60,0
+player=0 32 32 MOUSE=60,0
 player=0 32 32 FIRE
-player=0 33 33 MOUSE=60,0
+player=0 34 34 MOUSE=60,0
 player=0 34 34 FIRE
-player=0 35 35 MOUSE=-150,60
+player=0 36 36 MOUSE=-150,60
 player=0 36 37 FIRE
 # DOWN detaches this player's brain through the mod's own brain panel.
 player=0 90 94 L_DOWN
