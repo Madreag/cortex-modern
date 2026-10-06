@@ -41,6 +41,8 @@ THIRD_PASS_CASES = ("host-draft-roundtrip", "host-draft-apply", "host-apply-all"
 PAIRED_CASES = ("pause", "pause-save", "save-hotkey", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early",
                 "lobby-ready-all", "lobby-countdown", "lobby-last-ready", "lobby-ready-back", "lobby-seat-missing", "sweep-advanced-client",
                 "host-draft-roundtrip", "lobby-setup-unready", "lobby-setup-open", "lobby-long-names")
+# These two UI cases keep their one original peer; the shared executor records its native box.
+SPREAD_CASES = (*PAIRED_CASES, "net-chat", "lobby-name")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
@@ -2495,9 +2497,9 @@ def run_case(options, case, root, failing=None):
     result["picture_watch_scope"] = "all current controls" if picture_watches else "compatibility notices" if case in OLD_SKINS else "base controls"
     try:
         factory = make_run
-        if paired:
+        if case in SPREAD_CASES:
             if not spread or not spread.enabled(options):
-                raise RuntimeError("paired menu readback requires the shared spread executor")
+                raise RuntimeError(("paired" if paired else "selected") + " menu readback requires the shared spread executor")
             width, height, multiplier = size_parts(options.size)
             reviewed = "client" if case in ("host-draft-roundtrip", "sweep-advanced-client") else "host"
             peers = [spread.Peer(who, os="windows", size=(int(width * multiplier), int(height * multiplier)),
@@ -3399,7 +3401,8 @@ def run_case(options, case, root, failing=None):
             run.close()
         if executor:
             result.update(topology="spread", peer_boxes=executor.result()["peer_boxes"], spread=executor.result())
-            result["proof"] = result["pass"] and len(set(result["peer_boxes"].values())) == len(runs)
+            result["execution_scope"] = "match peers" if paired else "standalone UI"
+            result["proof"] = paired and result["pass"] and len(set(result["peer_boxes"].values())) == len(runs)
         result["captures"] = images
         (root / "result.json").write_text(json.dumps(retain_capture_detail(root, result), indent=2) + "\n", encoding="utf-8")
     return result
@@ -3525,9 +3528,9 @@ def main():
     if options.dry_run:
         print(json.dumps(dict(cases=selected, engine_count=max(2 if name in PAIRED_CASES else 1 for name, _ in selected))))
         return 0
-    if any(case in PAIRED_CASES for case, _ in selected):
+    if any(case in SPREAD_CASES for case, _ in selected):
         if not spread:
-            parser.error("paired menu readback requires the shared spread executor")
+            parser.error("selected menu readback requires the shared spread executor")
         options.spread = True
     if spread:
         spread.configure(options)
