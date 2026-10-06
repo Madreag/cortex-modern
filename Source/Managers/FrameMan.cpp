@@ -1350,8 +1350,11 @@ void FrameMan::RecordVideoFrame(const std::string& screen, const std::string& se
 	if (width <= 0 || height <= 0) return;
 	const std::size_t pitch = static_cast<std::size_t>(width) * 3;
 	const long long wallMS = FrameRecorder::SteadyNowMS();
+	const bool profileReadback = SDL_getenv("CCCP_TEST_READBACK_TIMING") != nullptr;
+	const Uint64 beforeStage = profileReadback ? SDL_GetTicksNS() : 0;
 	unsigned char* pixels = recorder.BeginFrame(wallMS, pitch * static_cast<std::size_t>(height));
 	if (!pixels) return;
+	const Uint64 beforeReadback = profileReadback ? SDL_GetTicksNS() : 0;
 
 	std::string readbackError;
 	const auto screenBuffer = g_WindowMan.GetScreenBuffer();
@@ -1359,10 +1362,12 @@ void FrameMan::RecordVideoFrame(const std::string& screen, const std::string& se
 	                                    {pixels, pitch * static_cast<std::size_t>(height)}, readbackError)) {
 		RTEAbort("Frame recorder texture readback failed: " + readbackError);
 	}
+	const Uint64 beforeFlip = profileReadback ? SDL_GetTicksNS() : 0;
 	// The texture is bottom-up and the PNG is not.
 	for (int y = 0; y < height / 2; ++y) {
 		std::swap_ranges(pixels + y * pitch, pixels + (y + 1) * pitch, pixels + (height - y - 1) * pitch);
 	}
+	const Uint64 beforeQueue = profileReadback ? SDL_GetTicksNS() : 0;
 
 	FrameRecorder::FrameMeta meta;
 	meta.wallMS = wallMS;
@@ -1372,6 +1377,14 @@ void FrameMan::RecordVideoFrame(const std::string& screen, const std::string& se
 	meta.width = width;
 	meta.height = height;
 	recorder.EndFrame(meta);
+	if (profileReadback) {
+		const Uint64 afterQueue = SDL_GetTicksNS();
+		System::PrintDiagnosticLine("[readback-phase] tick=" + std::to_string(meta.simTick) + " screen=" + screen +
+		    " begin_us=" + std::to_string((beforeReadback - beforeStage) / 1000) +
+		    " texture_us=" + std::to_string((beforeFlip - beforeReadback) / 1000) +
+		    " flip_us=" + std::to_string((beforeQueue - beforeFlip) / 1000) +
+		    " queue_us=" + std::to_string((afterQueue - beforeQueue) / 1000));
+	}
 	// A detecting run aborts only after this exact frame is durably recorded. Ordinary captures never arm it.
 	const char* abortScreen = SDL_getenv("CCCP_TEST_READBACK_ABORT_SCREEN");
 	if (abortScreen && screen == abortScreen) {
