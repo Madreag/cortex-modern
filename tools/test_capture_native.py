@@ -70,7 +70,7 @@ class NativeReceiptTests(unittest.TestCase):
 
     def test_reviewed_capture_does_not_require_windows(self):
         options = SimpleNamespace(spread=True, peer_boxes="host=Mac,seat2=Linux", size=None, capture_peer="host",
-                                  port=48010, repo=self.repo, pool_dispatcher=None, pool_registry=None)
+                                  port=e2e_video.PORT_LO + 10, repo=self.repo, pool_dispatcher=None, pool_registry=None)
         definition = {"peers": [{"name": "host"}, {"name": "client"}]}
         scenario = {"size": "960x540", "timeout_s": 170}
         with patch.object(spread_peers, "run_case", return_value={"driver_result": {}}) as launch:
