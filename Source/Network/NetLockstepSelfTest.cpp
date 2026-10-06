@@ -26023,7 +26023,7 @@ namespace {
 			};
 			if (!start(0, false)) return done(round.failure);
 			pump(200);
-			if (!applicants[0].session.IsReady() || applicants[0].client.GetAssignedPeerId() != 3) return done("authenticated HELLO/proof did not seat the original player: " + applicants[0].session.BuildReportJson(admission.nowMs));
+			if (!applicants[0].session.IsReady() || applicants[0].client.GetAssignedPeerId() != 3) return done("authenticated HELLO/proof did not seat the original player: " + applicants[0].session.BuildReportJson());
 			NetParticipantId participant{};
 			if (!hostSession.GetPeerParticipantId(1, participant) || participant != applicants[0].identity.PublicId()) return done("HELLO did not bind the proved participant identity");
 			const auto original = applicants[0].client.GetRecord();
