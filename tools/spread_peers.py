@@ -23,7 +23,7 @@ drivers whose existing control loop needs runner-compatible handles. Always
 use it in a with statement (or in @managed_case). Case.make_run() returns a
 handle with start/finish/poll/terminate/close/suspend/resume. Levers execute in
 the native runner owning that peer; a Windows suspend requires os="windows".
-Case.synchronize() mirrors only declared JSON rendezvous files, logs and video
+Case.synchronize() mirrors only declared JSON or empty presence rendezvous files, logs and video
 indices. Gameplay travels over real ICE sockets; SSH carries signaling and
 evidence only. No router mapping is requested. Caller paths are private staging
 paths; the helper maps them to the native case root, never to an owner's tree.
@@ -232,12 +232,46 @@ def public_file(path):
 
 
 def map_text(value, mappings):
+    def mapped(text):
+        for old, new in sorted(mappings, key=lambda pair: len(pair[0]), reverse=True):
+            variants = {old, old.replace("\\", "/"), old.replace("\\", "\\\\")}
+            for prefix in sorted(variants, key=len, reverse=True):
+                if new.startswith("/"):
+                    # A native POSIX path needs its whole Windows tail mapped,
+                    # including paths in script lines and decoded probe JSON.
+                    pattern = re.escape(prefix) + r'(?P<tail>(?:[\\/]+[^\\/\r\n"\'<>|?]*)*)'
+                    text = re.sub(pattern, lambda match: new + re.sub(r"\\+", "/", match["tail"]), text)
+                else:
+                    text = text.replace(prefix, new)
+        return text
     text = str(value)
-    # Probe JSON may carry Windows paths escaped with a second backslash.
-    for old, new in sorted(mappings, key=lambda pair: len(pair[0]), reverse=True):
-        text = text.replace(old.replace("\\", "\\\\"), new)
-        text = text.replace(old, new).replace(old.replace("\\", "/"), new)
-    return text
+    if text.lstrip().startswith(("{", "[")):
+        try:
+            document = json.loads(text)
+        except ValueError:
+            pass
+        else:
+            def walk(node):
+                if isinstance(node, str):
+                    return mapped(node)
+                if isinstance(node, list):
+                    return [walk(child) for child in node]
+                if isinstance(node, dict):
+                    return {key: walk(child) for key, child in node.items()}
+                return node
+            return json.dumps(walk(document))
+    return mapped(text)
+
+
+def complete_signal(data):
+    """An empty touch marker is complete; nonempty signals must be complete JSON."""
+    if data == b"":
+        return True
+    try:
+        json.loads(data)
+        return True
+    except ValueError:
+        return False
 
 
 def declared_signals(root):
@@ -401,8 +435,9 @@ class Case:
                 pin = reviewed_box
                 if not pin:
                     raise self.refuse(peer.name, "unassigned", "reviewed screen requires a registered local Windows recorder")
+            excluded = used + [box["name"] for box in catalog if peer.quiet and box.get("timing") is False]
             needs = self.pool.Needs(os=peer.os, engines=peer.engines, gpu=bool(peer.size), memory=peer.memory,
-                                    alone=peer.quiet, size=peer.size, only_box=pin, excluded=tuple(used))
+                                    alone=peer.quiet, size=peer.size, only_box=pin, excluded=tuple(excluded))
             fitting, reasons, states = self.pool.candidates(self.registry, needs, backend)
             request = dict(run_id=uuid.uuid4().hex, token=uuid.uuid4().hex, label=f"spread: {self.out.name}/{peer.name}",
                            owner=dict(pid=os.getpid(), machine=self.transport_module.worker.facts.machine_name(),
@@ -556,9 +591,7 @@ class Case:
                 path = self.out/safe_relative(relative)
                 if path.is_file():
                     data = path.read_bytes()
-                    try:
-                        json.loads(data)
-                    except ValueError:
+                    if not complete_signal(data):
                         continue
                     signals[relative] = base64.b64encode(data).decode()
             for handle in list(self.runs.values()):
@@ -822,7 +855,8 @@ def publish_signals(root, signals, allowed):
         if relative not in allowed:
             raise ValueError("only declared peer gate signals may be mirrored")
         data = base64.b64decode(encoded, validate=True)
-        json.loads(data)
+        if not complete_signal(data):
+            raise ValueError("peer gate signal is incomplete JSON")
         target = root/safe_relative(relative)
         if not target.is_file() or target.read_bytes() != data:
             atomic_bytes(target, data)

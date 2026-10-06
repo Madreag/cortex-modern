@@ -34,7 +34,17 @@ class ContractTests(unittest.TestCase):
     def test_windows_paths_inside_probe_json_map_to_native_root(self):
         text = json.dumps({"path": "D:\\mx\\lane\\host_probe\\done.json"})
         mapped = spread.map_text(text, [("D:\\mx\\lane", "/native/lane")])
-        self.assertEqual(json.loads(mapped)["path"].replace("\\", "/"), "/native/lane/host_probe/done.json")
+        self.assertEqual(json.loads(mapped)["path"], "/native/lane/host_probe/done.json")
+
+    def test_script_and_argument_paths_map_the_whole_windows_tail(self):
+        mappings = [("D:\\mx\\lane", "/native/lane")]
+        self.assertEqual(spread.map_text("D:\\mx\\lane\\host\\feel", mappings), "/native/lane/host/feel")
+        self.assertEqual(spread.map_text("wait_file D:\\mx\\lane\\ready.json 5000\n", mappings),
+                         "wait_file /native/lane/ready.json 5000\n")
+
+    def test_probe_path_mapping_preserves_unrelated_regex_escapes(self):
+        text = json.dumps({"path": "D:\\mx\\lane\\done.json", "regex": r"\d+\s+"})
+        self.assertEqual(json.loads(spread.map_text(text, [("D:\\mx\\lane", "/native/lane")]))["regex"], r"\d+\s+")
 
     def test_mapping_prefers_case_input_over_case_root(self):
         result = spread.map_text("D:/mx/lane/input.txt", [("D:/mx/lane", "/root"), ("D:/mx/lane/input.txt", "/input/schedule.txt")])
@@ -65,6 +75,11 @@ class ContractTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 spread.publish_signals(Path(temporary), {"done.json": base64.b64encode(b"{").decode()}, {"done.json"})
             self.assertFalse((Path(temporary)/"done.json").exists())
+
+    def test_declared_empty_presence_marker_keeps_its_exact_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            spread.publish_signals(Path(temporary), {"ready.json": ""}, {"ready.json"})
+            self.assertEqual((Path(temporary)/"ready.json").read_bytes(), b"")
 
     def test_credentials_and_tickets_do_not_travel_as_evidence(self):
         for name in (".env", "key.pem", "host.ticket", "id_ed25519"):
