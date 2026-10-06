@@ -121,9 +121,10 @@ def compile_choices(package: Path, menu: Path, factions: Path, output: Path) -> 
     target = [x + width // 2, y + height // 2]
     cursor = [menu_image.width // 2, menu_image.height // 2]
     lines = ["# Coordinates come from the captured mod lettering and faction banner borders."]
-    for tick, point in [(60, target), *[(90 + index * 30, point) for index, point in enumerate(buttons[:6])]]:
+    # The first press follows the controller's existing release debounce.
+    for tick, point in [(18, target), *[(20 + index * 2, point) for index, point in enumerate(buttons[:6])]]:
         delta = [point[0] - cursor[0], point[1] - cursor[1]]
-        lines += [f"player=0 {tick} {tick} MOUSE={delta[0]},{delta[1]}", f"player=0 {tick + 5} {tick + 8} FIRE"]
+        lines += [f"player=0 {tick} {tick} MOUSE={delta[0]},{delta[1]}", f"player=0 {tick + 1} {tick + 1} FIRE"]
         cursor = point
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return {"menu": str(menu), "factions": str(factions), "witnesses": witnesses,
@@ -143,15 +144,15 @@ def compile_play(package: Path, chosen: Path, layout: Path, host: Path, client: 
     prefix = []
     for line in host.read_text(encoding="utf-8").splitlines():
         match = re.match(r"player=0 (\d+) ", line)
-        if line.startswith("# Coordinates") or match and int(match[1]) <= 249:
+        if line.startswith("# Coordinates") or match and int(match[1]) <= 31:
             prefix.append(line)
-    prefix += [f"player=0 270 270 MOUSE={target[0] - cursor[0]},{target[1] - cursor[1]}", "player=0 275 278 FIRE"]
+    prefix += [f"player=0 32 32 MOUSE={target[0] - cursor[0]},{target[1] - cursor[1]}", "player=0 33 34 FIRE"]
     for peer, path in [(0, host), (1, client)]:
         lines = prefix.copy() if peer == 0 else ["# The joining player's local slot drives stable seat 1 in the match."]
-        detach = 350 if peer == 0 else 385
+        detach = 90 if peer == 0 else 125
         lines += ["# DOWN detaches this player's brain through the mod's own brain panel.", f"player=0 {detach} {detach + 4} L_DOWN"]
         for index in range(10):
-            start = 420 + index * 220
+            start = 160 + index * 250
             forward, back = ("L_RIGHT", "L_LEFT") if peer == 0 else ("L_LEFT", "L_RIGHT")
             lines += [f"player=0 {start} {start + 89} {forward}", f"player=0 {start + 110} {start + 199} {back}",
                       f"player=0 {start + 35} {start + 39} JUMP", f"player=0 {start + 145} {start + 149} JUMP"]
@@ -276,35 +277,47 @@ def grade_capture(repo: Path, capture: Path) -> dict:
             shots = runtime / "ScreenShots"
             start = sorted(shots.glob("vw_start_*.png"))
             menu = [find_words(Image.open(start[0]), package, word) for word in ["New game", "Load game"]] if start else []
-            if len(menu) != 2 or not all(check["pass"] for check in menu):
+            if peer["peer"] in ["sp", "host"] and (len(menu) != 2 or not all(check["pass"] for check in menu)):
                 errors.append("visible New game / Load game witness missing")
             if "form=START NEW GAME" not in logs:
                 errors.append("the hand press does not reach the mod's new-game form")
-            if peer["peer"] in ["sp", "host"] and not hand_input(repo / "tools/e2e/mod-void-wanderers-input.txt")["pass"]:
+            input_path = root / f"{peer['peer']}-stage/input.txt"
+            if peer["peer"] in ["sp", "host"] and not hand_input(input_path)["pass"]:
                 errors.append("menu input has no pointer move, button down and later release")
+            if "[vw-visible] live_brain_under_dead_banner" in logs:
+                errors.append("the death banner labels a living player brain")
             ship = sorted(shots.glob("vw_ship_*.png"))
+            played_shots = sorted(shots.glob("vw_played_*.png"))
             if not ship or "[vw-ship] first_tick=" not in logs:
                 errors.append("Vessel Lynx first playable screen witness missing")
             else:
                 visible = sum(max(pixel) > 16 for pixel in Image.open(ship[0]).convert("RGB").getdata())
                 if visible < 1000:
                     errors.append("the first ship picture is blank")
+                if Image.open(ship[0]).size != (960, 540):
+                    errors.append("the ship picture is not 960x540")
+                if not played_shots or Image.open(ship[0]).convert("RGB").tobytes() == Image.open(played_shots[0]).convert("RGB").tobytes():
+                    errors.append("the mod's ship picture does not change during play")
             play_ticks = [int(value) for value in re.findall(r"scene=Vessel Lynx mode=Vessel play_ticks=(\d+)", logs)]
             played = max(play_ticks, default=0)
             if played < 1800:
                 errors.append(f"only {played} ship play ticks after the new game; 1800 required")
             seats = {}
-            for tick, player, actor, x, y, uid, detached, brain_player in re.findall(
-                    r"\[vw-seat\] tick=(\d+) player=(\d+) actor=(.+?) x=([-\d.]+) y=([-\d.]+) uid=(\d+) detached=(\w+) brain_player=(\d+)", logs):
+            for tick, player, actor, x, y, uid, detached, brain_player, left, right in re.findall(
+                    r"\[vw-seat\] tick=(\d+) player=(\d+) actor=(.+?) x=([-\d.]+) y=([-\d.]+) uid=(\d+) detached=(\w+) brain_player=(\d+) left=(true|false) right=(true|false)", logs):
                 seats.setdefault(int(player), []).append({"tick": int(tick), "actor": actor, "x": float(x), "y": float(y),
-                                                         "uid": uid, "detached": detached, "brain_player": int(brain_player)})
+                                                         "uid": uid, "detached": detached, "brain_player": int(brain_player),
+                                                         "left": left == "true", "right": right == "true"})
             required = [0] if len(run["peers"]) == 1 else [0, 1]
             responses = {}
             for player in required:
                 rows = [row for row in seats.get(player, []) if row["detached"] == "True" and row["brain_player"] == player + 1]
-                moved = any(max(row["x"] for row in rows if row["uid"] == uid) - min(row["x"] for row in rows if row["uid"] == uid) >= 10
-                            for uid in {row["uid"] for row in rows})
-                responses[player] = {"detached": bool(rows), "moved": moved}
+                answers = {direction: any(a["uid"] == b["uid"] and a[direction] and b[direction] and
+                                          b["tick"] == a["tick"] + 60 and (b["x"] - a["x"]) * sign >= 10
+                                          for a, b in zip(rows, rows[1:]))
+                           for direction, sign in [("left", -1), ("right", 1)]}
+                moved = all(answers.values())
+                responses[player] = {"detached": bool(rows), "moved": moved, "directions": answers}
                 if not rows or not moved:
                     errors.append(f"player {player} detach and movement response missing")
             state = {"peer": peer["peer"], "pass": not errors, "errors": errors, "menu": menu,
@@ -322,12 +335,16 @@ def grade_capture(repo: Path, capture: Path) -> dict:
                     arm.setdefault("errors", []).append(f"{name} match report missing")
                 else:
                     match = json.loads(report.read_text(encoding="utf-8"))
-                    if match.get("exit_code") != 0 or match.get("setup_error") or match.get("runtime_error") or match.get("resyncs"):
+                    completed = match.get("last_match") if "last_match" in match else match
+                    completed = completed if isinstance(completed, dict) else {}
+                    if (not completed or match.get("error") or match.get("private_rejoin", {}).get("error") or
+                            match.get("setup_error") or match.get("runtime_error") or completed.get("resyncs") != 0 or
+                            ("last_match" not in match and match.get("exit_code") != 0)):
                         arm["pass"] = False
                         arm.setdefault("errors", []).append(f"{name} match report has an error or resync")
                     hashes = arm["hashes"]
-                    if (hashes.get("first_tick") != 1 or hashes.get("last_tick") != match.get("running_ticks") or
-                            hashes.get("compared_ticks") != match.get("running_ticks")):
+                    if (hashes.get("first_tick") != 1 or hashes.get("last_tick") != completed.get("running_ticks") or
+                            hashes.get("compared_ticks") != completed.get("running_ticks")):
                         arm["pass"] = False
                         arm.setdefault("errors", []).append(f"{name} hash trace does not cover every tick in its match report")
             if arm["peers"][0]["seats"] != arm["peers"][1]["seats"]:
@@ -365,7 +382,9 @@ def main() -> int:
         return int(not checker_self_test(package))
     if options.grade:
         result = grade_capture(options.repo.resolve(), options.grade.resolve())
-        print(json.dumps(result, indent=2))
+        summary = {**result, "arms": [{**arm, "peers": [{key: value for key, value in peer.items() if key != "seats"}
+                                                        for peer in arm["peers"]]} for arm in result["arms"]]}
+        print(json.dumps(summary, indent=2))
         return int(not result["pass"])
     if options.compile_choices:
         if not options.factions or not options.input_output:

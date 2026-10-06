@@ -2,7 +2,7 @@
   "schema": 1,
   "name": "mod-void-wanderers-multiplayer",
   "port_base": 49472,
-  "title": "Void Wanderers through the real multiplayer activity picker, lobby and 600 ticks on both peers",
+  "title": "Void Wanderers is played through its own new-game menu from the multiplayer picker and lobby",
   "size": "960x540",
   "timeout_s": 170,
   "peers": [
@@ -12,15 +12,37 @@
         "-input-script",
         "{INPUT_SCRIPT}",
         "-module",
-        "VoidWanderers.rte"
+        "VoidWanderers.rte",
+        "-seed",
+        "42",
+        "-num-lua-states",
+        "4",
+        "-net-live-tick-hashes",
+        "{OUT}/host-live.jsonl",
+        "-net-match-report",
+        "{OUT}/host-match.json"
       ],
       "menu_script": "mod-void-wanderers-multiplayer.host.menu.txt",
-      "input_script": "play-input.txt",
+      "input_script": "mod-void-wanderers-input.txt",
       "probe": "mod-void-wanderers-multiplayer.host.probe.json",
       "settings": {
-        "NetworkDisplayName": "Host"
+        "NetworkDisplayName": "Host",
+        "EnableGlobalScript": "UserSavedGames.rte/VW Scene Observer"
       },
-      "observe_after_failure": true
+      "observe_after_failure": true,
+      "env": {
+        "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
+      },
+      "runtime_files": [
+        {
+          "to": "Userdata/UserSavedGames.rte/Index.ini",
+          "write": "DataModule\n\tModuleName = Scripted Activity Saves\n\tAddGlobalScript = GlobalScript\n\t\tPresetName = VW Scene Observer\n\t\tScriptPath = UserSavedGames.rte/VWSceneObserver.lua\n\t\tLuaClassName = VWSceneObserver\n"
+        },
+        {
+          "to": "Userdata/UserSavedGames.rte/VWSceneObserver.lua",
+          "copy": "tools/e2e/mod-void-wanderers-observer.lua"
+        }
+      ]
     },
     {
       "name": "client",
@@ -28,20 +50,42 @@
         "-input-script",
         "{INPUT_SCRIPT}",
         "-module",
-        "VoidWanderers.rte"
+        "VoidWanderers.rte",
+        "-seed",
+        "42",
+        "-num-lua-states",
+        "4",
+        "-net-live-tick-hashes",
+        "{OUT}/client-live.jsonl",
+        "-net-match-report",
+        "{OUT}/client-match.json"
       ],
       "menu_script": "mod-void-wanderers-multiplayer.client.menu.txt",
-      "input_script": "play-input.txt",
+      "input_script": "mod-void-wanderers-client-input.txt",
       "probe": "mod-void-wanderers-multiplayer.client.probe.json",
       "settings": {
-        "NetworkDisplayName": "Joiner"
+        "NetworkDisplayName": "Joiner",
+        "EnableGlobalScript": "UserSavedGames.rte/VW Scene Observer"
       },
       "start_when": {
         "peer": "host",
         "event": "video_mark vw-mp-lobby-host",
         "timeout_s": 80
       },
-      "observe_after_failure": true
+      "observe_after_failure": true,
+      "env": {
+        "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
+      },
+      "runtime_files": [
+        {
+          "to": "Userdata/UserSavedGames.rte/Index.ini",
+          "write": "DataModule\n\tModuleName = Scripted Activity Saves\n\tAddGlobalScript = GlobalScript\n\t\tPresetName = VW Scene Observer\n\t\tScriptPath = UserSavedGames.rte/VWSceneObserver.lua\n\t\tLuaClassName = VWSceneObserver\n"
+        },
+        {
+          "to": "Userdata/UserSavedGames.rte/VWSceneObserver.lua",
+          "copy": "tools/e2e/mod-void-wanderers-observer.lua"
+        }
+      ]
     }
   ],
   "checklist": [
@@ -195,9 +239,9 @@
       "peer": "host",
       "screen": "game",
       "mark": "vw-mp-play-host",
-      "what": "The input script drives real gameplay for at least 600 simulation updates.",
-      "assert": "the round's committed frames across the marked window, which closes on the round's own frame 700 (and no sooner than 10.5 s), so a loaded box stretches the window instead of thinning it",
-      "sim_progress": 600
+      "what": "The mod starts a new campaign and answers the local player through at least 1800 further ship updates.",
+      "assert": "the whole committed-frame window plus the own scene checker: visible mod menu, new-game transition, ship, player responses and every tick hash",
+      "sim_progress": 1800
     },
     {
       "id": "vw-mp-pause-host",
@@ -276,9 +320,9 @@
       "peer": "client",
       "screen": "game",
       "mark": "vw-mp-play-client",
-      "what": "The input script drives real gameplay for at least 600 simulation updates.",
-      "assert": "the round's committed frames across the marked window, which closes on the round's own frame 700 (and no sooner than 10.5 s), so a loaded box stretches the window instead of thinning it",
-      "sim_progress": 600
+      "what": "The mod starts a new campaign and answers the local player through at least 1800 further ship updates.",
+      "assert": "the whole committed-frame window plus the own scene checker: visible mod menu, new-game transition, ship, player responses and every tick hash",
+      "sim_progress": 1800
     },
     {
       "id": "vw-mp-pause-client",

@@ -22,11 +22,29 @@
             "-num-lua-states",
             "4",
             "-input-script",
-            "{INPUT_SCRIPT}"
+            "{INPUT_SCRIPT}",
+            "-seed",
+            "42"
           ],
-          "input_script": "play-input.txt",
+          "input_script": "mod-void-wanderers-input.txt",
           "menu_script": "mod-void-wanderers.menu.txt",
-          "probe": "mod-void-wanderers.probe.json"
+          "probe": "mod-void-wanderers.probe.json",
+          "settings": {
+            "EnableGlobalScript": "UserSavedGames.rte/VW Scene Observer"
+          },
+          "runtime_files": [
+            {
+              "to": "Userdata/UserSavedGames.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = Scripted Activity Saves\n\tAddGlobalScript = GlobalScript\n\t\tPresetName = VW Scene Observer\n\t\tScriptPath = UserSavedGames.rte/VWSceneObserver.lua\n\t\tLuaClassName = VWSceneObserver\n"
+            },
+            {
+              "to": "Userdata/UserSavedGames.rte/VWSceneObserver.lua",
+              "copy": "tools/e2e/mod-void-wanderers-observer.lua"
+            }
+          ],
+          "env": {
+            "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
+          }
         }
       ]
     },
@@ -61,9 +79,32 @@
             "-net-match-service-scene",
             "Void Wanderers",
             "-net-match-service-scene-module",
-            "VoidWanderers.rte"
+            "VoidWanderers.rte",
+            "-seed",
+            "42",
+            "-num-lua-states",
+            "4",
+            "-net-live-tick-hashes",
+            "{OUT}/host-live.jsonl"
           ],
-          "input_script": "play-input.txt"
+          "input_script": "mod-void-wanderers-input.txt",
+          "settings": {
+            "EnableGlobalScript": "UserSavedGames.rte/VW Scene Observer"
+          },
+          "runtime_files": [
+            {
+              "to": "Userdata/UserSavedGames.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = Scripted Activity Saves\n\tAddGlobalScript = GlobalScript\n\t\tPresetName = VW Scene Observer\n\t\tScriptPath = UserSavedGames.rte/VWSceneObserver.lua\n\t\tLuaClassName = VWSceneObserver\n"
+            },
+            {
+              "to": "Userdata/UserSavedGames.rte/VWSceneObserver.lua",
+              "copy": "tools/e2e/mod-void-wanderers-observer.lua"
+            }
+          ],
+          "env": {
+            "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
+          },
+          "probe": "mod-void-wanderers-host.probe.json"
         },
         {
           "name": "client",
@@ -94,10 +135,33 @@
             "-net-match-service-scene",
             "Void Wanderers",
             "-net-match-service-scene-module",
-            "VoidWanderers.rte"
+            "VoidWanderers.rte",
+            "-seed",
+            "42",
+            "-num-lua-states",
+            "4",
+            "-net-live-tick-hashes",
+            "{OUT}/client-live.jsonl"
           ],
-          "input_script": "play-input.txt",
-          "start_delay_s": 3.0
+          "input_script": "mod-void-wanderers-client-input.txt",
+          "start_delay_s": 3.0,
+          "settings": {
+            "EnableGlobalScript": "UserSavedGames.rte/VW Scene Observer"
+          },
+          "runtime_files": [
+            {
+              "to": "Userdata/UserSavedGames.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = Scripted Activity Saves\n\tAddGlobalScript = GlobalScript\n\t\tPresetName = VW Scene Observer\n\t\tScriptPath = UserSavedGames.rte/VWSceneObserver.lua\n\t\tLuaClassName = VWSceneObserver\n"
+            },
+            {
+              "to": "Userdata/UserSavedGames.rte/VWSceneObserver.lua",
+              "copy": "tools/e2e/mod-void-wanderers-observer.lua"
+            }
+          ],
+          "env": {
+            "CC_LUA_FILE_ROOT": "Userdata/ScriptFiles"
+          },
+          "probe": "mod-void-wanderers-client.probe.json"
         }
       ]
     }
@@ -124,35 +188,29 @@
       "id": "vw-sp-play",
       "peer": "sp",
       "screen": "game",
-      "sim_ticks": [
-        1,
-        4000
-      ],
-      "what": "the mod's own activity plays: its Lua runs, its actors and objects behave as they did before this fork's changes",
-      "assert": "input script drives the seat; no Lua traceback in the log",
+      "what": "A hand starts a new game in the mod; Vessel Lynx then answers brain detach and movement presses for at least 1800 further ticks.",
+      "assert": "mod-void-wanderers-scenes.py checks the lettering, ship, input responses and every paired tick hash; both engines exit 0.",
       "run": "single",
       "mark": "vw-play",
       "forbidden_log_regex": [
         "^ERROR:",
         "RTE Aborted",
         "Assertion failed"
-      ]
+      ],
+      "sim_progress": 1800
     },
     {
       "id": "vw-mp-play",
       "screen": "game",
-      "sim_ticks": [
-        30,
-        1800
-      ],
-      "what": "the same mod activity runs over the lockstep transport on two peers and the two videos agree",
-      "assert": "both match reports and a frame-by-frame compare of the two contact sheets",
+      "what": "A hand starts a new game in the mod; Vessel Lynx then answers brain detach and movement presses for at least 1800 further ticks.",
+      "assert": "mod-void-wanderers-scenes.py checks the lettering, ship, input responses and every paired tick hash; both engines exit 0.",
       "run": "paired",
       "forbidden_log_regex": [
         "^ERROR:",
         "RTE Aborted",
         "Assertion failed"
-      ]
+      ],
+      "sim_progress": 1800
     },
     {
       "id": "vw-no-lua-break",
