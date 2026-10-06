@@ -16,6 +16,39 @@ from test_peer_run_guards import PeerRunGuardTests
 
 
 class ContractTests(unittest.TestCase):
+    def test_post_shipment_fifo_wait_uses_the_same_box_and_claim(self):
+        states = [{'reason':'earlier work request is waiting: menus'},
+                  {'reason':'box launch refused; owner=menus (pid=7); since now'},
+                  {'reason':None}]
+        seen, renewed = [], []
+        def capacity(box, **kwargs):
+            seen.append((box, kwargs))
+            return states.pop(0)
+        worker = SimpleNamespace(capacity_state=capacity, renew_claim=lambda claim:renewed.append(claim))
+        pool = SimpleNamespace(Needs=lambda **values:SimpleNamespace(**values), live_reason=lambda box, needs, state:state['reason'])
+        box = dict(name='EROL-PC', kind='local')
+        claim = dict(token='owned', needs=dict(peer_id='host'))
+        with patch.object(spread.time, 'sleep'):
+            spread.wait_named_launch(worker, pool, box, claim, wait=1800)
+        self.assertEqual([row[0] for row in seen], [box, box, box])
+        self.assertTrue(all(row[1]['ignore_token']=='owned' and row[1]['read_only'] for row in seen))
+        self.assertEqual(renewed, [claim, claim])
+
+    def test_post_shipment_wait_preserves_real_refusals(self):
+        for reason in ('free memory 11 GB is below floor 12 GB',
+                       'box launch refused; owner=other (pid=7); since now'):
+            worker = SimpleNamespace(capacity_state=unittest.mock.Mock(return_value={'reason':reason}),
+                                     renew_claim=unittest.mock.Mock())
+            pool = SimpleNamespace(Needs=lambda **values:SimpleNamespace(**values),
+                                   live_reason=lambda box, needs, state:state['reason'])
+            with self.subTest(reason=reason), patch.object(spread.time, 'sleep') as pause:
+                with self.assertRaisesRegex(spread.SpreadRefusal, 'capacity changed before launch'):
+                    spread.wait_named_launch(worker, pool, dict(name='EROL-PC', kind='local'),
+                                             dict(token='owned', needs=dict(peer_id='host')),
+                                             wait=1800, wait_for_holder='restore')
+                pause.assert_not_called()
+                worker.renew_claim.assert_not_called()
+
     def staging_case(self, root, token='owned'):
         case = object.__new__(spread.Case)
         case.out, case.id, case.closed = root.resolve(), 'owned', False

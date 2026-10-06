@@ -72,6 +72,8 @@ Before the native capacity claim, the same wait also covers the named local
 holder's FIFO line. Match.parameters["wait_for_holder"] / --wait-for-holder
 may name a holder the lead explicitly said to wait behind while it runs alone.
 Other markers, memory/CPU/engine limits and task refusals remain refusals.
+After shipment and before launch, the same native capacity check waits on that
+named local claim's FIFO before starting case timers; all other guards remain.
 Peer.block_udp reserves only
 declared discovery ports on that peer's native machine for the case's lever.
 The default network is ICE. Match.parameters["network"]="direct" preserves
@@ -619,6 +621,40 @@ def claim_named_peer(backend, box, needs, request, *, wait=0, wait_for_holder=No
             time.sleep(min(2, max(0, deadline-time.monotonic())))
 
 
+def wait_named_launch(worker, pool, box, claim, *, wait=0, wait_for_holder=None):
+    """Recheck native FIFO after shipping, before the case starts its timers."""
+    import math
+    wait = float(wait or 0)
+    if not math.isfinite(wait) or wait < 0:
+        raise ValueError("runner wait must be finite and nonnegative")
+    if not wait or box["kind"] != "local":
+        return
+    deadline = time.monotonic() + wait
+    holders = {wait_for_holder} if wait_for_holder else set()
+    announced = None
+    needs = pool.Needs(**claim["needs"])
+    while True:
+        state = worker.capacity_state(box, read_only=True, refresh_display=False, ignore_token=claim["token"])
+        reason = pool.live_reason(box, needs, state)
+        if not reason:
+            return
+        marker = "earlier work request is waiting: "
+        fifo = reason.startswith(marker)
+        if fifo:
+            holders.add(reason[len(marker):].splitlines()[0])
+        owned_window = any(("; owner=" + label + " (") in reason or
+                           ("; owner=" + label + ";") in reason for label in holders)
+        if not (fifo or owned_window):
+            raise SpreadRefusal("capacity changed before launch: " + reason)
+        if time.monotonic() >= deadline:
+            raise SpreadRefusal(f"native holder wait expired after {wait:g}s: {reason}")
+        if reason != announced:
+            print(f"WAITING NAMED: {box['name']}; peer {needs.peer_id}; {reason}", flush=True)
+            announced = reason
+        time.sleep(min(2, max(0, deadline-time.monotonic())))
+        worker.renew_claim(claim)
+
+
 class Case:
     def __init__(self, repo, out, peers, match, *, peer_boxes=None, dispatcher=None, registry=None, peer_ports=None):
         self.repo, self.out = Path(repo).resolve(), Path(out).resolve()
@@ -837,6 +873,17 @@ class Case:
         windows_hashes = {claim["exe_sha256"] for box, claim, _, _ in self.members.values() if box["os"] == "windows"}
         if len(windows_hashes) > 1:
             raise SpreadRefusal("Windows executable changed between peer shipments")
+        wait = self.match.parameters.get("runner_wait", getattr(_options, "runner_wait", 0))
+        for name in self.names:
+            box, claim, _, _ = self.members[name]
+            if not wait or box["kind"] != "local":
+                continue
+            try:
+                wait_named_launch(self.transport_module.worker, self.pool, box, claim,
+                                  wait=wait,
+                                  wait_for_holder=self.match.parameters.get("wait_for_holder", getattr(_options, "wait_for_holder", None)))
+            except SpreadRefusal as error:
+                raise self.refuse(name, box["name"], str(error)) from error
 
     def connect_directory(self):
         self.network = self.match.parameters.get("network", "ice")
@@ -1218,6 +1265,9 @@ class Run:
             request["command"] = ["python", claim["control"] + "/spread_peers.py", "--native", path, "--out", "{OUT}"]
             self.launch_attempted = True
             wait = self.case.match.parameters.get("runner_wait", getattr(_options, "runner_wait", 0))
+            if wait and box["kind"] == "local":
+                wait_named_launch(self.case.transport_module.worker, self.case.pool, box, claim, wait=wait,
+                                  wait_for_holder=self.case.match.parameters.get("wait_for_holder", getattr(_options, "wait_for_holder", None)))
             request["hang_guard"] = max(request.get("hang_guard", 600), self.timeout + 300 + float(wait or 0))
             launch_native(backend, box, claim, request, wait)
         except SpreadRefusal:
