@@ -283,13 +283,24 @@ namespace RTE {
 
 	unsigned char* FrameRecorder::BeginFrame(long long wallMS, std::size_t bytes) {
 		if (!m_Enabled || m_StagingHeld || bytes == 0) return nullptr;
+#if defined(__APPLE__)
+		if (!m_PendingTextureFrames.empty()) {
+			HarnessCost::SimulationSpan readbackCost;
+			DrainTextureReadbacks(false);
+			HarnessCost::Charge(HarnessCost::Recorder, readbackCost.Stop());
+		}
+#endif
 		std::unique_lock<std::mutex> lock(m_Mutex);
 		++m_Submitted;
 		if (!DueAt(wallMS)) {
 			++m_RateLimited;
 			return nullptr;
 		}
-		if (m_Queue.size() >= m_QueueBound) {
+		if (m_Queue.size()
+#if defined(__APPLE__)
+		    + m_PendingTextureFrames.size()
+#endif
+		    >= m_QueueBound) {
 			++m_Dropped;
 			m_PendingDrops.emplace_back(wallMS, m_Admitted - 1);
 			m_Wake.notify_one();
@@ -310,7 +321,11 @@ namespace RTE {
 
 	bool FrameRecorder::StageTextureReadback(unsigned int texture, int width, int height, std::string& error) {
 		if (!m_StagingHeld) { error = "no admitted frame"; return false; }
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__APPLE__)
+		m_StagedTextureReadback = true;
+		m_StagedReadback = FrameReadbackContext::Submit(texture, width, height, error, GL_BGRA);
+		return m_StagedReadback != nullptr;
+#elif defined(__linux__)
 		if (!ReadTextureRGB(texture, width, height, m_Staging, error)) return false;
 		const std::size_t rowBytes = static_cast<std::size_t>(width) * 3;
 		for (int y = 0; y < height / 2; ++y) {
@@ -350,10 +365,34 @@ namespace RTE {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			frame.index = m_NextIndex++;
+#if defined(__APPLE__)
+			if (frame.textureReadback) m_PendingTextureFrames.push_back(std::move(frame));
+			else
+#endif
 			m_Queue.push_back(std::move(frame));
 		}
 		m_Wake.notify_one();
 	}
+
+#if defined(__APPLE__)
+	void FrameRecorder::DrainTextureReadbacks(bool wait) {
+		while (!m_PendingTextureFrames.empty()) {
+			auto& pending = m_PendingTextureFrames.front();
+			std::string error;
+			const auto state = pending.readback ? ReadQueuedTextureRGB(*pending.readback, pending.pixels, error, wait) : TextureReadbackResult::Failed;
+			if (state == TextureReadbackResult::Pending) break;
+			if (state == TextureReadbackResult::Failed) pending.readbackError = error.empty() ? "admitted texture frame has no queued pixel transfer" : error;
+			pending.textureReadback = false;
+			pending.readback.reset();
+			{
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				m_Queue.push_back(std::move(pending));
+				m_PendingTextureFrames.pop_front();
+			}
+			m_Wake.notify_one();
+		}
+	}
+#endif
 
 	void FrameRecorder::WriterLoop() {
 		const bool profileReadback = std::getenv("CCCP_TEST_READBACK_TIMING") != nullptr;
@@ -375,8 +414,8 @@ namespace RTE {
 			// The writer's processor time is the recorder's cost: a write blocked on the encoder's pipe or the disk takes nothing from a frame.
 			const auto wallBefore = profileReadback ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			const int64_t cpuBefore = ThreadCpuNanoseconds();
-			std::string readbackError;
-			const bool pixelsReady = !frame.textureReadback || (frame.readback && m_ReadbackContext->Complete(*frame.readback, frame.pixels, readbackError));
+			std::string readbackError = frame.readbackError;
+			const bool pixelsReady = readbackError.empty() && (!frame.textureReadback || (frame.readback && m_ReadbackContext->Complete(*frame.readback, frame.pixels, readbackError)));
 			if (frame.textureReadback && !frame.readback) readbackError = "admitted texture frame has no queued pixel transfer";
 			const int64_t cpuAfterReadback = profileReadback ? ThreadCpuNanoseconds() : 0;
 			std::string row;
@@ -522,6 +561,11 @@ namespace RTE {
 			m_StagedTextureReadback = false;
 			m_Staging.clear();
 		}
+#if defined(__APPLE__)
+		const int64_t finalReadbackCPU = ThreadCpuNanoseconds();
+		DrainTextureReadbacks(true);
+		HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - finalReadbackCPU);
+#endif
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_Stopping = true;

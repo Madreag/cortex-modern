@@ -98,6 +98,7 @@ namespace RTE {
 			std::vector<unsigned char> pixels;
 			std::unique_ptr<QueuedTextureReadback> readback;
 			bool textureReadback = false;
+			std::string readbackError;
 			FrameMeta meta;
 			std::size_t index = 0;
 			std::size_t slot = 0; //!< The capture-rate slot the frame was admitted in.
@@ -106,6 +107,10 @@ namespace RTE {
 		/// Whether the capture rate admits a frame at this wall time, advancing the pacer when it does.
 		bool DueAt(long long wallMS);
 		void WriterLoop();
+#if defined(__APPLE__)
+		void DrainTextureReadbacks(bool wait);
+		std::deque<QueuedFrame> m_PendingTextureFrames; //!< Render-context transfers awaiting their fence; original metadata stays with each copy.
+#endif
 		/// Encodes the frame; returns its index row, which the caller files in frame order.
 		std::string WriteFrame(const QueuedFrame& frame);
 		/// Streams the frame's timestamp and pixels; the encoder holds its previous picture across empty slots.

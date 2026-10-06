@@ -1363,7 +1363,7 @@ void FrameMan::RecordVideoFrame(const std::string& screen, const std::string& se
 		RTEAbort("Frame recorder texture readback failed: " + readbackError);
 	}
 	const Uint64 beforeFlip = profileReadback ? SDL_GetTicksNS() : 0;
-	// The writer completes the GPU copy and produces the same top-down RGB rows.
+	// The recorder collects the GPU copy and produces the same top-down RGB rows.
 	const Uint64 beforeQueue = profileReadback ? SDL_GetTicksNS() : 0;
 
 	FrameRecorder::FrameMeta meta;

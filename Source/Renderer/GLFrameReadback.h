@@ -101,7 +101,78 @@ namespace RTE {
 		GLuint buffer = 0;
 		GLsync ready = nullptr;
 		int width = 0, height = 0;
+		GLenum format = GL_RGBA;
 	};
+
+	inline void DiscardTextureReadback(QueuedTextureReadback& frame) {
+		if (frame.ready) glad_glDeleteSync(frame.ready);
+		if (frame.buffer) glad_glDeleteBuffers(1, &frame.buffer);
+		frame.ready = nullptr;
+		frame.buffer = 0;
+	}
+
+	enum class TextureReadbackResult { Pending, Complete, Failed };
+
+	/// Collects a fenced copy on the render context, without waiting during rendering or entering another share-group context.
+	inline TextureReadbackResult ReadQueuedTextureRGB(QueuedTextureReadback& frame, std::span<unsigned char> rgb, std::string& error, bool wait = false) {
+		if (!SDL_GL_GetCurrentContext() || !glad_glGetError || !glad_glGetIntegerv || !glad_glBindBuffer ||
+		    !glad_glGetBufferSubData || !glad_glClientWaitSync || !glad_glDeleteSync || !glad_glDeleteBuffers) {
+			error = "no current context with queued texture readback functions";
+			return TextureReadbackResult::Failed;
+		}
+		const std::size_t max = std::min<std::size_t>(std::numeric_limits<std::size_t>::max(), std::numeric_limits<GLsizeiptr>::max());
+		if (!frame.buffer || !frame.ready || frame.width <= 0 || frame.height <= 0 ||
+		    static_cast<std::size_t>(frame.width) > max / 4 ||
+		    static_cast<std::size_t>(frame.height) > max / (static_cast<std::size_t>(frame.width) * 4) ||
+		    rgb.size() != static_cast<std::size_t>(frame.width) * frame.height * 3 ||
+		    (frame.format != GL_RGBA && frame.format != GL_BGRA)) {
+			error = "invalid queued texture transfer or RGB destination";
+			DiscardTextureReadback(frame);
+			return TextureReadbackResult::Failed;
+		}
+		if (const GLenum previous = glad_glGetError(); previous != GL_NO_ERROR) {
+			error = "GL error before queued pixel copy: " + std::to_string(previous);
+			DiscardTextureReadback(frame);
+			return TextureReadbackResult::Failed;
+		}
+		bool done = false;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(90);
+		do {
+			const GLenum state = glad_glClientWaitSync(frame.ready, 0, wait ? 1000000 : 0);
+			const GLenum fenceError = glad_glGetError();
+			if (state == GL_ALREADY_SIGNALED || state == GL_CONDITION_SATISFIED) { done = fenceError == GL_NO_ERROR; if (done) break; }
+			if (state != GL_TIMEOUT_EXPIRED || fenceError != GL_NO_ERROR) { error = "queued pixel transfer fence failed: " + std::to_string(fenceError); break; }
+			if (!wait) return TextureReadbackResult::Pending;
+		} while (std::chrono::steady_clock::now() < deadline);
+		if (!done) {
+			if (error.empty()) error = "queued pixel transfer did not finish within 90 seconds";
+			DiscardTextureReadback(frame);
+			return TextureReadbackResult::Failed;
+		}
+		GLint previousBuffer = 0;
+		glad_glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &previousBuffer);
+		std::vector<unsigned char> color(static_cast<std::size_t>(frame.width) * frame.height * 4);
+		glad_glBindBuffer(GL_PIXEL_PACK_BUFFER, frame.buffer);
+		glad_glGetBufferSubData(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(color.size()), color.data());
+		const GLenum readError = glad_glGetError();
+		glad_glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(previousBuffer));
+		const GLenum restoreError = glad_glGetError();
+		if (readError == GL_NO_ERROR && restoreError == GL_NO_ERROR) {
+			for (int y = 0; y < frame.height; ++y) {
+				const auto* source = color.data() + static_cast<std::size_t>(frame.height - y - 1) * frame.width * 4;
+				auto* destination = rgb.data() + static_cast<std::size_t>(y) * frame.width * 3;
+				for (int x = 0; x < frame.width; ++x) {
+					destination[x * 3] = source[x * 4 + (frame.format == GL_BGRA ? 2 : 0)];
+					destination[x * 3 + 1] = source[x * 4 + 1];
+					destination[x * 3 + 2] = source[x * 4 + (frame.format == GL_BGRA ? 0 : 2)];
+				}
+			}
+		} else error = "queued pixel copy GL error " + std::to_string(readError) + ", restore error " + std::to_string(restoreError);
+		DiscardTextureReadback(frame);
+		const GLenum cleanupError = glad_glGetError();
+		if (cleanupError != GL_NO_ERROR) error += " queued readback cleanup GL error " + std::to_string(cleanupError);
+		return readError == GL_NO_ERROR && restoreError == GL_NO_ERROR && cleanupError == GL_NO_ERROR ? TextureReadbackResult::Complete : TextureReadbackResult::Failed;
+	}
 
 	/// A private shared context completes capture transfers on a writer, leaving the render context's state intact.
 	class FrameReadbackContext {
@@ -155,15 +226,15 @@ namespace RTE {
 		}
 
 		static void Discard(QueuedTextureReadback& frame) {
-			if (frame.ready) glad_glDeleteSync(frame.ready);
-			if (frame.buffer) glad_glDeleteBuffers(1, &frame.buffer);
-			frame.ready = nullptr;
-			frame.buffer = 0;
+			DiscardTextureReadback(frame);
 		}
 
-		std::unique_ptr<QueuedTextureReadback> Submit(GLuint texture, int width, int height, std::string& error) {
+		static std::unique_ptr<QueuedTextureReadback> Submit(GLuint texture, int width, int height, std::string& error, GLenum format = GL_RGBA) {
 			const std::size_t max = std::min<std::size_t>(std::numeric_limits<std::size_t>::max(), std::numeric_limits<GLsizeiptr>::max());
-			if (!SDL_GL_GetCurrentContext() || !texture || width <= 0 || height <= 0 ||
+			if (!SDL_GL_GetCurrentContext() || !glad_glGetError || !glad_glGetIntegerv || !glad_glBindBuffer ||
+			    !glad_glGenBuffers || !glad_glDeleteBuffers || !glad_glBufferData || !glad_glPixelStorei || !glad_glBindTexture ||
+			    !glad_glGetTexLevelParameteriv || !glad_glGetTexImage || !glad_glFenceSync || !glad_glDeleteSync || !glad_glFlush ||
+			    !texture || width <= 0 || height <= 0 || (format != GL_RGBA && format != GL_BGRA) ||
 			    static_cast<std::size_t>(width) > max / 4 || static_cast<std::size_t>(height) > max / (static_cast<std::size_t>(width) * 4)) {
 				error = "invalid queued texture dimensions or context";
 				return nullptr;
@@ -180,6 +251,7 @@ namespace RTE {
 			for (std::size_t i = 0; i < parameters.size(); ++i) glad_glGetIntegerv(parameters[i], &oldPack[i]);
 			auto result = std::make_unique<QueuedTextureReadback>();
 			result->width = width; result->height = height;
+			result->format = format;
 			glad_glBindTexture(GL_TEXTURE_2D, texture);
 			GLint actualWidth = 0, actualHeight = 0;
 			GLenum allocationError = GL_NO_ERROR;
@@ -193,8 +265,8 @@ namespace RTE {
 					allocationError = glad_glGetError();
 					if (allocationError == GL_NO_ERROR) {
 						for (GLenum parameter : parameters) glad_glPixelStorei(parameter, parameter == GL_PACK_ALIGNMENT ? 1 : 0);
-						// RGBA avoids a driver's synchronous three-channel conversion; alpha is discarded on the writer.
-						glad_glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+						// Native color words avoid synchronous three-channel conversion; alpha is discarded when collected.
+						glad_glGetTexImage(GL_TEXTURE_2D, 0, format, GL_UNSIGNED_BYTE, nullptr);
 						result->ready = glad_glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
 						glad_glFlush();
 					}
@@ -238,7 +310,7 @@ namespace RTE {
 						const auto* source = m_RGBA.data() + static_cast<std::size_t>(frame.height - y - 1) * frame.width * 4;
 						auto* destination = rgb.data() + static_cast<std::size_t>(y) * frame.width * 3;
 						for (int x = 0; x < frame.width; ++x) {
-							for (int channel = 0; channel < 3; ++channel) destination[x * 3 + channel] = source[x * 4 + channel];
+							for (int channel = 0; channel < 3; ++channel) destination[x * 3 + channel] = source[x * 4 + (frame.format == GL_BGRA ? 2 - channel : channel)];
 						}
 					}
 				}
