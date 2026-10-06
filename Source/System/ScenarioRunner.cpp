@@ -1717,10 +1717,10 @@ namespace RTE {
 			if (std::any_of(commands.begin(), commands.end(), pending)) return true;
 		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 		const uint64_t through = tick + s_LockstepCoordinator->InputDelayAt(local, tick);
-		std::vector<NetGameCommand> commands;
+		NetLockstepFrame input;
 		for (uint64_t frame = tick; frame <= through; ++frame)
-			if (s_LockstepCoordinator->PeekQueuedCommands(frame, local, commands) &&
-			    std::any_of(commands.begin(), commands.end(), pending)) return true;
+			if (s_LockstepCoordinator->PeekLocalInput(frame, input) &&
+			    std::any_of(input.commands.begin(), input.commands.end(), pending)) return true;
 		return false;
 	}
 

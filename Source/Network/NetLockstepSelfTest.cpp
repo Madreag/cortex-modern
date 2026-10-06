@@ -16590,7 +16590,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			clientConfig.ownershipPolicy = "host-cpu-remote-human";
 			hostConfig.timeoutMs = 4000;
 			clientConfig.timeoutMs = 4000;
+			const long long savedTick = g_TimerMan.GetSimUpdateCount(), savedTime = g_TimerMan.GetSimTickCount();
 			const auto finish = [&](const char* message) {
+				if (watchBinding) g_TimerMan.RestoreSimTickAfterPreview(savedTick, savedTime);
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
 				std::unique_ptr<Activity> empty;
 				g_ActivityMan.SwapCheckpointActivity(empty);
@@ -16640,7 +16642,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!g_ActivityMan.GetActivity()->SwitchToActor(clientView, Players::PlayerOne, Activity::TeamTwo)) {
 				return finish("SwitchToActor refused the client takeover");
 			}
-			if (watchBinding) MovableMan::ReconcileLockstepControlBindings();
+			if (watchBinding) {
+				g_TimerMan.RewindSimTo(switchFrame, savedTime);
+				MovableMan::ReconcileLockstepControlBindings();
+			}
 			const std::vector<NetGameCommand> switchCommands = ScenarioRunner::DrainLocalGameCommands();
 			ControllerFrame hostSnap = ControllerFrameCodec::Snapshot(uid, *hostView->GetController(), hostView);
 			hostSnap.actorUniqueID = uid;
@@ -16672,6 +16677,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			}
 			std::string firstDiffer;
 			for (uint64_t frame = switchFrame; frame <= switchFrame + 2 * delay; ++frame) {
+				if (watchBinding) {
+					g_TimerMan.RewindSimTo(frame, savedTime);
+					MovableMan::ReconcileLockstepControlBindings();
+				}
 				if (hostReady.count(frame)) {
 					ApplyReadySwitchCommands(hostReady[frame], hostView);
 					ApplyOwnerFramesToViews(hostReady[frame], *hostView, *clientView, uid, Activity::TeamTwo);
