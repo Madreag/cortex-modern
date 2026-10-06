@@ -35,6 +35,8 @@ SELFTESTS = [
     "net-lockstep-released-claims",
     "net-lockstep-release-paths",
     "net-lockstep-seat-succession",
+    "net-lockstep-seat-admission",
+    "net-lockstep-cli",
     "net-match",
     "net-auth",
     "net-admission",
@@ -353,6 +355,51 @@ def run_single_player_reference(repo, make_run, case, timeout):
     return scored
 
 
+def run_lockstep_cli(repo, make_run, case, timeout):
+    """The two-peer gameplay entry runs a whole round with one frame of input delay."""
+    case.mkdir(parents=True, exist_ok=False)
+    runs, traces = [], []
+    common = ["-net-lockstep", "-net-port", "47459", "-net-lockstep-input-delay", "1",
+              "-scenario", "SimBaseline", "-seed", "42", "-max-ticks", "120", "-tick-hashes"]
+    try:
+        for role, network in (("host", ["-net-host"]), ("client", ["-net-join", "127.0.0.1"])):
+            trace = case / (role + ".json")
+            traces.append(trace)
+            run = make_run(repo, common + network + ["-out", str(trace)], case / role, timeout,
+                           env={"CCCP_HEADLESS": "1"}, expected=[trace])
+            runs.append(run)
+            run.start()
+        records = [run.finish() for run in runs]
+    finally:
+        for run in runs:
+            run.close()
+    failures, hashes = [], []
+    for role, record, trace in zip(("host", "client"), records, traces):
+        if record.get("exit_code") != 0 or record.get("timed_out") or not record.get("evidence_complete"):
+            stdout = (case / role / "stdout.log").read_text(errors="replace")
+            reason = next((line for line in stdout.splitlines() if "requires" in line or "failed" in line.lower()), stdout[-600:])
+            failures.append(f"delay 1 {role} does not finish its round: {reason}")
+        try:
+            result = json.loads(trace.read_text(encoding="utf-8-sig"))["runs"][0]
+            if result["passed"] is not True or result["ticks"] != 120:
+                failures.append(f"{role} does not complete all 120 ticks")
+            tick_hashes = result["tick_hashes"]
+            if [item["tick"] for item in tick_hashes] != list(range(1, 121)):
+                failures.append(f"{role} has missing tick hashes")
+            hashes.append(tick_hashes)
+        except (OSError, ValueError, KeyError, IndexError, TypeError) as error:
+            failures.append(f"{role} has no valid round trace: {error}")
+    if len(hashes) == 2 and hashes[0] != hashes[1]:
+        failures.append("the two delay 1 peers have different tick hashes")
+    verdict = "FAIL" if failures else "PASS"
+    line = f"[net-lockstep-cli-selftest] {verdict} delay_one_completes_a_round" + (": " + "; ".join(failures) if failures else "")
+    print(line, flush=True)
+    (case / "stdout.log").write_text(line + "\n", encoding="utf-8")
+    return {"pass": not failures, "reason": "; ".join(failures), "fail_lines": failures,
+            "exit_code": max(record.get("exit_code") or 0 for record in records),
+            "timed_out": any(record.get("timed_out") for record in records), "binary": records[0].get("exe_sha256")}
+
+
 def run_row(options, make_run, name, case, sanitizer):
     if name in LOAD_SENSITIVE:
         budget = max(options.timeout, SANITIZER_ROW_TIMEOUT.get(name, {}).get(sanitizer, 0))
@@ -391,6 +438,8 @@ def run_row(options, make_run, name, case, sanitizer):
         scored["binary"] = case_data.get("exe_sha256")
     elif name == "single-player-reference":
         scored = run_single_player_reference(options.repo, make_run, case, options.timeout)
+    elif name == "net-lockstep-cli":
+        scored = run_lockstep_cli(options.repo, make_run, case, options.timeout)
     elif name == "preview-invariance":
         from test_preview_invariance import run_case as invariance_case  # noqa: PLC0415
 

@@ -14,6 +14,7 @@ namespace RTE {
 		static int RunReleasedClaims();
 		static int RunReleasePaths();
 		static int RunSeatSuccession();
+		static int RunSeatAdmission();
 	};
 
 } // namespace RTE

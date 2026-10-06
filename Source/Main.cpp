@@ -10789,6 +10789,7 @@ int RunNetPortMapProbe() {
 int main(int argc, char** argv) {
 	bool netMatchSelfTest = false;
 	bool netSeatSuccessionSelfTest = false;
+	bool netSeatAdmissionSelfTest = false;
 	bool netRejoinGridSelfTest = false;
 	bool netMatchLobbyLifecycleSelfTest = false;
 	for (int i = 1; i < argc; ++i) {
@@ -10864,6 +10865,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-seat-succession-selftest") {
 			netSeatSuccessionSelfTest = true;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-seat-admission-selftest") {
+			netSeatAdmissionSelfTest = true;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-selftest") {
 			if (NetMatchSelfTest::RunBeforeInitialization() != 0) return EXIT_FAILURE;
@@ -11182,6 +11186,7 @@ int main(int argc, char** argv) {
 		return ShutDown(result);
 	}
 	if (netSeatSuccessionSelfTest) return ShutDown(NetLockstepSelfTest::RunSeatSuccession());
+	if (netSeatAdmissionSelfTest) return ShutDown(NetLockstepSelfTest::RunSeatAdmission());
 	if (netMatchSelfTest) {
 		NetMatchService::Destruct();
 		const int result = netMatchLobbyLifecycleSelfTest ? NetMatchSelfTest::RunLobbyLifecycle() : NetMatchSelfTest::Run();

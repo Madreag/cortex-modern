@@ -1331,6 +1331,7 @@ namespace RTE {
 		friend bool TestAParkReachesTheSessionAWorkerOwns(std::string* error);
 		friend bool TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay(std::string* error);
 		friend struct HostOptionsLobbyRow;
+		friend struct SeatAdmissionServiceTest;
 		bool HostOptionsNeedCorrectionLocked() const;
 		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);
 		friend bool TestResumePreparesTheAgreedLobby(std::string* error);
