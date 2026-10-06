@@ -6277,6 +6277,7 @@ namespace RTE::CheckpointLua {
 			lua_State* previousState = s_DescriptorState;
 			const std::unordered_set<const void*>* previousRoots = s_DescriptorRoots;
 			std::unordered_set<const void*> seen, userdata;
+			std::unordered_set<const void*> queuedFinalizers;
 			std::vector<TValue> pending;
 			void Queue(int index) {
 				if (index < 0) index += lua_gettop(state) + 1;
@@ -6285,6 +6286,13 @@ namespace RTE::CheckpointLua {
 				if (seen.insert(lua_topointer(state, index)).second) pending.push_back(state->base[index - 1]);
 			}
 			explicit DescriptorRootScope(lua_State* source) : state(source) {
+				if (GCobj* last = gcref(G(state)->gc.mmudata)) {
+					GCobj* object = last;
+					do {
+						object = gcnext(object);
+						if (object->gch.gct == ~LJ_TUDATA) queuedFinalizers.insert(object);
+					} while (object != last);
+				}
 				const int top = lua_gettop(state);
 				for (int index = 1; index <= top; ++index) Queue(index);
 				lua_pushvalue(state, LUA_GLOBALSINDEX); Queue(-1); lua_settop(state, top);
@@ -6300,6 +6308,10 @@ namespace RTE::CheckpointLua {
 						for (int upvalue = 1; lua_getupvalue(state, index, upvalue); ++upvalue) { Queue(-1); lua_pop(state, 1); }
 					} else if (kind == LUA_TUSERDATA) {
 						userdata.insert(gcval(&value));
+						if ((gcval(&value)->gch.marked & LJ_GC_FINALIZED) && !queuedFinalizers.contains(gcval(&value))) {
+							lua_settop(state, top);
+							continue;
+						}
 						if (auto* rep = luabind::detail::is_class_object(state, index)) {
 							if (rep->get_lua_table().is_valid()) { rep->get_lua_table().get(state); Queue(-1); lua_pop(state, 1); }
 							if (rep->get_dependencies().is_valid()) { rep->get_dependencies().get(state); Queue(-1); lua_pop(state, 1); }
