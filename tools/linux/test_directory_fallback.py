@@ -22,7 +22,7 @@ def check(repo, root, port, url):
     execution = None
     try:
         execution = spread.prepare_case(repo, root,
-            [spread.Peer("host", os="any"), spread.Peer("guest", os="windows", reviewed=True)],
+            [spread.Peer("host", share_ok=False, os="any"), spread.Peer("guest", share_ok=False, os="windows", reviewed=True)],
             spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
         host = menu_script("Host", True, 2, port)
         host += "wait_connected 2 90\nassert_substate Lobby\nwait_ms 1000\ngoto_main\nexit\n"

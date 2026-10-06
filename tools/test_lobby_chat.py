@@ -80,7 +80,7 @@ def run_pair(repo: Path, root: Path, port: int, ticks: int, scripts: dict) -> di
         script_paths[who] = root / f"{who}_chat.txt"
         script_paths[who].write_text(text, encoding="utf-8")
     execution = spread.prepare_case(repo, root,
-        [spread.Peer("host", os="windows", reviewed=True), spread.Peer("client", os="any")],
+        [spread.Peer("host", share_ok=False, os="windows", reviewed=True), spread.Peer("client", share_ok=False, os="any")],
         spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
     runs = {who: execution.make_run(repo, peer_args(root, who, port, ticks, script_paths.get(who)), root / who, 300)
             for who in ("host", "client")}
@@ -204,7 +204,7 @@ def run_mismatch_shots(repo: Path, root: Path, port: int) -> dict:
                 f"settext TextJoinPort {port}\nactivate ButtonJoinAddressGo\nwait 80\nexit\n",
                 encoding="utf-8")
             execution = spread.prepare_case(repo, arm,
-                [spread.Peer("host", os="windows", reviewed=True), spread.Peer("joiner", os="any")],
+                [spread.Peer("host", share_ok=False, os="windows", reviewed=True), spread.Peer("joiner", share_ok=False, os="any")],
                 spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
             runs = {
                 "host": execution.make_run(repo, host_args, arm / "host", 240),
@@ -264,7 +264,7 @@ def run_shots(repo: Path, root: Path, port: int) -> dict:
         arm = root / res_tag
         runs, records = {}, {}
         execution = spread.prepare_case(repo, arm,
-            [spread.Peer("host", os="windows", reviewed=True), spread.Peer("client", os="any")],
+            [spread.Peer("host", share_ok=False, os="windows", reviewed=True), spread.Peer("client", share_ok=False, os="any")],
             spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
         for who in ("host", "client"):
             script = arm / f"{who}.txt"
@@ -392,7 +392,7 @@ def main() -> int:
         # Refusal arm: the chat script is session traffic - outside the headless match it is refused.
         refusal_out = root / "refusal"
         refusal_case = spread.prepare_case(options.repo, root,
-            [spread.Peer("host", os="windows", reviewed=True, output_name="refusal")],
+            [spread.Peer("host", share_ok=False, os="windows", reviewed=True, output_name="refusal")],
             spread.Match(options.port + 4, parameters={"lane": "menus"}))
         refusal_run = refusal_case.make_run(options.repo, ["-net-chat-script", root / "chat" / "host_chat.txt"], refusal_out, 60)
         try:

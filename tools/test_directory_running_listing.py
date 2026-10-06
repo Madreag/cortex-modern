@@ -89,7 +89,7 @@ def main() -> int:
 
     try:
         execution = spread.prepare_case(options.repo, root,
-            [spread.Peer(name, os="windows" if name == "applicant" else "any", reviewed=name == "applicant")
+            [spread.Peer(name, share_ok=False, os="windows" if name == "applicant" else "any", reviewed=name == "applicant")
              for name in ("host", "departing", "stayer", "applicant")],
             spread.Match(options.game_port, options.port, parameters={"lane": "menus",
                 "directory": {"DIRECTORY_URL": f"127.0.0.1:{options.port}", "DIRECTORY_PIN": pin, "DIRECTORY_ROOT": root},

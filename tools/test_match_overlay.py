@@ -468,7 +468,7 @@ def run_vsplit_pair(repo, root, port, size, mode, timeout, expected_pin):
     execution = None
     try:
         execution = spread.prepare_case(repo, root,
-            [spread.Peer("Host", os="windows", reviewed=True), spread.Peer("Guest", os="any")],
+            [spread.Peer("Host", share_ok=False, os="windows", reviewed=True), spread.Peer("Guest", share_ok=False, os="any")],
             spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
         for who, flags in (("Host", ["-net-host", "-net-match-service-config", str(config)]),
                            ("Guest", ["-net-join", "127.0.0.1"])):
@@ -543,7 +543,7 @@ def run_pair(repo, root, port, size, arm, mode, timeout, expected_pin):
     execution = None
     try:
         execution = spread.prepare_case(repo, root,
-            [spread.Peer("Host", os="windows", reviewed=True), spread.Peer("Guest", os="any")],
+            [spread.Peer("Host", share_ok=False, os="windows", reviewed=True), spread.Peer("Guest", share_ok=False, os="any")],
             spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
         for who in ("Host", "Guest"):
             inputs = root / f"{who}_inputs"

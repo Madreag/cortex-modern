@@ -128,8 +128,8 @@ def run_arm(repo: Path, root: Path, port: int, ticks: int, timeout: int, settle_
     }
     runs, records = {}, {}
     execution = spread.prepare_case(repo, root,
-        [spread.Peer("host", os="windows", reviewed=True, output_name="Host", size=(640, 360)),
-         spread.Peer("client", os="any", output_name="Guest", size=(640, 360))],
+        [spread.Peer("host", share_ok=False, os="windows", reviewed=True, output_name="Host", size=(640, 360)),
+         spread.Peer("client", share_ok=False, os="any", output_name="Guest", size=(640, 360))],
         spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
     for who, text in scripts.items():
         path = root / f"{who}.txt"

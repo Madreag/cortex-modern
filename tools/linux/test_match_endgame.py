@@ -80,7 +80,7 @@ def run_case(repo, root, case, port):
     execution = None
     try:
         execution = spread.prepare_case(repo, root,
-            [spread.Peer(who, os="windows" if (who == "host") or case == "locale" else "any", reviewed=who == "host") for who in names],
+            [spread.Peer(who, share_ok=False, os="windows" if (who == "host") or case == "locale" else "any", reviewed=who == "host") for who in names],
             spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
         for who in names:
             host = who == "host"
