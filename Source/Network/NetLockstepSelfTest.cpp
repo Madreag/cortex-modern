@@ -24318,7 +24318,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	}
 
 	bool TestCommitOnlySuccessorReproposesRelease(std::string* error) {
-		const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("commit_only_successor_reproposes_release", why, error); };
+		const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("commit_only_successor_release_waits_for_own_click", why, error); };
 		ReleasePathRound round;
 		if (!round.Start(47445) || !round.HoldFourth()) return fail("the migration fixture did not start or hold seat 4: " + round.failure);
 		// A returned subscriber takes the Commit; the proposal and the session notice predate its listener.
@@ -24333,14 +24333,25 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		const uint64_t boundary = round.peers[1].GetMigrationResult().boundary;
 		if (boundary >= agreed->applyFrame) return fail("the migration did not drop the future release");
 		for (int turn = 0; turn < 150; ++turn) round.Pump();
+		for (size_t index: {size_t{1}, size_t{2}}) if (round.peers[index].IsSeatReleased(4) || round.peers[index].SeatReleases().contains(4)) return fail("the future Commit survives the agreed boundary");
 		std::array<ReleasePathClaimView, 2> views;
 		for (size_t index = 0; index < views.size(); ++index) {
 			if (!views[index].Create("survivor " + std::to_string(index + 2), round.peers[index + 1], 3, 4, 4)) return fail("the released actor could not be created");
 			views[index].claimant = 4;
 			views[index].handoff = 1;
 			for (const auto& [frame, ready]: round.committed[index + 1]) if (frame > boundary) views[index].ApplyTick(ready);
+			if (views[index].ended || views[index].claimant != 4) return fail("the discarded future Commit ends held claims");
 		}
-		if (!views[0].ended || views[0].ended != views[1].ended || views[0].hashes != views[1].hashes) return fail("a release known only as Commit was lost after boundary=" +
+		const uint64_t after = round.peers[1].GetResumeFrame();
+		round.peers[1].EvictRemovedPeer(4, "successor releases the held seat", round.now);
+		for (int turn = 0; turn < 150; ++turn) round.Pump();
+		std::array<size_t, 2> releases{};
+		for (size_t index = 0; index < views.size(); ++index) for (const auto& [frame, ready]: round.committed[index + 1]) if (frame >= after) {
+			views[index].ApplyTick(ready);
+			for (const auto* commands: {&ready.localCommands, &ready.remoteCommands}) for (const auto& command: *commands)
+				if (const auto* release = std::get_if<NetGameSeatRelease>(&command.payload); release && release->peerId == 4) ++releases[index];
+		}
+		if (releases[0] != 1 || releases[1] != 1 || !views[0].ended || views[0].ended != views[1].ended || views[0].hashes != views[1].hashes) return fail("the successor's own click does not end claims once after boundary=" +
 		    std::to_string(boundary) + ": successor ends claims at " + views[0].Ended() + ", survivor at " + views[1].Ended());
 		return fail("");
 	}
@@ -24676,6 +24687,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			for (size_t index = 0; index < owed.size(); ++index) for (uint8_t seat = 1; seat <= 4; ++seat)
 				if (round.peers[index + 1].IsSeatReleased(seat)) owed[index].insert(seat);
 			if (!owed[0].empty() || owed[0] != owed[1]) failures += "future release leaves unequal owed sets: successor seat4=" + std::to_string(owed[0].contains(4)) + " survivor3 seat4=" + std::to_string(owed[1].contains(4)) + "; ";
+			for (size_t index: {size_t{1}, size_t{2}}) if (!round.peers[index].HasHeldAISeat(4) || round.peers[index].HeldSeatResolution(4) != NetLockstepHoldResolution::Substituted) failures += "the discarded release keeps an expired hold resolution; ";
 			round.produceThrough.fill(UINT64_MAX); round.drainThrough = UINT64_MAX;
 			for (int turn = 0; turn < 30; ++turn) round.Pump();
 			std::array<ReleasePathClaimView, 2> views;

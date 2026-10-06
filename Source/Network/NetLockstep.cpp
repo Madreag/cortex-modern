@@ -4141,7 +4141,6 @@ namespace RTE {
 		const auto seatTransitions = m_SeatTransitions;
 		const auto heldSeats = m_AiHeldSeats;
 		const auto successionHolds = m_SuccessionHoldFrames;
-		const auto releasedSeats = m_ReleasedAiSeats;
 		const auto seatReleases = m_SeatReleases;
 		const auto holdTransactions = m_HoldTransactions;
 		const auto reclaimTransactions = m_ReclaimTransactions;
@@ -4197,7 +4196,6 @@ namespace RTE {
 			if ((!membershipHold && frame > m_MigrationBoundary) || std::find(m_Config.activePeerIds.begin(), m_Config.activePeerIds.end(), peer) != m_Config.activePeerIds.end()) continue;
 			m_AiHeldSeats[peer] = frame;
 			if (membershipHold) m_SuccessionHoldFrames[peer] = frame;
-			if (releasedSeats.contains(peer)) m_ReleasedAiSeats.insert(peer);
 			if (const auto transaction = holdTransactions.find(peer); transaction != holdTransactions.end()) m_HoldTransactions[peer] = transaction->second;
 			if (const auto resolution = heldResolutions.find(peer); resolution != heldResolutions.end()) m_DroppedSeatResolutions[peer] = resolution->second;
 			if (droppedSeats.contains(peer)) m_DroppedSeats.insert(peer);
@@ -4210,9 +4208,14 @@ namespace RTE {
 		for (auto& [peer, transitions]: m_SeatTransitions) transitions.erase(transitions.upper_bound(m_MigrationBoundary), transitions.end());
 		for (const auto& [peer, releases]: seatReleases)
 			for (const auto& [frame, release]: releases) {
-				if (frame <= m_MigrationBoundary) m_SeatReleases[peer][frame] = release;
-				else if (m_AiHeldSeats.contains(peer) && frame >= m_AiHeldSeats.at(peer)) m_ReleasedAiSeats.insert(peer);
+				if (frame > m_MigrationBoundary) continue;
+				m_SeatReleases[peer][frame] = release;
+				m_ReleasedAiSeats.insert(peer);
 			}
+		for (const auto& [peer, frame]: m_AiHeldSeats) if (!m_ReleasedAiSeats.contains(peer)) {
+			m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
+			m_DroppedSeats.insert(peer);
+		}
 		for (uint8_t peer: m_Config.activePeerIds) {
 			m_PeerLeaveFrames.erase(peer);
 			// A member of the successor's round is in it from its first frame, whatever the old round last recorded of its seat.
