@@ -1848,7 +1848,8 @@ local function visitThread(value, ctx)
 	noteNode(ctx, id, "H" .. outputNumber(id) .. ";" .. letter .. ";" .. outputNumber(desc.first) .. ";" .. outputNumber(desc.base) .. ";" .. outputNumber(desc.top) .. ";" .. concatenate(entries))
 	return reference(ctx, id)
 end
-
+)lua"
+	    R"lua(
 visit = function(value, ctx)
 	local kind = type(value)
 	if kind == "nil" then return "z;"
