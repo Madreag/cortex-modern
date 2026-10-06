@@ -2254,10 +2254,10 @@ namespace {
 		combo->SetText(text);
 	}
 
-	/// Shortens a closed list's caption in its middle until it fits beside the drop-down button; a module suffix that tells
-	/// two of one name apart stays whole, and the open list keeps every name whole.
+	/// Shortens a list's caption in its middle until it fits beside the drop-down button, the open list's hovered pick too; a
+	/// module suffix that tells two of one name apart stays whole, and the list itself keeps every name whole.
 	void HostOptFitComboCaption(GUISkin* skin, GUIComboBox* combo) {
-		if (!skin || !combo || combo->IsDropped()) return;
+		if (!skin || !combo) return;
 		const GUIListPanel::Item* item = combo->GetSelectedItem();
 		const std::string full = item ? item->m_Name : combo->GetText();
 		std::string fontName;
@@ -3627,11 +3627,6 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 			DraftHostOptionsFromControls();
 			FollowHostActivityDefaults(before, guiEventControl);
 		}
-	}
-	// A pick closes its list on the whole name: the caption is fitted before the frame draws.
-	if (guiEventControl == m_HostRulesActivityCombo || guiEventControl == m_HostRulesSceneCombo) {
-		HostOptFitComboCaption(m_SubMenuScreenGUIControlManager->GetSkin(), m_HostRulesActivityCombo);
-		HostOptFitComboCaption(m_SubMenuScreenGUIControlManager->GetSkin(), m_HostRulesSceneCombo);
 	}
 	if (guiEventControl == m_HostRelayCombo) {
 		if (m_HostOptionsReadOnly || !m_HostOptionsSetupDraft) return;
