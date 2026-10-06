@@ -3,6 +3,8 @@
 #include "CheckpointLuaHeap.h"
 
 #include <functional>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <unordered_set>
