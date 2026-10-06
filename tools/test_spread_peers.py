@@ -16,6 +16,139 @@ from test_peer_run_guards import PeerRunGuardTests
 
 
 class ContractTests(unittest.TestCase):
+    def exclusive_fake(self, root, clock, *, live):
+        marker = root/'exclusive.lock'
+        marker.write_text('owner evidence')
+        owner = dict(pid=7, process_start=12.0, machine='NAMED', label='timing window', token='other')
+        facts = SimpleNamespace(machine_name=lambda:'NAMED', process_start=lambda pid:12.0 if live else None,
+                                read_reservation=lambda path, **kwargs:owner if live else None)
+        box = dict(name='NAMED', kind='local', markers=dict(exclusive=str(marker)))
+        def raw_probe(target, **kwargs):
+            self.assertIs(target, box)
+            if clock[0] >= 20 and live:
+                marker.unlink(missing_ok=True)
+            return dict(reason='another run holds the box alone' if marker.exists() else None, jobs=[])
+        def probe(target, **kwargs):
+            # The native worker enriches this unchanged capacity probe.
+            raw_probe(target, **kwargs)
+            return spread.native_exclusive_state(raw_probe, target, facts=facts, root=root, **kwargs)
+        return box, marker, probe
+
+    def test_live_exclusive_claim_waits_twenty_seconds_before_launch(self):
+        for phase in ('claim', 'prepared', 'final'):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temporary:
+                clock, starts, locked, renewals = [0.0], [], [False], []
+                box, marker, probe = self.exclusive_fake(Path(temporary), clock, live=True)
+                claim = dict(token='owned', needs=dict(peer_id='host', alone=False), runner_wait=60)
+                needs = SimpleNamespace(**claim['needs'])
+                def reason(box, needs, state):
+                    return state.get('refusal') or state['reason']
+                def rpc(target, action, body, **kwargs):
+                    self.assertIs(target, box)
+                    self.assertEqual(action, 'claim')
+                    if refusal := reason(target, needs, probe(target)):
+                        raise RuntimeError('capacity refused: '+refusal)
+                    starts.append(clock[0])
+                    return claim
+                @contextlib.contextmanager
+                def mutex(*args, **kwargs):
+                    self.assertFalse(locked[0])
+                    locked[0] = True
+                    try: yield
+                    finally: locked[0] = False
+                def sleep(seconds):
+                    self.assertFalse(locked[0])
+                    self.assertEqual(starts, [])
+                    clock[0] += seconds
+                worker = SimpleNamespace(capacity_state=probe, renew_claim=lambda value:renewals.append(value))
+                pool = SimpleNamespace(Needs=lambda **values:SimpleNamespace(**values), live_reason=reason)
+                backend = SimpleNamespace(rpc=rpc, probe=probe)
+                with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+                     patch.object(spread.time, 'sleep', side_effect=sleep):
+                    if phase == 'claim':
+                        self.assertIs(spread.claim_named_peer(backend, box, needs, {}, wait=60), claim)
+                    elif phase == 'prepared':
+                        spread.wait_named_launch(worker, pool, box, claim, wait=60)
+                        starts.append(clock[0])
+                    else:
+                        with spread.named_launch_capacity(box, needs, claim, probe=probe, live_reason=reason,
+                                mutex=mutex, root=Path(temporary), renew=lambda value:renewals.append(value)):
+                            self.assertTrue(locked[0])
+                            starts.append(clock[0])
+                self.assertEqual(starts, [20.0])
+                self.assertFalse(marker.exists())
+                self.assertFalse(locked[0])
+                if phase != 'claim':
+                    self.assertEqual(len(renewals), 10)
+        for wait in (0, 10):
+            with self.subTest(wait=wait), tempfile.TemporaryDirectory() as temporary:
+                clock, starts = [0.0], []
+                box, marker, probe = self.exclusive_fake(Path(temporary), clock, live=True)
+                def rpc(target, action, body, **kwargs):
+                    if probe(target)['reason']:
+                        raise RuntimeError('capacity refused: another run holds the box alone')
+                    starts.append(clock[0])
+                with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+                     patch.object(spread.time, 'sleep', side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)), \
+                     self.assertRaisesRegex(RuntimeError, 'expired after 10s' if wait else 'capacity refused'):
+                    spread.claim_named_peer(SimpleNamespace(rpc=rpc, probe=probe), box,
+                                            SimpleNamespace(peer_id='host'), {}, wait=wait)
+                self.assertEqual(starts, [])
+                self.assertEqual(clock[0], wait)
+                self.assertTrue(marker.exists())
+
+    def test_ownerless_exclusive_marker_refuses_by_name_without_wait_or_archive(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            box, marker, probe = self.exclusive_fake(Path(temporary), [0.0], live=False)
+            claim = dict(token='owned', needs=dict(peer_id='host', alone=False), runner_wait=60)
+            needs = SimpleNamespace(**claim['needs'])
+            reason = lambda box, needs, state:state.get('refusal') or state['reason']
+            def rpc(target, action, body, **kwargs):
+                raise RuntimeError('capacity refused: '+reason(target, needs, probe(target)))
+            worker = SimpleNamespace(capacity_state=probe, renew_claim=unittest.mock.Mock())
+            pool = SimpleNamespace(Needs=lambda **values:SimpleNamespace(**values), live_reason=reason)
+            with patch.object(spread.time, 'sleep') as sleep:
+                for phase in ('claim', 'prepared', 'final'):
+                    with self.subTest(phase=phase), self.assertRaisesRegex(RuntimeError, 'ownerless exclusive marker.*exclusive.lock'):
+                        if phase == 'claim':
+                            spread.claim_named_peer(SimpleNamespace(rpc=rpc, probe=probe), box, needs, {}, wait=60)
+                        elif phase == 'prepared':
+                            spread.wait_named_launch(worker, pool, box, claim, wait=60)
+                        else:
+                            with spread.named_launch_capacity(box, needs, claim, probe=probe, live_reason=reason,
+                                    mutex=lambda *args, **kwargs:contextlib.nullcontext(), root=Path(temporary), renew=worker.renew_claim):
+                                self.fail('an ownerless marker cannot launch')
+                sleep.assert_not_called()
+                worker.renew_claim.assert_not_called()
+            self.assertEqual(marker.read_text(), 'owner evidence')
+
+    def test_worker_exclusive_extension_runs_before_main_and_keeps_positional_probe_calls(self):
+        source = ('def launch():\n'
+                  '    if True:\n'
+                  '        if True:\n'
+                  "            with mutex(root_for(box)/'.capacity.lock',wait=15):\n"
+                  "                before=capacity_state(box,refresh_display=False,ignore_token=claim['token'])\n"
+                  "                if reason:=live_reason(box,Needs(**claim['needs']),before):raise RuntimeError('capacity changed before launch: '+reason)\n"
+                  '                pass\n'
+                  "if __name__=='__main__':raise SystemExit(main())\n")
+        with tempfile.TemporaryDirectory() as temporary:
+            seen = []
+            facts = SimpleNamespace(read_reservation=lambda *args, **kwargs:None)
+            box = dict(name='NAMED', markers={})
+            def probe(target, **kwargs):
+                seen.append(kwargs)
+                return dict(jobs=[])
+            def main():
+                value = namespace['capacity_state'](box, True, False, 'owned')
+                self.assertEqual(value['exclusive_holders'], [])
+                return 0
+            namespace = dict(__name__='__main__', capacity_state=probe, facts=facts,
+                             root_for=lambda box:Path(temporary), main=main)
+            with self.assertRaises(SystemExit) as result:
+                exec(compile(spread.native_cpu_wait_source(source), '<native-worker>', 'exec'), namespace)
+            self.assertEqual(result.exception.code, 0)
+            self.assertEqual(seen, [dict(read_only=True, refresh_display=False, ignore_token='owned')])
+
     def test_direct_host_route_to_named_lan_peer_does_not_select_its_overlay(self):
         with patch.object(spread.sys, 'platform', 'win32'), \
              patch.object(spread.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='192.168.50.130\n')) as query:
