@@ -13,7 +13,9 @@
 		<string>/usr/bin/python3</string>
 		<string>/Users/erol/cortex-directory/session_directory.py</string>
 		<string>--bind</string>
-		<string>0.0.0.0</string>
+		<string>127.0.0.1</string>
+		<string>--caller-mode</string>
+		<string>tunnel</string>
 		<string>--port</string>
 		<string>8443</string>
 		<string>--cert</string>

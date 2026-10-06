@@ -299,6 +299,7 @@ class DirectoryTests(unittest.TestCase):
             "insecure_http": not self.use_tls,
             "cert": cert,
             "key": key,
+            "caller_mode": "direct",
         }
         if queue_idle_s is not None:
             kwargs["queue_idle_s"] = queue_idle_s
@@ -402,6 +403,16 @@ class DirectoryTests(unittest.TestCase):
     def assert_keys(self, body: dict[str, Any], keys: set[str]) -> None:
         self.assertEqual(set(body.keys()), keys)
 
+
+    def test_T3_startup_requires_an_explicit_safe_caller_mode(self) -> None:
+        with self.assertRaises(SystemExit, msg="T3: startup silently chose a caller mode"):
+            session_directory.parse_args(["--insecure-http"])
+        for mode in ("direct", "tunnel"):
+            with self.assertRaises((ValueError, SystemExit), msg="T3: a public listener accepted an unsafe caller mode"):
+                running = spawn_server(bind="0.0.0.0", port=47465, caller_mode=mode)
+                running.stop()
+            running = spawn_server(bind="127.0.0.1", port=47465, caller_mode=mode)
+            running.stop()
 
     def test_R1_tunnel_requires_the_callers_address(self) -> None:
         self.start(port=47460)
@@ -2454,7 +2465,7 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(recovered["token"], lost["token"], "S5: an unacknowledged recovery rotated its replacement again")
 
     def test_aborted_get_redacts_token_and_client_nonce(self) -> None:
-        self.server = spawn_server("127.0.0.1", 47493, expiry_s=15, heartbeat_s=5)
+        self.server = spawn_server("127.0.0.1", 47493, expiry_s=15, heartbeat_s=5, caller_mode="direct")
         store = self.server.store
         row = store.register(sample_register(), "127.0.0.1", time.monotonic(), INSTALL_KEY)
         nonce = "nonce-that-must-not-be-logged"
@@ -2534,14 +2545,14 @@ class DirectoryTests(unittest.TestCase):
             world_id = str(uuid.uuid4())
             request = sample_register(persistent_world=True, world_id=world_id,
                                       world_boot=1, resume_session_id=world_id)
-            first = spawn_server(log_file=log_file, create_owner_key=True)
+            first = spawn_server(log_file=log_file, create_owner_key=True, caller_mode="direct")
             try:
                 now = time.monotonic()
                 created = first.store.register(request, "192.0.2.1", now, INSTALL_KEY)
                 first.store.heartbeat(world_id, {"token": created["token"], "peer_count": 1, "seats_free": 1}, now, INSTALL_KEY)
             finally:
                 first.stop()
-            second = spawn_server(log_file=log_file)
+            second = spawn_server(log_file=log_file, caller_mode="direct")
             try:
                 now = time.monotonic()
                 try:
@@ -2560,7 +2571,7 @@ class DirectoryTests(unittest.TestCase):
                 self.assertNotIn(resumed["token"], proof.read_text(), "F3: the owner file exposed the resumed token")
             finally:
                 second.stop()
-            third = spawn_server(log_file=log_file)
+            third = spawn_server(log_file=log_file, caller_mode="direct")
             try:
                 with self.assertRaises(PermissionError, msg="F3: a rotated token recovered ownership after another restart"):
                     third.store.register(dict(request, resume_token=created["token"]), "192.0.2.1", time.monotonic(), INSTALL_KEY)
@@ -2575,12 +2586,12 @@ class DirectoryTests(unittest.TestCase):
             world_id = str(uuid.uuid4())
             request = sample_register(persistent_world=True, world_id=world_id,
                                       world_boot=1, resume_session_id=world_id)
-            first = spawn_server(log_file=log, create_owner_key=True)
+            first = spawn_server(log_file=log, create_owner_key=True, caller_mode="direct")
             try:
                 created = first.store.register(request, "192.0.2.1", time.monotonic(), INSTALL_KEY)
             finally:
                 first.stop()
-            second = spawn_server(log_file=log)
+            second = spawn_server(log_file=log, caller_mode="direct")
             try:
                 with self.assertRaises(PermissionError, msg="F2: a different install replayed a lost first registration"):
                     second.store.register(request, "192.0.2.1", time.monotonic(), "fedcba9876543210")
@@ -2590,7 +2601,7 @@ class DirectoryTests(unittest.TestCase):
                 lost = second.store.register(resume, "192.0.2.1", time.monotonic(), INSTALL_KEY)
             finally:
                 second.stop()
-            third = spawn_server(log_file=log)
+            third = spawn_server(log_file=log, caller_mode="direct")
             try:
                 replayed = third.store.register(resume, "192.0.2.1", time.monotonic(), INSTALL_KEY)
                 self.assertEqual(replayed["session_id"], lost["session_id"], "F2: a lost resume reply and restart changed the world id")

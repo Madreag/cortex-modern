@@ -22,7 +22,7 @@ python tools/session_directory/test_session_directory.py -v
 - `test_session_directory.py` — loopback tests (`python test_session_directory.py -v`)
 - `com.cortex.session-directory.plist` — macOS LaunchDaemon
 
-Listen address and port: `--bind` and `--port` (default `0`, an ephemeral port printed at start; the daemon and the Windows task pass `--port 8443`). TLS when both `--cert` and `--key` are set. Plain HTTP only with `--insecure-http` (tests and LAN trials). `--expiry-s` default 15. `--heartbeat-s` default 5 (also returned on register). `--log-file` is a rotating log (5 × 5 MB).
+The listener must be loopback (`--bind 127.0.0.1`, the default). `--caller-mode` is required: `direct` uses the socket address for local clients; `tunnel` requires the forwarding edge's address header. Both modes refuse a non-loopback listener. `--port` defaults to `0`, an ephemeral port printed at start; deployments pass `--port 8443`. TLS requires both `--cert` and `--key`. Plain HTTP requires `--insecure-http`. `--expiry-s` defaults to 15 and `--heartbeat-s` to 5. `--log-file` rotates at 5 × 5 MB.
 
 ## What the install key is
 
@@ -76,7 +76,7 @@ openssl x509 -in cert.pem -outform DER | openssl dgst -sha256
 
 Every client sets `SessionDirectoryCertSha256 = <hex>` in Settings.ini for a self-signed directory. An unpinned client needs a certificate the system store trusts (Let's Encrypt with a public DNS name). Pinned mode does not consult the chain, the name or the dates.
 
-4. Load the daemon (starts at boot, survives logout, KeepAlive):
+4. Follow the key-creation steps below, configure the forwarding tunnel to the loopback listener, then load the daemon (starts at boot, survives logout, KeepAlive):
 
 ```bash
 sudo launchctl bootstrap system /Library/LaunchDaemons/com.cortex.session-directory.plist
@@ -84,21 +84,21 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/com.cortex.session-direct
 
 To unload later: `sudo launchctl bootout system/com.cortex.session-directory`.
 
-5. Firewall: allow inbound TCP 8443 (HTTPS and signaling). UDP 3478 is only needed if a separate STUN/TURN daemon is added later; this process does not bind it.
+5. The forwarding tunnel reaches TCP 8443 on loopback. This process accepts no public listener and binds no UDP port.
 
 Logs: rotating file `/Users/erol/cortex-directory/logs/session-directory.log`, plus launchd stdout/stderr in the same folder.
 
 ## Windows alternative
 
-Same `session_directory.py`. Bind `0.0.0.0:8443` with `--cert` and `--key`. Create a Task Scheduler task that runs at logon (hidden `pythonw` is fine):
+Same `session_directory.py`, with a forwarding tunnel to `127.0.0.1:8443`. Create the permanent owner key once as described below, then create a Task Scheduler task at logon (hidden `pythonw` is fine):
 
 ```text
 Program: pythonw.exe
-Arguments: D:\path\to\session_directory.py --bind 0.0.0.0 --port 8443 --cert D:\path\to\cert.pem --key D:\path\to\key.pem --log-file D:\path\to\logs\session-directory.log
+Arguments: D:\path\to\session_directory.py --bind 127.0.0.1 --caller-mode tunnel --port 8443 --cert D:\path\to\cert.pem --key D:\path\to\key.pem --log-file D:\path\to\logs\session-directory.log --owner-state D:\path\to\world-owners.json
 Start in: D:\path\to
 ```
 
-Allow inbound TCP 8443 for that Python executable (elevated firewall rule). Clients set the directory URL to this PC. There is no launchd job and no `gui/501` requirement.
+The tunnel must overwrite `CF-Connecting-IP`. Clients use its public URL. The Python listener stays on loopback.
 
 Self-signed certificate (same `openssl` command as above, including the SAN) unless a public DNS name exists for Let's Encrypt. Clients pin that certificate as in step 3.
 # World ownership across restarts
@@ -115,13 +115,19 @@ distributing a new game build**: a positive-generation world resume against the
 old service receives 409 and reads as superseded.
 
 1. Stop the old service. Recreate the project's disposable test worlds.
-2. Start the new service with its normal TLS arguments, `--caller-mode tunnel`,
+2. Start the new service on loopback with its normal TLS arguments, `--caller-mode tunnel`,
    `--owner-state /Users/erol/cortex-directory/world-owners.json`, and
    `--create-owner-key` once. The Cloudflare edge must overwrite
    `CF-Connecting-IP`; missing or invalid addresses receive 400. Direct deployments
    use `--caller-mode direct` and the socket address. No address grants privilege.
    Missing keys without the create flag refuse startup. Creation is atomic: an
    interrupted first start leaves a complete key or no key, so repeat this step.
+
+   The public deployment's first-start command is:
+
+   ```bash
+   /usr/bin/python3 /Users/erol/cortex-directory/session_directory.py --bind 127.0.0.1 --port 8443 --caller-mode tunnel --cert /Users/erol/cortex-directory/cert.pem --key /Users/erol/cortex-directory/key.pem --log-file /Users/erol/cortex-directory/logs/session-directory.log --owner-state /Users/erol/cortex-directory/world-owners.json --create-owner-key
+   ```
 3. Remove the one-time create flag. Keep `world-owners.key` and `world-owners.json`
    permanently, back them up together, and preserve `world-owners.pending.json`
    through an in-progress restart. Verify register, heartbeat, list, signals and

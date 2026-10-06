@@ -108,6 +108,7 @@ def main() -> int:
         [
             sys.executable,
             str(SERVICE),
+            "--caller-mode", "direct", "--create-owner-key",
             "--bind",
             options.bind,
             "--port",

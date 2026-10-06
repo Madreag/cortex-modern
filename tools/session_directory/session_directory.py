@@ -527,9 +527,9 @@ class SessionDirectory:
         turn_config: Optional[dict[str, Any]] = None, turn_max_ttl: int = TURN_MAX_TTL,
         owner_state: Optional[Path] = None,
         owner_key: Optional[Path] = None, create_owner_key: bool = False,
-        caller_mode: str = "direct",
+        caller_mode: Optional[str] = None,
     ) -> None:
-        if caller_mode not in ("direct", "tunnel"):
+        if caller_mode not in (None, "direct", "tunnel"):
             raise ValueError("invalid caller mode")
         self.caller_mode = caller_mode
         self.expiry_s = expiry_s
@@ -1455,10 +1455,21 @@ def configure_logging(log_file: Optional[Path]) -> None:
         LOGGER.addHandler(handler)
 
 
+def check_listener_mode(bind: str, caller_mode: Optional[str]) -> None:
+    if caller_mode not in ("direct", "tunnel"):
+        raise ValueError("choose --caller-mode direct or tunnel explicitly")
+    try:
+        loopback = ipaddress.ip_address(bind).is_loopback
+    except ValueError:
+        loopback = False
+    if not loopback:
+        raise ValueError("the directory listener must be loopback; put the forwarding tunnel on 127.0.0.1")
+
+
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Self-hosted session directory")
-    parser.add_argument("--bind", default="0.0.0.0")
-    parser.add_argument("--caller-mode", choices=("direct", "tunnel"), default="direct",
+    parser.add_argument("--bind", default="127.0.0.1")
+    parser.add_argument("--caller-mode", choices=("direct", "tunnel"), required=True,
                         help="direct uses the socket address; tunnel requires the edge-set CF-Connecting-IP")
     # 0 = ephemeral; the bound port is printed at start. Game-port fixture
     # defaults live above 47600, each different:
@@ -1484,6 +1495,10 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--turn-max-ttl", type=int, default=TURN_MAX_TTL,
                         help=f"the longest relay credential minted, {TURN_MIN_TTL}-{TURN_MAX_TTL} s")
     args = parser.parse_args(argv)
+    try:
+        check_listener_mode(args.bind, args.caller_mode)
+    except ValueError as error:
+        parser.error(str(error))
     if not TURN_MIN_TTL <= args.turn_max_ttl <= TURN_MAX_TTL:
         parser.error(f"--turn-max-ttl must be {TURN_MIN_TTL}-{TURN_MAX_TTL}")
     return args
@@ -1884,6 +1899,7 @@ def build_httpd(
     cert: Optional[Path],
     key: Optional[Path],
 ) -> SessionHTTPServer:
+    check_listener_mode(bind, store.caller_mode)
     handler = make_handler(store)
     httpd = SessionHTTPServer((bind, port), handler)
     httpd.allow_reuse_address = True
@@ -1907,8 +1923,9 @@ def spawn_server(
     owner_state: Optional[Path] = None,
     owner_key: Optional[Path] = None,
     create_owner_key: bool = False,
-    caller_mode: str = "direct",
+    caller_mode: Optional[str] = None,
 ) -> RunningServer:
+    check_listener_mode(bind, caller_mode)
     configure_logging(log_file)
     if cert is None or key is None:
         if not insecure_http:

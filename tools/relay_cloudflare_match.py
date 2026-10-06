@@ -757,7 +757,7 @@ class Directory:
         if backend and backend.get('backend', 'cloudflare') == 'cloudflare':
             module.urlopen = urlopen
         self.server = module.spawn_server(port=port, cert=self.cert, key=key, insecure_http=False, log_file=root / 'service.log',
-                                          turn_config=backend, turn_max_ttl=ttl_cap, create_owner_key=True)
+                                          turn_config=backend, turn_max_ttl=ttl_cap, create_owner_key=True, caller_mode="direct")
         key.unlink()
         store = self.server.store
         mint, post, register, mint_offer = store.turn_provider.mint, store.post_signal, store.register, store.mint_ice_servers
