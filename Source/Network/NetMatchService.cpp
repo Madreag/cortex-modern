@@ -6655,7 +6655,7 @@ static std::string ResyncSaveName() {
 			return m_Session && m_Session->HasReject() ? m_Session->GetRejectReason() == reason : contains(NetProtocol::RejectReasonName(reason));
 		};
 		m_ErrorText = m_Session && m_Session->GetMismatchKey() == "host_disconnect" && std::string(NetProtocol::RejectReasonName(m_Session->GetRejectReason())) == "Unknown" && !m_Session->GetRejectSummary().empty()
-		    ? m_Session->GetRejectSummary() : contains("listing changed") ? "That listing changed while you were joining. Refresh the list and try again."
+		    ? m_Session->BuildPlayerRefusalText() : contains("listing changed") ? "That listing changed while you were joining. Refresh the list and try again."
 		    : contains("directory could not finish") ? "The directory could not finish your join. Refresh the list and try again."
 		    : contains(c_HistoryPassedDetail) ? "The host could not bring you into the world: you were too far behind. Try again."
 		    : contains("deadline") ? "The host could not bring you into the world in time. Try again."
@@ -9899,7 +9899,8 @@ static std::string ResyncSaveName() {
 			std::string sessionId;
 			std::string token;
 			if (!WaitForDirectorySession(c_IceRegisterBudgetMs, sessionId, token)) {
-				if (error) *error = "the session directory did not answer the register in time";
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				if (error) *error = m_Directory.LastError() == NetDirectoryClient::c_CapacityNotice ? m_Directory.LastError() : "the session directory did not answer the register in time";
 				return false;
 			}
 			config.role = GnsDirectorySignalDispatcher::Role::Host;
@@ -9972,6 +9973,7 @@ static std::string ResyncSaveName() {
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(50));
 		}
+		if (browse.ListError() == NetDirectoryClient::c_CapacityNotice) why = browse.ListError();
 		browse.StopBrowsing();
 		if (!why.empty()) {
 			if (error) *error = "session " + request.sessionId + ": " + why;
@@ -10080,6 +10082,12 @@ static std::string ResyncSaveName() {
 		// Directory lookup time is not part of either transport's connection deadline.
 		if (config.nowMs) session.Tick(config.nowMs(), false);
 		if (transportReady && runner.Start(wire, session, coordinator, config, error)) return true;
+#ifdef CCCP_WITH_GNS
+		if (m_Dispatcher && m_Dispatcher->Channel().GetLastError() == NetDirectoryClient::c_CapacityNotice) {
+			if (error) *error = NetDirectoryClient::c_CapacityNotice;
+			return false;
+		}
+#endif
 		if (config.host || !NetIcePrefersP2P(target, m_IceEnabled) || m_CancelRequested.load()) return false;
 		if (m_ConnectionMode == 2) {
 			// A setup that never reached the transport already says why; only a relay that failed to connect is named here.
@@ -10582,6 +10590,7 @@ static std::string ResyncSaveName() {
 				m_StatusText = changingHost ? std::string(c_NetMatchChangingHostLine) : lostHost ? "The host left the match"
 				                        : SetupFailureStatus(m_Session.get(), noDirectRoute, (m_RelayAttempted && noDirectRoute) || error.starts_with("Relay "));
 				m_ErrorText = lostHost ? m_StatusText : (m_Session && m_Session->HasReject() ? m_Session->BuildPlayerRefusalText() : error);
+				if (error == NetDirectoryClient::c_CapacityNotice) m_StatusText = m_ErrorText = error;
 				// A refusal that says the round is over is an answer, not a lost link: the seat completes.
 				(void)NoteHostGoodbyeLocked(m_Session.get());
 				// §9b: the refusals a joiner can answer - a running match, its own seat held for it, a world's slots all held.

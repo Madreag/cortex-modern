@@ -2757,6 +2757,30 @@ namespace RTE {
 				return true;
 			}
 
+			bool TestDirectoryCapacityWords(std::string* error) {
+				const std::string sentence = "The online list is full right now. Try again in a moment.";
+				ScriptedClient host;
+				host.replies->push_back({503, R"({"error":"full"})", ""});
+				host.client.Advertise(SampleRegisterRequest(), false);
+				host.client.Update(0); host.client.Update(0);
+				if (json::parse(host.client.BuildReportJson())["last_error"] != sentence) {
+					*error = "R6: directory full lost its player sentence"; return false;
+				}
+				host.client.Update(4999);
+				if (host.sent->size() != 1) { *error = "R6: directory full ignored its backoff"; return false; }
+				for (const int status : {400, 503}) {
+					ScriptedChannel joiner(false);
+					joiner.replies->push_back({status, status == 400 ? R"({"error":"queue_full"})" : R"({"error":"full"})", ""});
+					joiner.channel.Post("host", "offer");
+					joiner.channel.Update(0); joiner.channel.Update(0);
+					if (joiner.channel.GetLastError() != sentence) { *error = "R6: signaling capacity lost its player sentence"; return false; }
+					joiner.channel.Update(4999);
+					if (joiner.sent->size() != 1) { *error = "R6: signaling capacity ignored its backoff"; return false; }
+				}
+				std::cout << "[net-directory-selftest] PASS R6 capacity_words_and_backoff" << std::endl;
+				return true;
+			}
+
 			bool TestSignal404Fails(std::string* error) {
 				ScriptedChannel s(false);
 				s.replies->push_back({404, R"({"error":"not_found"})", ""});
@@ -3202,6 +3226,7 @@ namespace RTE {
 			if (!TestSignalCursorWaitsForSink(&error)) return fail(error);
 			if (!TestSignalLongPoll(&error)) return fail(error);
 			if (!TestSignalPostInterruptsAnIdlePoll(&error)) return fail(error);
+			if (!TestDirectoryCapacityWords(&error)) return fail(error);
 			if (!TestSignal404Fails(&error)) return fail(error);
 			if (!TestSignal403Fails(&error)) return fail(error);
 			if (!TestSignalQueueFullRetries(&error)) return fail(error);

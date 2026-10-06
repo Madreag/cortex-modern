@@ -7349,7 +7349,31 @@ namespace RTE {
 			service.m_Session->InjectEvent({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, ""}, 0);
 			service.RefuseWorldCatchUpLocked(service.m_Session->GetRejectSummary());
 			ScenarioRunner::ClearControllerReplayError();
-			if (service.m_ErrorText != "This host needs you to try another seat.") { *error = "C2: an unknown host reason lost the host's own words"; return false; }
+			if (service.m_ErrorText != "The host says: This host needs you to try another seat." || service.m_Session->BuildPlayerRefusalText() != service.m_ErrorText) {
+				*error = "R6: unknown host text appeared as the game's own notice in an ordinary match or world"; return false;
+			}
+			const std::vector<std::pair<std::string, std::string>> messages = {
+				{"hello \xE2\x80\xAEworld", "The host says: hello world"},
+				{"hello \xC2\x80world", "The host says: hello world"},
+				{"hello \xC0\xAFworld", "The host says: (unreadable message)"},
+				{"hello \xED\xA0\x80world", "The host says: (unreadable message)"},
+				{"hello \xE2\x81\xA6world", "The host says: hello world"},
+				{"hello \xE4\xB8\x96\xE7\x95\x8C", "The host says: hello \xE4\xB8\x96\xE7\x95\x8C"},
+				{std::string(500, 'x') + "\xE4\xB8\x96", "The host says: " + std::string(NetProtocol::c_MaxDiagnosticTextBytes - 15, 'x')}
+			};
+			for (const auto& [text, expected] : messages) {
+				if (!service.m_Session->StartClient(unknownWire, "loopback", config, error)) return false;
+				service.m_Session->InjectEvent({NetTransportEventType::PeerConnected, 1, NetTransportLane::ControlReliable, {}, ""}, 0);
+				message.payload = NetDisconnect{65530, text};
+				if (!NetProtocol::Encode(message, bytes)) { *error = "R6 fixture could not encode host text"; return false; }
+				service.m_Session->InjectEvent({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, ""}, 0);
+				service.RefuseWorldCatchUpLocked(service.m_Session->GetRejectSummary());
+				ScenarioRunner::ClearControllerReplayError();
+				if (service.m_ErrorText != expected || service.m_Session->BuildPlayerRefusalText() != expected || service.m_ErrorText.size() > NetProtocol::c_MaxDiagnosticTextBytes) {
+					*error = "R6: host notice retained invalid UTF-8, controls or excess bytes"; return false;
+				}
+			}
+			std::cout << "[net-world-join-selftest] PASS R6 attributed_printable_host_text" << std::endl;
 		}
 		std::cout << "[net-world-join-selftest] PASS " << (watcher ? "watcher_disconnect_keeps_deadline" : "catch_up_disconnect_keeps_timeout") << std::endl;
 		return true;

@@ -363,6 +363,7 @@ namespace RTE {
 			ScheduleRetry(nowMs);
 			return;
 		}
+		if (m_LastError == NetDirectoryClient::c_CapacityNotice) m_LastError.clear();
 		m_Outbox.pop_front();
 		++m_SignalsPosted;
 		m_BackoffMs = 0;
@@ -405,7 +406,12 @@ namespace RTE {
 	void NetDirectorySignalChannel::HandleRefusal(const char* what, const Reply& reply, uint64_t nowMs) {
 		const std::string code = ErrorCode(reply.body);
 		const std::string status = std::string(what) + ": HTTP " + std::to_string(reply.statusCode) + (code.empty() ? "" : " " + code);
-		if (reply.statusCode == 429) {
+		if (NetDirectoryClient::IsCapacityReply(reply)) {
+			NoteError(NetDirectoryClient::c_CapacityNotice);
+			m_PostBackoffMs = NextBackoff(m_PostBackoffMs);
+			m_NextPostMs = nowMs + m_PostBackoffMs;
+			if (std::string(what) != "post") ScheduleRetry(nowMs);
+		} else if (reply.statusCode == 429) {
 			const uint64_t waitMs = RetryAfterMs(reply.body);
 			NoteError(status + ", retrying in " + std::to_string(waitMs) + " ms");
 			m_NextAttemptMs = nowMs + waitMs;

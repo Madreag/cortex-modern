@@ -92,6 +92,10 @@ namespace RTE {
 		void SetTransportFactory(TransportFactory factory);
 		void Configure(std::string baseUrl, std::string installKey, std::string certPinSha256);
 
+		static constexpr const char* c_CapacityNotice = "The online list is full right now. Try again in a moment.";
+		static bool IsCapacityReply(const Reply& reply);
+		const std::string& LastError() const { return m_LastError; }
+
 		State GetState() const { return m_State; }
 		/// The held row's last acknowledged visibility; empty before registration or after loss.
 		std::optional<bool> GetConfirmedListed() const { return m_ConfirmedListed; }

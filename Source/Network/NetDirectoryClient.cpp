@@ -462,7 +462,21 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetDirectoryClient::IsCapacityReply(const Reply& reply) {
+		if (!reply.error.empty() || (reply.statusCode != 400 && reply.statusCode != 503)) return false;
+		const auto body = json::parse(reply.body, nullptr, false);
+		if (!body.is_object()) return false;
+		const auto code = body.find("error");
+		return code != body.end() && code->is_string() &&
+			   ((reply.statusCode == 503 && *code == "full") || *code == "queue_full");
+	}
+
 	void NetDirectoryClient::HandleRegisterReply(const Reply& reply, uint64_t nowMs) {
+		if (IsCapacityReply(reply)) {
+			NoteError(c_CapacityNotice);
+			ScheduleRetry(nowMs);
+			return;
+		}
 		if (TakeSuperseded(reply)) return;
 		if (!reply.error.empty() || reply.statusCode == 0) {
 			NoteError("register: " + (reply.error.empty() ? "transport error" : reply.error));
@@ -491,6 +505,7 @@ namespace RTE {
 			m_HeartbeatS = std::max<int64_t>(c_MinHeartbeatS, response.heartbeatS);
 			m_ExpiresInS = response.expiresInS;
 			m_NextHeartbeatMs = nowMs + static_cast<uint64_t>(m_HeartbeatS) * 1000;
+			if (m_LastError == c_CapacityNotice) m_LastError.clear();
 			m_BackoffMs = 0;
 			System::PrintDiagnosticLine("[net-directory] registered session_id=" + m_SessionId + " heartbeat_s=" + std::to_string(m_HeartbeatS));
 			SetState(State::Registered);
@@ -542,6 +557,11 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::HandleHeartbeatReply(const Reply& reply, uint64_t nowMs) {
+		if (IsCapacityReply(reply)) {
+			NoteError(c_CapacityNotice);
+			ScheduleRetry(nowMs);
+			return;
+		}
 		// Addresses the service did not acknowledge are still owed to it.
 		const bool listenAddrsAnswered = std::exchange(m_ListenAddrsInFlight, false);
 		if (TakeSuperseded(reply)) return;
@@ -576,6 +596,7 @@ namespace RTE {
 			m_HeartbeatS = std::max<int64_t>(c_MinHeartbeatS, response.heartbeatS);
 			m_ExpiresInS = response.expiresInS;
 			m_NextHeartbeatMs = nowMs + static_cast<uint64_t>(m_HeartbeatS) * 1000;
+			if (m_LastError == c_CapacityNotice) m_LastError.clear();
 			m_BackoffMs = 0;
 			if (m_Row.persistentWorld) {
 				m_WorldProofs.clear(); RememberWorldProof(m_SessionId, m_Token);
@@ -643,6 +664,14 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::HandleListReply(const Reply& reply, uint64_t nowMs) {
+		if (IsCapacityReply(reply)) {
+			m_ListError = c_CapacityNotice;
+			NoteError(c_CapacityNotice);
+			m_ListCursor.clear();
+			ScheduleRetry(nowMs);
+			m_BrowseNextMs = m_NextAttemptMs;
+			return;
+		}
 		++m_ListReplies;
 		const bool follow = m_ListPages > 1;
 		if (!reply.error.empty() || reply.statusCode == 0 || reply.statusCode != 200) {
@@ -673,6 +702,7 @@ namespace RTE {
 			m_Rows.insert(m_Rows.end(), list.sessions.begin(), list.sessions.end());
 		}
 		m_ListTotal = list.total;
+		if (m_LastError == c_CapacityNotice) m_LastError.clear();
 		m_ListError.clear();
 		if (!list.nextCursor.empty() && m_ListPages < c_ListMaxPages) {
 			m_ListCursor = list.nextCursor;
