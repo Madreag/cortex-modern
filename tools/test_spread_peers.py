@@ -16,6 +16,40 @@ from test_peer_run_guards import PeerRunGuardTests
 
 
 class ContractTests(unittest.TestCase):
+    def test_routed_wait_updates_one_existing_holder_and_keeps_its_claim(self):
+        sent = []
+        box = dict(name='EROL-PC', kind='local')
+        claim = dict(root='/own/run', token='owned')
+        argv = ['python', '/lead/box_hold.py', '--wait', '0', '--label', 'sol-multibox', '--', 'python', 'peer.py']
+        def rpc(box, action, body, **kwargs):
+            sent.append(body)
+        backend = SimpleNamespace(rpc=rpc)
+        def launch(box, claim, request):
+            backend.rpc(box, 'write', dict(path=claim['root']+'/request.json',
+                        value=dict(claim=claim, argv=argv, environment={'CCCP_HEADLESS':'1'})))
+        backend.launch = launch
+        spread.launch_native(backend, box, claim, {}, 1800)
+        self.assertEqual(sent[0]['value']['argv'], argv[:4]+['1800']+argv[5:])
+        self.assertEqual(sent[0]['value']['environment'], {'CCCP_HEADLESS':'1'})
+        self.assertEqual(sent[0]['value']['claim'], claim)
+        self.assertIs(backend.rpc, rpc)
+        self.assertEqual(argv[4], '0')
+
+    def test_live_controller_result_root_refuses_without_overwriting_its_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)/'run'
+            out.mkdir()
+            marker = out/'.spread-case-owner.json'
+            marker.write_text(json.dumps(dict(case_id='other-case', peer_id='host', token='foreign')))
+            receipt = out/'spread-result.json'
+            receipt.write_bytes(b'existing live receipt')
+            transport = SimpleNamespace(worker=SimpleNamespace(facts=SimpleNamespace()))
+            with patch.object(spread, 'installed_pool', return_value=(None, transport, Path(temporary)/'kit.py')):
+                with self.assertRaisesRegex(spread.SpreadRefusal, 'host on EROL-PC.*RUN ROOT CONFLICT.*other-case'):
+                    spread.Case(Path(temporary), out, [spread.Peer('host')], spread.Match(51580), peer_boxes='host=EROL-PC')
+            self.assertEqual(receipt.read_bytes(), b'existing live receipt')
+            self.assertEqual(json.loads(marker.read_text())['token'], 'foreign')
+
     def test_compatible_pending_release_never_reads_the_retired_queue(self):
         released = []
         case = object.__new__(spread.Case)

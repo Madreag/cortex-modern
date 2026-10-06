@@ -63,6 +63,9 @@ make_run(..., role=...) also accepts its declared logical peer explicitly.
 Text scripts retain their original UTF-8 or legacy Windows byte encoding.
 Peer.lane (or Match.parameters["lane"]) supplies the caller's run label.
 Match.parameters["label"] may specify the lead's exact native holder label.
+Match.parameters["runner_wait"] or --runner-wait may specify that holder's
+wait in seconds. It updates only the existing local holder command, without
+an enclosing holder or a second slot. Engine/script timeouts remain unchanged.
 Peer.block_udp reserves only
 declared discovery ports on that peer's native machine for the case's lever.
 The default network is ICE. Match.parameters["network"]="direct" preserves
@@ -128,7 +131,7 @@ def file_sha256(path):
 
 
 TOPOLOGY_LOCAL = "single-box: not proof"
-INTERFACE_VERSION = "3.0-named-concurrent-cases"
+INTERFACE_VERSION = "3.1-named-concurrent-cases"
 NO_BOX_NAMED = "NO BOX NAMED: the lead routes every peer (ROUTING.md section 6)"
 _options = None
 _cases = contextvars.ContextVar("spread_cases", default=None)
@@ -292,6 +295,7 @@ def add_arguments(parser):
     parser.add_argument("--pool-dispatcher", type=Path, help="compatible hint to the existing per-box transport kit; never executed")
     parser.add_argument("--pool-registry", type=Path, help="box facts for the lead's named peers")
     parser.add_argument("--runner-label", help="the lead's exact label for the native run holder")
+    parser.add_argument("--runner-wait", type=float, help="the lead's wait in seconds for the existing local holder")
     parser.add_argument("--peer-port", action="append", default=[], metavar="PEER=PORT", help="explicit peer match port (also supports a wrong-parameter detecting run)")
 
 
@@ -544,6 +548,35 @@ def run_case(repo, out, peers, match, *, drive=None, peer_boxes=None, dispatcher
                 handle.start()
             result = {handle.role: handle.finish() for handle in handles}
         return {**case.result(), "driver_result": result}
+
+
+def launch_native(backend, box, claim, request, wait=0):
+    """Keep the installed transport; pass a lead-specified wait to its holder."""
+    import math
+    wait = float(wait or 0)
+    if not math.isfinite(wait) or wait < 0:
+        raise ValueError("runner wait must be finite and nonnegative")
+    if box["kind"] != "local" or not wait:
+        return backend.launch(box, claim, request)
+    original = backend.rpc
+    def rpc(target, action, body, **kwargs):
+        if action == "write" and body.get("path") == claim["root"] + "/request.json":
+            value = body["value"]
+            if value.get("claim", {}).get("token") != claim["token"]:
+                raise SpreadRefusal("native holder request changed owner")
+            argv = list(value["argv"])
+            holder = next((i for i, item in enumerate(argv) if Path(item).name == "box_hold.py"), None)
+            if holder is None or "--wait" not in argv[holder:]:
+                raise SpreadRefusal("existing native holder has no wait argument")
+            index = argv.index("--wait", holder)
+            argv[index+1] = f"{wait:g}"
+            body = {**body, "value": {**value, "argv": argv}}
+        return original(target, action, body, **kwargs)
+    backend.rpc = rpc
+    try:
+        return backend.launch(box, claim, request)
+    finally:
+        backend.rpc = original
 
 
 class Case:
@@ -1135,7 +1168,9 @@ class Run:
             backend.rpc(box, "write", dict(path=path, value=native))
             request["command"] = ["python", claim["control"] + "/spread_peers.py", "--native", path, "--out", "{OUT}"]
             self.launch_attempted = True
-            backend.launch(box, claim, request)
+            wait = self.case.match.parameters.get("runner_wait", getattr(_options, "runner_wait", 0))
+            request["hang_guard"] = max(request.get("hang_guard", 600), self.timeout + 300 + float(wait or 0))
+            launch_native(backend, box, claim, request, wait)
         except SpreadRefusal:
             raise
         except Exception as error:
