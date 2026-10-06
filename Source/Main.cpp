@@ -11413,6 +11413,11 @@ int main(int argc, char** argv) {
 				}
 				scenarioExitCode = 1;
 			} else {
+				// A fixture may have no metrics calls of its own. Explicit tick-hash
+				// collection still records that run; scripts which began one keep it.
+				if (ScenarioRunner::GetArgs().tickHashes && g_MetricsCollector.GetCurrentRun().scenario.empty()) {
+					g_MetricsCollector.BeginHostRun(ScenarioRunner::GetArgs().scenario, ScenarioRunner::GetArgs().seed);
+				}
 				RunGameLoop();
 				CheckRequiredProbesCompleted();
 				scenarioExitCode = ScenarioRunner::FinalizeAndGetExitCode();

@@ -1190,6 +1190,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		} catch (const ScriptGraphRefusal& refusal) {
 			CheckpointCow::Get().RecordWorker(sinceStart());
 			System::PrintDiagnosticLine("[autosave] failed tick=" + std::to_string(tick) + " reason=capture refused\n");
+			for (const std::string& problem: refusal.problems) System::PrintDiagnosticLine("[autosave] refusal: " + problem + "\n");
 			QueueDeferredSaveRefusal(kind, refusal.problems);
 			if (automatic) NoteAutosaveVerdict(tick, false);
 			image.reset();

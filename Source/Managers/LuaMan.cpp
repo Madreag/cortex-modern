@@ -6282,16 +6282,116 @@ namespace RTE::CheckpointLua {
 			lua_State* state;
 			lua_State* previousState = s_DescriptorState;
 			const std::unordered_set<const void*>* previousRoots = s_DescriptorRoots;
-			std::unordered_set<const void*> seen, userdata;
+			std::unordered_set<const void*> seen, userdata, opaque;
 			std::unordered_set<const void*> queuedFinalizers;
 			std::vector<TValue> pending;
 			void Queue(int index) {
 				if (index < 0) index += lua_gettop(state) + 1;
 				const int kind = lua_type(state, index);
 				if (kind != LUA_TTABLE && kind != LUA_TFUNCTION && kind != LUA_TUSERDATA && kind != LUA_TTHREAD) return;
+				if (kind == LUA_TUSERDATA) userdata.insert(gcval(&state->base[index - 1]));
+				if (opaque.contains(lua_topointer(state, index))) return;
 				if (seen.insert(lua_topointer(state, index)).second) pending.push_back(state->base[index - 1]);
 			}
-			explicit DescriptorRootScope(lua_State* source) : state(source) {
+			// The saver walks the copied graph. Here only values which that graph can
+			// serialize need answers from live C++; baseline engine symbols are opaque.
+			bool SeedSerializedValues(int originalTop, int roots, const TValue& callbacks) {
+				const int top = lua_gettop(state);
+				lua_getglobal(state, "_ScriptGraphBaseline");
+				const int baseline = lua_gettop(state);
+				if (!lua_istable(state, baseline)) { lua_settop(state, top); return false; }
+				lua_getfield(state, baseline, "paths");
+				const int paths = lua_gettop(state);
+				if (!lua_istable(state, paths)) { lua_settop(state, top); return false; }
+				lua_pushnil(state);
+				while (lua_next(state, paths)) {
+					if (lua_topointer(state, -2)) opaque.insert(lua_topointer(state, -2));
+					if (lua_type(state, -2) == LUA_TUSERDATA) userdata.insert(gcval(&state->top[-2]));
+					lua_pop(state, 1);
+				}
+				for (int index = 1; index <= originalTop; ++index) Queue(index);
+				Queue(roots);
+				copyTV(state, state->top, &callbacks); incr_top(state); Queue(-1); lua_pop(state, 1);
+				lua_getfield(state, baseline, "values");
+				const int values = lua_gettop(state);
+				lua_pushvalue(state, LUA_GLOBALSINDEX);
+				const int globals = lua_gettop(state);
+				lua_pushnil(state);
+				while (lua_next(state, globals)) {
+					const bool named = lua_type(state, -2) == LUA_TSTRING;
+					size_t length = 0;
+					const char* name = named ? lua_tolstring(state, -2, &length) : nullptr;
+					const std::string_view key = name ? std::string_view(name, length) : std::string_view();
+					const bool helper = named && (key.starts_with("_ScriptGraph") || key == "_ScriptedObjects" ||
+						key == "_ScriptFieldsStash" || key == "_G");
+					if (!helper) {
+						if (!named) Queue(-2);
+						// buildPaths asks Members for named userdata, including engine symbols.
+						if (lua_type(state, -1) == LUA_TUSERDATA) Queue(-1);
+						else if (named && lua_istable(state, values)) {
+							lua_pushvalue(state, -2); lua_rawget(state, values);
+							if (!lua_rawequal(state, -1, -2)) Queue(-2);
+							lua_pop(state, 1);
+						} else Queue(-1);
+					}
+					lua_pop(state, 1);
+				}
+				lua_getfield(state, baseline, "tables");
+				const int tables = lua_gettop(state);
+				if (lua_istable(state, tables)) for (int number = 1;; ++number) {
+					lua_rawgeti(state, tables, number);
+					if (lua_isnil(state, -1)) { lua_pop(state, 1); break; }
+					const int saved = lua_gettop(state);
+					lua_getfield(state, saved, "object"); const int object = lua_gettop(state);
+					lua_getfield(state, saved, "entries"); const int entries = lua_gettop(state);
+					lua_getfield(state, saved, "global"); const bool global = lua_toboolean(state, -1); lua_pop(state, 1);
+					if (lua_istable(state, object) && lua_istable(state, entries)) {
+						const auto changes = [&](int from, int other, bool current) {
+							lua_pushnil(state);
+							while (lua_next(state, from)) {
+								const bool carries = !global || lua_type(state, -2) != LUA_TSTRING ||
+									std::string_view(lua_tostring(state, -2)) == "_G";
+								if (carries) {
+									lua_pushvalue(state, -2); lua_rawget(state, other);
+									if (!lua_rawequal(state, -1, -2)) { Queue(-3); Queue(current ? -2 : -1); }
+									lua_pop(state, 1);
+								}
+								lua_pop(state, 1);
+							}
+						};
+						changes(object, entries, true);
+						changes(entries, object, false);
+						if (!lua_getmetatable(state, object)) lua_pushnil(state);
+						lua_getfield(state, saved, "meta");
+						if (!lua_rawequal(state, -1, -2)) Queue(-2);
+						lua_pop(state, 2);
+					}
+					lua_settop(state, saved - 1);
+				}
+				lua_getglobal(state, "package");
+				if (lua_istable(state, -1)) {
+					lua_getfield(state, -1, "loaded");
+					if (lua_istable(state, -1)) {
+						const int loaded = lua_gettop(state);
+						lua_getfield(state, baseline, "loaded"); const int old = lua_gettop(state);
+						lua_pushnil(state);
+						while (lua_next(state, loaded)) {
+							if (lua_type(state, -2) == LUA_TSTRING) {
+								if (lua_istable(state, old)) {
+									lua_pushvalue(state, -2); lua_rawget(state, old);
+									if (!lua_toboolean(state, -1)) Queue(-2);
+									lua_pop(state, 1);
+								} else Queue(-1);
+							}
+							lua_pop(state, 1);
+						}
+					}
+				}
+				lua_settop(state, top);
+				return true;
+			}
+			explicit DescriptorRootScope(lua_State* source, int originalTop, int roots, const TValue& callbacks) : state(source) {
+				if (!lua_checkstack(state, 32)) throw std::runtime_error("native descriptor roots exhausted the Lua stack");
 				if (GCobj* last = gcref(G(state)->gc.mmudata)) {
 					GCobj* object = last;
 					do {
@@ -6300,8 +6400,10 @@ namespace RTE::CheckpointLua {
 					} while (object != last);
 				}
 				const int top = lua_gettop(state);
-				for (int index = 1; index <= top; ++index) Queue(index);
-				lua_pushvalue(state, LUA_GLOBALSINDEX); Queue(-1); lua_settop(state, top);
+				if (!SeedSerializedValues(originalTop, roots, callbacks)) {
+					for (int index = 1; index <= top; ++index) Queue(index);
+					lua_pushvalue(state, LUA_GLOBALSINDEX); Queue(-1); lua_settop(state, top);
+				}
 				while (!pending.empty()) {
 					if (!lua_checkstack(state, 8)) throw std::runtime_error("native descriptor roots exhausted the Lua stack");
 					const TValue value = pending.back(); pending.pop_back();
@@ -6579,7 +6681,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		if (!m_NativeCache) m_NativeCache = std::make_shared<CheckpointLua::NativeCache>(m_State);
 		std::optional<CaptureTrace::Span> span(std::in_place, "graph_natives", std::to_string(g_LuaMan.GetStateIndex(this)));
 		CheckpointLua::CaptureScope natives(m_State, *m_NativeCache);
-		CheckpointLua::DescriptorRootScope descriptorRoots(m_State);
+		CheckpointLua::DescriptorRootScope descriptorRoots(m_State, restore.top, roots, image->callbacks);
 		natives.Capture();
 		span.reset();
 		const auto nativeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();

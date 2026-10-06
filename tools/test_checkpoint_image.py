@@ -545,6 +545,7 @@ def main() -> int:
             install_fixture(cwd, dirty_all=False)
             module = cwd / "Userdata/UserSavedGames.rte"
             module.mkdir(parents=True, exist_ok=True)
+            (module / "Index.ini").write_text("DataModule\n\tModuleName = User Saved Games\n", encoding="utf-8")
             (module / f"{RESTORE_NAME}.ccsave").write_bytes(saved.read_bytes())
 
         reload_run = launch(
