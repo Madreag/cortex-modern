@@ -110,27 +110,29 @@ suffix. The key contains a private signing secret and a service-start era. Never
 log or replace it. Owner records contain hashes and generations, never tokens.
 Malformed existing state prevents startup.
 
-The first upgrade has three operator steps:
+The public service has no legacy worlds to convert. Upgrade the service **before
+distributing a new game build**: a positive-generation world resume against the
+old service receives 409 and reads as superseded.
 
-1. Hold public ingress while counting every listed `persistent_world=true` row,
-   including later list pages, immediately before stopping the old service.
-   Prefer stopping/unlisting world hosts first and observing **zero** rows. Record
-   the observed count; a count alone cannot authenticate an old opaque token.
-2. Start the upgraded service with its normal TLS arguments, `--owner-state
-   /Users/erol/cortex-directory/world-owners.json`, and the explicit observed
-   `--first-upgrade-worlds 0` (or the actual nonzero count). With no key file the
-   count is mandatory. A nonzero count quarantines tokenless world claims for one
-   discovery lease. Unknown old proofs are accepted once per observed allowance
-   **only from loopback**, so use controlled forwarding for those known hosts;
-   public guesses cannot claim their worlds. Existing saved hashes authenticate
-   their holders normally. Keep ingress held until those hosts receive signed
-   proofs and successfully heartbeat within the quarantine.
-3. Remove the one-time count argument, restore normal host URLs/public ingress,
-   and verify the intended worlds register, heartbeat and list. Back up both
-   permanent files together and preserve them on every restart. Keep the adjacent
-   `world-owners.pending.json` through an in-progress restart too: it holds bounded,
-   lease-expiring registration metadata and unsigned token payloads, not bearer
-   tokens. It is emptied after acknowledgement or expiry.
+1. Stop the old service. Recreate the project's disposable test worlds.
+2. Start the new service with its normal TLS arguments, `--caller-mode tunnel`,
+   `--owner-state /Users/erol/cortex-directory/world-owners.json`, and
+   `--create-owner-key` once. The Cloudflare edge must overwrite
+   `CF-Connecting-IP`; missing or invalid addresses receive 400. Direct deployments
+   use `--caller-mode direct` and the socket address. No address grants privilege.
+   Missing keys without the create flag refuse startup. Creation is atomic: an
+   interrupted first start leaves a complete key or no key, so repeat this step.
+3. Remove the one-time create flag. Keep `world-owners.key` and `world-owners.json`
+   permanently, back them up together, and preserve `world-owners.pending.json`
+   through an in-progress restart. Verify register, heartbeat, list, signals and
+   resume from old games; then distribute new builds. Pending metadata expires
+   within its row's lease and contains no bearer proof.
+
+Short HTTP requests have 64 handlers. Long polls use a separate pool of 64,
+with four per caller; excess polls answer immediately with a one-second retry
+hint. One caller retains at most 64 of 4,096 owners. Under pressure, worlds
+listed for less than 60 seconds retire first; signed returning proofs remain
+verifiable. These shares prevent one address from reserving the whole service.
 
 Signed opaque proofs stay within the existing token size. A returning holder can
 prove its original ownership after restart; an older game's normal requests keep

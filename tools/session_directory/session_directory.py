@@ -526,7 +526,7 @@ class SessionDirectory:
         self, expiry_s: float, heartbeat_s: float, queue_idle_s: float = QUEUE_IDLE_S,
         turn_config: Optional[dict[str, Any]] = None, turn_max_ttl: int = TURN_MAX_TTL,
         owner_state: Optional[Path] = None,
-        owner_key: Optional[Path] = None, first_upgrade_worlds: Optional[int] = None,
+        owner_key: Optional[Path] = None, create_owner_key: bool = False,
         caller_mode: str = "direct",
     ) -> None:
         if caller_mode not in ("direct", "tunnel"):
@@ -547,11 +547,9 @@ class SessionDirectory:
         self._pending_state = self._owner_state.with_suffix(".pending.json") if self._owner_state else None
         self._pending_worlds: dict[str, dict[str, Any]] = {}
         self._owner_key = Path(owner_key) if owner_key is not None else self._owner_state.with_suffix(".key") if self._owner_state else None
-        self._legacy_remaining = 0
-        self._legacy_until = 0.0
         self._service_era = 1
         self._next_owner = 0
-        self._service_key = self._load_service_key(first_upgrade_worlds)
+        self._service_key = self._load_service_key(create_owner_key)
         self._world_owners: dict[str, dict[str, Any]] = {}
         if self._owner_state is not None and self._owner_state.exists():
             if self._owner_state.stat().st_size > MAX_OWNER_STATE_BYTES:
@@ -645,9 +643,7 @@ class SessionDirectory:
         if not self._pruner.is_alive():
             self._pruner.start()
 
-    def _load_service_key(self, first_upgrade_worlds: Optional[int]) -> bytes:
-        if first_upgrade_worlds is not None and (type(first_upgrade_worlds) is not int or not 0 <= first_upgrade_worlds <= MAX_ROWS):
-            raise ValueError("first-upgrade-worlds must name the observed world count")
+    def _load_service_key(self, create_owner_key: bool) -> bytes:
         if self._owner_key is None:
             return secrets.token_bytes(SERVICE_KEY_BYTES)
         if self._owner_key.exists():
@@ -659,21 +655,15 @@ class SessionDirectory:
                 raise ValueError("service signing era exhausted")
             self._replace_secret(self._owner_key, key[:SERVICE_KEY_BYTES] + struct.pack(">I", self._service_era))
             return key[:SERVICE_KEY_BYTES]
-        if first_upgrade_worlds is None:
-            raise ValueError("first-upgrade-worlds is required before creating the service key")
+        if not create_owner_key:
+            raise ValueError("create-owner-key is required before creating the service key")
         self._owner_key.parent.mkdir(parents=True, exist_ok=True)
         key = secrets.token_bytes(SERVICE_KEY_BYTES)
-        descriptor = os.open(self._owner_key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(key + struct.pack(">I", self._service_era))
-            stream.flush()
-            os.fsync(stream.fileno())
-        self._legacy_remaining = first_upgrade_worlds
-        self._legacy_until = time.time() + self.expiry_s if first_upgrade_worlds else 0
+        self._replace_secret(self._owner_key, key + struct.pack(">I", self._service_era), create=True)
         return key
 
     @staticmethod
-    def _replace_secret(path: Path, raw: bytes) -> None:
+    def _replace_secret(path: Path, raw: bytes, create: bool = False) -> None:
         temporary = path.with_name(path.name + "." + secrets.token_hex(8) + ".tmp")
         try:
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -681,7 +671,10 @@ class SessionDirectory:
                 stream.write(raw)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temporary, path)
+            if create:
+                os.link(temporary, path)
+            else:
+                os.replace(temporary, path)
             if os.name != "nt":
                 descriptor = os.open(path.parent, os.O_RDONLY)
                 try:
@@ -978,7 +971,6 @@ class SessionDirectory:
             claimed = optional_generation(data)
             generation = claimed or 0
             world = fields.get("persistent_world") is True
-            legacy = False
             if resume is not None:
                 session_id = require_str(data, "resume_session_id")
                 try:
@@ -1025,19 +1017,13 @@ class SessionDirectory:
                 same_host = (world and proven and valid_install_key(install_key)
                              and (previous is None or tokens_equal(hashlib.sha256(install_key.encode()).hexdigest(), getattr(previous, "install_key_sha256", hashlib.sha256(previous.install_key.encode()).hexdigest())) or original_signed_owner))
                 first_world = world and not token and owner is None and presented in (None, "")
-                if first_world and time.time() < self._legacy_until:
-                    raise PermissionError("forbidden")
-                legacy = (world and previous is None and owner is None and isinstance(presented, str)
-                          and re.fullmatch(r"[A-Za-z0-9_-]{32}", presented) is not None
-                          and time.time() < self._legacy_until and self._legacy_remaining > 0
-                          and ipaddress.ip_address(observed_ip).is_loopback and valid_install_key(install_key))
                 if previous is not None and not previous.acknowledged and same_host and presented != previous.token and (claimed is None or claimed == previous.migration_gen):
                     previous.fields = fields
                     previous.observed_ip = observed_ip
                     return self._register_reply(previous)
                 if same_signed_owner and owner is not None and not proven and claimed is not None and proof[2] < owner["migration_gen"] and claimed <= owner["migration_gen"]:
                     raise Superseded("already_migrated", owner["migration_gen"])
-                if not first_world and not replayed_owner and not legacy and not (proven or (token and isinstance(presented, str) and tokens_equal(presented, token))):
+                if not first_world and not replayed_owner and not (proven or (token and isinstance(presented, str) and tokens_equal(presented, token))):
                     raise PermissionError("forbidden")
                 # One host per handover generation: the first successor's claim takes the row, any later claim at that generation
                 # or below is told the match already went on; a resume that names no generation is a host reopening its own.
@@ -1046,9 +1032,9 @@ class SessionDirectory:
                     held = generation
                 if world and owner is None and previous is None and proof is not None:
                     held = proof[2]
-                if claimed is not None and claimed <= held and not ((replayed_owner or same_host or legacy or first_world) and claimed == held):
+                if claimed is not None and claimed <= held and not ((replayed_owner or same_host or first_world) and claimed == held):
                     raise Superseded("already_migrated", held)
-                if claimed is None and held > 0 and not (replayed_owner or same_host or legacy):
+                if claimed is None and held > 0 and not (replayed_owner or same_host):
                     raise Superseded("already_migrated", held)
                 if claimed is None:
                     generation = held
@@ -1072,8 +1058,6 @@ class SessionDirectory:
             sess.install_key = install_key
             sess.install_key_sha256 = hashlib.sha256(install_key.encode()).hexdigest()
             sess.migration_gen = generation
-            if legacy:
-                self._legacy_remaining -= 1
             if fields.get("persistent_world") is True and resume is not None:
                 sess.register_fingerprint = fingerprint
                 sess.register_retry_until = 0
@@ -1495,7 +1479,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--owner-state", type=Path, default=None,
                         help="durable world owner hashes; defaults to world-owners.json beside the log, or in the working directory")
     parser.add_argument("--owner-key", type=Path, default=None, help="persistent service signing key; defaults beside owner-state with .key suffix")
-    parser.add_argument("--first-upgrade-worlds", type=int, default=None, help="listed world count observed before the first upgraded start")
+    parser.add_argument("--create-owner-key", action="store_true", help="create the permanent signing key on the first start only")
     parser.add_argument("--turn-config", type=Path, default=None)
     parser.add_argument("--turn-max-ttl", type=int, default=TURN_MAX_TTL,
                         help=f"the longest relay credential minted, {TURN_MIN_TTL}-{TURN_MAX_TTL} s")
@@ -1922,7 +1906,7 @@ def spawn_server(
     turn_max_ttl: int = TURN_MAX_TTL,
     owner_state: Optional[Path] = None,
     owner_key: Optional[Path] = None,
-    first_upgrade_worlds: Optional[int] = None,
+    create_owner_key: bool = False,
     caller_mode: str = "direct",
 ) -> RunningServer:
     configure_logging(log_file)
@@ -1934,7 +1918,7 @@ def spawn_server(
     store = SessionDirectory(
         expiry_s=expiry_s, heartbeat_s=heartbeat_s, queue_idle_s=queue_idle_s, turn_config=turn_config, turn_max_ttl=turn_max_ttl,
         owner_state=owner_state if owner_state is not None else log_file.parent / "world-owners.json" if log_file else None,
-        owner_key=owner_key, first_upgrade_worlds=first_upgrade_worlds, caller_mode=caller_mode,
+        owner_key=owner_key, create_owner_key=create_owner_key, caller_mode=caller_mode,
     )
     store.start_pruner()
     httpd = build_httpd(bind, port, store, cert, key)
@@ -1972,7 +1956,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         turn_config=turn_config,
         turn_max_ttl=args.turn_max_ttl,
         owner_state=args.owner_state or (args.log_file.parent if args.log_file else Path.cwd()) / "world-owners.json",
-        owner_key=args.owner_key, first_upgrade_worlds=args.first_upgrade_worlds, caller_mode=args.caller_mode,
+        owner_key=args.owner_key, create_owner_key=args.create_owner_key, caller_mode=args.caller_mode,
     )
     print(f"session_directory listening on {args.bind}:{server.port}", flush=True)
     try:

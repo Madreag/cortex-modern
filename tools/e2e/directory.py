@@ -41,7 +41,7 @@ def serve(root, port, block=(49400, 49479), turn_config=None, secret_book=None):
     pin = hashlib.sha256(certificate.public_bytes(serialization.Encoding.DER)).hexdigest()
     previous_handlers = set(LOGGER.handlers)
     server = spawn_server(port=port, cert=cert, key=key_path, insecure_http=False, expiry_s=30,
-                          heartbeat_s=2, log_file=root / "service.log", turn_config=turn_config, first_upgrade_worlds=0)
+                          heartbeat_s=2, log_file=root / "service.log", turn_config=turn_config, create_owner_key=True)
     if secret_book is not None:
         provider = server.store.turn_provider
         mint = provider.mint

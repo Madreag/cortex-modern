@@ -117,7 +117,7 @@ def main(argv=None) -> int:
     book.add_turn_config(config)
     calls: list[dict] = []
     record_provider(module, calls)
-    server = module.spawn_server(port=0, insecure_http=True, log_file=out / 'service.log', turn_config=config, first_upgrade_worlds=0)
+    server = module.spawn_server(port=0, insecure_http=True, log_file=out / 'service.log', turn_config=config, create_owner_key=True)
     book_mints(server.store, book)
     source = Path(str(module.__file__)).resolve()
     receipt = {'schema': 1, 'row': 'CF1', 'started': stamp(), 'turn_config': str(options.turn_config),

@@ -506,6 +506,34 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(after, before, "R4: a refused offer evicted an honest joiner's queued offer")
         self.assertIn(first["seq"], [item["seq"] for item in after["signals"]])
 
+    def test_R5_interrupted_key_creation_leaves_a_restartable_service(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "world-owners.json"
+            real_fdopen = session_directory.os.fdopen
+            class InterruptedWrite:
+                def __init__(self, fd, mode):
+                    self.stream = real_fdopen(fd, mode)
+                def __enter__(self): return self
+                def __exit__(self, *args): self.stream.close()
+                def write(self, data):
+                    self.stream.write(data[:7])
+                    self.stream.flush()
+                    raise OSError("interrupted first start")
+            import inspect
+            argument = {"create_owner_key": True} if "create_owner_key" in inspect.signature(session_directory.SessionDirectory).parameters else {"first_upgrade_worlds": 0}
+            with mock.patch.object(session_directory.os, "fdopen", side_effect=InterruptedWrite):
+                with self.assertRaises(OSError):
+                    session_directory.SessionDirectory(15, 5, owner_state=state, **argument)
+            try:
+                resumed = session_directory.SessionDirectory(15, 5, owner_state=state,
+                            **({} if state.with_suffix(".key").exists() else argument))
+            except ValueError:
+                self.fail("R5: interrupted first start left a partial signing key that prevents the next start")
+            self.addCleanup(resumed.stop)
+            self.assertEqual(resumed._world_owners, {})
+            row = resumed.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.1", 0, INSTALL_KEY)
+            self.assertTrue(row["token"])
+
     def test_successor_resumes_row_only_with_its_sealed_token(self) -> None:
         self.start(port=45799)
         status, created = self.register()
@@ -2187,7 +2215,7 @@ class DirectoryTests(unittest.TestCase):
 
     def test_owner_writes_are_bounded_batched_and_outside_the_lock(self) -> None:
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 4):
-            store = session_directory.SessionDirectory(15, 5, owner_state=Path(directory) / "world-owners.json", first_upgrade_worlds=0)
+            store = session_directory.SessionDirectory(15, 5, owner_state=Path(directory) / "world-owners.json", create_owner_key=True)
             self.addCleanup(store.stop)
             writes = []
             original = store._write_owner_file
@@ -2242,7 +2270,7 @@ class DirectoryTests(unittest.TestCase):
         signals = store.get_signals(world, "host", 0, host["token"], 4)["signals"]
         self.assertEqual(len(signals), 1, "S2: a capacity-refused registration discarded the active joiner's offer")
 
-    def test_relay_helper_preserves_the_source_and_declares_an_empty_upgrade(self) -> None:
+    def test_relay_helper_preserves_the_source_and_creates_its_signing_key(self) -> None:
         tools = str(Path(__file__).resolve().parents[1])
         with mock.patch.object(sys, "path", [tools, *sys.path]):
             import relay_cloudflare_match as relay
@@ -2266,12 +2294,12 @@ class DirectoryTests(unittest.TestCase):
                 except TypeError:
                     self.fail("S2: relay helper rejected the handler's source address")
                 original_post.assert_called_once_with("session", packet, 10, "192.0.2.42")
-                self.assertEqual(factory.call_args.kwargs.get("first_upgrade_worlds"), 0,
-                                 "S4: fresh relay directory omitted its declared empty first upgrade")
+                self.assertEqual(factory.call_args.kwargs.get("create_owner_key"), True,
+                                 "S4: fresh relay directory omitted its explicit signing-key creation")
             finally:
                 helper.stop()
 
-    def test_local_video_and_mint_helpers_declare_an_empty_upgrade(self) -> None:
+    def test_local_video_and_mint_helpers_create_their_signing_keys(self) -> None:
         tools = str(Path(__file__).resolve().parents[1])
         nested = "session_directory.session_directory"
         previous = sys.modules.get(nested)
@@ -2306,9 +2334,9 @@ class DirectoryTests(unittest.TestCase):
                          mock.patch.object(mint, "record_provider"), \
                          mock.patch.object(session_directory, "spawn_server", side_effect=capture), self.assertRaises(StartupCaptured):
                         mint.main(["--turn-config", str(root / "unused.json"), "--out", str(root / name)])
-                if arguments.get("first_upgrade_worlds") != 0:
+                if arguments.get("create_owner_key") is not True:
                     missing.append(name)
-        self.assertEqual(missing, [], "S4: fresh local helpers omitted their declared empty first upgrade: " + ",".join(missing))
+        self.assertEqual(missing, [], "S4: fresh local helpers omitted their explicit signing-key creation: " + ",".join(missing))
 
     def test_world_tick_receipts_keep_live_and_private_replay_comparisons(self) -> None:
         host = {"live": {1: "a" * 64, 2: "b" * 64, 3: "c" * 64}, "catchup": {}}
@@ -2363,19 +2391,15 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(len(store.get_signals(world, "host", 0, replacement["token"], time.monotonic())["signals"]), 1,
                          "S3: revoked long poll drained the replacement joiner's signal")
 
-    def test_first_upgrade_requires_a_count_and_keeps_signed_proofs(self) -> None:
+    def test_first_start_requires_create_key_and_keeps_signed_proofs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             owner_file = Path(directory) / "world-owners.json"
-            with self.assertRaisesRegex(ValueError, "first-upgrade-worlds", msg="S4: first upgraded startup omitted the operator's observed-world count"):
+            with self.assertRaisesRegex(ValueError, "create-owner-key", msg="S4: first startup omitted explicit signing-key creation"):
                 session_directory.SessionDirectory(15, 5, owner_state=owner_file)
-            store = session_directory.SessionDirectory(15, 5, owner_state=owner_file, first_upgrade_worlds=1)
+            store = session_directory.SessionDirectory(15, 5, owner_state=owner_file, create_owner_key=True)
             world = str(uuid.uuid4())
             request = sample_register(persistent_world=True, world_id=world, world_boot=1)
-            with self.assertRaises(PermissionError, msg="S4: tokenless claim bypassed the first-upgrade lease quarantine"):
-                store.register(request, "203.0.113.1", 0, INSTALL_KEY)
-            with self.assertRaises(PermissionError, msg="S4: a public caller forged a legacy proof during the upgrade"):
-                store.register(dict(request, resume_session_id=world, resume_token="X" * 32), "203.0.113.1", 0, INSTALL_KEY)
-            restored = store.register(dict(request, resume_session_id=world, resume_token="O" * 32), "127.0.0.1", 0, INSTALL_KEY)
+            restored = store.register(request, "192.0.2.1", 0, INSTALL_KEY)
             store.heartbeat(world, {"token": restored["token"], "peer_count": 2, "seats_free": 1}, 1, INSTALL_KEY)
             store.stop()
             restarted = session_directory.SessionDirectory(15, 5, owner_state=owner_file)
@@ -2482,7 +2506,7 @@ class DirectoryTests(unittest.TestCase):
             world_id = str(uuid.uuid4())
             request = sample_register(persistent_world=True, world_id=world_id,
                                       world_boot=1, resume_session_id=world_id)
-            first = spawn_server(log_file=log_file, first_upgrade_worlds=0)
+            first = spawn_server(log_file=log_file, create_owner_key=True)
             try:
                 now = time.monotonic()
                 created = first.store.register(request, "192.0.2.1", now, INSTALL_KEY)
@@ -2523,7 +2547,7 @@ class DirectoryTests(unittest.TestCase):
             world_id = str(uuid.uuid4())
             request = sample_register(persistent_world=True, world_id=world_id,
                                       world_boot=1, resume_session_id=world_id)
-            first = spawn_server(log_file=log, first_upgrade_worlds=0)
+            first = spawn_server(log_file=log, create_owner_key=True)
             try:
                 created = first.store.register(request, "192.0.2.1", time.monotonic(), INSTALL_KEY)
             finally:
@@ -2577,7 +2601,7 @@ class DirectoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             owner_file = Path(temporary) / "world-owners.json"
             owner_file.write_text(json.dumps({world_id.upper(): store._world_owners[world_id]}), encoding="utf-8")
-            restarted = session_directory.SessionDirectory(300, 5, owner_state=owner_file, first_upgrade_worlds=0)
+            restarted = session_directory.SessionDirectory(300, 5, owner_state=owner_file, create_owner_key=True)
             self.addCleanup(restarted.stop)
             with self.assertRaises(PermissionError, msg="F3: a noncanonical saved owner allowed a tokenless claim"):
                 restarted.register(request, "192.0.2.3", 26, "cccccccccccccccc")
