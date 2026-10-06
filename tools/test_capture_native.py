@@ -69,7 +69,7 @@ class NativeReceiptTests(unittest.TestCase):
             capture_native.verify(self.repo, self.receipt, self.head, "../other/engine")
 
     def test_reviewed_capture_does_not_require_windows(self):
-        options = SimpleNamespace(spread=True, peer_boxes="host=Mac,seat2=Linux", size=None, capture_peer="host",
+        options = SimpleNamespace(spread=False, peer_boxes="host=Mac,seat2=Linux", size=None, capture_peer="host",
                                   port=e2e_video.PORT_LO + 10, repo=self.repo, pool_dispatcher=None, pool_registry=None)
         definition = {"peers": [{"name": "host"}, {"name": "client"}]}
         scenario = {"size": "960x540", "timeout_s": 170}
@@ -77,7 +77,8 @@ class NativeReceiptTests(unittest.TestCase):
             e2e_video.run_one(options, scenario, definition, 0, self.root / "capture")
         peers = launch.call_args.args[2]
         self.assertEqual([peer.os for peer in peers], ["any", "any"])
-        self.assertFalse(any(peer.reviewed for peer in peers))
+        self.assertEqual([peer.reviewed for peer in peers], [True, False])
+        self.assertTrue(all(peer.readback and not peer.share_ok for peer in peers))
 
 
 if __name__ == "__main__":

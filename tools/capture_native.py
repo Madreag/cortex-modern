@@ -1,8 +1,8 @@
 """Reuse a verified native build in its caller-owned repository.
 
-The installed dispatcher still owns placement, reservations and launch. An
-optional CORTEX_CAPTURE_NATIVE_BUILDS JSON file maps its box names to repo and
-receipt paths. With no mapping the dispatcher's normal build path is used.
+The lead names every peer. The native runner owns its capacity and launch.
+An optional CORTEX_CAPTURE_NATIVE_BUILDS JSON file maps the named boxes to
+repo and receipt paths; otherwise the existing transport builds those inputs.
 """
 from __future__ import annotations
 

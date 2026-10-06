@@ -2175,8 +2175,9 @@ def run_one(options, scenario, run, run_index, out):
     if capture_peer not in {peer["name"] for peer in definitions}:
         raise ValueError("--capture-peer must name a peer of this run")
     # The engine records its rendered texture on every platform. The capture
-    # peer's OS and placement are resolved by the same pool as every other peer.
+    # peer and every recorder are isolated on the lead's explicitly named boxes.
     peers = [spread.Peer(peer["name"], os="any", size=size,
+                         reviewed=peer["name"] == capture_peer, readback=True, share_ok=False,
                          timeout=run.get("timeout_s") or scenario.get("timeout_s") or 300)
              for peer in definitions]
     previous = getattr(options, "remote_capture", None)
