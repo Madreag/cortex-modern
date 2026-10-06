@@ -2227,8 +2227,9 @@ class DirectoryTests(unittest.TestCase):
                 for index in range(4):
                     row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), f"192.0.2.{index}", index, INSTALL_KEY)
                     store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 2, "seats_free": 1}, index, INSTALL_KEY)
-                with self.assertRaises(OverflowError, msg="S1: durable ownership grew beyond its count cap"):
-                    store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.99", 5, INSTALL_KEY)
+                replacement = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.99", 5, INSTALL_KEY)
+                store.heartbeat(replacement["session_id"], {"token": replacement["token"], "peer_count": 2, "seats_free": 1}, 5, INSTALL_KEY)
+                self.assertEqual(len(store._world_owners), 4, "S1: durable ownership exceeded its count cap after retirement")
                 last = max(owner["last_heartbeat_unix"] for owner in store._world_owners.values())
                 with mock.patch.object(session_directory.time, "time", return_value=last + session_directory.OWNER_IDLE_S + 1):
                     store.prune(30)
