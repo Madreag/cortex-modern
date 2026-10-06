@@ -27,7 +27,7 @@ IDENTITY_FIELDS = {"game_version", "network_protocol_version", "controller_frame
                    "scenario_test_module_loaded", "lockstep_codec_version", "match_config_version",
                    "supported_lockstep_codec_version", "supported_world_lockstep_codec_version",
                    "supported_match_config_version", "supported_world_match_config_version",
-                   "lobby_protocol_version", "enabled_global_scripts"}
+                   "lobby_protocol_version", "committed_record_version", "enabled_global_scripts"}
 SECRET_KEYS = ("SessionDirectoryInstallKey", "NetworkTurnPass", "NetworkTurnUser", "NetworkPlayerTurnPass", "NetworkPlayerTurnUser", "SessionDirectoryCertSha256")
 SECRET_NEEDLES = ("Pass", "Password", "Secret", "Token", "PrivateKey", "Credential", "Ticket")
 
