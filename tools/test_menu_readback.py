@@ -2503,8 +2503,8 @@ def run_case(options, case, root, failing=None):
                 raise RuntimeError(("paired" if paired else "selected") + " menu readback requires the shared spread executor")
             width, height, multiplier = size_parts(options.size)
             reviewed = "client" if case in ("host-draft-roundtrip", "sweep-advanced-client") else "host"
-            peers = [spread.Peer(who, os="windows", size=(int(width * multiplier), int(height * multiplier)),
-                                 reviewed=who == reviewed) for who in texts]
+            peers = [spread.Peer(who, os="windows" if who == reviewed or case == "net-host-left-early" else "any",
+                                 size=(int(width * multiplier), int(height * multiplier)), reviewed=who == reviewed) for who in texts]
             parameters = {"lane": "menus"}
             if case == "host-draft-roundtrip":
                 # This case deliberately reads back Unlisted with traversal and relay Off.
