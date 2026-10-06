@@ -11,6 +11,7 @@
 #include "GUIFont.h"
 #include "GUILabel.h"
 #include "GnsTransport.h"
+#include "GUIListBox.h"
 #include "GUIInputWrapper.h"
 #include "MainMenuGUI.h"
 #include "PauseMenuGUI.h"
@@ -70,6 +71,9 @@ namespace {
 		bool phaseArmed = false;
 		bool roundEndArmed = false;
 		std::vector<std::string> roundEndSignals;
+		bool pageDown = false; //!< show_row holds the More players press it made.
+		uint64_t pageRender = 0; //!< The render show_row acts again at.
+		int pageTurns = 0; //!< Pages show_row has turned for the row it looks for.
 	};
 	Probe probe;
 	std::atomic<uint64_t> rendezvousCount{0};
@@ -427,6 +431,16 @@ namespace {
 		} else if (auto* button = dynamic_cast<GUIButton*>(control)) {
 			value["text"] = button->GetText();
 			value["pushed"] = button->IsPushed();
+		} else if (auto* list = dynamic_cast<GUIListBox*>(control)) {
+			// A list reads as its rows, one per line, and the row it has selected.
+			std::string text;
+			value["items"] = Json::array();
+			for (const auto* item: *list->GetItemList()) {
+				text += (text.empty() ? "" : "\n") + item->m_Name;
+				value["items"].push_back(item->m_Name);
+			}
+			value["text"] = text;
+			value["selected"] = list->GetSelectedIndex();
 		}
 		return value;
 	}
@@ -548,7 +562,10 @@ namespace {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("lockstep_frame_at_least") || step.contains("renders") ||
 			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
 			    step.contains("editing") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
-			    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most"), "wait has no predicate");
+			    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most") || step.contains("paused"),
+			    "wait has no predicate");
+			// The title screen's own scene reads as Gameplay too, paused; a started game runs.
+			if (step.contains("paused") && observed["paused"] != step["paused"]) return false;
 			if (step.contains("chat_entry_open") && observed["net_ui"].at("chat_entry_open") != step["chat_entry_open"]) return false;
 			if (step.contains("screen") && observed["screen"] != step["screen"]) return false;
 			if (step.contains("picker_open")) {
@@ -660,13 +677,60 @@ namespace {
 			observed["accepted"] = accepted;
 			observed["menu_observation"] = detail;
 			Require(accepted == step.value("accepted", true), "menu operation refused: " + step.at("command").get<std::string>() + " " + detail);
+		} else if (op == "show_row") {
+			// A player's row on the open host panel, reached as a hand reaches it: More players, its press and its release on
+			// separate frames, until the row shows or every page has been seen.
+			auto* menu = g_MenuMan.GetNetworkPanel();
+			Require(menu != nullptr && g_MenuMan.IsNetworkPanelOpen(), "the players panel is not open");
+			const std::string name = step.at("name").get<std::string>();
+			if (GUIControl* row = menu->GetControl("NetworkSeatName@" + name); row && row->GetVisible() && !probe.pageDown) {
+				probe.pageTurns = 0;
+				observed["control"] = ReadControl(row);
+				observed["page_turns"] = probe.pageTurns;
+				return true;
+			}
+			if (probe.renders < probe.pageRender) return false;
+			GUIControl* more = menu->GetControl("NetworkSeatsMore");
+			Require(more != nullptr && (probe.pageDown || more->GetVisible()), "no row for " + name + " and no more players to turn to");
+			Require(probe.pageTurns < 4, "every page turned and no row for " + name);
+			int x, y, w, h;
+			more->GetControlRect(&x, &y, &w, &h);
+			const float mouseX = static_cast<float>((x + w / 2) * g_WindowMan.GetResMultiplier());
+			const float mouseY = static_cast<float>((y + h / 2) * g_WindowMan.GetResMultiplier());
+			SDL_Event motion{};
+			motion.type = SDL_EVENT_MOUSE_MOTION;
+			motion.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+			motion.motion.x = mouseX;
+			motion.motion.y = mouseY;
+			Push(motion);
+			SDL_Event event{};
+			event.type = probe.pageDown ? SDL_EVENT_MOUSE_BUTTON_UP : SDL_EVENT_MOUSE_BUTTON_DOWN;
+			event.button.windowID = motion.motion.windowID;
+			event.button.button = SDL_BUTTON_LEFT;
+			event.button.down = !probe.pageDown;
+			event.button.x = mouseX;
+			event.button.y = mouseY;
+			Push(event);
+			if (probe.pageDown) ++probe.pageTurns;
+			probe.pageDown = !probe.pageDown;
+			probe.pageRender = probe.renders + (probe.pageDown ? 3 : 4);
+			return false;
 		} else if (op == "mouse_down" || op == "mouse_up" || op == "mouse_move") {
 			auto* control = Control(step);
 			Require((step.value("scope", "") == "menu" ? MenuAutomation::Visible(control) : g_MenuMan.IsNetworkPanelOpen() && control->GetVisible()), "mouse target is not visible");
 			int x, y, w, h;
 			control->GetControlRect(&x, &y, &w, &h);
+			int pointY = y + h / 2;
+			if (step.contains("item")) {
+				// A list row is pressed on the row itself: the list's own top, the rows above it and half its height.
+				auto* list = dynamic_cast<GUIListBox*>(control);
+				Require(list != nullptr, "an item press needs a list");
+				auto* item = list->GetItem(step["item"].get<int>());
+				Require(item != nullptr, "the list has no such row");
+				pointY = y + 1 + list->GetStackHeight(item) + list->GetItemHeight(item) / 2 - list->GetScrollVerticalValue();
+			}
 			const float mouseX = static_cast<float>((x + w / 2) * g_WindowMan.GetResMultiplier());
-			const float mouseY = static_cast<float>((y + h / 2) * g_WindowMan.GetResMultiplier());
+			const float mouseY = static_cast<float>(pointY * g_WindowMan.GetResMultiplier());
 			SDL_Event motion{};
 			motion.type = SDL_EVENT_MOUSE_MOTION;
 			motion.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
@@ -1031,6 +1095,10 @@ namespace {
 
 uint64_t RendezvousCount() { return rendezvousCount.load(); }
 bool Running() { return probe.loaded && probe.enabled && !probe.done; }
+void WriteUnfinished() {
+	// The steps since the last once-a-second write are otherwise lost with the process.
+	if (Running() && probe.resultStarted) WriteResult();
+}
 
 bool RunCrossScopeSelfTest(std::string* error) {
 	bool passed = true;

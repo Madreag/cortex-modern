@@ -149,6 +149,8 @@ namespace RTE {
 		std::string LocalIdentity() const;
 
 		const NetDirectorySignalChannel& Channel() const { return m_Channel; }
+		const std::string& BoundSessionId() const { return m_Config.sessionId; }
+		const std::string& BoundSessionToken() const { return m_Config.sessionToken; }
 		const Counters& GetCounters() const { return m_Counters; }
 		const std::vector<PollWindow>& PollWindows() const { return m_PollWindows; }
 		std::shared_ptr<const GnsSignalingTally> Tally() const { return m_Tally; }

@@ -331,7 +331,7 @@
       "id": "live-status-one-surface",
       "run": "640x360",
       "mark": "live-toast-band",
-      "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
+      "what": "The status box reads the match state in words and leaves the slow-machine notice to the banner.",
       "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
       "probe_steps": [
         6,
@@ -362,7 +362,7 @@
       "id": "live-status-one-surface",
       "run": "960x540",
       "mark": "live-toast-band",
-      "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
+      "what": "The status box reads the match state in words and leaves the slow-machine notice to the banner.",
       "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
       "probe_steps": [
         6,
@@ -393,7 +393,7 @@
       "id": "live-status-one-surface",
       "run": "1280x720",
       "mark": "live-toast-band",
-      "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
+      "what": "The status box reads the match state in words and leaves the slow-machine notice to the banner.",
       "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
       "probe_steps": [
         6,

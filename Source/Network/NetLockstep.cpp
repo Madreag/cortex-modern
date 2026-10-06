@@ -7210,6 +7210,7 @@ namespace RTE {
 				// A connection with no samples on it yet reports nothing, which is not a reading of an instant
 				// link: a seat that comes back on a new transport keeps what its link last measured.
 				if (ping > 0 || stats.pingMs == 0) stats.pingMs = ping;
+				if (m_Transport->IsPeerPingMeasured(transport)) stats.pingMeasured = true;
 				if (const uint32_t jitter = estimator.JitterMs(); jitter > 0 || stats.jitterMs == 0) stats.jitterMs = jitter;
 				stats.delayFrames = InputDelayAt(peer, m_Stats.nextFrame);
 				if (host && m_Config.adaptiveInputDelay) {

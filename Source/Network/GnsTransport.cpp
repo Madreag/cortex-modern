@@ -595,6 +595,16 @@ namespace RTE {
 			return status.m_nPing > 0 ? static_cast<uint32_t>(status.m_nPing) : 0;
 		}
 
+		bool IsPeerPingMeasured(NetPeerId peerId) {
+			const auto connectionIt = m_ConnectionsByPeer.find(peerId);
+			if (!m_Interface || connectionIt == m_ConnectionsByPeer.end()) {
+				return false;
+			}
+			SteamNetConnectionRealTimeStatus_t status{};
+			// The library reads a link it has no round trip for yet as a negative ping.
+			return m_Interface->GetConnectionRealTimeStatus(connectionIt->second, &status, 0, nullptr) == k_EResultOK && status.m_nPing >= 0;
+		}
+
 		bool Acquire(std::string* error) {
 			if (m_HasGnsRef) {
 				return true;
@@ -1338,6 +1348,7 @@ namespace RTE {
 		void Stop() {}
 		std::vector<NetTransportEvent> PollEvents() { return {}; }
 		uint32_t GetPeerPingMs(NetPeerId) { return 0; }
+		bool IsPeerPingMeasured(NetPeerId) { return false; }
 
 		bool StartHostP2P(int, const GnsP2PConfig&, std::string* error) {
 			SetError(error, "GameNetworkingSockets support is not compiled in; rebuild with CCCP_WITH_GNS");
@@ -1425,6 +1436,11 @@ namespace RTE {
 	uint32_t GnsTransport::GetPeerPingMs(NetPeerId peerId) const {
 		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		return m_Impl->GetPeerPingMs(peerId);
+	}
+
+	bool GnsTransport::IsPeerPingMeasured(NetPeerId peerId) const {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
+		return m_Impl->IsPeerPingMeasured(peerId);
 	}
 
 	bool GnsTransport::StartHostP2P(int virtualPort, const GnsP2PConfig& config, std::string* error) {

@@ -95,6 +95,7 @@
 #endif
 #endif
 
+#include "Controller.h"
 #include "ControllerFrame.h"
 #include "GnsP2PSelfTest.h"
 #include "GnsTransport.h"
@@ -967,6 +968,25 @@ static bool CrossEffectsChanged(uint64_t& seenGeneration, nlohmann::json& effect
 	effects = latest;
 	seenGeneration = generation.load();
 	return true;
+}
+
+static void CrossConfirmLocalControllerInputs(uint64_t tick) {
+	if (!g_MetricsCollector.EventsEnabled() || !ScenarioRunner::IsLockstepControllerSyncActive() || ScenarioRunner::WorldCatchUpActive()) return;
+	const uint64_t target = tick + ScenarioRunner::GetLockstepInputDelayFrames();
+	const uint64_t round = ScenarioRunner::GetLockstepRoundId();
+	std::vector<ControllerFrame> queued;
+	std::vector<long> actors;
+	if (ScenarioRunner::PeekLockstepLocalControllerFrames(target, queued)) {
+		for (const ControllerFrame& input: queued) {
+			if (input.inputMode != Controller::CIM_PLAYER || input.playerRaw < Players::PlayerOne || input.playerRaw >= Players::MaxPlayerCount) continue;
+			const long actor = static_cast<long>(input.actorUniqueID);
+			actors.push_back(actor);
+			// A returning player's first sample precedes its first committed human frame.
+			if (g_MetricsCollector.ProducedControllerFor(round, target, actor).empty())
+				g_MetricsCollector.RecordProducedController(round, tick, target, actor, input.playerRaw);
+		}
+	}
+	g_MetricsCollector.ConfirmProducedControllers(round, tick, target, actors, s_crossRestoredInputThrough[round]);
 }
 
 static void CrossRecoveryAtCommittedTick(uint64_t tick, bool paused = false) {
@@ -4880,11 +4900,14 @@ static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, con
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
 	const int centerX = g_WindowMan.GetResX() / 2;
 	const int centerY = g_WindowMan.GetResY() / 2;
-	const std::string resyncTitle = heldRejoin ? (heldLine.empty() ? std::string("Held - AI in control - rejoining...") : heldLine) : std::string("Resyncing the match...");
+	const std::string resyncTitle = heldRejoin ? (heldLine.empty() ? std::string("Rejoining the match...") : heldLine) : std::string("Restoring the shared match state...");
 	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, resyncTitle, GUIFont::Centre);
 	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncTitle);
-	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8,
-	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]" + (heldRejoin ? "  /  Leave [Esc] - your seat is kept" : ""), GUIFont::Centre);
+	// A held player's units are the AI's until the player is back; a repair pauses every player at once.
+	const std::string resyncLine = heldRejoin ? "The AI plays your units until you are back  /  " + std::to_string(elapsedSeconds) + " s  /  F6: Players  /  Esc: leave - your seat stays yours"
+	                                          : "Every player waits while the match is reloaded  /  " + std::to_string(elapsedSeconds) + " s  /  F6: Players";
+	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8, resyncLine, GUIFont::Centre);
+	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncLine);
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts(resyncTitle);
 	ScenarioRunner::NoteResyncOverlayFrame();
@@ -6785,6 +6808,18 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			} else {
 				returnToMenuAfterNetworkEnd = true;
 			}
+		} else if (const size_t refused = error.find("WorldJoinRefused:"); refused != std::string::npos) {
+			const std::string reason = error.substr(refused + std::string("WorldJoinRefused:").size());
+			g_ConsoleMan.PrintString("NETWORK: " + reason);
+			g_NetMatchService.ReportRuntimeError(reason);
+			g_ActivityMan.EndActivity();
+			g_ActivityMan.SetInActivity(false);
+			ScenarioRunner::ClearControllerReplayError();
+			if (s_netMatchServiceE2E) {
+				s_netMatchServiceE2EError = reason;
+				s_netMatchServiceE2EExitCode = 1;
+				System::SetQuit(true);
+			} else returnToMenuAfterNetworkEnd = true;
 		} else if (error.find("PeerLeft:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 			// The last peer announced its leave, so the match is over rather than broken: it ends the
 			// way a finished one does, which keeps the seats and the admission counters in the report.
@@ -7233,6 +7268,7 @@ void RunGameLoop() {
 		// The completed round's held pause menu ends the moment its probe does, or when the window runs out.
 		if (s_netMatchE2ECompletedMs && !ProbeHoldsE2eEnd(s_netMatchE2ECompletedMs)) {
 			s_netMatchE2ECompletedMs = 0;
+			NetModerationGUIProbe::WriteUnfinished();
 			g_ActivityMan.EndActivity();
 			ScenarioRunner::ClearControllerReplayError();
 			System::SetQuit(true);
@@ -7240,6 +7276,7 @@ void RunGameLoop() {
 		}
 		// A run that left its match ends as a leaver's run does, once its probe is done or the window runs out.
 		if (s_netMatchE2ELeftMs && !ProbeHoldsE2eEnd(s_netMatchE2ELeftMs)) {
+			NetModerationGUIProbe::WriteUnfinished();
 			System::SetQuit(true);
 			break;
 		}
@@ -8043,6 +8080,7 @@ void RunGameLoop() {
 				s_crossContext["wall_ms"] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
 				g_MetricsCollector.UpdateEventContext(s_crossContext);
 			}
+			CrossConfirmLocalControllerInputs(simTick);
 			g_MetricsCollector.FlushEventTick();
 			if (g_MetricsCollector.EventsEnabled() && !lockstepPausedTick && !ScenarioRunner::WorldCatchUpActive() && s_crossContext.value("gameplay_tick", false)) {
 				const uint64_t sourceRound = CrossRecordRound(s_crossContext.value("round", uint64_t{0}), s_crossContext.value("source_round", uint64_t{0}));
@@ -8059,14 +8097,6 @@ void RunGameLoop() {
 			}
 			CrossEliminationAtCommittedTick(simTick);
 			CrossEndTargetObservation(simTick);
-			if (g_MetricsCollector.EventsEnabled() && ScenarioRunner::IsLockstepControllerSyncActive() && !ScenarioRunner::WorldCatchUpActive()) {
-				const uint64_t target = simTick + ScenarioRunner::GetLockstepInputDelayFrames();
-				std::vector<ControllerFrame> queued; std::vector<long> actors;
-				if (ScenarioRunner::PeekLockstepLocalControllerFrames(target, queued))
-					for (const auto& input: queued) actors.push_back(static_cast<long>(input.actorUniqueID));
-				const uint64_t round = ScenarioRunner::GetLockstepRoundId();
-				g_MetricsCollector.ConfirmProducedControllers(round, simTick, target, actors, s_crossRestoredInputThrough[round]);
-			}
 			CrossRecoveryAtCommittedTick(simTick, lockstepPausedTick);
 			if (hashThisTick) {
 				const HarnessCost::SimulationSpan harnessSpan;

@@ -212,7 +212,7 @@
       "peer": "host",
       "screen": "PauseMatchOptions",
       "mark": "vw-mp-match-options-host",
-      "what": "Match Options shows the rules and the host-only Repair action.",
+      "what": "Match Details shows the rules and the host-only Repair action.",
       "assert": "recorded menu/probe assertions in this marked interval"
     },
     {
@@ -293,7 +293,7 @@
       "peer": "client",
       "screen": "PauseMatchOptions",
       "mark": "vw-mp-match-options-client",
-      "what": "Match Options shows the rules and the host-only Repair action.",
+      "what": "Match Details shows the rules and the host-only Repair action.",
       "assert": "recorded menu/probe assertions in this marked interval"
     },
     {

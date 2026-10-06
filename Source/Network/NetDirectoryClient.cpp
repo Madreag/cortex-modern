@@ -152,10 +152,23 @@ namespace RTE {
 		}
 	}
 
+	void NetDirectoryClient::RememberWorldProof(const std::string& sessionId, const std::string& token) {
+		if (sessionId.empty() || token.empty()) return;
+		const auto proof = std::make_pair(sessionId, token);
+		if (std::find(m_WorldProofs.begin(), m_WorldProofs.end(), proof) != m_WorldProofs.end()) return;
+		m_WorldProofs.insert(m_WorldProofs.begin(), proof);
+		if (m_WorldProofs.size() > c_MaxWorldProofs) m_WorldProofs.pop_back();
+	}
+
 	void NetDirectoryClient::ApplyRefusedResumes(NetDirectoryRegisterRequest& row) const {
+		if (row.persistentWorld && row.worldId == m_ProofWorldId) {
+			if (m_WorldProofAttempt) { row.resumeSessionId = m_WorldProofAttempt->first; row.resumeToken = m_WorldProofAttempt->second; }
+			return;
+		}
 		const auto refused = [&] { return std::find(m_RefusedResumes.begin(), m_RefusedResumes.end(), std::make_pair(row.resumeSessionId, row.resumeToken)) != m_RefusedResumes.end(); };
 		while (!row.resumeSessionId.empty() && refused()) {
-			if (row.persistentWorld && row.worldId == row.resumeSessionId && !row.resumeToken.empty()) {
+			if (row.persistentWorld && row.worldId == row.resumeSessionId) {
+				if (row.resumeToken.empty()) break;
 				row.resumeToken.clear();
 			} else {
 				row.resumeSessionId.clear();
@@ -171,9 +184,11 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::Advertise(const NetDirectoryRegisterRequest& row, bool running, bool listed) {
-		const bool hiddenLatchFailed = m_State == State::Failed && m_HiddenUnsupported;
 		m_Row = row;
-		// The host passes its row every frame: a claim the directory refused is never presented again.
+		if (row.persistentWorld) {
+			if (m_ProofWorldId != row.worldId) { m_ProofWorldId = row.worldId; m_WorldProofs.clear(); m_WorldProofAttempt.reset(); m_WorldProofRefusals = 0; }
+			if (m_WorldProofs.empty()) RememberWorldProof(row.resumeSessionId, row.resumeToken);
+		}
 		ApplyRefusedResumes(m_Row);
 		m_Running = running;
 		m_DesiredListed = listed;
@@ -181,18 +196,26 @@ namespace RTE {
 			m_HiddenUnsupported = false;
 		}
 		if (!m_Listed) {
-			m_Reregistered = false;
 			// m_NextAttemptMs stays: a 429 or backoff deadline binds every request, whatever the intent.
 			m_BackoffMs = 0;
 			// A hidden intent that a legacy service already refused stays Failed on repeat calls.
 			if (m_State == State::Failed && (listed || !m_HiddenUnsupported)) {
 				SetState(State::Idle);
 			}
-		} else if (hiddenLatchFailed && listed) {
-			// A visible intent resumes ordinary registration from the hidden-unsupported failure.
-			SetState(State::Idle);
+		} else if (m_State == State::Failed && listed) {
+			SetState(m_SessionId.empty() ? State::Registering : State::Registered);
 		}
 		m_Listed = true;
+	}
+
+	void NetDirectoryClient::RefreshRegistration(const NetDirectoryRegisterRequest& row, bool running, uint64_t nowMs) {
+		if (!m_Listed || !m_DesiredListed || m_State != State::Registered) return;
+		m_Row = row;
+		m_Row.resumeSessionId = m_SessionId;
+		m_Row.resumeToken = m_Token;
+		m_Running = running;
+		SetState(State::Registering);
+		ScheduleRetry(nowMs);
 	}
 
 	void NetDirectoryClient::AbandonLease() {
@@ -205,6 +228,7 @@ namespace RTE {
 		m_SessionId.clear();
 		m_Token.clear();
 		m_ConfirmedListed.reset();
+		m_ProofWorldId.clear(); m_WorldProofs.clear(); m_WorldProofAttempt.reset(); m_WorldProofRefusals = 0;
 		if (m_State != State::Disabled)
 			SetState(State::Idle);
 	}
@@ -398,13 +422,26 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::NoteError(const std::string& error) {
-		m_LastError = error;
+		{
+			std::lock_guard<std::mutex> lock(m_LastErrorMutex);
+			m_LastError = error;
+		}
 		System::PrintDiagnosticLine("[net-directory] " + error);
+	}
+
+	std::string NetDirectoryClient::LastError() const {
+		std::lock_guard<std::mutex> lock(m_LastErrorMutex);
+		return m_LastError;
+	}
+
+	void NetDirectoryClient::ClearCapacityError() {
+		std::lock_guard<std::mutex> lock(m_LastErrorMutex);
+		if (m_LastError == c_CapacityNotice) m_LastError.clear();
 	}
 
 	void NetDirectoryClient::ScheduleRetry(uint64_t nowMs) {
 		m_BackoffMs = m_BackoffMs == 0 ? c_RetryBaseMs : std::min<uint64_t>(m_BackoffMs * 2, c_RetryMaxMs);
-		m_NextAttemptMs = nowMs + m_BackoffMs;
+		m_NextAttemptMs = std::max(m_NextAttemptMs, nowMs + m_BackoffMs);
 	}
 
 	void NetDirectoryClient::StartRequest(RequestKind kind, const Request& request) {
@@ -445,7 +482,21 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetDirectoryClient::IsCapacityReply(const Reply& reply) {
+		if (!reply.error.empty() || (reply.statusCode != 400 && reply.statusCode != 503)) return false;
+		const auto body = json::parse(reply.body, nullptr, false);
+		if (!body.is_object()) return false;
+		const auto code = body.find("error");
+		return code != body.end() && code->is_string() &&
+			   ((reply.statusCode == 503 && *code == "full") || *code == "queue_full");
+	}
+
 	void NetDirectoryClient::HandleRegisterReply(const Reply& reply, uint64_t nowMs) {
+		if (IsCapacityReply(reply)) {
+			NoteError(c_CapacityNotice);
+			ScheduleRetry(nowMs);
+			return;
+		}
 		if (TakeSuperseded(reply)) return;
 		if (!reply.error.empty() || reply.statusCode == 0) {
 			NoteError("register: " + (reply.error.empty() ? "transport error" : reply.error));
@@ -462,6 +513,11 @@ namespace RTE {
 			}
 			m_SessionId = response.sessionId;
 			m_Token = response.token;
+			if (m_Row.persistentWorld) {
+				RememberWorldProof(m_Row.resumeSessionId, m_Row.resumeToken);
+				RememberWorldProof(m_SessionId, m_Token);
+				m_WorldProofAttempt = std::make_pair(m_SessionId, m_Token); m_WorldProofRefusals = 0;
+			}
 			m_ObservedIp = response.observedIp;
 			// The register schema is unchanged, so a fresh row starts visible on either service.
 			m_Capable = response.supportsUnlisted;
@@ -469,6 +525,7 @@ namespace RTE {
 			m_HeartbeatS = std::max<int64_t>(c_MinHeartbeatS, response.heartbeatS);
 			m_ExpiresInS = response.expiresInS;
 			m_NextHeartbeatMs = nowMs + static_cast<uint64_t>(m_HeartbeatS) * 1000;
+			ClearCapacityError();
 			m_BackoffMs = 0;
 			System::PrintDiagnosticLine("[net-directory] registered session_id=" + m_SessionId + " heartbeat_s=" + std::to_string(m_HeartbeatS));
 			SetState(State::Registered);
@@ -490,10 +547,24 @@ namespace RTE {
 			return;
 		}
 		if (reply.statusCode == 403 && !m_Row.resumeSessionId.empty()) {
+			if (m_Row.persistentWorld) {
+				++m_WorldProofRefusals;
+				if (m_WorldProofRefusals % 2 == 0) {
+					const size_t next = (m_WorldProofRefusals / 2) % (m_WorldProofs.size() + 1);
+					m_WorldProofAttempt = next < m_WorldProofs.size() ? m_WorldProofs[next] : std::make_pair(m_Row.worldId, std::string());
+				}
+				ApplyRefusedResumes(m_Row);
+				NoteError("register refused (403): retrying the world's retained proofs after the backoff");
+				ScheduleRetry(nowMs);
+				return;
+			}
 			// The stored row token is not this row's any more (a directory that restarted holds none): a world claims its own id
 			// again, anything else registers fresh, instead of leaving the row unlisted for the rest of its life.
-			if (m_RefusedResumes.size() >= c_MaxRefusedResumes) m_RefusedResumes.erase(m_RefusedResumes.begin());
-			m_RefusedResumes.emplace_back(m_Row.resumeSessionId, m_Row.resumeToken);
+			const auto claim = std::make_pair(m_Row.resumeSessionId, m_Row.resumeToken);
+			if (std::find(m_RefusedResumes.begin(), m_RefusedResumes.end(), claim) == m_RefusedResumes.end()) {
+				if (m_RefusedResumes.size() >= c_MaxRefusedResumes) m_RefusedResumes.erase(m_RefusedResumes.begin());
+				m_RefusedResumes.push_back(claim);
+			}
 			ApplyRefusedResumes(m_Row);
 			NoteError(m_Row.resumeSessionId.empty() ? "register refused (403): the stored directory row is not ours, registering fresh"
 			                                        : "register refused (403): the directory holds no token for the world's row, claiming the world's id again");
@@ -501,10 +572,16 @@ namespace RTE {
 			return;
 		}
 		NoteError("register refused: HTTP " + std::to_string(reply.statusCode));
-		SetState(State::Failed);
+		ScheduleRetry(nowMs);
+		if (!m_Listed || !m_DesiredListed) SetState(State::Failed);
 	}
 
 	void NetDirectoryClient::HandleHeartbeatReply(const Reply& reply, uint64_t nowMs) {
+		if (IsCapacityReply(reply)) {
+			NoteError(c_CapacityNotice);
+			ScheduleRetry(nowMs);
+			return;
+		}
 		// Addresses the service did not acknowledge are still owed to it.
 		const bool listenAddrsAnswered = std::exchange(m_ListenAddrsInFlight, false);
 		if (TakeSuperseded(reply)) return;
@@ -539,9 +616,12 @@ namespace RTE {
 			m_HeartbeatS = std::max<int64_t>(c_MinHeartbeatS, response.heartbeatS);
 			m_ExpiresInS = response.expiresInS;
 			m_NextHeartbeatMs = nowMs + static_cast<uint64_t>(m_HeartbeatS) * 1000;
+			ClearCapacityError();
 			m_BackoffMs = 0;
-			// A row that beats again has lived: a service that forgets it later is answered with another register.
-			m_Reregistered = false;
+			if (m_Row.persistentWorld) {
+				m_WorldProofs.clear(); RememberWorldProof(m_SessionId, m_Token);
+				m_WorldProofAttempt = std::make_pair(m_SessionId, m_Token); m_WorldProofRefusals = 0;
+			}
 			return;
 		}
 		if (reply.statusCode == 404) {
@@ -559,15 +639,8 @@ namespace RTE {
 			m_SessionId.clear();
 			m_Token.clear();
 			SetState(State::Registering);
-			// The row expired or the service forgot it: it registers again at once. Lost again before it beat, the service is
-			// restarting or throttling it: it asks again after the backoff, and a listed row is never given up.
-			if (m_Reregistered) {
-				NoteError("heartbeat: row lost again after re-register, registering again after the backoff");
-				ScheduleRetry(nowMs);
-				return;
-			}
-			m_Reregistered = true;
-			NoteError("heartbeat: row gone (404), re-registering once");
+			NoteError("heartbeat: row gone (404), re-registering after the backoff");
+			ScheduleRetry(nowMs);
 			return;
 		}
 		if (reply.statusCode == 429) {
@@ -578,13 +651,22 @@ namespace RTE {
 			m_NextAttemptMs = nowMs + static_cast<uint64_t>(retryS) * 1000;
 			return;
 		}
+		if (reply.statusCode == 403 && m_Row.persistentWorld && m_DesiredListed) {
+			m_Row.resumeSessionId = m_SessionId; m_Row.resumeToken = m_Token;
+			m_WorldProofAttempt = std::make_pair(m_SessionId, m_Token);
+			SetState(State::Registering);
+			NoteError("heartbeat refused (403): recovering the world's retained proof after the backoff");
+			ScheduleRetry(nowMs);
+			return;
+		}
 		if (reply.statusCode >= 500) {
 			NoteError("heartbeat: HTTP " + std::to_string(reply.statusCode));
 			ScheduleRetry(nowMs);
 			return;
 		}
 		NoteError("heartbeat refused: HTTP " + std::to_string(reply.statusCode));
-		SetState(State::Failed);
+		ScheduleRetry(nowMs);
+		if (!m_Listed || !m_DesiredListed) SetState(State::Failed);
 	}
 
 	void NetDirectoryClient::HandleDeleteReply(const Reply& reply, uint64_t nowMs) {
@@ -602,6 +684,14 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::HandleListReply(const Reply& reply, uint64_t nowMs) {
+		if (IsCapacityReply(reply)) {
+			m_ListError = c_CapacityNotice;
+			NoteError(c_CapacityNotice);
+			m_ListCursor.clear();
+			ScheduleRetry(nowMs);
+			m_BrowseNextMs = m_NextAttemptMs;
+			return;
+		}
 		++m_ListReplies;
 		const bool follow = m_ListPages > 1;
 		if (!reply.error.empty() || reply.statusCode == 0 || reply.statusCode != 200) {
@@ -632,6 +722,7 @@ namespace RTE {
 			m_Rows.insert(m_Rows.end(), list.sessions.begin(), list.sessions.end());
 		}
 		m_ListTotal = list.total;
+		ClearCapacityError();
 		m_ListError.clear();
 		if (!list.nextCursor.empty() && m_ListPages < c_ListMaxPages) {
 			m_ListCursor = list.nextCursor;
@@ -868,7 +959,7 @@ namespace RTE {
 			{"heartbeats", m_Heartbeats},
 			{"deletes", m_Deletes},
 			{"last_status", m_LastStatus},
-			{"last_error", m_LastError},
+			{"last_error", LastError()},
 			{"desired_listed", m_DesiredListed},
 			{"confirmed_listed", m_ConfirmedListed ? json(*m_ConfirmedListed) : json(nullptr)},
 			{"supports_unlisted", m_Capable},

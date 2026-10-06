@@ -23,6 +23,8 @@ CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "pause-s
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
          "lobby-name", "net-options", "net-activity", "net-host-left", "net-host-left-early", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "host-by-hand", "host-follows-activity", "oracles")
 PAIRED_CASES = ("pause", "pause-save", "save-hotkey", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early")
+# Cases another driver owns. They hold up to four engines for about an hour a size, so "all" never selects them: they run by name.
+DELEGATED_CASES = ("in-match",)
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
@@ -43,6 +45,12 @@ def layout_readback(capture):
         if name in rows:
             results.append({"control": name, "rect": rows[name]["rect"], "text": rows[name].get("text"),
                             "measurement": rows[name].get("text_measure"), "pass": rows[name].get("text_fits") is True})
+    # The seat dialog's hold line is one of the sentences a player reads, whole, never a developer's note.
+    hold = rows.get("LabelHostSeatDlgReclaim", {})
+    if hold.get("text"):
+        results.append({"control": "LabelHostSeatDlgReclaim", "kind": "seat-hold-line", "text": hold["text"],
+                        "pass": re.fullmatch(r"Not held|Not held - its player is in the match|Held for its player, who is coming back now|"
+                                             r"Held for its player( - .+)?", hold["text"]) is not None})
     hint = rows.get("LabelHostSeatDlgActionHint", {})
     if rows.get("ButtonHostSeatDlgKick", {}).get("enabled"):
         results.append({"control": "LabelHostSeatDlgActionHint", "kind": "selected-seat-hint", "text": hint.get("text"),
@@ -150,6 +158,7 @@ SIZE_GATES = (
     ("lobby-name", "1280x720"),
     ("lobby-name", "1920x1080"),
     ("live", "1280x720"),
+    *(("in-match", size) for size in ("640x360", "960x540", "1280x720")),
 )
 # CalculateWidth adds each printable glyph's m_Width (GUIFont.cpp:333). FontSmall's
 # thinnest printable cell is 2 px, so 139 characters exceed the 276 px status row.
@@ -413,7 +422,24 @@ def unavailable_reason(case, platform=None):
     """Why this platform cannot drive a case, or None. The case is refused with that reason as its verdict."""
     if (platform or os.name) != "nt" and case == "net-host-left-early":
         return "suspends the client mid-launch through ntdll's NtSuspendProcess on the win32 runner's process handle (Windows only)"
+    if (platform or os.name) != "nt" and case == "in-match":
+        return "suspends a newcomer mid-launch through ntdll's NtSuspendProcess on the win32 runner's process handle (Windows only)"
     return None
+
+
+def run_delegated(options, case, size):
+    """A case another driver owns, at one size; that driver's result.json decides the row. It takes about fifteen ports up from --port."""
+    root = options.out / case / size
+    root.parent.mkdir(parents=True, exist_ok=True)
+    argv = [sys.executable, "-u", str(Path(__file__).with_name("test_in_match_ux.py")), "--repo", str(options.repo), "--out", str(root),
+            "--case", "all", "--size", size, "--port", str(options.port)]
+    process = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    (root.parent / f"{size}-driver.log").write_text(process.stdout + process.stderr, encoding="utf-8")
+    result_path = root / "result.json"
+    result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.exists() else {}
+    red = [f"{row['case']}/{row['size']}: {check['check']}" for row in result.get("rows", []) for check in row.get("checks", []) if not check["pass"]]
+    return {"pass": process.returncode == 0 and result.get("pass") is True, "case": case, "size": size, "argv": argv, "exit": process.returncode,
+            "result": str(result_path), "red": red, "captures": []}
 
 
 def unavailable_row(case, size, reason):
@@ -559,7 +585,7 @@ def repair_probe(who, root, roomy=True):
              {"op": "mouse_up", "control": "NetworkSeatsOptions"},
              {"op": "wait", "control": "NetworkSeatsOptionsText", "equals": {"visible": True}},
              {"op": "assert_control", "control": "NetworkSeatsOptionsText", **({"fits": True} if roomy else {}),
-              "text_contains": "Repair match: Ready - pause menu > Match Options" if who == "host" else "Frame redundancy:"},
+              "text_contains": "Repair match: Ready - pause menu > Match Details" if who == "host" else "Frame redundancy:"},
              *([] if roomy else [menu_step("assert_vertical_scroll NetworkSeatsOptionsText")]),
              {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
              {"op": "wait", "panel_open": False},
@@ -1203,6 +1229,7 @@ def scripts(case, port, root, size="960x540"):
                 "activate ButtonHostSeatDetails0\nwait 3\nassert_visible HostSeatDialog 1\n"
                 "assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
                 "assert_label LabelHostSeatDlgActionHint The host's own seat is never kicked or banned.\n"
+                "assert_label LabelHostSeatDlgReclaim Not held\n"
                 "activate ButtonHostSeatDlgClose\nwait 3\nassert_visible HostSeatDialog 0\n"
                 # H34 on the two-peer fixture: the adopted config names both seated humans, the
                 # lobby sits LAN only, and the bound port refuses the edit mid-session.
@@ -1317,6 +1344,7 @@ def scripts(case, port, root, size="960x540"):
                   "activate TabHostPageSeats\nwait 3\nassert_visible CollectionBoxHostPageSeats 1\n"
                   "activate ButtonHostSeatDetails1\nwait 3\nassert_visible HostSeatDialog 1\n"
                   "assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
+                  "assert_label LabelHostSeatDlgActionHint Only the host can change who plays here.\n"
                   "activate ButtonHostSeatDlgClose\nwait 3\nassert_visible HostSeatDialog 0\n"
                   "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
                   "dump_lobby\ndump_host_options\n"
@@ -1445,6 +1473,7 @@ def scripts(case, port, root, size="960x540"):
             text += checks(control, "HostSeatDialog")
         # H09/H10: the host's own seat is never kickable - the row stays pressable-looking but off.
         text += ("assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
+                 "assert_label LabelHostSeatDlgReclaim Not held\n"
                  "dump_host_options\nactivate ButtonHostSeatDlgClose\nwait 3\n"
                  "assert_visible HostSeatDialog 0\n")
         # H07-H20 Rules: the L33 row keeps the ledger's exact label and pair of answers.
@@ -2847,6 +2876,9 @@ def self_test():
     ran, refused = {"pass": True, "case": "repair", "size": "960x540"}, unavailable_row("net-host-left-early", "960x540", reason)
     row("ran-rows-decide-with-the-refusal-named", summarize([ran, refused]) == (True, "PASS", [f"net-host-left-early/960x540: {reason}"]))
     row("a-red-row-stays-red", summarize([{**ran, "pass": False}, refused])[:2] == (False, "FAIL"))
+    row("in-match-runs-by-name-at-its-three-sizes", not any(name in DELEGATED_CASES for name, _ in planned_cases("all", "640x360", True))
+        and planned_cases("in-match", "640x360") == [("in-match", size) for size in ("640x360", "960x540", "1280x720")])
+    row("posix-refuses-the-in-match-case-by-name", "NtSuspendProcess" in str(unavailable_reason("in-match", "posix")) and not unavailable_reason("in-match", "nt"))
     row("nothing-ran-is-unavailable-not-green", summarize([refused])[:2] == (False, "UNAVAILABLE"))
     print(f"[menu-readback-self-test] {'PASS' if all(results) else 'FAIL'} {sum(results)}/{len(results)}")
     return 0 if all(results) else 1
@@ -2856,7 +2888,7 @@ def planned_cases(case, requested, all_sizes=False):
     rows = []
     for name in CASES if case == 'all' else (case,):
         sizes = [requested]
-        if name != 'oracles' and (all_sizes or name in ('net-chat', 'lobby-name', 'live')):
+        if name != 'oracles' and (all_sizes or name in ('net-chat', 'lobby-name', 'live', *DELEGATED_CASES)):
             sizes.extend(size for key, size in SIZE_GATES if key == name and size not in sizes)
         rows.extend((name, size) for size in sizes)
     return rows
@@ -2868,7 +2900,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--case", choices=(*CASES, "all"), required=True)
+    parser.add_argument("--case", choices=(*CASES, *DELEGATED_CASES, "all"), required=True)
     parser.add_argument("--size", choices=("640x360", "960x540", "1280x720", "1920x1080", "2560x1440", "3840x2160"), required=True)
     parser.add_argument("--all-sizes", action="store_true",
                         help="also run every SIZE_GATES row; net-chat and lobby-name always do this")
@@ -2879,7 +2911,7 @@ def main():
     if not selected:
         parser.error('the selected size partition has no cases')
     if options.dry_run:
-        print(json.dumps(dict(cases=selected, engine_count=max(2 if name in PAIRED_CASES else 1 for name, _ in selected))))
+        print(json.dumps(dict(cases=selected, engine_count=max(4 if name in DELEGATED_CASES else 2 if name in PAIRED_CASES else 1 for name, _ in selected))))
         return 0
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("LEAD_FAMILY.lock exists; no engine launch")
@@ -2912,7 +2944,8 @@ def main():
         for size in sizes_for(case):
             options.size = size
             reason = unavailable_reason(case)
-            rows.append(unavailable_row(case, size, reason) if reason else run_case(options, case, options.out / case / size))
+            rows.append(unavailable_row(case, size, reason) if reason else run_delegated(options, case, size) if case in DELEGATED_CASES
+                        else run_case(options, case, options.out / case / size))
     passed, verdict, refused = summarize(rows)
     result = {"pass": passed, "verdict": verdict, "unavailable": refused, "driver_sha256": sha(__file__), "declared_cases": selected,
               "source_revision": options.revision, "exe_sha256": options.exe_sha, "port": options.port,

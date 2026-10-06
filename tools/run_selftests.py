@@ -41,6 +41,7 @@ SELFTESTS = [
     "net-reconnect",
     "net-reconnect-session",
     "net-world-join",
+    "net-directory",
     "net-rejoin-matrix",
     "net-roster",
     "camera-null-scene",
@@ -64,6 +65,7 @@ SELFTESTS = [
     "text-wrap",
     "save-refusal-diagnosis",
     "headless-render-cap",
+    "single-player-reference",
     "preview-invariance",
     "preview-binding-exhaustive",
     "joystick-updater",
@@ -270,6 +272,88 @@ def attempt_summary(scored, case):
     return {"dir": str(case), **{key: scored.get(key) for key in keys}}
 
 
+SP_REFERENCE_FILE = Path(__file__).with_name("single_player_reference_v2.json")
+SP_REFERENCE = json.loads(SP_REFERENCE_FILE.read_text(encoding="utf-8"))
+SP_REFERENCE_INDEX = (
+    "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n"
+    "\tAddActivity = GAScripted\n\t\tPresetName = Determinism PieSwitchSP\n\t\tSceneName = Grasslands\n"
+    "\t\tScriptPath = UserScenes.rte/PieSwitchSP.lua\n\t\tLuaClassName = PieSwitchSP\n\t\tMinTeamsRequired = 1\n"
+    "\t\tIsTestActivity = 1\n\t\tDefaultRequireClearPathToOrbit = 0\n\t\tDefaultFogOfWar = 0\n\t\tDefaultDeployUnits = 0\n"
+)
+SP_REFERENCE_HEXFLOAT = re.compile(rb"[-+]?0x[0-9a-f]+(?:\.[0-9a-f]*)?p[-+][0-9]+", re.I)
+
+
+def canonical_single_player_dump(raw):
+    """Keep every field and exact float value with one LF record terminator."""
+    exact = SP_REFERENCE_HEXFLOAT.sub(lambda match: float.fromhex(match[0].decode("ascii")).hex().encode("ascii"), raw)
+    return exact.replace(b"\r\n", b"\n")
+
+
+def reference_json_digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
+
+
+def run_single_player_reference(repo, make_run, case, timeout):
+    """The fixed pie-close reference checks every dump field and tick hash without a retained runtime."""
+    fixtures = repo / "tools/pie_lockstep/fixtures"
+    trace = case / "trace.json"
+    dump = case / "trace.json.simdump.txt"
+    argv = ["-scenario", "PieSwitchSP", "-seed", "42", "-max-ticks", "320", "-tick-hashes", "-num-lua-states", "4",
+            "-input-script", str(fixtures / "pie_open_then_next.txt"), "-out", str(trace)]
+    run = make_run(repo, argv, case, timeout, env={"CCCP_HEADLESS": "1", "CC_RUNNER_IGNORE_FULLSCREEN": "1", "CC_SIM_DUMP": "27:320"},
+                   expected=[trace, dump])
+    module = Path(run.cwd) / "Userdata/UserScenes.rte"
+    module.mkdir(exist_ok=True)
+    (module / "Index.ini").write_text(SP_REFERENCE_INDEX, encoding="utf-8")
+    (module / "PieSwitchSP.lua").write_bytes((fixtures / "PieSwitchSP.lua").read_bytes())
+    try:
+        record = run.start().finish()
+    finally:
+        run.close()
+    failures, observed = [], {}
+    if record.get("exit_code") != 0:
+        failures.append(f"single-player engine exit_code={record.get('exit_code')}")
+    if record.get("timed_out"):
+        failures.append("single-player engine timed out")
+    if not record.get("evidence_complete"):
+        failures.append("single-player run evidence is incomplete")
+    try:
+        raw = dump.read_bytes()
+        observed["dump_sha256"] = hashlib.sha256(raw).hexdigest()
+        observed["dump_bytes"] = len(raw)
+        portable = canonical_single_player_dump(raw)
+        dump.with_suffix(".canonical.txt").write_bytes(portable)
+        observed["portable_dump_sha256"] = hashlib.sha256(portable).hexdigest()
+        wanted_dump = ("dump_sha256", "dump_bytes", "portable_dump_sha256") if sys.platform == "win32" else ("portable_dump_sha256",)
+        for key in wanted_dump:
+            if observed[key] != SP_REFERENCE[key]:
+                failures.append(f"single-player {key} differs: got {observed[key]}, reference {SP_REFERENCE[key]}")
+        document = json.loads(trace.read_text(encoding="utf-8-sig"))
+        if len(document["runs"]) != 1:
+            raise ValueError(f"single-player trace has {len(document['runs'])} runs")
+        result = document["runs"][0]
+        hashes = result["tick_hashes"]
+        observed["tick_count"] = len(hashes)
+        if [row["tick"] for row in hashes] != list(range(1, 321)):
+            failures.append(f"single-player tick coverage differs: got {len(hashes)} rows")
+        if result["scenario"] != "PieSwitchSP" or result["seed"] != 42 or result["ticks"] != 320 or result["passed"] is not True:
+            failures.append("single-player scenario, seed, completion or tick count differs")
+        observed["tick_hashes_sha256"] = reference_json_digest(hashes)
+        compared = {key: result[key] for key in ("scenario", "seed", "ticks", "passed", "sim_config", "numeric", "strings", "final_total_hash", "tick_hashes")}
+        compared["numeric"] = {key: value for key, value in compared["numeric"].items() if key != "__wall_seconds"}
+        observed["compared_trace_sha256"] = reference_json_digest(compared)
+        for key in ("tick_hashes_sha256", "compared_trace_sha256"):
+            if observed[key] != SP_REFERENCE[key]:
+                failures.append(f"single-player {key} differs: got {observed[key]}, reference {SP_REFERENCE[key]}")
+    except (OSError, ValueError, TypeError, KeyError, OverflowError) as error:
+        failures.append(f"single-player reference artifacts are invalid: {error}")
+    scored = {"pass": not failures, "reason": "; ".join(failures), "fail_lines": failures,
+              "exit_code": record.get("exit_code"), "timed_out": record.get("timed_out"), "binary": record.get("exe_sha256"),
+              "reference": SP_REFERENCE, "observed": observed}
+    (case / "reference_comparison.json").write_text(json.dumps(scored, indent=2), encoding="utf-8")
+    return scored
+
+
 def run_row(options, make_run, name, case, sanitizer):
     if name in LOAD_SENSITIVE:
         budget = max(options.timeout, SANITIZER_ROW_TIMEOUT.get(name, {}).get(sanitizer, 0))
@@ -306,6 +390,8 @@ def run_row(options, make_run, name, case, sanitizer):
         case_data = run_case(options.repo, case, options.timeout)
         scored = score_detect(case_data, sanitizer)
         scored["binary"] = case_data.get("exe_sha256")
+    elif name == "single-player-reference":
+        scored = run_single_player_reference(options.repo, make_run, case, options.timeout)
     elif name == "preview-invariance":
         from test_preview_invariance import run_case as invariance_case  # noqa: PLC0415
 
@@ -331,6 +417,17 @@ def run_row(options, make_run, name, case, sanitizer):
         scored["binary"] = record.get("exe_sha256")
         if walk:
             scored.update(budget_s=budget, elapsed_s=record.get("elapsed_seconds"), walked_classes=len(BINDING_WALK_CLASS.findall(stdout)))
+    if name == "net-directory":
+        service_log = case / "service-tests.log"
+        with service_log.open("w", encoding="utf-8") as stream:
+            service = subprocess.run([sys.executable, str(options.repo / "tools/session_directory/test_session_directory.py")],
+                                     cwd=options.repo, stdout=stream, stderr=subprocess.STDOUT, timeout=options.timeout,
+                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        scored["service_exit_code"] = service.returncode
+        scored["service_log"] = str(service_log)
+        if service.returncode != 0:
+            scored["pass"] = False
+            scored["reason"] += f"; directory service tests exited {service.returncode}: {service_log}"
     return scored
 
 

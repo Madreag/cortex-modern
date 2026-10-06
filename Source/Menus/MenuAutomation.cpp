@@ -525,8 +525,10 @@ namespace RTE::MenuAutomation {
 		const auto summary = text.find("\nRTT ");
 		if (summary == std::string::npos) return "";
 		const std::string rest = text.substr(summary + 5);
-		if (!std::isdigit(static_cast<unsigned char>(rest[0]))) return "";
-		const int shown = std::atoi(rest.c_str());
+		// A link under a millisecond reads "<1": it is a measured 0 on both lines.
+		const auto value = [](const std::string& text) { return text.starts_with("<1") ? 0 : std::isdigit(static_cast<unsigned char>(text[0])) ? std::atoi(text.c_str()) : -1; };
+		const int shown = value(rest);
+		if (shown < 0) return "";
 		const bool host = rest.find(" ms / max peer") == rest.find(" ms");
 		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 		int expected = -1;
@@ -534,9 +536,8 @@ namespace RTE::MenuAutomation {
 		for (std::string row; std::getline(rows, row);) {
 			if (row.size() < 4 || row[0] != 'P' || row.find(": Ping ") == std::string::npos) continue;
 			const int peer = std::atoi(row.c_str() + 1);
-			const std::string value = row.substr(row.find(": Ping ") + 7);
-			if (!std::isdigit(static_cast<unsigned char>(value[0])) || peer == snapshot.localPeerId) continue;
-			const int ping = std::atoi(value.c_str());
+			const int ping = value(row.substr(row.find(": Ping ") + 7));
+			if (ping < 0 || peer == snapshot.localPeerId) continue;
 			if (host) expected = std::max(expected, ping);
 			else if (peer == snapshot.hostPeerId) expected = ping;
 		}
@@ -652,11 +653,23 @@ namespace RTE::MenuAutomation {
 				auto* panel = g_MenuMan.GetNetworkPanel();
 				GUIControl* box = panel ? panel->GetControl("NetworkSeats") : nullptr;
 				Json missing = Json::array();
-				for (size_t row = 0; box && row < panel->AutomationSeatRowCount(); ++row) {
-					const std::string name = "NetworkSeatName" + std::to_string(row);
-					GUIControl* label = panel->GetControl(name);
-					const bool shown = label && Shown(label);
-					const Rect rect = label ? Rectangle(label->GetPanel()) : Rect{};
+				// Every player the roster calls for has a row on some page, the page shows its rows whole with every action, and
+				// a page that leaves players out offers the way to them.
+				const size_t implied = panel ? panel->AutomationRowsImplied() : 0;
+				const size_t listed = panel ? panel->AutomationRowsListed() : 0;
+				const size_t shownRows = panel ? panel->AutomationSeatRowCount() : 0;
+				if (box && Shown(box) && (listed != implied || (implied > 0 && shownRows == 0))) {
+					missing.push_back({{"control", "NetworkSeats"}, {"rows_implied", implied}, {"rows_listed", listed}, {"rows_shown", shownRows}});
+				}
+				std::vector<std::string> required;
+				for (size_t row = 0; box && row < shownRows; ++row) {
+					for (const std::string& name: panel->AutomationRowControls(row)) required.push_back(name);
+				}
+				if (box && shownRows < listed) required.push_back("NetworkSeatsMore");
+				for (const std::string& name: required) {
+					GUIControl* control = panel->GetControl(name);
+					const bool shown = control && Shown(control);
+					const Rect rect = control ? Rectangle(control->GetPanel()) : Rect{};
 					if (shown && Inside(rect, Rectangle(box->GetPanel()))) continue;
 					missing.push_back({{"control", name}, {"shown", shown}, {"rect", rect}, {"panel", Rectangle(box->GetPanel())}});
 				}
@@ -703,7 +716,7 @@ namespace RTE::MenuAutomation {
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
-			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "status_line" || command == "ghost_watch" || command == "text_watch" || command == "assert_list_rows" ||
+			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "assert_roster_text" || command == "status_line" || command == "ghost_watch" || command == "text_watch" || command == "assert_list_rows" ||
 			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "dump_world_ownership" || command == "fire_assert" || command == "fire_abort" || command == "fire_worker_throw" ||
 			command == "window_event" || command == "assert_window_focus" || command == "game_key" || command == "assert_game_input" || command == "open_local_pause" || command == "meta_command";
 	}
@@ -1109,6 +1122,17 @@ namespace RTE::MenuAutomation {
 			panel->SetStatusProbeLine(text);
 			observation = "status line " + std::to_string(text.size());
 			return true;
+		}
+		if (command == "assert_roster_text") {
+			// The players box the lobby draws beside its own column: the text it drew last frame carries the line asked for.
+			auto* panel = g_MenuMan.GetNetworkPanel();
+			if (!panel) return false;
+			const std::string rest{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};
+			const auto start = rest.find_first_not_of(' ');
+			const std::string wanted = start == std::string::npos ? std::string() : rest.substr(start);
+			const auto& drawn = panel->GetRosterWrap();
+			observation = Json{{"active", drawn.active}, {"text", drawn.source}, {"wanted", wanted}}.dump();
+			return drawn.active && !wanted.empty() && drawn.source.find(wanted) != std::string::npos;
 		}
 		if (command == "assert_roster_fits") {
 			auto* panel = g_MenuMan.GetNetworkPanel();

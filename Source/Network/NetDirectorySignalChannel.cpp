@@ -139,6 +139,20 @@ namespace RTE {
 		Configure(std::move(baseUrl), std::move(installKey), std::move(certPinSha256), std::move(sessionId), "client:" + m_JoinNonce, m_JoinNonce);
 	}
 
+	void NetDirectorySignalChannel::RebindHost(const std::string& sessionId, const std::string& sessionToken) {
+		if (m_LocalPeer != "host" || m_BaseUrl.empty() || !IsSessionId(sessionId) || !IsPeerSecret(sessionToken)) return;
+		AbortRequest();
+		m_SessionPath = "/v1/sessions/" + sessionId;
+		m_Credential = sessionToken;
+		for (auto& header: m_Headers) if (header.first == "X-Session-Token") header.second = sessionToken;
+		// A recovered service can start its per-peer sequences over.
+		m_Cursor = 0;
+		m_NextPollMs = 0;
+		m_DrainPolled = false;
+		m_LastError.clear();
+		SetState(State::Open);
+	}
+
 	void NetDirectorySignalChannel::Configure(std::string baseUrl, std::string installKey, std::string certPinSha256, std::string sessionId, std::string localPeer, std::string credential) {
 		AbortRequest();
 		m_Outbox.clear();
@@ -292,7 +306,7 @@ namespace RTE {
 		m_LastError = reason;
 		DiagnosticLine() << "[net-directory-signal] " << Role() << " failed: " << reason << (detail.empty() ? "" : " (" + detail + ")") << std::endl;
 		AbortRequest();
-		m_Outbox.clear();
+		if (m_LocalPeer != "host") m_Outbox.clear();
 		SetState(State::Failed);
 	}
 
@@ -358,6 +372,7 @@ namespace RTE {
 			ScheduleRetry(nowMs);
 			return;
 		}
+		if (m_LastError == NetDirectoryClient::c_CapacityNotice) m_LastError.clear();
 		m_Outbox.pop_front();
 		++m_SignalsPosted;
 		m_BackoffMs = 0;
@@ -400,7 +415,12 @@ namespace RTE {
 	void NetDirectorySignalChannel::HandleRefusal(const char* what, const Reply& reply, uint64_t nowMs) {
 		const std::string code = ErrorCode(reply.body);
 		const std::string status = std::string(what) + ": HTTP " + std::to_string(reply.statusCode) + (code.empty() ? "" : " " + code);
-		if (reply.statusCode == 429) {
+		if (NetDirectoryClient::IsCapacityReply(reply)) {
+			NoteError(NetDirectoryClient::c_CapacityNotice);
+			m_PostBackoffMs = NextBackoff(m_PostBackoffMs);
+			m_NextPostMs = nowMs + m_PostBackoffMs;
+			if (std::string(what) != "post") ScheduleRetry(nowMs);
+		} else if (reply.statusCode == 429) {
 			const uint64_t waitMs = RetryAfterMs(reply.body);
 			NoteError(status + ", retrying in " + std::to_string(waitMs) + " ms");
 			m_NextAttemptMs = nowMs + waitMs;

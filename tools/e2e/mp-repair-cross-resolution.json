@@ -21,7 +21,7 @@
       "run": "injected-desync",
       "peer": "host",
       "screen": "ResyncOverlay",
-      "what": "The automatic repair displays Resyncing the match after the deliberately injected divergence; its toast names the repair's cause (Match repair started: whose game fell out of step, at which frame) and never repeats the screen's line.",
+      "what": "The automatic repair displays Restoring the shared match state after the deliberately injected divergence; its toast names the repair's cause (Match repair started: whose game fell out of step, at which frame) and never repeats the screen's line.",
       "assert": "Saved ResyncOverlay frames and native divergence/host-snapshot reload lines; no repair button is pressed.",
       "log_regex": [
         "sim state diverged at tick \\d+",
@@ -100,7 +100,7 @@
       "run": "injected-desync",
       "peer": "client",
       "screen": "ResyncOverlay",
-      "what": "The automatic repair displays Resyncing the match after the deliberately injected divergence; its toast names the repair's cause (Match repair started: whose game fell out of step, at which frame) and never repeats the screen's line.",
+      "what": "The automatic repair displays Restoring the shared match state after the deliberately injected divergence; its toast names the repair's cause (Match repair started: whose game fell out of step, at which frame) and never repeats the screen's line.",
       "assert": "Saved ResyncOverlay frames and native divergence/host-snapshot reload lines; no repair button is pressed.",
       "log_regex": [
         "sim state diverged at tick \\d+",

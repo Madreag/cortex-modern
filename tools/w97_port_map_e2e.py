@@ -230,7 +230,7 @@ def main() -> int:
     for path in (log, fake_log):
         if path.exists():
             path.unlink()
-    svc = subprocess.Popen([sys.executable, str(REPO / "tools/session_directory/session_directory.py"), "--bind", "127.0.0.1", "--port", str(SERVICE_PORT),
+    svc = subprocess.Popen([sys.executable, str(REPO / "tools/session_directory/session_directory.py"), "--bind", "127.0.0.1", "--caller-mode", "direct", "--create-owner-key", "--port", str(SERVICE_PORT),
                             "--cert", str(CERT), "--key", str(KEY), "--log-file", str(log), "--heartbeat-s", "2", "--expiry-s", "20"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     fake = subprocess.Popen([sys.executable, str(REPO / "tools/net_port_map_fake.py"), "--natpmp-port", str(FAKE_UDP_PORT),

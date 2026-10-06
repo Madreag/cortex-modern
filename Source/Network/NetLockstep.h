@@ -578,6 +578,7 @@ namespace RTE {
 		bool returnsInPlace = false; //!< This seat's return replays on its own state and connection: it starts its round before its reclaim frame.
 		uint64_t startParkMs = 0; //!< The start work THIS peer's machine measured, as it published it.
 		uint32_t pingMs = 0;
+		bool pingMeasured = false; //!< This machine has measured the link's round trip; a LAN's can read 0 ms. Local only.
 		uint32_t jitterMs = 0;
 		uint16_t delayFrames = 0;
 		uint64_t reportedNextFrame = 0;

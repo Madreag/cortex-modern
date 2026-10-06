@@ -144,4 +144,8 @@ namespace RTE {
 		return IsP2P(peerId) ? m_P2P->GetPeerPingMs(Untag(peerId)) : m_Ip->GetPeerPingMs(peerId);
 	}
 
+	bool NetMuxTransport::IsPeerPingMeasured(NetPeerId peerId) const {
+		return IsP2P(peerId) ? m_P2P->IsPeerPingMeasured(Untag(peerId)) : m_Ip->IsPeerPingMeasured(peerId);
+	}
+
 } // namespace RTE

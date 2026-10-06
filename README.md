@@ -18,7 +18,7 @@ A community fork of the [Cortex Command Community Project](https://github.com/co
 ![Meson](https://img.shields.io/badge/Meson-macOS%20%2F%20Linux%20build-39207C?logo=meson&logoColor=white)
 ![MSBuild](https://img.shields.io/badge/Visual%20Studio-Windows%20build-5C2D91?logo=visualstudio&logoColor=white)
 
-<img src="docs/images/match.gif" alt="A two-player match: the network overlay in the corner, the seats panel opening on F6" width="800">
+<img src="docs/images/match.gif" alt="A two-player match: the network overlay in the corner, the players panel opening on F6" width="800">
 
 <sub>Recorded by the project's own test recorder on the alpha build. Top right: the network overlay (input delay, route, pace).</sub>
 
@@ -46,7 +46,7 @@ A community fork of the [Cortex Command Community Project](https://github.com/co
 | ⚡ **Feels like single player** | Your own soldier answers the instant you press. A player with a bad connection or a slow machine never slows anyone else down. | [How it works](#how-it-works) |
 | 🖥️ **Windows, macOS and Linux in one match** | Every machine runs the exact same simulation, bit for bit. Mixed-OS matches are a normal case, not a special one. | [How it works](#how-it-works) |
 | 🔁 **Leave and come back** | Drop out, crash, or close the game: the AI holds your seat and your soldiers keep fighting. Rejoin while the match runs. | [Menus](#the-new-menus-and-screens) |
-| 👑 **Host moderation** | A seats panel shows who holds what and why. Hand a held seat to a newcomer, kick, ban. Nobody loses a seat without the host's click. | [Menus](#the-new-menus-and-screens) |
+| 👑 **Host moderation** | The Players panel lists every player, a page at a time when they do not all fit, and why a place is held. While the match runs the host can hand a held seat to a newcomer, remove or ban a player. Nobody loses a seat without the host's click. | [Menus](#the-new-menus-and-screens) |
 | 💾 **Autosave and resume** | The host sets a checkpoint interval for the whole match. A match can be resumed from disk by everyone, even after the host's machine died. | [Menus](#the-new-menus-and-screens) |
 | 🌍 **Persistent worlds** | A match that keeps running while players join and leave. Latecomers watch, then take a seat when one opens. | [How it works](#how-it-works) |
 | 🧩 **Your mods, unchanged** | Mods run exactly as before. Void Wanderers is part of the test set. | [Mods](#mods) |
@@ -69,7 +69,7 @@ A community fork of the [Cortex Command Community Project](https://github.com/co
 2. Unpack anywhere. Start `Cortex Command.exe`. If SmartScreen asks, choose **More info → Run anyway**.
 3. **Host:** Main Menu → **Multiplayer** → type your name → **Host Game** → set the activity, scene and the number of players → **Create Lobby**.
 4. **Join:** Main Menu → **Multiplayer** → type your name → **Join Game** → pick the match from the list (or type the host's address and port) → **Connect**.
-5. When everyone is in the lobby, each joining player presses **Ready**, then the host presses **Start Match**. In the match, **F6** opens the seats panel; the network overlay in the corner shows input delay, route (direct or relay) and pace.
+5. When everyone is in the lobby, each joining player presses **Ready**, then the host presses **Start Match**. In the match, **F6** (or **Players** in the pause menu) opens the Players panel; the status box in the corner says what is happening, and with the detailed network statistics setting on, it adds input delay, round trip and pace.
 
 </details>
 
@@ -95,8 +95,8 @@ A community fork of the [Cortex Command Community Project](https://github.com/co
 **Troubleshooting**
 
 - *Nobody can see my match.* The game list is served by the directory service at `directory.broserver.com`. If it is unreachable, the host can share its address and port, and players type them into Join Game.
-- *We connect, but the overlay says "via relay".* Your internet did not allow a direct route. The relay adds a few milliseconds and costs nothing. To insist on direct, set **Settings → Network → Connection** to *Direct only* on both machines (it may then fail to connect).
-- *A player's soldier is "held".* Their inputs stopped arriving (lag spike, alt-tab, a crash). The AI plays the seat until they are back. The seats panel (F6) says why.
+- *We connect, but the status box says "connected through a relay".* With **Connection** on *Automatic*, your internet did not allow a direct route, so the game connected through the relay instead; with *Relay only* chosen, it always connects this way. It costs nothing. To insist on direct, set **Settings → Network → Connection** to *Direct only* on both machines (it may then fail to connect).
+- *A player's soldier is "held".* Their inputs stopped arriving (lag spike, alt-tab, a crash). The AI plays the seat until they are back. The Players panel (F6) says why.
 - *Everything got slower when someone joined.* It should not. If it did, it is a bug: see [Reporting a bug](#reporting-a-bug).
 
 ---
@@ -110,8 +110,8 @@ A community fork of the [Cortex Command Community Project](https://github.com/co
 | <img src="docs/images/host-options-seats.png" alt="Host options: Seats" width="440"> | **Host options: Seats.** How many players the lobby seats, each seat's team, its input delay (automatic by default) and its state. **Details** opens the seat. |
 | <img src="docs/images/host-options-network.png" alt="Host options: Network" width="440"> | **Host options: Network.** **Internet: NAT traversal (STUN)** lets players behind home routers connect directly; **Relay (TURN)** is off, from the directory (Cloudflare), or your own server. Every row has a one-line hint naming its consequence. The **Delay / session** tab holds the slow-player bound and what happens when a player falls behind. |
 | <img src="docs/images/recovery.png" alt="Host options: Recovery" width="440"> | **Host options: Recovery.** Automatic match repair; the **Return window** for a dropped player; authenticated rejoin; **Autosave checkpoints** every 60 seconds to 60 minutes, or off; **World history** and the **Catch-up limit** for persistent worlds. |
-| <img src="docs/images/net-overlay.png" alt="The in-match network overlay" width="440"> | **In the match.** The overlay: input delay in ticks and milliseconds, your route (*via direct* or *via relay*), the slowest peer's round trip, and the pace. **F6** opens the seats panel: held seats and why, applications for a seat, kick and ban. |
-| <img src="docs/images/match-seats.jpg" alt="The seats panel open during a match" width="440"> | **The seats panel.** The match continues while it is open. Chat lines sit at the top of the screen; a toast names what just happened (a player joined, the match paused). |
+| <img src="docs/images/net-overlay.png" alt="The in-match network overlay" width="440"> | **In the match.** The status box says what is happening and who must act - *Everyone is connected*, *Waiting for Ana's connection*, *The AI is playing for Ana* - and how each player is connected. With the detailed network statistics setting on (Settings → Network) it adds the input delay, the round trip and the pace. **F6**, or **Players** in the pause menu, opens the Players panel: every player and their state, the requests for a held place, keep, give away, remove and ban. |
+| <img src="docs/images/match-seats.jpg" alt="The players panel open during a match" width="440"> | **The Players panel.** The match continues while it is open, unless someone has paused it for everyone. Chat lines sit at the top of the screen; a toast names what just happened (a player joined, the match paused). |
 
 Not pictured: **Settings → Network** (your **Connection** setting, the STUN list, your own relay, the directory address, diagnostics), the post-match summary with rematch, and the **Rejoin Match** offer on the Multiplayer menu when a match of yours is still running.
 

@@ -164,7 +164,7 @@
       "peer": "host",
       "screen": "game",
       "mark": "host-seats-after-leave",
-      "what": "After the leave the host's Seats panel holds the seat for its player and names why: Held - AI in control / Left N s ago.",
+      "what": "After the leave the host's Players panel holds the seat for its player and names why: Held - AI in control / Left N s ago.",
       "probe_steps": [
         4,
         5
@@ -197,19 +197,24 @@
         600,
         3600
       ],
-      "what": "A newcomer applies for the held seat and the host accepts it in the Seats panel.",
+      "what": "A newcomer asks for the held seat; the host picks the request and lets them join in the Players panel, which names the consequence before the second press.",
       "log_regex": [
         "\\[net-moderation\\] substitute seat=1 applicant=\\d+ result=Ok"
       ],
       "probe_steps": [
         8,
-        9,
-        10,
-        11,
-        12,
         13,
         14,
-        15
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24
       ],
       "readback": [
         {
@@ -221,20 +226,28 @@
           "contains": "newcomer"
         },
         {
-          "step": 9,
+          "step": 13,
           "path": [
             "control",
             "text"
           ],
-          "contains": "Seat 1"
+          "contains": "leaver"
         },
         {
-          "step": 10,
+          "step": 14,
           "path": [
             "control",
             "enabled"
           ],
           "equals": true
+        },
+        {
+          "step": 20,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "newcomer takes leaver's place"
         }
       ]
     },

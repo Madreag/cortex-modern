@@ -40,6 +40,7 @@ SUITES = (
     ("snapshot-runtime", ["snapshot_runtime.py", "--self-test"]),
     ("print-discipline", ["test_print_discipline.py"]),
     ("menu-readback-platform", ["test_menu_readback.py", "--self-test"]),
+    ("in-match-ux", ["test_in_match_ux.py", "--self-test"]),
     ("main-arg-loop", ["test_main_arg_loop.py"]),
     ("checkpoint-field-stamps", ["test_checkpoint_field_stamps.py"]),
     ("selftest-sanitizer-rows", ["test_run_selftests.py"]),

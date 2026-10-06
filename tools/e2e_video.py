@@ -1078,7 +1078,7 @@ SCREEN_WATCH_RULES = {
     "layout": ("Every shown label's text fits its own rect, its rect sits inside its panel and the screen.", "layout always"),
     "duplicates": ("No two shown overlay controls carry the same line at once (the status strip and a toast never stack one event).", "duplicates always"),
     "held-reads-held": ("A seat kept for its player never reads 'Left' on another screen while it is held.", "forbid remote_held Left - AI in control"),
-    "own-hold-line": ("The held player's own screen says it is held from the hold's first frame to the frame its control returns.", "require local_held Held - AI in control"),
+    "own-hold-line": ("The held player's own screen says the AI plays for them from the hold's first frame to the frame its control returns.", "require local_held until you are back"),
     "rtt": ("NET STATUS's round-trip summary agrees with the per-player pings listed beside it.", "rtt always"),
     "seat-rows": ("Every seat the open seats panel lists has its row drawn inside the panel.", "seat_rows panel_open"),
 }

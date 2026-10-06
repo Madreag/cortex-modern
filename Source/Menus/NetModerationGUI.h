@@ -17,6 +17,7 @@ namespace RTE {
 	class GUICollectionBox;
 	class GUIControl;
 	class GUIButton;
+	class GUIListBox;
 	class GUILabel;
 	class GUIFont;
 	class GUITextBox;
@@ -43,8 +44,14 @@ namespace RTE {
 		bool AutomationPostCommand(const std::string& name);
 		/// Reads a named label's text for a script assert.
 		bool AutomationLabelText(const std::string& name, std::string& text) const;
-		/// The seat rows the open panel lists, or zero while it is closed or shows the match options.
-		size_t AutomationSeatRowCount() const { return m_Open && !m_OptionsView ? std::min(m_Model.RowCount(), m_Seats.size()) : 0; }
+		/// The player rows the open panel lists, or zero while it is closed or shows the match's rules.
+		size_t AutomationSeatRowCount() const { return m_Open && !m_OptionsView ? m_RowsShown : 0; }
+		/// The rows the open host panel has across its pages, or zero while it is closed, shows the rules or is a client's.
+		size_t AutomationRowsListed() const { return m_Open && !m_OptionsView ? m_Rows.size() : 0; }
+		/// The rows the match's roster calls for on the open host panel, counted from the roster and not from the panel's rows.
+		size_t AutomationRowsImplied() const;
+		/// The controls a shown row must show for its player to be acted on, by name.
+		std::vector<std::string> AutomationRowControls(size_t slot) const;
 
 		/// The area an overlay element drew into on the last frame, in screen pixels.
 		struct OverlayRect {
@@ -154,18 +161,59 @@ namespace RTE {
 		/// surfaces the game loop did. The title screen, settings and every other menu leave it off.
 		static bool PostMatchLobbySurfaces();
 
+		/// One player's row on the host's panel: the name and state line, the host's actions and why any is off.
 		struct Controls {
 			GUILabel* name = nullptr;
 			GUILabel* detail = nullptr;
-			GUIButton* applicant = nullptr;
-			std::array<GUIButton*, 3> actions{};
+			GUILabel* hint = nullptr;
+			GUIListBox* requests = nullptr; //!< The people asking for this place; a pick is the one Let names.
+			std::array<GUIButton*, 3> actions{}; //!< Keep, Let join and Cancel, in NetModerationAction order.
+			GUIButton* remove = nullptr;
+			GUIButton* ban = nullptr;
 		};
+		/// A player the host's panel lists: everyone in the match but the host, the held first.
+		struct PanelRow {
+			uint8_t peer = 0;
+			std::string name;
+			std::string state; //!< The state line the roster reads for this player.
+			std::optional<NetModerationUx::Row> decision; //!< The held seat's model row, when the seat waits on the host.
+			std::optional<NetH4ModerationSeat> seat;      //!< The admission row Remove and Ban act on.
+			bool opened = false; //!< A place the host opened that a newcomer asks for: only Let acts on it.
+		};
+		/// An action that takes a second press: it names its consequence first.
+		struct Armed {
+			enum class Kind { Let, Remove, Ban } kind = Kind::Remove;
+			size_t slot = 0; //!< The row of controls it was armed on; it dies when another player shows there.
+			uint8_t peer = 0;
+			uint16_t stableSeat = 0;
+			uint32_t incarnation = 0;
+			NetPeerId applicant = c_InvalidNetPeerId;
+			uint64_t untilMs = 0;
+		};
+		/// A press on a row's control, kept until its release: it acts only if the release finds the same player there.
 		struct Press {
 			const GUIControl* button = nullptr;
-			NetModerationUx::Row row;
+			size_t slot = 0;
+			PanelRow row;
 		};
+		/// The row a slot of controls shows on the current page.
+		const PanelRow& SlotRow(size_t slot) const { return m_Rows[m_PageStart + slot]; }
+		/// A row's height on a panel of this inner width.
+		int RowHeight(const PanelRow& row, int inner) const;
+		/// Ends a kept press that can no longer act: its row is off the page, shows another player, or the mouse is up.
+		void DropStalePress(bool mouseDown);
+		/// Ends an armed action whose player no longer shows on the controls it was armed on.
+		void DropStaleArmed();
 		void Refresh();
-		void HandleEvents();
+		/// Builds the host's rows from the roster and the admission rows.
+		std::vector<PanelRow> BuildRows(const NetLobbySnapshot& snapshot);
+		/// Lays out and fills one slot's controls from its top; returns its height.
+		int FillRow(Controls& controls, const PanelRow& row, size_t slot, int top);
+		void HideRow(Controls& controls);
+		/// The second press of an armed action, or the first, which only says what the action will do.
+		void PressArmed(const PanelRow& row, size_t slot, Armed::Kind kind);
+		/// Reads the panel's events; returns whether there were any.
+		bool HandleEvents();
 		void DrawRoster(const NetLobbySnapshot& snapshot);
 		/// Creates presentation controls only when an online match draws them.
 		void CreateOverlay();
@@ -175,7 +223,10 @@ namespace RTE {
 		void DrawMatchStatus(const NetLobbySnapshot& snapshot);
 		void RecordStatusObservation(const NetLobbySnapshot& snapshot, bool hostLost, long long currentWaitMs);
 		void DrawMatchChat(const NetLobbySnapshot& snapshot);
-		void UpdateMatchChat(const NetLobbySnapshot& snapshot);
+		/// The chat's key every pass; its lines and whether it shows once a drawn frame (frameDue).
+		void UpdateMatchChat(const NetLobbySnapshot& snapshot, bool frameDue);
+		/// Whether the mouse moved or a button changed since the last pass; a click's edge lasts one pass.
+		bool MouseChanged();
 		/// Places the seats panel for the current screen height; a compact screen's top band keeps
 		/// one toast row between the strip and the panel, which the roster's slack absorbs.
 		void LayoutPanel();
@@ -236,21 +287,45 @@ namespace RTE {
 		GUILabel* m_Status = nullptr;
 		GUILabel* m_Roster = nullptr;
 		GUIButton* m_Close = nullptr;
+		/// Turns to the next page of players when they do not all fit.
+		GUIButton* m_More = nullptr;
 		/// The F6 panel's second view: the match's adopted options, the same read-only panel the pause
-		/// menu's Match Options and the lobby's Details show.
+		/// menu's Match Details and the lobby's Details show.
 		GUIButton* m_OptionsToggle = nullptr;
 		GUILabel* m_Options = nullptr;
 		bool m_OptionsView = false;
 		std::array<Controls, 3> m_Seats;
+		std::vector<PanelRow> m_Rows;
+		size_t m_RowsShown = 0;
+		size_t m_RowsImplied = 0; //!< The rows the roster called for at the last refresh, counted apart from m_Rows.
+		size_t m_PageStart = 0; //!< The first row of the page shown.
+		uint8_t m_PageFirstPeer = 0; //!< That row's player, so the page stays put while rows come and go.
+		bool m_PageTurn = false; //!< The next refresh shows the page after this one.
+		std::optional<Armed> m_Armed;
+		std::string m_PanelStatus; //!< The last action's line; empty leaves the model's.
 		std::optional<Press> m_Press;
 		NetModerationUx m_Model;
 		std::optional<NetH4ModerationResult> m_ActionResult;
 		std::vector<uint8_t> m_AnnouncedAISeats;
 		uint64_t m_DepartureFrame = 0;
+		std::unique_ptr<NetLobbySnapshot> m_FrameSnapshot; //!< The match as the last drawn frame read it, or Update when nothing drew.
+		uint64_t m_DrawSerial = 0; //!< Drawn frames.
+		uint64_t m_ReadDrawSerial = 0; //!< The drawn frame Update last followed the match at.
+		uint64_t m_ReadMs = 0; //!< When Update last followed the match.
+		bool m_ChatInMatch = false; //!< Whether the chat showed at the last drawn frame.
+		int m_LastMouseX = -1, m_LastMouseY = -1;
 		bool m_Open = false;
 		int m_RefreshCount = 0;
 		int m_RefreshChangeCount = 0;
 		uint64_t m_LastRefreshHash = 0;
 		long long m_LastRefreshMs = 0;
+		/// The CC_TEST_PANEL_COST lever: per-frame time of the panel's update and draw, closed and open apart.
+		struct FrameCost {
+			std::vector<long long> closedUs, openUs, closedUpdateUs, openUpdateUs;
+			long long frameUs = 0;
+			long long updates = 0; //!< Update passes in the window: the loop comes by many times a drawn frame.
+		};
+		std::unique_ptr<FrameCost> m_Cost;
+		void NoteFrameCost(long long drawUs);
 	};
 }

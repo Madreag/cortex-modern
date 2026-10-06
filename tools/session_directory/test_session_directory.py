@@ -4,26 +4,33 @@
 from __future__ import annotations
 
 import base64
+import ast
 import hashlib
 import hmac
 import http.client
 import json
 import logging
+import os
 import re
+import select
 import shutil
 import socket
+import struct
 import ssl
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import unittest
 import uuid
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
 
 import session_directory
+from world_ticks import compare_world_ticks, read_world_ticks
 from session_directory import IP_REG_PER_MIN, IP_REQ_PER_MIN, DualRateLimiter, LOGGER, RunningServer, spawn_server
 from unittest import mock
 
@@ -237,7 +244,7 @@ class DirectoryTests(unittest.TestCase):
         self.assertTrue(offer["iceServers"][0]["username"].startswith("1300:"))
         self.assertEqual(session_directory.SessionDirectory(300, 5).turn_max_ttl, session_directory.TURN_MAX_TTL)
         with self.assertRaises(SystemExit):
-            session_directory.parse_args(["--turn-max-ttl", "299"])
+            session_directory.parse_args(["--caller-mode", "direct", "--turn-max-ttl", "299"])
 
     def test_main_hands_the_ttl_cap_to_its_server(self) -> None:
         seen = {}
@@ -247,7 +254,7 @@ class DirectoryTests(unittest.TestCase):
             raise SystemExit(0)
         with mock.patch.object(session_directory, "spawn_server", side_effect=spawn):
             with self.assertRaises(SystemExit):
-                session_directory.main(["--insecure-http", "--port", "0", "--turn-max-ttl", "300"])
+                session_directory.main(["--caller-mode", "direct", "--insecure-http", "--port", "0", "--turn-max-ttl", "300"])
         self.assertEqual(seen.get("turn_max_ttl"), 300)
 
     def test_fixed_offer_and_secret_refusal(self) -> None:
@@ -328,6 +335,7 @@ class DirectoryTests(unittest.TestCase):
             "insecure_http": not self.use_tls,
             "cert": cert,
             "key": key,
+            "caller_mode": "direct",
         }
         if queue_idle_s is not None:
             kwargs["queue_idle_s"] = queue_idle_s
@@ -431,6 +439,529 @@ class DirectoryTests(unittest.TestCase):
     def assert_keys(self, body: dict[str, Any], keys: set[str]) -> None:
         self.assertEqual(set(body.keys()), keys)
 
+
+    def test_T3_startup_requires_an_explicit_safe_caller_mode(self) -> None:
+        with self.assertRaises(SystemExit, msg="T3: startup silently chose a caller mode"):
+            session_directory.parse_args(["--insecure-http"])
+        for mode in ("direct", "tunnel"):
+            with self.assertRaises((ValueError, SystemExit), msg="T3: a public listener accepted an unsafe caller mode"):
+                running = spawn_server(bind="0.0.0.0", port=47465, caller_mode=mode)
+                running.stop()
+            running = spawn_server(bind="127.0.0.1", port=47465, caller_mode=mode)
+            running.stop()
+
+    def _U1_owner_transition(self, unlist: bool) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        self.addCleanup(store.stop)
+        request = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
+        original = store.register(request, "192.0.2.200", 0, INSTALL_KEY)
+        beat = {"token": original["token"], "peer_count": 1, "seats_free": 1}
+        store.heartbeat(original["session_id"], beat, 55, INSTALL_KEY)
+        if unlist:
+            store.heartbeat(original["session_id"], dict(beat, listed=False), 60, INSTALL_KEY)
+        store.delete(original["session_id"], {"token": original["token"]}, 60)
+        for index in range(63):
+            key = f"{index:016x}"
+            row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), f"192.0.2.{index + 1}", 61, key)
+            store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 121, key)
+            store.delete(row["session_id"], {"token": row["token"]}, 121)
+        try:
+            row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.64", 122, INSTALL_KEY)
+            store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 122, INSTALL_KEY)
+        except OverflowError:
+            pass
+        stolen = False
+        try:
+            store.register(request, "192.0.2.70", 122, "0123456789abcdee")
+            stolen = True
+        except (PermissionError, OverflowError):
+            pass
+        cause = "unlisting" if unlist else "deletion"
+        self.assertFalse(stolen, f"U1: {cause} lost the final listed interval and let a stranger claim the world")
+        self.assertGreaterEqual(store._world_owners[original["session_id"]]["listed_s"], 60,
+                                f"U1: {cause} failed to retain established ownership")
+        resumed = store.register(dict(request, world_boot=2, resume_session_id=original["session_id"], resume_token=original["token"]), "192.0.2.200", 122, INSTALL_KEY)
+        self.assertEqual(resumed["session_id"], original["session_id"])
+
+    def test_U1_unlisting_preserves_the_final_listed_interval(self) -> None:
+        self._U1_owner_transition(True)
+
+    def test_U1_deletion_preserves_the_final_listed_interval(self) -> None:
+        self._U1_owner_transition(False)
+
+    def test_U1_every_heartbeat_credits_monotonic_durable_time(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "owners.json"
+            store = session_directory.SessionDirectory(300, 5, owner_state=path, create_owner_key=True)
+            self.addCleanup(store.stop)
+            row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.1", 0, INSTALL_KEY)
+            beat = {"token": row["token"], "peer_count": 1, "seats_free": 1}
+            store.heartbeat(row["session_id"], beat, 55, INSTALL_KEY)
+            for now in range(56, 61):
+                store.heartbeat(row["session_id"], beat, now, INSTALL_KEY)
+                self.assertEqual(store._world_owners[row["session_id"]]["listed_s"], now,
+                                 "U1: a heartbeat skipped listed-time credit in memory")
+            store.heartbeat(row["session_id"], dict(beat, listed=False), 61, INSTALL_KEY)
+            store.heartbeat(row["session_id"], dict(beat, listed=True), 70, INSTALL_KEY)
+            store.delete(row["session_id"], {"token": row["token"]}, 71)
+            store._wait_owner_write(store._owner_revision)
+            self.assertEqual(json.loads(path.read_text())[row["session_id"]]["listed_s"], 62,
+                             "U1: durable accounting lost credited or hidden intervals")
+
+    def test_U2_ice_launcher_supplies_required_startup_flags(self) -> None:
+        source = Path(__file__).resolve().parents[1] / "test_directory_ice_join.py"
+        tree = ast.parse(source.read_text())
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "start_service")
+        strings = [node.value for node in ast.walk(function) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+        self.assertIn("--caller-mode", strings, "U2: the ICE launcher omits the required caller mode")
+        self.assertIn("direct", strings, "U2: the local ICE launcher does not choose direct mode")
+        self.assertIn("--create-owner-key", strings, "U2: the fresh ICE directory omits owner-key creation")
+
+    def test_U3_parsed_saturation_answers_503_with_retry(self) -> None:
+        self.start(port=47470)
+        slots = self.server.httpd._handler_slots
+        held = 0
+        while held < session_directory.MAX_ACTIVE_HANDLERS:
+            self.assertTrue(slots.acquire(timeout=1), "U3: the initial fixture request did not release its handler")
+            held += 1
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=2)
+            conn.request("GET", "/v1/sessions", headers={"X-Install-Key": INSTALL_KEY})
+            try:
+                response = conn.getresponse()
+                body = json.loads(response.read())
+            except (OSError, http.client.HTTPException):
+                self.fail("U3: saturation closed a complete parsed request without an HTTP answer")
+            finally:
+                conn.close()
+            self.assertEqual(response.status, 503, "U3: parsed saturation did not answer 503")
+            self.assertEqual(body.get("error"), "full")
+            self.assertEqual(response.getheader("Retry-After"), "1", "U3: saturation omitted Retry-After")
+        finally:
+            for _ in range(held): slots.release()
+
+    def test_U3_saturation_logs_once_per_caller_per_minute(self) -> None:
+        self.start(port=47475)
+        slots = self.server.httpd._handler_slots
+        held = 0
+        while held < session_directory.MAX_ACTIVE_HANDLERS:
+            self.assertTrue(slots.acquire(timeout=1), "U3: the initial fixture request did not release its handler")
+            held += 1
+        try:
+            with mock.patch.object(LOGGER, "info") as logged:
+                for _ in range(2):
+                    self.assertEqual(self.call("GET", "/v1/sessions")[0], 503)
+                notices = [call for call in logged.call_args_list if call.args[0].startswith("request capacity full")]
+                self.assertEqual(len(notices), 1, "U3: repeated saturation logged the caller more than once in a minute")
+                with self.server.httpd._connection_lock:
+                    self.server.httpd._capacity_logged["127.0.0.1"] -= 60
+                self.server.httpd.service_actions()
+                self.assertNotIn("127.0.0.1", self.server.httpd._capacity_logged,
+                                 "U3: the capacity log retained an expired caller")
+                self.assertEqual(self.call("GET", "/v1/sessions")[0], 503)
+                notices = [call for call in logged.call_args_list if call.args[0].startswith("request capacity full")]
+                self.assertEqual(len(notices), 2, "U3: saturation did not log the caller in the next minute")
+        finally:
+            for _ in range(held): slots.release()
+
+    def test_U4_unfinished_headers_leave_honest_capacity(self) -> None:
+        self.start(port=47471)
+        sockets = []
+        try:
+            for _ in range(64):
+                connection = socket.create_connection(("127.0.0.1", self.port), timeout=1)
+                sockets.append(connection)
+                try: connection.sendall(b"GET /v1/sessions HTTP/1.1\r\nX-Test: ")
+                except OSError: pass
+            time.sleep(0.15)
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=1, source_address=("127.0.0.2", 0))
+            started = time.monotonic()
+            try:
+                conn.request("GET", "/v1/sessions", headers={"X-Install-Key": INSTALL_KEY})
+                response = conn.getresponse()
+                response.read()
+            except (OSError, http.client.HTTPException):
+                self.fail("U4: one caller's unfinished headers occupied every honest short handler")
+            finally:
+                conn.close()
+            self.assertEqual(response.status, 200, "U4: unfinished headers blocked another caller")
+            self.assertLess(time.monotonic() - started, 1, "U4: the honest caller waited for the attacker's header deadline")
+            live = 0
+            for connection in sockets:
+                connection.settimeout(0.02)
+                try:
+                    if connection.recv(1): live += 1
+                except socket.timeout: live += 1
+                except OSError: pass
+            self.assertLessEqual(live, 2, "U4: one socket address kept more than two unfinished headers")
+        finally:
+            for connection in sockets: connection.close()
+
+    def test_U3_all_200_callers_heartbeat_with_repeated_polls(self) -> None:
+        self.start(port=47472)
+        self.server.store.caller_mode = "tunnel"
+        rows = []
+        def request(index, method, path, body=None):
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30 if method == "GET" else 14)
+            headers = {"X-Install-Key": f"{index + 1000:016x}", "CF-Connecting-IP": f"198.51.{index // 250}.{index % 250 + 1}"}
+            try:
+                conn.request(method, path, body=json.dumps(body) if body is not None else None, headers=headers)
+                response = conn.getresponse()
+                return response.status, json.loads(response.read()), response.getheader("Retry-After")
+            finally:
+                conn.close()
+        for index in range(200):
+            status, row, _ = request(index, "POST", "/v1/sessions", sample_register())
+            self.assertEqual(status, 200)
+            rows.append(row)
+        gate = threading.Barrier(401)
+        stop = threading.Event()
+        beats, polls, errors = {}, [], []
+        result_lock = threading.Lock()
+        def polling(index):
+            gate.wait()
+            while not stop.is_set():
+                try:
+                    status, body, retry = request(index, "GET", f"/v1/sessions/{rows[index]['session_id']}/signals?peer=client:{index:016x}&wait=25")
+                    with result_lock: polls.append((index, status, body.get("error"), retry))
+                    pause = int(retry or body.get("retry_after_s", 0))
+                    if pause: stop.wait(pause)
+                except (OSError, http.client.HTTPException) as error:
+                    with result_lock: errors.append((index, "poll", type(error).__name__))
+                    return
+        def heartbeat(index):
+            gate.wait()
+            for wave in range(3):
+                started = time.monotonic()
+                deadline = started + 15
+                try:
+                    while True:
+                        status, _, retry = request(index, "POST", f"/v1/sessions/{rows[index]['session_id']}/heartbeat",
+                                                   {"token": rows[index]["token"], "peer_count": 1, "seats_free": 1})
+                        if status != 503 or time.monotonic() + int(retry or 1) >= deadline: break
+                        time.sleep(int(retry or 1))
+                    with result_lock: beats[index, wave] = (status, time.monotonic() - started)
+                    if wave < 2: time.sleep(1)
+                except (OSError, http.client.HTTPException) as error:
+                    with result_lock: errors.append((index, "heartbeat", type(error).__name__))
+                    return
+        pollers = [threading.Thread(target=polling, args=(index,)) for index in range(200)]
+        workers = [threading.Thread(target=heartbeat, args=(index,)) for index in range(200)]
+        try:
+            for worker in pollers + workers: worker.start()
+            gate.wait()
+            for worker in workers: worker.join(45)
+        finally:
+            stop.set()
+            for worker in pollers + workers: worker.join(30)
+        self.assertFalse(any(worker.is_alive() for worker in pollers + workers), "U3: a worker still ran when the results were scored")
+        self.assertEqual(len(errors), 0, "U3: saturation dropped an honest caller instead of answering: " + str(errors[:3]))
+        answered = sum(all(beats.get((index, wave), (0, 15))[0] == 200 and beats[index, wave][1] < 15 for wave in range(3)) for index in range(200))
+        self.assertEqual(answered, 200, f"U3: only {answered}/200 honest callers received all heartbeat answers inside the 15 s lease")
+        self.assertEqual({index for index, *_ in polls}, set(range(200)), "U3: not every polling caller completed a response")
+        self.assertTrue(all(status == 200 or (status == 503 and retry == "1") for _, status, _, retry in polls),
+                        "U3: a saturated poll omitted its 503 retry answer")
+        self.assertGreater(len(polls), 200, "U3: the 200-caller run did not exercise repeated polling")
+        print(f"[directory-load] PASS U3 heartbeats={answered}/200 waves=3 replies={len(beats)} polls={len(polls)} max_heartbeat_s={max(value[1] for value in beats.values()):.3f}", flush=True)
+
+    def test_T4_subnet_churn_cannot_claim_an_established_world(self) -> None:
+        with mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 64):
+            store = session_directory.SessionDirectory(300, 5)
+            self.addCleanup(store.stop)
+            request = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
+            original = store.register(request, "192.0.2.200", 0, INSTALL_KEY)
+            store.heartbeat(original["session_id"], {"token": original["token"], "peer_count": 1, "seats_free": 1}, 60, INSTALL_KEY)
+            store.delete(original["session_id"], {"token": original["token"]}, 61)
+            for index in range(65):
+                key = f"{index:016x}"
+                try:
+                    row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), f"192.0.2.{index + 1}", 61, key)
+                    store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 121, key)
+                    store.delete(row["session_id"], {"token": row["token"]}, 122)
+                except OverflowError:
+                    pass
+            stolen = False
+            try:
+                store.register(request, "192.0.2.70", 122, "0123456789abcdee")
+                stolen = True
+            except (PermissionError, OverflowError):
+                pass
+            recovered = store.register(dict(request, world_boot=2, resume_session_id=original["session_id"], resume_token=original["token"]), "192.0.2.200", 122, INSTALL_KEY)
+            self.assertFalse(stolen, "T4: subnet churn let a stranger claim an established world")
+            self.assertEqual(recovered["session_id"], original["session_id"], "T4: retained capacity refused an established owner's resume")
+            self.assertIn(original["session_id"], store._world_owners, "T4: subnet churn evicted an established owner")
+
+    def test_T4_established_capacity_refuses_new_worlds(self) -> None:
+        with mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 1):
+            store = session_directory.SessionDirectory(300, 5)
+            self.addCleanup(store.stop)
+            request = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
+            row = store.register(request, "192.0.2.1", 0, INSTALL_KEY)
+            store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 60, INSTALL_KEY)
+            store.delete(row["session_id"], {"token": row["token"]}, 61)
+            with self.assertRaises(OverflowError, msg="T4: a table of established owners admitted a new world"):
+                store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "198.51.100.1", 61, INSTALL_KEY)
+            resumed = store.register(dict(request, world_boot=2, resume_session_id=row["session_id"], resume_token=row["token"]), "192.0.2.1", 61, INSTALL_KEY)
+            self.assertEqual(resumed["session_id"], row["session_id"])
+
+    def test_T4_retained_shares_cover_ipv4_and_ipv6_subnets(self) -> None:
+        for prefix in ("198.51.100.", "2001:db8:abcd:"):
+            store = session_directory.SessionDirectory(300, 5)
+            self.addCleanup(store.stop)
+            for index in range(65):
+                source = prefix + (str(index + 1) if prefix.endswith(".") else f"{index + 1:x}::1")
+                row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), source, 0, INSTALL_KEY)
+                store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 0, INSTALL_KEY)
+                store.delete(row["session_id"], {"token": row["token"]}, 1)
+            self.assertLessEqual(len(store._world_owners), session_directory.MAX_WORLD_OWNERS_PER_SOURCE,
+                                 "T4: addresses in one subnet exceeded its retained-owner share")
+
+    def test_T4_failed_retirement_preserves_the_old_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 1):
+            store = session_directory.SessionDirectory(300, 5, owner_state=Path(directory) / "owners.json", create_owner_key=True)
+            self.addCleanup(store.stop)
+            original = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.1", 0, INSTALL_KEY)
+            store.heartbeat(original["session_id"], {"token": original["token"], "peer_count": 1, "seats_free": 1}, 0, INSTALL_KEY)
+            store.delete(original["session_id"], {"token": original["token"]}, 1)
+            incoming = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "198.51.100.1", 1, INSTALL_KEY)
+            before = {sid: dict(owner) for sid, owner in store._world_owners.items()}
+            with mock.patch.object(store, "_write_owner_file", side_effect=OSError("storage unavailable")):
+                with self.assertRaises(OSError):
+                    store.heartbeat(incoming["session_id"], {"token": incoming["token"], "peer_count": 1, "seats_free": 1}, 2, INSTALL_KEY)
+            self.assertTrue(store._world_owners == before, "T4: a refused storage write retired the old owner")
+
+    def test_T4_failed_return_preserves_the_old_signals(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = session_directory.SessionDirectory(300, 5, owner_state=Path(directory) / "owners.json", create_owner_key=True)
+            self.addCleanup(store.stop)
+            request = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
+            row = store.register(request, "192.0.2.1", 0, INSTALL_KEY)
+            store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 0, INSTALL_KEY)
+            store.post_signal(row["session_id"], {"from": "client:returning", "to": "host", "token_or_join_nonce": "returning", "payload_b64": "eA=="}, 1, "192.0.2.2")
+            previous = store._sessions[row["session_id"]]
+            before = store.get_signals(row["session_id"], "host", 0, row["token"], 1)
+            with mock.patch.object(store, "_write_owner_file", side_effect=OSError("storage unavailable")):
+                with self.assertRaises(OSError):
+                    store.register(dict(request, world_boot=2, resume_session_id=row["session_id"], resume_token=row["token"]), "192.0.2.1", 1, INSTALL_KEY)
+            self.assertTrue(store._sessions.get(row["session_id"]) is previous, "T4: a refused returning registration replaced its old lease")
+            self.assertTrue(store.get_signals(row["session_id"], "host", 0, row["token"], 1) == before, "T4: a refused returning registration removed queued signaling")
+
+    def test_T5_accept_deadline_closes_dripping_headers_and_bodies(self) -> None:
+        self.start(port=47467)
+        self.server.store.caller_mode = "tunnel"
+        accepted_since = time.monotonic()
+        connections = [socket.create_connection(("127.0.0.1", self.port), timeout=1) for _ in range(2)]
+        try:
+            connections[0].sendall(b"POST /v1/sessions HTTP/1.1\r\nX-Test: ")
+            connections[1].sendall((f"POST /v1/sessions HTTP/1.1\r\nX-Install-Key: {INSTALL_KEY}\r\nCF-Connecting-IP: 192.0.2.1\r\nContent-Length: 4096\r\n\r\n{{").encode())
+            live = list(connections)
+            deadline = accepted_since + 3.25
+            while live and time.monotonic() < deadline:
+                for connection in live:
+                    try: connection.sendall(b" ")
+                    except OSError: pass
+                readable, _, _ = select.select(live, [], [], 0.1)
+                for connection in readable:
+                    try: ended = not connection.recv(4096)
+                    except OSError: ended = True
+                    if ended: live.remove(connection)
+            self.assertFalse(live, "T5: a dripping header or body outlived the total accept deadline")
+        finally:
+            for connection in connections: connection.close()
+
+    def test_T5_dripping_bodies_leave_an_honest_heartbeat_capacity(self) -> None:
+        self.start(port=47466)
+        self.server.store.caller_mode = "tunnel"
+        honest = {"CF-Connecting-IP": "192.0.2.200"}
+        status, row = self.call("POST", "/v1/sessions", sample_register(), headers=honest)
+        self.assertEqual(status, 200)
+        sockets = []
+        stop = threading.Event()
+        def drip():
+            while not stop.wait(0.1):
+                for connection in tuple(sockets):
+                    try: connection.sendall(b" ")
+                    except OSError: pass
+        worker = threading.Thread(target=drip)
+        try:
+            for index in range(64):
+                connection = socket.create_connection(("127.0.0.1", self.port), timeout=1)
+                sockets.append(connection)
+                try:
+                    connection.sendall((f"POST /v1/sessions HTTP/1.1\r\nHost: localhost\r\nX-Install-Key: {index:016x}\r\nCF-Connecting-IP: 192.0.2.1\r\nContent-Length: 4096\r\n\r\n{{").encode())
+                except OSError:
+                    pass
+                time.sleep(0.015)
+            worker.start()
+            started = time.monotonic()
+            try:
+                status, _ = self.call("POST", f"/v1/sessions/{row['session_id']}/heartbeat", {"token": row["token"], "peer_count": 1, "seats_free": 1}, headers=honest)
+            except (OSError, http.client.HTTPException):
+                self.fail("T5: one caller's dripping bodies occupied every heartbeat handler")
+            self.assertEqual(status, 200, "T5: dripping bodies blocked an honest heartbeat")
+            self.assertLess(time.monotonic() - started, self.server.store.expiry_s, "T5: heartbeat answered after its lease")
+        finally:
+            stop.set()
+            if worker.ident is not None: worker.join(2)
+            for connection in sockets: connection.close()
+
+    def test_R1_tunnel_requires_the_callers_address(self) -> None:
+        self.start(port=47460)
+        self.server.store.caller_mode = "tunnel"
+        status, _ = self.call("GET", "/v1/sessions")
+        self.assertEqual(status, 400, "R1: tunnel request without a caller address used the loopback bucket")
+        for header in ("garbage", "127.0.0.1, 192.0.2.1", "", "192.0.2.1%fake"):
+            status, _ = self.call("GET", "/v1/sessions", headers={"CF-Connecting-IP": header})
+            self.assertEqual(status, 400, "R1: tunnel accepted an invalid caller address")
+        for address in ("192.0.2.1", "192.0.2.2"):
+            status, row = self.call("POST", "/v1/sessions", sample_register(), headers={"CF-Connecting-IP": address})
+            self.assertEqual(status, 200)
+            self.assertEqual(row["observed_ip"], address, "R1: valid forwarded address was not the pending registration source")
+        self.assertEqual({row.observed_ip for row in self.server.store._sessions.values()}, {"192.0.2.1", "192.0.2.2"})
+
+    def test_R2_waiters_leave_heartbeats_capacity(self) -> None:
+        self.start(port=47461)
+        self.server.store.caller_mode = "tunnel"
+        address = {"CF-Connecting-IP": "192.0.2.250"}
+        status, row = self.call("POST", "/v1/sessions", sample_register(), headers=address)
+        self.assertEqual(status, 200)
+        threads, answers = [], []
+        def poll(index, source):
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+            try:
+                conn.request("GET", f"/v1/sessions/{row['session_id']}/signals?peer=client:{index:016x}&wait=25",
+                             headers={"X-Install-Key": f"{index % 2 if index < 1064 else index:016x}", "CF-Connecting-IP": source})
+                response = conn.getresponse()
+                answers.append((response.status, json.loads(response.read())))
+            except (OSError, http.client.HTTPException) as error:
+                answers.append((0, type(error).__name__))
+            finally:
+                conn.close()
+        try:
+            for count, shared in ((64, True), (200, False)):
+                for index in range(count):
+                    source = "192.0.2.1" if shared else f"198.51.{index // 250}.{index % 250 + 1}"
+                    worker = threading.Thread(target=poll, args=(len(threads) + 1000, source))
+                    threads.append(worker)
+                    worker.start()
+                    time.sleep(0.015)
+                started = time.monotonic()
+                try:
+                    status, _ = self.call("POST", f"/v1/sessions/{row['session_id']}/heartbeat",
+                                          {"token": row["token"], "peer_count": 2, "seats_free": 1}, headers=address)
+                except (OSError, http.client.HTTPException):
+                    self.fail("R2: waiting polls occupied the heartbeat handlers")
+                self.assertEqual(status, 200, "R2: waiting polls prevented an honest heartbeat")
+                self.assertLess(time.monotonic() - started, self.server.store.expiry_s, "R2: heartbeat answered after its lease")
+                self.assertEqual(self.call("GET", "/v1/sessions", headers=address)[1]["total"], 1)
+            self.assertTrue(any(status == 200 and body.get("retry_after_s") for status, body in answers),
+                            "R2: excess waiters did not get an immediate empty answer and retry hint")
+        finally:
+            completed = list(answers)
+            self.server.store.stop()
+            for worker in threads:
+                worker.join(3)
+        self.assertTrue(all(status == 200 for status, _ in completed), "R2: bounded waiters dropped an honest polling request")
+
+    def test_R3_one_source_cannot_exhaust_retained_owners(self) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        self.addCleanup(store.stop)
+        now = time.monotonic()
+        returning_request = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
+        returning = store.register(returning_request, "192.0.2.200", now, INSTALL_KEY)
+        store.heartbeat(returning["session_id"], {"token": returning["token"], "peer_count": 1, "seats_free": 1}, now, INSTALL_KEY)
+        store.delete(returning["session_id"], {"token": returning["token"]}, now)
+        for index in range(session_directory.MAX_WORLD_OWNERS):
+            request = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
+            try:
+                row = store.register(request, "192.0.2.1", now, f"{index:016x}")
+                store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, now, f"{index:016x}")
+                store.delete(row["session_id"], {"token": row["token"]}, now)
+            except OverflowError:
+                self.fail("R3: one caller filled retained ownership before honest worlds could register")
+        honest = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
+        try:
+            fresh = store.register(honest, "192.0.2.201", now, INSTALL_KEY)
+            recovered = store.register(dict(returning_request, world_boot=2, resume_session_id=returning["session_id"], resume_token=returning["token"]), "192.0.2.200", now, INSTALL_KEY)
+        except OverflowError:
+            self.fail("R3: strangers' retained owners refused an honest new or returning world")
+        self.assertEqual(recovered["session_id"], returning["session_id"])
+        self.assertNotEqual(fresh["session_id"], recovered["session_id"])
+        self.assertLess(len(store._world_owners), session_directory.MAX_WORLD_OWNERS, "R3: one source kept the whole owner table")
+
+    def test_R4_refused_offer_preserves_every_queued_offer(self) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        self.addCleanup(store.stop)
+        now = time.monotonic()
+        row = store.register(sample_register(), "192.0.2.200", now, INSTALL_KEY)
+        def offer(nonce, size, source):
+            return store.post_signal(row["session_id"], {"from": "client:" + nonce, "to": "host", "token_or_join_nonce": nonce,
+                                                        "payload_b64": base64.b64encode(b"x" * size).decode()}, now, source)
+        first = offer("honest", 1024, "192.0.2.200")
+        offer("honest", 1024, "192.0.2.200")
+        for index in range(7):
+            offer(f"attack{index}", 65536, f"192.0.2.{index // 2 + 1}")
+        before = store.get_signals(row["session_id"], "host", 0, row["token"], now)
+        with self.assertRaises(BufferError):
+            offer("attack7", 65536, "192.0.2.5")
+        after = store.get_signals(row["session_id"], "host", 0, row["token"], now)
+        self.assertEqual(after, before, "R4: a refused offer evicted an honest joiner's queued offer")
+        self.assertIn(first["seq"], [item["seq"] for item in after["signals"]])
+
+    def test_owner_pressure_retires_short_listings_before_established_worlds(self) -> None:
+        with mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 4):
+            store = session_directory.SessionDirectory(300, 5)
+            self.addCleanup(store.stop)
+            request = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
+            original = store.register(request, "192.0.2.200", 0, INSTALL_KEY)
+            store.heartbeat(original["session_id"], {"token": original["token"], "peer_count": 1, "seats_free": 1}, session_directory.OWNER_MIN_LISTED_S, INSTALL_KEY)
+            store.delete(original["session_id"], {"token": original["token"]}, 61)
+            for index in range(5):
+                row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), f"192.0.2.{index}", 61, INSTALL_KEY)
+                store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 62, INSTALL_KEY)
+                store.delete(row["session_id"], {"token": row["token"]}, 62)
+            self.assertEqual(len(store._world_owners), 4)
+            self.assertIn(original["session_id"], store._world_owners, "R3: short listings displaced an established owner")
+            expired_wall = time.time() + session_directory.OWNER_IDLE_S + 1
+            with mock.patch.object(session_directory.time, "time", return_value=expired_wall):
+                store.prune(62)
+                for index in range(4):
+                    row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), f"198.51.100.{index}", 62, INSTALL_KEY)
+                    store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 62, INSTALL_KEY)
+                    store.delete(row["session_id"], {"token": row["token"]}, 62)
+                recovered = store.register(dict(request, world_boot=2, resume_session_id=original["session_id"], resume_token=original["token"]), "192.0.2.200", 62, INSTALL_KEY)
+                store.heartbeat(recovered["session_id"], {"token": recovered["token"], "peer_count": 1, "seats_free": 1}, 62, INSTALL_KEY)
+            self.assertEqual(recovered["session_id"], original["session_id"], "R3: a full table refused a signed owner whose record expired")
+            self.assertEqual(len(store._world_owners), 4, "R3: recovery exceeded the retained owner cap")
+
+    def test_R5_interrupted_key_creation_leaves_a_restartable_service(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "world-owners.json"
+            real_fdopen = session_directory.os.fdopen
+            class InterruptedWrite:
+                def __init__(self, fd, mode):
+                    self.stream = real_fdopen(fd, mode)
+                def __enter__(self): return self
+                def __exit__(self, *args): self.stream.close()
+                def write(self, data):
+                    self.stream.write(data[:7])
+                    self.stream.flush()
+                    raise OSError("interrupted first start")
+            import inspect
+            argument = {"create_owner_key": True} if "create_owner_key" in inspect.signature(session_directory.SessionDirectory).parameters else {"first_upgrade_worlds": 0}
+            with mock.patch.object(session_directory.os, "fdopen", side_effect=InterruptedWrite):
+                with self.assertRaises(OSError):
+                    session_directory.SessionDirectory(15, 5, owner_state=state, **argument)
+            try:
+                resumed = session_directory.SessionDirectory(15, 5, owner_state=state,
+                            **({} if state.with_suffix(".key").exists() else argument))
+            except ValueError:
+                self.fail("R5: interrupted first start left a partial signing key that prevents the next start")
+            self.addCleanup(resumed.stop)
+            self.assertEqual(resumed._world_owners, {})
+            row = resumed.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.1", 0, INSTALL_KEY)
+            self.assertTrue(row["token"])
+
     def test_successor_resumes_row_only_with_its_sealed_token(self) -> None:
         self.start(port=45799)
         status, created = self.register()
@@ -459,6 +990,7 @@ class DirectoryTests(unittest.TestCase):
     def test_successor_token_outlives_the_discovery_lease(self) -> None:
         directory = session_directory.SessionDirectory(15, 5)
         created = directory.register(sample_register(), "192.0.2.1", 0)
+        directory.heartbeat(created["session_id"], {"token": created["token"], "peer_count": 2, "seats_free": 1}, 0)
         directory.prune(20)
         resumed = directory.register(sample_register(
             resume_session_id=created["session_id"], resume_token=created["token"],
@@ -545,6 +1077,34 @@ class DirectoryTests(unittest.TestCase):
         directory.delete(ended["session_id"], {"token": ended["token"]}, 201)
         with self.assertRaises(KeyError):
             directory.post_signal(ended["session_id"], {"token_or_join_nonce": nonce, "from": dialer, "to": "host", "payload_b64": offer}, 202)
+
+    def test_handover_signal_storage_follows_claim_expiry_and_host_end(self) -> None:
+        payload = base64.b64encode(b"successor-offer").decode("ascii")
+        charge = len(payload) + session_directory.SIGNAL_METADATA_BYTES
+        for fate in ("expiry", "host_end", "claim"):
+            with self.subTest(fate=fate):
+                store = session_directory.SessionDirectory(15, 5)
+                created = store.register(sample_register(), "192.0.2.10", 0)
+                sid, token = created["session_id"], created["token"]
+                store.heartbeat(sid, {"token": token, "state": "running", "peer_count": 3, "seats_free": 0}, 0)
+                store.post_signal(sid, {"token_or_join_nonce": "successor", "from": "client:successor",
+                                        "to": "host", "payload_b64": payload}, 1)
+                store.prune(16)
+                self.assertEqual(store._stored_signal_bytes, charge)
+                self.assertNotIn(sid, store._sessions)
+                if fate == "expiry":
+                    store.prune(16 + session_directory.RESUME_GRACE_S)
+                elif fate == "host_end":
+                    store.delete(sid, {"token": token}, 20)
+                    self.assertTrue(store.host_end_status(sid, 21)["ended_by_host"])
+                else:
+                    claimed = store.register(sample_register(resume_session_id=sid, resume_token=token,
+                                                            migration_gen=1), "192.0.2.11", 20)
+                    self.assertEqual(store._stored_signal_bytes, charge)
+                    owed = store.get_signals(sid, "host", 0, claimed["token"], 21)["signals"]
+                    self.assertEqual([item["payload_b64"] for item in owed], [payload])
+                    store.get_signals(sid, "host", 1, claimed["token"], 22)
+                self.assertEqual(store._stored_signal_bytes, 0)
 
     def test_live_resume_wrong_token_leaves_the_row_unchanged(self) -> None:
         self.start(port=45810)
@@ -735,6 +1295,7 @@ class DirectoryTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assert_keys(body, REGISTER_RESP_KEYS)
             last_ok = body
+            self.assertEqual(self.beat(body["session_id"], body["token"], key=key_a)[0], 200)
         self.assertIsNotNone(last_ok)
         status, limited = self.register(key=key_a)
         self.assertEqual(status, 429)
@@ -1264,6 +1825,7 @@ class DirectoryTests(unittest.TestCase):
             status, body = self.register(key=f"{i:016d}")
             self.assertEqual(status, 200, msg=f"register {i+1}")
             self.assert_keys(body, REGISTER_RESP_KEYS)
+            self.assertEqual(self.beat(body["session_id"], body["token"], key=f"{i:016d}")[0], 200)
         status, limited = self.register(key=f"{30:016d}")
         self.assertEqual(status, 429)
         self.assert_keys(limited, RATE_KEYS)
@@ -1289,6 +1851,7 @@ class DirectoryTests(unittest.TestCase):
         # Behind the Cloudflare tunnel every request reaches the service from loopback: each client is limited and
         # reported by the address the tunnel names, never pooled into one loopback bucket.
         self.start()
+        self.server.store.caller_mode = "tunnel"
 
         def register_from(ip: str, i: int) -> tuple[int, dict[str, Any]]:
             status_i, body_i = self.call("POST", "/v1/sessions", sample_register(),
@@ -1300,6 +1863,8 @@ class DirectoryTests(unittest.TestCase):
             status, body = register_from("203.0.113.7", i)
             self.assertEqual(status, 200, msg=f"register {i+1} from the first client")
             self.assertEqual(body["observed_ip"], "203.0.113.7")
+            headers = {"X-Install-Key": f"T20301137{i:04d}".ljust(16, "0")[:16], "CF-Connecting-IP": "203.0.113.7"}
+            self.assertEqual(self.call("POST", f'/v1/sessions/{body["session_id"]}/heartbeat', {"token": body["token"], "peer_count": 2, "seats_free": 1}, headers=headers)[0], 200)
         status, _ = register_from("203.0.113.7", IP_REG_PER_MIN)
         self.assertEqual(status, 429)
         status, body = register_from("198.51.100.9", 0)
@@ -1307,8 +1872,8 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(body["observed_ip"], "198.51.100.9")
         status, body = self.call("POST", "/v1/sessions", sample_register(),
                                  headers={"X-Install-Key": "Tbadheader000000", "CF-Connecting-IP": "not-an-address"})
-        self.assertEqual(status, 200)
-        self.assertEqual(body["observed_ip"], "127.0.0.1")
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"], "invalid_caller_address")
 
     def test_signal_session_queue_caps_and_idle_drop(self) -> None:
         self.start(queue_idle_s=1.5)
@@ -1668,6 +2233,7 @@ class DirectoryTests(unittest.TestCase):
                 sample_register(name=f"n{i:03d}"), "127.0.0.1", base + i * 0.001
             )
             ids.append(created["session_id"])
+            self.server.store.heartbeat(created["session_id"], {"token": created["token"], "peer_count": 2, "seats_free": 1}, base + i * 0.001)
         status, page1 = self.list_sessions("limit=100")
         self.assertEqual(status, 200)
         self.assertEqual(len(page1["sessions"]), 100)
@@ -2113,6 +2679,456 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(status, 403, refused)
         status, ok = self.beat(world_id, second["token"])
         self.assertEqual(status, 200, ok)
+
+    def test_pending_public_registrations_are_bounded_and_expire(self) -> None:
+        source_cap = getattr(session_directory, "MAX_PENDING_PER_SOURCE", 8)
+        total_cap = getattr(session_directory, "MAX_PENDING_REGISTRATIONS", 256)
+        store = session_directory.SessionDirectory(2, 1)
+        payload = base64.b64encode(b"offer" * 200).decode()
+        peak_source = 0
+        for index in range(source_cap * 2 + total_cap * 2):
+            source = "192.0.2.1" if index < source_cap * 2 else f"198.51.{index // 256}.{index % 256}"
+            try:
+                row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), source, 0, INSTALL_KEY)
+            except OverflowError:
+                continue
+            store.post_signal(row["session_id"], {"token_or_join_nonce": "joiner", "from": "client:joiner", "to": "host", "payload_b64": payload}, 0)
+            peak_source = max(peak_source, sum(sess.observed_ip == "192.0.2.1" for sess in store._sessions.values()))
+        peak_total = len(store._sessions)
+        owners_before_ack = len(store._world_owners)
+        store.prune(3)
+        retained_payload = sum(sess.undrained_bytes for sess in store._register_replays.values())
+        print(json.dumps({"case": "S1", "peak_source": peak_source, "peak_total": peak_total,
+                          "owners_before_ack": owners_before_ack, "expired_replays": len(store._register_replays),
+                          "retained_payload_bytes": retained_payload}))
+        self.assertLessEqual(peak_source, source_cap, "S1: one source retained more pending registrations than its cap")
+        self.assertLessEqual(peak_total, total_cap, "S1: many sources retained more pending registrations than the global cap")
+        self.assertEqual(owners_before_ack, 0, "S1: unacknowledged registrations wrote durable owner records")
+        self.assertEqual((len(store._register_replays), retained_payload), (0, 0), "S1: expired unacknowledged registrations retained their signal queues")
+        with mock.patch.object(session_directory, "PRUNE_MAP_MAX", 8):
+            limiter = DualRateLimiter()
+            for index in range(24):
+                limiter.check(f"{index:016d}", f"203.0.113.{index}", 0, False)
+            self.assertLessEqual(limiter._map_size(), 8, "S1: sparse callers grew rate buckets beyond the map cap")
+
+    def test_owner_writes_are_bounded_batched_and_outside_the_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 4):
+            store = session_directory.SessionDirectory(15, 5, owner_state=Path(directory) / "world-owners.json", create_owner_key=True)
+            self.addCleanup(store.stop)
+            writes = []
+            original = store._write_owner_file
+            def observe(owners):
+                writes.append((store._lock._is_owned(), time.monotonic(), len(owners), len(json.dumps(owners).encode())))
+                return original(owners)
+            with mock.patch.object(store, "_write_owner_file", side_effect=observe):
+                for index in range(4):
+                    row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), f"192.0.2.{index}", index, INSTALL_KEY)
+                    store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 2, "seats_free": 1}, index, INSTALL_KEY)
+                replacement = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.99", 5, INSTALL_KEY)
+                store.heartbeat(replacement["session_id"], {"token": replacement["token"], "peer_count": 2, "seats_free": 1}, 5, INSTALL_KEY)
+                self.assertEqual(len(store._world_owners), 4, "S1: durable ownership exceeded its count cap after retirement")
+                last = max(owner["last_heartbeat_unix"] for owner in store._world_owners.values())
+                with mock.patch.object(session_directory.time, "time", return_value=last + session_directory.OWNER_IDLE_S + 1):
+                    store.prune(30)
+                store._wait_owner_write(store._owner_revision)
+            self.assertTrue(writes and all(not held for held, _when, _count, _bytes in writes), "S1: a durable owner write held the directory lock")
+            self.assertTrue(all(count <= 4 and size <= session_directory.MAX_OWNER_STATE_BYTES for _held, _when, count, size in writes), "S1: an owner write exceeded its count or byte cap")
+            self.assertTrue(all(right[1] - left[1] >= session_directory.OWNER_WRITE_INTERVAL_S for left, right in zip(writes, writes[1:])), "S1: owner writes bypassed the batch interval")
+            self.assertEqual(len(store._world_owners), 0, "S1: ownership remained after thirty days without a heartbeat")
+
+    def test_signaling_requires_host_proof_and_preserves_a_joiners_offer(self) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        row = store.register(sample_register(), "192.0.2.1", 0, INSTALL_KEY)
+        sid = row["session_id"]
+        payload = base64.b64encode(b"offer").decode()
+        with self.assertRaises(PermissionError, msg="S2: an unauthenticated caller allocated a client-destination queue"):
+            store.post_signal(sid, {"token_or_join_nonce": "stranger", "from": "client:stranger", "to": "client:invented", "payload_b64": payload}, 1)
+        store.post_signal(sid, {"token_or_join_nonce": row["token"], "from": "host", "to": "client:legacy", "payload_b64": payload}, 1)
+        self.assertEqual(len(store.get_signals(sid, "client:legacy", 0, None, 1)["signals"]), 1)
+        store.post_signal(sid, {"token_or_join_nonce": "legitimate", "from": "client:legitimate", "to": "host", "payload_b64": payload}, 1, source_ip="198.51.100.1")
+        for index in range(session_directory.MAX_QUEUE * 2):
+            try:
+                store.post_signal(sid, {"token_or_join_nonce": f"attack{index}", "from": f"client:attack{index}", "to": "host", "payload_b64": payload}, 1, source_ip="203.0.113.1")
+            except BufferError:
+                pass
+        signals = store.get_signals(sid, "host", 0, row["token"], 2)["signals"]
+        self.assertTrue(any(signal["from"] == "client:legitimate" for signal in signals), "S2: queue pressure removed a legitimate joiner's only offer")
+        self.assertLessEqual(len(signals), session_directory.MAX_QUEUE, "S2: fair queue admission exceeded the queue bound")
+
+    def test_capacity_refusal_preserves_the_active_lease_and_signals(self) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        world = str(uuid.uuid4())
+        request = sample_register(persistent_world=True, world_id=world, world_boot=1)
+        host = store.register(request, "192.0.2.1", 0, INSTALL_KEY)
+        store.heartbeat(world, {"token": host["token"], "peer_count": 2, "seats_free": 1}, 1, INSTALL_KEY)
+        store.post_signal(world, {"token_or_join_nonce": "joiner", "from": "client:joiner", "to": "host", "payload_b64": "b2ZmZXI="}, 1)
+        with mock.patch.object(session_directory, "MAX_PENDING_REGISTRATIONS", 1):
+            store.register(sample_register(), "198.51.100.1", 2, INSTALL_KEY)
+            with self.assertRaises(OverflowError):
+                store.register(dict(request, resume_session_id=world, resume_token=host["token"]), "192.0.2.1", 3, INSTALL_KEY)
+        signals = store.get_signals(world, "host", 0, host["token"], 4)["signals"]
+        self.assertEqual(len(signals), 1, "S2: a capacity-refused registration discarded the active joiner's offer")
+
+    def test_relay_helper_preserves_the_source_and_creates_its_signing_key(self) -> None:
+        tools = str(Path(__file__).resolve().parents[1])
+        with mock.patch.object(sys, "path", [tools, *sys.path]):
+            import relay_cloudflare_match as relay
+            import edith_cross
+            from relay_secrets import SecretBook
+        server = mock.MagicMock()
+        original_post = server.store.post_signal
+        packet = dict(token_or_join_nonce="joiner", **{"from": "client:joiner", "to": "host", "payload_b64": "YQ=="})
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            cert, key = root / "cert.pem", root / "key.pem"
+            key.write_text("fixture")
+            package = SimpleNamespace(session_directory=session_directory)
+            with mock.patch.dict(sys.modules, {"session_directory": package}), \
+                 mock.patch.object(edith_cross, "make_cert", return_value=(cert, key, "0" * 64)), \
+                 mock.patch.object(session_directory, "spawn_server", return_value=server) as factory:
+                helper = relay.Directory(root, 0, None, 600, SecretBook())
+            try:
+                try:
+                    server.store.post_signal("session", packet, 10, "192.0.2.42")
+                except TypeError:
+                    self.fail("S2: relay helper rejected the handler's source address")
+                original_post.assert_called_once_with("session", packet, 10, "192.0.2.42")
+                self.assertEqual(factory.call_args.kwargs.get("create_owner_key"), True,
+                                 "S4: fresh relay directory omitted its explicit signing-key creation")
+            finally:
+                helper.stop()
+
+    def test_local_video_and_mint_helpers_create_their_signing_keys(self) -> None:
+        tools = str(Path(__file__).resolve().parents[1])
+        nested = "session_directory.session_directory"
+        previous = sys.modules.get(nested)
+        sys.modules[nested] = session_directory
+        try:
+            with mock.patch.object(sys, "path", [tools, *sys.path]):
+                from e2e import directory as video
+        finally:
+            if previous is None:
+                del sys.modules[nested]
+            else:
+                sys.modules[nested] = previous
+        with mock.patch.object(sys, "path", [tools, *sys.path]):
+            import relay_cloudflare_mint as mint
+        class StartupCaptured(Exception):
+            pass
+        missing = []
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for name in ("video", "mint"):
+                arguments = {}
+                def capture(**kwargs):
+                    arguments.update(kwargs)
+                    raise StartupCaptured()
+                if name == "video":
+                    with mock.patch.object(video, "spawn_server", side_effect=capture), self.assertRaises(StartupCaptured):
+                        with video.serve(root / name, 47497, block=(47460, 47499)):
+                            pass
+                else:
+                    with mock.patch.object(mint, "load_directory", return_value=session_directory), \
+                         mock.patch.object(mint, "read_turn_config", return_value={}), \
+                         mock.patch.object(mint, "record_provider"), \
+                         mock.patch.object(session_directory, "spawn_server", side_effect=capture), self.assertRaises(StartupCaptured):
+                        mint.main(["--turn-config", str(root / "unused.json"), "--out", str(root / name)])
+                if arguments.get("create_owner_key") is not True:
+                    missing.append(name)
+        self.assertEqual(missing, [], "S4: fresh local helpers omitted their explicit signing-key creation: " + ",".join(missing))
+
+    def test_world_tick_receipts_keep_live_and_private_replay_comparisons(self) -> None:
+        host = {"live": {1: "a" * 64, 2: "b" * 64, 3: "c" * 64}, "catchup": {}}
+        peer = {"live": {1: "a" * 64, 3: "c" * 64}, "catchup": {2: "b" * 64}}
+        scored = compare_world_ticks(host, peer)
+        self.assertTrue(scored["pass"], "world ticks: recorded private replay tick 2 was reported missing")
+        self.assertEqual((scored["compared"], scored["compared_catchup"], scored["live_only_holes"]), (2, 1, 1))
+        with self.subTest("missing_replay"):
+            self.assertFalse(compare_world_ticks(host, dict(peer, catchup={}))["pass"], "world ticks: an unrecorded gap passed")
+        with self.subTest("wrong_replay"):
+            self.assertFalse(compare_world_ticks(host, dict(peer, catchup={2: "d" * 64}))["pass"], "world ticks: a mismatching replay passed")
+        with self.subTest("wrong_live"):
+            self.assertFalse(compare_world_ticks(host, dict(peer, live={1: "d" * 64, 3: "c" * 64}))["pass"], "world ticks: a mismatching live tick passed")
+        with self.subTest("never_played"):
+            self.assertFalse(compare_world_ticks(host, dict(peer, live={}))["pass"], "world ticks: a peer that never played passed")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "live.jsonl"
+            rows = [{"tick": tick, "phase": phase, "sim_gated": value} for phase, ticks in peer.items() for tick, value in ticks.items()]
+            path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+            self.assertTrue(compare_world_ticks(host, read_world_ticks(path.parent))["pass"])
+            with path.open("a") as stream:
+                stream.write(json.dumps({"tick": 2, "phase": "live", "sim_gated": "d" * 64}) + "\n")
+            with self.assertRaisesRegex(ValueError, "contradictory world tick", msg="world ticks: contradictory phases hid a mismatching tick"):
+                read_world_ticks(path.parent)
+
+    def test_rotated_lease_refuses_an_old_long_poll_before_draining(self) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        now = time.monotonic()
+        world = str(uuid.uuid4())
+        request = sample_register(persistent_world=True, world_id=world, world_boot=1)
+        first = store.register(request, "192.0.2.1", now, INSTALL_KEY)
+        waiting = threading.Event()
+        original_wait = store._signals_changed.wait
+        def observed_wait(timeout=None):
+            waiting.set()
+            return original_wait(timeout)
+        answer = []
+        def poll():
+            try:
+                answer.append(store.get_signals(world, "host", 10000, first["token"], time.monotonic(), 0.25))
+            except Exception as error:
+                answer.append(error)
+        with mock.patch.object(store._signals_changed, "wait", side_effect=observed_wait):
+            thread = threading.Thread(target=poll)
+            thread.start()
+            self.assertTrue(waiting.wait(2), "S3: authenticated long poll never reached its wait")
+            replacement = store.register(dict(request, resume_session_id=world, resume_token=first["token"]), "192.0.2.1", time.monotonic(), INSTALL_KEY)
+            store.post_signal(world, {"token_or_join_nonce": "newjoiner", "from": "client:newjoiner", "to": "host", "payload_b64": "b2ZmZXI="}, time.monotonic())
+            thread.join(2)
+        self.assertFalse(thread.is_alive(), "S3: rotated long poll did not finish with a refusal")
+        self.assertTrue(answer and isinstance(answer[0], PermissionError), "S3: revoked long poll adopted the replacement lease and applied its cursor")
+        self.assertEqual(len(store.get_signals(world, "host", 0, replacement["token"], time.monotonic())["signals"]), 1,
+                         "S3: revoked long poll drained the replacement joiner's signal")
+
+    def test_first_start_requires_create_key_and_keeps_signed_proofs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            owner_file = Path(directory) / "world-owners.json"
+            with self.assertRaisesRegex(ValueError, "create-owner-key", msg="S4: first startup omitted explicit signing-key creation"):
+                session_directory.SessionDirectory(15, 5, owner_state=owner_file)
+            store = session_directory.SessionDirectory(15, 5, owner_state=owner_file, create_owner_key=True)
+            world = str(uuid.uuid4())
+            request = sample_register(persistent_world=True, world_id=world, world_boot=1)
+            restored = store.register(request, "192.0.2.1", 0, INSTALL_KEY)
+            store.heartbeat(world, {"token": restored["token"], "peer_count": 2, "seats_free": 1}, 1, INSTALL_KEY)
+            store.stop()
+            restarted = session_directory.SessionDirectory(15, 5, owner_state=owner_file)
+            resumed = restarted.register(dict(request, world_boot=2, resume_session_id=world, resume_token=restored["token"]), "192.0.2.1", 2, INSTALL_KEY)
+            self.assertEqual(resumed["session_id"], world, "S4: signed proof could not restore its world after restart")
+            with self.assertRaises(PermissionError, msg="S4: stranger claimed a signed world after restart"):
+                restarted.register(request, "203.0.113.1", 3, INSTALL_KEY)
+            self.assertNotIn(restored["token"], owner_file.read_text(), "S4: owner file stored a plaintext issued proof")
+            restarted.stop()
+
+    def test_previous_proof_recovers_a_lost_reply_after_host_restart(self) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        world = str(uuid.uuid4())
+        request = sample_register(persistent_world=True, world_id=world, world_boot=1)
+        first = store.register(request, "192.0.2.1", 0, INSTALL_KEY)
+        store.heartbeat(world, {"token": first["token"], "peer_count": 2, "seats_free": 1}, 1, INSTALL_KEY)
+        lost = store.register(dict(request, resume_session_id=world, resume_token=first["token"]), "192.0.2.1", 2, INSTALL_KEY)
+        try:
+            recovered = store.register(dict(request, world_boot=2, resume_session_id=world, resume_token=first["token"]), "192.0.2.1", 3, INSTALL_KEY)
+        except PermissionError:
+            self.fail("S5: previous owner proof was refused after a lost resume reply and host boot change")
+        self.assertEqual(recovered["session_id"], world, "S5: recovery registered a second world id")
+        self.assertEqual(len(store._sessions), 1, "S5: recovery retained two live world rows")
+        self.assertEqual(recovered["token"], lost["token"], "S5: an unacknowledged recovery rotated its replacement again")
+
+    def test_aborted_get_redacts_token_and_client_nonce(self) -> None:
+        self.server = spawn_server("127.0.0.1", 47493, expiry_s=15, heartbeat_s=5, caller_mode="direct")
+        store = self.server.store
+        row = store.register(sample_register(), "127.0.0.1", time.monotonic(), INSTALL_KEY)
+        nonce = "nonce-that-must-not-be-logged"
+        entered = threading.Event()
+        aborted = threading.Event()
+        records = []
+        original = store.get_signals
+        def observed_get(*args, **kwargs):
+            entered.set()
+            return original(*args, **kwargs)
+        class Capture(logging.Handler):
+            def emit(self, record):
+                records.append(record.getMessage())
+                if "client aborted" in records[-1]:
+                    aborted.set()
+        handler = Capture()
+        previous_handlers = LOGGER.handlers[:]
+        LOGGER.handlers = [handler]
+        previous_level = LOGGER.level
+        LOGGER.setLevel(logging.INFO)
+        try:
+            with mock.patch.object(store, "get_signals", side_effect=observed_get):
+                for peer_key, token_key in (("peer", "token"), ("%70eer", "t%6fken")):
+                    entered.clear(); aborted.clear()
+                    connection = socket.create_connection(("127.0.0.1", self.server.port), timeout=3)
+                    path = f'/v1/sessions/{row["session_id"]}/signals?{peer_key}=client:{nonce}&{token_key}={row["token"]}&wait=0.2'
+                    connection.sendall(f"GET {path} HTTP/1.1\r\nHost: localhost\r\nX-Install-Key: {INSTALL_KEY}\r\nConnection: close\r\n\r\n".encode())
+                    self.assertTrue(entered.wait(2), "B2: GET never entered the signal long poll")
+                    connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("hh" if os.name == "nt" else "ii", 1, 0))
+                    connection.close()
+                    self.assertTrue(aborted.wait(3), "B2: reset GET never reached the abort logging path")
+        finally:
+            LOGGER.handlers = previous_handlers
+            LOGGER.setLevel(previous_level)
+        text = "\n".join(records)
+        self.assertTrue(all(secret not in text for secret in (row["token"], nonce)), "B2: aborted GET wrote a token or client nonce to the log")
+
+    def test_lost_world_register_reply_replays_the_same_lease(self) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        world_id = str(uuid.uuid4())
+        first_request = sample_register(persistent_world=True, world_id=world_id,
+                                        world_boot=1, resume_session_id=world_id)
+        first = store.register(first_request, "192.0.2.1", 10, INSTALL_KEY)
+        resume = dict(first_request, world_boot=2, resume_token=first["token"])
+        moved = store.register(resume, "192.0.2.1", 20, INSTALL_KEY)
+        store.post_signal(world_id, {"from": "client:joiner", "to": "host",
+                                     "token_or_join_nonce": "joiner", "payload_b64": "YQ=="}, 21)
+        try:
+            retried = store.register(resume, "192.0.2.1", 25, INSTALL_KEY)
+        except PermissionError:
+            self.fail("F2: a lost successful resume reply made the old-token retry forbidden")
+        self.assertEqual(retried, moved, "F2: a repeated successful resume issued another lease")
+        self.assertEqual(len(store.list_sessions(26, None, None, None)["sessions"]), 1, "F2: register retries duplicated the world")
+        self.assertEqual(len(store.get_signals(world_id, "host", 0, moved["token"], 26)["signals"]), 1,
+                         "F2: a repeated register discarded a joiner's pending signal")
+        store.heartbeat(world_id, {"token": moved["token"], "peer_count": 1, "seats_free": 1}, 26, INSTALL_KEY)
+        with self.assertRaises(PermissionError, msg="F2: another install replayed a tokenless world claim"):
+            store.register(first_request, "192.0.2.1", 27, "fedcba9876543210")
+        with self.assertRaises(PermissionError, msg="F2: an old register replay outlived its retry window"):
+            store.register(resume, "192.0.2.1", 26 + session_directory.RESUME_GRACE_S + 1, INSTALL_KEY)
+        first_request = dict(first_request, world_id=str(uuid.uuid4()))
+        first_request["resume_session_id"] = first_request["world_id"]
+        first = store.register(first_request, "192.0.2.1", 200, INSTALL_KEY)
+        try:
+            repeated = store.register(first_request, "192.0.2.1", 205, INSTALL_KEY)
+        except PermissionError:
+            self.fail("F2: a lost first world register reply made the identical retry forbidden")
+        self.assertEqual(repeated, first, "F2: an identical first register retry changed its lease")
+        short = session_directory.SessionDirectory(3, 1)
+        first = short.register(first_request, "192.0.2.1", 10, INSTALL_KEY)
+        self.assertEqual(short.register(first_request, "192.0.2.1", 15, INSTALL_KEY)["session_id"], first["session_id"],
+                         "F2: a lost register reply changed the world id after its unacknowledged lease expired")
+
+    def test_world_owner_survives_a_directory_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(session_directory, "configure_logging"):
+            log_file = Path(folder) / "directory.log"
+            world_id = str(uuid.uuid4())
+            request = sample_register(persistent_world=True, world_id=world_id,
+                                      world_boot=1, resume_session_id=world_id)
+            first = spawn_server(log_file=log_file, create_owner_key=True, caller_mode="direct")
+            try:
+                now = time.monotonic()
+                created = first.store.register(request, "192.0.2.1", now, INSTALL_KEY)
+                first.store.heartbeat(world_id, {"token": created["token"], "peer_count": 1, "seats_free": 1}, now, INSTALL_KEY)
+            finally:
+                first.stop()
+            second = spawn_server(log_file=log_file, caller_mode="direct")
+            try:
+                now = time.monotonic()
+                try:
+                    second.store.register(request, "192.0.2.2", now, "fedcba9876543210")
+                except PermissionError:
+                    pass
+                else:
+                    self.fail("F3: a tokenless host claimed a known world id after the directory restarted")
+                resumed = second.store.register(dict(request, world_boot=2, resume_token=created["token"]),
+                                                "192.0.2.1", now + 1, INSTALL_KEY)
+                self.assertEqual(resumed["session_id"], world_id, "F3: the proven owner lost its world id after restart")
+                second.store.heartbeat(world_id, {"token": resumed["token"], "peer_count": 1, "seats_free": 1}, now + 1, INSTALL_KEY)
+                proof = Path(folder) / "world-owners.json"
+                self.assertTrue(proof.is_file(), "F3: no durable world owner file was written")
+                self.assertNotIn(created["token"], proof.read_text(), "F3: the owner file exposed the original token")
+                self.assertNotIn(resumed["token"], proof.read_text(), "F3: the owner file exposed the resumed token")
+            finally:
+                second.stop()
+            third = spawn_server(log_file=log_file, caller_mode="direct")
+            try:
+                with self.assertRaises(PermissionError, msg="F3: a rotated token recovered ownership after another restart"):
+                    third.store.register(dict(request, resume_token=created["token"]), "192.0.2.1", time.monotonic(), INSTALL_KEY)
+                third.store.register(dict(request, world_boot=3, resume_token=resumed["token"]),
+                                     "192.0.2.1", time.monotonic(), INSTALL_KEY)
+            finally:
+                third.stop()
+
+    def test_lost_world_reply_recovers_even_when_the_service_restarts(self) -> None:
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(session_directory, "configure_logging"):
+            log = Path(folder) / "directory.log"
+            world_id = str(uuid.uuid4())
+            request = sample_register(persistent_world=True, world_id=world_id,
+                                      world_boot=1, resume_session_id=world_id)
+            first = spawn_server(log_file=log, create_owner_key=True, caller_mode="direct")
+            try:
+                created = first.store.register(request, "192.0.2.1", time.monotonic(), INSTALL_KEY)
+            finally:
+                first.stop()
+            second = spawn_server(log_file=log, caller_mode="direct")
+            try:
+                with self.assertRaises(PermissionError, msg="F2: a different install replayed a lost first registration"):
+                    second.store.register(request, "192.0.2.1", time.monotonic(), "fedcba9876543210")
+                recovered = second.store.register(request, "192.0.2.1", time.monotonic(), INSTALL_KEY)
+                self.assertEqual(recovered["session_id"], world_id, "F2: a lost first reply and restart changed the world id")
+                resume = dict(request, world_boot=2, resume_token=recovered["token"])
+                lost = second.store.register(resume, "192.0.2.1", time.monotonic(), INSTALL_KEY)
+            finally:
+                second.stop()
+            third = spawn_server(log_file=log, caller_mode="direct")
+            try:
+                replayed = third.store.register(resume, "192.0.2.1", time.monotonic(), INSTALL_KEY)
+                self.assertEqual(replayed["session_id"], lost["session_id"], "F2: a lost resume reply and restart changed the world id")
+                third.store.heartbeat(world_id, {"token": replayed["token"], "peer_count": 1, "seats_free": 1}, time.monotonic(), INSTALL_KEY)
+            finally:
+                third.stop()
+
+    def test_world_owner_cannot_be_bypassed_with_an_alias_or_same_generation(self) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        world_id = str(uuid.uuid4())
+        request = sample_register(persistent_world=True, world_id=world_id, world_boot=1, resume_session_id=world_id)
+        first = store.register(request, "192.0.2.1", 10, INSTALL_KEY)
+        moved_request = dict(request, migration_gen=1, resume_token=first["token"])
+        moved = store.register(moved_request, "192.0.2.2", 20, "fedcba9876543210")
+        current = dict(moved_request, resume_token=moved["token"])
+        own = store.register(current, "192.0.2.2", 21, "fedcba9876543210")
+        store.heartbeat(world_id, {"token": own["token"], "peer_count": 1, "seats_free": 1}, 21, "fedcba9876543210")
+        self.assertEqual(own["session_id"], world_id, "F3: the current world host could not refresh its own generation")
+        with self.assertRaises(session_directory.Superseded, msg="F3: a different host refreshed the same world generation"):
+            store.register(dict(current, resume_token=own["token"]), "192.0.2.3", 22, "cccccccccccccccc")
+        alias = dict(request)
+        alias.pop("resume_session_id")
+        with self.assertRaises(PermissionError, msg="F3: an omitted resume id bypassed world ownership"):
+            store.register(alias, "192.0.2.3", 23, "cccccccccccccccc")
+        with self.assertRaises(PermissionError, msg="F3: a new resume id duplicated a known world"):
+            store.register(dict(request, resume_session_id=str(uuid.uuid4())), "192.0.2.3", 24, "cccccccccccccccc")
+        for alternate in (world_id.upper(), world_id.replace("-", "")):
+            with self.assertRaises(PermissionError, msg="F3: an alternate UUID spelling duplicated a known world's owner"):
+                store.register(dict(request, world_id=alternate, resume_session_id=alternate), "192.0.2.3", 25, "cccccccccccccccc")
+        store.prune(321)
+        try:
+            own = store.register(dict(current, resume_token=own["token"]), "192.0.2.2", 322, "abababababababab")
+        except session_directory.Superseded:
+            self.fail("F3: stored owner proof could not resume an expired world when the install identity changed")
+        store.heartbeat(world_id, {"token": own["token"], "peer_count": 1, "seats_free": 1}, 322, "abababababababab")
+        with tempfile.TemporaryDirectory() as temporary:
+            owner_file = Path(temporary) / "world-owners.json"
+            owner_file.write_text(json.dumps({world_id.upper(): store._world_owners[world_id]}), encoding="utf-8")
+            restarted = session_directory.SessionDirectory(300, 5, owner_state=owner_file, create_owner_key=True)
+            self.addCleanup(restarted.stop)
+            with self.assertRaises(PermissionError, msg="F3: a noncanonical saved owner allowed a tokenless claim"):
+                restarted.register(request, "192.0.2.3", 26, "cccccccccccccccc")
+            try:
+                resumed = restarted.register(dict(current, world_id=world_id.upper(), resume_session_id=world_id.upper(), resume_token=own["token"]),
+                                             "192.0.2.2", 27, "edededededededed")
+            except session_directory.Superseded:
+                self.fail("F3: stored owner proof could not resume after restart when the install identity changed")
+            self.assertEqual(resumed["session_id"], world_id, "F3: a proved alternate spelling changed the world id")
+            restarted.heartbeat(world_id, {"token": resumed["token"], "peer_count": 1, "seats_free": 1}, 27, "edededededededed")
+            self.assertEqual(list(json.loads(owner_file.read_text(encoding="utf-8"))), [world_id], "F3: saved ownership retained duplicate spellings")
+
+    def test_lost_register_reply_survives_live_updates_and_a_long_outage(self) -> None:
+        store = session_directory.SessionDirectory(15, 5)
+        world_id = str(uuid.uuid4())
+        request = sample_register(persistent_world=True, world_id=world_id, world_boot=1, resume_session_id=world_id)
+        created = store.register(request, "192.0.2.1", 10, INSTALL_KEY)
+        resume = dict(request, world_boot=2, resume_token=created["token"])
+        lost = store.register(resume, "192.0.2.1", 11, INSTALL_KEY)
+        try:
+            retried = store.register(dict(resume, seats_free=0, peer_count=3, listen_addrs=["192.0.2.9"]),
+                                     "192.0.2.9", 600, INSTALL_KEY)
+        except PermissionError:
+            self.fail("F2: a live listing update or long outage invalidated the host's unacknowledged register proof")
+        self.assertEqual((retried["session_id"], retried["token"]), (lost["session_id"], lost["token"]),
+                         "F2: recovery after a long outage changed the world lease")
+        self.assertEqual(store.list_sessions(601, None, None, None)["sessions"][0]["seats_free"], 0,
+                         "F2: replaying a register lost the host's updated seat count")
 
     def test_world_resume_without_the_row_token_is_refused(self) -> None:
         self.start()

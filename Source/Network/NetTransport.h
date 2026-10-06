@@ -53,6 +53,8 @@ namespace RTE {
 
 		/// Gets the round-trip ping to a peer in milliseconds, or 0 if unavailable.
 		virtual uint32_t GetPeerPingMs(NetPeerId) const { return 0; }
+		/// Whether the link to a peer has a measured round trip: a link under a millisecond reads 0 ms and is measured.
+		virtual bool IsPeerPingMeasured(NetPeerId) const { return false; }
 		virtual std::string GetConnectedRoute(NetPeerId) const { return {}; }
 	};
 
