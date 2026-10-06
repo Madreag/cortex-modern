@@ -28,6 +28,7 @@ import sys
 import threading
 import time
 from run_sim_test import engine_executable, file_sha256  # noqa: E402
+from test_menu_readback import spread, managed_case
 
 SCRATCH = Path("D:/mx/swe-overlay-layout-20260914")
 PORT_BASE, PORT_COUNT = 48260, 10
@@ -449,6 +450,7 @@ def probe_script_vsplit(who, size, mode):
     return {"schema": 1, "timeout_ms": 180000, "steps": steps}
 
 
+@managed_case
 def run_vsplit_pair(repo, root, port, size, mode, timeout, expected_pin):
     """E2E shared-seat pair with TwoPlayerSplitscreenVertSplit seeded, editor open on both halves."""
     require_pin(repo, expected_pin)
@@ -463,7 +465,11 @@ def run_vsplit_pair(repo, root, port, size, mode, timeout, expected_pin):
               "-net-match-mode", "coop-pve", "-net-match-ticks", "200", "-max-ticks", "200",
               "-net-match-input-delay", "3", "-seed", "42", "-num-lua-states", "4", "-tick-hashes"]
     runs, records = {}, {}
+    execution = None
     try:
+        execution = spread.prepare_case(repo, root,
+            [spread.Peer("Host", os="windows", reviewed=True), spread.Peer("Guest", os="windows")],
+            spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
         for who, flags in (("Host", ["-net-host", "-net-match-service-config", str(config)]),
                            ("Guest", ["-net-join", "127.0.0.1"])):
             flags = [*flags, "-net-match-e2e-shared-seat"]
@@ -473,7 +479,7 @@ def run_vsplit_pair(repo, root, port, size, mode, timeout, expected_pin):
             probe.write_text(json.dumps(probe_script_vsplit(who, size, mode), indent=2), encoding="utf-8")
             trace, report = root / f"{who}_trace.json", root / f"{who}_report.json"
             flags += ["-out", str(trace), "-net-match-report", str(report)]
-            runs[who] = make_run(repo, [*common, *flags], root / who, timeout,
+            runs[who] = execution.make_run(repo, [*common, *flags], root / who, timeout,
                                  env={"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe)},
                                  expected=[report])
             set_settings(runs[who].cwd, {"ResolutionX": size[0], "ResolutionY": size[1],
@@ -529,11 +535,16 @@ def inspect_vsplit(root, records, size, mode, name):
     return {"pass": all(checks.values()), "checks": checks, "details": details}
 
 
+@managed_case
 def run_pair(repo, root, port, size, arm, mode, timeout, expected_pin):
     require_pin(repo, expected_pin)
     root.mkdir(parents=True, exist_ok=False)
     runs, records = {}, {}
+    execution = None
     try:
+        execution = spread.prepare_case(repo, root,
+            [spread.Peer("Host", os="windows", reviewed=True), spread.Peer("Guest", os="windows")],
+            spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
         for who in ("Host", "Guest"):
             inputs = root / f"{who}_inputs"
             inputs.mkdir()
@@ -549,7 +560,7 @@ def run_pair(repo, root, port, size, arm, mode, timeout, expected_pin):
                 flags += ["-net-match-screenshot-ticks", ",".join(map(str, CAPTURE_TICKS))]
             if arm.get("stall") and who == "Guest":
                 flags += ["-net-match-e2e-stall"]
-            runs[who] = make_run(repo, flags, root / who, timeout,
+            runs[who] = execution.make_run(repo, flags, root / who, timeout,
                                  env={"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe)})
             values = {"ResolutionX": size[0], "ResolutionY": size[1],
                       "NetworkMatchStatusMode": MODE_INI[mode],
@@ -939,6 +950,12 @@ def compare_capture_switch(on, off, who, paused):
     return {"pass": ok, "detail": detail}
 
 
+def spread_metadata(root, result):
+    receipts = {path.parent.name: spread.read_json(path, {}) for path in root.glob("*/spread-result.json")}
+    result.update(topology="spread", peer_boxes={name: row.get("peer_boxes", {}) for name, row in receipts.items()},
+                  spread=receipts, proof=result["pass"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -952,7 +969,13 @@ def main():
     # A selection runs one arm against one build; the full matrix is still the default.
     parser.add_argument("--modes", default=",".join(MODES), help="status modes to run, in order")
     parser.add_argument("--arms", default=",".join(ARMS), help="arms to run, in order")
+    if spread:
+        spread.add_arguments(parser)
     options = parser.parse_args()
+    if not spread:
+        parser.error("match overlay requires the shared spread executor")
+    options.spread = True
+    spread.configure(options)
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("verification family owns the machine; no driver may start")
     repo, root = options.repo.resolve(), options.out.resolve()
@@ -1003,6 +1026,7 @@ def main():
                         pair = inspect_pair(pair_root, records, size, ARMS[arm_name], mode, name)
                     result["pairs"][name] = pair
                     result["checks"][name] = pair["pass"]
+                    spread_metadata(root, result)
                     (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
                     if not pair["pass"]:
                         failed = [key for key, passed in pair["checks"].items() if not passed]
@@ -1021,6 +1045,7 @@ def main():
         if result.get("pin_before") != result["pin_after"]:
             result["pass"] = False
             result["error"] = "source or executable changed during the driver"
+        spread_metadata(root, result)
         (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps({"pass": result["pass"], "error": result.get("error"), "out": str(root),
                       "exe_sha256": result["pin_after"]["exe_sha256"]}), flush=True)
