@@ -19,12 +19,21 @@ def load_sibling(name):
 
 
 PURGE_VIEW = """    if self.steps == 39 then
-        self:SetViewState(Activity.AIGOTOPOINT, 0);
-        print("[resume-detector] entered_ai_go_to=" .. self:GetViewState(0));
+        for player = 0, 3 do
+            if self:ScreenOfPlayer(player) >= 0 then
+                self:SetViewState(Activity.AIGOTOPOINT, player);
+                assert(self:GetViewState(player) == Activity.AIGOTOPOINT, "the local actor view was not entered");
+                print("[resume-detector] player=" .. player .. " entered_ai_go_to=" .. self:GetViewState(player));
+            end
+        end
     end
     if self.steps == 42 then
-        assert(self:GetViewState(0) == Activity.NORMAL, "purge leaves an actor-dependent view active");
-        assert(self:GetPlayerBrain(0) ~= nil, "replacement brain is absent");
+        for player = 0, 3 do
+            if self:ScreenOfPlayer(player) >= 0 then
+                assert(self:GetViewState(player) == Activity.NORMAL, "purge leaves an actor-dependent view active");
+                assert(self:GetPlayerBrain(player) ~= nil, "replacement brain is absent");
+            end
+        end
         print("[resume-detector] PASS purge_view");
     end
 """
