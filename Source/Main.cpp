@@ -7544,7 +7544,7 @@ void RunGameLoop() {
 				// Both arms of the checkpoint fixture start with the same scripted
 				// actors. Priming does not run an extra Update on a live actor.
 				std::list<SceneObject*> actors;
-				g_MovableMan.GetAllActors(true, actors);
+				g_MovableMan.GetAllActors(false, actors);
 				for (SceneObject* object: actors) if (auto* actor = dynamic_cast<Actor*>(object)) actor->InitializeObjectScriptsIfNeeded();
 			}
 			if (!s_loadGameName.empty() && ScenarioRunner::GetArgs().maxTicks > 0 &&
