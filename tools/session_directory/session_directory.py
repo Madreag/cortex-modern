@@ -83,6 +83,9 @@ MAX_STORED_SIGNAL_BYTES = 64 * 1024 * 1024
 SIGNAL_METADATA_BYTES = 256
 QUEUE_IDLE_S = 120.0
 HANDLER_TIMEOUT_S = 10
+# Three seconds bounds body readers well inside a fifteen-second lease.
+HANDLER_BODY_DEADLINE_S = 3.0
+MAX_SHORT_CONNECTIONS_PER_SOURCE = 4
 MAX_ACTIVE_HANDLERS = 64
 # Waiters have their own capacity, leaving all short handlers available.
 MAX_SIGNAL_WAITERS = 64
@@ -1598,7 +1601,28 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
 
         def parse_request(self) -> bool:
             self._body_read = False
-            return super().parse_request()
+            if not super().parse_request():
+                return False
+            try:
+                source = self._observed_ip()
+            except FieldError as error:
+                self._handle_error(error)
+                self.close_connection = True
+                return False
+            if not self.server.begin_short_request(source):
+                self.close_connection = True
+                return False
+            try:
+                body_length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                body_length = None
+            if body_length is not None and body_length > MAX_BODY:
+                self._handle_error(OverflowError("payload_too_large"))
+                self.close_connection = True
+                return False
+            if body_length == 0:
+                self.server.body_complete()
+            return True
 
         def _drain_body(self) -> None:
             # A refusal answered before the body is read still takes it off the wire: closing over unread bytes resets
@@ -1613,6 +1637,7 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                     self.rfile.read(length)
                 except OSError:
                     pass
+            self.server.body_complete()
 
         def _send(self, status: int, body: dict[str, Any]) -> None:
             if not getattr(self, "_body_read", True):
@@ -1638,6 +1663,7 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                 raise OverflowError("payload_too_large")
             self._body_read = True
             blob = self.rfile.read(length) if length else b""
+            self.server.body_complete()
             try:
                 parsed = json.loads(blob.decode("utf-8"))
             except (ValueError, UnicodeDecodeError) as exc:
@@ -1879,6 +1905,9 @@ class SessionHTTPServer(ThreadingHTTPServer):
     def __init__(self, *args, **kwargs) -> None:
         self._handler_slots = threading.BoundedSemaphore(MAX_ACTIVE_HANDLERS)
         self._handler_capacity = threading.local()
+        self._connection_lock = threading.Lock()
+        self._short_sources = Counter()
+        self._request_started: dict[socket.socket, float] = {}
         self._waiter_lock = threading.Lock()
         self._waiter_sources = Counter()
         self._waiters = 0
@@ -1888,9 +1917,13 @@ class SessionHTTPServer(ThreadingHTTPServer):
         if not self._handler_slots.acquire(blocking=False):
             self.shutdown_request(request)
             return
+        with self._connection_lock:
+            self._request_started[request] = time.monotonic()
         try:
             super().process_request(request, client_address)
         except BaseException:
+            with self._connection_lock:
+                self._request_started.pop(request, None)
             self._handler_slots.release()
             raise
 
@@ -1898,6 +1931,10 @@ class SessionHTTPServer(ThreadingHTTPServer):
         self, request: socket.socket, client_address: Any
     ) -> None:
         self._handler_capacity.held = True
+        self._handler_capacity.source = ""
+        with self._connection_lock:
+            accepted_at = self._request_started.pop(request)
+        self._handler_capacity.body_deadline = accepted_at + HANDLER_BODY_DEADLINE_S
         current = [request]
         def expire():
             try:
@@ -1905,14 +1942,40 @@ class SessionHTTPServer(ThreadingHTTPServer):
             except OSError:
                 pass
         timer = threading.Timer(HANDLER_LIFETIME_S, expire)
+        body_timer = threading.Timer(max(0, self._handler_capacity.body_deadline - time.monotonic()), expire)
+        body_timer.daemon = True
+        self._handler_capacity.body_timer = body_timer
+        body_timer.start()
         timer.daemon = True
         timer.start()
         try:
             self._serve_request(request, client_address, current)
         finally:
             timer.cancel()
+            body_timer.cancel()
+            self.end_short_request()
             if self._handler_capacity.held:
                 self._handler_slots.release()
+
+    def begin_short_request(self, source: str) -> bool:
+        with self._connection_lock:
+            if self._short_sources[source] >= MAX_SHORT_CONNECTIONS_PER_SOURCE:
+                return False
+            self._short_sources[source] += 1
+            self._handler_capacity.source = source
+            return True
+
+    def end_short_request(self) -> None:
+        source = self._handler_capacity.source
+        if source:
+            with self._connection_lock:
+                self._short_sources[source] -= 1
+                if not self._short_sources[source]:
+                    del self._short_sources[source]
+            self._handler_capacity.source = ""
+
+    def body_complete(self) -> None:
+        self._handler_capacity.body_timer.cancel()
 
     def begin_signal_wait(self, source: str) -> bool:
         with self._waiter_lock:
@@ -1921,6 +1984,7 @@ class SessionHTTPServer(ThreadingHTTPServer):
             self._waiters += 1
             self._waiter_sources[source] += 1
             self._handler_capacity.held = False
+            self.end_short_request()
             self._handler_slots.release()
             return True
 
@@ -1934,7 +1998,11 @@ class SessionHTTPServer(ThreadingHTTPServer):
     def _serve_request(self, request: socket.socket, client_address: Any, current: list[socket.socket]) -> None:
         ctx = self.tls_context
         if ctx is not None:
-            request.settimeout(HANDSHAKE_TIMEOUT_S)
+            remaining = self._handler_capacity.body_deadline - time.monotonic()
+            if remaining <= 0:
+                self.shutdown_request(request)
+                return
+            request.settimeout(min(HANDSHAKE_TIMEOUT_S, remaining))
             try:
                 request = ctx.wrap_socket(request, server_side=True)
                 current[0] = request

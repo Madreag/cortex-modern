@@ -139,7 +139,11 @@ with four per caller; excess polls answer immediately with a one-second retry
 hint. One caller retains at most 64 of 4,096 owners. Under pressure, worlds
 listed for less than 60 seconds retire first; signed returning proofs remain
 verifiable. These shares prevent one address from reserving the whole service.
-The owner share also applies to a /24 for
+Short requests have a three-second deadline from accept through body end,
+including TLS and headers, a 128 KiB body cap, and four open short connections
+per caller. The separate four-waiter share gives at most eight admitted
+connections per caller. Excess or overdue body readers close; they cannot hold
+all heartbeat handlers for a lease. The owner share also applies to a /24 for
 IPv4 and a /48 for IPv6. Owners listed for at least 60 seconds are never retired
 for capacity: a table of established owners refuses a new world with 503/full.
 Retirement of a shorter listing and replacement of a returning lease wait for

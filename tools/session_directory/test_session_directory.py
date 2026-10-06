@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import select
 import shutil
 import socket
 import struct
@@ -495,6 +496,64 @@ class DirectoryTests(unittest.TestCase):
                     store.register(dict(request, world_boot=2, resume_session_id=row["session_id"], resume_token=row["token"]), "192.0.2.1", 1, INSTALL_KEY)
             self.assertTrue(store._sessions.get(row["session_id"]) is previous, "T4: a refused returning registration replaced its old lease")
             self.assertTrue(store.get_signals(row["session_id"], "host", 0, row["token"], 1) == before, "T4: a refused returning registration removed queued signaling")
+
+    def test_T5_accept_deadline_closes_dripping_headers_and_bodies(self) -> None:
+        self.start(port=47467)
+        self.server.store.caller_mode = "tunnel"
+        connections = [socket.create_connection(("127.0.0.1", self.port), timeout=1) for _ in range(2)]
+        try:
+            connections[0].sendall(b"POST /v1/sessions HTTP/1.1\r\nX-Test: ")
+            connections[1].sendall((f"POST /v1/sessions HTTP/1.1\r\nX-Install-Key: {INSTALL_KEY}\r\nCF-Connecting-IP: 192.0.2.1\r\nContent-Length: 4096\r\n\r\n{{").encode())
+            live = list(connections)
+            deadline = time.monotonic() + 5
+            while live and time.monotonic() < deadline:
+                for connection in live:
+                    try: connection.sendall(b" ")
+                    except OSError: pass
+                readable, _, _ = select.select(live, [], [], 0.1)
+                for connection in readable:
+                    try: ended = not connection.recv(4096)
+                    except OSError: ended = True
+                    if ended: live.remove(connection)
+            self.assertFalse(live, "T5: a dripping header or body outlived the total accept deadline")
+        finally:
+            for connection in connections: connection.close()
+
+    def test_T5_dripping_bodies_leave_an_honest_heartbeat_capacity(self) -> None:
+        self.start(port=47466)
+        self.server.store.caller_mode = "tunnel"
+        honest = {"CF-Connecting-IP": "192.0.2.200"}
+        status, row = self.call("POST", "/v1/sessions", sample_register(), headers=honest)
+        self.assertEqual(status, 200)
+        sockets = []
+        stop = threading.Event()
+        def drip():
+            while not stop.wait(0.1):
+                for connection in tuple(sockets):
+                    try: connection.sendall(b" ")
+                    except OSError: pass
+        worker = threading.Thread(target=drip)
+        try:
+            for index in range(64):
+                connection = socket.create_connection(("127.0.0.1", self.port), timeout=1)
+                sockets.append(connection)
+                try:
+                    connection.sendall((f"POST /v1/sessions HTTP/1.1\r\nHost: localhost\r\nX-Install-Key: {index:016x}\r\nCF-Connecting-IP: 192.0.2.1\r\nContent-Length: 4096\r\n\r\n{{").encode())
+                except OSError:
+                    pass
+                time.sleep(0.015)
+            worker.start()
+            started = time.monotonic()
+            try:
+                status, _ = self.call("POST", f"/v1/sessions/{row['session_id']}/heartbeat", {"token": row["token"], "peer_count": 1, "seats_free": 1}, headers=honest)
+            except (OSError, http.client.HTTPException):
+                self.fail("T5: one caller's dripping bodies occupied every heartbeat handler")
+            self.assertEqual(status, 200, "T5: dripping bodies blocked an honest heartbeat")
+            self.assertLess(time.monotonic() - started, self.server.store.expiry_s, "T5: heartbeat answered after its lease")
+        finally:
+            stop.set()
+            if worker.ident is not None: worker.join(2)
+            for connection in sockets: connection.close()
 
     def test_R1_tunnel_requires_the_callers_address(self) -> None:
         self.start(port=47460)
