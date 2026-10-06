@@ -119,10 +119,11 @@ namespace RTE {
 			config.sessionConfig.p2pJoin.connect = [](INetTransport&, std::string* why) { if (why) *why = "ICE signaling queue is full"; return false; };
 			bool noDirectRoute = false;
 			NetIceJoinTarget target{"str:h-capacity", "either", "127.0.0.1", 47468};
-			const bool started = service.StartLobbyConnection(mux, ip, session, coordinator, runner, config, target, true, noDirectRoute, error);
+			std::string connectionError;
+			const bool started = service.StartLobbyConnection(mux, ip, session, coordinator, runner, config, target, true, noDirectRoute, &connectionError);
 			if (mode == 2) {
-				if (started || ip.connected || *error != NetDirectoryClient::c_CapacityNotice) {
-					*error = "U5: Relay-only retried direct or replaced the list-full sentence: " + *error;
+				if (started || ip.connected || connectionError != NetDirectoryClient::c_CapacityNotice) {
+					*error = "U5: Relay-only retried direct or replaced the list-full sentence: " + connectionError;
 					return false;
 				}
 				std::cout << "[net-directory-selftest] PASS U5 relay_only_keeps_capacity_notice" << std::endl;
@@ -130,7 +131,7 @@ namespace RTE {
 			}
 			if (!started ||
 			    !ip.connected || !session.IsReady() || !coordinator.IsRunning() || service.m_IceRoute != "ip") {
-				*error = (mode == 0 ? "T2: " : "U5: Direct-only ") + std::string("queue_full stopped a join that the direct address could complete: ") + *error;
+				*error = (mode == 0 ? "T2: " : "U5: Direct-only ") + std::string("queue_full stopped a join that the direct address could complete: ") + connectionError;
 				return false;
 			}
 			std::cout << (mode == 0 ? "[net-directory-selftest] PASS T2 queue_full_direct_join" : "[net-directory-selftest] PASS U5 direct_only_retries_direct") << std::endl;
