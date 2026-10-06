@@ -425,9 +425,9 @@ class ContractTests(unittest.TestCase):
             spread.Peer('host', output_name='../owner')
 
     def test_legacy_script_bytes_are_not_transcoded(self):
-        data = b'mark ' + bytes(range(128, 256)) + b'\nwait_file D:\\mx\\lane\\ready.json 5000\n'
-        mapped = spread.map_script(data, [('D:\\mx\\lane', '/native/lane')])
-        self.assertEqual(mapped, data.replace(b'D:\\mx\\lane\\ready.json', b'/native/lane/ready.json'))
+        data = b'mark ' + bytes(range(128, 256)) + b'\nwait_file X:\\test-inputs\\lane\\ready.json 5000\n'
+        mapped = spread.map_script(data, [('X:\\test-inputs\\lane', '/native/lane')])
+        self.assertEqual(mapped, data.replace(b'X:\\test-inputs\\lane\\ready.json', b'/native/lane/ready.json'))
 
     def test_control_port_is_not_game_port(self):
         with self.assertRaises(ValueError):
@@ -443,22 +443,22 @@ class ContractTests(unittest.TestCase):
             spread.pairs("host=ONE,HOST=TWO")
 
     def test_windows_paths_inside_probe_json_map_to_native_root(self):
-        text = json.dumps({"path": "D:\\mx\\lane\\host_probe\\done.json"})
-        mapped = spread.map_text(text, [("D:\\mx\\lane", "/native/lane")])
+        text = json.dumps({"path": "X:\\test-inputs\\lane\\host_probe\\done.json"})
+        mapped = spread.map_text(text, [("X:\\test-inputs\\lane", "/native/lane")])
         self.assertEqual(json.loads(mapped)["path"], "/native/lane/host_probe/done.json")
 
     def test_script_and_argument_paths_map_the_whole_windows_tail(self):
-        mappings = [("D:\\mx\\lane", "/native/lane")]
-        self.assertEqual(spread.map_text("D:\\mx\\lane\\host\\feel", mappings), "/native/lane/host/feel")
-        self.assertEqual(spread.map_text("wait_file D:\\mx\\lane\\ready.json 5000\n", mappings),
+        mappings = [("X:\\test-inputs\\lane", "/native/lane")]
+        self.assertEqual(spread.map_text("X:\\test-inputs\\lane\\host\\feel", mappings), "/native/lane/host/feel")
+        self.assertEqual(spread.map_text("wait_file X:\\test-inputs\\lane\\ready.json 5000\n", mappings),
                          "wait_file /native/lane/ready.json 5000\n")
 
     def test_probe_path_mapping_preserves_unrelated_regex_escapes(self):
-        text = json.dumps({"path": "D:\\mx\\lane\\done.json", "regex": r"\d+\s+"})
-        self.assertEqual(json.loads(spread.map_text(text, [("D:\\mx\\lane", "/native/lane")]))["regex"], r"\d+\s+")
+        text = json.dumps({"path": "X:\\test-inputs\\lane\\done.json", "regex": r"\d+\s+"})
+        self.assertEqual(json.loads(spread.map_text(text, [("X:\\test-inputs\\lane", "/native/lane")]))["regex"], r"\d+\s+")
 
     def test_mapping_prefers_case_input_over_case_root(self):
-        result = spread.map_text("D:/mx/lane/input.txt", [("D:/mx/lane", "/root"), ("D:/mx/lane/input.txt", "/input/schedule.txt")])
+        result = spread.map_text("X:/test-inputs/lane/input.txt", [("X:/test-inputs/lane", "/root"), ("X:/test-inputs/lane/input.txt", "/input/schedule.txt")])
         self.assertEqual(result, "/input/schedule.txt")
 
     def test_signals_include_probe_and_controller_rendezvous(self):
@@ -683,7 +683,7 @@ class ContractTests(unittest.TestCase):
         case.id = "unique"
         case.match = spread.Match(51580)
         case.guard = lambda: None
-        case.members = {name: ({"name": name, "os": "windows", "scratch": "D:/mx"}, {"ports": [47660, 47664]}, {}, Transport(digest))
+        case.members = {name: ({"name": name, "os": "windows", "scratch": "X:/test-inputs"}, {"ports": [47660, 47664]}, {}, Transport(digest))
                         for name, digest in (("host", "same"), ("client", client_hash))}
         return case
 
