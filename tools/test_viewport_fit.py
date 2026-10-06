@@ -2,11 +2,11 @@
 multiplayer container, its panel edges and the Back button inside the viewport,
 and the long diagnostic must stay reachable through the label's overflow scroll.
 
-    python test_viewport_fit.py --repo D:/Projects/item7-ux \
-        --out D:/mx/ui-viewport-complete-20260913/detector --port 47871 \
+    python test_viewport_fit.py --repo <tree> \
+        --out <output-dir> --port 47871 \
         --exe-sha256 <exe hash>
 
-Three phases, each one host + one refused joiner on loopback:
+Three phases, each one host + one refused joiner on separate machines:
 
   viewport  the joiner stages Base1.rte plus 'ß'*70 + '.rte' (the unchanged
             encoded-name fixture; the wire name arrives as 64 x 0xDF), then
@@ -53,6 +53,14 @@ import re
 import subprocess
 import sys
 from run_sim_test import engine_executable  # noqa: E402
+try:
+    import spread_peers as spread
+except ModuleNotFoundError as error:
+    if error.name != "spread_peers":
+        raise
+    spread = None
+
+managed_case = spread.managed_case if spread else lambda function: function
 
 
 LABEL = "LabelMultiplayerLandingStatus"
@@ -439,6 +447,7 @@ def post_back_is_main(post_back_path, main_start_path):
     return ok, {"main_diff": round(diff, 4), "gold_rows": buttons}
 
 
+@managed_case
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, required=True)
@@ -449,7 +458,13 @@ def main():
     parser.add_argument("--exe-sha256", required=True)
     parser.add_argument("--no-scroll-input", action="store_true",
                         help="omit the scrollwide/scrolltall joiner inputs; the scroll checks must then fail closed")
+    if spread:
+        spread.add_arguments(parser)
     options = parser.parse_args()
+    if not spread:
+        parser.error("viewport fit requires the shared spread executor")
+    options.spread = True
+    spread.configure(options)
     if not (320 <= options.width <= 7680 and 240 <= options.height <= 4320):
         parser.error("dimensions out of range")
     if not (1024 <= options.port <= 65535):
@@ -471,9 +486,19 @@ def main():
               "pin_before": before}
     checks, details = {}, {}
     runs, records = {}, {}
+    executions = {}
     phase = "viewport"
 
     def start(name, host, port, suffix, modules, phase="viewport"):
+        key = (phase, port)
+        if key not in executions:
+            if not host:
+                raise RuntimeError("viewport phase must stage its host first")
+            joiner = name.removesuffix("Host") + "Joiner"
+            executions[key] = spread.prepare_case(repo, root / phase,
+                [spread.Peer("host", os="windows", output_name=name, size=(options.width, options.height)),
+                 spread.Peer("client", os="windows", reviewed=True, output_name=joiner, size=(options.width, options.height))],
+                spread.Match(port))
         require_pin(repo, options.exe_sha256, before, checks, f"{name}_prelaunch")
         script = f"wait 40\nscreenshot main-start\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
         if host:
@@ -485,7 +510,7 @@ def main():
         path = root / phase / f"{name}.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(script + suffix, encoding="utf-8")
-        run = make_run(repo, ["-menu-script", path, "-num-lua-states", 4], root / phase / name, 200)
+        run = executions[key].make_run(repo, ["-menu-script", path, "-num-lua-states", 4], root / phase / name, 200)
         runs[name] = run
         staged = [str(stage_module(run, m[0], m[1], version, m[2] if len(m) > 2 else 1))
                   for m in modules]
@@ -959,6 +984,8 @@ def main():
         if close_errors:
             result["close_errors"] = close_errors
             result["pass"] = False
+        result.update(topology="spread", peer_boxes={f"{phase}:{port}": case.result()["peer_boxes"] for (phase, port), case in executions.items()},
+                      spread=[case.result() for case in executions.values()], proof=result["pass"])
         (root / "result.json").write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
     print(json.dumps({"pass": result["pass"], "error": result.get("error"),
                       "failed": [k for k, ok in result.get("checks", {}).items() if not ok],
