@@ -562,7 +562,7 @@ def save_hotkey_probe(who, root):
 
 
 def host_activity_label(row, rows=()):
-    """The host screen names an activity's module only to tell apart two activities of one name (MENU-UX 3.2)."""
+    """The host screen names an activity's module only to tell apart two activities of one name."""
     module = row.get("module") or ""
     shared = sum(other["preset"] == row["preset"] for other in rows) > 1
     return row["preset"] + (f" - {module}" if module and shared else "")
@@ -1036,7 +1036,7 @@ def scripts(case, port, root, size="960x540"):
         # Every kind of control on the host options, operated the way a hand does: a press and its release on different
         # frames with the panel's own per-frame refresh in between, and the value read back frames after.
         text = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\n"
-                # Under the activity, the first words of what it is (MENU-UX 3.2: a one-line description).
+                # Under the activity, the first words of what it is: a one-line description.
                 "assert_label LabelHostActivityAbout Survive waves of AI-controlled enemies\n"
                 "activate ButtonHostOptions\nwait_ms 400\nassert_substate HostOptions\n"
                 # The draft starts from the activity's own rules: Skirmish Defense names no gold (2,000) and fog of war on.
@@ -1479,7 +1479,7 @@ def scripts(case, port, root, size="960x540"):
                 "assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
                 "assert_label LabelHostSeatDlgActionHint The host's own seat is never kicked or banned.\n"
                 "activate ButtonHostSeatDlgClose\nwait 3\nassert_visible HostSeatDialog 0\n"
-                # H34 on the two-peer fixture: the adopted config names both seated humans, the lobby is kept to
+                # On the two-peer fixture the adopted config names both seated humans, the lobby is kept to
                 # this network, and Apply refuses a port edit mid-session.
                 "activate TabHostPageTiming\nwait 3\nassert_visible CollectionBoxHostPageTiming 1\n"
                 "assert_label LabelHostNetMode Host mode: Playing - capacity 2 - humans seated 2\n"
@@ -1699,7 +1699,7 @@ def scripts(case, port, root, size="960x540"):
         # own row and the joined player's row offer no other kind, so a hand cannot open them.
         text += "assert_enabled ComboHostSeatType0 0\n"
         text += "wait_members 2\nwait 3\nassert_enabled ComboHostSeatType1 0\n"
-        # H03: a two-peer lobby has no free peer id, so the closed tail turns a hand's human seat down
+        # A two-peer lobby has no free peer id, so the closed tail turns a hand's human seat down
         # with the reason in the status line, then accepts the peerless CPU seat the same row offers.
         text += ("combo_refused ComboHostSeatType2 Open\nwait 3\n"
                  "assert_label LabelHostOptStatus No free peer seat\n")
@@ -1742,7 +1742,7 @@ def scripts(case, port, root, size="960x540"):
         text += checks("ComboHostRulesBrainless", "CollectionBoxHostPageRules")
         text += "assert_no_overlap_within CollectionBoxHostPageRules\n"
         text += "dump_host_options\n"
-        # H21-H24 Timing: the delay policy and its numbers, the redundancy, the slow-player bound and policy.
+        # Timing: the delay policy and its numbers, the redundancy, the slow-player bound and policy.
         text += "activate TabHostPageTiming\nwait 3\nassert_visible CollectionBoxHostPageTiming 1\n"
         text += "assert_label LabelHostOptionsTitle A D V A N C E D\n"
         text += checks("ComboHostNetPolicy", "CollectionBoxHostPageTiming")
@@ -1760,7 +1760,7 @@ def scripts(case, port, root, size="960x540"):
         text += "assert_label LabelHostNetEffective Effective delay: ping plus a 3-tick margin, raised live if inputs arrive late, at least\n"
         text += checks("LabelHostNetEffective", "CollectionBoxHostPageTiming")
         text += checks("ButtonHostNetRecalc", "CollectionBoxHostPageTiming")
-        # H34: the host row names mode/capacity/seated humans off the adopted config.
+        # The host row names mode/capacity/seated humans off the adopted config.
         text += checks("LabelHostNetMode", "CollectionBoxHostPageTiming")
         text += "assert_label LabelHostNetMode Host mode: Playing - capacity 2 - humans seated 1\n"
         text += "assert_no_overlap_within CollectionBoxHostPageTiming\n"

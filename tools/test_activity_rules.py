@@ -8,7 +8,7 @@ same activity - and every seated team's funds equal that gold.
 
   python tools/test_activity_rules.py --out D:/mx/<lane>/activity-rules [--port 47350] [--runs 1] [--path address|newcomer]
 
-The newcomer path (MENU-UX.md section 6) joins through the game list - the host's row, Join Game - instead of by address; the
+The newcomer path joins through the game list - the host's row, Join Game - instead of by address; the
 host's port is the one setup word, so two runs on one machine never meet.
 """
 

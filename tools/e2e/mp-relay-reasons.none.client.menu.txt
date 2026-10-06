@@ -20,7 +20,7 @@ video_mark relay-reason-none
 assert_substate JoinSetup
 assert_label LabelJoinSelected No relay is configured for this match - switch Connection to Automatic or Direct only
 # The reason stays on Join a Game, the cause on its first drawn line, for as long as the player looks at it.
-text_watch start h15-scene-relay-none require substate:JoinSetup No relay is configured for this match
+text_watch start scene-relay-none require substate:JoinSetup No relay is configured for this match
 wait_ms 3000
-text_watch close h15-scene-relay-none
+text_watch close scene-relay-none
 exit

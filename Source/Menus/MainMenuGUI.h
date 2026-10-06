@@ -470,7 +470,7 @@ namespace RTE {
 		GUILabel* m_HostSeatDlgState = nullptr;
 		GUILabel* m_HostSeatDlgReclaim = nullptr;    //!< H08: hold/reclaim seconds from the seat snapshot.
 		GUILabel* m_HostSeatDlgApplicants = nullptr;
-		GUIListBox* m_HostSeatDlgApplicantList = nullptr; //!< H04: the people asking for the seat; a pick chooses whom Approve seats.
+		GUIListBox* m_HostSeatDlgApplicantList = nullptr; //!< The people asking for the seat; a pick chooses whom Approve seats.
 		GUIButton* m_HostSeatDlgWait = nullptr;      //!< H05.
 		GUIButton* m_HostSeatDlgApprove = nullptr;   //!< H06.
 		GUIButton* m_HostSeatDlgCancel = nullptr;    //!< H07.
