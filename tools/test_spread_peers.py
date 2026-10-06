@@ -16,6 +16,38 @@ from test_peer_run_guards import PeerRunGuardTests
 
 
 class ContractTests(unittest.TestCase):
+    def test_direct_host_route_to_named_lan_peer_does_not_select_its_overlay(self):
+        with patch.object(spread.sys, 'platform', 'win32'), \
+             patch.object(spread.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='192.0.2.10\n')) as query:
+            self.assertEqual(spread.native_address_probe('192.0.2.20'), '192.0.2.10')
+        self.assertIn('Find-NetRoute', query.call_args.args[0][-1])
+        self.assertIn('192.0.2.20', query.call_args.args[0][-1])
+        self.assertEqual(query.call_count, 1)
+
+    def test_named_endpoint_reads_ssh_facts_without_choosing_a_box(self):
+        with patch.object(spread.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='hostname named-peer.local\n')) as query, \
+             patch.object(spread.socket, 'getaddrinfo', return_value=[(None,None,None,None,('192.0.2.30',0))]):
+            self.assertEqual(spread.named_box_endpoint(dict(name='SecondPosixBox', kind='posix', ssh='saved-peer')), '192.0.2.30')
+        self.assertEqual(query.call_args.args[0], ['ssh','-G','saved-peer'])
+
+    def test_concurrent_seat_waits_for_requested_host_but_keeps_caller_order(self):
+        host = SimpleNamespace(started=False, launch_attempted=True)
+        case = SimpleNamespace(names=['host','seat'], runs={'host':host}, guard=unittest.mock.Mock())
+        def idle(seconds):
+            self.assertFalse(host.started)
+            host.started = True
+        with patch.object(spread.time, 'sleep', side_effect=idle) as sleep:
+            spread.wait_started_host(case, 'seat')
+        sleep.assert_called_once_with(.1)
+        case.guard.assert_called_once()
+        host.started, host.launch_attempted = False, False
+        with patch.object(spread.time, 'sleep') as sleep:
+            spread.wait_started_host(case, 'seat')
+        sleep.assert_not_called()
+        host.launch_attempted, host.start_failure = True, 'named native floor refused'
+        with self.assertRaisesRegex(spread.SpreadRefusal, 'requested host did not start.*floor'):
+            spread.wait_started_host(case, 'seat')
+
     def test_native_adapter_ships_its_existing_named_route_dependency(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -354,8 +386,8 @@ class ContractTests(unittest.TestCase):
     def test_linux_route_source_wins_over_a_docker_bridge(self):
         with patch.object(spread.sys, 'platform', 'linux'), patch.object(spread.shutil, 'which', return_value=None), \
                 patch.object(spread.socket, 'getaddrinfo', return_value=[(None, None, None, None, ('172.17.0.1', 0))]), \
-                patch.object(spread.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='[{"prefsrc":"192.168.50.36"}]')) as read:
-            self.assertEqual(spread.native_address_probe(), '192.168.50.36')
+                patch.object(spread.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='[{"prefsrc":"192.0.2.20"}]')) as read:
+            self.assertEqual(spread.native_address_probe(), '192.0.2.20')
         self.assertEqual(read.call_args.args[0], ['ip', '-j', 'route', 'get', '192.0.2.1'])
 
     def place_fake(self, peers, pins=None):
