@@ -1320,17 +1320,20 @@ class SessionDirectory:
                 raise PermissionError("forbidden")
             if to_peer not in sess.queues and len(sess.queues) >= MAX_DEST_QUEUES:
                 raise BufferError("queue_full")
-            queue = sess.queues.setdefault(to_peer, [])
+            queue = list(sess.queues.get(to_peer, []))
+            victims = []
+            anonymous = [item for item in sess.queues.get("host", []) if item.from_peer != "host"]
+            projected_payload = sess.undrained_bytes
+            projected_stored = self._stored_signal_bytes
             charge = len(payload_b64) + SIGNAL_METADATA_BYTES
             while True:
-                anonymous = [item for item in sess.queues.get("host", []) if item.from_peer != "host"]
                 source = [item for item in anonymous if item.source_ip == source_ip]
                 nonce = [item for item in source if item.from_peer == from_peer]
                 source_full = from_peer != "host" and (len(source) >= MAX_SIGNAL_SOURCE_MESSAGES or sum(item.stored_bytes for item in source) + charge > MAX_SIGNAL_SOURCE_BYTES)
                 nonce_full = from_peer != "host" and len(nonce) >= MAX_SIGNAL_NONCE_MESSAGES
                 anonymous_full = from_peer != "host" and sum(item.payload_len for item in anonymous) + len(raw) > MAX_ANONYMOUS_SIGNAL_BYTES
-                if not (source_full or nonce_full or anonymous_full or len(queue) >= MAX_QUEUE or sess.undrained_bytes + len(raw) > MAX_SESSION_PAYLOAD
-                        or self._stored_signal_bytes + charge > MAX_STORED_SIGNAL_BYTES):
+                if not (source_full or nonce_full or anonymous_full or len(queue) >= MAX_QUEUE or projected_payload + len(raw) > MAX_SESSION_PAYLOAD
+                        or projected_stored + charge > MAX_STORED_SIGNAL_BYTES):
                     break
                 counts = Counter((item.source_ip, item.from_peer) for item in anonymous)
                 candidates = [item for item in anonymous if counts[item.source_ip, item.from_peer] > 1
@@ -1343,9 +1346,17 @@ class SessionDirectory:
                     weights[item.source_ip] += item.stored_bytes
                 heaviest = min({item.source_ip for item in candidates}, key=lambda address: (-weights[address], next(item.seq for item in candidates if item.source_ip == address)))
                 victim = next(item for item in candidates if item.source_ip == heaviest)
+                victims.append(victim)
+                anonymous.remove(victim)
+                if victim in queue:
+                    queue.remove(victim)
+                projected_payload -= victim.payload_len
+                projected_stored -= victim.stored_bytes
+            for victim in victims:
                 sess.queues["host"].remove(victim)
                 sess.undrained_bytes -= victim.payload_len
                 self._stored_signal_bytes -= victim.stored_bytes
+            queue = sess.queues.setdefault(to_peer, [])
             if to_peer not in sess.queue_drain_at:
                 sess.queue_drain_at[to_peer] = now
             seq = sess.next_seq.get(to_peer, 1)

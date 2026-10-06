@@ -487,6 +487,25 @@ class DirectoryTests(unittest.TestCase):
         self.assertNotEqual(fresh["session_id"], recovered["session_id"])
         self.assertLess(len(store._world_owners), session_directory.MAX_WORLD_OWNERS, "R3: one source kept the whole owner table")
 
+    def test_R4_refused_offer_preserves_every_queued_offer(self) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        self.addCleanup(store.stop)
+        now = time.monotonic()
+        row = store.register(sample_register(), "192.0.2.200", now, INSTALL_KEY)
+        def offer(nonce, size, source):
+            return store.post_signal(row["session_id"], {"from": "client:" + nonce, "to": "host", "token_or_join_nonce": nonce,
+                                                        "payload_b64": base64.b64encode(b"x" * size).decode()}, now, source)
+        first = offer("honest", 1024, "192.0.2.200")
+        offer("honest", 1024, "192.0.2.200")
+        for index in range(7):
+            offer(f"attack{index}", 65536, f"192.0.2.{index // 2 + 1}")
+        before = store.get_signals(row["session_id"], "host", 0, row["token"], now)
+        with self.assertRaises(BufferError):
+            offer("attack7", 65536, "192.0.2.5")
+        after = store.get_signals(row["session_id"], "host", 0, row["token"], now)
+        self.assertEqual(after, before, "R4: a refused offer evicted an honest joiner's queued offer")
+        self.assertIn(first["seq"], [item["seq"] for item in after["signals"]])
+
     def test_successor_resumes_row_only_with_its_sealed_token(self) -> None:
         self.start(port=45799)
         status, created = self.register()
