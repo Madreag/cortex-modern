@@ -929,7 +929,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		image->luaReused = true;
 		image->graphs = cow.LastLua();
 	} else {
-		if (!g_MovableMan.CaptureScriptGraphs(image->graphs, problems, &frozenGraphs, readAudio)) {
+		if (!g_MovableMan.CaptureScriptGraphs(image->graphs, problems, &frozenGraphs, readAudio, &image->frozenGraphObservations)) {
 			if (fullStateOnly) {
 				System::PrintDiagnosticLine(std::format("[fullstate] tick={} refused: {}", tick, problems.empty() ? "no reason" : problems.front()));
 				return false;
@@ -1181,6 +1181,17 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			const char* metrics = std::getenv("CCCP_CHECKPOINT_METRICS");
 			const std::string metricsPath = metrics && *metrics ? std::string(metrics) : System::GetWorkingDirectory() + "Autosaves/checkpoint-metrics.json";
 			// Timed after the last of the work, so the number is the whole task.
+			if (!image->frozenGraphObservations.empty()) {
+				image->graph = {};
+				for (const auto& stats: image->frozenGraphObservations) {
+					image->graph.roots += stats->roots; image->graph.tables += stats->tables; image->graph.values += stats->values;
+					image->graph.rootsReused += stats->rootsReused; image->graph.rootsRewritten += stats->rootsRewritten;
+					image->graph.uncacheableRoots += stats->uncacheableRoots;
+					image->graph.walkParts.insert(image->graph.walkParts.end(), stats->walkParts.begin(), stats->walkParts.end());
+				}
+				image->graphRootsReused = image->graph.rootsReused; image->graphRootsRewritten = image->graph.rootsRewritten;
+				CheckpointCow::Get().RecordFrozenGraph(*image);
+			}
 			const int64_t workerUs = sinceStart();
 			CheckpointCow::Get().RecordWorker(workerUs);
 			CheckpointCow::Get().PublishLog(*image, workerUs);

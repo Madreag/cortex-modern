@@ -127,6 +127,36 @@ namespace RTE::CheckpointLua {
 		}
 
 		size_t EntryCount() const { return m_Entries.size() + (m_Classes ? m_Classes->entries.size() : 0); }
+		// Compare the actual frozen native answers, including deferred text, before
+		// reusing a chunk. No live writer barrier is borrowed by the saver VM.
+		std::string Fingerprint(const void* address, View& view, const std::function<void(const TValue&)>& noteTable = {}) const {
+			std::string bytes;
+			const auto word = [&bytes](const auto& value) { bytes.append(reinterpret_cast<const char*>(&value), sizeof(value)); };
+			const auto text = [&bytes, &word](const std::string& value) { word(value.size()); bytes += value; };
+			const auto result = [&](const Result& answer) {
+				text(answer.error); word(answer.values.size());
+				for (const Value& value: answer.values) {
+					word(value.text.has_value());
+					text(value.text ? value.text->Text() : view.Token(value.token));
+					if (!value.text && tvistab(&value.token) && noteTable) noteTable(value.token);
+				}
+				word(answer.carriedSounds.size()); for (uint64_t identity: answer.carriedSounds) word(identity);
+			};
+			if (const Entry* entry = FindEntry(address)) {
+				word(entry->serial); word(entry->movable); word(entry->carriesCopy); word(entry->ownedRegistered); word(entry->borrows);
+				text(entry->className); text(entry->presetName);
+				for (const Result& answer: entry->native) result(answer);
+				result(entry->members);
+				for (const auto* answers: {&entry->helpers, &entry->properties}) {
+					std::vector<std::string> names;
+					for (const auto& [name, answer]: *answers) names.push_back(name);
+					std::sort(names.begin(), names.end());
+					for (const std::string& name: names) { text(name); result(answers->at(name)); }
+				}
+			} else if (const auto iterator = m_Iterators.find(address); iterator != m_Iterators.end()) result(iterator->second);
+			else bytes = "missing";
+			return bytes;
+		}
 		size_t IteratorCount() const { return m_Iterators.size(); }
 		size_t OwnedCount() const { return m_Owned.size(); }
 

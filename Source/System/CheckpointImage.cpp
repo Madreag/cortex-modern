@@ -387,6 +387,14 @@ void CheckpointCow::RecordGraphText(int64_t graphTextUs) {
 	m_LastGraphTextUs = graphTextUs;
 }
 
+void CheckpointCow::RecordFrozenGraph(const CheckpointImage& image) {
+	std::lock_guard lock(m_Mutex);
+	if (m_Last.get() != &image) return;
+	m_LastGraph = image.graph;
+	m_LastRootsReused = image.graphRootsReused;
+	m_LastRootsRewritten = image.graphRootsRewritten;
+}
+
 void CheckpointCow::PublishLog(const CheckpointImage& image, int64_t workerUs) const {
 	const uint64_t tick = image.tick;
 	int64_t freezeUs = 0;

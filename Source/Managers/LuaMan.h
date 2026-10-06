@@ -22,10 +22,12 @@
 struct lua_State;
 
 namespace RTE {
-	namespace CheckpointLua { class HeapOwner; class NativeCache; struct CopyReceipt; }
+	namespace CheckpointLua { class HeapOwner; class NativeCache; struct CopyReceipt; struct GraphWorker; }
+	struct GraphDirt;
 
 	/// What one frozen script graph capture cost on the simulation thread, summed over the states.
 	struct FrozenCaptureStats {
+		std::vector<std::shared_ptr<GraphDirt>> observations;
 		int states = 0;
 		int64_t nativeUs = 0;
 		int64_t heapUs = 0;
@@ -549,6 +551,7 @@ namespace RTE {
 		lua_State* m_State;
 		std::unique_ptr<CheckpointLua::HeapOwner> m_CheckpointHeap;
 		std::shared_ptr<CheckpointLua::NativeCache> m_NativeCache; //!< The class descriptors and the heap values a frozen capture keeps between freezes.
+		std::shared_ptr<CheckpointLua::GraphWorker> m_GraphWorker; //!< Saver-only proxy and root caches; never entered by the simulation.
 		std::shared_ptr<std::atomic<bool>> m_FrozenCaptureUnavailable = std::make_shared<std::atomic<bool>>(false); //!< Set by the worker when a frozen image could not be serialized.
 		bool m_ScriptGraphHelperLoaded = false; //!< Whether the script graph codec has been installed in this state.
 		std::atomic<bool> m_PreviewGlobalFenceArmed{false}; //!< Whether the VM's native table barrier is armed for this state; read off the state mutex on the cached script path.

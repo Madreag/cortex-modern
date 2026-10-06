@@ -1223,6 +1223,10 @@ if captureNative.keyLabels then
 	for value, id in pairs(captureNative.keyLabels) do keyLabels[value] = id end
 end
 function Graph.captureKeyLabels() return keyLabels end
+function Graph.replaceCaptureKeyLabels(labels)
+	for value in pairs(keyLabels) do keyLabels[value] = nil end
+	for value, id in pairs(labels) do keyLabels[value] = id end
+end
 local liveOwned = setmetatable({}, { __mode = "v" })
 local lastObjects = setmetatable({}, { __mode = "v" })
 local heldObjects
@@ -6639,6 +6643,9 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		LuaCheckpointBarrierPause barrierPause;
 		ScriptGraphScratchScope scratch(m_State);
 		auto image = std::make_shared<CheckpointLua::GraphImage>();
+		if (!m_GraphWorker) m_GraphWorker = std::make_shared<CheckpointLua::GraphWorker>();
+		image->worker = m_GraphWorker;
+		image->stateIndex = g_LuaMan.GetStateIndex(this);
 		image->liveSerial = ScriptGraphBirthHorizon(m_State, restore.serial);
 		image->rng = CaptureRandomGeneratorCheckpoint();
 		const auto callbacksStarted = std::chrono::steady_clock::now();
@@ -6685,6 +6692,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		natives.Capture();
 		span.reset();
 		const auto nativeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();
+		image->nativeUs = nativeUs;
 		image->native = natives.Finish(m_State);
 		image->scratch = scratch.values;
 		// The stack and the birth counter go back before the protect; the objects the image names stay as they are until written.
@@ -6696,6 +6704,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		const size_t bytes = image->heap.ByteCount();
 		const auto frozenUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 		if (FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats) {
+			stats->observations.push_back(image->observations);
 			++stats->states;
 			stats->nativeUs += nativeUs;
 			stats->heapUs += image->heap.FreezeUs();
@@ -6810,6 +6819,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	bool all = true;
 	for (size_t index = 0; index < order.size(); ++index) {
 		const FrozenCaptureStats& part = parts[index];
+		stats.observations.insert(stats.observations.end(), part.observations.begin(), part.observations.end());
 		stats.states += part.states; stats.nativeUs += part.nativeUs; stats.heapUs += part.heapUs; stats.copyUs += part.copyUs;
 		stats.pages += part.pages; stats.bytes += part.bytes; stats.userdata += part.userdata; stats.cached += part.cached;
 		stats.shared += part.shared; stats.sharedMismatches += part.sharedMismatches;
@@ -7006,6 +7016,7 @@ bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<st
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	// A restore rebinds instance tables, so the answers a frozen capture kept no longer hold.
 	m_NativeCache.reset();
+	m_GraphWorker.reset();
 	ScriptCallbackRootScope callbackRoot{m_State};
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
@@ -7593,6 +7604,7 @@ PreviewWindowCreateFunctionsForType(Scene);
 
 void LuaStateWrapper::Initialize() {
 	m_NativeCache.reset();
+	m_GraphWorker.reset();
 	m_CheckpointHeap = CheckpointLua::HeapOwner::Create();
 	m_State = m_CheckpointHeap->State();
 	luabind::open(m_State);
@@ -7905,6 +7917,7 @@ void LuaStateWrapper::Destroy() {
 	// A wrapper destructed anywhere queues its luabind object, and deleting that object unrefs a
 	// registry slot of the state it lives in. Anything still queued for this state has to go now.
 	m_NativeCache.reset();
+	m_GraphWorker.reset();
 	LuabindObjectWrapper::DrainQueuedDeletionsBeforeStateClose(m_State);
 	m_CheckpointHeap.reset();
 	m_State = nullptr;
