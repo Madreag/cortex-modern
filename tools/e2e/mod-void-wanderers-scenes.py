@@ -123,9 +123,10 @@ def compile_choices(package: Path, menu: Path, factions: Path, output: Path) -> 
     cursor = [menu_image.width // 2, menu_image.height // 2]
     lines = ["# Coordinates come from the captured mod lettering and faction banner borders."]
     # The first press follows the controller's existing release debounce.
-    for tick, point in [(20, target), *[(22 + index * 2, point) for index, point in enumerate(buttons[:6])]]:
+    for index, (tick, point) in enumerate([(20, target), *[(23 + index * 2, point) for index, point in enumerate(buttons[:6])]]):
         delta = [point[0] - cursor[0], point[1] - cursor[1]]
-        lines += [f"player=0 {tick} {tick} MOUSE={delta[0]},{delta[1]}", f"player=0 {tick + 1} {tick + 1} FIRE"]
+        press = tick + (2 if index == 0 else 1)
+        lines += [f"player=0 {tick} {tick} MOUSE={delta[0]},{delta[1]}", f"player=0 {press} {press} FIRE"]
         cursor = point
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return {"menu": str(menu), "factions": str(factions), "witnesses": witnesses,
@@ -145,9 +146,9 @@ def compile_play(package: Path, chosen: Path, layout: Path, host: Path, client: 
     prefix = []
     for line in host.read_text(encoding="utf-8").splitlines():
         match = re.match(r"player=0 (\d+) ", line)
-        if line.startswith("# Coordinates") or match and int(match[1]) <= 33:
+        if line.startswith("# Coordinates") or match and int(match[1]) <= 34:
             prefix.append(line)
-    prefix += [f"player=0 34 34 MOUSE={target[0] - cursor[0]},{target[1] - cursor[1]}", "player=0 35 36 FIRE"]
+    prefix += [f"player=0 35 35 MOUSE={target[0] - cursor[0]},{target[1] - cursor[1]}", "player=0 36 37 FIRE"]
     for peer, path in [(0, host), (1, client)]:
         lines = prefix.copy() if peer == 0 else ["# The joining player's local slot drives stable seat 1 in the match."]
         detach = 90 if peer == 0 else 125
