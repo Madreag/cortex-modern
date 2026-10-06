@@ -3436,6 +3436,9 @@ def self_test():
     """The platform rows, without an engine: nothing Windows-only runs at import, and a case the platform cannot
     drive is refused by name while the rows that ran decide the verdict."""
     import ast
+    import tempfile
+    from types import SimpleNamespace
+    from unittest.mock import patch
     results = []
 
     def row(name, ok, detail=""):
@@ -3460,6 +3463,27 @@ def self_test():
     row("ran-rows-decide-with-the-refusal-named", summarize([ran, refused]) == (True, "PASS", [f"net-host-left-early/960x540: {reason}"]))
     row("a-red-row-stays-red", summarize([{**ran, "pass": False}, refused])[:2] == (False, "FAIL"))
     row("nothing-ran-is-unavailable-not-green", summarize([refused])[:2] == (False, "UNAVAILABLE"))
+    class NativeHold:
+        def __init__(self):
+            self.actions = []
+
+        def suspend(self):
+            self.actions.append("suspend")
+
+        def resume(self):
+            self.actions.append("resume")
+
+    held = NativeHold()
+    suspend_run(held)
+    resume_run(held)
+    row("hold-actions-target-the-native-runner", held.actions == ["suspend", "resume"])
+    with tempfile.TemporaryDirectory() as directory, patch.object(sys.modules[__name__], "spread", None), \
+            patch.object(sys.modules[__name__], "make_run") as local_factory:
+        options = SimpleNamespace(repo=Path(directory), port=49830, size="960x540")
+        refused_pair = run_case(options, "host-draft-roundtrip", Path(directory) / "case")
+        row("paired-case-refuses-before-any-local-engine", not local_factory.called and not refused_pair["records"]
+            and not refused_pair["pass"] and not refused_pair["proof"]
+            and refused_pair.get("error") == "paired menu readback requires the shared spread executor")
     print(f"[menu-readback-self-test] {'PASS' if all(results) else 'FAIL'} {sum(results)}/{len(results)}")
     return 0 if all(results) else 1
 
