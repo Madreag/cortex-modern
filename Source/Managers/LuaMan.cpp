@@ -12721,7 +12721,12 @@ int LuaMan::FileOpen(const std::string& path, const std::string& accessMode) {
 			}
 
 			std::filesystem::path inspectedPath = System::GetWorkingDirectory();
-			const std::filesystem::path relativeFilePath = std::filesystem::path(fullPath).lexically_relative(inspectedPath);
+			std::filesystem::path relativeFilePath = std::filesystem::path(fullPath).lexically_relative(inspectedPath);
+			if (!relativeFilePath.empty() && *relativeFilePath.begin() == "..") {
+				// An external private store is walked from its absolute root.
+				inspectedPath = std::filesystem::path(fullPath).root_path();
+				relativeFilePath = std::filesystem::path(fullPath).relative_path();
+			}
 
 			// Iterate over all path parts
 			for (std::filesystem::path::const_iterator relativeFilePathIterator = relativeFilePath.begin(); relativeFilePathIterator != relativeFilePath.end(); ++relativeFilePathIterator) {
