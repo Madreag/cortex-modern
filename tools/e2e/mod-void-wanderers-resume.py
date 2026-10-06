@@ -30,7 +30,8 @@ PURGE_VIEW = """    if self.steps == 39 then
     if self.steps == 42 then
         for player = 0, 3 do
             if self:ScreenOfPlayer(player) >= 0 then
-                assert(self:GetViewState(player) == Activity.NORMAL, "purge leaves view=" .. self:GetViewState(player) .. " on player=" .. player);
+                local view = self:GetViewState(player);
+                assert(view ~= Activity.AIGOTOPOINT and view ~= Activity.UNITSELECTCIRCLE, "purge leaves actor-dependent view=" .. view .. " on player=" .. player);
                 assert(self:GetPlayerBrain(player) ~= nil, "replacement brain is absent");
             end
         end
@@ -99,6 +100,7 @@ def stage_activity(run, case):
             for player = 0, 3 do
                 if self:ScreenOfPlayer(player) >= 0 then
                     print("[resume-detector] player=" .. player .. " immediate_purge_view=" .. self:GetViewState(player));
+                    assert(self:GetViewState(player) == Activity.NORMAL, "purge does not reset the cleared control view");
                 end
             end""")
     if case == "team-change":
