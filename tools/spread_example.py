@@ -1,6 +1,6 @@
 """Worked use of spread_peers.run_case with the unchanged mp-host-join case.
 
-python tools/spread_example.py --out <lane>/example --seat-box Z13
+python tools/spread_example.py --out <lane>/example --seat-box <seat-box>
     --pool-dispatcher <installed>/run_on_pool.py --port-block LO-HI --port LO
 
 The callback uses the existing video driver for its staging, start gates,
