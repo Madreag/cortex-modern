@@ -6,6 +6,7 @@ from engine instances; the running binary's admission limit remains authoritativ
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -483,20 +484,86 @@ def release_reservation(claim):
     return removed
 
 
-def admitted_shared_peer(box, peer):
-    """Recognize an existing native capacity claim for an ordinary shared peer."""
+def named_peer_assignment(box, peer):
+    """Validate the existing native claim, without excluding another case's binary."""
     if not peer or not peer.get('case_id') or not peer.get('peer_id'):
-        return False
+        raise RuntimeError(f'{box["name"]}: named peer has no case or peer identity')
     import pool_run
     assignment = pool_run.assignment_for_launch()
     if assignment is None:
-        return False
-    claim = pool_run.box_facts.read_reservation(assignment['claim'])
-    return bool(claim and claim.get('share_ok') is True and claim.get('engines') == 1
-                and not any(claim.get(name) for name in ('alone', 'reviewed', 'held'))
-                and claim.get('case_id') == peer['case_id'] and claim.get('peer_id') == peer['peer_id']
-                and assignment['box']['name'] == box['name']
-                and Path(assignment['executable']).resolve() == Path(box['executable']).resolve())
+        raise RuntimeError(f'{box["name"]}: peer {peer["peer_id"]} has no native capacity claim')
+    claim = pool_run.box_facts.read_reservation(assignment['claim'], archive=False)
+    if not (claim and claim.get('token') == assignment['token'] and claim.get('engines') == 1
+            and claim.get('case_id') == peer['case_id'] and claim.get('peer_id') == peer['peer_id']
+            and assignment['box']['name'] == box['name']
+            and Path(assignment['executable']).resolve() == Path(box['executable']).resolve()):
+        raise RuntimeError(f'{box["name"]}: peer {peer["peer_id"]} native capacity owner or executable differs')
+    expected = peer.get('executable_sha256')
+    if expected and digest_file(box['executable']).lower() != expected.lower():
+        raise RuntimeError(f'{box["name"]}: peer {peer["peer_id"]} native executable hash differs from preparation')
+    return assignment
+
+
+def run_path_key(box, path):
+    value = os.path.normpath(str(path).replace('\\', '/')).replace('\\', '/')
+    return value.casefold() if box['kind'].startswith('windows') else value
+
+
+def require_free_peer_run(box, peer, records):
+    """Only actual output or port conflicts exclude another named case."""
+    for other in records:
+        same_case = other.get('case_id') == peer['case_id']
+        same_root = run_path_key(box, other['run_root']) == run_path_key(box, peer['run_root'])
+        same_controller = (not same_case and other.get('controller_root') and peer.get('controller_root') and
+                           run_path_key(box, other['controller_root']) == run_path_key(box, peer['controller_root']))
+        owner = f'peer {other["peer_id"]} case {other["case_id"]}'
+        if same_root or same_controller:
+            path = peer['run_root'] if same_root else peer['controller_root']
+            raise RuntimeError(f'{box["name"]}: RUN ROOT CONFLICT {path}; {owner}')
+        overlap = set(peer['ports']) & set(other['ports'])
+        # Shared seats of one explicitly routed match use its one game port.
+        if overlap and not same_case:
+            raise RuntimeError(f'{box["name"]}: PORT CONFLICT {min(overlap)}; {owner}')
+
+
+@contextlib.contextmanager
+def peer_run_scope(box, peer):
+    """Keep native run roots and actual case ports owned for the whole peer run.
+
+    Uses the installed facts writer and native capacity mutex. This neither
+    assigns a box nor creates an admission queue; the existing claim and runner
+    continue to enforce the catalog's capacity, memory, CPU and hash guards.
+    """
+    assignment = named_peer_assignment(box, peer)
+    import pool_worker
+    facts = pool_worker.facts
+    root = pool_worker.root_for(assignment['box'])
+    run_root = Path(peer['run_root']).resolve()
+    if not run_root.is_relative_to(Path(box['scratch']).resolve()):
+        raise RuntimeError(f'{box["name"]}: peer run root leaves its named scratch root')
+    if not peer.get('ports') or any(type(port) is not int or not 1024 <= port <= 65535 for port in peer['ports']):
+        raise RuntimeError(f'{box["name"]}: peer {peer["peer_id"]} has no valid case ports')
+    registry = root/'peer-runs'
+    marker = registry/(Path(assignment['claim']).stem+'.json')
+    owner_marker = run_root/'.spread-run-owner.json'
+    owned = []
+    try:
+        with pool_worker.mutex(root/'.capacity.lock', wait=15):
+            live = [value for path in registry.glob('*.json')
+                    if (value := facts.read_reservation(path, archive=False))]
+            require_free_peer_run(box, peer, live)
+            if owner_marker.exists():
+                value = facts.read_reservation(owner_marker, archive=False) or {}
+                raise RuntimeError(f'{box["name"]}: RUN ROOT CONFLICT {run_root}; '
+                                   f'peer {value.get("peer_id", "unknown")} case {value.get("case_id", "unknown")}')
+            for path in (marker, owner_marker):
+                owner = facts.write_reservation(path, 'named peer '+peer['peer_id'],
+                                                token=assignment['token'], extra=peer)
+                owned.append((path, owner['token']))
+        yield
+    finally:
+        for path, token in reversed(owned):
+            facts.release_reservation(path, token)
 
 
 def assert_box_guard(box, *, pool_peer=None):
@@ -509,10 +576,17 @@ def assert_box_guard(box, *, pool_peer=None):
         raise RuntimeError(f'{box["name"]} launch guard active: {box["guard_file"]} absent')
     if box['kind'] == 'windows-local':
         if reason := inventory_guard(): raise RuntimeError(reason)
-        engines = [r for r in box_load() if 'Cortex Command' in r['Name'] and
-                   str(r.get('ExecutablePath', '')).replace('\\', '/').lower() == box['executable'].lower()]
-        if engines and not admitted_shared_peer(box, pool_peer):
-            raise RuntimeError('an engine of this lane is already running')
+    if pool_peer:
+        named_peer_assignment(box, pool_peer)
+        ceiling = box.get('engines_max', box.get('max_engines'))
+        engines = [row for row in box_load() if re.search(r'Cortex\s*Command', row['Name'], re.I)]
+        if ceiling is not None and len(engines) + 1 > ceiling:
+            raise RuntimeError(f'{box["name"]}: engine ceiling {ceiling} would be exceeded by peer {pool_peer["peer_id"]}')
+        import box_load as native_load
+        floor = box.get('free_floor_gb', box.get('min_free_gb', 0))
+        free = native_load.memory()[0]
+        if free < floor:
+            raise RuntimeError(f'{box["name"]}: free memory {free:.2f} GB below floor {floor:g} GB')
     size = scratch_bytes(box['scratch'])
     if size >= LIMIT: raise RuntimeError(f'scratch reached 4 GB: {box["scratch"]} bytes={size}; stopped without deletion')
 

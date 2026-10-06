@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import spread_peers as spread
 from test_named_spread import NamedRoutingTests
+from test_peer_run_guards import PeerRunGuardTests
 
 
 class ContractTests(unittest.TestCase):
@@ -141,23 +142,29 @@ class ContractTests(unittest.TestCase):
                     self.assertIn('hello-from-host', texts['client'])
                     self.assertIn('host-received-client', texts['client'])
 
-    def test_only_matching_live_pool_share_admits_an_existing_lane_engine(self):
+    def test_named_claim_matches_identity_without_excluding_an_existing_binary(self):
         import cross_peers as cross
         box = dict(name='EROL-PC', kind='windows-local', executable='D:/own/game.exe', scratch='D:/own')
         peer = dict(case_id='case', peer_id='seat')
-        claim = dict(case_id='case', peer_id='seat', share_ok=True, engines=1)
-        assignment = dict(claim='owned-claim', box=box, executable=box['executable'])
-        module = SimpleNamespace(assignment_for_launch=lambda:assignment, box_facts=SimpleNamespace(read_reservation=lambda path:claim))
-        with patch.dict(sys.modules, pool_run=module), patch.object(cross,'inventory_guard',return_value=None), \
+        claim = dict(case_id='case', peer_id='seat', share_ok=True, engines=1, token='owned')
+        assignment = dict(claim='owned-claim', token='owned', box=box, executable=box['executable'])
+        module = SimpleNamespace(assignment_for_launch=lambda:assignment,
+                                 box_facts=SimpleNamespace(read_reservation=lambda path, **kwargs:claim))
+        with patch.dict(sys.modules, pool_run=module, box_load=SimpleNamespace(memory=lambda:(20,48))), \
+                patch.object(cross,'inventory_guard',return_value=None), \
                 patch.object(cross,'box_load',return_value=[dict(Name='Cortex Command',ExecutablePath=box['executable'])]), \
                 patch.object(cross,'scratch_bytes',return_value=0):
-            with self.assertRaisesRegex(RuntimeError,'an engine of this lane is already running'):
-                cross.assert_box_guard(box)
+            cross.assert_box_guard(box)
             cross.assert_box_guard(box,pool_peer=peer)
-            for change in (dict(case_id='other'),dict(peer_id='other'),dict(share_ok=False),dict(reviewed=True),dict(held=True),dict(alone=True)):
+            for change in (dict(share_ok=False),dict(reviewed=True),dict(held=True),dict(alone=True)):
                 before = dict(claim)
                 claim.update(change)
-                with self.assertRaisesRegex(RuntimeError,'an engine of this lane is already running'):
+                cross.assert_box_guard(box,pool_peer=peer)
+                claim.clear(); claim.update(before)
+            for change in (dict(case_id='other'),dict(peer_id='other'),dict(token='foreign')):
+                before = dict(claim)
+                claim.update(change)
+                with self.assertRaisesRegex(RuntimeError,'native capacity owner or executable differs'):
                     cross.assert_box_guard(box,pool_peer=peer)
                 claim.clear(); claim.update(before)
 
@@ -356,7 +363,7 @@ class ContractTests(unittest.TestCase):
             specs = []
             backend = SimpleNamespace(rpc=lambda box, action, body: specs.append(body['value']), launch=lambda *args: None)
             claim = dict(case_root='/native/case', repo='/native/repo', root='/owned', control='/control', exe_sha256='same')
-            case = SimpleNamespace(id='fake-case', out=root, peer_ports={}, names=['host', 'client'], match=spread.Match(51580),
+            case = SimpleNamespace(id='fake-case', lane='one-lane', out=root, peer_ports={}, names=['host', 'client'], match=spread.Match(51580),
                                    directory=None, network='direct', host_address='100.64.1.2',
                                    members={'client': ({'name': 'SEAT', 'os': 'windows'}, claim, {}, backend)},
                                    peers=[spread.Peer('client')], signals=lambda: [], release_pending=lambda *args: None,
@@ -392,7 +399,7 @@ class ContractTests(unittest.TestCase):
             run.repo, run.cwd = root/'repo', root/'host/runtime'
             run.argv = ['engine', '-headless', '-net-match-service-config', str(config)]
             run.env, run.expected, run.fixtures, run.timeout = {}, [], [], 30
-            run.case = SimpleNamespace(id='fake-case', out=root, members={'host':({'name':'HOST'},claim,{},backend)}, names=['host'], peer_ports={},
+            run.case = SimpleNamespace(id='fake-case', lane='one-lane', out=root, members={'host':({'name':'HOST'},claim,{},backend)}, names=['host'], peer_ports={},
                 match=spread.Match(51580), directory=None, peers=[spread.Peer('host')], signals=lambda:[], release_pending=lambda *args:None,
                 transport_module=SimpleNamespace(Transport=SimpleNamespace(native_claim=lambda value:value)))
             run.start()
@@ -410,7 +417,7 @@ class ContractTests(unittest.TestCase):
             run.retained = None
             run.role, run.output_name, run.started, run.argv = 'seat', 'seat', False, ['engine','-headless']
             run.cwd, run.repo, run.env, run.expected, run.fixtures, run.timeout = root/'seat/runtime', root/'repo', {}, [], [], 30
-            run.case = SimpleNamespace(id='fake-case', members={'seat':({'name':'REMOTE'},claim,{},backend)}, names=['seat'], peer_ports={},
+            run.case = SimpleNamespace(id='fake-case', lane='one-lane', members={'seat':({'name':'REMOTE'},claim,{},backend)}, names=['seat'], peer_ports={},
                                        match=spread.Match(51580), directory=None, out=root, peers=[spread.Peer('seat')], signals=lambda:[],
                                        transport_module=SimpleNamespace(Transport=SimpleNamespace(native_claim=lambda value:value)),
                                        refuse=lambda peer,box,reason:spread.SpreadRefusal(f'spread peer {peer} on {box}: {reason}'))
