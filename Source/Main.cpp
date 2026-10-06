@@ -1635,6 +1635,9 @@ static uint64_t s_netReplayDumpTo = 0;
 
 // The launch target decides whether the bundled test module belongs in the session's identity.
 bool HarnessMatchRunActive() {
+	// This explicit checkpoint fixture flag also restores archives without an
+	// active scenario runner. Their saved baseline still includes Tests.rte.
+	if (s_cowCheckpointAutosave) return true;
 	std::string type = "GAScripted", preset = s_netMatchServiceE2EPreset, module = s_netMatchServiceE2EModule;
 	const auto selected = [&](const NetMatchConfig& config) {
 		type = config.activityType; preset = config.activityPreset; module = config.activityModule;

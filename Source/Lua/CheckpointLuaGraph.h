@@ -136,8 +136,9 @@ namespace RTE::CheckpointLua {
 			PrototypeCapture prototypes;
 			View view;
 			using Root = std::pair<std::string, std::string>;
-			struct Dependency { TValue value; std::string bytes; };
-			using Dependencies = std::unordered_map<const void*, Dependency>;
+			struct Dependency { TValue value; uint64_t serial; std::string bytes, helper, argument; };
+			using DependencyKey = std::tuple<const void*, std::string, std::string>;
+			using Dependencies = std::map<DependencyKey, Dependency>;
 			std::map<Root, Dependencies> dependencies, nextDependencies;
 			std::optional<Root> current;
 			GraphDirt stats;
@@ -145,7 +146,15 @@ namespace RTE::CheckpointLua {
 			Context(const GraphImage& source, std::unordered_set<uint64_t>& sounds) : image(&source), carried(&sounds), prototypes(source.heap),
 			    view(source.heap,
 			        [this](lua_State* state, View& observer, std::string_view name) {
-				        if (const auto value = observer.Value(state, 1)) Note(*value);
+				        if (const auto value = observer.Value(state, 1)) {
+					        std::string argument;
+					        if (name == "_ScriptGraphNative") argument = lua_toboolean(state, 2) ? "1" : "0";
+					        else if (name == "__index" && lua_type(state, 2) == LUA_TSTRING) {
+						        size_t size = 0; const char* text = lua_tolstring(state, 2, &size); argument.assign(text, size);
+					        }
+					        if (tvisudata(&*value) || tvisfunc(&*value)) Note(*value, name, argument);
+					        else Note(*value);
+				        }
 				        return image->native->Call(state, observer, name, carried, &carriedObjects);
 			        }, [this](const GCproto* prototype) { return prototypes.Dump(prototype); }) {
 				view.observe = [this](const TValue& value) { Note(value); };
@@ -157,23 +166,24 @@ namespace RTE::CheckpointLua {
 			void Part(std::string name, uint64_t root, int64_t us, bool reused, std::string unwatched) {
 				stats.walkParts.push_back({image->stateIndex, std::move(name), root, us, reused, std::move(unwatched)});
 			}
-			std::string Fingerprint(const TValue& value, std::vector<TValue>* tables = nullptr) {
+			std::string Fingerprint(const TValue& value, std::string_view helper = {}, std::string_view argument = {}, std::vector<TValue>* tables = nullptr) {
 				if (!view.Alive(value)) return "dead";
-				std::string bytes = view.Fingerprint(value);
-				if (tvisudata(&value) || tvisfunc(&value)) bytes += image->native->Fingerprint(gcval(&value), view,
+				std::string bytes = helper.empty() ? view.Fingerprint(value) : view.Token(value);
+				if (!helper.empty()) bytes += image->native->Fingerprint(gcval(&value), view, helper, argument,
 					[&](const TValue& table) { if (tables) tables->push_back(table); });
 				return bytes;
 			}
-			void Note(const TValue& value) {
+			void Note(const TValue& value, std::string_view helper = {}, std::string_view argument = {}) {
 				if (!current || noting || !tvisgcv(&value) || tvisstr(&value)) return;
 				auto& values = nextDependencies[*current];
-				if (values.contains(gcval(&value))) return;
+				const DependencyKey key{gcval(&value), std::string(helper), std::string(argument)};
+				if (values.contains(key)) return;
 				std::vector<TValue> tables;
 				noting = true;
 				std::string bytes;
-				try { bytes = Fingerprint(value, &tables); } catch (...) { noting = false; throw; }
+				try { bytes = Fingerprint(value, helper, argument, &tables); } catch (...) { noting = false; throw; }
 				noting = false;
-				values.emplace(gcval(&value), Dependency{value, std::move(bytes)});
+				values.emplace(key, Dependency{value, view.SerialOf(value), std::move(bytes), std::string(helper), std::string(argument)});
 				for (const TValue& table: tables) Note(table);
 			}
 		};
@@ -203,8 +213,6 @@ namespace RTE::CheckpointLua {
 			throw std::runtime_error(message);
 		}
 
-		static int NoOp(lua_State*) { return 0; }
-		static int NoDirt(lua_State* state) { lua_pushnil(state); return 1; }
 		static int BeginCapture(lua_State* state) {
 			Context& context = Self(state);
 			context.current.reset(); context.nextDependencies.clear(); context.stats = {};
@@ -217,8 +225,16 @@ namespace RTE::CheckpointLua {
 			std::set<std::string> roots, parts;
 			context.noting = true;
 			try {
-				for (const auto& [root, dependencies]: context.dependencies) for (const auto& [address, saved]: dependencies) {
-					if (context.Fingerprint(saved.value) != saved.bytes) {
+				for (const auto& [root, dependencies]: context.dependencies) for (const auto& [key, saved]: dependencies) {
+					bool same = false;
+					try {
+						same = context.view.Alive(saved.value) && context.view.SerialOf(saved.value) == saved.serial &&
+						       context.Fingerprint(saved.value, saved.helper, saved.argument) == saved.bytes;
+					} catch (const std::runtime_error&) {
+						// A dependency retained by an older chunk may have expired. It
+						// invalidates that chunk; fresh serialization still reports errors.
+					}
+					if (!same) {
 						if (root.first == "0") parts.insert(root.second); else roots.insert(root.first);
 						break;
 					}

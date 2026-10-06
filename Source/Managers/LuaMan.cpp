@@ -1289,7 +1289,8 @@ end
 function Graph.releaseObjects() heldObjects = nil end
 local nativeClosures = {
 	wrap = function() return coroutine.wrap(function() end) end,
-	gmatch = function() return string.gmatch("", ".") end
+	gmatch = function() return string.gmatch("", ".") end,
+	ipairs = function() local iterator = ipairs({}); return iterator end
 }
 local nativePrototypes = {}
 for name, create in pairs(nativeClosures) do nativePrototypes[name] = create() end

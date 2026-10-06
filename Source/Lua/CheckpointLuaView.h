@@ -45,7 +45,10 @@ namespace RTE::CheckpointLua {
 			lua_pop(state, 1);
 			lua_gc(state, LUA_GCCOLLECT, 0);
 		}
-		bool Alive(const TValue& value) const { return !tvisgcv(&value) || tvisstr(&value) || m_Alive.contains(gcval(&value)); }
+		bool Alive(const TValue& value) const {
+			return !tvisgcv(&value) || tvisstr(&value) || (m_Alive.contains(gcval(&value)) &&
+			       m_Heap.Read(&gcval(&value)->gch.gct) == static_cast<uint8_t>(~itype(&value)));
+		}
 		uint64_t SerialOf(const TValue& value) const {
 			if (tvistab(&value)) return m_Heap.Read(tabV(&value)).serial;
 			if (tvisfunc(&value)) return m_Heap.Read(&funcV(&value)->c.serial);
@@ -75,6 +78,22 @@ namespace RTE::CheckpointLua {
 				for (const auto& [key, item]: entries) {
 					const size_t sizes[] = {key.size(), item.size()};
 					result.append(reinterpret_cast<const char*>(sizes), sizeof(sizes)); result += key; result += item;
+				}
+			} else if (tvisfunc(&value)) {
+				const auto* source = funcV(&value);
+				const auto function = ReadFunction(source);
+				TValue environment; setnilV(&environment);
+				if (gcref(function.c.env)) setgcVraw(&environment, gcref(function.c.env), LJ_TTAB);
+				result += Token(environment);
+				for (int index = 0; index < function.c.nupvalues; ++index) {
+					TValue upvalue;
+					if (isluafunc(&function)) {
+						const auto cell = m_Heap.Read(gco2uv(gcref(m_Heap.Read(&source->l.uvptr[index]))));
+						result.append(reinterpret_cast<const char*>(&cell.serial), sizeof(cell.serial));
+						upvalue = cell.closed ? cell.tv : m_Heap.Read(mref(cell.v, TValue));
+					} else upvalue = m_Heap.Read(&source->c.upvalue[index]);
+					const auto token = Token(upvalue); const size_t size = token.size();
+					result.append(reinterpret_cast<const char*>(&size), sizeof(size)); result += token;
 				}
 			}
 			return result;

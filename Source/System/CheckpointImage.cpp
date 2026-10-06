@@ -737,6 +737,21 @@ namespace {
 
 bool RTE::RunCheckpointSceneRows() {
 	bool passed = true;
+	// Probe objects and captures borrow the counters, never the running world's.
+	struct BorrowedCounters {
+		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
+		long uid = MovableObject::GetUniqueIDCounter();
+		CheckpointSoundRegistry sounds = g_AudioMan.CaptureCheckpointSoundRegistry();
+		uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+		std::unordered_set<uint64_t> carried = g_AudioMan.LastCarriedSoundIdentities();
+		~BorrowedCounters() {
+			g_SimRNG = sim; g_RenderRNG = render;
+			MovableObject::PinUniqueIDCounter(uid);
+			g_AudioMan.RestoreCheckpointSoundRegistry(std::move(sounds));
+			g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
+			g_AudioMan.RememberCarriedSoundIdentities(std::move(carried));
+		}
+	} borrowed;
 	// Only the failing actual goes on the line; the expectation belongs in the row, not in the log.
 	const auto fail = [&passed](const char* name, const std::string& actual) {
 		std::cout << "[cow-checkpoint-selftest] FAIL " << name << " actual=" << actual << std::endl;
@@ -945,11 +960,19 @@ end
 		else fail("a_soundset_write_moves_its_owner_stamp", "the sound set did not stamp its container once");
 	}
 	{
-		live->UpdateScripts();
-		const uint64_t before = live->CheckpointWriteGeneration();
-		live->UpdateScripts();
-		live->UpdateScripts();
-		const uint64_t after = live->CheckpointWriteGeneration();
+		struct QuietCounterProbe : Actor {
+			QuietCounterProbe() {
+				m_AllLoadedScripts.push_back("checkpoint-counter-probe");
+				m_ScriptObjectName = "checkpoint-counter-probe";
+				m_SimUpdatesBetweenScriptedUpdates = 1;
+			}
+			~QuietCounterProbe() { m_ScriptObjectName.clear(); }
+		} probe;
+		probe.UpdateScripts();
+		const uint64_t before = probe.CheckpointWriteGeneration();
+		probe.UpdateScripts();
+		probe.UpdateScripts();
+		const uint64_t after = probe.CheckpointWriteGeneration();
 		const char* row = "a_quiet_scripted_update_counter_leaves_the_stamp";
 		if (after != before) {
 			fail(row, "generation moved " + std::to_string(after - before) + " times over two script updates");
@@ -957,22 +980,6 @@ end
 			pass(row, "generation " + std::to_string(after) + " held");
 		}
 	}
-	// A capture assigns sound identities and can draw counters; the rows hand the sim back what they took.
-	struct BorrowedCounters {
-		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
-		long uid = MovableObject::GetUniqueIDCounter();
-		CheckpointSoundRegistry sounds = g_AudioMan.CaptureCheckpointSoundRegistry();
-		uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
-		std::unordered_set<uint64_t> carried = g_AudioMan.LastCarriedSoundIdentities();
-		~BorrowedCounters() {
-			g_SimRNG = sim;
-			g_RenderRNG = render;
-			MovableObject::PinUniqueIDCounter(uid);
-			g_AudioMan.RestoreCheckpointSoundRegistry(std::move(sounds));
-			g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
-			g_AudioMan.RememberCarriedSoundIdentities(std::move(carried));
-		}
-	} borrowed;
 	const auto capture = [live](CheckpointCache* cache) {
 		CheckpointWriter::CacheScope scope(cache);
 		return Writer::Capture([live](Writer& writer) { Scene::SaveSceneObject(writer, live, false, true); });
