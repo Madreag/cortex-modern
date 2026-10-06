@@ -98,32 +98,43 @@ namespace RTE {
 			void Abort() override {}
 		};
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
-		NetMatchService service;
-		service.m_IceEnabled = true; service.m_ConnectionMode = 0;
-		service.m_Dispatcher = std::make_unique<GnsDirectorySignalDispatcher>();
-		auto& channel = const_cast<NetDirectorySignalChannel&>(service.m_Dispatcher->Channel());
-		channel.SetTransportFactory([] { return std::make_unique<QueueFull>(); });
-		channel.ConfigureClient("https://dir.test", "key0123456789abcd", "", "7b8c9d2e-1111-4222-8333-444455556666");
-		channel.Post("host", "offer"); channel.Update(0); channel.Update(0);
-		if (channel.GetLastError() != NetDirectoryClient::c_CapacityNotice) { *error = "T2: queue_full fixture did not refuse signaling"; return false; }
-		std::unique_ptr<NetMuxTransport> mux;
-		DirectHost ip;
-		NetSession session;
-		NetLockstepCoordinator coordinator;
-		NetMatchRunner runner;
-		NetMatchRunnerConfig config;
-		config.matchConfig = NetMatchConfigUtil::MakeDefault(73);
-		config.joinAddress = "session:capacity";
-		config.sessionWaitMs = 1000; config.lockstepWaitMs = 1000;
-		config.sessionConfig.p2pJoin.connect = [](INetTransport&, std::string* why) { if (why) *why = "ICE signaling queue is full"; return false; };
-		bool noDirectRoute = false;
-		NetIceJoinTarget target{"str:h-capacity", "either", "127.0.0.1", 47468};
-		if (!service.StartLobbyConnection(mux, ip, session, coordinator, runner, config, target, true, noDirectRoute, error) ||
-		    !ip.connected || !session.IsReady() || !coordinator.IsRunning() || service.m_IceRoute != "ip") {
-			*error = "T2: queue_full stopped a join that the direct address could complete: " + *error;
-			return false;
+		for (int mode : {0, 1, 2}) {
+			NetMatchService service;
+			service.m_IceEnabled = true; service.m_ConnectionMode = mode;
+			service.m_Dispatcher = std::make_unique<GnsDirectorySignalDispatcher>();
+			auto& channel = const_cast<NetDirectorySignalChannel&>(service.m_Dispatcher->Channel());
+			channel.SetTransportFactory([] { return std::make_unique<QueueFull>(); });
+			channel.ConfigureClient("https://dir.test", "key0123456789abcd", "", "7b8c9d2e-1111-4222-8333-444455556666");
+			channel.Post("host", "offer"); channel.Update(0); channel.Update(0);
+			if (channel.GetLastError() != NetDirectoryClient::c_CapacityNotice) { *error = "T2: queue_full fixture did not refuse signaling"; return false; }
+			std::unique_ptr<NetMuxTransport> mux;
+			DirectHost ip;
+			NetSession session;
+			NetLockstepCoordinator coordinator;
+			NetMatchRunner runner;
+			NetMatchRunnerConfig config;
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(73);
+			config.joinAddress = "session:capacity";
+			config.sessionWaitMs = 1000; config.lockstepWaitMs = 1000;
+			config.sessionConfig.p2pJoin.connect = [](INetTransport&, std::string* why) { if (why) *why = "ICE signaling queue is full"; return false; };
+			bool noDirectRoute = false;
+			NetIceJoinTarget target{"str:h-capacity", "either", "127.0.0.1", 47468};
+			const bool started = service.StartLobbyConnection(mux, ip, session, coordinator, runner, config, target, true, noDirectRoute, error);
+			if (mode == 2) {
+				if (started || ip.connected || *error != NetDirectoryClient::c_CapacityNotice) {
+					*error = "U5: Relay-only retried direct or replaced the list-full sentence: " + *error;
+					return false;
+				}
+				std::cout << "[net-directory-selftest] PASS U5 relay_only_keeps_capacity_notice" << std::endl;
+				continue;
+			}
+			if (!started ||
+			    !ip.connected || !session.IsReady() || !coordinator.IsRunning() || service.m_IceRoute != "ip") {
+				*error = (mode == 0 ? "T2: " : "U5: Direct-only ") + std::string("queue_full stopped a join that the direct address could complete: ") + *error;
+				return false;
+			}
+			std::cout << (mode == 0 ? "[net-directory-selftest] PASS T2 queue_full_direct_join" : "[net-directory-selftest] PASS U5 direct_only_retries_direct") << std::endl;
 		}
-		std::cout << "[net-directory-selftest] PASS T2 queue_full_direct_join" << std::endl;
 #endif
 		return true;
 	}
@@ -3290,7 +3301,7 @@ namespace RTE {
 			}
 #endif
 			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"T1", TestDirectoryErrorSnapshot}, {"T2", TestDirectoryCapacityFallback}, {"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
-				if (!selected || std::string(selected) == test.first) {
+				if (!selected || std::string(selected) == test.first || (std::string(selected) == "U5" && std::string(test.first) == "T2")) {
 					if (!test.second(&error)) return fail(error);
 					if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
 				}

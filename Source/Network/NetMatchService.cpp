@@ -10083,16 +10083,24 @@ static std::string ResyncSaveName() {
 		// Directory lookup time is not part of either transport's connection deadline.
 		if (config.nowMs) session.Tick(config.nowMs(), false);
 		if (transportReady && runner.Start(wire, session, coordinator, config, error)) return true;
+		bool directoryFull = false;
 #ifdef CCCP_WITH_GNS
 		if (m_Dispatcher && m_Dispatcher->Channel().GetLastError() == NetDirectoryClient::c_CapacityNotice &&
 		    !session.IsRejected() && session.GetMismatchKey() != "host_disconnect") {
+			directoryFull = true;
 			if (error) *error = NetDirectoryClient::c_CapacityNotice;
 		}
 #endif
 		if (config.host || !NetIcePrefersP2P(target, m_IceEnabled) || m_CancelRequested.load()) return false;
-		if (m_ConnectionMode == 2) {
+		switch (m_ConnectionMode) {
+		case 0: // Automatic
+		case 1: // Direct-only
+			break;
+		case 2: // Relay-only
 			// A setup that never reached the transport already says why; only a relay that failed to connect is named here.
-			if (error && transportReady) *error = "Relay connection failed: " + *error + "; check the relay or choose Automatic";
+			if (error && transportReady && !directoryFull) *error = "Relay connection failed: " + *error + "; check the relay or choose Automatic";
+			return false;
+		default:
 			return false;
 		}
 		const auto routeFailed = [&] {
