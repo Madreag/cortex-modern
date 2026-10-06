@@ -25897,9 +25897,11 @@ namespace {
 			ReleasePathClaimView view;
 			if (!view.Create("client leaver's original unit", round.peers[2], 3, 4, 4)) return done("the client leaver's unit did not create");
 			view.handoff = 1; view.claimant = 4;
+			admission.host.SetDropOwnershipSource([](void* actor) { const auto& view = *static_cast<ReleasePathClaimView*>(actor); return std::vector<NetH4LedgerActor>{{view.uid, view.team, view.seeded, true}}; }, &view);
+			admission.host.NotifyDisconnect(3, 30);
 			NetReconnectHost intermediate; NetSeatAuthRegistry registry;
 			auto config = round.peers[2].GetConfig().matchConfig; config.hostPeerId = 2;
-			if (!intermediate.ImportMigrationState(admission.host.ExportMigrationState(), registry, config, 2, {}, admission.nowMs)) return done("the first successor did not retain admission");
+			if (!intermediate.ImportMigrationState(admission.host.ExportMigrationState(), registry, config, 2, round.peers[1].RemoteTransports(), admission.nowMs)) return done("the first successor did not retain admission");
 			intermediate.RecordMigrationDepartures(30); config.hostPeerId = 3;
 			admission.successor.SetUnixClock(&HostReturnAdmission::WallClock, &admission);
 			if (!admission.successor.ImportMigrationState(intermediate.ExportMigrationState(), admission.successorRegistry, config, 3, {}, admission.nowMs)) return done("the second successor did not retain admission");
