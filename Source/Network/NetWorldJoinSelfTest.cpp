@@ -8620,7 +8620,7 @@ namespace RTE {
 			NetH4TicketRecord retained;
 			const auto load = leaver.m_TicketStore.Load(ticket.issuedAtUnixMs, retained, &why);
 			if (leaver.m_IsHost || !leaver.m_LeftMatch || leaver.m_State != NetMatchServiceState::Completed ||
-			    load != NetH4TicketLoadResult::Loaded || retained.ticket != ticket.ticket || leaver.m_ReconnectUx.GetState() == NetReconnectUxState::Idle ||
+			    load != NetH4TicketLoadResult::Loaded || retained.credential != ticket.credential || leaver.m_ReconnectUx.GetOffer() != NetReconnectOffer::Available ||
 			    leaver.m_ReconnectHost.GetRoster().stage != NetRosterStage::Running) {
 				why = "announced host's own Leave ends as host instead of leaver: is_host=" + std::to_string(leaver.m_IsHost) + " rejoin_state=" + std::string(NetReconnectUx::StateName(leaver.m_ReconnectUx.GetState())) + " roster_stage=" + std::to_string(static_cast<int>(leaver.m_ReconnectHost.GetRoster().stage));
 				return false;
