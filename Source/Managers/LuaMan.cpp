@@ -12593,12 +12593,13 @@ namespace {
 			const char* root = std::getenv("CC_LUA_FILE_ROOT");
 			return root && *root ? std::filesystem::absolute(root).lexically_normal() : std::filesystem::path();
 		}();
-		if (fileRoot.empty() || path.find("..") != std::string::npos) return original;
+		if (fileRoot.empty()) return original;
+		if (path.find("..") != std::string::npos) return write ? std::string() : original;
 
 		std::string modulePath = std::filesystem::path(path).generic_string();
 		std::replace(modulePath.begin(), modulePath.end(), '\\', '/');
 		const std::string module = g_PresetMan.GetModuleNameFromPath(modulePath + "/");
-		if (module.empty() || !module.ends_with(System::GetModulePackageExtension())) return original;
+		if (module.empty() || !module.ends_with(System::GetModulePackageExtension())) return write ? std::string() : original;
 		modulePath = g_PresetMan.GetFullModulePath(modulePath.substr(modulePath.find(module)));
 		const std::filesystem::path moduleRelative = g_PresetMan.GetFullModulePath(module);
 		std::filesystem::path installed = System::GetWorkingDirectory() + moduleRelative.generic_string();
@@ -12791,7 +12792,7 @@ bool LuaMan::FileRemove(const std::string& path) {
 
 bool LuaMan::DirectoryCreate(const std::string& path, bool recursive) {
 	std::string fullPath = ScriptFilePath(path, true);
-	if (fullPath.find("..") == std::string::npos) {
+	if (!fullPath.empty() && fullPath.find("..") == std::string::npos) {
 #ifndef _WIN32
 		fullPath = GetCaseInsensitiveFullPath(fullPath);
 #endif
@@ -12803,13 +12804,13 @@ bool LuaMan::DirectoryCreate(const std::string& path, bool recursive) {
 			}
 		} catch (const std::filesystem::filesystem_error& e) {}
 	}
-	g_ConsoleMan.PrintString("ERROR: Failed to remove directory " + path);
+	g_ConsoleMan.PrintString("ERROR: Failed to create directory " + path);
 	return false;
 }
 
 bool LuaMan::DirectoryRemove(const std::string& path, bool recursive) {
 	std::string fullPath = ScriptFilePath(path, true);
-	if (fullPath.find("..") == std::string::npos) {
+	if (!fullPath.empty() && fullPath.find("..") == std::string::npos) {
 #ifndef _WIN32
 		fullPath = GetCaseInsensitiveFullPath(fullPath);
 #endif
@@ -12851,7 +12852,7 @@ bool LuaMan::FileRename(const std::string& oldPath, const std::string& newPath) 
 bool LuaMan::DirectoryRename(const std::string& oldPath, const std::string& newPath) {
 	std::string fullOldPath = ScriptFilePath(oldPath, true);
 	std::string fullNewPath = ScriptFilePath(newPath, true);
-	if (fullOldPath.find("..") == std::string::npos && fullNewPath.find("..") == std::string::npos) {
+	if (!fullOldPath.empty() && !fullNewPath.empty() && fullOldPath.find("..") == std::string::npos && fullNewPath.find("..") == std::string::npos) {
 #ifndef _WIN32
 		fullOldPath = GetCaseInsensitiveFullPath(fullOldPath);
 		fullNewPath = GetCaseInsensitiveFullPath(fullNewPath);
