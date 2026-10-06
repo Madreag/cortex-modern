@@ -4223,13 +4223,17 @@ namespace RTE {
 					lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(lockstepConfig.matchConfig.ownershipPolicy);
 					lockstepConfig.scenario = lockstepConfig.matchConfig.activityPreset;
 					coordinatorActive = clientCoordinator.Start(clientTransport, lockstepConfig, &peerError);
+					if (coordinatorActive)
+						for (const auto& event: clientLobby.TakeRoundEventsAfterStart()) clientCoordinator.InjectEvent(event, NetLockstepNowMs());
 				}
 				if (coordinatorActive) clientCoordinator.Tick(NetLockstepNowMs());
 			};
 			if (!runner.Start(tap, hostSession, hostCoordinator, config, error) || !coordinatorActive || !clientCoordinator.IsRunning() ||
 			    !clientSession.IsReady() || startAttempts < 2 || changedStart || wrongLane || nowMs() - firstStartAt < 250) {
 				*error = "a missed lobby start was not repaired with live session keepalives: " + *error + "; attempts=" + std::to_string(startAttempts) +
-				         "; client_started=" + std::to_string(coordinatorActive) + "; client_ready=" + std::to_string(clientSession.IsReady()) + "; peer=" + peerError;
+				         "; client_started=" + std::to_string(coordinatorActive) + "; client_running=" + std::to_string(clientCoordinator.IsRunning()) +
+				         "; client_ready=" + std::to_string(clientSession.IsReady()) + "; changed_start=" + std::to_string(changedStart) +
+				         "; wrong_lane=" + std::to_string(wrongLane) + "; elapsed_ms=" + std::to_string(nowMs() - firstStartAt) + "; peer=" + peerError;
 				return false;
 			}
 			std::cout << "[net-match-selftest] PASS a_missed_lobby_start_is_repeated_without_losing_the_session attempts=" << startAttempts << std::endl;
