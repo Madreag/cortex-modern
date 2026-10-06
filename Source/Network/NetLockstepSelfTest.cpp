@@ -24657,16 +24657,19 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		bool TestFutureReleaseIsVoidOnEverySurvivor(std::string* error) {
 			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("future_release_is_void_on_every_survivor", why, error); };
 			ReleasePathRound round;
-			round.drainThrough = 29; round.produceThrough.fill(29);
+			round.drainThrough = 27; round.produceThrough.fill(27);
 			if (!round.Start(47430) || !round.HoldFourth()) return fail("the held-seat round did not start: " + round.failure);
-			for (int turn = 0; turn < 400 && round.peers[2].GetResumeFrame() != 30; ++turn) round.Pump();
-			if (round.peers[1].GetResumeFrame() != 30 || round.peers[2].GetResumeFrame() != 30) return fail("the survivors did not finish frame 29");
+			for (int turn = 0; turn < 400 && round.peers[2].GetResumeFrame() != 28; ++turn) round.Pump();
+			if (round.peers[1].GetResumeFrame() != 28 || round.peers[2].GetResumeFrame() != 28) return fail("the survivors did not finish frame 27");
 			round.hostWire.releaseOnlyToThird = true;
 			round.peers[0].EvictRemovedPeer(4, "release known to one survivor", round.now);
 			for (int turn = 0; turn < 20; ++turn) round.Pump();
 			const auto release = round.hostWire.Last(NetTimingAction::Release, NetTimingPhase::Commit);
 			if (!release || release->applyFrame != 32 || round.peers[2].SeatReleases().empty() || !round.peers[1].SeatReleases().empty())
 				return fail("release fixture: commit frame=" + (release ? std::to_string(release->applyFrame) : "none") + " successor histories=" + std::to_string(round.peers[1].SeatReleases().size()) + " survivor3 histories=" + std::to_string(round.peers[2].SeatReleases().size()));
+			round.drainThrough = 29; round.produceThrough.fill(29);
+			for (int turn = 0; turn < 100 && round.peers[2].GetResumeFrame() != 30; ++turn) round.Pump();
+			if (round.peers[1].GetResumeFrame() != 30 || round.peers[2].GetResumeFrame() != 30) return fail("the survivors did not finish frame 29");
 			if (!round.Migrate() || round.peers[1].GetMigrationResult().boundary != 29) return fail("the survivors did not succeed at boundary 29");
 			std::string failures;
 			std::array<std::set<uint8_t>, 2> owed;
