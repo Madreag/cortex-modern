@@ -321,6 +321,7 @@ def run_single_player_reference(repo, make_run, case, timeout):
         observed["dump_bytes"] = len(raw)
         # Hexadecimal float spellings vary between standard libraries; their exact values stay in the portable dump.
         portable = SP_REFERENCE_HEXFLOAT.sub(lambda match: float.fromhex(match[0].decode("ascii")).hex().encode("ascii"), raw)
+        portable = portable.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
         observed["portable_dump_sha256"] = hashlib.sha256(portable).hexdigest()
         wanted_dump = ("dump_sha256", "dump_bytes") if sys.platform == "win32" else ("portable_dump_sha256",)
         for key in wanted_dump:
