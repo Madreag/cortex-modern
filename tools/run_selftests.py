@@ -22,6 +22,9 @@ import subprocess
 import sys
 import time
 
+# Directory checks can use an OpenSSL-backed interpreter independently of the engine runner.
+DIRECTORY_TEST_PYTHON = os.environ.get("CCCP_DIRECTORY_TEST_PYTHON") or sys.executable
+
 SELFTEST_FIXTURES = {
     "mod-api-shims": ["mod-api-shims.lua"],
 }
@@ -487,9 +490,12 @@ def run_row(options, make_run, name, case, sanitizer):
     if name == "net-directory":
         service_log = case / "service-tests.log"
         with service_log.open("w", encoding="utf-8") as stream:
-            service = subprocess.run([sys.executable, str(options.repo / "tools/session_directory/test_session_directory.py")],
+            stream.write(f"Directory test interpreter: {DIRECTORY_TEST_PYTHON}\n")
+            stream.flush()
+            service = subprocess.run([DIRECTORY_TEST_PYTHON, str(options.repo / "tools/session_directory/test_session_directory.py")],
                                      cwd=options.repo, stdout=stream, stderr=subprocess.STDOUT, timeout=options.timeout,
                                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        scored["service_python"] = DIRECTORY_TEST_PYTHON
         scored["service_exit_code"] = service.returncode
         scored["service_log"] = str(service_log)
         if service.returncode != 0:
