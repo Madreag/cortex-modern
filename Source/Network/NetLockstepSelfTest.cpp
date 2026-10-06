@@ -24666,7 +24666,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			for (int turn = 0; turn < 20; ++turn) round.Pump();
 			const auto release = round.hostWire.Last(NetTimingAction::Release, NetTimingPhase::Commit);
 			if (!release || release->applyFrame != 32 || round.peers[2].SeatReleases().empty() || !round.peers[1].SeatReleases().empty())
-				return fail("only survivor 3 did not receive the release committed for frame 32");
+				return fail("release fixture: commit frame=" + (release ? std::to_string(release->applyFrame) : "none") + " successor histories=" + std::to_string(round.peers[1].SeatReleases().size()) + " survivor3 histories=" + std::to_string(round.peers[2].SeatReleases().size()));
 			if (!round.Migrate() || round.peers[1].GetMigrationResult().boundary != 29) return fail("the survivors did not succeed at boundary 29");
 			std::string failures;
 			std::array<std::set<uint8_t>, 2> owed;
@@ -24735,10 +24735,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			g_TimerMan.GrantSimUpdates(1); g_TimerMan.UpdateSim(); g_ActivityMan.Update();
 			const int earlyMutation = activity->mutations;
 			const uint8_t earlyAuthority = round.peers[2].GetHostPeerId();
+			if (!ScenarioRunner::QueueLockstepLocalControllerFrames(121, {}, &round.failure)) return fail(round.failure);
 			round.alive[0] = false; round.hostWire.Stop();
 			ScenarioRunner::SetSessionPump([&] { round.Pump(); });
 			struct PumpScope { ~PumpScope() { ScenarioRunner::SetSessionPump({}); } } pumpScope;
-			if (!ScenarioRunner::QueueLockstepLocalControllerFrames(121, {}, &round.failure)) return fail(round.failure);
 			NetLockstepReadyFrame earlyFrame;
 			if (!ScenarioRunner::WaitForLockstepControllerFrame(121, earlyFrame, &round.failure)) return fail("the early survivor did not deliver its tick: " + round.failure);
 			round.peers[2].FinishSimulationTick(121);
