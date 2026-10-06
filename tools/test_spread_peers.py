@@ -487,9 +487,16 @@ class ContractTests(unittest.TestCase):
             (root/'stdout.log').write_text('[net-directory] registered session_id=own-code heartbeat_s=15\n', encoding='utf-8')
             case = object.__new__(spread.Case)
             case.public_directory, case.match, case.peer_ports = True, spread.Match(51580), {}
-            case.names, case.runs = ['host','seat'], {'host': SimpleNamespace(out=root, finished=False)}
+            case.names, case.runs = ['host','seat'], {'host': SimpleNamespace(out=root, output_name='host', finished=False)}
+            backend = SimpleNamespace(rpc=unittest.mock.Mock(return_value={'text': (root/'stdout.log').read_text()}))
+            box, claim = dict(name='HostBox'), dict(case_root='native-owned')
+            case.members = {'host': (box, claim, {}, backend)}
+            case.guard = unittest.mock.Mock()
             case.synchronize = unittest.mock.Mock()
             self.assertEqual(case.published_session('seat'), 'own-code')
+            case.synchronize.assert_not_called()
+            case.guard.assert_called_once()
+            backend.rpc.assert_called_once_with(box, 'text', dict(path='native-owned/host/stdout.log'), timeout=15)
             script = b'settext TextJoinAddress 127.0.0.1\nsettext TextJoinAddress deliberately-invalid\n'
             self.assertEqual(spread.map_script(script, [], 'own-code'),
                              b'settext TextJoinAddress session:own-code\nsettext TextJoinAddress deliberately-invalid\n')

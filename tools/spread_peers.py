@@ -1322,14 +1322,18 @@ class Case:
         port = int(role_value(self.peer_ports, self.names, name) or self.match.port)
         deadline = time.monotonic() + 80
         while time.monotonic() < deadline:
-            self.synchronize()
             if getattr(self, "public_directory", False):
+                self.guard()
                 host = self.runs.get(self.names[0])
-                log = host.out / "stdout.log" if host else None
-                text = log.read_text(encoding="utf-8", errors="replace") if log and log.is_file() else ""
+                if not host:
+                    raise self.refuse(name, self.members[name][0]["name"], "the declared host has no native run")
+                box, claim, _, backend = self.members[self.names[0]]
+                path = claim["case_root"] + "/" + host.output_name + "/stdout.log"
+                text = backend.rpc(box, "text", dict(path=path), timeout=15).get("text") or ""
                 registered = re.findall(r"\[net-directory\] registered session_id=([A-Za-z0-9_-]+) heartbeat_s=", text)
                 session = registered[-1] if registered else None
             else:
+                self.synchronize()
                 session = directory_session(self.directory["DIRECTORY_ROOT"], port)
             if session:
                 return session
