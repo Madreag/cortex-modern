@@ -196,7 +196,7 @@ def main() -> int:
         exe_sha = file_sha256(exe)
     result = {"exe_sha256": exe_sha, "arms": {}}
     protected = [repo / "tools" / name for name in
-                 ("test_autosave.py", "compare_sim_traces.py", "run_sim_test.py", "compare_snapshots.py", "snapshot_runtime.py")]
+                 ("test_autosave.py", "compare_sim_traces.py", "run_sim_test.py", "compare_snapshots.py", "snapshot_runtime.py", "cross_peers.py")]
     protected += [repo / "Data/Base.rte/Devices/Shared/Scripts/MuzzleSmoke.lua", *helper_files]
     before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in protected}
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
