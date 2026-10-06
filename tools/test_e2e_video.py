@@ -2124,6 +2124,36 @@ def check_acceptance_rows(results, scratch):
     return ok
 
 
+def check_named_case_root(results, scratch):
+    from types import SimpleNamespace
+    options = SimpleNamespace(dry_run=False, size='960x540', port=49400, fps=30, repo=scratch)
+    scenario = dict(path='synthetic-named-root', peers=[dict(name='host')])
+    owned = scratch / 'named-root'
+    owned.mkdir()
+    marker = owned / '.spread-case-owner.json'
+    marker.write_text('{"case_id":"owned"}')
+    saved = marker.read_bytes()
+    class ReachedStaging(Exception):
+        pass
+    def before_staging(*args):
+        raise ReachedStaging()
+    def outcome(name, case_root=None, dry=False):
+        options.dry_run = dry
+        try:
+            with patch.object(driver, 'source_tokens', side_effect=before_staging):
+                driver._run_one(options, scenario, dict(name=name), 0, scratch, case_root=case_root)
+        except (ReachedStaging, FileExistsError, ValueError) as error:
+            return type(error)
+        raise AssertionError('The root test must stop before any engine staging')
+    ok = row(results, 'named-root/current-case-reaches-staging', outcome('named-root', owned) is ReachedStaging and marker.read_bytes() == saved)
+    ok &= row(results, 'named-root/standalone-preserves-existing-root', outcome('named-root') is FileExistsError and marker.read_bytes() == saved)
+    ok &= row(results, 'named-root/wrong-case-cannot-reuse-root', outcome('named-root', scratch / 'different-case') is ValueError)
+    ok &= row(results, 'named-root/missing-owned-root-is-a-defect', outcome('missing-owned', scratch / 'missing-owned') is ValueError and not (scratch / 'missing-owned').exists())
+    ok &= row(results, 'named-root/standalone-creates-fresh-root', outcome('fresh-run') is ReachedStaging and (scratch / 'fresh-run').is_dir())
+    ok &= row(results, 'named-root/dry-run-creates-nothing', outcome('dry-run', dry=True) is ReachedStaging and not (scratch / 'dry-run').exists())
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -2140,6 +2170,7 @@ def main():
         ok &= check_item_screens_reachable(results, options.repo)
         ok &= check_e2e_host_end_completion(results, options.repo)
         ok &= check_capture_binary(results, scratch)
+        ok &= check_named_case_root(results, scratch)
         ok &= check_recording_health(results, scratch)
         ok &= check_screen_watches(results, scratch)
         ok &= check_streamed_capture(results, scratch)

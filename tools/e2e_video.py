@@ -1792,20 +1792,19 @@ def gameplay_signals(video, stage, epochs=1):
             write_json(path, row)
 
 
-def prepare_run_root(root, remote_capture=None):
-    import spread_peers as spread
-    if isinstance(remote_capture, spread.Case):
-        remote_capture.stage_root(root)
-    else:
-        root.mkdir(parents=True, exist_ok=False)
-
-
-def _run_one(options, scenario, run, run_index, out):
+def _run_one(options, scenario, run, run_index, out, case_root=None):
     """One scenario run: its peers launched together, each recording its own video."""
     root = Path(out) / run.get("name", f"run{run_index}")
     dry = getattr(options, "dry_run", False)
-    if not dry:
-        prepare_run_root(root, getattr(options, "remote_capture", None))
+    if not dry and case_root is not None:
+        import spread_peers as spread
+        remote_capture = getattr(options, "remote_capture", None)
+        if isinstance(remote_capture, spread.Case):
+            remote_capture.stage_root(root)
+        if Path(case_root).resolve() != root.resolve() or not root.is_dir():
+            raise ValueError("named case does not own this scenario run root")
+    elif not dry:
+        root.mkdir(parents=True, exist_ok=False)
     size = options.size or run.get("size") or scenario.get("size") or DEFAULT_SIZE
     width, height = (int(part) for part in size.split("x"))
     port = port_for(run_index, options.port)
@@ -2184,7 +2183,7 @@ def run_one(options, scenario, run, run_index, out):
     def drive(case):
         options.remote_capture = case
         try:
-            result = _run_one(options, scenario, run, run_index, out)
+            result = _run_one(options, scenario, run, run_index, out, case_root=case.out)
             result.update(topology="spread", peer_boxes=case.result()["peer_boxes"], repo=str(Path(options.repo).resolve()))
             for peer in result["peers"]:
                 peer.update(topology="spread", box=result["peer_boxes"][peer["peer"]])
