@@ -65,8 +65,25 @@ namespace RTE {
 			dimensionsMatch = actualWidth == width && actualHeight == height;
 			readError = glad_glGetError();
 			if (dimensionsMatch && readError == GL_NO_ERROR) {
+#if defined(__APPLE__)
+				// Transfer complete native color words; packing three components in
+				// the driver can serialize the render queue. Alpha was never captured.
+				const std::size_t count = static_cast<std::size_t>(width) * height;
+				if (count > maxBytes / 4) { error = "native texture transfer size overflows"; return false; }
+				std::vector<unsigned char> bgra(count * 4);
+				glad_glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, bgra.data());
+				readError = glad_glGetError();
+				if (readError == GL_NO_ERROR) {
+					for (std::size_t i = 0; i < count; ++i) {
+						pixels[i * 3] = bgra[i * 4 + 2];
+						pixels[i * 3 + 1] = bgra[i * 4 + 1];
+						pixels[i * 3 + 2] = bgra[i * 4];
+					}
+				}
+#else
 				glad_glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
 				readError = glad_glGetError();
+#endif
 			}
 		}
 		const GLenum restoreError = glad_glGetError();
