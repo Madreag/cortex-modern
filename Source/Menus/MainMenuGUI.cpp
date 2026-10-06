@@ -5406,7 +5406,9 @@ void MainMenuGUI::RefreshGamesList() {
 		if (directoryUrl.empty()) {
 			state = m_GameRows.empty() ? "No online game list is set. Games on this network show here." : "Games on this network:";
 		} else if (!m_DirectoryBrowser.ListError().empty()) {
+			const bool online = std::any_of(m_GameRows.begin(), m_GameRows.end(), [](const NetDirectoryClient::GameRow& row) { return row.source != "LAN"; });
 			state = m_GameRows.empty() ? "The online game list is unavailable. Games on this network still show here."
+			        : online           ? "The online game list is unavailable - its last games may have closed."
 			                           : "The online game list is unavailable - showing games on this network.";
 		} else if (m_GameRows.empty()) {
 			state = m_DirectoryBrowser.ListReplies() == 0 ? "Looking for games..." : "No games found. Ask your friend to host, or host one yourself.";
@@ -5503,7 +5505,9 @@ void MainMenuGUI::RefreshGamesList() {
 	};
 	bool changed = rows.size() != m_GameRows.size();
 	for (size_t i = 0; !changed && i < rows.size(); ++i) {
-		changed = describe(rows[i]) != describe(m_GameRows[i]);
+		// A row is its game and where a join goes: a same-looking game at another session, address or port is another row.
+		changed = describe(rows[i]) != describe(m_GameRows[i]) || GameRowKey(rows[i]) != GameRowKey(m_GameRows[i]) ||
+		          NetIceMenuJoinAddress(rows[i]) != NetIceMenuJoinAddress(m_GameRows[i]) || rows[i].joinable != m_GameRows[i].joinable;
 	}
 	if (!changed) {
 		return;
