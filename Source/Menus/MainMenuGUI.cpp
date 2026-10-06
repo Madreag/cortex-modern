@@ -4628,11 +4628,12 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	if (m_MultiplayerLobbyPlayerRowFont) {
 		m_MultiplayerStatusLabel->SetFont(m_MultiplayerLobbyPlayerRowFont);
 		std::string statusText = m_MultiplayerStatusLabel->GetText();
-		while (!statusText.empty() &&
-		       m_MultiplayerLobbyPlayerRowFont->CalculateWidth(statusText + "...", m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
-			statusText.pop_back();
-		}
-		if (statusText != m_MultiplayerStatusLabel->GetText()) {
+		// Only a text wider than its box loses its end; one that fits is shown whole.
+		if (m_MultiplayerLobbyPlayerRowFont->CalculateWidth(statusText, m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
+			while (!statusText.empty() &&
+			       m_MultiplayerLobbyPlayerRowFont->CalculateWidth(statusText + "...", m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
+				statusText.pop_back();
+			}
 			m_MultiplayerStatusLabel->SetText(statusText + "...");
 		}
 	}
