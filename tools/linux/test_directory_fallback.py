@@ -9,15 +9,21 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from run_sim_test import make_run, seed_settings
 from test_lobby_lifecycle import menu_script, wait_for_log
+from test_menu_readback import spread, managed_case
 
 HINT = "the session directory is not reachable: LAN games and a typed address still work"
 
 
+@managed_case
 def check(repo, root, port, url):
     root.mkdir(parents=True, exist_ok=False)
     runs, records = {}, {}
     result = {"pass": False, "url": url, "port": port}
+    execution = None
     try:
+        execution = spread.prepare_case(repo, root,
+            [spread.Peer("host", os="windows"), spread.Peer("guest", os="windows", reviewed=True)],
+            spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
         host = menu_script("Host", True, 2, port)
         host += "wait_connected 2 90\nassert_substate Lobby\nwait_ms 1000\ngoto_main\nexit\n"
         guest = ("wait 40\nactivate ButtonMainToMultiplayer\nwait 12\n"
@@ -31,7 +37,7 @@ def check(repo, root, port, url):
         for who, script in (("host", host), ("guest", guest)):
             path = root / f"{who}.menu.txt"
             path.write_text(script, encoding="utf-8")
-            run = make_run(repo, ["-menu-script", path, "-num-lua-states", "4"], root / who, 150,
+            run = execution.make_run(repo, ["-menu-script", path, "-num-lua-states", "4"], root / who, 150,
                            env={"CCCP_HEADLESS": "1"})
             seed_settings(run, {"SessionDirectoryUrl": url, "NetworkIceEnable": 0})
             runs[who] = run.start()
@@ -55,6 +61,8 @@ def check(repo, root, port, url):
         for run in runs.values():
             run.close()
     result["records"] = records
+    receipt = execution.result() if execution else spread.read_json(root / "spread-result.json", {})
+    result.update(topology="spread", peer_boxes=receipt.get("peer_boxes", {}), spread=receipt, proof=result["pass"])
     (root / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result
 
@@ -64,10 +72,19 @@ def main():
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=50300)
+    if spread:
+        spread.add_arguments(parser)
     args = parser.parse_args()
+    if not spread:
+        parser.error("directory fallback requires the shared spread executor")
+    args.spread = True
+    spread.configure(args)
     results = {name: check(args.repo.resolve(), args.out.resolve() / name, args.port + index, url)
                for index, (name, url) in enumerate((("unset", ""), ("unreachable", "https://127.0.0.1:1/custom-directory")))}
-    (args.out / "result.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
+    summary = {**results, "topology": "spread",
+               "peer_boxes": {name: row["peer_boxes"] for name, row in results.items()},
+               "proof": all(row["pass"] for row in results.values())}
+    (args.out / "result.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({name: result["pass"] for name, result in results.items()}))
     return 0 if all(result["pass"] for result in results.values()) else 1
 
