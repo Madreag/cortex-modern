@@ -7135,7 +7135,10 @@ void LuaStateWrapper::RestoreScriptCallbacks(std::vector<std::string>& problems,
 			const long uid = lua_isstring(m_State, -2) ? static_cast<long>(std::strtol(lua_tostring(m_State, -2), nullptr, 10)) : 0;
 			MovableObject* mo = g_MovableMan.FindObjectByUniqueID(uid);
 			// Objects outside the world draw their IDs per process, so a record names this object only if it runs the scripts the record does.
-			if (mo && mo->GetLuaState() == this && lua_istable(m_State, -1) && !CallbacksFitScripts(m_State, -1, mo->m_EnabledScripts)) mo = nullptr;
+			if (mo && lua_istable(m_State, -1) && !CallbacksFitScripts(m_State, -1, mo->m_EnabledScripts)) mo = nullptr;
+			// An owned object whose scripts have not run has callbacks but no instance root. Its restored
+			// ID can choose a different provisional VM; the callback record names the saved VM instead.
+			if (mo && lua_istable(m_State, -1) && mo->GetLuaState() != this && !mo->ObjectScriptsInitialized()) mo->MoveScriptsToState(*this);
 			if (mo && mo->GetLuaState() == this && lua_istable(m_State, -1)) {
 				if (rebound) rebound->insert(mo);
 				mo->m_FunctionsAndScripts.clear();
@@ -13025,7 +13028,15 @@ void LuaMan::ClearScriptTimings() {
 }
 
 void LuaStateWrapper::DiscardStashedScriptObject(long uniqueID) {
-	RunScriptString("if _ScriptFieldsStash then _ScriptFieldsStash[\"" + std::to_string(uniqueID) + "\"] = nil; end");
+	// Retiring a held world must not compile a cleanup chunk into the restored world's birth sequence.
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
+	lua_getglobal(m_State, "_ScriptFieldsStash");
+	if (lua_istable(m_State, -1)) {
+		lua_pushstring(m_State, std::to_string(uniqueID).c_str());
+		lua_pushnil(m_State);
+		lua_rawset(m_State, -3);
+	}
+	lua_pop(m_State, 1);
 }
 
 // Read in place: the walk never allocates, runs Lua or reaches a metamethod.
