@@ -1335,7 +1335,7 @@ bool Activity::SwitchToActorFromScript(Actor* actor, int player, int team) {
 	NoteLockstepControlBinding(uid, player);
 	Controller& controller = *actor->GetController();
 	const auto previousMode = controller.GetInputMode();
-	const int previousPlayer = controller.GetPlayer();
+	const int previousPlayer = controller.GetPlayerRaw();
 	const bool held = ScenarioRunner::IsLockstepSeatUnderAI(owner, ScenarioRunner::GetLockstepAppliedFrame());
 	const auto mode = held ? Controller::CIM_AI : Controller::CIM_PLAYER;
 	controller.ApplyWireMode(mode, player);
