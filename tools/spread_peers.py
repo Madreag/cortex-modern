@@ -40,7 +40,9 @@ Peer.output_name optionally declares an existing non-ASCII output directory;
 make_run(..., role=...) also accepts its declared logical peer explicitly.
 Text scripts retain their original UTF-8 or legacy Windows byte encoding.
 Peer.lane (or Match.parameters["lane"]) supplies the caller's pool priority
-lane; the existing pool still decides admission. Peer.block_udp reserves only
+lane; the existing pool still decides admission. Its owned pending ticket is
+published before probing and is released on refusal or native launch.
+Peer.block_udp reserves only
 declared discovery ports on that peer's native machine for the case's lever.
 The default network is ICE. Match.parameters["network"]="direct" preserves
 explicit ICE-Off/Unlisted inputs and substitutes only deliberate loopback
@@ -432,7 +434,7 @@ def run_case(repo, out, peers, match, *, drive=None, peer_boxes=None, dispatcher
         if drive:
             result = drive(case)
         else:
-            handles = [case.make_run(repo, peer.args, Path(out)/peer.name, peer.timeout, env=peer.env,
+            handles = [case.make_run(repo, peer.args, Path(out)/(peer.output_name or peer.name), peer.timeout, env=peer.env,
                                      expected=peer.expected, fixtures=peer.fixtures) for peer in peers]
             for handle in handles:
                 handle.start()
@@ -456,7 +458,7 @@ class Case:
         self.pool, self.transport_module, self.dispatcher = installed_pool(dispatcher)
         self.registry = Path(registry or self.dispatcher.with_name("boxes.json"))
         self.pins, self.peer_ports = pairs(peer_boxes), peer_ports or {}
-        self.members, self.runs, self.tunnels, self.refusals, self.identities = {}, {}, [], [], {}
+        self.members, self.runs, self.tunnels, self.refusals, self.identities, self.pending = {}, {}, [], [], {}, []
         self.lock = threading.RLock()
         self.stack = contextlib.ExitStack()
         self.closed = False
@@ -537,18 +539,27 @@ class Case:
             excluded = used + [box["name"] for box in catalog if peer.quiet and box.get("timing") is False]
             needs = self.pool.Needs(os=peer.os, engines=peer.engines, gpu=bool(peer.size), memory=peer.memory,
                                     alone=peer.quiet, size=peer.size, only_box=pin, excluded=tuple(excluded))
-            fitting, reasons, states = self.pool.candidates(self.registry, needs, backend)
             caller_lane = peer.lane or self.match.parameters.get("lane")
             label = f"{caller_lane}: spread" if caller_lane else "spread"
             request = dict(run_id=uuid.uuid4().hex, token=uuid.uuid4().hex, label=f"{label}: {self.out.name}/{peer.name}",
                            lane=caller_lane or self.lane,
                            owner=dict(pid=os.getpid(), machine=self.transport_module.worker.facts.machine_name(),
                                       process_start=self.transport_module.worker.facts.process_start(os.getpid())),
-                           out=str(self.control/peer.name/"results"), command=[], hang_guard=max(600, peer.timeout + 300))
+                           out=str(self.control/peer.name/"results"), command=[], hang_guard=max(600, peer.timeout + 300), enqueued_at=time.time())
+            with self.transport_module.worker.mutex(self.pool.queue_root(self.registry)/".admission.lock", wait=60):
+                ticket = self.pool.write_ticket(self.registry, needs, request)
+            self.pending.append((ticket, request["token"]))
+            self.stack.callback(self.transport_module.worker.facts.release_reservation, ticket, request["token"])
+            fitting, reasons, states = self.pool.candidates(self.registry, needs, backend)
             chosen = None
             for _, box, state in fitting:
                 try:
-                    claim = backend.claim(box, needs, request)
+                    with self.transport_module.worker.mutex(self.pool.queue_root(self.registry)/".admission.lock", wait=60):
+                        blocker = self.pool.priority_blocker(self.registry, box, state, request)
+                        if blocker:
+                            reasons[box["name"]] = "yielded to " + blocker["label"]
+                            continue
+                        claim = backend.claim(box, needs, request)
                 except Exception as error:
                     self.refuse(peer.name, box["name"], str(error))
                     continue
@@ -579,6 +590,11 @@ class Case:
         for name, (box, claim, _, backend) in list(self.members.items()):
             if boxes[box["name"]]["off_limits"]:
                 raise self.refuse(name, box["name"], "went off limits during the case")
+            if not any(handle.started for handle in self.runs.values()):
+                request = self.members[name][2]
+                state = getattr(backend, "last_states", {}).get(box["name"])
+                if state and (blocker := self.pool.priority_blocker(self.registry, box, state, request)):
+                    raise self.refuse(name, box["name"], "yielded preparation to " + blocker["label"])
             if (name not in self.runs or not self.runs[name].finished) and not (name in self.runs and self.runs[name].native_progress.get("record")):
                 try:
                     backend.rpc(box, "renew", dict(claim=claim), timeout=15)
@@ -792,9 +808,14 @@ class Case:
             for name, (box, claim, _, backend) in self.members.items():
                 cleanup.callback(backend.release, box, claim)
                 handle = self.runs.get(name)
-                if handle and handle.started and not handle.finished:
+                if handle and (handle.started or getattr(handle, "launch_attempted", False)) and not handle.finished:
                     cleanup.callback(backend.stop, box, claim)
             self.save()
+
+    def release_pending(self):
+        for ticket, token in self.pending:
+            self.transport_module.worker.facts.release_reservation(ticket, token)
+        self.pending.clear()
 
     def __enter__(self):
         return self
@@ -900,10 +921,17 @@ class Run:
         if native["directory"]:
             native["directory"] = {key: value for key, value in native["directory"].items() if key != "DIRECTORY_ROOT"}
         path = claim["root"] + "/peer-spec.json"
-        backend.rpc(box, "write", dict(path=path, value=native))
-        request["command"] = ["python", claim["control"] + "/spread_peers.py", "--native", path, "--out", "{OUT}"]
-        backend.launch(box, claim, request)
+        try:
+            backend.rpc(box, "write", dict(path=path, value=native))
+            request["command"] = ["python", claim["control"] + "/spread_peers.py", "--native", path, "--out", "{OUT}"]
+            self.launch_attempted = True
+            backend.launch(box, claim, request)
+        except SpreadRefusal:
+            raise
+        except Exception as error:
+            raise self.case.refuse(self.role, box["name"], str(error)) from error
         self.started = True
+        self.case.release_pending()
         self.deadline = time.monotonic() + self.timeout + 180
         return self
 
