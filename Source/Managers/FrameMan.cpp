@@ -1376,6 +1376,11 @@ void FrameMan::RecordVideoFrame(const std::string& screen, const std::string& se
 	const char* abortScreen = SDL_getenv("CCCP_TEST_READBACK_ABORT_SCREEN");
 	if (abortScreen && screen == abortScreen) {
 		recorder.Finish();
+		// An abort may interrupt drawing with the renderer's FBO still bound.
+		// The detecting probe exercises that real GL state explicitly.
+		if (SDL_getenv("CCCP_TEST_READBACK_FRAMEBUFFER")) {
+			glBindFramebuffer(GL_READ_FRAMEBUFFER, screenBuffer->GetFramebuffer());
+		}
 		RTEAbort("deliberate frame readback probe");
 	}
 }

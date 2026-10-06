@@ -29,7 +29,8 @@ def run_case(repo: Path, out: Path, timeout: float = 90) -> dict:
     run = make_run(repo, ["-menu-script", str(script), "-record-video", str(video),
                           "-record-video-fps", "60"], out / "run", timeout,
                    env={"CCCP_HEADLESS": "1", "CC_RUNNER_IGNORE_FULLSCREEN": "1",
-                        "CCCP_TEST_RECORD_ENCODER": "", "CCCP_TEST_READBACK_ABORT_SCREEN": "SettingsScreen"})
+                        "CCCP_TEST_RECORD_ENCODER": "", "CCCP_TEST_READBACK_ABORT_SCREEN": "SettingsScreen",
+                        "CCCP_TEST_READBACK_FRAMEBUFFER": "1"})
     try:
         launched = run.start().finish()
     finally:
