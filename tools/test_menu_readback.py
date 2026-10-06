@@ -2562,7 +2562,7 @@ def run_case(options, case, root, failing=None):
                                  size=(int(width * multiplier), int(height * multiplier)), reviewed=who == reviewed,
                                  held=(case == "net-host-left-early" and who == "client")) for who in texts]
             parameters = {"lane": "menus"}
-            if case == "host-draft-roundtrip" or network_page_pair:
+            if case == "host-draft-roundtrip":
                 # This case deliberately reads back Unlisted with traversal and relay Off.
                 parameters["network"] = "direct"
             executor = spread.prepare_case(options.repo, root, peers, spread.Match(options.port, parameters=parameters))
