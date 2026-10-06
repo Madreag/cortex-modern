@@ -90,11 +90,29 @@ namespace RTE::CheckpointLua {
 					if (isluafunc(&function)) {
 						const auto cell = m_Heap.Read(gco2uv(gcref(m_Heap.Read(&source->l.uvptr[index]))));
 						result.append(reinterpret_cast<const char*>(&cell.serial), sizeof(cell.serial));
+						result.append(reinterpret_cast<const char*>(&cell.closed), sizeof(cell.closed));
+						if (!cell.closed) {
+							const auto slot = mref(cell.v, TValue);
+							result.append(reinterpret_cast<const char*>(&slot), sizeof(slot));
+						}
 						upvalue = cell.closed ? cell.tv : m_Heap.Read(mref(cell.v, TValue));
 					} else upvalue = m_Heap.Read(&source->c.upvalue[index]);
 					const auto token = Token(upvalue); const size_t size = token.size();
 					result.append(reinterpret_cast<const char*>(&size), sizeof(size)); result += token;
 				}
+			} else if (tvisthread(&value)) {
+				// A coroutine has no store barrier. Compare the frozen status,
+				// stack shape and every slot (including frame PCs and traversal
+				// cursors) before reusing any root that reached it.
+				const auto thread = m_Heap.Read(threadV(&value));
+				const TValue* stack = tvref(thread.stack);
+				const ptrdiff_t base = thread.base - stack, top = thread.top - stack;
+				if (base < 0 || top < base || top > thread.stacksize) throw std::runtime_error("invalid frozen coroutine stack");
+				result.append(reinterpret_cast<const char*>(&thread.status), sizeof(thread.status));
+				result.append(reinterpret_cast<const char*>(&base), sizeof(base));
+				result.append(reinterpret_cast<const char*>(&top), sizeof(top));
+				const auto slots = m_Heap.ReadBytes(stack, static_cast<size_t>(top) * sizeof(TValue));
+				result.append(reinterpret_cast<const char*>(slots.data()), slots.size());
 			}
 			return result;
 		}
@@ -112,7 +130,9 @@ namespace RTE::CheckpointLua {
 			const bool ours = lua_rawequal(state, -1, -2) != 0;
 			lua_pop(state, 2);
 			if (!ours) return std::nullopt;
-			return static_cast<Proxy*>(lua_touserdata(state, index))->value;
+			const TValue value = static_cast<Proxy*>(lua_touserdata(state, index))->value;
+			if (observe) observe(value);
+			return value;
 		}
 
 		void Push(lua_State* state, const TValue& value) {

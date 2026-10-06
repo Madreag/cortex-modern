@@ -63,6 +63,7 @@ namespace RTE::CheckpointLua {
 			if (first) context.view.Install(worker);
 			context.view.scratch.insert(scratch.begin(), scratch.end());
 			native->Bind(worker, context.view);
+			lua_pushboolean(worker, true); lua_setglobal(worker, "_ScriptGraphFrozenDependencies");
 			Bind(worker, context, "_ScriptGraphThreadCapture", Guard<ThreadCapture>);
 			Bind(worker, context, "_ScriptGraphOpenUpvalues", Guard<OpenUpvalues>);
 			Bind(worker, context, "_ScriptGraphRandomState", Guard<RandomState>);

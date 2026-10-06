@@ -1695,7 +1695,7 @@ local function visitFunction(value, ctx)
 	if info.what == "C" then
 		local range = _ScriptGraphIteratorSnapshot(value)
 		if range then
-			ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "iterator") .. ".cursor")
+			if not _ScriptGraphFrozenDependencies then ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "iterator") .. ".cursor") end
 			id = birthId(ctx, value, "iterator")
 			if not id then return "z;" end
 			ctx.ids[value] = id
@@ -1713,7 +1713,7 @@ local function visitFunction(value, ctx)
 		end
 		for name, prototype in pairs(nativePrototypes) do
 			if _ScriptGraphSameNativeFunction(value, prototype) then
-				ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "native closure") .. ".native_upvalues")
+				if not _ScriptGraphFrozenDependencies then ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "native closure") .. ".native_upvalues") end
 				id = birthId(ctx, value, "native closure")
 				if not id then return "z;" end
 				ctx.ids[value] = id
@@ -1764,7 +1764,7 @@ local function visitFunction(value, ctx)
 			local open = ctx.openUpvalues[cellKey]
 			if open then
 				-- An open cell lives on a coroutine's stack, which nothing watches.
-				ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "function") .. ".upvalue[" .. name .. "]")
+				if not _ScriptGraphFrozenDependencies then ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "function") .. ".upvalue[" .. name .. "]") end
 				noteNode(ctx, cellId, "C" .. outputNumber(cellId) .. ";O" .. visit(open.thread, ctx) .. "n" .. outputNumber(open.slot) .. ";")
 			else
 				-- A store into a cell reports nothing, so the chunk keys its reuse on the value the cell holds.
@@ -1785,7 +1785,7 @@ local function noteWeakTable(value, ctx)
 	local mode = type(meta) == "table" and rawget(meta, "__mode")
 	if type(mode) == "string" and string.find(mode, "[kv]") then
 		ctx.hasWeakTables = true
-		ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "table") .. ".weak_entries")
+		if not _ScriptGraphFrozenDependencies then ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "table") .. ".weak_entries") end
 	end
 	return meta
 end
@@ -1842,8 +1842,9 @@ local function visitThread(value, ctx)
 		elseif traversal == false then entries[#entries + 1] = "Vz;"
 		else entries[#entries + 1] = "V" .. visitAt(desc.slots[i], ctx, (ctx.location or "coroutine") .. ".slot[" .. i .. "]") end
 	end
-	-- A coroutine's stack slots move with no write barrier behind them, so this chunk is never reused.
-	ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "coroutine") .. ".stack")
+	-- The live index has no stack barrier; the frozen worker compares all stack
+	-- slots before reuse and also records every value this description reaches.
+	if not _ScriptGraphFrozenDependencies then ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "coroutine") .. ".stack") end
 	noteNode(ctx, id, "H" .. outputNumber(id) .. ";" .. letter .. ";" .. outputNumber(desc.first) .. ";" .. outputNumber(desc.base) .. ";" .. outputNumber(desc.top) .. ";" .. concatenate(entries))
 	return reference(ctx, id)
 end
