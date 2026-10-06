@@ -23,7 +23,16 @@ import threading
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# An explicitly routed spread run uses the shared interface and its sibling modules.
+# Local detector runs keep this tree's original imports and launch behavior.
+_interface_parser = argparse.ArgumentParser(add_help=False)
+_interface_parser.add_argument("--spread-tools", type=Path)
+_interface_options, _ = _interface_parser.parse_known_args()
+_interface_root = (_interface_options.spread_tools.resolve() if _interface_options.spread_tools
+                   else Path(__file__).resolve().parent)
+if not (_interface_root / "spread_peers.py").is_file():
+    _interface_parser.error("the shared tools directory has no spread interface")
+sys.path.insert(0, str(_interface_root))
 from run_sim_test import make_run, engine_executable, file_sha256  # noqa: E402
 from test_telemetry_bundle import set_visual_resolution  # noqa: E402
 from e2e_video import SCREEN_WATCHES  # noqa: E402
@@ -1068,6 +1077,10 @@ def run_peers(options, root, case, size, peers, base, moderate=False):
     for who in who_list + newcomers:
         directory = probe_root(root, who)
         directory.mkdir()
+        if placement:
+            # Remote startup is outside the script; its original waits count the joined round.
+            probes[who]["activate_phase"] = "Running"
+            probes[who]["sim_clock"] = "lockstep"
         (directory / "probe.json").write_text(json.dumps(probes[who], indent=2) + "\n", encoding="utf-8")
         script = root / f"{who}-menu.txt"
         lobby = case == "between-rounds"
@@ -1415,6 +1428,7 @@ def main():
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--port-block", help="lane-owned game ports LO-HI for spread mode")
     parser.add_argument("--dry-run", action="store_true", help="print each probe's step count and stop")
+    parser.add_argument("--spread-tools", type=Path, help="the canonical shared tools directory for an explicitly routed spread run")
     spread.add_arguments(parser)
     options = parser.parse_args()
     spread.configure(options)

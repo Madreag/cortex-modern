@@ -550,7 +550,10 @@ namespace {
 				if (seat == observed["editor_seats"].end() || seat->at("ready") != true) return false;
 			}
 			if (step.contains("service") && observed["service"] != step["service"]) return false;
-			if (step.contains("sim_at_least") && observed["sim_frame"].get<long long>() < step["sim_at_least"].get<long long>()) return false;
+			if (step.contains("sim_at_least")) {
+				const char* clock = probe.script.value("sim_clock", "process") == "lockstep" ? "lockstep_frame" : "sim_frame";
+				if (observed[clock].get<long long>() < step["sim_at_least"].get<long long>()) return false;
+			}
 			// A watcher plays a seat once its own id is a seat's.
 			if (step.contains("local_peer_at_most") && (observed["local_peer"].get<int>() == 0 || observed["local_peer"].get<int>() > step["local_peer_at_most"].get<int>())) return false;
 			if (step.contains("lockstep_frame_at_least") && observed["lockstep_frame"].get<uint64_t>() < step["lockstep_frame_at_least"].get<uint64_t>()) return false;

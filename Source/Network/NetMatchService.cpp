@@ -8352,7 +8352,8 @@ static std::string ResyncSaveName() {
 			m_LastRoundId = static_cast<uint32_t>(m_Coordinator->GetRoundId());
 		}
 		m_ReconnectClient.SetRound(m_Coordinator ? m_LastRoundId : 0);
-		if (hostAdmission) {
+		// A retained admission session still answers after its coordinator stopped; it cannot start that ended round again.
+		if (hostAdmission && (!m_Coordinator || !m_Coordinator->IsStopped())) {
 			// Phase A: a ticketless join into a running match is refused; a returning holder proves.
 			m_ReconnectHost.SetLiveMatch(true);
 		}
