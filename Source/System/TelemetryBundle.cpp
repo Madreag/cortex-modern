@@ -28,6 +28,7 @@
 #include <fstream>
 #include <format>
 #include <iostream>
+#include <iterator>
 #include <mutex>
 #include <memory>
 #include <optional>
@@ -160,6 +161,57 @@ namespace RTE {
 			return false;
 		}
 
+		bool KnownSettingsProperty(std::string_view name) {
+			static constexpr std::string_view properties[] = {
+				"actorauxiliaryhotkey", "actorprimaryhotkey", "advancedperformancestats", "aim",
+				"aimdown", "aimleft", "aimright", "aimup",
+				"aiupdateinterval", "allowsavingtobase", "alwaysdisplayunhelditemsinstrategicmode", "automaticgolddeposit",
+				"autosaveseconds", "axismap", "back", "bliponrevealunseen",
+				"brainlesshumansspectate", "casesensitivefilepaths", "consolescreenratio", "consoleusemonospacefont",
+				"crabbombthreshold", "crouch", "defaultactivityname", "defaultactivitytype",
+				"defaultscenename", "defaultshakefromrecoilmaximum", "defaultshakeperunitofgibenergy", "defaultshakeperunitofrecoilenergy",
+				"deltatime", "device", "digitalaimspeed", "directionmap",
+				"disablefactionbuymenuthemecursors", "disablefactionbuymenuthemes", "disableloadingscreenprogressreport", "disableluajit",
+				"disablemod", "drawatomgroupvisualizations", "drawhandandfootgroupvisualizations", "drawlimbpathvisualizations",
+				"drawpixelcheckvisualizations", "drawraycastvisualizations", "enablecrabbombs", "enableglobalscript",
+				"enableluadebugging", "enablemosubtraction", "enableparticlesettling", "enablevsync",
+				"endlessmetagamemode", "fire", "flashonbraindamage", "forcedisablemultimouse",
+				"forceimmediatepathingrequestcompletion", "fullscreen", "joybuttonmap", "joystickdeadzone",
+				"joystickdeadzonetype", "jump", "keymap", "launchintoactivity",
+				"leftdown", "leftleft", "leftright", "leftup",
+				"listenerzoffset", "loadingscreenprogressreportprecision", "localprediction", "localpredictionmaxticks",
+				"mastervolume", "maxscreenshaketime", "maxunhelditems", "measuremoduleloadtime",
+				"menutransitiondurationmultiplier", "minimumdistanceforpanning", "mousebuttonmap", "mousesensitivity",
+				"movefast", "movefasttoggle", "musicvolume", "muteaudioonfocusloss",
+				"mutemaster", "mutemusic", "mutesounds", "networkautoreconnect",
+				"networkautosaveskept", "networkchatdefaultscope", "networkchatkey", "networkchatnotify",
+				"networkchatsound", "networkchattextsize", "networkchatvisible", "networkconnectionmode",
+				"networkdiagnosticsdirectory", "networkdisplayname", "networkhostautorepair", "networkhostdelaypolicy",
+				"networkhostidlewaitminutes", "networkhostjoinhistoryseconds", "networkhostjoinlagseconds", "networkhostrelaymode",
+				"networkhostreturnwindowminutes", "networkhostvisibility", "networkiceenable", "networkinputdelayframes",
+				"networkmatchstatusmode", "networkofferstoredrejoin", "networkpathhorizonticks", "networkplayerturnpass",
+				"networkplayerturnservers", "networkplayerturnuser", "networkportmapenable", "networkrecordreplays",
+				"networkshowdiagnostics", "networkslowplayerboundticks", "networkslowplayerpolicy", "networkstunservers",
+				"networktoastsenabled", "networkturnpass", "networkturnservers", "networkturnuser",
+				"next", "palettefile", "pathfindergridnodesize", "piemenuanalog",
+				"piemenudigital", "player1scheme", "player2scheme", "player3scheme",
+				"player4scheme", "preset", "prev", "printdebuginfo",
+				"prone", "recommendedmoidcount", "resolutionmultiplier", "resolutionx",
+				"resolutiony", "rightdown", "rightleft", "rightright",
+				"rightup", "scenebackgroundautoscalemode", "scrapcompactingheight", "screenshakedecay",
+				"screenshakestrength", "sessiondirectorycertsha256", "sessiondirectoryinstallkey", "sessiondirectoryurl",
+				"showenemyhud", "showforeignitems", "showmetascenes", "showtooltips",
+				"skipintro", "smartbuymenunavigation", "soundpanningeffectstrength", "soundvolume",
+				"start", "subpiemenuhoveropendelay", "twoplayersplitscreenvertsplit", "unhelditemshuddisplayrange",
+				"usemultidisplays", "visibleassemblygroup", "weaponauxiliaryhotkey", "weaponchangenext",
+				"weaponchangeprev", "weapondrop", "weaponpickup", "weaponprimaryhotkey",
+				"weaponreload",
+			};
+			std::string lower(name);
+			std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+			return std::binary_search(std::begin(properties), std::end(properties), lower);
+		}
+
 		std::string RedactSettingsValue(std::string_view name, std::string_view value) {
 			if (name != "SessionDirectoryCertSha256") return "<redacted>";
 			std::string hex;
@@ -179,6 +231,7 @@ namespace RTE {
 			out.reserve(bytes.size());
 			size_t offset = 0;
 			bool redactContinuation = false;
+			bool redactObject = false;
 			size_t secretIndent = 0;
 			while (offset < bytes.size()) {
 				const size_t nl = bytes.find_first_of("\r\n", offset);
@@ -199,8 +252,11 @@ namespace RTE {
 				while (keyEnd > 0 && (body[keyEnd - 1] == ' ' || body[keyEnd - 1] == '\t')) --keyEnd;
 				const std::string key(body.substr(0, keyEnd));
 				const bool secret = eq != std::string_view::npos && SecretSettingsKey(key);
-				// Writer's raw values can span blank/comment lines and deeper assignments.
-				if (redactContinuation && !secret && (eq == std::string_view::npos || indent > secretIndent)) {
+				// Only writer properties end a raw value; an unknown assignment can contain credential bytes.
+				const bool property = indent > 0 && eq != std::string_view::npos && KnownSettingsProperty(key);
+				const bool sibling = property && indent <= secretIndent;
+				const bool nestedSecret = property && indent > secretIndent && redactObject && secret && key == "KeyMap";
+				if (redactContinuation && !sibling && !nestedSecret) {
 					out.append(bytes, offset, indent);
 					if (!body.empty()) out += "<redacted>";
 					out.append(bytes, end, ending);
@@ -213,7 +269,10 @@ namespace RTE {
 					offset = next;
 					continue;
 				}
-				if (!redactContinuation || indent < secretIndent) secretIndent = indent;
+				if (!redactContinuation || !nestedSecret) {
+					secretIndent = indent;
+					redactObject = key.ends_with("Hotkey");
+				}
 				redactContinuation = true;
 				size_t valueStart = eq + 1;
 				while (valueStart < body.size() && (body[valueStart] == ' ' || body[valueStart] == '\t')) ++valueStart;
