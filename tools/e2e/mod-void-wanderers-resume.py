@@ -34,6 +34,7 @@ TEAM_CHANGE = """    if self.steps == 20 then
         self:SetTeamOfPlayer(0, 1);
         self:SetPlayerBrain(brain, 0);
         print("[resume-detector] player_team=" .. self:GetTeamOfPlayer(0) .. " brain_team=" .. brain.Team);
+        self.setterPass = brain.Team == self:GetTeamOfPlayer(0);
         assert(brain.Team == self:GetTeamOfPlayer(0), "Lua brain setter leaves the brain on the old team");
         print("[resume-detector] PASS team_change");
     end
@@ -89,6 +90,7 @@ def stage_activity(run, case):
         source = source.replace("self.steps == 10 or self.steps == 40", "self.steps == 10")
         source = source.replace("                self:SwitchToActor(actor, player, 0);", "")
         source = source.replace("    if self.steps > 60 then", TEAM_CHANGE + "    if self.steps > 60 then")
+        source = source.replace("MetricsCollector:SetResult(self.purgeClear and self.responses[1] > 0)", "MetricsCollector:SetResult(self.setterPass == true)")
     if case == "held-switch":
         source = source.replace("self.steps == 10 or self.steps == 40", "self.steps == 10")
         source = source.replace("    if self.steps > 60 then", HELD_SWITCH + "    if self.steps > 60 then")
