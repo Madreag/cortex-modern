@@ -402,6 +402,21 @@ class DirectoryTests(unittest.TestCase):
     def assert_keys(self, body: dict[str, Any], keys: set[str]) -> None:
         self.assertEqual(set(body.keys()), keys)
 
+
+    def test_R1_tunnel_requires_the_callers_address(self) -> None:
+        self.start(port=47460)
+        self.server.store.caller_mode = "tunnel"
+        status, _ = self.call("GET", "/v1/sessions")
+        self.assertEqual(status, 400, "R1: tunnel request without a caller address used the loopback bucket")
+        for header in ("garbage", "127.0.0.1, 192.0.2.1", "", "192.0.2.1%fake"):
+            status, _ = self.call("GET", "/v1/sessions", headers={"CF-Connecting-IP": header})
+            self.assertEqual(status, 400, "R1: tunnel accepted an invalid caller address")
+        for address in ("192.0.2.1", "192.0.2.2"):
+            status, row = self.call("POST", "/v1/sessions", sample_register(), headers={"CF-Connecting-IP": address})
+            self.assertEqual(status, 200)
+            self.assertEqual(row["observed_ip"], address, "R1: valid forwarded address was not the pending registration source")
+        self.assertEqual({row.observed_ip for row in self.server.store._sessions.values()}, {"192.0.2.1", "192.0.2.2"})
+
     def test_successor_resumes_row_only_with_its_sealed_token(self) -> None:
         self.start(port=45799)
         status, created = self.register()

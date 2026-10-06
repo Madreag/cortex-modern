@@ -518,7 +518,11 @@ class SessionDirectory:
         turn_config: Optional[dict[str, Any]] = None, turn_max_ttl: int = TURN_MAX_TTL,
         owner_state: Optional[Path] = None,
         owner_key: Optional[Path] = None, first_upgrade_worlds: Optional[int] = None,
+        caller_mode: str = "direct",
     ) -> None:
+        if caller_mode not in ("direct", "tunnel"):
+            raise ValueError("invalid caller mode")
+        self.caller_mode = caller_mode
         self.expiry_s = expiry_s
         # The longest relay credential this directory mints; a client asking for longer gets this much.
         self.turn_max_ttl = max(TURN_MIN_TTL, min(TURN_MAX_TTL, int(turn_max_ttl)))
@@ -1436,6 +1440,8 @@ def configure_logging(log_file: Optional[Path]) -> None:
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Self-hosted session directory")
     parser.add_argument("--bind", default="0.0.0.0")
+    parser.add_argument("--caller-mode", choices=("direct", "tunnel"), default="direct",
+                        help="direct uses the socket address; tunnel requires the edge-set CF-Connecting-IP")
     # 0 = ephemeral; the bound port is printed at start. Game-port fixture
     # defaults live above 47600, each different:
     #   test_lobby_rejection.py            47611
@@ -1541,17 +1547,15 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
             return parts, parse_qs(parsed.query)
 
         def _observed_ip(self) -> str:
-            # The Cloudflare tunnel reaches the service from loopback and names each client in CF-Connecting-IP; nothing
-            # but a loopback peer may name another address, so a remote client cannot pick its own bucket.
-            peer = str(self.client_address[0])
+            if store.caller_mode == "direct":
+                return str(ipaddress.ip_address(self.client_address[0]))
             named = (self.headers.get("CF-Connecting-IP") or "").strip()
-            if named:
-                try:
-                    if ipaddress.ip_address(peer).is_loopback:
-                        return str(ipaddress.ip_address(named))
-                except ValueError:
-                    pass
-            return peer
+            try:
+                if not named or "%" in named:
+                    raise ValueError()
+                return str(ipaddress.ip_address(named))
+            except ValueError:
+                raise FieldError("invalid_caller_address", "CF-Connecting-IP") from None
 
         def _install_gate(
             self, is_register: bool
@@ -1857,6 +1861,7 @@ def spawn_server(
     owner_state: Optional[Path] = None,
     owner_key: Optional[Path] = None,
     first_upgrade_worlds: Optional[int] = None,
+    caller_mode: str = "direct",
 ) -> RunningServer:
     configure_logging(log_file)
     if cert is None or key is None:
@@ -1867,7 +1872,7 @@ def spawn_server(
     store = SessionDirectory(
         expiry_s=expiry_s, heartbeat_s=heartbeat_s, queue_idle_s=queue_idle_s, turn_config=turn_config, turn_max_ttl=turn_max_ttl,
         owner_state=owner_state if owner_state is not None else log_file.parent / "world-owners.json" if log_file else None,
-        owner_key=owner_key, first_upgrade_worlds=first_upgrade_worlds,
+        owner_key=owner_key, first_upgrade_worlds=first_upgrade_worlds, caller_mode=caller_mode,
     )
     store.start_pruner()
     httpd = build_httpd(bind, port, store, cert, key)
@@ -1905,7 +1910,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         turn_config=turn_config,
         turn_max_ttl=args.turn_max_ttl,
         owner_state=args.owner_state or (args.log_file.parent if args.log_file else Path.cwd()) / "world-owners.json",
-        owner_key=args.owner_key, first_upgrade_worlds=args.first_upgrade_worlds,
+        owner_key=args.owner_key, first_upgrade_worlds=args.first_upgrade_worlds, caller_mode=args.caller_mode,
     )
     print(f"session_directory listening on {args.bind}:{server.port}", flush=True)
     try:
