@@ -24788,6 +24788,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		});
 		std::cout << "[net-input-acceptance-selftest] " << passed << " of " << passed + failed << " passed" << std::endl;
+		std::cout << "[net-input-acceptance-selftest] " << (failed == 0 ? "PASS" : "FAIL") << std::endl;
 		return failed == 0 ? 0 : 1;
 	}
 
@@ -24904,6 +24905,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			std::cout << "}" << std::endl;
 			if (!ok) ++failed;
 		}
+		std::cout << "[net-input-acceptance-steady-selftest] " << (failed == 0 ? "PASS" : "FAIL") << std::endl;
 		return failed == 0 ? 0 : 1;
 	}
 
