@@ -436,7 +436,9 @@ class Case:
         for name in self.names:
             box, claim, request, backend = self.members[name]
             backend.active_claim, backend.active_box = claim, box
+            backend.snapshot = getattr(self, "input_snapshot", None)
             backend.prepare(box, claim, request)
+            self.input_snapshot = backend.snapshot
             native_root = box["scratch"].rstrip("/") + "/" + self.lane + "/native-" + self.id
             claim["case_root"] = native_root
             # Read the pool's port assignment. Each peer has a separate machine;
@@ -444,6 +446,9 @@ class Case:
             if self.match.port in range(*[claim["ports"][0], claim["ports"][1] + 1]):
                 raise self.refuse(name, box["name"], "driver match port overlaps the pool's control port map")
             self.guard()
+        windows_hashes = {claim["exe_sha256"] for box, claim, _, _ in self.members.values() if box["os"] == "windows"}
+        if len(windows_hashes) > 1:
+            raise SpreadRefusal("Windows executable changed between peer shipments")
 
     def connect_directory(self):
         if len(self.peers) < 2:
@@ -934,7 +939,14 @@ def main(argv=None):
     parser.add_argument("--native", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     options = parser.parse_args(argv)
-    return native_execute(options.native, options.out)
+    try:
+        return native_execute(options.native, options.out)
+    except Exception as error:
+        spec = read_json(options.native, {})
+        record = dict(topology="spread", box=spec.get("box", {}).get("name"), error=f"{type(error).__name__}: {error}")
+        write_json(options.out/"peer-result.json", record)
+        write_json(options.native.parent/"progress.json", dict(record=record))
+        raise
 
 
 if __name__ == "__main__":
