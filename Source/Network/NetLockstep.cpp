@@ -4700,6 +4700,12 @@ namespace RTE {
 		m_Config = config;
 		m_OpeningMatchConfig = config.matchConfig;
 		m_RoundConfigHash = config.originalRoundConfigHash.value_or(NetMatchConfigUtil::HashConfig(config.matchConfig));
+		// The published start repeats these delays, so the live config has them while the peer still starts.
+		if (config.requirePublishedStart && config.substituteSlowPeers) {
+			m_Config.matchConfig.peerInputDelayFrames.resize(config.peerCount);
+			for (uint8_t peer = 1; peer <= config.peerCount; ++peer)
+				m_Config.matchConfig.peerInputDelayFrames[peer - 1] = PeerInputDelay(peer);
+		}
 		m_MigrationPhase = NetHostMigrationPhase::None;
 		m_MigrationHistory.clear();
 		m_MigrationHistoryBytes = 0;
