@@ -355,6 +355,19 @@ class Case:
             backend.sources["pool_run.py"] = adapter.read_text(encoding="utf-8")
             backend.control_id = hashlib.sha256(json.dumps(backend.sources, sort_keys=True).encode()).hexdigest()[:20]
         backend.guard = self.guard
+        limits = read_json(os.environ.get("CORTEX_SPREAD_LIMITS", ""), {})
+        if limits:
+            original_probe = backend.probe
+            def probe(box, **kwargs):
+                constraint = next((value for key, value in limits.items() if key.casefold() == box["name"].casefold()), {})
+                if constraint.get("engines_max"):
+                    box["engines_max"] = min(box["engines_max"], constraint["engines_max"])
+                    box["max_engines"] = box["engines_max"]
+                if constraint.get("free_floor_gb"):
+                    box["free_floor_gb"] = max(box["free_floor_gb"], constraint["free_floor_gb"])
+                    box["min_free_gb"] = box["free_floor_gb"]
+                return original_probe(box, **kwargs)
+            backend.probe = probe
         return backend
 
     def allocate(self):
