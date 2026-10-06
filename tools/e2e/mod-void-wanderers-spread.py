@@ -43,6 +43,13 @@ def stage_package(case, repo):
     case.make_run = make_run
 
 
+def require_distinct_peers(case):
+    """A played match needs one peer on each physical box."""
+    boxes = list(case.result()["peer_boxes"].values())
+    if len({name.casefold() for name in boxes}) != len(boxes):
+        raise RuntimeError("mod match peers require distinct native machines: " + ", ".join(boxes))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--interface", type=Path, required=True)
@@ -76,6 +83,7 @@ def main():
 
         def drive(case):
             import run_sim_test
+            require_distinct_peers(case)
             stage_package(case, repo)
             original = run_sim_test.make_run
             run_sim_test.make_run = case.make_run
@@ -116,6 +124,7 @@ def main():
                              timeout=run.get("timeout_s") or scenario.get("timeout_s") or 300) for peer in definitions]
 
         def drive(case):
+            require_distinct_peers(case)
             stage_package(case, repo)
             arguments.remote_capture = case
             try:
