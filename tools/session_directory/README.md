@@ -22,7 +22,7 @@ python tools/session_directory/test_session_directory.py -v
 - `test_session_directory.py` — loopback tests (`python test_session_directory.py -v`)
 - `com.cortex.session-directory.plist` — macOS LaunchDaemon
 
-Listen address and port: `--bind` and `--port` (default `0`, an ephemeral port printed at start; the daemon and the Windows task pass `--port 8443`). TLS when both `--cert` and `--key` are set. Plain HTTP only with `--insecure-http` (tests and LAN trials). `--expiry-s` default 15. `--heartbeat-s` default 5 (also returned on register). `--log-file` is a rotating log (5 × 5 MB).
+The listener must be loopback (`--bind 127.0.0.1`, the default). `--caller-mode` is required: `direct` uses the socket address for local clients; `tunnel` requires the forwarding edge's address header. Both modes refuse a non-loopback listener. `--port` defaults to `0`, an ephemeral port printed at start; deployments pass `--port 8443`. TLS requires both `--cert` and `--key`. Plain HTTP requires `--insecure-http`. `--expiry-s` defaults to 15 and `--heartbeat-s` to 5. `--log-file` rotates at 5 × 5 MB.
 
 ## What the install key is
 
@@ -76,7 +76,7 @@ openssl x509 -in cert.pem -outform DER | openssl dgst -sha256
 
 Every client sets `SessionDirectoryCertSha256 = <hex>` in Settings.ini for a self-signed directory. An unpinned client needs a certificate the system store trusts (Let's Encrypt with a public DNS name). Pinned mode does not consult the chain, the name or the dates.
 
-4. Load the daemon (starts at boot, survives logout, KeepAlive):
+4. Follow the key-creation steps below, configure the forwarding tunnel to the loopback listener, then load the daemon (starts at boot, survives logout, KeepAlive):
 
 ```bash
 sudo launchctl bootstrap system /Library/LaunchDaemons/com.cortex.session-directory.plist
@@ -84,20 +84,82 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/com.cortex.session-direct
 
 To unload later: `sudo launchctl bootout system/com.cortex.session-directory`.
 
-5. Firewall: allow inbound TCP 8443 (HTTPS and signaling). UDP 3478 is only needed if a separate STUN/TURN daemon is added later; this process does not bind it.
+5. The forwarding tunnel reaches TCP 8443 on loopback. This process accepts no public listener and binds no UDP port.
 
 Logs: rotating file `/Users/erol/cortex-directory/logs/session-directory.log`, plus launchd stdout/stderr in the same folder.
 
 ## Windows alternative
 
-Same `session_directory.py`. Bind `0.0.0.0:8443` with `--cert` and `--key`. Create a Task Scheduler task that runs at logon (hidden `pythonw` is fine):
+Same `session_directory.py`, with a forwarding tunnel to `127.0.0.1:8443`. Create the permanent owner key once as described below, then create a Task Scheduler task at logon (hidden `pythonw` is fine):
 
 ```text
 Program: pythonw.exe
-Arguments: D:\path\to\session_directory.py --bind 0.0.0.0 --port 8443 --cert D:\path\to\cert.pem --key D:\path\to\key.pem --log-file D:\path\to\logs\session-directory.log
+Arguments: D:\path\to\session_directory.py --bind 127.0.0.1 --caller-mode tunnel --port 8443 --cert D:\path\to\cert.pem --key D:\path\to\key.pem --log-file D:\path\to\logs\session-directory.log --owner-state D:\path\to\world-owners.json
 Start in: D:\path\to
 ```
 
-Allow inbound TCP 8443 for that Python executable (elevated firewall rule). Clients set the directory URL to this PC. There is no launchd job and no `gui/501` requirement.
+The tunnel must overwrite `CF-Connecting-IP`. Clients use its public URL. The Python listener stays on loopback.
 
 Self-signed certificate (same `openssl` command as above, including the SAN) unless a public DNS name exists for Let's Encrypt. Clients pin that certificate as in step 3.
+# World ownership across restarts
+
+Keep `/Users/erol/cortex-directory/world-owners.json` and
+`/Users/erol/cortex-directory/world-owners.key` across deployments. The supplied
+service arguments select the owner file; the key defaults beside it with `.key`
+suffix. The key contains a private signing secret and a service-start era. Never
+log or replace it. Owner records contain hashes and generations, never tokens.
+Malformed existing state prevents startup.
+
+The public service has no legacy worlds to convert. Upgrade the service **before
+distributing a new game build**: a positive-generation world resume against the
+old service receives 409 and reads as superseded.
+
+1. Stop the old service. Recreate the project's disposable test worlds.
+2. Start the new service on loopback behind the existing tunnel with `--insecure-http`, `--caller-mode tunnel`,
+   `--owner-state /Users/erol/cortex-directory/world-owners.json`, and
+   `--create-owner-key` once. The Cloudflare edge must overwrite
+   `CF-Connecting-IP`; missing or invalid addresses receive 400. Direct deployments
+   use `--caller-mode direct` and the socket address. No address grants privilege.
+   Missing keys without the create flag refuse startup. Creation is atomic: an
+   interrupted first start leaves a complete key or no key, so repeat this step.
+
+   The public deployment's first-start command is:
+
+   ```bash
+   /usr/bin/python3 /Users/erol/cortex-directory/session_directory.py --bind 127.0.0.1 --port 8443 --caller-mode tunnel --insecure-http --log-file /Users/erol/cortex-directory/logs/session-directory.log --owner-state /Users/erol/cortex-directory/world-owners.json --create-owner-key
+   ```
+3. Remove the one-time create flag. Keep `world-owners.key` and `world-owners.json`
+   permanently, back them up together, and preserve `world-owners.pending.json`
+   through an in-progress restart. Verify register, heartbeat, list, signals and
+   resume from old games; then distribute new builds. Pending metadata expires
+   within its row's lease and contains no bearer proof.
+
+Short HTTP requests have 256 handlers. Long polls use a separate pool of 64,
+with four per caller; excess polls answer immediately with a one-second retry
+hint. Accepted polls wait at most one second; an empty answer also asks for a
+one-second retry. The 512-connection backlog and 512 header handlers admit a
+simultaneous heartbeat and poll from each of 200 callers. Even two three-second
+body waves plus a retry fit inside the unchanged 15-second lease. Parsed
+saturation answers 503 with `Retry-After: 1`; it logs once per caller per minute.
+Unfinished headers use at most two connections per socket address, separate
+from short handlers; complete buffered tunnel headers bypass that share.
+One caller retains at most 64 of 4,096 owners. Under pressure, worlds
+listed for less than 60 seconds retire first; signed returning proofs remain
+verifiable. These shares prevent one address from reserving the whole service.
+Short requests have a three-second deadline from accept through body end,
+including TLS and headers, a 128 KiB body cap, and four open short connections
+per caller. The separate four-waiter share gives at most eight admitted
+connections per caller. Excess or overdue body readers close; they cannot hold
+all heartbeat handlers for a lease. The owner share also applies to a /24 for
+IPv4 and a /48 for IPv6. Owners listed for at least 60 seconds are never retired
+for capacity: a table of established owners refuses a new world with 503/full.
+Retirement of a shorter listing and replacement of a returning lease wait for
+their storage acknowledgement before discarding the previous owner or signals.
+
+Signed opaque proofs stay within the existing token size. A returning holder can
+prove its original ownership after restart; an older game's normal requests keep
+working. Only heartbeat acknowledges a registration and creates its durable
+owner. Owners expire after 30 days without one, with bounded, batched writes on a
+separate worker. Pending registrations have global/source/byte caps and live no
+longer than their own lease. Previous proofs recover an unacknowledged replacement
+across host boot changes; a successful heartbeat retires them.

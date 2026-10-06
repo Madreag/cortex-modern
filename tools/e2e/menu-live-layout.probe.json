@@ -30,7 +30,7 @@
     },
     {
       "op": "menu",
-      "command": "assert_net_label LabelNetMatchStatus PACE"
+      "command": "assert_net_label LabelNetMatchStatus Everyone is connected"
     },
     {
       "op": "menu",

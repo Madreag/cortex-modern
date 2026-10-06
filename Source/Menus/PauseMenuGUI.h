@@ -31,7 +31,9 @@ namespace RTE {
 			ActivityResumed,
 			MatchLeft,
 			/// The host ended the round; the game loop's own Complete path lands every peer in the rematch lobby.
-			MatchEnded
+			MatchEnded,
+			/// The player asked for the Players panel; the menu closes and the panel opens over the running match.
+			PlayersPanel
 		};
 
 #pragma region Creation
@@ -74,6 +76,9 @@ namespace RTE {
 		/// @param drawPostProcessBuffer Whether to present the post-process buffer first; a live match frame already has.
 		void Draw(bool drawPostProcessBuffer = true);
 
+		/// The match's save line under the Save Match row while it is on screen, or empty.
+		std::string GetShownSaveLine() const;
+
 		/// Posts a command through the visible pause menu's event queue.
 		bool AutomationPostCommand(const std::string& controlName);
 		GUIControlManager* AutomationManager() const;
@@ -109,6 +114,7 @@ namespace RTE {
 			MatchOptionsButton,
 			EndMatchButton,
 			SaveMatchButton,
+			PlayersButton,
 			ResumeButton,
 			// The confirmation's buttons follow the rows, in their own box: the row layout stops at the resume row.
 			LeaveConfirmButton,
@@ -169,6 +175,9 @@ namespace RTE {
 		bool m_MatchOptionsShown;
 		GUILabel* m_MatchRepairHint;
 		GUILabel* m_SaveMatchHint; //!< Under the save row: who saves the match and when it last was.
+		GUILabel* m_MatchLiveLine; //!< Above the rows: whether the match runs on or is paused for everyone.
+		GUILabel* m_EndMatchHint; //!< Under the end row on a client: who may end the match.
+		int m_PauseMenuBoxHomeHeight; //!< The menu box height the skin gives, restored for single player.
 		bool m_MatchRepairArmed;
 		std::string m_MatchRepairRefusal;
 

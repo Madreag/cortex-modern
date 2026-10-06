@@ -185,6 +185,13 @@ void MenuMan::UpdateLocalPauseMenu() {
 		case PauseMenuGUI::PauseMenuUpdateResult::ActivityResumed:
 			CloseLocalPauseMenu();
 			break;
+		case PauseMenuGUI::PauseMenuUpdateResult::PlayersPanel:
+			// The pad's way to the panel F6 opens: the menu gives the screen to it over the running match.
+			CloseLocalPauseMenu();
+			if (m_NetworkPanel && !m_NetworkPanel->IsOpen()) {
+				m_NetworkPanel->SetOpen(true);
+			}
+			break;
 		case PauseMenuGUI::PauseMenuUpdateResult::MatchLeft:
 			CloseLocalPauseMenu();
 			// The leave itself is the running-service path the game loop takes when the activity is no longer in play.

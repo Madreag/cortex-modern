@@ -122,5 +122,33 @@ class RenderCapSanitizer(unittest.TestCase):
         self.assertFalse(self.score("tsan", exit_code=1)["pass"])
 
 
+class SinglePlayerCanonicalDump(unittest.TestCase):
+    WINDOWS = b"27 actor uid=1 Dummy pos=0x1.2c00000000000p+10,-0x0.0000000000000p+0 feet=9e98e75352970809 unknown=keep\r\n"
+    POSIX = b"27 actor uid=1 Dummy pos=0x1.2cp+10,-0x0p+0 feet=9e98e75352970809 unknown=keep\n"
+
+    def test_equivalent_float_spellings_and_record_terminators_match(self):
+        self.assertEqual(runner.canonical_single_player_dump(self.WINDOWS), runner.canonical_single_player_dump(self.POSIX))
+        self.assertEqual(runner.canonical_single_player_dump(self.WINDOWS),
+                         b"27 actor uid=1 Dummy pos=0x1.2c00000000000p+10,-0x0.0p+0 feet=9e98e75352970809 unknown=keep\n")
+
+    def test_every_state_field_and_record_order_stays_detectable(self):
+        control = runner.canonical_single_player_dump(self.POSIX)
+        for changed in (self.POSIX.replace(b"0x1.2c", b"0x1.2c00000000001"),
+                        self.POSIX.replace(b"-0x0p+0", b"0x0p+0"),
+                        self.POSIX.replace(b"feet=9", b"feet=8"),
+                        self.POSIX.replace(b"unknown=keep", b"unknown=changed"),
+                        self.POSIX.replace(b"uid=1", b"uid=2"),
+                        self.POSIX.replace(b"unknown=keep", b"")):
+            with self.subTest(changed=changed):
+                self.assertNotEqual(control, runner.canonical_single_player_dump(changed))
+        other = self.POSIX.replace(b"27 actor", b"28 actor")
+        self.assertNotEqual(runner.canonical_single_player_dump(self.POSIX + other),
+                            runner.canonical_single_player_dump(other + self.POSIX))
+
+    def test_only_record_crlf_is_changed_and_binary64_low_bits_remain(self):
+        self.assertEqual(runner.canonical_single_player_dump(b"27 actor uid=a\rb value=0x1.0000000000001p+0\r\n"),
+                         b"27 actor uid=a\rb value=0x1.0000000000001p+0\n")
+
+
 if __name__ == "__main__":
     unittest.main()

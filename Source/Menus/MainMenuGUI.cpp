@@ -2894,10 +2894,10 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 	if (mrow && (mrow->view.dropped || mrow->view.held || mrow->view.reclaiming)) {
 		// A held seat waits for its player with no deadline: only the host's click gives it away.
 		const std::string cause = NetModerationUx::HoldCause(mrow->view);
-		m_HostSeatDlgReclaim->SetText(mrow->view.reclaiming ? std::string("Reclaim: its player is rejoining")
-		                                                    : "Reclaim: seat kept for its player" + (cause.empty() ? std::string() : " - " + cause));
+		m_HostSeatDlgReclaim->SetText(mrow->view.reclaiming ? std::string("Held for its player, who is coming back now")
+		                                                    : "Held for its player" + (cause.empty() ? std::string() : " - " + cause));
 	} else {
-		m_HostSeatDlgReclaim->SetText(mrow ? "Reclaim: seat in use" : "Reclaim: --");
+		m_HostSeatDlgReclaim->SetText(mrow ? "Not held - its player is in the match" : "Not held");
 	}
 	if (mrow) {
 		m_HostSeatDlgApplicants->SetText("Applicants: " + std::to_string(mrow->applicants));
@@ -2924,7 +2924,7 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 		m_HostSeatDlgActionHint->SetText(humanSeat ? "Seat actions apply to this player."
 		                                         : (slot.cpu ? "CPU seats are the host's to retype, not to moderate."
 		                                            : host && slot.peerId != 0 && slot.peerId == localPeerId ? "The host's own seat is never kicked or banned."
-		                                            : "Moderation is the host's; clients watch."));
+		                                            : "Only the host can change who plays here."));
 	}
 }
 

@@ -915,7 +915,9 @@ namespace RTE {
 		static void ApplyLockstepControlHandoffToActor(Actor& actor, bool seated);
 
 		/// Lets go of this peer's control bindings for actors another peer now owns.
-		static void ReconcileLockstepControlBindings();
+		static size_t ReconcileLockstepControlBindings();
+		/// Restores each local sampler once inside its agreed return window.
+		static size_t PrepareLockstepReclaimInput(uint64_t frame);
 
 		/// Hands every controller this machine produces for to the producing pass, and names the set it
 		/// began with by unique ID: what the pass ends on cannot depend on a team or an owner a script

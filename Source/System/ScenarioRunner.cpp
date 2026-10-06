@@ -76,6 +76,7 @@ namespace RTE {
 		uint64_t s_CommandSessionId = 0;
 		std::array<uint8_t, 16> s_CommandEpoch{};
 		std::map<uint64_t, NetResyncPendingCommand> s_LocalCommandOutbox;
+		std::map<uint64_t, NetResyncPendingCommand> s_UnappliedLocalControlClaims;
 		std::map<uint64_t, std::vector<NetGameCommand>> s_RequeuedCommands;
 		std::map<uint64_t, NetGamePlayerBindings> s_RequeuedPlayerBindings;
 		std::map<uint64_t, NetLockstepFrame> s_RequeuedInputs;
@@ -1140,6 +1141,7 @@ namespace RTE {
 			s_PendingLocalGameCommands.clear();
 			s_NextLocalCommandSequence = 1;
 			s_LocalCommandOutbox.clear();
+			s_UnappliedLocalControlClaims.clear();
 			s_RequeuedCommands.clear();
 			s_RequeuedPlayerBindings.clear();
 			s_RequeuedInputs.clear();
@@ -1182,6 +1184,7 @@ namespace RTE {
 
 	bool ScenarioRunner::FinishLockstepSimulationTick(uint64_t completedTick) {
 		NetLockstepPlaneGuard plane;
+		std::erase_if(s_UnappliedLocalControlClaims, [&](const auto& claim) { return claim.second.frame <= completedTick; });
 		std::erase_if(s_RecoveredInputs, [&](const auto& input) { return input.targetFrame <= completedTick; });
 		std::erase_if(s_RecoveredCommands, [&](const auto& command) { return command.frame <= completedTick; });
 		std::erase_if(s_RecoveredPlayerBindings, [&](const auto& binding) { return binding.frame <= completedTick; });
@@ -1710,6 +1713,50 @@ namespace RTE {
 		return seeded != 0 && s_LockstepCoordinator->IsSeatReclaimGap(seeded, frame) ? seeded : owner;
 	}
 
+	std::optional<NetGameSeatReclaim> ScenarioRunner::GetLocalReclaimInputWindow(uint64_t frame) {
+		NetLockstepPlaneGuard plane;
+		if (!s_LockstepCoordinator || s_WorldCatchUpActive) return std::nullopt;
+		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
+		const auto reclaims = s_LockstepCoordinator->ReclaimTransactions();
+		const auto own = reclaims.find(local);
+		if (own == reclaims.end()) return std::nullopt;
+		const auto& reclaim = own->second;
+		const uint64_t firstHuman = std::max(reclaim.neutralThroughFrame, reclaim.activationFrame + reclaim.delayFrames) + 1;
+		// Activation still applies its controller reset; preparation follows it before the first human sample.
+		if (frame <= reclaim.activationFrame || frame > firstHuman || s_LockstepCoordinator->IsSeatUnderAI(local, frame)) return std::nullopt;
+		return reclaim;
+	}
+
+	static void RememberUnappliedLocalControlClaims(uint64_t targetFrame, const std::vector<NetGameCommand>& commands) {
+		if (!s_LockstepCoordinator) return;
+		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
+		for (const auto& command: commands) {
+			const auto* claim = std::get_if<NetGameSwitchControl>(&command.payload);
+			if (claim && claim->newOwnerPeerId == local && command.senderPeerId == local && command.sequence != 0)
+				s_UnappliedLocalControlClaims[command.sequence] = {targetFrame, command};
+		}
+	}
+
+	bool ScenarioRunner::IsLocalControlClaimPending(int64_t actorUniqueID) {
+		NetLockstepPlaneGuard plane;
+		if (!s_LockstepCoordinator) return false;
+		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
+		const auto pending = [&](const NetGameCommand& command) {
+			const auto* claim = std::get_if<NetGameSwitchControl>(&command.payload);
+			const auto applied = s_AppliedCommandSequences.find(local);
+			return claim && claim->actorUID == actorUniqueID && claim->newOwnerPeerId == local &&
+			    (command.senderPeerId == 0 || command.senderPeerId == local) &&
+			    (command.sequence == 0 || applied == s_AppliedCommandSequences.end() || command.sequence > applied->second);
+		};
+		if (std::any_of(s_PendingLocalGameCommands.begin(), s_PendingLocalGameCommands.end(), pending)) return true;
+		// Remote acknowledgements retire retransmits, never a claim the local simulation still owes.
+		for (const auto& [sequence, entry]: s_UnappliedLocalControlClaims) {
+			const auto& claim = std::get<NetGameSwitchControl>(entry.command.payload);
+			if (claim.actorUID == actorUniqueID && claim.newOwnerPeerId == local) return true;
+		}
+		return false;
+	}
+
 	uint8_t ScenarioRunner::GetLockstepHeldSeat(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) {
 		NetLockstepPlaneGuard plane;
 		const uint8_t owner = GetLockstepDropTimeActorOwner(actorUniqueID, actorTeam, cpuControlled);
@@ -2076,6 +2123,7 @@ namespace RTE {
 				}
 			}
 			if (!s_LockstepCoordinator->PrimeResyncInputs(batches, error)) return false;
+			for (const auto& input: batches) RememberUnappliedLocalControlClaims(input.targetFrame, input.commands);
 			const uint64_t primedEnd = config.startFrame + config.inputDelayFrames;
 			s_RequeuedCommands.erase(s_RequeuedCommands.begin(), s_RequeuedCommands.lower_bound(primedEnd));
 			s_RequeuedPlayerBindings.erase(s_RequeuedPlayerBindings.begin(), s_RequeuedPlayerBindings.lower_bound(primedEnd));
@@ -2246,6 +2294,7 @@ namespace RTE {
 			NetLockstepFrame input = previous->second;
 			input.roundId = s_LockstepCoordinator->GetRoundId();
 			if (!s_LockstepCoordinator->QueueRecoveredInput(input, error)) return false;
+			RememberUnappliedLocalControlClaims(input.targetFrame, input.commands);
 			s_RequeuedCommands.erase(targetFrame);
 			s_RequeuedPlayerBindings.erase(targetFrame);
 			s_RequeuedInputs.erase(previous);
@@ -2283,6 +2332,7 @@ namespace RTE {
 		}
 		const bool queued = s_LockstepCoordinator->QueueLocalInput(tick, frames, commands, error, g_AudioMan.SampleSoundObservations(), SampleValueObservations());
 		if (queued) {
+			RememberUnappliedLocalControlClaims(targetFrame, commands);
 			s_RequeuedCommands.erase(targetFrame);
 			s_RequeuedPlayerBindings.erase(targetFrame);
 			s_RequeuedInputs.erase(targetFrame);
@@ -2652,6 +2702,7 @@ namespace RTE {
 		s_PeerPlayerBindings = state.playerBindings;
 		s_AppliedCommandSequences = state.appliedCommands;
 		s_LockstepAppliedFrame = state.savedTick;
+		std::erase_if(s_UnappliedLocalControlClaims, [&](const auto& claim) { return claim.second.frame <= state.savedTick; });
 		s_E2eFirstTransferUid = state.e2eFirstTransferUid;
 		const auto applied = state.appliedCommands.find(GetLockstepLocalPeerId());
 		s_NextLocalCommandSequence = applied == state.appliedCommands.end() ? 1 : applied->second + 1;
@@ -2805,6 +2856,9 @@ namespace RTE {
 		s_PeerPlayerBindings = state.playerBindings;
 		s_AppliedCommandSequences = state.appliedCommands;
 		s_LocalCommandOutbox = std::move(outbox);
+		std::erase_if(s_UnappliedLocalControlClaims, [&](const auto& claim) { return claim.second.frame <= state.savedTick; });
+		for (const auto& [sequence, entry]: s_LocalCommandOutbox)
+			RememberUnappliedLocalControlClaims(entry.frame, {entry.command});
 		s_PendingLocalGameCommands = std::move(pending);
 		s_RequeuedCommands = std::move(requeued);
 		s_RequeuedPlayerBindings = std::move(requeuedBindings);

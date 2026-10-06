@@ -131,8 +131,8 @@ namespace RTE {
 	};
 
 	/// The seats panel's title line. The hold it reports is the ROUND's pause state, so the panel and
-	/// the stall overlay cannot say different things about the same moment.
-	std::string NetModerationPanelTitle(bool running, bool holdPause, const std::string& holdName, uint32_t holdSeconds);
+	/// the stall overlay cannot say different things about the same moment; a pause for everyone reads as the pause menu reads it.
+	std::string NetModerationPanelTitle(bool running, bool holdPause, const std::string& holdName, uint32_t holdSeconds, bool sharedPause);
 
 	/// §9b's moderation panel as a model: the rows the host sees and the three actions it can take.
 	/// The panel renders this and the headless driver drives this, so a gate exercises the path a
@@ -161,6 +161,8 @@ namespace RTE {
 		/// Moves to the next applicant for the row's seat, wrapping.
 		void CycleApplicant(size_t index);
 		void CycleApplicant(const Row& displayed);
+		/// Picks the row's request at index, as a pick from the list of the people asking.
+		void ChooseApplicant(const Row& displayed, size_t index);
 		static bool Available(const Row& row, NetModerationAction action);
 		/// Runs the row's action through the service's §9b API and records what it answered.
 		NetH4ModerationResult Act(size_t index, NetModerationAction action);
@@ -174,6 +176,10 @@ namespace RTE {
 		static std::string DescribeSeat(const NetH4ModerationSeat& seat);
 		/// Why a held seat is held, for the host: "Left 2 min ago", "Connection lost 10 s ago" or "Machine too slow"; empty when it is not held.
 		static std::string HoldCause(const NetH4ModerationSeat& seat);
+		/// A refused action's reason in the host's words.
+		static std::string ResultWords(NetH4ModerationResult result);
+		/// The player a row's give-away names: the chosen request, else the approved one.
+		static std::string ApplicantName(const Row& row);
 
 	private:
 		std::vector<Row> m_Rows;

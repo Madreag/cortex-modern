@@ -8,6 +8,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -27,7 +28,7 @@ namespace RTE {
 			Registering, //!< A register is in flight or awaiting its retry slot.
 			Registered,  //!< The row is listed; heartbeats keep it alive.
 			Deleting,    //!< A delete is in flight.
-			Failed,      //!< The directory refused the row; stays until the listing intent changes.
+			Failed,      //!< A stopped or hidden listing was refused; stays until the listing intent changes.
 			Superseded,  //!< The match went on under a later host generation: this host keeps the row no more.
 		};
 		static const char* StateName(State state);
@@ -92,6 +93,11 @@ namespace RTE {
 		void SetTransportFactory(TransportFactory factory);
 		void Configure(std::string baseUrl, std::string installKey, std::string certPinSha256);
 
+		static constexpr const char* c_CapacityNotice = "The online list is full right now. Try again in a moment.";
+		static bool IsCapacityReply(const Reply& reply);
+		/// The worker owns its snapshot while the game thread handles the next reply.
+		std::string LastError() const;
+
 		State GetState() const { return m_State; }
 		/// The held row's last acknowledged visibility; empty before registration or after loss.
 		std::optional<bool> GetConfirmedListed() const { return m_ConfirmedListed; }
@@ -115,6 +121,8 @@ namespace RTE {
 		/// selects discovery visibility; a false intent needs the service's supports_unlisted
 		/// capability, otherwise the row is deleted once and the intent stays Failed.
 		void Advertise(const NetDirectoryRegisterRequest& row, bool running, bool listed = true);
+		/// Refreshes discovery fields under the held lease, after the ordinary retry backoff.
+		void RefreshRegistration(const NetDirectoryRegisterRequest& row, bool running, uint64_t nowMs);
 		bool Resume(const NetDirectoryRegisterRequest& row, const std::string& sessionId, const std::string& token, bool running = true, bool listed = true);
 		/// The session id a register of this row would claim: its resume id, unless the directory refused that claim; empty for a new id.
 		std::string ClaimedSessionId(const NetDirectoryRegisterRequest& row) const;
@@ -175,6 +183,7 @@ namespace RTE {
 
 		void SetState(State state);
 		void NoteError(const std::string& error);
+		void ClearCapacityError();
 		void ScheduleRetry(uint64_t nowMs); //!< Transport/TLS/5xx: backoff 5s,10s,20s..60s.
 		void StartRequest(RequestKind kind, const Request& request);
 		void HandleReply(RequestKind kind, const Reply& reply, uint64_t nowMs);
@@ -217,11 +226,15 @@ namespace RTE {
 		uint64_t m_NextHeartbeatMs = 0;
 		uint64_t m_NextAttemptMs = 0;   //!< The retry slot a transient failure or a 429 set.
 		uint64_t m_BackoffMs = 0;
-		bool m_Reregistered = false;    //!< A heartbeat 404 re-registered the row and it has not beaten since: the next 404 waits out the backoff.
 		std::vector<std::pair<std::string, std::string>> m_RefusedResumes; //!< Resume claims (session, token) the directory refused.
 		static constexpr size_t c_MaxRefusedResumes = 8;
-		/// Steps a row's resume claim past every claim the directory refused: a world drops a token the directory no longer holds and
-		/// claims its own id as on its first boot; any other refused claim registers a new id.
+		static constexpr size_t c_MaxWorldProofs = 2;
+		std::string m_ProofWorldId;
+		std::vector<std::pair<std::string, std::string>> m_WorldProofs;
+		std::optional<std::pair<std::string, std::string>> m_WorldProofAttempt;
+		uint32_t m_WorldProofRefusals = 0;
+		void RememberWorldProof(const std::string& sessionId, const std::string& token);
+		/// A world's proofs survive refusals until its heartbeat acknowledges the replacement.
 		void ApplyRefusedResumes(NetDirectoryRegisterRequest& row) const;
 		uint64_t m_BrowseNextMs = 0;
 		std::vector<NetDirectorySessionRow> m_Rows;
@@ -243,6 +256,7 @@ namespace RTE {
 		uint64_t m_Deletes = 0;
 		long m_LastStatus = 0;
 		std::string m_LastError;
+		mutable std::mutex m_LastErrorMutex;
 	};
 
 } // namespace RTE

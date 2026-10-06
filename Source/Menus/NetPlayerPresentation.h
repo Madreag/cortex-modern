@@ -56,12 +56,22 @@ namespace RTE::NetPlayerPresentation {
 
 	inline std::string State(uint8_t peer, bool aiHeld, bool dropped, bool reclaiming, bool joining = false) {
 		const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
-		const bool released = ScenarioRunner::IsLockstepSeatReleased(peer) || Opened(peer);
-		// A seat the AI plays for its player is held, however its player went; only the host's release makes it Left.
-		const bool held = !released && (aiHeld || ScenarioRunner::IsLockstepSeatUnderAI(peer, frame));
-		const bool left = !held && Departed(peer);
-		const bool ai = held || (left && (ScenarioRunner::IsLockstepSeatUnderAI(peer, frame) || (Seated(peer) && ScenarioRunner::IsLockstepPeerGone(peer, frame))));
+		// One read of the roster's seat answers every question below.
+		const auto view = g_NetMatchService.GetSeatView(peer);
+		const bool opened = view && view->seat.owner == 0;
+		// The roster says who owns a place; the round's release reads only where the roster has no seat for the player, since a
+		// place the host gave to a newcomer is released in the round until the newcomer is in.
+		const bool released = view ? opened : ScenarioRunner::IsLockstepSeatReleased(peer);
+		// A seat the AI plays for its player is held, however its player went; only the host's release makes it Left. The roster
+		// keeps holding a place for its away player through the round and between rounds, where the round itself no longer reads it.
+		const bool rosterHeld = view && !opened && view->state == "Held";
+		const bool held = !released && (aiHeld || rosterHeld || ScenarioRunner::IsLockstepSeatUnderAI(peer, frame));
+		const bool gone = Seated(peer) && ScenarioRunner::IsLockstepPeerGone(peer, frame);
+		const bool left = !held && (opened || gone);
+		const bool ai = held || (left && (ScenarioRunner::IsLockstepSeatUnderAI(peer, frame) || gone));
 		if (left) return ai ? "Left - AI in control" : "Left";
+		// Between rounds nobody plays the place, and it is kept for its player all the same.
+		if (held && !reclaiming && g_NetMatchService.GetState() != NetMatchServiceState::Running) return "Held - the seat is kept";
 		if (ai) return reclaiming ? (joining ? "Held - AI in control - joining" : "Held - AI in control - rejoining") : "Held - AI in control";
 		if (reclaiming) return joining ? "Joining" : "Rejoining";
 		if (dropped) return "Disconnected";

@@ -905,6 +905,8 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::SetLiveMatch(bool live) {
+		// Admission pumping cannot start the next round.
+		if (live && m_MatchEnded && m_Roster.stage == NetRosterStage::Ended) return;
 		m_LiveMatch = live;
 		if (!live) {
 			// A match that stops being live without its end (a resume from disk waiting for its players) is a lobby after a round.

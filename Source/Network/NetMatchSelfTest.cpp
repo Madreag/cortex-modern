@@ -15253,7 +15253,7 @@ namespace RTE {
 			NetMatchService service;
 			std::string step;
 			if (hostAndBind(service, true, wire, step)) {
-				if (!pumpUntil(service, 2500, [&] { return service.m_Directory.GetSessionId() == idB; })) {
+				if (!pumpUntil(service, 2500 + NetDirectoryClient::c_RetryBaseMs, [&] { return service.m_Directory.GetSessionId() == idB; })) {
 					step = "the visible 404 never re-registered";
 				} else {
 					const std::string first = body(wire->sent.at(0)).value("join_mode", "");

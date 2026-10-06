@@ -45,14 +45,19 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <system_error>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <variant>
 #include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace RTE {
 
@@ -516,9 +521,10 @@ namespace RTE {
 			if (host.ExpireStaleJoins(3000 + c_NetWorldJoinDeadlineMs + 1) == 0) {
 				return Fail("a stalled bootstrap did not expire");
 			}
-			if (host.FindSession(9) == nullptr) {
-				return Fail("a spectator was expired by the join deadline");
+			if (host.FindSession(9) != nullptr) {
+				return Fail("a waiting spectator stayed past the join deadline");
 			}
+			if (host.FindSession(10) == nullptr) return Fail("a waiting spectator expired before its own deadline");
 			const std::string report = host.BuildReportJson();
 			if (report.find("\"capture_p99_ms\"") == std::string::npos || report.find("\"catch_up_ratio\"") == std::string::npos) {
 				return Fail("instrumentation report lost a baseline field");
@@ -7217,6 +7223,249 @@ namespace RTE {
 	// A frozen capture's refusal arrives a tick or more after the simulation queued it, so the world
 	// bookkeeping it stood for follows that verdict: a refused capture leaves the request pending and
 	// opens no segment, and only an archive that landed clears it.
+	bool TestStaleWorldImageRecaptures(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_Runner = std::make_unique<NetMatchRunner>();
+		NetMatchConfig config = MakeWorldConfig(); config.worldMaxSpectators = 1;
+		if (!service.m_WorldJoin.Configure(config, MakeIdentity(), error) ||
+		    !service.m_WorldJoin.BeginJoin(42, 42, "player", 1000, error) || !service.m_WorldJoin.BeginJoin(43, 43, "watcher", 1000, error)) return false;
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId; image.boot = 1; image.round = 1; image.tick = 100; image.bytes = 8; image.digest = "abc";
+		service.m_WorldJoin.PublishImage(image);
+		service.m_WorldJoin.Tail().Configure(1, 1024 * 1024);
+		if (!service.m_WorldJoin.Tail().Append(MakeCommittedFrame(101), error) || !service.m_WorldJoin.Tail().Append(MakeCommittedFrame(102), error)) return false;
+		service.ApplyAutosaveVerdict(100, true, true);
+		bool unstartable = false;
+		std::string waiting;
+		(void)service.StartJoinerImageTransfer(*service.m_WorldJoin.FindSession(43), &waiting, &unstartable);
+		std::string misses;
+		if (!service.m_WorldCapturePending || unstartable) misses = "stale image refusal left no replacement capture requested";
+		std::vector<NetPeerId> expired;
+		service.m_WorldJoin.ExpireStaleJoins(1000 + c_NetWorldJoinDeadlineMs + 1, &expired);
+		if (service.m_WorldJoin.FindSession(43)) misses += "; watcher waited past the player's join deadline";
+		if (expired != std::vector<NetPeerId>{42, 43}) misses += "; the host had no expired connections to notify";
+		if (!misses.empty()) { *error = "F4: " + misses; return false; }
+		std::cout << "[net-world-join-selftest] PASS stale_world_image_recaptures_and_watcher_wait_ends" << std::endl;
+		return true;
+	}
+
+	bool TestWorldCatchUpRefusal(std::string* error) {
+		if (!MetricsCollector::IsConstructed()) MetricsCollector::Construct();
+		NetMatchService service;
+		service.m_State = NetMatchServiceState::Running;
+		service.RefuseWorldCatchUpLocked("HostNotAccepting: the world's history moved past this catch-up");
+		const std::string told = ScenarioRunner::GetControllerReplayError();
+		ScenarioRunner::ClearControllerReplayError();
+		if (service.m_State != NetMatchServiceState::Failed || told != "WorldJoinRefused:The host could not bring you into the world: you were too far behind. Try again.") {
+			*error = "F6: catch-up refusal left a completed-match path or lost the host's reason: " + told;
+			return false;
+		}
+		for (const auto& refusal: std::vector<std::pair<const char*, const char*>>{
+		    {"the world join deadline expired", "The host could not bring you into the world in time. Try again."},
+		    {"The host banned you from this session", "The host banned you from the world."},
+		    {"The host removed you from this session", "The host removed you from the world."},
+		    {"SeatReassigned", "The host gave your seat to another player."},
+		    {"SeatReleased", "The host released your seat in the world."},
+		    {"the world is full", "That world is full. Try another world or ask the host for a seat."},
+		    {"that seat is held for its player", "That seat is held for its player. Ask the host for another seat."}}) {
+			service.m_State = NetMatchServiceState::Running;
+			service.RefuseWorldCatchUpLocked(refusal.first);
+			if (service.m_State != NetMatchServiceState::Failed || service.m_ErrorText != refusal.second) { *error = "F6: a host refusal lost its cause: " + std::string(refusal.first); return false; }
+		}
+		service.m_State = NetMatchServiceState::Running; service.m_WorldCatchUp.privateMatch = true;
+		service.RefuseWorldCatchUpLocked("the world's history moved past this catch-up");
+		if (service.m_State != NetMatchServiceState::Running || !ScenarioRunner::GetControllerReplayError().starts_with("PeerHeld:")) { *error = "F6: an ordinary private return lost its reconnect path"; return false; }
+		ScenarioRunner::ClearControllerReplayError();
+		std::cout << "[net-world-join-selftest] PASS world_catch_up_refusal_is_a_failure_with_its_reason" << std::endl;
+		return true;
+	}
+
+	bool TestWorldDisconnectReason(bool watcher, std::string* error) {
+		if (!MetricsCollector::IsConstructed()) MetricsCollector::Construct();
+		class CauseWire final : public INetTransport {
+		public:
+			bool StartHost(uint16_t, std::string*) override { return true; }
+			bool Connect(const std::string&, uint16_t, std::string*) override { return true; }
+			bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string*, bool*) override { return true; }
+			void Disconnect(NetPeerId, const std::string&) override {}
+			void Stop() override {}
+			std::vector<NetTransportEvent> PollEvents() override { return {}; }
+		};
+		LoopbackTransport hostWire, joinWire;
+		CauseWire unknownWire;
+		NetSession host;
+		NetMatchService service;
+		service.m_Session = std::make_unique<NetSession>();
+		const uint16_t port = watcher ? 47470 : 47471;
+		if (!host.StartHost(hostWire, MakeWorldSessionConfig(port, 11, "World"), error) ||
+		    !service.m_Session->StartClient(joinWire, "loopback", MakeWorldSessionConfig(port, 22, "Joiner"), error)) return false;
+		for (uint64_t now = 0; now < 1000 && !(host.IsReady() && service.m_Session->IsReady()); now += 10) {
+			host.Tick(now); service.m_Session->Tick(now); hostWire.AdvanceTimeMs(10); joinWire.AdvanceTimeMs(10);
+		}
+		if (!host.IsReady() || !service.m_Session->IsReady()) { *error = "disconnect fixture never completed both session handshakes"; return false; }
+		const NetRejectReason reason = watcher ? NetRejectReason::HostNotAccepting : NetRejectReason::Timeout;
+		const std::string detail = watcher ? "the world join deadline expired" : "heartbeat timeout";
+		host.DisconnectReadyPeer(host.GetReadyPeers().front().transportPeerId, reason, detail);
+		for (uint64_t now = 1000; now < 1200; now += 10) {
+			service.m_Session->Tick(now); hostWire.AdvanceTimeMs(10); joinWire.AdvanceTimeMs(10);
+		}
+		const std::string name = watcher ? "C1" : "C2";
+		if (!service.m_Session->HasReject() || service.m_Session->GetRejectSummary() != detail) {
+			*error = name + " fixture did not receive the host's disconnect packet"; return false;
+		}
+		if (!service.m_Session->HasReject() || service.m_Session->GetRejectReason() != reason) {
+			*error = name + ": host disconnect reason " + NetProtocol::RejectReasonName(reason) + " became " + NetProtocol::RejectReasonName(service.m_Session->GetRejectReason());
+			return false;
+		}
+		service.m_State = NetMatchServiceState::Running;
+		service.RefuseWorldCatchUpLocked(detail);
+		const std::string expected = watcher ? "The host could not bring you into the world in time. Try again." : "Your connection to the host timed out while joining the world. Try again.";
+		const bool told = service.m_State == NetMatchServiceState::Failed && service.m_ErrorText == expected;
+		ScenarioRunner::ClearControllerReplayError();
+		if (!told) { *error = name + ": the player lost the host's disconnect cause"; return false; }
+		if (!watcher) {
+			for (uint16_t code = 1; code <= static_cast<uint16_t>(NetRejectReason::SeatReleased); ++code) {
+				CauseWire wire;
+				NetSession known;
+				NetSessionConfig config = MakeWorldSessionConfig(port, 22, "Joiner");
+				if (!known.StartClient(wire, "loopback", config, error)) return false;
+				known.InjectEvent({NetTransportEventType::PeerConnected, 1, NetTransportLane::ControlReliable, {}, ""}, 0);
+				NetMessage message; message.sequence = 1; message.payload = NetDisconnect{code, "the host's stated cause"};
+				std::vector<uint8_t> bytes;
+				if (!NetProtocol::Encode(message, bytes)) { *error = "C2 fixture could not encode a host disconnect"; return false; }
+				known.InjectEvent({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, ""}, 0);
+				if (!known.HasReject() || static_cast<uint16_t>(known.GetRejectReason()) != code || known.GetRejectSummary() != "the host's stated cause") {
+					*error = "C2: a host disconnect lost its reason or text at code " + std::to_string(code); return false;
+				}
+				if (code == static_cast<uint16_t>(NetRejectReason::ModuleManifestMismatch) && known.BuildPlayerRefusalText() == "the host's stated cause") {
+					*error = "R6: a known disconnect presented host-authored text as the game's own notice"; return false;
+				}
+			}
+			NetSessionConfig config = MakeWorldSessionConfig(port, 22, "Joiner");
+			if (!service.m_Session->StartClient(unknownWire, "loopback", config, error)) return false;
+			service.m_Session->InjectEvent({NetTransportEventType::PeerConnected, 1, NetTransportLane::ControlReliable, {}, ""}, 0);
+			NetMessage message; message.sequence = 1; message.payload = NetDisconnect{65530, "This host needs you to try another seat."};
+			std::vector<uint8_t> bytes;
+			if (!NetProtocol::Encode(message, bytes)) return false;
+			service.m_Session->InjectEvent({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, ""}, 0);
+			service.RefuseWorldCatchUpLocked(service.m_Session->GetRejectSummary());
+			ScenarioRunner::ClearControllerReplayError();
+			if (service.m_ErrorText != "The host says: This host needs you to try another seat." || service.m_Session->BuildPlayerRefusalText() != service.m_ErrorText) {
+				*error = "R6: unknown host text appeared as the game's own notice in an ordinary match or world"; return false;
+			}
+			const std::vector<std::pair<std::string, std::string>> messages = {
+				{"hello \xE2\x80\xAEworld", "The host says: hello world"},
+				{"hello \xC2\x80world", "The host says: hello world"},
+				{"hello \xC0\xAFworld", "The host says: (unreadable message)"},
+				{"hello \xED\xA0\x80world", "The host says: (unreadable message)"},
+				{"hello \xE2\x81\xA6world", "The host says: hello world"},
+				{"hello \xE4\xB8\x96\xE7\x95\x8C", "The host says: hello \xE4\xB8\x96\xE7\x95\x8C"},
+				{std::string(500, 'x') + "\xE4\xB8\x96", "The host says: " + std::string(NetProtocol::c_MaxDiagnosticTextBytes - 15, 'x')}
+			};
+			for (const auto& [text, expected] : messages) {
+				if (!service.m_Session->StartClient(unknownWire, "loopback", config, error)) return false;
+				service.m_Session->InjectEvent({NetTransportEventType::PeerConnected, 1, NetTransportLane::ControlReliable, {}, ""}, 0);
+				message.payload = NetDisconnect{65530, text};
+				if (!NetProtocol::Encode(message, bytes)) { *error = "R6 fixture could not encode host text"; return false; }
+				service.m_Session->InjectEvent({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, ""}, 0);
+				service.RefuseWorldCatchUpLocked(service.m_Session->GetRejectSummary());
+				ScenarioRunner::ClearControllerReplayError();
+				if (service.m_ErrorText != expected || service.m_Session->BuildPlayerRefusalText() != expected || service.m_ErrorText.size() > NetProtocol::c_MaxDiagnosticTextBytes) {
+					*error = "R6: host notice retained invalid UTF-8, controls or excess bytes"; return false;
+				}
+			}
+			std::cout << "[net-world-join-selftest] PASS R6 attributed_printable_host_text" << std::endl;
+		}
+		std::cout << "[net-world-join-selftest] PASS " << (watcher ? "watcher_disconnect_keeps_deadline" : "catch_up_disconnect_keeps_timeout") << std::endl;
+		return true;
+	}
+
+	int TestFailedJournalDeletesHaveBounds() {
+		ResumeScratchDirectory scratch;
+		const auto path = scratch.path / "blocked.inputs";
+		NetWorldFrameLog tail;
+		tail.EnableJournal(path.string());
+		constexpr uint32_t oldFiles = 40;
+		const uint64_t last = oldFiles * NetWorldFrameLog::c_JournalSegmentFrames + 1;
+		std::string error;
+		for (uint64_t tick = 1; tick <= last; ++tick) if (!tail.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		while (tail.GetJournalStats().files < oldFiles + 1 && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		if (tail.GetJournalStats().files != oldFiles + 1) return Fail("B1 fixture did not finish writing its segment files");
+#ifdef _WIN32
+		std::vector<HANDLE> held;
+		for (uint32_t index = 0; index < oldFiles; ++index) {
+			const std::filesystem::path file = index == 0 ? path : std::filesystem::path(path.string() + "." + std::to_string(index));
+			HANDLE handle = CreateFileW(file.wstring().c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+			if (handle == INVALID_HANDLE_VALUE) { for (HANDLE previous: held) CloseHandle(previous); return Fail("B1 fixture could not hold a segment open"); }
+			held.push_back(handle);
+		}
+		const auto unlock = [&] { for (HANDLE handle: held) CloseHandle(handle); };
+#else
+		const auto permissions = std::filesystem::status(scratch.path).permissions();
+		std::filesystem::permissions(scratch.path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec);
+		const auto unlock = [&] { std::filesystem::permissions(scratch.path, permissions); };
+#endif
+		tail.PruneJournalBefore(last);
+		const auto stats = SettledJournalStats(tail);
+		const auto pending = []<typename Stats>(const Stats& value) {
+			if constexpr (requires { value.pendingDeleteFiles; }) return value.pendingDeleteFiles;
+			else return value.files - 1;
+		}(stats);
+		if (pending > 32) { unlock(); return Fail("B1: failed-delete worker retained " + std::to_string(pending) + " pending files beyond its 32-file cap"); }
+		if (stats.files != oldFiles + 1) { unlock(); return Fail("B1: dropping retry metadata hid files still on disk"); }
+		if (stats.indexBytes > 2 * NetWorldFrameLog::c_JournalSegmentFrames * sizeof(std::pair<uint64_t, uint32_t>)) { unlock(); return Fail("B1: pruned failed deletes retained full per-frame indexes"); }
+		const auto attempts = []<typename Stats>(const Stats& value) {
+			if constexpr (requires { value.deleteAttempts; }) return value.deleteAttempts;
+			else return uint64_t{0};
+		};
+		const auto retryDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(12);
+		while (attempts(tail.GetJournalStats()) < oldFiles + 32 * 7 && std::chrono::steady_clock::now() < retryDeadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		const auto stopped = tail.GetJournalStats();
+		std::this_thread::sleep_for(std::chrono::milliseconds(1250));
+		const auto later = tail.GetJournalStats();
+		unlock();
+		if (attempts(stopped) == 0 || attempts(stopped) > oldFiles + 32 * 7 || attempts(later) != attempts(stopped)) return Fail("B1: a permanent delete refusal kept retrying past its attempt limit");
+		if (later.files != oldFiles + 1) return Fail("B1: retry exhaustion hid files that still exist");
+		std::cout << "[net-world-join-selftest] PASS failed_journal_deletes_have_bounds" << std::endl;
+		return 0;
+	}
+
+	int TestJournalDeleteIsRetriedAndCounted() {
+		ResumeScratchDirectory scratch;
+		const auto path = scratch.path / "delete.inputs";
+		NetWorldFrameLog tail;
+		tail.EnableJournal(path.string());
+		std::string error;
+		for (uint64_t tick = 1; tick <= NetWorldFrameLog::c_JournalSegmentFrames + 1; ++tick)
+			if (!tail.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
+		const auto settle = [&] { return SettledJournalStats(tail); };
+		(void)settle();
+#ifdef _WIN32
+		HANDLE held = CreateFileW(path.wstring().c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+		if (held == INVALID_HANDLE_VALUE) return Fail("F8 fixture could not hold its old segment open");
+		const auto unlock = [&] { CloseHandle(held); };
+#else
+		const auto permissions = std::filesystem::status(scratch.path).permissions();
+		std::filesystem::permissions(scratch.path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec);
+		const auto unlock = [&] { std::filesystem::permissions(scratch.path, permissions); };
+#endif
+		tail.PruneJournalBefore(NetWorldFrameLog::c_JournalSegmentFrames + 1);
+		const auto refused = settle();
+		const bool remains = std::filesystem::is_regular_file(path);
+		unlock();
+		if (!remains) return Fail("F8 fixture failed to prevent an actual segment deletion");
+		if (refused.files != 2) return Fail("F8: failed segment deletion left a file on disk that the journal forgot (reported files=" + std::to_string(refused.files) + ")");
+		// A second prune has the same floor; a transient delete failure still needs a retry.
+		tail.PruneJournalBefore(NetWorldFrameLog::c_JournalSegmentFrames + 1);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while (std::filesystem::exists(path) && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		if (std::filesystem::exists(path) || settle().files != 1) return Fail("F8: the failed segment deletion was never retried after the disk allowed it");
+		std::cout << "[net-world-join-selftest] PASS journal_delete_is_retried_and_counted" << std::endl;
+		return 0;
+	}
+
 	bool TestWorldCaptureFollowsTheDeferredVerdict(std::string* error) {
 		WorldSegmentScratch scratch;
 		const std::string worldId = "aaaaaaaa-0000-0000-0000-0000000000c6";
@@ -9374,6 +9623,31 @@ namespace RTE {
 	int NetWorldJoinSelfTest::Run() {
 		s_FailTag = "net-world-join-selftest";
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		const char* selected = std::getenv("CCCP_TEST_WORLD_CASE");
+		std::string findingError;
+		if (!selected || std::string(selected) == "C1" || std::string(selected) == "C2") {
+			for (const bool watcher: {true, false}) {
+				if (selected && std::string(selected) != (watcher ? "C1" : "C2")) continue;
+				if (!TestWorldDisconnectReason(watcher, &findingError)) return Fail(findingError);
+			}
+			if (selected) return Pass();
+		}
+		if (!selected || std::string(selected) == "B1") {
+			if (const int result = TestFailedJournalDeletesHaveBounds(); result != 0) return result;
+			if (selected) return Pass();
+		}
+		if (!selected || std::string(selected) == "F4") {
+			if (!TestStaleWorldImageRecaptures(&findingError)) return Fail(findingError);
+			if (selected) return Pass();
+		}
+		if (!selected || std::string(selected) == "F6") {
+			if (!TestWorldCatchUpRefusal(&findingError)) return Fail(findingError);
+			if (selected) return Pass();
+		}
+		if (!selected || std::string(selected) == "F8") {
+			if (const int result = TestJournalDeleteIsRetriedAndCounted(); result != 0) return result;
+			if (selected) return Pass();
+		}
 		// The Lua states a row brings up close with the suite, not at the process exit.
 		struct LuaTakeDown {
 			bool owned = !LuaMan::IsConstructed();

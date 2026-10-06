@@ -36,6 +36,31 @@ namespace RTE {
 			return digits(ours) && digits(hosts);
 		}
 
+		std::string CleanHostNoticeText(const std::string& value, size_t limit) {
+			if (!NetProtocol::IsValidUtf8(value)) return "(unreadable message)";
+			std::string result;
+			for (size_t index = 0; index < value.size();) {
+				const size_t start = index;
+				const auto first = static_cast<unsigned char>(value[index++]);
+				const size_t length = first < 0x80 ? 1 : first < 0xE0 ? 2 : first < 0xF0 ? 3 : 4;
+				uint32_t code = first & (length == 1 ? 0x7F : length == 2 ? 0x1F : length == 3 ? 0x0F : 0x07);
+				while (index < start + length) code = (code << 6) | (static_cast<unsigned char>(value[index++]) & 0x3F);
+				// Format controls can disguise the authorship and reading order of a host's notice.
+				const bool hidden = code < 0x20 || (code >= 0x7F && code <= 0x9F) || code == 0xAD ||
+					(code >= 0x600 && code <= 0x605) || code == 0x61C || code == 0x6DD || code == 0x70F ||
+					(code >= 0x890 && code <= 0x891) || code == 0x8E2 || code == 0x180E ||
+					(code >= 0x200B && code <= 0x200F) || (code >= 0x2028 && code <= 0x202E) ||
+					(code >= 0x2060 && code <= 0x206F) || code == 0xFEFF || (code >= 0xFFF9 && code <= 0xFFFB) ||
+					code == 0x110BD || code == 0x110CD || (code >= 0x13430 && code <= 0x13455) ||
+					(code >= 0x1BCA0 && code <= 0x1BCA3) || (code >= 0x1D173 && code <= 0x1D17A) ||
+					(code >= 0xE0000 && code <= 0xE0FFF) || (code >= 0xFDD0 && code <= 0xFDEF) || (code & 0xFFFE) == 0xFFFE;
+				if (hidden) continue;
+				if (result.size() + length > limit) break;
+				result.append(value, start, length);
+			}
+			return result.empty() ? "(empty message)" : result;
+		}
+
 		using json = nlohmann::json;
 
 		constexpr uint8_t c_HostAssignedPeerId = 0;
@@ -1434,11 +1459,8 @@ namespace RTE {
 				m_ReconnectClient->NotifyParticipantRemoved(static_cast<NetRejectReason>(disconnect->disconnectReason));
 			}
 			if (m_State != NetSessionState::Rejected && m_State != NetSessionState::Failed) {
-				if (!m_HasReject && !disconnect->message.empty()) {
-					// A removal is why this link closed; the kicked player is owed that word rather than a
-					// generic fault. Every other disconnect reason stays unattributed as before.
-					RecordReject(removal ? static_cast<NetRejectReason>(disconnect->disconnectReason) : NetRejectReason::InternalError,
-					             "", "", "", disconnect->message);
+				if (!m_HasReject) {
+					RecordReject(static_cast<NetRejectReason>(disconnect->disconnectReason), "host_disconnect", "", "", CleanHostNoticeText(disconnect->message, NetProtocol::c_MaxDiagnosticTextBytes));
 				}
 				m_State = NetSessionState::Closed;
 			}
@@ -1660,6 +1682,7 @@ namespace RTE {
 
 	std::string NetSession::BuildPlayerRefusalText() const {
 		if (!m_HasReject) return {};
+		if (m_MismatchKey == "host_disconnect" && std::string(NetProtocol::RejectReasonName(m_RejectReason)) == "Unknown" ) return "The host says: " + CleanHostNoticeText(m_RejectSummary, NetProtocol::c_MaxDiagnosticTextBytes - 15);
 		if (m_Role == NetSessionRole::Host) {
 			// The host refused a joiner: its notice names what differed, the joiner's value against this host's own.
 			switch (m_RejectReason) {
@@ -1710,7 +1733,7 @@ namespace RTE {
 			}
 		}
 		switch (m_RejectReason) {
-			case NetRejectReason::ModuleManifestMismatch: return m_RejectSummary.empty() ? "This host's mods do not match yours." : m_RejectSummary;
+			case NetRejectReason::ModuleManifestMismatch: return m_MismatchKey == "host_disconnect" || m_RejectSummary.empty() ? "This host's mods do not match yours." : m_RejectSummary;
 			case NetRejectReason::ProtocolMismatch:
 			case NetRejectReason::GameVersionMismatch:
 			case NetRejectReason::BuildMismatch:

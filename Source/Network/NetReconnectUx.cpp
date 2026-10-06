@@ -170,8 +170,8 @@ namespace RTE {
 	std::string NetReconnectUx::GetOfferText() const {
 		switch (m_Offer) {
 			case NetReconnectOffer::Available: return "Rejoin your match at " + m_OfferAddress + "?";
-			case NetReconnectOffer::Corrupt: return "The saved reconnect ticket is damaged and cannot be used.";
-			case NetReconnectOffer::Stale: return "The saved reconnect ticket is too old to use.";
+			case NetReconnectOffer::Corrupt: return "The saved rejoin information is damaged and cannot be used.";
+			case NetReconnectOffer::Stale: return "The saved rejoin information is too old to use.";
 			case NetReconnectOffer::Missing: return "No reconnect record for that match.";
 			case NetReconnectOffer::None: break;
 		}
@@ -183,11 +183,11 @@ namespace RTE {
 		switch (m_State) {
 			case NetReconnectUxState::Waiting:
 			case NetReconnectUxState::Retrying:
-				return "Reconnecting... attempt " + std::to_string(m_Attempts == 0 ? 1U : m_Attempts) + " of " +
+				return "Rejoining the match... attempt " + std::to_string(m_Attempts == 0 ? 1U : m_Attempts) + " of " +
 				       std::to_string(c_MaxAttempts) + tail;
-			case NetReconnectUxState::Reconnected: return "Reconnected.";
-			case NetReconnectUxState::GaveUp: return "Could not reconnect" + tail + ". Retry to try again.";
-			case NetReconnectUxState::Cancelled: return "Reconnecting cancelled. Retry to try again.";
+			case NetReconnectUxState::Reconnected: return "Back in the match.";
+			case NetReconnectUxState::GaveUp: return "Could not rejoin" + tail + ". Retry to try again.";
+			case NetReconnectUxState::Cancelled: return "Stopped rejoining. Retry to try again.";
 			case NetReconnectUxState::Refused: return m_Reason;
 			case NetReconnectUxState::Connected:
 			case NetReconnectUxState::Idle: break;
@@ -207,14 +207,14 @@ namespace RTE {
 		return dropped ? " - Disconnected" : "";
 	}
 
-	std::string NetModerationPanelTitle(bool running, bool holdPause, const std::string& holdName, uint32_t holdSeconds) {
+	std::string NetModerationPanelTitle(bool running, bool holdPause, const std::string& holdName, uint32_t holdSeconds, bool sharedPause) {
 		if (!running) {
-			return "SEATS  /  Resynchronizing the match...";
+			return "PLAYERS  /  Restoring the shared match state...";
 		}
 		if (!holdPause) {
-			return "SEATS  /  The match continues while this panel is open";
+			return sharedPause ? "PLAYERS  /  The match is paused for everyone" : "PLAYERS  /  The match continues while this panel is open";
 		}
-		return "SEATS  /  Match paused: waiting for " + (holdName.empty() ? std::string("a player") : holdName) +
+		return "PLAYERS  /  Match paused: waiting for " + (holdName.empty() ? std::string("a player") : holdName) +
 		       " to return (" + std::to_string(holdSeconds) + "s left)";
 	}
 
@@ -240,14 +240,14 @@ namespace RTE {
 	}
 
 	std::string NetModerationUx::DescribeSeat(const NetH4ModerationSeat& seat) {
-		std::string text = "Seat " + std::to_string(seat.stableSeat) + " - " +
-		                   (seat.displayName.empty() ? "peer " + std::to_string(seat.lockstepPeerId) : seat.displayName);
+		std::string text = seat.displayName.empty() ? "Player " + std::to_string(seat.lockstepPeerId) : seat.displayName;
 		if (const std::string cause = HoldCause(seat); !cause.empty()) {
 			text += " - " + cause;
 		} else if (seat.closed) {
 			text += " - left";
 		}
-		text += " - " + std::to_string(seat.applicants.size()) + " waiting";
+		const size_t requests = seat.applicants.size();
+		text += " - " + (requests == 0 ? std::string("no requests") : requests == 1 ? std::string("1 request") : std::to_string(requests) + " requests");
 		return text;
 	}
 
@@ -281,7 +281,7 @@ namespace RTE {
 				}
 			}
 			if (index == seat.applicants.size()) {
-				row.applicantText = seat.applicants.empty() ? "No applicants" : "Choose an applicant";
+				row.applicantText = seat.applicants.empty() ? "No requests" : "Choose a player";
 			} else {
 				const NetH4ApplicantView& applicant = seat.applicants[index];
 				row.applicant = applicant.connection;
@@ -326,6 +326,11 @@ namespace RTE {
 		m_Chosen[displayed.stableSeat] = NetSelectModerationSeat(displayed.view, candidates[next].connection);
 	}
 
+	void NetModerationUx::ChooseApplicant(const Row& displayed, size_t index) {
+		if (!displayed.view.actionsAvailable || index >= displayed.view.applicants.size()) return;
+		m_Chosen[displayed.stableSeat] = NetSelectModerationSeat(displayed.view, displayed.view.applicants[index].connection);
+	}
+
 	bool NetModerationUx::Available(const Row& row, NetModerationAction action) {
 		return NetModerationAvailability(row.view, row.selection, action) == NetH4ModerationResult::Ok;
 	}
@@ -338,13 +343,48 @@ namespace RTE {
 		return Act(m_Rows[index], action);
 	}
 
+	std::string NetModerationUx::ResultWords(NetH4ModerationResult result) {
+		switch (result) {
+			case NetH4ModerationResult::Ok: return "done";
+			case NetH4ModerationResult::NotHosting: return "only the host can do that";
+			case NetH4ModerationResult::UnknownSeat:
+			case NetH4ModerationResult::StaleSelection: return "that place changed - choose it again";
+			case NetH4ModerationResult::SeatNotSubstitutable: return "that place is not free to give away";
+			case NetH4ModerationResult::UnknownApplicant: return "that player is no longer asking";
+			case NetH4ModerationResult::SubstitutionInFlight: return "another player is already joining in that place";
+			case NetH4ModerationResult::NoSubstitutionPending: return "nobody is joining in that place";
+			case NetH4ModerationResult::ProviderUnavailable:
+			case NetH4ModerationResult::ActionUnavailable: return "that is not possible right now";
+		}
+		return "that is not possible right now";
+	}
+
+	std::string NetModerationUx::ApplicantName(const Row& row) {
+		for (const NetH4ApplicantView& applicant: row.view.applicants) {
+			if (applicant.connection == row.selection.applicant && !applicant.displayName.empty()) return applicant.displayName;
+		}
+		for (const NetH4ApplicantView& applicant: row.view.applicants) {
+			if (applicant.approved && !applicant.displayName.empty()) return applicant.displayName;
+		}
+		return row.view.substituteName.empty() ? std::string("the approved player") : row.view.substituteName;
+	}
+
 	NetH4ModerationResult NetModerationUx::Act(const Row& displayed, NetModerationAction action) {
 		const Row row = displayed;
 		const NetH4ModerationResult result = Available(row, action) ? g_NetMatchService.ApplyModeration(row.selection, action) : NetH4ModerationResult::ActionUnavailable;
 		const char* name = NetModerationActionName(action);
-		m_StatusText = result == NetH4ModerationResult::Ok
-		                   ? "Seat " + std::to_string(row.stableSeat) + ": " + name + " accepted."
-		                   : "Seat " + std::to_string(row.stableSeat) + ": " + name + " refused - " + NetH4ModerationResultName(result) + ".";
+		const std::string player = row.view.displayName.empty() ? "Seat " + std::to_string(row.stableSeat) : row.view.displayName;
+		const std::string applicant = ApplicantName(row);
+		if (result == NetH4ModerationResult::Ok) {
+			m_StatusText = action == NetModerationAction::Wait       ? player + "'s place stays theirs; the AI keeps playing it."
+			               : action == NetModerationAction::Substitute ? applicant + " is joining in " + player + "'s place."
+			                                                           : applicant + " will not join.";
+		} else {
+			const std::string tried = action == NetModerationAction::Wait       ? "keep " + player + "'s place"
+			                          : action == NetModerationAction::Substitute ? "let " + applicant + " join"
+			                                                                      : "cancel the approval";
+			m_StatusText = "Could not " + tried + ": " + ResultWords(result) + ".";
+		}
 		DiagnosticLine() << "[net-moderation] " << name << " seat=" << row.stableSeat
 		          << " applicant=" << static_cast<int>(row.applicant) << " result=" << NetH4ModerationResultName(result) << std::endl;
 		return result;

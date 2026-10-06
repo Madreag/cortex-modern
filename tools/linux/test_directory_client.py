@@ -47,7 +47,7 @@ def main():
         return re.findall(r'"(GET|POST|DELETE) ([^ ]+) HTTP/1\.[01]" (\d+)', text)
     with service_stdout.open('w') as service_output:
         service = subprocess.Popen([sys.executable, str(repo / 'tools/session_directory/session_directory.py'),
-            '--bind', '127.0.0.1', '--port', str(args.port), '--cert', str(cert), '--key', str(key),
+            '--bind', '127.0.0.1', '--caller-mode', 'direct', '--create-owner-key', '--port', str(args.port), '--cert', str(cert), '--key', str(key),
             '--turn-config', str(turn), '--log-file', str(service_log), '--expiry-s', '120'],
             stdout=service_output, stderr=subprocess.STDOUT)
         try:

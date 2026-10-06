@@ -70,6 +70,7 @@ def start_service(out: Path, port: int, cert: Path, key: Path, extra: tuple = ()
     handle = (out / "service-stdout.log").open("w", encoding="utf-8")
     proc = subprocess.Popen(
         [sys.executable, str(SERVICE), "--bind", "127.0.0.1", "--port", str(port),
+         "--caller-mode", "direct", "--create-owner-key", "--owner-state", str(out / "world-owners.json"),
          "--cert", str(cert), "--key", str(key), "--log-file", str(log),
          "--expiry-s", "120", "--heartbeat-s", "5", *extra],
         stdout=handle, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
@@ -142,7 +143,6 @@ def main() -> int:
     service = start_service(out, options.port, options.cert, options.key)
     host = client = None
     try:
-        wait_engine_free()
         common = ["-net-match-service-e2e", "-net-port", str(options.game_port),
                   "-net-match-ticks", str(options.ticks), "-net-ice", "on",
                   "-tick-hashes", "-seed", "42"]

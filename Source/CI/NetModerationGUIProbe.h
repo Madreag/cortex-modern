@@ -22,5 +22,7 @@ namespace RTE::NetModerationGUIProbe {
 	/// Whether a loaded probe still has steps to run: a harness teardown waits for it the way a player's
 	/// own pause menu waits for the player.
 	bool Running();
+	/// Writes what a script still running has recorded, for a run that ends before the script does.
+	void WriteUnfinished();
 	bool RunCrossScopeSelfTest(std::string* error);
 }

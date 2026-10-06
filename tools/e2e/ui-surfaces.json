@@ -2,7 +2,7 @@
   "schema": 1,
   "name": "ui-surfaces",
   "port_base": 49440,
-  "title": "Every multiplayer UI surface at 640x360, 960x540 and 1280x720: lobby, host options, kick/ban, chat, F6, visibility, Repair, pause Match Options",
+  "title": "Every multiplayer UI surface at 640x360, 960x540 and 1280x720: lobby, host options, kick/ban, chat, F6, visibility, Repair, pause Match Details",
   "timeout_s": 160,
   "runs": [
     {
@@ -357,7 +357,7 @@
       "peer": "host",
       "mark": "ui-pause-match-options",
       "screen": "PauseMatchOptions",
-      "what": "Pause Match Options draws the rules, repair hint and Close button.",
+      "what": "Pause Match Details draws the rules, repair hint and Close button.",
       "assert": "probe assertions in the marked interval",
       "run": [
         "640x360",
@@ -396,7 +396,7 @@
       "peer": "client",
       "mark": "ui-pause-match-options",
       "screen": "PauseMatchOptions",
-      "what": "Pause Match Options draws the rules, repair hint and Close button.",
+      "what": "Pause Match Details draws the rules, repair hint and Close button.",
       "assert": "probe assertions in the marked interval",
       "run": [
         "640x360",

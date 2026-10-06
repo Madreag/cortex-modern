@@ -160,6 +160,9 @@ namespace RTE {
 
 	enum class NetHostHandoverState { Live, HostLost, Migrating };
 
+	/// What the host's leave does at the frame it is read: another player hosts and the match goes on, or it ends for everyone.
+	enum class NetHostLeaveOutcome { HandsOver, EndsMatch };
+
 	enum class NetMatchServiceState {
 		Idle,
 		Starting,
@@ -661,6 +664,14 @@ namespace RTE {
 		/// "player left" (2-peer); the session objects stay alive exactly like FinishMatch. §7's leave
 		/// exchange runs first, on the worker, so the ticket is answered while the link is still up.
 		void LeaveMatch(const std::string& result);
+		/// What the host's leave does now, read from what the survivors' election reads: the agreed successor order and the other
+		/// players still in the round with their link up at the current frame, held ones included, since they answer it. A lone
+		/// survivor of an announced leave ends the match, so a handover takes two. LeaveMatch acts on the same answer.
+		NetHostLeaveOutcome HostLeaveOutcome() const;
+		/// Whether this client's leave keeps a ticket the Multiplayer screen offers back as Rejoin Match.
+		bool LeaveKeepsRejoin() const;
+		/// Whether this match lets a player without a ticket ask the host for a place.
+		static bool AdmissionEnabled() { return s_AdmissionEnabled; }
 		/// Blocks until the worker has finished. A report written before a leave settles would describe
 		/// the exchange as unacknowledged when it was not.
 		void WaitForPendingWork();
@@ -1360,6 +1371,15 @@ namespace RTE {
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestGnsStopCancelContracts(std::string* error);
 		friend bool TestEndedWorldLateAdmission(std::string* error);
+		friend bool TestRecoveredDirectoryBinding(std::string* error);
+		friend bool TestSignalPumpInitialCredential(std::string* error);
+		friend bool TestDirectoryCapacityFallback(std::string* error);
+		friend bool TestStaleWorldImageRecaptures(std::string* error);
+		friend bool TestWorldCatchUpRefusal(std::string* error);
+		friend bool TestWorldDisconnectReason(bool watcher, std::string* error);
+		void InstallIcePump(NetMuxTransport& mux, bool host);
+		void RefuseWorldCatchUpLocked(const std::string& rejectText);
+		std::string RefreshDirectorySignalCredentialLocked(uint64_t nowMs);
 		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
 		friend bool TestIceDefaultsAndOverrides(std::string* error);
 		friend bool TestRelayOfferAndPolicy(std::string* error);
@@ -1700,6 +1720,7 @@ namespace RTE {
 #endif
 		bool m_IceEnabled = false;          //!< This run offers (host) or takes (client) a session-id join.
 		std::string m_IceBoundSessionId;    //!< The session id the process's GNS identity is pinned to.
+		bool m_DirectoryJoinIsWorld = false;
 		std::string m_IceIdentity;
 		std::string m_IceJoinSessionId;     //!< Client: the session id -net-join-session named.
 		std::string m_IceReport;            //!< The dispatcher's last report, taken when a worker or teardown takes the dispatcher.

@@ -49,6 +49,7 @@ assert_visible CollectionBoxHostPageSeats 1
 activate ButtonHostSeatDetails0
 wait_ms 660
 assert_visible HostSeatDialog 1
+assert_label LabelHostSeatDlgActionHint Only the host can change who plays here.
 assert_enabled ButtonHostSeatDlgKick 0
 assert_enabled ButtonHostSeatDlgBan 0
 dump_host_options
