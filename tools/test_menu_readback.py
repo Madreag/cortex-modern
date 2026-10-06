@@ -1166,9 +1166,10 @@ def third_pass_case(case, port, root, size):
                 "assert_label LabelMultiplayerOff Multiplayer is off\nassert_text_fits LabelMultiplayerOff\n"
                 "activate ButtonMainToSkirmish\nwait_ms 1600\nassert_screen ScenarioPicker\ncombo_select ComboBoxActivitySelect P4 Alpha Duel\n"
                 "wait_ms 700\nselect_scene Grasslands\nwait_ms 900\nactivate ButtonStartActivityConfig\nwait_ms 700\nassert_screen ScenarioConfig\n"
-                f"activate P1T1Box\nactivate P2T2Box\nwait_ms 1000\ntouch_file {probe / 'started.mark'}\nactivate ButtonStartGame\n"
-                f"wait_file {probe / 'done.json'} 120\nwait 10\nassert_screen MainScreen\nexit\n")
-        # The match runs a while, then the pause menu takes the player back to the main menu, where the script ends the run.
+                "activate P1T1Box\nactivate P2T2Box\nwait_ms 1000\nactivate ButtonStartGame\n"
+                f"wait_file {probe / 'done.json'} 120\nwait 10\nassert_screen ScenarioPicker\n"
+                "activate BackToMainButton\nwait_ms 700\nassert_screen MainScreen\nexit\n")
+        # The pause menu returns to the scenario picker, whose Back button returns to the main menu.
         return {"host": text}, {"host": {"schema": 1, "timeout_ms": 150000, "steps": [
             {"op": "wait_file", "path": str(probe / "started.mark")}, {"op": "wait", "renders": 180},
             {"op": "wait", "screen": "Gameplay", "sim_at_least": 120},
@@ -2474,6 +2475,8 @@ def run_case(options, case, root, failing=None):
     seeded = {} if failing else seeds(case)
     runs, records, argv, images = {}, {}, {}, []
     result = {"pass": False, "case": case, "scripts": {}, "records": records, "probes": {}, "seeds": seeded}
+    picture_watches = not BASE_WORDS and case not in OLD_SKINS
+    result["picture_watch_scope"] = "all current controls" if picture_watches else "compatibility notices" if case in OLD_SKINS else "base controls"
     try:
         # A pair runs host and client; a case may seat a second joiner beside them.
         for who in (tuple(texts) if paired else ("host",)):
@@ -2501,7 +2504,7 @@ def run_case(options, case, root, failing=None):
                 if case == "repair":
                     args += ["-net-match-e2e-resync"]
             env = {"CCCP_HEADLESS": "1"}
-            if not BASE_WORDS:
+            if picture_watches:
                 # The picture rules every screen is held to, on every frame drawn, at every size: a caption fits its control and
                 # its panel and the screen, and no caption draws over or under another control of its panel.
                 watches = root / "picture-watches.txt"
@@ -2559,7 +2562,12 @@ def run_case(options, case, root, failing=None):
 
         def drive(who):
             try:
-                records[who] = runs[who].start().finish()
+                run = runs[who].start()
+                if case in OLD_SKINS:
+                    # A transition has no menu controls too; Escape waits for the round's first tick.
+                    wait_for_log(run, "[e2e] rules tick=1", 120)
+                    (probe_root(root, who) / "started.mark").write_text("first gameplay tick\n", encoding="utf-8")
+                records[who] = run.finish()
             except Exception as error:
                 records[who] = {"error": repr(error)}
 
@@ -2628,7 +2636,7 @@ def run_case(options, case, root, failing=None):
                     rest = [line.strip() for line in tail.splitlines()[1:] if line.strip()]
                     in_round = bool(waits_for_round) and rest in ([], ["exit"]) and "state:Running -> OK" in logs[who]
                     assert "[menu-script] complete" in logs[who] or in_round, logs[who][-3000:]
-                if not BASE_WORDS:
+                if picture_watches:
                     armed = re.findall(r"\[text-watch\] armed .*\"(picture-[\w-]+)\"", logs[who])
                     violations = [line for line in logs[who].splitlines() if "[text-watch] violation picture-" in line]
                     result.setdefault("pictures", {})[who] = {"armed": armed, "violations": violations[:20]}
