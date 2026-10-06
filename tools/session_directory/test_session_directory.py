@@ -417,6 +417,50 @@ class DirectoryTests(unittest.TestCase):
             self.assertEqual(row["observed_ip"], address, "R1: valid forwarded address was not the pending registration source")
         self.assertEqual({row.observed_ip for row in self.server.store._sessions.values()}, {"192.0.2.1", "192.0.2.2"})
 
+    def test_R2_waiters_leave_heartbeats_capacity(self) -> None:
+        self.start(port=47461)
+        self.server.store.caller_mode = "tunnel"
+        address = {"CF-Connecting-IP": "192.0.2.250"}
+        status, row = self.call("POST", "/v1/sessions", sample_register(), headers=address)
+        self.assertEqual(status, 200)
+        threads, answers = [], []
+        def poll(index, source):
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+            try:
+                conn.request("GET", f"/v1/sessions/{row['session_id']}/signals?peer=client:{index:016x}&wait=25",
+                             headers={"X-Install-Key": f"{index:016x}", "CF-Connecting-IP": source})
+                response = conn.getresponse()
+                answers.append((response.status, json.loads(response.read())))
+            except (OSError, http.client.HTTPException) as error:
+                answers.append((0, type(error).__name__))
+            finally:
+                conn.close()
+        try:
+            for count, shared in ((64, True), (200, False)):
+                for index in range(count):
+                    source = "192.0.2.1" if shared else f"198.51.{index // 250}.{index % 250 + 1}"
+                    worker = threading.Thread(target=poll, args=(len(threads) + 1000, source))
+                    threads.append(worker)
+                    worker.start()
+                    time.sleep(0.015)
+                started = time.monotonic()
+                try:
+                    status, _ = self.call("POST", f"/v1/sessions/{row['session_id']}/heartbeat",
+                                          {"token": row["token"], "peer_count": 2, "seats_free": 1}, headers=address)
+                except (OSError, http.client.HTTPException):
+                    self.fail("R2: waiting polls occupied the heartbeat handlers")
+                self.assertEqual(status, 200, "R2: waiting polls prevented an honest heartbeat")
+                self.assertLess(time.monotonic() - started, self.server.store.expiry_s, "R2: heartbeat answered after its lease")
+                self.assertEqual(self.call("GET", "/v1/sessions", headers=address)[1]["total"], 1)
+            self.assertTrue(any(status == 200 and body.get("retry_after_s") for status, body in answers),
+                            "R2: excess waiters did not get an immediate empty answer and retry hint")
+        finally:
+            completed = list(answers)
+            self.server.store.stop()
+            for worker in threads:
+                worker.join(3)
+        self.assertTrue(all(status == 200 for status, _ in completed), "R2: bounded waiters dropped an honest polling request")
+
     def test_successor_resumes_row_only_with_its_sealed_token(self) -> None:
         self.start(port=45799)
         status, created = self.register()

@@ -78,6 +78,10 @@ SIGNAL_METADATA_BYTES = 256
 QUEUE_IDLE_S = 120.0
 HANDLER_TIMEOUT_S = 10
 MAX_ACTIVE_HANDLERS = 64
+# Waiters have their own capacity, leaving all short handlers available.
+MAX_SIGNAL_WAITERS = 64
+MAX_SIGNAL_WAITERS_PER_SOURCE = 4
+SIGNAL_WAIT_RETRY_S = 1
 HANDSHAKE_TIMEOUT_S = 5
 MAX_SIGNAL_WAIT_S = 25.0
 HANDLER_LIFETIME_S = MAX_SIGNAL_WAIT_S + 2 * HANDLER_TIMEOUT_S
@@ -1679,10 +1683,15 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                         self._observed_ip(),
                         peer_via,
                     )
-                    self._send(
-                        200,
-                        store.get_signals(sid, peer, after, token, now, wait_s),
-                    )
+                    waiting = wait_s > 0 and self.server.begin_signal_wait(self._observed_ip())
+                    try:
+                        answer = store.get_signals(sid, peer, after, token, now, wait_s if waiting else 0)
+                        if wait_s > 0 and not waiting:
+                            answer["retry_after_s"] = SIGNAL_WAIT_RETRY_S
+                        self._send(200, answer)
+                    finally:
+                        if waiting:
+                            self.server.end_signal_wait(self._observed_ip())
                     return
                 self._send(404, {"error": "not_found"})
             except TimeoutError:
@@ -1768,6 +1777,10 @@ class SessionHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, *args, **kwargs) -> None:
         self._handler_slots = threading.BoundedSemaphore(MAX_ACTIVE_HANDLERS)
+        self._handler_capacity = threading.local()
+        self._waiter_lock = threading.Lock()
+        self._waiter_sources = Counter()
+        self._waiters = 0
         super().__init__(*args, **kwargs)
 
     def process_request(self, request: socket.socket, client_address: Any) -> None:
@@ -1783,6 +1796,7 @@ class SessionHTTPServer(ThreadingHTTPServer):
     def process_request_thread(
         self, request: socket.socket, client_address: Any
     ) -> None:
+        self._handler_capacity.held = True
         current = [request]
         def expire():
             try:
@@ -1796,7 +1810,25 @@ class SessionHTTPServer(ThreadingHTTPServer):
             self._serve_request(request, client_address, current)
         finally:
             timer.cancel()
+            if self._handler_capacity.held:
+                self._handler_slots.release()
+
+    def begin_signal_wait(self, source: str) -> bool:
+        with self._waiter_lock:
+            if self._waiters >= MAX_SIGNAL_WAITERS or self._waiter_sources[source] >= MAX_SIGNAL_WAITERS_PER_SOURCE:
+                return False
+            self._waiters += 1
+            self._waiter_sources[source] += 1
+            self._handler_capacity.held = False
             self._handler_slots.release()
+            return True
+
+    def end_signal_wait(self, source: str) -> None:
+        with self._waiter_lock:
+            self._waiters -= 1
+            self._waiter_sources[source] -= 1
+            if not self._waiter_sources[source]:
+                del self._waiter_sources[source]
 
     def _serve_request(self, request: socket.socket, client_address: Any, current: list[socket.socket]) -> None:
         ctx = self.tls_context
