@@ -25789,7 +25789,7 @@ namespace {
 			NetReconnectTicketStore store; store.SetPath("Userdata/host-ticket-return/newcomer.ticket");
 			NetReconnectClient newcomer; newcomer.Configure(&store, admission.identity, "Newcomer");
 			newcomer.SetUnixClock(&HostReturnAdmission::WallClock, &admission);
-			admission.nowMs = NetMatchService::AdmissionNowMs();
+			admission.nowMs = host.AdmissionNowMs();
 			admission.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
 			if (!newcomer.BeginApplication(3, admission.nowMs, &round.failure) || !admission.Pump(host.m_ReconnectHost, {{connection, &newcomer}}, &round.failure)) return done(round.failure);
 			for (const auto& seat: host.m_ReconnectHost.GetModerationView()) if (seat.lockstepPeerId == 4) selected = NetSelectModerationSeat(seat, connection);
