@@ -2132,9 +2132,8 @@ void MainMenuGUI::SyncHostScreenFromDraft(const NetMatchConfig& draft) {
 		}
 	}
 	m_MultiplayerHostMode = draft.mode;
-	uint8_t humans = 0;
-	for (const NetMatchPlayerSlot& slot : draft.players) humans += slot.cpu ? 0 : 1;
-	m_MultiplayerHostPeerCount = draft.dedicated ? draft.peerCount : std::max<uint8_t>(humans, NetMatchConfigUtil::c_MinPeerCount);
+	// The setup's count is the draft's capacity, a closed seat included, so the sync that follows keeps the drafted roster.
+	m_MultiplayerHostPeerCount = std::max<uint8_t>(draft.peerCount, NetMatchConfigUtil::c_MinPeerCount);
 	RefreshHostPlayersChoices();
 	ApplyMultiplayerHostActivity();
 }
@@ -2989,7 +2988,8 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 	for (int peer = 0; peer < 4 && peer < m_HostOptionsDraft.peerCount; ++peer) {
 		if (!m_HostNetPeerDelayBoxes[peer]) continue;
 		const long parsed = std::strtol(m_HostNetPeerDelayBoxes[peer]->GetText().c_str(), nullptr, 10);
-		m_HostOptionsDraft.peerInputDelayFrames.push_back(static_cast<uint16_t>(std::clamp<int>(static_cast<int>(parsed), 0, NetMatchConfigUtil::c_MaxInputDelayFrames)));
+		// A seat's delay only raises the minimum: one under it reads as the minimum.
+		m_HostOptionsDraft.peerInputDelayFrames.push_back(static_cast<uint16_t>(std::clamp<int>(static_cast<int>(parsed), m_HostOptionsDraft.inputDelayFrames, NetMatchConfigUtil::c_MaxInputDelayFrames)));
 	}
 	if (m_HostOptionsDraft.delayPolicy != NetMatchDelayPolicy::Fixed) {
 		m_HostOptionsDraft.peerInputDelayFrames.clear();
