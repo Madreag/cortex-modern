@@ -87,12 +87,14 @@ def stage_activity(run, case):
         source = source.replace("                self:SwitchToActor(actor, player, 0);", "                if self.steps == 10 then self:SwitchToActor(actor, player, 0); end")
     if case == "team-change":
         source = source.replace("self.steps == 10 or self.steps == 40", "self.steps == 10")
+        source = source.replace("                self:SwitchToActor(actor, player, 0);", "")
         source = source.replace("    if self.steps > 60 then", TEAM_CHANGE + "    if self.steps > 60 then")
     if case == "held-switch":
         source = source.replace("self.steps == 10 or self.steps == 40", "self.steps == 10")
         source = source.replace("    if self.steps > 60 then", HELD_SWITCH + "    if self.steps > 60 then")
     if case == "feel":
         source = source.replace("MetricsCollector:SetResult(self.purgeClear and self.responses[1] > 0)", "MetricsCollector:SetResult(self.responses[1] > 0)")
+        source = source.replace("            for player = 0, 3 do\n                if self:GetPlayerBrain(player) or self:GetControlledActor(player) then self.purgeClear = false; end\n            end\n", "")
     (module / "Activity.lua").write_text(source, encoding="utf-8")
     (module / "Cold.lua").write_text(MODE_HOOK if case == "held-switch" else "function Update(self) end\n", encoding="utf-8")
 
