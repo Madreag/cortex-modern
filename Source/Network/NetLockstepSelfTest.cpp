@@ -26039,20 +26039,27 @@ namespace {
 			pump(200);
 			if (!applicants[3].session.IsReady() || !registry.MatchesActiveCredential(3, applicants[3].client.GetRecord().holderGeneration, applicants[3].client.GetRecord().credential)) return done("the original player's valid ticket loses to an unapproved application");
 			host.NotifyDisconnect(4, round.peers[0].GetResumeFrame()); applicants[3].wire.Stop(); std::erase(active, size_t{3}); pump(10);
-			if (host.SubstituteApplicant(3, 2, admission.nowMs) != NetH4ModerationResult::Ok) return done("the host cannot choose the first authenticated applicant");
-			pump(100);
-			if (!applicants[1].session.IsReady() || applicants[2].client.GetState() == NetH4ClientState::Joined ||
-			    !registry.MatchesActiveCredential(3, applicants[1].client.GetRecord().holderGeneration, applicants[1].client.GetRecord().credential)) return done("the second newcomer overwrites the host's chosen owner");
 			NetModerationSelection selected;
 			for (const auto& seat: host.GetModerationView()) if (seat.lockstepPeerId == 4) selected = NetSelectModerationSeat(seat);
 			NetParticipantRemovalIssue issue;
 			if (host.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, admission.nowMs, admission.wallMs, round.match.sessionId,
-			    static_cast<uint32_t>(round.peers[0].GetRoundId()), round.peers[0].GetStats().nextFrame, issue) != NetKickBanResult::Ok) return done("the authenticated owner cannot be kicked");
+			    static_cast<uint32_t>(round.peers[0].GetRoundId()), round.peers[0].GetStats().nextFrame, issue) != NetKickBanResult::Ok) return done("the host cannot open the original holder's seat");
+			if (registry.MatchesActiveCredential(3, original.holderGeneration, original.credential)) return done("the host's opening click leaves the old ticket active");
 			round.peers[0].EvictRemovedPeer(4, "open the seat", round.now); for (int pass = 0; pass < 80; ++pass) round.Pump();
+			for (size_t index: {size_t{1}, size_t{2}}) if (!applicants[index].client.BeginApplication(3, admission.nowMs, &round.failure)) return done(round.failure);
+			pump(100);
+			if (host.SubstituteApplicant(3, 2, admission.nowMs) != NetH4ModerationResult::Ok) return done("the host cannot choose the first authenticated applicant");
+			pump(100);
+			if (!applicants[1].session.IsReady() || applicants[2].client.GetState() == NetH4ClientState::Joined ||
+			    !registry.MatchesActiveCredential(3, applicants[1].client.GetRecord().holderGeneration, applicants[1].client.GetRecord().credential)) return done("the second newcomer overwrites the host's chosen owner");
 			LoopbackTransport coorWire; if (!coorWire.Connect("loopback", 47440, &round.failure)) return done(round.failure);
 			const uint64_t activation = round.peers[0].GetResumeFrame() + 60;
 			round.peers[0].NoteAdmissionLink(4, 4, round.now);
-			if (!round.peers[0].SchedulePeerAdmission(4, 4, applicants[1].client.GetIncarnation(), activation, &round.failure)) return done(round.failure);
+			const uint32_t incarnation = NetMatchService::ImageReturnIncarnation(applicants[1].client.GetIncarnation(), round.peers[0].GetConfig().peerIncarnations.at(4));
+			if (!round.peers[0].SchedulePeerAdmission(4, 4, incarnation, activation, &round.failure)) return done(round.failure);
+			for (const auto& seat: host.GetModerationView()) if (seat.lockstepPeerId == 4) selected = NetSelectModerationSeat(seat);
+			if (host.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, admission.nowMs, admission.wallMs, round.match.sessionId,
+			    static_cast<uint32_t>(round.peers[0].GetRoundId()), round.peers[0].GetStats().nextFrame, issue) != NetKickBanResult::Ok) return done("the authenticated owner cannot be kicked");
 			round.peers[0].EvictRemovedPeer(4, "host withdraws the authenticated newcomer", round.now);
 			for (int pass = 0; pass < 200 && round.peers[2].GetResumeFrame() <= activation; ++pass) round.Pump();
 			for (size_t index: {size_t{0}, size_t{1}, size_t{2}}) if (round.peers[index].SeatPlaysAtFrame(4, activation) || round.peers[index].ReclaimTransactions().contains(4)) return done("the authenticated host kick still installs the revoked owner at its agreed activation");
