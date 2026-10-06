@@ -1753,7 +1753,7 @@ namespace RTE {
 			return NetKickBanResult::ActionUnavailable;
 		}
 		const bool retainRemoval = m_LiveMatch && round != 0;
-		if (!m_Registry) return NetKickBanResult::ActionUnavailable;
+		if (!m_Registry || !m_Registry->IsActive()) return NetKickBanResult::ActionUnavailable;
 		NetSeatAuthRegistry nextRegistry = *m_Registry;
 		NetReconnectHost next = *this;
 		next.m_Registry = &nextRegistry;
