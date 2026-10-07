@@ -199,7 +199,7 @@ def check_streamed_pictures(results, scratch):
     root = scratch / "streamed-pictures"
     root.mkdir(parents=True)
     video = root / "colors.mkv"
-    pixels = b"".join(bytes((frame % 256, frame // 256, 42)) * 16 * 16 for frame in range(400))
+    pixels = b"".join(bytes((frame % 256, frame // 256, 42)) * 16 * 16 for frame in range(5000))
     encoded = subprocess.run([ffmpeg, "-nostdin", "-loglevel", "error", "-y", "-f", "rawvideo", "-pixel_format", "rgb24",
                               "-video_size", "16x16", "-framerate", "30", "-i", "pipe:0", "-c:v", "ffv1", str(video)],
                              input=pixels, capture_output=True)
@@ -251,6 +251,17 @@ def check_streamed_pictures(results, scratch):
               peer.get("video") == str(video) and peer.get("encode") == prior_encode)
     ok &= row(results, "stream/missing-sheet-uses-the-unchanged-sampling", bool(peer.get("sheet", {}).get("written")) and
               peer["sheet"].get("every") == 15 and peer["sheet"].get("tiles") == 9)
+    many = [{"frame": 4000 + index, "video_frame": index} for index in range(4096)]
+    long_frames = root / "long-selection"
+    error = ""
+    try:
+        driver.extract_frames(ffmpeg, video, many, long_frames)
+    except (OSError, RuntimeError) as failure:
+        error = str(failure)
+    exact = not error and len(list(long_frames.glob("frame-*.png"))) == len(many) and all(
+        Image.open(long_frames / f"frame-{4000 + index:06d}.png").getpixel((0, 0)) == (index % 256, index // 256, 42)
+        for index in (0, 2048, 4095))
+    ok &= row(results, "stream/long-selection-crosses-command-line-limits-without-loss", exact, error)
     return ok
 
 

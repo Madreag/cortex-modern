@@ -976,9 +976,11 @@ def extract_frames(ffmpeg, video, rows, frames):
     while len(terms) > 1:
         terms = ["(" + "+".join(terms[index:index + 2]) + ")" for index in range(0, len(terms), 2)]
     select = terms[0]
-    scratch = frames / "extract"
-    scratch.mkdir(exist_ok=True)
-    result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", str(video), "-vf", f"select='{select}'",
+    scratch = frames / f"extract-{uuid.uuid4().hex}"
+    scratch.mkdir()
+    selection = scratch / "selection.txt"
+    selection.write_text(f"select='{select}'\n", encoding="utf-8")
+    result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", str(video), "-filter_script:v", str(selection),
                             "-fps_mode", "passthrough", str(scratch / "pick-%06d.png")], capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg frame extraction exited {result.returncode}: {result.stderr[-2000:]}")
@@ -992,6 +994,7 @@ def extract_frames(ffmpeg, video, rows, frames):
             os.replace(picture, frames / f"frame-{row['frame']:06d}.png")
     for leftover in scratch.glob("*.png"):
         leftover.unlink()
+    selection.unlink()
     scratch.rmdir()
 
 
