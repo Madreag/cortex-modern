@@ -93,6 +93,8 @@ namespace RTE {
 		bool AutomationRowOf(const std::string& name, std::string& listName, int& row) const;
 		/// The games the Join screen lists, in list order: a row shows words, the join target is here.
 		const std::vector<NetDirectoryClient::GameRow>& AutomationGameRows() const { return m_GameRows; }
+		static std::string DiscoveredGameRowText(const NetDirectoryClient::GameRow& row, GUIFont* font, int width);
+		static std::string GameRowJoinRefusal(const NetDirectoryClient::GameRow& row);
 
 		/// What the multiplayer screens hold for the next lobby and the host's draft, for a readback that a change reached them.
 		std::string AutomationModelText() const;
@@ -130,6 +132,8 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		friend bool TestJoiningProgress(std::string* error);
+		static bool JoiningNeedsProgress(const NetLobbySnapshot& snapshot);
 		std::unique_ptr<GUIInputWrapper> m_AutomationInput;
 		/// Enumeration for the different sub-menu screens of the main menu.
 		enum MenuScreen {

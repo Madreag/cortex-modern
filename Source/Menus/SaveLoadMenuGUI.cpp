@@ -278,6 +278,8 @@ void SaveLoadMenuGUI::UpdateButtonEnabledStates() {
 		} else if (m_SaveGameName->GetText().empty()) {
 			m_DescriptionLabel->SetText("Enter a name for your savegame.");
 		}
+	} else if (m_SaveGamesFetched && m_SaveGames.empty()) {
+		m_DescriptionLabel->SetText("No saved games yet. Save a game from its pause menu.");
 	}
 
 	m_WasSaving = isSaving;

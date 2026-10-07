@@ -4,6 +4,9 @@
 #include "NetHttpClient.h"
 #include "NetMatchService.h"
 #include "NetMuxTransport.h"
+#include "AreaEditor.h"
+#include "GUIInputWrapper.h"
+#include "MainMenuGUI.h"
 #ifdef CCCP_WITH_GNS
 #include "GnsSignaling.h"
 #include "GnsTransport.h"
@@ -56,6 +59,136 @@
 #include <vector>
 
 namespace RTE {
+	namespace {
+		class LobbyNoticeTransport final : public INetTransport {
+		public:
+			bool StartHost(uint16_t, std::string*) override { return true; }
+			bool Connect(const std::string&, uint16_t, std::string*) override { return true; }
+			bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string*, bool*) override { return true; }
+			void Disconnect(NetPeerId, const std::string&) override {}
+			void Stop() override {}
+			std::vector<NetTransportEvent> PollEvents() override { return {}; }
+		};
+	}
+
+	bool TestJoiningProgress(std::string* error) {
+		NetLobbySnapshot snapshot;
+		if (!MainMenuGUI::JoiningNeedsProgress(snapshot)) { *error = "joining dismissed progress before the lobby was admitted"; return false; }
+		snapshot.inLobby = true; snapshot.awaitingHostConfig = true;
+		snapshot.transferLine = "Receiving the world";
+		if (!MainMenuGUI::JoiningNeedsProgress(snapshot)) { *error = "a receiving join lost its progress screen and Cancel"; return false; }
+		snapshot.awaitingHostConfig = false;
+		if (MainMenuGUI::JoiningNeedsProgress(snapshot)) { *error = "an admitted lobby kept the joining screen"; return false; }
+		std::cout << "[net-directory-selftest] PASS joining_progress" << std::endl;
+		return true;
+	}
+
+	bool TestLobbyDepartureNotice(std::string* error) {
+		LobbyNoticeTransport transport;
+		NetSession session;
+		session.m_Transport = &transport;
+		session.m_Role = NetSessionRole::Host;
+		session.m_State = NetSessionState::Ready;
+		NetSession::PeerState peer;
+		peer.transportPeerId = 1; peer.assignedPeerId = 1; peer.displayName = "Guest"; peer.state = NetSessionState::Ready;
+		session.m_Peers.push_back(peer);
+		session.InjectEvent({NetTransportEventType::PeerDisconnected, 1, NetTransportLane::ControlReliable, {}, "connection lost"}, 100);
+		if (session.GetLobbyNotice().find("Guest disconnected") == std::string::npos) { *error = "the lobby did not name the disconnected player"; return false; }
+		session.MarkPeerReady(session.m_Peers.front());
+		if (!session.GetLobbyNotice().empty()) { *error = "a returned player left the previous departure notice visible"; return false; }
+		session.m_Config.timeoutMs = 100;
+		session.m_NowMs = 250; session.m_LastTimeoutCheckMs = 200;
+		session.CheckTimeouts();
+		if (session.GetLobbyNotice().find("Guest disconnected") == std::string::npos || session.GetLobbyNotice().find("timed out") == std::string::npos) {
+			*error = "a seated player's timeout was described as an unnamed failed join"; return false;
+		}
+		NetMatchService service;
+		service.m_State = NetMatchServiceState::Starting;
+		service.m_LocalPeerId = 3;
+		service.m_AdoptedMatchConfig = NetMatchConfigUtil::MakeDefault(73);
+		NetLobbyMember sibling;
+		sibling.peerId = 2;
+		sibling.displayName = NetMatchConfigUtil::UnseatedSlotName(2, false);
+		service.m_LobbySnapshot.members = {sibling};
+		auto& view = service.m_SeatViews[2];
+		view.name = "Guest";
+		view.seat.owner = 7;
+		view.seat.link = NetSeatLink::Dropped;
+		view.state = "Held";
+		view.line = "Guest disconnected - seat held";
+		const auto shown = service.GetLobbySnapshot();
+		if (shown.members.size() != 1 || shown.members.front().displayName != "Guest" ||
+			!shown.members.front().dropped || shown.members.front().statusLine != view.line) {
+			*error = "a sibling's held ordinary-lobby seat lost its name and departure explanation"; return false;
+		}
+		std::cout << "[net-directory-selftest] PASS lobby_departure_notice" << std::endl;
+		return true;
+	}
+
+	bool TestAreaEditorCancel(std::string* error) {
+		bool prompted = false;
+		EditorActivity::EditorMode mode = AreaEditor::EmptySceneMode(true, prompted, EditorActivity::EDITINGOBJECT);
+		if (mode != EditorActivity::NEWDIALOG) { *error = "an empty scene was not offered a first area"; return false; }
+		for (int canceled : {EditorActivity::NEWDIALOG, EditorActivity::LOADDIALOG, EditorActivity::SAVEDIALOG}) {
+			mode = static_cast<EditorActivity::EditorMode>(canceled);
+			// The shared Cancel handler returns to EDITINGOBJECT; this is its next frame.
+			mode = AreaEditor::EmptySceneMode(true, prompted, EditorActivity::EDITINGOBJECT);
+			if (mode != EditorActivity::EDITINGOBJECT) { *error = "Cancel reopened the empty scene's New Area dialog"; return false; }
+		}
+		prompted = false;
+		if (AreaEditor::EmptySceneMode(true, prompted, EditorActivity::LOADDIALOG) != EditorActivity::LOADDIALOG) {
+			*error = "an empty scene replaced the player's chosen Load dialog"; return false;
+		}
+		std::cout << "[net-directory-selftest] PASS area_editor_cancel" << std::endl;
+		return true;
+	}
+
+	bool TestJoiningFailureDetail(std::string* error) {
+		const std::string detail = "That listing changed while you were joining. Refresh the list and try again.";
+		LobbyNoticeTransport transport;
+		NetSession session;
+		if (!session.StartClient(transport, "127.0.0.1", NetSessionConfig{}, error)) return false;
+		session.InjectEvent({NetTransportEventType::PeerDisconnected, 1, NetTransportLane::ControlReliable, {}, detail}, 0);
+		if (!session.HasReject() || session.GetRejectReason() != NetRejectReason::HostLinkLost) { *error = "listing failure fixture did not close the link"; return false; }
+		if (NetMatchService::SetupFailureDetail(&session, "ICE connection failed: " + detail).find(detail) == std::string::npos) {
+			*error = "joining replaced the listing repair instruction with generic link loss"; return false;
+		}
+		if (!session.StartClient(transport, "127.0.0.1", NetSessionConfig{}, error)) return false;
+		NetMessage refusal;
+		refusal.payload = NetJoinRejected{NetRejectReason::ParticipantBanned, "The host banned you from this session", "participant_identity", "admitted", "banned"};
+		std::vector<uint8_t> bytes;
+		if (!NetProtocol::Encode(refusal, bytes)) { *error = "could not encode the explicit refusal"; return false; }
+		session.InjectEvent({NetTransportEventType::PeerConnected, 1}, 1);
+		session.InjectEvent({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, {}}, 1);
+		if (!session.IsRejected() || NetMatchService::SetupFailureDetail(&session, detail).find("banned") == std::string::npos) {
+			*error = "a transport detail hid the host's explicit admission refusal"; return false;
+		}
+		std::cout << "[net-directory-selftest] PASS joining_failure_detail" << std::endl;
+		return true;
+	}
+
+	bool TestLobbyPingReadout(std::string* error) {
+		NetMatchConfig config = NetMatchConfigUtil::MakeDefault(73);
+		config.delayPolicy = NetMatchDelayPolicy::Auto;
+		config.peerInputDelayFrames = {2, 5};
+		NetLobbySnapshot snapshot;
+		snapshot.hostPeerId = 1; snapshot.localPeerId = 2;
+		NetLobbyMember host; host.peerId = 1; host.connected = true; host.pingMs = 83; host.pingMeasured = true;
+		NetLobbyMember local; local.peerId = 2; local.connected = true; local.isLocal = true;
+		snapshot.members = {host, local};
+		const std::string text = NetMatchService::LobbyInputDelayText(config, snapshot, 2);
+		if (text.find("83ms ping") == std::string::npos || text.find("0ms ping") != std::string::npos) { *error = "the client delay readout used its own zero ping instead of the host link"; return false; }
+		snapshot.members.front().pingMeasured = false;
+		if (NetMatchService::LobbyInputDelayText(config, snapshot, 2).find("ping not measured yet") == std::string::npos) {
+			*error = "an unmeasured host link was presented as a measured ping"; return false;
+		}
+		if (NetMatchService::LobbyInputDelayText(config, snapshot, 1).find("0ms ping") != std::string::npos) {
+			*error = "a host's local zero was presented as network ping"; return false;
+		}
+		std::cout << "[net-directory-selftest] PASS lobby_ping_readout" << std::endl;
+		return true;
+	}
+
 	bool TestDirectoryCapacityFallback(std::string* error) {
 #ifdef CCCP_WITH_GNS
 		class DirectHost final : public INetTransport {
@@ -3422,7 +3555,7 @@ namespace RTE {
 				if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
 			}
 #endif
-			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"L1", TestLobbyDirectoryLeaseRecovery}, {"L3", TestLobbyDirectoryStatus}, {"T1", TestDirectoryErrorSnapshot}, {"T2", TestDirectoryCapacityFallback}, {"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
+			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"LJ", TestJoiningProgress}, {"L7", TestLobbyDepartureNotice}, {"L2", TestAreaEditorCancel}, {"L5", TestJoiningFailureDetail}, {"L10", TestLobbyPingReadout}, {"L1", TestLobbyDirectoryLeaseRecovery}, {"L3", TestLobbyDirectoryStatus}, {"T1", TestDirectoryErrorSnapshot}, {"T2", TestDirectoryCapacityFallback}, {"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
 				if (!selected || std::string(selected) == test.first || (std::string(selected) == "U5" && std::string(test.first) == "T2")) {
 					if (!test.second(&error)) return fail(error);
 					if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }

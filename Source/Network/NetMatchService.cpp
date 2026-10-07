@@ -8865,13 +8865,13 @@ static std::string ResyncSaveName() {
 		}
 		for (NetLobbyMember& member: snapshot.members) {
 			const auto view = m_SeatViews.find(member.peerId);
-			// A world publishes every seat as open: its roster, not the slot's label, says who sits in a seat and whether they are there.
-			const bool seatedInWorld = persistentWorld && view != m_SeatViews.end() && view->second.seat.owner != 0;
-			const bool unseated = !seatedInWorld && !member.connected && !member.cpu && !member.isLocal &&
+			// The roster names held players in ordinary lobbies as well as worlds.
+			const bool ownedSeat = view != m_SeatViews.end() && view->second.seat.owner != 0;
+			const bool unseated = !ownedSeat && !member.connected && !member.cpu && !member.isLocal &&
 			                      member.displayName == NetMatchConfigUtil::UnseatedSlotName(member.peerId, persistentWorld);
 			const bool known = !unseated && view != m_SeatViews.end();
 			if (known && !view->second.name.empty()) member.displayName = view->second.name;
-			if (seatedInWorld && !member.isLocal) member.connected = view->second.seat.link == NetSeatLink::Connected;
+			if (ownedSeat && !member.isLocal) member.connected = view->second.seat.link == NetSeatLink::Connected;
 			if (member.isLocal && !m_LocalName.empty() && member.displayName == NetMatchConfigUtil::UnseatedSlotName(member.peerId, persistentWorld)) member.displayName = m_LocalName;
 			member.dropped = known && view->second.seat.link == NetSeatLink::Dropped && view->second.state != "Left";
 			member.reclaiming = known && view->second.state == "Reconnecting";
@@ -10023,9 +10023,15 @@ static std::string ResyncSaveName() {
 
 	std::string NetMatchService::GetNatModeText() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (!m_IceEnabled || m_IceRoute == "ip") return "Port forwarding required";
-		if (m_RelayOffer.Usable(UnixNowMs(nullptr) / 1000)) return "NAT: STUN + relay";
-		return g_SettingsMan.GetNetworkStunServers().empty() ? "Port forwarding required" : "NAT: STUN";
+		const std::string policy = m_ConnectionMode == 2 ? "Relay only" : m_ConnectionMode == 1 ? "Direct only" : "Automatic";
+		bool direct = false, relay = false;
+		for (const NetLobbyMember& member : m_LobbySnapshot.members) {
+			if (member.isLocal || member.cpu || !member.connected) continue;
+			const std::string route = GetConnectedRouteLocked(member.peerId);
+			direct = direct || route == "direct" || route == "ip";
+			relay = relay || route == "relay";
+		}
+		return policy + " - " + (direct && relay ? "direct and relay links" : relay ? "measured relay route" : direct ? "measured direct route" : "no route measured yet");
 	}
 
 	// The host row's line for an offer that expired before a renewal landed; the next offer clears it.
@@ -10510,6 +10516,31 @@ static std::string ResyncSaveName() {
 		return noDirectRoute ? "No direct route (NAT): forward the host's UDP port or use LAN" : "Network setup failed";
 	}
 
+	std::string NetMatchService::SetupFailureDetail(const NetSession* session, const std::string& detail) {
+		if (!session || !session->HasReject()) return detail;
+		const NetRejectReason reason = session->GetRejectReason();
+		const bool transportFailure = reason == NetRejectReason::HostLinkLost ||
+			(reason == NetRejectReason::InternalError && session->GetMismatchKey() == "transport") ||
+			(reason == NetRejectReason::Timeout && session->GetMismatchKey() != "timeout_ms");
+		// A link fault can carry a directory or ICE repair instruction; the generic reason loses it.
+		if (!session->IsRejected() && transportFailure) {
+			if (!detail.empty()) return detail;
+			if (!session->GetRejectSummary().empty()) return session->GetRejectSummary();
+		}
+		return session->BuildPlayerRefusalText();
+	}
+
+	std::string NetMatchService::LobbyInputDelayText(const NetMatchConfig& config, const NetLobbySnapshot& snapshot, uint8_t localPeerId) {
+		const std::string delay = "Input delay: " + std::to_string(NetMatchConfigUtil::PeerInputDelay(config, localPeerId));
+		if (config.delayPolicy == NetMatchDelayPolicy::Fixed) return delay + " (fixed)";
+		if (localPeerId == snapshot.hostPeerId) return delay + " (auto)";
+		const auto host = std::find_if(snapshot.members.begin(), snapshot.members.end(), [&](const NetLobbyMember& member) {
+			return member.peerId == snapshot.hostPeerId && !member.isLocal && member.connected;
+		});
+		if (host == snapshot.members.end() || !host->pingMeasured) return delay + " (auto, ping not measured yet)";
+		return delay + " (auto, " + (host->pingMs == 0 ? std::string("<1") : std::to_string(host->pingMs)) + "ms ping)";
+	}
+
 	void NetMatchService::ConfigureLobbyStart(NetMatchRunnerConfig& config) {
 		config.relayOffer = [this](NetRelayConfig& offer) { return ReadRelayOffer(offer); };
 		config.sessionWaitMs = c_MenuLobbyWaitMs;
@@ -10558,19 +10589,9 @@ static std::string ResyncSaveName() {
 			m_AdoptedMatchConfig = config;
 			if (!m_IsHost) SetRelayOfferLocked(config.relay.Usable(UnixNowMs(nullptr) / 1000) ? config.relay : NetRelayConfig{});
 			AdoptWorldTicketSession(config);
-			uint8_t localPeerId = m_LocalPeerId;
-			uint32_t pingMs = 0;
-			for (const NetLobbyMember& member: snapshot.members) {
-				if (member.isLocal) {
-					localPeerId = member.peerId;
-					pingMs = member.pingMs;
-				}
-			}
 			// The readout states the host's policy, not whether a per-sender set has arrived yet: an
 			// automatic delay reads automatic from the first frame and gains the measured ping later.
-			const std::string measured = config.peerInputDelayFrames.empty() ? ")" : ", " + std::to_string(pingMs) + "ms ping)";
-			m_InputDelayText = "Input delay: " + std::to_string(NetMatchConfigUtil::PeerInputDelay(config, localPeerId)) +
-			    (config.delayPolicy == NetMatchDelayPolicy::Fixed ? " (fixed)" : " (auto" + measured);
+			m_InputDelayText = LobbyInputDelayText(config, snapshot, m_LocalPeerId);
 			if (m_ChatSession) {
 				// The roster's lockstep ids are the session's assigned ids plus one; the host relays
 				// team scope only inside the sender's team.
@@ -10964,7 +10985,7 @@ static std::string ResyncSaveName() {
 				}
 				m_StatusText = changingHost ? std::string(c_NetMatchChangingHostLine) : lostHost ? "The host left the match"
 				                        : SetupFailureStatus(m_Session.get(), noDirectRoute, (m_RelayAttempted && noDirectRoute) || error.starts_with("Relay "));
-				m_ErrorText = lostHost ? m_StatusText : (m_Session && m_Session->HasReject() ? m_Session->BuildPlayerRefusalText() : error);
+				m_ErrorText = lostHost ? m_StatusText : SetupFailureDetail(m_Session.get(), error);
 				if (error == NetDirectoryClient::c_CapacityNotice) m_StatusText = m_ErrorText = error;
 				// A refusal that says the round is over is an answer, not a lost link: the seat completes.
 				(void)NoteHostGoodbyeLocked(m_Session.get());

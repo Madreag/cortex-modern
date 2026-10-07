@@ -273,6 +273,7 @@ namespace RTE {
 		const std::string& GetRejectSummary() const { return m_RejectSummary; }
 		/// Host: the display name the last refused connection joined with, so the host's notice can say who.
 		const std::string& GetRefusedPlayerName() const { return m_RefusedPlayerName; }
+		const std::string& GetLobbyNotice() const { return m_LobbyNotice; }
 		const NetSessionStats& GetStats() const { return m_Stats; }
 		/// The number of connections the host is tracking that have not yet passed a ClientHello.
 		uint32_t GetUnauthenticatedPeerCount() const;
@@ -294,6 +295,7 @@ namespace RTE {
 		static const char* StateName(NetSessionState state);
 
 	private:
+		friend bool TestLobbyDepartureNotice(std::string* error);
 		uint8_t m_HostAssignedPeerId = 0;
 		struct PeerState {
 			NetPeerId transportPeerId = c_InvalidNetPeerId;
@@ -325,6 +327,7 @@ namespace RTE {
 		void MaybeSendHeartbeats();
 		void RepeatUnansweredHello();
 		void ProcessEvent(const NetTransportEvent& event);
+		void MarkPeerReady(PeerState& peer);
 		void ProcessPacket(NetPeerId peerId, const std::vector<uint8_t>& bytes);
 		void HandleMalformed(NetPeerId peerId, const NetProtocolError& decodeError, const std::vector<uint8_t>& bytes);
 		/// Host: answers a peer whose header version we do not speak, explicitly when the envelope
@@ -426,6 +429,7 @@ namespace RTE {
 		std::string m_ExpectedValue;
 		std::string m_ActualValue;
 		std::string m_RejectSummary;
+		std::string m_LobbyNotice;
 		mutable std::string m_PlacedJoinerHash; //!< The refused joiner's config hash last placed against this build's versions.
 		mutable int m_PlacedJoinerOrder = 0; //!< Negative when that joiner's game is older, positive when newer, zero when unplaced.
 		std::string m_RefusedPlayerName;

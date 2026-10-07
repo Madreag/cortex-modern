@@ -77,6 +77,7 @@ namespace RTE {
 			GUIButton* ResetControlsButton;
 			GUILabel* SensitivityLabel;
 			GUISlider* SensitivitySlider;
+			int SensitivitySliderWidth;
 			GUICollectionBox* DeadZoneControlsBox;
 			GUIRadioButton* CircleDeadZoneRadioButton;
 			GUIRadioButton* SquareDeadZoneRadioButton;

@@ -983,9 +983,7 @@ namespace RTE {
 		snapshot.resumeHeldLocally = m_Config.host || m_Lobby.AnsweredResumeHeld();
 		// Start waits on a live remote ready, not the idle default (a reject never seats one).
 		snapshot.remoteReady = m_Lobby.GetState() != NetLobbyState::Idle && m_Lobby.IsRemoteReady();
-		if (m_Config.host && session.HasReject() && session.GetReadyPeerCount() < m_Config.sessionConfig.maxPeers) {
-			snapshot.errorText = "A player could not join: " + session.BuildPlayerRefusalText();
-		}
+		if (m_Config.host) snapshot.errorText = session.GetLobbyNotice();
 
 		const uint8_t localId = LocalLockstepPeerId(session);
 		const std::map<uint8_t, NetPeerId> remoteTransports = BuildRemoteTransportMap(session);
@@ -1014,8 +1012,10 @@ namespace RTE {
 				member.pingMs = 0;
 			} else if (transportIt != remoteTransports.end()) {
 				member.pingMs = transport.GetPeerPingMs(transportIt->second);
+				member.pingMeasured = transport.IsPeerPingMeasured(transportIt->second);
 			} else {
 				member.pingMs = m_Lobby.GetRemotePingMs(slot.peerId);
+				member.pingMeasured = member.pingMs != 0;
 			}
 			member.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(rosterConfig, slot.peerId);
 			snapshot.members.push_back(member);

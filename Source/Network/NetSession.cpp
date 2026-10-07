@@ -200,6 +200,7 @@ namespace RTE {
 		m_ExpectedValue.clear();
 		m_ActualValue.clear();
 		m_RejectSummary.clear();
+		m_LobbyNotice.clear();
 		m_HasRemoteIdentityHash = false;
 		m_Stats = {};
 		m_Peers.clear();
@@ -249,6 +250,7 @@ namespace RTE {
 		m_ExpectedValue.clear();
 		m_ActualValue.clear();
 		m_RejectSummary.clear();
+		m_LobbyNotice.clear();
 		m_HasRemoteIdentityHash = false;
 		m_AwaitingModuleDigests = false;
 		m_ModuleDigestsSent = false;
@@ -524,6 +526,7 @@ namespace RTE {
 		m_Peers.clear();
 		m_HasReject = false;
 		m_RejectSummary.clear();
+		m_LobbyNotice.clear();
 		if (m_Role == NetSessionRole::Host) {
 			for (const auto& [peer, connection]: peers) {
 				PeerState state;
@@ -623,6 +626,13 @@ namespace RTE {
 		m_NextHeartbeatMs = m_NowMs + m_Config.heartbeatIntervalMs;
 	}
 
+	void NetSession::MarkPeerReady(PeerState& peer) {
+		peer.state = NetSessionState::Ready;
+		peer.lastReceiveMs = m_NowMs;
+		peer.lastHeartbeatMs = m_NowMs;
+		m_LobbyNotice.clear();
+	}
+
 	void NetSession::ProcessEvent(const NetTransportEvent& event) {
 		switch (event.type) {
 			case NetTransportEventType::PeerConnected:
@@ -691,6 +701,9 @@ namespace RTE {
 					}
 					if (PeerState* peer = FindPeer(event.peerId)) {
 						if (NetA7Journal::Enabled()) NetA7Journal::Session("handshake_closed", m_NowMs, {{"connection", std::to_string(peer->a7ConnectionId)}, {"reason", event.reason}});
+						if (peer->state == NetSessionState::Ready) {
+							m_LobbyNotice = (peer->displayName.empty() ? "A player" : peer->displayName) + " disconnected.";
+						}
 						peer->state = NetSessionState::Closed;
 					}
 					RefreshHostState();
@@ -986,6 +999,7 @@ namespace RTE {
 				RejectPeer(*peer, NetRejectReason::ModuleManifestMismatch, "module_manifest_hash", HashText(m_Config.localIdentity.moduleManifestHash), HashText(ready->moduleManifestHash), "ready state module manifest hash does not match accepted session");
 				return;
 			}
+			if (ready->ready && peer->state != NetSessionState::Ready) m_LobbyNotice.clear();
 			peer->state = ready->ready ? NetSessionState::Ready : NetSessionState::Accepted;
 			peer->lastHeartbeatMs = m_NowMs;
 			if (ready->ready) {
@@ -1001,6 +1015,9 @@ namespace RTE {
 			return;
 		}
 		if (std::holds_alternative<NetDisconnect>(message.payload)) {
+			if (peer->state == NetSessionState::Ready) {
+				m_LobbyNotice = (peer->displayName.empty() ? "A player" : peer->displayName) + " left the lobby.";
+			}
 			peer->state = NetSessionState::Closed;
 			DropPeerTransport(peerId, "peer disconnected");
 			RefreshHostState();
@@ -1077,9 +1094,7 @@ namespace RTE {
 				// so a different id would silently re-point every actor the returner had.
 				if (PeerState* peer = FindPeer(commit.connection)) {
 					peer->assignedPeerId = commit.assignedPeerId;
-					peer->state = NetSessionState::Ready;
-					peer->lastReceiveMs = m_NowMs;
-					peer->lastHeartbeatMs = m_NowMs;
+					MarkPeerReady(*peer);
 				}
 				if (commit.supersededConnection != c_InvalidNetPeerId) {
 					if (PeerState* superseded = FindPeer(commit.supersededConnection)) {
@@ -1584,6 +1599,8 @@ namespace RTE {
 				}
 				if (m_NowMs >= peer.lastReceiveMs && m_NowMs - peer.lastReceiveMs > m_Config.timeoutMs) {
 					++m_Stats.timeouts;
+					m_LobbyNotice = (peer.displayName.empty() ? "A player" : peer.displayName) +
+						(peer.state == NetSessionState::Ready ? " disconnected (connection timed out)." : " could not join: the connection timed out.");
 					Send(peer.transportPeerId, NetDisconnect{static_cast<uint16_t>(NetRejectReason::Timeout), "heartbeat timeout"});
 					DropPeerTransport(peer.transportPeerId, "heartbeat timeout");
 					peer.state = NetSessionState::Failed;
@@ -1671,6 +1688,11 @@ namespace RTE {
 	void NetSession::RejectPeer(PeerState& peer, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
 		RejectConnection(peer.transportPeerId, reason, key, expected, actual, summary);
 		m_RefusedPlayerName = peer.displayName;
+		if (reason == NetRejectReason::ParticipantRemoved || reason == NetRejectReason::ParticipantBanned) {
+			m_LobbyNotice = BuildPlayerRefusalText();
+		} else {
+			m_LobbyNotice = (peer.displayName.empty() ? "A player" : peer.displayName) + " could not join: " + BuildPlayerRefusalText();
+		}
 		peer.state = NetSessionState::Rejected;
 		RefreshHostState();
 	}
@@ -1678,6 +1700,7 @@ namespace RTE {
 	void NetSession::RejectConnection(NetPeerId peerId, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
 		RecordReject(reason, key, expected, actual, summary);
 		m_RefusedPlayerName.clear();
+		m_LobbyNotice = "A player could not join: " + BuildPlayerRefusalText();
 		Send(peerId, NetJoinRejected{reason, summary, key, expected, actual});
 		if (m_Transport) {
 			// The close reason rides the transport too, so a peer that misses the reject packet still sees why.

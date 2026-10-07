@@ -42,6 +42,7 @@ AreaEditor::~AreaEditor() {
 void AreaEditor::Clear() {
 	m_pEditorGUI = 0;
 	m_pNewAreaName = 0;
+	m_EmptyScenePrompted = false;
 }
 
 int AreaEditor::Create() {
@@ -86,6 +87,7 @@ void AreaEditor::Destroy(bool notInherited) {
 
 int AreaEditor::Start() {
 	int error = EditorActivity::Start();
+	m_EmptyScenePrompted = false;
 
 	//////////////////////////////////////////////
 	// Allocate and (re)create the Editor GUI
@@ -179,6 +181,22 @@ void AreaEditor::End() {
 	m_ActivityState = ActivityState::Over;
 }
 
+EditorActivity::EditorMode AreaEditor::EmptySceneMode(bool emptyScene, bool& prompted, EditorMode mode) {
+	if (!emptyScene) {
+		prompted = false;
+	} else if (!prompted) {
+		prompted = true;
+		if (mode == EditorActivity::EDITINGOBJECT) return EditorActivity::NEWDIALOG;
+	}
+	return mode;
+}
+
+void AreaEditor::OfferNewArea(bool emptyScene) {
+	const EditorMode nextMode = EmptySceneMode(emptyScene, m_EmptyScenePrompted, m_EditorMode);
+	if (nextMode != m_EditorMode) m_ModeChange = true;
+	m_EditorMode = nextMode;
+}
+
 void AreaEditor::Update() {
 	EditorActivity::Update();
 
@@ -190,9 +208,8 @@ void AreaEditor::Update() {
 	// Update the loaded objects of the loaded scene so they look right
 	pCurrentScene->UpdatePlacedObjects(Scene::PLACEONLOAD);
 
-	// If the scene has no Area:s yet, force the user to make a new one
-	if (pCurrentScene->m_AreaList.empty())
-		m_EditorMode = EditorActivity::NEWDIALOG;
+	// Offer the empty scene's first area once; Cancel leaves the editor usable.
+	OfferNewArea(pCurrentScene->m_AreaList.empty());
 
 	// All dialog boxes are gone and we're editing the scene's Area:s
 	if (m_EditorMode == EditorActivity::EDITINGOBJECT) {
@@ -320,6 +337,7 @@ void AreaEditor::Update() {
 					// Attempt to load the scene, without applying its placed objects
 					g_SceneMan.SetSceneToLoad(pItem->m_Name, false);
 					g_SceneMan.LoadScene();
+					m_EmptyScenePrompted = false;
 					// Get the Module ID that the scene exists in, so we can limit the picker to only show objects from that DataModule space
 					m_ModuleSpaceID = g_SceneMan.GetScene()->GetModuleID();
 					if (pCurrentScene) {
@@ -416,6 +434,7 @@ void AreaEditor::Update() {
 			// CANCEL button pressed; exit any active dialog box
 
 			if (anEvent.GetControl() == m_pNewCancel || anEvent.GetControl() == m_pLoadCancel || anEvent.GetControl() == m_pSaveCancel) {
+				m_EmptyScenePrompted = true;
 				m_EditorMode = m_PreviousMode = EditorActivity::EDITINGOBJECT;
 				m_ModeChange = true;
 			}
