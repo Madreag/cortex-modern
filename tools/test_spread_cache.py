@@ -4,6 +4,7 @@ import builtins
 import contextlib
 import json
 import os
+import stat
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,6 +14,29 @@ import spread_peers as spread
 
 
 class CacheTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'nt', 'native read-only file disposition is Windows-specific')
+    def test_readonly_git_object_prunes_without_changing_another_hard_link(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root, retained = Path(temporary)/'snapshots', Path(temporary)/'retained-object'
+            root.mkdir()
+            for index in range(4):
+                snapshot = root/str(index)
+                snapshot.mkdir()
+                receipt = snapshot/'pool-inputs.json'
+                receipt.write_text(json.dumps(dict(head=str(index), manifest={})))
+                os.utime(receipt, (100+index, 100+index))
+            cached = root/'0/.git/objects/00/object'
+            cached.parent.mkdir(parents=True)
+            cached.write_bytes(b'original immutable git object')
+            os.link(cached, retained)
+            os.chmod(cached, stat.S_IREAD)
+            attributes = retained.stat().st_file_attributes
+            self.assertTrue(attributes & stat.FILE_ATTRIBUTE_READONLY)
+            result = spread.prune_snapshots(root, root/'3')
+            self.assertEqual(result['removed'], ['0'])
+            self.assertEqual(retained.read_bytes(), b'original immutable git object')
+            self.assertEqual(retained.stat().st_file_attributes, attributes)
+
     def test_link_limit_materializes_a_verified_copy(self):
         with tempfile.TemporaryDirectory() as temporary:
             source, target = Path(temporary)/'blob', Path(temporary)/'snapshot'/'file'
