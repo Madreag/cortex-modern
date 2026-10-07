@@ -2735,10 +2735,11 @@ namespace RTE::MenuAutomation {
 			NetLobbySnapshot snapshot;
 			snapshot.inputDelayText = "Input delay: 4 (auto, 50ms ping)";
 			const std::string summary = NetHostOptionsSummary(config, snapshot);
-			check("hint_summary_policy", summary.find("\nWhen a player falls behind: Give the seat to the AI (host too) until they catch up\n") != std::string::npos, summary);
-			check("hint_summary_delay", summary.find("\nInput delay: Automatic, ping plus a 3-tick margin, raised live if inputs arrive late - now 4 (auto, 50ms ping)\n") != std::string::npos, summary);
+			const std::string connection = NetHostConnectionSummary(config, snapshot);
+			check("hint_summary_policy", connection.find("\nWhen a player falls behind: Give the seat to the AI (host too) until they catch up\n") != std::string::npos, connection);
+			check("hint_summary_delay", connection.starts_with("Input delay: Automatic, ping plus a 3-tick margin, raised live if inputs arrive late - now 4 (auto, 50ms ping)\n"), connection);
 			check("hint_summary_no_rejoin", summary.find("rejoin") == std::string::npos, summary);
-			check("summary_short_rows_share_lines", summary.find(" ticks   Slow player bound: 3 ticks\n") != std::string::npos && summary.find("\nDifficulty: ") != std::string::npos &&
+			check("summary_short_rows_share_lines", connection.find(" ticks   Slow player bound: 3 ticks\n") != std::string::npos && summary.find("\nDifficulty: ") != std::string::npos &&
 			      summary.find("   Starting gold: ") != std::string::npos, summary);
 			same("transfer_line_measured", NetImageTransferLine(3250585, 8598323, 1468006.0), "Receiving the world: 3.1 of 8.2 MB - 1.4 MB/s - 4 s left");
 			same("transfer_line_before_a_rate", NetImageTransferLine(0, 8598323, 0.0), "Receiving the world: 0.0 of 8.2 MB");

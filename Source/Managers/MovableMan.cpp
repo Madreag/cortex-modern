@@ -1104,6 +1104,8 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				continue;
 			}
 			ApplyDeferredSoundOp(*sound);
+		} else if (const auto* placement = std::get_if<NetGameEditorPlacement>(&command.payload)) {
+			if (auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) game->ApplyNetEditorPlacement(*placement, command.senderPeerId);
 		} else if (const NetGamePlaceBrain* placeBrain = std::get_if<NetGamePlaceBrain>(&command.payload)) {
 			// A seat's committed brain placement in the synchronized setup editor.
 			if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {

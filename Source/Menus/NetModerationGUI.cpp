@@ -633,6 +633,8 @@ namespace {
 	/// say it - its marker clears the moment the lobby seats, and on a Failed landing at once.
 	bool PostMatchLobbyAlive() {
 		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+		const auto state = g_NetMatchService.GetState();
+		if (state == NetMatchServiceState::Failed || state == NetMatchServiceState::Idle) return false;
 		return g_NetMatchService.NeedsCompletedLobbyPump() ||
 		    (snapshot.playedAMatch && snapshot.active && !snapshot.leftMatch);
 	}
@@ -736,9 +738,11 @@ void NetModerationGUI::LayoutPanel() {
 namespace {
 	/// A button sized to its caption, the name in it shortened first when the caption would pass the room it has.
 	void Caption(GUIButton* button, GUIFont* font, const std::string& before, const std::string& name, const std::string& after, int room) {
-		std::string text = before + name + after;
-		const int fixed = font->CalculateWidth(before + after) + 20;
-		if (font->CalculateWidth(text) + 20 > room) text = before + FitName(font, name, std::max(24, room - fixed)) + after;
+		// Keep the player's name before spending the button's room on an optional explanation.
+		const std::string suffix = font->CalculateWidth(before + name + after) + 20 <= room ? after : std::string{};
+		std::string text = before + name + suffix;
+		const int fixed = font->CalculateWidth(before + suffix) + 20;
+		if (font->CalculateWidth(text) + 20 > room) text = before + FitName(font, name, std::max(1, room - fixed)) + suffix;
 		if (button->GetText() != text) button->SetText(text);
 		const int width = std::min(room, std::max(60, font->CalculateWidth(text) + 20));
 		if (button->GetWidth() != width) button->Resize(width, 20);
@@ -1317,6 +1321,13 @@ void NetModerationGUI::Update() {
 		m_ReadMs = nowMs;
 	}
 	const NetLobbySnapshot& snapshot = *m_FrameSnapshot;
+	const auto state = g_NetMatchService.GetState();
+	if (state == NetMatchServiceState::Failed || state == NetMatchServiceState::Idle) {
+		SetOpen(false);
+		m_ChatInMatch = false;
+		UpdateMatchChat(snapshot, false);
+		return;
+	}
 	if (frameDue) {
 		NoteSharedNames(snapshot);
 		const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
@@ -2459,6 +2470,8 @@ void NetModerationGUI::Draw() {
 		m_NetStatusBox->SetVisible(false);
 		m_NetStatus->SetVisible(false);
 	}
+	const auto state = g_NetMatchService.GetState();
+	if (state == NetMatchServiceState::Failed || state == NetMatchServiceState::Idle) return;
 	// A completed round's peer is still in its match until the activity is over, and it still needs its
 	// surfaces to read the result and leave. The menu-loop arm is the lobby's own version of that:
 	// the rematch lobby keeps the surfaces while the pump is owed.

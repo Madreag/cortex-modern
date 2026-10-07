@@ -2213,7 +2213,7 @@ class DirectoryTests(unittest.TestCase):
         self.assertIn("10 registers/min", text)
         self.assertIn("120 requests/min", text)
         self.assertIn("30 registers/min", text)
-        self.assertIn("300 requests/min", text)
+        self.assertIn("480 requests/min", text)
         self.assertIn("16 destination queues", text)
         self.assertIn("1 MiB", text)
         self.assertIn("120 s", text)

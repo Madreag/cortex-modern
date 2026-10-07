@@ -4510,7 +4510,7 @@ namespace RTE {
 			};
 
 			uint64_t unixNow = 1'700'000'000'000ULL;
-			// The leave the engine now runs: the link is still up, so the ack arrives and clears the record.
+			// A live link acknowledges the leave while the seat and return ticket stay with the holder.
 			{
 				LoopbackTransport hostTransport, clientTransport;
 				NetSession host, client;
@@ -4542,11 +4542,12 @@ namespace RTE {
 				if (acknowledgedMs - startedMs > NetReconnectClient::c_LeaveAckBudgetMs) {
 					return Fail("the leave outran P21's ack budget");
 				}
-				if (store.HasRecord() || reconnect.GetStats().leaveAcksReceived != 1 || reconnect.GetStats().ticketsCleared != 1) {
-					return Fail("an acknowledged leave did not clear the recovery record");
+				if (!store.HasRecord() || reconnect.GetStats().leaveAcksReceived != 1 || reconnect.GetStats().ticketsCleared != 0) {
+					return Fail("an acknowledged leave lost its return ticket or leave accounting");
 				}
-				if (admission.GetStats().seatsClosedByLeave != 1) {
-					return Fail("the host did not close the seat on the leave");
+				if (admission.GetStats().seatsClosedByLeave != 1 || admission.GetStats().seatsDropped != 1 ||
+				    !admission.IsSeatHeldForReclaim(MakeSeatTable()[0].lockstepPeerId)) {
+					return Fail("the host did not acknowledge the leave and retain its held seat");
 				}
 			}
 
@@ -6713,11 +6714,9 @@ namespace RTE {
 		}
 	} // namespace
 
-		// A lobby member whose process is gone sends nothing and closes nothing: the host reaps it on
-		// its own heartbeat timeout. That close is ours, so no transport event ever reaches the
-		// admission plane, and before this the seat stayed committed to a peer that no longer existed -
-		// every replacement was then refused a full lobby, which is what the 4-peer drop lane measured.
-		int TestReapedLobbySeatReturnsToThePool() {
+		// A lobby member's heartbeat timeout drops its link but preserves its admitted seat and ticket.
+		// A newcomer cannot take that seat without the host's choice, even before the first round.
+		int TestReapedLobbySeatRetainsItsHolder() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
 			std::string error;
@@ -6735,7 +6734,7 @@ namespace RTE {
 			registry.BeginHostedSession();
 			NetReconnectHost admission;
 			admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
-			// One human seat, so the replacement can only be admitted if the reaped seat came back.
+			// One human seat, so a newcomer must be refused while its original holder owns it.
 			admission.SetSeatTable({{0, 1, 1, false, 2, false}, {1, 0, 3, true, 0, false}}, NetMatchMode::PvPSkirmish);
 			NetReconnectTicketStore firstStore;
 			firstStore.SetPath(StorePath("reap-first"));
@@ -6749,7 +6748,7 @@ namespace RTE {
 			NetSessionConfig hostConfig = MakeSessionConfig(port, 101, "Host");
 			hostConfig.maxPeers = 2;
 			// The transport says nothing about a close we make ourselves, which is how GNS behaved: the
-			// seat has to come back because the session hands the peer over, not because the wire did.
+			// admission plane must learn about the drop from the session, even without a wire event.
 			LoopbackTransportConfig silentClose;
 			silentClose.silentLocalDisconnect = true;
 			hostTransport.SetFaultConfig(silentClose);
@@ -6779,17 +6778,14 @@ namespace RTE {
 			}
 			const std::vector<NetH4SeatStatus> seats = admission.GetSeatStatuses();
 			const auto reaped = std::find_if(seats.begin(), seats.end(), [](const NetH4SeatStatus& seat) { return seat.stableSeat == 0; });
-			if (reaped == seats.end() || reaped->committed) {
-				return Fail("the reaped member's seat is still committed to a peer that is gone");
+			if (reaped == seats.end() || !reaped->committed || !reaped->dropped || reaped->closed || !firstStore.HasRecord()) {
+				return Fail("the reaped member lost its admitted seat, drop mark or return ticket");
 			}
-			// It has to be the reap that released it, not a later sweep: the session hands the peer over.
-			if (admission.GetStats().seatsReleased != 1 || admission.GetStats().seatsClosedByLeave != 0) {
-				return Fail("the seat came back by some route other than the reap: released=" +
-				            std::to_string(admission.GetStats().seatsReleased) +
-				            " byLeave=" + std::to_string(admission.GetStats().seatsClosedByLeave));
+			if (admission.GetStats().seatsDropped != 1 || admission.GetStats().seatsReleased != 0 || admission.GetStats().seatsClosedByLeave != 0) {
+				return Fail("the reap did not record exactly one retained seat drop");
 			}
 
-			// The replacement: it can only be admitted onto the one seat the reap released.
+			// A different install without that ticket must not take the retained seat.
 			NetReconnectTicketStore secondStore;
 			secondStore.SetPath(StorePath("reap-second"));
 			NetReconnectClient secondClient;
@@ -6806,11 +6802,11 @@ namespace RTE {
 				hostTransport.AdvanceTimeMs(10);
 				secondTransport.AdvanceTimeMs(10);
 			}
-			if (secondClient.GetState() != NetH4ClientState::Joined) {
-				return Fail(std::string("the replacement was refused the reaped seat: ") + second.BuildRejectText());
+			if (second.GetState() != NetSessionState::Rejected || second.GetRejectReason() != NetRejectReason::SessionFull) {
+				return Fail(std::string("a newcomer was not refused the retained seat: ") + second.BuildRejectText());
 			}
-			if (host.GetReadyPeerCount() != 1) {
-				return Fail("the host did not end up with exactly the replacement seated");
+			if (host.GetReadyPeerCount() != 0) {
+				return Fail("the host admitted a newcomer over the retained holder");
 			}
 			return 0;
 		}
@@ -9346,7 +9342,7 @@ namespace RTE {
 		if (const int result = TestSessionWiring(); result != 0) {
 			return result;
 		}
-		if (const int result = TestReapedLobbySeatReturnsToThePool(); result != 0) {
+		if (const int result = TestReapedLobbySeatRetainsItsHolder(); result != 0) {
 			return result;
 		}
 		if (const int result = TestSessionEndIsTheOnlySignal(); result != 0) {

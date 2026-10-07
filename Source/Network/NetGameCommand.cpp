@@ -39,6 +39,8 @@ namespace RTE {
 				return NetGameCommandType::AIGib;
 			} else if constexpr (std::is_same_v<T, NetGamePlaceBrain>) {
 				return NetGameCommandType::PlaceBrain;
+			} else if constexpr (std::is_same_v<T, NetGameEditorPlacement>) {
+				return NetGameCommandType::EditorPlacement;
 			} else if constexpr (std::is_same_v<T, NetGameWorldTransition>) {
 				return NetGameCommandType::WorldTransition;
 			} else if constexpr (std::is_same_v<T, NetGameSeatHold>) {
@@ -107,6 +109,8 @@ namespace RTE {
 				return "Checkpoint";
 			case NetGameCommandType::SeatRelease:
 				return "SeatRelease";
+			case NetGameCommandType::EditorPlacement:
+				return "EditorPlacement";
 		}
 		return "Unknown";
 	}

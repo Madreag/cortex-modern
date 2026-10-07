@@ -85,6 +85,10 @@ namespace RTE {
 		/// as ready to start on every peer at the same frame.
 		/// @return False, with nothing changed, when the placement names a seat, team, sender or preset this peer refuses.
 		bool ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, uint8_t senderPeerId);
+		bool EnqueueEditorPlacement(const SceneObject& object, int player, int nativeTechModule, float foreignCostMult);
+		bool ApplyNetEditorPlacement(const NetGameEditorPlacement& placement, uint8_t senderPeerId);
+		/// True while this match uses shared setup-editor commands.
+		static bool IsLockstepPlacement();
 
 		/// Commits one of this peer's own seats' brain placements to the wire. Where the brain goes is the
 		/// player's own decision, read off their local editor; the command carries it to every peer.
@@ -258,6 +262,7 @@ namespace RTE {
 		/// thread before a capture's workers read them.
 		void PrepareCheckpointCapture() const;
 		static bool RunNetLocalUIRestoreSelfTest();
+		static bool RunSetupEditorSelfTest();
 		static bool RunNetInventoryRelaunchProbe(std::string_view phase);
 
 		/// Locks a player controlled actor to a specific controller mode.
@@ -799,8 +804,6 @@ namespace RTE {
 		/// Makes every brain already standing in the scene its seat's resident, identically on every peer, so
 		/// a local editor's residence test can never take an actor out of one peer's sim alone.
 		void SeedLockstepResidentBrains();
-		/// True while the match's setup editor is the synchronized one: placements cross the wire.
-		static bool IsLockstepPlacement();
 		/// Whether this peer is the one that commits a seat's brain placement.
 		bool MayCommitBrainPlacement(int player) const;
 		/// Puts one seat's committed placement on the wire. `via` names the path that read the spot.
@@ -862,7 +865,8 @@ namespace RTE {
 			archive(self.m_LockstepPlacementUidBase, self.m_LockstepPlacementSeeded);
 			for (auto& placement: self.m_LockstepSeatBrains) {
 				archive(placement.team, placement.player, placement.posX, placement.posY,
-					placement.className, placement.preset, placement.module);
+					placement.className, placement.preset, placement.module, placement.hFlipped);
+				archive(placement.addedInventory);
 			}
 		}
 		/// Clears all the member variables of this Activity, effectively

@@ -183,6 +183,9 @@ SCHEMAS["GameActivity3"] = [*SCHEMAS["GameActivity1"][:-1],
     *fields("lockstep_placement_uid_base lockstep_placement_seeded"),
     ("lockstep_seat_brains", array(4, structure(*fields("team player pos_x pos_y"), *fields("class preset module", "s")))),
     SCHEMAS["GameActivity1"][-1]]
+SCHEMAS["GameActivity4"] = [*SCHEMAS["GameActivity3"][:-2],
+    ("lockstep_seat_brains", array(4, structure(*fields("team player pos_x pos_y"), *fields("class preset module", "s"),
+     ("h_flipped", "n"), ("added_inventory", sequence(array(3, "s")))))), SCHEMAS["GameActivity1"][-1]]
 SCHEMAS["GameActivity2"] = [("values", "o"), ("players", array(4, structure(("marked_actor", "n"),
     ("purchases", sequence(array(3, "s"))), ("strategic_menu", "s")))),
     ("deliveries", array(4, sequence(structure(*fields("ordered_by_player"), ("landing_zone", VECTOR),
@@ -671,7 +674,7 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
                 mask_seat("view_state", seat)
                 for key in ("death_timer", "message_timer"):
                     mask_seat(key, seat, "sim_start")
-        if version in ("GameActivity1", "GameActivity3"):
+        if version in ("GameActivity1", "GameActivity3", "GameActivity4"):
             if local_seat is None:
                 for key in ("observation_target", "death_view_target", "actor_cursor", "landing_zone"):
                     result[key][0] = "LOCAL"
@@ -822,6 +825,14 @@ def selftest():
         check("game_activity3_refused_as_game_activity1", "trailing" in str(error) or "invalid runtime checkpoint" in str(error))
     check("game_activity3_decodes", decode(grown)["version"] == "GameActivity3" and
           "lockstep_seat_brains" in decode(grown) and len(decode(grown)["lockstep_seat_brains"]) == 4)
+    equipped = _payload("GameActivity4")
+    check("game_activity4_decodes", decode(equipped)["version"] == "GameActivity4" and
+          "added_inventory" in decode(equipped)["lockstep_seat_brains"][0])
+    try:
+        decode(equipped.replace(b"13 GameActivity4", b"13 GameActivity3", 1))
+        check("game_activity4_refused_as_game_activity3", False)
+    except ValueError:
+        check("game_activity4_refused_as_game_activity3", True)
     # HeldDeviceRuntime1 texts stay readable; HeldDevice.cpp:577 keys its legacy branch on this exact header.
     v1 = _payload("HeldDeviceRuntime1")
     check("held_device_runtime1_still_decodes", v1.startswith(b"18 HeldDeviceRuntime1 ") and
