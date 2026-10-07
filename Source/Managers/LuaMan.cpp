@@ -8886,6 +8886,31 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
 	{
+		LuaStateWrapper classState;
+		classState.Initialize();
+		const bool planted = classState.RunScriptString(R"lua(
+			class '_ImmutableClassCapture' (Box)
+			function _ImmutableClassCapture:__init() super() end
+			_ImmutableClassCapture.tag = { value = 31 }
+			_ImmutableClassRoots = { cpp = Vector, derived = _ImmutableClassCapture, alias = _ImmutableClassCapture }
+		)lua") == 0;
+		std::string ordinary;
+		CheckpointText first, cached;
+		std::vector<std::string> problems;
+		bool captured = planted && classState.SerializeScriptGraph(ordinary, problems);
+		{
+			CheckpointWriter::BatchScope batches(true);
+			captured = captured && classState.CaptureScriptGraph(first, problems, true) && classState.CaptureScriptGraph(cached, problems, true);
+		}
+		classState.RunScriptString("_ImmutableClassCapture.tag.value = 47; _ImmutableClassRoots = nil; _ImmutableClassCapture = nil");
+		const bool exact = captured && std::async(std::launch::async, [first, cached, ordinary] {
+			return first.Text() == ordinary && cached.Text() == ordinary;
+		}).get();
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " immutable_class_tokens_preserve_cold_and_cached_graph_bytes_after_mutation" << std::endl;
+		for (const auto& problem: problems) std::cout << "[script-graph-selftest] immutable class capture: " << problem << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
 		for (const auto& [name, override]: std::array<std::pair<const char*, const char*>, 4>{{
 		    {"plain_scalar_properties", "do end"},
 		    {"scalar_class_override", "Vector.X = 103; Timer.StartSimTimeTicks = 107"},

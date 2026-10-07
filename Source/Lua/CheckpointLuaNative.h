@@ -128,7 +128,7 @@ namespace RTE::CheckpointLua {
 			return problems;
 		}
 
-		size_t EntryCount() const { return m_Entries.size() + m_Scalars.size() + (m_Classes ? m_Classes->entries.size() : 0); }
+		size_t EntryCount() const { return m_Entries.size() + m_Scalars.size() + (m_Classes ? m_Classes->Size() : 0); }
 		// Compare the actual frozen native answers, including deferred text, before
 		// reusing a chunk. No live writer barrier is borrowed by the saver VM.
 		std::string Fingerprint(const void* address, View& view, std::string_view helper, std::string_view argument,
@@ -235,7 +235,29 @@ namespace RTE::CheckpointLua {
 			}
 		};
 		// The class descriptors and plain userdata a state holds never change; every capture shares one map of them.
-		struct ClassEntries { std::unordered_map<const void*, Entry> entries; };
+		struct ImmutableEntry {
+			uint64_t serial = 0;
+			TValue members{};
+			std::array<TValue, 3> native{};
+			unsigned memberCount = 0, nativeCount = 0;
+			Entry Expand() const {
+				Entry entry;
+				entry.serial = serial;
+				if (memberCount) entry.members.values.push_back(Value{members});
+				TValue nil; setnilV(&nil);
+				Result missing; missing.values.push_back(Value{nil});
+				entry.helpers.emplace("_ScriptGraphInstance", missing);
+				entry.helpers.emplace("_ScriptGraphNativeAddress", std::move(missing));
+				for (unsigned index = 0; index < nativeCount; ++index) entry.native[0].values.push_back(Value{native[index]});
+				entry.native[1] = entry.native[0];
+				return entry;
+			}
+		};
+		struct ClassEntries {
+			std::unordered_map<const void*, Entry> entries;
+			std::unordered_map<const void*, ImmutableEntry> compact;
+			size_t Size() const { return entries.size() + compact.size(); }
+		};
 		size_t CachedCount() const { return m_CachedClasses; }
 		/// Fresh references another reference's answer fits, and of those checked against a fresh answer, how many differed.
 		size_t SharedCount() const { return m_SharedAnswers; }
@@ -261,6 +283,9 @@ namespace RTE::CheckpointLua {
 		std::unordered_map<const void*, Entry> m_Entries;
 		std::unordered_map<const void*, ScalarEntry> m_Scalars;
 		std::shared_ptr<const ClassEntries> m_Classes;
+		// Expansion belongs to this image, rather than the shared class cache.
+		// A later capture can therefore reuse the cache while this image is saved.
+		mutable std::unordered_map<const void*, Entry> m_ExpandedClasses;
 		size_t m_CachedClasses = 0;
 		size_t m_SharedAnswers = 0, m_SharedMismatches = 0;
 		int64_t m_EnumUs = 0, m_WorldUs = 0, m_AnswerUs = 0;
@@ -270,6 +295,10 @@ namespace RTE::CheckpointLua {
 			if (const auto scalar = m_Scalars.find(address); scalar != m_Scalars.end()) return scalar->second.Expand();
 			if (m_Classes) {
 				if (const auto shared = m_Classes->entries.find(address); shared != m_Classes->entries.end()) return &shared->second;
+				if (const auto shared = m_Classes->compact.find(address); shared != m_Classes->compact.end()) {
+					if (const auto expanded = m_ExpandedClasses.find(address); expanded != m_ExpandedClasses.end()) return &expanded->second;
+					return &m_ExpandedClasses.emplace(address, shared->second.Expand()).first->second;
+				}
 			}
 			return nullptr;
 		}
@@ -420,10 +449,16 @@ namespace RTE::CheckpointLua {
 			const auto enumStarted = std::chrono::steady_clock::now();
 			// The class descriptors were answered by an earlier capture; everything else is asked again.
 			const auto& classes = m_Cache.classes->entries;
+			const auto& compactClasses = m_Cache.classes->compact;
 			auto& references = m_Cache.references;
 			ForEachCapturedUserdata(State(), [&](GCudata* data) {
 				GCobj* object = obj2gco(data);
 				if (const auto known = classes.find(object); known != classes.end() && known->second.serial == data->serial) {
+					m_SeenClasses.insert(object);
+					++m_Image->m_CachedClasses;
+					return;
+				}
+				if (const auto known = compactClasses.find(object); known != compactClasses.end() && known->second.serial == data->serial) {
 					m_SeenClasses.insert(object);
 					++m_Image->m_CachedClasses;
 					return;
@@ -487,11 +522,21 @@ namespace RTE::CheckpointLua {
 			CheckThread();
 			if (!m_Captured || !m_Image || state != State()) throw std::logic_error("native results require the same frozen Lua heap");
 			// Descriptors this walk neither reused nor made again describe userdata that are gone.
-			const bool retired = m_SeenClasses.size() != m_Cache.classes->entries.size();
-			if (!m_NewClasses.empty() || retired) {
+			const bool retired = m_SeenClasses.size() != m_Cache.classes->Size();
+			if (!m_NewClasses.empty() || !m_NewCompactClasses.empty() || retired) {
 				auto merged = std::make_shared<NativeImage::ClassEntries>(*m_Cache.classes);
-				if (retired) std::erase_if(merged->entries, [this](const auto& entry) { return !m_SeenClasses.contains(entry.first); });
-				for (auto& [address, entry]: m_NewClasses) merged->entries[address] = std::move(entry);
+				if (retired) {
+					std::erase_if(merged->entries, [this](const auto& entry) { return !m_SeenClasses.contains(entry.first); });
+					std::erase_if(merged->compact, [this](const auto& entry) { return !m_SeenClasses.contains(entry.first); });
+				}
+				for (auto& [address, entry]: m_NewClasses) {
+					merged->compact.erase(address);
+					merged->entries[address] = std::move(entry);
+				}
+				for (auto& [address, entry]: m_NewCompactClasses) {
+					merged->entries.erase(address);
+					merged->compact[address] = std::move(entry);
+				}
 				m_Cache.classes = std::move(merged);
 			}
 			// References this walk neither reused nor made again name objects that are gone.
@@ -541,6 +586,7 @@ namespace RTE::CheckpointLua {
 		std::pmr::monotonic_buffer_resource m_Transient;
 		std::pmr::memory_resource* m_TransientResource = CheckpointWriter::BatchEnabled() ? &m_Transient : std::pmr::get_default_resource();
 		std::pmr::unordered_map<const void*, NativeImage::Entry> m_NewClasses{m_TransientResource};
+		std::pmr::unordered_map<const void*, NativeImage::ImmutableEntry> m_NewCompactClasses{m_TransientResource};
 		std::pmr::unordered_map<const void*, NativeCache::Reference> m_NewReferences{m_TransientResource};
 		std::pmr::unordered_set<const void*> m_Kept{m_TransientResource};
 		struct SharedKey {
@@ -861,6 +907,33 @@ namespace RTE::CheckpointLua {
 				Persist(bool& value, bool on) : flag(value) { flag = on; }
 				~Persist() { flag = false; }
 			} persist{m_Persist, immutable};
+			if (immutable && CheckpointWriter::BatchEnabled()) {
+				auto* classRep = luabind::detail::is_class_rep(State(), -1) ? static_cast<luabind::detail::class_rep*>(lua_touserdata(State(), -1)) : nullptr;
+				NativeImage::ImmutableEntry compact;
+				compact.serial = luaJIT_value_serial(State(), -1);
+				lua_pop(State(), 1);
+				CaptureTrace::Span immutableSpan("answer_class");
+				if (classRep) {
+					compact.members = ScalarToken([&] { classRep->get_table(State()); });
+					compact.memberCount = 1;
+				}
+				if (classRep && classRep->get_class_type() == luabind::detail::class_rep::lua_class) {
+					compact.native[compact.nativeCount++] = ScalarToken([&] { lua_pushliteral(State(), "lua-class"); });
+					compact.native[compact.nativeCount++] = ScalarToken([&] { lua_pushstring(State(), classRep->name()); });
+					compact.native[compact.nativeCount++] = ScalarToken([&] { lua_pushstring(State(), !classRep->bases().empty() && classRep->bases()[0].base ? classRep->bases()[0].base->name() : ""); });
+				} else {
+					setnilV(&compact.native[compact.nativeCount++]);
+					if (classRep) compact.native[compact.nativeCount++] = ScalarToken([&] { lua_pushstring(State(), classRep->name()); });
+				}
+				if (VerifySharedAnswers()) {
+					NativeImage::Entry original;
+					original.serial = compact.serial;
+					AnswerImmutable(original, classRep, false);
+					CompareShared(original, compact.Expand(), classRep ? classRep->name() : "");
+				}
+				m_NewCompactClasses.emplace(gcval(&value), std::move(compact));
+				return;
+			}
 			auto& entry = immutable ? m_NewClasses[gcval(&value)] : m_Image->m_Entries[gcval(&value)];
 			entry.serial = luaJIT_value_serial(State(), -1);
 			bool movable = false, owned = false;
