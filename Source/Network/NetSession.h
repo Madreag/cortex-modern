@@ -169,6 +169,13 @@ namespace RTE {
 		bool IsSilenceSuspended() const { return m_SilenceSuspended; }
 		bool IsPumpParked() const { return m_PumpParked; }
 		uint64_t GetClockMs() const { return m_NowMs; }
+		/// A seat's timeout or transport fault does not prove the host left. Only its end record or
+		/// the roster's confirmed host loss does; every setup reader uses this same evidence.
+		bool HostDepartureConfirmed() const {
+			return m_Role == NetSessionRole::Client && !IsReady() && m_HasReject &&
+			       (m_RejectReason == NetRejectReason::SessionEnded || m_RejectReason == NetRejectReason::HostLinkLost ||
+			        (m_MismatchKey == "host_disconnect" && static_cast<uint16_t>(m_RejectReason) == 0));
+		}
 		/// Sends session heartbeats without polling the transport or checking timeouts, so another
 		/// phase (the lobby) can own the shared event queue while peers still see us alive.
 		void TickKeepalive(uint64_t nowMs);

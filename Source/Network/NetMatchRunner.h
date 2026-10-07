@@ -276,6 +276,9 @@ namespace RTE {
 		bool WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error, NetSession* session = nullptr);
 		NetLobbySnapshot BuildLobbySnapshot(const INetTransport& transport, const NetSession& session) const;
 		friend bool TestAJoiningLobbyWaitsForHostConfig(std::string* error);
+		friend bool TestMenuLobbyWaitsForALiveHost(std::string* error);
+		friend bool TestInitialLobbyStartsWithHeldSeats(std::string* error);
+		friend bool TestAHostsStartSurvivesTheLobbysOwnChanges(std::string* error);
 		friend bool TestKickedSeatReadsOpen(std::string* error);
 		friend bool TestARunningRoundsJoinerIsNotAskedForItsStartRoster(std::string* error);
 		friend bool TestTheRostersWaitKeepsTheRoundsStart(std::string* error);
