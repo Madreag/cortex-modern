@@ -4013,7 +4013,8 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		// A joining peer keeps the join screen until the host admits it; the refresh switches the screen
 		// the moment the lobby snapshot says the seat is real.
 		m_JoinAttemptActive = !host;
-		m_JoinStatusText = host ? std::string() : "Joining " + (m_JoinTargetName.empty() ? std::string("the game") : m_JoinTargetName) + "...";
+		const std::string target = m_JoinTargetName.empty() ? request.address : m_JoinTargetName;
+		m_JoinStatusText = host ? std::string() : target.empty() ? "Connecting to the host..." : "Joining " + target + "...";
 		m_MultiplayerSubScreen = host ? MultiplayerSubScreen::Lobby : MultiplayerSubScreen::JoinSetup;
 	} else {
 		ShowSetupFailure(host, PlayerFacingStatus(error));
@@ -4156,10 +4157,11 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 			RefreshMultiplayerScreenControls(snapshot);
 			return;
 		}
-		if (!snapshot.running && (snapshot.lobbyPhase.empty() || snapshot.lobbyPhase == "Idle" || snapshot.lobbyPhase == "SessionStarting") && snapshot.transferLine.empty() && snapshot.waitLine.empty()) {
+		if (!snapshot.running && snapshot.awaitingHostConfig && snapshot.transferLine.empty() && snapshot.waitLine.empty()) {
 			// The service's own phase ("Joining direct-IP match") says nothing the line does not.
 			const std::string status = snapshot.statusText.ends_with("direct-IP match") ? std::string() : PlayerFacingStatus(snapshot.statusText);
-			m_JoinStatusText = "Joining " + (m_JoinTargetName.empty() ? std::string("the game") : m_JoinTargetName) + "..." +
+			const std::string target = m_JoinTargetName.empty() ? m_MultiplayerJoinRequest.address : m_JoinTargetName;
+			m_JoinStatusText = (target.empty() ? std::string("Connecting to the host...") : "Joining " + target + "...") +
 			                   (status.empty() ? std::string() : " " + status);
 			m_MultiplayerSubScreen = MultiplayerSubScreen::JoinSetup;
 			RefreshMultiplayerScreenControls(snapshot);
@@ -4476,7 +4478,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	}
 
 	// The match header is two fixed rows: the activity (its module only when two loaded activities share its name, as Host a
-	// Game says it), then the scene and the mode's menu label. A joiner's placeholder shows the same rows with what it has.
+	// Game says it), then the scene and the mode's menu label.
 	std::string matchInfo = snapshot.activityPreset;
 	if (!snapshot.activityModule.empty() && (matchInfo.empty() || ActivityNameShared(matchInfo))) {
 		matchInfo += matchInfo.empty() ? snapshot.activityModule : " - " + snapshot.activityModule;
@@ -4570,6 +4572,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		if (!snapshot.transferLine.empty() || !snapshot.waitLine.empty()) {
 			// A join in progress names what it waits on: the world's image, or one of its held slots and the seconds left.
 			sentence = !snapshot.transferLine.empty() ? snapshot.transferLine : snapshot.waitLine;
+		} else if (snapshot.awaitingHostConfig) {
+			sentence = "Connecting to the host...";
 		} else if (!snapshot.inLobby) {
 			sentence = PlayerFacingStatus(snapshot.statusText);
 		} else if (snapshot.isHost) {
@@ -4810,7 +4814,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	// Every player but the host readies up, and can take it back until the match starts.
 	GUIButton* ready = m_MainMenuButtons[MenuButton::MultiplayerReadyButton];
 	ready->SetVisible(!snapshot.isHost && !snapshot.joiningWorld);
-	ready->SetEnabled(!snapshot.isHost && !snapshot.joiningWorld && snapshot.inLobby);
+	ready->SetEnabled(!snapshot.isHost && !snapshot.joiningWorld && snapshot.inLobby && !snapshot.awaitingHostConfig);
 	ready->SetText(g_NetMatchService.IsReadyRequested() ? "Cancel Ready" : "Ready");
 	// The host starts at once when everyone is ready; otherwise Start Match counts down for everyone, and the same button cancels it.
 	// A seat nobody has taken keeps it disabled, and the sentence above says who is missing.
@@ -4831,7 +4835,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	options->SetEnabled(snapshot.isHost && snapshot.inLobby);
 	if (GUIButton* editSetup = m_MainMenuButtons[MenuButton::LobbyEditSetupButton]) {
 		editSetup->SetText(snapshot.isHost ? "Edit setup" : "Match details");
-		editSetup->SetEnabled(snapshot.inLobby);
+		editSetup->SetEnabled(snapshot.inLobby && !snapshot.awaitingHostConfig);
 	}
 }
 

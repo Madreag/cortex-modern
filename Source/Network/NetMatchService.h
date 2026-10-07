@@ -1314,6 +1314,8 @@ namespace RTE {
 		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig) const;
 		/// Applies the service's lobby start policy and request controls.
 		void ConfigureLobbyStart(NetMatchRunnerConfig& config);
+		/// Publishes the runner's accepted lobby configuration and its display snapshot together.
+		void ConfigureLobbyPublishing(NetMatchRunnerConfig& config, const NetMatchRunner& runner);
 		void SetState(NetMatchServiceState state, std::string status, std::string error = "");
 		/// Match end or the host leaving takes the directory row down now rather than at Destroy.
 		/// Game-thread only, like the client it drives.
@@ -1406,6 +1408,7 @@ namespace RTE {
 		friend bool TestStartingKickMarshals(std::string* error);
 		friend bool TestUnreadableBanListHoldsAdmission(std::string* error);
 		friend bool TestLobbyModerationRows(std::string* error);
+		friend bool TestAJoiningLobbyWaitsForHostConfig(std::string* error);
 		friend bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
 		friend bool TestRematchAfterHostDeparture(std::string* error);
 		friend bool TestResyncFailureAfterHostDeparture(std::string* error);

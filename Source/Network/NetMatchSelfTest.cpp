@@ -12400,6 +12400,150 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestAJoiningLobbyWaitsForHostConfig(std::string* error) {
+		NetMatchConfig placeholder = MakeConfig();
+		placeholder.activityPreset = "P4 Alpha Duel";
+		placeholder.activityModule = "Base.rte";
+		NetMatchConfig hosted = MakeConfig();
+		hosted.sceneName = "Host scene";
+		hosted.players[0].displayName = "EROL";
+		hosted.players[1].displayName = "EDITH";
+		LoopbackTransport hostTransport, clientTransport;
+		NetSession hostSession, clientSession;
+		NetMatchRunner hostRunner, clientRunner;
+		hostRunner.m_Config.host = true;
+		hostRunner.m_MatchConfig = hosted;
+		clientRunner.m_MatchConfig = placeholder;
+		hostRunner.m_State = clientRunner.m_State = NetMatchRuntimeState::SessionStarting;
+		NetMatchService hostService, clientService;
+		const auto seed = [](NetMatchService& service, const NetMatchConfig& config, bool host) {
+			service.m_State = NetMatchServiceState::Starting;
+			service.m_IsHost = host;
+			service.m_LocalPeerId = host ? 1 : 2;
+			service.m_LocalTeam = host ? 0 : 1;
+			service.m_LocalName = host ? "EROL" : "EDITH";
+			service.m_MatchConfig = config;
+			service.m_ActivityPreset = config.activityPreset;
+			service.m_ActivityModule = config.activityModule;
+			service.m_SceneName = config.sceneName;
+			service.m_SceneModule = config.sceneModule;
+			service.m_StatusText = host ? "Hosting direct-IP match" : "Joining direct-IP match";
+		};
+		seed(hostService, hosted, true);
+		seed(clientService, placeholder, false);
+		const auto pending = [error](const NetLobbySnapshot& snapshot, const char* phase) {
+			if (!snapshot.members.empty() || !snapshot.activityPreset.empty() || !snapshot.activityModule.empty() ||
+			    !snapshot.sceneName.empty() || !snapshot.sceneModule.empty() || !snapshot.modeName.empty() || !snapshot.modeLabel.empty() ||
+			    !snapshot.inputDelayText.empty() || snapshot.localReady || snapshot.remoteReady || snapshot.occupancyComplete ||
+			    !snapshot.awaitingHostConfig || snapshot.isHost) {
+				*error = std::string(phase) + ": joining client shows activity='" + snapshot.activityPreset +
+				         "' scene='" + snapshot.sceneName + "' members=" + std::to_string(snapshot.members.size()) +
+				         " local_ready=" + std::to_string(snapshot.localReady);
+				return false;
+			}
+			return true;
+		};
+		const auto hostShown = [error, &hosted](const NetLobbySnapshot& snapshot) {
+			const auto host = std::find_if(snapshot.members.begin(), snapshot.members.end(), [&hosted](const NetLobbyMember& member) {
+				return member.peerId == hosted.hostPeerId && member.isLocal && member.displayName == "EROL";
+			});
+			if (!snapshot.isHost || snapshot.awaitingHostConfig || snapshot.activityPreset != hosted.activityPreset ||
+			    snapshot.sceneName != hosted.sceneName || snapshot.members.size() != hosted.players.size() || host == snapshot.members.end()) {
+				*error = "the host's lobby lost its own setup or local host row";
+				return false;
+			}
+			return true;
+		};
+		if (!pending(clientService.GetLobbySnapshot(), "before the first publish") || !hostShown(hostService.GetLobbySnapshot())) return false;
+		NetMatchRunnerConfig hostPublish, clientPublish;
+		hostService.ConfigureLobbyPublishing(hostPublish, hostRunner);
+		clientService.ConfigureLobbyPublishing(clientPublish, clientRunner);
+		clientPublish.publishLobby(clientRunner.BuildLobbySnapshot(clientTransport, clientSession));
+		hostPublish.publishLobby(hostRunner.BuildLobbySnapshot(hostTransport, hostSession));
+		if (!pending(clientService.GetLobbySnapshot(), "before session admission") || clientService.m_AdoptedMatchConfig.sessionId != 0 ||
+		    !hostShown(hostService.GetLobbySnapshot())) return false;
+
+		NetSessionConfig sessionConfig;
+		sessionConfig.port = 43249;
+		sessionConfig.sessionId = hosted.sessionId;
+		sessionConfig.displayName = "EROL";
+		auto& identity = sessionConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "joining-lobby-selftest";
+		identity.platform = "test";
+		NetSessionConfig clientSessionConfig = sessionConfig;
+		clientSessionConfig.displayName = "EDITH";
+		++clientSessionConfig.localNonce;
+		if (!hostSession.StartHost(hostTransport, sessionConfig, error) ||
+		    !clientSession.StartClient(clientTransport, "loopback", clientSessionConfig, error)) return false;
+		uint64_t now = 0;
+		for (; now <= 1000 && (!hostSession.IsReady() || !clientSession.IsReady()); now += 10) {
+			hostSession.Tick(now);
+			clientSession.Tick(now);
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+		}
+		if (!hostSession.IsReady() || !clientSession.IsReady()) {
+			*error = "the joining-lobby fixture did not finish session admission";
+			return false;
+		}
+		LoopbackTransportConfig delayedConfig;
+		delayedConfig.latencyMs = 100;
+		hostTransport.SetFaultConfig(delayedConfig);
+		NetLobbySessionConfig hostConfig;
+		hostConfig.host = true;
+		hostConfig.localPeerId = hostRunner.LocalLockstepPeerId(hostSession);
+		hostConfig.remoteTransportPeerIds = hostRunner.BuildRemoteTransportMap(hostSession);
+		hostConfig.matchConfig = hosted;
+		hostConfig.displayName = "EROL";
+		hostConfig.autoReady = hostConfig.autoStart = false;
+		NetLobbySessionConfig clientConfig = hostConfig;
+		clientConfig.host = false;
+		clientConfig.localPeerId = clientRunner.LocalLockstepPeerId(clientSession);
+		clientConfig.remoteTransportPeerIds = clientRunner.BuildRemoteTransportMap(clientSession);
+		clientConfig.matchConfig = placeholder;
+		clientConfig.displayName = "EDITH";
+		if (!hostRunner.m_Lobby.Start(hostTransport, hostConfig, error) || !clientRunner.m_Lobby.Start(clientTransport, clientConfig, error)) return false;
+		hostRunner.m_State = clientRunner.m_State = NetMatchRuntimeState::LobbySync;
+		// Session admission gives the client its id before the host's lobby configuration arrives.
+		for (int repeat = 0; repeat < 4; ++repeat, now += 10) {
+			clientRunner.m_Lobby.Tick(now);
+			const NetLobbySnapshot shown = clientRunner.BuildLobbySnapshot(clientTransport, clientSession);
+			if (!pending(shown, "waiting for the host's configuration")) return false;
+			clientPublish.publishLobby(shown);
+			if (!pending(clientService.GetLobbySnapshot(), "pending lobby publish") || clientService.m_AdoptedMatchConfig.sessionId != 0) return false;
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+		}
+		for (const uint64_t until = now + 1000; now <= until && clientRunner.m_Lobby.GetState() == NetLobbyState::WaitingForConfig; now += 10) {
+			hostRunner.m_Lobby.Tick(now);
+			clientRunner.m_Lobby.Tick(now);
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+		}
+		if (clientRunner.m_Lobby.GetState() != NetLobbyState::WaitingForReady) {
+			*error = "the joining-lobby fixture did not accept the host's configuration: " + clientRunner.m_Lobby.GetFailureReason();
+			return false;
+		}
+		clientPublish.publishLobby(clientRunner.BuildLobbySnapshot(clientTransport, clientSession));
+		hostPublish.publishLobby(hostRunner.BuildLobbySnapshot(hostTransport, hostSession));
+		const NetLobbySnapshot adopted = clientService.GetLobbySnapshot();
+		const auto local = std::find_if(adopted.members.begin(), adopted.members.end(), [](const NetLobbyMember& member) { return member.isLocal; });
+		if (adopted.awaitingHostConfig || adopted.isHost || adopted.activityPreset != hosted.activityPreset || adopted.sceneName != hosted.sceneName ||
+		    adopted.modeName != NetMatchConfigUtil::ModeName(hosted.mode) || adopted.modeLabel != NetMatchConfigUtil::ModeLabel(hosted.mode) ||
+		    adopted.members.size() != hosted.players.size() || local == adopted.members.end() || local->displayName != "EDITH" ||
+		    local->peerId == adopted.hostPeerId || NetMatchConfigUtil::HashConfig(clientService.GetLobbyMatchConfig()) != NetMatchConfigUtil::HashConfig(hosted)) {
+			*error = "the joining lobby did not replace its pending state with the host's setup and EDITH's client row";
+			return false;
+		}
+		if (!hostShown(hostService.GetLobbySnapshot())) return false;
+		std::cout << "[net-match-selftest] PASS joining_lobby_waits_for_host_config" << std::endl;
+		return true;
+	}
+
 	bool TestKickedSeatReadsOpen(std::string* error) {
 		const uint16_t port = 43247;
 		LoopbackTransport hostTransport;
@@ -16991,6 +17135,7 @@ namespace RTE {
 			bool passed = false;
 			if (name == "state-delivery") passed = TestLobbyStartWaitsForReceivedState(&error);
 			else if (name == "state-receipts") passed = TestLobbyStateReceiptsAreBoundAndRepeated(&error);
+			else if (name == "joining-lobby") passed = TestAJoiningLobbyWaitsForHostConfig(&error);
 			else return fail("unknown selected match check");
 			if (!passed) return fail(error);
 			std::cout << "[net-match-selftest] PASS" << std::endl;
@@ -17036,6 +17181,7 @@ namespace RTE {
 		row(&TestTickHashTraceIsBoundedAndLossless, "tick_hash_trace_is_bounded_and_lossless");
 		row(&TestWrittenConfigsHoldNoRelayLogin, "a_written_config_holds_no_relay_login");
 		row(&TestTheReportListsEveryConnection, "report_lists_every_connection");
+		row(&TestAJoiningLobbyWaitsForHostConfig, "joining_lobby_waits_for_host_config");
 		if (!rowsPassed) return fail("a reporting row failed");
 		std::string menuError, routeError;
 		const bool menuInputs = TestLocalMenuKeepsInputs(&menuError);
