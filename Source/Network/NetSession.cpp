@@ -1406,6 +1406,11 @@ namespace RTE {
 			return;
 		}
 		if (const auto* accepted = std::get_if<NetJoinAccepted>(&message.payload)) {
+			if (m_Config.expectedHostSessionId != 0 && accepted->sessionId != m_Config.expectedHostSessionId) {
+				SetRejected(NetRejectReason::HostNotAccepting, "host_session", std::to_string(m_Config.expectedHostSessionId), std::to_string(accepted->sessionId), "The address belongs to another hosted session.");
+				m_Transport->Disconnect(peerId, "The address belongs to another hosted session.");
+				return;
+			}
 			if (accepted->sessionId == 0 || accepted->selectedProtocolVersion != NetProtocol::c_Version || accepted->assignedPeerId == 0) {
 				SetRejected(NetRejectReason::ProtocolMismatch, "join_accepted", "valid JoinAccepted", "invalid", "invalid JoinAccepted");
 				m_Transport->Disconnect(peerId, "invalid JoinAccepted");
@@ -1418,7 +1423,12 @@ namespace RTE {
 			// §4 expands the handshake: with an admission plane attached, Ready waits for JoinCommitted,
 			// which is also what hands back the seat's own peer id instead of this freshly allocated one.
 			if (m_ReconnectClient) m_ReconnectClient->NoteAcceptedHostSession(accepted->sessionId);
-			if (m_ReconnectClient && m_ReconnectClient->BeginAdmission(m_NowMs)) {
+			if (m_ReconnectClient) {
+				if (!m_ReconnectClient->BeginAdmission(m_NowMs)) {
+					SetRejected(NetRejectReason::HostNotAccepting, "reconnect_auth", "retained seat ticket", "unavailable", m_ReconnectClient->GetError());
+					m_Transport->Disconnect(peerId, "reconnect admission failed closed");
+					return;
+				}
 				m_State = NetSessionState::Accepted;
 				m_StateStartedMs = m_NowMs;
 				FlushReconnectOutbound();
@@ -1970,6 +1980,8 @@ namespace RTE {
 	}
 
 	NetIdentityMismatch NetSession::ValidateHostHello(const NetHostHello& hello) const {
+		if (m_Config.expectedHostSessionId != 0 && hello.sessionId != m_Config.expectedHostSessionId)
+			return MakeMismatch("host_session", NetRejectReason::HostNotAccepting, std::to_string(m_Config.expectedHostSessionId), std::to_string(hello.sessionId), "The address belongs to another hosted session.");
 		if (hello.selectedProtocolVersion != NetProtocol::c_Version) {
 			return MakeMismatch("network_protocol_version", NetRejectReason::ProtocolMismatch, std::to_string(NetProtocol::c_Version), std::to_string(hello.selectedProtocolVersion), "selected protocol version does not match");
 		}

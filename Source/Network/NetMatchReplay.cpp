@@ -276,6 +276,7 @@ namespace RTE {
 		m_AgreedStart.reset();
 		m_AgreedStartWritten = false;
 		// The synced config rides the lobby codec, so the replayer rebuilds the identical roster; a recording players share never holds a relay login.
+		m_OpeningAuthorityPeerId = config.hostPeerId;
 		std::vector<uint8_t> configBytes;
 		NetLobbyError lobbyError;
 		if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{NetMatchConfigUtil::WithoutRelay(config)}}, configBytes, &lobbyError)) {
@@ -363,15 +364,20 @@ namespace RTE {
 		return WriteFrame(frame, frames, commands, observations, {}, error);
 	}
 
-	bool NetMatchReplayWriter::WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations, std::string* error) {
+	bool NetMatchReplayWriter::WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations, std::string* error, uint8_t authorityPeerId, uint8_t updateAuthorityPeerId) {
 		ReplayWorkTimer work{frame, "frame"};
 		if (!IsOpen()) {
 			if (error) *error = GetWriteError().empty() ? "replay writer is not open" : GetWriteError();
 			return false;
 		}
 		NetLockstepFrame record;
-		// The wire codec authenticates one sender; a committed tick can contain several.
-		record.senderPeerId = 1;
+		// The frame names its host; sender trailers retain each producer.
+		record.senderPeerId = authorityPeerId != 0 ? authorityPeerId : m_OpeningAuthorityPeerId;
+		const uint8_t updateAuthority = updateAuthorityPeerId != 0 ? updateAuthorityPeerId : record.senderPeerId;
+		if (updateAuthority == 0 || updateAuthority > NetLockstepCodec::c_MaxPeerCount) {
+			if (error) *error = "invalid replay update authority";
+			return false;
+		}
 		record.targetFrame = frame;
 		record.frames = frames;
 		record.commands = commands;
@@ -435,6 +441,7 @@ namespace RTE {
 				partFor(1);
 			}
 			parts.front().frames = frameRuns.front();
+			parts.front().senderPeerId = record.senderPeerId;
 			const uint8_t inputSender = parts.front().senderPeerId;
 			for (size_t run = 1; run < frameRuns.size(); ++run) {
 				NetLockstepFrame& part = parts.emplace_back();
@@ -451,8 +458,12 @@ namespace RTE {
 			}
 		}
 		std::vector<uint8_t> bytes;
+		static_assert(c_MaxRecordBytes <= (1U << 24));
+		if (wireBytes.size() >= (1U << 24)) { if (error) *error = "replay frame exceeds its record-size limit"; return false; }
 		bytes.reserve(4 + wireBytes.size() + commands.size() + observations.size() + valueObservations.size());
-		AppendU32(bytes, static_cast<uint32_t>(wireBytes.size()));
+		// The record bound leaves the envelope's high byte for a differing update host.
+		const uint32_t updateHost = updateAuthority != record.senderPeerId ? static_cast<uint32_t>(updateAuthority) << 24 : 0;
+		AppendU32(bytes, static_cast<uint32_t>(wireBytes.size()) | updateHost);
 		bytes.insert(bytes.end(), wireBytes.begin(), wireBytes.end());
 		for (const NetGameCommand& command : commands) {
 			bytes.push_back(command.senderPeerId);
@@ -685,6 +696,7 @@ namespace RTE {
 		}
 		size_t wireOffset = 0;
 		size_t wireLength = bytes.size();
+		uint8_t updateAuthority = 0;
 		if (m_Version >= 5) {
 			if (bytes.size() < 4) {
 				if (error) *error = "truncated replay frame envelope";
@@ -692,6 +704,10 @@ namespace RTE {
 			}
 			wireOffset = 4;
 			wireLength = ReadU32(bytes.data());
+			if (m_Version >= 8) {
+				updateAuthority = static_cast<uint8_t>(wireLength >> 24);
+				wireLength &= 0xFFFFFFU;
+			}
 			if (wireLength == 0 || wireLength > bytes.size() - wireOffset) {
 				if (error) *error = "invalid replay wire frame length";
 				return false;
@@ -773,6 +789,14 @@ namespace RTE {
 				}
 				outFrame.valueObservations[i].senderPeerId = sender;
 			}
+		}
+		if (m_Version >= 8) {
+			if (outFrame.senderPeerId == 0 || outFrame.senderPeerId > m_Config.peerCount || updateAuthority > m_Config.peerCount) {
+				if (error) *error = "invalid replay frame authority";
+				return false;
+			}
+			outFrame.replayAuthorityPeerId = outFrame.senderPeerId;
+			outFrame.replayUpdateAuthorityPeerId = updateAuthority != 0 ? updateAuthority : outFrame.senderPeerId;
 		}
 		m_LastStatus = NetReplayReadStatus::Frame;
 		return true;

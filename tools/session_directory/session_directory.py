@@ -2051,10 +2051,11 @@ class SessionHTTPServer(ThreadingHTTPServer):
                                      if now - last < SATURATION_LOG_INTERVAL_S}
 
     def _headers_ready(self, request: socket.socket) -> bool:
-        if self.tls_context is not None:
-            return False
         readable, _, _ = select.select([request], [], [], 0.02)
         if not readable:
+            return False
+        # TCP accepts can precede a client's first TLS bytes.
+        if self.tls_context is not None:
             return False
         try:
             return b"\r\n\r\n" in request.recv(65536, socket.MSG_PEEK)

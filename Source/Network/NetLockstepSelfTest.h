@@ -12,6 +12,9 @@ namespace RTE {
 		static int RunSeatLog();
 		/// When a seat's claims on its actors end, on every peer and in a replay, alone.
 		static int RunReleasedClaims();
+		static int RunReleasePaths();
+		static int RunSeatSuccession();
+		static int RunSeatAdmission();
 	};
 
 } // namespace RTE
