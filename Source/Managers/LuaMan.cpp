@@ -8886,6 +8886,33 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
 	{
+		CheckpointText frozen;
+		std::string full, shared;
+		bool captured = false;
+		{
+			CheckpointWriter seed("PathFinder1");
+			seed(32u, Vector(-0.0F, 13.25F), 2, 2, true, false, size_t{4});
+			for (int index = 0; index < 4; ++index) {
+				std::array<int64_t, 8> adjacent{-1, (index + 1) % 4, (index + 1) % 4, -1, (index + 2) % 4, -1, index, -1};
+				std::array<int, 8> materials{-1, 0, 0, -1, 0, -1, 0, -1};
+				seed(Vector(index == 0 ? std::bit_cast<float>(uint32_t{0x7fc01234}) : static_cast<float>(index), -0.0F), index % 2 == 0, adjacent, materials);
+			}
+			PathFinder finder;
+			captured = finder.LoadCheckpoint(seed.Text());
+			const auto save = [&] { return finder.SaveCheckpoint(); };
+			const auto ordinary = CheckpointWriter::CaptureNative(save);
+			full = ordinary.Text(); shared = ordinary.SharedText();
+			{
+				CheckpointWriter::BatchScope batches(true);
+				frozen = CheckpointWriter::CaptureNative(save);
+			}
+		}
+		const auto actual = std::async(std::launch::async, [frozen] { return std::pair{frozen.Text(), frozen.SharedText()}; }).get();
+		const bool exact = captured && actual.first == full && actual.second == shared;
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " owned_path_grid_records_outlive_nodes_and_keep_neighbor_and_material_indices" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
 		LuaStateWrapper classState;
 		classState.Initialize();
 		const bool planted = classState.RunScriptString(R"lua(

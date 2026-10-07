@@ -279,6 +279,38 @@ std::string PathFinder::SaveCheckpoint() const {
 	WaitForPathingRequests();
 	CheckpointWriter writer("PathFinder1");
 	writer(m_NodeDimension, m_Offset, m_GridWidth, m_GridHeight, m_WrapsX, m_WrapsY, m_NodeGrid.size());
+	if (CheckpointWriter::IsCapturing() && CheckpointWriter::BatchEnabled()) {
+		struct NodeState {
+			float x, y;
+			unsigned char navigable;
+			std::array<int64_t, PathNode::c_MaxAdjacentNodeCount> adjacent;
+			std::array<int, PathNode::c_MaxAdjacentNodeCount> material;
+		};
+		std::vector<NodeState> nodes;
+		nodes.reserve(m_NodeGrid.size());
+		for (const PathNode& node: m_NodeGrid) {
+			NodeState saved;
+			saved.x = node.Pos.m_X; saved.y = node.Pos.m_Y;
+			std::memcpy(&saved.navigable, &node.m_Navigable, sizeof(saved.navigable));
+			for (size_t direction = 0; direction < saved.adjacent.size(); ++direction) {
+				const PathNode* adjacent = node.AdjacentNodes[direction];
+				saved.adjacent[direction] = adjacent ? static_cast<int64_t>(adjacent - m_NodeGrid.data()) : int64_t{-1};
+				const Material* material = node.AdjacentNodeBlockingMaterials[direction];
+				saved.material[direction] = material ? static_cast<int>(material->GetIndex()) : -1;
+			}
+			nodes.push_back(saved);
+		}
+		const size_t bytes = sizeof(nodes) + nodes.size() * sizeof(NodeState);
+		writer.AppendFields(CheckpointText::Deferred([nodes = std::move(nodes)] {
+			CheckpointWriter output(CheckpointWriter::FieldsOnly{});
+			for (const NodeState& node: nodes) {
+				output(node.x, node.y, static_cast<unsigned int>(node.navigable));
+				output(node.adjacent, node.material);
+			}
+			return output.Text();
+		}, bytes));
+		return writer.Text();
+	}
 	for (const PathNode& node: m_NodeGrid) {
 		writer(node.Pos, node.m_Navigable);
 		for (const PathNode* adjacent: node.AdjacentNodes) writer(adjacent ? static_cast<int64_t>(adjacent - m_NodeGrid.data()) : int64_t{-1});

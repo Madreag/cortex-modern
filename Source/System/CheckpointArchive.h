@@ -36,8 +36,10 @@ namespace RTE {
 	// Native pointers are deliberately excluded: their owners encode stable graph links.
 	class CheckpointWriter {
 	public:
-		explicit CheckpointWriter(std::string_view version) : m_Recording(IsCapturing()), m_Capture(!(s_Capture && s_Capture->inlineOutput)),
-		    m_Output(s_Capture ? s_Capture->inlineOutput : nullptr) {
+		struct FieldsOnly {};
+		explicit CheckpointWriter(FieldsOnly) : m_Recording(IsCapturing()), m_Capture(!(s_Capture && s_Capture->inlineOutput)),
+		    m_Output(s_Capture ? s_Capture->inlineOutput : nullptr) {}
+		explicit CheckpointWriter(std::string_view version) : CheckpointWriter(FieldsOnly{}) {
 			if (m_Recording && BatchEnabled()) Buffer().String(version); else Value(std::string(version));
 		}
 		const std::string& Text() const {
