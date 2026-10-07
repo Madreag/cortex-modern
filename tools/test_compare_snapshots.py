@@ -532,6 +532,61 @@ class StateBirthNumberTests(unittest.TestCase):
             checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second), lockstep_master=False)
 
 
+class SplitBirthHorizonTests(unittest.TestCase):
+    def make(self, peer, shared=10, ids=(2, 4, 6), callbacks=True):
+        nodes = tuple(table(index, ((string("value"), f"n{value};"),))
+                      for value, index in enumerate(ids))
+        globals = tuple((str(value), f"#{index};") for value, index in enumerate(ids))
+        if callbacks:
+            nodes += (table(1, ((string("liveSerial"), f"n{shared};"),)),)
+            globals += (("_ScriptGraphCallbacks", "#1;"),)
+        return checker.parse_graph(birth_graph("SG7", nodes, globals=globals, serial=peer))
+
+    def compare(self, first, second):
+        return checker.compare_graphs(first, second, lockstep_master=False)
+
+    def test_peer_ai_births_leave_shared_identities_equal(self):
+        first, second = self.make((1 << 36) + 3), self.make((1 << 36) + 31)
+        report = self.compare(first, second)
+        self.assertEqual(report["moved_nodes"], 0)
+        self.assertEqual(report["live_serial"], {"a": 10, "b": 10})
+        with self.assertRaises(checker.GraphMismatch):
+            checker.compare_graphs(first, second)
+
+    def test_shared_offset_uses_shared_horizon_despite_opposite_peer_counts(self):
+        first = self.make((1 << 36) + 31)
+        second = self.make((1 << 36) + 3, shared=16, ids=(8, 10, 12))
+        report = self.compare(first, second)
+        self.assertEqual((report["moved_nodes"], report["identity_offset"]), (3, 6))
+
+    def test_replaced_shared_object_is_still_refused(self):
+        first = self.make((1 << 36) + 3)
+        second = self.make((1 << 36) + 31, shared=17, ids=(8, 10, 13))
+        with self.assertRaisesRegex(checker.GraphMismatch, "birth offset differs"):
+            self.compare(first, second)
+
+    def test_shared_birth_order_is_still_required(self):
+        with self.assertRaisesRegex(checker.GraphMismatch, "birth order differs"):
+            self.compare(self.make((1 << 36) + 3),
+                         self.make((1 << 36) + 31, ids=(4, 2, 6)))
+
+    def test_shared_horizon_is_required(self):
+        for first, second in ((False, False), (True, False)):
+            with self.subTest(callbacks=(first, second)), self.assertRaises(checker.GraphMismatch):
+                self.compare(self.make((1 << 36) + 3, callbacks=first),
+                             self.make((1 << 36) + 31, callbacks=second))
+
+    def test_shared_horizon_cannot_enter_peer_domain(self):
+        with self.assertRaisesRegex(checker.GraphMismatch, "overlap domains"):
+            self.compare(self.make((1 << 36) + 3, shared=1 << 36),
+                         self.make((1 << 36) + 31, shared=1 << 36))
+
+    def test_peer_horizon_cannot_leave_its_domain(self):
+        for serial in (1, (1 << 36) - 1, 1 << 40, (1 << 40) + 1):
+            with self.subTest(serial=serial), self.assertRaisesRegex(ValueError, "SG7 peer birth horizon"):
+                self.make(serial)
+
+
 class RuntimeProjectionTests(unittest.TestCase):
     def assert_field(self, original, field_path, allowed, replacement=999, **kwargs):
         changed = copy.deepcopy(original)

@@ -2700,7 +2700,7 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	return g_ActivityMan.RestoreRuntimeGlobals(in.runtimeGlobals) && restored;
 }
 
-bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, bool* fromAnImage, const std::function<void()>& whileWaiting) const {
+bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, bool* fromAnImage, const std::function<void()>& whileWaiting, std::vector<std::shared_ptr<GraphDirt>>* observations) const {
 	AudioMan::CheckpointRegistryScope captureSounds;
 	LuaCheckpointBarrierPause barrierPause;
 	// A world capture opens the lookups at its fence; a capture of the graphs alone opens its own.
@@ -2747,6 +2747,7 @@ bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::v
 		          << " copy_mapped=" << stats.copyMapped << " copy_idle=" << stats.copyIdle << " shared=" << stats.shared << " shared_mismatches=" << stats.sharedMismatches << std::endl;
 		if (complete) {
 			if (fromAnImage) *fromAnImage = true;
+			if (observations) *observations = std::move(stats.observations);
 			return true;
 		}
 		for (const std::string& problem: frozenProblems) std::cout << "[frozen-graph] fallback: " << problem << std::endl;

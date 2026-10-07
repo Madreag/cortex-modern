@@ -25,6 +25,9 @@
 #include <unordered_map>
 #include <vector>
 #include <optional>
+#include <tuple>
+#include <cstddef>
+#include <algorithm>
 
 namespace RTE {
 

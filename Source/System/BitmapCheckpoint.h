@@ -4,8 +4,25 @@
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <atomic>
 
 namespace RTE {
+	// One world freeze owns one pixel copy per bitmap, including images shared
+	// by many actors. Only the frozen readers use this scope, before they join.
+	class BitmapPixelCaptureScope {
+	public:
+		BitmapPixelCaptureScope();
+		~BitmapPixelCaptureScope();
+		BitmapPixelCaptureScope(const BitmapPixelCaptureScope&) = delete;
+		BitmapPixelCaptureScope& operator=(const BitmapPixelCaptureScope&) = delete;
+		static std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> Capture(
+		    const BITMAP* bitmap, const std::shared_ptr<const BitmapSnapshot>& previous);
+	private:
+		struct State;
+		std::unique_ptr<State> m_State;
+		State* m_Previous;
+		static std::atomic<State*> s_Current;
+	};
 	struct BitmapCheckpoint {
         int width = 0, height = 0, depth = 0;
         int clip = TRUE, clipLeft = 0, clipTop = 0, clipRight = 0, clipBottom = 0;

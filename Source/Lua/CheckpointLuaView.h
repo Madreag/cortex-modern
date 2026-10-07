@@ -3,6 +3,8 @@
 #include "CheckpointLuaHeap.h"
 
 #include <functional>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <unordered_set>
@@ -15,6 +17,107 @@ namespace RTE::CheckpointLua {
 		using Dump = std::function<std::string(const GCproto*)>;
 		View(Snapshot heap, NativeCall native, Dump dump) : m_Heap(std::move(heap)), m_Native(std::move(native)), m_Dump(std::move(dump)) {}
 		const Snapshot& Heap() const { return m_Heap; }
+		std::function<void(const TValue&)> observe;
+		// A persistent saver VM keeps proxy identity, but every read belongs to the
+		// new copied heap. Remove dead/reborn source objects before its weak caches run.
+		void Reset(lua_State* state, Snapshot heap) {
+			m_Heap = std::move(heap); m_Tables.clear(); scratch.clear(); m_InjectTable = nullptr;
+			m_Alive.clear();
+			const auto source = m_Heap.Read(m_Heap.State());
+			const auto globals = m_Heap.Read(mref(source.glref, global_State));
+			for (const GCobj* object = gcref(globals.gc.root); object;) {
+				if (!m_Alive.insert(object).second) throw std::runtime_error("cyclic frozen GC chain");
+				object = gcref(m_Heap.Read(&object->gch.nextgc));
+			}
+			m_Alive.insert(m_Heap.State());
+			if (const GCobj* last = gcref(globals.gc.mmudata)) {
+				const GCobj* object = last;
+				do { object = gcref(m_Heap.Read(&object->gch.nextgc)); m_Alive.insert(object); } while (object != last);
+			}
+			if (m_Proxies == LUA_NOREF) return;
+			lua_rawgeti(state, LUA_REGISTRYINDEX, m_Proxies);
+			lua_pushnil(state);
+			while (lua_next(state, -2)) {
+				const auto* proxy = static_cast<const Proxy*>(lua_touserdata(state, -1));
+				if (!Alive(proxy->value) || SerialOf(proxy->value) != proxy->serial) {
+					lua_pushvalue(state, -2); lua_pushnil(state); lua_rawset(state, -5);
+				}
+				lua_pop(state, 1);
+			}
+			lua_pop(state, 1);
+			lua_gc(state, LUA_GCCOLLECT, 0);
+		}
+		bool Alive(const TValue& value) const {
+			return !tvisgcv(&value) || tvisstr(&value) || (m_Alive.contains(gcval(&value)) &&
+			       m_Heap.Read(&gcval(&value)->gch.gct) == static_cast<uint8_t>(~itype(&value)));
+		}
+		uint64_t SerialOf(const TValue& value) const {
+			if (tvistab(&value)) return m_Heap.Read(tabV(&value)).serial;
+			if (tvisfunc(&value)) return m_Heap.Read(&funcV(&value)->c.serial);
+			if (tvisudata(&value)) return m_Heap.Read(udataV(&value)).serial;
+			if (tvisthread(&value)) return m_Heap.Read(threadV(&value)).serial;
+			return 0;
+		}
+		std::string Token(const TValue& value) const {
+			std::string result = Key(value);
+			if (tvisgcv(&value) && !tvisstr(&value)) {
+				const uint64_t serial = SerialOf(value);
+				result.append(reinterpret_cast<const char*>(&serial), sizeof(serial));
+			}
+			return result;
+		}
+		std::string Fingerprint(const TValue& value) {
+			if (!Alive(value)) return "dead";
+			std::string result = Token(value);
+			if (tvistab(&value)) {
+				const auto table = m_Heap.Read(tabV(&value));
+				TValue meta; setnilV(&meta);
+				if (gcref(table.metatable)) setgcVraw(&meta, gcref(table.metatable), LJ_TTAB);
+				result += Token(meta);
+				std::vector<std::pair<std::string, std::string>> entries;
+				for (const auto& [key, item]: ReadTable(tabV(&value)).entries) entries.emplace_back(Token(key), Token(item));
+				std::sort(entries.begin(), entries.end());
+				for (const auto& [key, item]: entries) {
+					const size_t sizes[] = {key.size(), item.size()};
+					result.append(reinterpret_cast<const char*>(sizes), sizeof(sizes)); result += key; result += item;
+				}
+			} else if (tvisfunc(&value)) {
+				const auto* source = funcV(&value);
+				const auto function = ReadFunction(source);
+				TValue environment; setnilV(&environment);
+				if (gcref(function.c.env)) setgcVraw(&environment, gcref(function.c.env), LJ_TTAB);
+				result += Token(environment);
+				for (int index = 0; index < function.c.nupvalues; ++index) {
+					TValue upvalue;
+					if (isluafunc(&function)) {
+						const auto cell = m_Heap.Read(gco2uv(gcref(m_Heap.Read(&source->l.uvptr[index]))));
+						result.append(reinterpret_cast<const char*>(&cell.serial), sizeof(cell.serial));
+						result.append(reinterpret_cast<const char*>(&cell.closed), sizeof(cell.closed));
+						if (!cell.closed) {
+							const auto slot = mref(cell.v, TValue);
+							result.append(reinterpret_cast<const char*>(&slot), sizeof(slot));
+						}
+						upvalue = cell.closed ? cell.tv : m_Heap.Read(mref(cell.v, TValue));
+					} else upvalue = m_Heap.Read(&source->c.upvalue[index]);
+					const auto token = Token(upvalue); const size_t size = token.size();
+					result.append(reinterpret_cast<const char*>(&size), sizeof(size)); result += token;
+				}
+			} else if (tvisthread(&value)) {
+				// A coroutine has no store barrier. Compare the frozen status,
+				// stack shape and every slot (including frame PCs and traversal
+				// cursors) before reusing any root that reached it.
+				const auto thread = m_Heap.Read(threadV(&value));
+				const TValue* stack = tvref(thread.stack);
+				const ptrdiff_t base = thread.base - stack, top = thread.top - stack;
+				if (base < 0 || top < base || top > thread.stacksize) throw std::runtime_error("invalid frozen coroutine stack");
+				result.append(reinterpret_cast<const char*>(&thread.status), sizeof(thread.status));
+				result.append(reinterpret_cast<const char*>(&base), sizeof(base));
+				result.append(reinterpret_cast<const char*>(&top), sizeof(top));
+				const auto slots = m_Heap.ReadBytes(stack, static_cast<size_t>(top) * sizeof(TValue));
+				result.append(reinterpret_cast<const char*>(slots.data()), slots.size());
+			}
+			return result;
+		}
 		std::unordered_set<const void*> scratch;
 		static const void* ObjectAddress(const TValue& value) {
 			if (tvisudata(&value)) return uddata(udataV(&value));
@@ -29,7 +132,9 @@ namespace RTE::CheckpointLua {
 			const bool ours = lua_rawequal(state, -1, -2) != 0;
 			lua_pop(state, 2);
 			if (!ours) return std::nullopt;
-			return static_cast<Proxy*>(lua_touserdata(state, index))->value;
+			const TValue value = static_cast<Proxy*>(lua_touserdata(state, index))->value;
+			if (observe) observe(value);
+			return value;
 		}
 
 		void Push(lua_State* state, const TValue& value) {
@@ -52,6 +157,7 @@ namespace RTE::CheckpointLua {
 			lua_pop(state, 1);
 			auto* proxy = static_cast<Proxy*>(lua_newuserdata(state, sizeof(Proxy)));
 			proxy->value = value;
+			proxy->serial = SerialOf(value);
 			lua_pushlightuserdata(state, this);
 			lua_rawget(state, LUA_REGISTRYINDEX);
 			lua_setmetatable(state, -2);
@@ -119,7 +225,8 @@ namespace RTE::CheckpointLua {
 		}
 
 	private:
-		struct Proxy { TValue value; };
+		struct Proxy { TValue value; uint64_t serial; };
+		std::unordered_set<const void*> m_Alive;
 		Snapshot m_Heap;
 		NativeCall m_Native;
 		Dump m_Dump;
@@ -158,6 +265,7 @@ namespace RTE::CheckpointLua {
 			return key;
 		}
 		const Table& ReadTable(const GCtab* original) {
+			if (observe) { TValue value; setgcVraw(&value, reinterpret_cast<GCobj*>(const_cast<GCtab*>(original)), LJ_TTAB); observe(value); }
 			if (auto found = m_Tables.find(original); found != m_Tables.end()) return found->second;
 			Table saved;
 			const auto table = m_Heap.Read(original);
@@ -371,7 +479,8 @@ namespace RTE::CheckpointLua {
 			const auto function = view.Function(state, 1);
 			lua_newtable(state);
 			lua_pushstring(state, isluafunc(&function) ? "Lua" : "C"); lua_setfield(state, -2, "what");
-			lua_pushinteger(state, function.c.nupvalues); lua_setfield(state, -2, "nups"); return 1;
+			lua_pushinteger(state, function.c.nupvalues); lua_setfield(state, -2, "nups");
+			lua_pushinteger(state, function.c.ffid); lua_setfield(state, -2, "ffid"); return 1;
 		}
 		const GCupval* UpvalueAddress(lua_State* state, int functionIndex, int number) {
 			const auto value = Value(state, functionIndex);
@@ -433,7 +542,8 @@ namespace RTE::CheckpointLua {
 		static int StateSerial(lua_State* state) { lua_pushnumber(state, static_cast<lua_Number>(Self(state).m_Heap.StateSerial())); return 1; }
 		static int Scratch(lua_State* state) {
 			auto& view = Self(state); auto value = view.Value(state, 1);
-			lua_pushboolean(state, value && (view.scratch.contains(gcval(&*value)) || view.scratch.contains(ObjectAddress(*value)))); return 1;
+			lua_pushboolean(state, value && (view.SerialOf(*value) > (uint64_t{1} << 40) ||
+			    view.scratch.contains(gcval(&*value)) || view.scratch.contains(ObjectAddress(*value)))); return 1;
 		}
 		static int Address(lua_State* state) {
 			auto value = Self(state).Value(state, 1);

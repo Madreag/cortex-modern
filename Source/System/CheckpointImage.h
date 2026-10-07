@@ -94,6 +94,7 @@ namespace RTE {
 		std::vector<std::pair<std::string, int64_t>> globalParts;
 		int64_t layersUs = 0;
 		GraphDirt graph;
+		std::vector<std::shared_ptr<GraphDirt>> frozenGraphObservations;
 		//! The dirt as it stood BEFORE the walk, which is what decided whether the root cache
 		//! engaged; EndWalk clears those counters, so the sample above always reads them as zero.
 		GraphDirt graphBeforeWalk;
@@ -132,6 +133,7 @@ namespace RTE {
 		void RecordWorker(int64_t workerUs);
 		void RecordGraphText(int64_t graphTextUs);
 		void PublishLog(const CheckpointImage& image, int64_t workerUs) const;
+		void RecordFrozenGraph(const CheckpointImage& image);
 		void WriteMetricsJson(const std::string& path) const;
 
 		int64_t LastFreezeUs() const { std::lock_guard lock(m_Mutex); return m_LastFreezeUs; }

@@ -929,7 +929,9 @@ void Actor::SetControllerMode(Controller::InputMode newMode, int newPlayer) {
 	m_Controller.SetPlayer(newPlayer);
 
 	// Under lockstep the sim-facing change lands with the committed frame, which notifies every peer then.
-	if (!m_Controller.IsWireOwned()) {
+	// Reconstructing a saved seat is not a control handoff. Its timer, menu
+	// animation and script callbacks already belong to the saved actor state.
+	if (!m_Controller.IsWireOwned() && !g_MovableMan.IsRestoringSnapshot()) {
 		OnControllerInputModeChanged(previousControllerMode, previousControllingPlayer);
 	}
 }

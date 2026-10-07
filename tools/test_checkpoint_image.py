@@ -358,7 +358,7 @@ def graph_nodes(text: bytes) -> dict:
         value = stripped.split("=", 1)[1].strip()
         index, _, payload = value.partition("|")
         data = base64.b64decode(payload.replace(".", "="), altchars=b"-_", validate=True)
-        header = re.match(rb"SG6;S(\d+);", data)
+        header = re.match(rb"SG[67];S(\d+);", data)
         ids = re.findall(rb"[TUFCHBJ](\d+);", data[data.rfind(b";N"):]) if header else []
         graphs[index] = (int(header[1]) if header else None, [int(item) for item in ids])
     return graphs
@@ -473,7 +473,7 @@ def main() -> int:
     def run_scene(name: str, scenario: str, dirty: bool, extras: list[str], env: dict | None = None) -> dict:
         return launch(
             repo, root / name,
-            ["-scenario", scenario, "-seed", "42", "-max-ticks", str(TICKS), "-scenario-run-past-end", *extras],
+            ["-scenario", scenario, "-seed", "42", "-max-ticks", str(TICKS), "-scenario-run-past-end", "-checkpoint-fixture-prime-scripts", *extras],
             args.timeout,
             env=env,
             prepare=lambda cwd: install_fixture(cwd, dirty_all=dirty),
@@ -545,6 +545,7 @@ def main() -> int:
             install_fixture(cwd, dirty_all=False)
             module = cwd / "Userdata/UserSavedGames.rte"
             module.mkdir(parents=True, exist_ok=True)
+            (module / "Index.ini").write_text("DataModule\n\tModuleName = User Saved Games\n", encoding="utf-8")
             (module / f"{RESTORE_NAME}.ccsave").write_bytes(saved.read_bytes())
 
         reload_run = launch(

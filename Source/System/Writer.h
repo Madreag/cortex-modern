@@ -93,6 +93,7 @@ namespace RTE {
 		explicit CheckpointText(std::string text);
 		const std::string& Text() const;
 		size_t OwnedBytes() const;
+		bool HasPeerRuns() const;
 		bool SameValues(const CheckpointText& other) const;
 		CheckpointText ReuseChildren(const CheckpointText& previous) const;
 		CheckpointText Base64(bool url = true) const;

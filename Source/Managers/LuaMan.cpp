@@ -12,6 +12,7 @@
 #include "LuaThreadCodec.h"
 #include "CheckpointImage.h"
 #include "ScenarioRunner.h"
+#include "SoundSimulation.h"
 #include "AtomGroup.h"
 #include "PieMenu.h"
 #include "PieSlice.h"
@@ -96,6 +97,7 @@ extern "C" {
 #include <optional>
 #include <set>
 #include <sstream>
+#include <system_error>
 #include <thread>
 #include <type_traits>
 #include <typeinfo>
@@ -140,6 +142,55 @@ struct RTE::LuaPathCallbackContext {
 const std::unordered_set<std::string> LuaMan::c_FileAccessModes = {"r", "r+", "w", "w+", "a", "a+", "rt", "wt"};
 
 namespace {
+	constexpr uint64_t c_PeerScriptBirthBand = uint64_t{1} << 36;
+	char s_PeerScriptBirthKey;
+	char s_SharedScriptBirthKey;
+
+	uint64_t ScriptBirthCounter(lua_State* state, const void* key) {
+		lua_pushlightuserdata(state, const_cast<void*>(key));
+		lua_rawget(state, LUA_REGISTRYINDEX);
+		const uint64_t serial = lua_isnumber(state, -1) ? static_cast<uint64_t>(lua_tonumber(state, -1)) : 0;
+		lua_pop(state, 1);
+		return serial;
+	}
+
+	void SetScriptBirthCounter(lua_State* state, const void* key, uint64_t serial) {
+		lua_pushlightuserdata(state, const_cast<void*>(key));
+		if (serial) lua_pushnumber(state, static_cast<lua_Number>(serial));
+		else lua_pushnil(state);
+		lua_rawset(state, LUA_REGISTRYINDEX);
+	}
+
+	uint64_t ScriptGraphBirthHorizon(lua_State* state, uint64_t sharedSerial) {
+		return std::max(sharedSerial, ScriptBirthCounter(state, &s_PeerScriptBirthKey));
+	}
+
+	class ScriptBirthDomainScope {
+	public:
+		ScriptBirthDomainScope(lua_State* state, bool local) : m_State(state), m_Local(local) {
+			const uint64_t current = luaJIT_state_serial(state);
+			m_Changed = local != (current >= c_PeerScriptBirthBand);
+			if (!m_Changed) return;
+			m_Previous = current;
+			if (local) {
+				SetScriptBirthCounter(state, &s_SharedScriptBirthKey, current);
+				luaJIT_set_state_serial(state, std::max(c_PeerScriptBirthBand, ScriptBirthCounter(state, &s_PeerScriptBirthKey)));
+			} else {
+				luaJIT_set_state_serial(state, ScriptBirthCounter(state, &s_SharedScriptBirthKey));
+			}
+		}
+		~ScriptBirthDomainScope() {
+			if (!m_Changed) return;
+			SetScriptBirthCounter(m_State, m_Local ? &s_PeerScriptBirthKey : &s_SharedScriptBirthKey, luaJIT_state_serial(m_State));
+			luaJIT_set_state_serial(m_State, m_Local ? ScriptBirthCounter(m_State, &s_SharedScriptBirthKey) : m_Previous);
+		}
+	private:
+		lua_State* m_State;
+		uint64_t m_Previous = 0;
+		bool m_Local;
+		bool m_Changed = false;
+	};
+
 	// os.time / os.clock replacements returning sim-tick seconds instead of the wall clock.
 	int det_os_time(lua_State* L) {
 		lua_pushnumber(L, static_cast<lua_Number>(g_TimerMan.GetSimUpdateCount()) / 60.0);
@@ -788,8 +839,12 @@ namespace {
 	}
 
 	static int ScriptGraphScratchValue(lua_State* state) {
-		lua_pushboolean(state, s_ScriptGraphScratch && s_ScriptGraphScratch->state == state &&
-		    s_ScriptGraphScratch->values.contains(lua_topointer(state, 1)));
+		// SG7 restores capture-owned nodes with their reserved synthetic IDs. They
+		// remain capture-owned on the next walk, even though this capture did not
+		// allocate them. The reader has already checked this band and its bounds.
+		const bool restoredScratch = luaJIT_value_serial(state, 1) > (uint64_t{1} << 40);
+		lua_pushboolean(state, restoredScratch || (s_ScriptGraphScratch && s_ScriptGraphScratch->state == state &&
+		    s_ScriptGraphScratch->values.contains(lua_topointer(state, 1))));
 		return 1;
 	}
 
@@ -1172,6 +1227,10 @@ if captureNative.keyLabels then
 	for value, id in pairs(captureNative.keyLabels) do keyLabels[value] = id end
 end
 function Graph.captureKeyLabels() return keyLabels end
+function Graph.replaceCaptureKeyLabels(labels)
+	for value in pairs(keyLabels) do keyLabels[value] = nil end
+	for value, id in pairs(labels) do keyLabels[value] = id end
+end
 local liveOwned = setmetatable({}, { __mode = "v" })
 local lastObjects = setmetatable({}, { __mode = "v" })
 local heldObjects
@@ -1269,6 +1328,7 @@ local SEAT_INTERFACE = { ["player-controller"] = true, ["buy-menu"] = true, ["ed
 -- Capture-owned nodes are numbered in walk order in a band of their own above every birth, so the
 -- bytes of an unchanged state do not follow where its birth counter stands.
 local SCRATCH_BAND = 1099511627776
+local PEER_BIRTH_BAND = 68719476736
 
 local function outputNumber(value)
 	return capturing and captureNative.number(value, false) or value
@@ -1446,8 +1506,8 @@ end
 -- Live nodes keep their births; capture-owned nodes take names in walk order.
 local function birthId(ctx, value, what)
 	local id = _ScriptGraphValueSerial(value)
-	-- Capture scratch is born after the horizon, so only a value above it can be scratch.
-	if id > ctx.base and _ScriptGraphScratchValue(value) then
+	-- Native capture helpers allocate in the shared domain, below SG7's peer horizon.
+	if id > ctx.scratchBase and _ScriptGraphScratchValue(value) then
 		ctx.scratch = ctx.scratch + 1
 		ctx.rootUnwatched = ctx.rootUnwatched or "capture scratch"
 		return SCRATCH_BAND + ctx.scratch
@@ -1635,7 +1695,7 @@ local function visitFunction(value, ctx)
 	if info.what == "C" then
 		local range = _ScriptGraphIteratorSnapshot(value)
 		if range then
-			ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "iterator") .. ".cursor")
+			if not _ScriptGraphFrozenDependencies then ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "iterator") .. ".cursor") end
 			id = birthId(ctx, value, "iterator")
 			if not id then return "z;" end
 			ctx.ids[value] = id
@@ -1653,7 +1713,7 @@ local function visitFunction(value, ctx)
 		end
 		for name, prototype in pairs(nativePrototypes) do
 			if _ScriptGraphSameNativeFunction(value, prototype) then
-				ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "native closure") .. ".native_upvalues")
+				if not _ScriptGraphFrozenDependencies then ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "native closure") .. ".native_upvalues") end
 				id = birthId(ctx, value, "native closure")
 				if not id then return "z;" end
 				ctx.ids[value] = id
@@ -1668,7 +1728,7 @@ local function visitFunction(value, ctx)
 			end
 		end
 		if path then return pathToken(path) end
-		problem(ctx, "a native function with no global name")
+		problem(ctx, "a native function with no global name" .. (info.ffid and (" (ffid=" .. info.ffid .. ")") or ""))
 		return "z;"
 	end
 	local ok, code = pcall(function() return capturing and captureNative.bytecode(value) or string.dump(value, "d") end)
@@ -1704,7 +1764,7 @@ local function visitFunction(value, ctx)
 			local open = ctx.openUpvalues[cellKey]
 			if open then
 				-- An open cell lives on a coroutine's stack, which nothing watches.
-				ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "function") .. ".upvalue[" .. name .. "]")
+				if not _ScriptGraphFrozenDependencies then ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "function") .. ".upvalue[" .. name .. "]") end
 				noteNode(ctx, cellId, "C" .. outputNumber(cellId) .. ";O" .. visit(open.thread, ctx) .. "n" .. outputNumber(open.slot) .. ";")
 			else
 				-- A store into a cell reports nothing, so the chunk keys its reuse on the value the cell holds.
@@ -1725,7 +1785,7 @@ local function noteWeakTable(value, ctx)
 	local mode = type(meta) == "table" and rawget(meta, "__mode")
 	if type(mode) == "string" and string.find(mode, "[kv]") then
 		ctx.hasWeakTables = true
-		ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "table") .. ".weak_entries")
+		if not _ScriptGraphFrozenDependencies then ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "table") .. ".weak_entries") end
 	end
 	return meta
 end
@@ -1782,12 +1842,14 @@ local function visitThread(value, ctx)
 		elseif traversal == false then entries[#entries + 1] = "Vz;"
 		else entries[#entries + 1] = "V" .. visitAt(desc.slots[i], ctx, (ctx.location or "coroutine") .. ".slot[" .. i .. "]") end
 	end
-	-- A coroutine's stack slots move with no write barrier behind them, so this chunk is never reused.
-	ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "coroutine") .. ".stack")
+	-- The live index has no stack barrier; the frozen worker compares all stack
+	-- slots before reuse and also records every value this description reaches.
+	if not _ScriptGraphFrozenDependencies then ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "coroutine") .. ".stack") end
 	noteNode(ctx, id, "H" .. outputNumber(id) .. ";" .. letter .. ";" .. outputNumber(desc.first) .. ";" .. outputNumber(desc.base) .. ";" .. outputNumber(desc.top) .. ";" .. concatenate(entries))
 	return reference(ctx, id)
 end
-
+)lua"
+	    R"lua(
 visit = function(value, ctx)
 	local kind = type(value)
 	if kind == "nil" then return "z;"
@@ -1840,7 +1902,9 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		if cache and not samePaths(paths, cache.paths) then cache = nil end
 	end
 	phase("paths")
-	local ctx = { ids = {}, cells = {}, rootCells = {}, nodes = {}, order = {}, defined = {}, refs = {}, chunks = {}, base = base, scratch = 0, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
+	local callbacks = rawget(_G, "_ScriptGraphCallbacks")
+	local scratchBase = base >= PEER_BIRTH_BAND and callbacks and callbacks.liveSerial or base
+	local ctx = { ids = {}, cells = {}, rootCells = {}, nodes = {}, order = {}, defined = {}, refs = {}, chunks = {}, base = base, scratchBase = scratchBase, scratch = 0, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
 	local chunks, rootIds, uids = {}, {}, {}
 	local reused, rewritten, uncacheable = 0, 0, 0
 	local globalReused, globalUnwatched = true, false
@@ -2026,7 +2090,8 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		_ScriptGraphEndCapture()
 		return serializeGraph(roots, true, base)
 	end
-	local out = { "SG6;", "S", outputNumber(base), ";", "r", #rootIds, ";", concatenate(rootIds), "G", #globals, ";", concatenate(globals), "L", #loaded, ";", concatenate(loaded), patches, "R", rng, "X", #gibReferences, ";", concatenate(gibReferences), "N", ctx.count, ";" }
+	local version = base >= PEER_BIRTH_BAND and "SG7;" or "SG6;"
+	local out = { version, "S", outputNumber(base), ";", "r", #rootIds, ";", concatenate(rootIds), "G", #globals, ";", concatenate(globals), "L", #loaded, ";", concatenate(loaded), patches, "R", rng, "X", #gibReferences, ";", concatenate(gibReferences), "N", ctx.count, ";" }
 	for _, text in ipairs(ctx.chunks) do out[#out + 1] = text end
 	for index = tailFirst, #ctx.order do out[#out + 1] = ctx.nodes[ctx.order[index]] end
 	local byId = {}
@@ -2191,9 +2256,9 @@ end
 local function parse(text)
 	local reader = newReader(text)
 	local version = reader:readUntil(";")
-	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" and version ~= "SG5" and version ~= "SG6" then reader:bad("bad header") end
+	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" and version ~= "SG5" and version ~= "SG6" and version ~= "SG7" then reader:bad("unsupported script graph version " .. version) end
 	local graph = { roots = {}, globals = {}, loaded = {}, nodes = {}, order = {}, enginePatches = {}, gibReferences = {}, nativeReferences = {}, version = version }
-	local birthNumbered = version == "SG5" or version == "SG6"
+	local birthNumbered = version == "SG5" or version == "SG6" or version == "SG7"
 	if birthNumbered then
 		reader:expect("S")
 		graph.serial = reader:integer(reader:readUntil(";"), 1)
@@ -2216,7 +2281,7 @@ local function parse(text)
 		for _ = 1, reader:count() do
 			-- Only SG6 ever wrote an engine patch that a reader can apply: the older shape named a
 			-- node holding the pairs, and no archive with one exists.
-			if version ~= "SG6" then reader:bad("engine patch before SG6") end
+			if version ~= "SG6" and version ~= "SG7" then reader:bad("engine patch before SG6") end
 			local target = reader:typed("path")
 			reader:expect("c")
 			local pairsIn = {}
@@ -2934,8 +2999,8 @@ end
 function Graph.roots(text)
 	local reader = newReader(text)
 	local version = reader:readUntil(";")
-	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" and version ~= "SG5" and version ~= "SG6" then error("script graph: bad header") end
-	if version == "SG5" or version == "SG6" then
+	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" and version ~= "SG5" and version ~= "SG6" and version ~= "SG7" then error("script graph: unsupported script graph version " .. version) end
+	if version == "SG5" or version == "SG6" or version == "SG7" then
 		reader:expect("S")
 		reader:readUntil(";")
 	end
@@ -4371,6 +4436,10 @@ static thread_local std::unordered_map<lua_State*, std::vector<std::unique_ptr<L
 static thread_local std::unordered_map<lua_State*, std::vector<std::unique_ptr<ScriptGraphScratchScope>>> s_GraphScratchScopes;
 
 static int ScriptGraphBeginCapture(lua_State* L) {
+	// Graph-only callers can capture before the world snapshot manager installs the write barriers.
+	// Install once here too, before a walk arms any table or native value for later invalidation.
+	static const bool armed = [] { ArmLuaCheckpointBarrier(); return true; }();
+	(void)armed;
 	// The walk the index records is the capture itself, so every caller gets one, nested or not; one
 	// opened by a single state's capture covers that state alone, unless a world walk encloses it.
 	CheckpointGraphIndex::Get().BeginWalk(true, false);
@@ -6214,6 +6283,217 @@ static int ScriptGraphRandomState(lua_State* L) {
 }
 } // namespace
 
+namespace RTE::CheckpointLua {
+	namespace {
+		thread_local lua_State* s_DescriptorState = nullptr;
+		thread_local const std::unordered_set<const void*>* s_DescriptorRoots = nullptr;
+		thread_local const std::unordered_set<const void*>* s_DescriptorFunctions = nullptr;
+
+		struct DescriptorRootScope {
+			lua_State* state;
+			lua_State* previousState = s_DescriptorState;
+			const std::unordered_set<const void*>* previousRoots = s_DescriptorRoots;
+			const std::unordered_set<const void*>* previousFunctions = s_DescriptorFunctions;
+			std::unordered_set<const void*> seen, userdata, functions, opaque;
+			std::unordered_set<const void*> queuedFinalizers;
+			std::vector<TValue> pending;
+			void Queue(const TValue& value) {
+				if (!tvistab(&value) && !tvisfunc(&value) && !tvisudata(&value) && !tvisthread(&value)) return;
+				if (tvisudata(&value)) userdata.insert(gcval(&value));
+				if (tvisfunc(&value)) functions.insert(gcval(&value));
+				const void* pointer = tvisudata(&value) ? uddata(udataV(&value)) : gcval(&value);
+				if (!opaque.contains(pointer) && seen.insert(pointer).second) pending.push_back(value);
+			}
+			void Queue(int index) {
+				if (index < 0) index += lua_gettop(state) + 1;
+				Queue(state->base[index - 1]);
+			}
+			// The saver walks the copied graph. Here only values which that graph can
+			// serialize need answers from live C++; baseline engine symbols are opaque.
+			bool SeedSerializedValues(int originalTop, int roots, const TValue& callbacks) {
+				const int top = lua_gettop(state);
+				lua_getglobal(state, "_ScriptGraphBaseline");
+				const int baseline = lua_gettop(state);
+				if (!lua_istable(state, baseline)) { lua_settop(state, top); return false; }
+				lua_getfield(state, baseline, "paths");
+				const int paths = lua_gettop(state);
+				if (!lua_istable(state, paths)) { lua_settop(state, top); return false; }
+				lua_pushnil(state);
+				while (lua_next(state, paths)) {
+					if (lua_topointer(state, -2)) opaque.insert(lua_topointer(state, -2));
+					if (lua_type(state, -2) == LUA_TUSERDATA) userdata.insert(gcval(&state->top[-2]));
+					lua_pop(state, 1);
+				}
+				for (int index = 1; index <= originalTop; ++index) Queue(index);
+				Queue(roots);
+				copyTV(state, state->top, &callbacks); incr_top(state); Queue(-1); lua_pop(state, 1);
+				lua_getfield(state, baseline, "values");
+				const int values = lua_gettop(state);
+				lua_pushvalue(state, LUA_GLOBALSINDEX);
+				const int globals = lua_gettop(state);
+				lua_pushnil(state);
+				while (lua_next(state, globals)) {
+					const bool named = lua_type(state, -2) == LUA_TSTRING;
+					size_t length = 0;
+					const char* name = named ? lua_tolstring(state, -2, &length) : nullptr;
+					const std::string_view key = name ? std::string_view(name, length) : std::string_view();
+					const bool helper = named && (key.starts_with("_ScriptGraph") || key == "_ScriptedObjects" ||
+						key == "_ScriptFieldsStash" || key == "_G");
+					if (!helper) {
+						if (!named) Queue(-2);
+						// buildPaths asks Members for named userdata, including engine symbols.
+						if (lua_type(state, -1) == LUA_TUSERDATA) Queue(-1);
+						else if (named && lua_istable(state, values)) {
+							lua_pushvalue(state, -2); lua_rawget(state, values);
+							if (!lua_rawequal(state, -1, -2)) Queue(-2);
+							lua_pop(state, 1);
+						} else Queue(-1);
+					}
+					lua_pop(state, 1);
+				}
+				lua_getfield(state, baseline, "tables");
+				const int tables = lua_gettop(state);
+				if (lua_istable(state, tables)) for (int number = 1;; ++number) {
+					lua_rawgeti(state, tables, number);
+					if (lua_isnil(state, -1)) { lua_pop(state, 1); break; }
+					const int saved = lua_gettop(state);
+					lua_getfield(state, saved, "object"); const int object = lua_gettop(state);
+					lua_getfield(state, saved, "entries"); const int entries = lua_gettop(state);
+					lua_getfield(state, saved, "global"); const bool global = lua_toboolean(state, -1); lua_pop(state, 1);
+					if (lua_istable(state, object) && lua_istable(state, entries)) {
+						const auto changes = [&](int from, int other, bool current) {
+							lua_pushnil(state);
+							while (lua_next(state, from)) {
+								const bool carries = !global || lua_type(state, -2) != LUA_TSTRING ||
+									std::string_view(lua_tostring(state, -2)) == "_G";
+								if (carries) {
+									lua_pushvalue(state, -2); lua_rawget(state, other);
+									if (!lua_rawequal(state, -1, -2)) { Queue(-3); Queue(current ? -2 : -1); }
+									lua_pop(state, 1);
+								}
+								lua_pop(state, 1);
+							}
+						};
+						changes(object, entries, true);
+						changes(entries, object, false);
+						if (!lua_getmetatable(state, object)) lua_pushnil(state);
+						lua_getfield(state, saved, "meta");
+						if (!lua_rawequal(state, -1, -2)) Queue(-2);
+						lua_pop(state, 2);
+					}
+					lua_settop(state, saved - 1);
+				}
+				lua_getglobal(state, "package");
+				if (lua_istable(state, -1)) {
+					lua_getfield(state, -1, "loaded");
+					if (lua_istable(state, -1)) {
+						const int loaded = lua_gettop(state);
+						lua_getfield(state, baseline, "loaded"); const int old = lua_gettop(state);
+						lua_pushnil(state);
+						while (lua_next(state, loaded)) {
+							if (lua_type(state, -2) == LUA_TSTRING) {
+								if (lua_istable(state, old)) {
+									lua_pushvalue(state, -2); lua_rawget(state, old);
+									if (!lua_toboolean(state, -1)) Queue(-2);
+									lua_pop(state, 1);
+								} else Queue(-1);
+							}
+							lua_pop(state, 1);
+						}
+					}
+				}
+				lua_settop(state, top);
+				return true;
+			}
+			explicit DescriptorRootScope(lua_State* source, int originalTop, int roots, const TValue& callbacks) : state(source) {
+				if (!lua_checkstack(state, 32)) throw std::runtime_error("native descriptor roots exhausted the Lua stack");
+				seen.reserve(2048);
+				if (GCobj* last = gcref(G(state)->gc.mmudata)) {
+					GCobj* object = last;
+					do {
+						object = gcnext(object);
+						if (object->gch.gct == ~LJ_TUDATA) queuedFinalizers.insert(object);
+					} while (object != last);
+				}
+				const int top = lua_gettop(state);
+				if (!SeedSerializedValues(originalTop, roots, callbacks)) {
+					for (int index = 1; index <= top; ++index) Queue(index);
+					lua_pushvalue(state, LUA_GLOBALSINDEX); Queue(-1); lua_settop(state, top);
+				}
+				while (!pending.empty()) {
+					if (!lua_checkstack(state, 8)) throw std::runtime_error("native descriptor roots exhausted the Lua stack");
+					const TValue value = pending.back(); pending.pop_back();
+					copyTV(state, state->top, &value); incr_top(state);
+					const int index = lua_gettop(state), kind = lua_type(state, index);
+					if (kind == LUA_TTABLE) {
+						// The VM is fenced. Read the same array and live hash entries
+						// directly, without pushing every key and value on its stack.
+						const GCtab* table = tabV(&value);
+						const TValue* array = tvref(table->array);
+						for (MSize item = 0; item < table->asize; ++item) Queue(array[item]);
+						const Node* nodes = noderef(table->node);
+						for (MSize item = 0; item <= table->hmask; ++item) if (!tvisnil(&nodes[item].val)) {
+							Queue(nodes[item].key); Queue(nodes[item].val);
+						}
+					} else if (kind == LUA_TFUNCTION) {
+						const GCfunc* function = funcV(&value);
+						for (MSize upvalue = 0; upvalue < function->c.nupvalues; ++upvalue) {
+							Queue(isluafunc(function) ? *uvval(gco2uv(gcref(function->l.uvptr[upvalue]))) : function->c.upvalue[upvalue]);
+						}
+					} else if (kind == LUA_TUSERDATA) {
+						userdata.insert(gcval(&value));
+						if ((gcval(&value)->gch.marked & LJ_GC_FINALIZED) && !queuedFinalizers.contains(gcval(&value))) {
+							lua_settop(state, top);
+							continue;
+						}
+						if (auto* rep = luabind::detail::is_class_object(state, index)) {
+							if (rep->get_lua_table().is_valid()) { rep->get_lua_table().get(state); Queue(-1); lua_pop(state, 1); }
+							if (rep->get_dependencies().is_valid()) { rep->get_dependencies().get(state); Queue(-1); lua_pop(state, 1); }
+						} else if (luabind::detail::is_class_rep(state, index)) {
+							static_cast<luabind::detail::class_rep*>(lua_touserdata(state, index))->get_table(state);
+							Queue(-1); lua_pop(state, 1);
+						}
+					} else if (lua_State* thread = lua_tothread(state, index); thread && thread != state) {
+						LuaThreadCodec::VisitThreadStack(thread, state, [](lua_State*, void* scope) {
+							static_cast<DescriptorRootScope*>(scope)->Queue(-1); return false;
+						}, this);
+					}
+					// Only functions serialize an environment. A userdata's registry
+					// environment can name the whole binding store, which the graph
+					// does not carry; its instance and dependency tables are above.
+					if (kind == LUA_TFUNCTION) { lua_getfenv(state, index); Queue(-1); lua_pop(state, 1); }
+					if (lua_getmetatable(state, index)) { Queue(-1); lua_pop(state, 1); }
+					lua_settop(state, top);
+				}
+				s_DescriptorState = state;
+				s_DescriptorRoots = &userdata;
+				s_DescriptorFunctions = &functions;
+			}
+			~DescriptorRootScope() { s_DescriptorState = previousState; s_DescriptorRoots = previousRoots; s_DescriptorFunctions = previousFunctions; }
+		};
+	}
+
+	// Heap garbage needs no descriptors; Lua-owned movable objects still receive the ownership check.
+	template<class Visit> requires true
+	void ForEachCapturedUserdata(lua_State* state, Visit visit) {
+		ForEachUserdata(state, false, true, [&](GCudata* data) {
+			if (s_DescriptorState != state || !s_DescriptorRoots || s_DescriptorRoots->contains(data)) { visit(data); return; }
+			const int top = lua_gettop(state);
+			TValue value; setgcVraw(&value, obj2gco(data), LJ_TUDATA);
+			copyTV(state, state->top, &value); incr_top(state);
+			const auto* rep = luabind::detail::is_class_object(state, -1);
+			const bool owned = rep && (rep->flags() & luabind::detail::object_rep::owner) && ClassDerivesFrom(rep->crep(), "MovableObject");
+			lua_settop(state, top);
+			if (owned) visit(data);
+		});
+	}
+	template<class Visit> void ForEachCapturedFunction(lua_State* state, Visit visit) {
+		if (s_DescriptorState == state && s_DescriptorFunctions) {
+			for (const void* address: *s_DescriptorFunctions) visit(static_cast<const GCfunc*>(address));
+		}
+	}
+}
+
 #include "CheckpointLuaGraph.h"
 
 void LuaStateWrapper::LoadScriptGraphHelper() {
@@ -6394,7 +6674,10 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		LuaCheckpointBarrierPause barrierPause;
 		ScriptGraphScratchScope scratch(m_State);
 		auto image = std::make_shared<CheckpointLua::GraphImage>();
-		image->liveSerial = restore.serial;
+		if (!m_GraphWorker) m_GraphWorker = std::make_shared<CheckpointLua::GraphWorker>();
+		image->worker = m_GraphWorker;
+		image->stateIndex = g_LuaMan.GetStateIndex(this);
+		image->liveSerial = ScriptGraphBirthHorizon(m_State, restore.serial);
 		image->rng = CaptureRandomGeneratorCheckpoint();
 		const auto callbacksStarted = std::chrono::steady_clock::now();
 		CaptureScriptCallbacks(restore.serial);
@@ -6436,20 +6719,23 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		if (!m_NativeCache) m_NativeCache = std::make_shared<CheckpointLua::NativeCache>(m_State);
 		std::optional<CaptureTrace::Span> span(std::in_place, "graph_natives", std::to_string(g_LuaMan.GetStateIndex(this)));
 		CheckpointLua::CaptureScope natives(m_State, *m_NativeCache);
+		CheckpointLua::DescriptorRootScope descriptorRoots(m_State, restore.top, roots, image->callbacks);
 		natives.Capture();
 		span.reset();
 		const auto nativeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();
+		image->nativeUs = nativeUs;
 		image->native = natives.Finish(m_State);
 		image->scratch = scratch.values;
 		// The stack and the birth counter go back before the protect; the objects the image names stay as they are until written.
 		restore.Run();
-		// The copy runs off this thread; the gate holds every way into this VM until it lands.
+		// A later VM write saves its page first, so the copy needs no whole-heap wait at VM entry.
 		span.emplace("graph_heap_freeze", std::to_string(g_LuaMan.GetStateIndex(this)));
-		image->heap = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit);
+		image->heap = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit, true);
 		span.reset();
 		const size_t bytes = image->heap.ByteCount();
 		const auto frozenUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 		if (FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats) {
+			stats->observations.push_back(image->observations);
 			++stats->states;
 			stats->nativeUs += nativeUs;
 			stats->heapUs += image->heap.FreezeUs();
@@ -6564,6 +6850,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	bool all = true;
 	for (size_t index = 0; index < order.size(); ++index) {
 		const FrozenCaptureStats& part = parts[index];
+		stats.observations.insert(stats.observations.end(), part.observations.begin(), part.observations.end());
 		stats.states += part.states; stats.nativeUs += part.nativeUs; stats.heapUs += part.heapUs; stats.copyUs += part.copyUs;
 		stats.pages += part.pages; stats.bytes += part.bytes; stats.userdata += part.userdata; stats.cached += part.cached;
 		stats.shared += part.shared; stats.sharedMismatches += part.sharedMismatches;
@@ -6645,7 +6932,7 @@ bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText
 	lua_getglobal(m_State, "_ScriptGraph");
 	lua_getfield(m_State, -1, "serialize");
 	lua_pushvalue(m_State, -3);
-	lua_pushnumber(m_State, static_cast<lua_Number>(captureSerial.value));
+	lua_pushnumber(m_State, static_cast<lua_Number>(ScriptGraphBirthHorizon(m_State, captureSerial.value)));
 	std::unordered_set<const MovableObject*> carried;
 	struct CarriedScope {
 		explicit CarriedScope(std::unordered_set<const MovableObject*>& objects) { s_CarriedScriptOwnedObjects = &objects; }
@@ -6760,6 +7047,7 @@ bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<st
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	// A restore rebinds instance tables, so the answers a frozen capture kept no longer hold.
 	m_NativeCache.reset();
+	m_GraphWorker.reset();
 	ScriptCallbackRootScope callbackRoot{m_State};
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
@@ -6776,6 +7064,14 @@ bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<st
 	}
 	CollectStrings(m_State, -1, problems);
 	const uint64_t horizon = luaJIT_state_serial(m_State);
+	uint64_t peerHorizon = 0;
+	if (text.starts_with("SG7;S")) {
+		const char* first = text.data() + 5;
+		const auto parsed = std::from_chars(first, text.data() + text.size(), peerHorizon);
+		if (parsed.ec != std::errc{} || parsed.ptr == text.data() + text.size() || *parsed.ptr != ';' || peerHorizon < c_PeerScriptBirthBand || peerHorizon >= (uint64_t{1} << 40)) {
+			problems.emplace_back("invalid SG7 peer birth horizon");
+		}
+	}
 	const int roots = lua_gettop(m_State) - 1;
 	// The script receiver is a graph object even when no saved field or coroutine refers to it yet.
 	lua_getglobal(m_State, "_ScriptGraphCallbacks");
@@ -6845,6 +7141,7 @@ bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<st
 	}
 	// The archive's horizon is where the state counts on from, whatever the wiring above allocated.
 	luaJIT_set_state_serial(m_State, horizon);
+	SetScriptBirthCounter(m_State, &s_PeerScriptBirthKey, peerHorizon);
 	// Objects the graph did not carry still hold functions of the cache it replaced; whatever they load now is born past the horizon.
 	RebindScriptFunctionsFromCache(rebound);
 	lua_settop(m_State, top);
@@ -7135,7 +7432,10 @@ void LuaStateWrapper::RestoreScriptCallbacks(std::vector<std::string>& problems,
 			const long uid = lua_isstring(m_State, -2) ? static_cast<long>(std::strtol(lua_tostring(m_State, -2), nullptr, 10)) : 0;
 			MovableObject* mo = g_MovableMan.FindObjectByUniqueID(uid);
 			// Objects outside the world draw their IDs per process, so a record names this object only if it runs the scripts the record does.
-			if (mo && mo->GetLuaState() == this && lua_istable(m_State, -1) && !CallbacksFitScripts(m_State, -1, mo->m_EnabledScripts)) mo = nullptr;
+			if (mo && lua_istable(m_State, -1) && !CallbacksFitScripts(m_State, -1, mo->m_EnabledScripts)) mo = nullptr;
+			// An owned object whose scripts have not run has callbacks but no instance root. Its restored
+			// ID can choose a different provisional VM; the callback record names the saved VM instead.
+			if (mo && lua_istable(m_State, -1) && mo->GetLuaState() != this && !mo->ObjectScriptsInitialized()) mo->MoveScriptsToState(*this);
 			if (mo && mo->GetLuaState() == this && lua_istable(m_State, -1)) {
 				if (rebound) rebound->insert(mo);
 				mo->m_FunctionsAndScripts.clear();
@@ -7335,6 +7635,7 @@ PreviewWindowCreateFunctionsForType(Scene);
 
 void LuaStateWrapper::Initialize() {
 	m_NativeCache.reset();
+	m_GraphWorker.reset();
 	m_CheckpointHeap = CheckpointLua::HeapOwner::Create();
 	m_State = m_CheckpointHeap->State();
 	luabind::open(m_State);
@@ -7647,6 +7948,7 @@ void LuaStateWrapper::Destroy() {
 	// A wrapper destructed anywhere queues its luabind object, and deleting that object unrefs a
 	// registry slot of the state it lives in. Anything still queued for this state has to go now.
 	m_NativeCache.reset();
+	m_GraphWorker.reset();
 	LuabindObjectWrapper::DrainQueuedDeletionsBeforeStateClose(m_State);
 	m_CheckpointHeap.reset();
 	m_State = nullptr;
@@ -8570,6 +8872,57 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
 	{
+		lua_State* first = luaL_newstate();
+		lua_State* second = luaL_newstate();
+		const auto sharedBirth = [](lua_State* state, int localCount) {
+			{
+				ScriptBirthDomainScope local(state, true);
+				for (int index = 0; index < localCount; ++index) { lua_newtable(state); lua_pop(state, 1); }
+			}
+			lua_newtable(state);
+			const uint64_t serial = luaJIT_value_serial(state, -1);
+			lua_pop(state, 1);
+			return serial;
+		};
+		const uint64_t beforeFirst = luaJIT_state_serial(first);
+		const uint64_t beforeSecond = luaJIT_state_serial(second);
+		const uint64_t birthFirst = sharedBirth(first, 3);
+		const uint64_t birthSecond = sharedBirth(second, 31);
+		const bool separate = beforeFirst == beforeSecond && birthFirst == birthSecond &&
+			ScriptBirthCounter(first, &s_PeerScriptBirthKey) != ScriptBirthCounter(second, &s_PeerScriptBirthKey) &&
+			ScriptGraphBirthHorizon(first, birthFirst) >= c_PeerScriptBirthBand;
+		std::cout << "[script-graph-selftest] " << (separate ? "PASS" : "FAIL") << " shared_births_survive_unequal_local_ai_allocations" << std::endl;
+		checkpointValues = separate && checkpointValues;
+		lua_close(first);
+		lua_close(second);
+	}
+	{
+		LuaStateWrapper domainState;
+		domainState.Initialize();
+		bool planted = false;
+		{
+			ScriptBirthDomainScope local(domainState.GetLuaState(), true);
+			planted = domainState.RunScriptString("_PeerBirthProbe = { position = Vector(3, 7) }") == 0;
+		}
+		std::string saved, restored;
+		CheckpointText frozen;
+		std::vector<std::string> problems;
+		const bool captured = planted && domainState.SerializeScriptGraph(saved, problems) && domainState.CaptureScriptGraph(frozen, problems, true);
+		{
+			ScriptBirthDomainScope local(domainState.GetLuaState(), true);
+			domainState.RunScriptString("_PeerBirthProbe.position = Vector(11, 13)");
+		}
+		const bool roundtrip = captured && saved.starts_with("SG7;") && saved == frozen.Text() && domainState.RestoreScriptGraph(saved, problems) && domainState.SerializeScriptGraph(restored, problems) && saved == restored;
+		std::cout << "[script-graph-selftest] " << (roundtrip ? "PASS" : "FAIL") << " sg7_peer_birth_horizon_roundtrip" << std::endl;
+		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] SG7: " << problem << std::endl;
+		checkpointValues = roundtrip && checkpointValues;
+		std::vector<std::string> refused;
+		const bool accepted = domainState.RestoreScriptGraph("SG8;", refused);
+		const bool named = !accepted && std::any_of(refused.begin(), refused.end(), [](const std::string& problem) { return problem.find("unsupported script graph version SG8") != std::string::npos; });
+		std::cout << "[script-graph-selftest] " << (named ? "PASS" : "FAIL") << " unknown_script_graph_version_refused_by_name" << std::endl;
+		checkpointValues = named && checkpointValues;
+	}
+	{
 		const uint64_t serialBefore = luaJIT_state_serial(m_State);
 		std::string first, repeated;
 		CheckpointText image;
@@ -8999,6 +9352,64 @@ end
 		std::cout << "[script-graph-selftest] " << (gated ? "PASS" : "FAIL") << " a_state_entered_during_its_page_copy_waits_for_it image_held="
 		          << imageHeld << " live_written=" << liveWritten << " entry_waited_ms=" << waitedMs << std::endl;
 		checkpointValues = gated && checkpointValues;
+	}
+
+	if (m_CheckpointHeap) {
+		RunScriptString("_ScriptGraphCowProbe = {} for index = 1, 4096 do _ScriptGraphCowProbe[index] = index end");
+		lua_getglobal(m_State, "_ScriptGraphCowProbe");
+		const auto* table = static_cast<const GCtab*>(lua_topointer(m_State, -1));
+		lua_pop(m_State, 1);
+		const TValue* array = table ? tvref(table->array) : nullptr;
+		const size_t bytes = table ? table->asize * sizeof(TValue) : 0;
+		std::vector<std::byte> before(bytes);
+		if (bytes) std::memcpy(before.data(), array, bytes);
+		std::optional<std::packaged_task<void()>> queued;
+		const auto defer = [&](std::function<void()> copy) {
+			queued.emplace(std::move(copy));
+			return queued->get_future();
+		};
+		CheckpointLua::Snapshot frozen;
+		{
+			std::lock_guard<std::recursive_mutex> lock(GetMutex());
+			frozen = m_CheckpointHeap->Freeze(defer, true);
+		}
+		const int64_t beforeWait = CheckpointLua::HeapOwner::ThisThreadGateWaitMicroseconds();
+		// The copy is deliberately not running; VM writes must finish before that task can start.
+		const int changed = RunScriptString("for index = 1, 4096 do _ScriptGraphCowProbe[index] = -index end local t = {} for i = 1, 4096 do t[i] = tostring(i) end");
+		const bool pendingDuringWrite = m_CheckpointHeap->CopyPending();
+		const int64_t entryWait = CheckpointLua::HeapOwner::ThisThreadGateWaitMicroseconds() - beforeWait;
+		std::vector<std::byte> changedBytes(bytes);
+		if (bytes) std::memcpy(changedBytes.data(), array, bytes);
+		std::optional<std::packaged_task<void()>> queuedSecond;
+		CheckpointLua::Snapshot secondFrozen;
+		{
+			std::lock_guard<std::recursive_mutex> lock(GetMutex());
+			secondFrozen = m_CheckpointHeap->Freeze([&](std::function<void()> copy) {
+				queuedSecond.emplace(std::move(copy));
+				return queuedSecond->get_future();
+			}, true);
+		}
+		const int64_t nextFreezeWait = CheckpointLua::HeapOwner::ThisThreadGateWaitMicroseconds() - beforeWait;
+		const int changedAgain = RunScriptString("for index = 1, 4096 do _ScriptGraphCowProbe[index] = index * 2 end collectgarbage('step', 200)");
+
+		if (queued) (*queued)();
+		if (queuedSecond) (*queuedSecond)();
+		bool imageHeld = false, secondImageHeld = false, liveWritten = false;
+		try {
+			const auto image = frozen.ReadBytes(array, bytes);
+			imageHeld = bytes > 0 && image.size() == bytes && std::memcmp(image.data(), before.data(), bytes) == 0;
+			const auto secondImage = secondFrozen.ReadBytes(array, bytes);
+			secondImageHeld = bytes > 0 && secondImage.size() == bytes && std::memcmp(secondImage.data(), changedBytes.data(), bytes) == 0;
+			liveWritten = bytes > 0 && std::memcmp(array, before.data(), bytes) != 0 && std::memcmp(array, changedBytes.data(), bytes) != 0;
+		} catch (const std::exception& error) {
+			std::cout << "[script-graph-selftest] page copy probe: " << error.what() << std::endl;
+		}
+		RunScriptString("_ScriptGraphCowProbe = nil");
+		const bool held = changed == 0 && changedAgain == 0 && imageHeld && secondImageHeld && liveWritten && pendingDuringWrite && entryWait == 0 && nextFreezeWait == 0 && frozen.FaultCount() > 0 && secondFrozen.FaultCount() > 0;
+		std::cout << "[script-graph-selftest] " << (held ? "PASS" : "FAIL") << " a_checkpoint_copy_preserves_pages_without_waiting_at_vm_entry image_held="
+		          << imageHeld << " live_written=" << liveWritten << " copy_still_queued=" << pendingDuringWrite << " entry_wait_us=" << entryWait << " next_freeze_wait_us=" << nextFreezeWait << " second_image_held=" << secondImageHeld
+		          << " faults=" << frozen.FaultCount() << "," << secondFrozen.FaultCount() << std::endl;
+		checkpointValues = held && checkpointValues;
 	}
 
 	if (m_CheckpointHeap) {
@@ -12045,6 +12456,9 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 	int status = 0;
 
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
+	// Peer AI births do not advance the shared script identity sequence.
+	std::optional<ScriptBirthDomainScope> birthDomain;
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) birthDomain.emplace(m_State, SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation);
 	s_currentLuaState = this;
 	m_CurrentlyRunningScriptPath = functionObject->GetFilePath();
 
@@ -13025,7 +13439,15 @@ void LuaMan::ClearScriptTimings() {
 }
 
 void LuaStateWrapper::DiscardStashedScriptObject(long uniqueID) {
-	RunScriptString("if _ScriptFieldsStash then _ScriptFieldsStash[\"" + std::to_string(uniqueID) + "\"] = nil; end");
+	// Retiring a held world must not compile a cleanup chunk into the restored world's birth sequence.
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
+	lua_getglobal(m_State, "_ScriptFieldsStash");
+	if (lua_istable(m_State, -1)) {
+		lua_pushstring(m_State, std::to_string(uniqueID).c_str());
+		lua_pushnil(m_State);
+		lua_rawset(m_State, -3);
+	}
+	lua_pop(m_State, 1);
 }
 
 // Read in place: the walk never allocates, runs Lua or reaches a metamethod.

@@ -8974,8 +8974,19 @@ namespace RTE {
 				slowestStartupMs = std::max(slowestStartupMs, park);
 			}
 		}
-		const uint64_t startupFrames = m_Config.simTickMs > 0
+		const uint64_t measuredStartupFrames = m_Config.simTickMs > 0
 			? static_cast<uint64_t>(std::ceil(static_cast<double>(slowestStartupMs) / m_Config.simTickMs)) : 0;
+		uint64_t startupFrames = measuredStartupFrames;
+		// An autosave on/off control needs the same input schedule; the measured startup remains the lower bound.
+		if (!m_Config.resumeFromSnapshot) if (const char* control = std::getenv("CC_TEST_AUTOSAVE_STARTUP_MIN_FRAMES")) {
+			uint64_t minimum = 0;
+			const auto parsed = std::from_chars(control, control + std::strlen(control), minimum);
+			if (parsed.ec == std::errc{} && *parsed.ptr == '\0' && minimum > 0 && minimum <= 4096) {
+				startupFrames = std::max(startupFrames, minimum);
+				DiagnosticLine() << "[autosave-input-control] minimum_frames=" << minimum << " measured_startup_frames=" << measuredStartupFrames
+				                 << " agreed_first_frame=" << m_Config.startFrame + startupFrames << std::endl;
+			}
+		}
 		NetLockstepStart record;
 		record.sessionId = m_Config.sessionId;
 		record.startFrame = m_Config.startFrame;

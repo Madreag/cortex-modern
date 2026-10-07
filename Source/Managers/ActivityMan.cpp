@@ -6,6 +6,7 @@
 #include "GUIInput.h"
 #include "GUISound.h"
 #include "CheckpointArchive.h"
+#include "BitmapCheckpoint.h"
 #include "NetIdentity.h"
 #include "LuaMan.h"
 #include "Base64/base64.h"
@@ -90,11 +91,15 @@
 #include <fstream>
 #include <iterator>
 #include <mutex>
+#include <memory>
+#include <new>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -410,6 +415,32 @@ namespace {
 
 	CheckpointText AssembleOwnedSave(const CheckpointImage& image) { return AssembleCheckpointSave(image); }
 	CheckpointText AssembleOwnedIndex(const CheckpointImage& image) { return AssembleCheckpointIndex(image); }
+
+	// The archive's scene label and the live scene's preset identity are different:
+	// SceneRuntime restores the latter. Keep the former with the restored scene's
+	// lifetime, including its checkpoint clones, without changing its reflected type.
+	class ArchiveScene final : public Scene {
+	public:
+		std::string archiveName;
+		static void* operator new(size_t size) { return ::operator new(size); }
+		static void operator delete(void* value) { ::operator delete(value); }
+		Entity* Clone(Entity* cloneTo = nullptr) const override {
+			if (cloneTo) {
+				Entity* result = Scene::Clone(cloneTo);
+				if (auto* scene = dynamic_cast<ArchiveScene*>(result)) scene->archiveName = archiveName;
+				return result;
+			}
+			auto result = std::make_unique<ArchiveScene>();
+			if (result->Create(*this) < 0) throw std::runtime_error("could not clone restored archive scene");
+			result->archiveName = archiveName;
+			return result.release();
+		}
+	};
+
+	const std::string& SceneArchiveName(const Scene* scene, const std::string& fileName) {
+		const auto* saved = dynamic_cast<const ArchiveScene*>(scene);
+		return saved && !saved->archiveName.empty() ? saved->archiveName : fileName;
+	}
 
 	void WriteCheckpointArchive(const std::string& fileName, const std::filesystem::path& savePath, int zipLevel,
 	                            const std::string& matchId, std::string_view mainText, std::string_view indexText,
@@ -751,6 +782,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	AudioMan::SoundCheckpointSaveScope carriedSounds(false);
 	ContentFile::LoadedBitmapIndexScope bitmapIndex;
 	const uint64_t liveSoundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+	BitmapPixelCaptureScope pixels;
 	auto& cow = CheckpointCow::Get();
 	cow.BeginImage();
 	CheckpointWriter::CacheScope cache(&cow.Cache());
@@ -820,7 +852,9 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// Elapsed timer fields change even when their object's write stamp holds, so the scene keeps a cache of its own.
 	captureAside("scene", {}, [&] {
 		const auto sceneStart = std::chrono::steady_clock::now();
-		image->scene = scene->CaptureSavedScene(fileName);
+		// A loaded archive already gave its scene and terrain a saved identity. A new
+		// storage filename must not replace that identity when the same world is saved again.
+		image->scene = scene->CaptureSavedScene(SceneArchiveName(scene, fileName));
 		image->movableUs = Scene::LastObjectCaptureUs();
 		image->sceneUs = since(sceneStart);
 	}, sceneCache.get());
@@ -897,7 +931,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		image->luaReused = true;
 		image->graphs = cow.LastLua();
 	} else {
-		if (!g_MovableMan.CaptureScriptGraphs(image->graphs, problems, &frozenGraphs, readAudio)) {
+		if (!g_MovableMan.CaptureScriptGraphs(image->graphs, problems, &frozenGraphs, readAudio, &image->frozenGraphObservations)) {
 			if (fullStateOnly) {
 				System::PrintDiagnosticLine(std::format("[fullstate] tick={} refused: {}", tick, problems.empty() ? "no reason" : problems.front()));
 				return false;
@@ -1149,6 +1183,17 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			const char* metrics = std::getenv("CCCP_CHECKPOINT_METRICS");
 			const std::string metricsPath = metrics && *metrics ? std::string(metrics) : System::GetWorkingDirectory() + "Autosaves/checkpoint-metrics.json";
 			// Timed after the last of the work, so the number is the whole task.
+			if (!image->frozenGraphObservations.empty()) {
+				image->graph = {};
+				for (const auto& stats: image->frozenGraphObservations) {
+					image->graph.roots += stats->roots; image->graph.tables += stats->tables; image->graph.values += stats->values;
+					image->graph.rootsReused += stats->rootsReused; image->graph.rootsRewritten += stats->rootsRewritten;
+					image->graph.uncacheableRoots += stats->uncacheableRoots;
+					image->graph.walkParts.insert(image->graph.walkParts.end(), stats->walkParts.begin(), stats->walkParts.end());
+				}
+				image->graphRootsReused = image->graph.rootsReused; image->graphRootsRewritten = image->graph.rootsRewritten;
+				CheckpointCow::Get().RecordFrozenGraph(*image);
+			}
 			const int64_t workerUs = sinceStart();
 			CheckpointCow::Get().RecordWorker(workerUs);
 			CheckpointCow::Get().PublishLog(*image, workerUs);
@@ -1158,6 +1203,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		} catch (const ScriptGraphRefusal& refusal) {
 			CheckpointCow::Get().RecordWorker(sinceStart());
 			System::PrintDiagnosticLine("[autosave] failed tick=" + std::to_string(tick) + " reason=capture refused\n");
+			for (const std::string& problem: refusal.problems) System::PrintDiagnosticLine("[autosave] refusal: " + problem + "\n");
 			QueueDeferredSaveRefusal(kind, refusal.problems);
 			if (automatic) NoteAutosaveVerdict(tick, false);
 			image.reset();
@@ -1271,7 +1317,7 @@ bool ActivityMan::RunCheckpointCaptureSelfTest(uint64_t tick) {
 		std::vector<std::string> graphs, problems;
 		if (!g_MovableMan.SerializeScriptGraphs(graphs, problems)) throw std::runtime_error(problems.empty() ? "synchronous graph refused" : problems.front());
 		for (auto& graph: graphs) synchronous.graphs.emplace_back(std::move(graph));
-		synchronous.scene = write([&](Writer& writer) { scene->SaveSavedScene(writer, fileName); });
+		synchronous.scene = write([&](Writer& writer) { scene->SaveSavedScene(writer, SceneArchiveName(scene, fileName)); });
 		g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
 		g_SimRNG = sim; g_RenderRNG = render;
 		MovableObject::PinUniqueIDCounter(uid);
@@ -2270,6 +2316,13 @@ bool ActivityMan::RestartActivityCandidate() {
 		g_TimerMan.RewindSimTo(m_PendingCheckpoint.simUpdateCount, m_PendingCheckpoint.simTimeTicks);
 	}
 	g_MovableMan.SetRestoringSnapshot(restoresSnapshot);
+	if (restoresSnapshot && m_PendingCheckpoint.scene && m_PendingCheckpoint.scene->GetTerrain()) {
+		auto saved = std::make_unique<ArchiveScene>();
+		if (saved->Create(*m_PendingCheckpoint.scene) < 0) throw std::runtime_error("could not stage saved scene identity");
+		saved->archiveName = m_PendingCheckpoint.scene->GetTerrain()->GetPresetName();
+		m_PendingCheckpoint.scene = std::move(saved);
+		g_SceneMan.SetSceneToLoad(m_PendingCheckpoint.scene.get(), true, true);
+	}
 
 	// TODO: Deal with GUI resetting here!$@#") // Figure out what the hell this is about.
 
@@ -2289,6 +2342,11 @@ bool ActivityMan::RestartActivityCandidate() {
 	}
 	if (restoresSnapshot && activityStarted >= 0 && !m_PendingCheckpoint.sceneRuntime.empty() && (!g_SceneMan.GetScene() || !g_SceneMan.GetScene()->LoadRuntimeCheckpoint(m_PendingCheckpoint.sceneRuntime))) {
 		g_ConsoleMan.PrintString("ERROR: the saved scene runtime did not restore"); activityStarted = -1;
+	}
+	if (restoresSnapshot && activityStarted >= 0 && !m_LockstepRelaunchInProgress && !m_PendingCheckpoint.sceneRuntime.empty()) {
+		// An ordinary load keeps the checkpoint's own seats and views. Only a network
+		// relaunch maps them to the live roster; StartActivity's provisional map is discarded.
+		m_Activity->ClearPlayers(false);
 	}
 	if (restoresSnapshot && activityStarted >= 0 && !m_Activity->ApplyPendingCheckpoint()) {
 		g_ConsoleMan.PrintString("ERROR: the saved activity runtime state did not restore");

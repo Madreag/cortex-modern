@@ -36,6 +36,7 @@
 #define g_MovableMan MovableMan::Instance()
 
 namespace RTE {
+	struct GraphDirt;
 	struct PrimitiveQueuesSetAside;
 
 	struct ControllerFrame;
@@ -298,7 +299,7 @@ namespace RTE {
 
 		/// Every Lua state's script graph, by state index; false with the reasons when a state could not be carried faithfully.
 		bool SerializeScriptGraphs(std::vector<std::string>& graphs, std::vector<std::string>& problems) const;
-		bool CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, bool* fromAnImage = nullptr, const std::function<void()>& whileWaiting = {}) const;
+		bool CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, bool* fromAnImage = nullptr, const std::function<void()>& whileWaiting = {}, std::vector<std::shared_ptr<GraphDirt>>* observations = nullptr) const;
 
 		/// The last script graph failure a set-aside recorded, empty when none.
 		const std::string& GetScriptGraphFailure() const { return m_ScriptGraphFailure; }

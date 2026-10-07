@@ -141,13 +141,15 @@ def graph_references(value):
 def parse_graph(data):
     reader = GraphReader(data)
     version = reader.until()
-    if version not in ("SG1", "SG2", "SG3", "SG4", "SG5", "SG6"):
+    if version not in ("SG1", "SG2", "SG3", "SG4", "SG5", "SG6", "SG7"):
         raise ValueError(f"unsupported graph version {version!r}")
     graph = {"version": version}
     serial = None
-    if version in ("SG5", "SG6"):
+    if version in ("SG5", "SG6", "SG7"):
         reader.expect("S")
         serial = reader.integer(minimum=1)
+        if version == "SG7" and not (1 << 36) <= serial < SCRATCH_BAND:
+            raise ValueError("invalid SG7 peer birth horizon")
     for tag, label in (("r", "roots"), ("G", "globals"), ("L", "loaded")):
         reader.expect(tag)
         entries = {}
@@ -162,7 +164,7 @@ def parse_graph(data):
         patches = []
         for _ in range(reader.count()):
             target = reader.token()
-            if version == "SG6":
+            if version in ("SG6", "SG7"):
                 # SG6 carries the changed pairs in the patch itself; the list that held them is not a node.
                 reader.expect("c")
                 pairs = [(reader.token(), reader.token()) for _ in range(reader.count())]
@@ -170,7 +172,7 @@ def parse_graph(data):
             else:
                 patches.append((target, reader.token(), reader.token()))
         graph["patches"] = patches
-    if version in ("SG3", "SG4", "SG5", "SG6"):
+    if version in ("SG3", "SG4", "SG5", "SG6", "SG7"):
         reader.expect("R")
         graph["rng"] = reader.token()
     if reader.peek() == "X":
@@ -187,7 +189,7 @@ def parse_graph(data):
     for expected in range(1, count + 1):
         kind, index = reader.char(), reader.integer(minimum=1)
         # SG6 numbers a capture-owned node in the scratch band above every birth, at most one per node.
-        if index > limit and not (version == "SG6" and SCRATCH_BAND < index <= SCRATCH_BAND + count):
+        if index > limit and not (version in ("SG6", "SG7") and SCRATCH_BAND < index <= SCRATCH_BAND + count):
             raise ValueError("graph node ID out of range")
         if serial is None:
             if index != expected:
@@ -453,7 +455,7 @@ def compare_graphs(first, second, actor_uids=None, cross_process=False, lockstep
         first, second = masked_timer_tokens(first), masked_timer_tokens(second)
     # A threaded state's live birth horizon is its local counter, checked with the serial below; the master's stays in the walk.
     live = (None, None)
-    if not lockstep_master and first.get("version") == "SG6" and second.get("version") == "SG6":
+    if not lockstep_master and first.get("version") in ("SG6", "SG7") and first.get("version") == second.get("version"):
         (first, live_a), (second, live_b) = without_live_serial(first), without_live_serial(second)
         live = (live_a, live_b)
     cuts = [local_ai_boundaries(graph, actor_uids) if actor_uids is not None else {} for graph in (first, second)]
@@ -561,8 +563,8 @@ def compare_graphs(first, second, actor_uids=None, cross_process=False, lockstep
     b = {key: value for key, value in second.items() if key not in ("nodes", "serial")}
     mapping, _, _ = solve([(a, b, "graph")], [], {}, {}, set())
     report = {"matched_nodes": len(mapping), "local_ai_boundaries": len(cuts[0])}
-    # SG6 is the only birth-numbered archive the engine writes; SG5 was never released.
-    if first.get("version") == "SG6" and first.get("version") == second.get("version"):
+    # SG6 and SG7 carry birth identities; SG7 separates peer and shared horizons.
+    if first.get("version") in ("SG6", "SG7") and first.get("version") == second.get("version"):
         report["serial"] = {"a": first["serial"], "b": second["serial"]}
         report["lockstep_master"] = lockstep_master
         moved = sorted((left, right) for left, right in mapping.items() if left != right)
@@ -587,6 +589,10 @@ def compare_graphs(first, second, actor_uids=None, cross_process=False, lockstep
                 raise GraphMismatch(
                     "a shared Lua object was replaced on one peer (its birth offset differs from the others)")
             serial_offset = second["serial"] - first["serial"]
+            if first["version"] == "SG7":
+                if live[0] is None or live[1] is None:
+                    raise GraphMismatch("SG7 is missing the shared birth horizon")
+                serial_offset = live[1] - live[0]
             if offset * serial_offset < 0:
                 raise GraphMismatch(
                     "shared Lua birth offset opposes the state counters: "
@@ -599,6 +605,8 @@ def compare_graphs(first, second, actor_uids=None, cross_process=False, lockstep
                 for horizon, serial in ((live[0], first["serial"]), (live[1], second["serial"])):
                     if not 1 <= horizon <= serial:
                         raise GraphMismatch(f"live birth horizon {horizon} lies outside the state counter {serial}")
+                if first["version"] == "SG7" and any(horizon >= (1 << 36) or serial < (1 << 36) for horizon, serial in ((live[0], first["serial"]), (live[1], second["serial"]))):
+                    raise GraphMismatch("SG7 birth horizons overlap domains")
                 if (live[1] - live[0]) * serial_offset < 0 or (live[1] != live[0] and serial_offset == 0):
                     raise GraphMismatch(
                         "live birth horizon offset opposes the state counters: "

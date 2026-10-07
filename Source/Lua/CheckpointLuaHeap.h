@@ -9,6 +9,7 @@ extern "C" {
 }
 
 #include "CaptureSentinel.h"
+#include "PageWriteFence.h"
 
 #include <algorithm>
 #include <atomic>
@@ -56,6 +57,11 @@ namespace RTE::CheckpointLua {
 		int64_t landedUs = 0;
 	};
 
+	struct CopyFaultStats {
+		std::atomic<size_t> count{0};
+		std::atomic<int64_t> us{0};
+	};
+
 	// The VM's memory at one freeze: a copy of every committed page. Addresses identify the source VM; only the copy is read.
 	class Snapshot {
 	public:
@@ -69,9 +75,9 @@ namespace RTE::CheckpointLua {
 		size_t BlockCount() const { return m_Data ? m_Data->copied.load(std::memory_order_relaxed) : 0; }
 		int64_t FreezeUs() const { return m_Data ? m_Data->freezeUs : 0; }
 		int64_t CopyUs() const { return m_Data ? m_Data->copyUs.load(std::memory_order_relaxed) : 0; }
-		size_t FaultCount() const { return 0; }
-		size_t PreviousFaults() const { return 0; }
-		int64_t PreviousFaultUs() const { return 0; }
+		size_t FaultCount() const { return m_Data && m_Data->faults ? m_Data->faults->count.load(std::memory_order_relaxed) : 0; }
+		size_t PreviousFaults() const { return m_Data ? m_Data->previousFaults : 0; }
+		int64_t PreviousFaultUs() const { return m_Data ? m_Data->previousFaultUs : 0; }
 
 		template<class T> T Read(const T* address) const {
 			static_assert(std::is_trivially_copyable_v<T>);
@@ -117,6 +123,9 @@ namespace RTE::CheckpointLua {
 			std::atomic<size_t> copied{0};
 			int64_t freezeUs = 0;
 			std::atomic<int64_t> copyUs{0};
+			std::shared_ptr<CopyFaultStats> faults;
+			size_t previousFaults = 0;
+			int64_t previousFaultUs = 0;
 			std::shared_ptr<const void> buffer; // Keeps the copy mapped.
 			const Page* pages = nullptr; // One per committed page, in order.
 			std::shared_future<void> ready; // Set only when a freeze was given somewhere to run its copy.
@@ -195,7 +204,10 @@ namespace RTE::CheckpointLua {
 		}
 
 		~HeapOwner() {
-			WaitCopy();
+			WaitCopy(true);
+			PageWriteFence::UnwatchCopies(this);
+			m_CowCopy.reset();
+			m_CowCoordinator.reset();
 			// From here a buffer released anywhere, by a snapshot that outlives this heap too, unmaps itself.
 			{
 				std::lock_guard lock(RegistryMutex());
@@ -235,47 +247,107 @@ namespace RTE::CheckpointLua {
 
 		using Submit = std::function<std::future<void>(std::function<void()>)>;
 
-		// With a Submit the freeze only fixes the instant and the copy runs there: no VM may run until it lands,
-		// and every way into this VM waits for it at the gate (WaitCopy, from the state's lock and from the
-		// allocator), so the copy never needs the VM's own lock. Without a Submit the copy runs here, on the caller's thread.
-		Snapshot Freeze(const Submit& submit) {
+		// The default gate holds VM entry until the submitted copy lands. A checkpoint's page fence instead
+		// saves a page before its next write; without a Submit either copy runs here.
+		Snapshot Freeze(const Submit& submit, bool copyOnWrite = false) {
 			const auto started = std::chrono::steady_clock::now();
 			if (!m_State) throw std::runtime_error("a Lua heap capture has no state");
 			void* allocatorData = nullptr;
 			if (lua_getallocf(m_State, &allocatorData) != &Allocate || allocatorData != this)
 				throw std::runtime_error("the Lua heap allocator changed after tracking began");
-			WaitCopy();
+			const bool keepCow = copyOnWrite && m_CowCoordinator;
+			if (!keepCow) WaitCopy(true);
 			auto data = std::make_shared<Snapshot::Data>();
 			data->state = m_State;
 			data->serial = G(m_State)->objserial;
 			data->base = m_Base;
 			data->committed = m_Committed;
+			if (m_CowCopy) {
+				data->previousFaults = m_CowCopy->faults->count.load(std::memory_order_relaxed);
+				data->previousFaultUs = m_CowCopy->faults->us.load(std::memory_order_relaxed);
+				if (!keepCow) {
+					PageWriteFence::UnwatchCopies(this);
+					m_CowCopy.reset();
+					m_CowCoordinator.reset();
+				}
+			}
+			m_CowGateFree.store(keepCow, std::memory_order_release);
+			m_FreshBytes = 0;
+			if (copyOnWrite && data->committed) {
+				const size_t pageBytes = PageWriteFence::SystemPageBytes();
+				if (!pageBytes || m_Base % pageBytes || data->committed % pageBytes)
+					throw std::runtime_error("the Lua heap is not aligned for a page copy fence");
+				auto slab = TakeSlab(data->committed / Snapshot::c_PageBytes);
+				data->pages = slab->pages;
+				data->buffer = std::move(slab);
+				data->faults = std::make_shared<CopyFaultStats>();
+				auto cow = std::make_shared<CowCopy>();
+				cow->base = m_Base;
+				cow->pageBytes = pageBytes;
+				cow->destination = const_cast<Snapshot::Page*>(data->pages);
+				cow->saved.assign(data->committed / pageBytes, 0);
+				cow->faults = data->faults;
+				cow->buffer = data->buffer;
+				if (!m_CowCoordinator) {
+					m_CowCoordinator = std::make_shared<CowCoordinator>();
+					m_CowCoordinator->base = m_Base;
+					m_CowCoordinator->pageBytes = pageBytes;
+				}
+				CowCoordinator::Prepared prepared{m_CowCoordinator.get(), cow};
+				if (!PageWriteFence::WatchCopies(this, {reinterpret_cast<uint8_t*>(m_Base), data->committed}, CowCoordinator::OnWrite,
+				                                m_CowCoordinator.get(), CowCoordinator::Arm, &prepared))
+					throw std::runtime_error("could not fence the Lua heap page copy");
+				m_CowCopy = std::move(cow);
+				m_CowGateFree.store(true, std::memory_order_release);
+			}
 			const bool receipt = Receipts().load(std::memory_order_acquire);
-			auto copy = [this, data, started, receipt] {
-				m_FreshBytes = 0;
-				CopyPages(*data);
+			const size_t freshBytes = m_FreshBytes;
+			auto copy = [this, data, started, receipt, freshBytes, cow = m_CowCopy, coordinator = m_CowCoordinator] {
+				if (cow) {
+					const auto copying = std::chrono::steady_clock::now();
+					for (size_t page = 0; page < cow->saved.size(); ++page) {
+						if (!coordinator->CopyPage(page, false)) throw std::runtime_error("could not open a copied Lua heap page");
+					}
+					coordinator->Complete(cow);
+					data->copied.store(data->committed / Snapshot::c_PageBytes, std::memory_order_relaxed);
+					data->copyUs.store(MicrosecondsSince(copying), std::memory_order_relaxed);
+				} else {
+					CopyPages(*data);
+				}
 				if (!receipt) return;
 				std::lock_guard lock(m_CopyMutex);
-				m_LandedCopy = {++m_LandedGeneration, data->copied.load(std::memory_order_relaxed), data->copyUs.load(std::memory_order_relaxed), m_FreshBytes, MicrosecondsSince(started)};
+				m_LandedCopy = {++m_LandedGeneration, data->copied.load(std::memory_order_relaxed), data->copyUs.load(std::memory_order_relaxed), freshBytes, MicrosecondsSince(started)};
 				LandedCopies().fetch_add(1, std::memory_order_release);
 			};
 			if (submit) {
 				// The snapshot waits on a promise of its own: a task's future can keep the task, and with it this
 				// snapshot, alive for as long as the snapshot holds that future.
 				auto done = std::make_shared<std::promise<void>>();
-				std::lock_guard lock(m_CopyMutex);
 				data->ready = done->get_future().share();
-				m_PendingCopy = data->ready;
-				++m_CopyGeneration;
-				m_CopyPending.store(true, std::memory_order_release);
-				submit([copy = std::move(copy), done] {
-					try {
-						copy();
-						done->set_value();
-					} catch (...) {
-						done->set_exception(std::current_exception());
-					}
-				});
+				{
+					std::lock_guard lock(m_CopyMutex);
+					std::erase_if(m_PreviousCopies, [](const auto& future) { return future.wait_for(std::chrono::seconds(0)) == std::future_status::ready; });
+					if (m_PendingCopy.valid() && m_PendingCopy.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+						m_PreviousCopies.push_back(m_PendingCopy);
+					m_PendingCopy = data->ready;
+					++m_CopyGeneration;
+					m_CopyPending.store(true, std::memory_order_release);
+				}
+				try {
+					submit([copy = std::move(copy), done] {
+						try {
+							copy();
+							done->set_value();
+						} catch (...) {
+							done->set_exception(std::current_exception());
+						}
+					});
+				} catch (...) {
+					done->set_exception(std::current_exception());
+					if (m_CowCoordinator && m_CowCopy) m_CowCoordinator->Cancel(m_CowCopy);
+					m_CowCopy.reset();
+					throw;
+				}
 			} else {
 				copy();
 			}
@@ -283,17 +355,20 @@ namespace RTE::CheckpointLua {
 			return Snapshot(std::move(data));
 		}
 
-		// The gate: blocks until the last freeze's copy has landed; the VM may write its heap again after this.
-		void WaitCopy() {
+		// Page-fenced generations share one coordinator. Only destruction or a
+		// switch back to the legacy entry gate needs their tasks to finish.
+		void WaitCopy(bool force = false) {
+			if (!force && m_CowGateFree.load(std::memory_order_acquire)) return;
 			if (!m_CopyPending.load(std::memory_order_acquire)) return;
 			std::unique_lock lock(m_CopyMutex);
 			if (!m_PendingCopy.valid()) return;
-			const std::shared_future<void> pending = m_PendingCopy;
+			auto pending = m_PreviousCopies;
+			pending.push_back(m_PendingCopy);
 			const uint64_t generation = m_CopyGeneration;
 			lock.unlock();
-			if (pending.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+			for (const auto& future: pending) if (future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
 				const auto waited = std::chrono::steady_clock::now();
-				pending.wait();
+				future.wait();
 				const int64_t waitedUs = MicrosecondsSince(waited);
 				GateWaitUs().fetch_add(waitedUs, std::memory_order_relaxed);
 				ThreadGateWaitUs() += waitedUs;
@@ -301,6 +376,7 @@ namespace RTE::CheckpointLua {
 			lock.lock();
 			if (generation == m_CopyGeneration) {
 				m_PendingCopy = {};
+				m_PreviousCopies.clear();
 				m_CopyPending.store(false, std::memory_order_release);
 			}
 		}
@@ -373,8 +449,78 @@ namespace RTE::CheckpointLua {
 		std::atomic<size_t> m_LiveSlabs{0};
 		std::mutex m_CopyMutex;
 		std::shared_future<void> m_PendingCopy;
+		std::vector<std::shared_future<void>> m_PreviousCopies;
 		uint64_t m_CopyGeneration = 0;
 		std::atomic<bool> m_CopyPending{false};
+		std::atomic<bool> m_CowGateFree{false};
+		struct CowCopy {
+			uintptr_t base = 0;
+			size_t pageBytes = 0;
+			Snapshot::Page* destination = nullptr;
+			std::vector<uint8_t> saved;
+			std::shared_ptr<CopyFaultStats> faults;
+			std::shared_ptr<const void> buffer;
+			bool completed = false;
+		};
+		struct CowCoordinator {
+			uintptr_t base = 0;
+			size_t pageBytes = 0;
+			std::vector<std::shared_ptr<CowCopy>> copies;
+			std::atomic_flag lock = ATOMIC_FLAG_INIT;
+			struct Locked {
+				std::atomic_flag& flag;
+				explicit Locked(std::atomic_flag& flag) : flag(flag) { while (flag.test_and_set(std::memory_order_acquire)) {} }
+				~Locked() { flag.clear(std::memory_order_release); }
+			};
+			struct Prepared { CowCoordinator* coordinator; std::shared_ptr<CowCopy> copy; };
+			static bool Arm(void* context, uintptr_t address, size_t bytes) noexcept {
+				auto& prepared = *static_cast<Prepared*>(context);
+				auto& coordinator = *prepared.coordinator;
+				Locked guard(coordinator.lock);
+				try {
+					std::erase_if(coordinator.copies, [](const auto& copy) { return copy->completed; });
+					coordinator.copies.push_back(prepared.copy);
+				} catch (...) { return false; }
+				if (PageWriteFence::ProtectCopyPages(address, bytes)) return true;
+				coordinator.copies.pop_back();
+				return false;
+			}
+
+			bool CopyPage(size_t page, bool fault) noexcept {
+				const auto started = fault ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+				Locked guard(lock);
+				const uintptr_t address = base + page * pageBytes;
+				bool savedAny = false;
+				for (const auto& copy: copies) {
+					if (page >= copy->saved.size() || copy->saved[page]) continue;
+					// An unsaved generation's page has never been opened for a
+					// write. Materialize every such generation before opening it.
+					std::memcpy(reinterpret_cast<std::byte*>(copy->destination) + page * pageBytes, reinterpret_cast<const void*>(address), pageBytes);
+					copy->saved[page] = 1;
+					savedAny = true;
+					if (fault) {
+						copy->faults->count.fetch_add(1, std::memory_order_relaxed);
+						copy->faults->us.fetch_add(MicrosecondsSince(started), std::memory_order_relaxed);
+					}
+				}
+				return (!fault && !savedAny) || PageWriteFence::OpenCopiedPage(address, pageBytes);
+			}
+			void Complete(const std::shared_ptr<CowCopy>& copy) {
+				Locked guard(lock);
+				copy->completed = true;
+				copy->buffer.reset();
+			}
+			void Cancel(const std::shared_ptr<CowCopy>& copy) {
+				Locked guard(lock);
+				std::erase(copies, copy);
+			}
+			static bool OnWrite(void* context, uintptr_t address) noexcept {
+				auto& coordinator = *static_cast<CowCoordinator*>(context);
+				return coordinator.CopyPage((address - coordinator.base) / coordinator.pageBytes, true);
+			}
+		};
+		std::shared_ptr<CowCopy> m_CowCopy;
+		std::shared_ptr<CowCoordinator> m_CowCoordinator;
 		size_t m_FreshBytes = 0; // The copy task's own: what its buffers mapped fresh.
 		uint64_t m_LandedGeneration = 0;
 		CopyReceipt m_LandedCopy; // Under m_CopyMutex.

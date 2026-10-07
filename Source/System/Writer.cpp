@@ -2,6 +2,7 @@
 #include "System.h"
 #include "CheckpointArchive.h"
 #include "CheckpointImage.h"
+#include "BitmapCheckpoint.h"
 #include "Base64/base64.h"
 #include "SceneLayer.h"
 #include "Scene.h"
@@ -204,6 +205,8 @@ CheckpointText CheckpointText::AtSimTime(int64_t ticks) const {
 }
 
 size_t CheckpointText::OwnedBytes() const { return m_Data ? m_Data->ownedBytes : 0; }
+
+bool CheckpointText::HasPeerRuns() const { return m_Data && m_Data->hasPeer; }
 
 bool CheckpointText::SameValues(const CheckpointText& other) const {
 	if (m_Data == other.m_Data) return true;
@@ -578,6 +581,12 @@ CheckpointText CheckpointCache::CapturePixels(const BITMAP* bitmap) {
 	if (!bitmap) return CheckpointText(std::string());
 	Pixels& previous = m_Pixels[bitmap];
 	previous.generation = m_Generation;
+	if (const auto shared = BitmapPixelCaptureScope::Capture(bitmap, previous.snapshot)) {
+		m_Retired.push_back(std::move(previous.text));
+		previous.snapshot = shared->first;
+		previous.text = shared->second;
+		return previous.text;
+	}
 	auto snapshot = BitmapSnapshot::Capture(bitmap, previous.snapshot);
 	if (previous.snapshot && snapshot->SamePixels(*previous.snapshot)) return previous.text;
 	CheckpointText text = CheckpointText::Deferred([snapshot] { return snapshot->PixelBytes(); }, snapshot->LogicalBytes());
@@ -585,6 +594,32 @@ CheckpointText CheckpointCache::CapturePixels(const BITMAP* bitmap) {
 	previous.snapshot = std::move(snapshot);
 	previous.text = std::move(text);
 	return previous.text;
+}
+
+struct BitmapPixelCaptureScope::State {
+	struct Cell { std::once_flag once; std::shared_ptr<const BitmapSnapshot> snapshot; CheckpointText text; };
+	std::mutex mutex;
+	std::unordered_map<const BITMAP*, std::shared_ptr<Cell>> cells;
+};
+std::atomic<BitmapPixelCaptureScope::State*> BitmapPixelCaptureScope::s_Current{nullptr};
+BitmapPixelCaptureScope::BitmapPixelCaptureScope() : m_State(std::make_unique<State>()), m_Previous(s_Current.exchange(m_State.get())) {}
+BitmapPixelCaptureScope::~BitmapPixelCaptureScope() { s_Current.store(m_Previous); }
+std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> BitmapPixelCaptureScope::Capture(
+    const BITMAP* bitmap, const std::shared_ptr<const BitmapSnapshot>& previous) {
+	State* state = s_Current.load();
+	if (!state) return std::nullopt;
+	std::shared_ptr<State::Cell> cell;
+	{
+		std::lock_guard lock(state->mutex);
+		auto& entry = state->cells[bitmap];
+		if (!entry) entry = std::make_shared<State::Cell>();
+		cell = entry;
+	}
+	std::call_once(cell->once, [&] {
+		cell->snapshot = BitmapSnapshot::Capture(bitmap, previous);
+		cell->text = CheckpointText::Deferred([snapshot = cell->snapshot] { return snapshot->PixelBytes(); }, cell->snapshot->LogicalBytes());
+	});
+	return std::pair{cell->snapshot, cell->text};
 }
 
 size_t CheckpointCache::PixelBytes() const {
@@ -731,6 +766,20 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		const CheckpointText captured = CheckpointWriter::CaptureNative(save);
 		value = 91; binary.assign("changed");
 		check(captured.Text() == reference, "owned_checkpoint_copies_native_values");
+
+		{
+			Timer timer;
+			timer.SetStartSimTimeTicks(17); timer.SetSimTimeLimitTicks(29);
+			timer.SetStartRealTimeTicks(41); timer.SetRealTimeLimitTicks(53);
+			std::vector<std::pair<int, Timer>> timers{{7, timer}, {9, timer}};
+			const auto saveTimers = [&] { CheckpointWriter writer("OwnedTimers1"); writer(timer, timers); return writer.Text(); };
+			const std::string before = saveTimers();
+			const CheckpointText frozen = CheckpointWriter::CaptureNative(saveTimers);
+			timer.SetStartSimTimeTicks(61); timers[0].second.SetStartRealTimeTicks(71); timers.clear();
+			const std::string shared = frozen.SharedText();
+			check(frozen.HasPeerRuns() && frozen.Text() == before && shared == "12 OwnedTimers1 17 29 2 7 17 29 9 17 29 ",
+			      "owned_checkpoint_copies_inline_timers_and_container_peer_runs");
+		}
 
 		const CheckpointText bytes(std::string("x\0y", 3));
 		CheckpointBuffer tokens;
