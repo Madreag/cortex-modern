@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -186,6 +187,70 @@ def check_streamed_capture(results, scratch):
     ffmpeg = driver.find_ffmpeg()
     ok &= row(results, "stream/every-peer-gets-the-encoder", (not ffmpeg) or (environment.get("CCCP_TEST_RECORD_ENCODER") == str(ffmpeg) and
               environment.get("CCCP_TEST_RECORD_CODEC") in ("h264_nvenc", "libx264")))
+    return ok
+
+
+def check_streamed_pictures(results, scratch):
+    """Long, sparse selections keep their frame identities, cached pictures and decoder failures."""
+    from PIL import Image
+    ffmpeg = driver.find_ffmpeg()
+    if not ffmpeg:
+        return row(results, "stream/picture-decoder-present", False, driver.missing_ffmpeg())
+    root = scratch / "streamed-pictures"
+    root.mkdir(parents=True)
+    video = root / "colors.mkv"
+    pixels = b"".join(bytes((frame % 256, frame // 256, 42)) * 16 * 16 for frame in range(400))
+    encoded = subprocess.run([ffmpeg, "-nostdin", "-loglevel", "error", "-y", "-f", "rawvideo", "-pixel_format", "rgb24",
+                              "-video_size", "16x16", "-framerate", "30", "-i", "pipe:0", "-c:v", "ffv1", str(video)],
+                             input=pixels, capture_output=True)
+    ok = row(results, "stream/picture-fixture-encoded", encoded.returncode == 0, encoded.stderr.decode(errors="replace"))
+    if not ok:
+        return False
+    frames = root / "frames"
+    frames.mkdir()
+    rows = [{"frame": 1000 + index, "video_frame": index * 3} for index in reversed(range(128))]
+    cached = frames / "frame-001064.png"
+    Image.new("RGB", (16, 16), (5, 6, 7)).save(cached)
+    before = cached.read_bytes()
+    driver.extract_frames(ffmpeg, video, rows, frames)
+    paths = list(frames.glob("frame-*.png"))
+    ok &= row(results, "stream/long-selection-keeps-every-requested-picture", len(paths) == len(rows))
+    exact = all((frames / f"frame-{value['frame']:06d}.png").is_file() and
+                Image.open(frames / f"frame-{value['frame']:06d}.png").getpixel((0, 0)) ==
+                (value["video_frame"] % 256, value["video_frame"] // 256, 42)
+                for value in rows if value["frame"] != 1064)
+    ok &= row(results, "stream/sparse-unsorted-pictures-keep-their-indexed-identity", exact)
+    ok &= row(results, "stream/existing-picture-is-kept-byte-for-byte", cached.read_bytes() == before)
+    error = ""
+    with patch.object(driver.subprocess, "run", return_value=SimpleNamespace(returncode=7, stderr="decoder refused the packet")):
+        try:
+            driver.extract_frames(ffmpeg, video, [{"frame": 2000, "video_frame": 1}], root / "decoder-error")
+        except RuntimeError as failure:
+            error = str(failure)
+    ok &= row(results, "stream/decoder-failure-is-reported-by-name", "7" in error and "decoder refused the packet" in error)
+    error = ""
+    try:
+        driver.extract_frames(ffmpeg, video, [{"frame": 3000, "video_frame": 999999}], root / "missing-picture")
+    except RuntimeError as failure:
+        error = str(failure)
+    ok &= row(results, "stream/a-missing-indexed-picture-is-a-failure", "missing" in error and "3000" in error)
+    peer_root = root / "retained" / "host"
+    peer_root.mkdir(parents=True)
+    prior_encode = {"encoded": True, "timing": "engine-slots", "path": str(video), "fps": 30}
+    peer = {"peer": "host", "root": str(peer_root), "video_dir": str(peer_root / "video"), "video": str(video),
+            "encode": prior_encode, "index": [dict(value, wall_ms=index * 100, screen="game", sim_tick=index)
+                                                for index, value in enumerate(reversed(rows))]}
+    original = video.read_bytes()
+    error = ""
+    with patch.object(driver, "encode", side_effect=AssertionError("the retained video must not be encoded again")):
+        try:
+            driver.render({"peers": [peer]}, 30, 15)
+        except AssertionError as failure:
+            error = str(failure)
+    ok &= row(results, "stream/missing-sheet-keeps-the-existing-video", not error and video.read_bytes() == original and
+              peer.get("video") == str(video) and peer.get("encode") == prior_encode)
+    ok &= row(results, "stream/missing-sheet-uses-the-unchanged-sampling", bool(peer.get("sheet", {}).get("written")) and
+              peer["sheet"].get("every") == 15 and peer["sheet"].get("tiles") == 9)
     return ok
 
 
@@ -2211,6 +2276,7 @@ def main():
         ok &= check_recording_health(results, scratch)
         ok &= check_screen_watches(results, scratch)
         ok &= check_streamed_capture(results, scratch)
+        ok &= check_streamed_pictures(results, scratch)
         ok &= check_item_kinds(results)
         ok &= check_port_claims(results)
         ok &= check_dropped_index(results, scratch)

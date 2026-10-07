@@ -971,11 +971,21 @@ def extract_frames(ffmpeg, video, rows, frames):
     if not wanted or not ffmpeg or not Path(video).is_file():
         return
     frames.mkdir(parents=True, exist_ok=True)
-    select = "+".join(f"eq(n,{row['video_frame']})" for row in wanted)
+    terms = [f"eq(n,{row['video_frame']})" for row in wanted]
+    # FFmpeg limits expression depth, so long selections need a balanced sum.
+    while len(terms) > 1:
+        terms = ["(" + "+".join(terms[index:index + 2]) + ")" for index in range(0, len(terms), 2)]
+    select = terms[0]
     scratch = frames / "extract"
     scratch.mkdir(exist_ok=True)
-    subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", str(video), "-vf", f"select='{select}'",
-                    "-fps_mode", "passthrough", str(scratch / "pick-%06d.png")], capture_output=True, text=True)
+    result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", str(video), "-vf", f"select='{select}'",
+                            "-fps_mode", "passthrough", str(scratch / "pick-%06d.png")], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg frame extraction exited {result.returncode}: {result.stderr[-2000:]}")
+    missing = [row["frame"] for index, row in enumerate(sorted(wanted, key=lambda row: row["video_frame"]), 1)
+               if not (scratch / f"pick-{index:06d}.png").is_file()]
+    if missing:
+        raise RuntimeError(f"ffmpeg frame extraction missing indexed pictures: {missing[:10]}")
     for index, row in enumerate(sorted(wanted, key=lambda row: row["video_frame"]), 1):
         picture = scratch / f"pick-{index:06d}.png"
         if picture.is_file():
@@ -2228,9 +2238,10 @@ def render(capture_run, fps, every):
         if peer.get("video") and Path(peer["video"]).is_file() and peer.get("contact_sheet") and Path(peer["contact_sheet"]).is_file():
             continue
         root = Path(peer["root"])
-        video = encode(ffmpeg, peer["video_dir"], fps, root.parent / f"{peer['peer']}.mp4")
-        peer["video"] = video.get("path") if video.get("encoded") else None
-        peer["encode"] = video
+        if not (peer.get("video") and Path(peer["video"]).is_file()):
+            video = encode(ffmpeg, peer["video_dir"], fps, root.parent / f"{peer['peer']}.mp4")
+            peer["video"] = video.get("path") if video.get("encoded") else None
+            peer["encode"] = video
         sheet = contact_sheet(peer["video_dir"], peer["index"], root.parent / f"{peer['peer']}-sheet.png", every, ffmpeg, peer["video"])
         peer["contact_sheet"] = sheet.get("path") if sheet.get("written") else None
         peer["sheet"] = sheet
