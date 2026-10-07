@@ -1,4 +1,5 @@
 #include "HDFirearm.h"
+#include "CheckpointProperties.h"
 #include "MetricsCollector.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
@@ -361,31 +362,32 @@ void HDFirearm::DiscardPersistedSnapshotState() {
 
 void HDFirearm::SaveSnapshotConfiguration(Writer& writer) const {
 	HeldDevice::SaveSnapshotConfiguration(writer);
-	writer.NewPropertyWithValue("ReloadEndOffset", m_ReloadEndOffset);
-	writer.NewPropertyWithValue("RateOfFire", m_RateOfFire);
-	writer.NewPropertyWithValue("ActivationDelay", m_ActivationDelay);
-	writer.NewPropertyWithValue("DeactivationDelay", m_DeactivationDelay);
-	writer.NewPropertyWithValue("BaseReloadTime", m_BaseReloadTime);
-	writer.NewPropertyWithValue("FullAuto", m_FullAuto);
-	writer.NewPropertyWithValue("FireIgnoresThis", m_FireIgnoresThis);
-	writer.NewPropertyWithValue("Reloadable", m_Reloadable);
-	writer.NewPropertyWithValue("DualReloadable", m_DualReloadable);
-	writer.NewPropertyWithValue("OneHandedReloadTimeMultiplier", m_OneHandedReloadTimeMultiplier);
-	writer.NewPropertyWithValue("ReloadAngle", m_ReloadAngle);
-	writer.NewPropertyWithValue("OneHandedReloadAngle", m_OneHandedReloadAngle);
-	writer.NewPropertyWithValue("IsAnimatedManually", m_IsAnimatedManually);
-	writer.NewPropertyWithValue("SpecialBehaviour_ShakeRangeRaw", m_ShakeRange);
-	writer.NewPropertyWithValue("SpecialBehaviour_SharpShakeRangeRaw", m_SharpShakeRange);
-	writer.NewPropertyWithValue("NoSupportFactor", m_NoSupportFactor);
-	writer.NewPropertyWithValue("SpecialBehaviour_ParticleSpreadRangeRaw", m_ParticleSpreadRange);
-	writer.NewPropertyWithValue("ShellEjectAngle", m_ShellEjectAngle);
-	writer.NewPropertyWithValue("SpecialBehaviour_ShellSpreadRangeRaw", m_ShellSpreadRange);
-	writer.NewPropertyWithValue("SpecialBehaviour_ShellAngVelRangeRaw", m_ShellAngVelRange);
-	writer.NewPropertyWithValue("ShellVelVariation", m_ShellVelVariation);
-	writer.NewPropertyWithValue("RecoilScreenShakeAmount", m_RecoilScreenShakeAmount);
-	writer.NewPropertyWithValue("MuzzleOffset", m_MuzzleOff);
-	writer.NewPropertyWithValue("EjectionOffset", m_EjectOff);
-	writer.NewPropertyWithValue("LegacyCompatibilityRoundsAlwaysFireUnflipped", m_LegacyCompatibilityRoundsAlwaysFireUnflipped);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"ReloadEndOffset">(m_ReloadEndOffset),
+		CheckpointProperty<"RateOfFire">(m_RateOfFire),
+		CheckpointProperty<"ActivationDelay">(m_ActivationDelay),
+		CheckpointProperty<"DeactivationDelay">(m_DeactivationDelay),
+		CheckpointProperty<"BaseReloadTime">(m_BaseReloadTime),
+		CheckpointProperty<"FullAuto">(m_FullAuto),
+		CheckpointProperty<"FireIgnoresThis">(m_FireIgnoresThis),
+		CheckpointProperty<"Reloadable">(m_Reloadable),
+		CheckpointProperty<"DualReloadable">(m_DualReloadable),
+		CheckpointProperty<"OneHandedReloadTimeMultiplier">(m_OneHandedReloadTimeMultiplier),
+		CheckpointProperty<"ReloadAngle">(m_ReloadAngle),
+		CheckpointProperty<"OneHandedReloadAngle">(m_OneHandedReloadAngle),
+		CheckpointProperty<"IsAnimatedManually">(m_IsAnimatedManually),
+		CheckpointProperty<"SpecialBehaviour_ShakeRangeRaw">(m_ShakeRange),
+		CheckpointProperty<"SpecialBehaviour_SharpShakeRangeRaw">(m_SharpShakeRange),
+		CheckpointProperty<"NoSupportFactor">(m_NoSupportFactor),
+		CheckpointProperty<"SpecialBehaviour_ParticleSpreadRangeRaw">(m_ParticleSpreadRange),
+		CheckpointProperty<"ShellEjectAngle">(m_ShellEjectAngle),
+		CheckpointProperty<"SpecialBehaviour_ShellSpreadRangeRaw">(m_ShellSpreadRange),
+		CheckpointProperty<"SpecialBehaviour_ShellAngVelRangeRaw">(m_ShellAngVelRange),
+		CheckpointProperty<"ShellVelVariation">(m_ShellVelVariation),
+		CheckpointProperty<"RecoilScreenShakeAmount">(m_RecoilScreenShakeAmount),
+		CheckpointProperty<"MuzzleOffset">(m_MuzzleOff),
+		CheckpointProperty<"EjectionOffset">(m_EjectOff),
+		CheckpointProperty<"LegacyCompatibilityRoundsAlwaysFireUnflipped">(m_LegacyCompatibilityRoundsAlwaysFireUnflipped));
 	writer.NewPropertyWithValue("SpecialBehaviour_PreFireSound", m_PreFireSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_FireSound", m_FireSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_FireEchoSound", m_FireEchoSound);

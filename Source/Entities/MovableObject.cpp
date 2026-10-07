@@ -1,4 +1,5 @@
 #include "MovableObject.h"
+#include "CheckpointProperties.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "OwnedMovableObjects.h"
@@ -942,38 +943,41 @@ bool MovableObject::LoadMovableObjectRuntime(std::string_view text, bool validat
 
 void MovableObject::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SpecialBehaviour_MovableObjectRuntime", CheckpointWriter::Native([&] { return m_PersistedMovableObjectRuntime.empty() ? SaveMovableObjectRuntime() : m_PersistedMovableObjectRuntime; }).Base64(true));
-	writer.NewPropertyWithValue("Mass", m_Mass);
-	writer.NewPropertyWithValue("Scale", m_Scale);
-	writer.NewPropertyWithValue("RestThreshold", m_RestThreshold);
-	writer.NewPropertyWithValue("Sharpness", m_Sharpness);
-	writer.NewPropertyWithValue("HitsMOs", m_HitsMOs);
-	writer.NewPropertyWithValue("GetsHitByMOs", m_GetsHitByMOs);
-	writer.NewPropertyWithValue("IgnoresAtomGroupHits", m_IgnoresAtomGroupHits);
-	writer.NewPropertyWithValue("IgnoresAGHitsWhenSlowerThan", m_IgnoresAGHitsWhenSlowerThan);
-	writer.NewPropertyWithValue("MissionCritical", m_MissionCritical);
-	writer.NewPropertyWithValue("CanBeSquished", m_CanBeSquished);
-	writer.NewPropertyWithValue("RemoveOrphanTerrainRadius", m_RemoveOrphanTerrainRadius);
-	writer.NewPropertyWithValue("RemoveOrphanTerrainMaxArea", m_RemoveOrphanTerrainMaxArea);
-	writer.NewPropertyWithValue("RemoveOrphanTerrainRate", m_RemoveOrphanTerrainRate);
-	writer.NewPropertyWithValue("DamageOnCollision", m_DamageOnCollision);
-	writer.NewPropertyWithValue("DamageOnPenetration", m_DamageOnPenetration);
-	writer.NewPropertyWithValue("WoundDamageMultiplier", m_WoundDamageMultiplier);
-	writer.NewPropertyWithValue("SpecialBehaviour_ToSettle", m_ToSettle);
-	writer.NewPropertyWithValue("SpecialBehaviour_ToDelete", m_ToDelete);
-	writer.NewPropertyWithValue("SimUpdatesBetweenScriptedUpdates", m_SimUpdatesBetweenScriptedUpdates);
-	writer.NewPropertyWithValue("SpecialBehaviour_SimUpdatesSinceLastScriptedUpdate", m_SimUpdatesSinceLastScriptedUpdate);
-	writer.NewPropertyWithValue("ForceIntoMasterLuaState", m_ForceIntoMasterLuaState);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"Mass">(m_Mass),
+		CheckpointProperty<"Scale">(m_Scale),
+		CheckpointProperty<"RestThreshold">(m_RestThreshold),
+		CheckpointProperty<"Sharpness">(m_Sharpness),
+		CheckpointProperty<"HitsMOs">(m_HitsMOs),
+		CheckpointProperty<"GetsHitByMOs">(m_GetsHitByMOs),
+		CheckpointProperty<"IgnoresAtomGroupHits">(m_IgnoresAtomGroupHits),
+		CheckpointProperty<"IgnoresAGHitsWhenSlowerThan">(m_IgnoresAGHitsWhenSlowerThan),
+		CheckpointProperty<"MissionCritical">(m_MissionCritical),
+		CheckpointProperty<"CanBeSquished">(m_CanBeSquished),
+		CheckpointProperty<"RemoveOrphanTerrainRadius">(m_RemoveOrphanTerrainRadius),
+		CheckpointProperty<"RemoveOrphanTerrainMaxArea">(m_RemoveOrphanTerrainMaxArea),
+		CheckpointProperty<"RemoveOrphanTerrainRate">(m_RemoveOrphanTerrainRate),
+		CheckpointProperty<"DamageOnCollision">(m_DamageOnCollision),
+		CheckpointProperty<"DamageOnPenetration">(m_DamageOnPenetration),
+		CheckpointProperty<"WoundDamageMultiplier">(m_WoundDamageMultiplier),
+		CheckpointProperty<"SpecialBehaviour_ToSettle">(m_ToSettle),
+		CheckpointProperty<"SpecialBehaviour_ToDelete">(m_ToDelete),
+		CheckpointProperty<"SimUpdatesBetweenScriptedUpdates">(m_SimUpdatesBetweenScriptedUpdates),
+		CheckpointProperty<"SpecialBehaviour_SimUpdatesSinceLastScriptedUpdate">(m_SimUpdatesSinceLastScriptedUpdate),
+		CheckpointProperty<"ForceIntoMasterLuaState">(m_ForceIntoMasterLuaState));
 	writer.NewPropertyWithValue("SpecialBehaviour_ScreenEffect", m_ScreenEffectFile);
-	writer.NewPropertyWithValue("PostEffectEnabled", m_PostEffectEnabled);
-	writer.NewPropertyWithValue("EffectStartTime", m_EffectStartTime);
-	writer.NewPropertyWithValue("SpecialBehaviour_EffectStopTimeRaw", m_EffectStopTime);
-	writer.NewPropertyWithValue("SpecialBehaviour_EffectStartStrengthRaw", m_EffectStartStrength);
-	writer.NewPropertyWithValue("SpecialBehaviour_EffectStopStrengthRaw", m_EffectStopStrength);
-	writer.NewPropertyWithValue("EffectAlwaysShows", m_EffectAlwaysShows);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"PostEffectEnabled">(m_PostEffectEnabled),
+		CheckpointProperty<"EffectStartTime">(m_EffectStartTime),
+		CheckpointProperty<"SpecialBehaviour_EffectStopTimeRaw">(m_EffectStopTime),
+		CheckpointProperty<"SpecialBehaviour_EffectStartStrengthRaw">(m_EffectStartStrength),
+		CheckpointProperty<"SpecialBehaviour_EffectStopStrengthRaw">(m_EffectStopStrength),
+		CheckpointProperty<"EffectAlwaysShows">(m_EffectAlwaysShows));
 	writer.NewPropertyWithValue("EffectRotAngle", CheckpointEffectRotAngle());
-	writer.NewPropertyWithValue("InheritEffectRotAngle", m_InheritEffectRotAngle);
-	writer.NewPropertyWithValue("RandomizeEffectRotAngle", m_RandomizeEffectRotAngle);
-	writer.NewPropertyWithValue("RandomizeEffectRotAngleEveryFrame", m_RandomizeEffectRotAngleEveryFrame);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"InheritEffectRotAngle">(m_InheritEffectRotAngle),
+		CheckpointProperty<"RandomizeEffectRotAngle">(m_RandomizeEffectRotAngle),
+		CheckpointProperty<"RandomizeEffectRotAngleEveryFrame">(m_RandomizeEffectRotAngleEveryFrame));
 }
 
 int MovableObject::Save(Writer& writer) const {

@@ -9961,6 +9961,8 @@ end
 	checkpointValues = BitmapCheckpoint::RunSelfTest() && checkpointValues;
 	checkpointValues = BitmapSnapshot::RunSelfTest() && checkpointValues;
 	checkpointValues = RunOwnedCheckpointSelfTest() && checkpointValues;
+	checkpointValues = RunOwnedSoundSetCaptureSelfTest() && checkpointValues;
+	checkpointValues = RunOwnedSoundParametersCaptureSelfTest() && checkpointValues;
 	{
 		const std::string mismatch = Atom::CheckpointListSelfTestMismatch();
 		const bool exact = mismatch.empty();

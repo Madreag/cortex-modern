@@ -1,4 +1,5 @@
 #include "MOSprite.h"
+#include "CheckpointProperties.h"
 #include "HDFirearm.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
@@ -326,9 +327,10 @@ void MOSprite::SaveSnapshotConfiguration(Writer& writer) const {
 	MovableObject::SaveSnapshotConfiguration(writer);
 	writer.NewPropertyWithValue("SpriteOffset", m_SpriteOffset);
 	writer.NewPropertyWithValue("SpriteAnimMode", static_cast<int>(m_SpriteAnimMode));
-	writer.NewPropertyWithValue("SpriteAnimDuration", m_SpriteAnimDuration);
-	writer.NewPropertyWithValue("ForcedHFlip", m_ForcedHFlip);
-	writer.NewPropertyWithValue("SettleMaterialDisabled", m_SettleMaterialDisabled);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"SpriteAnimDuration">(m_SpriteAnimDuration),
+		CheckpointProperty<"ForcedHFlip">(m_ForcedHFlip),
+		CheckpointProperty<"SettleMaterialDisabled">(m_SettleMaterialDisabled));
 	writer.NewPropertyWithValue("SpecialBehaviour_EntryWoundPreset", m_pEntryWound ? m_pEntryWound->GetModuleAndPresetName() : "None");
 	writer.NewPropertyWithValue("SpecialBehaviour_ExitWoundPreset", m_pExitWound ? m_pExitWound->GetModuleAndPresetName() : "None");
 	writer.NewPropertyWithValue("SpecialBehaviour_MOSpriteRuntime", CheckpointWriter::Native([&] { return m_PersistedMOSpriteRuntime.empty() ? SaveMOSpriteRuntime() : m_PersistedMOSpriteRuntime; }).Base64(true));

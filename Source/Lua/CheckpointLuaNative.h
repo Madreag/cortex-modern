@@ -128,7 +128,7 @@ namespace RTE::CheckpointLua {
 			return problems;
 		}
 
-		size_t EntryCount() const { return m_Entries.size() + (m_Classes ? m_Classes->entries.size() : 0); }
+		size_t EntryCount() const { return m_Entries.size() + m_Scalars.size() + (m_Classes ? m_Classes->entries.size() : 0); }
 		// Compare the actual frozen native answers, including deferred text, before
 		// reusing a chunk. No live writer barrier is borrowed by the saver VM.
 		std::string Fingerprint(const void* address, View& view, std::string_view helper, std::string_view argument,
@@ -205,6 +205,35 @@ namespace RTE::CheckpointLua {
 			std::string presetName;
 			uint64_t serial = 0; // The userdata's birth number: a reused address with another serial is another object.
 		};
+		// Plain owned scalar bindings have no callbacks or native ownership links.
+		// Freeze only their tokens; build the helper result containers on the saver.
+		struct ScalarEntry {
+			uint64_t serial = 0;
+			TValue kind{}, instance{}, address{};
+			std::array<TValue, 2> members{};
+			std::array<TValue, 4> properties{};
+			unsigned memberCount = 0;
+			bool timer = false;
+			mutable std::unique_ptr<Entry> expanded;
+			const Entry* Expand() const {
+				if (!expanded) {
+					auto entry = std::make_unique<Entry>();
+					entry->serial = serial;
+					const auto answer = [](const TValue& token) { Result result; result.values.push_back(Value{token}); return result; };
+					entry->native[0] = answer(kind);
+					entry->native[1] = entry->native[0];
+					for (unsigned index = 0; index < memberCount; ++index) entry->members.values.push_back(Value{members[index]});
+					entry->helpers.emplace("_ScriptGraphInstance", answer(instance));
+					entry->helpers.emplace("_ScriptGraphNativeAddress", answer(address));
+					static constexpr std::array vectorNames{"X", "Y"};
+					static constexpr std::array timerNames{"StartSimTimeTicks", "SimTimeLimitTicks", "StartRealTimeTicks", "RealTimeLimitTicks"};
+					const std::span<const char* const> names = timer ? std::span<const char* const>(timerNames) : std::span<const char* const>(vectorNames);
+					for (size_t index = 0; index < names.size(); ++index) entry->properties.emplace(names[index], answer(properties[index]));
+					expanded = std::move(entry);
+				}
+				return expanded.get();
+			}
+		};
 		// The class descriptors and plain userdata a state holds never change; every capture shares one map of them.
 		struct ClassEntries { std::unordered_map<const void*, Entry> entries; };
 		size_t CachedCount() const { return m_CachedClasses; }
@@ -230,6 +259,7 @@ namespace RTE::CheckpointLua {
 			Topology topology;
 		};
 		std::unordered_map<const void*, Entry> m_Entries;
+		std::unordered_map<const void*, ScalarEntry> m_Scalars;
 		std::shared_ptr<const ClassEntries> m_Classes;
 		size_t m_CachedClasses = 0;
 		size_t m_SharedAnswers = 0, m_SharedMismatches = 0;
@@ -237,6 +267,7 @@ namespace RTE::CheckpointLua {
 		std::unordered_map<const void*, Result> m_Iterators;
 		const Entry* FindEntry(const void* address) const {
 			if (const auto own = m_Entries.find(address); own != m_Entries.end()) return &own->second;
+			if (const auto scalar = m_Scalars.find(address); scalar != m_Scalars.end()) return scalar->second.Expand();
 			if (m_Classes) {
 				if (const auto shared = m_Classes->entries.find(address); shared != m_Classes->entries.end()) return &shared->second;
 			}
@@ -736,7 +767,7 @@ namespace RTE::CheckpointLua {
 			type->get_table(State());
 			return plain();
 		}
-		NativeImage::Result ScalarProperty(const luabind::detail::object_rep* object, const char* name) {
+		TValue ScalarPropertyToken(const luabind::detail::object_rep* object, const char* name) {
 			lua_Number number;
 			if (object->crep()->type() == LUABIND_TYPEID(Vector)) {
 				const auto& value = *static_cast<const Vector*>(object->ptr());
@@ -749,12 +780,55 @@ namespace RTE::CheckpointLua {
 				else number = value.GetRealTimeLimitTicksNumber();
 			}
 			lua_pushnumber(State(), number);
+			const TValue token = At(-1);
+			lua_pop(State(), 1);
+			return token;
+		}
+		NativeImage::Result ScalarProperty(const luabind::detail::object_rep* object, const char* name) {
 			NativeImage::Result result;
 			NativeImage::Value value;
-			value.token = At(-1);
+			value.token = ScalarPropertyToken(object, name);
 			result.values.push_back(std::move(value));
-			lua_pop(State(), 1);
 			return result;
+		}
+		template<class PushToken> TValue ScalarToken(PushToken push) {
+			const int top = lua_gettop(State());
+			struct Restore { lua_State* state; int top; ~Restore() { lua_settop(state, top); } } restore{State(), top};
+			const uint64_t before = luaJIT_state_serial(State());
+			push();
+			const uint64_t after = luaJIT_state_serial(State());
+			const TValue token = At(-1);
+			if (tvisgcv(&token)) Keep(-1);
+			std::unordered_set<const void*> seen;
+			NewResults(-1, before, after, seen);
+			return token;
+		}
+		bool CaptureOwnedScalar(const TValue& subject, const luabind::detail::object_rep* object) {
+			if (!CheckpointWriter::BatchEnabled() || !object || !object->ptr() || !object->crep() ||
+			    !(object->flags() & luabind::detail::object_rep::owner)) return false;
+			const auto* type = object->crep();
+			if (type->get_class_type() != luabind::detail::class_rep::cpp_class) return false;
+			const bool timer = type->type() == LUABIND_TYPEID(Timer) && std::strcmp(type->name(), "Timer") == 0;
+			const bool vector = type->type() == LUABIND_TYPEID(Vector) && std::strcmp(type->name(), "Vector") == 0;
+			if (!timer && !vector) return false;
+			static constexpr std::array vectorNames{"X", "Y"};
+			static constexpr std::array timerNames{"StartSimTimeTicks", "SimTimeLimitTicks", "StartRealTimeTicks", "RealTimeLimitTicks"};
+			const std::span<const char* const> names = timer ? std::span<const char* const>(timerNames) : std::span<const char* const>(vectorNames);
+			if (!PlainScalarProperties(subject, object, names)) return false;
+			CaptureTrace::Span span("answer_scalar", type->name());
+			NativeImage::ScalarEntry entry;
+			entry.serial = luaJIT_value_serial(State(), -1);
+			entry.timer = timer;
+			entry.members[entry.memberCount++] = ScalarToken([&] { type->get_table(State()); });
+			if (object->get_lua_table().is_valid()) {
+				entry.instance = ScalarToken([&] { object->get_lua_table().get(State()); });
+				entry.members[entry.memberCount++] = entry.instance;
+			} else setnilV(&entry.instance);
+			entry.address = ScalarToken([&] { lua_pushlightuserdata(State(), object->ptr()); });
+			entry.kind = ScalarToken([&] { lua_pushstring(State(), timer ? "timer" : "vector"); });
+			for (size_t index = 0; index < names.size(); ++index) entry.properties[index] = ScalarPropertyToken(object, names[index]);
+			m_Image->m_Scalars.emplace(gcval(&subject), std::move(entry));
+			return true;
 		}
 		static int IsIterator(lua_State* state) {
 			const bool iterator = lua_tocfunction(state, 1) == ScriptGraphValueIteratorNext || ScriptGraphIteratorHook(state, 1, "__iterator_snapshot");
@@ -770,6 +844,7 @@ namespace RTE::CheckpointLua {
 			Push(value);
 			// Only a luabind instance can change its answers; a class descriptor or a plain userdata is answered once.
 			const auto* object = luabind::detail::is_class_object(State(), -1);
+			if (CaptureOwnedScalar(value, object)) { lua_pop(State(), 1); return; }
 			const bool immutable = luabind::detail::is_class_rep(State(), -1) || !object;
 			// A fresh reference to a live object that another reference of its class already answered for answers the same.
 			std::optional<SharedHit> shared;

@@ -1,4 +1,5 @@
 #include "Gib.h"
+#include "CheckpointProperties.h"
 #include "PresetMan.h"
 #include "MovableObject.h"
 #include "MovableMan.h"
@@ -96,16 +97,17 @@ int Gib::Save(Writer& writer) const {
 	} else {
 		writer.NewPropertyWithValue("SpecialBehaviour_ClearParticle", true);
 	}
-	writer.NewPropertyWithValue("Offset", m_Offset);
-	writer.NewPropertyWithValue("Count", m_Count);
-	writer.NewPropertyWithValue("Spread", m_Spread);
-	writer.NewPropertyWithValue("MinVelocity", m_MinVelocity);
-	writer.NewPropertyWithValue("MaxVelocity", m_MaxVelocity);
-	writer.NewPropertyWithValue("LifeVariation", m_LifeVariation);
-	writer.NewPropertyWithValue("InheritsVel", m_InheritsVel);
-	writer.NewPropertyWithValue("InheritsAngularVel", m_InheritsAngularVel);
-	writer.NewPropertyWithValue("IgnoresTeamHits", m_IgnoresTeamHits);
-	writer.NewPropertyWithValue("SpreadMode", m_SpreadMode);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"Offset">(m_Offset),
+		CheckpointProperty<"Count">(m_Count),
+		CheckpointProperty<"Spread">(m_Spread),
+		CheckpointProperty<"MinVelocity">(m_MinVelocity),
+		CheckpointProperty<"MaxVelocity">(m_MaxVelocity),
+		CheckpointProperty<"LifeVariation">(m_LifeVariation),
+		CheckpointProperty<"InheritsVel">(m_InheritsVel),
+		CheckpointProperty<"InheritsAngularVel">(m_InheritsAngularVel),
+		CheckpointProperty<"IgnoresTeamHits">(m_IgnoresTeamHits),
+		CheckpointProperty<"SpreadMode">(m_SpreadMode));
 
 	return 0;
 }

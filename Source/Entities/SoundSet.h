@@ -7,6 +7,8 @@
 
 namespace RTE {
 	class SoundContainer;
+	bool RunOwnedSoundSetCaptureSelfTest();
+	bool RunOwnedSoundParametersCaptureSelfTest();
 
 	/// Self-contained struct defining an individual sound in a SoundSet.
 	struct SoundData {

@@ -1,4 +1,5 @@
 #include "AHuman.h"
+#include "CheckpointProperties.h"
 #include "MetricsCollector.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
@@ -715,13 +716,14 @@ int AHuman::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 void AHuman::SaveSnapshotConfiguration(Writer& writer) const {
 	Actor::SaveSnapshotConfiguration(writer);
-	writer.NewPropertyWithValue("ThrowPrepTime", m_ThrowPrepTime);
-	writer.NewPropertyWithValue("LookToAimRatio", m_LookToAimRatio);
-	writer.NewPropertyWithValue("FGArmFlailScalar", m_FGArmFlailScalar);
-	writer.NewPropertyWithValue("BGArmFlailScalar", m_BGArmFlailScalar);
-	writer.NewPropertyWithValue("ArmSwingRate", m_ArmSwingRate);
-	writer.NewPropertyWithValue("DeviceArmSwayRate", m_DeviceArmSwayRate);
-	writer.NewPropertyWithValue("MaxWalkPathCrouchShift", m_MaxWalkPathCrouchShift);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"ThrowPrepTime">(m_ThrowPrepTime),
+		CheckpointProperty<"LookToAimRatio">(m_LookToAimRatio),
+		CheckpointProperty<"FGArmFlailScalar">(m_FGArmFlailScalar),
+		CheckpointProperty<"BGArmFlailScalar">(m_BGArmFlailScalar),
+		CheckpointProperty<"ArmSwingRate">(m_ArmSwingRate),
+		CheckpointProperty<"DeviceArmSwayRate">(m_DeviceArmSwayRate),
+		CheckpointProperty<"MaxWalkPathCrouchShift">(m_MaxWalkPathCrouchShift));
 	writer.NewPropertyWithValue("StandRotAngleTarget", m_RotAngleTargets[STAND]);
 	writer.NewPropertyWithValue("WalkRotAngleTarget", m_RotAngleTargets[WALK]);
 	writer.NewPropertyWithValue("RunRotAngleTarget", m_RotAngleTargets[RUN]);

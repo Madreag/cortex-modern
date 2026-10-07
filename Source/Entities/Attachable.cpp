@@ -1,4 +1,5 @@
 #include "Attachable.h"
+#include "CheckpointProperties.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 #include "FloatText.h"
@@ -241,12 +242,13 @@ int Attachable::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 void Attachable::SaveSnapshotConfiguration(Writer& writer) const {
 	MOSRotating::SaveSnapshotConfiguration(writer);
-	writer.NewPropertyWithValue("ApplyTransferredForcesAtOffset", m_ApplyTransferredForcesAtOffset);
-	writer.NewPropertyWithValue("GibWithParentChance", m_GibWithParentChance);
-	writer.NewPropertyWithValue("ParentGibBlastStrengthMultiplier", m_ParentGibBlastStrengthMultiplier);
-	writer.NewPropertyWithValue("InheritsVelWhenDetached", m_InheritsVelWhenDetached);
-	writer.NewPropertyWithValue("InheritsAngularVelWhenDetached", m_InheritsAngularVelWhenDetached);
-	writer.NewPropertyWithValue("IgnoresParticlesWhileAttached", m_IgnoresParticlesWhileAttached);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"ApplyTransferredForcesAtOffset">(m_ApplyTransferredForcesAtOffset),
+		CheckpointProperty<"GibWithParentChance">(m_GibWithParentChance),
+		CheckpointProperty<"ParentGibBlastStrengthMultiplier">(m_ParentGibBlastStrengthMultiplier),
+		CheckpointProperty<"InheritsVelWhenDetached">(m_InheritsVelWhenDetached),
+		CheckpointProperty<"InheritsAngularVelWhenDetached">(m_InheritsAngularVelWhenDetached),
+		CheckpointProperty<"IgnoresParticlesWhileAttached">(m_IgnoresParticlesWhileAttached));
 	writer.NewPropertyWithValue("SpecialBehaviour_BreakWoundPreset", m_BreakWound ? m_BreakWound->GetModuleAndPresetName() : "None");
 	writer.NewPropertyWithValue("SpecialBehaviour_ParentBreakWoundPreset", m_ParentBreakWound ? m_ParentBreakWound->GetModuleAndPresetName() : "None");
 	const auto saveWound = [&](const char* ownedProperty, const char* uidProperty, const std::unique_ptr<AEmitter>& owned, const AEmitter* wound) {

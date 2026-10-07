@@ -1,4 +1,5 @@
 #include "HeldDevice.h"
+#include "CheckpointProperties.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 #include "RTETools.h"
@@ -248,23 +249,24 @@ void HeldDevice::DiscardPersistedSnapshotState() {
 
 void HeldDevice::SaveSnapshotConfiguration(Writer& writer) const {
 	Attachable::SaveSnapshotConfiguration(writer);
-	writer.NewPropertyWithValue("HeldDeviceType", m_HeldDeviceType);
-	writer.NewPropertyWithValue("OneHanded", m_OneHanded);
-	writer.NewPropertyWithValue("DualWieldable", m_DualWieldable);
-	writer.NewPropertyWithValue("StanceOffset", m_StanceOffset);
-	writer.NewPropertyWithValue("SharpStanceOffset", m_SharpStanceOffset);
-	writer.NewPropertyWithValue("Supportable", m_Supportable);
-	writer.NewPropertyWithValue("SupportOffset", m_SupportOffset);
-	writer.NewPropertyWithValue("UseSupportOffsetWhileReloading", m_UseSupportOffsetWhileReloading);
-	writer.NewPropertyWithValue("GripStrengthMultiplier", m_GripStrengthMultiplier);
-	writer.NewPropertyWithValue("SharpLength", m_MaxSharpLength);
-	writer.NewPropertyWithValue("Loudness", m_Loudness);
-	writer.NewPropertyWithValue("GetsHitByMOsWhenHeld", m_GetsHitByMOsWhenHeld);
-	writer.NewPropertyWithValue("VisualRecoilMultiplier", m_VisualRecoilMultiplier);
-	writer.NewPropertyWithValue("SpecialBehaviour_Supported", m_Supported);
-	writer.NewPropertyWithValue("SpecialBehaviour_SupportAvailable", m_SupportAvailable);
-	writer.NewPropertyWithValue("SpecialBehaviour_SharpAim", m_SharpAim);
-	writer.NewPropertyWithValue("SpecialBehaviour_UnPickupable", m_IsUnPickupable);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"HeldDeviceType">(m_HeldDeviceType),
+		CheckpointProperty<"OneHanded">(m_OneHanded),
+		CheckpointProperty<"DualWieldable">(m_DualWieldable),
+		CheckpointProperty<"StanceOffset">(m_StanceOffset),
+		CheckpointProperty<"SharpStanceOffset">(m_SharpStanceOffset),
+		CheckpointProperty<"Supportable">(m_Supportable),
+		CheckpointProperty<"SupportOffset">(m_SupportOffset),
+		CheckpointProperty<"UseSupportOffsetWhileReloading">(m_UseSupportOffsetWhileReloading),
+		CheckpointProperty<"GripStrengthMultiplier">(m_GripStrengthMultiplier),
+		CheckpointProperty<"SharpLength">(m_MaxSharpLength),
+		CheckpointProperty<"Loudness">(m_Loudness),
+		CheckpointProperty<"GetsHitByMOsWhenHeld">(m_GetsHitByMOsWhenHeld),
+		CheckpointProperty<"VisualRecoilMultiplier">(m_VisualRecoilMultiplier),
+		CheckpointProperty<"SpecialBehaviour_Supported">(m_Supported),
+		CheckpointProperty<"SpecialBehaviour_SupportAvailable">(m_SupportAvailable),
+		CheckpointProperty<"SpecialBehaviour_SharpAim">(m_SharpAim),
+		CheckpointProperty<"SpecialBehaviour_UnPickupable">(m_IsUnPickupable));
 	writer.NewPropertyWithValue("SpecialBehaviour_ClearPickupableBy", true);
 	std::vector<std::string> pickupableBy(m_PickupableByPresetNames.begin(), m_PickupableByPresetNames.end());
 	std::sort(pickupableBy.begin(), pickupableBy.end());

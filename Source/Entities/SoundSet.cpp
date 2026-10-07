@@ -7,6 +7,10 @@
 #include "RTETools.h"
 #include "RTEError.h"
 
+#include <bit>
+#include <future>
+#include <iostream>
+
 using namespace RTE;
 
 const std::string SoundSet::m_sClassName = "SoundSet";
@@ -108,6 +112,61 @@ int SoundSet::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 int SoundSet::Save(Writer& writer) const {
 	Serializable::Save(writer);
+	if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+		struct File {
+			std::string path;
+			float x, y, minimumDistance, attenuationDistance;
+			CheckpointText checkpoint;
+		};
+		struct Fields {
+			SoundSelectionCycleMode cycle;
+			unsigned selectionIsSet;
+			int selectionIndex;
+			std::vector<File> files;
+			std::vector<CheckpointText> subsets;
+			CheckpointText simulation;
+		};
+		Fields fields{m_SoundSelectionCycleMode, static_cast<unsigned>(m_CurrentSelection.first), m_CurrentSelection.second};
+		fields.files.reserve(m_SoundData.size());
+		size_t bytes = sizeof(Fields);
+		for (const SoundData& data: m_SoundData) {
+			CheckpointText checkpoint = CheckpointWriter::Native([&] { return data.SoundFile.SaveCheckpoint(); });
+			bytes += sizeof(File) + data.SoundFile.GetDataPath().size() + checkpoint.OwnedBytes();
+			fields.files.push_back({data.SoundFile.GetDataPath(), data.Offset.m_X, data.Offset.m_Y,
+			    data.MinimumAudibleDistance, data.AttenuationStartDistance, std::move(checkpoint)});
+		}
+		const int indent = writer.GetIndent();
+		fields.subsets.reserve(m_SubSoundSets.size());
+		for (const SoundSet* subset: m_SubSoundSets) {
+			fields.subsets.push_back(Writer::Capture([subset](Writer& owned) { owned.NewPropertyWithValue("AddSoundSet", *subset); }, indent));
+			bytes += sizeof(CheckpointText) + fields.subsets.back().OwnedBytes();
+		}
+		fields.simulation = CheckpointWriter::Native([&] { return SaveSimulationCheckpoint(); });
+		bytes += fields.simulation.OwnedBytes();
+		// No sample, backend or live set is retained. All fields are shared and
+		// keep their existing order; only building their writer tape moves.
+		writer.Append(CheckpointText::Deferred([fields = std::move(fields), indent] {
+			return Writer::Capture([&](Writer& owned) {
+				owned.NewProperty("SoundSelectionCycleMode");
+				SaveSoundSelectionCycleMode(owned, fields.cycle);
+				for (const File& file: fields.files) {
+					owned.NewProperty("AddSound");
+					owned.ObjectStart("ContentFile");
+					owned.NewPropertyWithValue("FilePath", file.path);
+					owned.NewPropertyWithValue("Offset", Vector(file.x, file.y));
+					owned.NewPropertyWithValue("MinimumAudibleDistance", file.minimumDistance);
+					owned.NewPropertyWithValue("AttenuationStartDistance", file.attenuationDistance);
+					owned.NewPropertyWithValue("SpecialBehaviour_ContentCheckpoint", file.checkpoint.Base64(true));
+					owned.ObjectEnd();
+				}
+				for (const CheckpointText& subset: fields.subsets) owned.Append(subset);
+				owned.NewPropertyWithValue("SpecialBehaviour_CurrentSelectionIsSet", fields.selectionIsSet);
+				owned.NewPropertyWithValue("SpecialBehaviour_CurrentSelectionIndex", fields.selectionIndex);
+				owned.NewPropertyWithValue("SpecialBehaviour_SimulationSelection", fields.simulation.Base64(true));
+			}, indent).Text();
+		}, bytes));
+		return 0;
+	}
 
 	writer.NewProperty("SoundSelectionCycleMode");
 	SaveSoundSelectionCycleMode(writer, m_SoundSelectionCycleMode);
@@ -137,6 +196,81 @@ int SoundSet::Save(Writer& writer) const {
 	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_SimulationSelection", CheckpointWriter::Native([&] { return SaveSimulationCheckpoint(); }).Base64(true));
 
 	return 0;
+}
+
+bool RTE::RunOwnedSoundSetCaptureSelfTest() {
+	bool passed = true;
+	for (const auto cycle: {SoundSet::RANDOM, SoundSet::FORWARDS, SoundSet::ALL}) {
+		std::string expected;
+		CheckpointText captured;
+		{
+			auto source = std::make_unique<SoundSet>();
+			source->SetSoundSelectionCycleModeNow(cycle);
+			SoundData file;
+			file.SoundObject = nullptr;
+			file.SoundFile.Create("CheckpointCapture.rte/Sounds/A.wav");
+			file.SoundFile.SetFormattedReaderPosition("owned sound definition source");
+			file.Offset.m_X = -0.0F;
+			file.Offset.m_Y = std::bit_cast<float>(uint32_t{0x7fc01234});
+			file.MinimumAudibleDistance = 1.25F;
+			file.AttenuationStartDistance = -1.0F;
+			source->AddSoundData(file);
+			file.SoundFile.Create("CheckpointCapture.rte/Sounds/B.wav");
+			file.Offset.SetXY(3.5F, 9.75F);
+			source->AddSoundData(file);
+			auto child = std::make_unique<SoundSet>();
+			child->SetSoundSelectionCycleModeNow(SoundSet::FORWARDS);
+			child->AddSoundData(file);
+			source->GetSubSoundSets().push_back(child.release());
+			const auto save = [&] { return Writer::Capture([&](Writer& owned) { owned << *source; }, 1); };
+			expected = save().Text();
+			{
+				CheckpointWriter::BatchScope batch(true);
+				captured = save();
+			}
+			source->Destroy();
+		}
+		auto worker = std::async(std::launch::async, [captured] { return std::pair{captured.Text(), captured.SharedText()}; });
+		const auto [full, shared] = worker.get();
+		passed = full == expected && shared == expected && passed;
+	}
+	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL")
+	          << " owned_sound_definitions_outlive_their_sources files, subsets, float bits and all selection modes stay exact" << std::endl;
+	return passed;
+}
+
+bool RTE::RunOwnedSoundParametersCaptureSelfTest() {
+	std::string expected, expectedShared;
+	CheckpointText captured;
+	{
+		auto source = std::make_unique<SoundContainer>();
+		source->SetPosition(Vector(-0.0F, 13.25F));
+		source->SetVolume(0.625F);
+		source->SetPitch(1.25F);
+		source->SetPitchVariation(0.375F);
+		source->SetLoopSetting(3);
+		source->SetBusRouting(SoundContainer::BusRouting::MUSIC);
+		source->SetMusicPreEntryTime(5.5F);
+		source->SetMusicExitTime(17.75F);
+		source->SetPaused(true);
+		const auto save = [&] { return Writer::Capture([&](Writer& owned) { owned << *source; }, 1); };
+		const CheckpointText ordinary = save();
+		expected = ordinary.Text();
+		expectedShared = ordinary.SharedText();
+		{
+			CheckpointWriter::BatchScope batch(true);
+			captured = save();
+		}
+		source->SetPitch(0.75F);
+		source->SetVolume(1.0F);
+		source->SetPosition(Vector(99, 101));
+	}
+	auto worker = std::async(std::launch::async, [captured] { return std::pair{captured.Text(), captured.SharedText()}; });
+	const auto [full, shared] = worker.get();
+	const bool passed = full == expected && shared == expectedShared;
+	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL")
+	          << " owned_sound_parameters_outlive_their_sources full and shared bytes preserve parameters and runtime peer fields" << std::endl;
+	return passed;
 }
 
 void SoundSet::Destroy() {

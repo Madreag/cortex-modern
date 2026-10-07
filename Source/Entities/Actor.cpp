@@ -1,4 +1,5 @@
 #include "Actor.h"
+#include "CheckpointProperties.h"
 #include "MetricsCollector.h"
 #include <iostream>
 #include "CheckpointArchive.h"
@@ -700,34 +701,36 @@ void Actor::SaveSnapshotConfiguration(Writer& writer) const {
 	for (const Vector& point: m_MovePath) {
 		writer.NewPropertyWithValue("SpecialBehaviour_AddMovePathPoint", point);
 	}
-	writer.NewPropertyWithValue("SpecialBehaviour_WaypointCursor", m_WaypointCursor);
-	writer.NewPropertyWithValue("SpecialBehaviour_MoveTarget", m_MoveTarget);
-	writer.NewPropertyWithValue("SpecialBehaviour_PrevPathTarget", m_PrevPathTarget);
-	writer.NewPropertyWithValue("SpecialBehaviour_MoveVector", m_MoveVector);
-	writer.NewPropertyWithValue("SpecialBehaviour_UpdateMovePath", m_UpdateMovePath);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"SpecialBehaviour_WaypointCursor">(m_WaypointCursor),
+		CheckpointProperty<"SpecialBehaviour_MoveTarget">(m_MoveTarget),
+		CheckpointProperty<"SpecialBehaviour_PrevPathTarget">(m_PrevPathTarget),
+		CheckpointProperty<"SpecialBehaviour_MoveVector">(m_MoveVector),
+		CheckpointProperty<"SpecialBehaviour_UpdateMovePath">(m_UpdateMovePath));
 	writer.PerPeerEnd();
-	writer.NewPropertyWithValue("PassengerSlots", m_PassengerSlots);
-	writer.NewPropertyWithValue("ImpulseDamageThreshold", m_TravelImpulseDamage);
-	writer.NewPropertyWithValue("StableVelocityThreshold", m_StableVel);
-	writer.NewPropertyWithValue("StableRecoveryDelay", m_StableRecoverDelay);
-	writer.NewPropertyWithValue("CanRun", m_CanRun);
-	writer.NewPropertyWithValue("CrouchWalkSpeedMultiplier", m_CrouchWalkSpeedMultiplier);
-	writer.NewPropertyWithValue("AimRange", m_AimRange);
-	writer.NewPropertyWithValue("AimDistance", m_AimDistance);
-	writer.NewPropertyWithValue("SharpAimDelay", m_SharpAimDelay);
-	writer.NewPropertyWithValue("SightDistance", m_SightDistance);
-	writer.NewPropertyWithValue("Perceptiveness", m_Perceptiveness);
-	writer.NewPropertyWithValue("PainThreshold", m_PainThreshold);
-	writer.NewPropertyWithValue("CanRevealUnseen", m_CanRevealUnseen);
-	writer.NewPropertyWithValue("CharHeight", m_CharHeight);
-	writer.NewPropertyWithValue("HolsterOffset", m_HolsterOffset);
-	writer.NewPropertyWithValue("ReloadOffset", m_ReloadOffset);
-	writer.NewPropertyWithValue("MaxInventoryMass", m_MaxInventoryMass);
-	writer.NewPropertyWithValue("Organic", m_Organic);
-	writer.NewPropertyWithValue("Mechanical", m_Mechanical);
-	writer.NewPropertyWithValue("AIBaseDigStrength", m_AIBaseDigStrength);
-	writer.NewPropertyWithValue("SpecialBehaviour_MoveProximityLimit", m_MoveProximityLimit);
-	writer.NewPropertyWithValue("SpecialBehaviour_LimbPushForcesAndCollisionsDisabled", m_LimbPushForcesAndCollisionsDisabled);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"PassengerSlots">(m_PassengerSlots),
+		CheckpointProperty<"ImpulseDamageThreshold">(m_TravelImpulseDamage),
+		CheckpointProperty<"StableVelocityThreshold">(m_StableVel),
+		CheckpointProperty<"StableRecoveryDelay">(m_StableRecoverDelay),
+		CheckpointProperty<"CanRun">(m_CanRun),
+		CheckpointProperty<"CrouchWalkSpeedMultiplier">(m_CrouchWalkSpeedMultiplier),
+		CheckpointProperty<"AimRange">(m_AimRange),
+		CheckpointProperty<"AimDistance">(m_AimDistance),
+		CheckpointProperty<"SharpAimDelay">(m_SharpAimDelay),
+		CheckpointProperty<"SightDistance">(m_SightDistance),
+		CheckpointProperty<"Perceptiveness">(m_Perceptiveness),
+		CheckpointProperty<"PainThreshold">(m_PainThreshold),
+		CheckpointProperty<"CanRevealUnseen">(m_CanRevealUnseen),
+		CheckpointProperty<"CharHeight">(m_CharHeight),
+		CheckpointProperty<"HolsterOffset">(m_HolsterOffset),
+		CheckpointProperty<"ReloadOffset">(m_ReloadOffset),
+		CheckpointProperty<"MaxInventoryMass">(m_MaxInventoryMass),
+		CheckpointProperty<"Organic">(m_Organic),
+		CheckpointProperty<"Mechanical">(m_Mechanical),
+		CheckpointProperty<"AIBaseDigStrength">(m_AIBaseDigStrength),
+		CheckpointProperty<"SpecialBehaviour_MoveProximityLimit">(m_MoveProximityLimit),
+		CheckpointProperty<"SpecialBehaviour_LimbPushForcesAndCollisionsDisabled">(m_LimbPushForcesAndCollisionsDisabled));
 	writer.NewPropertyWithValue("SpecialBehaviour_BodyHitSound", m_BodyHitSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_AlarmSound", m_AlarmSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_PainSound", m_PainSound);

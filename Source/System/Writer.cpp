@@ -1,6 +1,7 @@
 #include "Writer.h"
 #include "System.h"
 #include "CheckpointArchive.h"
+#include "CheckpointProperties.h"
 #include "CheckpointImage.h"
 #include "BitmapCheckpoint.h"
 #include "Base64/base64.h"
@@ -899,6 +900,29 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		const CheckpointText captured = CheckpointWriter::CaptureNative(save);
 		value = 91; binary.assign("changed");
 		check(captured.Text() == reference, "owned_checkpoint_copies_native_values");
+		{
+			int64_t integer = std::numeric_limits<int64_t>::min();
+			bool flag = true;
+			float scalar = -0.0F;
+			Vector vector(-0.0F, std::bit_cast<float>(uint32_t{0x7fc01234}));
+			std::string binary("named\0field\xff", 12);
+			const auto write = [&](Writer& writer) {
+				WriteCapturedProperties(writer, CheckpointProperty<"Integer">(integer), CheckpointProperty<"Flag">(flag),
+				    CheckpointProperty<"Scalar">(scalar), CheckpointProperty<"Vector">(vector), CheckpointProperty<"Binary">(binary));
+				writer.PerPeerBegin();
+				WriteCapturedProperties(writer, CheckpointProperty<"PeerInteger">(integer), CheckpointProperty<"PeerFlag">(flag));
+				writer.PerPeerEnd();
+			};
+			const CheckpointText ordinary = Writer::Capture(write, 2);
+			CheckpointText frozen;
+			{
+				CheckpointWriter::BatchScope batch(true);
+				frozen = Writer::Capture(write, 2);
+			}
+			integer = 99; flag = false; scalar = 1.25F; vector.SetXY(33, 37); binary.assign("changed");
+			const auto actual = std::async(std::launch::async, [frozen] { return std::pair{frozen.Text(), frozen.SharedText()}; }).get();
+			check(actual.first == ordinary.Text() && actual.second == ordinary.SharedText(), "owned_named_properties_preserve_full_and_shared_bytes_after_mutation");
+		}
 		{
 			enum class SignedByte : int8_t { Low = -127 };
 			const uint8_t unusualBool = 0xFE;

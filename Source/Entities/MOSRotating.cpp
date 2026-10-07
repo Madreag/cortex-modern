@@ -1,4 +1,5 @@
 #include "MOSRotating.h"
+#include "CheckpointProperties.h"
 #include "MetricsCollector.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
@@ -490,14 +491,15 @@ void MOSRotating::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SpecialBehaviour_DeepGroupCheckpoint", CheckpointWriter::Native([&] { return m_PersistedDeepGroupCheckpoint.empty() ? CaptureOwnedCheckpoint(m_pDeepGroup) : m_PersistedDeepGroupCheckpoint; }).Base64(true));
 	writer.NewPropertyWithValue("SpecialBehaviour_ClearGibs", true);
 	for (const Gib* gib: m_Gibs) writer.NewPropertyWithValue("AddGib", *gib);
-	writer.NewPropertyWithValue("OrientToVel", m_OrientToVel);
-	writer.NewPropertyWithValue("GibImpulseLimit", m_GibImpulseLimit);
-	writer.NewPropertyWithValue("GibWoundLimit", m_GibWoundLimit);
-	writer.NewPropertyWithValue("GibBlastStrength", m_GibBlastStrength);
-	writer.NewPropertyWithValue("GibScreenShakeAmount", m_GibScreenShakeAmount);
-	writer.NewPropertyWithValue("WoundCountAffectsImpulseLimitRatio", m_WoundCountAffectsImpulseLimitRatio);
-	writer.NewPropertyWithValue("DetachAttachablesBeforeGibbingFromWounds", m_DetachAttachablesBeforeGibbingFromWounds);
-	writer.NewPropertyWithValue("GibAtEndOfLifetime", m_GibAtEndOfLifetime);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"OrientToVel">(m_OrientToVel),
+		CheckpointProperty<"GibImpulseLimit">(m_GibImpulseLimit),
+		CheckpointProperty<"GibWoundLimit">(m_GibWoundLimit),
+		CheckpointProperty<"GibBlastStrength">(m_GibBlastStrength),
+		CheckpointProperty<"GibScreenShakeAmount">(m_GibScreenShakeAmount),
+		CheckpointProperty<"WoundCountAffectsImpulseLimitRatio">(m_WoundCountAffectsImpulseLimitRatio),
+		CheckpointProperty<"DetachAttachablesBeforeGibbingFromWounds">(m_DetachAttachablesBeforeGibbingFromWounds),
+		CheckpointProperty<"GibAtEndOfLifetime">(m_GibAtEndOfLifetime));
 	writer.NewPropertyWithValue("SpecialBehaviour_GibSound", m_GibSound);
 	writer.NewPropertyWithValue("EffectOnGib", m_EffectOnGib);
 	writer.NewPropertyWithValue("LoudnessOnGib", m_LoudnessOnGib);

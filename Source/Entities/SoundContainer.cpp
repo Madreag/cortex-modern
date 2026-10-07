@@ -261,48 +261,116 @@ int SoundContainer::Save(Writer& writer) const {
 	// Due to writer limitations, the top level SoundSet has to be explicitly written out, even though SoundContainer standard behaviour is to hide it in INI and just have properties be part of the SoundContainer.
 	writer.NewPropertyWithValue("SpecialBehaviour_TopLevelSoundSet", *m_TopLevelSoundSet);
 
-	writer.NewProperty("SoundOverlapMode");
-	auto overlapModeMapEntry = std::find_if(c_SoundOverlapModeMap.begin(), c_SoundOverlapModeMap.end(), [&soundOverlapMode = m_SoundOverlapMode](auto element) { return element.second == soundOverlapMode; });
-	if (overlapModeMapEntry != c_SoundOverlapModeMap.end()) {
-		writer << overlapModeMapEntry->first;
+	if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+		if (std::none_of(c_SoundOverlapModeMap.begin(), c_SoundOverlapModeMap.end(), [this](const auto& entry) { return entry.second == m_SoundOverlapMode; })) {
+			RTEAbort("Tried to write invalid SoundOverlapMode when saving SoundContainer.");
+		}
+		struct Parameters {
+			SoundOverlapMode m_SoundOverlapMode;
+			BusRouting m_BusRouting;
+			uint64_t m_Immobile;
+			float m_AttenuationStartDistance, m_CustomPanValue, m_PanningStrengthMultiplier;
+			int m_Loops, m_Priority;
+			uint64_t m_AffectedByGlobalPitch;
+			float x, y, m_Volume, m_Pitch, m_PitchVariation;
+			uint64_t m_WasFadedOut, m_Paused;
+			float m_MusicPreEntryTime, m_MusicExitTime;
+		};
+		const Parameters fields{m_SoundOverlapMode, m_BusRouting, static_cast<uint64_t>(m_Immobile),
+		    m_AttenuationStartDistance, m_CustomPanValue, m_PanningStrengthMultiplier, m_Loops, m_Priority,
+		    static_cast<uint64_t>(m_AffectedByGlobalPitch), m_Pos.m_X, m_Pos.m_Y, m_Volume, m_Pitch, m_PitchVariation,
+		    static_cast<uint64_t>(m_WasFadedOut), static_cast<uint64_t>(m_Paused), m_MusicPreEntryTime, m_MusicExitTime};
+		const int indent = writer.GetIndent();
+		writer.Append(CheckpointText::Deferred([fields, indent] {
+			return Writer::Capture([&](Writer& owned) {
+				owned.NewProperty("SoundOverlapMode");
+				auto overlapModeMapEntry = std::find_if(c_SoundOverlapModeMap.begin(), c_SoundOverlapModeMap.end(), [&soundOverlapMode = fields.m_SoundOverlapMode](auto element) { return element.second == soundOverlapMode; });
+				if (overlapModeMapEntry != c_SoundOverlapModeMap.end()) {
+					owned << overlapModeMapEntry->first;
+				} else {
+					RTEAbort("Tried to write invalid SoundOverlapMode when saving SoundContainer.");
+				}
+				owned.NewProperty("BusRouting");
+				owned << fields.m_BusRouting;
+				owned.NewProperty("Immobile");
+				owned << fields.m_Immobile;
+				owned.NewProperty("AttenuationStartDistance");
+				owned << fields.m_AttenuationStartDistance;
+				owned.NewProperty("CustomPanValue");
+				owned << fields.m_CustomPanValue;
+				owned.NewProperty("PanningStrengthMultiplier");
+				owned << fields.m_PanningStrengthMultiplier;
+				owned.NewProperty("LoopSetting");
+				owned << fields.m_Loops;
+
+				owned.NewProperty("Priority");
+				owned << fields.m_Priority;
+				owned.NewProperty("AffectedByGlobalPitch");
+				owned << fields.m_AffectedByGlobalPitch;
+
+				owned.NewProperty("Position");
+				owned << Vector(fields.x, fields.y);
+				owned.NewProperty("Volume");
+				owned << fields.m_Volume;
+				owned.NewProperty("Pitch");
+				owned << fields.m_Pitch;
+				owned.NewProperty("PitchVariation");
+				owned << fields.m_PitchVariation;
+
+				owned.NewProperty("WasFadedOut");
+				owned << fields.m_WasFadedOut;
+				owned.NewProperty("Paused");
+				owned << fields.m_Paused;
+				owned.NewProperty("MusicPreEntryTime");
+				owned << fields.m_MusicPreEntryTime;
+				owned.NewProperty("MusicExitTime");
+				owned << fields.m_MusicExitTime;
+			}, indent).Text();
+		}, sizeof(Parameters)));
 	} else {
-		RTEAbort("Tried to write invalid SoundOverlapMode when saving SoundContainer.");
+		writer.NewProperty("SoundOverlapMode");
+		auto overlapModeMapEntry = std::find_if(c_SoundOverlapModeMap.begin(), c_SoundOverlapModeMap.end(), [&soundOverlapMode = m_SoundOverlapMode](auto element) { return element.second == soundOverlapMode; });
+		if (overlapModeMapEntry != c_SoundOverlapModeMap.end()) {
+			writer << overlapModeMapEntry->first;
+		} else {
+			RTEAbort("Tried to write invalid SoundOverlapMode when saving SoundContainer.");
+		}
+		writer.NewProperty("BusRouting");
+		writer << m_BusRouting;
+		writer.NewProperty("Immobile");
+		writer << m_Immobile;
+		writer.NewProperty("AttenuationStartDistance");
+		writer << m_AttenuationStartDistance;
+		writer.NewProperty("CustomPanValue");
+		writer << m_CustomPanValue;
+		writer.NewProperty("PanningStrengthMultiplier");
+		writer << m_PanningStrengthMultiplier;
+		writer.NewProperty("LoopSetting");
+		writer << m_Loops;
+
+		writer.NewProperty("Priority");
+		writer << m_Priority;
+		writer.NewProperty("AffectedByGlobalPitch");
+		writer << m_AffectedByGlobalPitch;
+
+		writer.NewProperty("Position");
+		writer << m_Pos;
+		writer.NewProperty("Volume");
+		writer << m_Volume;
+		writer.NewProperty("Pitch");
+		writer << m_Pitch;
+		writer.NewProperty("PitchVariation");
+		writer << m_PitchVariation;
+
+		writer.NewProperty("WasFadedOut");
+		writer << m_WasFadedOut;
+		writer.NewProperty("Paused");
+		writer << m_Paused;
+		writer.NewProperty("MusicPreEntryTime");
+		writer << m_MusicPreEntryTime;
+		writer.NewProperty("MusicExitTime");
+		writer << m_MusicExitTime;
 	}
-	writer.NewProperty("BusRouting");
-	writer << m_BusRouting;
-	writer.NewProperty("Immobile");
-	writer << m_Immobile;
-	writer.NewProperty("AttenuationStartDistance");
-	writer << m_AttenuationStartDistance;
-	writer.NewProperty("CustomPanValue");
-	writer << m_CustomPanValue;
-	writer.NewProperty("PanningStrengthMultiplier");
-	writer << m_PanningStrengthMultiplier;
-	writer.NewProperty("LoopSetting");
-	writer << m_Loops;
-
-	writer.NewProperty("Priority");
-	writer << m_Priority;
-	writer.NewProperty("AffectedByGlobalPitch");
-	writer << m_AffectedByGlobalPitch;
-
-	writer.NewProperty("Position");
-	writer << m_Pos;
-	writer.NewProperty("Volume");
-	writer << m_Volume;
-	writer.NewProperty("Pitch");
-	writer << m_Pitch;
-	writer.NewProperty("PitchVariation");
-	writer << m_PitchVariation;
-
-	writer.NewProperty("WasFadedOut");
-	writer << m_WasFadedOut;
-	writer.NewProperty("Paused");
-	writer << m_Paused;
-	writer.NewProperty("MusicPreEntryTime");
-	writer << m_MusicPreEntryTime;
-	writer.NewProperty("MusicExitTime");
-	writer << m_MusicExitTime;
 	if (writer.IsSnapshot()) {
 		writer.NewPropertyWithValue("SpecialBehaviour_SoundCheckpoint", CheckpointWriter::Native([&] { return SaveCheckpoint(); }).Base64(true));
 		g_AudioMan.NoteCarriedSoundIdentity(m_CheckpointIdentity);
