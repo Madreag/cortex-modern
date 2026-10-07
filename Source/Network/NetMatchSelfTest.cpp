@@ -17846,6 +17846,7 @@ namespace RTE {
 			if (name == "ui-presentation") passed = TestInMatchPresentation(&error);
 			else if (name == "pause-navigation") passed = TestPauseNavigationDuringRecovery(&error);
 			else if (name == "ticket-recovery") passed = TestInternetTicketRecovery(&error);
+			else if (name == "placement-confirm") passed = GameActivity::RunSetupEditorSelfTest(true);
 			else if (name == "setup-editor") passed = GameActivity::RunSetupEditorSelfTest();
 			else if (name == "chat-receipts") passed = TestChatReceipts<NetSession>(&error);
 			else if (name == "chat-routing") passed = TestChatRoutingAndBounds(&error);

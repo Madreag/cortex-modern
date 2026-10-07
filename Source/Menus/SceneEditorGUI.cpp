@@ -30,6 +30,10 @@
 #include "Deployment.h"
 #include "BunkerAssemblyScheme.h"
 #include "Loadout.h"
+#include "GUI.h"
+#include "AllegroBitmap.h"
+#include "GUIFont.h"
+#include "MenuAutomation.h"
 
 #include <atomic>
 #include <thread>
@@ -1390,7 +1394,23 @@ void SceneEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 	m_DrawTexture->Draw(Box(Vector(), m_DrawTexture->m_Width, m_DrawTexture->m_Height), Box(Vector(), m_DrawTexture->m_Width, m_DrawTexture->m_Height));
 	rlZDepth(0);
 
-	// Draw the pie menu
+	if (m_FeatureSet == INGAMEEDIT && GameActivity::IsLockstepPlacement() && m_EditorGUIMode != PICKINGOBJECT && m_EditorGUIMode != INACTIVE) {
+		const auto* game = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+		if (game && game->NeedsPlacementConfirmation(m_pController->GetPlayer())) {
+			const bool returnKey = game->IsPlacementConfirmKeyAvailable(m_pController->GetPlayer(), SDL_SCANCODE_RETURN);
+			const bool keypad = game->IsPlacementConfirmKeyAvailable(m_pController->GetPlayer(), SDL_SCANCODE_KP_ENTER);
+			const std::string prompt = returnKey ? "Enter / Return: finish placement   |   Pie menu: Done"
+			                                   : keypad ? "Keypad Enter: finish placement   |   Pie menu: Done"
+			                                            : "Pie menu: Done (finish placement)";
+			AllegroBitmap bitmap(pTargetBitmap);
+			auto* font = g_FrameMan.GetSmallFont(true);
+			const int y = pTargetBitmap->h - font->GetFontHeight() - 8;
+			rectfill(pTargetBitmap, 0, y - 4, pTargetBitmap->w - 1, pTargetBitmap->h - 1, makeacol32(20, 22, 27, 255));
+			font->DrawAligned(&bitmap, pTargetBitmap->w / 2, y, prompt, GUIFont::Centre);
+			MenuAutomation::NoteDrawnText("PlacementConfirm", prompt);
+		}
+	}
+	// The original pie gesture remains visible above the placement hint.
 	m_PieMenu->Draw(pTargetBitmap, targetPos);
 }
 

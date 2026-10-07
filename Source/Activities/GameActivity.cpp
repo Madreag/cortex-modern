@@ -60,6 +60,8 @@
 #include "TimerMan.h"
 #include "OwnedMovableObjects.h"
 #include "System.h"
+#include "MenuAutomation.h"
+#include "NetModerationGUI.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -1160,6 +1162,14 @@ bool GameActivity::IsLockstepPlacement() {
 	return ScenarioRunner::IsLockstepControllerSyncActive();
 }
 
+bool GameActivity::IsPlacementConfirmKeyAvailable(int player, int scancode) const {
+	// A shared keyboard confirms one local seat; other local seats keep their own controller gestures.
+	const int inputPlayer = LocalInputOfPlayer(player);
+	if (inputPlayer != Players::PlayerOne) return false;
+	const auto& mappings = *g_UInputMan.GetControlScheme(inputPlayer)->GetInputMappings();
+	return std::none_of(mappings.begin(), mappings.end(), [scancode](const InputMapping& mapping) { return mapping.GetKey() == scancode; });
+}
+
 uint8_t GameActivity::LockstepSeatPeerId(int player) {
 	const auto config = ScenarioRunner::GetLockstepMatchConfig();
 	if (!config || player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
@@ -1886,6 +1896,17 @@ void GameActivity::UpdateEditing() {
 
 		// A scripted gesture stands in for this seat's own mouse; only the UI probe queues one.
 		DriveScriptedSetupEditor(player);
+		// Return is an additional local Done gesture; the original editor still validates the brain and submits the shared command.
+		const auto* networkPanel = g_MenuMan.GetNetworkPanel();
+		const bool typing = g_ConsoleMan.IsEnabled() || (networkPanel && networkPanel->IsChatEntryOpen());
+		if (lockstep && !typing && !g_MenuMan.IsLiveMenuOwningInput() && !m_ReadyToStart[player] && !m_LockstepPlacementSubmitted[player] &&
+		    m_pEditorGUI[player]->GetEditorGUIMode() != SceneEditorGUI::PICKINGOBJECT &&
+		    m_pEditorGUI[player]->GetEditorGUIMode() != SceneEditorGUI::INACTIVE &&
+		    !(SDL_GetModState() & (SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) &&
+		    ((g_UInputMan.KeyPressed(SDLK_RETURN) && IsPlacementConfirmKeyAvailable(player, SDL_SCANCODE_RETURN)) ||
+		     (g_UInputMan.KeyPressed(SDLK_KP_ENTER) && IsPlacementConfirmKeyAvailable(player, SDL_SCANCODE_KP_ENTER)))) {
+			m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::DONEEDITING);
+		}
 
 		// The editor answers a DONE it refuses by taking the seat back to placing a brain, which says nothing
 		// about the match; the seat hears the same refusal a wire-refused placement gives it.
@@ -4259,7 +4280,7 @@ bool GameActivity::RunNetInventoryRelaunchProbe(std::string_view phase) {
 	return check("local_inventory_and_marks_survive", matched && state.held > 0 && (phase == "first" ? relaunch && state.first == 1 : !relaunch && state.first == 1 && state.after == 1)) && state.passed;
 }
 
-bool GameActivity::RunSetupEditorSelfTest() {
+bool GameActivity::RunSetupEditorSelfTest(bool confirmOnly) {
 	struct Restore {
 		std::unique_ptr<Activity> activity;
 		MovableMan::WorldSetAside world;
@@ -4313,6 +4334,77 @@ bool GameActivity::RunSetupEditorSelfTest() {
 	}
 	editor->SetEditorGUIMode(SceneEditorGUI::ADDINGOBJECT); editor->SetCursorPos(Vector(120, 120));
 	game->UpdateEditing();
+	if (confirmOnly) {
+		const auto* brainPreset = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+		if (!brainPreset) return false;
+		{
+			const ScopedEditorRNG local(true);
+			g_SceneMan.GetScene()->SetResidentBrain(0, nullptr);
+			editor->SetCurrentObject(static_cast<AHuman*>(brainPreset->Clone()));
+			editor->SetEditorGUIMode(SceneEditorGUI::INSTALLINGBRAIN);
+		}
+		bool singlePlayerReceivedReturn = false;
+		bool receivedReturn = false;
+		bool refusedUnplacedBrain = false;
+		const auto drawFrame = [&] {
+			SDL_Event event;
+			while (SDL_PollEvent(&event)) g_UInputMan.HandleInputEvent(event);
+			g_UInputMan.Update(false);
+			if (g_UInputMan.KeyPressed(SDLK_RETURN)) receivedReturn = true;
+			if (!ScenarioRunner::HasLockstepCoordinator() && g_UInputMan.KeyPressed(SDLK_RETURN)) singlePlayerReceivedReturn = true;
+			game->UpdateEditing();
+			if (g_UInputMan.KeyPressed(SDLK_RETURN) && g_FrameMan.GetScreenText(0).find("Place your brain in a valid spot first") != std::string::npos) refusedUnplacedBrain = true;
+			editor->Draw(g_FrameMan.GetBackBuffer32(), Vector());
+			MenuAutomation::AfterDrawnFrame();
+			g_UInputMan.EndFrame();
+			g_UInputMan.EndSimUpdate();
+		};
+		std::string observation;
+		const auto finishHand = [&] {
+			for (int frames = 0; frames < 90 && MenuAutomation::HandBusy(); ++frames) drawFrame();
+			bool passed = false;
+			return MenuAutomation::HandFinished(passed, observation) && passed;
+		};
+		if (!MenuAutomation::HandGameKey("Return", [&] { return refusedUnplacedBrain; }, "invalid placement refusal", observation) ||
+		    !finishHand() || game->m_LockstepPlacementSubmitted[0] || !ScenarioRunner::DrainLocalGameCommands().empty()) {
+			System::PrintDiagnosticLine("[placement-confirm-selftest] FAIL enter_without_a_brain_must_refuse " + observation + " mode=" + std::to_string(editor->GetEditorGUIMode())); return false;
+		}
+		{
+			const ScopedEditorRNG local(true);
+			auto* brain = static_cast<AHuman*>(brainPreset->Clone());
+			brain->SetTeam(TeamOne); brain->SetPos(Vector(120, 120));
+			g_SceneMan.GetScene()->SetResidentBrain(0, brain);
+			editor->SetCurrentObject(nullptr); editor->SetEditorGUIMode(SceneEditorGUI::ADDINGOBJECT);
+		}
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		if (!MenuAutomation::HandGameKey("Return", [&] { return singlePlayerReceivedReturn; }, "single player Return", observation) ||
+		    !finishHand() || editor->GetEditorGUIMode() != SceneEditorGUI::ADDINGOBJECT || game->m_ReadyToStart[0]) {
+			System::PrintDiagnosticLine("[placement-confirm-selftest] FAIL single_player_return_changed " + observation); return false;
+		}
+		ScenarioRunner::SetLockstepCoordinator(&coordinator);
+		{
+			auto& mapping = (*g_UInputMan.GetControlScheme(0)->GetInputMappings())[INPUT_FIRE];
+			struct RestoreKey { InputMapping& mapping; int key; ~RestoreKey() { mapping.SetKey(key); } } restoreKey{mapping, mapping.GetKey()};
+			mapping.SetKey(SDL_SCANCODE_RETURN);
+			receivedReturn = false;
+			if (!MenuAutomation::HandGameKey("Return", [&] { return receivedReturn; }, "mapped Return", observation) || !finishHand() ||
+			    game->m_LockstepPlacementSubmitted[0] || editor->GetEditorGUIMode() != SceneEditorGUI::ADDINGOBJECT) {
+				System::PrintDiagnosticLine("[placement-confirm-selftest] FAIL return_stole_existing_player_binding " + observation); return false;
+			}
+		}
+		if (!MenuAutomation::HandGameKey("Return", [&] { return game->m_LockstepPlacementSubmitted[0]; }, "placement confirmation", observation)) return false;
+		for (int frames = 0; frames < 90 && MenuAutomation::HandBusy(); ++frames) drawFrame();
+		bool confirmed = false;
+		const bool finished = MenuAutomation::HandFinished(confirmed, observation);
+		const auto commands = ScenarioRunner::DrainLocalGameCommands();
+		const bool oneBrain = commands.size() == 1 && std::holds_alternative<NetGamePlaceBrain>(commands.front().payload);
+		drawFrame(); drawFrame();
+		const bool passed = finished && confirmed && oneBrain && !game->m_ReadyToStart[0] && ScenarioRunner::DrainLocalGameCommands().empty();
+		System::PrintDiagnosticLine(std::string("[placement-confirm-selftest] ") + (passed ? "PASS " : "FAIL ") +
+		    "enter_submits_one_validated_brain_and_waits_for_shared_commit " + observation + " commands=" + std::to_string(commands.size()));
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		return passed;
+	}
 	const auto before = g_MovableMan.MarkAddQueues();
 	const float funds = game->GetTeamFunds(TeamOne);
 	const std::string rng = g_SimRNG.SerializeStateForHashing();
