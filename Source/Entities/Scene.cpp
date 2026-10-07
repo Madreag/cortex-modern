@@ -3476,6 +3476,17 @@ std::shared_ptr<volatile PathRequest> Scene::CalculatePathAsync(const Vector& st
 	return GetPathFinder(team).CalculatePathAsync(start, end, jumpHeight, digStrength, callback, committedHorizon, completeTick);
 }
 
+std::shared_ptr<volatile PathRequest> Scene::CalculatePathAsyncForEditor(const Vector& start, const Vector& end, float jumpHeight, float digStrength, Activity::Teams team, PathCompleteCallback callback) {
+	const bool committedHorizon = SharedQueryUsesCommittedHorizon();
+	if (committedHorizon) {
+		FlushHorizonTerrainBoxes();
+		CommitSharedHorizon();
+	}
+	// The editor waits on the thread that advances lockstep. Keep its terrain view pinned,
+	// but let the worker publish this local result without requiring that thread to reach T+H.
+	return GetPathFinder(team).CalculatePathAsync(start, end, jumpHeight, digStrength, callback, committedHorizon, 0);
+}
+
 int Scene::GetScenePathSize() const {
 	return s_ScenePath.size();
 }

@@ -20,6 +20,7 @@
 #include "ScenarioRunner.h"
 #include "TerrainLayerSnapshot.h"
 #include "AsyncLineWriter.h"
+#include "SceneEditorGUI.h"
 
 #include "tracy/Tracy.hpp"
 
@@ -2016,6 +2017,103 @@ int PathFinder::RunHorizonGridSelfTest() {
 
 	if (!ThreadMan::IsConstructed()) {
 		ThreadMan::Construct(); // the async rows push onto the background pool
+	}
+
+	// Placement release waits for this editor query on the thread that advances lockstep.
+	// Drain the solver without advancing a frame: a solved but tick-deferred answer would hang that release.
+	{
+		struct BrainPathEditor : SceneEditorGUI {
+			using SceneEditorGUI::RequestBrainSkyPath;
+			bool Complete() const { return m_PathRequest && m_PathRequest->complete; }
+			bool Matches(const std::list<Vector>& path, float cost) const { return m_BrainSkyPath == path && m_BrainSkyPathCost == cost; }
+			uint64_t Generation() const { return m_PathRequest->horizonGeneration; }
+		};
+		LoopbackTransport idle;
+		NetLockstepConfig lockstep;
+		lockstep.localPeerId = 1;
+		lockstep.remotePeerId = 2;
+		lockstep.peerCount = 2;
+		lockstep.matchConfig = NetMatchConfigUtil::MakeDefault(0x5048413453455353ULL);
+		lockstep.matchConfig.pathHorizonTicks = 4;
+		NetLockstepCoordinator seated;
+		std::string lockstepError;
+		if (!seated.StartReplay(idle, lockstep, &lockstepError)) return fail("editor fixture lockstep replay did not start");
+		LockstepBinding lockstepBinding;
+		ScenarioRunner::SetLockstepCoordinator(&seated);
+		ScenarioRunner::SetLockstepAppliedFrame(100);
+		Scene scene;
+		SLTerrain terrain;
+		FixtureBinding binding;
+		if (terrain.TestInstallMaterialBitmap(160, 80) < 0) return fail("editor fixture terrain was not installed");
+		binding.Bind(&scene, &terrain);
+		scene.TestInstallHorizonPathFinders(8, 4, 20, &air);
+		constexpr auto team = Activity::Teams::TeamTwo;
+		PathFinder& finder = scene.GetPathFinder(team);
+		BrainPathEditor editor;
+		const Vector start(10, 10);
+		const Vector end(150, 50);
+		// The live grid disagrees with the committed grid. Local completion must still use the original terrain view.
+		for (int y = 0; y < 4; ++y) for (int x = 0; x < 8; ++x) {
+			const int node = finder.TestNodeIdAt(x, y);
+			finder.QueueHorizonDelta(100, 4, node, blocked);
+			finder.TestApplyLiveUpdate(node, blocked);
+		}
+		std::list<Vector> expected;
+		float expectedCost = -1.0F;
+		finder.CalculatePath(start, end, expected, expectedCost, FLT_MAX, c_PathFindingDefaultDigStrength, true);
+		editor.RequestBrainSkyPath(scene, start, end, team);
+		scene.BlockUntilAllPathingRequestsComplete();
+		if (!editor.Complete()) {
+			// Publish only for cleanup, while the editor still owns the callback's destination.
+			finder.CommitPathRequestsThrough(104);
+			return fail("brain placement query needs a future tick after its solver has finished");
+		}
+		if (ScenarioRunner::GetLockstepAppliedFrame() != 100 || finder.TestDeferredPathRequestCount() != 0 ||
+		    !editor.Matches(expected, expectedCost) || editor.Generation() != finder.TestHorizonGeneration() || expectedCost > 10000.0F) {
+			std::cout << Tag << " editor frame=" << ScenarioRunner::GetLockstepAppliedFrame() << " pending=" << finder.TestDeferredPathRequestCount()
+			          << " matches=" << editor.Matches(expected, expectedCost) << " generation=" << editor.Generation()
+			          << " expected_generation=" << finder.TestHorizonGeneration() << " expected_cost=" << expectedCost << std::endl;
+			return fail("clear brain path changed its tick, terrain view, callback result or placement cost");
+		}
+		std::cout << Tag << " PASS brain-placement-clock-stopped clear_cost=" << expectedCost << std::endl;
+
+		// Once blocking material really commits, the editor must finish with the same rejected path and cost.
+		ScenarioRunner::SetLockstepAppliedFrame(104);
+		scene.CommitSharedHorizon();
+		finder.CalculatePath(start, end, expected, expectedCost, FLT_MAX, c_PathFindingDefaultDigStrength, true);
+		editor.RequestBrainSkyPath(scene, start, end, team);
+		scene.BlockUntilAllPathingRequestsComplete();
+		if (!editor.Complete()) {
+			finder.CommitPathRequestsThrough(108);
+			return fail("blocked brain placement query needs a future tick after its solver has finished");
+		}
+		if (ScenarioRunner::GetLockstepAppliedFrame() != 104 || !editor.Matches(expected, expectedCost) || expectedCost <= 10000.0F) {
+			return fail("blocked brain path changed its tick, callback result or rejection cost");
+		}
+		std::cout << Tag << " PASS brain-placement-blocked-path cost=" << expectedCost << std::endl;
+
+		// Shared gameplay requests retain their T+H publication, even though local placement has completed.
+		bool sharedCallback = false;
+		auto shared = scene.CalculatePathAsync(start, end, FLT_MAX, c_PathFindingDefaultDigStrength, team,
+		                                       [&](auto) { sharedCallback = true; });
+		scene.BlockUntilAllPathingRequestsComplete();
+		finder.CommitPathRequestsThrough(107);
+		const bool early = shared->complete || sharedCallback;
+		finder.CommitPathRequestsThrough(108);
+		if (early || !shared->complete || !sharedCallback || shared->totalCost != expectedCost ||
+		    const_cast<const std::list<Vector>&>(shared->path) != expected) {
+			return fail("editor completion changed shared path publication or its answer");
+		}
+		std::cout << Tag << " PASS brain-placement-shared-publication" << std::endl;
+
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		finder.CalculatePath(start, end, expected, expectedCost, FLT_MAX, c_PathFindingDefaultDigStrength, false);
+		editor.RequestBrainSkyPath(scene, start, end, team);
+		scene.BlockUntilAllPathingRequestsComplete();
+		if (!editor.Complete() || editor.Generation() != 0 || !editor.Matches(expected, expectedCost)) {
+			return fail("single-player brain path changed its completion, path or cost");
+		}
+		std::cout << Tag << " PASS brain-placement-single-player" << std::endl;
 	}
 
 	ResetHorizonWaitStats();
