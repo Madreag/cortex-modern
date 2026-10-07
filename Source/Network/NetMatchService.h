@@ -960,6 +960,8 @@ namespace RTE {
 		/// §11: reads the recovery record so the landing screen can offer a rejoin after a relaunch, or
 		/// say exactly why it cannot. Read-only and safe to call repeatedly.
 		void ScanStoredTicket();
+		/// Sets aside the stored offer and stops its automatic watch; the seat ticket remains usable.
+		bool DismissReconnectOffer(uint64_t nowMs, std::string* error = nullptr);
 		/// Whether the §11 retry schedule still has work, so the menu loop pumps the service whatever
 		/// screen is up rather than only while the multiplayer screen is open.
 		bool NeedsRecoveryPump() const;
@@ -1404,6 +1406,7 @@ namespace RTE {
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestLobbyTrafficKeepsAHostLinkAlive(std::string* error);
 		friend bool TestMenuLobbyWaitsForALiveHost(std::string* error);
+		friend bool TestDismissedRejoinStaysDismissed(std::string* error);
 		friend bool TestLobbyTimeoutDoesNotClaimHostDeparture(std::string* error);
 		friend bool TestAJoinedRoundGivesTheSessionItsTraffic(std::string* error);
 		friend bool TestALinkClosedForTheImageKeepsTheSeatAtTheRematch(std::string* error);

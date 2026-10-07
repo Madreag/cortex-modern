@@ -248,6 +248,39 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetReconnectTicketStore::DismissOffer(const NetH4TicketRecord& record, std::string* error) {
+		// Bind the preference to the canonical ticket, so a new seat or credential has its own offer.
+		std::vector<uint8_t> body;
+		NetAuthBytes32 fingerprint{};
+		if (!Serialize(record, body) || !NetH4MacTicketRecord(record.credential, body, fingerprint)) {
+			SetError(error, "could not identify the rejoin offer to dismiss");
+			return false;
+		}
+		const std::vector<uint8_t> bytes(fingerprint.begin(), fingerprint.end());
+		const std::filesystem::path path(m_Path + ".dismissed"), temporary(m_Path + ".dismissed.tmp");
+		if (!WriteFileDurably(temporary, bytes, error)) return false;
+		std::error_code code;
+		std::filesystem::rename(temporary, path, code);
+		if (code) {
+			std::error_code ignored;
+			std::filesystem::remove(temporary, ignored);
+			SetError(error, "could not save the rejoin dismissal: " + code.message());
+			return false;
+		}
+		std::filesystem::permissions(path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write, std::filesystem::perm_options::replace, code);
+		return true;
+	}
+
+	bool NetReconnectTicketStore::IsOfferDismissed(const NetH4TicketRecord& record) const {
+		std::error_code code;
+		if (std::filesystem::file_size(m_Path + ".dismissed", code) != sizeof(NetAuthBytes32) || code) return false;
+		std::ifstream file(m_Path + ".dismissed", std::ios::binary);
+		NetAuthBytes32 fingerprint{};
+		if (!file.read(reinterpret_cast<char*>(fingerprint.data()), fingerprint.size()) || file.peek() != std::char_traits<char>::eof()) return false;
+		std::vector<uint8_t> body;
+		return Serialize(record, body) && NetH4VerifyTicketRecord(record.credential, body, fingerprint);
+	}
+
 	NetH4TicketLoadResult NetReconnectTicketStore::Read(uint64_t nowUnixMs, NetH4TicketRecord& out, std::string* error, std::vector<uint8_t>& bytes) const {
 		std::error_code code;
 		if (!std::filesystem::exists(m_Path, code)) {
@@ -316,6 +349,8 @@ namespace RTE {
 		}
 		std::filesystem::remove(m_Path + ".routes", code);
 		if (code) { SetError(error, "could not delete the recovery routes: " + code.message()); return false; }
+		std::filesystem::remove(m_Path + ".dismissed", code);
+		if (code) { SetError(error, "could not delete the rejoin dismissal: " + code.message()); return false; }
 		++m_Clears;
 		return true;
 	}

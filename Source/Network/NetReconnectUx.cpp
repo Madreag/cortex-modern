@@ -124,6 +124,11 @@ namespace RTE {
 		m_OfferAddress.clear();
 	}
 
+	void NetReconnectUx::DismissStoredOffer() {
+		if (m_Offer == NetReconnectOffer::Available) m_Offer = NetReconnectOffer::Dismissed;
+		StopWatchingForHostReturn();
+	}
+
 	void NetReconnectUx::WatchForHostReturn(std::string matchName, std::string directorySessionId) {
 		m_AwaitingHostReturn = true;
 		m_HostReturned = false;
@@ -174,6 +179,7 @@ namespace RTE {
 			case NetReconnectOffer::Stale: return "The saved rejoin information is too old to use.";
 			case NetReconnectOffer::Missing: return "No reconnect record for that match.";
 			case NetReconnectOffer::None: break;
+			case NetReconnectOffer::Dismissed: break;
 		}
 		return "";
 	}

@@ -11416,6 +11416,20 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	bool NetMatchService::DismissReconnectOffer(uint64_t nowMs, std::string* error) {
+		m_ReconnectUx.Cancel(nowMs);
+		m_ReconnectUx.DismissOffer();
+		m_ReconnectUx.StopWatchingForHostReturn();
+		m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+		NetH4TicketRecord record;
+		if (m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) == NetH4TicketLoadResult::Loaded) {
+			m_ReconnectUx.OfferStoredTicket(NetH4TicketLoadResult::Loaded, record.hostAddress);
+			m_ReconnectUx.DismissStoredOffer();
+			return m_TicketStore.DismissOffer(record, error);
+		}
+		return true;
+	}
+
 	void NetMatchService::ScanStoredTicket() {
 		if (!s_AdmissionEnabled) {
 			m_ReconnectUx.DismissOffer();
@@ -11426,6 +11440,10 @@ static std::string ResyncSaveName() {
 		NetH4TicketRecord record;
 		const NetH4TicketLoadResult load = m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr);
 		m_ReconnectUx.OfferStoredTicket(load, record.hostAddress);
+		if (load == NetH4TicketLoadResult::Loaded && m_TicketStore.IsOfferDismissed(record)) {
+			m_ReconnectUx.DismissStoredOffer();
+			return;
+		}
 		// 7e: the ticket names a match whose host is not here. The prompt waits for that host to come
 		// back rather than failing a rejoin at a host that is gone.
 		if (load == NetH4TicketLoadResult::Loaded) {
