@@ -2771,7 +2771,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     import spread_peers as spread
     spread.add_arguments(parser)
-    parser.add_argument("--capture-peer", help="reviewed peer on the controller's private Windows recorder; defaults to the first peer")
+    parser.add_argument("--capture-peer", help="reviewed peer on its named Windows runner's private desktop; defaults to the first peer")
     parser.add_argument('--win-cause-log', action='store_true', help='observe duel brain loss and retain native death events in a private spread runtime')
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path)

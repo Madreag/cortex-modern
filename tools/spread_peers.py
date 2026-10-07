@@ -12,7 +12,9 @@ peers; reviewed, held and recorder peers cannot share their box with another
 peer of this case. Quiet peers reserve the whole box alone. Distinct cases may
 use the same named box through ordinary slots, within native capacity guards.
 Peer.held declares any target of a hold or stall lever before allocation.
-Peer.recorder requires the controller's private Windows video recorder.
+Peer.recorder requires the named Windows runner's private desktop. A remote
+Windows session task runs that same recorder and returns its evidence through
+the existing collector. Recorder peers remain isolated within their case.
 Peer.readback permits the named reviewed screen's native readback.
 Every peer must be named in peer_boxes, by actual name or host/seatN alias.
 A value may contain the lead's first and second named boxes (BOX|SECOND).
@@ -93,8 +95,11 @@ admission conditions wait: FIFO/start spacing, exclusive holders (including an
 ownerless marker, preserved for the lead), capacity mutexes, CPU, SSH, payload
 slots, builds and quiet-box availability. Every retry checks the original
 native guard, renews this peer's ownership and releases locks between probes.
-Quiet peers launch only alone and below the strict CPU guard. Preparation
-claims retain root/control-port ownership but consume no engine share, payload
+Quiet peers launch only alone and below the strict CPU guard.
+Timing suitability in the catalog is historical evidence; an explicitly
+named quiet route retains the strict native guard and the caller's timing
+verdict. It does not change those measurements or their required bounds.
+Preparation claims retain root/control-port ownership but consume no engine share, payload
 slot or alone marker; those are acquired at native launch. The unchanged
 native engine-start mutex checks real engines and memory atomically. Root,
 port, hash and ownership conflicts remain fatal case defects. A zero wait
@@ -1620,10 +1625,8 @@ class Case:
                 box['requested_task_slot'] = int(task_slot)
             other_assignments = {name:item[0]['name'] for name,item in self.members.items() if name != peer.name}
             reason = sharing_reason(self.peers, other_assignments, peer.name, box['name'])
-            if peer.recorder and not (box['kind'] == 'local' and box['os'] == 'windows'):
-                reason = "reviewed screen requires the controller's private Windows recorder"
-            if peer.quiet and box.get('timing') is False:
-                reason = 'catalog does not permit timing measurements on this box'
+            if peer.recorder and not (box['os'] == 'windows' and box['kind'] in ('local', 'windows-task')):
+                reason = "reviewed screen requires the named runner's private Windows recorder"
             needs = self.pool.Needs(os=peer.os, engines=peer.engines, gpu=bool(peer.size), memory=peer.memory,
                                     alone=peer.quiet, size=peer.size, only_box=box['name'],
                                     case_id=self.id, peer_id=peer.name, share_ok=peer.share_ok,
