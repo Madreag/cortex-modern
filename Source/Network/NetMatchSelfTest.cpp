@@ -35,6 +35,22 @@
 #include "MovableMan.h"
 #include "ScenarioRunner.h"
 #include "NetModerationGUIProbe.h"
+#include "MenuAutomation.h"
+#include "GUIDrawRecord.h"
+#include "GUI.h"
+#include "AllegroScreen.h"
+#include "GUITextBox.h"
+#include "FrameMan.h"
+#include "SettingsGUI.h"
+#include "ModManagerGUI.h"
+#include "SaveLoadMenuGUI.h"
+#include "PauseMenuGUI.h"
+#include "MainMenuGUI.h"
+#include "TitleScreen.h"
+#include "GUIInputWrapper.h"
+#include "UInputMan.h"
+#include "WindowMan.h"
+#include <SDL3/SDL.h>
 
 #ifdef SYSTEM_MINIZIP
 #include <minizip/zip.h>
@@ -17540,10 +17556,6 @@ namespace RTE {
 		const auto check = [&](bool ok, const std::string& why) {
 			if (!ok) { std::cerr << "[net-match-selftest] FAIL ui_presentation: " << why << std::endl; passed = false; }
 		};
-		check(!NetHeldWaitShouldLeave(true, false, true, true) && !NetHeldWaitShouldLeave(true, true, false, true),
-		      "Escape cancels an owned chat/panel and also leaves the held-seat wait");
-		check(NetHeldWaitShouldLeave(true, false, false, true) && !NetHeldWaitShouldLeave(false, false, false, true) &&
-		      !NetHeldWaitShouldLeave(true, false, false, false), "held-wait Escape no longer follows its original action outside text focus");
 		const std::string returnNotice = NetReconnectUx::HeldSeatReturnNotice();
 		check(returnNotice.find("AI plays your units") != std::string::npos && returnNotice.find("until the host reassigns it") != std::string::npos,
 		      "in-match leave/rejoin copy promises unconditional seat ownership: " + returnNotice);
@@ -17614,6 +17626,104 @@ namespace RTE {
 		return passed;
 	}
 
+	bool TestPauseNavigationDuringRecovery(std::string* error) {
+		NetMatchService::Construct();
+		struct Restore {
+			std::unique_ptr<Activity> activity;
+			bool inActivity = g_ActivityMan.IsInActivity();
+			Restore() { g_ActivityMan.SwapCheckpointActivity(activity); }
+			~Restore() {
+				if (g_MenuMan.IsLocalPauseMenuOpen()) g_MenuMan.ToggleLocalPauseMenu();
+				GUIInputWrapper::SetAutomationDriving(false);
+				SetPanelDrawRecording(false);
+				g_ActivityMan.SwapCheckpointActivity(activity);
+				g_ActivityMan.SetInActivity(inActivity);
+				NetMatchService::Destruct();
+			}
+		} restore;
+		std::unique_ptr<Activity> game = std::make_unique<GameActivity>();
+		g_ActivityMan.SwapCheckpointActivity(game);
+		g_ActivityMan.GetActivity()->SetActivityState(Activity::Editing);
+		g_ActivityMan.SetInActivity(true);
+		g_NetMatchService.m_State = NetMatchServiceState::Running;
+		g_NetMatchService.m_IsHost = true;
+		g_NetMatchService.m_MatchWasRunning = true;
+		GUIInputWrapper::SetAutomationDriving(true);
+		SetPanelDrawRecording(true);
+		bool waiting = false, leftWait = false;
+		const auto frame = [&] {
+			SDL_Event event{};
+			while (SDL_PollEvent(&event)) g_UInputMan.HandleInputEvent(event);
+			g_UInputMan.Update(!waiting);
+			if (waiting) leftWait = g_MenuMan.UpdateNetworkWaitInput();
+			else g_MenuMan.UpdateLocalPauseMenu();
+			g_MenuMan.DrawLocalPauseMenu();
+			MenuAutomation::AfterDrawnFrame();
+			g_UInputMan.EndFrame();
+		};
+		std::string observation;
+		const auto finishHand = [&] {
+			for (int frames = 0; frames < 90 && MenuAutomation::HandBusy(); ++frames) frame();
+			bool passed = false;
+			return MenuAutomation::HandFinished(passed, observation) && passed;
+		};
+		if (!MenuAutomation::HandGameKey("Escape", [] { return g_MenuMan.IsLocalPauseMenuOpen(); }, "recovering match pause menu", observation) || !finishHand()) {
+			*error = "Escape paused or left the recovering match instead of opening its local menu: " + observation;
+			return false;
+		}
+		if (!MenuAutomation::HandClick(g_MenuMan.GetActivePauseMenu()->AutomationManager(), "ButtonSettings", nullptr, observation) || !finishHand() ||
+		    g_MenuMan.GetActivePauseMenu()->AutomationActiveScreenName() != "PauseSettings") {
+			*error = "the mouse could not open pause Settings: " + observation; return false;
+		}
+		if (!MenuAutomation::HandGameKey("Escape", [] { return g_MenuMan.GetActivePauseMenu() && g_MenuMan.GetActivePauseMenu()->AutomationActiveScreenName() != "PauseSettings"; }, "back from Settings", observation) || !finishHand()) {
+			*error = "Escape did not return Settings to pause: " + observation; return false;
+		}
+		if (!MenuAutomation::HandGameKey("Escape", [] { return !g_MenuMan.IsLocalPauseMenuOpen(); }, "resume recovering match", observation) || !finishHand() ||
+		    !g_ActivityMan.IsInActivity() || g_NetMatchService.GetState() != NetMatchServiceState::Running) {
+			*error = "the second Escape left the match: " + observation; return false;
+		}
+		waiting = true;
+		g_NetMatchService.m_IsHost = false;
+		g_NetMatchService.m_HeldRejoinDriving = true;
+		for (const auto state: {NetMatchServiceState::Running, NetMatchServiceState::Starting, NetMatchServiceState::Failed}) {
+			g_NetMatchService.m_State = state;
+			if (!MenuAutomation::HandGameKey("Escape", [&] { return g_MenuMan.IsLocalPauseMenuOpen(); }, "rejoin wait pause menu", observation) || !finishHand() ||
+			    !MenuAutomation::HandGameKey("Escape", [&] { return !g_MenuMan.IsLocalPauseMenuOpen(); }, "return to rejoin wait", observation) || !finishHand() ||
+			    leftWait || !g_ActivityMan.IsInActivity() || g_NetMatchService.GetState() != state) {
+				*error = "Escape left or restarted the held rejoin wait: " + observation;
+				return false;
+			}
+		}
+		g_NetMatchService.m_State = NetMatchServiceState::Running;
+		g_NetMatchService.m_HeldRejoinDriving = false;
+		if (!MenuAutomation::HandGameKey("Escape", [] { return g_MenuMan.IsLocalPauseMenuOpen(); }, "leave menu", observation) || !finishHand() ||
+		    !MenuAutomation::HandClick(g_MenuMan.GetActivePauseMenu()->AutomationManager(), "ButtonLeaveMatch", nullptr, observation) || !finishHand() ||
+		    !MenuAutomation::HandClick(g_MenuMan.GetActivePauseMenu()->AutomationManager(), "ButtonLeaveConfirm", nullptr, observation) || !finishHand() ||
+		    !leftWait || g_ActivityMan.IsInActivity()) {
+			*error = "the explicit Leave confirmation did not leave the match: " + observation; return false;
+		}
+		g_NetMatchService.LeaveMatch("Match left");
+		g_MenuMan.HandleTransitionIntoMenuLoop(true);
+		if (g_MenuMan.m_TitleScreen->GetTitleTransitionState() != TitleScreen::TitleTransition::ScrollingFadeIn) {
+			*error = "an explicit Leave selected the activity picker instead of the main menu"; return false;
+		}
+		g_MenuMan.SkipTitleIntroForAutomation();
+		g_MenuMan.Update(); g_MenuMan.Draw();
+		auto* resume = g_MenuMan.GetMainMenu()->AutomationManager()->GetControl("ButtonResume");
+		if (!g_ActivityMan.GetActivity()->IsOver() || !g_MenuMan.IsMainMenuInteractive() || (resume && resume->GetVisible())) {
+			*error = "a left match landed on the activity picker or still offered Resume Game"; return false;
+		}
+		g_NetMatchService.m_State = NetMatchServiceState::Idle;
+		g_NetMatchService.m_MatchWasRunning = g_NetMatchService.m_HeldRejoinDriving = false;
+		g_ActivityMan.SetInActivity(true);
+		if (g_MenuMan.ToggleLocalPauseMenu()) {
+			*error = "single player acquired the network pause menu";
+			return false;
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS recovery_pause_settings_escape_resumes_and_wait_escape_never_leaves");
+		return true;
+	}
+
 	int NetMatchSelfTest::Run() {
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-match-selftest] FAIL: " << message << std::endl;
@@ -17631,6 +17741,7 @@ namespace RTE {
 			const std::string name(selected);
 			bool passed = false;
 			if (name == "ui-presentation") passed = TestInMatchPresentation(&error);
+			else if (name == "pause-navigation") passed = TestPauseNavigationDuringRecovery(&error);
 			else if (name == "setup-editor") passed = GameActivity::RunSetupEditorSelfTest();
 			else if (name == "chat-receipts") passed = TestChatReceipts<NetSession>(&error);
 			else if (name == "chat-routing") passed = TestChatRoutingAndBounds(&error);

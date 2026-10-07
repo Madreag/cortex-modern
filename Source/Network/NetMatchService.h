@@ -965,6 +965,8 @@ namespace RTE {
 		/// Whether the §11 retry schedule still has work, so the menu loop pumps the service whatever
 		/// screen is up rather than only while the multiplayer screen is open.
 		bool NeedsRecoveryPump() const;
+		/// Whether this machine still owns a running match or its recovery, including a temporarily stopped coordinator.
+		bool OwnsLiveMatch() const;
 		/// Whether a finished match still wants the menu loop's pump for its rematch lobby and kept
 		/// directory lease. Not a recovery: the screens route a drop, not an ordinary match end.
 		bool NeedsCompletedLobbyPump() const;
@@ -1408,6 +1410,7 @@ namespace RTE {
 		friend bool TestLobbyTrafficKeepsAHostLinkAlive(std::string* error);
 		friend bool TestMenuLobbyWaitsForALiveHost(std::string* error);
 		friend bool TestDismissedRejoinStaysDismissed(std::string* error);
+		friend bool TestPauseNavigationDuringRecovery(std::string* error);
 		friend bool TestLobbyTimeoutDoesNotClaimHostDeparture(std::string* error);
 		friend bool TestAJoinedRoundGivesTheSessionItsTraffic(std::string* error);
 		friend bool TestALinkClosedForTheImageKeepsTheSeatAtTheRematch(std::string* error);

@@ -3,6 +3,7 @@
 #include "Singleton.h"
 
 #include <memory>
+#include <string>
 
 #define g_MenuMan MenuMan::Instance()
 
@@ -35,7 +36,7 @@ namespace RTE {
 
 #pragma region Concrete Methods
 		/// Sets the appropriate TitleScreen transition before entering the menu loop.
-		void HandleTransitionIntoMenuLoop();
+		void HandleTransitionIntoMenuLoop(bool networkMatchLeft = false);
 
 		/// Updates the MenuMan state.
 		/// @return Whether the MenuMan update has reached a state where the menu loop should be exited so the simulation loop can proceed.
@@ -64,6 +65,9 @@ namespace RTE {
 
 		/// Updates the local pause menu of a network match, once per rendered frame.
 		void UpdateLocalPauseMenu();
+		/// Routes local controls while a network recovery has stopped the ordinary activity input pump.
+		/// Returns whether an explicit menu action left the activity.
+		bool UpdateNetworkWaitInput();
 
 		/// Draws the local pause menu of a network match over the match's own frame.
 		void DrawLocalPauseMenu() const;
@@ -93,6 +97,7 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		friend bool TestPauseNavigationDuringRecovery(std::string* error);
 		/// Enumeration for the different menu screens that are active based on transition states.
 		enum ActiveMenu {
 			MenusDisabled,

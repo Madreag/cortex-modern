@@ -3106,6 +3106,13 @@ static std::string ResyncSaveName() {
 		m_ReconnectUx.StopWatchingForHostReturn();
 	}
 
+	bool NetMatchService::OwnsLiveMatch() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_MatchWasRunning && !m_LeftMatch && !m_HostEndedTheMatch &&
+		       (m_State == NetMatchServiceState::Running || m_State == NetMatchServiceState::Starting ||
+		        m_State == NetMatchServiceState::ReadyToLaunch || m_HeldRejoinDriving || m_ReconnectUx.CanCancel());
+	}
+
 	bool NetMatchService::NeedsRecoveryPump() const {
 		if (!s_AdmissionEnabled) {
 			return false;
