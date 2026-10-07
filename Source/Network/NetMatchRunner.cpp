@@ -555,7 +555,15 @@ namespace RTE {
 			}
 		}
 		// The seat roster the round is agreed on rides in the config; a peer whose copy differs is refused at the start.
-		const NetReconnectHost* admission = m_Config.host ? session.GetReconnectHost() : nullptr;
+		NetReconnectHost* admission = m_Config.host ? session.GetReconnectHost() : nullptr;
+		if (admission && !m_MatchConfig.persistentWorld && admission->GetRoster().stage == NetRosterStage::Lobby) {
+			// The first round forms on the same roster transition as a rematch: open or held seats
+			// keep their number and start with AI; only connected owners wait at the start gate.
+			admission->FormRematch();
+			const std::vector<uint8_t> present = RematchMembers(m_MatchConfig.hostPeerId, m_MatchConfig.peerCount, admission->StartMembers());
+			m_MatchConfig.activePeerIds = present.size() < m_MatchConfig.peerCount ? present : std::vector<uint8_t>{};
+			m_ActivePeerIds = m_MatchConfig.activePeerIds;
+		}
 		if (admission && admission->GetRoster().revision != 0) {
 			m_MatchConfig.seatRosterRevision = admission->GetRoster().revision;
 			m_MatchConfig.seatRosterHash = HashRoster(admission->GetRoster());
@@ -727,7 +735,6 @@ namespace RTE {
 			// The seating wait is re-read every tick because a live options edit republishes it.
 			if (clocks.budgetMs >= lastTransferProgressMs &&
 			    SeatingWaitExpired(m_Config.lobbySeatingWaitMs, static_cast<uint32_t>(maxWaitMs), clocks.budgetMs - lastTransferProgressMs)) {
-				m_HostLostDuringSetup = !m_Config.host;
 				m_Lobby.TimeoutWaitingForStart();
 				SetFailed(m_Lobby.GetFailureReason());
 				if (error) *error = m_SetupError;

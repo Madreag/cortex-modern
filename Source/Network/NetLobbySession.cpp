@@ -230,6 +230,7 @@ namespace RTE {
 				m_Config.session->InjectEvent(event, sessionNowMs);
 			}
 			if (m_Config.session->IsFailed() || m_Config.session->IsRejected() || m_Config.session->IsClosed()) {
+				m_HostLost = m_Config.session->HostDepartureConfirmed();
 				const std::string reason = m_Config.session->BuildRejectText();
 				Fail(reason.empty() ? "session closed" : reason);
 				return;
@@ -254,6 +255,7 @@ namespace RTE {
 			// Valid phase traffic is counted before the session evaluates silence.
 			m_Config.session->Tick(sessionNowMs, false);
 			if (m_Config.session->IsFailed() || m_Config.session->IsRejected() || m_Config.session->IsClosed()) {
+				m_HostLost = m_Config.session->HostDepartureConfirmed();
 				const std::string reason = m_Config.session->BuildRejectText();
 				Fail(reason.empty() ? "session closed" : reason);
 				return;
@@ -288,7 +290,6 @@ namespace RTE {
 			ReportStartWait();
 		}
 		if (!m_Config.host && m_Config.timeoutMs > 0 && nowMs >= m_LastReceiveMs && nowMs - m_LastReceiveMs > m_Config.timeoutMs) {
-			m_HostLost = true;
 			++m_Stats.timeouts;
 			Fail("lobby timed out");
 		}
@@ -875,6 +876,7 @@ namespace RTE {
 			if (error) *error = validateError;
 			return false;
 		}
+		const bool setupChanged = SetupDiffers(m_Config.matchConfig, config);
 		m_Config.matchConfig = config;
 		m_Config.autoInputDelay = config.delayPolicy == NetMatchDelayPolicy::Auto;
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(config);
@@ -883,12 +885,14 @@ namespace RTE {
 		for (auto& [peerId, acked] : m_ConfigAckedByPeer) {
 			acked = false;
 		}
-		for (auto& [peerId, ready] : m_RemoteReadyByPeer) {
-			ready = false;
+		// Ready accepts the setup, not a transient delay, relay or roster revision. The new hash still
+		// needs its own ack before Start; only an actual setup edit asks the players to Ready again.
+		if (setupChanged) {
+			for (auto& [peerId, ready] : m_RemoteReadyByPeer) ready = false;
+			m_LocalReady = m_Config.host || m_Config.autoReady;
 		}
 		m_State = NetLobbyState::WaitingForConfigAck;
 		m_ReadySent = false;
-		m_LocalReady = m_Config.host || m_Config.autoReady;
 		// An auto-starting round re-arms as Start() did; the host's own Start stands, and the round begins on the new config once acknowledged.
 		m_StartRequested = m_Config.autoStart;
 		m_PeerStatePending = true;
@@ -997,12 +1001,11 @@ namespace RTE {
 	}
 
 	bool NetLobbySession::RosterHoldsDroppedSeat(uint8_t peerId) {
-		// The seat roster decides: before the first start a member's seat frees, from it on a seat its player still owns is held, and a
-		// seat the host opened opens.
+		// The roster holds an owner's seat from admission until the host releases it, including the first lobby.
 		if (!m_Config.host) return false;
 		const NetReconnectHost* plane = m_Config.session ? m_Config.session->GetReconnectHost() : nullptr;
 		const NetRosterSeat* seat = plane ? plane->RosterSeatOfPeer(peerId) : nullptr;
-		if (!seat || plane->GetRoster().stage == NetRosterStage::Lobby || seat->owner == 0) return false;
+		if (!seat || seat->owner == 0) return false;
 		// The round starts that seat held by the AI and its player comes back through the rejoin; nobody waits for its endpoint.
 		NetMatchConfig held = m_Config.matchConfig;
 		if (LeaveRoundMembers(held, peerId)) {
@@ -1502,7 +1505,7 @@ namespace RTE {
 					}
 					RemoveRemote(event.peerId);
 				} else {
-					m_HostLost = IsCommittedTransport(event.peerId);
+					m_HostLost = IsCommittedTransport(event.peerId) && (!m_Config.session || m_Config.session->HostDepartureConfirmed());
 					Fail(event.reason.empty() ? "peer disconnected" : event.reason);
 				}
 				break;

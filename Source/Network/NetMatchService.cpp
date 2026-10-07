@@ -1220,21 +1220,9 @@ static std::string ResyncSaveName() {
 	// The close the transport records when this peer stops it itself.
 	static constexpr const char* c_OwnTransportStopDetail = "transport stopped";
 
-	// A client's session has exactly one remote - the host. Its loss is the host's departure unless the
-	// host's own record says it removed or refused this seat, which keeps its own text.
+	// Losing this client's link does not establish that the host left the match.
 	static bool ClientSessionLossIsHostDeparture(const NetSession& session) {
-		if (session.IsReady()) return false;
-		if (!session.HasReject()) return true;
-		if (session.GetMismatchKey() == "host_disconnect" && std::string(NetProtocol::RejectReasonName(session.GetRejectReason())) == "Unknown") return true;
-		switch (session.GetRejectReason()) {
-			case NetRejectReason::SessionEnded:
-			case NetRejectReason::Timeout:
-			case NetRejectReason::InternalError:
-			case NetRejectReason::HostLinkLost:
-				return true;
-			default:
-				return false;
-		}
+		return session.HostDepartureConfirmed();
 	}
 
 	bool NetMatchService::CanResyncLocked(std::string* error) {
@@ -10521,6 +10509,10 @@ static std::string ResyncSaveName() {
 		if (config.host) {
 			config.lobbySeatingWaitMs = !config.matchConfig.persistentWorld && config.matchConfig.idleWaitMinutes > 0
 			                              ? static_cast<uint32_t>(config.matchConfig.idleWaitMinutes) * 60000 : 0u;
+		} else {
+			// A menu client waits for the host's start/end while traffic continues. Session/lobby
+			// silence deadlines still detect a dead link; the seating policy belongs to the host.
+			config.lobbySeatingWaitMs = 0u;
 		}
 		config.autoReady = config.host;
 		// World hosts, including the menu path, start automatically once their bound players are ready.

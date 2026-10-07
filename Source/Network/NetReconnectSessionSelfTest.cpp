@@ -941,8 +941,7 @@ namespace RTE {
 			return 0;
 		}
 
-		// Brings one client to a committed seat and then drops its link MID-MATCH, which is the state
-		// every reclaim test starts from - a lobby drop hands the seat back instead.
+		// Brings one client to a committed seat and then drops its link mid-match.
 		int SeatAndDrop(Wire& wire, Endpoint& player, NetH4TicketRecord& record, uint64_t unixNow, std::string* error) {
 			if (!player.client.BeginNewJoin(wire.nowMs, error) || !wire.Pump(error)) {
 				return 1;
@@ -1454,8 +1453,7 @@ namespace RTE {
 				}
 			}
 
-			// The acknowledged leave of a running match keeps the ticket and the seat, as a drop does. In a lobby the
-			// seat goes back in the pool instead, which TestLobbySeatIsFreedForTheNextJoiner pins.
+			// An acknowledged leave keeps the ticket and seat, before and after the first start.
 			wire.host.SetLiveMatch(true);
 			wire.ClearDelivered();
 			if (!player.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) {
@@ -4722,10 +4720,9 @@ namespace RTE {
 			return 0;
 		}
 
-		// The reconnect admission rules are a MATCH feature. In a lobby nothing has been played, so a
-		// member who leaves or drops has nothing to reclaim and its seat must go back in the pool -
-		// otherwise a replacement is refused SessionFull and the lobby can never be refilled.
-		int TestLobbySeatIsFreedForTheNextJoiner() {
+		// A12 applies from admission: a lobby leave or drop retains the ticket and seat; a fresh
+		// stranger cannot take it, while its owner can reclaim it on a fresh runtime.
+		int TestLobbySeatKeepsItsOwner() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
 			std::string error;
@@ -4753,22 +4750,26 @@ namespace RTE {
 				return Fail("the lobby join took no seat");
 			}
 
-			// The clean leave: the seat comes back, it is not closed against the next joiner.
+			NetH4TicketRecord record;
+			if (departing.store.Load(unixNow, record, &error) != NetH4TicketLoadResult::Loaded) return Fail("the lobby ticket was not stored");
+			const NetRosterSeat owner = *wire.host.GetRoster().Find(NetRosterIdOf(seats[0].stableSeat));
+			// The clean leave keeps the owner's recovery record and the host's seat.
 			if (!departing.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) {
 				return Fail("the lobby leave did not settle: " + error);
 			}
 			if (departing.client.GetState() != NetH4ClientState::Left) {
 				return Fail("the lobby leave was not acknowledged");
 			}
-			if (wire.host.GetStats().seatsReleasedInLobby != 1) {
-				return Fail("the lobby leave did not hand the seat back");
+			if (wire.host.GetStats().seatsReleasedInLobby != 0 || !departing.store.HasRecord()) {
+				return Fail("the lobby leave released the seat or deleted its ticket");
 			}
-			if (wire.host.IsSeatClosed(seats[0].stableSeat) || wire.host.IsSeatHeldForReclaim(seats[0].lockstepPeerId)) {
-				return Fail("a lobby seat was closed or held after its member left");
+			if (wire.host.IsSeatClosed(seats[0].stableSeat) || !wire.host.IsSeatHeldForReclaim(seats[0].lockstepPeerId) ||
+			    wire.host.GetRoster().Find(owner.seatId)->owner != owner.owner || wire.host.GetRoster().Find(owner.seatId)->ticket != owner.ticket) {
+				return Fail("a lobby leave stopped holding the same owner's seat and ticket");
 			}
 			departing.connected = false;
 
-			// The replacement is a FRESH runtime with no ticket - exactly what the lobby lanes launch.
+			// A fresh stranger cannot take this held seat without the host's decision.
 			Endpoint replacement;
 			replacement.connection = 102;
 			ConfigureEndpoint(replacement, "lobby-replacement", &unixNow);
@@ -4777,30 +4778,40 @@ namespace RTE {
 			if (!replacement.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
 				return Fail("the replacement's join did not settle: " + error);
 			}
-			if (replacement.client.GetState() != NetH4ClientState::Joined) {
-				return Fail(std::string("the replacement was refused the freed lobby seat: ") +
-				            NetReconnectClientStateName(replacement.client.GetState()));
+			if (replacement.client.GetState() == NetH4ClientState::Joined && replacement.client.GetAssignedPeerId() == seats[0].peerId)
+				return Fail("a stranger took the lobby's held seat");
+			replacement.connected = false;
+			Endpoint returner;
+			returner.connection = 103;
+			ConfigureEndpoint(returner, "lobby-returner", &unixNow);
+			returner.store.SetPath(StorePath("lobby-departing"));
+			if (returner.store.Load(unixNow, record, &error) != NetH4TicketLoadResult::Loaded) return Fail("the fresh lobby runtime could not load its saved ticket");
+			wire.Add(&returner);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!returner.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error) ||
+			    returner.client.GetState() != NetH4ClientState::Joined || returner.client.GetAssignedPeerId() != seats[0].peerId) {
+				return Fail("the lobby owner's stored ticket did not reclaim the same seat: " + error);
 			}
-			if (wire.host.GetStats().provisionalSeatsRefused != 0) {
-				return Fail("a lobby joiner was refused while a seat was free");
-			}
+			if (returner.store.Load(unixNow, record, &error) != NetH4TicketLoadResult::Loaded) return Fail("the reclaimed lobby ticket was not stored");
 
-			// A lobby DROP frees the seat the same way - the lanes' --action drop arm.
-			if (wire.host.NotifyDisconnect(replacement.connection, 0) != NetH4DisconnectOutcome::SeatDropped) {
+			// A lobby drop also keeps the seat, and its stored ticket still returns on a new runtime.
+			if (wire.host.NotifyDisconnect(returner.connection, 0) != NetH4DisconnectOutcome::SeatDropped) {
 				return Fail("the lobby drop was not seen as the seat's holder going away");
 			}
-			replacement.connected = false;
-			if (wire.host.GetStats().seatsReleasedInLobby != 2 || wire.host.GetStats().seatsDropped != 0) {
-				return Fail("a lobby drop was recorded as a mid-match seat drop");
+			returner.connected = false;
+			if (wire.host.GetStats().seatsReleasedInLobby != 0 || wire.host.GetStats().seatsDropped != 2 || !wire.host.IsSeatHeldForReclaim(seats[0].lockstepPeerId)) {
+				return Fail("a lobby drop did not retain its owner's seat");
 			}
 			Endpoint second;
-			second.connection = 103;
+			second.connection = 104;
 			ConfigureEndpoint(second, "lobby-second", &unixNow);
+			second.store.SetPath(StorePath("lobby-departing"));
+			if (second.store.Load(unixNow, record, &error) != NetH4TicketLoadResult::Loaded) return Fail("the second fresh lobby runtime could not load its saved ticket");
 			wire.Add(&second);
 			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
-			if (!second.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error) ||
+			if (!second.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error) ||
 			    second.client.GetState() != NetH4ClientState::Joined) {
-				return Fail("the seat a lobby drop freed was not joinable");
+				return Fail("the ticket from a lobby drop could not reclaim its seat: " + error);
 			}
 
 			// The control: in a LIVE match none of this changes. A drop still records the ownership and
@@ -4811,14 +4822,14 @@ namespace RTE {
 				return Fail("the mid-match drop was not a seat drop");
 			}
 			second.connected = false;
-			if (wire.host.GetStats().seatsDropped != 1 || wire.host.GetStats().seatsReleasedInLobby != releasedBefore) {
+			if (wire.host.GetStats().seatsDropped != 3 || wire.host.GetStats().seatsReleasedInLobby != releasedBefore) {
 				return Fail("a mid-match drop released the seat instead of holding it");
 			}
 			if (!wire.host.IsSeatHeldForReclaim(seats[0].lockstepPeerId)) {
 				return Fail("a mid-match drop stopped holding the seat for its reclaim window");
 			}
 			Endpoint intruder;
-			intruder.connection = 104;
+			intruder.connection = 105;
 			ConfigureEndpoint(intruder, "lobby-intruder", &unixNow);
 			wire.Add(&intruder);
 			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
@@ -9312,7 +9323,7 @@ namespace RTE {
 		if (const int result = TestReturningHolderOnAFullSession(true, true); result != 0) {
 			return result;
 		}
-		if (const int result = TestLobbySeatIsFreedForTheNextJoiner(); result != 0) {
+		if (const int result = TestLobbySeatKeepsItsOwner(); result != 0) {
 			return result;
 		}
 		if (const int result = TestRecoveryAppliesOnlyAfterAMatch(); result != 0) {
@@ -9423,6 +9434,12 @@ namespace RTE {
 		if (const int result = TestAnAnsweredReclaimIsNotRefusedTwice(); result != 0) return result;
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;
 		return 0;
+	}
+
+	bool RunLobbySeatHoldSelfTest(std::string* error) {
+		if (TestLobbySeatKeepsItsOwner() == 0) return true;
+		if (error) *error = "the lobby's protocol leave/drop did not retain a reclaimable seat";
+		return false;
 	}
 
 } // namespace RTE

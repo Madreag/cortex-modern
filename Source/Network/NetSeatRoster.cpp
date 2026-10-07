@@ -108,18 +108,6 @@ namespace RTE {
 					if (!seat) return refuse("no such seat");
 					// A seat's own link says nothing about the host's: host loss is HostLinkLost with every survivor's agreement.
 					if (event.seat == next.hostSeat) return refuse("a link drop never replaces the host");
-					if (next.stage == NetRosterStage::Lobby) {
-						// Before the first start nothing is played and the lobby is still forming: a drop or a leave frees the seat.
-						if (seat->owner == 0) return keep("the seat is already open");
-						seat->owner = 0;
-						seat->ticket = 0;
-						seat->link = NetSeatLink::Dropped;
-						seat->holdCause = NetSeatHoldCause::None;
-						seat->failedReturns = 0;
-						seat->returnAfterMs = 0;
-						seat->heldSinceMs = 0;
-						return commit("the player left the lobby - the seat is open");
-					}
 					if (seat->link == NetSeatLink::Dropped && (seat->owner == 0 || IsAway(seat->phase))) return keep("the seat is already away");
 					const bool heldInPlace = seat->phase == NetSeatPhase::Held && seat->link == NetSeatLink::Connected && seat->owner != 0;
 					seat->link = NetSeatLink::Dropped;
@@ -412,8 +400,7 @@ namespace RTE {
 			const NetRosterSeat& is = after.seats[i];
 			if (was.seatId != is.seatId) return fail("seat " + std::to_string(was.seatId) + " was renumbered");
 			const bool ownerMoves = kind == NetRosterEventKind::Kicked || kind == NetRosterEventKind::Banned || kind == NetRosterEventKind::SeatReleased ||
-			                        kind == NetRosterEventKind::Admitted || kind == NetRosterEventKind::ApplicantAccepted ||
-			                        ((kind == NetRosterEventKind::LinkDropped || kind == NetRosterEventKind::LivenessPassed) && before.stage == NetRosterStage::Lobby);
+			                        kind == NetRosterEventKind::Admitted || kind == NetRosterEventKind::ApplicantAccepted;
 			if (was.owner != is.owner && !ownerMoves) return fail("seat " + std::to_string(was.seatId) + " changed owner on a " + NetRosterEventName(kind));
 			if (was.owner == is.owner && is.incarnation < was.incarnation) return fail("seat " + std::to_string(was.seatId) + " went back an incarnation");
 			if (is.owner != 0 && is.link == NetSeatLink::Dropped && !IsAway(is.phase))
@@ -723,7 +710,7 @@ namespace RTE {
 		/// The expected outcome of each cell for the subject seat: its next phase (L S R H I C E M Z G), '-' unchanged, 'X' refused, '.' unreachable.
 		/// Columns in c_Columns' order; rows 1-10 are the grid's rows.
 		constexpr std::array<const char*, 10> c_Expected{{
-			/*  1 LOBBY          */ "LZLLLXS.XXHX-LL-XXL--",
+			/*  1 LOBBY          */ "HZLLLXS.XXHX-HH-XXL--",
 			/*  2 STARTING       */ "HZSHHXX-XXXX-HH-XXX--",
 			/*  3 RUNNING        */ "HZRHHMX-GXXX-HHHXXXH-",
 			/*  4 HELD           */ "-ZIHHEX--XXX----XIH--",

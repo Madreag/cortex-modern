@@ -1523,23 +1523,15 @@ namespace RTE {
 		}
 		m_Admission.DropConnection(connection);
 		const bool liveLeave = m_LiveMatch && !m_MatchEnded;
-		// From the first start on a leave is a drop the player chose, in a match and in a world: the seat stays theirs and the AI plays it
-		// until they rejoin or the host gives it away; before the first start it frees the seat.
-		const bool heldLeave = m_Roster.stage != NetRosterStage::Lobby;
-		if (heldLeave) {
-			// The link may stay up at the leaver's menu, so the drop runs now.
-			seat->activeConnection = c_InvalidNetPeerId;
-			ApplySeatEvent(*seat, NetRosterEventKind::LinkDropped, true);
-			BumpSeatGeneration(*seat);
-			if (liveLeave) RecordDrop(*seat, m_LockstepFrame);
-			++m_Stats.seatsDropped;
-		} else {
-			// A lobby leave takes nothing with it: the seat goes back in the pool so the next player -
-			// this one returning or somebody new - joins exactly as they did before H4 existed.
-			ReleaseSeat(*seat, NetRosterEventKind::LinkDropped);
-		}
+		// A leave is a chosen drop from admission onward. The roster keeps the owner and ticket;
+		// the link may stay up at the leaver's menu, so the drop runs now.
+		seat->activeConnection = c_InvalidNetPeerId;
+		ApplySeatEvent(*seat, NetRosterEventKind::LinkDropped, true);
+		BumpSeatGeneration(*seat);
+		if (liveLeave) RecordDrop(*seat, m_LockstepFrame);
+		++m_Stats.seatsDropped;
 		// The client keeps its ticket for a seat that stays its own.
-		const NetH4LeaveAck ack{c_NetH4Version, message.txId, message.stableSeat, message.holderGeneration, !heldLeave};
+		const NetH4LeaveAck ack{c_NetH4Version, message.txId, message.stableSeat, message.holderGeneration, false};
 		m_TxCache.Store(message.txId, key, ack, nowMs);
 		++m_Stats.seatsClosedByLeave;
 		if (dropAck && NetA7Journal::Enabled()) NetA7Journal::Session("leave_ack_suppressed", nowMs, {{"transaction", NetA7Journal::Hex(message.txId.data(), message.txId.size())},
@@ -1915,9 +1907,8 @@ namespace RTE {
 	}
 
 	bool NetReconnectHost::IsSeatSubstitutable(const SeatState& seat) const {
-		// Moderation is a MATCH feature. A lobby seat goes back in the pool when its holder leaves, so
-		// anyone can simply take it and there is nothing for the host to decide.
-		if (!m_LiveMatch || seat.seat.cpu || seat.seat.local) {
+		// A held lobby seat needs the host's decision just like a held playing seat.
+		if (seat.seat.cpu || seat.seat.local) {
 			return false;
 		}
 		// The roster holds the seat for its away player - lost, left, or held by the round with its link open - or the host opened it.
@@ -2249,7 +2240,7 @@ namespace RTE {
 	}
 
 	NetH4ModerationResult NetReconnectHost::ApplyModeration(const NetModerationSelection& selected, NetModerationAction action, uint64_t nowMs) {
-		if (!m_Registry || !m_Registry->IsActive() || !m_LiveMatch) return NetH4ModerationResult::NotHosting;
+		if (!m_Registry || !m_Registry->IsActive()) return NetH4ModerationResult::NotHosting;
 		if (m_ConfiguredEpoch != m_Registry->GetEpoch()) return NetH4ModerationResult::StaleSelection;
 		Tick(nowMs);
 		for (const auto& seat: GetModerationView()) {
@@ -2510,13 +2501,7 @@ namespace RTE {
 		}), m_PendingReclaims.end());
 		for (SeatState& seat : m_Seats) {
 			if (IsSeated(seat) && seat.activeConnection == connection) {
-				if (m_Roster.stage == NetRosterStage::Lobby) {
-					// Nothing has been played, so there is no ownership to hold and no world to come
-					// back to; the seat is free for the next joiner.
-					ReleaseSeat(seat, NetRosterEventKind::LinkDropped);
-					return NetH4DisconnectOutcome::SeatDropped;
-				}
-				// From the first start on the seat is held for its player, inside a round and between rounds.
+				// Admission owns this seat until a host action releases it, including the first lobby.
 				seat.activeConnection = c_InvalidNetPeerId;
 				ApplySeatEvent(seat, NetRosterEventKind::LinkDropped);
 				if (m_LiveMatch) {
