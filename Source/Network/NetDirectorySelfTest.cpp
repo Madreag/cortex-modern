@@ -2256,7 +2256,7 @@ namespace RTE {
 				NetLanHostInfo lan;
 				lan.address = "10.0.0.5";
 				lan.port = 42000;
-				lan.hostName = "Erol-LAN";
+				lan.hostName = "Home-LAN";
 				lan.activity = "P4 Alpha Duel";
 				lan.mode = "pvp-skirmish";
 				lan.playerCount = 1;
