@@ -784,7 +784,8 @@ static std::string ResyncSaveName() {
 				m_DirectoryRow.sessionIdentityHash = NetIdentity::HashHex(manifest.sessionIdentityHash);
 				m_DirectoryRow.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
 				m_DirectoryRow.listenPort = request.port;
-				m_DirectoryRow.listenAddrs = {directoryListenAddr.empty() ? "127.0.0.1" : directoryListenAddr};
+				m_DirectoryRow.listenAddrs = iceEnabled && m_ConnectionMode == 2 ? std::vector<std::string>{}
+					: std::vector<std::string>{directoryListenAddr.empty() ? "127.0.0.1" : directoryListenAddr};
 				// The row goes out once, with the intent; a rematch downgrades it (NetIceRowJoinMode).
 				m_DirectoryRow.joinMode = NetIceRowJoinMode(iceEnabled, !m_DirectoryRow.listenAddrs.empty(), std::string(), std::string());
 				if (matchConfig.persistentWorld) {
@@ -830,7 +831,7 @@ static std::string ResyncSaveName() {
 			m_KeepEndedDirectoryLease = false;
 			m_DirectoryRelistPending = false;
 		}
-		if (request.host && g_SettingsMan.GetNetworkPortMapEnable() && !thisNetworkOnly) {
+		if (request.host && g_SettingsMan.GetNetworkPortMapEnable() && !thisNetworkOnly && !(iceEnabled && m_ConnectionMode == 2)) {
 			RequestHostPortMap(request.port, nullptr);
 		} else {
 			ReleaseHostPortMap();
@@ -2896,7 +2897,7 @@ static std::string ResyncSaveName() {
 		if (s_PortMapRequested) {
 			s_PortMap.Update(nowMs);
 		}
-		if (s_PortMapRequested && s_PortMap.Mapped()) {
+		if (s_PortMapRequested && s_PortMap.Mapped() && !(m_IceEnabled && m_ConnectionMode == 2)) {
 			// The public endpoint leads; the LAN address stays as the fallback join path.
 			const std::string external = s_PortMap.GetResult().externalIp;
 			if (!external.empty()) {
@@ -2974,9 +2975,16 @@ static std::string ResyncSaveName() {
 	}
 
 	std::string NetMatchService::RefreshDirectorySignalCredentialLocked(uint64_t nowMs) {
+		const bool wasRegistered = m_DirectoryRegistered;
 		m_DirectorySessionId = m_Directory.GetSessionId();
 		m_DirectoryToken = m_Directory.GetToken();
-		m_DirectoryRegistered = m_Directory.GetState() == NetDirectoryClient::State::Registered;
+		m_DirectoryState = m_Directory.GetState();
+		m_DirectoryError = m_Directory.LastError();
+		m_DirectoryRegistered = m_DirectoryState == NetDirectoryClient::State::Registered;
+		if (m_IsHost && m_DirectoryRegistered) {
+			m_DirectoryRow.resumeSessionId = m_DirectorySessionId;
+			m_DirectoryRow.resumeToken = m_DirectoryToken;
+		}
 		if (m_IsHost && m_DirectoryRegistered && !m_DirectoryToken.empty() && !m_IceBoundSessionId.empty()) {
 			const bool changedId = m_DirectorySessionId != m_IceBoundSessionId;
 			if (changedId && !m_DirectoryRow.persistentWorld) return {};
@@ -2987,7 +2995,7 @@ static std::string ResyncSaveName() {
 				m_DirectoryRow.joinMode = NetIceRowJoinMode(m_IceEnabled, !m_DirectoryRow.listenAddrs.empty(), m_IceBoundSessionId, m_DirectorySessionId);
 				m_Directory.RefreshRegistration(m_DirectoryRow, m_State == NetMatchServiceState::Running, nowMs);
 			}
-			if (const auto signal = m_HostSignalCredential.load(); signal && (signal->sessionId != m_DirectorySessionId || signal->token != m_DirectoryToken)) {
+			if (const auto signal = m_HostSignalCredential.load(); signal && (!wasRegistered || signal->sessionId != m_DirectorySessionId || signal->token != m_DirectoryToken)) {
 				m_HostSignalCredential.store(std::make_shared<const HostSignalCredential>(HostSignalCredential{m_DirectorySessionId, m_DirectoryToken}));
 				return m_DirectorySessionId;
 			}
@@ -10104,8 +10112,8 @@ static std::string ResyncSaveName() {
 		              host]() {
 			if (host) {
 				if (auto signal = m_HostSignalCredential.load(); signal && signal != memory->appliedSignal) {
-					if (memory->appliedSignal && (signal->sessionId != memory->appliedSignal->sessionId || signal->token != memory->appliedSignal->token))
-						dispatcher->RebindHost(signal->sessionId, signal->token);
+					// A renewed lease can keep both strings while its old signal poll is Failed.
+					dispatcher->RebindHost(signal->sessionId, signal->token);
 					memory->appliedSignal = std::move(signal);
 				}
 			}
