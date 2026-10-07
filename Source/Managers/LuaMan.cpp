@@ -8888,6 +8888,36 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	{
 		CheckpointText frozen;
 		std::string full, shared;
+		{
+			auto entity = std::make_unique<MOPixel>();
+			entity->SetPresetName(std::string("native\0name\xff", 12));
+			entity->SetDescription(std::string("desc\0\xff", 6));
+			entity->SetModuleID(-7);
+			entity->AddToGroup("z"); entity->AddToGroup("a"); entity->AddToGroup(std::string("group\0x", 7));
+			Writer::SaveOverrides overrides;
+			overrides.identities.emplace(entity.get(), Writer::SaveOverrides::Identity{std::string("override\0\xff", 10), 37, true});
+			const auto save = [&](Writer& output) {
+				entity->SaveSnapshotIdentity(output);
+				output.PerPeerBegin();
+				Writer::SaveOverridesScope scope(output, overrides);
+				entity->SaveSnapshotIdentity(output);
+				output.PerPeerEnd();
+			};
+			const auto ordinary = Writer::Capture(save, 2);
+			full = ordinary.Text(); shared = ordinary.SharedText();
+			{
+				CheckpointWriter::BatchScope batches(true);
+				frozen = Writer::Capture(save, 2);
+			}
+		}
+		const auto actual = std::async(std::launch::async, [frozen] { return std::pair{frozen.Text(), frozen.SharedText()}; }).get();
+		const bool exact = actual.first == full && actual.second == shared;
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " owned_identity_fields_and_overrides_outlive_entities" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
+		CheckpointText frozen;
+		std::string full, shared;
 		bool captured = false;
 		{
 			CheckpointWriter seed("PathFinder1");

@@ -205,6 +205,29 @@ namespace RTE {
 	void Entity::SaveSnapshotIdentity(Writer& writer) const {
 		const auto* identity = writer.IdentityOverride(this);
 		const auto& name = identity ? identity->name : m_PresetName;
+		if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+			struct Fields {
+				std::string name, description;
+				int module;
+				std::vector<std::string> groups;
+			};
+			Fields fields{name, m_PresetDescription, identity ? identity->module : m_DefinedInModule,
+			    {m_Groups.begin(), m_Groups.end()}};
+			size_t bytes = sizeof(fields) + fields.name.size() + fields.description.size() + fields.groups.size() * sizeof(std::string);
+			for (const std::string& group: fields.groups) bytes += group.size();
+			const int indent = writer.GetIndent();
+			writer.Append(CheckpointText::Deferred([fields = std::move(fields), indent]() mutable {
+				std::sort(fields.groups.begin(), fields.groups.end());
+				return Writer::Capture([&](Writer& output) {
+					output.NewPropertyWithValue("SpecialBehaviour_PresetName", fields.name.empty() ? CheckpointText("~") : CheckpointText(fields.name).Base64());
+					output.NewPropertyWithValue("SpecialBehaviour_Description", fields.description.empty() ? CheckpointText("~") : CheckpointText(fields.description).Base64());
+					output.NewPropertyWithValue("SpecialBehaviour_ModuleID", fields.module);
+					output.NewPropertyWithValue("SpecialBehaviour_ClearGroups", true);
+					for (const std::string& group: fields.groups) output.NewPropertyWithValue("AddToGroup", group);
+				}, indent).Text();
+			}, bytes));
+			return;
+		}
 		writer.NewPropertyWithValue("SpecialBehaviour_PresetName", name.empty() ? CheckpointText("~") : CheckpointText(name).Base64());
 		writer.NewPropertyWithValue("SpecialBehaviour_Description", m_PresetDescription.empty() ? CheckpointText("~") : CheckpointText(m_PresetDescription).Base64());
 		writer.NewPropertyWithValue("SpecialBehaviour_ModuleID", identity ? identity->module : m_DefinedInModule);
