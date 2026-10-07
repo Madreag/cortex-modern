@@ -278,6 +278,7 @@ namespace RTE {
 		friend bool TestAJoiningLobbyWaitsForHostConfig(std::string* error);
 		friend bool TestMenuLobbyWaitsForALiveHost(std::string* error);
 		friend bool TestInitialLobbyStartsWithHeldSeats(std::string* error);
+		friend bool TestAnEmptyLobbyAdmitsLaterJoiners(std::string* error);
 		friend bool TestAHostsStartSurvivesTheLobbysOwnChanges(std::string* error);
 		friend bool TestKickedSeatReadsOpen(std::string* error);
 		friend bool TestARunningRoundsJoinerIsNotAskedForItsStartRoster(std::string* error);

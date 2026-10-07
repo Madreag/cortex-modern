@@ -452,6 +452,7 @@ void SettingsNetworkGUI::UpdateStatusLines() {
 	const char* record = "-";
 	switch (reconnect.GetOffer()) {
 		case NetReconnectOffer::Available: record = "Rejoin available"; break;
+		case NetReconnectOffer::Dismissed: record = "Manual rejoin available"; break;
 		case NetReconnectOffer::Corrupt: record = "Unreadable"; break;
 		case NetReconnectOffer::Stale: record = "Expired"; break;
 		case NetReconnectOffer::Missing: record = "No recovery record"; break;
@@ -460,7 +461,7 @@ void SettingsNetworkGUI::UpdateStatusLines() {
 	m_RecoveryRecordLabel->SetText(record);
 	const std::string status = reconnect.GetStatusText();
 	m_RecoveryStatusLabel->SetText(status.empty() ? "-" : status);
-	m_RejoinButton->SetEnabled(reconnect.GetOffer() == NetReconnectOffer::Available || reconnect.CanRetryManually());
+	m_RejoinButton->SetEnabled(reconnect.GetOffer() == NetReconnectOffer::Available || reconnect.GetOffer() == NetReconnectOffer::Dismissed || reconnect.CanRetryManually());
 	m_CancelRecoveryButton->SetEnabled(reconnect.CanCancel());
 
 	const uint32_t autosaveSeconds = g_SettingsMan.GetAutosaveSeconds();

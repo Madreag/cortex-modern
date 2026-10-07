@@ -1421,9 +1421,10 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		g_GUISound.ButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]) {
 		// A cancel stops the automatic attempts; the recovery record survives it, so Rejoin still works.
-		g_NetMatchService.GetReconnectUx().Cancel(MenuClockMs());
-		g_NetMatchService.GetReconnectUx().DismissOffer();
-		g_NetMatchService.GetReconnectUx().StopWatchingForHostReturn();
+		std::string dismissError;
+		if (!g_NetMatchService.DismissReconnectOffer(MenuClockMs(), &dismissError)) {
+			m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(dismissError));
+		}
 		m_MultiplayerApplyOffered = false;
 		g_GUISound.BackButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerModerateButton]) {
@@ -4233,6 +4234,7 @@ void MainMenuGUI::RefreshReconnectControls() {
 	// keeps one pair of controls whatever it is offering.
 	const NetJoinRefusalOffer refusal = m_MultiplayerApplyOffered ? g_NetMatchService.JoinRefusalOffer() : NetJoinRefusalOffer::None;
 	const bool applying = !recovering && !offering && refusal != NetJoinRefusalOffer::None;
+	const bool manualOffer = reconnect.GetOffer() == NetReconnectOffer::Dismissed && !recovering && !applying;
 	// A world whose slots are all held offers a wait beside the application; it stands where Resume does while it is offered.
 	const bool waitOffered = landing && applying && refusal == NetJoinRefusalOffer::SlotsHeld;
 	m_MainMenuButtons[MenuButton::MultiplayerWaitSlotButton]->SetVisible(waitOffered);
@@ -4242,9 +4244,9 @@ void MainMenuGUI::RefreshReconnectControls() {
 	// watch and the only route left is the address the player types.
 	const bool awaiting = reconnect.IsAwaitingHostReturn() && !recovering;
 	const bool hostBack = reconnect.HasHostReturned() || !reconnect.CanWatchHostReturn();
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || applying || awaiting || reconnect.CanRetryManually()));
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering ? (!awaiting || hostBack) : (applying || reconnect.CanRetryManually()));
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(offering ? "Rejoin Match" : (applying ? NetJoinRefusalApplyCaption(refusal) : "Retry"));
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || manualOffer || applying || awaiting || reconnect.CanRetryManually()));
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering ? (!awaiting || hostBack) : (manualOffer || applying || reconnect.CanRetryManually()));
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(offering || manualOffer ? "Rejoin Match" : (applying ? NetJoinRefusalApplyCaption(refusal) : "Retry"));
 	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetVisible(landing && (offering || applying || awaiting || recovering));
 	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetEnabled(offering || applying || awaiting || reconnect.CanCancel());
 	// Stopping the attempts and setting the offer aside are different acts; the record survives both.

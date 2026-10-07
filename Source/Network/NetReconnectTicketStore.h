@@ -81,6 +81,9 @@ namespace RTE {
 		bool Store(const NetH4TicketRecord& record, std::string* error = nullptr);
 		bool StoreRoutes(const NetH4TicketRecord& record, const std::vector<NetH4TicketRoute>& routes, std::string* error = nullptr);
 		std::vector<NetH4TicketRoute> LoadRoutes(const NetH4TicketRecord& record) const;
+		/// Remembers only this record's prompt dismissal. The ticket and its routes are untouched.
+		bool DismissOffer(const NetH4TicketRecord& record, std::string* error = nullptr);
+		bool IsOfferDismissed(const NetH4TicketRecord& record) const;
 
 		/// Reads the record back.
 		/// @return Why the load produced nothing, or Loaded.

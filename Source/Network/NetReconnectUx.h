@@ -30,6 +30,7 @@ namespace RTE {
 		Corrupt = 2,
 		Stale = 3,
 		Missing = 4, //!< The scan ran and found no record; §11 says so rather than saying nothing.
+		Dismissed = 5, //!< The usable ticket remains for manual rejoin, with no automatic prompt or watch.
 	};
 
 	/// The reconnect UX (§11): the automatic-retry schedule with its cancel and manual-retry controls,
@@ -67,6 +68,8 @@ namespace RTE {
 		/// or say precisely why it cannot.
 		void OfferStoredTicket(NetH4TicketLoadResult load, std::string hostAddress);
 		void DismissOffer();
+		/// Keeps the stored address available manually while suppressing the startup prompt.
+		void DismissStoredOffer();
 
 		/// 7e: the match died with its host and no successor took it, so there is nobody to rejoin yet.
 		/// The prompt stays on the screen and watches the directory for that session's row to return.
