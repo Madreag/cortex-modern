@@ -6,6 +6,7 @@
 #include "NetMuxTransport.h"
 #include "AreaEditor.h"
 #include "GUIInputWrapper.h"
+#include "GUI.h"
 #include "MainMenuGUI.h"
 #ifdef CCCP_WITH_GNS
 #include "GnsSignaling.h"
