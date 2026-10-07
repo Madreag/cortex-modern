@@ -2,8 +2,6 @@
 
 In-memory JSON session list and signaling relay. One Python 3 process, standard library only. A restart empties the list.
 
-Do not run these install steps from a worker lane. They are for the Mac (preferred) or this PC after the lead copies the files.
-
 ## Location
 
 This service lives in `tools/session_directory/` of the repository. It is standard library only; the tests were run with Python 3.14.2.
@@ -14,7 +12,7 @@ Run the tests from the repository root:
 python tools/session_directory/test_session_directory.py -v
 ```
 
-`com.cortex.session-directory.plist` is a macOS LaunchDaemon that refers to the install paths it names — working directory and files under `/Users/erol/cortex-directory` (`session_directory.py`, `cert.pem`, `key.pem`, `logs/session-directory.log`, `logs/stdout.log`, `logs/stderr.log`) and interpreter `/usr/bin/python3`. The copy in the repository is a template; those paths apply on the install host, not in the worktree.
+`com.cortex.session-directory.plist` is a macOS LaunchDaemon that runs as the user `player` and refers to the install paths it names — working directory and files under `/Users/player/cortex-directory` (`session_directory.py`, `cert.pem`, `key.pem`, `logs/session-directory.log`, `logs/stdout.log`, `logs/stderr.log`) and interpreter `/usr/bin/python3`. The copy in the repository is a template: replace `player` with the account that runs the service.
 
 ## Files
 
@@ -49,20 +47,20 @@ Optional filters `mode`, `activity`, and `state` still apply before the page is 
 
 ## Mac install
 
-Working directory is `/Users/erol/cortex-directory`.
+Working directory is `/Users/<user>/cortex-directory`, `<user>` the account named in the plist.
 
 1. Create the directory and log folder:
 
 ```bash
-mkdir -p /Users/erol/cortex-directory/logs
+mkdir -p ~/cortex-directory/logs
 ```
 
-2. Copy `session_directory.py` into `/Users/erol/cortex-directory/` and copy `com.cortex.session-directory.plist` to `/Library/LaunchDaemons/com.cortex.session-directory.plist` (root-owned, mode `0644`).
+2. Copy `session_directory.py` into `~/cortex-directory/` and copy `com.cortex.session-directory.plist` to `/Library/LaunchDaemons/com.cortex.session-directory.plist` (root-owned, mode `0644`).
 
-3. Certificate. If the Mini has a public DNS name, use Let's Encrypt for that name and point `--cert` / `--key` at those files. If it is LAN-only or IP-only, self-signed is enough:
+3. Certificate. If the host has a public DNS name, use Let's Encrypt for that name and point `--cert` / `--key` at those files. If it is LAN-only or IP-only, self-signed is enough:
 
 ```bash
-cd /Users/erol/cortex-directory
+cd ~/cortex-directory
 openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=cortex-directory" -addext "subjectAltName=IP:<lan-ip>"
 ```
 
@@ -86,7 +84,7 @@ To unload later: `sudo launchctl bootout system/com.cortex.session-directory`.
 
 5. The forwarding tunnel reaches TCP 8443 on loopback. This process accepts no public listener and binds no UDP port.
 
-Logs: rotating file `/Users/erol/cortex-directory/logs/session-directory.log`, plus launchd stdout/stderr in the same folder.
+Logs: rotating file `~/cortex-directory/logs/session-directory.log`, plus launchd stdout/stderr in the same folder.
 
 ## Windows alternative
 

@@ -1,4 +1,4 @@
--- The F72-B arm's activity: a stock three-team skirmish that also seats one AI actor whose pass
+-- The arm's activity: a stock three-team skirmish that also seats one AI actor whose pass
 -- writes (a message to itself and a gib of a free object) and reports what every peer holds. The
 -- writes themselves live in the actor's script; this file only stages them and reads the result.
 SkirmishDefense = AIPassWrites;

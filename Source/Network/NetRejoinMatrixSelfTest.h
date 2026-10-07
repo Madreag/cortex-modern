@@ -6,7 +6,7 @@ namespace RTE {
 	class NetRejoinMatrixSelfTest {
 	public:
 		static int Run();
-		/// Drives every reachable cell of REJOIN-GRID.md (a seat's phase x the event) and reports each cell.
+		/// Drives every reachable cell of the rejoin grid (a seat's phase x the event) and reports each cell.
 		static int RunGrid();
 	};
 

@@ -1,4 +1,4 @@
-"""Row 513 campaign-format control using retained INI and its explicitly referenced files."""
+"""Campaign-format control using retained INI and its explicitly referenced files."""
 import argparse
 import hashlib
 import json

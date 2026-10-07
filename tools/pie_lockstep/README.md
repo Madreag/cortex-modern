@@ -2,14 +2,13 @@
 
 These fixtures detect stale player input on AI actors and local pie-state
 mutations. They do not repair the engine. Run `run_arm.py` through the existing
-isolated runner with a fresh output directory and an already firewall-ruled
-executable. It uses headless mode, separate peer runtimes, input delay 3, 320
+isolated runner with a fresh output directory and the executable to test. It uses headless mode, separate peer runtimes, input delay 3, 320
 ticks, and dumps ticks 27..320. It never builds or copies an executable.
 
 ```powershell
-python tools/pie_lockstep/run_arm.py actor_cancel D:/mx/astra-pie-gating-20260913/example-net --exe '<retained executable>' --port 47922 --observe
-python tools/pie_lockstep/run_arm.py actor_cancel D:/mx/astra-pie-gating-20260913/example-sp --exe '<retained executable>' --sp --observe
-python tools/pie_lockstep/verify_pie_close.py actor_cancel D:/mx/astra-pie-gating-20260913/example-net --reference D:/mx/astra-pie-gating-20260913/example-sp --out result.json
+python tools/pie_lockstep/run_arm.py actor_cancel <out>/example-net --exe '<retained executable>' --port 47922 --observe
+python tools/pie_lockstep/run_arm.py actor_cancel <out>/example-sp --exe '<retained executable>' --sp --observe
+python tools/pie_lockstep/verify_pie_close.py actor_cancel <out>/example-net --reference <out>/example-sp --out result.json
 ```
 
 Cases are `next`, `prev`, `goto`, `actor_cancel`, and `delivery_cancel`. The two
@@ -41,7 +40,7 @@ end-of-update getters and callback counts; it does not verify getters inside
 mode-change callbacks, scripted slice activation, or submenu timing.
 
 ```powershell
-python tools/pie_lockstep/test_detector.py D:/mx/astra-pie-gating-20260913/red-next-debug D:/mx/astra-pie-gating-20260913/example-mutations --cancel-root D:/mx/astra-pie-gating-20260913
+python tools/pie_lockstep/test_detector.py <out>/red-next-debug <out>/example-mutations --cancel-root <out>
 ```
 
 Mutation data are explicitly synthetic and contain synthetic successful runner

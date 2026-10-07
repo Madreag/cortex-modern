@@ -16,8 +16,9 @@ sys.path.insert(0, str(REPO / 'tools'))
 from compare_sim_traces import strict_compare
 from launched_exe import apply_launched_exe
 from run_sim_test import make_run, seed_settings
+import box_facts
 
-ROOT = Path('D:/Projects/stage2_p4/recovery_runs') / (datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d_%H%M%S_') + uuid.uuid4().hex[:8])
+ROOT = box_facts.scratch_dir('recovery_runs') / (datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d_%H%M%S_') + uuid.uuid4().hex[:8])
 EXE = REPO / 'Cortex Command.exe'
 OUT = ROOT / 'fresh' / 'e2e'
 SNAPSHOT_COMPARE = REPO / "tools" / "compare_snapshots.py"

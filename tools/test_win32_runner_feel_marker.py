@@ -25,7 +25,7 @@ class FeelMarker(unittest.TestCase):
         self.scratch.cleanup()
 
     def hold(self, pid, token="feel-token"):
-        self.marker.write_text(json.dumps({"stream_root": "D:/mx/x/S3", "stamp": "now", "pid": pid, "token": token}),
+        self.marker.write_text(json.dumps({"stream_root": "C:/scratch/x/S3", "stamp": "now", "pid": pid, "token": token}),
                                encoding="utf-8")
 
     def start(self, name, env=None):

@@ -18,8 +18,8 @@ from pathlib import Path
 
 from run_selftests import score_selftest
 from run_sim_test import make_run
+import box_facts
 
-FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
 LIMIT_US = 16700
 RED_STALL_MS = 870
 # The all-dirty arm bounds the worst case: it may miss one tick, never the base stall.
@@ -420,8 +420,8 @@ def install_fixture(runtime: Path, *, dirty_all: bool = False) -> None:
 
 
 def launch(repo: Path, out: Path, args: list, timeout: float, env: dict | None = None, prepare=None) -> dict:
-    if FAMILY_LOCK.exists():
-        raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
+    if box_facts.held("verification"):
+        raise RuntimeError(f"engine launch prohibited while {box_facts.held('verification')[0]} exists")
     os.environ["CCCP_HEADLESS"] = "1"
     private = {"CCCP_HEADLESS": "1", **(env or {})}
     run = make_run(repo, args, out, timeout, env=private)

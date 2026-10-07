@@ -16,6 +16,7 @@ from pathlib import Path
 from PIL import Image
 
 from run_sim_test import make_run, engine_executable, file_sha256
+import box_facts
 from test_lobby_lifecycle import wait_for_log
 from test_telemetry_bundle import set_visual_resolution
 
@@ -528,7 +529,7 @@ def pause_probe(who, root):
                   {"op": "wait", "service": "Completed", "scope": "menu"},
                   {"op": "signal", "name": "left", "scope": "menu"}]
     else:
-        # ENGINE 200: End Match is the host's row only while the round runs. The enabled state is re-derived
+        # End Match is the host's row only while the round runs. The enabled state is re-derived
         # from the live service on every pause-menu Update and the button is drawn by that same pass, so the
         # host reads it live here and the capture's recorded pause rows carry the state after completion.
         # The host keeps its probe running until the client has left: a host that stops probing plays at full rate while the
@@ -1732,7 +1733,7 @@ def scripts(case, port, root, size="960x540"):
                 "assert_text_fits LabelLobbyPlayersHeader\n"
                 "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
                 # The host's options panel edits the adopted config; its Rules page carries the
-                # picked activity/mode and the L33 row the ledger names.
+                # picked activity/mode and the brainless-humans row.
                 "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
                 "assert_label LabelHostOptionsTitle A D V A N C E D\nactivate TabHostPageSeats\nwait 3\n"
                 # H09/H10: the host's own seat is never kickable, whoever else is in the lobby.
@@ -1986,7 +1987,7 @@ def scripts(case, port, root, size="960x540"):
         text += ("assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
                  "dump_host_options\nactivate ButtonHostSeatDlgClose\nwait 3\n"
                  "assert_visible HostSeatDialog 0\n")
-        # H07-H20 Rules: the L33 row keeps the ledger's exact label and pair of answers.
+        # H07-H20 Rules: the brainless-humans row keeps its exact label and pair of answers.
         text += "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
         text += "assert_label LabelHostOptionsTitle A D V A N C E D\n"
         text += checks("ComboHostRulesActivity", "CollectionBoxHostPageRules")
@@ -2087,7 +2088,7 @@ def scripts(case, port, root, size="960x540"):
                  # Switching autosave on from off starts at the shortest cadence, not the off zero.
                  "assert_label TextHostRecAutosaveInterval 60\n"
                  "assert_label LabelHostRecLastSave Checkpoint every 60 sim seconds - none saved yet\n"
-                 # ENGINE 166: the caption follows the typed interval on the Changed notification,
+                 # The caption follows the typed interval on the Changed notification,
                  # before any Apply or focus loss commits it. The product bounds the interval to
                  # every minute through every hour: 5 commits as 60, 3600 keeps, 0 stays off.
                  "set_text TextHostRecAutosaveInterval 5\nwait_ms 500\n"
@@ -2187,7 +2188,7 @@ def scripts(case, port, root, size="960x540"):
                   # The host's own sim count says nothing about the client's start: the first checks
                   # wait until the client's round has committed frames of its own.
                   {"op": "wait_file", "path": str(probe_root(root, "client") / "client_frame.json")},
-                  # ENGINE 195: a band pushed while the panel is closed paints at the bottom of the
+                  # A band pushed while the panel is closed paints at the bottom of the
                   # game screen; opening the panel moves it, and `single` fails if the old band's
                   # pixels stay behind on the GUI layer. The watch arms before the move so a ghost
                   # that only lives for the frames between the move and the next wipe still counts.
@@ -2198,7 +2199,7 @@ def scripts(case, port, root, size="960x540"):
                   {"op": "wait", "panel_open": True}, {"op": "wait", "renders": 5},
                   menu_step("ghost_watch assert"),
                   menu_step("assert_toast_band single"),
-                  # ENGINE 210: the corner roster box wraps at word boundaries only, and its width
+                  # The corner roster box wraps at word boundaries only, and its width
                   # rule grows the panel to the longest word instead of letting it hang over. The
                   # status box only wraps in its tall layout; the strip path is one FitLine'd line.
                   menu_step("assert_word_wrap probe Seats [F6] Input delay: 15 (auto, re-sized live) PeerExtremelyLongDisplayNameForWrapChecking0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 sits row"),
@@ -2220,7 +2221,7 @@ def scripts(case, port, root, size="960x540"):
                   {"op": "key_up", "key": "Escape"}, {"op": "wait", "screen": "Pause"}]) if case == "live"
                  else [{"op": "wait", "screen": "MultiplayerScreen"}])
         if case == "live":
-            # The match's pause menu opens without pausing the shared sim (L03): the menu is a local
+            # The match's pause menu opens without pausing the shared sim: the menu is a local
             # surface, the synchronized pause is its own row. Both peers keep running while it is open.
             steps += [{"op": "assert", "equals": {"service": "Running", "paused": False}, "sim_at_least": 100},
                       menu_step("assert_visible ButtonSettings 1"), menu_step("dump_host_options"),
@@ -2291,7 +2292,7 @@ def pixel_luma(rgb):
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
 
-# TabBlue.png on 6447c4c2e3: Base and MouseOver RGB slice identity. Selected
+# TabBlue.png as first committed: Base and MouseOver RGB slice identity. Selected
 # fill was panel grey (59, 65, 83), luma 65.024; the floor sits above that.
 TABBLUE_SIZE = (63, 59)
 TABBLUE_BASE_SHA256 = "4f8ea8767d5c1762dcc9e2adea0f0cffeeee72ca770211ed855095ab2be14a4b"
@@ -3640,8 +3641,8 @@ def main():
             parser.error(spread.NO_BOX_NAMED)
     if spread:
         spread.configure(options)
-    if Path("D:/mx/LEAD_FAMILY.lock").exists():
-        parser.error("LEAD_FAMILY.lock exists; no engine launch")
+    if box_facts.held("verification"):
+        parser.error("another run reserves this machine; no engine launch")
     if not (any(low <= options.port <= low + 9 for low in (48270, 48380, 48390, 48530, 48540, 48550, 48840, 48850, 49180, 49190))
             or 49440 <= options.port <= 49459 or 49470 <= options.port <= 49478 or 49820 <= options.port <= 49839):
         parser.error("this detector owns ports 48270-48279, 48380-48389, 48390-48399, 48530-48539, 48540-48549, 48550-48559, 48840-48849, 48850-48859, 49180-49199, 49440-49459, 49470-49478 and 49820-49839")

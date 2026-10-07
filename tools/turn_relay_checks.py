@@ -1,7 +1,7 @@
-"""The TURN relay rows: a relayed connection outlives its permissions, and takes renewed logins live.
+"""Two checks against a real TURN server: a relayed connection outlives its permissions, and takes renewed logins live.
 
-    python tools/turn_relay_rows.py hold --seconds 360 --turn 192.168.50.122:3479 --out <dir>
-    python tools/turn_relay_rows.py renew --turn 192.168.50.122:3479 --out <dir>
+    python tools/turn_relay_checks.py hold --seconds 360 --turn <relay host>:3479 --out <dir>
+    python tools/turn_relay_checks.py renew --turn <relay host>:3479 --out <dir>
 
 Runs -net-p2p-selftest relay-hold / relay-renew through the runner with CCCP_HEADLESS=1. The TURN login is
 minted from the directory coturn backend read by path (or inherited CC_TEST_TURN_USER / CC_TEST_TURN_PASS) and handed
@@ -19,6 +19,8 @@ import re
 import subprocess
 import sys
 import time
+
+import box_facts
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
@@ -49,7 +51,7 @@ def read_login(conf: Path) -> tuple[str, str]:
     import uuid
     config=json.loads(conf.read_text(encoding='utf-8'))
     if config.get('backend')!='coturn':
-        raise ValueError('standalone TURN rows require a coturn directory backend; Cloudflare needs the A63.1 capability gate')
+        raise ValueError('standalone TURN checks require a coturn directory backend; Cloudflare needs the relay-safe-login capability gate')
     offer=TurnCredentialProvider(config).mint('selftest-'+uuid.uuid4().hex,900,int(time.time()))
     server=next(row for row in offer['iceServers'] if row.get('username') and row.get('credential'))
     return server['username'],server['credential']
@@ -90,7 +92,9 @@ def main() -> int:
     parser.add_argument("row", choices=("hold", "renew"))
     parser.add_argument("--turn", required=True, help="TURN server host:port")
     parser.add_argument("--seconds", type=int, default=360, help="hold: how long the relayed connection must keep passing data")
-    parser.add_argument("--turn-config", "--login-conf", dest='login_conf', type=Path, default=Path("D:/mx/coturn-20260920/directory-coturn.json"))
+    parser.add_argument("--turn-config", "--login-conf", dest='login_conf', type=Path,
+                        default=box_facts.optional_path('relay_coturn_config'),
+                        help="the directory's coturn backend file (default: the box file's relay_coturn_config)")
     parser.add_argument("--coturn-log", default="", help="<ssh host>:<coturn log path>, fetched for the run window")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument('--host-box')
@@ -107,6 +111,8 @@ def main() -> int:
     if args.dry_run:
         print(json.dumps(dict(row=args.row,engine_count=1,seconds=args.seconds)))
         return 0
+    if args.login_conf is None and not (os.environ.get('CC_TEST_TURN_USER') and os.environ.get('CC_TEST_TURN_PASS')):
+        parser.error('--turn-config is required: the box file names no relay_coturn_config and no CC_TEST_TURN_USER/PASS is set')
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     user, password = read_login(args.login_conf)

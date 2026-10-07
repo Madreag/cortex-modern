@@ -5,13 +5,13 @@
 	<key>Label</key>
 	<string>com.cortex.session-directory</string>
 	<key>UserName</key>
-	<string>erol</string>
+	<string>player</string>
 	<key>WorkingDirectory</key>
-	<string>/Users/erol/cortex-directory</string>
+	<string>/Users/player/cortex-directory</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/usr/bin/python3</string>
-		<string>/Users/erol/cortex-directory/session_directory.py</string>
+		<string>/Users/player/cortex-directory/session_directory.py</string>
 		<string>--bind</string>
 		<string>127.0.0.1</string>
 		<string>--caller-mode</string>
@@ -19,21 +19,21 @@
 		<string>--port</string>
 		<string>8443</string>
 		<string>--cert</string>
-		<string>/Users/erol/cortex-directory/cert.pem</string>
+		<string>/Users/player/cortex-directory/cert.pem</string>
 		<string>--key</string>
-		<string>/Users/erol/cortex-directory/key.pem</string>
+		<string>/Users/player/cortex-directory/key.pem</string>
 		<string>--log-file</string>
-		<string>/Users/erol/cortex-directory/logs/session-directory.log</string>
+		<string>/Users/player/cortex-directory/logs/session-directory.log</string>
 		<string>--owner-state</string>
-		<string>/Users/erol/cortex-directory/world-owners.json</string>
+		<string>/Users/player/cortex-directory/world-owners.json</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardOutPath</key>
-	<string>/Users/erol/cortex-directory/logs/stdout.log</string>
+	<string>/Users/player/cortex-directory/logs/stdout.log</string>
 	<key>StandardErrorPath</key>
-	<string>/Users/erol/cortex-directory/logs/stderr.log</string>
+	<string>/Users/player/cortex-directory/logs/stderr.log</string>
 </dict>
 </plist>

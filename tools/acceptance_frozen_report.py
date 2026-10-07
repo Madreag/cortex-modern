@@ -3,7 +3,7 @@
 The native collection below is the collection prefix of this tree's own
 cross_report.build_report; a test holds the two equal. Only its name and return
 surface differ; all shared reducers are imported from cross_report itself. The
-wrapper applies NOTE 14's explicit PC compiler exception while retaining the raw
+wrapper applies the stated compiler exception for the coordinating PC while retaining the raw
 load evidence and every timing threshold. No reporting function is modified.
 """
 from cross_report import (Path, event_paths, judge_exit, load, pace_verdict, peer_root, presentation_contract, presentation_index, re, read_log, record_path, report, rows, source_rows)

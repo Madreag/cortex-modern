@@ -1,7 +1,7 @@
 """The draw p99 ratio over repeated matrices: the median of the arm's p99 over the median of the single-player baseline's p99.
 
-At sub-millisecond draw times one p99 is scheduler noise, so the ratio is read from the medians of five whole matrices (the lead's
-ruling R2, 2026-09-30); a row with fewer arm or baseline repeats is not judged and fails. The pin's own threshold is unchanged.
+At sub-millisecond draw times one p99 is scheduler noise, so the ratio is read from the medians of five whole matrices;
+a row with fewer arm or baseline repeats is not judged and fails. The pin's own threshold is unchanged.
 
     python tools/feel/draw_median.py <matrix root> [<matrix root> ...] [--threshold 1.5]
 """

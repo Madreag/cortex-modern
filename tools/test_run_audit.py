@@ -52,7 +52,7 @@ class Gate(unittest.TestCase):
     def test_observe_and_stage_answer_for_themselves(self):
         for operation in ("observe", "stage", "memory-perturb"):
             with self.subTest(operation=operation):
-                # A perturb case still answers for its detection and its restored checks (test_run_audit_perturb_gate).
+                # A perturb case still answers for its detection and its restored checks.
                 outcome = dict(perturbation_detected=True, restored_contract_checks_passed=True) if operation == "memory-perturb" else {}
                 self.assertEqual(self.gate(case(operation, applied=False, **outcome)), [])
 

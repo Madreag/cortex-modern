@@ -35,9 +35,9 @@ class TestCrashDumpEnv(unittest.TestCase):
 
     def test_caller_value_is_kept(self):
         for cls in (IsolatedRun, PosixIsolatedRun):
-            env, env_set = _construct(cls, {"CC_TEST_CRASH_DUMP": r"D:\mx\forced\crash.dmp"})
-            self.assertEqual(env.get("CC_TEST_CRASH_DUMP"), r"D:\mx\forced\crash.dmp", cls.__module__)
-            self.assertEqual(env_set.get("CC_TEST_CRASH_DUMP"), r"D:\mx\forced\crash.dmp", cls.__module__)
+            env, env_set = _construct(cls, {"CC_TEST_CRASH_DUMP": r"C:\scratch\forced\crash.dmp"})
+            self.assertEqual(env.get("CC_TEST_CRASH_DUMP"), r"C:\scratch\forced\crash.dmp", cls.__module__)
+            self.assertEqual(env_set.get("CC_TEST_CRASH_DUMP"), r"C:\scratch\forced\crash.dmp", cls.__module__)
 
 
 if __name__ == "__main__":

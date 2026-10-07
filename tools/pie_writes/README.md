@@ -1,7 +1,7 @@
-# F23c local pie-write arms
+# Local pie-write arms
 
-Three two-peer lockstep arms for the local UI writes in `Source/Activities/GameActivity.cpp` that F23's
-gating did not reach. They measure; they do not repair the engine.
+Three two-peer lockstep arms for the local UI writes in `Source/Activities/GameActivity.cpp` that the pie's lockstep
+gating does not reach. They measure; they do not repair the engine.
 
 - `buy_menu` — site A, `RemovePieSlicesByType(PieSliceType::BuyMenu)` when the activity's buy menu is
   off and the seat's pie is enabling. `PieWriteObserver.lua` turns `BuyMenuEnabled` off on every peer,
@@ -16,13 +16,13 @@ write. `L_DOWN`/`L_LEFT` hover a quadrant's middle slice and the counter-clockwi
 second slice in that quadrant.
 
 ```powershell
-python tools/pie_writes/run_write_arm.py full_inventory D:/mx/opus-f23c-20260913/<name> --exe '<retained executable>' --port 48181
-python tools/pie_writes/verify_peer_pie.py full_inventory D:/mx/opus-f23c-20260913/<name> --out D:/mx/opus-f23c-20260913/score/<name>.json
+python tools/pie_writes/run_write_arm.py full_inventory <out>/<name> --exe '<retained executable>' --port 48181
+python tools/pie_writes/verify_peer_pie.py full_inventory <out>/<name> --out <out>/score/<name>.json
 ```
 
 The runner uses the existing isolated runner (`tools/run_sim_test.py` `make_run`), headless, separate peer
 runtimes, input delay 3, 320 ticks, dumps 27..320, ports 48181-48189. It never builds or copies an
-executable and refuses one with no inbound firewall rule.
+executable and refuses one the Windows firewall would block.
 
 The detector requires complete `manifest.json`, `run_result.json` and per-peer `launch.json` evidence, a
 complete dump for every actor over ticks 27..320, and then compares the two peers: `pie`, `ctrl`, `mode`

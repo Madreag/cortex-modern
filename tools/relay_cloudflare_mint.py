@@ -1,6 +1,6 @@
-"""CF1's live proof: the session directory mints a Cloudflare relay login through its own HTTP API.
+"""A live check that the session directory mints a Cloudflare relay login through its own HTTP API.
 
-    python tools/relay_cloudflare_mint.py --turn-config D:/mx/coturn-20260920/turn-config-cloudflare.json --out <dir>
+    python tools/relay_cloudflare_mint.py --turn-config <cloudflare key file> --out <dir>
                                           [--module <a session_directory.py>] [--ttl 600] [--scan <root> ...]
 
 The directory runs in this process on a loopback port with the key file's backend, read by path. One session
@@ -120,7 +120,7 @@ def main(argv=None) -> int:
     server = module.spawn_server(port=0, insecure_http=True, log_file=out / 'service.log', turn_config=config, create_owner_key=True, caller_mode="direct")
     book_mints(server.store, book)
     source = Path(str(module.__file__)).resolve()
-    receipt = {'schema': 1, 'row': 'CF1', 'started': stamp(), 'turn_config': str(options.turn_config),
+    receipt = {'schema': 1, 'check': 'cloudflare-mint', 'started': stamp(), 'turn_config': str(options.turn_config),
                'backend': config.get('backend'), 'module': str(source), 'module_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
                'directory_user_agent': getattr(module, 'USER_AGENT', None), 'ttl_requested_s': options.ttl}
     try:
@@ -148,7 +148,7 @@ def main(argv=None) -> int:
     (out / 'mint-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
     scan = book.scan([out, *options.scan])
     (out / 'secret-scan.json').write_text(json.dumps(scan, indent=2) + '\n', encoding='utf-8')
-    print(f"CF1 {'PASS' if receipt['passed'] and scan['clean'] else 'FAIL'} provider={[c['status'] for c in calls]} "
+    print(f"[cloudflare-mint] {'PASS' if receipt['passed'] and scan['clean'] else 'FAIL'} provider={[c['status'] for c in calls]} "
           f"cloudflare_error={[c.get('provider_error_code') for c in calls]} mint={mint.get('status')} ttl={mint.get('ttl_granted_s')} "
           f"servers={mint.get('server_count')} fetch={receipt.get('fetch', {}).get('status')} "
           f"scan: {scan['secrets']} secrets ({', '.join(scan['kinds'])}) in {scan['files_scanned']} files, "

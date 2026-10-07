@@ -21,6 +21,7 @@ import re
 import shutil
 
 from run_sim_test import make_run
+import box_facts
 from test_lobby_chat import read_log, set_resolution
 from test_post_match_report import LABELS, SIZES, capture_geometry, latest_capture, pin, sha256
 
@@ -28,7 +29,7 @@ from test_post_match_report import LABELS, SIZES, capture_geometry, latest_captu
 NAMES = ("01-first.ccreplay", "02-second.ccreplay")
 LEGACY_NAME = "03-pickup_fire.ccreplay"
 ROW_DATE_FORMAT = "%Y-%m-%d %H:%M"
-FIXTURE = Path("D:/Projects/stage2_p4/fixtures/pickup_fire.ccreplay")
+FIXTURE = Path(__file__).resolve().parent / "fixtures/pickup_fire.ccreplay"
 PLAYBACK = re.compile(r"\[net-replay\] playback finished[^\n]*ticks=(\d+)[^\n]*outcome=completed[^\n]*frames=(\d+)[^\n]*end_marker=1")
 # The rematch press the replay's end used to drop, injected on the exact frame that clears the replay.
 RESTART_FAULT = "queued_restart_at_replay_end"
@@ -235,13 +236,13 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--exe-sha256", required=True)
     parser.add_argument("--fixture", type=Path, default=FIXTURE)
-    parser.add_argument("--legacy-fixture", type=Path, default=FIXTURE, help="602-tick pickup_fire replay from the shared harness fixture root")
+    parser.add_argument("--legacy-fixture", type=Path, default=FIXTURE, help="the 602-tick pickup_fire replay")
     parser.add_argument("--summary", type=Path, help="report JSON from the same match as --fixture; checks row duration against its running ticks")
     parser.add_argument("--arm", choices=("browse", "queued-restart", "both"), default="browse",
                         help="queued-restart repeats the browse with CC_FAULT_INJECT=" + RESTART_FAULT)
     args = parser.parse_args()
-    if Path("D:/mx/LEAD_FAMILY.lock").exists():
-        parser.error("family lock exists; no driver may run")
+    if box_facts.held("verification"):
+        parser.error("another run reserves this machine; no driver may run")
     os.environ["CCCP_HEADLESS"] = "1"
     root = args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)

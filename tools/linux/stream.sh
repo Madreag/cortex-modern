@@ -10,7 +10,7 @@
 # The load-sensitive legs (S5, S1) run alone; the TSan suite runs in three shards beside the ASan build and suite, whose
 # wall-clock budgets a sanitizer build reports instead of judging.
 # Usage, from a lane directory holding this script, run_official13.py, sanitizer_digest.py and inventory/ (a copy of
-# lead-tools/inventory):
+# the acceptance inventory scripts):
 #   SHA=<full sha> [STEPS="repo gcc s5 libcxx s1 readback tsan asan rerun defects"] nohup bash stream.sh > job.out 2>&1 &
 # A repeated evidence path is refused. exit.txt is written at the end; no retained evidence is removed.
 set -u

@@ -59,6 +59,7 @@ from compare_sim_traces import FULLSTATE, compare_fullstate, load_fullstate
 from feel.report import own_hold_windows
 from feel.retained_resume import PER_PEER_SUBSYSTEMS, read_live_hashes, split_passes
 from run_sim_test import make_run, engine_executable, file_sha256
+import box_facts
 from feel_measure import stage_baseline
 
 CAPTURE = re.compile(r"^\[autosave\] tick=(\d+) capture_ms=(\d+(?:\.\d+)?) bytes=(\d+)$", re.MULTILINE)
@@ -76,7 +77,6 @@ RESUMING = re.compile(r"^\[autosave\] resuming match=(\S+) tick=(\d+) activity=(
 OFFER = re.compile(r"^\[autosave\] resume offer match=(\S+) tick=(\d+) (held locally|not held: .*)$", re.MULTILINE)
 HELD_LAUNCH = re.compile(r"^\[net-match\] launching from the held checkpoint: (\S+)$", re.MULTILINE)
 RECEIVED_LAUNCH = re.compile(r"^\[net-match\] launching from the received snapshot: (\S+)$", re.MULTILINE)
-FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
 # Every N committed ticks each peer hashes its whole capture (-net-fullstate-hash-every); 0 is off. Set by --fullstate-every.
 FULLSTATE_EVERY = 0
 # Both peers' archive writers pause this long before each task (CC_TEST_SAVER_DELAY_MS); 0 is off. Set by --saver-delay-ms.
@@ -373,8 +373,8 @@ def saver_delay_ms(who: str) -> int:
 
 def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra: dict, settings: dict | None = None, load_objects: int = 0) -> dict:
     """Two peers of one match, each with the arm's own extra flags and Settings.ini values."""
-    if FAMILY_LOCK.exists():
-        raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
+    if box_facts.held("verification"):
+        raise RuntimeError(f"engine launch prohibited while {box_facts.held('verification')[0]} exists")
     root.mkdir(parents=True, exist_ok=False)
     runs, records = {}, {}
     for who in ("host", "client"):
@@ -946,8 +946,8 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "") -> dic
     resumable and the restarted host refuses with "checkpoint refused"; -net-resume-match itself does
     not parse, so the run ends before a lobby exists.
     """
-    if FAMILY_LOCK.exists():
-        raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
+    if box_facts.held("verification"):
+        raise RuntimeError(f"engine launch prohibited while {box_facts.held('verification')[0]} exists")
     root.mkdir(parents=True, exist_ok=False)
     first, second = root / "died", root / "resumed"
     first.mkdir(parents=True, exist_ok=False)
@@ -1158,8 +1158,8 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
     copied into each staged runtime after the runner prepares it and before the process starts;
     `after_carry(who, runtime)` then edits what that peer finds on its disk. `return_wait_ticks` bounds the kill's wait on a
     held seat's return by the round's ticks since the hold instead of by wall time."""
-    if FAMILY_LOCK.exists():
-        raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
+    if box_facts.held("verification"):
+        raise RuntimeError(f"engine launch prohibited while {box_facts.held('verification')[0]} exists")
     timeout = world_round_timeout_s(own_ticks or ticks)
     runs, records = {}, {}
     def drive(who: str) -> None:
@@ -1282,8 +1282,8 @@ def measure_world_write(repo: Path, root: Path, port: int) -> dict:
     """One checkpoint write of the world arms' own world on this machine: a two-peer world round with the arms' flags runs until
     the host's writer has finished its first checkpoint, then both peers are stopped. The peers run as probe-host and probe-client,
     outside the rounds the full-state oracle judges, and take no full-state samples."""
-    if FAMILY_LOCK.exists():
-        raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
+    if box_facts.held("verification"):
+        raise RuntimeError(f"engine launch prohibited while {box_facts.held('verification')[0]} exists")
     root.mkdir(parents=True, exist_ok=False)
     names = {"host": "probe-host", "client": "probe-client"}
     autosaves = root / "probe-host/runtime/Autosaves"
@@ -1769,8 +1769,8 @@ class CheckpointWaitTests(unittest.TestCase):
         self.assertEqual(landed_checkpoints(self.capture_lines([130, 751, 1186, 1346])), ([130, 751, 1186, 1346], 0))
 
     def test_a_restore_with_one_written_checkpoint_is_short(self):
-        # The Mac on a758f2f4e0, 3:2x PM: each write took 8.7 s, so both peers had only 239 on disk at the tick-700 restore.
-        # The process exits 1 on the restore check while its match report stays at 0 (h8-green restore-all-1's client, 10-03).
+        # A slow Mac run: each write took 8.7 s, so both peers had only 239 on disk at the tick-700 restore.
+        # The process exits 1 on the restore check while its match report stays at 0.
         line = (f"[autosave-store-selftest] FAIL match={self.MATCH} restorable=1 (two checkpoints are needed)\n"
                 f"[autosave] restore_check FAIL match={self.MATCH} tick=239 sim_update_count=239 world_hash=ab expected=ab policy=0\n")
         texts = {who: self.capture_lines([239]) + line for who in ("host", "client")}
@@ -1886,7 +1886,7 @@ class CheckpointWaitTests(unittest.TestCase):
         self.assertEqual(details["host"]["captures"], [133, 253, 373, 493])
 
     def test_a_peer_that_wrote_no_checkpoint_waits(self):
-        # The Mac on 66d4f5e147, 5:4x PM: in 700 ticks the host wrote 152 behind 6-9 s writes and the held client took none.
+        # A slow Mac run: in 700 ticks the host wrote 152 behind 6-9 s writes and the held client took none.
         records = {"host": {"exit_code": 0}, "client": {"exit_code": 0}}
         texts = {"host": self.capture_lines([152]), "client": "[autosave] named tick=152 not taken: catch_up=true running=true\n"}
         with self.assertRaises(CheckpointsShort) as raised:
@@ -1894,7 +1894,7 @@ class CheckpointWaitTests(unittest.TestCase):
         self.assertIn("client wrote no checkpoint", str(raised.exception))
 
     def test_a_reclaim_set_past_the_run_waits_and_a_missing_one_fails(self):
-        # The Mac on de8e196578, 5:52 PM: the client held at 46 caught up in place and set its reclaim for 789 in a 700-tick run.
+        # A Mac run: the client held at 46 caught up in place and set its reclaim for 789 in a 700-tick run.
         import tempfile
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1907,7 +1907,7 @@ class CheckpointWaitTests(unittest.TestCase):
             with self.assertRaises(CheckpointsShort) as raised:
                 forced_hold_evidence(root, "40:1500", ticks=700)
             self.assertIn("set its reclaim for tick 789, past the run's 700", str(raised.exception))
-            # The Mac on 95df52ba14: the restore run's client had applied 700 of the 775 its reclaim needed when the 800-tick run ended.
+            # A Mac run: the restore run's client had applied 700 of the 775 its reclaim needed when the 800-tick run ended.
             (root / "client" / "stdout.log").write_text(client.replace("applied=282 activation=789", "applied=700 activation=775"), encoding="utf-8")
             with self.assertRaises(CheckpointsShort) as raised:
                 forced_hold_evidence(root, "40:1500", ticks=800)
@@ -1941,8 +1941,8 @@ class CheckpointWaitTests(unittest.TestCase):
 
 
 class SubstanceFirstTests(unittest.TestCase):
-    """The checklist read of d177a3ea74 (its finding 2): a run the arms took for short was retried, and a later passing run hid a
-    real restore or autosave failure. Each first run here is short AND broken; the arm fails it at once and never retries it."""
+    """A run the arms took for short is never retried: a later passing run could hide a real restore or autosave
+    failure. Each first run here is short AND broken; the arm fails it at once."""
     MATCH = CheckpointWaitTests.MATCH
     POLICY_PASS = f"[autosave-store-selftest] PASS match={MATCH} restorable=3 same_set=1\n"
     POLICY_ONE = f"[autosave-store-selftest] FAIL match={MATCH} restorable=1 (two checkpoints are needed)\n"
@@ -2140,11 +2140,11 @@ class WorldClockSizingTests(unittest.TestCase):
         self.assertGreaterEqual(world_round_ticks(1200, write_seconds, 2, WORLD_KILL_TICK, limit_ticks), needed)
 
     def test_a_fast_writer_keeps_the_old_rounds(self):
-        # Acceptance run 1 on the Z13 (2.0 s a write) and the Linux box's 1.75 s: every world round keeps the length it had.
+        # A laptop's 2.0 s a write and a Linux box's 1.75 s in one acceptance run: every world round keeps the length it had.
         for write_seconds in (1.75, 2.0):
             self.assertEqual(world_round_ticks(1200, write_seconds, 2, WORLD_START_LEAD_TICKS), 1200)
             self.assertEqual(world_round_ticks(600, write_seconds, 0, 0), 600)
-            # The Z13's resumed round, 2,425 ticks from its first boot's capture gap, with that boot's return of 487 ticks.
+            # A laptop's resumed round, 2,425 ticks from its first boot's capture gap, with that boot's return of 487 ticks.
             self.assertEqual(world_round_ticks(2425, write_seconds, RETAINED_AUTOSAVES + 1, WORLD_START_LEAD_TICKS, WRITE_MARGIN * 487), 2425)
         for tenths in range(0, 200):
             self.assertGreaterEqual(world_round_ticks(1200, tenths / 10, 2, WORLD_START_LEAD_TICKS), 1200)
@@ -2567,7 +2567,7 @@ class WorldRestartOracleTests(unittest.TestCase):
             "no canonical snapshot": (logs(canonical=False), False),
             "a section the canonical capture keeps for itself": (logs(canonical_own="graph.3"), True),
             "a section the canonical capture drops unnamed": (logs(canonical_own=""), False),
-            # EDITH S1 restore-all on merge 254: the slow saver coalesced samples after the heal on each peer.
+            # A restore-all run on a slow Windows box: the slow saver coalesced samples after the heal on each peer.
             "samples each peer's own saver coalesced after the heal": (
                 logs(absent={"host": {840, 1020}, "client": {840, 960}}, coalesced={"host": [840, 1020], "client": [840, 960]}), True),
             "an absence no line of the peer names": (logs(absent={"client": {1200}}), False),

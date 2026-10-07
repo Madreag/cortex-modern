@@ -224,10 +224,10 @@ def execute(spec):
         write(path,native)
         return 0 if record.get('exit_code') == 0 else 1
     if spec['kind'] == 'relay-selftest':
-        from turn_relay_rows import main
+        from turn_relay_checks import main
         from relay_private import inherited_environment
         import sys
-        sys.argv = ['turn_relay_rows.py',*spec['native']['argv'],'--stop-file',str(Path(spec['identity']).parent/'stop.json')]
+        sys.argv = ['turn_relay_checks.py',*spec['native']['argv'],'--stop-file',str(Path(spec['identity']).parent/'stop.json')]
         with inherited_environment(values.get('environment',{})):return main()
     if spec['kind'] == 'capture-peer':
         from acceptance_e2e_remote import execute_peer

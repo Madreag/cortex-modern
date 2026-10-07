@@ -14,14 +14,13 @@ from pathlib import Path
 
 from compare_sim_traces import strict_compare
 from run_sim_test import make_run, engine_executable, file_sha256
+import box_facts
 
 CAPTURE = re.compile(r"^\[autosave\] tick=(\d+) capture_ms=(\d+(?:\.\d+)?) bytes=(\d+)$", re.MULTILINE)
-FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
-
 
 def run_pair(repo: Path, root: Path, port: int, seconds: dict, ticks: int, *, prepare=None, case=None) -> dict:
-    if FAMILY_LOCK.exists():
-        raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
+    if box_facts.held("verification"):
+        raise RuntimeError(f"engine launch prohibited while {box_facts.held('verification')[0]} exists")
     if case:
         case.stage_root(root)
     else:

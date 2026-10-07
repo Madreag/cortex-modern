@@ -47,7 +47,7 @@ def inspect(root: Path) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", type=Path, default=Path(r"D:/Projects/takeover-build"))
+    parser.add_argument("--base", type=Path, required=True, help="the base tree to compare against")
     parser.add_argument("--tip", type=Path, default=REPO)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=180)
@@ -67,7 +67,7 @@ def main():
         for run in runs.values():
             run.start()
         for run in runs.values():
-            run.wait()
+            run.finish()
         result = inspect(root)
         result["argv"] = ARGV
         result["driver_sha256"] = sha(Path(__file__))

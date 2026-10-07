@@ -8,7 +8,7 @@ import subprocess
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--base',default='a7dd9086ade04e3f2dbb9ad897fcbd6b14126e88')
+    parser.add_argument('--base',required=True,help='the commit new includes are counted from, for example the branch point')
     parser.add_argument('--out',type=Path,required=True)
     options=parser.parse_args()
     repo=Path(__file__).resolve().parents[2]

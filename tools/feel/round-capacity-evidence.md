@@ -16,4 +16,4 @@ the native compute measurement when the full timing partition is unavailable;
 a whole-process average spanning several rounds cannot replace it. The
 existing 59.5 TPS, zero steady missing-frame stalls, below 1 percent waiting,
 50 ms maximum wait and 50 ms confirmed-horizon limits remain unchanged. The
-ruled whole-heavy relative policy needs all peers' round evidence.
+whole-heavy relative policy needs all peers' round evidence.

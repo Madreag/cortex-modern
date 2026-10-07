@@ -29,14 +29,12 @@ import sys
 import time
 from pathlib import Path
 from run_sim_test import engine_executable, file_sha256  # noqa: E402
+import box_facts
 
 REPO = Path(__file__).resolve().parents[1]
 FIXTURE = REPO / "tools/fixtures/spectate_skirmish_activity.lua"
-SCRATCH = Path("D:/mx/opus-l33-brainless-spectate-20260914")
-FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
-BATTERY_LOCK = Path("D:/mx/LEAD_BATTERY.lock")
-EXCLUSIVE_LOCK = Path("D:/mx/LEAD_EXCLUSIVE.lock")
-HARNESS = Path("D:/Projects/stage2_p4/recovery_e2e.py")
+SCRATCH = box_facts.scratch_dir("brainless-spectate")
+HARNESS = REPO / "tools/heal_driver/recovery_e2e.py"
 PORT_RANGE = range(48400, 48420)
 
 PROBE = re.compile(
@@ -81,7 +79,7 @@ def stamp() -> str:
 
 
 def refuse_on_locks() -> None:
-    for lock in (FAMILY_LOCK, BATTERY_LOCK, EXCLUSIVE_LOCK):
+    for lock in box_facts.held("verification", "battery", "exclusive"):
         if lock.exists():
             raise SystemExit(f"refusing to run: {lock} exists")
 

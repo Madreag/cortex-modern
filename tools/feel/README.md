@@ -1,10 +1,10 @@
 # Unattended feel measurements
 
-Run only after build authorization and removal of the phase lock:
+Run on a built tree with no other engine run on the machine:
 
 ```powershell
 $env:CCCP_HEADLESS = '1'
-python -B tools/feel_measure.py --out D:\mx\feel-item9a-review --skip-gates
+python -B tools/feel_measure.py --out <dir> --skip-gates
 ```
 
 The driver uses the assigned worktree's executable and `run_sim_test.make_run` for
@@ -16,7 +16,7 @@ call. The ordinary e2e loop renders and contributes to the existing pace counter
 All traces request 1200 ticks. The service's stop/drain tail is retained separately
 in the raw records; trace coverage must be exactly ticks 1 through 1200.
 
-The item 9a cases add 5% GNS packet loss and a three-peer match whose client stops
+The hold-and-rejoin cases add 5% GNS packet loss and a three-peer match whose client stops
 at tick 600 for 1500 ms, then takes the normal reclaim path. The latter keeps AI
 enabled and compares every committed hash on the two survivors through the hold
 and rejoin. The impaired client uses twice the lag argument while the host and
@@ -49,7 +49,7 @@ clears every CPU team (no funds, no brains). Human brains are parked out of
 Battle Rifle reach so the 1200-tick window cannot be decided. It uses the same
 input script and records the controller log. Network runs launch that same
 fixture with `-net-match-humans 2 -net-match-cpu-slots 0`. The input seam is
-the same one used by `record_ak47_fire.py`; no desktop input is synthesized.
+the engine's own `-input-script`; no desktop input is synthesized.
 Each three-tick firing pulse shares its press and release with a distinct aim
 change, so those input packets have an operationally defined render-pose probe.
 The generated input-schedule.json requires every planned edge stamp to be present.
@@ -121,8 +121,7 @@ Definitions are fixed before measurements:
   occur on the input's preview tick and within 34 ms. Voice output stays muted.
   The original ledger keeps only 64 detailed event starts; the full voice log and
   per-step records remain available after that capacity is reached.
-- PNG capture uses this lane's `-feel-measure` seam, since the pinned source does
-  not contain `-net-match-screenshot-ticks`. Files are named by requested tick,
+- PNG capture uses the engine's `-feel-measure` seam. Files are named by requested tick,
   every 60 ticks; the raw row also records the actual presented tick. Both peers
   retain captures, including the required client captures.
 
@@ -139,7 +138,7 @@ comparator recorded in the driver. The SP fixture and Index.ini are copied as
 individual files from the retained control runtime; no directory tree is copied.
 The gate's launch has neither new flag, verifying the default-off path.
 `--sp-control` selects a retained successful pie-close control if the default
-reference is unavailable. `--skip-gates` explicitly leaves the lane unverified.
+reference is unavailable. `--skip-gates` leaves the gates unchecked.
 
 `feel-report.json` and `summary.md` are written per measured pair, with a matrix
 summary at the output root. The raw-file manifest includes file sizes and SHA-256.
@@ -148,11 +147,10 @@ or missing gate prevents completion. Use a fresh child `--out` for a new run;
 existing run trees are never deleted, moved or replaced. `--analyze-only` is for a
 completed launch matrix whose analysis directories do not yet exist.
 
-Detector checks are `python -B tools/feel/test_report.py`. They use synthetic
-records only and do not establish engine correctness. They remain unrun in the
-compile-only lane; the review runs them with the engine gates and drivers.
+Detector checks are `python -B -m unittest feel.test_report`, run from `tools/` and by the tools suites. They use
+synthetic records only and do not establish engine correctness.
 
-Item 9a also writes 100/200 ms timing cases with 5 percent loss, silence at tick 600,
+The hold-and-rejoin cases also write 100/200 ms timing cases with 5 percent loss, silence at tick 600,
 and loss combined with silence and private rejoin. Silent cases run to tick 2400;
 the manifest selects the final tick for every rate, wait, horizon and full-hash gate.
 The 59.5 tps, 50 ms and one-percent bounds remain unchanged across the entire window.

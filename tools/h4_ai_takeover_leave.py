@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 
 from run_sim_test import make_run, engine_executable, file_sha256
+import box_facts
 
 
 def main() -> int:
@@ -20,8 +21,8 @@ def main() -> int:
     parser.add_argument("--expect", choices=("red", "green"), required=True)
     parser.add_argument("--timeout", type=int, default=300)
     options = parser.parse_args()
-    if Path("D:/mx/LEAD_FAMILY.lock").exists():
-        parser.error("the verification family owns the machine")
+    if box_facts.held("verification"):
+        parser.error("another run reserves this machine")
     repo, out = options.repo.resolve(), options.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     executable = engine_executable(repo)

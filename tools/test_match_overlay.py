@@ -29,8 +29,9 @@ import threading
 import time
 from run_sim_test import engine_executable, file_sha256  # noqa: E402
 from test_menu_readback import spread, managed_case
+import box_facts
 
-SCRATCH = Path("D:/mx/swe-overlay-layout-20260914")
+SCRATCH = box_facts.scratch_dir("match-overlay")
 PORT_BASE, PORT_COUNT = 48260, 10
 TICKS = 900
 DROP_SIGNAL = "host-past-290"
@@ -977,8 +978,8 @@ def main():
     if getattr(options, "spread", False) or not getattr(options, "peer_boxes", None):
         parser.error(spread.NO_BOX_NAMED)
     spread.configure(options)
-    if Path("D:/mx/LEAD_FAMILY.lock").exists():
-        parser.error("verification family owns the machine; no driver may start")
+    if box_facts.held("verification"):
+        parser.error("another run reserves this machine; no driver may start")
     repo, root = options.repo.resolve(), options.out.resolve()
     scratch = options.scratch.resolve()
     if not root.is_relative_to(scratch) or root == scratch:

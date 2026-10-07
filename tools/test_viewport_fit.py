@@ -3,7 +3,7 @@ multiplayer container, its panel edges and the Back button inside the viewport,
 and the long diagnostic must stay reachable through the label's overflow scroll.
 
     python test_viewport_fit.py --repo <tree> \
-        --out <output-dir> --port 47871 \
+        --out <dir> --port 47871 \
         --exe-sha256 <exe hash>
 
 Three phases, each one host + one refused joiner on separate machines:

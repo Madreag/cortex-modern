@@ -1,4 +1,4 @@
-"""Row 516: an unavailable directory explains the fallback and a typed LAN address joins."""
+"""An unavailable directory explains the fallback and a typed LAN address joins."""
 
 import argparse
 import json

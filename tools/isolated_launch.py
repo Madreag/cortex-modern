@@ -3,9 +3,9 @@
     python isolated_launch.py --out <record dir> --cwd <runtime dir> [--timeout S] [--stdout <file>] -- "<exe>" <args...>
     python isolated_launch.py --hold
 
-The PowerShell harnesses (run_interp_e2e.ps1 and the desync scripts) used to create the engine process themselves,
-which put its window, its GL context and its foreground activation on the user's desktop. This wrapper gives them
-the same launch every Python harness gets from win32_test_runner.IsolatedRun: a private desktop the user never
+A harness that cannot import win32_test_runner (a PowerShell script, say) runs the engine through this wrapper: a
+process it created itself would put its window, its GL context and its foreground activation on the user's desktop.
+This wrapper gives it the same launch every Python harness gets from win32_test_runner.IsolatedRun: a private desktop the user never
 sees, SW_HIDE, a job object that kills the engine when this process dies, the fullscreen hold and the job memory
 cap. The engine's combined stdout+stderr goes to <out>/stdout.log; at exit it is copied to --stdout when given and
 echoed on this process's stdout, so a harness that captured the engine's output captures the same text. The exit

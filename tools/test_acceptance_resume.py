@@ -98,7 +98,7 @@ class AcceptanceResume(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             out = Path(folder)/'result.json'
             with (patch.object(sys, 'argv', ['run_tools_suites.py', '--only', 'cross-report', '--out', str(out)]),
-                  patch.object(run_tools_suites, 'run', return_value=('cross-report', 0, 'OK\n')),
+                  patch.object(run_tools_suites, 'run', return_value=('cross-report', 0, 'OK\n', {})),
                   contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO())):
                 try:
                     code = run_tools_suites.main()

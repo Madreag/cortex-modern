@@ -942,7 +942,7 @@ namespace RTE {
 		}
 
 		// Brings one client to a committed seat and then drops its link MID-MATCH, which is the state
-		// every reclaim test starts from - a lobby drop hands the seat back instead (A5).
+		// every reclaim test starts from - a lobby drop hands the seat back instead.
 		int SeatAndDrop(Wire& wire, Endpoint& player, NetH4TicketRecord& record, uint64_t unixNow, std::string* error) {
 			if (!player.client.BeginNewJoin(wire.nowMs, error) || !wire.Pump(error)) {
 				return 1;
@@ -1586,7 +1586,7 @@ namespace RTE {
 				player.connected = false;
 				wire.Remove(player.connection);
 				player.client.NotifyAmbiguousLoss();
-				// A drop on either side of the round's end leaves the seat held for its player (A12).
+				// A drop on either side of the round's end leaves the seat held for its player.
 				const std::vector<NetH4SeatStatus> statuses = wire.host.GetSeatStatuses();
 				const auto held = std::find_if(statuses.begin(), statuses.end(), [](const NetH4SeatStatus& status) { return status.dropped; });
 				if (held == statuses.end() || !wire.host.IsSeatHeldForReclaim(held->lockstepPeerId)) {
@@ -3015,7 +3015,7 @@ namespace RTE {
 				return Fail("the first holder never committed a seat to reclaim");
 			}
 			// The ladder this case measures is the MID-MATCH reclaim; the match has to be live before
-			// the drop or the seat is handed back to the lobby pool instead (A5).
+			// the drop or the seat is handed back to the lobby pool instead.
 			admission.SetLiveMatch(true);
 			firstTransport.Stop();
 			for (const uint64_t settleUntil = nowMs + 200; nowMs <= settleUntil; nowMs += 10) {
@@ -3288,7 +3288,7 @@ namespace RTE {
 			if (!wire.host.IsSeatHeldForReclaim(held)) {
 				return Fail("the hold ended inside the P2 window");
 			}
-			// Past the window the seat is still its player's: a hold ends only at the host's click (A12).
+			// Past the window the seat is still its player's: a hold ends only at the host's click.
 			wire.nowMs += NetReconnectHost::c_ProvisionalExpiryMs + 1;
 			wire.host.Tick(wire.nowMs);
 			wire.host.Tick(wire.nowMs + 5000);
@@ -3576,7 +3576,7 @@ namespace RTE {
 			return 0;
 		}
 
-		// Ruling ppp on the plane: from the first start a kick opens the seat with its number kept - closed to its former player, open to an
+		// On the plane: from the first start a kick opens the seat with its number kept - closed to its former player, open to an
 		// applicant, 'Open - AI in control (kicked)' - and a leave between rounds is a drop the player chose, the seat kept for it.
 		int TestHostOpenedSeatsFollowTheRoster() {
 			ScriptedAuthCrypto crypto;
@@ -3703,7 +3703,7 @@ namespace RTE {
 			return 0;
 		}
 
-		// SEAT-ROSTER S2 and ruling mmm: a return's phases follow the round - the image, the catch-up, play - moved on only by the
+		// A return's phases follow the round - the image, the catch-up, play - moved on only by the
 		// service's events; a return whose transfer is abandoned is the roster's to offer again after its backoff and under its bound,
 		// and a return inside the backoff is refused by the roster with its reason.
 		int TestReturnPhasesFollowTheRound() {
@@ -3818,7 +3818,7 @@ namespace RTE {
 			return 0;
 		}
 
-		// Ruling mmm: the roster names a seat's owner by the identity its player proved and its ticket by the ticket the player holds;
+		// The roster names a seat's owner by the identity its player proved and its ticket by the ticket the player holds;
 		// a ticket the host gave away is refused by the roster's record of it, with the roster's reason.
 		int TestStaleTicketRefusedThroughTheRoster() {
 			ScriptedAuthCrypto crypto;
@@ -3882,7 +3882,7 @@ namespace RTE {
 			return 0;
 		}
 
-		// Ruling qqq: one game process plays one hosted session after another, and a client's copy of the seat roster follows the
+		// One game process plays one hosted session after another, and a client's copy of the seat roster follows the
 		// session it joined - the new host's revisions and its round's start are its own, never 'older' than the last session's.
 		int TestRosterCopyFollowsANewHostedSession() {
 			ScriptedAuthCrypto crypto;
@@ -4058,7 +4058,7 @@ namespace RTE {
 			return 0;
 		}
 
-		// Ruling qqq: a successor numbers its roster on from the old host's and takes the round over as its next revision under the next
+		// A successor numbers its roster on from the old host's and takes the round over as its next revision under the next
 		// host generation; a survivor takes that revision and every later one, and a rematch under the successor starts on it.
 		int TestRosterNumbersOnAcrossAMigration() {
 			ScriptedAuthCrypto crypto;
@@ -4357,7 +4357,7 @@ namespace RTE {
 			return 0;
 		}
 
-		// The host's seat roster reaches every holder whole and in order; no peer derives one (SEAT-ROSTER.md 5).
+		// The host's seat roster reaches every holder whole and in order; no peer derives one.
 		int TestRosterRevisionsReachEveryHolder() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -4448,7 +4448,7 @@ namespace RTE {
 			if (!wire.host.TakePendingHoldResolutions().empty()) {
 				return Fail("a drop queued a hold resolution before the admission clock expired");
 			}
-			// The window passes and nothing resolves the hold: only the player's return or the host's click does (A12).
+			// The window passes and nothing resolves the hold: only the player's return or the host's click does.
 			wire.nowMs += NetReconnectHost::c_ProvisionalExpiryMs + 1;
 			wire.host.Tick(wire.nowMs);
 			if (!wire.host.TakePendingHoldResolutions().empty()) {
@@ -4722,7 +4722,7 @@ namespace RTE {
 			return 0;
 		}
 
-		// A5: the H4 admission rules are a MATCH feature. In a lobby nothing has been played, so a
+		// The reconnect admission rules are a MATCH feature. In a lobby nothing has been played, so a
 		// member who leaves or drops has nothing to reclaim and its seat must go back in the pool -
 		// otherwise a replacement is refused SessionFull and the lobby can never be refilled.
 		int TestLobbySeatIsFreedForTheNextJoiner() {
@@ -4831,7 +4831,7 @@ namespace RTE {
 			return 0;
 		}
 
-		// A5: §11's recovery is a MATCH feature. A lobby that never started has no seat to reclaim, and
+		// Recovery is a MATCH feature. A lobby that never started has no seat to reclaim, and
 		// a retry there drags the player back into a lobby that is gone instead of to the menu.
 		int TestRecoveryAppliesOnlyAfterAMatch() {
 			static_assert(NetReconnectUx::RecoveryApplies(true, false, true, true), "a mid-match loss recovers");
@@ -5160,7 +5160,7 @@ namespace RTE {
 			wire.nowMs += NetReconnectHost::c_ProvisionalExpiryMs + 1;
 			if (wire.host.ApplyModeration(expires, NetModerationAction::Substitute, wire.nowMs) != NetH4ModerationResult::StaleSelection) return Fail("an expired applicant was accepted at click time");
 			const auto expired = wire.host.GetModerationView()[0];
-			// Past the applicant's window the seat is still held for its player (A12) and still open to a substitution.
+			// Past the applicant's window the seat is still held for its player and still open to a substitution.
 			if (!expired.dropped || !expired.heldForReclaim || !expired.substitutable) return Fail("the window altered the held seat or its substitution eligibility");
 			wire.host.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
 			if (wire.host.GetModerationView()[0] != expired) return Fail("a seat-table refresh restarted an expired hold");
@@ -6555,7 +6555,7 @@ namespace RTE {
 				return Fail("a ticket rejoin dialled " + menuRejoin.address + " for a host at 127.0.0.1:49460");
 			}
 			record.hostAddress = "10.0.0.8:41010";
-			if (ResolveTicketJoinAddress(record, "ignored", "127.0.0.1", "9.9.9.9:1", false) != "9.9.9.9:1") {
+			if (ResolveTicketJoinAddress(record, "ignored", "127.0.0.1", "198.51.100.9:1", false) != "198.51.100.9:1") {
 				return Fail("SessionFull resolveJoinAddress ignored a remapped directory address");
 			}
 			if (ResolveTicketJoinAddress(record, "ignored", "127.0.0.1", "", true) != "session:sess-re-resolve-1") {
@@ -6569,7 +6569,7 @@ namespace RTE {
 			local.sessionIdentityHash = std::string(64, 'a');
 			local.moduleManifestHash = std::string(64, 'c');
 			NetDirectorySessionRow browsed;
-			browsed.name = "Erol";
+			browsed.name = "Player";
 			browsed.activity = "P4 Alpha Duel";
 			browsed.mode = "pvp-skirmish";
 			browsed.peerCount = 2;
@@ -6661,7 +6661,7 @@ namespace RTE {
 			client.SetTransportFactory([replies, sent] { return std::make_unique<ScriptedTransport>(replies, sent); });
 			client.Configure("https://dir.test", "key0123456789abcd", "");
 			NetDirectoryRegisterRequest row;
-			row.name = "Erol";
+			row.name = "Player";
 			row.activity = "P4 Alpha Duel";
 			row.scene = "Grasslands";
 			row.mode = "pvp-skirmish";
@@ -6979,7 +6979,7 @@ namespace RTE {
 				return UINT64_MAX;
 			};
 
-			// A held seat has no window (A12); how long its holder has been away is elapsed time, whatever the pump.
+			// A held seat has no window; how long its holder has been away is elapsed time, whatever the pump.
 			const uint64_t runMs = NetReconnectHost::c_ProvisionalExpiryMs * 3;
 			const uint64_t singleMs = awayForMs(false, 1, 10, runMs);
 			if (singleMs != runMs) {
@@ -7124,7 +7124,7 @@ namespace RTE {
 			}
 			(void)lobbyStartedAtMs;
 
-			// Live match: the holder drops and the seat stays held with no window (A12), however the composed clock runs.
+			// Live match: the holder drops and the seat stays held with no window, however the composed clock runs.
 			admission.SetLiveMatch(true);
 			holderTransport.Stop();
 			for (uint64_t elapsed = 0; elapsed <= NetReconnectHost::c_ProvisionalExpiryMs * 3; elapsed += 10) {
@@ -7264,7 +7264,7 @@ namespace RTE {
 			return 0;
 		}
 
-		// Source40 R1 and R2 are one defect: a timeout must measure a silence the session was WATCHING.
+		// A timeout must measure a silence the session was WATCHING.
 		// The round owns the transport for the whole match, so the session is handed no traffic while it
 		// plays and - since the plane's clock became real elapsed time - a clock that runs on anyway. The
 		// first evaluation after that phase is the resync round's lobby tick, or the leave exchange's, and
@@ -7510,7 +7510,7 @@ namespace RTE {
 			return 0;
 		}
 
-		// Source40 item 3: host_reseat_issued reads one log line, and IssueReseat has TWO ways of not
+		// host_reseat_issued reads one log line, and IssueReseat has TWO ways of not
 		// printing it - the drop ledgered nothing (a fault: the returner is reseated onto nothing), or the
 		// ledger is good and none of the units it names is still alive (not a fault: there is nothing to
 		// hand back). The gates could not tell them apart, and on reclaim_socket the host ended with
@@ -7818,7 +7818,7 @@ namespace RTE {
 				uint64_t unixNow = record.issuedAtUnixMs;
 				client.Configure(&store, MakeIdentity(), "Player");
 				client.SetUnixClock(&FixedUnixClock, &unixNow);
-				client.SetHostContext("192.168.1.20:7777", MakeHash(9));
+				client.SetHostContext("192.0.2.20:7777", MakeHash(9));
 				client.NoteAcceptedHostSession(acceptedSession);
 				if (!client.BeginAdmission(0, &error)) return false;
 				*reclaimed = false;
@@ -7839,7 +7839,7 @@ namespace RTE {
 			}
 			std::cout << "[net-reconnect-session-selftest] another_address same_session_reclaim=" << sameReclaimed << " seat=" << seat << " bound=" << sameAddress
 			          << " other_session_reclaim=" << otherReclaimed << std::endl;
-			if (!sameReclaimed || seat != record.stableSeat || sameAddress != "192.168.1.20:7777") {
+			if (!sameReclaimed || seat != record.stableSeat || sameAddress != "192.0.2.20:7777") {
 				return Fail("a return to its own hosted session at another address joined as a stranger instead of presenting its ticket for seat " +
 				            std::to_string(record.stableSeat));
 			}
@@ -7861,7 +7861,7 @@ namespace RTE {
 				std::string error;
 				if (!ResetLaneDirectory(&error)) return Fail(error);
 				const std::string name = world ? "moved-world" : "moved-match";
-				const std::string first = "10.0.0.5:7777", second = "192.168.1.20:7777", third = "172.16.0.9:7777";
+				const std::string first = "10.0.0.5:7777", second = "192.0.2.20:7777", third = "172.16.0.9:7777";
 				const uint64_t hostSession = 0x4831ULL;
 				uint64_t unixNow = 1'700'000'000'000ULL;
 				const auto onDisk = [&](NetH4TicketRecord& record) {

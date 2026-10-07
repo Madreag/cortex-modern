@@ -189,7 +189,7 @@ namespace RTE {
 		line(std::string("Fog of war: ") + (config.fogOfWar ? "on" : "off") +
 		     "   Clear path to orbit: " + (config.requireClearPathToOrbit ? "on" : "off") +
 		     "   Deploy units: " + (config.deployUnits ? "on" : "off"));
-		// L33's row, in the same words the Rules page's combo uses.
+		// The brainless-humans row, in the same words the Rules page's combo uses.
 		line(std::string("When every human brain is lost: ") +
 		     (config.brainlessHumansSpectate ? "Keep playing, humans spectate" : "End the match"));
 		// The live figure drops the service's own row name, which this line already carries.

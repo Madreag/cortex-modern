@@ -22,8 +22,9 @@ import sys
 import threading
 from pathlib import Path
 from run_sim_test import engine_executable, file_sha256  # noqa: E402
+import box_facts
 
-SCRATCH = Path("D:/mx/opus-l03-pause-session-20260914")
+SCRATCH = box_facts.scratch_dir("options-pause")
 PORT_BASE = 48350
 PORT_SPAN = 20
 # The match must outlast the probe script on a loaded machine: a step costs a rendered frame, which a
@@ -396,7 +397,7 @@ def inspect(arm, root, outcome, strict_compare):
                     (left := LEFT_REMOTE.match(line)) and int(left.group(1)) < TICKS for line in logs[who].splitlines())
             if arm == "resync":
                 # The perturbation must actually be caught and healed: a run that finishes with no resync passed
-                # this arm while the runtime desync check was dead (F77), so the heal is required, not assumed.
+                # this arm while the runtime desync check was dead, so the heal is required, not assumed.
                 checks[f"{who}_resynced"] = (peer_report(root, who).get("resyncs") or 0) >= 1
         if arm == "pause":
             pauses = {who: [int(match[1]) for line in logs[who].splitlines() if (match := PAUSED.match(line))] for who in outcome["peers"]}
@@ -447,12 +448,12 @@ def main():
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--arms", nargs="*",
                         default=["menu", "pause", "leave", "sp", "peers4", "resync", "pad", "pad_hint", "desync", "desync_clean", "rematch"])
-    # A later lane runs the same arms from its own scratch root and its own ports.
+    # Another run takes its own scratch root and ports.
     parser.add_argument("--scratch-root", type=Path, default=SCRATCH)
     parser.add_argument("--port-base", type=int, default=PORT_BASE)
     options = parser.parse_args()
-    if Path("D:/mx/LEAD_FAMILY.lock").exists():
-        parser.error("verification family owns the machine; no driver may start")
+    if box_facts.held("verification"):
+        parser.error("another run reserves this machine; no driver may start")
     repo, root = options.repo.resolve(), options.out.resolve()
     scratch = options.scratch_root.resolve()
     ports = range(options.port_base, options.port_base + PORT_SPAN)

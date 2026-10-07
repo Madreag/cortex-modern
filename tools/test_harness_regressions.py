@@ -1,0 +1,119 @@
+"""Regression checks for the harness's drivers, fixtures and runners: one test per defect the base tree had.
+
+Each case asserts the changed behaviour and records what the base tree did.
+"""
+from __future__ import annotations
+
+import io
+import os
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from unittest.mock import patch
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent
+sys.path.insert(0, str(HERE))
+
+from run_selftests import engine_executable
+from test_match_overlay import probe_script
+
+
+class WoundIdCapture(unittest.TestCase):
+    def test_wound_id_is_captured_before_removal(self):
+        """Base tree printed wound.UniqueID after RemoveWounds deleted the emitter."""
+        text = (HERE / "fixtures" / "sound_query_gate.lua").read_text(encoding="utf-8")
+        wounds = text[text.index('mode == "wounds"'):text.index('elseif mode == "rng"')]
+        self.assertLess(wounds.index("local woundId = wound.UniqueID"), wounds.index("arm:RemoveWounds(1)"))
+        self.assertIn("woundId", wounds[wounds.index("arm:RemoveWounds(1)"):])
+
+
+class WireRefusalDelay(unittest.TestCase):
+    def test_wire_refusal_places_at_the_rendezvous(self):
+        """Base tree used the client hold delay for wire-refusal and missed the 120-tick editor cap."""
+        text = (HERE / "net_activity_launch.py").read_text(encoding="utf-8")
+        self.assertIn('if options.variant == "wire-refusal":\n                    delay = 0', text)
+
+
+class PeerReportFlags(unittest.TestCase):
+    def test_heal_autosave_and_e2e_pass_peer_report_flags(self):
+        """Base tree compared snapshots without --peer-report-a/-b and --cross-process."""
+        heal = (HERE / "heal_driver" / "recovery_e2e.py").read_text(encoding="utf-8")
+        autosave = (HERE / "test_autosave.py").read_text(encoding="utf-8")
+        self.assertNotIn("D" + ":/Projects/control-build", heal)
+        self.assertIn("parents[2]", heal)
+        self.assertIn("comparer missing:", heal)
+        for text in (heal, autosave):
+            self.assertIn("--peer-report-a", text)
+            self.assertIn("--peer-report-b", text)
+            self.assertIn("--cross-process", text)
+        self.assertIn('peer checkpoint compare failed: {first_fail}', autosave)
+
+    def test_missing_comparer_records_a_failed_snapshot_check(self):
+        """Base tree skipped snapshots_sim_identical when the comparer path was absent."""
+        sys.path.insert(0, str(HERE / "heal_driver"))
+        import recovery_e2e
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            copied = [out / "p5snap_p1.ccsave", out / "p5snap_p2.ccsave"]
+            for path in copied:
+                path.write_bytes(b"x")
+            checks = []
+
+            def check(name, ok, detail, evidence):
+                checks.append({"name": name, "status": "pass" if ok else "fail",
+                               "detail": detail, "evidence": evidence})
+
+            with patch.object(recovery_e2e, "SNAPSHOT_COMPARE", out / "missing_compare.py"):
+                recovery_e2e.record_snapshot_compare(out, copied, out / "a.json", out / "b.json", check)
+        row = next(item for item in checks if item["name"] == "snapshots_sim_identical")
+        self.assertEqual(row["status"], "fail")
+        self.assertIn("comparer missing:", row["detail"])
+
+
+class OverlayToastHoldBanner(unittest.TestCase):
+    def test_toast_hold_banner_carries_widget_and_banners(self):
+        """Base tree used expected_visible None on auto/always toast-hold-banner shots."""
+        for mode in ("auto", "always"):
+            steps = probe_script("Host", (1920, 1080), {"leave": True}, mode)["steps"]
+            shots = [step for step in steps
+                     if step.get("op") == "screenshot" and "toast-hold-banner" in step.get("name", "")]
+            self.assertTrue(shots)
+            for shot in shots:
+                self.assertIsNotNone(shot.get("widget"))
+                self.assertTrue(shot.get("banners"))
+
+
+class FeelMeasureOutStamp(unittest.TestCase):
+    def test_out_is_required_and_stamp_is_mst(self):
+        """Base tree used a hardcoded scratch root and stamped with a date(1) shell-out."""
+        import feel_measure
+        self.assertRegex(feel_measure.stamp(), r"^\d{4}-\d{2}-\d{2} (?:0[1-9]|1[0-2]):[0-5]\d (?:AM|PM) MST$")
+        text = (HERE / "feel_measure.py").read_text(encoding="utf-8")
+        self.assertIn("datetime.now(MST)", text)
+        self.assertNotIn("value-observations", text)
+        self.assertNotIn("stage" + "2/feel-measurement", text)
+        buf = io.StringIO()
+        with patch("sys.stderr", buf):
+            with self.assertRaises(SystemExit):
+                feel_measure.parse_args([])
+        self.assertIn("required: --out", buf.getvalue())
+
+
+class PosixSelftestBinary(unittest.TestCase):
+    def test_windows_and_posix_engine_names(self):
+        """Base tree always hashed Cortex Command.exe, which is not the Mac binary name."""
+        repo = Path("/repo")
+        env = {key: value for key, value in os.environ.items() if key != "CCCP_TEST_BINARY"}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("run_selftests.sys.platform", "win32"):
+                self.assertEqual(engine_executable(repo).resolve(), (repo / "Cortex Command.exe").resolve())
+            with patch("run_selftests.sys.platform", "darwin"):
+                self.assertEqual(engine_executable(repo).resolve(),
+                                 (repo.resolve() / "build-gns" / "CortexCommand"))
+
+
+if __name__ == "__main__":
+    unittest.main()

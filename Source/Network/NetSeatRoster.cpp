@@ -811,27 +811,27 @@ namespace RTE {
 		// The sequences the findings walked, each a path through the cells above.
 		const auto phaseOf = [](const NetSeatRoster& roster, uint8_t id) { const NetRosterSeat* seat = roster.Find(id); return seat ? seat->phase : NetSeatPhase::Count; };
 		{
-			// RT4: a return whose round ends during its image carries the seat into the next round, never out of it.
+			// A return whose round ends during its image carries the seat into the next round, never out of it.
 			NetSeatRoster roster = RosterForRow(5);
 			NetRosterEvent ended; ended.kind = NetRosterEventKind::RoundEnded;
 			roster = ApplyRosterEvent(roster, ended).roster;
 			NetRosterEvent formed; formed.kind = NetRosterEventKind::RematchFormed;
 			roster = ApplyRosterEvent(roster, formed).roster;
-			check("seq RT4 a return carried across the round's end", phaseOf(roster, 2) == NetSeatPhase::Starting && roster.StartWaitsOn(2),
+			check("seq a return carried across the round's end", phaseOf(roster, 2) == NetSeatPhase::Starting && roster.StartWaitsOn(2),
 			      std::string("phase=") + NetSeatPhaseName(phaseOf(roster, 2)));
 		}
 		{
-			// RT4 form A: a relaunched owner whose round ends is admitted into the next lobby with its ticket.
+			// A relaunched owner whose round ends is admitted into the next lobby with its ticket.
 			NetSeatRoster roster = RosterForRow(9);
 			NetRosterEvent ended; ended.kind = NetRosterEventKind::RoundEnded;
 			roster = ApplyRosterEvent(roster, ended).roster;
 			NetRosterEvent back; back.kind = NetRosterEventKind::Returned; back.seat = 2; back.ticket = 0x7002;
 			const NetRosterResult returned = ApplyRosterEvent(roster, back);
-			check("seq RT4 a relaunched owner returns after the round ended", !returned.refused && phaseOf(returned.roster, 2) == NetSeatPhase::RematchLobby,
+			check("seq a relaunched owner returns after the round ended", !returned.refused && phaseOf(returned.roster, 2) == NetSeatPhase::RematchLobby,
 			      std::string("phase=") + NetSeatPhaseName(phaseOf(returned.roster, 2)) + " reason='" + returned.reason + "'");
 		}
 		{
-			// RT3: two seats drop in the rematch lobby; the round forms with both held, every number kept, nobody waited on.
+			// Two seats drop in the rematch lobby; the round forms with both held, every number kept, nobody waited on.
 			NetSeatRoster roster = RosterForRow(8);
 			roster.seats.push_back(roster.seats[2]);
 			roster.seats.back().seatId = 4;
@@ -846,18 +846,18 @@ namespace RTE {
 			std::string why;
 			const bool ok = CheckRosterInvariants(before, roster, NetRosterEventKind::RematchFormed, &why) && roster.seats.size() == 4 && phaseOf(roster, 2) == NetSeatPhase::Held &&
 			                phaseOf(roster, 4) == NetSeatPhase::Held && !roster.StartWaitsOn(2) && !roster.StartWaitsOn(4) && roster.StartWaitsOn(3);
-			check("seq RT3 two drops in a rematch lobby", ok, "seats=" + std::to_string(roster.seats.size()) + (why.empty() ? "" : " invariant='" + why + "'"));
+			check("seq two drops in a rematch lobby", ok, "seats=" + std::to_string(roster.seats.size()) + (why.empty() ? "" : " invariant='" + why + "'"));
 		}
 		{
-			// S1: one member's lost link or silence never replaces a live host; only every survivor's agreement does.
+			// One member's lost link or silence never replaces a live host; only every survivor's agreement does.
 			const NetSeatRoster roster = RosterForRow(3);
 			NetRosterEvent drop; drop.kind = NetRosterEventKind::LinkDropped; drop.seat = 1;
 			NetRosterEvent lost; lost.kind = NetRosterEventKind::HostLinkLost; lost.quorum = false;
 			const bool ok = ApplyRosterEvent(roster, drop).refused && ApplyRosterEvent(roster, lost).refused;
-			check("seq S1 no election from one member's link", ok, "");
+			check("seq no election from one member's link", ok, "");
 		}
 		{
-			// S2 / yy: failed returns back off and never remove the seat; past the bound the return is still offered at the longest backoff.
+			// Failed returns back off and never remove the seat; past the bound the return is still offered at the longest backoff.
 			NetSeatRoster roster = RosterForRow(5);
 			uint64_t now = 10000;
 			bool ok = true;
@@ -875,16 +875,16 @@ namespace RTE {
 				roster = again.roster;
 				now = later.nowMs;
 			}
-			check("seq S2 a failing return backs off and keeps its seat", ok, "failed=" + std::to_string(roster.Find(2)->failedReturns));
+			check("seq a failing return backs off and keeps its seat", ok, "failed=" + std::to_string(roster.Find(2)->failedReturns));
 		}
 		{
-			// A12: an applicant the host accepts takes a held seat; its former player is told why when it returns.
+			// An applicant the host accepts takes a held seat; its former player is told why when it returns.
 			NetSeatRoster roster = RosterForRow(4);
 			NetRosterEvent accepted; accepted.kind = NetRosterEventKind::ApplicantAccepted; accepted.seat = 2; accepted.owner = 0x2002; accepted.ticket = 0x8002;
 			roster = ApplyRosterEvent(roster, accepted).roster;
 			NetRosterEvent back; back.kind = NetRosterEventKind::Returned; back.seat = 2; back.ticket = 0x7002;
 			const NetRosterResult returned = ApplyRosterEvent(roster, back);
-			check("seq A12 a former player is told the seat was given away", returned.refused && returned.reason == "The host gave your seat to another player", "reason='" + returned.reason + "'");
+			check("seq a former player is told the seat was given away", returned.refused && returned.reason == "The host gave your seat to another player", "reason='" + returned.reason + "'");
 		}
 		{
 			// A true host loss: the survivors agree, the round changes host, and the new host's generation is one more.
@@ -893,7 +893,7 @@ namespace RTE {
 			roster = ApplyRosterEvent(roster, lost).roster;
 			NetRosterEvent changed; changed.kind = NetRosterEventKind::HostChanged; changed.seat = 3;
 			const NetRosterResult handed = ApplyRosterEvent(roster, changed);
-			check("seq HL4 a true host loss hands the round over", !handed.refused && handed.roster.hostSeat == 3 && handed.roster.migrationGen == 1 &&
+			check("seq a true host loss hands the round over", !handed.refused && handed.roster.hostSeat == 3 && handed.roster.migrationGen == 1 &&
 			      phaseOf(handed.roster, 2) == NetSeatPhase::Running && phaseOf(handed.roster, 1) == NetSeatPhase::Held, "reason='" + handed.reason + "'");
 		}
 		{
@@ -938,10 +938,10 @@ namespace RTE {
 			bad[33] = 0xFF;
 			NetSeatRoster rejected;
 			ok = ok && !DecodeRoster(bad, rejected, &error);
-			check("seq R5 the roster replicates whole, in order, refused by name when it differs", ok, "wire_bytes=" + std::to_string(wire.size()) + " error='" + error + "' why='" + why + "'");
+			check("seq the roster replicates whole, in order, refused by name when it differs", ok, "wire_bytes=" + std::to_string(wire.size()) + " error='" + error + "' why='" + why + "'");
 		}
 		{
-			// Ruling ppp: before the first start a removal frees the seat; from the first start a kick, a ban or a release opens it with its
+			// Before the first start a removal frees the seat; from the first start a kick, a ban or a release opens it with its
 			// number kept and its cause named, and only a held seat is released.
 			NetSeatRoster lobby = RosterForRow(1);
 			NetRosterEvent kick; kick.kind = NetRosterEventKind::Kicked; kick.seat = 2;
@@ -1025,7 +1025,7 @@ namespace RTE {
 			NetSeatRoster copy;
 			std::string error;
 			const bool crossed = DecodeRoster(EncodeRoster(taken.roster), copy, &error) && copy.hostSeat == 0 && copy.seats[0].name == "Alice";
-			check("seq L03 a dedicated host's roster names seat 0 and keeps every rule", kept && crossed, "why='" + why + "' error='" + error + "'");
+			check("seq a dedicated host's roster names seat 0 and keeps every rule", kept && crossed, "why='" + why + "' error='" + error + "'");
 		}
 		{
 			// A newcomer taking an open seat of a running round is joining it, a returning player rejoining: the seat says which, on every peer.
@@ -1070,7 +1070,7 @@ namespace RTE {
 			const NetRosterResult playing = ApplyRosterEvent(ApplyRosterEvent(back.roster, loaded).roster, caughtUp);
 			const NetRosterSeat* played = playing.roster.Find(2);
 			const std::string newcomerLabel = newcomer ? RosterSeatLabel(*newcomer) : "?", returnerLabel = returner ? RosterSeatLabel(*returner) : "?";
-			check("seq J01 a newcomer's seat reads joining and a returner's rejoining, on the wire too, until the seat plays",
+			check("seq a newcomer's seat reads joining and a returner's rejoining, on the wire too, until the seat plays",
 			      !joined.refused && !back.refused && newcomerLabel == "Joining" && returnerLabel == "Rejoining" && crossed && played && played->phase == NetSeatPhase::Running && !played->joining,
 			      "newcomer='" + newcomerLabel + "' returner='" + returnerLabel + "' crossed=" + std::to_string(crossed) + " error='" + error +
 			          "' played=" + (played ? std::string(NetSeatPhaseName(played->phase)) + (played->joining ? " joining" : "") : std::string("?")));
