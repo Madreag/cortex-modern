@@ -16456,7 +16456,7 @@ namespace RTE {
 
 		auto sample = [&local](const std::string& id) {
 			NetDirectorySessionRow row;
-			row.name = "Erol";
+			row.name = "Captain";
 			row.peerCount = 2;
 			row.seatsFree = 1;
 			row.networkProtocolVersion = local.networkProtocolVersion;

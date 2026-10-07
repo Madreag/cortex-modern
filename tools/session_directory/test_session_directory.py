@@ -109,7 +109,7 @@ FIELD_ERROR_KEYS = {"error", "field"}
 
 def sample_register(**overrides: object) -> dict[str, Any]:
     row: dict[str, Any] = {
-        "name": "Erol",
+        "name": "Captain",
         "activity": "P4 Alpha Duel",
         "scene": "Grasslands",
         "mode": "pvp-skirmish",
@@ -1149,7 +1149,7 @@ class DirectoryTests(unittest.TestCase):
         self.assert_keys(row, LIST_ROW_KEYS)
         self.assertNotIn("token", row)
         self.assertEqual(row["session_id"], created["session_id"])
-        self.assertEqual(row["name"], "Erol")
+        self.assertEqual(row["name"], "Captain")
         self.assertEqual(row["activity"], "P4 Alpha Duel")
         self.assertEqual(row["scene"], "Grasslands")
         self.assertEqual(row["mode"], "pvp-skirmish")
@@ -1595,7 +1595,7 @@ class DirectoryTests(unittest.TestCase):
         status, missing = self.call(
             "POST",
             "/v1/sessions",
-            {"name": "Erol"},
+            {"name": "Captain"},
             headers={"X-Install-Key": INSTALL_KEY},
         )
         self.assertEqual(status, 400)
