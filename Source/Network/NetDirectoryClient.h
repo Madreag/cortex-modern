@@ -104,8 +104,6 @@ namespace RTE {
 		std::string LastError() const;
 
 		State GetState() const { return m_State; }
-		/// Why the directory last refused or failed a request; empty when nothing has.
-		const std::string& LastError() const { return m_LastError; }
 		/// The held row's last acknowledged visibility; empty before registration or after loss.
 		std::optional<bool> GetConfirmedListed() const { return m_ConfirmedListed; }
 		const std::string& GetSessionId() const { return m_SessionId; }
