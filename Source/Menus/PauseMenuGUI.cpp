@@ -381,9 +381,9 @@ PauseMenuGUI::LeaveConsequence PauseMenuGUI::ReadLeaveConsequence() const {
 		const bool handsOver = g_NetMatchService.HostLeaveOutcome() == NetHostLeaveOutcome::HandsOver;
 		return {handsOver ? "Leave the match?\nAnother player becomes the host and the match plays on." : "Leave the match?\nThe match ends for everyone.", handsOver};
 	}
-	// A leave is held like a drop: the seat and its ticket stay this player's while the match runs.
+	// A leave keeps the ticket and holds the seat, which the host may subsequently reassign.
 	if (g_NetMatchService.LeaveKeepsRejoin()) {
-		return {"Leave the match?\nThe AI plays your units; your seat is held until the host reassigns it.\nUse Rejoin Match on the Multiplayer screen to try to return."};
+		return {std::string("Leave the match?\n") + NetReconnectUx::HeldSeatReturnNotice() + "\nUse Rejoin Match on the Multiplayer screen to try to return."};
 	}
 	// No ticket is kept: the AI still plays the place, and the way back is the one any newcomer has, where the match offers one.
 	return {NetMatchService::AdmissionEnabled() ? "Leave the match?\nThe AI plays your units for the rest of the match.\nTo come back, join it again from the Multiplayer screen and ask the host for a place."

@@ -33,6 +33,21 @@
       "screen": "PauseMatchOptions"
     },
     {
+      "op": "wait",
+      "renders": 4,
+      "scope": "menu"
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonConnectionDetails",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "renders": 4,
+      "scope": "menu"
+    },
+    {
       "op": "menu",
       "command": "assert_visible ButtonMatchRepairNow 1"
     },
@@ -131,6 +146,21 @@
     {
       "op": "wait",
       "screen": "PauseMatchOptions"
+    },
+    {
+      "op": "wait",
+      "renders": 4,
+      "scope": "menu"
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonConnectionDetails",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "renders": 4,
+      "scope": "menu"
     },
     {
       "op": "menu",

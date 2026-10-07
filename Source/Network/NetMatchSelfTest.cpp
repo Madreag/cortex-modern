@@ -17387,6 +17387,31 @@ namespace RTE {
 		const auto check = [&](bool ok, const std::string& why) {
 			if (!ok) { std::cerr << "[net-match-selftest] FAIL ui_presentation: " << why << std::endl; passed = false; }
 		};
+		const std::string returnNotice = NetReconnectUx::HeldSeatReturnNotice();
+		check(returnNotice.find("AI plays your units") != std::string::npos && returnNotice.find("until the host reassigns it") != std::string::npos,
+		      "in-match leave/rejoin copy promises unconditional seat ownership: " + returnNotice);
+		NetLobbySnapshot connected;
+		connected.localPeerId = 1;
+		NetLobbyMember own; own.peerId = 1; own.connected = true;
+		connected.members.push_back(own);
+		NetMatchService::SeatView held; held.seat.owner = 1; held.state = "Held";
+		check(NetPlayerPresentation::PlayingSummary(NetPlayerPresentation::OwnSeatHeld(connected, held, false), 0, {}) == "The AI is playing for you",
+		      "a connected local held seat reads as everyone playing");
+		held.state = "Reconnecting";
+		check(NetPlayerPresentation::OwnSeatHeld(connected, held, false), "a local returning seat reads as active control");
+		held.seat.owner = 0;
+		connected.members.front().aiHeld = true;
+		check(!NetPlayerPresentation::OwnSeatHeld(connected, held, false), "an opened authoritative seat retains a cached hold");
+		check(NetPlayerPresentation::OwnSeatHeld(connected, std::nullopt, false) && !NetPlayerPresentation::OwnSeatHeld(connected, std::nullopt, true),
+		      "local cached holds ignore an authoritative release when no roster view exists");
+		struct AlertCase { bool known; bool initialized; bool local; bool notifyEnabled; bool soundEnabled; bool notify; bool sound; };
+		for (const AlertCase arrival : {AlertCase{false, true, false, true, true, true, true},
+		    {false, true, false, true, false, true, false}, {false, true, false, false, true, false, true},
+		    {false, true, false, false, false, false, false}, {true, true, false, true, true, false, false},
+		    {false, false, false, true, true, false, false}, {false, true, true, true, true, false, false}}) {
+			const auto alert = NetChatAlertFor(arrival.known, arrival.initialized, arrival.local, arrival.notifyEnabled, arrival.soundEnabled);
+			check(alert.notify == arrival.notify && alert.sound == arrival.sound, "chat arrival preferences, history or own echo gating ignored");
+		}
 		NetMatchSummary ended;
 		ended.result = "Match ended by host";
 		check(ended.LineText().find("draw") == std::string::npos && ended.DetailsText().find("No result") != std::string::npos,

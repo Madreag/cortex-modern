@@ -94,6 +94,15 @@ def main():
         steps.append({"op": "assert", "name": "pause-keeps-text-focus", "scope": "menu", "equals": {"screen": "Pause"}})
         key("Escape", True)
         steps.append({"op": "wait", "screen": "Gameplay"})
+        key("Escape")
+        steps.append({"op": "wait", "screen": "Pause", "renders": 4})
+        steps.append({"op": "menu", "command": "activate ButtonEndMatch"})
+        steps.append({"op": "wait", "screen": "PauseLeaveConfirm", "renders": 4, "scope": "menu"})
+        steps.append({"op": "menu", "command": "activate ButtonLeaveConfirm", "scope": "menu"})
+        steps.append({"op": "wait", "service": "Starting", "scope": "menu"})
+        steps.append({"op": "wait", "control": "LabelLastMatchSummary", "text_contains": "No result", "scope": "menu"})
+        steps.append({"op": "assert_control", "control": "LabelLastMatchSummary", "text_contains": "No result", "scope": "menu"})
+        shot("05-host-ended", True)
     steps.extend([{"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish", "scope": "menu"}])
     script = {"schema": 1, "activate_phase": "Running", "activation_timeout_ms": 45000,
               "timeout_ms": 45000, "label_dump": {"every_ms": 250}, "steps": steps}
@@ -138,6 +147,8 @@ def main():
         checks["rules_and_connection_are_separate"] = len(rules) == 2 and "Team 1" in rules[0] and "Input delay:" not in rules[0] and "Input delay:" in rules[1]
         focus = next((row["observed"] for row in observations if row["op"] == "assert" and steps[row["index"]].get("name") == "pause-keeps-text-focus"), {})
         checks["pause_keeps_text_focus"] = focus.get("screen") == "Pause" and not focus.get("net_ui", {}).get("chat_entry_open", True)
+        summaries = [row["observed"].get("control", {}).get("text", "") for row in observations if row["op"] == "assert_control" and steps[row["index"]].get("control") == "LabelLastMatchSummary"]
+        checks["confirmed_end_returns_to_lobby_without_false_draw"] = len(summaries) == 1 and "No result" in summaries[0] and "draw" not in summaries[0].lower()
     checks["probe_completed"] = result.get("pass", False) and record.get("exit_code") == 0 and not record.get("timed_out", True)
     receipt = {"topology": "host-only UI fixture", "proof": False, "purpose": __doc__, "checks": checks,
                "head": subprocess.check_output(["git", "-C", str(args.repo), "rev-parse", "HEAD"], text=True).strip(),

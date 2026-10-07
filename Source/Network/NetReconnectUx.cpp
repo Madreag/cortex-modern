@@ -207,6 +207,10 @@ namespace RTE {
 		return dropped ? " - Disconnected" : "";
 	}
 
+	const char* NetReconnectUx::HeldSeatReturnNotice() {
+		return "The AI plays your units; your seat is held until the host reassigns it.";
+	}
+
 	std::string NetModerationPanelTitle(bool running, bool holdPause, const std::string& holdName, uint32_t holdSeconds, bool sharedPause) {
 		if (!running) {
 			return "PLAYERS  /  Restoring the shared match state...";

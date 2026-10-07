@@ -228,7 +228,10 @@ def players_probes(root, peers, base, moderate, cancel=False):
              {"op": "wait", "panel_open": True}, {"op": "wait", "renders": 6}, *roster_reads("host-open", 3), shot("players-host"),
              *click("NetworkSeatsOptions"), {"op": "wait", "control": "NetworkSeatsOptionsText", "equals": {"visible": True}},
              read("NetworkSeatsSummary", tag="host-rules-summary"), read("NetworkSeatsOptions", tag="host-rules-toggle"),
-             shot("rules-host"), *click("NetworkSeatsOptions"), {"op": "wait", "renders": 4}, *click("NetworkSeatsClose"),
+             read("NetworkSeatsOptionsText", tag="host-rules-text"),
+             shot("rules-host"), *click("NetworkSeatsOptions"), {"op": "wait", "renders": 4},
+             read("NetworkSeatsOptionsText", tag="host-connection-text"), read("NetworkSeatsOptions", tag="host-connection-toggle"),
+             *click("NetworkSeatsClose"),
              {"op": "wait", "panel_open": False}, signal("host-read")]
     for name in names[1:]:
         steps.append(wait_file(probe_root(root, name) / "read.json"))
@@ -358,7 +361,7 @@ def repair_probes(root):
     host, client = NAMES[0], NAMES[1]
     steps = [{"op": "wait", "service": "Running", "sim_at_least": 200}, wait_file(probe_root(root, client) / "ready.json"),
              *keys("Escape"), *on_screen("Pause"), *hand("ButtonMatchOptions"), *on_screen("PauseMatchOptions"),
-             *hand("ButtonMatchRepairNow"), read("LabelMatchRepairHint", "menu", "repair-armed"), shot("repair-armed"),
+             *hand("ButtonConnectionDetails"), *hand("ButtonMatchRepairNow"), read("LabelMatchRepairHint", "menu", "repair-armed"), shot("repair-armed"),
              *hand("ButtonMatchRepairNow"), {"op": "wait", "elapsed_ms": 500}, signal("pressed"),
              wait_file(probe_root(root, client) / "shot.json"), {"op": "wait", "elapsed_ms": 6000}, signal("done"), {"op": "finish"}]
     client_steps = [{"op": "wait", "service": "Running", "sim_at_least": 200}, signal("ready"),
@@ -491,7 +494,7 @@ def check_pause(checks, captures, reads, logs, runtimes):
         label = control_of(confirm, "LabelLeaveConfirm") if confirm else None
         text = label["text"] if label else ""
         if who == client:
-            truthful = "your seat stays yours" in text.lower() and "Rejoin Match" in text and "cannot be reclaimed" not in text
+            truthful = "until the host reassigns it" in text and "Rejoin Match" in text and "try to return" in text and "your seat stays yours" not in text.lower()
             kept = "[net-reconnect] leave: Left (ticket kept)" in logs[client]
             checks.check("leave-text-client-true", truthful and kept,
                          f"confirmation {text!r}; the service kept the seat's ticket: {kept}")
@@ -539,7 +542,13 @@ def check_players(checks, reads, peers, logs, base, moderate, cancel=False):
     rules = reads[host].get("host-rules-summary", {})
     checks.check("panel-rules-for-this-round", rules.get("text") == RULES_SUMMARY, f"options view says {rules.get('text')!r}")
     toggle = reads[host].get("host-rules-toggle", {})
-    checks.check("panel-rules-toggle-names-the-way-back", toggle.get("text") == "Back to players", f"toggle {toggle.get('text')!r}")
+    checks.check("panel-rules-toggle-names-connection-details", toggle.get("text") == "Connection details", f"toggle {toggle.get('text')!r}")
+    rules_text = reads[host].get("host-rules-text", {}).get("text", "")
+    connection = reads[host].get("host-connection-text", {}).get("text", "")
+    checks.check("panel-game-rules-separated-from-connection", "Team 1" in rules_text and "Input delay:" not in rules_text and "Input delay:" in connection,
+                 f"rules {rules_text!r}; connection {connection!r}")
+    back = reads[host].get("host-connection-toggle", {})
+    checks.check("panel-connection-toggle-names-the-way-back", back.get("text") == "Back to players", f"toggle {back.get('text')!r}")
     for name in names[1:]:
         client_roster = reads[name].get("client-roster", {})
         listed = roster_names(client_roster.get("text", ""))

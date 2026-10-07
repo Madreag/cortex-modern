@@ -121,6 +121,7 @@
 #include "NetProtocolSelfTest.h"
 #include "NetReconnectSelfTest.h"
 #include "NetReconnectSessionSelfTest.h"
+#include "NetReconnectUx.h"
 #include "NetSession.h"
 #include "NetSessionSelfTest.h"
 #include "NetRejoinMatrixSelfTest.h"
@@ -5018,7 +5019,7 @@ static void DrawFrameWithPreviews() {
 static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, const std::string& heldLine = {}) {
 	PollSDLEvents();
 	g_UInputMan.Update(false);
-	// A held seat stays its player's, so the player may leave the wait from its first second.
+	// Leaving the wait keeps the ticket and the currently held seat; the host can still reassign it.
 	const bool leave = heldRejoin && !g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.KeyPressed(SDLK_ESCAPE);
 	if (g_UInputMan.KeyPressed(SDLK_F6) || (g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.AnyStartPress(false))) {
 		g_MenuMan.ToggleNetworkPanel();
@@ -5034,10 +5035,15 @@ static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, con
 	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, resyncTitle, GUIFont::Centre);
 	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncTitle);
 	// A held player's units are the AI's until the player is back; a repair pauses every player at once.
-	const std::string resyncLine = heldRejoin ? "The AI plays your units until you are back  /  " + std::to_string(elapsedSeconds) + " s  /  F6: Players  /  Esc: leave - your seat stays yours"
+	const std::string resyncLine = heldRejoin ? NetReconnectUx::HeldSeatReturnNotice()
 	                                          : "Every player waits while the match is reloaded  /  " + std::to_string(elapsedSeconds) + " s  /  F6: Players";
 	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8, resyncLine, GUIFont::Centre);
 	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncLine);
+	if (heldRejoin) {
+		const std::string controls = std::to_string(elapsedSeconds) + " s  /  F6: Players  /  Esc: leave";
+		g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 10 + g_FrameMan.GetSmallFont(true)->GetFontHeight(), controls, GUIFont::Centre);
+		MenuAutomation::NoteDrawnText("RejoinOverlay", controls);
+	}
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts(resyncTitle);
 	ScenarioRunner::NoteResyncOverlayFrame();
@@ -7192,7 +7198,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				}
 			} else if (leftTheWait) {
 				System::PrintDiagnosticLine("[net-match] held client: left the wait for its host; the seat and its ticket are kept");
-				g_ConsoleMan.PrintString("NETWORK: Left the match - your seat is kept; Rejoin Match while it runs");
+				g_ConsoleMan.PrintString("NETWORK: Left the match - seat held until the host reassigns it; use Rejoin Match to try to return");
 				g_NetMatchService.LeaveHeldWait();
 				g_ActivityMan.EndActivity();
 				g_ActivityMan.SetInActivity(false);

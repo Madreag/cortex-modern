@@ -112,6 +112,8 @@ namespace RTE {
 
 		/// The §11 roster mark for another player's seat, or "" while the seat is fine.
 		static const char* RosterMark(bool dropped, bool reclaiming);
+		/// In-match leave and catch-up copy: a held seat can be reassigned by the host.
+		static const char* HeldSeatReturnNotice();
 
 		static const char* StateName(NetReconnectUxState state);
 

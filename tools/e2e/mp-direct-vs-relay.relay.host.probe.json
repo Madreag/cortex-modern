@@ -101,6 +101,21 @@
       "elapsed_ms": 400
     },
     {
+      "op": "wait",
+      "renders": 4,
+      "scope": "menu"
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonConnectionDetails",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "renders": 4,
+      "scope": "menu"
+    },
+    {
       "op": "menu",
       "command": "video_mark relay-mp-match-options-host"
     },

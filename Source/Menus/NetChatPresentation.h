@@ -16,6 +16,13 @@ namespace RTE {
 
 	inline unsigned NetChatRosterPeer(uint8_t sessionPeer) { return static_cast<unsigned>(sessionPeer) + 1; }
 
+	struct NetChatArrivalAlert { bool notify; bool sound; };
+	/// Only fresh remote arrivals alert; opening history and receiving an own echo do not.
+	inline NetChatArrivalAlert NetChatAlertFor(bool known, bool initialized, bool local, bool notifyEnabled, bool soundEnabled) {
+		const bool arriving = !known && initialized && !local;
+		return {arriving && notifyEnabled, arriving && soundEnabled};
+	}
+
 	/// Wrap every character, including long unbroken words, at UTF-8 boundaries. Chat never ellipsizes its payload.
 	inline std::vector<std::string> NetChatWrap(const std::string& text, int width, const std::function<int(const std::string&)>& measure) {
 		std::vector<std::string> lines;

@@ -15,6 +15,21 @@ namespace RTE::NetPlayerPresentation {
 	// A seat only leaves a session it was seen in: a peer still connecting has no departure to show.
 	inline std::set<uint8_t> seated;
 
+	/// The authoritative seat wins over cached connection flags, including this machine's own hold.
+	inline bool OwnSeatHeld(const NetLobbySnapshot& snapshot, const std::optional<NetMatchService::SeatView>& view, bool released) {
+		if (view) return view->seat.owner != 0 && (view->state == "Held" || view->state == "Reconnecting");
+		if (released) return false;
+		for (const auto& member: snapshot.members) {
+			if (member.peerId == snapshot.localPeerId && !member.cpu && (member.aiHeld || member.reclaiming)) return true;
+		}
+		return false;
+	}
+
+	inline std::string PlayingSummary(bool ownHeld, size_t away, const std::string& awayName) {
+		if (ownHeld) return "The AI is playing for you";
+		return away == 0 ? "Everyone is playing" : away == 1 ? awayName + " is away" : std::to_string(away) + " players are away";
+	}
+
 	inline bool Placeholder(uint8_t peer, const std::string& name) {
 		return name.empty() || name == "Client " + std::to_string(peer) || name == "Player " + std::to_string(peer);
 	}

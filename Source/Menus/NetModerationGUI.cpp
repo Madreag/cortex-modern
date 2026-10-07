@@ -269,10 +269,8 @@ namespace {
 	// The roster names this machine's own seat held or rejoining until the host says it is back.
 	bool OwnRosterSeatHeld() {
 		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
-		if (const auto view = g_NetMatchService.GetSeatView(snapshot.localPeerId)) return view->seat.owner != 0 && (view->state == "Held" || view->state == "Reconnecting");
-		return std::any_of(snapshot.members.begin(), snapshot.members.end(), [&snapshot](const auto& member) {
-			return member.peerId == snapshot.localPeerId && !member.cpu && (member.aiHeld || member.reclaiming) && !ScenarioRunner::IsLockstepSeatReleased(member.peerId);
-		});
+		const auto view = g_NetMatchService.GetSeatView(snapshot.localPeerId);
+		return NetPlayerPresentation::OwnSeatHeld(snapshot, view, !view && ScenarioRunner::IsLockstepSeatReleased(snapshot.localPeerId));
 	}
 
 	/// This player's own seat on its way back: the roster holds it, or this peer replays its hold while it catches up.
@@ -1048,7 +1046,7 @@ void NetModerationGUI::Refresh() {
 		}
 	}
 	const bool ownHeld = OwnRosterSeatHeld() || ScenarioRunner::IsLockstepOwnSeatHeld();
-	std::string summary = ownHeld ? "The AI is playing for you" : away == 0 ? "Everyone is playing" : away == 1 ? awayRow->name + " is away" : std::to_string(away) + " players are away";
+	std::string summary = NetPlayerPresentation::PlayingSummary(ownHeld, away, awayRow ? awayRow->name : std::string());
 	if (requests) summary += requests == 1 ? " - 1 request to join" : " - " + std::to_string(requests) + " requests to join";
 	m_Summary->SetText(FitLine(m_LabelFont, summary, m_Summary->GetWidth()));
 	// The host's own line leads, then a page of the other players' rows, above the status line that says what an action will do
@@ -1583,7 +1581,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		if (hostLost) return snapshot.statusText.starts_with("Changing hosts") ? "Changing hosts - the match picks up in a moment" : "Host lost - contacting the next host...";
 		// The toast and the full-screen wait say the rest; the box's line never repeats theirs.
 		if (ownRejoin) return "Rejoining - catching up with the match";
-		if (ownHeld) return "The AI is playing for you";
+		if (ownHeld) return NetPlayerPresentation::PlayingSummary(true, 0, {});
 		if (resyncing) return "Match repair in progress";
 		if (placing) {
 			if (localUnplaced) return "Place your brain";
@@ -1926,14 +1924,14 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot, bool fr
 					break;
 				}
 			}
-			if (!known && m_ChatHistoryInitialized && NetChatRosterPeer(entry.senderPeerId) != snapshot.localPeerId) {
-				if (g_SettingsMan.GetNetworkChatNotify()) m_ChatNotifyUntilUs = nowUs + 6000000;
-				if (g_SettingsMan.GetNetworkChatSound()) {
-					RandomGenerator* previous = t_simRNGOverride;
-					t_simRNGOverride = &g_RenderRNG;
-					g_GUISound.SelectionChangeSound()->Play();
-					t_simRNGOverride = previous;
-				}
+			const auto alert = NetChatAlertFor(known, m_ChatHistoryInitialized, NetChatRosterPeer(entry.senderPeerId) == snapshot.localPeerId,
+			    g_SettingsMan.GetNetworkChatNotify(), g_SettingsMan.GetNetworkChatSound());
+			if (alert.notify) m_ChatNotifyUntilUs = nowUs + 6000000;
+			if (alert.sound) {
+				RandomGenerator* previous = t_simRNGOverride;
+				t_simRNGOverride = &g_RenderRNG;
+				g_GUISound.SelectionChangeSound()->Play();
+				t_simRNGOverride = previous;
 			}
 			next.push_back(std::move(line));
 		}
