@@ -61,12 +61,13 @@ namespace RTE {
 		void Cancel(uint64_t nowMs);
 		/// Reopens the window from now, whatever state we were in.
 		void RequestManualRetry(uint64_t nowMs);
+		void SetRetryWindowMs(uint64_t windowMs) { m_ResumeWindowMs = windowMs; }
 		bool CanCancel() const;
 		bool CanRetryManually() const;
 
 		/// Records what the startup scan of the store found, so the landing screen can offer the rejoin
 		/// or say precisely why it cannot.
-		void OfferStoredTicket(NetH4TicketLoadResult load, std::string hostAddress);
+		void OfferStoredTicket(NetH4TicketLoadResult load, std::string hostAddress, std::string matchName = {});
 		void DismissOffer();
 		/// Keeps the stored address available manually while suppressing the startup prompt.
 		void DismissStoredOffer();
@@ -77,7 +78,7 @@ namespace RTE {
 		/// @param directorySessionId The row to watch; empty leaves only the manual address.
 		void WatchForHostReturn(std::string matchName, std::string directorySessionId);
 		/// The directory poll's answer for the watched row; a returned host enables the rejoin.
-		void NoteHostReturn(bool present);
+		void NoteHostReturn(bool present, const std::string& matchName = {});
 		/// There is no directory to watch, or it cannot be reached: the prompt stops waiting on a row it
 		/// will never see and leaves the player the address route it always had.
 		void NoteHostUnwatchable(std::string reason);
@@ -123,11 +124,13 @@ namespace RTE {
 	private:
 		NetReconnectUxState m_State = NetReconnectUxState::Idle;
 		uint64_t m_DroppedAtMs = 0;
+		uint64_t m_ResumeWindowMs = c_ResumeWindowMs;
 		uint64_t m_NextAttemptMs = 0;
 		uint32_t m_Attempts = 0;
 		std::string m_Reason;
 		NetReconnectOffer m_Offer = NetReconnectOffer::None;
 		std::string m_OfferAddress;
+		std::string m_OfferName;
 		bool m_AwaitingHostReturn = false;
 		bool m_HostReturned = false;
 		std::string m_AwaitMatchName;

@@ -1411,6 +1411,7 @@ namespace RTE {
 		friend bool TestMenuLobbyWaitsForALiveHost(std::string* error);
 		friend bool TestDismissedRejoinStaysDismissed(std::string* error);
 		friend bool TestPauseNavigationDuringRecovery(std::string* error);
+		friend bool TestInternetTicketRecovery(std::string* error);
 		friend bool TestLobbyTimeoutDoesNotClaimHostDeparture(std::string* error);
 		friend bool TestAJoinedRoundGivesTheSessionItsTraffic(std::string* error);
 		friend bool TestALinkClosedForTheImageKeepsTheSeatAtTheRematch(std::string* error);
@@ -1962,7 +1963,8 @@ namespace RTE {
 		std::optional<NetMatchServiceRequest> m_LastJoinRoute;
 		bool BeginTicketRejoinOnRoute(std::string* error, const NetMatchServiceRequest* liveRoute);
 		void RememberTicketRoutesLocked(bool force = false, bool handsOver = false);
-		void DriveOrdinaryTicketRejoin();
+		void DriveOrdinaryTicketRejoin(uint64_t steadyMs = 0);
+		static constexpr uint64_t c_TicketRejoinAttemptBudgetMs = 90000;
 		uint64_t m_TicketRoutesRefreshAtMs = 0;
 		bool m_OrdinaryTicketRejoin = false;
 		/// Held client: the hosts its rejoin may still find when its own is gone, in the match's published successor order.
@@ -1970,6 +1972,7 @@ namespace RTE {
 		uint8_t m_HeldRejoinFailedAttempts = 0; //!< The attempts of this held rejoin that failed with its host still there.
 		bool m_RejoinFoundHostRowGone = false; //!< The directory confirms that this session ended by its host.
 		uint64_t m_HeldRejoinStartedMs = 0;
+		uint64_t m_TicketRejoinAttemptStartedMs = 0;
 		uint64_t m_HeldRejoinRetryAtMs = 0;     //!< When the armed retry of the host begins; 0 when none is armed.
 		uint64_t m_HeldRejoinPriorInput = 0;
 		std::string m_HostEndReason; //!< The host's End Match reason while its round plays to the agreed end frame.

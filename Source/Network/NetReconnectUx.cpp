@@ -12,6 +12,7 @@ namespace RTE {
 	void NetReconnectUx::NoteConnected(uint64_t nowMs) {
 		(void)nowMs;
 		m_State = NetReconnectUxState::Connected;
+		m_ResumeWindowMs = c_ResumeWindowMs;
 		m_Attempts = 0;
 		m_Reason.clear();
 	}
@@ -33,6 +34,7 @@ namespace RTE {
 	void NetReconnectUx::NoteReconnected(uint64_t nowMs) {
 		(void)nowMs;
 		m_State = NetReconnectUxState::Reconnected;
+		m_ResumeWindowMs = c_ResumeWindowMs;
 		m_Reason.clear();
 	}
 
@@ -40,7 +42,7 @@ namespace RTE {
 		if (m_State != NetReconnectUxState::Waiting) {
 			return false;
 		}
-		if (m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > c_ResumeWindowMs)) {
+		if (m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > m_ResumeWindowMs)) {
 			// The host's own resume window has closed, so nothing this side does can still land.
 			m_State = NetReconnectUxState::GaveUp;
 			return false;
@@ -61,7 +63,7 @@ namespace RTE {
 		if (m_State != NetReconnectUxState::Retrying) {
 			return;
 		}
-		m_State = m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > c_ResumeWindowMs)
+		m_State = m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > m_ResumeWindowMs)
 		              ? NetReconnectUxState::GaveUp
 		              : NetReconnectUxState::Waiting;
 	}
@@ -83,7 +85,7 @@ namespace RTE {
 	}
 
 	void NetReconnectUx::RequestManualRetry(uint64_t nowMs) {
-		if (!CanRetryManually()) {
+		if (!CanRetryManually() && m_Offer != NetReconnectOffer::Available) {
 			return;
 		}
 		m_State = NetReconnectUxState::Waiting;
@@ -100,7 +102,8 @@ namespace RTE {
 		return m_State == NetReconnectUxState::GaveUp || m_State == NetReconnectUxState::Cancelled;
 	}
 
-	void NetReconnectUx::OfferStoredTicket(NetH4TicketLoadResult load, std::string hostAddress) {
+	void NetReconnectUx::OfferStoredTicket(NetH4TicketLoadResult load, std::string hostAddress, std::string matchName) {
+		m_OfferName = std::move(matchName);
 		switch (load) {
 			case NetH4TicketLoadResult::Loaded:
 				m_Offer = NetReconnectOffer::Available;
@@ -117,11 +120,13 @@ namespace RTE {
 				break;
 		}
 		m_OfferAddress.clear();
+		m_OfferName.clear();
 	}
 
 	void NetReconnectUx::DismissOffer() {
 		m_Offer = NetReconnectOffer::None;
 		m_OfferAddress.clear();
+		m_OfferName.clear();
 	}
 
 	void NetReconnectUx::DismissStoredOffer() {
@@ -136,8 +141,9 @@ namespace RTE {
 		m_AwaitSessionId = std::move(directorySessionId);
 	}
 
-	void NetReconnectUx::NoteHostReturn(bool present) {
+	void NetReconnectUx::NoteHostReturn(bool present, const std::string& matchName) {
 		if (m_AwaitingHostReturn) {
+			if (present && !matchName.empty()) m_AwaitMatchName = m_OfferName = matchName;
 			m_HostReturned = present;
 			m_WatchReason.clear();
 		}
@@ -175,6 +181,7 @@ namespace RTE {
 	std::string NetReconnectUx::GetOfferText() const {
 		switch (m_Offer) {
 			case NetReconnectOffer::Available:
+				if (!m_OfferName.empty()) return "Rejoin " + m_OfferName + "?";
 				return m_OfferAddress.starts_with("iceip:") || m_OfferAddress.starts_with("iceid:") ? "Rejoin your online match?" : "Rejoin your match at " + m_OfferAddress + "?";
 			case NetReconnectOffer::Corrupt: return "The saved rejoin information is damaged and cannot be used.";
 			case NetReconnectOffer::Stale: return "The saved rejoin information is too old to use.";

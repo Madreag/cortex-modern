@@ -17724,6 +17724,109 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestInternetTicketRecovery(std::string* error) {
+		NetH4TicketRecord record;
+		record.hostAddress = "ice:";
+		record.directorySessionId = "recovery-session";
+		NetMatchServiceRequest published;
+		published.address = "ice:";
+		published.port = 41010;
+		const auto request = NetMatchService::BuildHeldRejoinRequest(record, "Returning player", false, published);
+		if (request.sessionId != record.directorySessionId || request.address != published.address || !request.rejoin || request.host) {
+			*error = "a successor route discarded the Internet session required by relay-only rejoin";
+			return false;
+		}
+		NetMatchService client;
+		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		client.m_ReconnectUx.NoteDropped(now, "Lost host");
+		client.m_ReconnectUx.NoteAttemptStarted(now);
+		client.m_OrdinaryTicketRejoin = client.m_HeldRejoinDriving = true;
+		client.m_State = NetMatchServiceState::Failed;
+		client.DriveOrdinaryTicketRejoin();
+		if (client.GetReconnectUx().GetState() == NetReconnectUxState::Retrying || client.m_HeldRejoinRetryAtMs == 0) {
+			*error = "a failed manual rejoin still shows attempt 1 in flight instead of its failure and scheduled retry";
+			return false;
+		}
+		client.m_State = NetMatchServiceState::Starting;
+		client.m_HeldRejoinRetryAtMs = 0;
+		client.m_TicketRejoinAttemptStartedMs = 100;
+		client.m_ReconnectUx.NoteAttemptStarted(now);
+		client.DriveOrdinaryTicketRejoin(100 + NetMatchService::c_TicketRejoinAttemptBudgetMs);
+		if (!client.m_CancelRequested.load() || client.GetReconnectUx().GetState() == NetReconnectUxState::Retrying ||
+		    client.GetLobbySnapshot().statusText.find("did not answer") == std::string::npos) {
+			*error = "an unanswered Connecting attempt is not cancelled with a visible outcome at its deadline"; return false;
+		}
+		for (uint32_t attempt = client.m_ReconnectUx.GetAttempts(); attempt < NetReconnectUx::c_MaxAttempts; ++attempt) {
+			client.m_ReconnectUx.NoteAttemptStarted(now);
+			client.m_ReconnectUx.NoteAttemptFailed(now, "Host unavailable");
+		}
+		client.m_State = NetMatchServiceState::Failed;
+		client.DriveOrdinaryTicketRejoin();
+		if (client.m_HeldRejoinDriving || client.m_ReconnectUx.GetState() != NetReconnectUxState::GaveUp ||
+		    client.m_ReconnectUx.GetAttempts() != NetReconnectUx::c_MaxAttempts) {
+			*error = "an exhausted manual rejoin kept retrying instead of showing its final outcome"; return false;
+		}
+		client.m_ReconnectUx.SetRetryWindowMs(NetMatchService::c_TicketRejoinAttemptBudgetMs * NetReconnectUx::c_MaxAttempts + 300000);
+		client.m_ReconnectUx.NoteReconnected(now);
+		client.m_ReconnectUx.NoteDropped(now + 100, "Later drop");
+		client.m_ReconnectUx.Tick(now + 100 + NetReconnectUx::c_ResumeWindowMs + 1);
+		if (client.m_ReconnectUx.GetState() != NetReconnectUxState::GaveUp) {
+			*error = "a successful ticket return changed the later automatic recovery window"; return false;
+		}
+		{
+			struct Restore {
+				std::string path = NetMatchService::s_TicketStorePath;
+				bool admission = NetMatchService::IsAdmissionEnabled();
+				~Restore() { NetMatchService::SetTicketStorePath(path); NetMatchService::SetAdmissionEnabled(admission); }
+			} restore;
+			const auto path = std::filesystem::current_path() / "Userdata" / "host-return-selftest" / "reconnect.ticket";
+			NetMatchService::SetTicketStorePath(path.string());
+			NetMatchService::SetAdmissionEnabled(true);
+			LoopbackTransport wire;
+			NetMatchService departing;
+			NetLockstepConfig config;
+			config.sessionId = config.roundId = 777; config.localPeerId = 1; config.peerCount = 4;
+			config.scenario = "HostReturnSelfTest"; config.ownershipPolicy = "unique-id-split";
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(777);
+			config.matchConfig.peerCount = 4; config.matchConfig.players.resize(4);
+			for (int i = 0; i < 4; ++i) { config.matchConfig.players[i].peerId = i + 1; config.matchConfig.players[i].team = i % 2; }
+			config.matchConfig.successorOrder = {2, 3, 4};
+			config.matchConfig.migrationPeers = {{2, 41010, {"192.0.2.2", "ice:"}}, {3, 41010, {"192.0.2.3", "ice:"}}};
+			departing.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+			if (!departing.m_Coordinator->StartReplay(wire, config, error)) return false;
+			departing.m_Session = std::make_unique<NetSession>();
+			NetSessionConfig session;
+			session.readyWithoutPeers = true; session.port = 41010;
+			if (!departing.m_Session->StartHost(wire, session, error)) return false;
+			record.recordVersion = NetReconnectTicketStore::RecordVersionFor(false);
+			record.epoch.fill(0x31); record.credential.fill(0x73);
+			record.stableSeat = 1; record.holderGeneration = 1; record.hostSessionId = 777;
+			record.hostAddress = "192.0.2.1:41010"; record.issuedAtUnixMs = now;
+			departing.m_TicketStore.SetPath(path.string());
+			if (!departing.m_TicketStore.Store(record, error)) return false;
+			departing.m_MatchWasRunning = departing.m_IsHost = true;
+			departing.m_LocalPeerId = 1; departing.m_State = NetMatchServiceState::Running;
+			departing.m_DirectoryRow.name = "Test game";
+			departing.ConfirmHostLeave(NetHostLeaveOutcome::HandsOver);
+			departing.LeaveMatch("Match left");
+			NetH4TicketRecord returned;
+			if (departing.m_TicketStore.Load(now, returned, error) != NetH4TicketLoadResult::Loaded || returned.hostAddress != "ice:" ||
+			    returned.directorySessionId != record.directorySessionId || departing.m_TicketStore.LoadRoutes(returned).empty()) {
+				*error = "the departing Internet host saved a private IP instead of the successor's rendezvous and session"; return false;
+			}
+			if (departing.GetReconnectUx().GetHostReturnText().find("Test game") == std::string::npos ||
+			    departing.GetReconnectUx().GetOfferText().find("192.0.2.") != std::string::npos) {
+				*error = "the public host's return offer names an address instead of the game"; return false;
+			}
+			departing.GetReconnectUx().NoteHostReturn(true, "Returned game");
+			if (departing.GetReconnectUx().GetHostReturnText().find("Returned game") == std::string::npos) {
+				*error = "the host watch did not adopt the directory's game name"; return false;
+			}
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS internet_ticket_keeps_session_and_failed_attempt_advances");
+		return true;
+	}
+
 	int NetMatchSelfTest::Run() {
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-match-selftest] FAIL: " << message << std::endl;
@@ -17742,6 +17845,7 @@ namespace RTE {
 			bool passed = false;
 			if (name == "ui-presentation") passed = TestInMatchPresentation(&error);
 			else if (name == "pause-navigation") passed = TestPauseNavigationDuringRecovery(&error);
+			else if (name == "ticket-recovery") passed = TestInternetTicketRecovery(&error);
 			else if (name == "setup-editor") passed = GameActivity::RunSetupEditorSelfTest();
 			else if (name == "chat-receipts") passed = TestChatReceipts<NetSession>(&error);
 			else if (name == "chat-routing") passed = TestChatRoutingAndBounds(&error);
