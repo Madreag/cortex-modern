@@ -1793,26 +1793,50 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		if (const long serial = movableObjectToSave->GetScriptRegistrationSerial(); serial > 0) {
 			writer.NewPropertyWithValue("ScriptRegistrationSerial", serial);
 		}
-		writer.NewPropertyWithValue("SpecialBehaviour_MOID", movableObjectToSave->GetID());
-		writer.NewPropertyWithValue("SpecialBehaviour_RootMOID", movableObjectToSave->GetRootID());
-		writer.NewPropertyWithValue("SpecialBehaviour_MOIDFootprint", movableObjectToSave->GetMOIDFootprint());
-		writer.NewPropertyWithValue("HUDVisible", movableObjectToSave->GetHUDVisible());
-		writer.NewPropertyWithValue("Velocity", movableObjectToSave->GetVel());
-		writer.NewPropertyWithValue("PrevPosition", movableObjectToSave->GetPrevPos());
-		writer.NewPropertyWithValue("SpecialBehaviour_CheckTerrainIntersection", movableObjectToSave->IntersectionWarning());
-		writer.NewPropertyWithValue("SpecialBehaviour_VelOscillations", movableObjectToSave->GetVelOscillations());
-		writer.NewPropertyWithValue("SpecialBehaviour_DistanceTravelled", movableObjectToSave->GetDistanceTravelled());
-		writer.NewPropertyWithValue("RestTimerStart", movableObjectToSave->GetRestTimerStart());
-		writer.NewPropertyWithValue("AgeTimerStart", movableObjectToSave->GetAgeTimerStart());
-		writer.NewPropertyWithValue("PrevVelocity", movableObjectToSave->GetPrevVel());
-		writer.NewPropertyWithValue("IgnoresTeamHits", movableObjectToSave->IgnoresTeamHits());
-		writer.NewPropertyWithValue("IgnoresActorHits", movableObjectToSave->GetIgnoresActorHits());
-		writer.NewPropertyWithValue("IgnoreTerrain", movableObjectToSave->IgnoreTerrain());
-		writer.NewPropertyWithValue("GlobalAccScalar", movableObjectToSave->GetGlobalAccScalar());
-		writer.NewPropertyWithValue("AirThreshold", movableObjectToSave->GetAirThreshold());
-		writer.NewPropertyWithValue("SpecialBehaviour_AirResistanceRaw", movableObjectToSave->GetAirResistance());
-		writer.NewPropertyWithValue("SpecialBehaviour_ApplyWoundDamageOnCollision", movableObjectToSave->GetApplyWoundDamageOnCollision());
-		writer.NewPropertyWithValue("SpecialBehaviour_ApplyWoundBurstDamageOnCollision", movableObjectToSave->GetApplyWoundBurstDamageOnCollision());
+		if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+			WriteCapturedProperties(writer,
+				CheckpointProperty<"SpecialBehaviour_MOID">(movableObjectToSave->GetID()),
+				CheckpointProperty<"SpecialBehaviour_RootMOID">(movableObjectToSave->GetRootID()),
+				CheckpointProperty<"SpecialBehaviour_MOIDFootprint">(movableObjectToSave->GetMOIDFootprint()),
+				CheckpointProperty<"HUDVisible">(movableObjectToSave->GetHUDVisible()),
+				CheckpointProperty<"Velocity">(movableObjectToSave->GetVel()),
+				CheckpointProperty<"PrevPosition">(movableObjectToSave->GetPrevPos()),
+				CheckpointProperty<"SpecialBehaviour_CheckTerrainIntersection">(movableObjectToSave->IntersectionWarning()),
+				CheckpointProperty<"SpecialBehaviour_VelOscillations">(movableObjectToSave->GetVelOscillations()),
+				CheckpointProperty<"SpecialBehaviour_DistanceTravelled">(movableObjectToSave->GetDistanceTravelled()),
+				CheckpointProperty<"RestTimerStart">(movableObjectToSave->GetRestTimerStart()),
+				CheckpointProperty<"AgeTimerStart">(movableObjectToSave->GetAgeTimerStart()),
+				CheckpointProperty<"PrevVelocity">(movableObjectToSave->GetPrevVel()),
+				CheckpointProperty<"IgnoresTeamHits">(movableObjectToSave->IgnoresTeamHits()),
+				CheckpointProperty<"IgnoresActorHits">(movableObjectToSave->GetIgnoresActorHits()),
+				CheckpointProperty<"IgnoreTerrain">(movableObjectToSave->IgnoreTerrain()),
+				CheckpointProperty<"GlobalAccScalar">(movableObjectToSave->GetGlobalAccScalar()),
+				CheckpointProperty<"AirThreshold">(movableObjectToSave->GetAirThreshold()),
+				CheckpointProperty<"SpecialBehaviour_AirResistanceRaw">(movableObjectToSave->GetAirResistance()),
+				CheckpointProperty<"SpecialBehaviour_ApplyWoundDamageOnCollision">(movableObjectToSave->GetApplyWoundDamageOnCollision()),
+				CheckpointProperty<"SpecialBehaviour_ApplyWoundBurstDamageOnCollision">(movableObjectToSave->GetApplyWoundBurstDamageOnCollision()));
+		} else {
+			writer.NewPropertyWithValue("SpecialBehaviour_MOID", movableObjectToSave->GetID());
+			writer.NewPropertyWithValue("SpecialBehaviour_RootMOID", movableObjectToSave->GetRootID());
+			writer.NewPropertyWithValue("SpecialBehaviour_MOIDFootprint", movableObjectToSave->GetMOIDFootprint());
+			writer.NewPropertyWithValue("HUDVisible", movableObjectToSave->GetHUDVisible());
+			writer.NewPropertyWithValue("Velocity", movableObjectToSave->GetVel());
+			writer.NewPropertyWithValue("PrevPosition", movableObjectToSave->GetPrevPos());
+			writer.NewPropertyWithValue("SpecialBehaviour_CheckTerrainIntersection", movableObjectToSave->IntersectionWarning());
+			writer.NewPropertyWithValue("SpecialBehaviour_VelOscillations", movableObjectToSave->GetVelOscillations());
+			writer.NewPropertyWithValue("SpecialBehaviour_DistanceTravelled", movableObjectToSave->GetDistanceTravelled());
+			writer.NewPropertyWithValue("RestTimerStart", movableObjectToSave->GetRestTimerStart());
+			writer.NewPropertyWithValue("AgeTimerStart", movableObjectToSave->GetAgeTimerStart());
+			writer.NewPropertyWithValue("PrevVelocity", movableObjectToSave->GetPrevVel());
+			writer.NewPropertyWithValue("IgnoresTeamHits", movableObjectToSave->IgnoresTeamHits());
+			writer.NewPropertyWithValue("IgnoresActorHits", movableObjectToSave->GetIgnoresActorHits());
+			writer.NewPropertyWithValue("IgnoreTerrain", movableObjectToSave->IgnoreTerrain());
+			writer.NewPropertyWithValue("GlobalAccScalar", movableObjectToSave->GetGlobalAccScalar());
+			writer.NewPropertyWithValue("AirThreshold", movableObjectToSave->GetAirThreshold());
+			writer.NewPropertyWithValue("SpecialBehaviour_AirResistanceRaw", movableObjectToSave->GetAirResistance());
+			writer.NewPropertyWithValue("SpecialBehaviour_ApplyWoundDamageOnCollision", movableObjectToSave->GetApplyWoundDamageOnCollision());
+			writer.NewPropertyWithValue("SpecialBehaviour_ApplyWoundBurstDamageOnCollision", movableObjectToSave->GetApplyWoundBurstDamageOnCollision());
+		}
 		// Written even when there is none, so a restored object drops the ignore link its preset carries.
 		const MovableObject* moToNotHit = movableObjectToSave->GetWhichMOToNotHit();
 		const bool namesMOToNotHit = moToNotHit && g_MovableMan.FindObjectByUniqueID(movableObjectToSave->GetMOToNotHitUID()) == moToNotHit;
@@ -1838,15 +1862,29 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			}
 		}
 		// The lethal-decay branch mutates these at runtime, so every pixel carries the live values.
-		writer.NewPropertyWithValue("Sharpness", moPixelToSave->GetSharpness());
-		writer.NewPropertyWithValue("HitsMOs", moPixelToSave->HitsMOs());
-		writer.NewPropertyWithValue("GetsHitByMOs", moPixelToSave->GetsHitByMOs());
+		if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+			WriteCapturedProperties(writer,
+				CheckpointProperty<"Sharpness">(moPixelToSave->GetSharpness()),
+				CheckpointProperty<"HitsMOs">(moPixelToSave->HitsMOs()),
+				CheckpointProperty<"GetsHitByMOs">(moPixelToSave->GetsHitByMOs()));
+		} else {
+			writer.NewPropertyWithValue("Sharpness", moPixelToSave->GetSharpness());
+			writer.NewPropertyWithValue("HitsMOs", moPixelToSave->HitsMOs());
+			writer.NewPropertyWithValue("GetsHitByMOs", moPixelToSave->GetsHitByMOs());
+		}
 		if (const Atom* pixelAtom = moPixelToSave->GetAtom()) {
 			writer.NewPropertyWithValue("SpecialBehaviour_AtomTrailLength", pixelAtom->GetTrailLength());
 		}
-		writer.NewPropertyWithValue("AtomResidue", moPixelToSave->GetAtomResidue());
-		writer.NewPropertyWithValue("SpecialBehaviour_LethalRange", moPixelToSave->GetLethalRange());
-		writer.NewPropertyWithValue("SpecialBehaviour_LethalSharpness", moPixelToSave->GetLethalSharpness());
+		if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+			WriteCapturedProperties(writer,
+				CheckpointProperty<"AtomResidue">(moPixelToSave->GetAtomResidue()),
+				CheckpointProperty<"SpecialBehaviour_LethalRange">(moPixelToSave->GetLethalRange()),
+				CheckpointProperty<"SpecialBehaviour_LethalSharpness">(moPixelToSave->GetLethalSharpness()));
+		} else {
+			writer.NewPropertyWithValue("AtomResidue", moPixelToSave->GetAtomResidue());
+			writer.NewPropertyWithValue("SpecialBehaviour_LethalRange", moPixelToSave->GetLethalRange());
+			writer.NewPropertyWithValue("SpecialBehaviour_LethalSharpness", moPixelToSave->GetLethalSharpness());
+		}
 	}
 
 	if (const MOSParticle* moSParticleToSave = dynamic_cast<const MOSParticle*>(sceneObjectToSave); moSParticleToSave && saveFullData) {
@@ -1854,13 +1892,24 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 	}
 
 	if (const PEmitter* pEmitterToSave = dynamic_cast<const PEmitter*>(sceneObjectToSave); pEmitterToSave && saveFullData) {
-		writer.NewPropertyWithValue("EmissionEnabled", pEmitterToSave->IsEmitting());
-		writer.NewPropertyWithValue("EmissionCount", pEmitterToSave->GetEmitCount());
-		writer.NewPropertyWithValue("Throttle", pEmitterToSave->GetThrottle());
-		writer.NewPropertyWithValue("BurstTriggered", pEmitterToSave->IsSetToBurst());
-		writer.NewPropertyWithValue("BurstTimerStart", pEmitterToSave->GetBurstTimerStart());
-		writer.NewPropertyWithValue("LastEmitTimerStart", pEmitterToSave->GetLastEmitTimerStart());
-		writer.NewPropertyWithValue("SpecialBehaviour_WasEmitting", pEmitterToSave->WasEmitting());
+		if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+			WriteCapturedProperties(writer,
+				CheckpointProperty<"EmissionEnabled">(pEmitterToSave->IsEmitting()),
+				CheckpointProperty<"EmissionCount">(pEmitterToSave->GetEmitCount()),
+				CheckpointProperty<"Throttle">(pEmitterToSave->GetThrottle()),
+				CheckpointProperty<"BurstTriggered">(pEmitterToSave->IsSetToBurst()),
+				CheckpointProperty<"BurstTimerStart">(pEmitterToSave->GetBurstTimerStart()),
+				CheckpointProperty<"LastEmitTimerStart">(pEmitterToSave->GetLastEmitTimerStart()),
+				CheckpointProperty<"SpecialBehaviour_WasEmitting">(pEmitterToSave->WasEmitting()));
+		} else {
+			writer.NewPropertyWithValue("EmissionEnabled", pEmitterToSave->IsEmitting());
+			writer.NewPropertyWithValue("EmissionCount", pEmitterToSave->GetEmitCount());
+			writer.NewPropertyWithValue("Throttle", pEmitterToSave->GetThrottle());
+			writer.NewPropertyWithValue("BurstTriggered", pEmitterToSave->IsSetToBurst());
+			writer.NewPropertyWithValue("BurstTimerStart", pEmitterToSave->GetBurstTimerStart());
+			writer.NewPropertyWithValue("LastEmitTimerStart", pEmitterToSave->GetLastEmitTimerStart());
+			writer.NewPropertyWithValue("SpecialBehaviour_WasEmitting", pEmitterToSave->WasEmitting());
+		}
 		writer.PerPeerBegin();
 		writer.NewPropertyWithValue("SpecialBehaviour_AvgBurstImpulse", pEmitterToSave->GetAvgBurstImpulse());
 		writer.NewPropertyWithValue("SpecialBehaviour_AvgImpulse", pEmitterToSave->GetAvgImpulse());
@@ -1892,9 +1941,16 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			if (drawnFrame) writer.PerPeerBegin();
 			writer.NewPropertyWithValue("Frame", static_cast<int>(moSpriteToSave->GetFrame()));
 			if (drawnFrame) writer.PerPeerEnd();
-			writer.NewPropertyWithValue("SpecialBehaviour_PrevAngVel", moSpriteToSave->GetPrevAngularVel());
-			writer.NewPropertyWithValue("SpriteAnimTimerStart", moSpriteToSave->GetSpriteAnimTimerStart());
-			writer.NewPropertyWithValue("SpecialBehaviour_SpriteAnimIsReversingFrames", moSpriteToSave->GetSpriteAnimIsReversingFrames());
+			if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+				WriteCapturedProperties(writer,
+					CheckpointProperty<"SpecialBehaviour_PrevAngVel">(moSpriteToSave->GetPrevAngularVel()),
+					CheckpointProperty<"SpriteAnimTimerStart">(moSpriteToSave->GetSpriteAnimTimerStart()),
+					CheckpointProperty<"SpecialBehaviour_SpriteAnimIsReversingFrames">(moSpriteToSave->GetSpriteAnimIsReversingFrames()));
+			} else {
+				writer.NewPropertyWithValue("SpecialBehaviour_PrevAngVel", moSpriteToSave->GetPrevAngularVel());
+				writer.NewPropertyWithValue("SpriteAnimTimerStart", moSpriteToSave->GetSpriteAnimTimerStart());
+				writer.NewPropertyWithValue("SpecialBehaviour_SpriteAnimIsReversingFrames", moSpriteToSave->GetSpriteAnimIsReversingFrames());
+			}
 		}
 	}
 
@@ -1911,9 +1967,16 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				writer.NewPropertyWithValue("AtomGroupMomentOfInertia", atomGroupToSave->GetStoredMomentOfInertia());
 				writer.NewPropertyWithValue("AtomGroupStoredOwnerMass", atomGroupToSave->GetStoredOwnerMass());
 			}
-			writer.NewPropertyWithValue("SpecialBehaviour_AttachableAndWoundMass", mosRotatingToSave->GetAttachableAndWoundMassForSave());
-			writer.NewPropertyWithValue("SpecialBehaviour_FarthestAttachableDistanceAndRadius", mosRotatingToSave->GetFarthestAttachableDistanceAndRadius());
-			writer.NewPropertyWithValue("SpecialBehaviour_DeepHardness", mosRotatingToSave->GetDeepHardness());
+			if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+				WriteCapturedProperties(writer,
+					CheckpointProperty<"SpecialBehaviour_AttachableAndWoundMass">(mosRotatingToSave->GetAttachableAndWoundMassForSave()),
+					CheckpointProperty<"SpecialBehaviour_FarthestAttachableDistanceAndRadius">(mosRotatingToSave->GetFarthestAttachableDistanceAndRadius()),
+					CheckpointProperty<"SpecialBehaviour_DeepHardness">(mosRotatingToSave->GetDeepHardness()));
+			} else {
+				writer.NewPropertyWithValue("SpecialBehaviour_AttachableAndWoundMass", mosRotatingToSave->GetAttachableAndWoundMassForSave());
+				writer.NewPropertyWithValue("SpecialBehaviour_FarthestAttachableDistanceAndRadius", mosRotatingToSave->GetFarthestAttachableDistanceAndRadius());
+				writer.NewPropertyWithValue("SpecialBehaviour_DeepHardness", mosRotatingToSave->GetDeepHardness());
+			}
 			if (!mosRotatingToSave->HasNoSetDamageMultiplier()) {
 				writer.NewPropertyWithValue("DamageMultiplier", mosRotatingToSave->GetDamageMultiplier());
 			}
@@ -1966,25 +2029,48 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 	}
 
 	if (const Attachable* attachableToSave = dynamic_cast<const Attachable*>(sceneObjectToSave); attachableToSave && saveFullData) {
-		writer.NewPropertyWithValue("ParentOffset", attachableToSave->GetParentOffset());
-		writer.NewPropertyWithValue("SpecialBehaviour_ParentOffset", attachableToSave->GetParentOffset());
-		writer.NewPropertyWithValue("SpecialBehaviour_JointPosition", attachableToSave->GetJointPos());
-		writer.NewPropertyWithValue("SpecialBehaviour_PrevParentOffset", attachableToSave->GetPrevParentOffset());
-		writer.NewPropertyWithValue("SpecialBehaviour_PrevJointOffset", attachableToSave->GetPrevJointOffset());
-		writer.NewPropertyWithValue("SpecialBehaviour_MountedRotAngleOffset", attachableToSave->GetMountedRotAngleOffset());
-		writer.NewPropertyWithValue("SpecialBehaviour_DamageCount", attachableToSave->GetDamageCount());
-		writer.NewPropertyWithValue("DrawAfterParent", attachableToSave->IsDrawnAfterParent());
-		writer.NewPropertyWithValue("DeleteWhenRemovedFromParent", attachableToSave->GetDeleteWhenRemovedFromParent());
-		writer.NewPropertyWithValue("GibWhenRemovedFromParent", attachableToSave->GetGibWhenRemovedFromParent());
-		writer.NewPropertyWithValue("JointStrength", attachableToSave->GetJointStrength());
-		writer.NewPropertyWithValue("JointStiffness", attachableToSave->GetJointStiffness());
-		writer.NewPropertyWithValue("JointOffset", attachableToSave->GetJointOffset());
-		writer.NewPropertyWithValue("SpecialBehaviour_InheritsHFlipped", attachableToSave->InheritsHFlipped());
-		writer.NewPropertyWithValue("InheritsRotAngle", attachableToSave->InheritsRotAngle());
-		writer.NewPropertyWithValue("InheritedRotAngleOffset", attachableToSave->GetInheritedRotAngleOffset());
-		writer.NewPropertyWithValue("InheritsFrame", attachableToSave->InheritsFrame());
-		writer.NewPropertyWithValue("CollidesWithTerrainWhileAttached", attachableToSave->GetCollidesWithTerrainWhileAttached());
-		writer.NewPropertyWithValue("SpecialBehaviour_PrevRotAngleOffset", attachableToSave->GetPrevRotAngleOffset());
+		if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+			WriteCapturedProperties(writer,
+				CheckpointProperty<"ParentOffset">(attachableToSave->GetParentOffset()),
+				CheckpointProperty<"SpecialBehaviour_ParentOffset">(attachableToSave->GetParentOffset()),
+				CheckpointProperty<"SpecialBehaviour_JointPosition">(attachableToSave->GetJointPos()),
+				CheckpointProperty<"SpecialBehaviour_PrevParentOffset">(attachableToSave->GetPrevParentOffset()),
+				CheckpointProperty<"SpecialBehaviour_PrevJointOffset">(attachableToSave->GetPrevJointOffset()),
+				CheckpointProperty<"SpecialBehaviour_MountedRotAngleOffset">(attachableToSave->GetMountedRotAngleOffset()),
+				CheckpointProperty<"SpecialBehaviour_DamageCount">(attachableToSave->GetDamageCount()),
+				CheckpointProperty<"DrawAfterParent">(attachableToSave->IsDrawnAfterParent()),
+				CheckpointProperty<"DeleteWhenRemovedFromParent">(attachableToSave->GetDeleteWhenRemovedFromParent()),
+				CheckpointProperty<"GibWhenRemovedFromParent">(attachableToSave->GetGibWhenRemovedFromParent()),
+				CheckpointProperty<"JointStrength">(attachableToSave->GetJointStrength()),
+				CheckpointProperty<"JointStiffness">(attachableToSave->GetJointStiffness()),
+				CheckpointProperty<"JointOffset">(attachableToSave->GetJointOffset()),
+				CheckpointProperty<"SpecialBehaviour_InheritsHFlipped">(attachableToSave->InheritsHFlipped()),
+				CheckpointProperty<"InheritsRotAngle">(attachableToSave->InheritsRotAngle()),
+				CheckpointProperty<"InheritedRotAngleOffset">(attachableToSave->GetInheritedRotAngleOffset()),
+				CheckpointProperty<"InheritsFrame">(attachableToSave->InheritsFrame()),
+				CheckpointProperty<"CollidesWithTerrainWhileAttached">(attachableToSave->GetCollidesWithTerrainWhileAttached()),
+				CheckpointProperty<"SpecialBehaviour_PrevRotAngleOffset">(attachableToSave->GetPrevRotAngleOffset()));
+		} else {
+			writer.NewPropertyWithValue("ParentOffset", attachableToSave->GetParentOffset());
+			writer.NewPropertyWithValue("SpecialBehaviour_ParentOffset", attachableToSave->GetParentOffset());
+			writer.NewPropertyWithValue("SpecialBehaviour_JointPosition", attachableToSave->GetJointPos());
+			writer.NewPropertyWithValue("SpecialBehaviour_PrevParentOffset", attachableToSave->GetPrevParentOffset());
+			writer.NewPropertyWithValue("SpecialBehaviour_PrevJointOffset", attachableToSave->GetPrevJointOffset());
+			writer.NewPropertyWithValue("SpecialBehaviour_MountedRotAngleOffset", attachableToSave->GetMountedRotAngleOffset());
+			writer.NewPropertyWithValue("SpecialBehaviour_DamageCount", attachableToSave->GetDamageCount());
+			writer.NewPropertyWithValue("DrawAfterParent", attachableToSave->IsDrawnAfterParent());
+			writer.NewPropertyWithValue("DeleteWhenRemovedFromParent", attachableToSave->GetDeleteWhenRemovedFromParent());
+			writer.NewPropertyWithValue("GibWhenRemovedFromParent", attachableToSave->GetGibWhenRemovedFromParent());
+			writer.NewPropertyWithValue("JointStrength", attachableToSave->GetJointStrength());
+			writer.NewPropertyWithValue("JointStiffness", attachableToSave->GetJointStiffness());
+			writer.NewPropertyWithValue("JointOffset", attachableToSave->GetJointOffset());
+			writer.NewPropertyWithValue("SpecialBehaviour_InheritsHFlipped", attachableToSave->InheritsHFlipped());
+			writer.NewPropertyWithValue("InheritsRotAngle", attachableToSave->InheritsRotAngle());
+			writer.NewPropertyWithValue("InheritedRotAngleOffset", attachableToSave->GetInheritedRotAngleOffset());
+			writer.NewPropertyWithValue("InheritsFrame", attachableToSave->InheritsFrame());
+			writer.NewPropertyWithValue("CollidesWithTerrainWhileAttached", attachableToSave->GetCollidesWithTerrainWhileAttached());
+			writer.NewPropertyWithValue("SpecialBehaviour_PrevRotAngleOffset", attachableToSave->GetPrevRotAngleOffset());
+		}
 
 		if (const AEmitter* aemitterToSave = dynamic_cast<const AEmitter*>(sceneObjectToSave)) {
 			writer.NewPropertyWithValue("BurstTimerStart", aemitterToSave->GetBurstTimerStart());
@@ -2005,15 +2091,28 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 					writer.NewPropertyWithValue("EmissionTimers", timers);
 				}
 			}
-			writer.NewPropertyWithValue("EmissionEnabled", aemitterToSave->IsEmitting());
-			writer.NewPropertyWithValue("EmissionCount", aemitterToSave->GetEmitCount());
-			writer.NewPropertyWithValue("EmissionCountLimit", aemitterToSave->GetEmitCountLimit());
-			writer.NewPropertyWithValue("NegativeThrottleMultiplier", aemitterToSave->GetNegativeThrottleMultiplier());
-			writer.NewPropertyWithValue("PositiveThrottleMultiplier", aemitterToSave->GetPositiveThrottleMultiplier());
-			writer.NewPropertyWithValue("Throttle", aemitterToSave->GetThrottle());
-			writer.NewPropertyWithValue("BurstScale", aemitterToSave->GetBurstScale());
-			writer.NewPropertyWithValue("BurstSpacing", aemitterToSave->GetBurstSpacing());
-			writer.NewPropertyWithValue("BurstTriggered", aemitterToSave->IsSetToBurst());
+			if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+				WriteCapturedProperties(writer,
+					CheckpointProperty<"EmissionEnabled">(aemitterToSave->IsEmitting()),
+					CheckpointProperty<"EmissionCount">(aemitterToSave->GetEmitCount()),
+					CheckpointProperty<"EmissionCountLimit">(aemitterToSave->GetEmitCountLimit()),
+					CheckpointProperty<"NegativeThrottleMultiplier">(aemitterToSave->GetNegativeThrottleMultiplier()),
+					CheckpointProperty<"PositiveThrottleMultiplier">(aemitterToSave->GetPositiveThrottleMultiplier()),
+					CheckpointProperty<"Throttle">(aemitterToSave->GetThrottle()),
+					CheckpointProperty<"BurstScale">(aemitterToSave->GetBurstScale()),
+					CheckpointProperty<"BurstSpacing">(aemitterToSave->GetBurstSpacing()),
+					CheckpointProperty<"BurstTriggered">(aemitterToSave->IsSetToBurst()));
+			} else {
+				writer.NewPropertyWithValue("EmissionEnabled", aemitterToSave->IsEmitting());
+				writer.NewPropertyWithValue("EmissionCount", aemitterToSave->GetEmitCount());
+				writer.NewPropertyWithValue("EmissionCountLimit", aemitterToSave->GetEmitCountLimit());
+				writer.NewPropertyWithValue("NegativeThrottleMultiplier", aemitterToSave->GetNegativeThrottleMultiplier());
+				writer.NewPropertyWithValue("PositiveThrottleMultiplier", aemitterToSave->GetPositiveThrottleMultiplier());
+				writer.NewPropertyWithValue("Throttle", aemitterToSave->GetThrottle());
+				writer.NewPropertyWithValue("BurstScale", aemitterToSave->GetBurstScale());
+				writer.NewPropertyWithValue("BurstSpacing", aemitterToSave->GetBurstSpacing());
+				writer.NewPropertyWithValue("BurstTriggered", aemitterToSave->IsSetToBurst());
+			}
 			writer.NewPropertyWithValue("EmissionAngle", aemitterToSave->GetEmitAngleMatrix());
 			writer.NewPropertyWithValue("EmissionOffset", aemitterToSave->GetEmitOffset());
 			WriteHardcodedAttachableOrNone("Flash", aemitterToSave->GetFlash());
@@ -2032,22 +2131,41 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			}
 
 			writer.NewPropertyWithValue("JumpTime", jetpackToSave->GetJetTimeTotal() / 1000.0f); // Convert to seconds
-			writer.NewPropertyWithValue("JumpReplenishRate", jetpackToSave->GetJetReplenishRate());
-			writer.NewPropertyWithValue("MinimumFuelRatio", jetpackToSave->GetMinimumFuelRatio());
-			writer.NewPropertyWithValue("JumpAngleRange", jetpackToSave->GetJetAngleRange());
-			writer.NewPropertyWithValue("CanAdjustAngleWhileFiring", jetpackToSave->GetCanAdjustAngleWhileFiring());
-			writer.NewPropertyWithValue("SpecialBehaviour_JetThrustBonusMultiplier", jetpackToSave->GetJetThrustBonusMultiplier());
+			if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+				WriteCapturedProperties(writer,
+					CheckpointProperty<"JumpReplenishRate">(jetpackToSave->GetJetReplenishRate()),
+					CheckpointProperty<"MinimumFuelRatio">(jetpackToSave->GetMinimumFuelRatio()),
+					CheckpointProperty<"JumpAngleRange">(jetpackToSave->GetJetAngleRange()),
+					CheckpointProperty<"CanAdjustAngleWhileFiring">(jetpackToSave->GetCanAdjustAngleWhileFiring()),
+					CheckpointProperty<"SpecialBehaviour_JetThrustBonusMultiplier">(jetpackToSave->GetJetThrustBonusMultiplier()));
+			} else {
+				writer.NewPropertyWithValue("JumpReplenishRate", jetpackToSave->GetJetReplenishRate());
+				writer.NewPropertyWithValue("MinimumFuelRatio", jetpackToSave->GetMinimumFuelRatio());
+				writer.NewPropertyWithValue("JumpAngleRange", jetpackToSave->GetJetAngleRange());
+				writer.NewPropertyWithValue("CanAdjustAngleWhileFiring", jetpackToSave->GetCanAdjustAngleWhileFiring());
+				writer.NewPropertyWithValue("SpecialBehaviour_JetThrustBonusMultiplier", jetpackToSave->GetJetThrustBonusMultiplier());
+			}
 		}
 
 		if (const Arm* armToSave = dynamic_cast<const Arm*>(sceneObjectToSave)) {
 			WriteHardcodedAttachableOrNone("HeldDevice", armToSave->GetHeldDevice());
 			if (saveFullData) {
-				writer.NewPropertyWithValue("HandCurrentOffset", armToSave->GetHandCurrentOffset());
-				writer.NewPropertyWithValue("HandPosition", armToSave->GetHandPos());
-				writer.NewPropertyWithValue("HandPrevPosition", armToSave->GetHandPrevPos());
-				writer.NewPropertyWithValue("SpecialBehaviour_HandHasReachedCurrentTarget", armToSave->GetHandHasReachedCurrentTarget());
-				writer.NewPropertyWithValue("HandMovementDelayTimerStart", armToSave->GetHandMovementDelayTimerStart());
-				writer.NewPropertyWithValue("HandMovementDelayTimerLimitTicks", armToSave->GetHandMovementDelayTimerLimitTicks());
+				if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+					WriteCapturedProperties(writer,
+						CheckpointProperty<"HandCurrentOffset">(armToSave->GetHandCurrentOffset()),
+						CheckpointProperty<"HandPosition">(armToSave->GetHandPos()),
+						CheckpointProperty<"HandPrevPosition">(armToSave->GetHandPrevPos()),
+						CheckpointProperty<"SpecialBehaviour_HandHasReachedCurrentTarget">(armToSave->GetHandHasReachedCurrentTarget()),
+						CheckpointProperty<"HandMovementDelayTimerStart">(armToSave->GetHandMovementDelayTimerStart()),
+						CheckpointProperty<"HandMovementDelayTimerLimitTicks">(armToSave->GetHandMovementDelayTimerLimitTicks()));
+				} else {
+					writer.NewPropertyWithValue("HandCurrentOffset", armToSave->GetHandCurrentOffset());
+					writer.NewPropertyWithValue("HandPosition", armToSave->GetHandPos());
+					writer.NewPropertyWithValue("HandPrevPosition", armToSave->GetHandPrevPos());
+					writer.NewPropertyWithValue("SpecialBehaviour_HandHasReachedCurrentTarget", armToSave->GetHandHasReachedCurrentTarget());
+					writer.NewPropertyWithValue("HandMovementDelayTimerStart", armToSave->GetHandMovementDelayTimerStart());
+					writer.NewPropertyWithValue("HandMovementDelayTimerLimitTicks", armToSave->GetHandMovementDelayTimerLimitTicks());
+				}
 				if (writer.IsCapturing()) {
 					for (const auto& target: armToSave->CaptureHandTargetsForSave()) writer.NewPropertyWithValue("AddHandTarget", target);
 				} else {
@@ -2064,9 +2182,16 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		if (const Leg* legToSave = dynamic_cast<const Leg*>(sceneObjectToSave)) {
 			WriteHardcodedAttachableOrNone("Foot", legToSave->GetFoot());
 			if (saveFullData) {
-				writer.NewPropertyWithValue("AnkleOffset", legToSave->GetAnkleOffset());
-				writer.NewPropertyWithValue("TargetPosition", legToSave->GetTargetPosition());
-				writer.NewPropertyWithValue("SpecialBehaviour_NormalizedExtension", legToSave->GetNormalizedExtension());
+				if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+					WriteCapturedProperties(writer,
+						CheckpointProperty<"AnkleOffset">(legToSave->GetAnkleOffset()),
+						CheckpointProperty<"TargetPosition">(legToSave->GetTargetPosition()),
+						CheckpointProperty<"SpecialBehaviour_NormalizedExtension">(legToSave->GetNormalizedExtension()));
+				} else {
+					writer.NewPropertyWithValue("AnkleOffset", legToSave->GetAnkleOffset());
+					writer.NewPropertyWithValue("TargetPosition", legToSave->GetTargetPosition());
+					writer.NewPropertyWithValue("SpecialBehaviour_NormalizedExtension", legToSave->GetNormalizedExtension());
+				}
 			}
 		}
 
@@ -2086,16 +2211,30 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		if (const HDFirearm* hdFirearmToSave = dynamic_cast<const HDFirearm*>(sceneObjectToSave)) {
 			WriteHardcodedAttachableOrNone("Magazine", hdFirearmToSave->GetMagazine());
 			WriteHardcodedAttachableOrNone("Flash", hdFirearmToSave->GetFlash());
-			writer.NewPropertyWithValue("LastFireTimerStart", hdFirearmToSave->GetLastFireTimerStart());
-			writer.NewPropertyWithValue("ReloadTimerStart", hdFirearmToSave->GetReloadTimerStart());
-			writer.NewPropertyWithValue("ReloadTimerLimitTicks", hdFirearmToSave->GetReloadTimerLimitTicks());
-			writer.NewPropertyWithValue("SpecialBehaviour_Reloading", hdFirearmToSave->IsReloading());
-			writer.NewPropertyWithValue("SpecialBehaviour_DoneReloading", hdFirearmToSave->DoneReloading());
-			writer.NewPropertyWithValue("SpecialBehaviour_HasPlayedEndReloadSound", hdFirearmToSave->HasPlayedEndReloadSound());
-			writer.NewPropertyWithValue("SpecialBehaviour_FireFrame", hdFirearmToSave->FiredFrame());
-			writer.NewPropertyWithValue("SpecialBehaviour_FiredLastFrame", hdFirearmToSave->FiredLastFrame());
-			writer.NewPropertyWithValue("SpecialBehaviour_FiredOnce", hdFirearmToSave->FiredOnce());
-			writer.NewPropertyWithValue("SpecialBehaviour_AlreadyClicked", hdFirearmToSave->GetAlreadyClicked());
+			if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+				WriteCapturedProperties(writer,
+					CheckpointProperty<"LastFireTimerStart">(hdFirearmToSave->GetLastFireTimerStart()),
+					CheckpointProperty<"ReloadTimerStart">(hdFirearmToSave->GetReloadTimerStart()),
+					CheckpointProperty<"ReloadTimerLimitTicks">(hdFirearmToSave->GetReloadTimerLimitTicks()),
+					CheckpointProperty<"SpecialBehaviour_Reloading">(hdFirearmToSave->IsReloading()),
+					CheckpointProperty<"SpecialBehaviour_DoneReloading">(hdFirearmToSave->DoneReloading()),
+					CheckpointProperty<"SpecialBehaviour_HasPlayedEndReloadSound">(hdFirearmToSave->HasPlayedEndReloadSound()),
+					CheckpointProperty<"SpecialBehaviour_FireFrame">(hdFirearmToSave->FiredFrame()),
+					CheckpointProperty<"SpecialBehaviour_FiredLastFrame">(hdFirearmToSave->FiredLastFrame()),
+					CheckpointProperty<"SpecialBehaviour_FiredOnce">(hdFirearmToSave->FiredOnce()),
+					CheckpointProperty<"SpecialBehaviour_AlreadyClicked">(hdFirearmToSave->GetAlreadyClicked()));
+			} else {
+				writer.NewPropertyWithValue("LastFireTimerStart", hdFirearmToSave->GetLastFireTimerStart());
+				writer.NewPropertyWithValue("ReloadTimerStart", hdFirearmToSave->GetReloadTimerStart());
+				writer.NewPropertyWithValue("ReloadTimerLimitTicks", hdFirearmToSave->GetReloadTimerLimitTicks());
+				writer.NewPropertyWithValue("SpecialBehaviour_Reloading", hdFirearmToSave->IsReloading());
+				writer.NewPropertyWithValue("SpecialBehaviour_DoneReloading", hdFirearmToSave->DoneReloading());
+				writer.NewPropertyWithValue("SpecialBehaviour_HasPlayedEndReloadSound", hdFirearmToSave->HasPlayedEndReloadSound());
+				writer.NewPropertyWithValue("SpecialBehaviour_FireFrame", hdFirearmToSave->FiredFrame());
+				writer.NewPropertyWithValue("SpecialBehaviour_FiredLastFrame", hdFirearmToSave->FiredLastFrame());
+				writer.NewPropertyWithValue("SpecialBehaviour_FiredOnce", hdFirearmToSave->FiredOnce());
+				writer.NewPropertyWithValue("SpecialBehaviour_AlreadyClicked", hdFirearmToSave->GetAlreadyClicked());
+			}
 		}
 
 		if (const Magazine* magazineToSave = dynamic_cast<const Magazine*>(sceneObjectToSave)) {
@@ -2122,30 +2261,62 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 					controllerStateMask |= (1LL << state);
 				}
 			}
-			writer.NewPropertyWithValue("ControllerStateMask", controllerStateMask);
-			writer.NewPropertyWithValue("ControllerAnalogMove", actorController->GetAnalogMove());
-			writer.NewPropertyWithValue("ControllerAnalogAim", actorController->GetAnalogAim());
-			writer.NewPropertyWithValue("ControllerInputMode", static_cast<int>(actorController->GetInputMode()));
-			writer.NewPropertyWithValue("ControllerPlayer", actorController->GetPlayerRaw());
+			if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+				WriteCapturedProperties(writer,
+					CheckpointProperty<"ControllerStateMask">(controllerStateMask),
+					CheckpointProperty<"ControllerAnalogMove">(actorController->GetAnalogMove()),
+					CheckpointProperty<"ControllerAnalogAim">(actorController->GetAnalogAim()),
+					CheckpointProperty<"ControllerInputMode">(static_cast<int>(actorController->GetInputMode())),
+					CheckpointProperty<"ControllerPlayer">(actorController->GetPlayerRaw()));
+			} else {
+				writer.NewPropertyWithValue("ControllerStateMask", controllerStateMask);
+				writer.NewPropertyWithValue("ControllerAnalogMove", actorController->GetAnalogMove());
+				writer.NewPropertyWithValue("ControllerAnalogAim", actorController->GetAnalogAim());
+				writer.NewPropertyWithValue("ControllerInputMode", static_cast<int>(actorController->GetInputMode()));
+				writer.NewPropertyWithValue("ControllerPlayer", actorController->GetPlayerRaw());
+			}
 
-			writer.NewPropertyWithValue("AimAngle", actorToSave->GetAimAngle(false));
-			writer.NewPropertyWithValue("SpecialBehaviour_AimState", actorToSave->GetAimState());
-			writer.NewPropertyWithValue("AimTimerStart", actorToSave->GetAimTimerStart());
-			writer.NewPropertyWithValue("SpecialBehaviour_SharpAimProgress", actorToSave->GetSharpAimProgress());
-			writer.NewPropertyWithValue("SpecialBehaviour_SharpAimMaxedOut", actorToSave->GetSharpAimMaxedOut());
-			writer.NewPropertyWithValue("SharpAimTimerStart", actorToSave->GetSharpAimTimerStart());
+			if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+				WriteCapturedProperties(writer,
+					CheckpointProperty<"AimAngle">(actorToSave->GetAimAngle(false)),
+					CheckpointProperty<"SpecialBehaviour_AimState">(actorToSave->GetAimState()),
+					CheckpointProperty<"AimTimerStart">(actorToSave->GetAimTimerStart()),
+					CheckpointProperty<"SpecialBehaviour_SharpAimProgress">(actorToSave->GetSharpAimProgress()),
+					CheckpointProperty<"SpecialBehaviour_SharpAimMaxedOut">(actorToSave->GetSharpAimMaxedOut()),
+					CheckpointProperty<"SharpAimTimerStart">(actorToSave->GetSharpAimTimerStart()));
+			} else {
+				writer.NewPropertyWithValue("AimAngle", actorToSave->GetAimAngle(false));
+				writer.NewPropertyWithValue("SpecialBehaviour_AimState", actorToSave->GetAimState());
+				writer.NewPropertyWithValue("AimTimerStart", actorToSave->GetAimTimerStart());
+				writer.NewPropertyWithValue("SpecialBehaviour_SharpAimProgress", actorToSave->GetSharpAimProgress());
+				writer.NewPropertyWithValue("SpecialBehaviour_SharpAimMaxedOut", actorToSave->GetSharpAimMaxedOut());
+				writer.NewPropertyWithValue("SharpAimTimerStart", actorToSave->GetSharpAimTimerStart());
+			}
 			if (const PieMenu* pieMenu = actorToSave->GetPieMenu()) {
 				writer.NewPropertyWithValue("PieMenuState", pieMenu->PackInteractionState());
 			}
-			writer.NewPropertyWithValue("SpecialBehaviour_MovementState", static_cast<int>(actorToSave->GetMovementState()));
-			writer.NewPropertyWithValue("LastSecondTimerStart", actorToSave->GetLastSecondTimerStart());
-			writer.NewPropertyWithValue("StableRecoverTimerStart", actorToSave->GetStableRecoverTimerStart());
-			writer.NewPropertyWithValue("HeartBeatTimerStart", actorToSave->GetHeartBeatTimerStart());
-			writer.NewPropertyWithValue("NewControlTimerStart", actorToSave->GetNewControlTimerStart());
-			writer.NewPropertyWithValue("DeathTimerStart", actorToSave->GetDeathTimerStart());
-			writer.NewPropertyWithValue("AlarmTimerStart", actorToSave->GetAlarmTimerStart());
-			writer.NewPropertyWithValue("SpecialBehaviour_RecentMovement", actorToSave->GetRecentMovement());
-			writer.NewPropertyWithValue("SpecialBehaviour_LastSecondPos", actorToSave->GetLastSecondPos());
+			if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+				WriteCapturedProperties(writer,
+					CheckpointProperty<"SpecialBehaviour_MovementState">(static_cast<int>(actorToSave->GetMovementState())),
+					CheckpointProperty<"LastSecondTimerStart">(actorToSave->GetLastSecondTimerStart()),
+					CheckpointProperty<"StableRecoverTimerStart">(actorToSave->GetStableRecoverTimerStart()),
+					CheckpointProperty<"HeartBeatTimerStart">(actorToSave->GetHeartBeatTimerStart()),
+					CheckpointProperty<"NewControlTimerStart">(actorToSave->GetNewControlTimerStart()),
+					CheckpointProperty<"DeathTimerStart">(actorToSave->GetDeathTimerStart()),
+					CheckpointProperty<"AlarmTimerStart">(actorToSave->GetAlarmTimerStart()),
+					CheckpointProperty<"SpecialBehaviour_RecentMovement">(actorToSave->GetRecentMovement()),
+					CheckpointProperty<"SpecialBehaviour_LastSecondPos">(actorToSave->GetLastSecondPos()));
+			} else {
+				writer.NewPropertyWithValue("SpecialBehaviour_MovementState", static_cast<int>(actorToSave->GetMovementState()));
+				writer.NewPropertyWithValue("LastSecondTimerStart", actorToSave->GetLastSecondTimerStart());
+				writer.NewPropertyWithValue("StableRecoverTimerStart", actorToSave->GetStableRecoverTimerStart());
+				writer.NewPropertyWithValue("HeartBeatTimerStart", actorToSave->GetHeartBeatTimerStart());
+				writer.NewPropertyWithValue("NewControlTimerStart", actorToSave->GetNewControlTimerStart());
+				writer.NewPropertyWithValue("DeathTimerStart", actorToSave->GetDeathTimerStart());
+				writer.NewPropertyWithValue("AlarmTimerStart", actorToSave->GetAlarmTimerStart());
+				writer.NewPropertyWithValue("SpecialBehaviour_RecentMovement", actorToSave->GetRecentMovement());
+				writer.NewPropertyWithValue("SpecialBehaviour_LastSecondPos", actorToSave->GetLastSecondPos());
+			}
 			if (const long itemInReach = actorToSave->GetItemInReachUniqueID(); itemInReach > 0) {
 				writer.NewPropertyWithValue("ItemInReachUniqueID", itemInReach);
 			}
@@ -2155,10 +2326,18 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				writer.NewPropertyWithValue("MOMoveTargetUniqueID", moveTarget);
 			}
 			writer.PerPeerEnd();
-			writer.NewPropertyWithValue("SpecialBehaviour_LastAlarmPos", actorToSave->GetLastAlarmPosRaw());
-			writer.NewPropertyWithValue("SpecialBehaviour_ViewPoint", actorToSave->GetViewPointRaw());
-			writer.NewPropertyWithValue("SpecialBehaviour_GoldPicked", actorToSave->GetGoldPicked());
-			writer.NewPropertyWithValue("SpecialBehaviour_PrevHealth", actorToSave->GetPrevHealth());
+			if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+				WriteCapturedProperties(writer,
+					CheckpointProperty<"SpecialBehaviour_LastAlarmPos">(actorToSave->GetLastAlarmPosRaw()),
+					CheckpointProperty<"SpecialBehaviour_ViewPoint">(actorToSave->GetViewPointRaw()),
+					CheckpointProperty<"SpecialBehaviour_GoldPicked">(actorToSave->GetGoldPicked()),
+					CheckpointProperty<"SpecialBehaviour_PrevHealth">(actorToSave->GetPrevHealth()));
+			} else {
+				writer.NewPropertyWithValue("SpecialBehaviour_LastAlarmPos", actorToSave->GetLastAlarmPosRaw());
+				writer.NewPropertyWithValue("SpecialBehaviour_ViewPoint", actorToSave->GetViewPointRaw());
+				writer.NewPropertyWithValue("SpecialBehaviour_GoldPicked", actorToSave->GetGoldPicked());
+				writer.NewPropertyWithValue("SpecialBehaviour_PrevHealth", actorToSave->GetPrevHealth());
+			}
 
 		}
 
@@ -2203,22 +2382,42 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				writer.NewPropertyWithValue("LimbGroupPositions", writer.IsCapturing() ? aHumanToSave->CaptureLimbGroupPositions() : CheckpointText(aHumanToSave->GetLimbGroupPositions()));
 				writer.NewPropertyWithValue("LimbGroupInertia", writer.IsCapturing() ? aHumanToSave->CaptureLimbGroupInertia() : CheckpointText(aHumanToSave->GetLimbGroupInertia()));
 				writer.NewPropertyWithValue("SpecialBehaviour_WalkState", writer.IsCapturing() ? aHumanToSave->CaptureWalkState() : CheckpointText(aHumanToSave->GetWalkState()));
-				writer.NewPropertyWithValue("SharpAimRevertTimerStart", aHumanToSave->GetSharpAimRevertTimerStart());
-				writer.NewPropertyWithValue("SpecialBehaviour_CanActivateBGItem", aHumanToSave->GetCanActivateBGItem());
-				writer.NewPropertyWithValue("SpecialBehaviour_TriggerPulled", aHumanToSave->GetTriggerPulled());
-				writer.NewPropertyWithValue("SpecialBehaviour_WaitingToReloadOffhand", aHumanToSave->IsWaitingToReloadOffhand());
-				writer.NewPropertyWithValue("SpecialBehaviour_ProneState", static_cast<int>(aHumanToSave->GetProneState()));
-				writer.NewPropertyWithValue("SpecialBehaviour_ArmsState", static_cast<int>(aHumanToSave->GetUpperBodyState()));
-				writer.NewPropertyWithValue("SpecialBehaviour_ArmClimbingFG", aHumanToSave->IsArmClimbing(0));
-				writer.NewPropertyWithValue("SpecialBehaviour_ArmClimbingBG", aHumanToSave->IsArmClimbing(1));
-				writer.NewPropertyWithValue("SpecialBehaviour_Aiming", aHumanToSave->IsAiming());
-				writer.NewPropertyWithValue("SpecialBehaviour_StrideFrame", aHumanToSave->StrideFrame());
-				writer.NewPropertyWithValue("SpecialBehaviour_StrideStart", aHumanToSave->GetStrideStart());
-				writer.NewPropertyWithValue("ProneTimerStart", aHumanToSave->GetProneTimerStart());
-				writer.NewPropertyWithValue("StrideTimerStart", aHumanToSave->GetStrideTimerStart());
-				writer.NewPropertyWithValue("ThrowTimerStart", aHumanToSave->GetThrowTimerStart());
-				writer.NewPropertyWithValue("SpecialBehaviour_CrouchAmount", aHumanToSave->GetCrouchAmount());
-				writer.NewPropertyWithValue("SpecialBehaviour_CrouchAmountOverride", aHumanToSave->GetCrouchAmountOverride());
+				if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+					WriteCapturedProperties(writer,
+						CheckpointProperty<"SharpAimRevertTimerStart">(aHumanToSave->GetSharpAimRevertTimerStart()),
+						CheckpointProperty<"SpecialBehaviour_CanActivateBGItem">(aHumanToSave->GetCanActivateBGItem()),
+						CheckpointProperty<"SpecialBehaviour_TriggerPulled">(aHumanToSave->GetTriggerPulled()),
+						CheckpointProperty<"SpecialBehaviour_WaitingToReloadOffhand">(aHumanToSave->IsWaitingToReloadOffhand()),
+						CheckpointProperty<"SpecialBehaviour_ProneState">(static_cast<int>(aHumanToSave->GetProneState())),
+						CheckpointProperty<"SpecialBehaviour_ArmsState">(static_cast<int>(aHumanToSave->GetUpperBodyState())),
+						CheckpointProperty<"SpecialBehaviour_ArmClimbingFG">(aHumanToSave->IsArmClimbing(0)),
+						CheckpointProperty<"SpecialBehaviour_ArmClimbingBG">(aHumanToSave->IsArmClimbing(1)),
+						CheckpointProperty<"SpecialBehaviour_Aiming">(aHumanToSave->IsAiming()),
+						CheckpointProperty<"SpecialBehaviour_StrideFrame">(aHumanToSave->StrideFrame()),
+						CheckpointProperty<"SpecialBehaviour_StrideStart">(aHumanToSave->GetStrideStart()),
+						CheckpointProperty<"ProneTimerStart">(aHumanToSave->GetProneTimerStart()),
+						CheckpointProperty<"StrideTimerStart">(aHumanToSave->GetStrideTimerStart()),
+						CheckpointProperty<"ThrowTimerStart">(aHumanToSave->GetThrowTimerStart()),
+						CheckpointProperty<"SpecialBehaviour_CrouchAmount">(aHumanToSave->GetCrouchAmount()),
+						CheckpointProperty<"SpecialBehaviour_CrouchAmountOverride">(aHumanToSave->GetCrouchAmountOverride()));
+				} else {
+					writer.NewPropertyWithValue("SharpAimRevertTimerStart", aHumanToSave->GetSharpAimRevertTimerStart());
+					writer.NewPropertyWithValue("SpecialBehaviour_CanActivateBGItem", aHumanToSave->GetCanActivateBGItem());
+					writer.NewPropertyWithValue("SpecialBehaviour_TriggerPulled", aHumanToSave->GetTriggerPulled());
+					writer.NewPropertyWithValue("SpecialBehaviour_WaitingToReloadOffhand", aHumanToSave->IsWaitingToReloadOffhand());
+					writer.NewPropertyWithValue("SpecialBehaviour_ProneState", static_cast<int>(aHumanToSave->GetProneState()));
+					writer.NewPropertyWithValue("SpecialBehaviour_ArmsState", static_cast<int>(aHumanToSave->GetUpperBodyState()));
+					writer.NewPropertyWithValue("SpecialBehaviour_ArmClimbingFG", aHumanToSave->IsArmClimbing(0));
+					writer.NewPropertyWithValue("SpecialBehaviour_ArmClimbingBG", aHumanToSave->IsArmClimbing(1));
+					writer.NewPropertyWithValue("SpecialBehaviour_Aiming", aHumanToSave->IsAiming());
+					writer.NewPropertyWithValue("SpecialBehaviour_StrideFrame", aHumanToSave->StrideFrame());
+					writer.NewPropertyWithValue("SpecialBehaviour_StrideStart", aHumanToSave->GetStrideStart());
+					writer.NewPropertyWithValue("ProneTimerStart", aHumanToSave->GetProneTimerStart());
+					writer.NewPropertyWithValue("StrideTimerStart", aHumanToSave->GetStrideTimerStart());
+					writer.NewPropertyWithValue("ThrowTimerStart", aHumanToSave->GetThrowTimerStart());
+					writer.NewPropertyWithValue("SpecialBehaviour_CrouchAmount", aHumanToSave->GetCrouchAmount());
+					writer.NewPropertyWithValue("SpecialBehaviour_CrouchAmountOverride", aHumanToSave->GetCrouchAmountOverride());
+				}
 			} else if (const ACrab* aCrabToSave = dynamic_cast<const ACrab*>(sceneObjectToSave)) {
 				WriteHardcodedAttachableOrNone("Turret", aCrabToSave->GetTurret());
 				WriteHardcodedAttachableOrNone("Jetpack", aCrabToSave->GetJetpack());
@@ -2281,15 +2480,28 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				writer.NewPropertyWithValue("SpecialBehaviour_LateralControl", acDropShipToSave->GetLateralControl());
 			}
 			if (const ACraft* aCraftToSave = dynamic_cast<const ACraft*>(sceneObjectToSave)) {
-				writer.NewPropertyWithValue("SpecialBehaviour_HatchState", static_cast<int>(aCraftToSave->GetHatchState()));
-				writer.NewPropertyWithValue("HatchTimerStart", aCraftToSave->GetHatchTimerStart());
-				writer.NewPropertyWithValue("ExitTimerStart", aCraftToSave->GetExitTimerStart());
-				writer.NewPropertyWithValue("FlippedTimerStart", aCraftToSave->GetFlippedTimerStart());
-				writer.NewPropertyWithValue("CrashTimerStart", aCraftToSave->GetCrashTimerStart());
-				writer.NewPropertyWithValue("NetworkDeliveryTimerStart", aCraftToSave->GetNetworkDeliveryTimerStart());
-				writer.NewPropertyWithValue("SpecialBehaviour_NetworkDelivery", aCraftToSave->IsNetworkDelivery());
-				writer.NewPropertyWithValue("SpecialBehaviour_ExitLinePhase", aCraftToSave->GetExitLinePhase());
-				writer.NewPropertyWithValue("SpecialBehaviour_CurrentExit", aCraftToSave->GetCurrentExitIndex());
+				if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+					WriteCapturedProperties(writer,
+						CheckpointProperty<"SpecialBehaviour_HatchState">(static_cast<int>(aCraftToSave->GetHatchState())),
+						CheckpointProperty<"HatchTimerStart">(aCraftToSave->GetHatchTimerStart()),
+						CheckpointProperty<"ExitTimerStart">(aCraftToSave->GetExitTimerStart()),
+						CheckpointProperty<"FlippedTimerStart">(aCraftToSave->GetFlippedTimerStart()),
+						CheckpointProperty<"CrashTimerStart">(aCraftToSave->GetCrashTimerStart()),
+						CheckpointProperty<"NetworkDeliveryTimerStart">(aCraftToSave->GetNetworkDeliveryTimerStart()),
+						CheckpointProperty<"SpecialBehaviour_NetworkDelivery">(aCraftToSave->IsNetworkDelivery()),
+						CheckpointProperty<"SpecialBehaviour_ExitLinePhase">(aCraftToSave->GetExitLinePhase()),
+						CheckpointProperty<"SpecialBehaviour_CurrentExit">(aCraftToSave->GetCurrentExitIndex()));
+				} else {
+					writer.NewPropertyWithValue("SpecialBehaviour_HatchState", static_cast<int>(aCraftToSave->GetHatchState()));
+					writer.NewPropertyWithValue("HatchTimerStart", aCraftToSave->GetHatchTimerStart());
+					writer.NewPropertyWithValue("ExitTimerStart", aCraftToSave->GetExitTimerStart());
+					writer.NewPropertyWithValue("FlippedTimerStart", aCraftToSave->GetFlippedTimerStart());
+					writer.NewPropertyWithValue("CrashTimerStart", aCraftToSave->GetCrashTimerStart());
+					writer.NewPropertyWithValue("NetworkDeliveryTimerStart", aCraftToSave->GetNetworkDeliveryTimerStart());
+					writer.NewPropertyWithValue("SpecialBehaviour_NetworkDelivery", aCraftToSave->IsNetworkDelivery());
+					writer.NewPropertyWithValue("SpecialBehaviour_ExitLinePhase", aCraftToSave->GetExitLinePhase());
+					writer.NewPropertyWithValue("SpecialBehaviour_CurrentExit", aCraftToSave->GetCurrentExitIndex());
+				}
 				for (long uid: aCraftToSave->GetExitIncomingMOUniqueIDs()) {
 					writer.NewPropertyWithValue("ExitIncomingMOUniqueID", uid);
 				}
