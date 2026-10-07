@@ -5016,19 +5016,12 @@ static void DrawFrameWithPreviews() {
 	NetModerationGUIProbe::AfterDraw();
 }
 
-/// Draws the wait; returns whether a held seat's player asked to leave it.
+/// Draws the network wait; returns whether the player explicitly left through the local menu.
 static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, const std::string& heldLine = {}) {
 	PollSDLEvents();
 	g_UInputMan.Update(false);
-	// Leaving the wait keeps the ticket and the currently held seat; the host can still reassign it.
-	const auto* panel = g_MenuMan.GetNetworkPanel();
-	const bool chatOpen = panel && panel->IsChatEntryOpen();
-	const bool leave = NetHeldWaitShouldLeave(heldRejoin, g_MenuMan.IsNetworkPanelOpen(), chatOpen, g_UInputMan.KeyPressed(SDLK_ESCAPE));
-	if (!chatOpen && (g_UInputMan.KeyPressed(SDLK_F6) || (g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.AnyStartPress(false)))) {
-		g_MenuMan.ToggleNetworkPanel();
-	}
-	g_MenuMan.UpdateNetworkUI();
-	g_MenuMan.UpdateLocalPauseMenu();
+	// Escape opens or backs out of the local menu; only its explicit Leave/End action exits the wait.
+	const bool leave = g_MenuMan.UpdateNetworkWaitInput();
 	g_WindowMan.ClearBackbuffer();
 	clear_to_color(g_FrameMan.GetBackBuffer32(), makeacol32(20, 22, 27, 255));
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
@@ -5043,7 +5036,7 @@ static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, con
 	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8, resyncLine, GUIFont::Centre);
 	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncLine);
 	if (heldRejoin) {
-		const std::string controls = std::to_string(elapsedSeconds) + " s  /  F6: Players  /  Esc: leave";
+		const std::string controls = std::to_string(elapsedSeconds) + " s  /  F6: Players  /  Esc: pause menu";
 		g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 10 + g_FrameMan.GetSmallFont(true)->GetFontHeight(), controls, GUIFont::Centre);
 		MenuAutomation::NoteDrawnText("RejoinOverlay", controls);
 	}
@@ -7063,13 +7056,12 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			const std::string unreachableAtStop = stopLine.rfind("The host is unreachable", 0) == 0 ? stopLine : std::string();
 			// The wait's screen goes up before the host's snapshot save holds this thread, so the stopped match says why at once.
 			const bool leaveAtOnce = UpdateResyncUI(0, heldRejoin, unreachableAtStop);
-			if (heldRejoin) {
-				resyncOk = g_NetMatchService.BeginHeldRejoin(&resyncError);
-			} else resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
 			if (leaveAtOnce) {
 				leftTheWait = true;
 				resyncOk = false;
-			}
+			} else if (heldRejoin) {
+				resyncOk = g_NetMatchService.BeginHeldRejoin(&resyncError);
+			} else resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
 			std::string launchPreset;
 			for (bool attempt = resyncOk; attempt;) {
 				attempt = false;
@@ -9129,13 +9121,14 @@ void RunGameLoop() {
 					// Leaving a running net match: a clean leave lets N-peer survivors keep playing and,
 					// with nobody left, ends their match at once - unlike a drop, which holds the seat
 					// open for its reclaim window. The §7 exchange runs before the link goes down.
-					if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+					const bool networkMatchLeft = g_NetMatchService.GetState() == NetMatchServiceState::Running;
+					if (networkMatchLeft) {
 						g_ConsoleMan.PrintString("NETWORK: Match left");
 						g_NetMatchService.LeaveMatch("Match left");
 					}
 					if (s_netMatchServiceE2E && !s_menuScriptPath.empty() && !s_menuScriptComplete && !s_menuScriptFailed) {
 						s_menuScriptHoldE2ePause = true;
-						g_MenuMan.HandleTransitionIntoMenuLoop();
+						g_MenuMan.HandleTransitionIntoMenuLoop(networkMatchLeft);
 						RunMenuLoop();
 						s_menuScriptHoldE2ePause = false;
 						if (!s_menuScriptComplete && !System::IsSetToQuit()) continue;
@@ -9149,7 +9142,7 @@ void RunGameLoop() {
 						System::SetQuit(true);
 						break;
 					}
-					g_MenuMan.HandleTransitionIntoMenuLoop();
+					g_MenuMan.HandleTransitionIntoMenuLoop(networkMatchLeft);
 					RunMenuLoop();
 				}
 			}

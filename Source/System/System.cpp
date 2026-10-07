@@ -458,6 +458,23 @@ const std::string System::s_ModulePackageExtension = ".rte";
 const std::string System::s_ZippedModulePackageExtension = ".zip";
 const std::unordered_set<std::string> System::s_SupportedExtensions = {".ini", ".txt", ".lua", ".cfg", ".bmp", ".png", ".jpg", ".jpeg", ".wav", ".ogg", ".mp3", ".flac"};
 
+std::filesystem::path System::ResolveDataRoot(const std::filesystem::path& workingDirectory, const std::filesystem::path& executable) {
+	const auto hasData = [](const std::filesystem::path& directory) {
+		std::error_code error;
+		return std::filesystem::is_regular_file(directory / "Data/Base.rte/Index.ini", error) &&
+		       std::filesystem::is_regular_file(directory / "Data/Base.rte/Shaders/ScreenBlit.vert", error);
+	};
+	if (hasData(workingDirectory)) return workingDirectory;
+	std::error_code error;
+	const auto actualExecutable = std::filesystem::weakly_canonical(executable, error);
+	if (error) return workingDirectory;
+	for (auto directory = actualExecutable.parent_path(); !directory.empty(); directory = directory.parent_path()) {
+		if (hasData(directory)) return directory;
+		if (directory == directory.parent_path()) break;
+	}
+	return workingDirectory;
+}
+
 void System::Initialize(const char* thisExePathAndName) {
 	if (const char* localeName = std::getenv("CC_TEST_PROCESS_LOCALE"); localeName && std::getenv("CCCP_HEADLESS")) {
 		// Select the test locale before reading settings and presets.
@@ -514,6 +531,11 @@ void System::Initialize(const char* thisExePathAndName) {
 	CFRelease(bundleURL);
 
 #endif
+	const auto dataRoot = ResolveDataRoot(std::filesystem::current_path(), ThisExecutablePath());
+	if (dataRoot != std::filesystem::current_path()) {
+		std::filesystem::current_path(dataRoot);
+		s_WorkingDirectory = dataRoot.generic_string();
+	}
 	if (s_WorkingDirectory.back() != '/') {
 		s_WorkingDirectory.append("/");
 	}

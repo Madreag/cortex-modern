@@ -134,8 +134,9 @@ bool MenuMan::ToggleLocalPauseMenu() {
 		CloseLocalPauseMenu();
 		return true;
 	}
-	// Only a running lockstep match has a session to keep running; everything else pauses as it always has.
-	if (!m_PauseMenu || !ScenarioRunner::IsLockstepControllerSyncActive()) {
+	// Recovery can stop the coordinator while this machine still owns the match.
+	if (!m_PauseMenu || !g_ActivityMan.IsInActivity() ||
+	    (!ScenarioRunner::IsLockstepControllerSyncActive() && !g_NetMatchService.OwnsLiveMatch())) {
 		return false;
 	}
 	m_LocalPauseMenuOpen = true;
@@ -170,7 +171,7 @@ void MenuMan::UpdateLocalPauseMenu() {
 	// The session keeps the menu, not the round: a resync stops the round for a moment with the match alive.
 	const NetMatchServiceState serviceState = g_NetMatchService.GetState();
 	const bool sessionLive = serviceState == NetMatchServiceState::Running || serviceState == NetMatchServiceState::Starting || serviceState == NetMatchServiceState::ReadyToLaunch;
-	if (!sessionLive || !g_ActivityMan.IsInActivity()) {
+	if ((!sessionLive && !g_NetMatchService.OwnsLiveMatch()) || !g_ActivityMan.IsInActivity()) {
 		CloseLocalPauseMenu();
 		return;
 	}
@@ -213,15 +214,36 @@ void MenuMan::UpdateLocalPauseMenu() {
 	}
 }
 
+bool MenuMan::UpdateNetworkWaitInput() {
+	const bool chatOpen = m_NetworkPanel && m_NetworkPanel->IsChatEntryOpen();
+	if (!chatOpen && !IsNetworkPanelOpen() && !m_LocalPauseMenuOpen && g_UInputMan.AnyStartPress(false)) {
+		ToggleLocalPauseMenu();
+	} else if (!chatOpen && !m_LocalPauseMenuOpen &&
+	           (g_UInputMan.KeyPressed(SDLK_F6) || (IsNetworkPanelOpen() && g_UInputMan.AnyStartPress(false)))) {
+		ToggleNetworkPanel();
+	} else if (m_LocalPauseMenuOpen && g_UInputMan.AnyStartPress(false) && !g_UInputMan.KeyPressed(SDLK_ESCAPE)) {
+		RequestLocalPauseMenuBack();
+	}
+	UpdateNetworkUI();
+	UpdateLocalPauseMenu();
+	return !g_ActivityMan.IsInActivity();
+}
+
 void MenuMan::DrawLocalPauseMenu() const {
 	if (m_LocalPauseMenuOpen) {
 		m_PauseMenu->Draw(false);
 	}
 }
 
-void MenuMan::HandleTransitionIntoMenuLoop() {
+void MenuMan::HandleTransitionIntoMenuLoop(bool networkMatchLeft) {
 	// Whatever sends us to the menus ends the match this menu was local to.
 	CloseLocalPauseMenu();
+	if (networkMatchLeft) {
+		// A left match is a completed local activity, so the scenario picker cannot offer Resume Game for it.
+		g_ActivityMan.EndActivity();
+		m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::ScrollingFadeIn);
+		return;
+	}
 	// §11: a match this peer was dropped from sends the player to the main menu, where the rejoin
 	// offer and the retry status are, rather than to the planet screen the preset would pick.
 	if (g_NetMatchService.NeedsRecoveryPump()) {

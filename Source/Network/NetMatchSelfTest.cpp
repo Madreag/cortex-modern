@@ -35,6 +35,22 @@
 #include "MovableMan.h"
 #include "ScenarioRunner.h"
 #include "NetModerationGUIProbe.h"
+#include "MenuAutomation.h"
+#include "GUIDrawRecord.h"
+#include "GUI.h"
+#include "AllegroScreen.h"
+#include "GUITextBox.h"
+#include "FrameMan.h"
+#include "SettingsGUI.h"
+#include "ModManagerGUI.h"
+#include "SaveLoadMenuGUI.h"
+#include "PauseMenuGUI.h"
+#include "MainMenuGUI.h"
+#include "TitleScreen.h"
+#include "GUIInputWrapper.h"
+#include "UInputMan.h"
+#include "WindowMan.h"
+#include <SDL3/SDL.h>
 
 #ifdef SYSTEM_MINIZIP
 #include <minizip/zip.h>
@@ -17540,10 +17556,6 @@ namespace RTE {
 		const auto check = [&](bool ok, const std::string& why) {
 			if (!ok) { std::cerr << "[net-match-selftest] FAIL ui_presentation: " << why << std::endl; passed = false; }
 		};
-		check(!NetHeldWaitShouldLeave(true, false, true, true) && !NetHeldWaitShouldLeave(true, true, false, true),
-		      "Escape cancels an owned chat/panel and also leaves the held-seat wait");
-		check(NetHeldWaitShouldLeave(true, false, false, true) && !NetHeldWaitShouldLeave(false, false, false, true) &&
-		      !NetHeldWaitShouldLeave(true, false, false, false), "held-wait Escape no longer follows its original action outside text focus");
 		const std::string returnNotice = NetReconnectUx::HeldSeatReturnNotice();
 		check(returnNotice.find("AI plays your units") != std::string::npos && returnNotice.find("until the host reassigns it") != std::string::npos,
 		      "in-match leave/rejoin copy promises unconditional seat ownership: " + returnNotice);
@@ -17614,6 +17626,322 @@ namespace RTE {
 		return passed;
 	}
 
+	bool TestPauseNavigationDuringRecovery(std::string* error) {
+		NetMatchService::Construct();
+		struct Restore {
+			std::unique_ptr<Activity> activity;
+			bool inActivity = g_ActivityMan.IsInActivity();
+			Restore() { g_ActivityMan.SwapCheckpointActivity(activity); }
+			~Restore() {
+				if (g_MenuMan.IsLocalPauseMenuOpen()) g_MenuMan.ToggleLocalPauseMenu();
+				GUIInputWrapper::SetAutomationDriving(false);
+				SetPanelDrawRecording(false);
+				g_ActivityMan.SwapCheckpointActivity(activity);
+				g_ActivityMan.SetInActivity(inActivity);
+				NetMatchService::Destruct();
+			}
+		} restore;
+		std::unique_ptr<Activity> game = std::make_unique<GameActivity>();
+		g_ActivityMan.SwapCheckpointActivity(game);
+		g_ActivityMan.GetActivity()->SetActivityState(Activity::Editing);
+		g_ActivityMan.SetInActivity(true);
+		g_NetMatchService.m_State = NetMatchServiceState::Running;
+		g_NetMatchService.m_IsHost = true;
+		g_NetMatchService.m_MatchWasRunning = true;
+		GUIInputWrapper::SetAutomationDriving(true);
+		SetPanelDrawRecording(true);
+		bool waiting = false, leftWait = false;
+		const auto frame = [&] {
+			SDL_Event event{};
+			while (SDL_PollEvent(&event)) g_UInputMan.HandleInputEvent(event);
+			g_UInputMan.Update(!waiting);
+			if (waiting) leftWait = g_MenuMan.UpdateNetworkWaitInput();
+			else g_MenuMan.UpdateLocalPauseMenu();
+			g_MenuMan.DrawLocalPauseMenu();
+			MenuAutomation::AfterDrawnFrame();
+			g_UInputMan.EndFrame();
+		};
+		std::string observation;
+		const auto finishHand = [&] {
+			for (int frames = 0; frames < 90 && MenuAutomation::HandBusy(); ++frames) frame();
+			bool passed = false;
+			return MenuAutomation::HandFinished(passed, observation) && passed;
+		};
+		if (!MenuAutomation::HandGameKey("Escape", [] { return g_MenuMan.IsLocalPauseMenuOpen(); }, "recovering match pause menu", observation) || !finishHand()) {
+			*error = "Escape paused or left the recovering match instead of opening its local menu: " + observation;
+			return false;
+		}
+		if (!MenuAutomation::HandClick(g_MenuMan.GetActivePauseMenu()->AutomationManager(), "ButtonSettings", nullptr, observation) || !finishHand() ||
+		    g_MenuMan.GetActivePauseMenu()->AutomationActiveScreenName() != "PauseSettings") {
+			*error = "the mouse could not open pause Settings: " + observation; return false;
+		}
+		if (!MenuAutomation::HandGameKey("Escape", [] { return g_MenuMan.GetActivePauseMenu() && g_MenuMan.GetActivePauseMenu()->AutomationActiveScreenName() != "PauseSettings"; }, "back from Settings", observation) || !finishHand()) {
+			*error = "Escape did not return Settings to pause: " + observation; return false;
+		}
+		if (!MenuAutomation::HandGameKey("Escape", [] { return !g_MenuMan.IsLocalPauseMenuOpen(); }, "resume recovering match", observation) || !finishHand() ||
+		    !g_ActivityMan.IsInActivity() || g_NetMatchService.GetState() != NetMatchServiceState::Running) {
+			*error = "the second Escape left the match: " + observation; return false;
+		}
+		waiting = true;
+		g_NetMatchService.m_IsHost = false;
+		g_NetMatchService.m_HeldRejoinDriving = true;
+		for (const auto state: {NetMatchServiceState::Running, NetMatchServiceState::Starting, NetMatchServiceState::Failed}) {
+			g_NetMatchService.m_State = state;
+			if (!MenuAutomation::HandGameKey("Escape", [&] { return g_MenuMan.IsLocalPauseMenuOpen(); }, "rejoin wait pause menu", observation) || !finishHand() ||
+			    !MenuAutomation::HandGameKey("Escape", [&] { return !g_MenuMan.IsLocalPauseMenuOpen(); }, "return to rejoin wait", observation) || !finishHand() ||
+			    leftWait || !g_ActivityMan.IsInActivity() || g_NetMatchService.GetState() != state) {
+				*error = "Escape left or restarted the held rejoin wait: " + observation;
+				return false;
+			}
+		}
+		g_NetMatchService.m_State = NetMatchServiceState::Running;
+		g_NetMatchService.m_HeldRejoinDriving = false;
+		if (!MenuAutomation::HandGameKey("Escape", [] { return g_MenuMan.IsLocalPauseMenuOpen(); }, "leave menu", observation) || !finishHand() ||
+		    !MenuAutomation::HandClick(g_MenuMan.GetActivePauseMenu()->AutomationManager(), "ButtonLeaveMatch", nullptr, observation) || !finishHand() ||
+		    !MenuAutomation::HandClick(g_MenuMan.GetActivePauseMenu()->AutomationManager(), "ButtonLeaveConfirm", nullptr, observation) || !finishHand() ||
+		    !leftWait || g_ActivityMan.IsInActivity()) {
+			*error = "the explicit Leave confirmation did not leave the match: " + observation; return false;
+		}
+		g_NetMatchService.LeaveMatch("Match left");
+		g_MenuMan.HandleTransitionIntoMenuLoop(true);
+		if (g_MenuMan.m_TitleScreen->GetTitleTransitionState() != TitleScreen::TitleTransition::ScrollingFadeIn) {
+			*error = "an explicit Leave selected the activity picker instead of the main menu"; return false;
+		}
+		g_MenuMan.SkipTitleIntroForAutomation();
+		g_MenuMan.Update(); g_MenuMan.Draw();
+		auto* resume = g_MenuMan.GetMainMenu()->AutomationManager()->GetControl("ButtonResume");
+		if (!g_ActivityMan.GetActivity()->IsOver() || !g_MenuMan.IsMainMenuInteractive() || (resume && resume->GetVisible())) {
+			*error = "a left match landed on the activity picker or still offered Resume Game"; return false;
+		}
+		g_NetMatchService.m_State = NetMatchServiceState::Idle;
+		g_NetMatchService.m_MatchWasRunning = g_NetMatchService.m_HeldRejoinDriving = false;
+		g_ActivityMan.SetInActivity(true);
+		if (g_MenuMan.ToggleLocalPauseMenu()) {
+			*error = "single player acquired the network pause menu";
+			return false;
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS recovery_pause_settings_escape_resumes_and_wait_escape_never_leaves");
+		return true;
+	}
+
+	bool TestInternetTicketRecovery(std::string* error) {
+		NetH4TicketRecord record;
+		record.hostAddress = "ice:";
+		record.directorySessionId = "recovery-session";
+		NetMatchServiceRequest published;
+		published.address = "ice:";
+		published.port = 41010;
+		const auto request = NetMatchService::BuildHeldRejoinRequest(record, "Returning player", false, published);
+		if (request.sessionId != record.directorySessionId || request.address != published.address || !request.rejoin || request.host) {
+			*error = "a successor route discarded the Internet session required by relay-only rejoin";
+			return false;
+		}
+		NetMatchService client;
+		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		client.m_ReconnectUx.NoteDropped(now, "Lost host");
+		client.m_ReconnectUx.NoteAttemptStarted(now);
+		client.m_OrdinaryTicketRejoin = client.m_HeldRejoinDriving = true;
+		client.m_State = NetMatchServiceState::Failed;
+		client.DriveOrdinaryTicketRejoin();
+		if (client.GetReconnectUx().GetState() == NetReconnectUxState::Retrying || client.m_HeldRejoinRetryAtMs == 0) {
+			*error = "a failed manual rejoin still shows attempt 1 in flight instead of its failure and scheduled retry";
+			return false;
+		}
+		client.m_State = NetMatchServiceState::Starting;
+		client.m_HeldRejoinRetryAtMs = 0;
+		client.m_TicketRejoinAttemptStartedMs = 100;
+		client.m_ReconnectUx.NoteAttemptStarted(now);
+		client.DriveOrdinaryTicketRejoin(100 + NetMatchService::c_TicketRejoinAttemptBudgetMs);
+		if (!client.m_CancelRequested.load() || client.GetReconnectUx().GetState() == NetReconnectUxState::Retrying ||
+		    client.GetLobbySnapshot().statusText.find("did not answer") == std::string::npos) {
+			*error = "an unanswered Connecting attempt is not cancelled with a visible outcome at its deadline"; return false;
+		}
+		for (uint32_t attempt = client.m_ReconnectUx.GetAttempts(); attempt < NetReconnectUx::c_MaxAttempts; ++attempt) {
+			client.m_ReconnectUx.NoteAttemptStarted(now);
+			client.m_ReconnectUx.NoteAttemptFailed(now, "Host unavailable");
+		}
+		client.m_State = NetMatchServiceState::Failed;
+		client.DriveOrdinaryTicketRejoin();
+		if (client.m_HeldRejoinDriving || client.m_ReconnectUx.GetState() != NetReconnectUxState::GaveUp ||
+		    client.m_ReconnectUx.GetAttempts() != NetReconnectUx::c_MaxAttempts) {
+			*error = "an exhausted manual rejoin kept retrying instead of showing its final outcome"; return false;
+		}
+		client.m_ReconnectUx.SetRetryWindowMs(NetMatchService::c_TicketRejoinAttemptBudgetMs * NetReconnectUx::c_MaxAttempts + 300000);
+		client.m_ReconnectUx.NoteReconnected(now);
+		client.m_ReconnectUx.NoteDropped(now + 100, "Later drop");
+		client.m_ReconnectUx.Tick(now + 100 + NetReconnectUx::c_ResumeWindowMs + 1);
+		if (client.m_ReconnectUx.GetState() != NetReconnectUxState::GaveUp) {
+			*error = "a successful ticket return changed the later automatic recovery window"; return false;
+		}
+		{
+			struct Restore {
+				std::string path = NetMatchService::s_TicketStorePath;
+				bool admission = NetMatchService::IsAdmissionEnabled();
+				~Restore() { NetMatchService::SetTicketStorePath(path); NetMatchService::SetAdmissionEnabled(admission); }
+			} restore;
+			const auto path = std::filesystem::current_path() / "Userdata" / "host-return-selftest" / "reconnect.ticket";
+			NetMatchService::SetTicketStorePath(path.string());
+			NetMatchService::SetAdmissionEnabled(true);
+			LoopbackTransport wire;
+			NetMatchService departing;
+			NetLockstepConfig config;
+			config.sessionId = config.roundId = 777; config.localPeerId = 1; config.peerCount = 4;
+			config.scenario = "HostReturnSelfTest"; config.ownershipPolicy = "unique-id-split";
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(777);
+			config.matchConfig.peerCount = 4; config.matchConfig.players.resize(4);
+			for (int i = 0; i < 4; ++i) { config.matchConfig.players[i].peerId = i + 1; config.matchConfig.players[i].team = i % 2; }
+			config.matchConfig.successorOrder = {2, 3, 4};
+			config.matchConfig.migrationPeers = {{2, 41010, {"192.0.2.2", "ice:"}}, {3, 41010, {"192.0.2.3", "ice:"}}};
+			departing.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+			if (!departing.m_Coordinator->StartReplay(wire, config, error)) return false;
+			departing.m_Session = std::make_unique<NetSession>();
+			NetSessionConfig session;
+			session.readyWithoutPeers = true; session.port = 41010;
+			if (!departing.m_Session->StartHost(wire, session, error)) return false;
+			record.recordVersion = NetReconnectTicketStore::RecordVersionFor(false);
+			record.epoch.fill(0x31); record.credential.fill(0x73);
+			record.stableSeat = 1; record.holderGeneration = 1; record.hostSessionId = 777;
+			record.hostAddress = "192.0.2.1:41010"; record.issuedAtUnixMs = now;
+			departing.m_TicketStore.SetPath(path.string());
+			if (!departing.m_TicketStore.Store(record, error)) return false;
+			departing.m_MatchWasRunning = departing.m_IsHost = true;
+			departing.m_LocalPeerId = 1; departing.m_State = NetMatchServiceState::Running;
+			departing.m_DirectoryRow.name = "Test game";
+			departing.ConfirmHostLeave(NetHostLeaveOutcome::HandsOver);
+			departing.LeaveMatch("Match left");
+			NetH4TicketRecord returned;
+			if (departing.m_TicketStore.Load(now, returned, error) != NetH4TicketLoadResult::Loaded || returned.hostAddress != "ice:" ||
+			    returned.directorySessionId != record.directorySessionId || departing.m_TicketStore.LoadRoutes(returned).empty()) {
+				*error = "the departing Internet host saved a private IP instead of the successor's rendezvous and session"; return false;
+			}
+			if (departing.GetReconnectUx().GetHostReturnText().find("Test game") == std::string::npos ||
+			    departing.GetReconnectUx().GetOfferText().find("192.0.2.") != std::string::npos) {
+				*error = "the public host's return offer names an address instead of the game"; return false;
+			}
+			departing.GetReconnectUx().NoteHostReturn(true, "Returned game");
+			if (departing.GetReconnectUx().GetHostReturnText().find("Returned game") == std::string::npos) {
+				*error = "the host watch did not adopt the directory's game name"; return false;
+			}
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS internet_ticket_keeps_session_and_failed_attempt_advances");
+		return true;
+	}
+
+	bool TestDataRootDiscovery(std::string* error) {
+		const auto root = std::filesystem::current_path() / "Userdata" / "data-root-selftest";
+		const auto game = root / "game", selected = root / "selected", build = game / "compiler-output";
+		std::filesystem::create_directories(build);
+		for (const auto& base: {game, selected}) {
+			std::filesystem::create_directories(base / "Data/Base.rte/Shaders");
+			std::ofstream(base / "Data/Base.rte/Index.ini").put('\n');
+			std::ofstream(base / "Data/Base.rte/Shaders/ScreenBlit.vert").put('\n');
+		}
+		const auto executable = build / "CortexCommand";
+		std::ofstream(executable).put('\n');
+		if (System::ResolveDataRoot(build, executable) != game) {
+			*error = "launching from a compiler output directory does not discover the game data above its executable"; return false;
+		}
+		if (System::ResolveDataRoot(selected, executable) != selected || System::ResolveDataRoot(game, executable) != game) {
+			*error = "data discovery replaced an explicitly selected data root and its mods"; return false;
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS build_directory_data_discovery_preserves_selected_root");
+		return true;
+	}
+
+	bool TestMatchChatOpeningText(std::string* error) {
+		NetMatchService::Construct();
+		struct Restore {
+			~Restore() { g_UInputMan.DisableKeys(false); g_UInputMan.TypeIntoSeatInput(false); g_UInputMan.EndFrame(); g_UInputMan.EndSimUpdate(); NetMatchService::Destruct(); }
+		} restore;
+		AllegroScreen screen(g_FrameMan.GetBackBuffer32());
+		NetModerationGUI panel(&screen);
+		panel.m_ChatInMatch = true;
+		NetLobbySnapshot snapshot;
+		SDL_Event key{};
+		key.type = SDL_EVENT_KEY_DOWN; key.key.scancode = SDL_SCANCODE_T; key.key.key = SDLK_T; key.key.down = true;
+		g_UInputMan.HandleInputEvent(key);
+		SDL_Event text{};
+		text.type = SDL_EVENT_TEXT_INPUT; text.text.text = "t";
+		g_UInputMan.HandleInputEvent(text);
+		g_UInputMan.Update(false);
+		panel.UpdateMatchChat(snapshot, false);
+		panel.DrawMatchChat(snapshot);
+		g_UInputMan.EndFrame();
+		key.type = SDL_EVENT_KEY_UP; key.key.down = false;
+		g_UInputMan.HandleInputEvent(key);
+		panel.UpdateMatchChat(snapshot, false);
+		panel.DrawMatchChat(snapshot);
+		g_UInputMan.EndFrame();
+		if (!panel.IsChatEntryOpen() || !panel.m_MatchChatInput || !panel.m_MatchChatInput->GetText().empty()) {
+			*error = "the key that opened match chat leaked into its draft"; return false;
+		}
+		text.text.text = "thanks";
+		g_UInputMan.HandleInputEvent(text);
+		panel.UpdateMatchChat(snapshot, false);
+		panel.DrawMatchChat(snapshot);
+		g_UInputMan.EndFrame();
+		if (panel.m_MatchChatInput->GetText() != "thanks") {
+			*error = "suppressing the opening key also swallowed the player's next typed letter"; return false;
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS chat_opening_key_is_not_text_and_next_text_is_preserved");
+		return true;
+	}
+
+	bool TestLobbyChatReturn(std::string* error) {
+		LoopbackTransport wire;
+		NetMatchService::Construct();
+		struct Restore {
+			~Restore() { GUIInputWrapper::SetAutomationDriving(false); SetPanelDrawRecording(false); g_UInputMan.EndFrame(); g_UInputMan.EndSimUpdate(); NetMatchService::Destruct(); }
+		} restore;
+		g_NetMatchService.m_State = NetMatchServiceState::Starting;
+		g_NetMatchService.m_IsHost = true;
+		g_NetMatchService.m_Session = std::make_unique<NetSession>();
+		NetSessionConfig config;
+		config.readyWithoutPeers = true;
+		if (!g_NetMatchService.m_Session->StartHost(wire, config, error)) return false;
+		g_NetMatchService.m_ChatSession = g_NetMatchService.m_Session.get();
+		GUIInputWrapper::SetAutomationDriving(true);
+		SetPanelDrawRecording(true);
+		AllegroScreen screen(g_FrameMan.GetBackBuffer32());
+		GUIInputWrapper input(-1, true);
+		MainMenuGUI menu(&screen, &input);
+		menu.SetActiveMenuScreen(MainMenuGUI::MenuScreen::MultiplayerScreen, false);
+		const auto frame = [&] {
+			SDL_Event event{};
+			while (SDL_PollEvent(&event)) g_UInputMan.HandleInputEvent(event);
+			g_UInputMan.Update(false);
+			menu.Update(); menu.Draw();
+			MenuAutomation::AfterDrawnFrame();
+			g_UInputMan.EndFrame(); g_UInputMan.EndSimUpdate();
+		};
+		std::string observation;
+		const auto finishHand = [&] {
+			for (int frames = 0; frames < 90 && MenuAutomation::HandBusy(); ++frames) frame();
+			bool passed = false;
+			return MenuAutomation::HandFinished(passed, observation) && passed;
+		};
+		frame();
+		for (const auto& key: {std::string("Return"), std::string("Keypad Enter")}) {
+			const std::string line = "Lobby hello " + key;
+			if (!MenuAutomation::HandType(menu.AutomationManager(), "TextLobbyChat", line, false, observation) || !finishHand() ||
+			    menu.m_MultiplayerLobbyChatInput->GetText() != line || !menu.m_MultiplayerLobbyChatInput->HasFocus()) {
+				*error = "the lobby chat hand failed to type and focus its drawn box: " + observation; return false;
+			}
+			if (!MenuAutomation::HandGameKey(key, [&] { return menu.m_LobbyChatRequestId != 0; }, "focused lobby chat submission", observation) || !finishHand()) {
+				*error = "a delivered " + key + " event did not submit the focused lobby chat: " + observation; return false;
+			}
+			g_NetMatchService.m_Session->Tick(1000);
+			frame();
+			const auto history = g_NetMatchService.ChatHistory();
+			if (menu.m_LobbyChatRequestId || !menu.m_MultiplayerLobbyChatInput->GetText().empty() ||
+			    std::count_if(history.begin(), history.end(), [&](const NetChatEntry& entry) { return entry.text == line; }) != 1) {
+				*error = "lobby Return lost or duplicated the message, or failed to clear the receipted draft"; return false;
+			}
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS focused_lobby_return_and_keypad_enter_submit_once");
+		return true;
+	}
+
 	int NetMatchSelfTest::Run() {
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-match-selftest] FAIL: " << message << std::endl;
@@ -17631,6 +17959,12 @@ namespace RTE {
 			const std::string name(selected);
 			bool passed = false;
 			if (name == "ui-presentation") passed = TestInMatchPresentation(&error);
+			else if (name == "pause-navigation") passed = TestPauseNavigationDuringRecovery(&error);
+			else if (name == "ticket-recovery") passed = TestInternetTicketRecovery(&error);
+			else if (name == "placement-confirm") passed = GameActivity::RunSetupEditorSelfTest(true);
+			else if (name == "data-root") passed = TestDataRootDiscovery(&error);
+			else if (name == "chat-opening") passed = TestMatchChatOpeningText(&error);
+			else if (name == "lobby-return") passed = TestLobbyChatReturn(&error);
 			else if (name == "setup-editor") passed = GameActivity::RunSetupEditorSelfTest();
 			else if (name == "chat-receipts") passed = TestChatReceipts<NetSession>(&error);
 			else if (name == "chat-routing") passed = TestChatRoutingAndBounds(&error);

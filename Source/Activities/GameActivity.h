@@ -123,6 +123,9 @@ namespace RTE {
 
 		/// Whether a seat has flagged itself ready to start.
 		bool IsReadyToStart(int player) const { return player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_ReadyToStart[player]; }
+		bool NeedsPlacementConfirmation(int player) const { return player >= Players::PlayerOne && player < Players::MaxPlayerCount && !m_ReadyToStart[player] && !m_LockstepPlacementSubmitted[player]; }
+		/// Whether the first local seat may use an unmapped keyboard key to finish placement.
+		bool IsPlacementConfirmKeyAvailable(int player, int scancode) const;
 
 		/// Whether this peer has already committed the seat's placement; the commit is in flight until it returns.
 		bool HasSubmittedLockstepPlacement(int player) const { return player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_LockstepPlacementSubmitted[player]; }
@@ -262,7 +265,7 @@ namespace RTE {
 		/// thread before a capture's workers read them.
 		void PrepareCheckpointCapture() const;
 		static bool RunNetLocalUIRestoreSelfTest();
-		static bool RunSetupEditorSelfTest();
+		static bool RunSetupEditorSelfTest(bool confirmOnly = false);
 		static bool RunNetInventoryRelaunchProbe(std::string_view phase);
 
 		/// Locks a player controlled actor to a specific controller mode.

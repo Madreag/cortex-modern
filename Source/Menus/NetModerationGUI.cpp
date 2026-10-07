@@ -1987,6 +1987,14 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot, bool fr
 			m_ChatDisabledKeys = true;
 		}
 		m_Input->SetKeyJoyMouseCursor(true);
+		// SDL can deliver the opening key's text in the same event batch. Remove that prefix only; later typed text stays.
+		const SDL_Keycode letter = SDL_GetKeyFromScancode(chatKey, SDL_GetModState(), false);
+		const auto& text = g_UInputMan.GetTextInput();
+		if (keyChat && letter > 0 && letter < 128 && !text.empty() &&
+		    (text.front() == static_cast<char>(letter) ||
+		     (letter >= 'a' && letter <= 'z' && text.front() == static_cast<char>(letter - 'a' + 'A')))) {
+			g_UInputMan.ConsumeTextInputPrefix(text.substr(0, 1));
+		}
 	}
 	m_ChatKeysHeld = scriptChat || g_UInputMan.KeyHeld(chatKey);
 
