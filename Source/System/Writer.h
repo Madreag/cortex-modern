@@ -278,6 +278,10 @@ namespace RTE {
 		/// Records a property writer into an independently owned checkpoint buffer.
 		static CheckpointText Capture(const std::function<void(Writer&)>& visit, int indent = 0);
 		bool IsCapturing() const { return m_Capture != nullptr; }
+		void AppendPropertyBlock(std::string_view values, CheckpointBuffer::PrimitiveDecoder decoder) {
+			if (!m_Capture) throw std::logic_error("property blocks require an owned writer");
+			m_Capture->PrimitiveBlock(values, decoder);
+		}
 		void Append(const CheckpointText& text);
 		void ElapsedSimTime(const Timer& timer);
 		struct SaveOverrides {

@@ -278,7 +278,8 @@ bool CheckpointText::SameValues(const CheckpointText& other) const {
 	if (m_Data == other.m_Data) return true;
 	if (!m_Data || !other.m_Data) return false;
 	if (m_Data->deferred || other.m_Data->deferred) return m_Data->deferred && other.m_Data->deferred && !m_Data->identity.empty() && m_Data->identity == other.m_Data->identity;
-	if (m_Data->children.empty() || other.m_Data->children.empty()) return m_Data->SameTape(*other.m_Data) && m_Data->children.size() == other.m_Data->children.size();
+	if (m_Data->children.size() != other.m_Data->children.size()) return false;
+	if (m_Data->children.empty()) return m_Data->SameTape(*other.m_Data);
 	std::vector<Data::Pair> pending{{m_Data.get(), other.m_Data.get()}};
 	std::unordered_set<Data::Pair, Data::PairHash> seen;
 	while (!pending.empty()) {
@@ -290,7 +291,7 @@ bool CheckpointText::SameValues(const CheckpointText& other) const {
 			if (!current->deferred || !previous->deferred || current->identity.empty() || current->identity != previous->identity) return false;
 			continue;
 		}
-		if (!current->SameTape(*previous) || current->children.size() != previous->children.size()) return false;
+		if (current->children.size() != previous->children.size() || !current->SameTape(*previous)) return false;
 		if (!seen.insert({current, previous}).second) continue;
 		for (size_t index = current->children.size(); index > 0; --index) pending.push_back({current->children[index - 1].m_Data.get(), previous->children[index - 1].m_Data.get()});
 	}
@@ -324,7 +325,7 @@ CheckpointText CheckpointText::ReuseChildren(const CheckpointText& previous) con
 				const bool equal = frame.current->deferred && frame.previous->deferred && !frame.current->identity.empty() && frame.current->identity == frame.previous->identity;
 				results.emplace(pair, Result{equal, equal ? frame.previous : frame.current}); pending.pop_back(); continue;
 			}
-			frame.equal = frame.current->SameTape(*frame.previous) && frame.current->children.size() == frame.previous->children.size();
+			frame.equal = frame.current->children.size() == frame.previous->children.size() && frame.current->SameTape(*frame.previous);
 			frame.entered = true;
 		}
 		const size_t count = std::min(frame.current->children.size(), frame.previous->children.size());

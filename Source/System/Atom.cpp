@@ -1,6 +1,7 @@
 #include "Atom.h"
 #include "Base64/base64.h"
 #include "CheckpointArchive.h"
+#include "CheckpointProperties.h"
 
 #include "SLTerrain.h"
 #include "MovableMan.h"
@@ -315,46 +316,99 @@ namespace {
 			return writer.Text();
 		}
 	};
-	template<class T> requires (std::is_integral_v<T> || std::is_enum_v<T>)
-	T OwnAtomValue(const T& value) { return value; }
-	unsigned int OwnAtomValue(const bool& value) {
-		unsigned char byte;
-		std::memcpy(&byte, &value, sizeof(byte));
-		return byte;
+	template<class T> constexpr size_t AtomPackedSize() {
+		if constexpr (std::is_same_v<T, bool>) return sizeof(unsigned char);
+		else if constexpr (std::is_integral_v<T> || std::is_enum_v<T> || std::is_same_v<T, float>) return sizeof(T);
+		else if constexpr (std::is_same_v<T, Vector>) return 2 * sizeof(float);
+		else if constexpr (std::is_same_v<T, Color>) return 4 * sizeof(int);
+		else if constexpr (std::is_array_v<T>) return std::extent_v<T> * AtomPackedSize<std::remove_extent_t<T>>();
+		else if constexpr (CheckpointArray<T>) return std::tuple_size_v<T> * AtomPackedSize<typename T::value_type>();
+		else if constexpr (requires { typename T::first_type; typename T::second_type; }) return AtomPackedSize<typename T::first_type>() + AtomPackedSize<typename T::second_type>();
+		else return 2 * sizeof(size_t);
 	}
-	uint32_t OwnAtomValue(float value) { return std::bit_cast<uint32_t>(value); }
-	std::array<uint32_t, 2> OwnAtomValue(const Vector& value) { return {OwnAtomValue(value.m_X), OwnAtomValue(value.m_Y)}; }
-	AtomColorValues OwnAtomValue(const Color& value) { return {{value.GetR(), value.GetG(), value.GetB(), value.GetIndex()}}; }
-	template<class T, class U>
-	auto OwnAtomValue(const std::pair<T, U>& value) { return std::pair{OwnAtomValue(value.first), OwnAtomValue(value.second)}; }
-	template<class T, size_t N>
-	auto OwnAtomValue(const T (&values)[N]) {
-		std::array<decltype(OwnAtomValue(values[0])), N> owned;
-		for (size_t index = 0; index < N; ++index) owned[index] = OwnAtomValue(values[index]);
-		return owned;
+	template<class T> void PackAtomValue(char* into, size_t& at, std::vector<char>& dynamic, const T& value) {
+		if constexpr (std::is_same_v<T, Vector>) {
+			PackAtomValue(into, at, dynamic, value.m_X); PackAtomValue(into, at, dynamic, value.m_Y);
+		} else if constexpr (std::is_same_v<T, Color>) {
+			const int channels[] = {value.GetR(), value.GetG(), value.GetB(), value.GetIndex()};
+			for (int channel: channels) PackAtomValue(into, at, dynamic, channel);
+		} else if constexpr (std::is_array_v<T> || CheckpointArray<T>) {
+			for (const auto& field: value) PackAtomValue(into, at, dynamic, field);
+		} else if constexpr (requires { typename T::first_type; typename T::second_type; }) {
+			PackAtomValue(into, at, dynamic, value.first); PackAtomValue(into, at, dynamic, value.second);
+		} else if constexpr (requires { typename T::value_type; }) {
+			const size_t count = value.size(), offset = dynamic.size();
+			PackAtomValue(into, at, dynamic, count); PackAtomValue(into, at, dynamic, offset);
+			dynamic.resize(offset + count * AtomPackedSize<typename T::value_type>());
+			size_t next = offset;
+			for (const auto& field: value) PackAtomValue(dynamic.data(), next, dynamic, field);
+		} else {
+			static_assert(std::is_trivially_copyable_v<T>);
+			std::memcpy(into + at, &value, sizeof(value));
+			at += sizeof(value);
+		}
 	}
-	template<class T>
-	auto OwnAtomValue(const std::vector<T>& values) {
-		std::vector<decltype(OwnAtomValue(std::declval<const T&>()))> owned;
-		owned.reserve(values.size());
-		for (const T& value: values) owned.push_back(OwnAtomValue(value));
-		return owned;
+	template<class T> auto UnpackAtomValue(std::string_view& values, std::string_view dynamic) {
+		if constexpr (std::is_same_v<T, bool>) {
+			return static_cast<unsigned int>(CheckpointProperties::Unpack<unsigned char>(values));
+		} else if constexpr (std::is_same_v<T, float>) {
+			return CheckpointProperties::Unpack<uint32_t>(values);
+		} else if constexpr (std::is_same_v<T, Vector>) {
+			return std::array{UnpackAtomValue<float>(values, dynamic), UnpackAtomValue<float>(values, dynamic)};
+		} else if constexpr (std::is_same_v<T, Color>) {
+			AtomColorValues color;
+			for (int& channel: color.channels) channel = UnpackAtomValue<int>(values, dynamic);
+			return color;
+		} else if constexpr (std::is_array_v<T> || CheckpointArray<T>) {
+			using Element = typename decltype([] {
+				if constexpr (std::is_array_v<T>) return std::type_identity<std::remove_extent_t<T>>{};
+				else return std::type_identity<typename T::value_type>{};
+			}())::type;
+			constexpr size_t count = [] { if constexpr (std::is_array_v<T>) return std::extent_v<T>; else return std::tuple_size_v<T>; }();
+			std::array<decltype(UnpackAtomValue<Element>(values, dynamic)), count> result;
+			for (auto& field: result) field = UnpackAtomValue<Element>(values, dynamic);
+			return result;
+		} else if constexpr (requires { typename T::first_type; typename T::second_type; }) {
+			return std::pair{UnpackAtomValue<typename T::first_type>(values, dynamic), UnpackAtomValue<typename T::second_type>(values, dynamic)};
+		} else if constexpr (requires { typename T::value_type; }) {
+			const size_t count = CheckpointProperties::Unpack<size_t>(values), offset = CheckpointProperties::Unpack<size_t>(values);
+			constexpr size_t width = AtomPackedSize<typename T::value_type>();
+			if (offset > dynamic.size() || count > (dynamic.size() - offset) / width) throw std::logic_error("truncated atom array");
+			std::string_view source = dynamic.substr(offset, count * width);
+			std::vector<decltype(UnpackAtomValue<typename T::value_type>(source, dynamic))> result;
+			result.reserve(count);
+			for (size_t index = 0; index < count; ++index) result.push_back(UnpackAtomValue<typename T::value_type>(source, dynamic));
+			return result;
+		} else {
+			return CheckpointProperties::Unpack<T>(values);
+		}
 	}
-	template<class T> size_t AtomDynamicBytes(const T&) { return 0; }
-	template<class T> size_t AtomDynamicBytes(const std::vector<T>& values) { return values.size() * sizeof(T); }
+	template<class... T> auto UnpackAtomFields(std::type_identity<std::tuple<T...>>, std::string_view values, std::string_view dynamic) {
+		auto result = std::tuple{UnpackAtomValue<T>(values, dynamic)...};
+		if (!values.empty()) throw std::logic_error("trailing atom values");
+		return result;
+	}
 }
 
 CheckpointText Atom::CaptureCheckpointList(const std::vector<Atom*>& atoms) {
-	const auto copy = [](const auto&... values) { return std::tuple{OwnAtomValue(values)...}; };
-	using Values = decltype(VisitCheckpoint(copy, std::declval<const Atom&>()));
+	const auto types = [](const auto&... values) { return std::type_identity<std::tuple<std::remove_cvref_t<decltype(values)>...>>{}; };
+	using Types = decltype(VisitCheckpoint(types, std::declval<const Atom&>()));
+	const auto size = [](const auto&... values) { return std::integral_constant<size_t, (AtomPackedSize<std::remove_cvref_t<decltype(values)>>() + ... + size_t{0})>{}; };
+	constexpr size_t width = decltype(VisitCheckpoint(size, std::declval<const Atom&>()))::value;
 	struct Record {
-		Values values;
+		Record() {}
+		std::array<char, width> values;
 		std::array<size_t, 3> materials;
 		std::array<long, 5> links;
 		bool groupIgnoreList;
 	};
 	std::vector<Record> records;
 	records.reserve(atoms.size());
+	std::vector<char> dynamic;
+	size_t dynamicBytes = 0;
+	for (const Atom* atom: atoms) dynamicBytes += atom->m_IgnoreMOIDs.size() * AtomPackedSize<MOID>()
+	    + (atom->m_LastTrailPoints.size() + atom->m_TrailPoints.size()) * AtomPackedSize<std::pair<int, int>>();
+	dynamic.reserve(dynamicBytes);
 	std::vector<CheckpointText> materials;
 	std::unordered_map<const Material*, size_t> materialIndices;
 	std::map<std::string, size_t> restoredIndices;
@@ -383,17 +437,26 @@ CheckpointText Atom::CaptureCheckpointList(const std::vector<Atom*>& atoms) {
 				indices[index] = found->second;
 			}
 		}
-		records.push_back({VisitCheckpoint(copy, *atom), indices, atom->CaptureCheckpointLinkIDs(), atom->m_IgnoreMOIDsByGroup != nullptr});
-		bytes += sizeof(Record) + std::apply([](const auto&... values) { return (AtomDynamicBytes(values) + ... + size_t{0}); }, records.back().values);
+		Record& record = records.emplace_back();
+		size_t at = 0;
+		const auto pack = [&](const auto&... values) { (PackAtomValue(record.values.data(), at, dynamic, values), ...); };
+		VisitCheckpoint(pack, *atom);
+		if (at != record.values.size()) throw std::logic_error("atom capture size differs");
+		record.materials = indices;
+		record.links = atom->CaptureCheckpointLinkIDs();
+		record.groupIgnoreList = atom->m_IgnoreMOIDsByGroup != nullptr;
+		bytes += sizeof(Record);
 	}
+	bytes += dynamic.size();
 	for (const CheckpointText& material: materials) bytes += sizeof(CheckpointText) + material.OwnedBytes();
 	// The producer holds no live pointers. Each atom keeps the old Atom2 field
 	// order and length prefix; only formatting and per-atom allocations move.
-	return CheckpointText::Deferred([records = std::move(records), materials = std::move(materials)] {
+	return CheckpointText::Deferred([records = std::move(records), dynamic = std::move(dynamic), materials = std::move(materials)] {
 		std::string list = std::to_string(records.size()) + " ";
 		for (const Record& record: records) {
 			CheckpointWriter writer("Atom2");
-			std::apply([&writer](const auto&... values) { writer(values...); }, record.values);
+			const auto fields = UnpackAtomFields(Types{}, std::string_view(record.values.data(), record.values.size()), std::string_view(dynamic.data(), dynamic.size()));
+			std::apply([&writer](const auto&... values) { writer(values...); }, fields);
 			for (size_t index: record.materials) writer(materials.at(index));
 			writer(record.links, record.groupIgnoreList);
 			const std::string& text = writer.Text();
