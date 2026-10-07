@@ -216,6 +216,15 @@ namespace RTE {
 		static const char* ModeName(NetMatchMode mode);
 		/// The mode's menu-facing word, for rows that show a user label instead of the wire token.
 		static const char* ModeLabel(NetMatchMode mode);
+
+		/// The host's own setup: every field the Advanced pages set. One list decides whether Apply has a change, what Create
+		/// Lobby takes from an accepted draft and what reopening shows, so a value the host accepted is the value the lobby gets.
+		static std::vector<std::string> HostDraftFieldNames();
+		/// Gets whether two configs hold the same host setup, field by field of the list.
+		static bool SameHostDraft(const NetMatchConfig& a, const NetMatchConfig& b);
+		/// Copies every field of the list onto a config; seat names stay the receiving config's own (the host's, and the unseated ones).
+		static void CopyHostDraft(const NetMatchConfig& from, NetMatchConfig& to);
+
 		static bool ParseMode(const std::string& text, NetMatchMode& outMode);
 		static const char* OwnershipPolicyName(NetActorOwnershipPolicy policy);
 		static bool ParseOwnershipPolicy(const std::string& text, NetActorOwnershipPolicy& outPolicy);

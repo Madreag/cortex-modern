@@ -310,7 +310,7 @@ namespace RTE {
 		/// How many autosaves this machine keeps. This peer's own disk, never the match's. Out of 1-10 is ignored.
 		int GetNetworkAutosavesKept() const { return m_NetworkAutosavesKept; }
 		void SetNetworkAutosavesKept(int kept);
-		/// New-session host visibility. Default LAN.
+		/// Who can join the next session this machine hosts: listed in the game list (default), unlisted (joined by its address), or this network only.
 		NetworkHostVisibility GetNetworkHostVisibility() const { return m_NetworkHostVisibility; }
 		void SetNetworkHostVisibility(NetworkHostVisibility visibility) { m_NetworkHostVisibility = visibility; }
 		/// The host-defaults template beside Settings.ini. "Save As Host Defaults" writes it and a new

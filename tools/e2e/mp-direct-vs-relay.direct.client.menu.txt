@@ -3,6 +3,10 @@ activate ButtonMainToOptions
 wait_ms 600
 select_settings_page Network
 wait_ms 450
+select_settings_page Network:Basics
+wait 3
+activate ButtonNetworkAdvanced
+wait 4
 select_settings_page Network:Connection
 video_mark direct-connection-client
 wait_ms 900
@@ -33,11 +37,12 @@ assert_label TextJoinPort {PORT}
 activate ButtonMultiplayerConnect
 video_mark direct-mp-lobby-client
 wait_connected 2
+wait_substate Lobby 30
 wait_ms 825
 assert_substate Lobby
 dump_lobby
 video_mark direct-mp-details-read-only
-activate ButtonLobbyOptions
+activate ButtonLobbyEditSetup
 wait_ms 495
 assert_substate HostOptions
 assert_label LabelHostOptionsTitle M A T C H   D E T A I L S

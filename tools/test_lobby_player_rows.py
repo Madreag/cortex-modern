@@ -48,6 +48,7 @@ sys.path.insert(0, str(TOOLS))
 from test_viewport_fit import (PinDrift, close_all, game_version, near,  # noqa: E402
                                pin_state, require_pin, resolve_tools, set_resolution, sha256_file)
 from run_sim_test import seed_settings  # noqa: E402
+from test_menu_readback import spread, managed_case  # noqa: E402
 
 PANEL_GRAY = (59, 65, 83)
 ROW_X_INI, ROW_W_INI, ROW_H, ROW_Y0, ROW_STEP = 8, 288, 16, 66, 18
@@ -110,13 +111,14 @@ def bands(counts):
 def menu_script(name, host, port, players):
     script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
     if host:
-        return script + (f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\n"
-                         f"settext TextHostPlayers {players}\n"
+        return script + (f"activate ButtonMultiplayerHostGame\nwait 10\nsetup_host_port {port}\n"
+                         f"combo_select ComboHostPlayers {players}\nwait 4\n"
                          "activate ButtonMultiplayerCreate\n")
-    return script + ("activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\n"
-                     f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n")
+    return script + ("activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
+                     f"settext TextJoinPort {port}\nactivate ButtonJoinAddressGo\n")
 
 
+@managed_case
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, required=True)
@@ -127,7 +129,14 @@ def main():
     parser.add_argument("--exe-sha256", required=True)
     parser.add_argument("--reference", type=Path, default=None,
                         help="control-run capture; outside the row boxes every pixel must match")
+    if spread:
+        spread.add_arguments(parser)
     options = parser.parse_args()
+    if not spread:
+        parser.error("lobby player rows requires the shared spread executor")
+    if getattr(options, "spread", False) or not getattr(options, "peer_boxes", None):
+        parser.error(spread.NO_BOX_NAMED)
+    spread.configure(options)
     if not re.fullmatch(r"[0-9a-f]{64}", options.exe_sha256):
         parser.error("--exe-sha256 must be 64 lowercase hex chars")
 
@@ -143,6 +152,7 @@ def main():
               "viewport_request": [options.width, options.height], "pin_before": before}
     checks, details = {}, {}
     runs, records = {}, {}
+    executor = None
 
     def start(name, host, suffix, ready=True):
         require_pin(repo, options.exe_sha256, before, checks, f"{name}_prelaunch")
@@ -150,7 +160,7 @@ def main():
         path = root / f"{name}.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes((script + suffix).encode("cp1252"))
-        run = make_run(repo, ["-menu-script", path, "-num-lua-states", 4], root / name, 200)
+        run = executor.make_run(repo, ["-menu-script", path, "-num-lua-states", 4], root / name, 200)
         runs[name] = run
         details[f"settings_{name.lower()}"] = set_resolution(run, options.width, options.height)
         # The delay box is read-only under the auto policy; the floor the host sends is a setting.
@@ -159,12 +169,17 @@ def main():
         return run
 
     try:
+        peers = [spread.Peer("host", share_ok=False, os="windows", reviewed=True, output_name=HOST_NAME,
+                             size=(options.width, options.height))]
+        peers.extend(spread.Peer(f"joiner{index + 1}", share_ok=False, os="any", output_name=name,
+                                 size=(options.width, options.height)) for index, name in enumerate(JOINER_NAMES))
+        executor = spread.prepare_case(repo, root, peers, spread.Match(options.port, parameters={"lane": "menus"}))
         host_suffix = ("wait_connected 4\nwait 120\ndump_lobby\n"
                        "assert_label LabelLobbyPlayer0 auto\nassert_label LabelLobbyPlayer1 Team\n"
                        "assert_label LabelLobbyPlayer2 Team\nassert_label LabelLobbyPlayer3 Team\n"
                        "screenshot rows-t0\nwait 40\nscreenshot rows-t1\nexit\n")
         host = start(HOST_NAME, True, host_suffix)
-        wait_for_log(host, "activate ButtonMultiplayerCreate ok=1")
+        wait_for_log(host, "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS")
         for index, name in enumerate(JOINER_NAMES):
             ready = index < 2
             suffix = "wait_connected 4\n"
@@ -195,7 +210,7 @@ def main():
             checks[f"row{i}_label_verdict"] = bool(m) and m.group(2) == b"PASS"
         m0 = re.search(rb'assert_label LabelLobbyPlayer0 "[^"]*" text="(.*?)" (PASS|FAIL)', host_log, re.S)
         checks["row0_delay_text_whole"] = bool(m0 and b"(auto," in m0.group(1) and b"ping)" in m0.group(1))
-        checks["host_reached_lobby"] = "activate ButtonMultiplayerCreate ok=1" in host_log.decode("cp1252", errors="replace")
+        checks["host_reached_lobby"] = "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS" in host_log.decode("cp1252", errors="replace")
 
         if shots:
             im = Image.open(shots[0]).convert("RGB")
@@ -386,6 +401,8 @@ def main():
     result["details"] = details
     result["records"] = {k: v for k, v in records.items()}
     result["pass"] = all(checks.values()) and not details.get("close_errors")
+    if executor:
+        result.update(topology="spread", peer_boxes=executor.result()["peer_boxes"], spread=executor.result(), proof=result["pass"])
     (root / "result.json").write_text(json.dumps(result, indent=2, default=str))
     print(json.dumps({"pass": result["pass"], "checks": checks}, indent=2))
     sys.exit(0 if result["pass"] else 1)

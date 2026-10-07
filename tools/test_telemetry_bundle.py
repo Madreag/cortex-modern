@@ -17,6 +17,15 @@ from pathlib import Path
 
 from run_sim_test import make_run, engine_executable, file_sha256
 
+try:
+    import spread_peers as spread
+except ModuleNotFoundError as error:
+    if error.name != "spread_peers":
+        raise
+    spread = None
+
+managed_case = spread.managed_case if spread else lambda function: function
+
 CAP = 8 * 1024 * 1024
 LOG_CAP = 512 * 1024
 MEMBERS = {"LogConsole.txt", "NetMatch.log", "JoinIdentity.json", "DesyncHeal.json",
@@ -297,6 +306,10 @@ def run_credentials(repo: Path, root: Path, exe_sha: str) -> dict:
 def run_replay(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
     root.mkdir(parents=True, exist_ok=False)
     runs, records, recordings = {}, {}, {}
+    # These private credential fixtures must remain intact for the archive privacy oracle.
+    execution = spread.prepare_case(repo, root,
+        [spread.Peer("host", share_ok=False, os="windows", reviewed=True), spread.Peer("client", share_ok=False, os="any")],
+        spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
     for who in ("host", "client"):
         recordings[who] = root / f"{who}.ccrp"
         args = ["-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", "2",
@@ -304,7 +317,7 @@ def run_replay(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
                 "-telemetry-bundle", "-net-replay-out", str(recordings[who]),
                 "-net-match-report", str(root / f"{who}_report.json")]
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
-        runs[who] = make_run(repo, args, root / who, 300, env={"CCCP_HEADLESS": "1"})
+        runs[who] = execution.make_run(repo, args, root / who, 300, env={"CCCP_HEADLESS": "1"})
     planted = {who: plant_bundle_secrets(run) for who, run in runs.items()}
 
     def drive(who: str) -> None:
@@ -401,6 +414,7 @@ def measure_pause_busy_centre(initial_path: Path, busy_path: Path) -> dict:
             "passed": abs(centre - axis) <= 3}
 
 
+@managed_case
 def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
     root.mkdir(parents=True, exist_ok=False)
     rows = {}
@@ -422,13 +436,17 @@ def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
                           "assert_enabled ButtonSaveDiagnostics 1\nassert_label ButtonSaveDiagnostics save diagnostics\n"
                           "screenshot diagnostics_pause_saved\nexit\n", encoding="utf-8")
         runs, records = {}, {}
+        execution = spread.prepare_case(repo, case,
+            [spread.Peer("host", share_ok=False, os="windows", reviewed=True, size=(width, height)),
+             spread.Peer("client", share_ok=False, os="any", size=(width, height))],
+            spread.Match(port + index, parameters={"lane": "menus", "network": "direct"}))
         for who in ("host", "client"):
             args = ["-net-match-service-e2e", "-net-port", str(port + index), "-net-match-peers", "2",
                     "-net-match-ticks", "400", "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
                     "-input-script", str(inputs), "-menu-script", str(script),
                     "-net-match-report", str(case / f"{who}_report.json")]
             args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
-            runs[who] = make_run(repo, args, case / who, 120, env={"CCCP_HEADLESS": "1"})
+            runs[who] = execution.make_run(repo, args, case / who, 120, env={"CCCP_HEADLESS": "1"})
             set_visual_resolution(runs[who], width, height)
         planted = {who: plant_bundle_secrets(run) for who, run in runs.items()}
 
@@ -461,7 +479,7 @@ def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
                 assert centre["passed"], f"pause busy row is {centre['offset']:.1f} px from its axis"
                 log = read_log(run.out)
                 assert "assert_screen expected=Pause actual=Pause PASS" in log, "pause screen was not asserted"
-                assert "post_command ButtonSaveDiagnostics ok=1" in log, "diagnostics command was not accepted"
+                assert "post_command ButtonSaveDiagnostics click ButtonSaveDiagnostics PASS" in log, "diagnostics command was not accepted"
                 assert "file:Telemetry/diag-*.zip -> OK" in log, "diagnostics file wait did not complete"
                 assert log.count("assert_enabled ButtonSaveDiagnostics expected=1 actual=1 PASS") == 2, "terminal button was not enabled"
                 assert log.count('assert_label ButtonSaveDiagnostics "save diagnostics" text="save diagnostics" PASS') == 2, "terminal label differs"
@@ -471,6 +489,8 @@ def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
             except Exception as error:
                 details["errors"][who] = str(error)
         details["passed"] = not details["errors"]
+        receipt = execution.result()
+        details.update(topology="spread", peer_boxes=receipt["peer_boxes"], spread=receipt, proof=details["passed"])
         rows[tag] = details
         if details["passed"]:
             print(f"PASS visual Pause {tag}: two peers, 8 PNGs, 2 diagnostics zips; busy labels and restored buttons verified", flush=True)
@@ -489,7 +509,15 @@ def main() -> int:
     parser.add_argument("--arm", choices=("menu", "replay", "pause", "credentials", "all"), default="all",
                         help="all runs menu+replay; use --arm pause for both pause-menu resolutions (no replay recording)")
     parser.add_argument("--port", type=int, default=48211)
+    if spread:
+        spread.add_arguments(parser)
     args = parser.parse_args()
+    if args.arm != "menu":
+        if not spread:
+            parser.error("paired diagnostics require the shared spread executor")
+        if getattr(args, "spread", False) or not getattr(args, "peer_boxes", None):
+            parser.error(spread.NO_BOX_NAMED)
+        spread.configure(args)
     allowed = ((48211, 48219), (48280, 48289))
     if not any(lo <= args.port <= hi for lo, hi in allowed):
         parser.error("port must be in 48211..48219 or 48280..48289")
@@ -513,6 +541,14 @@ def main() -> int:
         except Exception as error:
             result["arms"][arm] = {"passed": False, "error": str(error)}
             print(f"FAIL {arm}: {error}", flush=True)
+    if args.arm != "menu":
+        receipts = {}
+        for arm in result["arms"]:
+            for path in [root / arm / "spread-result.json", *(root / arm).glob("*/spread-result.json")]:
+                if path.is_file():
+                    receipts[path.parent.relative_to(root).as_posix()] = spread.read_json(path, {})
+        result.update(topology="spread", peer_boxes={name: row.get("peer_boxes", {}) for name, row in receipts.items()},
+                      spread=receipts, proof=all(arm["passed"] for arm in result["arms"].values()))
     (root / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return 0 if all(arm["passed"] for arm in result["arms"].values()) else 1
 

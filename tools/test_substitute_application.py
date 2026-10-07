@@ -12,6 +12,7 @@ from pathlib import Path
 import time
 
 from run_sim_test import make_run
+from test_menu_readback import spread, managed_case
 
 
 def peer_args(port, ticket, report, extra, players, ticks):
@@ -20,21 +21,30 @@ def peer_args(port, ticket, report, extra, players, ticks):
             "-net-match-report", report, *extra]
 
 
+@managed_case
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=47617)
+    if spread:
+        spread.add_arguments(parser)
     options = parser.parse_args()
+    if not spread:
+        parser.error("substitute application requires the shared spread executor")
+    if getattr(options, "spread", False) or not getattr(options, "peer_boxes", None):
+        parser.error(spread.NO_BOX_NAMED)
+    spread.configure(options)
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     players, ticks = 3, 2400
     trigger = root / "apply.trigger"
     runs = {}
+    execution = None
     result = {"pass": False, "checks": {}, "details": {}}
 
     def start(name, argv, timeout=420, env=None):
-        runs[name] = make_run(options.repo, argv, root / name, timeout, env=env).start()
+        runs[name] = execution.make_run(options.repo, argv, root / name, timeout, env=env).start()
         return runs[name]
 
     def wait_for(run, marker, seconds):
@@ -49,6 +59,10 @@ def main():
         raise RuntimeError(f"{run.out.name} did not reach {marker}")
 
     try:
+        execution = spread.prepare_case(options.repo, root,
+            [spread.Peer(name, share_ok=name != "host", os="windows" if name == "host" else "any", reviewed=name == "host")
+             for name in ("host", "departing", "stayer", "applicant")],
+            spread.Match(options.port, parameters={"lane": "menus", "network": "direct"}))
         # The host's own seats panel is the moderation view; it is pumped by the lockstep wait while
         # the dropped seat is held, which is exactly the window the applicant arrives in.
         signal = root / "applicant.signal.json"
@@ -80,8 +94,8 @@ def main():
         script = root / "applicant.txt"
         script.write_text(
             "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName Applicant\n"
-            "activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\n"
-            f"settext TextJoinPort {options.port}\nactivate ButtonMultiplayerConnect\n"
+            "activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
+            f"settext TextJoinPort {options.port}\nactivate ButtonJoinAddressGo\n"
             "wait_state Failed 240\nwait 5\nassert_substate Landing\n"
             "assert_error The match is already in progress\n"
             "assert_enabled ButtonMultiplayerReconnect 1\n"
@@ -110,7 +124,7 @@ def main():
         result["details"]["applications_sent"] = applicant_reconnect.get("client_applications_sent")
         result["checks"]["offer_shown"] = 'assert_error "The match is already in progress"' in applicant_log
         result["checks"]["apply_button_enabled"] = "assert_enabled ButtonMultiplayerReconnect expected=1 actual=1 PASS" in applicant_log
-        result["checks"]["apply_pressed"] = "activate ButtonMultiplayerReconnect ok=1" in applicant_log
+        result["checks"]["apply_pressed"] = "activate ButtonMultiplayerReconnect click ButtonMultiplayerReconnect PASS" in applicant_log
         result["checks"]["no_script_failure"] = "[menu-script] FAILED:" not in applicant_log
         result["checks"]["applications_sent"] = (applicant_reconnect.get("client_applications_sent") or 0) >= 1
         admission = service.get("runner", {}).get("session", {}).get("admission", {})
@@ -129,6 +143,8 @@ def main():
     finally:
         for run in runs.values():
             run.close()
+        receipt = execution.result() if execution else spread.read_json(root / "spread-result.json", {})
+        result.update(topology="spread", peer_boxes=receipt.get("peer_boxes", {}), spread=receipt, proof=result["pass"])
         (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps({"pass": result["pass"], "error": result.get("error"),
                       "failed": [k for k, v in result["checks"].items() if not v], "out": str(root)}), flush=True)

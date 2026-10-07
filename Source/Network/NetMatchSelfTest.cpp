@@ -45,6 +45,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <future>
 #include <deque>
 #include <filesystem>
@@ -803,6 +804,48 @@ namespace RTE {
 				*error = "the lobby timeout does not identify the missing handover endpoint";
 				return false;
 			}
+			return true;
+		}
+
+		bool TestLobbyOpenSeatConfig(std::string* error) {
+			const uint16_t port = 45810;
+			LoopbackTransport hostWire, clientWire;
+			if (!hostWire.StartHost(port, error) || !clientWire.Connect("loopback", port, error)) return false;
+			hostWire.PollEvents();
+			clientWire.PollEvents();
+			NetMatchConfig draft = MakeConfig();
+			draft.peerCount = 3;
+			draft.players.push_back(NetMatchPlayerSlot{3, 2, false, "Open seat"});
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.remoteTransportPeerIds = {{2, 1}};
+			hostConfig.matchConfig = draft;
+			hostConfig.enableMigration = true;
+			hostConfig.migrationListenPort = port;
+			hostConfig.migrationListenAddrs = {"loopback"};
+			NetLobbySessionConfig clientConfig = hostConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remoteTransportPeerIds = {{1, 1}};
+			NetLobbySession host, client;
+			if (!host.Start(hostWire, hostConfig, error) || !client.Start(clientWire, clientConfig, error)) return false;
+			for (uint64_t now = 0; now <= 2000; now += 10) {
+				host.Tick(now);
+				client.Tick(now);
+				if (host.IsStarted() || client.IsStarted() || host.IsFailed() || client.IsFailed()) {
+					*error = "open-seat lobby started or failed while publishing its draft";
+					return false;
+				}
+				hostWire.AdvanceTimeMs(10);
+				clientWire.AdvanceTimeMs(10);
+			}
+			if (client.GetState() != NetLobbyState::WaitingForReady || client.GetMatchConfigHash() != host.GetMatchConfigHash() ||
+			    host.GetStats().configAcksReceived == 0 || host.GetStats().startPacketsSent != 0) {
+				*error = "open-seat lobby withheld its draft or bypassed its start gate";
+				return false;
+			}
+			std::cout << "PASS lobby_open_seat_config" << std::endl;
 			return true;
 		}
 
@@ -1737,6 +1780,10 @@ namespace RTE {
 			    !RoundTrip(NetLobbyMatchConfig{config}, error) ||
 			    !RoundTrip(NetLobbyConfigAck{2, true, configHash, ""}, error) ||
 			    !RoundTrip(NetLobbyReady{2, true}, error) ||
+			    !RoundTrip(NetLobbyReady{2, false}, error) ||
+			    !RoundTrip(NetLobbyStartCountdown{0}, error) ||
+			    !RoundTrip(NetLobbyStartCountdown{27000}, error) ||
+			    !RoundTrip(NetLobbyStartCountdown{NetLobbyProtocol::c_MaxStartCountdownMs}, error) ||
 			    !RoundTrip(NetLobbyStart{config.sessionId, 120, 0, configHash}, error) ||
 			    !RoundTrip(NetLobbyAbort{1, "user cancelled"}, error) ||
 			    !RoundTrip(NetLobbySeatAssign{2}, error) ||
@@ -1764,6 +1811,25 @@ namespace RTE {
 				}
 				if (decoded.error.message.find("peer id") == std::string::npos) {
 					*error = "the refusal of seat assignment peer id " + std::to_string(assigned) + " did not name the field: " + decoded.error.message;
+					return false;
+				}
+			}
+			// A countdown past the longest a host may announce, or with a cause this version does not know, is refused by name.
+			for (const bool reserved: {false, true}) {
+				NetLobbyMessage message;
+				message.payload = NetLobbyStartCountdown{1000};
+				std::vector<uint8_t> bytes;
+				if (!NetLobbyProtocol::Encode(message, bytes)) {
+					*error = "could not encode a start countdown";
+					return false;
+				}
+				const uint32_t poked = reserved ? (uint32_t{NetLobbyProtocol::c_CountdownSetupOpen} + 1U) << 24 : NetLobbyProtocol::c_MaxStartCountdownMs + 1U;
+				const size_t offset = NetLobbyProtocol::c_HeaderBytes + (reserved ? 4 : 0);
+				for (size_t byte = 0; byte < 4; ++byte) bytes.at(offset + byte) = static_cast<uint8_t>(poked >> (8 * byte));
+				const NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(bytes);
+				const NetLobbyErrorCode expected = reserved ? NetLobbyErrorCode::ReservedFieldNonZero : NetLobbyErrorCode::InvalidValue;
+				if (decoded.ok || decoded.error.code != expected) {
+					*error = reserved ? "a start countdown with an unknown cause was not refused" : "a start countdown past the longest was not refused";
 					return false;
 				}
 			}
@@ -5130,9 +5196,23 @@ namespace RTE {
 					*error = what + " opened as v" + std::to_string(opened->config.version) + (opened->config.persistentWorld ? " world" : " ordinary");
 					return false;
 				}
+				// The writer's own protocol stands in the header (bytes 4-5); every other byte is the recording's own layout.
+				std::vector<uint8_t> expected = bytes;
+				expected[4] = static_cast<uint8_t>(NetLobbyProtocol::c_Version & 0xFF);
+				expected[5] = static_cast<uint8_t>(NetLobbyProtocol::c_Version >> 8);
 				std::vector<uint8_t> again;
-				if (!NetLobbyProtocol::Encode({*opened}, again) || again != bytes) {
+				if (!NetLobbyProtocol::Encode({*opened}, again) || again != expected) {
 					*error = what + " was not written back in its own layout";
+					return false;
+				}
+				const auto reopened = NetLobbyProtocol::Decode(again, NetLobbyDecodeOptions{true});
+				const auto* back = reopened.ok ? std::get_if<NetLobbyMatchConfig>(&reopened.message.payload) : nullptr;
+				if (!back || !(*back == *opened)) {
+					*error = what + " written back did not reopen as itself";
+					return false;
+				}
+				if (NetLobbyProtocol::Decode(again).ok) {
+					*error = what + " written back opened as a live config";
 					return false;
 				}
 				if (NetLobbyProtocol::Decode(bytes).ok) {
@@ -6549,6 +6629,163 @@ namespace RTE {
 				*error = "host lobby did not track both clients' names and readies";
 				return false;
 			}
+			return true;
+		}
+
+		// Three peers count down unready; the Start reaches A while B's queue refuses it as congested, and the host then
+		// presses Cancel Start: the Start already sent commits the round, so B and the host start as A did.
+		bool TestLobbyStartCommitted(std::string* error) {
+			const uint16_t port = 43018;
+			LoopbackTransport hostT, clientAT, clientBT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) || !clientBT.Connect("loopback", port, error)) return false;
+			NetMatchConfig matchConfig = MakeConfig();
+			matchConfig.peerCount = 3;
+			matchConfig.players.push_back(NetMatchPlayerSlot{3, 2, false, "Client B"});
+			auto cfg = [&](bool host, uint8_t local, std::map<uint8_t, NetPeerId> transports, const char* name) {
+				NetLobbySessionConfig c;
+				c.host = host;
+				c.localPeerId = local;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.matchConfig = matchConfig;
+				c.startFrame = 5;
+				c.displayName = name;
+				c.platform = "windows";
+				c.peerStateIntervalMs = 10;
+				c.autoReady = false;
+				c.autoStart = false;
+				c.startCountdownMs = host ? 300 : 0;
+				return c;
+			};
+			NetLobbySession host, clientA, clientB;
+			if (!host.Start(hostT, cfg(true, 1, {{2, 1}, {3, 2}}, "Host"), error) || !clientA.Start(clientAT, cfg(false, 2, {{1, 1}}, "Client A"), error) ||
+			    !clientB.Start(clientBT, cfg(false, 3, {{1, 1}}, "Client B"), error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			const auto step = [&](uint64_t ms) {
+				for (uint64_t until = now + ms; now < until; now += 10) {
+					host.Tick(now);
+					clientA.Tick(now);
+					clientB.Tick(now);
+					hostT.AdvanceTimeMs(10);
+					clientAT.AdvanceTimeMs(10);
+					clientBT.AdvanceTimeMs(10);
+				}
+			};
+			const auto states = [&] {
+				return std::string(" host=") + NetLobbySession::StateName(host.GetState()) + " a=" + NetLobbySession::StateName(clientA.GetState()) +
+				       " b=" + NetLobbySession::StateName(clientB.GetState());
+			};
+			step(500);
+			if (host.GetState() != NetLobbyState::WaitingForReady) {
+				*error = "start committed: the three-peer lobby never reached its Ready wait;" + states();
+				return false;
+			}
+			host.RequestStart();
+			while (host.StartCountdownRemainingMs() > 20 && now < 2000) step(10);
+			LoopbackTransportConfig congested;
+			congested.sendBufferBytes = 1;
+			congested.meterOnlyPeer = 2;
+			hostT.SetFaultConfig(congested);
+			for (uint64_t waited = 0; !clientA.IsStarted() && waited < 1000; waited += 10) step(10);
+			if (!clientA.IsStarted() || clientB.IsStarted() || host.IsStarted()) {
+				*error = "start committed: the congested send never left the Start with A alone;" + states();
+				return false;
+			}
+			host.CancelStart();
+			step(100);
+			hostT.SetFaultConfig({});
+			for (uint64_t waited = 0; !(host.IsStarted() && clientB.IsStarted()) && waited < 2000; waited += 10) step(10);
+			if (!host.IsStarted() || !clientB.IsStarted()) {
+				*error = "start committed: Cancel Start after the Start reached A left the others waiting;" + states();
+				return false;
+			}
+			if (host.GetMatchConfigHash() != clientA.GetMatchConfigHash() || host.GetMatchConfigHash() != clientB.GetMatchConfigHash() ||
+			    clientA.GetStartFrame() != clientB.GetStartFrame()) {
+				*error = "start committed: the three peers started on different setups";
+				return false;
+			}
+			std::cout << "PASS lobby_start_committed" << std::endl;
+			return true;
+		}
+
+		// A countdown names the setup it counts for: one sent for any other setup neither starts nor clears the client's count.
+		bool TestLobbyCountdownBelongsToSetup(std::string* error) {
+			const uint16_t port = 43028;
+			LoopbackTransport hostT, clientT;
+			NetPeerId hostRemotePeer = c_InvalidNetPeerId;
+			NetPeerId clientRemotePeer = c_InvalidNetPeerId;
+			if (!StartLoopbackTransports(port, hostT, clientT, hostRemotePeer, clientRemotePeer, error)) return false;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.remotePeerId = 2;
+			hostConfig.remoteTransportPeerId = hostRemotePeer;
+			hostConfig.matchConfig = MakeConfig();
+			hostConfig.startFrame = 5;
+			hostConfig.displayName = "Host";
+			hostConfig.platform = "windows";
+			// Only a change is broadcast: the host's periodic state carries its own count and would overwrite an injected one.
+			hostConfig.peerStateIntervalMs = 600000;
+			hostConfig.autoReady = false;
+			hostConfig.autoStart = false;
+			hostConfig.startCountdownMs = 60000;
+			NetLobbySessionConfig clientConfig = hostConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemotePeer;
+			clientConfig.displayName = "Client";
+			clientConfig.startCountdownMs = 0;
+			NetLobbySession host, client;
+			if (!host.Start(hostT, hostConfig, error) || !client.Start(clientT, clientConfig, error)) return false;
+			uint64_t now = 0;
+			const auto step = [&](uint64_t ms) {
+				for (uint64_t until = now + ms; now < until; now += 10) {
+					host.Tick(now);
+					client.Tick(now);
+					hostT.AdvanceTimeMs(10);
+					clientT.AdvanceTimeMs(10);
+				}
+			};
+			const auto inject = [&](uint32_t remainingMs) {
+				NetLobbyMessage message;
+				message.payload = NetLobbyStartCountdown{remainingMs};
+				std::vector<uint8_t> bytes;
+				return NetLobbyProtocol::Encode(message, bytes) && hostT.Send(hostRemotePeer, NetTransportLane::ControlReliable, bytes);
+			};
+			step(300);
+			if (client.IsStartCountdownRunning()) {
+				*error = "countdown setup: a count ran before the host pressed Start";
+				return false;
+			}
+			// A count announced for no setup the client holds is not this lobby's count.
+			if (!inject(45000)) {
+				*error = "countdown setup: could not send a countdown";
+				return false;
+			}
+			step(50);
+			if (client.IsStartCountdownRunning()) {
+				*error = "countdown setup: the client took a count for another setup (remaining " + std::to_string(client.StartCountdownRemainingMs()) + " ms)";
+				return false;
+			}
+			host.RequestStart();
+			step(100);
+			if (!client.IsStartCountdownRunning()) {
+				*error = "countdown setup: the host's own count never reached the client";
+				return false;
+			}
+			const uint32_t before = client.StartCountdownRemainingMs();
+			if (!inject(0)) {
+				*error = "countdown setup: could not send a countdown";
+				return false;
+			}
+			step(50);
+			if (!client.IsStartCountdownRunning() || client.StartCountdownRemainingMs() + 200 < before) {
+				*error = "countdown setup: a stopped count for another setup cleared the client's count";
+				return false;
+			}
+			std::cout << "PASS lobby_countdown_belongs_to_setup" << std::endl;
 			return true;
 		}
 
@@ -15193,6 +15430,47 @@ namespace RTE {
 		std::vector<std::string> misses;
 		SettingsGuard settings;
 
+		for (bool ice : {false, true}) { // An Unlisted lobby registers before ICE has a bound identity.
+			auto wire = std::make_shared<Wire>();
+			wire->replies = {registerReply(idA, "tok-unlisted", 60, true), hidden, deleted};
+			NetMatchService service;
+			service.m_Directory.SetTransportFactory([wire] { return std::make_unique<ScriptedTransport>(wire); });
+			service.m_IsHost = true;
+			service.m_IceEnabled = ice;
+			service.m_State = NetMatchServiceState::Starting;
+			service.m_DirectoryHidden = true;
+			service.m_IdentityPending = true;
+			service.m_BeaconGamePort = 48041;
+			service.m_BeaconMaxPlayers = 2;
+			service.m_DirectoryRow.name = "UnlistedHost";
+			service.m_DirectoryRow.peerCount = 2;
+			service.m_DirectoryRow.listenPort = 48041;
+			service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
+			service.Update();
+			std::string step;
+			if (service.m_DirectoryRetracted || count(*wire, "POST", "/v1/sessions") != 0) {
+				step = "the pending identity lost its Unlisted registration intent";
+			}
+			service.m_IdentityPending = false;
+			const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+			while (step.empty() && confirmed(service) != nlohmann::json(false) && std::chrono::steady_clock::now() < until) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(2));
+				service.Update();
+			}
+			if (step.empty() && (count(*wire, "POST", "/v1/sessions") != 1 || confirmed(service) != nlohmann::json(false) || service.m_DirectoryRetracted)) {
+				step = "the starting Unlisted lobby did not register and confirm its visibility";
+			}
+			for (auto phase : {NetMatchServiceState::ReadyToLaunch, NetMatchServiceState::Running}) {
+				service.m_State = phase;
+				pump(service, 2);
+				if (step.empty() && (service.m_DirectoryRetracted || service.m_Directory.GetSessionId() != idA || count(*wire, "DELETE", "/v1/sessions/" + idA) != 0)) {
+					step = "an active Unlisted lobby lost its directory row before the match ended";
+				}
+			}
+			finish(service);
+			if (!step.empty()) misses.push_back(std::string("unlisted startup ") + (ice ? "ice: " : "ip: ") + step);
+		}
+
 		{   // a natural ICE end hides the bound row, keeps beating it, and the rematch relists that same row
 			auto wire = std::make_shared<Wire>();
 			wire->replies = {registerReply(idA, "tok-a", 1, true), hidden, hidden, listed, deleted};
@@ -15781,6 +16059,30 @@ namespace RTE {
 				return false;
 			}
 		}
+		const std::string hiddenCode = "7b8c9d2e-1111-4222-8333-444455556666";
+		NetIceJoinTarget hiddenTarget;
+		if (NetIceResolveSessionRow(rows, local, hiddenCode, &hiddenTarget) != "no such session" ||
+		    !NetIceResolveSessionRow(rows, local, hiddenCode, &hiddenTarget, nullptr, false, true).empty() ||
+		    hiddenTarget.identity != NetIceHostIdentity(hiddenCode) || hiddenTarget.joinMode != "ice" ||
+		    !hiddenTarget.address.empty() || hiddenTarget.port != 0) {
+			*error = "an explicit Unlisted ICE code did not dial its host without changing ordinary browse resolution";
+			return false;
+		}
+		for (const std::string& invalid : {std::string("absent"), hiddenCode + "/extra", std::string(36, 'g')}) {
+			if (NetIceResolveSessionRow(rows, local, invalid, &hiddenTarget, nullptr, false, true) != "no such session") {
+				*error = "an invalid session code acquired an ICE route";
+				return false;
+			}
+		}
+		for (bool incompatible : {false, true}) {
+			NetDirectorySessionRow known = sample(hiddenCode);
+			if (incompatible) known.lockstepCodecVersion = 99; else known.seatsFree = 0;
+			if (NetIceResolveSessionRow({known}, local, hiddenCode, &hiddenTarget, nullptr, false, true) != (incompatible ? "codec" : "full")) {
+				*error = "an explicit code bypassed a known directory refusal";
+				return false;
+			}
+		}
+		std::cout << "[net-match-selftest] PASS unlisted_session_code_ice ordinary_browse=unchanged listed_refusals=preserved invalid_codes=refused" << std::endl;
 		NetIceJoinTarget target;
 		if (!NetIceResolveSessionRow(rows, local, "live", &target).empty() || target.identity != "str:h-live" || target.joinMode != "ice") {
 			*error = "session-id join: the joinable ice row did not resolve to its host identity";
@@ -15993,10 +16295,10 @@ namespace RTE {
 			return false;
 		}
 		// A fresh install ships a directory, so the hint asks for one only when the player cleared it.
-		const bool shippedDirectoryHint = NetHostNatTraversalHint(settings, true, false, "").find("session directory URL") == std::string::npos;
+		const bool shippedDirectoryHint = NetHostNatTraversalHint(settings, true, true, false, "").find("online game list service") == std::string::npos;
 		settings.SetSessionDirectoryUrl("");
-		if (!shippedDirectoryHint || NetHostNatTraversalHint(settings, true, false, "").find("session directory URL") == std::string::npos ||
-		    NetHostNatTraversalHint(settings, false, false, "ip").find("Current session uses direct IP:") == std::string::npos) {
+		if (!shippedDirectoryHint || NetHostNatTraversalHint(settings, true, true, false, "").find("online game list service") == std::string::npos ||
+		    NetHostNatTraversalHint(settings, true, false, false, "ip").find("This lobby connects by address:") == std::string::npos) {
 			*error = "NAT hint hid the directory requirement or the direct route after host handover";
 			return false;
 		}
@@ -16372,6 +16674,12 @@ namespace RTE {
 		};
 
 		std::string error;
+		if (const char* selected = std::getenv("CC_NET_MATCH_SELFTEST_ROW")) {
+			if (std::string(selected) != "session-id-join") return fail("unknown selected self-test row");
+			if (!TestSessionIdJoinRefusals(&error)) return fail(error);
+			std::cout << "[net-match-selftest] PASS selected_row session-id-join" << std::endl;
+			return 0;
+		}
 		// These rows each report their own failure, so one run names every red among them.
 		bool rowsPassed = true;
 		const auto row = [&](bool (*test)(std::string*), const char* name) {
@@ -16429,6 +16737,7 @@ namespace RTE {
 			return fail(error);
 		if (!TestMigrationEndpointTimeout(&error))
 			return fail(error);
+		if (!TestLobbyOpenSeatConfig(&error)) return fail(error);
 		if (!TestDisplayNameUtf8(&error)) return fail(error);
 		if (!TestMatchConfigDedicated(&error)) return fail(error);
 		if (!TestActivityModuleResolution(&error)) return fail(error);
@@ -16550,6 +16859,8 @@ namespace RTE {
 		if (!hardDropError.empty()) return fail(hardDropError);
 		if (!reclaimError.empty()) return fail(reclaimError);
 		if (!TestLobbyThreePeer(&error)) return fail(error);
+		if (!TestLobbyStartCommitted(&error)) return fail(error);
+		if (!TestLobbyCountdownBelongsToSetup(&error)) return fail(error);
 		if (!TestServiceDedicatedRequest(&error)) return fail(error);
 		if (!TestLobbyThreePeerDedicated(&error)) return fail(error);
 		if (!TestLobbyLateJoinerRosterRace(&error)) return fail(error);

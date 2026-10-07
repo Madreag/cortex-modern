@@ -55,7 +55,7 @@ namespace {
 	};
 	struct Probe {
 		bool loaded = false, enabled = false, done = false, resultStarted = false;
-		size_t index = 0, gestureIndex = SIZE_MAX;
+		size_t index = 0, gestureIndex = SIZE_MAX, handIndex = SIZE_MAX; //!< handIndex: the step whose hand gesture is still running.
 		uint64_t renders = 0, stepRender = 0, stepMs = 0, simTick = 0, resultWrittenMs = 0;
 		Clock::time_point started;
 		Clock::time_point loadedAt; //!< The label dump's one clock: the script's load, which the activation and a round's reset never move.
@@ -629,16 +629,26 @@ namespace {
 			std::string command, name, detail;
 			args >> command;
 			bool accepted = false;
-			if (command == "activate" || command == "post_command") {
+			if (probe.handIndex == probe.index) {
+				// The step's gesture runs a phase a frame; the step ends with its verdict.
+				if (!MenuAutomation::HandFinished(accepted, detail)) return false;
+				probe.handIndex = SIZE_MAX;
+			} else if (MenuAutomation::HandBusy()) {
+				return false;
+			} else if (command == "activate" || command == "post_command") {
 				args >> name;
-				if (auto* pause = g_MenuMan.GetActivePauseMenu()) accepted = pause->AutomationPostCommand(name);
-				else if (g_MenuMan.IsMainMenuInteractive()) accepted = g_MenuMan.GetMainMenu()->AutomationPostCommand(name);
+				auto* main = g_MenuMan.IsMainMenuInteractive() ? g_MenuMan.GetMainMenu() : nullptr;
+				accepted = MenuControls() && MenuAutomation::HandClick(MenuControls(), name, !g_MenuMan.GetActivePauseMenu() && main ? main->AutomationModalDialog() : nullptr, detail);
 			} else if (command == "assert_enabled") {
 				int expected = -1; args >> name >> expected;
 				accepted = MenuControls() && (expected == 0 || expected == 1) && MenuControls()->GetControl(name) && MenuAutomation::Enabled(MenuControls()->GetControl(name)) == (expected == 1);
 			} else {
 				Require(MenuAutomation::Handles(command), "unknown menu operation: " + command);
 				accepted = MenuAutomation::Execute(MenuControls(), MenuScreen(), command, args, detail);
+			}
+			if (accepted && MenuAutomation::HandBusy() && probe.handIndex != probe.index) {
+				probe.handIndex = probe.index;
+				return false;
 			}
 			observed["accepted"] = accepted;
 			observed["menu_observation"] = detail;
@@ -1003,7 +1013,7 @@ namespace {
 				probe.round = round; probe.index = 0; probe.done = false; probe.phaseArmed = false;
 				probe.result["steps"] = Json::array(); probe.result["complete"] = false; probe.result["pass"] = false;
 				probe.result["round"] = round; probe.started = Clock::now();
-				probe.stepMs = probe.resultWrittenMs = 0; probe.gestureIndex = SIZE_MAX;
+				probe.stepMs = probe.resultWrittenMs = 0; probe.gestureIndex = SIZE_MAX; probe.handIndex = SIZE_MAX;
 				probe.roundEndArmed = false; probe.roundEndSignals.clear();
 			}
 			if (probe.done) return;
@@ -1167,10 +1177,12 @@ bool RunCrossScopeSelfTest(std::string* error) {
 
 void BeforePoll() { Process(Phase::Poll); }
 void AfterDraw() {
+	MenuAutomation::AfterDrawnFrame();
 	MenuAutomation::EvaluateWatches(MenuControls());
 	Process(Phase::Draw);
 }
 void AfterMenuDraw() {
+	MenuAutomation::AfterDrawnFrame();
 	MenuAutomation::EvaluateWatches(MenuControls());
 	Process(Phase::Draw, true);
 }

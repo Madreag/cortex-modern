@@ -1,7 +1,9 @@
 #pragma once
 
 #include <array>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace RTE {
 
@@ -26,6 +28,11 @@ namespace RTE {
 		/// Constructor method used to instantiate a SettingsNetworkGUI object in system memory and make it ready for use.
 		/// @param parentControlManager Pointer to the parent GUIControlManager which owns all the GUIControls of this SettingsNetworkGUI. Ownership is NOT transferred!
 		explicit SettingsNetworkGUI(GUIControlManager* parentControlManager);
+
+		/// Lists the controls this page reads that the menu file lacks; the page is built only when there are none.
+		/// @param parentControlManager The GUIControlManager holding the settings menu's controls.
+		/// @return The names of the missing controls, empty for a menu file of this version.
+		static std::vector<std::string> MissingControls(GUIControlManager* parentControlManager);
 #pragma endregion
 
 #pragma region Concrete Methods
@@ -40,7 +47,7 @@ namespace RTE {
 
 	private:
 		/// The pages the tab row inside the network box selects between.
-		enum class Page { Player = 0, Chat, Recovery, Files, Internet, Connection, Count };
+		enum class Page { Player = 0, Chat, Recovery, Files, Internet, Connection, Basics, Count };
 
 		GUIControlManager* m_GUIControlManager; //!< The GUIControlManager which holds all the GUIControls of this menu. Not owned by this.
 
@@ -48,7 +55,11 @@ namespace RTE {
 		GUICollectionBox* m_NetworkSettingsBox;
 		std::array<GUITab*, static_cast<int>(Page::Count)> m_PageTabs; //!< The page selector row.
 		std::array<GUICollectionBox*, static_cast<int>(Page::Count)> m_PageBoxes; //!< One page box per selector tab.
-		Page m_ActivePage = Page::Player; //!< The page the selector currently shows.
+		Page m_ActivePage = Page::Basics; //!< The page the selector currently shows.
+		bool m_AdvancedShown = false; //!< The selector offers the pages behind Advanced settings.
+		GUILabel* m_ConnectionValueLabel = nullptr; //!< The first view's one-line Connection summary.
+		GUIButton* m_ConnectionChangeButton = nullptr;
+		GUIButton* m_AdvancedButton = nullptr;
 
 		// Player page.
 		GUITextBox* m_DisplayNameTextbox;
@@ -69,7 +80,7 @@ namespace RTE {
 		GUICheckbox* m_DiagnosticsCheckbox;
 		GUIComboBox* m_StatusModeCombo;
 		/// Every row drawn under the fixed-delay row, with the y it sits at while that row is drawn.
-		std::array<std::pair<GUIControl*, int>, 12> m_RowsUnderFixedDelay;
+		std::array<std::pair<GUIControl*, int>, 10> m_RowsUnderFixedDelay;
 
 		// Chat page.
 		GUICheckbox* m_ChatVisibleCheckbox;

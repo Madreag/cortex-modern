@@ -9,6 +9,7 @@
 
 #include "SaveLoadMenuGUI.h"
 #include "SettingsGUI.h"
+#include "SettingsMan.h"
 #include "ModManagerGUI.h"
 
 #include <array>
@@ -88,21 +89,19 @@ namespace RTE {
 #pragma region Automation
 		/// Gets the control manager for the screen currently drawn.
 		GUIControlManager* AutomationManager() const;
-		/// Activates a control by name, dispatching to the active screen handler exactly as a click does.
-		/// @return Whether the control was found.
-		bool AutomationActivateControl(const std::string& controlName);
+		/// The list and row a scripted row name stands for: GameRow<n>, GameRowPort<port> (the joinable game on that port) or LabelReplayRow<n>.
+		bool AutomationRowOf(const std::string& name, std::string& listName, int& row) const;
+		/// The games the Join screen lists, in list order: a row shows words, the join target is here.
+		const std::vector<NetDirectoryClient::GameRow>& AutomationGameRows() const { return m_GameRows; }
 
-		/// Names a clickable control; its Command is posted after the next GUI Update.
-		bool AutomationPostCommand(const std::string& controlName);
+		/// What the multiplayer screens hold for the next lobby and the host's draft, for a readback that a change reached them.
+		std::string AutomationModelText() const;
 
-		/// Sets a text box's text by control name.
-		bool AutomationSetText(const std::string& controlName, const std::string& text);
+		/// The dialog that takes every click while it is open, or null.
+		GUIControl* AutomationModalDialog() const;
 
-		/// Pins the lobby share-address host the status row draws.
-		void AutomationSetShareAddress(const std::string& address);
-
-		/// Sets a checkbox's state by control name, then runs the same change path a click would.
-		bool AutomationSetCheck(const std::string& controlName, bool checked);
+		/// Gets the port the next hosted lobby listens on, as the host's setup holds it. False when there is no setup.
+		bool AutomationHostPort(std::string& port) const;
 
 		/// Gets a named control's text (label, button or checkbox) for assert_label; false when it has none.
 		bool AutomationLabelText(const std::string& controlName, std::string& text) const;
@@ -206,6 +205,13 @@ namespace RTE {
 			HostSessionBannedButton,
 			HostBannedRemoveButton,
 			HostBannedCloseButton,
+			LobbyEditSetupButton,
+			LobbyLeaveStayButton,
+			LobbyLeaveConfirmButton,
+			JoinByAddressButton,
+			JoinAddressGoButton,
+			JoinAddressCancelButton,
+			HostOptionsRestoreButton,
 			ButtonCount
 		};
 
@@ -267,6 +273,7 @@ namespace RTE {
 		struct ReplayRow {
 			std::string path;
 			std::string text;
+			std::string details; //!< The selected recording, whole, and what Play does.
 			std::string error;
 		};
 		std::vector<ReplayRow> m_ReplayRows;
@@ -285,7 +292,9 @@ namespace RTE {
 		std::vector<ResumeRow> m_ResumeRows;
 		GUITextBox* m_MultiplayerNameTextBox;
 		GUITextBox* m_MultiplayerHostPortTextBox;
-		GUITextBox* m_MultiplayerHostPlayersTextBox;
+		GUIComboBox* m_MultiplayerHostPlayersCombo = nullptr; //!< The human players the mode accepts, the host included.
+		GUILabel* m_MultiplayerHostAboutLabel = nullptr;     //!< The picked activity's description, one line.
+		uint8_t m_MultiplayerHostPeerCount = 2;              //!< The human players the next lobby seats.
 		GUITextBox* m_MultiplayerHostInputDelayTextBox;
 		GUILabel* m_MultiplayerHostInputDelayPolicyLabel; //!< Names the saved delay policy beside the box, the same parenthetical the lobby row carries.
 		GUICheckbox* m_MultiplayerHostPortMapCheckbox;
@@ -332,12 +341,12 @@ namespace RTE {
 		std::array<GUIButton*, 3> m_ModerationCancelButtons;
 		NetModerationUx m_ModerationUx; //!< §9b's panel model; the buttons and the headless driver share it.
 		std::map<const GUIControl*, NetModerationUx::Row> m_PressedModeration;
-		std::array<GUILabel*, 4> m_MultiplayerLobbyPlayerLabels;
+		std::map<std::string, bool> m_ActivityNameShared; //!< Per activity name, whether two loaded activities share it.
+		std::array<GUILabel*, NetMatchConfigUtil::c_MaxPlayers> m_MultiplayerLobbyPlayerLabels;
 		GUIFont* m_MultiplayerLobbyPlayerRowFont = nullptr; //!< The font the player rows draw in, so the row text is measured against what draws it.
 		GUIFont* m_MultiplayerLobbyPlayerRowFallbackFont = nullptr; //!< Supplies the row bytes the primary font's atlas has no ink for.
 		GUILabel* m_MultiplayerLobbyPlayersHeader = nullptr; //!< The "Players" column header; it moves with the rows when the panel widens.
 		GUILabel* m_MultiplayerLobbyPortMapLabel;
-		uint32_t m_PortMapSerialShown; //!< The last lobby port-map serial this panel rendered.
 		// The lobby's chat is built in code so the panel can grow for it without touching the skin file.
 		std::array<GUILabel*, 8> m_MultiplayerLobbyChatLabels;
 		GUITextBox* m_MultiplayerLobbyChatInput;
@@ -347,11 +356,41 @@ namespace RTE {
 		// §9.2/9.3's host options panel: six pages over the lobby, or the host-setup draft of the next one.
 		GUICollectionBox* m_HostOptionsPanel = nullptr;
 		GUILabel* m_HostOptionsTitle = nullptr;
-		static constexpr int c_HostOptionsPageCount = 6;
+		static constexpr int c_HostOptionsPageCount = 7;
+		static constexpr int c_HostOptionsPlayersPage = 0;
+		static constexpr int c_HostOptionsRulesPage = 1;
+		static constexpr int c_HostOptionsConnectionPage = 2;
+		static constexpr int c_HostOptionsTimingPage = 3;
+		static constexpr int c_HostOptionsRecoveryPage = 4;
+		static constexpr int c_HostOptionsFilesPage = 5;
+		static constexpr int c_HostOptionsSessionPage = 6;
+		/// This computer's own hosting choices as Advanced edits them: saved when Apply commits the page, kept as they were on Cancel.
+		struct HostComputerDraft {
+			SettingsMan::NetworkHostVisibility listing = SettingsMan::NetworkHostVisibility::Listed;
+			bool portMap = true;
+			std::string port = "41010";
+			bool ice = true;
+			SettingsMan::NetworkHostRelayMode relay = SettingsMan::NetworkHostRelayMode::Directory;
+			std::array<std::string, 3> relayFields;
+			int joinHistorySeconds = 360;
+			int joinLagSeconds = 120;
+			SettingsMan::NetworkMatchStatusMode statusWidget = SettingsMan::NetworkMatchStatusMode::Auto;
+			bool operator==(const HostComputerDraft&) const = default;
+		};
+		HostComputerDraft m_HostComputerDraft;
+		HostComputerDraft m_HostComputerLoaded; //!< The hosting choices as Advanced opened on them.
+		NetMatchConfig m_HostOptionsOpenedDraft; //!< The match draft as Advanced opened on it, for an unstaged setup.
+		GUILabel* m_HostOptScopeLabel = nullptr;       //!< Under the selector: what the shown page edits.
+		GUILabel* m_HostRulesDefaultsLabel = nullptr;  //!< The Rules page's defaults, in one line.
+		GUILabel* m_HostNetVisibilityHint = nullptr;   //!< What the picked game listing means for a friend.
 		std::array<GUITab*, c_HostOptionsPageCount> m_HostOptionsTabs{};
 		std::array<GUICollectionBox*, c_HostOptionsPageCount> m_HostOptionsPages{};
 		int m_HostOptionsPage = 0;
 		GUILabel* m_HostOptionsStatusLabel = nullptr;
+		GUILabel* m_HostNetPortHint = nullptr;     //!< Beside the port: the default, or the router's answer for a hosted lobby.
+		GUILabel* m_HostRecRejoinLabel = nullptr;  //!< Whether this build can prove who a returning player is.
+		std::vector<std::string> m_MultiplayerControlsMissing; //!< Controls the multiplayer screens need that the menu file lacks.
+		GUILabel* m_MultiplayerOffLabel = nullptr; //!< Under the main menu: why multiplayer is off.
 		GUILabel* m_PageChatNotice = nullptr; //!< The newest lobby chat line, drawn above a host page that hides the lobby's chat band.
 		/// Moves the chat the service received into the lobby's lines, whichever sub-screen is showing.
 		void TakeLobbyChat(const NetLobbySnapshot& snapshot);
@@ -394,8 +433,6 @@ namespace RTE {
 		GUIComboBox* m_HostNetVisibilityCombo = nullptr; //!< H34: LAN only / Internet: Unlisted / Internet: Listed.
 		GUIComboBox* m_HostNetIceCombo = nullptr;
 		GUILabel* m_HostNetIceHintLabel = nullptr;
-		std::array<GUITab*, 2> m_HostNetworkTabs{};
-		std::array<GUICollectionBox*, 2> m_HostNetworkPages{};
 		GUIComboBox* m_HostRelayCombo = nullptr;
 		std::array<GUITextBox*, 3> m_HostRelayBoxes{};
 		std::array<GUILabel*, 3> m_HostRelayLabels{};
@@ -433,7 +470,7 @@ namespace RTE {
 		GUILabel* m_HostSeatDlgState = nullptr;
 		GUILabel* m_HostSeatDlgReclaim = nullptr;    //!< H08: hold/reclaim seconds from the seat snapshot.
 		GUILabel* m_HostSeatDlgApplicants = nullptr;
-		GUIButton* m_HostSeatDlgApplicant = nullptr; //!< H04: cycles the seat's bounded applicant list.
+		GUIListBox* m_HostSeatDlgApplicantList = nullptr; //!< The people asking for the seat; a pick chooses whom Approve seats.
 		GUIButton* m_HostSeatDlgWait = nullptr;      //!< H05.
 		GUIButton* m_HostSeatDlgApprove = nullptr;   //!< H06.
 		GUIButton* m_HostSeatDlgCancel = nullptr;    //!< H07.
@@ -447,9 +484,19 @@ namespace RTE {
 		GUILabel* m_HostBannedStatusLabel = nullptr;
 		std::vector<NetHostBanRecord> m_HostBannedRecords; //!< The store's rows, indexed like the pick combo.
 		NetMatchConfig m_HostOptionsDraft;              //!< The complete config the panel edits.
+		NetMatchConfig m_HostOptionsShownDraft;         //!< The draft as the controls last showed it: only then does a change event read them back.
 		uint64_t m_HostOptionsBaseRevision = 0;         //!< The adopted revision the draft was seeded from.
 		bool m_HostOptionsSetupDraft = false;           //!< True while the draft feeds a new lobby's request.
 		bool m_HostOptionsReadOnly = false;             //!< A client reads the adopted config; it cannot edit it.
+		GUICollectionBox* m_JoinAddressDialog = nullptr; //!< Join by address: the address and port boxes.
+		GUILabel* m_JoinSelectedLabel = nullptr;         //!< The selected game's details, or why it cannot be joined.
+		bool m_JoinAttemptActive = false;                //!< A join started from this screen and not yet in its lobby.
+		std::string m_JoinStatusText;                    //!< The join's outcome on the join screen; empty when there is none.
+		std::string m_JoinTargetName;                    //!< The host a join on its way is for.
+		int m_ListEventMsg = -1; //!< The notification a list's event carried, while its handler runs.
+		std::string m_SelectedGameKey;                   //!< The selected game's identity, kept across list refreshes.
+		GUICollectionBox* m_LobbyLeaveDialog = nullptr; //!< Asks before Escape or Back closes an open lobby.
+		GUILabel* m_LobbyLeaveLabel = nullptr;
 		std::optional<NetMatchConfig> m_HostSetupOptions; //!< The setup draft Apply accepted; the next request carries it.
 		unsigned m_HostRulesTouched = 0;        //!< The activity-seeded rules the host set himself in this draft (NetActivitySetup::SeededRule bits).
 		unsigned m_HostAppliedRulesTouched = 0; //!< The same for the last draft Apply accepted, which the next open continues from.
@@ -461,10 +508,10 @@ namespace RTE {
 		std::optional<NetH4ModerationSeat> m_HostSeatDlgRemovalSeat; //!< The seat's admission row a Kick/Ban selection rides, when published.
 		bool m_HostKickBanWatch = false;                //!< A Queued removal's applied result lands in GetLastKickBanResult.
 		std::string m_HostKickBanVerb;                  //!< "Kick"/"Ban" - the action the watch is reporting.
-		std::vector<std::string> m_HostOptionsScenes;   //!< Scene presets the Site combo offers.
+		std::vector<NetHostActivityChoice> m_HostOptionsActivities; //!< The activities the Rules page offers: the host screen's census.
+		std::vector<NetHostSceneChoice> m_HostOptionsScenes;        //!< The scenes the Rules page offers: those the drafted activity runs.
 		std::vector<std::string> m_HostOptionsTechModules; //!< Tech combo's resolved module names (-All-/-Random- first).
 		std::string m_ReconnectStatusShown; //!< The last §11 line this screen wrote, so it may clear its own.
-		std::string m_PendingAutomationCommand; //!< Control waiting to raise Command after Update clears the queue.
 		NetMatchServiceRequest m_MultiplayerJoinRequest; //!< The join the player last asked for, so an application reuses it.
 		bool m_MultiplayerApplyOffered = false;          //!< A join of this host may still be answered by applying (§9b).
 		GUICollectionBox* m_CreditsScrollPanel;
@@ -476,6 +523,12 @@ namespace RTE {
 		void CreateMainScreen();
 
 		/// Creates all the elements that compose the MetaGame notice menu screen.
+		/// Looks up a control the multiplayer screens use, noting it when the menu file has none of that name.
+		GUIControl* MultiplayerControl(const std::string& name);
+
+		/// Leaves multiplayer off for a menu file without its controls, and says so under the main menu.
+		void TurnMultiplayerOff();
+
 		void CreateMetaGameNoticeScreen();
 
 		/// Creates all the elements that compose the multiplayer menu screen.
@@ -539,12 +592,21 @@ namespace RTE {
 		/// @param backButtonPressed Whether the player requested to return to the main menu from one of the sub-menus via back button.
 		void HandleBackNavigation(bool backButtonPressed);
 
+		/// Asks whether to leave the open lobby, saying what leaving does for the others.
+		void AskToLeaveLobby();
+
+		/// Leaves the lobby or the match being joined, back to where the player chose it.
+		void LeaveLobby();
+
+		/// Joins the game selected in the list.
+		void JoinSelectedGame();
+
+		/// Keeps the player on the screen they set up with and says why the host or join did not start.
+		void ShowSetupFailure(bool host, const std::string& text);
+
 		/// Handles the player interaction with the MainMenuGUI GUI elements.
 		/// @return Whether the player requested to return to the main menu from one of the sub-menus.
 		bool HandleInputEvents();
-
-		/// Posts a pending menu-script Command after Update has cleared the queue.
-		void PostPendingAutomationCommand();
 
 		/// Handles the player interaction with the main screen GUI elements.
 		/// @param guiEventControl Pointer to the GUI element that the player interacted with.
@@ -632,6 +694,11 @@ namespace RTE {
 		void RefreshHostOptionsControls(const NetLobbySnapshot& snapshot);
 		/// Reads every editable control back into the draft (Apply, and before roster re-derivation).
 		void DraftHostOptionsFromControls();
+		/// Fills the Rules page's activity list from the host screen's census.
+		void RefreshHostOptionsActivities();
+		/// Fills the Rules page's scene list with the scenes the drafted activity can run.
+		/// @param resolve Whether a drafted scene the activity cannot run gives way to the activity's preferred one.
+		void RefreshHostOptionsScenes(bool resolve);
 		/// Keeps the activity-seeded rules on the activity's own defaults after a draft read: a new activity re-seeds
 		/// them and a new difficulty re-seeds the gold, except a rule the host set himself.
 		/// @param before The draft's rules before the read. @param guiEventControl The control the read answered.
@@ -640,8 +707,28 @@ namespace RTE {
 		void RederiveHostOptionsRoster();
 		/// The request the host-setup fields would send today, so the setup draft seeds the same config.
 		NetMatchServiceRequest HostRequestDraft() const;
+		/// Offers the human player counts the chosen mode accepts and keeps the count inside them.
+		void RefreshHostPlayersChoices();
+		/// Carries the host screen's activity, scene, mode and players into the staged draft, so the rows, Advanced and the
+		/// summary are one draft; a new activity re-seeds the rules the host did not set.
+		void SyncHostSetupDraft();
+		/// Shows a staged draft on the host screen's rows.
+		void SyncHostScreenFromDraft(const NetMatchConfig& draft);
+		/// The host's saved defaults become the draft the host screen opens on, when nothing is staged yet.
+		void StageSavedHostDefaults();
+		/// The host screen's summary: the scene, the people and AI teams and how they are arranged, and who can find the game.
+		std::string HostSummaryText() const;
 		/// Apply: the setup path stages the draft for the next request; the lobby path submits it.
 		void ApplyHostOptions();
+		/// Loads this computer's hosting choices into the draft Advanced edits.
+		void LoadHostComputerDraft();
+		/// Saves the edited hosting choices; false with the reason on the panel when one cannot be taken now.
+		/// @param commit False checks every choice and saves none.
+		bool CommitHostComputerDraft(bool commit = true);
+		/// Stages the shown page's factory values; Apply commits them as any edit.
+		void RestoreHostOptionsPageDefaults();
+		/// Leaves Advanced for the screen it was opened from.
+		void LeaveHostOptions();
 		/// Writes the draft's host-owned fields to the persisted host defaults.
 		void SaveHostOptionsDefaults();
 		/// The seat details dialog's contents for one roster row.
@@ -649,10 +736,6 @@ namespace RTE {
 		/// Re-fills the open seat dialog's live rows: hold seconds, applicants, action availability.
 		void RefreshHostSeatDialog();
 		void RefreshHostBannedDialog();
-		/// H34: validates the port field against the setup draft - refused while a session is
-		/// hosted, out of range, or unchanged; a valid edit lands on the next hosted request.
-		void CommitHostNetPort();
-		void CommitHostRelay();
 		/// H03: applies one row's Open/Closed/CPU pick to the draft roster, refusing the illegal ones.
 		void ChangeHostSeatType(int row, int typeIndex);
 		/// H11: opens the banned-players list dialog.
@@ -669,6 +752,8 @@ namespace RTE {
 		void ApplyToSubstitute();
 		/// Asks the host for the player's own held seat, which the host's refusal named.
 		void ApplyForOwnSeat(uint16_t stableSeat);
+		/// Whether two loaded activities share this name, so a header names the module to tell them apart.
+		bool ActivityNameShared(const std::string& preset);
 		/// Joins again and waits, knocking, for one of a world's held slots to open.
 		void WaitForSlot();
 

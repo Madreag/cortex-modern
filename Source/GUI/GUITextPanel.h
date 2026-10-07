@@ -129,6 +129,12 @@ namespace RTE {
 		/// @param maxLength The maximum length of the text this text panel can contain.
 		void SetMaxTextLength(int maxLength) { m_MaxTextLength = maxLength; }
 
+		/// What the panel accepts: numbers only, their bounds (0 means none) and the longest text (0 means any).
+		bool GetNumericOnly() const { return m_NumericOnly; }
+		int GetMaxNumericValue() const { return m_MaxNumericValue; }
+		int GetMinNumericValue() const { return m_MinNumericValue; }
+		int GetMaxTextLength() const { return m_MaxTextLength; }
+
 	private:
 		GUISkin* m_TextSkin = nullptr;
 		unsigned long m_FontSelectColor;

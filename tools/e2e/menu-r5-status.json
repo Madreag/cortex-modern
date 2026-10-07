@@ -59,7 +59,9 @@
             "-input-script",
             "{INPUT_SCRIPT}",
             "-net-join",
-            "127.0.0.1"
+            "127.0.0.1",
+            "-net-player-name",
+            "Observer"
           ],
           "settings": {
             "NetworkDisplayName": "client",
@@ -91,7 +93,9 @@
             "-input-script",
             "{INPUT_SCRIPT}",
             "-net-join",
-            "127.0.0.1"
+            "127.0.0.1",
+            "-net-player-name",
+            "Survivor"
           ],
           "settings": {
             "NetworkDisplayName": "survivor",
@@ -161,7 +165,9 @@
             "-input-script",
             "{INPUT_SCRIPT}",
             "-net-join",
-            "127.0.0.1"
+            "127.0.0.1",
+            "-net-player-name",
+            "Observer"
           ],
           "settings": {
             "NetworkDisplayName": "client",
@@ -193,7 +199,9 @@
             "-input-script",
             "{INPUT_SCRIPT}",
             "-net-join",
-            "127.0.0.1"
+            "127.0.0.1",
+            "-net-player-name",
+            "Survivor"
           ],
           "settings": {
             "NetworkDisplayName": "survivor",
@@ -263,7 +271,9 @@
             "-input-script",
             "{INPUT_SCRIPT}",
             "-net-join",
-            "127.0.0.1"
+            "127.0.0.1",
+            "-net-player-name",
+            "Observer"
           ],
           "settings": {
             "NetworkDisplayName": "client",
@@ -295,7 +305,9 @@
             "-input-script",
             "{INPUT_SCRIPT}",
             "-net-join",
-            "127.0.0.1"
+            "127.0.0.1",
+            "-net-player-name",
+            "Survivor"
           ],
           "settings": {
             "NetworkDisplayName": "survivor",

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "name": "mp-version-mismatch",
-  "port_base": 49700,
+  "port_base": 49420,
   "title": "Refuse mismatched advertised builds and protocols in the lobby",
   "size": "640x360",
   "timeout_s": 100,
@@ -72,10 +72,11 @@
       "peer": "client",
       "screen": "MultiplayerScreen",
       "mark": "version-client-refusal",
-      "what": "The joiner sees the exact refusal and both advertised versions.",
+      "what": "The joiner stays on Join a Game and reads the exact refusal, both advertised versions, whole.",
       "events": [
-        "assert_net_label LabelMultiplayerLandingStatus \"Your build differs from the host's \\(host stage2-p2d-local; yours fixture-other-build\\)\\.\"",
-        "assert_substate expected=Landing actual=Landing PASS"
+        "assert_label LabelJoinSelected \"Your build differs from the host's \\(host stage2-p2d-local; yours fixture-other-build\\)\\.\" text=.* PASS",
+        "assert_text_fits LabelJoinSelected .*PASS",
+        "assert_substate expected=JoinSetup actual=JoinSetup PASS"
       ]
     },
     {
@@ -96,10 +97,11 @@
       "peer": "client",
       "screen": "MultiplayerScreen",
       "mark": "version-client-refusal",
-      "what": "The joiner sees the exact refusal and both advertised versions.",
+      "what": "The joiner stays on Join a Game and reads the exact refusal, both advertised versions, whole.",
       "events": [
-        "assert_net_label LabelMultiplayerLandingStatus \"Network protocol differs \\(host {NET_PROTOCOL_VERSION}; yours 2\\)\\.\"",
-        "assert_substate expected=Landing actual=Landing PASS"
+        "assert_label LabelJoinSelected \"Network protocol differs \\(host {NET_PROTOCOL_VERSION}; yours 2\\)\\.\" text=.* PASS",
+        "assert_text_fits LabelJoinSelected .*PASS",
+        "assert_substate expected=JoinSetup actual=JoinSetup PASS"
       ]
     }
   ]

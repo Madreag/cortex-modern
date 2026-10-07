@@ -261,7 +261,8 @@ Vector UInputMan::GetMenuDirectional(int whichPlayer) {
 	if (whichPlayer == -1) {
 		Vector allInput(0.0f, 0.0f);
 		for (int player = PlayerOne; player < MaxPlayerCount; player++) {
-			allInput += GetMenuDirectional(player);
+			// A scripted player's moves are its match's, never the menus' cursor.
+			if (!InputScript::DrivesPlayer(player)) allInput += GetMenuDirectional(player);
 		}
 		allInput.CapMagnitude(1.0f);
 		return allInput;
@@ -1094,11 +1095,13 @@ bool UInputMan::GetMenuButtonState(int whichButton, InputState whichState) {
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		bool buttonState = false;
 		InputDevice device = m_ControlScheme[player].GetDevice();
+		// A player an input script drives plays its match; the menus' buttons are a hand's.
+		const bool scripted = InputScript::DrivesPlayer(player);
 		if (!buttonState && whichButton >= MenuCursorButtons::MENU_PRIMARY) {
-			buttonState = GetInputElementState(player, InputElements::INPUT_FIRE, whichState) || GetMouseButtonState(NoPlayer, MouseButtons::MOUSE_LEFT, whichState);
+			buttonState = (!scripted && GetInputElementState(player, InputElements::INPUT_FIRE, whichState)) || GetMouseButtonState(NoPlayer, MouseButtons::MOUSE_LEFT, whichState);
 		}
 		if (!buttonState && whichButton >= MenuCursorButtons::MENU_SECONDARY) {
-			buttonState = GetInputElementState(player, InputElements::INPUT_PIEMENU_DIGITAL, whichState) || GetMouseButtonState(NoPlayer, MouseButtons::MOUSE_RIGHT, whichState);
+			buttonState = (!scripted && GetInputElementState(player, InputElements::INPUT_PIEMENU_DIGITAL, whichState)) || GetMouseButtonState(NoPlayer, MouseButtons::MOUSE_RIGHT, whichState);
 		}
 		if (buttonState) {
 			m_LastDeviceWhichControlledGUICursor = device;
@@ -2148,9 +2151,14 @@ bool UInputMan::RunScriptedInputEdgeSelfTest() {
 	    InputScript::HeldAt(Players::PlayerOne, InputScript::c_ChatAction, 1) && !InputScript::HeldAt(Players::PlayerOne, InputScript::c_ChatAction, 3));
 	{
 		std::ofstream script(path);
-		script << "player=0 1 10 FIRE\nplayer=0 1 10 START\n";
+		script << "player=0 1 10 FIRE\nplayer=0 1 10 START\nplayer=0 1 10 L_RIGHT\n";
 	}
 	check("script_drives_across_chat_entry", InputScript::Load(path.string(), &error) && InputScript::DrivesPlayer(Players::PlayerOne));
+	// The menus' cursor and its click are a hand's: a scripted FIRE and move are held in the match and reach no menu.
+	g_TimerMan.RewindSimTo(5, 0);
+	check("scripted_player_works_no_menu", GetInputElementState(Players::PlayerOne, InputElements::INPUT_FIRE, InputState::Held) &&
+	        !MenuButtonHeld(MenuCursorButtons::MENU_EITHER) && GetMenuDirectional().GetSqrMagnitude() == 0.0F,
+	    "a scripted FIRE or move reached the menus' cursor");
 	// What an open entry does: the dialog key mask and the seats' own gameplay mappings.
 	DisableKeys(true);
 	TypeIntoSeatInput(true);

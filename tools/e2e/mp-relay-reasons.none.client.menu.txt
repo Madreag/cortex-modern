@@ -9,16 +9,18 @@ wait_ms 660
 assert_substate JoinSetup
 wait_file {DIRECTORY_ROOT}/listed.json 30
 wait_ms 2000
+activate ButtonJoinByAddress
+wait 4
 settext TextJoinAddress session:{DIRECTORY_SESSION}
 settext TextJoinPort {PORT}
 wait_ms 600
-activate ButtonMultiplayerConnect
+activate ButtonJoinAddressGo
 wait_ms 9000
 video_mark relay-reason-none
-assert_substate Landing
-assert_label LabelMultiplayerLandingStatus No relay is configured for this match - switch Connection to Automatic or Direct only
-# The reason stays on the landing, the cause on its first drawn line, for as long as the player looks at it.
-text_watch start h15-scene-relay-none require substate:Landing No relay is configured for this match
+assert_substate JoinSetup
+assert_label LabelJoinSelected No relay is configured for this match - switch Connection to Automatic or Direct only
+# The reason stays on Join a Game, the cause on its first drawn line, for as long as the player looks at it.
+text_watch start scene-relay-none require substate:JoinSetup No relay is configured for this match
 wait_ms 3000
-text_watch close h15-scene-relay-none
+text_watch close scene-relay-none
 exit

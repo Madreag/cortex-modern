@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 
@@ -33,7 +34,15 @@ namespace {
 	constexpr int c_FixedDelayRowHeight = 20;
 
 	// The selector row and the page boxes share their names with the page they switch in.
-	constexpr std::array<const char*, 6> c_PageNames{"Player", "Chat", "Recovery", "Files", "Internet", "Connection"};
+	constexpr std::array<const char*, 7> c_PageNames{"Player", "Chat", "Recovery", "Files", "Internet", "Connection", "Basics"};
+	// The first view's one-line summary of the player's own connection choice.
+	const char* ConnectionSummary(SettingsMan::NetworkConnectionMode mode) {
+		switch (mode) {
+			case SettingsMan::NetworkConnectionMode::DirectOnly: return "Direct only - no relay";
+			case SettingsMan::NetworkConnectionMode::RelayOnly: return "Relay only - always relayed";
+			default: return "Automatic - direct, or a relay";
+		}
+	}
 
 	// The boxes take typed digits only, so anything else came from a skin edit and is discarded.
 	bool ParseWholeNumber(const std::string& text, int& value) {
@@ -51,6 +60,16 @@ namespace {
 		return AutosaveStore::Directory().string();
 	}
 
+	// A run with no desktop of its own opens no window on the player's and leaves their clipboard alone.
+	bool Headless() {
+		const char* value = std::getenv("CCCP_HEADLESS");
+		return value && *value && std::string(value) != "0";
+	}
+
+	bool CopyPath(const std::string& path) {
+		return Headless() || GUIUtil::SetClipboardText(path);
+	}
+
 	// Creates the directory when absent so the opened folder always exists, then
 	// hands a file URI to the OS browser.
 	bool OpenFolder(const std::string& directory) {
@@ -59,11 +78,22 @@ namespace {
 		if (error) {
 			return false;
 		}
+		if (Headless()) {
+			return true;
+		}
 		std::string uri = "file:///";
 		for (char character: std::filesystem::path(directory).generic_string()) {
 			uri += character == ' ' ? "%20" : std::string(1, character);
 		}
 		return SDL_OpenURL(uri.c_str());
+	}
+
+	/// A message with a word wider than its row (a long folder path) scrolls along its one line instead of wrapping onto the rows above.
+	void ShowMessage(GUILabel* label, const std::string& text) {
+		label->SetText(text);
+		const bool wide = label->GetMaxWordWidth() > label->GetWidth();
+		label->SetHorizontalOverflowScroll(wide);
+		label->ActivateDeactivateOverflowScroll(wide);
 	}
 
 	std::string LatestFileName(const std::string& directory, const std::string& extension) {
@@ -122,6 +152,34 @@ namespace {
 	}
 } // namespace
 
+std::vector<std::string> SettingsNetworkGUI::MissingControls(GUIControlManager* parentControlManager) {
+	// Every control the constructor reads by name, besides the page tabs and boxes.
+	static const char* const requiredControls[]{
+	    "CollectionBoxNetworkSettings", "ButtonNetCancelRecovery", "ButtonNetNatRelay", "ButtonNetRejoin", "ButtonNetSaveDiagnostics",
+	    "ButtonNetworkAdvanced", "ButtonNetworkConnectionChange", "CheckboxNetworkAutoReconnect", "CheckboxNetworkAutoRepair",
+	    "CheckboxNetworkChatNotify", "CheckboxNetworkChatSound", "CheckboxNetworkChatVisible", "CheckboxNetworkOfferRejoin",
+	    "CheckboxNetworkPrediction", "CheckboxNetworkRecordReplays", "CheckboxNetworkToasts", "ComboMatchStatusWidget",
+	    "ComboNetworkChatScope", "ComboNetworkChatTextSize", "ComboNetworkConnection", "LabelNetAutosave", "LabelNetAutosaveInfo",
+	    "LabelNetAutosaveInterval", "LabelNetAutosavesKeptHint", "LabelNetAutosavesKeptTitle", "LabelNetDirStatus", "LabelNetDirUrlHint",
+	    "LabelNetFilesMessage", "LabelNetInternetError", "LabelNetInternetReason", "LabelNetLastHost", "LabelNetRecoveryError",
+	    "LabelNetRecoveryRecord", "LabelNetRecoveryStatus", "LabelNetworkConnectionHint", "LabelNetworkConnectionValue",
+	    "LabelNetworkFixedDelay", "LabelNetworkFixedDelayHint", "LabelNetworkIdleWait", "LabelNetworkIdleWaitHint",
+	    "LabelNetworkPathHorizon", "LabelNetworkPathHorizonHint", "LabelNetworkRelayHint", "RadioNetworkDelayAuto",
+	    "RadioNetworkDelayFixed", "TextNetworkAutosavesKept", "TextNetworkChatKey", "TextNetworkDiagDir", "TextNetworkDirPin",
+	    "TextNetworkDirUrl", "TextNetworkDisplayName", "TextNetworkFixedDelay", "TextNetworkIdleWait", "TextNetworkPathHorizon",
+	    "TextNetworkRelayAddress", "TextNetworkRelayPass", "TextNetworkRelayUser", "TextNetworkStunServers"};
+	std::vector<std::string> missing;
+	for (const char* name : requiredControls) {
+		if (!parentControlManager->GetControl(name)) missing.emplace_back(name);
+	}
+	for (const char* page : c_PageNames) {
+		for (const std::string& name : {"TabNetPage" + std::string(page), "CollectionBoxNetPage" + std::string(page)}) {
+			if (!parentControlManager->GetControl(name)) missing.push_back(name);
+		}
+	}
+	return missing;
+}
+
 SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) :
     m_GUIControlManager(parentControlManager) {
 	m_NetworkSettingsBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("CollectionBoxNetworkSettings"));
@@ -132,6 +190,9 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 		m_PageBoxes[index] = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("CollectionBoxNetPage" + page));
 	}
 
+	m_ConnectionValueLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkConnectionValue"));
+	m_ConnectionChangeButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonNetworkConnectionChange"));
+	m_AdvancedButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonNetworkAdvanced"));
 	m_DisplayNameTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkDisplayName"));
 	// The lobby's own name box takes 24 characters; both boxes write the same setting.
 	m_DisplayNameTextbox->SetMaxTextLength(24);
@@ -161,12 +222,12 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_AutoRepairCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkAutoRepair"));
 	m_ToastsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkToasts"));
 	m_PredictionCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkPrediction"));
-	m_DiagnosticsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->AddControl("CheckboxNetworkDiagnostics", "CHECKBOX", m_PageBoxes[0], 15, 172, 320, 20));
+	m_DiagnosticsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->AddControl("CheckboxNetworkDiagnostics", "CHECKBOX", m_PageBoxes[0], 15, 132, 320, 20));
 	m_DiagnosticsCheckbox->SetText("Show network diagnostics");
 
 	m_StatusModeCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboMatchStatusWidget"));
 	m_StatusModeCombo->AddItem("Off");
-	m_StatusModeCombo->AddItem("Auto");
+	m_StatusModeCombo->AddItem("When needed");
 	m_StatusModeCombo->AddItem("Always");
 
 	m_ChatVisibleCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkChatVisible"));
@@ -212,11 +273,12 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_DirPinTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkDirPin"));
 	m_DirStatusLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetDirStatus"));
 	m_InternetError = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetInternetError"));
-	if (auto* natButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonNetNatRelay"))) {
-		natButton->SetText("NAT setup");
+	// Replays, connection details and the match's relay live on the multiplayer screens: these three never lead anywhere from here.
+	for (const char* name : {"ButtonNetReplays", "ButtonNetConnDetails", "ButtonNetNatRelay"}) {
+		if (GUIControl* shortcut = m_GUIControlManager->GetControl(name)) shortcut->SetVisible(false);
 	}
 	if (auto* reason = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetInternetReason"))) {
-		reason->SetText("Connection sets your route. Host Options > Network sets the match's relay.");
+		reason->SetText("Connection sets your route. Host a Game > Advanced > Connection sets the match's relay.");
 	}
 	m_ConnectionCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboNetworkConnection"));
 	for (const char* state : {"Automatic", "Direct only", "Relay only"}) m_ConnectionCombo->AddItem(state);
@@ -239,11 +301,11 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	};
 	m_RowsUnderFixedDelay = {rowTop(m_IdleWaitLabel), rowTop(m_IdleWaitTextbox), rowTop(m_IdleWaitHintLabel),
 	                         rowTop(m_PathHorizonLabel), rowTop(m_PathHorizonTextbox), rowTop(m_PathHorizonHintLabel), rowTop(m_AutoRepairCheckbox),
-	                         rowTop(m_ToastsCheckbox), rowTop(m_PredictionCheckbox), rowTop(m_GUIControlManager->GetControl("LabelMatchStatusWidget")), rowTop(m_StatusModeCombo), rowTop(m_DiagnosticsCheckbox)};
+	                         rowTop(m_ToastsCheckbox), rowTop(m_PredictionCheckbox), rowTop(m_DiagnosticsCheckbox)};
 
 	ShowSavedValues();
 	// The skin draws only the player page's box first; checking its tab keeps the selector in step.
-	SetActivePage(Page::Player);
+	SetActivePage(Page::Basics);
 }
 
 void SettingsNetworkGUI::SetEnabled(bool enable) {
@@ -342,7 +404,7 @@ void SettingsNetworkGUI::ApplyTextboxes() {
 	// A refused value never stays on screen: the settings are what the page states.
 	ShowSavedValues();
 	if (diagDirRefused) {
-		m_FilesMessage->SetText("Diagnostics folder refused: no control characters allowed.");
+		ShowMessage(m_FilesMessage, "Diagnostics folder refused: no control characters allowed.");
 	}
 	m_InternetError->SetText(internetError);
 	m_NetworkSettingsBox->SetFocus();
@@ -371,10 +433,14 @@ void SettingsNetworkGUI::SetActivePage(Page page) {
 		ApplyTextboxes();
 	}
 	m_ActivePage = page;
+	// The first view leads; the other pages show once the player asks for them, or opens one by name.
+	if (page != Page::Basics) m_AdvancedShown = true;
 	for (int index = 0; index < static_cast<int>(Page::Count); ++index) {
 		m_PageBoxes[index]->SetVisible(index == static_cast<int>(page));
 		m_PageTabs[index]->SetCheck(index == static_cast<int>(page));
+		m_PageTabs[index]->SetVisible(m_AdvancedShown || index == static_cast<int>(Page::Basics));
 	}
+	if (m_ConnectionValueLabel) m_ConnectionValueLabel->SetText(ConnectionSummary(g_SettingsMan.GetNetworkConnectionMode()));
 	m_RecoveryError->SetText("");
 	m_InternetError->SetText("");
 	UpdateStatusLines();
@@ -405,16 +471,24 @@ void SettingsNetworkGUI::UpdateStatusLines() {
 
 	m_SaveDiagButton->SetEnabled(!TelemetryBundle::IsBusy());
 	if (TelemetryBundle::IsBusy()) {
-		m_FilesMessage->SetText("Saving diagnostics...");
+		ShowMessage(m_FilesMessage, "Saving diagnostics...");
 	} else {
 		const std::string latest = LatestFileName(EffectiveTelemetryDirectory(), ".zip");
-		m_FilesMessage->SetText(latest.empty() ? "No diagnostics saved yet." : "Latest: " + latest);
+		ShowMessage(m_FilesMessage, latest.empty() ? "No diagnostics saved yet." : "Latest: " + latest);
 	}
 
 	m_DirStatusLabel->SetText(g_SettingsMan.GetSessionDirectoryUrl().empty() ? "Not configured" : "Configured");
 }
 
 void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
+	if (guiEvent.GetType() == GUIEvent::Command && guiEvent.GetControl() == m_ConnectionChangeButton) {
+		SetActivePage(Page::Connection);
+		return;
+	}
+	if (guiEvent.GetType() == GUIEvent::Command && guiEvent.GetControl() == m_AdvancedButton) {
+		SetActivePage(Page::Player);
+		return;
+	}
 	if (guiEvent.GetType() == GUIEvent::Command) {
 		// Action feedback goes on the page's message line AFTER the status refresh,
 		// which owns the line's resting text.
@@ -439,21 +513,17 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 				message = "Diagnostics are already being saved.";
 			}
 		} else if (guiEvent.GetControl()->GetName() == "ButtonNetOpenAutosaves") {
-			if (!OpenFolder(AutosavesDirectory())) {
-				message = "Could not open the autosaves folder.";
-			}
+			message = OpenFolder(AutosavesDirectory()) ? "Opened the autosaves folder." : "Could not open the autosaves folder.";
 		} else if (guiEvent.GetControl()->GetName() == "ButtonNetCopyAutosavesPath") {
-			if (!GUIUtil::SetClipboardText(AutosavesDirectory())) {
+			if (!CopyPath(AutosavesDirectory())) {
 				message = "Could not copy the folder path.";
 			} else {
 				message = "Copied " + AutosavesDirectory();
 			}
 		} else if (guiEvent.GetControl()->GetName() == "ButtonNetOpenDiagnostics") {
-			if (!OpenFolder(EffectiveTelemetryDirectory())) {
-				message = "Could not open the diagnostics folder.";
-			}
+			message = OpenFolder(EffectiveTelemetryDirectory()) ? "Opened the support reports folder." : "Could not open the support reports folder.";
 		} else if (guiEvent.GetControl()->GetName() == "ButtonNetCopyDiagPath") {
-			if (!GUIUtil::SetClipboardText(EffectiveTelemetryDirectory())) {
+			if (!CopyPath(EffectiveTelemetryDirectory())) {
 				message = "Could not copy the folder path.";
 			} else {
 				message = "Copied " + EffectiveTelemetryDirectory();
@@ -463,7 +533,7 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		}
 		UpdateStatusLines();
 		if (!message.empty()) {
-			m_FilesMessage->SetText(message);
+			ShowMessage(m_FilesMessage, message);
 		}
 		return;
 	}

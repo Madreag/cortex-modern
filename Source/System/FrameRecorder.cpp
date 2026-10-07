@@ -252,6 +252,8 @@ namespace RTE {
 		const char* codec = std::getenv("CCCP_TEST_RECORD_CODEC");
 		m_EncoderPath = encoder ? encoder : "";
 		m_EncoderCodec = codec && *codec ? codec : "libx264";
+		// A killed engine never writes its last manifest; this one already names the capture rate its index is judged at.
+		WriteManifest();
 		// An encoder takes the frames in order on one pipe, so it has one writer; PNGs encode on a pool.
 		const std::size_t writers = m_EncoderPath.empty() ? WriterCount() : 1;
 		for (std::size_t writer = 0; writer < writers; ++writer) m_Writers.emplace_back(&FrameRecorder::WriterLoop, this);
@@ -393,9 +395,11 @@ namespace RTE {
 			m_FirstSlot = frame.slot;
 			m_NextSlot = frame.slot;
 			const std::string preset = m_EncoderCodec.find("nvenc") != std::string::npos ? "-preset p1 -cq 23" : "-preset ultrafast -crf 20";
+			// A keyframe and a fragment each second: a capture cut by a kill still plays up to its last whole second.
 			const std::string command = "\"" + m_EncoderPath + "\" -hide_banner -loglevel warning -y -f rawvideo -pix_fmt rgb24 -s " +
 			    std::to_string(m_EncodedWidth) + "x" + std::to_string(m_EncodedHeight) + " -framerate " + std::to_string(m_Fps) +
-			    " -i - -vf \"pad=ceil(iw/2)*2:ceil(ih/2)*2\" -c:v " + m_EncoderCodec + " " + preset + " -pix_fmt yuv420p \"" +
+			    " -i - -vf \"pad=ceil(iw/2)*2:ceil(ih/2)*2\" -c:v " + m_EncoderCodec + " " + preset + " -g " + std::to_string(m_Fps) +
+			    " -pix_fmt yuv420p -movflags +frag_keyframe+empty_moov+default_base_moof \"" +
 			    (std::filesystem::path(m_Directory) / "capture.mp4").string() + "\"";
 			auto encoder = std::make_unique<EncoderPipe>();
 			if (encoder->Open(command, (std::filesystem::path(m_Directory) / "encoder.log").string(), m_EncoderError)) m_Encoder = std::move(encoder);

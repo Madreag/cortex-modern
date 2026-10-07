@@ -133,6 +133,39 @@ namespace RTE {
 			return order > 0 ? "This host runs a newer game version." : "This host runs an older game version.";
 		}
 
+		/// Places a joiner refused for its simulation settings by its config's hash alone (its hello names no versions): this
+		/// build's config is hashed again with one or two of its version numbers a step or two away.
+		/// @return Negative when the joiner's game is older, positive when newer, zero when no such build matches.
+		int PlaceJoinerVersions(const NetIdentityDeterministicConfig& mine, const std::string& theirHash) {
+			using Field = uint16_t NetIdentityDeterministicConfig::*;
+			// In VersionTuple's order, so the first number that differs says which game is newer.
+			static constexpr Field fields[] = {&NetIdentityDeterministicConfig::supportedLockstepCodecVersion, &NetIdentityDeterministicConfig::supportedWorldLockstepCodecVersion,
+			                                   &NetIdentityDeterministicConfig::supportedMatchConfigVersion, &NetIdentityDeterministicConfig::supportedWorldMatchConfigVersion,
+			                                   &NetIdentityDeterministicConfig::lobbyProtocolVersion, &NetIdentityDeterministicConfig::committedRecordVersion};
+			static constexpr int steps[] = {-2, -1, 1, 2};
+			const auto matches = [&theirHash](const NetIdentityDeterministicConfig& candidate) { return HashText(NetIdentity::HashDeterministicConfig(candidate)) == theirHash; };
+			const auto step = [](uint16_t value, int by, uint16_t& out) {
+				const int next = static_cast<int>(value) + by;
+				if (next < 0 || next > 0xFFFF) return false;
+				out = static_cast<uint16_t>(next);
+				return true;
+			};
+			for (size_t first = 0; first < std::size(fields); ++first) {
+				for (const int firstStep : steps) {
+					NetIdentityDeterministicConfig single = mine;
+					if (!step(mine.*fields[first], firstStep, single.*fields[first])) continue;
+					if (matches(single)) return firstStep;
+					for (size_t second = first + 1; second < std::size(fields); ++second) {
+						for (const int secondStep : steps) {
+							NetIdentityDeterministicConfig pair = single;
+							if (step(mine.*fields[second], secondStep, pair.*fields[second]) && matches(pair)) return firstStep;
+						}
+					}
+				}
+			}
+			return 0;
+		}
+
 		bool HasMismatch(const NetIdentityMismatch& mismatch) {
 			return !mismatch.key.empty();
 		}
@@ -1731,6 +1764,15 @@ namespace RTE {
 				}
 				default: break;
 			}
+		}
+		if (m_Role == NetSessionRole::Host && m_RejectReason == NetRejectReason::DeterministicConfigMismatch) {
+			// Placed once per refused joiner: the host's lobby asks for this text every frame.
+			if (m_PlacedJoinerHash != m_ActualValue) {
+				m_PlacedJoinerHash = m_ActualValue;
+				m_PlacedJoinerOrder = PlaceJoinerVersions(m_Config.localIdentity.deterministicConfig, m_ActualValue);
+			}
+			if (m_PlacedJoinerOrder < 0) return "Their game is an older version than yours.";
+			if (m_PlacedJoinerOrder > 0) return "Their game is a newer version than yours.";
 		}
 		switch (m_RejectReason) {
 			case NetRejectReason::ModuleManifestMismatch: return m_MismatchKey == "host_disconnect" || m_RejectSummary.empty() ? "This host's mods do not match yours." : m_RejectSummary;

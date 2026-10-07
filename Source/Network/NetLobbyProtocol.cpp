@@ -704,6 +704,14 @@ namespace RTE {
 			       AppendString(out, payload.sideStateHash, NetLobbyProtocol::c_MaxShortTextBytes, "resume side state hash", error);
 		}
 
+		bool EncodePayload(const NetLobbyStartCountdown& payload, std::vector<uint8_t>& out, NetLobbyError*) {
+			if (payload.remainingMs > NetLobbyProtocol::c_MaxStartCountdownMs || payload.setupTag > NetLobbyProtocol::c_StartCountdownTagMask ||
+			    payload.cause > NetLobbyProtocol::c_CountdownSetupOpen) return false;
+			AppendU32LE(out, payload.remainingMs);
+			AppendU32LE(out, payload.setupTag | (static_cast<uint32_t>(payload.cause) << 24));
+			return true;
+		}
+
 		bool RefuseOversizePeerId(uint8_t peerId, size_t offset, NetLobbyError* error) {
 			if (peerId > NetLobbyProtocol::c_MaxPeers && (peerId < NetLobbyProtocol::c_FirstWatcherPeer || peerId > NetLobbyProtocol::c_LastWatcherPeer)) {
 				SetError(error, NetLobbyErrorCode::InvalidValue, offset, "peer id is invalid");
@@ -732,6 +740,24 @@ namespace RTE {
 					if (!ReadOrTruncated(reader.ReadHash(payload.configHash) && reader.ReadU32LE(bytes) && bytes <= 48 * 1024 + 28 && reader.ReadBytes(payload.sealedState, bytes), reader, error, "migration capsule"))
 						return false;
 					out = std::move(payload);
+					return true;
+				}
+				case NetLobbyMessageType::StartCountdown: {
+					NetLobbyStartCountdown payload;
+					uint32_t setup = 0;
+					if (!ReadOrTruncated(reader.ReadU32LE(payload.remainingMs), reader, error, "remaining_ms") ||
+					    !ReadOrTruncated(reader.ReadU32LE(setup), reader, error, "setup")) return false;
+					payload.setupTag = setup & NetLobbyProtocol::c_StartCountdownTagMask;
+					payload.cause = static_cast<uint8_t>(setup >> 24);
+					if (payload.cause > NetLobbyProtocol::c_CountdownSetupOpen) {
+						SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 1, "countdown cause is not one this version knows");
+						return false;
+					}
+					if (payload.remainingMs > NetLobbyProtocol::c_MaxStartCountdownMs) {
+						SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset() - 8, "start countdown is too long");
+						return false;
+					}
+					out = payload;
 					return true;
 				}
 				case NetLobbyMessageType::Resume: {
@@ -914,6 +940,7 @@ namespace RTE {
 				case NetLobbyMessageType::SeatAssign:
 				case NetLobbyMessageType::Migration:
 				case NetLobbyMessageType::Resume:
+				case NetLobbyMessageType::StartCountdown:
 					out = static_cast<NetLobbyMessageType>(raw);
 					return true;
 			}
@@ -934,6 +961,7 @@ namespace RTE {
 			[](const NetLobbySeatAssign&) { return NetLobbyMessageType::SeatAssign; },
 			[](const NetLobbyMigration&) { return NetLobbyMessageType::Migration; },
 			[](const NetLobbyResume&) { return NetLobbyMessageType::Resume; },
+			[](const NetLobbyStartCountdown&) { return NetLobbyMessageType::StartCountdown; },
 		}, payload);
 	}
 
@@ -952,6 +980,8 @@ namespace RTE {
 				return "Migration";
 			case NetLobbyMessageType::Resume:
 				return "Resume";
+			case NetLobbyMessageType::StartCountdown:
+				return "StartCountdown";
 		}
 		return "Unknown";
 	}

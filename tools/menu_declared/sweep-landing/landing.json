@@ -1,0 +1,24 @@
+{
+ "controls": [
+  {
+   "name": "TextMultiplayerName",
+   "enabled": true
+  },
+  {
+   "name": "ButtonMultiplayerHostGame",
+   "enabled": true
+  },
+  {
+   "name": "ButtonMultiplayerJoinGame",
+   "enabled": true
+  },
+  {
+   "name": "ButtonMultiplayerReplays",
+   "enabled": true
+  },
+  {
+   "name": "ButtonMultiplayerResumeGame",
+   "enabled": true
+  }
+ ]
+}

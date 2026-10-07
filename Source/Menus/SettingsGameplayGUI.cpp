@@ -43,10 +43,13 @@ SettingsGameplayGUI::SettingsGameplayGUI(GUIControlManager* parentControlManager
 	m_MaxUnheldItemsTextbox->SetNumericOnly(true);
 	m_MaxUnheldItemsTextbox->SetMaxTextLength(2);
 
+	// An older version's menu file has no such row; the setting then keeps its saved value.
 	m_BrainlessHumansSpectateCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboBrainlessHumansSpectate"));
-	m_BrainlessHumansSpectateCombo->AddItem("Keep playing, spectate");
-	m_BrainlessHumansSpectateCombo->AddItem("End the match");
-	m_BrainlessHumansSpectateCombo->SetSelectedIndex(g_SettingsMan.GetBrainlessHumansSpectate() ? 0 : 1);
+	if (m_BrainlessHumansSpectateCombo) {
+		m_BrainlessHumansSpectateCombo->AddItem("Keep playing, spectate");
+		m_BrainlessHumansSpectateCombo->AddItem("End the match");
+		m_BrainlessHumansSpectateCombo->SetSelectedIndex(g_SettingsMan.GetBrainlessHumansSpectate() ? 0 : 1);
+	}
 
 	m_CrabBombThresholdTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextboxCrabBombThreshold"));
 	m_CrabBombThresholdTextbox->SetText(std::to_string(g_SettingsMan.GetCrabBombThreshold()));

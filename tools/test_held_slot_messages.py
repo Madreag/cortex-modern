@@ -19,10 +19,13 @@ import shutil
 import time
 
 from run_sim_test import make_run
+from test_telemetry_bundle import set_visual_resolution
 
 OWN_SEAT_LINE = "Your slot is held for you. Apply to rejoin, the host decides"
 SLOTS_HELD_LINE = "All slots are held for returning players. Apply for a slot or wait"
 WAIT_LINE = "Waiting for a slot to open - "
+# The joiner's screen size; each offer is pictured on it.
+SIZE = (960, 540)
 
 
 def service_args(port, ticket, report, extra, players, ticks):
@@ -34,7 +37,7 @@ def service_args(port, ticket, report, extra, players, ticks):
 def join_script(name, port, lines):
     return ("wait 40\nactivate ButtonMainToMultiplayer\nwait 12\n"
             f"settext TextMultiplayerName {name}\nactivate ButtonMultiplayerJoinGame\nwait 10\n"
-            f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n"
+            f"activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\nactivate ButtonJoinAddressGo\n"
             "wait_state Failed 240\nwait 5\nassert_substate Landing\n" + "".join(line + "\n" for line in lines))
 
 
@@ -107,7 +110,7 @@ def returner_arm(repo, root, port, result):
         if not identity.is_file():
             raise RuntimeError("the departing peer wrote no identity to return with")
         lines = [f"assert_error {OWN_SEAT_LINE}", "assert_label ButtonMultiplayerReconnect Apply to Rejoin",
-                 "assert_enabled ButtonMultiplayerReconnect 1", "assert_enabled ButtonMultiplayerWaitSlot 0",
+                 "assert_enabled ButtonMultiplayerReconnect 1", "assert_visible ButtonMultiplayerWaitSlot 0", "dump_host_options",
                  "activate ButtonMultiplayerReconnect", "wait_ms 12000", "dump_lobby", "exit"]
         (root / "returner.txt").write_text(join_script("Client", port, lines), encoding="utf-8")
         # The same player: its identity comes back with it, its ticket does not.
@@ -115,6 +118,7 @@ def returner_arm(repo, root, port, result):
                                           "-net-reconnect-ticket", root / "returner.ticket",
                                           "-net-match-report", root / "returner_report.json",
                                           "-net-join-wait-for", trigger])
+        set_visual_resolution(returner, *SIZE)
         (Path(returner.cwd) / "Userdata").mkdir(parents=True, exist_ok=True)
         shutil.copy2(identity, Path(returner.cwd) / "Userdata/NetworkIdentity.key")
         returner.start()
@@ -134,8 +138,8 @@ def returner_arm(repo, root, port, result):
         checks = result["checks"]
         checks["returner_told_its_slot_is_held"] = f'assert_error "{OWN_SEAT_LINE}"' in log and f'status="{OWN_SEAT_LINE}" PASS' in log
         checks["returner_offered_apply_to_rejoin"] = 'assert_label ButtonMultiplayerReconnect "Apply to Rejoin" text="Apply to Rejoin" PASS' in log
-        checks["returner_offered_no_wait"] = "assert_enabled ButtonMultiplayerWaitSlot expected=0 actual=0 PASS" in log
-        checks["returner_apply_pressed"] = "activate ButtonMultiplayerReconnect ok=1" in log
+        checks["returner_offered_no_wait"] = "assert_visible ButtonMultiplayerWaitSlot 0 actual=0 PASS" in log
+        checks["returner_apply_pressed"] = "activate ButtonMultiplayerReconnect click ButtonMultiplayerReconnect PASS" in log
         checks["returner_script_ran_clean"] = "[menu-script] FAILED:" not in log
         checks["host_sees_the_request_beside_the_seat"] = probe_result.get("pass") is True
         checks["returner_host_exit"] = exits["host"] == 0
@@ -177,18 +181,23 @@ def world_arm(repo, root, port, result):
         runs.wait_for("restarted", "[autosave] resuming", 120)
         port += 2
         lines = [f"assert_error {SLOTS_HELD_LINE}", "assert_label ButtonMultiplayerReconnect Apply for a Slot",
-                 "assert_enabled ButtonMultiplayerReconnect 1", "assert_enabled ButtonMultiplayerWaitSlot 1",
+                 "assert_enabled ButtonMultiplayerReconnect 1", "assert_enabled ButtonMultiplayerWaitSlot 1", "dump_host_options",
                  "activate ButtonMultiplayerWaitSlot", f"wait_label LabelMultiplayerStatus {WAIT_LINE}",
                  f"assert_label LabelMultiplayerStatus {WAIT_LINE}", "assert_label ButtonMultiplayerLeave Cancel",
                  "wait_ms 10000", f"assert_label LabelMultiplayerStatus {WAIT_LINE}",
                  "activate ButtonMultiplayerLeave", "wait 10", "assert_substate Landing",
-                 "activate ButtonMultiplayerJoinGame", "wait 10", "activate ButtonMultiplayerConnect",
+                 "activate ButtonMultiplayerJoinGame", "wait 10",
+                 # A join made again goes through Join by address, whose address box starts empty.
+                 "activate ButtonJoinByAddress", "wait 4", "settext TextJoinAddress 127.0.0.1", f"settext TextJoinPort {port}",
+                 "activate ButtonJoinAddressGo",
                  "wait_state Failed 240", "wait 5", f"assert_error {SLOTS_HELD_LINE}",
                  "activate ButtonMultiplayerReconnect", "wait_ms 12000", "dump_lobby", "exit"]
         (root / "newcomer.txt").write_text(join_script("Newcomer", port, lines), encoding="utf-8")
-        runs.start("newcomer", ["-menu-script", root / "newcomer.txt", "-num-lua-states", 4,
-                                "-net-reconnect-ticket", root / "newcomer.ticket",
-                                "-net-match-report", root / "newcomer_report.json"])
+        newcomer = runs.make("newcomer", ["-menu-script", root / "newcomer.txt", "-num-lua-states", 4,
+                                          "-net-reconnect-ticket", root / "newcomer.ticket",
+                                          "-net-match-report", root / "newcomer_report.json"])
+        set_visual_resolution(newcomer, *SIZE)
+        newcomer.start()
         exits = {"newcomer": runs.runs["newcomer"].finish()["exit_code"]}
         log = runs.log("newcomer")
         host_log = runs.log("restarted")
@@ -205,7 +214,7 @@ def world_arm(repo, root, port, result):
         # Between rounds the host takes no application (moderation is a running match's); the Apply is answered, never left silent.
         answered = "[net-reconnect] applicant" in host_log or "admission refused reason=SeatNotSubstitutable" in host_log
         result["details"]["world"]["apply_answer"] = next((line.split("status=", 1)[1][:120] for line in log.splitlines() if line.startswith("[menu-script] dump_lobby")), "")
-        checks["newcomer_apply_answered_by_the_host"] = "activate ButtonMultiplayerReconnect ok=1" in log and answered
+        checks["newcomer_apply_answered_by_the_host"] = "activate ButtonMultiplayerReconnect click ButtonMultiplayerReconnect PASS" in log and answered
         # The wait knocks every two seconds; each knock must reach the host's answer, never trip on the last knock's leftovers.
         knocks = log.count("admission refused reason=SessionFull role=client key=slots_held")
         result["details"]["world"]["slots_held_answers"] = knocks
@@ -224,7 +233,10 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=47637)
     parser.add_argument("--arm", choices=("returner", "world", "all"), default="all")
+    parser.add_argument("--size", default="960x540", help="the joiner's screen, WIDTHxHEIGHT")
     options = parser.parse_args()
+    global SIZE
+    SIZE = tuple(int(part) for part in options.size.split("x"))
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     result = {"pass": False, "checks": {}, "details": {}}

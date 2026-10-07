@@ -11,10 +11,10 @@ activate ButtonMultiplayerHostGame
 video_mark mp-host-setup
 wait_ms 450
 assert_substate HostSetup
-combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+combo_select ComboHostActivity P4 Alpha Duel
 wait_ms 500
-settext TextHostPort {PORT}
-settext TextHostPlayers 2
+setup_host_port {PORT}
+combo_select ComboHostPlayers 2
 wait_ms 495
 activate ButtonHostOptions
 wait_ms 450
@@ -29,9 +29,9 @@ wait_ms 660
 assert_visible CollectionBoxHostPageRules 1
 dump_host_options
 video_mark mp-options-network
-activate TabHostPageNetwork
+activate TabHostPageConnection
 wait_ms 660
-assert_visible CollectionBoxHostPageNetwork 1
+assert_visible CollectionBoxHostPageConnection 1
 dump_host_options
 video_mark mp-options-recovery
 activate TabHostPageRecovery

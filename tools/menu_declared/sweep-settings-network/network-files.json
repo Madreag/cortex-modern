@@ -1,0 +1,36 @@
+{
+ "controls": [
+  {
+   "name": "TextNetworkAutosavesKept",
+   "enabled": true
+  },
+  {
+   "name": "TextNetworkDiagDir",
+   "enabled": true
+  },
+  {
+   "name": "CheckboxNetworkRecordReplays",
+   "enabled": true
+  },
+  {
+   "name": "ButtonNetOpenAutosaves",
+   "enabled": true
+  },
+  {
+   "name": "ButtonNetCopyAutosavesPath",
+   "enabled": true
+  },
+  {
+   "name": "ButtonNetOpenDiagnostics",
+   "enabled": true
+  },
+  {
+   "name": "ButtonNetCopyDiagPath",
+   "enabled": true
+  },
+  {
+   "name": "ButtonNetSaveDiagnostics",
+   "enabled": true
+  }
+ ]
+}

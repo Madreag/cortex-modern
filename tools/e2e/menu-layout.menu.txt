@@ -21,6 +21,10 @@ dump_player_options
 wait_ms 800
 select_settings_page Network
 wait_ms 250
+select_settings_page Network:Basics
+wait 3
+activate ButtonNetworkAdvanced
+wait 4
 select_settings_page Network:Connection
 wait_ms 400
 video_mark layout-network-connection

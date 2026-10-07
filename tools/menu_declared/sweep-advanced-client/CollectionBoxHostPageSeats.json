@@ -1,0 +1,37 @@
+{
+ "controls": [
+  {
+   "name": "ButtonHostSeatDetails0",
+   "enabled": true
+  },
+  {
+   "name": "ButtonHostSeatDetails1",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostSeatPlayers",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "ComboHostSeatType0",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "ComboHostSeatTeam0",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "ComboHostSeatType1",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "ComboHostSeatTeam1",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  }
+ ]
+}

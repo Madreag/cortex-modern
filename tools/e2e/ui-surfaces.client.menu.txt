@@ -12,24 +12,29 @@ video_mark ui-join-port-typed
 wait_file {DIRECTORY_ROOT}/listed.json 30
 wait_ms 4000
 assert_visible ListLanGames 1
-# A port typed by hand stays through changes to the listed games, even one equal to the listed port.
+# A port typed by hand into Join by address stays while the listed games change behind the dialog.
+activate ButtonJoinByAddress
+wait 4
 settext TextJoinPort 4
 wait_ms 99
 settext TextJoinPort {PORT}
 wait_ms 3960
 assert_label TextJoinPort {PORT}
+activate ButtonJoinAddressCancel
+wait 4
 video_mark ui-directory-listing
-activate GameRowPort{PORT}
-assert_label TextJoinPort {PORT}
+wait_row GameRowPort{PORT} 30
+click_row GameRowPort{PORT}
 wait_ms 800
 dump_player_options
 wait_ms 660
 video_mark ui-join-port-picked
-# A picked row keeps its own port while other games open and close.
+# A picked row stays picked while other games open and close: Join Game stays available.
 wait_ms 2640
-assert_label TextJoinPort {PORT}
+assert_enabled ButtonMultiplayerConnect 1
 activate ButtonMultiplayerConnect
 wait_connected 2
+wait_substate Lobby 30
 wait_ms 990
 assert_substate Lobby
 dump_lobby
@@ -39,7 +44,7 @@ chat all And the joiner can answer on the same line
 wait_ms 990
 assert_label LabelLobbyChatAny And the joiner can answer on the same line
 dump_lobby
-activate ButtonLobbyOptions
+activate ButtonLobbyEditSetup
 wait_ms 660
 assert_substate HostOptions
 assert_label LabelHostOptionsTitle M A T C H   D E T A I L S
@@ -55,10 +60,12 @@ assert_enabled ButtonHostSeatDlgBan 0
 dump_host_options
 activate ButtonHostSeatDlgClose
 wait_ms 495
-activate TabHostPageNetwork
-activate TabHostNetTuning
+activate TabHostPageConnection
+activate TabHostPageTiming
 wait_ms 825
-assert_visible CollectionBoxHostPageNetwork 1
+activate TabHostPageConnection
+wait_ms 600
+assert_visible CollectionBoxHostPageConnection 1
 dump_host_options
 activate ButtonHostOptBack
 wait_ms 495

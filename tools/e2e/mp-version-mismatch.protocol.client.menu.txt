@@ -5,15 +5,18 @@ assert_substate Landing
 settext TextMultiplayerName Joiner
 activate ButtonMultiplayerJoinGame
 wait_ms 660
+activate ButtonJoinByAddress
+wait 4
 settext TextJoinAddress 127.0.0.1
 settext TextJoinPort {PORT}
-activate ButtonMultiplayerConnect
+activate ButtonJoinAddressGo
 wait_state Failed
 wait_ms 495
 video_mark version-client-refusal
-assert_substate Landing
-assert_net_label LabelMultiplayerLandingStatus Network protocol differs (host {NET_PROTOCOL_VERSION}; yours 2).
-assert_enabled ButtonMultiplayerJoinGame 1
+assert_substate JoinSetup
+assert_label LabelJoinSelected Network protocol differs (host {NET_PROTOCOL_VERSION}; yours 2).
+assert_text_fits LabelJoinSelected
+assert_enabled ButtonJoinByAddress 1
 dump_lobby
 wait_ms 990
 goto_main

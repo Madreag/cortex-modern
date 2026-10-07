@@ -42,6 +42,7 @@
 #include "RTEError.h"
 #include "System.h"
 #include "HarnessCost.h"
+#include "Writer.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
@@ -51,11 +52,13 @@
 #include <array>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <iterator>
@@ -64,6 +67,7 @@
 #include <memory>
 #include <set>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -188,7 +192,7 @@ namespace RTE::MenuAutomation {
 	constexpr std::array<std::string_view, 6> c_SettingsPages{"Video", "Audio", "Input", "Gameplay", "Misc", "Network"};
 	// The network page's own selector names its sub-pages the same way; a script addresses
 	// one as "Network:<page>" once the network page is up.
-	constexpr std::array<std::string_view, 6> c_NetworkPages{"Player", "Chat", "Recovery", "Files", "Internet", "Connection"};
+	constexpr std::array<std::string_view, 7> c_NetworkPages{"Basics", "Player", "Chat", "Recovery", "Files", "Internet", "Connection"};
 
 	std::string SettingsPage(GUIControlManager* manager) {
 		for (const std::string_view page: c_SettingsPages) {
@@ -204,9 +208,6 @@ namespace RTE::MenuAutomation {
 		return "";
 	}
 
-	// A manager's Update clears its event queue, so a page request waits for the settings menu's own pass.
-	static std::unordered_map<GUIControlManager*, SettingsGUI*> s_SettingsOwners;
-
 	GUITab* PageTab(GUIControlManager* manager, const std::string& page) {
 		const size_t colon = page.find(':');
 		if (colon != std::string::npos) {
@@ -218,31 +219,6 @@ namespace RTE::MenuAutomation {
 		return known && manager ? dynamic_cast<GUITab*>(manager->GetControl("Tab" + page + "Settings")) : nullptr;
 	}
 
-	void BindSettingsOwner(GUIControlManager* manager, SettingsGUI* owner) {
-		if (manager && owner) s_SettingsOwners[manager] = owner;
-	}
-
-	void UnbindSettingsOwner(GUIControlManager* manager) {
-		s_SettingsOwners.erase(manager);
-	}
-
-	bool QueuePage(GUIControlManager* manager, const std::string& page) {
-		auto owner = s_SettingsOwners.find(manager);
-		if (owner == s_SettingsOwners.end() || !Enabled(PageTab(manager, page))) return false;
-		owner->second->QueuePendingPage(page);
-		return true;
-	}
-
-	void ApplyQueuedPage(GUIControlManager* manager) {
-		auto owner = s_SettingsOwners.find(manager);
-		if (!manager || owner == s_SettingsOwners.end() || owner->second->PendingPage().empty()) return;
-		GUITab* tab = PageTab(manager, owner->second->PendingPage());
-		owner->second->ClearPendingPage();
-		if (!Enabled(tab)) return;
-		// The settings menu switches pages on the notification a tab click raises, so raise that.
-		tab->SetCheck(true);
-		tab->AddEvent(GUIEvent::Notification, GUITab::UnPushed, 0);
-	}
 	// A relay login is a credential, though only its password box masks itself on screen: its boxes are named by their role.
 	constexpr std::array<std::string_view, 4> c_CredentialBoxes{"TextHostRelayUser", "TextHostRelayPass", "TextNetworkRelayUser", "TextNetworkRelayPass"};
 	bool CredentialName(const std::string& name) {
@@ -277,14 +253,923 @@ namespace RTE::MenuAutomation {
 		text = Captured(Credential(control), text);
 		return true;
 	}
-	void Click(GUIControlManager* manager, const std::string& name) {
-		auto* control = manager->GetControl(name);
-		if (!Enabled(control)) return;
-		auto* panel = control->GetPanel();
-		const auto r = Rectangle(panel);
-		panel->OnMouseDown(r[0] + r[2] / 2, r[1] + r[3] / 2, GUIPanel::MOUSE_LEFT, 0);
-		panel->OnMouseUp(r[0] + r[2] / 2, r[1] + r[3] / 2, GUIPanel::MOUSE_LEFT, 0);
+	// A hand reaches the menus the way a player does: real mouse and keyboard events go into the engine's input queue,
+	// one phase per drawn frame, and every press lands where the GUI manager's own hit test says it lands.
+	namespace Hand {
+		enum class Beat { Next, Again, Done, Fail };
+		using Phase = std::function<Beat(std::string& note)>;
+		struct Gesture {
+			std::string name;
+			std::vector<Phase> phases;
+			size_t at = 0;
+			int repeats = 0; //!< How often the current phase has asked for another frame.
+		};
+		std::optional<Gesture> s_Gesture;
+		std::optional<std::pair<bool, std::string>> s_Result;
+		uint64_t s_DrawnFrames = 0, s_AdvancedFrame = 0;
+		float s_WindowX = 0, s_WindowY = 0; //!< Where the pointer rests, in window pixels.
+		std::deque<std::string> s_TypedText; //!< Text an input event still points at until the queue hands it on.
+		constexpr int c_MaxRepeats = 240;
+
+		bool Push(SDL_Event& event) { return SDL_PushEvent(&event); }
+
+		/// Moves the pointer to a GUI pixel, sent in window pixels as the mouse sends it, so the window's scale is read on the way in.
+		bool Move(int x, int y) {
+			const float scale = g_WindowMan.GetResMultiplier();
+			const float windowX = std::floor((static_cast<float>(x) + 0.5F) * scale), windowY = std::floor((static_cast<float>(y) + 0.5F) * scale);
+			SDL_Event event{};
+			event.type = SDL_EVENT_MOUSE_MOTION;
+			event.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+			event.motion.x = windowX;
+			event.motion.y = windowY;
+			event.motion.xrel = windowX - s_WindowX;
+			event.motion.yrel = windowY - s_WindowY;
+			s_WindowX = windowX;
+			s_WindowY = windowY;
+			return Push(event);
+		}
+
+		bool Button(bool down) {
+			SDL_Event event{};
+			event.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+			event.button.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+			event.button.button = SDL_BUTTON_LEFT;
+			event.button.down = down;
+			event.button.clicks = 1;
+			event.button.x = s_WindowX;
+			event.button.y = s_WindowY;
+			return Push(event);
+		}
+
+		bool Wheel(int steps) {
+			SDL_Event event{};
+			event.type = SDL_EVENT_MOUSE_WHEEL;
+			event.wheel.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+			event.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
+			event.wheel.y = static_cast<float>(steps);
+			event.wheel.mouse_x = s_WindowX;
+			event.wheel.mouse_y = s_WindowY;
+			return Push(event);
+		}
+
+		bool Type(const std::string& text) {
+			// Keys come a few at a time, as a hand's do: the input reads at most 32 characters of one text event.
+			constexpr size_t c_Piece = 16;
+			for (size_t at = 0; at < text.size(); at += c_Piece) {
+				// The queue keeps the event's pointer, not the text: the text lives until a later frame has read it.
+				s_TypedText.push_back(text.substr(at, c_Piece));
+				while (s_TypedText.size() > 256) s_TypedText.pop_front();
+				SDL_Event event{};
+				event.type = SDL_EVENT_TEXT_INPUT;
+				event.text.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+				event.text.text = s_TypedText.back().c_str();
+				if (!Push(event)) return false;
+			}
+			return true;
+		}
+
+		bool Key(const std::string& name, bool down) { return GUIInputWrapper::QueueScriptedKey(name, down); }
+
+		bool Within(GUIPanel* panel, GUIPanel* ancestor) {
+			for (; panel; panel = panel->GetParentPanel()) if (panel == ancestor) return true;
+			return false;
+		}
+
+		/// What a press at this point reaches, named for the record.
+		std::string Reached(GUIPanel* panel) {
+			GUIControl* control = nullptr;
+			for (GUIPanel* node = panel; node && !control; node = node->GetParentPanel()) control = dynamic_cast<GUIControl*>(node);
+			return control ? control->GetName() : panel ? "an unnamed panel" : "nothing";
+		}
+
+		/// A point on the control that a press reaches: its centre first, then a grid over the rest of it. Empty, with the reason, when no point does.
+		std::optional<std::pair<int, int>> Target(GUIControlManager* manager, GUIControl* control, GUIControl* modal, std::string& why) {
+			if (!control || !control->GetPanel()) { why = "missing"; return std::nullopt; }
+			GUIPanel* panel = control->GetPanel();
+			if (!Enabled(control)) { why = control->GetName() + " is hidden or disabled"; return std::nullopt; }
+			if (!PanelDrawnInLatestPass(panel, c_DrawWindowSeconds)) { why = control->GetName() + " is not on the screen"; return std::nullopt; }
+			if (modal && !Within(panel, modal->GetPanel())) { why = control->GetName() + " is behind the open dialog " + modal->GetName(); return std::nullopt; }
+			const Rect r = Rectangle(panel);
+			const int width = g_WindowMan.GetResX(), height = g_WindowMan.GetResY();
+			std::string covered;
+			for (int row = 0; row < 5; ++row) {
+				for (int column = 0; column < 5; ++column) {
+					// The centre first, then the rest of a 5 x 5 grid inset from the edges.
+					const bool centre = row == 0 && column == 0;
+					if (!centre && row == 2 && column == 2) continue;
+					const int gx = centre ? 2 : column, gy = centre ? 2 : row;
+					const int x = r[0] + std::max(1, r[2] * (1 + 2 * gx) / 10), y = r[1] + std::max(1, r[3] * (1 + 2 * gy) / 10);
+					if (x < 0 || y < 0 || x >= width || y >= height || x >= r[0] + r[2] || y >= r[1] + r[3]) continue;
+					GUIPanel* hit = manager->GetManager()->PanelUnderMouse(x, y);
+					if (Within(hit, panel)) return std::make_pair(x, y);
+					if (covered.empty()) covered = Reached(hit);
+				}
+			}
+			why = control->GetName() + (covered.empty() ? " lies off the screen" : " is covered: a press there reaches " + covered);
+			if (GUIPanel* held = manager->GetManager()->GetCapturedPanel()) why += " (the mouse is held by " + Reached(held) + ")";
+			// The panels a press at the centre passes through on its way down, so the one that does not hold the point shows.
+			if (!covered.empty()) {
+				why += "; centre " + std::to_string(r[0] + r[2] / 2) + "," + std::to_string(r[1] + r[3] / 2) + " in";
+				for (GUIPanel* node = panel; node; node = node->GetParentPanel()) {
+					auto* named = dynamic_cast<GUIControl*>(node);
+					why += " " + (named ? named->GetName() : std::string("panel")) + Json(Rectangle(node)).dump() + (node->_GetVisible() ? "" : "(hidden)");
+				}
+			}
+			return std::nullopt;
+		}
+
+		void Start(std::string name, std::vector<Phase> phases) {
+			s_Result.reset();
+			s_Gesture = Gesture{std::move(name), std::move(phases)};
+		}
+
+		/// The phases that point at a control, press it and let it go, one frame apart.
+		void AppendClick(std::vector<Phase>& phases, GUIControlManager* manager, std::string name, GUIControl* modal, int presses = 1) {
+			auto point = std::make_shared<std::pair<int, int>>(-1, -1);
+			phases.push_back([manager, name, modal, point](std::string& note) {
+				std::string why;
+				const auto target = Target(manager, manager->GetControl(name), modal, why);
+				if (!target) { note = why; return Beat::Fail; }
+				*point = *target;
+				if (Move(point->first, point->second)) return Beat::Next;
+				note = "the pointer did not move";
+				return Beat::Fail;
+			});
+			for (int press = 0; press < presses; ++press) {
+				phases.push_back([manager, name, modal, point](std::string& note) {
+					// The press goes where the pointer is; a control that moved under it is followed.
+					GUIControl* control = manager->GetControl(name);
+					if (!control || !Within(manager->GetManager()->PanelUnderMouse(point->first, point->second), control->GetPanel())) {
+						std::string why;
+						const auto target = Target(manager, control, modal, why);
+						if (!target) { note = why; return Beat::Fail; }
+						*point = *target;
+						Move(point->first, point->second);
+						return Beat::Again;
+					}
+					if (Button(true)) return Beat::Next;
+					note = "the press was not sent";
+					return Beat::Fail;
+				});
+				phases.push_back([](std::string& note) {
+					if (Button(false)) return Beat::Next;
+					note = "the release was not sent";
+					return Beat::Fail;
+				});
+			}
+			// The frame that delivers the release runs the control's own handlers before the next step.
+			phases.push_back([](std::string&) { return Beat::Next; });
+		}
+
+		bool Busy() { return s_Gesture.has_value(); }
+
+		void Advance() {
+			if (!s_Gesture || s_AdvancedFrame == s_DrawnFrames) return;
+			s_AdvancedFrame = s_DrawnFrames;
+			Gesture& gesture = *s_Gesture;
+			std::string note;
+			Beat beat = gesture.at < gesture.phases.size() ? gesture.phases[gesture.at](note) : Beat::Done;
+			if (beat == Beat::Again && ++gesture.repeats > c_MaxRepeats) {
+				beat = Beat::Fail;
+				note = "a phase waited " + std::to_string(c_MaxRepeats) + " frames" + (note.empty() ? "" : ": " + note);
+			}
+			if (beat == Beat::Next) {
+				gesture.at++;
+				gesture.repeats = 0;
+			}
+			if (beat == Beat::Fail) {
+				s_Result = std::make_pair(false, gesture.name + ": " + note);
+				s_Gesture.reset();
+			} else if (beat == Beat::Done || gesture.at >= gesture.phases.size()) {
+				s_Result = std::make_pair(true, gesture.name + (note.empty() ? "" : " - " + note));
+				s_Gesture.reset();
+			}
+		}
+
+		bool Finished(bool& passed, std::string& observation) {
+			if (s_Gesture || !s_Result) return false;
+			passed = s_Result->first;
+			observation = s_Result->second;
+			s_Result.reset();
+			return true;
+		}
+
+		/// A list row the pointer can press: the wheel brings an unseen row into the list first.
+		Beat ReachRow(GUIControlManager* manager, GUIListPanel* list, int index, std::pair<int, int>& point, std::string& note) {
+			const GUIListPanel::Item* wanted = list->GetItem(index);
+			if (!wanted) {
+				note = "row " + std::to_string(index) + " is not in the list";
+				return Beat::Fail;
+			}
+			const Rect r = Rectangle(list);
+			int first = -1;
+			for (int y = r[1] + 1; y < r[1] + r[3] - 1; ++y) {
+				const GUIListPanel::Item* item = list->GetItem(r[0] + 6, y);
+				if (!item) continue;
+				if (item == wanted && Within(manager->GetManager()->PanelUnderMouse(r[0] + 6, y), list)) {
+					int bottom = y;
+					while (bottom + 1 < r[1] + r[3] - 1 && list->GetItem(r[0] + 6, bottom + 1) == wanted) ++bottom;
+					point = {r[0] + 6, (y + bottom) / 2};
+					return Beat::Next;
+				}
+				if (first < 0 || item->m_ID < first) first = item->m_ID;
+			}
+			if (first < 0) {
+				note = "the list shows no rows";
+				return Beat::Fail;
+			}
+			Move(r[0] + r[2] / 2, r[1] + r[3] / 2);
+			Wheel(index < first ? 1 : -1);
+			note = "row " + std::to_string(index) + " never came into view";
+			return Beat::Again;
+		}
 	}
+
+	// ---- The sweep: every enabled control a screen lists, changed by hand, read back frames later, put back ----
+	std::set<std::string> s_HandReached; //!< Every control a hand's gesture reached, for the controls a case owes a press.
+	std::set<std::string> s_Owed;        //!< Buttons a sweep left to the case's own later steps.
+	std::string s_ModelMark, s_ScreenMark;
+
+	void NoteReached(const std::string& name) { s_HandReached.insert(name); }
+
+	/// What a change on a menu drives: the host's choices and draft as the menu holds them, and every setting.
+	std::string ModelText() {
+		std::string text;
+		if (MainMenuGUI* main = g_MenuMan.GetMainMenu()) text = main->AutomationModelText();
+		auto stream = std::make_unique<std::ostringstream>();
+		std::ostringstream* raw = stream.get();
+		{
+			RTE::Writer writer(std::move(stream));
+			g_SettingsMan.Save(writer);
+			text += "\n" + raw->str();
+		}
+		return text;
+	}
+
+	/// What the screen shows: its name and every drawn control's text and state.
+	std::string ScreenText(GUIControlManager* manager) {
+		std::string text;
+		if (MainMenuGUI* main = g_MenuMan.GetMainMenu()) text = main->AutomationActiveScreenName() + "/" + main->AutomationMultiplayerSubScreen();
+		if (!manager) return text;
+		for (GUIControl* control: *manager->GetControlList()) {
+			if (!Visible(control) || !PanelDrawnInLatestPass(control->GetPanel(), c_DrawWindowSeconds)) continue;
+			std::string shown;
+			Text(control, shown);
+			text += "\n" + control->GetName() + "=" + shown;
+			if (auto* box = dynamic_cast<GUICheckbox*>(control)) text += box->GetCheck() == GUICheckbox::Checked ? " [x]" : " [ ]";
+			if (auto* radio = dynamic_cast<GUIRadioButton*>(control)) text += radio->GetCheck() ? " (o)" : " ( )";
+			if (auto* tab = dynamic_cast<GUITab*>(control)) text += tab->GetCheck() ? " <on>" : "";
+			if (auto* slider = dynamic_cast<GUISlider*>(control)) text += " " + std::to_string(slider->GetValue());
+			if (auto* list = dynamic_cast<GUIListBox*>(control)) text += " #" + std::to_string(list->GetSelectedIndex());
+			if (!Enabled(control)) text += " (disabled)";
+		}
+		return text;
+	}
+
+	bool Interactive(GUIControl* control) {
+		return dynamic_cast<GUIButton*>(control) || dynamic_cast<GUICheckbox*>(control) || dynamic_cast<GUIRadioButton*>(control) ||
+		       dynamic_cast<GUIComboBox*>(control) || dynamic_cast<GUISlider*>(control) || dynamic_cast<GUITextBox*>(control) ||
+		       dynamic_cast<GUIListBox*>(control) || dynamic_cast<GUITab*>(control);
+	}
+
+	bool Under(GUIControl* control, GUIControl* root, int depth) {
+		int level = 0;
+		for (GUIControl* node = control->GetParent(); node; node = node->GetParent()) {
+			++level;
+			if (node == root) return depth <= 0 || level <= depth;
+		}
+		return false;
+	}
+
+	std::set<std::string> NameList(const std::string& text) {
+		std::set<std::string> names;
+		std::istringstream items(text);
+		for (std::string item; std::getline(items, item, ',');) if (!item.empty()) names.insert(item);
+		return names;
+	}
+
+	/// A different value a text box takes from a hand: the next number in its bounds, or the text with one letter more or less.
+	std::string OtherText(GUITextBox* box) {
+		const std::string text = box->GetText();
+		if (box->GetNumericOnly()) {
+			const bool number = !text.empty() && text.size() < 10 && text.find_first_not_of("0123456789") == std::string::npos;
+			const int value = number ? std::stoi(text) : 0;
+			const int top = box->GetMaxNumericValue(), bottom = std::max(0, box->GetMinNumericValue());
+			int other = value + 1;
+			if (top > 0 && other > top) other = value - 1;
+			if (other < bottom) other = bottom == value ? value + 1 : bottom;
+			return std::to_string(other);
+		}
+		const int longest = box->GetMaxTextLength();
+		if (longest > 0 && static_cast<int>(text.size()) >= longest) return text.substr(0, text.size() - 1);
+		return text + "x";
+	}
+
+	// The controls a player must find on a screen in its state, each declared enabled or disabled (a disabled one with its reason),
+	// live in the case's own list (tools/menu_declared), never read off the screen they check. A declared control missing,
+	// hidden or in the other state fails the sweep, and so does a control on the screen the list does not name.
+	bool DeclaredControlsFound(GUIControlManager* manager, GUIControl* root, int depth, const std::string& label, const std::vector<std::vector<GUIControl*>*>& shown,
+	                           Json& record, std::string& observation) {
+		std::vector<GUIControl*> found;
+		for (const std::vector<GUIControl*>* group: shown) found.insert(found.end(), group->begin(), group->end());
+		// Test lever: CCCP_TEST_SWEEP_HARVEST=<dir> writes what the screen shows as a draft for a person to declare from. Unset, nothing changes.
+		static const std::string s_Harvest = [] { const char* lever = std::getenv("CCCP_TEST_SWEEP_HARVEST"); return std::string(lever ? lever : ""); }();
+		if (!s_Harvest.empty()) {
+			Json draft = {{"label", label}, {"controls", Json::array()}};
+			for (GUIControl* control: found) draft["controls"].push_back({{"name", control->GetName()}, {"enabled", Enabled(control)}});
+			std::ofstream(std::filesystem::path(s_Harvest) / (label + ".json")) << draft.dump(1) << "\n";
+			record["harvested"] = true;
+			return true;
+		}
+		static const std::string s_Declared = [] { const char* lists = std::getenv("CCCP_TEST_SWEEP_DECLARED"); return std::string(lists ? lists : ""); }();
+		const std::filesystem::path path = std::filesystem::path(s_Declared) / (label + ".json");
+		std::ifstream file(path);
+		if (s_Declared.empty() || !file) {
+			observation = "no declared list for " + label + (s_Declared.empty() ? std::string() : " at " + path.generic_string());
+			return false;
+		}
+		const Json declared = Json::parse(file, nullptr, false);
+		if (declared.is_discarded() || !declared.contains("controls") || !declared["controls"].is_array()) {
+			observation = "the declared list for " + label + " is not a list of controls";
+			return false;
+		}
+		std::set<std::string> names;
+		std::string faults;
+		const auto fault = [&faults](const std::string& text) { faults += (faults.empty() ? "" : "; ") + text; };
+		for (const Json& entry: declared["controls"]) {
+			const std::string name = entry.value("name", std::string());
+			const bool enabled = entry.value("enabled", true);
+			const std::string reason = entry.value("reason", std::string());
+			names.insert(name);
+			GUIControl* control = manager->GetControl(name);
+			if (!enabled && reason.empty()) fault(name + " is declared disabled with no reason");
+			if (!control || !Under(control, root, depth)) {
+				fault(name + " is missing");
+			} else if (!Visible(control) || !PanelDrawnInLatestPass(control->GetPanel(), c_DrawWindowSeconds)) {
+				fault(name + " is hidden");
+			} else if (Enabled(control) != enabled) {
+				fault(name + (enabled ? " is disabled" : " is enabled though declared disabled: " + reason));
+			}
+		}
+		for (GUIControl* control: found) {
+			if (!names.count(control->GetName())) fault(control->GetName() + " is not declared");
+		}
+		record["declared"] = names.size();
+		if (faults.empty()) return true;
+		observation = label + ": " + faults;
+		return false;
+	}
+
+	bool SweepSteps(GUIControlManager* manager, std::istream& args, std::vector<std::string>& steps, std::string& observation) {
+		std::string rootName;
+		args >> rootName;
+		int depth = 0;
+		std::string restore, label = rootName;
+		std::set<std::string> quiet, own;
+		// A box that takes only some text (a key name, a digest) is given one it takes: with=Box:text.
+		std::map<std::string, std::string> with;
+		bool readOnly = false;
+		for (std::string option; args >> option;) {
+			const size_t equals = option.find('=');
+			const std::string key = option.substr(0, equals), value = equals == std::string::npos ? std::string() : option.substr(equals + 1);
+			if (key == "depth") depth = std::atoi(value.c_str());
+			else if (key == "restore") restore = value;
+			else if (key == "quiet") quiet = NameList(value);
+			else if (key == "own") own = NameList(value);
+			else if (key == "label") label = value;
+			else if (key == "readonly") readOnly = true;
+			else if (key == "with" && value.find(':') != std::string::npos) with[value.substr(0, value.find(':'))] = value.substr(value.find(':') + 1);
+			else { observation = "unknown sweep option " + option; return false; }
+		}
+		GUIControl* root = manager ? manager->GetControl(rootName) : nullptr;
+		if (!root || !Visible(root)) {
+			observation = rootName + " is not on the screen";
+			return false;
+		}
+		// Test lever: CCCP_TEST_MENU_FAULT="hide:<control>,disable:<control>" breaks the screen as the sweep reads it, so the
+		// sweep's own verdict is tested against a control a player cannot find and one it cannot use. Unset, nothing changes.
+		static const std::string s_MenuFault = [] { const char* lever = std::getenv("CCCP_TEST_MENU_FAULT"); return std::string(lever ? lever : ""); }();
+		for (const std::string& fault: NameList(s_MenuFault)) {
+			const size_t colon = fault.find(':');
+			GUIControl* broken = colon == std::string::npos ? nullptr : manager->GetControl(fault.substr(colon + 1));
+			if (!broken || !Under(broken, root, depth)) continue;
+			if (fault.compare(0, colon, "hide") == 0) broken->SetVisible(false);
+			if (fault.compare(0, colon, "disable") == 0) broken->SetEnabled(false);
+			System::PrintDiagnosticLine("[sweep] test fault " + fault);
+		}
+		std::vector<GUIControl*> values, tabs, buttons, disabled;
+		for (GUIControl* control: *manager->GetControlList()) {
+			if (!Interactive(control) || !Under(control, root, depth) || !Visible(control) || !PanelDrawnInLatestPass(control->GetPanel(), c_DrawWindowSeconds)) continue;
+			if (!Enabled(control)) disabled.push_back(control);
+			else if (dynamic_cast<GUITab*>(control)) tabs.push_back(control);
+			else if (dynamic_cast<GUIButton*>(control)) buttons.push_back(control);
+			else values.push_back(control);
+		}
+		Json record = {{"label", label}, {"root", rootName}, {"values", Json::array()}, {"tabs", Json::array()}, {"buttons", Json::array()},
+		               {"disabled", Json::array()}, {"owed", Json::array()}, {"quiet", Json::array()}};
+		if (!DeclaredControlsFound(manager, root, depth, label, {&values, &tabs, &buttons, &disabled}, record, observation)) return false;
+		for (GUIControl* control: disabled) {
+			record["disabled"].push_back(control->GetName());
+			steps.push_back("assert_enabled " + control->GetName() + " 0");
+		}
+		if (readOnly) {
+			record["enabled"] = values.size() + tabs.size() + buttons.size();
+			// A screen shown to read changes nothing: every value is disabled, and its tabs only move about it - each is pressed.
+			for (GUIControl* control: values) steps.push_back("assert_enabled " + control->GetName() + " 0");
+			GUITab* shown = nullptr;
+			for (GUIControl* control: tabs) {
+				if (dynamic_cast<GUITab*>(control)->GetCheck()) shown = dynamic_cast<GUITab*>(control);
+			}
+			for (GUIControl* control: tabs) {
+				record["tabs"].push_back(control->GetName());
+				steps.insert(steps.end(), {"activate " + control->GetName(), "wait 3", "assert_checked " + control->GetName() + " 1"});
+				if (shown && control != shown) steps.insert(steps.end(), {"activate " + shown->GetName(), "wait 3", "assert_checked " + shown->GetName() + " 1"});
+			}
+			for (GUIControl* control: buttons) {
+				if (!own.count(control->GetName())) {
+					observation = "the read-only view's button " + control->GetName() + " is left to no one: name it with own=";
+					return false;
+				}
+				record["owed"].push_back(control->GetName());
+				s_Owed.insert(control->GetName());
+			}
+			observation = record.dump();
+			System::PrintDiagnosticLine("[sweep] " + observation);
+			return true;
+		}
+		const auto changed = [&](const std::string& name) {
+			if (quiet.count(name)) {
+				record["quiet"].push_back(name);
+				return;
+			}
+			steps.push_back("assert_model_changed " + name);
+		};
+		for (GUIControl* control: values) {
+			const std::string name = control->GetName();
+			record["values"].push_back(name);
+			steps.push_back("model_mark");
+			if (auto* box = dynamic_cast<GUICheckbox*>(control)) {
+				const bool checked = box->GetCheck() == GUICheckbox::Checked;
+				steps.push_back("setcheck " + name + (checked ? " 0" : " 1"));
+				steps.push_back("wait 3");
+				steps.push_back("assert_checked " + name + (checked ? " 0" : " 1"));
+				changed(name);
+				steps.push_back("setcheck " + name + (checked ? " 1" : " 0"));
+				steps.push_back("wait 3");
+				steps.push_back("assert_checked " + name + (checked ? " 1" : " 0"));
+			} else if (auto* radio = dynamic_cast<GUIRadioButton*>(control)) {
+				// A radio changes by its group: the checked one gives way to a sibling and comes back.
+				GUIRadioButton* checked = nullptr;
+				GUIRadioButton* other = nullptr;
+				for (GUIControl* sibling: *control->GetParent()->GetChildren()) {
+					auto* candidate = dynamic_cast<GUIRadioButton*>(sibling);
+					if (!candidate || !Enabled(candidate)) continue;
+					if (candidate->GetCheck()) checked = candidate;
+					else if (!other || candidate == radio) other = candidate;
+				}
+				GUIRadioButton* target = radio->GetCheck() ? other : radio;
+				if (!target || !checked) {
+					observation = name + " has no other choice in its group";
+					return false;
+				}
+				steps.push_back("activate " + target->GetName());
+				steps.push_back("wait 3");
+				steps.push_back("assert_checked " + target->GetName() + " 1");
+				changed(name);
+				steps.push_back("activate " + checked->GetName());
+				steps.push_back("wait 3");
+				steps.push_back("assert_checked " + checked->GetName() + " 1");
+			} else if (auto* combo = dynamic_cast<GUIComboBox*>(control)) {
+				const int count = combo->GetCount(), selected = combo->GetSelectedIndex();
+				if (count < 1) {
+					observation = name + " offers no row";
+					return false;
+				}
+				const GUIListPanel::Item* original = combo->GetItem(std::max(0, selected));
+				const GUIListPanel::Item* other = combo->GetItem(count > 1 ? (std::max(0, selected) + 1) % count : 0);
+				steps.push_back("combo_select " + name + " " + other->m_Name);
+				steps.push_back("wait 3");
+				steps.push_back("assert_label " + name + " " + other->m_Name);
+				if (count > 1) changed(name);
+				if (count > 1 && selected >= 0) {
+					steps.push_back("combo_select " + name + " " + original->m_Name);
+					steps.push_back("wait 3");
+					steps.push_back("assert_label " + name + " " + original->m_Name);
+				}
+			} else if (auto* slider = dynamic_cast<GUISlider*>(control)) {
+				const int value = slider->GetValue();
+				const int other = value != slider->GetMaximum() ? slider->GetMaximum() : slider->GetMinimum();
+				steps.push_back("slider_set " + name + " " + std::to_string(other));
+				steps.push_back("wait 3");
+				steps.push_back("assert_value " + name + " " + std::to_string(other));
+				changed(name);
+				steps.push_back("slider_set " + name + " " + std::to_string(value));
+				steps.push_back("wait 3");
+				steps.push_back("assert_value " + name + " " + std::to_string(value));
+			} else if (auto* box = dynamic_cast<GUITextBox*>(control)) {
+				const std::string original = box->GetText(), other = with.count(name) ? with[name] : OtherText(box);
+				// A quiet box acts on Enter (a chat line is sent and the box empties): it is typed into without Enter and read back.
+				const std::string mode = quiet.count(name) ? " plain " : " enter ";
+				steps.push_back("type_text " + name + mode + other);
+				steps.push_back("wait 3");
+				steps.push_back("assert_box_text " + name + " " + other);
+				changed(name);
+				steps.push_back("type_text " + name + mode + original);
+				steps.push_back("wait 3");
+				steps.push_back("assert_box_text " + name + " " + original);
+			} else if (auto* list = dynamic_cast<GUIListBox*>(control)) {
+				const int rows = static_cast<int>(list->GetItemList()->size()), selected = list->GetSelectedIndex();
+				if (rows == 0) {
+					// An empty list has nothing to press; the case asserts the line that says so.
+					steps.push_back("assert_list_rows " + name + " 0");
+					continue;
+				}
+				const int target = rows > 1 ? (std::max(0, selected) + 1) % rows : 0;
+				steps.push_back("click_row " + name + " " + std::to_string(target));
+				steps.push_back("wait 3");
+				steps.push_back("assert_selected " + name + " " + std::to_string(target));
+				if (selected >= 0 && selected != target) {
+					steps.push_back("click_row " + name + " " + std::to_string(selected));
+					steps.push_back("wait 3");
+					steps.push_back("assert_selected " + name + " " + std::to_string(selected));
+				}
+			}
+		}
+		GUITab* shownTab = nullptr;
+		for (GUIControl* control: tabs) {
+			if (dynamic_cast<GUITab*>(control)->GetCheck()) shownTab = dynamic_cast<GUITab*>(control);
+		}
+		for (GUIControl* control: tabs) {
+			const std::string name = control->GetName();
+			record["tabs"].push_back(name);
+			steps.push_back("activate " + name);
+			steps.push_back("wait 3");
+			steps.push_back("assert_checked " + name + " 1");
+			if (shownTab && control != shownTab) {
+				steps.push_back("activate " + shownTab->GetName());
+				steps.push_back("wait 3");
+				steps.push_back("assert_checked " + shownTab->GetName() + " 1");
+			}
+		}
+		for (GUIControl* control: buttons) {
+			const std::string name = control->GetName();
+			if (own.count(name)) {
+				record["owed"].push_back(name);
+				s_Owed.insert(name);
+				continue;
+			}
+			record["buttons"].push_back(name);
+			if (restore.empty()) {
+				observation = "pressing " + name + " needs a way back: name a restore macro or leave it to the case with own=";
+				return false;
+			}
+			steps.push_back("screen_mark");
+			steps.push_back("activate " + name);
+			steps.push_back("wait 6");
+			if (quiet.count(name)) record["quiet"].push_back(name);
+			else steps.push_back("assert_screen_changed " + name);
+			steps.push_back("run " + restore);
+		}
+		// Each control once: an owned button is one of the buttons, left to the case to press.
+		record["enabled"] = values.size() + tabs.size() + buttons.size();
+		observation = record.dump();
+		System::PrintDiagnosticLine("[sweep] " + observation);
+		return true;
+	}
+
+	bool OwedPressed(std::string& missing) {
+		for (const std::string& name: s_Owed) {
+			if (!s_HandReached.count(name)) missing += (missing.empty() ? "" : ",") + name;
+		}
+		return missing.empty();
+	}
+
+	void AfterDrawnFrame() {
+		++Hand::s_DrawnFrames;
+		Hand::Advance();
+	}
+
+	bool HandBusy() { return Hand::Busy(); }
+	bool HandFinished(bool& passed, std::string& observation) { return Hand::Finished(passed, observation); }
+
+	bool HandClick(GUIControlManager* manager, const std::string& name, GUIControl* modal, std::string& observation, int presses) {
+		std::string why;
+		if (!manager || !Hand::Target(manager, manager->GetControl(name), modal, why)) {
+			observation = name + " " + why;
+			return false;
+		}
+		std::vector<Hand::Phase> phases;
+		Hand::AppendClick(phases, manager, name, modal, presses);
+		Hand::Start((presses > 1 ? "double-click " : "click ") + name, std::move(phases));
+		NoteReached(name);
+		observation = name;
+		return true;
+	}
+
+	bool HandClickAt(int x, int y, const std::string& label, std::function<bool()> taken, std::string& observation) {
+		if (x < 0 || y < 0 || x >= g_WindowMan.GetResX() || y >= g_WindowMan.GetResY()) {
+			observation = label + " lies off the screen";
+			return false;
+		}
+		std::vector<Hand::Phase> phases;
+		phases.push_back([x, y](std::string&) { return Hand::Move(x, y) ? Hand::Beat::Next : Hand::Beat::Fail; });
+		phases.push_back([](std::string&) { return Hand::Button(true) ? Hand::Beat::Next : Hand::Beat::Fail; });
+		phases.push_back([](std::string&) { return Hand::Button(false) ? Hand::Beat::Next : Hand::Beat::Fail; });
+		phases.push_back([taken, label](std::string& note) {
+			if (taken()) return Hand::Beat::Next;
+			note = "the screen never took the click on " + label;
+			return Hand::Beat::Again;
+		});
+		Hand::Start("click " + label, std::move(phases));
+		observation = label;
+		return true;
+	}
+
+	bool HandGameKey(const std::string& key, std::function<bool()> taken, const std::string& label, std::string& observation) {
+		const SDL_Scancode scancode = SDL_GetScancodeFromName(key.c_str());
+		if (scancode == SDL_SCANCODE_UNKNOWN) {
+			observation = key + " names no key";
+			return false;
+		}
+		// A key in play reaches the game through the event queue alone; no menu input holds it.
+		const auto press = [scancode](bool down) {
+			SDL_Event event{};
+			event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+			event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+			event.key.scancode = scancode;
+			event.key.key = SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, false);
+			event.key.down = down;
+			return Hand::Push(event);
+		};
+		std::vector<Hand::Phase> phases;
+		phases.push_back([press](std::string&) { return press(true) ? Hand::Beat::Next : Hand::Beat::Fail; });
+		phases.push_back([press](std::string&) { return press(false) ? Hand::Beat::Next : Hand::Beat::Fail; });
+		phases.push_back([taken, label](std::string& note) {
+			if (taken()) return Hand::Beat::Next;
+			note = label + " never answered the key";
+			return Hand::Beat::Again;
+		});
+		Hand::Start("press " + key + " for " + label, std::move(phases));
+		observation = key;
+		return true;
+	}
+
+	bool HandPoint(GUIControlManager* manager, const std::string& name, std::string& observation) {
+		std::string why;
+		const auto target = manager ? Hand::Target(manager, manager->GetControl(name), nullptr, why) : std::nullopt;
+		if (!target) {
+			observation = name + " " + why;
+			return false;
+		}
+		auto* box = dynamic_cast<GUITextBox*>(manager->GetControl(name));
+		std::vector<Hand::Phase> phases;
+		if (box) {
+			// A hand gives a box the keyboard by clicking into it.
+			Hand::AppendClick(phases, manager, name, nullptr);
+		} else {
+			const std::pair<int, int> point = *target;
+			phases.push_back([point](std::string&) {
+				Hand::Move(point.first, point.second);
+				return Hand::Beat::Next;
+			});
+			phases.push_back([](std::string&) { return Hand::Beat::Next; });
+		}
+		Hand::Start((box ? "click into " : "point at ") + name, std::move(phases));
+		NoteReached(name);
+		observation = name;
+		return true;
+	}
+
+	bool HandType(GUIControlManager* manager, const std::string& name, const std::string& text, bool enter, std::string& observation, const std::string& enterWith) {
+		auto* box = manager ? dynamic_cast<GUITextBox*>(manager->GetControl(name)) : nullptr;
+		std::string why;
+		if (!box || !Hand::Target(manager, box, nullptr, why)) {
+			observation = name + (box ? " " + why : " is not a text box");
+			return false;
+		}
+		std::vector<Hand::Phase> phases;
+		Hand::AppendClick(phases, manager, name, nullptr);
+		const bool credential = Credential(box) || CredentialName(name);
+		phases.push_back([manager, box](std::string& note) {
+			if (!Hand::Within(manager->GetManager()->GetFocusPanel(), box)) {
+				note = "the click left the keyboard elsewhere";
+				return Hand::Beat::Fail;
+			}
+			// The whole text selected as a hand selects it with the keys every box reads: End, then Shift+Home.
+			Hand::Key("End", true);
+			return Hand::Beat::Next;
+		});
+		phases.push_back([](std::string&) {
+			Hand::Key("End", false);
+			Hand::Key("Left Shift", true);
+			Hand::Key("Home", true);
+			return Hand::Beat::Next;
+		});
+		phases.push_back([](std::string&) {
+			Hand::Key("Home", false);
+			Hand::Key("Left Shift", false);
+			return Hand::Beat::Next;
+		});
+		phases.push_back([text](std::string&) { return (text.empty() ? Hand::Key("Backspace", true) : Hand::Type(text)) ? Hand::Beat::Next : Hand::Beat::Fail; });
+		phases.push_back([text, enterWith](std::string&) {
+			if (text.empty()) Hand::Key("Backspace", false);
+			if (!enterWith.empty()) Hand::Key(enterWith, true);
+			return Hand::Beat::Next;
+		});
+		if (enter) {
+			phases.push_back([](std::string&) { return Hand::Key("Return", true) ? Hand::Beat::Next : Hand::Beat::Fail; });
+			phases.push_back([enterWith](std::string&) {
+				Hand::Key("Return", false);
+				if (!enterWith.empty()) Hand::Key(enterWith, false);
+				return Hand::Beat::Next;
+			});
+		}
+		phases.push_back([manager, name, text, credential](std::string& note) {
+			auto* typed = dynamic_cast<GUITextBox*>(manager->GetControl(name));
+			const std::string shown = typed ? typed->GetText() : "";
+			note = shown == text ? "the box reads what was typed" : "the box reads " + Json(Captured(credential, shown)).dump();
+			return Hand::Beat::Next;
+		});
+		Hand::Start((enter ? "type and press Enter in " : "type into ") + name, std::move(phases));
+		NoteReached(name);
+		observation = credential ? name + " <masked>" : name + " " + text;
+		return true;
+	}
+
+	bool HandPick(GUIControlManager* manager, const std::string& name, const std::string& item, std::string& observation, bool refused) {
+		auto* combo = manager ? dynamic_cast<GUIComboBox*>(manager->GetControl(name)) : nullptr;
+		if (!combo) {
+			observation = name + " is not a drop-down";
+			return false;
+		}
+		const GUIListPanel::Item* before = combo->GetSelectedItem();
+		const std::string kept = before ? before->m_Name : std::string();
+		if (refused && kept == item) {
+			observation = name + " already reads " + Json(item).dump();
+			return false;
+		}
+		int index = -1;
+		for (int i = 0; i < combo->GetCount(); ++i) {
+			if (const GUIListPanel::Item* entry = combo->GetItem(i); entry && entry->m_Name == item) {
+				index = i;
+				break;
+			}
+		}
+		if (index < 0) {
+			observation = name + " offers no row " + Json(item).dump();
+			return false;
+		}
+		std::string why;
+		if (!combo->IsDropped() && !Hand::Target(manager, combo, nullptr, why)) {
+			observation = name + " " + why;
+			return false;
+		}
+		std::vector<Hand::Phase> phases;
+		if (!combo->IsDropped()) Hand::AppendClick(phases, manager, name, nullptr);
+		phases.push_back([combo](std::string& note) {
+			if (combo->IsDropped()) return Hand::Beat::Next;
+			note = "the list did not open";
+			return Hand::Beat::Again;
+		});
+		auto point = std::make_shared<std::pair<int, int>>();
+		phases.push_back([manager, combo, index, point](std::string& note) { return Hand::ReachRow(manager, combo->GetListPanel(), index, *point, note); });
+		phases.push_back([point](std::string&) {
+			Hand::Move(point->first, point->second);
+			return Hand::Beat::Next;
+		});
+		phases.push_back([manager, combo, point](std::string& note) {
+			if (!Hand::Within(manager->GetManager()->PanelUnderMouse(point->first, point->second), combo->GetListPanel())) {
+				note = "the row is covered";
+				return Hand::Beat::Fail;
+			}
+			return Hand::Button(true) ? Hand::Beat::Next : Hand::Beat::Fail;
+		});
+		// A finger rests on the row for a frame before it lifts; the drop-down commits on the release.
+		phases.push_back([](std::string&) { return Hand::Beat::Next; });
+		phases.push_back([](std::string&) { return Hand::Button(false) ? Hand::Beat::Next : Hand::Beat::Fail; });
+		phases.push_back([](std::string&) { return Hand::Beat::Next; });
+		// The pick must hold on the frames after it, through the screen's own refresh; a refused one must not.
+		const std::string expected = refused ? kept : item;
+		for (int frame = 0; frame < 3; ++frame) {
+			phases.push_back([combo, expected, frame](std::string& note) {
+				const GUIListPanel::Item* shown = combo->GetSelectedItem();
+				if (combo->IsDropped()) {
+					note = "the list stayed open after the release";
+					return Hand::Beat::Fail;
+				}
+				if (!shown || shown->m_Name != expected) {
+					note = "the drop-down reads " + Json(shown ? shown->m_Name : std::string()).dump() + " " + std::to_string(frame + 1) + " frame(s) after the pick";
+					return Hand::Beat::Fail;
+				}
+				return Hand::Beat::Next;
+			});
+		}
+		Hand::Start((refused ? "pick (refused) " : "pick ") + Json(item).dump() + " in " + name, std::move(phases));
+		NoteReached(name);
+		observation = name + " " + item;
+		return true;
+	}
+
+	bool HandRow(GUIControlManager* manager, const std::string& listName, int index, int presses, GUIControl* modal, std::string& observation) {
+		GUIControl* control = manager ? manager->GetControl(listName) : nullptr;
+		auto* list = dynamic_cast<GUIListPanel*>(control);
+		std::string why;
+		if (!list || !Hand::Target(manager, control, modal, why)) {
+			observation = listName + (list ? " " + why : " is not a list");
+			return false;
+		}
+		if (!list->GetItem(index)) {
+			observation = listName + " has no row " + std::to_string(index);
+			return false;
+		}
+		auto point = std::make_shared<std::pair<int, int>>();
+		std::vector<Hand::Phase> phases;
+		phases.push_back([manager, list, index, point](std::string& note) { return Hand::ReachRow(manager, list, index, *point, note); });
+		phases.push_back([point](std::string&) {
+			Hand::Move(point->first, point->second);
+			return Hand::Beat::Next;
+		});
+		for (int press = 0; press < presses; ++press) {
+			phases.push_back([](std::string&) { return Hand::Button(true) ? Hand::Beat::Next : Hand::Beat::Fail; });
+			phases.push_back([](std::string&) { return Hand::Button(false) ? Hand::Beat::Next : Hand::Beat::Fail; });
+		}
+		phases.push_back([list, index](std::string& note) {
+			if (list->GetSelectedIndex() == index) return Hand::Beat::Next;
+			note = "the list selected row " + std::to_string(list->GetSelectedIndex());
+			return Hand::Beat::Fail;
+		});
+		Hand::Start((presses > 1 ? "double-click row " : "click row ") + std::to_string(index) + " of " + listName, std::move(phases));
+		NoteReached(listName);
+		observation = listName + " row " + std::to_string(index);
+		return true;
+	}
+
+	bool HandDrag(GUIControlManager* manager, const std::string& name, int value, std::string& observation) {
+		auto* slider = manager ? dynamic_cast<GUISlider*>(manager->GetControl(name)) : nullptr;
+		std::string why;
+		if (!slider || !Hand::Target(manager, slider, nullptr, why)) {
+			observation = name + (slider ? " " + why : " is not a slider");
+			return false;
+		}
+		if (value < slider->GetMinimum() || value > slider->GetMaximum()) {
+			observation = name + " runs " + std::to_string(slider->GetMinimum()) + "-" + std::to_string(slider->GetMaximum());
+			return false;
+		}
+		const bool horizontal = slider->GetOrientation() == GUISlider::Horizontal;
+		const Rect r = Rectangle(slider);
+		const int length = horizontal ? r[2] : r[3];
+		const int range = std::max(1, slider->GetMaximum() - slider->GetMinimum());
+		// The press puts the knob where it lands; the tries walk a pixel at a time from there toward the value.
+		auto offset = std::make_shared<int>(std::clamp(static_cast<int>(static_cast<long long>(value - slider->GetMinimum()) * length / range), 1, std::max(1, length - 2)));
+		auto tries = std::make_shared<int>(0);
+		auto stage = std::make_shared<int>(0);
+		std::vector<Hand::Phase> phases;
+		phases.push_back([manager, slider, value, horizontal, r, length, offset, tries, stage](std::string& note) {
+			const int x = horizontal ? r[0] + *offset : r[0] + r[2] / 2, y = horizontal ? r[1] + r[3] / 2 : r[1] + *offset;
+			switch ((*stage)++) {
+				case 0:
+					Hand::Move(x, y);
+					return Hand::Beat::Again;
+				case 1:
+					if (!Hand::Within(manager->GetManager()->PanelUnderMouse(x, y), slider)) {
+						note = "the track is covered at " + std::to_string(x) + "," + std::to_string(y);
+						return Hand::Beat::Fail;
+					}
+					Hand::Button(true);
+					return Hand::Beat::Again;
+				case 2:
+					Hand::Button(false);
+					return Hand::Beat::Again;
+				case 3:
+					return Hand::Beat::Again;
+				default:
+					break;
+			}
+			*stage = 0;
+			const int reached = slider->GetValue();
+			if (reached == value) return Hand::Beat::Next;
+			const int move = reached < value ? 1 : -1;
+			if (++*tries > length || *offset + move < 1 || *offset + move > length - 2) return Hand::Beat::Next;
+			*offset += move;
+			return Hand::Beat::Again;
+		});
+		// A value no pixel lands on is reached with the wheel, a step of the slider's resolution at a time.
+		phases.push_back([slider, value](std::string& note) {
+			if (slider->GetValue() == value) return Hand::Beat::Next;
+			note = "the wheel never reached it from " + std::to_string(slider->GetValue());
+			Hand::Wheel(slider->GetValue() < value ? 1 : -1);
+			return Hand::Beat::Again;
+		});
+		phases.push_back([slider, value](std::string& note) {
+			note = "reached " + std::to_string(slider->GetValue());
+			return slider->GetValue() == value ? Hand::Beat::Next : Hand::Beat::Fail;
+		});
+		Hand::Start("drag " + name + " to " + std::to_string(value), std::move(phases));
+		NoteReached(name);
+		observation = name + " " + std::to_string(value);
+		return true;
+	}
+
 	bool Inside(const Rect& child, const Rect& parent) {
 		return child[2] > 0 && child[3] > 0 && child[0] >= parent[0] && child[1] >= parent[1] &&
 			child[0] + child[2] <= parent[0] + parent[2] && child[1] + child[3] <= parent[1] + parent[3];
@@ -309,10 +1194,12 @@ namespace RTE::MenuAutomation {
 		const auto rect = Rectangle(control->GetPanel());
 		observation += " text=" + Json(Captured(Credential(control), text)).dump() + " rect=" + Json(rect).dump();
 		if (auto* label = dynamic_cast<GUILabel*>(control)) {
-			observation += " height=" + std::to_string(label->GetTextHeight()) + " word_width=" + std::to_string(label->GetMaxWordWidth());
+			observation += " height=" + std::to_string(label->GetTextHeight()) + " word_width=" + std::to_string(label->GetMaxWordWidth()) + " width=" + std::to_string(label->GetTextWidth());
 			if (label->GetHorizontalOverflowScroll() && control->GetName() == "LabelMultiplayerStatus") {
 				return label->GetTextHeight() <= rect[3];
 			}
+			// A label scrolling sideways draws its text on one line, which shows whole only when it is no wider than the label.
+			if (label->GetHorizontalOverflowScroll() && label->GetTextWidth() > rect[2]) return false;
 			return label->GetTextHeight() <= rect[3] && label->GetMaxWordWidth() <= rect[2];
 		}
 		std::string section = dynamic_cast<GUIButton*>(control) ? "Button_Up" : dynamic_cast<GUITab*>(control) ? "Tab" :
@@ -545,6 +1432,93 @@ namespace RTE::MenuAutomation {
 		return "summary RTT " + std::to_string(shown) + " ms against " + std::to_string(expected) + " ms listed";
 	}
 
+	/// Whether a text box's line is as tall as the box shows, under the box's top margin.
+	bool LineFits(GUIControlManager* manager, GUIControl* control, const std::string& text, std::string& observation) {
+		std::string fontName;
+		GUIFont* font = manager->GetSkin()->GetValue("TextBox", "Font", &fontName) ? manager->GetSkin()->GetFont(fontName) : nullptr;
+		if (!font) return false;
+		int top = 0;
+		manager->GetSkin()->GetValue("TextBox", "HeightMargin", &top);
+		const int height = font->CalculateHeight(text), available = Rectangle(control->GetPanel())[3] - top;
+		observation += " line_height=" + std::to_string(height) + " available_height=" + std::to_string(available);
+		return height <= available;
+	}
+
+	/// Where a label's text lands: its alignment places it inside a rect that may be larger.
+	Rect LabelTextRect(GUILabel* label, Rect rect) {
+		// A label clips its text to its own rect (GUILabel::Draw); text it cannot hold is the fit check's to find.
+		const int width = std::min(label->GetTextWidth(), rect[2]), height = std::min(label->GetTextHeight(), rect[3]);
+		const int h = label->GetHAlignment(), v = label->GetVAlignment();
+		rect[0] += h == GUIFont::Centre ? (rect[2] - width) / 2 : h == GUIFont::Right ? rect[2] - width : 0;
+		rect[1] += v == GUIFont::Middle ? (rect[3] - height) / 2 : v == GUIFont::Bottom ? rect[3] - height : 0;
+		rect[2] = std::max(1, width);
+		rect[3] = std::max(1, height);
+		return rect;
+	}
+
+	/// Where a control draws, and where its caption sits in that: a label draws only its text, a check box or a radio button its box
+	/// and its caption beside it, a button its face with the caption centred on it, any other control its whole rect.
+	std::pair<Rect, Rect> DrawnAndCaption(GUIControlManager* manager, GUIControl* control, const std::string& text) {
+		const Rect rect = Rectangle(control->GetPanel());
+		if (auto* label = dynamic_cast<GUILabel*>(control)) {
+			const Rect drawn = LabelTextRect(label, rect);
+			return {drawn, drawn};
+		}
+		const bool checkbox = dynamic_cast<GUICheckbox*>(control);
+		const bool radio = dynamic_cast<GUIRadioButton*>(control);
+		const bool button = dynamic_cast<GUIButton*>(control);
+		if (text.empty() || !(checkbox || radio || button)) return {rect, rect};
+		const std::string section = checkbox ? "Checkbox" : radio ? "RadioButton" : "Button_Up";
+		std::string fontName;
+		GUIFont* font = manager->GetSkin()->GetValue(section, "Font", &fontName) ? manager->GetSkin()->GetFont(fontName) : nullptr;
+		if (!font) return {rect, rect};
+		const int height = std::min(rect[3], font->GetFontHeight());
+		const int top = rect[1] + (rect[3] - height) / 2;
+		if (button) {
+			const int width = std::min(rect[2], font->CalculateWidth(text));
+			return {rect, {rect[0] + (rect[2] - width) / 2, top, std::max(1, width), std::max(1, height)}};
+		}
+		int base[4]{};
+		manager->GetSkin()->GetValue(section, "Base", base, 4);
+		const int box = base[2] + (checkbox ? 2 : 0);
+		const int width = std::min(rect[2] - box, font->CalculateWidth(" " + text));
+		// Its box and caption are centred on the rect's height, which may be taller than either.
+		const int drawnHeight = std::min(rect[3], std::max(base[3], height));
+		const Rect drawn{rect[0], rect[1] + (rect[3] - drawnHeight) / 2, std::min(rect[2], box + std::max(0, width)), std::max(1, drawnHeight)};
+		return {drawn, {rect[0] + box, top, std::max(1, width), std::max(1, height)}};
+	}
+
+	/// Each pair of shown controls of one panel where the caption of one meets what the other draws.
+	Json OverlapOffenders(GUIControlManager* menu) {
+		Json offenders = Json::array();
+		const auto meet = [](const Rect& a, const Rect& b) { return a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]; };
+		for (const auto& [source, manager]: WatchedManagers(menu)) {
+			// A box holds controls rather than covering them, so the controls each box holds are judged against each other.
+			std::map<GUIPanel*, std::vector<std::tuple<GUIControl*, Rect, Rect, bool>>> panels;
+			for (GUIControl* control: *manager->GetControlList()) {
+				if (!Shown(control) || dynamic_cast<GUICollectionBox*>(control)) continue;
+				std::string text;
+				const bool captioned = Text(control, text) && !text.empty();
+				// A label with nothing to say draws nothing.
+				if (dynamic_cast<GUILabel*>(control) && !captioned) continue;
+				const auto [drawn, caption] = DrawnAndCaption(manager, control, captioned ? text : std::string());
+				panels[control->GetPanel()->GetParentPanel()].emplace_back(control, drawn, caption, captioned);
+			}
+			for (const auto& [parent, shown]: panels) {
+				for (size_t i = 0; i < shown.size(); ++i) {
+					for (size_t j = i + 1; j < shown.size(); ++j) {
+						const auto& [first, firstDrawn, firstCaption, firstCaptioned] = shown[i];
+						const auto& [second, secondDrawn, secondCaption, secondCaptioned] = shown[j];
+						if (!(firstCaptioned && meet(firstCaption, secondDrawn)) && !(secondCaptioned && meet(secondCaption, firstDrawn))) continue;
+						offenders.push_back({{"source", source}, {"control", first->GetName() + " / " + second->GetName()},
+						    {"rects", Json::array({Json(firstDrawn), Json(secondDrawn)})}, {"captions", Json::array({Json(firstCaption), Json(secondCaption)})}});
+					}
+				}
+			}
+		}
+		return offenders;
+	}
+
 	/// Each shown control whose text runs out of its own rect, out of the panel it sits in or off the screen.
 	Json LayoutOffenders(GUIControlManager* menu) {
 		Json offenders = Json::array();
@@ -556,19 +1530,13 @@ namespace RTE::MenuAutomation {
 				if (!Shown(control) || !Text(control, text) || text.empty()) continue;
 				Rect rect = Rectangle(control->GetPanel());
 				std::string fit;
-				// A label that scrolls its overflow shows the whole text by design; only its placement is judged.
+				// A label that scrolls its overflow shows the whole text by design, so only its placement is judged; sideways that holds
+				// only for a word wider than the label (an address or a path), since a sentence that cannot wrap is never read whole.
 				auto* label = dynamic_cast<GUILabel*>(control);
-				const bool scrolls = label && (label->GetHorizontalOverflowScroll() || label->GetVerticalOverflowScroll());
-				const bool fits = scrolls || TextFits(manager, control, fit);
-				if (label) {
-					// A label is judged where its text lands, which its alignment places inside a rect that may be larger.
-					const int width = std::min(label->GetTextWidth(), rect[2]), height = label->GetTextHeight();
-					const int h = label->GetHAlignment(), v = label->GetVAlignment();
-					rect[0] += h == GUIFont::Centre ? (rect[2] - width) / 2 : h == GUIFont::Right ? rect[2] - width : 0;
-					rect[1] += v == GUIFont::Middle ? (rect[3] - height) / 2 : v == GUIFont::Bottom ? rect[3] - height : 0;
-					rect[2] = std::max(1, width);
-					rect[3] = std::max(1, height);
-				}
+				const bool scrolls = label && ((label->GetHorizontalOverflowScroll() && label->GetMaxWordWidth() > rect[2]) || label->GetVerticalOverflowScroll());
+				// A text box scrolls its one line sideways under the caret, so only the line's height is judged against it.
+				const bool fits = scrolls || (dynamic_cast<GUITextBox*>(control) ? LineFits(manager, control, text, fit) : TextFits(manager, control, fit));
+				if (label) rect = LabelTextRect(label, rect);
 				GUIPanel* parent = control->GetPanel()->GetParentPanel();
 				const bool inParent = !parent || Inside(rect, Rectangle(parent));
 				const bool onScreen = Inside(rect, screenRect);
@@ -625,7 +1593,7 @@ namespace RTE::MenuAutomation {
 			} cost{watch, {}};
 			if (!WatchStateHolds(watch.state)) continue;
 			++watch.active;
-			if (!linesRead && watch.rule != "layout" && watch.rule != "rtt" && watch.rule != "seat_rows") {
+			if (!linesRead && watch.rule != "layout" && watch.rule != "overlap" && watch.rule != "rtt" && watch.rule != "seat_rows") {
 				lines = ShownLines(menu);
 				linesRead = true;
 			}
@@ -656,6 +1624,8 @@ namespace RTE::MenuAutomation {
 				if (const std::string contradiction = RttContradiction(menu); !contradiction.empty()) detail = contradiction;
 			} else if (watch.rule == "layout") {
 				if (Json offenders = LayoutOffenders(menu); !offenders.empty()) detail = offenders;
+			} else if (watch.rule == "overlap") {
+				if (Json offenders = OverlapOffenders(menu); !offenders.empty()) detail = offenders;
 			} else if (watch.rule == "seat_rows") {
 				auto* panel = g_MenuMan.GetNetworkPanel();
 				GUIControl* box = panel ? panel->GetControl("NetworkSeats") : nullptr;
@@ -685,7 +1655,7 @@ namespace RTE::MenuAutomation {
 			if (detail.is_null()) continue;
 			Json shown = Json::array();
 			if (watch.violations++ == 0) {
-				if (!linesRead && watch.rule != "layout") lines = ShownLines(menu), linesRead = true;
+				if (!linesRead && watch.rule != "layout" && watch.rule != "overlap") lines = ShownLines(menu), linesRead = true;
 				for (size_t index = 0; index < lines.size() && index < 24; ++index) shown.push_back(lines[index].source + "/" + lines[index].control + ": " + lines[index].text);
 			}
 			const Json cases = detail.is_array() ? detail : Json::array({detail});
@@ -716,10 +1686,11 @@ namespace RTE::MenuAutomation {
 	bool Handles(const std::string& command) {
 		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_inside_screen" || command == "assert_text_fits" || command == "assert_no_overlap" || command == "assert_no_overlap_within" ||
 			command == "dump_refresh_count" || command == "dump_enter_state" ||
-			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad" ||
+			command == "dump_host_options" || command == "dump_player_options" || command == "key" || command == "pad" ||
 			command == "key_down" || command == "key_up" || command == "focus" ||
-			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" || command == "combo_press" || command == "combo_release" || command == "assert_combo_items" ||
-			command == "hand_press" || command == "hand_release" || command == "slider_set" ||
+			command == "set_text" || command == "assert_host_port" || command == "combo_drop" || command == "combo_select" || command == "combo_refused" || command == "assert_combo_items" ||
+			command == "slider_set" || command == "model_mark" || command == "assert_model_changed" || command == "screen_mark" || command == "assert_screen_changed" ||
+			command == "assert_box_text" || command == "type_text" || command == "assert_value" || command == "assert_selected" || command == "click_row" ||
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
@@ -749,14 +1720,13 @@ namespace RTE::MenuAutomation {
 			GUIControl* control = controls ? controls->GetControl(name) : nullptr;
 			auto* input = controls ? dynamic_cast<GUIInputWrapper*>(controls->GetInput()) : nullptr;
 			observation = name + " game=" + g_MetaMan.GetGameName();
-			if (!input || !control || !Enabled(control) || !Visible(control)) return false;
-			return input->QueueAutomationCommand([control] { control->AddEvent(GUIEvent::Command, 0, 0); });
+			if (!input || !control) return false;
+			return HandClick(controls, name, nullptr, observation);
 		}
 		if (command == "open_local_pause") {
+			// A player opens the match's own menu with Escape.
 			if (!FireAssertAllowed() || g_MenuMan.IsLocalPauseMenuOpen()) return false;
-			const bool opened = g_MenuMan.ToggleLocalPauseMenu();
-			observation = "local_pause=" + std::to_string(g_MenuMan.IsLocalPauseMenuOpen());
-			return opened;
+			return HandGameKey("Escape", [] { return g_MenuMan.IsLocalPauseMenuOpen(); }, "the match menu", observation);
 		}
 		if (command == "window_event") {
 			std::string kind;
@@ -1000,7 +1970,7 @@ namespace RTE::MenuAutomation {
 				if (watch.rule == "equals" || watch.rule == "shown") args >> watch.control;
 				std::getline(args >> std::ws, watch.text);
 				const bool textRule = watch.rule == "require" || watch.rule == "forbid" || watch.rule == "equals";
-				const bool known = textRule || watch.rule == "shown" || watch.rule == "duplicates" || watch.rule == "rtt" || watch.rule == "layout" || watch.rule == "seat_rows";
+				const bool known = textRule || watch.rule == "shown" || watch.rule == "duplicates" || watch.rule == "rtt" || watch.rule == "layout" || watch.rule == "overlap" || watch.rule == "seat_rows";
 				if (!known || watch.state.empty() || (textRule && watch.text.empty()) || ((watch.rule == "equals" || watch.rule == "shown") && watch.control.empty())) {
 					observation = "unknown or incomplete watch";
 					return false;
@@ -1295,10 +2265,13 @@ namespace RTE::MenuAutomation {
 				std::string name;
 				int expected = -1;
 				args >> name >> expected;
-				auto* box = dynamic_cast<GUICheckbox*>(manager->GetControl(name));
-				const int actual = box && box->GetCheck() == GUICheckbox::Checked ? 1 : 0;
+				GUIControl* control = manager->GetControl(name);
+				auto* box = dynamic_cast<GUICheckbox*>(control);
+				auto* radio = dynamic_cast<GUIRadioButton*>(control);
+				auto* tab = dynamic_cast<GUITab*>(control);
+				const int actual = box ? box->GetCheck() == GUICheckbox::Checked : radio ? radio->GetCheck() : tab ? tab->GetCheck() : 0;
 				observation = name + " expected=" + std::to_string(expected) + " actual=" + std::to_string(actual);
-				return box && Visible(box) && (expected == 0 || expected == 1) && actual == expected;
+				return (box || radio || tab) && Visible(control) && (expected == 0 || expected == 1) && actual == expected;
 			}
 			if (command == "assert_label") {
 				std::string name, expected, text;
@@ -1309,6 +2282,11 @@ namespace RTE::MenuAutomation {
 				if (!found && main && manager == main->AutomationManager()) found = main->AutomationLabelText(name, text);
 				const bool credential = CredentialName(name) || Credential(manager->GetControl(name));
 				observation = name + " \"" + Captured(credential, expected) + "\" text=\"" + Captured(credential, text) + "\"";
+				// A word a player cannot see is not read: a control off the screen fails whatever it holds.
+				if (GUIControl* control = manager->GetControl(name); control && !Visible(control)) {
+					observation += " (not on the screen)";
+					return false;
+				}
 				return found && text.find(expected) != std::string::npos;
 			}
 			if (command == "key_down" || command == "key_up") {
@@ -1321,16 +2299,7 @@ namespace RTE::MenuAutomation {
 			if (command == "focus") {
 				std::string target;
 				args >> std::quoted(target);
-				auto* control = manager->GetControl(target);
-				if (!control || !Enabled(control) || !control->GetPanel()) {
-					observation = target + " missing or disabled";
-					return false;
-				}
-				manager->GetManager()->SetFocus(control->GetPanel());
-				const auto r = Rectangle(control->GetPanel());
-				g_UInputMan.SetAbsoluteMousePosition(Vector(r[0] + r[2] / 2, r[1] + r[3] / 2) * g_WindowMan.GetResMultiplier());
-				observation = target;
-				return true;
+				return HandPoint(manager, target, observation);
 			}
 			if (command == "assert_combo_items") {
 				// The items a combo offers, in order, separated by '|'.
@@ -1346,141 +2315,110 @@ namespace RTE::MenuAutomation {
 				observation = comboName + " items=\"" + items + "\"";
 				return items == expected;
 			}
-			if (command == "combo_drop" || command == "combo_select" || command == "combo_press" || command == "combo_release") {
-				// Where a hand's press landed, for the release that follows it on a later frame.
-				static int s_HandPressX = 0, s_HandPressY = 0;
-				std::string comboName;
+			if (command == "combo_drop" || command == "combo_select" || command == "combo_refused") {
+				std::string comboName, item;
 				args >> std::quoted(comboName);
-				std::string item;
 				std::getline(args >> std::ws, item);
 				auto* combo = dynamic_cast<GUIComboBox*>(manager->GetControl(comboName));
-				if (!combo || !Enabled(combo)) { observation = comboName + " missing or disabled"; return false; }
-				observation = comboName + (item.empty() ? "" : " " + item);
+				if (!combo) { observation = comboName + " is not a drop-down"; return false; }
 				if (command == "combo_drop") {
-					// The same state the text-panel click produces: the list shows, takes focus and
-					// the mouse, sits topmost, and the control notifies Dropped.
-					auto* input = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
-					return input && input->QueueAutomationCommand([combo] {
-						GUIListPanel* list = combo->GetListPanel();
-						list->_SetVisible(true);
-						list->SetFocus();
-						list->CaptureMouse();
-						list->EndUpdate();
-						list->ChangeZPosition(GUIPanel::TopMost);
-						combo->AddEvent(GUIEvent::Notification, GUIComboBox::Dropped, 0);
-					});
+					if (!item.empty()) { observation = comboName + " takes no row"; return false; }
+					return HandClick(manager, comboName, nullptr, observation);
 				}
-				if (command == "combo_release") {
-					// The second half of a hand's row click, on a later frame than the press: the list signals the
-					// mouse-up where the press landed and the combo commits whatever row is selected by then.
-					if (!combo->IsDropped()) { observation += " list not open"; return false; }
-					auto* input = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
-					return input && input->QueueAutomationCommand([combo] {
-						combo->GetListPanel()->OnMouseUp(s_HandPressX, s_HandPressY, GUIPanel::MOUSE_LEFT, 0);
-					});
-				}
-				if (item.empty()) { observation += " no item"; return false; }
-				int index = -1;
-				for (int i = 0; i < combo->GetCount(); ++i) {
-					if (const GUIListPanel::Item* entry = combo->GetItem(i); entry && entry->m_Name == item) { index = i; break; }
-				}
-				if (index < 0) { observation += " no such item"; return false; }
-				if (command == "combo_press") {
-					// The first half: the mouse goes down on the row, which selects it. Nothing commits until the release.
-					if (!combo->IsDropped()) { observation += " list not open"; return false; }
-					auto* pressInput = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
-					return pressInput && pressInput->QueueAutomationCommand([combo, index] {
-						GUIListPanel* list = combo->GetListPanel();
-						const auto r = Rectangle(list);
-						const GUIListPanel::Item* wanted = combo->GetItem(index);
-						for (int y = r[1] + 1; y < r[1] + r[3]; ++y) {
-							if (list->GetItem(r[0] + 4, y) != wanted) continue;
-							s_HandPressX = r[0] + 4;
-							s_HandPressY = y + 1;
-							g_UInputMan.SetAbsoluteMousePosition(Vector(static_cast<float>(s_HandPressX), static_cast<float>(s_HandPressY)) * g_WindowMan.GetResMultiplier());
-							list->OnMouseDown(s_HandPressX, s_HandPressY, GUIPanel::MOUSE_LEFT, 0);
-							return;
-						}
-					});
-				}
-				auto* input = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
-				GUIManager* gui = manager->GetManager();
-				return input && input->QueueAutomationCommand([combo, index, gui] {
-					GUIListPanel* list = combo->GetListPanel();
-					// A scripted pick takes the row-click's close path so listeners see the same event.
-					list->_SetVisible(false);
-					list->ReleaseMouse();
-					gui->SetFocus(nullptr);
-					combo->SetSelectedIndex(index);
-					combo->AddEvent(GUIEvent::Notification, GUIComboBox::Closed, 0);
-				});
+				if (item.empty()) { observation = comboName + " no item"; return false; }
+				return HandPick(manager, comboName, item, observation, command == "combo_refused");
 			}
-			if (command == "hand_press" || command == "hand_release" || command == "slider_set") {
-				// A hand's input reaches a control one phase per frame, with the screen's own refresh running in between.
+			if (command == "model_mark") {
+				s_ModelMark = ModelText();
+				observation = std::to_string(s_ModelMark.size()) + " bytes";
+				return true;
+			}
+			if (command == "assert_model_changed") {
+				// The change reached what the control drives: the menu's own choices or a saved setting.
+				std::string control;
+				args >> control;
+				observation = control;
+				return !s_ModelMark.empty() && ModelText() != s_ModelMark;
+			}
+			if (command == "screen_mark") {
+				s_ScreenMark = ScreenText(manager);
+				observation = std::to_string(s_ScreenMark.size()) + " bytes";
+				return true;
+			}
+			if (command == "assert_screen_changed") {
+				std::string control;
+				args >> control;
+				observation = control + " screen=" + ScreenText(manager).substr(0, 60);
+				return !s_ScreenMark.empty() && ScreenText(manager) != s_ScreenMark;
+			}
+			if (command == "type_text") {
+				// Typed by a hand, Enter or not; the text may be empty.
+				std::string target, mode, text;
+				args >> std::quoted(target) >> mode;
+				std::getline(args, text);
+				if (!text.empty() && text[0] == ' ') text.erase(0, 1);
+				if (mode != "enter" && mode != "plain") { observation = target + " needs enter or plain"; return false; }
+				return HandType(manager, target, text, mode == "enter", observation);
+			}
+			if (command == "assert_box_text") {
+				std::string target, expected;
+				args >> std::quoted(target);
+				std::getline(args, expected);
+				if (!expected.empty() && expected[0] == ' ') expected.erase(0, 1);
+				auto* box = dynamic_cast<GUITextBox*>(manager->GetControl(target));
+				const bool credential = Credential(box) || CredentialName(target);
+				const std::string text = box ? box->GetText() : "";
+				observation = target + " \"" + Captured(credential, expected) + "\" text=\"" + Captured(credential, text) + "\"" + (box && !Visible(box) ? " (not on the screen)" : "");
+				return box && Visible(box) && text == expected;
+			}
+			if (command == "assert_value") {
+				std::string target;
+				int expected = 0;
+				args >> std::quoted(target) >> expected;
+				auto* slider = dynamic_cast<GUISlider*>(manager->GetControl(target));
+				observation = target + " expected=" + std::to_string(expected) + " actual=" + (slider ? std::to_string(slider->GetValue()) : std::string("none")) + (slider && !Visible(slider) ? " (not on the screen)" : "");
+				return slider && Visible(slider) && slider->GetValue() == expected;
+			}
+			if (command == "assert_selected" || command == "click_row") {
+				std::string target;
+				int row = -1;
+				args >> std::quoted(target) >> row;
+				if (command == "click_row") {
+					// A row named by the game it lists (wait_row's name) is clicked in the list that shows it now.
+					std::string listName;
+					if (row < 0 && g_MenuMan.GetMainMenu() && g_MenuMan.GetMainMenu()->AutomationRowOf(target, listName, row)) return HandRow(manager, listName, row, 1, nullptr, observation);
+					return HandRow(manager, target, row, 1, nullptr, observation);
+				}
+				auto* list = dynamic_cast<GUIListBox*>(manager->GetControl(target));
+				observation = target + " expected=" + std::to_string(row) + " actual=" + (list ? std::to_string(list->GetSelectedIndex()) : std::string("none")) + (list && !Visible(list) ? " (not on the screen)" : "");
+				return list && Visible(list) && list->GetSelectedIndex() == row;
+			}
+			if (command == "slider_set") {
 				std::string target;
 				int value = 0;
 				args >> std::quoted(target);
-				if (command == "slider_set" && !(args >> value)) { observation = target + " needs a value"; return false; }
-				auto* handControl = manager->GetControl(target);
-				if (!handControl || !Enabled(handControl) || !handControl->GetPanel()) { observation = target + " missing or disabled"; return false; }
-				observation = target;
-				auto* handInput = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
-				if (command == "slider_set") {
-					auto* slider = dynamic_cast<GUISlider*>(handControl);
-					if (!slider) { observation += " is not a slider"; return false; }
-					// What one step of a drag does: the value moves and the slider notifies.
-					return handInput && handInput->QueueAutomationCommand([slider, value] {
-						slider->SetValue(value);
-						slider->AddEvent(GUIEvent::Notification, GUISlider::Changed, 0);
-					});
-				}
-				GUIPanel* panel = handControl->GetPanel();
-				const bool press = command == "hand_press";
-				return handInput && handInput->QueueAutomationCommand([panel, press] {
-					const auto r = Rectangle(panel);
-					const int x = r[0] + r[2] / 2, y = r[1] + r[3] / 2;
-					g_UInputMan.SetAbsoluteMousePosition(Vector(static_cast<float>(x), static_cast<float>(y)) * g_WindowMan.GetResMultiplier());
-					if (press) panel->OnMouseDown(x, y, GUIPanel::MOUSE_LEFT, 0);
-					else panel->OnMouseUp(x, y, GUIPanel::MOUSE_LEFT, 0);
-				});
+				if (!(args >> value)) { observation = target + " needs a value"; return false; }
+				return HandDrag(manager, target, value, observation);
 			}
 			std::string name, argument, extra;
 			args >> std::quoted(name) >> argument >> extra;
 			if (!extra.empty()) { observation = "unexpected arguments"; return false; }
 			auto* control = manager->GetControl(name);
-			if (command == "set_share_address") {
-				if (name.empty() || !argument.empty()) { observation = "need one address"; return false; }
-				if (auto* menu = g_MenuMan.GetMainMenu()) {
-					menu->AutomationSetShareAddress(name);
-					observation = name;
-					return true;
+			if (command == "assert_host_port") {
+				// The port the next lobby listens on, as the host's setup holds it once Advanced took the typed one or refused it.
+				std::string held;
+				const MainMenuGUI* menu = g_MenuMan.GetMainMenu();
+				if (!menu || !menu->AutomationHostPort(held)) {
+					observation = "no host setup";
+					return false;
 				}
-				observation = "no main menu";
-				return false;
+				observation = name + " held=" + held;
+				return held == name;
 			}
 			if (command == "key" || command == "pad") {
 				auto* input = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
 				observation = name + " " + argument;
 				return input && (argument == "down" || argument == "up") && input->QueueAutomationInput(command, name, argument == "down");
-			}
-			if (command == "focus_next" || command == "focus_previous") {
-				if (!name.empty()) return false;
-				std::vector<GUIControl*> controls;
-				for (auto* item : *manager->GetControlList()) if (Enabled(item) && !item->IsContainer() && !dynamic_cast<GUILabel*>(item)) controls.push_back(item);
-				std::stable_sort(controls.begin(), controls.end(), [](auto* a, auto* b) {
-					const auto x = Rectangle(a->GetPanel()), y = Rectangle(b->GetPanel());
-					return std::tie(x[1], x[0]) < std::tie(y[1], y[0]);
-				});
-				if (controls.empty()) return false;
-				const auto current = std::find_if(controls.begin(), controls.end(), [](auto* item) { return item->GetPanel()->HasFocus(); });
-				const int count = static_cast<int>(controls.size()), index = static_cast<int>(current - controls.begin());
-				const int next = current == controls.end() ? (command == "focus_next" ? 0 : count - 1) : (index + (command == "focus_next" ? 1 : count - 1)) % count;
-				auto* target = controls[next];
-				manager->GetManager()->SetFocus(target->GetPanel());
-				const auto r = Rectangle(target->GetPanel());
-				g_UInputMan.SetAbsoluteMousePosition(Vector(r[0] + r[2] / 2, r[1] + r[3] / 2) * g_WindowMan.GetResMultiplier());
-				observation = target->GetName();
-				return true;
 			}
 			if (command == "select_settings_page" || command == "assert_settings_page") {
 				const std::string active = SettingsPage(manager);
@@ -1490,7 +2428,10 @@ namespace RTE::MenuAutomation {
 				if (command == "assert_settings_page") {
 					return active == name || (active.size() > name.size() && active.compare(0, name.size(), name) == 0 && active[name.size()] == ':');
 				}
-				return QueuePage(manager, name);
+				// A page opens the way a player opens it: a click on its tab.
+				GUITab* tab = PageTab(manager, name);
+				if (!tab) return false;
+				return HandClick(manager, tab->GetName(), nullptr, observation);
 			}
 			if (command == "dump_host_options" || command == "dump_player_options") {
 				if (!name.empty()) return false;
@@ -1562,6 +2503,14 @@ namespace RTE::MenuAutomation {
 						{"max_res_x", g_WindowMan.GetMaxResX()}, {"max_res_y", g_WindowMan.GetMaxResY()},
 						{"fullscreen", g_WindowMan.IsFullscreen()}}},
 					{"show_metascenes", g_SettingsMan.ShowMetascenes()}, {"controls", Json::array()}};
+				// The games the Join screen lists, with the join target each row stands for: the rows show words, not addresses.
+				if (const MainMenuGUI* main = g_MenuMan.GetMainMenu()) {
+					Json rows = Json::array();
+					for (const NetDirectoryClient::GameRow& game : main->AutomationGameRows()) {
+						rows.push_back({{"name", game.name}, {"source", game.source}, {"address", game.address}, {"port", game.port}, {"joinable", game.joinable}});
+					}
+					result["game_rows"] = rows;
+				}
 				for (auto* item : *manager->GetControlList()) {
 					const bool dumpHiddenPreset = item->GetName() == "ComboPresetResolution";
 					if (!Visible(item) && !dumpHiddenPreset) continue;
@@ -1640,14 +2589,12 @@ namespace RTE::MenuAutomation {
 				return argument.empty() && Visible(control) && control->GetPanel()->HasFocus();
 			}
 			if (command == "set_text") {
-				// The typed-entry seam for a settings page: the box takes the value and raises the notification a typed entry raises.
-				auto* box = dynamic_cast<GUITextBox*>(control);
-				if (!box || !Enabled(box) || argument.empty()) return false;
-				box->SetText(argument);
-				// The event queue clears at the top of every Update, so the Enter has to be raised
-				// inside one - the same channel a scripted click takes.
-				auto* input = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
-				return input && input->QueueAutomationCommand([box] { box->AddEvent(GUIEvent::Notification, GUITextBox::Enter, 0); });
+				// A settings box takes a typed value and Enter, the way a player commits one.
+				if (!dynamic_cast<GUITextBox*>(control) || argument.empty()) return false;
+				std::string typed;
+				const bool started = HandType(manager, name, argument, true, typed);
+				if (!started) observation += " " + typed;
+				return started;
 			}
 			if (command == "assert_text_fits") return argument.empty() && TextFits(manager, control, observation);
 			if (command == "assert_rect_inside") {

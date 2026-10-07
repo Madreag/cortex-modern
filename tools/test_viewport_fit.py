@@ -2,11 +2,11 @@
 multiplayer container, its panel edges and the Back button inside the viewport,
 and the long diagnostic must stay reachable through the label's overflow scroll.
 
-    python test_viewport_fit.py --repo D:/Projects/item7-ux \
-        --out D:/mx/ui-viewport-complete-20260913/detector --port 47871 \
+    python test_viewport_fit.py --repo <tree> \
+        --out <output-dir> --port 47871 \
         --exe-sha256 <exe hash>
 
-Three phases, each one host + one refused joiner on loopback:
+Three phases, each one host + one refused joiner on separate machines:
 
   viewport  the joiner stages Base1.rte plus 'ß'*70 + '.rte' (the unchanged
             encoded-name fixture; the wire name arrives as 64 x 0xDF), then
@@ -53,6 +53,14 @@ import re
 import subprocess
 import sys
 from run_sim_test import engine_executable  # noqa: E402
+try:
+    import spread_peers as spread
+except ModuleNotFoundError as error:
+    if error.name != "spread_peers":
+        raise
+    spread = None
+
+managed_case = spread.managed_case if spread else lambda function: function
 
 
 LABEL = "LabelMultiplayerLandingStatus"
@@ -439,6 +447,7 @@ def post_back_is_main(post_back_path, main_start_path):
     return ok, {"main_diff": round(diff, 4), "gold_rows": buttons}
 
 
+@managed_case
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, required=True)
@@ -449,7 +458,14 @@ def main():
     parser.add_argument("--exe-sha256", required=True)
     parser.add_argument("--no-scroll-input", action="store_true",
                         help="omit the scrollwide/scrolltall joiner inputs; the scroll checks must then fail closed")
+    if spread:
+        spread.add_arguments(parser)
     options = parser.parse_args()
+    if not spread:
+        parser.error("viewport fit requires the shared spread executor")
+    if getattr(options, "spread", False) or not getattr(options, "peer_boxes", None):
+        parser.error(spread.NO_BOX_NAMED)
+    spread.configure(options)
     if not (320 <= options.width <= 7680 and 240 <= options.height <= 4320):
         parser.error("dimensions out of range")
     if not (1024 <= options.port <= 65535):
@@ -471,21 +487,31 @@ def main():
               "pin_before": before}
     checks, details = {}, {}
     runs, records = {}, {}
+    executions = {}
     phase = "viewport"
 
     def start(name, host, port, suffix, modules, phase="viewport"):
+        key = (phase, port)
+        if key not in executions:
+            if not host:
+                raise RuntimeError("viewport phase must stage its host first")
+            joiner = name.removesuffix("Host") + "Joiner"
+            executions[key] = spread.prepare_case(repo, root / phase,
+                [spread.Peer("host", share_ok=False, os="any", output_name=name, size=(options.width, options.height)),
+                 spread.Peer("client", share_ok=False, os="windows", reviewed=True, output_name=joiner, size=(options.width, options.height))],
+                spread.Match(port, parameters={"lane": "menus"}))
         require_pin(repo, options.exe_sha256, before, checks, f"{name}_prelaunch")
         script = f"wait 40\nscreenshot main-start\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
         if host:
-            script += (f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\n"
-                       "settext TextHostPlayers 2\nactivate ButtonMultiplayerCreate\n")
+            script += (f"activate ButtonMultiplayerHostGame\nwait 10\nsetup_host_port {port}\n"
+                       "combo_select ComboHostPlayers 2\nactivate ButtonMultiplayerCreate\n")
         else:
-            script += ("activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\n"
-                       f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n")
+            script += ("activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
+                       f"settext TextJoinPort {port}\nactivate ButtonJoinAddressGo\n")
         path = root / phase / f"{name}.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(script + suffix, encoding="utf-8")
-        run = make_run(repo, ["-menu-script", path, "-num-lua-states", 4], root / phase / name, 200)
+        run = executions[key].make_run(repo, ["-menu-script", path, "-num-lua-states", 4], root / phase / name, 200)
         runs[name] = run
         staged = [str(stage_module(run, m[0], m[1], version, m[2] if len(m) > 2 else 1))
                   for m in modules]
@@ -504,7 +530,7 @@ def main():
                        "dump_lobby\nscreenshot host-lobby-t0\nwait_ms 13000\nscreenshot host-lobby-t1\n"
                        "goto_main\nassert_screen MainScreen\nexit\n")
         host = start("Host", True, options.port, host_script, [(BASE_NAME, "Base1")])
-        wait_for_log(host, "activate ButtonMultiplayerCreate ok=1")
+        wait_for_log(host, "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS")
         # post_command raises the button's Command event after the GUI update,
         # the same route a real click takes through HandleInputEvents. The
         # timed t1-t3 frames are the scripted scroll input; --no-scroll-input
@@ -533,7 +559,7 @@ def main():
             start("TallHost", True, options.port + 1,
                   "wait_error could not join\nwait_ms 3000\ngoto_main\nassert_screen MainScreen\nexit\n",
                   [(d, f, v) for d, f, v in TALL_HOST_MODS], phase="tall")
-            wait_for_log(runs["TallHost"], "activate ButtonMultiplayerCreate ok=1")
+            wait_for_log(runs["TallHost"], "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS")
             tall_script = ("wait_state Failed\nwait 5\nassert_substate Landing\n"
                            "assert_label %s yours\nscreenshot tall-t0\n" % LABEL +
                            "".join("wait_ms 750\nscreenshot tall-t%d\n" % n for n in range(1, 9)) +
@@ -551,7 +577,7 @@ def main():
             details["tall_screenshots"] = [str(p) for p in tall_shots]
             checks["tall_landed"] = "assert_substate expected=Landing actual=Landing PASS" in tall_log
             checks["tall_shot_count"] = len(tall_shots) == 9
-            checks["tall_back_command_posted"] = "post_command ButtonBackToMain ok=1" in tall_log
+            checks["tall_back_command_posted"] = "post_command ButtonBackToMain click ButtonBackToMain PASS" in tall_log
             checks["tall_returned_to_main"] = "assert_screen expected=MainScreen actual=MainScreen PASS" in tall_log
         else:
             details["tall_scroll_input"] = "omitted by --no-scroll-input"
@@ -571,7 +597,7 @@ def main():
             start(tag + "Host", True, options.port + 2 + attempt * 3,
                   "wait_error could not join\nwait_ms 3000\ngoto_main\nassert_screen MainScreen\nexit\n",
                   [(BASE_NAME, "Base1")], phase="seam")
-            wait_for_log(runs[tag + "Host"], "activate ButtonMultiplayerCreate ok=1")
+            wait_for_log(runs[tag + "Host"], "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS")
             seam_script = ("wait_state Failed\nwait 5\nassert_substate Landing\n"
                            "assert_label %s yours\nscreenshot seam-t0\nwait_ms 3000\n"
                            "screenshot seam-t1\npost_command ButtonBackToMain\nwait 12\n"
@@ -633,7 +659,7 @@ def main():
         checks["host_stayed_in_lobby"] = "assert_substate expected=Lobby actual=Lobby PASS" in logs["Host"]
         checks["host_returned_to_main"] = "assert_screen expected=MainScreen actual=MainScreen PASS" in logs["Host"]
         checks["joiner_returned_to_main"] = "assert_screen expected=MainScreen actual=MainScreen PASS" in logs["Joiner"]
-        checks["back_command_posted"] = "post_command ButtonBackToMain ok=1" in logs["Joiner"]
+        checks["back_command_posted"] = "post_command ButtonBackToMain click ButtonBackToMain PASS" in logs["Joiner"]
 
         from PIL import Image
         joiner_shots = sorted((root / phase / "Joiner" / "runtime/ScreenShots").glob("viewport-t*_*.png"))
@@ -959,6 +985,8 @@ def main():
         if close_errors:
             result["close_errors"] = close_errors
             result["pass"] = False
+        result.update(topology="spread", peer_boxes={f"{phase}:{port}": case.result()["peer_boxes"] for (phase, port), case in executions.items()},
+                      spread=[case.result() for case in executions.values()], proof=result["pass"])
         (root / "result.json").write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
     print(json.dumps({"pass": result["pass"], "error": result.get("error"),
                       "failed": [k for k, ok in result.get("checks", {}).items() if not ok],

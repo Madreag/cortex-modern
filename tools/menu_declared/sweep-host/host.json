@@ -1,0 +1,32 @@
+{
+ "controls": [
+  {
+   "name": "ComboHostActivity",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostScene",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostMode",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostPlayers",
+   "enabled": true
+  },
+  {
+   "name": "ButtonMultiplayerCreate",
+   "enabled": true
+  },
+  {
+   "name": "ButtonHostBack",
+   "enabled": true
+  },
+  {
+   "name": "ButtonHostOptions",
+   "enabled": true
+  }
+ ]
+}

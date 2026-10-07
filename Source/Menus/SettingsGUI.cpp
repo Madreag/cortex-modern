@@ -7,8 +7,10 @@
 #include "GUICollectionBox.h"
 #include "GUIButton.h"
 #include "GUITab.h"
+#include "GUILabel.h"
 #include "GUISound.h"
 #include "MenuAutomation.h"
+#include "System.h"
 
 using namespace RTE;
 
@@ -42,8 +44,32 @@ SettingsGUI::SettingsGUI(AllegroScreen* guiScreen, GUIInputWrapper* guiInput, bo
 	m_InputSettingsMenu = std::make_unique<SettingsInputGUI>(m_GUIControlManager.get());
 	m_GameplaySettingsMenu = std::make_unique<SettingsGameplayGUI>(m_GUIControlManager.get());
 	m_MiscSettingsMenu = std::make_unique<SettingsMiscGUI>(m_GUIControlManager.get());
-	if (m_SettingsMenuTabs[SettingsMenuScreen::NetworkSettingsMenu] && m_GUIControlManager->GetControl("CollectionBoxNetworkSettings")) {
-		m_NetworkSettingsMenu = std::make_unique<SettingsNetworkGUI>(m_GUIControlManager.get());
+	if (m_SettingsMenuTabs[SettingsMenuScreen::NetworkSettingsMenu]) {
+		// A menu file replaced by an older version's lacks some of the page's controls: the page is then left out, not built half.
+		const std::vector<std::string> missing = SettingsNetworkGUI::MissingControls(m_GUIControlManager.get());
+		if (missing.empty()) {
+			m_NetworkSettingsMenu = std::make_unique<SettingsNetworkGUI>(m_GUIControlManager.get());
+		} else {
+			std::string named;
+			for (size_t i = 0; i < missing.size() && i < 4; ++i) named += (i ? ", " : "") + missing[i];
+			System::PrintDiagnosticLine("[menu] multiplayer settings are off: Base.rte/GUIs/SettingsGUI.ini lacks " + std::to_string(missing.size()) +
+			                            " of its controls (" + named + (missing.size() > 4 ? ", ..." : "") + ")");
+			m_SettingsMenuTabs[SettingsMenuScreen::NetworkSettingsMenu]->SetVisible(false);
+			m_SettingsMenuTabs[SettingsMenuScreen::NetworkSettingsMenu] = nullptr;
+			if (GUIControl* page = m_GUIControlManager->GetControl("CollectionBoxNetworkSettings")) page->SetVisible(false);
+		}
+	}
+	if (!createForPauseMenu && !m_NetworkSettingsMenu) {
+		// The pause menu never had the page; here its absence means the menu file is from an older version, said in one sentence.
+		if (GUILabel* off = dynamic_cast<GUILabel*>(m_GUIControlManager->AddControl("LabelSettingsMultiplayerOff", "LABEL", nullptr, 0, 0, 360, 40))) {
+			if (GUIFont* small = m_GUIControlManager->GetSkin()->GetFont("FontSmall.png")) off->SetFont(small);
+			off->SetHAlignment(GUIFont::Centre);
+			off->SetVAlignment(GUIFont::Top);
+			off->SetText("Multiplayer settings are off: this game's menu files (Base.rte/GUIs) are from an older version. Reinstall the game, or remove the mod that replaced them.");
+			const int width = std::min(360, rootBox->GetWidth() - 20);
+			off->Resize(width, off->GetTextHeight() + 4);
+			off->SetPositionAbs((rootBox->GetWidth() - width) / 2, std::max(2, m_SettingsTabberBox->GetYPos() - off->GetHeight() - 4));
+		}
 	}
 
 	if (createForPauseMenu) {
@@ -55,13 +81,9 @@ SettingsGUI::SettingsGUI(AllegroScreen* guiScreen, GUIInputWrapper* guiInput, bo
 		SetActiveSettingsMenuScreen(SettingsMenuScreen::VideoSettingsMenu, false);
 	}
 	m_SettingsMenuTabs[m_ActiveSettingsMenuScreen]->SetCheck(true);
-	MenuAutomation::BindSettingsOwner(m_GUIControlManager.get(), this);
 }
 
-SettingsGUI::~SettingsGUI() {
-	MenuAutomation::UnbindSettingsOwner(m_GUIControlManager.get());
-	m_PendingPage.clear();
-}
+SettingsGUI::~SettingsGUI() = default;
 
 GUICollectionBox* SettingsGUI::GetActiveDialogBox() const {
 	GUICollectionBox* activeDialogBox = nullptr;
@@ -148,13 +170,11 @@ void SettingsGUI::SetActiveSettingsMenuScreen(SettingsMenuScreen activeMenu, boo
 
 bool SettingsGUI::HandleInputEvents() {
 	m_GUIControlManager->Update();
-	MenuAutomation::ApplyQueuedPage(m_GUIControlManager.get());
 
 	GUIEvent guiEvent;
 	while (m_GUIControlManager->GetEvent(&guiEvent)) {
 		if (guiEvent.GetType() == GUIEvent::Command) {
 			if (guiEvent.GetControl() == m_BackToMainButton) {
-				m_PendingPage.clear();
 				RefreshActiveSettingsMenuScreen();
 				return true;
 			}
@@ -222,7 +242,6 @@ void SettingsGUI::Draw() const {
 }
 
 bool SettingsGUI::AutomationPostCommand(const std::string& name) {
-	if (!MenuAutomation::Enabled(m_GUIControlManager->GetControl(name))) return false;
-	auto* input = dynamic_cast<GUIInputWrapper*>(m_GUIControlManager->GetInput());
-	return input && input->QueueAutomationCommand([this, name] { MenuAutomation::Click(m_GUIControlManager.get(), name); });
+	std::string observation;
+	return MenuAutomation::HandClick(m_GUIControlManager.get(), name, nullptr, observation);
 }

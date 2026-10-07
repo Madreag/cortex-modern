@@ -1,0 +1,28 @@
+{
+ "controls": [
+  {
+   "name": "TextNetworkDisplayName",
+   "enabled": true
+  },
+  {
+   "name": "ComboMatchStatusWidget",
+   "enabled": true
+  },
+  {
+   "name": "CheckboxNetworkChatVisible",
+   "enabled": true
+  },
+  {
+   "name": "CheckboxNetworkChatNotify",
+   "enabled": true
+  },
+  {
+   "name": "ButtonNetworkConnectionChange",
+   "enabled": true
+  },
+  {
+   "name": "ButtonNetworkAdvanced",
+   "enabled": true
+  }
+ ]
+}

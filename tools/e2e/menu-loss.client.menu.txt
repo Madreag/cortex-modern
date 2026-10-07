@@ -6,13 +6,17 @@ activate ButtonMultiplayerJoinGame
 wait_ms 3500
 video_mark loss-lan-list
 observe assert_text_fits ListLanGames
-observe assert_label TextJoinPort
 dump_host_options
 screenshot loss-lan-list
+activate ButtonJoinByAddress
+wait 4
+# Until a port is typed, the dialog's port is the first joinable listed game's.
+observe assert_label TextJoinPort
 settext TextJoinAddress 127.0.0.1
 settext TextJoinPort {PORT}
-activate ButtonMultiplayerConnect
+activate ButtonJoinAddressGo
 wait_connected 2 30
+wait_substate Lobby 30
 video_mark loss-client-lobby
 wait_ms 400
 observe assert_label LabelLobbyPlayer1 Joiner

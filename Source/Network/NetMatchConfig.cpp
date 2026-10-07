@@ -838,11 +838,65 @@ namespace RTE {
 
 	const char* NetMatchConfigUtil::ModeLabel(NetMatchMode mode) {
 		switch (mode) {
-			case NetMatchMode::PvPSkirmish: return "PvP";
-			case NetMatchMode::CoopPvE: return "Co-op PvE";
-			case NetMatchMode::PvPvE: return "PvPvE";
+			case NetMatchMode::PvPSkirmish: return "Players versus players";
+			case NetMatchMode::CoopPvE: return "Players versus AI";
+			case NetMatchMode::PvPvE: return "Players and AI opponents";
 		}
 		return "Unknown";
+	}
+
+	namespace {
+		struct HostDraftField {
+			const char* name;
+			bool (*same)(const NetMatchConfig& a, const NetMatchConfig& b);
+			void (*copy)(const NetMatchConfig& from, NetMatchConfig& to);
+		};
+
+		// A seat is its peer, its team and its kind; its name belongs to whoever holds it.
+		bool SameSeats(const NetMatchConfig& a, const NetMatchConfig& b) {
+			return std::equal(a.players.begin(), a.players.end(), b.players.begin(), b.players.end(), [](const NetMatchPlayerSlot& x, const NetMatchPlayerSlot& y) {
+				return x.peerId == y.peerId && x.team == y.team && x.cpu == y.cpu;
+			});
+		}
+
+		void CopySeats(const NetMatchConfig& from, NetMatchConfig& to) {
+			std::string hostName;
+			for (const NetMatchPlayerSlot& slot: to.players) {
+				if (!slot.cpu && slot.peerId == to.hostPeerId) hostName = slot.displayName;
+			}
+			to.players = from.players;
+			for (NetMatchPlayerSlot& slot: to.players) {
+				if (slot.cpu) continue;
+				slot.displayName = slot.peerId == to.hostPeerId && !hostName.empty() ? hostName : NetMatchConfigUtil::UnseatedSlotName(slot.peerId, to.persistentWorld);
+			}
+		}
+
+#define CCCP_HOST_DRAFT_FIELD(member) {#member, [](const NetMatchConfig& a, const NetMatchConfig& b) { return a.member == b.member; }, [](const NetMatchConfig& from, NetMatchConfig& to) { to.member = from.member; }}
+		const HostDraftField c_HostDraftFields[] = {
+		    CCCP_HOST_DRAFT_FIELD(mode), CCCP_HOST_DRAFT_FIELD(modePreset), CCCP_HOST_DRAFT_FIELD(activityPreset), CCCP_HOST_DRAFT_FIELD(activityModule),
+		    CCCP_HOST_DRAFT_FIELD(activityType), CCCP_HOST_DRAFT_FIELD(sceneName), CCCP_HOST_DRAFT_FIELD(sceneModule), CCCP_HOST_DRAFT_FIELD(difficulty),
+		    CCCP_HOST_DRAFT_FIELD(startingGold), CCCP_HOST_DRAFT_FIELD(fogOfWar), CCCP_HOST_DRAFT_FIELD(requireClearPathToOrbit), CCCP_HOST_DRAFT_FIELD(deployUnits),
+		    CCCP_HOST_DRAFT_FIELD(brainlessHumansSpectate), CCCP_HOST_DRAFT_FIELD(teamRules), CCCP_HOST_DRAFT_FIELD(peerCount), {"players", SameSeats, CopySeats},
+		    CCCP_HOST_DRAFT_FIELD(inputDelayFrames), CCCP_HOST_DRAFT_FIELD(peerInputDelayFrames), CCCP_HOST_DRAFT_FIELD(delayPolicy),
+		    CCCP_HOST_DRAFT_FIELD(slowPlayerBoundTicks), CCCP_HOST_DRAFT_FIELD(slowPlayerPolicy), CCCP_HOST_DRAFT_FIELD(autosaveEnabled),
+		    CCCP_HOST_DRAFT_FIELD(autosaveIntervalSeconds), CCCP_HOST_DRAFT_FIELD(idleWaitMinutes), CCCP_HOST_DRAFT_FIELD(automaticRepair),
+		    CCCP_HOST_DRAFT_FIELD(pathHorizonTicks), CCCP_HOST_DRAFT_FIELD(frameRedundancyTicks), CCCP_HOST_DRAFT_FIELD(returnWindowMinutes),
+		};
+#undef CCCP_HOST_DRAFT_FIELD
+	} // namespace
+
+	std::vector<std::string> NetMatchConfigUtil::HostDraftFieldNames() {
+		std::vector<std::string> names;
+		for (const HostDraftField& field: c_HostDraftFields) names.emplace_back(field.name);
+		return names;
+	}
+
+	bool NetMatchConfigUtil::SameHostDraft(const NetMatchConfig& a, const NetMatchConfig& b) {
+		return std::all_of(std::begin(c_HostDraftFields), std::end(c_HostDraftFields), [&](const HostDraftField& field) { return field.same(a, b); });
+	}
+
+	void NetMatchConfigUtil::CopyHostDraft(const NetMatchConfig& from, NetMatchConfig& to) {
+		for (const HostDraftField& field: c_HostDraftFields) field.copy(from, to);
 	}
 
 	bool NetMatchConfigUtil::ParseMode(const std::string& text, NetMatchMode& outMode) {

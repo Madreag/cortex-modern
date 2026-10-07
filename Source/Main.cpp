@@ -23,6 +23,7 @@
 #include <SDL3_image/SDL_image.h>
 
 #include "GUI.h"
+#include "GUICheckbox.h"
 #include "GUIInputWrapper.h"
 #include "CaptureSentinel.h"
 #include "FloatText.h"
@@ -1270,6 +1271,8 @@ static bool s_menuScriptFailed = false;
 static bool s_menuScriptObserveStep = false;
 static bool s_menuHashCapture = false;
 static bool s_menuScriptComplete = false;
+static std::string s_menuScriptHandStep; //!< The step whose hand gesture is still running, as the log names it.
+static bool s_menuScriptHandObserve = false;
 static bool s_menuScriptHoldE2ePause = false;
 static std::string s_snapshotRoundtripSelfTestName;
 static bool s_snapshotRoundtripSelfTestPassed = false;
@@ -3320,6 +3323,9 @@ static bool RunFrameRecorderSelfTest() {
 	FrameRecorder pacedRecorder;
 	if (!pacedRecorder.Start(paced.string(), 5, &error)) return FrameRecorderSelfTestFail("the paced recorder refused to start: " + error);
 	if (pacedRecorder.Start(paced.string(), 5, &error)) return FrameRecorderSelfTestFail("a second Start on the same recorder was accepted");
+	// A recording whose engine is killed never reaches Finish: its manifest is on disk from the start.
+	nlohmann::json started;
+	if (!manifestOf(paced, started) || started.value("fps", 0) != 5) return FrameRecorderSelfTestFail("no manifest with the capture rate before Finish in " + paced.string());
 	int finishActions = 0;
 	pacedRecorder.SetFinishAction([&finishActions] { ++finishActions; });
 	feed(pacedRecorder);
@@ -3617,6 +3623,7 @@ static void MenuScriptFail(const std::string& reason) {
 }
 
 static void CompleteMenuScript() {
+	MenuScriptPrint("complete");
 	GUIInputWrapper::SetAutomationDriving(false);
 	s_menuScriptComplete = true;
 	if (!s_menuScriptHoldE2ePause) System::SetQuit(true);
@@ -3650,6 +3657,28 @@ static void FinishMenuTickHashes() {
 	if (!saved) s_menuScriptFailed = true;
 }
 
+// The menu a hand reaches now: the pause menu over a match, the scenario picker, or the main menu's active screen.
+static GUIControlManager* MenuScriptHandManager(GUIControl** modal) {
+	*modal = nullptr;
+	if (PauseMenuGUI* pause = g_MenuMan.GetActivePauseMenu()) return pause->AutomationManager();
+	if (ScenarioGUI* scenario = ScenarioGUI::AutomationActive()) return scenario->AutomationManager();
+	MainMenuGUI* menu = g_MenuMan.GetMainMenu();
+	*modal = menu->AutomationModalDialog();
+	return menu->AutomationManager();
+}
+
+// A press of a named control, or of a named list row, the way a mouse makes it.
+static bool StartMenuScriptClick(const std::string& control, std::string& observation) {
+	GUIControl* modal = nullptr;
+	GUIControlManager* manager = MenuScriptHandManager(&modal);
+	std::string list;
+	int row = -1;
+	if (!g_MenuMan.GetActivePauseMenu() && !ScenarioGUI::AutomationActive() && g_MenuMan.GetMainMenu()->AutomationRowOf(control, list, row)) {
+		return MenuAutomation::HandRow(manager, list, row, 1, modal, observation);
+	}
+	return MenuAutomation::HandClick(manager, control, modal, observation);
+}
+
 // Menu scripts use real controls and the normal screenshot render path.
 void ProcessMenuScript() {
 	s_menuScriptObserveStep = false;
@@ -3661,6 +3690,7 @@ void ProcessMenuScript() {
 	}
 	NetModerationGUIProbe::AfterMenuDraw();
 	static std::vector<std::string> steps;
+	static std::map<std::string, std::vector<std::string>> macros; //!< "define NAME" ... "end" blocks, run by "run NAME".
 	static size_t stepIndex = 0;
 	static int waitFrames = 0;
 	static bool loaded = false;
@@ -3675,10 +3705,19 @@ void ProcessMenuScript() {
 			return MenuScriptFail("could not open menu-script file: " + s_menuScriptPath);
 		}
 		std::string line;
+		std::vector<std::string>* defining = nullptr;
 		while (std::getline(in, line)) {
 			if (!line.empty() && line.back() == '\r') { line.pop_back(); }
 			if (line.empty() || line[0] == '#') { continue; }
-			steps.push_back(line);
+			if (line.starts_with("define ")) {
+				defining = &macros[line.substr(7)];
+				continue;
+			}
+			if (defining && line == "end") {
+				defining = nullptr;
+				continue;
+			}
+			(defining ? *defining : steps).push_back(line);
 		}
 		loaded = true;
 		MenuScriptPrint("loaded " + std::to_string(steps.size()) + " steps");
@@ -3696,6 +3735,17 @@ void ProcessMenuScript() {
 		return;
 	}
 	introSkipped = true;
+	// A hand's gesture runs a phase a drawn frame; its step ends with the gesture.
+	if (MenuAutomation::HandBusy()) return;
+	if (!s_menuScriptHandStep.empty()) {
+		bool passed = false;
+		std::string observation;
+		const std::string step = std::exchange(s_menuScriptHandStep, {});
+		if (!MenuAutomation::HandFinished(passed, observation)) observation = "the gesture left no verdict";
+		s_menuScriptObserveStep = s_menuScriptHandObserve;
+		MenuScriptPrint(step + " " + observation + " " + (passed ? "PASS" : "FAIL"));
+		if (!passed) return MenuScriptFail(step + " " + observation);
+	}
 	if (waitFrames > 0) {
 		--waitFrames;
 		return;
@@ -3711,8 +3761,13 @@ void ProcessMenuScript() {
 	if (!waitCond.empty()) {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		bool met = false;
+		std::string seen;
 		if (waitCond.starts_with("file:")) {
 			met = MenuScriptFileExists(waitCond.substr(5));
+		} else if (waitCond.starts_with("row:")) {
+			std::string listName;
+			int row = -1;
+			met = !pauseMenu && g_MenuMan.GetMainMenu()->AutomationRowOf(waitCond.substr(4), listName, row);
 		} else if (waitCond.starts_with("label:")) {
 			std::istringstream label(waitCond.substr(6));
 			std::string control, expected, actual;
@@ -3720,6 +3775,10 @@ void ProcessMenuScript() {
 			std::getline(label >> std::ws, expected);
 			const bool found = pauseMenu ? pauseMenu->AutomationLabelText(control, actual) : g_MenuMan.GetMainMenu()->AutomationLabelText(control, actual);
 			met = found && actual.find(expected) != std::string::npos;
+			seen = " text=\"" + actual + "\"";
+		} else if (waitCond.starts_with("substate:")) {
+			seen = pauseMenu ? std::string(" screen=pause") : " screen=" + g_MenuMan.GetMainMenu()->AutomationMultiplayerSubScreen();
+			met = !pauseMenu && g_MenuMan.GetMainMenu()->AutomationMultiplayerSubScreen() == waitCond.substr(9);
 		} else if (waitCond.rfind("members:", 0) == 0) {
 			met = static_cast<int>(snapshot.members.size()) >= std::atoi(waitCond.c_str() + 8);
 		} else if (waitCond.rfind("connected:", 0) == 0) {
@@ -3741,7 +3800,7 @@ void ProcessMenuScript() {
 		// keeps the frame budget it has always had.
 		const bool expired = waitCondDeadlineMs != 0 ? MenuScriptNowMs() >= waitCondDeadlineMs : --waitCondTimeout <= 0;
 		if (met || expired) {
-			MenuScriptPrint(std::format("{} -> {} (members={} state={})", waitCond, met ? "OK" : "TIMEOUT", snapshot.members.size(), snapshot.serviceState));
+			MenuScriptPrint(std::format("{} -> {} (members={} state={}){}", waitCond, met ? "OK" : "TIMEOUT", snapshot.members.size(), snapshot.serviceState, met ? std::string() : seen));
 			if (!met) { return MenuScriptFail("condition wait timed out: " + waitCond); }
 			waitCond.clear();
 			waitCondDeadlineMs = 0;
@@ -3749,7 +3808,8 @@ void ProcessMenuScript() {
 		return;
 	}
 	if (stepIndex >= steps.size()) {
-		MenuScriptPrint("complete");
+		std::string owed;
+		if (!MenuAutomation::OwedPressed(owed)) return MenuScriptFail("the script never pressed what its sweeps left to it: " + owed);
 		CompleteMenuScript();
 		return;
 	}
@@ -3765,6 +3825,11 @@ void ProcessMenuScript() {
 		std::string observation;
 		const bool pass = MenuAutomation::Execute(pauseMenu ? pauseMenu->AutomationManager() : scenarioMenu ? scenarioMenu->AutomationManager() : menu->AutomationManager(),
 			pauseMenu ? pauseMenu->AutomationActiveScreenName() : scenarioMenu ? scenarioMenu->AutomationScreen() : menu->AutomationActiveScreenName(), cmd, iss, observation);
+		if (pass && MenuAutomation::HandBusy()) {
+			s_menuScriptHandStep = cmd + " " + observation;
+			s_menuScriptHandObserve = s_menuScriptObserveStep;
+			return;
+		}
 		MenuScriptPrint(cmd + " " + observation + " " + (pass ? "PASS" : "FAIL"));
 		if (!pass) return MenuScriptFail(cmd + " " + observation);
 	} else if (cmd == "net_panel") {
@@ -3775,17 +3840,10 @@ void ProcessMenuScript() {
 		iss >> inner;
 		std::string observation;
 		bool pass = panel != nullptr;
-		if (pass && inner == "open") {
-			pass = panel->SetOpen(true);
-			observation = "open";
-		} else if (pass && inner == "close") {
-			pass = panel->SetOpen(false);
-			observation = "close";
-		} else if (pass && inner == "activate") {
+		if (pass && inner == "activate") {
 			std::string control;
 			iss >> control;
-			pass = panel->AutomationPostCommand(control);
-			observation = control;
+			pass = MenuAutomation::HandClick(panel->AutomationManager(), control, nullptr, observation);
 		} else if (pass && inner == "assert_label") {
 			std::string control, sub, text;
 			iss >> control;
@@ -3804,12 +3862,43 @@ void ProcessMenuScript() {
 			pass = MenuAutomation::Handles(inner) &&
 			       MenuAutomation::Execute(panel->AutomationManager(), "NetSeats", inner, iss, observation);
 		}
+		if (pass && MenuAutomation::HandBusy()) {
+			s_menuScriptHandStep = "net_panel " + inner + " " + observation;
+			s_menuScriptHandObserve = s_menuScriptObserveStep;
+			return;
+		}
 		{
 			std::ostringstream line;
 			line << "[menu-script] net_panel " << inner << " " << observation << " " << (pass ? "PASS" : "FAIL");
 			System::PrintDiagnosticLine(line.str());
 		}
 		if (!pass) return MenuScriptFail("net_panel " + inner + " " + observation);
+	} else if (cmd == "run") {
+		std::string name;
+		iss >> name;
+		const auto macro = macros.find(name);
+		if (macro == macros.end()) return MenuScriptFail("run names no defined macro: " + name);
+		steps.insert(steps.begin() + static_cast<std::ptrdiff_t>(stepIndex), macro->second.begin(), macro->second.end());
+		MenuScriptPrint("run " + name + " steps=" + std::to_string(macro->second.size()));
+	} else if (cmd == "sweep") {
+		// The screen's own control list becomes the steps that change each control by hand, read it back and put it back.
+		std::string observation;
+		std::vector<std::string> generated;
+		GUIControl* modal = nullptr;
+		if (!MenuAutomation::SweepSteps(MenuScriptHandManager(&modal), iss, generated, observation)) return MenuScriptFail("sweep " + observation);
+		steps.insert(steps.begin() + static_cast<std::ptrdiff_t>(stepIndex), generated.begin(), generated.end());
+		MenuScriptPrint("sweep steps=" + std::to_string(generated.size()) + " " + observation);
+	} else if (cmd == "setup_host_port") {
+		// The port a scripted host listens on, set as a player sets it: typed into Advanced's port box, taken by Apply and its
+		// check, read back on the setup screen. A run picks its own so two runs on one machine never meet.
+		std::string port;
+		iss >> port;
+		if (port.empty()) return MenuScriptFail("setup_host_port needs a port");
+		const std::vector<std::string> generated = {"activate ButtonHostOptions", "wait 10", "assert_substate HostOptions", "activate TabHostPageConnection", "wait 4",
+		                                            "settext TextHostNetPort " + port, "wait 4", "activate ButtonHostOptApply", "wait 6", "activate ButtonHostOptBack",
+		                                            "wait 6", "assert_substate HostSetup", "assert_host_port " + port};
+		steps.insert(steps.begin() + static_cast<std::ptrdiff_t>(stepIndex), generated.begin(), generated.end());
+		MenuScriptPrint("setup_host_port " + port + " steps=" + std::to_string(generated.size()));
 	} else if (cmd == "wait") {
 		iss >> waitFrames;
 	} else if (cmd == "wait_ms") {
@@ -3823,12 +3912,41 @@ void ProcessMenuScript() {
 		if (path.empty() || (!iss.eof() && !(iss >> seconds)) || seconds <= 0) return MenuScriptFail("wait_file requires a path and positive timeout");
 		waitCond = "file:" + path;
 		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000ULL;
+	} else if (cmd == "wait_substate") {
+		// A hand presses on a screen once it sees it: a join shows the lobby a few frames after its connection is up.
+		std::string screen;
+		int seconds = 30;
+		iss >> screen >> std::ws;
+		if (screen.empty() || (!iss.eof() && !(iss >> seconds)) || seconds <= 0) return MenuScriptFail("wait_substate requires a screen name and positive timeout");
+		waitCond = "substate:" + screen;
+		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000ULL;
+	} else if (cmd == "wait_row") {
+		// A listed game a hand will click: the join list shows it once its host's beacon or listing arrives.
+		std::string row;
+		int seconds = 60;
+		iss >> row >> std::ws;
+		if (row.empty() || (!iss.eof() && !(iss >> seconds)) || seconds <= 0) return MenuScriptFail("wait_row requires a row name and positive timeout");
+		waitCond = "row:" + row;
+		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000ULL;
+	} else if (cmd == "touch_file") {
+		// The other engine's wait_file: one run tells another it has seen what it waited for.
+		std::string path;
+		iss >> path;
+		std::error_code madeError;
+		if (!path.empty()) std::filesystem::create_directories(std::filesystem::path(path).parent_path(), madeError);
+		std::ofstream marker(path);
+		if (path.empty() || !marker) return MenuScriptFail("touch_file could not write " + path);
+		MenuScriptPrint("touch_file " + path);
 	} else if (cmd == "select_scene") {
-		std::string name;
+		// A scene is picked the way a player picks it: a click on its site on the planet.
+		std::string name, observation;
 		std::getline(iss >> std::ws, name);
-		const bool pass = scenarioMenu && scenarioMenu->AutomationSelectScene(name);
-		MenuScriptPrint("select_scene " + name + " " + (pass ? "PASS" : "FAIL"));
-		if (!pass) return MenuScriptFail("select_scene " + name);
+		const auto site = scenarioMenu ? scenarioMenu->AutomationScenePoint(name) : std::nullopt;
+		if (!site || !MenuAutomation::HandClickAt(site->first, site->second, "the site of " + name, [scenarioMenu, name] { return scenarioMenu == ScenarioGUI::AutomationActive() && scenarioMenu->AutomationSceneSelected(name); }, observation)) {
+			return MenuScriptFail("select_scene " + name + (site ? " " + observation : " offers no such site"));
+		}
+		s_menuScriptHandStep = "select_scene " + observation;
+		s_menuScriptHandObserve = s_menuScriptObserveStep;
 	} else if (cmd == "host_world_lobby") {
 		unsigned port = 0;
 		if (!(iss >> port) || port == 0 || port > UINT16_MAX) return MenuScriptFail("host_world_lobby requires a port");
@@ -3912,53 +4030,50 @@ void ProcessMenuScript() {
 		// SaveScreenToPNG prepends System::GetScreenshotDirectory() ("ScreenShots/"); use a plain name.
 		g_FrameMan.SaveScreenToPNG(name.c_str());
 		MenuScriptPrint("screenshot ScreenShots/" + name + " screen=" + (pauseMenu ? std::string("Pause") : menu->AutomationActiveScreenName()));
-	} else if (cmd == "activate") {
-		std::string control;
+	} else if (cmd == "activate" || cmd == "post_command") {
+		std::string control, observation;
 		iss >> control;
-		const bool ok = pauseMenu ? pauseMenu->AutomationPostCommand(control) : scenarioMenu ? scenarioMenu->AutomationPostCommand(control) : menu->AutomationActivateControl(control);
-		MenuScriptPrint("activate " + control + " ok=" + std::to_string(static_cast<int>(ok)));
-		if (!ok) {
+		if (!StartMenuScriptClick(control, observation)) {
 			const auto lobby = g_NetMatchService.GetLobbySnapshot();
-			MenuScriptPrint(std::string("activate refused by ") + (pauseMenu ? "pause" : scenarioMenu ? "scenario" : "main") + " menu: service=" + lobby.serviceState +
-			                " in_lobby=" + std::to_string(lobby.inLobby) + " remote_ready=" + std::to_string(lobby.remoteReady) + " host=" + std::to_string(lobby.isHost));
-			return MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control);
+			MenuScriptPrint(cmd + " " + observation + " FAIL service=" + lobby.serviceState + " in_lobby=" + std::to_string(lobby.inLobby) +
+			                " remote_ready=" + std::to_string(lobby.remoteReady) + " host=" + std::to_string(lobby.isHost));
+			return MenuScriptFail(cmd + " " + observation);
 		}
-	} else if (cmd == "post_command") {
-		std::string control;
-		iss >> control;
-		const bool ok = pauseMenu ? pauseMenu->AutomationPostCommand(control) : scenarioMenu ? scenarioMenu->AutomationPostCommand(control) : menu->AutomationPostCommand(control);
-		MenuScriptPrint("post_command " + control + " ok=" + std::to_string(static_cast<int>(ok)));
-		if (!ok) { return MenuScriptFail("post_command failed (control missing, disabled, or hidden): " + control); }
+		s_menuScriptHandStep = cmd + " " + observation;
+		s_menuScriptHandObserve = s_menuScriptObserveStep;
 	} else if (cmd == "assert_control") {
 		std::string control;
 		iss >> control;
 		const bool exists = pauseMenu ? pauseMenu->AutomationControlExists(control) : menu->AutomationControlExists(control);
 		MenuScriptPrint("assert_control " + control + " " + (exists ? "PASS" : "FAIL"));
 		if (!exists) { return MenuScriptFail("assert_control names no control in the skin: " + control); }
-	} else if (cmd == "moderate") {
-		// The same panel action a host clicks, driven from a menu script.
-		std::string action;
-		int seat = -1;
-		iss >> action;
-		if (!(iss >> seat)) {
-			seat = -1;
-		}
-		const bool ok = menu->AutomationModerate(action, seat);
-		MenuScriptPrint("moderate " + action + " seat=" + std::to_string(seat) + " ok=" + std::to_string(static_cast<int>(ok)));
-		if (!ok) { return MenuScriptFail("moderate found no seat to act on: " + action); }
 	} else if (cmd == "settext") {
-		std::string control;
-		std::string text;
+		// Typed by a hand: a click into the box, the old text selected, the new text typed.
+		std::string control, text, observation;
 		iss >> control;
 		std::getline(iss, text);
 		if (!text.empty() && text[0] == ' ') { text.erase(0, 1); }
-		if (!menu->AutomationSetText(control, text)) { return MenuScriptFail("settext failed (textbox missing): " + control); }
+		GUIControl* modal = nullptr;
+		if (!MenuAutomation::HandType(MenuScriptHandManager(&modal), control, text, false, observation)) { return MenuScriptFail("settext " + observation); }
+		s_menuScriptHandStep = "settext " + observation;
+		s_menuScriptHandObserve = s_menuScriptObserveStep;
 	} else if (cmd == "setcheck") {
-		std::string control;
+		std::string control, observation;
 		int checked = 0;
 		iss >> control >> checked;
-		if (!menu->AutomationSetCheck(control, checked != 0)) { return MenuScriptFail("setcheck failed (checkbox missing or hidden): " + control); }
-		MenuScriptPrint("setcheck " + control + " " + std::to_string(checked));
+		GUIControl* modal = nullptr;
+		GUIControlManager* manager = MenuScriptHandManager(&modal);
+		auto* box = manager ? dynamic_cast<GUICheckbox*>(manager->GetControl(control)) : nullptr;
+		if (!box) { return MenuScriptFail("setcheck " + control + " is not a checkbox on this screen"); }
+		if (!MenuAutomation::Visible(box)) { return MenuScriptFail("setcheck " + control + " is not on the screen"); }
+		if ((box->GetCheck() == GUICheckbox::Checked) == (checked != 0)) {
+			// A hand leaves a box that already reads right alone.
+			MenuScriptPrint("setcheck " + control + " " + std::to_string(checked) + " already PASS");
+		} else {
+			if (!MenuAutomation::HandClick(manager, control, modal, observation)) { return MenuScriptFail("setcheck " + observation); }
+			s_menuScriptHandStep = "setcheck " + control + " " + std::to_string(checked);
+			s_menuScriptHandObserve = s_menuScriptObserveStep;
+		}
 	} else if (cmd == "assert_label") {
 		std::string control;
 		std::string sub;
@@ -4004,16 +4119,16 @@ void ProcessMenuScript() {
 		MenuScriptPrint("assert_substate expected=" + expected + " actual=" + actual + " " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail("assert_substate expected " + expected + " got " + actual); }
 	} else if (cmd == "chat") {
-		// The same send the lobby's input line does, driven headless so a capture has content.
-		std::string scope;
+		// The lobby's chat line, typed and sent as a player sends it: Enter for everyone, Ctrl+Enter for the team.
+		std::string scope, text, observation;
 		iss >> scope;
-		std::string text;
 		std::getline(iss, text);
 		if (!text.empty() && text[0] == ' ') { text.erase(0, 1); }
-		const uint8_t scopeValue = scope == "team" ? c_NetChatScopeTeam : c_NetChatScopeAll;
-		const bool ok = g_NetMatchService.SendChat(scopeValue, text);
-		MenuScriptPrint("chat scope=" + scope + " ok=" + std::to_string(static_cast<int>(ok)) + " text=\"" + text + "\"");
-		if (!ok) { return MenuScriptFail("chat send dropped: " + text); }
+		if (text.empty() || (scope != "all" && scope != "team")) { return MenuScriptFail("chat needs all or team and a line"); }
+		GUIControl* modal = nullptr;
+		if (!MenuAutomation::HandType(MenuScriptHandManager(&modal), "TextLobbyChat", text, true, observation, scope == "team" ? "Left Ctrl" : "")) { return MenuScriptFail("chat " + observation); }
+		s_menuScriptHandStep = "chat scope=" + scope + " " + observation;
+		s_menuScriptHandObserve = s_menuScriptObserveStep;
 	} else if (cmd == "record_tick_hashes") {
 		if (s_recordTickHashes || !FrameRecorder::Instance().Enabled() || g_ActivityMan.IsInActivity() ||
 		    g_NetMatchService.GetState() != NetMatchServiceState::Starting ||
@@ -4067,10 +4182,16 @@ void ProcessMenuScript() {
 		int expected = 0;
 		iss >> control >> expected;
 		const int actual = (pauseMenu ? pauseMenu->AutomationControlEnabled(control) : menu->AutomationControlEnabled(control)) ? 1 : 0;
-		const bool pass = actual == expected;
-		MenuScriptPrint("assert_enabled " + control + " expected=" + std::to_string(expected) + " actual=" + std::to_string(actual) + " " + (pass ? "PASS" : "FAIL"));
-		if (!pass) { return MenuScriptFail("assert_enabled " + control + " expected " + std::to_string(expected)); }
+		// A control a player cannot see is neither usable nor unusable to them: the read fails.
+		GUIControlManager* manager = pauseMenu ? pauseMenu->AutomationManager() : menu->AutomationManager();
+		GUIControl* shown = manager ? manager->GetControl(control) : nullptr;
+		const bool onScreen = !shown || MenuAutomation::Visible(shown);
+		const bool pass = onScreen && actual == expected;
+		MenuScriptPrint("assert_enabled " + control + " expected=" + std::to_string(expected) + " actual=" + std::to_string(actual) + (onScreen ? "" : " (not on the screen)") + " " + (pass ? "PASS" : "FAIL"));
+		if (!pass) { return MenuScriptFail("assert_enabled " + control + (onScreen ? " is " + std::string(actual ? "enabled" : "disabled") : std::string(" is not on the screen"))); }
 	} else if (cmd == "exit") {
+		std::string owed;
+		if (!MenuAutomation::OwedPressed(owed)) return MenuScriptFail("the script never pressed what its sweeps left to it: " + owed);
 		CompleteMenuScript();
 	} else {
 		return MenuScriptFail("unknown command: " + cmd);
@@ -6511,10 +6632,23 @@ static bool CrossDrawLobbySurface(std::string* error) {
 		g_WindowMan.GetScreenBuffer()->Begin(); g_MenuMan.Draw(); g_WindowMan.GetScreenBuffer()->End();
 		g_WindowMan.UploadFrame(); g_UInputMan.EndFrame();
 	};
+	// The details open and close the way a host opens them: a click, a phase a drawn frame.
+	SetPanelDrawRecording(true);
+	const auto click = [&](const std::string& name) {
+		std::string observation;
+		bool passed = false;
+		if (!MenuAutomation::HandClick(menu->AutomationManager(), name, menu->AutomationModalDialog(), observation)) return false;
+		for (unsigned frame = 0; frame < 120 && MenuAutomation::HandBusy() && !System::IsSetToQuit(); ++frame) {
+			draw();
+			MenuAutomation::AfterDrawnFrame();
+			std::this_thread::sleep_for(std::chrono::milliseconds(16));
+		}
+		return MenuAutomation::HandFinished(passed, observation) && passed;
+	};
 	for (unsigned frame = 0; frame < 20 && !System::IsSetToQuit(); ++frame) { draw(); std::this_thread::sleep_for(std::chrono::milliseconds(16)); }
 	std::string summary, details;
 	const bool summaryRead = menu->AutomationLabelText("LabelLastMatchSummary", summary);
-	const bool opened = menu->AutomationActivateControl("ButtonLastMatchDetails");
+	const bool opened = click("ButtonLastMatchDetails");
 	draw();
 	const bool detailsRead = menu->AutomationLabelText("LabelLastMatchDetails", details);
 	const auto path = std::filesystem::path(CrossEnvironment("CC_TEST_CROSS_RECORDS")).parent_path() /
@@ -6525,7 +6659,7 @@ static bool CrossDrawLobbySurface(std::string* error) {
 	g_MetricsCollector.WriteObservation({{"type", "lobby_surface"}, {"summary", summary}, {"details", details},
 	    {"screen", menu->AutomationActiveScreenName()}, {"subscreen", menu->AutomationMultiplayerSubScreen()},
 	    {"summary_matches", equal}, {"details_opened", opened}, {"screenshot", path.string()}, {"saved", saved}});
-	menu->AutomationActivateControl("ButtonLastMatchClose");
+	click("ButtonLastMatchClose");
 	g_MenuMan.SetIsInMenuScreen(false);
 	if (!summaryRead || !detailsRead || !opened || !equal || !saved) { *error = "the drawn lobby summary/details did not match the retained result"; return false; }
 	return true;

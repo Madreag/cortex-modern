@@ -1,0 +1,18 @@
+{
+ "controls": [
+  {
+   "name": "ButtonHostSessBanned",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostSessIdle",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "ButtonHostSessEnd",
+   "enabled": false,
+   "reason": "Only the host ends the session."
+  }
+ ]
+}

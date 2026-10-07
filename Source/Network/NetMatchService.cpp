@@ -280,7 +280,7 @@ namespace RTE {
 		return NetIdentity::BuildCurrentManifest(manifest, error, options);
 	}
 
-	std::string NetIceResolveSessionRow(const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, const std::string& sessionId, NetIceJoinTarget* out, const NetDirectoryLocalIdentity* worldLocal, bool reservedSeat) {
+	std::string NetIceResolveSessionRow(const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, const std::string& sessionId, NetIceJoinTarget* out, const NetDirectoryLocalIdentity* worldLocal, bool reservedSeat, bool allowUnlistedIce) {
 		for (const NetDirectorySessionRow& row : rows) {
 			if (row.sessionId != sessionId) {
 				continue;
@@ -288,7 +288,7 @@ namespace RTE {
 			// The join list decides joinability, so a session-id join is refused with its labels.
 			const std::vector<NetDirectoryClient::GameRow> merged = NetDirectoryClient::MergeGameLists({}, {row}, local, worldLocal);
 			if (merged.empty()) {
-				break;
+				return "no such session";
 			}
 			if (!merged.front().joinable && !(reservedSeat && merged.front().reason == "full")) {
 				return merged.front().reason.empty() ? "refused" : merged.front().reason;
@@ -299,6 +299,20 @@ namespace RTE {
 				out->address = merged.front().address;
 				out->port = merged.front().port;
 				out->persistentWorld = row.persistentWorld;
+			}
+			return {};
+		}
+		// A full Unlisted code names the ICE listener; its handshake checks identity and admission.
+		bool fullCode = sessionId.size() == 36;
+		for (size_t i = 0; fullCode && i < sessionId.size(); ++i) {
+			const bool separator = i == 8 || i == 13 || i == 18 || i == 23;
+			fullCode = separator ? sessionId[i] == '-' : std::isxdigit(static_cast<unsigned char>(sessionId[i])) != 0;
+		}
+		if (allowUnlistedIce && fullCode) {
+			if (out) {
+				*out = {};
+				out->identity = NetIceHostIdentity(sessionId);
+				out->joinMode = "ice";
 			}
 			return {};
 		}
@@ -504,6 +518,8 @@ static std::string ResyncSaveName() {
 		// A seat rejoining its own running match has nothing to choose in the lobby round: it is ready once it connects.
 		m_ReadyRequested.store(rejoinOfARunningMatch);
 		m_StartRequested.store(false);
+		m_CancelStartRequested.store(false);
+		m_HostSetupOpen.store(false);
 		if (request.dedicated && !request.host) {
 			if (error) *error = "dedicated service requires the host role";
 			return false;
@@ -652,7 +668,10 @@ static std::string ResyncSaveName() {
 		// The directory row advertises the same identity fields the probe registers; only the counts
 		// move afterwards. Only a host ever lists itself.
 		const std::string directoryListenAddr = NetLanDiscovery::GetPrimaryLocalAddress();
-		const bool directoryConfigured = !g_SettingsMan.GetSessionDirectoryUrl().empty();
+		// A host that keeps its game to this network never registers, so nothing reaches a directory or a router for it.
+		const SettingsMan::NetworkHostVisibility whoCanJoin = g_SettingsMan.GetNetworkHostVisibility();
+		const bool thisNetworkOnly = request.host && whoCanJoin == SettingsMan::NetworkHostVisibility::LAN;
+		const bool directoryConfigured = !g_SettingsMan.GetSessionDirectoryUrl().empty() && !thisNetworkOnly;
 		const bool icePreference = request.host || g_SettingsMan.HasNetworkIceEnableOverride() ? g_SettingsMan.GetNetworkIceEnable() : true;
 		const bool iceEnabled = icePreference && directoryConfigured &&
 		                        (request.host || !request.sessionId.empty());
@@ -783,11 +802,12 @@ static std::string ResyncSaveName() {
 				}
 			}
 			m_DirectoryRetracted = false;
-			m_DirectoryHidden = false;
+			m_DirectoryHidden = request.host && whoCanJoin == SettingsMan::NetworkHostVisibility::Unlisted;
+			m_HostThisNetworkOnly = thisNetworkOnly;
 			m_KeepEndedDirectoryLease = false;
 			m_DirectoryRelistPending = false;
 		}
-		if (request.host && g_SettingsMan.GetNetworkPortMapEnable()) {
+		if (request.host && g_SettingsMan.GetNetworkPortMapEnable() && !thisNetworkOnly) {
 			RequestHostPortMap(request.port, nullptr);
 		} else {
 			ReleaseHostPortMap();
@@ -925,6 +945,8 @@ static std::string ResyncSaveName() {
 		m_CancelRequested.store(false);
 		m_ReadyRequested.store(false);
 		m_StartRequested.store(false);
+		m_CancelStartRequested.store(false);
+		m_HostSetupOpen.store(false);
 		m_Worker = std::thread(&NetMatchService::WorkerRematchMain, this, std::move(link), session.release(), coordinator.release(), runner.release(), departedHost);
 		return true;
 	}
@@ -1235,6 +1257,23 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_DirectoryRetracted || m_IceBoundSessionId.empty()) return 0;
 		return m_DirectoryHidden ? 1 : 2;
+	}
+
+	NetListingStatus NetMatchService::GetListingStatus(std::string* reason) const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_IsHost || m_State == NetMatchServiceState::Idle) return NetListingStatus::None;
+		if (m_HostThisNetworkOnly || m_DirectoryState == NetDirectoryClient::State::Disabled) return NetListingStatus::LocalOnly;
+		const auto failed = [reason](const std::string& why) {
+			if (reason) *reason = why;
+			return NetListingStatus::Failed;
+		};
+		if (m_DirectoryRetracted) return failed("the listing closed when the match ended");
+		switch (m_DirectoryState) {
+			case NetDirectoryClient::State::Registered: return m_DirectoryHidden ? NetListingStatus::Unlisted : NetListingStatus::Listed;
+			case NetDirectoryClient::State::Failed: return failed(m_DirectoryError);
+			case NetDirectoryClient::State::Superseded: return failed("the match went on under another host");
+			default: return m_DirectoryHidden ? NetListingStatus::Unlisted : NetListingStatus::Opening;
+		}
 	}
 
 	bool NetMatchService::SetDirectoryVisibility(int visibility) {
@@ -2463,6 +2502,11 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::SettleKeptDirectoryLease() {
+		// Unlisted is also a new lobby's visibility. Only an ended lease (or its
+		// pending rematch relist) is subject to the bound-identity cleanup here.
+		if (GetState() != NetMatchServiceState::Completed && !m_DirectoryRelistPending) {
+			return;
+		}
 		if (!m_DirectoryHidden || m_Directory.GetState() == NetDirectoryClient::State::Deleting) {
 			return;
 		}
@@ -2826,7 +2870,7 @@ static std::string ResyncSaveName() {
 				s_PortMapApplied = true;
 			}
 		}
-		const std::string& directoryUrl = g_SettingsMan.GetSessionDirectoryUrl();
+		const std::string directoryUrl = m_HostThisNetworkOnly ? std::string() : g_SettingsMan.GetSessionDirectoryUrl();
 		// The install key is minted on the first directory use, so only a listing host asks for it.
 		const std::string directoryKey = (directoryWanted && !directoryUrl.empty()) ? g_SettingsMan.GetOrCreateSessionDirectoryInstallKey() : g_SettingsMan.GetSessionDirectoryInstallKey();
 		const std::string directoryCertPin = g_SettingsMan.GetSessionDirectoryCertSha256();
@@ -3123,13 +3167,18 @@ static std::string ResyncSaveName() {
 		}
 	}
 
-	void NetMatchService::SetReady() {
-		m_ReadyRequested.store(true);
+	void NetMatchService::SetReady(bool ready) {
+		m_ReadyRequested.store(ready);
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_State == NetMatchServiceState::Starting) {
-			m_StatusText = "Ready; waiting for host start";
+			m_StatusText = ready ? "Ready; waiting for host start" : "Not ready";
 			m_ErrorText.clear();
 		}
+	}
+
+	void NetMatchService::CancelStart() {
+		m_StartRequested.store(false);
+		m_CancelStartRequested.store(true);
 	}
 
 	void NetMatchService::RequestStart() {
@@ -9620,6 +9669,10 @@ static std::string ResyncSaveName() {
 		// ever built there, so reading it here is safe.
 		{
 			json directoryReport = json::parse(m_Directory.BuildReportJson());
+			directoryReport["identity_pending"] = m_IdentityPending;
+			directoryReport["retracted"] = m_DirectoryRetracted;
+			directoryReport["this_network_only"] = m_HostThisNetworkOnly;
+			directoryReport["last_update_ms"] = m_LastUpdateMs;
 			if (s_PortMapRequested) directoryReport["observed_ip"] = m_Directory.GetObservedIp();
 			report["directory"] = std::move(directoryReport);
 		}
@@ -10113,7 +10166,8 @@ static std::string ResyncSaveName() {
 			browse.PollList(nowMs);
 			browse.Update(nowMs);
 			if (browse.ListReplies() > 0) {
-				why = NetIceResolveSessionRow(browse.Rows(), local, request.sessionId, &target, worldIdentityBuilt ? &worldLocal : nullptr, reservedSeat);
+				why = NetIceResolveSessionRow(browse.Rows(), local, request.sessionId, &target, worldIdentityBuilt ? &worldLocal : nullptr, reservedSeat,
+				                              m_IceEnabled && g_SettingsMan.GetNetworkConnectionMode() != SettingsMan::NetworkConnectionMode::DirectOnly);
 				if (why.empty() || why != "no such session") {
 					break;
 				}
@@ -10321,6 +10375,8 @@ static std::string ResyncSaveName() {
 		config.autoStart = config.host && config.matchConfig.persistentWorld;
 		config.readyRequested = &m_ReadyRequested;
 		config.startRequested = &m_StartRequested;
+		config.cancelStartRequested = &m_CancelStartRequested;
+		config.hostSetupOpen = &m_HostSetupOpen;
 		config.roundStartScripts = [this] {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			return std::exchange(m_RoundStartScriptsToStream, {});
@@ -10429,6 +10485,7 @@ static std::string ResyncSaveName() {
 		runnerConfig.autoInputDelay = request.autoInputDelay;
 		runnerConfig.useLobbyProtocol = true;
 		ConfigureLobbyStart(runnerConfig);
+		runnerConfig.startCountdownMs = request.host && request.startCountdown && !runnerConfig.matchConfig.persistentWorld ? c_StartCountdownMs : 0;
 		// First lockstep tick is 1: RestartActivity zeroes the sim count, UpdateSim increments it before MovableMan reads it.
 		runnerConfig.startFrame = 1;
 		// A resumed match starts on the tick after the checkpoint, exactly as a healed round resumes
@@ -11668,6 +11725,11 @@ static std::string ResyncSaveName() {
 			cpuSlot.cpu = true;
 			cpuSlot.displayName = cpuCount == 1 ? "CPU" : "CPU " + std::to_string(cpu + 1);
 			config.players.push_back(cpuSlot);
+		}
+		// The host's accepted Advanced draft is the lobby's setup, every field of its list; the request keeps the session's identity.
+		if (request.hostDraft && !world) {
+			NetMatchConfigUtil::CopyHostDraft(*request.hostDraft, config);
+			config.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 		}
 		if (world && rosterHumans == 0) {
 			for (uint8_t peerId = firstHumanPeer; peerId <= config.peerCount; ++peerId) {

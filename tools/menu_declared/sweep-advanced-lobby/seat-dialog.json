@@ -1,0 +1,38 @@
+{
+ "controls": [
+  {
+   "name": "ButtonHostSeatDlgClose",
+   "enabled": true
+  },
+  {
+   "name": "ListHostSeatDlgApplicants",
+   "enabled": false,
+   "reason": "Nobody is asking for this seat."
+  },
+  {
+   "name": "ButtonHostSeatDlgWait",
+   "enabled": false,
+   "reason": "Nobody is asking for this seat."
+  },
+  {
+   "name": "ButtonHostSeatDlgApprove",
+   "enabled": false,
+   "reason": "Nobody is asking for this seat."
+  },
+  {
+   "name": "ButtonHostSeatDlgCancel",
+   "enabled": false,
+   "reason": "Nobody is asking for this seat."
+  },
+  {
+   "name": "ButtonHostSeatDlgKick",
+   "enabled": false,
+   "reason": "Seat 1 is the host's own: nobody else holds it to kick or ban."
+  },
+  {
+   "name": "ButtonHostSeatDlgBan",
+   "enabled": false,
+   "reason": "Seat 1 is the host's own: nobody else holds it to kick or ban."
+  }
+ ]
+}

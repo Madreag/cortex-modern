@@ -1,0 +1,12 @@
+{
+ "controls": [
+  {
+   "name": "TextNetworkDirUrl",
+   "enabled": true
+  },
+  {
+   "name": "TextNetworkDirPin",
+   "enabled": true
+  }
+ ]
+}

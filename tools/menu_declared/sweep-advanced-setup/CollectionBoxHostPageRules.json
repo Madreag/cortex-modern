@@ -1,0 +1,52 @@
+{
+ "controls": [
+  {
+   "name": "ComboHostRulesActivity",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostRulesScene",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostRulesMode",
+   "enabled": true
+  },
+  {
+   "name": "SliderHostRulesDifficulty",
+   "enabled": true
+  },
+  {
+   "name": "SliderHostRulesGold",
+   "enabled": true
+  },
+  {
+   "name": "CheckHostRulesFog",
+   "enabled": true
+  },
+  {
+   "name": "CheckHostRulesClearPath",
+   "enabled": true
+  },
+  {
+   "name": "CheckHostRulesDeploy",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostRulesBrainless",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostRulesTeam",
+   "enabled": true
+  },
+  {
+   "name": "SliderHostRulesSkill",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostRulesTech",
+   "enabled": true
+  }
+ ]
+}

@@ -1,0 +1,34 @@
+{
+ "controls": [
+  {
+   "name": "CheckHostRecRepair",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostRecReturnWindow",
+   "enabled": true
+  },
+  {
+   "name": "CheckHostRecAutosave",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostRecJoinHistory",
+   "enabled": true
+  },
+  {
+   "name": "ComboHostRecJoinLag",
+   "enabled": true
+  },
+  {
+   "name": "TextHostRecAutosaveInterval",
+   "enabled": false,
+   "reason": "Autosave is off: the interval applies once it is on."
+  },
+  {
+   "name": "ButtonHostRecRepairNow",
+   "enabled": false,
+   "reason": "No match is running to repair."
+  }
+ ]
+}

@@ -9,16 +9,18 @@ wait_ms 660
 assert_substate JoinSetup
 wait_file {DIRECTORY_ROOT}/listed.json 30
 wait_ms 2000
+activate ButtonJoinByAddress
+wait 4
 settext TextJoinAddress session:{DIRECTORY_SESSION}
 settext TextJoinPort {PORT}
 wait_ms 600
-activate ButtonMultiplayerConnect
+activate ButtonJoinAddressGo
 wait_ms 9000
 video_mark relay-reason-refused
-assert_substate Landing
-assert_label LabelMultiplayerLandingStatus The host's relay refused the credentials - ask the host to check the relay setting
-# The reason stays on the landing, the cause on its first drawn line, for as long as the player looks at it.
-text_watch start h15-scene-relay-refused require substate:Landing The host's relay refused the credentials
+assert_substate JoinSetup
+assert_label LabelJoinSelected The host's relay refused the credentials - ask the host to check the relay setting
+# The reason stays on Join a Game, the cause on its first drawn line, for as long as the player looks at it.
+text_watch start scene-relay-refused require substate:JoinSetup The host's relay refused the credentials
 wait_ms 3000
-text_watch close h15-scene-relay-refused
+text_watch close scene-relay-refused
 exit

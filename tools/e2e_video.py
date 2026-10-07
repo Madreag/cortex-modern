@@ -1076,6 +1076,7 @@ def probe_verdict(probe_dir, item):
 # every distinct offence once, so one capture lists them all.
 SCREEN_WATCH_RULES = {
     "layout": ("Every shown label's text fits its own rect, its rect sits inside its panel and the screen.", "layout always"),
+    "overlap": ("No shown caption draws over or under another shown control of its panel.", "overlap always"),
     "duplicates": ("No two shown overlay controls carry the same line at once (the status strip and a toast never stack one event).", "duplicates always"),
     "held-reads-held": ("A seat kept for its player never reads 'Left' on another screen while it is held.", "forbid remote_held Left - AI in control"),
     "own-hold-line": ("The held player's own screen says the AI plays for them from the hold's first frame to the frame its control returns.", "require local_held until you are back"),
@@ -1266,9 +1267,37 @@ def listed_rows(peer_root, control):
     return [json.loads(row) for row in LISTED_ROW.findall(lines[-1])] if lines else None
 
 
+def listed_games(peer_root):
+    """The Join screen's rows as the join targets they stand for, from the script's last dump that lists any (a dump taken after
+    the player left Join a Game lists none)."""
+    path = Path(peer_root) / "stdout.log"
+    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    seen = None
+    for line in reversed(text.splitlines()):
+        if not line.startswith(("[menu-script] dump_host_options {", "[menu-script] dump_player_options {")):
+            continue
+        body = line[line.index("{"):].removesuffix(" PASS")
+        try:
+            games = json.loads(body).get("game_rows")
+        except json.JSONDecodeError:
+            continue
+        if games:
+            return games
+        seen = games if seen is None else seen
+    return seen
+
+
 def own_session_evidence(peer_root, spec, port):
     """A LAN listing shows every engine beaconing on the network, so the count is of this run's own session only."""
     rows = listed_rows(peer_root, spec["control"])
+    games = listed_games(peer_root)
+    if games is not None:
+        # The rows read in words; each one's join target comes with the dump.
+        own = [game for game in games if game.get("port") == port]
+        address = spec.get("address")
+        return {"control": spec["control"], "port": port, "rows": rows, "games": games, "own_rows": own,
+                "other_sessions": [game for game in games if game.get("port") != port], "expected": spec.get("expected", 1),
+                "address": address, "pass": len(own) == spec.get("expected", 1) and all(game.get("address") == address for game in own if address)}
     endpoints = [(row, ROW_ENDPOINT.search(row)) for row in rows or []]
     own = [row for row, found in endpoints if found and int(found[2]) == port]
     others = [row for row, found in endpoints if not (found and int(found[2]) == port)]
@@ -1282,11 +1311,17 @@ def own_session_evidence(peer_root, spec, port):
 def join_port_evidence(peer_root, spec):
     """The Port field follows the first joinable listed row, whichever session that is."""
     rows = listed_rows(peer_root, spec["control"])
-    joinable = [found for found in (ROW_ENDPOINT.search(row) for row in rows or []) if found and not found[3]]
+    games = listed_games(peer_root)
+    if games is not None:
+        # The rows read in words; the dump names each one's port.
+        joinable = [game for game in games if game.get("joinable")]
+        expected = str(joinable[0]["port"]) if joinable else None
+    else:
+        joinable = [found for found in (ROW_ENDPOINT.search(row) for row in rows or []) if found and not found[3]]
+        expected = joinable[0][2] if joinable else None
     path = Path(peer_root) / "stdout.log"
     text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
     shown = re.findall(rf'^\[menu-script\] assert_label {re.escape(spec["field"])} ".*?" text="([^"]*)" PASS$', text, re.M)
-    expected = joinable[0][2] if joinable else None
     return {"control": spec["control"], "field": spec["field"], "rows": rows, "first_joinable_port": expected,
             "shown": shown[-1] if shown else None, "pass": bool(expected) and bool(shown) and shown[-1] == expected}
 
@@ -1875,6 +1910,9 @@ def _run_one(options, scenario, run, run_index, out):
             continue
         stage.mkdir(parents=True, exist_ok=False)
         environment = stage_peer(scenario, peer, stage, tokens)
+        if getattr(options, 'win_cause_log', False):
+            from e2e.win_diagnostics import configure_environment
+            environment = configure_environment(environment, peer_root, scenario['name'], name, root.name)
         retained = None
         if reference:
             previous = prior_peer(getattr(options, "completed_runs", []), reference)
@@ -1929,6 +1967,9 @@ def _run_one(options, scenario, run, run_index, out):
             else:
                 destination.write_text(entry["write"], encoding="utf-8")
         runs[name] = run_handle
+        if getattr(options, 'win_cause_log', False):
+            from e2e.win_diagnostics import stage as stage_win_diagnostics
+            write_json(peer_root / 'win-diagnostics.json', stage_win_diagnostics(options.repo, run_handle.cwd))
         staged[name] = {**arm, "args": args, "env": {k: str(v) for k, v in environment.items()},
                         "runtime": str(run_handle.cwd), "retain_runtime_from": reference,
                         "stage": str(stage), "probe_dir": str(stage / "probe"),
@@ -1959,6 +2000,9 @@ def _run_one(options, scenario, run, run_index, out):
                     data=public_native_bytes(data,options.relay_book)
                 (Path(runs[name].out) / "console.log").write_bytes(data)
             records[name] = record
+            if getattr(options, 'win_cause_log', False):
+                from e2e.win_diagnostics import collect as collect_win_diagnostics
+                collect_win_diagnostics(runs[name].out)
         except Exception as error:  # the peer's record carries the failure; the others still finish
             records[name] = {"error": public_value(repr(error),getattr(getattr(options,'relay_book',None),'values',{}))}
         finally:
@@ -2762,7 +2806,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     import spread_peers as spread
     spread.add_arguments(parser)
-    parser.add_argument("--capture-peer", help="reviewed peer on the controller's private Windows recorder; defaults to the first peer")
+    parser.add_argument("--capture-peer", help="reviewed peer on its named Windows runner's private desktop; defaults to the first peer")
+    parser.add_argument('--win-cause-log', action='store_true', help='observe duel brain loss and retain native death events in a private spread runtime')
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path)
     parser.add_argument("--scenario")
@@ -2797,6 +2842,8 @@ def main():
                              "a pair that differs is an engine finding; 0 is off")
     options = parser.parse_args()
     spread.configure(options)
+    if options.win_cause_log and not spread.enabled(options):
+        parser.error('--win-cause-log requires --peer-boxes and private native Data overlays')
     if spread.enabled(options) and (options.host_box or options.client_box or options.peer):
         parser.error("--spread/--peer-boxes use the shared peer interface; select its boxes with --peer-boxes")
 
@@ -2975,6 +3022,8 @@ def main():
                     options.remote_capture.directory_tunnel(directory_port)
                 options.service_tokens = tokens
                 captured = run_one(options, scenario, run, index, out)
+                # Each run is reviewed on its own: it names the tree a check reads the session protocol from.
+                captured["repo"] = capture["repo"]
                 captured["services"] = {key: str(value) for key, value in tokens.items()}
             if options.relay_book is not None:
                 from acceptance_relay_policy import sweep_retained

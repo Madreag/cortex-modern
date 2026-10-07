@@ -27,6 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_sim_test import make_run, seed_settings  # noqa: E402
+from test_menu_readback import spread, managed_case  # noqa: E402
 
 SCREEN = re.compile(r"^\[menu-script\] assert_screen expected=(\S+) actual=(\S+) (PASS|FAIL)$", re.M)
 SUBSTATE = re.compile(r"^\[menu-script\] assert_substate expected=(\S+) actual=(\S+) (PASS|FAIL)$", re.M)
@@ -49,13 +50,13 @@ def set_resolution(runtime: Path, x: int, y: int) -> None:
 def head(name: str, host: bool, port: int) -> str:
     script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
     if host:
-        return script + (f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\n"
-                         "settext TextHostPlayers 2\n"
+        return script + (f"activate ButtonMultiplayerHostGame\nwait 10\nsetup_host_port {port}\n"
+                         "combo_select ComboHostPlayers 2\n"
                          "activate ButtonMultiplayerCreate\nwait_connected 2\nwait_remote_ready\n"
                          "wait_all_ready\nactivate ButtonMultiplayerStart\n")
-    return script + (f"activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\n"
-                     f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n"
-                     "wait_connected 2\nactivate ButtonMultiplayerReady\nwait_remote_ready\n")
+    return script + (f"activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
+                     f"settext TextJoinPort {port}\nactivate ButtonJoinAddressGo\n"
+                     "wait_connected 2\nwait_substate Lobby 30\nwait 5\nactivate ButtonMultiplayerReady\nwait_remote_ready\n")
 
 
 # The launch stops the menu loop, so a real-time wait longer than the fade-out cannot finish
@@ -116,6 +117,7 @@ def newest_shot(out: Path, stem: str) -> Path:
     return found[-1] if found else shots / f"{stem}.png"
 
 
+@managed_case
 def run_arm(repo: Path, root: Path, port: int, ticks: int, timeout: int, settle_ms: int, arm: str) -> dict:
     root.mkdir(parents=True, exist_ok=True)
     scripts = {
@@ -125,10 +127,14 @@ def run_arm(repo: Path, root: Path, port: int, ticks: int, timeout: int, settle_
                                                else leave_tail("guest", settle_ms, leaver=True)),
     }
     runs, records = {}, {}
+    execution = spread.prepare_case(repo, root,
+        [spread.Peer("host", share_ok=False, os="windows", reviewed=True, output_name="Host", size=(640, 360)),
+         spread.Peer("client", share_ok=False, os="any", output_name="Guest", size=(640, 360))],
+        spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
     for who, text in scripts.items():
         path = root / f"{who}.txt"
         path.write_text(text, encoding="utf-8")
-        runs[who] = make_run(repo, ["-menu-script", path, "-num-lua-states", 4,
+        runs[who] = execution.make_run(repo, ["-menu-script", path, "-num-lua-states", 4,
                                     "-net-match-ticks", ticks,
                                     "-net-match-report", root / f"{who}_report.json"],
                              root / who, timeout)
@@ -170,6 +176,8 @@ def run_arm(repo: Path, root: Path, port: int, ticks: int, timeout: int, settle_
               "match_complete": {who: any("state=Completed" in l or "- ready up for a rematch" in l
                                           for l in logs[who].splitlines() if "dump_lobby" in l)
                                  for who in scripts}}
+    receipt = execution.result()
+    detail.update(topology="spread", peer_boxes=receipt["peer_boxes"], spread=receipt)
     return {"detail": detail, "logs": logs, "root": root}
 
 
@@ -183,7 +191,14 @@ def main() -> int:
     parser.add_argument("--wait-seconds", type=int, default=20,
                         help="real-time guard that keeps the post-match steps out of the launch fade-out")
     parser.add_argument("--arm", choices=["lobby", "leave", "both"], default="both")
+    if spread:
+        spread.add_arguments(parser)
     options = parser.parse_args()
+    if not spread:
+        parser.error("post-match lobby requires the shared spread executor")
+    if getattr(options, "spread", False) or not getattr(options, "peer_boxes", None):
+        parser.error(spread.NO_BOX_NAMED)
+    spread.configure(options)
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     result = {"pass": False, "checks": {}, "details": {}}
@@ -236,6 +251,9 @@ def main() -> int:
         result["pass"] = all(result["checks"].values())
     except Exception as error:  # noqa: BLE001
         result["error"] = str(error)
+    receipts = {path.parent.name: spread.read_json(path, {}) for path in root.glob("*/spread-result.json")}
+    result.update(topology="spread", peer_boxes={name: row.get("peer_boxes", {}) for name, row in receipts.items()},
+                  spread=receipts, proof=result["pass"])
     (root / "result.json").write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
     print(json.dumps({"pass": result["pass"], "error": result.get("error"),
                       "failed": [k for k, v in result["checks"].items() if not v], "out": str(root)}), flush=True)

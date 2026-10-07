@@ -152,11 +152,11 @@
       "peer": "host",
       "mark": "ui-visibility",
       "screen": "MultiplayerScreen",
-      "what": "The visibility selector opens and selects Unlisted and Listed.",
+      "what": "The listing selector opens, selects Unlisted, then Public again.",
       "assert": "menu assertions in the marked interval",
       "events": [
         "assert_label ComboHostNetVisibility .*Unlisted.* PASS",
-        "assert_label ComboHostNetVisibility .*Listed.* PASS"
+        "assert_label ComboHostNetVisibility .*Public.* PASS"
       ],
       "run": [
         "640x360",
@@ -251,8 +251,8 @@
       "peer": "client",
       "mark": "ui-join-port-typed",
       "screen": "MultiplayerScreen",
-      "what": "A published session appears in discovery; a port typed by hand stays in the Port field through changes to the listed games, even one equal to the listed port.",
-      "assert": "directory/listed.json; settext TextJoinPort 4 then {PORT}; assert_label TextJoinPort {PORT} after 3.96 s of list changes",
+      "what": "A published session appears in discovery; a port typed by hand into Join by address stays through changes to the listed games, even one equal to the listed port.",
+      "assert": "directory/listed.json; Join by address; settext TextJoinPort 4 then {PORT}; assert_label TextJoinPort {PORT} after 3.96 s of list changes",
       "events": [
         "assert_label TextJoinPort \"\\d+\" text=\"\\d+\" PASS"
       ],
@@ -267,10 +267,10 @@
       "peer": "client",
       "mark": "ui-directory-listing",
       "screen": "MultiplayerScreen",
-      "what": "Selecting a listed row fills its join target.",
-      "assert": "activate GameRowPort{PORT} (this session's own row)",
+      "what": "This session's own listed row, picked by hand, becomes the game to join.",
+      "assert": "wait_row then click_row GameRowPort{PORT} (this session's own row)",
       "events": [
-        "activate GameRowPort\\d+ ok=1"
+        "click_row ListLanGames row \\d+ .*PASS"
       ],
       "run": [
         "640x360",
@@ -283,10 +283,10 @@
       "peer": "client",
       "mark": "ui-join-port-picked",
       "screen": "MultiplayerScreen",
-      "what": "A picked row's port stays in the Port field, paired with its address, while other games open and close.",
-      "assert": "assert_label TextJoinPort {PORT} 4.1 s after activate GameRowPort{PORT}",
+      "what": "A picked row stays picked while other games open and close: Join Game stays available.",
+      "assert": "assert_enabled ButtonMultiplayerConnect 1, 3.4 s after click_row GameRowPort{PORT}",
       "events": [
-        "assert_label TextJoinPort \"\\d+\" text=\"\\d+\" PASS"
+        "assert_enabled ButtonMultiplayerConnect expected=1 actual=1 PASS"
       ],
       "run": [
         "640x360",
@@ -300,9 +300,9 @@
       "mark": "ui-chat",
       "screen": "MultiplayerScreen",
       "what": "The lobby chat band shows messages sent by both players.",
-      "assert": "chat all returns ok=1",
+      "assert": "chat all is typed and sent by hand",
       "events": [
-        "chat scope=all ok=1"
+        "chat scope=all .*PASS"
       ],
       "run": [
         "640x360",
@@ -316,9 +316,9 @@
       "mark": "ui-chat",
       "screen": "MultiplayerScreen",
       "what": "The lobby chat band shows messages sent by both players.",
-      "assert": "chat all returns ok=1",
+      "assert": "chat all is typed and sent by hand",
       "events": [
-        "chat scope=all ok=1"
+        "chat scope=all .*PASS"
       ],
       "run": [
         "640x360",

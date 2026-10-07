@@ -27,7 +27,7 @@
       "what": "The host opens ClientA's seat dialog and presses Kick.",
       "events": [
         "assert_label LabelHostSeatDlgName.*ClientA.*PASS",
-        "activate ButtonHostSeatDlgKick ok=1"
+        "activate ButtonHostSeatDlgKick .*PASS"
       ],
       "run": "kick-ban"
     },
@@ -38,7 +38,7 @@
       "screen": "MultiplayerScreen",
       "what": "The lobby opens ClientA's seat under its unseated name and keeps ClientB listed.",
       "events": [
-        "assert_label LabelLobbyPlayer1.*Client 2.*PASS",
+        "assert_label LabelLobbyPlayer1.*Open seat.*PASS",
         "assert_label LabelLobbyPlayer2.*ClientB.*PASS"
       ],
       "run": "kick-ban"
@@ -62,7 +62,7 @@
       "what": "The host opens ClientB's seat dialog and presses Ban.",
       "events": [
         "assert_label LabelHostSeatDlgName.*ClientB.*PASS",
-        "activate ButtonHostSeatDlgBan ok=1"
+        "activate ButtonHostSeatDlgBan .*PASS"
       ],
       "run": "kick-ban"
     },
@@ -96,8 +96,8 @@
       "screen": "MultiplayerScreen",
       "what": "ClientB uses Join Game again with the same process identity and host address.",
       "events": [
-        "activate ButtonMultiplayerJoinGame ok=1",
-        "activate ButtonMultiplayerConnect ok=1"
+        "activate ButtonMultiplayerJoinGame .*PASS",
+        "activate ButtonJoinAddressGo .*PASS"
       ],
       "run": "kick-ban"
     },
@@ -108,7 +108,7 @@
       "screen": "MultiplayerScreen",
       "what": "ClientB is refused and Landing reads The host banned you from this session, without internal admission details.",
       "events": [
-        "assert_label LabelMultiplayerLandingStatus.*The host banned you from this session.*PASS"
+        "assert_label LabelJoinSelected.*The host banned you from this session.*PASS"
       ],
       "run": "kick-ban"
     },
@@ -117,10 +117,10 @@
       "peer": "host",
       "mark": "moderation-final-roster",
       "screen": "MultiplayerScreen",
-      "what": "After both removals the host's lobby lists the two seats back open under their unseated names.",
+      "what": "After both removals the host's lobby lists the two seats back as open seats.",
       "events": [
-        "assert_label LabelLobbyPlayer1.*Client 2.*PASS",
-        "assert_label LabelLobbyPlayer2.*Client 3.*PASS"
+        "assert_label LabelLobbyPlayer1.*Open seat.*PASS",
+        "assert_label LabelLobbyPlayer2.*Open seat.*PASS"
       ],
       "run": "kick-ban"
     },
@@ -142,7 +142,7 @@
       "screen": "MultiplayerScreen",
       "what": "After Kick and Ban the host counts the two open seats and shows a plain refusal notice.",
       "events": [
-        "(?s)assert_label LabelMultiplayerStatus.*Waiting for 2 players to join.*PASS",
+        "(?s)assert_label LabelMultiplayerStatus.*Waiting for 2 more players to join.*PASS",
         "assert_label LabelMultiplayerError.*ClientB was refused: banned from this session.*PASS"
       ],
       "run": "kick-ban"

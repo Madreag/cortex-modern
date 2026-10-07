@@ -358,7 +358,7 @@ def stage_refusal_menu(run, spec, own, mutation):
     menu.write_text('wait_ms 1980\nactivate ButtonMainToMultiplayer\nwait_ms 495\n'
                     'activate ButtonMultiplayerJoinGame\nwait_ms 495\n'
                     f'settext TextJoinAddress session:{session}\nsettext TextJoinPort {spec["port_block"][0]}\n'
-                    'activate ButtonMultiplayerConnect\nwait_state Failed\nwait_ms 495\n'
+                    'activate ButtonJoinAddressGo\nwait_state Failed\nwait_ms 495\n'
                     'assert_substate Landing\nassert_enabled ButtonMultiplayerJoinGame 1\n'
                     'assert_visible LabelMultiplayerLandingStatus 1\nassert_text_fits LabelMultiplayerLandingStatus\n'
                     'assert_inside_screen LabelMultiplayerLandingStatus\n'

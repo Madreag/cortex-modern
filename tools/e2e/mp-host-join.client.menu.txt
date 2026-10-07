@@ -9,12 +9,15 @@ settext TextMultiplayerName Joiner
 activate ButtonMultiplayerJoinGame
 wait_ms 660
 assert_substate JoinSetup
+activate ButtonJoinByAddress
+wait 4
 settext TextJoinAddress 127.0.0.1
 settext TextJoinPort {PORT}
 wait_ms 495
-activate ButtonMultiplayerConnect
+activate ButtonJoinAddressGo
 video_mark mp-lobby-client
 wait_connected 2
+wait_substate Lobby 30
 wait_ms 825
 assert_substate Lobby
 assert_text_fits LabelLobbyPlayer0
@@ -23,7 +26,7 @@ assert_no_overlap LabelLobbyPlayer0 LabelLobbyPlayer1
 assert_label LabelLobbyPlayer1 Joiner
 dump_lobby
 video_mark mp-details-read-only
-activate ButtonLobbyOptions
+activate ButtonLobbyEditSetup
 wait_ms 495
 assert_substate HostOptions
 assert_label LabelHostOptionsTitle M A T C H   D E T A I L S

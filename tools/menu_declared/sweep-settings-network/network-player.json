@@ -1,0 +1,36 @@
+{
+ "controls": [
+  {
+   "name": "RadioNetworkDelayAuto",
+   "enabled": true
+  },
+  {
+   "name": "RadioNetworkDelayFixed",
+   "enabled": true
+  },
+  {
+   "name": "TextNetworkIdleWait",
+   "enabled": true
+  },
+  {
+   "name": "TextNetworkPathHorizon",
+   "enabled": true
+  },
+  {
+   "name": "CheckboxNetworkAutoRepair",
+   "enabled": true
+  },
+  {
+   "name": "CheckboxNetworkToasts",
+   "enabled": true
+  },
+  {
+   "name": "CheckboxNetworkPrediction",
+   "enabled": true
+  },
+  {
+   "name": "CheckboxNetworkDiagnostics",
+   "enabled": true
+  }
+ ]
+}

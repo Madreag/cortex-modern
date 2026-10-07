@@ -223,7 +223,7 @@ settext TextMultiplayerName Host
 activate ButtonMultiplayerHostGame
 wait 15
 combo_select ComboHostActivity P4 Alpha Duel - Base.rte
-settext TextHostPort $Port
+setup_host_port $Port
 settext TextHostPlayers $players
 wait 10
 activate ButtonMultiplayerCreate
@@ -248,10 +248,10 @@ wait 15
 settext TextMultiplayerName $($inst.Spec.Name)
 activate ButtonMultiplayerJoinGame
 wait 15
-settext TextJoinAddress 127.0.0.1
+activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1
 settext TextJoinPort $Port
 wait 10
-activate ButtonMultiplayerConnect
+activate ButtonJoinAddressGo
 wait_connected $players 120
 assert_substate Lobby
 dump_lobby

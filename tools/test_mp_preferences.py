@@ -29,7 +29,7 @@ KEYS = [
     ("NetworkHostAutoRepair", "0"),
     ("NetworkHostIdleWaitMinutes", "0"),
     ("NetworkPathHorizonTicks", "45"),
-    ("NetworkHostVisibility", "Unlisted"),
+    ("NetworkHostGameListing", "Unlisted"),
 ]
 
 

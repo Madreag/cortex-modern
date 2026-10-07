@@ -7,6 +7,7 @@
 #include "UInputMan.h"
 #include "Timer.h"
 #include <SDL3/SDL.h>
+#include <array>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -24,6 +25,25 @@ namespace {
 	SDL_Joystick* scriptedPad = nullptr;
 	SDL_Gamepad* scriptedPadGamepad = nullptr;
 	std::vector<GUIInputWrapper*> automationInputs;
+	// The keys a scripted hand holds: every menu input reads them as it reads the keyboard.
+	std::array<bool, SDL_SCANCODE_COUNT> scriptedKeys{};
+
+	std::array<bool, SDL_SCANCODE_COUNT> MergedKeys() {
+		int count = 0;
+		const bool* physical = SDL_GetKeyboardState(&count);
+		std::array<bool, SDL_SCANCODE_COUNT> merged{};
+		for (int i = 0; i < count && i < SDL_SCANCODE_COUNT; ++i) merged[i] = physical[i] || scriptedKeys[i];
+		return merged;
+	}
+
+	int ScriptedModifiers() {
+		int modifier = GUIInput::ModNone;
+		if (scriptedKeys[SDL_SCANCODE_LSHIFT] || scriptedKeys[SDL_SCANCODE_RSHIFT]) modifier |= GUIInput::ModShift;
+		if (scriptedKeys[SDL_SCANCODE_LCTRL] || scriptedKeys[SDL_SCANCODE_RCTRL]) modifier |= GUIInput::ModCtrl;
+		if (scriptedKeys[SDL_SCANCODE_LALT] || scriptedKeys[SDL_SCANCODE_RALT]) modifier |= GUIInput::ModAlt;
+		if (scriptedKeys[SDL_SCANCODE_LGUI] || scriptedKeys[SDL_SCANCODE_RGUI]) modifier |= GUIInput::ModCommand;
+		return modifier;
+	}
 
 	bool EnsureScriptedPad() {
 		if (scriptedPad) return true;
@@ -55,8 +75,6 @@ namespace {
 	}
 
 	class ScriptedGUIInput final : public GUIInputWrapper {
-		std::array<bool, SDL_SCANCODE_COUNT> m_Keys{};
-		std::function<void()> m_Command;
 		GUIInputWrapper* m_Physical;
 		bool m_HoldsPad = false;
 		bool m_MenuPadHeld = false;
@@ -65,10 +83,7 @@ namespace {
 		~ScriptedGUIInput() override { ReleaseAutomationInput(); std::erase(automationInputs, this); }
 		void Update() override {
 			SetKeyJoyMouseCursor(m_Physical->GetKeyJoyMouseCursor());
-			int count = 0;
-			const bool* physical = SDL_GetKeyboardState(&count);
-			std::array<bool, SDL_SCANCODE_COUNT> merged{};
-			for (int i = 0; i < count && i < SDL_SCANCODE_COUNT; ++i) merged[i] = physical[i] || m_Keys[i];
+			const std::array<bool, SDL_SCANCODE_COUNT> merged = MergedKeys();
 			UpdateWithKeyboard(merged.data());
 			const bool padHeld = GetKeyJoyMouseCursor() && scriptedPadGamepad && SDL_GetGamepadButton(scriptedPadGamepad, SDL_GAMEPAD_BUTTON_SOUTH);
 			if (padHeld) {
@@ -78,33 +93,11 @@ namespace {
 				m_MouseButtonsEvents[0] = Released;
 			}
 			m_MenuPadHeld = padHeld;
-			if (m_Keys[SDL_SCANCODE_LSHIFT] || m_Keys[SDL_SCANCODE_RSHIFT]) m_Modifier |= ModShift;
-			if (m_Keys[SDL_SCANCODE_LCTRL] || m_Keys[SDL_SCANCODE_RCTRL]) m_Modifier |= ModCtrl;
-			if (m_Keys[SDL_SCANCODE_LALT] || m_Keys[SDL_SCANCODE_RALT]) m_Modifier |= ModAlt;
-			if (m_Keys[SDL_SCANCODE_LGUI] || m_Keys[SDL_SCANCODE_RGUI]) m_Modifier |= ModCommand;
-			if (auto command = std::exchange(m_Command, {})) command();
-		}
-		bool QueueAutomationCommand(std::function<void()> command) override {
-			if (!automationDriving) return false;
-			m_Command = std::move(command);
-			return true;
+			m_Modifier |= ScriptedModifiers();
 		}
 		bool QueueAutomationInput(const std::string& device, const std::string& name, bool down) override {
 			if (!automationDriving) return false;
-			if (device == "key") {
-				const SDL_Scancode key = SDL_GetScancodeFromName(name == "KP1" ? "Keypad 1" : name == "KPEnter" ? "Keypad Enter" : name.c_str());
-				if (key == SDL_SCANCODE_UNKNOWN) return false;
-				SDL_Event event{};
-				event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
-				event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
-				event.key.scancode = key;
-				event.key.key = SDL_GetKeyFromScancode(key, SDL_KMOD_NONE, false);
-				event.key.down = down;
-				int count = 0;
-				if ((down || !SDL_GetKeyboardState(&count)[key]) && !SDL_PushEvent(&event)) return false;
-				m_Keys[key] = down;
-				return true;
-			}
+			if (device == "key") return GUIInputWrapper::QueueScriptedKey(name, down);
 			if (device != "pad") return false;
 			if (!m_HoldsPad) {
 				if (!GUIInputWrapper::AcquireScriptedPad()) return false;
@@ -113,11 +106,10 @@ namespace {
 			return GUIInputWrapper::QueueScriptedPad(name, down);
 		}
 		void ReleaseAutomationInput() override {
-			m_Command = {};
 			for (int key = 1; key < SDL_SCANCODE_COUNT; ++key) {
-				if (m_Keys[key]) QueueAutomationInput("key", SDL_GetScancodeName(static_cast<SDL_Scancode>(key)), false);
+				if (scriptedKeys[key]) GUIInputWrapper::QueueScriptedKey(SDL_GetScancodeName(static_cast<SDL_Scancode>(key)), false);
 			}
-			m_Keys.fill(false);
+			scriptedKeys.fill(false);
 			if (m_HoldsPad) {
 				GUIInputWrapper::ReleaseScriptedPad();
 				m_HoldsPad = false;
@@ -129,6 +121,26 @@ namespace {
 void GUIInputWrapper::SetAutomationDriving(bool enabled) {
 	if (!enabled) for (auto* input : automationInputs) input->ReleaseAutomationInput();
 	automationDriving = enabled;
+}
+
+bool GUIInputWrapper::AutomationDriving() {
+	return automationDriving;
+}
+
+bool GUIInputWrapper::QueueScriptedKey(const std::string& name, bool down) {
+	if (!automationDriving) return false;
+	const SDL_Scancode key = SDL_GetScancodeFromName(name == "KP1" ? "Keypad 1" : name == "KPEnter" ? "Keypad Enter" : name.c_str());
+	if (key == SDL_SCANCODE_UNKNOWN) return false;
+	SDL_Event event{};
+	event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+	event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+	event.key.scancode = key;
+	event.key.key = SDL_GetKeyFromScancode(key, SDL_KMOD_NONE, false);
+	event.key.down = down;
+	int count = 0;
+	if ((down || !SDL_GetKeyboardState(&count)[key]) && !SDL_PushEvent(&event)) return false;
+	scriptedKeys[key] = down;
+	return true;
 }
 
 void GUIInputWrapper::AcquireJoystickBackgroundEvents() {
@@ -241,6 +253,13 @@ void GUIInputWrapper::ConvertKeyEvent(bool down, int guilibKey, float elapsedS) 
 }
 
 void GUIInputWrapper::Update() {
+	// A menu input reads a scripted hand's keys too; a player's own input in a match never does.
+	if (automationDriving && m_Player < 0) {
+		const std::array<bool, SDL_SCANCODE_COUNT> merged = MergedKeys();
+		UpdateWithKeyboard(merged.data());
+		m_Modifier |= ScriptedModifiers();
+		return;
+	}
 	int count = 0;
 	UpdateWithKeyboard(SDL_GetKeyboardState(&count));
 }

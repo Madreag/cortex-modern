@@ -1,0 +1,29 @@
+{
+ "controls": [
+  {
+   "name": "ComboHostNetVisibility",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "CheckHostPortMap",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "TextHostNetPort",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "ComboHostNetIce",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  },
+  {
+   "name": "ComboHostNetRelay",
+   "enabled": false,
+   "reason": "A joined player reads the host's setup; only the host changes it."
+  }
+ ]
+}

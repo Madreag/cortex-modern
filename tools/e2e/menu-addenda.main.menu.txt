@@ -55,6 +55,10 @@ observe assert_settings_page Network
 observe assert_visible CollectionBoxVideoSettings 0
 observe assert_not_drawn CollectionBoxVideoSettings
 wait_ms 350
+select_settings_page Network:Basics
+wait 3
+activate ButtonNetworkAdvanced
+wait 4
 select_settings_page Network:Chat
 video_mark transition-network-chat
 screenshot transition-network-chat-first
@@ -62,6 +66,10 @@ dump_player_options
 screenshot transition-network-chat-settled
 observe assert_settings_page Network:Chat
 wait_ms 350
+select_settings_page Network:Basics
+wait 3
+activate ButtonNetworkAdvanced
+wait 4
 select_settings_page Network:Recovery
 video_mark transition-network-recovery
 screenshot transition-network-recovery-first
@@ -69,6 +77,10 @@ dump_player_options
 screenshot transition-network-recovery-settled
 observe assert_settings_page Network:Recovery
 wait_ms 350
+select_settings_page Network:Basics
+wait 3
+activate ButtonNetworkAdvanced
+wait 4
 select_settings_page Network:Files
 video_mark transition-network-files
 screenshot transition-network-files-first
@@ -76,6 +88,10 @@ dump_player_options
 screenshot transition-network-files-settled
 observe assert_settings_page Network:Files
 wait_ms 350
+select_settings_page Network:Basics
+wait 3
+activate ButtonNetworkAdvanced
+wait 4
 select_settings_page Network:Internet
 video_mark transition-network-internet
 screenshot transition-network-internet-first
@@ -83,6 +99,10 @@ dump_player_options
 screenshot transition-network-internet-settled
 observe assert_settings_page Network:Internet
 wait_ms 350
+select_settings_page Network:Basics
+wait 3
+activate ButtonNetworkAdvanced
+wait 4
 select_settings_page Network:Connection
 video_mark transition-network-connection
 screenshot transition-network-connection-first
@@ -90,6 +110,10 @@ dump_player_options
 screenshot transition-network-connection-settled
 observe assert_settings_page Network:Connection
 wait_ms 350
+select_settings_page Network:Basics
+wait 3
+activate ButtonNetworkAdvanced
+wait 4
 select_settings_page Network:Player
 video_mark transition-network-player
 screenshot transition-network-player-first
@@ -102,31 +126,32 @@ wait_ms 250
 activate ButtonMainToMultiplayer
 video_mark addenda-landing
 wait_ms 250
-observe assert_label LabelMultiplayerBlurb LAN, direct address and internet games.
+observe assert_label LabelMultiplayerBlurb Play online or on the same network.
 dump_host_options
 activate ButtonMultiplayerHostGame
 video_mark addenda-host
 screenshot transition-host-first
 dump_host_options
-observe assert_no_overlap CheckHostPortMap ButtonHostOptions
-observe assert_text_fits CheckHostPortMap
+observe assert_no_overlap ButtonHostOptions ButtonMultiplayerCreate
+observe assert_text_fits LabelHostActivityAbout
 observe assert_text_fits ComboHostActivity
 observe assert_not_drawn MultiplayerLandingPanel
 observe assert_label ComboHostActivity Skirmish Defense
 wait_ms 400
-combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+combo_select ComboHostActivity P4 Alpha Duel
 wait_ms 250
-settext TextHostPort {PORT}
-settext TextHostPlayers 3
+setup_host_port {PORT}
+combo_select ComboHostPlayers 3
 activate ButtonMultiplayerCreate
 wait_ms 1500
 video_mark addenda-lobby
-observe assert_label LabelMultiplayerStatus Waiting for 2 players to join
-observe assert_label LabelMultiplayerStatus LAN address:
+observe assert_label LabelMultiplayerStatus Waiting for 2 more players to join
 dump_lobby
 dump_host_options
 activate ButtonLobbyOptions
 wait_ms 350
+activate TabHostPageSeats
+wait_ms 300
 observe assert_text_fits LabelHostSeatHeader
 observe assert_not_drawn MultiplayerLobbyPanel
 dump_host_options

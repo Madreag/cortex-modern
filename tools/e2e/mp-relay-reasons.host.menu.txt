@@ -7,20 +7,23 @@ settext TextMultiplayerName Host
 activate ButtonMultiplayerHostGame
 wait_ms 450
 assert_substate HostSetup
-combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+combo_select ComboHostActivity P4 Alpha Duel
 wait_ms 500
-settext TextHostPort {PORT}
-settext TextHostPlayers 2
+setup_host_port {PORT}
+combo_select ComboHostPlayers 2
 wait_ms 495
 activate ButtonHostOptions
 wait_ms 450
-activate TabHostPageNetwork
+activate TabHostPageConnection
 wait_ms 600
-activate TabHostNetTuning
+activate TabHostPageTiming
 wait_ms 600
-combo_select ComboHostNetVisibility Internet: Listed
+activate TabHostPageConnection
+wait_ms 600
+combo_select ComboHostNetVisibility Public (default)
 wait_ms 900
-assert_label ComboHostNetVisibility Listed
+assert_label ComboHostNetVisibility Public (default)
+assert_enabled ButtonHostOptApply 0
 activate ButtonHostOptBack
 wait_ms 450
 assert_substate HostSetup

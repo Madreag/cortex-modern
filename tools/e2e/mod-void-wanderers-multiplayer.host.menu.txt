@@ -13,12 +13,12 @@ wait_ms 450
 assert_substate HostSetup
 video_mark vw-mp-activity-picker
 dump_host_options
-observe combo_select ComboHostActivity Void Wanderers - VoidWanderers.rte
+observe combo_select ComboHostActivity Void Wanderers
 wait_ms 900
-assert_label ComboHostActivity Void Wanderers - VoidWanderers.rte
+assert_label ComboHostActivity Void Wanderers
 wait_ms 500
-settext TextHostPort {PORT}
-settext TextHostPlayers 2
+setup_host_port {PORT}
+combo_select ComboHostPlayers 2
 wait_ms 495
 activate ButtonHostOptions
 wait_ms 450
@@ -33,9 +33,9 @@ wait_ms 660
 assert_visible CollectionBoxHostPageRules 1
 dump_host_options
 video_mark vw-mp-options-network
-activate TabHostPageNetwork
+activate TabHostPageConnection
 wait_ms 660
-assert_visible CollectionBoxHostPageNetwork 1
+assert_visible CollectionBoxHostPageConnection 1
 dump_host_options
 video_mark vw-mp-options-recovery
 activate TabHostPageRecovery

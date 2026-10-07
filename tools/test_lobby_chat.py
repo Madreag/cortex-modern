@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_sim_test import make_run, seed_settings  # noqa: E402
 from compare_sim_traces import strict_compare  # noqa: E402
+from test_menu_readback import spread, managed_case
 
 CHAT_LINE = re.compile(r"^\[chat\] tick=(\d+) from=(\d+) scope=(all|team) text=(.*)$")
 SEND_LINE = re.compile(r"^\[chat-send\] tick=(\d+) scope=(all|team) ok=([01]) text=(.*)$")
@@ -71,13 +72,17 @@ def read_log(out: Path) -> str:
     return text
 
 
+@managed_case
 def run_pair(repo: Path, root: Path, port: int, ticks: int, scripts: dict) -> dict:
     root.mkdir(parents=True, exist_ok=True)
     script_paths = {}
     for who, text in scripts.items():
         script_paths[who] = root / f"{who}_chat.txt"
         script_paths[who].write_text(text, encoding="utf-8")
-    runs = {who: make_run(repo, peer_args(root, who, port, ticks, script_paths.get(who)), root / who, 300)
+    execution = spread.prepare_case(repo, root,
+        [spread.Peer("host", share_ok=False, os="windows", reviewed=True), spread.Peer("client", share_ok=False, os="any")],
+        spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
+    runs = {who: execution.make_run(repo, peer_args(root, who, port, ticks, script_paths.get(who)), root / who, 300)
             for who in ("host", "client")}
     # The delay box is read-only under the auto policy; the floor the host sends is a setting.
     seed_settings(runs["host"], {"NetworkInputDelayFrames": 3})
@@ -99,7 +104,9 @@ def run_pair(repo: Path, root: Path, port: int, ticks: int, scripts: dict) -> di
     for run in runs.values():
         run.close()
     logs = {who: read_log(root / who) for who in ("host", "client")}
-    return {"records": records, "logs": logs, "argvs": {who: peer_args(root, who, port, ticks, script_paths.get(who))
+    receipt = execution.result()
+    return {"topology": "spread", "peer_boxes": receipt["peer_boxes"], "spread": receipt,
+            "records": records, "logs": logs, "argvs": {who: peer_args(root, who, port, ticks, script_paths.get(who))
                                                         for who in ("host", "client")}}
 
 
@@ -118,7 +125,7 @@ def shots_menu_script(who: str, port: int, res_tag: str) -> str:
     head = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {who}\n"
     if who == "Host":
         return (head + "activate ButtonMultiplayerHostGame\nwait 10\n"
-                f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
+                f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait_connected 2\n"
                 "chat all lobby hello at minimum viewport\nwait 15\n"
                 "chat team for my team only\nwait 15\n"
@@ -132,8 +139,8 @@ def shots_menu_script(who: str, port: int, res_tag: str) -> str:
                 "assert_label LabelLobbyChatNewest lobby closing marker\n"
                 "dump_lobby\nexit\n")
     return (head + "activate ButtonMultiplayerJoinGame\nwait 10\n"
-            f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
-            "activate ButtonMultiplayerConnect\nwait_connected 2\nwait 20\n"
+            f"activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
+            "activate ButtonJoinAddressGo\nwait_connected 2\nwait 20\n"
             "chat all hello from the client seat\nwait 60\nexit\n")
 
 
@@ -159,7 +166,7 @@ def game_version(repo: Path) -> str:
 def mismatch_menu_script(port: int, res_tag: str) -> str:
     return (f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName Host\n"
             f"activate ButtonMultiplayerHostGame\nwait 10\n"
-            f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
+            f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
             f"activate ButtonMultiplayerCreate\n"
             f"wait_error could not join\n"
             f"chat all lobby line beside the error\nwait 10\n"
@@ -168,6 +175,7 @@ def mismatch_menu_script(port: int, res_tag: str) -> str:
             f"assert_error could not join\ndump_lobby\nexit\n")
 
 
+@managed_case
 def run_mismatch_shots(repo: Path, root: Path, port: int) -> dict:
     """The lobby state the viewport lanes use: five 64-byte refused module names plus a live
     port-map row, captured at 640x360 and 960x540 with the chat panel populated."""
@@ -192,12 +200,15 @@ def run_mismatch_shots(repo: Path, root: Path, port: int) -> dict:
             joiner_script = arm / "joiner.txt"
             joiner_script.write_text(
                 "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName Guest\n"
-                "activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\n"
-                f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\nwait 80\nexit\n",
+                "activate ButtonMultiplayerJoinGame\nwait 10\nactivate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
+                f"settext TextJoinPort {port}\nactivate ButtonJoinAddressGo\nwait 80\nexit\n",
                 encoding="utf-8")
+            execution = spread.prepare_case(repo, arm,
+                [spread.Peer("host", share_ok=False, os="windows", reviewed=True), spread.Peer("joiner", share_ok=False, os="any")],
+                spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
             runs = {
-                "host": make_run(repo, host_args, arm / "host", 240),
-                "joiner": make_run(repo, ["-menu-script", str(joiner_script)], arm / "joiner", 240),
+                "host": execution.make_run(repo, host_args, arm / "host", 240),
+                "joiner": execution.make_run(repo, ["-menu-script", str(joiner_script)], arm / "joiner", 240),
             }
             set_resolution(runs["host"].cwd, *res)
             seed_settings(runs["host"], {"NetworkInputDelayFrames": 3})
@@ -220,6 +231,7 @@ def run_mismatch_shots(repo: Path, root: Path, port: int) -> dict:
             joiner.join()
             for run in runs.values():
                 run.close()
+            execution.close()
             host_log = read_log(arm / "host")
             shots_dir = arm / "host" / "runtime" / "ScreenShots"
             found = sorted(shots_dir.glob(f"lobby_chat_mismatch_{res_tag}*.png"),
@@ -243,6 +255,7 @@ def run_mismatch_shots(repo: Path, root: Path, port: int) -> dict:
     return result
 
 
+@managed_case
 def run_shots(repo: Path, root: Path, port: int) -> dict:
     """One lobby at 640x360 and one at 960x540: the host's panel carries real received lines."""
     root.mkdir(parents=True, exist_ok=True)
@@ -250,12 +263,15 @@ def run_shots(repo: Path, root: Path, port: int) -> dict:
     for res_tag, res in (("640x360", (640, 360)), ("960x540", (960, 540))):
         arm = root / res_tag
         runs, records = {}, {}
+        execution = spread.prepare_case(repo, arm,
+            [spread.Peer("host", share_ok=False, os="windows", reviewed=True), spread.Peer("client", share_ok=False, os="any")],
+            spread.Match(port, parameters={"lane": "menus", "network": "direct"}))
         for who in ("host", "client"):
             script = arm / f"{who}.txt"
             arm.mkdir(parents=True, exist_ok=True)
             script.write_text(shots_menu_script("Host" if who == "host" else "Guest", port, res_tag),
                               encoding="utf-8")
-            runs[who] = make_run(repo, ["-menu-script", str(script), "-net-match-report", str(arm / f"{who}_report.json")],
+            runs[who] = execution.make_run(repo, ["-menu-script", str(script), "-net-match-report", str(arm / f"{who}_report.json")],
                                  arm / who, 240)
             if who == "host":
                 set_resolution(runs[who].cwd, *res)
@@ -275,6 +291,7 @@ def run_shots(repo: Path, root: Path, port: int) -> dict:
         client.join()
         for run in runs.values():
             run.close()
+        execution.close()
         host_log = read_log(arm / "host")
         # SaveScreenToPNG stamps the name with a timestamp; take the newest match.
         shots_dir = arm / "host" / "runtime" / "ScreenShots"
@@ -296,6 +313,14 @@ def run_shots(repo: Path, root: Path, port: int) -> dict:
     return result
 
 
+def spread_result(root, result):
+    paths = [root / "spread-result.json", *root.glob("*/spread-result.json"), *root.glob("*/*/spread-result.json")]
+    receipts = {str(path.relative_to(root)): spread.read_json(path, {}) for path in paths if path.is_file()}
+    result.update(topology="spread", peer_boxes={name: row.get("peer_boxes", {}) for name, row in receipts.items()},
+                  spread=receipts, proof=result["pass"])
+
+
+@managed_case
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -304,7 +329,14 @@ def main() -> int:
     parser.add_argument("--ticks", type=int, default=300)
     parser.add_argument("--shots", action="store_true",
                         help="run only the menu-script screenshot arms (lobby at 640x360 and 960x540)")
+    if spread:
+        spread.add_arguments(parser)
     options = parser.parse_args()
+    if not spread:
+        parser.error("lobby chat requires the shared spread executor")
+    if getattr(options, "spread", False) or not getattr(options, "peer_boxes", None):
+        parser.error(spread.NO_BOX_NAMED)
+    spread.configure(options)
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     result = {"pass": False, "checks": {}, "details": {}}
@@ -316,6 +348,7 @@ def main() -> int:
             result["checks"].update({f"mismatch_{k}": v for k, v in mismatch["checks"].items()})
             result["details"]["mismatch"] = mismatch["details"]
             result["pass"] = all(result["checks"].values())
+            spread_result(root, result)
             (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
             print(json.dumps({"pass": result["pass"], "failed": [k for k, v in result["checks"].items() if not v],
                               "out": str(root)}), flush=True)
@@ -359,7 +392,10 @@ def main() -> int:
 
         # Refusal arm: the chat script is session traffic - outside the headless match it is refused.
         refusal_out = root / "refusal"
-        refusal_run = make_run(options.repo, ["-net-chat-script", root / "chat" / "host_chat.txt"], refusal_out, 60)
+        refusal_case = spread.prepare_case(options.repo, root,
+            [spread.Peer("host", share_ok=False, os="windows", reviewed=True, output_name="refusal")],
+            spread.Match(options.port + 4, parameters={"lane": "menus"}))
+        refusal_run = refusal_case.make_run(options.repo, ["-net-chat-script", root / "chat" / "host_chat.txt"], refusal_out, 60)
         try:
             refusal_record = refusal_run.start().finish()
         finally:
@@ -374,6 +410,7 @@ def main() -> int:
         result["pass"] = all(result["checks"].values())
     except Exception as error:  # noqa: BLE001
         result["error"] = str(error)
+    spread_result(root, result)
     (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps({"pass": result["pass"], "error": result.get("error"),
                       "failed": [k for k, v in result["checks"].items() if not v], "out": str(root)}), flush=True)
