@@ -1347,6 +1347,8 @@ namespace RTE {
 		void UpdateIceConnectingLine();
 		/// Keeps admission refusals distinct from a failed direct connection.
 		static std::string SetupFailureStatus(const NetSession* session, bool noDirectRoute, bool relayFailed = false);
+		static std::string SetupFailureDetail(const NetSession* session, const std::string& detail);
+		static std::string LobbyInputDelayText(const NetMatchConfig& config, const NetLobbySnapshot& snapshot, uint8_t localPeerId);
 		/// The ICE virtual port a host listens on and a joiner dials.
 		static constexpr int c_IceVirtualPort = 41011;
 		/// The ICE virtual port every peer's handover listener takes, and a survivor dials on its successor.
@@ -1421,6 +1423,9 @@ namespace RTE {
 		friend bool TestRecoveredDirectoryBinding(std::string* error);
 		friend bool TestLobbyDirectoryLeaseRecovery(std::string* error);
 		friend bool TestLobbyDirectoryStatus(std::string* error);
+		friend bool TestJoiningFailureDetail(std::string* error);
+		friend bool TestLobbyPingReadout(std::string* error);
+		friend bool TestLobbyDepartureNotice(std::string* error);
 		friend bool TestSignalPumpInitialCredential(std::string* error);
 		friend bool TestDirectoryCapacityFallback(std::string* error);
 		friend bool TestStaleWorldImageRecaptures(std::string* error);

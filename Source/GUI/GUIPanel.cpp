@@ -104,6 +104,7 @@ void GUIPanel::Clear() {
 	m_Enabled = true;
 
 	m_Parent = nullptr;
+	m_MouseWheelTarget = nullptr;
 	m_Children.clear();
 
 	m_Manager = nullptr;

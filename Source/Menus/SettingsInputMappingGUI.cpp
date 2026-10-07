@@ -25,6 +25,9 @@ SettingsInputMappingGUI::SettingsInputMappingGUI(GUIControlManager* parentContro
 
 	m_InputMapScrollingBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("CollectionBoxScrollingMappingBox"));
 	m_InputMapScrollingBoxScrollbar = dynamic_cast<GUIScrollbar*>(m_GUIControlManager->GetControl("ScrollbarScrollingMappingBox"));
+	if (auto* clip = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("CollectionBoxScrollingMappingClipBox"))) {
+		clip->SetMouseWheelTarget(m_InputMapScrollingBoxScrollbar);
+	}
 	m_InputMapScrollingBoxScrollbar->SetMaximum(m_InputMapScrollingBox->GetHeight());
 	m_InputMapScrollingBoxScrollbar->SetPageSize(m_InputMapScrollingBoxScrollbar->GetMaximum() / 2);
 	m_LastInputMapScrollingBoxScrollbarValue = m_InputMapScrollingBoxScrollbar->GetValue();

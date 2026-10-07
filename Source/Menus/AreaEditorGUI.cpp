@@ -272,9 +272,9 @@ void AreaEditorGUI::Update() {
 	// Make sure we have a picked area if there are any areas at all!
 	if (!m_pCurrentArea && !g_SceneMan.GetScene()->m_AreaList.empty())
 		m_pCurrentArea = g_SceneMan.GetScene()->m_AreaList.front();
-	// If there are no Area:s, AreaEditor should detect it and force user to create a new one with a dialog
-	//    else
-	//        m_EditorGUIMode = PREADDMOVEBOX;
+	if (!m_pCurrentArea && m_EditorGUIMode == PREADDMOVEBOX && !m_PieMenu->IsEnabled()) {
+		g_FrameMan.SetScreenText("No Areas yet. Open the pie menu to create an Area, load a Scene or leave the editor.", g_ActivityMan.GetActivity()->ScreenOfPlayer(m_pController->GetPlayer()));
+	}
 
 	/////////////////////////////////////
 	// ADDING or MOVING BOX MODE
@@ -471,8 +471,8 @@ void AreaEditorGUI::Update() {
 }
 
 void AreaEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) const {
-	// Done or can't, so don't draw the UI
-	if (!m_pCurrentArea || m_EditorGUIMode == DONEEDITING)
+	// The pie menu remains available even before the scene has its first Area.
+	if (m_EditorGUIMode == DONEEDITING || (!m_pCurrentArea && m_EditorGUIMode == INACTIVE))
 		return;
 
 	// List to capture scene-wrapped boxes
@@ -494,8 +494,8 @@ void AreaEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) const {
 
 	// Draw the Box:es defined for the currently selected Area
 	Vector adjCorner;
-	const std::vector<Box*>* pBoxList = &(m_pCurrentArea->m_BoxList);
-	if (m_FullFeatured) {
+	if (m_FullFeatured && m_pCurrentArea) {
+		const std::vector<Box*>* pBoxList = &(m_pCurrentArea->m_BoxList);
 		// Set the drawin mode to be transparent and use the
 		//        g_FrameMan.SetTransTableFromPreset(m_BlinkTimer.AlternateReal(333) || m_EditorGUIMode == PLACINGOBJECT ? TransparencyPreset::LessTrans : TransparencyPreset::HalfTrans);
 		g_FrameMan.SetTransTableFromPreset(TransparencyPreset::MoreTrans);

@@ -41,6 +41,7 @@ namespace RTE {
 
 		/// Causes a refresh of the save files.
 		void Refresh();
+		GUIControlManager* AutomationManager() const { return m_GUIControlManager.get(); }
 
 		/// Draws the SaveLoadMenuGUI to the screen.
 		void Draw() const;

@@ -5072,7 +5072,7 @@ namespace RTE {
 				return false;
 			}
 			const std::string missing = NetHostSeatRemovalRefusal(NetMatchServiceState::Starting, false, 2, "Kick");
-			if (missing != "Kick: no moderation row for peer 2 (Starting).") {
+			if (missing != "Kick: no player holds this seat.") {
 				*error = "the seat miss has the wrong phase or peer: " + missing;
 				return false;
 			}
