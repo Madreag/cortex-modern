@@ -99,20 +99,27 @@ namespace {
 }
 
 struct RTE::CheckpointArena {
+	std::atomic<size_t> owners{1};
 	std::pmr::monotonic_buffer_resource storage{16384};
+	void RetainBlock() { owners.fetch_add(1, std::memory_order_relaxed); }
+	void ReleaseBlock() noexcept { if (owners.fetch_sub(1, std::memory_order_acq_rel) == 1) delete this; }
 };
 
 namespace {
 	template<class T> struct CheckpointAllocator {
 		using value_type = T;
-		std::shared_ptr<CheckpointArena> arena;
-		explicit CheckpointAllocator(std::shared_ptr<CheckpointArena> owner) : arena(std::move(owner)) {}
+		CheckpointArena* arena;
+		explicit CheckpointAllocator(CheckpointArena* owner) : arena(owner) {}
 		template<class U> CheckpointAllocator(const CheckpointAllocator<U>& other) : arena(other.arena) {}
 		T* allocate(size_t count) {
 			if (count > std::numeric_limits<size_t>::max() / sizeof(T)) throw std::bad_alloc();
-			return static_cast<T*>(arena->storage.allocate(count * sizeof(T), alignof(T)));
+			T* block = static_cast<T*>(arena->storage.allocate(count * sizeof(T), alignof(T)));
+			arena->RetainBlock();
+			return block;
 		}
-		void deallocate(T*, size_t) noexcept {} // All blocks belong to the arena.
+		// A block retains its storage through destruction of its control block.
+		// Allocator copies carry an address, so rebinding makes no ownership traffic.
+		void deallocate(T*, size_t) noexcept { arena->ReleaseBlock(); }
 		template<class U> bool operator==(const CheckpointAllocator<U>& other) const noexcept { return arena == other.arena; }
 	};
 }
@@ -586,7 +593,7 @@ std::string CheckpointText::SharedText() const {
 
 CheckpointBuffer::AllocationScope::AllocationScope(bool enabled) {
 	if (enabled && !s_Arena) {
-		s_Arena = std::make_shared<CheckpointArena>();
+		s_Arena = std::shared_ptr<CheckpointArena>(new CheckpointArena, [](CheckpointArena* arena) { arena->ReleaseBlock(); });
 		m_Entered = true;
 	}
 }
@@ -629,7 +636,7 @@ void CheckpointBuffer::SizedRunBegin() { Copy(CaptureValue::SizedRunBegin); }
 void CheckpointBuffer::SizedRunEnd() { Copy(CaptureValue::SizedRunEnd); }
 
 CheckpointText CheckpointBuffer::Finish() {
-	auto data = m_Arena ? std::allocate_shared<CheckpointText::Data>(CheckpointAllocator<CheckpointText::Data>(m_Arena), &m_Arena->storage)
+	auto data = m_Arena ? std::allocate_shared<CheckpointText::Data>(CheckpointAllocator<CheckpointText::Data>(m_Arena.get()), &m_Arena->storage)
 	                    : std::make_shared<CheckpointText::Data>();
 	data->values = std::move(m_Values);
 	data->children = std::move(m_Children);
@@ -901,6 +908,31 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		const CheckpointText captured = CheckpointWriter::CaptureNative(save);
 		value = 91; binary.assign("changed");
 		check(captured.Text() == reference, "owned_checkpoint_copies_native_values");
+		{
+			CheckpointText frozen;
+			std::string full, shared;
+			{
+				std::unordered_map<std::string, float> numbers{{"z", -0.0F}, {std::string("a\0b", 3), std::bit_cast<float>(uint32_t{0x7fc01234})}, {"a", 1.25F}};
+				std::unordered_map<uint64_t, int64_t> integers{{std::numeric_limits<uint64_t>::max(), std::numeric_limits<int64_t>::min()}, {0, 17}, {31, -7}};
+				std::unordered_map<int, std::string> peers{{9, std::string("x\0y\xff", 4)}, {-7, "first"}, {0, ""}};
+				std::unordered_map<std::string, int> empty;
+				const auto saveMaps = [&] {
+					CheckpointWriter writer("OwnedMaps1");
+					writer(numbers, integers, empty);
+					writer.PerPeer(peers);
+					return writer.Text();
+				};
+				const CheckpointText ordinary = CheckpointWriter::CaptureNative(saveMaps);
+				full = ordinary.Text(); shared = ordinary.SharedText();
+				{
+					CheckpointWriter::BatchScope batch(true);
+					frozen = CheckpointWriter::CaptureNative(saveMaps);
+				}
+				numbers.clear(); integers.clear(); peers.clear(); empty.emplace("changed", 77);
+			}
+			const auto actual = std::async(std::launch::async, [frozen] { return std::pair{frozen.Text(), frozen.SharedText()}; }).get();
+			check(actual.first == full && actual.second == shared, "owned_unordered_maps_sort_after_source_death_and_keep_full_and_shared_bytes");
+		}
 		{
 			int64_t integer = std::numeric_limits<int64_t>::min();
 			bool flag = true;

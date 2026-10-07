@@ -167,7 +167,31 @@ namespace RTE {
 		template <class T> void Value(const std::deque<T>& values) { Value(values.size()); for (const auto& value: values) Value(value); }
 		template <class T> void Value(const std::set<T>& values) { Value(values.size()); for (const auto& value: values) Value(value); }
 		template <class K, class V> void Value(const std::map<K, V>& values) { Value(values.size()); for (const auto& [key, value]: values) (*this)(key, value); }
-		template <class K, class V> void Value(const std::unordered_map<K, V>& values) { Value(std::map<K, V>(values.begin(), values.end())); }
+		template <class K, class V> void Value(const std::unordered_map<K, V>& values) {
+			constexpr bool plainKey = (std::is_integral_v<K> && !std::is_same_v<K, bool>) || std::is_enum_v<K> || std::is_same_v<K, std::string>;
+			constexpr bool plainValue = (std::is_integral_v<V> && !std::is_same_v<V, bool>) || std::is_enum_v<V> || std::is_same_v<V, float> || std::is_same_v<V, double> || std::is_same_v<V, std::string>;
+			if constexpr (plainKey && plainValue) {
+				if (m_Recording && BatchEnabled()) {
+					if (values.empty()) { Value(size_t{0}); return; }
+					std::vector<std::pair<K, V>> owned(values.begin(), values.end());
+					size_t bytes = owned.size() * sizeof(std::pair<K, V>);
+					if constexpr (std::is_same_v<K, std::string>) for (const auto& entry: owned) bytes += entry.first.size();
+					if constexpr (std::is_same_v<V, std::string>) for (const auto& entry: owned) bytes += entry.second.size();
+					AppendFields(CheckpointText::Deferred([owned = std::move(owned)] {
+						// The original iteration order reaches the same ordered-map constructor,
+						// but every key and value belongs to this image before sorting starts.
+						const std::map<K, V> ordered(owned.begin(), owned.end());
+						return CaptureNative([&ordered] {
+							CheckpointWriter writer(FieldsOnly{});
+							writer(ordered);
+							return writer.Text();
+						}).Text();
+					}, bytes));
+					return;
+				}
+			}
+			Value(std::map<K, V>(values.begin(), values.end()));
+		}
 		template <class T> requires requires(const T& value) { value.SaveCheckpoint(); }
 		void Value(const T& value) {
 			if (m_Recording && BatchEnabled() && s_Cache && s_Cache->IsTransient()) {
