@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -208,6 +209,81 @@ def check_streamed_capture(results, scratch):
     ffmpeg = driver.find_ffmpeg()
     ok &= row(results, "stream/every-peer-gets-the-encoder", (not ffmpeg) or (environment.get("CCCP_TEST_RECORD_ENCODER") == str(ffmpeg) and
               environment.get("CCCP_TEST_RECORD_CODEC") in ("h264_nvenc", "h264_videotoolbox", "libx264")))
+    return ok
+
+
+def check_streamed_pictures(results, scratch):
+    """Long, sparse selections keep their frame identities, cached pictures and decoder failures."""
+    from PIL import Image
+    ffmpeg = driver.find_ffmpeg()
+    if not ffmpeg:
+        return row(results, "stream/picture-decoder-present", False, driver.missing_ffmpeg())
+    root = scratch / "streamed-pictures"
+    root.mkdir(parents=True)
+    video = root / "colors.mkv"
+    pixels = b"".join(bytes((frame % 256, frame // 256, 42)) * 16 * 16 for frame in range(5000))
+    encoded = subprocess.run([ffmpeg, "-nostdin", "-loglevel", "error", "-y", "-f", "rawvideo", "-pixel_format", "rgb24",
+                              "-video_size", "16x16", "-framerate", "30", "-i", "pipe:0", "-c:v", "ffv1", str(video)],
+                             input=pixels, capture_output=True)
+    ok = row(results, "stream/picture-fixture-encoded", encoded.returncode == 0, encoded.stderr.decode(errors="replace"))
+    if not ok:
+        return False
+    frames = root / "frames"
+    frames.mkdir()
+    rows = [{"frame": 1000 + index, "video_frame": index * 3} for index in reversed(range(128))]
+    cached = frames / "frame-001064.png"
+    Image.new("RGB", (16, 16), (5, 6, 7)).save(cached)
+    before = cached.read_bytes()
+    driver.extract_frames(ffmpeg, video, rows, frames)
+    paths = list(frames.glob("frame-*.png"))
+    ok &= row(results, "stream/long-selection-keeps-every-requested-picture", len(paths) == len(rows))
+    exact = all((frames / f"frame-{value['frame']:06d}.png").is_file() and
+                Image.open(frames / f"frame-{value['frame']:06d}.png").getpixel((0, 0)) ==
+                (value["video_frame"] % 256, value["video_frame"] // 256, 42)
+                for value in rows if value["frame"] != 1064)
+    ok &= row(results, "stream/sparse-unsorted-pictures-keep-their-indexed-identity", exact)
+    ok &= row(results, "stream/existing-picture-is-kept-byte-for-byte", cached.read_bytes() == before)
+    error = ""
+    with patch.object(driver.subprocess, "run", return_value=SimpleNamespace(returncode=7, stderr="decoder refused the packet")):
+        try:
+            driver.extract_frames(ffmpeg, video, [{"frame": 2000, "video_frame": 1}], root / "decoder-error")
+        except RuntimeError as failure:
+            error = str(failure)
+    ok &= row(results, "stream/decoder-failure-is-reported-by-name", "7" in error and "decoder refused the packet" in error)
+    error = ""
+    try:
+        driver.extract_frames(ffmpeg, video, [{"frame": 3000, "video_frame": 999999}], root / "missing-picture")
+    except RuntimeError as failure:
+        error = str(failure)
+    ok &= row(results, "stream/a-missing-indexed-picture-is-a-failure", "missing" in error and "3000" in error)
+    peer_root = root / "retained" / "host"
+    peer_root.mkdir(parents=True)
+    prior_encode = {"encoded": True, "timing": "engine-slots", "path": str(video), "fps": 30}
+    peer = {"peer": "host", "root": str(peer_root), "video_dir": str(peer_root / "video"), "video": str(video),
+            "encode": prior_encode, "index": [dict(value, wall_ms=index * 100, screen="game", sim_tick=index)
+                                                for index, value in enumerate(reversed(rows))]}
+    original = video.read_bytes()
+    error = ""
+    with patch.object(driver, "encode", side_effect=AssertionError("the retained video must not be encoded again")):
+        try:
+            driver.render({"peers": [peer]}, 30, 15)
+        except AssertionError as failure:
+            error = str(failure)
+    ok &= row(results, "stream/missing-sheet-keeps-the-existing-video", not error and video.read_bytes() == original and
+              peer.get("video") == str(video) and peer.get("encode") == prior_encode)
+    ok &= row(results, "stream/missing-sheet-uses-the-unchanged-sampling", bool(peer.get("sheet", {}).get("written")) and
+              peer["sheet"].get("every") == 15 and peer["sheet"].get("tiles") == 9)
+    many = [{"frame": 4000 + index, "video_frame": index} for index in range(4096)]
+    long_frames = root / "long-selection"
+    error = ""
+    try:
+        driver.extract_frames(ffmpeg, video, many, long_frames)
+    except (OSError, RuntimeError) as failure:
+        error = str(failure)
+    exact = not error and len(list(long_frames.glob("frame-*.png"))) == len(many) and all(
+        Image.open(long_frames / f"frame-{4000 + index:06d}.png").getpixel((0, 0)) == (index % 256, index // 256, 42)
+        for index in (0, 2048, 4095))
+    ok &= row(results, "stream/long-selection-crosses-command-line-limits-without-loss", exact, error)
     return ok
 
 
@@ -849,8 +925,8 @@ def check_launch_contract(results, scratch):
     stage = scratch / "launch"
     stage.mkdir()
     scenario = {"scripts": {"probe.json": json.dumps({"schema": 1, "steps": [
-        {"op": "wait_file", "path": "{PROBE_DIR_client}/done.json"}]}), "menu.txt": "exit\n"}}
-    peer = {"probe": "probe.json", "menu_script": "menu.txt", "args": ["-net-port", "{PORT}"]}
+        {"op": "wait_file", "path": "{PROBE_DIR_client}/done.json"}]}), "menu.txt": "exit\n", "input.txt": "1 key_down A\n"}}
+    peer = {"probe": "probe.json", "menu_script": "menu.txt", "input_script": "input.txt", "args": ["-net-port", "{PORT}"]}
     tokens = {"PROBE_DIR_client": r"D:\mx\client-stage\probe", "VIDEO": stage / "video",
               "MENU_SCRIPT": stage / "menu.txt", "PORT": 49400}
     env = driver.stage_peer(scenario, peer, stage, tokens)
@@ -861,6 +937,10 @@ def check_launch_contract(results, scratch):
     ok &= row(results, "launch/menu-script-passed",
               args[args.index("-menu-script") + 1] == str(stage / "menu.txt"), str(args))
     ok &= row(results, "launch/headless", env["CCCP_HEADLESS"] == "1")
+    for leaf, expected in (("menu.txt", b"exit\n"), ("input.txt", b"1 key_down A\n"),
+                           ("screen-watches.txt", driver.SCREEN_WATCHES.encode("utf-8"))):
+        ok &= row(results, "launch/portable-line-endings-" + leaf, (stage / leaf).read_bytes() == expected,
+                  "The logical commands and watch text survive a POSIX reader unchanged.")
     return ok
 
 
@@ -1017,6 +1097,13 @@ def check_review(results, scratch):
               flagged["probe"] == "fail" and "continued like Ignore" in flagged["finding"]["reason"]
               and flagged["assert_dialogs"][0]["peer"] == "host", str(flagged.get("assert_dialogs")))
     (scratch / "host/stdout.log").unlink()
+    (scratch / "host/stderr.log").write_text(
+        "RTE Assert (headless, continued like Ignore): Assertion in file 'Y.cpp'\n", encoding="utf-8")
+    fired = driver.review(scenario, capture, out)
+    flagged = next(item for item in fired["checklist"] if item["id"] == "no-assert-dialogs")
+    ok &= row(results, "review/assert-dialog-in-stderr-fails",
+              flagged["probe"] == "fail" and flagged["assert_dialogs"][0]["log"].endswith("stderr.log"))
+    (scratch / "host/stderr.log").unlink()
     document = driver.review(scenario, capture, out)
     ok &= row(results, "review/verdict-is-not-a-pass", document["verdict"] == "agent-review-required")
     ok &= row(results, "review/no-mp4-is-not-video-evidence", all(item["frames"] is None for item in document["checklist"]))
@@ -2183,6 +2270,72 @@ def check_acceptance_rows(results, scratch):
     return ok
 
 
+def check_named_case_root(results, scratch):
+    from types import SimpleNamespace
+    options = SimpleNamespace(dry_run=False, size='960x540', port=49400, fps=30, repo=scratch)
+    scenario = dict(path='synthetic-named-root', peers=[dict(name='host')])
+    owned = scratch / 'named-root'
+    owned.mkdir()
+    marker = owned / '.spread-case-owner.json'
+    marker.write_text('{"case_id":"owned"}')
+    saved = marker.read_bytes()
+    class ReachedStaging(Exception):
+        pass
+    def before_staging(*args):
+        raise ReachedStaging()
+    def outcome(name, case_root=None, dry=False):
+        options.dry_run = dry
+        try:
+            with patch.object(driver, 'source_tokens', side_effect=before_staging):
+                driver._run_one(options, scenario, dict(name=name), 0, scratch, case_root=case_root)
+        except (ReachedStaging, FileExistsError, ValueError) as error:
+            return type(error)
+        raise AssertionError('The root test must stop before any engine staging')
+    ok = row(results, 'named-root/current-case-reaches-staging', outcome('named-root', owned) is ReachedStaging and marker.read_bytes() == saved)
+    ok &= row(results, 'named-root/standalone-preserves-existing-root', outcome('named-root') is FileExistsError and marker.read_bytes() == saved)
+    ok &= row(results, 'named-root/wrong-case-cannot-reuse-root', outcome('named-root', scratch / 'different-case') is ValueError)
+    ok &= row(results, 'named-root/missing-owned-root-is-a-defect', outcome('missing-owned', scratch / 'missing-owned') is ValueError and not (scratch / 'missing-owned').exists())
+    ok &= row(results, 'named-root/standalone-creates-fresh-root', outcome('fresh-run') is ReachedStaging and (scratch / 'fresh-run').is_dir())
+    ok &= row(results, 'named-root/dry-run-creates-nothing', outcome('dry-run', dry=True) is ReachedStaging and not (scratch / 'dry-run').exists())
+    return ok
+
+
+def check_native_start_gate(results):
+    class Clock:
+        def __init__(self, launch, marker, abort=None):
+            self.now, self.launch, self.marker, self.abort = 0.0, launch, marker, abort
+            self.observed = []
+        def is_set(self):
+            return self.now >= self.launch
+        def wait(self, seconds):
+            self.now += seconds
+            return self.abort is not None and self.now >= self.abort
+        def gate_met(self, gate):
+            self.observed.append(self.now)
+            return self.now >= self.marker
+    gate = dict(peer="host", event="video_mark mp-lobby-host", timeout_s=80)
+    def run(launch, marker, abort=None, native=True):
+        clock = Clock(launch, marker, abort)
+        with patch.object(driver.time, "monotonic", side_effect=lambda: clock.now):
+            passed = driver.await_start_gate(gate, clock.gate_met, clock, clock if native else None)
+        return passed, clock
+    passed, clock = run(200, 279)
+    ok = row(results, 'native-gate/admission-does-not-spend-the-markers-budget',
+             passed and clock.observed[0] >= 200 and clock.now < 280)
+    passed, clock = run(200, 281)
+    ok &= row(results, 'native-gate/a-late-marker-still-fails-at-the-original-bound',
+              not passed and 280 <= clock.now < 280.2)
+    passed, clock = run(200, 279, abort=25)
+    ok &= row(results, 'native-gate/a-launch-failure-ends-the-wait', not passed and clock.now < 25.2 and not clock.observed)
+    passed, clock = run(200, 279, abort=220)
+    ok &= row(results, 'native-gate/a-running-peer-failure-ends-the-wait', not passed and 220 <= clock.now < 220.2)
+    passed, clock = run(200, 81, native=False)
+    ok &= row(results, 'native-gate/local-and-completed-run-gates-keep-their-clock', not passed and 80 <= clock.now < 80.2)
+    passed, clock = run(200, 79, native=False)
+    ok &= row(results, 'native-gate/local-gate-before-the-original-bound-passes', passed and clock.now < 80)
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -2199,10 +2352,13 @@ def main():
         ok &= check_item_screens_reachable(results, options.repo)
         ok &= check_e2e_host_end_completion(results, options.repo)
         ok &= check_capture_binary(results, scratch)
+        ok &= check_named_case_root(results, scratch)
+        ok &= check_native_start_gate(results)
         ok &= check_recording_health(results, scratch)
         ok &= check_screen_watches(results, scratch)
         ok &= check_encoder_selection(results)
         ok &= check_streamed_capture(results, scratch)
+        ok &= check_streamed_pictures(results, scratch)
         ok &= check_item_kinds(results)
         ok &= check_port_claims(results)
         ok &= check_dropped_index(results, scratch)

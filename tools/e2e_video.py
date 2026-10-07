@@ -980,17 +980,30 @@ def extract_frames(ffmpeg, video, rows, frames):
     if not wanted or not ffmpeg or not Path(video).is_file():
         return
     frames.mkdir(parents=True, exist_ok=True)
-    select = "+".join(f"eq(n,{row['video_frame']})" for row in wanted)
-    scratch = frames / "extract"
-    scratch.mkdir(exist_ok=True)
-    subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", str(video), "-vf", f"select='{select}'",
-                    "-fps_mode", "passthrough", str(scratch / "pick-%06d.png")], capture_output=True, text=True)
+    terms = [f"eq(n,{row['video_frame']})" for row in wanted]
+    # FFmpeg limits expression depth, so long selections need a balanced sum.
+    while len(terms) > 1:
+        terms = ["(" + "+".join(terms[index:index + 2]) + ")" for index in range(0, len(terms), 2)]
+    select = terms[0]
+    scratch = frames / f"extract-{uuid.uuid4().hex}"
+    scratch.mkdir()
+    selection = scratch / "selection.txt"
+    selection.write_text(f"select='{select}'\n", encoding="utf-8")
+    result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", str(video), "-filter_script:v", str(selection),
+                            "-fps_mode", "passthrough", str(scratch / "pick-%06d.png")], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg frame extraction exited {result.returncode}: {result.stderr[-2000:]}")
+    missing = [row["frame"] for index, row in enumerate(sorted(wanted, key=lambda row: row["video_frame"]), 1)
+               if not (scratch / f"pick-{index:06d}.png").is_file()]
+    if missing:
+        raise RuntimeError(f"ffmpeg frame extraction missing indexed pictures: {missing[:10]}")
     for index, row in enumerate(sorted(wanted, key=lambda row: row["video_frame"]), 1):
         picture = scratch / f"pick-{index:06d}.png"
         if picture.is_file():
             os.replace(picture, frames / f"frame-{row['frame']:06d}.png")
     for leftover in scratch.glob("*.png"):
         leftover.unlink()
+    selection.unlink()
     scratch.rmdir()
 
 
@@ -1685,13 +1698,14 @@ def review(scenario, capture, out):
     # run continues past an assert the way a player's Ignore does, so the line it logged is the evidence.
     dialogs = []
     for peer in capture["peers"]:
-        log = Path(peer["root"]) / "stdout.log"
-        text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
-        dialogs += [{"peer": peer["peer"], "line": line.strip(), "log": str(log)}
-                    for line in text.splitlines() if "RTE Assert (headless" in line]
+        for name in ("stdout.log", "stderr.log"):
+            log = Path(peer["root"]) / name
+            text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+            dialogs += [{"peer": peer["peer"], "line": line.strip(), "log": str(log)}
+                        for line in text.splitlines() if "RTE Assert (headless" in line]
     items.append({"id": "no-assert-dialogs", "run": capture["name"], "peer": "all", "screen": "any",
                   "what": "No peer had to answer an assert dialog: a player would have seen one for each line below.",
-                  "assert": "No 'RTE Assert (headless' line in any peer's stdout.",
+                  "assert": "No 'RTE Assert (headless' line in any peer's stdout or stderr.",
                   "frames": None, "capture_frames": None, "video_seconds": None, "video": None,
                   "contact_sheet": None, "state": "checked", "probe": "fail" if dialogs else "pass",
                   "assert_dialogs": dialogs,
@@ -1781,13 +1795,14 @@ def stage_peer(scenario, peer, root, tokens):
         environment["CC_TEST_NET_UI_SCRIPT"] = str(path)
     if peer.get("input_script"):
         path = Path(root) / "input.txt"
-        path.write_text(public_value(substitute(scenario_text(scenario, peer["input_script"]), tokens),private_values), encoding="utf-8")
+        path.write_bytes(public_value(substitute(scenario_text(scenario, peer["input_script"]), tokens),private_values).encode("utf-8"))
     if peer.get("menu_script"):
         path = Path(root) / "menu.txt"
-        path.write_text(public_value(substitute(scenario_text(scenario, peer["menu_script"]), tokens),private_values), encoding="utf-8")
+        path.write_bytes(public_value(substitute(scenario_text(scenario, peer["menu_script"]), tokens),private_values).encode("utf-8"))
     # Every peer's engine arms the shared screen watches from this file on its first drawn frame.
     watches = Path(root) / "screen-watches.txt"
-    watches.write_text(SCREEN_WATCHES, encoding="utf-8")
+    # These inputs may be consumed on POSIX; CRLF leaves a literal CR in a watch's required text there.
+    watches.write_bytes(SCREEN_WATCHES.encode("utf-8"))
     environment["CCCP_TEST_SCREEN_WATCHES"] = str(watches)
     if any('ownership_reclaim' in item and item.get('peer') == peer['name'] for item in scenario.get('checklist', [])):
         environment.update(CC_TEST_CROSS_RECORDS=str(Path(tokens['VIDEO']).parent / 'events.jsonl'),
@@ -1842,12 +1857,32 @@ def prepare_run_root(root, remote_capture=None):
         root.mkdir(parents=True, exist_ok=False)
 
 
-def _run_one(options, scenario, run, run_index, out):
+def await_start_gate(gate, gate_met, failed, peer_launched=None):
+    """A native runner's admission precedes the scenario's unchanged gate budget."""
+    if peer_launched is not None:
+        while not peer_launched.is_set():
+            if failed.wait(.1):
+                return False
+    deadline = time.monotonic() + gate.get("timeout_s", 90)
+    while not gate_met(gate):
+        if failed.wait(.1) or time.monotonic() >= deadline:
+            return False
+    return True
+
+
+def _run_one(options, scenario, run, run_index, out, case_root=None):
     """One scenario run: its peers launched together, each recording its own video."""
     root = Path(out) / run.get("name", f"run{run_index}")
     dry = getattr(options, "dry_run", False)
-    if not dry:
-        prepare_run_root(root, getattr(options, "remote_capture", None))
+    if not dry and case_root is not None:
+        import spread_peers as spread
+        remote_capture = getattr(options, "remote_capture", None)
+        if isinstance(remote_capture, spread.Case):
+            remote_capture.stage_root(root)
+        if Path(case_root).resolve() != root.resolve() or not root.is_dir():
+            raise ValueError("named case does not own this scenario run root")
+    elif not dry:
+        root.mkdir(parents=True, exist_ok=False)
     size = options.size or run.get("size") or scenario.get("size") or DEFAULT_SIZE
     width, height = (int(part) for part in size.split("x"))
     port = port_for(run_index, options.port)
@@ -1860,6 +1895,7 @@ def _run_one(options, scenario, run, run_index, out):
     peers = run.get("peers") or scenario.get("peers") or []
     if not peers:
         raise SystemExit(f"{scenario['path']}: run {run_index} names no peers")
+    launched = {peer["name"]: threading.Event() for peer in peers}
 
     # Every peer's staging paths are known before any script is written, so a paired script can name
     # the other peer's probe directory and done file.
@@ -1995,6 +2031,7 @@ def _run_one(options, scenario, run, run_index, out):
                 streams[name]=MenuStream(private_menus[name])
                 handle.argv[handle.argv.index('-menu-script')+1]=streams[name].path
             with inherited_environment(private_environments[name]):handle.start()
+            launched[name].set()
             record=handle.finish()
             if getattr(options,'relay_book',None) and not getattr(options,'remote_capture',None):
                 from acceptance_relay_policy import sweep_retained
@@ -2092,12 +2129,10 @@ def _run_one(options, scenario, run, run_index, out):
                     break
             gate = peer.get("start_when")
             if gate:
-                deadline = time.monotonic() + gate.get("timeout_s", 90)
-                while not gate_met(gate):
-                    if failed.wait(.1) or time.monotonic() >= deadline:
-                        records[name] = {"error": f"start gate not reached: {gate}"}
-                        failed.set()
-                        break
+                native_launch = launched[gate["peer"]] if getattr(options, "remote_capture", None) and not gate.get("run") else None
+                if not await_start_gate(gate, gate_met, failed, native_launch):
+                    records[name] = {"error": f"start gate not reached: {gate}"}
+                    failed.set()
                 if failed.is_set():
                     break
                 if failed.wait(float(peer.get("after_gate_delay_s", 0))):
@@ -2225,17 +2260,17 @@ def run_one(options, scenario, run, run_index, out):
     capture_peer = getattr(options, "capture_peer", None) or definitions[0]["name"]
     if capture_peer not in {peer["name"] for peer in definitions}:
         raise ValueError("--capture-peer must name a peer of this run")
-    peers = [spread.Peer(peer["name"], os="windows" if peer["name"] == capture_peer else "any", size=size,
-                         reviewed=peer["name"] == capture_peer, recorder=peer["name"] == capture_peer,
-                         held=bool(peer.get("kill_after_s") or peer.get("kill_at_tick") or peer.get("kill_when") or
-                                   any("stall" in str(value) for value in peer.get("args", []) if str(value).startswith("-net-test"))),
+    # The engine records its rendered texture on every platform. The capture
+    # peer and every recorder are isolated on the lead's explicitly named boxes.
+    peers = [spread.Peer(peer["name"], os="any", size=size,
+                         reviewed=peer["name"] == capture_peer, readback=True, share_ok=False,
                          timeout=run.get("timeout_s") or scenario.get("timeout_s") or 300)
              for peer in definitions]
     previous = getattr(options, "remote_capture", None)
     def drive(case):
         options.remote_capture = case
         try:
-            result = _run_one(options, scenario, run, run_index, out)
+            result = _run_one(options, scenario, run, run_index, out, case_root=case.out)
             result.update(topology="spread", peer_boxes=case.result()["peer_boxes"], repo=str(Path(options.repo).resolve()))
             for peer in result["peers"]:
                 peer.update(topology="spread", box=result["peer_boxes"][peer["peer"]])
@@ -2243,9 +2278,12 @@ def run_one(options, scenario, run, run_index, out):
             return result
         finally:
             options.remote_capture = previous
-    result = spread.run_case(options.repo, root, peers, spread.Match(port_for(run_index, options.port), PORT_HI), drive=drive,
-                             peer_boxes=getattr(options, "peer_boxes", None), dispatcher=getattr(options, "pool_dispatcher", None),
-                             registry=getattr(options, "pool_registry", None))
+    from capture_native import reuse_native_builds
+    with reuse_native_builds(spread, dispatcher=getattr(options, "pool_dispatcher", None),
+                            registry=getattr(options, "pool_registry", None)):
+        result = spread.run_case(options.repo, root, peers, spread.Match(port_for(run_index, options.port), PORT_HI), drive=drive,
+                                 peer_boxes=getattr(options, "peer_boxes", None), dispatcher=getattr(options, "pool_dispatcher", None),
+                                 registry=getattr(options, "pool_registry", None))
     return result["driver_result"]
 
 
@@ -2256,9 +2294,10 @@ def render(capture_run, fps, every):
         if peer.get("video") and Path(peer["video"]).is_file() and peer.get("contact_sheet") and Path(peer["contact_sheet"]).is_file():
             continue
         root = Path(peer["root"])
-        video = encode(ffmpeg, peer["video_dir"], fps, root.parent / f"{peer['peer']}.mp4")
-        peer["video"] = video.get("path") if video.get("encoded") else None
-        peer["encode"] = video
+        if not (peer.get("video") and Path(peer["video"]).is_file()):
+            video = encode(ffmpeg, peer["video_dir"], fps, root.parent / f"{peer['peer']}.mp4")
+            peer["video"] = video.get("path") if video.get("encoded") else None
+            peer["encode"] = video
         sheet = contact_sheet(peer["video_dir"], peer["index"], root.parent / f"{peer['peer']}-sheet.png", every, ffmpeg, peer["video"])
         peer["contact_sheet"] = sheet.get("path") if sheet.get("written") else None
         peer["sheet"] = sheet
@@ -2815,7 +2854,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     import spread_peers as spread
     spread.add_arguments(parser)
-    parser.add_argument("--capture-peer", help="reviewed peer on its named Windows runner's private desktop; defaults to the first peer")
+    parser.add_argument("--capture-peer", help="reviewed peer on any box; defaults to the first peer")
     parser.add_argument('--win-cause-log', action='store_true', help='observe duel brain loss and retain native death events in a private spread runtime')
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path)

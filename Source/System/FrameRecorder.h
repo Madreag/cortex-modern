@@ -19,11 +19,11 @@
 
 namespace RTE {
 
-	/// Writes a run's presented frames to numbered PNGs and a JSONL index on a small pool of writer threads.
-	/// The render thread only copies pixels into a pooled buffer; encoding and file writes never
-	/// touch it, and a full queue drops the frame instead of waiting.
 	class EncoderPipe;
+	class QueuedTextureReadback;
+	class FrameReadbackContext;
 
+	/// Writes admitted RGB images and their metadata; GPU completion, encoding and file writes belong to the writers.
 	class FrameRecorder {
 
 	public:
@@ -78,6 +78,9 @@ namespace RTE {
 		/// A buffer of bytes for this wall time, or null when the recorder is off, the frame is not
 		/// due at the capture rate, or the queue is full. Render thread only, paired with EndFrame.
 		unsigned char* BeginFrame(long long wallMS, std::size_t bytes);
+		/// Queue an immutable GPU copy of the rendered texture; completion and RGB conversion belong to the writer.
+		bool StageTextureReadback(unsigned int texture, int width, int height, std::string& error);
+		std::string ReadbackError() const;
 
 		/// Queues the buffer BeginFrame returned. Render thread only.
 		void EndFrame(const FrameMeta& meta);
@@ -93,6 +96,9 @@ namespace RTE {
 	private:
 		struct QueuedFrame {
 			std::vector<unsigned char> pixels;
+			std::unique_ptr<QueuedTextureReadback> readback;
+			bool textureReadback = false;
+			std::string readbackError;
 			FrameMeta meta;
 			std::size_t index = 0;
 			std::size_t slot = 0; //!< The capture-rate slot the frame was admitted in.
@@ -101,10 +107,14 @@ namespace RTE {
 		/// Whether the capture rate admits a frame at this wall time, advancing the pacer when it does.
 		bool DueAt(long long wallMS);
 		void WriterLoop();
+#if defined(__APPLE__)
+		void DrainTextureReadbacks(bool wait);
+		std::deque<QueuedFrame> m_PendingTextureFrames; //!< Render-context transfers awaiting their fence; original metadata stays with each copy.
+#endif
 		/// Encodes the frame; returns its index row, which the caller files in frame order.
 		std::string WriteFrame(const QueuedFrame& frame);
-		/// Streams the frame into the encoder, the last picture repeated for the slots before it that nothing filled.
-		std::string EncodeFrame(QueuedFrame& frame);
+		/// Streams the frame's timestamp and pixels; the encoder holds its previous picture across empty slots.
+		std::string EncodeFrame(const QueuedFrame& frame);
 		void WritePendingDrops();
 		void WriteManifest();
 
@@ -132,6 +142,10 @@ namespace RTE {
 		std::size_t m_NextIndex = 0;
 
 		std::vector<unsigned char> m_Staging;
+		std::unique_ptr<QueuedTextureReadback> m_StagedReadback;
+		bool m_StagedTextureReadback = false;
+		std::unique_ptr<FrameReadbackContext> m_ReadbackContext;
+		std::string m_ReadbackError;
 		bool m_StagingHeld = false;
 		std::size_t m_StagingSlot = 0;
 		std::optional<HarnessCost::SimulationSpan> m_ReadbackSpan; //!< The read back of the staged frame, measured until it is queued.
@@ -148,7 +162,6 @@ namespace RTE {
 		std::size_t m_FirstSlot = 0;
 		std::size_t m_NextSlot = 0;
 		std::size_t m_Repeated = 0;
-		std::vector<unsigned char> m_LastPicture;
 
 		mutable std::mutex m_Mutex;
 		std::condition_variable m_Wake;

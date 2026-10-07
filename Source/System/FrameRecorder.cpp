@@ -1,4 +1,6 @@
 #include "FrameRecorder.h"
+#include "FrameCaptureStream.h"
+#include "GLFrameReadback.h"
 
 #include "System.h"
 
@@ -239,7 +241,6 @@ namespace RTE {
 		if (!m_Events) return refuse("could not open the event index in " + directory);
 		m_DroppedIndex.open(std::filesystem::path(directory) / "dropped.jsonl", std::ios::out);
 		if (!m_DroppedIndex) return refuse("could not open the dropped-frame index in " + directory);
-
 		m_Directory = directory;
 		m_FramesDirectory = frames.string();
 		m_Fps = fps;
@@ -284,13 +285,24 @@ namespace RTE {
 
 	unsigned char* FrameRecorder::BeginFrame(long long wallMS, std::size_t bytes) {
 		if (!m_Enabled || m_StagingHeld || bytes == 0) return nullptr;
+#if defined(__APPLE__)
+		if (!m_PendingTextureFrames.empty()) {
+			HarnessCost::SimulationSpan readbackCost;
+			DrainTextureReadbacks(false);
+			HarnessCost::Charge(HarnessCost::Recorder, readbackCost.Stop());
+		}
+#endif
 		std::unique_lock<std::mutex> lock(m_Mutex);
 		++m_Submitted;
 		if (!DueAt(wallMS)) {
 			++m_RateLimited;
 			return nullptr;
 		}
-		if (m_Queue.size() >= m_QueueBound) {
+		if (m_Queue.size()
+#if defined(__APPLE__)
+		    + m_PendingTextureFrames.size()
+#endif
+		    >= m_QueueBound) {
 			++m_Dropped;
 			m_PendingDrops.emplace_back(wallMS, m_Admitted - 1);
 			m_Wake.notify_one();
@@ -309,6 +321,35 @@ namespace RTE {
 		return m_Staging.data();
 	}
 
+	bool FrameRecorder::StageTextureReadback(unsigned int texture, int width, int height, std::string& error) {
+		if (!m_StagingHeld) { error = "no admitted frame"; return false; }
+#if defined(__APPLE__)
+		m_StagedTextureReadback = true;
+		m_StagedReadback = FrameReadbackContext::Submit(texture, width, height, error, GL_BGRA);
+		return m_StagedReadback != nullptr;
+#elif defined(__linux__)
+		if (!ReadTextureRGB(texture, width, height, m_Staging, error)) return false;
+		const std::size_t rowBytes = static_cast<std::size_t>(width) * 3;
+		for (int y = 0; y < height / 2; ++y) {
+			auto* first = m_Staging.data() + static_cast<std::size_t>(y) * rowBytes;
+			auto* last = m_Staging.data() + static_cast<std::size_t>(height - y - 1) * rowBytes;
+			std::swap_ranges(first, first + rowBytes, last);
+		}
+		return true;
+#else
+		m_StagedTextureReadback = true;
+		if (!m_ReadbackContext) m_ReadbackContext = FrameReadbackContext::Create(error);
+		if (!m_ReadbackContext) return false;
+		m_StagedReadback = m_ReadbackContext->Submit(texture, width, height, error);
+		return m_StagedReadback != nullptr;
+#endif
+	}
+
+	std::string FrameRecorder::ReadbackError() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_ReadbackError;
+	}
+
 	void FrameRecorder::EndFrame(const FrameMeta& meta) {
 		if (!m_StagingHeld) return;
 		m_StagingHeld = false;
@@ -318,17 +359,45 @@ namespace RTE {
 		}
 		QueuedFrame frame;
 		frame.pixels = std::move(m_Staging);
+		frame.readback = std::move(m_StagedReadback);
+		frame.textureReadback = m_StagedTextureReadback;
+		m_StagedTextureReadback = false;
 		frame.meta = meta;
 		frame.slot = m_StagingSlot;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			frame.index = m_NextIndex++;
+#if defined(__APPLE__)
+			if (frame.textureReadback) m_PendingTextureFrames.push_back(std::move(frame));
+			else
+#endif
 			m_Queue.push_back(std::move(frame));
 		}
 		m_Wake.notify_one();
 	}
 
+#if defined(__APPLE__)
+	void FrameRecorder::DrainTextureReadbacks(bool wait) {
+		while (!m_PendingTextureFrames.empty()) {
+			auto& pending = m_PendingTextureFrames.front();
+			std::string error;
+			const auto state = pending.readback ? ReadQueuedTextureRGB(*pending.readback, pending.pixels, error, wait) : TextureReadbackResult::Failed;
+			if (state == TextureReadbackResult::Pending) break;
+			if (state == TextureReadbackResult::Failed) pending.readbackError = error.empty() ? "admitted texture frame has no queued pixel transfer" : error;
+			pending.textureReadback = false;
+			pending.readback.reset();
+			{
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				m_Queue.push_back(std::move(pending));
+				m_PendingTextureFrames.pop_front();
+			}
+			m_Wake.notify_one();
+		}
+	}
+#endif
+
 	void FrameRecorder::WriterLoop() {
+		const bool profileReadback = std::getenv("CCCP_TEST_READBACK_TIMING") != nullptr;
 		for (;;) {
 			QueuedFrame frame;
 			{
@@ -345,9 +414,32 @@ namespace RTE {
 			}
 			WritePendingDrops();
 			// The writer's processor time is the recorder's cost: a write blocked on the encoder's pipe or the disk takes nothing from a frame.
+			const auto wallBefore = profileReadback ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			const int64_t cpuBefore = ThreadCpuNanoseconds();
-			std::string row = m_EncoderPath.empty() ? WriteFrame(frame) : EncodeFrame(frame);
-			HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - cpuBefore);
+			std::string readbackError = frame.readbackError;
+			const bool pixelsReady = readbackError.empty() && (!frame.textureReadback || (frame.readback && m_ReadbackContext->Complete(*frame.readback, frame.pixels, readbackError)));
+			if (frame.textureReadback && !frame.readback) readbackError = "admitted texture frame has no queued pixel transfer";
+			const int64_t cpuAfterReadback = profileReadback ? ThreadCpuNanoseconds() : 0;
+			std::string row;
+			if (pixelsReady) row = m_EncoderPath.empty() ? WriteFrame(frame) : EncodeFrame(frame);
+			else {
+				row = nlohmann::json({{"frame", frame.index}, {"wall_ms", frame.meta.wallMS}, {"sim_tick", frame.meta.simTick},
+				    {"screen", frame.meta.screen}, {"service_state", frame.meta.serviceState}, {"resolution", {frame.meta.width, frame.meta.height}},
+				    {"saved", false}, {"readback_error", readbackError}}).dump();
+				System::PrintDiagnosticErrorLine("[record-video] pixel readback failed: " + readbackError);
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				if (m_ReadbackError.empty()) m_ReadbackError = readbackError;
+				++m_WriteFailures;
+			}
+			const int64_t cpuNS = ThreadCpuNanoseconds() - cpuBefore;
+			HarnessCost::Charge(HarnessCost::Recorder, cpuNS);
+			if (profileReadback) {
+				const auto wallUS = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - wallBefore).count();
+				System::PrintDiagnosticLine("[capture-writer-phase] tick=" + std::to_string(frame.meta.simTick) + " frame=" + std::to_string(frame.index) +
+				    " cpu_us=" + std::to_string(cpuNS / 1000) + " wall_us=" + std::to_string(wallUS) +
+				    " readback_cpu_us=" + std::to_string((cpuAfterReadback - cpuBefore) / 1000) +
+				    " encode_cpu_us=" + std::to_string((cpuNS - (cpuAfterReadback - cpuBefore)) / 1000));
+			}
 			frame.pixels.clear();
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
@@ -387,7 +479,7 @@ namespace RTE {
 		return line.dump();
 	}
 
-	std::string FrameRecorder::EncodeFrame(QueuedFrame& frame) {
+	std::string FrameRecorder::EncodeFrame(const QueuedFrame& frame) {
 		if (!m_EncoderTried) {
 			m_EncoderTried = true;
 			m_EncodedWidth = frame.meta.width;
@@ -396,24 +488,24 @@ namespace RTE {
 			m_NextSlot = frame.slot;
 			const std::string preset = m_EncoderCodec == "h264_videotoolbox" ? "-q:v 100"
 			                        : m_EncoderCodec.find("nvenc") != std::string::npos ? "-preset p1 -cq 23" : "-preset ultrafast -crf 20";
-			// A keyframe and a fragment each second: a capture cut by a kill still plays up to its last whole second.
-			const std::string command = "\"" + m_EncoderPath + "\" -hide_banner -loglevel warning -y -f rawvideo -pix_fmt rgb24 -s " +
-			    std::to_string(m_EncodedWidth) + "x" + std::to_string(m_EncodedHeight) + " -framerate " + std::to_string(m_Fps) +
-			    " -i - -vf \"pad=ceil(iw/2)*2:ceil(ih/2)*2\" -c:v " + m_EncoderCodec + " " + preset + " -g " + std::to_string(m_Fps) +
-			    " -pix_fmt yuv420p -movflags +frag_keyframe+empty_moov+default_base_moof \"" +
+			const std::string command = "\"" + m_EncoderPath + "\" -hide_banner -loglevel warning -y -f matroska -i - -vf \"fps=" +
+			    std::to_string(m_Fps) + ":round=near,pad=ceil(iw/2)*2:ceil(ih/2)*2\" -c:v " + m_EncoderCodec + " " + preset + " -pix_fmt yuv420p \"" +
 			    (std::filesystem::path(m_Directory) / "capture.mp4").string() + "\"";
 			auto encoder = std::make_unique<EncoderPipe>();
-			if (encoder->Open(command, (std::filesystem::path(m_Directory) / "encoder.log").string(), m_EncoderError)) m_Encoder = std::move(encoder);
+			if (encoder->Open(command, (std::filesystem::path(m_Directory) / "encoder.log").string(), m_EncoderError)) {
+				const auto header = FrameCaptureStream::Header(m_EncodedWidth, m_EncodedHeight, m_Fps);
+				if (!header.empty() && encoder->Write(header.data(), header.size())) m_Encoder = std::move(encoder);
+				else m_EncoderError = "the encoder refused the stream header";
+			}
 			RecordEvent("encoder " + m_EncoderCodec + (m_Encoder ? " started" : " refused: " + m_EncoderError));
 		}
 		bool written = false;
 		if (m_Encoder && frame.meta.width == m_EncodedWidth && frame.meta.height == m_EncodedHeight) {
-			// Slots nothing filled keep the last picture, so the video runs on the wall clock the index is stamped with.
-			written = true;
-			for (; written && !m_LastPicture.empty() && m_NextSlot < frame.slot; ++m_NextSlot, ++m_Repeated) written = m_Encoder->Write(m_LastPicture.data(), m_LastPicture.size());
-			written = written && m_Encoder->Write(frame.pixels.data(), frame.pixels.size());
+			// The encoder holds the same last picture for empty slots; only new pixels cross the pipe.
+			const auto header = FrameCaptureStream::FrameHeader(frame.slot - m_FirstSlot, m_Fps, frame.pixels.size());
+			written = !header.empty() && m_Encoder->Write(header.data(), header.size()) && m_Encoder->Write(frame.pixels.data(), frame.pixels.size());
+			if (written && frame.slot > m_NextSlot) m_Repeated += frame.slot - m_NextSlot;
 			m_NextSlot = frame.slot + 1;
-			std::swap(frame.pixels, m_LastPicture);
 			if (!written) m_EncoderError = "the encoder stopped reading";
 		}
 		nlohmann::json line = {{"frame", frame.index}, {"video_frame", frame.slot - m_FirstSlot}, {"wall_ms", frame.meta.wallMS}, {"sim_tick", frame.meta.simTick},
@@ -467,8 +559,16 @@ namespace RTE {
 		m_Finished = true;
 		if (m_StagingHeld) {
 			m_StagingHeld = false;
+			if (m_StagedReadback) FrameReadbackContext::Discard(*m_StagedReadback);
+			m_StagedReadback.reset();
+			m_StagedTextureReadback = false;
 			m_Staging.clear();
 		}
+#if defined(__APPLE__)
+		const int64_t finalReadbackCPU = ThreadCpuNanoseconds();
+		DrainTextureReadbacks(true);
+		HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - finalReadbackCPU);
+#endif
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_Stopping = true;
@@ -478,6 +578,7 @@ namespace RTE {
 			if (writer.joinable()) writer.join();
 		}
 		m_Writers.clear();
+		m_ReadbackContext.reset();
 		if (m_Encoder) {
 			m_EncoderExit = m_Encoder->Close(120000);
 			m_Encoder.reset();
