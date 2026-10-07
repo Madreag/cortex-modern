@@ -80,6 +80,20 @@ class RankedTests(unittest.TestCase):
             case.allocate()
         self.assertEqual(calls, ['FIRST'])
 
+    def test_prelaunch_capacity_change_tries_the_second_named_box(self):
+        case, calls = self.case({})
+        case.allocate()
+        case.pool.live_reason = lambda box, needs, state:'live engine capacity is in use' if box['name']=='FIRST' else None
+        prepared = []
+        case.prepare_peer = lambda name:prepared.append(case.members[name][0]['name'])
+        case.check_prepared_hashes = lambda:None
+        case.guard = lambda:None
+        case.directory = None
+        case.ensure_peer_ready('host')
+        self.assertEqual(case.assigned_boxes, {'host':'SECOND'})
+        self.assertEqual(prepared, ['SECOND'])
+        self.assertEqual(calls, ['FIRST', 'SECOND'])
+
 
 if __name__ == '__main__':
     unittest.main()

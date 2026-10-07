@@ -1,6 +1,6 @@
 """One lead-routed execution interface for real-network cases with native peers.
 
-Contract (version 3, compatible with version 1 and 2 calls)
+Contract (version 3.2, compatible with every published named-box call)
 --------------------
 run_case(repo, out, peers, match, *, drive=None, peer_boxes=None,
          dispatcher=None, registry=None) -> dict
@@ -138,7 +138,13 @@ calls, driver staging, levers, collectors and return fields remain supported.
 Native control ship set, in import order: pool_cohort.py, box_facts.py,
 box_load.py, pool.py, pool_worker.py, spread_peers.py, pool_run.py. The cohort
 reader comes from the facts adapter's folder or the installed transport kit.
-cross_peers.py is also pinned for native preflight. The immutable repository
+cross_peers.py is also pinned for native preflight. The native worker extends its existing cache materializer: any exhausted or
+failed file hard link falls back to a SHA-verified copy; each materialization
+prunes completed per-box snapshots to the latest three. Live claims and live
+preparation phases protect in-use snapshots. If more than three are live,
+pruning is deferred (recorded in snapshot_prune); unknown/unmarked entries are
+preserved. Reparse entries are unlinked without entering their targets.
+The immutable repository
 shipment includes the driver's tools and runner dependencies; its manifest
 hashes every file. Each result publishes native_ship_set with control hashes.
 """
@@ -179,7 +185,7 @@ def file_sha256(path):
 
 
 TOPOLOGY_LOCAL = "single-box: not proof"
-INTERFACE_VERSION = "3.1-named-concurrent-cases"
+INTERFACE_VERSION = "3.2-named-ranked-waits"
 NO_BOX_NAMED = "NO BOX NAMED: the lead routes every peer (ROUTING.md section 6)"
 _options = None
 _cases = contextvars.ContextVar("spread_cases", default=None)
@@ -1033,7 +1039,190 @@ def native_cpu_wait_source(source):
                       "def submit_task(value):\n"
                       "    from spread_peers import submit_named_task\n"
                       "    return submit_named_task(_native_submit_task,value,globals())\n")
-    return source.replace(guard, replacement, 1).replace(entry, extension+'\n'+entry, 1)
+    source = source.replace(guard, replacement, 1).replace(entry, extension+'\n'+entry, 1)
+    return native_cache_source(source)
+
+
+def native_cache_source(source):
+    """Extend only the existing worker's artifact operations, not its facts writer."""
+    import ast
+    changes = []
+    lines = source.splitlines(True)
+    offsets = [0]
+    for line in lines:
+        offsets.append(offsets[-1]+len(line))
+    for function in ast.parse(source).body:
+        if not isinstance(function, ast.FunctionDef) or function.name not in ('publish', 'ingest', '_materialize'):
+            continue
+        for node in ast.walk(function):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name) and node.func.value.id == 'os' and node.func.attr == 'link'):
+                call = ast.get_source_segment(source, node)
+                changes.append((offsets[node.lineno-1]+node.col_offset,
+                                offsets[node.end_lineno-1]+node.end_col_offset,
+                                'cache_link_or_copy('+call[len('os.link('):-1]+',expected)'))
+    for start, end, replacement in sorted(changes, reverse=True):
+        source = source[:start]+replacement+source[end:]
+    entry = "if __name__=='__main__':raise SystemExit(main())"
+    extension = ''
+    if changes:
+        extension += ("\ndef cache_link_or_copy(source,target,expected):\n"
+                      "    from spread_peers import cache_link_or_copy as verified_link\n"
+                      "    return verified_link(source,target,expected)\n")
+    if 'def materialize(' in source:
+        extension += ("\ndef materialize(value):\n"
+                      "    from spread_peers import materialize_cached_snapshot\n"
+                      "    return materialize_cached_snapshot(_materialize,value,globals())\n")
+    return source.replace(entry, extension+'\n'+entry, 1)
+
+
+def cache_link_or_copy(source, target, expected):
+    """A failed or exhausted hard link becomes a byte-verified regular copy."""
+    import tempfile
+    source, target = Path(source), Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(source, target)
+        return
+    except FileExistsError:
+        if target.is_symlink() or file_sha256(target) != expected:
+            raise SpreadRefusal(f'immutable cache artifact differs: {target}')
+        return
+    except OSError:
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() or not target.is_file() or file_sha256(target) != expected:
+                raise SpreadRefusal(f'immutable cache artifact differs: {target}')
+            return
+    descriptor, name = tempfile.mkstemp(prefix=target.name+'.copy-', dir=target.parent)
+    staging = Path(name)
+    try:
+        with os.fdopen(descriptor, 'wb') as output, source.open('rb') as original:
+            shutil.copyfileobj(original, output)
+            output.flush()
+            os.fsync(output.fileno())
+        if file_sha256(staging) != expected:
+            raise SpreadRefusal(f'cache copy hash differs: {target}')
+        shutil.copymode(source, staging)
+        if target.exists() and file_sha256(target) != expected:
+            raise SpreadRefusal(f'immutable cache artifact differs: {target}')
+        try:
+            os.rename(staging, target)
+        except FileExistsError:
+            if file_sha256(target) != expected:
+                raise SpreadRefusal(f'concurrent cache artifact differs: {target}')
+        if file_sha256(target) != expected:
+            raise SpreadRefusal(f'cache publication hash differs: {target}')
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def remove_snapshot_tree(path, snapshots):
+    """Unlink reparse entries; never traverse an immutable input's link target."""
+    import stat
+    path, snapshots = Path(path), Path(snapshots).resolve()
+    if path.parent.resolve() != snapshots or path.resolve().parent != snapshots:
+        raise SpreadRefusal(f'cache prune target escapes snapshots: {path}')
+    def remove(entry):
+        info = entry.lstat()
+        linked = stat.S_ISLNK(info.st_mode) or bool(getattr(info, 'st_file_attributes', 0) & 1024)
+        if linked:
+            if stat.S_ISDIR(info.st_mode) and not entry.is_symlink():
+                entry.rmdir()
+            else:
+                entry.unlink()
+        elif stat.S_ISDIR(info.st_mode):
+            for child in entry.iterdir():
+                remove(child)
+            entry.rmdir()
+        else:
+            entry.unlink()
+    remove(path)
+
+
+def prune_snapshots(root, current=None, *, protected=()):
+    """Keep the latest three completed snapshots, all live ones, and unknown entries."""
+    root = Path(root)
+    result = dict(removed=[], deferred_active=[], unmarked=[])
+    if not root.exists():
+        return result
+    if root.is_symlink() or getattr(root, 'is_junction', lambda:False)():
+        raise SpreadRefusal(f'cache snapshots root is a directory link: {root}')
+    protected = {Path(path).resolve() for path in protected}
+    if current is not None:
+        protected.add(Path(current).resolve())
+    candidates = []
+    for path in root.iterdir():
+        if not path.is_dir() or path.is_symlink() or getattr(path, 'is_junction', lambda:False)():
+            continue
+        receipt = path/'pool-inputs.json'
+        if receipt.is_symlink():
+            result['unmarked'].append(path.name)
+            continue
+        record = read_json(receipt, {})
+        if not record or not isinstance(record.get('manifest'), dict) or not record.get('head'):
+            result['unmarked'].append(path.name)
+            continue
+        candidates.append((receipt.stat().st_mtime_ns, path.name, path))
+    latest = {path.resolve() for _, _, path in sorted(candidates, reverse=True)[:3]}
+    for _, _, path in sorted(candidates):
+        if path.resolve() in latest:
+            continue
+        if path.resolve() in protected:
+            result['deferred_active'].append(path.name)
+            continue
+        remove_snapshot_tree(path, root)
+        result['removed'].append(path.name)
+    return result
+
+
+def live_snapshot_paths(box, worker):
+    """Read claims and live preparation phases without modifying their owners."""
+    root, facts = worker['root_for'](box), worker['facts']
+    runs = set()
+    for path in (root/'claims').glob('run-*.json'):
+        owner = facts.read_reservation(path, archive=False)
+        if owner and owner.get('run_id'):
+            runs.add(root/'runs'/owner['run_id'])
+    for path in (root/'runs').glob('*/phases/phase-*.json'):
+        if facts.read_reservation(path, archive=False):
+            runs.add(path.parent.parent)
+    paths = []
+    for run in runs:
+        for name in ('snapshot-use.json', 'request.json', 'assignment.json', 'build-request.json'):
+            record = read_json(run/name, {}) or {}
+            if record.get('repo'):
+                paths.append(record['repo'])
+    return paths
+
+
+def materialize_cached_snapshot(original, value, worker):
+    box = value['box']
+    cache, snapshot = worker['cache_root'](box), worker['snapshot_root'](value)
+    claim = value.get('phase_claim', {})
+    from types import SimpleNamespace
+    needs = SimpleNamespace(peer_id=claim.get('needs', {}).get('peer_id', value.get('run_id', 'snapshot')))
+    retry = AdmissionWait(box, needs, admission_seconds(claim))
+    with named_capacity_mutex(cache/'.snapshot-materialize.lock', mutex=worker['mutex'], box=box,
+                              peer=needs.peer_id, wait=retry.wait, remaining=retry.remaining()), \
+         named_capacity_mutex(snapshot/'.snapshot.lock', mutex=worker['mutex'], box=box,
+                              peer=needs.peer_id, wait=retry.wait, remaining=retry.remaining()):
+        if claim and value.get('run_id'):
+            owner = worker['facts'].read_reservation(claim['claim'], archive=False)
+            if not owner or owner.get('token') != claim['token']:
+                raise SpreadRefusal('snapshot materializer claim changed owner')
+            worker['atomic_json'](worker['root_for'](box)/'runs'/value['run_id']/'snapshot-use.json',
+                                 dict(repo=str(snapshot), token=claim['token']))
+        prepared = dict(value)
+        if value.get('pack') and not Path(value['pack']).is_file():
+            receipt = read_json(snapshot/'pool-inputs.json', {}) or {}
+            if receipt.get('head') != value['head'] or receipt.get('manifest') != value['manifest']:
+                raise SpreadRefusal('snapshot metadata pack is missing before publication')
+            prepared.pop('pack')  # a lost reply after verified publication is idempotent
+        result = original(prepared)
+        prune = prune_snapshots(cache/'snapshots', None if value.get('mutable') else snapshot,
+                                protected=live_snapshot_paths(box, worker))
+        worker['atomic_json'](cache/'snapshot-prune.json', dict(box=box['name'], **prune))
+        return dict(result, snapshot_prune=prune)
 
 
 def native_pool_source(source):
@@ -1073,6 +1262,9 @@ def bind_admission_transport(backend, box, needs, wait):
     retry = backend.admission_wait = AdmissionWait(box, needs, wait)
     original_rpc = backend.rpc
     def rpc(target, action, body, **kwargs):
+        active = getattr(backend, 'active_claim', None)
+        if active:
+            active.update(runner_wait_remaining=retry.remaining(), admission_deadline=time.time()+retry.remaining())
         if action == 'write' and body.get('path', '').endswith(('/request.json', '/peer-spec.json')):
             value = body.get('value', {})
             if 'claim' in value:
@@ -1623,27 +1815,73 @@ class Case:
                 directory_port = self.members[self.names[0]][1]["directory_port"]
             self.directory = self.stack.enter_context(serve(self.control/"directory", directory_port, block=(directory_port, directory_port)))
         self.directory_port = directory_port
-        peer_urls = self.match.parameters.get("peer_directory_urls", {})
         for name in self.names:
-            box, claim, _, backend = self.members[name]
-            target = role_value(peer_urls, self.names, name) or self.directory["DIRECTORY_URL"]
-            try:
-                target_port = directory_endpoint(target)
-            except ValueError as error:
-                raise self.refuse(name, box["name"], str(error))
-            local = target_port if box["kind"] == "local" else claim["directory_port"]
-            claim["signal_port"] = local
-            if box["kind"] == "local":
-                continue
-            log = (self.control/f"tunnel-{name}.log").open("ab")
-            process = subprocess.Popen(["ssh", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15",
-                                        "-R", f"127.0.0.1:{local}:127.0.0.1:{target_port}", box["ssh"]],
+            self.connect_peer_directory(name)
+
+    def connect_peer_directory(self, name):
+        if not self.directory:
+            return
+        box, claim, _, backend = self.members[name]
+        urls = self.match.parameters.get('peer_directory_urls', {})
+        target = role_value(urls, self.names, name) or self.directory['DIRECTORY_URL']
+        try:
+            target_port = directory_endpoint(target)
+        except ValueError as error:
+            raise self.refuse(name, box['name'], str(error)) from error
+        local = target_port if box['kind'] == 'local' else claim['directory_port']
+        claim['signal_port'] = local
+        if box['kind'] == 'local':
+            return
+        retry = getattr(backend, 'admission_wait', None)
+        while True:
+            log = (self.control/f'tunnel-{name}.log').open('ab')
+            process = subprocess.Popen(['ssh', '-N', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=15',
+                                        '-R', f'127.0.0.1:{local}:127.0.0.1:{target_port}', box['ssh']],
                                        stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
-            self.tunnels.append((process, log))
-        time.sleep(1)
-        for (process, _), name in zip(self.tunnels, [n for n in self.names if self.members[n][0]["kind"] != "local"]):
-            if process.poll() is not None:
-                raise self.refuse(name, self.members[name][0]["name"], "private directory signaling tunnel refused")
+            time.sleep(1)
+            if process.poll() is None:
+                self.tunnels.append((process, log))
+                return
+            log.close()
+            reason = 'SSH does not answer: private directory signaling tunnel refused'
+            if not retry:
+                raise self.refuse(name, box['name'], reason)
+            retry.pause(reason)
+
+    def ensure_peer_ready(self, name):
+        while True:
+            box, claim, _, backend = self.members[name]
+            if not hasattr(backend, 'admission_wait') or not hasattr(self.pool, 'live_reason'):
+                return
+            needs, retry = self.pool.Needs(**claim['needs']), backend.admission_wait
+            try:
+                while True:
+                    retry.probe_started()
+                    state = backend.probe(box, read_only=True, refresh_display=False)
+                    reason = named_live_reason(self.pool.live_reason, box, needs, state)
+                    if not reason:
+                        return
+                    if not retry.accepts(reason):
+                        raise SpreadRefusal('capacity changed before launch: '+reason)
+                    retry.pause(reason)
+                    self.guard()
+            except RuntimeError as error:
+                if not self.fallback_peer(name, error):
+                    raise self.refuse(name, box['name'], str(error)) from error
+                self.prepare_peer(name)
+                self.check_prepared_hashes()
+                self.check_identities({peer:dict(machine_id=item[0]['hostname'].casefold()) for peer,item in self.members.items()})
+                if getattr(self, 'network', 'ice') == 'direct' and getattr(self, 'runs', {}):
+                    # Re-evaluate the existing host route for this named seat.
+                    host, host_claim, _, host_backend = self.members[self.names[0]]
+                    from cross_peers import remote_command
+                    endpoint = named_box_endpoint(self.members[name][0])
+                    script = 'import sys;sys.path.insert(0,sys.argv[1]);from spread_peers import native_address_probe;print(native_address_probe(sys.argv[2]))'
+                    command = [host['python'], '-c', script, host_claim['control'], endpoint]
+                    if host['kind'] != 'local':
+                        command = remote_command(host, command)
+                    self.host_addresses[name] = host_backend.guarded_run(command, timeout=20).decode().strip()
+                self.connect_peer_directory(name)
 
     def published_session(self, name):
         from e2e_video import directory_session
@@ -1847,9 +2085,9 @@ def overlay_data(source, target, paths, *, module_content=False):
             try:
                 os.link(child, destination)
             except OSError as error:
-                if error.errno not in (errno.EXDEV, errno.EPERM, errno.EACCES, errno.ENOTSUP):
+                if error.errno not in (errno.EXDEV, errno.EPERM, errno.EACCES, errno.ENOTSUP, errno.EMLINK) and getattr(error, 'winerror', None) != 1142:
                     raise
-                shutil.copyfile(child, destination)
+                cache_link_or_copy(child, destination, file_sha256(child))
         else:
             shutil.copyfile(child, destination)
 
@@ -1905,6 +2143,8 @@ class Run:
     def start(self):
         if self.started:
             raise RuntimeError("spread runner was already started")
+        if hasattr(self.case, 'ensure_peer_ready'):
+            self.case.ensure_peer_ready(self.role)
         box, claim, request, backend = self.case.members[self.role]
         host_address = getattr(self.case, "host_addresses", {}).get(self.role, getattr(self.case, "host_address", None))
         port = int(role_value(self.case.peer_ports, self.case.names, self.role) or self.case.match.port)

@@ -155,6 +155,22 @@ class TransientTests(unittest.TestCase):
         self.assertIsNone(spread.named_live_reason(original, {}, SimpleNamespace(alone=True),
                                                    spread.real_engine_capacity(raw)))
 
+    def test_active_transport_propagates_remaining_budget_through_the_existing_holder(self):
+        clock, written = [0.0], []
+        claim = dict(token='owned', root='/own')
+        box, needs = dict(name='NAMED', kind='local'), SimpleNamespace(peer_id='host')
+        backend = SimpleNamespace(active_claim=claim, rpc=lambda target, action, body, **k:written.append(body))
+        def launch(target, own, request):
+            backend.rpc(target, 'write', dict(path='/own/request.json', value=dict(claim=own,
+                argv=['python', '/kit/box_hold.py', '--wait', '0', '--label', 'case', '--', 'python', 'native'])))
+        backend.launch = launch
+        with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]):
+            retry = spread.bind_admission_transport(backend, box, needs, 60)
+            clock[0] = 20
+            spread.launch_native(backend, box, claim, {}, retry.remaining())
+        self.assertEqual(claim['runner_wait_remaining'], 40)
+        self.assertEqual(written[0]['value']['argv'][3], '40')
+
 
 if __name__ == '__main__':
     unittest.main()
