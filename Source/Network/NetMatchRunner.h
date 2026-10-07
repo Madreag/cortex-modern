@@ -215,6 +215,11 @@ namespace RTE {
 		}
 		const NetHash32& GetMatchConfigHash() const { return m_MatchConfigHash; }
 		bool UsesLobbyProtocol() const { return m_UseLobbyProtocol; }
+		/// Whether the lobby's configuration is host-authored or has been accepted from the host.
+		bool HasLobbyConfig() const {
+			return m_Config.host || m_State == NetMatchRuntimeState::Running ||
+			       m_Lobby.GetState() == NetLobbyState::WaitingForReady || m_Lobby.GetState() == NetLobbyState::Started;
+		}
 		/// Whether this round loads a checkpoint, however the checkpoint reached this peer: streamed by
 		/// the host, or already held here and therefore never streamed.
 		static bool RoundResumesASnapshot(bool resyncRound, bool receivedState, bool answeredResumeHeld) {
@@ -270,6 +275,7 @@ namespace RTE {
 		bool StartLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error);
 		bool WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error, NetSession* session = nullptr);
 		NetLobbySnapshot BuildLobbySnapshot(const INetTransport& transport, const NetSession& session) const;
+		friend bool TestAJoiningLobbyWaitsForHostConfig(std::string* error);
 		friend bool TestKickedSeatReadsOpen(std::string* error);
 		friend bool TestARunningRoundsJoinerIsNotAskedForItsStartRoster(std::string* error);
 		friend bool TestTheRostersWaitKeepsTheRoundsStart(std::string* error);

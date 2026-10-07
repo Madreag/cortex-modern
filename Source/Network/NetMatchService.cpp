@@ -8778,6 +8778,9 @@ static std::string ResyncSaveName() {
 		snapshot.failed = m_State == NetMatchServiceState::Failed;
 		snapshot.playedAMatch = m_MatchWasRunning;
 		snapshot.leftMatch = m_LeftMatch;
+		snapshot.awaitingHostConfig = !snapshot.isHost && m_AdoptedMatchConfig.sessionId == 0 &&
+		                              (snapshot.inLobby || snapshot.awaitingHostConfig);
+		if (snapshot.awaitingHostConfig) return snapshot;
 		snapshot.inputDelayText = LiveInputDelayTextLocked();
 		if (snapshot.isHost && snapshot.active) {
 			const PortMapStatus portMap = GetPortMapStatus();
@@ -8815,8 +8818,7 @@ static std::string ResyncSaveName() {
 			snapshot.modeLabel = NetMatchConfigUtil::ModeLabel(m_MatchConfig.mode);
 		}
 		if (snapshot.members.empty() && snapshot.active) {
-			// Until the runner's first publish this renders the committed roster on the host and, on a
-			// client, the local placeholder config the runner publishes from WaitForSessionReady.
+			// The host's committed roster is available before the runner's first publish.
 			for (const NetMatchPlayerSlot& slot : m_MatchConfig.players) {
 				NetLobbyMember member;
 				member.peerId = slot.peerId;
@@ -8903,8 +8905,7 @@ static std::string ResyncSaveName() {
 		NetLockstepPlane::Gap plane("lobby match config");
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_Coordinator && m_State == NetMatchServiceState::Running) return m_Coordinator->GetConfig().matchConfig;
-		// A lobby publish names the agreed config on every peer; before one arrives the request's
-		// own build stands in, which is what a client still shows while its lobby starts.
+		// Details read the accepted host configuration; the host can inspect its own setup before publishing.
 		return m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig;
 	}
 
@@ -10536,6 +10537,66 @@ static std::string ResyncSaveName() {
 		config.hostOptions = &m_HostOptionsRequest;
 	}
 
+	void NetMatchService::ConfigureLobbyPublishing(NetMatchRunnerConfig& runnerConfig, const NetMatchRunner& runner) {
+		runnerConfig.publishLobby = [this, runnerRaw = &runner](const NetLobbySnapshot& snapshot) {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (!runnerRaw->HasLobbyConfig()) {
+				if (m_AdoptedMatchConfig.sessionId == 0) m_LobbySnapshot = snapshot;
+				return;
+			}
+			m_LobbySnapshot = snapshot;
+			// A world's joiner that has begun to receive the image comes into a running world: nobody there readies up.
+			m_LobbySnapshot.joiningWorld = !m_IsHost && runnerRaw->SawWorldImageTransfer() &&
+			                               (runnerRaw->GetLobbySession().GetState() != NetLobbyState::Idle ? runnerRaw->GetLobbySession().GetMatchConfig() : runnerRaw->GetMatchConfig()).persistentWorld;
+			// The announced delay comes from the lobby's exchanged config (host-authored, already
+			// auto-adjusted) — never recomputed here, so every peer renders the same value.
+			const NetMatchConfig& config = runnerRaw->GetState() != NetMatchRuntimeState::Running && runnerRaw->GetLobbySession().GetState() != NetLobbyState::Idle
+			                                   ? runnerRaw->GetLobbySession().GetMatchConfig()
+			                                   : runnerRaw->GetMatchConfig();
+			// The options view reads the same agreed config on every peer; the mirror sits under the
+			// same lock the snapshot publish already holds.
+			m_AdoptedMatchConfig = config;
+			if (!m_IsHost) SetRelayOfferLocked(config.relay.Usable(UnixNowMs(nullptr) / 1000) ? config.relay : NetRelayConfig{});
+			AdoptWorldTicketSession(config);
+			uint8_t localPeerId = m_LocalPeerId;
+			uint32_t pingMs = 0;
+			for (const NetLobbyMember& member: snapshot.members) {
+				if (member.isLocal) {
+					localPeerId = member.peerId;
+					pingMs = member.pingMs;
+				}
+			}
+			// The readout states the host's policy, not whether a per-sender set has arrived yet: an
+			// automatic delay reads automatic from the first frame and gains the measured ping later.
+			const std::string measured = config.peerInputDelayFrames.empty() ? ")" : ", " + std::to_string(pingMs) + "ms ping)";
+			m_InputDelayText = "Input delay: " + std::to_string(NetMatchConfigUtil::PeerInputDelay(config, localPeerId)) +
+			    (config.delayPolicy == NetMatchDelayPolicy::Fixed ? " (fixed)" : " (auto" + measured);
+			if (m_ChatSession) {
+				// The roster's lockstep ids are the session's assigned ids plus one; the host relays
+				// team scope only inside the sender's team.
+				std::map<uint8_t, int> chatTeams;
+				for (const NetMatchPlayerSlot& slot : config.players) {
+					if (!slot.cpu && slot.peerId > 0) {
+						chatTeams[static_cast<uint8_t>(slot.peerId - 1)] = slot.team;
+					}
+				}
+				m_ChatSession->SetChatTeams(std::move(chatTeams));
+			}
+			// The host's seat panel moderates from the admission rows, and the lobby is where it most
+			// needs them; they are named from the roster that has just been published.
+			PublishLobbyModerationViewLocked();
+			// A world's joiner sits in the lobby while the image comes: its seat lines read the roster the host has already sent,
+			// here on the thread that pumps its session.
+			if (!m_IsHost && config.persistentWorld && m_ReconnectClient.GetRosterReplica().HasRoster()) RefreshSeatViewsLocked(AdmissionNowMs());
+			// Its own seat is the one its ticket names: a world's seats and the lobby's ids are not the same numbers.
+			m_WorldJoinerSeatPeer = 0;
+			if (!m_IsHost && config.persistentWorld && m_ReconnectClient.HasRecord()) {
+				for (const NetH4Seat& entry: NetH4BuildSeatTable(config))
+					if (!entry.cpu && entry.stableSeat == m_ReconnectClient.GetRecord().stableSeat) m_WorldJoinerSeatPeer = entry.lockstepPeerId;
+			}
+		};
+	}
+
 	void NetMatchService::WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest, NetIdentityBuildOptions identityOptions) {
 		std::string identityError;
 		const bool identityReady = !m_CancelRequested.load() && NetIdentity::CompleteManifestFromInputs(manifest, &identityError, identityOptions);
@@ -10647,60 +10708,7 @@ static std::string ResyncSaveName() {
 		}
 		// Every peer answers whether it holds the checkpoint; one that does is streamed nothing.
 		runnerConfig.resumeHeld = [this](const NetLobbyResume& offer) { return AnswerResumeOffer(offer); };
-		NetMatchRunner* runnerRaw = runner.get();
-		runnerConfig.publishLobby = [this, runnerRaw](const NetLobbySnapshot& snapshot) {
-			std::lock_guard<std::mutex> lock(m_Mutex);
-			m_LobbySnapshot = snapshot;
-			// A world's joiner that has begun to receive the image comes into a running world: nobody there readies up.
-			m_LobbySnapshot.joiningWorld = !m_IsHost && runnerRaw->SawWorldImageTransfer() &&
-			                               (runnerRaw->GetLobbySession().GetState() != NetLobbyState::Idle ? runnerRaw->GetLobbySession().GetMatchConfig() : runnerRaw->GetMatchConfig()).persistentWorld;
-			// The announced delay comes from the lobby's exchanged config (host-authored, already
-			// auto-adjusted) — never recomputed here, so every peer renders the same value.
-			const NetMatchConfig& config = runnerRaw->GetState() != NetMatchRuntimeState::Running && runnerRaw->GetLobbySession().GetState() != NetLobbyState::Idle
-			                                   ? runnerRaw->GetLobbySession().GetMatchConfig()
-			                                   : runnerRaw->GetMatchConfig();
-			// The options view reads the same agreed config on every peer; the mirror sits under the
-			// same lock the snapshot publish already holds.
-			m_AdoptedMatchConfig = config;
-			if (!m_IsHost) SetRelayOfferLocked(config.relay.Usable(UnixNowMs(nullptr) / 1000) ? config.relay : NetRelayConfig{});
-			AdoptWorldTicketSession(config);
-			uint8_t localPeerId = m_LocalPeerId;
-			uint32_t pingMs = 0;
-			for (const NetLobbyMember& member: snapshot.members) {
-				if (member.isLocal) {
-					localPeerId = member.peerId;
-					pingMs = member.pingMs;
-				}
-			}
-			// The readout states the host's policy, not whether a per-sender set has arrived yet: an
-			// automatic delay reads automatic from the first frame and gains the measured ping later.
-			const std::string measured = config.peerInputDelayFrames.empty() ? ")" : ", " + std::to_string(pingMs) + "ms ping)";
-			m_InputDelayText = "Input delay: " + std::to_string(NetMatchConfigUtil::PeerInputDelay(config, localPeerId)) +
-			    (config.delayPolicy == NetMatchDelayPolicy::Fixed ? " (fixed)" : " (auto" + measured);
-			if (m_ChatSession) {
-				// The roster's lockstep ids are the session's assigned ids plus one; the host relays
-				// team scope only inside the sender's team.
-				std::map<uint8_t, int> chatTeams;
-				for (const NetMatchPlayerSlot& slot : config.players) {
-					if (!slot.cpu && slot.peerId > 0) {
-						chatTeams[static_cast<uint8_t>(slot.peerId - 1)] = slot.team;
-					}
-				}
-				m_ChatSession->SetChatTeams(std::move(chatTeams));
-			}
-			// The host's seat panel moderates from the admission rows, and the lobby is where it most
-			// needs them; they are named from the roster that has just been published.
-			PublishLobbyModerationViewLocked();
-			// A world's joiner sits in the lobby while the image comes: its seat lines read the roster the host has already sent,
-			// here on the thread that pumps its session.
-			if (!m_IsHost && config.persistentWorld && m_ReconnectClient.GetRosterReplica().HasRoster()) RefreshSeatViewsLocked(AdmissionNowMs());
-			// Its own seat is the one its ticket names: a world's seats and the lobby's ids are not the same numbers.
-			m_WorldJoinerSeatPeer = 0;
-			if (!m_IsHost && config.persistentWorld && m_ReconnectClient.HasRecord()) {
-				for (const NetH4Seat& entry: NetH4BuildSeatTable(config))
-					if (!entry.cpu && entry.stableSeat == m_ReconnectClient.GetRecord().stableSeat) m_WorldJoinerSeatPeer = entry.lockstepPeerId;
-			}
-		};
+		ConfigureLobbyPublishing(runnerConfig, *runner);
 
 		// One clock from here on: setup, play, stalls and every resync read the same elapsed time.
 		{

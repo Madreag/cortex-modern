@@ -100,6 +100,7 @@ namespace RTE {
 		bool active = false;
 		bool isHost = false;
 		bool inLobby = false;
+		bool awaitingHostConfig = false; //!< A joining client has no match setup or seats to show yet.
 		bool running = false;
 		bool failed = false;
 		bool hostLost = false;

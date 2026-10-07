@@ -927,12 +927,17 @@ namespace RTE {
 	}
 
 	NetLobbySnapshot NetMatchRunner::BuildLobbySnapshot(const INetTransport& transport, const NetSession& session) const {
+		NetLobbySnapshot snapshot;
+		snapshot.lobbyPhase = StateName(m_State);
+		snapshot.awaitingHostConfig = !HasLobbyConfig();
+		if (snapshot.awaitingHostConfig) {
+			if (m_SlotWaitLeftMs != 0) snapshot.waitLine = NetSlotWaitLine(m_SlotWaitLeftMs);
+			return snapshot;
+		}
 		// A client adopts the host's roster mid-round; read it from the live lobby so the member
 		// list grows to the real player count instead of the local placeholder config's.
 		const NetMatchConfig& rosterConfig = m_State == NetMatchRuntimeState::Running || m_Lobby.GetState() == NetLobbyState::Idle ? m_MatchConfig : m_Lobby.GetMatchConfig();
-		NetLobbySnapshot snapshot;
 		snapshot.hostPeerId = m_ActiveHostPeerId != 0 ? m_ActiveHostPeerId : rosterConfig.hostPeerId;
-		snapshot.lobbyPhase = StateName(m_State);
 		// A joiner that receives the world's image says how much has come, how fast and how long is left.
 		if (const auto [received, total] = m_Lobby.GetStateTransferProgress(); !m_Config.host && total > 0 && !m_Lobby.HasCompleteStateTransfer()) {
 			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
