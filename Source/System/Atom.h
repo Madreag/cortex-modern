@@ -11,6 +11,7 @@ namespace RTE {
 
 	class SLTerrain;
 	class MovableObject;
+	class CheckpointText;
 
 	enum {
 		HITOR = 0,
@@ -70,6 +71,9 @@ namespace RTE {
 		SerializableClassNameGetter;
 		SerializableOverrideMethods;
 		std::string SaveCheckpoint() const;
+		/// Owns atom fields before the saver thread formats the existing list.
+		static CheckpointText CaptureCheckpointList(const std::vector<Atom*>& atoms);
+		static std::string CheckpointListSelfTestMismatch();
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		void ResolveCheckpointLinks();
 
@@ -482,19 +486,19 @@ namespace RTE {
 		bool m_HasCheckpointLinks = false;
 		std::array<long, 5> CaptureCheckpointLinkIDs() const;
 
-		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
-			archive(self.m_Offset, self.m_OriginalOffset, self.m_Normal, self.m_SubgroupID,
+		template <class Archive, class Self> static decltype(auto) VisitCheckpoint(Archive& archive, Self& self) {
+			return archive(self.m_Offset, self.m_OriginalOffset, self.m_Normal, self.m_SubgroupID,
 			    self.m_StepWasTaken, self.m_StepRatio, self.m_SegTraj, self.m_SegProgress,
 			    self.m_ChangedDir, self.m_PrevError, self.m_ResultWrapped,
-			    self.m_MOHitsDisabled, self.m_TerrainHitsDisabled, self.m_IgnoreMOID);
-			archive(self.m_IgnoreMOIDs, self.m_LastTrailPoints, self.m_TrailPoints);
-			archive(self.m_MOIDHit, self.m_TerrainMatHit, self.m_NumPenetrations);
-			archive(self.m_TrailColor);
-			archive(self.m_TrailLength, self.m_TrailLengthVariation,
+			    self.m_MOHitsDisabled, self.m_TerrainHitsDisabled, self.m_IgnoreMOID,
+			    self.m_IgnoreMOIDs, self.m_LastTrailPoints, self.m_TrailPoints,
+			    self.m_MOIDHit, self.m_TerrainMatHit, self.m_NumPenetrations,
+			    self.m_TrailColor,
+			    self.m_TrailLength, self.m_TrailLengthVariation,
 			    self.m_IntPos, self.m_PrevIntPos, self.m_TrailPos, self.m_HitPos,
 			    self.m_Delta, self.m_Delta2, self.m_Increment, self.m_Error, self.m_Dom,
-			    self.m_Sub, self.m_DomSteps, self.m_SubSteps, self.m_SubStepped);
-			archive(self.m_LastHit.BitmapNormal, self.m_LastHit.TotalMass,
+			    self.m_Sub, self.m_DomSteps, self.m_SubSteps, self.m_SubStepped,
+			    self.m_LastHit.BitmapNormal, self.m_LastHit.TotalMass,
 			    self.m_LastHit.MomInertia, self.m_LastHit.SquaredMIHandle,
 			    self.m_LastHit.HitPoint, self.m_LastHit.HitRadius, self.m_LastHit.HitVel,
 			    self.m_LastHit.VelDiff, self.m_LastHit.PreImpulse, self.m_LastHit.ResImpulse,

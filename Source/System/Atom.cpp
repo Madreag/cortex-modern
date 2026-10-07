@@ -13,6 +13,8 @@
 #include "tracy/Tracy.hpp"
 
 #include <bit>
+#include <future>
+#include <tuple>
 
 #include <format>
 #include <mutex>
@@ -300,6 +302,160 @@ std::string Atom::SaveCheckpoint() const {
     }
     writer(materials, CaptureCheckpointLinkIDs(), m_IgnoreMOIDsByGroup != nullptr);
     return writer.Text();
+}
+
+namespace {
+	// Own values rather than Atom/Color objects: their constructors and copy
+	// constructors have engine side effects, and Color's copy recalculates its index.
+	struct AtomColorValues {
+		std::array<int, 4> channels;
+		std::string SaveCheckpoint() const {
+			CheckpointWriter writer("Color1");
+			writer(channels);
+			return writer.Text();
+		}
+	};
+	template<class T> requires (std::is_integral_v<T> || std::is_enum_v<T>)
+	T OwnAtomValue(const T& value) { return value; }
+	unsigned int OwnAtomValue(const bool& value) {
+		unsigned char byte;
+		std::memcpy(&byte, &value, sizeof(byte));
+		return byte;
+	}
+	uint32_t OwnAtomValue(float value) { return std::bit_cast<uint32_t>(value); }
+	std::array<uint32_t, 2> OwnAtomValue(const Vector& value) { return {OwnAtomValue(value.m_X), OwnAtomValue(value.m_Y)}; }
+	AtomColorValues OwnAtomValue(const Color& value) { return {{value.GetR(), value.GetG(), value.GetB(), value.GetIndex()}}; }
+	template<class T, class U>
+	auto OwnAtomValue(const std::pair<T, U>& value) { return std::pair{OwnAtomValue(value.first), OwnAtomValue(value.second)}; }
+	template<class T, size_t N>
+	auto OwnAtomValue(const T (&values)[N]) {
+		std::array<decltype(OwnAtomValue(values[0])), N> owned;
+		for (size_t index = 0; index < N; ++index) owned[index] = OwnAtomValue(values[index]);
+		return owned;
+	}
+	template<class T>
+	auto OwnAtomValue(const std::vector<T>& values) {
+		std::vector<decltype(OwnAtomValue(std::declval<const T&>()))> owned;
+		owned.reserve(values.size());
+		for (const T& value: values) owned.push_back(OwnAtomValue(value));
+		return owned;
+	}
+	template<class T> size_t AtomDynamicBytes(const T&) { return 0; }
+	template<class T> size_t AtomDynamicBytes(const std::vector<T>& values) { return values.size() * sizeof(T); }
+}
+
+CheckpointText Atom::CaptureCheckpointList(const std::vector<Atom*>& atoms) {
+	const auto copy = [](const auto&... values) { return std::tuple{OwnAtomValue(values)...}; };
+	using Values = decltype(VisitCheckpoint(copy, std::declval<const Atom&>()));
+	struct Record {
+		Values values;
+		std::array<size_t, 3> materials;
+		std::array<long, 5> links;
+		bool groupIgnoreList;
+	};
+	std::vector<Record> records;
+	records.reserve(atoms.size());
+	std::vector<CheckpointText> materials;
+	std::unordered_map<const Material*, size_t> materialIndices;
+	std::map<std::string, size_t> restoredIndices;
+	size_t bytes = 0;
+	for (const Atom* atom: atoms) {
+		std::array<size_t, 3> indices;
+		const Material* sources[] = {atom->m_Material, atom->m_LastHit.HitMaterial[0], atom->m_LastHit.HitMaterial[1]};
+		for (size_t index = 0; index < indices.size(); ++index) {
+			if (atom->m_HasCheckpointMaterials) {
+				const std::string& reference = atom->m_CheckpointMaterialReferences[index];
+				const auto [found, inserted] = restoredIndices.try_emplace(reference, materials.size());
+				if (inserted) materials.emplace_back(reference);
+				indices[index] = found->second;
+			} else {
+				const auto [found, inserted] = materialIndices.try_emplace(sources[index], materials.size());
+				if (inserted) {
+					auto* cache = CheckpointWriter::CurrentCache();
+					constexpr unsigned channel = std::numeric_limits<unsigned>::max();
+					const CheckpointText* current = cache ? cache->PeekCurrent(sources[index], channel) : nullptr;
+					if (current) materials.push_back(*current);
+					else {
+						CheckpointText reference = CheckpointWriter::Native([&] { return g_SceneMan.SaveMaterialReference(sources[index]); });
+						materials.push_back(cache ? cache->Remember(sources[index], channel, std::move(reference)) : std::move(reference));
+					}
+				}
+				indices[index] = found->second;
+			}
+		}
+		records.push_back({VisitCheckpoint(copy, *atom), indices, atom->CaptureCheckpointLinkIDs(), atom->m_IgnoreMOIDsByGroup != nullptr});
+		bytes += sizeof(Record) + std::apply([](const auto&... values) { return (AtomDynamicBytes(values) + ... + size_t{0}); }, records.back().values);
+	}
+	for (const CheckpointText& material: materials) bytes += sizeof(CheckpointText) + material.OwnedBytes();
+	// The producer holds no live pointers. Each atom keeps the old Atom2 field
+	// order and length prefix; only formatting and per-atom allocations move.
+	return CheckpointText::Deferred([records = std::move(records), materials = std::move(materials)] {
+		std::string list = std::to_string(records.size()) + " ";
+		for (const Record& record: records) {
+			CheckpointWriter writer("Atom2");
+			std::apply([&writer](const auto&... values) { writer(values...); }, record.values);
+			for (size_t index: record.materials) writer(materials.at(index));
+			writer(record.links, record.groupIgnoreList);
+			const std::string& text = writer.Text();
+			list += std::to_string(text.size());
+			list += " ";
+			list += text;
+			list += " ";
+		}
+		return list;
+	}, bytes);
+}
+
+
+std::string Atom::CheckpointListSelfTestMismatch() {
+	std::string expected;
+	CheckpointText captured;
+	{
+		auto first = std::make_unique<Atom>();
+		auto second = std::make_unique<Atom>();
+		first->m_Offset.m_X = std::bit_cast<float>(uint32_t{0x7fc01234});
+		first->m_OriginalOffset.m_Y = -0.0F;
+		first->m_IgnoreMOIDs = {1, 17, 99};
+		first->m_LastTrailPoints = {{-31, 2}, {100, -200}};
+		first->m_TrailPoints = {{7, 8}};
+		first->m_IntPos[0] = std::numeric_limits<int>::min();
+		first->m_LastHit.TotalMass[1] = std::bit_cast<float>(uint32_t{0xffc05678});
+		const unsigned char raw = 254;
+		std::memcpy(&first->m_LastHit.Terminate[0], &raw, sizeof(raw));
+		first->m_HasCheckpointLinks = true;
+		first->m_CheckpointLinkIDs = {0, 41, 0, 51, 61};
+		first->m_HasCheckpointMaterials = true;
+		first->m_CheckpointMaterialReferences = {std::string("named\0material", 14), "", "same"};
+		std::vector<MOID> ignored = {23};
+		first->m_IgnoreMOIDsByGroup = &ignored;
+		std::vector<Atom*> atoms = {first.get(), second.get(), first.get()};
+		const auto ordinary = [](const std::vector<Atom*>& values) {
+			std::string result = std::to_string(values.size()) + " ";
+			for (const Atom* atom: values) {
+				const std::string text = atom->SaveCheckpoint();
+				result += std::to_string(text.size()) + " " + text + " ";
+			}
+			return result;
+		};
+		expected = ordinary(atoms);
+		{
+			CheckpointWriter::BatchScope batch(true);
+			captured = CheckpointWriter::CaptureValues([&] { return CaptureCheckpointList(atoms); });
+		}
+		first->m_IgnoreMOIDs.clear();
+		first->m_LastTrailPoints.clear();
+		first->m_CheckpointMaterialReferences.fill("changed");
+		first->m_LastHit.TotalMass[1] = 123.0F;
+	}
+	// All live atoms, strings, trails and group pointers have died before traversal.
+	auto worker = std::async(std::launch::async, [captured] { return std::pair{captured.Text(), captured.SharedText()}; });
+	const auto [full, shared] = worker.get();
+	if (full != expected) return "owned atom list differs from the ordinary field order";
+	if (shared != expected) return "atom list lost shared fields";
+	CheckpointWriter::BatchScope batch(true);
+	const auto empty = CaptureCheckpointList({});
+	if (empty.Text() != "0 " || empty.SharedText() != "0 ") return "empty atom list differs";
+	return {};
 }
 
 bool Atom::LoadCheckpoint(std::string_view text, bool validateOnly) {

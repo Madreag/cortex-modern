@@ -623,6 +623,30 @@ namespace RTE::CheckpointLua {
 			}
 		}
 
+		// Binding-table and constant descriptors read no Lua property or native visitor.
+		// Keep their returned values exactly as the protected helper call does.
+		template<class PushValues> NativeImage::Result RecordPushed(PushValues push, bool keep = true) {
+			const int top = lua_gettop(State());
+			struct RestoreStack { lua_State* state; int top; ~RestoreStack() { lua_settop(state, top); } } stack{State(), top};
+			const uint64_t before = luaJIT_state_serial(State());
+			push();
+			const uint64_t after = luaJIT_state_serial(State());
+			NativeImage::Result result;
+			const int last = lua_gettop(State());
+			if (CheckpointWriter::BatchEnabled()) result.values.reserve(last - top);
+			std::unordered_set<const void*> seen;
+			for (int index = top + 1; index <= last; ++index) {
+				NativeImage::Value value;
+				value.token = At(index);
+				if (const auto* text = ScriptGraphCapturedText(State(), index)) value.text = *text;
+				if (keep) {
+					if (!CheckpointWriter::BatchEnabled() || tvisgcv(&value.token)) Keep(index);
+					NewResults(index, before, after, seen);
+				}
+				result.values.push_back(std::move(value));
+			}
+			return result;
+		}
 		template<class Arguments> NativeImage::Result Invoke(lua_CFunction function, const char* name, Arguments arguments, bool observesNative = false) {
 			const int top = lua_gettop(State());
 			struct RestoreStack { lua_State* state; int top; ~RestoreStack() { lua_settop(state, top); } } stack{State(), top};
@@ -803,9 +827,25 @@ namespace RTE::CheckpointLua {
 				AnswerImmutable(quick, classRep, false);
 				shared.emplace(SharedHit{std::move(quick), 0});
 			}
-			entry.members = One(MemberSources, "Members", value);
-			entry.helpers.emplace("_ScriptGraphInstance", One(ScriptGraphInstance, "Instance", value));
-			entry.helpers.emplace("_ScriptGraphNativeAddress", One(ScriptGraphNativeAddress, "NativeAddress", value));
+			const bool ownedScalar = CheckpointWriter::BatchEnabled() && owned && !detached && object && object->crep() &&
+			    object->crep()->get_class_type() == luabind::detail::class_rep::cpp_class &&
+			    ((className == "Vector" && object->crep()->type() == LUABIND_TYPEID(Vector)) ||
+			     (className == "Timer" && object->crep()->type() == LUABIND_TYPEID(Timer)));
+			if (ownedScalar) {
+				entry.members = RecordPushed([&] {
+					object->crep()->get_table(State());
+					if (object->get_lua_table().is_valid()) object->get_lua_table().get(State());
+				});
+				entry.helpers.emplace("_ScriptGraphInstance", RecordPushed([&] {
+					if (object->get_lua_table().is_valid()) object->get_lua_table().get(State());
+					else lua_pushnil(State());
+				}));
+				entry.helpers.emplace("_ScriptGraphNativeAddress", RecordPushed([&] { lua_pushlightuserdata(State(), object->ptr()); }));
+			} else {
+				entry.members = One(MemberSources, "Members", value);
+				entry.helpers.emplace("_ScriptGraphInstance", One(ScriptGraphInstance, "Instance", value));
+				entry.helpers.emplace("_ScriptGraphNativeAddress", One(ScriptGraphNativeAddress, "NativeAddress", value));
+			}
 			if (detached) {
 				for (auto& descriptor: entry.native) descriptor.error = "frozen native capture found detached " + className + " userdata";
 				if (shared) CompareShared(shared->entry, entry, className);
@@ -813,7 +853,10 @@ namespace RTE::CheckpointLua {
 			}
 			std::array<std::string_view, 2> kinds;
 			for (int named = 0; named < 2; ++named) {
-				entry.native[named] = Invoke(ScriptGraphNative, "Native", [&] { Push(value); lua_pushboolean(State(), named); return 2; }, true);
+				if (ownedScalar) {
+					if (named == 0) entry.native[0] = RecordPushed([&] { lua_pushstring(State(), className == "Vector" ? "vector" : "timer"); });
+					else entry.native[1] = entry.native[0];
+				} else entry.native[named] = Invoke(ScriptGraphNative, "Native", [&] { Push(value); lua_pushboolean(State(), named); return 2; }, true);
 				kinds[named] = Kind(entry.native[named]);
 			}
 			const auto contains = [&kinds](std::string_view kind) { return kinds[0] == kind || kinds[1] == kind; };

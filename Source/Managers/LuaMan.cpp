@@ -14,6 +14,7 @@
 #include "ScenarioRunner.h"
 #include "SoundSimulation.h"
 #include "AtomGroup.h"
+#include "Atom.h"
 #include "PieMenu.h"
 #include "PieSlice.h"
 #include "ContentFile.h"
@@ -9960,6 +9961,13 @@ end
 	checkpointValues = BitmapCheckpoint::RunSelfTest() && checkpointValues;
 	checkpointValues = BitmapSnapshot::RunSelfTest() && checkpointValues;
 	checkpointValues = RunOwnedCheckpointSelfTest() && checkpointValues;
+	{
+		const std::string mismatch = Atom::CheckpointListSelfTestMismatch();
+		const bool exact = mismatch.empty();
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " owned_atom_lists_outlive_their_sources "
+		          << (exact ? "raw booleans, NaNs, trails, material strings, links and empty lists stay exact" : mismatch) << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
 	checkpointValues = PieMenu::RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = Actor::RunBorrowedReferenceSelfTest() && checkpointValues;
 	checkpointValues = GameActivity::RunDeliveryReferenceSelfTest() && checkpointValues;

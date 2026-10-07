@@ -175,13 +175,12 @@ std::string AtomGroup::SaveCheckpoint() const {
 	if (!inlineAtoms) atoms.reserve(m_Atoms.size());
 	const bool needIndices = !CheckpointWriter::BatchEnabled() || !m_SubGroups.empty();
 	if (CheckpointWriter::BatchEnabled() && needIndices) indices.reserve(m_Atoms.size());
-	if (inlineAtoms) writer(m_Atoms.size());
 	size_t index = 0;
 	std::optional<CaptureTrace::Span> atomsSpan(std::in_place, "atom_values", CaptureTrace::Active() ? std::to_string(m_Atoms.size()) : std::string());
+	if (inlineAtoms) writer.AppendFields(Atom::CaptureCheckpointList(m_Atoms));
 	for (const Atom* atom: m_Atoms) {
 		if (needIndices) indices.emplace(atom, index++);
-		if (inlineAtoms) writer.NativeValue([atom] { return atom->SaveCheckpoint(); });
-		else atoms.push_back(CheckpointWriter::Native([atom] { return atom->SaveCheckpoint(); }));
+		if (!inlineAtoms) atoms.push_back(CheckpointWriter::Native([atom] { return atom->SaveCheckpoint(); }));
 	}
 	atomsSpan.reset();
 	std::map<long, std::vector<size_t>> subgroups;

@@ -107,6 +107,11 @@ namespace RTE {
 		/// Opens and closes such a run around values a visitor writes itself.
 		void BeginPerPeer() { if (m_Recording) Buffer().PeerBegin(); }
 		void EndPerPeer() { if (m_Recording) Buffer().PeerEnd(); }
+		/// Appends an owned sequence that already carries its counts and element lengths.
+		void AppendFields(const CheckpointText& value) {
+			if (m_Recording) { RefuseDivertedValue(); Buffer().Child(value); }
+			else m_Text += value.Text();
+		}
 		template<class Visit> void NativeValue(Visit visit) {
 			if (m_Recording && BatchEnabled()) InlineNative(visit);
 			else Value(Native(visit));
