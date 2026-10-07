@@ -241,6 +241,17 @@ namespace RTE {
 				return taken;
 			}
 
+			/// The signals queued at or before queuedBy, in order; later ones stay queued.
+			std::deque<Signal> TakeQueuedBy(double queuedBy) {
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				std::deque<Signal> taken;
+				while (!m_Signals.empty() && m_Signals.front().queuedMs <= queuedBy) {
+					taken.push_back(std::move(m_Signals.front()));
+					m_Signals.pop_front();
+				}
+				return taken;
+			}
+
 			const std::string& Name() const { return m_Name; }
 
 		private:
@@ -360,6 +371,14 @@ namespace RTE {
 				Say(label + " delivered: ReceivedP2PCustomSignal returned " + (accepted ? "true" : "false") + " after " + Ms(ElapsedMs() - signal.queuedMs) + "ms queued");
 			}
 			return refused;
+		}
+
+		/// Delivers each signal once it has waited delayMs, as a signal crossing a slow directory arrives.
+		void DeliverAfter(SignalQueue& queue, GnsTransport& receiver, ISteamNetworkingSignalingRecvContext& context, double delayMs) {
+			for (Signal& signal : queue.TakeQueuedBy(ElapsedMs() - delayMs)) {
+				const bool accepted = receiver.ReceiveP2PSignal(signal.bytes.data(), static_cast<int>(signal.bytes.size()), &context);
+				Say("signal " + queue.Name() + " #" + std::to_string(signal.number) + " delivered after " + Ms(ElapsedMs() - signal.queuedMs) + "ms: " + (accepted ? "accepted" : "refused"));
+			}
 		}
 
 		void Drain(Side& side) {
@@ -572,6 +591,109 @@ namespace RTE {
 					    "; both Connected " + (connectedMs < 0 ? std::string("never") : Ms(connectedMs - connectMs) + "ms after ConnectP2P"));
 				}
 			}
+			return Finish(failure);
+		}
+
+		std::string ConfigValue(const GnsPeerConnectionInfo& info, const std::string& name) {
+			for (const std::string& entry : info.config) {
+				if (entry.rfind(name + "=", 0) == 0) return entry.substr(name.size() + 1);
+			}
+			return "(absent)";
+		}
+
+		/// connect-limit: every rendezvous signal waits delayMs in the stub, as signals crossing a slow directory do, so the connect
+		/// outlasts GNS's 10 s default and must still reach Connected inside the ICE limit; then a joiner whose signals are never
+		/// delivered gives up inside that limit; and the route tracker reports one move per change of the live route.
+		int RunConnectLimit(double delayMs) {
+			const uint32_t limitMs = GnsTransport::IceConnectTimeoutMs();
+			Say("mode: connect-limit, single process; every rendezvous signal waits " + Ms(delayMs) + "ms in the stub; the ICE connect limit is " + std::to_string(limitMs) + "ms");
+			EnableGnsOutput();
+			std::string failure;
+			{
+				using Observation = GnsRouteTracker::Observation;
+				GnsRouteTracker tracker;
+				bool ok = tracker.Observe(7, true) == Observation::First && tracker.Observe(7, true) == Observation::Same &&
+				          tracker.Observe(7, false) == Observation::Moved && tracker.Observe(7, false) == Observation::Same &&
+				          tracker.Observe(7, true) == Observation::Moved && tracker.Observe(8, false) == Observation::First &&
+				          std::string(GnsRouteTracker::MoveName(false)) == "relay->direct" && std::string(GnsRouteTracker::MoveName(true)) == "direct->relay";
+				tracker.Forget(7);
+				ok = ok && tracker.Observe(7, false) == Observation::First;
+				if (!ok) {
+					failure = "the route tracker did not report exactly one move per change of a connection's live route";
+				} else {
+					Say("route tracker: first, same, relay->direct, same, direct->relay, a second connection first; a forgotten connection starts again");
+				}
+			}
+
+			GnsP2PConfig hostConfig;
+			GnsP2PConfig joinerConfig;
+			SingleProcessConfigs(&hostConfig, &joinerConfig);
+			const auto toHost = std::make_shared<SignalQueue>("joiner->host");
+			const auto toJoiner = std::make_shared<SignalQueue>("host->joiner");
+			const auto releases = std::make_shared<std::atomic<int>>(0);
+			if (failure.empty()) {
+				Side host("host");
+				Side joiner("joiner");
+				StubRecvContext hostContext(toJoiner, releases, Answer::Accept);
+				StubRecvContext joinerContext(toHost, releases, Answer::Ignore);
+				const auto pump = [&] {
+					DeliverAfter(*toHost, host.transport, hostContext, delayMs);
+					DeliverAfter(*toJoiner, joiner.transport, joinerContext, delayMs);
+					Drain(host);
+					Drain(joiner);
+				};
+				std::string error;
+				if (!host.transport.StartHostP2P(c_HostVirtualPort, hostConfig, &error)) {
+					failure = "StartHostP2P: " + error;
+				} else {
+					const std::string identity = host.transport.GetLocalIdentity();
+					const double connectMs = ElapsedMs();
+					if (!joiner.transport.ConnectP2P(new StubConnectionSignaling(toHost, releases), identity, c_HostVirtualPort, joinerConfig, &error)) {
+						failure = "ConnectP2P: " + error;
+					} else {
+						joiner.peer = 1;
+						const bool connected = WaitUntil(limitMs + 5000.0, pump, [&] { return host.closed || joiner.closed || (joiner.connected && IsConnected(joiner) && IsConnected(host)); }) &&
+						                       !host.closed && !joiner.closed;
+						const double tookMs = ElapsedMs() - connectMs;
+						if (!connected) {
+							failure = "the slow rendezvous did not connect: the joiner ended " + StateName(joiner.transport.GetPeerConnectionInfo(joiner.peer).state) + " \"" + joiner.closeReason +
+							          "\" " + Ms(tookMs) + "ms after ConnectP2P, the host \"" + host.closeReason + "\"";
+						} else {
+							Say("both sides Connected " + Ms(tookMs) + "ms after ConnectP2P through the slow rendezvous");
+							for (Side* side : {&host, &joiner}) {
+								const std::string value = ConfigValue(side->transport.GetPeerConnectionInfo(side->peer), "TimeoutInitial");
+								Say(std::string(side->name) + " connection config TimeoutInitial=" + value);
+								if (failure.empty() && value != std::to_string(limitMs)) failure = std::string(side->name) + "'s ICE connection runs with TimeoutInitial=" + value + ", not the ICE limit " + std::to_string(limitMs);
+							}
+							if (failure.empty() && tookMs <= 10000.0) {
+								failure = "the slow rendezvous connected in " + Ms(tookMs) + "ms, inside GNS's 10 s default, so it does not exercise the limit: raise the delay";
+							}
+						}
+					}
+				}
+				host.transport.Stop();
+				joiner.transport.Stop();
+			}
+			if (failure.empty()) {
+				Side joiner("joiner");
+				const auto nowhere = std::make_shared<SignalQueue>("joiner->nowhere");
+				std::string error;
+				const double connectMs = ElapsedMs();
+				if (!joiner.transport.ConnectP2P(new StubConnectionSignaling(nowhere, releases), "str:connect-limit-absent-host", c_HostVirtualPort, joinerConfig, &error)) {
+					failure = "ConnectP2P to the absent host: " + error;
+				} else {
+					joiner.peer = 1;
+					WaitUntil(limitMs + 5000.0, [&] { nowhere->TakeAll(); Drain(joiner); }, [&] { return joiner.closed; });
+					const double tookMs = ElapsedMs() - connectMs;
+					if (!joiner.closed) {
+						failure = "a connect to a host that never answers was still open " + Ms(tookMs) + "ms after ConnectP2P, past the ICE limit of " + std::to_string(limitMs) + "ms";
+					} else {
+						Say("a connect to a host that never answers ended " + Ms(tookMs) + "ms after ConnectP2P: \"" + joiner.closeReason + "\"");
+					}
+				}
+				joiner.transport.Stop();
+			}
+			Say("transports destroyed; GNS released " + std::to_string(releases->load()) + " stub signaling object(s)");
 			return Finish(failure);
 		}
 
@@ -1604,10 +1726,19 @@ namespace RTE {
 		if (args.size() == 1 && args[0] == "identity-guard") {
 			return RunIdentityGuard();
 		}
+		if (args[0] == "connect-limit" && args.size() == 2 && ParseNumber(args[1], &value) && value > 0 && value < 60000) {
+			return RunConnectLimit(static_cast<double>(value));
+		}
 		if (args.size() == 1 && args[0] == "payload-hold") {
 			std::string error;
 			const bool passed = GnsTransport::PayloadHoldSelfTest(&error);
 			std::cout << "[net-p2p-selftest] " << (passed ? "PASS payload_hold_order_and_cap" : "FAIL: " + error) << std::endl;
+			return passed ? 0 : 1;
+		}
+		if (args.size() == 1 && args[0] == "uplink-stall") {
+			std::string error;
+			const bool passed = GnsTransport::UplinkStallSelfTest(&error);
+			std::cout << "[net-p2p-selftest] " << (passed ? "PASS uplink_stall_sends_only" : "FAIL: " + error) << std::endl;
 			return passed ? 0 : 1;
 		}
 		if (args[0] == "relay-hold" && args.size() == 3 && ParseNumber(args[1], &value) && value > 0) {
@@ -1626,7 +1757,7 @@ namespace RTE {
 				return RunDirectory(variant, isHost, value, args[at + 1], args[at + 2], args[at + 3], isHost ? args[at + 4] : std::string());
 			}
 		}
-		std::cout << "[net-p2p-selftest] FAIL: usage: -net-p2p-selftest [reject | close-on-accept | gather <iceEnable> | drop j2h|h2j <n> | host <port> | join <port> | identity-guard | payload-hold | goodbye"
+		std::cout << "[net-p2p-selftest] FAIL: usage: -net-p2p-selftest [reject | close-on-accept | gather <iceEnable> | drop j2h|h2j <n> | host <port> | join <port> | identity-guard | payload-hold | connect-limit <delay-ms> | goodbye"
 		             " | relay-hold <seconds> <turn-server> | relay-renew <turn-server>"
 		             " | dir-host <vport> <url> <pin> <session-id> <token> | dir-join <vport> <url> <pin> <session-id>"
 		             " | dir-reject|dir-dup host <vport> <url> <pin> <session-id> <token> | dir-reject|dir-dup join <vport> <url> <pin> <session-id>]" << std::endl;

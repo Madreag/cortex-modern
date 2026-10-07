@@ -133,6 +133,40 @@ def sample_register(**overrides: object) -> dict[str, Any]:
 
 
 class DirectoryTests(unittest.TestCase):
+    def test_only_the_host_delete_proves_the_session_ended(self) -> None:
+        store = session_directory.SessionDirectory(15, 5)
+        created = store.register(sample_register(), "192.0.2.1", 0)
+        sid, token = created["session_id"], created["token"]
+        self.assertEqual(store.host_end_status(sid, 1), {"session_id": sid, "ended_by_host": False})
+        store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 0, "state": "running", "listed": False}, 2)
+        self.assertFalse(store.host_end_status(sid, 3)["ended_by_host"], "hidden running row proved an end")
+        store.prune(30)
+        self.assertFalse(store.host_end_status(sid, 31)["ended_by_host"], "expired running row proved an end")
+        with self.assertRaises(PermissionError):
+            store.delete(sid, {"token": "not-the-host-token"}, 32)
+        self.assertFalse(store.host_end_status(sid, 33)["ended_by_host"])
+        store.delete(sid, {"token": token}, 34)
+        self.assertTrue(store.host_end_status(sid, 34)["ended_by_host"])
+        self.assertTrue(store.host_end_status(sid, 633)["ended_by_host"])
+        self.assertFalse(store.host_end_status(sid, 634)["ended_by_host"], "host end survived beyond ten minutes")
+        with self.assertRaises(KeyError):
+            store.get_signals(sid, "host", 0, token, 635)
+
+    def test_host_end_reply_is_distinct_from_an_unknown_session(self) -> None:
+        self.start(port=47549)
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        endpoint = f"/v1/sessions/{sid}/host-end"
+        self.assertEqual(self.call("GET", endpoint), (200, {"session_id": sid, "ended_by_host": False}))
+        self.assertEqual(self.call("DELETE", f"/v1/sessions/{sid}", {"token": "wrong-token"})[0], 403)
+        self.assertEqual(self.call("GET", endpoint)[1]["ended_by_host"], False)
+        self.assertEqual(self.call("DELETE", f"/v1/sessions/{sid}", {"token": token})[0], 200)
+        self.assertEqual(self.call("GET", endpoint), (200, {"session_id": sid, "ended_by_host": True}))
+        unknown = str(uuid.uuid4())
+        self.assertEqual(self.call("GET", f"/v1/sessions/{unknown}/host-end"), (200, {"session_id": unknown, "ended_by_host": False}))
+        self.assertEqual(self.call("GET", f"/v1/sessions/{unknown}/signals?peer=client:someone")[0], 404)
+
     def setUp(self) -> None:
         self.server: Optional[RunningServer] = None
         self.tls_dir: Optional[tempfile.TemporaryDirectory[str]] = None
@@ -1002,6 +1036,75 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual((second["session_id"], directory._sessions[sid].migration_gen), (sid, 2))
         directory.delete(sid, {"token": token, "migration_gen": 2}, 33)
         self.assertNotIn(sid, directory._sessions)
+
+    def test_a_lost_hosts_signals_outlive_its_lease_for_the_handover(self) -> None:
+        # The survivors of a host that died meet on its row's signals, and a rendezvous across relays outlasts the lease
+        # (2026-10-04 LTE row e: the row expired 15 s after the dead host's last beat while the survivors' relayed dial ran).
+        directory = session_directory.SessionDirectory(15, 5)
+        running = {"peer_count": 3, "seats_free": 0, "state": "running"}
+        created = directory.register(sample_register(), "192.0.2.1", 0)
+        sid, token = created["session_id"], created["token"]
+        directory.heartbeat(sid, {"token": token, **running}, 0)
+        nonce = "joinNonce7"
+        dialer = f"client:{nonce}"
+        offer = base64.b64encode(b"successor-offer").decode("ascii")
+        directory.prune(20)
+        self.assertNotIn(sid, directory._sessions, "a row whose host stopped beating stayed listed")
+        self.assertEqual(directory.post_signal(sid, {"token_or_join_nonce": nonce, "from": dialer, "to": "host", "payload_b64": offer}, 21)["seq"], 1)
+        polled = directory.get_signals(sid, "host", 0, token, 22)["signals"]
+        self.assertEqual([item["payload_b64"] for item in polled], [offer], "the successor could not read the dial posted after the lease")
+        directory.post_signal(sid, {"token_or_join_nonce": token, "from": "host", "to": dialer, "payload_b64": offer}, 23)
+        self.assertEqual(len(directory.get_signals(sid, dialer, 0, None, 24)["signals"]), 1)
+        with self.assertRaises(PermissionError, msg="an expired row answered its host signals without the row token"):
+            directory.get_signals(sid, "host", 0, "not-the-token", 25)
+        # The successor's claim takes the row with what is still owed to its host end.
+        directory.post_signal(sid, {"token_or_join_nonce": nonce, "from": dialer, "to": "host", "payload_b64": offer}, 26)
+        claimed = directory.register(sample_register(resume_session_id=sid, resume_token=token, migration_gen=1), "192.0.2.2", 27)
+        self.assertEqual(claimed["session_id"], sid)
+        owed = directory.get_signals(sid, "host", 1, claimed["token"], 28)["signals"]
+        self.assertEqual([item["seq"] for item in owed], [2], "the claim dropped a signal posted while the row was out of its lease")
+        # A row nobody claims is gone with its resume window; a row its host deleted is gone at once.
+        lapsed = directory.register(sample_register(), "192.0.2.3", 30)
+        directory.heartbeat(lapsed["session_id"], {"token": lapsed["token"], **running}, 30)
+        directory.prune(30 + 15 + session_directory.RESUME_GRACE_S + 1)
+        with self.assertRaises(KeyError):
+            directory.get_signals(lapsed["session_id"], "host", 0, lapsed["token"], 30 + 15 + session_directory.RESUME_GRACE_S + 2)
+        lobby = directory.register(sample_register(), "192.0.2.5", 200)
+        directory.prune(216)
+        with self.assertRaises(KeyError, msg="a lobby row nobody plays in kept its signals past its lease"):
+            directory.get_signals(lobby["session_id"], "host", 0, lobby["token"], 216)
+        ended = directory.register(sample_register(), "192.0.2.4", 200)
+        directory.delete(ended["session_id"], {"token": ended["token"]}, 201)
+        with self.assertRaises(KeyError):
+            directory.post_signal(ended["session_id"], {"token_or_join_nonce": nonce, "from": dialer, "to": "host", "payload_b64": offer}, 202)
+
+    def test_handover_signal_storage_follows_claim_expiry_and_host_end(self) -> None:
+        payload = base64.b64encode(b"successor-offer").decode("ascii")
+        charge = len(payload) + session_directory.SIGNAL_METADATA_BYTES
+        for fate in ("expiry", "host_end", "claim"):
+            with self.subTest(fate=fate):
+                store = session_directory.SessionDirectory(15, 5)
+                created = store.register(sample_register(), "192.0.2.10", 0)
+                sid, token = created["session_id"], created["token"]
+                store.heartbeat(sid, {"token": token, "state": "running", "peer_count": 3, "seats_free": 0}, 0)
+                store.post_signal(sid, {"token_or_join_nonce": "successor", "from": "client:successor",
+                                        "to": "host", "payload_b64": payload}, 1)
+                store.prune(16)
+                self.assertEqual(store._stored_signal_bytes, charge)
+                self.assertNotIn(sid, store._sessions)
+                if fate == "expiry":
+                    store.prune(16 + session_directory.RESUME_GRACE_S)
+                elif fate == "host_end":
+                    store.delete(sid, {"token": token}, 20)
+                    self.assertTrue(store.host_end_status(sid, 21)["ended_by_host"])
+                else:
+                    claimed = store.register(sample_register(resume_session_id=sid, resume_token=token,
+                                                            migration_gen=1), "192.0.2.11", 20)
+                    self.assertEqual(store._stored_signal_bytes, charge)
+                    owed = store.get_signals(sid, "host", 0, claimed["token"], 21)["signals"]
+                    self.assertEqual([item["payload_b64"] for item in owed], [payload])
+                    store.get_signals(sid, "host", 1, claimed["token"], 22)
+                self.assertEqual(store._stored_signal_bytes, 0)
 
     def test_live_resume_wrong_token_leaves_the_row_unchanged(self) -> None:
         self.start(port=45810)

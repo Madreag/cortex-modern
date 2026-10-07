@@ -194,6 +194,7 @@ namespace RTE {
 	}
 
 	void NetInputDelayEstimator::Observe(uint64_t nowMs, uint32_t rttMs) {
+		ForgetSilencesBefore(nowMs);
 		if (rttMs == 0) return;
 		if (!m_Samples.empty() && nowMs < m_Samples.back().first) {
 			m_Samples.clear();
@@ -202,6 +203,23 @@ namespace RTE {
 		if (!m_Samples.empty() && nowMs - m_Samples.back().first < c_SampleMs) return;
 		m_Samples.emplace_back(nowMs, rttMs);
 		while (!m_Samples.empty() && nowMs - m_Samples.front().first > c_WindowMs) m_Samples.pop_front();
+	}
+
+	void NetInputDelayEstimator::ObserveSilence(uint64_t nowMs, uint32_t silenceMs) {
+		ForgetSilencesBefore(nowMs);
+		if (silenceMs == 0 || silenceMs > c_MaxCarriedSilenceMs) return;
+		m_Silences.emplace_back(nowMs, silenceMs);
+	}
+
+	void NetInputDelayEstimator::ForgetSilencesBefore(uint64_t nowMs) {
+		if (!m_Silences.empty() && nowMs < m_Silences.back().first) m_Silences.clear();
+		while (!m_Silences.empty() && nowMs - m_Silences.front().first > c_SilenceWindowMs) m_Silences.pop_front();
+	}
+
+	uint32_t NetInputDelayEstimator::SilenceMs() const {
+		uint32_t longest = 0;
+		for (const auto& [when, silence]: m_Silences) longest = std::max(longest, silence);
+		return longest;
 	}
 
 	uint32_t NetInputDelayEstimator::Percentile(unsigned percent) const {
@@ -214,9 +232,10 @@ namespace RTE {
 	}
 
 	void NetInputDelayEstimator::Rebase(uint64_t nowMs) {
-		if (m_Samples.empty()) return;
-		const uint64_t last = m_Samples.back().first;
+		if (m_Samples.empty() && m_Silences.empty()) return;
+		const uint64_t last = std::max(m_Samples.empty() ? 0 : m_Samples.back().first, m_Silences.empty() ? 0 : m_Silences.back().first);
 		for (auto& [when, rtt]: m_Samples) when = nowMs >= last - when ? nowMs - (last - when) : 0;
+		for (auto& [when, silence]: m_Silences) when = nowMs >= last - when ? nowMs - (last - when) : 0;
 		m_BelowSince.reset();
 	}
 
@@ -226,8 +245,10 @@ namespace RTE {
 	uint32_t NetInputDelayEstimator::RequiredFrames(double tickMs, uint16_t floor) const {
 		if (!std::isfinite(tickMs) || tickMs <= 0) return std::numeric_limits<uint32_t>::max();
 		const uint32_t rtt = std::max(P95Ms(), m_Samples.empty() ? 0U : m_Samples.back().second);
-		// Cover one retransmission after the one-way trip.
-		const double frames = std::ceil((1.5 * rtt) / tickMs) + 1 + std::ceil(JitterMs() / tickMs);
+		// Cover one retransmission after the one-way trip and the input stream's own silences, which a smoothed round trip never
+		// shows; a link that keeps going silent carries twice its longest, since its next silence is not always as brief.
+		const uint32_t silenceMargin = std::min(m_Silences.size() > 1 ? 2 * SilenceMs() : SilenceMs(), c_MaxSilenceMarginMs);
+		const double frames = std::ceil((1.5 * rtt) / tickMs) + 1 + std::ceil(std::max(JitterMs(), silenceMargin) / tickMs);
 		return static_cast<uint32_t>(std::clamp(frames, static_cast<double>(floor), static_cast<double>(std::numeric_limits<uint32_t>::max())));
 	}
 

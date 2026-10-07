@@ -275,6 +275,15 @@ namespace RTE {
 		m_Outbox.clear();
 	}
 
+	void NetDirectorySignalChannel::Abandon() {
+		if (m_State != State::Open && m_State != State::Draining) {
+			return;
+		}
+		AbortRequest();
+		m_Outbox.clear();
+		SetState(State::Closed);
+	}
+
 	const char* NetDirectorySignalChannel::Role() const { return m_LocalPeer == "host" ? "host" : "client"; }
 
 	void NetDirectorySignalChannel::SetState(State state) {

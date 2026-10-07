@@ -396,6 +396,62 @@ class RemoteBox:
         return size
 
 
+class LocalBox(RemoteBox):
+    """This box as a game box: the same calls answered here, the payload started as a hidden process of this session (an ssh
+    session to this box has no desktop for the runner's private one)."""
+
+    def ssh(self, command: str, timeout: float = 120, check: bool = True) -> str:
+        return self.run_local(['pwsh', '-NoProfile', '-NonInteractive', '-Command', command], timeout, check, what=f'pwsh {command[:80]!r}')
+
+    def scp_to(self, local: Path | str, remote: Path | str, timeout: float = 300) -> None:
+        if not self.dry_run and Path(local).resolve() != Path(remote).resolve():
+            Path(remote).parent.mkdir(parents=True, exist_ok=True)
+            Path(remote).write_bytes(Path(local).read_bytes())
+
+    def scp_from(self, remote: Path | str, local: Path | str, timeout: float = 900) -> None:
+        self.scp_to(remote, local)
+
+    def mkdir(self, path: Path | str) -> None:
+        if not self.dry_run:
+            Path(path).mkdir(parents=True, exist_ok=True)
+
+    def reachable(self, timeout: float = 30) -> str | None:
+        return None
+
+    def sha256(self, path: Path | str) -> str:
+        return sha256_file(Path(path))
+
+    def task_state(self) -> str:
+        return 'Ready'
+
+    def start_task(self, local_script: Path, budget_s: float = 900) -> None:
+        if self.dry_run:
+            self.say(f'dry-run: pwsh -File {local_script}')
+            return
+        subprocess.Popen(['pwsh', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(local_script)],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
+
+    def wait_done(self, done: Path | str, budget_s: float, slice_cap_s: int = 540) -> str:
+        if self.dry_run:
+            return 'done rc=0 (dry-run)'
+        deadline = time.monotonic() + budget_s
+        while time.monotonic() < deadline:
+            if Path(done).is_file():
+                time.sleep(1)
+                return Path(done).read_text(encoding='ascii', errors='replace').strip()
+            time.sleep(2)
+        return 'TIMEOUT'
+
+    def read_text(self, path: Path | str, timeout: float = 120) -> str | None:
+        return Path(path).read_text(encoding='utf-8-sig') if Path(path).is_file() else None
+
+    def fetch_list(self, root: Path | str, list_file: Path | str, local_root: Path, tar_name: str) -> int:
+        """The run root is this box's own: the listed files are already where the driver reads them."""
+        if Path(root).resolve() != Path(local_root).resolve():
+            raise RuntimeError(f'a local box fetches only into its own run root, not {local_root}')
+        return 0
+
+
 def render_payload(cwd: Path | str, argv: list[str], log: Path | str, done: Path | str,
                    env: dict[str, str] | None = None, path_prepend: list[str] | None = None,
                    template: Path = PAYLOAD_TEMPLATE) -> str:

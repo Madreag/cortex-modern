@@ -169,6 +169,28 @@ def check_item_kinds(results):
     return ok
 
 
+def check_encoder_selection(results):
+    def supported(codec):
+        def probe(command, **kwargs):
+            selected = command[command.index('-c:v') + 1]
+            return SimpleNamespace(returncode=0 if selected == codec else 1)
+        return probe
+
+    with patch.object(driver, '_ENCODER_CODEC', {}), patch.object(sys, 'platform', 'darwin'), \
+         patch.object(driver.subprocess, 'run', side_effect=supported('h264_videotoolbox')) as probe:
+        selected = driver.encoder_codec('native-encoder')
+        ok = row(results, 'stream/available-native-hardware-is-selected', selected == 'h264_videotoolbox')
+        count = probe.call_count
+        ok &= row(results, 'stream/hardware-selection-is-cached', driver.encoder_codec('native-encoder') == selected and probe.call_count == count)
+    with patch.object(driver, '_ENCODER_CODEC', {}), patch.object(sys, 'platform', 'darwin'), \
+         patch.object(driver.subprocess, 'run', side_effect=supported('none')):
+        ok &= row(results, 'stream/refused-hardware-keeps-software-fallback', driver.encoder_codec('native-encoder') == 'libx264')
+    with patch.object(driver, '_ENCODER_CODEC', {}), patch.object(sys, 'platform', 'win32'), \
+         patch.object(driver.subprocess, 'run', side_effect=supported('h264_videotoolbox')) as probe:
+        ok &= row(results, 'stream/another-platform-does-not-probe-native-hardware', driver.encoder_codec('native-encoder') == 'libx264' and probe.call_count == 1)
+    return ok
+
+
 def check_streamed_capture(results, scratch):
     video = scratch / "streamed" / "video"
     video.mkdir(parents=True, exist_ok=True)
@@ -185,7 +207,7 @@ def check_streamed_capture(results, scratch):
     environment = driver.stage_peer({"name": "probe-scenario"}, {"name": "host"}, scratch / "streamed" / "stage", tokens)
     ffmpeg = driver.find_ffmpeg()
     ok &= row(results, "stream/every-peer-gets-the-encoder", (not ffmpeg) or (environment.get("CCCP_TEST_RECORD_ENCODER") == str(ffmpeg) and
-              environment.get("CCCP_TEST_RECORD_CODEC") in ("h264_nvenc", "libx264")))
+              environment.get("CCCP_TEST_RECORD_CODEC") in ("h264_nvenc", "h264_videotoolbox", "libx264")))
     return ok
 
 
@@ -781,6 +803,48 @@ def check_directory_port_block(results):
     return ok
 
 
+def check_coturn_start_preflight(results, scratch):
+    from e2e import directory
+    import relay_cloudflare_match
+    import time
+    backend = dict(backend='coturn', static_auth_secret='unit-preflight-secret',
+                   relay_urls=['turn:127.0.0.1:47579?transport=udp'])
+    provider = SimpleNamespace(mint=lambda *args, **kwargs: {})
+    fake = SimpleNamespace(store=SimpleNamespace(turn_provider=provider), stop=lambda: None)
+    began = time.monotonic()
+    yielded, refusal = False, ''
+    with patch.object(relay_cloudflare_match, 'turn_allocate', side_effect=TimeoutError), \
+         patch.object(directory, 'spawn_server', return_value=fake) as started:
+        try:
+            with directory.serve(scratch / 'coturn-down', 47578, (47540, 47579), turn_config=backend):
+                yielded = True
+        except RuntimeError as error:
+            refusal = str(error)
+    ok = row(results, 'relay/dead-coturn-refuses-before-directory-and-engines',
+             not yielded and not started.called and 'Self-hosted relay' in refusal
+             and time.monotonic() - began < 10, refusal)
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as silent:
+        silent.bind(('127.0.0.1', 47579))
+        began = time.monotonic()
+        refused = False
+        with patch.object(directory, 'spawn_server', return_value=fake) as started:
+            try:
+                with directory.serve(scratch / 'coturn-silent', 47578, (47540, 47579), turn_config=backend):
+                    pass
+            except directory.RelayUnavailable:
+                refused = True
+        elapsed = time.monotonic() - began
+        ok &= row(results, 'relay/silent-coturn-refuses-within-ten-seconds',
+                  refused and not started.called and elapsed < 10, f'{elapsed:.3f}s')
+    with patch.object(relay_cloudflare_match, 'turn_allocate', return_value=dict(result='allocated')), \
+         patch.object(directory, 'spawn_server', return_value=fake) as started:
+        with directory.serve(scratch / 'coturn-up', 47578, (47540, 47579), turn_config=backend):
+            yielded = True
+    ok &= row(results, 'relay/live-coturn-admits-the-scene', yielded and started.call_count == 1)
+    return ok
+
+
 def check_launch_contract(results, scratch):
     stage = scratch / "launch"
     stage.mkdir()
@@ -924,6 +988,12 @@ def check_review(results, scratch):
     out.mkdir()
     document = driver.review(scenario, capture, out)
     ok = row(results, "review/written", (out / "review.json").is_file())
+    provider_review = driver.review({"name": "relay-provider-review", "checklist": [
+        {"id": "coturn-offer", "peer": "host", "directory_relay_offer": "coturn"}]}, capture, out)
+    provider_row = next(item for item in provider_review["checklist"] if item["id"] == "coturn-offer")
+    ok &= row(results, "review/missing-offer-names-selected-provider",
+              provider_row["probe"] == "fail" and "provider=coturn" in provider_row["finding"]["reason"],
+              provider_row["finding"]["reason"])
     ok &= row(results, "review/every-item-resolved", all("state" in item for item in document["checklist"]))
     unpeered = [item for item in document["checklist"] if item["id"] == "mp-play"]
     ok &= row(results, "review/peerless-item-covers-both", len(unpeered) == 2, str(len(unpeered)))
@@ -1179,10 +1249,10 @@ def check_listed_rows(results, scratch):
     listing([other, own], "49402")
     _, evidence = driver.item_evidence(record, port_item, 49402)
     ok &= row(results, "listed-rows/port-not-following-list-fails", evidence["probe"] == "fail")
-    listing([own, own.replace("127.0.0.1", "192.168.50.130")], "49402")
+    listing([own, own.replace("127.0.0.1", "192.0.2.102")], "49402")
     _, evidence = driver.item_evidence(record, rows_item, 49402)
     ok &= row(results, "listed-rows/own-session-twice-fails", evidence["probe"] == "fail" and len(evidence["own_session_rows"]["own_rows"]) == 2)
-    listing([own.replace("127.0.0.1", "192.168.50.130")], "49402")
+    listing([own.replace("127.0.0.1", "192.0.2.102")], "49402")
     _, evidence = driver.item_evidence(record, rows_item, 49402)
     ok &= row(results, "listed-rows/own-session-off-loopback-fails", evidence["probe"] == "fail")
     (root / "stdout.log").write_text("[menu-script] assert_label TextJoinPort \"\" text=\"49402\" PASS\n", encoding="utf-8")
@@ -2131,6 +2201,7 @@ def main():
         ok &= check_capture_binary(results, scratch)
         ok &= check_recording_health(results, scratch)
         ok &= check_screen_watches(results, scratch)
+        ok &= check_encoder_selection(results)
         ok &= check_streamed_capture(results, scratch)
         ok &= check_item_kinds(results)
         ok &= check_port_claims(results)
@@ -2145,6 +2216,7 @@ def main():
         ok &= check_probe_clicks_seen(results)
         ok &= check_substitution(results)
         ok &= check_directory_port_block(results)
+        ok &= check_coturn_start_preflight(results, scratch)
         ok &= check_launch_contract(results, scratch)
         ok &= check_index_and_checklist(results, scratch)
         ok &= check_encode(results, scratch)

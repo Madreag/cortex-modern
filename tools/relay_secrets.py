@@ -354,8 +354,9 @@ def views(data: bytes, depth: int = 0) -> Iterator[tuple[str, bytes, Any]]:
             yield 'utf16', text, None
         except UnicodeDecodeError:
             pass
-    # Unicode escapes are text, not a container: decoded at the same depth, and only while the text keeps shrinking.
-    if UNICODE_ESCAPE.search(data):
+    # Unicode escapes are text, not a container: decoded at the same depth, and only while the text keeps shrinking. A real
+    # archive's bytes are no text: its members are read through the archive's own view below.
+    if UNICODE_ESCAPE.search(data) and real_container(data) is None:
         unescaped = json_unescape(data)
         if len(unescaped) < len(data):
             for form, inner, _ in views(unescaped, depth):

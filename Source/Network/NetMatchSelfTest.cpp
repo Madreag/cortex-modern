@@ -3896,6 +3896,10 @@ namespace RTE {
 			void Stop() override { m_Transport.Stop(); }
 			std::vector<NetTransportEvent> PollEvents() override { if (beforePoll) beforePoll(); return m_Transport.PollEvents(); }
 			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error, bool* congested) override {
+				if (dropSend && dropSend(lane, bytes)) {
+					if (congested) *congested = false;
+					return true;
+				}
 				if (!m_Transport.Send(peer, lane, bytes, error, congested)) return false;
 				const auto decoded = NetLobbyProtocol::Decode(bytes);
 				if (decoded.ok) {
@@ -3912,9 +3916,115 @@ namespace RTE {
 			std::function<bool(uint16_t, std::string*)> afterHostStart;
 			std::function<void()> beforePoll;
 			std::function<void()> afterLobbyStart;
+			std::function<bool(NetTransportLane, const std::vector<uint8_t>&)> dropSend;
 		private:
 			LoopbackTransport& m_Transport;
 		};
+
+		bool TestLobbyStartWaitsForReceivedState(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetPeerId hostPeer = 0, clientPeer = 0;
+			if (!StartLoopbackTransports(47544, hostWire, clientWire, hostPeer, clientPeer, error)) return false;
+			StateTransferTap tap(hostWire);
+			NetLobbySession host, client;
+			NetLobbySessionConfig config;
+			config.host = true; config.localPeerId = 1; config.remotePeerId = 2; config.remoteTransportPeerId = hostPeer;
+			config.matchConfig = MakeConfig(); config.autoStart = false;
+			if (!host.Start(tap, config, error)) return false;
+			config.host = false; config.localPeerId = 2; config.remotePeerId = 1; config.remoteTransportPeerId = clientPeer;
+			if (!client.Start(clientWire, config, error)) return false;
+			uint64_t now = 0;
+			const auto tick = [&] { host.Tick(now); client.Tick(now++); };
+			for (int i = 0; i < 4; ++i) tick();
+			std::vector<std::vector<uint8_t>> queued;
+			bool holding = false;
+			tap.dropSend = [&](NetTransportLane lane, const std::vector<uint8_t>& bytes) {
+				const auto decoded = NetLobbyProtocol::Decode(bytes);
+				if (decoded.ok && std::holds_alternative<NetLobbyStateChunk>(decoded.message.payload)) holding = true;
+				if (!holding || lane != NetTransportLane::ControlReliable) return false;
+				queued.push_back(bytes);
+				return true;
+			};
+			const std::vector<uint8_t> state(3 * NetLobbyProtocol::c_MaxStateChunkBytes + 9, 0x73);
+			host.BeginStateTransfer(state);
+			host.RequestStart();
+			for (int i = 0; i < 8; ++i) tick();
+			std::vector<uint8_t> oldAck;
+			if (!NetLobbyProtocol::Encode({NetLobbyConfigAck{2, true, host.GetMatchConfigHash(), ""}}, oldAck) ||
+			    !clientWire.Send(clientPeer, NetTransportLane::ControlReliable, oldAck, error)) return false;
+			tick();
+			if (host.IsStarted() || client.IsStarted() || host.IsFailed() || client.IsFailed() || host.HasPendingStateChunks() ||
+			    client.HasCompleteStateTransfer() || queued.empty()) {
+				*error = "lobby start counts queued state as received: host_started=" + std::to_string(host.IsStarted()) +
+				         " client_complete=" + std::to_string(client.HasCompleteStateTransfer()) + " queued=" + std::to_string(queued.size());
+				return false;
+			}
+			tap.dropSend = {};
+			for (const auto& bytes: queued)
+				if (!hostWire.Send(hostPeer, NetTransportLane::ControlReliable, bytes, error)) return false;
+			for (int i = 0; i < 40 && !(host.IsStarted() && client.IsStarted()); ++i) tick();
+			if (!host.IsStarted() || !client.IsStarted() || client.TakeReceivedState() != state) {
+				*error = "a received state does not open the agreed start"; return false;
+			}
+			std::cout << "[net-match-selftest] PASS lobby_start_waits_for_received_state" << std::endl;
+			return true;
+		}
+
+		bool TestLobbyStateReceiptsAreBoundAndRepeated(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetPeerId hostPeer = 0, clientPeer = 0;
+			if (!StartLoopbackTransports(47545, hostWire, clientWire, hostPeer, clientPeer, error)) return false;
+			StateTransferTap tap(clientWire);
+			NetLobbySession host, client;
+			NetLobbySessionConfig config;
+			config.host = true; config.localPeerId = 1; config.remotePeerId = 2; config.remoteTransportPeerId = hostPeer;
+			config.matchConfig = MakeConfig(); config.autoStart = false;
+			if (!host.Start(hostWire, config, error)) return false;
+			config.host = false; config.localPeerId = 2; config.remotePeerId = 1; config.remoteTransportPeerId = clientPeer;
+			if (!client.Start(tap, config, error)) return false;
+			uint64_t now = 0;
+			const auto tick = [&] { host.Tick(now); client.Tick(now); now += 50; };
+			for (int i = 0; i < 4; ++i) tick();
+			std::optional<NetLobbyConfigAck> receipt;
+			bool hold = false, loseFinal = false, finalLost = false;
+			const std::vector<uint8_t> state(5 * NetLobbyProtocol::c_MaxStateChunkBytes + 9, 0x6A);
+			tap.dropSend = [&](NetTransportLane, const std::vector<uint8_t>& bytes) {
+				const auto decoded = NetLobbyProtocol::Decode(bytes);
+				const auto* ack = decoded.ok ? std::get_if<NetLobbyConfigAck>(&decoded.message.payload) : nullptr;
+				if (!ack || !ack->reason.starts_with("state:")) return false;
+				receipt = *ack;
+				if (hold) return true;
+				if (loseFinal && !finalLost && ack->reason.ends_with(":" + std::to_string(NetLobbyProtocol::GetStateChunkCount(state.size())))) {
+					finalLost = true; return true;
+				}
+				return false;
+			};
+			host.BeginStateTransfer(state);
+			for (int i = 0; i < 10; ++i) tick();
+			if (!receipt || client.TakeReceivedState() != state) { *error = "the first state has no complete receipt"; return false; }
+			const auto old = *receipt;
+			hold = true;
+			host.BeginStateTransfer(state);
+			host.RequestStart();
+			for (int i = 0; i < 8; ++i) tick();
+			if (!receipt || receipt->reason == old.reason || host.IsStarted()) { *error = "a new transfer reused its receipt or started without one"; return false; }
+			auto corrupt = *receipt;
+			corrupt.matchConfigHash[0] ^= 1;
+			for (const auto& wrong: {old, corrupt}) {
+				std::vector<uint8_t> bytes;
+				if (!NetLobbyProtocol::Encode({wrong}, bytes) || !clientWire.Send(clientPeer, NetTransportLane::ControlReliable, bytes, error)) return false;
+				tick();
+				if (host.IsStarted() || host.IsFailed() || client.IsFailed()) { *error = "a stale or corrupt receipt opens or ends the round"; return false; }
+			}
+			hold = false;
+			loseFinal = true;
+			for (int i = 0; i < 40 && !(host.IsStarted() && client.IsStarted()); ++i) tick();
+			if (!finalLost || !host.IsStarted() || !client.IsStarted() || client.TakeReceivedState() != state) {
+				*error = "a lost final receipt is not repeated or changes the received state"; return false;
+			}
+			std::cout << "[net-match-selftest] PASS state_receipts_bind_transfer_and_bytes_and_repeat" << std::endl;
+			return true;
+		}
 
 		bool TestResumeHeldPeerSkipsTheTransfer(std::string* error) {
 			const std::string matchId = "00000000deadbeef-00000000000000bb";
@@ -4188,6 +4298,125 @@ namespace RTE {
 				         "; host started " + std::to_string(host.IsStarted()) + ", client started with the whole state " + std::to_string(received);
 				return false;
 			}
+			return true;
+		}
+
+		bool TestRouteHostReceipts(std::string* error) {
+			const std::string first = "37fcff24bf62035b2b08020afc08b4fecd4fcffce57ab23518e3561ff0fe76b9";
+			const std::string second = "5afd19e856d1c18d17d600dfd2b5f534992333985e126c2a951047102c1ed536";
+			const std::string third = "84a60010564e121a833d1c4a745d1669783696f065b8a6f6523b0e6952dadd0a";
+			if (GnsTransport::TurnHostReceipts("192.0.2.1:3478,[2001:db8::1]:443,relay.example.test:3479") != first + ',' + second + ',' + third ||
+			    GnsTransport::TurnHostReceipts("192.0.2.1:443") != first || !GnsTransport::TurnHostReceipts("").empty() ||
+			    !GnsTransport::TurnHostReceipts("[2001:db8::1").empty()) {
+				*error = "relay host receipts do not match independent address digests";
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS relay_host_receipts_keep_addresses_out_of_the_log" << std::endl;
+			return true;
+		}
+
+		bool TestRunnerRecoversAMissedLobbyStart(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			StateTransferTap tap(hostTransport);
+			NetSession hostSession, clientSession;
+			NetLobbySession clientLobby;
+			NetLockstepCoordinator hostCoordinator, clientCoordinator;
+			NetMatchRunner runner;
+			const auto startedAt = std::chrono::steady_clock::now();
+			const auto nowMs = [&] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count()); };
+			NetMatchRunnerConfig config;
+			config.host = true;
+			config.matchConfig = MakeConfig();
+			config.useLobbyProtocol = true;
+			config.lobbyWaitMs = 1000;
+			config.sessionWaitMs = 1000;
+			config.lockstepWaitMs = 800;
+			config.postSessionSettleMs = config.postLobbySettleMs = 0;
+			config.nowMs = nowMs;
+			config.sessionConfig.port = 47569;
+			config.sessionConfig.sessionId = config.matchConfig.sessionId;
+			config.sessionConfig.displayName = "Host";
+			config.sessionConfig.heartbeatIntervalMs = 25;
+			config.sessionConfig.timeoutMs = 120;
+			auto& identity = config.sessionConfig.localIdentity;
+			identity.gameVersion = "7.0.0-test";
+			identity.networkProtocolVersion = NetProtocol::c_Version;
+			identity.controllerFrameVersion = ControllerFrame::c_Version;
+			identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+			identity.buildId = "lobby-start-selftest";
+			identity.platform = "test";
+			NetSessionConfig clientConfig = config.sessionConfig;
+			clientConfig.displayName = "Client";
+			++clientConfig.localNonce;
+			tap.afterHostStart = [&](uint16_t, std::string* startError) { return clientSession.StartClient(clientTransport, "loopback", clientConfig, startError); };
+			uint64_t transportClock = 0, lobbyStartedAt = 0, firstStartAt = 0;
+			bool lobbyActive = false, coordinatorActive = false, changedStart = false, wrongLane = false;
+			uint32_t startAttempts = 0;
+			std::vector<uint8_t> firstStart;
+			std::string peerError;
+			tap.dropSend = [&](NetTransportLane lane, const std::vector<uint8_t>& bytes) {
+				const auto decoded = NetLobbyProtocol::Decode(bytes);
+				if (!decoded.ok || !std::holds_alternative<NetLobbyStart>(decoded.message.payload)) return false;
+				wrongLane = wrongLane || lane != NetTransportLane::ControlReliable;
+				if (++startAttempts == 1) { firstStart = bytes; firstStartAt = nowMs(); return true; }
+				changedStart = changedStart || bytes != firstStart;
+				return false;
+			};
+			tap.beforePoll = [&] {
+				const uint64_t now = nowMs();
+				hostTransport.AdvanceTimeMs(now - transportClock);
+				clientTransport.AdvanceTimeMs(now - transportClock);
+				transportClock = now;
+				if (!clientSession.IsReady()) clientSession.Tick(now);
+				if (!clientSession.IsReady() || !peerError.empty()) return;
+				if (!lobbyActive) {
+					NetLobbySessionConfig lobbyConfig;
+					lobbyConfig.localPeerId = 2;
+					lobbyConfig.remotePeerId = 1;
+					lobbyConfig.remoteTransportPeerId = clientSession.GetRemoteTransportPeerId();
+					lobbyConfig.matchConfig = config.matchConfig;
+					lobbyConfig.session = &clientSession;
+					lobbyConfig.sessionNowMs = nowMs;
+					lobbyActive = clientLobby.Start(clientTransport, lobbyConfig, &peerError);
+					lobbyStartedAt = now;
+				}
+				if (!lobbyActive) return;
+				if (!coordinatorActive) {
+					clientLobby.Tick(now - lobbyStartedAt);
+					if (!clientLobby.IsStarted()) return;
+					NetLockstepConfig lockstepConfig;
+					lockstepConfig.sessionId = clientSession.GetSessionId();
+					lockstepConfig.localPeerId = 2;
+					lockstepConfig.remoteTransportPeerIds = {{1, clientSession.GetRemoteTransportPeerId()}};
+					lockstepConfig.matchConfig = clientLobby.GetMatchConfig();
+					lockstepConfig.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(lockstepConfig.matchConfig, 2);
+					lockstepConfig.startFrame = clientLobby.GetStartFrame();
+					lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(lockstepConfig.matchConfig.ownershipPolicy);
+					lockstepConfig.scenario = lockstepConfig.matchConfig.activityPreset;
+					coordinatorActive = clientCoordinator.Start(clientTransport, lockstepConfig, &peerError);
+					if (coordinatorActive)
+						for (const auto& event: clientLobby.TakeRoundEventsAfterStart()) clientCoordinator.InjectEvent(event, NetLockstepNowMs());
+				}
+				if (coordinatorActive) clientCoordinator.Tick(NetLockstepNowMs());
+			};
+			const bool setup = runner.Start(tap, hostSession, hostCoordinator, config, error);
+			if (setup && coordinatorActive) {
+				// The game publishes its measured startup after the runner completes the handshake.
+				hostCoordinator.NoteLocalStartPark(0);
+				for (int pump = 0; pump < 5 && !clientCoordinator.IsRunning(); ++pump) {
+					tap.beforePoll();
+					hostCoordinator.Tick(NetLockstepNowMs());
+				}
+			}
+			if (!setup || !coordinatorActive || !clientCoordinator.IsRunning() ||
+			    !clientSession.IsReady() || startAttempts < 2 || changedStart || wrongLane || nowMs() - firstStartAt < 250) {
+				*error = "a missed lobby start was not repaired with live session keepalives: " + *error + "; attempts=" + std::to_string(startAttempts) +
+				         "; client_started=" + std::to_string(coordinatorActive) + "; client_running=" + std::to_string(clientCoordinator.IsRunning()) +
+				         "; client_ready=" + std::to_string(clientSession.IsReady()) + "; changed_start=" + std::to_string(changedStart) +
+				         "; wrong_lane=" + std::to_string(wrongLane) + "; elapsed_ms=" + std::to_string(nowMs() - firstStartAt) + "; peer=" + peerError;
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS a_missed_lobby_start_is_repeated_without_losing_the_session attempts=" << startAttempts << std::endl;
 			return true;
 		}
 
@@ -8052,8 +8281,7 @@ namespace RTE {
 		return true;
 	}
 
-	// SEAT-ROSTER S2/S3 on the client: a held rejoin that failed with its host still there asks that host again after the seat roster's
-	// backoff - armed in the service, never slept on the game thread - and stops at the roster's bound or at the host's final word.
+	// A failed rejoin keeps its backoff until the host gives its final word.
 	bool TestAHeldRejoinAsksItsHostAgainOffTheGameThread(std::string* error) {
 		struct Case {
 			const char* name;
@@ -8067,7 +8295,8 @@ namespace RTE {
 		    {"a first failure the host gave no reason for", 1, false, NetRejectReason::InternalError, true, 2000},
 		    {"a first host link lost", 1, true, NetRejectReason::HostLinkLost, true, 2000},
 		    {"the roster's backoff refusal", 2, true, NetRejectReason::HostNotAccepting, true, 4000},
-		    {"a third failure", 3, true, NetRejectReason::Timeout, false, 0},
+		    {"a third failure", 3, true, NetRejectReason::Timeout, true, 8000},
+		    {"a sustained outage", 255, false, NetRejectReason::InternalError, true, 30000},
 		    {"the seat given away", 1, true, NetRejectReason::SeatReassigned, false, 0},
 		    {"a ban", 1, true, NetRejectReason::ParticipantBanned, false, 0},
 		};
@@ -8096,10 +8325,14 @@ namespace RTE {
 		}
 		(void)client.BeginHeldRejoinOnNextHost(&why);
 		why.clear();
-		if (client.BeginHeldRejoinOnNextHost(&why) || why.empty() || client.m_HeldRejoinRetryAtMs != 0) {
-			*error = "a held rejoin past the roster's bound was asked again: why='" + why + "'";
+		if (!client.BeginHeldRejoinOnNextHost(&why) || client.m_HeldRejoinRetryAtMs == 0) {
+			*error = "a held rejoin gave up after three unanswered attempts: why='" + why + "'";
 			return false;
 		}
+		client.m_HeldRejoinDriving = true;
+		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		client.m_HeldRejoinStartedMs = now - 30001;
+		if (client.GetHostUnreachableLine() != "The host cannot be found. You can leave or keep trying.") { *error = "an unanswered rejoin has no thirty-second leave line"; return false; }
 		std::cout << "PASS a_held_rejoin_asks_its_host_again_off_the_game_thread cases=" << sizeof(cases) / sizeof(cases[0]) << " armed_in=" << elapsedMs
 		          << "ms stop='" << why << "'" << std::endl;
 		return true;
@@ -14766,7 +14999,7 @@ namespace RTE {
 		    persistent.completedLockstep != NetLockstepCodec::c_WorldVersion ||
 		    ordinary.capturedLockstep != NetLockstepCodec::c_Version || ordinary.capturedMatchConfig != NetMatchConfigUtil::c_Version ||
 			    persistent.supported != ordinary.supported || persistent.supported != nlohmann::json{
-			        {"supported_lockstep_codec_version", NetLockstepCodec::c_SeatReleaseVersion}, {"supported_world_lockstep_codec_version", NetLockstepCodec::c_WorldVersion},
+			        {"supported_lockstep_codec_version", NetLockstepCodec::c_AdmissionVersion}, {"supported_world_lockstep_codec_version", NetLockstepCodec::c_WorldVersion},
 		        {"supported_match_config_version", NetMatchConfigUtil::c_Version}, {"supported_world_match_config_version", NetMatchConfigUtil::c_PersistentWorldVersion}} ||
 		    persistent.configHash.empty() || persistent.configHash != ordinary.configHash) {
 			if (error) *error = "captured world identity: world=" + seen(persistent) + " ordinary=" + seen(ordinary);
@@ -15977,6 +16210,49 @@ namespace RTE {
 		return true;
 	}
 
+	// A joiner's ICE dial names what it waits on and how long it may; a retry is offered only to a dial its host answered.
+	bool TestIceConnectingLine(std::string* error) {
+		{
+			LoopbackTransport listener, wire;
+			NetSession session;
+			NetMatchService service;
+			NetMatchRunnerConfig config;
+			if (!listener.StartHost(47548, error)) return false;
+			config.sessionConfig.port = 47548;
+			config.sessionConfig.timeoutMs = 30000;
+			config.sessionConfig.p2pJoin.connect = [](INetTransport&, std::string*) { return true; };
+			std::string shown;
+			config.publishLobby = [&](const NetLobbySnapshot&) { shown = service.GetStatusText(); };
+			service.ArmIceConnectingLine(config, session);
+			service.m_IceDialStartedMs -= 31000;
+			config.sessionConfig.p2pJoin = {};
+			config.sessionConfig.timeoutMs = 5000;
+			service.m_IceRoute = "ip";
+			service.ArmIceConnectingLine(config, session);
+			if (!session.StartClient(wire, "loopback", config.sessionConfig, error)) return false;
+			config.publishLobby({});
+			if (!shown.starts_with("Connecting (0 of 5 s)") || shown.find("30 s") != std::string::npos) {
+				*error = "direct fallback publisher retained the relay attempt clock: " + shown;
+				std::cout << "[net-match-selftest] FAIL direct_fallback_attempt_clock " << shown << std::endl;
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS direct_fallback_attempt_clock " << shown << std::endl;
+		}
+		const std::string waiting = NetIceConnectingLine(6400, 30000, false, true, false);
+		const std::string testing = NetIceConnectingLine(12900, 30000, true, true, false);
+		const std::string again = NetIceConnectingLine(2000, 30000, true, false, true);
+		if (waiting != "Connecting (6 of 30 s) - waiting for the host's answer" || testing != "Connecting (12 of 30 s) - testing routes, relay ready" ||
+		    again != "Connecting again (2 of 30 s) - testing routes") {
+			*error = "the connecting line read \"" + waiting + "\" / \"" + testing + "\" / \"" + again + "\"";
+			return false;
+		}
+		if (!NetIceRetryCanSucceed(3, 0) || NetIceRetryCanSucceed(0, 0) || NetIceRetryCanSucceed(4, 1)) {
+			*error = "an ICE retry was offered to a dial its host never answered or refused, or denied to one it answered";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestReservedSeatDirectoryResolve(std::string* error) {
 		NetDirectoryLocalIdentity identity;
 		identity.networkProtocolVersion = 1; identity.lockstepCodecVersion = NetLockstepCodec::c_Version;
@@ -16011,6 +16287,22 @@ namespace RTE {
 	}
 
 	bool TestSessionIdJoinRefusals(std::string* error) {
+		bool evidencePassed = true;
+		for (const char* state : {"unlisted", "hidden", "expired", "unreachable"}) {
+			const std::string why = std::string(state) == "unreachable" ? "directory unavailable" : "no such session";
+			const std::string refusal = NetMatchService::IceSessionRefusalText(true, "live", why);
+			const bool ended = NetMatchService::RejoinFoundHostRowGone(true, true, refusal);
+			std::cout << "[net-match-selftest] " << (ended ? "FAIL" : "PASS") << " live_rejoin_" << state << " ended=" << ended << std::endl;
+			evidencePassed = evidencePassed && !ended;
+		}
+		const std::string hostEnd = NetMatchService::IceSessionRefusalText(true, "ended", "ended by host");
+		const bool endedByHost = NetMatchService::RejoinFoundHostRowGone(true, false, hostEnd);
+		std::cout << "[net-match-selftest] " << (endedByHost ? "PASS" : "FAIL") << " rejoin_ended_by_host ended=" << endedByHost << std::endl;
+		if (!evidencePassed || !endedByHost) { *error = "rejoin completion accepts listing absence or misses the host's authenticated end"; return false; }
+		for (const auto& body : {std::string("{}"), std::string("{\"session_id\":\"other\",\"ended_by_host\":true}"), std::string("{\"session_id\":\"ended\",\"ended_by_host\":\"true\"}")})
+			if (NetMatchService::DirectoryHostEndReply("ended", 200, body)) { *error = "directory end reader accepted missing, mismatched or untyped evidence"; return false; }
+		if (!NetMatchService::DirectoryHostEndReply("ended", 200, "{\"session_id\":\"ended\",\"ended_by_host\":true}") ||
+		    NetMatchService::DirectoryHostEndReply("ended", 404, "{\"session_id\":\"ended\",\"ended_by_host\":true}")) { *error = "directory end reader used a failed reply or lost the authenticated fact"; return false; }
 		NetDirectoryLocalIdentity local;
 		local.networkProtocolVersion = 1;
 		local.lockstepCodecVersion = 20;
@@ -16099,6 +16391,19 @@ namespace RTE {
 		NetIceJoinTarget either;
 		if (!NetIceResolveSessionRow(rows, local, "either", &either).empty() || either.address != "127.0.0.1" || either.port != 41010) {
 			*error = "session-id join: an either row did not carry its direct address too";
+			return false;
+		}
+		if (NetMatchService::IceSessionRefusalText(true, "gone", "no such session").rfind("match over", 0) == 0 ||
+		    NetMatchService::IceSessionRefusalText(false, "gone", "no such session") != "session gone: no such session" ||
+		    NetMatchService::IceSessionRefusalText(true, "full", "full") != "session full: full") {
+			*error = "session-id join: a missing listing fabricated a host end";
+			return false;
+		}
+		const std::string dropped = "Relay connection failed: Connection dropped; check the relay or choose Automatic";
+		if (NetMatchService::RejoinFoundHostRowGone(true, true, dropped) ||
+		    NetMatchService::RejoinFoundHostRowGone(true, false, NetMatchService::IceSessionRefusalText(true, "gone", "no such session")) ||
+		    NetMatchService::RejoinFoundHostRowGone(false, true, dropped) || NetMatchService::RejoinFoundHostRowGone(true, false, dropped)) {
+			*error = "session-id join: a missing signal queue fabricated a host end";
 			return false;
 		}
 		std::cout << "[net-match-selftest] PASS session-id join: an absent, full, mismatched or ip-only row is refused with the join list's own label; an ice row resolves to str:h-<session>, an either row keeps its address" << std::endl;
@@ -16424,8 +16729,9 @@ namespace RTE {
 				*error = "ice retry retained the ICE dial or lost the failed stages: " + why;
 				return false;
 			}
-			if (arm == 3 && config.sessionConfig.timeoutMs != 15000) {
-				*error = "ice gathering retained the shorter heartbeat timeout";
+			// The session waits out the transport's ICE connect limit and the hello after it.
+			if (arm == 3 && config.sessionConfig.timeoutMs != GnsTransport::IceConnectTimeoutMs() + NetMatchService::c_IceHandshakeMarginMs) {
+				*error = "ice gathering kept a session timeout of " + std::to_string(config.sessionConfig.timeoutMs) + " ms, shorter than the ICE connect limit and the hello";
 				return false;
 			}
 			if (arm == 6 && session.GetStats().timeouts != 0) {
@@ -16680,6 +16986,16 @@ namespace RTE {
 			std::cout << "[net-match-selftest] PASS selected_row session-id-join" << std::endl;
 			return 0;
 		}
+		if (const char* selected = std::getenv("CCCP_TEST_MATCH_CASE")) {
+			const std::string name(selected);
+			bool passed = false;
+			if (name == "state-delivery") passed = TestLobbyStartWaitsForReceivedState(&error);
+			else if (name == "state-receipts") passed = TestLobbyStateReceiptsAreBoundAndRepeated(&error);
+			else return fail("unknown selected match check");
+			if (!passed) return fail(error);
+			std::cout << "[net-match-selftest] PASS" << std::endl;
+			return 0;
+		}
 		// These rows each report their own failure, so one run names every red among them.
 		bool rowsPassed = true;
 		const auto row = [&](bool (*test)(std::string*), const char* name) {
@@ -16689,6 +17005,8 @@ namespace RTE {
 			rowsPassed = false;
 		};
 		row(&TestTheDrainSaysGoodbyeAtItsCap, "the_drain_says_goodbye_at_its_cap");
+		row(&TestSessionIdJoinRefusals, "rejoin_end_requires_host_evidence");
+		row(&TestIceConnectingLine, "direct_fallback_attempt_clock");
 		row(&TestReplayStorageDoesNotBlockTicks, "replay_storage_does_not_block_ticks");
 		row(&TestDirectoryRowTakesTheLateRouterAnswer, "directory_row_takes_the_late_router_answer");
 		row(&TestAHostMappingOutlastsItsPendingIdentity, "a_host_mapping_outlasts_its_pending_identity");
@@ -16766,12 +17084,16 @@ namespace RTE {
 		if (!TestLobbyStartsWithoutRemoteHumanSeats(&error)) return fail(error);
 		if (!TestAiOnlyHostSeatsNoJoiner(&error)) return fail(error);
 		if (!TestBootstrapWaitsForReceivingLobby(&error)) return fail(error);
+		if (!TestLobbyStartWaitsForReceivedState(&error)) return fail(error);
+		if (!TestLobbyStateReceiptsAreBoundAndRepeated(&error)) return fail(error);
 		if (!TestLobbyStateTransfer(&error)) return fail(error);
 		if (!TestLobbyStateChunkBounds(&error)) return fail(error);
 		if (!TestLobbyStateChunkConsistency(&error)) return fail(error);
 		if (!TestLobbyStateTransferRestart(&error)) return fail(error);
 		if (!TestLobbyStateTransferBackpressure(&error)) return fail(error);
 		if (!TestLobbyStartWaitsOutAFullSendQueue(&error)) return fail(error);
+		if (!TestRouteHostReceipts(&error)) return fail(error);
+		if (!TestRunnerRecoversAMissedLobbyStart(&error)) return fail(error);
 		if (!TestRunnerStateTransferProgress(&error)) return fail(error);
 		if (!TestRunnerStateTransferProgress(&error, true)) return fail("resync after private return: " + error);
 		// The host options transaction: each arm reports its own verdict so one red cannot hide another.
@@ -16992,7 +17314,6 @@ namespace RTE {
 		if (!TestIceRowJoinMode(&iceRowError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << iceRowError << std::endl;
 		}
-		if (!TestSessionIdJoinRefusals(&error)) return fail(error);
 		if (!TestIceSettingsOverrideIsNotPersisted(&error)) return fail(error);
 		if (!TestP2PJoinSpecRidesTheSessionConfig(&error)) return fail(error);
 		if (!TestServiceDirectoryIceLeaseKeepsIdentity(&error)) return fail(error);

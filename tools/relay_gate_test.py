@@ -165,6 +165,8 @@ class FakeRemote:
 
     def ssh(self, command, timeout=120, check=True):
         import time
+        if command.rstrip().endswith(' data-digests'):
+            return '{"Data/Base.rte": ["same-on-every-fake-box", 1]}'  # the game data preflight: every fake box holds the same
         return str(int(time.time() * 1000))
 
     def fetch_list(self, root, listing, local_root, tar_name):
@@ -182,6 +184,26 @@ class FakeBox:
         self.name, self.tree, self.alias, self.task = name, 'D:/mx/lane/engine', name, 'cortex-session1'
         self.path_prepend, self.max_engines, self.computer = [], 2, name.upper()
         self.remote = FakeRemote()
+
+
+class LocalGameBox(unittest.TestCase):
+    """A game box that is this box (row c's EROL-PC): its run files are the driver's own run root."""
+
+    def test_a_local_box_is_swept_in_its_own_run_root(self):
+        secret = 'Zq8vN3pXw7LmT2rK5yHcRb4'
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / 'c-four-players'
+            (root / 'client2').mkdir(parents=True)
+            (root / 'client2' / 'stdout.log').write_text(f'[net-ice] relay login {secret}\n', encoding='utf-8')
+            box = FakeBox('erol-pc')
+            box.local = True
+            secrets = SecretBook()
+            secrets.add('minted-credential', secret)
+            with mock.patch.object(match.subprocess, 'run', side_effect=AssertionError('a local box is never reached over ssh')):
+                receipt = match.sanitize_box(box, root, secrets, Path(folder) / 'payload')
+            text = (root / 'client2' / 'stdout.log').read_text(encoding='utf-8')
+        self.assertEqual((receipt['box'], receipt['status'], receipt['hits_before'], receipt['hits_after']), ('erol-pc', 'CLEAN', 1, 0))
+        self.assertNotIn(secret, text)
 
 
 def legacy_fixed_run():
@@ -844,6 +866,10 @@ class GreenTipProbes(unittest.TestCase):
                 dict(step='up', at=at(41), exit_code=0, backend_state='Running')]), encoding='utf-8')
             (root / 'client-panel').mkdir()
             (root / 'client-panel' / 'net-ui-result.json').write_text(json.dumps({'pass': True, 'complete': True}), encoding='utf-8')
+            # The host's match summary, where the service report writes it: the hotspot seat may be held, no other.
+            report = json.loads((root / 'host_report.json').read_text(encoding='utf-8'))
+            report['service']['last_match'] = dict(peers=[dict(name='host', holds=0), dict(name='client', holds=1)])
+            (root / 'host_report.json').write_text(json.dumps(report), encoding='utf-8')
             verdict = full_judge(run, root, judge_facts([], public=True), [f'INFO relay_offer_issued {json.dumps(offer)}'])
         self.assertTrue(verdict['passed'], {key: value for key, value in verdict['checks'].items() if not value})
 
@@ -916,7 +942,27 @@ class GreenTipProbes(unittest.TestCase):
                                        ('Running', '172.20.10.1', 'mapped=None')):
             with self.subTest(state=state, gateway=gateway, mapped=mapped):
                 self.assertEqual(match.hotspot_preflight(state, gateway, mapped)['verdict'], 'REFUSED')
-        self.assertEqual(match.hotspot_preflight('Running', '172.20.10.1', '100.64.1.2:5000')['verdict'], 'AWAY')
+        with mock.patch.dict(match.HOME, gateway='192.0.2.1', public='192.0.2.2'):
+            self.assertEqual(match.hotspot_preflight('Running', '172.20.10.1', '100.64.1.2:5000')['verdict'], 'AWAY')
+    def test_home_baseline_is_required_and_addresses_stay_private(self):
+        with mock.patch.dict(match.HOME, gateway='', public=''):
+            self.assertEqual(match.hotspot_preflight('Running', '198.51.100.1', '198.51.100.2:5000')['verdict'], 'REFUSED')
+        with mock.patch.dict(match.HOME, gateway='192.0.2.1', public='192.0.2.2'):
+            for gateway, mapped in [('192.0.2.1', '198.51.100.2:5000'), ('198.51.100.1', '192.0.2.2:5000')]:
+                result = match.hotspot_preflight('Running', gateway, mapped)
+                self.assertEqual(result['verdict'], 'HOME')
+                self.assertNotIn(gateway, json.dumps(result))
+                self.assertNotIn(mapped.split(':')[0], json.dumps(result))
+
+    def test_process_log_redacts_a_private_address_before_retention(self):
+        book = SecretBook()
+        address = '192.0.2.28'
+        book.add('owner-address', address)
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(match, 'REDACTOR', book):
+            path = Path(folder) / 'process.log'
+            match.retain_redacted_process_log(io.StringIO(f'path uses {address}\nready\n'), path)
+            self.assertEqual(path.read_text(), 'path uses <owner-address>\nready\n')
+
 
     # G6: limits are incomplete, never clean; a scrub keeps the span's representation.
     def test_g6_four_nested_gzips_are_incomplete(self):

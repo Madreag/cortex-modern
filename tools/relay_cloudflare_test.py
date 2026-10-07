@@ -133,10 +133,10 @@ class CloudflareMatchEvidence(unittest.TestCase):
         self.assertFalse(self.judge(run)['passed'])
 
     def test_a_relay_outside_cloudflare_fails(self):
-        run = cloudflare_run(signals=[('host', signal(relay_line('68.3.162.151'))), ('client-nonce', signal(relay_line('162.159.207.9')))])
+        run = cloudflare_run(signals=[('host', signal(relay_line('192.0.2.100'))), ('client-nonce', signal(relay_line('162.159.207.9')))])
         verdict = self.judge(run)
         self.assertFalse(verdict['passed'])
-        self.assertTrue(any('68.3.162.151' in reason for reason in verdict['reasons']), verdict['reasons'])
+        self.assertTrue(any('192.0.2.100' in reason for reason in verdict['reasons']), verdict['reasons'])
 
     def test_a_peer_that_sent_no_relay_candidate_fails(self):
         run = cloudflare_run(signals=[('host', signal(relay_line('141.101.90.17')))])
@@ -161,11 +161,11 @@ class CloudflareMatchEvidence(unittest.TestCase):
         self.assertFalse(self.judge(cloudflare_run(reports={'client': {'found': True, 'relayed': False, 'remote_address': '24.251.145.96:5000'}}))['passed'])
 
     def test_our_relay_passes_only_with_its_own_addresses_and_a_fixed_offer(self):
-        coturn = dict(mode='coturn', relay_addresses=['192.168.50.122', '68.3.162.151'],
-                      signals=[('host', signal(relay_line('192.168.50.122', 49201))), ('client-nonce', signal(relay_line('192.168.50.122', 49202)))],
+        coturn = dict(mode='coturn', relay_addresses=['192.0.2.101', '192.0.2.100'],
+                      signals=[('host', signal(relay_line('192.0.2.101', 49201))), ('client-nonce', signal(relay_line('192.0.2.101', 49202)))],
                       offers=[dict(session_id='session-one', match_id='session-one:1', provider='coturn', generation=1, expires_at=2000, server_count=1)],
-                      offer_urls=['turn:68.3.162.151:3479?transport=udp'],
-                      reports={'client': {'found': True, 'state': 3, 'relayed': True, 'remote_address': '192.168.50.122:49201'}})
+                      offer_urls=['turn:192.0.2.100:3479?transport=udp'],
+                      reports={'client': {'found': True, 'state': 3, 'relayed': True, 'remote_address': '192.0.2.101:49201'}})
         self.assertTrue(self.judge(cloudflare_run(**coturn))['passed'])
         through_cloudflare = dict(coturn, signals=cloudflare_run()['signals'])
         self.assertFalse(self.judge(cloudflare_run(**through_cloudflare))['passed'])
@@ -191,7 +191,7 @@ class CloudflareMatchEvidence(unittest.TestCase):
         import relay_cloudflare_match as match
         self.assertTrue(match.cloudflare_address('141.101.90.1'))
         self.assertTrue(match.cloudflare_address('2a06:98c1:3200::1'))
-        for other in ('68.3.162.151', '24.251.145.96', '192.168.50.122', '8.8.8.8', 'not-an-address'):
+        for other in ('192.0.2.100', '24.251.145.96', '192.0.2.101', '8.8.8.8', 'not-an-address'):
             self.assertFalse(match.cloudflare_address(other), other)
 
 
@@ -269,7 +269,7 @@ class HotspotRows(unittest.TestCase):
             with self.subTest(name):
                 self.assertFalse(judge(rows)['passed'])
 
-    def test_a_automatic_fallback_needs_the_relay_on_the_hotspot_peer_with_no_player_action(self):
+    def test_a_forced_fallback_needs_the_relay_on_the_hotspot_peer_with_no_player_action(self):
         session = 'session-one'
         srflx = 'candidate:2 1 udp 1694498815 172.58.1.2 51000 typ srflx'
         signals = [('host', signal(relay_line('141.101.90.17'), srflx)), ('client-nonce', signal(relay_line('162.159.207.9', 40002), srflx))]
@@ -291,6 +291,88 @@ class HotspotRows(unittest.TestCase):
         for result in ({'pass': False, 'complete': True}, {'pass': True, 'complete': False}, {}, None):
             with self.subTest(result=result):
                 self.assertFalse(panel(result)['passed'])
+        watching = {'pass': True, 'complete': True, 'script': {'steps': [{'op': 'watch_route'}]}}
+        self.assertFalse(panel(watching)['passed'])
+        self.assertTrue(panel(dict(watching, route_watch={'samples': 900, 'moves': []}))['passed'])
+
+    def test_a_every_move_of_the_route_has_its_receipt(self):
+        """2026-10-04's row a: the connection moved from the relay to direct within 4 s and its log kept the one relay receipt."""
+        history = self.match().route_history
+        opening = '[net-ice] session s join_mode=ice resolved to identity x; dialling the ICE half\n'
+        relay = ('[net-ice] selected candidate=relay connection=7\n[net-route] RouteAllowed route=relay allowed=1 connection=7 remote=none '
+                 'turn=turn.cloudflare.com:3478 offer=s:0@2000\n')
+        moved = ('[net-ice] selected candidate=srflx connection=7\n[net-route] RouteAllowed route=direct allowed=1 connection=7 '
+                 'remote=192.0.2.103:5000 offer=none change=relay->direct after_ms=4100\n')
+        direct_report = {'found': True, 'relayed': False}
+        verdict = history(opening + relay + moved, 's', direct_report, None)
+        self.assertTrue(verdict['passed'], verdict['reasons'])
+        self.assertEqual(verdict['moves'], ['relay->direct'])
+        self.assertFalse(history(opening + relay, 's', direct_report, None)['passed'])
+        self.assertFalse(history(opening + relay + moved.replace('change=relay->direct', 'change=direct->relay'), 's', direct_report, None)['passed'])
+        self.assertFalse(history(opening + relay.replace('offer=s:0@2000', 'offer=s:0@2000 change=direct->relay'), 's', {'found': True, 'relayed': True}, None)['passed'])
+        seen = {'moves': [{'what': 'live', 'from': 'relay', 'to': 'direct'}, {'what': 'live', 'from': 'direct', 'to': 'relay'}]}
+        self.assertFalse(history(opening + relay + moved, 's', direct_report, seen)['passed'])
+        self.assertFalse(history('', 's', direct_report, None)['passed'])
+
+    def test_a_public_relay_is_bound_by_its_own_receipt_and_the_directory_s_offer(self):
+        """The public directory is not the run's: no candidate is observable, so the engine's receipt names the relay and its offer."""
+        session = 'session-one'
+        line = ('[net-route] RouteAllowed route=relay allowed=1 connection=7 remote=none turn=turn.cloudflare.com:3478,turn.cloudflare.com:443 '
+                f'offer={session}:0@2000')
+        log = '\n'.join([f'[net-ice] session {session} join_mode=ice resolved to identity x; dialling the ICE half',
+                          '[net-ice] selected candidate=relay connection=7', line])
+        offers = [dict(session_id=session, match_id=f'{session}:0', provider='cloudflare', generation=1, expires_at=2000, server_count=2)]
+        run = cloudflare_run(logs={'host': log, 'client': log}, signals=[], offers=offers, offer_urls=None, signals_observed=False,
+                             reports={'client': {'found': True, 'state': 3, 'relayed': True, 'remote_address': ''}})
+        verdict = self.match().judge_relay(run)
+        self.assertTrue(verdict['passed'], verdict['reasons'])
+        self.assertTrue(verdict['bindings']['client'].startswith('by its route receipt'))
+        for name, changed in {'another offer': line.replace('@2000', '@1999'), 'another relay': line.replace('turn.cloudflare.com:443', 'relay.example.net:443'),
+                              'no relay named': line.split(' turn=')[0] + f' offer={session}:0@2000'}.items():
+            with self.subTest(name):
+                swapped = log.replace(line, changed)
+                self.assertFalse(self.match().judge_relay(dict(run, logs={'host': swapped, 'client': swapped}))['passed'])
+        self.assertFalse(self.match().judge_relay(dict(run, signals_observed=True))['passed'])
+
+    def test_hashed_relay_hosts_keep_the_offer_and_provider_binding(self):
+        import hashlib
+        match = self.match()
+        host = 'relay.example.test'
+        digest = hashlib.sha256(host.encode()).hexdigest()
+        line = f'[net-route] RouteAllowed route=relay allowed=1 connection=7 remote=none turn_sha256={digest} offer=s:0@2000'
+        offers = [dict(session_id='s', match_id='s:0', provider='coturn', expires_at=2000)]
+        self.assertIsNotNone(match.receipt_binding(line, offers, 's', 'coturn', {host}))
+        for changed in (line.replace(digest, hashlib.sha256(b'other.example.test').hexdigest()),
+                        line.replace('@2000', '@1999'), line.replace(digest, digest + ',bad'),
+                        line.replace('turn_sha256=' + digest, 'turn_sha256=')):
+            self.assertIsNone(match.receipt_binding(changed, offers, 's', 'coturn', {host}))
+        self.assertIsNone(match.receipt_binding(line, offers, 's', 'cloudflare', {host}))
+        self.assertIsNone(match.receipt_binding(line + ' turn=other.example.test:3478', offers, 's', 'coturn', {host}))
+
+    def test_every_box_holds_the_same_game_data_before_an_engine_starts(self):
+        """2026-10-04: six Data text files with CRLF on two boxes were refused as 'modules' by the directory after a 10-minute wait."""
+        import tempfile
+        match = self.match()
+
+        class Here:
+            def __init__(self, name, tree):
+                self.name, self.tree, self.local = name, tree, True
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(match, 'DRY_RUN', False):
+            trees = []
+            for box in ('edith', 'ally'):
+                module = Path(folder) / box / 'Data' / 'Base.rte' / 'GUIs'
+                module.mkdir(parents=True)
+                (module / 'MainMenuSubMenuGUI.ini').write_bytes(b'[Panel]\nWidth = 2\n')
+                (Path(folder) / box / 'Data' / 'Tests.rte').mkdir()
+                (Path(folder) / box / 'Data' / 'Tests.rte' / 'Preview.lua').write_bytes(b'return 1\n')
+                trees.append(Here(box, str(Path(folder) / box)))
+            self.assertTrue(match.data_preflight(trees)['passed'])
+            (Path(folder) / 'ally' / 'Data' / 'Base.rte' / 'GUIs' / 'MainMenuSubMenuGUI.ini').write_bytes(b'[Panel]\r\nWidth = 2\r\n')
+            verdict = match.data_preflight(trees)
+            self.assertFalse(verdict['passed'])
+            self.assertEqual(len(verdict['reasons']), 1, verdict['reasons'])
+            self.assertIn('ally: module Data/Base.rte differs', verdict['reasons'][0])
+            self.assertIn('GUIs/MainMenuSubMenuGUI.ini', verdict['reasons'][0])
 
     def test_b_the_hotspot_host_is_listed_and_given_a_cloudflare_relay(self):
         listing = self.match().listing_evidence
@@ -326,6 +408,101 @@ class HotspotRows(unittest.TestCase):
         self.assertFalse(renewal(logs, [dict(status=201, epoch=1000.0), dict(status=403, epoch=1160.0, provider_error_code='1010')], ['host', 'client'], **timed)['passed'])
         self.assertFalse(renewal(logs, calls, ['host', 'client'], **dict(timed, line_times={}))['passed'])
 
+    def test_renewal_does_not_excuse_a_hold_without_stall_evidence(self):
+        scenario = json.loads((Path(__file__).parent / 'e2e/mp-relay-hotspot.json').read_text())
+        run = next(row for row in scenario['runs'] if row['name'] == 'd-credential-expiry')
+        peers = [dict(name='host', holds=0), dict(name='client', holds=1)]
+        verdict = self.match().seat_holds(peers, set(run.get('holds_allowed') or []), {'host', 'client'})
+        self.assertFalse(verdict['passed'], 'a held seat is excused without any independent link-stall record')
+
+    def test_e_the_survivors_feel_is_judged_on_either_side_of_the_loss(self):
+        """2026-10-04 row e: the whole-match bars read 47.5 tps and a 7.5 s wait, both the host loss's own pause."""
+        around = self.match().feel_around_loss
+        tick = 1000 / 60
+        rows = [dict(tick=t, wall_ms=t * tick + (7500 if t >= 618 else 0)) for t in range(1, 1802)]
+        loss = '[net-match] host lost; collecting surviving peers at applied frame 617 final_frame=1802\n'
+        verdict = around(rows, loss, 618, 1801)
+        self.assertTrue(verdict['passed'], verdict['reasons'])
+        self.assertGreater(verdict['pause_ms'], 7500)
+        slow = [dict(row, wall_ms=row['wall_ms'] + (row['tick'] - 1000) * 2 if row['tick'] > 1000 else row['wall_ms']) for row in rows]
+        self.assertFalse(around(slow, loss, 618, 1801)['passed'])
+        waited = around(rows, loss + '[net-frame-wait] frame=1200 wait_ms=80 on=x\n', 618, 1801)
+        self.assertFalse(waited['passed'])
+        self.assertFalse(around(rows, '', None, 1801)['passed'])
+
+    def test_e_a_pause_that_starts_before_the_boundary_is_the_loss_s(self):
+        """2026-10-05 5:12 AM row e: the survivors ran out of the dead host's input at 628, two frames before the boundary at 630."""
+        around = self.match().feel_around_loss
+        tick = 1000 / 60
+        rows = [dict(tick=t, wall_ms=t * tick + (7888 if t >= 628 else 0)) for t in range(1, 1802)]
+        loss = '[net-match] host lost; collecting surviving peers at applied frame 627 final_frame=1802\n'
+        verdict = around(rows, loss + '[net-frame-wait] frame=628 wait_ms=7888\n', 630, 1801)
+        self.assertTrue(verdict['passed'], verdict['reasons'])
+        self.assertEqual(verdict['windows']['before']['last_tick'], 627)
+        self.assertGreater(verdict['pause_ms'], 7888)
+        # A stall before the loss's pause is still the before window's.
+        self.assertFalse(around(rows, loss + '[net-frame-wait] frame=500 wait_ms=80\n[net-frame-wait] frame=628 wait_ms=7888\n', 630, 1801)['passed'])
+
+    def test_an_earlier_larger_gap_is_not_the_recorded_host_loss(self):
+        tick = 1000 / 60
+        rows = [dict(tick=t, wall_ms=t * tick + (9000 if t >= 450 else 0) + (7888 if t >= 628 else 0))
+                for t in range(1, 1802)]
+        log = '[net-match] host lost; collecting surviving peers at applied frame 627 final_frame=1802\n'
+        verdict = self.match().feel_around_loss(rows, log, 630, 1801)
+        self.assertFalse(verdict['passed'], 'a larger unrelated gap removes the defective part of the before window')
+
+    def test_e_a_survivor_s_second_dial_is_its_own(self):
+        """2026-10-04 row e: a survivor dials its successor as a second identity; its connect receipt names it."""
+        senders = self.match().sender_peers
+        signals = [('host', 'x'), ('client:aaaa1111bbbb2222cccc', 'x'), ('client:dddd3333eeee4444ffff', 'x')]
+        mapped = senders(signals, {'client': ['str:c-aaaa1111bbbb2222', 'str:c-dddd3333eeee4444']}, ['host', 'client'])
+        self.assertEqual(mapped['client:dddd3333eeee4444ffff'], 'client')
+        mapped = senders(signals, {'client': 'str:c-aaaa1111bbbb2222', 'client2': 'str:c-9999'}, ['host', 'client', 'client2'])
+        self.assertTrue(mapped['client:dddd3333eeee4444ffff'].startswith('unmatched:'))
+        run = cloudflare_run(reports={'client': {'found': False, 'state': 5, 'relayed': True}})
+        self.assertFalse(self.match().judge_relay(run)['passed'])
+        self.assertTrue(self.match().judge_relay(dict(run, host_lost=True))['passed'])
+        # 2026-10-04 8:02 PM: a survivor's closed report says nothing of the route it plays on after the loss.
+        closed = cloudflare_run(reports={'client': {'found': False, 'state': 0, 'relayed': False}})
+        verdict = self.match().judge_relay(dict(closed, host_lost=True))
+        self.assertTrue(verdict['passed'], verdict['reasons'])
+
+    def test_e_a_cut_registry_lookup_is_asked_again_or_read_from_its_block(self):
+        """2026-10-04 9:37 PM row e: two relay addresses inside a block the run had resolved met 'connection forcibly closed'."""
+        calls = []
+        block = dict(handle='NET-104-16-0-0-1', name='CLOUDFLARENET', start='104.16.0.0', end='104.31.255.255',
+                     registrants=['Cloudflare, Inc.'], inside=True, cloudflare=True)
+
+        def lookup(address):
+            calls.append(address)
+            if address == '104.30.146.20' or calls.count(address) > 1:
+                return dict(block, address=address) if address.startswith('104.') else dict(address=address, start='198.51.100.0',
+                                                                                            end='198.51.100.255', cloudflare=False)
+            return dict(address=address, cloudflare=False, error='URLError: [WinError 10054] forcibly closed')
+        rows = self.match().registrants_of(['104.30.146.20', '104.30.150.12', '198.51.100.7'], lookup=lookup, pause_s=0)
+        self.assertEqual([row['cloudflare'] for row in rows], [True, True, False])
+        self.assertEqual(rows[1]['within'], '104.30.146.20')
+        self.assertEqual(calls, ['104.30.146.20', '198.51.100.7', '198.51.100.7'])
+        self.assertNotIn('error', rows[2])
+
+    def test_e_a_killed_host_s_summary_is_its_successor_s(self):
+        """2026-10-04 8:02 PM row e: the killed host writes no report; the seats are read from the successor's summary."""
+        writers = self.match().summary_writers
+        run = {'tag': 'rp', 'kill_host_at_tick': 620, 'peers': [{'name': 'host'}, {'name': 'client'}, {'name': 'client2'}]}
+        logs = {'client': '[net-match] Host left - rp-client is now hosting; boundary=630 round=9\n', 'client2': ''}
+        self.assertEqual(writers(run, logs), ['host', 'client'])
+        self.assertEqual(writers(dict(run, kill_host_at_tick=None), logs), ['host'])
+
+    def test_d_a_login_that_expired_before_the_run_ended_is_already_revoked(self):
+        """2026-10-04 row d: the first of three five-minute logins expired mid-match; Cloudflare answered its revoke 404."""
+        revoked = self.match().revoked_every_login
+        minted = [dict(username='one', expires_at=1000), dict(username='two', expires_at=1300), dict(username='three', expires_at=1600)]
+        self.assertTrue(revoked(minted, [404, 204, 204], 1500))
+        self.assertFalse(revoked(minted, [204, 404, 204], 1200))
+        self.assertFalse(revoked(minted, [204, 204], 1500))
+        self.assertFalse(revoked(minted, [], 1500))
+        self.assertTrue(revoked(minted + [dict(username='one', expires_at=1000)], [204, 204, 204], 1500))
+
     def test_e_the_survivors_name_one_successor_after_the_relayed_host_is_lost(self):
         migration = self.match().migration_declarations
         line = '[net-match] Host left - Client is now hosting; boundary=640 round=1'
@@ -338,6 +515,12 @@ class HotspotRows(unittest.TestCase):
         self.assertFalse(migration({'client': line + successor, 'client2': other + successor}, ['client', 'client2'], 's', seats, ticks)['passed'])
         self.assertFalse(migration({'client': line + successor, 'client2': ''}, ['client', 'client2'], 's', seats, ticks)['passed'])
         self.assertFalse(migration({'client': line + '\n' + line + successor, 'client2': line + successor}, ['client', 'client2'], 's', seats, ticks)['passed'])
+        # 2026-10-04 row e: each survivor dials its successor when it finds the host lost, before the handover line.
+        lost = '[net-match] host lost; collecting surviving peers at applied frame 617 final_frame=1802'
+        early = {name: lost + successor + '\n' + line for name in ('client', 'client2')}
+        self.assertTrue(migration(early, ['client', 'client2'], 's', seats, ticks)['passed'])
+        stale = {name: successor.lstrip('\n') + '\n' + lost + '\n' + line for name in ('client', 'client2')}
+        self.assertFalse(migration(stale, ['client', 'client2'], 's', seats, ticks)['passed'])
 
     def test_f_relay_only_chosen_by_hand_is_read_from_the_menu_script(self):
         chosen = self.match().menu_choice
@@ -346,14 +529,55 @@ class HotspotRows(unittest.TestCase):
         self.assertFalse(chosen(log.replace('PASS', 'FAIL'), 'Relay only')['passed'])
         self.assertFalse(chosen('', 'Relay only')['passed'])
 
+    def test_every_hotspot_item_reads_a_check_its_row_computes(self):
+        scenario = json.loads((Path(__file__).resolve().parent / 'e2e/mp-relay-hotspot.json').read_text(encoding='utf-8'))
+        required = self.match().REQUIRED
+        judged_apart = ('offer', 'direct_expected')
+        unread = [item['id'] for item in scenario['checklist'] if item['run'] in required and ':' not in item['check'] and
+                  item['check'] not in judged_apart and item['check'] not in required[item['run']]]
+        self.assertEqual(unread, [], 'items whose check their row never computes read as absent and fail every run')
+
+    def test_a_busy_session_keeps_its_offer_in_the_directory_lines(self):
+        match = self.match()
+        session = '9dc65d53-88b9-48d8-bc3f-6efd89225510'
+        offer = f'2026-10-05 04:43:30,000 INFO relay_offer_issued {{"session_id": "{session}", "provider": "cloudflare"}}'
+        polls = [f'2026-10-05 04:45:41,408 INFO 127.0.0.1 "GET /v1/sessions/{session}/signals?peer=host&after={n}&wait=2 HTTP/1.1" 200 -'
+                 for n in range(600)]
+        lines = [offer, *polls, f'2026-10-05 04:48:10,000 INFO 127.0.0.1 "DELETE /v1/sessions/{session} HTTP/1.1" 204 -']
+
+        def ssh(argv, **_):
+            # The Mac's shell runs the command's own pipeline.
+            tail = re.search(r'\| tail -(\d+)\s*$', argv[-1])
+            return mock.Mock(stdout='\n'.join(lines[-int(tail.group(1)):] if tail else lines) + '\n')
+        with mock.patch.object(match.subprocess, 'run', side_effect=ssh):
+            got = match.public_directory_lines(session)
+        self.assertIn(offer, got, 'a four-player session logs more polls than the window: its offer must stay')
+        self.assertIn(lines[-1], got)
+        self.assertLessEqual(len(got), 402)
+
     def test_every_hotspot_row_is_declared_with_its_lever(self):
         scenario = json.loads((Path(__file__).resolve().parent / 'e2e/mp-relay-hotspot.json').read_text(encoding='utf-8'))
-        runs = {run['name'][0]: run for run in scenario['runs']}
+        named = {run['name']: run for run in scenario['runs']}
+        runs = {run['name'][0]: run for run in scenario['runs'] if run['name'] != 'a-automatic-forced'}
         self.assertEqual(sorted(runs), list('abcdefg'))
+        self.assertEqual(sorted(named), ['a-automatic-fallback', 'a-automatic-forced', 'b-hotspot-host', 'c-four-players', 'd-credential-expiry',
+                                         'e-migration-relayed', 'f-relay-by-hand', 'g-relay-only-public'])
         self.assertTrue(any(peer.get('tailscale_down') for peer in runs['a']['peers']))
-        self.assertEqual(runs['a']['expect_routes'], {'client': 'relay'})
+        # On a carrier NAT that can be punched Automatic ends direct: the natural form proves its route history, the forced form the fallback.
+        self.assertNotIn('expect_routes', runs['a'])
+        forced = named['a-automatic-forced']
+        self.assertEqual(forced['expect_routes'], {'client': 'relay'})
+        hotspot = next(peer for peer in forced['peers'] if peer['box'] == 'ally')
+        self.assertEqual(hotspot['env'], {'CC_TEST_ICE_GATHER_RELAY_ONLY': '1'})
+        self.assertEqual(hotspot['connection'], 'Automatic')
+        self.assertTrue(hotspot.get('tailscale_down'))
         self.assertEqual(next(peer for peer in runs['b']['peers'] if peer['name'] == 'host')['box'], 'ally')
         self.assertEqual(len(runs['c']['peers']), 4)
+        self.assertEqual(sorted(peer['box'] for peer in runs['c']['peers']), ['ally', 'edith', 'erol-pc', 'erol-pc'])
+        for row in 'def':
+            self.assertEqual(runs[row]['directory'], 'tunnel', row)
+        self.assertEqual(runs['g']['timing_peers'], ['host'])
+        self.assertEqual(runs['g']['holds_allowed'], ['client'])
         self.assertLessEqual(runs['d']['relay_ttl_cap'], 600)
         self.assertGreater(runs['d']['ticks'] / 60, runs['d']['relay_ttl_cap'])
         self.assertTrue(runs['e']['kill_host_at_tick'])
@@ -372,6 +596,26 @@ class HotspotRows(unittest.TestCase):
 class DirectoryPerRun(unittest.TestCase):
     """Two runs in one driver process: each run's offer receipt lands in its own service.log (a run's verdict reads only
     its own root, so a receipt logged into the previous run's file reads as 'no offer issued')."""
+
+    def test_observed_peer_addresses_are_private_before_retention(self):
+        import tempfile
+        import relay_cloudflare_match as match
+        from relay_secrets import SecretBook
+        addresses = ('192.0.2.29', '2001:db8::29')
+        book = SecretBook()
+        with tempfile.TemporaryDirectory() as folder, mock.patch('sys.stderr', io.StringIO()):
+            root = Path(folder)
+            run = match.Directory(root, 0, None, 86400, book)
+            try:
+                for address in addresses:
+                    run.module.LOGGER.info('signal session_id=unit client=%s peer_via=header', address)
+                retained = (root / 'service.log').read_text(encoding='utf-8')
+                for address in addresses:
+                    self.assertNotIn(address, retained)
+                self.assertEqual(retained.count('client=<owner-address>'), 2)
+                self.assertIn('owner-address', book.kinds())
+            finally:
+                run.stop()
 
     def test_each_run_logs_its_offer_receipt_to_its_own_root(self):
         import tempfile
@@ -407,7 +651,7 @@ class OracleCorrections(unittest.TestCase):
         # Both relay candidates of the live run; ARIN RDAP: NET-104-16-0-0-1 104.16.0.0/12 CLOUDFLARENET, Cloudflare, Inc.
         for address in ('104.30.136.195', '104.30.146.169'):
             self.assertTrue(match.cloudflare_address(address), address)
-        for other in ('104.32.0.1', '68.3.162.151', '192.168.50.122'):
+        for other in ('104.32.0.1', '192.0.2.100', '192.0.2.101'):
             self.assertFalse(match.cloudflare_address(other), other)
 
     def test_a_report_written_after_the_connection_closed_is_no_route_evidence(self):
@@ -442,6 +686,32 @@ class LeakScrub(unittest.TestCase):
         self.assertEqual(result['files'][0]['logins'], 1)
         self.assertEqual(result['revokes'], [204])
         self.assertNotIn('unit-minted', json.dumps(result))
+
+    def test_an_archive_whose_bytes_spell_an_escape_is_read_as_its_members(self):
+        """2026-10-04: an engine autosave (a zip) whose bytes held a backslash-u escape run was unescaped as if it were text; the
+        mangled copy no longer parsed as a zip and the sweep called the whole run INCOMPLETE. A login inside a member is still found."""
+        import io
+        import tempfile
+        import zipfile
+        from relay_secrets import SecretBook, sweep
+        def archive(member: bytes) -> bytes:
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_STORED) as out:
+                out.writestr('Save.ini', member)
+            return buffer.getvalue()
+        book = SecretBook()
+        book.add_offer({'iceServers': SERVERS})
+        with tempfile.TemporaryDirectory() as folder:
+            clean = Path(folder) / 'clean' / 'tick-791.ccsave'
+            clean.parent.mkdir()
+            clean.write_bytes(archive(b'Name = \\u00e9t\\u00e9\n'))
+            self.assertIn(b'\\u00e9', clean.read_bytes())
+            scan = sweep([clean.parent], book.finder())
+            self.assertEqual(scan['status'], 'CLEAN', scan)
+            leaked = Path(folder) / 'leaked' / 'tick-792.ccsave'
+            leaked.parent.mkdir()
+            leaked.write_bytes(archive(b'Name = \\u00e9\nTurnPass = unit-minted-credential\n'))
+            self.assertNotEqual(sweep([leaked.parent], book.finder())['status'], 'CLEAN')
 
     def test_a_file_without_a_login_is_left_byte_for_byte(self):
         import tempfile
@@ -497,7 +767,7 @@ class FeelBars(unittest.TestCase):
 
     def test_the_six_measured_pins_decide_and_the_unmeasurable_ones_are_listed(self):
         import relay_cloudflare_match as match
-        verdict = match.feel_bars(self.timing(), 'host')
+        verdict = match.feel_bars(self.timing(), 'host', log='[net-match] end record received final=1201\n')
         self.assertTrue(verdict['passed'], verdict)
         self.assertEqual(sorted(verdict['unmeasured']), ['input_carried', 'item9a_harness_cost'])
         self.assertIs(verdict['pass_check'], False)
@@ -507,6 +777,104 @@ class FeelBars(unittest.TestCase):
         self.assertFalse(match.feel_bars(self.timing(item9a_wall_tps={'status': 'FAIL', 'value': 41.2}), 'host')['passed'])
         self.assertFalse(match.feel_bars(self.timing(item9a_longest_wait={'status': 'MISS', 'value': None}), 'host')['passed'])
         self.assertFalse(match.feel_bars({'peers': {}}, 'host')['passed'])
+
+    def test_missing_logs_and_unobserved_spikes_never_repair_a_pin(self):
+        import relay_cloudflare_match as match
+        for log in (None, '', '   \n'):
+            with self.subTest(log=log):
+                self.assertFalse(match.feel_bars(self.timing(), 'host', log=log)['passed'])
+        missing = dict(item9a_steady_stalls={'status': 'MISS', 'value': None},
+                       item9a_missing_frame_stalls={'status': 'PASS', 'value': 0})
+        self.assertFalse(match.feel_bars(self.timing(**missing), 'host', log='[net-match] hold peer=4 frame=1120\n',
+                                         spikes={1120}, ticks=1201)['passed'])
+        failed = dict(item9a_steady_stalls={'status': 'FAIL', 'value': 1},
+                      item9a_missing_frame_stalls={'status': 'FAIL', 'value': 1})
+        self.assertFalse(match.feel_bars(self.timing(**failed), 'host', log='[net-frame-wait] frame=1120 wait_ms=2\n',
+                                         spikes={1120}, ticks=1201)['passed'])
+
+    def test_a_spike_needs_the_runs_measured_bound(self):
+        import relay_cloudflare_match as match
+        log = ('[net-lockstep] propose hold peer=4 next_frame=1120 played=1 first_missing_ms=2000 now=2100 cause=late_stream\n'
+               '[net-match] hold peer=4 frame=1120 AI in control\n')
+        self.assertEqual(match.observed_input_spikes(log), {})
+        self.assertEqual(match.observed_input_spikes(log, 1000 / 60, 8), {})
+        self.assertIn(1120, match.observed_input_spikes(log, 1000 / 60, 3))
+
+    def test_a_live_rows_one_wait_at_a_held_frame_is_the_spikes(self):
+        import relay_cloudflare_match as match
+        steady = dict(item9a_steady_stalls={'status': 'FAIL', 'value': 1}, item9a_missing_frame_stalls={'status': 'FAIL', 'value': 1})
+        log = '[net-frame-wait] frame=1120 wait_ms=2\n[net-frame-wait] frame=200 wait_ms=40\n'
+        observed = match.observed_input_spikes('[net-lockstep] propose hold peer=4 next_frame=1120 played=1 first_missing_ms=2000 now=2100 cause=late_stream\n'
+                                                '[net-match] hold peer=4 frame=1120 AI in control\n', 1000 / 60, 3)
+        verdict = match.feel_bars(self.timing(**steady), 'host', log=log, spikes=observed, ticks=1201)
+        self.assertTrue(verdict['passed'], verdict)
+        self.assertEqual(verdict['live_spike_reading'], dict(steady=0, spike_waits=[(1120, 2)],
+                                                             pins={'item9a_steady_stalls': 'FAIL', 'item9a_missing_frame_stalls': 'FAIL'}, evidence=observed))
+        # A wait at a frame no hold answered, a second wait at a held frame, or a spike's wait over 50 ms stays a failure.
+        self.assertFalse(match.feel_bars(self.timing(**steady), 'host', log='[net-frame-wait] frame=1119 wait_ms=2\n', spikes=observed, ticks=1201)['passed'])
+        self.assertFalse(match.feel_bars(self.timing(**steady), 'host', log=log + '[net-frame-wait] frame=1120 wait_ms=3\n', spikes=observed,
+                                         ticks=1201)['passed'])
+        self.assertFalse(match.feel_bars(self.timing(item9a_longest_wait={'status': 'FAIL', 'value': 97}, **steady), 'host', log=log,
+                                         spikes=observed, ticks=1201)['passed'])
+        self.assertFalse(match.feel_bars(self.timing(**steady), 'host')['passed'])
+
+
+class TurnProbe(unittest.TestCase):
+    def test_a_malformed_allocation_does_not_admit_a_scene(self):
+        import relay_cloudflare_match as match
+        import struct
+        transaction = b'0' * 12
+        def packet(kind, body):
+            return struct.pack('!HHI', kind, len(body), 0x2112A442) + transaction + body
+        challenge = packet(0x0113, b'\x00\x14\x00\x04test\x00\x15\x00\x04once')
+        malformed = packet(0x0103, b'\x00\x00')
+        fake = mock.MagicMock()
+        fake.__enter__.return_value = fake
+        fake.recvfrom.side_effect = [(challenge, ('127.0.0.1', 47579)), (malformed, ('127.0.0.1', 47579))]
+        with mock.patch.object(match.socket, 'socket', return_value=fake), mock.patch.object(match.os, 'urandom', return_value=transaction):
+            with self.assertRaises(ValueError):
+                match.turn_allocate(('127.0.0.1', 47579), 'test-user', 'test-password')
+        self.assertEqual(fake.sendto.call_count, 2)
+
+    def test_a_stream_probe_reads_partial_challenge_and_success(self):
+        import relay_cloudflare_match as match
+        import struct
+        import socket
+        import threading
+        errors = []
+        requests = []
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen(1)
+            listener.settimeout(3)
+            def serve():
+                try:
+                    with listener.accept()[0] as client:
+                        client.settimeout(3)
+                        for kind, body in ((0x0113, b'\x00\x14\x00\x04test\x00\x15\x00\x04once'), (0x0103, b'')):
+                            packet = bytearray()
+                            while len(packet) < 20:
+                                packet.extend(client.recv(20 - len(packet)))
+                            length = struct.unpack('!H', packet[2:4])[0]
+                            while len(packet) < 20 + length:
+                                packet.extend(client.recv(20 + length - len(packet)))
+                            requests.append(bytes(packet))
+                            response = struct.pack('!HHI', kind, len(body), 0x2112A442) + packet[8:20] + body
+                            for byte in response:
+                                client.sendall(bytes([byte]))
+                except Exception as error:
+                    errors.append(type(error).__name__)
+            worker = threading.Thread(target=serve)
+            worker.start()
+            try:
+                receipt = match.turn_allocate(listener.getsockname(), 'test-user', 'test-password', timeout=2, transport='tcp')
+            finally:
+                worker.join(4)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(receipt['result'], 'allocated')
+        self.assertEqual(len(requests), 2)
+        self.assertIn(b'\x00\x08\x00\x14', requests[1])
 
 
 class LoginSweep(unittest.TestCase):

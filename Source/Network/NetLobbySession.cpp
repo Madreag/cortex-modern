@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <charconv>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -40,6 +41,20 @@ namespace RTE {
 
 		bool IsTerminal(NetLobbyState state) {
 			return state == NetLobbyState::Started || state == NetLobbyState::Rejected || state == NetLobbyState::Failed;
+		}
+
+		bool ParseStateReceipt(const std::string& reason, uint64_t& transfer, uint16_t& chunks) {
+			if (!reason.starts_with("state:")) return false;
+			const char* end = reason.data() + reason.size();
+			const auto id = std::from_chars(reason.data() + 6, end, transfer);
+			if (id.ec != std::errc{} || id.ptr == end || *id.ptr != ':' || transfer == 0) return false;
+			const auto count = std::from_chars(id.ptr + 1, end, chunks);
+			return count.ec == std::errc{} && count.ptr == end && chunks != 0;
+		}
+
+		NetHash32 StateReceiptHash(uint64_t session, uint64_t transfer, uint8_t peer, uint32_t total, uint16_t chunks, const uint8_t* bytes, size_t size) {
+			return NetIdentity::HashCanonicalText("LobbyStateReceipt/v1", {{"session", std::to_string(session)}, {"transfer", std::to_string(transfer)},
+			    {"peer", std::to_string(peer)}, {"total", std::to_string(total)}, {"chunks", std::to_string(chunks)}, {"chunk", System::Sha256Hex(bytes, size)}});
 		}
 
 		std::atomic<uint64_t> g_TransferStartMs{0};
@@ -130,6 +145,7 @@ namespace RTE {
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_Config.matchConfig);
 		m_StartFrame = config.startFrame;
 		m_LastConfigSentMs = 0;
+		m_LastStartRepeatMs = 0;
 		m_LastPeerStateSentMs = 0;
 		m_LastReceiveMs = 0;
 		m_SessionClockBaseMs = config.session ? config.session->GetClockMs() : 0;
@@ -157,6 +173,10 @@ namespace RTE {
 		m_PendingTailDatagrams.clear();
 		m_OutgoingChunkIndexByPeer.clear();
 		m_OutgoingChunkCount = 0;
+		m_StateReceiptRequired = false;
+		m_ReceivedChunkCountByPeer.clear();
+		m_IncomingStateReceipt.reset();
+		m_LastStateReceiptSentMs = UINT64_MAX;
 		m_ChunkSendStall = 0;
 		m_StartSentTo.clear();
 		m_StartSendStall = 0;
@@ -240,6 +260,7 @@ namespace RTE {
 			}
 		}
 		SampleInputDelays(nowMs);
+		SendStateReceiptIfDue(nowMs);
 		SendReadyIfNeeded();
 		if (IsTerminal(m_State)) {
 			return;
@@ -337,6 +358,10 @@ namespace RTE {
 			return false;
 		}
 		if (IsKnownRemote(peerId)) {
+			if (m_StateReceiptRequired && m_RemoteTransports.at(peerId) != transport) {
+				m_ReceivedChunkCountByPeer.erase(peerId);
+				m_OutgoingChunkIndexByPeer.erase(peerId);
+			}
 			m_RemoteTransports[peerId] = transport;
 			return true;
 		}
@@ -432,6 +457,8 @@ namespace RTE {
 		                                           : m_OutgoingStateId + 1;
 		m_OutgoingChunkIndexByPeer.clear();
 		m_OutgoingChunkCount = chunkCount;
+		m_ReceivedChunkCountByPeer.clear();
+		m_StateReceiptRequired = m_State != NetLobbyState::Started && !m_Config.matchConfig.persistentWorld && !IsWorldJoinImageBlob(m_StateBytesToSend);
 		m_ChunkSendStall = 0;
 		g_TransferStartMs.store(0);
 	}
@@ -453,6 +480,28 @@ namespace RTE {
 			}
 			return OutgoingChunkIndex(peerId) < m_OutgoingChunkCount;
 		});
+	}
+
+	bool NetLobbySession::HasUnreceivedStartState() const {
+		if (!m_StateReceiptRequired) return false;
+		return std::any_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [this](uint8_t peer) {
+			if ((m_StateTransferOnlyPeer != 0 && peer != m_StateTransferOnlyPeer) || ResumeSkipsTransfer(peer)) return false;
+			const auto received = m_ReceivedChunkCountByPeer.find(peer);
+			return received == m_ReceivedChunkCountByPeer.end() || received->second != m_OutgoingChunkCount;
+		});
+	}
+
+	void NetLobbySession::SendStateReceiptIfDue(uint64_t nowMs) {
+		if (!m_IncomingStateReceipt || (m_LastStateReceiptSentMs != UINT64_MAX && nowMs < m_LastStateReceiptSentMs + m_Config.resendIntervalMs)) return;
+		// A handover keeps the agreed config while the client's bound host changes.
+		const uint8_t remote = m_Config.host ? m_Config.snapshotProviderPeerId
+		    : m_RemoteTransports.size() == 1 ? m_RemoteTransports.begin()->first : m_Config.matchConfig.hostPeerId;
+		const auto route = m_RemoteTransports.find(remote);
+		if (route == m_RemoteTransports.end()) return;
+		std::string error;
+		bool congested = false;
+		if (SendTo(route->second, *m_IncomingStateReceipt, &error, &congested)) m_LastStateReceiptSentMs = nowMs;
+		else if (!congested) Fail(error);
 	}
 
 	bool NetLobbySession::ResumeSkipsTransfer(uint8_t peerId) const {
@@ -507,6 +556,9 @@ namespace RTE {
 				if (m_StateTransferOnlyPeer != 0 && peerId != m_StateTransferOnlyPeer) continue;
 				if (m_StateTransferOnlyPeer == 0 && (ResumeSkipsTransfer(peerId) || ResumeAwaitsAnswer(peerId))) continue;
 				if (!IsRemoteConnectionLobbyUp(peerId) || OutgoingChunkIndex(peerId) != index) continue;
+				// Four received chunks bound the bulk ahead of the ordered keepalive and Start.
+				const uint16_t received = m_ReceivedChunkCountByPeer.contains(peerId) ? m_ReceivedChunkCountByPeer.at(peerId) : 0;
+				if (m_StateReceiptRequired && index >= static_cast<uint32_t>(received) + c_StateFlightChunks) continue;
 				std::string error;
 				if (!SendTo(m_RemoteTransports.at(peerId), chunk, &error)) {
 					if (++m_ChunkSendStall > 4000) Fail("state transfer stalled: " + error);
@@ -581,6 +633,7 @@ namespace RTE {
 			m_IncomingChunkCount = message.chunkCount;
 			m_IncomingNextChunkIndex = 0;
 			m_IncomingStateComplete = false;
+			m_IncomingStateReceipt.reset();
 			m_ReceivedState.clear();
 			g_TransferStartMs.store(TransferSteadyMs());
 		}
@@ -606,6 +659,14 @@ namespace RTE {
 		m_IncomingReceivedBytes = static_cast<uint32_t>(m_ReceivedState.size());
 		++m_IncomingNextChunkIndex;
 		++m_StateTransferProgressSerial;
+		if (!m_Config.matchConfig.persistentWorld && !IsWorldJoinImageBlob(m_ReceivedState)) {
+			m_IncomingStateReceipt = NetLobbyConfigAck{m_Config.localPeerId, true,
+			    StateReceiptHash(m_Config.matchConfig.sessionId, m_IncomingStateId, m_Config.localPeerId, m_IncomingTotalBytes,
+			                     m_IncomingNextChunkIndex, message.bytes.data(), message.bytes.size()),
+			    "state:" + std::to_string(m_IncomingStateId) + ":" + std::to_string(m_IncomingNextChunkIndex)};
+			m_LastStateReceiptSentMs = UINT64_MAX;
+			SendStateReceiptIfDue(m_TimingClockMs);
+		}
 		if (m_Config.matchConfig.persistentWorld || IsWorldJoinImageBlob(m_ReceivedState)) {
 			const uint64_t progress = (static_cast<uint64_t>(m_IncomingChunkCount) << 32) | m_IncomingNextChunkIndex;
 			std::string sendError;
@@ -897,6 +958,7 @@ namespace RTE {
 		m_RemoteLobbyUp.erase(peerId);
 		m_WorldTransferPeers.erase(peerId);
 		m_OutgoingChunkIndexByPeer.erase(peerId);
+		m_ReceivedChunkCountByPeer.erase(peerId);
 		m_ConfigAckedByPeer.erase(peerId);
 		m_AckedSetupByPeer.erase(peerId);
 		m_RemoteReadyByPeer.erase(peerId);
@@ -1339,6 +1401,8 @@ namespace RTE {
 		m_LastStartWaitLogMs = m_TimingClockMs == 0 ? 1 : m_TimingClockMs;
 		std::ostringstream line;
 		line << "[net-lobby] waiting at " << StateName(m_State) << " role=" << (m_Config.host ? "host" : "client")
+		     << " clock_ms=" << m_TimingClockMs << " session_ms=" << (m_Config.session ? m_Config.session->GetClockMs() : 0)
+		     << " received=" << m_Stats.messagesReceived << " ignored=" << m_Stats.ignoredSessionPackets << " unbound=" << m_Stats.unboundSenderPackets
 		     << " hash=" << HashText(m_MatchConfigHash) << " revision=" << m_Config.matchConfig.configRevision
 		     << " republishes=" << m_Stats.configRepublishes << " config_sent=" << m_Stats.configPacketsSent
 		     << " acks=" << m_Stats.configAcksReceived;
@@ -1348,11 +1412,14 @@ namespace RTE {
 			for (uint8_t peerId: m_RemotePeerIds) {
 				line << " peer" << static_cast<int>(peerId) << "=[acked=" << (m_ConfigAckedByPeer.count(peerId) && m_ConfigAckedByPeer.at(peerId) ? 1 : 0)
 				     << " ready=" << (IsRemoteReady(peerId) ? 1 : 0) << " lobby_up=" << (IsRemoteLobbyUp(peerId) ? 1 : 0)
+				     << " state_sent=" << OutgoingChunkIndex(peerId)
+				     << " state_received=" << (m_ReceivedChunkCountByPeer.contains(peerId) ? m_ReceivedChunkCountByPeer.at(peerId) : 0) << "/" << m_OutgoingChunkCount
 				     << " delay=" << NetMatchConfigUtil::PeerInputDelay(m_Config.matchConfig, peerId) << "]";
 			}
 		} else {
 			line << " ready_sent=" << (m_ReadySent ? 1 : 0) << " local_ready=" << (m_LocalReady ? 1 : 0)
-			     << " seat_assigned=" << (m_SeatAssigned ? 1 : 0) << " starts_seen=" << m_Stats.startPacketsReceived;
+			     << " seat_assigned=" << (m_SeatAssigned ? 1 : 0) << " starts_seen=" << m_Stats.startPacketsReceived
+			     << " state_received=" << m_IncomingNextChunkIndex << "/" << m_IncomingChunkCount;
 		}
 		DiagnosticLine() << line.str() << std::endl;
 	}
@@ -1363,7 +1430,7 @@ namespace RTE {
 		// The Start rides the same ordered lane as the state chunks, so it must queue behind them.
 		// The host's countdown at zero starts the round with everyone present, ready or not.
 		const bool countedDown = m_StartCountdownDeadlineMs != 0 && m_TimingClockMs >= m_StartCountdownDeadlineMs && HasRequiredOccupancy();
-		if (!m_Config.host || !AllConfigAcked() || !(AllRemoteReady() || countedDown) || !IsStartRequested() || HasPendingStateChunks() || IsTerminal(m_State) ||
+		if (!m_Config.host || !AllConfigAcked() || !(AllRemoteReady() || countedDown) || !IsStartRequested() || HasPendingStateChunks() || HasUnreceivedStartState() || IsTerminal(m_State) ||
 		    (m_SetupOpen && !IsStartCommitted())) {
 			ReportStartWait();
 			return;
@@ -1391,6 +1458,29 @@ namespace RTE {
 		m_StartIntent = false;
 		m_StartCountdownDeadlineMs = 0;
 		m_State = NetLobbyState::Started;
+		DiagnosticLine() << "[net-lobby] agreed start queued remotes=" << m_RemotePeerIds.size() << " frame=" << m_StartFrame
+		                 << " clock_ms=" << m_TimingClockMs << " session_ms=" << (m_Config.session ? m_Config.session->GetClockMs() : 0) << std::endl;
+	}
+
+	bool NetLobbySession::RepeatStartIfDue(uint64_t elapsedMs, std::string* error) {
+		if (!m_Config.host || !IsStarted() || elapsedMs < m_LastStartRepeatMs + m_Config.resendIntervalMs) return true;
+		m_LastStartRepeatMs = elapsedMs;
+		NetLobbyStart start;
+		start.sessionId = m_Config.matchConfig.sessionId;
+		start.startFrame = m_StartFrame;
+		start.inputDelayFrames = m_Config.matchConfig.inputDelayFrames;
+		start.matchConfigHash = m_MatchConfigHash;
+		bool sent = false;
+		for (uint8_t peerId: m_RemotePeerIds) {
+			bool congested = false;
+			if (SendTo(m_RemoteTransports[peerId], start, error, &congested)) sent = true;
+			else if (!congested) return false;
+		}
+		if (sent) {
+			++m_Stats.startPacketsSent;
+			if (m_Stats.startPacketsSent == 2) DiagnosticLine() << "[net-lobby] agreed start repeated elapsed_ms=" << elapsedMs << std::endl;
+		}
+		return true;
 	}
 
 	void NetLobbySession::HandleEvent(const NetTransportEvent& event, uint64_t nowMs) {
@@ -1502,7 +1592,9 @@ namespace RTE {
 						}
 						return false;
 					}
-					if constexpr (std::is_same_v<Payload, NetLobbyReady> || std::is_same_v<Payload, NetLobbyConfigAck>) return false;
+					if constexpr (std::is_same_v<Payload, NetLobbyReady>) return false;
+					if constexpr (std::is_same_v<Payload, NetLobbyConfigAck>)
+						return payload.accepted && payload.peerId == sender->first && payload.reason.starts_with("state:");
 					if constexpr (std::is_same_v<Payload, NetLobbyHello>)
 						return payload.peerId == sender->first || (m_Config.enableMigration && payload.peerId != 0 && payload.peerId <= NetMatchConfigUtil::c_MaxPeerCount);
 					if constexpr (std::is_same_v<Payload, NetLobbyAbort>)
@@ -1831,6 +1923,19 @@ namespace RTE {
 	}
 
 	void NetLobbySession::HandleConfigAck(const NetLobbyConfigAck& message) {
+		if (message.accepted && message.reason.starts_with("state:")) {
+			uint64_t transfer = 0;
+			uint16_t chunks = 0;
+			if (!m_StateReceiptRequired || !IsKnownRemote(message.peerId) || !ParseStateReceipt(message.reason, transfer, chunks) ||
+			    transfer != m_OutgoingStateId || chunks > m_OutgoingChunkCount || chunks > OutgoingChunkIndex(message.peerId)) return;
+			const size_t begin = static_cast<size_t>(chunks - 1) * NetLobbyProtocol::c_MaxStateChunkBytes;
+			const size_t count = std::min(NetLobbyProtocol::c_MaxStateChunkBytes, m_StateBytesToSend.size() - begin);
+			if (message.matchConfigHash != StateReceiptHash(m_Config.matchConfig.sessionId, transfer, message.peerId,
+			    static_cast<uint32_t>(m_StateBytesToSend.size()), chunks, m_StateBytesToSend.data() + begin, count)) return;
+			auto& received = m_ReceivedChunkCountByPeer[message.peerId];
+			received = std::max(received, chunks);
+			return;
+		}
 		if (!m_Config.host || !IsKnownRemote(message.peerId)) {
 			return;
 		}

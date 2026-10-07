@@ -394,7 +394,8 @@ namespace RTE {
 			m_EncodedHeight = frame.meta.height;
 			m_FirstSlot = frame.slot;
 			m_NextSlot = frame.slot;
-			const std::string preset = m_EncoderCodec.find("nvenc") != std::string::npos ? "-preset p1 -cq 23" : "-preset ultrafast -crf 20";
+			const std::string preset = m_EncoderCodec == "h264_videotoolbox" ? "-q:v 100"
+			                        : m_EncoderCodec.find("nvenc") != std::string::npos ? "-preset p1 -cq 23" : "-preset ultrafast -crf 20";
 			// A keyframe and a fragment each second: a capture cut by a kill still plays up to its last whole second.
 			const std::string command = "\"" + m_EncoderPath + "\" -hide_banner -loglevel warning -y -f rawvideo -pix_fmt rgb24 -s " +
 			    std::to_string(m_EncodedWidth) + "x" + std::to_string(m_EncodedHeight) + " -framerate " + std::to_string(m_Fps) +

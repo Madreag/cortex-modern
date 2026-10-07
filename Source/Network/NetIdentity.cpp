@@ -494,8 +494,8 @@ namespace RTE {
 		manifest.deterministicConfig.scenarioTestModuleLoaded = g_PresetMan.GetModuleID("Tests.rte") >= 0;
 		manifest.deterministicConfig.lockstepCodecVersion = options.lockstepCodecVersion;
 		manifest.deterministicConfig.matchConfigVersion = options.matchConfigVersion;
-		// Every layout this build decodes; a checkpoint frame goes out on the newest.
-		manifest.deterministicConfig.supportedLockstepCodecVersion = NetLockstepCodec::c_SeatReleaseVersion;
+		// Admission also requires the input-acceptance semantics of this build.
+		manifest.deterministicConfig.supportedLockstepCodecVersion = NetLockstepCodec::c_AdmissionVersion;
 		manifest.deterministicConfig.supportedWorldLockstepCodecVersion = NetLockstepCodec::c_WorldVersion;
 		manifest.deterministicConfig.supportedMatchConfigVersion = NetMatchConfigUtil::c_Version;
 		manifest.deterministicConfig.supportedWorldMatchConfigVersion = NetMatchConfigUtil::c_PersistentWorldVersion;
@@ -805,6 +805,17 @@ namespace RTE {
 		}
 		digests.resize(kept);
 		return digests;
+	}
+
+	std::vector<std::string> NetIdentity::DescribeGameData(const NetIdentityManifest& manifest) {
+		std::vector<std::string> lines;
+		lines.push_back("Your game data " + HashHex(manifest.moduleManifestHash).substr(0, 8) + ": " + std::to_string(manifest.modules.size()) +
+		                " modules - a player whose digest for a module differs has different files in it");
+		for (const NetIdentityModuleEntry& module : manifest.modules) {
+			lines.push_back("  " + module.fileName + " " + HashHex(module.contentHash).substr(0, 12) + " (" + std::to_string(module.fileCount) + " files, " +
+			                std::to_string(module.totalBytes) + " bytes)");
+		}
+		return lines;
 	}
 
 	NetModuleDiff NetIdentity::DiffModules(const std::vector<NetModuleDigestEntry>& local, const std::vector<NetModuleDigestEntry>& remote) {

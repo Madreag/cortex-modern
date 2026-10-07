@@ -20,6 +20,7 @@
 #include <steam/isteamnetworkingutils.h>
 #include <steam/steamnetworkingsockets.h>
 #endif
+#include "ConsoleMan.h"
 #include "NetIdentity.h"
 #include "NetPortMap.h"
 #include "NetProtocol.h"
@@ -108,6 +109,10 @@ namespace RTE {
 	}
 
 	namespace {
+		std::string EndpointReceipt(const std::string& address) {
+			return "endpoint_sha256=" + System::Sha256Hex(address.data(), address.size());
+		}
+
 		/// A seat is away while its owner's link is gone, its return is in flight or the host opened it; a hold in place keeps its player.
 		bool SeatViewAway(const NetMatchService::SeatView& view) {
 			return view.peerId != 0 && (view.seat.owner == 0 || view.seat.link == NetSeatLink::Dropped || view.state == "Reconnecting");
@@ -262,6 +267,24 @@ namespace RTE {
 
 	std::string NetIceMenuJoinAddress(const NetDirectoryClient::GameRow& row) {
 		return row.source == "NET" && !row.sessionId.empty() ? "session:" + row.sessionId : row.address;
+	}
+
+	void NetReportGameData(const NetIdentityManifest& manifest) {
+		for (const std::string& line : NetIdentity::DescribeGameData(manifest)) {
+			g_ConsoleMan.PrintString(line);
+			System::PrintDiagnosticLine("[net-identity] " + line.substr(line.find_first_not_of(' ')));
+		}
+	}
+
+	std::string NetIceConnectingLine(uint64_t elapsedMs, uint64_t limitMs, bool hostAnswered, bool relayReady, bool retrying) {
+		// The clock leads, so a status line elided to its box still says how long the wait may last.
+		const std::string opening = std::string(retrying ? "Connecting again" : "Connecting") + " (" + std::to_string(elapsedMs / 1000) + " of " + std::to_string(limitMs / 1000) + " s) - ";
+		if (!hostAnswered) return opening + "waiting for the host's answer";
+		return opening + "testing routes" + (relayReady ? ", relay ready" : "");
+	}
+
+	bool NetIceRetryCanSucceed(uint64_t signalsFromHost, uint64_t refusals) {
+		return signalsFromHost > 0 && refusals == 0;
 	}
 
 	void FillDirectoryLocalIdentity(NetDirectoryLocalIdentity& local, const NetIdentityManifest& manifest) {
@@ -1020,6 +1043,37 @@ static std::string ResyncSaveName() {
 		if (winnerTeam < 0) return "Match over: draw";
 		if (localTeam == Activity::NoTeam) return "Match over";
 		return winnerTeam == localTeam ? "Victory!" : "Defeat";
+	}
+
+	std::string NetMatchService::IceSessionRefusalText(bool rejoin, const std::string& sessionId, const std::string& why) {
+		if (rejoin && why == "ended by host") return "match over: the host ended the session";
+		return "session " + sessionId + ": " + why;
+	}
+
+	bool NetMatchService::RejoinFoundHostRowGone(bool rejoin, bool signalSessionGone, const std::string& setupError) {
+		(void)signalSessionGone;
+		return rejoin && setupError.rfind("match over", 0) == 0;
+	}
+
+	bool NetMatchService::DirectoryHostEndReply(const std::string& sessionId, long status, const std::string& body) {
+		if (status != 200) return false;
+		const auto reply = nlohmann::json::parse(body, nullptr, false);
+		return reply.is_object() && reply.contains("session_id") && reply["session_id"].is_string() && reply["session_id"] == sessionId &&
+		       reply.contains("ended_by_host") && reply["ended_by_host"].is_boolean() && reply["ended_by_host"] == true;
+	}
+
+	bool NetMatchService::QueryDirectoryHostEnd(const std::string& sessionId) {
+		if (sessionId.empty() || m_CancelRequested.load()) return false;
+		std::string base = g_SettingsMan.GetSessionDirectoryUrl();
+		while (!base.empty() && base.back() == '/') base.pop_back();
+		if (base.empty()) return false;
+		NetHttpClient query;
+		query.Start("GET", base + "/v1/sessions/" + sessionId + "/host-end",
+		            {{"X-Install-Key", g_SettingsMan.GetOrCreateSessionDirectoryInstallKey()}}, "", g_SettingsMan.GetSessionDirectoryCertSha256());
+		while (!m_CancelRequested.load() && query.Poll() == NetHttpClient::PollResult::Pending) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		if (m_CancelRequested.load()) { query.Cancel(); return false; }
+		const auto reply = query.GetResponse();
+		return DirectoryHostEndReply(sessionId, reply.statusCode, reply.body);
 	}
 
 	bool NetMatchService::TakeRoundEndRecord(uint64_t& record) {
@@ -3161,7 +3215,7 @@ static std::string ResyncSaveName() {
 				m_HeldRejoinRoutes.push_back(*successor);
 			}
 		}
-		if (successor) System::PrintDiagnosticLine("[net-match] reconnect: trying the successor at " + successor->address + ":" + std::to_string(successor->port));
+		if (successor) System::PrintDiagnosticLine("[net-match] reconnect: trying the successor " + EndpointReceipt(successor->address) + " port=" + std::to_string(successor->port));
 		if (!(successor ? RejoinSuccessorRoute(*successor, &attemptError) : BeginTicketRejoin(&attemptError))) {
 			m_ReconnectUx.NoteAttemptFailed(nowMs, attemptError);
 		}
@@ -5124,6 +5178,7 @@ static std::string ResyncSaveName() {
 		m_WorldJoin.ReleaseLostConnections(live);
 		std::erase_if(m_PrivateActivations, [&](NetPeerId connection) { return m_WorldJoin.FindSession(connection) == nullptr; });
 		std::erase_if(m_PrivateTransferHeldReasons, [&](const auto& entry) { return m_WorldJoin.FindSession(entry.first) == nullptr; });
+		std::erase_if(m_ReturnerLinkSettlesMs, [&](const auto& entry) { return m_WorldJoin.FindSession(entry.first) == nullptr; });
 		std::erase_if(m_PrivateJoinBlobs, [&](const auto& task) { return m_WorldJoin.FindSession(task.first) == nullptr &&
 		    task.second.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; });
 		for (const auto& session: m_WorldJoin.Sessions()) {
@@ -5136,7 +5191,12 @@ static std::string ResyncSaveName() {
 			}
 			if (m_Coordinator->IsSeatReleased(session.assignedPeerId)) m_Coordinator->NoteAdmissionLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
 			else m_Coordinator->NoteReturningLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
-			m_WorldJoin.NoteRejoinLinkFit(session.connection, PrepareHeldPeerRejoinLocked(session.assignedPeerId));
+			// Our image to a returner fills its link, and the link's smoothed round trip takes a moment to come back once the image has
+			// landed: a sample taken then times our own queue, never the link the seat will play on.
+			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && session.transferStarted) m_ReturnerLinkSettlesMs[session.connection] = nowMs + c_ReturnerLinkSettleMs;
+			const auto settles = m_ReturnerLinkSettlesMs.find(session.connection);
+			const bool linkCarriesOurImage = settles != m_ReturnerLinkSettlesMs.end() && nowMs < settles->second;
+			m_WorldJoin.NoteRejoinLinkFit(session.connection, !linkCarriesOurImage && PrepareHeldPeerRejoinLocked(session.assignedPeerId));
 			if (INetTransport* wire = ActiveWireLocked()) m_WorldJoin.NoteTailLinkRtt(session.connection, wire->GetPeerPingMs(session.connection));
 			// A returning seat takes the base being captured for it, not the older one that capture replaces.
 			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted) {
@@ -6438,7 +6498,7 @@ static std::string ResyncSaveName() {
 			auto transport = std::make_unique<GnsTransport>();
 			if (!AttachAdmissionPlane(*m_Session, request, m_Coordinator->GetConfig().matchConfig, sessionConfig, sessionConfig.localIdentity, &error) ||
 			    !m_Session->StartClient(*transport, address, sessionConfig, &error)) {
-				System::PrintDiagnosticLine("[net-match] held client: the successor at " + address + ":" + std::to_string(route.endpoint.listenPort) + " could not be dialed: " + error);
+				System::PrintDiagnosticLine("[net-match] held client: the successor " + EndpointReceipt(address) + " could not be dialed: " + error);
 				continue;
 			}
 			m_MigratedTransport = std::move(transport);
@@ -6447,7 +6507,7 @@ static std::string ResyncSaveName() {
 			m_InPlaceMoveSinceMs = SteadyNowMs();
 			m_HeldRecordPackets.clear(); m_HeldRecordQueued = false;
 			std::ostringstream line;
-			line << "[net-match] held client: the host is gone; the catch-up moves to the successor at " << m_InPlaceMoveAddress << " peer=" << static_cast<int>(route.peerId)
+			line << "[net-match] held client: the host is gone; the catch-up moves to the successor " << EndpointReceipt(m_InPlaceMoveAddress) << " peer=" << static_cast<int>(route.peerId)
 			     << " from=" << m_WorldCatchUp.appliedThrough;
 			System::PrintDiagnosticLine(line.str());
 			return true;
@@ -6587,7 +6647,7 @@ static std::string ResyncSaveName() {
 		}
 		const bool failed = m_Session->IsFailed() || m_Session->GetState() == NetSessionState::Closed || m_Session->GetState() == NetSessionState::Rejected;
 		if (!failed && SteadyNowMs() - m_InPlaceMoveSinceMs < c_InPlaceMoveBudgetMs) return true;
-		System::PrintDiagnosticLine("[net-match] held client: the successor at " + m_InPlaceMoveAddress + " did not admit the seat: " +
+		System::PrintDiagnosticLine("[net-match] held client: the successor " + EndpointReceipt(m_InPlaceMoveAddress) + " did not admit the seat: " +
 		                            (failed ? m_Session->BuildRejectText() : std::string("no answer in time")));
 		return DialNextInPlaceRouteLocked(nowMs);
 	}
@@ -8696,6 +8756,10 @@ static std::string ResyncSaveName() {
 		                                                                   : m_Runner                    ? m_Runner->GetMatchConfig().hostPeerId
 		                                                                                                 : 1;
 		snapshot.serviceState = StateName(m_State);
+		// The activity exists before its published boundary starts the shared simulation.
+		if (m_State == NetMatchServiceState::Running && m_Coordinator &&
+		    m_Coordinator->GetState() == NetLockstepState::WaitingForStart && m_Coordinator->GetConfig().requirePublishedStart)
+			snapshot.serviceState = StateName(NetMatchServiceState::Starting);
 		snapshot.statusText = m_StatusText;
 		snapshot.migrating = m_Coordinator && m_Coordinator->IsMigrating();
 		snapshot.hostLost = snapshot.migrating && m_Coordinator->GetMigrationPhase() == NetHostMigrationPhase::Contacting;
@@ -9905,7 +9969,8 @@ static std::string ResyncSaveName() {
 		spec.p2p = BuildIceConfig(g_SettingsMan, std::string(), c_MigrationVirtualPort, snapshot ? *snapshot : NetRelayConfig{});
 		spec.makeSignaling = [raw = dispatcher.get()] { return raw->CreateJoinSignaling(); };
 		mux->SetJoinSpec(std::move(spec));
-		System::PrintDiagnosticLine("[net-migration] dialing the successor's ICE route identity=" + (identity.empty() ? std::string("(any)") : identity) + " session=" + ice.session);
+		System::PrintDiagnosticLine("[net-migration] dialing the successor's ICE route identity=" + (identity.empty() ? std::string("(any)") : identity) + " session=" + ice.session +
+		                            " as=" + dispatcher->LocalIdentity());
 		return mux->Connect(std::string(), 0, error);
 #else
 		(void)transport; (void)identity;
@@ -9926,7 +9991,7 @@ static std::string ResyncSaveName() {
 			System::PrintDiagnosticLine("[net-migration] the successor's ICE route stays closed: " + std::string(!mux || !mux->P2PGns() ? "its listener has no ICE half" : "no directory credential reached this peer"));
 			return;
 		}
-		auto dispatcher = std::make_shared<GnsDirectorySignalDispatcher>();
+		auto dispatcher = GnsDirectorySignalDispatcher::MakeMigrationStandby();
 		GnsDirectorySignalDispatcher::Config config;
 		config.role = GnsDirectorySignalDispatcher::Role::Host;
 		config.baseUrl = g_SettingsMan.GetSessionDirectoryUrl();
@@ -10160,9 +10225,21 @@ static std::string ResyncSaveName() {
 			    TicketMatchesRequest(record, request.sessionId, request.address);
 		}
 		std::string why = "no such session";
+		std::unique_ptr<NetHttpClient> hostEnd;
+		uint64_t nextHostEndProbe = 0;
 		const uint64_t deadline = SteadyNowMs() + c_IceResolveBudgetMs;
 		while (SteadyNowMs() < deadline && !m_CancelRequested.load()) {
 			const uint64_t nowMs = SteadyNowMs();
+			if (request.rejoin && !hostEnd && nowMs >= nextHostEndProbe) {
+				hostEnd = std::make_unique<NetHttpClient>();
+				hostEnd->Start("GET", baseUrl + "/v1/sessions/" + request.sessionId + "/host-end", {{"X-Install-Key", installKey}}, "", certPin);
+				nextHostEndProbe = nowMs + 5000;
+			}
+			if (hostEnd && hostEnd->Poll() == NetHttpClient::PollResult::Done) {
+				const auto reply = hostEnd->GetResponse();
+				if (DirectoryHostEndReply(request.sessionId, reply.statusCode, reply.body)) { why = "ended by host"; break; }
+				hostEnd.reset();
+			}
 			browse.PollList(nowMs);
 			browse.Update(nowMs);
 			if (browse.ListReplies() > 0) {
@@ -10176,8 +10253,23 @@ static std::string ResyncSaveName() {
 		}
 		if (browse.ListError() == NetDirectoryClient::c_CapacityNotice) why = browse.ListError();
 		browse.StopBrowsing();
+		if (hostEnd) hostEnd->Cancel();
 		if (!why.empty()) {
-			if (error) *error = why == NetDirectoryClient::c_CapacityNotice ? why : "session " + request.sessionId + ": " + why;
+			if (why == "modules") {
+				NetReportGameData(manifest);
+				for (const NetDirectorySessionRow& row : browse.Rows()) {
+					if (row.sessionId != request.sessionId) continue;
+					NetDirectoryClient::GameRow refused;
+					refused.reason = why;
+					refused.localModuleManifestHash = (row.persistentWorld && worldIdentityBuilt ? worldLocal : local).moduleManifestHash;
+					refused.hostModuleManifestHash = row.moduleManifestHash;
+					// The player reads the sentence; the session id is the log's.
+					System::PrintDiagnosticLine("[net-ice] session " + request.sessionId + " refused: modules");
+					if (error) *error = NetDirectoryClient::JoinRefusalText(refused);
+					return false;
+				}
+			}
+			if (error) *error = why == NetDirectoryClient::c_CapacityNotice ? why : IceSessionRefusalText(request.rejoin, request.sessionId, why);
 			return false;
 		}
 		if (target.persistentWorld && worldIdentityBuilt) {
@@ -10206,7 +10298,7 @@ static std::string ResyncSaveName() {
 			}
 			{
 				std::ostringstream line;
-				line << "[net-ice] session " << request.sessionId << " join_mode=" << target.joinMode << " resolved to " << target.address << ":" << target.port << "; taking the IP half";
+				line << "[net-ice] session " << request.sessionId << " join_mode=" << target.joinMode << " resolved to " << EndpointReceipt(target.address) << "; taking the IP half";
 				System::PrintDiagnosticLine(line.str());
 			}
 			return true;
@@ -10263,7 +10355,9 @@ static std::string ResyncSaveName() {
 		}
 		{
 			std::ostringstream line;
-			line << "[net-ice] session " << request.sessionId << " join_mode=" << target.joinMode << " resolved to identity " << target.identity << "; dialling the ICE half";
+			// The dial's own identity names this dial's signals among the directory's, a rejoin's second dial included.
+			line << "[net-ice] session " << request.sessionId << " join_mode=" << target.joinMode << " resolved to identity " << target.identity << "; dialling the ICE half as "
+			     << (dispatcher ? dispatcher->LocalIdentity() : std::string("none"));
 			System::PrintDiagnosticLine(line.str());
 		}
 		return true;
@@ -10275,9 +10369,12 @@ static std::string ResyncSaveName() {
 	                                         bool transportReady, bool& noDirectRoute, std::string* error) {
 		noDirectRoute = false;
 		const uint32_t directTimeoutMs = config.sessionConfig.timeoutMs;
-		if (!config.host && config.sessionConfig.p2pJoin.connect) {
-			// The host's JoinAccepted restores its heartbeat timeout after candidate gathering.
-			config.sessionConfig.timeoutMs = std::max(directTimeoutMs, c_IceConnectBudgetMs);
+		const bool iceDial = !config.host && config.sessionConfig.p2pJoin.connect;
+		if (iceDial) {
+			m_IceDialRetrying = false;
+			// The host's JoinAccepted restores its heartbeat timeout after candidate gathering; the session outlives the transport's connect limit.
+			config.sessionConfig.timeoutMs = std::max(directTimeoutMs, GnsTransport::IceConnectTimeoutMs() + c_IceHandshakeMarginMs);
+			ArmIceConnectingLine(config, session);
 		}
 		INetTransport& wire = mux ? static_cast<INetTransport&>(*mux) : ip;
 		// Directory lookup time is not part of either transport's connection deadline.
@@ -10292,17 +10389,6 @@ static std::string ResyncSaveName() {
 		}
 #endif
 		if (config.host || !NetIcePrefersP2P(target, m_IceEnabled) || m_CancelRequested.load()) return false;
-		switch (m_ConnectionMode) {
-		case 0: // Automatic
-		case 1: // Direct-only
-			break;
-		case 2: // Relay-only
-			// A setup that never reached the transport already says why; only a relay that failed to connect is named here.
-			if (error && transportReady && !directoryFull) *error = "Relay connection failed: " + *error + "; check the relay or choose Automatic";
-			return false;
-		default:
-			return false;
-		}
 		const auto routeFailed = [&] {
 			const bool unconnectedClose = session.IsClosed() && (session.GetRejectReason() == NetRejectReason::InternalError || session.GetRejectReason() == NetRejectReason::HostLinkLost) && session.GetMismatchKey().empty();
 			return runner.GetLobbySession().GetState() == NetLobbyState::Idle &&
@@ -10310,6 +10396,30 @@ static std::string ResyncSaveName() {
 			       session.GetRemoteTransportPeerId() == c_InvalidNetPeerId && !session.IsRejected() &&
 			       (!session.HasReject() || session.GetMismatchKey() == "transport" || session.GetMismatchKey() == "timeout_ms" || unconnectedClose);
 		};
+#ifdef CCCP_WITH_GNS
+		// A dial that ran out of time while its host was answering gets one more: the slow part was the exchange, not the host.
+		if (iceDial && transportReady && routeFailed() && m_Dispatcher) {
+			const GnsDirectorySignalDispatcher::Counters counters = m_Dispatcher->GetCounters();
+			const bool retry = NetIceRetryCanSucceed(counters.signalsIn, counters.refusals);
+			System::PrintDiagnosticLine("[net-ice] connect failed after " + std::to_string((SteadyNowMs() - m_IceDialStartedMs) / 1000) + " s (signals from the host " +
+			                            std::to_string(counters.signalsIn) + ", refusals " + std::to_string(counters.refusals) + "): " +
+			                            (retry ? "dialling once more" : "no retry, the host never answered") + "; " + (error ? *error : std::string()));
+			if (retry) {
+				session.Close("retry ICE");
+				if (error) error->clear();
+				m_IceDialRetrying = true;
+				ArmIceConnectingLine(config, session);
+				if (config.nowMs) session.Tick(config.nowMs(), false);
+				if (runner.Start(wire, session, coordinator, config, error)) return true;
+				if (m_CancelRequested.load()) return false;
+			}
+		}
+#endif
+		if (m_ConnectionMode == 2) {
+			// A setup that never reached the transport already says why; only a relay that failed to connect is named here.
+			if (error && transportReady && !directoryFull) *error = "Relay connection failed: " + *error + "; check the relay or choose Automatic";
+			return false;
+		}
 		if (transportReady && !routeFailed()) return false;
 		noDirectRoute = true;
 		const std::string iceError = (transportReady ? (m_RelayAttempted ? "ICE direct/relay connection failed: " : "ICE connection failed: ") : "") + (error ? *error : std::string());
@@ -10335,12 +10445,13 @@ static std::string ResyncSaveName() {
 		config.joinAddress = target.address;
 		// SessionFull retries must keep this leg instead of resolving back to ICE.
 		config.resolveJoinAddress = {};
+		ArmIceConnectingLine(config, session);
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_IceRoute = "ip";
 			m_StatusText = "NAT traversal failed; trying the host's UDP address";
 		}
-		System::PrintDiagnosticLine("[net-ice] " + iceError + "; retrying IP " + target.address + ":" + std::to_string(target.port));
+		System::PrintDiagnosticLine("[net-ice] " + iceError + "; retrying IP " + EndpointReceipt(target.address));
 		if (error) error->clear();
 		if (config.nowMs) session.Tick(config.nowMs(), false);
 		const bool started = runner.Start(ip, session, coordinator, config, error);
@@ -10349,6 +10460,46 @@ static std::string ResyncSaveName() {
 		noDirectRoute = !started && !m_CancelRequested.load() && routeFailed();
 		if (noDirectRoute && error) *error = iceError + "; IP connection failed: " + *error;
 		return started;
+	}
+
+	void NetMatchService::ArmIceConnectingLine(NetMatchRunnerConfig& config, NetSession& session) {
+		m_IceDialStartedMs = SteadyNowMs();
+		m_ConnectingDirect = !config.sessionConfig.p2pJoin.connect;
+		m_ConnectingLimitMs = m_ConnectingDirect ? config.sessionConfig.timeoutMs : GnsTransport::IceConnectTimeoutMs();
+		m_IceConnectingPhase.clear();
+		m_IceSignalsAtDial = 0;
+		// The existing publisher follows the attempt; a direct fallback needs no second wrapper.
+		if (m_ConnectingDirect) return;
+#ifdef CCCP_WITH_GNS
+		if (m_Dispatcher) m_IceSignalsAtDial = m_Dispatcher->GetCounters().signalsIn;
+#endif
+		if (config.publishLobby && !m_IceDialRetrying) {
+			// Runs on the worker thread beside the dial; it stops naming the dial the moment the transport connects.
+			config.publishLobby = [this, &session, publish = config.publishLobby](const NetLobbySnapshot& snapshot) {
+				if (session.GetRemoteTransportPeerId() == c_InvalidNetPeerId && session.GetState() == NetSessionState::Connecting) {
+					UpdateIceConnectingLine();
+				}
+				publish(snapshot);
+			};
+		}
+	}
+
+	void NetMatchService::UpdateIceConnectingLine() {
+		bool answered = false;
+#ifdef CCCP_WITH_GNS
+		answered = m_Dispatcher && m_Dispatcher->GetCounters().signalsIn > m_IceSignalsAtDial;
+#endif
+		const std::string phase = m_ConnectingDirect ? "direct UDP" : m_IceDialRetrying ? (answered ? "retry, testing routes" : "retry, waiting for the host") : (answered ? "testing routes" : "waiting for the host's answer");
+		const uint64_t elapsedMs = SteadyNowMs() - m_IceDialStartedMs;
+		const std::string line = m_ConnectingDirect
+		    ? "Connecting (" + std::to_string(elapsedMs / 1000) + " of " + std::to_string(m_ConnectingLimitMs / 1000) + " s) - trying the host's UDP address"
+		    : NetIceConnectingLine(elapsedMs, m_ConnectingLimitMs, answered, m_RelayAttempted, m_IceDialRetrying);
+		if (phase != m_IceConnectingPhase) {
+			m_IceConnectingPhase = phase;
+			System::PrintDiagnosticLine("[net-ice] connecting: " + line);
+		}
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_StatusText = line;
 	}
 
 	std::string NetMatchService::SetupFailureStatus(const NetSession* session, bool noDirectRoute, bool relayFailed) {
@@ -10402,6 +10553,7 @@ static std::string ResyncSaveName() {
 			m_DirectoryRow.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
 		}
 		CacheDiagnosticIdentity(manifest);
+		if (request.host) NetReportGameData(manifest);
 		if (request.host) {
 			// Arm the off-sim reconnect-auth epoch; without real crypto nothing is issued (fail closed).
 			std::lock_guard<std::mutex> lock(m_Mutex);
@@ -10705,8 +10857,11 @@ static std::string ResyncSaveName() {
 				}
 			}
 		}
+		const bool hostEnded = !started && !request.host && request.rejoin &&
+		    (RejoinFoundHostRowGone(true, false, error) || QueryDirectoryHostEnd(request.sessionId));
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_RejoinFoundHostRowGone = hostEnded;
 			if (started) {
 				// The lockstep peer id is the session-assigned id + 1; the team comes from that slot.
 				const uint8_t localLockstepId = static_cast<uint8_t>(session->GetLocalPeerId() + 1);
@@ -11351,8 +11506,10 @@ static std::string ResyncSaveName() {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_HeldRejoinDriving = true;
+			m_HeldRejoinStartedMs = SteadyNowMs();
 			m_HeldRejoinFailedAttempts = 0;
 			m_HeldRejoinRetryAtMs = 0;
+			m_RejoinFoundHostRowGone = false;
 		}
 		const bool started = BeginTicketRejoinOnRoute(error, liveRoute ? &*liveRoute : nullptr);
 		if (started) ScenarioRunner::SetWorldCatchUpPriorInputThrough(prior);
@@ -11371,6 +11528,7 @@ static std::string ResyncSaveName() {
 	void NetMatchService::EndHeldRejoinInNextRound() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_HeldRejoinDriving = false;
+		m_HeldRejoinStartedMs = 0;
 		m_HeldRejoinFailedAttempts = 0;
 		m_HeldRejoinRetryAtMs = 0;
 		m_HeldRejoinRoutes.clear();
@@ -11409,12 +11567,8 @@ static std::string ResyncSaveName() {
 			step.stop = rejectText.empty() ? "Could not rejoin - the host refused the seat" : rejectText;
 			return step;
 		}
-		if (failedAttempts >= c_RosterReturnAttempts) {
-			step.stop = "Could not rejoin - the host did not take the seat back after " + std::to_string(failedAttempts) + " tries";
-			return step;
-		}
 		step.retry = true;
-		step.delayMs = static_cast<uint32_t>(c_RosterReturnBackoffMs << (failedAttempts > 0 ? failedAttempts - 1 : 0));
+		step.delayMs = static_cast<uint32_t>(std::min<uint64_t>(30000, c_RosterReturnBackoffMs << std::min<unsigned>(failedAttempts > 0 ? failedAttempts - 1 : 0, 4)));
 		return step;
 	}
 
@@ -11423,6 +11577,10 @@ static std::string ResyncSaveName() {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_IsHost) return false;
+			if (m_RejoinFoundHostRowGone || NoteHostGoodbyeLocked(m_Session.get())) {
+				m_HostGoodbyeSeen = true;
+				return false;
+			}
 			const bool lostDuringSetup = m_Runner && m_Runner->DidLoseHostDuringSetup();
 			const bool hasReject = m_Session && m_Session->HasReject();
 			const NetRejectReason reason = hasReject ? m_Session->GetRejectReason() : NetRejectReason::InternalError;
@@ -11432,11 +11590,9 @@ static std::string ResyncSaveName() {
 			    (!hasReject || reason == NetRejectReason::Timeout || (reason == NetRejectReason::HostNotAccepting &&
 			    (m_Session->GetRejectSummary() == "The address belongs to another hosted session." || m_Session->GetRejectSummary() == "reconnect denied")));
 			const bool hostGone = obsoleteRoute || (!helloUnanswered && (lostDuringSetup || (m_Session && ClientSessionLossIsHostDeparture(*m_Session))));
-			if (hostGone) {
-				// A host that answered the round is over is not gone: the seat completes on what it holds.
-				if (NoteHostGoodbyeLocked(m_Session.get()) || m_HeldRejoinRoutes.empty()) return false;
-			} else {
-				step = NextHeldRejoinStep(++m_HeldRejoinFailedAttempts, hasReject, reason, hasReject ? m_Session->BuildRejectText() : std::string());
+			if (!hostGone || m_HeldRejoinRoutes.empty()) {
+				if (m_HeldRejoinFailedAttempts < UINT8_MAX) ++m_HeldRejoinFailedAttempts;
+				step = NextHeldRejoinStep(m_HeldRejoinFailedAttempts, hasReject, reason, hasReject ? m_Session->BuildRejectText() : std::string());
 				if (!step.retry) {
 					m_HeldRejoinRetryAtMs = 0;
 					m_StatusText = step.stop;
@@ -11455,14 +11611,16 @@ static std::string ResyncSaveName() {
 		while (!m_HeldRejoinRoutes.empty()) {
 			const NetMatchServiceRequest route = m_HeldRejoinRoutes.front();
 			m_HeldRejoinRoutes.pop_front();
-			System::PrintDiagnosticLine("[net-match] held rejoin: the host is gone; rejoining the successor at " + route.address + ":" + std::to_string(route.port));
+			System::PrintDiagnosticLine("[net-match] held rejoin: the host is gone; rejoining the successor " + EndpointReceipt(route.address) + " port=" + std::to_string(route.port));
 			if (RejoinSuccessorRoute(route, error)) return true;
 		}
-		return false;
+		return BeginHeldRejoinOnNextHost(error);
 	}
 
 	std::string NetMatchService::GetHostUnreachableLine() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (m_HeldRejoinDriving && m_HeldRejoinStartedMs != 0 && (!m_Session || !m_Session->IsReady()) && SteadyNowMs() - m_HeldRejoinStartedMs >= 30000)
+			return "The host cannot be found. You can leave or keep trying.";
 		static const std::string c_Prefix = "PeerHeld:";
 		return m_HeldUnreachableText.rfind(c_Prefix, 0) == 0 ? m_HeldUnreachableText.substr(c_Prefix.size()) : m_HeldUnreachableText;
 	}
@@ -11525,7 +11683,7 @@ static std::string ResyncSaveName() {
 		return BeginTicketRejoinOnRoute(error, nullptr);
 	}
 
-	void NetMatchService::RememberTicketRoutesLocked(bool force) {
+	void NetMatchService::RememberTicketRoutesLocked(bool force, bool handsOver) {
 		if (!m_Coordinator || !m_MatchWasRunning || !m_Session || !m_Session->IsReady()) return;
 		const uint64_t now = SteadyNowMs();
 		if (!force && now < m_TicketRoutesRefreshAtMs) return;
@@ -11541,8 +11699,17 @@ static std::string ResyncSaveName() {
 			if (endpoint == config.migrationPeers.end() || endpoint->listenPort == 0) continue;
 			for (const auto& address: endpoint->listenAddrs) routes.push_back({address, endpoint->listenPort});
 		}
-		if (routes == m_TicketStore.LoadRoutes(record)) return;
 		std::string error;
+		// The departing direct host tries the first published successor instead of its closed address.
+		if (handsOver && record.directorySessionId.empty() && !routes.empty()) {
+			auto successor = record;
+			const auto& next = routes.front();
+			successor.hostAddress = next.address.find(':') != std::string::npos && !next.address.starts_with("[") ? "[" + next.address + "]" : next.address;
+			successor.hostAddress += ":" + std::to_string(next.port);
+			if (m_TicketStore.Store(successor, &error)) record = std::move(successor);
+			else System::PrintDiagnosticLine("[net-match] cannot save the direct successor rejoin address: " + error);
+		}
+		if (routes == m_TicketStore.LoadRoutes(record)) return;
 		if (!m_TicketStore.StoreRoutes(record, routes, &error)) System::PrintDiagnosticLine("[net-match] cannot save the successor rejoin routes: " + error);
 	}
 

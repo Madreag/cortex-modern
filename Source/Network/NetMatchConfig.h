@@ -5,6 +5,7 @@
 #include "NetProtocol.h"
 
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -14,6 +15,19 @@
 #include <vector>
 
 namespace RTE {
+
+	struct NetHostMigrationTimeouts {
+		static constexpr uint64_t c_IceStepMs = 8000;
+		static constexpr uint64_t c_IceDialMs = 30000;
+		static constexpr uint64_t c_DirectStepMs = 1000;
+		static constexpr uint64_t c_RetryMs = 250;
+		static constexpr uint64_t c_ProbeMs = 1000;
+		uint64_t stepMs, quorumMs, recoveryMs, readyMs, publicationMs;
+		static NetHostMigrationTimeouts For(uint32_t timeoutMs, bool ice, uint64_t routeBudgetMs) {
+			const uint64_t step = ice ? c_IceStepMs : std::clamp<uint64_t>(timeoutMs, 1, c_DirectStepMs);
+			return {step, std::max(3 * step, routeBudgetMs + step), step, 2 * step, 3 * step};
+		}
+	};
 
 	enum class NetMatchMode : uint8_t {
 		PvPSkirmish = 1,
@@ -44,15 +58,27 @@ namespace RTE {
 	public:
 		static constexpr uint64_t c_WindowMs = 5000;
 		static constexpr uint64_t c_SampleMs = 100;
+		/// A link that fell silent once falls silent again: its longest silence is carried this long.
+		static constexpr uint64_t c_SilenceWindowMs = 120000;
+		/// A silence longer than half the largest delay is an outage the hold answers, not jitter a delay should carry.
+		static constexpr uint32_t c_MaxCarriedSilenceMs = 500;
+		/// The most a link's silences add to its delay: a returning seat's delay still fits beside a long round trip and its restart.
+		static constexpr uint32_t c_MaxSilenceMarginMs = 300;
 		void Observe(uint64_t nowMs, uint32_t rttMs);
+		/// Records how long the sender's input stream fell silent beyond its cadence.
+		void ObserveSilence(uint64_t nowMs, uint32_t silenceMs);
 		void Rebase(uint64_t nowMs);
 		uint32_t RequiredFrames(double tickMs, uint16_t floor = 0) const;
 		uint32_t P95Ms() const;
 		uint32_t JitterMs() const;
+		/// The longest silence of the input stream within the window; 0 when none was seen.
+		uint32_t SilenceMs() const;
 		std::optional<uint16_t> Change(uint64_t nowMs, uint16_t current, double tickMs, uint16_t floor = 0);
 	private:
 		uint32_t Percentile(unsigned percent) const;
+		void ForgetSilencesBefore(uint64_t nowMs);
 		std::deque<std::pair<uint64_t, uint32_t>> m_Samples;
+		std::deque<std::pair<uint64_t, uint32_t>> m_Silences;
 		std::optional<uint64_t> m_BelowSince;
 	};
 	struct NetMatchMigrationPeer {

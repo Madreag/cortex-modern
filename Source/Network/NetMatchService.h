@@ -153,6 +153,12 @@ namespace RTE {
 	bool NetIcePrefersP2P(const NetIceJoinTarget& target, bool iceEnabled);
 	/// Keeps an Internet selection attached to its directory session.
 	std::string NetIceMenuJoinAddress(const NetDirectoryClient::GameRow& row);
+	/// Prints this player's game data digests to the console and the log, where two players whose data differs compare them.
+	void NetReportGameData(const NetIdentityManifest& manifest);
+	/// The line a joiner reads while its ICE connect runs: what it waits on, how long it has waited and how long it may.
+	std::string NetIceConnectingLine(uint64_t elapsedMs, uint64_t limitMs, bool hostAnswered, bool relayReady, bool retrying);
+	/// A connect that ran out of time is worth one more dial only when the host answered it and refused nothing: its session lives.
+	bool NetIceRetryCanSucceed(uint64_t signalsFromHost, uint64_t refusals);
 
 	/// Resolves a session id against a directory listing. Empty and a filled target when the row can
 	/// be joined, else the join list's own refusal label for it.
@@ -838,6 +844,11 @@ namespace RTE {
 		bool TakeRoundEndRecord(uint64_t& record);
 		/// The result line a seat reads for a round's winner team, as its own team sees it.
 		static std::string RoundEndResultText(int winnerTeam, int localTeam);
+		/// Only an authenticated host end completes a ticket rejoin.
+		static std::string IceSessionRefusalText(bool rejoin, const std::string& sessionId, const std::string& why);
+		/// A missing listing or signal queue never proves a host end.
+		static bool RejoinFoundHostRowGone(bool rejoin, bool signalSessionGone, const std::string& setupError);
+		static bool DirectoryHostEndReply(const std::string& sessionId, long status, const std::string& body);
 		/// The request a stored ticket rejoins with. The world flag is the ticket's own, so a relaunch
 		/// against a world host still hellos on the world plane.
 		static NetMatchServiceRequest BuildTicketRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget);
@@ -1325,10 +1336,13 @@ namespace RTE {
 		void PublishRelayOfferLocked(NetSession& session, INetTransport& wire);
 		bool ReadRelayOffer(NetRelayConfig& offer) const;
 		void SetRelayOfferLocked(const NetRelayConfig& offer);
-		/// Retries a failed ICE connection once through the row's direct address.
+		/// Dials ICE once more when its host answered but the connect ran out of time, then retries through the row's direct address.
 		bool StartLobbyConnection(std::unique_ptr<NetMuxTransport>& mux, INetTransport& ip, NetSession& session, NetLockstepCoordinator& coordinator,
 		                          NetMatchRunner& runner, NetMatchRunnerConfig& config, const NetIceJoinTarget& target,
 		                          bool transportReady, bool& noDirectRoute, std::string* error);
+		/// Starts the line a joiner reads while its ICE dial runs; the lobby publish keeps it current until the transport connects.
+		void ArmIceConnectingLine(NetMatchRunnerConfig& config, NetSession& session);
+		void UpdateIceConnectingLine();
 		/// Keeps admission refusals distinct from a failed direct connection.
 		static std::string SetupFailureStatus(const NetSession* session, bool noDirectRoute, bool relayFailed = false);
 		/// The ICE virtual port a host listens on and a joiner dials.
@@ -1343,7 +1357,9 @@ namespace RTE {
 		void HostMigrationIce(INetTransport& listener);
 		static constexpr uint64_t c_IceRegisterBudgetMs = 30000;
 		static constexpr uint64_t c_IceResolveBudgetMs = 30000;
+		bool QueryDirectoryHostEnd(const std::string& sessionId);
 		static constexpr uint32_t c_IceConnectBudgetMs = 15000;
+		static constexpr uint32_t c_IceHandshakeMarginMs = 5000; //!< The session's hello after the transport connects, on top of its connect limit.
 		void JoinWorkerIfDone();
 		/// Attaches the H4 admission plane to a freshly built session. Host: only with a live auth
 		/// epoch, so a build without crypto keeps the pre-admission handshake and issues no tickets.
@@ -1445,6 +1461,7 @@ namespace RTE {
 		friend bool TestAStuckPrivateImageIsRetakenOnceThenRefused(std::string* error);
 		friend bool TestAPrivateReturnFollowsTheRoundOnTheRoster(std::string* error);
 		friend bool TestAHeldRejoinAsksItsHostAgainOffTheGameThread(std::string* error);
+		friend bool TestIceConnectingLine(std::string* error);
 		friend bool TestWorldReturnWatchKeysOnWorldId(std::string* error);
 		friend bool TestTheGoodbyeEndsWithItsRound(std::string* error);
 		friend bool TestAnOwnSideErrorKeepsTheSeatsReconnect(std::string* error);
@@ -1779,6 +1796,12 @@ namespace RTE {
 		bool m_RelayReady = false;
 		bool m_RelayPublishPending = false;
 		bool m_RelayAttempted = false;
+		uint64_t m_IceDialStartedMs = 0; //!< Worker thread: the current connection attempt starts its own clock.
+		uint32_t m_ConnectingLimitMs = 0;
+		bool m_ConnectingDirect = false;
+		bool m_IceDialRetrying = false;
+		uint64_t m_IceSignalsAtDial = 0; //!< The host's signals before this dial, so a retry waits for an answer of its own.
+		std::string m_IceConnectingPhase; //!< The phase the log last named, so a phase is logged once, not each second.
 		uint64_t m_RelayOfferIssuedAt = 0; //!< Wall seconds when the current offer was adopted.
 		uint64_t m_RelayReplies = 0;
 		uint64_t m_NextRelayRequestMs = 0;
@@ -1919,13 +1942,15 @@ namespace RTE {
 		bool m_LastJoinTargetPersistentWorld = false;
 		std::optional<NetMatchServiceRequest> m_LastJoinRoute;
 		bool BeginTicketRejoinOnRoute(std::string* error, const NetMatchServiceRequest* liveRoute);
-		void RememberTicketRoutesLocked(bool force = false);
+		void RememberTicketRoutesLocked(bool force = false, bool handsOver = false);
 		void DriveOrdinaryTicketRejoin();
 		uint64_t m_TicketRoutesRefreshAtMs = 0;
 		bool m_OrdinaryTicketRejoin = false;
 		/// Held client: the hosts its rejoin may still find when its own is gone, in the match's published successor order.
 		std::deque<NetMatchServiceRequest> m_HeldRejoinRoutes;
 		uint8_t m_HeldRejoinFailedAttempts = 0; //!< The attempts of this held rejoin that failed with its host still there.
+		bool m_RejoinFoundHostRowGone = false; //!< The directory confirms that this session ended by its host.
+		uint64_t m_HeldRejoinStartedMs = 0;
 		uint64_t m_HeldRejoinRetryAtMs = 0;     //!< When the armed retry of the host begins; 0 when none is armed.
 		uint64_t m_HeldRejoinPriorInput = 0;
 		std::string m_HostEndReason; //!< The host's End Match reason while its round plays to the agreed end frame.
@@ -2008,6 +2033,8 @@ namespace RTE {
 		bool m_PrivateImageRecaptured = false; //!< Host: this wait already took its one fresh base.
 		bool m_PrivateImageSeatHeld = false;
 		std::map<NetPeerId, std::string> m_PrivateTransferHeldReasons; //!< Host: why a returner's image has not left, reported once per reason.
+		static constexpr uint64_t c_ReturnerLinkSettleMs = 1000; //!< How long a returner's round trip still carries our image's queue after it lands.
+		std::map<NetPeerId, uint64_t> m_ReturnerLinkSettlesMs; //!< Host: until when each returner's link still carries the image we sent it.
 		const char* m_PrivateBaseHeldReason = nullptr; //!< Host: why the last pass could not take a base, reported once per reason.
 		std::string m_PrivateJoinError;
 		std::shared_ptr<const std::vector<uint8_t>> m_WorldJoinImageArchive; //!< The writer's own buffer, shared.

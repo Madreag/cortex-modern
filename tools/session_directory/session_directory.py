@@ -553,6 +553,11 @@ class SessionDirectory:
         self._signals_changed = threading.Condition(self._lock)
         self._sessions: dict[str, Session] = {}
         self._resume_tokens: dict[str, tuple[str, float, int]] = {}
+        self._host_ends: dict[str, float] = {}
+        # A running match's row whose host stopped beating leaves the listing at once, but the survivors of that host meet on its
+        # signals to hand the match over, and a rendezvous across relays outlasts the lease: its queues stay reachable as long
+        # as its successor may still claim it.
+        self._retired: dict[str, tuple[Session, float]] = {}
         self._register_replays: dict[str, Session] = {}
         self._stored_signal_bytes = 0
         self._owner_state = Path(owner_state) if owner_state is not None else None
@@ -964,7 +969,10 @@ class SessionDirectory:
                 sess = self._sessions[sid]
                 if sess.acknowledged and sess.fields.get("persistent_world") is True:
                     self._credit_world_listing(sess, min(now, sess.last_beat + self.expiry_s))
-                self._clear_signals(sess)
+                if sess.acknowledged and sess.state == "running":
+                    self._retired[sid] = (sess, sess.last_beat + self.expiry_s + RESUME_GRACE_S)
+                else:
+                    self._clear_signals(sess)
                 if sess.acknowledged:
                     self._resume_tokens[sid] = (sess.token, sess.last_beat + self.expiry_s + RESUME_GRACE_S, sess.migration_gen)
                 del self._sessions[sid]
@@ -976,6 +984,14 @@ class SessionDirectory:
                     del self._resume_tokens[sid]
             while len(self._resume_tokens) > MAX_ROWS:
                 del self._resume_tokens[next(iter(self._resume_tokens))]
+            for sid, (retired, deadline) in list(self._retired.items()):
+                if now >= deadline:
+                    self._clear_signals(retired)
+                    del self._retired[sid]
+            while len(self._retired) > MAX_ROWS:
+                sid = next(iter(self._retired))
+                self._clear_signals(self._retired[sid][0])
+                del self._retired[sid]
             for sid, replay in list(self._register_replays.items()):
                 if self._sessions.get(sid) is not replay or (replay.register_retry_until != 0 and now >= replay.register_retry_until):
                     del self._register_replays[sid]
@@ -991,6 +1007,15 @@ class SessionDirectory:
     def _get(self, session_id: str, now: float) -> Optional[Session]:
         self.prune(now)
         return self._sessions.get(session_id)
+
+    def _signalling(self, session_id: str, now: float, pruned: bool = False) -> Optional[Session]:
+        """The live row, or the expired one whose signals its survivors may still need."""
+        sess = self._sessions.get(session_id) if pruned else self._get(session_id, now)
+        if sess is None and session_id in self._retired:
+            retired, deadline = self._retired[session_id]
+            if now < deadline:
+                return retired
+        return sess
 
     def register(self, data: dict[str, Any], observed_ip: str, now: float, install_key: str = "") -> dict[str, Any]:
         self.prune(now)
@@ -1159,8 +1184,14 @@ class SessionDirectory:
             raise
         with self._lock:
             self._registering_sessions.pop(session_id, None)
-            if previous_session is not None:
+            carried = (self._sessions.get(session_id) or self._retired.get(session_id, (None, 0.0))[0]) if resume is not None else None
+            if carried is not None:
+                # A durable claim keeps the signals still owed to the successor.
+                sess.queues, sess.next_seq = carried.queues, carried.next_seq
+                sess.queue_drain_at, sess.undrained_bytes = carried.queue_drain_at, carried.undrained_bytes
+            elif previous_session is not None:
                 self._clear_signals(previous_session)
+            self._retired.pop(session_id, None)
             self._sessions[session_id] = sess
             if fields.get("persistent_world") is True:
                 self._register_replays[session_id] = sess
@@ -1304,12 +1335,39 @@ class SessionDirectory:
             answer["migration_gen"] = held
         return answer
 
+    def host_end_status(self, session_id: str, now: float) -> dict[str, Any]:
+        with self._lock:
+            self._host_ends = {sid: until for sid, until in self._host_ends.items() if now < until}
+            return {"session_id": session_id, "ended_by_host": session_id in self._host_ends}
+
+    def _record_host_end(self, session_id: str, now: float) -> None:
+        self.host_end_status(session_id, now)
+        self._host_ends[session_id] = now + 600
+
+    def _delete_retired_host(self, session_id: str, token: str, generation: Optional[int], now: float) -> bool:
+        retired = self._resume_tokens.get(session_id)
+        if retired is None or now >= retired[1]:
+            return False
+        if not tokens_equal(token, retired[0]):
+            raise PermissionError("forbidden")
+        if generation is not None and generation < retired[2]:
+            raise Superseded("superseded", retired[2])
+        self._resume_tokens.pop(session_id, None)
+        carried = self._retired.pop(session_id, None)
+        if carried is not None:
+            self._clear_signals(carried[0])
+        self._record_host_end(session_id, now)
+        self._signals_changed.notify_all()
+        return True
+
     def delete(self, session_id: str, data: dict[str, Any], now: float) -> dict[str, Any]:
         token = require_str(data, "token")
         generation = optional_generation(data)
         with self._lock:
             sess = self._get(session_id, now)
             if sess is None:
+                if self._delete_retired_host(session_id, token, generation, now):
+                    return {"ok": True}
                 raise KeyError("not_found")
             if not tokens_equal(token, sess.token):
                 raise PermissionError("forbidden")
@@ -1321,6 +1379,8 @@ class SessionDirectory:
             self._clear_signals(sess)
             self._register_replays.pop(session_id, None)
             self._resume_tokens.pop(session_id, None)
+            self._retired.pop(session_id, None)
+            self._record_host_end(session_id, now)
             if self._pending_worlds.pop(session_id, None) is not None:
                 self._owner_revision += 1
                 self._owner_changed.notify_all()
@@ -1392,7 +1452,7 @@ class SessionDirectory:
         if len(raw) > MAX_PAYLOAD:
             raise ValueError("payload_too_large")
         with self._lock:
-            sess = self._get(session_id, now)
+            sess = self._signalling(session_id, now)
             if sess is None:
                 raise KeyError("not_found")
             if from_peer == "host":
@@ -1463,7 +1523,7 @@ class SessionDirectory:
         if not valid_peer(peer):
             raise FieldError("invalid_field", "peer")
         with self._lock:
-            sess = self._get(session_id, now)
+            sess = self._signalling(session_id, now)
             if sess is None:
                 raise KeyError("not_found")
             if peer == "host":
@@ -1483,7 +1543,7 @@ class SessionDirectory:
                 if remaining <= 0:
                     break
                 self._signals_changed.wait(remaining)
-                sess = self._sessions.get(session_id)
+                sess = self._signalling(session_id, time.monotonic(), pruned=True)
                 if sess is None:
                     raise KeyError("not_found")
                 if peer == "host" and (sess is not authenticated_lease or not tokens_equal(host_token or "", sess.token)):
@@ -1787,6 +1847,9 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                     self._send(gated[0], gated[1])
                     return
                 now = time.monotonic()
+                if len(parts) == 4 and parts[:2] == ["v1", "sessions"] and parts[3] == "host-end":
+                    self._send(200, store.host_end_status(parse_session_id(parts[2]), now))
+                    return
                 if len(parts) == 4 and parts[:2] == ["v1", "sessions"] and parts[3] == "ice-servers":
                     self._send(200, store.get_ice_servers(parse_session_id(parts[2]), now))
                     return

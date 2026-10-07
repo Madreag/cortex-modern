@@ -907,11 +907,20 @@ _ENCODER_CODEC = {}
 
 
 def encoder_codec(ffmpeg):
-    """The codec the engines stream into: the GPU's h264 encoder when this box offers one, libx264 otherwise; probed once."""
+    """The available hardware encoder, with a software fallback; probed once."""
     if ffmpeg not in _ENCODER_CODEC:
         probe = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "color=black:s=320x240:d=0.2",
                                 "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True, text=True) if ffmpeg else None
         _ENCODER_CODEC[ffmpeg] = "h264_nvenc" if probe is not None and probe.returncode == 0 else "libx264"
+        if ffmpeg and sys.platform == 'darwin' and _ENCODER_CODEC[ffmpeg] == 'libx264':
+            try:
+                probe = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "color=black:s=320x240:d=0.2",
+                                        "-c:v", "h264_videotoolbox", "-q:v", "100", "-pix_fmt", "yuv420p", "-f", "null", "-"],
+                                       capture_output=True, text=True, timeout=10)
+            except subprocess.TimeoutExpired:
+                probe = None
+            if probe is not None and probe.returncode == 0:
+                _ENCODER_CODEC[ffmpeg] = 'h264_videotoolbox'
     return _ENCODER_CODEC[ffmpeg]
 
 
@@ -1641,7 +1650,7 @@ def review(scenario, capture, out):
                 passed = directory_offer(capture, item['directory_relay_offer'])
                 assertions['directory_relay_offer'] = dict(passed=passed, provider=item['directory_relay_offer'])
                 if not passed:
-                    assertions.update(probe='fail', reason='relay_offer_issued provider=cloudflare for this session is absent')
+                    assertions.update(probe='fail', reason=f"relay_offer_issued provider={item['directory_relay_offer']} for this session is absent")
             if item.get("peer_drop"):
                 required = item["peer_drop"]
                 witness = next((row for row in capture["peers"] if row["peer"] == required["peer"]), None)
@@ -3046,6 +3055,8 @@ def main():
                 break
     except (KeyboardInterrupt, Exception) as error:
         capture["interrupted"] = public_value(f"{type(error).__name__}: {error}",getattr(getattr(options,'relay_book',None),'values',{}))
+        if type(error).__name__ == 'RelayUnavailable':
+            print(str(error), flush=True)
         complete = False
         for captured in capture["runs"]:
             captured["interrupted"] = capture["interrupted"]

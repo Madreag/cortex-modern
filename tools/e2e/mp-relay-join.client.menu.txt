@@ -39,5 +39,7 @@ wait_substate Lobby 30
 wait_ms 825
 assert_substate Lobby
 activate ButtonMultiplayerReady
-# A finished script quits its engine: this one waits; the trace cap ends the match at its declared frame.
-wait_ms 900000
+# A finished script quits its engine: this one waits for the match to complete, by the trace cap at its declared frame or
+# by the host's end record when the round ended while this seat was held. A held seat whose host said goodbye or left with
+# its row quits on its own when its trace ends.
+wait_state Completed 900

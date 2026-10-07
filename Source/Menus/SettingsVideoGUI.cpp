@@ -21,8 +21,20 @@
 #endif
 
 #include <set>
+#include <iomanip>
+#include <locale>
+#include <sstream>
 
 using namespace RTE;
+
+namespace {
+	std::string ResolutionMultiplierText(float multiplier) {
+		std::ostringstream text;
+		text.imbue(std::locale::classic());
+		text << std::setprecision(3) << multiplier << 'x';
+		return text.str();
+	}
+}
 
 std::string SettingsVideoGUI::PresetResolutionRecord::GetDisplayString() const {
 #if __cpp_lib_format >= 201907L && !(defined(__APPLE__) && defined(__GNUC__)) //FIXME: macOS CI borken without this.
@@ -113,11 +125,7 @@ void SettingsVideoGUI::CreateCustomResolutionBox() {
 
 	m_CustomResolutionMultiplierComboBox = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboboxResolutionMultiplier"));
 	PopulateResMultplierComboBox();
-#if __cpp_lib_format >= 201907L && !(defined(__APPLE__) && defined(__GNUC__))
-	m_CustomResolutionMultiplierComboBox->SetText(std::format("{:.3g}x", m_NewResMultiplier));
-#else
-	m_CustomResolutionMultiplierComboBox->SetText(std::to_string(m_NewResMultiplier));
-#endif
+	m_CustomResolutionMultiplierComboBox->SetText(ResolutionMultiplierText(m_NewResMultiplier));
 
 	m_CustomResolutionApplyButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonApplyCustomResolution"));
 	m_CustomResolutionMessageLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelCustomResolutionValidation"));
@@ -131,11 +139,7 @@ void SettingsVideoGUI::SetEnabled(bool enable) const {
 	if (enable) {
 		m_CustomResolutionWidthTextBox->SetText(std::to_string(static_cast<int>(g_WindowMan.GetResX())));
 		m_CustomResolutionHeightTextBox->SetText(std::to_string(static_cast<int>(g_WindowMan.GetResY())));
-#if __cpp_lib_format >= 201907L && !(defined(__APPLE__) && defined(__GNUC__))
-		m_CustomResolutionMultiplierComboBox->SetText(std::format("{:.3g}x", m_NewResMultiplier));
-#else
-		m_CustomResolutionMultiplierComboBox->SetText(std::to_string(m_NewResMultiplier));
-#endif
+		m_CustomResolutionMultiplierComboBox->SetText(ResolutionMultiplierText(m_NewResMultiplier));
 		std::string windowedText = g_WindowMan.IsFullscreen() ? "Windowed" : "Scale To Window";
 		m_ResolutionQuickToggleButtons[ResolutionQuickChangeType::Windowed]->SetText(windowedText);
 		std::string fullscreenText = g_WindowMan.IsFullscreen() ? "Scale To Fullscreen" : "Fullscreen";
@@ -200,11 +204,7 @@ void SettingsVideoGUI::PopulateResMultplierComboBox() {
 	m_CustomResolutionMultiplierComboBox->ClearList();
 
 	for (float resMultiplier = 1.0f; resMultiplier <= maximumResMultiplier; resMultiplier += 0.5) {
-#if __cpp_lib_format >= 201907L && !(defined(__APPLE__) && defined(__GNUC__))
-		m_CustomResolutionMultiplierComboBox->AddItem(std::format("{:.3g}x", resMultiplier));
-#else
-		m_CustomResolutionMultiplierComboBox->AddItem(std::to_string(resMultiplier));
-#endif
+		m_CustomResolutionMultiplierComboBox->AddItem(ResolutionMultiplierText(resMultiplier));
 	}
 	m_CustomResolutionMultiplierComboBox->SetSelectedIndex(0);
 }

@@ -96,6 +96,13 @@ namespace RTE {
 			}
 			return "incompatible";
 		}
+
+		/// A row refused for its modules keeps both digests, so the refusal can show the player what to compare.
+		void NoteGameData(NetDirectoryClient::GameRow& row, const std::string& local, const std::string& host) {
+			if (row.reason != "modules") return;
+			row.localModuleManifestHash = local;
+			row.hostModuleManifestHash = host;
+		}
 	}
 
 	NetDirectoryClient::NetDirectoryClient() = default;
@@ -861,6 +868,7 @@ namespace RTE {
 					row.joinable = true;
 				} else {
 					row.reason = MapMismatchReason(why);
+					NoteGameData(row, (lanWorld ? *worldLocal : local).moduleManifestHash, lanIdentity.moduleManifestHash);
 				}
 			}
 			rows.push_back(std::move(row));
@@ -890,6 +898,7 @@ namespace RTE {
 			const NetDirectoryLocalIdentity& ident = (session.persistentWorld && worldLocal != nullptr) ? *worldLocal : local;
 			if (!NetDirectoryCodec::IsJoinable(session, ident, &why)) {
 				row.reason = MapMismatchReason(why);
+				NoteGameData(row, ident.moduleManifestHash, session.moduleManifestHash);
 			} else if (session.seatsFree == 0 && !session.persistentWorld && !(session.state == "running" && session.seatsHeld > 0)) {
 				// A running match that holds a seat is reached anyway: its host answers, and a newcomer may apply.
 				row.reason = "full";
@@ -902,6 +911,16 @@ namespace RTE {
 			rows.push_back(std::move(row));
 		}
 		return rows;
+	}
+
+	std::string NetDirectoryClient::JoinRefusalText(const GameRow& row, bool brief) {
+		if (row.reason == "modules") {
+			// The console lists each module's digest, so two players can find the module whose files differ.
+			if (brief) return "Cannot join: game data differs - see the console (~)";
+			return "Cannot join this game: your game data differs from the host's (yours " + row.localModuleManifestHash.substr(0, 8) + ", the host's " +
+			       row.hostModuleManifestHash.substr(0, 8) + "). Open the console (~) on both computers and compare the module digests it lists.";
+		}
+		return "Cannot join this game: " + row.reason;
 	}
 
 	std::string NetDirectoryClient::DescribeGameRow(const GameRow& row) {

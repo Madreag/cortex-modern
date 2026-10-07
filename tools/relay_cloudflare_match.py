@@ -36,6 +36,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import os
 import re
 import secrets
@@ -61,7 +62,7 @@ CLOUDFLARE_TURN_CONFIG = Path('D:/mx/coturn-20260920/turn-config-cloudflare.json
 # The retired fixed account (turnserver-fixed.conf): read into the book only, so a leak of it is still found; never used by a run.
 RETIRED_FIXED_CONF = Path('D:/mx/coturn-20260920/turnserver-fixed.conf')
 # Our relay for a run: a coturn on the Mac with a per-run REST secret, on its own LAN port and relay range.
-LANE_COTURN = dict(ssh='Erol-Mac', binary='/opt/homebrew/opt/coturn/bin/turnserver', address='192.168.50.122',
+LANE_COTURN = dict(ssh='Erol-Mac', binary='/opt/homebrew/opt/coturn/bin/turnserver', address=os.environ.get('CC_RELAY_COTURN_ADDRESS', ''),
                    ports=(3490, 3499), relay=(49301, 49340))
 # https://www.cloudflare.com/ips-v4 and /ips-v6, read 2026-10-03; turn.cloudflare.com resolved to 141.101.90.1 that day.
 CLOUDFLARE_RANGES = [ipaddress.ip_network(text) for text in (
@@ -80,7 +81,7 @@ RELAY_SETTINGS = ('NetworkTurnServers', 'NetworkTurnUser', 'NetworkTurnPass', 'N
 # The game's built-in directory (c_DefaultSessionDirectoryUrl): the hotspot rows that turn the tailnet off meet there.
 PUBLIC_DIRECTORY = 'directory.broserver.com'
 PUBLIC_DIRECTORY_LOGS = ('Erol-Mac', '/Users/erol/cortex-directory/logs')
-HOME = dict(gateway='192.168.50.1', public='68.3.162.151')
+HOME = dict(gateway=os.environ.get('CC_RELAY_HOME_GATEWAY', ''), public=os.environ.get('CC_RELAY_HOME_PUBLIC', ''))
 # Ports other drivers own (the project policy, the e2e README, edith_cross): never chosen here.
 FOREIGN_PORTS = [(48320, 48539), (48630, 48649), (49180, 49199), (49400, 49479), (49860, 49879), (49985, 49986)]
 PORT_WINDOW = (48700, 49170)
@@ -93,6 +94,10 @@ REDACTOR = None  # the run's SecretBook: no booked value reaches a printed line 
 # --- the mandatory checks, once (R-b) --------------------------------------------------------------------------------
 BASE = ('identities', 'builds', 'exits', 'full_history', 'hashes_equal', 'holds', 'feel_bars', 'relay', 'route_receipts',
         'rtt_recorded', 'secrets_observed', 'no_secret_in_files', 'sanitizer_clean')
+# A row with a hotspot seat judges the seats by the match summary: only the hotspot's seat may be held (A1: the player with the
+# problem carries its cost), the fast peers' feel is the row's bar ('timing_peers'). A peer log's hold lines name the seats
+# that peer held, never its own, so the per-log count cannot judge it.
+SEATED = tuple(check for check in BASE if check != 'holds') + ('seat_holds',)
 REQUIRED = {
     'cloudflare': BASE + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked'),
     'coturn': BASE + ('offer_fresh', 'endpoint', 'logins_short_lived'),
@@ -101,12 +106,21 @@ REQUIRED = {
     'fixed': tuple(check for check in BASE if check != 'no_secret_in_files') + ('offer_fresh', 'endpoint', 'menu_entered',
                                                                                'logins_short_lived', 'pair_blanked', 'pair_ttl',
                                                                                'menu_choice:client'),
-    'a-automatic-fallback': BASE + ('offer_fresh', 'endpoint', 'logins_revoked', 'tunnel:client', 'panel:client'),
+    # Automatic on a carrier NAT ends on the best route ICE completes (direct where the NAT can be punched): the history of its
+    # route receipts and the panel's agreement with the live route at every frame are its evidence, whichever route it ends on.
+    'a-automatic-fallback': SEATED + ('offer_fresh', 'logins_revoked', 'tunnel:client', 'panel:client', 'route_history:client'),
+    # The forced form: the hotspot end offers relay candidates only, so no direct route completes and Automatic holds the relay.
+    'a-automatic-forced': SEATED + ('offer_fresh', 'endpoint', 'logins_revoked', 'tunnel:client', 'panel:client', 'route_history:client'),
     'b-hotspot-host': BASE + ('offer_fresh', 'logins_revoked', 'tunnel:host', 'listing'),
     'c-four-players': tuple(check for check in BASE if check != 'holds') + ('offer_fresh', 'logins_revoked', 'tunnel:hotspot', 'seat_holds'),
-    'd-credential-expiry': BASE + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'renewal'),
-    'e-migration-relayed': BASE + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'migration'),
-    'f-relay-by-hand': BASE + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'menu_choice:client'),
+    'd-credential-expiry': SEATED + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'renewal'),
+    # Through a host loss the survivors' feel is judged on either side of it and the pause reported (ROLLBACK 3.1.2).
+    'e-migration-relayed': tuple(check for check in SEATED if check != 'feel_bars') + ('feel_around_loss', 'offer_fresh', 'endpoint',
+                                                                                     'relay_registrant', 'provider_201', 'logins_revoked', 'migration'),
+    'f-relay-by-hand': SEATED + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked', 'menu_choice:client'),
+    # A public row sees no candidate (the directory is not this run's): the relay is bound by the engine's own receipt and the
+    # directory's offer line, and its holds are the hotspot seat's own (the fast peer's feel is the row's bar).
+    'g-relay-only-public': SEATED + ('offer_fresh', 'endpoint', 'logins_revoked', 'tunnel:client', 'route_history:client', 'listing'),
 }
 
 
@@ -191,6 +205,31 @@ def registrant(address: str) -> dict:
     return judge_registrant(address, record)
 
 
+def registrants_of(addresses: list[str], lookup=None, attempts: int = 3, pause_s: float = 2.0) -> list[dict]:
+    """Each address's registry record. An address inside a block an earlier lookup of this run resolved reads that block's
+    record (the registry answers the same for the whole block); a lookup the network cut is asked again."""
+    lookup = lookup or registrant
+    records = []
+    for address in addresses:
+        try:
+            ip = ipaddress.ip_address(address)
+            known = next((row for row in records if row.get('start') and row.get('end') and
+                          ipaddress.ip_address(row['start']) <= ip <= ipaddress.ip_address(row['end'])), None)
+        except ValueError:
+            known = None
+        if known is not None:
+            records.append(dict(known, address=address, within=known['address']))
+            continue
+        for attempt in range(attempts):
+            row = lookup(address)
+            if 'error' not in row:
+                break
+            if attempt + 1 < attempts:
+                time.sleep(pause_s)
+        records.append(row)
+    return records
+
+
 def judge_registrant(address: str, record: dict) -> dict:
     def entities(items):
         for entity in items or []:
@@ -231,7 +270,7 @@ def url_host(url: str) -> str:
 def route_receipts(log: str, session: str | None, any_session: bool = False) -> dict:
     """The route lines a peer wrote for this session, per connection: its selected candidate and its RouteAllowed line.
     Each line keeps its number in the log, so a phase (after a migration, after a renewal) can be read from it."""
-    current, connections = None, {}
+    current, connections, history = None, {}, []
     for number, line in enumerate(log.splitlines()):
         if found := re.search(r'\[net-ice\] (?:host )?session (\S+)', line):
             current = found[1]
@@ -241,17 +280,70 @@ def route_receipts(log: str, session: str | None, any_session: bool = False) -> 
             connections.setdefault(found[2], {}).update(candidate=found[1], selected_at=number)
         if found := re.search(r'\[net-route\] RouteAllowed route=(\w+) allowed=(\d+) connection=(\d+)', line):
             connections.setdefault(found[3], {}).update(route=found[1], allowed=found[2] == '1', allowed_at=number, line=line.strip())
+            change = re.search(r' change=(\w+)->(\w+)', line)
+            history.append(dict(connection=found[3], route=found[1], allowed=found[2] == '1', at=number,
+                                change=f'{change[1]}->{change[2]}' if change else None,
+                                after_ms=int(re.search(r' after_ms=(\d+)', line)[1]) if ' after_ms=' in line else None))
     accepted = [dict(connection=key, **value) for key, value in connections.items() if value.get('allowed') and value.get('candidate')
                 and (value['route'] == 'relay') == (value['candidate'] == 'relay')]
     other_allowed = [dict(connection=key, **value) for key, value in connections.items() if value.get('allowed') and dict(connection=key, **value) not in accepted]
     refused = [dict(connection=key, **value) for key, value in connections.items() if value.get('route') and not value.get('allowed')]
     incomplete = [key for key, value in connections.items() if 'candidate' not in value or 'route' not in value]
-    return dict(accepted=accepted, other_allowed=other_allowed, refused=refused, incomplete=incomplete, connections=connections)
+    return dict(accepted=accepted, other_allowed=other_allowed, refused=refused, incomplete=incomplete, connections=connections, history=history)
 
 
-def sender_peers(signals, identities: dict[str, str], peers: list[str]) -> dict[str, str]:
-    """Each signal sender's peer: 'host' is the host; a joiner 'client:<nonce>' is the peer whose own report names
-    'str:c-<the nonce's prefix>'; with one joiner and no report, that joiner. An unmatched sender stays unmatched."""
+def receipt_binding(line: str, offers: list[dict], session: str | None, provider: str, hosts: set[str]) -> str | None:
+    """A relayed route bound by the engine's own receipt: its TURN servers are the provider's alone and its offer is one the
+    directory logged issuing for this session (match id and expiry). None when the receipt does not bind it."""
+    servers = re.search(r' turn=(\S+)', line or '')
+    hashed = re.search(r' turn_sha256=(\S+)', line or '')
+    offer = re.search(r' offer=(\S+)', line or '')
+    named = {host_of(server) for server in servers[1].split(',')} if servers else set()
+    digests = set(hashed[1].split(',')) if hashed else set()
+    expected = {hashlib.sha256(host.encode()).hexdigest() for host in hosts}
+    hashes_valid = bool(digests) and all(re.fullmatch(r'[0-9a-f]{64}', value) for value in digests) and digests <= expected
+    hosts_valid = bool(named) and named <= hosts
+    if hashed and servers:
+        hashes_valid = hashes_valid and hosts_valid and digests == {hashlib.sha256(host.encode()).hexdigest() for host in named}
+    issued = {f'{row.get("match_id")}@{row.get("expires_at")}' for row in offers if row.get('session_id') == session and row.get('provider') == provider}
+    if (hashes_valid if hashed else hosts_valid) and offer and offer[1] in issued:
+        return f'by its route receipt: turn {sorted(digests) if hashed else sorted(named)} on offer {offer[1]}'
+    return None
+
+
+def route_history(log: str, session: str | None, report: dict | None, watch: dict | None) -> dict:
+    """A peer's route through its match, from its own receipts: each move of a live connection has its own receipt naming the
+    move, the last receipt is the route the connection holds at the end (its open report), and every move the panel probe saw
+    the transport make has a receipt of the same direction."""
+    receipts = route_receipts(log, session)
+    history, reasons = receipts['history'], []
+    if not history:
+        reasons.append(f'no route receipt for session {session!r}')
+    last = {}
+    for row in history:
+        before = last.get(row['connection'])
+        if before is not None:
+            if row['change'] != f'{before}->{row["route"]}':
+                reasons.append(f'connection {row["connection"]}: a receipt at line {row["at"]} names {row["change"]} after a {before} receipt')
+        elif row['change']:
+            reasons.append(f'connection {row["connection"]}: its first receipt names a change ({row["change"]})')
+        last[row['connection']] = row['route']
+    moves = [row['change'] for row in history if row['change']]
+    if isinstance(report, dict) and report.get('found') is True and last:
+        live = 'relay' if report.get('relayed') else 'direct'
+        if list(last.values())[-1] != live:
+            reasons.append(f'the last receipt names {list(last.values())[-1]}, the open report says the route is {live}')
+    seen = [f'{move.get("from")}->{move.get("to")}' for move in (watch or {}).get('moves', []) if move.get('what') == 'live' and move.get('from')]
+    for direction in set(seen):
+        if seen.count(direction) > moves.count(direction):
+            reasons.append(f'the probe saw the transport move {direction} {seen.count(direction)} time(s), the receipts name {moves.count(direction)}')
+    return dict(passed=not reasons, reasons=reasons, history=history, moves=moves, probe_moves=seen)
+
+
+def sender_peers(signals, identities: dict[str, str | list[str]], peers: list[str]) -> dict[str, str]:
+    """Each signal sender's peer: 'host' is the host; a joiner 'client:<nonce>' is the peer whose own report or connect
+    receipts name 'str:c-<the nonce's prefix>' (a survivor dials again after a host loss, as another identity); with one
+    joiner and no report, that joiner. An unmatched sender stays unmatched."""
     joiners = [peer for peer in peers if peer != 'host']
     mapped = {}
     for sender, _ in signals:
@@ -261,7 +353,9 @@ def sender_peers(signals, identities: dict[str, str], peers: list[str]) -> dict[
             mapped[sender] = 'host'
             continue
         nonce = sender.split(':', 1)[1] if sender.startswith('client:') else sender
-        owners = [peer for peer, identity in identities.items() if identity and identity.startswith('str:c-') and nonce.startswith(identity[6:])]
+        owners = [peer for peer, named in identities.items()
+                  if any(identity and identity.startswith('str:c-') and nonce.startswith(identity[6:])
+                         for identity in ([named] if isinstance(named, str) or named is None else named))]
         mapped[sender] = owners[0] if len(owners) == 1 else joiners[0] if not identities and len(joiners) == 1 else f'unmatched:{sender[:16]}'
     return mapped
 
@@ -282,6 +376,7 @@ def judge_relay(run: dict) -> dict:
     relay_ok = (lambda address: address in (run.get('relay_addresses') or [])) if coturn else cloudflare_address
     names = sorted(run['connection'])
     signals = run.get('signals') or []
+    signals_observed = run.get('signals_observed', True)
     owners = sender_peers(signals, run.get('identities') or {}, names)
     sent: dict[str, list] = {}
     for sender, payload in signals:
@@ -310,14 +405,17 @@ def judge_relay(run: dict) -> dict:
             state = 'missing' if not isinstance(report, dict) or not report else 'closed' if report.get('found') is not True else 'open'
             report_states[peer] = state
             entry['report'] = {key: (report or {}).get(key) for key in ('found', 'state', 'relayed', 'remote_identity', 'remote_address')}
-            if state != 'open':
+            # A survivor of a lost host reports the connection it lost; its route after the loss is the migration check's.
+            if state == 'open':
+                if chosen is not None and bool(report.get('relayed')) != (chosen == 'relay'):
+                    reasons.append(f'{peer}: its report says relayed={report.get("relayed")} where its route is {chosen}')
+            elif not (run.get('host_lost') and state == 'closed'):
                 reasons.append(f'{peer}: its report holds no live connection ({state}): a lost report fails the row')
-            elif chosen is not None and bool(report.get('relayed')) != (chosen == 'relay'):
-                reasons.append(f'{peer}: its report says relayed={report.get("relayed")} where its route is {chosen}')
         if connection == 'RelayOnly':
             if chosen != 'relay' or receipts['other_allowed'] or any(row['route'] != 'relay' for row in receipts['accepted']):
                 reasons.append(f'{peer}: Relay only but routes {[row.get("route") for row in receipts["accepted"] + receipts["other_allowed"]]}')
-            if not relays:
+            # A public directory is not this run's: what each peer sent through it is not observable, so its route receipt binds it.
+            if not relays and signals_observed:
                 reasons.append(f'{peer}: sent no relay candidate through the directory')
             if any(kind != 'relay' for _, _, kind in own):
                 reasons.append(f'{peer}: Relay only but sent {sorted({kind for _, _, kind in own if kind != "relay"})} candidates')
@@ -326,8 +424,12 @@ def judge_relay(run: dict) -> dict:
             reasons.append(f'{peer}: relay candidates outside the {provider} relay: {outside}')
         if chosen == 'relay':
             report = reports.get(peer)
+            by_receipt = receipt_binding(receipts['accepted'][-1].get('line'), run.get('offers') or [], session, provider,
+                                         set(run.get('relay_hosts') or run.get('relay_addresses') or []) if coturn else CLOUDFLARE_HOSTS)
             if relays and not outside and run.get('overrides_cleared'):
                 bindings[peer] = 'by exclusion'
+            elif by_receipt and run.get('overrides_cleared'):
+                bindings[peer] = by_receipt
             elif report and report.get('found') is True and report.get('relayed') and report.get('remote_address') and \
                     relay_ok(host_of(report['remote_address'])):
                 bindings[peer] = 'by its open report'
@@ -367,17 +469,69 @@ def judge_relay(run: dict) -> dict:
 
 FEEL_BARS = ('item9a_wall_tps', 'item9a_net_wait', 'item9a_steady_stalls', 'item9a_missing_frame_stalls', 'item9a_longest_wait',
              'item9a_confirmed_horizon_lag')
+LIVE_SPIKE_PINS = ('item9a_steady_stalls', 'item9a_missing_frame_stalls')
 
 
-def feel_bars(timing: dict, peer: str) -> dict:
+def observed_input_spikes(log: str, tick_ms: float | None = None, bound_ticks: int | None = None) -> dict:
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < float('inf')
+           for value in (tick_ms, bound_ticks)):
+        return {}
+    proposals, observed = {}, {}
+    for line in log.splitlines():
+        if line.startswith('[net-lockstep] propose hold peer='):
+            fields = dict(re.findall(r'(\w+)=(\S+)', line))
+            if fields.get('cause') != 'late_stream' or fields.get('played') != '1':
+                continue
+            try:
+                peer, frame, first, now = (int(fields[key]) for key in ('peer', 'next_frame', 'first_missing_ms', 'now'))
+            except (KeyError, ValueError):
+                continue
+            if first > 0 and now - first > bound_ticks * tick_ms:
+                proposals[peer] = dict(frame=frame, peer=peer, elapsed_ms=now-first, bound_ms=bound_ticks*tick_ms,
+                                       observed=True, evidence=line)
+        elif held := re.match(r'\[net-match\] hold peer=(\d+) frame=(\d+)', line):
+            peer, frame = map(int, held.groups())
+            proof = proposals.pop(peer, None)
+            if proof and proof['frame'] == frame:
+                observed[frame] = dict(proof, hold_evidence=line)
+    return observed
+
+
+def feel_bars(timing: dict, peer: str, log: str | None = None, spikes=(), ticks: int | None = None) -> dict:
     """The feel driver's own measured pins for one peer (its thresholds, unchanged): every one present and PASS. The pins this
     match cannot measure are listed with their reasons: the harness-cost receipt no current engine prints, and the input
-    pins of the feel recorder a lean match does not run."""
+    pins of the feel recorder a lean match does not run.
+
+    One wait at a held frame belongs to a spike only with the run's observed stream-silence record. Every other wait
+    remains steady, and a missing measured pin or log fails."""
     pins = (timing.get('peers', {}).get(peer) or {}).get('pins', {})
     failed = {name: (pins.get(name) or {}).get('status', 'MISS') for name in FEEL_BARS if (pins.get(name) or {}).get('status') != 'PASS'}
     unmeasured = {name: str(pin.get('reason', ''))[:160] for name, pin in pins.items() if name not in FEEL_BARS and pin.get('status') == 'MISS'}
+    reading = None
+    if not isinstance(log, str) or not log.strip():
+        failed['log'] = 'MISS'
+    proofs = {frame: proof for frame, proof in spikes.items() if isinstance(proof, dict) and proof.get('observed') is True
+              and type(proof.get('elapsed_ms')) is int and isinstance(proof.get('bound_ms'), (int, float))
+              and proof['elapsed_ms'] > proof['bound_ms'] and proof.get('evidence') and proof.get('hold_evidence')} if isinstance(spikes, dict) else {}
+    if isinstance(log, str) and log.strip() and any(failed.get(name) == 'FAIL' for name in LIVE_SPIKE_PINS):
+        left, steady, at_spikes = set(proofs), [], []
+        for tick, ms in ((int(tick), int(ms)) for tick, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', log)):
+            if 300 < tick <= (tick if ticks is None else ticks) and ms > 0:
+                if tick in left:
+                    left.discard(tick)
+                    at_spikes.append((tick, ms))
+                else:
+                    steady.append((tick, ms))
+        reading = dict(steady=len(steady), spike_waits=at_spikes, pins={name: failed[name] for name in LIVE_SPIKE_PINS if name in failed},
+                       evidence={frame: proofs[frame] for frame, _ in at_spikes})
+        missing = (pins.get('item9a_missing_frame_stalls') or {}).get('value')
+        if not steady and at_spikes:
+            if failed.get('item9a_steady_stalls') == 'FAIL' and (pins.get('item9a_steady_stalls') or {}).get('value') == len(at_spikes):
+                failed.pop('item9a_steady_stalls', None)
+            if failed.get('item9a_missing_frame_stalls') == 'FAIL' and type(missing) is int and missing == len(at_spikes):
+                failed.pop('item9a_missing_frame_stalls', None)
     return dict(passed=not failed, failed=failed, values={name: (pins.get(name) or {}).get('value') for name in FEEL_BARS},
-                unmeasured=unmeasured, pass_check=(timing.get('peers', {}).get(peer) or {}).get('pass_check'))
+                unmeasured=unmeasured, pass_check=(timing.get('peers', {}).get(peer) or {}).get('pass_check'), live_spike_reading=reading)
 
 
 def tunnel_receipt(rows: list[dict], peers: list[str] | None = None, min_seconds: float | None = None) -> dict:
@@ -441,15 +595,25 @@ def hotspot_preflight(state: str | None, gateway: str | None, mapped: str | None
         return dict(verdict='REFUSED', reason=f'unknown or malformed precondition: {", ".join(malformed)}')
     if state != 'Running':
         return dict(verdict='REFUSED', reason=f'the tunnel is {state}, not Running')
-    if address(gateway) == HOME['gateway'] or address(mapped) == HOME['public']:
-        return dict(verdict='HOME', reason=f'the box is on the home network (gateway {address(gateway)}, mapped {address(mapped)})')
-    return dict(verdict='AWAY', reason=f'gateway {address(gateway)}, mapped {address(mapped)}')
+    home_gateway, home_public = (address(str(HOME.get(key) or '')) for key in ('gateway', 'public'))
+    if home_gateway is None or home_public is None:
+        return dict(verdict='REFUSED', reason='the home-network baseline is missing or malformed')
+    if address(gateway) == home_gateway or address(mapped) == home_public:
+        return dict(verdict='HOME', reason='the box is on the home network')
+    return dict(verdict='AWAY', reason='the gateway and mapped address differ from the home-network baseline')
 
 
 def panel_verdict(result) -> dict:
-    """The in-match connection panel's probe (CC_TEST_NET_UI_SCRIPT): it ran to its end and every assertion held."""
+    """The in-match connection panel's probe (CC_TEST_NET_UI_SCRIPT): it ran to its end and every assertion held; a probe that
+    watched the route did so on at least one frame (its moves are recorded, so a run whose route moved shows both)."""
     ok = isinstance(result, dict) and result.get('pass') is True and result.get('complete') is True
-    return dict(passed=ok, reasons=[] if ok else [f'the connection panel probe did not pass: {result!r}'[:300]])
+    reasons = [] if ok else [f'the connection panel probe did not pass: {result!r}'[:300]]
+    script = (result or {}).get('script') if isinstance(result, dict) else None
+    watched = isinstance(script, dict) and any(step.get('op') == 'watch_route' for step in script.get('steps', []))
+    watch = (result or {}).get('route_watch') if isinstance(result, dict) else None
+    if ok and watched and not (isinstance(watch, dict) and watch.get('samples', 0) > 0):
+        reasons.append('the probe watched the route on no frame')
+    return dict(passed=not reasons, reasons=reasons, route_watch=watch)
 
 
 def listing_evidence(lines: list[str], session: str | None, listed: bool) -> dict:
@@ -466,6 +630,14 @@ def listing_evidence(lines: list[str], session: str | None, listed: bool) -> dic
     reasons = (([] if listed else [f'session {session!r} was never seen in the directory listing'])
                + ([] if offers else [f'no Cloudflare relay offer was issued for session {session!r}']))
     return dict(passed=not reasons, reasons=reasons, offers=offers)
+
+
+def summary_writers(run: dict, logs: dict[str, str]) -> list[str]:
+    """Whose report carries the match summary: the host's, and when the row kills its host, its successor's after it."""
+    if not run.get('kill_host_at_tick'):
+        return ['host']
+    successor = next(iter(re.findall(r'\[net-match\] Host left - (\S+) is now hosting', '\n'.join(logs.values()))), None)
+    return ['host'] + [peer['name'] for peer in run['peers'] if display_name(run, peer) == successor]
 
 
 def seat_holds(peers: list[dict], allowed: set[str], expected: set[str] | None = None) -> dict:
@@ -547,8 +719,10 @@ def migration_declarations(logs: dict[str, str], survivors: list[str], session: 
         for peer in survivors:
             lines = logs.get(peer, '').splitlines()
             declared = next(index for index, line in enumerate(lines) if 'is now hosting; boundary=' in line)
-            seen_before = {match for line in lines[:declared] for match in re.findall(r'connection=(\d+)', line)}
-            post = [key for key, row in route_receipts('\n'.join(lines[declared:]), None, any_session=True)['connections'].items()
+            # A survivor dials its successor as soon as it finds the host lost, before the handover is declared.
+            lost = next((index for index, line in enumerate(lines[:declared]) if 'host lost; collecting surviving peers' in line), declared)
+            seen_before = {match for line in lines[:lost] for match in re.findall(r'connection=(\d+)', line)}
+            post = [key for key, row in route_receipts('\n'.join(lines[lost:]), None, any_session=True)['connections'].items()
                     if key not in seen_before and row.get('candidate') == 'relay' and row.get('route') == 'relay' and row.get('allowed')
                     and row.get('selected_at', -1) >= 0 and row.get('allowed_at', -1) >= 0]
             successors[peer] = post
@@ -599,7 +773,8 @@ def coturn_rest_login(secret: str, ttl_s: int, now: int | None = None) -> tuple[
 
 # --- a TURN Allocate, enough to ask our relay whether a login is alive ------------------------------------------------
 
-def turn_allocate(server: tuple[str, int], username: str, password: str, timeout: float = 4.0) -> dict:
+def turn_allocate(server: tuple[str, int], username: str, password: str, timeout: float = 4.0,
+                  transport: str = 'udp', tls_hostname: str | None = None) -> dict:
     """RFC 5766 Allocate with the long-term credential: the first answer's realm and nonce, then the signed request.
     Returns the final message class and error code; the login is used for the HMAC only and never returned."""
     def attribute(kind: int, value: bytes) -> bytes:
@@ -614,26 +789,71 @@ def turn_allocate(server: tuple[str, int], username: str, password: str, timeout
         return struct.pack('!HHI', 0x0003, len(body), 0x2112A442) + txn + body
 
     def parse(data: bytes) -> tuple[int, dict]:
+        if len(data) < 20:
+            raise ValueError('relay sends an incomplete response')
         kind, length = struct.unpack('!HH', data[:4])
+        if length % 4 or len(data) != 20 + length or data[4:8] != struct.pack('!I', 0x2112A442):
+            raise ValueError('relay sends an invalid response')
         fields, offset = {}, 20
         while offset + 4 <= 20 + length:
             name, size = struct.unpack('!HH', data[offset:offset + 4])
+            if offset + 4 + size > len(data):
+                raise ValueError('relay truncates a response field')
             fields[name] = data[offset + 4:offset + 4 + size]
             offset += 4 + size + ((4 - size % 4) % 4)
+        if offset != len(data):
+            raise ValueError('relay sends an incomplete response field')
         return kind, fields
 
-    transport = attribute(0x0019, b'\x11\x00\x00\x00')
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.settimeout(timeout)
-        sock.sendto(message(transport, os.urandom(12), None), server)
-        kind, fields = parse(sock.recvfrom(4096)[0])
+    from contextlib import ExitStack
+    requested_transport = attribute(0x0019, b'\x11\x00\x00\x00')
+    deadline = time.monotonic() + 2 * timeout
+    family = socket.AF_INET6 if ':' in server[0] else socket.AF_INET
+    stream = transport in ('tcp', 'tls')
+    with ExitStack() as closer:
+        raw = closer.enter_context(socket.socket(family, socket.SOCK_STREAM if stream else socket.SOCK_DGRAM))
+        sock = raw
+        def limit():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('relay does not complete its response')
+            sock.settimeout(remaining)
+        limit()
+        if stream:
+            sock.connect(server)
+            if transport == 'tls':
+                limit()
+                sock = closer.enter_context(ssl.create_default_context().wrap_socket(sock, server_hostname=tls_hostname or server[0]))
+        def exchange(payload):
+            limit()
+            if not stream:
+                sock.sendto(payload, server)
+                response = sock.recvfrom(4096)[0]
+                if len(response) < 20 or response[8:20] != payload[8:20]:
+                    raise ValueError('relay answers another request')
+                return response
+            sock.sendall(payload)
+            def exact(size):
+                data = bytearray()
+                while len(data) < size:
+                    limit()
+                    part = sock.recv(size - len(data))
+                    if not part:
+                        raise ConnectionError('relay closes its response')
+                    data.extend(part)
+                return bytes(data)
+            header = exact(20)
+            if header[8:20] != payload[8:20]:
+                raise ValueError('relay answers another request')
+            length = struct.unpack('!H', header[2:4])[0]
+            return header + exact(length)
+        kind, fields = parse(exchange(message(requested_transport, os.urandom(12), None)))
         realm, nonce = fields.get(0x0014, b''), fields.get(0x0015, b'')
         if kind != 0x0113 or not realm or not nonce:
             return dict(first=hex(kind), result='no challenge')
         key = hashlib.md5(username.encode() + b':' + realm + b':' + password.encode()).digest()
-        signed = transport + attribute(0x0006, username.encode()) + attribute(0x0014, realm) + attribute(0x0015, nonce)
-        sock.sendto(message(signed, os.urandom(12), key), server)
-        kind, fields = parse(sock.recvfrom(4096)[0])
+        signed = requested_transport + attribute(0x0006, username.encode()) + attribute(0x0014, realm) + attribute(0x0015, nonce)
+        kind, fields = parse(exchange(message(signed, os.urandom(12), key)))
     error = fields.get(0x0009)
     code = (error[2] & 0x7) * 100 + error[3] if error and len(error) >= 4 else None
     return dict(result='allocated' if kind == 0x0103 else 'refused', message_class=hex(kind), error_code=code)
@@ -644,20 +864,23 @@ def turn_allocate(server: tuple[str, int], username: str, password: str, timeout
 class Box:
     def __init__(self, name: str, entry: dict, tree: str | None = None, alias: str | None = None) -> None:
         self.name = name
-        self.alias = alias or entry['ssh']
+        self.local = entry.get('kind') == 'local'
+        self.alias = alias or entry.get('ssh') or 'localhost'
         self.task = entry.get('task', 'cortex-session1')
         self.session_script = entry.get('session_script', 'D:/mx/session1/run.ps1')
         self.tree = tree or entry['repo']
         self.path_prepend = list(entry.get('path_prepend') or [])
         self.max_engines = int((entry.get('memory') or {}).get('max_engines') or (entry.get('runner') or {}).get('max_engines') or 2)
         self.computer = entry.get('computer_name') or entry.get('hostname') or name
-        from remote_box import RemoteBox
-        self.remote = RemoteBox(self.alias, self.task, self.session_script, dry_run=DRY_RUN, say=say)
+        from remote_box import LocalBox, RemoteBox
+        self.remote = (LocalBox if self.local else RemoteBox)(self.alias, self.task, self.session_script, dry_run=DRY_RUN, say=say)
 
 
 def load_boxes(trees: dict[str, str], aliases: dict[str, str] | None = None) -> dict[str, Box]:
+    """The Windows game boxes: each one's session task, and this box (kind local) whose peers start here in this session.
+    A local box's tree is the --tree a run names: the inventory's tree there belongs to the merge gate."""
     entries = {entry['name'].lower(): entry for entry in json.loads(boxes_file().read_text(encoding='utf-8'))['boxes']
-               if entry.get('kind') == 'windows-task'}
+               if entry.get('kind') == 'windows-task' or (entry.get('kind') == 'local' and entry['name'].lower() in trees)}
     return {name: Box(name, entry, trees.get(name), (aliases or {}).get(name)) for name, entry in entries.items()}
 
 
@@ -720,6 +943,77 @@ def identity(box: Box, expected_head: str | None = None) -> dict:
                 status='INCOMPLETE' if errors else 'PASS', errors=errors, measured=stamp())
 
 
+# Runs on a box (python -c): each module directory of the tree's Data and Mods hashed over its files' relative paths and bytes,
+# or with WANT set, one module's files each hashed. Junctions and symlinks are never entered.
+DATA_DIGEST_CODE = r'''
+import hashlib, json, os, sys
+tree, want = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else '')
+out = {}
+for top in ('Data', 'Mods'):
+    base = os.path.join(tree, top)
+    if not os.path.isdir(base):
+        continue
+    for module in sorted(os.listdir(base)):
+        root = os.path.join(base, module)
+        if not os.path.isdir(root) or os.path.islink(root) or (want and top + '/' + module != want):
+            continue
+        files, stack = [], [root]
+        while stack:
+            folder = stack.pop()
+            with os.scandir(folder) as entries:
+                for entry in entries:
+                    if entry.is_symlink() or (getattr(entry.stat(follow_symlinks=False), 'st_file_attributes', 0) & 0x400):
+                        continue
+                    (stack.append if entry.is_dir(follow_symlinks=False) else files.append)(entry.path)
+        digest, per_file = hashlib.sha256(), {}
+        for path in sorted(files, key=lambda path: os.path.relpath(path, root).replace(os.sep, '/').lower()):
+            name = os.path.relpath(path, root).replace(os.sep, '/')
+            with open(path, 'rb') as handle:
+                data = handle.read()
+            digest.update(name.lower().encode() + b'\0' + str(len(data)).encode() + b'\0' + data)
+            if want:
+                per_file[name] = hashlib.sha256(data).hexdigest()
+        out[top + '/' + module] = per_file if want else [digest.hexdigest(), len(files)]
+print(json.dumps(out))
+'''
+
+
+def data_digests(box: Box, module: str = '') -> dict:
+    """The box tree's Data and Mods, per module (or one module's files): what every peer of a match must hold byte for byte."""
+    encoded = base64.b64encode(DATA_DIGEST_CODE.encode()).decode()
+    if getattr(box, 'local', False):
+        done = subprocess.run([sys.executable, '-c', DATA_DIGEST_CODE, box.tree, module], capture_output=True, text=True, timeout=600)
+        text = done.stdout
+    else:
+        text = box.remote.ssh(f"python -c \"import base64,sys;exec(base64.b64decode('{encoded}'))\" '{box.tree}' '{module}' data-digests", timeout=600)
+    return json.loads(text.strip().splitlines()[-1])
+
+
+def data_preflight(boxes: list[Box]) -> dict:
+    """Every box's modules against the first box's: a module that differs anywhere refuses the run in seconds, naming the box,
+    the module and its first differing file, before any engine starts (a peer with other bytes is refused by the directory)."""
+    if DRY_RUN or len(boxes) < 2:
+        return dict(passed=True, reasons=[], digests={})
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=len(boxes)) as pool:
+        digests = dict(zip([box.name for box in boxes], pool.map(data_digests, boxes)))
+    reference = boxes[0]
+    reasons = []
+    for box in boxes[1:]:
+        for module in sorted(set(digests[box.name]) | set(digests[reference.name])):
+            mine, theirs = digests[box.name].get(module), digests[reference.name].get(module)
+            if mine == theirs:
+                continue
+            if mine is None or theirs is None:
+                reasons.append(f'{box.name}: module {module} is {"missing" if mine is None else "extra"} against {reference.name}')
+                continue
+            left, right = data_digests(reference, module).get(module, {}), data_digests(box, module).get(module, {})
+            differing = sorted(name for name in set(left) | set(right) if left.get(name) != right.get(name))
+            reasons.append(f'{box.name}: module {module} differs from {reference.name} ({mine[1]} files against {theirs[1]}); '
+                           f'first differing file {differing[0] if differing else "(none found)"} of {len(differing)}')
+    return dict(passed=not reasons, reasons=reasons, digests=digests)
+
+
 def box_lan_address(box: Box) -> str:
     if DRY_RUN:
         return '0.0.0.0'
@@ -758,6 +1052,20 @@ class Directory:
             module.urlopen = urlopen
         self.server = module.spawn_server(port=port, cert=self.cert, key=key, insecure_http=False, log_file=root / 'service.log',
                                           turn_config=backend, turn_max_ttl=ttl_cap, create_owner_key=True, caller_mode="direct")
+        class PrivateLogFilter(logging.Filter):
+            def filter(self, record):
+                text = record.getMessage()
+                for address in re.findall(r'\bclient=([^\s,]+)', text):
+                    try:
+                        if not ipaddress.ip_address(address).is_loopback:
+                            book.add('owner-address', address)
+                    except ValueError:
+                        pass
+                record.msg, record.args = book.redact(text), ()
+                return True
+        self.private_log_filters = [(handler, PrivateLogFilter()) for handler in module.LOGGER.handlers]
+        for handler, filter_ in self.private_log_filters:
+            handler.addFilter(filter_)
         key.unlink()
         store = self.server.store
         mint, post, register, mint_offer = store.turn_provider.mint, store.post_signal, store.register, store.mint_ice_servers
@@ -804,6 +1112,8 @@ class Directory:
                 self.revokes = revoke_cloudflare(self.backend, [row['username'] for row in self.minted], self.real_urlopen,
                                                  self.module.USER_AGENT)
             self.module.urlopen = self.real_urlopen
+            for handler, filter_ in self.private_log_filters:
+                handler.removeFilter(filter_)
             for handler in set(self.module.LOGGER.handlers) - self.handlers:
                 self.module.LOGGER.removeHandler(handler)
                 handler.close()
@@ -824,6 +1134,104 @@ def revoke_cloudflare(backend: dict, usernames: list[str], opener=None, agent: s
         except OSError:
             statuses.append(0)
     return statuses
+
+
+CLOUDFLARED = Path('C:/Program Files (x86)/cloudflared/cloudflared.exe')
+
+
+def retain_redacted_process_log(stream, path: Path) -> None:
+    with path.open('w', encoding='utf-8') as log:
+        for line in stream:
+            log.write(redacted(line))
+            log.flush()
+
+
+class QuickTunnel:
+    """A Cloudflare quick tunnel (trycloudflare.com: no account, no router port) to this run's directory, so every box reaches
+    it over the public internet as a player's machine reaches a directory, never through the tailnet's relay. cloudflared runs
+    with a configuration of its own and a home of its own, so it never reads a named tunnel's credentials."""
+
+    def __init__(self, port: int, root: Path) -> None:
+        self.port, self.root, self.process, self.host = port, root, None, None
+        self.log_reader = None
+
+    def open(self, budget_s: float = 90) -> str:
+        if DRY_RUN:
+            self.host = 'dry-run.trycloudflare.com'
+            say(f'dry-run: cloudflared quick tunnel to https://127.0.0.1:{self.port}')
+            return self.host
+        home = self.root / 'cloudflared-home'
+        home.mkdir(exist_ok=True)
+        config = home / 'quick-tunnel.yml'
+        config.write_text('no-autoupdate: true\n', encoding='utf-8')
+        env = dict(os.environ, USERPROFILE=str(home), HOME=str(home), HOMEDRIVE='', HOMEPATH='')
+        self.process = subprocess.Popen([str(CLOUDFLARED), '--config', str(config), 'tunnel', '--no-autoupdate', '--url',
+                                         f'https://127.0.0.1:{self.port}', '--no-tls-verify'], stdin=subprocess.DEVNULL,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace',
+                                        env=env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        self.log_reader = threading.Thread(target=retain_redacted_process_log, args=(self.process.stdout, self.root / 'cloudflared.log'), daemon=True)
+        self.log_reader.start()
+        deadline = time.monotonic() + budget_s
+        while time.monotonic() < deadline and self.host is None:
+            time.sleep(1)
+            path = self.root / 'cloudflared.log'
+            found = re.search(r'https://([a-z0-9-]+\.trycloudflare\.com)', path.read_text(encoding='utf-8', errors='replace') if path.is_file() else '')
+            if found:
+                self.host = found[1]
+            elif self.process.poll() is not None:
+                break
+        if self.host is None:
+            raise RuntimeError(f'the quick tunnel named no address within {budget_s:.0f} s; see {self.root / "cloudflared.log"}')
+        while time.monotonic() < deadline:
+            try:
+                request = urllib.request.Request(f'https://{self.host}/v1/sessions', headers={'X-Install-Key': 'relay-proof-tunnel-probe',
+                                                                                              'User-Agent': 'cccp-relay-proof/1'})
+                with urllib.request.urlopen(request, context=ssl.create_default_context(), timeout=10) as reply:
+                    if reply.status == 200:
+                        return self.host
+            except (OSError, ValueError):
+                time.sleep(2)
+        raise RuntimeError(f'the quick tunnel {self.host} never answered the directory within {budget_s:.0f} s')
+
+    def close(self) -> None:
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            self.process.wait(timeout=20)
+        if self.log_reader:
+            self.log_reader.join(timeout=20)
+
+
+# Runs on a box (python -c): the directory's round trip from there, each request on a new connection as an engine's first is.
+PATH_RTT_CODE = r'''
+import json, ssl, statistics, sys, time, urllib.request
+url, samples = sys.argv[1], []
+for _ in range(5):
+    began = time.perf_counter()
+    try:
+        request = urllib.request.Request(url, headers={'X-Install-Key': 'relay-proof-path-rtt-probe', 'User-Agent': 'cccp-relay-proof/1'})
+        with urllib.request.urlopen(request, context=ssl.create_default_context(), timeout=20) as reply:
+            reply.read()
+        samples.append(round((time.perf_counter() - began) * 1000))
+    except OSError as error:
+        samples.append(None)
+good = [value for value in samples if value is not None]
+print(json.dumps(dict(url=url, samples_ms=samples, min_ms=min(good) if good else None, median_ms=statistics.median(good) if good else None)))
+'''
+
+
+def directory_rtt(box, url: str) -> dict:
+    """A request to the directory and its answer from a box, five times on new connections (TLS included)."""
+    if DRY_RUN:
+        return {}
+    encoded = base64.b64encode(PATH_RTT_CODE.encode()).decode()
+    try:
+        if getattr(box, 'local', False):
+            text = subprocess.run([sys.executable, '-c', PATH_RTT_CODE, url], capture_output=True, text=True, timeout=180).stdout
+        else:
+            text = box.remote.ssh(f"python -c \"import base64,sys;exec(base64.b64decode('{encoded}'))\" '{url}'", timeout=180)
+        return json.loads(text.strip().splitlines()[-1])
+    except (OSError, ValueError, IndexError, RuntimeError, subprocess.TimeoutExpired) as error:
+        return dict(url=url, error=f'{type(error).__name__}: {str(error)[-160:]}')
 
 
 class Tunnel:
@@ -904,8 +1312,14 @@ class LaneCoturn:
         book.add('lane-coturn-secret', self.secret)
         self.pid, self.port = None, None
         self.address = LANE_COTURN['address']
+        book.add('owner-address', self.address)
 
     def start(self) -> None:
+        try:
+            ipaddress.ip_address(self.address)
+        except ValueError:
+            raise RuntimeError('CC_RELAY_COTURN_ADDRESS must name the test relay address') from None
+
         if DRY_RUN:
             self.port = LANE_COTURN['ports'][0]
             say(f'dry-run: coturn on {LANE_COTURN["ssh"]} {self.address}:{self.port} relay {LANE_COTURN["relay"]} (REST secret in memory)')
@@ -1069,7 +1483,9 @@ def peer_settings(run: dict, peer: dict, port: int, pin: str, login=None) -> dic
     only TURN list a connection can hold is the directory's offer; a login is never seeded (a Fixed pair is entered by the
     menu automation on the box). A public row keeps the game's own directory and the system's certificate check."""
     public = run.get('directory') == 'public'
-    settings = {'SessionDirectoryUrl': PUBLIC_DIRECTORY if public else f'127.0.0.1:{port}', 'SessionDirectoryCertSha256': '' if public else pin,
+    # A tunnel row's directory is this run's own, met at its quick tunnel's public name with the system's certificate check.
+    url = PUBLIC_DIRECTORY if public else run.get('tunnel_host') or f'127.0.0.1:{port}'
+    settings = {'SessionDirectoryUrl': url, 'SessionDirectoryCertSha256': '' if public or run.get('tunnel_host') else pin,
                 'SessionDirectoryInstallKey': f'relay-proof-{peer["box"]}-{peer["name"]}'[:32], 'NetworkIceEnable': '1',
                 'NetworkConnectionMode': peer.get('settings_connection', peer['connection']), 'NetworkShowDiagnostics': '1',
                 'NetworkMatchStatusMode': 'Always', 'NetworkDisplayName': display_name(run, peer),
@@ -1107,10 +1523,17 @@ def build_specs(h, run: dict, root: Path, ports: dict, boxes: dict, pin: str, lo
                 flags[flags.index(option) + 1] = humans
             flags += ['-net-player-name', name]
         spec['flags'] = flags
+        if not run.get('persist_tickets', True) and '-net-reconnect-ticket' in flags:
+            at = flags.index('-net-reconnect-ticket')
+            flags[at + 1] = str(Path(run['private_ticket_root']) / f'{peer["name"]}.ticket')
         if peer['name'] == 'host' and run.get('kill_host_at_tick'):
             spec['kill_at_tick'] = int(run['kill_host_at_tick'])
         if peer.get('panel_probe'):
             spec['env']['CC_TEST_NET_UI_SCRIPT'] = str(root / f'{peer["name"]}-panel' / 'probe.json')
+        for key, value in (peer.get('env') or {}).items():
+            if not key.startswith(('CC_TEST_', 'CCCP_TEST_')):
+                raise ValueError(f'{run["name"]}: {peer["name"]} names {key}, not a test lever')
+            spec['env'][key] = str(value)
         spec.update(box=peer['box'], tailscale_down=bool(peer.get('tailscale_down')), panel_probe=peer.get('panel_probe'),
                     panel_route=peer.get('panel_route'), menu_script=peer.get('menu_script'), name=name)
         specs.append(spec)
@@ -1118,18 +1541,19 @@ def build_specs(h, run: dict, root: Path, ports: dict, boxes: dict, pin: str, lo
 
 
 def ship(box, root: Path, specs: list[dict], directory_port: int, payload: Path, public: bool = False, host_name: str = '',
-         menu_texts: dict[str, str] | None = None) -> Path:
+         menu_texts: dict[str, str] | None = None, tunnel_host: str | None = None) -> Path:
     """The box's spec (its peers in start order) and the drivers; a menu script is written straight onto the box from
     memory (a Fixed pair inside one never touches this box's disk); returns the local copy of the rendered task payload."""
     spec_path = root / f'{box.name}-peers.json'
     document = dict(root=str(root), lane=LANE, directory=dict(port=directory_port, cert=str(root / 'cert.pem'), public=public,
-                    host_name=host_name), peers=specs)
+                    host_name=host_name, host=tunnel_host), peers=specs)
     if DRY_RUN:
         say(f'dry-run: {box.name} runs {[spec["peer"] for spec in specs]} from {box.tree}: ' + json.dumps([spec['settings'] for spec in specs]))
         return root / f'{box.name}-run.ps1'
     box.remote.mkdir(root)
     box.remote.mkdir(payload / 'edith')
     for local, remote in ((HERE / 'relay_cloudflare_match.py', payload / 'relay_cloudflare_match.py'),
+                          (boxes_file(), payload / 'boxes.json'),
                           (HERE / 'relay_secrets.py', payload / 'relay_secrets.py'), (HERE / 'relay_fixtures.json', payload / 'relay_fixtures.json'),
                           (HERE / 'edith_cross.py', payload / 'edith_cross.py'),
                           (HERE / 'edith/remote_box.py', payload / 'edith/remote_box.py'), (root / 'cert.pem', root / 'cert.pem'),
@@ -1154,7 +1578,8 @@ def ship(box, root: Path, specs: list[dict], directory_port: int, payload: Path,
     from remote_box import render_payload
     script = render_payload(box.tree, [str(payload / 'relay_cloudflare_match.py'), '--remote-peers', str(spec_path)],
                             root / f'{box.name}-payload.log', root / f'{box.name}-payload.done',
-                            {'CC_RELAY_LANE': LANE, 'CC_EDITH_CROSS_LANE': LANE}, box.path_prepend)
+                            {'CC_RELAY_LANE': LANE, 'CC_EDITH_CROSS_LANE': LANE, 'CC_RUNNER_BOX_MANIFEST': str(payload / 'boxes.json')},
+                            box.path_prepend)
     local = root / f'{box.name}-run.ps1'
     local.write_text(script, encoding='utf-8')
     return local
@@ -1188,6 +1613,9 @@ def sanitize_box(box, root: Path, book, payload: Path) -> dict:
     digest file removed after. Returns the box's receipt (counts, never values); an unreachable box is INCOMPLETE."""
     if DRY_RUN:
         return dict(box=box.name, status='CLEAN', dry_run=True)
+    if getattr(box, 'local', False):
+        # This box's run files are the driver's own run root: they are swept here, in this process.
+        return dict(sanitize_local(root, book), box=box.name)
     digests = root / f'{box.name}-digests.json'
     receipt_path = root / f'{box.name}-sanitize.json'
     try:
@@ -1297,10 +1725,21 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
         refusal = f'the boxes do not run one receipted build: {[(name, value["head"][:10], str(value["executable_sha256"])[:12], value["errors"]) for name, value in identities.items()]}'
         say(f'{run["name"]}: REFUSED {refusal}')
         return dict(name=run['name'], root=str(root), passed=False, refused=refusal, identities=identities)
+    started_data = time.monotonic()
+    data = data_preflight(used)
+    if not DRY_RUN:
+        write_json(root / 'data-preflight.json', dict(data, seconds=round(time.monotonic() - started_data, 1)))
+    if not data['passed']:
+        refusal = f'the boxes do not hold the same game data: {data["reasons"]}'
+        say(f'{run["name"]}: REFUSED {refusal}')
+        return dict(name=run['name'], root=str(root), passed=False, refused=refusal, identities=identities)
+    say(f'{run["name"]}: game data equal on {[box.name for box in used]} ({time.monotonic() - started_data:.0f} s)')
     h = edith_cross.harness(HERE)
     public = run.get('directory') == 'public'
+    tunneled = run.get('directory') == 'tunnel'
     run.setdefault('tag', f'rp{os.urandom(3).hex()}')
-    backend = coturn = bridge = directory = observer = None
+    backend = coturn = bridge = directory = observer = quick = None
+    legs = {}
     fixed_pair = pair_ttl = minted_at = relay_hosts = None
     if run['relay'] in ('cloudflare', 'automatic') and not public:
         backend = read_turn_config(CLOUDFLARE_TURN_CONFIG)
@@ -1343,8 +1782,14 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
         if not DRY_RUN and not public:
             directory = Directory(root, ports['directory'], backend, int(run.get('relay_ttl_cap', 86400)), book)
         pin = directory.pin if directory else '<pin>'
+        if tunneled:
+            quick = QuickTunnel(ports['directory'], root)
+            run['tunnel_host'] = quick.open()
+            say(f'{run["name"]}: the directory is met at https://{run["tunnel_host"]} (a quick tunnel to this box)')
+            legs = {box.name: directory_rtt(box, f'https://{run["tunnel_host"]}/v1/sessions') for box in used}
+            say(f'{run["name"]}: directory round trip per box {json.dumps({name: leg.get("median_ms") for name, leg in legs.items()})}')
         for box in used:
-            if not public:
+            if not public and not tunneled and not getattr(box, 'local', False):
                 forwards = [ports['directory']] + ([ports['bridge_tcp']] if bridge and box is bridge.box else [])
                 tunnels.append(Tunnel(box, forwards, root / f'tunnel-{box.name}.log'))
         for tunnel in tunnels:
@@ -1357,7 +1802,7 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
             ship_driver_only(bridge.box, payload)
             bridge.open()
         scripts = {box.name: ship(box, root, [spec for spec in specs if spec['box'] == box.name], ports['directory'], payload, public,
-                                  host_name, menu_texts) for box in used}
+                                  host_name, menu_texts, run.get('tunnel_host')) for box in used}
         if public:
             observer = PublicObserver(host_name, book)
             observer.start()
@@ -1381,7 +1826,7 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
         if not isinstance(error, Exception):
             interrupt = error
     finally:
-        steps = [(f'tunnel {tunnel.box.name}', tunnel.close) for tunnel in tunnels]
+        steps = [(f'tunnel {tunnel.box.name}', tunnel.close) for tunnel in tunnels] + ([('quick tunnel', quick.close)] if quick else [])
         steps += [(name, part.close if name == 'bridge' else part.stop) for name, part in
                   (('bridge', bridge), ('directory', directory), ('observer', observer)) if part is not None]
         for step, close in steps:
@@ -1434,7 +1879,7 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
         return dict(name=run['name'], root=str(root), passed=False, refused=failure, identities=identities, sanitize=sanitize,
                     revokes=revokes, cleanup=cleanup)
     return judge_run(h, scenario, run, root, dict(started=started, finished=stamp(), states=states, identities=identities,
-                     legs={}, ports=ports, sessions=directory.sessions() if directory else [],
+                     legs=legs, ports=ports, sessions=directory.sessions() if directory else [],
                      signals=directory.signals if directory else [], offers_seen=directory.offers if directory else None,
                      provider_calls=directory.provider_calls if directory else [], revokes=revokes, minted=minted, public=public,
                      ticks=ticks, ended_epoch=ended_epoch, overrides_cleared=overrides_cleared, sanitize=sanitize, fetched=fetched,
@@ -1498,9 +1943,14 @@ def public_directory_lines(session: str | None) -> list[str]:
     if not session or not re.fullmatch(r'[0-9a-fA-F-]{8,64}', session):
         return []
     host, logs = PUBLIC_DIRECTORY_LOGS
-    done = subprocess.run(['ssh', '-o', 'BatchMode=yes', host, f"grep -h -F '{session}' {logs}/* 2>/dev/null | tail -400"],
+    done = subprocess.run(['ssh', '-o', 'BatchMode=yes', host, f"grep -h -F '{session}' {logs}/* 2>/dev/null"],
                           capture_output=True, text=True, timeout=120, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-    return done.stdout.splitlines()
+    # A long or busy match polls its signals thousands of times: the polls are kept for its last 400 lines only, and every other
+    # line (the session's creation, its relay offer, its listing) whenever it came.
+    lines = done.stdout.splitlines()
+    start = max(0, len(lines) - 400)
+    polls = ('/signals?', '/heartbeat', ' heartbeat session_id=', ' signal session_id=')
+    return [line for index, line in enumerate(lines) if index >= start or not any(mark in line for mark in polls)]
 
 
 def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> dict:
@@ -1564,7 +2014,10 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
     covered = set(range(1, ticks + 1)) <= common
     joiner = next((name for name in names if name != 'host'), 'client')
     connections = {name: edith_cross.find_key(reports.get(name) or {}, 'connection') for name in names}
-    identities = {name: edith_cross.find_key(reports.get(name) or {}, 'local_identity') for name in names if name != 'host'}
+    identities = {name: [edith_cross.find_key(reports.get(name) or {}, 'local_identity'),
+                         *re.findall(r'dialling the ICE half as (str:c-\S+)', logs.get(name, '')),
+                         *re.findall(r"\[net-migration\] dialing the successor's ICE route .*? as=(str:c-\S+)", logs.get(name, ''))]
+                  for name in names if name != 'host'}
     if facts.get('public'):
         directory_lines = public_directory_lines(session)
         (root / 'public-directory.log').write_text('\n'.join(directory_lines) + '\n', encoding='utf-8')
@@ -1587,7 +2040,8 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
                              expect_routes=run.get('expect_routes'),
                              relay_addresses=[facts['coturn_address']] if facts.get('coturn_address') else None,
                              relay_hosts=facts.get('relay_hosts'), run_ends_at=int(facts['ended_epoch']),
-                             overrides_cleared=facts.get('overrides_cleared')))
+                             overrides_cleared=facts.get('overrides_cleared'), signals_observed=not facts.get('public'),
+                             host_lost=bool(run.get('kill_host_at_tick'))))
     owners = sender_peers(facts['signals'], identities, names)
     write_json(root / 'signals-candidates.json', [dict(peer=owners[sender], sender=sender, candidates=[
         f'{address}:{port} {kind}' for address, port, kind in signal_candidates(payload)],
@@ -1595,6 +2049,8 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
     builds = edith_cross.pair_build_evidence(root, dict(source_sha=next(iter({value['head'] for value in facts['identities'].values()}))), records)
     rtts = transport_rtts(host_log)
     judged = run.get('timing_peers') or hash_peers
+    spikes = observed_input_spikes(host_log, edith_cross.find_key(reports.get('host') or {}, 'sim_tick_ms'),
+                                   edith_cross.find_key(reports.get('host') or {}, 'slow_player_bound_ticks'))
     sanitize = facts['sanitize']
     minted = facts.get('minted') or []
     clocks = {}
@@ -1612,7 +2068,7 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
 
     def registrants():
         addresses = sorted({address for entry in relay['peers'].values() for address in entry.get('relay_addresses') or []})
-        registry.extend(registrant(address) for address in addresses)
+        registry.extend(registrants_of(addresses))
         return bool(registry) and all(row.get('cloudflare') for row in registry)
 
     def peer_check(key):
@@ -1625,6 +2081,9 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
             return detail(key, tunnel_receipt(rows if isinstance(rows, list) else [], [name]))
         if kind == 'panel':
             return detail(key, panel_verdict(read_json(root / f'{name}-panel' / 'net-ui-result.json') or None))
+        if kind == 'route_history':
+            watch = (read_json(root / f'{name}-panel' / 'net-ui-result.json') or {}).get('route_watch')
+            return detail(key, route_history(logs.get(name, ''), session, connections.get(name) if isinstance(connections.get(name), dict) else None, watch))
         if kind == 'menu_choice':
             return detail(key, menu_choice(logs.get(name, ''), peer.get('menu_choice', 'Relay only'), session) if session
                           else dict(passed=False, reasons=['no session to bind the choice to']))
@@ -1640,10 +2099,20 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
             clocks={name: clocks.get(box_of[name]) for name in relayed}, session=session))
 
     def seat_holds_check():
-        summary = ((reports.get('host') or {}).get('last_match') or {}).get('peers') or []
+        # The service writes its match summary under 'service' (the e2e report); an older report had it at the top.
+        last_match = next((found for found in (edith_cross.find_key(reports.get(name) or {}, 'last_match') for name in summary_writers(run, logs))
+                           if isinstance(found, dict)), None)
+        summary = (last_match if isinstance(last_match, dict) else {}).get('peers') or []
         named = [dict(row, name=next((peer['name'] for peer in run['peers'] if display_name(run, peer) == row.get('name')), row.get('name')))
                  for row in summary]
         return detail('seat_holds', seat_holds(named, set(run.get('holds_allowed') or []), set(names)))
+
+    def feel_around_loss_check():
+        from feel.retained_resume import read_live_hashes
+        boundary = migration_declarations(logs, hash_peers, session, {peer['name']: display_name(run, peer) for peer in run['peers']}, last_ticks)['boundary']
+        verdicts = {name: feel_around_loss(read_live_hashes(root / f'{name}-live.jsonl'), logs.get(name, ''), boundary, ticks) for name in judged}
+        return detail('feel_around_loss', dict(passed=bool(verdicts) and all(row['passed'] for row in verdicts.values()),
+                                               reasons=[f'{name}: {reason}' for name, row in verdicts.items() for reason in row['reasons']], peers=verdicts))
 
     def listing():
         listed = (read_json(root / f'{joiner}-listed.json') or {}).get('session_id') == session
@@ -1664,7 +2133,7 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         'hashes_equal': lambda: bool(live) and mismatched == 0 and trace_pass is not False and covered and all(
             value >= ticks - int(run.get('kill_host_at_tick') or 0) for value in compared.values()),
         'holds': lambda: all(peers[name]['holds'] == 0 for name in judged),
-        'feel_bars': lambda: all(feel_bars(timing, name)['passed'] for name in judged),
+        'feel_bars': lambda: all(feel_bars(timing, name, logs.get(name, ''), spikes, ticks)['passed'] for name in judged),
         'relay': lambda: relay['passed'],
         'route_receipts': lambda: relay['receipts_complete'],
         'endpoint': lambda: relay['endpoint'],
@@ -1677,8 +2146,7 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         'offer_fresh': lambda: bool(relay['offer_fresh']),
         'direct_expected': lambda: bool(relay['direct_as_expected']),
         'provider_201': lambda: bool(facts['provider_calls']) and all(call['status'] == 201 for call in facts['provider_calls']),
-        'logins_revoked': lambda: bool(facts['revokes']) and len(facts['revokes']) == len({row['username'] for row in minted})
-                                  and all(status == 204 for status in facts['revokes']),
+        'logins_revoked': lambda: revoked_every_login(minted, facts['revokes'], facts['ended_epoch']),
         'logins_short_lived': short_lived,
         'relay_registrant': registrants,
         'menu_entered': lambda: detail('menu_entered', menu_choice(logs.get('host', ''), 'Relay only', session) if session
@@ -1687,6 +2155,7 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         'renewal': renewal,
         'migration': lambda: detail('migration', migration_declarations(
             logs, hash_peers, session, {peer['name']: display_name(run, peer) for peer in run['peers']}, last_ticks)),
+        'feel_around_loss': feel_around_loss_check,
         'listing': listing,
         'seat_holds': seat_holds_check,
     }
@@ -1696,7 +2165,7 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         checks[name] = bool(producer()) if producer else False  # a check the run cannot produce fails
     if 'pair_blanked' in required:
         details['pair_on_disk'] = dict(passed=True, files=[(row['box'], row.get('hits_before')) for row in sanitize])
-    details.update({f'feel:{name}': feel_bars(timing, name) for name in judged})
+    details.update({f'feel:{name}': feel_bars(timing, name, logs.get(name, ''), spikes, ticks) for name in judged})
     details['history'] = dict(contiguous=contiguous, covered=covered, compared=compared)
     passed = all(checks.values())
     verdict = dict(name=run['name'], scenario=scenario['name'], relay=run['relay'], root=str(root), passed=passed, checks=checks,
@@ -1713,6 +2182,59 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         f'sanitize={[(row["box"], row["status"], row.get("hits_before"), row.get("hits_after")) for row in sanitize]} '
         f'relay_reasons={relay["reasons"][:3]}')
     return verdict
+
+
+def feel_around_loss(live_rows: list[dict], log: str, boundary: int | None, final_tick: int, tick_ms: float = 1000 / 60, warmup: int = 300) -> dict:
+    """A survivor's feel through a host loss (ROLLBACK 3.1.2: the host itself falling silent is host migration, measured on
+    its own): the feel driver's bars on the steady window before the loss and on the one after the successor runs, each past
+    the driver's own 300-tick warmup, and the pause between them reported. Bars: 59.5 tps, under 1 % waiting, no wait over
+    50 ms, a confirmed horizon lag of 50 ms at most."""
+    from feel.report import reduce_net_window
+    if boundary is None:
+        return dict(passed=False, reasons=['no handover boundary'], windows={})
+    committed = [dict(tick=row['tick'], wall_ms=row['wall_ms']) for row in live_rows if isinstance(row.get('tick'), int) and 'wall_ms' in row]
+    waits = [dict(tick=int(tick), wait_ms=int(ms)) for tick, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', log)]
+    windows, reasons = {}, []
+    losses, matched, pending = [], [], None
+    for line in log.splitlines():
+        if loss := re.match(r'\[net-match\] host lost; collecting surviving peers at applied frame (\d+)', line):
+            pending = dict(frame=int(loss.group(1)), evidence=line)
+            losses.append(pending)
+        elif declaration := re.match(r'\[net-match\] Host left - .*; boundary=(\d+)', line):
+            if int(declaration.group(1)) == boundary and pending:
+                matched.append(dict(pending, declaration=line))
+            pending = None
+    proof = matched[0] if len(matched) == 1 else losses[0] if not matched and len(losses) == 1 else None
+    if not proof or not warmup <= proof['frame'] <= boundary:
+        return dict(passed=False, reasons=['no unambiguous host-loss record for this succession'], windows={})
+    before_end = proof['frame']
+    by_tick = {row['tick']: row['wall_ms'] for row in committed}
+    after_loss = min((tick for tick in by_tick if tick > before_end), default=None)
+    pause = by_tick[after_loss] - by_tick[before_end] if after_loss is not None and before_end in by_tick else None
+    at = before_end
+    for name, first, last in (('before', warmup, before_end), ('after', boundary + warmup, final_tick)):
+        if last - first < 60:
+            reasons.append(f'the {name} window {first}..{last} is shorter than a second')
+            continue
+        window = reduce_net_window(committed, waits, first, last, tick_ms)
+        windows[name] = window
+        failed = [label for label, bad in (('incomplete', not window['complete']),
+                                           ('tps', (window['steady_wall_tps'] or 0) < 59.5),
+                                           ('waiting', window['waiting_percent'] is None or window['waiting_percent'] >= 1),
+                                           ('longest wait', window['longest_stall_ms'] is None or window['longest_stall_ms'] > 50),
+                                           ('horizon', window['confirmed_horizon_lag_ms'] is None or window['confirmed_horizon_lag_ms'] > 50)) if bad]
+        if failed:
+            reasons.append(f'the {name} window {first}..{last} fails {failed}: {json.dumps({k: window[k] for k in ("steady_wall_tps", "waiting_percent", "longest_stall_ms", "confirmed_horizon_lag_ms")})}')
+    return dict(passed=not reasons, reasons=reasons, windows=windows, pause_ms=pause, pause_after_tick=at, loss_evidence=proof)
+
+
+def revoked_every_login(minted: list[dict], statuses: list[int], ended_at: float) -> bool:
+    """Every login the run minted or observed was revoked (204), in the order the driver revoked them; a login whose own expiry
+    passed before the run ended is already gone, and Cloudflare answers its revoke 404."""
+    logins = list({row['username']: row for row in minted}.values())
+    return bool(statuses) and len(statuses) == len(logins) and all(
+        status == 204 or (status == 404 and isinstance(row.get('expires_at'), (int, float)) and row['expires_at'] <= ended_at)
+        for row, status in zip(logins, statuses))
 
 
 def pair_ttl_receipt(target, pair, secret: str, book, now=time.time, sleep=time.sleep, allocate=None) -> dict:
@@ -1741,8 +2263,8 @@ def pair_ttl_receipt(target, pair, secret: str, book, now=time.time, sleep=time.
 
 def directory_session(directory: dict, budget_s: float) -> dict | None:
     """The host's listing row: the lane directory's only row, or the public directory's row carrying the host's name."""
-    if directory.get('public'):
-        url, context = f'https://{PUBLIC_DIRECTORY}/v1/sessions', ssl.create_default_context()
+    if directory.get('public') or directory.get('host'):
+        url, context = f'https://{PUBLIC_DIRECTORY if directory.get("public") else directory["host"]}/v1/sessions', ssl.create_default_context()
     else:
         url, context = f'https://127.0.0.1:{directory["port"]}/v1/sessions', ssl.create_default_context(cafile=directory['cert'])
     deadline = time.monotonic() + budget_s
@@ -1915,10 +2437,11 @@ def forget_menu(menu: Path, log: Path, run, budget_s: float = 90) -> None:
 
 
 def evidence_list(root: Path, out: Path) -> int:
-    """The small files a run keeps (after its sweep): 8 MiB each at most; the sweep itself read everything."""
+    """The small files a run keeps (after its sweep): 8 MiB each at most, a long row's hash files 64 MiB; the sweep read everything."""
     from relay_secrets import walk
     files = [path.relative_to(root).as_posix() for path, reason in walk(root) if reason is None
-             and not path.name.lower().endswith(('.exe', '.dll', '.pdb', '.png', '.mp4', '.tar')) and path.stat().st_size <= 8 << 20
+             and not path.name.lower().endswith(('.exe', '.dll', '.pdb', '.png', '.mp4', '.tar'))
+             and path.stat().st_size <= (64 << 20 if path.name.endswith(('-live.jsonl', '_trace.json')) else 8 << 20)
              and 'Data' not in path.relative_to(root).parts[:-1]]
     out.write_text('\n'.join(files) + '\n', encoding='utf-8')
     print(json.dumps(dict(files=len(files))))
@@ -2050,6 +2573,8 @@ def main(argv=None) -> int:
                         help="the host records no replay (no -net-replay-out, NetworkRecordReplays off): an engine that persists the relay "
                              "login in its replay is told apart from every other file it writes")
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--directory', choices=('public', 'lane', 'tunnel'),
+                        help="every selected row meets this directory instead of its own (lane: the run's directory through each box's ssh -R)")
     parser.add_argument('--table', type=Path, nargs='+')
     parser.add_argument('--remote-peers')
     parser.add_argument('--evidence-list', type=Path)
@@ -2080,6 +2605,9 @@ def main(argv=None) -> int:
     boxes = load_boxes(trees, aliases)
     from relay_secrets import RETIRED_USERNAME_SCOPE, SecretBook
     book = REDACTOR = SecretBook()
+    for address in HOME.values():
+        book.add('owner-address', address)
+    book.add('owner-address', LANE_COTURN['address'])
     if RETIRED_FIXED_CONF.is_file():
         book.add_fixed_login(RETIRED_FIXED_CONF, RETIRED_USERNAME_SCOPE)  # its leak is still found; no run uses it
     out = options.out.resolve()
@@ -2093,6 +2621,13 @@ def main(argv=None) -> int:
         resolved = resolve_run(scenario, run, placement)
         if options.no_replay:
             resolved['record_replay'] = False
+        if options.directory:
+            resolved['directory'] = options.directory
+        # The lane directory is reached over the tailnet: a peer whose tunnel the row takes down could never list the session.
+        if resolved.get('directory') == 'lane' and any(peer.get('tailscale_down') for peer in resolved['peers']):
+            say(f'{run["name"]}: REFUSED: the lane directory is reached over the tailnet, and this row takes a peer\'s tunnel down')
+            verdicts.append(dict(name=run['name'], root=str(out / run['name']), passed=False, refused='lane directory with a tunnel taken down'))
+            continue
         ticks = options.ticks or int(run.get('ticks') or scenario.get('ticks') or MATCH_TICKS)
         try:
             verdicts.append(run_one(scenario, resolved, out, boxes, ticks, book))

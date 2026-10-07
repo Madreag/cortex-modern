@@ -67,6 +67,9 @@ namespace RTE {
 		/// Teardown: settles the in-flight request, polls once more and closes within c_DrainBudgetMs;
 		/// signals still queued are dropped.
 		void Drain();
+		/// Teardown without the last poll: the request in flight is cancelled and the channel closes at once; signals still
+		/// queued are dropped.
+		void Abandon();
 
 		State GetState() const { return m_State; }
 		const std::string& GetLocalPeer() const { return m_LocalPeer; }

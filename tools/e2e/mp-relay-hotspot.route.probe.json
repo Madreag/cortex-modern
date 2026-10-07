@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "timeout_ms": 180000,
+  "steps": [
+    {
+      "op": "wait",
+      "service": "Running",
+      "screen": "Gameplay"
+    },
+    {
+      "op": "finish_on_round_end",
+      "signals": [
+        "done"
+      ]
+    },
+    {
+      "op": "watch_route",
+      "control": "LabelNetMatchStatus",
+      "grace_ms": 2000
+    }
+  ]
+}

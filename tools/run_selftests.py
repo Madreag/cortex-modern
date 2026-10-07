@@ -35,6 +35,8 @@ SELFTESTS = [
     "net-identity",
     "net-session",
     "net-lockstep",
+    "net-input-acceptance",
+    "net-input-acceptance-steady",
     "net-lockstep-released-claims",
     "net-lockstep-release-paths",
     "net-lockstep-seat-succession",

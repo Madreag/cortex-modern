@@ -1,8 +1,10 @@
 #pragma once
 
 #include "NetTransport.h"
+#include "NetMatchConfig.h"
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -10,6 +12,30 @@ class ISteamNetworkingConnectionSignaling;
 class ISteamNetworkingSignalingRecvContext;
 
 namespace RTE {
+
+	/// How long an ICE connect may take to reach Connected: a relayed connect whose candidates cross a slow signalling path
+	/// outlasts GNS's 10 s default, while a dead session still fails inside it.
+	constexpr uint32_t c_IceConnectTimeoutMs = NetHostMigrationTimeouts::c_IceDialMs;
+
+	/// The route each connection last named in a receipt; a connection whose live route differs has moved.
+	class GnsRouteTracker {
+	public:
+		enum class Observation { First, Same, Moved };
+		Observation Observe(uint64_t connection, bool relayed) {
+			const auto [entry, inserted] = m_Relayed.try_emplace(connection, relayed);
+			if (inserted) return Observation::First;
+			if (entry->second == relayed) return Observation::Same;
+			entry->second = relayed;
+			return Observation::Moved;
+		}
+		void Forget(uint64_t connection) { m_Relayed.erase(connection); }
+		void Clear() { m_Relayed.clear(); }
+		/// The move a Moved observation of relayed reports.
+		static const char* MoveName(bool relayed) { return relayed ? "direct->relay" : "relay->direct"; }
+
+	private:
+		std::map<uint64_t, bool> m_Relayed;
+	};
 
 	/// ICE settings for the P2P entry points (the GNS k_ESteamNetworkingConfig_P2P_* values).
 	struct GnsP2PConfig {
@@ -105,6 +131,9 @@ namespace RTE {
 		/// Also hands a changed relay login to the TURN allocations of the live P2P connections.
 		void UpdateListenerIceServers(const GnsP2PConfig& config);
 		static bool ConnectionPolicyAllowsRoute(int mode, bool relayed) { return mode == 1 ? !relayed : mode != 2 || relayed; }
+		static std::string TurnHostReceipts(const std::string& servers);
+		/// The connect limit ICE connections run with: c_IceConnectTimeoutMs, or CC_TEST_ICE_CONNECT_TIMEOUT_MS when a measurement sets it.
+		static uint32_t IceConnectTimeoutMs();
 
 		static bool IsCompiledIn();
 
@@ -120,6 +149,8 @@ namespace RTE {
 		static void SetRendezvousLogLevel(int level);
 		/// Exercises the pre-announcement payload queue without opening a socket.
 		static bool PayloadHoldSelfTest(std::string* error = nullptr);
+		static void ObserveOutgoingLockstepFrame(uint64_t targetFrame);
+		static bool UplinkStallSelfTest(std::string* error = nullptr);
 
 	private:
 		struct Impl;

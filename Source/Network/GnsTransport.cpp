@@ -1,6 +1,7 @@
 #include "GnsTransport.h"
 #include "DiagnosticLine.h"
 #include "NetIceServers.h"
+#include "NetLobbyProtocol.h"
 #include "SettingsMan.h"
 #include "System.h"
 
@@ -32,7 +33,25 @@
 
 namespace RTE {
 	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
+	uint64_t NetLockstepSharedClockMs();
 	static std::atomic<uint64_t> s_CrossTransportResetMs{0};
+
+	std::string GnsTransport::TurnHostReceipts(const std::string& servers) {
+		std::istringstream input(servers);
+		std::string server, result;
+		while (std::getline(input, server, ',')) {
+			if (server.empty()) continue;
+			std::string host = server;
+			if (server.front() == '[') {
+				const auto end = server.find(']');
+				if (end == std::string::npos) return {};
+				host = server.substr(1, end - 1);
+			} else if (std::count(server.begin(), server.end(), ':') == 1) host = server.substr(0, server.find(':'));
+			if (!result.empty()) result += ',';
+			result += System::Sha256Hex(host.data(), host.size());
+		}
+		return result;
+	}
 
 	namespace {
 		void SetError(std::string* error, const std::string& message) {
@@ -45,6 +64,58 @@ namespace RTE {
 #ifdef CCCP_WITH_GNS
 
 	namespace {
+		struct UplinkStallConfig { uint64_t frame = 0, durationMs = 0; };
+		UplinkStallConfig ParseUplinkStall(const char* frame, const char* duration) {
+			const auto number = [](const char* text, uint64_t limit) {
+				if (!text || !*text) return uint64_t(0);
+				uint64_t value = 0;
+				for (const char* at = text; *at; ++at) {
+					if (*at < '0' || *at > '9' || value > limit / 10) return uint64_t(0);
+					value = value * 10 + static_cast<uint64_t>(*at - '0');
+					if (value > limit) return uint64_t(0);
+				}
+				return value;
+			};
+			UplinkStallConfig result{number(frame, 1000000), number(duration, 10000)};
+			return result.frame && result.durationMs ? result : UplinkStallConfig{};
+		}
+		const UplinkStallConfig& TestUplinkStallConfig() {
+			static const UplinkStallConfig config = [] {
+				const char* headless = std::getenv("CCCP_HEADLESS");
+				return headless && std::string_view(headless) == "1" ? ParseUplinkStall(std::getenv("CC_TEST_GNS_UPLINK_STALL_FRAME"), std::getenv("CC_TEST_GNS_UPLINK_STALL_MS")) : UplinkStallConfig{};
+			}();
+			return config;
+		}
+		float GlobalLoss(ESteamNetworkingConfigValue key) {
+			float value = 0; size_t size = sizeof(value); ESteamNetworkingConfigDataType type = k_ESteamNetworkingConfig_Float;
+			SteamNetworkingUtils()->GetConfigValue(key, k_ESteamNetworkingConfig_Global, 0, &type, &value, &size);
+			return value;
+		}
+		struct UplinkStall {
+			bool started = false, finished = false;
+			uint64_t firstMs = 0, untilMs = 0;
+			float previousLoss = 0;
+			bool NoteFrame(const UplinkStallConfig& config, uint64_t frame, uint64_t nowMs) {
+				if (started || config.durationMs == 0 || frame < config.frame) return false;
+				previousLoss = GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Send);
+				if (!SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, 100.0F)) return false;
+				started = true; firstMs = nowMs; untilMs = nowMs + config.durationMs;
+				DiagnosticLine() << "[test-uplink-stall] begin frame=" << frame << " duration_ms=" << config.durationMs << " send_loss=100 recv_loss=" << GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Recv)
+				                 << " clock_ms=" << NetLockstepSharedClockMs() << std::endl;
+				return true;
+			}
+			void Update(uint64_t nowMs) {
+				if (!started || finished) return;
+				if (nowMs < untilMs) { SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, 100.0F); return; }
+				if (!SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, previousLoss)) return;
+				finished = true;
+				DiagnosticLine() << "[test-uplink-stall] end elapsed_ms=" << nowMs - firstMs << " send_loss=" << previousLoss
+				                 << " clock_ms=" << NetLockstepSharedClockMs() << std::endl;
+			}
+		};
+		UplinkStall s_TestUplinkStall;
+		uint64_t UplinkStallClockMs() { return static_cast<uint64_t>(SteamNetworkingUtils()->GetLocalTimestamp() / 1000); }
+
 		struct SignalField { uint32_t number; uint8_t wire; uint64_t integer; std::string_view bytes; };
 		bool SignalFields(std::string_view bytes, std::vector<SignalField>& out) {
 			size_t cursor = 0;
@@ -381,6 +452,7 @@ namespace RTE {
 				SetError(error, "ICE route refused by the player's Connection setting");
 				return false;
 			}
+			s_TestUplinkStall.Update(UplinkStallClockMs());
 			const EResult result = m_Interface->SendMessageToConnection(
 				connectionIt->second,
 				bytes.data(),
@@ -397,7 +469,32 @@ namespace RTE {
 				return false;
 			}
 			m_BytesHandedOver[peerId] += bytes.size();
+			TraceLobbyDelivery(connectionIt->second, bytes, "sent");
 			return true;
+		}
+
+		void TraceLobbyDelivery(HSteamNetConnection connection, const std::vector<uint8_t>& bytes, const char* direction) {
+			// The header keeps frame sends out of the lobby decoder.
+			if (bytes.size() < NetLobbyProtocol::c_HeaderBytes || bytes.size() > NetLobbyProtocol::c_MaxStateChunkBytes + 128) return;
+			uint32_t magic = 0;
+			for (size_t i = 0; i < 4; ++i) magic |= static_cast<uint32_t>(bytes[i]) << (8 * i);
+			if (magic != NetLobbyProtocol::c_Magic) return;
+			const auto decoded = NetLobbyProtocol::Decode(bytes);
+			if (!decoded.ok || (!std::holds_alternative<NetLobbyStart>(decoded.message.payload) &&
+			    !std::holds_alternative<NetLobbyStateChunk>(decoded.message.payload) &&
+			    !(std::holds_alternative<NetLobbyConfigAck>(decoded.message.payload) && std::get<NetLobbyConfigAck>(decoded.message.payload).reason.starts_with("state:")))) return;
+			const auto nowUs = SteamNetworkingUtils()->GetLocalTimestamp();
+			auto& lastUs = m_LastDeliveryTraceUs[connection];
+			if (lastUs != 0 && nowUs - lastUs < 1000000) return;
+			lastUs = nowUs;
+			SteamNetConnectionRealTimeStatus_t status{};
+			if (m_Interface->GetConnectionRealTimeStatus(connection, &status, 0, nullptr) != k_EResultOK) return;
+			DiagnosticLine() << "[net-start-delivery] " << direction << " type=" << NetLobbyProtocol::MessageTypeName(NetLobbyProtocol::MessageTypeOf(decoded.message.payload))
+			                 << " bytes=" << bytes.size() << " connection=" << connection << " clock_ms=" << nowUs / 1000
+			                 << " pending_reliable=" << status.m_cbPendingReliable << " unacked_reliable=" << status.m_cbSentUnackedReliable
+			                 << " queue_ms=" << status.m_usecQueueTime / 1000 << " ping_ms=" << status.m_nPing
+			                 << " send_rate=" << status.m_nSendRateBytesPerSecond << " local_quality=" << status.m_flConnectionQualityLocal
+			                 << " remote_quality=" << status.m_flConnectionQualityRemote << std::endl;
 		}
 
 		// What the connection was holding when it refused. k_EResultLimitExceeded (25) means the
@@ -461,6 +558,7 @@ namespace RTE {
 		void Stop() {
 			m_RouteLogged.clear(); m_CandidateIdentities.clear(); m_CandidateTypes.clear();
 			m_ConnectionOffers.clear(); m_RouteReceipts.clear(); m_RelayOffer = "none";
+			m_RouteTracker.Clear(); m_DialedMs.clear();
 			m_Announced.clear(); m_HeldPackets.clear();
 			m_P2PMode = -1;
 			if (!m_Interface) {
@@ -501,17 +599,20 @@ namespace RTE {
 			m_NextPeerId = 1;
 			m_BytesHandedOver.clear();
 			m_LastDetailUs.clear();
+			m_LastDeliveryTraceUs.clear();
 			m_LiveTurnLogin.clear();
 			m_PendingEvents.clear();
 		}
 
 		std::vector<NetTransportEvent> PollEvents() {
 			if (m_Interface) {
+				s_TestUplinkStall.Update(UplinkStallClockMs());
 				// Drain delivered messages first: a close callback forgets the connection, which would
 				// drop a reject/goodbye that GNS already delivered alongside it.
 				PollIncomingMessages();
 				if (m_P2PMode >= 0) {
 					PollCallbacks();
+					NoteRouteChanges();
 					const auto connections = m_PeersByConnection;
 					for (const auto& [connection, peer] : connections) {
 						if (!RouteAllowed(connection)) RefuseRoute(connection);
@@ -606,6 +707,7 @@ namespace RTE {
 						LaneFromMessage(*message),
 						std::vector<uint8_t>(data, data + message->m_cbSize),
 						{}};
+					TraceLobbyDelivery(message->m_conn, received.bytes, "received");
 					// GNS decrypts a P2P peer's payload as soon as the rendezvous is done, which over a
 					// relay routinely beats our own Connected callback. Handing it up before the session
 					// has been told the peer exists loses it, so it waits behind that announcement.
@@ -629,7 +731,9 @@ namespace RTE {
 		}
 
 		mutable std::set<HSteamNetConnection> m_RouteLogged;
-		mutable std::map<HSteamNetConnection, std::string> m_RouteReceipts; //!< Each connection's [net-route] line.
+		mutable std::map<HSteamNetConnection, std::string> m_RouteReceipts; //!< Each connection's latest [net-route] line.
+		mutable GnsRouteTracker m_RouteTracker; //!< The route each receipt named, so a live change gets its own receipt.
+		std::map<HSteamNetConnection, uint64_t> m_DialedMs; //!< When each ICE connection was dialed or accepted.
 		std::map<HSteamNetConnection, std::string> m_ConnectionOffers; //!< The relay offer each connection's TURN lists came from.
 		std::string m_RelayOffer = "none"; //!< The offer a connection made or accepted now runs with.
 		std::map<uint32_t, std::string> m_CandidateIdentities;
@@ -642,20 +746,49 @@ namespace RTE {
 			const bool relayed = (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0;
 			const bool allowed = GnsTransport::ConnectionPolicyAllowsRoute(m_P2PMode, relayed);
 			if (m_RouteLogged.insert(connection).second) {
-				DiagnosticLine() << "[net-ice] selected candidate=" << CandidateType(info) << " connection=" << connection << std::endl;
-				// The endpoint in use (GNS reports none for a relayed route) and, for a relayed route, the TURN servers this connection
-				// runs with and the relay offer they came from.
-				char address[SteamNetworkingIPAddr::k_cchMaxString]{};
-				info.m_addrRemote.ToString(address, sizeof(address), true);
-				std::ostringstream line;
-				line << "[net-route] RouteAllowed route=" << (relayed ? "relay" : "direct") << " allowed=" << (allowed ? 1 : 0) << " connection=" << connection
-				     << " remote=" << (info.m_addrRemote.IsIPv6AllZeros() ? std::string("none") : std::string(address));
-				if (relayed) line << " turn=" << ConnectionConfigString(connection, k_ESteamNetworkingConfig_P2P_TURN_ServerList);
-				line << " offer=" << RouteOffer(connection, relayed);
-				m_RouteReceipts[connection] = line.str();
-				DiagnosticLine() << line.str() << std::endl;
+				m_RouteTracker.Observe(connection, relayed);
+				if (const auto dialed = m_DialedMs.find(connection); dialed != m_DialedMs.end()) {
+					DiagnosticLine() << "[net-ice] connected connection=" << connection << " after_ms=" << SteadyMs() - dialed->second << " route=" << (relayed ? "relay" : "direct") << std::endl;
+				}
+				WriteRouteReceipt(connection, info, relayed, allowed, nullptr);
 			}
 			return allowed;
+		}
+
+		static uint64_t SteadyMs() {
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		}
+
+		// Digests bind the relay to its offer without writing the player's addresses.
+		void WriteRouteReceipt(HSteamNetConnection connection, const SteamNetConnectionInfo_t& info, bool relayed, bool allowed, const char* change) const {
+			DiagnosticLine() << "[net-ice] selected candidate=" << CandidateType(info) << " connection=" << connection << std::endl;
+			char address[SteamNetworkingIPAddr::k_cchMaxString]{};
+			info.m_addrRemote.ToString(address, sizeof(address), true);
+			std::ostringstream line;
+			line << "[net-route] RouteAllowed route=" << (relayed ? "relay" : "direct") << " allowed=" << (allowed ? 1 : 0) << " connection=" << connection
+			     << " remote_sha256=" << (info.m_addrRemote.IsIPv6AllZeros() ? std::string("none") : System::Sha256Hex(address, std::char_traits<char>::length(address)));
+			if (relayed) line << " turn_sha256=" << TurnHostReceipts(ConnectionConfigString(connection, k_ESteamNetworkingConfig_P2P_TURN_ServerList));
+			line << " offer=" << RouteOffer(connection, relayed);
+			if (change) {
+				line << " change=" << change;
+				if (const auto dialed = m_DialedMs.find(connection); dialed != m_DialedMs.end()) line << " after_ms=" << SteadyMs() - dialed->second;
+			}
+			m_RouteReceipts[connection] = line.str();
+			DiagnosticLine() << line.str() << std::endl;
+		}
+
+		// ICE keeps testing candidate pairs after the first route, so a live connection can move between relay and direct.
+		void NoteRouteChanges() {
+			for (const auto& [connection, peer] : m_PeersByConnection) {
+				(void)peer;
+				if (!m_RouteLogged.contains(connection)) continue;
+				SteamNetConnectionInfo_t info{};
+				if (!m_Interface->GetConnectionInfo(connection, &info) || info.m_eState != k_ESteamNetworkingConnectionState_Connected) continue;
+				const bool relayed = (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0;
+				if (m_RouteTracker.Observe(connection, relayed) == GnsRouteTracker::Observation::Moved) {
+					WriteRouteReceipt(connection, info, relayed, GnsTransport::ConnectionPolicyAllowsRoute(m_P2PMode, relayed), GnsRouteTracker::MoveName(relayed));
+				}
+			}
 		}
 
 		// A direct route uses no relay offer, whatever login its connection holds.
@@ -741,6 +874,7 @@ namespace RTE {
 
 		void AcceptIncomingConnection(HSteamNetConnection connection) {
 			m_ConnectionOffers[connection] = m_RelayOffer;
+			if (m_P2PMode >= 0) m_DialedMs[connection] = SteadyMs();
 			if (m_Interface->AcceptConnection(connection) != k_EResultOK) {
 				m_Interface->CloseConnection(connection, 0, "accept failed", false);
 				m_PendingEvents.push_back({NetTransportEventType::TransportError, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "GNS AcceptConnection failed"});
@@ -782,6 +916,10 @@ namespace RTE {
 			}
 
 			const NetPeerId peerId = peerIt->second;
+			if (const auto dialed = m_DialedMs.find(connection); dialed != m_DialedMs.end() && !m_RouteLogged.contains(connection)) {
+				DiagnosticLine() << "[net-ice] connect ended connection=" << connection << " after_ms=" << SteadyMs() - dialed->second
+				                 << " limit_ms=" << GnsTransport::IceConnectTimeoutMs() << std::endl;
+			}
 			ForgetConnection(connection);
 			DiagnosticLine() << "[net-transport] closed peer=" << peerId << " reason=" << reason << std::endl;
 			m_PendingEvents.push_back({NetTransportEventType::PeerDisconnected, peerId, NetTransportLane::ControlReliable, {}, reason});
@@ -789,6 +927,8 @@ namespace RTE {
 
 		void ForgetConnection(HSteamNetConnection connection) {
 			m_RouteLogged.erase(connection);
+			m_RouteTracker.Forget(connection);
+			m_DialedMs.erase(connection);
 			m_ConnectionOffers.erase(connection);
 			m_RouteReceipts.erase(connection);
 			m_Announced.erase(connection);
@@ -801,6 +941,7 @@ namespace RTE {
 			}
 			s_ConnectionOwners.erase(connection);
 			m_LastDetailUs.erase(connection);
+			m_LastDeliveryTraceUs.erase(connection);
 			if (connection == m_ServerConnection) {
 				m_ServerConnection = k_HSteamNetConnection_Invalid;
 			}
@@ -901,6 +1042,7 @@ namespace RTE {
 					m_LiveTurnLogin = config.turnServerList + '\n' + config.turnUserList + '\n' + config.turnPassList;
 					m_RelayOffer = config.relayOffer;
 					m_ConnectionOffers[m_ServerConnection] = config.relayOffer;
+					m_DialedMs[m_ServerConnection] = SteadyMs();
 					return true;
 				}
 			}
@@ -1061,7 +1203,8 @@ namespace RTE {
 			m_RelayOffer = config.relayOffer;
 			if (m_ListenSocket == k_HSteamListenSocket_Invalid) return;
 			auto* utils = SteamNetworkingUtils();
-			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_Int32, &config.iceEnable);
+			const int32 iceEnable = GatheredIceEnable(config.iceEnable);
+			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_Int32, &iceEnable);
 			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_ServerList, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_String, config.turnServerList.c_str());
 			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_UserList, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_String, config.turnUserList.c_str());
 			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_PassList, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_String, config.turnPassList.c_str());
@@ -1084,6 +1227,13 @@ namespace RTE {
 			if (renewed > 0) DiagnosticLine() << "[net-relay] relay login renewed on " << renewed << " live connection(s)" << std::endl;
 		}
 
+		/// CC_TEST_ICE_GATHER_RELAY_ONLY=1 stands for a network no direct route can cross: this end offers relay candidates only, while
+		/// the player's Connection setting, and so the route policy, stays what it is.
+		static int32 GatheredIceEnable(int iceEnable) {
+			const char* lever = std::getenv("CC_TEST_ICE_GATHER_RELAY_ONLY");
+			return lever && std::string_view(lever) == "1" ? k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_Relay : iceEnable;
+		}
+
 		static std::vector<SteamNetworkingConfigValue_t> P2PConnectionConfigs(const GnsP2PConfig& config) {
 			GnsTransport::ApplyIceServers(config);
 			std::vector<SteamNetworkingConfigValue_t> connectionConfigs(11);
@@ -1093,12 +1243,15 @@ namespace RTE {
 			connectionConfigs[2].SetInt32(k_ESteamNetworkingConfig_SendRateMin, 2 * 1024 * 1024);
 			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, 32 * 1024 * 1024);
 			connectionConfigs[4].SetInt32(k_ESteamNetworkingConfig_TimeoutConnected, c_NetLinkTimeoutMs);
-			connectionConfigs[5].SetInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable, config.iceEnable);
+			connectionConfigs[5].SetInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable, GatheredIceEnable(config.iceEnable));
 			connectionConfigs[6].SetString(k_ESteamNetworkingConfig_P2P_STUN_ServerList, config.stunServerList.c_str());
 			connectionConfigs[7].SetInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Implementation, config.iceImplementation);
 			connectionConfigs[8].SetString(k_ESteamNetworkingConfig_P2P_TURN_ServerList, config.turnServerList.c_str());
 			connectionConfigs[9].SetString(k_ESteamNetworkingConfig_P2P_TURN_UserList, config.turnUserList.c_str());
 			connectionConfigs[10].SetString(k_ESteamNetworkingConfig_P2P_TURN_PassList, config.turnPassList.c_str());
+			// Candidates cross the directory before a route can be tried, so a relayed connect outlasts GNS's 10 s default.
+			connectionConfigs.emplace_back();
+			connectionConfigs.back().SetInt32(k_ESteamNetworkingConfig_TimeoutInitial, static_cast<int32>(GnsTransport::IceConnectTimeoutMs()));
 			if (config.rendezvousLogLevel > 0) {
 				connectionConfigs.emplace_back();
 				connectionConfigs.back().SetInt32(k_ESteamNetworkingConfig_LogLevel_P2PRendezvous, config.rendezvousLogLevel);
@@ -1196,6 +1349,7 @@ namespace RTE {
 		std::vector<NetTransportEvent> m_PendingEvents;
 		std::map<NetPeerId, uint64_t> m_BytesHandedOver; //!< What we actually gave the socket, to read the pending figure against.
 		std::map<HSteamNetConnection, SteamNetworkingMicroseconds> m_LastDetailUs; //!< When each connection last produced a detailed status.
+		std::map<HSteamNetConnection, SteamNetworkingMicroseconds> m_LastDeliveryTraceUs;
 		std::set<HSteamNetConnection> m_Announced; //!< Connections whose PeerConnected we have already handed up.
 		std::map<HSteamNetConnection, std::vector<NetTransportEvent>> m_HeldPackets; //!< Payloads GNS delivered before that.
 		std::string m_LiveTurnLogin; //!< The TURN server, user and password lists the live connections run with.
@@ -1439,6 +1593,15 @@ namespace RTE {
 #endif
 	}
 
+	uint32_t GnsTransport::IceConnectTimeoutMs() {
+		if (const char* lever = std::getenv("CC_TEST_ICE_CONNECT_TIMEOUT_MS"); lever && *lever) {
+			char* end = nullptr;
+			const unsigned long value = std::strtoul(lever, &end, 10);
+			if (end && *end == '\0' && value >= 1000 && value <= 600000) return static_cast<uint32_t>(value);
+		}
+		return c_IceConnectTimeoutMs;
+	}
+
 	void GnsTransport::UpdateListenerIceServers(const GnsP2PConfig& config) {
 		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 #ifdef CCCP_WITH_GNS
@@ -1579,6 +1742,44 @@ namespace RTE {
 		s_RendezvousLogLevel = level;
 #else
 		(void)level;
+#endif
+	}
+
+	void GnsTransport::ObserveOutgoingLockstepFrame(uint64_t targetFrame) {
+#ifdef CCCP_WITH_GNS
+		const auto& config = TestUplinkStallConfig();
+		if (config.durationMs == 0) return;
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
+		if (SteamNetworkingUtils()) s_TestUplinkStall.NoteFrame(config, targetFrame, UplinkStallClockMs());
+#else
+		(void)targetFrame;
+#endif
+	}
+
+	bool GnsTransport::UplinkStallSelfTest(std::string* error) {
+#ifdef CCCP_WITH_GNS
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
+		if (!AcquireGns(error)) return false;
+		bool passed = true;
+		const float send = GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Send), receive = GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Recv);
+		for (uint64_t duration : {300U, 800U}) {
+			UplinkStall test;
+			const UplinkStallConfig config{600, duration};
+			passed = passed && !test.NoteFrame({}, 600, 1000) && !test.NoteFrame(config, 599, 1000) && test.NoteFrame(config, 600, 1000);
+			test.Update(1000 + duration - 1);
+			passed = passed && GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Send) == 100.0F && GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Recv) == receive;
+			test.Update(1000 + duration);
+			passed = passed && test.finished && GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Send) == send && !test.NoteFrame(config, 600, 2000);
+		}
+		for (const auto& bad : {ParseUplinkStall(nullptr, "300"), ParseUplinkStall("600", nullptr), ParseUplinkStall("-1", "300"), ParseUplinkStall("600x", "300"), ParseUplinkStall("600", "10001")}) passed = passed && bad.durationMs == 0;
+		passed = passed && ParseUplinkStall("600", "300").durationMs == 300;
+		SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, send);
+		ReleaseGns();
+		if (!passed && error) *error = "the one-way stall changed receiving, failed its clock, or failed to restore sending";
+		return passed;
+#else
+		if (error) *error = "GameNetworkingSockets support is not compiled in";
+		return false;
 #endif
 	}
 

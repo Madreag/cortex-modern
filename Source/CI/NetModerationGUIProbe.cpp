@@ -10,6 +10,7 @@
 #include "GUIButton.h"
 #include "GUIFont.h"
 #include "GUILabel.h"
+#include "GnsTransport.h"
 #include "GUIListBox.h"
 #include "GUIInputWrapper.h"
 #include "MainMenuGUI.h"
@@ -444,6 +445,42 @@ namespace {
 		return value;
 	}
 
+	/// The route the transport holds now for this peer's connection to its host: GNS's live flag, not the panel's copy of it.
+	std::string LiveRoute() {
+		for (const GnsProcessConnection& connection: GnsTransport::GetProcessConnections()) {
+			if (connection.p2p && !connection.host && !connection.info.connectedRoute.empty()) return connection.info.connectedRoute;
+		}
+		return {};
+	}
+
+	/// "watch_route": every frame the panel's "via <route>" is read beside the transport's live route. A route that moved may take the
+	/// panel up to grace_ms (2000) to follow; past that, or a route other than "expect" when one is named, fails the script. Each move
+	/// of either is recorded with its time, so a run that moved shows the panel at both routes.
+	void WatchRoute(const Json& step) {
+		const std::string text = ReadControl(Control(step)).at("text").get<std::string>();
+		const size_t at = text.find(" via ");
+		std::string shown = at == std::string::npos ? std::string() : text.substr(at + 5);
+		shown = shown.substr(0, shown.find_first_of(" \n"));
+		const std::string live = LiveRoute();
+		const uint64_t now = NowMs();
+		Json& watch = probe.result["route_watch"];
+		if (!watch.is_object()) watch = {{"samples", 0}, {"moves", Json::array()}, {"live", live}, {"shown", shown}, {"live_since_ms", now}, {"first_ms", now}};
+		for (const auto& [what, value]: {std::pair<const char*, const std::string*>{"live", &live}, {"shown", &shown}}) {
+			if (watch[what] == *value) continue;
+			watch["moves"].push_back({{"at_ms", now}, {"what", what}, {"from", watch[what]}, {"to", *value}});
+			watch[what] = *value;
+			if (std::string(what) == "live") watch["live_since_ms"] = now;
+			System::PrintDiagnosticLine("[net-ui-probe] route " + std::string(what) + " -> " + *value + " at_ms=" + std::to_string(now));
+		}
+		watch["samples"] = watch["samples"].get<uint64_t>() + 1;
+		watch["last_ms"] = now;
+		const std::string expect = step.value("expect", "");
+		Require(!live.empty(), "the transport holds no live route to the host");
+		Require(expect.empty() || live == expect, "the transport's route is " + live + ", the script expects " + expect);
+		Require(shown == live || now - watch["live_since_ms"].get<uint64_t>() <= step.value("grace_ms", uint64_t{2000}),
+		        "the panel says via " + shown + " while the transport's route has been " + live + " for " + std::to_string(now - watch["live_since_ms"].get<uint64_t>()) + " ms");
+	}
+
 	void Push(SDL_Event& event) {
 		Require(SDL_PushEvent(&event), std::string("SDL_PushEvent: ") + SDL_GetError());
 	}
@@ -456,7 +493,7 @@ namespace {
 		}
 		if (op == "assert" || op == "assert_control" || op == "assert_editor" || op == "assert_net_ui_clear" ||
 		    op == "assert_buy" || op == "assert_pie" || op == "assert_window" ||
-		    op == "screenshot" || op == "screenshot_pair" || op == "finish") return Phase::Draw;
+		    op == "screenshot" || op == "screenshot_pair" || op == "finish" || op == "watch_route") return Phase::Draw;
 		if ((op == "key_down" || op == "key_up") && SimRateKey(step.value("key", ""))) return Phase::Sim;
 		return Phase::Poll;
 	}
@@ -978,6 +1015,10 @@ namespace {
 				(void)Leaf(name.get<std::string>());
 				probe.roundEndSignals.push_back(name.get<std::string>());
 			}
+		} else if (op == "watch_route") {
+			WatchRoute(step);
+			// It samples every frame until the round's end completes the script.
+			return false;
 		} else if (op == "wait_file") {
 			const std::string path = step.at("path").get<std::string>();
 			if (!std::filesystem::is_regular_file(path)) return false;

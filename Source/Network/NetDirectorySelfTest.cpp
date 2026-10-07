@@ -114,6 +114,7 @@ namespace RTE {
 			NetMatchRunner runner;
 			NetMatchRunnerConfig config;
 			config.matchConfig = NetMatchConfigUtil::MakeDefault(73);
+			config.matchConfig.inputDelayFrames = 1;
 			config.joinAddress = "session:capacity";
 			config.sessionWaitMs = 1000; config.lockstepWaitMs = 1000;
 			config.sessionConfig.p2pJoin.connect = [](INetTransport&, std::string* why) { if (why) *why = "ICE signaling queue is full"; return false; };
@@ -2342,6 +2343,21 @@ namespace RTE {
 					if (netMerged[1].joinable || netMerged[1].reason != "identity") {
 						note("identity-mismatch NET row joinable=" + std::to_string(netMerged[1].joinable) + " reason=\"" + netMerged[1].reason + "\", expected joinable=no reason=identity");
 					}
+					// A player cannot act on 'modules': the refusal says the game data differs, both digests and where to compare them.
+					if (netMerged[0].hostModuleManifestHash != kHex64A || netMerged[0].localModuleManifestHash != local.moduleManifestHash) {
+						note("modded-host NET row carried game data digests host=\"" + netMerged[0].hostModuleManifestHash + "\" local=\"" + netMerged[0].localModuleManifestHash + "\"");
+					}
+					const std::string refusal = NetDirectoryClient::JoinRefusalText(netMerged[0]);
+					const std::string opening = "Cannot join this game: your game data differs from the host's (yours " + local.moduleManifestHash.substr(0, 8) + ", the host's " + kHex64A.substr(0, 8) + ")";
+					if (refusal.rfind(opening, 0) != 0 || refusal.find("console") == std::string::npos || refusal.find("module_manifest") != std::string::npos) {
+						note("modded-host refusal read \"" + refusal + "\"");
+					}
+					if (NetDirectoryClient::JoinRefusalText(netMerged[0], true) != "Cannot join: game data differs - see the console (~)") {
+						note("modded-host brief refusal read \"" + NetDirectoryClient::JoinRefusalText(netMerged[0], true) + "\"");
+					}
+					if (NetDirectoryClient::JoinRefusalText(netMerged[1]) != "Cannot join this game: identity") {
+						note("identity-mismatch refusal read \"" + NetDirectoryClient::JoinRefusalText(netMerged[1]) + "\"");
+					}
 				}
 
 				// A v1 beacon carries no compatibility fields: the row must list but never be joinable.
@@ -3285,6 +3301,43 @@ namespace RTE {
 				std::cout << "[net-directory-selftest] signal drain: one more poll after=2 inside the 1000 ms interval took seq 3, then closed; the queued post was dropped" << std::endl;
 				return true;
 			}
+
+#if defined(CCCP_WITH_GNS) && (defined(_WIN32) || defined(__APPLE__) || defined(__linux__))
+			// A held seat's return drops its successor standby with the listener, on the simulation's thread.
+			bool TestMigrationStandbyClosesAtOnce(std::string* error) {
+				SocketHandle listener = c_InvalidSocket;
+				std::string url;
+				if (!OpenSilentListener(&listener, &url, error)) {
+					return false;
+				}
+				url.pop_back();
+				GnsTransport transport;
+				std::shared_ptr<GnsDirectorySignalDispatcher> standby = GnsDirectorySignalDispatcher::MakeMigrationStandby();
+				GnsDirectorySignalDispatcher::Config cfg;
+				cfg.role = GnsDirectorySignalDispatcher::Role::Host;
+				cfg.baseUrl = url;
+				cfg.installKey = "key0123456789abcd";
+				cfg.sessionId = kSignalSession;
+				cfg.sessionToken = "hostToken_0123456789";
+				if (!standby->Start(transport, cfg)) {
+					CloseSocket(listener);
+					*error = "migration standby: the host end would not open: " + standby->Channel().GetLastError();
+					return false;
+				}
+				standby->SetPolling(true, 0);
+				standby->Update(0);
+				const auto begin = std::chrono::steady_clock::now();
+				standby.reset();
+				const long long heldMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count();
+				CloseSocket(listener);
+				if (heldMs >= 500) {
+					*error = "migration standby: dropping a successor's host end with its poll in flight held the thread " + std::to_string(heldMs) + " ms";
+					return false;
+				}
+				std::cout << "[net-directory-selftest] migration standby: dropped with its poll in flight, closed in " << heldMs << " ms" << std::endl;
+				return true;
+			}
+#endif
 		}
 
 		int Run() {
@@ -3348,6 +3401,9 @@ namespace RTE {
 			if (!TestSignalPostBeforePoll(&error)) return fail(error);
 			if (!TestSignalNonceAndCredentials(&error)) return fail(error);
 			if (!TestSignalDrain(&error)) return fail(error);
+#if defined(CCCP_WITH_GNS) && (defined(_WIN32) || defined(__APPLE__) || defined(__linux__))
+			if (!TestMigrationStandbyClosesAtOnce(&error)) return fail(error);
+#endif
 #if defined(_WIN32) || defined(__APPLE__) || defined(__linux__)
 			if (!TestHttpClientCancel(&error)) return fail(error);
 #ifdef _WIN32

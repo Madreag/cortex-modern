@@ -560,6 +560,7 @@ namespace RTE {
 		uint32_t futureFrameDrops = 0;
 		uint32_t staleRoundPackets = 0;
 		uint32_t preStartBuffered = 0;
+		std::array<uint32_t, 33> arrivalLeadFrames{}; //!< Host: this sender's new inputs by the ticks they arrived ahead of need (32 = 32 or more).
 		uint32_t relayPacketsSent = 0; //!< Host: packets forwarded TO this peer.
 		uint32_t relaySendFailures = 0; //!< Host: forwards the transport refused for this peer.
 		uint32_t relayResends = 0; //!< Host: refused forwards a later retry did deliver.
@@ -693,6 +694,7 @@ namespace RTE {
 		static constexpr uint32_t c_Magic = 0x334C4343U;
 		/// Version 39 carries each seat's device class in the start and the agreed-start record; admission refuses a peer below it.
 		static constexpr uint16_t c_Version = 39;
+		static constexpr uint16_t c_AdmissionVersion = 46; //!< Admission requires cumulative input acceptance and committed succession grants.
 		static constexpr uint16_t c_WorldVersion = 39;
 		static constexpr uint16_t c_SeatDeviceVersion = 39;
 		/// Version 37 carries input frames on the unreliable lane: a window reaches back a round trip, and a tick that
@@ -1260,9 +1262,13 @@ namespace RTE {
 		std::string GetMigrationAddress() const { NET_PLANE_CHECK(); return m_MigrationAddress; }
 		/// A handover endpoint entry that names the listener's ICE route: this prefix and the listener's GNS identity.
 		static constexpr std::string_view c_MigrationIcePrefix = "ice:";
-		/// How long a survivor gives an ICE dial to the successor: candidates are gathered and traded through the directory first.
-		static constexpr uint64_t c_MigrationIceDialMs = 8000;
+		/// The successor's step when its roster answers through ICE: candidates are gathered and traded through the directory first.
+		static constexpr uint64_t c_MigrationIceStepMs = NetHostMigrationTimeouts::c_IceStepMs;
+		/// How long a survivor gives an ICE dial to the successor: a relayed one can take most of the ICE connect limit.
+		static constexpr uint64_t c_MigrationIceDialMs = NetHostMigrationTimeouts::c_IceDialMs;
 		static bool IsMigrationIceEndpoint(const std::string& address) { return address.starts_with(c_MigrationIcePrefix); }
+		/// Whether a survivor gives up its dial of the successor at this address after elapsedMs: an ICE dial runs to its own limit.
+		static bool MigrationDialSpent(const std::string& address, uint64_t elapsedMs, uint64_t stepMs) { return elapsedMs >= (IsMigrationIceEndpoint(address) ? c_MigrationIceDialMs : stepMs); }
 		/// What a peer publishes for its handover listener, in ICE order: its LAN address (the host candidate a direct dial
 		/// reaches), then, when the match's links run through the session directory, its ICE route, whose rendezvous offers
 		/// the listener's host, server-reflexive (STUN) and relay (TURN) candidates.
@@ -1415,6 +1421,7 @@ namespace RTE {
 		friend bool TestAParkCoversTheBoxsSlowCaptures(std::string* error);
 		friend bool TestALateStartsReclaimIsRetriedUntilAdmitted(std::string* error);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
+		friend class NetLockstepSelfTest;
 		friend bool TestAReturnCopyKeepsTheCommittedObservations(std::string* error);
 		friend bool TestOldSeatTransitionsAreLetGo(std::string* error);
 		friend bool TestOldHoldDecisionsGoBelowTheReturnFloor(std::string* error);
@@ -1449,6 +1456,8 @@ namespace RTE {
 		friend bool TestAReadyFrameKeepsItsLocalInputForThePreview(std::string* error);
 		friend bool TestAFeedingSeatIsNotHeldForLateness(std::string* error);
 		friend bool TestAReturnRebuildsArrivalSlack(std::string* error);
+		friend bool TestALinksSilenceKeepsItsCover(std::string* error);
+		friend bool TestAHeldSeatsSilenceCarriesItsReturn(std::string* error);
 		friend bool TestReturnFramesBypassReliableLoss(std::string* error);
 		friend bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error);
 		friend bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);
@@ -1504,8 +1513,9 @@ namespace RTE {
 		/// A side without the quorum hosts nothing: its seat is held by whoever hosts, and it returns later.
 		void StopHostUnreachable();
 		uint64_t MigrationStepBudgetMs() const;
+		NetHostMigrationTimeouts MigrationTimeouts() const;
 		/// How long a survivor waits on its dial to the successor before it dials the next entry.
-		uint64_t MigrationDialPatienceMs() const { return IsMigrationIceEndpoint(m_MigrationAddress) ? c_MigrationIceDialMs : 250; }
+		uint64_t MigrationDialPatienceMs() const { return IsMigrationIceEndpoint(m_MigrationAddress) ? c_MigrationIceDialMs : NetHostMigrationTimeouts::c_RetryMs; }
 		bool HoldsLiveMigrationCandidate(uint64_t nowMs, uint64_t budget) const;
 		void PublishMigrationPlan(uint64_t nowMs);
 		void CompleteHostMigration(uint64_t nowMs);
@@ -1578,6 +1588,9 @@ namespace RTE {
 		void AdvertiseFrameWindow();
 		void HandleAck(const NetLockstepAck& ack, NetPeerId fromTransport);
 		void AcknowledgeAcceptedInput(uint8_t peerId, uint64_t frame);
+		void SeedInputAcceptance(uint8_t peerId, uint64_t firstInputFrame);
+		void SendInputAcceptance(uint8_t peerId);
+		bool LocalInputAccepted(uint64_t frame) const;
 		bool FrameWindowAllRemotesAdvertised() const;
 		bool FrameWindowAgreedFor(uint8_t peerId) const;
 		uint8_t ConfiguredWindowTicks() const;
@@ -1796,6 +1809,7 @@ namespace RTE {
 			uint64_t ms = 0; //!< When the input arrived.
 			uint64_t frame = 0; //!< The frame it was for.
 			uint64_t lead = 0; //!< Frames it arrived ahead of our sim's next tick.
+			uint64_t simNext = 0; //!< Our sim's next tick when it arrived; 0 when not measured.
 		};
 		std::map<uint8_t, std::deque<ArrivalLead>> m_ArrivalLeads; //!< Per remote sender, the recent arrivals of its new input.
 		std::map<uint8_t, std::deque<uint32_t>> m_ArrivalLateness; //!< Per remote sender, how long its recent ticks landed after we first missed them.
@@ -1806,6 +1820,11 @@ namespace RTE {
 		/// The rise a live delay change makes so the sender's inputs keep the slow-player bound's worth of lead: what the least lead over the last
 		/// window lacked, never past the bound above the delay the link's round trip requires.
 		std::optional<uint16_t> MarginKeepingIncrease(uint8_t peerId, uint16_t current, uint32_t required, uint64_t nowMs) const;
+		/// Records, for the sender's delay to carry, how long its stream fell silent between its previous new input and this one.
+		void NoteStreamSilence(uint8_t senderPeerId, const ArrivalLead& previous, uint64_t targetFrame, uint64_t simNext, uint64_t nowMs);
+		void ObserveHostInputSilence(uint64_t nowMs);
+		void EndHostInputSilence(uint8_t senderPeerId, uint64_t nowMs);
+		uint64_t HostInputSilenceMs(uint8_t senderPeerId, uint64_t firstMs, uint64_t lastMs) const;
 		/// Whether the blip test lever drops this unreliable frame send.
 		bool TestBlipDropsFrameSend(uint64_t targetFrame);
 		static constexpr uint64_t c_MarginWindowMs = 1000; //!< The arrivals a rise is judged over: short, so it lands before a spike finds the seat.
@@ -1910,6 +1929,18 @@ namespace RTE {
 		uint64_t m_LastQueuedTargetFrame = UINT64_MAX; //!< Highest produced target frame; UINT64_MAX until the first queue.
 		std::set<uint64_t> m_ObservationEpochs;        //!< Every announced frame senders spell their keys out from again.
 		std::set<uint64_t> m_HostAcceptedLocalFrames;
+		struct InputAcceptance {
+			uint64_t nextFrame = 0;
+			uint32_t incarnation = 1;
+			std::set<uint64_t> ahead;
+		};
+		std::map<uint8_t, InputAcceptance> m_InputAcceptance;
+		uint64_t m_LastInputAcceptanceSendMs = 0;
+		uint64_t m_InputAcceptanceWaits = 0;
+		std::optional<uint64_t> m_LastInputAcceptanceWait;
+		std::map<int64_t, uint64_t> m_InputAcceptanceLeadFrames;
+		uint64_t m_InputAcceptanceReceipts = 0;
+		std::map<std::string, uint64_t> m_InputAcceptanceRejections;
 		std::map<uint8_t, uint64_t> m_ObservationEpochApplied; //!< sender -> the newest epoch its encode table was reset at.
 		size_t m_LastAdmissionReplayFrames = 0;        //!< What the last admission replayed, for the report.
 		std::function<void(const NetTransportEvent&)> m_SessionEventSink; //!< Forwards session traffic (reconnect handshakes) mid-match.
@@ -2014,6 +2045,10 @@ namespace RTE {
 		uint64_t m_AuthorityLastHeardMs = 0;
 		uint64_t m_LastLivenessMs = 0; //!< Host: when it last told its clients it is alive while its round waited.
 		std::map<uint8_t, std::pair<NetPeerId, uint64_t>> m_HeldPeerLinks; //!< Host: each held seat's link it still talks on, and when the hold took it.
+		std::set<uint8_t> m_SilenceUnmeasured; //!< Host: seats held for going silent whose next input has not landed: it measures that silence.
+		struct HostInputSilence { uint64_t firstMs, lastMs; std::set<uint8_t> peers; };
+		std::deque<HostInputSilence> m_HostInputSilences;
+		std::optional<HostInputSilence> m_OpenHostInputSilence;
 		std::map<uint8_t, NetPeerId> m_ReturningLinks; //!< Host: the new link each held seat's player came back on, until it closes.
 		uint64_t m_LastHeldLinkMs = 0; //!< Host: when it last told its held seats it is alive.
 		uint64_t m_LastReliableWindowAliveMs = 0; //!< Host: when it last told the seats reading its frames on the reliable lane it is alive.

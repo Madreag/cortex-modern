@@ -5506,6 +5506,7 @@ void MainMenuGUI::RefreshGamesList() {
 			local.sessionIdentityHash = NetIdentity::HashHex(manifest.sessionIdentityHash);
 			local.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
 			m_DirectoryIdentity = local;
+			m_DirectoryManifest = manifest;
 		}
 		if (worldBuilt) {
 			NetDirectoryLocalIdentity worldLocal;

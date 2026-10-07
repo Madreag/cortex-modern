@@ -1891,7 +1891,9 @@ namespace RTE::MenuAutomation {
 			const uint64_t round = ScenarioRunner::GetLockstepRoundId();
 			if (path.empty() || !FrameRecorder::Instance().Enabled() || snapshot.serviceState != "Running" || !round) return false;
 			const Json identity = {{"schema", 1}, {"match_id", g_NetMatchService.GetAutosaveMatchId()}, {"session_id", config.sessionId},
-				{"round", round}, {"config_hash", NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config))}, {"peer_id", snapshot.localPeerId}, {"host", snapshot.isHost}};
+				{"round", round}, {"config_hash", NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config))}, {"peer_id", snapshot.localPeerId}, {"host", snapshot.isHost},
+				{"applied_frame", ScenarioRunner::GetLockstepAppliedFrame()}, {"completed_frame", ScenarioRunner::GetLockstepCompletedFrame()},
+				{"config", Json::parse(NetMatchConfigUtil::BuildReportJson(config))}};
 			std::ofstream output(path);
 			output << identity.dump(2) << '\n';
 			observation = identity.dump();

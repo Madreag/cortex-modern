@@ -879,6 +879,11 @@ namespace RTE {
 		// The handshake and the round must feed the coordinator ONE clock, or its per-peer liveness
 		// and retransmit timers see time run backwards at the handoff into the sim loop.
 		const uint64_t startMs = NetLockstepNowMs();
+		const uint64_t sessionBaseMs = session ? session->GetClockMs() : 0;
+		DiagnosticLine() << "[net-match] round start handshake host=" << m_Config.host << " lobby=" << m_UseLobbyProtocol
+		                 << " clock_ms=" << startMs << " session_ms=" << sessionBaseMs
+		                 << " lobby_state=" << static_cast<int>(m_Lobby.GetState()) << " peers=" << static_cast<int>(coordinator.GetConfig().peerCount)
+		                 << " routes=" << coordinator.GetConfig().remoteTransportPeerIds.size() << std::endl;
 		while (!coordinator.IsRunning()) {
 			if (m_Config.cancelRequested && m_Config.cancelRequested->load()) {
 				SetFailed("match setup canceled");
@@ -887,7 +892,11 @@ namespace RTE {
 			}
 			const uint64_t nowMs = NetLockstepNowMs();
 			coordinator.Tick(nowMs);
-			if (session) DeliverSessionTraffic(*session, m_Config.nowMs ? m_Config.nowMs() : session->GetClockMs());
+			if (session) {
+				const uint64_t sessionMs = m_Config.nowMs ? m_Config.nowMs() : sessionBaseMs + nowMs - startMs;
+				DeliverSessionTraffic(*session, sessionMs);
+				session->TickKeepalive(sessionMs);
+			}
 			if (coordinator.IsFailed() || coordinator.IsStopped()) {
 				m_HostLostDuringSetup = !m_Config.host && coordinator.GetStats().timeoutReason.starts_with("PeerDisconnected:");
 				SetFailed(coordinator.GetStats().timeoutReason);
@@ -900,9 +909,16 @@ namespace RTE {
 				return true;
 			}
 			if (nowMs - startMs > maxWaitMs) {
+				DiagnosticLine() << "[net-match] round start timeout lobby_sent=" << m_Lobby.GetStats().startPacketsSent
+				                 << " clock_ms=" << nowMs << " session_ms=" << (session ? session->GetClockMs() : 0)
+				                 << " lobby_received=" << m_Lobby.GetStats().startPacketsReceived << " round_received=" << coordinator.GetStats().startPacketsReceived << std::endl;
 				m_HostLostDuringSetup = !m_Config.host;
 				SetFailed("timed out waiting for lockstep start");
 				if (error) *error = m_SetupError;
+				return false;
+			}
+			if (m_UseLobbyProtocol && m_Config.host && !m_Lobby.RepeatStartIfDue(nowMs - startMs, error)) {
+				SetFailed(error ? *error : "could not repeat the lobby start");
 				return false;
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));

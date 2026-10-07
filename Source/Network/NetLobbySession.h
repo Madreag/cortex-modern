@@ -155,6 +155,8 @@ namespace RTE {
 		bool IsOccupancyComplete() const { return m_State != NetLobbyState::Idle && HasRequiredOccupancy(); }
 		/// Client: whether the host's new setup took back this player's Ready since the last call.
 		bool TakeReadyClearedBySetup() { return std::exchange(m_ReadyClearedBySetup, false); }
+		// The coordinator owns the queue after Start; repeat the agreed start until its peers answer.
+		bool RepeatStartIfDue(uint64_t elapsedMs, std::string* error);
 
 		/// Host: adopts an accepted host-options draft as this round's next configuration revision and
 		/// republishes it to every peer. Every ack and readiness is reset, so the hash-checked Start
@@ -296,6 +298,8 @@ namespace RTE {
 		void HandleSeatAssign(const NetLobbySeatAssign& message);
 		void SendSeatAssign(uint8_t peerId);
 		void RestartStateTransfer();
+		bool HasUnreceivedStartState() const;
+		void SendStateReceiptIfDue(uint64_t nowMs);
 		/// Takes the free pump for the next waiting joiner image. Returns whether one started.
 		bool StartNextQueuedStateTransfer();
 		void SendQueuedStateChunks();
@@ -330,6 +334,7 @@ namespace RTE {
 		NetHash32 m_MatchConfigHash{};
 		uint64_t m_StartFrame = 0;
 		uint64_t m_LastConfigSentMs = 0;
+		uint64_t m_LastStartRepeatMs = 0;
 		uint64_t m_LastPeerStateSentMs = 0;
 		uint64_t m_LastReceiveMs = 0;
 		uint64_t m_LastStartWaitLogMs = 0;
@@ -364,6 +369,11 @@ namespace RTE {
 		std::map<uint8_t, uint16_t> m_OutgoingChunkIndexByPeer; //!< Next chunk each remote still needs.
 		std::vector<std::pair<uint8_t, std::vector<uint8_t>>> m_QueuedStateTransfers; //!< Joiner images waiting for the pump.
 		uint16_t m_OutgoingChunkCount = 0;
+		bool m_StateReceiptRequired = false;
+		static constexpr uint32_t c_StateFlightChunks = 4;
+		std::map<uint8_t, uint16_t> m_ReceivedChunkCountByPeer;
+		std::optional<NetLobbyConfigAck> m_IncomingStateReceipt;
+		uint64_t m_LastStateReceiptSentMs = UINT64_MAX;
 		uint32_t m_ChunkSendStall = 0; //!< Consecutive ticks the transport refused a chunk (backpressure).
 		std::set<uint8_t> m_StartSentTo; //!< Remotes this round's Start reached while a congested one still waits for it.
 		uint32_t m_StartSendStall = 0; //!< Consecutive ticks the transport refused the Start as congested.

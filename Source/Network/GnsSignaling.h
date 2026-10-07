@@ -136,10 +136,13 @@ namespace RTE {
 		// Every poll spends the service's per-key request budget, so polling is armed only during a rendezvous.
 		void SetPolling(bool armed, uint64_t nowMs);
 		void Update(uint64_t nowMs);
+		/// Without a drain the channel closes at once and drops what it holds.
+		void Stop(bool drain = true);
+		/// The host end a successor opens for its ICE route while its match runs, dropped with the listener that pumps it.
+		static std::shared_ptr<GnsDirectorySignalDispatcher> MakeMigrationStandby();
 		/// Host: points the channel at the row the directory re-registered, keeping the joiners' signaling and the poll arming. Call
 		/// from the thread that runs Update.
 		void RebindHost(const std::string& sessionId, const std::string& sessionToken);
-		void Stop();
 
 		static std::string HostIdentity(const std::string& sessionId);
 		static std::string JoinerIdentity(const std::string& joinNonce);

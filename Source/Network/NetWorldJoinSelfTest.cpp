@@ -2069,6 +2069,7 @@ namespace RTE {
 			NetMatchRunnerConfig config;
 			config.host = true;
 			config.matchConfig = MakeWorldConfig();
+			config.matchConfig.inputDelayFrames = 1;
 			config.useLobbyProtocol = false;
 			config.sessionConfig = MakeWorldSessionConfig(port, 0x11ULL, "World");
 			config.sessionWaitMs = 2000;
@@ -2138,6 +2139,7 @@ namespace RTE {
 			joinerConfig.peerCount = config.matchConfig.peerCount;
 			joinerConfig.timeoutMs = 1000000;
 			joinerConfig.startFrame = e;
+			joinerConfig.inputDelayFrames = config.matchConfig.inputDelayFrames;
 			joinerConfig.matchConfig = config.matchConfig;
 			joinerConfig.scenario = config.scenario;
 			joinerConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(config.matchConfig.ownershipPolicy);
@@ -3682,7 +3684,7 @@ namespace RTE {
 		for (int still = 0, polls = 0; still < 3 && polls < 2000; ++polls) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(5));
 			const NetWorldFrameLog::JournalStats next = log.GetJournalStats();
-			still = next.bytes == stats.bytes && next.files == stats.files ? still + 1 : 0;
+			still = next.pendingJobs == 0 && next.bytes == stats.bytes && next.files == stats.files && next.indexBytes == stats.indexBytes ? still + 1 : 0;
 			stats = next;
 		}
 		return stats;
