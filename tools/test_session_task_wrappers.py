@@ -64,25 +64,25 @@ class SessionWrapperTests(unittest.TestCase):
             self.assertEqual(box.catalog_slot()['task'], 'chosen')
 
     def test_preserved_direct_start_refuses_foreign_wrapper_before_shipping(self):
-        box = remote.RemoteBox('saved-alias', task='fake-task', preserve_runner=False)
+        box = remote.RemoteBox('saved-alias', preserve_runner=False)
         slot = dict(task=box.task, wrapper=box.session_script, payload='command.ps1',
                     owner_marker='payload-owner.json', preserve_runner=True, box_name='NAMED')
         with patch.object(box, 'catalog_slot', return_value=slot), \
              patch.object(box, 'wait_task_idle'), patch.object(box, 'scp_to') as ship, \
              patch.object(box, 'ssh', return_value=json.dumps(dict(wrapper=base64.b64encode(b'foreign').decode(), command=True))):
-            with self.assertRaisesRegex(RuntimeError, 'FOREIGN TASK WRAPPER: NAMED fake-task'):
+            with self.assertRaisesRegex(RuntimeError, 'FOREIGN TASK WRAPPER: NAMED cortex-session1'):
                 box.start_task(Path('not-shipped.ps1'))
         ship.assert_not_called()
 
     def test_nonpreserved_direct_start_keeps_the_original_install_call(self):
-        box = remote.RemoteBox('saved-alias', task='fake-task')
+        box = remote.RemoteBox('saved-alias')
         with patch.object(box, 'catalog_slot', return_value=dict(preserve_runner=False)), \
              patch.object(box, 'wait_task_idle') as idle, patch.object(box, 'scp_to') as ship, \
              patch.object(box, 'ssh') as launch:
             box.start_task(Path('payload.ps1'), budget_s=123)
         idle.assert_called_once_with(123)
         ship.assert_called_once_with(Path('payload.ps1'), box.session_script)
-        launch.assert_called_once_with('Start-ScheduledTask -TaskName fake-task')
+        launch.assert_called_once_with('Start-ScheduledTask -TaskName cortex-session1')
 
     def test_restore_never_changes_a_foreign_payload_marker(self):
         with tempfile.TemporaryDirectory() as temporary:

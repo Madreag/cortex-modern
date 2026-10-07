@@ -1,6 +1,7 @@
 """Detect boundary and ownership defects in the shared peer interface, without engines."""
 import base64
 import contextlib
+import errno
 import json
 from pathlib import Path
 import tempfile
@@ -13,9 +14,186 @@ from unittest.mock import patch
 import spread_peers as spread
 from test_named_spread import NamedRoutingTests
 from test_peer_run_guards import PeerRunGuardTests
+from test_spread_admission import TransientTests
+from test_spread_ranked import RankedTests
+from test_spread_cache import CacheTests
+from test_session_task_wrappers import SessionWrapperTests
 
 
 class ContractTests(unittest.TestCase):
+    def exclusive_fake(self, root, clock, *, live):
+        marker = root/'exclusive.lock'
+        marker.write_text('owner evidence')
+        owner = dict(pid=7, process_start=12.0, machine='NAMED', label='timing window', token='other')
+        facts = SimpleNamespace(machine_name=lambda:'NAMED', process_start=lambda pid:12.0 if live else None,
+                                read_reservation=lambda path, **kwargs:owner if live else None)
+        box = dict(name='NAMED', kind='local', markers=dict(exclusive=str(marker)))
+        def raw_probe(target, **kwargs):
+            self.assertIs(target, box)
+            if clock[0] >= 20 and live:
+                marker.unlink(missing_ok=True)
+            return dict(reason='another run holds the box alone' if marker.exists() else None, jobs=[])
+        def probe(target, **kwargs):
+            # The native worker enriches this unchanged capacity probe.
+            raw_probe(target, **kwargs)
+            return spread.native_exclusive_state(raw_probe, target, facts=facts, root=root, **kwargs)
+        return box, marker, probe
+
+    def test_live_exclusive_claim_waits_twenty_seconds_before_launch(self):
+        for phase in ('claim', 'prepared', 'final'):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temporary:
+                clock, starts, locked, renewals = [0.0], [], [False], []
+                box, marker, probe = self.exclusive_fake(Path(temporary), clock, live=True)
+                claim = dict(token='owned', needs=dict(peer_id='host', alone=False), runner_wait=60)
+                needs = SimpleNamespace(**claim['needs'])
+                def reason(box, needs, state):
+                    return state.get('refusal') or state['reason']
+                def rpc(target, action, body, **kwargs):
+                    self.assertIs(target, box)
+                    self.assertEqual(action, 'claim')
+                    if refusal := reason(target, needs, probe(target)):
+                        raise RuntimeError('capacity refused: '+refusal)
+                    starts.append(clock[0])
+                    return claim
+                @contextlib.contextmanager
+                def mutex(*args, **kwargs):
+                    self.assertFalse(locked[0])
+                    locked[0] = True
+                    try: yield
+                    finally: locked[0] = False
+                def sleep(seconds):
+                    self.assertFalse(locked[0])
+                    self.assertEqual(starts, [])
+                    clock[0] += seconds
+                worker = SimpleNamespace(capacity_state=probe, renew_claim=lambda value:renewals.append(value))
+                pool = SimpleNamespace(Needs=lambda **values:SimpleNamespace(**values), live_reason=reason)
+                backend = SimpleNamespace(rpc=rpc, probe=probe)
+                with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+                     patch.object(spread.time, 'sleep', side_effect=sleep):
+                    if phase == 'claim':
+                        self.assertIs(spread.claim_named_peer(backend, box, needs, {}, wait=60), claim)
+                    elif phase == 'prepared':
+                        spread.wait_named_launch(worker, pool, box, claim, wait=60)
+                        starts.append(clock[0])
+                    else:
+                        with spread.named_launch_capacity(box, needs, claim, probe=probe, live_reason=reason,
+                                mutex=mutex, root=Path(temporary), renew=lambda value:renewals.append(value)):
+                            self.assertTrue(locked[0])
+                            starts.append(clock[0])
+                self.assertEqual(starts, [20.0])
+                self.assertFalse(marker.exists())
+                self.assertFalse(locked[0])
+                if phase != 'claim':
+                    self.assertEqual(len(renewals), 10)
+        for wait in (0, 10):
+            with self.subTest(wait=wait), tempfile.TemporaryDirectory() as temporary:
+                clock, starts = [0.0], []
+                box, marker, probe = self.exclusive_fake(Path(temporary), clock, live=True)
+                def rpc(target, action, body, **kwargs):
+                    if probe(target)['reason']:
+                        raise RuntimeError('capacity refused: another run holds the box alone')
+                    starts.append(clock[0])
+                with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+                     patch.object(spread.time, 'sleep', side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)), \
+                     self.assertRaisesRegex(RuntimeError, 'expired after 10s' if wait else 'capacity refused'):
+                    spread.claim_named_peer(SimpleNamespace(rpc=rpc, probe=probe), box,
+                                            SimpleNamespace(peer_id='host'), {}, wait=wait)
+                self.assertEqual(starts, [])
+                self.assertEqual(clock[0], wait)
+                self.assertTrue(marker.exists())
+
+    def test_ownerless_exclusive_marker_waits_to_budget_and_preserves_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            box, marker, probe = self.exclusive_fake(Path(temporary), [0.0], live=False)
+            claim = dict(token='owned', needs=dict(peer_id='host', alone=False), runner_wait=60)
+            needs = SimpleNamespace(**claim['needs'])
+            reason = lambda box, needs, state:state.get('refusal') or state['reason']
+            def rpc(target, action, body, **kwargs):
+                raise RuntimeError('capacity refused: '+reason(target, needs, probe(target)))
+            worker = SimpleNamespace(capacity_state=probe, renew_claim=unittest.mock.Mock())
+            pool = SimpleNamespace(Needs=lambda **values:SimpleNamespace(**values), live_reason=reason)
+            clock = [0.0]
+            with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+                 patch.object(spread.time, 'sleep', side_effect=lambda seconds:clock.__setitem__(0, clock[0]+seconds)) as sleep:
+                for phase in ('claim', 'prepared', 'final'):
+                    with self.subTest(phase=phase), self.assertRaisesRegex(RuntimeError, 'ownerless exclusive marker.*exclusive.lock'):
+                        if phase == 'claim':
+                            spread.claim_named_peer(SimpleNamespace(rpc=rpc, probe=probe), box, needs, {}, wait=60)
+                        elif phase == 'prepared':
+                            spread.wait_named_launch(worker, pool, box, claim, wait=60)
+                        else:
+                            with spread.named_launch_capacity(box, needs, claim, probe=probe, live_reason=reason,
+                                    mutex=lambda *args, **kwargs:contextlib.nullcontext(), root=Path(temporary), renew=worker.renew_claim):
+                                self.fail('an ownerless marker cannot launch')
+                self.assertEqual(clock[0], 180)
+                self.assertTrue(sleep.called)
+            self.assertEqual(marker.read_text(), 'owner evidence')
+
+    def test_worker_exclusive_extension_runs_before_main_and_keeps_positional_probe_calls(self):
+        source = ('def launch():\n'
+                  '    if True:\n'
+                  '        if True:\n'
+                  "            with mutex(root_for(box)/'.capacity.lock',wait=15):\n"
+                  "                before=capacity_state(box,refresh_display=False,ignore_token=claim['token'])\n"
+                  "                if reason:=live_reason(box,Needs(**claim['needs']),before):raise RuntimeError('capacity changed before launch: '+reason)\n"
+                  '                pass\n'
+                  "if __name__=='__main__':raise SystemExit(main())\n")
+        with tempfile.TemporaryDirectory() as temporary:
+            seen = []
+            facts = SimpleNamespace(read_reservation=lambda *args, **kwargs:None)
+            box = dict(name='NAMED', markers={})
+            def probe(target, **kwargs):
+                seen.append(kwargs)
+                return dict(jobs=[])
+            def main():
+                value = namespace['capacity_state'](box, True, False, 'owned')
+                self.assertEqual(value['exclusive_holders'], [])
+                return 0
+            namespace = dict(__name__='__main__', capacity_state=probe, facts=facts,
+                             root_for=lambda box:Path(temporary), main=main)
+            with self.assertRaises(SystemExit) as result:
+                exec(compile(spread.native_cpu_wait_source(source), '<native-worker>', 'exec'), namespace)
+            self.assertEqual(result.exception.code, 0)
+            self.assertEqual(seen, [dict(read_only=True, refresh_display=False, ignore_token='owned')])
+
+    def test_posix_quiet_marker_waits_for_its_live_owner_and_preserves_ownerless_evidence(self):
+        for live in (True, False):
+            with self.subTest(live=live), tempfile.TemporaryDirectory() as temporary:
+                clock, writes, renewals = [0.0], [], []
+                marker = Path(temporary)/'quiet.lock'
+                marker.write_text('previous owner evidence')
+                previous = dict(pid=7, process_start=12.0, machine='NAMED', label='previous window', token='other')
+                def read(path, **kwargs):
+                    self.assertFalse(kwargs['archive'])
+                    if live and clock[0] >= 20:
+                        marker.unlink(missing_ok=True)
+                    return previous if marker.exists() else None
+                def write(path, label, **kwargs):
+                    self.assertFalse(marker.exists())
+                    self.assertEqual(clock[0], 20)
+                    self.assertEqual(kwargs['token'], 'owned')
+                    marker.write_text('owned window')
+                    writes.append(label)
+                facts = SimpleNamespace(read_reservation=read, write_reservation=write,
+                                        machine_name=lambda:'NAMED', process_start=lambda pid:12.0 if live else None)
+                box = dict(name='NAMED', kind='posix')
+                claim = dict(token='owned', needs=dict(peer_id='client'), runner_wait=60)
+                with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+                     patch.object(spread.time, 'sleep', side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)) as sleep:
+                    if live:
+                        spread.claim_native_exclusive_marker(box, claim, marker, 'own window', facts=facts,
+                                                             renew=lambda value:renewals.append(value))
+                        self.assertEqual(writes, ['own window'])
+                        self.assertEqual(len(renewals), 10)
+                    else:
+                        with self.assertRaisesRegex(spread.SpreadRefusal, 'ownerless exclusive marker.*quiet.lock'):
+                            spread.claim_native_exclusive_marker(box, claim, marker, 'own window', facts=facts,
+                                                                 renew=lambda value:renewals.append(value))
+                        self.assertEqual(clock[0], 60)
+                        self.assertTrue(sleep.called)
+                        self.assertEqual(marker.read_text(), 'previous owner evidence')
+                        self.assertEqual(writes, [])
+
     def test_direct_host_route_to_named_lan_peer_does_not_select_its_overlay(self):
         with patch.object(spread.sys, 'platform', 'win32'), \
              patch.object(spread.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='192.168.50.130\n')) as query:
@@ -48,6 +226,72 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(spread.SpreadRefusal, 'requested host did not start.*floor'):
             spread.wait_started_host(case, 'seat')
 
+    def test_session_wait_returns_the_hosts_named_admission_failure_without_launching_a_seat(self):
+        case = object.__new__(spread.Case)
+        case.names, case.peer_ports, case.match = ['host','seat'], {}, spread.Match(51580)
+        case.members = {'host':(dict(name='EROL-PC'),), 'seat':(dict(name='Linux'),)}
+        case.runs = {'host':SimpleNamespace(start_failure='capacity update is busy; skip this box')}
+        case.synchronize = unittest.mock.Mock()
+        case.refuse = lambda name, box, reason:spread.SpreadRefusal(f'spread peer {name} on {box}: {reason}')
+        with patch('e2e_video.directory_session') as query, patch.object(spread.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'seat on Linux.*host on EROL-PC.*capacity update is busy'):
+                case.published_session('seat')
+            query.assert_not_called()
+            sleep.assert_not_called()
+            case.synchronize.assert_not_called()
+
+    def session_admission_fake(self, clock, failure=None):
+        host = SimpleNamespace(started=False, launch_attempted=True, finished=False, start_failure=None)
+        case = object.__new__(spread.Case)
+        case.names, case.peer_ports = ['host', 'seat'], {}
+        case.match = spread.Match(51580, parameters={'runner_wait':1800})
+        case.directory = {'DIRECTORY_ROOT':'unused'}
+        case.members = {'host':(dict(name='EROL-PC'),), 'seat':(dict(name='Linux'),)}
+        case.runs = {'host':host}
+        def synchronize():
+            if failure and clock[0] >= 20:
+                host.start_failure = failure
+            elif clock[0] >= 100:
+                host.started = True
+        def idle(seconds):
+            clock[0] = round(clock[0]+seconds, 6)
+            synchronize()
+        case.guard, case.synchronize = synchronize, synchronize
+        case.refuse = lambda name, box, reason: spread.SpreadRefusal(f'spread peer {name} on {box}: {reason}')
+        return case, host, idle
+
+    def test_session_lookup_starts_after_the_requested_host_is_admitted(self):
+        clock, queries = [0.0], []
+        case, host, idle = self.session_admission_fake(clock)
+        def query(*args):
+            queries.append(clock[0])
+            return 'native-session' if host.started else None
+        with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+             patch.object(spread.time, 'sleep', side_effect=idle), patch('e2e_video.directory_session', side_effect=query):
+            self.assertEqual(case.published_session('seat'), 'native-session')
+        self.assertEqual(queries, [100.0])
+
+    def test_session_lookup_still_refuses_after_eighty_seconds_without_publication(self):
+        clock = [0.0]
+        case, host, idle = self.session_admission_fake(clock)
+        with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+             patch.object(spread.time, 'sleep', side_effect=idle), patch('e2e_video.directory_session', return_value=None):
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'seat on Linux.*no session.*51580'):
+                case.published_session('seat')
+        self.assertTrue(host.started)
+        self.assertEqual(clock[0], 180.0)
+
+    def test_host_refusal_during_admission_reaches_session_waiter_before_lookup(self):
+        clock = [0.0]
+        case, host, idle = self.session_admission_fake(clock, 'named native floor refused')
+        with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+             patch.object(spread.time, 'sleep', side_effect=idle), patch('e2e_video.directory_session') as query:
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'seat on Linux.*host on EROL-PC.*floor refused'):
+                case.published_session('seat')
+            query.assert_not_called()
+        self.assertFalse(host.started)
+        self.assertEqual(clock[0], 20.0)
+
     def test_native_adapter_ships_its_existing_named_route_dependency(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -58,6 +302,16 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(list(sources), ['pool_cohort.py', 'pool_run.py'])
             self.assertEqual(sources['pool_cohort.py'], (root/'pool_cohort.py').read_text())
             self.assertEqual(sources['pool_run.py'], (root/'pool_run.py').read_text())
+
+    def test_named_route_reader_is_shipped_from_the_installed_kit_when_facts_has_no_copy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            kit = root / 'kit'
+            kit.mkdir()
+            (kit/'pool_cohort.py').write_text('NAME="named"\n')
+            sources = spread.native_adapter_sources(root/'box_facts.py', {'box_facts.py': 'import pool_cohort\n'}, kit=kit)
+            self.assertEqual(list(sources), ['pool_cohort.py', 'box_facts.py'])
+            self.assertEqual(sources['pool_cohort.py'], (kit/'pool_cohort.py').read_text())
 
     def test_native_bootstrap_loads_route_reader_before_facts_and_adapter_after(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -80,7 +334,7 @@ class ContractTests(unittest.TestCase):
                              (True, [(100, 1), (20, 1), (20, 0)])):
             with self.subTest(quiet=quiet):
                 clock, locked, launched, seen, renewed = [0.0], [False], [], [], []
-                box, claim = dict(name='NAMED', kind='local'), dict(token='owned')
+                box, claim = dict(name='NAMED', kind='local'), dict(token='owned', runner_wait=90)
                 needs = SimpleNamespace(peer_id='host', alone=quiet)
                 @contextlib.contextmanager
                 def mutex(*args, **kwargs):
@@ -104,7 +358,7 @@ class ContractTests(unittest.TestCase):
                 def sleep(seconds):
                     self.assertFalse(locked[0])
                     self.assertEqual(launched, [])
-                    self.assertEqual(seconds, 20)
+                    self.assertIn(seconds, (0, 20))
                     clock[0] += seconds
                 with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
                      patch.object(spread.time, 'sleep', side_effect=sleep):
@@ -112,12 +366,52 @@ class ContractTests(unittest.TestCase):
                             mutex=mutex, root=Path('/own'), renew=lambda value:renewed.append(value)) as state:
                         self.assertTrue(locked[0])
                         launched.append(state)
-                self.assertEqual(seen, [0, 30, 60] if quiet else [0, 30])
+                self.assertEqual(seen, [0, 30, 40] if quiet else [0, 30])
                 self.assertEqual(renewed, [claim]*(len(seen)-1))
                 self.assertEqual(len(launched), 1)
                 self.assertFalse(locked[0])
 
-    def test_named_cpu_retry_expires_after_ten_minutes_and_preserves_other_guards(self):
+    def test_capacity_lock_waits_forty_seconds_then_launches_within_the_runner_budget(self):
+        for wait, held, expected in ((1800, 40, 'start'), (20, 40, 'expire'),
+                                     (1800, 200, 'start'), (0, 40, 'legacy')):
+            with self.subTest(wait=wait, held=held):
+                clock, locked, starts, budgets = [0.0], [False], [], []
+                box = dict(name='NAMED', kind='local')
+                needs = SimpleNamespace(peer_id='host', alone=False)
+                claim = dict(token='owned', runner_wait=wait)
+                @contextlib.contextmanager
+                def mutex(path, *, wait):
+                    self.assertEqual(path, Path('/named/.capacity.lock'))
+                    budgets.append(wait)
+                    spread.time.sleep(min(wait, held-clock[0]))
+                    if clock[0] < held:
+                        raise RuntimeError('capacity update is busy; skip this box')
+                    locked[0] = True
+                    try: yield
+                    finally: locked[0] = False
+                def probe(target, **kwargs):
+                    self.assertTrue(locked[0])
+                    self.assertEqual(kwargs['ignore_token'], 'owned')
+                    self.assertIs(target, box)
+                    return dict(free_gb=20, engines=0)
+                with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+                     patch.object(spread.time, 'sleep', side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)):
+                    if expected == 'start':
+                        with spread.named_launch_capacity(box, needs, claim, probe=probe, live_reason=lambda *args:None,
+                                mutex=mutex, root=Path('/named'), renew=lambda value:None):
+                            starts.append(clock[0])
+                        self.assertEqual(starts, [held])
+                        self.assertEqual(budgets, [180] if held == 40 else [180, 180])
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, r'NAMED.*host.*expired.*capacity.lock'):
+                            with spread.named_launch_capacity(box, needs, claim, probe=probe, live_reason=lambda *args:None,
+                                    mutex=mutex, root=Path('/named'), renew=lambda value:None):
+                                self.fail('capacity lock cannot admit before it is free')
+                        self.assertEqual(starts, [])
+                        self.assertEqual(clock[0], 0 if expected == 'legacy' else wait)
+                self.assertFalse(locked[0])
+
+    def test_named_cpu_retry_uses_runner_budget_and_preserves_hard_guards(self):
         clock = [0.0]
         box = dict(name='NAMED', kind='posix')
         needs = SimpleNamespace(peer_id='seat2', alone=False)
@@ -125,10 +419,10 @@ class ContractTests(unittest.TestCase):
         backend = SimpleNamespace(rpc=unittest.mock.Mock(side_effect=RuntimeError(reason)))
         with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
              patch.object(spread.time, 'sleep', side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)):
-            with self.assertRaisesRegex(spread.SpreadRefusal, 'expired after 600s.*CPU 100'):
-                spread.claim_named_peer(backend, box, needs, {})
-        self.assertEqual(clock[0], 600)
-        self.assertEqual(backend.rpc.call_count, 21)
+            with self.assertRaisesRegex(spread.SpreadRefusal, 'expired after 10s.*CPU 100'):
+                spread.claim_named_peer(backend, box, needs, {}, wait=10)
+        self.assertEqual(clock[0], 10)
+        self.assertEqual(backend.rpc.call_count, 2)
         self.assertTrue(all(call.args[0] is box for call in backend.rpc.call_args_list))
         for refusal in ('capacity refused: live engine capacity is in use',
                         'capacity refused: free memory 11 GB is below floor 12 GB'):
@@ -138,6 +432,44 @@ class ContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'capacity refused'):
                     spread.claim_named_peer(backend, box, needs, {})
                 sleep.assert_not_called()
+
+    def test_initial_capacity_claim_has_the_same_lock_budget_and_rpc_allowance(self):
+        source = ("def capacity_claim(box,needs,request):\n"
+                  "    root=root_for(box)\n"
+                  "    with mutex(root/'.capacity.lock',wait=15):\n"
+                  "        return dict(token=request['token'])\n"
+                  "def launch():\n"
+                  "    if True:\n"
+                  "        if True:\n"
+                  "            with mutex(root_for(box)/'.capacity.lock',wait=15):\n"
+                  "                before=capacity_state(box,refresh_display=False,ignore_token=claim['token'])\n"
+                  "                if reason:=live_reason(box,Needs(**claim['needs']),before):raise RuntimeError('capacity changed before launch: '+reason)\n"
+                  "                pass\n"
+                  "if __name__=='__main__':raise SystemExit(main())\n")
+        clock, calls = [0.0], []
+        box = dict(name='NAMED', kind='local')
+        @contextlib.contextmanager
+        def mutex(path, *, wait):
+            self.assertEqual((path,wait),(Path('/named/.capacity.lock'),180))
+            spread.time.sleep(40)
+            yield
+        namespace = dict(__name__='test_worker', capacity_state=lambda *args, **kwargs:{},
+                         root_for=lambda box:Path('/named'), mutex=mutex)
+        exec(compile(spread.native_cpu_wait_source(source), '<claim-worker>', 'exec'), namespace)
+        request = dict(token='owned')
+        def rpc(target, action, body, **kwargs):
+            self.assertIs(target, box)
+            self.assertEqual(action, 'claim')
+            self.assertEqual(kwargs['timeout'], 210)
+            self.assertEqual(body['request']['runner_wait'], 1800)
+            self.assertEqual(body['request']['capacity_wait_remaining'], 1800)
+            calls.append(clock[0])
+            return namespace['capacity_claim'](target, body['needs'], body['request'])
+        with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
+             patch.object(spread.time, 'sleep', side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)):
+            result = spread.claim_named_peer(SimpleNamespace(rpc=rpc), box, SimpleNamespace(peer_id='host'), request, wait=1800)
+        self.assertEqual((result,clock[0],calls),(dict(token='owned'),40,[0]))
+        self.assertEqual(request,dict(token='owned'))
 
     def test_native_admission_wait_ends_before_the_case_timer_and_checks_ownership(self):
         states = [dict(token='owned'), dict(token='owned', driver_pid=7)]
@@ -178,7 +510,7 @@ class ContractTests(unittest.TestCase):
         with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
              patch.object(spread.time, 'sleep', side_effect=sleep), \
              spread.named_engine_cpu_wait(load, dict(name='NAMED'), SimpleNamespace(peer_id='host', alone=False),
-                                          lambda:renewed.append('owned')):
+                                          lambda:renewed.append('owned'), wait=90):
             with load.admission(['engine'], {}, record, lambda:None):
                 self.assertTrue(entered[0])
                 self.assertNotIn('not_started', record)
@@ -245,7 +577,7 @@ class ContractTests(unittest.TestCase):
 
     def test_post_shipment_wait_preserves_real_refusals(self):
         for reason in ('free memory 11 GB is below floor 12 GB',
-                       'box launch refused; owner=other (pid=7); since now'):
+                       'PORT CONFLICT 51580; case other'):
             worker = SimpleNamespace(capacity_state=unittest.mock.Mock(return_value={'reason':reason}),
                                      renew_claim=unittest.mock.Mock())
             pool = SimpleNamespace(Needs=lambda **values:SimpleNamespace(**values),
@@ -303,9 +635,9 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(claim, dict(token='owned'))
         self.assertEqual([call.args[0] for call in backend.rpc.call_args_list], [box, box, box])
 
-    def test_named_wait_never_retries_a_floor_or_unknown_marker_refusal(self):
+    def test_named_wait_never_retries_a_floor_or_port_conflict(self):
         for reason in ('capacity refused: free memory 11 GB is below floor 12 GB',
-                       'capacity refused: box launch refused: other-marker; owner=other (pid=9); since now'):
+                       'capacity refused: PORT CONFLICT 51580; case other'):
             backend = SimpleNamespace(rpc=unittest.mock.Mock(side_effect=RuntimeError(reason)))
             with self.subTest(reason=reason), patch.object(spread.time, 'sleep') as pause:
                 with self.assertRaisesRegex(RuntimeError, 'capacity refused'):
@@ -471,6 +803,57 @@ class ContractTests(unittest.TestCase):
             (root/'Userdata/host.ticket').write_bytes(b'private fixture')
             with self.assertRaisesRegex(spread.SpreadRefusal, 'existing credential delivery channel'):
                 spread.retained_files(root)
+
+    def exercise_private_module_contents(self, platform, link_error=None):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, base = root/'repo', root/'repo/Data/Base.rte'
+            (base/'Actors').mkdir(parents=True)
+            (base/'Activities').mkdir()
+            (base/'Actors/actor.bin').write_bytes(b'actor pixels')
+            (base/'Activities/P4AlphaDuel.lua').write_bytes(b'unchanged duel')
+            (base/'Index.ini').write_bytes(b'DataModule')
+            other = repo/'Data/Other.rte'
+            other.mkdir()
+            (other/'Index.ini').write_bytes(b'Other')
+            aliases = []
+            def alias(source, target):
+                aliases.append(target)
+                target.mkdir()
+            files = {Path('Data/Base.rte/Activities/P4AlphaDuel.lua'): b'observed duel',
+                     Path('Userdata/Settings.ini'): b'owned settings'}
+            with patch.object(spread.sys, 'platform', platform), patch.object(spread, 'link_directory', side_effect=alias):
+                if link_error:
+                    with patch.object(spread.os, 'link', side_effect=link_error):
+                        runtime = spread.native_retained_runtime(repo, root/'native/seat', files, [])
+                else:
+                    runtime = spread.native_retained_runtime(repo, root/'native/seat', files, [])
+            native_base = runtime/'Data/Base.rte'
+            self.assertFalse([path for path in aliases if path.is_relative_to(native_base)],
+                             'module content must have no directory links')
+            self.assertEqual((native_base/'Actors/actor.bin').read_bytes(), b'actor pixels')
+            self.assertEqual((native_base/'Index.ini').read_bytes(), b'DataModule')
+            contents = {path.relative_to(native_base).as_posix():path.read_bytes()
+                        for path in native_base.rglob('*') if path.is_file()}
+            self.assertEqual(set(contents), {'Index.ini', 'Actors/actor.bin', 'Activities/P4AlphaDuel.lua'})
+            self.assertIn(runtime/'Data/Other.rte', aliases)
+            self.assertEqual((native_base/'Activities/P4AlphaDuel.lua').read_bytes(), b'observed duel')
+            (native_base/'Activities/P4AlphaDuel.lua').write_bytes(b'private later edit')
+            self.assertEqual((base/'Activities/P4AlphaDuel.lua').read_bytes(), b'unchanged duel',
+                             'overlay never writes to immutable source')
+            return contents
+
+    def test_posix_private_module_preserves_all_files_without_content_links(self):
+        for platform in ('linux', 'darwin'):
+            with self.subTest(platform=platform):
+                self.exercise_private_module_contents(platform)
+
+    def test_posix_private_module_cross_filesystem_fallback_preserves_contents(self):
+        self.exercise_private_module_contents('linux', OSError(errno.EXDEV, 'different filesystem'))
+
+    def test_windows_and_posix_private_modules_have_identical_content_manifests(self):
+        windows = self.exercise_private_module_contents('win32')
+        self.assertEqual(windows, self.exercise_private_module_contents('linux'))
 
     def test_real_menu_pairs_keep_every_original_page_assertion_and_capture(self):
         import test_menu_readback as menu
@@ -733,6 +1116,56 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'declared test ports'):
             spread.Peer('seat', block_udp=(80,))
 
+    def test_declared_posix_line_scripts_keep_command_text_without_carriage_returns(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            menu, inputs, watches = (root / name for name in ('menu.txt', 'input.txt', 'screen-watches.txt'))
+            selected = spread.line_script_inputs(['-menu-script', str(menu), '-input-script', str(inputs)],
+                                                 {'CCCP_TEST_SCREEN_WATCHES': str(watches)})
+            data = b'h15-own-hold-line require local_held until you are back\r\nlegacy-byte=\x96\r\n'
+            for path in (menu, inputs, watches):
+                normalized = spread.native_line_script(data, path, {'os': 'posix'}, selected)
+                self.assertEqual(normalized, b'h15-own-hold-line require local_held until you are back\nlegacy-byte=\x96\n')
+                self.assertEqual(normalized.split(b'\n')[0].split(b' ', 3)[3], b'until you are back')
+                self.assertEqual(spread.native_line_script(data, path, {'os': 'windows'}, selected), data)
+
+    def test_line_script_normalization_keeps_protocol_module_and_unselected_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data = bytes(range(256)) + b'\r\n\x00\xff'
+            protected = [root/'launch.bin', root/'input.ccreplay', root/'Data/Base.rte/fixture.txt']
+            selected = {path.resolve() for path in protected}
+            for path in (*protected, root/'unselected.txt'):
+                self.assertEqual(spread.native_line_script(data, path, {'os':'posix'}, selected), data)
+
+    def test_native_spec_normalizes_owned_and_external_posix_line_scripts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            out, external = root/'case', root/'external-input.txt'
+            stage = out/'host-stage'; stage.mkdir(parents=True)
+            watch = stage/'screen-watches.txt'
+            watch.write_bytes(b'h15-own-hold-line require local_held until you are back\r\n')
+            external.write_bytes(b'0 60 MOVE_RIGHT\r\n')
+            specs = []
+            backend = SimpleNamespace(rpc=lambda box, action, body:specs.append(body['value']), launch=lambda *args:None)
+            claim = dict(case_root='/native/case', repo='/native/repo', root='/owned', control='/control', exe_sha256='same')
+            run = object.__new__(spread.Run)
+            run.retained, run.role, run.output_name, run.started = None, 'host', 'host', False
+            run.repo, run.cwd = root/'repo', out/'host/runtime'
+            run.argv = ['engine','-headless','-input-script',str(external)]
+            run.env, run.expected, run.fixtures, run.timeout = {'CCCP_TEST_SCREEN_WATCHES':str(watch)}, [], [], 30
+            run.case = SimpleNamespace(id='fake-case',lane='one-lane',out=out,peer_ports={},names=['host'],match=spread.Match(51580),
+                directory=None,members={'host':({'name':'POSIX','os':'posix'},claim,{},backend)},peers=[spread.Peer('host')],
+                signals=lambda:[],release_pending=lambda *args:None,
+                transport_module=SimpleNamespace(Transport=SimpleNamespace(native_claim=lambda value:value)))
+            with patch.object(spread, 'wait_native_admission'):
+                run.start()
+            self.assertEqual(base64.b64decode(specs[0]['files']['host-stage/screen-watches.txt']),
+                             b'h15-own-hold-line require local_held until you are back\n')
+            self.assertEqual(base64.b64decode(specs[0]['files']['.inputs/external-input.txt']),b'0 60 MOVE_RIGHT\n')
+            self.assertEqual(watch.read_bytes(),b'h15-own-hold-line require local_held until you are back\r\n')
+            self.assertEqual(external.read_bytes(),b'0 60 MOVE_RIGHT\r\n')
+
     def test_declared_binary_match_config_keeps_every_byte(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -858,10 +1291,10 @@ class ContractTests(unittest.TestCase):
             clock = [0.0]
             with patch.object(spread.time, 'monotonic', side_effect=lambda:clock[0]), \
                  patch.object(spread.time, 'sleep', side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)), \
-                 self.assertRaisesRegex(spread.SpreadRefusal, 'expired after 600s.*alone run needs an idle box'):
+                 self.assertRaisesRegex(spread.SpreadRefusal, 'expired after 0s.*alone run needs an idle box'):
                 case.allocate()
             case.stack.close()
-            self.assertEqual(events, [('probe', 'ONE')]+[('claim', 'ONE', 'in-match: spread')]*21)
+            self.assertEqual(events, [('probe', 'ONE')]+[('claim', 'ONE', 'in-match: spread')])
             self.assertEqual(case.pending, [])
 
     def test_credentials_and_tickets_do_not_travel_as_evidence(self):
