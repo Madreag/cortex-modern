@@ -29,6 +29,7 @@
 #include "FloatText.h"
 #include "MainMenuGUI.h"
 #include "NetModerationGUI.h"
+#include "NetChatPresentation.h"
 #include "NetModerationGUIProbe.h"
 #include "Icon.h"
 #include "AllegroScreen.h"
@@ -5020,8 +5021,10 @@ static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, con
 	PollSDLEvents();
 	g_UInputMan.Update(false);
 	// Leaving the wait keeps the ticket and the currently held seat; the host can still reassign it.
-	const bool leave = heldRejoin && !g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.KeyPressed(SDLK_ESCAPE);
-	if (g_UInputMan.KeyPressed(SDLK_F6) || (g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.AnyStartPress(false))) {
+	const auto* panel = g_MenuMan.GetNetworkPanel();
+	const bool chatOpen = panel && panel->IsChatEntryOpen();
+	const bool leave = NetHeldWaitShouldLeave(heldRejoin, g_MenuMan.IsNetworkPanelOpen(), chatOpen, g_UInputMan.KeyPressed(SDLK_ESCAPE));
+	if (!chatOpen && (g_UInputMan.KeyPressed(SDLK_F6) || (g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.AnyStartPress(false)))) {
 		g_MenuMan.ToggleNetworkPanel();
 	}
 	g_MenuMan.UpdateNetworkUI();

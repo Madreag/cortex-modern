@@ -542,6 +542,8 @@ bool NetModerationGUI::SetOpen(bool open) {
 		m_More->SetPushed(false);
 		m_OptionsView = false;
 		m_PageFirstPeer = 0;
+		m_PageFirstTeam = 0;
+		m_PageFirstCpu = false;
 		for (auto& seat: m_Seats) {
 			for (auto* button: seat.actions) button->SetPushed(false);
 			seat.remove->SetPushed(false);
@@ -1878,6 +1880,7 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot, bool fr
 		m_ChatWrapKey.clear();
 		m_ChatHistoryInitialized = false;
 		m_ChatNotifyUntilUs = 0;
+		m_ChatNotifyHistoryId = 0;
 		if (m_ChatEntryOpen) {
 			m_ChatEntryOpen = false;
 			if (m_MatchChatInput) {
@@ -1926,7 +1929,10 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot, bool fr
 			}
 			const auto alert = NetChatAlertFor(known, m_ChatHistoryInitialized, NetChatRosterPeer(entry.senderPeerId) == snapshot.localPeerId,
 			    g_SettingsMan.GetNetworkChatNotify(), g_SettingsMan.GetNetworkChatSound());
-			if (alert.notify) m_ChatNotifyUntilUs = nowUs + 6000000;
+			if (alert.notify) {
+				m_ChatNotifyUntilUs = nowUs + 6000000;
+				m_ChatNotifyHistoryId = entry.historyId;
+			}
 			if (alert.sound) {
 				RandomGenerator* previous = t_simRNGOverride;
 				t_simRNGOverride = &g_RenderRNG;
@@ -2126,7 +2132,7 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 	const bool notification = g_SettingsMan.GetNetworkChatNotify() && g_TimerMan.GetAbsoluteTime() < m_ChatNotifyUntilUs;
 	std::string wrapKey;
 	for (size_t index = 0; index < m_MatchChatLines.size(); ++index) {
-		if (!showHistory && !m_ChatEntryOpen && (!notification || index + 1 != m_MatchChatLines.size())) continue;
+		if (!NetChatLineVisible(showHistory, m_ChatEntryOpen, notification, m_MatchChatLines[index].historyId, m_ChatNotifyHistoryId)) continue;
 		const auto& line = m_MatchChatLines[index];
 		const std::string text = (line.scope == c_NetChatScopeTeam ? "[TEAM] " : "[ALL] ") + DisplayName(line.name.empty() ? "Player" : line.name) + ": " + DisplayName(line.text);
 		wrapKey += std::to_string(line.historyId) + ":" + std::to_string(line.team) + ":" + text + '\n';
@@ -2134,7 +2140,7 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 	if (wrapKey != m_ChatWrapKey || width != m_ChatWrapWidth || font != m_ChatWrapFont) {
 		m_ChatWrappedLines.clear();
 		for (size_t index = 0; index < m_MatchChatLines.size(); ++index) {
-			if (!showHistory && !m_ChatEntryOpen && (!notification || index + 1 != m_MatchChatLines.size())) continue;
+			if (!NetChatLineVisible(showHistory, m_ChatEntryOpen, notification, m_MatchChatLines[index].historyId, m_ChatNotifyHistoryId)) continue;
 			const auto& line = m_MatchChatLines[index];
 			const std::string text = (line.scope == c_NetChatScopeTeam ? "[TEAM] " : "[ALL] ") + DisplayName(line.name.empty() ? "Player" : line.name) + ": " + DisplayName(line.text);
 			for (auto& part: wrap(text)) m_ChatWrappedLines.push_back({std::move(part), line.team, line.seenUs});

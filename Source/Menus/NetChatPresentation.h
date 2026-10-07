@@ -16,11 +16,21 @@ namespace RTE {
 
 	inline unsigned NetChatRosterPeer(uint8_t sessionPeer) { return static_cast<unsigned>(sessionPeer) + 1; }
 
+	/// The held-seat screen's Escape must first belong to its active text entry or Players panel.
+	inline bool NetHeldWaitShouldLeave(bool heldWait, bool panelOpen, bool chatOpen, bool escapePressed) {
+		return heldWait && !panelOpen && !chatOpen && escapePressed;
+	}
+
 	struct NetChatArrivalAlert { bool notify; bool sound; };
 	/// Only fresh remote arrivals alert; opening history and receiving an own echo do not.
 	inline NetChatArrivalAlert NetChatAlertFor(bool known, bool initialized, bool local, bool notifyEnabled, bool soundEnabled) {
 		const bool arriving = !known && initialized && !local;
 		return {arriving && notifyEnabled, arriving && soundEnabled};
+	}
+
+	/// Hidden history reveals the arrival that triggered the notice, even when an own echo follows it.
+	inline bool NetChatLineVisible(bool historyVisible, bool entryOpen, bool notifying, uint64_t lineId, uint64_t arrivalId) {
+		return historyVisible || entryOpen || (notifying && lineId == arrivalId);
 	}
 
 	/// Wrap every character, including long unbroken words, at UTF-8 boundaries. Chat never ellipsizes its payload.

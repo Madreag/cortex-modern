@@ -276,6 +276,7 @@ namespace RTE {
 		std::string m_ChatSendStatus;
 		bool m_ChatHistoryInitialized = false;
 		long long m_ChatNotifyUntilUs = 0;
+		uint64_t m_ChatNotifyHistoryId = 0;
 		struct MatchChatLine {
 			uint64_t historyId = 0;
 			uint64_t receivedTick = 0;

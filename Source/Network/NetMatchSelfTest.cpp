@@ -17387,6 +17387,10 @@ namespace RTE {
 		const auto check = [&](bool ok, const std::string& why) {
 			if (!ok) { std::cerr << "[net-match-selftest] FAIL ui_presentation: " << why << std::endl; passed = false; }
 		};
+		check(!NetHeldWaitShouldLeave(true, false, true, true) && !NetHeldWaitShouldLeave(true, true, false, true),
+		      "Escape cancels an owned chat/panel and also leaves the held-seat wait");
+		check(NetHeldWaitShouldLeave(true, false, false, true) && !NetHeldWaitShouldLeave(false, false, false, true) &&
+		      !NetHeldWaitShouldLeave(true, false, false, false), "held-wait Escape no longer follows its original action outside text focus");
 		const std::string returnNotice = NetReconnectUx::HeldSeatReturnNotice();
 		check(returnNotice.find("AI plays your units") != std::string::npos && returnNotice.find("until the host reassigns it") != std::string::npos,
 		      "in-match leave/rejoin copy promises unconditional seat ownership: " + returnNotice);
@@ -17412,6 +17416,10 @@ namespace RTE {
 			const auto alert = NetChatAlertFor(arrival.known, arrival.initialized, arrival.local, arrival.notifyEnabled, arrival.soundEnabled);
 			check(alert.notify == arrival.notify && alert.sound == arrival.sound, "chat arrival preferences, history or own echo gating ignored");
 		}
+		check(NetChatLineVisible(false, false, true, 7, 7) && !NetChatLineVisible(false, false, true, 9, 7),
+		      "an own echo hides the remote message that triggered a hidden-history notice");
+		check(!NetChatLineVisible(false, false, false, 7, 7) && NetChatLineVisible(true, false, false, 9, 7) && NetChatLineVisible(false, true, false, 9, 7),
+		      "chat notice expiration or normal/open history visibility changed");
 		NetMatchSummary ended;
 		ended.result = "Match ended by host";
 		check(ended.LineText().find("draw") == std::string::npos && ended.DetailsText().find("No result") != std::string::npos,
