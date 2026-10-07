@@ -1800,6 +1800,19 @@ def prepare_run_root(root, remote_capture=None):
         root.mkdir(parents=True, exist_ok=False)
 
 
+def await_start_gate(gate, gate_met, failed, peer_launched=None):
+    """A native runner's admission precedes the scenario's unchanged gate budget."""
+    if peer_launched is not None:
+        while not peer_launched.is_set():
+            if failed.wait(.1):
+                return False
+    deadline = time.monotonic() + gate.get("timeout_s", 90)
+    while not gate_met(gate):
+        if failed.wait(.1) or time.monotonic() >= deadline:
+            return False
+    return True
+
+
 def _run_one(options, scenario, run, run_index, out, case_root=None):
     """One scenario run: its peers launched together, each recording its own video."""
     root = Path(out) / run.get("name", f"run{run_index}")
@@ -1825,6 +1838,7 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
     peers = run.get("peers") or scenario.get("peers") or []
     if not peers:
         raise SystemExit(f"{scenario['path']}: run {run_index} names no peers")
+    launched = {peer["name"]: threading.Event() for peer in peers}
 
     # Every peer's staging paths are known before any script is written, so a paired script can name
     # the other peer's probe directory and done file.
@@ -1954,6 +1968,7 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                 streams[name]=MenuStream(private_menus[name])
                 handle.argv[handle.argv.index('-menu-script')+1]=streams[name].path
             with inherited_environment(private_environments[name]):handle.start()
+            launched[name].set()
             record=handle.finish()
             if getattr(options,'relay_book',None) and not getattr(options,'remote_capture',None):
                 from acceptance_relay_policy import sweep_retained
@@ -2048,12 +2063,10 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                     break
             gate = peer.get("start_when")
             if gate:
-                deadline = time.monotonic() + gate.get("timeout_s", 90)
-                while not gate_met(gate):
-                    if failed.wait(.1) or time.monotonic() >= deadline:
-                        records[name] = {"error": f"start gate not reached: {gate}"}
-                        failed.set()
-                        break
+                native_launch = launched[gate["peer"]] if getattr(options, "remote_capture", None) and not gate.get("run") else None
+                if not await_start_gate(gate, gate_met, failed, native_launch):
+                    records[name] = {"error": f"start gate not reached: {gate}"}
+                    failed.set()
                 if failed.is_set():
                     break
                 if failed.wait(float(peer.get("after_gate_delay_s", 0))):

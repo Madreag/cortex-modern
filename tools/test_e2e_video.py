@@ -2154,6 +2154,42 @@ def check_named_case_root(results, scratch):
     return ok
 
 
+def check_native_start_gate(results):
+    class Clock:
+        def __init__(self, launch, marker, abort=None):
+            self.now, self.launch, self.marker, self.abort = 0.0, launch, marker, abort
+            self.observed = []
+        def is_set(self):
+            return self.now >= self.launch
+        def wait(self, seconds):
+            self.now += seconds
+            return self.abort is not None and self.now >= self.abort
+        def gate_met(self, gate):
+            self.observed.append(self.now)
+            return self.now >= self.marker
+    gate = dict(peer="host", event="video_mark mp-lobby-host", timeout_s=80)
+    def run(launch, marker, abort=None, native=True):
+        clock = Clock(launch, marker, abort)
+        with patch.object(driver.time, "monotonic", side_effect=lambda: clock.now):
+            passed = driver.await_start_gate(gate, clock.gate_met, clock, clock if native else None)
+        return passed, clock
+    passed, clock = run(200, 279)
+    ok = row(results, 'native-gate/admission-does-not-spend-the-markers-budget',
+             passed and clock.observed[0] >= 200 and clock.now < 280)
+    passed, clock = run(200, 281)
+    ok &= row(results, 'native-gate/a-late-marker-still-fails-at-the-original-bound',
+              not passed and 280 <= clock.now < 280.2)
+    passed, clock = run(200, 279, abort=25)
+    ok &= row(results, 'native-gate/a-launch-failure-ends-the-wait', not passed and clock.now < 25.2 and not clock.observed)
+    passed, clock = run(200, 279, abort=220)
+    ok &= row(results, 'native-gate/a-running-peer-failure-ends-the-wait', not passed and 220 <= clock.now < 220.2)
+    passed, clock = run(200, 81, native=False)
+    ok &= row(results, 'native-gate/local-and-completed-run-gates-keep-their-clock', not passed and 80 <= clock.now < 80.2)
+    passed, clock = run(200, 79, native=False)
+    ok &= row(results, 'native-gate/local-gate-before-the-original-bound-passes', passed and clock.now < 80)
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -2171,6 +2207,7 @@ def main():
         ok &= check_e2e_host_end_completion(results, options.repo)
         ok &= check_capture_binary(results, scratch)
         ok &= check_named_case_root(results, scratch)
+        ok &= check_native_start_gate(results)
         ok &= check_recording_health(results, scratch)
         ok &= check_screen_watches(results, scratch)
         ok &= check_streamed_capture(results, scratch)
