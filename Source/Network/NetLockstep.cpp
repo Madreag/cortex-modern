@@ -1305,9 +1305,11 @@ namespace RTE {
 			const auto action = static_cast<uint8_t>(timing.action);
 			const auto phase = static_cast<uint8_t>(timing.phase);
 			if (!ValidatePeerId(timing.senderPeerId, error, "timing sender") || !ValidatePeerId(timing.peerId, error, "timing subject")) return false;
-			if (action < 1 || action > 6 || phase < 1 || phase > 7 || timing.sessionId == 0 || timing.roundId == 0 ||
+			if (action < 1 || action > 7 || phase < 1 || phase > 7 || timing.sessionId == 0 || timing.roundId == 0 ||
 			    (action == 1 && phase > 4) || (action == 6 && (phase > 3 || timing.heldPeers != 0 || timing.peerId > timing.seatIncarnations.size())) || (action == 2 && phase > 6) || (action == 3 && phase != 7) || (action == 4 && (phase > 3 || !timing.worldTransition)) ||
 			    (action == 5 && phase != static_cast<uint8_t>(NetTimingPhase::Commit) && phase != static_cast<uint8_t>(NetTimingPhase::Status)) ||
+			    (action == 7 && (phase != static_cast<uint8_t>(NetTimingPhase::Status) || timing.senderPeerId != timing.peerId ||
+			                    timing.applyFrame == UINT64_MAX || timing.cutoffFrame == 0 || timing.nextFrame > 1 || timing.delayFrames != 0 || timing.heldPeers != 0)) ||
 			    timing.delayFrames > NetLockstepCodec::c_MaxInputDelayFrames || (timing.requiredPeers & 0xF0U) != 0 ||
 			    (timing.heldPeers & 0xF0U) != 0 || (timing.heldPeers & timing.requiredPeers) != 0 ||
 			    (timing.phase != NetTimingPhase::Status && timing.action == NetTimingAction::Hold && (timing.heldPeers & (1U << (timing.peerId - 1))) == 0) ||
@@ -4991,6 +4993,10 @@ namespace RTE {
 		m_CaptureReportResent = false;
 		m_CaptureParkReportsMs.clear();
 		m_CommittedAtMs.clear();
+		m_SceneLoadStatus.clear();
+		m_SceneLoadFrame = UINT64_MAX;
+		m_SceneLoadOrdinal = m_SceneLoadStartedMs = 0;
+		m_SceneLoadBudgetNamed = false;
 		m_ParkFrameSimulated = UINT64_MAX;
 		m_ParkFrameSimulatedMs = 0;
 		m_GoodbyeDrain = false;
@@ -5917,7 +5923,7 @@ namespace RTE {
 			if (onlyPeer != 0 && peer != onlyPeer) continue;
 			auto& queue = m_TimingOutgoing[peer];
 			if (timing.phase == NetTimingPhase::Status)
-				std::erase_if(queue, [&](const auto& pending) { return pending.phase == NetTimingPhase::Status && pending.peerId == timing.peerId; });
+				std::erase_if(queue, [&](const auto& pending) { return pending.phase == NetTimingPhase::Status && pending.action == timing.action && pending.peerId == timing.peerId; });
 			else std::erase_if(queue, [&](const auto& pending) { return pending.phase == timing.phase && pending.revision == timing.revision; });
 			// The withdrawal travels ahead of anything still queued for the revision it replaces, so a peer sees
 			// proposal then commit, or proposal then withdrawal, but never a commit after a withdrawal.
@@ -6575,6 +6581,7 @@ namespace RTE {
 		// no ramp, nothing left to estimate. Its capacity is its ticks in this round, so it need not have sent a frame yet.
 		bool slowHeld = false;
 		for (uint8_t peer: missing) {
+			if (SceneLoadInputPending(peer, frame, nowMs)) continue;
 			const auto published = m_PublishedCapacity.find(peer);
 			if (published == m_PublishedCapacity.end() || IsReturningSeatBeforeItsFirstInput(peer) || frame < CapacityJudgedFrom(peer, c_OwnPaceTicks)) continue;
 			const double fastest = FastestPublishedCapacity(peer, true);
@@ -6590,6 +6597,7 @@ namespace RTE {
 		// covers: it is held at the bound like a silent one, whatever each frame's own wait, and the others never run at its pace.
 		for (uint8_t peer: missing) {
 			double rate = 0.0;
+			if (SceneLoadInputPending(peer, frame, nowMs)) continue;
 			if (m_PublishedCapacity.contains(peer) || !m_PeersPlayedThisRound.contains(peer) || IsReturningSeatBeforeItsFirstInput(peer) ||
 			    !FeedsBelowRoundRate(peer, frame, nowMs, &rate)) continue;
 			DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << frame << ": " << rate
@@ -6620,6 +6628,7 @@ namespace RTE {
 			bool held = false;
 			for (uint8_t peer: missing) {
 				const auto& peerStats = m_Stats.peers[peer];
+				if (SceneLoadInputPending(peer, frame, nowMs)) continue;
 				// A hold is for a seat gone silent. One still feeding - its newest frame landed within a tick and its jitter - is late,
 				// and the live delay re-size answers that, never a hold.
 				if (peerStats.lastProgressMs != 0 && nowMs >= peerStats.lastProgressMs &&
@@ -7064,6 +7073,12 @@ namespace RTE {
 		if (!IsRunning() || timing.sessionId != m_Config.sessionId || timing.roundId != m_RoundId || timing.authorityGeneration != m_Config.migrationGeneration ||
 		    timing.peerId > m_Config.peerCount || !SenderOwnsTransport(timing.senderPeerId, fromTransport)) return;
 		const bool authority = timing.senderPeerId == GetHostPeerId() && LockstepPeerOfTransport(fromTransport) == GetHostPeerId();
+		if (timing.action == NetTimingAction::SceneLoad) {
+			if (timing.applyFrame < m_Config.startFrame || (timing.applyFrame > m_Stats.nextFrame &&
+			    timing.applyFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew)) return;
+			TakeSceneLoadStatus(timing, nowMs);
+			return;
+		}
 		// A decision the host re-stamped names the proposal it replaces: the peer drops that one here, so it can
 		// never hold two pending proposals for the same timing or match a commit against the withdrawn frame.
 		if (authority && timing.supersededRevision != 0) m_TimingDecisions.erase(timing.supersededRevision);
@@ -8728,6 +8743,77 @@ namespace RTE {
 		}
 	}
 
+	uint64_t NetLockstepCoordinator::NoteSharedSceneLoad(uint64_t frame) {
+		NET_PLANE_CHECK();
+		if (!IsRunning() || m_Playback || IsMigrating() || frame == UINT64_MAX) return 0;
+		if (frame != m_SceneLoadFrame) m_SceneLoadOrdinal = 0;
+		if (m_SceneLoadOrdinal == UINT64_MAX) return 0;
+		m_SceneLoadFrame = frame;
+		++m_SceneLoadOrdinal;
+		m_SceneLoadStartedMs = m_TimingNowMs;
+		m_SceneLoadBudgetNamed = false;
+		NetLockstepTiming status;
+		status.action = NetTimingAction::SceneLoad;
+		status.phase = NetTimingPhase::Status;
+		status.senderPeerId = status.peerId = m_Config.localPeerId;
+		status.sessionId = m_Config.sessionId; status.roundId = m_RoundId;
+		status.authorityGeneration = m_Config.migrationGeneration;
+		status.applyFrame = frame; status.cutoffFrame = m_SceneLoadOrdinal;
+		TakeSceneLoadStatus(status, m_TimingNowMs);
+		QueueTiming(status); FlushTimingOutgoing();
+		return m_SceneLoadOrdinal;
+	}
+
+	void NetLockstepCoordinator::CompleteSharedSceneLoad(uint64_t frame, uint64_t ordinal, uint64_t nowMs) {
+		NET_PLANE_CHECK();
+		if (!IsRunning() || m_Playback || ordinal == 0) return;
+		NetLockstepTiming status;
+		status.action = NetTimingAction::SceneLoad;
+		status.phase = NetTimingPhase::Status;
+		status.senderPeerId = status.peerId = m_Config.localPeerId;
+		status.sessionId = m_Config.sessionId; status.roundId = m_RoundId;
+		status.authorityGeneration = m_Config.migrationGeneration;
+		status.applyFrame = frame; status.cutoffFrame = ordinal; status.nextFrame = 1;
+		TakeSceneLoadStatus(status, nowMs);
+		QueueTiming(status); FlushTimingOutgoing();
+	}
+
+	void NetLockstepCoordinator::TakeSceneLoadStatus(const NetLockstepTiming& timing, uint64_t nowMs) {
+		auto& status = m_SceneLoadStatus[timing.peerId];
+		const auto incoming = std::pair(timing.applyFrame, timing.cutoffFrame);
+		const auto known = std::pair(status.frame, status.ordinal);
+		if (incoming < known || (incoming == known && status.complete)) return;
+		status = {timing.applyFrame, timing.cutoffFrame, timing.nextFrame == 1 ? nowMs : 0, timing.nextFrame == 1};
+		DiagnosticLine() << "[net-lockstep] scene load peer=" << static_cast<int>(timing.peerId) << " frame=" << status.frame
+		                 << " ordinal=" << status.ordinal << (status.complete ? " complete" : " begin") << " now_ms=" << nowMs << std::endl;
+	}
+
+	bool NetLockstepCoordinator::SceneLoadInputPending(uint8_t peer, uint64_t frame, uint64_t nowMs) {
+		if (m_SceneLoadFrame == UINT64_MAX || frame < m_SceneLoadFrame ||
+		    frame - m_SceneLoadFrame < InputDelayAt(peer, m_SceneLoadFrame)) return false;
+		const auto found = m_SceneLoadStatus.find(peer);
+		if (found != m_SceneLoadStatus.end()) {
+			const auto& status = found->second;
+			if (status.frame > m_SceneLoadFrame) return false;
+			if (status.frame == m_SceneLoadFrame && status.ordinal >= m_SceneLoadOrdinal && status.complete) {
+				// The input becomes answerable when completion crosses its link; the report may precede that input.
+				const uint64_t boundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
+				return nowMs < status.completedAtMs || nowMs - status.completedAtMs < boundMs;
+			}
+		}
+		// Loading is a discrete world operation. It uses the existing startup answer budget, never an enlarged input bound.
+		const uint64_t budgetMs = std::min<uint64_t>(m_Config.timeoutMs, c_StartupAnswerBudgetMs);
+		if (nowMs >= m_SceneLoadStartedMs && nowMs - m_SceneLoadStartedMs >= budgetMs) {
+			if (!m_SceneLoadBudgetNamed) {
+				m_SceneLoadBudgetNamed = true;
+				DiagnosticLine() << "[net-lockstep] scene load frame=" << m_SceneLoadFrame << " still awaits peer=" << static_cast<int>(peer)
+				                 << " readiness after the " << budgetMs << "ms answer budget" << std::endl;
+			}
+			return false;
+		}
+		return true;
+	}
+
 	void NetLockstepCoordinator::BeginSynchronizedCapture(uint64_t completedFrame) {
 		NET_PLANE_CHECK();
 		if (m_Playback || completedFrame == UINT64_MAX || m_Config.simTickMs <= 0) return;
@@ -9922,6 +10008,7 @@ namespace RTE {
 		const auto back = m_ReclaimTransactions.find(local);
 		const bool backBy = back != m_ReclaimTransactions.end() && back->second.activationFrame <= frame;
 		if (!UsesBoundedWait() || local != GetHostPeerId() || m_GoodbyeDrain || frame > m_FinalFrame || (IsOwnHostSeatHeld() && !backBy) || m_RemotePeerIds.empty()) return false;
+		if (SceneLoadInputPending(local, frame, nowMs)) { m_OwnMissingFrame.reset(); return false; }
 		// The host's start work excuses its first ticks once; after a return only the return's own gap carries none of its input.
 		const uint64_t excusedThrough = back != m_ReclaimTransactions.end()
 			? std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames)
@@ -12891,6 +12978,7 @@ namespace RTE {
 		CENSUS(m_ObservationEpochs); CENSUS(m_HostAcceptedLocalFrames); CENSUS(m_InputAcceptance); CENSUS(m_InputAcceptanceLeadFrames); CENSUS(m_InputAcceptanceRejections); CENSUS(m_MigrationHistory); CENSUS(m_MigrationIncoming);
 		CENSUS(m_HostInputSilences);
 		CENSUS(m_PreStartFrames); CENSUS(m_ArrivalLeads); CENSUS(m_ArrivalLateness); CENSUS(m_TimingOutgoing);
+		CENSUS(m_SceneLoadStatus);
 		CENSUS(m_ParkCaptureHistoryMs); CENSUS(m_DropReasonsNamed); CENSUS(m_PlaneDeferredEvents); CENSUS(m_InstalledResyncTargets);
 		CENSUS(m_ResyncPrimeInputs); CENSUS(m_RetiredReclaimGaps); CENSUS(m_PreStartTiming);
 #undef CENSUS

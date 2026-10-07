@@ -3228,6 +3228,17 @@ namespace RTE {
 		return drained;
 	}
 
+	uint64_t ScenarioRunner::BeginSharedSceneLoad(uint64_t frame) {
+		NetLockstepPlaneGuard plane;
+		return s_LockstepCoordinator && !WorldCatchUpActive() ? s_LockstepCoordinator->NoteSharedSceneLoad(frame) : 0;
+	}
+
+	void ScenarioRunner::CompleteSharedSceneLoad(uint64_t frame, uint64_t ordinal) {
+		NetLockstepPlaneGuard plane;
+		if (s_LockstepCoordinator && ordinal != 0 && !WorldCatchUpActive())
+			s_LockstepCoordinator->CompleteSharedSceneLoad(frame, ordinal, NetLockstepNowMs());
+	}
+
 	void ScenarioRunner::PublishLocalStartup() {
 		NetLockstepPlaneGuard plane;
 		// The seat's device goes out with the startup reading, so the agreed record names it before any frame does.

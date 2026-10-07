@@ -2512,7 +2512,7 @@ void GameActivity::Update() {
 		// But only if we're not editing something, because editor will scroll the screen himself
 		// and double scrolling will cause CC gitch when we'll cross the seam
 		else if (m_ControlledActor[player] && m_ActivityState != ActivityState::Editing && m_ActivityState != ActivityState::PreGame) {
-			g_CameraMan.SetScrollTarget(m_ControlledActor[player]->GetViewPoint(), 0.1, ScreenOfPlayer(player));
+			g_CameraMan.SetScrollTarget(g_CameraMan.GetActorScrollTarget(*m_ControlledActor[player], m_ControlledActor[player]->GetViewPoint(), ScreenOfPlayer(player)), 0.1, ScreenOfPlayer(player));
 		}
 
 		if (m_ControlledActor[player] && m_ViewState[player] != ViewState::DeathWatch && m_ViewState[player] != ViewState::ActorSelect && m_ViewState[player] != ViewState::AIGoToPoint && m_ViewState[player] != ViewState::UnitSelectCircle) {
@@ -2664,6 +2664,8 @@ void GameActivity::Update() {
 		///////////////////////////////////////
 		// Configure banners to show when important things happen, like the game over or death of brain
 
+		// A shared scripted scene can replace a living brain after the old world is purged.
+		if (m_SharedPlayerSeats && m_Brain[player] && !m_Brain[player]->IsDead() && m_pBannerRed[player]->GetBannerText() == "DEAD") m_pBannerRed[player]->ClearText();
 		if (IsOver()) {
 			// Override previous messages
 			if (m_pBannerRed[player]->IsVisible() && m_pBannerRed[player]->GetBannerText() != "FAIL")
@@ -3732,6 +3734,14 @@ bool GameActivity::PlaceUnassignedBrain(int player) {
 }
 
 void GameActivity::ForgetDestroyedActor(const Actor* actor) {
+	if (!actor) return;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if ((m_ControlledActor[player] == actor || (m_SharedPlayerSeats && m_LockstepControlUID[player] == actor->GetUniqueID())) &&
+		    (m_ViewState[player] == ViewState::AIGoToPoint || m_ViewState[player] == ViewState::UnitSelectCircle)) {
+			// These views need the control slot that deletion clears.
+			m_ViewState[player] = ViewState::Normal;
+		}
+	}
 	Activity::ForgetDestroyedActor(actor);
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (m_pLastMarkedActor[player] == actor) m_pLastMarkedActor[player] = nullptr;

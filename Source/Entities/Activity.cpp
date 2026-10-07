@@ -14,6 +14,7 @@
 #include "MetaMan.h"
 #include "SceneMan.h"
 #include "ScenarioRunner.h"
+#include "SoundSimulation.h"
 #include "NetActorOwnership.h"
 #include "NetGameCommand.h"
 #include "LuaMan.h"
@@ -960,6 +961,20 @@ float Activity::GetPlayerFundsShare(int player) const {
 }
 
 void Activity::SetPlayerBrain(Actor* newBrain, int player) {
+	SetPlayerBrainImpl(newBrain, player);
+}
+
+static bool SharedScriptControl() {
+	const auto key = SoundSimulationScope::CurrentKey();
+	// Activity startup runs on every peer before the tick scope opens.
+	return key.domain == SoundExecutionDomain::SharedSimulation || (key.domain == SoundExecutionDomain::Presentation && key.objectUID == 0);
+}
+
+void Activity::SetPlayerBrainFromScript(Actor* newBrain, int player) {
+	SetPlayerBrain(newBrain, player);
+}
+
+void Activity::SetPlayerBrainImpl(Actor* newBrain, int player) {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_HadBrain); });
 	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) return;
 	if (newBrain) {
@@ -1289,6 +1304,45 @@ void Activity::NoteLockstepControlBinding(int64_t uid, int player) {
 			m_LockstepControlUID[seat] = 0;
 		}
 	}
+}
+
+bool Activity::SwitchToActorFromScript(Actor* actor, int player, int team) {
+	if (!m_SharedPlayerSeats || !ScenarioRunner::IsLockstepControllerSyncActive() || !SharedScriptControl()) return SwitchToActor(actor, player, team);
+	if (LuaMan::AreScriptsFrozen() || player < Players::PlayerOne || player >= Players::MaxPlayerCount ||
+	    !IsSeatActive(player) || !IsHumanSeat(player) || team < Teams::TeamOne || team >= Teams::MaxTeamCount ||
+	    !actor || !g_MovableMan.IsActor(actor) || !actor->IsPlayerControllable()) return false;
+	Actor* previous = GetControlledActor(player);
+	if (actor != m_Brain[player] && ((actor != previous && actor->IsPlayerControlled()) || IsOtherPlayerBrain(actor, player))) return false;
+	const auto config = ScenarioRunner::GetLockstepMatchConfig();
+	if (!config) return false;
+	uint8_t owner = 0;
+	int seat = Players::PlayerOne;
+	for (const NetMatchPlayerSlot& slot: config->players) {
+		if (slot.cpu) continue;
+		if (seat++ == player) { owner = slot.peerId; break; }
+	}
+	if (!owner) return false;
+	// Scripted switches run on every peer and commit the same assignment without a local team command.
+	if (previous && previous != actor && g_MovableMan.IsActor(previous)) {
+		const int64_t uid = NetActorUID(previous);
+		MovableMan::ApplyLockstepControlHandoffToActor(*previous, false);
+		const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
+		ScenarioRunner::SetLockstepControlOverride(uid, seeded ? seeded : ScenarioRunner::GetLockstepPolicyActorOwner(uid, previous->GetTeam(), true));
+	}
+	actor->SetTeam(team);
+	const int64_t uid = NetActorUID(actor);
+	ScenarioRunner::SetLockstepControlOverride(uid, owner);
+	NoteLockstepControlBinding(uid, player);
+	Controller& controller = *actor->GetController();
+	const auto previousMode = controller.GetInputMode();
+	const int previousPlayer = controller.GetPlayerRaw();
+	const bool held = ScenarioRunner::IsLockstepSeatUnderAI(owner, ScenarioRunner::GetLockstepAppliedFrame());
+	const auto mode = held ? Controller::CIM_AI : Controller::CIM_PLAYER;
+	controller.ApplyWireMode(mode, player);
+	controller.TouchCheckpoint();
+	if (previousMode != mode || previousPlayer != player) actor->OnControllerInputModeChanged(previousMode, previousPlayer);
+	if (IsLocalHumanSeat(player) && !held && m_ControlledActor[player] != actor) SwitchToActor(actor, player, team);
+	return true;
 }
 
 bool Activity::SwitchToActor(Actor* actor, int player, int team) {

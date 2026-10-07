@@ -3916,6 +3916,8 @@ void MovableMan::RestartSimUpdateFrameNumber() {
 	m_SimUpdateFrameNumber = 0;
 }
 
+static void ForgetActivitySlots(MovableObject* object);
+
 void MovableMan::PurgeAllMOs() {
 	if (m_Speculation.active) {
 		ReportSpeculationViolation("purging", nullptr);
@@ -3953,6 +3955,7 @@ void MovableMan::PurgeAllMOs() {
 		while (!objects.empty()) {
 			auto* object = objects.front();
 			objects.pop_front();
+			ForgetActivitySlots(object);
 			delete object;
 		}
 	};
@@ -5356,8 +5359,18 @@ void MovableMan::ClearLockstepJoinQuarantine() {
 
 static void ForgetActivitySlots(MovableObject* object) {
 	Activity* activity = g_ActivityMan.GetActivity();
-	if (!activity) return;
-	if (const Actor* actor = dynamic_cast<Actor*>(object)) activity->ForgetDestroyedActor(actor);
+	const Actor* root = dynamic_cast<const Actor*>(object);
+	if (!activity || !root) return;
+	activity->ForgetDestroyedActor(root);
+	const ACraft* craft = dynamic_cast<const ACraft*>(root);
+	if (root->GetInventory()->empty() && (!craft || craft->GetCollectedInventory().empty())) return;
+	// Owned inventory actors die with their carrier and leave no activity aliases.
+	std::unordered_set<const Entity*> visited;
+	std::unordered_set<const MovableObject*> owned;
+	CollectOwnedMovableObjects(root, visited, owned);
+	for (const MovableObject* child: owned) {
+		if (const Actor* actor = dynamic_cast<const Actor*>(child); actor && actor != root) activity->ForgetDestroyedActor(actor);
+	}
 }
 
 void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {

@@ -11724,7 +11724,23 @@ end
 		bool frozen = true;
 		int previewCount = -1;
 		int liveCount = -1;
+		bool coldWaits = false;
 		if (actor && actor->LoadScript(g_PresetMan.GetFullModulePath("Tests.rte/PreviewUpdateHook.lua")) >= 0) {
+			LuaMan::CapturePreviewSelfCopies({actor.get()}, false);
+			MovableObject* cold = nullptr;
+			{
+				MovableObject::FaithfulCloneScope scope(false);
+				cold = dynamic_cast<MovableObject*>(actor->Clone());
+			}
+			if (auto* previewed = dynamic_cast<Actor*>(cold)) {
+				LuaMan::BeginPreviewScripts({previewed}, false, {actor.get()});
+				coldWaits = !LuaMan::ShouldRunPreviewHook(previewed, "Update") && !actor->ObjectScriptsInitialized();
+				LuaMan::SetScriptsFrozen(true);
+				previewed->UpdateScripts();
+				LuaMan::SetScriptsFrozen(false);
+			}
+			LuaMan::EndPreviewScripts();
+			delete cold;
 			loaded = actor->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {"init"}) >= 0;
 			LuaMan::CapturePreviewSelfCopies({actor.get()}, false);
 			MovableObject* clone = nullptr;
@@ -11749,7 +11765,8 @@ end
 			previewCount = count("preview");
 			liveCount = count("live");
 		}
-		const bool passed = loaded && !frozen && previewCount == 2 && liveCount == 0;
+		const bool passed = coldWaits && loaded && !frozen && previewCount == 2 && liveCount == 0;
+		std::cout << "[script-graph-selftest] " << (coldWaits ? "PASS" : "FAIL") << " preview_copy_waits_for_committed_create" << std::endl;
 		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " preview_copy_runs_its_update_hook loaded=" << loaded << " frozen=" << frozen
 		          << " preview_updates=" << previewCount << " live_updates=" << liveCount << std::endl;
 		checkpointValues = passed && checkpointValues;
@@ -12983,8 +13000,49 @@ LuaMan::~LuaMan() {
 	Destroy();
 }
 
+namespace {
+	std::string ScriptFilePath(const std::string& path, bool write = false, bool rawPath = false) {
+		const std::string original = System::GetWorkingDirectory() + (rawPath ? path : g_PresetMan.GetFullModulePath(path));
+		static const std::filesystem::path fileRoot = [] {
+			const char* root = std::getenv("CC_LUA_FILE_ROOT");
+			return root && *root ? std::filesystem::absolute(root).lexically_normal() : std::filesystem::path();
+		}();
+		if (fileRoot.empty()) return original;
+		if (path.find("..") != std::string::npos) return write ? std::string() : original;
+
+		std::string modulePath = std::filesystem::path(path).generic_string();
+		std::replace(modulePath.begin(), modulePath.end(), '\\', '/');
+		const std::string module = g_PresetMan.GetModuleNameFromPath(modulePath + "/");
+		if (module.empty() || !module.ends_with(System::GetModulePackageExtension())) return write ? std::string() : original;
+		modulePath = g_PresetMan.GetFullModulePath(modulePath.substr(modulePath.find(module)));
+		const std::filesystem::path moduleRelative = g_PresetMan.GetFullModulePath(module);
+		std::filesystem::path installed = System::GetWorkingDirectory() + moduleRelative.generic_string();
+#ifndef _WIN32
+		installed = GetCaseInsensitiveFullPath(installed.generic_string());
+#endif
+		const std::filesystem::path stored = fileRoot / installed.filename();
+		const std::filesystem::path suffix = std::filesystem::path(modulePath).lexically_relative(moduleRelative);
+		static std::mutex fileStoreMutex;
+		std::lock_guard<std::mutex> lock(fileStoreMutex);
+		std::error_code error;
+		// Clone on the first write so later removal and rename never fall back to installed files.
+		if (write && !std::filesystem::exists(stored)) {
+			std::filesystem::create_directories(fileRoot, error);
+			if (!error && std::filesystem::is_directory(installed)) {
+				std::filesystem::copy(installed, stored, std::filesystem::copy_options::recursive, error);
+			}
+			if (error) {
+				g_ConsoleMan.PrintString("ERROR: Cannot prepare private Lua file store for " + module + ": " + error.message());
+				return {};
+			}
+		}
+		return write || std::filesystem::exists(stored) ? (stored / suffix).generic_string()
+		                                                 : System::GetWorkingDirectory() + modulePath;
+	}
+}
+
 const std::vector<std::string>* LuaMan::DirectoryList(const std::string& path) {
-	std::string fullPath = System::GetWorkingDirectory() + path;
+	std::string fullPath = ScriptFilePath(path, false, true);
 	auto* directoryPaths = new std::vector<std::string>();
 
 	if (fullPath.find("..") == std::string::npos) {
@@ -13003,7 +13061,7 @@ const std::vector<std::string>* LuaMan::DirectoryList(const std::string& path) {
 }
 
 const std::vector<std::string>* LuaMan::FileList(const std::string& path) {
-	std::string fullPath = System::GetWorkingDirectory() + path;
+	std::string fullPath = ScriptFilePath(path, false, true);
 	auto* filePaths = new std::vector<std::string>();
 
 	if (fullPath.find("..") == std::string::npos) {
@@ -13022,7 +13080,7 @@ const std::vector<std::string>* LuaMan::FileList(const std::string& path) {
 }
 
 bool LuaMan::FileExists(const std::string& path) {
-	std::string fullPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(path);
+	std::string fullPath = ScriptFilePath(path);
 	if (fullPath.find("..") == std::string::npos) {
 #ifndef _WIN32
 		fullPath = GetCaseInsensitiveFullPath(fullPath);
@@ -13033,7 +13091,7 @@ bool LuaMan::FileExists(const std::string& path) {
 }
 
 bool LuaMan::DirectoryExists(const std::string& path) {
-	std::string fullPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(path);
+	std::string fullPath = ScriptFilePath(path);
 	if (fullPath.find("..") == std::string::npos) {
 #ifndef _WIN32
 		fullPath = GetCaseInsensitiveFullPath(fullPath);
@@ -13066,7 +13124,7 @@ int LuaMan::FileOpen(const std::string& path, const std::string& accessMode) {
 		return -1;
 	}
 
-	std::string fullPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(path);
+	std::string fullPath = ScriptFilePath(path, accessMode != "r" && accessMode != "rt");
 	if (IsValidModulePath(fullPath)) {
 #ifdef _WIN32
 		FILE* file = fopen(fullPath.c_str(), accessMode.c_str());
@@ -13077,7 +13135,12 @@ int LuaMan::FileOpen(const std::string& path, const std::string& accessMode) {
 			}
 
 			std::filesystem::path inspectedPath = System::GetWorkingDirectory();
-			const std::filesystem::path relativeFilePath = std::filesystem::path(fullPath).lexically_relative(inspectedPath);
+			std::filesystem::path relativeFilePath = std::filesystem::path(fullPath).lexically_relative(inspectedPath);
+			if (!relativeFilePath.empty() && *relativeFilePath.begin() == "..") {
+				// An external private store is walked from its absolute root.
+				inspectedPath = std::filesystem::path(fullPath).root_path();
+				relativeFilePath = std::filesystem::path(fullPath).relative_path();
+			}
 
 			// Iterate over all path parts
 			for (std::filesystem::path::const_iterator relativeFilePathIterator = relativeFilePath.begin(); relativeFilePathIterator != relativeFilePath.end(); ++relativeFilePathIterator) {
@@ -13133,7 +13196,7 @@ void LuaMan::FileCloseAll() {
 }
 
 bool LuaMan::FileRemove(const std::string& path) {
-	std::string fullPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(path);
+	std::string fullPath = ScriptFilePath(path, true);
 	if (IsValidModulePath(fullPath)) {
 #ifndef _WIN32
 		fullPath = GetCaseInsensitiveFullPath(fullPath);
@@ -13147,8 +13210,8 @@ bool LuaMan::FileRemove(const std::string& path) {
 }
 
 bool LuaMan::DirectoryCreate(const std::string& path, bool recursive) {
-	std::string fullPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(path);
-	if (fullPath.find("..") == std::string::npos) {
+	std::string fullPath = ScriptFilePath(path, true);
+	if (!fullPath.empty() && fullPath.find("..") == std::string::npos) {
 #ifndef _WIN32
 		fullPath = GetCaseInsensitiveFullPath(fullPath);
 #endif
@@ -13160,13 +13223,13 @@ bool LuaMan::DirectoryCreate(const std::string& path, bool recursive) {
 			}
 		} catch (const std::filesystem::filesystem_error& e) {}
 	}
-	g_ConsoleMan.PrintString("ERROR: Failed to remove directory " + path);
+	g_ConsoleMan.PrintString("ERROR: Failed to create directory " + path);
 	return false;
 }
 
 bool LuaMan::DirectoryRemove(const std::string& path, bool recursive) {
-	std::string fullPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(path);
-	if (fullPath.find("..") == std::string::npos) {
+	std::string fullPath = ScriptFilePath(path, true);
+	if (!fullPath.empty() && fullPath.find("..") == std::string::npos) {
 #ifndef _WIN32
 		fullPath = GetCaseInsensitiveFullPath(fullPath);
 #endif
@@ -13185,8 +13248,8 @@ bool LuaMan::DirectoryRemove(const std::string& path, bool recursive) {
 }
 
 bool LuaMan::FileRename(const std::string& oldPath, const std::string& newPath) {
-	std::string fullOldPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(oldPath);
-	std::string fullNewPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(newPath);
+	std::string fullOldPath = ScriptFilePath(oldPath, true);
+	std::string fullNewPath = ScriptFilePath(newPath, true);
 	if (IsValidModulePath(fullOldPath) && IsValidModulePath(fullNewPath)) {
 #ifndef _WIN32
 		fullOldPath = GetCaseInsensitiveFullPath(fullOldPath);
@@ -13206,9 +13269,9 @@ bool LuaMan::FileRename(const std::string& oldPath, const std::string& newPath) 
 }
 
 bool LuaMan::DirectoryRename(const std::string& oldPath, const std::string& newPath) {
-	std::string fullOldPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(oldPath);
-	std::string fullNewPath = System::GetWorkingDirectory() + g_PresetMan.GetFullModulePath(newPath);
-	if (fullOldPath.find("..") == std::string::npos && fullNewPath.find("..") == std::string::npos) {
+	std::string fullOldPath = ScriptFilePath(oldPath, true);
+	std::string fullNewPath = ScriptFilePath(newPath, true);
+	if (!fullOldPath.empty() && !fullNewPath.empty() && fullOldPath.find("..") == std::string::npos && fullNewPath.find("..") == std::string::npos) {
 #ifndef _WIN32
 		fullOldPath = GetCaseInsensitiveFullPath(fullOldPath);
 		fullNewPath = GetCaseInsensitiveFullPath(fullNewPath);
@@ -13994,6 +14057,7 @@ static std::vector<uint64_t> HashScriptObjectGraphs(LuaStateWrapper& master, Lua
 
 std::unordered_set<const MovableObject*> LuaMan::s_PreviewClones;
 std::unordered_set<long> LuaMan::s_PreviewFrozenUIDs;
+static std::unordered_set<long> s_PreviewUninitializedUIDs;
 // What BeginPreviewScripts bound into a state, so EndPreviewScripts can undo exactly that.
 struct PreviewCloneBinding {
 	long uid;
@@ -15539,7 +15603,8 @@ bool LuaMan::ShouldRunPreviewHook(const MovableObject* mo, const std::string& fu
 	if (!mo || !IsPreviewClone(mo) || !(IsPreviewEdgeHook(functionName) || IsPreviewTickHook(functionName))) {
 		return false;
 	}
-	return s_PreviewSharedSlot || s_PreviewFrozenUIDs.count(mo->GetUniqueID()) == 0;
+	return !s_PreviewUninitializedUIDs.contains(mo->GetUniqueID()) &&
+	       (s_PreviewSharedSlot || s_PreviewFrozenUIDs.count(mo->GetUniqueID()) == 0);
 }
 
 std::vector<std::pair<MovableObject*, LuaStateWrapper*>> LuaMan::PreviewBindingsUnder(const MovableObject* root) {
@@ -15641,6 +15706,7 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 	s_PreviewPartByUID.clear();
 	s_PreviewCloneBindings.clear();
 	s_PreviewSharedSlot = sharedSlot;
+	s_PreviewUninitializedUIDs.clear();
 	for (MovableObject* clone: clones) {
 		if (clone) {
 			s_PreviewRootByUID[clone->GetUniqueID()] = clone;
@@ -15661,6 +15727,8 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 		WalkOwned(originals[i], [](MovableObject* part) {
 			if (const auto copy = s_PreviewPartByUID.find(part->GetUniqueID()); copy != s_PreviewPartByUID.end() && copy->second != part) {
 				s_PreviewCloneOf[part] = copy->second;
+				// Create belongs to the committed instance; its cold copy waits for the next initialized hold.
+				if (!part->ObjectScriptsInitialized()) s_PreviewUninitializedUIDs.insert(part->GetUniqueID());
 			}
 		});
 	}
@@ -15735,6 +15803,7 @@ void LuaMan::EndPreviewScripts() {
 	s_PreviewRootByUID.clear();
 	s_PreviewPartByUID.clear();
 	s_PreviewFrozenUIDs.clear();
+	s_PreviewUninitializedUIDs.clear();
 	s_PreviewSharedSlot = false;
 	s_RunningPreviewHook = false;
 	DropPreviewSoundCopies();

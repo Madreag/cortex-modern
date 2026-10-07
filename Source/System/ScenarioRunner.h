@@ -510,6 +510,8 @@ namespace RTE {
 		static bool PollLockstepSimulationTick(uint64_t tick);
 		/// Publishes this machine's startup reading and seat device to the round, once per round.
 		static void PublishLocalStartup();
+		static uint64_t BeginSharedSceneLoad(uint64_t frame);
+		static void CompleteSharedSceneLoad(uint64_t frame, uint64_t ordinal);
 		static bool WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
 		/// The local frames already queued for a future lockstep tick (the input-delay pipeline).
 		static bool PeekLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames);

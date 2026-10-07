@@ -427,7 +427,7 @@ LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, CameraMan) {
 	    .def("SetScrollTarget", &CameraMan::SetScrollTarget)
 	    .def("TargetDistanceScalar", &CameraMan::TargetDistanceScalar)
 	    .def("CheckOffset", &CameraMan::CheckOffset)
-	    .def("SetScroll", &CameraMan::SetScroll)
+	    .def("SetScroll", &CameraMan::SetScrollFromScript)
 	    .def("AddScreenShake", (void(CameraMan::*)(float, int)) & CameraMan::AddScreenShake)
 	    .def("AddScreenShake", (void(CameraMan::*)(float, const Vector&)) & CameraMan::AddScreenShake);
 }

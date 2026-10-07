@@ -16,4 +16,5 @@ activate P1T1Box
 wait_ms 700
 activate ButtonStartGame
 wait_file {PROBE_DIR}/done.json 90
+assert_console 0
 exit

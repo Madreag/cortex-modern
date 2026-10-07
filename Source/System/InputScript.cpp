@@ -2,12 +2,16 @@
 
 #include "Constants.h"
 #include "FloatText.h"
+#include "ScenarioRunner.h"
 #include "Vector.h"
 
+#include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <vector>
 
@@ -32,6 +36,16 @@ namespace RTE {
 		std::vector<VectorRange> s_Aims;
 		std::vector<VectorRange> s_Mouse;
 		std::array<bool, Players::MaxPlayerCount> s_PlayerDriven{};
+		bool s_RoundRelative = false;
+		uint64_t s_MinimumOrigin = 0;
+
+		std::optional<uint64_t> TimelineTick(uint64_t tick, uint64_t firstFrame) {
+			if (!s_RoundRelative) return tick;
+			// Startup negotiation commits neutral frames before this boundary.
+			if (firstFrame == 0) return std::nullopt;
+			const uint64_t origin = std::max(firstFrame, s_MinimumOrigin);
+			return tick >= origin ? std::optional<uint64_t>(tick - origin) : std::nullopt;
+		}
 
 		// Names follow the InputElements enum without its INPUT_ prefix, in enum order.
 		constexpr const char* c_ElementNames[] = {
@@ -90,6 +104,8 @@ namespace RTE {
 		s_Aims.clear();
 		s_Mouse.clear();
 		s_PlayerDriven.fill(false);
+		s_RoundRelative = false;
+		s_MinimumOrigin = 0;
 		std::string line;
 		int lineNumber = 0;
 		while (std::getline(in, line)) {
@@ -105,6 +121,25 @@ namespace RTE {
 				tokens.push_back(word);
 			}
 			if (tokens.empty()) {
+				continue;
+			}
+			if (tokens[0].rfind("timeline=", 0) == 0) {
+				bool valid = tokens[0] == "timeline=lockstep-start" && tokens.size() <= 2 && !s_RoundRelative &&
+				    s_Elements.empty() && s_Aims.empty() && s_Mouse.empty();
+				if (valid && tokens.size() == 2) {
+					valid = tokens[1].rfind("min=", 0) == 0 && tokens[1].size() > 4;
+					if (valid) {
+						const char* begin = tokens[1].data() + 4;
+						const char* end = tokens[1].data() + tokens[1].size();
+						const auto parsed = std::from_chars(begin, end, s_MinimumOrigin);
+						valid = parsed.ec == std::errc{} && parsed.ptr == end;
+					}
+				}
+				if (!valid) {
+					if (error) *error = "input script line " + std::to_string(lineNumber) + ": expected one initial timeline=lockstep-start [min=N]";
+					return false;
+				}
+				s_RoundRelative = true;
 				continue;
 			}
 			int player = 0;
@@ -156,6 +191,9 @@ namespace RTE {
 	}
 
 	bool InputScript::HeldAt(int player, int element, uint64_t simTick) {
+		const auto tick = TimelineTick(simTick, s_RoundRelative ? ScenarioRunner::GetLockstepEffectiveStartFrame() : 0);
+		if (!tick) return false;
+		simTick = *tick;
 		for (const ElementRange& range: s_Elements) {
 			if (range.player == player && range.element == element && simTick >= range.from && simTick <= range.to) {
 				return true;
@@ -165,6 +203,9 @@ namespace RTE {
 	}
 
 	bool InputScript::AimAt(int player, uint64_t simTick, Vector& outAim) {
+		const auto tick = TimelineTick(simTick, s_RoundRelative ? ScenarioRunner::GetLockstepEffectiveStartFrame() : 0);
+		if (!tick) return false;
+		simTick = *tick;
 		for (const VectorRange& range: s_Aims) {
 			if (range.player == player && simTick >= range.from && simTick <= range.to) {
 				outAim = range.value;
@@ -175,6 +216,9 @@ namespace RTE {
 	}
 
 	bool InputScript::MouseAt(int player, uint64_t simTick, Vector& outMovement) {
+		const auto tick = TimelineTick(simTick, s_RoundRelative ? ScenarioRunner::GetLockstepEffectiveStartFrame() : 0);
+		if (!tick) return false;
+		simTick = *tick;
 		for (const VectorRange& range: s_Mouse) {
 			if (range.player == player && simTick >= range.from && simTick <= range.to) {
 				outMovement = range.value;
@@ -186,5 +230,38 @@ namespace RTE {
 
 	bool InputScript::DrivesPlayer(int player) {
 		return s_Active && player >= 0 && player < Players::MaxPlayerCount && s_PlayerDriven[player];
+	}
+
+	bool InputScript::RunTimelineSelfTest() {
+		bool passed = true;
+		const auto check = [&passed](const char* name, bool valid) {
+			passed = valid && passed;
+			std::cout << "[input-edge-selftest] " << (valid ? "PASS " : "FAIL ") << name << std::endl;
+		};
+		const char* path = "input-timeline-selftest.txt";
+		{
+			std::ofstream script(path);
+			script << "timeline=lockstep-start min=17\nplayer=0 1 1 MOUSE=1,-18\nplayer=0 3 3 FIRE\n";
+		}
+		std::string error;
+		check("round_relative_timeline_loads", Load(path, &error) && s_RoundRelative && s_MinimumOrigin == 17 && DrivesPlayer(0));
+		check("round_timeline_waits_for_agreement", !TimelineTick(40, 0) && !TimelineTick(37, 38));
+		check("round_timeline_starts_at_agreed_frame", TimelineTick(38, 38) == 0 && TimelineTick(39, 38) == 1);
+		check("round_timeline_preserves_down_and_release", TimelineTick(41, 38) == 3 && TimelineTick(42, 38) == 4 &&
+		    s_Elements.size() == 1 && s_Elements[0].from == 3 && s_Elements[0].to == 3);
+		check("round_timeline_respects_minimum_origin", !TimelineTick(16, 1) && TimelineTick(20, 1) == 3);
+		check("round_timeline_tracks_next_round", TimelineTick(103, 100) == 3 && !TimelineTick(99, 100));
+		{
+			std::ofstream script(path);
+			script << "player=0 3 3 FIRE\n";
+		}
+		check("legacy_timeline_is_unchanged", Load(path, &error) && !s_RoundRelative && HeldAt(0, InputElements::INPUT_FIRE, 3) &&
+		    !HeldAt(0, InputElements::INPUT_FIRE, 4) && TimelineTick(3, 38) == 3);
+		{
+			std::ofstream script(path);
+			script << "timeline=lockstep-start min=-1\nplayer=0 3 3 FIRE\n";
+		}
+		check("invalid_timeline_names_its_failure", !Load(path, &error) && error.find("initial timeline=") != std::string::npos);
+		return passed;
 	}
 } // namespace RTE

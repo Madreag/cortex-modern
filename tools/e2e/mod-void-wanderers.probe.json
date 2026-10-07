@@ -3,8 +3,23 @@
   "timeout_ms": 110000,
   "steps": [
     {
-      "op": "wait_file",
-      "path": "{STAGE}/gameplay-started.json"
+      "op": "wait",
+      "screen": "Gameplay",
+      "sim_at_least": 32
+    },
+    {
+      "op": "screenshot",
+      "name": "vw_start",
+      "composited": true
+    },
+    {
+      "op": "wait",
+      "sim_at_least": 30
+    },
+    {
+      "op": "screenshot",
+      "name": "vw_start_ready",
+      "composited": true
     },
     {
       "op": "menu",
@@ -12,13 +27,21 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 45000
+      "sim_at_least": 330
     },
     {
-      "op": "assert",
-      "equals": {
-        "screen": "Gameplay"
-      }
+      "op": "screenshot",
+      "name": "vw_ship",
+      "composited": true
+    },
+    {
+      "op": "wait",
+      "sim_at_least": 2500
+    },
+    {
+      "op": "screenshot",
+      "name": "vw_played",
+      "composited": true
     },
     {
       "op": "key_down",

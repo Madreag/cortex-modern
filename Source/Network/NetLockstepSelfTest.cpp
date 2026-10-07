@@ -2421,6 +2421,87 @@ namespace RTE {
 
 		// A resumed host's own restore is its park, not the work of a seat that already plays: that seat's first-second
 		// ramp is the start work it published, so a stall of it is held without the survivors waiting out our restore.
+		bool TestSharedSceneLoadKeepsThePlayingSeat(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A67, 3, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A67, 3, NetTransportLane::ControlReliable);
+			a.startFrame = b.startFrame = 1;
+			a.roundId = b.roundId = 67;
+			a.substituteSlowPeers = b.substituteSlowPeers = true;
+			a.simTickMs = b.simTickMs = 1000.0 / 60.0;
+			a.timeoutMs = b.timeoutMs = 30000;
+			a.relayToOtherPeers = true;
+			a.peerInputDelayFrames = b.peerInputDelayFrames = {{1, 3}, {2, 3}};
+			a.matchConfig = b.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A67);
+			if (!StartCoordinatorPair(47658, hostWire, clientWire, host, client, a, b, error)) return false;
+			host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
+			constexpr uint64_t loadFrame = 80, loadMs = 670;
+			// The same input schedule also detects engines without a scene-load notification.
+			const auto notify = []<typename Coordinator>(Coordinator& coordinator) {
+				if constexpr (requires { coordinator.NoteSharedSceneLoad(loadFrame); }) return coordinator.NoteSharedSceneLoad(loadFrame);
+				else return uint64_t{0};
+			};
+			const auto complete = []<typename Coordinator>(Coordinator& coordinator, uint64_t ordinal, uint64_t now) {
+				if constexpr (requires { coordinator.CompleteSharedSceneLoad(loadFrame, ordinal, now); })
+					coordinator.CompleteSharedSceneLoad(loadFrame, ordinal, now);
+			};
+			uint64_t hostProduced = 1, clientProduced = 1, loadBeganMs = 0, resumedAtMs = 0;
+			uint64_t clientLoadOrdinal = 0;
+			bool clientLoading = false, clientStopped = false;
+			std::string queueError;
+			const auto canSimulate = [](NetLockstepCoordinator& peer, uint64_t frame) {
+				return frame < peer.GetStats().effectiveStartFrame || peer.HasReadyFrame(frame);
+			};
+			const auto simulate = [&](NetLockstepCoordinator& peer, uint64_t& produced, int64_t uid) {
+				if (!peer.QueueLocalInput(produced, {MakeFrame(uid, produced)}, {}, &queueError)) return false;
+				if (produced >= peer.GetStats().effectiveStartFrame) {
+					NetLockstepReadyFrame ready;
+					if (!peer.PopReadyFrame(ready) || ready.frame != produced) { queueError = "scene-load fixture consumed a different frame"; return false; }
+					(void)peer.FinishSimulationTick(ready.frame);
+				}
+				++produced;
+				return true;
+			};
+			for (uint64_t now = 1; now < 10000; ++now) {
+				host.Tick(now); client.Tick(now);
+				if (now % 17 == 0) {
+					if (canSimulate(host, hostProduced)) {
+						if (hostProduced == loadFrame) complete(host, notify(host), now);
+						if (!simulate(host, hostProduced, 100)) { *error = queueError; return false; }
+					} else (void)host.NoteFrameWait(hostProduced, now, true);
+					if (!clientStopped && canSimulate(client, clientProduced)) {
+						if (clientProduced == loadFrame && !clientLoading) { clientLoading = true; loadBeganMs = now; clientLoadOrdinal = notify(client); }
+						if (!clientLoading || now - loadBeganMs >= loadMs) {
+							if (clientLoading && resumedAtMs == 0) { resumedAtMs = now; complete(client, clientLoadOrdinal, now); }
+							if (!simulate(client, clientProduced, 200)) { *error = queueError; return false; }
+						}
+					}
+					if (resumedAtMs != 0 && clientProduced > loadFrame + 12) clientStopped = true;
+				}
+				const uint64_t holds = host.GetStats().peers.at(2).holds;
+				if (!clientStopped && holds != 0) {
+					*error = "a playing seat was held during the shared scene load: load_frame=" + std::to_string(loadFrame) +
+					         " missing_frame=" + std::to_string(host.GetStats().nextFrame) + " loading_ms=" +
+					         std::to_string(loadBeganMs != 0 ? now - loadBeganMs : 0) + " holds=" + std::to_string(holds);
+					return false;
+				}
+				if (clientStopped && holds != 0) {
+					const uint64_t boundMs = static_cast<uint64_t>(std::floor(a.slowPlayerBoundTicks * a.simTickMs));
+					if (holds != 1 || host.GetStats().lastHoldDeclarationMs > boundMs) {
+						*error = "scene-load completion changed the ordinary silent-input bound";
+						return false;
+					}
+					std::cout << "[net-lockstep-selftest] PASS shared_scene_load_keeps_the_playing_seat load_ms=" << loadMs
+					          << " resumed_frame=" << clientProduced - 1 << " later_stall_hold_ms=" << host.GetStats().lastHoldDeclarationMs << std::endl;
+					return true;
+				}
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+			}
+			*error = "scene-load fixture did not finish its load, resume play, and detect the later silent seat";
+			return false;
+		}
+
 		bool TestAPlayingPeersRampIsNotOurPark(std::string* error) {
 			LoopbackTransport hostWire, clientWire;
 			NetLockstepCoordinator host, client;
@@ -27444,6 +27525,12 @@ namespace {
 			std::cerr << "[net-lockstep-selftest] FAIL: " << message << std::endl;
 			return 1;
 		};
+		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
+		if (selectedCase) {
+			if (std::string_view(selectedCase) != "shared-scene-load") return fail("unknown selected lockstep self-test case");
+			std::string error;
+			return TestSharedSceneLoadKeepsThePlayingSeat(&error) ? 0 : fail(error);
+		}
 
 		if (PathFinder::RunHorizonGridSelfTest() != 0) {
 			return fail("horizon path grid self-test failed");
@@ -27525,6 +27612,7 @@ namespace {
 		row(&TestAReturnerReadsTicksRelayedPastItsEpoch, "a_returner_reads_ticks_relayed_past_its_epoch");
 		row(&TestAStartingPeerIsJudgedByItsRampForItsFirstSecond, "a_starting_peer_is_judged_by_its_ramp_for_its_first_second");
 		row(&TestAPlayingPeersRampIsNotOurPark, "a_playing_peers_ramp_is_not_our_park");
+		row(&TestSharedSceneLoadKeepsThePlayingSeat, "shared_scene_load_keeps_the_playing_seat");
 		row(&TestASeatIsNotLateForOurOwnDecision, "a_seat_is_not_late_for_our_own_decision");
 		row(&TestAFirstDelayChangeIsNotAMutualWait, "a_first_delay_change_is_not_a_mutual_wait");
 		row(&TestALiveDelayDecreaseKeepsAWaitedSeatsSlack, "a_live_delay_decrease_keeps_a_waited_seats_slack");
