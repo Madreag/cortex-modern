@@ -1,5 +1,6 @@
 """Cache detectors use temporary private snapshots, never an engine or owner tree."""
 import hashlib
+import builtins
 import contextlib
 import json
 import os
@@ -118,7 +119,15 @@ if __name__=='__main__':raise SystemExit(main())
                              mutex=lambda *a,**k:contextlib.nullcontext(), atomic_json=atomic)
             exec(compile(spread.native_cache_source(code), '<cache-worker>', 'exec'), namespace)
             failure = OSError('link limit'); failure.winerror = 1142
-            with patch.object(spread.os, 'link', side_effect=failure):
+            original_import = builtins.__import__
+            def control_import(name, *args, **kwargs):
+                if name == 'run_sim_test':
+                    raise ModuleNotFoundError("No module named 'run_sim_test'")
+                return original_import(name, *args, **kwargs)
+            # The materializer imports only the published control ship set,
+            # before repository tools are available on its module path.
+            with patch.object(spread.os, 'link', side_effect=failure), \
+                 patch.object(builtins, '__import__', side_effect=control_import):
                 result = namespace['materialize'](dict(box=dict(name='NAMED'), source=str(source),
                     target=str(snapshots/'new'/'file'), expected=expected, head='new', manifest=dict(file=expected)))
             self.assertTrue(result['verified'])
