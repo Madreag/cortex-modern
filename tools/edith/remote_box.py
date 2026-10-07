@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path, PureWindowsPath
 from typing import Callable, Iterable
 
@@ -39,16 +40,199 @@ def ps_quote(value: object) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def session_wrapper(floor: float) -> str:
+    """The installed native session runner, with its catalog memory floor."""
+    floor = format(float(floor), 'g')
+    return ("$ErrorActionPreference='Stop'\n"
+            "$root=Split-Path -Parent $PSCommandPath\n"
+            "$env:CCCP_HEADLESS='1'\n"
+            "$free=(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB\n"
+            f"if($free -lt {floor}) {{\n"
+            f"  @{{exit_code=97;reason='native memory floor';free_gb=$free;floor_gb={floor};finished=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()}} | ConvertTo-Json -Compress | Set-Content -Encoding utf8 -LiteralPath \"$root/last-result.json\"\n"
+            "  exit 97\n}\n"
+            "& 'C:/Program Files/PowerShell/7/pwsh.exe' -NoProfile -NonInteractive -File \"$root/command.ps1\"\n"
+            "exit $LASTEXITCODE\n")
+
+
+def wrapper_refusal(box: dict, slot: dict, *, data: bytes | None = None) -> str | None:
+    """Authenticate a preserved wrapper; mentioning command.ps1 is insufficient."""
+    if not slot.get('preserve_runner'):
+        return None
+    reason = f"FOREIGN TASK WRAPPER: {box['name']} {slot['task']} {slot['wrapper']}"
+    try:
+        if data is None:
+            path = Path(slot['wrapper'])
+            metadata = path.stat(follow_symlinks=False)
+            if (path.is_symlink() or getattr(path, 'is_junction', lambda:False)()
+                    or getattr(metadata, 'st_file_attributes', 0) & REPARSE or metadata.st_size > 65536):
+                return reason
+            data = path.read_bytes()
+        if expected := slot.get('wrapper_sha256'):
+            return None if hashlib.sha256(data).hexdigest().lower() == expected.lower() else reason
+        text = data.decode('utf-8-sig').replace('\r\n', '\n')
+        floor = box.get('free_floor_gb')
+        if floor is None:
+            match = re.search(r'^if\(\$free -lt (\d+(?:\.\d+)?)\) \{$', text, re.M)
+            if match is None:
+                return reason
+            floor = float(match[1])
+        return None if text.rstrip('\n') == session_wrapper(floor).rstrip('\n') else reason
+    except (OSError, UnicodeError, ValueError):
+        return reason
+
+
+def task_restore_script(slot: dict, token: str, *, abort: bool = False) -> str:
+    """Restore only this token's command. The preserved wrapper is never replaced."""
+    wrapper, payload, marker = (str(slot[key]).replace('\\', '/') for key in ('wrapper', 'payload', 'owner_marker'))
+    stage = str(PureWindowsPath(wrapper).parent / ('.direct-'+token)).replace('\\', '/')
+    incoming = str(PureWindowsPath(wrapper).parent / ('.direct-script-'+token+'.ps1')).replace('\\', '/')
+    lines = ["$ErrorActionPreference='Stop'", f"$token={ps_quote(token)}", f"$marker={ps_quote(marker)}",
+             f"$stage={ps_quote(stage)}", f"$wrapper={ps_quote(wrapper)}", f"$payload={ps_quote(payload)}",
+             "if (-not (Test-Path -LiteralPath $marker)) { return }",
+             "$owner=Get-Content -Raw -LiteralPath $marker | ConvertFrom-Json",
+             "if ($owner.token -ne $token) { throw 'DIRECT TASK OWNER CHANGED: restore refused' }"]
+    if abort:
+        lines += [f"$task={ps_quote(slot['task'])}",
+                  "if ((Get-ScheduledTask -TaskName $task).State -eq 'Running') { Stop-ScheduledTask -TaskName $task }",
+                  "$until=[DateTime]::UtcNow.AddSeconds(30)",
+                  "while ((Get-ScheduledTask -TaskName $task).State -eq 'Running') { if ([DateTime]::UtcNow -ge $until) { throw 'owned task did not stop; restore deferred' }; Start-Sleep -Milliseconds 200 }"]
+    lines += ["$saved=Get-Content -Raw -LiteralPath ($stage+'/saved.json') | ConvertFrom-Json",
+              f"if ([IO.Path]::GetFullPath($saved.incoming) -ne [IO.Path]::GetFullPath({ps_quote(incoming)})) {{ throw 'direct payload path changed; restore refused' }}",
+              "if ((Get-FileHash -Algorithm SHA256 -LiteralPath $wrapper).Hash -ne $saved.wrapper_sha256) { throw 'FOREIGN TASK WRAPPER: changed during direct payload; restore refused' }",
+              "if ((Get-FileHash -Algorithm SHA256 -LiteralPath ($stage+'/wrapper.ps1')).Hash -ne $saved.wrapper_sha256) { throw 'saved wrapper hash differs; restore refused' }",
+              "if ((Get-FileHash -Algorithm SHA256 -LiteralPath $payload).Hash -ne $saved.launcher_sha256) { throw 'DIRECT TASK COMMAND CHANGED: restore refused' }",
+              "if ($saved.had_command) {",
+              "  if ((Get-FileHash -Algorithm SHA256 -LiteralPath ($stage+'/command.ps1')).Hash -ne $saved.command_sha256) { throw 'saved command hash differs; restore refused' }",
+              "  [IO.File]::WriteAllBytes(($stage+'/restore.part'), [IO.File]::ReadAllBytes($stage+'/command.ps1'))",
+              "  [IO.File]::Move(($stage+'/restore.part'), $payload, $true)",
+              "} else { Remove-Item -LiteralPath $payload }",
+              "# run.ps1 retained its original bytes throughout, including a forced task abort.",
+              "foreach ($name in @('wrapper.ps1','command.ps1','saved.json','restore.ps1')) { $path=$stage+'/'+$name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path } }",
+              "if (Test-Path -LiteralPath $saved.incoming) { Remove-Item -LiteralPath $saved.incoming }",
+              "Remove-Item -LiteralPath $stage",
+              "$current=Get-Content -Raw -LiteralPath $marker | ConvertFrom-Json",
+              "if ($current.token -ne $token) { throw 'DIRECT TASK OWNER CHANGED: release refused' }",
+              "Remove-Item -LiteralPath $marker"]
+    return '\n'.join(lines)+'\n'
+
+
+def task_install_script(slot: dict, token: str, incoming: str, budget_s: float) -> str:
+    """Install through command.ps1 under the existing payload mutex and marker."""
+    if not re.fullmatch(r'[A-Za-z0-9-]+', token):
+        raise ValueError('direct task token contains path characters')
+    wrapper, payload, marker = (str(slot[key]).replace('\\', '/') for key in ('wrapper', 'payload', 'owner_marker'))
+    parent = str(PureWindowsPath(wrapper).parent).replace('\\', '/')
+    expected_incoming = str(PureWindowsPath(wrapper).parent / ('.direct-script-'+token+'.ps1')).replace('\\', '/')
+    if str(PureWindowsPath(incoming)).casefold() != str(PureWindowsPath(expected_incoming)).casefold():
+        raise ValueError('direct task payload must be its token file beside the wrapper')
+    stage = parent+'/.direct-'+token
+    restore = task_restore_script(slot, token)
+    launcher = ("$ErrorActionPreference='Stop'\n$directExit=1\ntry {\n"
+                f"  $marker={ps_quote(marker)}\n"
+                "  $owner=Get-Content -Raw -LiteralPath $marker | ConvertFrom-Json\n"
+                f"  if ($owner.token -ne {ps_quote(token)}) {{ throw 'DIRECT TASK OWNER CHANGED: launch refused' }}\n"
+                "  $owner.pid=$PID; $owner.machine=[Environment]::MachineName\n"
+                "  $owner.process_start=((Get-Process -Id $PID).StartTime.ToFileTimeUtc()-116444736000000000)/10000000.0\n"
+                "  [IO.File]::WriteAllText($marker, ($owner | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))\n"
+                f"  & 'C:/Program Files/PowerShell/7/pwsh.exe' -NoProfile -NonInteractive -File {ps_quote(incoming)}\n"
+                "  $directExit=$LASTEXITCODE\n"
+                f"}} finally {{ & {ps_quote(stage+'/restore.ps1')} }}\nexit $directExit\n")
+    reason = f"FOREIGN TASK WRAPPER: {slot.get('box_name', 'named box')} {slot['task']} {wrapper}"
+    verify_incoming = ([] if not slot.get('payload_sha256') else [
+        f"if ((Get-FileHash -Algorithm SHA256 -LiteralPath $incoming).Hash -ne {ps_quote(slot['payload_sha256'])}) {{ throw 'direct payload hash differs before launch' }}"])
+    return '\n'.join([
+        "$ErrorActionPreference='Stop'", f"$task={ps_quote(slot['task'])}", f"$marker={ps_quote(marker)}",
+        f"$wrapper={ps_quote(wrapper)}", f"$payload={ps_quote(payload)}", f"$stage={ps_quote(stage)}",
+        f"$incoming={ps_quote(incoming)}", f"$token={ps_quote(token)}", f"$lock={ps_quote(parent+'/.payload-submit.lock')}",
+        f"$until=[DateTime]::UtcNow.AddSeconds({max(0, float(budget_s))})", "$installed=$false",
+        *verify_incoming,
+        "while (-not $installed) {",
+        "  $held=$false",
+        "  try {",
+        "    try {",
+        "      $stream=[IO.File]::Open($lock, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)",
+        "      $held=$true",
+        "      try {",
+        "        $owner=@{token=$token;label='direct task payload';pid=$PID;machine=[Environment]::MachineName;process_start=((Get-Process -Id $PID).StartTime.ToFileTimeUtc()-116444736000000000)/10000000.0;written_at=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds();lease_expires=[DateTimeOffset]::UtcNow.AddHours(2).ToUnixTimeSeconds()}",
+        "        $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($owner | ConvertTo-Json -Compress)); $stream.Write($bytes, 0, $bytes.Length); $stream.Flush()",
+        "      } finally { $stream.Dispose() }",
+        "    } catch [IO.IOException] { if (-not (Test-Path -LiteralPath $lock)) { throw } }",
+        "    if ($held -and (Get-ScheduledTask -TaskName $task).State -eq 'Ready' -and -not (Test-Path -LiteralPath $marker)) {",
+        f"      if ((Get-FileHash -Algorithm SHA256 -LiteralPath $wrapper).Hash -ne {ps_quote(slot['wrapper_sha256'])}) {{ throw {ps_quote(reason)} }}",
+        "      if ((Get-Item -LiteralPath $wrapper).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'task wrapper is a reparse point' }",
+        "      if (Test-Path -LiteralPath $stage) { throw 'direct task staging already exists' }",
+        "      [IO.Directory]::CreateDirectory($stage) | Out-Null",
+        "      [IO.File]::WriteAllBytes(($stage+'/wrapper.ps1'), [IO.File]::ReadAllBytes($wrapper))",
+        "      $had=Test-Path -LiteralPath $payload",
+        "      if ($had) {",
+        "        if ((Get-Item -LiteralPath $payload).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'task command is a reparse point' }",
+        "        [IO.File]::WriteAllBytes(($stage+'/command.ps1'), [IO.File]::ReadAllBytes($payload))",
+        "      }",
+        f"      [IO.File]::WriteAllText(($stage+'/restore.ps1'), {ps_quote(restore)}, [Text.UTF8Encoding]::new($false))",
+        f"      $launcher={ps_quote(launcher)}",
+        "      $saved=@{had_command=$had;wrapper_sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $wrapper).Hash;command_sha256=if($had){(Get-FileHash -Algorithm SHA256 -LiteralPath $payload).Hash}else{$null};incoming=$incoming}",
+        "      [IO.File]::WriteAllText(($stage+'/launcher.part'), $launcher, [Text.UTF8Encoding]::new($false))",
+        "      $saved.launcher_sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath ($stage+'/launcher.part')).Hash",
+        "      [IO.File]::WriteAllText(($stage+'/saved.json'), ($saved | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))",
+        "      [IO.File]::WriteAllText($marker, ($owner | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))",
+        "      [IO.File]::Move(($stage+'/launcher.part'), $payload, $true)",
+        "      $installed=$true",
+        "      Start-ScheduledTask -TaskName $task",
+        "    }",
+        "  } finally {",
+        "    if ($held) { $owner=Get-Content -Raw -LiteralPath $lock | ConvertFrom-Json; if ($owner.token -ne $token) { throw 'DIRECT TASK MUTEX OWNER CHANGED' }; Remove-Item -LiteralPath $lock }",
+        "  }",
+        "  if (-not $installed) { if ([DateTime]::UtcNow -ge $until) { throw ('task payload remains busy: '+$task) }; Start-Sleep -Seconds 2 }",
+        "}", "Write-Output 'DIRECT TASK INSTALLED'", ""])
+
+
 class RemoteBox:
     """ssh/scp to one box plus its single session task. With dry_run every call is printed, nothing is sent."""
 
     def __init__(self, alias: str, task: str = 'cortex-session1', session_script: str = 'D:/mx/session1/run.ps1',
-                 dry_run: bool = False, say: Callable[[str], None] | None = None) -> None:
+                 dry_run: bool = False, say: Callable[[str], None] | None = None,
+                 *, pool_registry: Path | str | None = None, preserve_runner: bool | None = None) -> None:
         self.alias = alias
         self.task = task
         self.session_script = session_script
         self.dry_run = dry_run
         self.say = say or LOG.info
+        self.pool_registry = pool_registry
+        self.preserve_runner = preserve_runner
+        self._direct_payload: tuple[dict, str] | None = None
+
+    def catalog_slot(self) -> dict | None:
+        """Read only the named box's task facts, without any placement or queue."""
+        registry = self.pool_registry or os.environ.get('CORTEX_POOL_REGISTRY')
+        if not registry:
+            dispatcher = os.environ.get('CORTEX_POOL_DISPATCHER')
+            if not dispatcher:
+                try:
+                    import box_facts
+                    dispatcher = box_facts.pool_dispatcher()
+                except (ImportError, AttributeError):
+                    pass
+            if dispatcher:
+                registry = Path(dispatcher).with_name('boxes.json')
+        if not registry:
+            try:
+                from inventory_location import lead_script
+                path = lead_script('boxes.json')
+                if path.is_file():
+                    registry = path
+            except ImportError:
+                pass
+        if not registry:
+            return None
+        data = json.loads(Path(registry).read_text(encoding='utf-8-sig'))
+        for box in data['boxes']:
+            names = [box.get('name'), box.get('ssh'), box.get('hostname'), *box.get('aliases', [])]
+            if self.alias.casefold() not in {str(name).casefold() for name in names if name}:
+                continue
+            for slot in box.get('task_slots', []):
+                if slot['task'] == self.task:
+                    return dict(slot, box_name=box['name'], free_floor_gb=box.get('free_floor_gb'))
+        raise RuntimeError(f'named task is not registered: {self.alias} {self.task}')
 
     def run_local(self, argv: Iterable[object], timeout: float = 120, check: bool = True, what: str | None = None) -> str:
         argv = [str(part) for part in argv]
@@ -102,10 +286,60 @@ class RemoteBox:
             time.sleep(poll_s)
 
     def start_task(self, local_script: Path, budget_s: float = 900) -> None:
-        """Waits for the task to be free, installs the rendered payload as the task's script and starts it."""
+        """Preserved tasks use command.ps1; their run.ps1 is saved and never overwritten.
+
+        The old constructor and direct tasks remain supported. Explicit catalog
+        preserve_runner wins; without a catalog, an existing command.ps1 runner
+        is protected. Normal completion and abort restore the previous command.
+        """
+        deadline = time.monotonic()+budget_s
         self.wait_task_idle(budget_s)
-        self.scp_to(local_script, self.session_script)
-        self.ssh(f'Start-ScheduledTask -TaskName {self.task}')
+        slot = self.catalog_slot()
+        preserve = (slot or {}).get('preserve_runner', self.preserve_runner)
+        if self.dry_run or preserve is False:
+            self.scp_to(local_script, self.session_script)
+            self.ssh(f'Start-ScheduledTask -TaskName {self.task}')
+            return
+        slot = slot or dict(task=self.task, wrapper=self.session_script,
+                            payload=str(PureWindowsPath(self.session_script).parent/'command.ps1'),
+                            owner_marker=str(PureWindowsPath(self.session_script).parent/'payload-owner.json'),
+                            box_name=self.alias)
+        wrapper = ps_quote(slot['wrapper'])
+        meta = json.loads(self.ssh(f"$p={wrapper}; @{{wrapper=if(Test-Path -LiteralPath $p){{[Convert]::ToBase64String([IO.File]::ReadAllBytes($p))}}else{{$null}}; command=Test-Path -LiteralPath {ps_quote(slot['payload'])}}} | ConvertTo-Json -Compress"))
+        import base64
+        data = base64.b64decode(meta['wrapper'] or '')
+        identity = dict(name=slot['box_name'], free_floor_gb=slot.get('free_floor_gb'))
+        slot['preserve_runner'] = True
+        reason = wrapper_refusal(identity, slot, data=data)
+        if preserve is None and not meta['command'] and reason:
+            self.scp_to(local_script, self.session_script)
+            self.ssh(f'Start-ScheduledTask -TaskName {self.task}')
+            return
+        if reason:
+            raise RuntimeError(reason)
+        slot['wrapper_sha256'] = hashlib.sha256(data).hexdigest()
+        slot['payload_sha256'] = sha256_file(Path(local_script))
+        token = uuid.uuid4().hex
+        incoming = str(PureWindowsPath(slot['wrapper']).parent/('.direct-script-'+token+'.ps1')).replace('\\', '/')
+        self.scp_to(local_script, incoming)
+        self._direct_payload = slot, token
+        try:
+            remaining = max(0, deadline-time.monotonic())
+            self.ssh(task_install_script(slot, token, incoming, remaining), timeout=remaining+60)
+        except BaseException as error:
+            try:
+                self.abort_task()
+            except Exception as cleanup:
+                # Preserve the launch's exact refusal and retain failed cleanup.
+                error.add_note(f'owned direct task cleanup: {type(cleanup).__name__}: {cleanup}')
+            raise
+
+    def abort_task(self) -> None:
+        """Abort/restore only the direct payload token started by this instance."""
+        if self._direct_payload is not None:
+            slot, token = self._direct_payload
+            self.ssh(task_restore_script(slot, token, abort=True), timeout=60)
+            self._direct_payload = None
 
     def wait_done(self, done: Path | str, budget_s: float, slice_cap_s: int = 540) -> str:
         """Waits on a payload's done file; each ssh call stays under ten minutes."""

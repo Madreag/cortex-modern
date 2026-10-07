@@ -27,6 +27,11 @@ The lead supplies those boxes; this interface never chooses an unnamed box.
 Peer.task_slot, Match.parameters["peer_task_slots"], or --peer-task-slot PEER=N
 may pin a registered Windows payload slot named by the lead. No slot is claimed
 through preparation; its ownership is checked before the payload is changed.
+Preserved native task wrappers are authenticated before submission. A foreign
+wrapper refuses "FOREIGN TASK WRAPPER: BOX TASK PATH" without changing it.
+The direct-payload kit saves the wrapper, runs through command.ps1, and restores
+the previous command on completion or its owned abort. run.ps1 retains its bytes
+throughout. remote_box.py is included in the native control module ship set.
 Extra assignments for another arm are unused, as in the published interface.
 The case supplies arguments, environment and fixtures through Peer or by calling
 case.make_run() in ``drive(case)``. ``match`` is a Match with the game's port,
@@ -758,7 +763,8 @@ def transient_admission(reason):
         return False
     if any(value in text for value in ('run root conflict', 'port conflict', 'hash differs',
                                       'owner changed', 'lost its capacity claim', 'changed owner',
-                                      'artifact changed', 'snapshot differs', 'match port ')):
+                                      'artifact changed', 'snapshot differs', 'match port ',
+                                      'foreign task wrapper', 'direct task command changed')):
         return False
     return any(value in text for value in (
         'capacity refused:', 'capacity changed before launch:', 'capacity update is busy',
@@ -1044,7 +1050,16 @@ def native_cpu_wait_source(source):
                       "    from spread_peers import existing_native_claim\n"
                       "    return existing_native_claim(box,needs,request,facts,root_for(box)) or _native_capacity_claim(box,needs,request)\n")
     if 'def submit_task(' in source:
-        extension += ("\n_native_submit_task = submit_task\n"
+        wrapper_guard = "        state=next(row for row in task_slots(box) if row['slot']==selected['slot'])\n"
+        if source.count(wrapper_guard) != 1:
+            raise SpreadRefusal('native worker task wrapper guard differs from the supported kit')
+        source = source.replace(wrapper_guard, wrapper_guard+
+                                "        if state.get('wrapper_refusal'):raise RuntimeError(state['wrapper_refusal'])\n", 1)
+        extension += ("\n_native_task_slots = task_slots\n"
+                      "def task_slots(box):\n"
+                      "    from spread_peers import named_task_slots\n"
+                      "    return named_task_slots(_native_task_slots(box),box)\n"
+                      "\n_native_submit_task = submit_task\n"
                       "def submit_task(value):\n"
                       "    from spread_peers import submit_named_task\n"
                       "    return submit_named_task(_native_submit_task,value,globals())\n")
@@ -1345,6 +1360,22 @@ def bind_admission_transport(backend, box, needs, wait):
     return retry
 
 
+def named_task_slots(slots, box):
+    """Enrich the native slot probe with the exact preserved-wrapper refusal."""
+    try:
+        from remote_box import wrapper_refusal
+    except ModuleNotFoundError:
+        from edith.remote_box import wrapper_refusal
+    result = []
+    for slot in slots:
+        row = dict(slot)
+        # A live direct payload is a wait. Its wrapper is checked when idle.
+        if row['state'] != 'Running' and (reason := wrapper_refusal(box, row)):
+            row.update(state='Unavailable', wrapper_refusal=reason)
+        result.append(row)
+    return result
+
+
 def submit_named_task(original, value, worker):
     """Claim a ready native payload slot only at this owned launch."""
     from pool import Needs, live_reason
@@ -1356,9 +1387,12 @@ def submit_named_task(original, value, worker):
         with named_capacity_mutex(root/'.capacity.lock', mutex=worker['mutex'], box=box,
                                   peer=needs.peer_id, wait=retry.wait, remaining=retry.remaining()):
             slots = worker['task_slots'](box)
-            selected, reason = None, 'all registered payload slots are busy or unavailable'
+            selected, reason, foreign = None, 'all registered payload slots are busy or unavailable', []
             for row in slots:
                 if box.get('requested_task_slot') and row['slot'] != box['requested_task_slot']:
+                    continue
+                if row.get('wrapper_refusal'):
+                    foreign.append(row['wrapper_refusal'])
                     continue
                 owner = facts.read_reservation(row['owner_marker'], archive=False)
                 owned = owner and owner.get('token') == claim['token']
@@ -1368,6 +1402,8 @@ def submit_named_task(original, value, worker):
                 if row['state'] in ('Ready', 'Reserved') and (owned or not Path(row['owner_marker']).exists()):
                     selected = row
                     break
+            if selected is None and foreign:
+                raise SpreadRefusal('; '.join(foreign))
             if selected:
                 retry.probe_started()
                 state = worker['capacity_state'](box, ignore_token=claim['token'])
@@ -1528,6 +1564,7 @@ class Case:
         if len({name.casefold() for name in self.output_names.values()}) != len(self.names):
             raise ValueError("a spread case declares unique output names")
         self.interface_source = Path(__file__).read_text(encoding="utf-8")
+        self.task_runner_source = Path(__file__).with_name('edith').joinpath('remote_box.py').read_text(encoding='utf-8')
         self.interface_sha256 = hashlib.sha256(self.interface_source.encode()).hexdigest()
         self.pins, self.peer_ports = pairs(peer_boxes), peer_ports or {}
         try:
@@ -1610,6 +1647,8 @@ class Case:
         backend = module.Transport(repo=source_repo, work=self.lane_root/".spread-inputs", registry=self.registry)
         backend.repo = self.repo
         backend.sources["spread_peers.py"] = self.interface_source
+        backend.sources['remote_box.py'] = (self.task_runner_source if hasattr(self, 'task_runner_source') else
+                                          Path(__file__).with_name('edith').joinpath('remote_box.py').read_text(encoding='utf-8'))
         backend.sources["pool_worker.py"] = native_cpu_wait_source(backend.sources["pool_worker.py"])
         backend.sources['pool.py'] = native_pool_source(backend.sources['pool.py'])
         # The existing facts reader lazily imports pool_cohort under a named
