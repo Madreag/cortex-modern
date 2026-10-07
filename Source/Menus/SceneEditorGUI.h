@@ -201,7 +201,7 @@ namespace RTE {
 		void UpdateBrainSkyPathAndCost(Vector brainPos);
 
 		/// Starts the editor's orbit-path query with the chosen endpoints and player team.
-		void RequestBrainSkyPath(Scene& scene, const Vector& start, const Vector& end, Activity::Teams team);
+		void RequestBrainSkyPath(Scene& scene, const Vector& start, const Vector& end, int team);
 
 		enum BlinkMode {
 			NOBLINK = 0,
