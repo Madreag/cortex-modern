@@ -1125,6 +1125,35 @@ def cache_link_or_copy(source, target, expected):
         staging.unlink(missing_ok=True)
 
 
+def unlink_readonly_cache_file(path):
+    """Remove this Windows link without changing shared file attributes."""
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    create.restype = wintypes.HANDLE
+    dispose = kernel.SetFileInformationByHandle
+    dispose.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]
+    dispose.restype = wintypes.BOOL
+    close = kernel.CloseHandle
+    close.argtypes, close.restype = [wintypes.HANDLE], wintypes.BOOL
+    native = str(Path(path).absolute())
+    if not native.startswith('\\\\?\\'):
+        native = '\\\\?\\UNC\\'+native[2:] if native.startswith('\\\\') else '\\\\?\\'+native
+    handle = create(native, 0x00010000, 7, None, 3, 0x00200000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        # FileDispositionInfoEx: DELETE | POSIX_SEMANTICS | IGNORE_READONLY.
+        # https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fscc/2e860264-018a-47b3-8555-565a13b35a45
+        flags = wintypes.DWORD(0x01 | 0x02 | 0x10)
+        if not dispose(handle, 21, ctypes.byref(flags), ctypes.sizeof(flags)):
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        close(handle)
+
+
 def remove_snapshot_tree(path, snapshots):
     """Unlink reparse entries; never traverse an immutable input's link target."""
     import stat
@@ -1144,7 +1173,12 @@ def remove_snapshot_tree(path, snapshots):
                 remove(child)
             entry.rmdir()
         else:
-            entry.unlink()
+            try:
+                entry.unlink()
+            except PermissionError:
+                if sys.platform != 'win32' or not (getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_READONLY):
+                    raise
+                unlink_readonly_cache_file(entry)
     remove(path)
 
 
