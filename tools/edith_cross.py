@@ -45,10 +45,10 @@ GAME_PORT, DIRECTORY_PORT = 49860, 49875  # the lane's block is 49860-49879 on b
 BRIDGE_UDP, BRIDGE_TCP = 49876, 49877
 # EDITH reserves TCP 49675-49974 (netsh int ipv4 show excludedportrange), so the tunnel's loopback ends there sit outside it.
 EDITH_TCP = {DIRECTORY_PORT: 49985, BRIDGE_TCP: 49986}
-ADDRESS = {'here': '68.3.162.151', 'edith': '24.251.145.96'}
+ADDRESS = {'here': '203.0.113.10', 'edith': '203.0.113.20'}
 MACHINE = {'here': 'EROL-PC', 'edith': 'EDITH'}
 # The TURN URL each side can reach; EDITH reaches this site only through its public address.
-TURN = {'here': 'turn:192.168.50.122:3479?transport=udp', 'edith': 'turn:68.3.162.151:3479?transport=udp'}
+TURN = {'here': 'turn:192.168.50.122:3479?transport=udp', 'edith': 'turn:203.0.113.10:3479?transport=udp'}
 # The Cloudflare key stays in this file on this box: only its path is passed, to the run's own directory.
 CLOUDFLARE_TURN_CONFIG = Path('D:/mx/coturn-20260920/turn-config-cloudflare.json')
 BOX_LOG = Path('D:/mx/inventory-confirming-2-20260926/steps.log')

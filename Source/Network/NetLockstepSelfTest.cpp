@@ -4681,7 +4681,7 @@ namespace RTE {
 		}
 
 		// A seat the host removes ends its round with the removal: the host closing its link is the removal, never the host lost
-		// (hl4-local-1: the banned 'edith' read the closed link as host loss, hosted the match alone as generation 1, and the real
+		// (hl4-local-1: the banned 'the banned peer' read the closed link as host loss, hosted the match alone as generation 1, and the real
 		// host, which then reached only itself, yielded to it).
 		bool TestARemovedSeatEndsOnItsRemoval(std::string* error) {
 			for (const bool notice: {true, false}) {
@@ -22975,7 +22975,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	}
 
 	// A host whose own seat came back catches up through its reclaim gap to the newest input it holds; its client's next input is not
-	// late there, only not yet due (EDITH soak on the tip: the host back at 2593 held its client at 2597, 102 ms after it first missed it).
+	// late there, only not yet due (the second machine soak on the tip: the host back at 2593 held its client at 2597, 102 ms after it first missed it).
 	bool TestAHostInItsReclaimGapJudgesNoSeatLate(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;

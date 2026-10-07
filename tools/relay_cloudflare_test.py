@@ -158,7 +158,7 @@ class CloudflareMatchEvidence(unittest.TestCase):
         self.assertFalse(self.judge(run)['passed'])
 
     def test_the_client_report_must_agree_the_connection_is_relayed(self):
-        self.assertFalse(self.judge(cloudflare_run(reports={'client': {'found': True, 'relayed': False, 'remote_address': '24.251.145.96:5000'}}))['passed'])
+        self.assertFalse(self.judge(cloudflare_run(reports={'client': {'found': True, 'relayed': False, 'remote_address': '203.0.113.20:5000'}}))['passed'])
 
     def test_our_relay_passes_only_with_its_own_addresses_and_a_fixed_offer(self):
         coturn = dict(mode='coturn', relay_addresses=['192.0.2.101', '192.0.2.100'],
@@ -174,8 +174,8 @@ class CloudflareMatchEvidence(unittest.TestCase):
         session = 'session-one'
         run = cloudflare_run(mode='automatic', connection={'host': 'Automatic', 'client': 'Automatic'},
                              logs={'host': receipts(session, route='direct'), 'client': receipts(session, route='direct')},
-                             signals=[('host', signal('candidate:2 1 udp 2130706431 24.251.145.96 51000 typ srflx'))],
-                             reports={'client': {'found': True, 'state': 3, 'relayed': False, 'remote_address': '24.251.145.96:51000'}})
+                             signals=[('host', signal('candidate:2 1 udp 2130706431 203.0.113.20 51000 typ srflx'))],
+                             reports={'client': {'found': True, 'state': 3, 'relayed': False, 'remote_address': '203.0.113.20:51000'}})
         verdict = self.judge(run)
         self.assertTrue(verdict['passed'], verdict['reasons'])
         self.assertEqual(verdict['routes'], {'host': 'direct', 'client': 'direct'})
@@ -191,7 +191,7 @@ class CloudflareMatchEvidence(unittest.TestCase):
         import relay_cloudflare_match as match
         self.assertTrue(match.cloudflare_address('141.101.90.1'))
         self.assertTrue(match.cloudflare_address('2a06:98c1:3200::1'))
-        for other in ('192.0.2.100', '24.251.145.96', '192.0.2.101', '8.8.8.8', 'not-an-address'):
+        for other in ('192.0.2.100', '203.0.113.20', '192.0.2.101', '8.8.8.8', 'not-an-address'):
             self.assertFalse(match.cloudflare_address(other), other)
 
 
@@ -280,7 +280,7 @@ class HotspotRows(unittest.TestCase):
         self.assertTrue(verdict['passed'], verdict['reasons'])
         run['logs']['client'] = receipts(session, route='direct')
         run['logs']['host'] = receipts(session, route='direct')
-        run['reports'] = {'client': {'found': True, 'state': 3, 'relayed': False, 'remote_address': '24.251.145.96:5000'}}
+        run['reports'] = {'client': {'found': True, 'state': 3, 'relayed': False, 'remote_address': '203.0.113.20:5000'}}
         verdict = self.match().judge_relay(run)
         self.assertFalse(verdict['passed'])
         self.assertTrue(any('fallback' in reason for reason in verdict['reasons']), verdict['reasons'])
@@ -661,7 +661,7 @@ class OracleCorrections(unittest.TestCase):
         self.assertFalse(verdict['passed'])
         self.assertEqual(verdict['reports'], {'client': 'closed'})
         self.assertFalse(match.judge_relay(cloudflare_run(reports={}))['passed'])
-        found_direct = dict(closed, found=True, relayed=False, remote_address='24.251.145.96:5000', state=4)
+        found_direct = dict(closed, found=True, relayed=False, remote_address='203.0.113.20:5000', state=4)
         self.assertFalse(match.judge_relay(cloudflare_run(reports={'client': found_direct}))['passed'])
 
 

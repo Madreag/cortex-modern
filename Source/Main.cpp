@@ -603,7 +603,7 @@ bool RTE::RunCrossInPlaceHistorySelfTest(std::string* error) {
 	    !CrossHistoryBranch(671, false, 672, {}).is_null()) {
 		*error = "an image catch-up, a late start, a ticket rejoin or a re-executed tick keeps the initial history"; return false;
 	}
-	// l4p-31: EDITH's relaunch rejoined round 2 by ticket, then played rounds 3-6 from their first frames; all of them were recorded as restored.
+	// l4p-31: the second machine's relaunch rejoined round 2 by ticket, then played rounds 3-6 from their first frames; all of them were recorded as restored.
 	uint64_t firstRound = 0;
 	const bool rejoined = CrossTicketRejoinRound(true, 1542469911966388394ull, firstRound), later = CrossTicketRejoinRound(true, 12545044123032358889ull, firstRound);
 	if (!rejoined || later || CrossTicketRejoinRound(false, 1542469911966388394ull, firstRound)) {
@@ -6606,7 +6606,7 @@ static bool CrossWinSurfaceReady() {
 
 static bool PrepareCrossLobbyResources(std::string* error) {
 	// Service-E2E returns before normal menu startup loads these preset icons.
-	// EDITH can have virtual gamepads even when the test supplies scripted input.
+	// the second machine can have virtual gamepads even when the test supplies scripted input.
 	g_UInputMan.LoadDeviceIcons();
 	for (int device = InputDevice::DEVICE_KEYB_ONLY; device < InputDevice::DEVICE_COUNT; ++device) {
 		const Icon* icon = g_UInputMan.GetDeviceIcon(device);

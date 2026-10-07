@@ -841,7 +841,7 @@ class GreenTipProbes(unittest.TestCase):
     def test_g3_a_correct_automatic_direct_row_passes(self):
         run = dict(name='automatic', relay='automatic', peers=[dict(name='host', box='edith', connection='Automatic'),
                                                                dict(name='client', box='edith', connection='Automatic')])
-        srflx = 'candidate:2 1 udp 1694498815 24.251.145.96 51000 typ srflx'
+        srflx = 'candidate:2 1 udp 1694498815 203.0.113.20 51000 typ srflx'
         with tempfile.TemporaryDirectory() as folder:
             root = judge_folder(Path(folder) / 'run', {'host': dict(route='direct', connection=7),
                                                        'client': dict(route='direct', connection=8, identity='str:c-aaaa1111bbbb2222',

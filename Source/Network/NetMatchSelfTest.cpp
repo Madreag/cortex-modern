@@ -8221,7 +8221,7 @@ namespace RTE {
 		return true;
 	}
 
-	// A machine whose round-start restart took longer than the host's plays the round that much behind: EDITH's 302 ms against the
+	// A machine whose round-start restart took longer than the host's plays the round that much behind: the second machine's 302 ms against the
 	// host's 164 ms left it 8 ticks late on an 8-tick delay sized from its link alone, and the first jitter past the bound held it
 	// (four-box runs, round frames 140-265). Its delay covers the start work it published beyond ours.
 	bool TestARoundStartsDelayCoversTheStartWork(std::string* error) {
@@ -11754,7 +11754,7 @@ namespace RTE {
 		hostLobby.HandleConfigAck(ack);
 		const uint64_t revisionBefore = hostLobby.GetMatchConfig().configRevision;
 		// l4p-25: the Mac's link dropped by heartbeat timeout in round 5's lobby, its seat was opened and the host waited for its
-		// handover endpoint forever ('waiting at WaitingForConfigAck ... config_sent=0'), so EDITH's 'timed out waiting for lobby start'.
+		// handover endpoint forever ('waiting at WaitingForConfigAck ... config_sent=0'), so the second machine's 'timed out waiting for lobby start'.
 		if (kick) {
 			NetModerationSelection selected{};
 			for (const NetH4ModerationSeat& seat: admission.GetModerationView()) {

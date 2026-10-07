@@ -4246,7 +4246,7 @@ namespace RTE {
 		if (NetMatchService::LoneElectionOutcome(true, false) != Outcome::EndMatch) {
 			return Fail("lone-survivor-announced-leave: the survivor of an announced host leave did not end the match");
 		}
-		// l4p-34: the Mac, cut off by its own lag, heard neither the host nor Linux and, with EDITH's seat held, took the match over.
+		// l4p-34: the Mac, cut off by its own lag, heard neither the host nor Linux and, with the second machine's seat held, took the match over.
 		if (NetMatchService::LoneElectionOutcome(false, true) != Outcome::RejoinHost || NetMatchService::LoneElectionOutcome(true, true) != Outcome::EndMatch) {
 			return Fail("lone-survivor-split-the-match: a peer that heard no live member and no host hosted a match of its own instead of rejoining");
 		}
