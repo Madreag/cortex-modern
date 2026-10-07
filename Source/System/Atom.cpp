@@ -285,7 +285,18 @@ std::string Atom::SaveCheckpoint() const {
     std::array<CheckpointText, 3> materials;
     const Material* sources[] = {m_Material, m_LastHit.HitMaterial[0], m_LastHit.HitMaterial[1]};
     for (size_t index = 0; index < materials.size(); ++index) {
-        materials[index] = CheckpointWriter::Native([&] { return m_HasCheckpointMaterials ? m_CheckpointMaterialReferences[index] : g_SceneMan.SaveMaterialReference(sources[index]); });
+        auto* cache = !m_HasCheckpointMaterials && CheckpointWriter::IsCapturing() && CheckpointWriter::BatchEnabled() ? CheckpointWriter::CurrentCache() : nullptr;
+        constexpr unsigned materialChannel = std::numeric_limits<unsigned>::max();
+        // Material ownership cannot change inside the joined world freeze.
+        // Reuse only a reference read in this capture, including the null one.
+        if (cache) {
+            if (const CheckpointText* current = cache->PeekCurrent(sources[index], materialChannel)) {
+                materials[index] = *current;
+                continue;
+            }
+        }
+        CheckpointText reference = CheckpointWriter::Native([&] { return m_HasCheckpointMaterials ? m_CheckpointMaterialReferences[index] : g_SceneMan.SaveMaterialReference(sources[index]); });
+        materials[index] = cache ? cache->Remember(sources[index], materialChannel, std::move(reference)) : std::move(reference);
     }
     writer(materials, CaptureCheckpointLinkIDs(), m_IgnoreMOIDsByGroup != nullptr);
     return writer.Text();

@@ -178,6 +178,26 @@ def parse_freeze_log(text: str, source: str) -> list[dict]:
     return rows
 
 
+def score_first_after_restore(stdout: str, exit_code: int) -> dict:
+    """The first complete checkpoint call after a real load must fit one frame."""
+    rows = parse_freeze_log(stdout, "first-after-restore")
+    calls = re.findall(r"^\[autosave\] tick=(\d+) capture_ms=([0-9.]+) bytes=\d+\s*$", stdout, re.MULTILINE)
+    failures = []
+    if exit_code != 0 or "[load-game] loaded " not in stdout:
+        failures.append(f"saved-game load failed or absent (exit {exit_code})")
+    if len(rows) != 1 or len(calls) != 1:
+        failures.append(f"required exactly one first-after-load checkpoint; actual freezes={len(rows)} calls={len(calls)}")
+    capture_us = float(calls[0][1]) * 1000 if len(calls) == 1 else None
+    if len(rows) == 1:
+        failures.extend(freeze_failures(rows))
+        if len(calls) == 1 and rows[0]["tick"] != int(calls[0][0]):
+            failures.append("complete call and freeze describe different ticks")
+    if capture_us is not None and not 0 < capture_us < LIMIT_US:
+        failures.append(f"complete first checkpoint call took {capture_us:g} us; required < {LIMIT_US} us")
+    return {"pass": not failures, "failures": failures, "limit_us": LIMIT_US,
+            "capture_us": capture_us, "freeze": rows}
+
+
 def named_rows(stdout: str) -> dict:
     rows = {}
     for status, name in SELFTEST_ROW.findall(stdout):
@@ -556,6 +576,10 @@ def main() -> int:
         )
         result["restore_stdout_tail"] = reload_run["stdout"][-2000:]
         restored = score_restore_round_trip(saved, newest_autosave(reload_run["cwd"]))
+        first_after_restore = score_first_after_restore(reload_run["stdout"], reload_run["record"].get("exit_code", 1))
+        result["first_after_restore"] = first_after_restore
+        if not first_after_restore["pass"]:
+            failures.extend(f"first_after_restore: {item}" for item in first_after_restore["failures"])
     result["restore"] = restored
     if not restored["pass"]:
         failures.extend(f"restore: {item}" for item in restored["failures"])

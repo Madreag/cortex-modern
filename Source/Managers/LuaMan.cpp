@@ -94,6 +94,7 @@ extern "C" {
 #include <map>
 #include <memory>
 #include <mutex>
+#include <memory_resource>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -6286,16 +6287,20 @@ static int ScriptGraphRandomState(lua_State* L) {
 namespace RTE::CheckpointLua {
 	namespace {
 		thread_local lua_State* s_DescriptorState = nullptr;
-		thread_local const std::unordered_set<const void*>* s_DescriptorRoots = nullptr;
-		thread_local const std::unordered_set<const void*>* s_DescriptorFunctions = nullptr;
+		thread_local const std::pmr::unordered_set<const void*>* s_DescriptorRoots = nullptr;
+		thread_local const std::pmr::unordered_set<const void*>* s_DescriptorFunctions = nullptr;
 
 		struct DescriptorRootScope {
 			lua_State* state;
 			lua_State* previousState = s_DescriptorState;
-			const std::unordered_set<const void*>* previousRoots = s_DescriptorRoots;
-			const std::unordered_set<const void*>* previousFunctions = s_DescriptorFunctions;
-			std::unordered_set<const void*> seen, userdata, functions, opaque;
-			std::unordered_set<const void*> queuedFinalizers;
+			const std::pmr::unordered_set<const void*>* previousRoots = s_DescriptorRoots;
+			const std::pmr::unordered_set<const void*>* previousFunctions = s_DescriptorFunctions;
+			// These sets live only for the fenced walk. Allocate their small nodes
+			// together instead of contending with every other state's allocator.
+			std::pmr::monotonic_buffer_resource storage;
+			std::pmr::memory_resource* resource = CheckpointWriter::BatchEnabled() ? &storage : std::pmr::get_default_resource();
+			std::pmr::unordered_set<const void*> seen{resource}, userdata{resource}, functions{resource}, opaque{resource};
+			std::pmr::unordered_set<const void*> queuedFinalizers{resource};
 			std::vector<TValue> pending;
 			void Queue(const TValue& value) {
 				if (!tvistab(&value) && !tvisfunc(&value) && !tvisudata(&value) && !tvisthread(&value)) return;
@@ -6730,7 +6735,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		restore.Run();
 		// A later VM write saves its page first, so the copy needs no whole-heap wait at VM entry.
 		span.emplace("graph_heap_freeze", std::to_string(g_LuaMan.GetStateIndex(this)));
-		image->heap = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit, true);
+		image->heap = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit, true, CheckpointWriter::BatchEnabled());
 		span.reset();
 		const size_t bytes = image->heap.ByteCount();
 		const auto frozenUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
@@ -8872,6 +8877,30 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
 	{
+		for (const auto& [name, override]: std::array<std::pair<const char*, const char*>, 4>{{
+		    {"plain_scalar_properties", "do end"},
+		    {"scalar_class_override", "Vector.X = 103; Timer.StartSimTimeTicks = 107"},
+		    {"scalar_instance_override", "_ScriptGraphSetInstance(_ScalarCapture.vector, { X = 109 }); _ScriptGraphSetInstance(_ScalarCapture.timer, { SimTimeLimitTicks = 113 })"},
+		    {"scalar_index_override", "local meta = debug.getmetatable(_ScalarCapture.vector); local old = meta.__index; meta.__index = function(o, k) if k == 'X' then return 127 end return old(o, k) end"}}}) {
+			LuaStateWrapper scalarState;
+			scalarState.Initialize();
+			const bool planted = scalarState.RunScriptString("_ScalarCapture = { vector = Vector(-0.0, 1.25), timer = Timer() }; _ScalarCapture.timer.StartSimTimeTicks = 9007199254740992; _ScalarCapture.timer.SimTimeLimitTicks = 137") == 0 && scalarState.RunScriptString(override) == 0;
+			std::string ordinary;
+			CheckpointText frozen;
+			std::vector<std::string> problems;
+			bool captured = planted && scalarState.SerializeScriptGraph(ordinary, problems);
+			{
+				CheckpointWriter::BatchScope batches(true);
+				captured = captured && scalarState.CaptureScriptGraph(frozen, problems, true);
+			}
+			scalarState.RunScriptString("_ScalarCapture = nil");
+			const bool exact = captured && ordinary == std::async(std::launch::async, [frozen] { return frozen.Text(); }).get();
+			std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " " << name << std::endl;
+			for (const auto& problem: problems) std::cout << "[script-graph-selftest] scalar capture: " << problem << std::endl;
+			checkpointValues = exact && checkpointValues;
+		}
+	}
+	{
 		lua_State* first = luaL_newstate();
 		lua_State* second = luaL_newstate();
 		const auto sharedBirth = [](lua_State* state, int localCount) {
@@ -9409,6 +9438,38 @@ end
 		std::cout << "[script-graph-selftest] " << (held ? "PASS" : "FAIL") << " a_checkpoint_copy_preserves_pages_without_waiting_at_vm_entry image_held="
 		          << imageHeld << " live_written=" << liveWritten << " copy_still_queued=" << pendingDuringWrite << " entry_wait_us=" << entryWait << " next_freeze_wait_us=" << nextFreezeWait << " second_image_held=" << secondImageHeld
 		          << " faults=" << frozen.FaultCount() << "," << secondFrozen.FaultCount() << std::endl;
+		checkpointValues = held && checkpointValues;
+	}
+
+	if (m_CheckpointHeap) {
+		RunScriptString("_ScriptGraphPausedCopyProbe = {17, 29, 41}");
+		lua_getglobal(m_State, "_ScriptGraphPausedCopyProbe");
+		const auto* table = static_cast<const GCtab*>(lua_topointer(m_State, -1));
+		lua_pop(m_State, 1);
+		const TValue* array = table ? tvref(table->array) : nullptr;
+		const size_t bytes = table ? table->asize * sizeof(TValue) : 0;
+		std::vector<std::byte> before(bytes);
+		if (bytes) std::memcpy(before.data(), array, bytes);
+		CheckpointLua::Snapshot frozen;
+		std::future<void> marker;
+		bool stayedQueued = false;
+		int changed = -1;
+		{
+			CheckpointLua::CopyPool::PauseScope pause(true);
+			{
+				CheckpointLua::CopyPool::PauseScope nested(true);
+				std::lock_guard<std::recursive_mutex> lock(GetMutex());
+				frozen = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit, true, true);
+				marker = CheckpointLua::CopyPool::Submit([] {});
+			}
+			changed = RunScriptString("_ScriptGraphPausedCopyProbe[1] = 91");
+			stayedQueued = frozen.BlockCount() == 0 && marker.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
+		}
+		marker.get();
+		const auto image = frozen.ReadBytes(array, bytes);
+		const bool held = bytes && stayedQueued && changed == 0 && image.size() == bytes && std::memcmp(image.data(), before.data(), bytes) == 0;
+		RunScriptString("_ScriptGraphPausedCopyProbe = nil");
+		std::cout << "[script-graph-selftest] " << (held ? "PASS" : "FAIL") << " queued_checkpoint_copy_preserves_live_writes" << std::endl;
 		checkpointValues = held && checkpointValues;
 	}
 

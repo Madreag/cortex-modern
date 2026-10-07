@@ -150,14 +150,41 @@ namespace RTE::CheckpointLua {
 	class CopyPool {
 	public:
 		static std::future<void> Submit(std::function<void()> work) {
-			static CopyPool* pool = new CopyPool(); // Never destroyed, so a heap released at exit still gets its copy.
-			return pool->Push(std::move(work));
+			return Get().Push(std::move(work));
 		}
+		// Page copies contend with the joined native readers for the same memory.
+		class PauseScope {
+		public:
+			explicit PauseScope(bool enabled) : m_Enabled(enabled) {
+				if (!m_Enabled) return;
+				CopyPool& pool = Get();
+				std::lock_guard lock(pool.m_Mutex);
+				++pool.m_Paused;
+			}
+			~PauseScope() {
+				if (!m_Enabled) return;
+				CopyPool& pool = Get();
+				{
+					std::lock_guard lock(pool.m_Mutex);
+					--pool.m_Paused;
+				}
+				pool.m_Ready.notify_all();
+			}
+			PauseScope(const PauseScope&) = delete;
+			PauseScope& operator=(const PauseScope&) = delete;
+		private:
+			bool m_Enabled;
+		};
 
 	private:
+		static CopyPool& Get() {
+			static CopyPool* pool = new CopyPool(); // Copies still finish during static teardown.
+			return *pool;
+		}
 		std::mutex m_Mutex;
 		std::condition_variable m_Ready;
 		std::deque<std::packaged_task<void()>> m_Tasks;
+		unsigned m_Paused = 0;
 
 		CopyPool() {
 			const unsigned threads = std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
@@ -167,7 +194,7 @@ namespace RTE::CheckpointLua {
 						std::packaged_task<void()> task;
 						{
 							std::unique_lock lock(m_Mutex);
-							m_Ready.wait(lock, [this] { return !m_Tasks.empty(); });
+							m_Ready.wait(lock, [this] { return !m_Paused && !m_Tasks.empty(); });
 							task = std::move(m_Tasks.front());
 							m_Tasks.pop_front();
 						}
@@ -249,7 +276,7 @@ namespace RTE::CheckpointLua {
 
 		// The default gate holds VM entry until the submitted copy lands. A checkpoint's page fence instead
 		// saves a page before its next write; without a Submit either copy runs here.
-		Snapshot Freeze(const Submit& submit, bool copyOnWrite = false) {
+		Snapshot Freeze(const Submit& submit, bool copyOnWrite = false, bool batchCopy = false) {
 			const auto started = std::chrono::steady_clock::now();
 			if (!m_State) throw std::runtime_error("a Lua heap capture has no state");
 			void* allocatorData = nullptr;
@@ -302,13 +329,21 @@ namespace RTE::CheckpointLua {
 			}
 			const bool receipt = Receipts().load(std::memory_order_acquire);
 			const size_t freshBytes = m_FreshBytes;
-			auto copy = [this, data, started, receipt, freshBytes, cow = m_CowCopy, coordinator = m_CowCoordinator] {
+			auto copy = [this, data, started, receipt, freshBytes, batchCopy, cow = m_CowCopy, coordinator = m_CowCoordinator] {
 				if (cow) {
 					const auto copying = std::chrono::steady_clock::now();
-					for (size_t page = 0; page < cow->saved.size(); ++page) {
-						if (!coordinator->CopyPage(page, false)) throw std::runtime_error("could not open a copied Lua heap page");
+					// Opening each 4 KB page separately makes tens of thousands of
+					// protection calls and invalidates translations on the capture's
+					// other cores. Copy a bounded contiguous run under the same fence.
+					// A live write still saves its individual page before it is opened.
+					const size_t batchPages = batchCopy ? 64 : 1;
+					for (size_t page = 0; page < cow->saved.size(); page += batchPages) {
+						const bool opened = batchCopy ? coordinator->CopyPages(page, std::min(batchPages, cow->saved.size() - page))
+						                             : coordinator->CopyPage(page, false);
+						if (!opened)
+							throw std::runtime_error("could not open copied Lua heap pages");
 					}
-					coordinator->Complete(cow);
+					if (!coordinator->Complete(cow, batchCopy)) throw std::runtime_error("could not open a copied Lua heap");
 					data->copied.store(data->committed / Snapshot::c_PageBytes, std::memory_order_relaxed);
 					data->copyUs.store(MicrosecondsSince(copying), std::memory_order_relaxed);
 				} else {
@@ -505,10 +540,35 @@ namespace RTE::CheckpointLua {
 				}
 				return (!fault && !savedAny) || PageWriteFence::OpenCopiedPage(address, pageBytes);
 			}
-			void Complete(const std::shared_ptr<CowCopy>& copy) {
+			bool CopyPages(size_t first, size_t count) noexcept {
+				Locked guard(lock);
+				for (const auto& copy: copies) {
+					const size_t last = std::min(first + count, copy->saved.size());
+					for (size_t page = first; page < last;) {
+						if (copy->saved[page]) { ++page; continue; }
+						const size_t begin = page;
+						while (page < last && !copy->saved[page]) ++page;
+						std::memcpy(reinterpret_cast<std::byte*>(copy->destination) + begin * pageBytes,
+						            reinterpret_cast<const void*>(base + begin * pageBytes), (page - begin) * pageBytes);
+						std::fill(copy->saved.begin() + begin, copy->saved.begin() + page, 1);
+					}
+				}
+				// Keep background-copied pages protected until the whole heap is
+				// ready. A live first write opens just its own saved page; a completed
+				// last generation opens the heap once, without per-run shootdowns.
+				return true;
+			}
+			bool Complete(const std::shared_ptr<CowCopy>& copy, bool openHeap) {
 				Locked guard(lock);
 				copy->completed = true;
 				copy->buffer.reset();
+				if (!openHeap) return true;
+				size_t pages = 0;
+				for (const auto& generation: copies) {
+					if (!generation->completed) return true;
+					pages = std::max(pages, generation->saved.size());
+				}
+				return PageWriteFence::OpenCopiedPage(base, pages * pageBytes);
 			}
 			void Cancel(const std::shared_ptr<CowCopy>& copy) {
 				Locked guard(lock);

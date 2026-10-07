@@ -1558,7 +1558,7 @@ namespace {
 			CaptureTrace::Span span("ahead", CaptureTrace::Active() ? TraceName(m_Object) : std::string());
 			try {
 				AudioMan::SoundCheckpointSaveScope carried(false);
-				CheckpointCache values;
+				CheckpointCache values(CheckpointWriter::BatchEnabled());
 				values.Begin();
 				CheckpointWriter::CacheScope valuesScope(&values);
 				m_Text = Writer::Capture([this](Writer& owned) {
@@ -1643,7 +1643,7 @@ std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, con
 	const auto capture = [&](size_t first, size_t last) {
 		AudioMan::SoundCheckpointSaveScope::Lend lend(sounds);
 		AheadCaptureScope aheadScope(&ahead);
-		CheckpointCache values;
+		CheckpointCache values(CheckpointWriter::BatchEnabled());
 		values.Begin();
 		CheckpointWriter::CacheScope valuesScope(&values);
 		for (size_t index = first; index < last; ++index) {
@@ -1663,7 +1663,8 @@ std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, con
 	if (CaptureTrace::Serial()) {
 		capture(0, order.size());
 	} else {
-		ParallelWork items(g_ThreadMan.GetPriorityThreadPool(), heavyNodes.size() + order.size(), [&, task = CaptureSentinel::CurrentTask()](size_t item) {
+		BS::thread_pool& nativePool = CheckpointWriter::BatchEnabled() ? g_ThreadMan.GetCheckpointThreadPool() : g_ThreadMan.GetPriorityThreadPool();
+		ParallelWork items(nativePool, heavyNodes.size() + order.size(), [&, task = CaptureSentinel::CurrentTask()](size_t item) {
 			CaptureSentinel::WorkerScope worker(task);
 			if (item < heavyNodes.size()) {
 				AheadCaptureScope aheadScope(&ahead);

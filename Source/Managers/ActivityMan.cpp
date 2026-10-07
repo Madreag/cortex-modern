@@ -57,6 +57,13 @@
 #include "CheckpointImage.h"
 #include "SceneLayer.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#undef GetClassName
+#undef LoadBitmap
+#endif
+#include "CheckpointLuaHeap.h"
+
 #ifdef SYSTEM_MINIZIP
 #include <minizip/zip.h>
 #include <minizip/unzip.h>
@@ -790,6 +797,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	auto& cow = CheckpointCow::Get();
 	cow.BeginImage();
 	CheckpointWriter::CacheScope cache(&cow.Cache());
+	CheckpointWriter::BatchScope nativeBatches(!matchId.empty());
+	CheckpointLua::CopyPool::PauseScope pageCopies(!matchId.empty());
 	auto image = std::make_shared<CheckpointImage>();
 	image->tick = tick;
 	std::vector<std::shared_ptr<const BitmapSnapshot>> retiredLayers;
@@ -909,7 +918,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			for (int64_t seen = layersUs.load(); done > seen && !layersUs.compare_exchange_weak(seen, done);) {}
 		});
 	}
-	ParallelWork asideWork(g_ThreadMan.GetPriorityThreadPool(), aside.size(), [&aside](size_t part) { aside[part](); });
+	BS::thread_pool& nativePool = !matchId.empty() ? g_ThreadMan.GetCheckpointThreadPool() : g_ThreadMan.GetPriorityThreadPool();
+	ParallelWork asideWork(nativePool, aside.size(), [&aside](size_t part) { aside[part](); });
 	std::vector<std::string> problems;
 	const size_t luaStateCount = 1 + g_LuaMan.GetThreadedScriptStates().size();
 	auto& graphIndex = CheckpointGraphIndex::Get();

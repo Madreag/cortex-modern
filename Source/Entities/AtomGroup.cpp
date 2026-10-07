@@ -170,17 +170,24 @@ std::string AtomGroup::SaveCheckpoint() const {
 	    m_HasCheckpointOwner ? m_CheckpointOwnerID : (m_OwnerMOSR ? m_OwnerMOSR->GetUniqueID() : 0));
 	std::vector<CheckpointText> atoms;
 	std::unordered_map<const Atom*, size_t> indices;
-	atoms.reserve(m_Atoms.size());
+	const bool inlineAtoms = CheckpointWriter::IsCapturing() && CheckpointWriter::BatchEnabled();
+	if (!inlineAtoms) atoms.reserve(m_Atoms.size());
+	const bool needIndices = !CheckpointWriter::BatchEnabled() || !m_SubGroups.empty();
+	if (CheckpointWriter::BatchEnabled() && needIndices) indices.reserve(m_Atoms.size());
+	if (inlineAtoms) writer(m_Atoms.size());
+	size_t index = 0;
 	for (const Atom* atom: m_Atoms) {
-		indices.emplace(atom, atoms.size());
-		atoms.push_back(CheckpointWriter::Native([atom] { return atom->SaveCheckpoint(); }));
+		if (needIndices) indices.emplace(atom, index++);
+		if (inlineAtoms) writer.NativeValue([atom] { return atom->SaveCheckpoint(); });
+		else atoms.push_back(CheckpointWriter::Native([atom] { return atom->SaveCheckpoint(); }));
 	}
 	std::map<long, std::vector<size_t>> subgroups;
 	for (const auto& [id, group]: m_SubGroups) {
 		auto& saved = subgroups[id];
 		for (const Atom* atom: group) saved.push_back(indices.at(atom));
 	}
-	writer(atoms, subgroups);
+	if (!inlineAtoms) writer(atoms);
+	writer(subgroups);
 	return writer.Text();
 }
 

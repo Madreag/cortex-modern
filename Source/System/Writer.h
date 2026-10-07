@@ -5,6 +5,8 @@
 
 #include <string>
 #include <memory>
+#include <memory_resource>
+#include <cstring>
 #include <ostream>
 #include <functional>
 #include <cstdint>
@@ -83,6 +85,7 @@ namespace RTE {
 	};
 
 	struct BitmapSnapshot;
+	struct CheckpointArena;
 	class Timer;
 	bool RunOwnedCheckpointSelfTest();
 
@@ -116,6 +119,22 @@ namespace RTE {
 	/// Copies scalar values and owned children without formatting them.
 	class CheckpointBuffer {
 	public:
+		enum class ValueKind : uint8_t { Raw, Integer, Unsigned, SpacedInteger, SpacedUnsigned, Float, Double, String, Child, SizedChild, Base64, UrlBase64, GraphString, NewLine, Property, ElapsedSimTime, PeerBegin, PeerEnd, SizedRunBegin, SizedRunEnd };
+		/// One worker owns the allocator while it captures; its published nodes
+		/// keep that storage alive until the last archive/cache reference ends.
+		class AllocationScope {
+		public:
+			explicit AllocationScope(bool enabled);
+			~AllocationScope();
+			AllocationScope(const AllocationScope&) = delete;
+			AllocationScope& operator=(const AllocationScope&) = delete;
+		private:
+			bool m_Entered = false;
+		};
+		explicit CheckpointBuffer(bool reserve = true);
+		bool IsBatched() const { return m_Arena != nullptr; }
+		/// Appends the same typed scalar tape as the individual value calls.
+		void AppendValues(std::string_view values) { m_Values.append(values); }
 		void Raw(std::string_view text);
 		void Integer(int64_t value, bool space = false);
 		void Unsigned(uint64_t value, bool space = false);
@@ -131,25 +150,45 @@ namespace RTE {
 		/// Opens and closes a run of values only this machine holds; the text is unchanged, SharedText() leaves the run out.
 		void PeerBegin();
 		void PeerEnd();
+		void SizedRunBegin();
+		void SizedRunEnd();
 		CheckpointText Finish();
 	private:
-		std::string m_Values;
-		std::vector<CheckpointText> m_Children;
+		inline static thread_local std::shared_ptr<CheckpointArena> s_Arena;
+		std::shared_ptr<CheckpointArena> m_Arena;
+		std::pmr::string m_Values;
+		std::pmr::vector<CheckpointText> m_Children;
 		bool m_HasPeer = false;
 		bool m_UsesSimTime = false;
 		int64_t m_SimTimeTicks = 0;
-		template<class T> void Copy(const T& value) {
-			m_Values.append(reinterpret_cast<const char*>(&value), sizeof(value));
+		template<class... T> void Copy(const T&... values) {
+			if (!m_Arena) {
+				(m_Values.append(reinterpret_cast<const char*>(&values), sizeof(values)), ...);
+				return;
+			}
+			std::array<char, (sizeof(T) + ...)> record;
+			size_t at = 0;
+			const auto put = [&](const auto& value) {
+				std::memcpy(record.data() + at, &value, sizeof(value));
+				at += sizeof(value);
+			};
+			(put(values), ...);
+			m_Values.append(record.data(), record.size());
 		}
 	};
 
 	/// Retains unchanged owned values and retires replaced buffers on the worker.
 	class CheckpointCache {
 	public:
+		CheckpointCache() = default;
+		explicit CheckpointCache(bool transient) : m_Transient(transient) {}
+		bool IsTransient() const { return m_Transient; }
 		void Begin() { ++m_Generation; m_Touched = 0; m_Reused = 0; }
 		CheckpointText Remember(const void* owner, unsigned channel, CheckpointText value);
 		CheckpointText Remember(const void* owner, unsigned channel, CheckpointText value, uint64_t stamp, uint64_t identity = 0, const MovableObject* object = nullptr);
 		const CheckpointText* Peek(const void* owner, unsigned channel) const;
+		/// Only a value observed in this frozen capture, never an older frame.
+		const CheckpointText* PeekCurrent(const void* owner, unsigned channel) const;
 		uint64_t Stamp(const void* owner, unsigned channel) const;
 		/// The remembered identity, or zero after its object expires.
 		uint64_t Identity(const void* owner, unsigned channel) const;
@@ -164,6 +203,7 @@ namespace RTE {
 		/// The bytes its pixel snapshots hold.
 		size_t PixelBytes() const;
 	private:
+		bool m_Transient = false;
 		struct Entry { CheckpointText text; uint64_t generation = 0; uint64_t stamp = 0; uint64_t identity = 0; MovableObjectReference object; };
 		std::unordered_map<const void*, std::unordered_map<unsigned, Entry>> m_Entries;
 		std::vector<CheckpointText> m_Retired;
@@ -312,11 +352,19 @@ namespace RTE {
 			NewLine();
 			*m_Stream << propName + " = ";
 		}
+		template<size_t N> void NewProperty(const char (&propName)[N]) const {
+			if (m_Capture && m_Capture->IsBatched()) { m_Capture->Property(propName, m_IndentCount); return; }
+			NewProperty(std::string(propName));
+		}
 
 		/// Creates a new line and writes the name of the specified property, followed by its set value.
 		/// @param propName The name of the property to be written.
 		/// @param propValue The value of the property.
 		template <typename Type> void NewPropertyWithValue(const std::string& propName, const Type& propValue) {
+			NewProperty(propName);
+			*this << propValue;
+		}
+		template <size_t N, typename Type> void NewPropertyWithValue(const char (&propName)[N], const Type& propValue) {
 			NewProperty(propName);
 			*this << propValue;
 		}

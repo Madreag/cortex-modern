@@ -7,6 +7,7 @@
 #include "Writer.h"
 
 #include <array>
+#include <atomic>
 #include <bit>
 #include <charconv>
 #include <cstring>
@@ -35,14 +36,34 @@ namespace RTE {
 	// Native pointers are deliberately excluded: their owners encode stable graph links.
 	class CheckpointWriter {
 	public:
-		explicit CheckpointWriter(std::string_view version) : m_Recording(IsCapturing()) { Value(std::string(version)); }
+		explicit CheckpointWriter(std::string_view version) : m_Recording(IsCapturing()), m_Capture(!(s_Capture && s_Capture->inlineOutput)),
+		    m_Output(s_Capture ? s_Capture->inlineOutput : nullptr) {
+			if (m_Recording && BatchEnabled()) Buffer().String(version); else Value(std::string(version));
+		}
 		const std::string& Text() const {
 			if (!m_Recording) return m_Text;
+			if (m_Output) {
+				if (s_Capture->inlineWritten) throw std::logic_error("nested checkpoint capture requires Native");
+				s_Capture->inlineWritten = true;
+				return m_Text;
+			}
 			if (s_Capture->output) throw std::logic_error("nested checkpoint capture requires Native");
-			s_Capture->output = m_Capture.Finish();
+			s_Capture->output = Buffer().Finish();
 			return m_Text;
 		}
 		static bool IsCapturing() { return s_Capture != nullptr; }
+		/// Enables bounded page-copy batches for the joined workers of a multiplayer image.
+		/// Manual and single-player saves keep their existing visitors.
+		class BatchScope {
+		public:
+			explicit BatchScope(bool enabled) : m_Enabled(enabled) { if (m_Enabled) s_Batches.fetch_add(1, std::memory_order_relaxed); }
+			~BatchScope() { if (m_Enabled) s_Batches.fetch_sub(1, std::memory_order_relaxed); }
+			BatchScope(const BatchScope&) = delete;
+			BatchScope& operator=(const BatchScope&) = delete;
+		private:
+			bool m_Enabled;
+		};
+		static bool BatchEnabled() { return s_Batches.load(std::memory_order_relaxed) != 0; }
 		class CacheScope {
 		public:
 			explicit CacheScope(CheckpointCache* cache) : m_Previous(s_Cache) { s_Cache = cache; }
@@ -53,6 +74,7 @@ namespace RTE {
 		static CheckpointCache* CurrentCache() { return s_Cache; }
 		/// Captures an existing checkpoint visitor into owned values.
 		static CheckpointText CaptureNative(const std::function<std::string()>& visit) {
+			CheckpointBuffer::AllocationScope allocation(BatchEnabled());
 			CaptureScope scope;
 			std::string existing = visit();
 			if (scope.output && !existing.empty()) throw std::logic_error("checkpoint capture result has uncaptured text");
@@ -62,28 +84,45 @@ namespace RTE {
 			return IsCapturing() ? CaptureNative(visit) : CheckpointText(visit());
 		}
 		static CheckpointText CaptureValues(const std::function<CheckpointText()>& visit) {
+			CheckpointBuffer::AllocationScope allocation(BatchEnabled());
 			CaptureScope scope;
 			CheckpointText result = visit();
 			if (scope.output) throw std::logic_error("checkpoint capture result was not consumed");
 			return result;
 		}
-		template <class... Values> void operator()(const Values&... values) { (Value(values), ...); }
+		template <class... Values> void operator()(const Values&... values) {
+			constexpr size_t words = (PrimitiveWords<Values>() + ... + 0);
+			if constexpr (words > 0 && words <= 512 && ((PrimitiveWords<Values>() != 0) && ...)) {
+				if (m_Recording && BatchEnabled()) {
+					std::array<char, 9 * words> record;
+					size_t at = 0;
+					(WritePrimitive(record.data(), at, values), ...);
+					Buffer().AppendValues(std::string_view(record.data(), at));
+					return;
+				}
+			}
+			(Value(values), ...);
+		}
 		/// Writes values only this machine holds (its clocks, pacing, seat or view): the archive carries them as before,
 		/// and the shared state a peer is compared on leaves them out.
 		template <class... Values> void PerPeer(const Values&... values) {
 			BeginPerPeer();
-			(Value(values), ...);
+			(*this)(values...);
 			EndPerPeer();
 		}
 		/// Opens and closes such a run around values a visitor writes itself.
-		void BeginPerPeer() { if (m_Recording) m_Capture.PeerBegin(); }
-		void EndPerPeer() { if (m_Recording) m_Capture.PeerEnd(); }
+		void BeginPerPeer() { if (m_Recording) Buffer().PeerBegin(); }
+		void EndPerPeer() { if (m_Recording) Buffer().PeerEnd(); }
+		template<class Visit> void NativeValue(Visit visit) {
+			if (m_Recording && BatchEnabled()) InlineNative(visit);
+			else Value(Native(visit));
+		}
 
 		template <class T> requires std::is_integral_v<T>
 		void Value(T value) {
 			if (m_Recording) {
-				if constexpr (std::is_signed_v<T>) m_Capture.Integer(static_cast<int64_t>(value), true);
-				else m_Capture.Unsigned(static_cast<uint64_t>(value), true);
+				if constexpr (std::is_signed_v<T>) Buffer().Integer(static_cast<int64_t>(value), true);
+				else Buffer().Unsigned(static_cast<uint64_t>(value), true);
 				return;
 			}
 			char buffer[32];
@@ -107,11 +146,11 @@ namespace RTE {
 		void Value(float value) { Value(std::bit_cast<uint32_t>(value)); }
 		void Value(double value) { Value(std::bit_cast<uint64_t>(value)); }
 		void Value(const std::string& value) {
-			if (m_Recording) { RefuseDivertedValue(); m_Capture.String(value); return; }
+			if (m_Recording) { RefuseDivertedValue(); Buffer().String(value); return; }
 			Value(value.size()); m_Text += value; m_Text.push_back(' ');
 		}
 		void Value(const CheckpointText& value) {
-			if (m_Recording) { RefuseDivertedValue(); m_Capture.Child(value, true); } else Value(value.Text());
+			if (m_Recording) { RefuseDivertedValue(); Buffer().Child(value, true); } else Value(value.Text());
 		}
 		void Value(const Vector& value) { (*this)(value.m_X, value.m_Y); }
 		void Value(const Box& value) { (*this)(value.m_Corner, value.m_Width, value.m_Height); }
@@ -130,27 +169,81 @@ namespace RTE {
 		template <class K, class V> void Value(const std::unordered_map<K, V>& values) { Value(std::map<K, V>(values.begin(), values.end())); }
 		template <class T> requires requires(const T& value) { value.SaveCheckpoint(); }
 		void Value(const T& value) {
+			if (m_Recording && BatchEnabled() && s_Cache && s_Cache->IsTransient()) {
+				InlineNative([&value] { return value.SaveCheckpoint(); });
+				return;
+			}
 			CheckpointText captured = Native([&value] { return value.SaveCheckpoint(); });
 			if (m_Recording && s_Cache) captured = s_Cache->Remember(&value, 0, std::move(captured));
 			Value(captured);
 		}
 
 	private:
+		CheckpointBuffer& Buffer() const { return m_Output ? *m_Output : m_Capture; }
+		template<class Visit> void InlineNative(Visit visit) {
+			RefuseDivertedValue();
+			Buffer().SizedRunBegin();
+			{
+				CaptureScope scope(&Buffer());
+				std::string existing = visit();
+				if (scope.inlineWritten && !existing.empty()) throw std::logic_error("checkpoint capture result has uncaptured text");
+				if (scope.output) Buffer().Child(*scope.output);
+				else if (!existing.empty()) Buffer().Raw(existing);
+			}
+			Buffer().SizedRunEnd();
+		}
+		template<class T> static constexpr size_t PrimitiveWords() {
+			if constexpr (std::is_integral_v<T> || std::is_enum_v<T> || std::is_same_v<T, float> || std::is_same_v<T, double>) return 1;
+			else if constexpr (std::is_same_v<T, Vector>) return 2;
+			else if constexpr (std::is_same_v<T, Box>) return 4;
+			else if constexpr (std::is_array_v<T>) return std::extent_v<T> * PrimitiveWords<std::remove_extent_t<T>>();
+			else if constexpr (CheckpointArray<T>) return std::tuple_size_v<T> * PrimitiveWords<typename T::value_type>();
+			else return 0;
+		}
+		template<class T> static void WritePrimitive(char* bytes, size_t& at, const T& value) {
+			if constexpr (std::is_same_v<T, Vector>) {
+				WritePrimitive(bytes, at, value.m_X); WritePrimitive(bytes, at, value.m_Y);
+			} else if constexpr (std::is_same_v<T, Box>) {
+				WritePrimitive(bytes, at, value.m_Corner); WritePrimitive(bytes, at, value.m_Width); WritePrimitive(bytes, at, value.m_Height);
+			} else if constexpr (std::is_array_v<T> || CheckpointArray<T>) {
+				for (const auto& item: value) WritePrimitive(bytes, at, item);
+			} else if constexpr (std::is_enum_v<T>) {
+				WritePrimitive(bytes, at, static_cast<std::underlying_type_t<T>>(value));
+			} else if constexpr (std::is_same_v<T, float>) {
+				WritePrimitive(bytes, at, std::bit_cast<uint32_t>(value));
+			} else if constexpr (std::is_same_v<T, double>) {
+				WritePrimitive(bytes, at, std::bit_cast<uint64_t>(value));
+			} else if constexpr (std::is_same_v<T, bool>) {
+				unsigned char byte;
+				std::memcpy(&byte, &value, sizeof(byte));
+				WritePrimitive(bytes, at, static_cast<unsigned int>(byte));
+			} else {
+				const auto kind = std::is_signed_v<T> ? CheckpointBuffer::ValueKind::SpacedInteger : CheckpointBuffer::ValueKind::SpacedUnsigned;
+				const uint64_t word = static_cast<uint64_t>(value);
+				bytes[at++] = static_cast<char>(kind);
+				std::memcpy(bytes + at, &word, sizeof(word));
+				at += sizeof(word);
+			}
+		}
 		// A nested writer that already published into this scope was composed by hand, so its text
 		// never reached this writer: name the mistake here instead of losing the value.
 		void RefuseDivertedValue() const {
-			if (s_Capture && s_Capture->output) throw std::logic_error("a nested checkpoint value must be produced with CheckpointWriter::Native");
+			if (s_Capture && (s_Capture->output || s_Capture->inlineWritten)) throw std::logic_error("a nested checkpoint value must be produced with CheckpointWriter::Native");
 		}
 		struct CaptureScope {
 			CaptureScope* previous = s_Capture;
 			std::optional<CheckpointText> output;
-			CaptureScope() { s_Capture = this; }
+			CheckpointBuffer* inlineOutput;
+			bool inlineWritten = false;
+			explicit CaptureScope(CheckpointBuffer* into = nullptr) : inlineOutput(into) { s_Capture = this; }
 			~CaptureScope() { s_Capture = previous; }
 		};
 		inline static thread_local CaptureScope* s_Capture = nullptr;
 		inline static thread_local CheckpointCache* s_Cache = nullptr;
+		inline static std::atomic<unsigned> s_Batches{0};
 		bool m_Recording = false;
 		mutable CheckpointBuffer m_Capture;
+		CheckpointBuffer* m_Output;
 		std::string m_Text;
 	};
 

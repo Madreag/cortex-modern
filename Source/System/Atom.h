@@ -486,10 +486,11 @@ namespace RTE {
 			archive(self.m_Offset, self.m_OriginalOffset, self.m_Normal, self.m_SubgroupID,
 			    self.m_StepWasTaken, self.m_StepRatio, self.m_SegTraj, self.m_SegProgress,
 			    self.m_ChangedDir, self.m_PrevError, self.m_ResultWrapped,
-			    self.m_MOHitsDisabled, self.m_TerrainHitsDisabled, self.m_IgnoreMOID,
-			    self.m_IgnoreMOIDs, self.m_LastTrailPoints, self.m_TrailPoints,
-			    self.m_MOIDHit, self.m_TerrainMatHit, self.m_NumPenetrations,
-			    self.m_TrailColor, self.m_TrailLength, self.m_TrailLengthVariation,
+			    self.m_MOHitsDisabled, self.m_TerrainHitsDisabled, self.m_IgnoreMOID);
+			archive(self.m_IgnoreMOIDs, self.m_LastTrailPoints, self.m_TrailPoints);
+			archive(self.m_MOIDHit, self.m_TerrainMatHit, self.m_NumPenetrations);
+			archive(self.m_TrailColor);
+			archive(self.m_TrailLength, self.m_TrailLengthVariation,
 			    self.m_IntPos, self.m_PrevIntPos, self.m_TrailPos, self.m_HitPos,
 			    self.m_Delta, self.m_Delta2, self.m_Increment, self.m_Error, self.m_Dom,
 			    self.m_Sub, self.m_DomSteps, self.m_SubSteps, self.m_SubStepped);

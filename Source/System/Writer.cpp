@@ -33,7 +33,7 @@ std::string RTE::CheckpointFieldText(const std::function<std::string()>& observe
 }
 
 namespace {
-	enum class CaptureValue : uint8_t { Raw, Integer, Unsigned, SpacedInteger, SpacedUnsigned, Float, Double, String, Child, SizedChild, Base64, UrlBase64, GraphString, NewLine, Property, ElapsedSimTime, PeerBegin, PeerEnd };
+	using CaptureValue = CheckpointBuffer::ValueKind;
 	template<class T> T ReadCaptureValue(std::string_view values, size_t& cursor) {
 		if (sizeof(T) > values.size() - cursor) throw std::logic_error("truncated owned checkpoint values");
 		T value;
@@ -59,7 +59,27 @@ namespace {
 	}
 }
 
+struct RTE::CheckpointArena {
+	std::pmr::monotonic_buffer_resource storage{16384};
+};
+
+namespace {
+	template<class T> struct CheckpointAllocator {
+		using value_type = T;
+		std::shared_ptr<CheckpointArena> arena;
+		explicit CheckpointAllocator(std::shared_ptr<CheckpointArena> owner) : arena(std::move(owner)) {}
+		template<class U> CheckpointAllocator(const CheckpointAllocator<U>& other) : arena(other.arena) {}
+		T* allocate(size_t count) {
+			if (count > std::numeric_limits<size_t>::max() / sizeof(T)) throw std::bad_alloc();
+			return static_cast<T*>(arena->storage.allocate(count * sizeof(T), alignof(T)));
+		}
+		void deallocate(T*, size_t) noexcept {} // All blocks belong to the arena.
+		template<class U> bool operator==(const CheckpointAllocator<U>& other) const noexcept { return arena == other.arena; }
+	};
+}
+
 struct CheckpointText::Data {
+	explicit Data(std::pmr::memory_resource* resource = std::pmr::get_default_resource()) : values(resource), children(resource) {}
 	struct Pair {
 		const Data* current;
 		const Data* previous;
@@ -71,8 +91,8 @@ struct CheckpointText::Data {
 			return first ^ (second + 0x9e3779b9u + (first << 6) + (first >> 2));
 		}
 	};
-	std::string values;
-	std::vector<CheckpointText> children;
+	std::pmr::string values;
+	std::pmr::vector<CheckpointText> children;
 	// A deferred node's producer, dropped once it has produced: what it captured (a frozen heap, a pixel snapshot) goes with it.
 	mutable std::function<std::string()> produce;
 	bool deferred = false;
@@ -325,6 +345,7 @@ const std::string& CheckpointText::Text() const {
 				return;
 			}
 			std::string text;
+			std::vector<size_t> sizedRuns;
 			const std::string_view values = node->values;
 			text.reserve(values.size());
 			size_t cursor = 0;
@@ -382,9 +403,18 @@ const std::string& CheckpointText::Text() const {
 					}
 					case CaptureValue::PeerBegin:
 					case CaptureValue::PeerEnd: break;
+					case CaptureValue::SizedRunBegin: sizedRuns.push_back(text.size()); break;
+					case CaptureValue::SizedRunEnd: {
+						if (sizedRuns.empty()) throw std::logic_error("unmatched owned sized run");
+						const size_t begin = sizedRuns.back(); sizedRuns.pop_back();
+						std::string size; AppendCaptureNumber(size, text.size() - begin); size.push_back(' ');
+						text.insert(begin, size); text.push_back(' ');
+						break;
+					}
 					default: throw std::logic_error("unknown owned checkpoint value");
 				}
 			}
+			if (!sizedRuns.empty()) throw std::logic_error("open owned sized run");
 			node->text = std::move(text);
 			node->formatted.store(true, std::memory_order_release);
 		};
@@ -421,6 +451,7 @@ std::string CheckpointText::SharedText() const {
 	std::string text;
 	size_t cursor = 0;
 	int peer = 0;
+	std::vector<std::optional<size_t>> sizedRuns;
 	// Appends what the full text would, unless it lies inside a per-peer run.
 	const auto put = [&text, &peer](std::string_view part) { if (peer == 0) text += part; };
 	const auto number = [&put](auto value) { std::string formatted; AppendCaptureNumber(formatted, value); put(formatted); };
@@ -477,33 +508,64 @@ std::string CheckpointText::SharedText() const {
 			}
 			case CaptureValue::PeerBegin: ++peer; break;
 			case CaptureValue::PeerEnd: --peer; break;
+			case CaptureValue::SizedRunBegin: sizedRuns.push_back(peer == 0 ? std::optional<size_t>(text.size()) : std::nullopt); break;
+			case CaptureValue::SizedRunEnd: {
+				if (sizedRuns.empty()) throw std::logic_error("unmatched owned sized run");
+				const auto begin = sizedRuns.back(); sizedRuns.pop_back();
+				if (begin) {
+					std::string size; AppendCaptureNumber(size, text.size() - *begin); size.push_back(' ');
+					text.insert(*begin, size); text.push_back(' ');
+				}
+				break;
+			}
 			default: throw std::logic_error("unknown owned checkpoint value");
 		}
 	}
+	if (!sizedRuns.empty()) throw std::logic_error("open owned sized run");
 	return text;
 }
 
-void CheckpointBuffer::Raw(std::string_view text) { Copy(CaptureValue::Raw); Copy(static_cast<uint64_t>(text.size())); m_Values.append(text); }
-void CheckpointBuffer::Integer(int64_t value, bool space) { Copy(space ? CaptureValue::SpacedInteger : CaptureValue::Integer); Copy(value); }
-void CheckpointBuffer::Unsigned(uint64_t value, bool space) { Copy(space ? CaptureValue::SpacedUnsigned : CaptureValue::Unsigned); Copy(value); }
-void CheckpointBuffer::Real(float value) { Copy(CaptureValue::Float); Copy(value); }
-void CheckpointBuffer::Real(double value) { Copy(CaptureValue::Double); Copy(value); }
+CheckpointBuffer::AllocationScope::AllocationScope(bool enabled) {
+	if (enabled && !s_Arena) {
+		s_Arena = std::make_shared<CheckpointArena>();
+		m_Entered = true;
+	}
+}
+
+CheckpointBuffer::AllocationScope::~AllocationScope() {
+	if (m_Entered) s_Arena.reset();
+}
+
+CheckpointBuffer::CheckpointBuffer(bool reserve) : m_Arena(reserve ? s_Arena : nullptr),
+	m_Values(m_Arena ? &m_Arena->storage : std::pmr::get_default_resource()),
+	m_Children(m_Arena ? &m_Arena->storage : std::pmr::get_default_resource()) {
+	if (m_Arena && reserve) m_Values.reserve(64);
+}
+
+void CheckpointBuffer::Raw(std::string_view text) { Copy(CaptureValue::Raw, static_cast<uint64_t>(text.size())); m_Values.append(text); }
+void CheckpointBuffer::Integer(int64_t value, bool space) { Copy(space ? CaptureValue::SpacedInteger : CaptureValue::Integer, value); }
+void CheckpointBuffer::Unsigned(uint64_t value, bool space) { Copy(space ? CaptureValue::SpacedUnsigned : CaptureValue::Unsigned, value); }
+void CheckpointBuffer::Real(float value) { Copy(CaptureValue::Float, value); }
+void CheckpointBuffer::Real(double value) { Copy(CaptureValue::Double, value); }
 void CheckpointBuffer::ElapsedSimTime(int64_t startTicks, double ticksPerMS) {
-	Copy(CaptureValue::ElapsedSimTime); Copy(startTicks); Copy(ticksPerMS);
+	Copy(CaptureValue::ElapsedSimTime, startTicks, ticksPerMS);
 	m_UsesSimTime = true;
 	m_SimTimeTicks = g_TimerMan.GetSimTickCount();
 }
-void CheckpointBuffer::String(std::string_view value) { Copy(CaptureValue::String); Copy(static_cast<uint64_t>(value.size())); m_Values.append(value); }
-void CheckpointBuffer::Child(const CheckpointText& value, bool sized) { Copy(sized ? CaptureValue::SizedChild : CaptureValue::Child); Copy(static_cast<uint64_t>(m_Children.size())); m_Children.push_back(value); }
-void CheckpointBuffer::Base64(const CheckpointText& value, bool url) { Copy(url ? CaptureValue::UrlBase64 : CaptureValue::Base64); Copy(static_cast<uint64_t>(m_Children.size())); m_Children.push_back(value); }
-void CheckpointBuffer::GraphString(const CheckpointText& value) { Copy(CaptureValue::GraphString); Copy(static_cast<uint64_t>(m_Children.size())); m_Children.push_back(value); }
-void CheckpointBuffer::NewLine(int indent, int count) { Copy(CaptureValue::NewLine); Copy(indent); Copy(count); }
-void CheckpointBuffer::Property(std::string_view name, int indent) { Copy(CaptureValue::Property); Copy(indent); Copy(static_cast<uint64_t>(name.size())); m_Values.append(name); }
+void CheckpointBuffer::String(std::string_view value) { Copy(CaptureValue::String, static_cast<uint64_t>(value.size())); m_Values.append(value); }
+void CheckpointBuffer::Child(const CheckpointText& value, bool sized) { Copy(sized ? CaptureValue::SizedChild : CaptureValue::Child, static_cast<uint64_t>(m_Children.size())); m_Children.push_back(value); }
+void CheckpointBuffer::Base64(const CheckpointText& value, bool url) { Copy(url ? CaptureValue::UrlBase64 : CaptureValue::Base64, static_cast<uint64_t>(m_Children.size())); m_Children.push_back(value); }
+void CheckpointBuffer::GraphString(const CheckpointText& value) { Copy(CaptureValue::GraphString, static_cast<uint64_t>(m_Children.size())); m_Children.push_back(value); }
+void CheckpointBuffer::NewLine(int indent, int count) { Copy(CaptureValue::NewLine, indent, count); }
+void CheckpointBuffer::Property(std::string_view name, int indent) { Copy(CaptureValue::Property, indent, static_cast<uint64_t>(name.size())); m_Values.append(name); }
 void CheckpointBuffer::PeerBegin() { Copy(CaptureValue::PeerBegin); m_HasPeer = true; }
 void CheckpointBuffer::PeerEnd() { Copy(CaptureValue::PeerEnd); }
+void CheckpointBuffer::SizedRunBegin() { Copy(CaptureValue::SizedRunBegin); }
+void CheckpointBuffer::SizedRunEnd() { Copy(CaptureValue::SizedRunEnd); }
 
 CheckpointText CheckpointBuffer::Finish() {
-	auto data = std::make_shared<CheckpointText::Data>();
+	auto data = m_Arena ? std::allocate_shared<CheckpointText::Data>(CheckpointAllocator<CheckpointText::Data>(m_Arena), &m_Arena->storage)
+	                    : std::make_shared<CheckpointText::Data>();
 	data->values = std::move(m_Values);
 	data->children = std::move(m_Children);
 	data->ownedBytes = data->values.size();
@@ -550,6 +612,13 @@ const CheckpointText* CheckpointCache::Peek(const void* owner, unsigned channel)
 	const auto entry = owners->second.find(channel);
 	if (entry == owners->second.end()) return nullptr;
 	return &entry->second.text;
+}
+
+const CheckpointText* CheckpointCache::PeekCurrent(const void* owner, unsigned channel) const {
+	const auto owners = m_Entries.find(owner);
+	if (owners == m_Entries.end()) return nullptr;
+	const auto entry = owners->second.find(channel);
+	return entry == owners->second.end() || entry->second.generation != m_Generation ? nullptr : &entry->second.text;
 }
 
 uint64_t CheckpointCache::Identity(const void* owner, unsigned channel) const {
@@ -766,6 +835,66 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		const CheckpointText captured = CheckpointWriter::CaptureNative(save);
 		value = 91; binary.assign("changed");
 		check(captured.Text() == reference, "owned_checkpoint_copies_native_values");
+		{
+			struct InlineRecord {
+				Vector position{-0.0F, std::bit_cast<float>(uint32_t{0x7FC00031})};
+				Timer timer;
+				std::string bytes{"x\0y", 3};
+				std::string SaveCheckpoint() const {
+					CheckpointWriter writer("InlineRecord1");
+					writer(position, timer, bytes);
+					return writer.Text();
+				}
+			};
+			CheckpointText frozen;
+			std::string fullReference, sharedReference;
+			{
+				std::vector<InlineRecord> records(512);
+				for (auto& record: records) {
+					record.timer.SetStartSimTimeTicks(17); record.timer.SetSimTimeLimitTicks(29);
+					record.timer.SetStartRealTimeTicks(41); record.timer.SetRealTimeLimitTicks(53);
+				}
+				const auto saveInline = [&] {
+					CheckpointWriter writer("InlineParent1"); writer(records);
+					return writer.Text();
+				};
+				const auto ordinary = CheckpointWriter::CaptureNative(saveInline);
+				fullReference = ordinary.Text(); sharedReference = ordinary.SharedText();
+				CheckpointCache transient(true); transient.Begin();
+				CheckpointWriter::CacheScope cache(&transient);
+				CheckpointWriter::BatchScope batch(true);
+				frozen = CheckpointWriter::CaptureNative(saveInline);
+			}
+			const auto archived = std::async(std::launch::async, [frozen] { return std::pair(frozen.Text(), frozen.SharedText()); }).get();
+			check(frozen.HasPeerRuns() && archived.first == fullReference && archived.second == sharedReference,
+			      "owned_inline_native_records_outlive_sources_and_keep_peer_lengths");
+		}
+
+		{
+			std::vector<Vector> vectors(512, Vector(-0.0F, std::bit_cast<float>(uint32_t{0x7fc00031})));
+			Timer timer;
+			timer.SetStartSimTimeTicks(17); timer.SetSimTimeLimitTicks(29);
+			timer.SetStartRealTimeTicks(41); timer.SetRealTimeLimitTicks(53);
+			const auto saveArena = [&] {
+				CheckpointWriter outer("Arena1");
+				for (const Vector& vector: vectors) outer(CheckpointWriter::Native([&] {
+					CheckpointWriter inner("ArenaChild1");
+					inner(vector, timer, std::string("x\0y", 3));
+					return inner.Text();
+				}));
+				return outer.Text();
+			};
+			const CheckpointText ordinary = CheckpointWriter::CaptureNative(saveArena);
+			CheckpointText frozen;
+			{
+				CheckpointWriter::BatchScope batches(true);
+				frozen = CheckpointWriter::CaptureNative(saveArena);
+			}
+			vectors.clear(); timer.SetStartSimTimeTicks(91);
+			const auto archived = std::async(std::launch::async, [frozen] { return std::pair(frozen.Text(), frozen.SharedText()); }).get();
+			check(frozen.SameValues(ordinary) && archived.first == ordinary.Text() && archived.second == ordinary.SharedText(),
+			      "owned_checkpoint_arena_outlives_capture_and_live_values");
+		}
 
 		{
 			Timer timer;
