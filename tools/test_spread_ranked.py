@@ -9,7 +9,7 @@ import spread_peers as spread
 
 
 class RankedTests(unittest.TestCase):
-    def case(self, refusals, *, wait=0, peers=None, pins=None):
+    def case(self, refusals, *, wait=0, peers=None, pins=None, boxes=None):
         case = object.__new__(spread.Case)
         case.peers = peers or [spread.Peer('host')]
         case.names = [peer.name for peer in case.peers]
@@ -19,7 +19,7 @@ class RankedTests(unittest.TestCase):
         case.stack = contextlib.ExitStack()
         self.addCleanup(case.stack.close)
         calls = []
-        boxes = [dict(name=name, kind='local', os='windows', hostname=name) for name in ('FIRST', 'SECOND', 'UNNAMED')]
+        boxes = boxes or [dict(name=name, kind='local', os='windows', hostname=name) for name in ('FIRST', 'SECOND', 'UNNAMED')]
         def rpc(box, action, value, **kwargs):
             calls.append(box['name'])
             if reason := refusals.get(box['name']):
@@ -93,6 +93,35 @@ class RankedTests(unittest.TestCase):
         self.assertEqual(case.assigned_boxes, {'host':'SECOND'})
         self.assertEqual(prepared, ['SECOND'])
         self.assertEqual(calls, ['FIRST', 'SECOND'])
+
+    def test_reviewed_recorder_uses_the_named_windows_session_slot(self):
+        peers = [spread.Peer('host', recorder=True, reviewed=True)]
+        boxes = [dict(name='FIRST', kind='windows-task', os='windows', hostname='remote')]
+        case, calls = self.case({}, peers=peers, pins='host=FIRST', boxes=boxes)
+        case.match.parameters['peer_task_slots'] = {'host': 2}
+        case.allocate()
+        self.assertEqual(calls, ['FIRST'])
+        box, claim, request, backend = case.members['host']
+        self.assertEqual(box['requested_task_slot'], 2)
+        self.assertTrue(claim['needs']['reviewed'])
+        self.assertFalse(claim['needs']['share_ok'])
+
+    def test_reviewed_recorder_still_requires_a_native_windows_runner(self):
+        peers = [spread.Peer('host', recorder=True, reviewed=True)]
+        boxes = [dict(name='FIRST', kind='posix-ssh', os='linux', hostname='remote')]
+        case, calls = self.case({}, peers=peers, pins='host=FIRST', boxes=boxes)
+        with self.assertRaisesRegex(spread.SpreadRefusal, 'private Windows recorder'):
+            case.allocate()
+        self.assertEqual(calls, [])
+
+    def test_named_quiet_route_keeps_strict_admission_despite_old_timing_rating(self):
+        peers = [spread.Peer('host', quiet=True)]
+        boxes = [dict(name='FIRST', kind='windows-task', os='windows', hostname='remote', timing=False)]
+        case, calls = self.case({}, peers=peers, pins='host=FIRST', boxes=boxes)
+        case.allocate()
+        self.assertEqual(calls, ['FIRST'])
+        self.assertTrue(case.members['host'][1]['needs']['alone'])
+        self.assertFalse(case.members['host'][1]['needs']['share_ok'])
 
 
 if __name__ == '__main__':

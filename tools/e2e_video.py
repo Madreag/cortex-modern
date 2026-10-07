@@ -1967,6 +1967,9 @@ def _run_one(options, scenario, run, run_index, out):
             else:
                 destination.write_text(entry["write"], encoding="utf-8")
         runs[name] = run_handle
+        if getattr(options, 'win_cause_log', False):
+            from e2e.win_diagnostics import stage as stage_win_diagnostics
+            write_json(peer_root / 'win-diagnostics.json', stage_win_diagnostics(options.repo, run_handle.cwd))
         staged[name] = {**arm, "args": args, "env": {k: str(v) for k, v in environment.items()},
                         "runtime": str(run_handle.cwd), "retain_runtime_from": reference,
                         "stage": str(stage), "probe_dir": str(stage / "probe"),
@@ -1997,6 +2000,9 @@ def _run_one(options, scenario, run, run_index, out):
                     data=public_native_bytes(data,options.relay_book)
                 (Path(runs[name].out) / "console.log").write_bytes(data)
             records[name] = record
+            if getattr(options, 'win_cause_log', False):
+                from e2e.win_diagnostics import collect as collect_win_diagnostics
+                collect_win_diagnostics(runs[name].out)
         except Exception as error:  # the peer's record carries the failure; the others still finish
             records[name] = {"error": public_value(repr(error),getattr(getattr(options,'relay_book',None),'values',{}))}
         finally:
@@ -2198,6 +2204,12 @@ def run_one(options, scenario, run, run_index, out):
             result["topology"] = "spread" if getattr(options, "remote_capture", None) else spread.topology(options, count)
             for peer in result.get("peers", []):
                 peer["topology"] = result["topology"]
+                peer["record"]["topology"] = result["topology"]
+                if not getattr(options, "remote_capture", None):
+                    record_path = Path(peer["root"]) / "record.json"
+                    if record_path.is_file():
+                        record = json.loads(record_path.read_text(encoding="utf-8"))
+                        write_json(record_path, dict(record, topology=result["topology"]))
         return result
     root = Path(out)/run.get("name", f"run{run_index}")
     size = tuple(map(int, (options.size or run.get("size") or scenario.get("size") or DEFAULT_SIZE).split("x")))
@@ -2205,7 +2217,10 @@ def run_one(options, scenario, run, run_index, out):
     if capture_peer not in {peer["name"] for peer in definitions}:
         raise ValueError("--capture-peer must name a peer of this run")
     peers = [spread.Peer(peer["name"], os="windows" if peer["name"] == capture_peer else "any", size=size,
-                         reviewed=peer["name"] == capture_peer, timeout=run.get("timeout_s") or scenario.get("timeout_s") or 300)
+                         reviewed=peer["name"] == capture_peer, recorder=peer["name"] == capture_peer,
+                         held=bool(peer.get("kill_after_s") or peer.get("kill_at_tick") or peer.get("kill_when") or
+                                   any("stall" in str(value) for value in peer.get("args", []) if str(value).startswith("-net-test"))),
+                         timeout=run.get("timeout_s") or scenario.get("timeout_s") or 300)
              for peer in definitions]
     previous = getattr(options, "remote_capture", None)
     def drive(case):
@@ -2791,7 +2806,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     import spread_peers as spread
     spread.add_arguments(parser)
-    parser.add_argument("--capture-peer", help="reviewed peer on the controller's private Windows recorder; defaults to the first peer")
+    parser.add_argument("--capture-peer", help="reviewed peer on its named Windows runner's private desktop; defaults to the first peer")
+    parser.add_argument('--win-cause-log', action='store_true', help='observe duel brain loss and retain native death events in a private spread runtime')
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path)
     parser.add_argument("--scenario")
@@ -2826,6 +2842,8 @@ def main():
                              "a pair that differs is an engine finding; 0 is off")
     options = parser.parse_args()
     spread.configure(options)
+    if options.win_cause_log and not spread.enabled(options):
+        parser.error('--win-cause-log requires --peer-boxes and private native Data overlays')
     if spread.enabled(options) and (options.host_box or options.client_box or options.peer):
         parser.error("--spread/--peer-boxes use the shared peer interface; select its boxes with --peer-boxes")
 
