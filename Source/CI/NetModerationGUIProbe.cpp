@@ -550,7 +550,10 @@ namespace {
 				if (seat == observed["editor_seats"].end() || seat->at("ready") != true) return false;
 			}
 			if (step.contains("service") && observed["service"] != step["service"]) return false;
-			if (step.contains("sim_at_least") && observed["sim_frame"].get<long long>() < step["sim_at_least"].get<long long>()) return false;
+			if (step.contains("sim_at_least")) {
+				const char* clock = probe.script.value("sim_clock", "process") == "lockstep" ? "lockstep_frame" : "sim_frame";
+				if (observed[clock].get<long long>() < step["sim_at_least"].get<long long>()) return false;
+			}
 			// A watcher plays a seat once its own id is a seat's.
 			if (step.contains("local_peer_at_most") && (observed["local_peer"].get<int>() == 0 || observed["local_peer"].get<int>() > step["local_peer_at_most"].get<int>())) return false;
 			if (step.contains("lockstep_frame_at_least") && observed["lockstep_frame"].get<uint64_t>() < step["lockstep_frame_at_least"].get<uint64_t>()) return false;
@@ -1075,6 +1078,28 @@ bool RunCrossScopeSelfTest(std::string* error) {
 	    !ActivationPending({{"activation_timeout_ms", 1}}, false, UINT64_MAX);
 	passed &= bounded;
 	System::PrintDiagnosticLine("[net-match-selftest] " + std::string(bounded ? "PASS" : "FAIL") + " probe_activation_wait_has_a_deadline");
+
+	// Lobby ticks cannot satisfy an opt-in round wait. The legacy clock remains the default.
+	{
+		Probe saved = std::move(probe);
+		probe = Probe{};
+		probe.script = {{"sim_clock", "lockstep"}};
+		const Json wait = {{"op", "wait"}, {"service", "Running"}, {"sim_at_least", 450}};
+		Json observed = {{"service", "Running"}, {"sim_frame", 5000}, {"lockstep_frame", 100}};
+		const bool lobbyDidNotSettleRound = !Step(wait, observed);
+		observed["lockstep_frame"] = 450;
+		const bool settledRound = Step(wait, observed);
+		observed["lockstep_frame"] = 100;
+		probe.script = Json::object();
+		const bool legacyClock = Step(wait, observed);
+		const bool roundClock = lobbyDidNotSettleRound && settledRound && legacyClock;
+		probe = std::move(saved);
+		passed &= roundClock;
+		if (!roundClock) *error = "lobby simulation ticks satisfied a lockstep round wait";
+		System::PrintDiagnosticLine("[net-match-selftest] " + std::string(roundClock ? "PASS" : "FAIL") +
+		                            " probe_round_clock_ignores_lobby_ticks_and_preserves_the_default");
+	}
+
 	// finish_on_round_end: armed, a round end completes the script with its signals; disarmed or never armed, it is the script's.
 	{
 		Probe saved = std::move(probe);

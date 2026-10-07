@@ -481,6 +481,13 @@ namespace RTE {
 			if (store.Load(second.issuedAtUnixMs + NetReconnectTicketStore::c_MaxRecordAgeMs + 1, loaded, &error) != NetH4TicketLoadResult::Stale) {
 				return Fail("a record past the age bound was still offered");
 			}
+			// The leave's sentence reads the same answer without counting a load.
+			const uint32_t loadsBefore = store.GetLoads(), refusedBefore = store.GetRefusedLoads();
+			if (store.Check(second.issuedAtUnixMs + NetReconnectTicketStore::c_MaxRecordAgeMs) != NetH4TicketLoadResult::Loaded ||
+			    store.Check(second.issuedAtUnixMs + NetReconnectTicketStore::c_MaxRecordAgeMs + 1) != NetH4TicketLoadResult::Stale ||
+			    store.GetLoads() != loadsBefore || store.GetRefusedLoads() != refusedBefore) {
+				return Fail("a check of the record did not answer as its load does, or counted as a load");
+			}
 
 			{
 				NetH4TicketRecord v2 = second;

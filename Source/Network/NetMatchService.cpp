@@ -2325,6 +2325,8 @@ static std::string ResyncSaveName() {
 			m_RejoinOfRunningMatch = false;
 			m_HostEndedTheMatch = false;
 			m_LeftMatch = false;
+			m_HostLeaveConfirmed.reset();
+			m_LeaveRejoinRead.reset();
 			m_HostEndReason.clear();
 			m_CompletedLobbySinceMs = 0;
 			m_PendingLobbyEvents.clear();
@@ -2587,16 +2589,32 @@ static std::string ResyncSaveName() {
 		return survivors >= 2 ? NetHostLeaveOutcome::HandsOver : NetHostLeaveOutcome::EndsMatch;
 	}
 
+	void NetMatchService::ConfirmHostLeave(NetHostLeaveOutcome outcome) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_HostLeaveConfirmed = outcome;
+	}
+
 	bool NetMatchService::LeaveKeepsRejoin() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		// The same reading the landing's offer takes after the leave: admission on, and a ticket kept for this match.
-		return s_AdmissionEnabled && !m_IsHost && m_TicketStore.HasRecord();
+		if (!s_AdmissionEnabled || m_IsHost) return false;
+		// The same reading the landing's offer takes after the leave: a ticket that loads, not a file that is there. A menu asks
+		// every pass while it is open, so the ticket is read again at most every half second.
+		const uint64_t nowMs = UnixNowMs(nullptr);
+		if (!m_LeaveRejoinRead || nowMs < m_LeaveRejoinRead->first || nowMs - m_LeaveRejoinRead->first >= 500) {
+			m_LeaveRejoinRead = std::make_pair(nowMs, m_TicketStore.Check(nowMs) == NetH4TicketLoadResult::Loaded);
+		}
+		return m_LeaveRejoinRead->second;
 	}
 
 	void NetMatchService::LeaveMatch(const std::string& result) {
 		std::string displayResult = result;
-		// The host's leave does what its confirmation said at this frame.
-		const bool handover = HostLeaveOutcome() == NetHostLeaveOutcome::HandsOver;
+		// The host's leave does what its confirmation showed when it was pressed, or what it reads now when no menu asked.
+		std::optional<NetHostLeaveOutcome> confirmed;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			confirmed = std::exchange(m_HostLeaveConfirmed, std::nullopt);
+		}
+		const bool handover = (confirmed ? *confirmed : HostLeaveOutcome()) == NetHostLeaveOutcome::HandsOver;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			CaptureMatchSummaryLocked(result);
@@ -2636,12 +2654,16 @@ static std::string ResyncSaveName() {
 		bool exchangeOwed = false;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			// Leaving ends this machine's replay of its held seat, while its ticket still keeps the seat.
+			EndRoundCatchUpLocked();
 			// The round hears the leave at once: this seat stopped producing here, and a leave that waited on §7's
 			// ack would be held as a slow player first. The notice leaves the link up, so §7 still runs on it.
 			exchangeOwed = !m_LeaveExchangeRun && m_AdmissionAttached && !m_IsHost && m_Session &&
 			               m_Session->IsReady() && m_TicketStore.HasRecord();
 			if (m_Coordinator) {
 				m_Coordinator->Leave(reason);
+				// A held returner hears the same end as a player still in the round.
+				if (m_IsHost && m_State == NetMatchServiceState::Running && !handover) SayGoodbyeToRejoinersLocked();
 			}
 			if (handover) m_IsHost = false;
 			if (m_State == NetMatchServiceState::Running) {
@@ -8402,7 +8424,8 @@ static std::string ResyncSaveName() {
 			m_LastRoundId = static_cast<uint32_t>(m_Coordinator->GetRoundId());
 		}
 		m_ReconnectClient.SetRound(m_Coordinator ? m_LastRoundId : 0);
-		if (hostAdmission) {
+		// A retained admission session still answers after its coordinator stopped; it cannot start that ended round again.
+		if (hostAdmission && (!m_Coordinator || !m_Coordinator->IsStopped())) {
 			// Phase A: a ticketless join into a running match is refused; a returning holder proves.
 			m_ReconnectHost.SetLiveMatch(true);
 		}

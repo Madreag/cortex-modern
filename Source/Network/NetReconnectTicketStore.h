@@ -86,6 +86,9 @@ namespace RTE {
 		/// @return Why the load produced nothing, or Loaded.
 		NetH4TicketLoadResult Load(uint64_t nowUnixMs, NetH4TicketRecord& out, std::string* error = nullptr);
 
+		/// What a load would answer now, without counting it as one.
+		NetH4TicketLoadResult Check(uint64_t nowUnixMs) const;
+
 		/// Deletes the record. Only a LeaveAck, a confirmed session end or the age bound may call this.
 		bool Clear(std::string* error = nullptr);
 
@@ -103,6 +106,9 @@ namespace RTE {
 		static bool Deserialize(const std::vector<uint8_t>& bytes, NetH4TicketRecord& out);
 
 	private:
+		/// Reads and verifies the record; the counters and the journal are Load's.
+		NetH4TicketLoadResult Read(uint64_t nowUnixMs, NetH4TicketRecord& out, std::string* error, std::vector<uint8_t>& bytes) const;
+
 		std::string m_Path = DefaultPath();
 		uint32_t m_Stores = 0;
 		uint32_t m_StoreFailures = 0;

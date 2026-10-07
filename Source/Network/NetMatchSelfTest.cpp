@@ -7655,6 +7655,106 @@ namespace RTE {
 		return true;
 	}
 
+	// A player leaving while its held seat catches up must leave that replay too; otherwise the departed screen still reads held.
+	bool TestLeavingEndsTheSeatsCatchUp(std::string* error) {
+		for (int arm = 0; arm < 3; ++arm) {
+			NetMatchService service;
+			service.m_State = NetMatchServiceState::Running;
+			service.m_MatchWasRunning = true;
+			if (arm < 2) {
+				service.m_WorldCatchUp.active = true;
+				service.m_WorldCatchUp.privateMatch = arm == 0;
+				service.m_WorldCatchUp.roundId = 61;
+				service.m_WorldCatchUp.snapshotTick = 40;
+				service.m_InPlaceCatchUp = arm == 1;
+				if (!ScenarioRunner::InstallWorldCatchUp(40, {}, error)) return false;
+				ScenarioRunner::SetWorldCatchUpActivation(41);
+				ScenarioRunner::SetWorldCatchUpPriorInputThrough(88);
+			}
+			service.LeaveMatch("Match left");
+			if (service.GetState() != NetMatchServiceState::Completed || !service.m_LeftMatch ||
+			    service.m_WorldCatchUp.active || service.m_WorldCatchUp.snapshotTick != 0 || service.m_InPlaceCatchUp ||
+			    ScenarioRunner::WorldCatchUpActive() || ScenarioRunner::WorldCatchUpHolding() || ScenarioRunner::WorldCatchUpPriorInputThrough() != 0) {
+				*error = "leaving kept the seat's catch-up in arm " + std::to_string(arm) +
+				         ": active=" + std::to_string(ScenarioRunner::WorldCatchUpActive()) + " snapshot=" + std::to_string(service.m_WorldCatchUp.snapshotTick);
+				return false;
+			}
+		}
+
+		// A host ending the match tells its held returners too; handing it over leaves those returners in the match.
+		for (bool handover: {false, true}) {
+			LoopbackTransport wire;
+			NetMatchService service;
+			service.m_IsHost = true;
+			service.m_State = NetMatchServiceState::Running;
+			service.m_MatchWasRunning = true;
+			service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+			NetLockstepConfig config;
+			config.sessionId = 0x4C45415645454E44ULL;
+			config.roundId = 61;
+			config.startFrame = 80;
+			config.localPeerId = 1;
+			config.peerCount = 2;
+			config.substituteSlowPeers = true;
+			config.initialSeatHolds[2].peerId = 2;
+			config.initialSeatHolds[2].cutoffFrame = 1;
+			if (!service.m_Coordinator->StartReplay(wire, config, error) || !service.m_Coordinator->AnyHeldAISeat()) {
+				*error = "the host-leave fixture did not hold its returning seat";
+				return false;
+			}
+			service.ConfirmHostLeave(handover ? NetHostLeaveOutcome::HandsOver : NetHostLeaveOutcome::EndsMatch);
+			service.LeaveMatch("Host left");
+			uint64_t finalFrame = 0;
+			const bool goodbye = service.HostGoodbyeSeen(finalFrame);
+			if (goodbye == handover || service.m_GoodbyeOwedToRejoiners == handover) {
+				*error = handover ? "handing the match over ended a held returner's round" : "the host left without ending its held returner's round";
+				return false;
+			}
+		}
+
+		// A retained admission session must not restart an ended held round while the service finishes its readback.
+		for (bool ended: {false, true}) {
+			LoopbackTransport wire;
+			NetMatchService service;
+			service.m_IsHost = true;
+			service.m_AdmissionAttached = true;
+			service.m_State = NetMatchServiceState::Running;
+			service.m_MatchWasRunning = true;
+			service.m_LocalPeerId = 1;
+			service.m_Session = std::make_unique<NetSession>();
+			service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+			NetLockstepConfig config;
+			config.sessionId = 0x454E444544524F53ULL;
+			config.roundId = 61;
+			config.startFrame = 80;
+			config.localPeerId = 1;
+			config.peerCount = 2;
+			config.substituteSlowPeers = true;
+			config.initialSeatHolds[2].peerId = 2;
+			config.initialSeatHolds[2].cutoffFrame = 1;
+			if (!service.m_Coordinator->StartReplay(wire, config, error)) return false;
+			const NetMatchConfig matchConfig;
+			service.m_ReconnectHost.SetSeatTable(NetH4BuildSeatTable(matchConfig), matchConfig.mode);
+			service.m_ReconnectHost.SetLiveMatch(true);
+			if (ended) service.Complete("match over");
+			const NetRosterStage expected = ended ? NetRosterStage::Ended : NetRosterStage::Running;
+			const uint64_t revision = service.m_ReconnectHost.GetRoster().revision;
+			if (service.m_ReconnectHost.GetRoster().stage != expected || service.m_Coordinator->IsStopped() != ended) {
+				*error = "the ended-roster fixture did not reach its requested round state";
+				return false;
+			}
+			for (int pump = 0; pump < 3; ++pump) service.PumpSessionEvents();
+			if (service.m_ReconnectHost.GetRoster().stage != expected || service.m_ReconnectHost.GetRoster().revision != revision) {
+				*error = ended ? "pumping retained admission restarted the ended roster" : "pumping a live round changed its roster stage";
+				return false;
+			}
+		}
+		std::cout << "[net-match-leave-catch-up-selftest] PASS an_ended_held_roster_stays_ended pumps=3 live_control=1" << std::endl;
+
+		std::cout << "[net-match-leave-catch-up-selftest] PASS leaving_ends_the_seats_catch_up cases=5" << std::endl;
+		return true;
+	}
+
 	// A machine whose round-start restart took longer than the host's plays the round that much behind: EDITH's 302 ms against the
 	// host's 164 ms left it 8 ticks late on an 8-tick delay sized from its link alone, and the first jitter past the bound held it
 	// (four-box runs, round frames 140-265). Its delay covers the start work it published beyond ours.
@@ -16255,6 +16355,16 @@ namespace RTE {
 		return passed ? 0 : 1;
 	}
 
+	int NetMatchSelfTest::RunLeaveCatchUp() {
+		std::string error;
+		const bool leavePassed = TestLeavingEndsTheSeatsCatchUp(&error);
+		std::cout << "[net-match-leave-catch-up-selftest] " << (leavePassed ? "PASS" : "FAIL: " + error) << std::endl;
+		std::string probeError;
+		const bool probePassed = NetModerationGUIProbe::RunCrossScopeSelfTest(&probeError);
+		if (!probePassed) std::cout << "[net-match-leave-catch-up-selftest] FAIL: " << probeError << std::endl;
+		return leavePassed && probePassed ? 0 : 1;
+	}
+
 	int NetMatchSelfTest::Run() {
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-match-selftest] FAIL: " << message << std::endl;
@@ -16501,6 +16611,7 @@ namespace RTE {
 		if (!TestAHeldRejoinAsksItsHostAgainOffTheGameThread(&error)) return fail(error);
 		if (!TestARoundStartsDelayCoversTheStartWork(&error)) return fail(error);
 		if (!TestARematchStartsWithoutTheEndedRoundsCatchUp(&error)) return fail(error);
+		if (!TestLeavingEndsTheSeatsCatchUp(&error)) return fail(error);
 		if (!TestALobbyDropsAnAbandonedTransfersTail(&error)) return fail(error);
 		if (!TestALaterLobbysTransferIsNewToItsPeers(&error)) return fail(error);
 		if (!TestANextRoundLandingEndsTheRejoinPhase(&error)) return fail(error);

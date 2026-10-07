@@ -629,8 +629,15 @@ namespace RTE::MenuAutomation {
 				lines = ShownLines(menu);
 				linesRead = true;
 			}
-			const auto carries = [&lines](const std::string& text) {
-				return std::any_of(lines.begin(), lines.end(), [&text](const ShownLine& line) { return line.text.find(text) != std::string::npos; });
+			const auto carries = [&lines, &watch](const std::string& text) {
+				// A place the host opened is no seat held for anyone, as WatchStateHolds reads it: a held watch leaves its row's state alone.
+				std::set<std::string> openedRows;
+				if (watch.state.ends_with("_held")) {
+					for (const ShownLine& line: lines) {
+						if (line.control.starts_with("NetworkSeatName") && line.text.starts_with("Open place")) openedRows.insert("NetworkSeatDetail" + line.control.substr(15));
+					}
+				}
+				return std::any_of(lines.begin(), lines.end(), [&](const ShownLine& line) { return !openedRows.contains(line.control) && line.text.find(text) != std::string::npos; });
 			};
 			Json detail;
 			if (watch.rule == "require" && !carries(watch.text)) {

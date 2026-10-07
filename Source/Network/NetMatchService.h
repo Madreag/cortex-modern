@@ -668,7 +668,9 @@ namespace RTE {
 		/// players still in the round with their link up at the current frame, held ones included, since they answer it. A lone
 		/// survivor of an announced leave ends the match, so a handover takes two. LeaveMatch acts on the same answer.
 		NetHostLeaveOutcome HostLeaveOutcome() const;
-		/// Whether this client's leave keeps a ticket the Multiplayer screen offers back as Rejoin Match.
+		/// The outcome the host's leave confirmation showed when it was pressed; the next LeaveMatch acts on it.
+		void ConfirmHostLeave(NetHostLeaveOutcome outcome);
+		/// Whether this client's leave keeps a ticket the Multiplayer screen offers back as Rejoin Match: one that loads, as the offer reads it.
 		bool LeaveKeepsRejoin() const;
 		/// Whether this match lets a player without a ticket ask the host for a place.
 		static bool AdmissionEnabled() { return s_AdmissionEnabled; }
@@ -1426,6 +1428,7 @@ namespace RTE {
 		friend bool TestAReturnerToldTheMatchIsOverGetsItsRecord(std::string* error);
 		friend bool TestACaughtUpSeatTakesItsRoundsRecordOnce(std::string* error);
 		friend bool TestARematchStartsWithoutTheEndedRoundsCatchUp(std::string* error);
+		friend bool TestLeavingEndsTheSeatsCatchUp(std::string* error);
 		friend bool TestANextRoundLandingEndsTheRejoinPhase(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
@@ -1783,6 +1786,8 @@ namespace RTE {
 		bool m_PendingLobbyOverflow = false;
 		size_t m_PendingLobbyDropped = 0; //!< Lobby events dropped since the queue last drained.
 		bool m_LeftMatch = false;
+		std::optional<NetHostLeaveOutcome> m_HostLeaveConfirmed; //!< What the host's pressed leave showed, for the LeaveMatch it starts.
+		mutable std::optional<std::pair<uint64_t, bool>> m_LeaveRejoinRead; //!< When the kept ticket was last read for the leave sentence, and whether it loads.
 		//!< Steady ms of the match end that opened this rematch lobby; 0 when no lobby is waiting.
 		uint64_t m_CompletedLobbySinceMs = 0;
 		uint64_t m_EndedLockstepPackets = 0;
