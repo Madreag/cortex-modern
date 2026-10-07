@@ -17827,6 +17827,27 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestDataRootDiscovery(std::string* error) {
+		const auto root = std::filesystem::current_path() / "Userdata" / "data-root-selftest";
+		const auto game = root / "game", selected = root / "selected", build = game / "compiler-output";
+		std::filesystem::create_directories(build);
+		for (const auto& base: {game, selected}) {
+			std::filesystem::create_directories(base / "Data/Base.rte/Shaders");
+			std::ofstream(base / "Data/Base.rte/Index.ini").put('\n');
+			std::ofstream(base / "Data/Base.rte/Shaders/ScreenBlit.vert").put('\n');
+		}
+		const auto executable = build / "CortexCommand";
+		std::ofstream(executable).put('\n');
+		if (System::ResolveDataRoot(build, executable) != game) {
+			*error = "launching from a compiler output directory does not discover the game data above its executable"; return false;
+		}
+		if (System::ResolveDataRoot(selected, executable) != selected || System::ResolveDataRoot(game, executable) != game) {
+			*error = "data discovery replaced an explicitly selected data root and its mods"; return false;
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS build_directory_data_discovery_preserves_selected_root");
+		return true;
+	}
+
 	bool TestMatchChatOpeningText(std::string* error) {
 		NetMatchService::Construct();
 		struct Restore {
@@ -17941,6 +17962,7 @@ namespace RTE {
 			else if (name == "pause-navigation") passed = TestPauseNavigationDuringRecovery(&error);
 			else if (name == "ticket-recovery") passed = TestInternetTicketRecovery(&error);
 			else if (name == "placement-confirm") passed = GameActivity::RunSetupEditorSelfTest(true);
+			else if (name == "data-root") passed = TestDataRootDiscovery(&error);
 			else if (name == "chat-opening") passed = TestMatchChatOpeningText(&error);
 			else if (name == "lobby-return") passed = TestLobbyChatReturn(&error);
 			else if (name == "setup-editor") passed = GameActivity::RunSetupEditorSelfTest();
