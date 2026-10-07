@@ -130,7 +130,7 @@ class SnapshotComparisonTests(unittest.TestCase):
                 self.assertEqual(self.compare(first, second, seats=seats), 1)
         self.assertEqual(self.compare(first, first, seats=(0, 1)), 0)
 
-    def test_cross_process_reaches_the_anchors_no_owner_decodes(self):
+    def test_peer_process_reaches_the_anchors_no_owner_decodes(self):
         payload = runtime._payload("ArmRuntime1")
         encoded = lambda data: base64.urlsafe_b64encode(data).decode().replace("=", ".")
         limb = lambda anchor, length: "LP2 " + " ".join([str(length)] + ["1"] * 36 + [anchor, "1", "1", anchor] + ["1"] * 4 + ["0"])
@@ -305,7 +305,7 @@ class GraphIdentityTests(unittest.TestCase):
     def compare(self, first, second):
         return checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second))
 
-    def test_cross_process_compare_masks_only_the_timer_real_anchor(self):
+    def test_peer_process_compare_masks_only_the_timer_real_anchor(self):
         # A Timer rides the graph as m<StartSimTime,SimTimeLimit,StartRealTime,RealTimeLimit>; two processes never share the real anchor.
         def timer_graph(token):
             return birth_graph("SG6", (table(1, ((string("timer"), "#2;"),)), "U2;" + token + "Iz;"), roots=(("1", "#1;"),), serial=3)

@@ -11,7 +11,7 @@ game.
 - A built engine at the repository root (`Cortex Command.exe` on Windows; on macOS and Linux the binary named by
   `CCCP_TEST_BINARY`, else `build-gns/CortexCommand`). See [Building](../README.md#building).
 - For video scenes: `ffmpeg` and `ffprobe` on `PATH`.
-- Git, for the tree scanner and the drivers that record which commit they ran.
+- Git, for the drivers that record which commit they ran.
 
 ## The two suite runners
 
@@ -33,7 +33,7 @@ python tools/e2e_video.py --repo . --out <scratch dir>/mp-host-join --scenario m
 
 A scene is one play-through described by `tools/e2e/<name>.json`: the peers, their menu and input scripts, and what the
 probes must read on screen. The driver records each peer on a private hidden desktop and leaves a video, a contact sheet
-and `review.json`. See `e2e/README.md`.
+and `review.json`. The JSON records the peers, input scripts and assertions for the scene.
 
 ## How the game is started
 
@@ -52,8 +52,20 @@ write your machines in. `box_facts.py` reads it. Each machine has a role (`pc`, 
 system temp directory and no reservation marker is honoured); the multi-machine tools stop and say how to make one.
 The unit tests use the example file, never yours.
 
-`scan_public_tree.py` keeps machine names, home paths, private network addresses and tool names out of the repository.
-It reads the box file to know what to look for: `python tools/scan_public_tree.py` (and `--self-test`).
+Optional operator tooling is configured outside the repository. `CCCP_INVENTORY_DIR` selects an inventory folder;
+`CC_INVENTORY_DIR` selects a shipped flat copy. Without either, only this tools folder is searched.
+`CCCP_FEEL_MARKER` selects a reservation marker; its default is `cccp-feel-matrix-running` in the system temp folder.
+`CCCP_SCRATCH_ROOT` selects a shared scratch root. `CCCP_SP_CONTROL`, `CCCP_FAMILY_LOCK` and `CCCP_BOX_LOG` select
+the single-player control, family reservation and run log. `CCCP_SESSION_SCRIPT` selects the remote task's script.
+`CCCP_CROSS_BOXES` selects a cross-match manifest; without it the driver reads the configured box file.
+`CCCP_CROSS_REQUIREMENTS` selects an external requirements table; without it those requirements are NOT COVERED.
+`CCCP_CLOUDFLARE_TURN_CONFIG` and `CCCP_COTURN_CONFIG` select relay credential files; defaults are relative files
+under `relay/`. `CCCP_VPN_COMMAND` selects an optional overlay network CLI. No overlay CLI is discovered automatically.
+`ACCEPTANCE_RELAY_SCENARIO` selects an external relay scenario. `CCCP_DIRECTORY_LOG_HOST` and `CCCP_DIRECTORY_LOG_DIR`
+enable optional directory-log collection; without them it reads no remote logs. `CCCP_CLOUDFLARED` and `CCCP_FFMPEG`
+select tool commands; otherwise the tools use `PATH` and configured manifest directories.
+Remote mod targets declare `scratch_root`. World task profiles also declare `approved_task_script`, `approved_tree`
+and `approved_marker`; the profile checks compare the actual paths against these explicit policy fields.
 
 ## Layout
 
@@ -76,7 +88,7 @@ It reads the box file to know what to look for: `python tools/scan_public_tree.p
 | `linux/`, `macos/`, `mac/` | helpers for the POSIX builds and streams |
 | `handtest/` | the two-window kit for playing a match by hand (`docs/handtest.md`) |
 | `fonts/` | the font atlas tool |
-| `box_facts.py`, `boxes.example.json`, `scan_public_tree.py` | the box file and the tree scanner |
+| `box_facts.py`, `boxes.example.json` | the configured box file and its example |
 
 ## Utilities nothing else runs
 
@@ -95,5 +107,4 @@ Each is run by hand when its question comes up.
 | `python tools/feel/draw_median.py <matrix root> ...` | the draw-time ratio over several feel matrices |
 | `python tools/feel/world_report_audit.py <run root>` | a held world's progress from the host's receipts and both lobby counters |
 | `python tools/h4_substitution_gates.py <gate> --out <dir>` | the nine live substitution gates of the reconnect design: a held seat given to an applicant over a real socket |
-| `tools/linux/stream.sh`, `tools/linux/acceptance_endgame.sh`, `tools/macos/acceptance_stream.zsh` | the POSIX build-and-test streams the multi-machine acceptance runs ship to the Linux and macOS machines |
 | `tools/pie_lockstep/`, `tools/pie_writes/` | pie-menu arms; each folder's README says how to run them |

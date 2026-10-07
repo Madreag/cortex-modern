@@ -7,7 +7,7 @@ import tarfile
 import tempfile
 import unittest
 
-from test_harness_resume6 import module
+from test_relay_build_inputs import module
 from test_inventory_oracle_evidence import INVENTORY
 
 

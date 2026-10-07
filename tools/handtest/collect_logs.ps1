@@ -4,9 +4,9 @@
   Collects every hand-test instance's evidence into one folder:
     pwsh tools\handtest\collect_logs.ps1 -Out <dir>
 
-  Reads only the headed instances - D:\mx\handtest\<role>-<n>\. The self-check
-  writes under D:\mx\handtest\_selfcheck\ and is never mixed in; pass
-  -Source D:\mx\handtest\_selfcheck to pack a self-check run instead.
+  Reads only the headed instances - <kit>\instances\<role>-<n>\. The self-check
+  writes under <kit>\instances\_selfcheck\ and is never mixed in; pass
+  -InstanceRoot <kit>\instances\_selfcheck to pack a self-check run instead.
 
   For each instance it copies the console logs (console-*.out.log / *.err.log /
   console-*.log), the runner records (run-*\launch.json, run-*\stdout.log),
@@ -23,9 +23,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string]$Out,
-    [string]$Source = 'D:\mx\handtest'
+    [Alias('Source')] [string]$InstanceRoot = (Join-Path $PSScriptRoot 'instances')
 )
 $ErrorActionPreference = 'Stop'
+$Source = [IO.Path]::GetFullPath($InstanceRoot)
 
 if (-not (Test-Path $Source)) { throw "no hand-test instances found: $Source does not exist" }
 $instances = Get-ChildItem $Source -Directory | Where-Object { $_.Name -match '^(host|client)-\d+$' }

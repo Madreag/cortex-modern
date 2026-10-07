@@ -8,7 +8,8 @@ command packs both instances' logs for a bug report.
 ## Before you start
 
 - A build of this tree: the folder that holds `Cortex Command.exe` and `Data\`
-  (see Building in the README). Pass it as `-Build`. Below it is written `<build>`.
+  (see Building in the README). Pass it as `-Build`. Below it is written `<build>`;
+  `<kit>` means the folder containing `play.ps1` and `collect_logs.ps1`.
 - Windows may ask to let the game through the firewall the first time an
   instance hosts. Allow it: the lobby runs over UDP.
 - Run `play.ps1` from your own PowerShell 7 terminal. It refuses to open windows
@@ -23,9 +24,9 @@ pwsh <build>\tools\handtest\play.ps1 -Build <build>
 ```
 
 Two windows appear side by side: HOST (left) and CLIENT (right). Each instance
-runs from its own directory `D:\mx\handtest\<role>-<n>\` with its own
+runs from its own directory `<kit>\instances\<role>-<n>\` with its own
 `Userdata\Settings.ini`, so profiles, saves and settings never touch each other.
-(The kit keeps its instances under `D:\mx\handtest` today.)
+Both scripts accept `-InstanceRoot <folder>` to use another instance folder.
 
 > If a window opens on a "Rejoin Match?" offer instead of the main menu, that is
 > last session's reconnect ticket doing its job - Cancel takes you to the menu.
@@ -181,13 +182,14 @@ replays, crash dumps and the effective Settings.ini into
 `<Out>\<role>-<n>\` plus a `MANIFEST.txt` (build sha + dirty flag of the exe's
 tree, exe hash, exact command lines, per-file sizes/mtimes). `reconnect.ticket`
 is not collected - it is a live rejoin credential. Self-check runs under
-`D:\mx\handtest\_selfcheck\` are never mixed in; collect them explicitly with
-`-Source D:\mx\handtest\_selfcheck` if needed.
+`<kit>\instances\_selfcheck\` are never mixed in; collect them explicitly with
+`-InstanceRoot <kit>\instances\_selfcheck` if needed. When launching with a custom
+`-InstanceRoot`, pass the same folder to the collector.
 
-WARNING: never delete `D:\mx\handtest` with a tool that follows junctions -
+WARNING: never delete `<kit>\instances` with a tool that follows junctions -
 each instance's `Data` is a junction into the build tree and a junction-following
-delete would eat the build. (Deleting `D:\mx\handtest` itself with Explorer or
-`Remove-Item` only removes the links, which is safe.)
+delete would eat the build. Remove each instance's `Data` junction itself before
+deleting the instance folder; never enter the junction's target.
 
 ## Ports
 

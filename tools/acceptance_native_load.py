@@ -15,7 +15,7 @@ COMPILERS = {'cl.exe', 'link.exe', 'msbuild.exe'}
 
 
 def compiler_overlap_allowed(box):
-    return (box.get('name') == 'EROL-PC' and box.get('kind') == 'windows-local' and
+    return (box.get('name') == 'box-a' and box.get('kind') == 'windows-local' and
             box.get('compiler_overlap_row') in ('mod-match', 'mod-refusal'))
 
 

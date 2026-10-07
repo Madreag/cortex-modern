@@ -38,7 +38,7 @@ def live_hashes(paths, first, last):
             subsystems = row.get("subsystems")
             required = CORE | {"controller"}
             if (not all(field in row for field in (*HISTORY, "instance", "execution", "incarnation")) or
-                    row.get("instance") != ("erol" if peer == "pc" else peer) or
+                    row.get("instance") != ("pc" if peer == "pc" else peer) or
                     not isinstance(subsystems, dict) or not set(required) <= set(subsystems) or
                     not re.fullmatch(r"[0-9a-f]{64}", str(row.get("sim_gated", ""))) or
                     any(not re.fullmatch(r"[0-9a-f]{64}", str(h)) for h in (subsystems or {}).values())):

@@ -116,3 +116,5 @@ imgui.ini
 /dist/
 # Void Wanderers is installed into Data/ for the mod rows; it is never part of the tree
 /Data/VoidWanderers.rte/
+# Local handtest instances and their Data junctions
+/tools/handtest/instances/

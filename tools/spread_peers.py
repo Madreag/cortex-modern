@@ -301,11 +301,7 @@ def native_address_probe(destination=None):
             if not address.is_loopback and not address.is_link_local and not address.is_unspecified:
                 return str(address)
         raise RuntimeError("native host has no route address to the named peer")
-    program = shutil.which("tailscale")
-    if not program and sys.platform == "win32":
-        candidate = Path("C:/Program Files/Tailscale/tailscale.exe")
-        if candidate.is_file():
-            program = str(candidate)
+    program = os.environ.get("CCCP_VPN_COMMAND")
     if program:
         result = subprocess.run([program, "ip", "-4"], capture_output=True, text=True, timeout=10, creationflags=NO_WINDOW)
         if result.returncode == 0:
@@ -1365,7 +1361,7 @@ def named_task_slots(slots, box):
     try:
         from remote_box import wrapper_refusal
     except ModuleNotFoundError:
-        from edith.remote_box import wrapper_refusal
+        from remote.remote_box import wrapper_refusal
     result = []
     for slot in slots:
         row = dict(slot)
@@ -1564,7 +1560,7 @@ class Case:
         if len({name.casefold() for name in self.output_names.values()}) != len(self.names):
             raise ValueError("a spread case declares unique output names")
         self.interface_source = Path(__file__).read_text(encoding="utf-8")
-        self.task_runner_source = Path(__file__).with_name('edith').joinpath('remote_box.py').read_text(encoding='utf-8')
+        self.task_runner_source = Path(__file__).with_name('remote').joinpath('remote_box.py').read_text(encoding='utf-8')
         self.interface_sha256 = hashlib.sha256(self.interface_source.encode()).hexdigest()
         self.pins, self.peer_ports = pairs(peer_boxes), peer_ports or {}
         try:
@@ -1648,7 +1644,7 @@ class Case:
         backend.repo = self.repo
         backend.sources["spread_peers.py"] = self.interface_source
         backend.sources['remote_box.py'] = (self.task_runner_source if hasattr(self, 'task_runner_source') else
-                                          Path(__file__).with_name('edith').joinpath('remote_box.py').read_text(encoding='utf-8'))
+                                          Path(__file__).with_name('remote').joinpath('remote_box.py').read_text(encoding='utf-8'))
         backend.sources["pool_worker.py"] = native_cpu_wait_source(backend.sources["pool_worker.py"])
         backend.sources['pool.py'] = native_pool_source(backend.sources['pool.py'])
         # The existing facts reader lazily imports pool_cohort under a named

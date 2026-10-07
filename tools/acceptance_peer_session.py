@@ -71,14 +71,14 @@ class Delivery:
 
 
 class Pair:
-    def __init__(self, repo, root, inventory, host='ALLY', client='EDITH'):
+    def __init__(self, repo, root, inventory, host='HANDHELD', client='REMOTE'):
         self.repo, self.root, self.inventory = Path(repo).resolve(), Path(root).resolve(), Path(inventory).resolve()
         split, self.rb = dispatch.inventory_modules(inventory)
         boxes, _ = split.load_manifest(self.inventory/'boxes.json')
         self.schedule = read(self.root/'split-plan.json')
         self.source, self.executable, self.cid = (self.schedule[key] for key in ('source_sha','exe_sha256','collection_id'))
-        if (host, client) != ('ALLY', 'EDITH'):
-            raise ValueError('the declared relay pair is ALLY host and EDITH client')
+        if (host, client) != ('HANDHELD', 'REMOTE'):
+            raise ValueError('the declared relay pair is HANDHELD host and REMOTE client')
         self.boxes = {}
         for role, name in (('host', host), ('client', client)):
             box = next(box for box in boxes if box.name == name)
@@ -199,7 +199,7 @@ def publish(root, records):
 def execute(spec):
     values = receive_values(spec['values_pipe'])
     if spec['kind'] == 'relay-peer':
-        import edith_cross
+        import two_box_match
         native = spec['native']
         from relay_private import require_public
         require_public(values.get('settings',{}))
@@ -209,8 +209,8 @@ def execute(spec):
             (Path(native['root'])/name).write_text(text,encoding='utf-8')
         path = Path(native['root'])/(native['peer']+'-spec.json')
         # The directory issues the login; no settings or task file carries one.
-        h = edith_cross.harness(Path(native['repo'])/'tools')
-        run = edith_cross.prepare_peer(h,native)
+        h = two_box_match.harness(Path(native['repo'])/'tools')
+        run = two_box_match.prepare_peer(h,native)
         try:
             run.start()
             stop=Path(spec['identity']).parent/'stop.json'
@@ -219,7 +219,7 @@ def execute(spec):
                 time.sleep(.05)
             record=run.finish()
         finally:
-            run.close(); edith_cross.redact(h,run,native)
+            run.close(); two_box_match.redact(h,run,native)
         write(Path(native['root'])/(native['peer']+'-record.json'),record)
         write(path,native)
         return 0 if record.get('exit_code') == 0 else 1

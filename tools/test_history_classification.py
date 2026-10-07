@@ -2,7 +2,7 @@
 import unittest
 
 import cross_report
-from test_harness_resume3 import COUNT_CATEGORIES, ROUND_START, OWN_WARNING, OWN_PROPOSAL, OWN_COMMIT, classified
+from test_history_authority import COUNT_CATEGORIES, ROUND_START, OWN_WARNING, OWN_PROPOSAL, OWN_COMMIT, classified
 
 
 def counts(declared, progress):

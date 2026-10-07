@@ -35,7 +35,7 @@ def combined_script(base_script, who, port):
         'assert_label LabelReplaySelected 02-match.ccreplay\n'
         'screenshot report_saved_replay\nactivate ButtonReplayPlay\nwait_ms 5000\n'
         'assert_screen MultiplayerScreen\nassert_substate ReplayBrowser\n'
-        'assert_label LabelReplayStatus Playback finished:\n'
+        'assert_label LabelReplayStatus Playback finished:' '\n'
         'assert_label LabelReplaySelected 02-match.ccreplay\n'
         'screenshot report_saved_replay_return\nactivate ButtonReplayBack\nwait 10\n'
         'assert_substate Landing\nexit\n')

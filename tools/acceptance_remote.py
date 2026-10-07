@@ -31,7 +31,7 @@ def remote_commands(commands, local_repo, remote_repo, local_root, remote_root):
     pairs.sort(key=lambda pair: len(pair[0]), reverse=True)
     for command in commands:
         if CREDENTIAL_FLAGS & set(command):
-            raise ValueError('credential readers stay on EROL-PC; only their game peers may be remote')
+            raise ValueError('credential readers stay on box-a; only their game peers may be remote')
         argv = list(command)
         if argv and Path(argv[0]).name.lower() in ('python', 'python.exe', 'python3', 'python3.exe'):
             argv[0] = 'python'
@@ -69,7 +69,7 @@ def prepare_box(repo, box, root, inventory_root, source, executable, *, declared
     remote.wait_task_idle(budget_s=180 * 60, poll_s=30)
     remote.mkdir(payload)
     remote.mkdir(box.repo)
-    remote.scp_to(Path(repo)/'tools/edith/remote_box.py', payload/'remote_box.py')
+    remote.scp_to(Path(repo)/'tools/remote/remote_box.py', payload/'remote_box.py')
     shipped = split.ship_inputs(rb, remote, Path(repo), box, payload, work, lambda value: print(value, flush=True))
     synced = split.sync_git(rb, remote, Path(repo), box, payload, work, lambda value: print(value, flush=True))
     if shipped['exe_sha256_there'] != executable or synced['head_there'] != source:
@@ -246,7 +246,7 @@ def execute_payload(path):
     deadline = time.monotonic() + spec['timeout']
     for argv in spec['commands']:
         if CREDENTIAL_FLAGS & set(argv):
-            raise ValueError('credential files may only be read by the EROL-PC driver')
+            raise ValueError('credential files may only be read by the box-a driver')
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError('declared remote row budget exhausted')

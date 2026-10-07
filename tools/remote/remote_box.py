@@ -1,9 +1,9 @@
 """A second Windows box reached over ssh, whose engine runs only inside the owner's interactive session through one
-scheduled task (EDITH's cortex-session1). Shared by tools/edith_cross.py and the inventory's split runner.
+scheduled task (REMOTE's cortex-session1). Shared by tools/two_box_match.py and the inventory's split runner.
 
-    python tools/edith/remote_box.py hash --root <dir> --list <file>      sha256 of each listed relative path (JSON)
-    python tools/edith/remote_box.py evidence --root <dir> --out <list> [--max-bytes N] [--suffix .json ...]
-    python tools/edith/remote_box.py --self-test
+    python tools/remote/remote_box.py hash --root <dir> --list <file>      sha256 of each listed relative path (JSON)
+    python tools/remote/remote_box.py evidence --root <dir> --out <list> [--max-bytes N] [--suffix .json ...]
+    python tools/remote/remote_box.py --self-test
 
 The two subcommands run ON the box: `hash` answers a ship-by-hash question, `evidence` writes the list of small files
 under a run root (never entering a junction or symlink) for one tar. Everything else runs here and speaks ssh/scp.
@@ -27,7 +27,7 @@ from typing import Callable, Iterable
 
 LOG = logging.getLogger('remote_box')
 SSH_NOISE = re.compile(r'post-quantum|store now, decrypt later|may need to be upgraded|openssh\.com/pq', re.I)
-WINDOWS_TAR = 'C:/Windows/System32/tar.exe'
+WINDOWS_TAR = 'tar.exe'
 PAYLOAD_TEMPLATE = Path(__file__).resolve().parent / 'session_command.ps1'
 EVIDENCE_SUFFIXES = ('.json', '.log', '.txt', '.md')
 EVIDENCE_MAX_BYTES = 4 << 20
@@ -50,7 +50,7 @@ def session_wrapper(floor: float) -> str:
             f"if($free -lt {floor}) {{\n"
             f"  @{{exit_code=97;reason='native memory floor';free_gb=$free;floor_gb={floor};finished=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()}} | ConvertTo-Json -Compress | Set-Content -Encoding utf8 -LiteralPath \"$root/last-result.json\"\n"
             "  exit 97\n}\n"
-            "& 'C:/Program Files/PowerShell/7/pwsh.exe' -NoProfile -NonInteractive -File \"$root/command.ps1\"\n"
+            "& pwsh.exe -NoProfile -NonInteractive -File \"$root/command.ps1\"\n"
             "exit $LASTEXITCODE\n")
 
 
@@ -134,7 +134,7 @@ def task_install_script(slot: dict, token: str, incoming: str, budget_s: float) 
                 "  $owner.pid=$PID; $owner.machine=[Environment]::MachineName\n"
                 "  $owner.process_start=((Get-Process -Id $PID).StartTime.ToFileTimeUtc()-116444736000000000)/10000000.0\n"
                 "  [IO.File]::WriteAllText($marker, ($owner | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))\n"
-                f"  & 'C:/Program Files/PowerShell/7/pwsh.exe' -NoProfile -NonInteractive -File {ps_quote(incoming)}\n"
+                f"  & pwsh.exe -NoProfile -NonInteractive -File {ps_quote(incoming)}\n"
                 "  $directExit=$LASTEXITCODE\n"
                 f"}} finally {{ & {ps_quote(stage+'/restore.ps1')} }}\nexit $directExit\n")
     reason = f"FOREIGN TASK WRAPPER: {slot.get('box_name', 'named box')} {slot['task']} {wrapper}"
@@ -189,12 +189,12 @@ def task_install_script(slot: dict, token: str, incoming: str, budget_s: float) 
 class RemoteBox:
     """ssh/scp to one box plus its single session task. With dry_run every call is printed, nothing is sent."""
 
-    def __init__(self, alias: str, task: str = 'cortex-session1', session_script: str = 'D:/mx/session1/run.ps1',
+    def __init__(self, alias: str, task: str = 'cortex-session1', session_script: str | None = None,
                  dry_run: bool = False, say: Callable[[str], None] | None = None,
                  *, pool_registry: Path | str | None = None, preserve_runner: bool | None = None) -> None:
         self.alias = alias
         self.task = task
-        self.session_script = session_script
+        self.session_script = session_script or os.environ.get('CCCP_SESSION_SCRIPT', 'session/run.ps1')
         self.dry_run = dry_run
         self.say = say or LOG.info
         self.pool_registry = pool_registry
@@ -364,7 +364,7 @@ class RemoteBox:
         return None if text.strip() == '<<ABSENT>>' else text
 
     def fetch_tar(self, root: Path | str, names_like: list[str], excludes: list[str], local_root: Path | None = None,
-                  tar_name: str = 'fetch-edith.tar') -> None:
+                  tar_name: str = 'fetch-remote.tar') -> None:
         """Packs the top-level entries of <root> matching names_like (never a runtime, whose Data is a junction) and
         unpacks them under local_root (default: the same path here)."""
         root = Path(root)
@@ -455,7 +455,7 @@ class LocalBox(RemoteBox):
 def render_payload(cwd: Path | str, argv: list[str], log: Path | str, done: Path | str,
                    env: dict[str, str] | None = None, path_prepend: list[str] | None = None,
                    template: Path = PAYLOAD_TEMPLATE) -> str:
-    """tools/edith/session_command.ps1 with one command line (python and its arguments) filled in; path_prepend puts
+    """tools/remote/session_command.ps1 with one command line (python and its arguments) filled in; path_prepend puts
     directories ahead of the session's PATH (the tools the drivers call by name: date, ffmpeg)."""
     env = dict({'CCCP_HEADLESS': '1', 'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONUNBUFFERED': '1'}, **(env or {}))
     fields = {
@@ -532,20 +532,20 @@ def self_test() -> int:
             failures.append(name)
 
     expect('ps_quote doubles a single quote', ps_quote("a'b") == "'a''b'")
-    script = render_payload('D:\\Projects\\t', ['tools/x.py', "--out", "D:/mx/l a/o'k"], 'D:/mx/l/log.txt',
-                            'D:/mx/l/done.txt', {'INVENTORY_NO_FULLSTATE': '1'}, ['C:/Program Files/Git/usr/bin'])
+    script = render_payload('work/tree', ['tools/x.py', "--out", "scratch/l a/o'k"], 'scratch/l/log.txt',
+                            'scratch/l/done.txt', {'INVENTORY_NO_FULLSTATE': '1'}, ['tools/git/bin'])
     expect('payload fields all filled', '{{' not in script)
-    expect('payload argv quoted', "@('tools/x.py', '--out', 'D:/mx/l a/o''k')" in script)
+    expect('payload argv quoted', "@('tools/x.py', '--out', 'scratch/l a/o''k')" in script)
     expect('payload sets the headless and inventory environment',
            "$env:CCCP_HEADLESS = '1'" in script and "$env:INVENTORY_NO_FULLSTATE = '1'" in script)
     expect('payload never starts the engine itself', 'Cortex Command' not in script)
     expect('payload puts the listed directories ahead of PATH',
-           "$env:PATH = 'C:\\Program Files\\Git\\usr\\bin;' + $env:PATH" in script)
+           "$env:PATH = 'tools\\git\\bin;' + $env:PATH" in script)
     expect('ssh noise filtered', bool(SSH_NOISE.search('** WARNING: connection is not using a post-quantum key exchange')))
     said: list[str] = []
-    box = RemoteBox('edith', dry_run=True, say=said.append)
+    box = RemoteBox('remote', dry_run=True, say=said.append)
     box.ssh('Write-Output 1')
-    expect('dry-run prints and sends nothing', bool(said) and said[-1].startswith('dry-run: ssh edith'))
+    expect('dry-run prints and sends nothing', bool(said) and said[-1].startswith('dry-run: ssh remote'))
     expect('dry-run task is Ready', box.task_state() == 'Ready')
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)

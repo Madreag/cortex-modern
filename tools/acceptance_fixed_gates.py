@@ -10,12 +10,12 @@ from feel.report import parse_fullstate, compare_fullstate_histories, reclaim_sa
 def identity(manifest, peers):
     row = manifest.get("acceptance_row")
     errors, diagnostics = [], []
-    host_box = manifest.get('acceptance_host_box', manifest.get('world_host_box', 'EROL-PC'))
-    if host_box not in (('EROL-PC', 'Z13', 'ALLY') if row == 'world-soak' else ('EROL-PC', 'Z13')):
+    host_box = manifest.get('acceptance_host_box', manifest.get('world_host_box', 'box-a'))
+    if host_box not in (('box-a', 'LAPTOP', 'HANDHELD') if row == 'world-soak' else ('box-a', 'LAPTOP')):
         errors.append("host box is outside the lead's named hosts for this row")
-    expected = {"erol":host_box, "edith":"EDITH", "mac":"Mac", "linux":"Linux"}
+    expected = {"pc":host_box, "remote":"REMOTE", "mac":"Mac", "linux":"Linux"}
     if row == "world-soak":
-        expected = {"erol":host_box, "edith-first":"EDITH", "edith":"EDITH"}
+        expected = {"pc":host_box, "remote-first":"REMOTE", "remote":"REMOTE"}
     actual = {entry.get("name"):entry.get("box") for entry in manifest.get("instances", [])}
     if actual != expected or set(peers) != set(expected):
         errors.append("named instances and peer evidence do not match the row's required boxes")
@@ -23,11 +23,11 @@ def identity(manifest, peers):
     if boxes != set(expected.values()):
         errors.append("box set differs from the declared row")
     specs = manifest.get("specs", [])
-    if manifest.get("host") != "erol" or [entry.get("peer") for entry in specs if entry.get("role") == "host"] != ["erol"]:
+    if manifest.get("host") != "pc" or [entry.get("peer") for entry in specs if entry.get("role") == "host"] != ["pc"]:
         errors.append("the world or match host role is not uniquely bound")
     for name, box in expected.items():
         matched = [entry for entry in specs if entry.get("peer") == name and entry.get("box") == box]
-        if len(matched) != 1 or matched[0].get("role") != ("host" if name == "erol" else "player"):
+        if len(matched) != 1 or matched[0].get("role") != ("host" if name == "pc" else "player"):
             errors.append(name+": native instance role differs from its box contract")
     preflights = manifest.get("preflights", {})
     machines = [preflights.get(box, {}).get("machine_id") for box in boxes]
@@ -68,7 +68,7 @@ def capture_evidence(inputs, intervals, cadence):
                 continue
             document["announcements"].append(dict(key=(int(match[2]), int(match[1]), match[3]), log=str(path), line=number))
         all_documents[name] = document
-    host_rows = inputs["live"].get("erol", [])
+    host_rows = inputs["live"].get("pc", [])
     host_expected = fullstate_expected(host_rows, cadence) if cadence else []
     for names, first, last in intervals:
         documents = {name:all_documents[name] for name in names}
@@ -94,7 +94,7 @@ def capture_evidence(inputs, intervals, cadence):
         comparison["passed"] &= not missing
         comparisons.append(dict(peers=names, first=first, last=last, **comparison))
     if inputs["manifest"]["acceptance_row"].startswith("world-"):
-        late = all_documents.get("edith", {})
+        late = all_documents.get("remote", {})
         if not any(sample["key"][2] == "restored" for sample in late.get("samples", [])):
             errors.append("late joiner has no native restored full-state sample")
     return dict(passed=bool(comparisons) and all(row["passed"] for row in comparisons) and not errors,
@@ -110,12 +110,12 @@ def evaluate(inputs, facts):
     intervals = []
     if row.startswith("world-"):
         if type(joined) is int and 1 < joined <= end:
-            intervals = [([name for name in active if name != "edith"], 1, joined-1), (list(active), joined, end)]
+            intervals = [([name for name in active if name != "remote"], 1, joined-1), (list(active), joined, end)]
     else:
         intervals = [(list(active), 1, end)]
     workload = {}
     for name in active:
-        first = joined if row.startswith("world-") and name == "edith" else 1
+        first = joined if row.startswith("world-") and name == "remote" else 1
         workload[name] = completed_workload([dict(name=name)], events, end-first+1) if type(first) is int and 1 <= first <= end else dict(passed=False)
         workload[name]["passed"] &= active[name].get("native_final_tick") == end and active[name].get("native_completion", {}).get("completion") == "completed"
     matrix = coverage(events, active, {**manifest, "scenario":"soak" if row == "world-soak" else "match"})

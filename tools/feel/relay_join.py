@@ -88,7 +88,7 @@ def main():
     parser.add_argument('--port', type=int, default=49492)
     parser.add_argument('--game-port', type=int, default=49493)
     parser.add_argument('--turn', required=True)
-    parser.add_argument('--turn-config',type=Path,default=Path('D:/mx/coturn-20260920/directory-coturn.json'))
+    parser.add_argument('--turn-config',type=Path,default=Path(os.environ.get('CCCP_COTURN_CONFIG', 'relay/directory-coturn.json')))
     parser.add_argument('--keep-wsl-running', action='store_true')
     parser.add_argument('--rendezvous-log', type=int, default=0)
     parser.add_argument('--fullstate-every', type=int, default=0,

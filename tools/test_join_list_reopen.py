@@ -30,7 +30,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 from run_sim_test import make_run, engine_executable  # noqa: E402
 import test_directory_ice_join as directory  # noqa: E402
-from edith_cross import make_cert  # noqa: E402
+from two_box_match import make_cert  # noqa: E402
 from test_menu_readback import spread, managed_case  # noqa: E402
 
 DISCOVERY_PORT = 42115

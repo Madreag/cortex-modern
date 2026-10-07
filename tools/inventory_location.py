@@ -1,24 +1,25 @@
-"""Where the lead's inventory tools are, for every check that reads them.
+"""Locate optional inventory tools beside a shipped copy or in a configured directory.
 
-CC_INVENTORY_DIR names a copy (run_tools_suites.py --inventory sets it for each suite; a run sets it to the copy it
-ships to a box); without it, the lead's own copy on EROL-PC. A shipped copy is flat, while the lead's own keeps its
-operator scripts one level above the inventory.
+CC_INVENTORY_DIR selects a shipped flat copy. CCCP_INVENTORY_DIR selects an operator
+inventory whose scripts may also live one level above it. Without either, use this folder.
 """
 
 import os
 from pathlib import Path
 
-LEAD_INVENTORY = Path('D:/Projects/reviews/takeover-20260909/grok-workers/lead-tools/inventory')
+LEAD_INVENTORY = Path(os.environ["CCCP_INVENTORY_DIR"]) if os.environ.get("CCCP_INVENTORY_DIR") else None
 
 
 def inventory_dir() -> Path:
-    return Path(os.environ.get('CC_INVENTORY_DIR') or LEAD_INVENTORY)
+    return Path(os.environ.get('CC_INVENTORY_DIR') or LEAD_INVENTORY or Path(__file__).resolve().parent)
 
 
 def lead_script(name: str) -> Path:
-    """An operator script of the lead tools: beside a shipped inventory, or one level above the lead's own."""
+    """An operator script beside a shipped inventory or above a configured operator inventory."""
     inventory = inventory_dir()
-    for path in (inventory / name, inventory.parent / name):
+    locations = (inventory, inventory.parent) if LEAD_INVENTORY is not None and inventory == LEAD_INVENTORY else (inventory,)
+    for location in locations:
+        path = location / name
         if path.is_file():
             return path
-    return inventory.parent / name
+    return locations[-1] / name

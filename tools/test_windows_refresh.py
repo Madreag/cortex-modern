@@ -28,10 +28,10 @@ class WindowsRefresh(unittest.TestCase):
             self.assertFalse(refresh.normalized_equal(b'\0a\nb',b'\0a\r\nb'))
             git('add','sample.txt')
             self.assertEqual(refresh.scan_tree(root)['differing_files'],['sample.txt'])
-        for name in ('ally_refresh_exe.sh','z13_refresh_exe.sh'):
+        for name in ('ally_refresh_exe.sh','laptop_refresh_exe.sh'):
             text=(INVENTORY.parent/name).read_text()
             self.assertIn('refresh_windows.py',text)
-            self.assertNotIn('z13_build.sh',text)
+            self.assertNotIn('laptop_build.sh',text)
 
 
 if __name__=='__main__':unittest.main()

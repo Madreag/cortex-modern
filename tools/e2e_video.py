@@ -13,6 +13,7 @@ Ports: this driver owns 49400-49479 and hands each scenario run a slice of it; t
 Every engine launch goes through the runners with CCCP_HEADLESS=1; nothing here ever creates the process itself.
 """
 
+import tempfile
 import argparse
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
@@ -46,10 +47,8 @@ DEFAULT_SIZE = "960x540"
 DEFAULT_FPS = 30
 SHEET_COLUMNS = 6
 SHEET_THUMB_WIDTH = 320
-# Where an ffmpeg usually lives when PATH does not name it, per platform; a box's manifest may add its own directories.
-FFMPEG_CANDIDATES = (
-    (Path.home() / "scoop/shims/ffmpeg.exe", Path("C:/Tools/ffmpeg/bin/ffmpeg.exe"), Path("C:/ProgramData/chocolatey/bin/ffmpeg.exe"))
-    if os.name == "nt" else (Path("/opt/homebrew/bin/ffmpeg"), Path("/usr/local/bin/ffmpeg"), Path("/usr/bin/ffmpeg")))
+# Optional tool paths come from configuration; a box manifest may add directories.
+FFMPEG_CANDIDATES = (Path(os.environ['CCCP_FFMPEG']),) if os.environ.get('CCCP_FFMPEG') else ()
 SCRATCH_LIMIT = 5_000_000_000
 
 
@@ -253,13 +252,16 @@ def engine_cap_findings(scenario):
 
 
 def ffmpeg_choice():
-    """(path, where it was found): PATH first, then this platform's usual places, then the box manifest's directories."""
+    """(path, where it was found): configured command, PATH, then manifest directories."""
+    if os.environ.get('CCCP_FFMPEG'):
+        found = shutil.which(os.environ['CCCP_FFMPEG'])
+        return (found, 'CCCP_FFMPEG') if found else (None, None)
     found = shutil.which("ffmpeg")
     if found:
         return found, "PATH"
     for candidate in FFMPEG_CANDIDATES:
         if candidate.is_file():
-            return str(candidate), "usual location"
+            return str(candidate), "configured location"
     for directory in declared_tool_dirs():
         candidate = directory / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
         if candidate.is_file():
@@ -2426,7 +2428,7 @@ def finalize_only(options):
     if incomplete and not capture.get("interrupted"):
         capture["interrupted"] = "Finalized after the capture owner ended; unstarted runs remain findings"
     capture["finalized"] = stamp()
-    budget = options.scratch_root or capture.get("scratch_root") or next((parent for parent in out.parents if parent.parent == Path("D:/mx")), out)
+    budget = options.scratch_root or capture.get("scratch_root") or next((parent for parent in out.parents if parent.parent == Path(os.environ.get("CCCP_SCRATCH_ROOT", tempfile.gettempdir()))), out)
     limit = scratch_limit(options, capture)
     capture.update(scratch_root=str(budget), scratch_limit_bytes=limit)
     for run in recovered:
@@ -2947,8 +2949,8 @@ def main():
             or any(peer.get('settings',{}).get(key) for run in definitions for peer in run.get('peers',[]) for key in LOGIN_KEYS)):
         scenario['relay_secret_scan']=True
     if options.host_box or options.client_box:
-        if (options.host_box, options.client_box) != ('ALLY', 'EDITH') or not options.inventory or not options.collection_root:
-            parser.error('remote capture requires ALLY host, EDITH client, inventory and collection root')
+        if (options.host_box, options.client_box) != ('HANDHELD', 'REMOTE') or not options.inventory or not options.collection_root:
+            parser.error('remote capture requires HANDHELD host, REMOTE client, inventory and collection root')
     # Each scenario keeps its own slice of the block, so two of them can record side by side.
     if options.port is None:
         options.port = int(scenario.get("port_base", PORT_LO))
@@ -2975,7 +2977,7 @@ def main():
         from acceptance_e2e_remote import RemoteCapture
         options.remote_capture = RemoteCapture(options)
     options.scratch_root = options.scratch_root or next(
-        (parent for parent in out.parents if parent.parent == Path("D:/mx")), out)
+        (parent for parent in out.parents if parent.parent == Path(os.environ.get("CCCP_SCRATCH_ROOT", tempfile.gettempdir()))), out)
     options.scratch_limit_bytes = scratch_limit(options)
     try:
         check_scratch_budget(options.scratch_root, options.scratch_limit_bytes)

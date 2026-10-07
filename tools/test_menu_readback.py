@@ -113,7 +113,7 @@ CHAT_SAVED = {"NetworkChatVisible": "0", "NetworkChatNotify": "0"}
 RECOVERY_SEED = {"NetworkAutoReconnect": "1", "NetworkOfferStoredRejoin": "1"}
 RECOVERY_SAVED = {"NetworkAutoReconnect": "0", "NetworkOfferStoredRejoin": "0"}
 FILES_SEED = {"AutosaveSeconds": "45", "NetworkRecordReplays": "0", "NetworkAutosavesKept": "3"}
-FILES_SAVED = {"NetworkDiagnosticsDirectory": "D:/diag-lane", "NetworkRecordReplays": "1", "NetworkAutosavesKept": "5"}
+FILES_SAVED = {"NetworkDiagnosticsDirectory": "Temp/diagnostics", "NetworkRecordReplays": "1", "NetworkAutosavesKept": "5"}
 # AutosaveStore::c_MinRetainedAutosaves-c_MaxRetainedAutosaves, as the page writes the hint from them.
 AUTOSAVES_KEPT_HINT = "1-10, this machine"
 # The settings reader cuts values at "//", so the directory url persists scheme-less;

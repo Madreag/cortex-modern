@@ -7,8 +7,8 @@ from pathlib import Path
 import re
 
 SEATED = ('seated-one', 'seated-two', 'seated-three')
-PLACEMENT = {'host': 'EROL-PC', 'seated-one': 'EROL-PC', 'seated-two': 'EDITH',
-             'seated-three': 'EDITH', 'spectator': 'Linux'}
+PLACEMENT = {'host': 'box-a', 'seated-one': 'box-a', 'seated-two': 'REMOTE',
+             'seated-three': 'REMOTE', 'spectator': 'Linux'}
 
 
 def file_digest(path):

@@ -15,27 +15,20 @@ import sys
 
 from inventory_location import inventory_dir
 
-# The inventory tools live beside the lead's tools, outside the repository; a box without them reports N/A.
+# Optional inventory tools use the configured copy; an absent script reports N/A.
 INVENTORY = inventory_dir()
 SUITES = (
-    ("runner-firewall", ["test_win32_runner_firewall.py"]),
-    ("relay-gate", ["relay_gate_test.py"]),
-    ("relay-cloudflare", ["relay_cloudflare_test.py"]),
     ("session-directory", ["session_directory/test_session_directory.py"]),
     ("acceptance-harness", ["test_acceptance_harness.py"]),
-    ("e2e-video", ["test_e2e_video.py"]),
     ("win-cause-diagnostics", ["test_win_diagnostics.py"]),
-    ("spread-peers", ["test_spread_peers.py"]),
     ("lobby-wire", ["test_net_lobby_wire.py"]),
     ("settings-seed", ["test_settings_seed.py"]),
     ("package-contents", ["test_package_contents.py"]),
     ("package-evidence", ["test_package_evidence.py"]),
     ("package-runner-scope", ["test_package_runner_scope.py"]),
     ("launch-budget", ["-m", "unittest", "feel.test_launch_budget"]),
-    ("cross-driver", ["-m", "unittest", "feel.test_cross_driver"]),
     ("cross-report", ["-m", "unittest", "feel.test_report", "feel.test_report_serialization", "feel.test_harness_cost",
                       "feel.test_impairment_evidence", "feel.test_matrix_selection"]),
-    ("cross-oracles", ["-m", "unittest", "feel.test_cross_oracles"]),
     ("autosave-restore-oracles", ["-m", "unittest", "test_autosave_restore"]),
     ("compare-snapshots", ["test_compare_snapshots.py"]),
     ("snapshot-inventory-roles", ["test_snapshot_inventory_roles.py"]),
@@ -48,14 +41,12 @@ SUITES = (
     ("selftest-sanitizer-rows", ["test_run_selftests.py"]),
     ("selftest-runner-quiet-tail", ["run_selftests.py", "--self-test"]),
     ("plane-value-getters", ["test_plane_value_getters.py"]),
-    ("edith-remote-box", ["edith/remote_box.py", "--self-test"]),
+    ("remote-remote-box", ["remote/remote_box.py", "--self-test"]),
     ("ubsan-suppressions", ["sanitizers/check_ubsan_supp.py", "--self-test"]),
     ("vw-battery", ["vw_battery.py", "--self-test"]),
     ("mod-api-census-guard", ["mod_api_census.py", "--self-test"]),
     ("runner-feel-marker", ["test_win32_runner_feel_marker.py"]),
-    ("runner-limits", ["test_win32_runner_limits.py"]),
     ("feel-engine-placement", ["test_feel_placement.py"]),
-    ("feel-spread-scope", ["test_feel_spread.py"]),
     ("feel-recorder-on-off-scope", ["test_feel_on_off_proof.py"]),
     ("soak-judgement", ["test_soak_two_peer.py"]),
     ("inventory-run-split", [str(INVENTORY / "run_split.py"), "--self-test"]),
@@ -64,20 +55,11 @@ SUITES = (
     ("inventory-merge-defects", [str(INVENTORY / "merge_defects.py"), "--self-test"]),
     ("inventory-acceptance-manifest", [str(INVENTORY / "acceptance_manifest.py"), "--self-test"]),
     ("acceptance-collection", [str(INVENTORY / "test_acceptance_collection.py")]),
-    ("acceptance-rows", ["-m", "unittest", "test_acceptance_ally_build", "test_acceptance_box_lease", "test_acceptance_box_mods",
-                         "test_acceptance_clock_brackets", "test_acceptance_control_plan_integration", "test_acceptance_cross_report",
-                         "test_acceptance_deferred", "test_acceptance_evidence", "test_acceptance_fixed_captures",
-                         "test_acceptance_fixed_gates", "test_acceptance_frozen_report", "test_acceptance_frozen_tools",
-                         "test_acceptance_image_report", "test_acceptance_local_host", "test_acceptance_mod",
-                         "test_acceptance_native_admission", "test_acceptance_native_load", "test_acceptance_pipeline_controls",
-                         "test_acceptance_posix_build", "test_acceptance_private_runtime", "test_acceptance_remote_tasks",
-                         "test_acceptance_retained_links", "test_acceptance_rows", "test_acceptance_spectator",
-                         "test_acceptance_spectator_tasks", "test_acceptance_storage", "test_acceptance_tip_runtime",
-                         "test_acceptance_transfer", "test_cross_peers_public_row"]),
-    ("world-rows", ["-m", "unittest", "test_world_image_sizes", "test_world_mod_cross", "test_world_soak", "test_world_soak_tasks"]),
+    ("acceptance-rows", ["-m", "unittest", "test_acceptance_clock_brackets", "test_acceptance_evidence", "test_acceptance_image_report", "test_acceptance_rows", "test_acceptance_spectator"]),
+    ("world-rows", ["-m", "unittest", "test_world_image_sizes", "test_world_soak"]),
 )
 # The cross driver's suite reads the Windows boxes' trees and ctypes.WinDLL; the other platforms run the cross peers, not this suite.
-# The acceptance and world row suites test the Windows coordinator, which names its boxes' D: trees.
+# The acceptance and world suites exercise the Windows coordinator.
 WINDOWS_ONLY = {"runner-feel-marker", "runner-limits", "feel-engine-placement", "cross-driver", "acceptance-rows", "world-rows",
                 "package-runner-scope"}
 
@@ -114,7 +96,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--only", action="append", default=[], help="run just these suite names")
     parser.add_argument('--out', type=Path, help='write the collection verdict JSON and its log')
-    parser.add_argument('--inventory', type=Path, help="the lead's inventory copy (default: CC_INVENTORY_DIR, else the lead's own)")
+    parser.add_argument('--inventory', type=Path, help="inventory folder (default: CC_INVENTORY_DIR, CCCP_INVENTORY_DIR, or this tools folder)")
     args = parser.parse_args()
     inventory = args.inventory.resolve() if args.inventory else INVENTORY
     worst = 0

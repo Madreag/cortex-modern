@@ -14,7 +14,7 @@ def run(options, mode, repo):
     declarations=policy.arms(mode)
     if options.dry_run:
         import json
-        print(json.dumps(dict(mode=mode,driver='EROL-PC',engine_boxes={'ALLY':1,'EDITH':1},arms=declarations)))
+        print(json.dumps(dict(mode=mode,driver='box-a',engine_boxes={'HANDHELD':1,'REMOTE':1},arms=declarations)))
         return 0
     schedule=read(Path(options.collection_root)/'split-plan.json')
     try: proof=read(Path(options.collection_root)/policy.SAFE_LOGIN['path'])

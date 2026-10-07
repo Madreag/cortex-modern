@@ -9,7 +9,7 @@ import re
 import subprocess
 
 
-BOXES = ('EROL-PC', 'EDITH', 'Mac', 'Linux', 'Z13', 'ALLY')
+BOXES = ('box-a', 'REMOTE', 'Mac', 'Linux', 'LAPTOP', 'HANDHELD')
 
 
 def sha256(path):

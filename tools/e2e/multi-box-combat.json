@@ -1,7 +1,7 @@
 {
   "name": "multi-box-combat",
   "driver": "tools/cross_peers.py",
-  "boxes": "tools/cross_peers/boxes.json",
+  "boxes": null,
   "activity": "Multi Box Combat",
   "module": "UserScenes.rte",
   "fixture": ["tools/feel/CrossCombat.lua", "tools/feel/CrossCombat.ini"],

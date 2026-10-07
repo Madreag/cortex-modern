@@ -12,7 +12,7 @@ from unittest.mock import Mock,patch
 import uuid
 
 import e2e_video as video
-import edith_cross as cross
+import two_box_match as cross
 import acceptance_relay_policy as policy
 import turn_relay_checks as turn
 from feel import relay_join

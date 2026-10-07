@@ -2,20 +2,20 @@
 our own relay through the directory's coturn backend, the player's fixed pair entered by hand, or Automatic), judged by
 the transport's own receipts against one table of mandatory checks per row.
 
-    python tools/relay_cloudflare_match.py --scenario mp-relay-cloudflare --out D:/mx/<lane>/<dir> [--run NAME ...]
-            [--box host=edith --box client=edith] [--tree edith=D:/mx/<lane>/engine] [--alias ally=ally-ts]
+    python tools/relay_cloudflare_match.py --scenario mp-relay-cloudflare --out <scratch>/<lane>/<dir> [--run NAME ...]
+            [--box host=remote --box client=remote] [--tree remote=<scratch>/<lane>/engine] [--alias handheld=handheld-ts]
             [--ticks N] [--no-replay] [--dry-run]
     python tools/relay_cloudflare_match.py --table <run dir> [<run dir> ...] --out <table.json>
     python tools/relay_cloudflare_match.py --remote-peers <spec.json>            (on a box, inside its session task)
     python tools/relay_cloudflare_match.py --evidence-list <root> --out <list>    (on a box, after its sweep)
-    python tools/relay_cloudflare_match.py --bridge-edith <ip:udp-port> <tcp-port> (on EDITH, in an ssh session)
+    python tools/relay_cloudflare_match.py --bridge-remote <ip:udp-port> <tcp-port> (on REMOTE, in an ssh session)
 
 This box (the driver's) launches no engine. A lane row runs the session directory in this process on a loopback port
 (TLS, a throwaway certificate every engine pins; the Cloudflare key read by path) and opens an `ssh -R` from each game
 box's loopback to it; a public row uses the game's own directory and reads the session's relay offer as a joiner does.
 Our relay is a coturn started for the run on the Mac with a per-run secret held in memory (a REST secret: every login the
-directory mints from it is time-limited); EDITH reaches it through a UDP-over-ssh bridge, opening no router port. Each
-box runs its peers through its session task (tools/edith/remote_box.py's payload) and the private-desktop runner.
+directory mints from it is time-limited); REMOTE reaches it through a UDP-over-ssh bridge, opening no router port. Each
+box runs its peers through its session task (tools/remote/remote_box.py's payload) and the private-desktop runner.
 
 The evidence per peer and connection: the same-session `[net-ice] selected candidate=` and `[net-route] RouteAllowed`
 lines; the ICE candidates each peer itself sent through the directory, keyed by the sender's own identity (a Relay only
@@ -29,6 +29,7 @@ runs the same sweep. A check a row requires and the run did not produce is a fai
 """
 from __future__ import annotations
 
+import tempfile
 import argparse
 import base64
 import datetime as dt
@@ -38,6 +39,7 @@ import ipaddress
 import json
 import logging
 import os
+import shlex
 import re
 import secrets
 import socket
@@ -53,16 +55,16 @@ from urllib.error import HTTPError
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE / 'edith'))
+sys.path.insert(0, str(HERE / 'remote'))
 
 MST = dt.timezone(dt.timedelta(hours=-7))
-LANE = os.environ.get('CC_RELAY_LANE')  # else the lane's scratch root the --out directory sits in (D:/mx/<lane>/...)
+LANE = os.environ.get('CC_RELAY_LANE')  # else the lane's scratch root the --out directory sits in (<scratch>/<lane>/...)
 SCENARIO_DIR = HERE / 'e2e'
-CLOUDFLARE_TURN_CONFIG = Path('D:/mx/coturn-20260920/turn-config-cloudflare.json')
+CLOUDFLARE_TURN_CONFIG = Path(os.environ.get('CCCP_CLOUDFLARE_TURN_CONFIG', 'relay/turn-config-cloudflare.json'))
 # The retired fixed account (turnserver-fixed.conf): read into the book only, so a leak of it is still found; never used by a run.
-RETIRED_FIXED_CONF = Path('D:/mx/coturn-20260920/turnserver-fixed.conf')
+RETIRED_FIXED_CONF = Path(os.environ.get('CCCP_RETIRED_RELAY_CONFIG', 'relay/retired-turnserver.conf'))
 # Our relay for a run: a coturn on the Mac with a per-run REST secret, on its own LAN port and relay range.
-LANE_COTURN = dict(ssh='Erol-Mac', binary='/opt/homebrew/opt/coturn/bin/turnserver', address=os.environ.get('CC_RELAY_COTURN_ADDRESS', ''),
+LANE_COTURN = dict(ssh='host-c', binary='/opt/homebrew/opt/coturn/bin/turnserver', address=os.environ.get('CC_RELAY_COTURN_ADDRESS', ''),
                    ports=(3490, 3499), relay=(49301, 49340))
 # https://www.cloudflare.com/ips-v4 and /ips-v6, read 2026-10-03; turn.cloudflare.com resolved to 141.101.90.1 that day.
 CLOUDFLARE_RANGES = [ipaddress.ip_network(text) for text in (
@@ -80,9 +82,9 @@ RELAY_SETTINGS = ('NetworkTurnServers', 'NetworkTurnUser', 'NetworkTurnPass', 'N
                   'NetworkPlayerTurnPass')
 # The game's built-in directory (c_DefaultSessionDirectoryUrl): the hotspot rows that turn the tailnet off meet there.
 PUBLIC_DIRECTORY = 'directory.broserver.com'
-PUBLIC_DIRECTORY_LOGS = ('Erol-Mac', '/Users/erol/cortex-directory/logs')
+PUBLIC_DIRECTORY_LOGS = (os.environ.get('CCCP_DIRECTORY_LOG_HOST'), os.environ.get('CCCP_DIRECTORY_LOG_DIR'))
 HOME = dict(gateway=os.environ.get('CC_RELAY_HOME_GATEWAY', ''), public=os.environ.get('CC_RELAY_HOME_PUBLIC', ''))
-# Ports other drivers own (the project policy, the e2e README, edith_cross): never chosen here.
+# Ports other drivers own (the project policy, the e2e README, two_box_match): never chosen here.
 FOREIGN_PORTS = [(48320, 48539), (48630, 48649), (49180, 49199), (49400, 49479), (49860, 49879), (49985, 49986)]
 PORT_WINDOW = (48700, 49170)
 MATCH_TICKS = 1201
@@ -150,14 +152,14 @@ def write_json(path, value) -> None:
 
 
 def lane_for(out: Path) -> str:
-    """The lane's scratch root name: CC_RELAY_LANE, or the D:/mx/<lane> directory the output sits in."""
+    """The lane's scratch root name: CC_RELAY_LANE, or the <scratch>/<lane> directory the output sits in."""
     if LANE:
         return LANE
     parts = Path(out).resolve().parts
     for index, part in enumerate(parts[:-1]):
         if part.lower() == 'mx' and index + 1 < len(parts):
             return parts[index + 1]
-    raise SystemExit('the output is not under D:/mx/<lane>: set CC_RELAY_LANE')
+    raise SystemExit('the output is not under <scratch>/<lane>: set CC_RELAY_LANE')
 
 
 def boxes_file() -> Path:
@@ -179,7 +181,7 @@ def read_json(path):
         return {}
 
 
-# --- the evidence (pure; tools/relay_cloudflare_test.py and relay_gate_test.py drive every rule) ---------------------
+# The evidence reducers are pure.
 
 CANDIDATE = re.compile(rb'candidate:\S+ \d+ (?:udp|UDP) \d+ (\S+) (\d+) typ (host|srflx|prflx|relay)')
 
@@ -535,7 +537,7 @@ def feel_bars(timing: dict, peer: str, log: str | None = None, spikes=(), ticks:
 
 
 def tunnel_receipt(rows: list[dict], peers: list[str] | None = None, min_seconds: float | None = None) -> dict:
-    """The hotspot box's own Tailscale states around its engines, by its own clock: down (Stopped) stamped before the first
+    """The hotspot box's own OverlayVpn states around its engines, by its own clock: down (Stopped) stamped before the first
     engine started; for every peer one start and one end record, in that order, Stopped at both and at every record between;
     back up (Running) stamped after the last engine ended; with min_seconds, each engine bracket at least that long. A
     missing record, a Running state inside a bracket or an unreadable time fails."""
@@ -544,7 +546,7 @@ def tunnel_receipt(rows: list[dict], peers: list[str] | None = None, min_seconds
     down = next((index for index, row in enumerate(rows) if row.get('step') == 'down'), None)
     up = next((index for index, row in enumerate(rows) if row.get('step') == 'up'), None)
     if down is None or rows[down].get('exit_code') != 0 or rows[down].get('backend_state') != 'Stopped':
-        reasons.append(f'tailscale down did not stop the tunnel: {rows[down] if down is not None else "no down step"}')
+        reasons.append(f'overlay_vpn down did not stop the tunnel: {rows[down] if down is not None else "no down step"}')
     named = peers or sorted({row.get('peer') for row in rows if row.get('step', '').startswith('engine-') and row.get('peer')})
     if not named:
         reasons.append('the receipt names no engine')
@@ -589,7 +591,7 @@ def hotspot_preflight(state: str | None, gateway: str | None, mapped: str | None
             return str(ipaddress.ip_address(host))
         except ValueError:
             return None
-    malformed = [name for name, ok in (('tailscale state', state in ('Running', 'Stopped')), ('default gateway', address(gateway) is not None),
+    malformed = [name for name, ok in (('overlay_vpn state', state in ('Running', 'Stopped')), ('default gateway', address(gateway) is not None),
                                        ('STUN mapped address', address(mapped) is not None)) if not ok]
     if malformed:
         return dict(verdict='REFUSED', reason=f'unknown or malformed precondition: {", ".join(malformed)}')
@@ -867,7 +869,7 @@ class Box:
         self.local = entry.get('kind') == 'local'
         self.alias = alias or entry.get('ssh') or 'localhost'
         self.task = entry.get('task', 'cortex-session1')
-        self.session_script = entry.get('session_script', 'D:/mx/session1/run.ps1')
+        self.session_script = entry.get('session_script') or os.environ.get('CCCP_SESSION_SCRIPT', 'session/run.ps1')
         self.tree = tree or entry['repo']
         self.path_prepend = list(entry.get('path_prepend') or [])
         self.max_engines = int((entry.get('memory') or {}).get('max_engines') or (entry.get('runner') or {}).get('max_engines') or 2)
@@ -1032,7 +1034,7 @@ class Directory:
 
     def __init__(self, root: Path, port: int, backend: dict | None, ttl_cap: int, book) -> None:
         from session_directory import session_directory as module
-        from edith_cross import make_cert
+        from two_box_match import make_cert
         self.module, self.book, self.backend = module, book, backend
         self.signals, self.provider_calls, self.offers, self.minted, self.revokes, self.published = [], [], [], [], [], []
         self.cert, key, self.pin = make_cert(root)
@@ -1136,7 +1138,7 @@ def revoke_cloudflare(backend: dict, usernames: list[str], opener=None, agent: s
     return statuses
 
 
-CLOUDFLARED = Path('C:/Program Files (x86)/cloudflared/cloudflared.exe')
+CLOUDFLARED = os.environ.get('CCCP_CLOUDFLARED', 'cloudflared')
 
 
 def retain_redacted_process_log(stream, path: Path) -> None:
@@ -1264,7 +1266,7 @@ class Tunnel:
             self.process.wait(timeout=10)
 
 
-# --- our relay for a run, and the bridge EDITH reaches it through ---------------------------------------------------
+# --- our relay for a run, and the bridge REMOTE reaches it through ---------------------------------------------------
 
 # Runs on the Mac: reads the secret from stdin and serves it as coturn's configuration through a named pipe (no storage),
 # once for each time coturn opens it, then removes the pipe; coturn runs on in its own session.
@@ -1378,8 +1380,8 @@ def pump(stream: socket.socket, deliver, counts: dict, key: str) -> None:
         return
 
 
-def bridge_edith(bind: str, tcp_port: int) -> int:
-    """On EDITH, in an ssh session: the engines' TURN sockets talk UDP to <bind> (EDITH's own LAN address: ICE binds
+def bridge_remote(bind: str, tcp_port: int) -> int:
+    """On REMOTE, in an ssh session: the engines' TURN sockets talk UDP to <bind> (REMOTE's own LAN address: ICE binds
     interface addresses, so a loopback TURN server is never tried); each source gets its own TCP stream through the ssh -R
     forward to the driver's end, which speaks UDP to our relay."""
     host, port = bind.rsplit(':', 1)
@@ -1404,7 +1406,7 @@ def bridge_edith(bind: str, tcp_port: int) -> int:
 
 
 class Bridge:
-    """The driver's end of EDITH's bridge to our relay: each tunnel stream becomes one UDP flow to the run coturn."""
+    """The driver's end of REMOTE's bridge to our relay: each tunnel stream becomes one UDP flow to the run coturn."""
 
     def __init__(self, box: Box, target: tuple[str, int], tcp_port: int, udp_bind: str, log_path: Path, payload: Path) -> None:
         self.box, self.target, self.tcp_port, self.udp_bind, self.log_path, self.payload = box, target, tcp_port, udp_bind, log_path, payload
@@ -1441,7 +1443,7 @@ class Bridge:
         self.listener.listen(16)
         threading.Thread(target=self.serve, daemon=True).start()
         argv = ['ssh', '-o', 'BatchMode=yes', self.box.alias,
-                f"python '{(self.payload / 'relay_cloudflare_match.py').as_posix()}' --bridge-edith {self.udp_bind} {self.tcp_port}"]
+                f"python '{(self.payload / 'relay_cloudflare_match.py').as_posix()}' --bridge-remote {self.udp_bind} {self.tcp_port}"]
         self.remote = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         found, seen = None, []
@@ -1452,7 +1454,7 @@ class Bridge:
             seen.append(line)
             found = re.search(r'bridge pid (\d+)', line)
         if not found:
-            raise RuntimeError(f'the EDITH end of the bridge did not start: {"".join(seen)[-300:]!r}')
+            raise RuntimeError(f'the REMOTE end of the bridge did not start: {"".join(seen)[-300:]!r}')
         self.remote_pid = int(found[1])
 
     def close(self) -> None:
@@ -1499,7 +1501,7 @@ def build_specs(h, run: dict, root: Path, ports: dict, boxes: dict, pin: str, lo
     """One spec per peer. A service peer plays the feel driver's two-peer arm (-net-match-service-e2e); a menu peer starts
     at the main menu and its menu script makes the player's choices, then hosts or joins through the menus (row f, the
     Fixed row); the trace cap ends a menu match at the declared frame on every peer."""
-    from edith_cross import match_spec
+    from two_box_match import match_spec
     specs = []
     humans = str(len(run['peers']))
     for peer in run['peers']:
@@ -1534,7 +1536,7 @@ def build_specs(h, run: dict, root: Path, ports: dict, boxes: dict, pin: str, lo
             if not key.startswith(('CC_TEST_', 'CCCP_TEST_')):
                 raise ValueError(f'{run["name"]}: {peer["name"]} names {key}, not a test lever')
             spec['env'][key] = str(value)
-        spec.update(box=peer['box'], tailscale_down=bool(peer.get('tailscale_down')), panel_probe=peer.get('panel_probe'),
+        spec.update(box=peer['box'], overlay_vpn_down=bool(peer.get('overlay_vpn_down')), panel_probe=peer.get('panel_probe'),
                     panel_route=peer.get('panel_route'), menu_script=peer.get('menu_script'), name=name)
         specs.append(spec)
     return specs
@@ -1551,12 +1553,12 @@ def ship(box, root: Path, specs: list[dict], directory_port: int, payload: Path,
         say(f'dry-run: {box.name} runs {[spec["peer"] for spec in specs]} from {box.tree}: ' + json.dumps([spec['settings'] for spec in specs]))
         return root / f'{box.name}-run.ps1'
     box.remote.mkdir(root)
-    box.remote.mkdir(payload / 'edith')
+    box.remote.mkdir(payload / 'remote')
     for local, remote in ((HERE / 'relay_cloudflare_match.py', payload / 'relay_cloudflare_match.py'),
                           (boxes_file(), payload / 'boxes.json'),
                           (HERE / 'relay_secrets.py', payload / 'relay_secrets.py'), (HERE / 'relay_fixtures.json', payload / 'relay_fixtures.json'),
-                          (HERE / 'edith_cross.py', payload / 'edith_cross.py'),
-                          (HERE / 'edith/remote_box.py', payload / 'edith/remote_box.py'), (root / 'cert.pem', root / 'cert.pem'),
+                          (HERE / 'two_box_match.py', payload / 'two_box_match.py'),
+                          (HERE / 'remote/remote_box.py', payload / 'remote/remote_box.py'), (root / 'cert.pem', root / 'cert.pem'),
                           (root / 'input.txt', root / 'input.txt'), (root / 'input-schedule.json', root / 'input-schedule.json')):
         if Path(local).is_file():
             box.remote.scp_to(local, remote)
@@ -1578,7 +1580,7 @@ def ship(box, root: Path, specs: list[dict], directory_port: int, payload: Path,
     from remote_box import render_payload
     script = render_payload(box.tree, [str(payload / 'relay_cloudflare_match.py'), '--remote-peers', str(spec_path)],
                             root / f'{box.name}-payload.log', root / f'{box.name}-payload.done',
-                            {'CC_RELAY_LANE': LANE, 'CC_EDITH_CROSS_LANE': LANE, 'CC_RUNNER_BOX_MANIFEST': str(payload / 'boxes.json')},
+                            {'CC_RELAY_LANE': LANE, 'CC_REMOTE_CROSS_LANE': LANE, 'CC_RUNNER_BOX_MANIFEST': str(payload / 'boxes.json')},
                             box.path_prepend)
     local = root / f'{box.name}-run.ps1'
     local.write_text(script, encoding='utf-8')
@@ -1705,7 +1707,7 @@ class PublicObserver:
 
 
 def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book) -> dict:
-    import edith_cross
+    import two_box_match
     from relay_secrets import read_turn_config
     root = (out / run['name']).resolve()
     used = [boxes[name] for name in dict.fromkeys(peer['box'] for peer in run['peers'])]
@@ -1734,7 +1736,7 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
         say(f'{run["name"]}: REFUSED {refusal}')
         return dict(name=run['name'], root=str(root), passed=False, refused=refusal, identities=identities)
     say(f'{run["name"]}: game data equal on {[box.name for box in used]} ({time.monotonic() - started_data:.0f} s)')
-    h = edith_cross.harness(HERE)
+    h = two_box_match.harness(HERE)
     public = run.get('directory') == 'public'
     tunneled = run.get('directory') == 'tunnel'
     run.setdefault('tag', f'rp{os.urandom(3).hex()}')
@@ -1748,9 +1750,9 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
     block = choose_ports(used, len(names) + 3)
     ports = dict(directory=block[0], bridge_tcp=block[1], bridge_udp=block[2], **{name: block[index + 3] for index, name in enumerate(names)})
     if not DRY_RUN:
-        edith_cross.looped_input(h, root / 'input.txt', ticks)
+        two_box_match.looped_input(h, root / 'input.txt', ticks)
     tunnels: list[Tunnel] = []
-    started, states, payload = stamp(), {}, Path('D:/mx') / lane_for(out) / 'payload'
+    started, states, payload = stamp(), {}, Path(os.environ.get('CCCP_SCRATCH_ROOT', str(Path(tempfile.gettempdir())/'cortex-modern'))) / lane_for(out) / 'payload'
     sanitize, cleanup, fetched, revokes, menus, clocks = [], [], [], [], [], {}
     failure = interrupt = None
     overrides_cleared, ended_epoch = False, time.time()
@@ -1761,11 +1763,11 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
         if run['relay'] in ('coturn', 'fixed'):
             coturn = LaneCoturn(book)
             coturn.start()
-            edith_box = next((box for box in used if box.name == 'edith'), None)
+            remote_box = next((box for box in used if box.name == 'remote'), None)
             bridge_url = None
-            if edith_box:
-                lan = box_lan_address(edith_box)
-                bridge = Bridge(edith_box, (coturn.address, coturn.port), ports['bridge_tcp'], f'{lan}:{ports["bridge_udp"]}',
+            if remote_box:
+                lan = box_lan_address(remote_box)
+                bridge = Bridge(remote_box, (coturn.address, coturn.port), ports['bridge_tcp'], f'{lan}:{ports["bridge_udp"]}',
                                 root / 'bridge.log', payload)
                 bridge_url = f'turn:{lan}:{ports["bridge_udp"]}?transport=udp'
                 relay_hosts = [lan]
@@ -1904,7 +1906,7 @@ def measure_clock(box) -> dict:
 def ship_driver_only(box, payload: Path) -> None:
     if DRY_RUN:
         return
-    box.remote.mkdir(payload / 'edith')
+    box.remote.mkdir(payload / 'remote')
     box.remote.scp_to(HERE / 'relay_cloudflare_match.py', payload / 'relay_cloudflare_match.py')
 
 
@@ -1943,7 +1945,9 @@ def public_directory_lines(session: str | None) -> list[str]:
     if not session or not re.fullmatch(r'[0-9a-fA-F-]{8,64}', session):
         return []
     host, logs = PUBLIC_DIRECTORY_LOGS
-    done = subprocess.run(['ssh', '-o', 'BatchMode=yes', host, f"grep -h -F '{session}' {logs}/* 2>/dev/null"],
+    if not host or not logs:
+        return []
+    done = subprocess.run(['ssh', '-o', 'BatchMode=yes', host, f"grep -h -F '{session}' {shlex.quote(logs)}/* 2>/dev/null"],
                           capture_output=True, text=True, timeout=120, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     # A long or busy match polls its signals thousands of times: the polls are kept for its last 400 lines only, and every other
     # line (the session's creation, its relay offer, its listing) whenever it came.
@@ -1956,13 +1960,13 @@ def public_directory_lines(session: str | None) -> list[str]:
 def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> dict:
     """The run's verdict from its own files: exactly the checks its row's table names, each computed from the evidence
     that check reads, a missing one failing."""
-    import edith_cross
+    import two_box_match
     names = [peer['name'] for peer in run['peers']]
     box_of = {peer['name']: peer['box'] for peer in run['peers']}
     ticks = int(facts['ticks'])
     required = REQUIRED.get(run['name'], BASE)
     records = {name: read_json(root / f'{name}-record.json') for name in names}
-    logs = {name: edith_cross.peer_log(root, name) for name in names}
+    logs = {name: two_box_match.peer_log(root, name) for name in names}
     reports = {name: read_json(root / f'{name}_report.json') for name in names}
     host_log = logs.get('host', '')
     session = next(iter(re.findall(r'\[net-ice\] host session (\S+)', host_log)), None) or (facts['sessions'][0] if facts['sessions'] else None)
@@ -1997,7 +2001,7 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
     for name in names:
         metrics = (timing.get('peers', {}).get(name) or {}).get('metrics', {})
         try:
-            seen[name] = set(edith_cross.live_ticks(root / f'{name}-live.jsonl'))
+            seen[name] = set(two_box_match.live_ticks(root / f'{name}-live.jsonl'))
         except (ValueError, OSError):
             seen[name] = set()
         peers[name] = dict(box=box_of[name], exit_code=records[name].get('exit_code'),
@@ -2013,8 +2017,8 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
     common = set.intersection(*(seen[name] for name in hash_peers)) if hash_peers else set()
     covered = set(range(1, ticks + 1)) <= common
     joiner = next((name for name in names if name != 'host'), 'client')
-    connections = {name: edith_cross.find_key(reports.get(name) or {}, 'connection') for name in names}
-    identities = {name: [edith_cross.find_key(reports.get(name) or {}, 'local_identity'),
+    connections = {name: two_box_match.find_key(reports.get(name) or {}, 'connection') for name in names}
+    identities = {name: [two_box_match.find_key(reports.get(name) or {}, 'local_identity'),
                          *re.findall(r'dialling the ICE half as (str:c-\S+)', logs.get(name, '')),
                          *re.findall(r"\[net-migration\] dialing the successor's ICE route .*? as=(str:c-\S+)", logs.get(name, ''))]
                   for name in names if name != 'host'}
@@ -2046,11 +2050,11 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
     write_json(root / 'signals-candidates.json', [dict(peer=owners[sender], sender=sender, candidates=[
         f'{address}:{port} {kind}' for address, port, kind in signal_candidates(payload)],
         payload_sha256=hashlib.sha256(payload.encode()).hexdigest()) for sender, payload in facts['signals']])
-    builds = edith_cross.pair_build_evidence(root, dict(source_sha=next(iter({value['head'] for value in facts['identities'].values()}))), records)
+    builds = two_box_match.pair_build_evidence(root, dict(source_sha=next(iter({value['head'] for value in facts['identities'].values()}))), records)
     rtts = transport_rtts(host_log)
     judged = run.get('timing_peers') or hash_peers
-    spikes = observed_input_spikes(host_log, edith_cross.find_key(reports.get('host') or {}, 'sim_tick_ms'),
-                                   edith_cross.find_key(reports.get('host') or {}, 'slow_player_bound_ticks'))
+    spikes = observed_input_spikes(host_log, two_box_match.find_key(reports.get('host') or {}, 'sim_tick_ms'),
+                                   two_box_match.find_key(reports.get('host') or {}, 'slow_player_bound_ticks'))
     sanitize = facts['sanitize']
     minted = facts.get('minted') or []
     clocks = {}
@@ -2077,7 +2081,7 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         if peer is None:
             return False
         if kind == 'tunnel':
-            rows = read_json(root / f'{peer["box"]}-tailscale.json')
+            rows = read_json(root / f'{peer["box"]}-overlay_vpn.json')
             return detail(key, tunnel_receipt(rows if isinstance(rows, list) else [], [name]))
         if kind == 'panel':
             return detail(key, panel_verdict(read_json(root / f'{name}-panel' / 'net-ui-result.json') or None))
@@ -2100,7 +2104,7 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
 
     def seat_holds_check():
         # The service writes its match summary under 'service' (the e2e report); an older report had it at the top.
-        last_match = next((found for found in (edith_cross.find_key(reports.get(name) or {}, 'last_match') for name in summary_writers(run, logs))
+        last_match = next((found for found in (two_box_match.find_key(reports.get(name) or {}, 'last_match') for name in summary_writers(run, logs))
                            if isinstance(found, dict)), None)
         summary = (last_match if isinstance(last_match, dict) else {}).get('peers') or []
         named = [dict(row, name=next((peer['name'] for peer in run['peers'] if display_name(run, peer) == row.get('name')), row.get('name')))
@@ -2282,9 +2286,11 @@ def directory_session(directory: dict, budget_s: float) -> dict | None:
     return None
 
 
-def tailscale(command: list[str]) -> dict:
-    """The tunnel's own state, for the receipt: 'tailscale status --json' BackendState, and a toggle's exit code."""
-    exe = 'C:/Program Files/Tailscale/tailscale.exe'
+def overlay_vpn(command: list[str]) -> dict:
+    """The tunnel's own state, for the receipt: 'overlay_vpn status --json' BackendState, and a toggle's exit code."""
+    exe = os.environ.get('CCCP_VPN_COMMAND')
+    if not exe:
+        raise RuntimeError('CCCP_VPN_COMMAND is required for an overlay network operation')
     row = dict(at=stamp(), command=' '.join(command))
     try:
         if command[0] != 'status':
@@ -2353,20 +2359,20 @@ def last_live_tick(path: Path) -> int | None:
 def remote_peers(spec_path: str) -> int:
     """Runs on a game box inside its session task: its peers through the runner, a joiner after the host is listed. The
     tailnet a row took down comes back up in a finally that survives any cleanup error, with its receipt."""
-    import edith_cross
+    import two_box_match
     document = json.loads(Path(spec_path).read_text(encoding='utf-8'))
     root = Path(document['root'])
     specs = document['peers']
-    toggled = any(spec.get('tailscale_down') for spec in specs)
+    toggled = any(spec.get('overlay_vpn_down') for spec in specs)
     receipt: list[dict] = []
     running, results = [], {}
     clock = BoxClock(root, [spec['peer'] for spec in specs])
     clock.start()
     try:
-        h = edith_cross.harness(Path(specs[0]['repo']) / 'tools')
+        h = two_box_match.harness(Path(specs[0]['repo']) / 'tools')
         if toggled:
-            receipt.append(dict(tailscale(['status']), step='before'))
-            receipt.append(dict(tailscale(['down']), step='down'))
+            receipt.append(dict(overlay_vpn(['status']), step='before'))
+            receipt.append(dict(overlay_vpn(['down']), step='down'))
         try:
             for spec in specs:
                 menu = root / f'{spec["peer"]}.menu.txt'
@@ -2381,20 +2387,20 @@ def remote_peers(spec_path: str) -> int:
                     spec['flags'] = [row['session_id'] if flag == '{SESSION}' else flag for flag in spec['flags']]
                     if needs_menu_session:
                         menu.write_text(menu.read_text(encoding='utf-8').replace('{DIRECTORY_SESSION}', row['session_id']), encoding='utf-8')
-                run = edith_cross.prepare_peer(h, spec)
+                run = two_box_match.prepare_peer(h, spec)
                 run.start()
                 if spec.get('menu_script') and menu.is_file():
                     forget_menu(menu, root / spec['peer'] / 'stdout.log', run)
-                if spec.get('tailscale_down'):
-                    receipt.append(dict(tailscale(['status']), step='engine-started', peer=spec['peer']))
+                if spec.get('overlay_vpn_down'):
+                    receipt.append(dict(overlay_vpn(['status']), step='engine-started', peer=spec['peer']))
                 print(f'{stamp()} {spec["peer"]} started (pid {run.record.get("pid")})', flush=True)
                 running.append((spec, run))
             for spec, run in running:
                 if spec.get('kill_at_tick') and wait_for_tick(root / f'{spec["peer"]}-live.jsonl', spec['kill_at_tick'], run):
                     run.terminate(137, f'scenario drop of the {spec["peer"]} at tick {spec["kill_at_tick"]}')
                 run.finish()
-                if spec.get('tailscale_down'):
-                    receipt.append(dict(tailscale(['status']), step='engine-ended', peer=spec['peer']))
+                if spec.get('overlay_vpn_down'):
+                    receipt.append(dict(overlay_vpn(['status']), step='engine-ended', peer=spec['peer']))
         finally:
             for spec, run in running:
                 try:
@@ -2405,16 +2411,16 @@ def remote_peers(spec_path: str) -> int:
                     print(f'{stamp()} {spec["peer"]} exit={run.record.get("exit_code")} timed_out={run.record.get("timed_out")} '
                           f'exe={str(run.record.get("exe_sha256"))[:16]}', flush=True)
             for spec, run in running:
-                edith_cross.redact(h, run, spec)
+                two_box_match.redact(h, run, spec)
     finally:
         try:
             clock.finish(root / f'{specs[0]["box"]}-clock.json')
         finally:
             if toggled:
                 try:
-                    receipt.append(dict(tailscale(['up']), step='up'))
+                    receipt.append(dict(overlay_vpn(['up']), step='up'))
                 finally:
-                    write_json(root / f'{specs[0]["box"]}-tailscale.json', receipt)
+                    write_json(root / f'{specs[0]["box"]}-overlay_vpn.json', receipt)
     try:
         h.records.compress_case_records(root)
     except Exception as error:
@@ -2578,14 +2584,14 @@ def main(argv=None) -> int:
     parser.add_argument('--table', type=Path, nargs='+')
     parser.add_argument('--remote-peers')
     parser.add_argument('--evidence-list', type=Path)
-    parser.add_argument('--bridge-edith', nargs=2, metavar=('IP:UDP', 'TCP'))
+    parser.add_argument('--bridge-remote', nargs=2, metavar=('IP:UDP', 'TCP'))
     options = parser.parse_args(argv)
     if options.remote_peers:
         return remote_peers(options.remote_peers)
     if options.evidence_list:
         return evidence_list(options.evidence_list, options.out)
-    if options.bridge_edith:
-        return bridge_edith(options.bridge_edith[0], int(options.bridge_edith[1]))
+    if options.bridge_remote:
+        return bridge_remote(options.bridge_remote[0], int(options.bridge_remote[1]))
     if options.table:
         if not options.out:
             parser.error('--table needs --out')
@@ -2624,7 +2630,7 @@ def main(argv=None) -> int:
         if options.directory:
             resolved['directory'] = options.directory
         # The lane directory is reached over the tailnet: a peer whose tunnel the row takes down could never list the session.
-        if resolved.get('directory') == 'lane' and any(peer.get('tailscale_down') for peer in resolved['peers']):
+        if resolved.get('directory') == 'lane' and any(peer.get('overlay_vpn_down') for peer in resolved['peers']):
             say(f'{run["name"]}: REFUSED: the lane directory is reached over the tailnet, and this row takes a peer\'s tunnel down')
             verdicts.append(dict(name=run['name'], root=str(out / run['name']), passed=False, refused='lane directory with a tunnel taken down'))
             continue

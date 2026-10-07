@@ -54,7 +54,7 @@ def collect(root):
     def base(peer):
         if placement:
             return root/'boxes'/placement[peer]
-        return root/'boxes'/('Z13' if peer=='host' else 'EDITH') if remote else root
+        return root/'boxes'/('LAPTOP' if peer=='host' else 'REMOTE') if remote else root
     host_probe = base('host')/"host-stage/probe"
     spectator_probe = base('spectator')/"spectator-stage/probe"
     before = read(host_probe/"before-release.ownership.json")
@@ -64,7 +64,7 @@ def collect(root):
     promoted = read(spectator_probe/"promoted-input.ownership.json")
     departing = read(base('seated-one')/"seated-one-stage/probe/departing-seat.ownership.json")
     watch = {**image.get("watch", {}), **cost.get("watch", {})}
-    facts = dict(configuration=before.get("configuration", {}), seated=list(SEATED), clock_box='edith' if remote else 'pc',
+    facts = dict(configuration=before.get("configuration", {}), seated=list(SEATED), clock_box='remote' if remote else 'pc',
                  spectator="spectator", peers={}, throttle=cost.get("sim_cost", {}),
                  promotion=promoted.get("promotion", {}), watch=watch)
     errors = ownership_agreement(after.get("promotion", {}), facts["promotion"], departing.get("ownership", {}))

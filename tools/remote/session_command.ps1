@@ -1,5 +1,5 @@
-# One command line in the owner's interactive session on a remote box, started by its session task (EDITH: cortex-session1).
-# tools/edith/remote_box.py fills the double-brace fields; the command is python and a driver, which start any engine only
+# One command line in the owner's interactive session on a remote box, started by its session task (REMOTE: cortex-session1).
+# tools/remote/remote_box.py fills the double-brace fields; the command is python and a driver, which start any engine only
 # through the runner (tools/win32_test_runner.py via make_run) on a private hidden desktop.
 $ErrorActionPreference = 'Continue'
 {{ENV}}

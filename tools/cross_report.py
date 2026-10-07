@@ -1,6 +1,7 @@
 """Build a self-contained, evidence-linked multi-box report and its run index."""
 from __future__ import annotations
 
+import os
 import argparse
 from collections import Counter, defaultdict
 import html
@@ -63,10 +64,10 @@ def completed_workload(instances, events, ticks):
 
 def acceptance_identity(manifest, peers):
     errors, build_errors, diagnostics = [], [], []
-    expected = {'erol': 'EROL-PC', 'edith': 'EDITH', 'mac': 'Mac', 'linux': 'Linux'}
+    expected = {'pc': 'box-a', 'remote': 'REMOTE', 'mac': 'Mac', 'linux': 'Linux'}
     if (manifest.get('driver') or {}).get('kind') == 'coordinator':
-        expected.pop('erol')
-        expected['z13'] = 'Z13'
+        expected.pop('pc')
+        expected['laptop'] = 'LAPTOP'
     # G-READER-1819: the declared three-way/mixed acceptance rows bind their three named boxes.
     if manifest.get('scenario') in ('soak', 'chaos') and manifest.get('roster') in ('three-way', 'mixed'):
         expected.pop('linux')
@@ -563,7 +564,8 @@ def presentation_index(path):
 
 def write_rerun_command(root,manifest):
     root=Path(root)
-    current=load(HERE/'cross_peers/boxes.json',{})
+    from box_facts import cross_manifest, present
+    current = cross_manifest() if present() else {}
     routes={b['name']:b for b in current.get('boxes',[])}
     boxes=[dict(routes.get(b['name'],b) if routes.get(b['name'],{}).get('kind')==b['kind'] else b,
                 peers_per_box=sum(p['box']==b['name'] for p in manifest['instances'])) for b in manifest['boxes']]
@@ -673,7 +675,13 @@ def coverage(events, peers, manifest):
 
 
 def requirements(manifest, comparison, metrics):
-    items = load(HERE / 'cross_peers/requirements.json', [])
+    source = os.environ.get('CCCP_CROSS_REQUIREMENTS')
+    if not source:
+        return [dict(number='requirements', status='NOT COVERED',
+                     reason='CCCP_CROSS_REQUIREMENTS is not configured',
+                     requirement='Provide the requirements file to evaluate its assertions.',
+                     reread='', evidence=[], required=False)]
+    items = load(Path(source), [])
     reasons = {
         2: 'WAN migration requires NetMatchService.cpp:8284 endpoint publication and NetLockstep.cpp:3304,3334 dialing changes owned by the catch-up lane.',
         3: 'MIXED uses human teams 0,0,1 plus peerless CPU team 2 through real host options; ordinary AI actors supply allied units. Adopted configurations and all roster arms still need run evidence.',

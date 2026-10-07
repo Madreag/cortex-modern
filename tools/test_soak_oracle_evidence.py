@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-import edith_cross
+import two_box_match
 import soak_two_peer
 
 
@@ -39,7 +39,7 @@ def analyzed_pair(root, *, timing=True):
         (root / f'{name}-record.json').write_text(json.dumps(dict(exit_code=0, evidence_complete=True, exe_sha256='a' * 64)))
         (root / f'{name}-build.json').write_text(json.dumps(dict(source_sha='b'*40, build=dict(commit='b'*40, executable_sha256='a'*64))))
         (root / name / 'stdout.log').write_text('[net-route] RouteAllowed route=direct allowed=1\n')
-    meta = dict(name='unit', path='direct', source_sha='b'*40, feel_records=False, machines=dict(host='EROL-PC', client='EDITH'), local_peer='host')
+    meta = dict(name='unit', path='direct', source_sha='b'*40, feel_records=False, machines=dict(host='box-a', client='REMOTE'), local_peer='host')
     return harness, meta
 
 
@@ -87,14 +87,14 @@ class SoakOracleEvidence(unittest.TestCase):
             harness, meta = analyzed_pair(root)
             (root / 'soak-verdict.json').write_text(json.dumps(dict(passed=False, stalls=[])))
             with contextlib.redirect_stdout(io.StringIO()):
-                self.assertFalse(edith_cross.analyze_match(harness, root, meta)['passed'])
+                self.assertFalse(two_box_match.analyze_match(harness, root, meta)['passed'])
 
     def test_clean_pair_passes_without_injected_faults(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             harness, meta = analyzed_pair(root)
             with contextlib.redirect_stdout(io.StringIO()):
-                self.assertTrue(edith_cross.analyze_match(harness, root, meta)['passed'])
+                self.assertTrue(two_box_match.analyze_match(harness, root, meta)['passed'])
 
     def test_p17_failed_soak_and_timing_reach_the_pair_verdict(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -103,7 +103,7 @@ class SoakOracleEvidence(unittest.TestCase):
             (root / 'soak-verdict.json').write_text(json.dumps(dict(passed=False, stalls=[])))
             with patch.object(soak_two_peer, 'soak_hold_judgement', return_value=dict(passed=True, planned=[], explained=[], unexplained=[])), \
                  contextlib.redirect_stdout(io.StringIO()):
-                result = edith_cross.analyze_match(harness, root, meta)
+                result = two_box_match.analyze_match(harness, root, meta)
         self.assertFalse(result['passed'], result)
 
     def test_timing_failure_is_required_without_a_soak(self):
@@ -111,7 +111,7 @@ class SoakOracleEvidence(unittest.TestCase):
             root = Path(folder)
             harness, meta = analyzed_pair(root, timing=False)
             with contextlib.redirect_stdout(io.StringIO()):
-                result = edith_cross.analyze_match(harness, root, meta)
+                result = two_box_match.analyze_match(harness, root, meta)
         self.assertFalse(result['passed'], result)
 
     def test_p18_unrelated_bootstrap_and_late_survivor_wait_do_not_prove_recovery(self):

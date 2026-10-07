@@ -24,9 +24,9 @@ from relay_secrets import FIXTURES, Finder, logical_line  # noqa: E402
 
 # Each tracked file that holds a login-shaped value, and why that value is synthetic (first match wins).
 REASONS = [
+    ('tools/acceptance_relay_pair.py', 'relay driver: a keyword-argument line naming settings keys, holding no login value'),
+    ('tools/test_relay_build_inputs.py', 'relay retention unit tests: deliberately synthetic sample logins'),
     ('tools/session_directory/test_session_directory.py', "the directory's unit tests: sample relay logins built for those tests"),
-    ('tools/relay_gate_test.py', "the relay sweep's own unit rows: synthetic logins each row builds"),
-    ('tools/relay_cloudflare_test.py', "the relay driver's unit rows: synthetic logins each row builds"),
     ('tools/e2e/*.menu.txt', 'menu script templates: {TOKEN} placeholders the harness fills at run time'),
     ('tools/e2e/*.json', 'e2e scenario templates and negative fixtures: placeholders and deliberately invalid sample logins'),
     ('tools/test_menu_readback.py', 'the menu readback driver: sample relay logins typed into the boxes under test'),

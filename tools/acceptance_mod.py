@@ -64,7 +64,7 @@ def write_json(path, data):
 
 
 def equal_manifests(values):
-    if set(values) != {"pc", "edith", "mac", "linux"}:
+    if set(values) != {"pc", "remote", "mac", "linux"}:
         raise ValueError("four named box manifests are required")
     reference = values["pc"]
     for box, value in values.items():

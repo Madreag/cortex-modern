@@ -14,10 +14,10 @@ import time
 import uuid
 import zipfile
 
-CONFIG = 'D:/mx/coturn-20260920/turn-config-cloudflare.json'
-COTURN_CONFIG = 'D:/mx/coturn-20260920/directory-coturn.json'
+CONFIG = os.environ.get('CCCP_CLOUDFLARE_TURN_CONFIG', 'relay/turn-config-cloudflare.json')
+COTURN_CONFIG = os.environ.get('CCCP_COTURN_CONFIG', 'relay/directory-coturn.json')
 LOGIN_REASON = "the engine's relay selftests print the TURN username through GNS verbose output (engine row A63.1)"
-SAFE_LOGIN = dict(path='capabilities/relay-safe-login.json', engine_row='A63.1', boxes=['ALLY','EDITH'])
+SAFE_LOGIN = dict(path='capabilities/relay-safe-login.json', engine_row='A63.1', boxes=['HANDHELD','REMOTE'])
 ITEM_15 = "direct paths; relay = Cloudflare through the directory's mint (the primary), our own coturn through the directory's coturn backend (the alternative) and the player's own fixed pair proven by one row"
 LOGIN_FIELD = re.compile(rb'"(username|credential)"\s*:\s*"((?:\\.|[^"\\])+)"')
 GNS_USER = re.compile(rb"long-term credentials for user ['\"]([^'\"\r\n]+)")
@@ -66,8 +66,11 @@ def arms(mode):
 
 def scenario_contract(repo):
     """Read the driver's declaration independently of the acceptance plan, including future-wave test pins."""
-    relative='tools/e2e/mp-relay-cloudflare.json'
-    path=Path(os.environ.get('ACCEPTANCE_RELAY_SCENARIO') or Path(repo)/relative)
+    configured = os.environ.get('ACCEPTANCE_RELAY_SCENARIO')
+    if not configured:
+        raise ValueError('ACCEPTANCE_RELAY_SCENARIO must name a relay scenario file')
+    path=Path(configured)
+    relative=path.as_posix()
     data=path.read_bytes();document=json.loads(data)
     names=[run['name'] for run in document['runs']]
     if not names or len(set(names))!=len(names) or 'fixed' not in names:

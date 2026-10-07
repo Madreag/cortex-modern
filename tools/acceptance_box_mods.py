@@ -10,12 +10,12 @@ import tarfile
 
 from acceptance_mod import equal_manifests, write_json
 
-ALIASES = {"edith": "edith", "mac": "Erol-Mac", "linux": "3090"}
+ALIASES = {"remote": "remote", "mac": "host-c", "linux": "host-d"}
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def shell_command(box, arguments):
-    if box["name"] == "edith":
+    if box["name"] == "remote":
         return "& " + " ".join("'"+str(arg).replace("'", "''")+"'" for arg in arguments)
     return shlex.join(map(str, arguments))
 
@@ -32,7 +32,7 @@ def validate_target(box, lane):
     if box.get("name") not in ALIASES or box.get("ssh") != ALIASES[box["name"]]:
         raise ValueError("target must use its saved box alias")
     root = box.get("scratch", "")
-    prefix = {"edith": "D:/mx/", "mac": "/Users/erol/cortex-workers/", "linux": "/home/erol/cortex-workers/"}[box["name"]]
+    prefix = str(box["scratch_root"]).rstrip("/")+"/"
     if root != prefix+lane or any(c in lane for c in "/\\\r\n'\""):
         raise ValueError("remote scratch must be this lane's own root")
     destination = box.get("destination", "")
@@ -46,7 +46,7 @@ def fetch_receipt(box, remote, local):
     scratch = box["scratch"]
     name = remote.rsplit("/", 1)[-1]
     archive_path = local.with_suffix(".tar")
-    tar = ["env", "COPYFILE_DISABLE=1", "tar"] if box["name"] == "mac" else ["tar.exe" if box["name"] == "edith" else "tar"]
+    tar = ["env", "COPYFILE_DISABLE=1", "tar"] if box["name"] == "mac" else ["tar.exe" if box["name"] == "remote" else "tar"]
     command = shell_command(box, [*tar, "-cf", "-", "-C", scratch, name])
     with archive_path.open("xb") as stream:
         checked(["ssh", "-o", "BatchMode=yes", box["ssh"], command], stdout=stream)
@@ -67,7 +67,7 @@ def fetch_receipt(box, remote, local):
 
 def install_boxes(targets, lane, archive, receipt, out, dry_run=False):
     if {b.get("name") for b in targets} != set(ALIASES) or len(targets) != 3:
-        raise ValueError("exactly EDITH, Mac and Linux are required")
+        raise ValueError("exactly REMOTE, Mac and Linux are required")
     for box in targets:
         validate_target(box, lane)
     source = Path(__file__).with_name("acceptance_mod.py")
@@ -81,7 +81,7 @@ def install_boxes(targets, lane, archive, receipt, out, dry_run=False):
         plans.append(dict(box=box["name"], destination=box["destination"], command=args))
         if dry_run:
             continue
-        mkdir = ("New-Item -ItemType Directory -Force -Path '"+scratch+"' | Out-Null" if box["name"] == "edith"
+        mkdir = ("New-Item -ItemType Directory -Force -Path '"+scratch+"' | Out-Null" if box["name"] == "remote"
                  else "mkdir -p "+shlex.quote(scratch))
         checked(["ssh", "-o", "BatchMode=yes", box["ssh"], mkdir], stdout=subprocess.PIPE)
         for local, remote in ((source, remote_script), (archive, remote_archive), (receipt, remote_receipt)):

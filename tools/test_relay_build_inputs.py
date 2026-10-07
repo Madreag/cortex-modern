@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from test_harness_resume5 import built
+from test_native_build_inputs import built
 from test_inventory_oracle_evidence import run_stream
 from inventory_location import inventory_dir
 import run_tools_suites
@@ -42,22 +42,7 @@ class RelayRows(unittest.TestCase):
         self.assertIn('{REPO}/tools/relay_cloudflare_match.py', row['argv'])
         self.assertEqual(row['relay_contract']['runs'], ['cloudflare','coturn','fixed','automatic'])
         self.assertEqual(row['relay_contract']['primary'], 'cloudflare')
-        self.assertEqual(row['engine_boxes'], {'ALLY':1,'EDITH':1})
-
-    def test_c502_directory_primary_and_coturn_alternative(self):
-        scenario = json.loads((REPO/'tools/e2e/mp-direct-vs-relay.json').read_text())
-        runs = {run['name']:run for run in scenario['runs']}
-        self.assertEqual(runs['relay']['peers'][0]['settings']['NetworkHostRelayMode'], 'Directory')
-        self.assertEqual(runs['relay']['directory_turn_config_path'], 'D:/mx/coturn-20260920/turn-config-cloudflare.json')
-        self.assertIn('relay-coturn', runs)
-        self.assertEqual(runs['relay-coturn']['peers'][0]['settings']['NetworkHostRelayMode'], 'Directory')
-        self.assertTrue(any(item.get('directory_relay_offer') == 'cloudflare' and item['run']=='relay' for item in scenario['checklist']))
-        for peer in runs['relay']['peers']:
-            self.assertEqual(peer['settings']['NetworkConnectionMode'], 'RelayOnly')
-            self.assertNotIn('NetworkTurnPass', peer['settings'])
-            script = (REPO/'tools/e2e'/peer['menu_script']).read_text()
-            self.assertNotIn('{TURN_PASS}', script)
-        self.assertIn('ComboHostNetRelay Directory', (REPO/'tools/e2e'/runs['relay']['peers'][0]['menu_script']).read_text())
+        self.assertEqual(row['engine_boxes'], {'HANDHELD':1,'REMOTE':1})
 
     def test_c503_refusal_uses_a_throwaway_backend_file(self):
         scenario = json.loads((REPO/'tools/e2e/mp-relay-reasons.json').read_text())
@@ -104,7 +89,6 @@ class RelayRows(unittest.TestCase):
 
     def test_c508_suites_register_both_relay_and_directory(self):
         suites=dict(run_tools_suites.SUITES)
-        self.assertEqual(suites.get('relay-cloudflare'), ['relay_cloudflare_test.py'])
         self.assertEqual(suites.get('session-directory'), ['session_directory/test_session_directory.py'])
 
     def test_c509_hotspot_is_conditional_on_explicit_session(self):

@@ -831,7 +831,7 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	settings.SetNetworkChatDefaultScope(NetworkChatDefaultScope::Team);
 	settings.SetNetworkChatTextSize(NetworkChatTextSize::Large);
 	settings.SetNetworkChatKey("Y");
-	settings.SetNetworkDiagnosticsDirectory("D:/tmp/telemetry-alt");
+	settings.SetNetworkDiagnosticsDirectory("Temp/telemetry-alt");
 	settings.SetNetworkHostDelayPolicy(NetworkHostDelayPolicy::Fixed);
 	settings.SetNetworkSlowPlayerBoundTicks(7);
 	settings.SetNetworkSlowPlayerPolicy(NetworkSlowPlayerPolicy::Pause);
@@ -888,7 +888,7 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 		}
 		settings.Create(reader);
 	}
-	check("roundtrip", settings.GetNetworkDisplayName() == "AlphaPilot" && settings.GetNetworkMatchStatusMode() == NetworkMatchStatusMode::Always && !settings.GetNetworkToastsEnabled() && !settings.GetNetworkChatVisible() && settings.GetNetworkChatDefaultScope() == NetworkChatDefaultScope::Team && !settings.GetNetworkChatNotify() && settings.GetNetworkChatSound() && settings.GetNetworkChatTextSize() == NetworkChatTextSize::Large && settings.GetNetworkChatKey() == "Y" && !settings.GetNetworkAutoReconnect() && !settings.GetNetworkOfferStoredRejoin() && settings.GetNetworkDiagnosticsDirectory() == "D:/tmp/telemetry-alt" && !settings.GetNetworkRecordReplays() && settings.GetNetworkHostDelayPolicy() == NetworkHostDelayPolicy::Fixed && !settings.GetNetworkHostAutoRepair() && settings.GetNetworkHostIdleWaitMinutes() == 0 && settings.GetNetworkPathHorizonTicks() == 45 && settings.GetNetworkAutosavesKept() == 7 && settings.GetNetworkHostVisibility() == NetworkHostVisibility::Unlisted);
+	check("roundtrip", settings.GetNetworkDisplayName() == "AlphaPilot" && settings.GetNetworkMatchStatusMode() == NetworkMatchStatusMode::Always && !settings.GetNetworkToastsEnabled() && !settings.GetNetworkChatVisible() && settings.GetNetworkChatDefaultScope() == NetworkChatDefaultScope::Team && !settings.GetNetworkChatNotify() && settings.GetNetworkChatSound() && settings.GetNetworkChatTextSize() == NetworkChatTextSize::Large && settings.GetNetworkChatKey() == "Y" && !settings.GetNetworkAutoReconnect() && !settings.GetNetworkOfferStoredRejoin() && settings.GetNetworkDiagnosticsDirectory() == "Temp/telemetry-alt" && !settings.GetNetworkRecordReplays() && settings.GetNetworkHostDelayPolicy() == NetworkHostDelayPolicy::Fixed && !settings.GetNetworkHostAutoRepair() && settings.GetNetworkHostIdleWaitMinutes() == 0 && settings.GetNetworkPathHorizonTicks() == 45 && settings.GetNetworkAutosavesKept() == 7 && settings.GetNetworkHostVisibility() == NetworkHostVisibility::Unlisted);
 	check("bounded-wait roundtrip", settings.GetNetworkSlowPlayerBoundTicks() == 7 && settings.GetNetworkSlowPlayerPolicy() == NetworkSlowPlayerPolicy::Pause && settings.GetNetworkShowDiagnostics());
 	check("return-window roundtrip", settings.GetNetworkHostReturnWindowMinutes() == 12);
 	settings.SetNetworkHostReturnWindowMinutes(0);

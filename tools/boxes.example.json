@@ -14,15 +14,15 @@
       "aliases": [],
       "os": "windows",
       "user": "player",
-      "home": "C:/Users/player",
-      "scratch": "C:/scratch",
+      "home": "home/player",
+      "scratch": "scratch",
       "markers": {
-        "timing": "C:/scratch/TIMING-RUN",
-        "cross-free": "C:/scratch/FREE-FOR-CROSS",
-        "verification": "C:/scratch/VERIFICATION.lock",
-        "battery": "C:/scratch/BATTERY.lock",
-        "exclusive": "C:/scratch/EXCLUSIVE.lock",
-        "harness": "C:/scratch/HARNESS.lock"
+        "timing": "scratch/TIMING-RUN",
+        "cross-free": "scratch/FREE-FOR-CROSS",
+        "verification": "scratch/VERIFICATION.lock",
+        "battery": "scratch/BATTERY.lock",
+        "exclusive": "scratch/EXCLUSIVE.lock",
+        "harness": "scratch/HARNESS.lock"
       }
     },
     {
@@ -36,7 +36,7 @@
       ],
       "os": "windows",
       "user": "player",
-      "home": "C:/Users/player"
+      "home": "home/player"
     },
     {
       "role": "mac",
@@ -47,7 +47,7 @@
       "aliases": [],
       "os": "macos",
       "user": "player",
-      "home": "/Users/player"
+      "home": "home/player"
     },
     {
       "role": "linux",
@@ -60,7 +60,7 @@
       ],
       "os": "linux",
       "user": "player",
-      "home": "/home/player"
+      "home": "home/player"
     },
     {
       "role": "laptop",
@@ -73,7 +73,7 @@
       ],
       "os": "windows",
       "user": "player",
-      "home": "C:/Users/player"
+      "home": "home/player"
     },
     {
       "role": "handheld",
@@ -86,12 +86,12 @@
       ],
       "os": "windows",
       "user": "player",
-      "home": "C:/Users/player"
+      "home": "home/player"
     }
   ],
   "paths": {
-    "relay_coturn_config": "C:/scratch/relay/directory-coturn.json",
-    "relay_cloudflare_config": "C:/scratch/relay/turn-config-cloudflare.json"
+    "relay_coturn_config": "scratch/relay/directory-coturn.json",
+    "relay_cloudflare_config": "scratch/relay/turn-config-cloudflare.json"
   },
   "cross_peers": {
     "version": 1,
@@ -100,10 +100,10 @@
         "name": "box-a",
         "kind": "windows-local",
         "peers_per_box": 1,
-        "guard_file": "C:/scratch/FREE-FOR-CROSS",
-        "exclusive_marker": "C:/scratch/TIMING-RUN",
-        "tree": "C:/work/cross-tree",
-        "executable": "C:/work/cross-tree/Cortex Command.exe",
+        "guard_file": "scratch/FREE-FOR-CROSS",
+        "exclusive_marker": "scratch/TIMING-RUN",
+        "tree": "work/cross-tree",
+        "executable": "work/cross-tree/Cortex Command.exe",
         "runner": "tools/win32_test_runner.py via run_sim_test.make_run",
         "ports": [
           49900,
@@ -111,7 +111,7 @@
         ],
         "directory_port": 49918,
         "sampler": "engine-process-handle",
-        "scratch": "C:/scratch/{lane}",
+        "scratch": "scratch/{lane}",
         "python": "python"
       },
       {
@@ -119,17 +119,17 @@
         "kind": "windows-task",
         "ssh": "host-b",
         "peers_per_box": 1,
-        "tree": "C:/scratch/{lane}/engine",
-        "executable": "C:/scratch/{lane}/engine/Cortex Command.exe",
+        "tree": "scratch/{lane}/engine",
+        "executable": "scratch/{lane}/engine/Cortex Command.exe",
         "runner": "cortex-session1",
-        "task_script": "C:/scratch/session1/run.ps1",
+        "task_script": "scratch/session1/run.ps1",
         "ports": [
           49900,
           49919
         ],
         "directory_port": 49985,
         "sampler": "engine-process-handle",
-        "scratch": "C:/scratch/{lane}",
+        "scratch": "scratch/{lane}",
         "python": "python"
       },
       {
@@ -140,8 +140,8 @@
           "DISPLAY": ":0"
         },
         "peers_per_box": 1,
-        "tree": "/home/player/workers/cross-linux/repo",
-        "executable": "/home/player/workers/cross-linux/repo/build-gcc/CortexCommand",
+        "tree": "workers/cross-linux/repo",
+        "executable": "workers/cross-linux/repo/build-gcc/CortexCommand",
         "runner": "tools/posix_test_runner.py via run_sim_test.make_run over ssh",
         "ports": [
           50310,
@@ -149,17 +149,17 @@
         ],
         "directory_port": 50318,
         "sampler": "engine-pid-ps",
-        "scratch": "/home/player/workers/cross-linux/runs/{lane}",
+        "scratch": "workers/cross-linux/runs/{lane}",
         "python": "/usr/bin/python3",
-        "guard_file": "/home/player/workers/cross-linux/BOX-FREE-FOR-CROSS"
+        "guard_file": "workers/cross-linux/BOX-FREE-FOR-CROSS"
       },
       {
         "name": "box-c",
         "kind": "posix-ssh",
         "ssh": "host-c",
         "peers_per_box": 1,
-        "tree": "/Users/player/workers/{lane}/repo",
-        "executable": "/Users/player/workers/{lane}/repo/build-gcc/CortexCommand",
+        "tree": "workers/{lane}/repo",
+        "executable": "workers/{lane}/repo/build-gcc/CortexCommand",
         "runner": "tools/posix_test_runner.py via run_sim_test.make_run over ssh",
         "ports": [
           49900,
@@ -167,7 +167,7 @@
         ],
         "directory_port": 49918,
         "sampler": "engine-pid-ps",
-        "scratch": "/Users/player/workers/{lane}",
+        "scratch": "workers/{lane}",
         "python": "/opt/homebrew/bin/python3",
         "guard_file": "{mac_guard}"
       }

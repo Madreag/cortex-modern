@@ -1,6 +1,7 @@
 """Run the fixed unattended feel matrix on private desktops, retaining every raw record."""
 from __future__ import annotations
 
+import tempfile
 import argparse
 import concurrent.futures
 from datetime import datetime, timedelta, timezone
@@ -30,7 +31,7 @@ REPO = Path(__file__).resolve().parents[1]
 install_memory_guard()
 MST = timezone(timedelta(hours=-7))
 HELPERS = REPO / 'tools/feel'
-SP_CONTROL = Path('D:/mx/opus-f24-20260913/sp-control')
+SP_CONTROL = Path(os.environ.get('CCCP_SP_CONTROL', str(Path(__file__).resolve().parent/'feel'/'sp-control')))
 # The single-player comparison, kept beside the driver so every box that runs the matrix has it.
 SP_COMPARATOR = HELPERS / 'compare_sp.py'
 BYTE_LIMIT = 5_000_000_000
@@ -1284,7 +1285,7 @@ def _main(argv=None):
     PIN_ALIKE = args.pin_alike
     PIN_SWAPPED = args.pin_swapped
     SP_ONE_SCREEN = args.sp_one_screen
-    if (Path('D:/mx/LEAD_FAMILY.lock')).exists():
+    if (Path(os.environ.get('CCCP_FAMILY_LOCK', str(Path(tempfile.gettempdir())/'cccp-family.lock')))).exists():
         parser.error('Phase 1 lock is present; no driver or engine launch is permitted')
     branch = subprocess.check_output(['git', '-C', str(REPO), 'branch', '--show-current'], text=True).strip()
     os.environ.update(CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1')

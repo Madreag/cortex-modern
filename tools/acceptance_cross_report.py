@@ -113,13 +113,13 @@ def build_report(root):
                         ('acceptance_cross_report.py', 'acceptance_rows.py', 'acceptance_evidence.py',
                          'acceptance_fixed_gates.py', 'acceptance_frozen_report.py', 'acceptance_native_load.py', 'acceptance_transfer.py', 'world_soak.py', 'cross_report.py', 'feel/report.py')}))
     row = manifest["acceptance_row"]
-    specs = {("pc" if spec["peer"] == "erol" else spec["peer"]): spec for spec in manifest["specs"]}
+    specs = {("pc" if spec["peer"] == "pc" else spec["peer"]): spec for spec in manifest["specs"]}
     paths = {name: peer_root(root, manifest, spec) for name, spec in specs.items()}
     logs = {name: (own/"engine/stdout.log").read_text(encoding="utf-8", errors="replace")
             if (own/"engine/stdout.log").is_file() else "" for name, own in paths.items()}
     documents = {name: own/"live.jsonl" for name, own in paths.items()}
-    host_box = manifest.get('acceptance_host_box', manifest.get('world_host_box', 'EROL-PC'))
-    host_key = 'pc' if host_box == 'EROL-PC' else host_box.lower()
+    host_box = manifest.get('acceptance_host_box', manifest.get('world_host_box', 'box-a'))
+    host_key = 'pc' if host_box == 'box-a' else host_box.lower()
     facts, failures = dict(host_box=host_key), []
     preflights = manifest.get("preflights", {})
     if len(preflights) != len(manifest["boxes"]) or any(not p.get("machine_id") for p in preflights.values()) or \
@@ -132,7 +132,7 @@ def build_report(root):
     comparing = list(paths)
     if row.startswith("world-"):
         activated = re.findall(r"(?m)^\[net-world\] activate peer=(\d+) at=(\d+)\s*$", logs.get("pc", ""))
-        completed = re.findall(r"(?m)^\[net-world\] catch-up complete peer=(\d+) at=(\d+)", logs.get("edith", ""))
+        completed = re.findall(r"(?m)^\[net-world\] catch-up complete peer=(\d+) at=(\d+)", logs.get("remote", ""))
         released = load(root/"late-join-released.json", {})
         # A repaired or returning seat still owes every tick after its first
         # activation; a later catch-up must not erase an earlier bad interval.
@@ -140,11 +140,11 @@ def build_report(root):
         if not isinstance(start, int) or any(value not in activated for value in completed):
             failures.append("join: native activation and late-join receipt do not agree")
             start = None
-        facts["join"] = dict(peer="edith", host_tick=released.get("host_tick"), activation_tick=start, last_tick=end,
+        facts["join"] = dict(peer="remote", host_tick=released.get("host_tick"), activation_tick=start, last_tick=end,
                              directory=manifest.get("directory_mode"), public_directory_down=manifest.get("public_directory_down"),
                              own_certificate=manifest.get("own_certificate"),
-                             **native_route_evidence(logs.get("pc", ""), logs.get("edith", "")))
-        totals = [int(value) for value in re.findall(r'(?m)^\[net-match\] state transfer complete: (\d+) bytes\s*$', logs.get('edith', ''))]
+                             **native_route_evidence(logs.get("pc", ""), logs.get("remote", "")))
+        totals = [int(value) for value in re.findall(r'(?m)^\[net-match\] state transfer complete: (\d+) bytes\s*$', logs.get('remote', ''))]
         if row == 'world-soak':
             # R6's clocked label evidence belongs to R3/R4. R5 still owes a
             # completed native StateChunk transfer, activation and equal hashes.
@@ -155,7 +155,7 @@ def build_report(root):
         else:
             from acceptance_transfer import collect as collect_transfer
             try:
-                facts['transfer'] = collect_transfer(paths.get('edith', root))
+                facts['transfer'] = collect_transfer(paths.get('remote', root))
             except (OSError, ValueError, KeyError, TypeError) as error:
                 facts['transfer'] = {}
                 failures.append('transfer: '+str(error))
@@ -173,8 +173,8 @@ def build_report(root):
     try:
         facts["live"] = live_hashes({n: documents[n] for n in comparing}, start, end) if start else {}
         facts["fullstate"] = fullstate_hashes({n: paths[n]/"engine/stdout.log" for n in comparing}, start, end) if start else {}
-        facts["peers"] = {name: peer_receipt(host_key if name == 'pc' else "edith" if name == "edith-first" else name, documents[name], logs[name], load(paths[name]/"record.json", {}),
-                                             start if row.startswith("world-") and name == "edith" and start else 1, end)
+        facts["peers"] = {name: peer_receipt(host_key if name == 'pc' else "remote" if name == "remote-first" else name, documents[name], logs[name], load(paths[name]/"record.json", {}),
+                                             start if row.startswith("world-") and name == "remote" and start else 1, end)
                           for name in paths if name != "linux" or row != "mod-refusal"}
     except (OSError, ValueError, TypeError) as error:
         failures.append("native receipts: "+str(error))
@@ -206,9 +206,9 @@ def build_report(root):
                                 log_text=refusal_log_excerpt(logs["linux"]), log_evidence=str(own/"engine/stdout.log"),
                                 landing_text=native_labels(own), joined=joined,
                                 refusal_tick=load(root/"late-join-released.json", {}).get("host_tick"),
-                                survivors=["pc", "edith", "mac"])
+                                survivors=["pc", "remote", "mac"])
     if row == "world-soak":
-        facts['world_host_box'] = manifest.get('world_host_box', 'EROL-PC')
+        facts['world_host_box'] = manifest.get('world_host_box', 'box-a')
         observed = load(paths["pc"]/"soak-elapsed.json", {})
         released = load(root/"late-join-released.json", {})
         facts["soak"] = {**manifest["soak"], "elapsed_s": observed.get("elapsed_s"),
@@ -216,8 +216,8 @@ def build_report(root):
         facts["soak"]["journal"] = load(paths["pc"]/"journal-sizes.json", [])
         if start:
             try:
-                facts['initial_live'] = live_hashes({n:documents[n] for n in ('pc','edith-first')}, 1, start-1)
-                facts['initial_fullstate'] = fullstate_hashes({n:paths[n]/'engine/stdout.log' for n in ('pc','edith-first')}, 1, start-1)
+                facts['initial_live'] = live_hashes({n:documents[n] for n in ('pc','remote-first')}, 1, start-1)
+                facts['initial_fullstate'] = fullstate_hashes({n:paths[n]/'engine/stdout.log' for n in ('pc','remote-first')}, 1, start-1)
             except (OSError, ValueError, TypeError) as error:
                 failures.append('initial world history: '+str(error))
         facts["census"] = {}

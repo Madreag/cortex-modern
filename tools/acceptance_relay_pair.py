@@ -1,4 +1,4 @@
-"""Run the existing relay contracts from EROL-PC with ALLY and EDITH game peers."""
+"""Run the existing relay contracts from box-a with HANDHELD and REMOTE game peers."""
 from __future__ import annotations
 
 import json
@@ -14,13 +14,13 @@ import acceptance_remote as dispatch
 
 
 def declared(options, mode):
-    if (options.host_box,options.client_box) != ('ALLY','EDITH'):
-        raise ValueError('relay game roles must be ALLY host and EDITH client')
+    if (options.host_box,options.client_box) != ('HANDHELD','REMOTE'):
+        raise ValueError('relay game roles must be HANDHELD host and REMOTE client')
     if not options.inventory or not options.collection_root:
         raise ValueError('remote relay peers require the inventory and the collection root')
     seconds = options.seconds if mode == 'hold' else 20
-    return dict(mode=mode, driver='EROL-PC', host='ALLY', client='EDITH', engine_boxes={'ALLY':1,'EDITH':1},
-        credentials='read on EROL-PC; values delivered through SSH stdin and a one-use named pipe',
+    return dict(mode=mode, driver='box-a', host='HANDHELD', client='REMOTE', engine_boxes={'HANDHELD':1,'REMOTE':1},
+        credentials='read on box-a; values delivered through SSH stdin and a one-use named pipe',
         connection_mode='RelayOnly', game_ticks=seconds*60,
         native_selftest=mode if mode in ('hold','renew') else None,
         native_scope='the existing in-process TURN test precedes the independent two-box game match')
@@ -33,7 +33,7 @@ def run(options, mode, repo):
     declaration = declared(options,mode)
     if getattr(options,'dry_run',False):
         print(json.dumps(declaration)); return 0
-    import edith_cross as cross
+    import two_box_match as cross
     import test_directory_ice_join as directory
     from turn_relay_checks import read_login
     from acceptance_relay_policy import CredentialBook, sweep_retained,directory_config,COTURN_CONFIG
@@ -80,7 +80,7 @@ def run(options, mode, repo):
                             if listings:
                                 session=listings[0]['session_id'];break
                             time.sleep(.5)
-                        if not session: raise RuntimeError('ALLY did not publish its directory row within 60 s')
+                        if not session: raise RuntimeError('HANDHELD did not publish its directory row within 60 s')
                     box,_,_,_=pair.boxes[role]
                     peer_root = root/'peers'/role/'match'
                     settings=dict(SessionDirectoryUrl=f'127.0.0.1:{directory_port}',SessionDirectoryCertSha256=pin,
@@ -116,9 +116,9 @@ def run(options, mode, repo):
                 if not scan['safe_to_copy']:raise ValueError('relay sanitizer refused analysis copies')
                 shutil.copy2(match/'directory/service.log',match/'service.log')
                 verdict=cross.analyze_match(h,match,dict(name='acceptance-relay-pair',started=cross.stamp(),finished=cross.stamp(),
-                    direction='host-ally',path='relay' if backend_name=='coturn' else 'directory-relay',ticks=ticks,port=game_port,machines={'host':'ALLY','client':'EDITH'},
+                    direction='host-handheld',path='relay' if backend_name=='coturn' else 'directory-relay',ticks=ticks,port=game_port,machines={'host':'HANDHELD','client':'REMOTE'},
                     soak=False,source_sha=pair.source,local_peer='host',feel_records=False,instrumentation='lean',
-                    driver_box='EROL-PC',session_id=session,relay_secret_scan=scan['passed'],remote_state='both terminal receipts retained',note=None))
+                    driver_box='box-a',session_id=session,relay_secret_scan=scan['passed'],remote_state='both terminal receipts retained',note=None))
                 checks['pair']=dict(required=True,passed=verdict['passed'],product='pair/verdict.json')
                 if getattr(options,'fullstate_every',0):
                     from compare_sim_traces import compare_fullstate
@@ -132,7 +132,7 @@ def run(options, mode, repo):
         write(root/'secret-scan.json',scan)
     checks['no_logins_in_kept_files']=dict(required=True,passed=scan['passed'],receipt='secret-scan.json')
     passed=passed and scan['passed']
-    result=dict(passed=passed,checks=checks,driver_box='EROL-PC',engine_boxes=declaration['engine_boxes'],
+    result=dict(passed=passed,checks=checks,driver_box='box-a',engine_boxes=declaration['engine_boxes'],
                 backend=backend_name,credential_mode='directory '+backend_name+' backend')
     write(root/'result.json',result)
     write(root/'secret-scan.json',sweep_retained(root,book,previous=scan))

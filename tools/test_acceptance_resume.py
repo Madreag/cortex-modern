@@ -22,7 +22,7 @@ def write(path, data):
     path.write_text(json.dumps(data), encoding='utf-8')
 
 
-def fixture(root, *, item='1', boxes=('EROL-PC',), passed=True, code=0, rerun=False):
+def fixture(root, *, item='1', boxes=('box-a',), passed=True, code=0, rerun=False):
     source = 'a'*40
     exe = b'unit executable bytes; never executed'
     sha = hashlib.sha256(exe).hexdigest()
@@ -69,9 +69,9 @@ def fixture(root, *, item='1', boxes=('EROL-PC',), passed=True, code=0, rerun=Fa
 class AcceptanceResume(unittest.TestCase):
     def test_g_id_host_normalizes_writer_node_spelling(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder); plan, requirement = fixture(root, boxes=('Erol-PC',))
+            root = Path(folder); plan, requirement = fixture(root, boxes=('box-a',))
             result = reader.build_manifest(plan, requirement)
-            self.assertEqual(result['rows'][0]['identities'][0]['box'], 'EROL-PC')
+            self.assertEqual(result['rows'][0]['identities'][0]['box'], 'box-a')
             self.assertTrue(result['passed'], result['errors'])
 
     def test_g_sched_completed_product_failure_is_collected(self):
@@ -83,7 +83,7 @@ class AcceptanceResume(unittest.TestCase):
 
     def test_g_reader_1819_uses_the_declared_three_box_roster(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder); plan, requirement = fixture(root, item='18', boxes=('EROL-PC', 'EDITH', 'Mac'))
+            root = Path(folder); plan, requirement = fixture(root, item='18', boxes=('box-a', 'REMOTE', 'Mac'))
             result = reader.build_manifest(plan, requirement)
             self.assertTrue(result['passed'], (result['errors'], result['rows'][0]['errors']))
 

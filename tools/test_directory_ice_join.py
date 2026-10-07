@@ -27,7 +27,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 from run_sim_test import make_run, engine_executable, file_sha256  # noqa: E402
 import box_facts
-from edith_cross import make_cert  # noqa: E402
+from two_box_match import make_cert  # noqa: E402
 
 SERVICE = REPO / "tools" / "session_directory" / "session_directory.py"
 

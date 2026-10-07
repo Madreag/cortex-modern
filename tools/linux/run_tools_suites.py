@@ -1,6 +1,6 @@
 """Run the shared tools suites on POSIX, preserving N/A for Windows-only external paths.
 
-The shared driver uses Path.is_absolute(), which interprets D:/... as a relative path on
+The shared driver uses Path.is_absolute(), which interprets Windows drive paths as relative paths on
 POSIX. Normalize those external inventory paths before handing its suite list back to it.
 Repository suites and every available external suite still run through the shared driver.
 """

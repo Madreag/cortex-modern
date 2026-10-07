@@ -6,7 +6,7 @@ from acceptance_rows import judge
 
 
 ROWS = ("spectator", "mod-match", "mod-refusal", "world-join", "image-sizes", "world-soak")
-BOXES = ("pc", "edith", "mac", "linux")
+BOXES = ("pc", "remote", "mac", "linux")
 
 
 def hashes(first=1, last=1201, cadence=1):
@@ -30,9 +30,9 @@ def good(row):
                 tree_hashes={b: "a"*64 for b in BOXES}, module="VoidWanderers.rte",
                 activity="Void Wanderers", installed_activity="Void Wanderers",
                 transfer=transfer(), configuration=dict(seats=3, world_max_spectators=1),
-                seated=["pc", "mac", "linux"], spectator="edith",
+                seated=["pc", "mac", "linux"], spectator="remote",
                 watch=dict(first=300, last=600, image_received=True, role="Spectator", hashes=hashes(300, 600)),
-                throttle=dict(start_ms=5000, end_ms=35000, sim_cost_us=500000, process="edith"),
+                throttle=dict(start_ms=5000, end_ms=35000, sim_cost_us=500000, process="remote"),
                 promotion=dict(host_authorized=True, freed_seat=2, seat=2, actor=123,
                                ticket_incarnation=2, applied_incarnation=2, applied_seat=2,
                                applied_actor=123, activation_tick=800, input_tick=801,
@@ -41,8 +41,8 @@ def good(row):
                              before="a"*64, altered="b"*64, restored="a"*64,
                              reason="module manifest mismatch", log_text="module manifest mismatch: VoidWanderers.rte",
                              landing_text="module manifest mismatch: VoidWanderers.rte", joined=False,
-                             refusal_tick=600, survivors=["pc", "edith", "mac"]),
-                join=dict(peer="edith", host_tick=1200, activation_tick=1201, last_tick=1801,
+                             refusal_tick=600, survivors=["pc", "remote", "mac"]),
+                join=dict(peer="remote", host_tick=1200, activation_tick=1201, last_tick=1801,
                           directory="public-default", nat_to_nat=True, stun=True, route="direct"),
                 offered_scenes=["Grasslands", "Desert"], build=dict(configuration="Final", sanitizer=False),
                 scenes=[dict(name=n, archive_bytes=34567, received_bytes=34567, capture_count=1,
@@ -52,7 +52,7 @@ def good(row):
                           journal=[dict(minute=m, bytes=123*m) for m in (10,30,50,60)]),
                 census={"pc": [dict(uptime_ms=m*60000, process_bytes=100*1024**2,
                                     instrument_bytes=0) for m in range(62)],
-                        "edith": [dict(uptime_ms=m*60000, process_bytes=100*1024**2,
+                        "remote": [dict(uptime_ms=m*60000, process_bytes=100*1024**2,
                                        instrument_bytes=0) for m in range(12)]})
     if row in ("world-join", "world-soak"):
         data["live"] = hashes(1201, 1801)
@@ -64,8 +64,8 @@ def good(row):
         data["watch"].update(first=1201, last=1861, hashes=hashes(1201, 1861))
         data["promotion"].update(activation_tick=4000, input_tick=4001, input_created_tick=4001)
     if row == "world-soak":
-        data["peers"] = {"pc": peer(1, 219601), "edith-first": peer(1, 219601, "edith"), "edith": peer(180001, 219601, "edith")}
-        data['census']['edith-first'] = deepcopy(data['census']['pc'])
+        data["peers"] = {"pc": peer(1, 219601), "remote-first": peer(1, 219601, "remote"), "remote": peer(180001, 219601, "remote")}
+        data['census']['remote-first'] = deepcopy(data['census']['pc'])
         data["join"].update(host_tick=180000, activation_tick=180001, last_tick=219601)
         data["live"] = hashes(180001, 219601)
         data["fullstate"] = hashes(180060, 219600, 60)
@@ -96,12 +96,12 @@ class AcceptanceRows(unittest.TestCase):
                 result = judge(row, good(row))
                 self.assertTrue(result["passed"], result)
 
-    def test_four_box_rows_use_the_declared_z13_host(self):
+    def test_four_box_rows_use_the_declared_laptop_host(self):
         for row in ('mod-match', 'world-join'):
             with self.subTest(row=row):
                 data = good(row)
-                data['host_box'] = 'z13'
-                data['peers']['pc']['box'] = 'z13'
+                data['host_box'] = 'laptop'
+                data['peers']['pc']['box'] = 'laptop'
                 self.assertTrue(judge(row, data)['passed'])
                 data['peers']['pc']['box'] = 'pc'
                 self.assert_rejected(row, data, 'peers')

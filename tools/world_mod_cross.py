@@ -25,10 +25,8 @@ ROWS = ("mod-match", "mod-refusal", "world-join", "world-soak")
 DRIVER_FILES = ("cross_peers.py", "cross_report.py", "e2e_video.py", "feel/report.py", "feel/records.py", "world_mod_cross.py",
                 "world_soak.py", "world_soak_tasks.py", "acceptance_rows.py", "acceptance_evidence.py", "acceptance_cross_report.py", "acceptance_fixed_gates.py", "acceptance_mod.py",
                 "acceptance_runtime.py", "acceptance_box_mods.py", "run_sim_test.py", "win32_test_runner.py", "posix_test_runner.py",
-                "feel_measure.py", "feel/harness_cost.py", "feel/host_loss.py", "e2e/ownership.py", "edith/remote_box.py",
-                "acceptance_native_runtime.py", "acceptance_frozen_tools.py", "acceptance_remote_tasks.py",
-                "acceptance_clock_brackets.py", "acceptance_spectator.py", "acceptance_spectator_tasks.py",
-                "acceptance_box_lease.py", "acceptance_transfer.py", "acceptance_frozen_report.py", "acceptance_native_load.py")
+                "feel_measure.py", "feel/harness_cost.py", "feel/host_loss.py", "e2e/ownership.py", "remote/remote_box.py",
+                "acceptance_frozen_tools.py", "acceptance_clock_brackets.py", "acceptance_spectator.py", "acceptance_transfer.py", "acceptance_frozen_report.py", "acceptance_native_load.py")
 
 
 def named_row(arguments):
@@ -72,37 +70,37 @@ def configure_plan(plan, row, mod_receipts=None):
     for module in DRIVER_FILES:
         plan.setdefault("driver_sources", {})[module] = sha256(Path(__file__).parent/module)
     names = {spec["peer"] for spec in plan["specs"]}
-    if names != {"erol", "edith", "mac", "linux"} or plan["host"] != "erol":
+    if names != {"pc", "remote", "mac", "linux"} or plan["host"] != "pc":
         raise ValueError(f"acceptance peers {sorted(names)} hosted by {plan['host']!r} are not the four named boxes with the PC hosting")
     if len({spec["box"] for spec in plan["specs"]}) != 4:
         raise ValueError(f"acceptance peers share machines: {sorted({spec['box'] for spec in plan['specs']})}")
     world = row.startswith("world-")
     if row == "world-soak":
-        plan["specs"] = [s for s in plan["specs"] if s["peer"] in ("erol", "edith")]
-        plan["instances"] = [s for s in plan["instances"] if s["name"] in ("erol", "edith")]
+        plan["specs"] = [s for s in plan["specs"] if s["peer"] in ("pc", "remote")]
+        plan["instances"] = [s for s in plan["instances"] if s["name"] in ("pc", "remote")]
         used = {s["box"] for s in plan["specs"]}
         plan["boxes"] = [b for b in plan["boxes"] if b["name"] in used]
-        late = next(s for s in plan['specs'] if s['peer'] == 'edith')
+        late = next(s for s in plan['specs'] if s['peer'] == 'remote')
         def initial_copy(value):
-            if isinstance(value, str): return value.replace('/edith/', '/edith-first/')
+            if isinstance(value, str): return value.replace('/remote/', '/remote-first/')
             if isinstance(value, list): return [initial_copy(item) for item in value]
             if isinstance(value, dict): return {key: initial_copy(item) for key, item in value.items()}
             return value
         initial = initial_copy(late)
-        initial['peer'] = 'edith-first'
-        initial['env']['CC_TEST_CROSS_INSTANCE'] = 'edith-first'
-        initial['flags'] = flag(initial['flags'], '-net-player-name', 'edith-first')
+        initial['peer'] = 'remote-first'
+        initial['env']['CC_TEST_CROSS_INSTANCE'] = 'remote-first'
+        initial['flags'] = flag(initial['flags'], '-net-player-name', 'remote-first')
         if 'port_block' in initial:
             initial['port_block'] = [port+5 for port in initial['port_block']]
             initial['flags'] = flag(initial['flags'], '-net-port', initial['port_block'][0])
         plan['specs'].insert(1, initial)
-        template = next(p for p in plan['instances'] if p['name'] == 'edith')
-        plan['instances'].insert(1, {**deepcopy(template), 'name':'edith-first', **({'port_block':initial['port_block']} if 'port_block' in initial else {})})
+        template = next(p for p in plan['instances'] if p['name'] == 'remote')
+        plan['instances'].insert(1, {**deepcopy(template), 'name':'remote-first', **({'port_block':initial['port_block']} if 'port_block' in initial else {})})
         for box in plan['boxes']:
             if box['name'] == late['box']:
                 box['peers_per_box'] = 2
                 if 'ports' in box and initial['port_block'][-1] > box['ports'][-1]:
-                    raise ValueError('EDITH needs two disjoint instance port blocks')
+                    raise ValueError('REMOTE needs two disjoint instance port blocks')
         from world_soak import configuration
         plan["soak"] = configuration(max(3660, (plan["ticks"]-1)//60))
         plan["ticks"] = plan["soak"]["ticks"]
@@ -116,9 +114,9 @@ def configure_plan(plan, row, mod_receipts=None):
         plan["module_tree_sha256"] = digest
     plan.update(acceptance_row=row, fullstate_every=60, faults=[], capture_barriers=[], preserve_evidence=True)
     if row == "world-join":
-        plan["late_join"] = dict(peer="edith", host_tick=1200)
+        plan["late_join"] = dict(peer="remote", host_tick=1200)
     elif row == "world-soak":
-        plan["late_join"] = dict(peer="edith", host_elapsed_s=3000)
+        plan["late_join"] = dict(peer="remote", host_elapsed_s=3000)
     elif row == "mod-refusal":
         plan["late_join"] = dict(peer="linux", host_tick=600)
     else:
@@ -209,7 +207,7 @@ def check_mod_preflights(plan, preflights):
         return
     values = {}
     for spec in plan["specs"]:
-        canonical = "pc" if spec["peer"] == "erol" else spec["peer"]
+        canonical = "pc" if spec["peer"] == "pc" else spec["peer"]
         value = preflights.get(spec["box"], {}).get("acceptance_module")
         if value is None:
             raise ValueError("native preflight omitted the installed mod tree")
@@ -533,9 +531,9 @@ def fetch_preserved(box, root, local, compress_records=False, stream_transfer=Fa
     import gzip
     import tarfile
     from acceptance_box_mods import shell_command
-    name = "edith" if box["kind"] == "windows-task" else "mac" if box["ssh"] == "Erol-Mac" else "linux"
+    name = "remote" if box["kind"] == "windows-task" else "mac" if box["ssh"] == "host-c" else "linux"
     target = {**box, "name": name}
-    prefix = ["env", "COPYFILE_DISABLE=1", "tar"] if name == "mac" else ["tar.exe" if name == "edith" else "tar"]
+    prefix = ["env", "COPYFILE_DISABLE=1", "tar"] if name == "mac" else ["tar.exe" if name == "remote" else "tar"]
     exclusions = ["runtime", "private-runtime", "*.ticket", "*.key", "*.pem", "evidence.tar"]
     args = [*prefix, "-czf" if compress_records else "-cf", "-", "-C", root, *("--exclude="+p for p in exclusions), "."]
     local = Path(local)

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import edith_cross
+import two_box_match
 from test_soak_oracle_evidence import analyzed_pair
 
 
@@ -18,7 +18,7 @@ class RelayReceipts(unittest.TestCase):
             meta['machines']['client'] = 'Linux'
             (root / 'client-build.json').write_text('{}')
             with contextlib.redirect_stdout(io.StringIO()):
-                self.assertFalse(edith_cross.analyze_match(harness, root, meta)['passed'])
+                self.assertFalse(two_box_match.analyze_match(harness, root, meta)['passed'])
 
     def test_each_relay_only_peer_needs_selected_route_and_same_session_offer(self):
         for missing in ('none', 'offer', 'selected', 'session', 'client', 'host', 'contradiction'):
@@ -37,7 +37,7 @@ class RelayReceipts(unittest.TestCase):
                     (root / 'service.log').write_text('INFO relay_offer_issued ' + json.dumps(dict(session_id='session-one',
                         match_id='match-one', provider='coturn', generation=1, expires_at=1600, server_count=1)))
                 with contextlib.redirect_stdout(io.StringIO()):
-                    result = edith_cross.analyze_match(harness, root, meta)
+                    result = two_box_match.analyze_match(harness, root, meta)
                 self.assertEqual(result['passed'], missing == 'none', result['relay'])
 
     def test_directory_mint_receipt_contains_only_public_evidence(self):
@@ -66,7 +66,7 @@ class RelayReceipts(unittest.TestCase):
             harness, meta = analyzed_pair(root)
             meta.update(path='directory-relay', session_id='session-one')
             with contextlib.redirect_stdout(io.StringIO()):
-                result = edith_cross.analyze_match(harness, root, meta)
+                result = two_box_match.analyze_match(harness, root, meta)
         self.assertFalse(result['passed'], result)
 
 

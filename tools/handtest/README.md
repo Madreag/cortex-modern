@@ -6,12 +6,13 @@
 
 ## Isolation
 
-Each instance gets a private runtime `D:\mx\handtest\<role>-<n>\`:
+`<kit>` is this folder. Each instance gets a private runtime `<kit>\instances\<role>-<n>\`:
 
 - `Userdata\Settings.ini` copied from the build's template and pinned in place
   (idempotent - keys are replaced, never duplicated): windowed 1280x720, sound
   on, `DeltaTime = 0.016667`, `SkipIntro`, and the same lockstep pins the harness
-  uses (`tools/feel_measure.py` `private_settings`).
+  uses (`tools/feel_measure.py` `private_settings`). Both scripts accept
+  `-InstanceRoot <folder>`; use the same folder for launching and collecting.
 - `Data` is a junction to the build's `Data` - shared read-only content,
   zero copies. Never delete the runtime root with a junction-following tool.
 - `Mods`, `ScreenShots`, `Temp`, `Autosaves` are per-instance; `TEMP`/`TMP`
@@ -32,7 +33,7 @@ headless+lockstep. `-FakeLagMs` works in both modes (`-net-fake-lag`).
 `play.ps1 -Headless` runs the same flow through `tools/isolated_launch.py`
 (CCCP_HEADLESS=1, private hidden desktop) with a menu-script driving the real
 lobby UI and `-net-match-ticks` bounding the match. Its runtimes live under
-`D:\mx\handtest\_selfcheck\` - the collector never mixes them into a user pack.
+`<kit>\instances\_selfcheck\` - the collector never mixes them into a user pack.
 
 ## Evidence
 
@@ -41,4 +42,4 @@ lobby UI and `-net-match-ticks` bounding the match. Its runtimes live under
 per instance, plus a `MANIFEST.txt` (build sha + dirty flag of the exe's tree,
 exe sha256, argv, exit codes, per-file sizes/mtimes). `reconnect.ticket` is not
 collected - a live rejoin credential. Recursive copies never follow junctions.
-`-Source <dir>` packs a different root (e.g. `D:\mx\handtest\_selfcheck`).
+`-InstanceRoot <dir>` packs a different root (e.g. `<kit>\instances\_selfcheck\`).

@@ -62,8 +62,8 @@ def fixture(root, runtime=True):
         pe(crt/name, ('vcruntime140_1.dll',) if name == 'msvcp140.dll' else ())
     receipt = dict(commit=git(repo, 'rev-parse', 'HEAD').decode().strip(),
                    executable_sha256=package.sha256(repo/package.EXECUTABLE), configuration='Final',
-                   build_log='C:\\Users\\builder\\private-build.log',
-                   lead_build_receipt=dict(label='private-build', repo='D:\\private-tree'))
+                   build_log=str(root/'private-build.log'),
+                   lead_build_receipt=dict(label='private-build', repo='private-tree'))
     receipt_path = repo/'tools/cross_peers/build.json'; receipt_path.parent.mkdir(parents=True)
     receipt_path.write_text(json.dumps(receipt), encoding='utf-8')
     return repo, install, crt

@@ -6,10 +6,10 @@ import cross_report
 
 
 def attempt():
-    names = dict(erol='EROL-PC', edith='EDITH', mac='Mac', linux='Linux')
-    manifest = dict(scenario='soak', acceptance_row=18, source_sha='a'*40, host='erol', ticks=72000, fullstate_every=600,
+    names = dict(pc='box-a', remote='REMOTE', mac='Mac', linux='Linux')
+    manifest = dict(scenario='soak', acceptance_row=18, source_sha='a'*40, host='pc', ticks=72000, fullstate_every=600,
                     boxes=[dict(name=box) for box in names.values()], instances=[dict(name=name, box=box) for name, box in names.items()],
-                    specs=[dict(peer=name, box=box, role='host' if name == 'erol' else 'player') for name, box in names.items()],
+                    specs=[dict(peer=name, box=box, role='host' if name == 'pc' else 'player') for name, box in names.items()],
                     preflights={box: dict(head='a'*40, machine_id=box, executable_sha256='b'*64,
                         build=dict(commit='a'*40, executable_sha256='b'*64)) for box in names.values()},
                     capture_rows_pending=[], faults=[dict(id='stall', action='live-stall', peer='mac')])
@@ -20,7 +20,7 @@ def attempt():
     peers = {name: dict(feel_gated=True, feel_pass=True, record=dict(exe_sha256='b'*64),
                        memory_by_incarnation={'0': dict(passed=True, sizes={'private': {}}, missing_samples=0)},
                        memory_census={'0': dict(status='PASS', warm_slope_bound=10)})
-             for name in ('erol', 'edith', 'mac', 'linux')}
+             for name in ('pc', 'remote', 'mac', 'linux')}
     return manifest, checks, peers, [dict(status='PASS', category='combat')], []
 
 

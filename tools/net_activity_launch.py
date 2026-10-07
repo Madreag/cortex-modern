@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -25,7 +26,7 @@ def sha(path):
 
 
 def stamp():
-    return subprocess.check_output(["C:/Program Files/Git/usr/bin/date.exe", "+%Y-%m-%d %H:%M:%S MST"], text=True).strip()
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 def rules_for(variant):
@@ -1083,7 +1084,7 @@ def funds_preview(options):
     if samples["host_p1"] and not checks["peek_used_the_canonical_tick"]:
         print("FAIL the preview peeked in-flight buys on a tick other than the committed one")
     if not all(checks.values()):
-        print("observed:\n" + observed())
+        print("observed:" + "\n" + observed())
     dump_pairs = []
     # The world dump only: the peers' extras carry a per-process accumulator and are written beside it, not compared.
     for suffix in ("funds_p1", "funds_pd"):

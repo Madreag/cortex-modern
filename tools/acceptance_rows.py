@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 
 ROWS = ("spectator", "mod-match", "mod-refusal", "world-join", "image-sizes", "world-soak")
-BOXES = {"pc", "edith", "mac", "linux"}
+BOXES = {"pc", "remote", "mac", "linux"}
 MIB = 1024**2
 
 
@@ -108,14 +108,14 @@ def transfer_gate(check, value, prefix="transfer"):
 
 def named_boxes(check, facts):
     host = facts.get('host_box', 'pc')
-    if not check.require(host in ('pc', 'z13'), 'host_box', 'host is outside the named four-box roster'):
+    if not check.require(host in ('pc', 'laptop'), 'host_box', 'host is outside the named four-box roster'):
         return set()
-    return {host, 'edith', 'mac', 'linux'}
+    return {host, 'remote', 'mac', 'linux'}
 
 
 def join_gate(check, facts, boxes=True, progress=True):
     join = facts.get("join", {})
-    check.require(join.get("peer") == "edith", "join", "internet late joiner is not EDITH")
+    check.require(join.get("peer") == "remote", "join", "internet late joiner is not REMOTE")
     check.require(number(join.get("host_tick")) and join["host_tick"] >= 1200, "join", "join starts before 1200 host frames")
     check.require(join.get("directory") in ("public-default", "loopback-fallback"), "join", "directory route missing")
     if join.get("directory") == "loopback-fallback":
@@ -135,7 +135,7 @@ def join_gate(check, facts, boxes=True, progress=True):
         check.require({p.get("box") for p in peers.values()} == named_boxes(check, facts), "peers", "machine set differs from the declared host roster")
     seated = [name for name in peers if name != join.get("peer")]
     peer_gate(check, peers, seated, timing=True)
-    peer_gate(check, peers, ["edith"])
+    peer_gate(check, peers, ["remote"])
     if progress:
         transfer_gate(check, facts.get("transfer", {}))
     else:
@@ -227,7 +227,7 @@ def judge(row, facts):
             from acceptance_clock_brackets import errors as clock_errors
             check.failures.extend(clock_errors(facts))
         else:
-            check.require(clock_box in ('pc','edith') and all(peers.get(name,{}).get('box') == clock_box for name in [*seated,spectator]),
+            check.require(clock_box in ('pc','remote') and all(peers.get(name,{}).get('box') == clock_box for name in [*seated,spectator]),
                           'throttle', 'crawl and seated timing must share their actual native clock domain')
         check.require(cost.get("process") == spectator and number(cost.get("sim_cost_us")) and cost["sim_cost_us"] >= 100000,
                       "throttle", "crawl cost was not applied to the spectator")
@@ -268,14 +268,14 @@ def judge(row, facts):
             check.require(number(late) and 3000 <= late < 3060, "soak", "late join was not at minute 50")
             check.require(soak.get("autosave_seconds") == 60 and soak.get("fullstate_every") == 60 and
                           soak.get("census_every_s") == 60, "soak", "autosave, hash or census cadence missing")
-            check.require(set(peers) == {"pc", "edith-first", "edith"}, "peers", "world host and the two EDITH seats are not covered")
+            check.require(set(peers) == {"pc", "remote-first", "remote"}, "peers", "world host and the two REMOTE seats are not covered")
             activation = facts.get('join', {}).get('activation_tick')
             if type(activation) is int:
                 hash_gate(check, facts.get('initial_live', {}), 'initial_live', 1, activation-1)
                 hash_gate(check, facts.get('initial_fullstate', {}), 'initial_fullstate', 60, (activation-1)//60*60, 60)
             details["memory"] = {}
             if number(duration) and number(late):
-                for name, seconds in (("pc", duration), ("edith-first", duration), ("edith", duration-late)):
+                for name, seconds in (("pc", duration), ("remote-first", duration), ("remote", duration-late)):
                     details["memory"][name] = census_gate(check, facts.get("census", {}).get(name, []), f"census.{name}", seconds)
             journal = soak.get("journal", [])
             check.require([r.get("minute") for r in journal] == [10, 30, 50, 60] and

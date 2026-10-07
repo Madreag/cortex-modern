@@ -1,23 +1,24 @@
-"""The two-machine proof: one lockstep match between this box (EROL-PC) and EDITH over the internet, measured by the
-feel driver, and EDITH's own single-player tick budget.
+"""The two-machine proof: one lockstep match between this box (box-a) and REMOTE over the internet, measured by the
+feel driver, and REMOTE's own single-player tick budget.
 
-    python tools/edith_cross.py --scenario mp-host-join --direction host-here|host-edith --path direct|relay|ip
-                                --runs N --out D:/mx/opus-edith-cross-20260926/<run> [--dry-run]
-    python tools/edith_cross.py --scenario sp-soak [--minutes 10] --out D:/mx/opus-edith-cross-20260926/<run>
+    python tools/two_box_match.py --scenario mp-host-join --direction host-here|host-remote --path direct|relay|ip
+                                --runs N --out <scratch>/<run> [--dry-run]
+    python tools/two_box_match.py --scenario sp-soak [--minutes 10] --out <scratch>/<run>
 
-The local peer starts through run_sim_test.make_run. The EDITH peer starts inside the owner's interactive session:
-this file is copied to EDITH, tools/edith/session1.ps1 becomes D:/mx/session1/run.ps1 and the cortex-session1 task
+The local peer starts through run_sim_test.make_run. The REMOTE peer starts inside the owner's interactive session:
+this file is copied to REMOTE, tools/remote/session1.ps1 becomes the configured session script and the cortex-session1 task
 runs it, which calls this file with --remote-peer, again through make_run and the private-desktop runner with
 CCCP_HEADLESS=1. Both boxes use the same absolute run directory, so after the fetch the feel driver's own reducers
 (feel_measure.reduce_timing_case and item9a_gates) read the pair exactly as they read one of its local arms.
 
 Paths: direct = ICE with the engine's public STUN list, DirectOnly, the rendezvous through a session directory on this
-box's loopback that `ssh -R` also opens on EDITH's loopback (signalling only; the match's packets take the route ICE
+box's loopback that `ssh -R` also opens on REMOTE's loopback (signalling only; the match's packets take the route ICE
 selects); relay = ICE RelayOnly through the TURN server named for each side; ip = a plain -net-join to the host's public
 address, ICE off. One verdict line per run: frames/desyncs per peer, holds, waits over 50 ms, % waiting, the route lines.
 """
 from __future__ import annotations
 
+import tempfile
 import argparse
 import datetime as dt
 import hashlib
@@ -30,32 +31,32 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / 'edith'))
-from remote_box import SSH_NOISE, WINDOWS_TAR, RemoteBox  # noqa: E402  (shipped beside this file on EDITH)
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'remote'))
+from remote_box import SSH_NOISE, WINDOWS_TAR, RemoteBox  # noqa: E402  (shipped beside this file on REMOTE)
 
 HERE = Path(__file__).resolve().parent
 # The calling lane's own scratch root, the same absolute path on both boxes.
-LANE = os.environ.get('CC_EDITH_CROSS_LANE', 'opus-edith-cross-20260926')
-SCRATCH = Path('D:/mx') / LANE  # the same absolute path on both boxes
+LANE = os.environ.get('CC_REMOTE_CROSS_LANE', 'two-box-match')
+SCRATCH = Path(os.environ.get('CCCP_SCRATCH_ROOT', str(Path(tempfile.gettempdir())/'cortex-modern'))) / LANE  # the same absolute path on both boxes
 PAYLOAD = SCRATCH / 'payload'
-SESSION1_SCRIPT = 'D:/mx/session1/run.ps1'
+SESSION1_SCRIPT = os.environ.get('CCCP_SESSION_SCRIPT', 'session/run.ps1')
 TASK = 'cortex-session1'
-REPO = Path('D:/Projects/takeover-build')
+REPO = Path(__file__).resolve().parents[1]
 GAME_PORT, DIRECTORY_PORT = 49860, 49875  # the lane's block is 49860-49879 on both boxes
 BRIDGE_UDP, BRIDGE_TCP = 49876, 49877
-# EDITH reserves TCP 49675-49974 (netsh int ipv4 show excludedportrange), so the tunnel's loopback ends there sit outside it.
-EDITH_TCP = {DIRECTORY_PORT: 49985, BRIDGE_TCP: 49986}
-ADDRESS = {'here': '203.0.113.10', 'edith': '203.0.113.20'}
-MACHINE = {'here': 'EROL-PC', 'edith': 'EDITH'}
-# The TURN URL each side can reach; EDITH reaches this site only through its public address.
-TURN = {'here': 'turn:192.168.50.122:3479?transport=udp', 'edith': 'turn:203.0.113.10:3479?transport=udp'}
+# REMOTE reserves TCP 49675-49974 (netsh int ipv4 show excludedportrange), so the tunnel's loopback ends there sit outside it.
+REMOTE_TCP = {DIRECTORY_PORT: 49985, BRIDGE_TCP: 49986}
+ADDRESS = {'here': '203.0.113.10', 'remote': '203.0.113.20'}
+MACHINE = {'here': 'box-a', 'remote': 'REMOTE'}
+# The TURN URL each side can reach; REMOTE reaches this site only through its public address.
+TURN = {'here': os.environ.get('CCCP_TURN_LOCAL_URL', ''), 'remote': os.environ.get('CCCP_TURN_REMOTE_URL', '')}
 # The Cloudflare key stays in this file on this box: only its path is passed, to the run's own directory.
-CLOUDFLARE_TURN_CONFIG = Path('D:/mx/coturn-20260920/turn-config-cloudflare.json')
-BOX_LOG = Path('D:/mx/inventory-confirming-2-20260926/steps.log')
+CLOUDFLARE_TURN_CONFIG = Path(os.environ.get('CCCP_CLOUDFLARE_TURN_CONFIG', 'relay/turn-config-cloudflare.json'))
+BOX_LOG = Path(os.environ.get('CCCP_BOX_LOG', str(SCRATCH/'steps.log')))
 SECRET_KEYS = ('NetworkTurnUser', 'NetworkTurnPass', 'NetworkPlayerTurnUser', 'NetworkPlayerTurnPass')
 # The Linux box (BOXES.md): the lane's directory there, its clone of the tree at the tip and that tree's gcc build.
-LINUX_SSH = '3090'
-LINUX_LANE = f'/home/erol/cortex-workers/{LANE}'
+LINUX_SSH = os.environ.get('CCCP_LINUX_SSH', 'host-d')
+LINUX_LANE = os.environ.get('CCCP_LINUX_RUN_ROOT', f'.cortex-modern/runs/{LANE}')
 LINUX_REPO = f'{LINUX_LANE}/repo'
 LINUX_BINARY = f'{LINUX_REPO}/build-gcc/CortexCommand'
 # The soak (tools/soak_two_peer.py's defaults): an autosave a minute on the host, three 1.5 s stalls of the client, the memory
@@ -66,7 +67,7 @@ TICK_MS = 1000 / 60
 SCRATCH_LIMIT = 4_000_000_000
 MST = dt.timezone(dt.timedelta(hours=-7))
 SCENARIOS = {'mp-host-join': 'two-peer service match (host and join), the feel driver measuring both peers',
-             'sp-soak': 'single-player FeelBaseline duel on EDITH alone: the sim tick budget'}
+             'sp-soak': 'single-player FeelBaseline duel on REMOTE alone: the sim tick budget'}
 DRY_RUN = False
 
 
@@ -75,7 +76,7 @@ def stamp():
 
 
 def say(message):
-    print(f'[edith-cross] {message}', flush=True)
+    print(f'[two-box-match] {message}', flush=True)
 
 
 def write_json(path, value):
@@ -83,7 +84,7 @@ def write_json(path, value):
 
 
 def harness(tools):
-    """The repo's own harness: this file's directory here, the engine tree's tools on EDITH."""
+    """The repo's own harness: this file's directory here, the engine tree's tools on REMOTE."""
     if str(tools) not in sys.path:
         sys.path.insert(0, str(tools))
     import feel_measure
@@ -159,7 +160,7 @@ def redact(h, run, spec, spec_path=None):
 
 
 def remote_peer(spec_path):
-    """Runs on EDITH inside session 1: one peer through the runner, then its records packed for the fetch."""
+    """Runs on REMOTE inside session 1: one peer through the runner, then its records packed for the fetch."""
     spec_path = Path(spec_path)
     spec = json.loads(spec_path.read_text(encoding='utf-8'))
     h = harness(Path(spec['repo']) / 'tools')
@@ -241,10 +242,10 @@ def tick_budget(raw, open_record):
                 loop_overhead_ms=statistics.fmean(idle) if idle else None, idle_iterations=len(idle))
 
 
-# --- EDITH over ssh --------------------------------------------------------------------------------------------------
+# --- REMOTE over ssh --------------------------------------------------------------------------------------------------
 
 def box():
-    return RemoteBox('edith', TASK, SESSION1_SCRIPT, dry_run=DRY_RUN, say=say)
+    return RemoteBox('remote', TASK, SESSION1_SCRIPT, dry_run=DRY_RUN, say=say)
 
 
 def run_local(argv, timeout=120, check=True, what=None):
@@ -273,9 +274,9 @@ def exe_hashes(repo, remote_repo=None):
 
 
 def ship_driver():
-    remote_mkdir(PAYLOAD / 'edith')
-    scp_to(Path(__file__), PAYLOAD / 'edith_cross.py')
-    scp_to(HERE / 'edith/remote_box.py', PAYLOAD / 'edith/remote_box.py')
+    remote_mkdir(PAYLOAD / 'remote')
+    scp_to(Path(__file__), PAYLOAD / 'two_box_match.py')
+    scp_to(HERE / 'remote/remote_box.py', PAYLOAD / 'remote/remote_box.py')
 
 
 def wait_task_idle(budget_s=900):
@@ -289,15 +290,15 @@ def start_session1(root, spec, label):
     require_public(spec['settings']);require_public(spec['env'])
     spec_path = root / f'{spec["peer"]}-spec.json'
     if DRY_RUN:
-        say(f'dry-run: EDITH {spec["peer"]} spec {spec_path} through {TASK} ({SESSION1_SCRIPT}): {" ".join(spec["flags"])}')
-        say(f'dry-run: EDITH {spec["peer"]} settings ' + json.dumps({key: ('redacted' if key in SECRET_KEYS else value)
+        say(f'dry-run: REMOTE {spec["peer"]} spec {spec_path} through {TASK} ({SESSION1_SCRIPT}): {" ".join(spec["flags"])}')
+        say(f'dry-run: REMOTE {spec["peer"]} settings ' + json.dumps({key: ('redacted' if key in SECRET_KEYS else value)
                                                                      for key, value in spec['settings'].items()}))
         return
     local_spec = root / f'{label}-spec.local.json'
     write_json(local_spec, spec)
-    script = (HERE / 'edith/session1.ps1').read_text(encoding='utf-8')
+    script = (HERE / 'remote/session1.ps1').read_text(encoding='utf-8')
     for key, value in dict(REPO=spec['repo'], LOG=root / 'session1.log', DONE=root / 'session1.done',
-                           DRIVER=PAYLOAD / 'edith_cross.py', SPEC=spec_path).items():
+                           DRIVER=PAYLOAD / 'two_box_match.py', SPEC=spec_path).items():
         script = script.replace('{{' + key + '}}', Path(value).as_posix() if key != 'REPO' else str(value))
     local_script = root / f'{label}-session1.ps1'
     local_script.write_text(script, encoding='utf-8')
@@ -305,7 +306,7 @@ def start_session1(root, spec, label):
     redacted = dict(spec, settings={key: ('redacted' if key in SECRET_KEYS else value) for key, value in spec['settings'].items()})
     write_json(local_spec, redacted)
     box().start_task(local_script)
-    say(f'{label}: {spec["peer"]} started on EDITH through {TASK}')
+    say(f'{label}: {spec["peer"]} started on REMOTE through {TASK}')
 
 
 def soak_stalls(ticks):
@@ -344,13 +345,13 @@ class LinuxPeer:
         write_json(spec_path, self.spec)
         remote_spec = f'{self.remote_root}/{self.peer}-spec.json'
         payload = f'{LINUX_LANE}/payload'
-        run([*SSH_LINUX, f'mkdir -p {self.remote_root} {payload}/edith'])
+        run([*SSH_LINUX, f'mkdir -p {self.remote_root} {payload}/remote'])
         for source, target in ((spec_path, remote_spec), (self.local_root / 'input.txt', f'{self.remote_root}/input.txt'),
                                (self.local_root / 'input-schedule.json', f'{self.remote_root}/input-schedule.json'),
-                               (Path(__file__), f'{payload}/edith_cross.py'), (HERE / 'edith/remote_box.py', f'{payload}/edith/remote_box.py')):
+                               (Path(__file__), f'{payload}/two_box_match.py'), (HERE / 'remote/remote_box.py', f'{payload}/remote/remote_box.py')):
             run(['scp', '-q', '-o', 'BatchMode=yes', str(source), f'{LINUX_SSH}:{target}'])
         command = (f'cd {LINUX_REPO} && export CCCP_HEADLESS=1 PYTHONDONTWRITEBYTECODE=1 CCCP_TEST_BINARY={LINUX_BINARY} '
-                   f'CC_EDITH_CROSS_LANE={LANE} DISPLAY=${{DISPLAY:-:0}} && python3 {payload}/edith_cross.py --remote-peer {remote_spec}')
+                   f'CC_REMOTE_CROSS_LANE={LANE} DISPLAY=${{DISPLAY:-:0}} && python3 {payload}/two_box_match.py --remote-peer {remote_spec}')
         self.process = subprocess.Popen([*SSH_LINUX, command], stdin=subprocess.DEVNULL, stdout=self.log_path.open('w'),
                                         stderr=subprocess.STDOUT, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         say(f'{self.peer} started on the Linux box (ssh pid {self.process.pid})')
@@ -453,7 +454,7 @@ def wait_done(root, budget_s):
 
 
 def fetch(root, names_like, excludes):
-    """Packs the EDITH peer's files (never its runtime, whose Data is a junction) and unpacks them here."""
+    """Packs the REMOTE peer's files (never its runtime, whose Data is a junction) and unpacks them here."""
     box().fetch_tar(root, names_like, excludes)
 
 
@@ -481,8 +482,8 @@ def make_cert(root):
 
 
 class Tunnel:
-    """ssh -R: EDITH's 127.0.0.1:<its directory port> reaches the directory on this box's loopback (signalling only); with the
-    bridge, EDITH's 127.0.0.1:<bridge TCP port> reaches this box's end of the relay bridge too."""
+    """ssh -R: REMOTE's 127.0.0.1:<its directory port> reaches the directory on this box's loopback (signalling only); with the
+    bridge, REMOTE's 127.0.0.1:<bridge TCP port> reaches this box's end of the relay bridge too."""
 
     def __init__(self, log_path, bridge=False):
         self.log_path, self.process, self.bridge = Path(log_path), None, bridge
@@ -490,17 +491,17 @@ class Tunnel:
     def open(self):
         forwards = [DIRECTORY_PORT] + ([BRIDGE_TCP] if self.bridge else [])
         argv = ['ssh', '-N', '-o', 'ExitOnForwardFailure=yes',
-                *[part for port in forwards for part in ('-R', f'127.0.0.1:{EDITH_TCP[port]}:127.0.0.1:{port}')], 'edith']
+                *[part for port in forwards for part in ('-R', f'127.0.0.1:{REMOTE_TCP[port]}:127.0.0.1:{port}')], 'remote']
         if DRY_RUN:
             say('dry-run: ' + ' '.join(argv))
             return
         self.process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=self.log_path.open('w'), stderr=subprocess.STDOUT,
                                         creationflags=subprocess.CREATE_NO_WINDOW)
         time.sleep(4)
-        probe = ssh(f"$c = New-Object Net.Sockets.TcpClient; try {{ $c.Connect('127.0.0.1', {EDITH_TCP[DIRECTORY_PORT]}); 'open' }} "
+        probe = ssh(f"$c = New-Object Net.Sockets.TcpClient; try {{ $c.Connect('127.0.0.1', {REMOTE_TCP[DIRECTORY_PORT]}); 'open' }} "
                     f"catch {{ 'closed' }} finally {{ $c.Close() }}").strip()
         if self.process.poll() is not None or probe != 'open':
-            raise RuntimeError(f'the ssh -R tunnel did not open on EDITH (probe {probe}); see {self.log_path}')
+            raise RuntimeError(f'the ssh -R tunnel did not open on REMOTE (probe {probe}); see {self.log_path}')
 
     def close(self):
         if self.process and self.process.poll() is None:
@@ -532,14 +533,14 @@ def pump_frames(connection, deliver, counts, key):
         return
 
 
-def bridge_edith(bind, udp_port=None, tcp_port=None):
-    """Runs on EDITH in the ssh session: the engine's TURN socket talks UDP to <bind>:<udp_port> (EDITH's own LAN address:
+def bridge_remote(bind, udp_port=None, tcp_port=None):
+    """Runs on REMOTE in the ssh session: the engine's TURN socket talks UDP to <bind>:<udp_port> (REMOTE's own LAN address:
     the ICE sockets are bound to interface addresses, so a loopback TURN server is never tried); each source address
     gets its own TCP stream through the ssh -R forward to this box's end, which speaks UDP to the TURN server."""
     import socket
     import struct
     import threading
-    udp_port, tcp_port = udp_port or BRIDGE_UDP, tcp_port or EDITH_TCP[BRIDGE_TCP]
+    udp_port, tcp_port = udp_port or BRIDGE_UDP, tcp_port or REMOTE_TCP[BRIDGE_TCP]
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((bind, udp_port))
     flows, counts = {}, dict(up=0, down=0, flows=0)
@@ -606,18 +607,18 @@ class BridgeHere:
     def open(self):
         import threading
         threading.Thread(target=self.serve, daemon=True).start()
-        argv = ['ssh', 'edith', f"python '{(PAYLOAD / 'edith_cross.py').as_posix()}' --bridge-edith --bridge-bind {self.bind}"]
+        argv = ['ssh', 'remote', f"python '{(PAYLOAD / 'two_box_match.py').as_posix()}' --bridge-remote --bridge-bind {self.bind}"]
         self.remote = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=self.log_path.open('w'), stderr=subprocess.STDOUT,
                                        creationflags=subprocess.CREATE_NO_WINDOW)
         time.sleep(4)
         if self.remote.poll() is not None:
-            raise RuntimeError(f'the EDITH end of the relay bridge exited; see {self.log_path}')
+            raise RuntimeError(f'the REMOTE end of the relay bridge exited; see {self.log_path}')
 
     def close(self):
         if self.remote and self.remote.poll() is None:
             self.remote.terminate()
             self.remote.wait(timeout=10)
-        ssh("Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { $_.CommandLine -like '*edith_cross.py*--bridge-edith*' } "
+        ssh("Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { $_.CommandLine -like '*two_box_match.py*--bridge-remote*' } "
             "| ForEach-Object { Stop-Process -Id $_.ProcessId -Force }", check=False)
         self.listener.close()
         with self.log_path.open('a') as stream:
@@ -646,8 +647,8 @@ def turn_login():
 def network_settings(path, side, pin, login, peer='host'):
     if path == 'ip':
         return {'NetworkIceEnable': '0'}
-    rendezvous = {'SessionDirectoryUrl': f'127.0.0.1:{DIRECTORY_PORT if side == "here" else EDITH_TCP[DIRECTORY_PORT]}', 'SessionDirectoryCertSha256': pin,
-                  'SessionDirectoryInstallKey': f'edith-cross-{side}-install'}
+    rendezvous = {'SessionDirectoryUrl': f'127.0.0.1:{DIRECTORY_PORT if side == "here" else REMOTE_TCP[DIRECTORY_PORT]}', 'SessionDirectoryCertSha256': pin,
+                  'SessionDirectoryInstallKey': f'two-box-match-{side}-install'}
     if path == 'direct':
         return {**rendezvous, 'NetworkIceEnable': '1', 'NetworkConnectionMode': 'DirectOnly', 'NetworkHostRelayMode': 'Off'}
     if path in ('directory-relay','relay'):
@@ -702,8 +703,8 @@ def run_match(h, options, index, login):
     name = f'{options.direction}-{path_label(options)}-{index}'
     root = (options.out / name).resolve()
     port = GAME_PORT + (index - 1) % 10
-    host_side = 'here' if options.direction == 'host-here' else 'edith'
-    sides = {'host': host_side, 'client': 'edith' if host_side == 'here' else 'here'}
+    host_side = 'here' if options.direction == 'host-here' else 'remote'
+    sides = {'host': host_side, 'client': 'remote' if host_side == 'here' else 'here'}
     local_peer = 'host' if host_side == 'here' else 'client'
     remote_peer_name = 'client' if local_peer == 'host' else 'host'
     machines = {peer: 'LINUX-3090' if peer == 'client' and options.client_box == 'linux' else MACHINE[side] for peer, side in sides.items()}
@@ -747,7 +748,7 @@ def run_match(h, options, index, login):
 
     def spec(peer, session_id=None):
         made = match_spec(peer, root, port, role(peer, session_id), network_settings(options.path, sides[peer], pin, login, peer),
-                          repo=options.remote_repo or options.repo if sides[peer] == 'edith' else options.repo,
+                          repo=options.remote_repo or options.repo if sides[peer] == 'remote' else options.repo,
                           ticks=match_ticks(options), timeout=match_timeout(options), record=options.feel_records,
                           lean=options.instrumentation == 'lean')
         if options.soak:
@@ -772,7 +773,7 @@ def run_match(h, options, index, login):
             if options.path != 'ip':
                 session_id = '<session id>' if DRY_RUN else wait_session(directory, 120, lambda: True)
                 if not session_id:
-                    note = 'the EDITH host published no directory row within 120 s'
+                    note = 'the REMOTE host published no directory row within 120 s'
             else:
                 time.sleep(0 if DRY_RUN else 20)
             if not note:
@@ -934,7 +935,7 @@ def pair_build_evidence(root, meta, records):
 def analyze_match(h, root, meta):
     records = {peer: read_json(root / f'{peer}-record.json') for peer in ('host', 'client')}
     complete = all(row.get('exit_code') == 0 and row.get('evidence_complete') and not row.get('timed_out') for row in records.values())
-    manifest = dict(meta, mode='two-machine service e2e, EROL-PC <-> EDITH over the internet', ticks=meta.get('ticks', MATCH_TICKS), lag_ms=0, cap_hz=60,
+    manifest = dict(meta, mode='two-machine service e2e, box-a <-> REMOTE over the internet', ticks=meta.get('ticks', MATCH_TICKS), lag_ms=0, cap_hz=60,
                     instrumentation=meta['feel_records'], loss_percent=0, silent_tick=None, live_stalls=None, autosave_seconds=None,
                     per_peer_lag_ms={'host': 0, 'client': 0}, launches_complete=complete,
                     exe={peer: row.get('exe_sha256') for peer, row in records.items()})
@@ -1029,7 +1030,7 @@ def run_soak(h, options):
     root = options.out.resolve()
     ticks = int(round(options.minutes * 60 * 60))
     spec = soak_spec(root, ticks, options.repo)
-    say(f'soak on EDITH: {ticks} ticks ({options.minutes} min) under {root} {stamp()}')
+    say(f'soak on REMOTE: {ticks} ticks ({options.minutes} min) under {root} {stamp()}')
     if not DRY_RUN:
         root.mkdir(parents=True, exist_ok=False)
         looped_input(h, root / 'input.txt', ticks)
@@ -1045,7 +1046,7 @@ def run_soak(h, options):
     budget = read_json(root / 'tick-budget.json')
     record = read_json(root / 'sp-record.json')
     fmt = lambda key: '-' if budget.get(key) is None else f'{budget[key]:.2f}'
-    say(f'SOAK EDITH sp {budget.get("first_tick")}..{budget.get("last_tick")} exit={record.get("exit_code")} '
+    say(f'SOAK REMOTE sp {budget.get("first_tick")}..{budget.get("last_tick")} exit={record.get("exit_code")} '
         f'sim tick mean={fmt("mean_ms")} ms p50={fmt("p50_ms")} p99={fmt("p99_ms")} p99.9={fmt("p999_ms")} max={fmt("max_ms")} ms '
         f'(tick {budget.get("max_tick")}) over {TICK_MS:.2f} ms={budget.get("over_budget_ticks")} of {budget.get("one_tick_iterations")} '
         f'all-ticks mean={fmt("all_ticks_mean_ms")} wall_tps={fmt("wall_tps")} exe={str(record.get("exe_sha256"))[:16]}')
@@ -1057,7 +1058,7 @@ def run_soak(h, options):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--scenario', choices=sorted(SCENARIOS), help='; '.join(f'{key}: {value}' for key, value in SCENARIOS.items()))
-    parser.add_argument('--direction', choices=['host-here', 'host-edith'], default='host-here')
+    parser.add_argument('--direction', choices=['host-here', 'host-remote'], default='host-here')
     parser.add_argument('--path', choices=['direct', 'relay', 'directory-relay', 'ip'], default='direct')
     parser.add_argument('--relay-ttl', type=int, default=86400,
                         help="the longest relay credential the run's directory mints (300-86400 s; a short one renews mid-match)")
@@ -1065,12 +1066,12 @@ def parse_args(argv=None):
                         help="the directory-relay path's backend file (its path only is passed; default the Cloudflare key file)")
     parser.add_argument('--runs', type=int, default=1)
     parser.add_argument('--relay-bridge', action='store_true',
-                        help='relay only: EDITH reaches the TURN server through a UDP-over-ssh bridge (its loopback UDP, an ssh -R '
+                        help='relay only: REMOTE reaches the TURN server through a UDP-over-ssh bridge (its loopback UDP, an ssh -R '
                              'TCP stream, UDP from this box), for a TURN server with no public forward')
-    parser.add_argument('--out', type=Path, help=f'a fresh directory under {SCRATCH} (the same path is used on EDITH)')
+    parser.add_argument('--out', type=Path, help=f'a fresh directory under {SCRATCH} (the same path is used on REMOTE)')
     parser.add_argument('--minutes', type=float, default=10, help='sp-soak length')
     parser.add_argument('--client-box', choices=['here', 'linux'], default='here',
-                        help='with --direction host-edith: the client runs on this box or on the Linux box (EDITH then runs one engine alone)')
+                        help='with --direction host-remote: the client runs on this box or on the Linux box (REMOTE then runs one engine alone)')
     parser.add_argument('--soak', action='store_true', help="the soak's autosaves, client stalls, census and full-state hashing, judged as soak_two_peer judges")
     parser.add_argument('--match-minutes', type=float, help='mp-host-join length in minutes, the feel inputs looped (default: the 1200-tick arm)')
     parser.add_argument('--timeout', type=int, default=420, help='each match engine (seconds)')
@@ -1079,18 +1080,18 @@ def parse_args(argv=None):
                              'per-tick sim dump and the controller dump (the feel matrix arms)')
     parser.add_argument('--feel-records', action='store_true', help='add -feel-measure to both match peers (the matrix -on arms)')
     parser.add_argument('--repo', type=Path, default=REPO, help='the engine tree on both boxes (its executable must match)')
-    parser.add_argument('--remote-repo', type=Path, help="EDITH's engine tree when it is not --repo's path (a firewall-ruled tree holding the same executable)")
+    parser.add_argument('--remote-repo', type=Path, help="REMOTE's engine tree when it is not --repo's path (a firewall-ruled tree holding the same executable)")
     parser.add_argument('--quiet-wait', type=int, default=1200, help='seconds to wait for other builds on this box to end')
     parser.add_argument('--box-wait', type=int, default=2700, help='seconds to wait while the inventory feel matrix holds this box')
     parser.add_argument('--dry-run', action='store_true', help='print the launches, copies and ssh commands instead of running them')
     parser.add_argument('--reanalyze', type=Path, help='re-reduce one fetched match directory (no launch)')
     parser.add_argument('--remote-peer', type=Path, help=argparse.SUPPRESS)
-    parser.add_argument('--bridge-edith', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--bridge-remote', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--bridge-bind', default='', help=argparse.SUPPRESS)
     options = parser.parse_args(argv)
-    if options.remote_peer is None and not options.bridge_edith and options.reanalyze is None:
-        if options.client_box == 'linux' and options.direction != 'host-edith':
-            parser.error('--client-box linux runs the client there: the host is on EDITH (--direction host-edith)')
+    if options.remote_peer is None and not options.bridge_remote and options.reanalyze is None:
+        if options.client_box == 'linux' and options.direction != 'host-remote':
+            parser.error('--client-box linux runs the client there: the host is on REMOTE (--direction host-remote)')
         if options.relay_bridge and options.path != 'relay':
             parser.error('--relay-bridge needs --path relay')
         if not options.scenario or not options.out:
@@ -1112,8 +1113,8 @@ def main(argv=None):
     parser, options = parse_args(argv)
     if options.remote_peer is not None:
         return remote_peer(options.remote_peer)
-    if options.bridge_edith:
-        return bridge_edith(options.bridge_bind)
+    if options.bridge_remote:
+        return bridge_remote(options.bridge_bind)
     if options.reanalyze is not None:
         root = options.reanalyze.resolve()
         return 0 if analyze_match(harness(HERE), root, read_json(root / 'manifest.json'))['passed'] else 1
@@ -1124,9 +1125,9 @@ def main(argv=None):
         if options.out.exists() and options.scenario == 'sp-soak':
             parser.error(f'{options.out} exists; every run takes a fresh --out')
         local, remote = exe_hashes(options.repo, options.remote_repo)
-        say(f'executable here {local[:16]} on EDITH {remote[:16]}')
+        say(f'executable here {local[:16]} on REMOTE {remote[:16]}')
         if local != remote:
-            say('REFUSED: the executables differ; refresh EDITH per EDITH_SSH_RUNBOOK.md section 7')
+            say('REFUSED: the executables differ; refresh REMOTE per REMOTE_SSH_RUNBOOK.md section 7')
             return 4
         h.feel.scratch_bytes(SCRATCH, SCRATCH_LIMIT)
     ship_driver()
@@ -1152,10 +1153,10 @@ def main(argv=None):
         if linux_tunnel and not DRY_RUN:
             linux_tunnel.open()
         if options.relay_bridge:
-            lan = '192.168.3.55' if DRY_RUN else ssh('(Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1).IPv4Address.IPAddress').strip()
-            TURN['edith'] = f'turn:{lan}:{BRIDGE_UDP}?transport=udp'
+            lan = '198.51.100.55' if DRY_RUN else ssh('(Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1).IPv4Address.IPAddress').strip()
+            TURN['remote'] = f'turn:{lan}:{BRIDGE_UDP}?transport=udp'
             if DRY_RUN:
-                say(f'dry-run: relay bridge EDITH udp {lan}:{BRIDGE_UDP} -> ssh -R tcp {BRIDGE_TCP} -> {TURN["here"]}')
+                say(f'dry-run: relay bridge REMOTE udp {lan}:{BRIDGE_UDP} -> ssh -R tcp {BRIDGE_TCP} -> {TURN["here"]}')
             else:
                 bridge = BridgeHere(TURN['here'], options.out.resolve() / f'bridge-{label}.log', lan)
                 bridge.open()

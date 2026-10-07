@@ -5,6 +5,7 @@ from engine instances; the running binary's admission limit remains authoritativ
 """
 from __future__ import annotations
 
+import tempfile
 import argparse
 import contextlib
 import datetime as dt
@@ -26,7 +27,7 @@ HERE = Path(__file__).resolve().parent
 # The lane that owns this run's scratch on every box: --lane or CC_CROSS_PEERS_LANE, never a default. The manifest
 # writes it as {lane}, so a merged-away lane's root is never where a run lands.
 LANE_ENV = 'CC_CROSS_PEERS_LANE'
-SCRATCH_ROOT = Path('D:/mx')
+SCRATCH_ROOT = Path(os.environ.get('CCCP_SCRATCH_ROOT', str(Path(tempfile.gettempdir())/'cortex-modern')))
 SCRATCH = None
 LANE = None
 # The Mac inventory's live marker a Mac launch requires: --mac-guard or CC_CROSS_PEERS_MAC_GUARD, never a default. The
@@ -92,7 +93,12 @@ def with_lane(value):
 
 
 def load_boxes(path, roster='three-way'):
-    manifest = with_lane(json.loads(Path(path).read_text(encoding='utf-8-sig')))
+    if path is None:
+        from box_facts import cross_manifest
+        source = cross_manifest()
+    else:
+        source = json.loads(Path(path).read_text(encoding='utf-8-sig'))
+    manifest = with_lane(source)
     if roster is not None:
         manifest['instances'] = [peer for peer in manifest['instances'] if not peer.get('rosters') or roster in peer['rosters']]
         active = {peer['box'] for peer in manifest['instances']}
@@ -146,13 +152,13 @@ def schedule_for(options, peers, boxes):
         clients = [peer for peer in peers if peer['name'] != host]
         remote_windows = next((p['name'] for p in clients if boxes[p['box']]['kind'] == 'windows-task'), clients[0]['name'])
         posix = next((p['name'] for p in clients if boxes[p['box']]['kind'] == 'posix-ssh'), clients[-1]['name'])
-        faults = [dict(id='edith-live-stall',tick=7200, peer=remote_windows, action='live-stall', duration_ms=600),
+        faults = [dict(id='remote-live-stall',tick=7200, peer=remote_windows, action='live-stall', duration_ms=600),
                   dict(id='mac-announced-rejoin',tick=14400, peer=posix, action='announced-leave-rejoin'),
-                  dict(id='edith-crash-restart',tick=21600, peer=remote_windows, action='crash-restart'),
+                  dict(id='remote-crash-restart',tick=21600, peer=remote_windows, action='crash-restart'),
                   dict(id='mac-ack-drop',tick=28800, peer=posix, action='ack-drop'),
                   dict(id='mac-loss',tick=28800, peer=posix, action='loss', percent=5, duration_ticks=1800),
                   dict(id='end-under-hold',tick=7200,peer=host,action='brain-eliminate',phase='hold',target_peer=remote_windows,
-                       target_incarnation=0,recovery_id='edith-live-stall',phase_window_ticks=600),
+                       target_incarnation=0,recovery_id='remote-live-stall',phase_window_ticks=600),
                   dict(id='end-under-catchup',tick=14400,peer=host,action='brain-eliminate',phase='catch_up',target_peer=posix,
                        target_incarnation=1,recovery_id='mac-announced-rejoin',phase_window_ticks=6000)]
     if options.scenario == 'chaos':
@@ -261,8 +267,8 @@ def make_plan(options):
                  'CC_TEST_CROSS_RECOVERIES': own + '/recoveries.json',
                  'CC_TEST_CROSS_BOT': own + '/bot.json', 'CC_TEST_CROSS_EVENT_RAW_LIMIT': str(64*1024**3)}, timeout=options.timeout, ticks=options.ticks,
             settings={}, roster=options.roster, scene=options.scene,
-            # D1 changes the former EROL-PC host to Z13, preserving that host's workload settings.
-            initial_skill=100 if boxes[hosts[0]['box']]['kind'] == 'windows-task' and hosts[0]['box'] != 'Z13' else 50,
+            # D1 changes the former box-a host to LAPTOP, preserving that host's workload settings.
+            initial_skill=100 if boxes[hosts[0]['box']]['kind'] == 'windows-task' and hosts[0]['box'] != 'LAPTOP' else 50,
             faults=[f for f in faults if f['peer'] == peer['name']], barriers=[b for b in barriers if b['peer']==peer['name']]))
         if getattr(options, 'keep_fullstate_sections', ''):
             specs[-1]['keep_fullstate_sections'] = [name for name in options.keep_fullstate_sections.split(',') if name]
@@ -345,7 +351,7 @@ def dry_run(plan):
 
 
 def inventory_guard():
-    paths = list(Path('D:/mx').glob('inventory-confirming-*/steps.log'))
+    paths = list(SCRATCH_ROOT.glob('inventory-confirming-*/steps.log'))
     if not paths: return None
     newest = max(paths, key=lambda p: p.stat().st_mtime)
     # Only the newest stream owns the box; old unfinished logs stay evidence.
@@ -1216,7 +1222,7 @@ def fetch_box(box, root, local):
 
 
 def run_plan(plan, root):
-    import edith_cross
+    import two_box_match
     import test_directory_ice_join as directory
     root = root.resolve()
     if not root.is_relative_to(SCRATCH.resolve()) or root == SCRATCH.resolve():
@@ -1279,7 +1285,7 @@ def run_plan(plan, root):
             if acceptance_cross.is_row(plan):
                 plan.update(directory_mode='loopback-fallback', public_directory_down=True, own_certificate=True)
                 for spec in plan['specs']: spec['directory_mode'] = 'loopback-fallback'
-            cert, key, pin = edith_cross.make_cert(root)
+            cert, key, pin = two_box_match.make_cert(root)
             service = directory.start_service(root, local['directory_port'], cert, key)
             for box in boxes.values():
                 if box['kind'] == 'windows-local': continue
@@ -1292,7 +1298,7 @@ def run_plan(plan, root):
             time.sleep(1)
             if any(p.poll() is not None for p in tunnels): raise RuntimeError('directory tunnel failed')
         host_box = next(s['box'] for s in plan['specs'] if s['peer'] == plan['host'])
-        # The task payload claims EDITH first and waits for publication if it is a client.
+        # The task payload claims REMOTE first and waits for publication if it is a client.
         ordered = sorted(boxes.values(), key=lambda b: 0 if b['kind']=='windows-task' else 1 if b['name']==host_box else 2)
         for box in ordered:
             payload, local_payload, box_root = payloads[box['name']]
@@ -1309,12 +1315,12 @@ def run_plan(plan, root):
                 if box['kind'] == 'windows-task':
                     state = command(['ssh', box['ssh'], f'(Get-ScheduledTask -TaskName {box["runner"]}).State']).strip()
                     if state != 'Ready': raise RuntimeError(f'{box["name"]}: task is {state}; another payload owns it')
-                    script = (HERE / 'edith/cross_session.ps1').read_text(encoding='utf-8')
+                    script = (HERE / 'remote/cross_session.ps1').read_text(encoding='utf-8')
                     for field, value in dict(PYTHON=box['python'], DRIVER=box['tree'] + '/tools/cross_peers.py', ROOT=box_root).items():
                         script = script.replace('{{' + field + '}}', str(value))
                     local_script = root / f'cross-session-{box["name"]}.ps1'; local_script.write_text(script, encoding='utf-8')
                     if acceptance_cross.is_row(plan):
-                        from edith.remote_box import RemoteBox
+                        from remote.remote_box import RemoteBox
                         RemoteBox(box['ssh'], task=box['runner'], session_script=box['task_script']).start_task(local_script, budget_s=1)
                     else:
                         stage_remote(box, local_script, box['task_script'])
@@ -1427,12 +1433,12 @@ def run_plan(plan, root):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--boxes', type=Path, default=HERE / 'cross_peers/boxes.json')
+    parser.add_argument('--boxes', type=Path, default=Path(os.environ['CCCP_CROSS_BOXES']) if os.environ.get('CCCP_CROSS_BOXES') else None)
     parser.add_argument('--lane', default=os.environ.get(LANE_ENV), help=f'the lane whose scratch holds the run on every box (or {LANE_ENV}); no default')
     parser.add_argument('--mac-guard', default=os.environ.get(MAC_GUARD_ENV),
                         help=f"the Mac inventory's live marker a Mac launch requires (or {MAC_GUARD_ENV}); no default")
     parser.add_argument('--out', type=Path, help='default: <lane scratch>/dry-run')
-    parser.add_argument('--host', default='erol')
+    parser.add_argument('--host', default='pc')
     parser.add_argument('--local-setting', action='append', type=setting_pair, default=[], metavar='KEY=VALUE',
                         help='seed windows-local after directory settings; repeatable, last value wins')
     parser.add_argument('--local-render-cap', type=render_cap_hz, metavar='HZ', help='windows-local render cap: 0 or 60')

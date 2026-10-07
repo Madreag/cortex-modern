@@ -68,7 +68,7 @@ def start_section(root, section, *, marker=None, inventory_root=None, optional_b
         raise ValueError('section has no collection start')
     window = run_split.window_variant(marker)
     capabilities = {}
-    for name in sorted({row.get('blocked_capability','EDITH.readback') for row in rows if row.get('blocked_reason')}):
+    for name in sorted({row.get('blocked_capability','REMOTE.readback') for row in rows if row.get('blocked_reason')}):
         declared=reader.CAPABILITIES[name];ref=root/declared['path']
         try:
             proof = read(ref)
@@ -87,7 +87,7 @@ def start_section(root, section, *, marker=None, inventory_root=None, optional_b
         reason = ''
         if row.get('window_required') and window['variant'] == 'WITHOUT':
             reason = run_split.WINDOW_REASON
-        elif row.get('blocked_reason') and not capabilities.get(row.get('blocked_capability','EDITH.readback'), {}).get('passed'):
+        elif row.get('blocked_reason') and not capabilities.get(row.get('blocked_capability','REMOTE.readback'), {}).get('passed'):
             reason = row['blocked_reason']
         else:
             absent = sorted(box for box in reader.execution_boxes(row) if optional_boxes.get(box) is False)
@@ -126,13 +126,13 @@ def wait_for_window(root, section, *, marker=None, timeout=None, sleep_fn=None, 
         state='AWAITING' if occupied else 'READY'
         receipt=dict(state=state,collection_id=schedule['collection_id'],source_sha=schedule['source_sha'],section=section,
                      started_epoch=started,waits=waits,budget_s=budget,marker=current,
-                     reason=run_split.WINDOW_REASON if user_hold else 'waiting for the EROL-PC reservation to clear' if occupied else '',updated=run_split.stamp())
+                     reason=run_split.WINDOW_REASON if user_hold else 'waiting for the box-a reservation to clear' if occupied else '',updated=run_split.stamp())
         write(path,receipt)
         schedule.setdefault('window_wait_receipts',{})[str(section)]=dict(path=path.relative_to(root).as_posix(),sha256=sha256(path))
         write(root/'split-plan.json',schedule)
         if user_hold or not occupied or remaining<=0:return receipt
         seconds=min(45*60,remaining)
-        print(f'{run_split.stamp()} section {section}: WAIT for EROL-PC reservation; retry in {seconds:g} s',flush=True)
+        print(f'{run_split.stamp()} section {section}: WAIT for box-a reservation; retry in {seconds:g} s',flush=True)
         sleep(seconds);waits+=1
 
 
@@ -349,11 +349,11 @@ def run(share, command_id, repo, here):
         from acceptance_remote import run_command
         code = run_command(share, command_id, repo, here, commands, log)
         return share.finish(command_id, code, log)['exit_code']
-    if spec.get('engine_boxes', {}).get('EROL-PC'):
+    if spec.get('engine_boxes', {}).get('box-a'):
         from acceptance_identity import identity
-        native = identity('EROL-PC', repo, Path(repo)/'Cortex Command.exe', share.root/'build-receipt.json', share.source, share.run_id)
+        native = identity('box-a', repo, Path(repo)/'Cortex Command.exe', share.root/'build-receipt.json', share.source, share.run_id)
         for reference in spec['identities']:
-            if reference['box'] == 'EROL-PC': write(share.root/reference['path'], native)
+            if reference['box'] == 'box-a': write(share.root/reference['path'], native)
         if native['status'] != 'PASS': raise ValueError('local window identity refused: '+ '; '.join(native['errors']))
     import run_stream
     reservation = run_stream.feel_box(share.root/share.label/command_id) if spec.get('window_required') else nullcontext()

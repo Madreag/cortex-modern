@@ -51,7 +51,7 @@ class ExclusiveMatrixTest(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == 'win32', 'the launch guard wraps the Windows runner')
 class CrossFlagTest(unittest.TestCase):
-    """The cross match's reservation keeps strangers off the box, never the cross driver's own launch (r2-erol-match/payload.log:
+    """The cross match's reservation keeps strangers off the box, never the cross driver's own launch (r2-pc-match/payload.log:
     'PAYLOAD FAIL: engine launch refused: the box is reserved for the cross match')."""
 
     def setUp(self):

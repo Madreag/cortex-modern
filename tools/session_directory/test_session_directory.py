@@ -1254,7 +1254,7 @@ class DirectoryTests(unittest.TestCase):
 
     def test_a_refusal_reaches_a_client_whose_body_arrives_late(self) -> None:
         # A loaded box sends the headers and the body apart; the install-key gate answers between them. Closing over the
-        # unread body reset the connection and the client lost the answer (WinError 10053 on the Z13).
+        # unread body reset the connection and the client lost the answer (WinError 10053 on a Windows laptop).
         self.start()
         body = json.dumps(dict(sample_register(), padding="x" * 2000)).encode("utf-8")
         head = (f"POST /v1/sessions HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
@@ -2773,7 +2773,7 @@ class DirectoryTests(unittest.TestCase):
         tools = str(Path(__file__).resolve().parents[1])
         with mock.patch.object(sys, "path", [tools, *sys.path]):
             import relay_cloudflare_match as relay
-            import edith_cross
+            import two_box_match
             from relay_secrets import SecretBook
         server = mock.MagicMock()
         original_post = server.store.post_signal
@@ -2784,7 +2784,7 @@ class DirectoryTests(unittest.TestCase):
             key.write_text("fixture")
             package = SimpleNamespace(session_directory=session_directory)
             with mock.patch.dict(sys.modules, {"session_directory": package}), \
-                 mock.patch.object(edith_cross, "make_cert", return_value=(cert, key, "0" * 64)), \
+                 mock.patch.object(two_box_match, "make_cert", return_value=(cert, key, "0" * 64)), \
                  mock.patch.object(session_directory, "spawn_server", return_value=server) as factory:
                 helper = relay.Directory(root, 0, None, 600, SecretBook())
             try:

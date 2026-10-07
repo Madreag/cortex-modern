@@ -1,6 +1,7 @@
-"""Run the authorized R5 world on Z13 and two EDITH seats through their session tasks."""
+"""Run the authorized R5 world on LAPTOP and two REMOTE seats through their session tasks."""
 from __future__ import annotations
 
+import tempfile
 import argparse
 from copy import deepcopy
 import json
@@ -16,9 +17,9 @@ import cross_peers as cross
 import world_mod_cross as world
 from acceptance_mod import sha256
 from acceptance_runtime import check_storage, write_json, write_text, retained_open, storage_scope, ACTIVE_STORAGE
-from edith.remote_box import RemoteBox, ps_quote, render_payload
+from remote.remote_box import RemoteBox, ps_quote, render_payload
 
-HOSTS = {'Z13': 'z13', 'EDITH': 'edith'}
+HOSTS = {'LAPTOP': 'laptop', 'REMOTE': 'remote'}
 
 
 def read_json(remote, path):
@@ -40,29 +41,29 @@ if (Test-Path -LiteralPath $path) {
 
 def task_profile(box, lane):
     if box.get('name') not in HOSTS or box.get('ssh') != HOSTS[box['name']]:
-        raise ValueError('R5 tasks require the named Z13 and EDITH aliases')
-    if box.get('kind') != 'windows-task' or box.get('runner') != 'cortex-session1' or box.get('task_script') != 'D:/mx/session1/run.ps1':
+        raise ValueError('R5 tasks require the named LAPTOP and REMOTE aliases')
+    if box.get('kind') != 'windows-task' or box.get('runner') != 'cortex-session1' or box.get('task_script') != box['approved_task_script']:
         raise ValueError('R5 engines require the existing session tasks')
-    if box.get('scratch') != 'D:/mx/'+lane or not box.get('helpers', '').startswith(box['scratch']+'/'):
+    if box.get('scratch') != str(box['scratch_root']).rstrip('/')+'/'+lane or not box.get('helpers', '').startswith(box['scratch']+'/'):
         raise ValueError('task helper and evidence paths must stay inside this lane')
     if '..' in box['helpers'].replace('\\', '/').split('/'):
         raise ValueError('task helper path leaves its owned root')
-    expected = 'D:/Projects/z13-build' if box['name'] == 'Z13' else 'D:/Projects/inventory-build'
+    expected = box['approved_tree']
     if box.get('tree') != expected or box.get('executable') != expected+'/Cortex Command.exe':
         raise ValueError('R5 executable must use its existing approved path')
-    if box.get('exclusive_marker') != 'D:/mx/FEEL-MATRIX-RUNNING':
+    if box.get('exclusive_marker') != box['approved_marker']:
         raise ValueError('each task must take its real box reservation')
-    count = 1 if box['name'] == 'Z13' else 2
+    count = 1 if box['name'] == 'LAPTOP' else 2
     if box.get('peers_per_box') != count:
-        raise ValueError('R5 requires one Z13 host and two EDITH seats')
-    floor = 6.5 if box['name'] == 'Z13' else 10
+        raise ValueError('R5 requires one LAPTOP host and two REMOTE seats')
+    floor = 6.5 if box['name'] == 'LAPTOP' else 10
     if box.get('launch_floor_gib') != floor:
         raise ValueError('task launch floor differs from the named box policy')
 
 
 def make_plan(options, profiles):
     if {box.get('name') for box in profiles} != set(HOSTS) or len(profiles) != 2:
-        raise ValueError('R5 requires exactly Z13 and EDITH')
+        raise ValueError('R5 requires exactly LAPTOP and REMOTE')
     for box in profiles:
         task_profile(box, options.lane)
     base_options = cross.parse_args(['--boxes', str(options.template_boxes), '--lane', options.lane,
@@ -71,7 +72,7 @@ def make_plan(options, profiles):
     plan = world.configure_plan(cross.make_plan(base_options), 'world-soak')
     by_name = {box['name']: deepcopy(box) for box in profiles}
     for spec in plan['specs']:
-        box = by_name['Z13' if spec['peer'] == 'erol' else 'EDITH']
+        box = by_name['LAPTOP' if spec['peer'] == 'pc' else 'REMOTE']
         old_root = spec['root']
         new_root = box['scratch']+'/'+plan['run']
         def rebase(value):
@@ -84,16 +85,16 @@ def make_plan(options, profiles):
         spec.clear(); spec.update(updated)
         spec.update(box=box['name'], repo=box['tree'], executable=box['executable'], task_control=True,
                     under_load_by_design=False)
-        port = box['ports'][0]+(5 if spec['peer'] == 'edith-first' else 0)
+        port = box['ports'][0]+(5 if spec['peer'] == 'remote-first' else 0)
         spec['port_block'] = [port, port+4]
         if port+4 > box['ports'][-1]:
-            raise ValueError('EDITH needs two disjoint five-port instance blocks')
+            raise ValueError('REMOTE needs two disjoint five-port instance blocks')
         spec['flags'] = world.flag(spec['flags'], '-net-port', port)
         spec['env'].update(CCCP_HEADLESS='1', CC_RUNNER_IGNORE_FULLSCREEN='1')
     for instance in plan['instances']:
         spec = next(spec for spec in plan['specs'] if spec['peer'] == instance['name'])
         instance.update(box=spec['box'], port_block=spec['port_block'])
-    plan.update(boxes=list(by_name.values()), world_host_box='Z13', coordinator_only=dict(box='EROL-PC', engine_instances=0),
+    plan.update(boxes=list(by_name.values()), world_host_box='LAPTOP', coordinator_only=dict(box='box-a', engine_instances=0),
                 authorization='LEAD-NOTES NOTE 5 / RESUME 1', mac_guard=None, quiet_window=True)
     plan['driver_sources']['world_soak_tasks.py'] = sha256(Path(__file__))
     return plan
@@ -143,16 +144,16 @@ def stage(plan, root):
 def validate_preflights(plan):
     values = plan['preflights']
     cross.require_distinct_machines(values)
-    reference = values['Z13']
+    reference = values['LAPTOP']
     source = reference.get('build', {}).get('commit')
     if not re.fullmatch(r'[0-9a-f]{40}', str(source)):
-        raise ValueError('Z13 has no full native build source receipt')
+        raise ValueError('LAPTOP has no full native build source receipt')
     for name, value in values.items():
         build = value.get('build', {})
         if build.get('commit') != source or build.get('executable_sha256') != value.get('executable_sha256'):
             raise ValueError(name+': native build and measured executable do not agree')
         if value.get('executable_sha256') != reference.get('executable_sha256'):
-            raise ValueError(name+': Windows executable differs from Z13')
+            raise ValueError(name+': Windows executable differs from LAPTOP')
         if any(value.get(key) != reference.get(key) for key in ('content', 'modules', 'fixture')):
             raise ValueError(name+': complete content/module/fixture manifests differ')
         if value.get('load'):
@@ -166,7 +167,7 @@ def run_payload(path):
     box, specs = payload['box'], payload['specs']
     lane = Path(box['scratch']).name
     task_profile(box, lane)
-    expected = {'erol'} if box['name'] == 'Z13' else {'edith-first', 'edith'}
+    expected = {'pc'} if box['name'] == 'LAPTOP' else {'remote-first', 'remote'}
     if {spec.get('peer') for spec in specs} != expected or any(spec.get('acceptance_row') != 'world-soak' for spec in specs):
         raise ValueError('task payload differs from the authorized R5 process roster')
     from feel import launch_budget
@@ -201,7 +202,7 @@ def launch(plan, root):
     write_json(root/'manifest.json', plan)
     started, published, late_released = [], False, False
     try:
-        for name in ('EDITH', 'Z13'):
+        for name in ('REMOTE', 'LAPTOP'):
             box, remote, own = by_name[name], remotes[name], root/'boxes'/name
             remote_root = remote_roots[name]
             script = render_payload(box['tree'], [box['helpers']+'/tools/world_soak_tasks.py', '--payload', remote_root+'/payload.json'],
@@ -225,14 +226,14 @@ def launch(plan, root):
             cross.stage_remote(by_name[name], root/'launch-go.json', remote_roots[name]+'/launch-go.json')
         deadline, next_status = time.monotonic()+4500, 0
         while time.monotonic() < deadline:
-            control = read_json(remotes['Z13'], remote_roots['Z13']+'/host-control.json') or {}
+            control = read_json(remotes['LAPTOP'], remote_roots['LAPTOP']+'/host-control.json') or {}
             if control.get('session') and not published:
                 write_json(root/'session.json', dict(session=control['session']))
-                cross.stage_remote(by_name['EDITH'], root/'session.json', remote_roots['EDITH']+'/session.json')
+                cross.stage_remote(by_name['REMOTE'], root/'session.json', remote_roots['REMOTE']+'/session.json')
                 published = True
             elapsed = control.get('host_elapsed_s')
             if published and not late_released and isinstance(elapsed, (int, float)) and elapsed >= 3000:
-                cross.stage_remote(by_name['EDITH'], root/'session.json', remote_roots['EDITH']+'/session-late.json')
+                cross.stage_remote(by_name['REMOTE'], root/'session.json', remote_roots['REMOTE']+'/session-late.json')
                 write_json(root/'late-join-released.json', {key:control[key] for key in ('host_tick', 'host_elapsed_s', 'payload_monotonic_s')})
                 late_released = True
             done = {name: read_json(remotes[name], remote_roots[name]+'/done.json') for name in started}
@@ -287,7 +288,7 @@ def main(argv=None):
         return run_payload(options.payload)
     if not options.out or not options.lane:
         parser.error('--out and --lane are required')
-    owned = Path('D:/mx')/options.lane
+    owned = Path(os.environ.get('CCCP_SCRATCH_ROOT', str(Path(tempfile.gettempdir())/'cortex-modern')))/options.lane
     if not re.fullmatch(r'[A-Za-z0-9_-]+', options.lane) or not options.out.resolve().is_relative_to(owned.resolve()) or options.out.resolve() == owned.resolve():
         parser.error('output must be a fresh run inside the named lane scratch')
     with storage_scope(owned, reserve=1024**2):

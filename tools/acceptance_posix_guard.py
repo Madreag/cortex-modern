@@ -7,7 +7,7 @@ from pathlib import Path
 
 def assert_available(environment=None, guard_root=None, required_free=None):
     environment=os.environ if environment is None else environment
-    root=Path(guard_root) if guard_root is not None else Path.home()/'cortex-workers'
+    root=Path(guard_root) if guard_root is not None else Path(environment.get('CCCP_GUARD_ROOT', str(Path.home()/'.cortex-modern'/'guards')))
     marker=root/'ACCEPTANCE-STREAM-RUNNING'
     holder='unrecorded owner'
     if marker.exists():

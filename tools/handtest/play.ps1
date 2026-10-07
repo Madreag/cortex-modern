@@ -3,7 +3,7 @@
 .SYNOPSIS
   Hand-test kit launcher. One command brings up isolated multiplayer instances of
   Cortex Command on this PC: each instance gets its own runtime directory under
-  D:\mx\handtest\<role>-<n>\ (own Userdata/Settings.ini, Mods, ScreenShots, Temp,
+  <kit>\instances\<role>-<n>\ (own Userdata/Settings.ini, Mods, ScreenShots, Temp,
   and a Data junction to the build's data), so saves and settings never collide.
 
   Headed (default, for the user at this PC): windowed 1280x720 instances with
@@ -18,7 +18,7 @@
   CCCP_HEADLESS=1. A menu-script drives the real lobby UI (Multiplayer -> Host
   Game / Join Game -> Create Lobby / Connect -> Ready -> Start), a bounded
   -net-match-ticks match runs, and both instances exit 0. No visible window.
-  Self-check runtimes live under D:\mx\handtest\_selfcheck\ so their evidence
+  Self-check runtimes live under <kit>\instances\_selfcheck\ so their evidence
   never mixes into the user's collected pack.
 
   Every flag passed exists in Source/Main.cpp at this tip:
@@ -40,6 +40,7 @@
 [CmdletBinding()]
 param(
     [string]$Build,
+    [string]$InstanceRoot = (Join-Path $PSScriptRoot 'instances'),
     [ValidateSet('host', 'client', 'both')] [string]$Role = 'both',
     [ValidateSet(1, 2)] [int]$Clients = 1,
     [int]$Port = 47400,
@@ -73,9 +74,10 @@ if (-not (Test-Path $settingsTemplate)) { $settingsTemplate = Join-Path $repo 'U
 foreach ($pair in @(@($exe, 'engine exe'), @($buildData, 'Data'), @($settingsTemplate, 'Settings.ini template'))) {
     if (-not (Test-Path $pair[0])) { throw "missing $($pair[1]): $($pair[0]) - pass -Build <dir containing the Final exe>" }
 }
-# Headed (user) instances live at the top level of D:\mx\handtest as <role>-<n>;
+# Headed instances live under InstanceRoot as <role>-<n>;
 # the self-check keeps its own root so collect_logs never packs runner leftovers.
-$scratchRoot = $Headless ? 'D:\mx\handtest\_selfcheck' : 'D:\mx\handtest'
+$InstanceRoot = [IO.Path]::GetFullPath($InstanceRoot)
+$scratchRoot = $Headless ? (Join-Path $InstanceRoot '_selfcheck') : $InstanceRoot
 New-Item -ItemType Directory -Force $scratchRoot | Out-Null
 
 # Kit-owned port block: 47400-47419. Every harness/e2e base is >= 47563 (or 41210);
@@ -303,7 +305,7 @@ function Write-MacInstructions([string]$buildSha) {
         Sort-Object { $_.IPAddress -match '^(192\.168\.|10\.)' ? 0 : 1 } | Select-Object -First 1).IPAddress
     if (-not $lanIp) { $lanIp = '<this PC''s LAN IP - run ipconfig>' }
     Write-Host ''
-    Write-Host '=== Erol-Mac: LAN peer ===' -ForegroundColor Cyan
+    Write-Host '=== host-c: LAN peer ===' -ForegroundColor Cyan
     Write-Host "This PC's LAN address: $lanIp    Lobby port: $Port"
     Write-Host 'On the Mac, from a checkout of this tree at the SAME commit:'
     Write-Host "    git -C <path-to-alias-walk> rev-parse HEAD    # must print $buildSha"

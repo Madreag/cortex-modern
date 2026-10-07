@@ -31,6 +31,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -392,7 +393,7 @@ def _probe_writable(directory):
 FIREWALL_RULES_KEY = r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules"
 # While the feel matrix's stream holds this box (inventory/run_stream.py writes the marker for S3's run), only an
 # engine whose environment carries the marker's token launches.
-FEEL_MARKER = Path(r"D:\mx\FEEL-MATRIX-RUNNING")
+FEEL_MARKER = Path(os.environ.get("CCCP_FEEL_MARKER", str(Path(tempfile.gettempdir()) / "cccp-feel-matrix-running")))
 FEEL_TOKEN_ENV = "CCCP_FEEL_MATRIX_RUN"
 open_process = api(K, "OpenProcess", [W.DWORD, W.BOOL, W.DWORD], W.HANDLE)
 
