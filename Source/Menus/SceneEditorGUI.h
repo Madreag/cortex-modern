@@ -24,6 +24,7 @@ struct BITMAP;
 namespace RTE {
 
 	class SceneObject;
+	class Scene;
 	class Entity;
 	class ObjectPickerGUI;
 	class PieMenu;
@@ -198,6 +199,9 @@ namespace RTE {
 		/// Updates the path from the designated position to orbit, and its cost.
 		/// @param brainPos The designated position of the brain.
 		void UpdateBrainSkyPathAndCost(Vector brainPos);
+
+		/// Starts the editor's orbit-path query with the chosen endpoints and player team.
+		void RequestBrainSkyPath(Scene& scene, const Vector& start, const Vector& end, Activity::Teams team);
 
 		enum BlinkMode {
 			NOBLINK = 0,

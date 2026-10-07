@@ -27527,6 +27527,7 @@ namespace {
 		};
 		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
 		if (selectedCase) {
+			if (std::string_view(selectedCase) == "horizon-path-grid") return PathFinder::RunHorizonGridSelfTest();
 			if (std::string_view(selectedCase) != "shared-scene-load") return fail("unknown selected lockstep self-test case");
 			std::string error;
 			return TestSharedSceneLoadKeepsThePlayingSeat(&error) ? 0 : fail(error);
