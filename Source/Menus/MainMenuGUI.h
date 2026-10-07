@@ -133,6 +133,7 @@ namespace RTE {
 
 	private:
 		friend bool TestJoiningProgress(std::string* error);
+		friend bool TestLobbyChatReturn(std::string* error);
 		static bool JoiningNeedsProgress(const NetLobbySnapshot& snapshot);
 		std::unique_ptr<GUIInputWrapper> m_AutomationInput;
 		/// Enumeration for the different sub-menu screens of the main menu.

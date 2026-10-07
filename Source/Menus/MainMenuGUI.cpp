@@ -1197,6 +1197,13 @@ bool MainMenuGUI::HandleInputEvents() {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		}
 	}
+	// Some window systems deliver Return as a key event before the GUI's held-key state catches up.
+	if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen && m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby &&
+	    !m_ActiveDialogBox && m_MultiplayerLobbyChatInput && m_MultiplayerLobbyChatInput->GetVisible() &&
+	    m_MultiplayerLobbyChatInput->GetEnabled() && m_MultiplayerLobbyChatInput->HasFocus() &&
+	    (g_UInputMan.KeyPressed(SDLK_RETURN) || g_UInputMan.KeyPressed(SDLK_KP_ENTER))) {
+		SendLobbyChat();
+	}
 	return false;
 }
 

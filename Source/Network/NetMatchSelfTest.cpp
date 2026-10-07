@@ -17827,6 +17827,100 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestMatchChatOpeningText(std::string* error) {
+		NetMatchService::Construct();
+		struct Restore {
+			~Restore() { g_UInputMan.DisableKeys(false); g_UInputMan.TypeIntoSeatInput(false); g_UInputMan.EndFrame(); g_UInputMan.EndSimUpdate(); NetMatchService::Destruct(); }
+		} restore;
+		AllegroScreen screen(g_FrameMan.GetBackBuffer32());
+		NetModerationGUI panel(&screen);
+		panel.m_ChatInMatch = true;
+		NetLobbySnapshot snapshot;
+		SDL_Event key{};
+		key.type = SDL_EVENT_KEY_DOWN; key.key.scancode = SDL_SCANCODE_T; key.key.key = SDLK_T; key.key.down = true;
+		g_UInputMan.HandleInputEvent(key);
+		SDL_Event text{};
+		text.type = SDL_EVENT_TEXT_INPUT; text.text.text = "t";
+		g_UInputMan.HandleInputEvent(text);
+		g_UInputMan.Update(false);
+		panel.UpdateMatchChat(snapshot, false);
+		panel.DrawMatchChat(snapshot);
+		g_UInputMan.EndFrame();
+		key.type = SDL_EVENT_KEY_UP; key.key.down = false;
+		g_UInputMan.HandleInputEvent(key);
+		panel.UpdateMatchChat(snapshot, false);
+		panel.DrawMatchChat(snapshot);
+		g_UInputMan.EndFrame();
+		if (!panel.IsChatEntryOpen() || !panel.m_MatchChatInput || !panel.m_MatchChatInput->GetText().empty()) {
+			*error = "the key that opened match chat leaked into its draft"; return false;
+		}
+		text.text.text = "thanks";
+		g_UInputMan.HandleInputEvent(text);
+		panel.UpdateMatchChat(snapshot, false);
+		panel.DrawMatchChat(snapshot);
+		g_UInputMan.EndFrame();
+		if (panel.m_MatchChatInput->GetText() != "thanks") {
+			*error = "suppressing the opening key also swallowed the player's next typed letter"; return false;
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS chat_opening_key_is_not_text_and_next_text_is_preserved");
+		return true;
+	}
+
+	bool TestLobbyChatReturn(std::string* error) {
+		LoopbackTransport wire;
+		NetMatchService::Construct();
+		struct Restore {
+			~Restore() { GUIInputWrapper::SetAutomationDriving(false); SetPanelDrawRecording(false); g_UInputMan.EndFrame(); g_UInputMan.EndSimUpdate(); NetMatchService::Destruct(); }
+		} restore;
+		g_NetMatchService.m_State = NetMatchServiceState::Starting;
+		g_NetMatchService.m_IsHost = true;
+		g_NetMatchService.m_Session = std::make_unique<NetSession>();
+		NetSessionConfig config;
+		config.readyWithoutPeers = true;
+		if (!g_NetMatchService.m_Session->StartHost(wire, config, error)) return false;
+		g_NetMatchService.m_ChatSession = g_NetMatchService.m_Session.get();
+		GUIInputWrapper::SetAutomationDriving(true);
+		SetPanelDrawRecording(true);
+		AllegroScreen screen(g_FrameMan.GetBackBuffer32());
+		GUIInputWrapper input(-1, true);
+		MainMenuGUI menu(&screen, &input);
+		menu.SetActiveMenuScreen(MainMenuGUI::MenuScreen::MultiplayerScreen, false);
+		const auto frame = [&] {
+			SDL_Event event{};
+			while (SDL_PollEvent(&event)) g_UInputMan.HandleInputEvent(event);
+			g_UInputMan.Update(false);
+			menu.Update(); menu.Draw();
+			MenuAutomation::AfterDrawnFrame();
+			g_UInputMan.EndFrame(); g_UInputMan.EndSimUpdate();
+		};
+		std::string observation;
+		const auto finishHand = [&] {
+			for (int frames = 0; frames < 90 && MenuAutomation::HandBusy(); ++frames) frame();
+			bool passed = false;
+			return MenuAutomation::HandFinished(passed, observation) && passed;
+		};
+		frame();
+		for (const auto& key: {std::string("Return"), std::string("Keypad Enter")}) {
+			const std::string line = "Lobby hello " + key;
+			if (!MenuAutomation::HandType(menu.AutomationManager(), "TextLobbyChat", line, false, observation) || !finishHand() ||
+			    menu.m_MultiplayerLobbyChatInput->GetText() != line || !menu.m_MultiplayerLobbyChatInput->HasFocus()) {
+				*error = "the lobby chat hand failed to type and focus its drawn box: " + observation; return false;
+			}
+			if (!MenuAutomation::HandGameKey(key, [&] { return menu.m_LobbyChatRequestId != 0; }, "focused lobby chat submission", observation) || !finishHand()) {
+				*error = "a delivered " + key + " event did not submit the focused lobby chat: " + observation; return false;
+			}
+			g_NetMatchService.m_Session->Tick(1000);
+			frame();
+			const auto history = g_NetMatchService.ChatHistory();
+			if (menu.m_LobbyChatRequestId || !menu.m_MultiplayerLobbyChatInput->GetText().empty() ||
+			    std::count_if(history.begin(), history.end(), [&](const NetChatEntry& entry) { return entry.text == line; }) != 1) {
+				*error = "lobby Return lost or duplicated the message, or failed to clear the receipted draft"; return false;
+			}
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS focused_lobby_return_and_keypad_enter_submit_once");
+		return true;
+	}
+
 	int NetMatchSelfTest::Run() {
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-match-selftest] FAIL: " << message << std::endl;
@@ -17847,6 +17941,8 @@ namespace RTE {
 			else if (name == "pause-navigation") passed = TestPauseNavigationDuringRecovery(&error);
 			else if (name == "ticket-recovery") passed = TestInternetTicketRecovery(&error);
 			else if (name == "placement-confirm") passed = GameActivity::RunSetupEditorSelfTest(true);
+			else if (name == "chat-opening") passed = TestMatchChatOpeningText(&error);
+			else if (name == "lobby-return") passed = TestLobbyChatReturn(&error);
 			else if (name == "setup-editor") passed = GameActivity::RunSetupEditorSelfTest();
 			else if (name == "chat-receipts") passed = TestChatReceipts<NetSession>(&error);
 			else if (name == "chat-routing") passed = TestChatRoutingAndBounds(&error);
