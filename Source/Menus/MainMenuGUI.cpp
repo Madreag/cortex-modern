@@ -1,6 +1,7 @@
 #include "MainMenuGUI.h"
 #include "NetHostOptionsText.h"
 #include "NetPlayerPresentation.h"
+#include "NetChatPresentation.h"
 
 #include "WindowMan.h"
 #include "FrameMan.h"
@@ -358,6 +359,7 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerLobbyPortMapLabel = nullptr;
 	m_MultiplayerLobbyChatLabels.fill(nullptr);
 	m_MultiplayerLobbyChatInput = nullptr;
+	m_LobbyChatRequestId = 0;
 	m_MultiplayerLobbyVersionLabel = nullptr;
 	m_MultiplayerLobbyChatLines.clear();
 
@@ -1207,10 +1209,10 @@ void MainMenuGUI::SendLobbyChat() {
 		return;
 	}
 	const int modifier = m_SubMenuScreenGUIControlManager->GetManager()->GetInputController()->GetModifier();
-	const uint8_t scope = (modifier & GUIPanel::MODI_CTRL) ? c_NetChatScopeTeam : c_NetChatScopeAll;
-	if (g_NetMatchService.SendChat(scope, text)) {
-		m_MultiplayerLobbyChatInput->SetText("");
-	}
+	if (m_LobbyChatRequestId) return;
+	const uint8_t scope = NetChatAudience(g_SettingsMan.GetNetworkChatDefaultScope(), modifier & GUIPanel::MODI_CTRL, modifier & GUIPanel::MODI_SHIFT);
+	if (g_NetMatchService.SendChat(scope, text, &m_LobbyChatRequestId)) m_MultiplayerLobbyChatInput->SetEnabled(false);
+	else m_MultiplayerLobbyChatLines.push_back("Not sent: chat is unavailable or the message was refused. Your draft is kept.");
 }
 
 void MainMenuGUI::HandleMainScreenInputEvents(const GUIControl* guiEventControl) {
@@ -4356,6 +4358,20 @@ void MainMenuGUI::LayoutMultiplayerFooter(int width, int y) {
 }
 
 void MainMenuGUI::TakeLobbyChat(const NetLobbySnapshot& snapshot) {
+	if (m_LobbyChatRequestId) {
+		const auto result = g_NetMatchService.ChatSendResult(m_LobbyChatRequestId);
+		if (result.state != NetChatSendState::Queued) {
+			m_LobbyChatRequestId = 0;
+			m_MultiplayerLobbyChatInput->SetEnabled(true);
+			if (result.state == NetChatSendState::Sent) m_MultiplayerLobbyChatInput->SetText("");
+			else m_MultiplayerLobbyChatLines.push_back(result.state == NetChatSendState::Unknown ? "Chat not sent: the session changed; your draft is kept." : result.detail);
+		}
+	}
+	if (m_MultiplayerLobbyChatInput) {
+		const int modifier = m_SubMenuScreenGUIControlManager->GetManager()->GetInputController()->GetModifier();
+		const auto scope = NetChatAudience(g_SettingsMan.GetNetworkChatDefaultScope(), modifier & GUIPanel::MODI_CTRL, modifier & GUIPanel::MODI_SHIFT);
+		m_MultiplayerLobbyChatInput->SetRightText(m_LobbyChatRequestId ? "Sending..." : scope == c_NetChatScopeTeam ? "To Team" : "To All");
+	}
 	for (const NetChatEntry& entry : g_NetMatchService.TakeChatEntries()) {
 		std::string name = entry.senderName;
 		if (name.empty()) {
@@ -4771,8 +4787,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	                                   std::max(0, (panelCap - chatTop - inputBlock) / 10));
 	const int contentHeight = chatTop + chatRows * 10 + inputBlock;
 
-	// The newest chatRows lines, oldest on top; the entry box takes Enter for All, Ctrl+Enter for
-	// Team. Team lines indent two cells as well as carrying their [team] mark.
+	// The newest chatRows lines, oldest on top; Enter uses the saved audience, Ctrl+Enter selects Team,
+	// and Shift+Enter selects All. Team lines indent two cells as well as carrying their [team] mark.
 	TakeLobbyChat(snapshot);
 	// Lines sit bottom-aligned above the input: the newest line is always the lowest drawn row.
 	const size_t chatOffset = m_MultiplayerLobbyChatLines.size() > static_cast<size_t>(chatRows)

@@ -203,8 +203,18 @@ namespace RTE {
 		for (const NetMatchPlayerSlot& slot : config.players) {
 			(slot.cpu ? cpus : humans)++;
 		}
-		line("Seats: " + std::to_string(humans) + " human, " + std::to_string(cpus) + " CPU of " +
-		     std::to_string(config.peerCount) + " peers");
+		line("Players: " + std::to_string(humans) + " human, " + std::to_string(cpus) + " AI");
+		for (size_t team = 0; team < config.teamRules.size(); ++team) {
+			std::string players;
+			for (const auto& slot: config.players) {
+				if (slot.team != team) continue;
+				players += (players.empty() ? "" : ", ") + (slot.displayName.empty() ? "Player " + std::to_string(slot.peerId) : slot.displayName) + (slot.cpu ? " (AI)" : " (human)");
+			}
+			if (players.empty()) continue;
+			const auto& rules = config.teamRules[team];
+			line("Team " + std::to_string(team + 1) + ": " + players);
+			line("  Technology: " + (rules.technologyModule.empty() ? (rules.technologyIntent == "-All-" ? std::string("All factions") : rules.technologyIntent) : rules.technologyModule) + "   AI skill: " + std::to_string(rules.aiSkill));
+		}
 		// Short rows share a line, so the summary fits the smallest panel that shows it.
 		line("Difficulty: " + std::to_string(config.difficulty) + "   Starting gold: " +
 		     (config.startingGold >= NetMatchConfigUtil::c_InfiniteGold ? std::string("Infinite") : std::to_string(config.startingGold) + " oz"));
@@ -214,6 +224,13 @@ namespace RTE {
 		// The brainless-humans row, in the same words the Rules page's combo uses.
 		line(std::string("When every human brain is lost: ") +
 		     (config.brainlessHumansSpectate ? "Keep playing, humans spectate" : "End the match"));
+		return text;
+	}
+
+	/// Connection and recovery details, shown separately from the round's rules.
+	inline std::string NetHostConnectionSummary(const NetMatchConfig& config, const NetLobbySnapshot& snapshot) {
+		std::string text;
+		auto line = [&text](const std::string& row) { text += (text.empty() ? "" : "\n") + row; };
 		// The live figure drops the service's own row name, which this line already carries.
 		std::string live = snapshot.inputDelayText;
 		if (live.starts_with("Input delay: ")) live.erase(0, 13);

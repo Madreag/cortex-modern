@@ -72,7 +72,7 @@ namespace RTE {
 	}
 
 	std::string NetMatchSummary::LineText() const {
-		std::string text = "Last match: " + (winnerTeam < 0 ? std::string("draw") : "Team " + std::to_string(winnerTeam + 1) + " wins");
+		std::string text = "Last match: " + (winnerTeam < 0 ? (result == "Match complete" || result == "Match over: draw" ? std::string("draw") : std::string("No result - ") + result) : "Team " + std::to_string(winnerTeam + 1) + " wins");
 		text += " | " + DurationText() + " | ";
 		for (size_t i = 0; i < peers.size(); ++i) text += (i ? ", " : "") + peers[i].name;
 		std::replace_if(text.begin(), text.end(), [](unsigned char c) { return c < 32 || c == 127; }, ' ');
@@ -86,7 +86,7 @@ namespace RTE {
 
 	std::string NetMatchSummary::DetailsText() const {
 		std::ostringstream text;
-		text << "Result: " << result << "\nWinner: " << (winnerTeam < 0 ? "draw" : "Team " + std::to_string(winnerTeam + 1));
+		text << "Result: " << result << "\nWinner: " << (winnerTeam < 0 ? (result == "Match complete" || result == "Match over: draw" ? "draw" : "No result") : "Team " + std::to_string(winnerTeam + 1));
 		text << "\nDuration: " << DurationText() << " (" << runningTicks << " ticks at 60 tps)\n\nPeers";
 		for (const Peer& peer : peers) {
 			text << '\n' << peer.name << " | team " << peer.team + 1 << " | seat " << peer.seat << " | delay " << peer.inputDelayFrames;
@@ -913,7 +913,7 @@ static std::string ResyncSaveName() {
 			m_FreshRelayRequested = true;
 			m_EndRecordSent.clear();
 			m_ToldMatchOver.clear();
-			m_EndWinnerTeam = Activity::NoTeam;
+			m_EndWinnerTeam = c_NetRoundEndedNoResult;
 			m_ReceivedEndWinner.reset();
 			m_PendingResyncState.reset();
 			m_ResyncRetainsLocalState = false;
@@ -1041,6 +1041,7 @@ static std::string ResyncSaveName() {
 	}
 
 	std::string NetMatchService::RoundEndResultText(int winnerTeam, int localTeam) {
+		if (winnerTeam == c_NetRoundEndedNoResult) return "Match ended - no result";
 		if (winnerTeam < 0) return "Match over: draw";
 		if (localTeam == Activity::NoTeam) return "Match over";
 		return winnerTeam == localTeam ? "Victory!" : "Defeat";
@@ -9302,8 +9303,9 @@ static std::string ResyncSaveName() {
 		return g_SettingsMan.SaveNetworkHostDefaultsText(Serialize(saved), error);
 	}
 
-	bool NetMatchService::SendChat(uint8_t scope, const std::string& text) {
+	bool NetMatchService::SendChat(uint8_t scope, const std::string& text, uint64_t* requestId) {
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (requestId) *requestId = 0;
 		// Only a live lobby or match can carry a line to the wire: after LeaveWorkerMain the
 		// session object (and m_ChatSession) is still owned but no pump will ever drain it, so
 		// accepting would just let the UI drop text it should have kept.
@@ -9312,7 +9314,16 @@ static std::string ResyncSaveName() {
 		    m_State != NetMatchServiceState::Running) {
 			return false;
 		}
-		return m_ChatSession && m_ChatSession->SendChat(scope, text);
+		return m_ChatSession && m_ChatSession->SendChat(scope, text, requestId);
+	}
+
+	NetChatSendResult NetMatchService::ChatSendResult(uint64_t requestId) const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		const auto receipt = m_ChatSession ? m_ChatSession->ChatSendResult(requestId) : NetChatSendResult{};
+		if (receipt.state != NetChatSendState::Queued) return receipt;
+		if (m_State != NetMatchServiceState::Starting && m_State != NetMatchServiceState::ReadyToLaunch && m_State != NetMatchServiceState::Running)
+			return {NetChatSendState::Refused, "Not sent: the chat session ended. Your draft is kept."};
+		return receipt;
 	}
 
 	std::vector<NetChatEntry> NetMatchService::TakeChatEntries() {
@@ -11123,6 +11134,12 @@ static std::string ResyncSaveName() {
 		m_LastKickBanResult = m_ReconnectHost.RemoveParticipant(selection, action, nowMs, UnixNowMs(nullptr), sessionId, round, boundary, m_LastRemovalIssue);
 		if (m_LastKickBanResult != NetKickBanResult::Ok) {
 			if (!m_LastRemovalIssue.refusal.empty()) m_ErrorText = m_LastRemovalIssue.refusal;
+			return m_LastKickBanResult;
+		}
+		if (selection.applicant != c_InvalidNetPeerId && m_LastRemovalIssue.lockstepPeerId == 0) {
+			session.TickAdmissionPlane(nowMs);
+			if (m_LastRemovalIssue.connection != c_InvalidNetPeerId) session.DisconnectJoiningPeer(m_LastRemovalIssue.connection, NetRejectReason::ParticipantBanned, c_NetBannedLinkText);
+			PublishModerationView();
 			return m_LastKickBanResult;
 		}
 		session.BroadcastControl(m_LastRemovalIssue.notice);

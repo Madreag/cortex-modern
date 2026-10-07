@@ -208,6 +208,7 @@ namespace RTE {
 		{
 			std::lock_guard<std::mutex> chatLock(m_ChatMutex);
 			m_ChatOutbox.clear();
+			m_ChatSendResults.clear();
 			m_ChatLog.clear();
 			m_ChatHistory.clear();
 			m_ChatTeams.clear();
@@ -263,6 +264,7 @@ namespace RTE {
 			std::lock_guard<std::mutex> chatLock(m_ChatMutex);
 			m_ChatOutbox.clear();
 			m_ChatLog.clear();
+			m_ChatSendResults.clear();
 			m_ChatHistory.clear();
 			m_ChatTeams.clear();
 			m_ChatRate.clear();
@@ -371,6 +373,18 @@ namespace RTE {
 			peer.state = NetSessionState::Closed;
 			DropPeerTransport(peer.transportPeerId, message);
 		}
+		RefreshHostState();
+	}
+
+	void NetSession::DisconnectJoiningPeer(NetPeerId peerId, NetRejectReason reason, const std::string& message) {
+		if (m_Role != NetSessionRole::Host) return;
+		PeerState* peer = FindPeer(peerId);
+		if (!peer) return;
+		if (peer->state == NetSessionState::Ready) { DisconnectReadyPeer(peerId, reason, message); return; }
+		if (peer->state != NetSessionState::Handshake && peer->state != NetSessionState::Accepted) return;
+		Send(peerId, NetDisconnect{static_cast<uint16_t>(reason), message});
+		peer->state = NetSessionState::Closed;
+		DropPeerTransport(peerId, message);
 		RefreshHostState();
 	}
 
@@ -1117,7 +1131,8 @@ namespace RTE {
 		}
 	}
 
-	bool NetSession::SendChat(uint8_t scope, const std::string& text) {
+	bool NetSession::SendChat(uint8_t scope, const std::string& text, uint64_t* requestId) {
+		if (requestId) *requestId = 0;
 		std::string clean = text;
 		const bool valid = scope <= c_NetChatScopeTeam && SanitizeChatText(clean);
 		std::lock_guard<std::mutex> lock(m_ChatMutex);
@@ -1131,8 +1146,20 @@ namespace RTE {
 			++m_Stats.chatDroppedRate;
 			return false;
 		}
-		m_ChatOutbox.push_back({scope, std::move(clean)});
+		const uint64_t id = requestId ? m_NextChatRequestId++ : 0;
+		if (requestId) {
+			*requestId = id;
+			while (m_ChatSendResults.size() >= 128) m_ChatSendResults.erase(m_ChatSendResults.begin());
+			m_ChatSendResults[id] = {NetChatSendState::Queued, "Waiting to send"};
+		}
+		m_ChatOutbox.push_back({scope, std::move(clean), id});
 		return true;
+	}
+
+	NetChatSendResult NetSession::ChatSendResult(uint64_t requestId) const {
+		std::lock_guard<std::mutex> lock(m_ChatMutex);
+		const auto found = m_ChatSendResults.find(requestId);
+		return found == m_ChatSendResults.end() ? NetChatSendResult{} : found->second;
 	}
 
 	void NetSession::PumpChatOutbox() {
@@ -1144,6 +1171,11 @@ namespace RTE {
 		while (!pending.empty()) {
 			NetChatOutbound line = std::move(pending.front());
 			pending.pop_front();
+			const auto receipt = [&](NetChatSendState state, const std::string& detail) {
+				if (!line.requestId) return;
+				const auto found = m_ChatSendResults.find(line.requestId);
+				if (found != m_ChatSendResults.end()) found->second = {state, detail};
+			};
 			// Accepted counts as linked: a client sits in Accepted while its admission commit is in
 			// flight, and the host's aggregate state is Accepted in the same window - both are in
 			// the lobby. A host alone in its lobby is still Listening; its own lines must sink even
@@ -1157,14 +1189,14 @@ namespace RTE {
 				std::lock_guard<std::mutex> lock(m_ChatMutex);
 				if (!linked) {
 					++m_Stats.chatDroppedInvalid;
+					receipt(NetChatSendState::Refused, "Not sent: the chat connection is unavailable. Your draft is kept.");
 					continue;
 				}
 				if (!AdmitChatRate(c_LocalChatRateKey, m_NowMs)) {
 					++m_Stats.chatDroppedRate;
+					receipt(NetChatSendState::Refused, "Not sent: chat allows five messages per second. Wait, then press Enter to retry.");
 					continue;
 				}
-				++m_Stats.chatMessagesSent;
-				DeliverChat({m_LockstepFrame, m_LocalPeerId, m_Config.displayName, line.scope, line.text});
 				if (m_Role == NetSessionRole::Client) {
 					sendToHost = true;
 				} else {
@@ -1189,20 +1221,25 @@ namespace RTE {
 			wire.senderPeerId = m_LocalPeerId;
 			wire.scope = line.scope;
 			wire.sentAtMs = static_cast<uint32_t>(m_NowMs);
-			wire.text = std::move(line.text);
-			if (sendToHost) {
-				Send(m_RemoteTransportPeerId, wire);
-				continue;
-			}
+			wire.text = line.text;
+			bool sent = true;
 			uint32_t relayed = 0;
+			if (sendToHost) sent = Send(m_RemoteTransportPeerId, wire);
 			for (const NetPeerId target : targets) {
 				if (Send(target, wire)) {
 					++relayed;
-				}
+				} else sent = false;
 			}
-			if (relayed > 0) {
+			{
 				std::lock_guard<std::mutex> lock(m_ChatMutex);
 				m_Stats.chatMessagesRelayed += relayed;
+				if (sent) {
+					++m_Stats.chatMessagesSent;
+					DeliverChat({m_LockstepFrame, m_LocalPeerId, m_Config.displayName, line.scope, line.text});
+					receipt(NetChatSendState::Sent, "Sent to the chat connection");
+				} else {
+					receipt(NetChatSendState::Refused, relayed ? "Some players received this message; another connection refused it. Your draft is kept; retrying may send it twice." : "Not sent: the chat connection refused the message. Your draft is kept.");
+				}
 			}
 		}
 	}
@@ -1259,6 +1296,7 @@ namespace RTE {
 	}
 
 	void NetSession::DeliverChat(NetChatEntry entry) {
+		entry.historyId = m_NextChatHistoryId++;
 		m_ChatHistory.push_back(entry);
 		while (m_ChatHistory.size() > 32) {
 			m_ChatHistory.pop_front();

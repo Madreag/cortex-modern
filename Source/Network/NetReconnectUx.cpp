@@ -213,6 +213,10 @@ namespace RTE {
 		return dropped ? " - Disconnected" : "";
 	}
 
+	const char* NetReconnectUx::HeldSeatReturnNotice() {
+		return "The AI plays your units; your seat is held until the host reassigns it.";
+	}
+
 	std::string NetModerationPanelTitle(bool running, bool holdPause, const std::string& holdName, uint32_t holdSeconds, bool sharedPause) {
 		if (!running) {
 			return "PLAYERS  /  Restoring the shared match state...";
@@ -239,6 +243,21 @@ namespace RTE {
 			return seconds < 60 ? std::to_string(seconds) + " s ago" : std::to_string(seconds / 60) + " min ago";
 		};
 		if (seat.closed) return {};
+		switch (seat.holdCause) {
+			case NetSeatHoldCause::Capacity: return "Machine too slow";
+			case NetSeatHoldCause::LateStream: return "Inputs arrived too late";
+			case NetSeatHoldCause::TimingAck: return "Waiting for the player to accept the input delay";
+			case NetSeatHoldCause::Quiet: return "Stopped receiving this player's input";
+			case NetSeatHoldCause::OwnSeat: return "Catching up before taking control";
+			case NetSeatHoldCause::Crash: return "The player's game stopped";
+			case NetSeatHoldCause::RejoinFailed: return "The return could not catch up";
+			case NetSeatHoldCause::Leave: return "Left " + ago(seat.leftForMs);
+			case NetSeatHoldCause::LinkDrop: return "Connection lost " + ago(seat.droppedForMs);
+			case NetSeatHoldCause::Released: return "The host opened the seat";
+			case NetSeatHoldCause::Kicked: return "Removed by the host";
+			case NetSeatHoldCause::Banned: return "Banned by the host";
+			case NetSeatHoldCause::None: break;
+		}
 		if (seat.leftByChoice) return "Left " + ago(seat.leftForMs);
 		if (seat.slowMachine) return "Machine too slow";
 		if (seat.dropped) return "Connection lost " + ago(seat.droppedForMs);
@@ -260,7 +279,7 @@ namespace RTE {
 	void NetModerationUx::Refresh(const std::vector<NetH4ModerationSeat>& seats) {
 		m_Rows.clear();
 		for (const NetH4ModerationSeat& seat: seats) {
-			if (seat.cpu || (!seat.substitutable && !seat.substituting && !seat.dropped && !seat.slowMachine)) {
+			if (seat.cpu || (!seat.held && !seat.substitutable && !seat.substituting && !seat.dropped && !seat.slowMachine)) {
 				continue;
 			}
 			Row row;

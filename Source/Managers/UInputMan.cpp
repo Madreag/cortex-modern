@@ -18,6 +18,7 @@
 #include "PresetMan.h"
 #include "PerformanceMan.h"
 #include "MenuMan.h"
+#include "NetModerationGUI.h"
 #include "GUIInputWrapper.h"
 #include "Icon.h"
 #include "GameActivity.h"
@@ -1612,6 +1613,8 @@ void UInputMan::EndSimUpdate() {
 
 void UInputMan::HandleSpecialInput() {
 	if (g_ActivityMan.IsInActivity()) {
+		// A match chat entry owns Escape and the rest of the menu-opening keys until it closes.
+		if (const auto* panel = g_MenuMan.GetNetworkPanel(); panel && panel->IsChatEntryOpen()) return;
 		if (g_MenuMan.IsLocalPauseMenuOpen()) {
 			// The menu owns input: escape belongs to its own back navigation, start is the pad's way back.
 			if (AnyStartPress(false) && !KeyPressed(SDLK_ESCAPE)) g_MenuMan.RequestLocalPauseMenuBack();

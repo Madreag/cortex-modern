@@ -1704,13 +1704,63 @@ namespace RTE {
 		if (seat == nullptr) {
 			return NetKickBanResult::UnknownSeat;
 		}
-		if (seat->seat.local || seat->seat.cpu) {
-			return NetKickBanResult::ForbiddenTarget;
-		}
 		if (!(selection.epoch == m_ConfiguredEpoch) || selection.holderGeneration != seat->holderGeneration ||
 		    selection.incarnation != seat->incarnation || selection.seatGeneration != seat->seatGeneration) {
 			return NetKickBanResult::StaleSelection;
 		}
+		if (selection.applicant != c_InvalidNetPeerId) {
+			const Applicant* applicant = FindApplicant(selection.applicant, selection.stableSeat);
+			if (!applicant || applicant->txId != selection.applicantTransaction) return NetKickBanResult::StaleSelection;
+			if (applicant->approved) return NetKickBanResult::ActionUnavailable;
+			const Applicant chosen = *applicant;
+			const bool ban = action != NetParticipantRemovalAction::Kick;
+			// An applicant can already play a different seat. Declining only ends this request; banning
+			// that person uses the existing removal of their own seat, never the requested incumbent's.
+			if (ban) {
+				if (const auto owned = StableSeatOfConnection(chosen.connection)) {
+					for (const auto& view: GetModerationView()) if (view.stableSeat == *owned)
+						return RemoveParticipant(NetSelectModerationSeat(view), action, nowMs, unixNowMs, sessionId, round, boundaryFrame, issued);
+				}
+			}
+			issued.identity = chosen.identity;
+			issued.hasParticipantId = LookupParticipantId(chosen.connection, issued.participantId);
+			if (ban && !issued.hasParticipantId) return NetKickBanResult::UnknownIdentity;
+			if (ban && !m_BanStore) return NetKickBanResult::ActionUnavailable;
+			NetReconnectHost next = *this;
+			next.m_Applicants.erase(std::remove_if(next.m_Applicants.begin(), next.m_Applicants.end(), [&](const Applicant& row) {
+				return row.connection == chosen.connection && row.stableSeat == chosen.stableSeat && row.txId == chosen.txId;
+			}), next.m_Applicants.end());
+			const NetHostBanScope scope = action == NetParticipantRemovalAction::BanUntilRemoved ? NetHostBanScope::UntilRemoved : NetHostBanScope::Session;
+			if (ban) {
+				next.DropApplicantsFor(chosen.connection);
+				next.m_Admission.DropConnection(chosen.connection);
+				next.UnbindParticipantId(chosen.connection);
+				auto proposed = next.ExportMigrationState();
+				auto bans = m_BanStore->List();
+				const auto existing = std::find_if(bans.begin(), bans.end(), [&](const auto& row) { return row.identity == issued.participantId; });
+				if (existing == bans.end()) bans.push_back({issued.participantId, scope, unixNowMs, m_HostSessionId, chosen.displayName, "host ban"});
+				else if (scope == NetHostBanScope::UntilRemoved) existing->scope = scope;
+				auto state = nlohmann::json::from_cbor(proposed);
+				state["bans"] = nlohmann::json::array();
+				for (const auto& row: bans) if (row.scope == NetHostBanScope::UntilRemoved || row.sessionId == m_HostSessionId)
+					state["bans"].push_back({row.identity, static_cast<uint8_t>(row.scope), row.createdUnixMs, row.displayAlias, row.reason});
+				proposed = nlohmann::json::to_cbor(state);
+				if (proposed.empty() || proposed.size() > 32 * 1024) issued.refusal = "Applicant ban refused: the admission capsule exceeds 32 KiB.";
+				else if (m_MigrationCapacityCheck && !m_MigrationCapacityCheck(proposed, issued.refusal) && issued.refusal.empty()) issued.refusal = "Applicant ban refused: the migration capsule has no remaining capacity.";
+				if (!issued.refusal.empty()) return NetKickBanResult::ActionUnavailable;
+				std::string persistError;
+				if (!m_BanStore->Ban(issued.participantId, scope, chosen.displayName, "host ban", m_HostSessionId, unixNowMs, &persistError)) return NetKickBanResult::PersistenceFailed;
+				issued.connection = chosen.connection;
+			}
+			const NetJoinRejected denied{NetRejectReason::HostNotAccepting,
+			    ban ? "The host banned you from this session." : "The host declined your request for this seat.",
+			    "substitution", NetH4DenialReasonName(NetH4DenialReason::SeatNotSubstitutable), ""};
+			next.m_TxCache.Store(chosen.txId, chosen.key, denied, nowMs);
+			next.Send(chosen.connection, denied);
+			*this = std::move(next);
+			return NetKickBanResult::Ok;
+		}
+		if (seat->seat.local || seat->seat.cpu) return NetKickBanResult::ForbiddenTarget;
 		if (!IsSeated(*seat) && !IsHostOpened(*seat) && !IsHolderAway(*seat)) {
 			return NetKickBanResult::ActionUnavailable;
 		}

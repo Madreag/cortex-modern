@@ -559,14 +559,15 @@ namespace RTE {
 	inline constexpr uint8_t c_NetWorldReportActivationCommit = 7;
 	/// A successor to a returner whose held state predates its handover: the first frame under the new authority.
 	inline constexpr uint8_t c_NetWorldReportHandover = 8;
-	/// The round ended while the seat was held or rejoining: its end record, the final frame and the winner team + 1 in the top byte.
+	/// Presentation result for a held returner: final frame and winner team + 1 in the top byte; 0 is a completed draw, 255 is no result.
 	inline constexpr uint8_t c_NetWorldReportRoundEnded = 9;
+	inline constexpr int c_NetRoundEndedNoResult = -2;
 	inline uint64_t PackRoundEndedRecord(uint64_t finalFrame, int winnerTeam) {
-		return (finalFrame & 0x00FFFFFFFFFFFFFFULL) | (static_cast<uint64_t>(static_cast<uint8_t>(winnerTeam < 0 ? 0 : winnerTeam + 1)) << 56);
+		return (finalFrame & 0x00FFFFFFFFFFFFFFULL) | (static_cast<uint64_t>(static_cast<uint8_t>(winnerTeam == c_NetRoundEndedNoResult ? 255 : winnerTeam < 0 ? 0 : winnerTeam + 1)) << 56);
 	}
 	inline uint64_t RoundEndedFinalFrame(uint64_t record) { return record & 0x00FFFFFFFFFFFFFFULL; }
-	/// The winner team, or -1 for a round that ended without one.
-	inline int RoundEndedWinnerTeam(uint64_t record) { return static_cast<int>(record >> 56) - 1; }
+	/// Winner team, -1 for a completed draw, or c_NetRoundEndedNoResult for an unfinished round.
+	inline int RoundEndedWinnerTeam(uint64_t record) { return (record >> 56) == 255 ? c_NetRoundEndedNoResult : static_cast<int>(record >> 56) - 1; }
 
 
 	/// Why a world turned a connection away, as a code the joiner turns into the line it shows.

@@ -596,14 +596,17 @@ def repair_probe(who, root, roomy=True):
              {"op": "mouse_down", "control": "NetworkSeatsOptions"},
              {"op": "mouse_up", "control": "NetworkSeatsOptions"},
              {"op": "wait", "control": "NetworkSeatsOptionsText", "equals": {"visible": True}},
+             {"op": "mouse_down", "control": "NetworkSeatsOptions"}, {"op": "wait", "renders": 3},
+             {"op": "mouse_up", "control": "NetworkSeatsOptions"}, {"op": "wait", "renders": 4},
              {"op": "assert_control", "control": "NetworkSeatsOptionsText", **({"fits": True} if roomy else {}),
-              "text_contains": "Repair match: Ready - pause menu > Match Options" if who == "host" else "Frame redundancy:"},
+              "text_contains": "Repair match: Ready - pause menu > Match Details" if who == "host" else "Frame redundancy:"},
              *([] if roomy else [menu_step("assert_vertical_scroll NetworkSeatsOptionsText")]),
              {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
              {"op": "wait", "panel_open": False},
              {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
              {"op": "wait", "screen": "Pause"}, {"op": "wait", "renders": 2}, menu_step("activate ButtonMatchOptions"),
              {"op": "wait", "screen": "PauseMatchOptions"},
+             menu_step("activate ButtonConnectionDetails"), {"op": "wait", "renders": 4},
              {"op": "assert", "equals": {"service": "Running"}},
              menu_step("assert_rect_inside MatchOptionsBox viewport"),
              *row_checks("LabelMatchOptions", "MatchOptionsBox"),
@@ -875,7 +878,10 @@ def lobby_case(case, port, root):
             if who == "host":
                 steps += [{"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
                           {"op": "wait", "screen": "Pause", "elapsed_ms": 400},
-                          menu_step("assert_enabled ButtonEndMatch 1"), menu_step("activate ButtonEndMatch")]
+                          menu_step("assert_enabled ButtonEndMatch 1"), menu_step("activate ButtonEndMatch"),
+                          {"op": "wait", "screen": "PauseLeaveConfirm", "renders": 4, "scope": "menu"},
+                          {"op": "assert", "equals": {"service": "Running", "screen": "PauseLeaveConfirm"}, "scope": "menu"},
+                          menu_step("activate ButtonLeaveConfirm")]
             steps += [{"op": "wait", "service": "Starting", "scope": "menu"}, {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]
             probes[who] = {"schema": 1, "timeout_ms": 150000, "steps": steps}
             assert scripts[who].endswith("exit\n"), scripts[who][-80:]
@@ -1284,7 +1290,10 @@ def scripts(case, port, root, size="960x540"):
             if who == "host":
                 steps += [{"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
                           {"op": "wait", "screen": "Pause", "elapsed_ms": 400},
-                          menu_step("assert_enabled ButtonEndMatch 1"), menu_step("activate ButtonEndMatch")]
+                          menu_step("assert_enabled ButtonEndMatch 1"), menu_step("activate ButtonEndMatch"),
+                          {"op": "wait", "screen": "PauseLeaveConfirm", "renders": 4, "scope": "menu"},
+                          {"op": "assert", "equals": {"service": "Running", "screen": "PauseLeaveConfirm"}, "scope": "menu"},
+                          menu_step("activate ButtonLeaveConfirm")]
             steps += [{"op": "wait", "service": "Starting", "scope": "menu"},
                       {"op": "assert", "equals": {"service": "Starting"}, "scope": "menu"},
                       # The lobby box's rect lands next to the net_ui rects in the same observation,
@@ -2964,7 +2973,7 @@ def run_case(options, case, root, failing=None):
             assert reports["client"]["service"]["status"] == "Match left", reports["client"]["service"]["status"]
             leave = reports["client"]["service"]["reconnect"]
             assert leave["client_leave_acks"] == 1 and leave["client_unacknowledged_leaves"] == 0, leave
-            # A player who leaves keeps the seat and its ticket, so Rejoin Match brings the player back while the match runs.
+            # Leaving keeps the ticket and holds the seat until the host reassigns it.
             assert leave["client_state"] == "Left" and leave["ticket_stored"] is True, leave
             assert "[net-reconnect] leave: Left (ticket kept)" in logs["client"], logs["client"][-2000:]
             announcements = re.findall(r"\[net-lockstep\] a leave becomes a hold for peer 2 at frame (\d+): Match left", logs["host"])

@@ -101,10 +101,17 @@ def hand(control):
     return [menu(f"hand_press {control}"), {"op": "wait", "renders": 3}, menu(f"hand_release {control}"), {"op": "wait", "renders": 4}]
 
 
+def confirm_end_match():
+    return [{"op": "wait", "screen": "PauseLeaveConfirm", "renders": 4, "scope": "menu"},
+            {"op": "assert", "equals": {"service": "Running", "screen": "PauseLeaveConfirm"}, "scope": "menu"},
+            menu("hand_press ButtonLeaveConfirm", scope="menu"), {"op": "wait", "renders": 3, "scope": "menu"},
+            menu("hand_release ButtonLeaveConfirm", scope="menu")]
+
+
 def end_match():
     """The host's End match by hand, its last steps: a match launched from the command line has no lobby to land in, so
     neither loop steps the probe once the round has ended; the run's menu script gives the end its few frames."""
-    return [menu("hand_press ButtonEndMatch"), {"op": "wait", "renders": 3}, menu("hand_release ButtonEndMatch"), signal("done"),
+    return [menu("hand_press ButtonEndMatch"), {"op": "wait", "renders": 3}, menu("hand_release ButtonEndMatch"), *confirm_end_match(), signal("done"),
             {"op": "finish"}]
 
 
@@ -221,7 +228,10 @@ def players_probes(root, peers, base, moderate, cancel=False):
              {"op": "wait", "panel_open": True}, {"op": "wait", "renders": 6}, *roster_reads("host-open", 3), shot("players-host"),
              *click("NetworkSeatsOptions"), {"op": "wait", "control": "NetworkSeatsOptionsText", "equals": {"visible": True}},
              read("NetworkSeatsSummary", tag="host-rules-summary"), read("NetworkSeatsOptions", tag="host-rules-toggle"),
-             shot("rules-host"), *click("NetworkSeatsOptions"), {"op": "wait", "renders": 4}, *click("NetworkSeatsClose"),
+             read("NetworkSeatsOptionsText", tag="host-rules-text"),
+             shot("rules-host"), *click("NetworkSeatsOptions"), {"op": "wait", "renders": 4},
+             read("NetworkSeatsOptionsText", tag="host-connection-text"), read("NetworkSeatsOptions", tag="host-connection-toggle"),
+             *click("NetworkSeatsClose"),
              {"op": "wait", "panel_open": False}, signal("host-read")]
     for name in names[1:]:
         steps.append(wait_file(probe_root(root, name) / "read.json"))
@@ -351,7 +361,7 @@ def repair_probes(root):
     host, client = NAMES[0], NAMES[1]
     steps = [{"op": "wait", "service": "Running", "sim_at_least": 200}, wait_file(probe_root(root, client) / "ready.json"),
              *keys("Escape"), *on_screen("Pause"), *hand("ButtonMatchOptions"), *on_screen("PauseMatchOptions"),
-             *hand("ButtonMatchRepairNow"), read("LabelMatchRepairHint", "menu", "repair-armed"), shot("repair-armed"),
+             *hand("ButtonConnectionDetails"), *hand("ButtonMatchRepairNow"), read("LabelMatchRepairHint", "menu", "repair-armed"), shot("repair-armed"),
              *hand("ButtonMatchRepairNow"), {"op": "wait", "elapsed_ms": 500}, signal("pressed"),
              wait_file(probe_root(root, client) / "shot.json"), {"op": "wait", "elapsed_ms": 6000}, signal("done"), {"op": "finish"}]
     client_steps = [{"op": "wait", "service": "Running", "sim_at_least": 200}, signal("ready"),
@@ -484,7 +494,7 @@ def check_pause(checks, captures, reads, logs, runtimes):
         label = control_of(confirm, "LabelLeaveConfirm") if confirm else None
         text = label["text"] if label else ""
         if who == client:
-            truthful = "your seat stays yours" in text.lower() and "Rejoin Match" in text and "cannot be reclaimed" not in text
+            truthful = "until the host reassigns it" in text and "Rejoin Match" in text and "try to return" in text and "your seat stays yours" not in text.lower()
             kept = "[net-reconnect] leave: Left (ticket kept)" in logs[client]
             checks.check("leave-text-client-true", truthful and kept,
                          f"confirmation {text!r}; the service kept the seat's ticket: {kept}")
@@ -532,7 +542,13 @@ def check_players(checks, reads, peers, logs, base, moderate, cancel=False):
     rules = reads[host].get("host-rules-summary", {})
     checks.check("panel-rules-for-this-round", rules.get("text") == RULES_SUMMARY, f"options view says {rules.get('text')!r}")
     toggle = reads[host].get("host-rules-toggle", {})
-    checks.check("panel-rules-toggle-names-the-way-back", toggle.get("text") == "Back to players", f"toggle {toggle.get('text')!r}")
+    checks.check("panel-rules-toggle-names-connection-details", toggle.get("text") == "Connection details", f"toggle {toggle.get('text')!r}")
+    rules_text = reads[host].get("host-rules-text", {}).get("text", "")
+    connection = reads[host].get("host-connection-text", {}).get("text", "")
+    checks.check("panel-game-rules-separated-from-connection", "Team 1" in rules_text and "Input delay:" not in rules_text and "Input delay:" in connection,
+                 f"rules {rules_text!r}; connection {connection!r}")
+    back = reads[host].get("host-connection-toggle", {})
+    checks.check("panel-connection-toggle-names-the-way-back", back.get("text") == "Back to players", f"toggle {back.get('text')!r}")
     for name in names[1:]:
         client_roster = reads[name].get("client-roster", {})
         listed = roster_names(client_roster.get("text", ""))
@@ -959,13 +975,13 @@ def between_rounds_plan(root, port):
                    f"settext TextHostPort {port}\nsettext TextHostPlayers 2\nactivate ButtonMultiplayerCreate\nwait_connected 2 60\n"
                    "wait_remote_ready 60\nwait 3\nactivate ButtonMultiplayerStart\n"
                    f"wait_file {probe_root(root, host) / 'lobby.json'} 150\nwait_ms 1500\nscreenshot between_rounds\nwait 3\n"
-                   f"assert_roster_text {client}  /  {HELD_BETWEEN_ROUNDS}\nwait 3\nexit\n")
+                   f"assert_roster_text {client}  /  Team 2  /  {HELD_BETWEEN_ROUNDS}\nwait 3\nexit\n")
     client_script = (LANDING + "activate ButtonMultiplayerJoinGame\nwait_ms 400\nsettext TextJoinAddress 127.0.0.1\n"
                      f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\nwait_connected 2 60\nactivate ButtonMultiplayerReady\n"
                      f"wait_file {probe_root(root, host) / 'lobby.json'} 150\nwait_ms 4000\nexit\n")
     # The lobby's ticks count on the launch counter: the round's own frame says the match is on screen.
     host_steps = [{"op": "wait", "service": "Running", "screen": "Gameplay", "lockstep_frame_at_least": 150}, wait_file(probe_root(root, client) / "left.json"),
-                  {"op": "wait", "elapsed_ms": 2500}, *keys("Escape"), *on_screen("Pause"), *hand("ButtonEndMatch"),
+                  {"op": "wait", "elapsed_ms": 2500}, *keys("Escape"), *on_screen("Pause"), *hand("ButtonEndMatch"), *confirm_end_match(),
                   {"op": "wait", "service": "Starting", "scope": "menu"}, {"op": "wait", "elapsed_ms": 1500, "scope": "menu"}, signal("lobby", "menu"),
                   {"op": "finish"}]
     client_steps = [{"op": "wait", "service": "Running", "screen": "Gameplay", "lockstep_frame_at_least": 150}, *keys("Escape"), *on_screen("Pause"), *hand("ButtonLeaveMatch"),
@@ -976,7 +992,7 @@ def between_rounds_plan(root, port):
 
 def check_between_rounds(checks, logs):
     host, client = NAMES[:2]
-    wanted = f"{client}  /  {HELD_BETWEEN_ROUNDS}"
+    wanted = f"{client}  /  Team 2  /  {HELD_BETWEEN_ROUNDS}"
     line = next((line for line in logs[host].splitlines() if "assert_roster_text" in line), "")
     passed = re.search(r"assert_roster_text .*PASS", line) is not None
     checks.check("between-rounds-held-reads-held", passed and "Disconnected" not in line, f"{wanted!r}: {line[:400]!r}")
