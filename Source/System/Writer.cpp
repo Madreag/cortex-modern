@@ -57,6 +57,44 @@ namespace {
 		if (result.ec != std::errc{}) throw std::runtime_error("could not format checkpoint value");
 		text.append(buffer, result.ptr);
 	}
+	std::string CanonicalCaptureValues(std::string_view values) {
+		std::string result;
+		size_t cursor = 0;
+		while (cursor < values.size()) {
+			const size_t begin = cursor;
+			const auto kind = ReadCaptureValue<CaptureValue>(values, cursor);
+			switch (kind) {
+				case CaptureValue::PrimitiveBlock: {
+					const auto decode = ReadCaptureValue<CheckpointBuffer::PrimitiveDecoder>(values, cursor);
+					decode(result, ReadCaptureString(values, cursor), true);
+					continue;
+				}
+				case CaptureValue::Raw:
+				case CaptureValue::String: ReadCaptureString(values, cursor); break;
+				case CaptureValue::Property: ReadCaptureValue<int>(values, cursor); ReadCaptureString(values, cursor); break;
+				case CaptureValue::NewLine: ReadCaptureValue<int>(values, cursor); ReadCaptureValue<int>(values, cursor); break;
+				case CaptureValue::Float: ReadCaptureValue<float>(values, cursor); break;
+				case CaptureValue::ElapsedSimTime: ReadCaptureValue<int64_t>(values, cursor); ReadCaptureValue<double>(values, cursor); break;
+				case CaptureValue::PeerBegin:
+				case CaptureValue::PeerEnd:
+				case CaptureValue::SizedRunBegin:
+				case CaptureValue::SizedRunEnd: break;
+				case CaptureValue::Integer:
+				case CaptureValue::Unsigned:
+				case CaptureValue::SpacedInteger:
+				case CaptureValue::SpacedUnsigned:
+				case CaptureValue::Double:
+				case CaptureValue::Child:
+				case CaptureValue::SizedChild:
+				case CaptureValue::Base64:
+				case CaptureValue::UrlBase64:
+				case CaptureValue::GraphString: ReadCaptureValue<uint64_t>(values, cursor); break;
+				default: throw std::logic_error("unknown owned checkpoint value");
+			}
+			result.append(values.substr(begin, cursor - begin));
+		}
+		return result;
+	}
 }
 
 struct RTE::CheckpointArena {
@@ -101,12 +139,18 @@ struct CheckpointText::Data {
 	std::string identity;
 	size_t ownedBytes = 0;
 	bool hasPeer = false;
+	bool hasPrimitiveBlocks = false;
 	bool usesSimTime = false;
 	int64_t simTimeTicks = 0;
 	mutable std::mutex ready; // Held while this node formats; a producer that throws leaves the node for the next read.
 	mutable std::atomic<bool> formatted{false};
 	mutable std::string text;
 	std::shared_ptr<Data> drainNext;
+	bool SameTape(const Data& other) const {
+		if (values == other.values) return true;
+		if (hasPrimitiveBlocks == other.hasPrimitiveBlocks) return false;
+		return CanonicalCaptureValues(values) == CanonicalCaptureValues(other.values);
+	}
 
 	~Data() {
 		std::shared_ptr<Data> pending;
@@ -199,6 +243,7 @@ CheckpointText CheckpointText::AtSimTime(int64_t ticks) const {
 		node->children.reserve(source->children.size());
 		node->ownedBytes = source->ownedBytes;
 		node->hasPeer = source->hasPeer;
+		node->hasPrimitiveBlocks = source->hasPrimitiveBlocks;
 		node->simTimeTicks = ticks;
 		bound.emplace(source, node);
 		pending.push_back({source, node});
@@ -232,7 +277,7 @@ bool CheckpointText::SameValues(const CheckpointText& other) const {
 	if (m_Data == other.m_Data) return true;
 	if (!m_Data || !other.m_Data) return false;
 	if (m_Data->deferred || other.m_Data->deferred) return m_Data->deferred && other.m_Data->deferred && !m_Data->identity.empty() && m_Data->identity == other.m_Data->identity;
-	if (m_Data->children.empty() || other.m_Data->children.empty()) return m_Data->values == other.m_Data->values && m_Data->children.size() == other.m_Data->children.size();
+	if (m_Data->children.empty() || other.m_Data->children.empty()) return m_Data->SameTape(*other.m_Data) && m_Data->children.size() == other.m_Data->children.size();
 	std::vector<Data::Pair> pending{{m_Data.get(), other.m_Data.get()}};
 	std::unordered_set<Data::Pair, Data::PairHash> seen;
 	while (!pending.empty()) {
@@ -244,7 +289,7 @@ bool CheckpointText::SameValues(const CheckpointText& other) const {
 			if (!current->deferred || !previous->deferred || current->identity.empty() || current->identity != previous->identity) return false;
 			continue;
 		}
-		if (current->values != previous->values || current->children.size() != previous->children.size()) return false;
+		if (!current->SameTape(*previous) || current->children.size() != previous->children.size()) return false;
 		if (!seen.insert({current, previous}).second) continue;
 		for (size_t index = current->children.size(); index > 0; --index) pending.push_back({current->children[index - 1].m_Data.get(), previous->children[index - 1].m_Data.get()});
 	}
@@ -278,7 +323,7 @@ CheckpointText CheckpointText::ReuseChildren(const CheckpointText& previous) con
 				const bool equal = frame.current->deferred && frame.previous->deferred && !frame.current->identity.empty() && frame.current->identity == frame.previous->identity;
 				results.emplace(pair, Result{equal, equal ? frame.previous : frame.current}); pending.pop_back(); continue;
 			}
-			frame.equal = frame.current->values == frame.previous->values && frame.current->children.size() == frame.previous->children.size();
+			frame.equal = frame.current->SameTape(*frame.previous) && frame.current->children.size() == frame.previous->children.size();
 			frame.entered = true;
 		}
 		const size_t count = std::min(frame.current->children.size(), frame.previous->children.size());
@@ -299,6 +344,7 @@ CheckpointText CheckpointText::ReuseChildren(const CheckpointText& previous) con
 			value->children = frame.current->children;
 			value->ownedBytes = frame.current->ownedBytes;
 			value->hasPeer = frame.current->hasPeer;
+			value->hasPrimitiveBlocks = frame.current->hasPrimitiveBlocks;
 			value->usesSimTime = frame.current->usesSimTime;
 			value->simTimeTicks = frame.current->simTimeTicks;
 			for (size_t index = 0; index < count; ++index) {
@@ -403,6 +449,11 @@ const std::string& CheckpointText::Text() const {
 					}
 					case CaptureValue::PeerBegin:
 					case CaptureValue::PeerEnd: break;
+					case CaptureValue::PrimitiveBlock: {
+						const auto decode = ReadCaptureValue<CheckpointBuffer::PrimitiveDecoder>(values, cursor);
+						decode(text, ReadCaptureString(values, cursor), false);
+						break;
+					}
 					case CaptureValue::SizedRunBegin: sizedRuns.push_back(text.size()); break;
 					case CaptureValue::SizedRunEnd: {
 						if (sizedRuns.empty()) throw std::logic_error("unmatched owned sized run");
@@ -508,6 +559,12 @@ std::string CheckpointText::SharedText() const {
 			}
 			case CaptureValue::PeerBegin: ++peer; break;
 			case CaptureValue::PeerEnd: --peer; break;
+			case CaptureValue::PrimitiveBlock: {
+				const auto decode = ReadCaptureValue<CheckpointBuffer::PrimitiveDecoder>(values, cursor);
+				const auto block = ReadCaptureString(values, cursor);
+				if (peer == 0) decode(text, block, false);
+				break;
+			}
 			case CaptureValue::SizedRunBegin: sizedRuns.push_back(peer == 0 ? std::optional<size_t>(text.size()) : std::nullopt); break;
 			case CaptureValue::SizedRunEnd: {
 				if (sizedRuns.empty()) throw std::logic_error("unmatched owned sized run");
@@ -560,6 +617,12 @@ void CheckpointBuffer::NewLine(int indent, int count) { Copy(CaptureValue::NewLi
 void CheckpointBuffer::Property(std::string_view name, int indent) { Copy(CaptureValue::Property, indent, static_cast<uint64_t>(name.size())); m_Values.append(name); }
 void CheckpointBuffer::PeerBegin() { Copy(CaptureValue::PeerBegin); m_HasPeer = true; }
 void CheckpointBuffer::PeerEnd() { Copy(CaptureValue::PeerEnd); }
+void CheckpointBuffer::PrimitiveBlock(std::string_view values, PrimitiveDecoder decoder) {
+	Copy(CaptureValue::PrimitiveBlock, decoder, static_cast<uint64_t>(values.size()));
+	m_Values.append(values);
+	m_HasPrimitiveBlocks = true;
+}
+
 void CheckpointBuffer::SizedRunBegin() { Copy(CaptureValue::SizedRunBegin); }
 void CheckpointBuffer::SizedRunEnd() { Copy(CaptureValue::SizedRunEnd); }
 
@@ -570,6 +633,7 @@ CheckpointText CheckpointBuffer::Finish() {
 	data->children = std::move(m_Children);
 	data->ownedBytes = data->values.size();
 	data->hasPeer = m_HasPeer;
+	data->hasPrimitiveBlocks = m_HasPrimitiveBlocks;
 	data->usesSimTime = m_UsesSimTime;
 	data->simTimeTicks = m_SimTimeTicks;
 	for (const auto& child: data->children) {
@@ -835,6 +899,58 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		const CheckpointText captured = CheckpointWriter::CaptureNative(save);
 		value = 91; binary.assign("changed");
 		check(captured.Text() == reference, "owned_checkpoint_copies_native_values");
+		{
+			enum class SignedByte : int8_t { Low = -127 };
+			const uint8_t unusualBool = 0xFE;
+			bool flag;
+			std::memcpy(&flag, &unusualBool, sizeof(flag));
+			int8_t bytes[] = {-128, 0, 127};
+			std::array<uint64_t, 2> wide{0, std::numeric_limits<uint64_t>::max()};
+			const auto saveBlock = [&] {
+				CheckpointWriter writer("PrimitiveBlock1");
+				writer(flag, bytes, wide, SignedByte::Low, std::numeric_limits<int64_t>::min(),
+				       -0.0F, std::bit_cast<float>(uint32_t{0x7FC00031}), std::bit_cast<double>(uint64_t{0x7FF8000000000031}));
+				writer.PerPeer(bytes, wide);
+				return writer.Text();
+			};
+			const auto ordinary = CheckpointWriter::CaptureNative(saveBlock);
+			CheckpointText frozen;
+			{
+				CheckpointWriter::BatchScope batch(true);
+				frozen = CheckpointWriter::CaptureNative(saveBlock);
+			}
+			flag = false; bytes[0] = 17; wide.fill(1);
+			const auto archived = std::async(std::launch::async, [frozen] { return std::pair(frozen.Text(), frozen.SharedText()); }).get();
+			check(frozen.SameValues(ordinary) && archived.first == ordinary.Text() && archived.second == ordinary.SharedText(),
+			      "owned_primitive_blocks_preserve_width_bits_peer_runs_and_lifetime");
+		}
+		{
+			CheckpointText frozen;
+			std::string full, shared;
+			{
+				std::string binary("a\0b", 3);
+				std::vector<Vector> positions{{-0.0F, std::bit_cast<float>(uint32_t{0x7FC00031})}, {17, 29}};
+				Timer timer;
+				timer.SetStartSimTimeTicks(37); timer.SetSimTimeLimitTicks(41);
+				timer.SetStartRealTimeTicks(43); timer.SetRealTimeLimitTicks(47);
+				const auto saveMixed = [&] {
+					CheckpointWriter writer("MixedFields1");
+					writer(-17, 19u, binary, -0.0F, 23, positions, 31, 37u, timer, 41, 43u, binary);
+					writer.PerPeer(47, 53u, binary, 59, 61u);
+					writer(67, 71u);
+					return writer.Text();
+				};
+				const auto ordinary = CheckpointWriter::CaptureNative(saveMixed);
+				full = ordinary.Text(); shared = ordinary.SharedText();
+				CheckpointWriter::BatchScope batch(true);
+				frozen = CheckpointWriter::CaptureNative(saveMixed);
+				check(frozen.SameValues(ordinary), "mixed_primitive_runs_match_the_original_tape");
+				binary.assign("changed"); positions.clear(); timer.Reset();
+			}
+			const auto archived = std::async(std::launch::async, [frozen] { return std::pair(frozen.Text(), frozen.SharedText()); }).get();
+			check(archived.first == full && archived.second == shared,
+			      "mixed_primitive_runs_outlive_strings_containers_and_clocks");
+		}
 		{
 			struct InlineRecord {
 				Vector position{-0.0F, std::bit_cast<float>(uint32_t{0x7FC00031})};

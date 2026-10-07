@@ -1,6 +1,7 @@
 #include "AtomGroup.h"
 #include "Base64/base64.h"
 #include "CheckpointArchive.h"
+#include "CaptureSentinel.h"
 #include "MovableMan.h"
 
 #include <algorithm>
@@ -176,11 +177,13 @@ std::string AtomGroup::SaveCheckpoint() const {
 	if (CheckpointWriter::BatchEnabled() && needIndices) indices.reserve(m_Atoms.size());
 	if (inlineAtoms) writer(m_Atoms.size());
 	size_t index = 0;
+	std::optional<CaptureTrace::Span> atomsSpan(std::in_place, "atom_values", CaptureTrace::Active() ? std::to_string(m_Atoms.size()) : std::string());
 	for (const Atom* atom: m_Atoms) {
 		if (needIndices) indices.emplace(atom, index++);
 		if (inlineAtoms) writer.NativeValue([atom] { return atom->SaveCheckpoint(); });
 		else atoms.push_back(CheckpointWriter::Native([atom] { return atom->SaveCheckpoint(); }));
 	}
+	atomsSpan.reset();
 	std::map<long, std::vector<size_t>> subgroups;
 	for (const auto& [id, group]: m_SubGroups) {
 		auto& saved = subgroups[id];

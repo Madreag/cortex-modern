@@ -6410,7 +6410,7 @@ namespace RTE::CheckpointLua {
 				lua_settop(state, top);
 				return true;
 			}
-			explicit DescriptorRootScope(lua_State* source, int originalTop, int roots, const TValue& callbacks) : state(source) {
+			explicit DescriptorRootScope(lua_State* source, int originalTop, int roots, const TValue& callbacks, int stateIndex) : state(source) {
 				if (!lua_checkstack(state, 32)) throw std::runtime_error("native descriptor roots exhausted the Lua stack");
 				seen.reserve(2048);
 				if (GCobj* last = gcref(G(state)->gc.mmudata)) {
@@ -6421,10 +6421,16 @@ namespace RTE::CheckpointLua {
 					} while (object != last);
 				}
 				const int top = lua_gettop(state);
-				if (!SeedSerializedValues(originalTop, roots, callbacks)) {
+				bool seeded;
+				{
+					CaptureTrace::Span seedSpan("descriptor_seed", CaptureTrace::Active() ? std::to_string(stateIndex) : std::string());
+					seeded = SeedSerializedValues(originalTop, roots, callbacks);
+				}
+				if (!seeded) {
 					for (int index = 1; index <= top; ++index) Queue(index);
 					lua_pushvalue(state, LUA_GLOBALSINDEX); Queue(-1); lua_settop(state, top);
 				}
+				std::optional<CaptureTrace::Span> walkSpan(std::in_place, "descriptor_walk", CaptureTrace::Active() ? std::to_string(stateIndex) : std::string());
 				while (!pending.empty()) {
 					if (!lua_checkstack(state, 8)) throw std::runtime_error("native descriptor roots exhausted the Lua stack");
 					const TValue value = pending.back(); pending.pop_back();
@@ -6470,6 +6476,8 @@ namespace RTE::CheckpointLua {
 					if (lua_getmetatable(state, index)) { Queue(-1); lua_pop(state, 1); }
 					lua_settop(state, top);
 				}
+				walkSpan.reset();
+				CaptureTrace::Span countSpan("descriptor_counts", CaptureTrace::Active() ? std::format("{}:seen={}:userdata={}:functions={}:opaque={}", stateIndex, seen.size(), userdata.size(), functions.size(), opaque.size()) : std::string());
 				s_DescriptorState = state;
 				s_DescriptorRoots = &userdata;
 				s_DescriptorFunctions = &functions;
@@ -6724,7 +6732,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		if (!m_NativeCache) m_NativeCache = std::make_shared<CheckpointLua::NativeCache>(m_State);
 		std::optional<CaptureTrace::Span> span(std::in_place, "graph_natives", std::to_string(g_LuaMan.GetStateIndex(this)));
 		CheckpointLua::CaptureScope natives(m_State, *m_NativeCache);
-		CheckpointLua::DescriptorRootScope descriptorRoots(m_State, restore.top, roots, image->callbacks);
+		CheckpointLua::DescriptorRootScope descriptorRoots(m_State, restore.top, roots, image->callbacks, image->stateIndex);
 		natives.Capture();
 		span.reset();
 		const auto nativeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();

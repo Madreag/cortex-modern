@@ -91,17 +91,11 @@ namespace RTE {
 			return result;
 		}
 		template <class... Values> void operator()(const Values&... values) {
-			constexpr size_t words = (PrimitiveWords<Values>() + ... + 0);
-			if constexpr (words > 0 && words <= 512 && ((PrimitiveWords<Values>() != 0) && ...)) {
-				if (m_Recording && BatchEnabled()) {
-					std::array<char, 9 * words> record;
-					size_t at = 0;
-					(WritePrimitive(record.data(), at, values), ...);
-					Buffer().AppendValues(std::string_view(record.data(), at));
-					return;
-				}
+			if (m_Recording && BatchEnabled()) {
+				CaptureFields<0>(std::forward_as_tuple(values...));
+			} else {
+				(Value(values), ...);
 			}
-			(Value(values), ...);
 		}
 		/// Writes values only this machine holds (its clocks, pacing, seat or view): the archive carries them as before,
 		/// and the shared state a peer is compared on leaves them out.
@@ -200,6 +194,34 @@ namespace RTE {
 			else if constexpr (CheckpointArray<T>) return std::tuple_size_v<T> * PrimitiveWords<typename T::value_type>();
 			else return 0;
 		}
+		template<class Fields, size_t Index> using FieldType = std::remove_cvref_t<std::tuple_element_t<Index, Fields>>;
+		template<size_t Index, class Fields, size_t Words = 0> static constexpr size_t PrimitiveEnd() {
+			if constexpr (Index == std::tuple_size_v<Fields>) {
+				return Index;
+			} else {
+				constexpr size_t words = PrimitiveWords<FieldType<Fields, Index>>();
+				if constexpr (words == 0 || words + Words > 512) return Index;
+				else return PrimitiveEnd<Index + 1, Fields, Words + words>();
+			}
+		}
+		template<size_t Begin, class Fields, size_t... Index> void CapturePrimitives(const Fields& fields, std::index_sequence<Index...>) {
+			std::array<char, (PrimitiveBytes<FieldType<Fields, Begin + Index>>() + ... + 0)> record;
+			size_t at = 0;
+			(WritePrimitive(record.data(), at, std::get<Begin + Index>(fields)), ...);
+			Buffer().PrimitiveBlock(std::string_view(record.data(), at), &DecodePrimitives<FieldType<Fields, Begin + Index>...>);
+		}
+		template<size_t Begin, class Fields> void CaptureFields(const Fields& fields) {
+			if constexpr (Begin < std::tuple_size_v<Fields>) {
+				constexpr size_t end = PrimitiveEnd<Begin, Fields>();
+				if constexpr (end == Begin) {
+					Value(std::get<Begin>(fields));
+					CaptureFields<Begin + 1>(fields);
+				} else {
+					CapturePrimitives<Begin>(fields, std::make_index_sequence<end - Begin>());
+					CaptureFields<end>(fields);
+				}
+			}
+		}
 		template<class T> static void WritePrimitive(char* bytes, size_t& at, const T& value) {
 			if constexpr (std::is_same_v<T, Vector>) {
 				WritePrimitive(bytes, at, value.m_X); WritePrimitive(bytes, at, value.m_Y);
@@ -207,23 +229,60 @@ namespace RTE {
 				WritePrimitive(bytes, at, value.m_Corner); WritePrimitive(bytes, at, value.m_Width); WritePrimitive(bytes, at, value.m_Height);
 			} else if constexpr (std::is_array_v<T> || CheckpointArray<T>) {
 				for (const auto& item: value) WritePrimitive(bytes, at, item);
-			} else if constexpr (std::is_enum_v<T>) {
-				WritePrimitive(bytes, at, static_cast<std::underlying_type_t<T>>(value));
-			} else if constexpr (std::is_same_v<T, float>) {
-				WritePrimitive(bytes, at, std::bit_cast<uint32_t>(value));
-			} else if constexpr (std::is_same_v<T, double>) {
-				WritePrimitive(bytes, at, std::bit_cast<uint64_t>(value));
-			} else if constexpr (std::is_same_v<T, bool>) {
-				unsigned char byte;
-				std::memcpy(&byte, &value, sizeof(byte));
-				WritePrimitive(bytes, at, static_cast<unsigned int>(byte));
 			} else {
-				const auto kind = std::is_signed_v<T> ? CheckpointBuffer::ValueKind::SpacedInteger : CheckpointBuffer::ValueKind::SpacedUnsigned;
-				const uint64_t word = static_cast<uint64_t>(value);
-				bytes[at++] = static_cast<char>(kind);
-				std::memcpy(bytes + at, &word, sizeof(word));
-				at += sizeof(word);
+				std::memcpy(bytes + at, &value, sizeof(value));
+				at += sizeof(value);
 			}
+		}
+		template<class T> static constexpr size_t PrimitiveBytes() {
+			if constexpr (std::is_same_v<T, Vector>) return 2 * sizeof(float);
+			else if constexpr (std::is_same_v<T, Box>) return 4 * sizeof(float);
+			else if constexpr (std::is_array_v<T>) return std::extent_v<T> * PrimitiveBytes<std::remove_extent_t<T>>();
+			else if constexpr (CheckpointArray<T>) return std::tuple_size_v<T> * PrimitiveBytes<typename T::value_type>();
+			else return sizeof(T);
+		}
+		template<class T> static T ReadPrimitive(std::string_view& values) {
+			if (values.size() < sizeof(T)) throw std::logic_error("truncated owned primitive block");
+			T value;
+			std::memcpy(&value, values.data(), sizeof(value));
+			values.remove_prefix(sizeof(value));
+			return value;
+		}
+		template<class T> static void DecodePrimitive(std::string& text, std::string_view& values, bool tape) {
+			if constexpr (std::is_same_v<T, Vector>) {
+				DecodePrimitive<float>(text, values, tape); DecodePrimitive<float>(text, values, tape);
+			} else if constexpr (std::is_same_v<T, Box>) {
+				for (size_t index = 0; index < 4; ++index) DecodePrimitive<float>(text, values, tape);
+			} else if constexpr (std::is_array_v<T>) {
+				for (size_t index = 0; index < std::extent_v<T>; ++index) DecodePrimitive<std::remove_extent_t<T>>(text, values, tape);
+			} else if constexpr (CheckpointArray<T>) {
+				for (size_t index = 0; index < std::tuple_size_v<T>; ++index) DecodePrimitive<typename T::value_type>(text, values, tape);
+			} else if constexpr (std::is_enum_v<T>) {
+				DecodePrimitive<std::underlying_type_t<T>>(text, values, tape);
+			} else if constexpr (std::is_same_v<T, float>) {
+				DecodePrimitive<uint32_t>(text, values, tape);
+			} else if constexpr (std::is_same_v<T, double>) {
+				DecodePrimitive<uint64_t>(text, values, tape);
+			} else if constexpr (std::is_same_v<T, bool>) {
+				DecodePrimitive<unsigned char>(text, values, tape);
+			} else {
+				const T value = ReadPrimitive<T>(values);
+				using Wide = std::conditional_t<std::is_signed_v<T>, int64_t, uint64_t>;
+				const Wide word = static_cast<Wide>(value);
+				if (tape) {
+					text.push_back(static_cast<char>(std::is_signed_v<T> ? CheckpointBuffer::ValueKind::SpacedInteger : CheckpointBuffer::ValueKind::SpacedUnsigned));
+					text.append(reinterpret_cast<const char*>(&word), sizeof(word));
+				} else {
+					char buffer[32];
+					const auto result = std::to_chars(buffer, buffer + sizeof(buffer), word);
+					if (result.ec != std::errc{}) throw std::logic_error("could not format owned primitive");
+					text.append(buffer, result.ptr); text.push_back(' ');
+				}
+			}
+		}
+		template<class... T> static void DecodePrimitives(std::string& text, std::string_view values, bool tape) {
+			(DecodePrimitive<T>(text, values, tape), ...);
+			if (!values.empty()) throw std::logic_error("trailing owned primitive block");
 		}
 		// A nested writer that already published into this scope was composed by hand, so its text
 		// never reached this writer: name the mistake here instead of losing the value.

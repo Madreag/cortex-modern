@@ -119,7 +119,8 @@ namespace RTE {
 	/// Copies scalar values and owned children without formatting them.
 	class CheckpointBuffer {
 	public:
-		enum class ValueKind : uint8_t { Raw, Integer, Unsigned, SpacedInteger, SpacedUnsigned, Float, Double, String, Child, SizedChild, Base64, UrlBase64, GraphString, NewLine, Property, ElapsedSimTime, PeerBegin, PeerEnd, SizedRunBegin, SizedRunEnd };
+		enum class ValueKind : uint8_t { Raw, Integer, Unsigned, SpacedInteger, SpacedUnsigned, Float, Double, String, Child, SizedChild, Base64, UrlBase64, GraphString, NewLine, Property, ElapsedSimTime, PeerBegin, PeerEnd, SizedRunBegin, SizedRunEnd, PrimitiveBlock };
+		using PrimitiveDecoder = void (*)(std::string&, std::string_view, bool);
 		/// One worker owns the allocator while it captures; its published nodes
 		/// keep that storage alive until the last archive/cache reference ends.
 		class AllocationScope {
@@ -135,6 +136,7 @@ namespace RTE {
 		bool IsBatched() const { return m_Arena != nullptr; }
 		/// Appends the same typed scalar tape as the individual value calls.
 		void AppendValues(std::string_view values) { m_Values.append(values); }
+		void PrimitiveBlock(std::string_view values, PrimitiveDecoder decoder);
 		void Raw(std::string_view text);
 		void Integer(int64_t value, bool space = false);
 		void Unsigned(uint64_t value, bool space = false);
@@ -159,6 +161,7 @@ namespace RTE {
 		std::pmr::string m_Values;
 		std::pmr::vector<CheckpointText> m_Children;
 		bool m_HasPeer = false;
+		bool m_HasPrimitiveBlocks = false;
 		bool m_UsesSimTime = false;
 		int64_t m_SimTimeTicks = 0;
 		template<class... T> void Copy(const T&... values) {
