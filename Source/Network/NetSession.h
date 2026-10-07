@@ -102,12 +102,19 @@ namespace RTE {
 
 	/// One presentation-queue line. Chat is never a sim command and never enters a tick hash, so it
 	/// lives in this bounded queue the UI drains instead of any command stream.
+	enum class NetChatSendState { Unknown, Queued, Sent, Refused };
+	struct NetChatSendResult {
+		NetChatSendState state = NetChatSendState::Unknown;
+		std::string detail;
+	};
+
 	struct NetChatEntry {
 		uint64_t receivedTick = 0; //!< The lockstep frame current when it arrived (lobby phase: 0).
 		uint8_t senderPeerId = 0; //!< Session-assigned id of the author; the host's own seat is 0.
 		std::string senderName; //!< Filled when this session knows the name; the UI resolves the rest.
 		uint8_t scope = c_NetChatScopeAll;
 		std::string text;
+		uint64_t historyId = 0; //!< Local presentation identity: distinguishes repeated lines during a paused tick.
 	};
 
 	// A connected peer as seen by the match runner: its transport id and session-assigned id.
@@ -185,6 +192,7 @@ namespace RTE {
 		void DisconnectReadyPeer(NetPeerId peerId, NetRejectReason reason, const std::string& message);
 		/// Refuses every connection still in its handshake with the message, without ending the host's session.
 		void DisconnectJoiningPeers(NetRejectReason reason, const std::string& message);
+		void DisconnectJoiningPeer(NetPeerId peerId, NetRejectReason reason, const std::string& message);
 		/// Host: how many connections are still in their handshake. A rejoin that has reached us but not yet
 		/// been admitted lives here, and the goodbye drain must see it arrive.
 		uint32_t GetHandshakingPeerCount() const;
@@ -230,8 +238,9 @@ namespace RTE {
 		/// it never becomes a lockstep command and no part of it reaches a tick hash. The host's
 		/// line relays to every Ready peer; a client's line goes to the host, which relays it.
 		/// @return false when the line was refused outright (bad scope, oversize, malformed text, or
-		/// a full outbox); a queued line can still be rate-dropped at the pump - the counters tell.
-		bool SendChat(uint8_t scope, const std::string& text);
+		/// a full outbox). With requestId, ChatSendResult reports later link, rate and transport refusal.
+		bool SendChat(uint8_t scope, const std::string& text, uint64_t* requestId = nullptr);
+		NetChatSendResult ChatSendResult(uint64_t requestId) const;
 		/// Drains the bounded presentation queue (newest 64 kept). Safe from the UI thread while the
 		/// runner worker owns the transport pump.
 		std::vector<NetChatEntry> TakeChatEntries();
@@ -455,9 +464,13 @@ namespace RTE {
 		struct NetChatOutbound {
 			uint8_t scope;
 			std::string text;
+			uint64_t requestId = 0;
 		};
 		mutable std::mutex m_ChatMutex;
 		std::deque<NetChatOutbound> m_ChatOutbox;
+		uint64_t m_NextChatRequestId = 1;
+		uint64_t m_NextChatHistoryId = 1;
+		std::map<uint64_t, NetChatSendResult> m_ChatSendResults;
 		std::deque<NetChatEntry> m_ChatLog;
 		std::deque<NetChatEntry> m_ChatHistory;
 		std::map<uint8_t, int> m_ChatTeams;

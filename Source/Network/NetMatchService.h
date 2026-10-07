@@ -1009,7 +1009,8 @@ namespace RTE {
 		std::optional<NetMatchSummary> GetLastMatchSummary() const;
 		/// Local chat send, presentation only. Reaches the session whether the lobby is still running
 		/// on the worker or the match has handed it back; false when no session link exists.
-		bool SendChat(uint8_t scope, const std::string& text);
+		bool SendChat(uint8_t scope, const std::string& text, uint64_t* requestId = nullptr);
+		NetChatSendResult ChatSendResult(uint64_t requestId) const;
 		/// Drains the session's chat queue for the UI. Newest 64 are kept on the session side.
 		std::vector<NetChatEntry> TakeChatEntries();
 		std::vector<NetChatEntry> ChatHistory() const;
@@ -1889,7 +1890,7 @@ namespace RTE {
 		std::optional<uint64_t> m_RoundEndRecord;
 		std::set<NetPeerId> m_EndRecordSent;
 		std::set<NetPeerId> m_ToldMatchOver; //!< Host: returning connections this round told the match is over; they wait on no final tail.
-		int m_EndWinnerTeam = -1;
+		int m_EndWinnerTeam = c_NetRoundEndedNoResult;
 		std::optional<int> m_ReceivedEndWinner; //!< The winner an end record named for the round this seat was held or rejoining in.
 		/// Host: a seat was held when the round ended, so a rejoin still arriving is owed the goodbye.
 		bool m_GoodbyeOwedToRejoiners = false;

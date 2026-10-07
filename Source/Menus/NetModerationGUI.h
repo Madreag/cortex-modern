@@ -139,7 +139,7 @@ namespace RTE {
 		/// @param rowHeight One text row plus its padding, as the panel's font measures it.
 		/// @param textBands Each seat message band as the editor reports it, ungrown, in any order.
 		/// @param reservedTop The highest top an open chat entry's run leaves the panel; 0 when no entry is open.
-		static PanelPlacement PlaceSeatsPanelOnScreen(int screenHeight, int rowHeight, const std::vector<PanelBand>& textBands, int reservedTop = 0);
+		static PanelPlacement PlaceSeatsPanelOnScreen(int screenHeight, int rowHeight, const std::vector<PanelBand>& textBands, int reservedTop = 0, int wantedHeight = 344);
 		/// Whether the in-match net surfaces draw. They belong to the match, not to the running round: a
 		/// round that completed or stopped still owes this peer its status box, chat and toasts until the
 		/// match activity itself is over. The service detaches the coordinator before it reports the end,
@@ -170,25 +170,30 @@ namespace RTE {
 			std::array<GUIButton*, 3> actions{}; //!< Keep, Let join and Cancel, in NetModerationAction order.
 			GUIButton* remove = nullptr;
 			GUIButton* ban = nullptr;
+			GUIButton* declineApplicant = nullptr;
+			GUIButton* banApplicant = nullptr;
 		};
 		/// A player the host's panel lists: everyone in the match but the host, the held first.
 		struct PanelRow {
 			uint8_t peer = 0;
+			uint8_t team = 0;
 			std::string name;
 			std::string state; //!< The state line the roster reads for this player.
 			std::optional<NetModerationUx::Row> decision; //!< The held seat's model row, when the seat waits on the host.
 			std::optional<NetH4ModerationSeat> seat;      //!< The admission row Remove and Ban act on.
 			bool opened = false; //!< A place the host opened that a newcomer asks for: only Let acts on it.
+			bool cpu = false;
 		};
 		/// An action that takes a second press: it names its consequence first.
 		struct Armed {
-			enum class Kind { Let, Remove, Ban } kind = Kind::Remove;
+			enum class Kind { Let, Remove, Ban, DeclineApplicant, BanApplicant } kind = Kind::Remove;
 			size_t slot = 0; //!< The row of controls it was armed on; it dies when another player shows there.
 			uint8_t peer = 0;
 			uint16_t stableSeat = 0;
 			uint32_t incarnation = 0;
 			NetPeerId applicant = c_InvalidNetPeerId;
 			uint64_t untilMs = 0;
+			NetModerationSelection selection;
 		};
 		/// A press on a row's control, kept until its release: it acts only if the release finds the same player there.
 		struct Press {
@@ -261,7 +266,18 @@ namespace RTE {
 		ChatBand m_ChatBand;
 		std::array<GUILabel*, 8> m_MatchChat{};
 		GUITextBox* m_MatchChatInput = nullptr;
+		GUILabel* m_MatchChatCaption = nullptr;
+		GUIButton* m_ChatOlder = nullptr;
+		GUIButton* m_ChatNewer = nullptr;
+		size_t m_ChatScroll = 0;
+		size_t m_ChatVisualRows = 0;
+		uint64_t m_ChatRequestId = 0;
+		uint8_t m_ChatPendingScope = 0;
+		std::string m_ChatSendStatus;
+		bool m_ChatHistoryInitialized = false;
+		long long m_ChatNotifyUntilUs = 0;
 		struct MatchChatLine {
+			uint64_t historyId = 0;
 			uint64_t receivedTick = 0;
 			uint8_t senderPeerId = 0;
 			uint8_t team = 0;
@@ -271,6 +287,11 @@ namespace RTE {
 			long long seenUs = 0;
 		};
 		std::deque<MatchChatLine> m_MatchChatLines;
+		struct VisualChatLine { std::string text; uint8_t team; long long seenUs; };
+		std::vector<VisualChatLine> m_ChatWrappedLines;
+		std::string m_ChatWrapKey;
+		GUIFont* m_ChatWrapFont = nullptr;
+		int m_ChatWrapWidth = 0;
 		bool m_ChatEntryOpen = false;
 		bool m_ChatKeysHeld = false;
 		bool m_ChatDisabledKeys = false;
@@ -294,12 +315,15 @@ namespace RTE {
 		GUIButton* m_OptionsToggle = nullptr;
 		GUILabel* m_Options = nullptr;
 		bool m_OptionsView = false;
+		bool m_ConnectionView = false;
 		std::array<Controls, 3> m_Seats;
 		std::vector<PanelRow> m_Rows;
 		size_t m_RowsShown = 0;
 		size_t m_RowsImplied = 0; //!< The rows the roster called for at the last refresh, counted apart from m_Rows.
 		size_t m_PageStart = 0; //!< The first row of the page shown.
 		uint8_t m_PageFirstPeer = 0; //!< That row's player, so the page stays put while rows come and go.
+		uint8_t m_PageFirstTeam = 0;
+		bool m_PageFirstCpu = false;
 		bool m_PageTurn = false; //!< The next refresh shows the page after this one.
 		std::optional<Armed> m_Armed;
 		std::string m_PanelStatus; //!< The last action's line; empty leaves the model's.

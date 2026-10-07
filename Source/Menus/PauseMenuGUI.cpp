@@ -64,6 +64,8 @@ void PauseMenuGUI::Clear() {
 	m_ModManagerButtonDisabled = false;
 	m_NetworkMatchMode = false;
 	m_LeaveConfirmShown = false;
+	m_EndConfirmShown = false;
+	m_ConnectionDetailsShown = false;
 	m_BackRequested = false;
 
 	m_PauseMenuBox = nullptr;
@@ -105,6 +107,9 @@ void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->AddControl(
 	    "ButtonMatchRepairNow", "BUTTON", m_MatchOptionsBox, 12, 292, 260, 20));
 	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetText("Repair match now");
+	m_PauseMenuButtons[PauseMenuButton::ConnectionDetailsButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->AddControl(
+	    "ButtonConnectionDetails", "BUTTON", m_MatchOptionsBox, 12, 292, 260, 20));
+	m_PauseMenuButtons[PauseMenuButton::ConnectionDetailsButton]->SetText("Connection details");
 	m_MatchRepairHint = dynamic_cast<GUILabel*>(m_GUIControlManager->AddControl(
 	    "LabelMatchRepairHint", "LABEL", m_MatchOptionsBox, 12, 252, 544, 34));
 	m_MatchRepairHint->SetHAlignment(GUIFont::Left);
@@ -368,6 +373,9 @@ std::string PauseMenuGUI::GetShownSaveLine() const {
 }
 
 PauseMenuGUI::LeaveConsequence PauseMenuGUI::ReadLeaveConsequence() const {
+	if (m_EndConfirmShown) return {g_NetMatchService.IsHost() && g_NetMatchService.GetState() == NetMatchServiceState::Running
+	    ? "End the match for everyone?\nThis stops the current round for all players.\nNo winner is awarded for an unfinished round."
+	    : "End Match is unavailable.\nOnly the current host can end a running round.\nCancel to return to the menu."};
 	if (g_NetMatchService.IsHost()) {
 		// The host's leave reads what the survivors' election does at this frame, and the press acts on the answer it showed.
 		const bool handsOver = g_NetMatchService.HostLeaveOutcome() == NetHostLeaveOutcome::HandsOver;
@@ -375,7 +383,7 @@ PauseMenuGUI::LeaveConsequence PauseMenuGUI::ReadLeaveConsequence() const {
 	}
 	// A leave is held like a drop: the seat and its ticket stay this player's while the match runs.
 	if (g_NetMatchService.LeaveKeepsRejoin()) {
-		return {"Leave the match?\nThe AI plays your units and your seat stays yours.\nRejoin Match on the Multiplayer screen brings you back while the match runs."};
+		return {"Leave the match?\nThe AI plays your units; your seat is held until the host reassigns it.\nUse Rejoin Match on the Multiplayer screen to try to return."};
 	}
 	// No ticket is kept: the AI still plays the place, and the way back is the one any newcomer has, where the match offers one.
 	return {NetMatchService::AdmissionEnabled() ? "Leave the match?\nThe AI plays your units for the rest of the match.\nTo come back, join it again from the Multiplayer screen and ask the host for a place."
@@ -384,13 +392,32 @@ PauseMenuGUI::LeaveConsequence PauseMenuGUI::ReadLeaveConsequence() const {
 
 void PauseMenuGUI::RefreshLeaveConfirm() {
 	m_LeaveShown = ReadLeaveConsequence();
+	m_PauseMenuButtons[PauseMenuButton::LeaveConfirmButton]->SetEnabled(!m_EndConfirmShown || (g_NetMatchService.IsHost() && g_NetMatchService.GetState() == NetMatchServiceState::Running));
 	// A press that found the sentence changed under it says so beneath the new one until the confirmation closes.
 	const std::string text = m_LeaveChanged ? m_LeaveShown.text + "\nWhat leaving does changed as you pressed, so you are still in the match." : m_LeaveShown.text;
 	if (m_LeaveConfirmLabel->GetText() != text) m_LeaveConfirmLabel->SetText(text);
+	const int width = std::min(520, g_WindowMan.GetResX() - 16);
+	m_LeaveConfirmLabel->Resize(width - 20, m_LeaveConfirmLabel->GetHeight());
+	const int textHeight = std::max(60, m_LeaveConfirmLabel->GetTextHeight());
+	const int height = std::min(g_WindowMan.GetResY() - 16, textHeight + 64);
+	m_LeaveConfirmBox->Resize(width, height);
+	m_LeaveConfirmBox->CenterInParent(true, true);
+	m_LeaveConfirmLabel->SetPositionRel(10, 8);
+	m_LeaveConfirmLabel->Resize(width - 20, height - 64);
+	m_LeaveConfirmLabel->SetVerticalOverflowScroll(textHeight > height - 64);
+	m_LeaveConfirmLabel->ActivateDeactivateOverflowScroll(textHeight > height - 64);
+	m_PauseMenuButtons[PauseMenuButton::LeaveConfirmButton]->Resize(width - 20, 20);
+	m_PauseMenuButtons[PauseMenuButton::LeaveCancelButton]->Resize(width - 20, 20);
+	m_PauseMenuButtons[PauseMenuButton::LeaveConfirmButton]->SetPositionRel(10, height - 48);
+	m_PauseMenuButtons[PauseMenuButton::LeaveCancelButton]->SetPositionRel(10, height - 24);
 }
 
-void PauseMenuGUI::ShowLeaveConfirm(bool show) {
+void PauseMenuGUI::ShowLeaveConfirm(bool show, bool endMatch) {
 	m_LeaveConfirmShown = show;
+	m_EndConfirmShown = show && endMatch;
+	m_ButtonHoveredText[PauseMenuButton::LeaveConfirmButton] = m_EndConfirmShown ? "END MATCH FOR EVERYONE" : "LEAVE MATCH";
+	m_ButtonUnhoveredText[PauseMenuButton::LeaveConfirmButton] = m_EndConfirmShown ? "end match for everyone" : "leave match";
+	m_PauseMenuButtons[PauseMenuButton::LeaveConfirmButton]->SetText(m_ButtonUnhoveredText[PauseMenuButton::LeaveConfirmButton]);
 	if (show) {
 		m_LeaveChanged = false;
 		m_LeaveDrawn.reset();
@@ -405,6 +432,7 @@ void PauseMenuGUI::ShowLeaveConfirm(bool show) {
 
 void PauseMenuGUI::ShowMatchOptions(bool show) {
 	m_MatchOptionsShown = show;
+	m_ConnectionDetailsShown = false;
 	m_MatchRepairArmed = false;
 	m_MatchRepairRefusal.clear();
 	if (show) {
@@ -417,13 +445,20 @@ void PauseMenuGUI::ShowMatchOptions(bool show) {
 }
 
 void PauseMenuGUI::RefreshMatchOptions() {
-	m_MatchOptionsLabel->SetText(NetHostOptionsSummary(g_NetMatchService.GetLobbyMatchConfig(), g_NetMatchService.GetLobbySnapshot()));
+	const auto config = g_NetMatchService.GetLobbyMatchConfig();
+	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+	m_MatchOptionsLabel->SetText(m_ConnectionDetailsShown ? NetHostConnectionSummary(config, snapshot) : NetHostOptionsSummary(config, snapshot));
+	dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelMatchOptionsTitle"))->SetText(m_ConnectionDetailsShown ? "CONNECTION DETAILS" : "RULES FOR THIS ROUND");
+	m_ButtonHoveredText[PauseMenuButton::ConnectionDetailsButton] = m_ConnectionDetailsShown ? "RULES FOR THIS ROUND" : "CONNECTION DETAILS";
+	m_ButtonUnhoveredText[PauseMenuButton::ConnectionDetailsButton] = m_ConnectionDetailsShown ? "rules for this round" : "connection details";
+	m_PauseMenuButtons[PauseMenuButton::ConnectionDetailsButton]->SetText(m_ButtonUnhoveredText[PauseMenuButton::ConnectionDetailsButton]);
 	FitMatchOptionsBox();
 	const bool enabled = NetHostRepairEnabled(g_NetMatchService);
 	if (!enabled) m_MatchRepairArmed = false;
-	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetVisible(g_NetMatchService.IsHost());
+	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetVisible(m_ConnectionDetailsShown && g_NetMatchService.IsHost());
 	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetEnabled(enabled);
 	m_MatchRepairHint->SetText(NetHostRepairHint(g_NetMatchService, m_MatchRepairArmed, m_MatchRepairRefusal));
+	m_MatchRepairHint->SetVisible(m_ConnectionDetailsShown);
 }
 
 // The match summary grows with the match's own rows, so the panel takes the height its text needs and
@@ -435,24 +470,23 @@ void PauseMenuGUI::FitMatchOptionsBox() {
 	constexpr int c_ButtonHeight = 20;
 	constexpr int c_BottomMargin = 12;
 	const int screenHeight = g_FrameMan.GetBackBuffer32()->h;
-	const int chrome = c_LabelTop + c_RowGap + c_HintHeight + c_RowGap + c_ButtonHeight + c_BottomMargin;
+	const int chrome = c_LabelTop + c_RowGap + c_HintHeight + c_RowGap + 2 * c_ButtonHeight + c_RowGap + c_BottomMargin;
 	const int room = std::max(120, screenHeight - 8 - chrome);
-	const int wanted = std::min(std::max(m_MatchOptionsLabel->GetTextHeight(), 225), room);
+	const int wanted = std::min(std::max(m_MatchOptionsLabel->GetTextHeight(), 80), room);
 	const bool scrolls = m_MatchOptionsLabel->GetTextHeight() > room;
 	if (m_MatchOptionsLabel->GetVerticalOverflowScroll() != scrolls) {
 		m_MatchOptionsLabel->SetVerticalOverflowScroll(scrolls);
 		m_MatchOptionsLabel->ActivateDeactivateOverflowScroll(scrolls);
-	}
-	if (m_MatchOptionsLabel->GetHeight() == wanted) {
-		return;
 	}
 	m_MatchOptionsLabel->Resize(m_MatchOptionsLabel->GetWidth(), wanted);
 	const int hintTop = c_LabelTop + wanted + c_RowGap;
 	m_MatchRepairHint->SetPositionRel(12, hintTop);
 	const int buttonTop = hintTop + c_HintHeight + c_RowGap;
 	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetPositionRel(12, buttonTop);
-	m_PauseMenuButtons[PauseMenuButton::MatchOptionsCloseButton]->SetPositionRel(296, buttonTop);
-	m_MatchOptionsBox->Resize(m_MatchOptionsBox->GetWidth(), buttonTop + c_ButtonHeight + c_BottomMargin);
+	const int footerTop = m_ConnectionDetailsShown ? buttonTop + c_ButtonHeight + c_RowGap : hintTop;
+	m_PauseMenuButtons[PauseMenuButton::ConnectionDetailsButton]->SetPositionRel(12, footerTop);
+	m_PauseMenuButtons[PauseMenuButton::MatchOptionsCloseButton]->SetPositionRel(296, footerTop);
+	m_MatchOptionsBox->Resize(m_MatchOptionsBox->GetWidth(), footerTop + c_ButtonHeight + c_BottomMargin);
 	m_MatchOptionsBox->CenterInParent(true, true);
 }
 
@@ -605,9 +639,11 @@ bool PauseMenuGUI::HandleInputEvents() {
 					g_GUISound.BackButtonPressSound()->Play();
 				}
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::EndMatchButton]) {
-				// H33: the host's End Match is the round's own completion, so every peer takes the
-				// same rematch path a played-out match takes. Leave stays the session's way out.
-				m_UpdateResult = PauseMenuUpdateResult::MatchEnded;
+				ShowLeaveConfirm(true, true);
+			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::ConnectionDetailsButton]) {
+				m_ConnectionDetailsShown = !m_ConnectionDetailsShown;
+				m_MatchRepairArmed = false;
+				RefreshMatchOptions();
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::LeaveConfirmButton]) {
 				// The press does what the sentence showed when it went down; if that changed since, nothing happens and the new sentence says so.
 				const std::optional<LeaveConsequence> shown = m_LeavePressed ? m_LeavePressed : m_LeaveDrawn;
@@ -617,8 +653,12 @@ bool PauseMenuGUI::HandleInputEvents() {
 					RefreshLeaveConfirm();
 					g_GUISound.UserErrorSound()->Play();
 				} else {
-					if (g_NetMatchService.IsHost()) g_NetMatchService.ConfirmHostLeave((shown ? *shown : m_LeaveShown).handsOver ? NetHostLeaveOutcome::HandsOver : NetHostLeaveOutcome::EndsMatch);
-					m_UpdateResult = PauseMenuUpdateResult::MatchLeft;
+					if (m_EndConfirmShown) {
+						if (g_NetMatchService.IsHost() && g_NetMatchService.GetState() == NetMatchServiceState::Running) m_UpdateResult = PauseMenuUpdateResult::MatchEnded;
+					} else {
+						if (g_NetMatchService.IsHost()) g_NetMatchService.ConfirmHostLeave((shown ? *shown : m_LeaveShown).handsOver ? NetHostLeaveOutcome::HandsOver : NetHostLeaveOutcome::EndsMatch);
+						m_UpdateResult = PauseMenuUpdateResult::MatchLeft;
+					}
 				}
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::LeaveCancelButton]) {
 				g_GUISound.BackButtonPressSound()->Play();

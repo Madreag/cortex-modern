@@ -12,6 +12,7 @@
 #include "GUILabel.h"
 #include "GnsTransport.h"
 #include "GUIListBox.h"
+#include "GUITextBox.h"
 #include "GUIInputWrapper.h"
 #include "MainMenuGUI.h"
 #include "PauseMenuGUI.h"
@@ -87,6 +88,7 @@ namespace {
 	}
 
 	GUIControlManager* MenuControls() {
+		if (auto* panel = g_MenuMan.GetNetworkPanel(); panel && panel->IsChatEntryOpen()) return panel->OverlayManager();
 		if (auto* pause = g_MenuMan.GetActivePauseMenu()) return pause->AutomationManager();
 		return g_MenuMan.IsMainMenuInteractive() ? g_MenuMan.GetMainMenu()->AutomationManager() : nullptr;
 	}
@@ -203,6 +205,8 @@ namespace {
 		    {"service", snapshot.serviceState}, {"host", snapshot.isHost}, {"activity_preset", snapshot.activityPreset},
 		    {"panel_open", g_MenuMan.IsNetworkPanelOpen()},
 		    {"paused", g_ActivityMan.ActivityPaused()}, {"seats", Json::array()}};
+		observed["chat_history"] = Json::array();
+		for (const auto& line: g_NetMatchService.ChatHistory()) observed["chat_history"].push_back({{"sender", line.senderPeerId}, {"scope", line.scope}, {"text", line.text}});
 		for (const auto& seat: g_NetMatchService.GetModerationSeats()) {
 			observed["seats"].push_back({{"seat", seat.stableSeat}, {"name", seat.displayName}, {"dropped", seat.dropped},
 			    {"closed", seat.closed}, {"substituting", seat.substituting}, {"reclaiming", seat.reclaiming},
@@ -431,6 +435,8 @@ namespace {
 		} else if (auto* button = dynamic_cast<GUIButton*>(control)) {
 			value["text"] = button->GetText();
 			value["pushed"] = button->IsPushed();
+		} else if (auto* box = dynamic_cast<GUITextBox*>(control)) {
+			value["text"] = box->GetText();
 		} else if (auto* list = dynamic_cast<GUIListBox*>(control)) {
 			// A list reads as its rows, one per line, and the row it has selected.
 			std::string text;

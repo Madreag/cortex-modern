@@ -24,6 +24,8 @@
 #include "NetPortMap.h"
 #include "NetModerationGUI.h"
 #include "NetHostOptionsText.h"
+#include "NetPlayerPresentation.h"
+#include "NetChatPresentation.h"
 #include "Activity.h"
 #include "Actor.h"
 #include "AEmitter.h"
@@ -5297,7 +5299,7 @@ namespace RTE {
 				*error = "the hosted request lost the return window: " + std::to_string(built.returnWindowMinutes);
 				return false;
 			}
-			const std::string summary = NetHostOptionsSummary(built, {});
+			const std::string summary = NetHostConnectionSummary(built, {});
 			if (summary.find("Frame redundancy: 6 ticks") == std::string::npos) {
 				*error = "the adopted summary lost the redundancy: " + summary;
 				return false;
@@ -17347,6 +17349,85 @@ namespace RTE {
 		return leavePassed && probePassed ? 0 : 1;
 	}
 
+	template<class Session>
+	bool TestChatReceipts(std::string* error) {
+		if constexpr (requires(Session& session, uint64_t* id) { session.SendChat(c_NetChatScopeAll, std::string("draft"), id); session.ChatSendResult(uint64_t{1}); }) {
+			LoopbackTransport transport;
+			Session host;
+			NetSessionConfig config;
+			config.port = 43261; config.maxPeers = 1;
+			if (!host.StartHost(transport, config, error)) return false;
+			uint64_t ids[6]{};
+			for (int line = 0; line < 6; ++line) {
+				if (!host.SendChat(c_NetChatScopeAll, "draft " + std::to_string(line), &ids[line])) { *error = "valid draft was refused before the pump"; return false; }
+				const auto result = host.ChatSendResult(ids[line]);
+				if (result.state != decltype(result.state)::Queued) { *error = "queued is incorrectly reported as sent"; return false; }
+			}
+			host.PumpChatOutbox();
+			for (int line = 0; line < 6; ++line) {
+				const auto result = host.ChatSendResult(ids[line]);
+				if (result.state != (line < 5 ? decltype(result.state)::Sent : decltype(result.state)::Refused) || result.detail.empty()) { *error = "the rate-dropped draft has no honest send result"; return false; }
+			}
+			Session unlinked;
+			uint64_t id = 0;
+			if (!unlinked.SendChat(c_NetChatScopeAll, "kept draft", &id)) { *error = "the unlinked fixture did not queue"; return false; }
+			unlinked.PumpChatOutbox();
+			const auto refused = unlinked.ChatSendResult(id);
+			if (refused.state != decltype(refused.state)::Refused || refused.detail.find("unavailable") == std::string::npos) { *error = "the unlinked draft has no connection refusal"; return false; }
+			std::cout << "[net-match-selftest] PASS chat receipts distinguish queued, sent, rate refused and unlinked; five per second unchanged" << std::endl;
+			return true;
+		} else {
+			*error = "the chat outbox gives no receipt for a queued draft that is later refused";
+			return false;
+		}
+	}
+
+	bool TestInMatchPresentation(std::string* error) {
+		bool passed = true;
+		const auto check = [&](bool ok, const std::string& why) {
+			if (!ok) { std::cerr << "[net-match-selftest] FAIL ui_presentation: " << why << std::endl; passed = false; }
+		};
+		NetMatchSummary ended;
+		ended.result = "Match ended by host";
+		check(ended.LineText().find("draw") == std::string::npos && ended.DetailsText().find("No result") != std::string::npos,
+		      "an unfinished host-ended round reads as a draw: " + ended.LineText());
+		ended.result = "Match complete";
+		check(ended.LineText().find("draw") != std::string::npos, "a completed draw lost its result");
+		ended.winnerTeam = 1;
+		check(ended.LineText().find("Team 2 wins") != std::string::npos, "a played winner lost its team");
+		check(RoundEndedWinnerTeam(PackRoundEndedRecord(321, -2)) == -2 && RoundEndedFinalFrame(PackRoundEndedRecord(321, -2)) == 321 &&
+		      NetMatchService::RoundEndResultText(-2, 0).find("no result") != std::string::npos, "a held returner reads an unfinished end as a draw");
+		for (auto cause : {NetSeatHoldCause::LateStream, NetSeatHoldCause::TimingAck, NetSeatHoldCause::Quiet,
+		                   NetSeatHoldCause::OwnSeat, NetSeatHoldCause::RejoinFailed, NetSeatHoldCause::Crash}) {
+			NetH4ModerationSeat seat; seat.held = true; seat.holdCause = cause;
+			check(!NetModerationUx::HoldCause(seat).empty(), "a connected held seat lost cause " + std::string(NetSeatHoldCauseName(cause)));
+		}
+		NetMatchConfig rules;
+		rules.players = {{1, 0, false, "Host"}, {0, 1, true, "CPU opponent"}};
+		rules.teamRules[1].technologyIntent = "Coalition.rte";
+		rules.teamRules[1].aiSkill = 73;
+		const auto text = NetHostOptionsSummary(rules, {});
+		check(text.find("Team 2") != std::string::npos && text.find("Coalition.rte") != std::string::npos && text.find("73") != std::string::npos,
+		      "round rules omit team technology, AI skill or arrangement");
+		check(text.find("Frame redundancy") == std::string::npos && text.find("Input delay:") == std::string::npos && text.find("Phase:") == std::string::npos,
+		      "round rules lead with connection machinery");
+		NetLobbyMember cpu;
+		cpu.peerId = 0; cpu.team = 1; cpu.cpu = true; cpu.displayName = "CPU opponent";
+		const auto cpuLine = NetPlayerPresentation::Row(cpu);
+		check(cpuLine.find("Team 2") != std::string::npos && cpuLine.find("AI") != std::string::npos, "CPU roster line omits its team or AI state: " + cpuLine);
+		check(NetChatAudience(SettingsMan::NetworkChatDefaultScope::Team, false, false) == c_NetChatScopeTeam, "saved Team audience is not used");
+		check(NetChatAudience(SettingsMan::NetworkChatDefaultScope::All, true, false) == c_NetChatScopeTeam &&
+		      NetChatAudience(SettingsMan::NetworkChatDefaultScope::Team, false, true) == c_NetChatScopeAll, "explicit chat audience override is not honored");
+		check(NetChatRosterPeer(0) == 1 && NetChatRosterPeer(1) == 2, "chat sender maps to the wrong roster seat");
+		const std::string longWord(128, 'W');
+		const auto wrapped = NetChatWrap(longWord, 37, [](const std::string& part) { return static_cast<int>(part.size()); });
+		std::string joined;
+		for (const auto& line: wrapped) { joined += line; check(line.size() <= 37, "a chat line exceeds its readable column"); }
+		check(joined == longWord && wrapped.size() > 1, "wrapping drops part of a valid chat message");
+		if (!passed) *error = "in-match presentation defects";
+		return passed;
+	}
+
 	int NetMatchSelfTest::Run() {
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-match-selftest] FAIL: " << message << std::endl;
@@ -17363,7 +17444,10 @@ namespace RTE {
 		if (const char* selected = std::getenv("CCCP_TEST_MATCH_CASE")) {
 			const std::string name(selected);
 			bool passed = false;
-			if (name == "state-delivery") passed = TestLobbyStartWaitsForReceivedState(&error);
+			if (name == "ui-presentation") passed = TestInMatchPresentation(&error);
+			else if (name == "chat-receipts") passed = TestChatReceipts<NetSession>(&error);
+			else if (name == "chat-routing") passed = TestChatRoutingAndBounds(&error);
+			else if (name == "state-delivery") passed = TestLobbyStartWaitsForReceivedState(&error);
 			else if (name == "state-receipts") passed = TestLobbyStateReceiptsAreBoundAndRepeated(&error);
 			else if (name == "joining-lobby") passed = TestAJoiningLobbyWaitsForHostConfig(&error);
 			else if (name == "lobby-stability") {
@@ -17408,6 +17492,8 @@ namespace RTE {
 		row(&TestAHostMappingOutlastsItsPendingIdentity, "a_host_mapping_outlasts_its_pending_identity");
 		row(&TestAHostWithNoRouterReadsNoRouterMapping, "a_host_with_no_router_reads_no_router_mapping");
 		row(&TestCommittedEventStream, "committed_events_append_exclude_prediction_and_label_reexecution");
+		row(&TestInMatchPresentation, "in_match_presentation_results_teams_causes_and_chat");
+		row(&TestChatReceipts<NetSession>, "chat_send_receipts");
 		row(&RunCrossBotRangeSelfTest, "bot_producer_respects_round_and_tick_ranges");
 		row(&RunCrossRosterSelfTest, "cross_mixed_roster_preserves_seats_and_cpu_rules");
 		row(&RunCrossEndSignalSelfTest, "forced_end_phase_signal_requires_sender_round_incarnation_and_id");

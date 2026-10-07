@@ -101,10 +101,17 @@ def hand(control):
     return [menu(f"hand_press {control}"), {"op": "wait", "renders": 3}, menu(f"hand_release {control}"), {"op": "wait", "renders": 4}]
 
 
+def confirm_end_match():
+    return [{"op": "wait", "screen": "PauseLeaveConfirm", "renders": 4, "scope": "menu"},
+            {"op": "assert", "equals": {"service": "Running", "screen": "PauseLeaveConfirm"}, "scope": "menu"},
+            menu("hand_press ButtonLeaveConfirm", scope="menu"), {"op": "wait", "renders": 3, "scope": "menu"},
+            menu("hand_release ButtonLeaveConfirm", scope="menu")]
+
+
 def end_match():
     """The host's End match by hand, its last steps: a match launched from the command line has no lobby to land in, so
     neither loop steps the probe once the round has ended; the run's menu script gives the end its few frames."""
-    return [menu("hand_press ButtonEndMatch"), {"op": "wait", "renders": 3}, menu("hand_release ButtonEndMatch"), signal("done"),
+    return [menu("hand_press ButtonEndMatch"), {"op": "wait", "renders": 3}, menu("hand_release ButtonEndMatch"), *confirm_end_match(), signal("done"),
             {"op": "finish"}]
 
 
@@ -959,13 +966,13 @@ def between_rounds_plan(root, port):
                    f"settext TextHostPort {port}\nsettext TextHostPlayers 2\nactivate ButtonMultiplayerCreate\nwait_connected 2 60\n"
                    "wait_remote_ready 60\nwait 3\nactivate ButtonMultiplayerStart\n"
                    f"wait_file {probe_root(root, host) / 'lobby.json'} 150\nwait_ms 1500\nscreenshot between_rounds\nwait 3\n"
-                   f"assert_roster_text {client}  /  {HELD_BETWEEN_ROUNDS}\nwait 3\nexit\n")
+                   f"assert_roster_text {client}  /  Team 2  /  {HELD_BETWEEN_ROUNDS}\nwait 3\nexit\n")
     client_script = (LANDING + "activate ButtonMultiplayerJoinGame\nwait_ms 400\nsettext TextJoinAddress 127.0.0.1\n"
                      f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\nwait_connected 2 60\nactivate ButtonMultiplayerReady\n"
                      f"wait_file {probe_root(root, host) / 'lobby.json'} 150\nwait_ms 4000\nexit\n")
     # The lobby's ticks count on the launch counter: the round's own frame says the match is on screen.
     host_steps = [{"op": "wait", "service": "Running", "screen": "Gameplay", "lockstep_frame_at_least": 150}, wait_file(probe_root(root, client) / "left.json"),
-                  {"op": "wait", "elapsed_ms": 2500}, *keys("Escape"), *on_screen("Pause"), *hand("ButtonEndMatch"),
+                  {"op": "wait", "elapsed_ms": 2500}, *keys("Escape"), *on_screen("Pause"), *hand("ButtonEndMatch"), *confirm_end_match(),
                   {"op": "wait", "service": "Starting", "scope": "menu"}, {"op": "wait", "elapsed_ms": 1500, "scope": "menu"}, signal("lobby", "menu"),
                   {"op": "finish"}]
     client_steps = [{"op": "wait", "service": "Running", "screen": "Gameplay", "lockstep_frame_at_least": 150}, *keys("Escape"), *on_screen("Pause"), *hand("ButtonLeaveMatch"),
@@ -976,7 +983,7 @@ def between_rounds_plan(root, port):
 
 def check_between_rounds(checks, logs):
     host, client = NAMES[:2]
-    wanted = f"{client}  /  {HELD_BETWEEN_ROUNDS}"
+    wanted = f"{client}  /  Team 2  /  {HELD_BETWEEN_ROUNDS}"
     line = next((line for line in logs[host].splitlines() if "assert_roster_text" in line), "")
     passed = re.search(r"assert_roster_text .*PASS", line) is not None
     checks.check("between-rounds-held-reads-held", passed and "Disconnected" not in line, f"{wanted!r}: {line[:400]!r}")

@@ -174,6 +174,32 @@
     },
     {
       "op": "wait",
+      "screen": "PauseLeaveConfirm",
+      "renders": 4,
+      "scope": "menu"
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Running",
+        "screen": "PauseLeaveConfirm"
+      },
+      "scope": "menu"
+    },
+    {
+      "op": "assert_control",
+      "control": "LabelLeaveConfirm",
+      "text_contains": "all players",
+      "fits": true,
+      "scope": "menu"
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonLeaveConfirm",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
       "elapsed_ms": 3000,
       "scope": "menu"
     },

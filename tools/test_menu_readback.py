@@ -875,7 +875,10 @@ def lobby_case(case, port, root):
             if who == "host":
                 steps += [{"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
                           {"op": "wait", "screen": "Pause", "elapsed_ms": 400},
-                          menu_step("assert_enabled ButtonEndMatch 1"), menu_step("activate ButtonEndMatch")]
+                          menu_step("assert_enabled ButtonEndMatch 1"), menu_step("activate ButtonEndMatch"),
+                          {"op": "wait", "screen": "PauseLeaveConfirm", "renders": 4, "scope": "menu"},
+                          {"op": "assert", "equals": {"service": "Running", "screen": "PauseLeaveConfirm"}, "scope": "menu"},
+                          menu_step("activate ButtonLeaveConfirm")]
             steps += [{"op": "wait", "service": "Starting", "scope": "menu"}, {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]
             probes[who] = {"schema": 1, "timeout_ms": 150000, "steps": steps}
             assert scripts[who].endswith("exit\n"), scripts[who][-80:]
@@ -1284,7 +1287,10 @@ def scripts(case, port, root, size="960x540"):
             if who == "host":
                 steps += [{"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
                           {"op": "wait", "screen": "Pause", "elapsed_ms": 400},
-                          menu_step("assert_enabled ButtonEndMatch 1"), menu_step("activate ButtonEndMatch")]
+                          menu_step("assert_enabled ButtonEndMatch 1"), menu_step("activate ButtonEndMatch"),
+                          {"op": "wait", "screen": "PauseLeaveConfirm", "renders": 4, "scope": "menu"},
+                          {"op": "assert", "equals": {"service": "Running", "screen": "PauseLeaveConfirm"}, "scope": "menu"},
+                          menu_step("activate ButtonLeaveConfirm")]
             steps += [{"op": "wait", "service": "Starting", "scope": "menu"},
                       {"op": "assert", "equals": {"service": "Starting"}, "scope": "menu"},
                       # The lobby box's rect lands next to the net_ui rects in the same observation,

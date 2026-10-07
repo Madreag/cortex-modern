@@ -52,7 +52,7 @@ namespace RTE::NetPlayerPresentation {
 		return fallback.empty() ? "Player " + std::to_string(peer) : fallback;
 	}
 
-	inline std::string Name(const NetLobbyMember& member) { return Name(member.peerId, member.displayName); }
+	inline std::string Name(const NetLobbyMember& member) { return member.cpu ? (member.displayName.empty() ? "AI player" : member.displayName) : Name(member.peerId, member.displayName); }
 
 	inline std::string State(uint8_t peer, bool aiHeld, bool dropped, bool reclaiming, bool joining = false) {
 		const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
@@ -80,15 +80,16 @@ namespace RTE::NetPlayerPresentation {
 	}
 
 	inline std::string State(const NetLobbyMember& member) {
+		if (member.cpu) return "AI in control";
 		return State(member.peerId, member.aiHeld, member.dropped, member.reclaiming, member.joining);
 	}
 
 	inline std::string Row(const NetLobbyMember& member) {
 		// A seat nobody holds is open: no remembered name, and nothing reads it as connected.
 		if (!member.connected && !member.cpu && !member.isLocal && !member.dropped && !member.reclaiming && !member.aiHeld && Placeholder(member.peerId, member.displayName)) return "Open seat";
-		std::string row = Name(member) + "  /  " + State(member);
+		std::string row = Name(member) + "  /  Team " + std::to_string(member.team + 1) + "  /  " + State(member);
 		// A seat that is gone has no live route to name.
-		if (!member.connectedRoute.empty() && member.connected && !Departed(member.peerId)) row += " / via " + member.connectedRoute;
+		if (!member.cpu && !member.connectedRoute.empty() && member.connected && !Departed(member.peerId)) row += " / via " + member.connectedRoute;
 		return row;
 	}
 }

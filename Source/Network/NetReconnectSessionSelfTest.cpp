@@ -1,5 +1,7 @@
 #include "NetReconnectSessionSelfTest.h"
 
+#include <cstdlib>
+
 #include "ControllerFrame.h"
 #include "LoopbackTransport.h"
 #include "NetAuthCrypto.h"
@@ -8622,6 +8624,98 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestApplicantDecisionsKeepTheHolder() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			// A departed holder, a seated bystander and an unseated requester. Moderating the request
+			// must preserve the holder's seat and only ban the requester's proven identity.
+			wire.host.SetSeatTable({{0, 1, 1, false, 2, false}, {1, 2, 2, false, 3, false}, {2, 3, 3, false, 4, false}, {3, 0, 4, true, 0, false}}, NetMatchMode::PvPSkirmish);
+			Endpoint departed;
+			departed.connection = 421;
+			ConfigureEndpoint(departed, "removed-departed", &unixNow);
+			wire.Add(&departed);
+			NetH4TicketRecord departedRecord;
+			if (!departed.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error) || departed.client.GetState() != NetH4ClientState::Joined ||
+			    departed.store.Load(unixNow, departedRecord, &error) != NetH4TicketLoadResult::Loaded) {
+				return Fail("the fixture could not seat the first member: " + error);
+			}
+			Endpoint holder;
+			holder.connection = 422;
+			ConfigureEndpoint(holder, "removed-holder", &unixNow);
+			wire.Add(&holder);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!holder.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error) || holder.client.GetState() != NetH4ClientState::Joined) {
+				return Fail(std::string("the holder did not join: ") + NetReconnectClientStateName(holder.client.GetState()) +
+				            " reason=" + NetProtocol::RejectReasonName(holder.client.GetLastRejectReason()) + " " + error);
+			}
+			NetH4TicketRecord holderRecord;
+			if (holder.store.Load(unixNow, holderRecord, &error) != NetH4TicketLoadResult::Loaded) {
+				return Fail(error);
+			}
+			wire.host.SetLiveMatch(true);
+			wire.host.NotifyDisconnect(departed.connection, 100);
+			departed.connected = false;
+			wire.Remove(departed.connection);
+			departed.client.NotifyAmbiguousLoss();
+			if (!wire.host.IsSeatHeldForReclaim(2)) return Fail("the departed member's seat has no reclaim hold");
+			Endpoint applicant;
+			applicant.connection = 433;
+			ConfigureEndpoint(applicant, "requester", &unixNow);
+			wire.Add(&applicant);
+			const auto requesterId = Ramp<32>(0xD6);
+			wire.host.BindParticipantId(applicant.connection, requesterId);
+			NetHostBanStore bans;
+			bans.SetPath((std::filesystem::temp_directory_path() / "ui-applicant-bans").string());
+			if (!bans.Load(&error)) return Fail(error);
+			wire.host.SetBanStore(&bans);
+			const auto view = [&]() {
+				for (const auto& seat: wire.host.GetModerationView()) if (seat.stableSeat == departedRecord.stableSeat) return seat;
+				return NetH4ModerationSeat{};
+			};
+			const auto before = view();
+			const auto holderUnchanged = [&]() {
+				const auto seat = view();
+				return seat.holderGeneration == before.holderGeneration && seat.incarnation == before.incarnation &&
+				       seat.seatGeneration == before.seatGeneration && seat.heldForReclaim && !seat.closed;
+			};
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			const auto request = MakeApplicant(departedRecord.stableSeat, 0x61, "removed-departed");
+			if (!wire.SendRaw(applicant.connection, request, &error)) return Fail(error);
+			wire.DrainHostOutbound();
+			if (view().applicants.size() != 1) return Fail("the requester was not listed");
+			const auto selected = NetSelectModerationSeat(view(), applicant.connection);
+			auto stale = selected;
+			stale.applicantTransaction[0] ^= 1;
+			NetParticipantRemovalIssue issued;
+			if (wire.host.RemoveParticipant(stale, NetParticipantRemovalAction::Kick, wire.nowMs, unixNow, 0x4831ULL, 1, 150, issued) != NetKickBanResult::StaleSelection || !holderUnchanged())
+				return Fail("a stale applicant transaction changed the incumbent");
+			if (wire.host.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, wire.nowMs, unixNow, 0x4831ULL, 1, 150, issued) != NetKickBanResult::Ok || !holderUnchanged() || !view().applicants.empty() || issued.lockstepPeerId != 0)
+				return Fail("declining a requester removed or changed the incumbent");
+			wire.DrainHostOutbound();
+			if (!wire.SendRaw(applicant.connection, request, &error) || !holderUnchanged() || !view().applicants.empty()) return Fail("a declined transaction revived on retry");
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!wire.SendRaw(applicant.connection, MakeApplicant(departedRecord.stableSeat, 0x62, "removed-departed"), &error)) return Fail(error);
+			wire.DrainHostOutbound();
+			if (view().applicants.size() != 1) return Fail("the fresh request was not listed");
+			const auto banSelection = NetSelectModerationSeat(view(), applicant.connection);
+			auto refusal = [](const std::vector<uint8_t>&, std::string& why) { why = "test capacity refused"; return false; };
+			wire.host.SetMigrationCapacityCheck(refusal);
+			if (wire.host.RemoveParticipant(banSelection, NetParticipantRemovalAction::BanSession, wire.nowMs, unixNow, 0x4831ULL, 1, 150, issued) != NetKickBanResult::ActionUnavailable || !holderUnchanged() || view().applicants.empty() || bans.IsBanned(requesterId, 0x4831ULL))
+				return Fail("a refused requester ban partly changed policy or the incumbent");
+			wire.host.SetMigrationCapacityCheck({});
+			if (wire.host.RemoveParticipant(banSelection, NetParticipantRemovalAction::BanSession, wire.nowMs, unixNow, 0x4831ULL, 1, 150, issued) != NetKickBanResult::Ok || !holderUnchanged() || !view().applicants.empty() || issued.connection != applicant.connection || issued.lockstepPeerId != 0 || !bans.IsBanned(requesterId, 0x4831ULL))
+				return Fail("a requester ban targeted the incumbent or failed to bind the requester's identity");
+			std::cout << "[net-reconnect-session-selftest] PASS requester decline and identity ban keep the incumbent; stale and capacity refusals are atomic" << std::endl;
+			return 0;
+		}
+
 		int TestRemovedTransactionsDropped() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -9192,6 +9286,11 @@ namespace RTE {
 	}
 
 	int NetReconnectSessionSelfTest::Run() {
+		if (const char* selected = std::getenv("CCCP_TEST_RECONNECT_CASE")) {
+			if (std::string(selected) == "applicant-decisions") return TestApplicantDecisionsKeepTheHolder();
+			return Fail("unknown selected reconnect check");
+		}
+		if (const int result = TestApplicantDecisionsKeepTheHolder(); result != 0) return result;
 		if (const int result = TestLocalHostPresence(); result != 0) return result;
 		if (const int result = TestRemovalStoreKindsAndAlias(); result != 0) return result;
 		if (const int result = TestStoreFailsClosed(); result != 0) {
