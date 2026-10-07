@@ -12406,7 +12406,7 @@ namespace RTE {
 		placeholder.activityModule = "Base.rte";
 		NetMatchConfig hosted = MakeConfig();
 		hosted.sceneName = "Host scene";
-		hosted.players[0].displayName = "EROL";
+		hosted.players[0].displayName = "Captain";
 		hosted.players[1].displayName = "Guest";
 		LoopbackTransport hostTransport, clientTransport;
 		NetSession hostSession, clientSession;
@@ -12421,7 +12421,7 @@ namespace RTE {
 			service.m_IsHost = host;
 			service.m_LocalPeerId = host ? 1 : 2;
 			service.m_LocalTeam = host ? 0 : 1;
-			service.m_LocalName = host ? "EROL" : "Guest";
+			service.m_LocalName = host ? "Captain" : "Guest";
 			service.m_MatchConfig = config;
 			service.m_ActivityPreset = config.activityPreset;
 			service.m_ActivityModule = config.activityModule;
@@ -12445,7 +12445,7 @@ namespace RTE {
 		};
 		const auto hostShown = [error, &hosted](const NetLobbySnapshot& snapshot) {
 			const auto host = std::find_if(snapshot.members.begin(), snapshot.members.end(), [&hosted](const NetLobbyMember& member) {
-				return member.peerId == hosted.hostPeerId && member.isLocal && member.displayName == "EROL";
+				return member.peerId == hosted.hostPeerId && member.isLocal && member.displayName == "Captain";
 			});
 			if (!snapshot.isHost || snapshot.awaitingHostConfig || snapshot.activityPreset != hosted.activityPreset ||
 			    snapshot.sceneName != hosted.sceneName || snapshot.members.size() != hosted.players.size() || host == snapshot.members.end()) {
@@ -12466,7 +12466,7 @@ namespace RTE {
 		NetSessionConfig sessionConfig;
 		sessionConfig.port = 43249;
 		sessionConfig.sessionId = hosted.sessionId;
-		sessionConfig.displayName = "EROL";
+		sessionConfig.displayName = "Captain";
 		auto& identity = sessionConfig.localIdentity;
 		identity.gameVersion = "7.0.0-test";
 		identity.networkProtocolVersion = NetProtocol::c_Version;
@@ -12498,7 +12498,7 @@ namespace RTE {
 		hostConfig.localPeerId = hostRunner.LocalLockstepPeerId(hostSession);
 		hostConfig.remoteTransportPeerIds = hostRunner.BuildRemoteTransportMap(hostSession);
 		hostConfig.matchConfig = hosted;
-		hostConfig.displayName = "EROL";
+		hostConfig.displayName = "Captain";
 		hostConfig.autoReady = hostConfig.autoStart = false;
 		NetLobbySessionConfig clientConfig = hostConfig;
 		clientConfig.host = false;
