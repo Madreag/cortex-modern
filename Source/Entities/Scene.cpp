@@ -2,6 +2,7 @@
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "CheckpointImage.h"
+#include "CheckpointProperties.h"
 #include "BitmapCheckpoint.h"
 #include "TerrainLayerSnapshot.h"
 
@@ -1900,20 +1901,12 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 	if (const MOSRotating* mosRotatingToSave = dynamic_cast<const MOSRotating*>(sceneObjectToSave)) {
 		if (saveFullData) {
 			if (const AtomGroup* atomGroupToSave = const_cast<MOSRotating*>(mosRotatingToSave)->GetAtomGroup()) {
-				for (long long residueValue: atomGroupToSave->GetTravelResidue()) {
-					writer.NewPropertyWithValue("AtomGroupResidue", residueValue);
-				}
+				WriteCapturedPropertySequence<"AtomGroupResidue">(writer, atomGroupToSave->GetTravelResidue());
 				// Attachable subgroup folds move atom offsets off the preset; carry them verbatim.
-				for (const Vector& offsetValue: atomGroupToSave->GetAtomOffsets()) {
-					writer.NewPropertyWithValue("AtomGroupOffset", offsetValue);
-				}
+				WriteCapturedPropertySequence<"AtomGroupOffset">(writer, atomGroupToSave->GetAtomOffsets());
 				// Subgroup identities bind the two arrays above; live order records attach history.
-				for (long long subIDValue: atomGroupToSave->GetAtomSubIDs()) {
-					writer.NewPropertyWithValue("AtomGroupSubID", subIDValue);
-				}
-				for (int materialIndex: atomGroupToSave->GetAtomMaterialIndices()) {
-					writer.NewPropertyWithValue("AtomGroupMaterial", materialIndex);
-				}
+				WriteCapturedPropertySequence<"AtomGroupSubID">(writer, atomGroupToSave->GetAtomSubIDs());
+				WriteCapturedPropertySequence<"AtomGroupMaterial">(writer, atomGroupToSave->GetAtomMaterialIndices());
 				// The moment of inertia accumulates over attach history; carry the value, not the recompute.
 				writer.NewPropertyWithValue("AtomGroupMomentOfInertia", atomGroupToSave->GetStoredMomentOfInertia());
 				writer.NewPropertyWithValue("AtomGroupStoredOwnerMass", atomGroupToSave->GetStoredOwnerMass());

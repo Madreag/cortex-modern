@@ -24,11 +24,12 @@ namespace RTE {
 		}
 		template<CheckpointPropertyName Name, class T> struct Owned {
 			T value;
-			void Write(Writer& writer) const {
+			static void WriteValue(Writer& writer, const T& value) {
 				writer.NewProperty(Name.text);
 				if constexpr (std::is_same_v<T, VectorValue>) value.Write(writer);
 				else writer << value;
 			}
+			void Write(Writer& writer) const { WriteValue(writer, value); }
 			size_t DynamicBytes() const {
 				if constexpr (std::is_same_v<T, std::string>) return value.size();
 				else return 0;
@@ -57,6 +58,30 @@ namespace RTE {
 		writer.Append(CheckpointText::Deferred([owned = std::move(owned), indent] {
 			return Writer::Capture([&](Writer& output) {
 				std::apply([&output](const auto&... fields) { (fields.Write(output), ...); }, owned);
+			}, indent).Text();
+		}, bytes));
+	}
+	template<CheckpointPropertyName Name, class T> void WriteCapturedPropertySequence(Writer& writer, std::vector<T> values) {
+		if (!writer.IsCapturing() || !CheckpointWriter::BatchEnabled()) {
+			for (const T& value: values) writer.NewPropertyWithValue(Name.text, value);
+			return;
+		}
+		using Value = decltype(CheckpointProperties::Freeze(std::declval<const T&>()));
+		auto owned = [&] {
+			if constexpr (std::is_same_v<T, Value>) return std::move(values);
+			else {
+				std::vector<Value> frozen;
+				frozen.reserve(values.size());
+				for (const T& value: values) frozen.push_back(CheckpointProperties::Freeze(value));
+				return frozen;
+			}
+		}();
+		size_t bytes = sizeof(owned) + owned.size() * sizeof(Value);
+		if constexpr (std::is_same_v<Value, std::string>) for (const Value& value: owned) bytes += value.size();
+		const int indent = writer.GetIndent();
+		writer.Append(CheckpointText::Deferred([owned = std::move(owned), indent] {
+			return Writer::Capture([&](Writer& output) {
+				for (const Value& value: owned) CheckpointProperties::Owned<Name, Value>::WriteValue(output, value);
 			}, indent).Text();
 		}, bytes));
 	}

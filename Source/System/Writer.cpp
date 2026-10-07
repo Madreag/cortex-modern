@@ -924,6 +924,31 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			check(actual.first == ordinary.Text() && actual.second == ordinary.SharedText(), "owned_named_properties_preserve_full_and_shared_bytes_after_mutation");
 		}
 		{
+			CheckpointText frozen;
+			std::string full, shared;
+			{
+				std::vector<Vector> offsets{Vector(-0.0F, std::bit_cast<float>(uint32_t{0x7fc01234})), Vector(11.25F, -17.5F)};
+				std::vector<int64_t> ids{std::numeric_limits<int64_t>::min(), 0, std::numeric_limits<int64_t>::max()};
+				std::vector<std::string> binary{std::string("seq\0value\xff", 10), "", "repeated"};
+				const auto write = [&](Writer& writer) {
+					WriteCapturedPropertySequence<"Offsets">(writer, offsets);
+					WriteCapturedPropertySequence<"IDs">(writer, ids);
+					WriteCapturedPropertySequence<"Empty">(writer, std::vector<int>{});
+					writer.PerPeerBegin();
+					WriteCapturedPropertySequence<"Binary">(writer, binary);
+					writer.PerPeerEnd();
+				};
+				const auto ordinary = Writer::Capture(write, 3);
+				full = ordinary.Text(); shared = ordinary.SharedText();
+				{
+					CheckpointWriter::BatchScope batches(true);
+					frozen = Writer::Capture(write, 3);
+				}
+			}
+			const auto actual = std::async(std::launch::async, [frozen] { return std::pair{frozen.Text(), frozen.SharedText()}; }).get();
+			check(actual.first == full && actual.second == shared, "owned_property_sequences_outlive_sources_and_preserve_full_and_shared_bytes");
+		}
+		{
 			enum class SignedByte : int8_t { Low = -127 };
 			const uint8_t unusualBool = 0xFE;
 			bool flag;
