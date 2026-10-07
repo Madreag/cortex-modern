@@ -3588,11 +3588,11 @@ def self_test():
     return 0 if all(results) else 1
 
 
-def planned_cases(case, requested, all_sizes=False):
+def planned_cases(case, requested, all_sizes=False, one_size=False):
     rows = []
     for name in CASES if case == 'all' else (case,):
         sizes = [requested]
-        if name != 'oracles' and (all_sizes or name in ('net-chat', 'lobby-name', 'live')):
+        if not one_size and name != 'oracles' and (all_sizes or name in ('net-chat', 'lobby-name', 'live')):
             sizes.extend(size for key, size in SIZE_GATES if key == name and size not in sizes)
         rows.extend((name, size) for size in sizes)
     return rows
@@ -3606,8 +3606,10 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--case", choices=(*CASES, "all"), required=True)
     parser.add_argument("--size", choices=("640x360", "960x540", "1280x720", "1920x1080", "2560x1440", "3840x2160", "960x540@2.6667"), required=True)
-    parser.add_argument("--all-sizes", action="store_true",
+    sizes = parser.add_mutually_exclusive_group()
+    sizes.add_argument("--all-sizes", action="store_true",
                         help="also run every SIZE_GATES row; net-chat and lobby-name always do this")
+    sizes.add_argument("--one-size", action="store_true", help="run only the requested size")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--single-box-smoke", action="store_true", help="explicit local smoke for direct LAN arms; always proof:false")
     parser.add_argument("--harvest-declared", action="store_true", help="write each sweep's controls as drafts for tools/menu_declared; the sweeps then prove nothing")
@@ -3620,7 +3622,7 @@ def main():
     options = parser.parse_args()
     global BASE_WORDS
     BASE_WORDS = options.base_words
-    selected = planned_cases(options.case, options.size, options.all_sizes)
+    selected = planned_cases(options.case, options.size, options.all_sizes, options.one_size)
     if not selected:
         parser.error('the selected size partition has no cases')
     if options.single_box_smoke:
