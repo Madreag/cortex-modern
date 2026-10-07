@@ -192,8 +192,12 @@ def engine_executable(repo):
 
 
 def file_sha256(path):
-    from run_sim_test import file_sha256 as digest
-    return digest(path)
+    # Cache publication precedes the repository tools' native module path.
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda:stream.read(1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 TOPOLOGY_LOCAL = "single-box: not proof"
