@@ -692,7 +692,7 @@ def inventory_reference_roles(text, state, local_seat=0):
     UIDs elsewhere stay global identities. The ownership path distinguishes two equal
     devices and keeps repeated GUI references attached to the same world object.
     """
-    while isinstance(state, dict) and state.get("version") in ("GameActivity1", "GameActivity2", "GameActivity3"):
+    while isinstance(state, dict) and state.get("version") in ("GameActivity1", "GameActivity2", "GameActivity3", "GameActivity4"):
         state = state["values" if state["version"] == "GameActivity2" else "base"]
     if not isinstance(state, dict) or state.get("version") not in ("Activity1", "Activity2", "Activity3", "Activity4"):
         return {}

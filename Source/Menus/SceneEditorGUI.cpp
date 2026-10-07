@@ -922,6 +922,12 @@ void SceneEditorGUI::Update() {
 						g_FrameMan.ClearScreenText(g_ActivityMan.GetActivity()->ScreenOfPlayer(m_pController->GetPlayer()));
 						g_FrameMan.SetScreenText("You can't afford to place that!", g_ActivityMan.GetActivity()->ScreenOfPlayer(m_pController->GetPlayer()), 333, 1500);
 						g_GUISound.UserErrorSound()->Play(m_pController->GetPlayer());
+					} else if (game && game->IsLockstepPlacement()) {
+						if ((dynamic_cast<TerrainObject*>(m_pCurrentObject) || m_CursorInAir) &&
+						    game->EnqueueEditorPlacement(*m_pCurrentObject, m_pController->GetPlayer(), m_NativeTechModule, m_ForeignCostMult)) {
+							m_EditMade = true;
+							g_GUISound.PlacementThud()->Play(m_pController->GetPlayer());
+						} else g_GUISound.UserErrorSound()->Play(m_pController->GetPlayer());
 					} else {
 						// TODO: Experimental! clean up this messiness
 						SceneObject* pPlacedClone = dynamic_cast<SceneObject*>(m_pCurrentObject->Clone());

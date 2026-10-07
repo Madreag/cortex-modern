@@ -4791,18 +4791,22 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	// and Shift+Enter selects All. Team lines indent two cells as well as carrying their [team] mark.
 	TakeLobbyChat(snapshot);
 	// Lines sit bottom-aligned above the input: the newest line is always the lowest drawn row.
-	const size_t chatOffset = m_MultiplayerLobbyChatLines.size() > static_cast<size_t>(chatRows)
-	                              ? m_MultiplayerLobbyChatLines.size() - chatRows : 0;
-	const size_t firstLineRow = m_MultiplayerLobbyChatLines.size() - chatOffset < static_cast<size_t>(chatRows)
-	                                ? static_cast<size_t>(chatRows) - (m_MultiplayerLobbyChatLines.size() - chatOffset) : 0;
 	// Chat follows the player rows' convention: X=8, their ini spot, at the fixed panel width.
 	const int chatX = 8;
 	const int chatW = contentWidth - 2 * chatX;
+	GUIFont* chatFont = m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png");
+	std::vector<std::string> visualChatLines;
+	for (const auto& message: m_MultiplayerLobbyChatLines) {
+		const auto wrapped = NetChatWrap(message, std::max(1, chatW - 4), [&](const std::string& text) { return chatFont->CalculateWidth(text); });
+		visualChatLines.insert(visualChatLines.end(), wrapped.begin(), wrapped.end());
+	}
+	const size_t chatOffset = visualChatLines.size() > static_cast<size_t>(chatRows) ? visualChatLines.size() - chatRows : 0;
+	const size_t firstLineRow = static_cast<size_t>(chatRows) - (visualChatLines.size() - chatOffset);
 	for (size_t row = 0; row < m_MultiplayerLobbyChatLabels.size(); ++row) {
 		GUILabel* label = m_MultiplayerLobbyChatLabels[row];
 		if (!label) continue;
 		const bool drawn = row < static_cast<size_t>(chatRows) && row >= firstLineRow;
-		label->SetText(drawn ? m_MultiplayerLobbyChatLines[chatOffset + row - firstLineRow] : "");
+		label->SetText(drawn ? visualChatLines[chatOffset + row - firstLineRow] : "");
 		// FontSmall's cells are 10px, so the rows pitch at the measured height, not the label's skin one.
 		label->SetPositionRel(chatX, chatTop + static_cast<int>(row) * 10);
 		if (label->GetWidth() != chatW) {

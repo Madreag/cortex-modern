@@ -1335,7 +1335,7 @@ namespace RTE {
 			if (!pump()) return false;
 			sessions[1].Tick(now);
 			if (!sessions[1].IsClosed() || hostSession.GetReadyPeerCount() != 1 || !sessions[0].IsReady() || !lobbies[0].IsLocalReady() ||
-			    hostLobby.IsRemoteReady(2) || hostLobby.GetState() != NetLobbyState::WaitingForConfigAck ||
+			    !hostLobby.IsRemoteReady(2) || hostLobby.IsConfigAcked(2) || hostLobby.GetState() != NetLobbyState::WaitingForConfigAck ||
 			    hostLobby.GetMatchConfig().configRevision != revisionBeforeForgery + 1) {
 				*error = "forged readiness was not isolated to its sending connection: closed=" + std::to_string(sessions[1].IsClosed()) +
 				         " peers=" + std::to_string(hostSession.GetReadyPeerCount()) + " host_ready=" + std::to_string(hostLobby.IsRemoteReady(2)) +

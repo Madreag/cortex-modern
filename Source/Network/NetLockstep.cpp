@@ -68,7 +68,7 @@ namespace RTE {
 		// A host playing to its round's agreed end stops waiting for it after this long at most.
 		constexpr uint64_t c_AgreedEndBoundMs = 3000;
 		constexpr uint32_t c_RecoveryInputMagic = 0x314e4952;
-		constexpr uint16_t c_RecoveryInputVersion = 7;
+		constexpr uint16_t c_RecoveryInputVersion = 8;
 
 		std::optional<uint64_t> TestFrameFromEnvironment(const char* name) {
 			const char* text = std::getenv(name);
@@ -785,7 +785,7 @@ namespace RTE {
 			return true;
 		}
 
-		bool EncodeCommandList(const std::vector<NetGameCommand>& commands, uint8_t senderPeerId, std::vector<uint8_t>& out, NetLockstepError* error, bool recovery, bool holdIdentity = true, bool admissionIdentity = true) {
+		bool EncodeCommandList(const std::vector<NetGameCommand>& commands, uint8_t senderPeerId, std::vector<uint8_t>& out, NetLockstepError* error, bool recovery, bool holdIdentity = true, bool admissionIdentity = true, bool editorPlacement = true) {
 			AppendU16LE(out, static_cast<uint16_t>(commands.size()));
 			for (const NetGameCommand& command : commands) {
 				if (recovery && command.senderPeerId != senderPeerId) {
@@ -1062,6 +1062,31 @@ namespace RTE {
 						    !AppendString(out, place.module, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_module", error)) {
 							return false;
 						}
+						if (editorPlacement) {
+							if (place.addedInventory.size() > NetLockstepCodec::c_MaxCargoPerDelivery) return false;
+							AppendU8(out, place.hFlipped);
+							AppendU16LE(out, static_cast<uint16_t>(place.addedInventory.size()));
+							for (const auto& item: place.addedInventory) {
+								for (const auto& name: item) if (!AppendString(out, name, NetLockstepCodec::c_MaxScenarioBytes, "brain_inventory", error)) return false;
+							}
+						}
+						break;
+					}
+					case NetGameCommandType::EditorPlacement: {
+						if (!editorPlacement) return false;
+						const auto& place = std::get<NetGameEditorPlacement>(command.payload);
+						AppendU32LE(out, static_cast<uint32_t>(place.team));
+						AppendU32LE(out, static_cast<uint32_t>(place.player));
+						AppendU32LE(out, FloatToBitsLE(place.posX));
+						AppendU32LE(out, FloatToBitsLE(place.posY));
+						AppendU32LE(out, FloatToBitsLE(place.foreignCostMult));
+						AppendU8(out, place.hFlipped);
+						AppendU64LE(out, static_cast<uint64_t>(place.recipientUID));
+						AppendU8(out, place.equipResidentBrain);
+						for (const auto* name: {&place.className, &place.preset, &place.module, &place.nativeTechModule,
+						                       &place.brainClassName, &place.brainPreset, &place.brainModule}) {
+							if (!AppendString(out, *name, NetLockstepCodec::c_MaxScenarioBytes, "editor_placement", error)) return false;
+						}
 						break;
 					}
 					case NetGameCommandType::WorldTransition: {
@@ -1155,13 +1180,22 @@ namespace RTE {
 			return frame.hostHold || std::any_of(frame.priorWindow.begin(), frame.priorWindow.end(), [](const auto& older) { return older.hostHold.has_value(); });
 		}
 
+		bool CarriesEditorPlacement(const NetLockstepFrame& frame) {
+			const auto carries = [](const NetLockstepFrame& tick) {
+				return std::any_of(tick.commands.begin(), tick.commands.end(), [](const NetGameCommand& command) {
+					return std::holds_alternative<NetGameEditorPlacement>(command.payload) || std::holds_alternative<NetGamePlaceBrain>(command.payload);
+				});
+			};
+			return carries(frame) || std::any_of(frame.priorWindow.begin(), frame.priorWindow.end(), carries);
+		}
+
 		bool EncodeFrameHold(const NetLockstepFrame& frame, bool enabled, std::vector<uint8_t>& out, NetLockstepError* error) {
 			if (!enabled) return !frame.hostHold;
 			AppendU8(out, frame.hostHold ? 1 : 0);
 			return !frame.hostHold || EncodePayload(*frame.hostHold, out, error);
 		}
 
-		bool EncodePayload(const NetLockstepFrame& payload, std::vector<uint8_t>& out, NetLockstepError* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded, bool recovery = false, size_t* outValueObservationsEncoded = nullptr, NetLockstepObservationBlocks* blocks = nullptr, bool holdIdentity = true, bool admissionIdentity = true, bool holdMarker = false) {
+		bool EncodePayload(const NetLockstepFrame& payload, std::vector<uint8_t>& out, NetLockstepError* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded, bool recovery = false, size_t* outValueObservationsEncoded = nullptr, NetLockstepObservationBlocks* blocks = nullptr, bool holdIdentity = true, bool admissionIdentity = true, bool holdMarker = false, bool editorPlacement = true) {
 			if (!ValidatePeerId(payload.senderPeerId, error, "sender_peer_id") || !ValidateSortedFrames(payload.frames, error)) {
 				return false;
 			}
@@ -1202,7 +1236,7 @@ namespace RTE {
 				std::vector<ControllerFrame> previousFrames;
 				auto encodeTick = [&](const NetLockstepFrame& tick) {
 					if (!EncodeTickFrames(tick.targetFrame, tick.frames, previousTick, out, error) ||
-					    !EncodeCommandList(tick.commands, tick.senderPeerId, out, error, recovery, holdIdentity, admissionIdentity) ||
+					    !EncodeCommandList(tick.commands, tick.senderPeerId, out, error, recovery, holdIdentity, admissionIdentity, editorPlacement) ||
 					    !EncodeFrameHold(tick, holdMarker, out, error) ||
 					    !AppendTickObservations(tick, out, dictionary, blocks, true, outObservationsEncoded, outValueObservationsEncoded, error)) {
 						return false;
@@ -1219,7 +1253,7 @@ namespace RTE {
 				return encodeTick(payload);
 			}
 			if (!EncodeTickFrames(payload.targetFrame, payload.frames, nullptr, out, error) ||
-			    !EncodeCommandList(payload.commands, payload.senderPeerId, out, error, recovery, holdIdentity, admissionIdentity) ||
+			    !EncodeCommandList(payload.commands, payload.senderPeerId, out, error, recovery, holdIdentity, admissionIdentity, editorPlacement) ||
 			    !EncodeFrameHold(payload, holdMarker, out, error)) {
 				return false;
 			}
@@ -2254,6 +2288,37 @@ namespace RTE {
 						place.player = static_cast<int32_t>(player);
 						place.posX = FloatFromBitsLE(xBits);
 						place.posY = FloatFromBitsLE(yBits);
+						if (version >= NetLockstepCodec::c_EditorPlacementVersion) {
+							uint8_t flipped = 0;
+							uint16_t count = 0;
+							if (!reader.ReadU8(flipped) || flipped > 1 || !reader.ReadU16LE(count) || count > NetLockstepCodec::c_MaxCargoPerDelivery) return false;
+							place.hFlipped = flipped != 0;
+							place.addedInventory.resize(count);
+							for (auto& item: place.addedInventory) {
+								for (auto& name: item) if (!reader.ReadString(name, NetLockstepCodec::c_MaxScenarioBytes, "brain_inventory", error)) return false;
+							}
+						}
+						command.payload = std::move(place);
+						break;
+					}
+					case NetGameCommandType::EditorPlacement: {
+						if (version < NetLockstepCodec::c_EditorPlacementVersion) {
+							SetError(error, NetLockstepErrorCode::UnsupportedVersion, reader.Offset(), "editor placement requires the setup-editor wire");
+							return false;
+						}
+						NetGameEditorPlacement place;
+						uint32_t team = 0, player = 0, x = 0, y = 0, cost = 0;
+						uint64_t recipient = 0;
+						uint8_t flipped = 0, brain = 0;
+						if (!reader.ReadU32LE(team) || !reader.ReadU32LE(player) || !reader.ReadU32LE(x) || !reader.ReadU32LE(y) ||
+						    !reader.ReadU32LE(cost) || !reader.ReadU8(flipped) || flipped > 1 || !reader.ReadU64LE(recipient) || !reader.ReadU8(brain) || brain > 1) return false;
+						place.team = static_cast<int32_t>(team); place.player = static_cast<int32_t>(player);
+						place.posX = FloatFromBitsLE(x); place.posY = FloatFromBitsLE(y); place.foreignCostMult = FloatFromBitsLE(cost);
+						place.hFlipped = flipped != 0; place.recipientUID = static_cast<int64_t>(recipient); place.equipResidentBrain = brain != 0;
+						for (auto* name: {&place.className, &place.preset, &place.module, &place.nativeTechModule,
+						                 &place.brainClassName, &place.brainPreset, &place.brainModule}) {
+							if (!reader.ReadString(*name, NetLockstepCodec::c_MaxScenarioBytes, "editor_placement", error)) return false;
+						}
 						command.payload = std::move(place);
 						break;
 					}
@@ -2706,7 +2771,7 @@ namespace RTE {
 		std::vector<uint8_t> payloadBytes;
 		const bool payloadOk = std::visit(Overloaded{
 			[&](const NetLockstepStart& payload) { return EncodePayload(payload, payloadBytes, error); },
-			[&](const NetLockstepFrame& payload) { return EncodePayload(payload, payloadBytes, error, dictionary, outObservationsEncoded, false, outValueObservationsEncoded, blocks, true, true, HasHostHold(payload) || CarriesSeatRelease(payload)); },
+			[&](const NetLockstepFrame& payload) { return EncodePayload(payload, payloadBytes, error, dictionary, outObservationsEncoded, false, outValueObservationsEncoded, blocks, true, true, HasHostHold(payload) || CarriesSeatRelease(payload) || CarriesEditorPlacement(payload)); },
 			[&](const NetLockstepAck& payload) { return EncodePayload(payload, payloadBytes, error); },
 			[&](const NetLockstepStop& payload) { return EncodePayload(payload, payloadBytes, error); },
 			[&](const NetLockstepChecksum& payload) { return EncodePayload(payload, payloadBytes, error); },
@@ -2740,6 +2805,7 @@ namespace RTE {
 			if (carriesCheckpoint(*frame) || std::any_of(frame->priorWindow.begin(), frame->priorWindow.end(), carriesCheckpoint)) encodeVersion = c_CheckpointVersion;
 			if (HasHostHold(*frame)) encodeVersion = c_HoldMarkerVersion;
 			if (CarriesSeatRelease(*frame)) encodeVersion = c_SeatReleaseVersion;
+			if (CarriesEditorPlacement(*frame)) encodeVersion = c_EditorPlacementVersion;
 		}
 		if (const auto* timing = std::get_if<NetLockstepTiming>(&packet.payload); timing && timing->action == NetTimingAction::Release) encodeVersion = c_SeatReleaseVersion;
 
@@ -2758,8 +2824,8 @@ namespace RTE {
 	bool NetLockstepCodec::EncodeRecoveryInput(const NetLockstepFrame& frame, std::vector<uint8_t>& outBytes, NetLockstepError* error) {
 		std::vector<uint8_t> bytes;
 		AppendU32LE(bytes, c_RecoveryInputMagic);
-		const bool release = CarriesSeatRelease(frame), holdMarker = release || HasHostHold(frame);
-		AppendU16LE(bytes, release ? c_RecoveryInputVersion : holdMarker ? 6 : 5);
+		const bool editor = CarriesEditorPlacement(frame), release = CarriesSeatRelease(frame), holdMarker = editor || release || HasHostHold(frame);
+		AppendU16LE(bytes, editor ? c_RecoveryInputVersion : release ? 7 : holdMarker ? 6 : 5);
 		AppendU16LE(bytes, ControllerFrame::c_Version);
 		if (!EncodePayload(frame, bytes, error, nullptr, nullptr, true, nullptr, nullptr, true, true, holdMarker)) return false;
 		if (bytes.size() > c_MaxRecoveryInputBytes) {
@@ -2787,13 +2853,13 @@ namespace RTE {
 		}
 		NetLockstepPayload payload;
 		// Each recovery layout keeps the command vocabulary it recorded.
-		if (!DecodeFrame(reader, payload, error, controllerVersion, version == 1 ? c_WorldTransitionVersion : version == 2 ? 25 : version == 3 ? 27 : version == 4 ? c_WorldVersion : version == 5 ? c_CheckpointVersion : version == 6 ? c_HoldMarkerVersion : c_SeatReleaseRecordVersion, nullptr, true) || !reader.AtEnd()) return false;
+		if (!DecodeFrame(reader, payload, error, controllerVersion, version == 1 ? c_WorldTransitionVersion : version == 2 ? 25 : version == 3 ? 27 : version == 4 ? c_WorldVersion : version == 5 ? c_CheckpointVersion : version == 6 ? c_HoldMarkerVersion : version == 7 ? c_SeatReleaseRecordVersion : c_EditorPlacementVersion, nullptr, true) || !reader.AtEnd()) return false;
 		NetLockstepFrame frame = std::get<NetLockstepFrame>(std::move(payload));
 		std::vector<uint8_t> canonical;
 		AppendU32LE(canonical, c_RecoveryInputMagic);
 		AppendU16LE(canonical, version);
 		AppendU16LE(canonical, ControllerFrame::c_Version);
-		if (!EncodePayload(frame, canonical, error, nullptr, nullptr, true, nullptr, nullptr, version >= 3, version >= 4, version >= 6)) return false;
+		if (!EncodePayload(frame, canonical, error, nullptr, nullptr, true, nullptr, nullptr, version >= 3, version >= 4, version >= 6, version >= 8)) return false;
 		if (canonical != bytes) {
 			SetError(error, NetLockstepErrorCode::InvalidValue, 0, "noncanonical recovery input");
 			return false;
@@ -2830,7 +2896,7 @@ namespace RTE {
 		if (magic != c_Magic) {
 			return Fail(NetLockstepErrorCode::BadMagic, 0, "packet magic mismatch");
 		}
-		if (version < c_MinVersion || version > c_SeatReleaseVersion) {
+		if (version < c_MinVersion || version > c_EditorPlacementVersion) {
 			return Fail(NetLockstepErrorCode::UnsupportedVersion, 4, "unsupported lockstep packet version");
 		}
 		if (headerBytes != c_HeaderBytes) {
@@ -2939,7 +3005,7 @@ namespace RTE {
 			default:
 				return false;
 		}
-		return magic == c_Magic && version >= c_MinVersion && version <= c_SeatReleaseVersion && headerBytes == c_HeaderBytes &&
+		return magic == c_Magic && version >= c_MinVersion && version <= c_EditorPlacementVersion && headerBytes == c_HeaderBytes &&
 		       flags == 0 && bytes.size() == static_cast<size_t>(c_HeaderBytes) + payloadLength;
 	}
 
@@ -11574,6 +11640,14 @@ namespace RTE {
 			return;
 		}
 		if (chunk.targetFrame < EffectiveStartOf(chunk.senderPeerId)) {
+			// Reclaim moves the sender's start beyond input already queued on the reliable lane.
+			// Match ordinary frame admission: discard those old inputs, including a partial assembly.
+			if (m_ReclaimTransactions.contains(chunk.senderPeerId)) {
+				m_RecoveryIncoming.erase(chunk.senderPeerId);
+				++m_Stats.windowCopiesSkipped;
+				++m_Stats.peers[chunk.senderPeerId].windowCopiesSkipped;
+				return;
+			}
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "recovery input targets the sender's delay window");
 			return;
 		}

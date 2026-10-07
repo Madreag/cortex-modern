@@ -132,7 +132,7 @@ namespace RTE {
 	void NetReconnectUx::WatchForHostReturn(std::string matchName, std::string directorySessionId) {
 		m_AwaitingHostReturn = true;
 		m_HostReturned = false;
-		m_AwaitMatchName = matchName.empty() ? "the match" : std::move(matchName);
+		m_AwaitMatchName = matchName.empty() || matchName.starts_with("iceip:") || matchName.starts_with("iceid:") ? "your match" : std::move(matchName);
 		m_AwaitSessionId = std::move(directorySessionId);
 	}
 
@@ -174,7 +174,8 @@ namespace RTE {
 
 	std::string NetReconnectUx::GetOfferText() const {
 		switch (m_Offer) {
-			case NetReconnectOffer::Available: return "Rejoin your match at " + m_OfferAddress + "?";
+			case NetReconnectOffer::Available:
+				return m_OfferAddress.starts_with("iceip:") || m_OfferAddress.starts_with("iceid:") ? "Rejoin your online match?" : "Rejoin your match at " + m_OfferAddress + "?";
 			case NetReconnectOffer::Corrupt: return "The saved rejoin information is damaged and cannot be used.";
 			case NetReconnectOffer::Stale: return "The saved rejoin information is too old to use.";
 			case NetReconnectOffer::Missing: return "No reconnect record for that match.";

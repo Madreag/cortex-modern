@@ -1183,7 +1183,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x27, 0x00,
+				0x28, 0x00, // Ordinary Ack layout remains version 40.
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -27511,6 +27511,92 @@ namespace {
 		return passed ? 0 : 1;
 	}
 
+	int NetLockstepSelfTest::RunRecoveryAfterReclaim() {
+		std::string error;
+		for (size_t observations: {size_t{3}, size_t{4096}}) {
+			RecoveryWireRound round;
+			if (!round.Start(4, 48906, &error)) {
+				std::cerr << "[net-lockstep-selftest] FAIL recovery_after_reclaim: " << error << std::endl;
+				return 1;
+			}
+			auto& receiver = round.peer[0];
+			auto returning = receiver.m_RemoteStarts.at(3);
+			NetLockstepTiming reclaim;
+			reclaim.senderPeerId = 1; reclaim.peerId = 3; reclaim.action = NetTimingAction::Reclaim; reclaim.phase = NetTimingPhase::ReclaimAtFrame;
+			reclaim.sessionId = receiver.m_Config.sessionId; reclaim.roundId = receiver.GetRoundId(); reclaim.revision = 1;
+			reclaim.applyFrame = 100; reclaim.delayFrames = 46; reclaim.neutralThroughFrame = 146; reclaim.seatIncarnations[2] = 2;
+			receiver.ApplyTiming(reclaim);
+			const auto chunks = RecoveryWireChunks(RecoveryWireInput(3, 42, receiver.GetRoundId(), observations), reclaim.sessionId);
+			if (chunks.empty() || (observations == 4096 && chunks.size() < 2)) {
+				std::cerr << "[net-lockstep-selftest] FAIL recovery fixture did not create the required chunks" << std::endl;
+				return 1;
+			}
+			for (const auto& chunk: chunks) {
+				NetTransportEvent event{NetTransportEventType::PacketReceived, 2, NetTransportLane::ControlReliable, {}, {}};
+				if (!NetLockstepCodec::Encode({chunk}, event.bytes)) return 1;
+				receiver.InjectEvent(event, round.now);
+			}
+			if (receiver.IsFailed() || receiver.m_RemoteFrames[42].contains(3) || receiver.m_RecoveryIncoming.contains(3)) {
+				std::cerr << "[net-lockstep-selftest] FAIL recovery_after_reclaim chunks=" << chunks.size()
+				          << " next=" << receiver.GetStats().nextFrame << " reason=" << receiver.GetStats().timeoutReason << std::endl;
+				return 1;
+			}
+			std::cout << "[net-lockstep-selftest] PASS recovery_after_reclaim chunks=" << chunks.size() << " old_target=42 new_start=146" << std::endl;
+			returning.startFrame = reclaim.applyFrame; returning.inputDelayFrames = reclaim.delayFrames;
+			returning.resumeFromSnapshot = false; // A reclaimed seat publishes its admission, not its old snapshot start.
+			NetTransportEvent publication{NetTransportEventType::PacketReceived, 2, NetTransportLane::ControlReliable, {}, {}};
+			if (!NetLockstepCodec::Encode({returning}, publication.bytes)) return 1;
+			receiver.InjectEvent(publication, round.now);
+			const auto valid = RecoveryWireChunks(RecoveryWireInput(3, 147, receiver.GetRoundId(), observations), reclaim.sessionId);
+			for (const auto& chunk: valid) {
+				NetTransportEvent event{NetTransportEventType::PacketReceived, 2, NetTransportLane::ControlReliable, {}, {}};
+				if (!NetLockstepCodec::Encode({chunk}, event.bytes)) return 1;
+				receiver.InjectEvent(event, round.now);
+			}
+			if (receiver.IsFailed() || !receiver.m_RemoteFrames[147].contains(3)) {
+				std::cerr << "[net-lockstep-selftest] FAIL post_reclaim_input_is_accepted: " << receiver.GetStats().timeoutReason << std::endl;
+				return 1;
+			}
+			std::cout << "[net-lockstep-selftest] PASS post_reclaim_input_is_accepted" << std::endl;
+		}
+		{
+			RecoveryWireRound round;
+			if (!round.Start(4, 48907, &error)) return 1;
+			auto& receiver = round.peer[0];
+			const auto chunks = RecoveryWireChunks(RecoveryWireInput(3, 42, receiver.GetRoundId(), 4096), receiver.m_Config.sessionId);
+			if (chunks.size() < 2) return 1;
+			NetTransportEvent first{NetTransportEventType::PacketReceived, 2, NetTransportLane::ControlReliable, {}, {}};
+			if (!NetLockstepCodec::Encode({chunks.front()}, first.bytes)) return 1;
+			receiver.InjectEvent(first, round.now);
+			if (!receiver.m_RecoveryIncoming.contains(3)) return 1;
+			NetLockstepTiming reclaim;
+			reclaim.senderPeerId = 1; reclaim.peerId = 3; reclaim.action = NetTimingAction::Reclaim; reclaim.phase = NetTimingPhase::ReclaimAtFrame;
+			reclaim.sessionId = receiver.m_Config.sessionId; reclaim.roundId = receiver.GetRoundId(); reclaim.revision = 1;
+			reclaim.applyFrame = 100; reclaim.delayFrames = 46; reclaim.neutralThroughFrame = 146; reclaim.seatIncarnations[2] = 2;
+			receiver.ApplyTiming(reclaim);
+			for (size_t index = 1; index < chunks.size(); ++index) {
+				NetTransportEvent next{NetTransportEventType::PacketReceived, 2, NetTransportLane::ControlReliable, {}, {}};
+				if (!NetLockstepCodec::Encode({chunks[index]}, next.bytes)) return 1;
+				receiver.InjectEvent(next, round.now);
+			}
+			if (receiver.IsFailed() || receiver.m_RecoveryIncoming.contains(3)) return 1;
+			std::cout << "[net-lockstep-selftest] PASS partial_recovery_discarded_after_reclaim" << std::endl;
+		}
+		{
+			RecoveryWireRound round;
+			if (!round.Start(4, 48908, &error)) return 1;
+			auto& receiver = round.peer[0];
+			receiver.m_PeerEffectiveStart[3] = 146;
+			const auto chunks = RecoveryWireChunks(RecoveryWireInput(3, 42, receiver.GetRoundId(), 3), receiver.m_Config.sessionId);
+			NetTransportEvent event{NetTransportEventType::PacketReceived, 2, NetTransportLane::ControlReliable, {}, {}};
+			if (chunks.empty() || !NetLockstepCodec::Encode({chunks.front()}, event.bytes)) return 1;
+			receiver.InjectEvent(event, round.now);
+			if (!receiver.IsFailed() || receiver.GetStats().timeoutReason.find("sender's delay window") == std::string::npos) return 1;
+			std::cout << "[net-lockstep-selftest] PASS startup_delay_violation_still_rejected" << std::endl;
+		}
+		return 0;
+	}
+
 	int NetLockstepSelfTest::Run() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		if (!LuaMan::IsConstructed()) LuaMan::Construct();
@@ -27527,6 +27613,7 @@ namespace {
 		};
 		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
 		if (selectedCase) {
+			if (std::string_view(selectedCase) == "recovery-after-reclaim") return RunRecoveryAfterReclaim();
 			if (std::string_view(selectedCase) == "horizon-path-grid") return PathFinder::RunHorizonGridSelfTest();
 			if (std::string_view(selectedCase) != "shared-scene-load") return fail("unknown selected lockstep self-test case");
 			std::string error;

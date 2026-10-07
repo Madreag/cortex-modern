@@ -10340,12 +10340,14 @@ static std::string ResyncSaveName() {
 		}
 		spec.p2p = BuildIceConfig(g_SettingsMan, std::string(), c_IceVirtualPort, relay);
 		if (spec.p2p.connectionMode == 2 && spec.p2p.turnServerList.empty()) {
-			// Relay only never falls back: the player is told why there is no relay and what to change.
+			// A failed credential fetch does not mean the hosted match had no relay configured.
 			if (error) {
 				*error = !g_SettingsMan.GetNetworkPlayerTurnServers().empty() || g_SettingsMan.HasNetworkTurnServersOverride()
 				             ? "Your relay has no unexpired login - check your relay setting or switch Connection to Automatic"
 				         : browse.IceRelayRefused() ? "The host's relay refused the credentials - ask the host to check the relay setting"
-				                                    : "No relay is configured for this match - switch Connection to Automatic or Direct only";
+				                                    : !browse.IceError().empty() ? browse.IceError()
+				                                    : browse.IceRequestPending() ? "Relay credentials did not arrive in time. Retry joining the match."
+				                                    : "Relay credentials are unavailable for this match. Refresh the list and retry joining.";
 			}
 			return false;
 		}
@@ -10901,6 +10903,10 @@ static std::string ResyncSaveName() {
 		    (RejoinFoundHostRowGone(true, false, error) || QueryDirectoryHostEnd(request.sessionId));
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_CancelRequested.load()) {
+				started = false;
+				error = "Match setup canceled";
+			}
 			m_RejoinFoundHostRowGone = hostEnded;
 			if (started) {
 				// The lockstep peer id is the session-assigned id + 1; the team comes from that slot.
@@ -11434,6 +11440,20 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::DismissReconnectOffer(uint64_t nowMs, std::string* error) {
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			const bool cancelAttempt = (m_OrdinaryTicketRejoin || m_HeldRejoinDriving) && m_State != NetMatchServiceState::Running;
+			m_OrdinaryTicketRejoin = m_HeldRejoinDriving = false;
+			m_HeldRejoinRoutes.clear();
+			m_HeldRejoinRetryAtMs = 0;
+			m_HeldRejoinFailedAttempts = 0;
+			if (cancelAttempt) {
+				m_CancelRequested.store(true);
+				m_StartRequested.store(false);
+				m_CancelStartRequested.store(true);
+				if (m_State == NetMatchServiceState::ReadyToLaunch) m_State = NetMatchServiceState::Failed;
+			}
+		}
 		m_ReconnectUx.Cancel(nowMs);
 		m_ReconnectUx.DismissOffer();
 		m_ReconnectUx.StopWatchingForHostReturn();

@@ -27,6 +27,7 @@
 #include "NetPlayerPresentation.h"
 #include "NetChatPresentation.h"
 #include "Activity.h"
+#include "GameActivity.h"
 #include "Actor.h"
 #include "AEmitter.h"
 #include "ActivityMan.h"
@@ -12926,6 +12927,7 @@ namespace RTE {
 
 		// The snapshot the lobby screen reads comes from the runner's own lobby, so the round runs on it.
 		NetMatchRunner runner;
+		runner.m_Config.host = true;
 		NetLobbySession& hostLobby = runner.GetLobbySession();
 		NetLobbySessionConfig lobbyConfig;
 		lobbyConfig.host = true;
@@ -16381,7 +16383,7 @@ namespace RTE {
 			if (!step.empty()) misses.push_back("hidden 404 in flight: " + step);
 		}
 
-		{   // a mid-match re-register is not the bound row: its register says ip, and the end deletes it
+		{   // A register claims the bound id; a directory returning a different id leaves an IP-only row.
 			auto wire = std::make_shared<Wire>();
 			wire->replies = {registerReply(idA, "tok-a", 1, true), gone, registerReply(idB, "tok-b", 60, true), deleted};
 			NetMatchService service;
@@ -16394,13 +16396,17 @@ namespace RTE {
 					const auto registration = std::find_if(wire->sent.rbegin(), wire->sent.rend(), [](const auto& request) {
 						return request.method == "POST" && request.path == "/v1/sessions";
 					});
-					const std::string second = body(*registration).value("join_mode", "");
+					const auto registered = body(*registration);
+					const std::string second = registered.value("join_mode", "");
+					const bool boundClaim = registered.value("resume_session_id", "") == idA && registered.value("resume_token", "") == "tok-a";
+					const bool unboundRow = service.m_IceBoundSessionId == idA && service.m_DirectoryRow.joinMode == "ip";
 					service.FinishMatch("match over");
 					if (!pumpUntil(service, 500, [&] { return count(*wire, "DELETE", "/v1/sessions/" + idB) == 1; })) {
 						step = "the end kept a row GNS is not pinned to";
 					}
-					if (first != "either" || second != "ip") {
-						step += (step.empty() ? "" : "; ") + std::string("register join_mode ") + first + " then " + second + ", want either then ip";
+					if (first != "either" || second != "either" || !boundClaim || !unboundRow) {
+						step += (step.empty() ? "" : "; ") + std::string("register join_mode ") + first + " then " + second +
+						        " bound_claim=" + (boundClaim ? "1" : "0") + " unbound_ip_row=" + (unboundRow ? "1" : "0");
 					}
 				}
 			}
@@ -17625,6 +17631,7 @@ namespace RTE {
 			const std::string name(selected);
 			bool passed = false;
 			if (name == "ui-presentation") passed = TestInMatchPresentation(&error);
+			else if (name == "setup-editor") passed = GameActivity::RunSetupEditorSelfTest();
 			else if (name == "chat-receipts") passed = TestChatReceipts<NetSession>(&error);
 			else if (name == "chat-routing") passed = TestChatRoutingAndBounds(&error);
 			else if (name == "state-delivery") passed = TestLobbyStartWaitsForReceivedState(&error);
