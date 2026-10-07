@@ -1419,6 +1419,8 @@ namespace RTE {
 		friend bool TestGnsStopCancelContracts(std::string* error);
 		friend bool TestEndedWorldLateAdmission(std::string* error);
 		friend bool TestRecoveredDirectoryBinding(std::string* error);
+		friend bool TestLobbyDirectoryLeaseRecovery(std::string* error);
+		friend bool TestLobbyDirectoryStatus(std::string* error);
 		friend bool TestSignalPumpInitialCredential(std::string* error);
 		friend bool TestDirectoryCapacityFallback(std::string* error);
 		friend bool TestStaleWorldImageRecaptures(std::string* error);

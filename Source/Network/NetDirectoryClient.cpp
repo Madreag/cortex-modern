@@ -184,7 +184,14 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::Advertise(const NetDirectoryRegisterRequest& row, bool running, bool listed) {
+		const auto retainedClaim = std::make_pair(m_Row.resumeSessionId, m_Row.resumeToken);
 		m_Row = row;
+		// A metadata refresh must not discard the identity acknowledged by the service.
+		// It is also the identity the live ICE listener and returning seats still use.
+		if (!row.persistentWorld && row.resumeSessionId.empty()) {
+			m_Row.resumeSessionId = m_SessionId.empty() ? retainedClaim.first : m_SessionId;
+			m_Row.resumeToken = m_Token.empty() ? retainedClaim.second : m_Token;
+		}
 		if (row.persistentWorld) {
 			if (m_ProofWorldId != row.worldId) { m_ProofWorldId = row.worldId; m_WorldProofs.clear(); m_WorldProofAttempt.reset(); m_WorldProofRefusals = 0; }
 			if (m_WorldProofs.empty()) RememberWorldProof(row.resumeSessionId, row.resumeToken);
@@ -227,6 +234,8 @@ namespace RTE {
 		m_Listed = false;
 		m_SessionId.clear();
 		m_Token.clear();
+		m_Row.resumeSessionId.clear();
+		m_Row.resumeToken.clear();
 		m_ConfirmedListed.reset();
 		m_ProofWorldId.clear(); m_WorldProofs.clear(); m_WorldProofAttempt.reset(); m_WorldProofRefusals = 0;
 		if (m_State != State::Disabled)
@@ -517,6 +526,9 @@ namespace RTE {
 				RememberWorldProof(m_Row.resumeSessionId, m_Row.resumeToken);
 				RememberWorldProof(m_SessionId, m_Token);
 				m_WorldProofAttempt = std::make_pair(m_SessionId, m_Token); m_WorldProofRefusals = 0;
+			} else {
+				m_Row.resumeSessionId = m_SessionId;
+				m_Row.resumeToken = m_Token;
 			}
 			m_ObservedIp = response.observedIp;
 			// The register schema is unchanged, so a fresh row starts visible on either service.
@@ -636,10 +648,12 @@ namespace RTE {
 				SetState(State::Failed);
 				return;
 			}
+			m_Row.resumeSessionId = m_SessionId;
+			m_Row.resumeToken = m_Token;
 			m_SessionId.clear();
 			m_Token.clear();
 			SetState(State::Registering);
-			NoteError("heartbeat: row gone (404), re-registering after the backoff");
+			NoteError("heartbeat: row gone (404), renewing its identity after the backoff");
 			ScheduleRetry(nowMs);
 			return;
 		}

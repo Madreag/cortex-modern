@@ -189,6 +189,74 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestLobbyDirectoryLeaseRecovery(std::string* error) {
+		const std::string id = "7b8c9d2e-1111-4222-8333-444455556666";
+		class Answer final : public NetDirectoryClient::Transport {
+		public:
+			explicit Answer(std::shared_ptr<std::vector<NetDirectoryClient::Request>> sent): m_Sent(std::move(sent)) {}
+			void Start(const NetDirectoryClient::Request& request) override { m_Sent->push_back(request); }
+			bool Finished() override { return true; }
+			NetDirectoryClient::Reply Take() override {
+				if (m_Sent->size() == 2) return {404, R"({"error":"not_found"})", ""};
+				return {200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","heartbeat_s":5,"expires_in_s":15,"observed_ip":"127.0.0.1"})", ""};
+			}
+			void Abort() override {}
+			std::shared_ptr<std::vector<NetDirectoryClient::Request>> m_Sent;
+		};
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_State = NetMatchServiceState::Starting;
+		service.m_IceEnabled = true;
+		service.m_IceBoundSessionId = id;
+		service.m_HostSignalCredential.store(std::make_shared<const NetMatchService::HostSignalCredential>(NetMatchService::HostSignalCredential{id, "host-token"}));
+		auto sent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
+		service.m_Directory.SetTransportFactory([sent] { return std::make_unique<Answer>(sent); });
+		service.m_Directory.Configure("https://dir.test", "0123456789abcdef", "");
+		service.m_Directory.Advertise({}, false);
+		service.m_Directory.Update(0); service.m_Directory.Update(0);
+		service.RefreshDirectorySignalCredentialLocked(0);
+		service.m_Directory.Update(17417); service.m_Directory.Update(17417);
+		service.RefreshDirectorySignalCredentialLocked(17417);
+		const auto before = service.m_HostSignalCredential.load();
+		service.m_Directory.Advertise(service.m_DirectoryRow, false);
+		service.m_Directory.Update(22416);
+		if (sent->size() != 2) { *error = "lobby recovery ignored the directory retry deadline"; return false; }
+		service.m_Directory.Update(22417);
+		const auto body = nlohmann::json::parse(sent->back().body);
+		if (body.value("resume_session_id", std::string()) != id || body.value("resume_token", std::string()) != "host-token") {
+			*error = "expired lobby registration discarded its listener's directory identity"; return false;
+		}
+		service.m_Directory.Update(22417);
+		service.RefreshDirectorySignalCredentialLocked(22417);
+		if (service.m_HostSignalCredential.load() == before) { *error = "renewed lobby lease left its failed signal pump unopened"; return false; }
+		std::cout << "[net-directory-selftest] PASS lobby_directory_lease_recovery" << std::endl;
+		return true;
+	}
+
+	bool TestLobbyDirectoryStatus(std::string* error) {
+		class Answer final : public NetDirectoryClient::Transport {
+		public:
+			void Start(const NetDirectoryClient::Request&) override {}
+			bool Finished() override { return true; }
+			NetDirectoryClient::Reply Take() override { return {200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","heartbeat_s":5,"expires_in_s":15,"observed_ip":"127.0.0.1"})", ""}; }
+			void Abort() override {}
+		};
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_State = NetMatchServiceState::Starting;
+		service.m_Directory.SetTransportFactory([] { return std::make_unique<Answer>(); });
+		service.m_Directory.Configure("https://dir.test", "0123456789abcdef", "");
+		service.m_Directory.Advertise({}, false);
+		service.m_Directory.Update(0);
+		service.RefreshDirectorySignalCredentialLocked(0);
+		if (service.GetListingStatus() != NetListingStatus::Opening) { *error = "public registration was described as network-only"; return false; }
+		service.m_Directory.Update(0);
+		service.RefreshDirectorySignalCredentialLocked(0);
+		if (service.GetListingStatus() != NetListingStatus::Listed) { *error = "registered public lobby was not described as listed"; return false; }
+		std::cout << "[net-directory-selftest] PASS lobby_directory_status" << std::endl;
+		return true;
+	}
+
 	bool TestSignalPumpInitialCredential(std::string* error) {
 #ifdef CCCP_WITH_GNS
 		if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
@@ -3354,7 +3422,7 @@ namespace RTE {
 				if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
 			}
 #endif
-			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"T1", TestDirectoryErrorSnapshot}, {"T2", TestDirectoryCapacityFallback}, {"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
+			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"L1", TestLobbyDirectoryLeaseRecovery}, {"L3", TestLobbyDirectoryStatus}, {"T1", TestDirectoryErrorSnapshot}, {"T2", TestDirectoryCapacityFallback}, {"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
 				if (!selected || std::string(selected) == test.first || (std::string(selected) == "U5" && std::string(test.first) == "T2")) {
 					if (!test.second(&error)) return fail(error);
 					if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
