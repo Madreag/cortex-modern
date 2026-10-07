@@ -234,7 +234,7 @@ namespace RTE {
 
 			NetDirectoryRegisterRequest SampleRegisterRequest() {
 				NetDirectoryRegisterRequest request;
-				request.name = "Erol";
+				request.name = "Captain";
 				request.activity = "P4 Alpha Duel";
 				request.scene = "Grasslands";
 				request.mode = "pvp-skirmish";
@@ -260,7 +260,7 @@ namespace RTE {
 
 			NetDirectorySessionRow SampleRow() {
 				NetDirectorySessionRow row;
-				row.name = "Erol";
+				row.name = "Captain";
 				row.activity = "P4 Alpha Duel";
 				row.scene = "Grasslands";
 				row.mode = "pvp-skirmish";
