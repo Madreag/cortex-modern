@@ -12407,7 +12407,7 @@ namespace RTE {
 		NetMatchConfig hosted = MakeConfig();
 		hosted.sceneName = "Host scene";
 		hosted.players[0].displayName = "EROL";
-		hosted.players[1].displayName = "EDITH";
+		hosted.players[1].displayName = "Guest";
 		LoopbackTransport hostTransport, clientTransport;
 		NetSession hostSession, clientSession;
 		NetMatchRunner hostRunner, clientRunner;
@@ -12421,7 +12421,7 @@ namespace RTE {
 			service.m_IsHost = host;
 			service.m_LocalPeerId = host ? 1 : 2;
 			service.m_LocalTeam = host ? 0 : 1;
-			service.m_LocalName = host ? "EROL" : "EDITH";
+			service.m_LocalName = host ? "EROL" : "Guest";
 			service.m_MatchConfig = config;
 			service.m_ActivityPreset = config.activityPreset;
 			service.m_ActivityModule = config.activityModule;
@@ -12475,7 +12475,7 @@ namespace RTE {
 		identity.buildId = "joining-lobby-selftest";
 		identity.platform = "test";
 		NetSessionConfig clientSessionConfig = sessionConfig;
-		clientSessionConfig.displayName = "EDITH";
+		clientSessionConfig.displayName = "Guest";
 		++clientSessionConfig.localNonce;
 		if (!hostSession.StartHost(hostTransport, sessionConfig, error) ||
 		    !clientSession.StartClient(clientTransport, "loopback", clientSessionConfig, error)) return false;
@@ -12505,7 +12505,7 @@ namespace RTE {
 		clientConfig.localPeerId = clientRunner.LocalLockstepPeerId(clientSession);
 		clientConfig.remoteTransportPeerIds = clientRunner.BuildRemoteTransportMap(clientSession);
 		clientConfig.matchConfig = placeholder;
-		clientConfig.displayName = "EDITH";
+		clientConfig.displayName = "Guest";
 		if (!hostRunner.m_Lobby.Start(hostTransport, hostConfig, error) || !clientRunner.m_Lobby.Start(clientTransport, clientConfig, error)) return false;
 		hostRunner.m_State = clientRunner.m_State = NetMatchRuntimeState::LobbySync;
 		// Session admission gives the client its id before the host's lobby configuration arrives.
@@ -12534,9 +12534,9 @@ namespace RTE {
 		const auto local = std::find_if(adopted.members.begin(), adopted.members.end(), [](const NetLobbyMember& member) { return member.isLocal; });
 		if (adopted.awaitingHostConfig || adopted.isHost || adopted.activityPreset != hosted.activityPreset || adopted.sceneName != hosted.sceneName ||
 		    adopted.modeName != NetMatchConfigUtil::ModeName(hosted.mode) || adopted.modeLabel != NetMatchConfigUtil::ModeLabel(hosted.mode) ||
-		    adopted.members.size() != hosted.players.size() || local == adopted.members.end() || local->displayName != "EDITH" ||
+		    adopted.members.size() != hosted.players.size() || local == adopted.members.end() || local->displayName != "Guest" ||
 		    local->peerId == adopted.hostPeerId || NetMatchConfigUtil::HashConfig(clientService.GetLobbyMatchConfig()) != NetMatchConfigUtil::HashConfig(hosted)) {
-			*error = "the joining lobby did not replace its pending state with the host's setup and EDITH's client row";
+			*error = "the joining lobby did not replace its pending state with the host's setup and Guest's client row";
 			return false;
 		}
 		if (!hostShown(hostService.GetLobbySnapshot())) return false;
