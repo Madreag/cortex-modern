@@ -199,7 +199,7 @@ namespace RTE {
 		}
 	} // namespace
 
-	bool PageWriteFence::WatchCopies(void* owner, Buffer buffer, CopyObserver observer, void* context) {
+	bool PageWriteFence::WatchCopies(void* owner, Buffer buffer, CopyObserver observer, void* context, CopyArm arm, void* armContext) {
 		const size_t page = PageBytes();
 		const uintptr_t begin = reinterpret_cast<uintptr_t>(buffer.data);
 		if (!owner || !observer || !page || !buffer.bytes || begin % page || buffer.bytes % page || buffer.bytes > UINTPTR_MAX - begin) return false;
@@ -208,13 +208,24 @@ namespace RTE {
 		CopyWatches& copies = Watches();
 		SpinLock guard(copies.lock);
 		CopyWatch* vacant = nullptr;
+		CopyWatch* previous = nullptr;
 		for (CopyWatch& watch: copies.watches) {
-			if (watch.owner == owner || (watch.owner && begin < watch.end && begin + buffer.bytes > watch.begin)) return false;
+			if (watch.owner == owner) {
+				if (!arm || watch.begin != begin || begin + buffer.bytes < watch.end || watch.observer != observer || watch.context != context) return false;
+				previous = &watch;
+			} else if (watch.owner && begin < watch.end && begin + buffer.bytes > watch.begin) return false;
 			if (!watch.owner && !vacant) vacant = &watch;
 		}
+		if (previous) vacant = previous;
 		if (!vacant) return false;
+		// Publish before protection, as for a first watch. A failed arm can have
+		// protected part of the range: keep its observer until UnwatchCopies so
+		// those pages still preserve earlier generations or open safely.
 		*vacant = {owner, begin, begin + buffer.bytes, observer, context};
-		copies.count.fetch_add(1, std::memory_order_release);
+		if (!previous) copies.count.fetch_add(1, std::memory_order_release);
+		// The arm callback holds the copy coordinator while protecting and adding
+		// a generation. Handler and worker writes cannot open the new fence midway.
+		if (arm) return arm(armContext, begin, buffer.bytes);
 		if (Protect(begin, buffer.bytes, true)) return true;
 		Protect(begin, buffer.bytes, false);
 		*vacant = {};
@@ -237,6 +248,7 @@ namespace RTE {
 
 	size_t PageWriteFence::SystemPageBytes() { return PageBytes(); }
 	bool PageWriteFence::OpenCopiedPage(uintptr_t address, size_t bytes) noexcept { return Protect(address, bytes, false); }
+	bool PageWriteFence::ProtectCopyPages(uintptr_t address, size_t bytes) noexcept { return Protect(address, bytes, true); }
 
 	bool PageWriteFence::Arm(const std::vector<Buffer>& buffers) {
 		State& fence = Fence();

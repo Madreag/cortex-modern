@@ -9378,19 +9378,37 @@ end
 		const int changed = RunScriptString("for index = 1, 4096 do _ScriptGraphCowProbe[index] = -index end local t = {} for i = 1, 4096 do t[i] = tostring(i) end");
 		const bool pendingDuringWrite = m_CheckpointHeap->CopyPending();
 		const int64_t entryWait = CheckpointLua::HeapOwner::ThisThreadGateWaitMicroseconds() - beforeWait;
+		std::vector<std::byte> changedBytes(bytes);
+		if (bytes) std::memcpy(changedBytes.data(), array, bytes);
+		std::optional<std::packaged_task<void()>> queuedSecond;
+		CheckpointLua::Snapshot secondFrozen;
+		{
+			std::lock_guard<std::recursive_mutex> lock(GetMutex());
+			secondFrozen = m_CheckpointHeap->Freeze([&](std::function<void()> copy) {
+				queuedSecond.emplace(std::move(copy));
+				return queuedSecond->get_future();
+			}, true);
+		}
+		const int64_t nextFreezeWait = CheckpointLua::HeapOwner::ThisThreadGateWaitMicroseconds() - beforeWait;
+		const int changedAgain = RunScriptString("for index = 1, 4096 do _ScriptGraphCowProbe[index] = index * 2 end collectgarbage('step', 200)");
+
 		if (queued) (*queued)();
-		bool imageHeld = false, liveWritten = false;
+		if (queuedSecond) (*queuedSecond)();
+		bool imageHeld = false, secondImageHeld = false, liveWritten = false;
 		try {
 			const auto image = frozen.ReadBytes(array, bytes);
 			imageHeld = bytes > 0 && image.size() == bytes && std::memcmp(image.data(), before.data(), bytes) == 0;
-			liveWritten = bytes > 0 && std::memcmp(array, before.data(), bytes) != 0;
+			const auto secondImage = secondFrozen.ReadBytes(array, bytes);
+			secondImageHeld = bytes > 0 && secondImage.size() == bytes && std::memcmp(secondImage.data(), changedBytes.data(), bytes) == 0;
+			liveWritten = bytes > 0 && std::memcmp(array, before.data(), bytes) != 0 && std::memcmp(array, changedBytes.data(), bytes) != 0;
 		} catch (const std::exception& error) {
 			std::cout << "[script-graph-selftest] page copy probe: " << error.what() << std::endl;
 		}
 		RunScriptString("_ScriptGraphCowProbe = nil");
-		const bool held = changed == 0 && imageHeld && liveWritten && pendingDuringWrite && entryWait == 0 && frozen.FaultCount() > 0;
+		const bool held = changed == 0 && changedAgain == 0 && imageHeld && secondImageHeld && liveWritten && pendingDuringWrite && entryWait == 0 && nextFreezeWait == 0 && frozen.FaultCount() > 0 && secondFrozen.FaultCount() > 0;
 		std::cout << "[script-graph-selftest] " << (held ? "PASS" : "FAIL") << " a_checkpoint_copy_preserves_pages_without_waiting_at_vm_entry image_held="
-		          << imageHeld << " live_written=" << liveWritten << " copy_still_queued=" << pendingDuringWrite << " entry_wait_us=" << entryWait << " faults=" << frozen.FaultCount() << std::endl;
+		          << imageHeld << " live_written=" << liveWritten << " copy_still_queued=" << pendingDuringWrite << " entry_wait_us=" << entryWait << " next_freeze_wait_us=" << nextFreezeWait << " second_image_held=" << secondImageHeld
+		          << " faults=" << frozen.FaultCount() << "," << secondFrozen.FaultCount() << std::endl;
 		checkpointValues = held && checkpointValues;
 	}
 
