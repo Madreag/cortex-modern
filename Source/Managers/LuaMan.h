@@ -9,6 +9,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -51,6 +52,7 @@ namespace RTE {
 		int64_t answerUs = 0;
 		int64_t nativeSetupUs = 0, descriptorUs = 0, nativeFinishUs = 0;
 		int64_t heapSetupUs = 0, heapWatchSetupUs = 0, heapWatchArmUs = 0;
+		uint64_t callbacksCpu = 0, nativeCpu = 0, descriptorCpu = 0, heapCpu = 0;
 		size_t copyMapped = 0; // Every Lua heap copy mapped after the capture, idle buffers included, and the idle part.
 		size_t copyIdle = 0;
 	};

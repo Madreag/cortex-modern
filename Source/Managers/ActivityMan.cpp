@@ -740,6 +740,12 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 	std::shared_future<bool> task;
 	size_t bytes = 0;
 	const auto captureStart = std::chrono::steady_clock::now();
+#ifdef _WIN32
+	const char* phases = std::getenv("CCCP_CHECKPOINT_PHASES");
+	const bool phaseClock = phases && std::string_view(phases) == "1";
+	LARGE_INTEGER clockStart{};
+	if (phaseClock) QueryPerformanceCounter(&clockStart);
+#endif
 	try {
 		if (!QueueIncrementalAutosave(fileName, path, matchId, tick, task, bytes, SaveCompression::Fast, &identity)) {
 			{
@@ -751,6 +757,15 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 		}
 		m_AutosaveTasks.push_back(std::move(task));
 		const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count();
+#ifdef _WIN32
+		if (phaseClock) {
+			LARGE_INTEGER clockEnd{}, frequency{};
+			QueryPerformanceCounter(&clockEnd);
+			QueryPerformanceFrequency(&frequency);
+			System::PrintDiagnosticLine(std::format("[checkpoint-clock] tick={} thread={} begin={} end={} frequency={}", tick,
+			    GetCurrentThreadId(), clockStart.QuadPart, clockEnd.QuadPart, frequency.QuadPart));
+		}
+#endif
 		m_LastAutosavePath = path;
 		m_LastAutosaveTick = tick;
 		m_LastAutosaveBytes = bytes;
