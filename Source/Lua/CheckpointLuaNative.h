@@ -1198,11 +1198,13 @@ namespace RTE::CheckpointLua {
 	public:
 		// The world's trees, walked in chunks side by side; an object two chunks reach is described the same by both.
 		static std::shared_ptr<const void> BuildWorld(const std::vector<MovableObject*>& known) {
+			CheckpointBuffer::AllocationScope allocation(CheckpointWriter::BatchEnabled());
 			auto world = std::make_shared<NativeImage::World>();
 			const size_t chunks = CaptureTrace::Serial() ? 1 : std::clamp<size_t>(known.size() / 512, 1, 16);
 			std::vector<NativeImage::Topology> topologies(chunks);
 			std::vector<std::vector<NativeImage::NativeId>> objects(chunks);
 			const auto walk = [&](size_t chunk) {
+				CheckpointBuffer::AllocationScope allocation(CheckpointWriter::BatchEnabled());
 				for (size_t index = chunk * known.size() / chunks; index < (chunk + 1) * known.size() / chunks; ++index) {
 					const MovableObject* object = known[index];
 					if (!g_MovableMan.ValidMO(object)) continue;
