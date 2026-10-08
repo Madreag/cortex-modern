@@ -2317,7 +2317,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 
 			// Full checkpoints retain the controller even before its first committed wire frame.
 			// Read-only; a const accessor would make the luabind GetController overload ambiguous.
-			const Controller* actorController = const_cast<Actor>(actorToSave)->GetController();
+			const Controller* actorController = const_cast<Actor*>(actorToSave)->GetController();
 			writer.NewPropertyWithValue("SpecialBehaviour_ControllerCheckpoint", CheckpointWriter::Native([&] { return actorController->SaveCheckpoint(); }).Base64(true));
 			writer.NewPropertyWithValue("ControllerQuickDisabled", static_cast<int>(actorController->IsQuickDisabled()));
 			long long controllerStateMask = 0;
