@@ -119,12 +119,13 @@ namespace {
 				s_CheckpointPoolLiveBytes.fetch_sub(bytes, std::memory_order_relaxed);
 			}
 		};
-		struct Allocation { void* address; std::shared_ptr<Block> block; };
-		Allocation Allocate(size_t count, size_t alignment) {
+		void* Allocate(size_t count, size_t alignment, std::vector<std::shared_ptr<Block>>& leases) {
 			constexpr size_t chunkBytes = 1 << 20;
 			if (count > chunkBytes) {
 				auto block = MakeBlock(count, alignment);
-				return {block->address, std::move(block)};
+				void* address = block->address;
+				leases.push_back(std::move(block));
+				return address;
 			}
 			void* address = m_Current ? static_cast<char*>(m_Current->address) + m_Used : nullptr;
 			size_t available = m_Current ? m_Current->bytes - m_Used : 0;
@@ -134,7 +135,8 @@ namespace {
 				address = m_Current->address;
 			}
 			m_Used = static_cast<char*>(address) - static_cast<char*>(m_Current->address) + count;
-			return {address, m_Current};
+			if (leases.empty() || leases.back() != m_Current) leases.push_back(m_Current);
+			return address;
 		}
 		size_t Blocks() const { return m_Blocks.load(std::memory_order_relaxed); }
 		size_t Bytes() const { return m_Bytes.load(std::memory_order_relaxed); }
@@ -158,9 +160,7 @@ namespace {
 		std::vector<std::shared_ptr<CheckpointArenaGroup::Block>> m_Blocks;
 		void* do_allocate(size_t count, size_t alignment) override {
 			if (!m_Group) return m_Default->allocate(count, alignment);
-			auto allocation = m_Group->Allocate(count, alignment);
-			if (m_Blocks.empty() || m_Blocks.back() != allocation.block) m_Blocks.push_back(std::move(allocation.block));
-			return allocation.address;
+			return m_Group->Allocate(count, alignment, m_Blocks);
 		}
 		void do_deallocate(void* address, size_t count, size_t alignment) override {
 			if (!m_Group) m_Default->deallocate(address, count, alignment);
@@ -221,7 +221,9 @@ struct RTE::CheckpointArena {
 	CheckpointArenaSource source{group};
 	std::pmr::memory_resource* upstream = group ? &source : std::pmr::get_default_resource();
 	AllocationReceipts receipts{upstream};
-	std::pmr::monotonic_buffer_resource storage{16384, CaptureTrace::Active() ? &receipts : upstream};
+	std::pmr::monotonic_buffer_resource fallback{16384, CaptureTrace::Active() ? &receipts : upstream};
+	std::pmr::memory_resource* storage = group ? (CaptureTrace::Active() ? &receipts : upstream) : &fallback;
+	size_t nodes = 0, valueBytes = 0, valueCapacity = 0, childBytes = 0, childCapacity = 0;
 	void RetainBlock() { owners.fetch_add(1, std::memory_order_relaxed); }
 	void ReleaseBlock() noexcept { if (owners.fetch_sub(1, std::memory_order_acq_rel) == 1) delete this; }
 };
@@ -234,7 +236,7 @@ namespace {
 		template<class U> CheckpointAllocator(const CheckpointAllocator<U>& other) : arena(other.arena) {}
 		T* allocate(size_t count) {
 			if (count > std::numeric_limits<size_t>::max() / sizeof(T)) throw std::bad_alloc();
-			T* block = static_cast<T*>(arena->storage.allocate(count * sizeof(T), alignof(T)));
+			T* block = static_cast<T*>(arena->storage->allocate(count * sizeof(T), alignof(T)));
 			arena->RetainBlock();
 			return block;
 		}
@@ -747,15 +749,20 @@ CheckpointBuffer::AllocationScope::AllocationScope(bool enabled) {
 CheckpointBuffer::AllocationScope::~AllocationScope() {
 	if (m_Entered) {
 		if (CaptureTrace::Active()) {
-			CaptureTrace::Span receipt("checkpoint_arena_allocations", std::format("blocks={} bytes={} backing_blocks={} backing_bytes={}", s_Arena->receipts.blocks, s_Arena->receipts.bytes, s_Arena->group ? s_Arena->group->Blocks() : 0, s_Arena->group ? s_Arena->group->Bytes() : 0));
+			CaptureTrace::Span receipt("checkpoint_arena_allocations", std::format("blocks={} bytes={} backing_blocks={} backing_bytes={} nodes={} value_bytes={} value_capacity={} child_bytes={} child_capacity={}", s_Arena->receipts.blocks, s_Arena->receipts.bytes, s_Arena->group ? s_Arena->group->Blocks() : 0, s_Arena->group ? s_Arena->group->Bytes() : 0, s_Arena->nodes, s_Arena->valueBytes, s_Arena->valueCapacity, s_Arena->childBytes, s_Arena->childCapacity));
 		}
 		s_Arena.reset();
 	}
 }
 
+std::shared_ptr<std::pmr::memory_resource> CheckpointBuffer::LeaseCaptureStorage() {
+	if (!s_Arena) return {};
+	return {s_Arena, s_Arena->storage};
+}
+
 CheckpointBuffer::CheckpointBuffer(bool reserve) : m_Arena(reserve ? s_Arena : nullptr),
-	m_Values(m_Arena ? &m_Arena->storage : std::pmr::get_default_resource()),
-	m_Children(m_Arena ? &m_Arena->storage : std::pmr::get_default_resource()) {
+	m_Values(m_Arena ? m_Arena->storage : std::pmr::get_default_resource()),
+	m_Children(m_Arena ? m_Arena->storage : std::pmr::get_default_resource()) {
 	if (m_Arena && reserve) m_Values.reserve(64);
 }
 
@@ -787,7 +794,14 @@ void CheckpointBuffer::SizedRunBegin() { Copy(CaptureValue::SizedRunBegin); }
 void CheckpointBuffer::SizedRunEnd() { Copy(CaptureValue::SizedRunEnd); }
 
 CheckpointText CheckpointBuffer::Finish() {
-	auto data = m_Arena ? std::allocate_shared<CheckpointText::Data>(CheckpointAllocator<CheckpointText::Data>(m_Arena.get()), &m_Arena->storage)
+	if (m_Arena && CaptureTrace::Active()) {
+		++m_Arena->nodes;
+		m_Arena->valueBytes += m_Values.size();
+		m_Arena->valueCapacity += m_Values.capacity();
+		m_Arena->childBytes += m_Children.size() * sizeof(CheckpointText);
+		m_Arena->childCapacity += m_Children.capacity() * sizeof(CheckpointText);
+	}
+	auto data = m_Arena ? std::allocate_shared<CheckpointText::Data>(CheckpointAllocator<CheckpointText::Data>(m_Arena.get()), m_Arena->storage)
 	                    : std::make_shared<CheckpointText::Data>();
 	data->values = std::move(m_Values);
 	data->children = std::move(m_Children);

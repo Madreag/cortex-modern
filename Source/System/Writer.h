@@ -143,6 +143,8 @@ namespace RTE {
 		private:
 			bool m_Entered = false;
 		};
+		/// Owned native arrays keep their capture storage until saver traversal ends.
+		static std::shared_ptr<std::pmr::memory_resource> LeaseCaptureStorage();
 		explicit CheckpointBuffer(bool reserve = true);
 		bool IsBatched() const { return m_Arena != nullptr; }
 		/// Appends the same typed scalar tape as the individual value calls.

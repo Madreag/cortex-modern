@@ -326,7 +326,7 @@ namespace {
 		else if constexpr (requires { typename T::first_type; typename T::second_type; }) return AtomPackedSize<typename T::first_type>() + AtomPackedSize<typename T::second_type>();
 		else return 2 * sizeof(size_t);
 	}
-	template<class T> void PackAtomValue(char* into, size_t& at, std::vector<char>& dynamic, const T& value) {
+	template<class T> void PackAtomValue(char* into, size_t& at, std::pmr::vector<char>& dynamic, const T& value) {
 		if constexpr (std::is_same_v<T, Vector>) {
 			PackAtomValue(into, at, dynamic, value.m_X); PackAtomValue(into, at, dynamic, value.m_Y);
 		} else if constexpr (std::is_same_v<T, Color>) {
@@ -402,9 +402,11 @@ CheckpointText Atom::CaptureCheckpointList(const std::vector<Atom*>& atoms) {
 		std::array<long, 5> links;
 		bool groupIgnoreList;
 	};
-	std::vector<Record> records;
+	auto storage = CheckpointBuffer::LeaseCaptureStorage();
+	auto* resource = storage ? storage.get() : std::pmr::get_default_resource();
+	std::pmr::vector<Record> records{resource};
 	records.reserve(atoms.size());
-	std::vector<char> dynamic;
+	std::pmr::vector<char> dynamic{resource};
 	size_t dynamicBytes = 0;
 	for (const Atom* atom: atoms) dynamicBytes += atom->m_IgnoreMOIDs.size() * AtomPackedSize<MOID>()
 	    + (atom->m_LastTrailPoints.size() + atom->m_TrailPoints.size()) * AtomPackedSize<std::pair<int, int>>();
@@ -451,7 +453,7 @@ CheckpointText Atom::CaptureCheckpointList(const std::vector<Atom*>& atoms) {
 	for (const CheckpointText& material: materials) bytes += sizeof(CheckpointText) + material.OwnedBytes();
 	// The producer holds no live pointers. Each atom keeps the old Atom2 field
 	// order and length prefix; only formatting and per-atom allocations move.
-	return CheckpointText::Deferred([records = std::move(records), dynamic = std::move(dynamic), materials = std::move(materials)] {
+	return CheckpointText::Deferred([storage = std::move(storage), records = std::move(records), dynamic = std::move(dynamic), materials = std::move(materials)] {
 		std::string list = std::to_string(records.size()) + " ";
 		for (const Record& record: records) {
 			CheckpointWriter writer("Atom2");
@@ -511,10 +513,18 @@ std::string Atom::CheckpointListSelfTestMismatch() {
 		first->m_LastHit.TotalMass[1] = 123.0F;
 	}
 	// All live atoms, strings, trails and group pointers have died before traversal.
-	auto worker = std::async(std::launch::async, [captured] { return std::pair{captured.Text(), captured.SharedText()}; });
-	const auto [full, shared] = worker.get();
-	if (full != expected) return "owned atom list differs from the ordinary field order";
-	if (shared != expected) return "atom list lost shared fields";
+	std::array<std::future<std::pair<std::string, std::string>>, 4> readers;
+	for (auto& reader: readers) reader = std::async(std::launch::async, [captured] {
+		CheckpointWriter::BatchScope nextCapture(true);
+		const auto fresh = CheckpointWriter::CaptureValues([] { return CaptureCheckpointList({}); });
+		if (fresh.Text() != "0 ") throw std::logic_error("new atom capture differs");
+		return std::pair{captured.Text(), captured.SharedText()};
+	});
+	for (auto& reader: readers) {
+		const auto [full, shared] = reader.get();
+		if (full != expected) return "owned atom list differs from the ordinary field order";
+		if (shared != expected) return "atom list lost shared fields";
+	}
 	CheckpointWriter::BatchScope batch(true);
 	const auto empty = CaptureCheckpointList({});
 	if (empty.Text() != "0 " || empty.SharedText() != "0 ") return "empty atom list differs";
