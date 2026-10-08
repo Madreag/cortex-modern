@@ -38,6 +38,7 @@
 #include <future>
 #include <iostream>
 #include <locale>
+#include <variant>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -378,7 +379,7 @@ struct CheckpointText::Data {
 	std::pmr::string values;
 	std::pmr::vector<CheckpointText> children;
 	// A deferred node's producer, dropped once it has produced: what it captured (a frozen heap, a pixel snapshot) goes with it.
-	mutable std::function<std::string()> produce;
+	mutable std::variant<std::monostate, std::function<std::string()>, CapturedProducer> produce;
 	bool deferred = false;
 	std::string peerMark;
 	std::string identity;
@@ -456,6 +457,21 @@ CheckpointText CheckpointText::Deferred(std::function<std::string()> produce, si
 	data->deferred = true;
 	data->ownedBytes = ownedBytes;
 	data->identity = std::move(identity);
+	return CheckpointText(std::move(data));
+}
+
+std::shared_ptr<std::pmr::memory_resource> CheckpointText::ProducerStorage() {
+	return CheckpointWriter::BatchEnabled() ? CheckpointBuffer::LeaseCaptureStorage() : nullptr;
+}
+
+CheckpointText CheckpointText::DeferredOwned(CapturedProducer produce, size_t ownedBytes, std::string identity, std::string peerMark) {
+	auto data = Data::Create();
+	data->produce = std::move(produce);
+	data->deferred = true;
+	data->ownedBytes = ownedBytes;
+	data->identity = std::move(identity);
+	data->peerMark = std::move(peerMark);
+	data->hasPeer = !data->peerMark.empty();
 	return CheckpointText(std::move(data));
 }
 
@@ -654,10 +670,13 @@ const std::string& CheckpointText::Text() const {
 		}
 		const auto format = [node] {
 			if (node->deferred) {
-				node->Output().text = node->produce();
+				node->Output().text = std::visit([](const auto& produce) -> std::string {
+					if constexpr (std::is_same_v<std::remove_cvref_t<decltype(produce)>, std::monostate>) throw std::bad_function_call();
+					else return produce();
+				}, node->produce);
 				if (!node->peerMark.empty()) StripPeerMarks(node->Output().text, node->peerMark, node->Output().peerRuns);
 				node->Output().formatted.store(true, std::memory_order_release);
-				node->produce = nullptr;
+				node->produce.emplace<std::monostate>();
 				return;
 			}
 			std::string text;
@@ -2216,6 +2235,41 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		check(before == 2 && producedOnce && held.use_count() == 1, "owned_checkpoint_formatted_text_lets_its_producer_go",
 		      "use_count before=" + std::to_string(before) + " after=" + std::to_string(held.use_count()));
 
+		{
+			struct Producer {
+				std::array<uint64_t, 257> fields{};
+				std::shared_ptr<std::atomic<unsigned>> calls;
+				std::shared_ptr<int> source;
+				std::string operator()() {
+					if (calls->fetch_add(1) == 0) throw std::runtime_error("captured producer retry");
+					return std::to_string(fields.front()) + std::string("\0@private@", 10) + std::to_string(fields.back());
+				}
+			};
+			CheckpointText frozen;
+			std::weak_ptr<int> witness;
+			auto calls = std::make_shared<std::atomic<unsigned>>(0);
+			bool pooled = false;
+			{
+				Producer source; source.fields.front() = 31; source.fields.back() = 47; source.calls = calls; source.source = std::make_shared<int>(7);
+				witness = source.source;
+				CheckpointWriter::BatchScope batch(true);
+				CheckpointBuffer::AllocationScope allocation(true);
+				frozen = CheckpointText::DeferredWithPeerRuns(source, "@", sizeof(source));
+				pooled = std::holds_alternative<CheckpointText::CapturedProducer>(frozen.m_Data->produce);
+				source.fields.fill(0);
+			}
+			bool retried = false;
+			try { frozen.Text(); } catch (const std::runtime_error&) { retried = true; }
+			const bool retained = !witness.expired();
+			std::array<std::future<bool>, 4> readers;
+			for (auto& reader: readers) reader = std::async(std::launch::async, [frozen] {
+				return frozen.Text() == std::string("31\0private47", 12) && frozen.SharedText() == std::string("31\0" "47", 5);
+			});
+			bool exact = true;
+			for (auto& reader: readers) exact = reader.get() && exact;
+			check(pooled && retried && retained && exact && calls->load() == 2 && witness.expired(),
+			    "captured_producer_storage_keeps_owned_fields_retries_and_concurrent_publication");
+		}
 		auto attempts = std::make_shared<std::atomic<int>>(0);
 		const auto flaky = CheckpointText::Deferred([attempts] {
 			if (attempts->fetch_add(1) == 0) throw std::runtime_error("owned checkpoint retry probe");

@@ -8,6 +8,7 @@
 #include <map>
 #include <future>
 #include <memory_resource>
+#include <new>
 #include <cstring>
 #include <ostream>
 #include <functional>
@@ -109,14 +110,58 @@ namespace RTE {
 		/// SharedText() with its timers bound at a capture's sim time, as BindSimTime(ticks).Text() binds the whole text.
 		std::string SharedText(int64_t simTimeTicks) const;
 		static CheckpointText Deferred(std::function<std::string()> produce, size_t ownedBytes = 0, std::string identity = {});
+		/// Captured callables use native storage instead of function-wrapper allocations.
+		template<class Function> requires (!std::is_same_v<std::remove_cvref_t<Function>, std::function<std::string()>> && std::is_invocable_r_v<std::string, std::decay_t<Function>&>)
+		static CheckpointText Deferred(Function&& produce, size_t ownedBytes = 0, std::string identity = {}) {
+			if constexpr (NeedsProducerStorage<Function>) if (auto storage = ProducerStorage()) return DeferredOwned(CaptureProducer(std::move(storage), std::forward<Function>(produce)), ownedBytes, std::move(identity), {});
+			return Deferred(std::function<std::string()>(std::forward<Function>(produce)), ownedBytes, std::move(identity));
+		}
 		/// A deferred text whose producer brackets each run only this machine holds with `mark`: Text() drops the marks, SharedText() the runs as well.
 		static CheckpointText DeferredWithPeerRuns(std::function<std::string()> produce, std::string mark, size_t ownedBytes = 0);
+		template<class Function> requires (!std::is_same_v<std::remove_cvref_t<Function>, std::function<std::string()>> && std::is_invocable_r_v<std::string, std::decay_t<Function>&>)
+		static CheckpointText DeferredWithPeerRuns(Function&& produce, std::string mark, size_t ownedBytes = 0) {
+			if (mark.empty()) throw std::logic_error("a per-peer run mark cannot be empty");
+			if constexpr (NeedsProducerStorage<Function>) if (auto storage = ProducerStorage()) return DeferredOwned(CaptureProducer(std::move(storage), std::forward<Function>(produce)), ownedBytes, {}, std::move(mark));
+			return DeferredWithPeerRuns(std::function<std::string()>(std::forward<Function>(produce)), std::move(mark), ownedBytes);
+		}
 	private:
+		// Small trivial callables already fit the function wrapper.
+		template<class Function> static constexpr bool NeedsProducerStorage = !std::is_trivially_copyable_v<std::decay_t<Function>> || sizeof(std::decay_t<Function>) > 2 * sizeof(void*) || alignof(std::decay_t<Function>) > alignof(void*);
+		struct CapturedProducer {
+			std::shared_ptr<void> function;
+			std::string (*invoke)(void*);
+			std::string operator()() const { return invoke(function.get()); }
+		};
+		// The callable's control block retains its allocator through destruction and deallocation.
+		template<class T> struct ProducerAllocator {
+			using value_type = T;
+			std::shared_ptr<std::pmr::memory_resource> storage;
+			explicit ProducerAllocator(std::shared_ptr<std::pmr::memory_resource> resource) : storage(std::move(resource)) {}
+			template<class U> ProducerAllocator(const ProducerAllocator<U>& other) noexcept : storage(other.storage) {}
+			T* allocate(size_t count) {
+				if (count > size_t(-1) / sizeof(T)) throw std::bad_array_new_length();
+				return static_cast<T*>(storage->allocate(count * sizeof(T), alignof(T)));
+			}
+			void deallocate(T* value, size_t count) noexcept { storage->deallocate(value, count * sizeof(T), alignof(T)); }
+			template<class U> bool operator==(const ProducerAllocator<U>& other) const noexcept { return storage == other.storage; }
+		};
+		template<class Function> static CapturedProducer CaptureProducer(std::shared_ptr<std::pmr::memory_resource> storage, Function&& function) {
+			using Value = std::decay_t<Function>;
+			return {std::allocate_shared<Value>(ProducerAllocator<Value>(std::move(storage)), std::forward<Function>(function)),
+			    [](void* value) -> std::string {
+				    auto& function = *static_cast<Value*>(value);
+				    if constexpr (std::is_pointer_v<Value>) if (!function) throw std::bad_function_call();
+				    return function();
+			    }};
+		}
+		static std::shared_ptr<std::pmr::memory_resource> ProducerStorage();
+		static CheckpointText DeferredOwned(CapturedProducer produce, size_t ownedBytes, std::string identity, std::string peerMark);
 		struct Data;
 		std::shared_ptr<Data> m_Data;
 		explicit CheckpointText(std::shared_ptr<Data> data) : m_Data(std::move(data)) {}
 		CheckpointText AtSimTime(int64_t ticks) const;
 		friend class CheckpointBuffer;
+		friend bool RunOwnedCheckpointSelfTest();
 	};
 
 	/// Copies scalar values and owned children without formatting them.
