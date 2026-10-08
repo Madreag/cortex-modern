@@ -3,6 +3,7 @@
 #include "CheckpointArchive.h"
 #include "CheckpointImage.h"
 #include "CheckpointProperties.h"
+#include "CheckpointCast.h"
 #include "BitmapCheckpoint.h"
 #include "TerrainLayerSnapshot.h"
 
@@ -1753,7 +1754,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		const unsigned channel = 32 + 8 * writer.GetIndent() + 2 * saveFullData + isChildAttachable;
 		const uint64_t stamp = sceneObjectToSave->CheckpointWriteGeneration();
 		// Restored ids can repeat, so the cache also tracks the object's lifetime.
-		const auto* movableToSave = dynamic_cast<const MovableObject*>(sceneObjectToSave);
+		const auto* movableToSave = CheckpointCast<const MovableObject>(sceneObjectToSave);
 		const uint64_t identity = movableToSave ? static_cast<uint64_t>(movableToSave->GetUniqueID()) : 0;
 		if (auto* cache = CheckpointWriter::CurrentCache()) {
 			if (const CheckpointText* previous = cache->Peek(sceneObjectToSave, channel); previous && identity != 0 &&
@@ -1825,17 +1826,17 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		writer.NewPropertyWithValue("GoldValue", sceneObjectToSave->GetGoldValue());
 	}
 
-	if (const Deployment* deploymentToSave = dynamic_cast<const Deployment*>(sceneObjectToSave); deploymentToSave && deploymentToSave->GetID() != 0) {
+	if (const Deployment* deploymentToSave = CheckpointCast<const Deployment>(sceneObjectToSave); deploymentToSave && deploymentToSave->GetID() != 0) {
 		writer.NewPropertyWithValue("ID", deploymentToSave->GetID());
 	}
 
-	if (const MovableObject* movableObjectToSave = dynamic_cast<const MovableObject*>(sceneObjectToSave); movableObjectToSave && saveFullData) {
+	if (const MovableObject* movableObjectToSave = CheckpointCast<const MovableObject>(sceneObjectToSave); movableObjectToSave && saveFullData) {
 		movableObjectToSave->SaveSnapshotConfiguration(writer);
 		// Identity survives the restore: UID-keyed RNG scopes and wire commands must address
 		// the same objects the first pass saw.
 		writer.NewPropertyWithValue("UniqueID", movableObjectToSave->GetUniqueID());
 		// The scripts added or disabled since the preset made it; CopyOf already loads the preset's own.
-		const MovableObject* presetObject = dynamic_cast<const MovableObject*>(sourcePreset);
+		const MovableObject* presetObject = CheckpointCast<const MovableObject>(sourcePreset);
 		for (const std::string& scriptPath: movableObjectToSave->GetAllLoadedScripts()) {
 			if (!presetObject || !presetObject->HasScript(scriptPath)) {
 				writer.NewPropertyWithValue("ScriptPath", scriptPath);
@@ -1914,7 +1915,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		writer.NewPropertyWithValue("PinStrength", movableObjectToSave->GetPinStrength());
 	}
 
-	if (const MOPixel* moPixelToSave = dynamic_cast<const MOPixel*>(sceneObjectToSave); moPixelToSave && saveFullData) {
+	if (const MOPixel* moPixelToSave = CheckpointCast<const MOPixel>(sceneObjectToSave); moPixelToSave && saveFullData) {
 		if (!presetBacked) {
 			// Terrain-debris pixels have no preset to copy from; carry their defining properties whole.
 			// The atom rides as a material INDEX — embedding the Material would add a registry copy per pixel on load.
@@ -1951,11 +1952,11 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		}
 	}
 
-	if (const MOSParticle* moSParticleToSave = dynamic_cast<const MOSParticle*>(sceneObjectToSave); moSParticleToSave && saveFullData) {
+	if (const MOSParticle* moSParticleToSave = CheckpointCast<const MOSParticle>(sceneObjectToSave); moSParticleToSave && saveFullData) {
 		writer.NewPropertyWithValue("AtomResidue", moSParticleToSave->GetAtomResidue());
 	}
 
-	if (const PEmitter* pEmitterToSave = dynamic_cast<const PEmitter*>(sceneObjectToSave); pEmitterToSave && saveFullData) {
+	if (const PEmitter* pEmitterToSave = CheckpointCast<const PEmitter>(sceneObjectToSave); pEmitterToSave && saveFullData) {
 		if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
 			WriteCapturedProperties(writer,
 				CheckpointProperty<"EmissionEnabled">(pEmitterToSave->IsEmitting()),
@@ -1990,9 +1991,9 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		}
 	}
 
-	if (const MOSprite* moSpriteToSave = dynamic_cast<const MOSprite*>(sceneObjectToSave)) {
+	if (const MOSprite* moSpriteToSave = CheckpointCast<const MOSprite>(sceneObjectToSave)) {
 		writer.NewPropertyWithValue("HFlipped", moSpriteToSave->IsHFlipped());
-		if (saveFullData || dynamic_cast<const ADoor*>(moSpriteToSave)) {
+		if (saveFullData || CheckpointCast<const ADoor>(moSpriteToSave)) {
 			writer.NewPropertyWithValue("Rotation", moSpriteToSave->GetRotMatrix());
 		}
 		if (saveFullData) {
@@ -2000,7 +2001,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			writer.NewPropertyWithValue("AngularVel", moSpriteToSave->GetAngularVel());
 			writer.NewPropertyWithValue("SpecialBehaviour_AngOscillations", moSpriteToSave->GetAngOscillations());
 			// A firearm's flash shows the frame this machine's draw picked with the render stream.
-			const auto* firearm = dynamic_cast<const HDFirearm*>(moSpriteToSave->GetParent());
+			const auto* firearm = CheckpointCast<const HDFirearm>(moSpriteToSave->GetParent());
 			const bool drawnFrame = firearm && firearm->GetFlash() == moSpriteToSave;
 			if (drawnFrame) writer.PerPeerBegin();
 			writer.NewPropertyWithValue("Frame", static_cast<int>(moSpriteToSave->GetFrame()));
@@ -2018,7 +2019,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		}
 	}
 
-	if (const MOSRotating* mosRotatingToSave = dynamic_cast<const MOSRotating*>(sceneObjectToSave)) {
+	if (const MOSRotating* mosRotatingToSave = CheckpointCast<const MOSRotating>(sceneObjectToSave)) {
 		if (saveFullData) {
 			if (const AtomGroup* atomGroupToSave = const_cast<MOSRotating*>(mosRotatingToSave)->GetAtomGroup()) {
 				WriteCapturedPropertySequence<"AtomGroupResidue">(writer, atomGroupToSave->GetTravelResidue());
@@ -2061,7 +2062,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			// Alternatively, if the MOSRotating has no Attachables but its preset does, we need to set the flag, because that means this is missing Attachables, and we don't want to magically regenerate them when a game is loaded.
 			if (!attachablesToSave.empty()) {
 				writer.NewPropertyWithValue("SpecialBehaviour_ClearAllAttachables", true);
-			} else if (const MOSRotating* presetOfMOSRotatingToSave = dynamic_cast<const MOSRotating*>(g_PresetMan.GetEntityPreset(mosRotatingToSave->GetClassName(), mosRotatingToSave->GetPresetName(), mosRotatingToSave->GetModuleID())); presetOfMOSRotatingToSave && !presetOfMOSRotatingToSave->GetAttachableList().empty()) {
+			} else if (const MOSRotating* presetOfMOSRotatingToSave = CheckpointCast<const MOSRotating>(g_PresetMan.GetEntityPreset(mosRotatingToSave->GetClassName(), mosRotatingToSave->GetPresetName(), mosRotatingToSave->GetModuleID())); presetOfMOSRotatingToSave && !presetOfMOSRotatingToSave->GetAttachableList().empty()) {
 				writer.NewPropertyWithValue("SpecialBehaviour_ClearAllAttachables", true);
 			}
 
@@ -2092,7 +2093,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		}
 	}
 
-	if (const Attachable* attachableToSave = dynamic_cast<const Attachable*>(sceneObjectToSave); attachableToSave && saveFullData) {
+	if (const Attachable* attachableToSave = CheckpointCast<const Attachable>(sceneObjectToSave); attachableToSave && saveFullData) {
 		if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
 			WriteCapturedProperties(writer,
 				CheckpointProperty<"ParentOffset">(attachableToSave->GetParentOffset()),
@@ -2136,7 +2137,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			writer.NewPropertyWithValue("SpecialBehaviour_PrevRotAngleOffset", attachableToSave->GetPrevRotAngleOffset());
 		}
 
-		if (const AEmitter* aemitterToSave = dynamic_cast<const AEmitter*>(sceneObjectToSave)) {
+		if (const AEmitter* aemitterToSave = CheckpointCast<const AEmitter>(sceneObjectToSave)) {
 			writer.NewPropertyWithValue("BurstTimerStart", aemitterToSave->GetBurstTimerStart());
 			writer.NewPropertyWithValue("SpecialBehaviour_WasEmitting", aemitterToSave->WasEmitting());
 			// The impulse averages are filled when this machine's own AI first asks.
@@ -2182,7 +2183,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			WriteHardcodedAttachableOrNone("Flash", aemitterToSave->GetFlash());
 		}
 
-		if (const AEJetpack* jetpackToSave = dynamic_cast<const AEJetpack*>(sceneObjectToSave)) {
+		if (const AEJetpack* jetpackToSave = CheckpointCast<const AEJetpack>(sceneObjectToSave)) {
 			writer.NewProperty("JetpackType");
 			switch (jetpackToSave->GetJetpackType()) {
 				default:
@@ -2211,7 +2212,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			}
 		}
 
-		if (const Arm* armToSave = dynamic_cast<const Arm*>(sceneObjectToSave)) {
+		if (const Arm* armToSave = CheckpointCast<const Arm>(sceneObjectToSave)) {
 			WriteHardcodedAttachableOrNone("HeldDevice", armToSave->GetHeldDevice());
 			if (saveFullData) {
 				if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
@@ -2243,7 +2244,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			}
 		}
 
-		if (const Leg* legToSave = dynamic_cast<const Leg*>(sceneObjectToSave)) {
+		if (const Leg* legToSave = CheckpointCast<const Leg>(sceneObjectToSave)) {
 			WriteHardcodedAttachableOrNone("Foot", legToSave->GetFoot());
 			if (saveFullData) {
 				if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
@@ -2259,20 +2260,20 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			}
 		}
 
-		if (const Turret* turretToSave = dynamic_cast<const Turret*>(sceneObjectToSave)) {
+		if (const Turret* turretToSave = CheckpointCast<const Turret>(sceneObjectToSave)) {
 			for (const HeldDevice* heldDeviceToSave: turretToSave->GetMountedDevices()) {
 				WriteHardcodedAttachableOrNone("AddMountedDevice", heldDeviceToSave);
 			}
 		}
 
-		if (const HeldDevice* heldDeviceToSave = dynamic_cast<const HeldDevice*>(sceneObjectToSave)) {
+		if (const HeldDevice* heldDeviceToSave = CheckpointCast<const HeldDevice>(sceneObjectToSave)) {
 			writer.NewPropertyWithValue("SpecialBehaviour_Activated", heldDeviceToSave->IsActivated());
 			writer.NewProperty("SpecialBehaviour_ActivationTimerElapsedSimTimeMS");
 			writer.ElapsedSimTime(heldDeviceToSave->GetActivationTimer());
 			writer.NewPropertyWithValue("ActivationTimerStart", heldDeviceToSave->GetActivationTimer().GetStartSimTimeMS());
 		}
 
-		if (const HDFirearm* hdFirearmToSave = dynamic_cast<const HDFirearm*>(sceneObjectToSave)) {
+		if (const HDFirearm* hdFirearmToSave = CheckpointCast<const HDFirearm>(sceneObjectToSave)) {
 			WriteHardcodedAttachableOrNone("Magazine", hdFirearmToSave->GetMagazine());
 			WriteHardcodedAttachableOrNone("Flash", hdFirearmToSave->GetFlash());
 			if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
@@ -2301,13 +2302,13 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			}
 		}
 
-		if (const Magazine* magazineToSave = dynamic_cast<const Magazine*>(sceneObjectToSave)) {
+		if (const Magazine* magazineToSave = CheckpointCast<const Magazine>(sceneObjectToSave)) {
 			writer.NewPropertyWithValue("RoundCount", magazineToSave->GetRoundCount());
 			writer.NewPropertyWithValue("SpecialBehaviour_FullCapacity", magazineToSave->GetCapacity());
 		}
 	}
 
-	if (const Actor* actorToSave = dynamic_cast<const Actor*>(sceneObjectToSave)) {
+	if (const Actor* actorToSave = CheckpointCast<const Actor>(sceneObjectToSave)) {
 		writer.NewPropertyWithValue("Health", actorToSave->GetHealth());
 		writer.NewPropertyWithValue("MaxHealth", actorToSave->GetMaxHealth());
 		if (saveFullData) {
@@ -2316,7 +2317,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 
 			// Full checkpoints retain the controller even before its first committed wire frame.
 			// Read-only; a const accessor would make the luabind GetController overload ambiguous.
-			const Controller* actorController = const_cast<Actor*>(actorToSave)->GetController();
+			const Controller* actorController = const_cast<Actor>(actorToSave)->GetController();
 			writer.NewPropertyWithValue("SpecialBehaviour_ControllerCheckpoint", CheckpointWriter::Native([&] { return actorController->SaveCheckpoint(); }).Base64(true));
 			writer.NewPropertyWithValue("ControllerQuickDisabled", static_cast<int>(actorController->IsQuickDisabled()));
 			long long controllerStateMask = 0;
@@ -2415,9 +2416,9 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		}
 
 		if (saveFullData) {
-			if (const ADoor* aDoorToSave = dynamic_cast<const ADoor*>(sceneObjectToSave)) {
+			if (const ADoor* aDoorToSave = CheckpointCast<const ADoor>(sceneObjectToSave)) {
 				WriteHardcodedAttachableOrNone("Door", aDoorToSave->GetDoor());
-			} else if (const AHuman* aHumanToSave = dynamic_cast<const AHuman*>(sceneObjectToSave)) {
+			} else if (const AHuman* aHumanToSave = CheckpointCast<const AHuman>(sceneObjectToSave)) {
 				WriteHardcodedAttachableOrNone("Head", aHumanToSave->GetHead());
 				WriteHardcodedAttachableOrNone("Jetpack", aHumanToSave->GetJetpack());
 				WriteHardcodedAttachableOrNone("FGArm", aHumanToSave->GetFGArm());
@@ -2482,7 +2483,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 					writer.NewPropertyWithValue("SpecialBehaviour_CrouchAmount", aHumanToSave->GetCrouchAmount());
 					writer.NewPropertyWithValue("SpecialBehaviour_CrouchAmountOverride", aHumanToSave->GetCrouchAmountOverride());
 				}
-			} else if (const ACrab* aCrabToSave = dynamic_cast<const ACrab*>(sceneObjectToSave)) {
+			} else if (const ACrab* aCrabToSave = CheckpointCast<const ACrab>(sceneObjectToSave)) {
 				WriteHardcodedAttachableOrNone("Turret", aCrabToSave->GetTurret());
 				WriteHardcodedAttachableOrNone("Jetpack", aCrabToSave->GetJetpack());
 				WriteHardcodedAttachableOrNone("LeftFGLeg", aCrabToSave->GetLeftFGLeg());
@@ -2510,7 +2511,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				}
 				writer.NewPropertyWithValue("LimbGroupPositions", writer.IsCapturing() ? aCrabToSave->CaptureLimbGroupPositions() : CheckpointText(aCrabToSave->GetLimbGroupPositions()));
 				writer.NewPropertyWithValue("LimbGroupInertia", writer.IsCapturing() ? aCrabToSave->CaptureLimbGroupInertia() : CheckpointText(aCrabToSave->GetLimbGroupInertia()));
-			} else if (const ACRocket* acRocketToSave = dynamic_cast<const ACRocket*>(sceneObjectToSave)) {
+			} else if (const ACRocket* acRocketToSave = CheckpointCast<const ACRocket>(sceneObjectToSave)) {
 				WriteHardcodedAttachableOrNone("RightLeg", acRocketToSave->GetRightLeg());
 				WriteHardcodedAttachableOrNone("LeftLeg", acRocketToSave->GetLeftLeg());
 				WriteHardcodedAttachableOrNone("MainThruster", acRocketToSave->GetMainThruster());
@@ -2534,7 +2535,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				}
 				writer.NewPropertyWithValue("LimbGroupPositions", writer.IsCapturing() ? acRocketToSave->CaptureLimbGroupPositions() : CheckpointText(acRocketToSave->GetLimbGroupPositions()));
 				writer.NewPropertyWithValue("LimbGroupInertia", writer.IsCapturing() ? acRocketToSave->CaptureLimbGroupInertia() : CheckpointText(acRocketToSave->GetLimbGroupInertia()));
-			} else if (const ACDropShip* acDropShipToSave = dynamic_cast<const ACDropShip*>(sceneObjectToSave)) {
+			} else if (const ACDropShip* acDropShipToSave = CheckpointCast<const ACDropShip>(sceneObjectToSave)) {
 				WriteHardcodedAttachableOrNone("RightThruster", acDropShipToSave->GetRightThruster());
 				WriteHardcodedAttachableOrNone("LeftThruster", acDropShipToSave->GetLeftThruster());
 				WriteHardcodedAttachableOrNone("UpRightThruster", acDropShipToSave->GetURightThruster());
@@ -2543,7 +2544,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				WriteHardcodedAttachableOrNone("LeftHatchDoor", acDropShipToSave->GetLeftHatch());
 				writer.NewPropertyWithValue("SpecialBehaviour_LateralControl", acDropShipToSave->GetLateralControl());
 			}
-			if (const ACraft* aCraftToSave = dynamic_cast<const ACraft*>(sceneObjectToSave)) {
+			if (const ACraft* aCraftToSave = CheckpointCast<const ACraft>(sceneObjectToSave)) {
 				if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
 					WriteCapturedProperties(writer,
 						CheckpointProperty<"SpecialBehaviour_HatchState">(static_cast<int>(aCraftToSave->GetHatchState())),
@@ -2570,7 +2571,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 					writer.NewPropertyWithValue("ExitIncomingMOUniqueID", uid);
 				}
 			}
-		} else if (const AHuman* aHumanToSave = dynamic_cast<const AHuman*>(sceneObjectToSave)) {
+		} else if (const AHuman* aHumanToSave = CheckpointCast<const AHuman>(sceneObjectToSave)) {
 			if (const HeldDevice* equippedItem = aHumanToSave->GetEquippedItem()) {
 				writer.NewProperty("AddInventory");
 				SaveSceneObject(writer, equippedItem, true, saveFullData);

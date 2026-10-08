@@ -3,6 +3,7 @@
 #include "CheckpointLuaView.h"
 #include "CheckpointLuaAddresses.h"
 #include "CaptureSentinel.h"
+#include "CheckpointCast.h"
 
 #include <algorithm>
 #include <array>
@@ -1337,7 +1338,7 @@ namespace RTE::CheckpointLua {
 				object.children.push_back(reinterpret_cast<uintptr_t>(part));
 				Describe(part, into, shared);
 			};
-			if (const auto* rotating = dynamic_cast<const MOSRotating*>(source)) {
+			if (const auto* rotating = CheckpointCast<const MOSRotating>(source)) {
 				object.rotating = true;
 				for (const Attachable* part: rotating->GetAttachables()) child(part);
 				for (const AEmitter* wound: rotating->GetWoundList()) child(wound);
@@ -1348,8 +1349,8 @@ namespace RTE::CheckpointLua {
 					++index;
 				}
 			}
-			if (const auto* actor = dynamic_cast<const Actor*>(source)) for (const MovableObject* part: *actor->GetInventory()) child(part);
-			if (const auto* craft = dynamic_cast<const ACraft*>(source)) for (const MovableObject* part: craft->GetCollectedInventory()) child(part);
+			if (const auto* actor = CheckpointCast<const Actor>(source)) for (const MovableObject* part: *actor->GetInventory()) child(part);
+			if (const auto* craft = CheckpointCast<const ACraft>(source)) for (const MovableObject* part: craft->GetCollectedInventory()) child(part);
 			into.at(identity) = std::move(object);
 		}
 	};

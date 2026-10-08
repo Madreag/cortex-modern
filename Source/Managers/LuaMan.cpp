@@ -11,6 +11,7 @@
 #include "RTETools.h"
 #include "LuaThreadCodec.h"
 #include "CheckpointImage.h"
+#include "CheckpointCast.h"
 #include "ScenarioRunner.h"
 #include "SoundSimulation.h"
 #include "AtomGroup.h"
@@ -4215,7 +4216,7 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 			CollectOwnedMovableObjects(root, entities, objects);
 			collected->objects.assign(objects.begin(), objects.end());
 			for (const MovableObject* object: collected->objects) {
-				if (auto* actor = dynamic_cast<Actor*>(const_cast<MovableObject*>(object))) collected->controllers.emplace_back(actor->GetController(), actor);
+				if (auto* actor = CheckpointCast<Actor>(const_cast<MovableObject*>(object))) collected->controllers.emplace_back(actor->GetController(), actor);
 			}
 			parts = std::move(collected);
 		}
@@ -4246,16 +4247,16 @@ private:
 			vectors.reserve(KnownObjects().size() * 6);
 			for (MovableObject* mo: KnownObjects()) {
 				const long uid = mo->GetUniqueID();
-				if (Actor* actor = dynamic_cast<Actor*>(mo)) controllers.emplace_back(actor->GetController(), uid);
+				if (Actor* actor = CheckpointCast<Actor>(mo)) controllers.emplace_back(actor->GetController(), uid);
 				vectors.emplace_back(&mo->GetPos(), VectorField{uid, "Pos"});
 				vectors.emplace_back(&mo->GetVel(), VectorField{uid, "Vel"});
 				vectors.emplace_back(&mo->GetPrevPos(), VectorField{uid, "PrevPos"});
 				vectors.emplace_back(&mo->GetPrevVel(), VectorField{uid, "PrevVel"});
-				if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(mo)) {
+				if (const MOSRotating* rotating = CheckpointCast<const MOSRotating>(mo)) {
 					vectors.emplace_back(&rotating->GetRecoilForce(), VectorField{uid, "RecoilForce"});
 					vectors.emplace_back(&rotating->GetRecoilOffset(), VectorField{uid, "RecoilOffset"});
 				}
-				if (const Attachable* attachable = dynamic_cast<const Attachable*>(mo)) {
+				if (const Attachable* attachable = CheckpointCast<const Attachable>(mo)) {
 					vectors.emplace_back(&attachable->GetParentOffset(), VectorField{uid, "ParentOffset"});
 					vectors.emplace_back(&attachable->GetJointOffset(), VectorField{uid, "JointOffset"});
 					vectors.emplace_back(&attachable->GetJointPos(), VectorField{uid, "JointPos"});
@@ -9063,6 +9064,44 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 #endif
 	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
+	{
+		struct Base { virtual ~Base() = default; };
+		struct Left : Base {};
+		struct Right : Base {};
+		struct Repeated : Left, Right {};
+		struct VirtualLeft : virtual Base {};
+		struct VirtualRight : virtual Base {};
+		struct Diamond : VirtualLeft, VirtualRight {};
+		const auto compare = [](auto* source) {
+			return CheckpointCast<const Left>(source) == dynamic_cast<const Left*>(source) &&
+			       CheckpointCast<const Right>(source) == dynamic_cast<const Right*>(source) &&
+			       CheckpointCast<const Repeated>(source) == dynamic_cast<const Repeated*>(source) &&
+			       CheckpointCast<const Diamond>(source) == dynamic_cast<const Diamond*>(source) &&
+			       CheckpointCast<const VirtualLeft>(source) == dynamic_cast<const VirtualLeft*>(source);
+		};
+		const auto probe = [&] {
+			bool exact = compare(static_cast<const Base*>(nullptr));
+			for (int index = 0; index < 32; ++index) {
+				Repeated repeated;
+				Diamond diamond;
+				Base absent;
+				exact = compare(static_cast<const Base*>(static_cast<Left*>(&repeated))) && exact;
+				exact = compare(static_cast<const Base*>(static_cast<Right*>(&repeated))) && exact;
+				exact = compare(static_cast<const Base*>(&diamond)) && compare(&absent) && exact;
+			}
+			return exact;
+		};
+		bool exact = probe();
+		{
+			CheckpointWriter::BatchScope batch(true);
+			std::array<std::future<bool>, 3> readers;
+			for (auto& reader: readers) reader = std::async(std::launch::async, probe);
+			exact = probe() && exact;
+			for (auto& reader: readers) exact = reader.get() && exact;
+		}
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " checkpoint_native_casts_preserve_crosscasts_repeated_bases_and_virtual_bases" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
 	{
 		std::vector<uint64_t> words(8192);
 		std::vector<std::pair<const void*, long>> entries;
