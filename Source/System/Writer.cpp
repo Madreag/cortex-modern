@@ -460,8 +460,8 @@ CheckpointText CheckpointText::Deferred(std::function<std::string()> produce, si
 	return CheckpointText(std::move(data));
 }
 
-std::shared_ptr<std::pmr::memory_resource> CheckpointText::ProducerStorage() {
-	return CheckpointWriter::BatchEnabled() ? CheckpointBuffer::LeaseCaptureStorage() : nullptr;
+std::pmr::memory_resource* CheckpointText::ProducerStorage() {
+	return CheckpointWriter::BatchEnabled() && CheckpointBuffer::s_Arena ? CheckpointBuffer::s_Arena->storage : nullptr;
 }
 
 CheckpointText CheckpointText::DeferredOwned(CapturedProducer produce, size_t ownedBytes, std::string identity, std::string peerMark) {
@@ -2269,6 +2269,17 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			for (auto& reader: readers) exact = reader.get() && exact;
 			check(pooled && retried && retained && exact && calls->load() == 2 && witness.expired(),
 			    "captured_producer_storage_keeps_owned_fields_retries_and_concurrent_publication");
+			CheckpointText discarded;
+			{
+				Producer source; source.calls = calls; source.source = std::make_shared<int>(9);
+				witness = source.source;
+				CheckpointWriter::BatchScope batch(true);
+				CheckpointBuffer::AllocationScope allocation(true);
+				discarded = CheckpointText::Deferred(source);
+			}
+			const bool kept = !witness.expired();
+			discarded = CheckpointText();
+			check(kept && witness.expired() && calls->load() == 2, "captured_producer_releases_unformatted_fields_after_arena_scope");
 		}
 		auto attempts = std::make_shared<std::atomic<int>>(0);
 		const auto flaky = CheckpointText::Deferred([attempts] {
