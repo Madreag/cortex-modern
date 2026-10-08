@@ -8197,6 +8197,7 @@ void RunGameLoop() {
 					System::PrintDiagnosticLine("[selftest] late script stall done plane_ticks=" + std::to_string(NetLockstepPlane::Ticks() - planeTicksBefore));
 				}
 				g_ActivityMan.LateUpdateGlobalScripts();
+				g_MovableMan.CapturePhysicsHistory(simTick, 3);
 				// Kick the async MOID draw after the last main-thread sim mutation of the tick; it
 				// completes before the render frames below, which share draw scratch state with it.
 				g_MovableMan.StartMOIDDrawTask();

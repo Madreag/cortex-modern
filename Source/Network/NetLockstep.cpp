@@ -5451,6 +5451,16 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetLockstepCoordinator::StartCatchUpReplay(INetTransport& transport, const NetLockstepConfig& config, const NetLockstepCoordinator& live, std::string* error) {
+		NET_PLANE_CHECK();
+		NetLockstepPlane::Check(&live, "StartCatchUpReplay (the live round)");
+		if (!StartReplay(transport, config, error)) return false;
+		// The newest hold can be ahead of the saved world; scripted switches still read the earlier hold and return.
+		for (const auto& [peer, transitions]: live.m_SeatTransitions)
+			for (const auto& [frame, state]: transitions) m_SeatTransitions[peer].try_emplace(frame, state);
+		return true;
+	}
+
 	bool NetLockstepCoordinator::ApplyReplayAgreedStart(const NetLockstepStart& start, std::string* error) {
 		NET_PLANE_CHECK();
 		if (!m_Playback || m_State != NetLockstepState::Running || m_Stats.framesAccepted != 0) {
@@ -5788,6 +5798,12 @@ namespace RTE {
 		NET_PLANE_CHECK();
 		// The replay's own maps are read here too.
 		NetLockstepPlane::Check(&replay, "AdoptReplayedSeatTransitions (the replay)");
+		// Scripted switches at the return still need our seat's history through the preceding tick.
+		for (const auto& [peer, transitions]: replay.m_SeatTransitions) {
+			for (const auto& [frame, state]: transitions) {
+				if (frame <= throughFrame) m_SeatTransitions[peer].try_emplace(frame, state);
+			}
+		}
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 			if (peer == m_Config.localPeerId) continue;
 			const auto back = replay.m_ReclaimTransactions.find(peer);

@@ -983,6 +983,8 @@ namespace RTE {
 		/// Starts in playback mode: no remotes, no handshake — every frame commits from the local
 		/// queue, which the replay reader feeds through QueueReplayFrame.
 		bool StartReplay(INetTransport& transport, const NetLockstepConfig& config, std::string* error = nullptr);
+		/// Starts the replay of an existing world while retaining the seat history its simulation still reads.
+		bool StartCatchUpReplay(INetTransport& transport, const NetLockstepConfig& config, const NetLockstepCoordinator& live, std::string* error = nullptr);
 		/// Installs the recording's host-authored startup boundary before playback queues its first frame.
 		bool ApplyReplayAgreedStart(const NetLockstepStart& start, std::string* error = nullptr);
 		bool IsReplayPlayback() const { NET_PLANE_CHECK(); return m_Playback; }

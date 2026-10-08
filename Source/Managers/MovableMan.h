@@ -1009,6 +1009,7 @@ namespace RTE {
 		/// @param tick The sim tick to label the lines with.
 		/// @param out The stream to append to.
 		void DumpSimState(uint64_t tick, std::ostream& out) const;
+		void CapturePhysicsHistory(uint64_t tick, uint64_t phase) const;
 
 		/// Writes one MO's line of the sim dump, and its attachables' lines, as DumpSimState writes them.
 		/// @param tick The sim tick to label the lines with.

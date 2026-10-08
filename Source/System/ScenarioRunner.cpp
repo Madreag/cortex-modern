@@ -1254,7 +1254,8 @@ namespace RTE {
 		if (!s_LockstepCoordinator) {
 			return 0;
 		}
-		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled);
+		// A returning coordinator has no delivered cursor yet; the actor belongs to the world's committed tick.
+		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled, s_LockstepAppliedFrame);
 	}
 
 	uint8_t ScenarioRunner::GetLockstepDropTimeActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {

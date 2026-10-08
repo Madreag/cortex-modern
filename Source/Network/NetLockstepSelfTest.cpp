@@ -17454,6 +17454,169 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return finish(nullptr);
 		}
 
+		// A returning coordinator knows the new return, but scripted activity updates still ask about
+		// the preceding applied tick. Losing the earlier hold makes only this peer switch back to
+		// player mode; a second hold then resets its control timer alone until delayed input lands.
+		bool TestCatchUpScriptSwitchKeepsSharedControl(std::string* error) {
+			EnsureSwitchTestManagers();
+			const auto timer = g_TimerMan.SaveCheckpoint();
+			LoopbackTransport transport;
+			NetLockstepCoordinator replay, returning;
+			NetLockstepConfig config;
+			config.sessionId = 0x43544354524C; config.roundId = 31; config.localPeerId = 2; config.peerCount = 2; config.startFrame = 36;
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+			config.matchConfig.players = {{1, Activity::TeamOne, false, "First"}, {2, Activity::TeamTwo, false, "Second"}};
+			config.initialSeatHolds[2] = {2, 0, 1, 1, 35};
+			if (!replay.StartReplay(transport, config, error)) return false;
+			config.startFrame = 41;
+			config.initialSeatHolds.clear();
+			config.initialSeatReclaims[2] = {2, 0, 2, 2, 41, 3, 44, std::nullopt};
+			if (!returning.StartReplay(transport, config, error)) return false;
+			ScenarioRunner::SetLockstepCoordinator(&replay);
+			std::unique_ptr<Activity> saved = std::make_unique<Activity>();
+			g_ActivityMan.SwapCheckpointActivity(saved);
+			const auto finish = [&](bool passed) {
+				ScenarioRunner::ReleaseWorldCatchUp();
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				g_ActivityMan.SwapCheckpointActivity(saved);
+				g_TimerMan.LoadCheckpoint(timer);
+				return passed;
+			};
+			Activity* activity = g_ActivityMan.GetActivity();
+			if (!activity->ConfigureLockstepPlayers()) return finish(false);
+			Actor* reference = MakeSwitchTestActor(Activity::TeamTwo);
+			Actor* caughtUp = MakeSwitchTestActor(Activity::TeamTwo);
+			if (!reference || !caughtUp) return finish(false);
+			AddSwitchTestActor(reference); AddSwitchTestActor(caughtUp);
+			g_TimerMan.RestoreSimTickAfterPreview(41, g_TimerMan.GetSimTimeTicks() + g_TimerMan.GetTicksPerSecond() / 20);
+			const auto atReturn = g_TimerMan.GetSimTimeTicks();
+			ScenarioRunner::SetLockstepAppliedFrame(40);
+			if (!replay.IsSeatUnderAI(2, 40) || !activity->SwitchToActorFromScript(reference, Players::PlayerTwo, Activity::TeamTwo)) return finish(false);
+			const auto referenceMode = reference->GetController()->GetInputMode();
+			// This is the activation's real coordinator handoff, with both coordinators running.
+			returning.AdoptReplayedSeatTransitions(replay, 40);
+			ScenarioRunner::SetLockstepCoordinator(&returning, true);
+			ScenarioRunner::SetLockstepAppliedFrame(40);
+			const bool retainedHold = returning.IsSeatUnderAI(2, 40);
+			const bool switched = activity->SwitchToActorFromScript(caughtUp, Players::PlayerTwo, Activity::TeamTwo);
+			const auto returnedMode = caughtUp->GetController()->GetInputMode();
+			const bool exactReturn = !returning.IsSeatUnderAI(2, 41);
+			g_TimerMan.RestoreSimTickAfterPreview(45, atReturn + 4 * g_TimerMan.GetDeltaTimeTicks());
+			MovableMan::ApplyLockstepControlHandoffToActor(*reference, false);
+			MovableMan::ApplyLockstepControlHandoffToActor(*caughtUp, false);
+			const double referenceTimer = reference->GetNewControlTimerElapsedSimMS();
+			const double returnedTimer = caughtUp->GetNewControlTimerElapsedSimMS();
+			bool equalTimers = referenceTimer > 0 && referenceTimer == returnedTimer;
+			for (int tick = 46; tick < 50; ++tick) {
+				g_TimerMan.RestoreSimTickAfterPreview(tick, atReturn + (tick - 41) * g_TimerMan.GetDeltaTimeTicks());
+				equalTimers = equalTimers && reference->GetNewControlTimerElapsedSimMS() == caughtUp->GetNewControlTimerElapsedSimMS();
+			}
+			bool passed = replay.IsRunning() && returning.IsRunning() && retainedHold && exactReturn && switched &&
+			    referenceMode == Controller::CIM_AI && returnedMode == referenceMode && equalTimers;
+			std::cout << "[net-lockstep-selftest] " << (passed ? "PASS" : "FAIL") << " catch_up_script_switch_keeps_shared_control"
+			          << " prior_hold=" << retainedHold << " exact_return=" << exactReturn << " modes=" << referenceMode << "/" << returnedMode
+			          << " control_timer=" << referenceTimer << "/" << returnedTimer << " equal_ticks=45..49:" << equalTimers << std::endl;
+			// The live plane can agree the next hold while this world's sim is still before its preceding return.
+			NetLockstepCoordinator ahead, restarted;
+			config.startFrame = 36; config.initialSeatReclaims.clear(); config.initialSeatHolds[2] = {2, 0, 1, 1, 35};
+			if (!ahead.StartReplay(transport, config, error)) return finish(false);
+			for (uint64_t frame = 36; frame <= 45; ++frame) {
+				std::vector<NetGameCommand> commands;
+				if (frame == 41) commands.push_back({1, NetGameSeatReclaim{2, 0, 2, 2, 41, 3, 44, std::nullopt}});
+				if (frame == 45) commands.push_back({1, NetGameSeatHold{2, 0, 3, 2, 45}});
+				NetLockstepReadyFrame ready;
+				if (!ahead.QueueReplayFrame(frame, {}, commands, error)) return finish(false);
+				ahead.Tick(frame);
+				if (!ahead.PopReadyFrame(ready) || ready.frame != frame) {
+					if (error) *error = "the restart test could not commit its seat history at " + std::to_string(frame);
+					return finish(false);
+				}
+			}
+			config.startFrame = 41; config.initialSeatHolds.clear();
+			for (const auto& [peer, hold]: ahead.HeldTransactions()) if (hold.cutoffFrame <= 40) config.initialSeatHolds[peer] = hold;
+			if (!restarted.StartCatchUpReplay(transport, config, ahead, error)) return finish(false);
+			g_TimerMan.RestoreSimTickAfterPreview(35, atReturn);
+			reference->GetController()->ApplyWireMode(Controller::CIM_AI, Players::PlayerTwo);
+			caughtUp->GetController()->ApplyWireMode(Controller::CIM_AI, Players::PlayerTwo);
+			reference->OnControllerInputModeChanged(Controller::CIM_PLAYER, Players::PlayerTwo);
+			caughtUp->OnControllerInputModeChanged(Controller::CIM_PLAYER, Players::PlayerTwo);
+			g_TimerMan.RestoreSimTickAfterPreview(41, atReturn + 6 * g_TimerMan.GetDeltaTimeTicks());
+			ScenarioRunner::SetLockstepCoordinator(&ahead); ScenarioRunner::SetLockstepAppliedFrame(40);
+			if (!activity->SwitchToActorFromScript(reference, Players::PlayerTwo, Activity::TeamTwo)) return finish(false);
+			ScenarioRunner::SetLockstepCoordinator(&restarted); ScenarioRunner::SetLockstepAppliedFrame(40);
+			if (!activity->SwitchToActorFromScript(caughtUp, Players::PlayerTwo, Activity::TeamTwo)) return finish(false);
+			const bool restartHold = restarted.IsSeatUnderAI(2, 40);
+			const bool restartMode = reference->GetController()->GetInputMode() == caughtUp->GetController()->GetInputMode();
+			const bool restartTimer = reference->GetNewControlTimerElapsedSimMS() == caughtUp->GetNewControlTimerElapsedSimMS();
+			const bool restartPassed = ahead.HeldTransactions().at(2).cutoffFrame == 45 && restartHold && restartMode && restartTimer;
+			std::cout << "[net-lockstep-selftest] " << (restartPassed ? "PASS" : "FAIL") << " catch_up_restart_keeps_prior_seat_history"
+			          << " future_hold=45 saved_tick=40 prior_hold=" << restartHold << " modes=" << reference->GetController()->GetInputMode() << "/" << caughtUp->GetController()->GetInputMode()
+			          << " control_timer=" << reference->GetNewControlTimerElapsedSimMS() << "/" << caughtUp->GetNewControlTimerElapsedSimMS() << std::endl;
+			passed = passed && restartPassed;
+			if (!passed && error) *error = "the returning coordinator lost the preceding hold and the next handoff reset one control timer";
+			return finish(passed);
+		}
+
+		// A returning coordinator has not delivered a frame yet, while survivors delivered E-1.
+		// A newborn's owner and the next reclaim fence must still read the same committed world tick.
+		bool TestCatchUpActorOwnerUsesAppliedTick(std::string* error) {
+			EnsureSwitchTestManagers();
+			const auto savedOwners = NetActorOwnership::GetSeededOwners();
+			LoopbackTransport transport;
+			NetLockstepCoordinator survivor, returning;
+			NetLockstepConfig config;
+			config.sessionId = 0x4354434F574E; config.roundId = 32; config.localPeerId = 2; config.peerCount = 2; config.startFrame = 36;
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+			config.matchConfig.peerCount = 2;
+			config.matchConfig.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+			config.matchConfig.players = {{1, Activity::TeamOne, false, "First"}, {2, Activity::TeamTwo, false, "Second"}};
+			config.initialSeatHolds[2] = {2, 0, 1, 1, 35};
+			config.initialSeatReclaims[2] = {2, 0, 2, 2, 41, 3, 44, std::nullopt};
+			if (!survivor.StartReplay(transport, config, error)) return false;
+			for (uint64_t frame = 36; frame <= 40; ++frame) {
+				NetLockstepReadyFrame ready;
+				if (!survivor.QueueReplayFrame(frame, {}, {}, error)) return false;
+				survivor.Tick(frame);
+				if (!survivor.PopReadyFrame(ready) || ready.frame != frame) return false;
+			}
+			config.startFrame = 41;
+			if (!returning.StartReplay(transport, config, error)) return false;
+			returning.AdoptReplayedSeatTransitions(survivor, 40);
+			std::unique_ptr<Activity> saved = std::make_unique<Activity>();
+			g_ActivityMan.SwapCheckpointActivity(saved);
+			const auto finish = [&](bool passed) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				NetActorOwnership::RestoreSeededOwners(savedOwners);
+				g_ActivityMan.SwapCheckpointActivity(saved);
+				return passed;
+			};
+			std::array<uint8_t, 2> owners{};
+			std::array<size_t, 2> inputs{};
+			std::array<NetLockstepCoordinator*, 2> peers{&survivor, &returning};
+			for (size_t index = 0; index < peers.size(); ++index) {
+				ScenarioRunner::SetLockstepCoordinator(peers[index]);
+				ScenarioRunner::SetLockstepAppliedFrame(40);
+				Actor* actor = MakeSwitchTestActor(Activity::TeamTwo);
+				if (!actor) return finish(false);
+				AddSwitchTestActor(actor);
+				const int64_t uid = actor->GetUniqueID();
+				owners[index] = ScenarioRunner::GetLockstepPolicyActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
+				NetActorOwnership::SeedOwner(uid, owners[index], Activity::TeamTwo);
+				// The script moved on to a replacement, returning this old actor to its seeded AI owner.
+				ScenarioRunner::SetLockstepControlOverride(uid, 1);
+				NetLockstepReadyFrame ready;
+				ready.frame = 41; ready.remoteFrames = {MakeFrame(uid, 41)}; ready.remoteFrameCounts = {{1, 1}};
+				ScenarioRunner::FilterReclaimControllerInputs(ready);
+				inputs[index] = ready.remoteFrames.size();
+			}
+			const bool passed = owners[0] == 1 && owners[1] == owners[0] && inputs[0] == 1 && inputs[1] == inputs[0];
+			std::cout << "[net-lockstep-selftest] " << (passed ? "PASS" : "FAIL") << " catch_up_actor_owner_uses_applied_tick"
+			          << " saved_tick=40 return=41 owners=" << static_cast<int>(owners[0]) << "/" << static_cast<int>(owners[1])
+			          << " applied_inputs=" << inputs[0] << "/" << inputs[1] << std::endl;
+			if (!passed && error) *error = "the returning coordinator seeded a newborn at an undated seat state and fenced out its AI input";
+			return finish(passed);
+		}
+
 		// The previews replay queued frames on throwaway clones that carry the original's unique id, through the
 		// same static the committed tick uses. Only the committed frame may move the shared control binding, or
 		// the previewing peer moves a seat's answer while every other peer still holds the old one.
@@ -27613,6 +27776,10 @@ namespace {
 		};
 		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
 		if (selectedCase) {
+			if (std::string_view(selectedCase) == "catch-up-script-control") {
+				std::string error;
+				return TestCatchUpScriptSwitchKeepsSharedControl(&error) && TestCatchUpActorOwnerUsesAppliedTick(&error) ? 0 : fail(error);
+			}
 			if (std::string_view(selectedCase) == "recovery-after-reclaim") return RunRecoveryAfterReclaim();
 			if (std::string_view(selectedCase) == "horizon-path-grid") return PathFinder::RunHorizonGridSelfTest();
 			if (std::string_view(selectedCase) != "shared-scene-load") return fail("unknown selected lockstep self-test case");
@@ -27639,6 +27806,8 @@ namespace {
 			rowsPassed = false;
 		};
 		row(&TestSuccessorWaitsForAThirtySecondDial, "successor_waits_for_a_thirty_second_dial");
+		row(&TestCatchUpScriptSwitchKeepsSharedControl, "catch_up_script_switch_keeps_shared_control");
+		row(&TestCatchUpActorOwnerUsesAppliedTick, "catch_up_actor_owner_uses_applied_tick");
 		row(&TestHeldSeatReleaseEndsItsClaimsOnOneFrame, "held_seat_release_ends_its_claims_on_one_frame");
 		row(&TestKickedPlayingSeatLeavesOnOneFrame, "kicked_playing_seat_leaves_on_one_frame");
 		row(&TestUnboundedDropEndsItsClaimsOnOneFrame, "unbounded_drop_ends_its_claims_on_one_frame");

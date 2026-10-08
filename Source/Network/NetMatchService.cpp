@@ -6020,7 +6020,7 @@ static std::string ResyncSaveName() {
 		for (const auto& [peer, hold]: m_Coordinator->HeldTransactions()) if (hold.cutoffFrame <= tick) config.initialSeatHolds[peer] = hold;
 		auto transport = std::make_unique<LoopbackTransport>();
 		auto replay = std::make_unique<NetLockstepCoordinator>();
-		if (!replay->StartReplay(*transport, config, &error)) {
+		if (!replay->StartCatchUpReplay(*transport, config, *m_Coordinator, &error)) {
 			System::PrintDiagnosticLine("[net-match] held client: no in-place catch-up: " + error);
 			return false;
 		}
