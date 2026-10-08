@@ -1683,7 +1683,7 @@ std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, con
 	}
 	// Each object is written by one thread, as its own capture, exactly as the loop would write it.
 	const auto capture = [&](size_t first, size_t last) {
-		AudioMan::SoundCheckpointSaveScope::Lend lend(sounds);
+		AudioMan::SoundCheckpointSaveScope::Lend lend(sounds, CheckpointWriter::BatchEnabled());
 		AheadCaptureScope aheadScope(&ahead);
 		CheckpointCache values(CheckpointWriter::BatchEnabled());
 		values.Begin();

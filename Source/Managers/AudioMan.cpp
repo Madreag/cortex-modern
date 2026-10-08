@@ -1418,6 +1418,68 @@ void AudioMan::SoundCheckpointSaveScope::Note(uint64_t identity) {
 	m_Carried.insert(identity);
 }
 
+AudioMan::SoundCheckpointSaveScope::Lend::Lend(SoundCheckpointSaveScope* scope, bool collectLocally) : m_Previous(s_Current), m_Target(scope) {
+	if (collectLocally && scope) m_Local = std::make_unique<SoundCheckpointSaveScope>(false);
+	else s_Current = scope;
+}
+
+AudioMan::SoundCheckpointSaveScope::Lend::~Lend() {
+	if (m_Local) {
+		// Each helper takes the shared lock once, after its sound writes finish.
+		std::lock_guard lock(m_Target->m_NoteMutex);
+		try {
+			if (m_Local->m_Failure) m_Target->m_Failure = m_Local->m_Failure;
+			m_Target->m_Carried.merge(m_Local->m_Carried);
+		} catch (...) {
+			m_Target->m_Failure = std::current_exception();
+		}
+		m_Local.reset();
+	}
+	s_Current = m_Previous;
+}
+
+bool AudioMan::SoundCheckpointSaveScope::NotesCollectWithoutSharedLock() {
+	SoundCheckpointSaveScope shared(false);
+	std::unique_lock blocked(shared.m_NoteMutex);
+	std::promise<void> collected;
+	auto ready = collected.get_future();
+	std::thread writer([&] {
+		Lend lent(&shared, true);
+		for (uint64_t identity = 1; identity <= 128; ++identity) {
+			g_AudioMan.NoteCarriedSoundIdentity(identity);
+			g_AudioMan.NoteCarriedSoundIdentity(identity);
+		}
+		collected.set_value();
+	});
+	const bool independent = ready.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+	blocked.unlock();
+	writer.join();
+	std::vector<std::thread> writers;
+	for (uint64_t part = 0; part < 4; ++part) writers.emplace_back([&, part] {
+		Lend lent(&shared, true);
+		for (uint64_t index = 1; index <= 256; ++index) {
+			const uint64_t identity = 10000 + part * 256 + index;
+			g_AudioMan.NoteCarriedSoundIdentity(identity);
+			g_AudioMan.NoteCarriedSoundIdentity(identity);
+		}
+		{
+			SoundCheckpointSaveScope scratch(false);
+			g_AudioMan.NoteCarriedSoundIdentity(99999);
+		}
+		g_AudioMan.NoteCarriedSoundIdentity(20000);
+		{
+			Lend nested(SoundCheckpointSaveScope::Current(), true);
+			g_AudioMan.NoteCarriedSoundIdentity(10000);
+			g_AudioMan.NoteCarriedSoundIdentity(0);
+		}
+	});
+	for (auto& thread: writers) thread.join();
+	bool exact = shared.Carried().size() == 1154 && shared.Contains(10000) && shared.Contains(20000) && !shared.Contains(99999) && !shared.Contains(0);
+	for (uint64_t identity = 1; identity <= 128; ++identity) exact = exact && shared.Contains(identity);
+	for (uint64_t identity = 10001; identity <= 11024; ++identity) exact = exact && shared.Contains(identity);
+	return independent && exact;
+}
+
 void AudioMan::NoteCarriedSoundIdentity(uint64_t identity) {
 	if (s_SkipCarriedSoundNotes) return;
 	if (auto* scope = SoundCheckpointSaveScope::Current()) scope->Note(identity);

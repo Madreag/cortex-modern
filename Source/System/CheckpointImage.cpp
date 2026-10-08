@@ -1281,6 +1281,11 @@ bool RTE::RunCheckpointImageSelfTest() {
 			if (missed.empty()) pass("a_registry_scope_puts_back_what_any_change_moved", "ways=5");
 			else fail("a_registry_scope_puts_back_what_any_change_moved", "missed_way=" + missed);
 		}
+		{
+			const char* row = "capture_helpers_collect_sound_notes_without_the_shared_lock";
+			if (AudioMan::SoundCheckpointSaveScope::NotesCollectWithoutSharedLock()) pass(row, "blocked_merge=1 nested_and_duplicate_notes=1154");
+			else fail(row, "a blocked merge stopped collection or changed the carried identities");
+		}
 		// This machine's pacing flag and view are archived, but a peer compares the shared state without them.
 		{
 			const auto capture = [] { return CheckpointWriter::CaptureNative([] { return g_TimerMan.SaveCheckpoint(); }); };

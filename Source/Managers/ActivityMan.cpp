@@ -871,7 +871,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		const auto task = [sounds, cache, label, detail = std::move(detail), queued = std::chrono::steady_clock::now(), work = std::move(work)] {
 			CaptureSentinel::WorkerScope worker("capture-aside");
 			CaptureTrace::Span span(label, detail, queued);
-			AudioMan::SoundCheckpointSaveScope::Lend lend(sounds);
+			AudioMan::SoundCheckpointSaveScope::Lend lend(sounds, CheckpointWriter::BatchEnabled());
 			CheckpointCache values;
 			values.Begin();
 			CheckpointWriter::CacheScope valuesScope(cache ? cache : &values);

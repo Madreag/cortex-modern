@@ -13,6 +13,7 @@
 #include "fmod/fmod.hpp"
 #include <atomic>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <map>
 #include <memory>
@@ -152,23 +153,27 @@ namespace RTE {
 			SoundCheckpointSaveScope(const SoundCheckpointSaveScope&) = delete;
 			SoundCheckpointSaveScope& operator=(const SoundCheckpointSaveScope&) = delete;
 			void Note(uint64_t identity);
-			bool Contains(uint64_t identity) const { return m_Carried.contains(identity); }
-			const std::unordered_set<uint64_t>& Carried() const { return m_Carried; }
+			bool Contains(uint64_t identity) const { if (m_Failure) std::rethrow_exception(m_Failure); return m_Carried.contains(identity); }
+			const std::unordered_set<uint64_t>& Carried() const { if (m_Failure) std::rethrow_exception(m_Failure); return m_Carried; }
+			static bool NotesCollectWithoutSharedLock();
 			static SoundCheckpointSaveScope* Current() { return s_Current; }
 			/// Collects this thread's notes into a capture another thread opened, for as long as it lives.
 			class Lend {
 			public:
-				explicit Lend(SoundCheckpointSaveScope* scope) : m_Previous(s_Current) { s_Current = scope; }
-				~Lend() { s_Current = m_Previous; }
+				explicit Lend(SoundCheckpointSaveScope* scope, bool collectLocally = false);
+				~Lend();
 				Lend(const Lend&) = delete;
 				Lend& operator=(const Lend&) = delete;
 			private:
 				SoundCheckpointSaveScope* m_Previous;
+				SoundCheckpointSaveScope* m_Target;
+				std::unique_ptr<SoundCheckpointSaveScope> m_Local;
 			};
 		private:
 			static thread_local SoundCheckpointSaveScope* s_Current;
 			std::mutex m_NoteMutex;
 			std::unordered_set<uint64_t> m_Carried;
+			std::exception_ptr m_Failure;
 			SoundCheckpointSaveScope* m_Previous = nullptr;
 			bool m_Remember = true;
 		};
