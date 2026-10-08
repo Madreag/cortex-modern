@@ -9316,7 +9316,7 @@ namespace RTE {
 		copy.client.SetConnectionAuthority(&otherAuthority);
 		wire.host.BindParticipantId(copy.connection, otherKey.PublicId());
 		wire.Add(&copy);
-		if (!copy.store.Store(first) || !copy.client.BeginReclaim(wire.nowMs, &error) || !wire.Pump(&error)) return Fail("copied seat request: " + error);
+		if (!copy.store.Store(first) || !copy.client.BeginReclaim(first, wire.nowMs, &error) || !wire.Pump(&error)) return Fail("copied seat request: " + error);
 		const auto* refused = LastOf<NetJoinRejected>(wire.Delivered(copy.connection));
 		NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
 		if (!refused || refused->rejectReason != NetRejectReason::IdentityUnproven || refused->humanMessage.find("Original player") == std::string::npos ||
