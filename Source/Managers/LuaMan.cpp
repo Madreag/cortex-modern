@@ -6302,26 +6302,25 @@ static int ScriptGraphRandomState(lua_State* L) {
 namespace RTE::CheckpointLua {
 	namespace {
 		thread_local lua_State* s_DescriptorState = nullptr;
-		thread_local const std::pmr::unordered_set<const void*>* s_DescriptorRoots = nullptr;
+		thread_local const CaptureAddressSet* s_DescriptorRoots = nullptr;
 		thread_local const std::pmr::unordered_set<const void*>* s_DescriptorFunctions = nullptr;
 
 		struct DescriptorRootScope {
 			lua_State* state;
 			lua_State* previousState = s_DescriptorState;
-			const std::pmr::unordered_set<const void*>* previousRoots = s_DescriptorRoots;
+			const CaptureAddressSet* previousRoots = s_DescriptorRoots;
 			const std::pmr::unordered_set<const void*>* previousFunctions = s_DescriptorFunctions;
 			// These sets live only for the fenced walk. Allocate their small nodes
 			// together instead of contending with every other state's allocator.
 			std::shared_ptr<std::pmr::memory_resource> backing = CheckpointWriter::BatchEnabled() ? CheckpointBuffer::LeaseCaptureStorage() : nullptr;
 			std::pmr::monotonic_buffer_resource storage{backing ? backing.get() : std::pmr::get_default_resource()};
 			std::pmr::memory_resource* resource = CheckpointWriter::BatchEnabled() ? &storage : std::pmr::get_default_resource();
-			CaptureAddressSet seen{resource}, opaque{resource};
-			std::pmr::unordered_set<const void*> userdata{resource}, functions{resource};
-			std::pmr::unordered_set<const void*> queuedFinalizers{resource};
+			CaptureAddressSet seen{resource}, opaque{resource}, userdata{resource}, queuedFinalizers{resource};
+			std::pmr::unordered_set<const void*> functions{resource};
 			std::pmr::vector<TValue> pending{resource};
 			void Queue(const TValue& value) {
 				if (!tvistab(&value) && !tvisfunc(&value) && !tvisudata(&value) && !tvisthread(&value)) return;
-				if (tvisudata(&value)) userdata.insert(gcval(&value));
+				if (tvisudata(&value)) userdata.Insert(gcval(&value));
 				if (tvisfunc(&value)) functions.insert(gcval(&value));
 				const void* pointer = tvisudata(&value) ? uddata(udataV(&value)) : gcval(&value);
 				if (!opaque.Contains(pointer) && seen.Insert(pointer)) pending.push_back(value);
@@ -6343,7 +6342,7 @@ namespace RTE::CheckpointLua {
 				lua_pushnil(state);
 				while (lua_next(state, paths)) {
 					if (lua_topointer(state, -2)) opaque.Insert(lua_topointer(state, -2));
-					if (lua_type(state, -2) == LUA_TUSERDATA) userdata.insert(gcval(&state->top[-2]));
+					if (lua_type(state, -2) == LUA_TUSERDATA) userdata.Insert(gcval(&state->top[-2]));
 					lua_pop(state, 1);
 				}
 				for (int index = 1; index <= originalTop; ++index) Queue(index);
@@ -6434,7 +6433,7 @@ namespace RTE::CheckpointLua {
 					GCobj* object = last;
 					do {
 						object = gcnext(object);
-						if (object->gch.gct == ~LJ_TUDATA) queuedFinalizers.insert(object);
+						if (object->gch.gct == ~LJ_TUDATA) queuedFinalizers.Insert(object);
 					} while (object != last);
 				}
 				const int top = lua_gettop(state);
@@ -6469,8 +6468,8 @@ namespace RTE::CheckpointLua {
 							Queue(isluafunc(function) ? *uvval(gco2uv(gcref(function->l.uvptr[upvalue]))) : function->c.upvalue[upvalue]);
 						}
 					} else if (kind == LUA_TUSERDATA) {
-						userdata.insert(gcval(&value));
-						if ((gcval(&value)->gch.marked & LJ_GC_FINALIZED) && !queuedFinalizers.contains(gcval(&value))) {
+						userdata.Insert(gcval(&value));
+						if ((gcval(&value)->gch.marked & LJ_GC_FINALIZED) && !queuedFinalizers.Contains(gcval(&value))) {
 							lua_settop(state, top);
 							continue;
 						}
@@ -6494,7 +6493,7 @@ namespace RTE::CheckpointLua {
 					lua_settop(state, top);
 				}
 				walkSpan.reset();
-				CaptureTrace::Span countSpan("descriptor_counts", CaptureTrace::Active() ? std::format("{}:seen={}:userdata={}:functions={}:opaque={}", stateIndex, seen.Size(), userdata.size(), functions.size(), opaque.Size()) : std::string());
+				CaptureTrace::Span countSpan("descriptor_counts", CaptureTrace::Active() ? std::format("{}:seen={}:userdata={}:functions={}:opaque={}", stateIndex, seen.Size(), userdata.Size(), functions.size(), opaque.Size()) : std::string());
 				s_DescriptorState = state;
 				s_DescriptorRoots = &userdata;
 				s_DescriptorFunctions = &functions;
@@ -6507,7 +6506,7 @@ namespace RTE::CheckpointLua {
 	template<class Visit> requires true
 	void ForEachCapturedUserdata(lua_State* state, Visit visit) {
 		ForEachUserdata(state, false, true, [&](GCudata* data) {
-			if (s_DescriptorState != state || !s_DescriptorRoots || s_DescriptorRoots->contains(data)) { visit(data); return; }
+			if (s_DescriptorState != state || !s_DescriptorRoots || s_DescriptorRoots->Contains(data)) { visit(data); return; }
 			const int top = lua_gettop(state);
 			TValue value; setgcVraw(&value, obj2gco(data), LJ_TUDATA);
 			copyTV(state, state->top, &value); incr_top(state);
