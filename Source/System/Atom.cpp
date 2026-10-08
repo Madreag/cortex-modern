@@ -326,7 +326,7 @@ namespace {
 		else if constexpr (requires { typename T::first_type; typename T::second_type; }) return AtomPackedSize<typename T::first_type>() + AtomPackedSize<typename T::second_type>();
 		else return 2 * sizeof(size_t);
 	}
-	template<class T> void PackAtomValue(char* into, size_t& at, std::pmr::vector<char>& dynamic, const T& value) {
+	template<class T> void PackAtomValue(char* __restrict into, size_t& at, std::pmr::vector<char>& dynamic, const T& value) {
 		if constexpr (std::is_same_v<T, Vector>) {
 			PackAtomValue(into, at, dynamic, value.m_X); PackAtomValue(into, at, dynamic, value.m_Y);
 		} else if constexpr (std::is_same_v<T, Color>) {
@@ -339,14 +339,34 @@ namespace {
 		} else if constexpr (requires { typename T::value_type; }) {
 			const size_t count = value.size(), offset = dynamic.size();
 			PackAtomValue(into, at, dynamic, count); PackAtomValue(into, at, dynamic, offset);
-			dynamic.resize(offset + count * AtomPackedSize<typename T::value_type>());
-			size_t next = offset;
-			for (const auto& field: value) PackAtomValue(dynamic.data(), next, dynamic, field);
+			if (count) {
+				dynamic.resize(offset + count * AtomPackedSize<typename T::value_type>());
+				size_t next = offset;
+				for (const auto& field: value) PackAtomValue(dynamic.data(), next, dynamic, field);
+			}
 		} else {
 			static_assert(std::is_trivially_copyable_v<T>);
 			std::memcpy(into + at, &value, sizeof(value));
 			at += sizeof(value);
 		}
+	}
+	template<size_t Offset, class T> void PackAtomField(char* __restrict into, std::pmr::vector<char>& dynamic, const T& value) {
+		size_t at = Offset;
+		PackAtomValue(into, at, dynamic, value);
+		if (at != Offset + AtomPackedSize<T>()) throw std::logic_error("atom field capture size differs");
+	}
+	template<class... T, size_t... Index> void PackAtomFieldsAt(char* __restrict into, std::pmr::vector<char>& dynamic,
+	    const std::tuple<const T&...>& fields, std::index_sequence<Index...>) {
+		constexpr auto offsets = [] {
+			std::array<size_t, sizeof...(T)> result;
+			size_t index = 0, at = 0;
+			((result[index++] = at, at += AtomPackedSize<T>()), ...);
+			return result;
+		}();
+		(PackAtomField<offsets[Index]>(into, dynamic, std::get<Index>(fields)), ...);
+	}
+	template<class... T> void PackAtomFields(char* into, std::pmr::vector<char>& dynamic, const T&... values) {
+		PackAtomFieldsAt(into, dynamic, std::tie(values...), std::index_sequence_for<T...>{});
 	}
 	template<class T> auto UnpackAtomValue(std::string_view& values, std::string_view dynamic) {
 		if constexpr (std::is_same_v<T, bool>) {
@@ -440,10 +460,9 @@ CheckpointText Atom::CaptureCheckpointList(const std::vector<Atom*>& atoms) {
 			}
 		}
 		Record& record = records.emplace_back();
-		size_t at = 0;
-		const auto pack = [&](const auto&... values) { (PackAtomValue(record.values.data(), at, dynamic, values), ...); };
+		// Each field's fixed offset avoids an aliasable cursor in the inner loop.
+		const auto pack = [&](const auto&... values) { PackAtomFields(record.values.data(), dynamic, values...); };
 		VisitCheckpoint(pack, *atom);
-		if (at != record.values.size()) throw std::logic_error("atom capture size differs");
 		record.materials = indices;
 		record.links = atom->CaptureCheckpointLinkIDs();
 		record.groupIgnoreList = atom->m_IgnoreMOIDsByGroup != nullptr;
