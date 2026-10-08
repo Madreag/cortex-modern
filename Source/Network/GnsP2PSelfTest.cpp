@@ -1484,8 +1484,8 @@ namespace RTE {
 		}
 
 		/// relay-hold: both sides relay only through one TURN server; a numbered message crosses each way every second for the whole hold.
-		int RunRelayHold(int seconds, const std::string& server) {
-			Say("mode: relay-hold, single process, both sides relay only through " + server + " for " + std::to_string(seconds) + " s; a numbered message crosses each way every second");
+		int RunRelayHold(int seconds, const std::string& server, bool automaticJoiner = false) {
+			Say(std::string("mode: relay-hold, single process, Relay only host and ") + (automaticJoiner ? "Automatic" : "Relay only") + " joiner through " + server + " for " + std::to_string(seconds) + " s; a numbered message crosses each way every second");
 			std::string user;
 			std::string pass;
 			if (!RelayLogin(&user, &pass)) {
@@ -1495,6 +1495,11 @@ namespace RTE {
 			GnsP2PConfig hostConfig = RelayOnlyConfig(server, user, pass);
 			GnsP2PConfig joinerConfig;
 			SingleProcessConfigs(&hostConfig, &joinerConfig);
+			if (automaticJoiner) {
+				joinerConfig.connectionMode = 0;
+				joinerConfig.iceEnable = 7;
+				joinerConfig.stunServerList = "stun.cloudflare.com:3478";
+			}
 
 			const auto toHost = std::make_shared<SignalQueue>("joiner->host");
 			const auto toJoiner = std::make_shared<SignalQueue>("host->joiner");
@@ -1744,6 +1749,9 @@ namespace RTE {
 		if (args[0] == "relay-hold" && args.size() == 3 && ParseNumber(args[1], &value) && value > 0) {
 			return RunRelayHold(value, args[2]);
 		}
+		if (args[0] == "relay-automatic" && args.size() == 3 && ParseNumber(args[1], &value) && value > 0) {
+			return RunRelayHold(value, args[2], true);
+		}
 		if (args[0] == "relay-renew" && args.size() == 2) {
 			return RunRelayRenew(args[1]);
 		}
@@ -1758,7 +1766,7 @@ namespace RTE {
 			}
 		}
 		std::cout << "[net-p2p-selftest] FAIL: usage: -net-p2p-selftest [reject | close-on-accept | gather <iceEnable> | drop j2h|h2j <n> | host <port> | join <port> | identity-guard | payload-hold | connect-limit <delay-ms> | goodbye"
-		             " | relay-hold <seconds> <turn-server> | relay-renew <turn-server>"
+		             " | relay-hold <seconds> <turn-server> | relay-automatic <seconds> <turn-server> | relay-renew <turn-server>"
 		             " | dir-host <vport> <url> <pin> <session-id> <token> | dir-join <vport> <url> <pin> <session-id>"
 		             " | dir-reject|dir-dup host <vport> <url> <pin> <session-id> <token> | dir-reject|dir-dup join <vport> <url> <pin> <session-id>]" << std::endl;
 		return 1;

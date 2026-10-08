@@ -146,6 +146,8 @@ Existing nonempty TURN settings without the new mode setting load as Fixed. Exis
 
 Native ICE prioritizes host candidates at 126, server-reflexive at 100 and relayed at 0 in `ICESessionInterface::NotifyLocalCandidateDiscovered` (lines 2664-2670 of the inspected source), before shifting the type preference by 24 bits. This is source evidence, not a WAN measurement of this binary. [GNS native ICE source](https://github.com/ValveSoftware/GameNetworkingSockets/blob/master/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp#L2664).
 
+The local candidate policy also applies when native ICE creates or accepts candidate pairs and receives peer data. A Relay only host's base socket carries TURN control traffic, but cannot become a direct peer route. Automatic joiners can therefore use that host's relay without adopting the host's player setting. When signaling identifies an already selected peer-reflexive candidate as a relay, its route type and pair priority are updated.
+
 STUN settings contain comma-separated `host:port` values: `stun.l.google.com:19302,stun.cloudflare.com:3478,stun.nextcloud.com:443`. An empty list deliberately removes server-reflexive gathering. NAT Off uses LAN or a forwarded host UDP port. Relay Off only removes the host's offer; player policy is a separate choice.
 
 The linked native GNS ICE implementation consumes UDP TURN endpoints. The directory and lobby preserve TCP/TLS URLs, but this engine currently selects only UDP entries and passes GNS parallel comma-separated address, username and password lists. TCP/TLS-only access is not implemented by this change.
@@ -158,7 +160,7 @@ The TCP/TLS limit remains unfinished. The menu must not imply that selecting Rel
 
 ## GameNetworkingSockets build
 
-The engine builds against GameNetworkingSockets v1.6.0 (upstream commit `2cb93a06350bb065db53abdb0d87cf297e0bfd34`) with `external/patches/gns-turn-lifetime.patch` applied. The patch defines `STEAMNETWORKINGSOCKETS_TURN_LIFETIME` in `steamnetworkingtypes.h`; `GnsTransport.cpp` refuses to compile against a GNS without it. The patched library installs beside the stock prefix, as `<stock prefix>-turnfix`: `RTEA.vcxproj` and `meson.build` use that sibling whenever it exists, so `GNS_ROOT` / `-Dgns_root` keep naming the stock prefix and the dependency prefix does not change:
+The engine builds against GameNetworkingSockets v1.6.0 (upstream commit `2cb93a06350bb065db53abdb0d87cf297e0bfd34`) with `external/patches/gns-turn-lifetime.patch` applied. The patch defines `STEAMNETWORKINGSOCKETS_TURN_LIFETIME` and `STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY` in `steamnetworkingtypes.h`; `GnsTransport.cpp` requires both, so a library built with an older patch must be rebuilt. The patched library installs beside the stock prefix, as `<stock prefix>-turnfix`: `RTEA.vcxproj` and `meson.build` use that sibling whenever it exists, so `GNS_ROOT` / `-Dgns_root` keep naming the stock prefix and the dependency prefix does not change:
 
 - `GNS_ROOT` names the stock install prefix; the build uses `<GNS_ROOT>-turnfix` beside it
 - `GNS_DEP_ROOT` names the vcpkg dependency prefix (the Windows builds use protobuf 6.33.4, abseil 20260107.1, OpenSSL 3.6.2)
@@ -194,5 +196,7 @@ ninja -C build-gns-ubsan install
 ```
 
 `tools/turn_relay_checks.py hold|renew --turn <host:port> --out <dir>` runs the two relay checks (`-net-p2p-selftest relay-hold <seconds> <server>` and `relay-renew <server>`) through the runner against a real TURN server, with the login from `CC_TEST_TURN_USER` / `CC_TEST_TURN_PASS` or a coturn `user=` line; `--coturn-log <ssh host>:<log>` adds the server's own log lines for the run.
+
+`-net-p2p-selftest relay-automatic <seconds> <server>` exercises the same exchange with an Automatic joiner and a Relay only host. It requires a measured relay route at both ends and checks that messages and the close cross it. This single-process regression does not replace joins between machines and platforms.
 
 An ordinary match config is version 8 and a persistent world's is version 9; a live session refuses an older config, and versions back to 2 still decode for recordings. The relay JSON suffix is appended after migration data; `NetLobbyProtocol` owns that encoder/decoder. Relay metadata is outside the deterministic simulation hash so rotating a login cannot alter simulation identity. Transport authorization comes from the host connection. Lua names and behavior are unchanged.
