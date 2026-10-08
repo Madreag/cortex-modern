@@ -1322,6 +1322,15 @@ bool RTE::RunCheckpointImageSelfTest() {
 		// A preview's page fence puts back exactly the bytes written under it, edges included, and nothing after it lifts.
 		{
 			if (!PageWriteFence::IsSupported()) {
+				pass("independent_heap_fences_keep_contexts_until_their_readers_finish", "platform=copies");
+			} else if (const std::string mismatch = PageWriteFence::CopyWatchSelfTestMismatch(); mismatch.empty()) {
+				pass("independent_heap_fences_keep_contexts_until_their_readers_finish", "blocked_arm=1 retained_observer=1");
+			} else {
+				fail("independent_heap_fences_keep_contexts_until_their_readers_finish", mismatch);
+			}
+		}
+		{
+			if (!PageWriteFence::IsSupported()) {
 				pass("a_page_fence_puts_back_exactly_what_was_written", "platform=copies");
 			} else if (const std::string mismatch = PageWriteFence::SelfTestMismatch(); mismatch.empty()) {
 				pass("a_page_fence_puts_back_exactly_what_was_written", "rounds=2");

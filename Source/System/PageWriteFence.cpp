@@ -5,8 +5,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <future>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -63,6 +65,8 @@ namespace RTE {
 		};
 		struct CopyWatches {
 			std::array<CopyWatch, 256> watches{};
+			std::array<std::atomic<size_t>, 256> readers{};
+			std::array<std::atomic<bool>, 256> retiring{};
 			std::atomic<size_t> count{0};
 			std::atomic_flag lock = ATOMIC_FLAG_INIT;
 		};
@@ -163,10 +167,24 @@ namespace RTE {
 		bool Take(uintptr_t address) {
 			CopyWatches& copies = Watches();
 			if (copies.count.load(std::memory_order_acquire)) {
-				SpinLock guard(copies.lock);
-				for (const CopyWatch& watch: copies.watches) {
-					if (watch.owner && address >= watch.begin && address < watch.end)
-						return watch.observer(watch.context, address);
+				CopyWatch found;
+				size_t slot = copies.watches.size();
+				{
+					SpinLock guard(copies.lock);
+					for (size_t index = 0; index < copies.watches.size(); ++index) {
+						const CopyWatch& watch = copies.watches[index];
+						if (watch.owner && !copies.retiring[index].load(std::memory_order_relaxed) && address >= watch.begin && address < watch.end) {
+							found = watch;
+							slot = index;
+							copies.readers[slot].fetch_add(1, std::memory_order_acquire);
+							break;
+						}
+					}
+				}
+				if (slot < copies.watches.size()) {
+					const bool taken = found.observer(found.context, address);
+					copies.readers[slot].fetch_sub(1, std::memory_order_release);
+					return taken;
 				}
 			}
 			State& fence = Fence();
@@ -205,26 +223,33 @@ namespace RTE {
 		const size_t page = PageBytes();
 		const uintptr_t begin = reinterpret_cast<uintptr_t>(buffer.data);
 		if (!owner || !observer || !page || !buffer.bytes || begin % page || buffer.bytes % page || buffer.bytes > UINTPTR_MAX - begin) return false;
-		std::lock_guard setup(HandlerMutex());
-		if (!InstallHandler()) return false;
-		CopyWatches& copies = Watches();
-		SpinLock guard(copies.lock);
-		CopyWatch* vacant = nullptr;
-		CopyWatch* previous = nullptr;
-		for (CopyWatch& watch: copies.watches) {
-			if (watch.owner == owner) {
-				if (!arm || watch.begin != begin || begin + buffer.bytes < watch.end || watch.observer != observer || watch.context != context) return false;
-				previous = &watch;
-			} else if (watch.owner && begin < watch.end && begin + buffer.bytes > watch.begin) return false;
-			if (!watch.owner && !vacant) vacant = &watch;
+		{
+			std::lock_guard setup(HandlerMutex());
+			if (!InstallHandler()) return false;
 		}
-		if (previous) vacant = previous;
-		if (!vacant) return false;
+		CopyWatches& copies = Watches();
+		size_t slot = copies.watches.size();
+		{
+			SpinLock guard(copies.lock);
+			size_t vacant = copies.watches.size(), previous = copies.watches.size();
+			for (size_t index = 0; index < copies.watches.size(); ++index) {
+				const CopyWatch& watch = copies.watches[index];
+				if (watch.owner == owner) {
+					if (copies.retiring[index].load(std::memory_order_relaxed) || !arm || watch.begin != begin || begin + buffer.bytes < watch.end || watch.observer != observer || watch.context != context) return false;
+					previous = index;
+				} else if (watch.owner && begin < watch.end && begin + buffer.bytes > watch.begin) return false;
+				if (!watch.owner && vacant == copies.watches.size()) vacant = index;
+			}
+			slot = previous < copies.watches.size() ? previous : vacant;
+			if (slot == copies.watches.size()) return false;
+			// The slot pins its context while an arm or a fault uses it outside the registry lock.
+			copies.readers[slot].fetch_add(1, std::memory_order_acquire);
+			copies.watches[slot] = {owner, begin, begin + buffer.bytes, observer, context};
+			if (previous == copies.watches.size()) copies.count.fetch_add(1, std::memory_order_release);
+		}
 		// Publish before protection, as for a first watch. A failed arm can have
 		// protected part of the range: keep its observer until UnwatchCopies so
 		// those pages still preserve earlier generations or open safely.
-		*vacant = {owner, begin, begin + buffer.bytes, observer, context};
-		if (!previous) copies.count.fetch_add(1, std::memory_order_release);
 		// The arm callback holds the copy coordinator while protecting and adding
 		// a generation. Handler and worker writes cannot open the new fence midway.
 		const auto arming = costs ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
@@ -232,25 +257,44 @@ namespace RTE {
 		if (arm) {
 			const bool armed = arm(armContext, begin, buffer.bytes);
 			if (costs) costs->armUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - arming).count();
+			copies.readers[slot].fetch_sub(1, std::memory_order_release);
 			return armed;
 		}
-		if (Protect(begin, buffer.bytes, true)) return true;
-		Protect(begin, buffer.bytes, false);
-		*vacant = {};
-		copies.count.fetch_sub(1, std::memory_order_release);
-		return false;
+		const bool protectedPages = Protect(begin, buffer.bytes, true);
+		copies.readers[slot].fetch_sub(1, std::memory_order_release);
+		if (!protectedPages) UnwatchCopies(owner);
+		return protectedPages;
 	}
 
 	void PageWriteFence::UnwatchCopies(void* owner) {
 		CopyWatches& copies = Watches();
 		if (!copies.count.load(std::memory_order_acquire)) return;
-		SpinLock guard(copies.lock);
-		for (CopyWatch& watch: copies.watches) {
-			if (watch.owner != owner) continue;
-			Protect(watch.begin, watch.end - watch.begin, false);
-			watch = {};
-			copies.count.fetch_sub(1, std::memory_order_release);
+		CopyWatch retired;
+		size_t slot = copies.watches.size();
+		bool first = false;
+		{
+			SpinLock guard(copies.lock);
+			for (size_t index = 0; index < copies.watches.size(); ++index) {
+				if (copies.watches[index].owner != owner) continue;
+				slot = index;
+				retired = copies.watches[index];
+				first = !copies.retiring[index].exchange(true, std::memory_order_acq_rel);
+				break;
+			}
+		}
+		if (slot == copies.watches.size()) return;
+		if (!first) {
+			while (copies.retiring[slot].load(std::memory_order_acquire)) std::this_thread::yield();
 			return;
+		}
+		// A retired slot is not reused until its last callback releases the context.
+		while (copies.readers[slot].load(std::memory_order_acquire)) std::this_thread::yield();
+		Protect(retired.begin, retired.end - retired.begin, false);
+		{
+			SpinLock guard(copies.lock);
+			copies.watches[slot] = {};
+			copies.retiring[slot].store(false, std::memory_order_release);
+			copies.count.fetch_sub(1, std::memory_order_release);
 		}
 	}
 
@@ -367,6 +411,92 @@ namespace RTE {
 
 	uint64_t PageWriteFence::GetFaultCount() {
 		return Fence().faults.load(std::memory_order_relaxed);
+	}
+
+	std::string PageWriteFence::CopyWatchSelfTestMismatch() {
+		if (!IsSupported()) return "unsupported";
+		const size_t page = PageBytes();
+		struct Pages {
+			uint8_t* data;
+			size_t bytes;
+			~Pages() {
+#ifdef _WIN32
+				if (data) VirtualFree(data, 0, MEM_RELEASE);
+#else
+				if (data) munmap(data, bytes);
+#endif
+			}
+		} pages{nullptr, page * 2};
+#ifdef _WIN32
+		pages.data = static_cast<uint8_t*>(VirtualAlloc(nullptr, pages.bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+#else
+		void* mapped = mmap(nullptr, pages.bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (mapped != MAP_FAILED) pages.data = static_cast<uint8_t*>(mapped);
+#endif
+		if (!pages.data) return "could not map test pages";
+		std::memset(pages.data, 42, pages.bytes);
+		struct Probe {
+			uint8_t* data;
+			std::vector<uint8_t> saved;
+			std::promise<void>* entered = nullptr;
+			std::shared_future<void> release;
+		};
+		Probe first{pages.data, std::vector<uint8_t>(page)}, second{pages.data + page, std::vector<uint8_t>(page)};
+		const auto observe = +[](void* context, uintptr_t) noexcept {
+			auto& probe = *static_cast<Probe*>(context);
+			if (probe.entered) {
+				probe.entered->set_value();
+				probe.release.wait();
+			}
+			std::memcpy(probe.saved.data(), probe.data, probe.saved.size());
+			return OpenCopiedPage(reinterpret_cast<uintptr_t>(probe.data), probe.saved.size());
+		};
+		if (!WatchCopies(&second, {second.data, page}, observe, &second)) return "second watch refused";
+		struct ArmGate {
+			std::promise<void> entered;
+			std::shared_future<void> release;
+		} armGate;
+		std::promise<void> releaseArm;
+		armGate.release = releaseArm.get_future().share();
+		auto armEntered = armGate.entered.get_future();
+		const auto arm = +[](void* context, uintptr_t address, size_t bytes) noexcept {
+			auto& gate = *static_cast<ArmGate*>(context);
+			gate.entered.set_value();
+			gate.release.wait();
+			return ProtectCopyPages(address, bytes);
+		};
+		auto armer = std::async(std::launch::async, [&] { return WatchCopies(&first, {first.data, page}, observe, &first, arm, &armGate); });
+		const bool entered = armEntered.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+		bool independent = false;
+		std::future<void> writer;
+		if (entered) {
+			writer = std::async(std::launch::async, [&] { *static_cast<volatile uint8_t*>(second.data) = 77; });
+			// The first arm stays blocked until the unrelated fault has answered.
+			independent = writer.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+		}
+		releaseArm.set_value();
+		const bool armed = armer.get();
+		if (writer.valid()) writer.get();
+		UnwatchCopies(&first);
+		UnwatchCopies(&second);
+		if (!entered || !armed || !independent || second.saved.front() != 42 || second.data[0] != 77) return "one heap arm blocked another heap's frozen write";
+
+		std::promise<void> observerEntered, releaseObserver, unwatchEntered;
+		second.entered = &observerEntered;
+		second.release = releaseObserver.get_future().share();
+		auto observed = observerEntered.get_future();
+		auto retiring = unwatchEntered.get_future();
+		if (!WatchCopies(&second, {second.data, page}, observe, &second)) return "retained watch refused";
+		writer = std::async(std::launch::async, [&] { *static_cast<volatile uint8_t*>(second.data) = 91; });
+		const bool observedWrite = observed.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+		auto unwatch = std::async(std::launch::async, [&] { unwatchEntered.set_value(); UnwatchCopies(&second); });
+		retiring.wait();
+		const bool releasedEarly = unwatch.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready;
+		releaseObserver.set_value();
+		writer.get();
+		unwatch.get();
+		if (!observedWrite || releasedEarly || second.saved.front() != 77 || second.data[0] != 91) return "unwatch released a context still answering its frozen write";
+		return {};
 	}
 
 	std::string PageWriteFence::SelfTestMismatch() {

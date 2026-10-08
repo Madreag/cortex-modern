@@ -46,5 +46,6 @@ namespace RTE {
 
 		/// Empty when the fence puts back exactly what was written, else the first mismatch; for -cow-checkpoint-selftest.
 		static std::string SelfTestMismatch();
+		static std::string CopyWatchSelfTestMismatch();
 	};
 } // namespace RTE
