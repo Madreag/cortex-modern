@@ -9193,12 +9193,13 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		checkpointValues = exact && checkpointValues;
 	}
 	{
-		for (const auto& [name, override]: std::array<std::pair<const char*, const char*>, 5>{{
+		for (const auto& [name, override]: std::array<std::pair<const char*, const char*>, 6>{{
 		    {"plain_scalar_properties", "do end"},
 		    {"scalar_nan_and_negative_zero", "_ScalarCapture.vector.X = 0/0; _ScalarCapture.vector.Y = -0.0"},
 		    {"scalar_class_override", "Vector.X = 103; Timer.StartSimTimeTicks = 107"},
 		    {"scalar_instance_override", "_ScriptGraphSetInstance(_ScalarCapture.vector, { X = 109 }); _ScriptGraphSetInstance(_ScalarCapture.timer, { SimTimeLimitTicks = 113 })"},
-		    {"scalar_index_override", "local meta = debug.getmetatable(_ScalarCapture.vector); local old = meta.__index; meta.__index = function(o, k) if k == 'X' then return 127 end return old(o, k) end"}}}) {
+		    {"scalar_index_override", "local meta = debug.getmetatable(_ScalarCapture.vector); local old = meta.__index; meta.__index = function(o, k) if k == 'X' then return 127 end return old(o, k) end"},
+		    {"scalar_class_marker_metatable_fallback", "local meta = debug.getmetatable(_ScalarCapture.vector); meta.__luabind_class = nil; debug.setmetatable(meta, { __index = function(t, k) if k == '__luabind_class' then return true end end })"}}}) {
 			LuaStateWrapper scalarState;
 			scalarState.Initialize();
 			const bool planted = scalarState.RunScriptString("_ScalarCapture = { vector = Vector(-0.0, 1.25), timer = Timer() }; _ScalarCapture.timer.StartSimTimeTicks = 9007199254740992; _ScalarCapture.timer.SimTimeLimitTicks = 137") == 0 && scalarState.RunScriptString(override) == 0;

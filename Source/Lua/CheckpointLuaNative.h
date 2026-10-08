@@ -641,6 +641,7 @@ namespace RTE::CheckpointLua {
 			TValue members{};
 		};
 		std::array<ScalarKeys, 2> m_ScalarKeys;
+		GCstr* m_ClassMarker = nullptr;
 		const bool m_RetainedReport = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
 		size_t m_RetainedCalls = 0, m_RetainedMissing = 0;
 		int64_t m_RetainedUs = 0;
@@ -655,6 +656,21 @@ namespace RTE::CheckpointLua {
 			incr_top(State());
 		}
 		TValue At(int index) const { return *(index > 0 ? State()->base + index - 1 : State()->top + index); }
+		const luabind::detail::object_rep* ClassObject(const TValue& subject) {
+			if (!CheckpointWriter::BatchEnabled()) return luabind::detail::is_class_object(State(), -1);
+			GCtab* meta = tabref(udataV(&subject)->metatable);
+			if (!meta) return nullptr;
+			if (!m_ClassMarker) {
+				lua_pushliteral(State(), "__luabind_class");
+				m_ClassMarker = strV(&State()->top[-1]); Keep(-1); lua_pop(State(), 1);
+			}
+			const TValue* marker = lj_tab_getstr(meta, m_ClassMarker);
+			if (!marker || tvisnil(marker)) {
+				// A metatable fallback can execute Lua, so retain ordinary lookup.
+				return tabref(meta->metatable) ? luabind::detail::is_class_object(State(), -1) : nullptr;
+			}
+			return tvisfalse(marker) ? nullptr : static_cast<const luabind::detail::object_rep*>(uddata(udataV(&subject)));
+		}
 		void Keep(int index) {
 			if (index < 0) index += lua_gettop(State()) + 1;
 			const TValue value = At(index);
@@ -867,8 +883,7 @@ namespace RTE::CheckpointLua {
 			const GCfunc* function = funcV(dispatcher);
 			const BCOp operation = bc_op(*mref(function->c.pc, BCIns));
 			if ((operation != BC_FUNCC && operation != BC_FUNCCW) || function->c.f != luabind::detail::class_rep::gettable_dispatcher) return false;
-			const auto plain = [&] {
-				const TValue& value = State()->top[-1];
+			const auto plain = [&](const TValue& value) {
 				if (!tvistab(&value) || tabref(tabV(&value)->metatable)) return false;
 				// Read every override again; only the interned keys are capture-local.
 				for (size_t index = 0; index < names.size(); ++index) {
@@ -879,11 +894,13 @@ namespace RTE::CheckpointLua {
 			};
 			if (object->get_lua_table().is_valid()) {
 				object->get_lua_table().get(State());
-				if (!plain()) return false;
+				if (!plain(State()->top[-1])) return false;
 				lua_pop(State(), 1);
 			}
-			type->get_table(State());
-			return plain();
+			if (keys.type != type) {
+				type->get_table(State()); keys.members = At(-1); Keep(-1); lua_pop(State(), 1); keys.type = type;
+			}
+			return plain(keys.members);
 		}
 		TValue ScalarPropertyToken(const luabind::detail::object_rep* object, const char* name) {
 			lua_Number number;
@@ -969,7 +986,7 @@ namespace RTE::CheckpointLua {
 			ReleaseRetained(value);
 			Push(value);
 			// Only a luabind instance can change its answers; a class descriptor or a plain userdata is answered once.
-			const auto* object = luabind::detail::is_class_object(State(), -1);
+			const auto* object = ClassObject(value);
 			if (CaptureOwnedScalar(value, object)) { lua_pop(State(), 1); return; }
 			const bool immutable = luabind::detail::is_class_rep(State(), -1) || !object;
 			// A fresh reference to a live object that another reference of its class already answered for answers the same.
