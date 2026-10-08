@@ -4167,7 +4167,7 @@ static std::vector<const void*> LoadedActivityPresets() { return LoadedPresets("
 struct RTE::LuaScriptGraphNativeCaptureData {
 	/// The objects that existed when the capture began, copied by the first question asked of them.
 	const std::vector<MovableObject*>& KnownObjects() const {
-		std::call_once(m_KnownObjectsCopied, [this] {
+		Once(m_KnownObjectsCopied, m_KnownObjectsReady, [this] {
 			CaptureSentinel::NoteCreation("capture known-objects copy", &m_KnownObjects);
 			m_KnownObjects = g_MovableMan.SnapshotKnownObjects();
 		});
@@ -4177,7 +4177,7 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	mutable std::mutex frozenWorldMutex;
 	/// Whether an object existed when the capture began; only the pointer is read.
 	bool Known(const MovableObject* object) const {
-		std::call_once(m_KnownBuilt, [this] {
+		Once(m_KnownBuilt, m_KnownReady, [this] {
 			CaptureSentinel::NoteCreation("capture known-objects lookup", &m_Known);
 			m_Known.assign(KnownObjects().begin(), KnownObjects().end());
 			std::sort(m_Known.begin(), m_Known.end());
@@ -4189,12 +4189,12 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	void BuildOwners() const { Owners(); }
 	/// Whether an address is a loaded activity preset; only the pointer is read.
 	bool ActivityPreset(const void* address) const {
-		std::call_once(m_ActivityPresetsBuilt, [this] { m_ActivityPresets = LoadedActivityPresets(); });
+		Once(m_ActivityPresetsBuilt, m_ActivityPresetsReady, [this] { m_ActivityPresets = LoadedActivityPresets(); });
 		return std::binary_search(m_ActivityPresets.begin(), m_ActivityPresets.end(), address);
 	}
 	/// Whether an address is a loaded preset of any type; only the pointer is read.
 	bool Preset(const void* address) const {
-		std::call_once(m_PresetsBuilt, [this] { m_Presets = LoadedPresets("Entity"); });
+		Once(m_PresetsBuilt, m_PresetsReady, [this] { m_Presets = LoadedPresets("Entity"); });
 		return std::binary_search(m_Presets.begin(), m_Presets.end(), address);
 	}
 	/// The object a Vector field belongs to, if it is one of a known object's aliased fields.
@@ -4224,6 +4224,13 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	}
 
 private:
+	template<class Work> static void Once(std::once_flag& once, std::atomic<bool>& ready, Work&& work) {
+		if (!CheckpointWriter::BatchEnabled()) { std::call_once(once, std::forward<Work>(work)); return; }
+		if (ready.load(std::memory_order_acquire)) return;
+		// A completed index is immutable; readers acquire its publication without call_once's TLS setup.
+		std::call_once(once, std::forward<Work>(work));
+		ready.store(true, std::memory_order_release);
+	}
 	template <class Value> struct Entries {
 		std::vector<std::pair<const void*, Value>> sorted;
 		std::optional<CheckpointLua::CaptureAddressIndex> index;
@@ -4239,12 +4246,12 @@ private:
 	}
 	// Which object owns a Vector or a Controller, built by the first state that asks, for every state after it.
 	const Fields& Owners() const {
-		std::call_once(m_OwnersBuilt, [this] {
+		Once(m_OwnersBuilt, m_OwnersReady, [this] {
 			static const bool report = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
 			const auto started = report ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			auto& vectors = m_Owners.vectors.sorted;
 			auto& controllers = m_Owners.controllers.sorted;
-			vectors.reserve(KnownObjects().size() * 6);
+			vectors.reserve(KnownObjects().size() * (CheckpointWriter::BatchEnabled() ? 9 : 6));
 			for (MovableObject* mo: KnownObjects()) {
 				const long uid = mo->GetUniqueID();
 				if (Actor* actor = CheckpointCast<Actor>(mo)) controllers.emplace_back(actor->GetController(), uid);
@@ -4286,14 +4293,19 @@ private:
 		return m_Owners;
 	}
 	mutable std::once_flag m_ActivityPresetsBuilt;
+	mutable std::atomic<bool> m_ActivityPresetsReady{false};
 	mutable std::vector<const void*> m_ActivityPresets;
 	mutable std::once_flag m_PresetsBuilt;
+	mutable std::atomic<bool> m_PresetsReady{false};
 	mutable std::vector<const void*> m_Presets;
 	mutable std::once_flag m_KnownObjectsCopied;
+	mutable std::atomic<bool> m_KnownObjectsReady{false};
 	mutable std::vector<MovableObject*> m_KnownObjects;
 	mutable std::once_flag m_OwnersBuilt;
+	mutable std::atomic<bool> m_OwnersReady{false};
 	mutable Fields m_Owners;
 	mutable std::once_flag m_KnownBuilt;
+	mutable std::atomic<bool> m_KnownReady{false};
 	mutable std::vector<const MovableObject*> m_Known;
 	mutable std::mutex m_OwnedMutex;
 	mutable std::unordered_map<const Entity*, std::shared_ptr<const OwnedParts>> m_Owned;
@@ -9100,6 +9112,35 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			for (auto& reader: readers) exact = reader.get() && exact;
 		}
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " checkpoint_native_casts_preserve_crosscasts_repeated_bases_and_virtual_bases" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
+		auto actor = std::make_unique<AHuman>();
+		auto part = std::make_unique<Attachable>();
+		LuaScriptGraphNativeCaptureData fields;
+		bool exact = false;
+		{
+			CheckpointWriter::BatchScope batch(true);
+			const auto probe = [&] {
+				bool same = true;
+				for (int pass = 0; pass < 64; ++pass) {
+					fields.BuildOwners();
+					const VectorField* position = fields.VectorOwner(&actor->GetPos());
+					const VectorField* joint = fields.VectorOwner(&part->GetJointPos());
+					const long* controller = fields.ControllerOwner(actor->GetController());
+					same = same && fields.Known(actor.get()) && fields.Known(part.get()) && !fields.Known(nullptr) &&
+					    position && position->uid == actor->GetUniqueID() && std::string_view(position->property) == "Pos" &&
+					    joint && joint->uid == part->GetUniqueID() && std::string_view(joint->property) == "JointPos" &&
+					    controller && *controller == actor->GetUniqueID();
+				}
+				return same;
+			};
+			std::array<std::future<bool>, 4> readers;
+			for (auto& reader: readers) reader = std::async(std::launch::async, probe);
+			exact = probe();
+			for (auto& reader: readers) exact = reader.get() && exact;
+		}
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " checkpoint_owner_indexes_publish_once_for_concurrent_readers" << std::endl;
 		checkpointValues = exact && checkpointValues;
 	}
 	{
