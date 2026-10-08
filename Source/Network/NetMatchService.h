@@ -146,6 +146,8 @@ namespace RTE {
 	/// The GNS identity a host binds for a directory session; the dispatcher's rule, readable in a
 	/// build without GameNetworkingSockets.
 	std::string NetIceHostIdentity(const std::string& sessionId);
+	/// A saved successor keeps an ICE identity intact; only direct addresses carry a UDP port.
+	std::string NetRejoinAddress(const std::string& address, uint16_t port);
 
 	/// Reports ICE reachability only for the directory id bound to the listener.
 	std::string NetIceRowJoinMode(bool iceEnabled, bool hasDirectAddress, const std::string& boundSessionId, const std::string& rowSessionId);

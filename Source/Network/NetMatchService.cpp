@@ -238,6 +238,12 @@ namespace RTE {
 		m_LastMatchSummary = m_CurrentMatchSummary;
 	}
 
+	std::string NetRejoinAddress(const std::string& address, uint16_t port) {
+		if (address.empty() || NetLockstepCoordinator::IsMigrationIceEndpoint(address)) return address;
+		const std::string host = address.find(':') != std::string::npos && !address.starts_with('[') ? "[" + address + "]" : address;
+		return host + ":" + std::to_string(port);
+	}
+
 	std::string NetIceHostIdentity(const std::string& sessionId) {
 		// Kept in step with GnsDirectorySignalDispatcher::HostIdentity; the selftest asserts they agree.
 		constexpr size_t c_IdentityChars = 24;
@@ -8299,13 +8305,13 @@ static std::string ResyncSaveName() {
 		const auto endpoint = std::find_if(config.migrationPeers.begin(), config.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == result.hostPeerId; });
 		if (endpoint != config.migrationPeers.end()) {
 			const std::string& connected = m_Coordinator->GetMigrationAddress();
-			const std::string address = (connected.empty() ? endpoint->listenAddrs.front() : connected) + ":" + std::to_string(endpoint->listenPort);
+			const std::string address = NetRejoinAddress(connected.empty() ? endpoint->listenAddrs.front() : connected, endpoint->listenPort);
 			if (!m_IsHost) {
 				(void)m_ReconnectClient.MigrateHostContext(address, m_MigrationDirectorySession, NetMatchConfigUtil::HashConfig(config));
 				if (m_LastJoinRoute) {
 					m_LastJoinRoute->address = address;
 					m_LastJoinRoute->port = endpoint->listenPort;
-					if (!m_LastJoinRoute->sessionId.empty()) m_LastJoinRoute->sessionId = m_MigrationDirectorySession;
+					if (!m_MigrationDirectorySession.empty()) m_LastJoinRoute->sessionId = m_MigrationDirectorySession;
 				}
 				if (m_Coordinator->GetMigrationPhase() == NetHostMigrationPhase::ResyncAdmission) {
 					NetSessionConfig sessionConfig = m_Session->GetConfig();
@@ -11718,6 +11724,10 @@ static std::string ResyncSaveName() {
 			m_HeldRejoinRoutes.pop_front();
 			System::PrintDiagnosticLine("[net-match] held rejoin: the host is gone; rejoining the successor " + EndpointReceipt(route.address) + " port=" + std::to_string(route.port));
 			if (RejoinSuccessorRoute(route, error)) return true;
+			if (m_OrdinaryTicketRejoin) {
+				m_ReconnectUx.NoteAttemptFailed(SteadyNowMs(), error ? *error : GetLobbySnapshot().errorText);
+				if (m_ReconnectUx.GetState() == NetReconnectUxState::GaveUp || m_ReconnectUx.IsRefused()) return false;
+			}
 		}
 		return BeginHeldRejoinOnNextHost(error);
 	}
@@ -11757,8 +11767,9 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			NetH4TicketRecord record;
 			m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
-			if (m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) == NetH4TicketLoadResult::Loaded && record.hostAddress != route.address) {
-				record.hostAddress = route.address;
+			const std::string address = NetRejoinAddress(route.address, route.port);
+			if (m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) == NetH4TicketLoadResult::Loaded && record.hostAddress != address) {
+				record.hostAddress = address;
 				(void)m_TicketStore.Store(record, nullptr);
 			}
 		}
@@ -11816,11 +11827,7 @@ static std::string ResyncSaveName() {
 		if (handsOver && !routes.empty() && (record.directorySessionId.empty() || NetLockstepCoordinator::IsMigrationIceEndpoint(routes.front().address))) {
 			auto successor = record;
 			const auto& next = routes.front();
-			successor.hostAddress = next.address;
-			if (!NetLockstepCoordinator::IsMigrationIceEndpoint(next.address)) {
-				if (next.address.find(':') != std::string::npos && !next.address.starts_with("[")) successor.hostAddress = "[" + next.address + "]";
-				successor.hostAddress += ":" + std::to_string(next.port);
-			}
+			successor.hostAddress = NetRejoinAddress(next.address, next.port);
 			if (m_TicketStore.Store(successor, &error)) record = std::move(successor);
 			else System::PrintDiagnosticLine("[net-match] cannot save the successor rejoin route: " + error);
 		}
@@ -11830,7 +11837,8 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::DriveOrdinaryTicketRejoin(uint64_t steadyMs) {
 		if (steadyMs == 0) steadyMs = SteadyNowMs();
-		const uint64_t nowMs = UnixNowMs(nullptr);
+		// Menus and the recovery pump start attempts on the monotonic clock.
+		const uint64_t nowMs = steadyMs;
 		bool failed = false, retry = false;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
@@ -11866,21 +11874,34 @@ static std::string ResyncSaveName() {
 		if (!failed || BeginHeldRejoinOnNextHost()) return;
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_OrdinaryTicketRejoin = m_HeldRejoinDriving = false;
-		m_ReconnectUx.NoteRefused(m_StatusText.empty() ? "Could not rejoin this match. Return to Multiplayer to choose another game." : m_StatusText);
+		if (m_ReconnectUx.GetState() != NetReconnectUxState::GaveUp && !m_ReconnectUx.IsRefused())
+			m_ReconnectUx.NoteRefused(m_StatusText.empty() ? "Could not rejoin this match. Return to Multiplayer to choose another game." : m_StatusText);
 	}
 
 	bool NetMatchService::BeginTicketRejoinOnRoute(std::string* error, const NetMatchServiceRequest* liveRoute) {
 		NetH4TicketRecord record;
 		m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
 		const NetH4TicketLoadResult load = m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr);
-		m_ReconnectUx.OfferStoredTicket(load, record.hostAddress);
+		m_ReconnectUx.OfferStoredTicket(load, record.hostAddress, record.directorySessionId.empty() ? std::string() : "your online match");
 		if (load != NetH4TicketLoadResult::Loaded) {
-			if (error) *error = m_ReconnectUx.GetOfferText().empty() ? "no reconnect ticket to rejoin with" : m_ReconnectUx.GetOfferText();
+			const std::string reason = m_ReconnectUx.GetOfferText().empty() ? "No saved match to rejoin. Choose a game from Multiplayer." : m_ReconnectUx.GetOfferText();
+			if (error) *error = reason;
+			m_ReconnectUx.NoteRefused(reason);
+			SetState(NetMatchServiceState::Failed, reason, reason);
 			return false;
 		}
 		const bool world = m_MatchConfig.persistentWorld || m_LastJoinTargetPersistentWorld;
 		m_TicketRejoinAttemptStartedMs = SteadyNowMs();
-		return Start(liveRoute ? BuildHeldRejoinRequest(record, m_LocalName, world, *liveRoute) : BuildTicketRejoinRequest(record, m_LocalName, world), error);
+		if (m_OrdinaryTicketRejoin && m_ReconnectUx.GetState() != NetReconnectUxState::Retrying) {
+			if (m_ReconnectUx.GetState() != NetReconnectUxState::Waiting) m_ReconnectUx.RequestManualRetry(m_TicketRejoinAttemptStartedMs);
+			m_ReconnectUx.NoteAttemptStarted(m_TicketRejoinAttemptStartedMs);
+		}
+		std::string reason;
+		if (Start(liveRoute ? BuildHeldRejoinRequest(record, m_LocalName, world, *liveRoute) : BuildTicketRejoinRequest(record, m_LocalName, world), &reason)) return true;
+		// A refusal before the worker starts is still a finished attempt, never an idle loop.
+		SetState(NetMatchServiceState::Failed, "Could not rejoin the match", reason);
+		if (error) *error = reason;
+		return false;
 	}
 
 	NetSessionConfig NetMatchService::BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig) const {

@@ -17750,6 +17750,17 @@ namespace RTE {
 	}
 
 	bool TestInternetTicketRecovery(std::string* error) {
+		for (const auto& address: {"ice:ip:::1", "ice:str:successor", "192.0.2.4", "2001:db8::4"}) {
+			NetReconnectUx prompt;
+			prompt.OfferStoredTicket(NetH4TicketLoadResult::Loaded, address);
+			if (prompt.GetOfferText().find(address) != std::string::npos) {
+				*error = "a saved rejoin prompt exposes its transport address"; return false;
+			}
+		}
+		if (NetRejoinAddress("ice:str:successor", 41234) != "ice:str:successor" || NetRejoinAddress("ice:ip:::1", 41234) != "ice:ip:::1" ||
+		    NetRejoinAddress("192.0.2.4", 41234) != "192.0.2.4:41234" || NetRejoinAddress("2001:db8::4", 41234) != "[2001:db8::4]:41234") {
+			*error = "saving a successor corrupts its ICE identity or loses its direct port"; return false;
+		}
 		NetH4TicketRecord record;
 		record.hostAddress = "ice:";
 		record.directorySessionId = "recovery-session";
@@ -17762,21 +17773,22 @@ namespace RTE {
 			return false;
 		}
 		NetMatchService client;
-		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 		client.m_ReconnectUx.NoteDropped(now, "Lost host");
+		client.m_ReconnectUx.SetRetryWindowMs(NetMatchService::c_TicketRejoinAttemptBudgetMs * NetReconnectUx::c_MaxAttempts + 300000);
 		client.m_ReconnectUx.NoteAttemptStarted(now);
 		client.m_OrdinaryTicketRejoin = client.m_HeldRejoinDriving = true;
 		client.m_State = NetMatchServiceState::Failed;
 		client.DriveOrdinaryTicketRejoin();
-		if (client.GetReconnectUx().GetState() == NetReconnectUxState::Retrying || client.m_HeldRejoinRetryAtMs == 0) {
+		if (client.GetReconnectUx().GetState() != NetReconnectUxState::Waiting || client.m_HeldRejoinRetryAtMs == 0 || !client.m_OrdinaryTicketRejoin) {
 			*error = "a failed manual rejoin still shows attempt 1 in flight instead of its failure and scheduled retry";
 			return false;
 		}
 		client.m_State = NetMatchServiceState::Starting;
 		client.m_HeldRejoinRetryAtMs = 0;
-		client.m_TicketRejoinAttemptStartedMs = 100;
+		client.m_TicketRejoinAttemptStartedMs = now;
 		client.m_ReconnectUx.NoteAttemptStarted(now);
-		client.DriveOrdinaryTicketRejoin(100 + NetMatchService::c_TicketRejoinAttemptBudgetMs);
+		client.DriveOrdinaryTicketRejoin(now + NetMatchService::c_TicketRejoinAttemptBudgetMs);
 		if (!client.m_CancelRequested.load() || client.GetReconnectUx().GetState() == NetReconnectUxState::Retrying ||
 		    client.GetLobbySnapshot().statusText.find("did not answer") == std::string::npos) {
 			*error = "an unanswered Connecting attempt is not cancelled with a visible outcome at its deadline"; return false;
@@ -17799,6 +17811,7 @@ namespace RTE {
 			*error = "a successful ticket return changed the later automatic recovery window"; return false;
 		}
 		{
+			const uint64_t unixNow = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
 			struct Restore {
 				std::string path = NetMatchService::s_TicketStorePath;
 				bool admission = NetMatchService::IsAdmissionEnabled();
@@ -17826,7 +17839,7 @@ namespace RTE {
 			record.recordVersion = NetReconnectTicketStore::RecordVersionFor(false);
 			record.epoch.fill(0x31); record.credential.fill(0x73);
 			record.stableSeat = 1; record.holderGeneration = 1; record.hostSessionId = 777;
-			record.hostAddress = "192.0.2.1:41010"; record.issuedAtUnixMs = now;
+			record.hostAddress = "192.0.2.1:41010"; record.issuedAtUnixMs = unixNow;
 			departing.m_TicketStore.SetPath(path.string());
 			if (!departing.m_TicketStore.Store(record, error)) return false;
 			departing.m_MatchWasRunning = departing.m_IsHost = true;
@@ -17835,7 +17848,7 @@ namespace RTE {
 			departing.ConfirmHostLeave(NetHostLeaveOutcome::HandsOver);
 			departing.LeaveMatch("Match left");
 			NetH4TicketRecord returned;
-			if (departing.m_TicketStore.Load(now, returned, error) != NetH4TicketLoadResult::Loaded || returned.hostAddress != "ice:" ||
+			if (departing.m_TicketStore.Load(unixNow, returned, error) != NetH4TicketLoadResult::Loaded || returned.hostAddress != "ice:" ||
 			    returned.directorySessionId != record.directorySessionId || departing.m_TicketStore.LoadRoutes(returned).empty()) {
 				*error = "the departing Internet host saved a private IP instead of the successor's rendezvous and session"; return false;
 			}

@@ -497,13 +497,12 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		if (guiEvent.GetControl() == m_RejoinButton) {
 			NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
 			reconnect.RequestManualRetry(NetLockstepNowMs());
+			reconnect.NoteAttemptStarted(NetLockstepNowMs());
 			reconnect.DismissOffer();
 			std::string rejoinError;
 			if (!g_NetMatchService.BeginTicketRejoin(&rejoinError)) {
 				reconnect.NoteAttemptFailed(NetLockstepNowMs(), rejoinError);
 				m_RecoveryError->SetText(rejoinError.empty() ? "Rejoin failed." : rejoinError);
-			} else {
-				reconnect.NoteAttemptStarted(NetLockstepNowMs());
 			}
 		} else if (guiEvent.GetControl() == m_CancelRecoveryButton) {
 			NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();

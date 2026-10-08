@@ -1419,12 +1419,12 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
 		reconnect.RequestManualRetry(MenuClockMs());
 		reconnect.DismissOffer();
+		reconnect.NoteAttemptStarted(MenuClockMs());
 		std::string rejoinError;
 		if (!g_NetMatchService.BeginTicketRejoin(&rejoinError)) {
 			reconnect.NoteAttemptFailed(MenuClockMs(), rejoinError);
 			m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(rejoinError));
 		} else {
-			reconnect.NoteAttemptStarted(MenuClockMs());
 			m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
 		}
 		g_GUISound.ButtonPressSound()->Play();
