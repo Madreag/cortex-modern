@@ -484,6 +484,9 @@ namespace RTE::CheckpointLua {
 		CaptureScope(const CaptureScope&) = delete;
 		CaptureScope& operator=(const CaptureScope&) = delete;
 
+		/// Reads the stack-top userdata's live class marker, including its Lua fallback.
+		const luabind::detail::object_rep* BindingObject(const TValue& subject) { return ClassObject(subject); }
+
 		void Capture() {
 			CheckThread();
 			if (m_Captured || !m_Image) throw std::logic_error("native image capture cannot be repeated");

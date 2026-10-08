@@ -6430,7 +6430,11 @@ namespace RTE::CheckpointLua {
 				lua_settop(state, top);
 				return true;
 			}
-			explicit DescriptorRootScope(lua_State* source, int originalTop, int roots, const TValue& callbacks, int stateIndex, std::span<const TValue> callbackFunctions = {}) : state(source) {
+			explicit DescriptorRootScope(lua_State* source, int originalTop, int roots, const TValue& callbacks, int stateIndex, std::span<const TValue> callbackFunctions = {}) :
+			    DescriptorRootScope(source, originalTop, roots, callbacks, stateIndex, callbackFunctions,
+			        [source](const TValue&) { return luabind::detail::is_class_object(source, -1); }) {}
+			template<class ObjectAt>
+			DescriptorRootScope(lua_State* source, int originalTop, int roots, const TValue& callbacks, int stateIndex, std::span<const TValue> callbackFunctions, ObjectAt objectAt) : state(source) {
 				if (!lua_checkstack(state, 32)) throw std::runtime_error("native descriptor roots exhausted the Lua stack");
 				seen.Reserve(2048);
 				if (GCobj* last = gcref(G(state)->gc.mmudata)) {
@@ -6478,7 +6482,7 @@ namespace RTE::CheckpointLua {
 							lua_settop(state, top);
 							continue;
 						}
-						if (auto* rep = luabind::detail::is_class_object(state, index)) {
+						if (const auto* rep = objectAt(value)) {
 							// Members reads the class table; binding metatables stay outside the serialized graph.
 							if (CheckpointWriter::BatchEnabled() && rep->crep()) { rep->crep()->get_table(state); Queue(-1); lua_pop(state, 1); }
 							if (rep->get_lua_table().is_valid()) { rep->get_lua_table().get(state); Queue(-1); lua_pop(state, 1); }
@@ -6805,7 +6809,8 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		const auto descriptorStarted = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		const uint64_t descriptorCpu = phaseCosts ? CheckpointThreadCpuUnits() : 0;
 		CheckpointLua::DescriptorRootScope descriptorRoots(m_State, restore.top, roots, image->callbacks, image->stateIndex,
-			image->callbackObjects ? std::span<const TValue>(image->callbackObjects->roots) : std::span<const TValue>());
+			image->callbackObjects ? std::span<const TValue>(image->callbackObjects->roots) : std::span<const TValue>(),
+			[&natives](const TValue& value) { return natives.BindingObject(value); });
 		const uint64_t descriptorCpuDone = phaseCosts ? CheckpointThreadCpuUnits() : 0;
 		const auto descriptorDone = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		natives.Capture();
@@ -9390,13 +9395,22 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		lua_getfield(state, -1, "leaf");
 		const void* instanceMember = gcval(&state->top[-1]);
 		lua_settop(state, top);
-		bool rootsExact = false;
+		bool rootsExact = false, directRootsExact = false;
 		{
 			CheckpointWriter::BatchScope batches(true);
+			CheckpointLua::NativeCache cache(state);
+			CheckpointLua::CaptureScope natives(state, cache);
 			TValue callbacks; setnilV(&callbacks);
 			lua_pushnil(state);
-			CheckpointLua::DescriptorRootScope roots(state, top, lua_gettop(state), callbacks, 1);
-			rootsExact = !roots.userdata.Contains(bindingOnly) && roots.userdata.Contains(classMember) && roots.userdata.Contains(instanceMember);
+			{
+				CheckpointLua::DescriptorRootScope roots(state, top, lua_gettop(state), callbacks, 1);
+				rootsExact = !roots.userdata.Contains(bindingOnly) && roots.userdata.Contains(classMember) && roots.userdata.Contains(instanceMember);
+			}
+			{
+				CheckpointLua::DescriptorRootScope roots(state, top, lua_gettop(state), callbacks, 1, {},
+				    [&natives](const TValue& value) { return natives.BindingObject(value); });
+				directRootsExact = !roots.userdata.Contains(bindingOnly) && roots.userdata.Contains(classMember) && roots.userdata.Contains(instanceMember);
+			}
 			lua_settop(state, top);
 		}
 		std::string ordinary;
@@ -9408,9 +9422,40 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			captured = captured && descriptorState.CaptureScriptGraph(frozen, problems, true);
 		}
 		descriptorState.RunScriptString("_DescriptorCapture.leaf.X = 29; Vector._CheckpointDescriptorMember.X = 31");
-		const bool exact = rootsExact && captured && ordinary == std::async(std::launch::async, [frozen] { return frozen.Text(); }).get();
+		const bool exact = rootsExact && directRootsExact && captured && ordinary == std::async(std::launch::async, [frozen] { return frozen.Text(); }).get();
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " userdata_descriptor_walk_keeps_members_without_binding_metatables" << std::endl;
 		for (const auto& problem: problems) std::cout << "[script-graph-selftest] userdata descriptor capture: " << problem << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
+		LuaStateWrapper markerState;
+		markerState.Initialize();
+		bool exact = markerState.RunScriptString("_DescriptorMarker = Vector(3, 5); _DescriptorMarkerLookups = 0") == 0;
+		lua_State* state = markerState.GetLuaState();
+		const int top = lua_gettop(state);
+		{
+			CheckpointWriter::BatchScope batches(true);
+			CheckpointLua::NativeCache cache(state);
+			CheckpointLua::CaptureScope natives(state, cache);
+			for (const auto& [change, calls]: std::array<std::pair<const char*, unsigned>, 7>{{
+			    {"meta.__luabind_class = true", 0}, {"meta.__luabind_class = false", 0},
+			    {"meta.__luabind_class = 0", 0}, {"meta.__luabind_class = ''", 0},
+			    {"meta.__luabind_class = nil", 0},
+			    {"meta.__luabind_class = nil; debug.setmetatable(meta, { __index = function(t, k) _DescriptorMarkerLookups = _DescriptorMarkerLookups + 1; return true end })", 2},
+			    {"debug.setmetatable(meta, { __index = function(t, k) _DescriptorMarkerLookups = _DescriptorMarkerLookups + 1; return false end })", 2}}}) {
+				if (!exact) break;
+				const bool changed = markerState.RunScriptString(std::string("local meta = debug.getmetatable(_DescriptorMarker); _DescriptorMarkerLookups = 0; ") + change) == 0;
+				if (!changed) { exact = false; break; }
+				lua_getglobal(state, "_DescriptorMarker");
+				const TValue value = state->top[-1];
+				const auto* ordinary = luabind::detail::is_class_object(state, -1);
+				const auto* direct = natives.BindingObject(value);
+				lua_getglobal(state, "_DescriptorMarkerLookups");
+				exact = ordinary == direct && lua_tointeger(state, -1) == static_cast<lua_Integer>(calls) && exact;
+				lua_settop(state, top);
+			}
+		}
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " descriptor_class_markers_stay_live_and_keep_metatable_fallback_effects" << std::endl;
 		checkpointValues = exact && checkpointValues;
 	}
 	{
