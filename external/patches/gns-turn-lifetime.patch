@@ -106,7 +106,7 @@ index 5ce6b59..70f48e3 100644
  	/// We *mostly* work on top of the sockets system, but in a few places we
  	/// need to break the abstraction and do things other clients of the API
 diff --git a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
-index de4b490..7b45734 100644
+index de4b490..2183e04 100644
 --- a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
 +++ b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
 @@ -5,12 +5,22 @@
@@ -1407,7 +1407,7 @@ index de4b490..7b45734 100644
  }
  
  void CSteamNetworkingICESession::Think_KeepAliveOnCandidates( SteamNetworkingMicroseconds usecNow )
-@@ -2331,6 +2845,115 @@ void CSteamNetworkingICESession::Think_KeepAliveOnCandidates( SteamNetworkingMic
+@@ -2331,6 +2845,116 @@ void CSteamNetworkingICESession::Think_KeepAliveOnCandidates( SteamNetworkingMic
      }
  }
  
@@ -1462,6 +1462,7 @@ index de4b490..7b45734 100644
 +{
 +	SteamNetworkingGlobalLock lock( "TURN refresh selftest" );
 +	CSteamNetworkingICESession session( k_EICERole_Controlling, nullptr, 0 );
++	session.m_nPermittedCandidateTypes = 0;
 +	session.m_vecInterfaces.emplace_back( new ICESessionInterface( session, 1, 24 ) );
 +	auto &intf = *session.m_vecInterfaces.back();
 +	if ( !intf.m_boundAddr.SetFromString( "192.0.2.1:50000" )
@@ -1523,7 +1524,7 @@ index de4b490..7b45734 100644
  void CSteamNetworkingICESession::Think_TestPeerConnectivity()
  {
  	SteamNetworkingGlobalLock::AssertHeldByCurrentThread( "CSteamNetworkingICESession::Think_TestPeerConnectivity" );
-@@ -2346,19 +2969,24 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
+@@ -2346,19 +2970,24 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
              ICELocalCandidate localCandidates[2];
              int nLocalCandidates = 0;
  
@@ -1553,7 +1554,7 @@ index de4b490..7b45734 100644
                          continue;
                      bool bFound = false;
                      for ( ICECandidatePair *pPair : m_vecCandidatePairs )
-@@ -2406,31 +3034,37 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
+@@ -2406,31 +3035,37 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
  
      if ( pPairToCheck == nullptr )
      {
@@ -1606,7 +1607,7 @@ index de4b490..7b45734 100644
              pCandidatePair->m_nState = kICECandidatePairState_Waiting;
              if ( pPairToCheck == nullptr )
                  pPairToCheck = pCandidatePair;
-@@ -2529,9 +3163,15 @@ void CSteamNetworkingICESession::STUNRequestCallback_PeerConnectivityCheck( cons
+@@ -2529,9 +3164,15 @@ void CSteamNetworkingICESession::STUNRequestCallback_PeerConnectivityCheck( cons
  
      // Always update the pair state so it is never left stuck in InProgress with no
      // active request (which would break the invariant checked in OnPacketReceived).
@@ -1623,7 +1624,7 @@ index de4b490..7b45734 100644
          return;
      }
      pPair->m_nState = kICECandidatePairState_Succeeded;
-@@ -2634,6 +3274,8 @@ void ICESessionInterface::NotifyLocalCandidateDiscovered( ICECandidateKind kind,
+@@ -2634,6 +3275,8 @@ void ICESessionInterface::NotifyLocalCandidateDiscovered( ICECandidateKind kind,
              uCounter += stunIPv6[i];
          }
          nFoundation = ( m_boundAddr.GetPort() + m_addrSTUNServer.GetPort() ) + ( uCounter << 15 ) + (int)kind;
@@ -1632,7 +1633,7 @@ index de4b490..7b45734 100644
      }
  
      char connectionAddr[ k_ncchMaxNetAdrString ];
-@@ -2674,6 +3316,7 @@ void ICESessionInterface::NotifyLocalCandidateDiscovered( ICECandidateKind kind,
+@@ -2674,6 +3317,7 @@ void ICESessionInterface::NotifyLocalCandidateDiscovered( ICECandidateKind kind,
      }
      if ( !( eType & m_session.m_nPermittedCandidateTypes ) )
          return;
@@ -1640,7 +1641,7 @@ index de4b490..7b45734 100644
      pCallbacks->OnLocalCandidateDiscovered( eType, szCandidate );
  }
  
-@@ -2802,6 +3445,19 @@ void CConnectionTransportP2PICE_Valve::RecvRendezvous( const CMsgICERendezvous &
+@@ -2802,6 +3446,19 @@ void CConnectionTransportP2PICE_Valve::RecvRendezvous( const CMsgICERendezvous &
      }
  }
  
