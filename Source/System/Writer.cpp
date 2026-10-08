@@ -1452,6 +1452,30 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			      "mixed_primitive_runs_outlive_strings_containers_and_clocks");
 		}
 		{
+			CheckpointText frozen, ordinary;
+			std::string full, shared;
+			{
+				std::array<std::string, 3> strings{std::string("a\0b\xff", 4), "", std::string(32769, 'x')};
+				std::string array[] = {"", std::string("z\0y", 3)};
+				const auto saveStrings = [&] {
+					CheckpointWriter writer("OwnedStringBlock1");
+					writer(strings, -0.0F, array, std::numeric_limits<int64_t>::min(), strings[2]);
+					writer.PerPeer(array, std::bit_cast<double>(uint64_t{0x7FF8000000000031}), strings);
+					return writer.Text();
+				};
+				ordinary = CheckpointWriter::CaptureNative(saveStrings);
+				full = ordinary.Text(); shared = ordinary.SharedText();
+				{
+					CheckpointWriter::BatchScope batch(true);
+					frozen = CheckpointWriter::CaptureNative(saveStrings);
+				}
+				strings.fill("changed"); array[0] = "changed";
+			}
+			const auto actual = std::async(std::launch::async, [frozen] { return std::pair{frozen.Text(), frozen.SharedText()}; }).get();
+			check(frozen.SameValues(ordinary) && actual.first == full && actual.second == shared,
+			      "packed_string_blocks_preserve_binary_arrays_peer_lengths_and_source_lifetime");
+		}
+		{
 			struct InlineRecord {
 				Vector position{-0.0F, std::bit_cast<float>(uint32_t{0x7FC00031})};
 				Timer timer;

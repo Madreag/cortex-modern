@@ -160,6 +160,15 @@ namespace RTE {
 		/// Appends the same typed scalar tape as the individual value calls.
 		void AppendValues(std::string_view values) { m_Values.append(values); }
 		void PrimitiveBlock(std::string_view values, PrimitiveDecoder decoder);
+		/// Copies variable-size fields directly into their owned tape allocation.
+		template<class Capture> void CapturePrimitiveBlock(size_t size, PrimitiveDecoder decoder, const Capture& capture) {
+			Copy(ValueKind::PrimitiveBlock, decoder, static_cast<uint64_t>(size));
+			const size_t offset = m_Values.size();
+			if (size > m_Values.max_size() - offset) throw std::length_error("checkpoint field block is too large");
+			m_Values.resize(offset + size);
+			capture(m_Values.data() + offset);
+			m_HasPrimitiveBlocks = true;
+		}
 		void Raw(std::string_view text);
 		void Integer(int64_t value, bool space = false);
 		void Unsigned(uint64_t value, bool space = false);

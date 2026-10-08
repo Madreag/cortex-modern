@@ -219,7 +219,7 @@ namespace RTE {
 			Buffer().SizedRunEnd();
 		}
 		template<class T> static constexpr size_t PrimitiveWords() {
-			if constexpr (std::is_integral_v<T> || std::is_enum_v<T> || std::is_same_v<T, float> || std::is_same_v<T, double>) return 1;
+			if constexpr (std::is_integral_v<T> || std::is_enum_v<T> || std::is_same_v<T, float> || std::is_same_v<T, double> || std::is_same_v<T, std::string>) return 1;
 			else if constexpr (std::is_same_v<T, Vector>) return 2;
 			else if constexpr (std::is_same_v<T, Box>) return 4;
 			else if constexpr (std::is_array_v<T>) return std::extent_v<T> * PrimitiveWords<std::remove_extent_t<T>>();
@@ -237,10 +237,25 @@ namespace RTE {
 			}
 		}
 		template<size_t Begin, class Fields, size_t... Index> void CapturePrimitives(const Fields& fields, std::index_sequence<Index...>) {
-			std::array<char, (PrimitiveBytes<FieldType<Fields, Begin + Index>>() + ... + 0)> record;
-			size_t at = 0;
-			(WritePrimitive(record.data(), at, std::get<Begin + Index>(fields)), ...);
-			Buffer().PrimitiveBlock(std::string_view(record.data(), at), &DecodePrimitives<FieldType<Fields, Begin + Index>...>);
+			constexpr size_t fixedBytes = (PrimitiveBytes<FieldType<Fields, Begin + Index>>() + ... + 0);
+			const auto copy = [&](char* into) {
+				size_t at = 0;
+				(WritePrimitive(into, at, std::get<Begin + Index>(fields)), ...);
+			};
+			if constexpr ((PrimitiveHasString<FieldType<Fields, Begin + Index>>() || ...)) {
+				size_t size = fixedBytes;
+				const auto add = [&](const auto& field) {
+					const size_t bytes = PrimitiveStringBytes(field);
+					if (bytes > std::numeric_limits<size_t>::max() - size) throw std::length_error("checkpoint string block is too large");
+					size += bytes;
+				};
+				(add(std::get<Begin + Index>(fields)), ...);
+				Buffer().CapturePrimitiveBlock(size, &DecodePrimitives<FieldType<Fields, Begin + Index>...>, copy);
+			} else {
+				std::array<char, fixedBytes> record;
+				copy(record.data());
+				Buffer().PrimitiveBlock(std::string_view(record.data(), record.size()), &DecodePrimitives<FieldType<Fields, Begin + Index>...>);
+			}
 		}
 		template<size_t Begin, class Fields> void CaptureFields(const Fields& fields) {
 			if constexpr (Begin < std::tuple_size_v<Fields>) {
@@ -255,7 +270,12 @@ namespace RTE {
 			}
 		}
 		template<class T> static void WritePrimitive(char* bytes, size_t& at, const T& value) {
-			if constexpr (std::is_same_v<T, Vector>) {
+			if constexpr (std::is_same_v<T, std::string>) {
+				const uint64_t size = value.size();
+				WritePrimitive(bytes, at, size);
+				std::memcpy(bytes + at, value.data(), value.size());
+				at += value.size();
+			} else if constexpr (std::is_same_v<T, Vector>) {
 				WritePrimitive(bytes, at, value.m_X); WritePrimitive(bytes, at, value.m_Y);
 			} else if constexpr (std::is_same_v<T, Box>) {
 				WritePrimitive(bytes, at, value.m_Corner); WritePrimitive(bytes, at, value.m_Width); WritePrimitive(bytes, at, value.m_Height);
@@ -267,11 +287,30 @@ namespace RTE {
 			}
 		}
 		template<class T> static constexpr size_t PrimitiveBytes() {
-			if constexpr (std::is_same_v<T, Vector>) return 2 * sizeof(float);
+			if constexpr (std::is_same_v<T, std::string>) return sizeof(uint64_t);
+			else if constexpr (std::is_same_v<T, Vector>) return 2 * sizeof(float);
 			else if constexpr (std::is_same_v<T, Box>) return 4 * sizeof(float);
 			else if constexpr (std::is_array_v<T>) return std::extent_v<T> * PrimitiveBytes<std::remove_extent_t<T>>();
 			else if constexpr (CheckpointArray<T>) return std::tuple_size_v<T> * PrimitiveBytes<typename T::value_type>();
 			else return sizeof(T);
+		}
+		template<class T> static constexpr bool PrimitiveHasString() {
+			if constexpr (std::is_same_v<T, std::string>) return true;
+			else if constexpr (std::is_array_v<T>) return PrimitiveHasString<std::remove_extent_t<T>>();
+			else if constexpr (CheckpointArray<T>) return PrimitiveHasString<typename T::value_type>();
+			else return false;
+		}
+		template<class T> static size_t PrimitiveStringBytes(const T& value) {
+			if constexpr (std::is_same_v<T, std::string>) return value.size();
+			else if constexpr (std::is_array_v<T> || CheckpointArray<T>) {
+				size_t size = 0;
+				for (const auto& field: value) {
+					const size_t bytes = PrimitiveStringBytes(field);
+					if (bytes > std::numeric_limits<size_t>::max() - size) throw std::length_error("checkpoint string array is too large");
+					size += bytes;
+				}
+				return size;
+			} else return 0;
 		}
 		template<class T> static T ReadPrimitive(std::string_view& values) {
 			if (values.size() < sizeof(T)) throw std::logic_error("truncated owned primitive block");
@@ -281,7 +320,22 @@ namespace RTE {
 			return value;
 		}
 		template<class T> static void DecodePrimitive(std::string& text, std::string_view& values, bool tape) {
-			if constexpr (std::is_same_v<T, Vector>) {
+			if constexpr (std::is_same_v<T, std::string>) {
+				const uint64_t size = ReadPrimitive<uint64_t>(values);
+				if (size > values.size()) throw std::logic_error("truncated owned string block");
+				if (tape) {
+					text.push_back(static_cast<char>(CheckpointBuffer::ValueKind::String));
+					text.append(reinterpret_cast<const char*>(&size), sizeof(size));
+				} else {
+					char buffer[32];
+					const auto result = std::to_chars(buffer, buffer + sizeof(buffer), size);
+					if (result.ec != std::errc{}) throw std::logic_error("could not format owned string length");
+					text.append(buffer, result.ptr); text.push_back(' ');
+				}
+				text.append(values.data(), static_cast<size_t>(size));
+				if (!tape) text.push_back(' ');
+				values.remove_prefix(static_cast<size_t>(size));
+			} else if constexpr (std::is_same_v<T, Vector>) {
 				DecodePrimitive<float>(text, values, tape); DecodePrimitive<float>(text, values, tape);
 			} else if constexpr (std::is_same_v<T, Box>) {
 				for (size_t index = 0; index < 4; ++index) DecodePrimitive<float>(text, values, tape);
