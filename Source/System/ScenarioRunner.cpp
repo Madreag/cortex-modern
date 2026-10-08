@@ -2469,36 +2469,37 @@ namespace RTE {
 		}
 	}
 
-	void ScenarioRunner::EnqueueLocalGameCommand(const NetGameCommand& command) {
-		if (s_WorldCatchUpActive) return;
+	bool ScenarioRunner::EnqueueLocalGameCommand(const NetGameCommand& command) {
+		if (s_WorldCatchUpActive) return false;
 		if (g_MovableMan.IsRestoringSnapshot()) {
-			return;
+			return false;
 		}
 		if (g_MovableMan.IsSpeculative()) {
 			g_MovableMan.ReportSpeculationViolation("queueing a wire command for", nullptr);
-			return;
+			return false;
 		}
 		const NetGameCommandType enqueuedType = NetGameCommandTypeOf(command.payload);
 		if (enqueuedType != NetGameCommandType::Reseat && enqueuedType != NetGameCommandType::WorldTransition && enqueuedType != NetGameCommandType::Checkpoint) {
 			const uint8_t sender = command.senderPeerId != 0 ? command.senderPeerId : GetLockstepLocalPeerId();
 			if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
 				if (!IsLockstepAIOrderAuthorized(sender, *order)) {
-					return;
+					return false;
 				}
 			} else if (const NetGameAIScriptMessage* message = std::get_if<NetGameAIScriptMessage>(&command.payload)) {
 				// The writer is the authority for a message its pass sent, exactly as for an AI order.
 				if (!IsLockstepAIWriteAuthorized(sender, message->team, message->writerUID, message->writerUID)) {
-					return;
+					return false;
 				}
 			} else if (const NetGameAIGib* gib = std::get_if<NetGameAIGib>(&command.payload)) {
 				if (!IsLockstepAIWriteAuthorized(sender, gib->team, gib->writerUID, gib->writerUID)) {
-					return;
+					return false;
 				}
 			} else if (!IsLockstepTeamCommandSender(NetGameCommandTeam(command.payload), sender)) {
-				return;
+				return false;
 			}
 		}
 		s_PendingLocalGameCommands.push_back(command);
+		return true;
 	}
 
 	std::vector<NetGameCommand> ScenarioRunner::DrainLocalGameCommands() {

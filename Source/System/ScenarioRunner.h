@@ -540,7 +540,7 @@ namespace RTE {
 
 		/// Enqueue an owner-issued game command to ride the next local lockstep frame; the coordinator stamps
 		/// the sender and both peers apply it at the synced frame.
-		static void EnqueueLocalGameCommand(const NetGameCommand& command);
+		static bool EnqueueLocalGameCommand(const NetGameCommand& command);
 		static std::vector<NetGameCommand> DrainLocalGameCommands();
 
 		/// Pin the sim-affecting config to canonical values for a deterministic run, so the sim is

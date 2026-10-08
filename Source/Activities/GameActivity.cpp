@@ -1159,7 +1159,7 @@ void GameActivity::End() {
 }
 
 bool GameActivity::IsLockstepPlacement() {
-	return ScenarioRunner::IsLockstepControllerSyncActive();
+	return ScenarioRunner::HasLockstepCoordinator();
 }
 
 bool GameActivity::IsPlacementConfirmKeyAvailable(int player, int scancode) const {
@@ -1273,7 +1273,7 @@ bool GameActivity::CommitLockstepBrainPlacement(int player, const std::string& c
 	    resident && resident->GetClassName() == className && resident->GetPresetName() == preset && resident->GetModuleName() == module) {
 		placement.hFlipped = resident->IsHFlipped();
 	}
-	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, placement});
+	if (!ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, placement})) return false;
 	m_LockstepPlacementSubmitted[player] = true;
 	{
 		std::ostringstream line;
@@ -1933,6 +1933,14 @@ void GameActivity::UpdateEditing() {
 			// A match seat commits its placement instead of starting on its own: readiness comes back from
 			// the wire, on the same frame, for every peer.
 			if (lockstep) {
+				// Done is a local choice until the seat can send it. Catch-up refuses live commands,
+				// so leave the editor on Done and submit once the same seat is back.
+				if (!m_ReadyToStart[player] && !m_LockstepPlacementSubmitted[player] &&
+				    (ScenarioRunner::WorldCatchUpActive() || !ScenarioRunner::IsLockstepControllerSyncActive() ||
+				     !ScenarioRunner::IsLockstepTeamCommandSender(m_Team[player], ScenarioRunner::GetLockstepLocalPeerId()))) {
+					g_FrameMan.SetScreenText("Reconnecting - your placement will be sent when you are back", ScreenOfPlayer(player), 333);
+					continue;
+				}
 				if (!m_ReadyToStart[player] && !m_LockstepPlacementSubmitted[player] && !SubmitLockstepBrainPlacement(player)) {
 					const Entity* pBrain = g_PresetMan.GetEntityPreset("Actor", "Brain Case");
 					if (pBrain)
@@ -4399,9 +4407,29 @@ bool GameActivity::RunSetupEditorSelfTest(bool confirmOnly) {
 		const auto commands = ScenarioRunner::DrainLocalGameCommands();
 		const bool oneBrain = commands.size() == 1 && std::holds_alternative<NetGamePlaceBrain>(commands.front().payload);
 		drawFrame(); drawFrame();
-		const bool passed = finished && confirmed && oneBrain && !game->m_ReadyToStart[0] && ScenarioRunner::DrainLocalGameCommands().empty();
+		bool passed = finished && confirmed && oneBrain && !game->m_ReadyToStart[0] && ScenarioRunner::DrainLocalGameCommands().empty();
 		System::PrintDiagnosticLine(std::string("[placement-confirm-selftest] ") + (passed ? "PASS " : "FAIL ") +
 		    "enter_submits_one_validated_brain_and_waits_for_shared_commit " + observation + " commands=" + std::to_string(commands.size()));
+		if (!passed) return false;
+		{
+			struct ReleaseCatchUp { ~ReleaseCatchUp() { ScenarioRunner::ReleaseWorldCatchUp(); } } releaseCatchUp;
+			game->m_LockstepPlacementSubmitted[0] = false;
+			editor->SetEditorGUIMode(SceneEditorGUI::ADDINGOBJECT);
+			if (!ScenarioRunner::InstallWorldCatchUp(1, {}, &error)) return false;
+			const bool refused = !ScenarioRunner::EnqueueLocalGameCommand({1, NetGamePlaceBrain{}});
+			if (!MenuAutomation::HandGameKey("Return", [&] { return editor->GetEditorGUIMode() == SceneEditorGUI::DONEEDITING; }, "placement while reconnecting", observation) ||
+			    !finishHand()) return false;
+			passed = refused && !game->m_LockstepPlacementSubmitted[0] && !game->m_ReadyToStart[0] && ScenarioRunner::DrainLocalGameCommands().empty();
+			ScenarioRunner::ReleaseWorldCatchUp();
+			drawFrame(); drawFrame();
+			const auto returnedCommands = ScenarioRunner::DrainLocalGameCommands();
+			passed = passed && game->m_LockstepPlacementSubmitted[0] && returnedCommands.size() == 1 &&
+			    returnedCommands.front().payload == commands.front().payload && !game->m_ReadyToStart[0];
+			drawFrame(); drawFrame();
+			passed = passed && ScenarioRunner::DrainLocalGameCommands().empty();
+			System::PrintDiagnosticLine(std::string("[placement-confirm-selftest] ") + (passed ? "PASS " : "FAIL ") +
+			    "done_during_catch_up_submits_once_after_return");
+		}
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		return passed;
 	}
