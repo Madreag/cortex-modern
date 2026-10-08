@@ -34,8 +34,8 @@ namespace RTE {
 			if (found != cache.entries.end()) cache.last = static_cast<size_t>(found - cache.entries.begin());
 			else {
 				const Target* target = dynamic_cast<Target*>(source);
-				cache.last = cache.entries.size();
 				cache.entries.push_back({&type, from, target ? std::optional<ptrdiff_t>(reinterpret_cast<const char*>(target) - complete) : std::nullopt});
+				cache.last = cache.entries.size() - 1;
 			}
 		}
 		// The source subobject distinguishes repeated and virtual bases of the same complete type.
