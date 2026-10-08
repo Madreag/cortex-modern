@@ -11,6 +11,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <random>
 #include <set>
 #include <thread>
 #include <utility>
@@ -195,8 +196,14 @@ namespace RTE {
 
 		bool AcquireGns(std::string* error) {
 			if (!g_GnsInitialized) {
+				// Every migration listener needs a distinct identity before any socket opens.
+				std::random_device random;
+				std::string name = "p-";
+				for (int i = 0; i < 28; ++i) name += "0123456789abcdef"[random() & 15];
+				SteamNetworkingIdentity identity;
+				identity.SetGenericString(name.c_str());
 				SteamDatagramErrMsg initError;
-				if (!GameNetworkingSockets_Init(nullptr, initError)) {
+				if (!GameNetworkingSockets_Init(&identity, initError)) {
 					SetError(error, std::string("GameNetworkingSockets_Init failed: ") + initError);
 					return false;
 				}

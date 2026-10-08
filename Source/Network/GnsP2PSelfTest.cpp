@@ -571,7 +571,7 @@ namespace RTE {
 				} else {
 					Say("host StartHostP2P(" + std::to_string(c_HostVirtualPort) + "): CreateListenSocketP2P and CreatePollGroup succeeded");
 					const std::string identity = host.transport.GetLocalIdentity();
-					Say("process identity (GameNetworkingSockets_Init(nullptr), no ResetIdentity): " + identity);
+					Say("process identity (no ResetIdentity): " + identity);
 					connectMs = ElapsedMs();
 					if (!joiner.transport.ConnectP2P(new StubConnectionSignaling(toHost, releases), identity, c_HostVirtualPort, joinerConfig, &error)) {
 						failure = "ConnectP2P: " + error;
@@ -1133,6 +1133,7 @@ namespace RTE {
 			const auto toJoiner = std::make_shared<SignalQueue>("host->joiner");
 			const auto releases = std::make_shared<std::atomic<int>>(0);
 			std::string failure;
+			std::string firstIdentity;
 			{
 				Side host("host");
 				Side joiner("joiner");
@@ -1152,8 +1153,12 @@ namespace RTE {
 					failure = "StartHostP2P: " + error;
 				} else {
 					const std::string identity = host.transport.GetLocalIdentity();
+					firstIdentity = identity;
 					Say("host StartHostP2P(" + std::to_string(c_HostVirtualPort) + ") succeeded; process identity " + identity);
-					if (!joiner.transport.ConnectP2P(new StubConnectionSignaling(toHost, releases), identity, c_HostVirtualPort, joinerConfig, &error)) {
+					SteamNetworkingIdentity parsed;
+					if (!parsed.ParseString(identity.c_str()) || !parsed.GetGenericString() || GnsTransport::ProcessIdentity() != identity) {
+						failure = "the default migration listener has no distinct process identity";
+					} else if (!joiner.transport.ConnectP2P(new StubConnectionSignaling(toHost, releases), identity, c_HostVirtualPort, joinerConfig, &error)) {
 						failure = "ConnectP2P: " + error;
 					} else {
 						joiner.peer = 1;
@@ -1171,6 +1176,12 @@ namespace RTE {
 			Say("transports destroyed; GNS released " + std::to_string(releases->load()) + " stub signaling object(s)");
 			if (failure.empty() && releases->load() != 3) {
 				failure = "GNS released " + std::to_string(releases->load()) + " signaling objects, expected 3 (host, joiner, the refused ConnectP2P)";
+			}
+			if (failure.empty()) {
+				Side restarted("restarted");
+				std::string error;
+				if (!restarted.transport.StartHostP2P(c_HostVirtualPort, hostConfig, &error)) failure = "restarted StartHostP2P: " + error;
+				else if (restarted.transport.GetLocalIdentity() == firstIdentity) failure = "a new transport lifetime reused the default migration identity";
 			}
 			return Finish(failure);
 		}
