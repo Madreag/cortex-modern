@@ -5,6 +5,7 @@
 
 #include <string>
 #include <memory>
+#include <map>
 #include <future>
 #include <memory_resource>
 #include <cstring>
@@ -24,6 +25,7 @@
 struct BITMAP;
 
 namespace RTE {
+	class Entity;
 	std::string CheckpointFieldText(const std::function<std::string()>& observe);
 
 	template <typename Value> inline constexpr bool CheckpointArray = false;
@@ -206,7 +208,9 @@ namespace RTE {
 		CheckpointCache() = default;
 		explicit CheckpointCache(bool transient) : m_Transient(transient) {}
 		bool IsTransient() const { return m_Transient; }
-		void Begin() { ++m_Generation; m_Touched = 0; m_Reused = 0; }
+		void Begin() { ++m_Generation; m_Touched = 0; m_Reused = 0; m_Presets.clear(); }
+		/// Preset lookup is stable while the capture holds the world fence.
+		const Entity* FindPreset(const std::string& type, const std::string& name, int module);
 		CheckpointText Remember(const void* owner, unsigned channel, CheckpointText value);
 		CheckpointText Remember(const void* owner, unsigned channel, CheckpointText value, uint64_t stamp, uint64_t identity = 0, const MovableObject* object = nullptr);
 		const CheckpointText* Peek(const void* owner, unsigned channel) const;
@@ -229,6 +233,7 @@ namespace RTE {
 		bool m_Transient = false;
 		struct Entry { CheckpointText text; uint64_t generation = 0; uint64_t stamp = 0; uint64_t identity = 0; MovableObjectReference object; };
 		std::unordered_map<const void*, std::unordered_map<unsigned, Entry>> m_Entries;
+		std::map<std::tuple<int, std::string, std::string>, const Entity*, std::less<>> m_Presets;
 		std::vector<CheckpointText> m_Retired;
 		uint64_t m_Generation = 0;
 		size_t m_Touched = 0;

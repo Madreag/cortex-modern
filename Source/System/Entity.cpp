@@ -199,6 +199,9 @@ namespace RTE {
 
 	const Entity* Entity::GetPresetForCopy() const {
 		const std::string& name = m_IsOriginalPreset || m_CopiedFromPresetName.empty() ? m_PresetName : m_CopiedFromPresetName;
+		if (CheckpointWriter::BatchEnabled() && !name.empty() && name != "None") {
+			if (auto* cache = CheckpointWriter::CurrentCache()) return cache->FindPreset(GetClassName(), name, m_DefinedInModule);
+		}
 		return name.empty() || name == "None" ? nullptr : g_PresetMan.GetEntityPreset(GetClassName(), name, m_DefinedInModule);
 	}
 

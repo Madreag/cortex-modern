@@ -4,6 +4,7 @@
 #include "CheckpointProperties.h"
 #include "CheckpointImage.h"
 #include "ThreadMan.h"
+#include "PresetMan.h"
 #include "CaptureSentinel.h"
 #include "BitmapCheckpoint.h"
 #include "Base64/base64.h"
@@ -964,6 +965,14 @@ CheckpointText CheckpointBuffer::Finish() {
 		}
 	}
 	return CheckpointText(std::move(data));
+}
+
+const Entity* CheckpointCache::FindPreset(const std::string& type, const std::string& name, int module) {
+	const auto key = std::tuple(module, std::string_view(type), std::string_view(name));
+	if (const auto found = m_Presets.find(key); found != m_Presets.end()) return found->second;
+	const Entity* preset = g_PresetMan.GetEntityPreset(type, name, module);
+	m_Presets.emplace(std::tuple(module, type, name), preset);
+	return preset;
 }
 
 CheckpointText CheckpointCache::Remember(const void* owner, unsigned channel, CheckpointText value) {
