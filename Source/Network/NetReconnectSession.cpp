@@ -3258,6 +3258,7 @@ namespace RTE {
 		    lease.epoch != record.epoch || lease.seat != record.stableSeat || lease.generation != record.holderGeneration ||
 		    lease.hostSessionId != record.hostSessionId || lease.credential != record.credential || lease.directorySessionId != m_DirectorySessionId) return false;
 		record.seatToken = token; record.authorityKey = key; record.directorySessionId = lease.directorySessionId;
+		if (!record.directorySessionId.empty()) record.hostAddress = "ice:";
 		record.issuedAtUnixMs = lease.issuedAt * 1000; record.recordVersion = NetReconnectTicketStore::c_RecordVersion;
 		return m_ConnectionAuthority->AdoptLocalLease(lease);
 	}

@@ -291,6 +291,7 @@ namespace RTE {
 		service.m_IsHost = true;
 		service.m_IceBoundSessionId = oldId;
 		service.m_IceEnabled = true;
+		service.m_IceIdentity = NetIceHostIdentity(oldId);
 		service.m_DirectoryRow.persistentWorld = true; service.m_DirectoryRow.worldId = oldId;
 		service.m_DirectoryRow.listenAddrs = {"127.0.0.1"}; service.m_DirectoryRow.listenPort = 47460;
 		service.m_HostSignalCredential.store(std::make_shared<const NetMatchService::HostSignalCredential>(NetMatchService::HostSignalCredential{oldId, "old-token"}));
@@ -342,6 +343,7 @@ namespace RTE {
 		service.m_State = NetMatchServiceState::Starting;
 		service.m_IceEnabled = true;
 		service.m_IceBoundSessionId = id;
+		service.m_IceIdentity = NetIceHostIdentity(id);
 		service.m_HostSignalCredential.store(std::make_shared<const NetMatchService::HostSignalCredential>(NetMatchService::HostSignalCredential{id, "host-token"}));
 		auto sent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
 		service.m_Directory.SetTransportFactory([sent] { return std::make_unique<Answer>(sent); });

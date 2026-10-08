@@ -17875,8 +17875,9 @@ namespace RTE {
 			departing.LeaveMatch("Match left");
 			NetH4TicketRecord returned;
 			if (departing.m_TicketStore.Load(unixNow, returned, error) != NetH4TicketLoadResult::Loaded || returned.hostAddress != "ice:" ||
-			    returned.directorySessionId != record.directorySessionId || departing.m_TicketStore.LoadRoutes(returned).empty()) {
-				*error = "the departing Internet host saved a private IP instead of the successor's rendezvous and session"; return false;
+			    returned.directorySessionId != record.directorySessionId || !departing.m_TicketStore.LoadRoutes(returned).empty() ||
+			    NetMatchService::BuildTicketRejoinRequest(returned, "Returning host", false).address != "ice:") {
+				*error = "the departing Internet host did not leave route resolution to its directory authority"; return false;
 			}
 			if (departing.GetReconnectUx().GetHostReturnText().find("Test game") == std::string::npos ||
 			    departing.GetReconnectUx().GetOfferText().find("192.0.2.") != std::string::npos) {

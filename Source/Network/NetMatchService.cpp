@@ -10118,7 +10118,7 @@ static std::string ResyncSaveName() {
 		record.directorySessionId = lease->directorySessionId; record.seatToken = lease->token; record.authorityKey = lease->authority;
 		record.issuedAtUnixMs = lease->issuedAt * 1000; record.recordVersion = NetReconnectTicketStore::c_RecordVersion;
 		record.persistentWorld = m_MatchConfig.persistentWorld;
-		record.hostAddress = NetRejoinAddress(NetLanDiscovery::GetPrimaryLocalAddress(), m_BeaconGamePort);
+		record.hostAddress = record.directorySessionId.empty() ? NetRejoinAddress(NetLanDiscovery::GetPrimaryLocalAddress(), m_BeaconGamePort) : "ice:";
 		if (m_TicketStore.Store(record)) m_PersistedLocalLease = lease->token;
 		else m_ErrorText = "Your seat could not be saved. Check that the game can write its settings before leaving.";
 	}
@@ -11597,7 +11597,7 @@ static std::string ResyncSaveName() {
 	NetMatchServiceRequest NetMatchService::BuildTicketRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget) {
 		NetMatchServiceRequest request;
 		request.host = false;
-		request.address = record.hostAddress;
+		request.address = record.directorySessionId.empty() ? record.hostAddress : "ice:";
 		request.sessionId = record.directorySessionId;
 		request.playerName = playerName.empty() ? "Client" : playerName;
 		request.resyncOnDesync = true;
@@ -11865,6 +11865,10 @@ static std::string ResyncSaveName() {
 		m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
 		if (m_TicketStore.Load(UnixNowMs(nullptr), record) != NetH4TicketLoadResult::Loaded) return;
 		if (!record.directorySessionId.empty()) {
+			if (record.hostAddress != "ice:") {
+				record.hostAddress = "ice:";
+				if (!m_TicketStore.Store(record)) System::PrintDiagnosticLine("[net-match] could not save the online match's directory route");
+			}
 			if (!m_TicketStore.LoadRoutes(record).empty()) (void)m_TicketStore.StoreRoutes(record, {}, nullptr);
 			return;
 		}
@@ -11875,16 +11879,12 @@ static std::string ResyncSaveName() {
 			if (handsOver && (m_Coordinator->IsPeerGoneAtFrame(peer, m_Coordinator->GetResumeFrame()) || m_Coordinator->HasHeldAISeat(peer))) continue;
 			const auto endpoint = std::find_if(config.migrationPeers.begin(), config.migrationPeers.end(), [peer](const auto& item) { return item.peerId == peer; });
 			if (endpoint == config.migrationPeers.end() || endpoint->listenPort == 0) continue;
-			// The same successor is reachable through its published rendezvous when a LAN address is private.
-			if (!record.directorySessionId.empty()) {
-				for (const auto& address: endpoint->listenAddrs) if (NetLockstepCoordinator::IsMigrationIceEndpoint(address)) routes.push_back({address, endpoint->listenPort});
-			}
 			for (const auto& address: endpoint->listenAddrs)
-				if (record.directorySessionId.empty() || !NetLockstepCoordinator::IsMigrationIceEndpoint(address)) routes.push_back({address, endpoint->listenPort});
+				if (!NetLockstepCoordinator::IsMigrationIceEndpoint(address)) routes.push_back({address, endpoint->listenPort});
 		}
 		std::string error;
-		// A departing host returns through the successor's listener, keeping the Internet session for signaling.
-		if (handsOver && !routes.empty() && (record.directorySessionId.empty() || NetLockstepCoordinator::IsMigrationIceEndpoint(routes.front().address))) {
+		// A departing LAN host returns through the successor's direct listener.
+		if (handsOver && !routes.empty()) {
 			auto successor = record;
 			const auto& next = routes.front();
 			successor.hostAddress = NetRejoinAddress(next.address, next.port);
