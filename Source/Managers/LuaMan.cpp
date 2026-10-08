@@ -8872,6 +8872,42 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
 	{
+		const int result = RunScriptString(R"lua(
+local script = assert(loadfile("Base.rte/Scenes/Objects/Bunkers/BunkerSystems/ActorSpawner/ActorSpawner.lua"))
+local constructed = 0
+local environment = setmetatable({
+	ActivityMan = { GetActivity = function() return {} end },
+	ToGameActivity = function(activity) return activity end,
+	SceneMan = { Scene = {} },
+	Timer = function() return {} end,
+	require = function() return { Initialize = function() end } end,
+	CreateAHuman = function(preset, tech)
+		assert(preset == "Green Dummy" and tech == "Base.rte", "the spawner lost its class or tech")
+		constructed = constructed + 1
+		return {}
+	end
+}, { __index = _G })
+environment._G = environment
+setfenv(script, environment)()
+local values = { ActorPresetName = "Green Dummy", ActorClassName = "AHuman", ActorTechName = "Base.rte", SpawnType = "Specific", AIMode = "SENTRY" }
+local spawner = {
+	Pos = Vector(12, 24), Team = Activity.TEAM_1,
+	StringValueExists = function(_, key) return type(values[key]) == "string" end,
+	NumberValueExists = function() return false end,
+	GetStringValue = function(_, key) return values[key] or "" end,
+	GetNumberValue = function() return 0 end,
+	SetNumberValue = function() end,
+	RemoveNumberValue = function() end
+}
+environment.Create(spawner)
+assert(constructed == 1 and spawner.specificActorClassName == "AHuman" and spawner.specificActorTechName == "Base.rte")
+assert(spawner.nextActor.Team == spawner.Team and spawner.nextActor.Pos == spawner.Pos and spawner.nextActor.AIMode == Actor.AIMODE_SENTRY)
+)lua");
+		const bool passed = result == 0;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " actor_spawner_keeps_class_and_tech result=" << result << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+	{
 		lua_State* first = luaL_newstate();
 		lua_State* second = luaL_newstate();
 		const auto sharedBirth = [](lua_State* state, int localCount) {
