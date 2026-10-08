@@ -3,10 +3,12 @@
 #include "CheckpointLuaView.h"
 #include "CaptureSentinel.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <iostream>
 #include <exception>
+#include <functional>
 #include <map>
 #include <memory_resource>
 #include <optional>
@@ -15,6 +17,8 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 // Include after the live ScriptGraph helpers in LuaMan.cpp.
 namespace RTE::CheckpointLua {
@@ -281,7 +285,9 @@ namespace RTE::CheckpointLua {
 			Topology topology;
 		};
 		std::unordered_map<const void*, Entry> m_Entries;
-		std::unordered_map<const void*, ScalarEntry> m_Scalars;
+		using ScalarRecord = std::pair<const void*, ScalarEntry>;
+		std::vector<ScalarRecord> m_Scalars;
+		mutable std::optional<std::vector<const ScalarRecord*>> m_ScalarIndex;
 		std::shared_ptr<const ClassEntries> m_Classes;
 		// Expansion belongs to this image, rather than the shared class cache.
 		// A later capture can therefore reuse the cache while this image is saved.
@@ -292,7 +298,19 @@ namespace RTE::CheckpointLua {
 		std::unordered_map<const void*, Result> m_Iterators;
 		const Entry* FindEntry(const void* address) const {
 			if (const auto own = m_Entries.find(address); own != m_Entries.end()) return &own->second;
-			if (const auto scalar = m_Scalars.find(address); scalar != m_Scalars.end()) return scalar->second.Expand();
+			if (!m_Scalars.empty()) {
+				// The saver builds the index after the captured records stop growing.
+				if (!m_ScalarIndex) {
+					std::vector<const ScalarRecord*> index;
+					index.reserve(m_Scalars.size());
+					for (const auto& record: m_Scalars) index.push_back(&record);
+					std::sort(index.begin(), index.end(), [](const auto* first, const auto* second) { return std::less<const void*>{}(first->first, second->first); });
+					m_ScalarIndex = std::move(index);
+				}
+				const auto& index = *m_ScalarIndex;
+				const auto scalar = std::lower_bound(index.begin(), index.end(), address, [](const auto* record, const void* key) { return std::less<const void*>{}(record->first, key); });
+				if (scalar != index.end() && (*scalar)->first == address) return (*scalar)->second.Expand();
+			}
 			if (m_Classes) {
 				if (const auto shared = m_Classes->entries.find(address); shared != m_Classes->entries.end()) return &shared->second;
 				if (const auto shared = m_Classes->compact.find(address); shared != m_Classes->compact.end()) {
@@ -500,6 +518,7 @@ namespace RTE::CheckpointLua {
 			lua_pop(State(), 1);
 			const auto worldStarted = std::chrono::steady_clock::now();
 			m_Image->m_EnumUs = std::chrono::duration_cast<std::chrono::microseconds>(worldStarted - enumStarted).count();
+			if (CheckpointWriter::BatchEnabled()) m_Image->m_Scalars.reserve(m_Queue.size());
 			{
 				// The states of one world capture may run side by side; the first to get here walks the world.
 				std::lock_guard worldLock(s_GraphNativeCapture->frozenWorldMutex);
@@ -873,7 +892,7 @@ namespace RTE::CheckpointLua {
 			entry.address = ScalarToken([&] { lua_pushlightuserdata(State(), object->ptr()); });
 			entry.kind = ScalarToken([&] { lua_pushstring(State(), timer ? "timer" : "vector"); });
 			for (size_t index = 0; index < names.size(); ++index) entry.properties[index] = ScalarPropertyToken(object, names[index]);
-			m_Image->m_Scalars.emplace(gcval(&subject), std::move(entry));
+			m_Image->m_Scalars.emplace_back(gcval(&subject), std::move(entry));
 			return true;
 		}
 		static int IsIterator(lua_State* state) {

@@ -8992,6 +8992,39 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		}
 	}
 	{
+		LuaStateWrapper scalarState;
+		scalarState.Initialize();
+		const bool planted = scalarState.RunScriptString(R"lua(
+			_ScalarIndexCapture = {}
+			for i = 1, 257 do
+				local timer = Timer()
+				timer.StartSimTimeTicks = 9007199254740992 + i
+				timer.SimTimeLimitTicks = 137 + i
+				local vector = Vector(-0.0, i / 8)
+				_ScalarIndexCapture[i] = { vector = vector, alias = vector, timer = timer }
+			end
+		)lua") == 0;
+		std::string ordinary;
+		CheckpointText frozen, later;
+		std::vector<std::string> problems;
+		bool captured = planted && scalarState.SerializeScriptGraph(ordinary, problems);
+		{
+			CheckpointWriter::BatchScope batches(true);
+			captured = captured && scalarState.CaptureScriptGraph(frozen, problems, true);
+		}
+		const bool gone = scalarState.RunScriptString("_ScalarIndexCapture = nil; collectgarbage('collect')") == 0;
+		{
+			CheckpointWriter::BatchScope batches(true);
+			captured = captured && scalarState.CaptureScriptGraph(later, problems, true);
+		}
+		std::vector<std::future<bool>> readers;
+		for (int reader = 0; reader < 4; ++reader) readers.push_back(std::async(std::launch::async, [frozen, ordinary] { return frozen.Text() == ordinary; }));
+		bool exact = captured && gone;
+		for (auto& reader: readers) exact = reader.get() && exact;
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " owned_scalar_index_survives_source_death_with_concurrent_readers_and_later_images" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
 		lua_State* first = luaL_newstate();
 		lua_State* second = luaL_newstate();
 		const auto sharedBirth = [](lua_State* state, int localCount) {
