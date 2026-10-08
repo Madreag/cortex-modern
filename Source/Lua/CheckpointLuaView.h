@@ -347,8 +347,7 @@ namespace RTE::CheckpointLua {
 		}
 
 	public:
-		// A saver-owned descriptor can replace one field without changing the
-		// frozen live table. The registry reference owns all of its local tables.
+		// Registry-owned saver tables leave the frozen live table unchanged.
 		void InjectLocal(lua_State* state, const GCtab* table, const char* key) {
 			if (m_LocalInjectRef != LUA_NOREF) luaL_unref(state, LUA_REGISTRYINDEX, m_LocalInjectRef);
 			m_LocalInjectTable = table;

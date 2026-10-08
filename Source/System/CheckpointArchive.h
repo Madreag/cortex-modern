@@ -54,8 +54,7 @@ namespace RTE {
 			return m_Text;
 		}
 		static bool IsCapturing() { return s_Capture != nullptr; }
-		/// Enables bounded page-copy batches for the joined workers of a multiplayer image.
-		/// Manual and single-player saves keep their existing visitors.
+		/// Enables owned value batches for joined multiplayer checkpoint workers.
 		class BatchScope {
 		public:
 			explicit BatchScope(bool enabled, bool releasePreparedOnWorker = false) : m_Enabled(enabled), m_Arenas(enabled, releasePreparedOnWorker) { if (m_Enabled) s_Batches.fetch_add(1, std::memory_order_relaxed); }
@@ -179,8 +178,7 @@ namespace RTE {
 					if constexpr (std::is_same_v<K, std::string>) for (const auto& entry: owned) bytes += entry.first.size();
 					if constexpr (std::is_same_v<V, std::string>) for (const auto& entry: owned) bytes += entry.second.size();
 					AppendFields(CheckpointText::Deferred([owned = std::move(owned)] {
-						// The original iteration order reaches the same ordered-map constructor,
-						// but every key and value belongs to this image before sorting starts.
+						// Owned keys and values preserve the ordered-map constructor's input order.
 						const std::map<K, V> ordered(owned.begin(), owned.end());
 						return CaptureNative([&ordered] {
 							CheckpointWriter writer(FieldsOnly{});

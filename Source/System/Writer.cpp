@@ -149,8 +149,7 @@ namespace {
 }
 
 namespace {
-	// Each arena leases only the blocks it uses. A small cached record cannot
-	// retain the rest of its thread's capture storage.
+	// Arena leases retain only the backing blocks their records use.
 	std::atomic<size_t> s_CheckpointPoolLiveBytes{0};
 	class CheckpointArenaGroup {
 	public:
@@ -337,8 +336,7 @@ namespace {
 			arena->RetainBlock();
 			return block;
 		}
-		// A block retains its storage through destruction of its control block.
-		// Allocator copies carry an address, so rebinding makes no ownership traffic.
+		// Allocator copies borrow an address while the control block retains its storage.
 		void deallocate(T*, size_t) noexcept { arena->ReleaseBlock(); }
 		template<class U> bool operator==(const CheckpointAllocator<U>& other) const noexcept { return arena == other.arena; }
 	};

@@ -335,10 +335,7 @@ namespace RTE::CheckpointLua {
 			auto copy = [this, data, started, receipt, freshBytes, batchCopy, cow = m_CowCopy, coordinator = m_CowCoordinator] {
 				if (cow) {
 					const auto copying = std::chrono::steady_clock::now();
-					// Opening each 4 KB page separately makes tens of thousands of
-					// protection calls and invalidates translations on the capture's
-					// other cores. Copy a bounded contiguous run under the same fence.
-					// A live write still saves its individual page before it is opened.
+					// Bounded page runs avoid repeated protection calls while live faults still save individual pages.
 					const size_t batchPages = batchCopy ? 64 : 1;
 					for (size_t page = 0; page < cow->saved.size(); page += batchPages) {
 						const bool opened = batchCopy ? coordinator->CopyPages(page, std::min(batchPages, cow->saved.size() - page))
@@ -556,9 +553,7 @@ namespace RTE::CheckpointLua {
 						std::fill(copy->saved.begin() + begin, copy->saved.begin() + page, 1);
 					}
 				}
-				// Keep background-copied pages protected until the whole heap is
-				// ready. A live first write opens just its own saved page; a completed
-				// last generation opens the heap once, without per-run shootdowns.
+				// The final copied generation opens the heap once; live writes open their saved pages.
 				return true;
 			}
 			bool Complete(const std::shared_ptr<CowCopy>& copy, bool openHeap) {

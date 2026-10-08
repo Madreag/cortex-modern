@@ -287,8 +287,7 @@ namespace RTE {
 		void WaitFrozenCopy();
 		/// What that copy cost, once, after the gate; generation 0 when no copy landed since the last call.
 		CheckpointLua::CopyReceipt TakeFrozenCopyReceipt();
-		/// Captures every state off a frozen image, the states side by side; false when any state could not freeze.
-		/// whileWaiting runs on the calling thread once its state is captured, while the pool captures the rest.
+		/// Captures frozen states in parallel; whileWaiting runs on the caller, false means capture failed.
 		static bool CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats, const std::function<void()>& whileWaiting = {});
 
 		/// The unique ids of the objects a graph text holds fields for.
@@ -922,8 +921,7 @@ namespace RTE {
 		/// The heap every Lua state holds, live and uncollected, in bytes.
 		long long GetTotalHeapBytes();
 
-		/// Every script-owned MovableObject the script graph will capture, every state.
-		/// Parallel capture reads each threaded VM separately, joins, then visits in the original order on this thread.
+		/// Visits all script-owned MovableObjects in the original caller order after joined VM scans.
 		void VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit, bool parallel = false);
 #pragma endregion
 

@@ -143,8 +143,7 @@ int SoundSet::Save(Writer& writer) const {
 		}
 		fields.simulation = CheckpointWriter::Native([&] { return SaveSimulationCheckpoint(); });
 		bytes += fields.simulation.OwnedBytes();
-		// No sample, backend or live set is retained. All fields are shared and
-		// keep their existing order; only building their writer tape moves.
+		// The saver formats owned sound fields in their archive order.
 		writer.Append(CheckpointText::Deferred([fields = std::move(fields), indent] {
 			return Writer::Capture([&](Writer& owned) {
 				owned.NewProperty("SoundSelectionCycleMode");

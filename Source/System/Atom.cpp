@@ -290,8 +290,7 @@ std::string Atom::SaveCheckpoint() const {
     for (size_t index = 0; index < materials.size(); ++index) {
         auto* cache = !m_HasCheckpointMaterials && CheckpointWriter::IsCapturing() && CheckpointWriter::BatchEnabled() ? CheckpointWriter::CurrentCache() : nullptr;
         constexpr unsigned materialChannel = std::numeric_limits<unsigned>::max();
-        // Material ownership cannot change inside the joined world freeze.
-        // Reuse only a reference read in this capture, including the null one.
+        // Material references remain stable during the joined world freeze.
         if (cache) {
             if (const CheckpointText* current = cache->PeekCurrent(sources[index], materialChannel)) {
                 materials[index] = *current;
@@ -306,8 +305,7 @@ std::string Atom::SaveCheckpoint() const {
 }
 
 namespace {
-	// Own values rather than Atom/Color objects: their constructors and copy
-	// constructors have engine side effects, and Color's copy recalculates its index.
+	// Raw field copies avoid Atom and Color constructor side effects.
 	struct AtomColorValues {
 		std::array<int, 4> channels;
 		std::string SaveCheckpoint() const {
@@ -470,8 +468,7 @@ CheckpointText Atom::CaptureCheckpointList(const std::vector<Atom*>& atoms) {
 	}
 	bytes += dynamic.size();
 	for (const CheckpointText& material: materials) bytes += sizeof(CheckpointText) + material.OwnedBytes();
-	// The producer holds no live pointers. Each atom keeps the old Atom2 field
-	// order and length prefix; only formatting and per-atom allocations move.
+	// The saver formats owned atom fields in Atom2 order with their length prefixes.
 	return CheckpointText::Deferred([storage = std::move(storage), records = std::move(records), dynamic = std::move(dynamic), materials = std::move(materials)] {
 		std::string list = std::to_string(records.size()) + " ";
 		for (const Record& record: records) {

@@ -2422,8 +2422,7 @@ namespace {
 
 	CheckpointText CaptureOwnedAudioSample(AudioCheckpoint::Sample sample) {
 		const size_t bytes = sizeof(sample) + sample.path.size();
-		// All mixer reads have already completed. Only the owned metadata is
-		// formatted on the saver; no sound handle or live sample is retained.
+		// The saver formats owned metadata after the mixer reads finish.
 		return CheckpointText::Deferred([sample = std::move(sample)] { return sample.SaveCheckpoint(); }, bytes);
 	}
 

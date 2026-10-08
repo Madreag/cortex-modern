@@ -125,8 +125,7 @@ namespace RTE {
 	public:
 		enum class ValueKind : uint8_t { Raw, Integer, Unsigned, SpacedInteger, SpacedUnsigned, Float, Double, String, Child, SizedChild, Base64, UrlBase64, GraphString, NewLine, Property, ElapsedSimTime, PeerBegin, PeerEnd, SizedRunBegin, SizedRunEnd, PrimitiveBlock };
 		using PrimitiveDecoder = void (*)(std::string&, std::string_view, bool);
-		/// One worker owns the allocator while it captures; its published nodes
-		/// keep that storage alive until the last archive/cache reference ends.
+		/// Published nodes retain the capture allocator until the last reader releases them.
 		class AllocationScope {
 		public:
 			explicit AllocationScope(bool enabled);
@@ -136,8 +135,7 @@ namespace RTE {
 		private:
 			bool m_Entered = false;
 		};
-		/// Groups multiplayer arena backing allocations by capture thread.
-		/// Published arenas keep their backing group until every reader is done.
+		/// Groups multiplayer backing allocations by thread and retains them for published readers.
 		class ArenaPoolScope {
 		public:
 			explicit ArenaPoolScope(bool enabled, bool releasePreparedOnWorker = false);

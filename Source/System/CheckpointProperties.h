@@ -95,8 +95,7 @@ namespace RTE {
 		}
 	}
 
-	// The writer tape owns the exact fields. Property names and the decoder have
-	// static storage; no callback, tuple or live reference survives the capture.
+	// The tape owns field bytes; property names and decoders have static storage.
 	template<CheckpointPropertyName Name, class T> auto CheckpointProperty(const T& value) {
 		return CheckpointProperties::Reference<Name, T>{value};
 	}

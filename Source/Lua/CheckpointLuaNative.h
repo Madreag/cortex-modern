@@ -197,8 +197,7 @@ namespace RTE::CheckpointLua {
 		struct Entry {
 			std::array<Result, 2> native;
 			Result members;
-			// Names are the static helper/property literals below. Do not allocate
-			// another copy of them for every userdata in every captured state.
+			// Helper and property names have static storage.
 			Answers helpers;
 			Answers properties;
 			NativeId movable = 0;
@@ -210,8 +209,7 @@ namespace RTE::CheckpointLua {
 			std::string presetName;
 			uint64_t serial = 0; // The userdata's birth number: a reused address with another serial is another object.
 		};
-		// Plain owned scalar bindings have no callbacks or native ownership links.
-		// Freeze only their tokens; build the helper result containers on the saver.
+		// The saver expands owned scalar tokens without native callbacks.
 		struct ScalarEntry {
 			uint64_t serial = 0;
 			TValue kind{}, instance{}, address{};
@@ -290,8 +288,7 @@ namespace RTE::CheckpointLua {
 		std::vector<ScalarRecord> m_Scalars;
 		mutable std::optional<std::vector<const ScalarRecord*>> m_ScalarIndex;
 		std::shared_ptr<const ClassEntries> m_Classes;
-		// Expansion belongs to this image, rather than the shared class cache.
-		// A later capture can therefore reuse the cache while this image is saved.
+		// Each image owns its expansions while later captures share the class cache.
 		mutable std::unordered_map<const void*, Entry> m_ExpandedClasses;
 		size_t m_CachedClasses = 0;
 		size_t m_SharedAnswers = 0, m_SharedMismatches = 0;
@@ -772,8 +769,7 @@ namespace RTE::CheckpointLua {
 			}
 		}
 
-		// Binding-table and constant descriptors read no Lua property or native visitor.
-		// Keep their returned values exactly as the protected helper call does.
+		// Constant descriptors retain the protected helper call's values.
 		template<class PushValues> NativeImage::Result RecordPushed(PushValues push, bool keep = true) {
 			const int top = lua_gettop(State());
 			struct RestoreStack { lua_State* state; int top; ~RestoreStack() { lua_settop(state, top); } } stack{State(), top};
@@ -818,8 +814,7 @@ namespace RTE::CheckpointLua {
 				NativeImage::Value value;
 				value.token = At(index);
 				if (const auto* text = ScriptGraphCapturedText(State(), index)) value.text = *text;
-				// Numbers, booleans, nil and light userdata have no GC owner to
-				// pin. Avoid growing a scratch Lua table for those scalar answers.
+				// Scalar answers have no GC owner to pin.
 				if (!CheckpointWriter::BatchEnabled() || tvisgcv(&value.token)) Keep(index);
 				NewResults(index, before, after, seen);
 				result.values.push_back(std::move(value));
@@ -914,8 +909,7 @@ namespace RTE::CheckpointLua {
 				else if (std::strcmp(name, "StartRealTimeTicks") == 0) number = value.GetStartRealTimeTicksNumber();
 				else number = value.GetRealTimeLimitTicksNumber();
 			}
-			// Match lua_pushnumber, including its NaN canonicalization, without
-			// changing the live VM stack for each already-owned scalar field.
+			// Scalar tokens preserve lua_pushnumber's NaN canonicalization.
 			TValue token; setnumV(&token, number);
 			if (tvisnan(&token)) setnanV(&token);
 			return token;

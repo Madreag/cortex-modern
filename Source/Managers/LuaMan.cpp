@@ -6315,8 +6315,7 @@ namespace RTE::CheckpointLua {
 			lua_State* previousState = s_DescriptorState;
 			const CaptureAddressSet* previousRoots = s_DescriptorRoots;
 			const std::pmr::unordered_set<const void*>* previousFunctions = s_DescriptorFunctions;
-			// These sets live only for the fenced walk. Allocate their small nodes
-			// together instead of contending with every other state's allocator.
+			// Fenced walk nodes share capture storage to avoid allocator contention.
 			std::shared_ptr<std::pmr::memory_resource> backing = CheckpointWriter::BatchEnabled() ? CheckpointBuffer::LeaseCaptureStorage() : nullptr;
 			std::pmr::monotonic_buffer_resource storage{backing ? backing.get() : std::pmr::get_default_resource()};
 			std::pmr::memory_resource* resource = CheckpointWriter::BatchEnabled() ? &storage : std::pmr::get_default_resource();
@@ -6480,8 +6479,7 @@ namespace RTE::CheckpointLua {
 							continue;
 						}
 						if (auto* rep = luabind::detail::is_class_object(state, index)) {
-							// Members reads the class table directly. The userdata's binding
-							// metatable is not serialized and can lead back to the binding store.
+							// Members reads the class table; binding metatables stay outside the serialized graph.
 							if (CheckpointWriter::BatchEnabled() && rep->crep()) { rep->crep()->get_table(state); Queue(-1); lua_pop(state, 1); }
 							if (rep->get_lua_table().is_valid()) { rep->get_lua_table().get(state); Queue(-1); lua_pop(state, 1); }
 							if (rep->get_dependencies().is_valid()) { rep->get_dependencies().get(state); Queue(-1); lua_pop(state, 1); }
@@ -6953,8 +6951,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	// no pool thread has started once its own work is done.
 	size_t caller = 0;
 	if (CheckpointWriter::BatchEnabled() && !CaptureTrace::Serial()) {
-		// The fenced heap sizes are already known. Keep the largest state's
-		// serial walk on the caller instead of joining it after a small state.
+		// The caller captures the largest heap while workers capture the rest.
 		for (size_t index = 1; index < order.size(); ++index) {
 			if (G(order[index]->m_State)->gc.total > G(order[caller]->m_State)->gc.total) caller = index;
 		}
@@ -8250,8 +8247,7 @@ void LuaMan::VisitScriptHeldMovableObjects(const std::function<void(MovableObjec
 		for (LuaStateWrapper& state: m_ScriptStates) state.VisitScriptHeldMovableObjects(visit);
 		return;
 	}
-	// No graph freezes until this walk joins. Each VM keeps its own lock and result list;
-	// the caller's callback and the order it observes are unchanged.
+	// Joined VM scans replay callbacks in the original order on the caller.
 	CaptureSentinel::ParallelPhase phase;
 	std::vector<std::vector<MovableObject*>> held(m_ScriptStates.size());
 	ParallelWork states(g_ThreadMan.GetCheckpointThreadPool(), m_ScriptStates.size(), [&](size_t index) {
@@ -11816,8 +11812,7 @@ shared.parent = _AutosaveCaptureProbe
 	std::cout << "[script-graph-selftest] " << (ownedGraph ? "PASS" : "FAIL") << " captured_graph_survives_mutation_and_collection" << std::endl;
 	checkpointValues = ownedGraph && checkpointValues;
 	{
-		// Added, replaced and removed baseline keys must discover their native
-		// values before the live table is changed or those values are collected.
+		// Capture baseline keys before changing their tables or collecting their native values.
 		const bool staged = RunScriptString(R"lua(
 _CheckpointBaselineProbe = { pi = math.pi, rad = math.rad, meta = getmetatable(table) }
 rawset(math, 'pi', Vector(11, 13))

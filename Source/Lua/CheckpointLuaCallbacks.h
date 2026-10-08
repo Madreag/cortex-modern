@@ -17,8 +17,7 @@
 #include <thread>
 
 namespace RTE::CheckpointLua {
-	// The callback descriptor is capture-owned. Keep its live function tokens and
-	// scalar fields here; its Lua tables are made only by the saver VM.
+	// The saver builds callback tables from owned fields and frozen function tokens.
 	struct CallbackImage {
 		struct Function {
 			TValue value;
