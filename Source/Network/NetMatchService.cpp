@@ -2802,10 +2802,13 @@ static std::string ResyncSaveName() {
 		NetLobbySnapshot snapshot;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			beaconWanted = m_IsHost && !m_IdentityPending && m_State == NetMatchServiceState::Starting;
-			if (beaconWanted) {
+			const bool hostingLobby = m_IsHost && !m_IdentityPending && m_State == NetMatchServiceState::Starting;
+			if (hostingLobby) {
 				snapshot = m_LobbySnapshot;
 			}
+			// Relay-only hosts open no direct listener. A LAN beacon would advertise
+			// an unusable join beside the working Internet row.
+			beaconWanted = hostingLobby && m_ConnectionMode != 2;
 			// A listing that waits only for the lobby's identity is still wanted: its router mapping stays.
 			mappingKept = m_IsHost && !m_DirectoryRetracted &&
 			              (m_State == NetMatchServiceState::Starting || m_State == NetMatchServiceState::ReadyToLaunch ||
