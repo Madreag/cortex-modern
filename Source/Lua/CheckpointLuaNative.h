@@ -632,6 +632,11 @@ namespace RTE::CheckpointLua {
 		CaptureAddressSet m_Pinned{m_TransientResource};
 		std::pmr::vector<TValue> m_Queue{m_TransientResource};
 		bool m_Captured = false;
+		struct ScalarKeys {
+			GCstr* index = nullptr;
+			std::array<GCstr*, 4> properties{};
+		};
+		std::array<ScalarKeys, 2> m_ScalarKeys;
 
 		lua_State* State() const { return m_References.state; }
 		void CheckThread() const {
@@ -813,26 +818,42 @@ namespace RTE::CheckpointLua {
 			return 1;
 		}
 		// Overrides keep the ordinary Lua lookup; plain scalar getters need no call closure.
-		bool PlainScalarProperties(const TValue& subject, const luabind::detail::object_rep* object, std::span<const char* const> names) {
+		bool PlainScalarProperties(const TValue& subject, const luabind::detail::object_rep* object) {
 			if (!CheckpointWriter::BatchEnabled() || !object || !object->ptr() || !object->crep()) return false;
 			const auto* type = object->crep();
 			if (type->get_class_type() != luabind::detail::class_rep::cpp_class ||
 			    (type->type() != LUABIND_TYPEID(Vector) && type->type() != LUABIND_TYPEID(Timer))) return false;
+			static constexpr std::array vectorNames{"X", "Y"};
+			static constexpr std::array timerNames{"StartSimTimeTicks", "SimTimeLimitTicks", "StartRealTimeTicks", "RealTimeLimitTicks"};
+			const std::span<const char* const> names = type->type() == LUABIND_TYPEID(Timer) ? std::span<const char* const>(timerNames) : std::span<const char* const>(vectorNames);
 			const int top = lua_gettop(State());
 			struct Restore { lua_State* state; int top; ~Restore() { lua_settop(state, top); } } restore{State(), top};
-			Push(subject);
-			if (!lua_getmetatable(State(), -1)) return false;
-			lua_pushliteral(State(), "__index"); lua_rawget(State(), -2);
-			if (lua_tocfunction(State(), -1) != luabind::detail::class_rep::gettable_dispatcher) return false;
-			lua_settop(State(), top);
-			const auto plain = [&] {
-				const int table = lua_gettop(State());
-				if (!lua_istable(State(), table) || lua_getmetatable(State(), table)) return false;
-				for (const char* name: names) {
-					lua_pushstring(State(), name); lua_rawget(State(), table);
-					const bool empty = lua_isnil(State(), -1);
+			auto& keys = m_ScalarKeys[type->type() == LUABIND_TYPEID(Timer) ? 1 : 0];
+			if (!keys.index) {
+				const auto key = [&](const char* name) {
+					lua_pushstring(State(), name);
+					GCstr* string = strV(&State()->top[-1]);
+					Keep(-1);
 					lua_pop(State(), 1);
-					if (!empty) return false;
+					return string;
+				};
+				keys.index = key("__index");
+				for (size_t index = 0; index < names.size(); ++index) keys.properties[index] = key(names[index]);
+			}
+			const GCtab* meta = tabref(udataV(&subject)->metatable);
+			if (!meta) return false;
+			const TValue* dispatcher = lj_tab_getstr(const_cast<GCtab*>(meta), keys.index);
+			if (!dispatcher || !tvisfunc(dispatcher)) return false;
+			const GCfunc* function = funcV(dispatcher);
+			const BCOp operation = bc_op(*mref(function->c.pc, BCIns));
+			if ((operation != BC_FUNCC && operation != BC_FUNCCW) || function->c.f != luabind::detail::class_rep::gettable_dispatcher) return false;
+			const auto plain = [&] {
+				const TValue& value = State()->top[-1];
+				if (!tvistab(&value) || tabref(tabV(&value)->metatable)) return false;
+				// Read every override again; only the interned keys are capture-local.
+				for (size_t index = 0; index < names.size(); ++index) {
+					const TValue* field = lj_tab_getstr(tabV(&value), keys.properties[index]);
+					if (field && !tvisnil(field)) return false;
 				}
 				return true;
 			};
@@ -891,7 +912,7 @@ namespace RTE::CheckpointLua {
 			static constexpr std::array vectorNames{"X", "Y"};
 			static constexpr std::array timerNames{"StartSimTimeTicks", "SimTimeLimitTicks", "StartRealTimeTicks", "RealTimeLimitTicks"};
 			const std::span<const char* const> names = timer ? std::span<const char* const>(timerNames) : std::span<const char* const>(vectorNames);
-			if (!PlainScalarProperties(subject, object, names)) return false;
+			if (!PlainScalarProperties(subject, object)) return false;
 			CaptureTrace::Span span("answer_scalar", type->name());
 			NativeImage::ScalarEntry entry;
 			entry.serial = luaJIT_value_serial(State(), -1);
@@ -1057,7 +1078,7 @@ namespace RTE::CheckpointLua {
 			if (className == "Vector") properties = vectorProperties;
 			else if (className == "Timer") properties = timerProperties;
 			else if (className == "AlarmEvent") properties = alarmProperties;
-			const bool scalarProperties = !properties.empty() && PlainScalarProperties(value, object, properties);
+			const bool scalarProperties = !properties.empty() && PlainScalarProperties(value, object);
 			for (const char* property: properties) {
 				entry.properties.emplace(property, scalarProperties ? ScalarProperty(object, property) :
 				                         Invoke(Property, property, [&] { Push(value); lua_pushstring(State(), property); return 2; }));

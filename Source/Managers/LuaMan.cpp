@@ -6474,6 +6474,9 @@ namespace RTE::CheckpointLua {
 							continue;
 						}
 						if (auto* rep = luabind::detail::is_class_object(state, index)) {
+							// Members reads the class table directly. The userdata's binding
+							// metatable is not serialized and can lead back to the binding store.
+							if (CheckpointWriter::BatchEnabled() && rep->crep()) { rep->crep()->get_table(state); Queue(-1); lua_pop(state, 1); }
 							if (rep->get_lua_table().is_valid()) { rep->get_lua_table().get(state); Queue(-1); lua_pop(state, 1); }
 							if (rep->get_dependencies().is_valid()) { rep->get_dependencies().get(state); Queue(-1); lua_pop(state, 1); }
 						} else if (luabind::detail::is_class_rep(state, index)) {
@@ -6489,7 +6492,7 @@ namespace RTE::CheckpointLua {
 					// environment can name the whole binding store, which the graph
 					// does not carry; its instance and dependency tables are above.
 					if (kind == LUA_TFUNCTION) { lua_getfenv(state, index); Queue(-1); lua_pop(state, 1); }
-					if (lua_getmetatable(state, index)) { Queue(-1); lua_pop(state, 1); }
+					if ((!CheckpointWriter::BatchEnabled() || kind != LUA_TUSERDATA) && lua_getmetatable(state, index)) { Queue(-1); lua_pop(state, 1); }
 					lua_settop(state, top);
 				}
 				walkSpan.reset();
@@ -6930,16 +6933,24 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	};
 	// Each state is its own VM behind its own lock, so the states are captured side by side; this thread takes the states
 	// no pool thread has started once its own work is done.
+	size_t caller = 0;
+	if (CheckpointWriter::BatchEnabled() && !CaptureTrace::Serial()) {
+		// The fenced heap sizes are already known. Keep the largest state's
+		// serial walk on the caller instead of joining it after a small state.
+		for (size_t index = 1; index < order.size(); ++index) {
+			if (G(order[index]->m_State)->gc.total > G(order[caller]->m_State)->gc.total) caller = index;
+		}
+	}
 	std::optional<ParallelWork> states;
 	if (!CaptureTrace::Serial()) {
-		states.emplace(g_ThreadMan.GetPriorityThreadPool(), order.size() - 1, [&capture](size_t index) {
+		states.emplace(g_ThreadMan.GetPriorityThreadPool(), order.size() - 1, [&capture, caller](size_t index) {
 			CaptureSentinel::WorkerScope worker("script-graph-state");
-			capture(index + 1);
+			capture(index < caller ? index : index + 1);
 		});
 	}
 	std::exception_ptr failure;
 	try {
-		capture(0);
+		capture(caller);
 		if (CaptureTrace::Serial()) for (size_t index = 1; index < order.size(); ++index) capture(index);
 		CaptureTrace::Span span("graph_while_waiting");
 		if (whileWaiting) whileWaiting();
@@ -9141,6 +9152,57 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			for (const auto& problem: problems) std::cout << "[script-graph-selftest] scalar capture: " << problem << std::endl;
 			checkpointValues = exact && checkpointValues;
 		}
+	}
+	{
+		LuaStateWrapper descriptorState;
+		descriptorState.Initialize();
+		descriptorState.LoadScriptGraphHelper();
+		const bool planted = descriptorState.RunScriptString(R"lua(
+			_DescriptorCapture = Vector(3, 5)
+			Vector._CheckpointDescriptorMember = Vector(7, 11)
+			_ScriptGraphSetInstance(_DescriptorCapture, { leaf = Vector(13, 17) })
+			debug.getmetatable(_DescriptorCapture)._CheckpointUnserialized = { leaf = Vector(19, 23) }
+		)lua") == 0;
+		lua_State* state = descriptorState.GetLuaState();
+		const int top = lua_gettop(state);
+		lua_getglobal(state, "_DescriptorCapture");
+		lua_getmetatable(state, -1);
+		lua_getfield(state, -1, "_CheckpointUnserialized");
+		lua_getfield(state, -1, "leaf");
+		const void* bindingOnly = gcval(&state->top[-1]);
+		lua_settop(state, top);
+		lua_getglobal(state, "Vector");
+		lua_getfield(state, -1, "_CheckpointDescriptorMember");
+		const void* classMember = gcval(&state->top[-1]);
+		lua_settop(state, top);
+		lua_getglobal(state, "_DescriptorCapture");
+		const auto* rep = luabind::detail::is_class_object(state, -1);
+		rep->get_lua_table().get(state);
+		lua_getfield(state, -1, "leaf");
+		const void* instanceMember = gcval(&state->top[-1]);
+		lua_settop(state, top);
+		bool rootsExact = false;
+		{
+			CheckpointWriter::BatchScope batches(true);
+			TValue callbacks; setnilV(&callbacks);
+			lua_pushnil(state);
+			CheckpointLua::DescriptorRootScope roots(state, top, lua_gettop(state), callbacks, 1);
+			rootsExact = !roots.userdata.Contains(bindingOnly) && roots.userdata.Contains(classMember) && roots.userdata.Contains(instanceMember);
+			lua_settop(state, top);
+		}
+		std::string ordinary;
+		CheckpointText frozen;
+		std::vector<std::string> problems;
+		bool captured = planted && descriptorState.SerializeScriptGraph(ordinary, problems);
+		{
+			CheckpointWriter::BatchScope batches(true);
+			captured = captured && descriptorState.CaptureScriptGraph(frozen, problems, true);
+		}
+		descriptorState.RunScriptString("_DescriptorCapture.leaf.X = 29; Vector._CheckpointDescriptorMember.X = 31");
+		const bool exact = rootsExact && captured && ordinary == std::async(std::launch::async, [frozen] { return frozen.Text(); }).get();
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " userdata_descriptor_walk_keeps_members_without_binding_metatables" << std::endl;
+		for (const auto& problem: problems) std::cout << "[script-graph-selftest] userdata descriptor capture: " << problem << std::endl;
+		checkpointValues = exact && checkpointValues;
 	}
 	{
 		LuaStateWrapper scalarState;
