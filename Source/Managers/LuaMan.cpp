@@ -8244,11 +8244,23 @@ void LuaStateWrapper::VisitScriptHeldMovableObjects(const std::function<void(Mov
 	if (m_State) VisitScriptOwnedObjects(m_State, visit);
 }
 
-void LuaMan::VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit) {
+void LuaMan::VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit, bool parallel) {
 	m_MasterScriptState.VisitScriptHeldMovableObjects(visit);
-	for (LuaStateWrapper& state: m_ScriptStates) {
-		state.VisitScriptHeldMovableObjects(visit);
+	if (!parallel || CaptureTrace::Serial()) {
+		for (LuaStateWrapper& state: m_ScriptStates) state.VisitScriptHeldMovableObjects(visit);
+		return;
 	}
+	// No graph freezes until this walk joins. Each VM keeps its own lock and result list;
+	// the caller's callback and the order it observes are unchanged.
+	CaptureSentinel::ParallelPhase phase;
+	std::vector<std::vector<MovableObject*>> held(m_ScriptStates.size());
+	ParallelWork states(g_ThreadMan.GetCheckpointThreadPool(), m_ScriptStates.size(), [&](size_t index) {
+		CaptureSentinel::WorkerScope worker("script-held-state");
+		CheckpointBuffer::AllocationScope allocations(CheckpointWriter::BatchEnabled());
+		m_ScriptStates[index].VisitScriptHeldMovableObjects([&](MovableObject* object) { held[index].push_back(object); });
+	});
+	states.Finish();
+	for (const auto& objects: held) for (MovableObject* object: objects) visit(object);
 }
 
 LuaStateWrapper& LuaMan::GetMasterScriptState() {
@@ -8956,6 +8968,22 @@ bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
 			if (!created || !held) throw std::runtime_error(std::string("the lua-held object could not be created") + (GetLastError().empty() ? "" : (": " + GetLastError())));
 			held->SetWhichMOToNotHit(world.get());
 			if (held->GetWhichMOToNotHit() != world.get()) throw std::runtime_error("the lua-held object did not take the world actor");
+			{
+				auto& threaded = g_LuaMan.GetThreadedScriptStates().front();
+				if (threaded.RunScriptString("_CheckpointHeldOrderProbe = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\")") != 0) throw std::runtime_error("threaded held probe could not be created");
+				std::vector<MovableObject*> serial, parallel;
+				g_LuaMan.VisitScriptHeldMovableObjects([&](MovableObject* object) { serial.push_back(object); });
+				const auto caller = std::this_thread::get_id();
+				bool onCaller = true;
+				g_LuaMan.VisitScriptHeldMovableObjects([&](MovableObject* object) {
+					onCaller = onCaller && caller == std::this_thread::get_id();
+					parallel.push_back(object);
+				}, true);
+				threaded.RunScriptString("_CheckpointHeldOrderProbe = nil");
+				const bool exact = serial == parallel && onCaller && serial.size() >= 2 && std::find(serial.begin(), serial.end(), held) != serial.end();
+				std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " parallel_script_held_walk_preserves_order_and_caller objects=" << serial.size() << std::endl;
+				if (!exact) throw std::runtime_error("parallel held walk changed its sequence or callback thread");
+			}
 			const std::string archive = g_MovableMan.SaveCheckpoint();
 			held->SetWhichMOToNotHit(nullptr);
 			const bool applied = g_MovableMan.LoadCheckpoint(archive);

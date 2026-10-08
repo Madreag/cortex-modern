@@ -923,7 +923,8 @@ namespace RTE {
 		long long GetTotalHeapBytes();
 
 		/// Every script-owned MovableObject the script graph will capture, every state.
-		void VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit);
+		/// Parallel capture reads each threaded VM separately, joins, then visits in the original order on this thread.
+		void VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit, bool parallel = false);
 #pragma endregion
 
 		/// Clears Script Timings.

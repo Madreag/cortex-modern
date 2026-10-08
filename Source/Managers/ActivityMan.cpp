@@ -859,7 +859,10 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	std::vector<MovableObject*> scriptHeld;
 	{
 		CaptureTrace::Span span("script_held");
-		g_LuaMan.VisitScriptHeldMovableObjects([&scriptHeld](MovableObject* object) { scriptHeld.push_back(object); });
+		static const bool report = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
+		const auto started = report ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		g_LuaMan.VisitScriptHeldMovableObjects([&scriptHeld](MovableObject* object) { scriptHeld.push_back(object); }, !matchId.empty());
+		if (report) System::PrintDiagnosticLine(std::format("[checkpoint-script-held] objects={} parallel={} us={}", scriptHeld.size(), !matchId.empty(), since(started)));
 	}
 	MovableMan::ScriptHeldScope scriptHeldScope(std::move(scriptHeld));
 	std::optional<CaptureSentinel::ParallelPhase> parallel(std::in_place);
