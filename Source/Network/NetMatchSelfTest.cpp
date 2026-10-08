@@ -18274,6 +18274,22 @@ namespace RTE {
 			if (departing.GetReconnectUx().GetHostReturnText().find("Returned game") == std::string::npos) {
 				*error = "the host watch did not adopt the directory's game name"; return false;
 			}
+			for (int closure = 0; closure < 4; ++closure) {
+				NetMatchService closing;
+				closing.m_TicketStore.SetPath(path.string());
+				record.recordVersion = NetReconnectTicketStore::c_RecordVersion;
+				record.seatToken = "test-host-seat-lease";
+				if (!closing.m_TicketStore.Store(record, error)) return false;
+				closing.m_IsHost = true;
+				closing.m_State = NetMatchServiceState::Starting;
+				closing.m_PersistedLocalLease = closure == 2 ? "another-session-lease" : record.seatToken;
+				if (closure == 3) closing.ReportRuntimeError("unexpected host fault");
+				else closing.Destroy(closure == 1);
+				const bool retained = closing.m_TicketStore.Load(unixNow, returned) == NetH4TicketLoadResult::Loaded;
+				if (retained != (closure != 0)) {
+					*error = "closing an unstarted host kept its own ticket or removed a recoverable/unrelated ticket"; return false;
+				}
+			}
 		}
 		System::PrintDiagnosticLine("[net-match-selftest] PASS internet_ticket_keeps_session_and_failed_attempt_advances");
 		return true;

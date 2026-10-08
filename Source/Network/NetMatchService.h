@@ -1478,9 +1478,8 @@ namespace RTE {
 		void RunCleanLeave();
 		/// The worker half of a leave: the §7 exchange, then - and only then - the round is told.
 		void LeaveWorkerMain(std::string result);
-		/// Ends the hosted session: tells every peer with the one reason that permits deleting a
-		/// recovery record (P22), then clears the registry, the ledger and the seats. Caller holds the lock.
-		void EndAdmissionSession();
+		/// Clears admission, preserving hosted recovery only for a handover or restart. Caller holds the lock.
+		void EndAdmissionSession(bool preserveHostedMatch = false);
 		void ResetRosterTransitionHistory();
 		/// Reads the session's roster into the seat views, then records what moved. Caller holds the lock.
 		void RefreshSeatViewsLocked(uint64_t observedAtMs);
