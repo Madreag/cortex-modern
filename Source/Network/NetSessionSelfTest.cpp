@@ -377,13 +377,14 @@ namespace RTE {
 			transport.Push({NetTransportEventType::PacketReceived, 300, NetTransportLane::ControlReliable, helloBytes, ""});
 			host.Tick(0);
 
-			if (host.GetState() != NetSessionState::Accepted || transport.sentPackets.size() != 2) {
-				*error = "scripted host did not accept and send both accept messages";
+			if (host.GetState() != NetSessionState::Accepted || transport.sentPackets.size() != 3) {
+				*error = "scripted host did not send both accept messages and its first heartbeat";
 				return false;
 			}
 
 			bool sawHostHello = false;
 			bool sawJoinAccepted = false;
+			bool sawHeartbeat = false;
 			for (const ScriptedHostTransport::SentPacket& packet : transport.sentPackets) {
 				if (packet.peerId != 300) {
 					*error = "host sent response to the wrong transport peer";
@@ -406,10 +407,12 @@ namespace RTE {
 						*error = "JoinAccepted leaked the transport peer id into the session peer id";
 						return false;
 					}
+				} else if (std::holds_alternative<NetHeartbeat>(decoded.message.payload)) {
+					sawHeartbeat = true;
 				}
 			}
-			if (!sawHostHello || !sawJoinAccepted) {
-				*error = "scripted host did not send HostHello and JoinAccepted";
+			if (!sawHostHello || !sawJoinAccepted || !sawHeartbeat) {
+				*error = "scripted host did not send HostHello, JoinAccepted and Heartbeat";
 				return false;
 			}
 			return true;
