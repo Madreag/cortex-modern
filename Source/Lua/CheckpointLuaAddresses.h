@@ -8,9 +8,44 @@
 #include <optional>
 #include <stdexcept>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace RTE::CheckpointLua {
+	inline size_t CaptureAddressHash(const void* pointer) {
+		uint64_t hash = reinterpret_cast<uintptr_t>(pointer);
+		hash ^= hash >> 33; hash *= UINT64_C(0xff51afd7ed558ccd);
+		hash ^= hash >> 33; hash *= UINT64_C(0xc4ceb9fe1a85ec53);
+		hash ^= hash >> 33;
+		return static_cast<size_t>(hash);
+	}
+	// Entries keep their insertion order; the last entry for an address supplies its value.
+	class CaptureAddressIndex {
+	public:
+		template <class Value> void Build(const std::vector<std::pair<const void*, Value>>& entries) {
+			if (entries.size() > m_Slots.max_size() / 2) throw std::length_error("checkpoint address index is too large");
+			size_t capacity = 8;
+			while (capacity / 2 < entries.size()) {
+				if (capacity > m_Slots.max_size() / 2) throw std::length_error("checkpoint address index is too large");
+				capacity *= 2;
+			}
+			m_Slots.assign(capacity, 0);
+			for (size_t index = 0; index < entries.size(); ++index) m_Slots[Slot(entries, entries[index].first)] = index + 1;
+		}
+		template <class Value> const Value* Find(const std::vector<std::pair<const void*, Value>>& entries, const void* address) const {
+			if (m_Slots.empty()) return nullptr;
+			const size_t entry = m_Slots[Slot(entries, address)];
+			return entry ? &entries[entry - 1].second : nullptr;
+		}
+	private:
+		std::vector<size_t> m_Slots;
+		template <class Value> size_t Slot(const std::vector<std::pair<const void*, Value>>& entries, const void* address) const {
+			const size_t mask = m_Slots.size() - 1;
+			size_t slot = CaptureAddressHash(address) & mask;
+			while (m_Slots[slot] && entries[m_Slots[slot] - 1].first != address) slot = (slot + 1) & mask;
+			return slot;
+		}
+	};
 	// Membership has no iteration order; contiguous slots keep the fenced walk local.
 	class CaptureAddressSet {
 	public:
@@ -55,12 +90,8 @@ namespace RTE::CheckpointLua {
 		size_t m_Size = 0;
 		bool m_Null = false;
 		static size_t Slot(const std::pmr::vector<const void*>& slots, const void* pointer) {
-			uint64_t hash = reinterpret_cast<uintptr_t>(pointer);
-			hash ^= hash >> 33; hash *= UINT64_C(0xff51afd7ed558ccd);
-			hash ^= hash >> 33; hash *= UINT64_C(0xc4ceb9fe1a85ec53);
-			hash ^= hash >> 33;
 			const size_t mask = slots.size() - 1;
-			size_t slot = static_cast<size_t>(hash) & mask;
+			size_t slot = CaptureAddressHash(pointer) & mask;
 			while (slots[slot] && slots[slot] != pointer) slot = (slot + 1) & mask;
 			return slot;
 		}

@@ -4224,12 +4224,14 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 private:
 	template <class Value> struct Entries {
 		std::vector<std::pair<const void*, Value>> sorted;
+		std::optional<CheckpointLua::CaptureAddressIndex> index;
 	};
 	struct Fields {
 		Entries<VectorField> vectors;
 		Entries<long> controllers;
 	};
 	template <class Value> static const Value* Find(const Entries<Value>& entries, const void* address) {
+		if (entries.index) return entries.index->Find(entries.sorted, address);
 		const auto found = std::lower_bound(entries.sorted.begin(), entries.sorted.end(), address, [](const auto& entry, const void* key) { return entry.first < key; });
 		return found != entries.sorted.end() && found->first == address ? &found->second : nullptr;
 	}
@@ -4257,7 +4259,13 @@ private:
 				}
 			}
 			// A later object's entry wins an address, as the map it replaces let it.
-			const auto settle = [](auto& entries) {
+			const auto settle = [](auto& fields) {
+				auto& entries = fields.sorted;
+				if (CheckpointWriter::BatchEnabled()) {
+					fields.index.emplace();
+					fields.index->Build(entries);
+					return;
+				}
 				std::stable_sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 				auto last = entries.begin();
 				for (auto entry = entries.begin(); entry != entries.end(); ++entry) {
@@ -4266,8 +4274,8 @@ private:
 				}
 				if (!entries.empty()) entries.erase(last + 1, entries.end());
 			};
-			settle(vectors);
-			settle(controllers);
+			settle(m_Owners.vectors);
+			settle(m_Owners.controllers);
 		});
 		return m_Owners;
 	}
@@ -8980,6 +8988,35 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 #endif
 	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
+	{
+		std::vector<uint64_t> words(8192);
+		std::vector<std::pair<const void*, long>> entries;
+		std::unordered_map<const void*, long> reference;
+		for (size_t index = 0; index < words.size(); ++index) {
+			entries.emplace_back(&words[index], static_cast<long>(index));
+			reference[&words[index]] = static_cast<long>(index);
+		}
+		for (size_t index = 0; index < words.size(); index += 3) {
+			entries.emplace_back(&words[index], -static_cast<long>(index) - 1);
+			reference[&words[index]] = -static_cast<long>(index) - 1;
+		}
+		entries.emplace_back(nullptr, 17);
+		entries.emplace_back(nullptr, 29);
+		reference[nullptr] = 29;
+		CheckpointLua::CaptureAddressIndex owners;
+		owners.Build(entries);
+		bool exact = true;
+		for (const auto& [address, value]: reference) {
+			const long* captured = owners.Find(entries, address);
+			exact = exact && captured && *captured == value;
+		}
+		uint64_t absent = 0;
+		exact = exact && !owners.Find(entries, &absent);
+		entries.clear(); owners.Build(entries);
+		exact = exact && !owners.Find(entries, nullptr);
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " checkpoint_owner_index_preserves_the_last_alias" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
 	{
 		std::pmr::monotonic_buffer_resource resource;
 		CheckpointLua::CaptureAddressSet addresses(&resource, true);
