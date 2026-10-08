@@ -6028,11 +6028,24 @@ namespace RTE {
 		std::array<std::unique_ptr<NetLobbySession>, 4> lobbies;
 		uint32_t pumps = 0;
 		bool sawFourNotReady = false;
+		bool leftLobby = false, sawHeldSeat = false, returnedToLobby = false;
+		uint32_t leftAtPump = 0;
+		NetRosterSeat originalSeat;
 		std::string pumpError;
 		runner.m_Config.publishLobby = [&](const NetLobbySnapshot&) {
 			++pumps;
 			for (size_t i = 1; i < fixture.peers.size(); ++i) {
 				RematchPeer& peer = *fixture.peers[i];
+				if (i == 1 && leftLobby && !returnedToLobby) {
+					const auto* held = host.admission.GetRoster().Find(2);
+					if (host.session.GetReadyPeerCount() == 2 && held && held->phase == NetSeatPhase::Held) sawHeldSeat = true;
+					if (!sawHeldSeat || pumps < leftAtPump + 10) continue;
+					peer.reconnect.Configure(&peer.store, RematchIdentity(), "Client 1");
+					peer.reconnect.SetUnixClock(&RematchUnixClock, nullptr);
+					peer.reconnect.SetHostContext("loopback", NetHash32{});
+					peer.reconnect.SetRequireStoredTicket(true);
+					returnedToLobby = true;
+				}
 				// The host is already pumping its empty manual lobby when these independent peers arrive.
 				if (!connected[i] && pumps >= 1 + (i - 1) * 10) {
 					connected[i] = peer.session.StartClient(peer.transport, "loopback", peer.config.sessionConfig, &pumpError);
@@ -6056,7 +6069,7 @@ namespace RTE {
 				}
 				lobbies[i]->Tick(fixture.clock.NowMs());
 			}
-			if (!sawFourNotReady && host.session.GetReadyPeerCount() == 3 &&
+			if (host.session.GetReadyPeerCount() == 3 &&
 			    std::all_of(lobbies.begin() + 1, lobbies.end(), [](const auto& lobby) {
 				    return lobby && lobby->GetState() == NetLobbyState::WaitingForReady && !lobby->IsLocalReady();
 			    })) {
@@ -6065,7 +6078,24 @@ namespace RTE {
 					cancel.store(true);
 					return;
 				}
-				sawFourNotReady = true;
+				if (!leftLobby) {
+					sawFourNotReady = true;
+					originalSeat = *host.admission.GetRoster().Find(2);
+					fixture.peers[1]->session.Close("leaving the lobby");
+					fixture.peers[1]->transport.Stop();
+					lobbies[1].reset();
+					connected[1] = false;
+					leftLobby = true;
+					leftAtPump = pumps;
+					return;
+				}
+				const auto* returned = host.admission.GetRoster().Find(2);
+				if (!returnedToLobby || !fixture.peers[1]->reconnect.UsedStoredTicket() || !returned ||
+				    returned->owner != originalSeat.owner || returned->ticket != originalSeat.ticket || returned->phase != NetSeatPhase::Lobby) {
+					pumpError = "the returning lobby connection did not reclaim its original seat";
+					cancel.store(true);
+					return;
+				}
 				for (size_t i = 1; i < lobbies.size(); ++i) lobbies[i]->SetLocalReady(true);
 				start.store(true);
 			}
@@ -6085,7 +6115,7 @@ namespace RTE {
 			          << " ignored_session=" << lobbies[i]->GetStats().ignoredSessionPackets
 			          << " started=" << lobbies[i]->IsStarted() << std::endl;
 		}
-		if (!started || !sawFourNotReady) { *error = "late joiners were admitted but never received the lobby config: " + pumpError; return false; }
+		if (!started || !sawFourNotReady || !sawHeldSeat || !returnedToLobby) { *error = "a late or returning joiner was admitted but never received the lobby config: " + pumpError; return false; }
 		for (size_t i = 1; i < lobbies.size(); ++i) {
 			if (!lobbies[i]->IsStarted() || lobbies[i]->GetMatchConfigHash() != runner.GetMatchConfigHash()) {
 				*error = "the four peers did not start with the same config and roster";

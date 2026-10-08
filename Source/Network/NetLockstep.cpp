@@ -5663,6 +5663,12 @@ namespace RTE {
 		// round will never require. Only that shift is dropped instead of refused - every peer agrees the
 		// same first frame - and a target below the round's own start is still an error.
 		if (target >= m_Config.startFrame + delay && target < EffectiveStartOf(m_Config.localPeerId)) {
+			// A player's event accepted during the startup ramp still has to commit. Carry it
+			// through the same queue as an input emptied by a capture park; only the sample expires.
+			if (!commands.empty()) {
+				auto& carried = m_ParkCarriedCommands[target];
+				carried.insert(carried.end(), commands.begin(), commands.end());
+			}
 			m_DeferredControllerFrames.clear();
 			return true;
 		}

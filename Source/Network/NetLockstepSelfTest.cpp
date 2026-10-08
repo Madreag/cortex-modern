@@ -2700,6 +2700,39 @@ namespace RTE {
 				*error = "effective delays replaced the opening round identity";
 				return false;
 			}
+			// The editor is visible during the agreed ramp. A Done click is an event, even
+			// when its input sample targets a tick before this seat's admitted start.
+			const uint64_t through = host.GetStats().effectiveStartFrame + 20;
+			for (uint64_t produced = 1; produced <= through; ++produced) {
+				std::vector<NetGameCommand> hostCommands{{1, NetGamePlayerBindings{}}};
+				std::vector<NetGameCommand> clientCommands{{2, NetGamePlayerBindings{}}};
+				if (produced == 2) hostCommands.push_back({1, NetGamePlaceBrain{0, 0, 100, 100, "Actor", "Brain Case", "Base.rte"}, 1});
+				if (produced == 3) clientCommands.push_back({2, NetGamePlaceBrain{1, 1, 200, 100, "Actor", "Brain Case", "Base.rte"}, 1});
+				if (!host.QueueLocalInput(produced, {}, hostCommands, error) || !client.QueueLocalInput(produced, {}, clientCommands, error)) return false;
+			}
+			std::vector<std::pair<uint8_t, uint64_t>> hostPlacements, clientPlacements;
+			const auto collect = [](NetLockstepCoordinator& peer, auto& placements) {
+				NetLockstepReadyFrame frame;
+				while (peer.PopReadyFrame(frame)) {
+					for (const auto* commands: {&frame.localCommands, &frame.remoteCommands})
+						for (const NetGameCommand& command: *commands)
+							if (std::holds_alternative<NetGamePlaceBrain>(command.payload)) placements.emplace_back(command.senderPeerId, frame.frame);
+					(void)peer.FinishSimulationTick(frame.frame);
+				}
+			};
+			for (uint64_t now = 500; now < 1000 && (host.GetStats().nextFrame <= through || client.GetStats().nextFrame <= through); ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+				collect(host, hostPlacements); collect(client, clientPlacements);
+			}
+			if (hostPlacements.size() != 2 || hostPlacements != clientPlacements ||
+			    hostPlacements[0].first != 1 || hostPlacements[1].first != 2 ||
+			    host.GetStats().nextFrame <= through || client.GetStats().nextFrame <= through) {
+				*error = "startup discarded or repeated an editor command: host=" + std::to_string(hostPlacements.size()) +
+				         " client=" + std::to_string(clientPlacements.size());
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS startup_editor_commands_commit_once_on_both_peers" << std::endl;
 			std::cout << "[net-lockstep-selftest] PASS first_start_waits_for_published_startup startup_ms=1000 peer_start_ms=200 agreed_frame_at_least="
 			          << expectedAgreedFrame << std::endl;
 			return true;

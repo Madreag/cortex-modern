@@ -1006,7 +1006,11 @@ namespace RTE {
 		const NetReconnectHost* plane = m_Config.session ? m_Config.session->GetReconnectHost() : nullptr;
 		const NetRosterSeat* seat = plane ? plane->RosterSeatOfPeer(peerId) : nullptr;
 		if (!seat || seat->owner == 0) return false;
-		// The round starts that seat held by the AI and its player comes back through the rejoin; nobody waits for its endpoint.
+		// The initial lobby has not agreed on round members. Removing a held owner from that
+		// set now would also hide its authenticated return from SyncSessionPeers. FormRematch
+		// selects the present members when the host actually asks to start.
+		if (plane->GetRoster().stage == NetRosterStage::Lobby) return true;
+		// The formed round starts that seat held by the AI; nobody waits for its old endpoint.
 		NetMatchConfig held = m_Config.matchConfig;
 		if (LeaveRoundMembers(held, peerId)) {
 			++held.configRevision;
