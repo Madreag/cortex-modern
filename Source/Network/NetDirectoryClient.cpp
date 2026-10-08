@@ -355,6 +355,7 @@ namespace RTE {
 		m_Listed = false;
 		m_BrowseWanted = false;
 		if (m_State == State::Disabled) {
+			AbandonLease();
 			return;
 		}
 		const uint64_t begin = SteadyNowMs();
@@ -365,19 +366,8 @@ namespace RTE {
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(5));
 		}
-		if (m_Request) {
-			m_Request->Abort();
-			m_Request.reset();
-			m_RequestKind = RequestKind::None;
-		}
-		m_SessionId.clear();
-		m_Token.clear();
-		m_ConfirmedListed.reset();
+		AbandonLease();
 		m_Capable = false;
-		m_ConnectionProtocolRefused = false;
-		if (m_State != State::Disabled) {
-			SetState(State::Idle);
-		}
 	}
 
 	bool NetDirectoryClient::StartIceRequest(const Request& request) {

@@ -786,8 +786,7 @@ static std::string ResyncSaveName() {
 			// A new join is not the substitute this process was; its own rejoin carries on as one.
 			if (!request.rejoin) m_SubstituteRejoinStarted = false;
 			if (request.host) {
-				m_DirectoryRow.iceIdentity.clear();
-				m_DirectoryRow.iceVirtualPort = 0;
+				m_DirectoryRow = {};
 				m_DirectoryRow.name = m_LocalName;
 				m_DirectoryRow.activity = matchConfig.activityPreset;
 				m_DirectoryRow.scene = matchConfig.sceneName;
@@ -1304,7 +1303,8 @@ static std::string ResyncSaveName() {
 
 	int NetMatchService::GetDirectoryVisibility() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (m_DirectoryRetracted || m_IceBoundSessionId.empty()) return 0;
+		if (!m_IsHost || m_State == NetMatchServiceState::Idle || m_HostThisNetworkOnly || m_DirectoryRetracted ||
+		    m_DirectoryState == NetDirectoryClient::State::Disabled) return 0;
 		return m_DirectoryHidden ? 1 : 2;
 	}
 
@@ -1329,7 +1329,8 @@ static std::string ResyncSaveName() {
 		if (visibility <= 0) {
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
-				if (m_DirectoryRetracted || m_IceBoundSessionId.empty()) return true; // already LAN-only
+				if (!m_IsHost || m_State == NetMatchServiceState::Idle || m_HostThisNetworkOnly || m_DirectoryRetracted ||
+				    m_DirectoryState == NetDirectoryClient::State::Disabled) return true;
 			}
 			RetractDirectoryListing();
 			return true;
@@ -1339,8 +1340,9 @@ static std::string ResyncSaveName() {
 		bool listed;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			// A retracted row or a LAN-bound session has no lease to move; relisting is a new session's.
-			if (m_DirectoryRetracted || m_IceBoundSessionId.empty()) return false;
+			// A local or retracted lobby needs a new session to publish its address.
+			if (!m_IsHost || m_State == NetMatchServiceState::Idle || m_HostThisNetworkOnly || m_DirectoryRetracted ||
+			    m_DirectoryState == NetDirectoryClient::State::Disabled) return false;
 			advertised = m_DirectoryRow;
 			running = m_State == NetMatchServiceState::Running;
 			listed = visibility >= 2;

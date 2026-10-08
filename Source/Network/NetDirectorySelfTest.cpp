@@ -385,10 +385,27 @@ namespace RTE {
 		service.m_Directory.Advertise({}, false);
 		service.m_Directory.Update(0);
 		service.RefreshDirectorySignalCredentialLocked(0);
-		if (service.GetListingStatus() != NetListingStatus::Opening) { *error = "public registration was described as network-only"; return false; }
+		if (service.GetListingStatus() != NetListingStatus::Opening || service.GetDirectoryVisibility() != 2 || !service.SetDirectoryVisibility(2)) {
+			*error = "public registration was described as network-only or refused its existing visibility"; return false;
+		}
 		service.m_Directory.Update(0);
 		service.RefreshDirectorySignalCredentialLocked(0);
-		if (service.GetListingStatus() != NetListingStatus::Listed) { *error = "registered public lobby was not described as listed"; return false; }
+		if (service.GetListingStatus() != NetListingStatus::Listed || service.GetDirectoryVisibility() != 2) {
+			*error = "registered public lobby without ICE was not described as listed"; return false;
+		}
+		if (!service.SetDirectoryVisibility(0) || service.GetDirectoryVisibility() != 0 || service.SetDirectoryVisibility(2)) {
+			*error = "a retracted lobby retained its public intent or relisted the ended lease"; return false;
+		}
+		service.m_DirectoryRetracted = false;
+		service.m_DirectoryState = NetDirectoryClient::State::Registering;
+		if (!service.SetDirectoryVisibility(0) || !service.m_DirectoryRetracted) {
+			*error = "a pending public registration ignored the host's local-only choice"; return false;
+		}
+		service.m_DirectoryRetracted = false;
+		service.m_HostThisNetworkOnly = true;
+		if (service.GetDirectoryVisibility() != 0 || service.SetDirectoryVisibility(2)) {
+			*error = "a LAN-bound lobby accepted a public listing"; return false;
+		}
 		std::cout << "[net-directory-selftest] PASS lobby_directory_status" << std::endl;
 		return true;
 	}
@@ -2475,6 +2492,17 @@ namespace RTE {
 					} else if (!ReportRowless(report)) {
 						note("shutdown: the report still claimed " + VisibilityFields(report) + " after Shutdown deleted the row");
 					}
+					auto newLease = json::parse(kRegisterCapableSecret);
+					newLease["session_id"] = "7b8c9d2e-1111-4222-8333-444455556667";
+					s.replies->push_back({200, newLease.dump(), ""});
+					s.client.Advertise(SampleRegisterRequest(), false);
+					s.client.Update(SteadyMs() + 60000);
+					const auto fresh = json::parse(s.sent->back().body);
+					if (s.sent->back().method != "POST" || !fresh.value("resume_session_id", std::string()).empty() || !fresh.value("resume_token", std::string()).empty()) {
+						note("shutdown: a new lobby reclaimed the deleted lobby's lease");
+					}
+					s.client.Update(SteadyMs() + 60000);
+					if (s.client.GetSessionId() != newLease["session_id"]) note("shutdown: the next lobby did not adopt its fresh lease");
 				}
 
 				{   // Shutdown inside a heartbeat 429 keeps retry_after: no DELETE within its budget, none counted
