@@ -562,17 +562,17 @@ static std::string ResyncSaveName() {
 			return false;
 		}
 		if (!request.host && request.sessionId.empty() && g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly) {
-			if (error) *error = "Relay only requires an Internet session; select a game from the Internet list";
+			if (error) *error = "Your Connection is Relay only. Select a game from the Internet list, or switch Connection to Automatic to join a direct address.";
 			return false;
 		}
 		if (g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly &&
 		    (g_SettingsMan.GetSessionDirectoryUrl().empty() || (request.host && !g_SettingsMan.GetNetworkIceEnable()))) {
-			if (error) *error = "Relay only needs a session directory and NAT traversal enabled";
+			if (error) *error = "Your Connection is Relay only. Enable the session directory in Settings > Network and NAT traversal in Host Options > Network.";
 			return false;
 		}
 		if (request.host && g_SettingsMan.GetNetworkHostRelayMode() == SettingsMan::NetworkHostRelayMode::Fixed &&
 		    NetRelayConfig::Fixed(g_SettingsMan.GetNetworkTurnServers(), g_SettingsMan.GetNetworkTurnUser(), g_SettingsMan.GetNetworkTurnPass(), "host", UINT64_MAX).Empty()) {
-			if (error) *error = "Fixed relay needs a valid address, username and password in Host Options > Network";
+			if (error) *error = "Your host relay is Fixed. Enter its address, username and password in Host Options > Network, or select Directory.";
 			return false;
 		}
 		// Past the refusals: the settings are read once here, where a real host starts, and ride the
@@ -8712,7 +8712,14 @@ static std::string ResyncSaveName() {
 
 	std::string NetMatchService::GetConnectedRouteLocked(uint8_t peerId) const {
 		INetTransport* wire = ActiveWireLocked();
-		if (!wire) return {};
+		if (!wire) {
+			// During initial setup the worker owns the wire. It publishes its measured
+			// routes with the lobby, just as it publishes ping and Ready state.
+			for (const NetLobbyMember& member: m_LobbySnapshot.members) {
+				if (!member.isLocal && member.connected && (peerId == 0 || member.peerId == peerId) && !member.connectedRoute.empty()) return member.connectedRoute;
+			}
+			return {};
+		}
 		if (m_Coordinator) for (const auto& [peer, transport]: m_Coordinator->RemoteTransports()) {
 			if (peerId != 0 && peer != peerId) continue;
 			const auto route = wire->GetConnectedRoute(transport); if (!route.empty()) return route;
@@ -10188,7 +10195,7 @@ static std::string ResyncSaveName() {
 			while (!ReadRelayOffer(relay) && !m_CancelRequested.load() && SteadyNowMs() < relayDeadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
 			const GnsP2PConfig ice = BuildIceConfig(g_SettingsMan, identity, c_IceVirtualPort, relay);
 			if (ice.connectionMode == 2 && ice.turnServerList.empty()) {
-				if (error) *error = "Relay setup failed: no unexpired relay credentials; configure a relay or choose Automatic";
+				if (error) *error = "Your Connection is Relay only, but no relay login is available. Select Directory or configure Fixed in Host Options > Network, then retry.";
 				return false;
 			}
 			mux.SetHostP2P(c_IceVirtualPort, ice);
@@ -10295,11 +10302,11 @@ static std::string ResyncSaveName() {
 		// Automatic prefers ICE because a directory address can be private.
 		if (!NetIcePrefersP2P(target, m_IceEnabled)) {
 			if (g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly) {
-				if (error) *error = "Relay only requires a host that offers an Internet ICE join";
+				if (error) *error = "Your Connection is Relay only, but this host offers a direct address. Ask the host to enable NAT traversal, or switch your Connection to Automatic.";
 				return false;
 			}
 			if (target.address.empty() || target.port == 0) {
-				if (error) *error = "NAT traversal is Off: enable Automatic or ask the host for a forwarded UDP address";
+				if (error) *error = "This host offers no usable direct address. Enable NAT traversal in Settings > Network, or ask the host for a forwarded UDP address.";
 				return false;
 			}
 			joinAddress = target.address;
@@ -10432,14 +10439,14 @@ static std::string ResyncSaveName() {
 #endif
 		if (m_ConnectionMode == 2) {
 			// A setup that never reached the transport already says why; only a relay that failed to connect is named here.
-			if (error && transportReady && !directoryFull) *error = "Relay connection failed: " + *error + "; check the relay or choose Automatic";
+			if (error && transportReady && !directoryFull) *error = "Relay connection failed: " + *error + "; retry joining or check the relay in Settings > Network";
 			return false;
 		}
 		if (transportReady && !routeFailed()) return false;
 		noDirectRoute = true;
 		const std::string iceError = (transportReady ? (m_RelayAttempted ? "ICE direct/relay connection failed: " : "ICE connection failed: ") : "") + (error ? *error : std::string());
 		if (target.address.empty() || target.port == 0) {
-			if (error) *error = iceError + "; no direct IP address advertised";
+			if (error) *error = iceError + "; this host offers no direct fallback. Retry joining, or ask the host to check its relay.";
 			return false;
 		}
 

@@ -1432,7 +1432,8 @@ namespace RTE {
 		std::string CheckRouteReceipt(Side& side, const std::string& server) {
 			const std::string receipt = side.transport.GetPeerConnectionInfo(side.peer).routeReceipt;
 			const bool relayed = receipt.find(" route=relay ") != std::string::npos;
-			const bool addressed = receipt.find(" remote=") != std::string::npos && receipt.find(" turn=" + server + " ") != std::string::npos;
+			const bool addressed = receipt.find(" remote_sha256=") != std::string::npos &&
+			                       receipt.find(" turn_sha256=" + GnsTransport::TurnHostReceipts(server) + " ") != std::string::npos;
 			const bool offered = receipt.find(std::string(" offer=") + c_RelaySelfTestOffer) != std::string::npos;
 			bool listed = false;
 			for (const GnsProcessConnection& connection : GnsTransport::GetProcessConnections()) {

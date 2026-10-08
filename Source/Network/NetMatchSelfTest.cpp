@@ -8057,13 +8057,25 @@ namespace RTE {
 		size_t listed = 0, joinerListed = 0, migratedListed = 0;
 		const size_t hostWire = onWire(host, hostPlayers, listed);
 		const size_t joinerWire = onWire(joiner, joinerPlayers, joinerListed);
+		// The initial lobby's worker owns its transport until Start. The UI must
+		// retain the measured route that worker published while no member wire exists.
+		NetLobbyMember lobbyPeer;
+		lobbyPeer.peerId = 1;
+		lobbyPeer.connected = true;
+		lobbyPeer.connectedRoute = joiner.GetConnectedRoute(1);
+		joiner.m_LobbySnapshot.members = {lobbyPeer};
+		auto workerWire = std::move(joiner.m_Transport);
+		const bool lobbyRoute = joiner.GetConnectedRoute(1) == "direct" &&
+		                        joiner.GetLobbySnapshot().members.front().connectedRoute == "direct" &&
+		                        joiner.GetNatModeText().find("measured direct route") != std::string::npos;
+		joiner.m_Transport = std::move(workerWire);
 		joiner.m_MigratedTransport = std::move(joiner.m_Transport);
 		const size_t migratedWire = onWire(joiner, migratedPlayers, migratedListed);
 		const bool pass = hostWire == 2 && hostPlayers == std::set<int>{2, 3} && joinerWire == 1 && joinerPlayers == std::set<int>{1} && migratedWire == 1 &&
-		                  migratedPlayers == std::set<int>{1} && listed >= 4;
+		                  migratedPlayers == std::set<int>{1} && listed >= 4 && lobbyRoute;
 		std::cout << "[net-match-selftest] " << (pass ? "PASS" : "FAIL") << " report_lists_every_connection host_connections=" << hostWire << " host_bound=" << hostPlayers.size()
 		          << " joiner_connections=" << joinerWire << " joiner_bound=" << joinerPlayers.size() << " migrated_connections=" << migratedWire
-		          << " migrated_bound=" << migratedPlayers.size() << " process_connections=" << listed << std::endl;
+		          << " migrated_bound=" << migratedPlayers.size() << " process_connections=" << listed << " worker_lobby_route=" << lobbyRoute << std::endl;
 		if (!pass) {
 			*error = "the host's report lists " + std::to_string(hostWire) + " of its 2 joiners' connections (" + std::to_string(hostPlayers.size()) + " bound to a player), a joiner's " +
 			         std::to_string(joinerWire) + " (" + std::to_string(migratedWire) + " on a migrated wire) of its 1, the process " + std::to_string(listed);
@@ -17971,6 +17983,11 @@ namespace RTE {
 			else if (name == "state-delivery") passed = TestLobbyStartWaitsForReceivedState(&error);
 			else if (name == "state-receipts") passed = TestLobbyStateReceiptsAreBoundAndRepeated(&error);
 			else if (name == "joining-lobby") passed = TestAJoiningLobbyWaitsForHostConfig(&error);
+			else if (name == "relay-core") {
+				passed = TestWrittenConfigsHoldNoRelayLogin(&error) && TestTheReportListsEveryConnection(&error) &&
+				         TestConnectedRouteEvidence(&error) && TestRelayOfferAndPolicy(&error) && TestRelayOfferRefresh(&error) &&
+				         TestLobbyRelayAdoption(&error) && TestInternetTicketRecovery(&error) && TestSessionIdJoinRefusals(&error);
+			}
 			else if (name == "relay-join-fix") {
 				std::string joinError, dismissError, heldError;
 				const bool joins = TestAnEmptyLobbyAdmitsLaterJoiners(&joinError);

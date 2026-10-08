@@ -1018,6 +1018,7 @@ namespace RTE {
 			} else if (transportIt != remoteTransports.end()) {
 				member.pingMs = transport.GetPeerPingMs(transportIt->second);
 				member.pingMeasured = transport.IsPeerPingMeasured(transportIt->second);
+				member.connectedRoute = transport.GetConnectedRoute(transportIt->second);
 			} else {
 				member.pingMs = m_Lobby.GetRemotePingMs(slot.peerId);
 				member.pingMeasured = member.pingMs != 0;

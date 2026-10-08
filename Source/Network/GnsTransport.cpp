@@ -798,9 +798,16 @@ namespace RTE {
 		}
 
 		void RefuseRoute(HSteamNetConnection connection) {
-			const char* reason = m_P2PMode == 1 ? "Direct only refuses this relay route" : "Relay only refuses this direct route";
-			m_Interface->CloseConnection(connection, 0, reason, false);
-			HandleConnectionClosed(connection, reason, k_ESteamNetworkingConnectionState_Connecting);
+			const char* localReason = m_P2PMode == 1
+			    ? "Your Connection is Direct only. Switch it to Automatic or Relay only to use this relay route."
+			    : "Your Connection is Relay only, but this route is direct. Check your relay or switch Connection to Automatic.";
+			const char* remoteReason = m_P2PMode == 1
+			    ? (m_IsHost ? "The host's Connection is Direct only. Ask the host to switch it to Automatic to allow this relay route."
+			                : "The joining player's Connection is Direct only. Ask that player to switch it to Automatic to allow this relay route.")
+			    : (m_IsHost ? "The host's Connection is Relay only, but this route is direct. Ask the host to check the relay, then retry."
+			                : "The joining player's Connection is Relay only, but this route is direct. Ask that player to check the relay, then retry.");
+			m_Interface->CloseConnection(connection, 0, remoteReason, false);
+			HandleConnectionClosed(connection, localReason, k_ESteamNetworkingConnectionState_Connecting);
 		}
 
 		void OnConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t* info) {
@@ -1443,7 +1450,7 @@ namespace RTE {
 		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		if (SettingsMan::IsConstructed() && g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly) {
 			m_Impl->Stop();
-			SetError(error, "Relay only refuses direct IP; choose Automatic or Direct only");
+			SetError(error, "Your Connection is Relay only. Host an Internet game, or switch Connection to Automatic to listen on a direct address.");
 			return false;
 		}
 		return m_Impl->StartHost(port, error);
@@ -1453,7 +1460,7 @@ namespace RTE {
 		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		if (SettingsMan::IsConstructed() && g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly) {
 			m_Impl->Stop();
-			SetError(error, "Relay only refuses direct IP; choose Automatic or Direct only");
+			SetError(error, "Your Connection is Relay only. Join from the Internet list, or switch Connection to Automatic to use a direct address.");
 			return false;
 		}
 		return m_Impl->Connect(address, port, error);
