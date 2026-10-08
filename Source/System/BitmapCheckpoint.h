@@ -19,6 +19,8 @@ namespace RTE {
 		std::shared_ptr<const void> TakeStorage();
 		static std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> Capture(
 		    const BITMAP* bitmap, const std::shared_ptr<const BitmapSnapshot>& previous);
+		/// Shares existing local preset searches during a joined world capture.
+		static const Entity* FindPreset(const std::string& type, const std::string& name, int module);
 	private:
 		friend bool RunOwnedCheckpointSelfTest();
 		struct State;

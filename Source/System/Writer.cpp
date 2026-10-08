@@ -1014,10 +1014,12 @@ CheckpointText CheckpointBuffer::Finish() {
 }
 
 const Entity* CheckpointCache::FindPreset(const std::string& type, const std::string& name, int module) {
+	const bool batch = CheckpointWriter::BatchEnabled();
+	if (batch && (module < 0 || name.find('/') != std::string::npos)) return g_PresetMan.GetEntityPreset(type, name, module);
 	const auto key = std::tuple(module, std::string_view(type), std::string_view(name));
-	if (const auto found = m_Presets.find(key); found != m_Presets.end()) return found->second;
-	const Entity* preset = g_PresetMan.GetEntityPreset(type, name, module);
-	m_Presets.emplace(std::tuple(module, type, name), preset);
+	if (const auto found = m_Presets.find(key); found != m_Presets.end() && (!batch || (found->second && found->second->GetModuleID() == module))) return found->second;
+	const Entity* preset = batch ? BitmapPixelCaptureScope::FindPreset(type, name, module) : g_PresetMan.GetEntityPreset(type, name, module);
+	if (!batch || (preset && preset->GetModuleID() == module)) m_Presets.insert_or_assign(std::tuple(module, type, name), preset);
 	return preset;
 }
 
@@ -1109,6 +1111,12 @@ struct BitmapPixelCaptureScope::State {
 		std::mutex mutex;
 		std::optional<std::unordered_map<const BITMAP*, std::shared_ptr<Cell>>> values;
 	};
+	struct Presets {
+		std::mutex mutex;
+		std::optional<std::map<std::tuple<int, std::string, std::string>, const Entity*, std::less<>>> values;
+	};
+	std::array<Presets, 64> presets;
+	std::atomic<size_t> presetQueries{0};
 	std::array<Cells, 64> pixelShards;
 	std::mutex mutex;
 	std::unordered_map<const BITMAP*, std::shared_ptr<Cell>> cells;
@@ -1131,6 +1139,21 @@ std::shared_ptr<const void> BitmapPixelCaptureScope::TakeStorage() {
 	if (!m_State || s_Current.load() != m_State.get()) throw std::logic_error("pixel storage requires the current joined capture");
 	s_Current.store(m_Previous);
 	return std::shared_ptr<State>(std::move(m_State));
+}
+const Entity* BitmapPixelCaptureScope::FindPreset(const std::string& type, const std::string& name, int module) {
+	State* state = s_Current.load();
+	if (!state || module < 0 || name.find('/') != std::string::npos) return g_PresetMan.GetEntityPreset(type, name, module);
+	const size_t hash = std::hash<std::string_view>{}(type) ^ (std::hash<std::string_view>{}(name) << 1) ^ std::hash<int>{}(module);
+	auto& shard = state->presets[hash % state->presets.size()];
+	std::lock_guard lock(shard.mutex);
+	if (!shard.values) shard.values.emplace();
+	const auto key = std::tuple(module, std::string_view(type), std::string_view(name));
+	if (const auto found = shard.values->find(key); found != shard.values->end() && found->second->GetModuleID() == module) return found->second;
+	const Entity* preset = g_PresetMan.GetEntityPreset(type, name, module);
+	// Mods can add a missing local preset; only existing local matches are stable.
+	if (preset && preset->GetModuleID() == module) shard.values->insert_or_assign(std::tuple(module, type, name), preset);
+	state->presetQueries.fetch_add(1, std::memory_order_relaxed);
+	return preset;
 }
 std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> BitmapPixelCaptureScope::Capture(
     const BITMAP* bitmap, const std::shared_ptr<const BitmapSnapshot>& previous) {
@@ -1544,6 +1567,49 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			const std::string census = cache.Census();
 			check(kept && !retired.empty() && census.starts_with("entries=1 ") && census.find("channels=7:1") != std::string::npos,
 			      "transient_checkpoint_cache_keeps_channels_generations_and_expired_owners");
+		}
+		{
+			const std::string type = "MOPixel", missing = "__checkpoint_preset_lookup_missing__";
+			std::list<Entity*> candidates;
+			g_PresetMan.GetAllOfType(candidates, type);
+			const Entity* candidate = candidates.empty() ? nullptr : candidates.front();
+			const int module = candidate ? candidate->GetModuleID() : (g_PresetMan.GetTotalModuleCount() ? 0 : -1);
+			const Entity* expected = g_PresetMan.GetEntityPreset(type, missing, module);
+			const Entity* candidateReference = candidate ? g_PresetMan.GetEntityPreset(candidate->GetClassName(), candidate->GetPresetName(), module) : nullptr;
+			bool exact = true;
+			bool fresh = expected == nullptr;
+			{
+				CheckpointWriter::BatchScope batch(true);
+				BitmapPixelCaptureScope scope;
+				std::vector<std::future<const Entity*>> readers;
+				for (int reader = 0; reader < 16; ++reader) readers.push_back(std::async(std::launch::async, [&] {
+					CheckpointCache cache(true); cache.Begin();
+					return cache.FindPreset(type, missing, module);
+				}));
+				for (auto& reader: readers) exact = reader.get() == expected && exact;
+				const size_t queries = module >= 0 ? readers.size() : 0;
+				fresh = scope.m_State->presetQueries.load() == queries && fresh;
+				if (candidate) {
+					CheckpointCache first(true), second(true); first.Begin(); second.Begin();
+					const auto lookup = [&](CheckpointCache& cache) { return cache.FindPreset(candidate->GetClassName(), candidate->GetPresetName(), candidate->GetModuleID()); };
+					exact = lookup(first) == candidateReference && lookup(second) == candidateReference && exact;
+					readers.clear();
+					for (int reader = 0; reader < 16; ++reader) readers.push_back(std::async(std::launch::async, [&] {
+						CheckpointCache cache(true); cache.Begin(); return lookup(cache);
+					}));
+					for (auto& reader: readers) exact = reader.get() == candidateReference && exact;
+					exact = scope.m_State->presetQueries.load() == queries + 1 && exact;
+				}
+			}
+			{
+				CheckpointWriter::BatchScope batch(true);
+				BitmapPixelCaptureScope scope;
+				CheckpointCache cache(true); cache.Begin();
+				if (candidate) exact = cache.FindPreset(candidate->GetClassName(), candidate->GetPresetName(), candidate->GetModuleID()) == candidateReference && scope.m_State->presetQueries.load() == 1 && exact;
+				else exact = cache.FindPreset(type, missing, module) == expected && scope.m_State->presetQueries.load() == (module >= 0 ? 1 : 0) && exact;
+			}
+			check(exact, "checkpoint_preset_searches_are_shared_by_readers_and_reset_for_each_world_capture");
+			check(fresh, "checkpoint_missing_presets_are_read_fresh_for_mods");
 		}
 		{
 			CheckpointText frozen;

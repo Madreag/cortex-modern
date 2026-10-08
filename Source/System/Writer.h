@@ -219,7 +219,7 @@ namespace RTE {
 		explicit CheckpointCache(bool transient) : m_Transient(transient) {}
 		bool IsTransient() const { return m_Transient; }
 		void Begin() { ++m_Generation; m_Touched = 0; m_Reused = 0; m_Presets.clear(); }
-		/// Preset lookup is stable while the capture holds the world fence.
+		/// Reuses existing local presets while leaving misses and module fallbacks fresh.
 		const Entity* FindPreset(const std::string& type, const std::string& name, int module);
 		CheckpointText Remember(const void* owner, unsigned channel, CheckpointText value);
 		CheckpointText Remember(const void* owner, unsigned channel, CheckpointText value, uint64_t stamp, uint64_t identity = 0, const MovableObject* object = nullptr);
