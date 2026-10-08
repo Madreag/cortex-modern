@@ -698,11 +698,36 @@ struct MusicCheckpoint {
         const std::string originalAudio = g_AudioMan.SaveCheckpoint();
         const auto originalRegistry = g_AudioMan.CaptureCheckpointSoundRegistry();
         const RandomGenerator originalRNG = g_RenderRNG;
+        const RandomGenerator originalSimRNG = g_SimRNG;
         State original; original.Swap(manager);
         bool ok = true;
         try {
             const auto* preset = dynamic_cast<const SoundContainer*>(g_PresetMan.GetEntityPreset("SoundContainer", "Funds Changed", "Base.rte"));
             if (!preset) throw std::runtime_error("missing music checkpoint fixture sample");
+            for (auto mode: {DynamicSongSection::RANDOMNOREPEAT, DynamicSongSection::SHUFFLE}) {
+                DynamicSongSection probe;
+                for (int i = 0; i < 3; ++i) {
+                    probe.GetSoundContainers().emplace_back(*preset);
+                    probe.GetTransitionSoundContainers().emplace_back(*preset);
+                }
+                probe.SetSoundContainerSelectionCycleMode(mode);
+                const std::string before = g_SimRNG.SerializeStateForHashing();
+                const uint64_t renderDraws = g_RenderRNG.GetDrawCount();
+                SoundContainer* previous = nullptr;
+                SoundContainer* previousTransition = nullptr;
+                bool noRepeats = true;
+                for (int i = 0; i < 12; ++i) {
+                    auto* selected = &probe.SelectSoundContainer();
+                    auto* transition = &probe.SelectTransitionSoundContainer();
+                    noRepeats = noRepeats && selected != previous && transition != previousTransition;
+                    previous = selected; previousTransition = transition;
+                }
+                const bool isolated = before == g_SimRNG.SerializeStateForHashing() &&
+                    g_RenderRNG.GetDrawCount() == renderDraws + 24 && noRepeats;
+                std::cout << "[music-checkpoint-selftest] " << (isolated ? "PASS" : "FAIL")
+                          << " music_selection_preserves_sim_rng mode=" << static_cast<int>(mode) << std::endl;
+                ok = isolated && ok;
+            }
             manager.m_CurrentSong = std::make_unique<DynamicSong>();
             auto& section = manager.m_CurrentSong->m_DefaultSongSection;
             for (int i = 0; i < 3; ++i) { section.m_SoundContainers.emplace_back(*preset); section.m_SoundContainers.back().SetBusRouting(SoundContainer::MUSIC); }
@@ -744,6 +769,7 @@ struct MusicCheckpoint {
         g_AudioMan.RestoreCheckpointSoundRegistry(originalRegistry);
         ok = g_AudioMan.LoadCheckpoint(originalAudio) && ok;
         g_RenderRNG = originalRNG;
+        g_SimRNG = originalSimRNG;
         return ok;
     }
 };

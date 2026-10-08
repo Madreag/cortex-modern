@@ -9218,6 +9218,48 @@ assert(({_ScriptGraphNative(CheckpointEndedZone)})[1] == "invalid", "the restore
 	}
 
 	{
+		// A round's start capture can see its activity before the manager installs it.
+		LuaStateWrapper probeState;
+		probeState.Initialize();
+		probeState.CaptureScriptGraphBaseline();
+		std::unique_ptr<Activity> activity = std::make_unique<GameActivity>();
+		luabind::object(probeState.GetLuaState(), static_cast<GameActivity*>(activity.get())).push(probeState.GetLuaState());
+		lua_setglobal(probeState.GetLuaState(), "_ScriptGraphActivityProbe");
+		const bool planted = probeState.RunScriptString(R"lua(
+package.loaded._CheckpointActivityModule = { Activity = _ScriptGraphActivityProbe, count = 7 }
+_ScriptGraphActivityProbe = nil
+)lua") == 0;
+		CheckpointText before, after;
+		std::vector<std::string> problems;
+		const bool first = planted && probeState.CaptureScriptGraph(before, problems, true);
+		if (first) (void)before.Text();
+		probeState.WaitFrozenCopy();
+		g_ActivityMan.SwapCheckpointActivity(activity);
+		const bool second = first && probeState.CaptureScriptGraph(after, problems, true);
+		std::string restoreError;
+		bool restored = false;
+		if (second) {
+			const std::string text = after.Text();
+			probeState.WaitFrozenCopy();
+			probeState.RunScriptString("package.loaded._CheckpointActivityModule = nil");
+			std::vector<std::string> restoreProblems;
+			restored = probeState.RestoreScriptGraph(text, restoreProblems) && probeState.RunScriptString(R"lua(
+assert(package.loaded._CheckpointActivityModule.count == 7)
+assert(_ScriptGraphNativeAddress(package.loaded._CheckpointActivityModule.Activity) == _ScriptGraphNativeAddress(ActivityMan:GetActivity()))
+)lua") == 0;
+			if (!restoreProblems.empty()) restoreError = restoreProblems.front();
+		}
+		g_ActivityMan.SwapCheckpointActivity(activity);
+		probeState.RunScriptString("package.loaded._CheckpointActivityModule = nil");
+		const bool passed = first && second && restored;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL")
+		          << " cached_activity_reference_follows_world_role first=" << first << " second=" << second
+		          << " restored=" << restored << " error=" << restoreError << std::endl;
+		for (const auto& problem: problems) std::cout << "[script-graph-selftest] activity probe: " << problem << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+
+	{
 		// What a capture's cached answers name must die with the object they describe: a script table an
 		// image once read is collected exactly as it would be if no capture had ever run.
 		auto* probe = new MOPixel;

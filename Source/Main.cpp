@@ -10259,22 +10259,36 @@ int RunNetMatchServiceE2E() {
 
 	bool setupCancelled = false;
 	std::string activityPreset;
+	// A real-peer detecting run waits for admission rather than starting with its placeholder slots.
+	const bool waitPeers = std::getenv("CC_TEST_NET_MATCH_E2E_WAIT_PEERS") != nullptr;
 	if (setupError.empty()) {
 		g_NetMatchService.SetReady();
 		bool crossOptionsApplied = s_crossHostOptions.empty() || !e2eHost;
 		uint64_t crossReadyRevision = UINT64_MAX;
-		if (e2eHost && crossOptionsApplied) {
+		const auto peersReady = [waitPeers] {
+			if (!waitPeers) return true;
+			const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+			const auto ready = std::count_if(snapshot.members.begin(), snapshot.members.end(), [](const NetLobbyMember& member) {
+				return !member.cpu && member.connected && member.ready;
+			});
+			return ready >= s_netMatchPeers - (s_netDedicated ? 1 : 0);
+		};
+		if (e2eHost && crossOptionsApplied && peersReady()) {
 			g_NetMatchService.RequestStart();
 		}
 		bool roundEndedOnTheWay = false;
 		while (true) {
 			PollSDLEvents();
 			CrossRecoveryAtCommittedTick(0);
+			if (waitPeers && g_NetMatchService.GetState() == NetMatchServiceState::Starting) g_NetMatchService.SetReady();
 			if (!crossOptionsApplied) {
 				std::string optionsError;
-				if (CrossHostOptions(0, &optionsError)) { crossOptionsApplied = true; g_NetMatchService.SetReady(); g_NetMatchService.RequestStart(); }
+				if (CrossHostOptions(0, &optionsError)) { crossOptionsApplied = true; g_NetMatchService.SetReady(); if (peersReady()) g_NetMatchService.RequestStart(); }
 			}
-			if (crossOptionsApplied) CrossReadyForCurrentConfig(crossReadyRevision);
+			if (crossOptionsApplied && peersReady()) {
+				if (e2eHost && waitPeers) g_NetMatchService.RequestStart();
+				CrossReadyForCurrentConfig(crossReadyRevision);
+			}
 			if (System::IsSetToQuit()) {
 				setupCancelled = true;
 				g_NetMatchService.Destroy();
