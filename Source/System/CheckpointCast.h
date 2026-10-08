@@ -28,13 +28,19 @@ namespace RTE {
 			size_t last = 0;
 		};
 		static thread_local Cache cache;
-		const auto matches = [&](const Entry& entry) { return entry.from == from && *entry.type == type; };
+		const auto matches = [&](const Entry& entry) { return entry.from == from && entry.type == &type; };
 		if (cache.entries.empty() || !matches(cache.entries[cache.last])) {
 			const auto found = std::find_if(cache.entries.begin(), cache.entries.end(), matches);
 			if (found != cache.entries.end()) cache.last = static_cast<size_t>(found - cache.entries.begin());
 			else {
-				const Target* target = dynamic_cast<Target*>(source);
-				cache.entries.push_back({&type, from, target ? std::optional<ptrdiff_t>(reinterpret_cast<const char*>(target) - complete) : std::nullopt});
+				// Equivalent type records from separate modules share the adjustment after their first lookup.
+				const auto equivalent = std::find_if(cache.entries.begin(), cache.entries.end(), [&](const Entry& entry) {
+					return entry.from == from && *entry.type == type;
+				});
+				std::optional<ptrdiff_t> to;
+				if (equivalent != cache.entries.end()) to = equivalent->to;
+				else if (const Target* target = dynamic_cast<Target*>(source)) to = reinterpret_cast<const char*>(target) - complete;
+				cache.entries.push_back({&type, from, to});
 				cache.last = cache.entries.size() - 1;
 			}
 		}
