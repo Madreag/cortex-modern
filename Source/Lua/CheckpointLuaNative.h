@@ -635,6 +635,9 @@ namespace RTE::CheckpointLua {
 		struct ScalarKeys {
 			GCstr* index = nullptr;
 			std::array<GCstr*, 4> properties{};
+			GCstr* kind = nullptr;
+			const luabind::detail::class_rep* type = nullptr;
+			TValue members{};
 		};
 		std::array<ScalarKeys, 2> m_ScalarKeys;
 
@@ -877,9 +880,10 @@ namespace RTE::CheckpointLua {
 				else if (std::strcmp(name, "StartRealTimeTicks") == 0) number = value.GetStartRealTimeTicksNumber();
 				else number = value.GetRealTimeLimitTicksNumber();
 			}
-			lua_pushnumber(State(), number);
-			const TValue token = At(-1);
-			lua_pop(State(), 1);
+			// Match lua_pushnumber, including its NaN canonicalization, without
+			// changing the live VM stack for each already-owned scalar field.
+			TValue token; setnumV(&token, number);
+			if (tvisnan(&token)) setnanV(&token);
 			return token;
 		}
 		NativeImage::Result ScalarProperty(const luabind::detail::object_rep* object, const char* name) {
@@ -917,13 +921,20 @@ namespace RTE::CheckpointLua {
 			NativeImage::ScalarEntry entry;
 			entry.serial = luaJIT_value_serial(State(), -1);
 			entry.timer = timer;
-			entry.members[entry.memberCount++] = ScalarToken([&] { type->get_table(State()); });
+			auto& tokens = m_ScalarKeys[timer ? 1 : 0];
+			if (tokens.type != type) {
+				type->get_table(State()); tokens.members = At(-1); Keep(-1); lua_pop(State(), 1); tokens.type = type;
+			}
+			entry.members[entry.memberCount++] = tokens.members;
 			if (object->get_lua_table().is_valid()) {
-				entry.instance = ScalarToken([&] { object->get_lua_table().get(State()); });
+				object->get_lua_table().get(State()); entry.instance = At(-1); Keep(-1); lua_pop(State(), 1);
 				entry.members[entry.memberCount++] = entry.instance;
 			} else setnilV(&entry.instance);
-			entry.address = ScalarToken([&] { lua_pushlightuserdata(State(), object->ptr()); });
-			entry.kind = ScalarToken([&] { lua_pushstring(State(), timer ? "timer" : "vector"); });
+			lua_pushlightuserdata(State(), object->ptr()); entry.address = At(-1); lua_pop(State(), 1);
+			if (!tokens.kind) {
+				lua_pushstring(State(), timer ? "timer" : "vector"); tokens.kind = strV(&State()->top[-1]); Keep(-1); lua_pop(State(), 1);
+			}
+			setgcVraw(&entry.kind, obj2gco(tokens.kind), LJ_TSTR);
 			for (size_t index = 0; index < names.size(); ++index) entry.properties[index] = ScalarPropertyToken(object, names[index]);
 			m_Image->m_Scalars.emplace_back(gcval(&subject), std::move(entry));
 			return true;

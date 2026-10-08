@@ -23,7 +23,7 @@
 struct lua_State;
 
 namespace RTE {
-	namespace CheckpointLua { class HeapOwner; class NativeCache; struct CopyReceipt; struct GraphWorker; }
+	namespace CheckpointLua { class HeapOwner; class NativeCache; struct CopyReceipt; struct GraphWorker; struct CallbackImage; }
 	struct GraphDirt;
 
 	/// Elapsed costs of the frozen states; concurrent states overlap.
@@ -107,6 +107,8 @@ namespace RTE {
 		static const LuaScriptGraphNativeCaptureData* Current();
 		/// Walks the world's trees for a capture's native answers here, unless one of its states already did.
 		static void BuildWorld(const LuaScriptGraphNativeCaptureData* shared);
+		/// Builds native field identities while the states describe their heaps.
+		static void BuildOwners(const LuaScriptGraphNativeCaptureData* shared);
 		/// Makes, on the capturing thread, everything a capture's workers would otherwise make on first use.
 		static void PreTouch();
 		LuaScriptGraphNativeCaptureScope(const LuaScriptGraphNativeCaptureScope&) = delete;
@@ -286,7 +288,7 @@ namespace RTE {
 		/// What that copy cost, once, after the gate; generation 0 when no copy landed since the last call.
 		CheckpointLua::CopyReceipt TakeFrozenCopyReceipt();
 		/// Captures every state off a frozen image, the states side by side; false when any state could not freeze.
-		/// whileWaiting runs on the calling thread once the master state is captured, while the pool captures the rest.
+		/// whileWaiting runs on the calling thread once its state is captured, while the pool captures the rest.
 		static bool CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats, const std::function<void()>& whileWaiting = {});
 
 		/// The unique ids of the objects a graph text holds fields for.
@@ -312,7 +314,7 @@ namespace RTE {
 		bool RestoreLegacyScriptObjectFields(long uniqueID, const std::string& text);
 
 		/// Exposes cached functions and object callbacks to the script graph.
-		void CaptureScriptCallbacks(uint64_t liveSerial = 0);
+		void CaptureScriptCallbacks(uint64_t liveSerial = 0, CheckpointLua::CallbackImage* deferredObjects = nullptr);
 
 		/// Rebinds cached functions and object callbacks from the restored graph.
 		/// @param rebound Filled with the objects whose callbacks the graph carried and that took them.

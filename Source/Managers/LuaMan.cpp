@@ -4185,6 +4185,7 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	}
 	/// Makes the known-objects copy and lookup on this thread, before any worker asks.
 	void PreTouch() const { Known(nullptr); }
+	void BuildOwners() const { Owners(); }
 	/// Whether an address is a loaded activity preset; only the pointer is read.
 	bool ActivityPreset(const void* address) const {
 		std::call_once(m_ActivityPresetsBuilt, [this] { m_ActivityPresets = LoadedActivityPresets(); });
@@ -4238,6 +4239,8 @@ private:
 	// Which object owns a Vector or a Controller, built by the first state that asks, for every state after it.
 	const Fields& Owners() const {
 		std::call_once(m_OwnersBuilt, [this] {
+			static const bool report = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
+			const auto started = report ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			auto& vectors = m_Owners.vectors.sorted;
 			auto& controllers = m_Owners.controllers.sorted;
 			vectors.reserve(KnownObjects().size() * 6);
@@ -4276,6 +4279,8 @@ private:
 			};
 			settle(m_Owners.vectors);
 			settle(m_Owners.controllers);
+			if (report) System::PrintDiagnosticLine(std::format("[checkpoint-owner-index] objects={} vectors={} controllers={} thread={} us={}", KnownObjects().size(), vectors.size(), controllers.size(),
+				std::hash<std::thread::id>{}(std::this_thread::get_id()), std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()));
 		});
 		return m_Owners;
 	}
@@ -6426,7 +6431,7 @@ namespace RTE::CheckpointLua {
 				lua_settop(state, top);
 				return true;
 			}
-			explicit DescriptorRootScope(lua_State* source, int originalTop, int roots, const TValue& callbacks, int stateIndex) : state(source) {
+			explicit DescriptorRootScope(lua_State* source, int originalTop, int roots, const TValue& callbacks, int stateIndex, std::span<const TValue> callbackFunctions = {}) : state(source) {
 				if (!lua_checkstack(state, 32)) throw std::runtime_error("native descriptor roots exhausted the Lua stack");
 				seen.Reserve(2048);
 				if (GCobj* last = gcref(G(state)->gc.mmudata)) {
@@ -6446,6 +6451,7 @@ namespace RTE::CheckpointLua {
 					for (int index = 1; index <= top; ++index) Queue(index);
 					lua_pushvalue(state, LUA_GLOBALSINDEX); Queue(-1); lua_settop(state, top);
 				}
+				for (const TValue& function: callbackFunctions) Queue(function);
 				std::optional<CaptureTrace::Span> walkSpan(std::in_place, "descriptor_walk", CaptureTrace::Active() ? std::to_string(stateIndex) : std::string());
 				while (!pending.empty()) {
 					if (!lua_checkstack(state, 8)) throw std::runtime_error("native descriptor roots exhausted the Lua stack");
@@ -6752,7 +6758,12 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		image->rng = CaptureRandomGeneratorCheckpoint();
 		const auto callbacksStarted = std::chrono::steady_clock::now();
 		const uint64_t callbacksCpu = phaseCosts ? CheckpointThreadCpuUnits() : 0;
-		CaptureScriptCallbacks(restore.serial);
+		if (CheckpointWriter::BatchEnabled()) {
+			image->callbackObjects = std::make_shared<CheckpointLua::CallbackImage>();
+			image->callbackObjects->stateIndex = image->stateIndex;
+			image->callbackObjects->report = phaseCosts;
+		}
+		CaptureScriptCallbacks(restore.serial, image->callbackObjects.get());
 		const uint64_t callbacksCpuDone = phaseCosts ? CheckpointThreadCpuUnits() : 0;
 		const auto rootsStarted = std::chrono::steady_clock::now();
 		lua_newtable(m_State);
@@ -6795,7 +6806,8 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		CheckpointLua::CaptureScope natives(m_State, *m_NativeCache);
 		const auto descriptorStarted = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		const uint64_t descriptorCpu = phaseCosts ? CheckpointThreadCpuUnits() : 0;
-		CheckpointLua::DescriptorRootScope descriptorRoots(m_State, restore.top, roots, image->callbacks, image->stateIndex);
+		CheckpointLua::DescriptorRootScope descriptorRoots(m_State, restore.top, roots, image->callbacks, image->stateIndex,
+			image->callbackObjects ? std::span<const TValue>(image->callbackObjects->roots) : std::span<const TValue>());
 		const uint64_t descriptorCpuDone = phaseCosts ? CheckpointThreadCpuUnits() : 0;
 		const auto descriptorDone = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		natives.Capture();
@@ -6890,6 +6902,12 @@ void LuaScriptGraphNativeCaptureScope::BuildWorld(const LuaScriptGraphNativeCapt
 	std::lock_guard worldLock(shared->frozenWorldMutex);
 	CaptureTrace::Span span("build_world_body");
 	if (!shared->frozenWorld) shared->frozenWorld = CheckpointLua::CaptureScope::BuildWorld(shared->KnownObjects());
+}
+
+void LuaScriptGraphNativeCaptureScope::BuildOwners(const LuaScriptGraphNativeCaptureData* shared) {
+	if (!shared) return;
+	CheckpointBuffer::AllocationScope allocation(CheckpointWriter::BatchEnabled());
+	shared->BuildOwners();
 }
 
 bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats, const std::function<void()>& whileWaiting) {
@@ -7317,7 +7335,7 @@ bool LuaStateWrapper::RestoreLegacyScriptObjectFields(long uniqueID, const std::
 // Set while a round's start scripts are captured or laid down.
 static bool s_RoundStartScripts = false;
 
-void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
+void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial, CheckpointLua::CallbackImage* deferredObjects) {
 	const int top = lua_gettop(m_State);
 	FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats;
 	auto mark = std::chrono::steady_clock::now();
@@ -7400,6 +7418,23 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 	const std::vector<MovableObject*> known = s_GraphNativeCapture ? std::vector<MovableObject*>() : g_MovableMan.SnapshotKnownObjects();
 	for (const MovableObject* mo: s_GraphNativeCapture ? s_GraphNativeCapture->KnownObjects() : known) {
 		if (mo->GetLuaState() != this || mo->IsOriginalPreset() || mo->GetPendingPersistedUniqueID() > 0 || mo->m_FunctionsAndScripts.empty()) {
+			continue;
+		}
+		if (deferredObjects) {
+			auto* resource = &deferredObjects->storage;
+			auto& object = deferredObjects->objects.emplace_back(std::to_string(mo->GetUniqueID()), resource);
+			object.groups.reserve(mo->m_FunctionsAndScripts.size());
+			for (const auto& [name, functions]: mo->m_FunctionsAndScripts) {
+				auto& group = object.groups.emplace_back(name, resource);
+				group.functions.reserve(functions.size());
+				for (const auto& function: functions) {
+					function.m_LuaFunction->GetLuabindObject()->push(m_State);
+					const TValue value = m_State->top[-1];
+					group.functions.emplace_back(value, function.m_LuaFunction->GetFilePath(), function.m_ScriptIsEnabled, resource);
+					deferredObjects->roots.push_back(value);
+					lua_pop(m_State, 1);
+				}
+			}
 			continue;
 		}
 		PushScriptGraphScratchTable(m_State);
@@ -9130,8 +9165,9 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		checkpointValues = exact && checkpointValues;
 	}
 	{
-		for (const auto& [name, override]: std::array<std::pair<const char*, const char*>, 4>{{
+		for (const auto& [name, override]: std::array<std::pair<const char*, const char*>, 5>{{
 		    {"plain_scalar_properties", "do end"},
+		    {"scalar_nan_and_negative_zero", "_ScalarCapture.vector.X = 0/0; _ScalarCapture.vector.Y = -0.0"},
 		    {"scalar_class_override", "Vector.X = 103; Timer.StartSimTimeTicks = 107"},
 		    {"scalar_instance_override", "_ScriptGraphSetInstance(_ScalarCapture.vector, { X = 109 }); _ScriptGraphSetInstance(_ScalarCapture.timer, { SimTimeLimitTicks = 113 })"},
 		    {"scalar_index_override", "local meta = debug.getmetatable(_ScalarCapture.vector); local old = meta.__index; meta.__index = function(o, k) if k == 'X' then return 127 end return old(o, k) end"}}}) {

@@ -3,6 +3,7 @@
 #include "CheckpointLuaPrototype.h"
 #include "CheckpointLuaNative.h"
 #include "CheckpointLuaThread.h"
+#include "CheckpointLuaCallbacks.h"
 #include "CheckpointImage.h"
 
 #include <set>
@@ -27,6 +28,7 @@ namespace RTE::CheckpointLua {
 		Snapshot heap;
 		std::shared_ptr<const NativeImage> native;
 		TValue roots, globals, baseline, package, callbacks;
+		std::shared_ptr<CallbackImage> callbackObjects;
 		uint64_t liveSerial = 0;
 		CheckpointText rng;
 		std::unordered_set<const void*> scratch;
@@ -80,6 +82,10 @@ namespace RTE::CheckpointLua {
 			Bind(worker, context, "_ScriptGraphNoteRootReuse", Guard<NoteRootReuse>);
 			Bind(worker, context, "_ScriptGraphWalkPart", Guard<WalkPart>);
 			// The capture's descriptor was taken out of the live globals before the freeze; the walk reads it under its name.
+			if (callbackObjects && tvistab(&callbacks)) {
+				callbackObjects->Push(worker, context.view);
+				context.view.InjectLocal(worker, tabV(&callbacks), "objects");
+			}
 			if (tvistab(&callbacks)) context.view.Inject(tabV(&globals), "_ScriptGraphCallbacks", callbacks);
 			context.view.Push(worker, globals); lua_setglobal(worker, "_G");
 			context.view.Push(worker, baseline); lua_setglobal(worker, "_ScriptGraphBaseline");

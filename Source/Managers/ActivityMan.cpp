@@ -885,6 +885,9 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	};
 	// The script graphs' native answers need the world's trees walked; that starts first, off this thread.
 	captureAside("build_world", {}, [shared = LuaScriptGraphNativeCaptureScope::Current()] { LuaScriptGraphNativeCaptureScope::BuildWorld(shared); });
+	if (CheckpointWriter::BatchEnabled()) {
+		captureAside("native_field_owners", {}, [shared = LuaScriptGraphNativeCaptureScope::Current()] { LuaScriptGraphNativeCaptureScope::BuildOwners(shared); });
+	}
 	// Elapsed timer fields change even when their object's write stamp holds, so the scene keeps a cache of its own.
 	captureAside("scene", {}, [&] {
 		const auto sceneStart = std::chrono::steady_clock::now();

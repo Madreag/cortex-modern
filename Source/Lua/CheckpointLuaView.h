@@ -21,6 +21,8 @@ namespace RTE::CheckpointLua {
 		// A persistent saver VM keeps proxy identity, but every read belongs to the
 		// new copied heap. Remove dead/reborn source objects before its weak caches run.
 		void Reset(lua_State* state, Snapshot heap) {
+			if (m_LocalInjectRef != LUA_NOREF) luaL_unref(state, LUA_REGISTRYINDEX, m_LocalInjectRef);
+			m_LocalInjectRef = LUA_NOREF; m_LocalInjectTable = nullptr; m_LocalScratch.clear();
 			m_Heap = std::move(heap); m_Tables.clear(); scratch.clear(); m_InjectTable = nullptr;
 			m_Alive.clear();
 			const auto source = m_Heap.Read(m_Heap.State());
@@ -336,6 +338,7 @@ namespace RTE::CheckpointLua {
 
 		void Lookup(lua_State* state, const GCtab* table, int key) {
 			const std::string name = Key(state, key);
+			if (table == m_LocalInjectTable && name == m_LocalInjectKey) { lua_rawgeti(state, LUA_REGISTRYINDEX, m_LocalInjectRef); return; }
 			if (table == m_InjectTable && name == m_InjectKey) { Push(state, m_InjectValue); return; }
 			const auto& saved = ReadTable(table);
 			const auto found = saved.positions.find(name);
@@ -344,6 +347,17 @@ namespace RTE::CheckpointLua {
 		}
 
 	public:
+		// A saver-owned descriptor can replace one field without changing the
+		// frozen live table. The registry reference owns all of its local tables.
+		void InjectLocal(lua_State* state, const GCtab* table, const char* key) {
+			if (m_LocalInjectRef != LUA_NOREF) luaL_unref(state, LUA_REGISTRYINDEX, m_LocalInjectRef);
+			m_LocalInjectTable = table;
+			m_LocalInjectKey = std::string("s") + key;
+			m_LocalInjectRef = luaL_ref(state, LUA_REGISTRYINDEX);
+		}
+		void MarkLocalScratch(lua_State* state, int index) {
+			m_LocalScratch.emplace(lua_topointer(state, index), m_Heap.StateSerial() + 1 + m_LocalScratch.size());
+		}
 		// One value answered under a key of one frozen table, for a value the capture kept out of the live heap's table.
 		void Inject(const GCtab* table, const char* key, const TValue& value) {
 			m_InjectTable = table;
@@ -352,6 +366,10 @@ namespace RTE::CheckpointLua {
 		}
 
 	private:
+		const GCtab* m_LocalInjectTable = nullptr;
+		std::string m_LocalInjectKey;
+		int m_LocalInjectRef = LUA_NOREF;
+		std::unordered_map<const void*, uint64_t> m_LocalScratch;
 		const GCtab* m_InjectTable = nullptr;
 		std::string m_InjectKey;
 		TValue m_InjectValue{};
@@ -532,7 +550,7 @@ namespace RTE::CheckpointLua {
 				else if (tvisfunc(&*value)) serial = view.ReadFunction(funcV(&*value)).c.serial;
 				else if (tvisudata(&*value)) serial = view.m_Heap.Read(udataV(&*value)).serial;
 				else if (tvisthread(&*value)) serial = view.m_Heap.Read(threadV(&*value)).serial;
-			}
+			} else if (const auto local = view.m_LocalScratch.find(lua_topointer(state, 1)); local != view.m_LocalScratch.end()) serial = local->second;
 			lua_pushnumber(state, static_cast<lua_Number>(serial)); return 1;
 		}
 		static int CellSerial(lua_State* state) {
@@ -542,8 +560,8 @@ namespace RTE::CheckpointLua {
 		static int StateSerial(lua_State* state) { lua_pushnumber(state, static_cast<lua_Number>(Self(state).m_Heap.StateSerial())); return 1; }
 		static int Scratch(lua_State* state) {
 			auto& view = Self(state); auto value = view.Value(state, 1);
-			lua_pushboolean(state, value && (view.SerialOf(*value) > (uint64_t{1} << 40) ||
-			    view.scratch.contains(gcval(&*value)) || view.scratch.contains(ObjectAddress(*value)))); return 1;
+			lua_pushboolean(state, value ? (view.SerialOf(*value) > (uint64_t{1} << 40) ||
+			    view.scratch.contains(gcval(&*value)) || view.scratch.contains(ObjectAddress(*value))) : view.m_LocalScratch.contains(lua_topointer(state, 1))); return 1;
 		}
 		static int Address(lua_State* state) {
 			auto value = Self(state).Value(state, 1);
