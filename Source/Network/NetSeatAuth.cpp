@@ -1,6 +1,7 @@
 #include "NetSeatAuth.h"
 
 #include "NetAuthCrypto.h"
+#include "NetMatchConfig.h"
 #include "nlohmann/json.hpp"
 #include <set>
 #include <map>
@@ -14,7 +15,7 @@ namespace RTE {
 		std::map<uint16_t, SeatEntry> ordered(m_Seats.begin(), m_Seats.end());
 		for (const auto& [seat, entry]: ordered)
 			seats.push_back({seat, entry.lastGeneration, entry.active, entry.credential, entry.retiredGeneration, entry.hasRetired, entry.retiredCredential});
-		return nlohmann::json::to_cbor(nlohmann::json{{"version", 1}, {"epoch", m_Epoch}, {"seats", seats}});
+		return nlohmann::json::to_cbor(nlohmann::json{{"version", 2}, {"epoch", m_Epoch}, {"lease_signer", m_HostLeaseSigningKey}, {"seats", seats}});
 	}
 
 	bool NetSeatAuthRegistry::ImportMigrationState(const std::vector<uint8_t>& bytes) {
@@ -23,14 +24,18 @@ namespace RTE {
 		try {
 			const auto object = nlohmann::json::from_cbor(bytes);
 			NetSeatAuthRegistry next;
-			if (object.at("version") != 1 || !object.at("seats").is_array() || object.at("seats").size() > 7)
+			constexpr uint16_t seatBound = NetMatchConfigUtil::c_MaxPlayers + NetMatchConfigUtil::c_MaxWorldSpectators;
+			if ((object.at("version") != 1 && object.at("version") != 2) || !object.at("seats").is_array() || object.at("seats").size() > seatBound + 1U)
 				return false;
 			next.m_Epoch = object.at("epoch").get<NetAuthEpoch>();
+			if (object.at("version") == 2) next.m_HostLeaseSigningKey = object.at("lease_signer").get<NetAuthBytes32>();
+			else if (!GetNetAuthCrypto().RandomBytes(next.m_HostLeaseSigningKey.data(), next.m_HostLeaseSigningKey.size())) return false;
+			if (next.m_HostLeaseSigningKey == NetAuthBytes32{}) return false;
 			if (std::all_of(next.m_Epoch.begin(), next.m_Epoch.end(), [](uint8_t value) { return value == 0; }))
 				return false;
 			for (const auto& row: object.at("seats")) {
 				const uint16_t seat = row.at(0).get<uint16_t>();
-				if (seat >= 7 || next.m_Seats.contains(seat))
+				if (seat > seatBound || next.m_Seats.contains(seat))
 					return false;
 				SeatEntry entry;
 				entry.lastGeneration = row.at(1).get<uint32_t>();
@@ -59,10 +64,12 @@ namespace RTE {
 	bool NetSeatAuthRegistry::BeginHostedSession() {
 		EndSession();
 		NetAuthEpoch epoch{};
-		if (!GetNetAuthCrypto().RandomBytes(epoch.data(), epoch.size())) {
+		NetAuthBytes32 signer{};
+		if (!GetNetAuthCrypto().RandomBytes(epoch.data(), epoch.size()) || !GetNetAuthCrypto().RandomBytes(signer.data(), signer.size())) {
 			return false;
 		}
 		m_Epoch = epoch;
+		m_HostLeaseSigningKey = signer;
 		m_Active = true;
 		return true;
 	}
@@ -70,6 +77,7 @@ namespace RTE {
 	void NetSeatAuthRegistry::EndSession() {
 		m_Active = false;
 		m_Epoch.fill(0);
+		m_HostLeaseSigningKey.fill(0);
 		m_Seats.clear();
 	}
 

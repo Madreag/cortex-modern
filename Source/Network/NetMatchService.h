@@ -161,7 +161,6 @@ namespace RTE {
 	/// The line a joiner reads while its ICE connect runs: what it waits on, how long it has waited and how long it may.
 	std::string NetIceConnectingLine(uint64_t elapsedMs, uint64_t limitMs, bool hostAnswered, bool relayReady, bool retrying);
 	/// A connect that ran out of time is worth one more dial only when the host answered it and refused nothing: its session lives.
-	bool NetIceRetryCanSucceed(uint64_t signalsFromHost, uint64_t refusals);
 
 	/// Resolves a session id against a directory listing. Empty and a filled target when the row can
 	/// be joined, else the join list's own refusal label for it.
@@ -667,7 +666,7 @@ namespace RTE {
 		/// Stages the pending snapshot for launch: the world state is the file's, the player seats
 		/// are per-peer, and the funds/roster ride the snapshot untouched.
 		bool StageResyncedMatchLaunch(std::string* error = nullptr);
-		void Destroy();
+		void Destroy(bool preserveMatch = false);
 		void Update();
 
 		/// Watcher: tell the world whether this player wants a seat when one frees. A declining
@@ -1336,13 +1335,13 @@ namespace RTE {
 		void SettleKeptDirectoryLease();
 		/// Host: waits for the register reply so the GNS identity can be pinned to the session id
 		/// before any listen socket of this process opens. Worker thread; reads the published snapshot.
-		bool WaitForDirectorySession(uint64_t budgetMs, std::string& sessionId, std::string& token) const;
 		/// Host: registers first, pins the GNS identity to the session id, then opens both listens.
 		/// Client: resolves the session id to a row and arms the join. Worker thread.
 		bool SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, NetIceJoinTarget& target, std::string* error);
 		/// Builds the candidate policy from the saved settings and run overrides.
 		static GnsP2PConfig BuildIceConfig(const SettingsMan& settings, const std::string& localIdentity, int localVirtualPort, const NetRelayConfig& relay = {});
 		void UpdateRelayOffer(uint64_t nowMs);
+		void UpdateConnectionAuthority(uint64_t nowMs);
 		void PublishRelayOfferLocked(NetSession& session, INetTransport& wire);
 		bool ReadRelayOffer(NetRelayConfig& offer) const;
 		void SetRelayOfferLocked(const NetRelayConfig& offer);
@@ -1367,9 +1366,7 @@ namespace RTE {
 		bool DialMigrationIce(INetTransport& transport, const std::string& identity, std::string* error);
 		/// Opens the directory's host end on this successor's handover listener, so the survivors' ICE dials reach it.
 		void HostMigrationIce(INetTransport& listener);
-		static constexpr uint64_t c_IceRegisterBudgetMs = 30000;
 		static constexpr uint64_t c_IceResolveBudgetMs = 30000;
-		bool QueryDirectoryHostEnd(const std::string& sessionId);
 		static constexpr uint32_t c_IceConnectBudgetMs = 15000;
 		static constexpr uint32_t c_IceHandshakeMarginMs = 5000; //!< The session's hello after the transport connects, on top of its connect limit.
 		void JoinWorkerIfDone();
@@ -1662,8 +1659,7 @@ namespace RTE {
 		std::string m_PublishedDirectorySession, m_PublishedDirectoryToken;
 		std::string m_PublishedAdmissionMatchId;    //!< The match the file on disk belongs to.
 		uint64_t m_PublishedAdmissionRevision = 0;  //!< The admission plane's revision that file renders.
-		NetDirectoryClient m_ReturnWatch; //!< 7e: browses for the watched session's row; never registers one.
-		bool m_ReturnWatchConfigured = false;
+		uint64_t m_NextHostWatchMs = 0;
 		uint64_t m_RestartAdmissionGeneration = 0;
 		std::atomic<bool> m_RestartAdmissionDue{false};
 		bool m_FinalCheckpointWritten = false; //!< One final world checkpoint per teardown, never two.
@@ -1687,6 +1683,10 @@ namespace RTE {
 		NetReconnectClient m_ReconnectClient;
 		NetReconnectTicketStore m_TicketStore;
 		NetParticipantIdentityStore m_ParticipantStore;
+		NetConnectionAuthority m_ConnectionAuthority;
+		uint32_t m_ConnectionNetworkRevision = 0;
+		uint64_t m_ConnectionRouteAtMs = 0, m_LocalLeasePersistAtMs = 0;
+		std::string m_PersistedLocalLease;
 		NetHostBanStore m_BanStore;
 		NetReconnectUx m_ReconnectUx;
 		std::map<uint8_t, SeatView> m_SeatViews; //!< Every seat label's source: the session's roster, read each pump.
@@ -1824,7 +1824,6 @@ namespace RTE {
 		uint64_t m_IceDialStartedMs = 0; //!< Worker thread: the current connection attempt starts its own clock.
 		uint32_t m_ConnectingLimitMs = 0;
 		bool m_ConnectingDirect = false;
-		bool m_IceDialRetrying = false;
 		uint64_t m_IceSignalsAtDial = 0; //!< The host's signals before this dial, so a retry waits for an answer of its own.
 		std::string m_IceConnectingPhase; //!< The phase the log last named, so a phase is logged once, not each second.
 		uint64_t m_RelayOfferIssuedAt = 0; //!< Wall seconds when the current offer was adopted.

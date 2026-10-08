@@ -6668,7 +6668,7 @@ namespace RTE {
 
 			auto replies = std::make_shared<std::deque<NetDirectoryClient::Reply>>();
 			auto sent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
-			replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})", ""});
+			replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})", ""});
 			replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":true})", ""});
 			replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":true})", ""});
 			NetDirectoryClient client;
@@ -9281,12 +9281,90 @@ namespace RTE {
 		return 0;
 	}
 
+	int TestSignedSeatOwnership() {
+		std::string error;
+		if (!ResetLaneDirectory(&error)) return Fail(error);
+		if (!GetNetParticipantCrypto().IsRealCrypto()) return Fail("signed seats need the real participant crypto provider");
+		uint64_t unixNow = 1700000000000ULL;
+		NetParticipantIdentityStore hostKey, ownerKey, otherKey;
+		hostKey.SetPath(StorePath("lease-host-key")); ownerKey.SetPath(StorePath("lease-owner-key")); otherKey.SetPath(StorePath("lease-other-key"));
+		if (!hostKey.LoadOrCreate(&error) || !ownerKey.LoadOrCreate(&error) || !otherKey.LoadOrCreate(&error)) return Fail("signed seat keys: " + error);
+		NetConnectionAuthority hostAuthority, ownerAuthority, otherAuthority;
+		hostAuthority.Configure(&hostKey, "", "", ""); ownerAuthority.Configure(&ownerKey, "", "", ""); otherAuthority.Configure(&otherKey, "", "", "");
+		Wire wire; ConfigureWire(wire);
+		wire.host.SetUnixClock(&FixedUnixClock, &unixNow);
+		wire.host.SetConnectionAuthority(&hostAuthority);
+		wire.host.SetParticipantProofRequired(true);
+		Endpoint owner; owner.connection = 501;
+		ConfigureEndpoint(owner, "Original player", &unixNow);
+		owner.client.SetConnectionAuthority(&ownerAuthority);
+		wire.host.BindParticipantId(owner.connection, ownerKey.PublicId());
+		wire.Add(&owner);
+		if (!owner.client.BeginNewJoin(0, &error) || !wire.Pump(&error) || owner.client.GetState() != NetH4ClientState::Joined)
+			return Fail("signed direct admission: " + error);
+		NetH4TicketRecord first;
+		NetSeatLease lease;
+		if (owner.store.Load(unixNow, first) != NetH4TicketLoadResult::Loaded ||
+		    !NetSeatLease::Decode(first.seatToken, first.authorityKey, lease) || lease.participant != ownerKey.PublicId() || !lease.directorySessionId.empty())
+			return Fail("direct admission did not persist its host-signed, player-bound seat");
+		NetSeatLease damaged;
+		std::string tampered = first.seatToken; tampered[40] = tampered[40] == 'A' ? 'B' : 'A';
+		if (NetSeatLease::Decode(tampered, first.authorityKey, damaged) || NetSeatLease::Decode(first.seatToken, otherKey.PublicId(), damaged))
+			return Fail("a modified seat or wrong issuer passed signature verification");
+		Endpoint copy; copy.connection = 502;
+		ConfigureEndpoint(copy, "Copied seat", &unixNow);
+		copy.client.SetConnectionAuthority(&otherAuthority);
+		wire.host.BindParticipantId(copy.connection, otherKey.PublicId());
+		wire.Add(&copy);
+		if (!copy.store.Store(first) || !copy.client.BeginReclaim(wire.nowMs, &error) || !wire.Pump(&error)) return Fail("copied seat request: " + error);
+		const auto* refused = LastOf<NetJoinRejected>(wire.Delivered(copy.connection));
+		NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
+		if (!refused || refused->rejectReason != NetRejectReason::IdentityUnproven || refused->humanMessage.find("Original player") == std::string::npos ||
+		    !wire.host.GetSeatHolder(first.stableSeat, holder, generation, incarnation) || holder != owner.connection || generation != first.holderGeneration)
+			return Fail("a copied seat was not refused by its owner's name while preserving the original connection");
+		const auto* offer = LastOf<NetH4TicketOffer>(wire.Delivered(owner.connection));
+		if (!offer || !wire.SendRaw(copy.connection, NetH4TicketStoredAck{c_NetH4Version, offer->txId, offer->stableSeat, offer->holderGeneration, true}, &error))
+			return Fail("cached commit replay setup");
+		wire.DrainHostOutbound();
+		if (CountOf<NetH4JoinCommitted>(wire.Delivered(copy.connection)) != 0) return Fail("a copied acknowledgement replayed another player's commit");
+		if (!owner.store.DismissOffer(first)) return Fail("signed seat dismissal");
+		unixNow += 151000; wire.nowMs += 151000;
+		if (!wire.Pump(&error)) return Fail(error);
+		NetH4TicketRecord renewed;
+		NetSeatLease refreshed;
+		if (owner.store.Load(unixNow, renewed) != NetH4TicketLoadResult::Loaded || renewed.seatToken == first.seatToken ||
+		    !NetSeatLease::Decode(renewed.seatToken, renewed.authorityKey, refreshed) || !refreshed.SameSeat(lease) ||
+		    !refreshed.Usable(unixNow / 1000) || !owner.store.IsOfferDismissed(renewed)) return Fail("renewing a seat changed its binding or redisplayed a dismissed offer");
+		NetSeatAuthRegistry successor;
+		if (!successor.ImportMigrationState(wire.registry.ExportMigrationState()) || successor.HostLeaseSigningKey() != wire.registry.HostLeaseSigningKey())
+			return Fail("host migration lost the direct match's lease signing key");
+		refreshed.issuedAt += 150; refreshed.expiresAt += 150;
+		if (!NetSeatLease::Sign(successor.HostLeaseSigningKey(), refreshed) || !NetSeatLease::Decode(refreshed.token, first.authorityKey, damaged))
+			return Fail("the successor could not renew the direct host's signed seat");
+		ownerAuthority.Suspend();
+		if (ownerAuthority.AdoptLocalLease(refreshed) || ownerAuthority.LocalLease()) return Fail("leaving restarted background seat renewal");
+		if (!ownerAuthority.RestoreLease(refreshed) || !ownerAuthority.LocalLease()) return Fail("manual rejoin could not restore the suspended seat");
+		NetReconnectUx ux; ux.SetRetainedSeat(true); ux.NoteConnected(0); ux.NoteDropped(1, "directory unavailable");
+		for (uint64_t attempt = 0; attempt < 50; ++attempt) {
+			const uint64_t now = 1 + attempt * 60000;
+			if (!ux.Tick(now)) return Fail("a retained seat stopped waiting during a long outage");
+			ux.NoteAttemptStarted(now); ux.NoteAttemptFailed(now + 100, "directory unavailable");
+		}
+		ux.Cancel(4000000);
+		if (ux.Tick(5000000) || ux.GetState() != NetReconnectUxState::Cancelled) return Fail("Cancel did not stop retained-seat recovery");
+		if (hostAuthority.CheckIns() != 0 || ownerAuthority.CheckIns() != 0) return Fail("a direct match checked in with a directory");
+		std::cout << "[net-reconnect-session-selftest] PASS signed_seats copied_token=named_refusal owner=unchanged renewal=same_seat migration=same_issuer cancel=stops direct=offline" << std::endl;
+		return 0;
+	}
+
 	int NetReconnectSessionSelfTest::Run() {
 		if (const char* selected = std::getenv("CCCP_TEST_RECONNECT_CASE")) {
 			if (std::string(selected) == "applicant-decisions") return TestApplicantDecisionsKeepTheHolder();
+			if (std::string(selected) == "signed-seats") return TestSignedSeatOwnership();
 			return Fail("unknown selected reconnect check");
 		}
 		if (const int result = TestApplicantDecisionsKeepTheHolder(); result != 0) return result;
+		if (const int result = TestSignedSeatOwnership(); result != 0) return result;
 		if (const int result = TestLocalHostPresence(); result != 0) return result;
 		if (const int result = TestRemovalStoreKindsAndAlias(); result != 0) return result;
 		if (const int result = TestStoreFailsClosed(); result != 0) {

@@ -80,6 +80,8 @@ namespace RTE {
 			int64_t spectatorMax = 0;
 			std::string localModuleManifestHash; //!< A 'modules' refusal's two digests: this player's game data and the host's.
 			std::string hostModuleManifestHash;
+			int64_t localNetworkProtocol = 0;
+			int64_t hostNetworkProtocol = 0;
 		};
 
 		/// The one line the join screen shows for a row. A world reads its boot, its published state and
@@ -111,6 +113,7 @@ namespace RTE {
 		const std::string& GetObservedIp() const { return m_ObservedIp; }
 		/// The session token the register reply issued; the host's signaling channel proves it.
 		const std::string& GetToken() const { return m_Token; }
+		const std::string& AuthorityKey() const { return m_AuthorityKey; }
 		/// Requests or retrieves the held session's short-lived relay offer without blocking a frame.
 		bool RequestIceServers(const std::string& matchId, uint32_t ttl, const NetRelayConfig* fixed = nullptr);
 		bool FetchIceServers(const std::string& sessionId);
@@ -224,6 +227,7 @@ namespace RTE {
 		bool m_Running = false;
 		std::string m_SessionId;
 		std::string m_Token;
+		std::string m_AuthorityKey;
 		std::string m_ObservedIp;
 		int64_t m_HeartbeatS = 0;
 		int64_t m_SupersededGeneration = 0;

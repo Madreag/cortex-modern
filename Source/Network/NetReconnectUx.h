@@ -62,6 +62,7 @@ namespace RTE {
 		/// Reopens the window from now, whatever state we were in.
 		void RequestManualRetry(uint64_t nowMs);
 		void SetRetryWindowMs(uint64_t windowMs) { m_ResumeWindowMs = windowMs; }
+		void SetRetainedSeat(bool retained) { m_RetainedSeat = retained; }
 		bool CanCancel() const;
 		bool CanRetryManually() const;
 
@@ -127,6 +128,7 @@ namespace RTE {
 		uint64_t m_ResumeWindowMs = c_ResumeWindowMs;
 		uint64_t m_NextAttemptMs = 0;
 		uint32_t m_Attempts = 0;
+		bool m_RetainedSeat = false;
 		std::string m_Reason;
 		NetReconnectOffer m_Offer = NetReconnectOffer::None;
 		std::string m_OfferAddress;

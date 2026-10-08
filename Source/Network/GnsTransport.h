@@ -126,6 +126,7 @@ namespace RTE {
 		std::string GetLocalIdentity() const;
 		/// The same identity read without a transport of its own; empty while GNS is not running in this process.
 		static std::string ProcessIdentity();
+		static uint32_t LocalRouteRevision();
 		/// Updates the credentials used by subsequent ICE connections on this listener.
 		static void ApplyIceServers(const GnsP2PConfig& config);
 		/// Also hands a changed relay login to the TURN allocations of the live P2P connections.

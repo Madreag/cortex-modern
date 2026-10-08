@@ -26,7 +26,7 @@
 #include <steam/steamnetworkingcustomsignaling.h>
 #include <steam/steamnetworkingsockets.h>
 // A relayed route dies once its TURN permission lapses unless the library refreshes it.
-#if !defined(STEAMNETWORKINGSOCKETS_TURN_LIFETIME) || STEAMNETWORKINGSOCKETS_TURN_LIFETIME < 2 || !defined(STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY) || STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY < 2 || !defined(STEAMNETWORKINGSOCKETS_TURN_STREAMS)
+#if !defined(STEAMNETWORKINGSOCKETS_TURN_LIFETIME) || STEAMNETWORKINGSOCKETS_TURN_LIFETIME < 2 || !defined(STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY) || STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY < 2 || !defined(STEAMNETWORKINGSOCKETS_TURN_STREAMS) || !defined(STEAMNETWORKINGSOCKETS_NETWORK_RECOVERY)
 #error "GameNetworkingSockets without external/patches/gns-turn-lifetime.patch; build it into <GNS_ROOT>-turnfix, see docs/turn-relay.md"
 #endif
 #endif
@@ -1586,6 +1586,14 @@ namespace RTE {
 
 	std::string GnsTransport::GetLocalIdentity() const {
 		return m_Impl->GetLocalIdentity();
+	}
+
+	uint32_t GnsTransport::LocalRouteRevision() {
+#ifdef CCCP_WITH_GNS
+		return SteamNetworkingSockets_GetLocalRouteRevision();
+#else
+		return 0;
+#endif
 	}
 
 	std::string GnsTransport::ProcessIdentity() {

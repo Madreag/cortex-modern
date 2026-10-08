@@ -7822,7 +7822,7 @@ void RunGameLoop() {
 				}
 				// The session plane keeps running through a pause: a seat held during it is served its image and its tail.
 				g_NetMatchService.PumpSessionEvents();
-				if (const NetMatchServiceState netServiceState = g_NetMatchService.GetState(); g_NetMatchService.IsHost() && netServiceState == NetMatchServiceState::Running) {
+				if (const NetMatchServiceState netServiceState = g_NetMatchService.GetState(); netServiceState == NetMatchServiceState::Running) {
 					g_NetMatchService.Update();
 				}
 			}
@@ -8148,8 +8148,8 @@ void RunGameLoop() {
 				}
 				// The session-directory heartbeat rides Update on the game thread, never the pump.
 				if (const NetMatchServiceState netServiceState = g_NetMatchService.GetState();
-				    g_NetMatchService.IsHost() && (netServiceState == NetMatchServiceState::Starting || netServiceState == NetMatchServiceState::ReadyToLaunch ||
-				                                   netServiceState == NetMatchServiceState::Running || netServiceState == NetMatchServiceState::Completed)) {
+				    netServiceState == NetMatchServiceState::Starting || netServiceState == NetMatchServiceState::ReadyToLaunch ||
+				    netServiceState == NetMatchServiceState::Running || netServiceState == NetMatchServiceState::Completed) {
 					g_NetMatchService.Update();
 				}
 				DriveModerationE2e();

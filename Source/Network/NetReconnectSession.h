@@ -9,6 +9,7 @@
 #include "NetReconnectTxCache.h"
 #include "NetSeatRoster.h"
 #include "NetTransport.h"
+#include "NetConnectionAuthority.h"
 
 #include <cstdint>
 #include <functional>
@@ -372,6 +373,8 @@ namespace RTE {
 		static constexpr size_t c_MaxApplicantsPerConnection = 1;
 
 		void Configure(NetSeatAuthRegistry* registry, uint64_t hostSessionId, NetH4Identity localIdentity);
+		void SetConnectionAuthority(NetConnectionAuthority* authority) { m_ConnectionAuthority = authority; }
+		void SetLocalPlayerName(std::string name) { m_LocalPlayerName = std::move(name); }
 		NetAuthBytes16 GetEpoch() const;
 		void SetSeatTable(std::vector<NetH4Seat> seats, NetMatchMode mode);
 		/// Live match: a ticketless join is denied outright in Phase A; in a lobby it may fill a
@@ -542,6 +545,7 @@ namespace RTE {
 			std::string holderName;
 			NetAuthBytes32 participantId{};
 			bool hasParticipantId = false;
+			NetSeatLease lease;
 		};
 
 		/// A pending applicant. It carries an identity because §4 re-validates one on every admission
@@ -555,6 +559,7 @@ namespace RTE {
 			uint64_t appliedAtMs = 0;
 			NetH4TxKey key;
 			bool approved = false;
+			std::string directorySessionId;
 		};
 
 		/// An approved substitution between the host action and the commit. The credential lives here
@@ -576,6 +581,7 @@ namespace RTE {
 			uint32_t retransmits = 0;
 			NetH4TxKey key;
 			NetH4SubstitutionOffer offer;
+			NetSeatLease lease;
 		};
 
 		struct Provisional {
@@ -589,6 +595,7 @@ namespace RTE {
 			uint32_t retransmits = 0;
 			NetH4TxKey key;
 			NetH4TicketOffer offer;
+			NetSeatLease lease;
 		};
 
 		struct PendingReclaim {
@@ -690,6 +697,9 @@ namespace RTE {
 		bool LookupParticipantId(NetPeerId connection, NetAuthBytes32& out) const;
 		void UnbindParticipantId(NetPeerId connection);
 		void CaptureParticipant(SeatState& seat, NetPeerId connection);
+		bool PrepareSeatLease(NetPeerId connection, const std::string& name, NetSeatLease& lease, std::string& error);
+		bool ValidateSeatLease(NetPeerId connection, const SeatState& seat, const std::string& token, std::string& error, bool& expired) const;
+		void RenewSeatLeases();
 		void IssueReseat(const SeatState& seat);
 		void QueueHoldResolution(uint8_t lockstepPeerId, NetHoldResolution resolution);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
@@ -718,6 +728,8 @@ namespace RTE {
 		void DropApplicantsFor(NetPeerId connection);
 
 		NetSeatAuthRegistry* m_Registry = nullptr;
+		NetConnectionAuthority* m_ConnectionAuthority = nullptr;
+		std::string m_LocalPlayerName = "Host";
 		uint64_t m_HostSessionId = 0;
 		NetAuthBytes16 m_ConfiguredEpoch{};
 		NetH4Identity m_LocalIdentity;
@@ -771,6 +783,7 @@ namespace RTE {
 		NetPeerId m_LastRemovedConnection = c_InvalidNetPeerId;
 		NetHostBanStore* m_BanStore = nullptr;
 		std::set<NetAuthBytes32> m_RemovedParticipants;
+		std::map<NetAuthBytes32, std::string> m_RemovedNames;
 		uint64_t m_LockstepFrame = 0;
 		bool m_ProofRequired = false;
 		std::vector<std::pair<NetPeerId, NetAuthBytes32>> m_ConnectionIds;
@@ -790,6 +803,7 @@ namespace RTE {
 		Applying = 10,   //!< Applicant sent, waiting for the host to acknowledge the request.
 		Applied = 11,    //!< On the host's list, waiting for a human decision.
 		Substituting = 12, //!< Approved: the ticket is persisted and the ack proves it.
+		WaitingAuthority = 13, //!< The authenticated host is obtaining this reserved seat's signed lease.
 	};
 
 	const char* NetReconnectClientStateName(NetH4ClientState state);
@@ -834,6 +848,7 @@ namespace RTE {
 		static constexpr uint64_t c_EndpointRetryLongestMs = 32000;
 
 		void Configure(NetReconnectTicketStore* store, NetH4Identity identity, std::string displayName);
+		void SetConnectionAuthority(NetConnectionAuthority* authority) { m_ConnectionAuthority = authority; }
 		void SetUnixClock(uint64_t (*clock)(void*), void* context);
 		void SetRound(uint32_t round) { m_Round = round; }
 		uint32_t GetRound() const { return m_Round; }
@@ -939,8 +954,10 @@ namespace RTE {
 		uint64_t UnixNowMs() const;
 		/// Writes where the host was reached into the stored ticket of the seat it just committed, and nothing else of it.
 		void StoreReturnEndpoint(uint64_t nowMs);
+		bool ReadSeatLease(const std::string& token, const NetAuthBytes32& key, NetH4TicketRecord& record);
 
 		NetReconnectTicketStore* m_Store = nullptr;
+		NetConnectionAuthority* m_ConnectionAuthority = nullptr;
 		NetRosterReplica m_RosterReplica;
 		NetH4Identity m_Identity;
 		std::string m_DisplayName = "Player";
@@ -972,6 +989,7 @@ namespace RTE {
 		uint64_t m_ReturnRetryDelayMs = 0; //!< The last wait, doubled each time up to the roster's longest backoff.
 		uint64_t m_EndpointRetryAtMs = 0;    //!< When a proven address the store refused is written again; 0 when none waits.
 		uint64_t m_EndpointRetryDelayMs = 0; //!< The last wait before such a write, doubled each time.
+		uint64_t m_LeasePersistAtMs = 0;
 		NetAuthBytes16 m_TxId{};
 		std::optional<std::pair<uint16_t, NetAuthBytes16>> m_CarriedApplication; //!< An application a lost host left unanswered, for the next host.
 		NetH4TicketRecord m_Record;

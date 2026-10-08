@@ -28,6 +28,9 @@ namespace RTE {
 
 		/// The armed epoch; all zero while inactive.
 		const NetAuthEpoch& GetEpoch() const { return m_Epoch; }
+		/// Match authority only, carried inside the same sealed state as seat credentials.
+		/// This is separate from every player's private identity key.
+		const NetAuthBytes32& HostLeaseSigningKey() const { return m_HostLeaseSigningKey; }
 
 		/// Issues a fresh credential for the seat under a new holder generation, invalidating any
 		/// prior generation's credential. One credential per generation; reconnects reuse it.
@@ -85,6 +88,7 @@ namespace RTE {
 
 		bool m_Active = false;
 		NetAuthEpoch m_Epoch{};
+		NetAuthBytes32 m_HostLeaseSigningKey{};
 		std::unordered_map<uint16_t, SeatEntry> m_Seats;
 	};
 

@@ -33,6 +33,8 @@ import session_directory
 from world_ticks import compare_world_ticks, read_world_ticks
 from session_directory import IP_REG_PER_MIN, IP_REQ_PER_MIN, DualRateLimiter, LOGGER, RunningServer, spawn_server
 from unittest import mock
+from connection_authority import ConnectionErrorReply, ConnectionAuthority, REQUEST_DOMAIN, TOKEN_DOMAIN, TOKEN_FIELDS
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 INSTALL_KEY = "0123456789abcdef"
 
@@ -66,6 +68,8 @@ HEX64_B = "b" * 64
 HEX64_C = "c" * 64
 
 REGISTER_RESP_KEYS = {
+    "connection_protocol",
+    "authority_key",
     "session_id",
     "token",
     "expires_in_s",
@@ -109,6 +113,8 @@ FIELD_ERROR_KEYS = {"error", "field"}
 
 def sample_register(**overrides: object) -> dict[str, Any]:
     row: dict[str, Any] = {
+
+        "connection_protocol": session_directory.CONNECTION_PROTOCOL,
         "name": "Captain",
         "activity": "P4 Alpha Duel",
         "scene": "Grasslands",
@@ -3218,6 +3224,136 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(len(listed["sessions"]), 1)
         self.assertNotIn("listed", listed["sessions"][0])
+
+
+class ConnectionAuthorityTests(unittest.TestCase):
+    """Real signatures and restart-safe state, with no provider or public network."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.wall = 1700000000.0
+        self.now = 100.0
+        self.clock = mock.patch.object(session_directory.time, "time", side_effect=lambda: self.wall)
+        self.clock.start()
+        self.addCleanup(self.clock.stop)
+        self.path = Path(self.temporary.name) / "owners.json"
+        self.options = dict(owner_state=self.path, turn_config={"backend": "coturn", "static_auth_secret": "server-only-secret",
+            "relay_urls": ["turn:relay.example:3478?transport=udp", "turn:relay.example:3478?transport=tcp", "turns:relay.example:443?transport=tcp"]})
+        self.store = session_directory.SessionDirectory(15, 5, create_owner_key=True, **self.options)
+        self.addCleanup(lambda: self.store.stop())
+        self.row = self.store.register(sample_register(ice_identity="str:original-host", ice_virtual_port=41010), "192.0.2.1", self.now, INSTALL_KEY)
+        self.sid = self.row["session_id"]
+        self.store.heartbeat(self.sid, {"token": self.row["token"], "peer_count": 2, "seats_free": 0, "state": "running", "listed": False}, self.now, INSTALL_KEY)
+        self.store.mint_ice_servers(self.sid, {"token": self.row["token"], "match_id": "lease-fixture", "ttl": 600}, INSTALL_KEY, self.now)
+        self.player = Ed25519PrivateKey.generate()
+        self.issue = dict(connection_protocol=1, operation="issue", token=self.row["token"], host_generation=0,
+            epoch="10" * 16, seat=1, generation=1, credential="20" * 32, host_session=42,
+            network_protocol=NETWORK_PROTOCOL_VERSION, participant=self.player.public_key().public_bytes_raw().hex(), name="Original player")
+        self.lease = self.store.connection_request(self.sid, self.issue, self.now, INSTALL_KEY)
+        self.route = dict(ice_identity="str:player-route", ice_virtual_port=41012, listen_port=41012,
+            listen_addrs=["192.0.2.2", "2001:db8::2"], generation=1, state="connected")
+
+    def envelope(self, *, key=None, token=None, instance="30" * 16, route=None, host=None, nonce=None):
+        key = key or self.player
+        data = dict(session_id=self.sid, seat_token=token or self.lease["seat_token"], instance=instance,
+            nonce=nonce or uuid.uuid4().hex, sent_at=int(self.wall), route=route or self.route)
+        if host is not None:
+            data["host"] = host
+        raw = json.dumps(data, separators=(",", ":")).encode()
+        return dict(connection_protocol=1, operation="check-in", participant=key.public_key().public_bytes_raw().hex(),
+            signature=key.sign(REQUEST_DOMAIN + raw).hex(), signed_request=base64.b64encode(raw).decode())
+
+    def check(self, **kwargs):
+        return self.store.connection_request(self.sid, self.envelope(**kwargs), self.now, INSTALL_KEY)
+
+    def test_signed_seat_copy_replay_and_concurrent_instance_keep_the_owner(self) -> None:
+        raw = base64.b64decode(self.lease["seat_token"], validate=True)
+        self.assertEqual(len(raw), 194)
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(self.lease["authority_key"])).verify(raw[-64:], TOKEN_DOMAIN + raw[:-64])
+        fields = TOKEN_FIELDS.unpack(raw[:-64])
+        self.assertEqual((fields[0], fields[1], fields[2], fields[4], fields[5], fields[6]),
+                         (1, NETWORK_PROTOCOL_VERSION, uuid.UUID(self.sid).bytes, 42, 1, 1))
+        first = self.check()
+        self.assertTrue(first["relay_current"])
+        with self.assertRaises(ConnectionErrorReply) as copied:
+            self.check(key=Ed25519PrivateKey.generate())
+        self.assertEqual(copied.exception.body["error"], "seat_taken")
+        self.assertIn("Original player", copied.exception.body["message"])
+        with self.assertRaises(ConnectionErrorReply) as simultaneous:
+            self.check(instance="40" * 16)
+        self.assertEqual(simultaneous.exception.body["error"], "seat_in_use")
+        self.assertIn("Original player", simultaneous.exception.body["message"])
+        request = self.envelope()
+        self.store.connection_request(self.sid, request, self.now, INSTALL_KEY)
+        with self.assertRaises(ConnectionErrorReply) as replay:
+            self.store.connection_request(self.sid, request, self.now, INSTALL_KEY)
+        self.assertEqual(replay.exception.body["error"], "connection_replay")
+        self.assertEqual(self.check()["seat"], 1)
+
+    def test_network_change_long_outage_and_renewal_keep_the_same_seat(self) -> None:
+        first = self.check()
+        self.wall += 5; self.now += 5
+        changed = self.check(route=dict(self.route, listen_addrs=["198.51.100.4", "2001:db8::4"], generation=2))
+        self.assertTrue(changed["relay_current"])
+        self.assertNotEqual(first["relay"]["iceServers"][0]["username"], changed["relay"]["iceServers"][0]["username"])
+        self.assertEqual(changed["peers"][0]["route"]["listen_addrs"], ["198.51.100.4", "2001:db8::4"])
+        self.wall += 900; self.now += 900
+        self.store.prune(self.now)
+        returned = self.check(instance="40" * 16)
+        self.assertEqual((returned["seat"], returned["generation"]), (first["seat"], first["generation"]))
+        self.assertGreater(returned["expires_at"], self.wall)
+        self.assertTrue(returned["relay_current"])
+        self.assertFalse(returned["host"]["session"].get("listed", False))
+
+    def test_restart_preserves_the_seat_route_and_removal(self) -> None:
+        first = self.check()
+        issuer = first["authority_key"]
+        self.store.stop()
+        state = self.path.with_suffix(".connections.sqlite3").read_bytes()
+        self.assertTrue(self.lease["seat_token"].encode() not in state, "seat token was stored without encryption")
+        self.assertTrue(first["relay"]["iceServers"][0]["credential"].encode() not in state, "relay login was stored without encryption")
+        self.store = session_directory.SessionDirectory(15, 5, **self.options)
+        self.assertEqual(self.store.connection_bootstrap(self.sid, time.monotonic())["authority_key"], issuer)
+        self.now = time.monotonic()
+        returned = self.check()
+        self.assertEqual((returned["seat"], returned["generation"], returned["peers"][0]["route"]), (1, 1, self.route))
+        removal = dict(connection_protocol=1, operation="remove", token=self.row["token"], host_generation=0,
+                       participant=self.issue["participant"], name="Original player", action="banned")
+        self.store.connection_request(self.sid, removal, self.now, INSTALL_KEY)
+        self.store.stop()
+        self.store = session_directory.SessionDirectory(15, 5, **self.options)
+        with self.assertRaises(ConnectionErrorReply) as banned:
+            self.check()
+        self.assertEqual(banned.exception.body["error"], "player_removed")
+        self.assertIn("Original player", banned.exception.body["message"])
+        with self.assertRaises(ConnectionErrorReply):
+            self.store.connection_request(self.sid, self.issue, self.now, INSTALL_KEY)
+
+    def test_current_host_updates_its_route_and_old_host_cannot_move_it_back(self) -> None:
+        current = self.check(host={"token": self.row["token"], "generation": 0})
+        self.assertEqual(current["host"]["listen_addrs"], self.route["listen_addrs"])
+        moved = self.store.register(sample_register(resume_session_id=self.sid, resume_token=self.row["token"],
+            migration_gen=1, ice_identity="str:successor", ice_virtual_port=41012, listen_addrs=["198.51.100.8"]),
+            "198.51.100.8", self.now + 1, "fedcba9876543210")
+        reply = self.check(host={"token": self.row["token"], "generation": 0})
+        self.assertEqual((reply["host"]["host_generation"], reply["host"]["ice_identity"], reply["seat"]), (1, "str:successor", 1))
+        self.assertEqual(reply["host"]["listen_addrs"], ["198.51.100.8"])
+        with self.assertRaises(session_directory.Superseded):
+            self.store.connection_request(self.sid, self.issue, self.now, INSTALL_KEY)
+        self.store.delete(self.sid, {"token": moved["token"], "migration_gen": 1}, self.now + 2)
+        with self.assertRaises(ConnectionErrorReply) as ended:
+            self.check()
+        self.assertEqual(ended.exception.body["error"], "match_ended")
+
+    def test_connection_version_refuses_before_any_seat_mutation(self) -> None:
+        for version in (0, 2):
+            with self.subTest(version=version), self.assertRaises(ConnectionErrorReply) as mismatch:
+                self.store.connection_request(self.sid, dict(self.issue, connection_protocol=version), self.now, INSTALL_KEY)
+            self.assertEqual(mismatch.exception.body["error"], "connection_version")
+            self.assertIn(f"protocol is {version}", mismatch.exception.body["message"])
+            self.assertIn("directory uses 1", mismatch.exception.body["message"])
+        self.assertEqual(self.check()["generation"], 1)
 
 
 if __name__ == "__main__":

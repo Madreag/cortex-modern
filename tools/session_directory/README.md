@@ -1,14 +1,25 @@
 # Session directory
 
-This service lists multiplayer sessions and carries ICE signalling. It stores live listings in memory. Persistent world ownership uses the configured owner state and signing key.
+This service lists multiplayer sessions, carries ICE signalling, and signs Internet seat leases. Gameplay and the seat roster remain on the peers. With `--owner-state`, sessions, signalling queues, host generations, removals and retained seats survive a restart in an encrypted SQLite file beside the owner state. Keep that file and the matching service signing key together when backing up or moving the service.
 
 For a local test, run:
 
 ```sh
+python -m pip install -r tools/session_directory/requirements.txt
 python tools/session_directory/session_directory.py --caller-mode direct --insecure-http --bind 127.0.0.1 --port 8080
 ```
 
 Use `--cert` and `--key` for HTTPS. Select the caller mode for the deployment; `--help` describes direct and tunnel operation. Keep the owner signing key when restarting a persistent directory. Relay setup is described in [the relay guide](../../docs/turn-relay.md).
+
+## Connection authority
+
+Registration and connection requests carry `connection_protocol: 1`. A mismatch refuses with both versions and an update instruction. `GET /v1/sessions/{id}/connections`, with `X-Connection-Protocol: 1`, resolves the current host even while its public listing is hidden or temporarily expired. Its reply contains the public issuer key and current host generation, without seat or relay credentials.
+
+`POST` on the same endpoint accepts three operations. `issue` and `remove` require the current host token and generation. The host selects the seat through its existing admission transaction; the directory signs that match, seat, holder generation and participant public key. `check-in` carries the seat token and a request signed by that participant's private key. The signed request includes a nonce, time, process instance and current route. A copied token cannot prove the participant key or displace its active instance.
+
+Seat signatures expire after five minutes and renew at half their lifetime. Peers check in every five seconds. A changed route requests a fresh relay login under the same seat; an expired seat can renew after an outage only while the retained binding still belongs to the same participant. Active check-ins retain the match for another day. Removal and host-end records remain authoritative across restarts. An unreachable directory does not stop an established peer connection.
+
+State mutations use full SQLite transactions and AES-GCM with a key derived separately from the service's Ed25519 signing key. The database is private to the service account. An unreadable record stops startup with a recovery instruction rather than silently discarding ownership. Never log request bodies, seat tokens, relay logins or the service key.
 
 ## What the install key is
 

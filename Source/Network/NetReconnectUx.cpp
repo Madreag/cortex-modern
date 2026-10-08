@@ -42,7 +42,7 @@ namespace RTE {
 		if (m_State != NetReconnectUxState::Waiting) {
 			return false;
 		}
-		if (m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > m_ResumeWindowMs)) {
+		if (!m_RetainedSeat && (m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > m_ResumeWindowMs))) {
 			// The host's own resume window has closed, so nothing this side does can still land.
 			m_State = NetReconnectUxState::GaveUp;
 			return false;
@@ -52,7 +52,7 @@ namespace RTE {
 
 	void NetReconnectUx::NoteAttemptStarted(uint64_t nowMs) {
 		m_State = NetReconnectUxState::Retrying;
-		++m_Attempts;
+		if (m_Attempts != UINT32_MAX) ++m_Attempts;
 		m_NextAttemptMs = nowMs + c_AttemptIntervalMs;
 	}
 
@@ -63,7 +63,7 @@ namespace RTE {
 		if (m_State != NetReconnectUxState::Retrying) {
 			return;
 		}
-		m_State = m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > m_ResumeWindowMs)
+		m_State = !m_RetainedSeat && (m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > m_ResumeWindowMs))
 		              ? NetReconnectUxState::GaveUp
 		              : NetReconnectUxState::Waiting;
 	}
@@ -197,9 +197,11 @@ namespace RTE {
 		const std::string tail = m_Reason.empty() ? "" : " (" + m_Reason + ")";
 		switch (m_State) {
 			case NetReconnectUxState::Waiting:
+				if (m_RetainedSeat) return "Reconnecting - waiting to reach your match. Cancel stops rejoining." + tail;
 				return m_Attempts == 0 ? "Preparing to rejoin the match..." : "Rejoin attempt " + std::to_string(m_Attempts) + " of " +
 				       std::to_string(c_MaxAttempts) + " failed; retrying shortly" + tail;
 			case NetReconnectUxState::Retrying:
+				if (m_RetainedSeat) return "Reconnecting - reclaiming your seat. Cancel stops rejoining." + tail;
 				return "Rejoining the match... attempt " + std::to_string(m_Attempts == 0 ? 1U : m_Attempts) + " of " +
 				       std::to_string(c_MaxAttempts) + tail;
 			case NetReconnectUxState::Reconnected: return "Back in the match.";

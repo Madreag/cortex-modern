@@ -17,7 +17,7 @@ namespace RTE {
 
 	/// Version of the H4 admission payloads, carried per message so the reconnect handshake can move
 	/// without bumping the envelope an old client still has to decode a rejection from.
-	constexpr uint16_t c_NetH4Version = 1;
+	constexpr uint16_t c_NetH4Version = 2;
 
 	/// Version of the module-digest payloads, carried per message for the same reason.
 	constexpr uint16_t c_NetModuleDigestVersion = 1;
@@ -69,6 +69,7 @@ namespace RTE {
 		ParticipantProof = 29,
 		RosterRevision = 30,
 		RosterRevisionRequest = 31,
+		ConnectionLease = 32,
 	};
 
 	enum class NetRejectReason : uint16_t {
@@ -276,6 +277,7 @@ namespace RTE {
 		NetAuthBytes16 txId{};
 		NetH4Identity identity;
 		std::string displayName;
+		std::string directorySessionId; //!< Empty for a typed-address or LAN join.
 
 		bool operator==(const NetH4NewJoin&) const = default;
 	};
@@ -289,6 +291,8 @@ namespace RTE {
 		NetAuthBytes32 credential{};
 		uint64_t hostSessionId = 0;
 		uint32_t provisionalExpiryMs = 0;
+		std::string seatToken;
+		NetAuthBytes32 authorityKey{};
 
 		bool operator==(const NetH4TicketOffer&) const = default;
 	};
@@ -322,6 +326,7 @@ namespace RTE {
 		uint32_t holderGeneration = 0;
 		NetH4Identity identity;
 		std::string displayName;
+		std::string seatToken;
 
 		bool operator==(const NetH4Reclaim&) const = default;
 	};
@@ -375,6 +380,13 @@ namespace RTE {
 		bool operator==(const NetH4RosterRevision&) const = default;
 	};
 
+	struct NetH4ConnectionLease {
+		uint16_t h4Version = c_NetH4Version;
+		std::string seatToken;
+		NetAuthBytes32 authorityKey{};
+		bool operator==(const NetH4ConnectionLease&) const = default;
+	};
+
 	/// A peer whose agreed config names a seat roster revision it never heard asks the host for that one by number.
 	struct NetH4RosterRevisionRequest {
 		uint16_t h4Version = c_NetH4Version;
@@ -391,6 +403,7 @@ namespace RTE {
 		uint16_t stableSeat = 0;
 		NetH4Identity identity;
 		std::string displayName;
+		std::string directorySessionId;
 
 		bool operator==(const NetH4Applicant&) const = default;
 	};
@@ -419,6 +432,8 @@ namespace RTE {
 		NetAuthBytes32 challenge{};
 		uint64_t hostSessionId = 0;
 		uint32_t provisionalExpiryMs = 0;
+		std::string seatToken;
+		NetAuthBytes32 authorityKey{};
 
 		bool operator==(const NetH4SubstitutionOffer&) const = default;
 	};
@@ -546,7 +561,8 @@ namespace RTE {
 		NetParticipantChallenge,
 		NetParticipantProof,
 		NetH4RosterRevision,
-		NetH4RosterRevisionRequest>;
+		NetH4RosterRevisionRequest,
+		NetH4ConnectionLease>;
 
 	struct NetMessage {
 		uint32_t sequence = 0;
@@ -565,7 +581,7 @@ namespace RTE {
 	class NetProtocol {
 	public:
 		static constexpr uint32_t c_Magic = 0x324E4343U;
-		static constexpr uint16_t c_Version = 5;
+		static constexpr uint16_t c_Version = 6;
 		static constexpr uint16_t c_HeaderBytes = 24;
 		static constexpr size_t c_MaxControlPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxDisplayNameBytes = 64;

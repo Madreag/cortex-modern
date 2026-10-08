@@ -521,6 +521,17 @@ namespace RTE {
 			return;
 		}
 		if (TakeSuperseded(reply)) return;
+		if (reply.statusCode == 409) {
+			const auto body = json::parse(reply.body, nullptr, false);
+			if (body.is_object() && body.contains("error") && body["error"] == "connection_version") {
+				const auto version = body.find("directory_version");
+				const int64_t actual = version != body.end() && version->is_number_integer() ? version->get<int64_t>() : 0;
+				NoteError("Your connection protocol is " + std::to_string(NetDirectoryLimits::c_ConnectionProtocol) + "; the directory uses " + std::to_string(actual) + ". Update the game or directory so the versions match.");
+				SetState(State::Failed);
+				ScheduleRetry(nowMs);
+				return;
+			}
+		}
 		if (!reply.error.empty() || reply.statusCode == 0) {
 			NoteError("register: " + (reply.error.empty() ? "transport error" : reply.error));
 			ScheduleRetry(nowMs);
@@ -534,8 +545,14 @@ namespace RTE {
 				ScheduleRetry(nowMs);
 				return;
 			}
+			if (response.connectionProtocol != NetDirectoryLimits::c_ConnectionProtocol) {
+				NoteError("Your connection protocol is " + std::to_string(NetDirectoryLimits::c_ConnectionProtocol) + "; the directory uses " + std::to_string(response.connectionProtocol) + ". Update the game or directory so the versions match.");
+				SetState(State::Failed);
+				return;
+			}
 			m_SessionId = response.sessionId;
 			m_Token = response.token;
+			m_AuthorityKey = response.authorityKey;
 			if (m_Row.persistentWorld) {
 				RememberWorldProof(m_Row.resumeSessionId, m_Row.resumeToken);
 				RememberWorldProof(m_SessionId, m_Token);
@@ -584,16 +601,8 @@ namespace RTE {
 				ScheduleRetry(nowMs);
 				return;
 			}
-			// The stored row token is not this row's any more (a directory that restarted holds none): a world claims its own id
-			// again, anything else registers fresh, instead of leaving the row unlisted for the rest of its life.
-			const auto claim = std::make_pair(m_Row.resumeSessionId, m_Row.resumeToken);
-			if (std::find(m_RefusedResumes.begin(), m_RefusedResumes.end(), claim) == m_RefusedResumes.end()) {
-				if (m_RefusedResumes.size() >= c_MaxRefusedResumes) m_RefusedResumes.erase(m_RefusedResumes.begin());
-				m_RefusedResumes.push_back(claim);
-			}
-			ApplyRefusedResumes(m_Row);
-			NoteError(m_Row.resumeSessionId.empty() ? "register refused (403): the stored directory row is not ours, registering fresh"
-			                                        : "register refused (403): the directory holds no token for the world's row, claiming the world's id again");
+			// A fresh id would strand every issued seat. Keep proving the same hosted session.
+			NoteError("The directory could not verify this match. The running match can continue; restoring its directory state allows reconnects to resume.");
 			ScheduleRetry(nowMs);
 			return;
 		}
@@ -892,6 +901,8 @@ namespace RTE {
 				lanIdentity.moduleManifestHash = host.compatibility.moduleManifestHash;
 				std::string why;
 				const bool lanWorld = worldLocal != nullptr && host.compatibility.lockstepCodecVersion == worldLocal->lockstepCodecVersion;
+				row.localNetworkProtocol = (lanWorld ? *worldLocal : local).networkProtocolVersion;
+				row.hostNetworkProtocol = lanIdentity.networkProtocolVersion;
 				if (NetDirectoryCodec::IsJoinable(lanIdentity, lanWorld ? *worldLocal : local, &why)) {
 					row.joinable = true;
 				} else {
@@ -924,6 +935,8 @@ namespace RTE {
 			row.spectatorMax = session.spectatorMax;
 			std::string why;
 			const NetDirectoryLocalIdentity& ident = (session.persistentWorld && worldLocal != nullptr) ? *worldLocal : local;
+			row.localNetworkProtocol = ident.networkProtocolVersion;
+			row.hostNetworkProtocol = session.networkProtocolVersion;
 			if (!NetDirectoryCodec::IsJoinable(session, ident, &why)) {
 				row.reason = MapMismatchReason(why);
 				NoteGameData(row, ident.moduleManifestHash, session.moduleManifestHash);
@@ -942,6 +955,8 @@ namespace RTE {
 	}
 
 	std::string NetDirectoryClient::JoinRefusalText(const GameRow& row, bool brief) {
+		if (row.reason == "protocol") return "Your network protocol is " + std::to_string(row.localNetworkProtocol) +
+			"; the host uses " + std::to_string(row.hostNetworkProtocol) + ". Update both games to the same version.";
 		if (row.reason == "modules") {
 			// The console lists each module's digest, so two players can find the module whose files differ.
 			if (brief) return "Cannot join: game data differs - see the console (~)";
@@ -954,8 +969,7 @@ namespace RTE {
 	std::string NetDirectoryClient::DescribeGameRow(const GameRow& row) {
 		const std::string refusal = row.joinable ? std::string() : " [" + row.reason + "]";
 		if (!row.persistentWorld) {
-			return "[" + row.source + "] " + row.name + " - " + row.activity + " (" + row.players + ") " +
-			       row.address + ":" + std::to_string(row.port) + refusal;
+			return "[" + row.source + "] " + row.name + " - " + row.activity + " (" + row.players + ")" + refusal;
 		}
 		// A world is judged by its boot, whether it is up, and what it still has room for; its address
 		// says nothing a player acts on because a world is reached through its own row.
