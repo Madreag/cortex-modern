@@ -6302,11 +6302,12 @@ namespace RTE::CheckpointLua {
 			const std::pmr::unordered_set<const void*>* previousFunctions = s_DescriptorFunctions;
 			// These sets live only for the fenced walk. Allocate their small nodes
 			// together instead of contending with every other state's allocator.
-			std::pmr::monotonic_buffer_resource storage;
+			std::shared_ptr<std::pmr::memory_resource> backing = CheckpointWriter::BatchEnabled() ? CheckpointBuffer::LeaseCaptureStorage() : nullptr;
+			std::pmr::monotonic_buffer_resource storage{backing ? backing.get() : std::pmr::get_default_resource()};
 			std::pmr::memory_resource* resource = CheckpointWriter::BatchEnabled() ? &storage : std::pmr::get_default_resource();
 			std::pmr::unordered_set<const void*> seen{resource}, userdata{resource}, functions{resource}, opaque{resource};
 			std::pmr::unordered_set<const void*> queuedFinalizers{resource};
-			std::vector<TValue> pending;
+			std::pmr::vector<TValue> pending{resource};
 			void Queue(const TValue& value) {
 				if (!tvistab(&value) && !tvisfunc(&value) && !tvisudata(&value) && !tvisthread(&value)) return;
 				if (tvisudata(&value)) userdata.insert(gcval(&value));
@@ -6727,6 +6728,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		if (luaJIT_preview_active(m_State)) throw std::runtime_error("a checkpoint capture cannot run inside an armed preview window");
 		LoadScriptGraphHelper();
 		LuaCheckpointBarrierPause barrierPause;
+		CheckpointBuffer::AllocationScope allocations(CheckpointWriter::BatchEnabled());
 		ScriptGraphScratchScope scratch(m_State);
 		auto image = std::make_shared<CheckpointLua::GraphImage>();
 		const bool phaseCosts = CheckpointPhaseCostsRequested();

@@ -602,7 +602,9 @@ namespace RTE::CheckpointLua {
 		std::optional<LuaScriptGraphNativeCaptureScope> m_NativeScope;
 		std::thread::id m_Thread;
 		NativeCache& m_Cache;
-		std::pmr::monotonic_buffer_resource m_Transient;
+		// The capture owns prepared backing until its temporary containers die.
+		std::shared_ptr<std::pmr::memory_resource> m_TransientBacking = CheckpointWriter::BatchEnabled() ? CheckpointBuffer::LeaseCaptureStorage() : nullptr;
+		std::pmr::monotonic_buffer_resource m_Transient{m_TransientBacking ? m_TransientBacking.get() : std::pmr::get_default_resource()};
 		std::pmr::memory_resource* m_TransientResource = CheckpointWriter::BatchEnabled() ? &m_Transient : std::pmr::get_default_resource();
 		std::pmr::unordered_map<const void*, NativeImage::Entry> m_NewClasses{m_TransientResource};
 		std::pmr::unordered_map<const void*, NativeImage::ImmutableEntry> m_NewCompactClasses{m_TransientResource};
@@ -626,7 +628,7 @@ namespace RTE::CheckpointLua {
 		bool m_Persist = false;
 		std::shared_ptr<NativeImage> m_Image = std::make_shared<NativeImage>();
 		std::pmr::unordered_set<const void*> m_Queued{m_TransientResource};
-		std::vector<TValue> m_Queue;
+		std::pmr::vector<TValue> m_Queue{m_TransientResource};
 		bool m_Captured = false;
 
 		lua_State* State() const { return m_References.state; }
@@ -698,7 +700,8 @@ namespace RTE::CheckpointLua {
 			Push(value); Keep(-1); lua_pop(State(), 1);
 			m_Queue.push_back(value);
 		}
-		void NewResults(int index, uint64_t before, uint64_t after, std::unordered_set<const void*>& seen) {
+		using ResultTables = std::optional<std::pmr::unordered_set<const void*>>;
+		void NewResults(int index, uint64_t before, uint64_t after, ResultTables& seen) {
 			if (index < 0) index += lua_gettop(State()) + 1;
 			const TValue value = At(index);
 			if (!tvisudata(&value) && !tvistab(&value) && !tvisfunc(&value) && !tvisthread(&value)) return;
@@ -710,7 +713,10 @@ namespace RTE::CheckpointLua {
 			}
 			if (tvisudata(&value) && !ScriptGraphCapturedText(State(), index)) Enqueue(value);
 			if (tvisfunc(&value) && IteratorCandidate(funcV(&value))) Enqueue(value);
-			if (!fresh || !tvistab(&value) || !seen.insert(gcval(&value)).second) return;
+			if (!fresh || !tvistab(&value)) return;
+			// Only newly returned tables need a cycle set.
+			if (!seen) seen.emplace(m_TransientResource);
+			if (!seen->insert(gcval(&value)).second) return;
 			lua_pushnil(State());
 			while (lua_next(State(), index)) {
 				NewResults(-2, before, after, seen);
@@ -730,7 +736,7 @@ namespace RTE::CheckpointLua {
 			NativeImage::Result result;
 			const int last = lua_gettop(State());
 			if (CheckpointWriter::BatchEnabled()) result.values.reserve(last - top);
-			std::unordered_set<const void*> seen;
+			ResultTables seen;
 			for (int index = top + 1; index <= last; ++index) {
 				NativeImage::Value value;
 				value.token = At(index);
@@ -760,7 +766,7 @@ namespace RTE::CheckpointLua {
 			const uint64_t after = luaJIT_state_serial(State());
 			const int last = lua_gettop(State());
 			if (CheckpointWriter::BatchEnabled()) result.values.reserve(last - top);
-			std::unordered_set<const void*> seen;
+			ResultTables seen;
 			for (int index = top + 1; index <= last; ++index) {
 				NativeImage::Value value;
 				value.token = At(index);
@@ -864,7 +870,7 @@ namespace RTE::CheckpointLua {
 			const uint64_t after = luaJIT_state_serial(State());
 			const TValue token = At(-1);
 			if (tvisgcv(&token)) Keep(-1);
-			std::unordered_set<const void*> seen;
+			ResultTables seen;
 			NewResults(-1, before, after, seen);
 			return token;
 		}
@@ -1073,7 +1079,7 @@ namespace RTE::CheckpointLua {
 				push();
 				const uint64_t after = luaJIT_state_serial(State());
 				NativeImage::Result result;
-				std::unordered_set<const void*> seen;
+				ResultTables seen;
 				for (int index = top + 1; index <= lua_gettop(State()); ++index) {
 					NativeImage::Value value;
 					value.token = At(index);
