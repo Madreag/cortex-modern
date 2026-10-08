@@ -94,8 +94,9 @@ namespace RTE {
 					return false;
 				}
 				for (size_t i = 0; i < count; ++i) {
-					m_Counter = static_cast<uint8_t>(m_Counter * 37U + 149U);
-					buffer[i] = m_Counter;
+					// A byte-sized cycle reused whole epochs after 256 bytes of fixture draws.
+					m_Counter = m_Counter * 6364136223846793005ULL + 1442695040888963407ULL;
+					buffer[i] = static_cast<uint8_t>(m_Counter >> 56);
 				}
 				return true;
 			}
@@ -121,7 +122,7 @@ namespace RTE {
 			}
 
 		private:
-			uint8_t m_Counter = 1;
+			uint64_t m_Counter = 1;
 		};
 
 		struct ScopedTestCrypto {
