@@ -10,12 +10,16 @@
 #include <iostream>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <map>
+#include <memory>
 #include <memory_resource>
+#include <new>
 #include <optional>
 #include <span>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -25,6 +29,27 @@
 namespace RTE::CheckpointLua {
 
 	class CaptureScope;
+
+	// Published answers retain their arena; copies allocate on the copying thread.
+	template<class T> class NativeAllocator {
+	public:
+		using value_type = T;
+		using propagate_on_container_move_assignment = std::true_type;
+		using propagate_on_container_swap = std::true_type;
+		std::shared_ptr<std::pmr::memory_resource> storage;
+		NativeAllocator() : storage(CheckpointWriter::BatchEnabled() ? CheckpointBuffer::LeaseCaptureStorage() : nullptr) {}
+		template<class U> NativeAllocator(const NativeAllocator<U>& other) noexcept : storage(other.storage) {}
+		NativeAllocator select_on_container_copy_construction() const { return {}; }
+		T* allocate(size_t count) {
+			if (count > std::numeric_limits<size_t>::max() / sizeof(T)) throw std::bad_array_new_length();
+			return storage ? static_cast<T*>(storage->allocate(count * sizeof(T), alignof(T))) : std::allocator<T>{}.allocate(count);
+		}
+		void deallocate(T* address, size_t count) noexcept {
+			if (storage) storage->deallocate(address, count * sizeof(T), alignof(T));
+			else std::allocator<T>{}.deallocate(address, count);
+		}
+		template<class U> bool operator==(const NativeAllocator<U>& other) const noexcept { return storage == other.storage; }
+	};
 
 	// The counters a native capture must leave as it found them, put back when it ends.
 	struct NativeEffects {
@@ -55,8 +80,8 @@ namespace RTE::CheckpointLua {
 		};
 
 		struct Result {
-			std::vector<Value> values;
-			std::vector<uint64_t> carriedSounds;
+			std::vector<Value, NativeAllocator<Value>> values;
+			std::vector<uint64_t, NativeAllocator<uint64_t>> carriedSounds;
 			std::string error;
 			int Push(lua_State* destination, View& view, std::unordered_set<uint64_t>* carried) const {
 				if (!error.empty()) throw std::runtime_error(error);
@@ -176,8 +201,9 @@ namespace RTE::CheckpointLua {
 		class Answers {
 		public:
 			using Item = std::pair<std::string_view, Result>;
-			using Iterator = std::vector<Item>::iterator;
-			using ConstIterator = std::vector<Item>::const_iterator;
+			using Items = std::vector<Item, NativeAllocator<Item>>;
+			using Iterator = Items::iterator;
+			using ConstIterator = Items::const_iterator;
 			Iterator begin() { return m_Items.begin(); }
 			Iterator end() { return m_Items.end(); }
 			ConstIterator begin() const { return m_Items.begin(); }
@@ -192,7 +218,7 @@ namespace RTE::CheckpointLua {
 				return std::pair(std::prev(end()), true);
 			}
 		private:
-			std::vector<Item> m_Items;
+			Items m_Items;
 		};
 		struct Entry {
 			std::array<Result, 2> native;
@@ -283,7 +309,7 @@ namespace RTE::CheckpointLua {
 			std::vector<NativeId> objects;
 			Topology topology;
 		};
-		std::unordered_map<const void*, Entry> m_Entries;
+		std::unordered_map<const void*, Entry, std::hash<const void*>, std::equal_to<const void*>, NativeAllocator<std::pair<const void* const, Entry>>> m_Entries;
 		using ScalarRecord = std::pair<const void*, ScalarEntry>;
 		std::vector<ScalarRecord> m_Scalars;
 		mutable std::optional<std::vector<const ScalarRecord*>> m_ScalarIndex;
@@ -516,7 +542,10 @@ namespace RTE::CheckpointLua {
 			lua_pop(State(), 1);
 			const auto worldStarted = std::chrono::steady_clock::now();
 			m_Image->m_EnumUs = std::chrono::duration_cast<std::chrono::microseconds>(worldStarted - enumStarted).count();
-			if (CheckpointWriter::BatchEnabled()) m_Image->m_Scalars.reserve(m_Queue.size());
+			if (CheckpointWriter::BatchEnabled()) {
+				m_Image->m_Entries.reserve(m_Image->m_Entries.size() + m_Queue.size());
+				m_Image->m_Scalars.reserve(m_Queue.size());
+			}
 			{
 				// The states of one world capture may run side by side; the first to get here walks the world.
 				std::lock_guard worldLock(s_GraphNativeCapture->frozenWorldMutex);

@@ -9164,6 +9164,54 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		checkpointValues = exact && checkpointValues;
 	}
 	{
+		using Entry = CheckpointLua::NativeImage::Entry;
+		Entry retained;
+		std::weak_ptr<std::pmr::memory_resource> firstStorage;
+		{
+			CheckpointWriter::BatchScope batches(true);
+			CheckpointBuffer::AllocationScope allocation(true);
+			Entry source;
+			for (unsigned index = 0; index < 257; ++index) {
+				TValue token; setnumV(&token, static_cast<lua_Number>(index));
+				source.native[0].values.push_back({token});
+				source.native[0].carriedSounds.push_back(index + 1);
+			}
+			source.native[1] = source.native[0];
+			source.helpers.emplace("_ScriptGraphInstance", source.native[0]);
+			source.properties.emplace("X", source.native[1]);
+			firstStorage = source.native[0].values.get_allocator().storage;
+			retained = std::move(source);
+		}
+		const bool leased = !firstStorage.expired();
+		const bool exact = std::async(std::launch::async, [retained = std::move(retained), firstStorage]() mutable {
+			Entry copied = retained;
+			Entry assigned; assigned = retained;
+			bool independent = !copied.native[0].values.get_allocator().storage && !assigned.native[0].values.get_allocator().storage;
+			Entry pooled;
+			std::weak_ptr<std::pmr::memory_resource> copyStorage;
+			{
+				CheckpointWriter::BatchScope batches(true);
+				CheckpointBuffer::AllocationScope allocation(true);
+				Entry current = retained;
+				copyStorage = current.native[0].values.get_allocator().storage;
+				independent = independent && !copyStorage.expired() && copyStorage.lock() != firstStorage.lock();
+				pooled = std::move(current);
+			}
+			setnumV(&copied.native[0].values[0].token, -1.0);
+			bool preserved = retained.native[0].values.size() == 257 && assigned.native[0].values.size() == 257 && pooled.native[0].values.size() == 257;
+			for (unsigned index = 0; index < 257 && preserved; ++index) {
+				preserved = retained.native[0].values[index].token.u64 == assigned.native[0].values[index].token.u64 &&
+				    retained.native[0].values[index].token.u64 == pooled.native[0].values[index].token.u64 && retained.native[0].carriedSounds[index] == index + 1;
+			}
+			preserved = preserved && numV(&retained.native[0].values[0].token) == 0.0 && retained.helpers.size() == 1 && retained.properties.size() == 1;
+			retained = Entry{};
+			pooled = Entry{};
+			return independent && preserved && firstStorage.expired() && copyStorage.expired();
+		}).get();
+		std::cout << "[script-graph-selftest] " << (leased && exact ? "PASS" : "FAIL") << " native_answer_storage_outlives_capture_and_copies_on_the_reading_thread" << std::endl;
+		checkpointValues = leased && exact && checkpointValues;
+	}
+	{
 		LuaStateWrapper classState;
 		classState.Initialize();
 		const bool planted = classState.RunScriptString(R"lua(
