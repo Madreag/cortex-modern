@@ -1105,14 +1105,20 @@ CheckpointText CheckpointCache::CapturePixels(const BITMAP* bitmap) {
 
 struct BitmapPixelCaptureScope::State {
 	struct Cell { std::once_flag once; std::shared_ptr<const BitmapSnapshot> snapshot; CheckpointText text; };
+	struct Cells {
+		std::mutex mutex;
+		std::optional<std::unordered_map<const BITMAP*, std::shared_ptr<Cell>>> values;
+	};
+	std::array<Cells, 64> pixelShards;
 	std::mutex mutex;
 	std::unordered_map<const BITMAP*, std::shared_ptr<Cell>> cells;
 	std::thread::id captureThread = std::this_thread::get_id();
 	~State() {
 		static const bool report = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
 		const auto started = report ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-		const size_t count = cells.size();
+		size_t count = cells.size();
 		cells.clear();
+		for (auto& shard: pixelShards) if (shard.values) { count += shard.values->size(); shard.values->clear(); }
 		if (report) System::PrintDiagnosticLine(std::format("[checkpoint-pixel-release] entries={} capture_thread={} release_thread={} off_capture_thread={} us={}", count,
 			std::hash<std::thread::id>{}(captureThread), std::hash<std::thread::id>{}(std::this_thread::get_id()), captureThread != std::this_thread::get_id(),
 			std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()));
@@ -1131,7 +1137,16 @@ std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> 
 	State* state = s_Current.load();
 	if (!state) return std::nullopt;
 	std::shared_ptr<State::Cell> cell;
-	{
+	if (CheckpointWriter::BatchEnabled()) {
+		uintptr_t hash = reinterpret_cast<uintptr_t>(bitmap) >> 4;
+		hash ^= hash >> 16;
+		auto& shard = state->pixelShards[hash % state->pixelShards.size()];
+		std::lock_guard lock(shard.mutex);
+		if (!shard.values) shard.values.emplace();
+		auto& entry = (*shard.values)[bitmap];
+		if (!entry) entry = std::make_shared<State::Cell>();
+		cell = entry;
+	} else {
 		std::lock_guard lock(state->mutex);
 		auto& entry = state->cells[bitmap];
 		if (!entry) entry = std::make_shared<State::Cell>();
@@ -1529,6 +1544,39 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			const std::string census = cache.Census();
 			check(kept && !retired.empty() && census.starts_with("entries=1 ") && census.find("channels=7:1") != std::string::npos,
 			      "transient_checkpoint_cache_keeps_channels_generations_and_expired_owners");
+		}
+		{
+			CheckpointText frozen;
+			std::string expected;
+			bool exact = true;
+			{
+				constexpr int width = 7, height = 5;
+				std::array<unsigned char, width * height> bytes;
+				for (size_t index = 0; index < bytes.size(); ++index) bytes[index] = static_cast<unsigned char>(index * 17);
+				expected.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+				std::array<unsigned char*, height> lines;
+				for (int y = 0; y < height; ++y) lines[y] = bytes.data() + y * width;
+				GFX_VTABLE vtable{}; vtable.color_depth = 8;
+				BITMAP bitmap{}; bitmap.w = width; bitmap.h = height; bitmap.vtable = &vtable; bitmap.line = lines.data();
+				CheckpointWriter::BatchScope batch(true);
+				BitmapPixelCaptureScope scope;
+				std::vector<std::future<CheckpointText>> readers;
+				for (int reader = 0; reader < 16; ++reader) readers.push_back(std::async(std::launch::async, [&] {
+					CheckpointCache cache(true); cache.Begin();
+					return cache.CapturePixels(&bitmap);
+				}));
+				for (auto& reader: readers) {
+					auto text = reader.get();
+					if (!frozen.OwnedBytes()) frozen = text;
+					else exact = frozen.SameValues(text) && exact;
+				}
+				size_t copies = 0;
+				for (const auto& shard: scope.m_State->pixelShards) if (shard.values) copies += shard.values->size();
+				exact = copies == 1 && exact;
+				bytes.fill(0);
+			}
+			const auto actual = std::async(std::launch::async, [frozen] { return frozen.Text(); }).get();
+			check(exact && actual == expected, "parallel_bitmap_readers_share_one_fresh_copy_after_source_death");
 		}
 
 		{

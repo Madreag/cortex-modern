@@ -20,6 +20,7 @@ namespace RTE {
 		static std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> Capture(
 		    const BITMAP* bitmap, const std::shared_ptr<const BitmapSnapshot>& previous);
 	private:
+		friend bool RunOwnedCheckpointSelfTest();
 		struct State;
 		std::unique_ptr<State> m_State;
 		State* m_Previous;
@@ -36,9 +37,12 @@ namespace RTE {
             clip = bitmap->clip; clipLeft = bitmap->cl; clipTop = bitmap->ct;
             clipRight = bitmap->cr; clipBottom = bitmap->cb;
 			if (CheckpointWriter::IsCapturing()) {
-				CheckpointCache temporary;
 				auto* cache = CheckpointWriter::CurrentCache();
-				capturedPixels = (cache ? cache : &temporary)->CapturePixels(bitmap);
+				if (CheckpointWriter::BatchEnabled() && cache) capturedPixels = cache->CapturePixels(bitmap);
+				else {
+					CheckpointCache temporary;
+					capturedPixels = (cache ? cache : &temporary)->CapturePixels(bitmap);
+				}
 				pixels.clear();
 				return;
 			}
