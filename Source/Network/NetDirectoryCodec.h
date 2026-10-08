@@ -10,6 +10,7 @@ namespace RTE {
 
 	// Field limits mirrored from tools/session_directory/session_directory.py (the API of record).
 	namespace NetDirectoryLimits {
+		inline constexpr uint16_t c_ConnectionProtocol = 1;
 		inline constexpr size_t c_MaxStringChars = 64;        // MAX_STR
 		inline constexpr size_t c_MaxPeerChars = 64;          // peer string cap (not 7+MAX_STR)
 		inline constexpr size_t c_MaxListRows = 4096;         // MAX_ROWS
@@ -43,6 +44,8 @@ namespace RTE {
 		int64_t listenPort = 0;
 		std::vector<std::string> listenAddrs;
 		std::string joinMode; //!< "ip" | "ice" | "either"
+		std::string iceIdentity; //!< A successor's existing listener; absent uses the session's initial identity.
+		int64_t iceVirtualPort = 0;
 		bool persistentWorld = false;
 		std::string worldId;
 		int64_t worldBoot = 0;
@@ -64,6 +67,8 @@ namespace RTE {
 		int64_t heartbeatS = 0;
 		std::string observedIp;
 		bool supportsUnlisted = false; //!< Server-advertised unlisted-session capability; absent or false means unsupported.
+		int64_t connectionProtocol = NetDirectoryLimits::c_ConnectionProtocol;
+		std::string authorityKey;
 
 		bool operator==(const NetDirectoryRegisterResponse&) const = default;
 	};
@@ -127,6 +132,8 @@ namespace RTE {
 		int64_t listenPort = 0;
 		std::vector<std::string> listenAddrs;
 		std::string joinMode;
+		std::string iceIdentity;
+		int64_t iceVirtualPort = 0;
 		std::string sessionId;
 		int64_t ageS = 0;
 		std::string observedIp;

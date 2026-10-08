@@ -253,8 +253,11 @@ namespace RTE {
 			}
 
 			const std::string& Name() const { return m_Name; }
+			void NoteConnection(HSteamNetConnection connection) { m_Connection.store(connection); }
+			HSteamNetConnection Connection() const { return m_Connection.load(); }
 
 		private:
+			std::atomic<HSteamNetConnection> m_Connection{k_HSteamNetConnection_Invalid};
 			const std::string m_Name;
 			std::mutex m_Mutex;
 			std::deque<Signal> m_Signals;
@@ -266,7 +269,8 @@ namespace RTE {
 		public:
 			StubConnectionSignaling(std::shared_ptr<SignalQueue> out, std::shared_ptr<std::atomic<int>> releases) : m_Out(std::move(out)), m_Releases(std::move(releases)) {}
 
-			bool SendSignal(HSteamNetConnection, const SteamNetConnectionInfo_t&, const void* message, int size) override {
+			bool SendSignal(HSteamNetConnection connection, const SteamNetConnectionInfo_t&, const void* message, int size) override {
+				m_Out->NoteConnection(connection);
 				m_Out->Push(message, size, "SendSignal");
 				return true;
 			}
@@ -567,7 +571,7 @@ namespace RTE {
 				} else {
 					Say("host StartHostP2P(" + std::to_string(c_HostVirtualPort) + "): CreateListenSocketP2P and CreatePollGroup succeeded");
 					const std::string identity = host.transport.GetLocalIdentity();
-					Say("process identity (GameNetworkingSockets_Init(nullptr), no ResetIdentity): " + identity);
+					Say("process identity (no ResetIdentity): " + identity);
 					connectMs = ElapsedMs();
 					if (!joiner.transport.ConnectP2P(new StubConnectionSignaling(toHost, releases), identity, c_HostVirtualPort, joinerConfig, &error)) {
 						failure = "ConnectP2P: " + error;
@@ -757,6 +761,15 @@ namespace RTE {
 						}
 					}
 					pump();
+					if (failure.empty()) {
+						SteamNetConnectionInfo_t native{};
+						const HSteamNetConnection connection = toHost->Connection();
+						if (connection == k_HSteamNetConnection_Invalid || SteamNetworkingSockets()->GetConnectionInfo(connection, &native)) {
+							failure = "the terminal callback left the joiner's native connection open";
+						} else {
+							Say("the terminal callback released the native connection before transport shutdown");
+						}
+					}
 					host.transport.Stop();
 					joiner.transport.Stop();
 				}
@@ -1120,6 +1133,7 @@ namespace RTE {
 			const auto toJoiner = std::make_shared<SignalQueue>("host->joiner");
 			const auto releases = std::make_shared<std::atomic<int>>(0);
 			std::string failure;
+			std::string firstIdentity;
 			{
 				Side host("host");
 				Side joiner("joiner");
@@ -1139,8 +1153,12 @@ namespace RTE {
 					failure = "StartHostP2P: " + error;
 				} else {
 					const std::string identity = host.transport.GetLocalIdentity();
+					firstIdentity = identity;
 					Say("host StartHostP2P(" + std::to_string(c_HostVirtualPort) + ") succeeded; process identity " + identity);
-					if (!joiner.transport.ConnectP2P(new StubConnectionSignaling(toHost, releases), identity, c_HostVirtualPort, joinerConfig, &error)) {
+					SteamNetworkingIdentity parsed;
+					if (!parsed.ParseString(identity.c_str()) || !parsed.GetGenericString() || GnsTransport::ProcessIdentity() != identity) {
+						failure = "the default migration listener has no distinct process identity";
+					} else if (!joiner.transport.ConnectP2P(new StubConnectionSignaling(toHost, releases), identity, c_HostVirtualPort, joinerConfig, &error)) {
 						failure = "ConnectP2P: " + error;
 					} else {
 						joiner.peer = 1;
@@ -1158,6 +1176,12 @@ namespace RTE {
 			Say("transports destroyed; GNS released " + std::to_string(releases->load()) + " stub signaling object(s)");
 			if (failure.empty() && releases->load() != 3) {
 				failure = "GNS released " + std::to_string(releases->load()) + " signaling objects, expected 3 (host, joiner, the refused ConnectP2P)";
+			}
+			if (failure.empty()) {
+				Side restarted("restarted");
+				std::string error;
+				if (!restarted.transport.StartHostP2P(c_HostVirtualPort, hostConfig, &error)) failure = "restarted StartHostP2P: " + error;
+				else if (restarted.transport.GetLocalIdentity() == firstIdentity) failure = "a new transport lifetime reused the default migration identity";
 			}
 			return Finish(failure);
 		}
@@ -1432,7 +1456,8 @@ namespace RTE {
 		std::string CheckRouteReceipt(Side& side, const std::string& server) {
 			const std::string receipt = side.transport.GetPeerConnectionInfo(side.peer).routeReceipt;
 			const bool relayed = receipt.find(" route=relay ") != std::string::npos;
-			const bool addressed = receipt.find(" remote=") != std::string::npos && receipt.find(" turn=" + server + " ") != std::string::npos;
+			const bool addressed = receipt.find(" remote_sha256=") != std::string::npos &&
+			                       receipt.find(" turn_sha256=" + GnsTransport::TurnHostReceipts(server) + " ") != std::string::npos;
 			const bool offered = receipt.find(std::string(" offer=") + c_RelaySelfTestOffer) != std::string::npos;
 			bool listed = false;
 			for (const GnsProcessConnection& connection : GnsTransport::GetProcessConnections()) {
@@ -1484,8 +1509,8 @@ namespace RTE {
 		}
 
 		/// relay-hold: both sides relay only through one TURN server; a numbered message crosses each way every second for the whole hold.
-		int RunRelayHold(int seconds, const std::string& server) {
-			Say("mode: relay-hold, single process, both sides relay only through " + server + " for " + std::to_string(seconds) + " s; a numbered message crosses each way every second");
+		int RunRelayHold(int seconds, const std::string& server, bool automaticJoiner = false) {
+			Say(std::string("mode: relay-hold, single process, Relay only host and ") + (automaticJoiner ? "Automatic" : "Relay only") + " joiner through " + server + " for " + std::to_string(seconds) + " s; a numbered message crosses each way every second");
 			std::string user;
 			std::string pass;
 			if (!RelayLogin(&user, &pass)) {
@@ -1495,6 +1520,11 @@ namespace RTE {
 			GnsP2PConfig hostConfig = RelayOnlyConfig(server, user, pass);
 			GnsP2PConfig joinerConfig;
 			SingleProcessConfigs(&hostConfig, &joinerConfig);
+			if (automaticJoiner) {
+				joinerConfig.connectionMode = 0;
+				joinerConfig.iceEnable = 7;
+				joinerConfig.stunServerList = "stun.cloudflare.com:3478";
+			}
 
 			const auto toHost = std::make_shared<SignalQueue>("joiner->host");
 			const auto toJoiner = std::make_shared<SignalQueue>("host->joiner");
@@ -1744,6 +1774,9 @@ namespace RTE {
 		if (args[0] == "relay-hold" && args.size() == 3 && ParseNumber(args[1], &value) && value > 0) {
 			return RunRelayHold(value, args[2]);
 		}
+		if (args[0] == "relay-automatic" && args.size() == 3 && ParseNumber(args[1], &value) && value > 0) {
+			return RunRelayHold(value, args[2], true);
+		}
 		if (args[0] == "relay-renew" && args.size() == 2) {
 			return RunRelayRenew(args[1]);
 		}
@@ -1758,7 +1791,7 @@ namespace RTE {
 			}
 		}
 		std::cout << "[net-p2p-selftest] FAIL: usage: -net-p2p-selftest [reject | close-on-accept | gather <iceEnable> | drop j2h|h2j <n> | host <port> | join <port> | identity-guard | payload-hold | connect-limit <delay-ms> | goodbye"
-		             " | relay-hold <seconds> <turn-server> | relay-renew <turn-server>"
+		             " | relay-hold <seconds> <turn-server> | relay-automatic <seconds> <turn-server> | relay-renew <turn-server>"
 		             " | dir-host <vport> <url> <pin> <session-id> <token> | dir-join <vport> <url> <pin> <session-id>"
 		             " | dir-reject|dir-dup host <vport> <url> <pin> <session-id> <token> | dir-reject|dir-dup join <vport> <url> <pin> <session-id>]" << std::endl;
 		return 1;

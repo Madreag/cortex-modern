@@ -141,11 +141,14 @@ namespace RTE {
 		std::string address;   //!< Set when the row also advertises a direct address.
 		uint16_t port = 0;
 		bool persistentWorld = false;
+		int virtualPort = 0; //!< Zero selects the original host listener.
 	};
 
 	/// The GNS identity a host binds for a directory session; the dispatcher's rule, readable in a
 	/// build without GameNetworkingSockets.
 	std::string NetIceHostIdentity(const std::string& sessionId);
+	/// A saved successor keeps an ICE identity intact; only direct addresses carry a UDP port.
+	std::string NetRejoinAddress(const std::string& address, uint16_t port);
 
 	/// Reports ICE reachability only for the directory id bound to the listener.
 	std::string NetIceRowJoinMode(bool iceEnabled, bool hasDirectAddress, const std::string& boundSessionId, const std::string& rowSessionId);
@@ -158,7 +161,6 @@ namespace RTE {
 	/// The line a joiner reads while its ICE connect runs: what it waits on, how long it has waited and how long it may.
 	std::string NetIceConnectingLine(uint64_t elapsedMs, uint64_t limitMs, bool hostAnswered, bool relayReady, bool retrying);
 	/// A connect that ran out of time is worth one more dial only when the host answered it and refused nothing: its session lives.
-	bool NetIceRetryCanSucceed(uint64_t signalsFromHost, uint64_t refusals);
 
 	/// Resolves a session id against a directory listing. Empty and a filled target when the row can
 	/// be joined, else the join list's own refusal label for it.
@@ -265,37 +267,6 @@ namespace RTE {
 		}
 	};
 
-	inline NetMatchServiceRequest TicketRejoinRequestFromRecord(const NetH4TicketRecord& record, const std::string& playerName) {
-		NetMatchServiceRequest request;
-		request.host = false;
-		request.address = record.hostAddress;
-		request.sessionId = record.directorySessionId;
-		request.playerName = playerName.empty() ? "Client" : playerName;
-		request.resyncOnDesync = true;
-		return request;
-	}
-
-	inline std::string ResolveTicketJoinAddress(const NetH4TicketRecord& record, const std::string& requestSessionId, const std::string& requestAddress, const std::string& directoryResolvedAddress, bool iceDial) {
-		const std::string sessionId = !record.directorySessionId.empty() ? record.directorySessionId : requestSessionId;
-		if (!directoryResolvedAddress.empty()) {
-			return directoryResolvedAddress;
-		}
-		if (!sessionId.empty() && iceDial) {
-			return "session:" + sessionId;
-		}
-		if (!record.hostAddress.empty()) {
-			return record.hostAddress;
-		}
-		if (!sessionId.empty()) {
-			return "session:" + sessionId;
-		}
-		return requestAddress;
-	}
-
-	/// Polls a configured directory client until it answers a list or the budget runs out; the rows it
-	/// returns are what a rejoin re-resolves against.
-	std::vector<NetDirectorySessionRow> BrowseSessionRows(NetDirectoryClient& browse, uint64_t budgetMs, const std::function<bool()>& cancelled);
-
 	/// Whether a browsed row is the host the rejoin prompt is waiting for: the same directory session,
 	/// listed as a lobby or a running match. A world's session id is its own UUID, so a world answers
 	/// this under every boot it ever takes.
@@ -303,28 +274,13 @@ namespace RTE {
 		return !sessionId.empty() && row.sessionId == sessionId && (row.state == "running" || row.state == "lobby");
 	}
 
-	/// A stored ticket belongs to this join only when it names the host this request dials or the session
-	/// it joins; a record left by another host is not a re-resolve of this one.
+	/// Online seats match only their directory session. A direct seat matches its
+	/// saved route; the shared "ice:" placeholder never identifies a match.
 	inline bool TicketMatchesRequest(const NetH4TicketRecord& record, const std::string& requestSessionId, const std::string& requestAddress) {
-		if (!record.directorySessionId.empty() && record.directorySessionId == requestSessionId) {
-			return true;
-		}
+		if (!record.directorySessionId.empty() || !requestSessionId.empty()) return !requestSessionId.empty() && record.directorySessionId == requestSessionId;
 		return !record.hostAddress.empty() && record.hostAddress == requestAddress;
 	}
 
-	/// The address a ticket rejoin dials: the row the directory browse found for the stored session, else
-	/// the ticket's own address or session id.
-	inline std::string ResolveTicketJoinAddressFromRows(const NetH4TicketRecord& record, const std::string& requestSessionId, const std::string& requestAddress, const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, bool iceDial) {
-		const std::string sessionId = !record.directorySessionId.empty() ? record.directorySessionId : requestSessionId;
-		std::string resolved;
-		if (!sessionId.empty() && !rows.empty()) {
-			NetIceJoinTarget target;
-			if (NetIceResolveSessionRow(rows, local, sessionId, &target, nullptr, TicketMatchesRequest(record, requestSessionId, requestAddress)).empty() && !target.address.empty()) {
-				resolved = target.address;
-			}
-		}
-		return ResolveTicketJoinAddress(record, requestSessionId, requestAddress, resolved, iceDial);
-	}
 	/// The host's saved match defaults: the versioned template a new hosted lobby seeds its draft
 	/// from. It holds only what a host chooses - never an occupant, a credential, a session epoch or
 	/// a runtime peer id - so a template can be copied between machines without carrying identity.
@@ -664,7 +620,7 @@ namespace RTE {
 		/// Stages the pending snapshot for launch: the world state is the file's, the player seats
 		/// are per-peer, and the funds/roster ride the snapshot untouched.
 		bool StageResyncedMatchLaunch(std::string* error = nullptr);
-		void Destroy();
+		void Destroy(bool preserveMatch = false);
 		void Update();
 
 		/// Watcher: tell the world whether this player wants a seat when one frees. A declining
@@ -1333,13 +1289,13 @@ namespace RTE {
 		void SettleKeptDirectoryLease();
 		/// Host: waits for the register reply so the GNS identity can be pinned to the session id
 		/// before any listen socket of this process opens. Worker thread; reads the published snapshot.
-		bool WaitForDirectorySession(uint64_t budgetMs, std::string& sessionId, std::string& token) const;
 		/// Host: registers first, pins the GNS identity to the session id, then opens both listens.
 		/// Client: resolves the session id to a row and arms the join. Worker thread.
 		bool SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, NetIceJoinTarget& target, std::string* error);
 		/// Builds the candidate policy from the saved settings and run overrides.
 		static GnsP2PConfig BuildIceConfig(const SettingsMan& settings, const std::string& localIdentity, int localVirtualPort, const NetRelayConfig& relay = {});
 		void UpdateRelayOffer(uint64_t nowMs);
+		void UpdateConnectionAuthority(uint64_t nowMs);
 		void PublishRelayOfferLocked(NetSession& session, INetTransport& wire);
 		bool ReadRelayOffer(NetRelayConfig& offer) const;
 		void SetRelayOfferLocked(const NetRelayConfig& offer);
@@ -1364,9 +1320,7 @@ namespace RTE {
 		bool DialMigrationIce(INetTransport& transport, const std::string& identity, std::string* error);
 		/// Opens the directory's host end on this successor's handover listener, so the survivors' ICE dials reach it.
 		void HostMigrationIce(INetTransport& listener);
-		static constexpr uint64_t c_IceRegisterBudgetMs = 30000;
 		static constexpr uint64_t c_IceResolveBudgetMs = 30000;
-		bool QueryDirectoryHostEnd(const std::string& sessionId);
 		static constexpr uint32_t c_IceConnectBudgetMs = 15000;
 		static constexpr uint32_t c_IceHandshakeMarginMs = 5000; //!< The session's hello after the transport connects, on top of its connect limit.
 		void JoinWorkerIfDone();
@@ -1440,7 +1394,8 @@ namespace RTE {
 		friend bool TestStaleWorldImageRecaptures(std::string* error);
 		friend bool TestWorldCatchUpRefusal(std::string* error);
 		friend bool TestWorldDisconnectReason(bool watcher, std::string* error);
-		void InstallIcePump(NetMuxTransport& mux, bool host);
+		void InstallIcePump(NetMuxTransport& mux, bool host, std::shared_ptr<GnsDirectorySignalDispatcher> ownedDispatcher = {});
+		void AdoptMigrationDirectoryLocked(const NetMatchMigrationPeer& endpoint, size_t peerCount);
 		void RefuseWorldCatchUpLocked(const std::string& rejectText);
 		std::string RefreshDirectorySignalCredentialLocked(uint64_t nowMs);
 		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
@@ -1658,8 +1613,7 @@ namespace RTE {
 		std::string m_PublishedDirectorySession, m_PublishedDirectoryToken;
 		std::string m_PublishedAdmissionMatchId;    //!< The match the file on disk belongs to.
 		uint64_t m_PublishedAdmissionRevision = 0;  //!< The admission plane's revision that file renders.
-		NetDirectoryClient m_ReturnWatch; //!< 7e: browses for the watched session's row; never registers one.
-		bool m_ReturnWatchConfigured = false;
+		uint64_t m_NextHostWatchMs = 0;
 		uint64_t m_RestartAdmissionGeneration = 0;
 		std::atomic<bool> m_RestartAdmissionDue{false};
 		bool m_FinalCheckpointWritten = false; //!< One final world checkpoint per teardown, never two.
@@ -1683,6 +1637,10 @@ namespace RTE {
 		NetReconnectClient m_ReconnectClient;
 		NetReconnectTicketStore m_TicketStore;
 		NetParticipantIdentityStore m_ParticipantStore;
+		NetConnectionAuthority m_ConnectionAuthority;
+		uint32_t m_ConnectionNetworkRevision = 0;
+		uint64_t m_ConnectionRouteAtMs = 0, m_LocalLeasePersistAtMs = 0;
+		std::string m_PersistedLocalLease;
 		NetHostBanStore m_BanStore;
 		NetReconnectUx m_ReconnectUx;
 		std::map<uint8_t, SeatView> m_SeatViews; //!< Every seat label's source: the session's roster, read each pump.
@@ -1820,7 +1778,6 @@ namespace RTE {
 		uint64_t m_IceDialStartedMs = 0; //!< Worker thread: the current connection attempt starts its own clock.
 		uint32_t m_ConnectingLimitMs = 0;
 		bool m_ConnectingDirect = false;
-		bool m_IceDialRetrying = false;
 		uint64_t m_IceSignalsAtDial = 0; //!< The host's signals before this dial, so a retry waits for an answer of its own.
 		std::string m_IceConnectingPhase; //!< The phase the log last named, so a phase is logged once, not each second.
 		uint64_t m_RelayOfferIssuedAt = 0; //!< Wall seconds when the current offer was adopted.

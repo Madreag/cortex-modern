@@ -3379,6 +3379,7 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::ConnectMigrationEndpoint(INetTransport& transport, const NetMatchMigrationPeer& peer, size_t& nextAddress, std::string& connectedAddress, std::string* error,
 	                                                      const MigrationIceDial* iceDial) {
+		if (!connectedAddress.empty() && std::find(peer.listenAddrs.begin(), peer.listenAddrs.end(), connectedAddress) == peer.listenAddrs.end()) nextAddress = 0;
 		while (nextAddress < peer.listenAddrs.size()) {
 			const std::string& address = peer.listenAddrs[nextAddress++];
 			// An ICE route is reached through the session's rendezvous, never dialed as an address.
@@ -3407,6 +3408,13 @@ namespace RTE {
 		return MigrationTimeouts().stepMs;
 	}
 
+	std::optional<NetMatchMigrationPeer> NetLockstepCoordinator::MigrationEndpoint(uint8_t peerId) const {
+		const auto found = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(),
+			[peerId](const auto& peer) { return peer.peerId == peerId; });
+		if (found == m_Config.matchConfig.migrationPeers.end()) return {};
+		return m_Config.migrationEndpoint ? m_Config.migrationEndpoint(*found) : *found;
+	}
+
 	NetHostMigrationTimeouts NetLockstepCoordinator::MigrationTimeouts() const {
 		const bool ice = std::any_of(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [](const NetMatchMigrationPeer& peer) {
 			return std::any_of(peer.listenAddrs.begin(), peer.listenAddrs.end(), [](const std::string& address) { return IsMigrationIceEndpoint(address); });
@@ -3415,7 +3423,9 @@ namespace RTE {
 		uint64_t routes = 0;
 		// A successor stays available through the dials that can reach it, including earlier candidates.
 		for (uint8_t candidate : m_Config.matchConfig.successorOrder) {
-			const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == candidate; });
+			// Keep the agreed election budget; current routes only select where to dial.
+			const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(),
+				[candidate](const auto& peer) { return peer.peerId == candidate; });
 			if (endpoint != m_Config.matchConfig.migrationPeers.end())
 				for (const auto& address : endpoint->listenAddrs) routes += IsMigrationIceEndpoint(address) ? c_MigrationIceDialMs : step;
 			if (candidate == m_MigrationSuccessor || m_MigrationSuccessor == 0) break;
@@ -3439,15 +3449,15 @@ namespace RTE {
 			m_MigrationNextAddress = 0;
 		}
 		m_MigrationSuccessor = order[m_MigrationCandidateIndex];
-		const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == m_MigrationSuccessor; });
-		if (endpoint == m_Config.matchConfig.migrationPeers.end()) {
+		const auto endpoint = MigrationEndpoint(m_MigrationSuccessor);
+		if (!endpoint) {
 			FailHostMigration("successor has no agreed listen endpoint");
 			return false;
 		}
 		if (!m_MigrationListener) {
-			const auto local = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == m_Config.localPeerId; });
+			const auto local = MigrationEndpoint(m_Config.localPeerId);
 			m_MigrationListener = m_Config.migrationTransportFactory();
-			if (local == m_Config.matchConfig.migrationPeers.end() || !m_MigrationListener || !m_MigrationListener->StartHost(local->listenPort)) {
+			if (!local || !m_MigrationListener || !m_MigrationListener->StartHost(local->listenPort)) {
 				FailHostMigration("the local handover listener could not open");
 				return false;
 			}
@@ -3483,13 +3493,14 @@ namespace RTE {
 			}
 		}
 		if (hosting)
-			for (const auto& peer: m_Config.matchConfig.migrationPeers) {
+			for (const auto& agreed: m_Config.matchConfig.migrationPeers) {
+				const auto peer = m_Config.migrationEndpoint ? m_Config.migrationEndpoint(agreed) : agreed;
 				if (peer.peerId == m_Config.localPeerId || peer.peerId == GetHostPeerId() || IsPeerGoneAtFrame(peer.peerId, GetResumeFrame()))
 					continue;
 				MigrationProbe probe;
 				probe.transport = m_Config.migrationTransportFactory();
 				probe.lastDialMs = nowMs;
-				if (probe.transport && ConnectMigrationEndpoint(*probe.transport, peer, probe.nextAddress, probe.address)) {
+				if (probe.transport && ConnectMigrationEndpoint(*probe.transport, peer, probe.nextAddress, probe.address, nullptr, &m_Config.migrationIceDial)) {
 					m_MigrationProbes[peer.peerId] = std::move(probe);
 				}
 			}
@@ -3640,13 +3651,13 @@ namespace RTE {
 		for (size_t tried = 0; tried < order.size(); ++tried) {
 			const uint8_t peer = order[m_SuccessorProbeTurn++ % order.size()];
 			if (peer == m_Config.localPeerId || m_RemovedPeers.contains(peer)) continue;
-			const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& entry) { return entry.peerId == peer; });
-			if (endpoint == m_Config.matchConfig.migrationPeers.end() || endpoint->listenPort == 0) continue;
+			const auto endpoint = MigrationEndpoint(peer);
+			if (!endpoint || endpoint->listenPort == 0) continue;
 			m_SuccessorProbe = m_Config.migrationTransportFactory();
 			m_SuccessorProbePeer = peer;
 			size_t nextAddress = 0;
 			std::string address;
-			if (m_SuccessorProbe && ConnectMigrationEndpoint(*m_SuccessorProbe, *endpoint, nextAddress, address)) return;
+			if (m_SuccessorProbe && ConnectMigrationEndpoint(*m_SuccessorProbe, *endpoint, nextAddress, address, nullptr, &m_Config.migrationIceDial)) return;
 			m_SuccessorProbe.reset();
 		}
 	}
@@ -3723,10 +3734,11 @@ namespace RTE {
 			auto& probe = dial.transport;
 			if (!probe)
 				continue;
-			const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& entry) { return entry.peerId == peer; });
-			if (!dial.answered && endpoint != m_Config.matchConfig.migrationPeers.end() && dial.nextAddress < endpoint->listenAddrs.size() && nowMs >= dial.lastDialMs + NetHostMigrationTimeouts::c_RetryMs) {
+			const auto endpoint = MigrationEndpoint(peer);
+			if (endpoint && !dial.address.empty() && std::find(endpoint->listenAddrs.begin(), endpoint->listenAddrs.end(), dial.address) == endpoint->listenAddrs.end()) dial.nextAddress = 0;
+			if (!dial.answered && endpoint && dial.nextAddress < endpoint->listenAddrs.size() && nowMs >= dial.lastDialMs + NetHostMigrationTimeouts::c_RetryMs) {
 				probe->Stop();
-				(void)ConnectMigrationEndpoint(*probe, *endpoint, dial.nextAddress, dial.address);
+				(void)ConnectMigrationEndpoint(*probe, *endpoint, dial.nextAddress, dial.address, nullptr, &m_Config.migrationIceDial);
 				dial.lastDialMs = nowMs;
 			}
 			for (const auto& event: probe->PollEvents()) {
@@ -4131,8 +4143,9 @@ namespace RTE {
 				}
 			} else if (nowMs >= m_MigrationSinceMs && MigrationDialSpent(m_MigrationAddress, nowMs - m_MigrationSinceMs, budget) && !m_MigrationAuthoritySeen &&
 			           !HoldsLiveMigrationCandidate(nowMs, budget)) {
-				const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == m_MigrationSuccessor; });
-				if (endpoint == m_Config.matchConfig.migrationPeers.end() || m_MigrationNextAddress >= endpoint->listenAddrs.size()) {
+				const auto endpoint = MigrationEndpoint(m_MigrationSuccessor);
+				if (endpoint && !m_MigrationAddress.empty() && std::find(endpoint->listenAddrs.begin(), endpoint->listenAddrs.end(), m_MigrationAddress) == endpoint->listenAddrs.end()) m_MigrationNextAddress = 0;
+				if (!endpoint || m_MigrationNextAddress >= endpoint->listenAddrs.size()) {
 					++m_MigrationCandidateIndex;
 				}
 				m_MigrationTransport.reset();
@@ -5670,6 +5683,12 @@ namespace RTE {
 		// round will never require. Only that shift is dropped instead of refused - every peer agrees the
 		// same first frame - and a target below the round's own start is still an error.
 		if (target >= m_Config.startFrame + delay && target < EffectiveStartOf(m_Config.localPeerId)) {
+			// A player's event accepted during the startup ramp still has to commit. Carry it
+			// through the same queue as an input emptied by a capture park; only the sample expires.
+			if (!commands.empty()) {
+				auto& carried = m_ParkCarriedCommands[target];
+				carried.insert(carried.end(), commands.begin(), commands.end());
+			}
 			m_DeferredControllerFrames.clear();
 			return true;
 		}

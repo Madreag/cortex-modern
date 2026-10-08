@@ -835,7 +835,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(GNS_ROOT)\lib;$(GNS_DEP_ROOT)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>GameNetworkingSockets_s.lib;libprotobuf.lib;utf8_validity.lib;abseil_dll.lib;libcrypto.lib;ws2_32.lib;crypt32.lib;winmm.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>GameNetworkingSockets_s.lib;libprotobuf.lib;utf8_validity.lib;abseil_dll.lib;libcrypto.lib;libssl.lib;ws2_32.lib;crypt32.lib;winmm.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup>
@@ -936,6 +936,7 @@
     <ClInclude Include="Source\Network\NetParticipantCrypto.h" />
     <ClInclude Include="Source\Network\NetAuthSelfTest.h" />
     <ClInclude Include="Source\Network\NetDirectoryClient.h" />
+    <ClInclude Include="Source\Network\NetConnectionAuthority.h" />
     <ClInclude Include="Source\Network\NetDirectoryCodec.h" />
     <ClInclude Include="Source\Network\NetDirectorySignalChannel.h" />
     <ClInclude Include="Source\Network\NetMuxTransport.h" />
@@ -1581,6 +1582,7 @@
     <ClCompile Include="Source\Network\NetParticipantCrypto.cpp" />
     <ClCompile Include="Source\Network\NetAuthSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetDirectoryClient.cpp" />
+    <ClCompile Include="Source\Network\NetConnectionAuthority.cpp" />
     <ClCompile Include="Source\Network\NetDirectoryCodec.cpp" />
     <ClCompile Include="Source\Network\NetDirectorySelfTest.cpp" />
     <ClCompile Include="Source\Network\NetDirectorySignalChannel.cpp" />

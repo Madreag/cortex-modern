@@ -11,6 +11,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <random>
 #include <set>
 #include <thread>
 #include <utility>
@@ -26,7 +27,7 @@
 #include <steam/steamnetworkingcustomsignaling.h>
 #include <steam/steamnetworkingsockets.h>
 // A relayed route dies once its TURN permission lapses unless the library refreshes it.
-#ifndef STEAMNETWORKINGSOCKETS_TURN_LIFETIME
+#if !defined(STEAMNETWORKINGSOCKETS_TURN_LIFETIME) || STEAMNETWORKINGSOCKETS_TURN_LIFETIME < 2 || !defined(STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY) || STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY < 2 || !defined(STEAMNETWORKINGSOCKETS_TURN_STREAMS) || STEAMNETWORKINGSOCKETS_TURN_STREAMS < 2 || !defined(STEAMNETWORKINGSOCKETS_NETWORK_RECOVERY)
 #error "GameNetworkingSockets without external/patches/gns-turn-lifetime.patch; build it into <GNS_ROOT>-turnfix, see docs/turn-relay.md"
 #endif
 #endif
@@ -41,6 +42,9 @@ namespace RTE {
 		std::string server, result;
 		while (std::getline(input, server, ',')) {
 			if (server.empty()) continue;
+			if (server.starts_with("turns:")) server.erase(0, 6);
+			else if (server.starts_with("turn:")) server.erase(0, 5);
+			if (const auto query = server.find('?'); query != std::string::npos) server.resize(query);
 			std::string host = server;
 			if (server.front() == '[') {
 				const auto end = server.find(']');
@@ -192,8 +196,14 @@ namespace RTE {
 
 		bool AcquireGns(std::string* error) {
 			if (!g_GnsInitialized) {
+				// Every migration listener needs a distinct identity before any socket opens.
+				std::random_device random;
+				std::string name = "p-";
+				for (int i = 0; i < 28; ++i) name += "0123456789abcdef"[random() & 15];
+				SteamNetworkingIdentity identity;
+				identity.SetGenericString(name.c_str());
 				SteamDatagramErrMsg initError;
-				if (!GameNetworkingSockets_Init(nullptr, initError)) {
+				if (!GameNetworkingSockets_Init(&identity, initError)) {
 					SetError(error, std::string("GameNetworkingSockets_Init failed: ") + initError);
 					return false;
 				}
@@ -798,9 +808,16 @@ namespace RTE {
 		}
 
 		void RefuseRoute(HSteamNetConnection connection) {
-			const char* reason = m_P2PMode == 1 ? "Direct only refuses this relay route" : "Relay only refuses this direct route";
-			m_Interface->CloseConnection(connection, 0, reason, false);
-			HandleConnectionClosed(connection, reason, k_ESteamNetworkingConnectionState_Connecting);
+			const char* localReason = m_P2PMode == 1
+			    ? "Your Connection is Direct only. Switch it to Automatic or Relay only to use this relay route."
+			    : "Your Connection is Relay only, but this route is direct. Check your relay or switch Connection to Automatic.";
+			const char* remoteReason = m_P2PMode == 1
+			    ? (m_IsHost ? "The host's Connection is Direct only. Ask the host to switch it to Automatic to allow this relay route."
+			                : "The joining player's Connection is Direct only. Ask that player to switch it to Automatic to allow this relay route.")
+			    : (m_IsHost ? "The host's Connection is Relay only, but this route is direct. Ask the host to check the relay, then retry."
+			                : "The joining player's Connection is Relay only, but this route is direct. Ask that player to check the relay, then retry.");
+			m_Interface->CloseConnection(connection, 0, remoteReason, false);
+			HandleConnectionClosed(connection, localReason, k_ESteamNetworkingConnectionState_Connecting);
 		}
 
 		void OnConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t* info) {
@@ -829,9 +846,15 @@ namespace RTE {
 					}
 					break;
 				case k_ESteamNetworkingConnectionState_ClosedByPeer:
-				case k_ESteamNetworkingConnectionState_ProblemDetectedLocally:
-					HandleConnectionClosed(info->m_hConn, EndDebugText(*info), info->m_eOldState);
+				case k_ESteamNetworkingConnectionState_ProblemDetectedLocally: {
+					const std::string reason = EndDebugText(*info);
+					// A terminal callback still owns a native connection until the
+					// application closes it. Retiring only our maps leaks its ICE
+					// requests and relay allocations into every later retry.
+					m_Interface->CloseConnection(info->m_hConn, 0, nullptr, false);
+					HandleConnectionClosed(info->m_hConn, reason, info->m_eOldState);
 					break;
+				}
 				case k_ESteamNetworkingConnectionState_None:
 				default:
 					break;
@@ -1443,7 +1466,7 @@ namespace RTE {
 		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		if (SettingsMan::IsConstructed() && g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly) {
 			m_Impl->Stop();
-			SetError(error, "Relay only refuses direct IP; choose Automatic or Direct only");
+			SetError(error, "Your Connection is Relay only. Host an Internet game, or switch Connection to Automatic to listen on a direct address.");
 			return false;
 		}
 		return m_Impl->StartHost(port, error);
@@ -1453,7 +1476,7 @@ namespace RTE {
 		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		if (SettingsMan::IsConstructed() && g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly) {
 			m_Impl->Stop();
-			SetError(error, "Relay only refuses direct IP; choose Automatic or Direct only");
+			SetError(error, "Your Connection is Relay only. Join from the Internet list, or switch Connection to Automatic to use a direct address.");
 			return false;
 		}
 		return m_Impl->Connect(address, port, error);
@@ -1570,6 +1593,14 @@ namespace RTE {
 
 	std::string GnsTransport::GetLocalIdentity() const {
 		return m_Impl->GetLocalIdentity();
+	}
+
+	uint32_t GnsTransport::LocalRouteRevision() {
+#ifdef CCCP_WITH_GNS
+		return SteamNetworkingSockets_GetLocalRouteRevision();
+#else
+		return 0;
+#endif
 	}
 
 	std::string GnsTransport::ProcessIdentity() {

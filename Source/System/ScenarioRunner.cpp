@@ -2264,8 +2264,18 @@ namespace RTE {
 		}
 		std::vector<NetGameCommand> commands;
 		const uint64_t targetFrame = tick + producing->InputDelayAt(config.localPeerId, tick);
-		if (producing->IsSeatReclaimGap(config.localPeerId, targetFrame) ||
-		    (config.localPeerId == producing->GetHostPeerId() && producing->IsSeatUnderAI(config.localPeerId, targetFrame))) {
+		if (producing->IsSeatReclaimGap(config.localPeerId, targetFrame)) {
+			// The returned player can act before its first input is due. Keep those
+			// accepted events for that input; only sampled AI writes and bindings expire.
+			std::erase_if(s_PendingLocalGameCommands, [](const NetGameCommand& command) {
+				return std::holds_alternative<NetGameAIOrder>(command.payload) ||
+				       std::holds_alternative<NetGameAIScriptMessage>(command.payload) ||
+				       std::holds_alternative<NetGameAIGib>(command.payload) ||
+				       std::holds_alternative<NetGamePlayerBindings>(command.payload);
+			});
+			return producing->QueueLocalInput(tick, frames, {}, error);
+		}
+		if (config.localPeerId == producing->GetHostPeerId() && producing->IsSeatUnderAI(config.localPeerId, targetFrame)) {
 			s_PendingLocalGameCommands.clear();
 			return producing->QueueLocalInput(tick, frames, {}, error);
 		}
@@ -2474,36 +2484,37 @@ namespace RTE {
 		}
 	}
 
-	void ScenarioRunner::EnqueueLocalGameCommand(const NetGameCommand& command) {
-		if (s_WorldCatchUpActive) return;
+	bool ScenarioRunner::EnqueueLocalGameCommand(const NetGameCommand& command) {
+		if (s_WorldCatchUpActive) return false;
 		if (g_MovableMan.IsRestoringSnapshot()) {
-			return;
+			return false;
 		}
 		if (g_MovableMan.IsSpeculative()) {
 			g_MovableMan.ReportSpeculationViolation("queueing a wire command for", nullptr);
-			return;
+			return false;
 		}
 		const NetGameCommandType enqueuedType = NetGameCommandTypeOf(command.payload);
 		if (enqueuedType != NetGameCommandType::Reseat && enqueuedType != NetGameCommandType::WorldTransition && enqueuedType != NetGameCommandType::Checkpoint) {
 			const uint8_t sender = command.senderPeerId != 0 ? command.senderPeerId : GetLockstepLocalPeerId();
 			if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
 				if (!IsLockstepAIOrderAuthorized(sender, *order)) {
-					return;
+					return false;
 				}
 			} else if (const NetGameAIScriptMessage* message = std::get_if<NetGameAIScriptMessage>(&command.payload)) {
 				// The writer is the authority for a message its pass sent, exactly as for an AI order.
 				if (!IsLockstepAIWriteAuthorized(sender, message->team, message->writerUID, message->writerUID)) {
-					return;
+					return false;
 				}
 			} else if (const NetGameAIGib* gib = std::get_if<NetGameAIGib>(&command.payload)) {
 				if (!IsLockstepAIWriteAuthorized(sender, gib->team, gib->writerUID, gib->writerUID)) {
-					return;
+					return false;
 				}
 			} else if (!IsLockstepTeamCommandSender(NetGameCommandTeam(command.payload), sender)) {
-				return;
+				return false;
 			}
 		}
 		s_PendingLocalGameCommands.push_back(command);
+		return true;
 	}
 
 	std::vector<NetGameCommand> ScenarioRunner::DrainLocalGameCommands() {

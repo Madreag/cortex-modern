@@ -100,7 +100,7 @@ namespace RTE {
 		switch (mode) {
 			case SettingsMan::NetworkHostRelayMode::Off: return "No relay: a player who cannot connect directly cannot join.\nDirect connections have the lowest latency; some routers need port forwarding.";
 			case SettingsMan::NetworkHostRelayMode::Fixed: return "If a direct connection fails, your own relay carries it, adding its round trip.\nAddress: host:port or TURN URLs. Use a login, never a signing secret. Players may pick Direct only.";
-			default: return "If a direct connection fails, the game service relays it, adding its round trip.\nUDP relays only in this build; the game service's login renews itself while the session runs.";
+			default: return "If a direct connection fails, the game service relays it, adding its round trip.\nRelays support UDP, TCP and TLS; the game service's login renews while the session runs.";
 		}
 	}
 

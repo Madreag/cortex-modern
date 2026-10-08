@@ -425,7 +425,10 @@ namespace RTE {
 			NoteError(status + ", retrying in " + std::to_string(waitMs) + " ms");
 			m_NextAttemptMs = nowMs + waitMs;
 		} else if (reply.statusCode == 404) {
-			Fail("session gone", status);
+			// Only the seat authority can declare the match ended. A restarting
+			// directory or a host handover may temporarily have no signal route.
+			NoteError("The directory is restoring this match's connection. Retrying; Cancel stops joining.");
+			ScheduleRetry(nowMs);
 		} else if (reply.statusCode == 403) {
 			Fail("bad credential", status);
 		} else if (reply.statusCode == 400 && code == "queue_full") {

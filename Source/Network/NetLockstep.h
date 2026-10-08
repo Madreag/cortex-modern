@@ -393,6 +393,8 @@ namespace RTE {
 		std::vector<uint8_t> activePeerIds;
 		std::array<uint8_t, 32> migrationKey{};
 		std::function<std::unique_ptr<INetTransport>()> migrationTransportFactory;
+		/// The connection authority supplies current routes without changing the agreed game config.
+		std::function<NetMatchMigrationPeer(const NetMatchMigrationPeer&)> migrationEndpoint;
 		/// Dials a handover endpoint that names an ICE route through the session's rendezvous; the identity may be empty.
 		std::function<bool(INetTransport& transport, const std::string& identity, std::string* error)> migrationIceDial;
 		/// Opens the rendezvous on this peer's handover listener once it hosts the handover.
@@ -1524,6 +1526,7 @@ namespace RTE {
 		NetHostMigrationTimeouts MigrationTimeouts() const;
 		/// How long a survivor waits on its dial to the successor before it dials the next entry.
 		uint64_t MigrationDialPatienceMs() const { return IsMigrationIceEndpoint(m_MigrationAddress) ? c_MigrationIceDialMs : NetHostMigrationTimeouts::c_RetryMs; }
+		std::optional<NetMatchMigrationPeer> MigrationEndpoint(uint8_t peerId) const;
 		bool HoldsLiveMigrationCandidate(uint64_t nowMs, uint64_t budget) const;
 		void PublishMigrationPlan(uint64_t nowMs);
 		void CompleteHostMigration(uint64_t nowMs);

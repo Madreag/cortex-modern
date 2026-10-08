@@ -25,6 +25,7 @@ import time
 import unittest
 import uuid
 from types import SimpleNamespace
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
@@ -33,6 +34,8 @@ import session_directory
 from world_ticks import compare_world_ticks, read_world_ticks
 from session_directory import IP_REG_PER_MIN, IP_REQ_PER_MIN, DualRateLimiter, LOGGER, RunningServer, spawn_server
 from unittest import mock
+from connection_authority import ConnectionErrorReply, ConnectionAuthority, REQUEST_DOMAIN, TOKEN_DOMAIN, TOKEN_FIELDS
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 INSTALL_KEY = "0123456789abcdef"
 
@@ -66,6 +69,8 @@ HEX64_B = "b" * 64
 HEX64_C = "c" * 64
 
 REGISTER_RESP_KEYS = {
+    "connection_protocol",
+    "authority_key",
     "session_id",
     "token",
     "expires_in_s",
@@ -109,6 +114,8 @@ FIELD_ERROR_KEYS = {"error", "field"}
 
 def sample_register(**overrides: object) -> dict[str, Any]:
     row: dict[str, Any] = {
+
+        "connection_protocol": session_directory.CONNECTION_PROTOCOL,
         "name": "Captain",
         "activity": "P4 Alpha Duel",
         "scene": "Grasslands",
@@ -232,6 +239,37 @@ class DirectoryTests(unittest.TestCase):
         with mock.patch.object(session_directory, "urlopen", return_value=response):
             store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 13)
         self.assertEqual(store.get_ice_servers(row["session_id"], 14)["iceServers"][0]["username"], "u")
+
+    def test_unexpired_relay_offer_survives_listing_gap_and_host_resume(self) -> None:
+        store = session_directory.SessionDirectory(15, 5)
+        row = store.register(sample_register(), "192.0.2.1", 0, INSTALL_KEY)
+        sid, token = row["session_id"], row["token"]
+        store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 0, "state": "running"}, 1, INSTALL_KEY)
+        with mock.patch.object(session_directory.time, "time", return_value=1000):
+            offer = store.mint_ice_servers(sid, {"token": token, "match_id": "match:1", "ttl": 300,
+                "iceServers": [{"urls": ["turn:relay.example:3478?transport=udp"], "username": "test-user", "credential": "test-password"}]}, INSTALL_KEY, 2)
+            self.assertEqual(store.get_ice_servers(sid, 17), offer, "live rendezvous lost its unexpired relay offer")
+            resumed = store.register(sample_register(resume_session_id=sid, resume_token=token), "192.0.2.2", 18, INSTALL_KEY)
+            self.assertEqual(resumed["session_id"], sid)
+            self.assertEqual(store.get_ice_servers(sid, 19), offer, "resumed host discarded the offer before renewing it")
+        with mock.patch.object(session_directory.time, "time", return_value=1300):
+            with self.assertRaises(session_directory.TurnError):
+                store.get_ice_servers(sid, 20)
+        with mock.patch.object(session_directory.time, "time", return_value=1001):
+            store.delete(sid, {"token": resumed["token"]}, 21)
+            with self.assertRaises(KeyError):
+                store.get_ice_servers(sid, 22)
+
+    def test_live_host_resume_keeps_offer_until_its_original_expiry(self) -> None:
+        store = session_directory.SessionDirectory(15, 5)
+        row = store.register(sample_register(), "192.0.2.1", 0, INSTALL_KEY)
+        sid, token = row["session_id"], row["token"]
+        store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 0, "state": "running"}, 1, INSTALL_KEY)
+        with mock.patch.object(session_directory.time, "time", return_value=1000):
+            offer = store.mint_ice_servers(sid, {"token": token, "match_id": "match:1", "ttl": 300,
+                "iceServers": [{"urls": ["turn:relay.example:3478?transport=udp"], "username": "test-user", "credential": "test-password"}]}, INSTALL_KEY, 2)
+            store.register(sample_register(resume_session_id=sid, resume_token=token), "192.0.2.2", 3, INSTALL_KEY)
+            self.assertEqual(store.get_ice_servers(sid, 4), offer)
 
     def test_turn_max_ttl_caps_the_minted_lifetime(self) -> None:
         store = session_directory.SessionDirectory(300, 5, turn_config={
@@ -490,10 +528,10 @@ class DirectoryTests(unittest.TestCase):
         self._U1_owner_transition(False)
 
     def test_U1_every_heartbeat_credits_monotonic_durable_time(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as cleanup:
             path = Path(directory) / "owners.json"
             store = session_directory.SessionDirectory(300, 5, owner_state=path, create_owner_key=True)
-            self.addCleanup(store.stop)
+            cleanup.callback(store.stop)
             row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.1", 0, INSTALL_KEY)
             beat = {"token": row["token"], "peer_count": 1, "seats_free": 1}
             store.heartbeat(row["session_id"], beat, 55, INSTALL_KEY)
@@ -717,9 +755,9 @@ class DirectoryTests(unittest.TestCase):
                                  "T4: addresses in one subnet exceeded its retained-owner share")
 
     def test_T4_failed_retirement_preserves_the_old_owner(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 1):
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as cleanup, mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 1):
             store = session_directory.SessionDirectory(300, 5, owner_state=Path(directory) / "owners.json", create_owner_key=True)
-            self.addCleanup(store.stop)
+            cleanup.callback(store.stop)
             original = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.1", 0, INSTALL_KEY)
             store.heartbeat(original["session_id"], {"token": original["token"], "peer_count": 1, "seats_free": 1}, 0, INSTALL_KEY)
             store.delete(original["session_id"], {"token": original["token"]}, 1)
@@ -731,9 +769,9 @@ class DirectoryTests(unittest.TestCase):
             self.assertTrue(store._world_owners == before, "T4: a refused storage write retired the old owner")
 
     def test_T4_failed_return_preserves_the_old_signals(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as cleanup:
             store = session_directory.SessionDirectory(300, 5, owner_state=Path(directory) / "owners.json", create_owner_key=True)
-            self.addCleanup(store.stop)
+            cleanup.callback(store.stop)
             request = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
             row = store.register(request, "192.0.2.1", 0, INSTALL_KEY)
             store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 0, INSTALL_KEY)
@@ -935,7 +973,7 @@ class DirectoryTests(unittest.TestCase):
             self.assertEqual(len(store._world_owners), 4, "R3: recovery exceeded the retained owner cap")
 
     def test_R5_interrupted_key_creation_leaves_a_restartable_service(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as cleanup:
             state = Path(directory) / "world-owners.json"
             real_fdopen = session_directory.os.fdopen
             class InterruptedWrite:
@@ -957,7 +995,7 @@ class DirectoryTests(unittest.TestCase):
                             **({} if state.with_suffix(".key").exists() else argument))
             except ValueError:
                 self.fail("R5: interrupted first start left a partial signing key that prevents the next start")
-            self.addCleanup(resumed.stop)
+            cleanup.callback(resumed.stop)
             self.assertEqual(resumed._world_owners, {})
             row = resumed.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.1", 0, INSTALL_KEY)
             self.assertTrue(row["token"])
@@ -974,6 +1012,7 @@ class DirectoryTests(unittest.TestCase):
         status, moved = self.register(
             resume_session_id=sid, resume_token=token,
             listen_addrs=["203.0.113.42"], listen_port=45793,
+            ice_identity="str:successor", ice_virtual_port=7,
         )
         self.assertEqual(status, 200)
         self.assertEqual(moved["session_id"], sid, "successor created another row instead of resuming the match")
@@ -983,9 +1022,20 @@ class DirectoryTests(unittest.TestCase):
         row = listed["sessions"][0]
         self.assertEqual(row["listen_addrs"], ["203.0.113.42"])
         self.assertEqual(row["listen_port"], 45793)
+        self.assertEqual(row["ice_identity"], "str:successor")
+        self.assertEqual(row["ice_virtual_port"], 7)
         self.assertEqual(row["state"], "running")
         self.assertNotIn("resume_token", row)
         self.assertNotIn("token", row)
+
+    def test_successor_listener_fields_are_a_valid_pair(self) -> None:
+        store = session_directory.SessionDirectory(15, 5)
+        for fields in ({"ice_identity": "str:successor"}, {"ice_virtual_port": 7},
+                       {"ice_identity": "", "ice_virtual_port": 7},
+                       {"ice_identity": "str:successor", "ice_virtual_port": 65536},
+                       {"ice_identity": "str:successor", "ice_virtual_port": True}):
+            with self.subTest(fields=fields), self.assertRaises(session_directory.FieldError):
+                store.register(sample_register(**fields), "192.0.2.1", 0)
 
     def test_successor_token_outlives_the_discovery_lease(self) -> None:
         directory = session_directory.SessionDirectory(15, 5)
@@ -1595,7 +1645,7 @@ class DirectoryTests(unittest.TestCase):
         status, missing = self.call(
             "POST",
             "/v1/sessions",
-            {"name": "Captain"},
+            {"connection_protocol": 1, "name": "Captain"},
             headers={"X-Install-Key": INSTALL_KEY},
         )
         self.assertEqual(status, 400)
@@ -2712,9 +2762,9 @@ class DirectoryTests(unittest.TestCase):
             self.assertLessEqual(limiter._map_size(), 8, "S1: sparse callers grew rate buckets beyond the map cap")
 
     def test_owner_writes_are_bounded_batched_and_outside_the_lock(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 4):
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as cleanup, mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 4):
             store = session_directory.SessionDirectory(15, 5, owner_state=Path(directory) / "world-owners.json", create_owner_key=True)
-            self.addCleanup(store.stop)
+            cleanup.callback(store.stop)
             writes = []
             original = store._write_owner_file
             def observe(owners):
@@ -3097,11 +3147,11 @@ class DirectoryTests(unittest.TestCase):
         except session_directory.Superseded:
             self.fail("F3: stored owner proof could not resume an expired world when the install identity changed")
         store.heartbeat(world_id, {"token": own["token"], "peer_count": 1, "seats_free": 1}, 322, "abababababababab")
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary, ExitStack() as cleanup:
             owner_file = Path(temporary) / "world-owners.json"
             owner_file.write_text(json.dumps({world_id.upper(): store._world_owners[world_id]}), encoding="utf-8")
             restarted = session_directory.SessionDirectory(300, 5, owner_state=owner_file, create_owner_key=True)
-            self.addCleanup(restarted.stop)
+            cleanup.callback(restarted.stop)
             with self.assertRaises(PermissionError, msg="F3: a noncanonical saved owner allowed a tokenless claim"):
                 restarted.register(request, "192.0.2.3", 26, "cccccccccccccccc")
             try:
@@ -3175,6 +3225,192 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(len(listed["sessions"]), 1)
         self.assertNotIn("listed", listed["sessions"][0])
+
+
+class ConnectionAuthorityTests(unittest.TestCase):
+    """Real signatures and restart-safe state, with no provider or public network."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.wall = 1700000000.0
+        self.now = 100.0
+        self.clock = mock.patch.object(session_directory.time, "time", side_effect=lambda: self.wall)
+        self.clock.start()
+        self.addCleanup(self.clock.stop)
+        self.path = Path(self.temporary.name) / "owners.json"
+        self.options = dict(owner_state=self.path, turn_config={"backend": "coturn", "static_auth_secret": "server-only-secret",
+            "relay_urls": ["turn:relay.example:3478?transport=udp", "turn:relay.example:3478?transport=tcp", "turns:relay.example:443?transport=tcp"]})
+        self.store = session_directory.SessionDirectory(15, 5, create_owner_key=True, **self.options)
+        self.addCleanup(lambda: self.store.stop())
+        self.row = self.store.register(sample_register(ice_identity="str:original-host", ice_virtual_port=41010), "192.0.2.1", self.now, INSTALL_KEY)
+        self.sid = self.row["session_id"]
+        self.store.heartbeat(self.sid, {"token": self.row["token"], "peer_count": 2, "seats_free": 0, "state": "running", "listed": False}, self.now, INSTALL_KEY)
+        self.store.mint_ice_servers(self.sid, {"token": self.row["token"], "match_id": "lease-fixture", "ttl": 600}, INSTALL_KEY, self.now)
+        self.player = Ed25519PrivateKey.generate()
+        self.issue = dict(connection_protocol=1, operation="issue", token=self.row["token"], host_generation=0,
+            epoch="10" * 16, seat=1, generation=1, credential="20" * 32, host_session=42,
+            network_protocol=NETWORK_PROTOCOL_VERSION, participant=self.player.public_key().public_bytes_raw().hex(), name="Original player")
+        self.lease = self.store.connection_request(self.sid, self.issue, self.now, INSTALL_KEY)
+        self.route = dict(ice_identity="str:player-route", ice_virtual_port=41012, listen_port=41012,
+            listen_addrs=["192.0.2.2", "2001:db8::2"], generation=1, state="connected")
+
+    def envelope(self, *, key=None, token=None, instance="30" * 16, route=None, host=None, nonce=None):
+        key = key or self.player
+        data = dict(session_id=self.sid, seat_token=token or self.lease["seat_token"], instance=instance,
+            nonce=nonce or uuid.uuid4().hex, sent_at=int(self.wall), route=route or self.route)
+        if host is not None:
+            data["host"] = host
+        raw = json.dumps(data, separators=(",", ":")).encode()
+        return dict(connection_protocol=1, operation="check-in", participant=key.public_key().public_bytes_raw().hex(),
+            signature=key.sign(REQUEST_DOMAIN + raw).hex(), signed_request=base64.b64encode(raw).decode())
+
+    def check(self, **kwargs):
+        return self.store.connection_request(self.sid, self.envelope(**kwargs), self.now, INSTALL_KEY)
+
+    def test_signed_seat_copy_replay_and_concurrent_instance_keep_the_owner(self) -> None:
+        raw = base64.b64decode(self.lease["seat_token"], validate=True)
+        self.assertEqual(len(raw), 194)
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(self.lease["authority_key"])).verify(raw[-64:], TOKEN_DOMAIN + raw[:-64])
+        fields = TOKEN_FIELDS.unpack(raw[:-64])
+        self.assertEqual((fields[0], fields[1], fields[2], fields[4], fields[5], fields[6]),
+                         (1, NETWORK_PROTOCOL_VERSION, uuid.UUID(self.sid).bytes, 42, 1, 1))
+        first = self.check()
+        self.assertTrue(first["relay_current"])
+        with self.assertRaises(ConnectionErrorReply) as copied:
+            self.check(key=Ed25519PrivateKey.generate())
+        self.assertEqual(copied.exception.body["error"], "seat_taken")
+        self.assertIn("Original player", copied.exception.body["message"])
+        with self.assertRaises(ConnectionErrorReply) as simultaneous:
+            self.check(instance="40" * 16)
+        self.assertEqual(simultaneous.exception.body["error"], "seat_in_use")
+        self.assertIn("Original player", simultaneous.exception.body["message"])
+        request = self.envelope()
+        self.store.connection_request(self.sid, request, self.now, INSTALL_KEY)
+        with self.assertRaises(ConnectionErrorReply) as replay:
+            self.store.connection_request(self.sid, request, self.now, INSTALL_KEY)
+        self.assertEqual(replay.exception.body["error"], "connection_replay")
+        self.assertEqual(self.check()["seat"], 1)
+
+    def test_network_change_long_outage_and_renewal_keep_the_same_seat(self) -> None:
+        first = self.check()
+        self.wall += 5; self.now += 5
+        changed = self.check(route=dict(self.route, listen_addrs=["198.51.100.4", "2001:db8::4"], generation=2))
+        self.assertTrue(changed["relay_current"])
+        self.assertNotEqual(first["relay"]["iceServers"][0]["username"], changed["relay"]["iceServers"][0]["username"])
+        self.assertEqual(changed["peers"][0]["route"]["listen_addrs"], ["198.51.100.4", "2001:db8::4"])
+        self.wall += 900; self.now += 900
+        self.store.prune(self.now)
+        returned = self.check(instance="40" * 16)
+        self.assertEqual((returned["seat"], returned["generation"]), (first["seat"], first["generation"]))
+        self.assertGreater(returned["expires_at"], self.wall)
+        self.assertTrue(returned["relay_current"])
+        self.assertFalse(returned["host"]["session"].get("listed", False))
+
+    def test_restart_preserves_the_seat_route_and_removal(self) -> None:
+        first = self.check()
+        issuer = first["authority_key"]
+        self.store.stop()
+        state = self.path.with_suffix(".connections.sqlite3").read_bytes()
+        self.assertTrue(self.lease["seat_token"].encode() not in state, "seat token was stored without encryption")
+        self.assertTrue(first["relay"]["iceServers"][0]["credential"].encode() not in state, "relay login was stored without encryption")
+        self.store = session_directory.SessionDirectory(15, 5, **self.options)
+        self.assertEqual(self.store.connection_bootstrap(self.sid, time.monotonic())["authority_key"], issuer)
+        self.now = time.monotonic()
+        returned = self.check()
+        self.assertEqual((returned["seat"], returned["generation"], returned["peers"][0]["route"]), (1, 1, self.route))
+        removal = dict(connection_protocol=1, operation="remove", token=self.row["token"], host_generation=0,
+                       participant=self.issue["participant"], name="Original player", action="banned")
+        self.store.connection_request(self.sid, removal, self.now, INSTALL_KEY)
+        self.store.stop()
+        self.store = session_directory.SessionDirectory(15, 5, **self.options)
+        with self.assertRaises(ConnectionErrorReply) as banned:
+            self.check()
+        self.assertEqual(banned.exception.body["error"], "player_removed")
+        self.assertIn("Original player", banned.exception.body["message"])
+        with self.assertRaises(ConnectionErrorReply):
+            self.store.connection_request(self.sid, self.issue, self.now, INSTALL_KEY)
+
+    def test_current_host_updates_its_route_and_old_host_cannot_move_it_back(self) -> None:
+        current = self.check(host={"token": self.row["token"], "generation": 0})
+        self.assertEqual(current["host"]["listen_addrs"], self.route["listen_addrs"])
+        moved = self.store.register(sample_register(resume_session_id=self.sid, resume_token=self.row["token"],
+            migration_gen=1, ice_identity="str:successor", ice_virtual_port=41012, listen_addrs=["198.51.100.8"]),
+            "198.51.100.8", self.now + 1, "fedcba9876543210")
+        reply = self.check(host={"token": self.row["token"], "generation": 0})
+        self.assertEqual((reply["host"]["host_generation"], reply["host"]["ice_identity"], reply["seat"]), (1, "str:successor", 1))
+        self.assertEqual(reply["host"]["listen_addrs"], ["198.51.100.8"])
+        with self.assertRaises(session_directory.Superseded):
+            self.store.connection_request(self.sid, self.issue, self.now, INSTALL_KEY)
+        self.store.delete(self.sid, {"token": moved["token"], "migration_gen": 1}, self.now + 2)
+        with self.assertRaises(ConnectionErrorReply) as ended:
+            self.check()
+        self.assertEqual(ended.exception.body["error"], "match_ended")
+
+    def test_connection_version_refuses_before_any_seat_mutation(self) -> None:
+        for version in (0, 2):
+            with self.subTest(version=version), self.assertRaises(ConnectionErrorReply) as mismatch:
+                self.store.connection_request(self.sid, dict(self.issue, connection_protocol=version), self.now, INSTALL_KEY)
+            self.assertEqual(mismatch.exception.body["error"], "connection_version")
+            self.assertIn(f"protocol is {version}", mismatch.exception.body["message"])
+            self.assertIn("directory uses 1", mismatch.exception.body["message"])
+        self.assertEqual(self.check()["generation"], 1)
+
+    def test_ended_world_reopens_only_with_its_owner_and_a_later_boot(self) -> None:
+        sid = str(uuid.uuid4())
+        request = sample_register(persistent_world=True, world_id=sid, world_boot=1)
+        row = self.store.register(request, "192.0.2.3", self.now, INSTALL_KEY)
+        self.store.heartbeat(sid, {"token": row["token"], "peer_count": 2, "seats_free": 0}, self.now, INSTALL_KEY)
+        issued = self.store.connection_request(sid, dict(self.issue, token=row["token"]), self.now, INSTALL_KEY)
+        self.store.delete(sid, {"token": row["token"]}, self.now)
+        resume = dict(request, resume_session_id=sid, resume_token=row["token"])
+        with self.assertRaises(ConnectionErrorReply) as ended:
+            self.store.register(resume, "192.0.2.3", self.now, INSTALL_KEY)
+        self.assertEqual(ended.exception.body["error"], "match_ended")
+        self.assertNotIn(sid, self.store._sessions, "a refused registration published an ended match")
+        self.store.stop()
+        self.store = session_directory.SessionDirectory(15, 5, **self.options)
+        self.now = time.monotonic()
+        self.assertNotIn(sid, self.store._sessions, "restart revived a refused ended-world registration")
+        with self.assertRaises(PermissionError):
+            self.store.register(dict(resume, world_boot=2, resume_token="wrong-owner"), "192.0.2.4", self.now, INSTALL_KEY)
+        reopened = self.store.register(dict(resume, world_boot=2), "192.0.2.3", self.now, INSTALL_KEY)
+        self.assertEqual(reopened["session_id"], sid)
+        self.assertFalse(self.store.host_end_status(sid, self.now)["ended_by_host"])
+        self.assertEqual(dict(self.store.connections.records())[sid]["seats"], {})
+        current_sid = self.sid
+        try:
+            self.sid = sid
+            with self.assertRaises(ConnectionErrorReply):
+                self.check(token=issued["seat_token"])
+        finally:
+            self.sid = current_sid
+        fresh = self.store.connection_request(sid, dict(self.issue, token=reopened["token"], epoch="11" * 16), self.now, INSTALL_KEY)
+        self.assertNotEqual(fresh["seat_token"], issued["seat_token"])
+
+    def test_connection_capacity_refusal_does_not_publish_an_unpersisted_row(self) -> None:
+        with mock.patch("connection_authority.MAX_MATCHES", 1), self.assertRaises(ConnectionErrorReply) as full:
+            self.store.register(sample_register(), "198.51.100.1", self.now, INSTALL_KEY)
+        self.assertEqual(full.exception.body["error"], "connection_capacity")
+        self.assertEqual(set(self.store._sessions), {self.sid})
+        self.assertEqual(self.check()["seat"], 1)
+
+    def test_corrupt_connection_storage_fails_closed_and_releases_the_file(self) -> None:
+        path = Path(self.temporary.name) / "corrupt.sqlite3"
+        authority = ConnectionAuthority(b"isolated-test-service-key", path)
+        with authority._db:
+            authority._db.execute("INSERT INTO connections VALUES (?, ?)", (str(uuid.uuid4()), b"invalid encrypted record"))
+        authority.close()
+        with self.assertRaisesRegex(ValueError, "could not be verified"):
+            ConnectionAuthority(b"isolated-test-service-key", path)
+        path.unlink()  # Windows refuses this if failed startup leaked the handle.
+
+    def test_shutdown_never_acknowledges_a_memory_only_mutation(self) -> None:
+        self.store.stop()
+        with self.assertRaises(ConnectionErrorReply) as stopped:
+            self.check()
+        self.assertEqual(stopped.exception.status, 503)
+        self.assertEqual(stopped.exception.body["error"], "directory_restarting")
 
 
 if __name__ == "__main__":

@@ -1419,12 +1419,12 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
 		reconnect.RequestManualRetry(MenuClockMs());
 		reconnect.DismissOffer();
+		reconnect.NoteAttemptStarted(MenuClockMs());
 		std::string rejoinError;
 		if (!g_NetMatchService.BeginTicketRejoin(&rejoinError)) {
 			reconnect.NoteAttemptFailed(MenuClockMs(), rejoinError);
 			m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(rejoinError));
 		} else {
-			reconnect.NoteAttemptStarted(MenuClockMs());
 			m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
 		}
 		g_GUISound.ButtonPressSound()->Play();
@@ -1473,8 +1473,7 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::JoinAddressGoButton]) {
 		CloseMultiplayerDialog();
 		// A session id names nothing a player knows; the joining line says the game.
-		const std::string& address = m_MultiplayerJoinAddressTextBox->GetText();
-		m_JoinTargetName = address.starts_with("session:") ? std::string() : address;
+		m_JoinTargetName.clear();
 		m_JoinTargetPersistentWorld = false;
 		m_JoinTargetActivity.clear();
 		StartMultiplayer(false);
@@ -4053,7 +4052,7 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		// A joining peer keeps the join screen until the host admits it; the refresh switches the screen
 		// the moment the lobby snapshot says the seat is real.
 		m_JoinAttemptActive = !host;
-		const std::string target = m_JoinTargetName.empty() ? request.address : m_JoinTargetName;
+		const std::string target = m_JoinTargetName;
 		m_JoinStatusText = host ? std::string() : target.empty() ? "Connecting to the host..." : "Joining " + target + "...";
 		m_MultiplayerSubScreen = host ? MultiplayerSubScreen::Lobby : MultiplayerSubScreen::JoinSetup;
 	} else {
@@ -4205,7 +4204,7 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 			// The service's own phase ("Joining direct-IP match") says nothing the line does not.
 			const std::string status = !snapshot.transferLine.empty() ? snapshot.transferLine : !snapshot.waitLine.empty() ? snapshot.waitLine
 				: snapshot.statusText.ends_with("direct-IP match") ? std::string() : PlayerFacingStatus(snapshot.statusText);
-			const std::string target = m_JoinTargetName.empty() ? m_MultiplayerJoinRequest.address : m_JoinTargetName;
+			const std::string target = m_JoinTargetName;
 			m_JoinStatusText = (target.empty() ? std::string("Connecting to the host...") : "Joining " + target + "...") +
 			                   (status.empty() ? std::string() : " " + status);
 			m_MultiplayerSubScreen = MultiplayerSubScreen::JoinSetup;

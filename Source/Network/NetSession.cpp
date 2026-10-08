@@ -628,11 +628,11 @@ namespace RTE {
 		}
 		if (m_Role == NetSessionRole::Host) {
 			for (const PeerState& peer : m_Peers) {
-				if (peer.state == NetSessionState::Ready) {
+				if (peer.state == NetSessionState::Ready || peer.state == NetSessionState::Accepted) {
 					SendHeartbeat(peer.transportPeerId);
 				}
 			}
-		} else if ((m_State == NetSessionState::Ready ||
+		} else if ((m_State == NetSessionState::Ready || m_State == NetSessionState::Accepted ||
 		            (m_State == NetSessionState::HelloSent && FaultInjected("client_never_says_hello"))) &&
 		           m_RemoteTransportPeerId != c_InvalidNetPeerId) {
 			SendHeartbeat(m_RemoteTransportPeerId);
@@ -1379,6 +1379,9 @@ namespace RTE {
 			// The commit names the seat's own peer id (P4); adopt it before declaring ourselves Ready,
 			// or the host's ready check would see a different id than the seat it just committed.
 			m_LocalPeerId = m_ReconnectClient->GetAssignedPeerId();
+			// The former host can return as a client; the admitted roster names its remote host.
+			const NetRosterReplica& replica = m_ReconnectClient->GetRosterReplica();
+			if (replica.HasRoster() && replica.Roster().HostSeatValid()) AdoptLobbyHostPeerId(replica.Roster().hostSeat);
 			Send(m_RemoteTransportPeerId, BuildReadyState(true));
 			m_State = NetSessionState::Ready;
 			m_StateStartedMs = m_NowMs;
@@ -1573,7 +1576,7 @@ namespace RTE {
 		// watchdogs and their own clocks.
 		// Each phase with nobody to answer gets the host's own join deadline on its own clock and no more: past it the
 		// rejoin ends here, and the seat stays with the AI the host already gave it.
-		if (const RejoinPhase phase = m_RejoinPhase.load(); phase != m_CeilingPhase) {
+		if (const RejoinPhase phase = m_RejoinPhase.load(); m_RejoinPhaseChanged.exchange(false) || phase != m_CeilingPhase) {
 			m_CeilingPhase = phase;
 			m_CeilingPhaseSinceMs = m_NowMs;
 		} else if (SuspendsSilence(phase) && m_Config.rejoinPhaseCeilingMs != 0 && m_NowMs >= m_CeilingPhaseSinceMs &&
@@ -1785,7 +1788,7 @@ namespace RTE {
 					// A joiner offers a range of protocols; one that offers a single protocol is named by it.
 					const size_t dash = m_ActualValue.find('-');
 					const bool single = dash != std::string::npos && m_ActualValue.substr(0, dash) == m_ActualValue.substr(dash + 1);
-					return "Their network protocol differs (theirs " + (single ? m_ActualValue.substr(0, dash) : m_ActualValue) + "; yours " + m_ExpectedValue + ").";
+					return "Their network protocol differs (theirs " + (single ? m_ActualValue.substr(0, dash) : m_ActualValue) + "; yours " + m_ExpectedValue + "). Update both games to the same version.";
 				}
 				case NetRejectReason::BuildMismatch:
 					// Two builds with the same id can still differ in their session identity; its hashes mean nothing on screen.
@@ -1806,7 +1809,7 @@ namespace RTE {
 					return "This host runs a different game version.";
 				case NetRejectReason::ProtocolMismatch: {
 					const std::string mine = std::to_string(m_AdvertisedProtocolForTest.value_or(NetProtocol::c_Version));
-					return "Network protocol differs (host " + hostValue(mine) + "; yours " + mine + ").";
+					return "Network protocol differs (host " + hostValue(mine) + "; yours " + mine + "). Update both games to the same version.";
 				}
 				case NetRejectReason::BuildMismatch: {
 					const std::string mine = m_AdvertisedBuildForTest.value_or(m_Config.localIdentity.buildId);

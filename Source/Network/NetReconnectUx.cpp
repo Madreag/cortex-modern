@@ -42,7 +42,7 @@ namespace RTE {
 		if (m_State != NetReconnectUxState::Waiting) {
 			return false;
 		}
-		if (m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > m_ResumeWindowMs)) {
+		if (!m_RetainedSeat && (m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > m_ResumeWindowMs))) {
 			// The host's own resume window has closed, so nothing this side does can still land.
 			m_State = NetReconnectUxState::GaveUp;
 			return false;
@@ -52,7 +52,7 @@ namespace RTE {
 
 	void NetReconnectUx::NoteAttemptStarted(uint64_t nowMs) {
 		m_State = NetReconnectUxState::Retrying;
-		++m_Attempts;
+		if (m_Attempts != UINT32_MAX) ++m_Attempts;
 		m_NextAttemptMs = nowMs + c_AttemptIntervalMs;
 	}
 
@@ -63,7 +63,7 @@ namespace RTE {
 		if (m_State != NetReconnectUxState::Retrying) {
 			return;
 		}
-		m_State = m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > m_ResumeWindowMs)
+		m_State = !m_RetainedSeat && (m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > m_ResumeWindowMs))
 		              ? NetReconnectUxState::GaveUp
 		              : NetReconnectUxState::Waiting;
 	}
@@ -92,6 +92,7 @@ namespace RTE {
 		m_DroppedAtMs = nowMs;
 		m_NextAttemptMs = nowMs;
 		m_Attempts = 0;
+		m_Reason.clear();
 	}
 
 	bool NetReconnectUx::CanCancel() const {
@@ -137,7 +138,7 @@ namespace RTE {
 	void NetReconnectUx::WatchForHostReturn(std::string matchName, std::string directorySessionId) {
 		m_AwaitingHostReturn = true;
 		m_HostReturned = false;
-		m_AwaitMatchName = matchName.empty() || matchName.starts_with("iceip:") || matchName.starts_with("iceid:") ? "your match" : std::move(matchName);
+		m_AwaitMatchName = matchName.empty() || matchName.starts_with("ice:") || matchName.starts_with("iceip:") || matchName.starts_with("iceid:") ? "your match" : std::move(matchName);
 		m_AwaitSessionId = std::move(directorySessionId);
 	}
 
@@ -182,7 +183,7 @@ namespace RTE {
 		switch (m_Offer) {
 			case NetReconnectOffer::Available:
 				if (!m_OfferName.empty()) return "Rejoin " + m_OfferName + "?";
-				return m_OfferAddress.starts_with("iceip:") || m_OfferAddress.starts_with("iceid:") ? "Rejoin your online match?" : "Rejoin your match at " + m_OfferAddress + "?";
+				return "Rejoin your match?";
 			case NetReconnectOffer::Corrupt: return "The saved rejoin information is damaged and cannot be used.";
 			case NetReconnectOffer::Stale: return "The saved rejoin information is too old to use.";
 			case NetReconnectOffer::Missing: return "No reconnect record for that match.";
@@ -196,7 +197,11 @@ namespace RTE {
 		const std::string tail = m_Reason.empty() ? "" : " (" + m_Reason + ")";
 		switch (m_State) {
 			case NetReconnectUxState::Waiting:
+				if (m_RetainedSeat) return "Reconnecting - waiting to reach your match. Cancel stops rejoining." + tail;
+				return m_Attempts == 0 ? "Rejoining the match... preparing the first attempt. Cancel stops rejoining." + tail : "Rejoin attempt " + std::to_string(m_Attempts) + " of " +
+				       std::to_string(c_MaxAttempts) + " failed; retrying shortly" + tail;
 			case NetReconnectUxState::Retrying:
+				if (m_RetainedSeat) return "Reconnecting - reclaiming your seat. Cancel stops rejoining." + tail;
 				return "Rejoining the match... attempt " + std::to_string(m_Attempts == 0 ? 1U : m_Attempts) + " of " +
 				       std::to_string(c_MaxAttempts) + tail;
 			case NetReconnectUxState::Reconnected: return "Back in the match.";
