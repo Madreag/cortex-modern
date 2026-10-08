@@ -477,23 +477,6 @@ static std::string ResyncSaveName() {
 		}
 	}
 
-	std::vector<NetDirectorySessionRow> BrowseSessionRows(NetDirectoryClient& browse, uint64_t budgetMs, const std::function<bool()>& cancelled) {
-		std::vector<NetDirectorySessionRow> rows;
-		const uint64_t deadline = SteadyNowMs() + budgetMs;
-		while (SteadyNowMs() < deadline && !(cancelled && cancelled())) {
-			const uint64_t nowMs = SteadyNowMs();
-			browse.PollList(nowMs);
-			browse.Update(nowMs);
-			if (browse.ListReplies() > 0) {
-				rows = browse.Rows();
-				break;
-			}
-			std::this_thread::sleep_for(std::chrono::milliseconds(20));
-		}
-		browse.StopBrowsing();
-		return rows;
-	}
-
 	void NetMatchService::RequestHostPortMap(uint16_t port, NetPortMapWan* wan) {
 		NetPortMap::Options options = NetPortMap::ProbeOverrides();
 		if (wan) options.wan = wan;
@@ -10224,7 +10207,7 @@ static std::string ResyncSaveName() {
 		GnsDirectorySignalDispatcher::Config signalConfig;
 		signalConfig.role = host ? GnsDirectorySignalDispatcher::Role::Host : GnsDirectorySignalDispatcher::Role::Joiner;
 		signalConfig.baseUrl = g_SettingsMan.GetSessionDirectoryUrl();
-		signalConfig.installKey = g_SettingsMan.GetOrCreateSessionDirectoryInstallKey();
+		signalConfig.installKey = g_SettingsMan.GetSessionDirectoryInstallKey();
 		signalConfig.certPinSha256 = g_SettingsMan.GetSessionDirectoryCertSha256();
 		mux.SetPump([this, dispatcher, keepAlive = std::move(ownedDispatcher), p2p = mux.P2PGns(), memory,
 		              initial = host ? mux.HostP2PConfig() : mux.GetJoinSpec().p2p,

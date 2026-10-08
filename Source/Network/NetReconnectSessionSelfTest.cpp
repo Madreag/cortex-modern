@@ -6562,60 +6562,16 @@ namespace RTE {
 			}
 			record.directorySessionId = "sess-re-resolve-1";
 			record.hostAddress = "10.0.0.8:41010";
-			const NetMatchServiceRequest rejoin = TicketRejoinRequestFromRecord(record, "Client");
-			if (rejoin.sessionId != "sess-re-resolve-1" || rejoin.address != "10.0.0.8:41010" || rejoin.host) {
-				return Fail("BeginTicketRejoin.sessionId did not take the stored directory session id");
+			const NetMatchServiceRequest rejoin = NetMatchService::BuildTicketRejoinRequest(record, "Client", false);
+			if (rejoin.sessionId != record.directorySessionId || rejoin.address != "ice:" || rejoin.host || !rejoin.rejoin) {
+				return Fail("an Internet ticket did not request its directory's current route");
 			}
-			// Rejoin Match dials the address with the port the record keeps; the transport takes the port from it.
-			record.hostAddress = "127.0.0.1:49460";
-			const NetMatchServiceRequest menuRejoin = NetMatchService::BuildTicketRejoinRequest(record, "Client", false);
-			if (menuRejoin.address != "127.0.0.1:49460") {
-				return Fail("a ticket rejoin dialled " + menuRejoin.address + " for a host at 127.0.0.1:49460");
-			}
-			record.hostAddress = "10.0.0.8:41010";
-			if (ResolveTicketJoinAddress(record, "ignored", "127.0.0.1", "198.51.100.9:1", false) != "198.51.100.9:1") {
-				return Fail("SessionFull resolveJoinAddress ignored a remapped directory address");
-			}
-			if (ResolveTicketJoinAddress(record, "ignored", "127.0.0.1", "", true) != "session:sess-re-resolve-1") {
-				return Fail("SessionFull resolveJoinAddress ignored the stored directory session id");
-			}
-			// The SessionFull retry's own resolution: the address it dials comes out of the browsed rows.
-			NetDirectoryLocalIdentity local;
-			local.networkProtocolVersion = 1;
-			local.lockstepCodecVersion = 20;
-			local.controllerFrameVersion = 6;
-			local.sessionIdentityHash = std::string(64, 'a');
-			local.moduleManifestHash = std::string(64, 'c');
-			NetDirectorySessionRow browsed;
-			browsed.name = "Player";
-			browsed.activity = "P4 Alpha Duel";
-			browsed.mode = "pvp-skirmish";
-			browsed.peerCount = 2;
-			browsed.seatsFree = 1;
-			browsed.networkProtocolVersion = local.networkProtocolVersion;
-			browsed.lockstepCodecVersion = local.lockstepCodecVersion;
-			browsed.controllerFrameVersion = local.controllerFrameVersion;
-			browsed.sessionIdentityHash = local.sessionIdentityHash;
-			browsed.moduleManifestHash = local.moduleManifestHash;
-			browsed.listenAddrs = {"198.51.100.7"};
-			browsed.listenPort = 41010;
-			browsed.joinMode = "ip";
-			browsed.sessionId = record.directorySessionId;
-			browsed.state = "lobby";
-			const std::string fromRows = ResolveTicketJoinAddressFromRows(record, "ignored", "127.0.0.1", {browsed}, local, false);
-			if (fromRows != "198.51.100.7") {
-				return Fail("the SessionFull retry dialled '" + fromRows + "' instead of the browsed row's address");
-			}
-			NetDirectorySessionRow otherSession = browsed;
-			otherSession.sessionId = "sess-re-resolve-other";
-			otherSession.listenAddrs = {"198.51.100.9"};
-			const std::string noRow = ResolveTicketJoinAddressFromRows(record, "ignored", "127.0.0.1", {otherSession}, local, false);
-			if (noRow != record.hostAddress) {
-				return Fail("a browse that found another session's row dialled '" + noRow + "' instead of the stored host address");
-			}
-			const std::string emptyBrowse = ResolveTicketJoinAddressFromRows(record, "ignored", "127.0.0.1", {}, local, true);
-			if (emptyBrowse != "session:sess-re-resolve-1") {
-				return Fail("a browse that found nothing dialled '" + emptyBrowse + "' instead of the stored directory session");
+			NetH4TicketRecord direct = record;
+			direct.directorySessionId.clear();
+			direct.hostAddress = "127.0.0.1:49460";
+			const NetMatchServiceRequest directRejoin = NetMatchService::BuildTicketRejoinRequest(direct, "Client", false);
+			if (directRejoin.address != direct.hostAddress || !directRejoin.sessionId.empty() || !directRejoin.rejoin) {
+				return Fail("a direct ticket lost its host's port or acquired a directory dependency");
 			}
 			// A record left by the previous host is not this join's: the retry dials what the request named.
 			NetH4TicketRecord otherHost = record;
@@ -6624,8 +6580,13 @@ namespace RTE {
 			if (TicketMatchesRequest(otherHost, "sess-re-resolve-1", "10.0.0.8:41010")) {
 				return Fail("a ticket for host 10.0.0.9 was taken for a join to 10.0.0.8");
 			}
-			if (!TicketMatchesRequest(record, "sess-re-resolve-1", "") || !TicketMatchesRequest(record, "", "10.0.0.8:41010")) {
+			if (!TicketMatchesRequest(record, "sess-re-resolve-1", "") || !TicketMatchesRequest(direct, "", direct.hostAddress) ||
+			    TicketMatchesRequest(record, "", record.hostAddress)) {
 				return Fail("this join's own ticket was refused by the host and session match");
+			}
+			otherHost.hostAddress = "ice:";
+			if (TicketMatchesRequest(otherHost, record.directorySessionId, "ice:")) {
+				return Fail("two online matches shared a seat through the ICE route placeholder");
 			}
 
 			class ScriptedTransport final : public NetDirectoryClient::Transport {
@@ -6646,29 +6607,6 @@ namespace RTE {
 				std::shared_ptr<std::deque<NetDirectoryClient::Reply>> m_Replies;
 				std::shared_ptr<std::vector<NetDirectoryClient::Request>> m_Sent;
 			};
-
-			// The SessionFull retry's own browse: the production loop, answered by a scripted list.
-			{
-				auto listReplies = std::make_shared<std::deque<NetDirectoryClient::Reply>>();
-				auto listSent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
-				NetDirectoryListResponse list;
-				list.sessions = {browsed};
-				list.total = 1;
-				listReplies->push_back({200, NetDirectoryCodec::EncodeListResponse(list), ""});
-				NetDirectoryClient browseClient;
-				browseClient.SetTransportFactory([listReplies, listSent] { return std::make_unique<ScriptedTransport>(listReplies, listSent); });
-				browseClient.Configure("https://dir.test", "key0123456789abcd", "");
-				const std::vector<NetDirectorySessionRow> browsedRows = BrowseSessionRows(browseClient, 250, [] { return false; });
-				if (browsedRows.size() != 1 || browsedRows.front().sessionId != record.directorySessionId) {
-					return Fail("the retry's browse returned " + std::to_string(browsedRows.size()) + " rows for the stored session");
-				}
-				if (listSent->empty() || listSent->front().path.find("/v1/sessions") == std::string::npos) {
-					return Fail("the retry's browse asked for '" + (listSent->empty() ? std::string("nothing") : listSent->front().path) + "' instead of the session list");
-				}
-				if (ResolveTicketJoinAddressFromRows(record, "ignored", "127.0.0.1", browsedRows, local, false) != "198.51.100.7") {
-					return Fail("the rows the retry browsed did not resolve to the row's address");
-				}
-			}
 
 			auto replies = std::make_shared<std::deque<NetDirectoryClient::Reply>>();
 			auto sent = std::make_shared<std::vector<NetDirectoryClient::Request>>();

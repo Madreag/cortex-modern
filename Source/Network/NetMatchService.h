@@ -267,37 +267,6 @@ namespace RTE {
 		}
 	};
 
-	inline NetMatchServiceRequest TicketRejoinRequestFromRecord(const NetH4TicketRecord& record, const std::string& playerName) {
-		NetMatchServiceRequest request;
-		request.host = false;
-		request.address = record.hostAddress;
-		request.sessionId = record.directorySessionId;
-		request.playerName = playerName.empty() ? "Client" : playerName;
-		request.resyncOnDesync = true;
-		return request;
-	}
-
-	inline std::string ResolveTicketJoinAddress(const NetH4TicketRecord& record, const std::string& requestSessionId, const std::string& requestAddress, const std::string& directoryResolvedAddress, bool iceDial) {
-		const std::string sessionId = !record.directorySessionId.empty() ? record.directorySessionId : requestSessionId;
-		if (!directoryResolvedAddress.empty()) {
-			return directoryResolvedAddress;
-		}
-		if (!sessionId.empty() && iceDial) {
-			return "session:" + sessionId;
-		}
-		if (!record.hostAddress.empty()) {
-			return record.hostAddress;
-		}
-		if (!sessionId.empty()) {
-			return "session:" + sessionId;
-		}
-		return requestAddress;
-	}
-
-	/// Polls a configured directory client until it answers a list or the budget runs out; the rows it
-	/// returns are what a rejoin re-resolves against.
-	std::vector<NetDirectorySessionRow> BrowseSessionRows(NetDirectoryClient& browse, uint64_t budgetMs, const std::function<bool()>& cancelled);
-
 	/// Whether a browsed row is the host the rejoin prompt is waiting for: the same directory session,
 	/// listed as a lobby or a running match. A world's session id is its own UUID, so a world answers
 	/// this under every boot it ever takes.
@@ -305,28 +274,13 @@ namespace RTE {
 		return !sessionId.empty() && row.sessionId == sessionId && (row.state == "running" || row.state == "lobby");
 	}
 
-	/// A stored ticket belongs to this join only when it names the host this request dials or the session
-	/// it joins; a record left by another host is not a re-resolve of this one.
+	/// Online seats match only their directory session. A direct seat matches its
+	/// saved route; the shared "ice:" placeholder never identifies a match.
 	inline bool TicketMatchesRequest(const NetH4TicketRecord& record, const std::string& requestSessionId, const std::string& requestAddress) {
-		if (!record.directorySessionId.empty() && record.directorySessionId == requestSessionId) {
-			return true;
-		}
+		if (!record.directorySessionId.empty() || !requestSessionId.empty()) return !requestSessionId.empty() && record.directorySessionId == requestSessionId;
 		return !record.hostAddress.empty() && record.hostAddress == requestAddress;
 	}
 
-	/// The address a ticket rejoin dials: the row the directory browse found for the stored session, else
-	/// the ticket's own address or session id.
-	inline std::string ResolveTicketJoinAddressFromRows(const NetH4TicketRecord& record, const std::string& requestSessionId, const std::string& requestAddress, const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, bool iceDial) {
-		const std::string sessionId = !record.directorySessionId.empty() ? record.directorySessionId : requestSessionId;
-		std::string resolved;
-		if (!sessionId.empty() && !rows.empty()) {
-			NetIceJoinTarget target;
-			if (NetIceResolveSessionRow(rows, local, sessionId, &target, nullptr, TicketMatchesRequest(record, requestSessionId, requestAddress)).empty() && !target.address.empty()) {
-				resolved = target.address;
-			}
-		}
-		return ResolveTicketJoinAddress(record, requestSessionId, requestAddress, resolved, iceDial);
-	}
 	/// The host's saved match defaults: the versioned template a new hosted lobby seeds its draft
 	/// from. It holds only what a host chooses - never an occupant, a credential, a session epoch or
 	/// a runtime peer id - so a template can be copied between machines without carrying identity.
