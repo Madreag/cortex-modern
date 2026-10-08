@@ -181,16 +181,17 @@ namespace {
 				leases.push_back(std::move(block));
 				return address;
 			}
-			void* address = m_Current ? static_cast<char*>(m_Current->address) + m_Used : nullptr;
-			size_t available = m_Current ? m_Current->bytes - m_Used : 0;
-			if (!address || !std::align(alignment, count, address, available)) {
-				m_Current = MakeBlock(chunkBytes, std::max(alignment, alignof(std::max_align_t)));
-				m_Used = 0;
-				address = m_Current->address;
-			}
-			m_Used = static_cast<char*>(address) - static_cast<char*>(m_Current->address) + count;
+			void* address = Bump(count, alignment);
 			if (leases.empty() || leases.back() != m_Current) leases.push_back(m_Current);
 			return address;
+		}
+		std::shared_ptr<void> AllocateBytes(size_t count) {
+			if (count > (1 << 20)) {
+				auto block = MakeBlock(count, alignof(uint8_t));
+				return {block, block->address};
+			}
+			void* address = Bump(count, alignof(uint8_t));
+			return {m_Current, address};
 		}
 		size_t Blocks() const { return m_Blocks.load(std::memory_order_relaxed); }
 		size_t Bytes() const { return m_Bytes.load(std::memory_order_relaxed); }
@@ -199,6 +200,17 @@ namespace {
 		std::weak_ptr<Prepared> m_Prepared;
 		size_t m_Used = 0;
 		std::atomic<size_t> m_Blocks{0}, m_Bytes{0};
+		void* Bump(size_t count, size_t alignment) {
+			void* address = m_Current ? static_cast<char*>(m_Current->address) + m_Used : nullptr;
+			size_t available = m_Current ? m_Current->bytes - m_Used : 0;
+			if (!address || !std::align(alignment, count, address, available)) {
+				m_Current = MakeBlock(1 << 20, std::max(alignment, alignof(std::max_align_t)));
+				m_Used = 0;
+				address = m_Current->address;
+			}
+			m_Used = static_cast<char*>(address) - static_cast<char*>(m_Current->address) + count;
+			return address;
+		}
 		std::shared_ptr<Block> MakeBlock(size_t bytes, size_t alignment) {
 			std::shared_ptr<Block> block;
 			if (bytes == (1 << 20) && alignment <= alignof(std::max_align_t)) {
@@ -945,6 +957,13 @@ CheckpointBuffer::AllocationScope::~AllocationScope() {
 std::shared_ptr<std::pmr::memory_resource> CheckpointBuffer::LeaseCaptureStorage() {
 	if (!s_Arena) return {};
 	return {s_Arena, s_Arena->storage};
+}
+
+std::shared_ptr<void> CheckpointBuffer::AllocateCaptureBytes(size_t bytes) {
+	if (auto group = CurrentArenaGroup()) return group->AllocateBytes(bytes);
+	auto* upstream = std::pmr::get_default_resource();
+	void* address = upstream->allocate(bytes, alignof(uint8_t));
+	return {address, [upstream, bytes](void* value) { upstream->deallocate(value, bytes, alignof(uint8_t)); }};
 }
 
 CheckpointBuffer::CheckpointBuffer(bool reserve) : m_Arena(reserve ? s_Arena : nullptr),
@@ -1711,6 +1730,30 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			check(exact && actual == expected, "parallel_bitmap_readers_share_one_fresh_copy_after_source_death");
 		}
 
+		{
+			CheckpointBuffer::WaitForPreparedStorageRelease();
+			const size_t before = s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed);
+			CheckpointBuffer::PrepareCaptureStorage(8 << 20).get();
+			std::shared_ptr<void> kept;
+			std::weak_ptr<void> witness;
+			{
+				CheckpointWriter::BatchScope batch(true, true);
+				kept = CheckpointBuffer::AllocateCaptureBytes(4096);
+				witness = kept;
+				std::memset(kept.get(), 0x5a, 4096);
+			}
+			CheckpointBuffer::WaitForPreparedStorageRelease();
+			bool exact = !witness.expired() && s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed) - before <= (1 << 20);
+			exact = std::async(std::launch::async, [kept = std::move(kept)] {
+				CheckpointWriter::BatchScope next(true);
+				auto other = CheckpointBuffer::AllocateCaptureBytes(4096);
+				std::memset(other.get(), 0xa5, 4096);
+				const auto* bytes = static_cast<const uint8_t*>(kept.get());
+				return std::all_of(bytes, bytes + 4096, [](uint8_t value) { return value == 0x5a; });
+			}).get() && exact;
+			check(exact && witness.expired() && s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed) == before,
+			    "prepared_pixel_bytes_retain_only_their_block_until_the_last_reader");
+		}
 		{
 			CheckpointBuffer::WaitForPreparedStorageRelease();
 			const size_t before = s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed);

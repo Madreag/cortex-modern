@@ -153,6 +153,8 @@ namespace RTE {
 		static void WaitForPreparedStorageRelease();
 		/// Owned native arrays keep their capture storage until saver traversal ends.
 		static std::shared_ptr<std::pmr::memory_resource> LeaseCaptureStorage();
+		/// Keeps only the backing block of a prepared byte allocation until its last reader ends.
+		static std::shared_ptr<void> AllocateCaptureBytes(size_t bytes);
 		explicit CheckpointBuffer(bool reserve = true);
 		bool IsBatched() const { return m_Arena != nullptr; }
 		/// Appends the same typed scalar tape as the individual value calls.

@@ -52,7 +52,7 @@ namespace RTE {
 		BitmapPtr CopyBitmap() const;
 		/// Flattens owned rows for the checkpoint codec on the save worker.
 		std::string PixelBytes() const;
-		/// Counts retained pixel allocations, including partially shared blocks, on the save worker.
+		/// Counts owned pixel bytes, including unchanged pixels in shared image blocks.
 		size_t OwnedBytes() const;
 		size_t LogicalBytes() const { return rowBytes * static_cast<size_t>(height); }
 		/// Exercises shared pixel rows and worker serialization after source destruction.
@@ -62,9 +62,18 @@ namespace RTE {
 		template <bool, bool> friend class SceneLayerImpl;
 		static std::shared_ptr<const BitmapSnapshot> CaptureRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll);
 		struct Pixels {
-			explicit Pixels(size_t size): bytes(new uint8_t[size]), size(size) {}
+			Pixels(size_t size, size_t rowBytes);
 			std::unique_ptr<uint8_t[]> bytes;
+			std::shared_ptr<void> firstChunk;
+			std::vector<std::shared_ptr<void>> chunks;
+			size_t chunkBytes = 0;
 			size_t size;
+			uint8_t* At(size_t offset) const {
+				if (bytes) return bytes.get() + offset;
+				if (chunks.empty()) return static_cast<uint8_t*>(firstChunk.get()) + offset;
+				const size_t chunk = offset / chunkBytes;
+				return static_cast<uint8_t*>(chunk ? chunks[chunk - 1].get() : firstChunk.get()) + offset % chunkBytes;
+			}
 		};
 		struct Row {
 			std::shared_ptr<const Pixels> pixels;
@@ -73,7 +82,7 @@ namespace RTE {
 		std::vector<Row> rows;
 		std::shared_ptr<const Pixels> fullPixels;
 		const uint8_t* RowBytes(int y) const {
-			return fullPixels ? fullPixels->bytes.get() + static_cast<size_t>(y) * rowBytes : rows[y].pixels->bytes.get() + rows[y].offset;
+			return fullPixels ? fullPixels->At(static_cast<size_t>(y) * rowBytes) : rows[y].pixels->At(rows[y].offset);
 		}
 	};
 

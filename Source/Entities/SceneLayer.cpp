@@ -71,6 +71,19 @@ void BitmapSnapshot::BitmapDeleter::operator()(BITMAP* bitmap) const {
 	if (bitmap) destroy_bitmap(bitmap);
 }
 
+BitmapSnapshot::Pixels::Pixels(size_t size, size_t rowBytes) : size(size) {
+	if (!CheckpointWriter::BatchEnabled()) { bytes.reset(new uint8_t[size]); return; }
+	// Whole rows fit in prepared blocks, so a row never crosses allocations.
+	chunkBytes = std::max(rowBytes, (size_t{1} << 20) / rowBytes * rowBytes);
+	firstChunk = CheckpointBuffer::AllocateCaptureBytes(std::min(size, chunkBytes));
+	chunks.reserve((size - 1) / chunkBytes);
+	for (size_t offset = std::min(size, chunkBytes); offset < size;) {
+		const size_t count = std::min(chunkBytes, size - offset);
+		chunks.push_back(CheckpointBuffer::AllocateCaptureBytes(count));
+		offset += count;
+	}
+}
+
 std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::Capture(const BITMAP* source, std::shared_ptr<const BitmapSnapshot> previous) {
 	return CaptureRows(source, previous, nullptr, false);
 }
@@ -97,12 +110,10 @@ BitmapSnapshot::BitmapPtr BitmapSnapshot::CopyBitmap() const {
 }
 
 std::string BitmapSnapshot::PixelBytes() const {
-	if (fullPixels) return std::string(reinterpret_cast<const char*>(fullPixels->bytes.get()), LogicalBytes());
+	if (fullPixels && fullPixels->bytes) return std::string(reinterpret_cast<const char*>(fullPixels->bytes.get()), LogicalBytes());
 	std::string bytes;
 	bytes.reserve(LogicalBytes());
-	for (const Row& row: rows) {
-		bytes.append(reinterpret_cast<const char*>(row.pixels->bytes.get() + row.offset), rowBytes);
-	}
+	for (int y = 0; y < height; ++y) bytes.append(reinterpret_cast<const char*>(RowBytes(y)), rowBytes);
 	return bytes;
 }
 
@@ -229,6 +240,49 @@ bool BitmapSnapshot::RunSelfTest() {
 				return results;
 			});
 			for (const auto& [name, result]: worker.get()) check(name, result);
+		}
+		for (const int colorDepth: {8, 15, 16, 24, 32}) {
+			std::array<std::shared_ptr<const BitmapSnapshot>, 3> snapshots;
+			std::array<std::string, 3> expected;
+			const std::string prefix = "depth_" + std::to_string(colorDepth) + "_";
+			{
+				constexpr int width = 1021, height = 1100;
+				const size_t rowBytes = width * ((colorDepth + 7) / 8), stride = rowBytes + 19;
+				std::vector<uint8_t> sourceBytes(stride * height, 0xa5);
+				std::array<uint8_t*, height> lines;
+				for (int y = 0; y < height; ++y) {
+					lines[y] = sourceBytes.data() + y * stride;
+					for (size_t x = 0; x < rowBytes; ++x) lines[y][x] = static_cast<uint8_t>((x * 17 + y * 31) & 255);
+				}
+				GFX_VTABLE vtable{}; vtable.color_depth = colorDepth;
+				BITMAP source{}; source.w = width; source.h = height; source.vtable = &vtable; source.line = lines.data();
+				const auto remember = [&](size_t index) {
+					for (int y = 0; y < height; ++y) expected[index].append(reinterpret_cast<const char*>(lines[y]), rowBytes);
+				};
+				CheckpointWriter::BatchScope batch(true);
+				snapshots[0] = Capture(&source); remember(0);
+				const size_t boundary = snapshots[0]->fullPixels->chunkBytes / rowBytes;
+				lines[boundary][17] ^= 0x5a;
+				snapshots[1] = Capture(&source, snapshots[0]); remember(1);
+				for (int y = 0; y < height; ++y) lines[y][0] ^= 0x33;
+				snapshots[2] = Capture(&source, snapshots[1]); remember(2);
+				check(prefix + "multiplayer_prepared_pixels_keep_whole_rows_across_blocks", snapshots[0]->fullPixels->firstChunk && !snapshots[0]->fullPixels->chunks.empty() && snapshots[0]->rows.empty() &&
+				    snapshots[1]->dirtyBytes == rowBytes && snapshots[1]->unmarkedDirtyBytes == rowBytes && snapshots[2]->fullPixels && snapshots[2]->rows.empty());
+			}
+			const auto read = [snapshots, expected] {
+				bool exact = true;
+				for (size_t index = 0; index < snapshots.size(); ++index) {
+					exact = snapshots[index]->PixelBytes() == expected[index] && exact;
+					const auto bitmap = snapshots[index]->CopyBitmap();
+					for (int y = 0; y < bitmap->h; ++y) exact = std::memcmp(bitmap->line[y], expected[index].data() + y * snapshots[index]->rowBytes, snapshots[index]->rowBytes) == 0 && exact;
+				}
+				return exact;
+			};
+			std::array<std::future<bool>, 4> readers;
+			for (auto& reader: readers) reader = std::async(std::launch::async, read);
+			bool exact = true;
+			for (auto& reader: readers) exact = reader.get() && exact;
+			check(prefix + "multiplayer_prepared_pixels_outlive_source_pool_and_concurrent_readers", exact);
 		}
 		// A layer's back buffer reaches saves before anything draws to it, so it never holds what its memory held before.
 		{
@@ -533,8 +587,8 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::CaptureRows(const BITMAP* 
 	markedAll = markedAll || (markedRows && markedRows->size() != static_cast<size_t>(snapshot->height));
 	const bool packed = CheckpointWriter::BatchEnabled();
 	const auto copyFull = [&] {
-		auto pixels = std::make_shared<Pixels>(snapshot->LogicalBytes());
-		for (int y = 0; y < snapshot->height; ++y) std::memcpy(pixels->bytes.get() + static_cast<size_t>(y) * snapshot->rowBytes, source->line[y], snapshot->rowBytes);
+		auto pixels = std::make_shared<Pixels>(snapshot->LogicalBytes(), snapshot->rowBytes);
+		for (int y = 0; y < snapshot->height; ++y) std::memcpy(pixels->At(static_cast<size_t>(y) * snapshot->rowBytes), source->line[y], snapshot->rowBytes);
 		snapshot->copiedBytes = pixels->size;
 		snapshot->fullPixels = std::move(pixels);
 	};
@@ -595,10 +649,10 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::CaptureRows(const BITMAP* 
 		}
 		// Separate sparse rows bound retained storage when later changes split dirty regions.
 		const int end = snapshot->fullCopy ? snapshot->height : first + 1;
-		auto pixels = std::make_shared<Pixels>(snapshot->rowBytes * static_cast<size_t>(end - first));
+		auto pixels = std::make_shared<Pixels>(snapshot->rowBytes * static_cast<size_t>(end - first), snapshot->rowBytes);
 		for (int y = first; y < end; ++y) {
 			const size_t offset = static_cast<size_t>(y - first) * snapshot->rowBytes;
-			std::memcpy(pixels->bytes.get() + offset, source->line[y], snapshot->rowBytes);
+			std::memcpy(pixels->At(offset), source->line[y], snapshot->rowBytes);
 			snapshot->rows[y] = {pixels, offset};
 		}
 		snapshot->copiedBytes += pixels->size;
