@@ -1259,6 +1259,12 @@ namespace RTE {
 			Send(connection, NetJoinRejected{NetRejectReason::SessionFull, "session is full", "provisional_seats", std::to_string(c_MaxProvisionalSeats), std::to_string(m_Provisionals.size())});
 			return;
 		}
+		// A returning holder without its ticket still owns the held seat. An unused slot
+		// must not silently give the same player a second seat.
+		if (const SeatState* own = HeldSeatOwnedBy(connection, message.displayName)) {
+			Send(connection, NetJoinRejected{NetRejectReason::HostNotAccepting, "Your seat is held for you. Use Rejoin Match, or apply to reclaim it.", "seat_held_for_you", std::to_string(own->seat.stableSeat), ""});
+			return;
+		}
 		// An open seat uses the same private image and catch-up as a returning holder.
 		SeatState* seat = m_PersistentWorld ? FindFreeWorldSeat() : FindFreeNeverHeldSeat();
 		if (seat == nullptr) {

@@ -3327,7 +3327,7 @@ namespace RTE {
 		}
 
 		// A player who leaves a running match on purpose keeps its seat exactly as a dropped one does: the ticket stays, the seat is
-		// held, and the return is a reclaim; nobody is told it left. A stranger is answered as before.
+		// held, and the return is a reclaim; nobody is told it left. A newcomer may take a different, unused seat.
 		int TestCleanLeaverKeepsTheSeat() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -3381,6 +3381,17 @@ namespace RTE {
 				if (cause != "Left 2 min ago") {
 					return Fail(mode + ": the Seats panel read the held seat's cause as '" + cause + "'");
 				}
+				Endpoint withoutTicket;
+				withoutTicket.connection = 97;
+				ConfigureEndpoint(withoutTicket, "returner-without-ticket", &unixNow);
+				wire.Add(&withoutTicket);
+				wire.host.BindParticipantId(withoutTicket.connection, leaver);
+				if (!withoutTicket.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) return Fail(error);
+				const NetJoinRejected* ownSeat = LastOf<NetJoinRejected>(wire.Delivered(withoutTicket.connection));
+				if (!ownSeat || ownSeat->mismatchKey != "seat_held_for_you" || ownSeat->expected != std::to_string(record.stableSeat) ||
+				    LastOf<NetH4TicketOffer>(wire.Delivered(withoutTicket.connection))) {
+					return Fail(mode + ": an unticketed returner was offered another seat instead of its held seat");
+				}
 				Endpoint returner;
 				returner.connection = 96;
 				ConfigureEndpoint(returner, world ? "left-world-return" : "left-match-return", &unixNow);
@@ -3394,26 +3405,18 @@ namespace RTE {
 					const NetJoinRejected* refused = LastOf<NetJoinRejected>(wire.Delivered(returner.connection));
 					return Fail(mode + ": the leaver's return was refused " + (refused == nullptr ? std::string("silently") : std::string(NetProtocol::RejectReasonName(refused->rejectReason))));
 				}
-				const auto joinAs = [&wire, &error](NetPeerId connection, const NetAuthBytes32& id, uint8_t tx) {
-					wire.host.BindParticipantId(connection, id);
-					NetH4NewJoin join;
-					join.txId = Ramp<16>(tx);
-					join.identity = MakeIdentity();
-					join.displayName = "stranger";
-					const bool sent = wire.SendRaw(connection, join, &error);
-					wire.nowMs += NetReconnectAdmission::c_DenialReleaseMs;
-					wire.DrainHostOutbound();
-					return sent;
-				};
-				if (!joinAs(98, Ramp<32>(0xC1), 0x63)) {
-					return Fail(error);
-				}
-				const NetJoinRejected* stranger = LastOf<NetJoinRejected>(wire.Delivered(98));
-				if (stranger != nullptr && stranger->rejectReason == NetRejectReason::SeatReleased) {
-					return Fail(mode + ": a stranger was told its seat was released");
-				}
-				if (!world && (stranger == nullptr || stranger->mismatchKey != "live_match")) {
-					return Fail(mode + ": a stranger's join was not answered as before");
+				Endpoint newcomer;
+				newcomer.connection = 98;
+				ConfigureEndpoint(newcomer, "newcomer", &unixNow);
+				wire.Add(&newcomer);
+				wire.host.BindParticipantId(newcomer.connection, Ramp<32>(0xC1));
+				if (!newcomer.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) return Fail(error);
+				NetPeerId holder = c_InvalidNetPeerId;
+				uint32_t generation = 0, incarnation = 0;
+				if (newcomer.client.GetState() != NetH4ClientState::Joined || newcomer.client.GetRecord().stableSeat == record.stableSeat ||
+				    !wire.host.GetSeatHolder(record.stableSeat, holder, generation, incarnation) || holder != returner.connection ||
+				    generation != record.holderGeneration) {
+					return Fail(mode + ": a late newcomer did not take only the unused seat, preserving the returned holder");
 				}
 			}
 			return 0;
@@ -3448,8 +3451,8 @@ namespace RTE {
 				wire.host.SetPersistentWorld(persistent);
 				std::vector<std::unique_ptr<Endpoint>> players;
 				std::vector<NetH4TicketRecord> records;
-				// A match holds the one seat its player left; a world holds both, so it has no slot left for a newcomer.
-				for (size_t index = 0; index < (persistent ? 2u : 1u); ++index) {
+				// Both human seats are held, so neither kind of match has an unused slot for a newcomer.
+				for (size_t index = 0; index < 2u; ++index) {
 					auto player = std::make_unique<Endpoint>();
 					player->connection = static_cast<NetPeerId>(95 + index);
 					ConfigureEndpoint(*player, std::string(persistent ? "held-world-" : "held-match-") + std::to_string(index), &unixNow);
@@ -3467,7 +3470,7 @@ namespace RTE {
 					if (seat.cpu || seat.stableSeat != seated.stableSeat) continue;
 					wire.host.NoteSeatHeldInPlace(seat.lockstepPeerId, NetSeatHoldCause::Capacity);
 					const NetAuthBytes32 sameOwner = Ramp<32>(0xB1);
-					inPlace = keyOf(refusalTo(wire, 96, &sameOwner, "renamed", 0x70, &error)) + " expected=seat_held_for_you:" + std::to_string(seat.stableSeat);
+						inPlace = keyOf(refusalTo(wire, 196, &sameOwner, "renamed", 0x70, &error)) + " expected=seat_held_for_you:" + std::to_string(seat.stableSeat);
 				}
 				std::cout << "[net-reconnect-session-selftest] unticketed_return " << (persistent ? "world" : "match") << " held_in_place=" << inPlace << std::endl;
 				if (inPlace.substr(0, inPlace.find(' ')) != inPlace.substr(inPlace.find("expected=") + 9)) note(persistent, "its player back while its seat is held in place was answered " + inPlace);

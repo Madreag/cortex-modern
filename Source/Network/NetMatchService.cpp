@@ -7599,8 +7599,9 @@ static std::string ResyncSaveName() {
 		if (!m_ReconnectHost.EnsureLocalTicket(localTicket))
 			return false;
 		localTicket.recordVersion = NetReconnectTicketStore::RecordVersionFor(localTicket.persistentWorld);
-		localTicket.hostAddress = NetLanDiscovery::GetPrimaryLocalAddress() + ":" + std::to_string(m_BeaconGamePort);
 		if (localTicket.seatToken.empty()) localTicket.directorySessionId = m_DirectorySessionId;
+		localTicket.hostAddress = localTicket.directorySessionId.empty()
+			? NetLanDiscovery::GetPrimaryLocalAddress() + ":" + std::to_string(m_BeaconGamePort) : "ice:";
 		localTicket.matchConfigHash = configHash;
 		if (localTicket.issuedAtUnixMs == 0)
 			localTicket.issuedAtUnixMs = UnixNowMs(nullptr);
