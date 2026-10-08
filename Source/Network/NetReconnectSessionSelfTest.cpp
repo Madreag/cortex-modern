@@ -3175,6 +3175,13 @@ namespace RTE {
 				    given.GetStatusText() != "The host gave your seat to another player." || given.GetOffer() != NetReconnectOffer::None) {
 					return Fail("a seat the host gave away still read '" + given.GetStatusText() + "' with retry " + std::to_string(given.CanRetryManually()));
 				}
+				given.NoteDropped(500001, "connection closed by peer");
+				given.NoteAttemptFailed(500002, "host did not answer");
+				given.RequestManualRetry(500003);
+				if (!given.IsRefused() || given.Tick(500003) || given.CanCancel() || given.CanRetryManually() ||
+				    given.GetStatusText() != "The host gave your seat to another player.") {
+					return Fail("a repeated drop or late failure rearmed or replaced the host's final refusal");
+				}
 			}
 
 			// The window closing is a real end, not just a spent counter.

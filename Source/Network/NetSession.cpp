@@ -1871,7 +1871,9 @@ namespace RTE {
 				if (m_Role == NetSessionRole::Host && !m_RefusedPlayerName.empty())
 					return m_RefusedPlayerName + (m_MismatchKey == "participant_removed" ? " was removed from this session" : " is banned from this session");
 				return BuildRejectText();
-			case NetRejectReason::IdentityUnproven: return "Your player identity could not be verified.";
+			case NetRejectReason::IdentityUnproven:
+				if (m_MismatchKey == "seat_owner" && !m_RejectSummary.empty()) return CleanHostNoticeText(m_RejectSummary, NetProtocol::c_MaxDiagnosticTextBytes);
+				return "Your player identity could not be verified.";
 			default: return "The host could not admit this connection. Please try again.";
 		}
 	}

@@ -17935,6 +17935,91 @@ namespace RTE {
 
 	bool TestInternetTicketRecovery(std::string* error) {
 		{
+			struct Restore {
+				std::string path = NetMatchService::s_TicketStorePath;
+				bool admission = NetMatchService::IsAdmissionEnabled();
+				~Restore() { NetMatchService::SetTicketStorePath(path); NetMatchService::SetAdmissionEnabled(admission); }
+			} restore;
+			NetMatchService::SetAdmissionEnabled(true);
+			const auto path = std::filesystem::current_path() / "Userdata" / "refused-rejoin-selftest" / "reconnect.ticket";
+			NetMatchService::SetTicketStorePath(path.string());
+			const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			NetH4TicketRecord ticket;
+			ticket.recordVersion = NetReconnectTicketStore::RecordVersionFor(false);
+			ticket.epoch.fill(0x31); ticket.credential.fill(0x73);
+			ticket.stableSeat = 2; ticket.holderGeneration = 1; ticket.hostSessionId = 781;
+			ticket.hostAddress = "loopback";
+			ticket.issuedAtUnixMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+			struct Refusal { NetRejectReason reason; std::string key, summary, text; };
+			const std::string ours = std::to_string(NetProtocol::c_Version), theirs = std::to_string(NetProtocol::c_Version + 1);
+			for (const auto& refusal: {
+			    Refusal{NetRejectReason::IdentityUnproven, "seat_owner", "Alex owns this seat. Join another open seat.", "Alex owns this seat. Join another open seat."},
+			    Refusal{NetRejectReason::ParticipantBanned, "participant", "banned", "The host banned you from this session"},
+			    Refusal{NetRejectReason::ProtocolMismatch, "protocol_version", "protocol differs", "Network protocol differs (host " + theirs + "; yours " + ours + "). Update both games to the same version."},
+			    Refusal{NetRejectReason::SeatReassigned, "seat", "reassigned", "The host gave your seat to another player."},
+			    Refusal{NetRejectReason::SeatReleased, "seat", "released", "The host released your seat."}}) {
+				for (const bool manualFirst: {false, true}) {
+					LoopbackTransport hostWire, clientWire;
+					NetMatchService refused;
+					refused.m_TicketStore.SetPath(path.string());
+					if (!refused.m_TicketStore.Store(ticket, error) || !hostWire.StartHost(43195, error)) return false;
+					refused.m_Session = std::make_unique<NetSession>();
+					refused.m_ReconnectClient.Configure(&refused.m_TicketStore, {}, "Rejected player");
+					refused.m_Session->SetReconnectClient(&refused.m_ReconnectClient);
+					NetSessionConfig config;
+					config.port = 43195;
+					config.localIdentity.gameVersion = "7.0.0-test";
+					config.localIdentity.buildId = "refused-rejoin-selftest";
+					config.localIdentity.controllerFrameVersion = ControllerFrame::c_Version;
+					config.localIdentity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+					if (!refused.m_Session->StartClient(clientWire, "loopback", config, error)) return false;
+					refused.m_Session->Tick(0);
+					const auto events = hostWire.PollEvents();
+					const auto connected = std::find_if(events.begin(), events.end(), [](const auto& event) { return event.type == NetTransportEventType::PeerConnected; });
+					NetMessage message;
+					message.payload = NetJoinRejected{refusal.reason, refusal.summary, refusal.key, theirs, ours};
+					std::vector<uint8_t> bytes;
+					if (connected == events.end() || !NetProtocol::Encode(message, bytes) || !hostWire.Send(connected->peerId, NetTransportLane::ControlReliable, bytes, error)) {
+						*error = "the final-refusal fixture could not send the host's answer"; return false;
+					}
+					refused.m_Session->Tick(1);
+					if (!refused.m_Session->HasReject() || refused.m_Session->GetRejectReason() != refusal.reason) {
+						*error = "the final-refusal fixture did not receive the host's answer"; return false;
+					}
+					refused.m_State = NetMatchServiceState::Failed;
+					refused.m_MatchWasRunning = true;
+					refused.m_ErrorText = refused.m_Session->BuildRejectText();
+					refused.m_OrdinaryTicketRejoin = refused.m_HeldRejoinDriving = true;
+					refused.m_HeldRejoinRoutes.push_back(NetMatchServiceRequest{});
+					refused.m_ReconnectUx.NoteDropped(now, "Lost host");
+					refused.m_ReconnectUx.NoteAttemptStarted(now);
+					if (manualFirst) refused.DriveOrdinaryTicketRejoin(now + 1);
+					else refused.DriveReconnectUx(now + 1);
+					if (!refused.m_ReconnectUx.IsRefused() || refused.m_ReconnectUx.GetStatusText() != refusal.text) {
+						*error = "a final admission refusal did not settle on the host's plain answer"; return false;
+					}
+					for (uint64_t update = 2; update < 6; ++update) {
+						refused.DriveReconnectUx(now + update);
+						refused.DriveOrdinaryTicketRejoin(now + update);
+					}
+					const bool ticketGone = refusal.reason == NetRejectReason::SeatReassigned || refusal.reason == NetRejectReason::SeatReleased || refusal.reason == NetRejectReason::ParticipantBanned;
+					if (!refused.m_ReconnectUx.IsRefused() || refused.m_ReconnectUx.GetStatusText() != refusal.text || refused.m_ReconnectUx.GetAttempts() != 1 ||
+					    refused.m_OrdinaryTicketRejoin || refused.m_HeldRejoinDriving || !refused.m_HeldRejoinRoutes.empty() || refused.m_HeldRejoinRetryAtMs != 0 ||
+					    refused.m_ReconnectUx.CanRetryManually() || refused.m_ReconnectUx.CanCancel() || refused.m_TicketStore.HasRecord() == ticketGone) {
+						*error = "repeated menu updates rearmed a final refusal or changed which ticket survives"; return false;
+					}
+					// A later explicit game choice retires this refusal even if its own setup fails before dialing.
+					NetMatchServiceRequest next;
+					next.port = 0;
+					std::string setupError;
+					if (refused.Start(next, &setupError) || refused.m_ReconnectUx.IsRefused() || !refused.m_ReconnectUx.GetStatusText().empty()) {
+						*error = "a new game choice retained the previous seat's refusal"; return false;
+					}
+				}
+			}
+			System::PrintDiagnosticLine("[net-match-selftest] PASS final_admission_refusal_survives_menu_updates_and_new_game_clears_it");
+		}
+		{
 			struct RestoreAdmission {
 				bool enabled = NetMatchService::IsAdmissionEnabled();
 				~RestoreAdmission() { NetMatchService::SetAdmissionEnabled(enabled); }

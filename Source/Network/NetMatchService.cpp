@@ -518,7 +518,10 @@ static std::string ResyncSaveName() {
 			rejoinOfARunningMatch = request.rejoin && !request.host && m_MatchWasRunning;
 		}
 		Destroy(request.rejoin);
-		if (!request.rejoin) m_ConnectionAuthority.Reset();
+		if (!request.rejoin) {
+			m_ConnectionAuthority.Reset();
+			m_ReconnectUx = {};
+		}
 		if (s_AdmissionEnabled) {
 			m_ParticipantStore.SetPath(NetParticipantIdentityStore::DefaultPath());
 			if (!m_ParticipantStore.HasKey() && !m_ParticipantStore.LoadOrCreate(nullptr)) {
@@ -3138,16 +3141,18 @@ static std::string ResyncSaveName() {
 			hasRecord = m_TicketStore.HasRecord();
 			matchWasRunning = m_MatchWasRunning || (m_ReconnectClient.HasRecord() && !m_ReconnectClient.GetRecord().seatToken.empty());
 			reason = m_ErrorText;
-			// The host gave this seat away or released it: the answer is final, so the ticket goes and nothing retries.
-			const bool seatGone = state == NetMatchServiceState::Failed && !isHost && m_Session && m_Session->HasReject() &&
-			                      (m_Session->GetRejectReason() == NetRejectReason::SeatReassigned || m_Session->GetRejectReason() == NetRejectReason::SeatReleased);
-			if (seatGone) {
-				if (!m_ReconnectUx.IsRefused()) {
-					if (m_TicketStore.HasRecord()) (void)m_TicketStore.Clear(nullptr);
-					m_ReconnectUx.NoteRefused(m_Session->BuildPlayerRefusalText());
+			// Admission refusals are the same final answer on a new join and a saved rejoin.
+			if (state == NetMatchServiceState::Failed && !isHost && m_Session && m_Session->HasReject()) {
+				const auto rejected = m_Session->GetRejectReason();
+				const auto step = NextHeldRejoinStep(0, true, rejected, m_Session->BuildPlayerRefusalText());
+				if (!step.retry) {
+					if ((rejected == NetRejectReason::SeatReassigned || rejected == NetRejectReason::SeatReleased) && m_TicketStore.HasRecord())
+						(void)m_TicketStore.Clear(nullptr);
+					m_ReconnectUx.NoteRefused(step.stop);
+					return;
 				}
-				return;
 			}
+			if (m_ReconnectUx.IsRefused()) return;
 			// The held seat's own rejoin is trying the hosts the match named; the prompt takes over only once it gives up.
 			if (m_HeldRejoinDriving) return;
 			// A match the host ended by leaving it is over for this seat: it lands, and nothing reconnects.
@@ -11761,10 +11766,11 @@ static std::string ResyncSaveName() {
 			const bool hostGone = obsoleteRoute || (!helloUnanswered && (lostDuringSetup || (m_Session && ClientSessionLossIsHostDeparture(*m_Session))));
 			if (!hostGone || m_HeldRejoinRoutes.empty()) {
 				if (m_HeldRejoinFailedAttempts < UINT8_MAX) ++m_HeldRejoinFailedAttempts;
-				step = NextHeldRejoinStep(m_HeldRejoinFailedAttempts, hasReject, reason, hasReject ? m_Session->BuildRejectText() : std::string());
+				step = NextHeldRejoinStep(m_HeldRejoinFailedAttempts, hasReject, reason, hasReject ? m_Session->BuildPlayerRefusalText() : std::string());
 				if (!step.retry) {
 					m_HeldRejoinRetryAtMs = 0;
 					m_StatusText = step.stop;
+					m_ReconnectUx.NoteRefused(step.stop);
 					if (error) *error = step.stop;
 					return false;
 				}
@@ -11940,6 +11946,7 @@ static std::string ResyncSaveName() {
 		if (!failed || BeginHeldRejoinOnNextHost()) return;
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_OrdinaryTicketRejoin = m_HeldRejoinDriving = false;
+		m_HeldRejoinRoutes.clear(); m_HeldRejoinRetryAtMs = 0;
 		if (m_ReconnectUx.GetState() != NetReconnectUxState::GaveUp && !m_ReconnectUx.IsRefused())
 			m_ReconnectUx.NoteRefused(m_StatusText.empty() ? "Could not rejoin this match. Return to Multiplayer to choose another game." : m_StatusText);
 	}

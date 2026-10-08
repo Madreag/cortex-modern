@@ -18,9 +18,8 @@ namespace RTE {
 	}
 
 	void NetReconnectUx::NoteDropped(uint64_t nowMs, std::string reason) {
-		// A schedule that is already running, has been stopped by the player, or has run out is not
-		// re-armed by the same loss being reported again.
-		if (IsActive()) {
+		// The same loss cannot restart a running, cancelled, spent or refused attempt.
+		if (IsActive() || IsRefused()) {
 			return;
 		}
 		m_State = NetReconnectUxState::Waiting;
@@ -57,6 +56,7 @@ namespace RTE {
 	}
 
 	void NetReconnectUx::NoteAttemptFailed(uint64_t nowMs, std::string reason) {
+		if (IsRefused()) return;
 		if (!reason.empty()) {
 			m_Reason = std::move(reason);
 		}
