@@ -3339,6 +3339,7 @@ namespace RTE {
 		m_ReadyFrames.clear();
 		m_PendingSourceCommandCounts.clear();
 		m_PendingRecoveryStop.reset();
+		m_RecoveryDrainThrough.reset();
 		m_PendingCompleteStop.reset();
 		m_Stats.nextFrame = GetResumeFrame();
 		m_Stats.timeoutReason.clear();
@@ -5123,6 +5124,7 @@ namespace RTE {
 		m_LastTimingStatusMs = UINT64_MAX;
 		m_AuthoritativeCommandAcks.clear();
 		m_PendingRecoveryStop.reset();
+		m_RecoveryDrainThrough.reset();
 		m_PendingCompleteStop.reset();
 		m_LastCompletedSimulationTick.reset();
 		m_GrantedSimulationTick.reset();
@@ -9687,6 +9689,12 @@ namespace RTE {
 		}
 		if (m_PendingRecoveryStop || !IsRunning()) return;
 		m_PendingRecoveryStop = NetLockstepStop{m_Config.localPeerId, reason, frame, message};
+		if (m_Config.localPeerId == GetHostPeerId()) {
+			// The snapshot includes every tick already committed by its coordinator.
+			m_RecoveryDrainThrough = m_ReadyFrames.empty() ? m_GrantedSimulationTick.value_or(m_Stats.nextFrame) : m_ReadyFrames.back().frame;
+			if (m_GrantedSimulationTick) *m_RecoveryDrainThrough = std::max(*m_RecoveryDrainThrough, *m_GrantedSimulationTick);
+			for (const auto& [peer, heldFrame]: m_AiHeldSeats) *m_RecoveryDrainThrough = std::max(*m_RecoveryDrainThrough, heldFrame);
+		}
 		if (m_Config.localPeerId != GetHostPeerId()) {
 			// A client requests the stop while continuing to supply the host's current tick.
 			std::string ignored;
@@ -9751,9 +9759,11 @@ namespace RTE {
 			return true;
 		}
 		if (m_PendingRecoveryStop && m_Config.localPeerId == GetHostPeerId()) {
+			if (m_RecoveryDrainThrough && completedTick < *m_RecoveryDrainThrough) return false;
 			for (const auto& [peer, frame]: m_AiHeldSeats) if (frame > completedTick) return false;
 			const NetLockstepStop stop = *m_PendingRecoveryStop;
 			m_PendingRecoveryStop.reset();
+			m_RecoveryDrainThrough.reset();
 			Fail(stop.reason, completedTick + 1, stop.message);
 			return true;
 		}
@@ -12737,6 +12747,10 @@ namespace RTE {
 			return;
 		}
 		while (true) {
+			if (m_RecoveryDrainThrough) {
+				for (const auto& [peer, heldFrame]: m_AiHeldSeats) *m_RecoveryDrainThrough = std::max(*m_RecoveryDrainThrough, heldFrame);
+				if (m_Stats.nextFrame > *m_RecoveryDrainThrough) { m_AdvanceBlock = "recovery-boundary"; break; }
+			}
 			// No peer plays at or past the round's named end, so nothing there is committed or judged.
 			if (m_PendingCompleteStop && m_Stats.nextFrame >= m_PendingCompleteStop->frame) { m_AdvanceBlock = "agreed-end"; break; }
 			const bool parkFrame = IsSynchronizedCapturePark(m_Stats.nextFrame);

@@ -753,6 +753,94 @@ namespace RTE {
 				"frame wait failure was refused with \"" + waitReason + "\" instead of the boundary reason");
 		}
 
+		bool TestRecoveryDrainsCommittedPrefix(std::string* error) {
+			Pair pair(44217, 0, 0);
+			if (!pair.Start(error) || !pair.Running(error) || !pair.host.PrimeResyncInputs({}, error) || !pair.client.PrimeResyncInputs({}, error)) return false;
+			ResetScenario reset;
+			ScenarioRunner::SetLockstepCoordinator(&pair.host);
+			pair.host.DeferStopsToTickBoundary();
+			constexpr uint64_t last = c_Start + NetLockstepCodec::c_MaxFutureFrameSkew + 53;
+			InputsByFrame host, client;
+			for (uint64_t target = c_Start; target <= last; ++target) {
+				host[target] = FullInput(1, target, pair.host.GetRoundId());
+				client[target] = FullInput(2, target, pair.client.GetRoundId());
+				if (!QueueFull(pair.host, host.at(target), error) || !QueueFull(pair.client, client.at(target), error) ||
+				    !pair.Until([&] { return pair.host.GetStats().nextFrame == target + 1 && pair.client.GetStats().nextFrame == target + 1; }, error)) return false;
+				NetLockstepReadyFrame ready;
+				if (!Check(pair.client.PopReadyFrame(ready) && ready.frame == target, error, "survivor lost a committed input")) return false;
+				(void)pair.client.FinishSimulationTick(target);
+			}
+			NetResyncState tooEarly;
+			std::vector<uint8_t> envelope;
+			std::string refused;
+			if (!ScenarioRunner::CaptureNetResyncState(c_Start - 1, tooEarly, error, false) ||
+			    !Check(!NetResyncCodec::Encode(tooEarly, {1}, envelope, &refused) && !refused.empty(), error,
+			           "an oversized committed prefix escaped the recovery bound")) return false;
+			if (!pair.host.BeginSimulationTick(c_Start, error)) return false;
+			pair.host.RequestResync("long-stall recovery");
+			std::vector<NetLockstepFrame> future;
+			for (uint64_t target = last + 1; target <= last + 2; ++target) {
+				for (uint8_t peer: {uint8_t{1}, uint8_t{2}}) {
+					auto input = FullInput(peer, target, pair.host.GetRoundId());
+					if (!QueueFull(peer == 1 ? pair.host : pair.client, input, error)) return false;
+					future.push_back(std::move(input));
+				}
+			}
+			for (int step = 0; step < 4; ++step) pair.Step();
+			if (!Check(pair.host.GetStats().nextFrame == last + 1, error, "the recovery boundary moved while its world caught up")) return false;
+			for (uint64_t target = c_Start; target <= last; ++target) {
+				if (!pair.host.BeginSimulationTick(target, error)) return false;
+				NetLockstepReadyFrame ready;
+				if (!Check(pair.host.PopReadyFrame(ready) && ready.frame == target, error, "recovery skipped or repeated a committed tick")) return false;
+				for (uint8_t peer: {uint8_t{1}, uint8_t{2}}) {
+					const auto& input = (peer == 1 ? host : client).at(target);
+					if (!Check(SameInput(ReadyInput(ready, peer, 1, pair.host.GetRoundId()), input), error,
+					           "recovery changed committed controller, command or observation bytes")) return false;
+					for (const auto& command: input.commands) {
+						if (const auto* bindings = std::get_if<NetGamePlayerBindings>(&command.payload)) ScenarioRunner::ObserveLockstepPlayerBindings(peer, target, *bindings);
+						else if (!Check(ScenarioRunner::ConsumeLockstepGameCommand(command), error, "recovery applied a command twice")) return false;
+					}
+				}
+				const bool stopped = ScenarioRunner::FinishLockstepSimulationTick(target);
+				if (!Check(stopped == (target == last) && (target == last ? pair.host.IsFailed() : pair.host.IsRunning()), error,
+				           "recovery stopped before the committed world was complete")) return false;
+				pair.Step();
+			}
+			uint64_t dropFrame = 0;
+			NetResyncState captured, decoded;
+			std::vector<uint8_t> archive;
+			if (!ScenarioRunner::ResolveResyncDropFrame(pair.host.GetResumeFrame(), last, dropFrame, error) ||
+			    !ScenarioRunner::CaptureNetResyncState(last, captured, error, false) ||
+			    !NetResyncCodec::Encode(captured, {1, 2, 3}, envelope, error) ||
+			    !NetResyncCodec::Decode(envelope, captured.sessionId, dropFrame, decoded, archive, error)) return false;
+			NetLockstepReadyFrame extra;
+			return Check(dropFrame == last + 1 && decoded.savedTick == last && SameInputs(decoded.pendingInputs, future) &&
+			             archive == std::vector<uint8_t>({1, 2, 3}) && !pair.host.PopReadyFrame(extra), error,
+			             "recovery lost future input or mislabeled the completed world");
+		}
+
+		bool TestRecoveryAtGrantedBoundary(std::string* error) {
+			Pair pair(44218, 0, 0);
+			if (!pair.Start(error) || !pair.Running(error) || !pair.host.PrimeResyncInputs({}, error) || !pair.client.PrimeResyncInputs({}, error)) return false;
+			pair.host.DeferStopsToTickBoundary();
+			const auto host = FullInput(1, c_Start, pair.host.GetRoundId());
+			const auto client = FullInput(2, c_Start, pair.client.GetRoundId());
+			if (!QueueFull(pair.host, host, error) || !QueueFull(pair.client, client, error) ||
+			    !pair.Until([&] { return pair.host.GetStats().nextFrame == c_Start + 1; }, error) ||
+			    !pair.host.BeginSimulationTick(c_Start, error)) return false;
+			NetLockstepReadyFrame ready;
+			if (!Check(pair.host.PopReadyFrame(ready) && ready.frame == c_Start, error, "granted tick was not committed")) return false;
+			pair.host.RequestResync("in-flight tick recovery");
+			const auto futureHost = FullInput(1, c_Start + 1, pair.host.GetRoundId());
+			const auto futureClient = FullInput(2, c_Start + 1, pair.client.GetRoundId());
+			if (!QueueFull(pair.host, futureHost, error) || !QueueFull(pair.client, futureClient, error)) return false;
+			for (int step = 0; step < 4; ++step) pair.Step();
+			return Check(pair.host.GetStats().nextFrame == c_Start + 1 && pair.host.FinishSimulationTick(c_Start) &&
+			             pair.host.GetResumeFrame() == c_Start + 1 && !pair.host.PopReadyFrame(ready) &&
+			             SameInputs(pair.host.CapturePendingInputs(c_Start), {futureHost, futureClient}), error,
+			             "recovery added a tick after its granted boundary or lost future input");
+		}
+
 		bool TestThreePeerCapture(std::string* error, bool withBoundary = false) {
 			std::array<LoopbackTransport, 3> transports;
 			std::array<NetLockstepCoordinator, 3> coordinators;
@@ -1326,6 +1414,8 @@ namespace RTE {
 		run("checksum ACK authority", TestChecksumAckAuthority);
 		run("snapshot capture", TestSnapshotCapture);
 		run("deferred stop capture", TestDeferredStopCapture);
+		run("recovery drains committed prefix", TestRecoveryDrainsCommittedPrefix);
+		run("recovery at granted boundary", TestRecoveryAtGrantedBoundary);
 		run("destroyed coordinator retires", TestDestroyedCoordinatorRetires);
 		run("full asymmetric input 0/3", [](auto* error) { return TestFullAsymmetric(0, 3, 44196, error); });
 		run("full asymmetric input 3/0", [](auto* error) { return TestFullAsymmetric(3, 0, 44197, error); });

@@ -2015,6 +2015,7 @@ namespace RTE {
 		bool m_CaptureParkAwaitingReports = false;
 		bool m_CaptureParkFinalized = false;
 		std::optional<NetLockstepStop> m_PendingRecoveryStop;
+		std::optional<uint64_t> m_RecoveryDrainThrough;
 		std::optional<NetLockstepStop> m_PendingCompleteStop;
 		uint8_t m_HostLeaveRecordFrom = 0; //!< Client: the host whose leave record this round heard.
 		bool m_MigrationHostAnnounced = false; //!< The host this handover replaces sent its leave record.
