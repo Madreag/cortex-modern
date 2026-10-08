@@ -75,6 +75,7 @@ extern "C" {
 #include "CheckpointLuaHeap.h"
 #include "CheckpointLuaView.h"
 #include "CheckpointLuaThread.h"
+#include "CheckpointLuaAddresses.h"
 
 #include <atomic>
 #include <algorithm>
@@ -108,6 +109,7 @@ extern "C" {
 #include <random>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #ifndef _WIN32
 #include <time.h>
@@ -6305,7 +6307,8 @@ namespace RTE::CheckpointLua {
 			std::shared_ptr<std::pmr::memory_resource> backing = CheckpointWriter::BatchEnabled() ? CheckpointBuffer::LeaseCaptureStorage() : nullptr;
 			std::pmr::monotonic_buffer_resource storage{backing ? backing.get() : std::pmr::get_default_resource()};
 			std::pmr::memory_resource* resource = CheckpointWriter::BatchEnabled() ? &storage : std::pmr::get_default_resource();
-			std::pmr::unordered_set<const void*> seen{resource}, userdata{resource}, functions{resource}, opaque{resource};
+			CaptureAddressSet seen{resource}, opaque{resource};
+			std::pmr::unordered_set<const void*> userdata{resource}, functions{resource};
 			std::pmr::unordered_set<const void*> queuedFinalizers{resource};
 			std::pmr::vector<TValue> pending{resource};
 			void Queue(const TValue& value) {
@@ -6313,7 +6316,7 @@ namespace RTE::CheckpointLua {
 				if (tvisudata(&value)) userdata.insert(gcval(&value));
 				if (tvisfunc(&value)) functions.insert(gcval(&value));
 				const void* pointer = tvisudata(&value) ? uddata(udataV(&value)) : gcval(&value);
-				if (!opaque.contains(pointer) && seen.insert(pointer).second) pending.push_back(value);
+				if (!opaque.Contains(pointer) && seen.Insert(pointer)) pending.push_back(value);
 			}
 			void Queue(int index) {
 				if (index < 0) index += lua_gettop(state) + 1;
@@ -6331,7 +6334,7 @@ namespace RTE::CheckpointLua {
 				if (!lua_istable(state, paths)) { lua_settop(state, top); return false; }
 				lua_pushnil(state);
 				while (lua_next(state, paths)) {
-					if (lua_topointer(state, -2)) opaque.insert(lua_topointer(state, -2));
+					if (lua_topointer(state, -2)) opaque.Insert(lua_topointer(state, -2));
 					if (lua_type(state, -2) == LUA_TUSERDATA) userdata.insert(gcval(&state->top[-2]));
 					lua_pop(state, 1);
 				}
@@ -6418,7 +6421,7 @@ namespace RTE::CheckpointLua {
 			}
 			explicit DescriptorRootScope(lua_State* source, int originalTop, int roots, const TValue& callbacks, int stateIndex) : state(source) {
 				if (!lua_checkstack(state, 32)) throw std::runtime_error("native descriptor roots exhausted the Lua stack");
-				seen.reserve(2048);
+				seen.Reserve(2048);
 				if (GCobj* last = gcref(G(state)->gc.mmudata)) {
 					GCobj* object = last;
 					do {
@@ -6483,7 +6486,7 @@ namespace RTE::CheckpointLua {
 					lua_settop(state, top);
 				}
 				walkSpan.reset();
-				CaptureTrace::Span countSpan("descriptor_counts", CaptureTrace::Active() ? std::format("{}:seen={}:userdata={}:functions={}:opaque={}", stateIndex, seen.size(), userdata.size(), functions.size(), opaque.size()) : std::string());
+				CaptureTrace::Span countSpan("descriptor_counts", CaptureTrace::Active() ? std::format("{}:seen={}:userdata={}:functions={}:opaque={}", stateIndex, seen.Size(), userdata.size(), functions.size(), opaque.Size()) : std::string());
 				s_DescriptorState = state;
 				s_DescriptorRoots = &userdata;
 				s_DescriptorFunctions = &functions;
@@ -8977,6 +8980,25 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 #endif
 	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
+	{
+		std::pmr::monotonic_buffer_resource resource;
+		CheckpointLua::CaptureAddressSet addresses(&resource, true);
+		std::unordered_set<const void*> reference;
+		std::vector<uint64_t> words(8192);
+		addresses.Reserve(32);
+		bool exact = addresses.Insert(nullptr) == reference.insert(nullptr).second;
+		for (size_t index = 0; index < words.size(); ++index) {
+			const void* pointer = &words[index];
+			exact = exact && addresses.Insert(pointer) == reference.insert(pointer).second;
+			exact = exact && addresses.Insert(pointer) == reference.insert(pointer).second;
+		}
+		addresses.Reserve(20000);
+		for (const void* pointer: reference) exact = exact && addresses.Contains(pointer);
+		uint64_t absent = 0;
+		exact = exact && !addresses.Contains(&absent) && addresses.Size() == reference.size();
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " checkpoint_address_membership_survives_growth_and_duplicates" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
 	{
 		CheckpointText frozen;
 		std::string full, shared;

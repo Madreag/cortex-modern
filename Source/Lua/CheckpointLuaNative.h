@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointLuaView.h"
+#include "CheckpointLuaAddresses.h"
 #include "CaptureSentinel.h"
 
 #include <algorithm>
@@ -472,12 +473,12 @@ namespace RTE::CheckpointLua {
 			ForEachCapturedUserdata(State(), [&](GCudata* data) {
 				GCobj* object = obj2gco(data);
 				if (const auto known = classes.find(object); known != classes.end() && known->second.serial == data->serial) {
-					m_SeenClasses.insert(object);
+					m_SeenClasses.Insert(object);
 					++m_Image->m_CachedClasses;
 					return;
 				}
 				if (const auto known = compactClasses.find(object); known != compactClasses.end() && known->second.serial == data->serial) {
-					m_SeenClasses.insert(object);
+					m_SeenClasses.Insert(object);
 					++m_Image->m_CachedClasses;
 					return;
 				}
@@ -492,7 +493,7 @@ namespace RTE::CheckpointLua {
 					if (same) {
 						const NativeImage::Entry& kept = m_Image->m_Entries.emplace(object, reference.entry).first->second;
 						if (reference.entity && SharesAnswer(rep)) m_Shared.emplace(SharedKey::Of(rep), SharedAnswer{&kept, reference.uid});
-						m_Kept.insert(object);
+						m_Kept.Insert(object);
 						++m_Image->m_CachedClasses;
 						return;
 					}
@@ -541,12 +542,12 @@ namespace RTE::CheckpointLua {
 			CheckThread();
 			if (!m_Captured || !m_Image || state != State()) throw std::logic_error("native results require the same frozen Lua heap");
 			// Descriptors this walk neither reused nor made again describe userdata that are gone.
-			const bool retired = m_SeenClasses.size() != m_Cache.classes->Size();
+			const bool retired = m_SeenClasses.Size() != m_Cache.classes->Size();
 			if (!m_NewClasses.empty() || !m_NewCompactClasses.empty() || retired) {
 				auto merged = std::make_shared<NativeImage::ClassEntries>(*m_Cache.classes);
 				if (retired) {
-					std::erase_if(merged->entries, [this](const auto& entry) { return !m_SeenClasses.contains(entry.first); });
-					std::erase_if(merged->compact, [this](const auto& entry) { return !m_SeenClasses.contains(entry.first); });
+					std::erase_if(merged->entries, [this](const auto& entry) { return !m_SeenClasses.Contains(entry.first); });
+					std::erase_if(merged->compact, [this](const auto& entry) { return !m_SeenClasses.Contains(entry.first); });
 				}
 				for (auto& [address, entry]: m_NewClasses) {
 					merged->compact.erase(address);
@@ -559,7 +560,7 @@ namespace RTE::CheckpointLua {
 				m_Cache.classes = std::move(merged);
 			}
 			// References this walk neither reused nor made again name objects that are gone.
-			std::erase_if(m_Cache.references, [this](const auto& entry) { return !m_Kept.contains(entry.first); });
+			std::erase_if(m_Cache.references, [this](const auto& entry) { return !m_Kept.Contains(entry.first); });
 			for (auto& [address, reference]: m_NewReferences) m_Cache.references[address] = std::move(reference);
 			m_Image->m_Classes = m_Cache.classes;
 			std::shared_ptr<const NativeImage> result = std::move(m_Image);
@@ -609,7 +610,7 @@ namespace RTE::CheckpointLua {
 		std::pmr::unordered_map<const void*, NativeImage::Entry> m_NewClasses{m_TransientResource};
 		std::pmr::unordered_map<const void*, NativeImage::ImmutableEntry> m_NewCompactClasses{m_TransientResource};
 		std::pmr::unordered_map<const void*, NativeCache::Reference> m_NewReferences{m_TransientResource};
-		std::pmr::unordered_set<const void*> m_Kept{m_TransientResource};
+		CaptureAddressSet m_Kept{m_TransientResource};
 		struct SharedKey {
 			const void* crep = nullptr;
 			const void* pointer = nullptr;
@@ -623,12 +624,12 @@ namespace RTE::CheckpointLua {
 		struct SharedAnswer { const NativeImage::Entry* entry = nullptr; long uid = 0; };
 		struct SharedHit { NativeImage::Entry entry; long uid = 0; };
 		std::pmr::unordered_map<SharedKey, SharedAnswer, SharedKeyHash> m_Shared{m_TransientResource};
-		std::pmr::unordered_set<const void*> m_SeenClasses{m_TransientResource};
+		CaptureAddressSet m_SeenClasses{m_TransientResource};
 		TValue m_Subject{};
 		bool m_Persist = false;
 		std::shared_ptr<NativeImage> m_Image = std::make_shared<NativeImage>();
-		std::pmr::unordered_set<const void*> m_Queued{m_TransientResource};
-		std::pmr::unordered_set<const void*> m_Pinned{m_TransientResource};
+		CaptureAddressSet m_Queued{m_TransientResource};
+		CaptureAddressSet m_Pinned{m_TransientResource};
 		std::pmr::vector<TValue> m_Queue{m_TransientResource};
 		bool m_Captured = false;
 
@@ -646,7 +647,7 @@ namespace RTE::CheckpointLua {
 			if (index < 0) index += lua_gettop(State()) + 1;
 			const TValue value = At(index);
 			// One strong reference keeps every repeated token alive for this image.
-			if (!CheckpointWriter::BatchEnabled() || !tvisgcv(&value) || m_Pinned.insert(gcval(&value)).second) {
+			if (!CheckpointWriter::BatchEnabled() || !tvisgcv(&value) || m_Pinned.Insert(gcval(&value))) {
 				m_References.Push();
 				lua_pushvalue(State(), index);
 				lua_rawseti(State(), -2, ++m_References.count);
@@ -701,7 +702,7 @@ namespace RTE::CheckpointLua {
 			for (const auto& [name, result]: entry.properties) keep(result);
 		}
 		void Enqueue(const TValue& value) {
-			if ((!tvisudata(&value) && !tvisfunc(&value)) || !m_Queued.insert(gcval(&value)).second) return;
+			if ((!tvisudata(&value) && !tvisfunc(&value)) || !m_Queued.Insert(gcval(&value))) return;
 			Push(value); Keep(-1); lua_pop(State(), 1);
 			m_Queue.push_back(value);
 		}
@@ -1068,7 +1069,7 @@ namespace RTE::CheckpointLua {
 			if (entity || singleton) {
 				NativeCache::Reference reference{entry, object->ptr(), entity ? static_cast<const MovableObject*>(object->ptr())->GetUniqueID() : 0, entity};
 				m_NewReferences[gcval(&value)] = std::move(reference);
-				m_Kept.insert(gcval(&value));
+				m_Kept.Insert(gcval(&value));
 				Retain(entry);
 			}
 			if (entity && SharesAnswer(object)) m_Shared.emplace(SharedKey::Of(object), SharedAnswer{&entry, static_cast<const MovableObject*>(object->ptr())->GetUniqueID()});
@@ -1143,7 +1144,7 @@ namespace RTE::CheckpointLua {
 			CaptureObject(static_cast<const MovableObject*>(object->ptr()));
 			NativeImage::Entry& entry = m_Image->m_Entries[gcval(&value)] = std::move(shared.entry);
 			m_NewReferences[gcval(&value)] = NativeCache::Reference{entry, object->ptr(), shared.uid, true};
-			m_Kept.insert(gcval(&value));
+			m_Kept.Insert(gcval(&value));
 			Retain(entry);
 		}
 		static bool SameResult(const NativeImage::Result& a, const NativeImage::Result& b) {
