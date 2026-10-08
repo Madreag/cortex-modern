@@ -11,9 +11,8 @@
 
 namespace RTE {
 	namespace {
-		// "NRESYNS3": version 3 carries the rewind anchor. A build that predates it refuses the whole
-		// envelope rather than ignoring a field it cannot read, so the version says so outright.
-		constexpr uint64_t c_Magic = 0x33534E595345524EULL;
+		// "NRESYNS4" refuses envelopes without command provenance.
+		constexpr uint64_t c_Magic = 0x34534E595345524EULL;
 		static_assert(NetResyncCodec::c_MaxTotalBytes <= NetLobbyProtocol::c_MaxTotalStateBytes);
 
 		void Require(bool valid, const char* reason) {
@@ -144,6 +143,16 @@ namespace RTE {
 		}
 	}
 
+	bool NetResyncCodec::ValidSourceCommandCount(const NetLockstepFrame& input, size_t count) {
+		if (count >= input.commands.size()) return false;
+		return std::all_of(input.commands.begin() + count, input.commands.end(), [&](const auto& command) {
+			return command.sequence == 0 && command.senderPeerId == input.senderPeerId &&
+			       (std::holds_alternative<NetGameInputDelay>(command.payload) || std::holds_alternative<NetGameSeatHold>(command.payload) ||
+			        std::holds_alternative<NetGameSeatRelease>(command.payload) || std::holds_alternative<NetGameSeatReclaim>(command.payload) ||
+			        std::holds_alternative<NetGameWorldTransition>(command.payload));
+		});
+	}
+
 	bool NetResyncCodec::Encode(const NetResyncState& state, const std::vector<uint8_t>& archive, std::vector<uint8_t>& bytes, std::string* error) {
 		try {
 			Require(state.sessionId != 0 && state.sourceRound != 0 && state.savedTick != UINT64_MAX && !archive.empty() && archive.size() <= c_MaxArchiveBytes, "session, round, savedTick or archive is unset");
@@ -176,6 +185,14 @@ namespace RTE {
 			const size_t inputBytes = result.size() - inputStart;
 			size_t referenceBytes = 0;
 			const auto checkAuxiliary = [&] { Require(result.size() - inputBytes - referenceBytes <= c_MaxAuxiliaryBytes, "auxiliary metadata overflow"); };
+			Require(state.sourceCommandCounts.size() <= state.pendingInputs.size(), "too many source command counts");
+			Put(result, state.sourceCommandCounts.size(), 4);
+			for (const auto& [key, count]: state.sourceCommandCounts) {
+				const auto found = inputTargets.find(key);
+				Require(found != inputTargets.end() && count <= UINT16_MAX && ValidSourceCommandCount(state.pendingInputs[found->second], count), "invalid source command count");
+				Put(result, found->second, 4); Put(result, count, 2);
+				checkAuxiliary();
+			}
 			Put(result, state.pendingCommands.size(), 4);
 			std::map<std::pair<uint8_t, uint64_t>, uint64_t> pendingTargets;
 			for (const auto& pending: state.pendingCommands) {
@@ -209,8 +226,7 @@ namespace RTE {
 			}
 			Put(result, static_cast<uint64_t>(state.e2eFirstTransferUid), 8);
 			checkAuxiliary();
-			// The rewind anchor rides at the end, so an envelope without one differs from a version 2 one only
-			// in the version the header names.
+			// An absent rewind anchor leaves no trailing fields.
 			if (!state.rewindMatchId.empty()) {
 				Require(state.rewindMatchId.size() <= c_MaxRewindMatchIdBytes && state.rewindTick > 0 && state.rewindTick <= state.savedTick,
 				        "rewind anchor is not a committed tick of this match");
@@ -279,6 +295,19 @@ namespace RTE {
 			const size_t inputBytes = reader.cursor - inputStart;
 			size_t referenceBytes = 0;
 			const auto checkAuxiliary = [&] { Require(reader.cursor - inputBytes - referenceBytes <= c_MaxAuxiliaryBytes, "auxiliary metadata overflow"); };
+			const auto sourceCount = reader.Get(4);
+			Require(sourceCount <= inputCount && sourceCount <= (reader.end - reader.cursor) / 6, "too many source command counts");
+			std::pair<uint8_t, uint64_t> previousSource{};
+			for (uint64_t i = 0; i < sourceCount; ++i) {
+				const auto index = reader.Get(4), count = reader.Get(2);
+				Require(index < result.pendingInputs.size() && ValidSourceCommandCount(result.pendingInputs[index], static_cast<size_t>(count)), "invalid source command count");
+				const auto& input = result.pendingInputs[index];
+				const auto key = std::make_pair(input.senderPeerId, input.targetFrame);
+				Require(previousSource < key, "source command counts out of order");
+				previousSource = key;
+				result.sourceCommandCounts.emplace(key, static_cast<size_t>(count));
+				checkAuxiliary();
+			}
 			const auto pendingCount = reader.Get(4);
 			Require(pendingCount <= (reader.end - reader.cursor) / 4, "pendingCommands count past the metadata end");
 			std::map<std::pair<uint8_t, uint64_t>, NetResyncPendingCommand> unique;

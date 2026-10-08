@@ -1000,7 +1000,7 @@ namespace RTE {
 		bool QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error = nullptr, const std::vector<NetSoundObservation>& observations = {}, const std::vector<NetValueObservation>& valueObservations = {});
 		bool PrimeResyncFrames(const std::vector<std::vector<NetGameCommand>>& batches, std::string* error = nullptr);
 		bool PrimeResyncInputs(const std::vector<NetLockstepFrame>& batches, std::string* error = nullptr);
-		bool InstallResyncInputs(const std::vector<NetLockstepFrame>& authoritativeInputs, std::string* error = nullptr);
+		bool InstallResyncInputs(const std::vector<NetLockstepFrame>& authoritativeInputs, std::string* error = nullptr, const std::map<std::pair<uint8_t, uint64_t>, size_t>& sourceCommandCounts = {});
 		bool QueueRecoveredInput(const NetLockstepFrame& frame, std::string* error = nullptr);
 		std::vector<NetLockstepFrame> CapturePendingInputs(uint64_t afterFrame) const;
 		/// Pending packets before committed timing events are added to their apply sets.
@@ -2133,8 +2133,8 @@ namespace RTE {
 		std::map<uint64_t, std::map<uint8_t, std::array<uint8_t, 32>>> m_RemoteChecksums; //!< frame -> (peerId -> hash)
 		std::map<uint8_t, uint64_t> m_VerifiedAppliedFrames; //!< Matching hashes keep their applied prefix after the hash buffers are pruned.
 		std::deque<NetLockstepReadyFrame> m_ReadyFrames;
-		/// Command counts before the coordinator adds boundary events.
-		std::map<uint64_t, std::array<size_t, 2>> m_ReadySourceCommandCounts;
+		/// Command counts before the coordinator adds boundary events, by frame and sender.
+		std::map<uint64_t, std::map<uint8_t, size_t>> m_PendingSourceCommandCounts;
 		std::map<uint64_t, NetLockstepReadyFrame> m_ReadyHistory;
 
 		bool AllRemoteStartsReceived() const { return m_RemoteStartsReceived.size() == m_RemotePeerIds.size(); }

@@ -661,6 +661,52 @@ namespace RTE {
 			return value;
 		}
 
+		void TestSourceCommandProvenance() {
+			auto state = InputState();
+			state.pendingInputs.front().commands.push_back({1, NetGameInputDelay{2, 4}});
+			state.sourceCommandCounts = {{{1, 101}, 2}};
+			StateRoundTrip(state);
+			auto emptySource = state;
+			emptySource.pendingInputs.front().commands = {{1, NetGameInputDelay{2, 4}}};
+			emptySource.pendingCommands.clear(); emptySource.pendingPlayerBindings.clear();
+			emptySource.sourceCommandCounts.at({1, 101}) = 0;
+			StateRoundTrip(emptySource);
+			auto reordered = state;
+			auto remote = state.pendingInputs.front();
+			remote.senderPeerId = 2; remote.targetFrame = 102;
+			for (auto& command: remote.commands) command.senderPeerId = 2;
+			reordered.pendingInputs.insert(reordered.pendingInputs.begin(), remote);
+			reordered.sourceCommandCounts.emplace(std::make_pair(uint8_t{2}, uint64_t{102}), 2);
+			StateRoundTrip(reordered);
+			for (int kind = 0; kind < 6; ++kind) {
+				auto bad = state;
+				if (kind == 0) bad.sourceCommandCounts.at({1, 101}) = 3;
+				if (kind == 1) bad.sourceCommandCounts.at({1, 101}) = 4;
+				if (kind == 2) bad.sourceCommandCounts.at({1, 101}) = 1;
+				if (kind == 3) bad.sourceCommandCounts = {{{1, 102}, 2}};
+				if (kind == 4) bad.pendingInputs.front().commands.back().sequence = 17;
+				if (kind == 5) bad.pendingInputs.front().commands.back().payload = NetGameSetTeamFunds{0, 91};
+				RejectStateEncode(bad, "invalid source command provenance " + std::to_string(kind));
+			}
+			const auto bytes = EncodeState(state);
+			constexpr size_t record = 54;
+			const size_t provenance = record + 9 + Read32(bytes, record + 4);
+			Check(Read32(bytes, provenance) == 1 && Read32(bytes, provenance + 4) == 0, "source command provenance fixture layout changed");
+			for (const auto [offset, value, width]: {std::array<uint64_t, 3>{provenance, 2, 4}, {provenance + 4, 1, 4},
+			     {provenance + 8, 3, 2}, {provenance + 8, 1, 2}}) {
+				auto bad = bytes;
+				WriteLE(bad, offset, value, width);
+				RejectState(bad, state.sessionId, 101, "invalid decoded source command provenance");
+			}
+			auto previousVersion = bytes;
+			previousVersion.at(7) = '3';
+			RejectState(previousVersion, state.sessionId, 101, "resync envelope without command provenance");
+			state.ClearPending();
+			Check(state.pendingInputs.empty() && state.sourceCommandCounts.empty() && state.pendingCommands.empty() &&
+			      state.pendingPlayerBindings.empty() && state.admittedReseats.empty(), "committed boundary retained pending command provenance");
+			StateRoundTrip(state);
+		}
+
 		void TestCompleteInputRefusals() {
 			const auto state = InputState();
 			const auto bytes = EncodeState(state);
@@ -674,7 +720,7 @@ namespace RTE {
 				WriteLE(bad, offset, value, width);
 				RejectState(bad, state.sessionId, 101, "invalid complete input block header");
 			}
-			const size_t pending = record + 9 + Read32(bytes, record + 4) + 4;
+			const size_t pending = record + 9 + Read32(bytes, record + 4) + 8;
 			Check(bytes[pending] == 1, "pending command was not stored as an exact input reference");
 			for (const auto [offset, value, width]: {std::array<uint64_t, 3>{pending, 2, 1}, {pending + 1, 1, 4}, {pending + 5, 2, 2}}) {
 				auto bad = bytes;
@@ -722,6 +768,7 @@ namespace RTE {
 			{"future_command_wire_ids", TestFutureCommandWireIds},
 			{"future_player_bindings", TestFuturePlayerBindings},
 			{"complete_input_window", TestCompleteInputWindow},
+			{"source_command_provenance", TestSourceCommandProvenance},
 			{"complete_input_refusals", TestCompleteInputRefusals}};
 		int failures = 0;
 		for (const auto& [name, test] : tests) {

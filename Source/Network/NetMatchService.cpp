@@ -3557,7 +3557,7 @@ static std::string ResyncSaveName() {
 		const uint64_t round = m_Coordinator->GetRoundId();
 		NetResyncState state;
 		if (!ScenarioRunner::CaptureNetResyncState(tick, state, error)) return false;
-		state.pendingInputs.clear(); state.pendingCommands.clear(); state.pendingPlayerBindings.clear(); state.admittedReseats.clear();
+		state.ClearPending();
 		image.privateSessionId = config.sessionId; image.round = round; image.tick = tick;
 		image.pauseState = ScenarioRunner::CaptureLockstepPauseState();
 		image.authorityGeneration = config.migrationGeneration;
@@ -3671,7 +3671,7 @@ static std::string ResyncSaveName() {
 		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 		NetResyncState state;
 		if (!ScenarioRunner::CaptureNetResyncState(tick, state, &error)) { m_PrivateJoinError = error; return; }
-		state.pendingInputs.clear(); state.pendingCommands.clear(); state.pendingPlayerBindings.clear(); state.admittedReseats.clear();
+		state.ClearPending();
 		NetWorldCheckpointImage image;
 		image.privateSessionId = config.sessionId; image.round = round; image.tick = tick;
 		image.pauseState = ScenarioRunner::CaptureLockstepPauseState();
@@ -4358,7 +4358,7 @@ static std::string ResyncSaveName() {
 			std::vector<uint8_t> side;
 			std::string error;
 			if (ScenarioRunner::CaptureNetResyncState(tick, state, &error)) {
-				state.pendingInputs.clear(); state.pendingCommands.clear(); state.pendingPlayerBindings.clear(); state.admittedReseats.clear();
+				state.ClearPending();
 				if (!NetResyncCodec::Encode(state, {0}, side, &error)) side.clear();
 			}
 			NetWorldCheckpointImage seats;
@@ -5999,7 +5999,7 @@ static std::string ResyncSaveName() {
 			System::PrintDiagnosticLine("[net-match] held client: no in-place catch-up: " + error);
 			return false;
 		}
-		committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
+		committed.ClearPending();
 		const NetLockstepPauseState pause = ScenarioRunner::CaptureLockstepPauseState();
 		const NetLockstepConfig& live = m_Coordinator->GetConfig();
 		NetLockstepConfig config;
@@ -6187,7 +6187,7 @@ static std::string ResyncSaveName() {
 			System::PrintDiagnosticLine("[net-match] held client cannot host alone: " + error);
 			return false;
 		}
-		committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
+		committed.ClearPending();
 		const NetLockstepPauseState pause = ScenarioRunner::CaptureLockstepPauseState();
 		// The round goes on from the tick this peer stands on, with every other seat the AI's: its own hold ends, as nobody is left to wait for.
 		NetLockstepConfig config = m_Coordinator->GetConfig();
@@ -6674,7 +6674,7 @@ static std::string ResyncSaveName() {
 		// The replay goes on under the new authority from the state it reached: what the switch clears, it takes back.
 		NetResyncState committed;
 		if (!ScenarioRunner::CaptureNetResyncState(handover.frame - 1, committed, error, false)) return false;
-		committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
+		committed.ClearPending();
 		const auto pause = ScenarioRunner::CaptureLockstepPauseState();
 		ScenarioRunner::SetLockstepCoordinator(replay.get(), true);
 		if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, error) || !ScenarioRunner::RestoreLockstepPauseState(pause, committed.savedTick)) return false;
@@ -7127,7 +7127,7 @@ static std::string ResyncSaveName() {
 			NetResyncState committed;
 			std::string error;
 			if (!ScenarioRunner::CaptureNetResyncState(m_WorldCatchUp.activationTick - 1, committed, &error, false)) { ScenarioRunner::SetControllerReplayError("private catch-up activation: " + error); return; }
-			committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
+			committed.ClearPending();
 			const auto activationCaptured = std::chrono::steady_clock::now();
 			const auto pause = ScenarioRunner::CaptureLockstepPauseState();
 			if (m_CatchUpCoordinator) m_Coordinator->AdoptReplayedSeatTransitions(*m_CatchUpCoordinator, m_WorldCatchUp.activationTick - 1);
@@ -7209,7 +7209,7 @@ static std::string ResyncSaveName() {
 				if (!ScenarioRunner::CaptureNetResyncState(m_WorldCatchUp.activationTick - 1, committed, &error, false)) {
 					ScenarioRunner::SetControllerReplayError("PeerLeft:world catch-up activation: " + error); return;
 				}
-				committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
+				committed.ClearPending();
 				committed.sessionId = m_Coordinator->GetConfig().sessionId;
 				const auto pause = ScenarioRunner::CaptureLockstepPauseState();
 				AdoptWorldReplaySeats(*m_Coordinator, *m_CatchUpCoordinator, m_WorldCatchUp.activationTick);

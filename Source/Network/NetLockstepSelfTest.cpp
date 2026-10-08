@@ -716,7 +716,7 @@ namespace RTE {
 			for (uint64_t target = 41; target <= 43; ++target) {
 				for (uint8_t index = 0; index < 2; ++index) {
 					auto input = RecoveryWireInput(index + 1, target, round.peer[index].GetRoundId());
-					if (target == 43 && index == 0) input.commands.push_back({1, NetGameInputDelay{2, 9}});
+					if (target == 43 && index == 0) input.commands.push_back({1, NetGameSetTeamFunds{0, 919}});
 					if (!round.peer[index].QueueLocalInput(target, input.frames, input.commands, error, input.observations)) return false;
 					if (target == 43) source.push_back(std::move(input));
 				}
@@ -747,7 +747,7 @@ namespace RTE {
 						for (uint8_t peer = 0; peer < 2; ++peer) {
 							auto input = RecoveryWireInput(peer + 1, target, conflicting.peer[peer].GetRoundId());
 							if (target == 43 && peer == 0) {
-								input.commands.push_back({1, NetGameInputDelay{2, 9}});
+								input.commands.push_back({1, NetGameSetTeamFunds{0, 919}});
 								input.frames.front().aimAngle = 0.375F;
 							}
 							if (!conflicting.peer[peer].QueueLocalInput(target, input.frames, input.commands, error, input.observations)) return false;
