@@ -20,7 +20,7 @@ namespace RTE {
 		Reconnected = 4, //!< Back in the match.
 		GaveUp = 5,      //!< The resume window closed; only a manual retry starts another attempt.
 		Cancelled = 6,   //!< The player stopped the automatic retries.
-		Refused = 7,     //!< The host gave the seat away or released it: nothing is left to rejoin.
+		Refused = 7,     //!< The host or directory refused this seat: automatic recovery stops.
 	};
 
 	/// What the startup scan of the recovery record found. The protocol does not care; the player does.
@@ -46,14 +46,14 @@ namespace RTE {
 
 		void NoteConnected(uint64_t nowMs);
 		/// The link is gone and a recovery record exists: the automatic schedule starts, first attempt
-		/// immediately. Ignored while a schedule is already running, cancelled or spent.
+		/// immediately. Ignored while a schedule is already running, cancelled, spent or refused.
 		void NoteDropped(uint64_t nowMs, std::string reason);
 		void NoteReconnected(uint64_t nowMs);
 		/// @return Whether an attempt is due now. The caller starts it and reports back.
 		bool Tick(uint64_t nowMs);
 		void NoteAttemptStarted(uint64_t nowMs);
 		void NoteAttemptFailed(uint64_t nowMs, std::string reason);
-		/// The host's final answer to a rejoin: the seat is no longer this player's, so nothing retries and nothing is offered.
+		/// A final admission refusal: nothing retries and nothing is offered.
 		void NoteRefused(std::string reason);
 		bool IsRefused() const { return m_State == NetReconnectUxState::Refused; }
 

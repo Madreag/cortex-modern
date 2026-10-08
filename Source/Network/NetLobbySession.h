@@ -237,6 +237,8 @@ namespace RTE {
 		std::pair<uint32_t, uint32_t> GetStateTransferProgress() const { return {m_IncomingReceivedBytes, m_IncomingTotalBytes}; }
 		bool IsStateTransferOutgoing() const { return HasPendingStateChunks(); }
 		uint64_t GetStateTransferProgressSerial() const { return m_StateTransferProgressSerial; }
+		/// Changes to people, readiness or setup; periodic presence packets are not activity.
+		uint64_t GetActivitySerial() const { return m_ActivitySerial; }
 		/// The transfer buffers and queues it holds, as counts and bytes, for the memory census.
 		std::string MemoryCensus() const;
 
@@ -378,6 +380,7 @@ namespace RTE {
 		std::set<uint8_t> m_StartSentTo; //!< Remotes this round's Start reached while a congested one still waits for it.
 		uint32_t m_StartSendStall = 0; //!< Consecutive ticks the transport refused the Start as congested.
 		uint64_t m_StateTransferProgressSerial = 0;
+		uint64_t m_ActivitySerial = 0;
 		uint64_t m_IncomingStateId = 0; //!< The active incoming transfer, 0 = none.
 		uint64_t m_LastIncomingStateId = 0;
 		uint32_t m_IncomingTotalBytes = 0;

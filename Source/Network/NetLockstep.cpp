@@ -3347,6 +3347,17 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetLockstepCoordinator::NoteLocalRouteChanged() {
+		NET_PLANE_CHECK();
+		if (m_Playback || m_Config.localPeerId == GetHostPeerId() || (!IsRunning() && !IsMigrating())) return true;
+		if (m_GrantedSimulationTick) return false;
+		if (IsMigrating()) m_MigrationPhase = NetHostMigrationPhase::Failed;
+		m_MigrationNotice = false;
+		m_State = NetLockstepState::Stopped;
+		m_Stats.timeoutReason = "PeerHeld:Your network changed - rejoining the same seat";
+		return true;
+	}
+
 	bool NetLockstepCoordinator::HostEndOfRoundReached() const {
 		return m_PendingCompleteStop.has_value() || m_Stats.nextFrame > m_FinalFrame;
 	}

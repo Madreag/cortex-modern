@@ -15,8 +15,8 @@
 namespace RTE {
 
 	/// One peer's end of the session directory's signal relay, game-thread only. Post() queues a
-	/// signal; Update() keeps at most one request in flight: a POST for the oldest queued signal,
-	/// else, while polling is armed, a GET every c_PollIntervalMs for the signals addressed to this
+	/// signal; Update() keeps at most one request in flight and interleaves queued POSTs with
+	/// armed GETs every c_PollIntervalMs for the signals addressed to this
 	/// peer. Those reach the sink in seq order and the cursor moves only past a signal the sink took,
 	/// so the service keeps the rest for the next poll.
 	class NetDirectorySignalChannel {
@@ -98,6 +98,7 @@ namespace RTE {
 		static constexpr uint64_t c_DrainBudgetMs = 2000;
 
 	private:
+		static constexpr int c_MaxPostBurst = 2;
 		enum class RequestKind : uint8_t { None, Post, Poll };
 		struct Outbound {
 			std::string to;
@@ -136,6 +137,8 @@ namespace RTE {
 		std::deque<Outbound> m_Outbox;
 		int64_t m_Cursor = 0;          //!< The highest seq the sink took; the next poll reads after it.
 		int m_PollWaitS = 0;           //!< Long-poll seconds on the wire; 0 = a plain GET every c_PollIntervalMs.
+		int m_ActivePollWaitS = 0;
+		int m_PostBurst = 0;
 		uint64_t m_NextPollMs = 0;
 		uint64_t m_PollStartedMs = 0;
 		uint64_t m_NextAttemptMs = 0;  //!< Every request waits for this slot after a transport error, 5xx or 429.

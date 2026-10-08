@@ -162,6 +162,8 @@ namespace RTE {
 		m_BackoffMs = 0;
 		m_NextPostMs = 0;
 		m_PostBackoffMs = 0;
+		m_PostBurst = 0;
+		m_ActivePollWaitS = 0;
 		m_DrainPolled = false;
 		m_SignalsPosted = 0;
 		m_SignalsReceived = 0;
@@ -206,7 +208,7 @@ namespace RTE {
 		if (m_State != State::Open || !reachable || bytes.size() > c_MaxSignalBytes || m_Outbox.size() >= c_MaxPendingPosts) {
 			return false;
 		}
-		if (m_RequestKind == RequestKind::Poll && m_PollWaitS > 0) {
+		if (m_RequestKind == RequestKind::Poll && m_ActivePollWaitS > 0 && !m_Request->Finished()) {
 			AbortRequest();
 			m_NextPollMs = 0;
 		}
@@ -247,9 +249,10 @@ namespace RTE {
 		if (m_State != State::Open || nowMs < m_NextAttemptMs) {
 			return;
 		}
-		if (!m_Outbox.empty() && nowMs >= m_NextPostMs) {
+		const bool pollDue = m_PollArmed && nowMs >= m_NextPollMs;
+		if (!m_Outbox.empty() && nowMs >= m_NextPostMs && (!pollDue || m_PostBurst < c_MaxPostBurst)) {
 			IssuePost();
-		} else if (m_PollArmed && nowMs >= m_NextPollMs) {
+		} else if (pollDue) {
 			IssuePoll(nowMs);
 		}
 	}
@@ -334,6 +337,7 @@ namespace RTE {
 	}
 
 	void NetDirectorySignalChannel::IssuePost() {
+		m_PostBurst = std::min(m_PostBurst + 1, c_MaxPostBurst);
 		const Outbound& head = m_Outbox.front();
 		NetDirectorySignalPost post;
 		post.tokenOrJoinNonce = m_Credential;
@@ -345,12 +349,13 @@ namespace RTE {
 
 	void NetDirectorySignalChannel::IssuePoll(uint64_t nowMs) {
 		m_PollStartedMs = nowMs;
+		m_PostBurst = 0;
 		++m_Polls;
-		// The drain poll is a last look before closing: never hold it open.
-		const int waitS = m_State == State::Draining ? 0 : m_PollWaitS;
+		// Queued offers still need their answers, without waiting behind an idle long poll.
+		m_ActivePollWaitS = m_State == State::Draining || !m_Outbox.empty() ? 0 : m_PollWaitS;
 		std::string path = m_SessionPath + "/signals?peer=" + m_LocalPeer + "&after=" + std::to_string(m_Cursor);
-		if (waitS > 0) {
-			path += "&wait=" + std::to_string(waitS);
+		if (m_ActivePollWaitS > 0) {
+			path += "&wait=" + std::to_string(m_ActivePollWaitS);
 		}
 		StartRequest(RequestKind::Poll, {"GET", path, ""});
 	}

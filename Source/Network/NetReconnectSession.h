@@ -374,6 +374,8 @@ namespace RTE {
 
 		void Configure(NetSeatAuthRegistry* registry, uint64_t hostSessionId, NetH4Identity localIdentity);
 		void SetConnectionAuthority(NetConnectionAuthority* authority) { m_ConnectionAuthority = authority; }
+		/// Whether admission verifies the player's key and signed seat claim.
+		bool AuthenticatesSeatClaims() const { return m_ConnectionAuthority != nullptr && m_ProofRequired; }
 		void SetLocalPlayerName(std::string name) { m_LocalPlayerName = std::move(name); }
 		NetAuthBytes16 GetEpoch() const;
 		void SetSeatTable(std::vector<NetH4Seat> seats, NetMatchMode mode);

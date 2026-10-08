@@ -518,7 +518,10 @@ static std::string ResyncSaveName() {
 			rejoinOfARunningMatch = request.rejoin && !request.host && m_MatchWasRunning;
 		}
 		Destroy(request.rejoin);
-		if (!request.rejoin) m_ConnectionAuthority.Reset();
+		if (!request.rejoin) {
+			m_ConnectionAuthority.Reset();
+			m_ReconnectUx = {};
+		}
 		if (s_AdmissionEnabled) {
 			m_ParticipantStore.SetPath(NetParticipantIdentityStore::DefaultPath());
 			if (!m_ParticipantStore.HasKey() && !m_ParticipantStore.LoadOrCreate(nullptr)) {
@@ -783,8 +786,7 @@ static std::string ResyncSaveName() {
 			// A new join is not the substitute this process was; its own rejoin carries on as one.
 			if (!request.rejoin) m_SubstituteRejoinStarted = false;
 			if (request.host) {
-				m_DirectoryRow.iceIdentity.clear();
-				m_DirectoryRow.iceVirtualPort = 0;
+				m_DirectoryRow = {};
 				m_DirectoryRow.name = m_LocalName;
 				m_DirectoryRow.activity = matchConfig.activityPreset;
 				m_DirectoryRow.scene = matchConfig.sceneName;
@@ -1301,7 +1303,8 @@ static std::string ResyncSaveName() {
 
 	int NetMatchService::GetDirectoryVisibility() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (m_DirectoryRetracted || m_IceBoundSessionId.empty()) return 0;
+		if (!m_IsHost || m_State == NetMatchServiceState::Idle || m_HostThisNetworkOnly || m_DirectoryRetracted ||
+		    m_DirectoryState == NetDirectoryClient::State::Disabled) return 0;
 		return m_DirectoryHidden ? 1 : 2;
 	}
 
@@ -1326,7 +1329,8 @@ static std::string ResyncSaveName() {
 		if (visibility <= 0) {
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
-				if (m_DirectoryRetracted || m_IceBoundSessionId.empty()) return true; // already LAN-only
+				if (!m_IsHost || m_State == NetMatchServiceState::Idle || m_HostThisNetworkOnly || m_DirectoryRetracted ||
+				    m_DirectoryState == NetDirectoryClient::State::Disabled) return true;
 			}
 			RetractDirectoryListing();
 			return true;
@@ -1336,8 +1340,9 @@ static std::string ResyncSaveName() {
 		bool listed;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			// A retracted row or a LAN-bound session has no lease to move; relisting is a new session's.
-			if (m_DirectoryRetracted || m_IceBoundSessionId.empty()) return false;
+			// A local or retracted lobby needs a new session to publish its address.
+			if (!m_IsHost || m_State == NetMatchServiceState::Idle || m_HostThisNetworkOnly || m_DirectoryRetracted ||
+			    m_DirectoryState == NetDirectoryClient::State::Disabled) return false;
 			advertised = m_DirectoryRow;
 			running = m_State == NetMatchServiceState::Running;
 			listed = visibility >= 2;
@@ -2206,11 +2211,18 @@ static std::string ResyncSaveName() {
 		}
 	}
 
-	void NetMatchService::EndAdmissionSession() {
-		if (m_AdmissionAttached && m_IsHost && m_Session) {
-			// P22: sent from the same call that clears the registry, so a client's record is provably
-			// dead exactly here - not on a transport disconnect, a timeout or a match Complete.
-			m_Session->EndHostedSession("the host ended the session");
+	void NetMatchService::EndAdmissionSession(bool preserveHostedMatch) {
+		if (m_IsHost && !preserveHostedMatch) {
+			if (m_AdmissionAttached && m_Session) m_Session->EndHostedSession("the host ended the session");
+			NetH4TicketRecord record;
+			// Only this host's last saved lease belongs to the session being closed.
+			if (!m_PersistedLocalLease.empty() && m_TicketStore.Load(UnixNowMs(nullptr), record) == NetH4TicketLoadResult::Loaded &&
+			    record.seatToken == m_PersistedLocalLease) {
+				(void)m_TicketStore.Clear(nullptr);
+				m_ReconnectUx.DismissOffer();
+				m_ReconnectUx.StopWatchingForHostReturn();
+			}
+			m_ConnectionAuthority.Suspend();
 		}
 		m_SeatAuth.EndSession();
 		m_ReconnectHost.EndHostedSession();
@@ -2363,6 +2375,7 @@ static std::string ResyncSaveName() {
 			m_DirectoryRelistPending = false;
 			m_KeepEndedDirectoryLease = false;
 			AccumulateLockstepTotalsLocked();
+			EndAdmissionSession(superseded || preserveMatch);
 			runner = std::move(m_Runner);
 			coordinator = std::move(m_Coordinator);
 			session = std::move(m_Session);
@@ -2421,7 +2434,6 @@ static std::string ResyncSaveName() {
 			m_JoinRefusalKey.clear();
 			m_JoinRefusalSeat.reset();
 			ResetRoundGoodbyeLocked();
-			EndAdmissionSession();
 		}
 		runner.reset();
 		coordinator.reset();
@@ -2481,6 +2493,7 @@ static std::string ResyncSaveName() {
 			const bool hostDeparted = !m_IsHost && ((m_Runner && m_Runner->DidLoseHostDuringSetup()) || (m_Session && ClientSessionLossIsHostDeparture(*m_Session)));
 			// A seat rejoining the match it played has committed frames, whatever the fresh round it was rejoining has not.
 			m_FailedWithoutFrame = hostDeparted && !m_RejoinOfRunningMatch && m_Coordinator && !m_Coordinator->HasCompletedSimulationTick();
+			EndAdmissionSession(true);
 			runner = std::move(m_Runner);
 			coordinator = std::move(m_Coordinator);
 			session = std::move(m_Session);
@@ -2506,7 +2519,6 @@ static std::string ResyncSaveName() {
 			}
 			m_LobbySnapshot = {};
 			m_InputDelayText.clear();
-			EndAdmissionSession();
 		}
 		runner.reset();
 		coordinator.reset();
@@ -3138,16 +3150,18 @@ static std::string ResyncSaveName() {
 			hasRecord = m_TicketStore.HasRecord();
 			matchWasRunning = m_MatchWasRunning || (m_ReconnectClient.HasRecord() && !m_ReconnectClient.GetRecord().seatToken.empty());
 			reason = m_ErrorText;
-			// The host gave this seat away or released it: the answer is final, so the ticket goes and nothing retries.
-			const bool seatGone = state == NetMatchServiceState::Failed && !isHost && m_Session && m_Session->HasReject() &&
-			                      (m_Session->GetRejectReason() == NetRejectReason::SeatReassigned || m_Session->GetRejectReason() == NetRejectReason::SeatReleased);
-			if (seatGone) {
-				if (!m_ReconnectUx.IsRefused()) {
-					if (m_TicketStore.HasRecord()) (void)m_TicketStore.Clear(nullptr);
-					m_ReconnectUx.NoteRefused(m_Session->BuildPlayerRefusalText());
+			// Admission refusals are the same final answer on a new join and a saved rejoin.
+			if (state == NetMatchServiceState::Failed && !isHost && m_Session && m_Session->HasReject()) {
+				const auto rejected = m_Session->GetRejectReason();
+				const auto step = NextHeldRejoinStep(0, true, rejected, m_Session->BuildPlayerRefusalText());
+				if (!step.retry) {
+					if ((rejected == NetRejectReason::SeatReassigned || rejected == NetRejectReason::SeatReleased) && m_TicketStore.HasRecord())
+						(void)m_TicketStore.Clear(nullptr);
+					m_ReconnectUx.NoteRefused(step.stop);
+					return;
 				}
-				return;
 			}
+			if (m_ReconnectUx.IsRefused()) return;
 			// The held seat's own rejoin is trying the hosts the match named; the prompt takes over only once it gives up.
 			if (m_HeldRejoinDriving) return;
 			// A match the host ended by leaving it is over for this seat: it lands, and nothing reconnects.
@@ -8472,6 +8486,8 @@ static std::string ResyncSaveName() {
 	void NetMatchService::PumpSessionEvents() {
 		// Nothing sends on the wire from off this thread while this pump may change it; the end of the pump arms it again.
 		DisarmHostLiveness();
+		// A missing input cannot stop the route check that lets this seat return.
+		UpdateConnectionAuthority(SteadyNowMs());
 		PushPendingToasts();
 		PumpHostMigration();
 		if (m_Coordinator && m_Coordinator->IsMigrating())
@@ -10047,11 +10063,13 @@ static std::string ResyncSaveName() {
 		}
 		const uint32_t revision = m_ConnectionAuthority.NetworkRevision();
 		const bool changed = revision != m_ConnectionNetworkRevision;
-		if (changed && m_ConnectionNetworkRevision != 0) {
+		const bool refresh = changed && m_ConnectionNetworkRevision != 0;
+		const bool applied = !refresh || m_State != NetMatchServiceState::Running || !m_Coordinator || m_Coordinator->NoteLocalRouteChanged();
+		if (refresh && applied) {
 			System::PrintDiagnosticLine("[net-connection] network changed; refreshing the same seat's route");
 			if (m_IsHost && s_PortMapRequested) { ReleaseHostPortMap(); RequestHostPortMap(m_BeaconGamePort, nullptr); }
 		}
-		m_ConnectionNetworkRevision = revision;
+		if (applied) m_ConnectionNetworkRevision = revision;
 		if (changed || nowMs >= m_ConnectionRouteAtMs) {
 			m_ConnectionRouteAtMs = nowMs + 1000;
 			NetConnectionRoute route;
@@ -10094,6 +10112,7 @@ static std::string ResyncSaveName() {
 		const auto lease = m_ConnectionAuthority.LocalLease();
 		if (!lease || lease->token == m_PersistedLocalLease) return;
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_IsHost || m_LeftMatch || m_State == NetMatchServiceState::Idle || m_State == NetMatchServiceState::Failed) return;
 		NetH4TicketRecord record;
 		m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
 		(void)m_TicketStore.Load(UnixNowMs(nullptr), record);
@@ -10635,6 +10654,7 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::ConfigureLobbyStart(NetMatchRunnerConfig& config) {
+		m_LobbyInput.store(false);
 		config.relayOffer = [this](NetRelayConfig& offer) { return ReadRelayOffer(offer); };
 		config.sessionWaitMs = c_MenuLobbyWaitMs;
 		config.lobbyWaitMs = c_MenuLobbyWaitMs;
@@ -10653,6 +10673,7 @@ static std::string ResyncSaveName() {
 		config.startRequested = &m_StartRequested;
 		config.cancelStartRequested = &m_CancelStartRequested;
 		config.hostSetupOpen = &m_HostSetupOpen;
+		config.lobbyInput = &m_LobbyInput;
 		config.roundStartScripts = [this] {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			return std::exchange(m_RoundStartScriptsToStream, {});
@@ -11071,6 +11092,7 @@ static std::string ResyncSaveName() {
 				const bool lostHost = !request.host && !seatReleased &&
 				    (m_Runner->DidLoseHostDuringSetup() || (reachedHost && ClientSessionLossIsHostDeparture(*m_Session)));
 				System::PrintDiagnosticLine("[net-match] setup failed: " + error + (lostHost ? " (the host left)" : ""));
+				if (request.host && !m_MatchWasRunning) EndAdmissionSession();
 				// A player coming into a running match whose host went while the others play on: the match is changing host.
 				// An application waiting on a held seat is one: such a seat is in a match with other players.
 				NetReconnectClient* replica = m_Session ? m_Session->GetReconnectClient() : nullptr;
@@ -11757,10 +11779,11 @@ static std::string ResyncSaveName() {
 			const bool hostGone = obsoleteRoute || (!helloUnanswered && (lostDuringSetup || (m_Session && ClientSessionLossIsHostDeparture(*m_Session))));
 			if (!hostGone || m_HeldRejoinRoutes.empty()) {
 				if (m_HeldRejoinFailedAttempts < UINT8_MAX) ++m_HeldRejoinFailedAttempts;
-				step = NextHeldRejoinStep(m_HeldRejoinFailedAttempts, hasReject, reason, hasReject ? m_Session->BuildRejectText() : std::string());
+				step = NextHeldRejoinStep(m_HeldRejoinFailedAttempts, hasReject, reason, hasReject ? m_Session->BuildPlayerRefusalText() : std::string());
 				if (!step.retry) {
 					m_HeldRejoinRetryAtMs = 0;
 					m_StatusText = step.stop;
+					m_ReconnectUx.NoteRefused(step.stop);
 					if (error) *error = step.stop;
 					return false;
 				}
@@ -11936,6 +11959,7 @@ static std::string ResyncSaveName() {
 		if (!failed || BeginHeldRejoinOnNextHost()) return;
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_OrdinaryTicketRejoin = m_HeldRejoinDriving = false;
+		m_HeldRejoinRoutes.clear(); m_HeldRejoinRetryAtMs = 0;
 		if (m_ReconnectUx.GetState() != NetReconnectUxState::GaveUp && !m_ReconnectUx.IsRefused())
 			m_ReconnectUx.NoteRefused(m_StatusText.empty() ? "Could not rejoin this match. Return to Multiplayer to choose another game." : m_StatusText);
 	}

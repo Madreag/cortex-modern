@@ -904,6 +904,16 @@ namespace RTE {
 			}
 			peer->helloSeen = true;
 			peer->clientNonce = hello->clientNonce;
+			const NetIdentityMismatch mismatch = ValidateClientHello(*hello);
+			if (HasMismatch(mismatch)) {
+				if (mismatch.rejectReason == NetRejectReason::ModuleManifestMismatch && !peer->awaitingModuleDigests && BeginModuleDigestExchange(peerId)) {
+					peer->awaitingModuleDigests = true;
+					peer->pendingModuleMismatch = mismatch;
+					return;
+				}
+				RejectPeer(*peer, mismatch.rejectReason, mismatch.key, mismatch.expectedShortValue, mismatch.actualShortValue, mismatch.summary);
+				return;
+			}
 			uint8_t assignedPeerId = AllocatePeerId();
 			if (assignedPeerId == 0) {
 				if (m_Config.maxPeers == 0) {
@@ -911,8 +921,7 @@ namespace RTE {
 					RejectPeer(*peer, NetRejectReason::SessionFull, "peer_count", "0", std::to_string(ActivePeerCount()), "session seats no remote player");
 					return;
 				}
-				// §6: the seat's own id is still held by the incarnation this joiner may be about to
-				// supersede, so it proves on a provisional one and takes the seat's id from the commit.
+				// A full session authenticates a seat claim on a provisional id; only a commit seats it.
 				assignedPeerId = AllocatePendingAdmissionPeerId();
 				if (assignedPeerId == 0) {
 					RejectPeer(*peer, NetRejectReason::SessionFull, "peer_count", std::to_string(m_Config.maxPeers), std::to_string(ActivePeerCount()), "session is full");
@@ -925,16 +934,6 @@ namespace RTE {
 					RejectPeer(*peer, NetRejectReason::DuplicateClientNonce, "client_nonce", "unique", std::to_string(hello->clientNonce), "duplicate client nonce");
 					return;
 				}
-			}
-			const NetIdentityMismatch mismatch = ValidateClientHello(*hello);
-			if (HasMismatch(mismatch)) {
-				if (mismatch.rejectReason == NetRejectReason::ModuleManifestMismatch && !peer->awaitingModuleDigests && BeginModuleDigestExchange(peerId)) {
-					peer->awaitingModuleDigests = true;
-					peer->pendingModuleMismatch = mismatch;
-					return;
-				}
-				RejectPeer(*peer, mismatch.rejectReason, mismatch.key, mismatch.expectedShortValue, mismatch.actualShortValue, mismatch.summary);
-				return;
 			}
 			if (NetA7Journal::Enabled()) NetA7Journal::Session("handshake_accepted", m_NowMs, {{"connection", std::to_string(peer->a7ConnectionId)}});
 			peer->clientNonce = hello->clientNonce;
@@ -1000,6 +999,15 @@ namespace RTE {
 			if (peer->state != NetSessionState::Accepted && peer->state != NetSessionState::Ready) {
 				RejectPeer(*peer, NetRejectReason::HostNotAccepting, "state", "accepted", StateName(peer->state), "ready state arrived before acceptance");
 				return;
+			}
+			if (m_ReconnectHost) {
+				const auto seat = m_ReconnectHost->StableSeatOfConnection(peerId);
+				NetPeerId holder = c_InvalidNetPeerId;
+				uint32_t generation = 0, incarnation = 0;
+				if (!seat || !m_ReconnectHost->GetSeatHolder(*seat, holder, generation, incarnation) || holder != peerId) {
+					RejectPeer(*peer, NetRejectReason::HostNotAccepting, "admission", "committed seat", "uncommitted", "The host has not admitted this seat. Join again.");
+					return;
+				}
 			}
 			if (ready->peerId != peer->assignedPeerId) {
 				RejectPeer(*peer, NetRejectReason::ProtocolMismatch, "peer_id", std::to_string(peer->assignedPeerId), std::to_string(ready->peerId), "ready state peer id does not match accepted session");
@@ -1863,7 +1871,9 @@ namespace RTE {
 				if (m_Role == NetSessionRole::Host && !m_RefusedPlayerName.empty())
 					return m_RefusedPlayerName + (m_MismatchKey == "participant_removed" ? " was removed from this session" : " is banned from this session");
 				return BuildRejectText();
-			case NetRejectReason::IdentityUnproven: return "Your player identity could not be verified.";
+			case NetRejectReason::IdentityUnproven:
+				if (m_MismatchKey == "seat_owner" && !m_RejectSummary.empty()) return CleanHostNoticeText(m_RejectSummary, NetProtocol::c_MaxDiagnosticTextBytes);
+				return "Your player identity could not be verified.";
 			default: return "The host could not admit this connection. Please try again.";
 		}
 	}
@@ -1911,7 +1921,8 @@ namespace RTE {
 	}
 
 	uint8_t NetSession::AllocatePendingAdmissionPeerId() const {
-		if (m_Role != NetSessionRole::Host || m_ReconnectHost == nullptr || !m_ReconnectHost->HoldsSeatsForReturn()) {
+		if (m_Role != NetSessionRole::Host || m_ReconnectHost == nullptr ||
+		    (!m_ReconnectHost->HoldsSeatsForReturn() && !m_ReconnectHost->AuthenticatesSeatClaims())) {
 			return 0;
 		}
 		for (uint16_t candidate = static_cast<uint16_t>(m_Config.maxPeers) + 1;

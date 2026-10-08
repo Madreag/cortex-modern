@@ -4173,6 +4173,8 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 		g_NetMatchService.ReturnToLobby();
 	}
 	const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
+	if (snapshot.inLobby && snapshot.isHost && (g_UInputMan.AnyPress() || g_UInputMan.HasTextInput() ||
+	    g_UInputMan.MouseWheelMoved() != 0 || !g_UInputMan.GetMouseMovement().IsZero())) g_NetMatchService.NoteLobbyInput();
 
 	// While a connection is being established, cap the menu update rate so the GNS I/O service thread
 	// isn't CPU-starved by the menu rendering flat-out (the headless path yields the same way).

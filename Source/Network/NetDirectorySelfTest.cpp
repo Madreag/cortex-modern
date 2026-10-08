@@ -385,10 +385,27 @@ namespace RTE {
 		service.m_Directory.Advertise({}, false);
 		service.m_Directory.Update(0);
 		service.RefreshDirectorySignalCredentialLocked(0);
-		if (service.GetListingStatus() != NetListingStatus::Opening) { *error = "public registration was described as network-only"; return false; }
+		if (service.GetListingStatus() != NetListingStatus::Opening || service.GetDirectoryVisibility() != 2 || !service.SetDirectoryVisibility(2)) {
+			*error = "public registration was described as network-only or refused its existing visibility"; return false;
+		}
 		service.m_Directory.Update(0);
 		service.RefreshDirectorySignalCredentialLocked(0);
-		if (service.GetListingStatus() != NetListingStatus::Listed) { *error = "registered public lobby was not described as listed"; return false; }
+		if (service.GetListingStatus() != NetListingStatus::Listed || service.GetDirectoryVisibility() != 2) {
+			*error = "registered public lobby without ICE was not described as listed"; return false;
+		}
+		if (!service.SetDirectoryVisibility(0) || service.GetDirectoryVisibility() != 0 || service.SetDirectoryVisibility(2)) {
+			*error = "a retracted lobby retained its public intent or relisted the ended lease"; return false;
+		}
+		service.m_DirectoryRetracted = false;
+		service.m_DirectoryState = NetDirectoryClient::State::Registering;
+		if (!service.SetDirectoryVisibility(0) || !service.m_DirectoryRetracted) {
+			*error = "a pending public registration ignored the host's local-only choice"; return false;
+		}
+		service.m_DirectoryRetracted = false;
+		service.m_HostThisNetworkOnly = true;
+		if (service.GetDirectoryVisibility() != 0 || service.SetDirectoryVisibility(2)) {
+			*error = "a LAN-bound lobby accepted a public listing"; return false;
+		}
 		std::cout << "[net-directory-selftest] PASS lobby_directory_status" << std::endl;
 		return true;
 	}
@@ -1322,17 +1339,43 @@ namespace RTE {
 			}
 
 			bool TestConnectionProtocolRefusal(std::string* error) {
-				for (const int64_t version: {int64_t{0}, int64_t{2}}) {
+				for (const int status : {409, 200}) for (const bool refresh : {false, true}) for (const int64_t version: {int64_t{0}, int64_t{2}}) {
 					ScriptedClient s;
 					NetDirectoryRegisterResponse response{"7b8c9d2e-1111-4222-8333-444455556666", "fixture-proof", 15, 5, "192.0.2.1"};
+					const auto row = SampleRegisterRequest();
+					if (refresh) s.replies->push_back({200, NetDirectoryCodec::EncodeRegisterResponse(response), ""});
 					response.connectionProtocol = version;
-					s.replies->push_back({200, NetDirectoryCodec::EncodeRegisterResponse(response), ""});
-					s.client.Advertise(SampleRegisterRequest(), false);
-					s.client.Update(0); s.client.Update(0); s.client.Update(100000);
-					if (s.client.GetState() != NetDirectoryClient::State::Failed || s.sent->size() != 1 ||
+					s.replies->push_back({status, status == 200 ? NetDirectoryCodec::EncodeRegisterResponse(response) :
+					    json{{"error", "connection_version"}, {"client_version", NetDirectoryLimits::c_ConnectionProtocol}, {"directory_version", version}}.dump(), ""});
+					s.client.Advertise(row, false);
+					s.client.Update(0); s.client.Update(0);
+					if (refresh) {
+						s.client.RefreshRegistration(row, true, 0);
+						s.client.Update(5000); s.client.Update(5000);
+					}
+					const size_t expectedRequests = refresh ? 2 : 1;
+					if (s.client.GetState() != NetDirectoryClient::State::Failed || s.sent->size() != expectedRequests ||
+					    s.client.GetSupersededGeneration() != 0 ||
 					    s.client.LastError().find("protocol is 1") == std::string::npos ||
 					    s.client.LastError().find("directory uses " + std::to_string(version)) == std::string::npos) {
 						*error = "a directory protocol mismatch did not stop with both versions"; return false;
+					}
+					const std::string refusal = s.client.LastError();
+					for (const uint64_t now : {10000ULL, 100000ULL, 200000ULL}) {
+						// The service republishes metadata and calls Configure on every update.
+						s.client.Configure("dir.test/", "key0123456789abcd", "");
+						s.client.Advertise(row, true);
+						s.client.Update(now);
+						if (s.client.GetState() != NetDirectoryClient::State::Failed || s.sent->size() != expectedRequests || s.client.LastError() != refusal) {
+							*error = "routine listing metadata rearmed a terminal directory version refusal"; return false;
+						}
+					}
+					if (refresh) s.client.AbandonLease(); // An explicit new match may try again.
+					else s.client.Configure("https://other.test", "key0123456789abcd", "");
+					s.client.Advertise(row, false);
+					s.client.Update(300000);
+					if (s.client.GetState() != NetDirectoryClient::State::Registering || s.sent->size() != expectedRequests + 1) {
+						*error = "an explicit new match or directory could not retry after a version refusal"; return false;
 					}
 				}
 				std::cout << "[net-directory-selftest] PASS connection_protocol_refusal versions=named" << std::endl;
@@ -1507,6 +1550,31 @@ namespace RTE {
 			// R6 (sss): one host per handover generation - a successor's claim names its generation, every heartbeat and the delete
 			// carry this host's, and a 409 that names a later one stops the client keeping the row.
 			bool TestASupersededHostKeepsTheRowNoMore(std::string* error) {
+				for (const char* code : {"superseded", "already_migrated"}) {
+					ScriptedClient refused;
+					refused.replies->push_back({409, json{{"error", code}, {"migration_gen", 2}}.dump(), ""});
+					refused.client.Advertise(SampleRegisterRequest(), true);
+					refused.client.Update(0); refused.client.Update(0);
+					refused.client.Advertise(SampleRegisterRequest(), true);
+					refused.client.Update(100000);
+					if (refused.client.GetState() != NetDirectoryClient::State::Superseded || refused.client.GetSupersededGeneration() != 2 || refused.sent->size() != 1) {
+						*error = "a named migration refusal did not stop registration"; return false;
+					}
+				}
+				for (const char* body : {"not-json", "[]", R"({"migration_gen":2})", R"({"error":409,"migration_gen":2})", R"({"error":"other_conflict","migration_gen":2})"}) {
+					for (const bool heartbeat : {false, true}) {
+						ScriptedClient unrelated;
+						if (heartbeat) unrelated.replies->push_back({200, NetDirectoryCodec::EncodeRegisterResponse(
+						    NetDirectoryRegisterResponse{"7b8c9d2e-1111-4222-8333-444455556666", "fixture-proof", 15, 5, "192.0.2.1"}), ""});
+						unrelated.replies->push_back({409, body, ""});
+						unrelated.client.Advertise(SampleRegisterRequest(), true);
+						unrelated.client.Update(0); unrelated.client.Update(0);
+						if (heartbeat) { unrelated.client.Update(5000); unrelated.client.Update(5000); }
+						if (unrelated.client.GetState() == NetDirectoryClient::State::Superseded || unrelated.client.GetSupersededGeneration() != 0) {
+							*error = "an unrelated HTTP conflict superseded the host"; return false;
+						}
+					}
+				}
 				NetDirectoryRegisterRequest claim = SampleRegisterRequest();
 				claim.resumeSessionId = "7b8c9d2e-1111-4222-8333-444455556666";
 				claim.resumeToken = "tok";
@@ -2424,6 +2492,17 @@ namespace RTE {
 					} else if (!ReportRowless(report)) {
 						note("shutdown: the report still claimed " + VisibilityFields(report) + " after Shutdown deleted the row");
 					}
+					auto newLease = json::parse(kRegisterCapableSecret);
+					newLease["session_id"] = "7b8c9d2e-1111-4222-8333-444455556667";
+					s.replies->push_back({200, newLease.dump(), ""});
+					s.client.Advertise(SampleRegisterRequest(), false);
+					s.client.Update(SteadyMs() + 60000);
+					const auto fresh = json::parse(s.sent->back().body);
+					if (s.sent->back().method != "POST" || !fresh.value("resume_session_id", std::string()).empty() || !fresh.value("resume_token", std::string()).empty()) {
+						note("shutdown: a new lobby reclaimed the deleted lobby's lease");
+					}
+					s.client.Update(SteadyMs() + 60000);
+					if (s.client.GetSessionId() != newLease["session_id"]) note("shutdown: the next lobby did not adopt its fresh lease");
 				}
 
 				{   // Shutdown inside a heartbeat 429 keeps retry_after: no DELETE within its budget, none counted
@@ -3431,6 +3510,24 @@ namespace RTE {
 					return false;
 				}
 				std::cout << "[net-directory-selftest] signal priority: with the poll due at t=0, POST(first) and POST(second) went before the GET" << std::endl;
+				for (const int wait : {0, 2}) {
+					ScriptedChannel busy(false);
+					busy.channel.SetPolling(true); busy.channel.SetPollWait(wait);
+					busy.replies->push_back(kPostOk); busy.replies->push_back(kPostOk);
+					for (int offer = 0; offer < 12; ++offer)
+						if (!busy.channel.Post("host", "offer")) { *error = "the busy signal queue refused an offer"; return false; }
+					busy.channel.Update(0); busy.channel.Update(1); busy.channel.Update(2);
+					if (busy.sent->size() != 3 || !RequestIs(busy.sent->back(), "GET", busy.PollPath(0).c_str(), error)) {
+						*error = "queued offers starved the peer's answer or blocked outgoing offers on a long poll"; return false;
+					}
+					busy.replies->push_back({200, SignalListBody({{1, "host", busy.channel.GetLocalPeer(), B64("answer")}}), ""});
+					if (!busy.channel.Post("host", "new offer")) { *error = "the active poll refused a new offer"; return false; }
+					busy.channel.Update(3);
+					if (Taken(busy) != "1:answer" || busy.channel.PendingPosts() == 0 || busy.sent->back().method != "POST") {
+						*error = "a new offer discarded the peer's ready answer or the answer stopped outgoing progress"; return false;
+					}
+				}
+				std::cout << "[net-directory-selftest] PASS queued_signals_receive_answers_before_the_outbox_drains" << std::endl;
 				return true;
 			}
 
@@ -3589,6 +3686,11 @@ namespace RTE {
 
 			std::string error;
 			const char* selected = std::getenv("CCCP_TEST_DIRECTORY_CASE");
+			if (selected && std::string(selected) == "protocol") {
+				if (!TestConnectionProtocolRefusal(&error) || !TestASupersededHostKeepsTheRowNoMore(&error)) return fail(error);
+				std::cout << "[net-directory-selftest] PASS" << std::endl;
+				return 0;
+			}
 #ifdef CCCP_WITH_GNS
 			if (!selected || std::string(selected) == "point3") {
 				if (!TestMissingListingKeepsTheRendezvous(&error)) return fail(error);

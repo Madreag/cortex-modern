@@ -638,6 +638,8 @@ namespace RTE {
 
 		/// Host: its setup screen is open or closed. Opening it stops a running count, and nothing starts while it is open.
 		void SetHostSetupOpen(bool open) { m_HostSetupOpen.store(open); }
+		/// Keeps a lobby's idle wait measured from the host's last menu input.
+		void NoteLobbyInput() { m_LobbyInput.store(true); }
 		void ReportRuntimeError(const std::string& error);
 		void Complete(const std::string& reason);
 		void FinishMatch(const std::string& result);
@@ -1476,9 +1478,8 @@ namespace RTE {
 		void RunCleanLeave();
 		/// The worker half of a leave: the §7 exchange, then - and only then - the round is told.
 		void LeaveWorkerMain(std::string result);
-		/// Ends the hosted session: tells every peer with the one reason that permits deleting a
-		/// recovery record (P22), then clears the registry, the ledger and the seats. Caller holds the lock.
-		void EndAdmissionSession();
+		/// Clears admission, preserving hosted recovery only for a handover or restart. Caller holds the lock.
+		void EndAdmissionSession(bool preserveHostedMatch = false);
 		void ResetRosterTransitionHistory();
 		/// Reads the session's roster into the seat views, then records what moved. Caller holds the lock.
 		void RefreshSeatViewsLocked(uint64_t observedAtMs);
@@ -1850,6 +1851,7 @@ namespace RTE {
 		std::atomic<bool> m_ReadyRequested{false};
 		std::atomic<bool> m_StartRequested{false};
 		std::atomic<bool> m_CancelStartRequested{false};
+		std::atomic<bool> m_LobbyInput{false};
 		std::atomic<bool> m_HostSetupOpen{false};
 		std::atomic<bool> m_CancelRequested{false};
 		std::atomic<bool> m_EverStarted{false};
