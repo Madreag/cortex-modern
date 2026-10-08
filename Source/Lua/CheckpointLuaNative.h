@@ -628,6 +628,7 @@ namespace RTE::CheckpointLua {
 		bool m_Persist = false;
 		std::shared_ptr<NativeImage> m_Image = std::make_shared<NativeImage>();
 		std::pmr::unordered_set<const void*> m_Queued{m_TransientResource};
+		std::pmr::unordered_set<const void*> m_Pinned{m_TransientResource};
 		std::pmr::vector<TValue> m_Queue{m_TransientResource};
 		bool m_Captured = false;
 
@@ -643,10 +644,14 @@ namespace RTE::CheckpointLua {
 		TValue At(int index) const { return *(index > 0 ? State()->base + index - 1 : State()->top + index); }
 		void Keep(int index) {
 			if (index < 0) index += lua_gettop(State()) + 1;
-			m_References.Push();
-			lua_pushvalue(State(), index);
-			lua_rawseti(State(), -2, ++m_References.count);
-			lua_pop(State(), 1);
+			const TValue value = At(index);
+			// One strong reference keeps every repeated token alive for this image.
+			if (!CheckpointWriter::BatchEnabled() || !tvisgcv(&value) || m_Pinned.insert(gcval(&value)).second) {
+				m_References.Push();
+				lua_pushvalue(State(), index);
+				lua_rawseti(State(), -2, ++m_References.count);
+				lua_pop(State(), 1);
+			}
 			// A cached descriptor's values must outlive this capture: the subject keeps them for every later freeze.
 			if (m_Persist) {
 				const int bucket = PushRetainedBucket();
