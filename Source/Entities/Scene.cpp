@@ -25,6 +25,8 @@
 #include "ConsoleMan.h"
 #include "SettingsMan.h"
 #include "ThreadMan.h"
+#include "FrameRecorder.h"
+#include "System.h"
 #include "AudioMan.h"
 #include "MetaMan.h"
 #include "ContentFile.h"
@@ -66,9 +68,26 @@
 #include "tracy/Tracy.hpp"
 
 #include <bit>
+#include <cstdint>
+#include <cstdlib>
+#include <format>
 #include <functional>
 #include <shared_mutex>
+#include <stdexcept>
+#include <string_view>
 #include <thread>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#undef GetClassName
+#elif defined(__linux__)
+#include <sys/resource.h>
+#endif
 
 using namespace RTE;
 
@@ -1518,6 +1537,24 @@ int Scene::Save(Writer& writer) const {
 
 namespace {
 	thread_local int64_t s_LastObjectCaptureUs = 0;
+	int64_t SnapshotThreadMinorFaults() {
+#ifdef __linux__
+		rusage usage{};
+		if (getrusage(RUSAGE_THREAD, &usage) != 0) throw std::runtime_error("could not read checkpoint thread page faults");
+		return usage.ru_minflt;
+#else
+		return 0;
+#endif
+	}
+	int64_t SnapshotThreadCpuUnits() {
+#ifdef _WIN32
+		ULONG64 cycles = 0;
+		if (!QueryThreadCycleTime(GetCurrentThread(), &cycles)) throw std::runtime_error("could not read checkpoint thread cycles");
+		return static_cast<int64_t>(cycles);
+#else
+		return FrameRecorder::ThreadCpuNanoseconds();
+#endif
+	}
 
 	// An object as a capture trace names it.
 	std::string TraceName(const SceneObject* object) {
@@ -1625,10 +1662,14 @@ int64_t Scene::LastObjectCaptureUs() {
 
 std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, const std::list<SceneObject*>& objects, const std::function<bool(const SceneObject*)>& placeable, bool saveFullData) {
 	const auto started = std::chrono::steady_clock::now();
+	static const bool cpuRequested = [] { const char* value = std::getenv("CCCP_CHECKPOINT_NATIVE_CPU"); return value && std::string_view(value) == "1"; }();
+	const bool cpuTrace = (CaptureTrace::Active() || cpuRequested) && CheckpointWriter::BatchEnabled();
+	if (cpuTrace) SnapshotThreadCpuUnits();
 	std::vector<const SceneObject*> order;
 	order.reserve(objects.size());
 	for (const SceneObject* object: objects) if (placeable(object)) order.push_back(object);
 	std::vector<CheckpointText> texts(order.size());
+	std::vector<int64_t> rootCpu(cpuTrace ? order.size() : 0), rootWall(cpuTrace ? order.size() : 0), rootFaults(cpuTrace ? order.size() : 0);
 	const Writer::SaveOverrides* overrides = writer.GetSaveOverrides();
 	const int indent = writer.GetIndent();
 	AudioMan::SoundCheckpointSaveScope* sounds = AudioMan::SoundCheckpointSaveScope::Current();
@@ -1650,11 +1691,19 @@ std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, con
 		for (size_t index = first; index < last; ++index) {
 			const SceneObject* object = order[index];
 			CaptureTrace::Span span("mo", CaptureTrace::Active() ? TraceName(object) : std::string());
+			const int64_t cpuStart = cpuTrace ? SnapshotThreadCpuUnits() : 0;
+			const int64_t faultStart = cpuTrace ? SnapshotThreadMinorFaults() : 0;
+			const auto wallStart = cpuTrace ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			texts[index] = Writer::Capture([&](Writer& owned) {
 				owned.SetSaveOverrides(overrides);
 				owned.SetCaptureObject(object);
 				SaveSceneObject(owned, object, false, saveFullData);
 			}, indent);
+			if (cpuTrace) {
+				rootCpu[index] = SnapshotThreadCpuUnits() - cpuStart;
+				rootFaults[index] = SnapshotThreadMinorFaults() - faultStart;
+				rootWall[index] = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - wallStart).count();
+			}
 		}
 	};
 	// Few objects carry most of the work (an actor's whole attachable tree), so each is an item of its own, the last
@@ -1679,6 +1728,21 @@ std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, con
 	{
 		std::lock_guard lock(s_AheadPlanMutex);
 		s_AheadPlan = std::move(ahead.heavy);
+	}
+	if (cpuTrace) {
+		int64_t cpu = 0, wall = 0, maximumCpu = 0, faults = 0;
+		for (size_t index = 0; index < order.size(); ++index) {
+			cpu += rootCpu[index]; wall += rootWall[index]; faults += rootFaults[index]; maximumCpu = std::max(maximumCpu, rootCpu[index]);
+		}
+#ifdef _WIN32
+		const std::string detail = std::format("roots={} cpu_cycles={} wall_sum_us={} max_cpu_cycles={}", order.size(), cpu, wall, maximumCpu);
+#elif defined(__linux__)
+		const std::string detail = std::format("roots={} cpu_us={} wall_sum_us={} max_cpu_us={} minor_faults={}", order.size(), cpu / 1000, wall, maximumCpu / 1000, faults);
+#else
+		const std::string detail = std::format("roots={} cpu_us={} wall_sum_us={} max_cpu_us={} minor_faults=unavailable", order.size(), cpu / 1000, wall, maximumCpu / 1000);
+#endif
+		if (cpuRequested) System::PrintDiagnosticLine("[checkpoint-native-cpu] " + detail);
+		else { CaptureTrace::Span receipt("native_root_cpu", detail); }
 	}
 	s_LastObjectCaptureUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 	return texts;

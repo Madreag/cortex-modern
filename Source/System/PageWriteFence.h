@@ -35,8 +35,9 @@ namespace RTE {
 
 		using CopyObserver = bool (*)(void*, uintptr_t) noexcept;
 		using CopyArm = bool (*)(void*, uintptr_t, size_t) noexcept;
+		struct CopyWatchCosts { int64_t setupUs = 0, armUs = 0; };
 		/// The owner keeps the observer alive until UnwatchCopies, including after an arm callback refuses; buffers cover whole system pages.
-		static bool WatchCopies(void* owner, Buffer buffer, CopyObserver observer, void* context, CopyArm arm = nullptr, void* armContext = nullptr);
+		static bool WatchCopies(void* owner, Buffer buffer, CopyObserver observer, void* context, CopyArm arm = nullptr, void* armContext = nullptr, CopyWatchCosts* costs = nullptr);
 		static void UnwatchCopies(void* owner);
 		static size_t SystemPageBytes();
 		/// Opens a page only after the observer or its copy worker has saved it.

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -199,7 +200,8 @@ namespace RTE {
 		}
 	} // namespace
 
-	bool PageWriteFence::WatchCopies(void* owner, Buffer buffer, CopyObserver observer, void* context, CopyArm arm, void* armContext) {
+	bool PageWriteFence::WatchCopies(void* owner, Buffer buffer, CopyObserver observer, void* context, CopyArm arm, void* armContext, CopyWatchCosts* costs) {
+		const auto started = costs ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		const size_t page = PageBytes();
 		const uintptr_t begin = reinterpret_cast<uintptr_t>(buffer.data);
 		if (!owner || !observer || !page || !buffer.bytes || begin % page || buffer.bytes % page || buffer.bytes > UINTPTR_MAX - begin) return false;
@@ -225,7 +227,13 @@ namespace RTE {
 		if (!previous) copies.count.fetch_add(1, std::memory_order_release);
 		// The arm callback holds the copy coordinator while protecting and adding
 		// a generation. Handler and worker writes cannot open the new fence midway.
-		if (arm) return arm(armContext, begin, buffer.bytes);
+		const auto arming = costs ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		if (costs) costs->setupUs = std::chrono::duration_cast<std::chrono::microseconds>(arming - started).count();
+		if (arm) {
+			const bool armed = arm(armContext, begin, buffer.bytes);
+			if (costs) costs->armUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - arming).count();
+			return armed;
+		}
 		if (Protect(begin, buffer.bytes, true)) return true;
 		Protect(begin, buffer.bytes, false);
 		*vacant = {};

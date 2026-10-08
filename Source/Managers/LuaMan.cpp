@@ -6664,6 +6664,16 @@ bool LuaStateWrapper::CaptureScriptGraph(CheckpointText& text, std::vector<std::
 	return CollectScriptGraph(nullptr, &text, problems);
 }
 
+namespace {
+	bool CheckpointPhaseCostsRequested() {
+		static const bool requested = [] {
+			const char* value = std::getenv("CCCP_CHECKPOINT_PHASES");
+			return value && std::string_view(value) == "1";
+		}();
+		return requested && CheckpointWriter::BatchEnabled();
+	}
+}
+
 bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector<std::string>& problems) {
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	const auto started = std::chrono::steady_clock::now();
@@ -6733,22 +6743,36 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		if (!m_NativeCache) m_NativeCache = std::make_shared<CheckpointLua::NativeCache>(m_State);
 		std::optional<CaptureTrace::Span> span(std::in_place, "graph_natives", std::to_string(g_LuaMan.GetStateIndex(this)));
 		CheckpointLua::CaptureScope natives(m_State, *m_NativeCache);
+		const bool phaseCosts = CheckpointPhaseCostsRequested();
+		const auto descriptorStarted = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		CheckpointLua::DescriptorRootScope descriptorRoots(m_State, restore.top, roots, image->callbacks, image->stateIndex);
+		const auto descriptorDone = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		natives.Capture();
 		span.reset();
 		const auto nativeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();
 		image->nativeUs = nativeUs;
+		const auto finishStarted = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		image->native = natives.Finish(m_State);
+		const auto finishDone = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		image->scratch = scratch.values;
 		// The stack and the birth counter go back before the protect; the objects the image names stay as they are until written.
 		restore.Run();
 		// A later VM write saves its page first, so the copy needs no whole-heap wait at VM entry.
 		span.emplace("graph_heap_freeze", std::to_string(g_LuaMan.GetStateIndex(this)));
-		image->heap = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit, true, CheckpointWriter::BatchEnabled());
+		CheckpointLua::HeapFreezeCosts heapCosts;
+		image->heap = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit, true, CheckpointWriter::BatchEnabled(), phaseCosts ? &heapCosts : nullptr);
 		span.reset();
 		const size_t bytes = image->heap.ByteCount();
 		const auto frozenUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 		if (FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats) {
+			if (phaseCosts) {
+				stats->nativeSetupUs = std::chrono::duration_cast<std::chrono::microseconds>(descriptorStarted - nativeStarted).count();
+				stats->descriptorUs = std::chrono::duration_cast<std::chrono::microseconds>(descriptorDone - descriptorStarted).count();
+				stats->nativeFinishUs = std::chrono::duration_cast<std::chrono::microseconds>(finishDone - finishStarted).count();
+				stats->heapSetupUs = heapCosts.setupUs;
+				stats->heapWatchSetupUs = heapCosts.watch.setupUs;
+				stats->heapWatchArmUs = heapCosts.watch.armUs;
+			}
 			stats->observations.push_back(image->observations);
 			++stats->states;
 			stats->nativeUs += nativeUs;
@@ -6817,6 +6841,9 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	std::vector<std::vector<std::string>> refusals(order.size());
 	std::vector<FrozenCaptureStats> parts(order.size());
 	std::vector<char> complete(order.size(), 0);
+	const bool phaseCosts = CheckpointPhaseCostsRequested();
+	const auto phaseOrigin = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+	std::vector<std::pair<int64_t, int64_t>> stateCosts(phaseCosts ? order.size() : 0);
 	CheckpointLua::NativeEffects effects;
 	const LuaScriptGraphNativeCaptureData* shared = LuaScriptGraphNativeCaptureScope::Current();
 	// Only a match's capture leaves receipts of what its page copies cost; a single-player save leaves none to collect.
@@ -6834,7 +6861,11 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 		LuaScriptGraphNativeCaptureScope lookups(shared);
 		FrozenCaptureStats* const previous = LuaMan::s_FrozenCaptureStats;
 		LuaMan::s_FrozenCaptureStats = &parts[index];
+		const auto start = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		complete[index] = order[index]->CaptureScriptGraph(texts[index], refusals[index], true);
+		if (phaseCosts) stateCosts[index] = {
+		    std::chrono::duration_cast<std::chrono::microseconds>(start - phaseOrigin).count(),
+		    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()};
 		LuaMan::s_FrozenCaptureStats = previous;
 	};
 	// Each state is its own VM behind its own lock, so the states are captured side by side; this thread takes the states
@@ -6864,6 +6895,9 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	bool all = true;
 	for (size_t index = 0; index < order.size(); ++index) {
 		const FrozenCaptureStats& part = parts[index];
+		if (phaseCosts) System::PrintDiagnosticLine(std::format("[checkpoint-lua-phase] state={} start_us={} total_us={} callbacks_us={} roots_us={} native_us={} native_setup_us={} descriptor_us={} enum_us={} world_us={} answers_us={} native_finish_us={} heap_us={} heap_setup_us={} heap_watch_setup_us={} heap_watch_arm_us={} userdata={} bytes={}",
+		    index, stateCosts[index].first, stateCosts[index].second, part.callbacksUs, part.rootsUs, part.nativeUs, part.nativeSetupUs, part.descriptorUs,
+		    part.enumUs, part.worldUs, part.answerUs, part.nativeFinishUs, part.heapUs, part.heapSetupUs, part.heapWatchSetupUs, part.heapWatchArmUs, part.userdata, part.bytes));
 		stats.observations.insert(stats.observations.end(), part.observations.begin(), part.observations.end());
 		stats.states += part.states; stats.nativeUs += part.nativeUs; stats.heapUs += part.heapUs; stats.copyUs += part.copyUs;
 		stats.pages += part.pages; stats.bytes += part.bytes; stats.userdata += part.userdata; stats.cached += part.cached;

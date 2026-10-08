@@ -782,6 +782,14 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	struct TraceEnd {
 		~TraceEnd() { CaptureTrace::End(); }
 	} traceEnd;
+	struct CaptureTailCost {
+		uint64_t tick;
+		std::optional<std::chrono::steady_clock::time_point> from;
+		~CaptureTailCost() {
+			if (from) System::PrintDiagnosticLine(std::format("[checkpoint-capture-tail] tick={} tail_us={}", tick,
+			    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - *from).count()));
+		}
+	} tailCost{tick};
 	std::optional<CaptureTrace::Span> simSpan(std::in_place, "sim_prepare");
 	g_MovableMan.CompleteQueuedMOIDDrawings();
 	g_MovableMan.WaitForActorsSeeTask();
@@ -1049,6 +1057,9 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->dirtyRatio = image->imageBytes ? static_cast<double>(dirtyBytes) / static_cast<double>(image->imageBytes) : 0;
 	const int64_t freezeNs = freezeSpan.Stop();
 	image->freezeUs = freezeNs / 1000;
+	if (!matchId.empty()) {
+		if (const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); value && std::string_view(value) == "1") tailCost.from = std::chrono::steady_clock::now();
+	}
 	// The full-state oracle's own freeze is an instrument's cost; an autosave's is the product's.
 	if (fullStateOnly) HarnessCost::Charge(HarnessCost::FullState, freezeNs);
 	simSpan.reset();

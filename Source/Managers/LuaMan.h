@@ -25,7 +25,7 @@ namespace RTE {
 	namespace CheckpointLua { class HeapOwner; class NativeCache; struct CopyReceipt; struct GraphWorker; }
 	struct GraphDirt;
 
-	/// What one frozen script graph capture cost on the simulation thread, summed over the states.
+	/// Elapsed costs of the frozen states; concurrent states overlap.
 	struct FrozenCaptureStats {
 		std::vector<std::shared_ptr<GraphDirt>> observations;
 		int states = 0;
@@ -49,6 +49,8 @@ namespace RTE {
 		int64_t enumUs = 0;
 		int64_t worldUs = 0;
 		int64_t answerUs = 0;
+		int64_t nativeSetupUs = 0, descriptorUs = 0, nativeFinishUs = 0;
+		int64_t heapSetupUs = 0, heapWatchSetupUs = 0, heapWatchArmUs = 0;
 		size_t copyMapped = 0; // Every Lua heap copy mapped after the capture, idle buffers included, and the idle part.
 		size_t copyIdle = 0;
 	};
