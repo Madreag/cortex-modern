@@ -348,23 +348,72 @@ namespace {
 			at += sizeof(value);
 		}
 	}
-	template<size_t Offset, class T> void PackAtomField(char* __restrict into, std::pmr::vector<char>& dynamic, const T& value) {
-		size_t at = Offset;
-		PackAtomValue(into, at, dynamic, value);
-		if (at != Offset + AtomPackedSize<T>()) throw std::logic_error("atom field capture size differs");
+	template<class T> constexpr bool AtomDynamicField = !std::is_array_v<T> && !CheckpointArray<T> && requires { typename T::value_type; };
+	template<class T, bool ColorField> constexpr size_t AtomMetadataCount() {
+		if constexpr (std::is_same_v<T, Color>) return ColorField ? 1 : 0;
+		else if constexpr (AtomDynamicField<T>) return ColorField ? 0 : 1;
+		else if constexpr (std::is_array_v<T>) return std::extent_v<T> * AtomMetadataCount<std::remove_extent_t<T>, ColorField>();
+		else if constexpr (CheckpointArray<T>) return std::tuple_size_v<T> * AtomMetadataCount<typename T::value_type, ColorField>();
+		else if constexpr (requires { typename T::first_type; typename T::second_type; }) return AtomMetadataCount<typename T::first_type, ColorField>() + AtomMetadataCount<typename T::second_type, ColorField>();
+		else return 0;
 	}
-	template<class... T, size_t... Index> void PackAtomFieldsAt(char* __restrict into, std::pmr::vector<char>& dynamic,
-	    const std::tuple<const T&...>& fields, std::index_sequence<Index...>) {
-		constexpr auto offsets = [] {
-			std::array<size_t, sizeof...(T)> result;
-			size_t index = 0, at = 0;
-			((result[index++] = at, at += AtomPackedSize<T>()), ...);
-			return result;
-		}();
-		(PackAtomField<offsets[Index]>(into, dynamic, std::get<Index>(fields)), ...);
+	struct AtomFieldRange {
+		enum class Source { Image, Colors, Dynamic };
+		Source source;
+		size_t offset, into, size;
+	};
+	void AddAtomRange(std::vector<AtomFieldRange>& ranges, AtomFieldRange::Source source, size_t offset, size_t& into, size_t size) {
+		if (!ranges.empty() && ranges.back().source == source && ranges.back().offset + ranges.back().size == offset && ranges.back().into + ranges.back().size == into) ranges.back().size += size;
+		else ranges.push_back({source, offset, into, size});
+		into += size;
 	}
-	template<class... T> void PackAtomFields(char* into, std::pmr::vector<char>& dynamic, const T&... values) {
-		PackAtomFieldsAt(into, dynamic, std::tie(values...), std::index_sequence_for<T...>{});
+	template<class T> void AtomFieldRanges(std::vector<AtomFieldRange>& ranges, const Atom* atom, size_t& into, size_t& colors, size_t& dynamic, const T& value) {
+		using Source = AtomFieldRange::Source;
+		if constexpr (std::is_same_v<T, Vector>) {
+			AtomFieldRanges(ranges, atom, into, colors, dynamic, value.m_X);
+			AtomFieldRanges(ranges, atom, into, colors, dynamic, value.m_Y);
+		} else if constexpr (std::is_same_v<T, Color>) {
+			AddAtomRange(ranges, Source::Colors, colors++ * 4 * sizeof(int), into, 4 * sizeof(int));
+		} else if constexpr (std::is_array_v<T> || CheckpointArray<T>) {
+			for (const auto& field: value) AtomFieldRanges(ranges, atom, into, colors, dynamic, field);
+		} else if constexpr (requires { typename T::first_type; typename T::second_type; }) {
+			AtomFieldRanges(ranges, atom, into, colors, dynamic, value.first);
+			AtomFieldRanges(ranges, atom, into, colors, dynamic, value.second);
+		} else if constexpr (AtomDynamicField<T>) {
+			AddAtomRange(ranges, Source::Dynamic, dynamic++ * 2 * sizeof(size_t), into, 2 * sizeof(size_t));
+		} else {
+			static_assert(std::is_trivially_copyable_v<T> && sizeof(T) == AtomPackedSize<T>());
+			const uintptr_t base = reinterpret_cast<uintptr_t>(atom), field = reinterpret_cast<uintptr_t>(&value);
+			if (field < base || field - base > sizeof(Atom) - sizeof(T)) throw std::logic_error("atom field lies outside its snapshot");
+			AddAtomRange(ranges, Source::Image, field - base, into, sizeof(T));
+		}
+	}
+	template<class Record, class T> void CaptureAtomMetadata(Record& record, std::pmr::vector<char>& bytes, size_t& colors, size_t& dynamic, const T& value) {
+		if constexpr (std::is_same_v<T, Color>) {
+			const size_t at = colors++ * 4;
+			record.colors[at] = value.GetR(); record.colors[at + 1] = value.GetG(); record.colors[at + 2] = value.GetB(); record.colors[at + 3] = value.GetIndex();
+		} else if constexpr (std::is_array_v<T> || CheckpointArray<T>) {
+			for (const auto& field: value) CaptureAtomMetadata(record, bytes, colors, dynamic, field);
+		} else if constexpr (requires { typename T::first_type; typename T::second_type; }) {
+			CaptureAtomMetadata(record, bytes, colors, dynamic, value.first); CaptureAtomMetadata(record, bytes, colors, dynamic, value.second);
+		} else if constexpr (AtomDynamicField<T>) {
+			const size_t count = value.size(), offset = bytes.size(), at = dynamic++ * 2;
+			constexpr size_t elementBytes = AtomPackedSize<typename T::value_type>();
+			if (count > (bytes.max_size() - offset) / elementBytes) throw std::length_error("atom array is too large");
+			record.dynamic[at] = count; record.dynamic[at + 1] = offset;
+			using Element = typename T::value_type;
+			if constexpr ((std::is_integral_v<Element> || std::is_enum_v<Element> || std::is_same_v<Element, float>) && requires { value.data(); }) {
+				static_assert(elementBytes == sizeof(Element));
+				if (count) {
+					const char* first = reinterpret_cast<const char*>(value.data());
+					bytes.insert(bytes.end(), first, first + count * elementBytes);
+				}
+			} else {
+				bytes.resize(offset + count * elementBytes);
+				size_t next = offset;
+				for (const auto& field: value) PackAtomValue(bytes.data(), next, bytes, field);
+			}
+		}
 	}
 	template<class T> auto UnpackAtomValue(std::string_view& values, std::string_view dynamic) {
 		if constexpr (std::is_same_v<T, bool>) {
@@ -413,15 +462,37 @@ CheckpointText Atom::CaptureCheckpointList(const std::vector<Atom*>& atoms) {
 	using Types = decltype(VisitCheckpoint(types, std::declval<const Atom&>()));
 	const auto size = [](const auto&... values) { return std::integral_constant<size_t, (AtomPackedSize<std::remove_cvref_t<decltype(values)>>() + ... + size_t{0})>{}; };
 	constexpr size_t width = decltype(VisitCheckpoint(size, std::declval<const Atom&>()))::value;
+	const auto colorCount = [](const auto&... values) { return std::integral_constant<size_t, (AtomMetadataCount<std::remove_cvref_t<decltype(values)>, true>() + ... + size_t{0})>{}; };
+	const auto dynamicCount = [](const auto&... values) { return std::integral_constant<size_t, (AtomMetadataCount<std::remove_cvref_t<decltype(values)>, false>() + ... + size_t{0})>{}; };
 	struct Record {
 		Record() {}
-		std::array<char, width> values;
+		std::array<int, decltype(VisitCheckpoint(colorCount, std::declval<const Atom&>()))::value * 4> colors;
+		std::array<size_t, decltype(VisitCheckpoint(dynamicCount, std::declval<const Atom&>()))::value * 2> dynamic;
 		std::array<size_t, 3> materials;
 		std::array<long, 5> links;
 		bool groupIgnoreList;
 	};
 	auto storage = CheckpointBuffer::LeaseCaptureStorage();
 	auto* resource = storage ? storage.get() : std::pmr::get_default_resource();
+	std::vector<AtomFieldRange> ranges;
+	size_t firstByte = sizeof(Atom), lastByte = 0;
+	if (!atoms.empty()) {
+		size_t into = 0, colors = 0, dynamic = 0;
+		const auto describe = [&](const auto&... values) { (AtomFieldRanges(ranges, atoms.front(), into, colors, dynamic, values), ...); };
+		VisitCheckpoint(describe, *atoms.front());
+		if (into != width) throw std::logic_error("atom snapshot field size differs");
+		for (const auto& range: ranges) if (range.source == AtomFieldRange::Source::Image) {
+			firstByte = std::min(firstByte, range.offset); lastByte = std::max(lastByte, range.offset + range.size);
+		}
+		if (lastByte == 0) firstByte = 0;
+		for (auto& range: ranges) if (range.source == AtomFieldRange::Source::Image) range.offset -= firstByte;
+	} else firstByte = 0;
+	const size_t imageBytes = lastByte - firstByte;
+	struct Byte { char value; Byte() {} };
+	static_assert(sizeof(Byte) == 1 && std::is_trivially_copyable_v<Byte>);
+	std::pmr::vector<Byte> images{resource};
+	if (imageBytes && atoms.size() > images.max_size() / imageBytes) throw std::length_error("atom snapshots are too large");
+	images.resize(atoms.size() * imageBytes);
 	std::pmr::vector<Record> records{resource};
 	records.reserve(atoms.size());
 	std::pmr::vector<char> dynamic{resource};
@@ -458,22 +529,32 @@ CheckpointText Atom::CaptureCheckpointList(const std::vector<Atom*>& atoms) {
 			}
 		}
 		Record& record = records.emplace_back();
-		// Each field's fixed offset avoids an aliasable cursor in the inner loop.
-		const auto pack = [&](const auto&... values) { PackAtomFields(record.values.data(), dynamic, values...); };
-		VisitCheckpoint(pack, *atom);
+		// Only scalar ranges are decoded; copied pointer bytes never name live objects.
+		std::memcpy(images.data() + (records.size() - 1) * imageBytes, reinterpret_cast<const char*>(atom) + firstByte, imageBytes);
+		size_t colors = 0, arrays = 0;
+		const auto metadata = [&](const auto&... values) { (CaptureAtomMetadata(record, dynamic, colors, arrays, values), ...); };
+		VisitCheckpoint(metadata, *atom);
 		record.materials = indices;
 		record.links = atom->CaptureCheckpointLinkIDs();
 		record.groupIgnoreList = atom->m_IgnoreMOIDsByGroup != nullptr;
 		bytes += sizeof(Record);
 	}
-	bytes += dynamic.size();
+	bytes += images.size() + dynamic.size() + ranges.size() * sizeof(AtomFieldRange);
 	for (const CheckpointText& material: materials) bytes += sizeof(CheckpointText) + material.OwnedBytes();
 	// The saver formats owned atom fields in Atom2 order with their length prefixes.
-	return CheckpointText::Deferred([storage = std::move(storage), records = std::move(records), dynamic = std::move(dynamic), materials = std::move(materials)] {
+	return CheckpointText::Deferred([storage = std::move(storage), records = std::move(records), images = std::move(images), ranges = std::move(ranges), imageBytes,
+	    dynamic = std::move(dynamic), materials = std::move(materials)] {
 		std::string list = std::to_string(records.size()) + " ";
-		for (const Record& record: records) {
+		for (size_t index = 0; index < records.size(); ++index) {
+			const Record& record = records[index];
+			std::array<char, width> packed;
+			for (const auto& range: ranges) {
+				const char* source = range.source == AtomFieldRange::Source::Image ? reinterpret_cast<const char*>(images.data()) + index * imageBytes :
+				    range.source == AtomFieldRange::Source::Colors ? reinterpret_cast<const char*>(record.colors.data()) : reinterpret_cast<const char*>(record.dynamic.data());
+				std::memcpy(packed.data() + range.into, source + range.offset, range.size);
+			}
 			CheckpointWriter writer("Atom2");
-			const auto fields = UnpackAtomFields(Types{}, std::string_view(record.values.data(), record.values.size()), std::string_view(dynamic.data(), dynamic.size()));
+			const auto fields = UnpackAtomFields(Types{}, std::string_view(packed.data(), packed.size()), std::string_view(dynamic.data(), dynamic.size()));
 			std::apply([&writer](const auto&... values) { writer(values...); }, fields);
 			for (size_t index: record.materials) writer(materials.at(index));
 			writer(record.links, record.groupIgnoreList);
@@ -494,6 +575,22 @@ std::string Atom::CheckpointListSelfTestMismatch() {
 	{
 		auto first = std::make_unique<Atom>();
 		auto second = std::make_unique<Atom>();
+		const auto fill = []<class Self, class T>(Self& self, T& value, uint64_t& bits) -> void {
+			if constexpr (std::is_same_v<T, Vector>) {
+				self(self, value.m_X, bits); self(self, value.m_Y, bits);
+			} else if constexpr (std::is_same_v<T, Color>) {
+				value.SetR(17); value.SetG(31); value.SetB(47);
+			} else if constexpr (std::is_array_v<T> || CheckpointArray<T>) {
+				for (auto& field: value) self(self, field, bits);
+			} else if constexpr (!AtomDynamicField<T>) {
+				static_assert(std::is_trivially_copyable_v<T> && sizeof(T) <= sizeof(bits));
+				bits = bits * UINT64_C(6364136223846793005) + 1;
+				std::memcpy(&value, &bits, sizeof(T));
+			}
+		};
+		uint64_t bits = 31;
+		const auto allFields = [&](auto&... values) { (fill(fill, values, bits), ...); };
+		VisitCheckpoint(allFields, *second);
 		first->m_Offset.m_X = std::bit_cast<float>(uint32_t{0x7fc01234});
 		first->m_OriginalOffset.m_Y = -0.0F;
 		first->m_IgnoreMOIDs = {1, 17, 99};
