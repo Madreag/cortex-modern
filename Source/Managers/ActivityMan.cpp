@@ -1084,11 +1084,13 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	CaptureTrace::End();
 	bytes = image->imageBytes;
 	auto previousImage = cow.FinishImage(image);
+	auto pixelStorage = !matchId.empty() ? pixels.TakeStorage() : std::shared_ptr<const void>{};
 	if (fullStateOnly) {
 		// A round's periodic samples are one series, so a sample only ever stands in for an older one of its own round; a labelled
 		// capture answers one save or restore and is never replaced.
 		const AutosaveArchiveWriter::Submitted submitted = FullStateWriter().Submit([image, dump = m_FullStateDumpDirectory, round = m_FullStateRound, label = m_FullStateLabel, sceneCache, previousImage, retired = std::move(retired),
-		                                retiredLayers = std::move(retiredLayers)](bool replaced) mutable {
+		                                retiredLayers = std::move(retiredLayers), pixelStorage = std::move(pixelStorage)](bool replaced) mutable {
+			pixelStorage.reset();
 			retired.clear();
 			retiredLayers.clear();
 			previousImage.reset();
@@ -1176,7 +1178,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// are one series; a save the player asked for has none and is always written.
 	const AutosaveArchiveWriter::Submitted submitted = AutosaveWriter().Submit([this, image, layerNames, palette, fileName, path, matchId, tick, simThread, zipLevel, kind,
 	                                automatic, descriptor, manifest, pinnedCheckpointSource, sceneCache, previousImage,
-	                                retired = std::move(retired), retiredLayers = std::move(retiredLayers)](bool replaced) mutable {
+	                                retired = std::move(retired), retiredLayers = std::move(retiredLayers), pixelStorage = std::move(pixelStorage)](bool replaced) mutable {
+		pixelStorage.reset();
 		if (replaced) {
 			retired.clear();
 			retiredLayers.clear();

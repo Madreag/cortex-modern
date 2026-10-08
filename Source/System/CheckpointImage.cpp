@@ -1,6 +1,7 @@
 #include "CheckpointImage.h"
 #include "PageWriteFence.h"
 #include "CheckpointArchive.h"
+#include "BitmapCheckpoint.h"
 #include "ContentFile.h"
 #include "Writer.h"
 #include "Scene.h"
@@ -42,6 +43,7 @@
 #include <iomanip>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -1319,6 +1321,43 @@ bool RTE::RunCheckpointImageSelfTest() {
 			else fail("a_font_loaded_by_drawing_is_per_peer", mismatch);
 		}
 		// A capture's bitmap index is kept while the loaded bitmaps' version holds, so every way that changes them moves it.
+		{
+			auto bitmap = std::make_unique<BITMAP>();
+			auto sourceRows = std::make_unique<std::array<std::array<unsigned char, 5>, 3>>();
+			std::array<unsigned char*, 3> rowPointers;
+			GFX_VTABLE table{};
+			table.color_depth = 8;
+			bitmap->w = 5;
+			bitmap->h = 3;
+			bitmap->vtable = &table;
+			for (int row = 0; row < bitmap->h; ++row) rowPointers[row] = (*sourceRows)[row].data();
+			bitmap->line = rowPointers.data();
+			for (int row = 0; row < bitmap->h; ++row) std::memset(bitmap->line[row], 7, bitmap->w);
+			CheckpointText frozen;
+			std::shared_ptr<const void> storage;
+			bool parentRestored = false;
+			{
+				BitmapPixelCaptureScope parent;
+				const auto before = BitmapPixelCaptureScope::Capture(bitmap.get(), {});
+				for (int row = 0; row < bitmap->h; ++row) std::memset(bitmap->line[row], 9, bitmap->w);
+				{
+					BitmapPixelCaptureScope child;
+					frozen = BitmapPixelCaptureScope::Capture(bitmap.get(), {})->second;
+					storage = child.TakeStorage();
+				}
+				const auto after = BitmapPixelCaptureScope::Capture(bitmap.get(), {});
+				parentRestored = before && after && before->first == after->first;
+			}
+			bitmap.reset();
+			sourceRows.reset();
+			const std::weak_ptr<const void> held = storage;
+			const bool exact = std::async(std::launch::async, [storage = std::move(storage), frozen]() mutable {
+				storage.reset();
+				return frozen.Text() == std::string(15, char{9});
+			}).get();
+			if (parentRestored && exact && held.expired()) pass("pixel_capture_storage_moves_to_a_worker_after_nested_scopes", "parent restored, source gone, frozen pixels exact");
+			else fail("pixel_capture_storage_moves_to_a_worker_after_nested_scopes", "parent=" + std::to_string(parentRestored) + " pixels=" + std::to_string(exact) + " released=" + std::to_string(held.expired()));
+		}
 		{
 			const std::string missed = ContentFile::LoadedBitmapChangeMissedByIndex();
 			if (missed.empty()) pass("a_loaded_bitmap_change_by_any_way_reaches_the_next_index", "ways=12");

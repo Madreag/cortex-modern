@@ -1103,10 +1103,25 @@ struct BitmapPixelCaptureScope::State {
 	struct Cell { std::once_flag once; std::shared_ptr<const BitmapSnapshot> snapshot; CheckpointText text; };
 	std::mutex mutex;
 	std::unordered_map<const BITMAP*, std::shared_ptr<Cell>> cells;
+	std::thread::id captureThread = std::this_thread::get_id();
+	~State() {
+		static const bool report = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
+		const auto started = report ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		const size_t count = cells.size();
+		cells.clear();
+		if (report) System::PrintDiagnosticLine(std::format("[checkpoint-pixel-release] entries={} capture_thread={} release_thread={} off_capture_thread={} us={}", count,
+			std::hash<std::thread::id>{}(captureThread), std::hash<std::thread::id>{}(std::this_thread::get_id()), captureThread != std::this_thread::get_id(),
+			std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()));
+	}
 };
 std::atomic<BitmapPixelCaptureScope::State*> BitmapPixelCaptureScope::s_Current{nullptr};
 BitmapPixelCaptureScope::BitmapPixelCaptureScope() : m_State(std::make_unique<State>()), m_Previous(s_Current.exchange(m_State.get())) {}
-BitmapPixelCaptureScope::~BitmapPixelCaptureScope() { s_Current.store(m_Previous); }
+BitmapPixelCaptureScope::~BitmapPixelCaptureScope() { if (m_State) s_Current.store(m_Previous); }
+std::shared_ptr<const void> BitmapPixelCaptureScope::TakeStorage() {
+	if (!m_State || s_Current.load() != m_State.get()) throw std::logic_error("pixel storage requires the current joined capture");
+	s_Current.store(m_Previous);
+	return std::shared_ptr<State>(std::move(m_State));
+}
 std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> BitmapPixelCaptureScope::Capture(
     const BITMAP* bitmap, const std::shared_ptr<const BitmapSnapshot>& previous) {
 	State* state = s_Current.load();

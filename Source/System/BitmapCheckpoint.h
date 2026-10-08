@@ -15,6 +15,8 @@ namespace RTE {
 		~BitmapPixelCaptureScope();
 		BitmapPixelCaptureScope(const BitmapPixelCaptureScope&) = delete;
 		BitmapPixelCaptureScope& operator=(const BitmapPixelCaptureScope&) = delete;
+		/// Hands the joined capture's buffers to the saver for release there.
+		std::shared_ptr<const void> TakeStorage();
 		static std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> Capture(
 		    const BITMAP* bitmap, const std::shared_ptr<const BitmapSnapshot>& previous);
 	private:
