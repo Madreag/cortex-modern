@@ -152,7 +152,6 @@ SoundContainer& DynamicSongSection::SelectTransitionSoundContainer() {
 					}
 				}
 
-				// Music advances on the local audio clock, independently of simulation ticks.
 				unsigned int randomIndex = validIndices[g_RenderRNG.RandomNum(0, static_cast<int>(validIndices.size()) - 1)];
 				m_LastTransitionSoundContainerIndex = randomIndex;
 				return m_TransitionSoundContainers[randomIndex];
