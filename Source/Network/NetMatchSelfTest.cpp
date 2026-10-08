@@ -17997,8 +17997,10 @@ namespace RTE {
 			else if (name == "state-receipts") passed = TestLobbyStateReceiptsAreBoundAndRepeated(&error);
 			else if (name == "joining-lobby") passed = TestAJoiningLobbyWaitsForHostConfig(&error);
 			else if (name == "relay-core") {
+				// RunBeforeInitialization already checked settings and candidate policy,
+				// before the global SettingsMan singleton was constructed.
 				passed = TestWrittenConfigsHoldNoRelayLogin(&error) && TestTheReportListsEveryConnection(&error) &&
-				         TestConnectedRouteEvidence(&error) && TestRelayOfferAndPolicy(&error) && TestRelayOfferRefresh(&error) &&
+				         TestConnectedRouteEvidence(&error) && TestRelayOfferRefresh(&error) &&
 				         TestLobbyRelayAdoption(&error) && TestInternetTicketRecovery(&error) && TestSessionIdJoinRefusals(&error);
 			}
 			else if (name == "relay-join-fix") {
