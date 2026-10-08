@@ -9909,7 +9909,7 @@ static std::string ResyncSaveName() {
 			selected = NetRelayConfig::Fixed(settings.GetNetworkPlayerTurnServers(), settings.GetNetworkPlayerTurnUser(), settings.GetNetworkPlayerTurnPass(), "personal", now + 3600);
 		}
 		if (config.connectionMode != 1 && selected.Usable(now)) {
-			selected.UdpLists(config.turnServerList, config.turnUserList, config.turnPassList);
+			selected.TurnLists(config.turnServerList, config.turnUserList, config.turnPassList);
 			config.relayOffer = RelayOfferName(selected);
 		}
 		config.iceEnable = (config.stunServerList.empty() ? 2 : 6) | (config.turnServerList.empty() ? 0 : 1);
@@ -10160,7 +10160,7 @@ static std::string ResyncSaveName() {
 					update.turnServerList.clear(); update.turnUserList.clear(); update.turnPassList.clear();
 					update.relayOffer = "none";
 					if (offer.Usable(UnixNowMs(nullptr) / 1000)) {
-						offer.UdpLists(update.turnServerList, update.turnUserList, update.turnPassList);
+						offer.TurnLists(update.turnServerList, update.turnUserList, update.turnPassList);
 						update.relayOffer = RelayOfferName(offer);
 					}
 					update.iceEnable = initial.connectionMode == 2 ? 1 : (initial.stunServerList.empty() ? 2 : 6) | (update.turnServerList.empty() ? 0 : 1);

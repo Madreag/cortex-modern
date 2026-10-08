@@ -17009,7 +17009,7 @@ namespace RTE {
 			const int masks[] = {7, 6, 1};
 			if (GnsTransport::ConnectionPolicyAllowsRoute(mode, false) != (mode != 2) ||
 			    GnsTransport::ConnectionPolicyAllowsRoute(mode, true) != (mode != 1)) { *error = "selected route bypassed the player's connection policy"; return false; }
-			if (ice.iceEnable != masks[mode] || (mode == 1 ? !ice.turnServerList.empty() : ice.turnServerList != "relay.example:3478") ||
+			if (ice.iceEnable != masks[mode] || (mode == 1 ? !ice.turnServerList.empty() : ice.turnServerList != "relay.example:3478,turn:relay.example:3478?transport=tcp,turns:relay.example:5349?transport=tcp") ||
 			    (mode == 2 && !ice.stunServerList.empty())) {
 				*error = "connection preference did not constrain ICE candidate types or TURN credentials";
 				return false;
@@ -17025,10 +17025,10 @@ namespace RTE {
 			return false;
 		}
 		settings.SetNetworkPlayerTurnServers("");
-		const auto parallel = NetRelayConfig::Fixed("one.example:3478,two.example:3478", "one-user,two-user", "one-pass,two-pass", "parallel", now + 3600);
+		const auto parallel = NetRelayConfig::Fixed("one.example:3478,turn:two.example:3478?transport=tcp,turns:three.example:443?transport=tcp", "one-user,two-user,three-user", "one-pass,two-pass,three-pass", "parallel", now + 3600);
 		std::string parallelServers, parallelUsers, parallelPasswords;
-		parallel.UdpLists(parallelServers, parallelUsers, parallelPasswords);
-		if (!parallel.Valid() || parallelServers != "one.example:3478,two.example:3478" || parallelUsers != "one-user,two-user" || parallelPasswords != "one-pass,two-pass") { *error = "existing parallel TURN logins did not retain their server mapping"; return false; }
+		parallel.TurnLists(parallelServers, parallelUsers, parallelPasswords);
+		if (!parallel.Valid() || parallelServers != "one.example:3478,turn:two.example:3478?transport=tcp,turns:three.example:443?transport=tcp" || parallelUsers != "one-user,two-user,three-user" || parallelPasswords != "one-pass,two-pass,three-pass") { *error = "parallel TURN logins did not retain their UDP/TCP/TLS server mapping"; return false; }
 		NetRelayConfig expired = relay;
 		expired.expiresAt = now;
 		if (!NetMatchService::BuildIceConfig(settings, "", 41011, expired).turnServerList.empty()) {
@@ -17037,11 +17037,12 @@ namespace RTE {
 		}
 		settings.SetNetworkConnectionMode(SettingsMan::NetworkConnectionMode::RelayOnly);
 		const auto tlsOnly = NetRelayConfig::Fixed("turns:relay.example:443?transport=tcp", "temporary-user", "temporary-password", "tls-only", now + 3600);
-		// The native ICE client speaks UDP TURN only, so a TLS-only offer yields no endpoint and the join refuses by name.
-		if (!NetMatchService::BuildIceConfig(settings, "", 41011, tlsOnly).turnServerList.empty()) {
-			*error = "Relay only turned a TLS-only host offer into a UDP relay endpoint";
+		// A network that blocks UDP still receives the TLS URI, including its transport.
+		if (NetMatchService::BuildIceConfig(settings, "", 41011, tlsOnly).turnServerList != "turns:relay.example:443?transport=tcp") {
+			*error = "Relay only discarded or changed a TLS-only host offer";
 			return false;
 		}
+		if (!NetRelayConfig::Fixed("turns:relay.example:443?transport=udp", "user", "password", "invalid", now + 3600).Empty()) { *error = "unsupported DTLS relay URI was accepted as TLS"; return false; }
 		std::cout << "[net-match-selftest] PASS relay offer: versioned config, expiry, secret refusal, player modes and own-relay precedence" << std::endl;
 		return true;
 	}

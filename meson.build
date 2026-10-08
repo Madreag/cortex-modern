@@ -347,6 +347,7 @@ if gns_mode != 'disabled'
               compiler.find_library('utf8_validity', dirs: [gns_dep_lib_dir], required: gns_required),
               compiler.find_library('abseil_dll', dirs: [gns_dep_lib_dir], required: gns_required),
               compiler.find_library('libcrypto', dirs: [gns_dep_lib_dir], required: gns_required),
+              compiler.find_library('libssl', dirs: [gns_dep_lib_dir], required: gns_required),
             ]
             add_project_link_arguments(['crypt32.lib', 'Iphlpapi.lib'], language: 'cpp')
           endif
@@ -355,6 +356,9 @@ if gns_mode != 'disabled'
             dependency('protobuf', required: gns_required),
             dependency('openssl', required: gns_required),
           ]
+          if host_machine.system() == 'darwin'
+            deps += [dependency('appleframeworks', modules: ['Security', 'CoreFoundation'])]
+          endif
         endif
       elif gns_required
         error('GameNetworkingSockets_s library was not found under gns_root')

@@ -25,8 +25,8 @@ namespace RTE {
 		std::string ToJson() const;
 		static bool FromJson(const std::string& text, NetRelayConfig& out);
 		static NetRelayConfig Fixed(const std::string& servers, const std::string& user, const std::string& password, const std::string& matchId, uint64_t expiry);
-		/// GNS's native ICE client consumes UDP host:port entries with parallel credential lists.
-		void UdpLists(std::string& servers, std::string& users, std::string& passwords) const;
+		/// Native ICE consumes UDP addresses and TCP/TLS URIs with parallel credential lists.
+		void TurnLists(std::string& servers, std::string& users, std::string& passwords) const;
 	};
 
 	/// The relay logins handed to the transport, so no log line the harness keeps carries one.

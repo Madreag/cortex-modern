@@ -26,7 +26,7 @@
 #include <steam/steamnetworkingcustomsignaling.h>
 #include <steam/steamnetworkingsockets.h>
 // A relayed route dies once its TURN permission lapses unless the library refreshes it.
-#if !defined(STEAMNETWORKINGSOCKETS_TURN_LIFETIME) || !defined(STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY)
+#if !defined(STEAMNETWORKINGSOCKETS_TURN_LIFETIME) || !defined(STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY) || !defined(STEAMNETWORKINGSOCKETS_TURN_STREAMS)
 #error "GameNetworkingSockets without external/patches/gns-turn-lifetime.patch; build it into <GNS_ROOT>-turnfix, see docs/turn-relay.md"
 #endif
 #endif
@@ -41,6 +41,9 @@ namespace RTE {
 		std::string server, result;
 		while (std::getline(input, server, ',')) {
 			if (server.empty()) continue;
+			if (server.starts_with("turns:")) server.erase(0, 6);
+			else if (server.starts_with("turn:")) server.erase(0, 5);
+			if (const auto query = server.find('?'); query != std::string::npos) server.resize(query);
 			std::string host = server;
 			if (server.front() == '[') {
 				const auto end = server.find(']');

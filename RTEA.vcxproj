@@ -835,7 +835,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(GNS_ROOT)\lib;$(GNS_DEP_ROOT)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>GameNetworkingSockets_s.lib;libprotobuf.lib;utf8_validity.lib;abseil_dll.lib;libcrypto.lib;ws2_32.lib;crypt32.lib;winmm.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>GameNetworkingSockets_s.lib;libprotobuf.lib;utf8_validity.lib;abseil_dll.lib;libcrypto.lib;libssl.lib;ws2_32.lib;crypt32.lib;winmm.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup>
