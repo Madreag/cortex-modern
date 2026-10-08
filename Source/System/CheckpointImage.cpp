@@ -960,6 +960,43 @@ end
 		else fail("a_soundset_write_moves_its_owner_stamp", "the sound set did not stamp its container once");
 	}
 	{
+		struct InertiaProbe : MOSRotating {
+			InertiaProbe() {
+				m_UniqueID = GetNextUniqueID();
+				m_pAtomGroup = new AtomGroup();
+				m_pAtomGroup->SetOwner(this);
+			}
+		} owner;
+		owner.SetMass(2.0F);
+		AtomGroup* group = owner.GetAtomGroup();
+		group->SetAtomList({new Atom(Vector(3.0F, 4.0F), g_SceneMan.GetMaterialFromID(g_MaterialAir), &owner)});
+		CheckpointCache cache;
+		const auto capture = [&owner](CheckpointCache* cache) {
+			CheckpointWriter::CacheScope scope(cache);
+			return Writer::Capture([&owner](Writer& writer) { Scene::SaveSceneObject(writer, &owner, false, true); }).Text();
+		};
+		for (float mass: {2.0F, 4.0F}) {
+			owner.SetMass(mass);
+			cache.Begin();
+			const std::string before = capture(&cache);
+			cache.Begin();
+			const std::string reused = capture(&cache);
+			const bool exercisedReuse = before == reused && cache.Reused() > 0;
+			const float inertia = group->GetMomentOfInertia();
+			const std::string fresh = capture(nullptr);
+			cache.Begin();
+			const std::string cached = capture(&cache);
+			const uint64_t stamp = owner.CheckpointWriteGeneration();
+			const float repeated = group->GetMomentOfInertia();
+			const char* row = "lazy_inertia_refresh_updates_the_cached_scene";
+			if (exercisedReuse && before != fresh && cached == fresh && inertia > 0.0F && inertia == repeated && group->GetStoredOwnerMass() == mass && owner.CheckpointWriteGeneration() == stamp) {
+				pass(row, "mass " + std::to_string(mass));
+			} else {
+				fail(row, "mass " + std::to_string(mass) + " reuse=" + std::to_string(exercisedReuse) + " refreshed=" + std::to_string(before != fresh) + " cached=" + std::to_string(cached == fresh));
+			}
+		}
+	}
+	{
 		struct QuietCounterProbe : Actor {
 			QuietCounterProbe() {
 				m_AllLoadedScripts.push_back("checkpoint-counter-probe");
