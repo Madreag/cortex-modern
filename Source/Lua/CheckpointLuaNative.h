@@ -1261,7 +1261,8 @@ namespace RTE::CheckpointLua {
 					Describe(object, topologies[chunk], nullptr);
 				}
 			};
-			ParallelWork(g_ThreadMan.GetPriorityThreadPool(), chunks, walk).Finish();
+			BS::thread_pool& pool = CheckpointWriter::BatchEnabled() ? g_ThreadMan.GetCheckpointThreadPool() : g_ThreadMan.GetPriorityThreadPool();
+			ParallelWork(pool, chunks, walk).Finish();
 			for (size_t chunk = 0; chunk < chunks; ++chunk) {
 				world->objects.insert(world->objects.end(), objects[chunk].begin(), objects[chunk].end());
 				for (auto& [identity, object]: topologies[chunk]) world->topology.try_emplace(identity, std::move(object));
