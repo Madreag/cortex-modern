@@ -4150,6 +4150,7 @@ struct VectorField {
 	long uid;
 	const char* property;
 };
+uint64_t CheckpointThreadCpuUnits();
 }
 
 // The loaded presets of a type by address; a reference to anything else of that type names an instance.
@@ -4249,6 +4250,7 @@ private:
 		Once(m_OwnersBuilt, m_OwnersReady, [this] {
 			static const bool report = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
 			const auto started = report ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			const uint64_t cpuStart = report ? CheckpointThreadCpuUnits() : 0;
 			auto& vectors = m_Owners.vectors.sorted;
 			auto& controllers = m_Owners.controllers.sorted;
 			vectors.reserve(KnownObjects().size() * (CheckpointWriter::BatchEnabled() ? 9 : 6));
@@ -4269,6 +4271,8 @@ private:
 					vectors.emplace_back(&attachable->GetJointPos(), VectorField{uid, "JointPos"});
 				}
 			}
+			const auto enumerated = report ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			const uint64_t cpuEnumerated = report ? CheckpointThreadCpuUnits() : 0;
 			// A later object's entry wins an address, as the map it replaces let it.
 			const auto settle = [](auto& fields) {
 				auto& entries = fields.sorted;
@@ -4287,8 +4291,19 @@ private:
 			};
 			settle(m_Owners.vectors);
 			settle(m_Owners.controllers);
-			if (report) System::PrintDiagnosticLine(std::format("[checkpoint-owner-index] objects={} vectors={} controllers={} thread={} us={}", KnownObjects().size(), vectors.size(), controllers.size(),
-				std::hash<std::thread::id>{}(std::this_thread::get_id()), std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()));
+			if (report) {
+				const auto done = std::chrono::steady_clock::now();
+				const uint64_t cpuDone = CheckpointThreadCpuUnits();
+#ifdef _WIN32
+				constexpr const char* cpuUnit = "cycles";
+#else
+				constexpr const char* cpuUnit = "ns";
+#endif
+				System::PrintDiagnosticLine(std::format("[checkpoint-owner-index] objects={} vectors={} controllers={} thread={} us={} enumerate_us={} index_us={} cpu_unit={} cpu={} enumerate_cpu={} index_cpu={}", KnownObjects().size(), vectors.size(), controllers.size(),
+					std::hash<std::thread::id>{}(std::this_thread::get_id()), std::chrono::duration_cast<std::chrono::microseconds>(done - started).count(),
+					std::chrono::duration_cast<std::chrono::microseconds>(enumerated - started).count(), std::chrono::duration_cast<std::chrono::microseconds>(done - enumerated).count(),
+					cpuUnit, cpuDone - cpuStart, cpuEnumerated - cpuStart, cpuDone - cpuEnumerated));
+			}
 		});
 		return m_Owners;
 	}

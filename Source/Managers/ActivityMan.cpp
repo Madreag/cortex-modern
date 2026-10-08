@@ -89,6 +89,7 @@
 #include <deque>
 #include <map>
 #include <cstdlib>
+#include <ctime>
 #include <cstring>
 #include <execution>
 #include <format>
@@ -126,6 +127,17 @@ using namespace RTE;
 #define HACK_MZ_COMPRESS_METHOD_DEFLATE 8
 
 namespace {
+	uint64_t CheckpointCaptureCpuUnits() {
+#ifdef _WIN32
+		ULONG64 cycles = 0;
+		if (!QueryThreadCycleTime(GetCurrentThread(), &cycles)) throw std::runtime_error("could not read checkpoint layer cycles");
+		return cycles;
+#else
+		timespec now{};
+		if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now) != 0) throw std::runtime_error("could not read checkpoint layer CPU time");
+		return static_cast<uint64_t>(now.tv_sec) * 1000000000 + now.tv_nsec;
+#endif
+	}
 	const char* SaveKindName(ActivityMan::SaveKind kind) {
 		switch (kind) {
 			case ActivityMan::SaveKind::Autosave:
@@ -836,6 +848,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		const SceneLayer* layer;
 		std::shared_ptr<const BitmapSnapshot> snapshot;
 		std::vector<std::shared_ptr<const BitmapSnapshot>> retired;
+		int64_t queueUs = 0, captureUs = 0;
+		uint64_t cpu = 0, thread = 0;
 	};
 	std::vector<LayerCapture> layers;
 	const auto addLayer = [&layers](std::string name, const SceneLayer* value) {
@@ -940,9 +954,18 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	}
 	// Each terrain layer copies its own dirty rows; the image keeps the layers' order.
 	const auto layersStart = std::chrono::steady_clock::now();
+	static const bool layerCosts = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
 	for (LayerCapture& captured: layers) {
-		captureAside("layer", captured.name, [&captured, &layersUs, &since, layersStart] {
+		captureAside("layer", captured.name, [&captured, &layersUs, &since, layersStart, queued = layerCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}] {
+			const auto started = layerCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			const uint64_t cpuStart = layerCosts ? CheckpointCaptureCpuUnits() : 0;
 			captured.snapshot = captured.layer->CaptureBitmapSnapshot(&captured.retired);
+			if (layerCosts) {
+				captured.captureUs = since(started);
+				captured.queueUs = std::chrono::duration_cast<std::chrono::microseconds>(started - queued).count();
+				captured.cpu = CheckpointCaptureCpuUnits() - cpuStart;
+				captured.thread = std::hash<std::thread::id>{}(std::this_thread::get_id());
+			}
 			const int64_t done = since(layersStart);
 			for (int64_t seen = layersUs.load(); done > seen && !layersUs.compare_exchange_weak(seen, done);) {}
 		});
@@ -1017,6 +1040,15 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		writer.PerPeerEnd();
 	});
 	for (LayerCapture& captured: layers) {
+		if (layerCosts) {
+#ifdef _WIN32
+			constexpr const char* cpuUnit = "cycles";
+#else
+			constexpr const char* cpuUnit = "ns";
+#endif
+			System::PrintDiagnosticLine(std::format("[checkpoint-layer-phase] name={} thread={} queue_us={} capture_us={} cpu_unit={} cpu={}",
+			    captured.name, captured.thread, captured.queueUs, captured.captureUs, cpuUnit, captured.cpu));
+		}
 		image->layers.emplace_back(captured.name, std::move(captured.snapshot));
 		std::move(captured.retired.begin(), captured.retired.end(), std::back_inserter(retiredLayers));
 	}
