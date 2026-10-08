@@ -37,6 +37,7 @@
 
 #include <iostream>
 #include <format>
+#include <future>
 #include <string_view>
 
 #include <algorithm>
@@ -2357,6 +2358,13 @@ namespace {
 		});
 	}
 
+	CheckpointText CaptureOwnedAudioSample(AudioCheckpoint::Sample sample) {
+		const size_t bytes = sizeof(sample) + sample.path.size();
+		// All mixer reads have already completed. Only the owned metadata is
+		// formatted on the saver; no sound handle or live sample is retained.
+		return CheckpointText::Deferred([sample = std::move(sample)] { return sample.SaveCheckpoint(); }, bytes);
+	}
+
 	void WriteSnapshotObject(const SceneObject* object) {
 		auto stream = std::make_unique<std::stringstream>();
 		Writer writer(std::move(stream));
@@ -2389,7 +2397,10 @@ std::shared_ptr<AudioCheckpointCapture> AudioMan::CaptureCheckpointSamples() con
 	if (m_AudioEnabled) ReadCheckpointSamples(*result);
 	std::vector<CheckpointText> texts;
 	texts.reserve(result->state.samples.size());
-	for (const AudioCheckpoint::Sample& sample: result->state.samples) texts.push_back(CheckpointWriter::CaptureNative([&sample] { return sample.SaveCheckpoint(); }));
+	for (const AudioCheckpoint::Sample& sample: result->state.samples) {
+		texts.push_back(CheckpointWriter::BatchEnabled() ? CaptureOwnedAudioSample(sample)
+		    : CheckpointWriter::CaptureNative([&sample] { return sample.SaveCheckpoint(); }));
+	}
 	result->samples = std::move(texts);
 	return result;
 }
@@ -3136,6 +3147,25 @@ bool AudioMan::RunCheckpointSelfTest() {
 			AudioCheckpoint::Require(originalChannel->setPaused(true));
 		}
 		const auto reportArm = [&ok](const char* name, bool passed) { { std::ostringstream line; line << "[audio-checkpoint-selftest] " << (passed ? "PASS " : "FAIL ") << name; System::PrintDiagnosticLine(line.str()); } ok = ok && passed; };
+		{
+			bool owned = true;
+			for (const bool captured: {false, true}) {
+				AudioCheckpoint::Sample sample;
+				sample.path = std::string("sample\0owned", 12);
+				sample.mode = 0xffffffffu; sample.loopStart = 7; sample.loopEnd = 19;
+				sample.frequency = -0.0F; sample.minimumDistance = 0.125F; sample.maximumDistance = 123.5F;
+				sample.priority = 256; sample.loops = -1; sample.cone = {15.5F, 179.25F, 0.0625F}; sample.captured = captured;
+				const std::string reference = sample.SaveCheckpoint();
+				const CheckpointText frozen = CaptureOwnedAudioSample(sample);
+				sample = AudioCheckpoint::Sample{};
+				std::array<std::future<bool>, 4> readers;
+				for (auto& reader: readers) reader = std::async(std::launch::async, [frozen, reference] {
+					return frozen.Text() == reference && frozen.SharedText() == reference;
+				});
+				for (auto& reader: readers) owned = reader.get() && owned;
+			}
+			reportArm("owned_sample_metadata_formats_after_source_death_with_concurrent_readers", owned);
+		}
 		std::unique_ptr<SoundContainer> held;
 		try {
 			held.reset(static_cast<SoundContainer*>(preset->Clone()));

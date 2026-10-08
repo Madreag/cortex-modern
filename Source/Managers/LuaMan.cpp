@@ -11491,6 +11491,48 @@ shared.parent = _AutosaveCaptureProbe
 	std::cout << "[script-graph-selftest] " << (ownedGraph ? "PASS" : "FAIL") << " captured_graph_survives_mutation_and_collection" << std::endl;
 	checkpointValues = ownedGraph && checkpointValues;
 	{
+		// Added, replaced and removed baseline keys must discover their native
+		// values before the live table is changed or those values are collected.
+		const bool staged = RunScriptString(R"lua(
+_CheckpointBaselineProbe = { pi = math.pi, rad = math.rad, meta = getmetatable(table) }
+rawset(math, 'pi', Vector(11, 13))
+rawset(math, 'rad', nil)
+rawset(string, 65520, SoundSet())
+rawset(string, 65521, Timer())
+rawset(string, true, { native = Vector(17, 19) })
+rawset(string, '_capture\0probe', Controller())
+setmetatable(table, { native = Vector(23, 29) })
+)lua") == 0;
+		std::string reference;
+		CheckpointText captured;
+		std::vector<std::string> problems;
+		const bool written = staged && SerializeScriptGraph(reference, problems);
+		bool frozen;
+		{
+			CheckpointWriter::BatchScope batches(true);
+			frozen = written && CaptureScriptGraph(captured, problems, true);
+		}
+		const bool cleaned = RunScriptString(R"lua(
+if _CheckpointBaselineProbe then
+rawset(math, 'pi', _CheckpointBaselineProbe.pi)
+rawset(math, 'rad', _CheckpointBaselineProbe.rad)
+setmetatable(table, _CheckpointBaselineProbe.meta)
+_CheckpointBaselineProbe = nil
+end
+rawset(string, 65521, nil)
+rawset(string, 65520, nil)
+rawset(string, true, nil)
+rawset(string, '_capture\0probe', nil)
+)lua") == 0;
+		lua_gc(m_State, LUA_GCCOLLECT, 0);
+		bool exact = false;
+		try { exact = frozen && cleaned && problems.empty() && std::async(std::launch::async, [captured] { return captured.Text(); }).get() == reference; }
+		catch (const std::exception& error) { problems.push_back(error.what()); }
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " frozen_baseline_key_changes_keep_native_values_after_collection" << std::endl;
+		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] baseline capture: " << problem << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
 		// A mod's handle to the terrain goes into a checkpoint as the scene's terrain and comes back as it.
 		SceneMan::SceneSetAside originalScene;
 		g_SceneMan.SetAsideScene(originalScene);

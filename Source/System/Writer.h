@@ -132,6 +132,17 @@ namespace RTE {
 		private:
 			bool m_Entered = false;
 		};
+		/// Groups multiplayer arena backing allocations by capture thread.
+		/// Published arenas keep their backing group until every reader is done.
+		class ArenaPoolScope {
+		public:
+			explicit ArenaPoolScope(bool enabled);
+			~ArenaPoolScope();
+			ArenaPoolScope(const ArenaPoolScope&) = delete;
+			ArenaPoolScope& operator=(const ArenaPoolScope&) = delete;
+		private:
+			bool m_Entered = false;
+		};
 		explicit CheckpointBuffer(bool reserve = true);
 		bool IsBatched() const { return m_Arena != nullptr; }
 		/// Appends the same typed scalar tape as the individual value calls.

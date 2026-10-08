@@ -58,12 +58,13 @@ namespace RTE {
 		/// Manual and single-player saves keep their existing visitors.
 		class BatchScope {
 		public:
-			explicit BatchScope(bool enabled) : m_Enabled(enabled) { if (m_Enabled) s_Batches.fetch_add(1, std::memory_order_relaxed); }
+			explicit BatchScope(bool enabled) : m_Enabled(enabled), m_Arenas(enabled) { if (m_Enabled) s_Batches.fetch_add(1, std::memory_order_relaxed); }
 			~BatchScope() { if (m_Enabled) s_Batches.fetch_sub(1, std::memory_order_relaxed); }
 			BatchScope(const BatchScope&) = delete;
 			BatchScope& operator=(const BatchScope&) = delete;
 		private:
 			bool m_Enabled;
+			CheckpointBuffer::ArenaPoolScope m_Arenas;
 		};
 		static bool BatchEnabled() { return s_Batches.load(std::memory_order_relaxed) != 0; }
 		class CacheScope {

@@ -3,11 +3,13 @@
 #include "CheckpointArchive.h"
 #include "CheckpointProperties.h"
 #include "CheckpointImage.h"
+#include "CaptureSentinel.h"
 #include "BitmapCheckpoint.h"
 #include "Base64/base64.h"
 #include "SceneLayer.h"
 #include "Scene.h"
 #include "MOPixel.h"
+#include "Actor.h"
 #include "Deployment.h"
 #include "Reader.h"
 #include "Timer.h"
@@ -17,6 +19,7 @@
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <thread>
 #include <cstring>
 #include <sstream>
 #include <stdexcept>
@@ -98,9 +101,127 @@ namespace {
 	}
 }
 
+namespace {
+	// Each arena leases only the blocks it uses. A small cached record cannot
+	// retain the rest of its thread's capture storage.
+	std::atomic<size_t> s_CheckpointPoolLiveBytes{0};
+	class CheckpointArenaGroup {
+	public:
+		struct Block {
+			std::pmr::memory_resource* upstream = std::pmr::get_default_resource();
+			void* address;
+			size_t bytes, alignment;
+			Block(size_t count, size_t align) : address(upstream->allocate(count, align)), bytes(count), alignment(align) {
+				s_CheckpointPoolLiveBytes.fetch_add(bytes, std::memory_order_relaxed);
+			}
+			~Block() {
+				upstream->deallocate(address, bytes, alignment);
+				s_CheckpointPoolLiveBytes.fetch_sub(bytes, std::memory_order_relaxed);
+			}
+		};
+		struct Allocation { void* address; std::shared_ptr<Block> block; };
+		Allocation Allocate(size_t count, size_t alignment) {
+			constexpr size_t chunkBytes = 1 << 20;
+			if (count > chunkBytes) {
+				auto block = MakeBlock(count, alignment);
+				return {block->address, std::move(block)};
+			}
+			void* address = m_Current ? static_cast<char*>(m_Current->address) + m_Used : nullptr;
+			size_t available = m_Current ? m_Current->bytes - m_Used : 0;
+			if (!address || !std::align(alignment, count, address, available)) {
+				m_Current = MakeBlock(chunkBytes, std::max(alignment, alignof(std::max_align_t)));
+				m_Used = 0;
+				address = m_Current->address;
+			}
+			m_Used = static_cast<char*>(address) - static_cast<char*>(m_Current->address) + count;
+			return {address, m_Current};
+		}
+		size_t Blocks() const { return m_Blocks.load(std::memory_order_relaxed); }
+		size_t Bytes() const { return m_Bytes.load(std::memory_order_relaxed); }
+	private:
+		std::shared_ptr<Block> m_Current;
+		size_t m_Used = 0;
+		std::atomic<size_t> m_Blocks{0}, m_Bytes{0};
+		std::shared_ptr<Block> MakeBlock(size_t bytes, size_t alignment) {
+			auto block = std::make_shared<Block>(bytes, alignment);
+			m_Blocks.fetch_add(1, std::memory_order_relaxed);
+			m_Bytes.fetch_add(bytes, std::memory_order_relaxed);
+			return block;
+		}
+	};
+	class CheckpointArenaSource : public std::pmr::memory_resource {
+	public:
+		explicit CheckpointArenaSource(std::shared_ptr<CheckpointArenaGroup> group) : m_Group(std::move(group)) {}
+	private:
+		std::shared_ptr<CheckpointArenaGroup> m_Group;
+		std::pmr::memory_resource* m_Default = std::pmr::get_default_resource();
+		std::vector<std::shared_ptr<CheckpointArenaGroup::Block>> m_Blocks;
+		void* do_allocate(size_t count, size_t alignment) override {
+			if (!m_Group) return m_Default->allocate(count, alignment);
+			auto allocation = m_Group->Allocate(count, alignment);
+			if (m_Blocks.empty() || m_Blocks.back() != allocation.block) m_Blocks.push_back(std::move(allocation.block));
+			return allocation.address;
+		}
+		void do_deallocate(void* address, size_t count, size_t alignment) override {
+			if (!m_Group) m_Default->deallocate(address, count, alignment);
+		}
+		bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override { return this == &other; }
+	};
+	struct CheckpointArenaPool {
+		std::mutex mutex;
+		std::unordered_map<std::thread::id, std::shared_ptr<CheckpointArenaGroup>> groups;
+	};
+	std::mutex s_ArenaPoolMutex;
+	std::shared_ptr<CheckpointArenaPool> s_ArenaPool;
+	size_t s_ArenaPoolUsers = 0;
+	uint64_t s_ArenaPoolNext = 0;
+	std::atomic<uint64_t> s_ArenaPoolEpoch{0};
+
+	std::shared_ptr<CheckpointArenaGroup> CurrentArenaGroup() {
+		const uint64_t epoch = s_ArenaPoolEpoch.load(std::memory_order_acquire);
+		if (!epoch) return {};
+		thread_local uint64_t previousEpoch = 0;
+		thread_local std::weak_ptr<CheckpointArenaGroup> previousGroup;
+		if (epoch == previousEpoch) if (auto group = previousGroup.lock()) return group;
+		std::shared_ptr<CheckpointArenaPool> pool;
+		{
+			std::lock_guard lock(s_ArenaPoolMutex);
+			pool = s_ArenaPool;
+		}
+		if (!pool) return {};
+		std::lock_guard lock(pool->mutex);
+		auto& group = pool->groups[std::this_thread::get_id()];
+		if (!group) group = std::make_shared<CheckpointArenaGroup>();
+		previousEpoch = epoch;
+		previousGroup = group;
+		return group;
+	}
+}
+
 struct RTE::CheckpointArena {
+	class AllocationReceipts : public std::pmr::memory_resource {
+	public:
+		size_t bytes = 0, blocks = 0;
+		explicit AllocationReceipts(std::pmr::memory_resource* upstream) : m_Upstream(upstream) {}
+	private:
+		std::pmr::memory_resource* m_Upstream;
+		void* do_allocate(size_t count, size_t alignment) override {
+			void* result = m_Upstream->allocate(count, alignment);
+			bytes += count;
+			++blocks;
+			return result;
+		}
+		void do_deallocate(void* address, size_t count, size_t alignment) override {
+			m_Upstream->deallocate(address, count, alignment);
+		}
+		bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override { return this == &other; }
+	};
 	std::atomic<size_t> owners{1};
-	std::pmr::monotonic_buffer_resource storage{16384};
+	std::shared_ptr<CheckpointArenaGroup> group = CurrentArenaGroup();
+	CheckpointArenaSource source{group};
+	std::pmr::memory_resource* upstream = group ? &source : std::pmr::get_default_resource();
+	AllocationReceipts receipts{upstream};
+	std::pmr::monotonic_buffer_resource storage{16384, CaptureTrace::Active() ? &receipts : upstream};
 	void RetainBlock() { owners.fetch_add(1, std::memory_order_relaxed); }
 	void ReleaseBlock() noexcept { if (owners.fetch_sub(1, std::memory_order_acq_rel) == 1) delete this; }
 };
@@ -591,6 +712,31 @@ std::string CheckpointText::SharedText() const {
 	return text;
 }
 
+CheckpointBuffer::ArenaPoolScope::ArenaPoolScope(bool enabled) {
+	if (!enabled) return;
+	std::lock_guard lock(s_ArenaPoolMutex);
+	if (!s_ArenaPoolUsers) {
+		s_ArenaPool = std::make_shared<CheckpointArenaPool>();
+		s_ArenaPoolEpoch.store(++s_ArenaPoolNext, std::memory_order_release);
+	}
+	++s_ArenaPoolUsers;
+	m_Entered = true;
+}
+
+CheckpointBuffer::ArenaPoolScope::~ArenaPoolScope() {
+	if (!m_Entered) return;
+	std::lock_guard lock(s_ArenaPoolMutex);
+	if (--s_ArenaPoolUsers) return;
+	s_ArenaPoolEpoch.store(0, std::memory_order_release);
+	if (CaptureTrace::Active()) {
+		std::lock_guard groups(s_ArenaPool->mutex);
+		size_t blocks = 0, bytes = 0;
+		for (const auto& [thread, group]: s_ArenaPool->groups) { blocks += group->Blocks(); bytes += group->Bytes(); }
+		CaptureTrace::Span receipt("checkpoint_pool_allocations", std::format("threads={} blocks={} bytes={}", s_ArenaPool->groups.size(), blocks, bytes));
+	}
+	s_ArenaPool.reset();
+}
+
 CheckpointBuffer::AllocationScope::AllocationScope(bool enabled) {
 	if (enabled && !s_Arena) {
 		s_Arena = std::shared_ptr<CheckpointArena>(new CheckpointArena, [](CheckpointArena* arena) { arena->ReleaseBlock(); });
@@ -599,7 +745,12 @@ CheckpointBuffer::AllocationScope::AllocationScope(bool enabled) {
 }
 
 CheckpointBuffer::AllocationScope::~AllocationScope() {
-	if (m_Entered) s_Arena.reset();
+	if (m_Entered) {
+		if (CaptureTrace::Active()) {
+			CaptureTrace::Span receipt("checkpoint_arena_allocations", std::format("blocks={} bytes={} backing_blocks={} backing_bytes={}", s_Arena->receipts.blocks, s_Arena->receipts.bytes, s_Arena->group ? s_Arena->group->Blocks() : 0, s_Arena->group ? s_Arena->group->Bytes() : 0));
+		}
+		s_Arena.reset();
+	}
 }
 
 CheckpointBuffer::CheckpointBuffer(bool reserve) : m_Arena(reserve ? s_Arena : nullptr),
@@ -1068,6 +1219,27 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			      "owned_inline_native_records_outlive_sources_and_keep_peer_lengths");
 		}
 
+	{
+			CheckpointCache cache(true); cache.Begin();
+			auto owner = std::make_unique<MOPixel>();
+			const void* address = owner.get();
+			cache.Remember(address, 7, CheckpointText("one"), 11, 13, owner.get());
+			cache.Remember(address, 8, CheckpointText("two"), 17, 19, owner.get());
+			int other = 0;
+			cache.Remember(&other, 7, CheckpointText("three"), 23);
+			bool kept = cache.Peek(address, 7)->Text() == "one" && cache.Peek(address, 8)->Text() == "two" &&
+			            cache.Peek(&other, 7)->Text() == "three" && cache.Identity(address, 7) == 13;
+			owner.reset();
+			kept = kept && cache.Identity(address, 7) == 0 && cache.Stamp(address, 8) == 17;
+			cache.Begin();
+			kept = kept && !cache.PeekCurrent(address, 7) && cache.Touch(address, 7) && cache.PeekCurrent(address, 7);
+			const auto retired = cache.RetireUnused();
+			kept = kept && !cache.Peek(address, 8) && !cache.Peek(&other, 7) && cache.Peek(address, 7)->Text() == "one";
+			const std::string census = cache.Census();
+			check(kept && !retired.empty() && census.starts_with("entries=1 ") && census.find("channels=7:1") != std::string::npos,
+			      "transient_checkpoint_cache_keeps_channels_generations_and_expired_owners");
+		}
+
 		{
 			std::vector<Vector> vectors(512, Vector(-0.0F, std::bit_cast<float>(uint32_t{0x7fc00031})));
 			Timer timer;
@@ -1092,6 +1264,65 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			const auto archived = std::async(std::launch::async, [frozen] { return std::pair(frozen.Text(), frozen.SharedText()); }).get();
 			check(frozen.SameValues(ordinary) && archived.first == ordinary.Text() && archived.second == ordinary.SharedText(),
 			      "owned_checkpoint_arena_outlives_capture_and_live_values");
+		}
+
+		{
+			std::array<CheckpointText, 4> frozen;
+			std::array<std::string, 4> reference;
+			for (size_t index = 0; index < reference.size(); ++index) {
+				CheckpointWriter writer("ArenaGroup1"); writer(index, std::string("before\0death", 12));
+				reference[index] = writer.Text();
+			}
+			{
+				CheckpointWriter::BatchScope batch(true);
+				std::array<std::future<void>, 4> workers;
+				for (size_t index = 0; index < workers.size(); ++index) workers[index] = std::async(std::launch::async, [&, index] {
+					std::string source("before\0death", 12);
+					for (int repetition = 0; repetition < 256; ++repetition) {
+						frozen[index] = CheckpointWriter::CaptureNative([&] {
+							CheckpointWriter writer("ArenaGroup1"); writer(index, source); return writer.Text();
+						});
+					}
+					source.assign("after");
+				});
+				for (auto& worker: workers) worker.get();
+			}
+			bool survived = true;
+			{
+				CheckpointWriter::BatchScope next(true);
+				std::array<std::future<bool>, 4> readers;
+				for (size_t index = 0; index < readers.size(); ++index) readers[index] = std::async(std::launch::async, [&, index] {
+					const auto fresh = CheckpointWriter::CaptureNative([] { CheckpointWriter writer("NextArena1"); writer(97); return writer.Text(); });
+					return !fresh.Text().empty() && frozen[index].Text() == reference[index] && frozen[index].SharedText() == reference[index];
+				});
+				for (auto& reader: readers) survived = reader.get() && survived;
+			}
+			check(survived, "owned_checkpoint_pool_keeps_prior_thread_groups_during_a_new_capture");
+		}
+
+		{
+			const size_t before = s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed);
+			CheckpointText small;
+			{
+				CheckpointWriter::BatchScope batch(true);
+				small = CheckpointWriter::CaptureNative([] {
+					CheckpointWriter writer("SmallArena1"); writer(17); return writer.Text();
+				});
+				{
+					const std::string source(8 << 20, 'x');
+					const auto discarded = CheckpointWriter::CaptureNative([&] {
+						CheckpointWriter writer("LargeArena1"); writer(source); return writer.Text();
+					});
+					if (discarded.OwnedBytes() < source.size()) throw std::logic_error("large arena fixture lost its values");
+				}
+			}
+			CheckpointWriter ordinary("SmallArena1"); ordinary(17);
+			const size_t retained = s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed);
+			check(retained <= before + (2 << 20) && small.Text() == ordinary.Text(),
+			      "small_cached_checkpoint_releases_unrelated_large_backing_blocks");
+			small = CheckpointText{};
+			check(s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed) <= before,
+			      "checkpoint_pool_releases_its_last_backing_lease");
 		}
 
 		{
@@ -1260,6 +1491,57 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			deployment.SetPos(Vector(20, 0));
 			const auto nextDeployment = capture(deployment);
 			check(firstDeployment.Text() != nextDeployment.Text(), "owned_checkpoint_recaptures_a_scene_object_without_a_lifetime_identity");
+		}
+
+		{
+			auto actor = std::make_unique<Actor>();
+			auto pixel = std::make_unique<MOPixel>();
+			pixel->Create();
+			pixel->SetPos(Vector(-0.0F, 13.5F));
+			pixel->SetPresetName("owned inventory pixel");
+			actor->AddInventoryItem(pixel.release());
+			actor->SetPos(Vector(17.25F, -23.5F));
+			const auto capture = [&] {
+				return Writer::Capture([&](Writer& output) { Scene::SaveSceneObject(output, actor.get(), false, true); });
+			};
+			const std::string reference = capture().Text();
+			CheckpointText frozen;
+			{
+				CheckpointWriter::BatchScope batch(true);
+				CheckpointCache transient(true);
+				transient.Begin();
+				CheckpointWriter::CacheScope cacheScope(&transient);
+				frozen = capture();
+			}
+			actor->SetPos(Vector(99, 101));
+			actor.reset();
+			const std::string encoded = std::async(std::launch::async, [frozen] { return frozen.Text(); }).get();
+			check(encoded == reference, "flat_checkpoint_tree_owns_nested_inventory_after_source_death");
+		}
+
+		{
+			std::vector<CheckpointText> deferred;
+			{
+				CheckpointWriter::BatchScope batch(true);
+				CheckpointBuffer::AllocationScope arena(true);
+				for (int index = 0; index < 1024; ++index) {
+					std::string live = std::to_string(index) + std::string("\0owned", 6);
+					deferred.push_back(CheckpointText::Deferred([owned = live] { return owned; }, live.size()));
+					live.assign("changed");
+				}
+				deferred.push_back(CheckpointText::DeferredWithPeerRuns([] { return std::string("first@private@last"); }, "@"));
+			}
+			const auto read = [deferred] {
+				for (int index = 0; index < 1024; ++index) {
+					if (deferred[index].Text() != std::to_string(index) + std::string("\0owned", 6)) return false;
+				}
+				return deferred.back().Text() == "firstprivatelast" && deferred.back().SharedText() == "firstlast";
+			};
+			std::array<std::future<bool>, 4> readers;
+			for (auto& reader: readers) reader = std::async(std::launch::async, read);
+			bool exact = true;
+			for (auto& reader: readers) exact = reader.get() && exact;
+			check(exact, "deferred_checkpoint_arena_survives_scope_exit_and_concurrent_peer_reads");
 		}
 
 		auto calls = std::make_shared<std::atomic<int>>(0);

@@ -1,6 +1,7 @@
 #include "SoundContainer.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
+#include "CheckpointProperties.h"
 #include "TimerMan.h"
 #include "Base64/base64.h"
 #include "MovableObject.h"
@@ -262,71 +263,27 @@ int SoundContainer::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("SpecialBehaviour_TopLevelSoundSet", *m_TopLevelSoundSet);
 
 	if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
-		if (std::none_of(c_SoundOverlapModeMap.begin(), c_SoundOverlapModeMap.end(), [this](const auto& entry) { return entry.second == m_SoundOverlapMode; })) {
-			RTEAbort("Tried to write invalid SoundOverlapMode when saving SoundContainer.");
-		}
-		struct Parameters {
-			SoundOverlapMode m_SoundOverlapMode;
-			BusRouting m_BusRouting;
-			uint64_t m_Immobile;
-			float m_AttenuationStartDistance, m_CustomPanValue, m_PanningStrengthMultiplier;
-			int m_Loops, m_Priority;
-			uint64_t m_AffectedByGlobalPitch;
-			float x, y, m_Volume, m_Pitch, m_PitchVariation;
-			uint64_t m_WasFadedOut, m_Paused;
-			float m_MusicPreEntryTime, m_MusicExitTime;
-		};
-		const Parameters fields{m_SoundOverlapMode, m_BusRouting, static_cast<uint64_t>(m_Immobile),
-		    m_AttenuationStartDistance, m_CustomPanValue, m_PanningStrengthMultiplier, m_Loops, m_Priority,
-		    static_cast<uint64_t>(m_AffectedByGlobalPitch), m_Pos.m_X, m_Pos.m_Y, m_Volume, m_Pitch, m_PitchVariation,
-		    static_cast<uint64_t>(m_WasFadedOut), static_cast<uint64_t>(m_Paused), m_MusicPreEntryTime, m_MusicExitTime};
-		const int indent = writer.GetIndent();
-		writer.Append(CheckpointText::Deferred([fields, indent] {
-			return Writer::Capture([&](Writer& owned) {
-				owned.NewProperty("SoundOverlapMode");
-				auto overlapModeMapEntry = std::find_if(c_SoundOverlapModeMap.begin(), c_SoundOverlapModeMap.end(), [&soundOverlapMode = fields.m_SoundOverlapMode](auto element) { return element.second == soundOverlapMode; });
-				if (overlapModeMapEntry != c_SoundOverlapModeMap.end()) {
-					owned << overlapModeMapEntry->first;
-				} else {
-					RTEAbort("Tried to write invalid SoundOverlapMode when saving SoundContainer.");
-				}
-				owned.NewProperty("BusRouting");
-				owned << fields.m_BusRouting;
-				owned.NewProperty("Immobile");
-				owned << fields.m_Immobile;
-				owned.NewProperty("AttenuationStartDistance");
-				owned << fields.m_AttenuationStartDistance;
-				owned.NewProperty("CustomPanValue");
-				owned << fields.m_CustomPanValue;
-				owned.NewProperty("PanningStrengthMultiplier");
-				owned << fields.m_PanningStrengthMultiplier;
-				owned.NewProperty("LoopSetting");
-				owned << fields.m_Loops;
-
-				owned.NewProperty("Priority");
-				owned << fields.m_Priority;
-				owned.NewProperty("AffectedByGlobalPitch");
-				owned << fields.m_AffectedByGlobalPitch;
-
-				owned.NewProperty("Position");
-				owned << Vector(fields.x, fields.y);
-				owned.NewProperty("Volume");
-				owned << fields.m_Volume;
-				owned.NewProperty("Pitch");
-				owned << fields.m_Pitch;
-				owned.NewProperty("PitchVariation");
-				owned << fields.m_PitchVariation;
-
-				owned.NewProperty("WasFadedOut");
-				owned << fields.m_WasFadedOut;
-				owned.NewProperty("Paused");
-				owned << fields.m_Paused;
-				owned.NewProperty("MusicPreEntryTime");
-				owned << fields.m_MusicPreEntryTime;
-				owned.NewProperty("MusicExitTime");
-				owned << fields.m_MusicExitTime;
-			}, indent).Text();
-		}, sizeof(Parameters)));
+		const auto overlap = std::find_if(c_SoundOverlapModeMap.begin(), c_SoundOverlapModeMap.end(),
+		    [this](const auto& entry) { return entry.second == m_SoundOverlapMode; });
+		if (overlap == c_SoundOverlapModeMap.end()) RTEAbort("Tried to write invalid SoundOverlapMode when saving SoundContainer.");
+		WriteCapturedProperties(writer,
+			CheckpointProperty<"SoundOverlapMode">(overlap->first),
+			CheckpointProperty<"BusRouting">(m_BusRouting),
+			CheckpointProperty<"Immobile">(m_Immobile),
+			CheckpointProperty<"AttenuationStartDistance">(m_AttenuationStartDistance),
+			CheckpointProperty<"CustomPanValue">(m_CustomPanValue),
+			CheckpointProperty<"PanningStrengthMultiplier">(m_PanningStrengthMultiplier),
+			CheckpointProperty<"LoopSetting">(m_Loops),
+			CheckpointProperty<"Priority">(m_Priority),
+			CheckpointProperty<"AffectedByGlobalPitch">(m_AffectedByGlobalPitch),
+			CheckpointProperty<"Position">(m_Pos),
+			CheckpointProperty<"Volume">(m_Volume),
+			CheckpointProperty<"Pitch">(m_Pitch),
+			CheckpointProperty<"PitchVariation">(m_PitchVariation),
+			CheckpointProperty<"WasFadedOut">(m_WasFadedOut),
+			CheckpointProperty<"Paused">(m_Paused),
+			CheckpointProperty<"MusicPreEntryTime">(m_MusicPreEntryTime),
+			CheckpointProperty<"MusicExitTime">(m_MusicExitTime));
 	} else {
 		writer.NewProperty("SoundOverlapMode");
 		auto overlapModeMapEntry = std::find_if(c_SoundOverlapModeMap.begin(), c_SoundOverlapModeMap.end(), [&soundOverlapMode = m_SoundOverlapMode](auto element) { return element.second == soundOverlapMode; });
