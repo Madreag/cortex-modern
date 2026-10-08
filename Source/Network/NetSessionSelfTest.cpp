@@ -1197,12 +1197,23 @@ namespace RTE {
 			};
 			client.SetRejoinPhase(NetSession::RejoinPhase::ImagePending);
 			run(250);
+			// The round owns the transport between recoveries, so the session does not tick through Active.
+			client.SetRejoinPhase(NetSession::RejoinPhase::Active);
+			now += 2000;
+			clientTransport.AdvanceTimeMs(2000);
+			client.SetRejoinPhase(NetSession::RejoinPhase::ImagePending);
+			run(250);
+			if (client.HasReject()) {
+				*error = "a second recovery inherited the first recovery's phase ceiling";
+				return false;
+			}
 			client.SetRejoinPhase(NetSession::RejoinPhase::Loading);
 			run(250);
 			if (client.HasReject()) {
 				*error = "a rejoin phase ended before its own ceiling: the clock did not start again at the phase change";
 				return false;
 			}
+			client.SetRejoinPhase(NetSession::RejoinPhase::Loading);
 			run(200);
 			if (!client.HasReject() || client.GetRejectReason() != NetRejectReason::Timeout) {
 				*error = "a rejoin phase that outlived its ceiling kept the rejoin waiting: phase=Loading reject=" + std::to_string(client.HasReject());

@@ -1576,7 +1576,7 @@ namespace RTE {
 		// watchdogs and their own clocks.
 		// Each phase with nobody to answer gets the host's own join deadline on its own clock and no more: past it the
 		// rejoin ends here, and the seat stays with the AI the host already gave it.
-		if (const RejoinPhase phase = m_RejoinPhase.load(); phase != m_CeilingPhase) {
+		if (const RejoinPhase phase = m_RejoinPhase.load(); m_RejoinPhaseChanged.exchange(false) || phase != m_CeilingPhase) {
 			m_CeilingPhase = phase;
 			m_CeilingPhaseSinceMs = m_NowMs;
 		} else if (SuspendsSilence(phase) && m_Config.rejoinPhaseCeilingMs != 0 && m_NowMs >= m_CeilingPhaseSinceMs &&

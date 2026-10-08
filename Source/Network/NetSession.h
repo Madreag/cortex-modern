@@ -163,7 +163,7 @@ namespace RTE {
 			return "Unknown";
 		}
 		void SetRejoinPhase(RejoinPhase phase) {
-			m_RejoinPhase = phase;
+			if (m_RejoinPhase.exchange(phase) != phase) m_RejoinPhaseChanged = true;
 			m_AdmissionSuspended = SuspendsSilence(phase);
 		}
 		RejoinPhase GetRejoinPhase() const { return m_RejoinPhase; }
@@ -422,7 +422,8 @@ namespace RTE {
 		// A worker thread evaluates silence while the game thread declares the park, so these cross threads.
 		std::atomic<bool> m_PumpParked{false};
 		std::atomic<RejoinPhase> m_RejoinPhase{RejoinPhase::Active};
-		RejoinPhase m_CeilingPhase = RejoinPhase::Active; //!< The phase the ceiling clock is timing, read on the session's own thread.
+		std::atomic<bool> m_RejoinPhaseChanged{false}; //!< Keeps phase transitions until the session resumes ticking.
+		RejoinPhase m_CeilingPhase = RejoinPhase::Active; //!< The phase timed on the session's own thread.
 		uint64_t m_CeilingPhaseSinceMs = 0;
 		std::atomic<bool> m_AdmissionSuspended{false};
 		std::atomic<bool> m_SilenceSuspended{false};
