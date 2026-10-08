@@ -121,6 +121,7 @@ namespace RTE {
 
 	/// Copies scalar values and owned children without formatting them.
 	class CheckpointBuffer {
+		friend class CheckpointText;
 	public:
 		enum class ValueKind : uint8_t { Raw, Integer, Unsigned, SpacedInteger, SpacedUnsigned, Float, Double, String, Child, SizedChild, Base64, UrlBase64, GraphString, NewLine, Property, ElapsedSimTime, PeerBegin, PeerEnd, SizedRunBegin, SizedRunEnd, PrimitiveBlock };
 		using PrimitiveDecoder = void (*)(std::string&, std::string_view, bool);

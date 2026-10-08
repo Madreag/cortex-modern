@@ -425,6 +425,10 @@ struct CheckpointText::Data::Legacy : Data {
 };
 
 std::shared_ptr<CheckpointText::Data> CheckpointText::Data::Create() {
+	if (CheckpointWriter::BatchEnabled() && CheckpointBuffer::s_Arena) {
+		const auto& arena = CheckpointBuffer::s_Arena;
+		return std::allocate_shared<Data>(CheckpointAllocator<Data>(arena.get()), arena->storage);
+	}
 	return CheckpointWriter::BatchEnabled() ? std::make_shared<Data>() : std::make_shared<Legacy>();
 }
 
@@ -1594,6 +1598,27 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			      "cancelled_checkpoint_preparation_releases_all_unused_storage_on_worker");
 		}
 
+		{
+			CheckpointBuffer::WaitForPreparedStorageRelease();
+			const size_t before = s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed);
+			CheckpointText plain, peer;
+			std::weak_ptr<const std::string> source;
+			{
+				CheckpointWriter::BatchScope batch(true);
+				CheckpointBuffer::AllocationScope allocations(true);
+				auto owned = std::make_shared<const std::string>("before\0death", 12);
+				source = owned;
+				plain = CheckpointText::Deferred([owned] { return *owned; }, owned->size());
+				peer = CheckpointText::DeferredWithPeerRuns([] { return std::string("a<peer>gone<peer>b"); }, "<peer>", 17);
+			}
+			const bool retained = s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed) > before;
+			const bool exact = std::async(std::launch::async, [plain, peer] {
+				return plain.Text() == std::string("before\0death", 12) && peer.Text() == "agoneb" && peer.SharedText() == "ab";
+			}).get();
+			plain = CheckpointText{}; peer = CheckpointText{};
+			check(retained && exact && source.expired() && s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed) <= before,
+			      "deferred_checkpoint_nodes_keep_and_release_capture_storage_on_workers");
+		}
 		{
 			Timer timer;
 			timer.SetStartSimTimeTicks(17); timer.SetSimTimeLimitTicks(29);
