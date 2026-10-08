@@ -10682,6 +10682,22 @@ static std::string ResyncSaveName() {
 			m_AdoptedMatchConfig = config;
 			if (!m_IsHost) SetRelayOfferLocked(config.relay.Usable(UnixNowMs(nullptr) / 1000) ? config.relay : NetRelayConfig{});
 			AdoptWorldTicketSession(config);
+			// An admitted return to the initial lobby is complete before anyone presses
+			// Start. The host's roster distinguishes it from a running seat awaiting an image.
+			if (!m_IsHost && m_OrdinaryTicketRejoin && m_ChatSession && m_ChatSession->IsReady()) {
+				const NetReconnectClient* returning = m_ChatSession->GetReconnectClient();
+				if (returning && returning->GetState() == NetH4ClientState::Joined && returning->GetRosterReplica().HasRoster()) {
+					const NetSeatRoster& roster = returning->GetRosterReplica().Roster();
+					const NetRosterSeat* seat = roster.Find(static_cast<uint8_t>(m_ChatSession->GetLocalPeerId() + 1));
+					if (roster.stage == NetRosterStage::Lobby && seat && seat->phase == NetSeatPhase::Lobby) {
+						m_ChatSession->SetRejoinPhase(NetSession::RejoinPhase::Active);
+						m_ReconnectUx.NoteReconnected(SteadyNowMs());
+						m_OrdinaryTicketRejoin = m_HeldRejoinDriving = false;
+						m_HeldRejoinRoutes.clear(); m_HeldRejoinRetryAtMs = 0;
+						System::PrintDiagnosticLine("[net-match] saved seat returned to the lobby; waiting for host start");
+					}
+				}
+			}
 			// The readout states the host's policy, not whether a per-sender set has arrived yet: an
 			// automatic delay reads automatic from the first frame and gains the measured ping later.
 			m_InputDelayText = LobbyInputDelayText(config, snapshot, m_LocalPeerId);
@@ -11892,7 +11908,9 @@ static std::string ResyncSaveName() {
 				m_OrdinaryTicketRejoin = m_HeldRejoinDriving = false;
 				m_HeldRejoinRoutes.clear(); return;
 			}
-			const auto* session = m_WorkerSession ? m_WorkerSession : m_Session.get();
+			// The initial worker publishes its live session for lobby/chat; it does not
+			// transfer ownership to m_Session until the host starts the round.
+			const auto* session = m_WorkerSession ? m_WorkerSession : (m_ChatSession ? m_ChatSession : m_Session.get());
 			const bool connecting = !session || session->GetRejoinPhase() == NetSession::RejoinPhase::Connecting;
 			if (m_State == NetMatchServiceState::Starting && connecting && m_TicketRejoinAttemptStartedMs != 0 &&
 			    steadyMs >= m_TicketRejoinAttemptStartedMs && steadyMs - m_TicketRejoinAttemptStartedMs >= c_TicketRejoinAttemptBudgetMs && !m_CancelRequested.load()) {

@@ -12908,6 +12908,76 @@ namespace RTE {
 			return false;
 		}
 		if (!hostShown(hostService.GetLobbySnapshot())) return false;
+		{
+			// A saved seat rejoins the initial lobby, then waits past the connection
+			// attempt budget before the host starts. Admission, roster and lobby are real.
+			RematchFixture fixture;
+			if (!SetUpRematchFixture(fixture, "returned-lobby-waits", 43276, 2, error)) return false;
+			RematchPeer& host = fixture.Host();
+			RematchPeer& peer = *fixture.peers[1];
+			if (!host.session.StartHost(host.transport, host.config.sessionConfig, error) ||
+			    !peer.session.StartClient(peer.transport, "loopback", peer.config.sessionConfig, error)) return false;
+			const auto admit = [&] {
+				for (unsigned pump = 0; pump < 100; ++pump) {
+					host.session.Tick(fixture.clock.NowMs()); peer.session.Tick(fixture.clock.NowMs());
+					if (host.session.IsReady() && peer.session.IsReady() && peer.reconnect.GetState() == NetH4ClientState::Joined) return true;
+					fixture.clock.skippedMs.fetch_add(10);
+				}
+				return false;
+			};
+			if (!admit()) { *error = "the returning-lobby fixture did not admit its first connection"; return false; }
+			const NetRosterSeat original = *host.admission.GetRoster().Find(2);
+			peer.session.Close("leaving the lobby"); peer.transport.Stop();
+			for (unsigned pump = 0; pump < 3; ++pump) { host.session.Tick(fixture.clock.NowMs()); fixture.clock.skippedMs.fetch_add(10); }
+			peer.reconnect.Configure(&peer.store, RematchIdentity(), "Returning player");
+			peer.reconnect.SetUnixClock(&RematchUnixClock, nullptr);
+			peer.reconnect.SetHostContext("loopback", NetHash32{});
+			peer.reconnect.SetRequireStoredTicket(true);
+			peer.session.SetRejoinPhase(NetSession::RejoinPhase::Connecting);
+			if (!peer.session.StartClient(peer.transport, "loopback", peer.config.sessionConfig, error) || !admit()) return false;
+			const NetRosterSeat* reclaimed = host.admission.GetRoster().Find(2);
+			if (!peer.reconnect.UsedStoredTicket() || !reclaimed || reclaimed->owner != original.owner || reclaimed->ticket != original.ticket) {
+				*error = "the returned-lobby fixture did not reclaim its original authenticated seat"; return false;
+			}
+			for (RematchPeer* member: {&host, &peer}) {
+				member->runner.m_Config = member->config;
+				member->runner.m_MatchConfig = member->config.matchConfig;
+				member->runner.m_State = NetMatchRuntimeState::LobbySync;
+				NetLobbySessionConfig lobby;
+				lobby.host = member->host; lobby.localPeerId = member->LockstepId();
+				lobby.remoteTransportPeerIds = member->runner.BuildRemoteTransportMap(member->session);
+				lobby.matchConfig = member->config.matchConfig; lobby.session = &member->session;
+				lobby.sessionNowMs = [&fixture] { return fixture.clock.NowMs(); };
+				lobby.autoReady = lobby.autoStart = false; lobby.timeoutMs = 8000;
+				if (!member->runner.m_Lobby.Start(member->transport, lobby, error)) return false;
+			}
+			for (unsigned pump = 0; pump < 100 && peer.runner.m_Lobby.GetState() != NetLobbyState::WaitingForReady; ++pump) {
+				host.runner.m_Lobby.Tick(fixture.clock.NowMs()); peer.runner.m_Lobby.Tick(fixture.clock.NowMs());
+				fixture.clock.skippedMs.fetch_add(10);
+			}
+			if (peer.runner.m_Lobby.GetState() != NetLobbyState::WaitingForReady) { *error = "the returned seat did not receive the lobby configuration"; return false; }
+			NetMatchService returned;
+			returned.m_State = NetMatchServiceState::Starting;
+			returned.m_LocalPeerId = peer.LockstepId();
+			returned.m_ChatSession = &peer.session;
+			returned.m_OrdinaryTicketRejoin = returned.m_HeldRejoinDriving = true;
+			const uint64_t attemptAt = 1000;
+			returned.m_TicketRejoinAttemptStartedMs = attemptAt;
+			returned.m_ReconnectUx.NoteDropped(attemptAt, "Returning to the lobby");
+			returned.m_ReconnectUx.NoteAttemptStarted(attemptAt);
+			returned.m_ReadyRequested.store(true);
+			peer.runner.m_Lobby.SetLocalReady(true);
+			NetMatchRunnerConfig publish;
+			returned.ConfigureLobbyPublishing(publish, peer.runner);
+			publish.publishLobby(peer.runner.BuildLobbySnapshot(peer.transport, peer.session));
+			returned.DriveOrdinaryTicketRejoin(attemptAt + 2 * NetMatchService::c_TicketRejoinAttemptBudgetMs);
+			returned.m_ChatSession = nullptr;
+			if (returned.m_OrdinaryTicketRejoin || returned.m_HeldRejoinDriving || returned.m_CancelRequested.load() ||
+			    peer.session.GetRejoinPhase() != NetSession::RejoinPhase::Active || !returned.m_ReadyRequested.load() || !peer.runner.m_Lobby.IsLocalReady()) {
+				*error = "an admitted lobby return was cancelled or lost Ready while waiting for host start"; return false;
+			}
+			std::cout << "[net-match-selftest] PASS returned_lobby_waits_past_rejoin_deadline" << std::endl;
+		}
 		std::cout << "[net-match-selftest] PASS joining_lobby_waits_for_host_config" << std::endl;
 		return true;
 	}
@@ -17848,6 +17918,18 @@ namespace RTE {
 		if (!client.m_CancelRequested.load() || client.GetReconnectUx().GetState() == NetReconnectUxState::Retrying ||
 		    client.GetLobbySnapshot().statusText.find("did not answer") == std::string::npos) {
 			*error = "an unanswered Connecting attempt is not cancelled with a visible outcome at its deadline"; return false;
+		}
+		{
+			NetSession admitted;
+			admitted.SetRejoinPhase(NetSession::RejoinPhase::ImagePending);
+			client.m_ChatSession = &admitted;
+			client.m_CancelRequested.store(false);
+			client.m_ReconnectUx.NoteAttemptStarted(now);
+			client.DriveOrdinaryTicketRejoin(now + NetMatchService::c_TicketRejoinAttemptBudgetMs);
+			client.m_ChatSession = nullptr;
+			if (client.m_CancelRequested.load() || client.GetReconnectUx().GetState() != NetReconnectUxState::Retrying) {
+				*error = "the initial worker's admitted session was treated as an unanswered connection"; return false;
+			}
 		}
 		for (uint32_t attempt = client.m_ReconnectUx.GetAttempts(); attempt < NetReconnectUx::c_MaxAttempts; ++attempt) {
 			client.m_ReconnectUx.NoteAttemptStarted(now);
