@@ -71,6 +71,10 @@ namespace RTE {
 			size_t offset = 0;
 		};
 		std::vector<Row> rows;
+		std::shared_ptr<const Pixels> fullPixels;
+		const uint8_t* RowBytes(int y) const {
+			return fullPixels ? fullPixels->bytes.get() + static_cast<size_t>(y) * rowBytes : rows[y].pixels->bytes.get() + rows[y].offset;
+		}
 	};
 
 	/// A scrolling layer of the Scene.

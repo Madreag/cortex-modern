@@ -79,10 +79,9 @@ bool BitmapSnapshot::SamePixels(const BitmapSnapshot& other) const {
 	if (this == &other) return true;
 	if (width != other.width || height != other.height || depth != other.depth || rowBytes != other.rowBytes) return false;
 	for (int y = 0; y < height; ++y) {
-		const Row& left = rows[y];
-		const Row& right = other.rows[y];
-		if (left.pixels == right.pixels && left.offset == right.offset) continue;
-		if (std::memcmp(left.pixels->bytes.get() + left.offset, right.pixels->bytes.get() + right.offset, rowBytes) != 0) return false;
+		const uint8_t* left = RowBytes(y);
+		const uint8_t* right = other.RowBytes(y);
+		if (left != right && std::memcmp(left, right, rowBytes) != 0) return false;
 	}
 	return true;
 }
@@ -92,13 +91,13 @@ BitmapSnapshot::BitmapPtr BitmapSnapshot::CopyBitmap() const {
 	BitmapPtr bitmap(create_bitmap_ex(depth, width, height));
 	if (!bitmap) throw std::bad_alloc();
 	for (int y = 0; y < height; ++y) {
-		const Row& row = rows[y];
-		std::memcpy(bitmap->line[y], row.pixels->bytes.get() + row.offset, rowBytes);
+		std::memcpy(bitmap->line[y], RowBytes(y), rowBytes);
 	}
 	return bitmap;
 }
 
 std::string BitmapSnapshot::PixelBytes() const {
+	if (fullPixels) return std::string(reinterpret_cast<const char*>(fullPixels->bytes.get()), LogicalBytes());
 	std::string bytes;
 	bytes.reserve(LogicalBytes());
 	for (const Row& row: rows) {
@@ -108,6 +107,7 @@ std::string BitmapSnapshot::PixelBytes() const {
 }
 
 size_t BitmapSnapshot::OwnedBytes() const {
+	if (fullPixels) return fullPixels->size;
 	size_t bytes = 0;
 	std::unordered_set<const Pixels*> allocations;
 	for (const Row& row: rows) {
@@ -157,6 +157,27 @@ bool BitmapSnapshot::RunSelfTest() {
 			const auto independent = Capture(source.get());
 			check(prefix + "independent_pixel_equality", first->SamePixels(*independent));
 			retain("first", first);
+			{
+				CheckpointWriter::BatchScope batch(true);
+				const auto packed = Capture(source.get());
+				check(prefix + "multiplayer_full_pixels_have_one_owner", packed->fullPixels && packed->rows.empty() && packed->SamePixels(*first) && packed->copiedBytes == original.size());
+				retain("packed_full", packed);
+				const auto same = Capture(source.get(), packed);
+				check(prefix + "multiplayer_unchanged_pixels_keep_one_owner", same->fullPixels == packed->fullPixels && same->rows.empty() && same->reusedRows == height && same->copiedBytes == 0);
+				retain("packed_same", same);
+				source->line[13][3] ^= 0x5a;
+				const auto changed = Capture(source.get(), same);
+				check(prefix + "multiplayer_unmarked_pixels_are_fresh", !changed->SamePixels(*packed) && changed->dirtyBytes == stride && changed->unmarkedDirtyBytes == stride);
+				retain("packed_sparse", changed);
+				const auto fromRows = Capture(source.get(), first);
+				check(prefix + "multiplayer_pixels_compare_with_row_storage", fromRows->SamePixels(*changed) && fromRows->PixelBytes() == changed->PixelBytes());
+				retain("packed_from_rows", fromRows);
+				for (int y = 0; y < height; ++y) source->line[y][0] ^= 0x33;
+				const auto dense = Capture(source.get(), changed);
+				check(prefix + "multiplayer_dense_pixels_keep_one_owner", dense->fullPixels && dense->rows.empty() && dense->fullCopy && dense->copiedBytes == original.size() && dense->dirtyBytes == original.size());
+				retain("packed_dense", dense);
+				reset();
+			}
 			const auto unchanged = Capture(source.get(), first);
 			bool shared = true;
 			for (int y = 0; y < height; ++y) shared &= unchanged->rows[y].pixels == first->rows[y].pixels && unchanged->rows[y].offset == first->rows[y].offset;
@@ -510,18 +531,34 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::CaptureRows(const BITMAP* 
 	const bool compatible = previous && previous->width == snapshot->width &&
 	    previous->height == snapshot->height && previous->depth == snapshot->depth;
 	markedAll = markedAll || (markedRows && markedRows->size() != static_cast<size_t>(snapshot->height));
+	const bool packed = CheckpointWriter::BatchEnabled();
+	const auto copyFull = [&] {
+		auto pixels = std::make_shared<Pixels>(snapshot->LogicalBytes());
+		for (int y = 0; y < snapshot->height; ++y) std::memcpy(pixels->bytes.get() + static_cast<size_t>(y) * snapshot->rowBytes, source->line[y], snapshot->rowBytes);
+		snapshot->copiedBytes = pixels->size;
+		snapshot->fullPixels = std::move(pixels);
+	};
+	if (packed && !compatible) {
+		// A full image needs one pixel owner rather than one reference per row.
+		snapshot->fullCopy = true;
+		snapshot->dirtyBytes = snapshot->LogicalBytes();
+		snapshot->dirtyRegionCount = 1;
+		for (int y = 0; y < snapshot->height; ++y) {
+			if (markedAll || (markedRows && (*markedRows)[y])) snapshot->markedBytes += snapshot->rowBytes;
+			else snapshot->unmarkedDirtyBytes += snapshot->rowBytes;
+		}
+		copyFull();
+		return snapshot;
+	}
 	std::vector<uint8_t> dirtyRows(snapshot->height, compatible ? 0 : 1);
-	if (compatible) snapshot->rows = previous->rows;
-	else snapshot->rows.resize(snapshot->height);
 	bool previousDirty = false;
 	for (int y = 0; y < snapshot->height; ++y) {
 		const bool marked = markedAll || (markedRows && (*markedRows)[y] != 0);
 		if (marked) snapshot->markedBytes += snapshot->rowBytes;
 		if (compatible) {
-			const Row& previousRow = previous->rows[y];
 			// Raw bitmap aliases remain writable, so unmarked rows also need an exact comparison.
 			snapshot->scannedBytes += snapshot->rowBytes;
-			dirtyRows[y] = std::memcmp(previousRow.pixels->bytes.get() + previousRow.offset, source->line[y], snapshot->rowBytes) != 0;
+			dirtyRows[y] = std::memcmp(previous->RowBytes(y), source->line[y], snapshot->rowBytes) != 0;
 		}
 		if (dirtyRows[y]) {
 			snapshot->dirtyBytes += snapshot->rowBytes;
@@ -533,6 +570,22 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::CaptureRows(const BITMAP* 
 	const uint64_t dirtyRowCount = snapshot->dirtyBytes / snapshot->rowBytes;
 	snapshot->fullCopy = !compatible || (dirtyRowCount != 0 &&
 	    dirtyRowCount * 100 >= static_cast<uint64_t>(snapshot->height) * snapshot->fullCopyPercent);
+	if (packed && snapshot->fullCopy) {
+		copyFull();
+		return snapshot;
+	}
+	if (packed && !dirtyRowCount && previous->fullPixels) {
+		snapshot->fullPixels = previous->fullPixels;
+		snapshot->reusedRows = snapshot->height;
+		return snapshot;
+	}
+	if (compatible && !previous->fullPixels) snapshot->rows = previous->rows;
+	else {
+		snapshot->rows.resize(snapshot->height);
+		if (compatible) {
+			for (int y = 0; y < snapshot->height; ++y) snapshot->rows[y] = {previous->fullPixels, static_cast<size_t>(y) * snapshot->rowBytes};
+		}
+	}
 	if (snapshot->fullCopy) std::fill(dirtyRows.begin(), dirtyRows.end(), 1);
 	for (int first = 0; first < snapshot->height;) {
 		if (!dirtyRows[first]) {
