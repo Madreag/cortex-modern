@@ -723,7 +723,7 @@ namespace RTE {
 				if (closed && client.GetState() != NetSessionState::HelloSent && client.GetState() != NetSessionState::Connecting) break;
 			}
 			const std::string told = client.BuildPlayerRefusalText();
-			const std::string expected = "Network protocol differs (host " + std::to_string(c_AlphaProtocol) + "; yours " + std::to_string(NetProtocol::c_Version) + ").";
+			const std::string expected = "Network protocol differs (host " + std::to_string(c_AlphaProtocol) + "; yours " + std::to_string(NetProtocol::c_Version) + "). Update both games to the same version.";
 			if (fromClient == c_InvalidNetPeerId || client.GetState() != NetSessionState::Rejected || told != expected) {
 				*error = "a new player refused by an older host read '" + told + "' in state " + NetSession::StateName(client.GetState()) + (fromClient == c_InvalidNetPeerId ? " (its hello never arrived)" : "");
 				return false;
@@ -774,14 +774,14 @@ namespace RTE {
 					*error = std::string("a peer advertising ") + c.advertised + " was never told why: " + *error;
 					return false;
 				}
-				const std::string expected = protocol ? "Network protocol differs (host " + std::to_string(NetProtocol::c_Version) + "; yours " + c.advertised + ")." :
+				const std::string expected = protocol ? "Network protocol differs (host " + std::to_string(NetProtocol::c_Version) + "; yours " + c.advertised + "). Update both games to the same version." :
 				    "Your build differs from the host's (host stage2-p2c-selftest; yours fixture-other-build).";
 				if (client.GetRejectReason() != (protocol ? NetRejectReason::ProtocolMismatch : NetRejectReason::BuildMismatch) ||
 				    client.BuildPlayerRefusalText() != expected || host.GetReadyPeerCount() != 0 || host.GetState() != NetSessionState::Listening) {
 					*error = "the advertised mismatch changed admission or lost its versions: " + client.BuildPlayerRefusalText(); return false;
 				}
 				// The host's own notice names what differed from its side, never "this host".
-				const std::string hostExpected = protocol ? "Their network protocol differs (theirs " + std::string(c.advertised) + "; yours " + std::to_string(NetProtocol::c_Version) + ")." :
+				const std::string hostExpected = protocol ? "Their network protocol differs (theirs " + std::string(c.advertised) + "; yours " + std::to_string(NetProtocol::c_Version) + "). Update both games to the same version." :
 				    "Their build differs from yours (theirs fixture-other-build; yours stage2-p2c-selftest).";
 				if (host.BuildPlayerRefusalText() != hostExpected) {
 					*error = "the host was told \"" + host.BuildPlayerRefusalText() + "\" where it must read \"" + hostExpected + "\""; return false;
