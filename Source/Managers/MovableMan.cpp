@@ -80,6 +80,7 @@ extern "C" {
 #include <fstream>
 #include <functional>
 #include <iomanip>
+#include <locale>
 #include <map>
 #include <memory>
 #include <queue>
