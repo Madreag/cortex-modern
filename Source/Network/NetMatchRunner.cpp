@@ -510,11 +510,10 @@ namespace RTE {
 				if (error) *error = m_SetupError;
 				return false;
 			}
-			// A world whose slots are all held tells the joiner so at once; one that chose to wait knocks for a slot, its countdown shown.
-			const bool slotsHeld = session.IsRejected() && session.GetMismatchKey() == "slots_held";
 			m_SlotWaitLeftMs = m_Config.waitForSlot ? maxWaitMs - waitMs : 0;
-			// A reconnect can knock before the host's transport notices the dead slot; retry until the timeout frees it.
-			if (!m_Config.host && session.IsRejected() && session.GetRejectReason() == NetRejectReason::SessionFull && (!slotsHeld || m_Config.waitForSlot)) {
+			// A reconnect may arrive before its dead transport frees an id; a seat refusal is final unless the player chose to wait.
+			const bool reconnectWaitingForId = session.GetRejoinPhase() == NetSession::RejoinPhase::Connecting && session.GetMismatchKey() == "peer_count";
+			if (!m_Config.host && session.IsRejected() && session.GetRejectReason() == NetRejectReason::SessionFull && (m_Config.waitForSlot || reconnectWaitingForId)) {
 				if (nowMs >= nextRetryMs) {
 					nextRetryMs = nowMs + 2000;
 					std::string retryError;

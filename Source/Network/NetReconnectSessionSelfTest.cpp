@@ -9227,7 +9227,149 @@ namespace RTE {
 		return 0;
 	}
 
+	int TestSignedSeatLobbyAdmission() {
+		std::string error;
+		if (!ResetLaneDirectory(&error)) return Fail(error);
+		uint64_t unixNow = 1700000000000ULL, nowMs = 0;
+		const uint16_t port = 42139;
+		NetParticipantIdentityStore hostKey, ownerKey, otherKey;
+		hostKey.SetPath(StorePath("lobby-host-key")); ownerKey.SetPath(StorePath("lobby-owner-key")); otherKey.SetPath(StorePath("lobby-other-key"));
+		if (!hostKey.LoadOrCreate(&error) || !ownerKey.LoadOrCreate(&error) || !otherKey.LoadOrCreate(&error)) return Fail(error);
+		NetConnectionAuthority hostAuthority, ownerAuthority, otherAuthority;
+		hostAuthority.Configure(&hostKey, "", "", ""); ownerAuthority.Configure(&ownerKey, "", "", ""); otherAuthority.Configure(&otherKey, "", "", "");
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) return Fail("signed lobby registry");
+		NetReconnectHost admission;
+		NetSessionConfig hostConfig = MakeSessionConfig(port, 101, "Host");
+		hostConfig.maxPeers = 1;
+		admission.Configure(&registry, hostConfig.sessionId, MakeIdentity());
+		admission.SetSeatTable({MakeSeatTable().front()}, NetMatchMode::PvPSkirmish);
+		admission.SetUnixClock(&FixedUnixClock, &unixNow);
+		admission.SetConnectionAuthority(&hostAuthority);
+		NetHostBanStore bans;
+		bans.SetPath(StorePath("lobby-bans"));
+		if (!bans.Load(&error)) return Fail(error);
+		admission.SetBanStore(&bans);
+		LoopbackTransport hostTransport, ownerTransport;
+		NetSession host, owner;
+		host.SetReconnectHost(&admission);
+		host.EnableParticipantProof(nullptr);
+		host.SetHostBanStore(&bans);
+		NetReconnectTicketStore ownerStore;
+		ownerStore.SetPath(StorePath("lobby-owner"));
+		NetReconnectClient ownerClient;
+		ownerClient.Configure(&ownerStore, MakeIdentity(), "Original player");
+		ownerClient.SetUnixClock(&FixedUnixClock, &unixNow);
+		ownerClient.SetHostContext("loopback", MakeHash(5));
+		ownerClient.SetConnectionAuthority(&ownerAuthority);
+		owner.SetReconnectClient(&ownerClient);
+		owner.EnableParticipantProof(&ownerKey);
+		if (!host.StartHost(hostTransport, hostConfig, &error) ||
+		    !owner.StartClient(ownerTransport, "loopback", MakeSessionConfig(port, 202, "Original player"), &error)) return Fail(error);
+		const auto pump = [&](NetSession* applicant, LoopbackTransport* transport, uint64_t duration = 600) {
+			for (const uint64_t until = nowMs + duration; nowMs <= until; nowMs += 10) {
+				host.Tick(nowMs); owner.Tick(nowMs);
+				if (applicant) applicant->Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10); ownerTransport.AdvanceTimeMs(10);
+				if (transport) transport->AdvanceTimeMs(10);
+			}
+		};
+		pump(nullptr, nullptr);
+		NetH4TicketRecord ticket;
+		if (!owner.IsReady() || host.GetReadyPeerCount() != 1 || ownerStore.Load(unixNow, ticket) != NetH4TicketLoadResult::Loaded)
+			return Fail("signed lobby did not seat its original player");
+		const NetPeerId originalConnection = host.GetReadyPeers().front().transportPeerId;
+		const auto originalKept = [&] {
+			NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
+			return owner.IsReady() && host.GetReadyPeerCount() == 1 &&
+			    admission.GetSeatHolder(ticket.stableSeat, holder, generation, incarnation) && holder == originalConnection && generation == ticket.holderGeneration;
+		};
+		uint64_t nonce = 300;
+		const auto refuse = [&](const char* name, bool copied, bool requireTicket, bool admissionAttached, bool wrongVersion,
+		                        NetRejectReason reason, const std::string& text) {
+			LoopbackTransport transport;
+			NetSession applicant;
+			NetReconnectTicketStore store;
+			store.SetPath(StorePath(name));
+			if (copied && !store.Store(ticket, &error)) return false;
+			NetReconnectClient client;
+			client.Configure(&store, MakeIdentity(), name);
+			client.SetUnixClock(&FixedUnixClock, &unixNow);
+			client.SetHostContext("loopback", MakeHash(5));
+			client.SetConnectionAuthority(&otherAuthority);
+			client.SetRequireStoredTicket(requireTicket);
+			if (admissionAttached) applicant.SetReconnectClient(&client);
+			applicant.EnableParticipantProof(&otherKey);
+			auto config = MakeSessionConfig(port, ++nonce, name);
+			if (wrongVersion) config.minProtocolVersion = config.maxProtocolVersion = NetProtocol::c_Version + 1;
+			if (!applicant.StartClient(transport, "loopback", config, &error)) return false;
+			pump(&applicant, &transport);
+			if (!applicant.IsRejected() || applicant.GetRejectReason() != reason || applicant.BuildRejectText().find(text) == std::string::npos || !originalKept()) {
+				error = std::string(name) + ": " + applicant.BuildRejectText();
+				return false;
+			}
+			return true;
+		};
+		if (!refuse("copied-rejoin", true, true, true, false, NetRejectReason::IdentityUnproven, "Original player owns this seat") ||
+		    !refuse("copied-join", true, false, true, false, NetRejectReason::IdentityUnproven, "Original player owns this seat") ||
+		    !refuse("newcomer", false, false, true, false, NetRejectReason::SessionFull, "Every seat is taken") ||
+		    !refuse("uncommitted-ready", false, false, false, false, NetRejectReason::HostNotAccepting, "not admitted this seat") ||
+		    !refuse("wrong-version", false, false, true, true, NetRejectReason::ProtocolMismatch, "protocol")) return Fail(error);
+		if (!bans.Ban(otherKey.PublicId(), NetHostBanScope::Session, "Other player", "banned", hostConfig.sessionId, unixNow, &error) ||
+		    !refuse("banned-rejoin", true, true, true, false, NetRejectReason::ParticipantBanned, "banned")) return Fail(error);
+
+		// Unanswered proofs consume the same bounded pending range as a running match.
+		std::array<LoopbackTransport, NetSession::c_MaxPendingAdmissions + 1> pending;
+		NetClientHello hello;
+		const auto manifest = MakeManifest();
+		hello.gameVersion = manifest.gameVersion; hello.buildId = manifest.buildId;
+		hello.controllerFrameVersion = manifest.controllerFrameVersion; hello.controllerFrameEncodedSize = manifest.controllerFrameEncodedSize;
+		hello.deterministicConfigHash = manifest.deterministicConfigHash; hello.moduleManifestHash = manifest.moduleManifestHash;
+		hello.sessionRulesHash = manifest.sessionRulesHash; hello.sessionIdentityHash = manifest.sessionIdentityHash;
+		hello.minProtocolVersion = hello.maxProtocolVersion = NetProtocol::c_Version;
+		hello.displayName = "Pending player";
+		for (size_t index = 0; index < pending.size(); ++index) {
+			auto& transport = pending[index];
+			if (!transport.Connect("loopback", port, &error)) return Fail(error);
+			hello.clientNonce = ++nonce;
+			std::vector<uint8_t> bytes;
+			if (!NetProtocol::Encode({1, 0, hello}, bytes) || !transport.Send(1, NetTransportLane::ControlReliable, bytes, &error)) return Fail(error);
+			pump(nullptr, &transport, 20);
+			bool challenged = false, full = false;
+			for (const auto& event: transport.PollEvents()) {
+				if (event.type != NetTransportEventType::PacketReceived) continue;
+				const auto decoded = NetProtocol::Decode(event.bytes);
+				if (!decoded.ok) return Fail("pending proof did not decode");
+				challenged = challenged || std::holds_alternative<NetParticipantChallenge>(decoded.message.payload);
+				if (const auto* rejected = std::get_if<NetJoinRejected>(&decoded.message.payload)) full = rejected->rejectReason == NetRejectReason::SessionFull;
+			}
+			if (challenged != (index < NetSession::c_MaxPendingAdmissions) || full != (index == NetSession::c_MaxPendingAdmissions) || !originalKept())
+				return Fail("a pending lobby proof changed the player cap or its bounded admission range");
+		}
+		for (auto& transport: pending) transport.Stop();
+		owner.Close("returning from the lobby");
+		pump(nullptr, nullptr, 20);
+		LoopbackTransport returningTransport;
+		NetSession returning;
+		NetReconnectClient returningClient;
+		returningClient.Configure(&ownerStore, MakeIdentity(), "Original player");
+		returningClient.SetUnixClock(&FixedUnixClock, &unixNow);
+		returningClient.SetHostContext("loopback", MakeHash(5));
+		returningClient.SetConnectionAuthority(&ownerAuthority);
+		returningClient.SetRequireStoredTicket(true);
+		returning.SetReconnectClient(&returningClient);
+		returning.EnableParticipantProof(&ownerKey);
+		if (!returning.StartClient(returningTransport, "loopback", MakeSessionConfig(port, ++nonce, "Original player"), &error)) return Fail(error);
+		pump(&returning, &returningTransport);
+		if (!returning.IsReady() || !returningClient.UsedStoredTicket() || returningClient.GetIncarnation() != 2 ||
+		    host.GetReadyPeerCount() != 1 || returning.GetLocalPeerId() != MakeSeatTable().front().peerId || admission.IsLiveMatch())
+			return Fail("the original player could not reclaim its lobby seat: " + returning.BuildRejectText());
+		std::cout << "[net-reconnect-session-selftest] PASS signed_lobby copied_join_and_rejoin=named_refusal ban=refused version=refused uncommitted_ready=refused pending=bounded owner=same_seat" << std::endl;
+		return 0;
+	}
+
 	int TestSignedSeatOwnership() {
+		if (const int result = TestSignedSeatLobbyAdmission(); result != 0) return result;
 		std::string error;
 		if (!ResetLaneDirectory(&error)) return Fail(error);
 		if (!GetNetParticipantCrypto().IsRealCrypto()) return Fail("signed seats need the real participant crypto provider");

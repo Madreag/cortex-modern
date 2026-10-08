@@ -3131,6 +3131,7 @@ namespace RTE {
 	bool NetReconnectClient::AbsorbRejection(uint64_t nowMs, NetRejectReason reason, const std::string& key) {
 		m_LastRejectReason = reason;
 		m_HasLastRejectReason = true;
+		if (reason == NetRejectReason::IdentityUnproven) return false;
 		if (reason == NetRejectReason::SeatReassigned || reason == NetRejectReason::ParticipantRemoved ||
 		    reason == NetRejectReason::ParticipantBanned) {
 			if (reason != NetRejectReason::SeatReassigned) {

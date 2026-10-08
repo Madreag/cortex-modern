@@ -12525,8 +12525,7 @@ namespace RTE {
 		return true;
 	}
 
-	// A joiner the host refuses because the match is full knocks again while a dead slot may free; its whole wait still ends at the
-	// round's budget with the refusal named, never knocking on past it until someone cancels.
+	// An ordinary full-match refusal is immediate; an explicit wait still ends at its budget.
 	bool TestAFullMatchsKnockEndsAtTheBudget(std::string* error) {
 		LoopbackTransport hostTransport, firstTransport, knockTransport;
 		NetSession host, first, knock;
@@ -12569,6 +12568,8 @@ namespace RTE {
 		runner.m_Config.host = false;
 		runner.m_Config.joinAddress = "loopback";
 		runner.m_Config.sessionConfig = knockConfig;
+		uint32_t retries = 0;
+		runner.m_Config.resolveJoinAddress = [&] { ++retries; return std::string("loopback"); };
 		std::atomic<bool> cancel{false};
 		runner.m_Config.cancelRequested = &cancel;
 		bool sawFull = false;
@@ -12586,11 +12587,21 @@ namespace RTE {
 		std::string waitError;
 		const bool ready = runner.WaitForSessionReady(knockTransport, knock, 1, 400, &waitError);
 		const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+		if (ready || !knock.IsRejected() || knock.GetMismatchKey() != "peer_count" || retries != 0) {
+			cancel.store(true); watchdog.join();
+			*error = "an ordinary full-match refusal restarted the connection";
+			return false;
+		}
+		runner.m_Config.waitForSlot = true;
+		if (!knock.StartClient(knockTransport, "loopback", knockConfig, error)) { cancel.store(true); watchdog.join(); return false; }
+		const auto waitingBegan = std::chrono::steady_clock::now();
+		const bool waitingReady = runner.WaitForSessionReady(knockTransport, knock, 1, 400, &waitError);
+		const double waitingMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waitingBegan).count();
 		cancel.store(true);
 		watchdog.join();
 		std::cout << "[net-match-selftest] full_knock ready=" << ready << " refused_full=" << sawFull << " elapsed_ms=" << static_cast<long long>(elapsedMs) << " why='" << waitError << "'" << std::endl;
 		// The wait ends on the first pass past its budget: one 5 ms sleep at the platform timer's granularity plus a pump, never a retry's 2 s.
-		if (ready || !sawFull || waitError == "match setup canceled" || elapsedMs > 400.0 + 50.0) {
+		if (ready || waitingReady || !sawFull || waitError == "match setup canceled" || elapsedMs > 400.0 + 50.0 || waitingMs > 400.0 + 50.0) {
 			*error = "a joiner refused as full waited " + std::to_string(static_cast<long long>(elapsedMs)) + " ms against a 400 ms budget and ended '" + waitError + "'";
 			return false;
 		}
@@ -18278,6 +18289,7 @@ namespace RTE {
 			else if (name == "state-delivery") passed = TestLobbyStartWaitsForReceivedState(&error);
 			else if (name == "state-receipts") passed = TestLobbyStateReceiptsAreBoundAndRepeated(&error);
 			else if (name == "joining-lobby") passed = TestAJoiningLobbyWaitsForHostConfig(&error);
+			else if (name == "full-knock") passed = TestAFullMatchsKnockEndsAtTheBudget(&error);
 			else if (name == "relay-core") {
 				// RunBeforeInitialization already checked settings and candidate policy,
 				// before the global SettingsMan singleton was constructed.
