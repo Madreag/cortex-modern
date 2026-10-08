@@ -26,7 +26,7 @@
 #include <steam/steamnetworkingcustomsignaling.h>
 #include <steam/steamnetworkingsockets.h>
 // A relayed route dies once its TURN permission lapses unless the library refreshes it.
-#if !defined(STEAMNETWORKINGSOCKETS_TURN_LIFETIME) || !defined(STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY) || !defined(STEAMNETWORKINGSOCKETS_TURN_STREAMS)
+#if !defined(STEAMNETWORKINGSOCKETS_TURN_LIFETIME) || !defined(STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY) || STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY < 2 || !defined(STEAMNETWORKINGSOCKETS_TURN_STREAMS)
 #error "GameNetworkingSockets without external/patches/gns-turn-lifetime.patch; build it into <GNS_ROOT>-turnfix, see docs/turn-relay.md"
 #endif
 #endif
@@ -839,9 +839,15 @@ namespace RTE {
 					}
 					break;
 				case k_ESteamNetworkingConnectionState_ClosedByPeer:
-				case k_ESteamNetworkingConnectionState_ProblemDetectedLocally:
-					HandleConnectionClosed(info->m_hConn, EndDebugText(*info), info->m_eOldState);
+				case k_ESteamNetworkingConnectionState_ProblemDetectedLocally: {
+					const std::string reason = EndDebugText(*info);
+					// A terminal callback still owns a native connection until the
+					// application closes it. Retiring only our maps leaks its ICE
+					// requests and relay allocations into every later retry.
+					m_Interface->CloseConnection(info->m_hConn, 0, nullptr, false);
+					HandleConnectionClosed(info->m_hConn, reason, info->m_eOldState);
 					break;
+				}
 				case k_ESteamNetworkingConnectionState_None:
 				default:
 					break;

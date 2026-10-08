@@ -170,6 +170,9 @@ namespace RTE {
 		}
 
 		std::string Scrub(std::string line) {
+			// Native rendezvous diagnostics can contain the ICE authentication
+			// fragment before the transport has any relay login to remember.
+			if (line.find("pwd_frag:") != std::string::npos) return "ICE authentication signal <redacted>";
 			std::vector<std::string> logins;
 			{
 				std::lock_guard lock(Mutex());

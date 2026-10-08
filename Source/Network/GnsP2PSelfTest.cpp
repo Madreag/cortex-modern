@@ -253,8 +253,11 @@ namespace RTE {
 			}
 
 			const std::string& Name() const { return m_Name; }
+			void NoteConnection(HSteamNetConnection connection) { m_Connection.store(connection); }
+			HSteamNetConnection Connection() const { return m_Connection.load(); }
 
 		private:
+			std::atomic<HSteamNetConnection> m_Connection{k_HSteamNetConnection_Invalid};
 			const std::string m_Name;
 			std::mutex m_Mutex;
 			std::deque<Signal> m_Signals;
@@ -266,7 +269,8 @@ namespace RTE {
 		public:
 			StubConnectionSignaling(std::shared_ptr<SignalQueue> out, std::shared_ptr<std::atomic<int>> releases) : m_Out(std::move(out)), m_Releases(std::move(releases)) {}
 
-			bool SendSignal(HSteamNetConnection, const SteamNetConnectionInfo_t&, const void* message, int size) override {
+			bool SendSignal(HSteamNetConnection connection, const SteamNetConnectionInfo_t&, const void* message, int size) override {
+				m_Out->NoteConnection(connection);
 				m_Out->Push(message, size, "SendSignal");
 				return true;
 			}
@@ -757,6 +761,15 @@ namespace RTE {
 						}
 					}
 					pump();
+					if (failure.empty()) {
+						SteamNetConnectionInfo_t native{};
+						const HSteamNetConnection connection = toHost->Connection();
+						if (connection == k_HSteamNetConnection_Invalid || SteamNetworkingSockets()->GetConnectionInfo(connection, &native)) {
+							failure = "the terminal callback left the joiner's native connection open";
+						} else {
+							Say("the terminal callback released the native connection before transport shutdown");
+						}
+					}
 					host.transport.Stop();
 					joiner.transport.Stop();
 				}

@@ -7983,7 +7983,8 @@ namespace RTE {
 		NetRelayLogins::Remember("scrub-user-4c1d,ab");
 		NetRelayLogins::Remember("scrub-pass-77e0");
 		const std::string scrubbed = NetRelayLogins::Scrub("TURN allocate user=scrub-user-4c1d pass 'scrub-pass-77e0' tab ab");
-		const bool scrubs = scrubbed == "TURN allocate user=<relay-login> pass '<relay-login>' tab <relay-login>";
+		const bool scrubs = scrubbed == "TURN allocate user=<relay-login> pass '<relay-login>' tab <relay-login>" &&
+		    NetRelayLogins::Scrub("Initial ICE auth: { ice { auth { pwd_frag: \"test-fragment\" } } }") == "ICE authentication signal <redacted>";
 		const bool pass = logins == 0 && files >= 8 && scrubs;
 		std::cout << "[net-match-selftest] " << (pass ? "PASS" : "FAIL") << " a_written_config_holds_no_relay_login files=" << files << " logins=" << logins
 		          << (first.empty() ? "" : " first=" + first) << " scrubbed='" << scrubbed << "'" << std::endl;
