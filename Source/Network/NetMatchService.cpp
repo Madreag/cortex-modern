@@ -8472,6 +8472,8 @@ static std::string ResyncSaveName() {
 	void NetMatchService::PumpSessionEvents() {
 		// Nothing sends on the wire from off this thread while this pump may change it; the end of the pump arms it again.
 		DisarmHostLiveness();
+		// A missing input cannot stop the route check that lets this seat return.
+		UpdateConnectionAuthority(SteadyNowMs());
 		PushPendingToasts();
 		PumpHostMigration();
 		if (m_Coordinator && m_Coordinator->IsMigrating())
@@ -10047,11 +10049,13 @@ static std::string ResyncSaveName() {
 		}
 		const uint32_t revision = m_ConnectionAuthority.NetworkRevision();
 		const bool changed = revision != m_ConnectionNetworkRevision;
-		if (changed && m_ConnectionNetworkRevision != 0) {
+		const bool refresh = changed && m_ConnectionNetworkRevision != 0;
+		const bool applied = !refresh || m_State != NetMatchServiceState::Running || !m_Coordinator || m_Coordinator->NoteLocalRouteChanged();
+		if (refresh && applied) {
 			System::PrintDiagnosticLine("[net-connection] network changed; refreshing the same seat's route");
 			if (m_IsHost && s_PortMapRequested) { ReleaseHostPortMap(); RequestHostPortMap(m_BeaconGamePort, nullptr); }
 		}
-		m_ConnectionNetworkRevision = revision;
+		if (applied) m_ConnectionNetworkRevision = revision;
 		if (changed || nowMs >= m_ConnectionRouteAtMs) {
 			m_ConnectionRouteAtMs = nowMs + 1000;
 			NetConnectionRoute route;

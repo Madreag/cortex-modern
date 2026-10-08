@@ -1294,6 +1294,8 @@ namespace RTE {
 		}
 		/// A transport fault starts agreement without choosing a simulation departure.
 		bool BeginHostMigration(uint64_t nowMs);
+		/// A changed local route rejoins its seat; false leaves an already granted tick to finish first.
+		bool NoteLocalRouteChanged();
 		/// The handover's vote as this peer last saw it: the successor's own tally, or the one its roll call told a voter.
 		NetHostMigrationReach GetMigrationReach() const { NET_PLANE_CHECK(); return m_MigrationReach; }
 		bool BeginHostMigrationAfterHeal(uint64_t nowMs);

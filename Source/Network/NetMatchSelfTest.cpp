@@ -17923,6 +17923,63 @@ namespace RTE {
 	}
 
 	bool TestInternetTicketRecovery(std::string* error) {
+		{
+			struct RestoreAdmission {
+				bool enabled = NetMatchService::IsAdmissionEnabled();
+				~RestoreAdmission() { NetMatchService::SetAdmissionEnabled(enabled); }
+			} restore;
+			NetMatchService::SetAdmissionEnabled(true);
+			for (int phase = 0; phase < 3; ++phase) {
+				LoopbackTransport hostWire, clientWire;
+				NetPeerId hostPeer = 0, clientPeer = 0;
+				if (!StartLoopbackTransports(43193, hostWire, clientWire, hostPeer, clientPeer, error)) return false;
+				NetMatchService host, returning;
+				NetLockstepConfig config;
+				config.sessionId = config.roundId = 778; config.peerCount = 2; config.startFrame = 1;
+				config.matchConfig = MakeConfig(); config.matchConfig.sessionId = config.sessionId;
+				config.matchConfig.successorOrder = {2}; config.matchConfig.migrationPeers = {{2, 43194, {"loopback"}}};
+				config.migrationKey.fill(0x39);
+				config.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); };
+				config.localPeerId = 1; config.remoteTransportPeerIds = {{2, hostPeer}};
+				host.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+				if (!host.m_Coordinator->Start(hostWire, config, error)) return false;
+				config.localPeerId = 2; config.remoteTransportPeerIds = {{1, clientPeer}};
+				returning.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+				if (!returning.m_Coordinator->Start(clientWire, config, error)) return false;
+				for (uint64_t now = 0; now < 50; now += 5) {
+					host.m_Coordinator->Tick(now); returning.m_Coordinator->Tick(now);
+					hostWire.AdvanceTimeMs(5); clientWire.AdvanceTimeMs(5);
+				}
+				if (!host.m_Coordinator->IsRunning() || !returning.m_Coordinator->IsRunning()) {
+					*error = "the route-change fixture did not enter the live round"; return false;
+				}
+				host.m_IsHost = true; host.m_LocalPeerId = 1; returning.m_LocalPeerId = 2;
+				host.m_State = returning.m_State = NetMatchServiceState::Running;
+				const uint64_t steady = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+				const uint64_t wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+				host.UpdateConnectionAuthority(steady); returning.UpdateConnectionAuthority(steady);
+				if (phase == 1 && !returning.m_Coordinator->BeginHostMigration(50)) {
+					*error = "the route-change fixture did not enter handover"; return false;
+				}
+				if (phase == 2 && !returning.m_Coordinator->BeginSimulationTick(1, error)) return false;
+				// A resumed clock enters the same authority revision path as a changed address.
+				host.m_ConnectionAuthority.Update(steady + 1, wall + 21);
+				returning.m_ConnectionAuthority.Update(steady + 1, wall + 21);
+				host.PumpSessionEvents(); returning.PumpSessionEvents();
+				if (phase == 2) {
+					if (!returning.m_Coordinator->IsRunning()) { *error = "a route change interrupted a granted simulation tick"; return false; }
+					(void)returning.m_Coordinator->FinishSimulationTick(1);
+					returning.PumpSessionEvents();
+				}
+				if (!host.m_Coordinator->IsRunning() || !returning.m_Coordinator->IsStopped() || returning.m_Coordinator->IsMigrating() ||
+				    returning.m_Coordinator->GetStats().timeoutReason != "PeerHeld:Your network changed - rejoining the same seat" ||
+				    returning.m_Coordinator->GetHostPeerId() != 1 || returning.m_LocalPeerId != 2 ||
+				    returning.m_ConnectionNetworkRevision != returning.m_ConnectionAuthority.NetworkRevision()) {
+					*error = "a local route change did not leave the waiting client ready for same-seat recovery while the host kept running"; return false;
+				}
+			}
+			System::PrintDiagnosticLine("[net-match-selftest] PASS local_route_change_rejoins_during_input_wait_and_handover");
+		}
 		for (const auto& address: {"ice:ip:::1", "ice:str:successor", "192.0.2.4", "2001:db8::4"}) {
 			NetReconnectUx prompt;
 			prompt.OfferStoredTicket(NetH4TicketLoadResult::Loaded, address);
