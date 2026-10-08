@@ -9263,6 +9263,106 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		}
 	}
 	{
+		std::string before, after;
+		CheckpointText first, second;
+		std::vector<std::string> problems;
+		bool captured = false;
+		{
+			LuaStateWrapper metadataState;
+			metadataState.Initialize();
+			metadataState.LoadScriptGraphHelper();
+			const bool planted = metadataState.RunScriptString(R"lua(
+				_MetadataCapture = { box = Box() }
+				_MetadataCapture.alias = _MetadataCapture.box
+				Box._CheckpointMetadataMember = { value = 31 }
+				_ScriptGraphSetInstance(_MetadataCapture.box, { leaf = Vector(3, 5) })
+			)lua") == 0;
+			captured = planted && metadataState.SerializeScriptGraph(before, problems);
+			{
+				CheckpointWriter::BatchScope batches(true);
+				captured = captured && metadataState.CaptureScriptGraph(first, problems, true);
+			}
+			const bool changed = metadataState.RunScriptString("_MetadataCapture.box.leaf.X = 29; Box._CheckpointMetadataMember.value = 47") == 0;
+			captured = changed && captured && metadataState.SerializeScriptGraph(after, problems);
+			{
+				CheckpointWriter::BatchScope batches(true);
+				captured = captured && metadataState.CaptureScriptGraph(second, problems, true);
+			}
+		}
+		const bool exact = captured && before != after && std::async(std::launch::async, [first, second, before, after] {
+			return first.Text() == before && second.Text() == after;
+		}).get();
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " native_metadata_keeps_live_class_and_instance_members_after_source_death" << std::endl;
+		for (const auto& problem: problems) std::cout << "[script-graph-selftest] native metadata capture: " << problem << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
+		std::array<unsigned, 2> lookups{};
+		bool exact = true;
+		for (size_t run = 0; run < lookups.size(); ++run) {
+			LuaStateWrapper markerState;
+			markerState.Initialize();
+			if (markerState.RunScriptString("_MarkerFallbackCapture = Vector(3, 5)") != 0) { exact = false; continue; }
+			lua_State* state = markerState.GetLuaState();
+			const int top = lua_gettop(state);
+			lua_getglobal(state, "_MarkerFallbackCapture");
+			lua_getmetatable(state, -1);
+			lua_pushnil(state); lua_setfield(state, -2, "__luabind_class");
+			lua_newtable(state);
+			lua_pushlightuserdata(state, &lookups[run]);
+			lua_pushcclosure(state, [](lua_State* source) -> int {
+				const char* key = lua_tostring(source, 2);
+				if (key && std::strcmp(key, "__luabind_class") == 0) {
+					++*static_cast<unsigned*>(lua_touserdata(source, lua_upvalueindex(1)));
+					lua_pushboolean(source, true);
+				} else lua_pushnil(source);
+				return 1;
+			}, 1);
+			lua_setfield(state, -2, "__index"); lua_setmetatable(state, -2);
+			lua_settop(state, top);
+			{
+				CheckpointWriter::BatchScope batches(run == 1);
+				CheckpointBuffer::AllocationScope allocation(run == 1);
+				CheckpointLua::NativeCache cache(state);
+				CheckpointLua::CaptureScope capture(state, cache);
+				capture.Capture();
+				capture.Finish(state);
+			}
+			lua_settop(state, top);
+		}
+		exact = exact && lookups[0] != 0 && lookups[0] == lookups[1];
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " native_metadata_keeps_class_marker_fallback_calls ordinary=" << lookups[0] << " pooled=" << lookups[1] << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
+		std::array<unsigned, 2> events{};
+		bool exact = true;
+		for (size_t run = 0; run < events.size(); ++run) {
+			LuaStateWrapper hookState;
+			hookState.Initialize();
+			if (hookState.RunScriptString("_MetadataHookCapture = { Vector(3, 5), Box() }") != 0) { exact = false; continue; }
+			lua_State* state = hookState.GetLuaState();
+			lua_pushlightuserdata(state, &events[run]); lua_setfield(state, LUA_REGISTRYINDEX, "_NativeMetadataHook");
+			lua_sethook(state, [](lua_State* source, lua_Debug*) {
+				lua_getfield(source, LUA_REGISTRYINDEX, "_NativeMetadataHook");
+				unsigned* count = static_cast<unsigned*>(lua_touserdata(source, -1));
+				lua_pop(source, 1); ++*count;
+			}, LUA_MASKCALL | LUA_MASKRET, 0);
+			{
+				CheckpointWriter::BatchScope batches(run == 1);
+				CheckpointBuffer::AllocationScope allocation(run == 1);
+				CheckpointLua::NativeCache cache(state);
+				CheckpointLua::CaptureScope capture(state, cache);
+				capture.Capture();
+				capture.Finish(state);
+			}
+			lua_sethook(state, nullptr, 0, 0);
+		}
+		exact = exact && events[0] != 0 && events[0] == events[1];
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " native_metadata_keeps_debug_hook_calls ordinary=" << events[0] << " pooled=" << events[1] << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
 		LuaStateWrapper descriptorState;
 		descriptorState.Initialize();
 		descriptorState.LoadScriptGraphHelper();

@@ -697,6 +697,12 @@ namespace RTE::CheckpointLua {
 			}
 			return tvisfalse(marker) ? nullptr : static_cast<const luabind::detail::object_rep*>(uddata(udataV(&subject)));
 		}
+		bool DirectClassMarker(const TValue& subject) const {
+			if (lua_gethook(State())) return false;
+			const GCtab* meta = tabref(udataV(&subject)->metatable);
+			const TValue* marker = meta && m_ClassMarker ? lj_tab_getstr(const_cast<GCtab*>(meta), m_ClassMarker) : nullptr;
+			return marker && !tvisnil(marker) && !tvisfalse(marker);
+		}
 		void Keep(int index) {
 			if (index < 0) index += lua_gettop(State()) + 1;
 			const TValue value = At(index);
@@ -879,7 +885,7 @@ namespace RTE::CheckpointLua {
 		}
 		// Overrides keep the ordinary Lua lookup; plain scalar getters need no call closure.
 		bool PlainScalarProperties(const TValue& subject, const luabind::detail::object_rep* object) {
-			if (!CheckpointWriter::BatchEnabled() || !object || !object->ptr() || !object->crep()) return false;
+			if (!CheckpointWriter::BatchEnabled() || !object || !object->ptr() || !object->crep() || !DirectClassMarker(subject)) return false;
 			const auto* type = object->crep();
 			if (type->get_class_type() != luabind::detail::class_rep::cpp_class ||
 			    (type->type() != LUABIND_TYPEID(Vector) && type->type() != LUABIND_TYPEID(Timer))) return false;
@@ -1095,11 +1101,13 @@ namespace RTE::CheckpointLua {
 				AnswerImmutable(quick, classRep, false);
 				shared.emplace(SharedHit{std::move(quick), 0});
 			}
-			const bool ownedScalar = CheckpointWriter::BatchEnabled() && owned && !detached && object && object->crep() &&
+			const bool directMembers = CheckpointWriter::BatchEnabled() && object && object->crep() && DirectClassMarker(value);
+			const bool ownedScalar = directMembers && owned && !detached &&
 			    object->crep()->get_class_type() == luabind::detail::class_rep::cpp_class &&
 			    ((className == "Vector" && object->crep()->type() == LUABIND_TYPEID(Vector)) ||
 			     (className == "Timer" && object->crep()->type() == LUABIND_TYPEID(Timer)));
-			if (ownedScalar) {
+			// Plain binding metadata uses the captured class and instance tables.
+			if (directMembers) {
 				entry.members = RecordPushed([&] {
 					object->crep()->get_table(State());
 					if (object->get_lua_table().is_valid()) object->get_lua_table().get(State());
