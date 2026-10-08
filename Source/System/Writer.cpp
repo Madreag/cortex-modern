@@ -248,6 +248,14 @@ namespace {
 }
 
 struct CheckpointText::Data {
+	struct Legacy;
+	struct Formatting {
+		std::mutex ready;
+		std::atomic<bool> formatted{false};
+		std::string text;
+		std::vector<std::pair<size_t, size_t>> peerRuns;
+	};
+	static std::shared_ptr<Data> Create();
 	explicit Data(std::pmr::memory_resource* resource = std::pmr::get_default_resource()) : values(resource), children(resource) {}
 	struct Pair {
 		const Data* current;
@@ -266,16 +274,22 @@ struct CheckpointText::Data {
 	mutable std::function<std::string()> produce;
 	bool deferred = false;
 	std::string peerMark;
-	mutable std::vector<std::pair<size_t, size_t>> peerRuns;
 	std::string identity;
 	size_t ownedBytes = 0;
 	bool hasPeer = false;
 	bool hasPrimitiveBlocks = false;
 	bool usesSimTime = false;
 	int64_t simTimeTicks = 0;
-	mutable std::mutex ready; // Held while this node formats; a producer that throws leaves the node for the next read.
-	mutable std::atomic<bool> formatted{false};
-	mutable std::string text;
+	mutable std::atomic<Formatting*> output{nullptr};
+	bool ownsOutput = true;
+	Formatting& Output() const {
+		Formatting* current = output.load(std::memory_order_acquire);
+		if (!current) {
+			auto candidate = std::make_unique<Formatting>();
+			if (output.compare_exchange_strong(current, candidate.get(), std::memory_order_acq_rel, std::memory_order_acquire)) current = candidate.release();
+		}
+		return *current;
+	}
 	std::shared_ptr<Data> drainNext;
 	bool SameTape(const Data& other) const {
 		if (values == other.values) return true;
@@ -284,6 +298,7 @@ struct CheckpointText::Data {
 	}
 
 	~Data() {
+		if (ownsOutput) delete output.load(std::memory_order_relaxed);
 		std::shared_ptr<Data> pending;
 		const auto enqueue = [&pending](Data& node) {
 			for (auto& child: node.children) {
@@ -304,6 +319,18 @@ struct CheckpointText::Data {
 	}
 };
 
+struct CheckpointText::Data::Legacy : Data {
+	explicit Legacy(std::pmr::memory_resource* resource = std::pmr::get_default_resource()) : Data(resource) {
+		ownsOutput = false;
+		output.store(&initialOutput, std::memory_order_relaxed);
+	}
+	Formatting initialOutput;
+};
+
+std::shared_ptr<CheckpointText::Data> CheckpointText::Data::Create() {
+	return CheckpointWriter::BatchEnabled() ? std::make_shared<Data>() : std::make_shared<Legacy>();
+}
+
 CheckpointText::CheckpointText() = default;
 
 CheckpointText::CheckpointText(std::string text) {
@@ -313,7 +340,7 @@ CheckpointText::CheckpointText(std::string text) {
 }
 
 CheckpointText CheckpointText::Deferred(std::function<std::string()> produce, size_t ownedBytes, std::string identity) {
-	auto data = std::make_shared<Data>();
+	auto data = Data::Create();
 	data->produce = std::move(produce);
 	data->deferred = true;
 	data->ownedBytes = ownedBytes;
@@ -323,7 +350,7 @@ CheckpointText CheckpointText::Deferred(std::function<std::string()> produce, si
 
 CheckpointText CheckpointText::DeferredWithPeerRuns(std::function<std::string()> produce, std::string mark, size_t ownedBytes) {
 	if (mark.empty()) throw std::logic_error("a per-peer run mark cannot be empty");
-	auto data = std::make_shared<Data>();
+	auto data = Data::Create();
 	data->produce = std::move(produce);
 	data->deferred = true;
 	data->peerMark = std::move(mark);
@@ -369,7 +396,7 @@ CheckpointText CheckpointText::AtSimTime(int64_t ticks) const {
 	std::unordered_map<const Data*, std::shared_ptr<Data>> bound;
 	std::vector<Frame> pending;
 	const auto copy = [&](const Data* source) {
-		auto node = std::make_shared<Data>();
+		auto node = Data::Create();
 		node->values = source->values;
 		node->children.reserve(source->children.size());
 		node->ownedBytes = source->ownedBytes;
@@ -471,7 +498,7 @@ CheckpointText CheckpointText::ReuseChildren(const CheckpointText& previous) con
 		}
 		std::shared_ptr<Data> value = frame.equal ? frame.previous : frame.current;
 		if (!frame.equal && frame.changed) {
-			value = std::make_shared<Data>();
+			value = Data::Create();
 			value->values = frame.current->values;
 			value->children = frame.current->children;
 			value->ownedBytes = frame.current->ownedBytes;
@@ -494,31 +521,31 @@ const std::string& CheckpointText::Text() const {
 	static const std::string empty;
 	if (!m_Data) return empty;
 	const auto root = m_Data;
-	if (root->formatted.load(std::memory_order_acquire)) return root->text;
+	if (root->Output().formatted.load(std::memory_order_acquire)) return root->Output().text;
 	if (root->usesSimTime) {
-		std::lock_guard lock(root->ready);
-		if (!root->formatted.load(std::memory_order_acquire)) {
-			root->text = AtSimTime(root->simTimeTicks).Text();
-			root->formatted.store(true, std::memory_order_release);
+		std::lock_guard lock(root->Output().ready);
+		if (!root->Output().formatted.load(std::memory_order_acquire)) {
+			root->Output().text = AtSimTime(root->simTimeTicks).Text();
+			root->Output().formatted.store(true, std::memory_order_release);
 		}
-		return root->text;
+		return root->Output().text;
 	}
 	struct Frame { const Data* node; size_t next = 0; };
 	std::vector<Frame> pending{{root.get()}};
 	while (!pending.empty()) {
 		Frame& frame = pending.back();
 		const Data* node = frame.node;
-		if (node->formatted.load(std::memory_order_acquire)) { pending.pop_back(); continue; }
+		if (node->Output().formatted.load(std::memory_order_acquire)) { pending.pop_back(); continue; }
 		if (!node->deferred && frame.next < node->children.size()) {
 			const Data* child = node->children[frame.next++].m_Data.get();
-			if (child && !child->formatted.load(std::memory_order_acquire)) pending.push_back({child});
+			if (child && !child->Output().formatted.load(std::memory_order_acquire)) pending.push_back({child});
 			continue;
 		}
 		const auto format = [node] {
 			if (node->deferred) {
-				node->text = node->produce();
-				if (!node->peerMark.empty()) StripPeerMarks(node->text, node->peerMark, node->peerRuns);
-				node->formatted.store(true, std::memory_order_release);
+				node->Output().text = node->produce();
+				if (!node->peerMark.empty()) StripPeerMarks(node->Output().text, node->peerMark, node->Output().peerRuns);
+				node->Output().formatted.store(true, std::memory_order_release);
 				node->produce = nullptr;
 				return;
 			}
@@ -561,7 +588,7 @@ const std::string& CheckpointText::Text() const {
 					case CaptureValue::GraphString: {
 						const auto index = ReadCaptureValue<uint64_t>(values, cursor);
 						const auto& data = node->children.at(static_cast<size_t>(index)).m_Data;
-						const std::string& child = data ? data->text : empty;
+						const std::string& child = data ? data->Output().text : empty;
 						if (kind == CaptureValue::SizedChild) { AppendCaptureNumber(text, child.size()); text.push_back(' '); }
 						if (kind == CaptureValue::GraphString) { text.push_back('s'); AppendCaptureNumber(text, child.size()); text.push_back(':'); }
 						if (kind == CaptureValue::Base64 || kind == CaptureValue::UrlBase64) text += base64_encode(child, kind == CaptureValue::UrlBase64);
@@ -598,16 +625,16 @@ const std::string& CheckpointText::Text() const {
 				}
 			}
 			if (!sizedRuns.empty()) throw std::logic_error("open owned sized run");
-			node->text = std::move(text);
-			node->formatted.store(true, std::memory_order_release);
+			node->Output().text = std::move(text);
+			node->Output().formatted.store(true, std::memory_order_release);
 		};
 		{
-			std::lock_guard lock(node->ready);
-			if (!node->formatted.load(std::memory_order_acquire)) format();
+			std::lock_guard lock(node->Output().ready);
+			if (!node->Output().formatted.load(std::memory_order_acquire)) format();
 		}
 		pending.pop_back();
 	}
-	return root->text;
+	return root->Output().text;
 }
 
 std::string CheckpointText::SharedText(int64_t simTimeTicks) const {
@@ -622,7 +649,7 @@ std::string CheckpointText::SharedText() const {
 		const std::string& text = Text();
 		std::string shared;
 		size_t at = 0;
-		for (const auto& [begin, end]: m_Data->peerRuns) {
+		for (const auto& [begin, end]: m_Data->Output().peerRuns) {
 			shared.append(text, at, begin - at);
 			at = end;
 		}
@@ -801,8 +828,11 @@ CheckpointText CheckpointBuffer::Finish() {
 		m_Arena->childBytes += m_Children.size() * sizeof(CheckpointText);
 		m_Arena->childCapacity += m_Children.capacity() * sizeof(CheckpointText);
 	}
-	auto data = m_Arena ? std::allocate_shared<CheckpointText::Data>(CheckpointAllocator<CheckpointText::Data>(m_Arena.get()), m_Arena->storage)
-	                    : std::make_shared<CheckpointText::Data>();
+	std::shared_ptr<CheckpointText::Data> data;
+	if (m_Arena) {
+		if (m_Arena->group) data = std::allocate_shared<CheckpointText::Data>(CheckpointAllocator<CheckpointText::Data>(m_Arena.get()), m_Arena->storage);
+		else data = std::allocate_shared<CheckpointText::Data::Legacy>(CheckpointAllocator<CheckpointText::Data::Legacy>(m_Arena.get()), m_Arena->storage);
+	} else data = CheckpointText::Data::Create();
 	data->values = std::move(m_Values);
 	data->children = std::move(m_Children);
 	data->ownedBytes = data->values.size();
