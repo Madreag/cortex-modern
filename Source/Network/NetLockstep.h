@@ -1003,6 +1003,8 @@ namespace RTE {
 		bool InstallResyncInputs(const std::vector<NetLockstepFrame>& authoritativeInputs, std::string* error = nullptr);
 		bool QueueRecoveredInput(const NetLockstepFrame& frame, std::string* error = nullptr);
 		std::vector<NetLockstepFrame> CapturePendingInputs(uint64_t afterFrame) const;
+		/// Pending packets before committed timing events are added to their apply sets.
+		std::vector<NetLockstepFrame> CapturePendingSourceInputs(uint64_t afterFrame) const;
 		std::vector<NetLockstepFrame> CaptureLocalInputHistory() const;
 		bool NeedsResyncPriming() const { NET_PLANE_CHECK(); return m_Config.resumeFromSnapshot && !m_ResyncPrimed; }
 		bool SubmitLocalChecksum(uint64_t frame, const std::array<uint8_t, 32>& hash, std::string* error = nullptr, const std::map<uint8_t, uint64_t>& appliedCommands = {});
@@ -1647,6 +1649,7 @@ namespace RTE {
 		bool SenderOwnsTransport(uint8_t claimedPeerId, NetPeerId fromTransport) const;
 		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
+		std::vector<NetLockstepFrame> CapturePendingInputsImpl(uint64_t afterFrame, bool includeBoundaryCommands) const;
 		void StampFrameAuthority(NetLockstepReadyFrame& ready);
 		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false, bool agreedBoundary = false, bool removed = false, bool cleanLeave = true);
 		void ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay);
@@ -2130,6 +2133,8 @@ namespace RTE {
 		std::map<uint64_t, std::map<uint8_t, std::array<uint8_t, 32>>> m_RemoteChecksums; //!< frame -> (peerId -> hash)
 		std::map<uint8_t, uint64_t> m_VerifiedAppliedFrames; //!< Matching hashes keep their applied prefix after the hash buffers are pruned.
 		std::deque<NetLockstepReadyFrame> m_ReadyFrames;
+		/// Command counts before the coordinator adds boundary events.
+		std::map<uint64_t, std::array<size_t, 2>> m_ReadySourceCommandCounts;
 		std::map<uint64_t, NetLockstepReadyFrame> m_ReadyHistory;
 
 		bool AllRemoteStartsReceived() const { return m_RemoteStartsReceived.size() == m_RemotePeerIds.size(); }

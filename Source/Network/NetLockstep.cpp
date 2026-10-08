@@ -3337,6 +3337,7 @@ namespace RTE {
 		m_MigrationAdmissionEvents.clear();
 		m_OwnEndDuringMigration.reset();
 		m_ReadyFrames.clear();
+		m_ReadySourceCommandCounts.clear();
 		m_PendingRecoveryStop.reset();
 		m_PendingCompleteStop.reset();
 		m_Stats.nextFrame = GetResumeFrame();
@@ -5195,6 +5196,7 @@ namespace RTE {
 		m_ObservationEncodeTables.Reset();
 		m_ObservationBlocks.clear();
 		m_ReadyFrames.clear();
+		m_ReadySourceCommandCounts.clear();
 		m_ReadyHistory.clear();
 		m_PreStartFrames.clear();
 		m_PreStartChecksums.clear();
@@ -5603,6 +5605,7 @@ namespace RTE {
 		m_LocalChecksums.clear();
 		m_RemoteChecksums.clear();
 		m_ReadyFrames.clear();
+		m_ReadySourceCommandCounts.clear();
 		m_ReadyHistory.clear();
 		m_Stats.nextFrame = firstFrame;
 		m_Stats.effectiveStartFrame = firstFrame;
@@ -8657,6 +8660,14 @@ namespace RTE {
 	}
 
 	std::vector<NetLockstepFrame> NetLockstepCoordinator::CapturePendingInputs(uint64_t afterFrame) const {
+		return CapturePendingInputsImpl(afterFrame, true);
+	}
+
+	std::vector<NetLockstepFrame> NetLockstepCoordinator::CapturePendingSourceInputs(uint64_t afterFrame) const {
+		return CapturePendingInputsImpl(afterFrame, false);
+	}
+
+	std::vector<NetLockstepFrame> NetLockstepCoordinator::CapturePendingInputsImpl(uint64_t afterFrame, bool includeBoundaryCommands) const {
 		NET_PLANE_CHECK();
 		std::map<std::pair<uint64_t, uint8_t>, NetLockstepFrame> inputs;
 		const auto entry = [&](uint64_t target, uint8_t peer) -> NetLockstepFrame& {
@@ -8676,12 +8687,17 @@ namespace RTE {
 		for (const auto& [target, peers]: m_RemoteValueObservations) if (target > afterFrame) for (const auto& [peer, observations]: peers) entry(target, peer).valueObservations = observations;
 		for (const auto& ready: m_ReadyFrames) {
 			if (ready.frame <= afterFrame) continue;
+			const auto counts = m_ReadySourceCommandCounts.find(ready.frame);
+			const bool source = !includeBoundaryCommands && counts != m_ReadySourceCommandCounts.end();
 			if (ready.hasLocalInput) {
 				auto& input = entry(ready.frame, m_Config.localPeerId);
 				input.frames = ready.localFrames;
 				input.commands = ready.localCommands;
 				input.observations = ready.localObservations;
 				input.valueObservations = ready.localValueObservations;
+				if (source) {
+					input.commands.resize(counts->second[0]);
+				}
 			}
 			size_t offset = 0;
 			for (const auto& [peer, count]: ready.remoteFrameCounts) {
@@ -8689,7 +8705,11 @@ namespace RTE {
 				input.frames.assign(ready.remoteFrames.begin() + offset, ready.remoteFrames.begin() + offset + count);
 				offset += count;
 			}
-			for (const auto& command: ready.remoteCommands) entry(ready.frame, command.senderPeerId).commands.push_back(command);
+			const size_t remoteCommands = source ? counts->second[1] : ready.remoteCommands.size();
+			for (size_t index = 0; index < remoteCommands; ++index) {
+				const auto& command = ready.remoteCommands[index];
+				entry(ready.frame, command.senderPeerId).commands.push_back(command);
+			}
 			for (const auto& observation: ready.remoteObservations) entry(ready.frame, observation.senderPeerId).observations.push_back(observation);
 			for (const auto& observation: ready.remoteValueObservations) entry(ready.frame, observation.senderPeerId).valueObservations.push_back(observation);
 		}
@@ -9787,6 +9807,7 @@ namespace RTE {
 			if (auto history = m_ReadyHistory.find(updateAuthority->first); history != m_ReadyHistory.end()) history->second.updateAuthorityPeerId = updateAuthority->second;
 		}
 		outFrame = std::move(m_ReadyFrames.front());
+		m_ReadySourceCommandCounts.erase(outFrame.frame);
 		m_ReadyFrames.pop_front();
 		m_LastDeliveredFrame = outFrame.frame;
 		// A retired gap the simulation has passed covers nothing it will apply again.
@@ -12848,6 +12869,7 @@ namespace RTE {
 				m_LocalFrames.erase(localIt);
 			}
 			if (remoteIt != m_RemoteFrames.end()) m_RemoteFrames.erase(remoteIt);
+			m_ReadySourceCommandCounts[ready.frame] = {ready.localCommands.size(), ready.remoteCommands.size()};
 			if (!m_Playback) for (const auto& [peer, changes]: m_DelayChanges) {
 				if (const auto delay = changes.find(ready.frame); delay != changes.end()) {
 					auto& commands = m_Config.localPeerId == GetHostPeerId() ? ready.localCommands : ready.remoteCommands;
@@ -13064,7 +13086,7 @@ namespace RTE {
 		CENSUS(m_LocalFrames); CENSUS(m_RemoteFrames); CENSUS(m_LocalCommands); CENSUS(m_RemoteCommands);
 		CENSUS(m_LocalObservations); CENSUS(m_RemoteObservations); CENSUS(m_LocalValueObservations); CENSUS(m_RemoteValueObservations);
 		CENSUS(m_ResendFrames); CENSUS(m_RecoveryOutgoing); CENSUS(m_LocalInputHistory); CENSUS(m_LocalChecksums); CENSUS(m_RemoteChecksums);
-		CENSUS(m_ReadyFrames); CENSUS(m_ReadyHistory); CENSUS(m_RelayedTicks); CENSUS(m_RelayedTickFrames); CENSUS(m_RelayBacklog);
+		CENSUS(m_ReadyFrames); CENSUS(m_ReadySourceCommandCounts); CENSUS(m_ReadyHistory); CENSUS(m_RelayedTicks); CENSUS(m_RelayedTickFrames); CENSUS(m_RelayBacklog);
 		CENSUS(m_ObservationEpochs); CENSUS(m_HostAcceptedLocalFrames); CENSUS(m_InputAcceptance); CENSUS(m_InputAcceptanceLeadFrames); CENSUS(m_InputAcceptanceRejections); CENSUS(m_MigrationHistory); CENSUS(m_MigrationIncoming);
 		CENSUS(m_HostInputSilences);
 		CENSUS(m_PreStartFrames); CENSUS(m_ArrivalLeads); CENSUS(m_ArrivalLateness); CENSUS(m_TimingOutgoing);

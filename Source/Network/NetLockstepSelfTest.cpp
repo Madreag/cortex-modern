@@ -404,16 +404,18 @@ namespace RTE {
 				}
 			}
 
-			bool Start(uint8_t peerCount, uint16_t port, std::string* error, bool prime = true) {
+			bool Start(uint8_t peerCount, uint16_t port, std::string* error, bool prime = true,
+			           const std::map<uint8_t, std::map<uint64_t, uint16_t>>& delayChanges = {}, uint64_t session = 0) {
 				count = peerCount;
 				if (!transport[0].StartHost(port, error)) return false;
 				for (uint8_t index = 1; index < count; ++index) if (!transport[index].Connect("loopback", port, error)) return false;
 				for (uint8_t index = 0; index < count; ++index) {
 					auto& c = config[index];
-					c.sessionId = 0x5257430000000000ULL + port; c.roundId = index == 0 ? c.sessionId + 1 : 0;
+					c.sessionId = session != 0 ? session : 0x5257430000000000ULL + port; c.roundId = index == 0 ? c.sessionId + 1 : 0;
 					c.startFrame = 41; c.resumeFromSnapshot = true; c.timeoutMs = 60000; c.localPeerId = index + 1; c.peerCount = count;
 					c.relayToOtherPeers = index == 0; c.frameLane = NetTransportLane::ControlReliable;
 					c.scenario = "LockstepSelfTest"; c.ownershipPolicy = "unique-id-split";
+					c.initialDelayChanges = delayChanges;
 					if (index == 0) for (uint8_t remote = 1; remote < count; ++remote) c.remoteTransportPeerIds.emplace(remote + 1, remote);
 					else c.remoteTransportPeerIds.emplace(1, 1);
 					if (!peer[index].Start(transport[index], c, error)) return false;
@@ -703,6 +705,64 @@ namespace RTE {
 				                       error, "restoration dropped a configured departed sender's accepted controller, commands or observations")) return false;
 			}
 			std::cout << "[net-lockstep-selftest] PASS recovery_input_membership never_member=refused accepted_departed=preserved" << std::endl;
+			return true;
+		}
+
+		bool TestPendingRecoveryKeepsSourceAndBoundaryCommands(std::string* error) {
+			RecoveryWireRound round;
+			const std::map<uint8_t, std::map<uint64_t, uint16_t>> delays{{2, {{43, 2}}}};
+			if (!round.Start(2, 44988, error, true, delays)) return false;
+			std::vector<NetLockstepFrame> source;
+			for (uint64_t target = 41; target <= 43; ++target) {
+				for (uint8_t index = 0; index < 2; ++index) {
+					auto input = RecoveryWireInput(index + 1, target, round.peer[index].GetRoundId());
+					if (target == 43 && index == 0) input.commands.push_back({1, NetGameInputDelay{2, 9}});
+					if (!round.peer[index].QueueLocalInput(target, input.frames, input.commands, error, input.observations)) return false;
+					if (target == 43) source.push_back(std::move(input));
+				}
+				round.Pump();
+			}
+			auto applied = source;
+			applied.front().commands.push_back({1, NetGameInputDelay{2, 2}});
+			for (uint8_t index = 0; index < 2; ++index) {
+				auto& coordinator = round.peer[index];
+				auto history = coordinator.CaptureLocalInputHistory();
+				std::erase_if(history, [](const auto& input) { return input.targetFrame <= 42; });
+				if (!RecoveryWireCheck(coordinator.ReadyFrameCount() == 3 &&
+				                       SameRecoveryInputs(history, {source[index]}) &&
+				                       SameRecoveryInputs(coordinator.CapturePendingInputs(42), applied),
+				                       error, "a boundary event changed its source packet or vanished from its apply set")) return false;
+				ScenarioRunner::SetLockstepCoordinator(&coordinator);
+				struct ClearCoordinator {
+					~ClearCoordinator() { ScenarioRunner::SetLockstepCoordinator(nullptr); }
+				} clear;
+				NetResyncState state;
+				if (!ScenarioRunner::CaptureNetResyncState(42, state, error, false) ||
+				    !RecoveryWireCheck(SameRecoveryInputs(state.pendingInputs, applied), error, "the recovery dropped packet data or committed timing commands")) return false;
+				if (index == 0) {
+					ScenarioRunner::SetLockstepCoordinator(nullptr);
+					RecoveryWireRound conflicting;
+					if (!conflicting.Start(2, 44989, error, true, delays, round.config[0].sessionId)) return false;
+					for (uint64_t target = 41; target <= 43; ++target) {
+						for (uint8_t peer = 0; peer < 2; ++peer) {
+							auto input = RecoveryWireInput(peer + 1, target, conflicting.peer[peer].GetRoundId());
+							if (target == 43 && peer == 0) {
+								input.commands.push_back({1, NetGameInputDelay{2, 9}});
+								input.frames.front().aimAngle = 0.375F;
+							}
+							if (!conflicting.peer[peer].QueueLocalInput(target, input.frames, input.commands, error, input.observations)) return false;
+						}
+						conflicting.Pump();
+					}
+					if (!RecoveryWireCheck(conflicting.peer[0].ReadyFrameCount() == 3, error, "the conflicting fixture did not commit its packets")) return false;
+					ScenarioRunner::SetLockstepCoordinator(&conflicting.peer[0], true);
+					ClearCoordinator clearConflict;
+					std::string refusal;
+					if (!RecoveryWireCheck(!ScenarioRunner::CaptureNetResyncState(42, state, &refusal, false) && refusal == "conflicting pending input",
+					                       error, "recovery accepted different controller bits for one sender and tick")) return false;
+				}
+			}
+			std::cout << "[net-lockstep-selftest] PASS pending_recovery_keeps_source_and_boundary_commands" << std::endl;
 			return true;
 		}
 
@@ -28101,6 +28161,7 @@ namespace {
 		row([](std::string* rowError) { return TestRecoveryWireRefusals(rowError); }, "TestRecoveryWireRefusals");
 		row([](std::string* rowError) { return TestRecoveryWireRelayRetry(rowError); }, "TestRecoveryWireRelayRetry");
 		row([](std::string* rowError) { return TestRecoveryInputMembership(rowError); }, "TestRecoveryInputMembership");
+		row([](std::string* rowError) { return TestPendingRecoveryKeepsSourceAndBoundaryCommands(rowError); }, "TestPendingRecoveryKeepsSourceAndBoundaryCommands");
 		row([](std::string* rowError) { return TestADepartedTransportCannotStopTheSurvivors(rowError); }, "TestADepartedTransportCannotStopTheSurvivors");
 		row([](std::string* rowError) { return TestAnnouncedLeaveHoldsNothing(rowError); }, "TestAnnouncedLeaveHoldsNothing");
 		row([](std::string* rowError) { return TestAClassicLeaverDrivesItsUnitsUntilItsFrame(rowError); }, "TestAClassicLeaverDrivesItsUnitsUntilItsFrame");

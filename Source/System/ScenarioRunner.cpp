@@ -2633,15 +2633,27 @@ namespace RTE {
 			activity->CaptureNetPlayerBindings(own.bindings);
 		}
 		std::map<std::pair<uint8_t, uint64_t>, NetLockstepFrame> inputs;
+		std::map<std::pair<uint8_t, uint64_t>, NetLockstepFrame> sourceInputs;
+		for (auto input: s_LockstepCoordinator->CapturePendingSourceInputs(savedTick)) {
+			input.roundId = captured.sourceRound;
+			sourceInputs.emplace(std::make_pair(input.senderPeerId, input.targetFrame), std::move(input));
+		}
+		for (auto input: s_LockstepCoordinator->CapturePendingInputs(savedTick)) {
+			input.roundId = captured.sourceRound;
+			inputs.emplace(std::make_pair(input.senderPeerId, input.targetFrame), std::move(input));
+		}
 		auto futureInputs = s_RecoveredInputs;
-		for (auto& input: s_LockstepCoordinator->CapturePendingInputs(savedTick)) futureInputs.push_back(std::move(input));
 		for (const auto& [frame, input]: s_LocalInputHistory) futureInputs.push_back(input);
 		for (auto& input: s_LockstepCoordinator->CaptureLocalInputHistory()) futureInputs.push_back(std::move(input));
 		for (auto& input: futureInputs) {
 			if (input.targetFrame <= savedTick) continue;
 			input.roundId = captured.sourceRound;
-			const auto [found, inserted] = inputs.emplace(std::make_pair(input.senderPeerId, input.targetFrame), input);
-			if (!inserted && !SameInputBits(found->second, input)) { if (error) *error = "conflicting pending input"; return false; }
+			const auto key = std::make_pair(input.senderPeerId, input.targetFrame);
+			const auto [found, inserted] = inputs.emplace(key, input);
+			// The history records packets before boundary events are appended.
+			const auto source = sourceInputs.find(key);
+			const auto& prior = source != sourceInputs.end() ? source->second : found->second;
+			if (!inserted && !SameInputBits(prior, input)) { if (error) *error = "conflicting pending input"; return false; }
 		}
 		auto pending = s_RecoveredCommands;
 		for (auto& command: s_LockstepCoordinator->CapturePendingCommands(savedTick)) pending.push_back(std::move(command));
