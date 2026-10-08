@@ -9115,8 +9115,11 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		checkpointValues = exact && checkpointValues;
 	}
 	{
+		MovableMan::ConstructionRegistryScope world;
 		auto actor = std::make_unique<AHuman>();
 		auto part = std::make_unique<Attachable>();
+		actor->TakeNextUniqueID();
+		part->TakeNextUniqueID();
 		LuaScriptGraphNativeCaptureData fields;
 		bool exact = false;
 		{
