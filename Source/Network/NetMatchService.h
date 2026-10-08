@@ -638,6 +638,8 @@ namespace RTE {
 
 		/// Host: its setup screen is open or closed. Opening it stops a running count, and nothing starts while it is open.
 		void SetHostSetupOpen(bool open) { m_HostSetupOpen.store(open); }
+		/// Keeps a lobby's idle wait measured from the host's last menu input.
+		void NoteLobbyInput() { m_LobbyInput.store(true); }
 		void ReportRuntimeError(const std::string& error);
 		void Complete(const std::string& reason);
 		void FinishMatch(const std::string& result);
@@ -1850,6 +1852,7 @@ namespace RTE {
 		std::atomic<bool> m_ReadyRequested{false};
 		std::atomic<bool> m_StartRequested{false};
 		std::atomic<bool> m_CancelStartRequested{false};
+		std::atomic<bool> m_LobbyInput{false};
 		std::atomic<bool> m_HostSetupOpen{false};
 		std::atomic<bool> m_CancelRequested{false};
 		std::atomic<bool> m_EverStarted{false};

@@ -620,7 +620,9 @@ namespace RTE {
 
 		const auto startTime = std::chrono::steady_clock::now();
 		const uint64_t roundStartSessionMs = m_Config.nowMs ? m_Config.nowMs() : 0;
-		uint64_t transferProgress = m_Lobby.GetStateTransferProgressSerial(), lastTransferProgressMs = 0;
+		uint64_t transferProgress = m_Lobby.GetStateTransferProgressSerial(), lastProgressMs = 0;
+		uint64_t activity = m_Lobby.GetActivitySerial();
+		uint64_t chatMessages = uint64_t(session.GetStats().chatMessagesSent) + session.GetStats().chatMessagesReceived;
 		NetMatchConfig stagedOptions;
 		bool readyAsked = false; // A Ready only the player can take back: an automatic one is never withdrawn here.
 		while (true) {
@@ -705,7 +707,15 @@ namespace RTE {
 			}
 			if (const uint64_t progress = m_Lobby.GetStateTransferProgressSerial(); progress != transferProgress) {
 				transferProgress = progress;
-				lastTransferProgressMs = clocks.budgetMs;
+				lastProgressMs = clocks.budgetMs;
+			}
+			if (m_Config.host && m_Config.lobbySeatingWaitMs) {
+				const uint64_t nextActivity = m_Lobby.GetActivitySerial();
+				const uint64_t nextChat = uint64_t(session.GetStats().chatMessagesSent) + session.GetStats().chatMessagesReceived;
+				const bool input = m_Config.lobbyInput && m_Config.lobbyInput->exchange(false);
+				if (input || nextActivity != activity || nextChat != chatMessages) lastProgressMs = clocks.budgetMs;
+				activity = nextActivity;
+				chatMessages = nextChat;
 			}
 			// The lobby round owns the transport queue, so the plane only gets its time from here.
 			session.TickAdmissionPlane(clocks.planeMs);
@@ -737,8 +747,8 @@ namespace RTE {
 				return false;
 			}
 			// The seating wait is re-read every tick because a live options edit republishes it.
-			if (clocks.budgetMs >= lastTransferProgressMs &&
-			    SeatingWaitExpired(m_Config.lobbySeatingWaitMs, static_cast<uint32_t>(maxWaitMs), clocks.budgetMs - lastTransferProgressMs)) {
+			if (clocks.budgetMs >= lastProgressMs &&
+			    SeatingWaitExpired(m_Config.lobbySeatingWaitMs, static_cast<uint32_t>(maxWaitMs), clocks.budgetMs - lastProgressMs)) {
 				m_Lobby.TimeoutWaitingForStart();
 				SetFailed(m_Lobby.GetFailureReason());
 				if (error) *error = m_SetupError;

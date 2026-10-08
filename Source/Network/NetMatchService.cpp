@@ -10646,6 +10646,7 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::ConfigureLobbyStart(NetMatchRunnerConfig& config) {
+		m_LobbyInput.store(false);
 		config.relayOffer = [this](NetRelayConfig& offer) { return ReadRelayOffer(offer); };
 		config.sessionWaitMs = c_MenuLobbyWaitMs;
 		config.lobbyWaitMs = c_MenuLobbyWaitMs;
@@ -10664,6 +10665,7 @@ static std::string ResyncSaveName() {
 		config.startRequested = &m_StartRequested;
 		config.cancelStartRequested = &m_CancelStartRequested;
 		config.hostSetupOpen = &m_HostSetupOpen;
+		config.lobbyInput = &m_LobbyInput;
 		config.roundStartScripts = [this] {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			return std::exchange(m_RoundStartScriptsToStream, {});

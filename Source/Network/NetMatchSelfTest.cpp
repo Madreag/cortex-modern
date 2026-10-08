@@ -13981,6 +13981,55 @@ namespace RTE {
 		service.ConfigureLobbyStart(hostRun);
 		if (!NetMatchRunner::SeatingWaitExpired(hostRun.lobbySeatingWaitMs, hostRun.lobbyWaitMs, 600001) ||
 		    NetMatchRunner::SeatingWaitExpired(0u, hostRun.lobbyWaitMs, 660001)) { *error = "the host's seating policy changed"; return false; }
+		for (int activity = 0; activity < 4; ++activity) {
+			LoopbackTransport host, guest;
+			NetSession hosting, joining;
+			if (!StartServiceRematchSession(static_cast<uint16_t>(43470 + activity), host, guest, hosting, joining, error)) return false;
+			NetMatchService activeService;
+			NetMatchRunner active;
+			active.m_Config.host = true;
+			active.m_Config.matchConfig = MakeConfig();
+			active.m_Config.matchConfig.peerCount = 3;
+			active.m_Config.matchConfig.players.push_back({3, 2, false, "Client 3"});
+			active.m_Config.matchConfig.idleWaitMinutes = 1;
+			activeService.ConfigureLobbyStart(active.m_Config);
+			active.m_MatchConfig = active.m_Config.matchConfig;
+			uint64_t clock = std::max(hosting.GetClockMs(), joining.GetClockMs());
+			const uint64_t start = clock;
+			active.m_Config.nowMs = [&clock] { return clock; };
+			NetLobbySession guestLobby;
+			NetLobbySessionConfig guestConfig;
+			guestConfig.localPeerId = 2; guestConfig.remotePeerId = 1;
+			guestConfig.remoteTransportPeerId = joining.GetRemoteTransportPeerId();
+			guestConfig.matchConfig = active.m_MatchConfig;
+			guestConfig.session = &joining;
+			guestConfig.sessionNowMs = [&clock] { return clock; };
+			if (!guestLobby.Start(guest, guestConfig, error)) return false;
+			std::atomic<bool> stop{false};
+			active.m_Config.cancelRequested = &stop;
+			active.m_Config.publishLobby = [&](const NetLobbySnapshot&) {
+				guestLobby.Tick(clock);
+				const uint64_t elapsed = clock - start;
+				if (elapsed == 40000 || elapsed == 80000) {
+					if (activity == 1) activeService.NoteLobbyInput();
+					if (activity == 2) (void)joining.SendChat(c_NetChatScopeAll, "Still choosing the match");
+					if (activity == 3) guestLobby.SetLocalReady(elapsed == 80000);
+				}
+				host.AdvanceTimeMs(1000); guest.AdvanceTimeMs(1000);
+				clock += 1000;
+				if (elapsed > 160000) stop.store(true);
+			};
+			std::string idle;
+			if (active.RunLobby(host, hosting, active.m_Config.lobbyWaitMs, &idle) || idle.find("closed after being idle") == std::string::npos ||
+			    clock - start < (activity ? 140000u : 60000u) || clock - start > (activity ? 145000u : 65000u) ||
+			    active.GetLobbySession().GetStats().timeouts != 1) {
+				*error = "lobby activity case " + std::to_string(activity) + " expired at " + std::to_string(clock - start) + " ms: " + idle; return false;
+			}
+			guestLobby.Tick(clock);
+			if (!guestLobby.IsRejected() || guestLobby.GetFailureReason() != idle) {
+				*error = "the idle host closed without telling its ready guest why"; return false;
+			}
+		}
 		return true;
 	}
 
@@ -18374,6 +18423,7 @@ namespace RTE {
 			else if (name == "state-delivery") passed = TestLobbyStartWaitsForReceivedState(&error);
 			else if (name == "state-receipts") passed = TestLobbyStateReceiptsAreBoundAndRepeated(&error);
 			else if (name == "joining-lobby") passed = TestAJoiningLobbyWaitsForHostConfig(&error);
+			else if (name == "lobby-idle") passed = TestMenuLobbyWaitsForALiveHost(&error);
 			else if (name == "full-knock") passed = TestAFullMatchsKnockEndsAtTheBudget(&error);
 			else if (name == "relay-core") {
 				// RunBeforeInitialization already checked settings and candidate policy,
