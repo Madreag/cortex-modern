@@ -1254,7 +1254,7 @@ namespace RTE {
 		if (!s_LockstepCoordinator) {
 			return 0;
 		}
-		// A returning coordinator has no delivered cursor yet; the actor belongs to the world's committed tick.
+		// A coordinator's delivered cursor can lag the world at a return.
 		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled, s_LockstepAppliedFrame);
 	}
 

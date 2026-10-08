@@ -17454,9 +17454,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return finish(nullptr);
 		}
 
-		// A returning coordinator knows the new return, but scripted activity updates still ask about
-		// the preceding applied tick. Losing the earlier hold makes only this peer switch back to
-		// player mode; a second hold then resets its control timer alone until delayed input lands.
+		// Scripted switches read the seat state from the preceding applied tick.
 		bool TestCatchUpScriptSwitchKeepsSharedControl(std::string* error) {
 			EnsureSwitchTestManagers();
 			const auto timer = g_TimerMan.SaveCheckpoint();
@@ -17493,7 +17491,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			ScenarioRunner::SetLockstepAppliedFrame(40);
 			if (!replay.IsSeatUnderAI(2, 40) || !activity->SwitchToActorFromScript(reference, Players::PlayerTwo, Activity::TeamTwo)) return finish(false);
 			const auto referenceMode = reference->GetController()->GetInputMode();
-			// This is the activation's real coordinator handoff, with both coordinators running.
+			// Both coordinators remain live at the handoff.
 			returning.AdoptReplayedSeatTransitions(replay, 40);
 			ScenarioRunner::SetLockstepCoordinator(&returning, true);
 			ScenarioRunner::SetLockstepAppliedFrame(40);
@@ -17516,7 +17514,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			std::cout << "[net-lockstep-selftest] " << (passed ? "PASS" : "FAIL") << " catch_up_script_switch_keeps_shared_control"
 			          << " prior_hold=" << retainedHold << " exact_return=" << exactReturn << " modes=" << referenceMode << "/" << returnedMode
 			          << " control_timer=" << referenceTimer << "/" << returnedTimer << " equal_ticks=45..49:" << equalTimers << std::endl;
-			// The live plane can agree the next hold while this world's sim is still before its preceding return.
+			// A future hold can arrive before the sim reaches the preceding return.
 			NetLockstepCoordinator ahead, restarted;
 			config.startFrame = 36; config.initialSeatReclaims.clear(); config.initialSeatHolds[2] = {2, 0, 1, 1, 35};
 			if (!ahead.StartReplay(transport, config, error)) return finish(false);
@@ -17557,8 +17555,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return finish(passed);
 		}
 
-		// A returning coordinator has not delivered a frame yet, while survivors delivered E-1.
-		// A newborn's owner and the next reclaim fence must still read the same committed world tick.
+		// Newborn ownership follows the world tick during a coordinator handoff.
 		bool TestCatchUpActorOwnerUsesAppliedTick(std::string* error) {
 			EnsureSwitchTestManagers();
 			const auto savedOwners = NetActorOwnership::GetSeededOwners();
@@ -17602,7 +17599,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				const int64_t uid = actor->GetUniqueID();
 				owners[index] = ScenarioRunner::GetLockstepPolicyActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
 				NetActorOwnership::SeedOwner(uid, owners[index], Activity::TeamTwo);
-				// The script moved on to a replacement, returning this old actor to its seeded AI owner.
+				// A replaced actor returns to its seeded controller owner.
 				ScenarioRunner::SetLockstepControlOverride(uid, 1);
 				NetLockstepReadyFrame ready;
 				ready.frame = 41; ready.remoteFrames = {MakeFrame(uid, 41)}; ready.remoteFrameCounts = {{1, 1}};

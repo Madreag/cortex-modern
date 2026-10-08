@@ -5455,7 +5455,7 @@ namespace RTE {
 		NET_PLANE_CHECK();
 		NetLockstepPlane::Check(&live, "StartCatchUpReplay (the live round)");
 		if (!StartReplay(transport, config, error)) return false;
-		// The newest hold can be ahead of the saved world; scripted switches still read the earlier hold and return.
+		// Scripted switches can still read the hold before the newest return.
 		for (const auto& [peer, transitions]: live.m_SeatTransitions)
 			for (const auto& [frame, state]: transitions) m_SeatTransitions[peer].try_emplace(frame, state);
 		return true;
@@ -5798,7 +5798,7 @@ namespace RTE {
 		NET_PLANE_CHECK();
 		// The replay's own maps are read here too.
 		NetLockstepPlane::Check(&replay, "AdoptReplayedSeatTransitions (the replay)");
-		// Scripted switches at the return still need our seat's history through the preceding tick.
+		// Scripted switches at the return still read the preceding hold.
 		for (const auto& [peer, transitions]: replay.m_SeatTransitions) {
 			for (const auto& [frame, state]: transitions) {
 				if (frame <= throughFrame) m_SeatTransitions[peer].try_emplace(frame, state);

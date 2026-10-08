@@ -10260,7 +10260,7 @@ int RunNetMatchServiceE2E() {
 
 	bool setupCancelled = false;
 	std::string activityPreset;
-	// A real-peer detecting run waits for admission rather than starting with its placeholder slots.
+	// Match setup needs every admitted peer's readiness.
 	const bool waitPeers = std::getenv("CC_TEST_NET_MATCH_E2E_WAIT_PEERS") != nullptr;
 	if (setupError.empty()) {
 		g_NetMatchService.SetReady();

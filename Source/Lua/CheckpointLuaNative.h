@@ -752,9 +752,7 @@ namespace RTE::CheckpointLua {
 			for (const char* property: properties) {
 				entry.properties.emplace(property, Invoke(Property, property, [&] { Push(value); lua_pushstring(State(), property); return 2; }));
 			}
-			// A reference to a live movable or to a manager singleton answers the same next time if it still names the same object.
-			// Other entities can change their world role without changing address (an activity
-			// installed after the first capture, for example), so ask their descriptors again.
+			// An entity's world role can change at the same address.
 			const std::string kind = Kind(entry.native[0]);
 			const bool entity = kind == "entity" && object && object->ptr();
 			const bool singleton = kind.empty() && object && object->ptr() && !owned &&
