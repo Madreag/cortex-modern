@@ -5532,6 +5532,23 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 		lua_pushlstring(L, checkpoint.data(), checkpoint.size());
 		return 7;
 	};
+	const auto* type = rep->crep();
+	if (CheckpointWriter::BatchEnabled() && type && type->get_class_type() == luabind::detail::class_rep::cpp_class &&
+	    type->type() == LUABIND_TYPEID(Vector) && std::strcmp(type->name(), "Vector") == 0) {
+		if (const int index = g_PrimitiveMan.FindCheckpointVertex(rep->ptr()); index >= 0) return found(&g_PrimitiveMan, "primitive-vertex", index);
+		// Vectors alias fields or polygon vertices; dependency markers still run their Lua fallbacks.
+		if (rep->get_dependencies().is_valid()) {
+			rep->get_dependencies().get(L);
+			lua_pushnil(L);
+			while (lua_next(L, -2) != 0) {
+				const auto* owner = luabind::detail::is_class_object(L, -1);
+				ScriptGraphReadableDependency(owner);
+				lua_pop(L, 1);
+			}
+			lua_pop(L, 1);
+		}
+		return 0;
+	}
 	if (const int index = g_PrimitiveMan.FindCheckpointPrimitive(rep->ptr()); index >= 0) return found(&g_PrimitiveMan, "primitive", index);
 	if (const int index = g_PrimitiveMan.FindCheckpointVertex(rep->ptr()); index >= 0) return found(&g_PrimitiveMan, "primitive-vertex", index);
 	const auto editorMember = [&](SceneEditorGUI* editor) {
@@ -9448,6 +9465,48 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		}
 		exact = exact && events[0] != 0 && events[0] == events[1];
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " native_metadata_keeps_debug_hook_calls ordinary=" << events[0] << " pooled=" << events[1] << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
+		MovableMan::ConstructionRegistryScope world;
+		auto owner = std::make_unique<MOPixel>();
+		owner->TakeNextUniqueID();
+		std::array<unsigned, 2> lookups{};
+		bool exact = true;
+		for (size_t run = 0; run < lookups.size(); ++run) {
+			LuaStateWrapper referenceState;
+			referenceState.Initialize();
+			referenceState.LoadScriptGraphHelper();
+			lua_State* state = referenceState.GetLuaState();
+			const int top = lua_gettop(state);
+			luabind::object(state, owner.get()).push(state); lua_setglobal(state, "_BorrowedVectorOwner");
+			if (referenceState.RunScriptString("_BorrowedVectorCapture = { field = _BorrowedVectorOwner.Pos }; _BorrowedVectorCapture.alias = _BorrowedVectorCapture.field") != 0) { exact = false; continue; }
+			lua_getglobal(state, "_BorrowedVectorOwner"); lua_getmetatable(state, -1);
+			lua_pushnil(state); lua_setfield(state, -2, "__luabind_class");
+			lua_newtable(state);
+			lua_pushlightuserdata(state, &lookups[run]);
+			lua_pushcclosure(state, [](lua_State* source) -> int {
+				const char* key = lua_tostring(source, 2);
+				if (key && std::strcmp(key, "__luabind_class") == 0) {
+					++*static_cast<unsigned*>(lua_touserdata(source, lua_upvalueindex(1)));
+					lua_pushboolean(source, true);
+				} else lua_pushnil(source);
+				return 1;
+			}, 1);
+			lua_setfield(state, -2, "__index"); lua_setmetatable(state, -2);
+			lua_settop(state, top);
+			{
+				CheckpointWriter::BatchScope batches(run == 1);
+				CheckpointBuffer::AllocationScope allocation(run == 1);
+				CheckpointLua::NativeCache cache(state);
+				CheckpointLua::CaptureScope capture(state, cache);
+				capture.Capture();
+				capture.Finish(state);
+			}
+			lua_settop(state, top);
+		}
+		exact = exact && lookups[0] != 0 && lookups[0] == lookups[1];
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " borrowed_vector_owner_search_preserves_dependency_marker_fallback_calls ordinary=" << lookups[0] << " pooled=" << lookups[1] << std::endl;
 		checkpointValues = exact && checkpointValues;
 	}
 	{
