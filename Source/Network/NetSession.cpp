@@ -1379,6 +1379,9 @@ namespace RTE {
 			// The commit names the seat's own peer id (P4); adopt it before declaring ourselves Ready,
 			// or the host's ready check would see a different id than the seat it just committed.
 			m_LocalPeerId = m_ReconnectClient->GetAssignedPeerId();
+			// The former host can return as a client; the admitted roster names its remote host.
+			const NetRosterReplica& replica = m_ReconnectClient->GetRosterReplica();
+			if (replica.HasRoster() && replica.Roster().HostSeatValid()) AdoptLobbyHostPeerId(replica.Roster().hostSeat);
 			Send(m_RemoteTransportPeerId, BuildReadyState(true));
 			m_State = NetSessionState::Ready;
 			m_StateStartedMs = m_NowMs;

@@ -12978,6 +12978,79 @@ namespace RTE {
 			}
 			std::cout << "[net-match-selftest] PASS returned_lobby_waits_past_rejoin_deadline" << std::endl;
 		}
+		{
+			// The old host keeps seat 1 when it returns to the successor at seat 2.
+			// Exercise admission before the lobby hello can correct the remote host id.
+			RematchFixture fixture;
+			if (!SetUpRematchFixture(fixture, "former-host-return", 43277, 2, error)) return false;
+			RematchPeer& former = fixture.Host();
+			RematchPeer& successor = *fixture.peers[1];
+			if (!former.session.StartHost(former.transport, former.config.sessionConfig, error) ||
+			    !successor.session.StartClient(successor.transport, "loopback", successor.config.sessionConfig, error)) return false;
+			const auto admit = [&](RematchPeer& host, RematchPeer& client) {
+				for (unsigned pump = 0; pump < 100; ++pump) {
+					host.session.Tick(fixture.clock.NowMs()); client.session.Tick(fixture.clock.NowMs());
+					if (host.session.IsReady() && host.session.GetReadyPeerCount() == 1 && client.session.IsReady() &&
+					    client.reconnect.GetState() == NetH4ClientState::Joined) return true;
+					fixture.clock.skippedMs.fetch_add(10);
+				}
+				*error = "the former-host fixture did not complete admission: " + client.session.GetRejectSummary();
+				return false;
+			};
+			if (!admit(former, successor)) return false;
+			NetH4TicketRecord ticket;
+			if (!former.admission.EnsureLocalTicket(ticket)) { *error = "the former host has no saved seat"; return false; }
+			ticket.hostAddress = "loopback";
+			ticket.issuedAtUnixMs = RematchUnixClock(nullptr);
+			former.store.SetPath((fixture.ticketDirectory / "host.ticket").string());
+			if (!former.store.Store(ticket, error)) return false;
+			const NetRosterSeat original = *former.admission.GetRoster().Find(1);
+			former.admission.SetLiveMatch(true);
+			const auto capsule = former.admission.ExportMigrationState();
+			NetMatchConfig migrated = former.config.matchConfig;
+			migrated.hostPeerId = 2;
+			former.transport.Stop(); successor.transport.Stop();
+			if (!successor.admission.ImportMigrationState(capsule, successor.registry, migrated, 2, {}, fixture.clock.NowMs())) {
+				*error = "the successor did not import the former host's admission state"; return false;
+			}
+			successor.session.SetReconnectClient(nullptr);
+			successor.session.SetReconnectHost(&successor.admission);
+			if (!successor.session.StartHost(successor.transport, successor.config.sessionConfig, error) ||
+			    !successor.session.AdoptHostMigration(successor.transport, 2, 2, migrated, {}, fixture.clock.NowMs())) return false;
+			former.session.SetReconnectHost(nullptr);
+			former.reconnect.Configure(&former.store, RematchIdentity(), "Returning host");
+			former.reconnect.SetUnixClock(&RematchUnixClock, nullptr);
+			former.reconnect.SetHostContext("loopback", NetHash32{});
+			former.reconnect.SetRequireStoredTicket(true);
+			former.session.SetReconnectClient(&former.reconnect);
+			former.session.SetRejoinPhase(NetSession::RejoinPhase::Connecting);
+			if (!former.session.StartClient(former.transport, "loopback", former.config.sessionConfig, error) || !admit(successor, former)) return false;
+			const NetRosterSeat* reclaimed = successor.admission.GetRoster().Find(1);
+			const auto peers = former.session.GetReadyPeers();
+			if (!former.reconnect.UsedStoredTicket() || former.LockstepId() != 1 || !reclaimed ||
+			    reclaimed->owner != original.owner || reclaimed->ticket != original.ticket ||
+			    !former.reconnect.GetRosterReplica().HasRoster() || former.reconnect.GetRosterReplica().Roster().hostSeat != 2 ||
+			    peers.size() != 1 || peers.front().assignedPeerId != 1) {
+				*error = "the returned host did not keep its saved seat and identify the successor as a distinct remote peer"; return false;
+			}
+			for (RematchPeer* member: {&successor, &former}) {
+				NetLobbySessionConfig lobby;
+				lobby.host = member == &successor; lobby.localPeerId = member->LockstepId();
+				lobby.remoteTransportPeerIds = member->runner.BuildRemoteTransportMap(member->session);
+				lobby.matchConfig = lobby.host ? migrated : former.config.matchConfig;
+				lobby.session = &member->session; lobby.sessionNowMs = [&fixture] { return fixture.clock.NowMs(); };
+				lobby.autoReady = lobby.autoStart = false; lobby.timeoutMs = 8000;
+				if (!member->runner.m_Lobby.Start(member->transport, lobby, error)) return false;
+			}
+			for (unsigned pump = 0; pump < 100 && former.runner.m_Lobby.GetState() != NetLobbyState::WaitingForReady; ++pump) {
+				successor.runner.m_Lobby.Tick(fixture.clock.NowMs()); former.runner.m_Lobby.Tick(fixture.clock.NowMs());
+				fixture.clock.skippedMs.fetch_add(10);
+			}
+			if (former.runner.m_Lobby.GetState() != NetLobbyState::WaitingForReady || former.runner.m_Lobby.GetMatchConfig().hostPeerId != 2) {
+				*error = "the returned host did not accept the successor's lobby: " + former.runner.m_Lobby.GetFailureReason(); return false;
+			}
+			std::cout << "[net-match-selftest] PASS former_host_returns_to_successor_lobby" << std::endl;
+		}
 		std::cout << "[net-match-selftest] PASS joining_lobby_waits_for_host_config" << std::endl;
 		return true;
 	}
