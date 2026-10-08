@@ -692,6 +692,8 @@ class SessionDirectory:
         now, wall = time.monotonic(), time.time()
         for sid, record in self.connections.records():
             if record.get("ended"):
+                self._sessions.pop(sid, None)
+                self._register_replays.pop(sid, None)
                 self._host_ends[sid] = now + max(0, record["retain_until"] - wall)
                 continue
             snapshot = record.get("session")
@@ -1366,7 +1368,18 @@ class SessionDirectory:
                 sess.ice_refused = carried.ice_refused
                 sess.ice_generation = carried.ice_generation
                 sess.ice_fixed = carried.ice_fixed
-            self._persist_session(sess, now, reopen_world=world and not first_world)
+            try:
+                self._persist_session(sess, now, reopen_world=world and not first_world)
+            except BaseException:
+                # A refused durable registration must not leave a pending world
+                # that could become a live row after the next service restart.
+                if previous_pending is None:
+                    self._pending_worlds.pop(session_id, None)
+                else:
+                    self._pending_worlds[session_id] = previous_pending
+                self._owner_revision += 1
+                self._owner_changed.notify_all()
+                raise
             if carried is None and previous_session is not None:
                 self._clear_signals(previous_session)
             self._retired.pop(session_id, None)

@@ -3368,6 +3368,10 @@ class ConnectionAuthorityTests(unittest.TestCase):
             self.store.register(resume, "192.0.2.3", self.now, INSTALL_KEY)
         self.assertEqual(ended.exception.body["error"], "match_ended")
         self.assertNotIn(sid, self.store._sessions, "a refused registration published an ended match")
+        self.store.stop()
+        self.store = session_directory.SessionDirectory(15, 5, **self.options)
+        self.now = time.monotonic()
+        self.assertNotIn(sid, self.store._sessions, "restart revived a refused ended-world registration")
         with self.assertRaises(PermissionError):
             self.store.register(dict(resume, world_boot=2, resume_token="wrong-owner"), "192.0.2.4", self.now, INSTALL_KEY)
         reopened = self.store.register(dict(resume, world_boot=2), "192.0.2.3", self.now, INSTALL_KEY)
