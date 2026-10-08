@@ -9261,6 +9261,20 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			CheckpointWriter::BatchScope batches(true);
 			captured = captured && scalarState.CaptureScriptGraph(frozen, problems, true);
 		}
+		scalarState.WaitFrozenCopy();
+		size_t emptyKeys = 0;
+		if (scalarState.m_NativeCache) {
+			scalarState.m_NativeCache->PushRetained(scalarState.m_State);
+			const GCtab* retained = tabV(&scalarState.m_State->top[-1]);
+			const Node* nodes = noderef(retained->node);
+			for (size_t index = 0; index <= retained->hmask; ++index) {
+				if (tvisudata(&nodes[index].key) && tvisnil(&nodes[index].val)) ++emptyKeys;
+			}
+			lua_pop(scalarState.m_State, 1);
+		}
+		const bool noEmptyKeys = captured && scalarState.m_NativeCache && emptyKeys == 0;
+		std::cout << "[script-graph-selftest] " << (noEmptyKeys ? "PASS" : "FAIL") << " fresh_native_capture_does_not_insert_empty_retained_keys count=" << emptyKeys << std::endl;
+		checkpointValues = noEmptyKeys && checkpointValues;
 		const bool gone = scalarState.RunScriptString("_ScalarIndexCapture = nil; collectgarbage('collect')") == 0;
 		{
 			CheckpointWriter::BatchScope batches(true);

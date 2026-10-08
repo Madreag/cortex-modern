@@ -535,6 +535,7 @@ namespace RTE::CheckpointLua {
 				else CaptureIterator(value);
 			}
 			m_Image->m_AnswerUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - answerStarted).count();
+			if (m_RetainedReport) System::PrintDiagnosticLine(std::format("[checkpoint-retained] thread={} calls={} missing={} us={}", std::hash<std::thread::id>{}(std::this_thread::get_id()), m_RetainedCalls, m_RetainedMissing, m_RetainedUs));
 			m_Captured = true;
 		}
 
@@ -640,6 +641,9 @@ namespace RTE::CheckpointLua {
 			TValue members{};
 		};
 		std::array<ScalarKeys, 2> m_ScalarKeys;
+		const bool m_RetainedReport = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
+		size_t m_RetainedCalls = 0, m_RetainedMissing = 0;
+		int64_t m_RetainedUs = 0;
 
 		lua_State* State() const { return m_References.state; }
 		void CheckThread() const {
@@ -685,11 +689,24 @@ namespace RTE::CheckpointLua {
 		}
 		// A subject answered again names new values; what the last capture kept for it goes.
 		void ReleaseRetained(const TValue& subject) {
+			const auto started = m_RetainedReport ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			m_Cache.PushRetained(State());
+			const TValue* previous = (m_RetainedReport || CheckpointWriter::BatchEnabled()) ? lj_tab_get(State(), tabV(&State()->top[-1]), &subject) : nullptr;
+			if (m_RetainedReport) {
+				++m_RetainedCalls;
+				if (!previous || tvisnil(previous)) ++m_RetainedMissing;
+			}
+			// Setting an absent key to nil still grows Lua's hash chains.
+			if (CheckpointWriter::BatchEnabled() && (!previous || tvisnil(previous))) {
+				lua_pop(State(), 1);
+				if (m_RetainedReport) m_RetainedUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+				return;
+			}
 			Push(subject);
 			lua_pushnil(State());
 			lua_rawset(State(), -3);
 			lua_pop(State(), 1);
+			if (m_RetainedReport) m_RetainedUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 		}
 		// The heap values a cached answer names stay alive in the subject's bucket of the retained table.
 		void Retain(const NativeImage::Entry& entry) {
