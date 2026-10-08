@@ -118,6 +118,7 @@ namespace RTE {
 	void NetDirectoryClient::SetTransportFactory(TransportFactory factory) { m_Factory = std::move(factory); }
 
 	void NetDirectoryClient::Configure(std::string baseUrl, std::string installKey, std::string certPinSha256) {
+		const std::string previousUrl = m_BaseUrl;
 		m_BaseUrl = std::move(baseUrl);
 		m_InstallKey = std::move(installKey);
 		m_CertPinSha256 = std::move(certPinSha256);
@@ -129,6 +130,7 @@ namespace RTE {
 		if (!m_BaseUrl.empty() && m_BaseUrl.rfind("https://", 0) != 0) {
 			m_BaseUrl = "https://" + m_BaseUrl;
 		}
+		if (m_BaseUrl != previousUrl) m_ConnectionProtocolRefused = false;
 		if (m_BaseUrl.empty()) {
 			if (m_IceRequest) m_IceRequest->Abort();
 			m_IceRequest.reset();
@@ -205,11 +207,11 @@ namespace RTE {
 		if (!m_Listed) {
 			// m_NextAttemptMs stays: a 429 or backoff deadline binds every request, whatever the intent.
 			m_BackoffMs = 0;
-			// A hidden intent that a legacy service already refused stays Failed on repeat calls.
-			if (m_State == State::Failed && (listed || !m_HiddenUnsupported)) {
+			// Repeated metadata cannot retry a protocol refusal or an unsupported hidden intent.
+			if (m_State == State::Failed && !m_ConnectionProtocolRefused && (listed || !m_HiddenUnsupported)) {
 				SetState(State::Idle);
 			}
-		} else if (m_State == State::Failed && listed) {
+		} else if (m_State == State::Failed && !m_ConnectionProtocolRefused && listed) {
 			SetState(m_SessionId.empty() ? State::Registering : State::Registered);
 		}
 		m_Listed = true;
@@ -232,6 +234,7 @@ namespace RTE {
 		}
 		m_RequestKind = RequestKind::None;
 		m_Listed = false;
+		m_ConnectionProtocolRefused = false;
 		m_SessionId.clear();
 		m_Token.clear();
 		m_Row.resumeSessionId.clear();
@@ -371,6 +374,7 @@ namespace RTE {
 		m_Token.clear();
 		m_ConfirmedListed.reset();
 		m_Capable = false;
+		m_ConnectionProtocolRefused = false;
 		if (m_State != State::Disabled) {
 			SetState(State::Idle);
 		}
@@ -492,12 +496,16 @@ namespace RTE {
 	}
 
 	bool NetDirectoryClient::TakeSuperseded(const Reply& reply) {
-		if (reply.statusCode != 409) return false;
+		if (reply.statusCode != 409 || !reply.error.empty()) return false;
 		int64_t generation = 0;
 		try {
 			const json body = json::parse(reply.body);
+			if (!body.is_object()) return false;
+			const auto code = body.find("error");
+			if (code == body.end() || !code->is_string() || (*code != "superseded" && *code != "already_migrated")) return false;
 			if (body.contains("migration_gen") && body.at("migration_gen").is_number_integer()) generation = body.at("migration_gen").get<int64_t>();
 		} catch (const json::exception&) {
+			return false;
 		}
 		m_SupersededGeneration = std::max<int64_t>(generation, 1);
 		NoteError("the match went on under host generation " + std::to_string(m_SupersededGeneration) + ": this host keeps the row no more");
@@ -527,6 +535,7 @@ namespace RTE {
 				const auto version = body.find("directory_version");
 				const int64_t actual = version != body.end() && version->is_number_integer() ? version->get<int64_t>() : 0;
 				NoteError("Your connection protocol is " + std::to_string(NetDirectoryLimits::c_ConnectionProtocol) + "; the directory uses " + std::to_string(actual) + ". Update the game or directory so the versions match.");
+				m_ConnectionProtocolRefused = true;
 				SetState(State::Failed);
 				ScheduleRetry(nowMs);
 				return;
@@ -547,6 +556,7 @@ namespace RTE {
 			}
 			if (response.connectionProtocol != NetDirectoryLimits::c_ConnectionProtocol) {
 				NoteError("Your connection protocol is " + std::to_string(NetDirectoryLimits::c_ConnectionProtocol) + "; the directory uses " + std::to_string(response.connectionProtocol) + ". Update the game or directory so the versions match.");
+				m_ConnectionProtocolRefused = true;
 				SetState(State::Failed);
 				return;
 			}

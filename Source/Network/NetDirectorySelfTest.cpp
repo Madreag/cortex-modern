@@ -1322,17 +1322,43 @@ namespace RTE {
 			}
 
 			bool TestConnectionProtocolRefusal(std::string* error) {
-				for (const int64_t version: {int64_t{0}, int64_t{2}}) {
+				for (const int status : {409, 200}) for (const bool refresh : {false, true}) for (const int64_t version: {int64_t{0}, int64_t{2}}) {
 					ScriptedClient s;
 					NetDirectoryRegisterResponse response{"7b8c9d2e-1111-4222-8333-444455556666", "fixture-proof", 15, 5, "192.0.2.1"};
+					const auto row = SampleRegisterRequest();
+					if (refresh) s.replies->push_back({200, NetDirectoryCodec::EncodeRegisterResponse(response), ""});
 					response.connectionProtocol = version;
-					s.replies->push_back({200, NetDirectoryCodec::EncodeRegisterResponse(response), ""});
-					s.client.Advertise(SampleRegisterRequest(), false);
-					s.client.Update(0); s.client.Update(0); s.client.Update(100000);
-					if (s.client.GetState() != NetDirectoryClient::State::Failed || s.sent->size() != 1 ||
+					s.replies->push_back({status, status == 200 ? NetDirectoryCodec::EncodeRegisterResponse(response) :
+					    json{{"error", "connection_version"}, {"client_version", NetDirectoryLimits::c_ConnectionProtocol}, {"directory_version", version}}.dump(), ""});
+					s.client.Advertise(row, false);
+					s.client.Update(0); s.client.Update(0);
+					if (refresh) {
+						s.client.RefreshRegistration(row, true, 0);
+						s.client.Update(5000); s.client.Update(5000);
+					}
+					const size_t expectedRequests = refresh ? 2 : 1;
+					if (s.client.GetState() != NetDirectoryClient::State::Failed || s.sent->size() != expectedRequests ||
+					    s.client.GetSupersededGeneration() != 0 ||
 					    s.client.LastError().find("protocol is 1") == std::string::npos ||
 					    s.client.LastError().find("directory uses " + std::to_string(version)) == std::string::npos) {
 						*error = "a directory protocol mismatch did not stop with both versions"; return false;
+					}
+					const std::string refusal = s.client.LastError();
+					for (const uint64_t now : {10000ULL, 100000ULL, 200000ULL}) {
+						// The service republishes metadata and calls Configure on every update.
+						s.client.Configure("dir.test/", "key0123456789abcd", "");
+						s.client.Advertise(row, true);
+						s.client.Update(now);
+						if (s.client.GetState() != NetDirectoryClient::State::Failed || s.sent->size() != expectedRequests || s.client.LastError() != refusal) {
+							*error = "routine listing metadata rearmed a terminal directory version refusal"; return false;
+						}
+					}
+					if (refresh) s.client.AbandonLease(); // An explicit new match may try again.
+					else s.client.Configure("https://other.test", "key0123456789abcd", "");
+					s.client.Advertise(row, false);
+					s.client.Update(300000);
+					if (s.client.GetState() != NetDirectoryClient::State::Registering || s.sent->size() != expectedRequests + 1) {
+						*error = "an explicit new match or directory could not retry after a version refusal"; return false;
 					}
 				}
 				std::cout << "[net-directory-selftest] PASS connection_protocol_refusal versions=named" << std::endl;
@@ -1507,6 +1533,31 @@ namespace RTE {
 			// R6 (sss): one host per handover generation - a successor's claim names its generation, every heartbeat and the delete
 			// carry this host's, and a 409 that names a later one stops the client keeping the row.
 			bool TestASupersededHostKeepsTheRowNoMore(std::string* error) {
+				for (const char* code : {"superseded", "already_migrated"}) {
+					ScriptedClient refused;
+					refused.replies->push_back({409, json{{"error", code}, {"migration_gen", 2}}.dump(), ""});
+					refused.client.Advertise(SampleRegisterRequest(), true);
+					refused.client.Update(0); refused.client.Update(0);
+					refused.client.Advertise(SampleRegisterRequest(), true);
+					refused.client.Update(100000);
+					if (refused.client.GetState() != NetDirectoryClient::State::Superseded || refused.client.GetSupersededGeneration() != 2 || refused.sent->size() != 1) {
+						*error = "a named migration refusal did not stop registration"; return false;
+					}
+				}
+				for (const char* body : {"not-json", "[]", R"({"migration_gen":2})", R"({"error":409,"migration_gen":2})", R"({"error":"other_conflict","migration_gen":2})"}) {
+					for (const bool heartbeat : {false, true}) {
+						ScriptedClient unrelated;
+						if (heartbeat) unrelated.replies->push_back({200, NetDirectoryCodec::EncodeRegisterResponse(
+						    NetDirectoryRegisterResponse{"7b8c9d2e-1111-4222-8333-444455556666", "fixture-proof", 15, 5, "192.0.2.1"}), ""});
+						unrelated.replies->push_back({409, body, ""});
+						unrelated.client.Advertise(SampleRegisterRequest(), true);
+						unrelated.client.Update(0); unrelated.client.Update(0);
+						if (heartbeat) { unrelated.client.Update(5000); unrelated.client.Update(5000); }
+						if (unrelated.client.GetState() == NetDirectoryClient::State::Superseded || unrelated.client.GetSupersededGeneration() != 0) {
+							*error = "an unrelated HTTP conflict superseded the host"; return false;
+						}
+					}
+				}
 				NetDirectoryRegisterRequest claim = SampleRegisterRequest();
 				claim.resumeSessionId = "7b8c9d2e-1111-4222-8333-444455556666";
 				claim.resumeToken = "tok";
@@ -3607,6 +3658,11 @@ namespace RTE {
 
 			std::string error;
 			const char* selected = std::getenv("CCCP_TEST_DIRECTORY_CASE");
+			if (selected && std::string(selected) == "protocol") {
+				if (!TestConnectionProtocolRefusal(&error) || !TestASupersededHostKeepsTheRowNoMore(&error)) return fail(error);
+				std::cout << "[net-directory-selftest] PASS" << std::endl;
+				return 0;
+			}
 #ifdef CCCP_WITH_GNS
 			if (!selected || std::string(selected) == "point3") {
 				if (!TestMissingListingKeepsTheRendezvous(&error)) return fail(error);

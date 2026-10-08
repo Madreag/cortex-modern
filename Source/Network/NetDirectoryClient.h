@@ -220,6 +220,7 @@ namespace RTE {
 		std::optional<bool> m_ConfirmedListed; //!< The held row's last server-confirmed visibility; empty without one.
 		std::optional<bool> m_InFlightListed; //!< The visibility carried by the in-flight heartbeat.
 		bool m_HiddenUnsupported = false; //!< A hidden intent on a legacy service already deleted once.
+		bool m_ConnectionProtocolRefused = false; //!< Metadata refresh cannot retry an incompatible directory.
 		bool m_BrowseWanted = false;
 		NetDirectoryRegisterRequest m_Row;
 		bool m_ListenAddrsDirty = false;
@@ -231,7 +232,7 @@ namespace RTE {
 		std::string m_ObservedIp;
 		int64_t m_HeartbeatS = 0;
 		int64_t m_SupersededGeneration = 0;
-		/// A 409 names the generation that holds the row now: this host keeps it no more.
+		/// A directory migration refusal names the generation that now holds the row.
 		bool TakeSuperseded(const Reply& reply);
 		int64_t m_ExpiresInS = 0;
 		uint64_t m_NextHeartbeatMs = 0;
