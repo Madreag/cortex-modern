@@ -198,7 +198,7 @@ namespace RTE {
 		switch (m_State) {
 			case NetReconnectUxState::Waiting:
 				if (m_RetainedSeat) return "Reconnecting - waiting to reach your match. Cancel stops rejoining." + tail;
-				return m_Attempts == 0 ? "Preparing to rejoin the match..." : "Rejoin attempt " + std::to_string(m_Attempts) + " of " +
+				return m_Attempts == 0 ? "Rejoining the match... preparing the first attempt. Cancel stops rejoining." + tail : "Rejoin attempt " + std::to_string(m_Attempts) + " of " +
 				       std::to_string(c_MaxAttempts) + " failed; retrying shortly" + tail;
 			case NetReconnectUxState::Retrying:
 				if (m_RetainedSeat) return "Reconnecting - reclaiming your seat. Cancel stops rejoining." + tail;

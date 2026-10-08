@@ -573,7 +573,6 @@ class SessionDirectory:
         self._service_era = 1
         self._next_owner = 0
         self._service_key = self._load_service_key(create_owner_key)
-        self.connections = ConnectionAuthority(self._service_key, self._owner_state.with_suffix(".connections.sqlite3") if self._owner_state else None)
         self._world_owners: dict[str, dict[str, Any]] = {}
         self._owner_replacements: dict[str, tuple[str, dict[str, Any], int]] = {}
         self._registering_sessions: dict[str, Session] = {}
@@ -629,8 +628,6 @@ class SessionDirectory:
         self._owner_written = 0
         self._owner_failure: Optional[BaseException] = None
         self._owner_writer = threading.Thread(target=self._write_owners_loop, name="world-owner-write", daemon=True)
-        if self._owner_state is not None:
-            self._owner_writer.start()
         if self._pending_state is not None and self._pending_state.exists():
             if self._pending_state.stat().st_size > MAX_PENDING_BYTES:
                 raise ValueError("pending world state exceeds its byte bound")
@@ -661,7 +658,14 @@ class SessionDirectory:
                 self._sessions[sid] = sess
                 self._register_replays[sid] = sess
                 self._pending_worlds[sid] = record
-        self._restore_connections()
+        self.connections = ConnectionAuthority(self._service_key, self._owner_state.with_suffix(".connections.sqlite3") if self._owner_state else None)
+        try:
+            self._restore_connections()
+        except BaseException:
+            self.connections.close()
+            raise
+        if self._owner_state is not None:
+            self._owner_writer.start()
         self._pruner = threading.Thread(
             target=self._prune_loop, name="session-prune", daemon=True
         )
@@ -670,7 +674,7 @@ class SessionDirectory:
         if not self._pruner.is_alive():
             self._pruner.start()
 
-    def _persist_session(self, sess: Session, now: float) -> None:
+    def _persist_session(self, sess: Session, now: float, reopen_world: bool = False) -> None:
         """A reply acknowledges both the lease and the state needed after restart."""
         wall = time.time()
         snapshot = dict(fields=sess.fields, token=sess.token, observed_ip=sess.observed_ip,
@@ -682,7 +686,7 @@ class SessionDirectory:
             register_retry_until=wall + max(0, sess.register_retry_until - now) if sess.register_retry_until else 0,
             next_seq=sess.next_seq, queue_drain_at={peer: wall - max(0, now - stamp) for peer, stamp in sess.queue_drain_at.items()},
             queues={peer: [dict(item.as_json(), payload_len=item.payload_len, source_ip=item.source_ip) for item in queue] for peer, queue in sess.queues.items()})
-        self.connections.remember_session(sess.session_id, snapshot, wall)
+        self.connections.remember_session(sess.session_id, snapshot, wall, reopen_world)
 
     def _restore_connections(self) -> None:
         now, wall = time.monotonic(), time.time()
@@ -709,6 +713,8 @@ class SessionDirectory:
                 self._clear_signals(prior)
             if now - sess.last_beat < self.expiry_s:
                 self._sessions[sid] = sess
+                if sess.register_fingerprint and (sess.register_retry_until == 0 or now < sess.register_retry_until):
+                    self._register_replays[sid] = sess
             elif sess.acknowledged:
                 deadline = now + max(0, record["retain_until"] - wall) if record.get("seats") else sess.last_beat + self.expiry_s + RESUME_GRACE_S
                 if deadline > now:
@@ -1360,7 +1366,8 @@ class SessionDirectory:
                 sess.ice_refused = carried.ice_refused
                 sess.ice_generation = carried.ice_generation
                 sess.ice_fixed = carried.ice_fixed
-            elif previous_session is not None:
+            self._persist_session(sess, now, reopen_world=world and not first_world)
+            if carried is None and previous_session is not None:
                 self._clear_signals(previous_session)
             self._retired.pop(session_id, None)
             self._sessions[session_id] = sess
@@ -1369,7 +1376,7 @@ class SessionDirectory:
             if resume is not None:
                 self._resume_tokens.pop(session_id, None)
             self._signals_changed.notify_all()
-            self._persist_session(sess, now)
+            self._host_ends.pop(session_id, None)
         return self._register_reply(sess)
 
     def _register_reply(self, sess: Session) -> dict[str, Any]:

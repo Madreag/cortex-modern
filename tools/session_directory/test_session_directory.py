@@ -25,6 +25,7 @@ import time
 import unittest
 import uuid
 from types import SimpleNamespace
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
@@ -527,10 +528,10 @@ class DirectoryTests(unittest.TestCase):
         self._U1_owner_transition(False)
 
     def test_U1_every_heartbeat_credits_monotonic_durable_time(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as cleanup:
             path = Path(directory) / "owners.json"
             store = session_directory.SessionDirectory(300, 5, owner_state=path, create_owner_key=True)
-            self.addCleanup(store.stop)
+            cleanup.callback(store.stop)
             row = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.1", 0, INSTALL_KEY)
             beat = {"token": row["token"], "peer_count": 1, "seats_free": 1}
             store.heartbeat(row["session_id"], beat, 55, INSTALL_KEY)
@@ -754,9 +755,9 @@ class DirectoryTests(unittest.TestCase):
                                  "T4: addresses in one subnet exceeded its retained-owner share")
 
     def test_T4_failed_retirement_preserves_the_old_owner(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 1):
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as cleanup, mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 1):
             store = session_directory.SessionDirectory(300, 5, owner_state=Path(directory) / "owners.json", create_owner_key=True)
-            self.addCleanup(store.stop)
+            cleanup.callback(store.stop)
             original = store.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.1", 0, INSTALL_KEY)
             store.heartbeat(original["session_id"], {"token": original["token"], "peer_count": 1, "seats_free": 1}, 0, INSTALL_KEY)
             store.delete(original["session_id"], {"token": original["token"]}, 1)
@@ -768,9 +769,9 @@ class DirectoryTests(unittest.TestCase):
             self.assertTrue(store._world_owners == before, "T4: a refused storage write retired the old owner")
 
     def test_T4_failed_return_preserves_the_old_signals(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as cleanup:
             store = session_directory.SessionDirectory(300, 5, owner_state=Path(directory) / "owners.json", create_owner_key=True)
-            self.addCleanup(store.stop)
+            cleanup.callback(store.stop)
             request = sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1)
             row = store.register(request, "192.0.2.1", 0, INSTALL_KEY)
             store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 1, "seats_free": 1}, 0, INSTALL_KEY)
@@ -972,7 +973,7 @@ class DirectoryTests(unittest.TestCase):
             self.assertEqual(len(store._world_owners), 4, "R3: recovery exceeded the retained owner cap")
 
     def test_R5_interrupted_key_creation_leaves_a_restartable_service(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as cleanup:
             state = Path(directory) / "world-owners.json"
             real_fdopen = session_directory.os.fdopen
             class InterruptedWrite:
@@ -994,7 +995,7 @@ class DirectoryTests(unittest.TestCase):
                             **({} if state.with_suffix(".key").exists() else argument))
             except ValueError:
                 self.fail("R5: interrupted first start left a partial signing key that prevents the next start")
-            self.addCleanup(resumed.stop)
+            cleanup.callback(resumed.stop)
             self.assertEqual(resumed._world_owners, {})
             row = resumed.register(sample_register(persistent_world=True, world_id=str(uuid.uuid4()), world_boot=1), "192.0.2.1", 0, INSTALL_KEY)
             self.assertTrue(row["token"])
@@ -1644,7 +1645,7 @@ class DirectoryTests(unittest.TestCase):
         status, missing = self.call(
             "POST",
             "/v1/sessions",
-            {"name": "Captain"},
+            {"connection_protocol": 1, "name": "Captain"},
             headers={"X-Install-Key": INSTALL_KEY},
         )
         self.assertEqual(status, 400)
@@ -2761,9 +2762,9 @@ class DirectoryTests(unittest.TestCase):
             self.assertLessEqual(limiter._map_size(), 8, "S1: sparse callers grew rate buckets beyond the map cap")
 
     def test_owner_writes_are_bounded_batched_and_outside_the_lock(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 4):
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as cleanup, mock.patch.object(session_directory, "MAX_WORLD_OWNERS", 4):
             store = session_directory.SessionDirectory(15, 5, owner_state=Path(directory) / "world-owners.json", create_owner_key=True)
-            self.addCleanup(store.stop)
+            cleanup.callback(store.stop)
             writes = []
             original = store._write_owner_file
             def observe(owners):
@@ -3146,11 +3147,11 @@ class DirectoryTests(unittest.TestCase):
         except session_directory.Superseded:
             self.fail("F3: stored owner proof could not resume an expired world when the install identity changed")
         store.heartbeat(world_id, {"token": own["token"], "peer_count": 1, "seats_free": 1}, 322, "abababababababab")
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary, ExitStack() as cleanup:
             owner_file = Path(temporary) / "world-owners.json"
             owner_file.write_text(json.dumps({world_id.upper(): store._world_owners[world_id]}), encoding="utf-8")
             restarted = session_directory.SessionDirectory(300, 5, owner_state=owner_file, create_owner_key=True)
-            self.addCleanup(restarted.stop)
+            cleanup.callback(restarted.stop)
             with self.assertRaises(PermissionError, msg="F3: a noncanonical saved owner allowed a tokenless claim"):
                 restarted.register(request, "192.0.2.3", 26, "cccccccccccccccc")
             try:
@@ -3354,6 +3355,58 @@ class ConnectionAuthorityTests(unittest.TestCase):
             self.assertIn(f"protocol is {version}", mismatch.exception.body["message"])
             self.assertIn("directory uses 1", mismatch.exception.body["message"])
         self.assertEqual(self.check()["generation"], 1)
+
+    def test_ended_world_reopens_only_with_its_owner_and_a_later_boot(self) -> None:
+        sid = str(uuid.uuid4())
+        request = sample_register(persistent_world=True, world_id=sid, world_boot=1)
+        row = self.store.register(request, "192.0.2.3", self.now, INSTALL_KEY)
+        self.store.heartbeat(sid, {"token": row["token"], "peer_count": 2, "seats_free": 0}, self.now, INSTALL_KEY)
+        issued = self.store.connection_request(sid, dict(self.issue, token=row["token"]), self.now, INSTALL_KEY)
+        self.store.delete(sid, {"token": row["token"]}, self.now)
+        resume = dict(request, resume_session_id=sid, resume_token=row["token"])
+        with self.assertRaises(ConnectionErrorReply) as ended:
+            self.store.register(resume, "192.0.2.3", self.now, INSTALL_KEY)
+        self.assertEqual(ended.exception.body["error"], "match_ended")
+        self.assertNotIn(sid, self.store._sessions, "a refused registration published an ended match")
+        with self.assertRaises(PermissionError):
+            self.store.register(dict(resume, world_boot=2, resume_token="wrong-owner"), "192.0.2.4", self.now, INSTALL_KEY)
+        reopened = self.store.register(dict(resume, world_boot=2), "192.0.2.3", self.now, INSTALL_KEY)
+        self.assertEqual(reopened["session_id"], sid)
+        self.assertFalse(self.store.host_end_status(sid, self.now)["ended_by_host"])
+        self.assertEqual(dict(self.store.connections.records())[sid]["seats"], {})
+        current_sid = self.sid
+        try:
+            self.sid = sid
+            with self.assertRaises(ConnectionErrorReply):
+                self.check(token=issued["seat_token"])
+        finally:
+            self.sid = current_sid
+        fresh = self.store.connection_request(sid, dict(self.issue, token=reopened["token"], epoch="11" * 16), self.now, INSTALL_KEY)
+        self.assertNotEqual(fresh["seat_token"], issued["seat_token"])
+
+    def test_connection_capacity_refusal_does_not_publish_an_unpersisted_row(self) -> None:
+        with mock.patch("connection_authority.MAX_MATCHES", 1), self.assertRaises(ConnectionErrorReply) as full:
+            self.store.register(sample_register(), "198.51.100.1", self.now, INSTALL_KEY)
+        self.assertEqual(full.exception.body["error"], "connection_capacity")
+        self.assertEqual(set(self.store._sessions), {self.sid})
+        self.assertEqual(self.check()["seat"], 1)
+
+    def test_corrupt_connection_storage_fails_closed_and_releases_the_file(self) -> None:
+        path = Path(self.temporary.name) / "corrupt.sqlite3"
+        authority = ConnectionAuthority(b"isolated-test-service-key", path)
+        with authority._db:
+            authority._db.execute("INSERT INTO connections VALUES (?, ?)", (str(uuid.uuid4()), b"invalid encrypted record"))
+        authority.close()
+        with self.assertRaisesRegex(ValueError, "could not be verified"):
+            ConnectionAuthority(b"isolated-test-service-key", path)
+        path.unlink()  # Windows refuses this if failed startup leaked the handle.
+
+    def test_shutdown_never_acknowledges_a_memory_only_mutation(self) -> None:
+        self.store.stop()
+        with self.assertRaises(ConnectionErrorReply) as stopped:
+            self.check()
+        self.assertEqual(stopped.exception.status, 503)
+        self.assertEqual(stopped.exception.body["error"], "directory_restarting")
 
 
 if __name__ == "__main__":

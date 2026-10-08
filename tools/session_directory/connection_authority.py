@@ -95,6 +95,7 @@ class ConnectionAuthority:
         self.public_key = self._signer.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
         self._seal = AESGCM(hmac.new(service_key, b"connection-storage-v1", hashlib.sha256).digest())
         self._db = None
+        self._closed = False
         self._records: dict[str, dict[str, Any]] = {}
         if path is not None:
             path = Path(path)
@@ -104,31 +105,38 @@ class ConnectionAuthority:
                 os.close(fd)
             os.chmod(path, 0o600)
             self._db = sqlite3.connect(path, check_same_thread=False)
-            self._db.execute("PRAGMA journal_mode=DELETE")
-            self._db.execute("PRAGMA synchronous=FULL")
-            self._db.execute("CREATE TABLE IF NOT EXISTS connections (session TEXT PRIMARY KEY, record BLOB NOT NULL)")
-            now = time.time()
-            for sid, sealed in self._db.execute("SELECT session, record FROM connections"):
-                try:
-                    if str(uuid.UUID(sid)) != sid or not 28 <= len(sealed) <= MAX_RECORD_BYTES + 28:
-                        raise ValueError()
-                    raw = self._seal.decrypt(sealed[:12], sealed[12:], sid.encode("ascii"))
-                    record = json.loads(raw)
-                    if not isinstance(record, dict) or record.get("version") != CONNECTION_PROTOCOL:
-                        raise ValueError()
-                    if record.get("retain_until", 0) > now:
-                        self._records[sid] = record
-                except (ValueError, InvalidTag, TypeError):
-                    raise ValueError("connection state could not be verified; restore the matching directory state and service key") from None
-            self.prune(now)
+            try:
+                self._db.execute("PRAGMA journal_mode=DELETE")
+                self._db.execute("PRAGMA synchronous=FULL")
+                self._db.execute("CREATE TABLE IF NOT EXISTS connections (session TEXT PRIMARY KEY, record BLOB NOT NULL)")
+                now = time.time()
+                for sid, sealed in self._db.execute("SELECT session, record FROM connections"):
+                    try:
+                        if str(uuid.UUID(sid)) != sid or not 28 <= len(sealed) <= MAX_RECORD_BYTES + 28:
+                            raise ValueError()
+                        raw = self._seal.decrypt(sealed[:12], sealed[12:], sid.encode("ascii"))
+                        record = json.loads(raw)
+                        if not isinstance(record, dict) or record.get("version") != CONNECTION_PROTOCOL:
+                            raise ValueError()
+                        if record.get("retain_until", 0) > now:
+                            self._records[sid] = record
+                    except (ValueError, InvalidTag, TypeError):
+                        raise ValueError("connection state could not be verified; restore the matching directory state and service key") from None
+                self.prune(now)
+            except BaseException:
+                self.close()
+                raise
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             if self._db is not None:
                 self._db.close()
                 self._db = None
 
     def _save(self, sid: str, record: dict[str, Any]) -> None:
+        if self._closed:
+            raise ConnectionErrorReply(503, "directory_restarting", "The directory is restarting. Your match can keep playing; reconnecting will retry.")
         if sid not in self._records and len(self._records) >= MAX_MATCHES:
             raise ConnectionErrorReply(503, "connection_capacity", "The directory is full. Wait a moment and host again.")
         raw = json.dumps(record, separators=(",", ":"), ensure_ascii=True).encode()
@@ -160,19 +168,35 @@ class ConnectionAuthority:
             record = self._records.get(sid)
             return record["retain_until"] if record and record.get("seats") and not record.get("ended") else 0
 
-    def remember_session(self, sid: str, snapshot: dict[str, Any], now: float) -> None:
+    def remember_session(self, sid: str, snapshot: dict[str, Any], now: float, reopen_world: bool = False) -> None:
         with self._lock:
             record = dict(self._records.get(sid, {"version": CONNECTION_PROTOCOL, "seats": {}, "removed": {}, "route_revision": 0}))
             if record.get("ended"):
-                raise ConnectionErrorReply(410, "match_ended", "The host ended this match. Choose another game.")
+                # Only an authenticated owner registration can open a later boot
+                # of a persistent world. Old match seats are never carried over.
+                if not (reopen_world and snapshot["fields"].get("persistent_world") is True
+                        and snapshot["fields"].get("world_boot", 0) > record.get("world_boot", 0)):
+                    raise ConnectionErrorReply(410, "match_ended", "The host ended this match. Choose another game.")
+                record.update(ended=False, seats={})
             record["session"] = snapshot
             record["retain_until"] = now + (MATCH_RETENTION_SECONDS if record.get("seats") else 150)
             self._save(sid, record)
 
     def end(self, sid: str, now: float) -> None:
         with self._lock:
-            record = dict(self._records.get(sid, {"version": CONNECTION_PROTOCOL}))
-            record.update(ended=True, seats={}, removed={}, session=None, retain_until=now + MATCH_RETENTION_SECONDS)
+            if self._closed:
+                raise ConnectionErrorReply(503, "directory_restarting", "The directory is restarting. Retry ending this match shortly.")
+            record = dict(self._records.get(sid, {}))
+            if not record.get("seats") and not record.get("removed"):
+                # No participant ever obtained a seat token. Deleting an empty
+                # listing must not reserve a day of connection-table capacity.
+                if self._db is not None:
+                    with self._db:
+                        self._db.execute("DELETE FROM connections WHERE session=?", (sid,))
+                self._records.pop(sid, None)
+                return
+            record.update(ended=True, seats={}, session=None, retain_until=now + MATCH_RETENTION_SECONDS,
+                          world_boot=(record.get("session") or {}).get("fields", {}).get("world_boot", 0))
             self._save(sid, record)
 
     def _match(self, sid: str, now: float) -> dict[str, Any]:
