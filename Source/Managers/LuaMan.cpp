@@ -6909,7 +6909,8 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	ContentFile::LoadedBitmapIndexScope bitmapIndex;
 	if (!CaptureSentinel::InParallelPhase()) LuaScriptGraphNativeCaptureScope::PreTouch();
 	CaptureSentinel::ParallelPhase parallel;
-	{
+	// A match's states can describe their heaps while the native worker walks the world.
+	if (!CheckpointWriter::BatchEnabled()) {
 		CaptureTrace::Span span("graph_build_world_wait");
 		LuaScriptGraphNativeCaptureScope::BuildWorld(shared);
 	}
