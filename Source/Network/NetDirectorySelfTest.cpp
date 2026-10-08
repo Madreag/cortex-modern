@@ -2502,7 +2502,7 @@ namespace RTE {
 						note("shutdown: a new lobby reclaimed the deleted lobby's lease");
 					}
 					s.client.Update(SteadyMs() + 60000);
-					if (s.client.GetSessionId() != newLease["session_id"]) note("shutdown: the next lobby did not adopt its fresh lease");
+					if (s.client.GetSessionId() != newLease["session_id"].get<std::string>()) note("shutdown: the next lobby did not adopt its fresh lease");
 				}
 
 				{   // Shutdown inside a heartbeat 429 keeps retry_after: no DELETE within its budget, none counted
