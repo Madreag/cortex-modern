@@ -233,6 +233,37 @@ class DirectoryTests(unittest.TestCase):
             store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 13)
         self.assertEqual(store.get_ice_servers(row["session_id"], 14)["iceServers"][0]["username"], "u")
 
+    def test_unexpired_relay_offer_survives_listing_gap_and_host_resume(self) -> None:
+        store = session_directory.SessionDirectory(15, 5)
+        row = store.register(sample_register(), "192.0.2.1", 0, INSTALL_KEY)
+        sid, token = row["session_id"], row["token"]
+        store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 0, "state": "running"}, 1, INSTALL_KEY)
+        with mock.patch.object(session_directory.time, "time", return_value=1000):
+            offer = store.mint_ice_servers(sid, {"token": token, "match_id": "match:1", "ttl": 300,
+                "iceServers": [{"urls": ["turn:relay.example:3478?transport=udp"], "username": "test-user", "credential": "test-password"}]}, INSTALL_KEY, 2)
+            self.assertEqual(store.get_ice_servers(sid, 17), offer, "live rendezvous lost its unexpired relay offer")
+            resumed = store.register(sample_register(resume_session_id=sid, resume_token=token), "192.0.2.2", 18, INSTALL_KEY)
+            self.assertEqual(resumed["session_id"], sid)
+            self.assertEqual(store.get_ice_servers(sid, 19), offer, "resumed host discarded the offer before renewing it")
+        with mock.patch.object(session_directory.time, "time", return_value=1300):
+            with self.assertRaises(session_directory.TurnError):
+                store.get_ice_servers(sid, 20)
+        with mock.patch.object(session_directory.time, "time", return_value=1001):
+            store.delete(sid, {"token": resumed["token"]}, 21)
+            with self.assertRaises(KeyError):
+                store.get_ice_servers(sid, 22)
+
+    def test_live_host_resume_keeps_offer_until_its_original_expiry(self) -> None:
+        store = session_directory.SessionDirectory(15, 5)
+        row = store.register(sample_register(), "192.0.2.1", 0, INSTALL_KEY)
+        sid, token = row["session_id"], row["token"]
+        store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 0, "state": "running"}, 1, INSTALL_KEY)
+        with mock.patch.object(session_directory.time, "time", return_value=1000):
+            offer = store.mint_ice_servers(sid, {"token": token, "match_id": "match:1", "ttl": 300,
+                "iceServers": [{"urls": ["turn:relay.example:3478?transport=udp"], "username": "test-user", "credential": "test-password"}]}, INSTALL_KEY, 2)
+            store.register(sample_register(resume_session_id=sid, resume_token=token), "192.0.2.2", 3, INSTALL_KEY)
+            self.assertEqual(store.get_ice_servers(sid, 4), offer)
+
     def test_turn_max_ttl_caps_the_minted_lifetime(self) -> None:
         store = session_directory.SessionDirectory(300, 5, turn_config={
             "backend": "coturn", "static_auth_secret": "server-only-secret", "relay_urls": ["turn:relay.example:3478?transport=udp"],

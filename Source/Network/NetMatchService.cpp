@@ -10044,7 +10044,7 @@ static std::string ResyncSaveName() {
 	}
 
 	// The host row's line for an offer that expired before a renewal landed; the next offer clears it.
-	static constexpr const char* c_RelayLapsedText = "Relay login expired and has not renewed yet; new joins connect direct until it does.";
+	static constexpr const char* c_RelayLapsedText = "Relay login expired and is renewing. Players who need the relay can join once it reconnects.";
 
 	std::string NetMatchService::GetRelayError() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
@@ -10338,8 +10338,19 @@ static std::string ResyncSaveName() {
 		if (g_SettingsMan.GetNetworkConnectionMode() != SettingsMan::NetworkConnectionMode::DirectOnly && g_SettingsMan.GetNetworkPlayerTurnServers().empty() && !g_SettingsMan.HasNetworkTurnServersOverride()) {
 			browse.FetchIceServers(request.sessionId);
 			const uint64_t relayDeadline = SteadyNowMs() + c_IceConnectBudgetMs;
-			while (browse.IceRequestPending() && !m_CancelRequested.load() && SteadyNowMs() < relayDeadline) {
-				browse.Update(SteadyNowMs());
+			const bool needsRelay = g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly || target.address.empty();
+			uint64_t nextRelayFetch = 0;
+			while (!m_CancelRequested.load() && SteadyNowMs() < relayDeadline) {
+				const uint64_t nowMs = SteadyNowMs();
+				browse.Update(nowMs);
+				if (!browse.IceRequestPending()) {
+					if (!browse.IceServers().Empty() || !needsRelay || !browse.IceRequestRetryable()) break;
+					if (!nextRelayFetch) nextRelayFetch = nowMs + browse.IceRetryDelayMs();
+					if (nowMs >= nextRelayFetch) {
+						if (!browse.FetchIceServers(request.sessionId)) break;
+						nextRelayFetch = 0;
+					}
+				}
 				std::this_thread::sleep_for(std::chrono::milliseconds(20));
 			}
 			relay = browse.IceServers();

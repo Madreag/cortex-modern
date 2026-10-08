@@ -379,6 +379,9 @@ namespace RTE {
 	bool NetDirectoryClient::StartIceRequest(const Request& request) {
 		if (m_IceRequest || m_BaseUrl.empty() || !m_Factory) return false;
 		m_IceError.clear();
+		m_IceRelayRefused = false;
+		m_IceRetryable = false;
+		m_IceHostRequest = request.method == "POST";
 		m_IceRequest = m_Factory();
 		m_IceRequest->Start(request);
 		return true;
@@ -407,15 +410,26 @@ namespace RTE {
 		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
 		NetRelayConfig offer;
 		m_IceRelayRefused = reply.statusCode == 502 && reply.body.find("\"relay_provider_refused\"") != std::string::npos;
+		m_IceRetryable = false;
+		m_IceRetryDelayMs = 500;
 		if (reply.statusCode == 200 && NetRelayConfig::FromJson(reply.body, offer) && offer.Usable(now)) {
 			m_IceServers = std::move(offer);
 			m_IceError.clear();
 		} else {
 			if (!m_IceServers.Usable(now)) m_IceServers = {};
-			m_IceError = m_IceRelayRefused ? "The host's relay refused the credentials" :
-			             reply.statusCode == 429 ? "Relay credential rate limit; retrying shortly" :
-			             reply.statusCode == 403 ? "Relay credential request refused by the directory" :
-			             "Relay credentials unavailable or expired";
+			m_IceRetryable = !m_IceRelayRefused && (reply.statusCode == 0 || reply.statusCode == 404 || reply.statusCode == 408 ||
+			                 reply.statusCode == 429 || reply.statusCode >= 500 || (reply.statusCode == 200 && offer.Valid()));
+			const json details = json::parse(reply.body, nullptr, false);
+			if (details.is_object() && details.contains("retry_after_s") && details["retry_after_s"].is_number_unsigned()) {
+				m_IceRetryDelayMs = static_cast<uint32_t>(std::min<uint64_t>(details["retry_after_s"].get<uint64_t>(), 3600) * 1000);
+				m_IceRetryDelayMs = std::max<uint32_t>(m_IceRetryDelayMs, 500);
+			}
+			m_IceError = m_IceRelayRefused
+			                 ? (m_IceHostRequest ? "The relay service refused your request. Check Relay in the lobby and retry."
+			                                     : "The host's relay refused the credentials. Ask the host to check Relay in the lobby.")
+			             : reply.statusCode == 429 ? "The relay service is busy. Wait briefly and retry joining."
+			             : reply.statusCode == 403 ? "The directory refused the relay request. Refresh the game list and retry."
+			             : "The relay login is not ready. Retry joining after the host's relay reconnects.";
 		}
 	}
 

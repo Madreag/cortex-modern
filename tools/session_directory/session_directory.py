@@ -1189,6 +1189,11 @@ class SessionDirectory:
                 # A durable claim keeps the signals still owed to the successor.
                 sess.queues, sess.next_seq = carried.queues, carried.next_seq
                 sess.queue_drain_at, sess.undrained_bytes = carried.queue_drain_at, carried.undrained_bytes
+                # Rejoining peers need the same offer while the successor renews it.
+                # Keep its original expiry; resuming never extends a relay login.
+                sess.ice_offer = carried.ice_offer
+                sess.ice_refused = carried.ice_refused
+                sess.ice_generation = carried.ice_generation
             elif previous_session is not None:
                 self._clear_signals(previous_session)
             self._retired.pop(session_id, None)
@@ -1259,7 +1264,9 @@ class SessionDirectory:
 
     def get_ice_servers(self, session_id: str, now: float) -> dict[str, Any]:
         with self._lock:
-            sess = self._get(session_id, now)
+            # An expired running listing still routes survivor signals during the
+            # existing resume grace. Those dials also need its unexpired offer.
+            sess = self._signalling(session_id, now)
             if not sess:
                 raise KeyError(session_id)
             if not sess.ice_offer or sess.ice_offer["expires_at"] <= int(time.time()):

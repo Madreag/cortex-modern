@@ -17132,7 +17132,20 @@ namespace RTE {
 		service.m_FreshRelayRequested = true;
 		service.UpdateRelayOffer(60010);
 		service.m_Directory.Update(60011); service.UpdateRelayOffer(60011);
-		if (service.GetRelayError() != "Relay credentials unavailable or expired") failures.push_back("a failed re-mint printed \"" + service.GetRelayError() + "\"");
+		if (service.GetRelayError() != "The relay login is not ready. Retry joining after the host's relay reconnects.") failures.push_back("a failed re-mint printed \"" + service.GetRelayError() + "\"");
+		// A join may race the host's first mint or renewal; retry only temporary failures.
+		for (const auto& reply : std::vector<NetDirectoryClient::Reply>{{404, R"({"error":"relay_offer_unavailable"})", ""},
+		                                                            {429, R"({"error":"relay_rate_limited","retry_after_s":2})", ""},
+		                                                            {502, R"({"error":"relay_provider_refused"})", ""},
+		                                                            {403, R"({"error":"forbidden"})", ""}}) {
+			script->replies.push_back(reply);
+			if (!service.m_Directory.FetchIceServers("11111111-2222-4333-8444-555555555555")) { *error = "relay bootstrap retry did not start"; return false; }
+			service.m_Directory.Update(60012);
+			const bool retry = reply.statusCode == 404 || reply.statusCode == 429;
+			if (service.m_Directory.IceRequestRetryable() != retry ||
+			    (reply.statusCode == 429 && service.m_Directory.IceRetryDelayMs() != 2000) ||
+			    service.m_Directory.IceRelayRefused() != (reply.statusCode == 502)) failures.push_back("relay bootstrap lost its retry or refusal reason");
+		}
 		if (!failures.empty()) {
 			*error = "relay renewal: " + failures.front();
 			for (size_t index = 1; index < failures.size(); ++index) *error += " | " + failures[index];
