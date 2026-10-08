@@ -797,7 +797,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	auto& cow = CheckpointCow::Get();
 	cow.BeginImage();
 	CheckpointWriter::CacheScope cache(&cow.Cache());
-	CheckpointWriter::BatchScope nativeBatches(!matchId.empty());
+	CheckpointWriter::BatchScope nativeBatches(!matchId.empty(), !matchId.empty());
 	CheckpointLua::CopyPool::PauseScope pageCopies(!matchId.empty());
 	auto image = std::make_shared<CheckpointImage>();
 	image->tick = tick;
@@ -2087,7 +2087,11 @@ bool ActivityMan::LoadAutosaveToRestart(const std::string& matchId, uint64_t tic
 		}
 		return false;
 	}
-	if (!LoadArchiveToRestart(checkpoint->path.string(), matchId + "-" + std::to_string(tick))) return false;
+	CheckpointBuffer::PrepareCaptureStorage(256 << 20);
+	if (!LoadArchiveToRestart(checkpoint->path.string(), matchId + "-" + std::to_string(tick))) {
+		CheckpointBuffer::CancelCaptureStorage();
+		return false;
+	}
 	System::PrintDiagnosticLine(std::format("[autosave] restored match={} tick={} round={} world_hash={}\n",
 	                         checkpoint->matchId, checkpoint->savedTick, checkpoint->roundId, checkpoint->worldStructureHash));
 	return true;

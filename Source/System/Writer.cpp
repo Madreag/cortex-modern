@@ -3,6 +3,7 @@
 #include "CheckpointArchive.h"
 #include "CheckpointProperties.h"
 #include "CheckpointImage.h"
+#include "ThreadMan.h"
 #include "CaptureSentinel.h"
 #include "BitmapCheckpoint.h"
 #include "Base64/base64.h"
@@ -14,6 +15,13 @@
 #include "Reader.h"
 #include "Timer.h"
 
+#include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <memory>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
 #include <format>
 #include <iomanip>
 #include <fstream>
@@ -119,6 +127,14 @@ namespace {
 				s_CheckpointPoolLiveBytes.fetch_sub(bytes, std::memory_order_relaxed);
 			}
 		};
+		struct Prepared {
+			std::mutex mutex;
+			std::vector<std::shared_ptr<Block>> blocks;
+			std::atomic<bool> ready{false};
+			std::shared_future<void> task;
+			std::promise<void> completion;
+		};
+		explicit CheckpointArenaGroup(const std::shared_ptr<Prepared>& prepared = {}) : m_Prepared(prepared) {}
 		void* Allocate(size_t count, size_t alignment, std::vector<std::shared_ptr<Block>>& leases) {
 			constexpr size_t chunkBytes = 1 << 20;
 			if (count > chunkBytes) {
@@ -142,10 +158,18 @@ namespace {
 		size_t Bytes() const { return m_Bytes.load(std::memory_order_relaxed); }
 	private:
 		std::shared_ptr<Block> m_Current;
+		std::weak_ptr<Prepared> m_Prepared;
 		size_t m_Used = 0;
 		std::atomic<size_t> m_Blocks{0}, m_Bytes{0};
 		std::shared_ptr<Block> MakeBlock(size_t bytes, size_t alignment) {
-			auto block = std::make_shared<Block>(bytes, alignment);
+			std::shared_ptr<Block> block;
+			if (bytes == (1 << 20) && alignment <= alignof(std::max_align_t)) {
+				if (auto prepared = m_Prepared.lock(); prepared && prepared->ready.load(std::memory_order_acquire)) {
+					std::lock_guard lock(prepared->mutex);
+					if (!prepared->blocks.empty()) { block = std::move(prepared->blocks.back()); prepared->blocks.pop_back(); }
+				}
+			}
+			if (!block) block = std::make_shared<Block>(bytes, alignment);
 			m_Blocks.fetch_add(1, std::memory_order_relaxed);
 			m_Bytes.fetch_add(bytes, std::memory_order_relaxed);
 			return block;
@@ -168,14 +192,48 @@ namespace {
 		bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override { return this == &other; }
 	};
 	struct CheckpointArenaPool {
+		bool releasePreparedOnWorker = false;
+		std::shared_ptr<CheckpointArenaGroup::Prepared> prepared;
 		std::mutex mutex;
 		std::unordered_map<std::thread::id, std::shared_ptr<CheckpointArenaGroup>> groups;
 	};
 	std::mutex s_ArenaPoolMutex;
 	std::shared_ptr<CheckpointArenaPool> s_ArenaPool;
+	std::shared_ptr<CheckpointArenaGroup::Prepared> s_NextPrepared;
+	std::vector<std::shared_future<void>> s_PreparedReleaseTasks;
+	std::atomic<size_t> s_PreparedReleaseWorkerCalls{0}, s_PreparedReleaseWorkerBytes{0};
 	size_t s_ArenaPoolUsers = 0;
 	uint64_t s_ArenaPoolNext = 0;
 	std::atomic<uint64_t> s_ArenaPoolEpoch{0};
+
+	void ReleasePreparedStorage(std::shared_ptr<CheckpointArenaGroup::Prepared> prepared) {
+		try {
+			std::erase_if(s_PreparedReleaseTasks, [](auto& task) { return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready; });
+			auto completion = std::make_shared<std::promise<void>>();
+			s_PreparedReleaseTasks.push_back(completion->get_future().share());
+			const auto owner = std::this_thread::get_id();
+			g_ThreadMan.GetBackgroundThreadPool().push_task([prepared = std::move(prepared), completion, owner]() mutable {
+				prepared->task.wait();
+				size_t bytes = 0;
+				for (const auto& block: prepared->blocks) bytes += block->bytes;
+				const auto started = std::chrono::steady_clock::now();
+				prepared.reset(); // The pool keeps idle task closures, so release here.
+				const bool worker = std::this_thread::get_id() != owner;
+				if (worker) {
+					s_PreparedReleaseWorkerCalls.fetch_add(1, std::memory_order_relaxed);
+					s_PreparedReleaseWorkerBytes.fetch_add(bytes, std::memory_order_relaxed);
+				}
+				if (const char* value = std::getenv("CCCP_CHECKPOINT_STORAGE_RELEASE"); value && std::string_view(value) == "1") {
+					System::PrintDiagnosticLine(std::format("[checkpoint-storage-release] worker={} bytes={} release_us={}", worker ? 1 : 0, bytes,
+					    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()));
+				}
+				completion->set_value();
+			});
+		} catch (...) {
+			// Queue allocation failure preserves capture and releases locally.
+			prepared.reset();
+		}
+	}
 
 	std::shared_ptr<CheckpointArenaGroup> CurrentArenaGroup() {
 		const uint64_t epoch = s_ArenaPoolEpoch.load(std::memory_order_acquire);
@@ -191,7 +249,7 @@ namespace {
 		if (!pool) return {};
 		std::lock_guard lock(pool->mutex);
 		auto& group = pool->groups[std::this_thread::get_id()];
-		if (!group) group = std::make_shared<CheckpointArenaGroup>();
+		if (!group) group = std::make_shared<CheckpointArenaGroup>(pool->prepared);
 		previousEpoch = epoch;
 		previousGroup = group;
 		return group;
@@ -741,13 +799,69 @@ std::string CheckpointText::SharedText() const {
 	return text;
 }
 
-CheckpointBuffer::ArenaPoolScope::ArenaPoolScope(bool enabled) {
+std::shared_future<void> CheckpointBuffer::PrepareCaptureStorage(size_t bytes) {
+	static constexpr size_t chunk = 1 << 20;
+	constexpr size_t ceiling = 256 << 20;
+	std::lock_guard lock(s_ArenaPoolMutex);
+	if (s_NextPrepared && !s_NextPrepared->ready.load(std::memory_order_acquire)) return s_NextPrepared->task;
+	auto prepared = std::make_shared<CheckpointArenaGroup::Prepared>();
+	const auto owner = std::this_thread::get_id();
+	const size_t count = (std::min(bytes, ceiling) + chunk - 1) / chunk;
+	prepared->task = prepared->completion.get_future().share();
+	g_ThreadMan.GetBackgroundThreadPool().push_task([prepared, owner, count]() mutable {
+		auto completion = std::move(prepared->completion);
+		try {
+			if (std::this_thread::get_id() == owner) throw std::logic_error("checkpoint preparation requires a worker");
+			const auto started = std::chrono::steady_clock::now();
+			const auto& helpers = g_ThreadMan.GetCheckpointThreadPool();
+			const auto poolUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+			prepared->blocks.reserve(count);
+			for (size_t index = 0; index < count; ++index) {
+				auto block = std::make_shared<CheckpointArenaGroup::Block>(chunk, alignof(std::max_align_t));
+				std::memset(block->address, 0, chunk);
+				prepared->blocks.push_back(std::move(block));
+			}
+			prepared->ready.store(true, std::memory_order_release);
+			System::PrintDiagnosticLine(std::format("[checkpoint-storage] worker=1 blocks={} bytes={} prepare_us={} helpers={} pool_us={}", count, count * chunk,
+			    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count(), helpers.get_thread_count(), poolUs));
+			prepared.reset();
+			completion.set_value();
+		} catch (...) {
+			if (prepared) {
+				{ std::lock_guard cleanup(prepared->mutex); prepared->blocks.clear(); }
+				prepared->ready.store(true, std::memory_order_release);
+				prepared.reset();
+			}
+			completion.set_exception(std::current_exception());
+		}
+	});
+	s_NextPrepared = prepared;
+	return prepared->task;
+}
+
+void CheckpointBuffer::CancelCaptureStorage() {
+	std::lock_guard lock(s_ArenaPoolMutex);
+	if (s_NextPrepared) ReleasePreparedStorage(std::move(s_NextPrepared));
+}
+
+void CheckpointBuffer::WaitForPreparedStorageRelease() {
+	std::vector<std::shared_future<void>> tasks;
+	{
+		std::lock_guard lock(s_ArenaPoolMutex);
+		tasks.swap(s_PreparedReleaseTasks);
+	}
+	for (auto& task: tasks) task.get();
+}
+
+CheckpointBuffer::ArenaPoolScope::ArenaPoolScope(bool enabled, bool releasePreparedOnWorker) {
 	if (!enabled) return;
 	std::lock_guard lock(s_ArenaPoolMutex);
 	if (!s_ArenaPoolUsers) {
 		s_ArenaPool = std::make_shared<CheckpointArenaPool>();
+		s_ArenaPool->prepared = std::move(s_NextPrepared);
 		s_ArenaPoolEpoch.store(++s_ArenaPoolNext, std::memory_order_release);
 	}
+	s_ArenaPool->releasePreparedOnWorker |= releasePreparedOnWorker;
 	++s_ArenaPoolUsers;
 	m_Entered = true;
 }
@@ -763,6 +877,7 @@ CheckpointBuffer::ArenaPoolScope::~ArenaPoolScope() {
 		for (const auto& [thread, group]: s_ArenaPool->groups) { blocks += group->Blocks(); bytes += group->Bytes(); }
 		CaptureTrace::Span receipt("checkpoint_pool_allocations", std::format("threads={} blocks={} bytes={}", s_ArenaPool->groups.size(), blocks, bytes));
 	}
+	if (s_ArenaPool->releasePreparedOnWorker && s_ArenaPool->prepared) ReleasePreparedStorage(std::move(s_ArenaPool->prepared));
 	s_ArenaPool.reset();
 }
 
@@ -1285,10 +1400,101 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		}
 
 		{
-			std::vector<Vector> vectors(512, Vector(-0.0F, std::bit_cast<float>(uint32_t{0x7fc00031})));
+			CheckpointBuffer::WaitForPreparedStorageRelease();
+			const size_t before = s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed);
+			auto prepared = std::make_shared<CheckpointArenaGroup::Prepared>();
+			prepared->task = prepared->completion.get_future().share();
+			const auto finished = prepared->task;
+			std::promise<void> begin;
+			const auto gate = begin.get_future().share();
+			{
+				std::lock_guard lock(s_ArenaPoolMutex);
+				if (s_NextPrepared) throw std::logic_error("late preparation fixture found prior storage");
+				s_NextPrepared = prepared;
+			}
+			g_ThreadMan.GetBackgroundThreadPool().push_task([prepared, gate]() mutable {
+				auto completion = std::move(prepared->completion);
+				try {
+					gate.wait();
+					for (int block = 0; block < 16; ++block) prepared->blocks.push_back(std::make_shared<CheckpointArenaGroup::Block>(1 << 20, alignof(std::max_align_t)));
+					prepared->ready.store(true, std::memory_order_release);
+					prepared.reset();
+					completion.set_value();
+				} catch (...) {
+					prepared.reset();
+					completion.set_exception(std::current_exception());
+				}
+			});
+			prepared.reset();
+			CheckpointText small;
+			{
+				CheckpointWriter::BatchScope batch(true, true);
+				small = CheckpointWriter::CaptureNative([] { CheckpointWriter writer("LateArena1"); writer(17); return writer.Text(); });
+			}
+			begin.set_value();
+			finished.get();
+			CheckpointBuffer::WaitForPreparedStorageRelease();
+			CheckpointWriter ordinary("LateArena1"); ordinary(17);
+			check(s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed) <= before + (2 << 20) && small.Text() == ordinary.Text(),
+			      "late_prepared_checkpoint_storage_is_released_without_changing_owned_nodes");
+			small = CheckpointText{};
+			check(s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed) <= before,
+			      "late_prepared_checkpoint_storage_drops_its_last_lease");
+		}
+
+
+		{
+			CheckpointBuffer::WaitForPreparedStorageRelease();
+			const size_t before = s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed);
+			auto prepared = std::make_shared<CheckpointArenaGroup::Prepared>();
+			prepared->task = prepared->completion.get_future().share();
+			const auto finished = prepared->task;
+			std::promise<void> begin;
+			const auto gate = begin.get_future().share();
+			{
+				std::lock_guard lock(s_ArenaPoolMutex);
+				if (s_NextPrepared) throw std::logic_error("late preparation fixture found prior storage");
+				s_NextPrepared = prepared;
+			}
+			g_ThreadMan.GetBackgroundThreadPool().push_task([prepared, gate]() mutable {
+				auto completion = std::move(prepared->completion);
+				try {
+					gate.wait();
+					for (int block = 0; block < 16; ++block) prepared->blocks.push_back(std::make_shared<CheckpointArenaGroup::Block>(1 << 20, alignof(std::max_align_t)));
+					prepared->ready.store(true, std::memory_order_release);
+					prepared.reset();
+					completion.set_value();
+				} catch (...) {
+					prepared.reset();
+					completion.set_exception(std::current_exception());
+				}
+			});
+			prepared.reset();
+			CheckpointBuffer::CancelCaptureStorage();
+			begin.set_value();
+			finished.get();
+			CheckpointBuffer::WaitForPreparedStorageRelease();
+			check(s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed) <= before,
+			      "cancelled_late_checkpoint_preparation_releases_after_producer_finishes");
+		}
+
+		{
+			CheckpointBuffer::WaitForPreparedStorageRelease();
+			const size_t before = s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed);
+			const size_t released = s_PreparedReleaseWorkerBytes.load(std::memory_order_relaxed);
+			CheckpointBuffer::PrepareCaptureStorage(16 << 20).get();
+			CheckpointBuffer::CancelCaptureStorage();
+			CheckpointBuffer::WaitForPreparedStorageRelease();
+			check(s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed) <= before &&
+			      s_PreparedReleaseWorkerBytes.load(std::memory_order_relaxed) - released >= (16 << 20),
+			      "cancelled_checkpoint_preparation_releases_all_unused_storage_on_worker");
+		}
+
+		{
 			Timer timer;
 			timer.SetStartSimTimeTicks(17); timer.SetSimTimeLimitTicks(29);
 			timer.SetStartRealTimeTicks(41); timer.SetRealTimeLimitTicks(53);
+			std::vector<Vector> vectors(512, Vector(-0.0F, std::bit_cast<float>(uint32_t{0x7fc00031})));
 			const auto saveArena = [&] {
 				CheckpointWriter outer("Arena1");
 				for (const Vector& vector: vectors) outer(CheckpointWriter::Native([&] {
@@ -1346,6 +1552,7 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 
 		{
 			const size_t before = s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed);
+			CheckpointBuffer::PrepareCaptureStorage(16 << 20).get();
 			CheckpointText small;
 			{
 				CheckpointWriter::BatchScope batch(true);
@@ -1364,9 +1571,33 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			const size_t retained = s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed);
 			check(retained <= before + (2 << 20) && small.Text() == ordinary.Text(),
 			      "small_cached_checkpoint_releases_unrelated_large_backing_blocks");
+			check(retained <= before + (2 << 20), "prepared_checkpoint_storage_does_not_pin_unused_blocks");
 			small = CheckpointText{};
 			check(s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed) <= before,
 			      "checkpoint_pool_releases_its_last_backing_lease");
+		}
+
+		{
+			CheckpointBuffer::WaitForPreparedStorageRelease();
+			const size_t before = s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed);
+			const size_t calls = s_PreparedReleaseWorkerCalls.load(std::memory_order_relaxed);
+			const size_t bytes = s_PreparedReleaseWorkerBytes.load(std::memory_order_relaxed);
+			CheckpointBuffer::PrepareCaptureStorage(16 << 20).get();
+			CheckpointText small;
+			{
+				CheckpointWriter::BatchScope batch(true, true);
+				small = CheckpointWriter::CaptureNative([] { CheckpointWriter writer("ReleasedArena1"); writer(17); return writer.Text(); });
+			}
+			CheckpointBuffer::WaitForPreparedStorageRelease();
+			CheckpointWriter ordinary("ReleasedArena1"); ordinary(17);
+			check(s_PreparedReleaseWorkerCalls.load(std::memory_order_relaxed) > calls &&
+			      s_PreparedReleaseWorkerBytes.load(std::memory_order_relaxed) - bytes >= (15 << 20),
+			      "prepared_checkpoint_spares_are_released_on_a_worker");
+			check(s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed) <= before + (2 << 20) && small.Text() == ordinary.Text(),
+			      "prepared_checkpoint_worker_release_preserves_owned_nodes");
+			small = CheckpointText{};
+			check(s_CheckpointPoolLiveBytes.load(std::memory_order_relaxed) <= before,
+			      "prepared_checkpoint_worker_release_drops_its_last_lease");
 		}
 
 		{

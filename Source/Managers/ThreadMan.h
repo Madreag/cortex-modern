@@ -129,7 +129,9 @@ namespace RTE {
 		/// Native checkpoint work has nested helpers. Keeping it off the Lua
 		/// capture's pool prevents those helpers from delaying every VM to this thread.
 		BS::thread_pool& GetCheckpointThreadPool() {
-			if (!m_CheckpointThreadPool) m_CheckpointThreadPool = std::make_unique<BS::thread_pool>(std::max(1u, std::thread::hardware_concurrency()));
+			std::call_once(m_CheckpointPoolOnce, [this] {
+				m_CheckpointThreadPool = std::make_unique<BS::thread_pool>(std::max(1u, std::thread::hardware_concurrency()));
+			});
 			return *m_CheckpointThreadPool;
 		}
 
@@ -151,6 +153,7 @@ namespace RTE {
 		// For background tasks that we can just let happen whenever over multiple frames
 		BS::thread_pool m_BackgroundThreadPool;
 		std::unique_ptr<BS::thread_pool> m_CheckpointThreadPool;
+		std::once_flag m_CheckpointPoolOnce;
 	};
 
 } // namespace RTE

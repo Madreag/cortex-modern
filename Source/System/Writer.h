@@ -5,6 +5,7 @@
 
 #include <string>
 #include <memory>
+#include <future>
 #include <memory_resource>
 #include <cstring>
 #include <ostream>
@@ -136,13 +137,19 @@ namespace RTE {
 		/// Published arenas keep their backing group until every reader is done.
 		class ArenaPoolScope {
 		public:
-			explicit ArenaPoolScope(bool enabled);
+			explicit ArenaPoolScope(bool enabled, bool releasePreparedOnWorker = false);
 			~ArenaPoolScope();
 			ArenaPoolScope(const ArenaPoolScope&) = delete;
 			ArenaPoolScope& operator=(const ArenaPoolScope&) = delete;
 		private:
 			bool m_Entered = false;
 		};
+		/// Prepares bounded native storage on a worker while a multiplayer archive loads.
+		static std::shared_future<void> PrepareCaptureStorage(size_t bytes);
+		/// Releases unused preparation on a worker after a restore is refused.
+		static void CancelCaptureStorage();
+		/// Waits for queued storage releases; the simulation capture never calls this.
+		static void WaitForPreparedStorageRelease();
 		/// Owned native arrays keep their capture storage until saver traversal ends.
 		static std::shared_ptr<std::pmr::memory_resource> LeaseCaptureStorage();
 		explicit CheckpointBuffer(bool reserve = true);

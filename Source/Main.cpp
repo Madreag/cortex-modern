@@ -11642,6 +11642,7 @@ int main(int argc, char** argv) {
 			ScenarioRunner::SetLockstepStallOverlayEnabled(true);
 			bool loadedSavedGame = false;
 			if (!s_loadGameName.empty()) {
+				if (s_cowCheckpointAutosave) CheckpointBuffer::PrepareCaptureStorage(256 << 20);
 				loadedSavedGame = g_ActivityMan.LoadAndLaunchGame(s_loadGameName);
 				{
 					std::ostringstream line;
@@ -11649,6 +11650,7 @@ int main(int argc, char** argv) {
 					System::PrintDiagnosticLine(line.str());
 				}
 				if (!loadedSavedGame) {
+					if (s_cowCheckpointAutosave) CheckpointBuffer::CancelCaptureStorage();
 					s_loadGameFailed = true;
 					System::SetQuit(true);
 				}

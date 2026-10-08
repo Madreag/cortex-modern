@@ -58,7 +58,7 @@ namespace RTE {
 		/// Manual and single-player saves keep their existing visitors.
 		class BatchScope {
 		public:
-			explicit BatchScope(bool enabled) : m_Enabled(enabled), m_Arenas(enabled) { if (m_Enabled) s_Batches.fetch_add(1, std::memory_order_relaxed); }
+			explicit BatchScope(bool enabled, bool releasePreparedOnWorker = false) : m_Enabled(enabled), m_Arenas(enabled, releasePreparedOnWorker) { if (m_Enabled) s_Batches.fetch_add(1, std::memory_order_relaxed); }
 			~BatchScope() { if (m_Enabled) s_Batches.fetch_sub(1, std::memory_order_relaxed); }
 			BatchScope(const BatchScope&) = delete;
 			BatchScope& operator=(const BatchScope&) = delete;
