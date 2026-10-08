@@ -1005,6 +1005,7 @@ class DirectoryTests(unittest.TestCase):
         status, moved = self.register(
             resume_session_id=sid, resume_token=token,
             listen_addrs=["203.0.113.42"], listen_port=45793,
+            ice_identity="str:successor", ice_virtual_port=7,
         )
         self.assertEqual(status, 200)
         self.assertEqual(moved["session_id"], sid, "successor created another row instead of resuming the match")
@@ -1014,9 +1015,20 @@ class DirectoryTests(unittest.TestCase):
         row = listed["sessions"][0]
         self.assertEqual(row["listen_addrs"], ["203.0.113.42"])
         self.assertEqual(row["listen_port"], 45793)
+        self.assertEqual(row["ice_identity"], "str:successor")
+        self.assertEqual(row["ice_virtual_port"], 7)
         self.assertEqual(row["state"], "running")
         self.assertNotIn("resume_token", row)
         self.assertNotIn("token", row)
+
+    def test_successor_listener_fields_are_a_valid_pair(self) -> None:
+        store = session_directory.SessionDirectory(15, 5)
+        for fields in ({"ice_identity": "str:successor"}, {"ice_virtual_port": 7},
+                       {"ice_identity": "", "ice_virtual_port": 7},
+                       {"ice_identity": "str:successor", "ice_virtual_port": 65536},
+                       {"ice_identity": "str:successor", "ice_virtual_port": True}):
+            with self.subTest(fields=fields), self.assertRaises(session_directory.FieldError):
+                store.register(sample_register(**fields), "192.0.2.1", 0)
 
     def test_successor_token_outlives_the_discovery_lease(self) -> None:
         directory = session_directory.SessionDirectory(15, 5)

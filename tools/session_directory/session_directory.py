@@ -523,7 +523,7 @@ class Session:
 
     def as_list_row(self, now: float) -> dict[str, Any]:
         row = {key: self.fields[key] for key in LIST_ROW_FIELDS}
-        for key in ("persistent_world", "world_id", "world_boot", "spectator_free", "spectator_max", "seats_held"):
+        for key in ("persistent_world", "world_id", "world_boot", "spectator_free", "spectator_max", "seats_held", "ice_identity", "ice_virtual_port"):
             if key in self.fields:
                 row[key] = self.fields[key]
         row["session_id"] = self.session_id
@@ -1037,6 +1037,11 @@ class SessionDirectory:
                 else:
                     fields[name] = require_int(data, name, 0, 10**9)
             fields["listen_addrs"] = require_listen_addrs(data)
+            if "ice_identity" in data or "ice_virtual_port" in data:
+                fields["ice_identity"] = require_str(data, "ice_identity")
+                fields["ice_virtual_port"] = require_int(data, "ice_virtual_port", 1, 65535)
+                if not fields["ice_identity"]:
+                    raise FieldError("invalid_field", "ice_identity")
             if "persistent_world" in data:
                 if not isinstance(data["persistent_world"], bool):
                     raise FieldError("invalid_field", "persistent_world")

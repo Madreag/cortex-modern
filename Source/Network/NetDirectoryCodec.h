@@ -43,6 +43,8 @@ namespace RTE {
 		int64_t listenPort = 0;
 		std::vector<std::string> listenAddrs;
 		std::string joinMode; //!< "ip" | "ice" | "either"
+		std::string iceIdentity; //!< A successor's existing listener; absent uses the session's initial identity.
+		int64_t iceVirtualPort = 0;
 		bool persistentWorld = false;
 		std::string worldId;
 		int64_t worldBoot = 0;
@@ -127,6 +129,8 @@ namespace RTE {
 		int64_t listenPort = 0;
 		std::vector<std::string> listenAddrs;
 		std::string joinMode;
+		std::string iceIdentity;
+		int64_t iceVirtualPort = 0;
 		std::string sessionId;
 		int64_t ageS = 0;
 		std::string observedIp;

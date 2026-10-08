@@ -141,6 +141,7 @@ namespace RTE {
 		std::string address;   //!< Set when the row also advertises a direct address.
 		uint16_t port = 0;
 		bool persistentWorld = false;
+		int virtualPort = 0; //!< Zero selects the original host listener.
 	};
 
 	/// The GNS identity a host binds for a directory session; the dispatcher's rule, readable in a
@@ -1442,7 +1443,8 @@ namespace RTE {
 		friend bool TestStaleWorldImageRecaptures(std::string* error);
 		friend bool TestWorldCatchUpRefusal(std::string* error);
 		friend bool TestWorldDisconnectReason(bool watcher, std::string* error);
-		void InstallIcePump(NetMuxTransport& mux, bool host);
+		void InstallIcePump(NetMuxTransport& mux, bool host, std::shared_ptr<GnsDirectorySignalDispatcher> ownedDispatcher = {});
+		void AdoptMigrationDirectoryLocked(const NetMatchMigrationPeer& endpoint, size_t peerCount);
 		void RefuseWorldCatchUpLocked(const std::string& rejectText);
 		std::string RefreshDirectorySignalCredentialLocked(uint64_t nowMs);
 		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);

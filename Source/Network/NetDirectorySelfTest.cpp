@@ -420,6 +420,21 @@ namespace RTE {
 			return false;
 		}
 		mux.SetPump({});
+		NetMuxTransport migrated;
+		auto successor = GnsDirectorySignalDispatcher::MakeMigrationStandby();
+		const_cast<NetDirectorySignalChannel&>(successor->Channel()).SetTransportFactory([] { return std::make_unique<PollAnswer>(); });
+		if (!successor->Start(*migrated.P2PGns(), config)) { *error = "successor fixture could not bind its dispatcher"; return false; }
+		service.InstallIcePump(migrated, true, successor);
+		std::weak_ptr<GnsDirectorySignalDispatcher> held = successor;
+		successor.reset();
+		(void)migrated.PollEvents();
+		if (held.expired()) { *error = "the successor pump lost its signaling owner"; return false; }
+		const auto& successorHeaders = held.lock()->Channel().RequestHeaders();
+		if (std::none_of(successorHeaders.begin(), successorHeaders.end(), [](const auto& value) { return value.first == "X-Session-Token" && value.second == "recovered-token"; })) {
+			*error = "the successor pump kept the previous host's directory token"; return false;
+		}
+		migrated.SetPump({});
+		if (!held.expired()) { *error = "the retired successor dispatcher outlived its pump"; return false; }
 #endif
 		std::cout << "[net-directory-selftest] PASS signal_pump_initial_credential" << std::endl;
 		return true;

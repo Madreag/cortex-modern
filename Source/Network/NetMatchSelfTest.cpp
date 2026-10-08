@@ -17764,6 +17764,32 @@ namespace RTE {
 		NetH4TicketRecord record;
 		record.hostAddress = "ice:";
 		record.directorySessionId = "recovery-session";
+		{
+			NetMatchService successor;
+			successor.m_ConnectionMode = 2;
+			successor.m_MigrationDirectorySession = record.directorySessionId;
+			successor.m_MigrationDirectoryToken = "test-successor-token";
+			successor.m_DirectoryRow.seatsFree = 1;
+			successor.AdoptMigrationDirectoryLocked({2, 41234, {"192.0.2.2", "ice:str:successor"}}, 2);
+			auto row = nlohmann::json::parse(NetDirectoryCodec::EncodeRegisterRequest(successor.m_DirectoryRow));
+			row.erase("resume_token"); row.erase("resume_session_id");
+			row["session_id"] = record.directorySessionId; row["age_s"] = 0;
+			row["observed_ip"] = "192.0.2.2"; row["state"] = "running";
+			NetDirectoryListResponse listing;
+			std::string reason;
+			NetIceJoinTarget target;
+			if (!NetDirectoryCodec::DecodeListResponse(nlohmann::json{{"sessions", {row}}, {"total", 1}}.dump(), listing, reason) ||
+			    !NetIceResolveSessionRow(listing.sessions, {}, record.directorySessionId, &target).empty() ||
+			    target.identity != "str:successor" || target.virtualPort != NetMatchService::c_MigrationVirtualPort ||
+			    target.joinMode != "ice" || !target.address.empty() || successor.m_IceBoundSessionId != record.directorySessionId ||
+			    !successor.m_DirectoryRow.listenAddrs.empty() || !successor.m_FreshRelayRequested.load()) {
+				*error = "a relay-only successor cannot be found through its published listener after handover: " + reason; return false;
+			}
+			row["ice_virtual_port"] = 65536;
+			if (NetDirectoryCodec::DecodeListResponse(nlohmann::json{{"sessions", {row}}, {"total", 1}}.dump(), listing, reason)) {
+				*error = "an invalid successor virtual port passed the directory decoder"; return false;
+			}
+		}
 		NetMatchServiceRequest published;
 		published.address = "ice:";
 		published.port = 41010;

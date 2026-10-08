@@ -260,6 +260,9 @@ namespace RTE {
 			if (obj.contains("migration_gen") && !ReadInt(obj, "migration_gen", 0, NetDirectoryLimits::c_MaxIntField, out.migrationGen, reason)) {
 				return false;
 			}
+			if (!ReadOptionalPlainStr(obj, "ice_identity", out.iceIdentity, reason, NetDirectoryLimits::c_MaxStringChars) ||
+			    !ReadOptionalInt(obj, "ice_virtual_port", 1, NetDirectoryLimits::c_MaxListenPort, out.iceVirtualPort, reason)) return false;
+			if (out.iceIdentity.empty() != (out.iceVirtualPort == 0)) return Fail(reason, "invalid_field", "ice_identity");
 			return true;
 		}
 
@@ -281,6 +284,10 @@ namespace RTE {
 			obj["listen_port"] = in.listenPort;
 			obj["listen_addrs"] = in.listenAddrs;
 			obj["join_mode"] = in.joinMode;
+			if (!in.iceIdentity.empty()) {
+				obj["ice_identity"] = in.iceIdentity;
+				obj["ice_virtual_port"] = in.iceVirtualPort;
+			}
 			if (in.persistentWorld) {
 				obj["persistent_world"] = true;
 				obj["world_id"] = in.worldId;
@@ -315,6 +322,8 @@ namespace RTE {
 			out.listenPort = fields.listenPort;
 			out.listenAddrs = std::move(fields.listenAddrs);
 			out.joinMode = std::move(fields.joinMode);
+			out.iceIdentity = std::move(fields.iceIdentity);
+			out.iceVirtualPort = fields.iceVirtualPort;
 			out.persistentWorld = fields.persistentWorld;
 			out.worldId = std::move(fields.worldId);
 			out.worldBoot = fields.worldBoot;
@@ -349,6 +358,8 @@ namespace RTE {
 			fields.listenPort = row.listenPort;
 			fields.listenAddrs = row.listenAddrs;
 			fields.joinMode = row.joinMode;
+			fields.iceIdentity = row.iceIdentity;
+			fields.iceVirtualPort = row.iceVirtualPort;
 			fields.persistentWorld = row.persistentWorld;
 			fields.worldId = row.worldId;
 			fields.worldBoot = row.worldBoot;
