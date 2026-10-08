@@ -39,6 +39,12 @@
 #include <iostream>
 #include <locale>
 
+#ifdef _WIN32
+#include <windows.h>
+#undef GetClassName
+#undef LoadBitmap
+#endif
+
 using namespace RTE;
 
 std::string RTE::CheckpointFieldText(const std::function<std::string()>& observe) {
@@ -46,6 +52,38 @@ std::string RTE::CheckpointFieldText(const std::function<std::string()>& observe
 }
 
 namespace {
+	struct CheckpointThreadPerformance {
+#ifdef _WIN32
+		struct Policy { ULONG version = 1, control = 0, state = 0; };
+		using Information = BOOL (WINAPI*)(HANDLE, int, void*, DWORD);
+		Information get = reinterpret_cast<Information>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetThreadInformation"));
+		Information set = reinterpret_cast<Information>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetThreadInformation"));
+		Policy previous;
+		bool changed = false;
+#endif
+		size_t depth = 0;
+		void Enter() noexcept {
+			if (depth++) return;
+#ifdef _WIN32
+			// A joined capture has a frame deadline even when its window is hidden.
+			if (get && set && get(GetCurrentThread(), 3, &previous, sizeof(previous))) {
+				Policy performance{1, 1, 0};
+				changed = set(GetCurrentThread(), 3, &performance, sizeof(performance)) != FALSE;
+			}
+#endif
+		}
+		void Leave() noexcept {
+			if (--depth) return;
+#ifdef _WIN32
+			if (changed) { set(GetCurrentThread(), 3, &previous, sizeof(previous)); changed = false; }
+#endif
+		}
+	};
+	thread_local CheckpointThreadPerformance s_CheckpointPerformance;
+	struct LeaveCheckpointPerformance {
+		~LeaveCheckpointPerformance() { s_CheckpointPerformance.Leave(); }
+	};
+
 	using CaptureValue = CheckpointBuffer::ValueKind;
 	template<class T> T ReadCaptureValue(std::string_view values, size_t& cursor) {
 		if (sizeof(T) > values.size() - cursor) throw std::logic_error("truncated owned checkpoint values");
@@ -865,10 +903,12 @@ CheckpointBuffer::ArenaPoolScope::ArenaPoolScope(bool enabled, bool releasePrepa
 	s_ArenaPool->releasePreparedOnWorker |= releasePreparedOnWorker;
 	++s_ArenaPoolUsers;
 	m_Entered = true;
+	s_CheckpointPerformance.Enter();
 }
 
 CheckpointBuffer::ArenaPoolScope::~ArenaPoolScope() {
 	if (!m_Entered) return;
+	LeaveCheckpointPerformance performance;
 	std::lock_guard lock(s_ArenaPoolMutex);
 	if (--s_ArenaPoolUsers) return;
 	s_ArenaPoolEpoch.store(0, std::memory_order_release);
@@ -886,11 +926,13 @@ CheckpointBuffer::AllocationScope::AllocationScope(bool enabled) {
 	if (enabled && !s_Arena) {
 		s_Arena = std::shared_ptr<CheckpointArena>(new CheckpointArena, [](CheckpointArena* arena) { arena->ReleaseBlock(); });
 		m_Entered = true;
+		s_CheckpointPerformance.Enter();
 	}
 }
 
 CheckpointBuffer::AllocationScope::~AllocationScope() {
 	if (m_Entered) {
+		LeaveCheckpointPerformance performance;
 		if (CaptureTrace::Active()) {
 			CaptureTrace::Span receipt("checkpoint_arena_allocations", std::format("blocks={} bytes={} backing_blocks={} backing_bytes={} nodes={} value_bytes={} value_capacity={} child_bytes={} child_capacity={}", s_Arena->receipts.blocks, s_Arena->receipts.bytes, s_Arena->group ? s_Arena->group->Blocks() : 0, s_Arena->group ? s_Arena->group->Bytes() : 0, s_Arena->nodes, s_Arena->valueBytes, s_Arena->valueCapacity, s_Arena->childBytes, s_Arena->childCapacity));
 		}
@@ -1220,6 +1262,44 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		passed = result && passed;
 	};
 	try {
+#ifdef _WIN32
+		{
+			auto& performance = s_CheckpointPerformance;
+			CheckpointThreadPerformance::Policy before;
+			if (performance.get && performance.set && performance.get(GetCurrentThread(), 3, &before, sizeof(before))) {
+				struct RestorePolicy {
+					CheckpointThreadPerformance& performance;
+					CheckpointThreadPerformance::Policy policy;
+					~RestorePolicy() { performance.set(GetCurrentThread(), 3, &policy, sizeof(policy)); }
+				} restore{performance, before};
+				CheckpointThreadPerformance::Policy eco{1, 1, 1};
+				bool exact = performance.set(GetCurrentThread(), 3, &eco, sizeof(eco)) != FALSE;
+				const auto matches = [&](ULONG control, ULONG state) {
+					CheckpointThreadPerformance::Policy current;
+					return performance.get(GetCurrentThread(), 3, &current, sizeof(current)) && current.control == control && current.state == state;
+				};
+				{
+					CheckpointBuffer::ArenaPoolScope pool(false);
+					CheckpointBuffer::AllocationScope allocation(false);
+					exact = exact && matches(1, 1);
+				}
+				{
+					CheckpointBuffer::ArenaPoolScope pool(true);
+					exact = exact && matches(1, 0);
+					{
+						CheckpointBuffer::AllocationScope allocation(true);
+						CheckpointBuffer::AllocationScope nested(true);
+						exact = exact && matches(1, 0);
+					}
+					exact = exact && matches(1, 0);
+				}
+				exact = exact && matches(1, 1) && performance.depth == 0;
+				check(exact, "checkpoint_scopes_restore_thread_power_policy");
+			} else {
+				std::cout << "[script-graph-selftest] SKIP checkpoint_scopes_restore_thread_power_policy unsupported" << std::endl;
+			}
+		}
+#endif
 		int value = 17;
 		std::string binary("x\0y", 3);
 		const auto save = [&]() -> std::string { CheckpointWriter writer("Owned1"); writer(value, binary); return writer.Text(); };
