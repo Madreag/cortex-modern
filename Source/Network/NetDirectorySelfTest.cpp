@@ -3431,6 +3431,24 @@ namespace RTE {
 					return false;
 				}
 				std::cout << "[net-directory-selftest] signal priority: with the poll due at t=0, POST(first) and POST(second) went before the GET" << std::endl;
+				for (const int wait : {0, 2}) {
+					ScriptedChannel busy(false);
+					busy.channel.SetPolling(true); busy.channel.SetPollWait(wait);
+					busy.replies->push_back(kPostOk); busy.replies->push_back(kPostOk);
+					for (int offer = 0; offer < 12; ++offer)
+						if (!busy.channel.Post("host", "offer")) { *error = "the busy signal queue refused an offer"; return false; }
+					busy.channel.Update(0); busy.channel.Update(1); busy.channel.Update(2);
+					if (busy.sent->size() != 3 || !RequestIs(busy.sent->back(), "GET", busy.PollPath(0).c_str(), error)) {
+						*error = "queued offers starved the peer's answer or blocked outgoing offers on a long poll"; return false;
+					}
+					busy.replies->push_back({200, SignalListBody({{1, "host", busy.channel.GetLocalPeer(), B64("answer")}}), ""});
+					if (!busy.channel.Post("host", "new offer")) { *error = "the active poll refused a new offer"; return false; }
+					busy.channel.Update(3);
+					if (Taken(busy) != "1:answer" || busy.channel.PendingPosts() == 0 || busy.sent->back().method != "POST") {
+						*error = "a new offer discarded the peer's ready answer or the answer stopped outgoing progress"; return false;
+					}
+				}
+				std::cout << "[net-directory-selftest] PASS queued_signals_receive_answers_before_the_outbox_drains" << std::endl;
 				return true;
 			}
 
