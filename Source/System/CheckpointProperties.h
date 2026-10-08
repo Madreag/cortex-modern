@@ -105,20 +105,19 @@ namespace RTE {
 			return;
 		}
 		constexpr size_t staticBytes = sizeof(int) + (Properties::OwnedType::StaticBytes + ... + size_t{0});
-		const auto capture = [&](char* into, size_t size) {
+		size_t size = staticBytes;
+		const auto add = [&](const auto& property) {
+			const size_t bytes = property.DynamicBytes();
+			if (bytes > std::numeric_limits<size_t>::max() - size) throw std::length_error("checkpoint property block is too large");
+			size += bytes;
+		};
+		(add(properties), ...);
+		writer.CapturePropertyBlock(size, &CheckpointProperties::Expand<typename Properties::OwnedType...>, [&](char* into) {
 			size_t at = 0;
 			CheckpointProperties::Pack(into, at, writer.GetIndent());
 			(properties.PackValue(into, at), ...);
 			if (at != size) throw std::logic_error("property capture size differs");
-			writer.AppendPropertyBlock(std::string_view(into, size), &CheckpointProperties::Expand<typename Properties::OwnedType...>);
-		};
-		if constexpr ((Properties::HasString || ...)) {
-			std::string record(staticBytes + (properties.DynamicBytes() + ... + size_t{0}), '\0');
-			capture(record.data(), record.size());
-		} else {
-			std::array<char, staticBytes> record;
-			capture(record.data(), record.size());
-		}
+		});
 	}
 	template<CheckpointPropertyName Name, class T> void WriteCapturedPropertySequence(Writer& writer, std::vector<T> values) {
 		if (!writer.IsCapturing() || !CheckpointWriter::BatchEnabled()) {

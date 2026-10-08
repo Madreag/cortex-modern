@@ -355,6 +355,14 @@ namespace {
 	};
 }
 
+struct CheckpointBuffer::ValueChunk {
+	ValueChunk* next = nullptr;
+	size_t size = 0, capacity;
+	explicit ValueChunk(size_t bytes) : capacity(bytes) {}
+	char* Bytes() { return reinterpret_cast<char*>(this + 1); }
+	const char* Bytes() const { return reinterpret_cast<const char*>(this + 1); }
+};
+
 struct CheckpointText::Data {
 	struct Legacy;
 	struct Formatting {
@@ -362,6 +370,8 @@ struct CheckpointText::Data {
 		std::atomic<bool> formatted{false};
 		std::string text;
 		std::vector<std::pair<size_t, size_t>> peerRuns;
+		std::once_flag copied;
+		std::string tape;
 	};
 	static std::shared_ptr<Data> Create();
 	explicit Data(std::pmr::memory_resource* resource = std::pmr::get_default_resource()) : values(resource), children(resource) {}
@@ -377,6 +387,8 @@ struct CheckpointText::Data {
 		}
 	};
 	std::pmr::string values;
+	const CheckpointBuffer::ValueChunk* chunks = nullptr;
+	size_t valueSize = 0;
 	std::pmr::vector<CheckpointText> children;
 	// A deferred node's producer, dropped once it has produced: what it captured (a frozen heap, a pixel snapshot) goes with it.
 	mutable std::variant<std::monostate, std::function<std::string()>, CapturedProducer> produce;
@@ -399,10 +411,39 @@ struct CheckpointText::Data {
 		return *current;
 	}
 	std::shared_ptr<Data> drainNext;
+	std::string_view Values() const {
+		if (!chunks) return values;
+		if (!chunks->next) return {chunks->Bytes(), chunks->size};
+		auto& result = Output();
+		// Published chunks are immutable; only a reader joins them into contiguous storage.
+		std::call_once(result.copied, [&] {
+			std::string tape;
+			tape.reserve(valueSize);
+			for (auto* chunk = chunks; chunk; chunk = chunk->next) tape.append(chunk->Bytes(), chunk->size);
+			result.tape = std::move(tape);
+		});
+		return result.tape;
+	}
 	bool SameTape(const Data& other) const {
-		if (values == other.values) return true;
+		struct Cursor {
+			const CheckpointBuffer::ValueChunk* next;
+			std::string_view part;
+			explicit Cursor(const Data& node) : next(node.chunks), part(node.chunks ? std::string_view{} : node.values) { Advance(); }
+			void Advance() {
+				while (part.empty() && next) { part = {next->Bytes(), next->size}; next = next->next; }
+			}
+		};
+		Cursor left(*this), right(other);
+		bool equal = true;
+		while (!left.part.empty() && !right.part.empty()) {
+			const size_t size = std::min(left.part.size(), right.part.size());
+			if (std::memcmp(left.part.data(), right.part.data(), size) != 0) { equal = false; break; }
+			left.part.remove_prefix(size); right.part.remove_prefix(size);
+			left.Advance(); right.Advance();
+		}
+		if (equal && left.part.empty() && right.part.empty()) return true;
 		if (hasPrimitiveBlocks == other.hasPrimitiveBlocks) return false;
-		return CanonicalCaptureValues(values) == CanonicalCaptureValues(other.values);
+		return CanonicalCaptureValues(Values()) == CanonicalCaptureValues(other.Values());
 	}
 
 	~Data() {
@@ -524,7 +565,7 @@ CheckpointText CheckpointText::AtSimTime(int64_t ticks) const {
 	std::vector<Frame> pending;
 	const auto copy = [&](const Data* source) {
 		auto node = Data::Create();
-		node->values = source->values;
+		node->values = source->Values();
 		node->children.reserve(source->children.size());
 		node->ownedBytes = source->ownedBytes;
 		node->hasPeer = source->hasPeer;
@@ -626,7 +667,7 @@ CheckpointText CheckpointText::ReuseChildren(const CheckpointText& previous) con
 		std::shared_ptr<Data> value = frame.equal ? frame.previous : frame.current;
 		if (!frame.equal && frame.changed) {
 			value = Data::Create();
-			value->values = frame.current->values;
+			value->values = frame.current->Values();
 			value->children = frame.current->children;
 			value->ownedBytes = frame.current->ownedBytes;
 			value->hasPeer = frame.current->hasPeer;
@@ -681,7 +722,7 @@ const std::string& CheckpointText::Text() const {
 			}
 			std::string text;
 			std::vector<size_t> sizedRuns;
-			const std::string_view values = node->values;
+			const std::string_view values = node->Values();
 			text.reserve(values.size());
 			size_t cursor = 0;
 			while (cursor < values.size()) {
@@ -787,7 +828,7 @@ std::string CheckpointText::SharedText() const {
 		return shared;
 	}
 	const Data& node = *m_Data;
-	const std::string_view values = node.values;
+	const std::string_view values = node.Values();
 	std::string text;
 	size_t cursor = 0;
 	int peer = 0;
@@ -987,11 +1028,37 @@ std::shared_ptr<void> CheckpointBuffer::AllocateCaptureBytes(size_t bytes) {
 
 CheckpointBuffer::CheckpointBuffer(bool reserve) : m_Arena(reserve ? s_Arena : nullptr),
 	m_Values(m_Arena ? m_Arena->storage : std::pmr::get_default_resource()),
-	m_Children(m_Arena ? m_Arena->storage : std::pmr::get_default_resource()) {
-	if (m_Arena && reserve) m_Values.reserve(64);
+	m_Children(m_Arena ? m_Arena->storage : std::pmr::get_default_resource()) {}
+
+char* CheckpointBuffer::ReserveValues(size_t size) {
+	if (!m_Arena) {
+		const size_t offset = m_Values.size();
+		if (size > m_Values.max_size() - offset) throw std::length_error("checkpoint field block is too large");
+		m_Values.resize(offset + size);
+		return m_Values.data() + offset;
+	}
+	if (size > std::numeric_limits<size_t>::max() - m_ValueSize) throw std::length_error("checkpoint field block is too large");
+	if (!m_LastValues || size > m_LastValues->capacity - m_LastValues->size) {
+		const size_t capacity = std::max(size, m_LastValues ? std::min(size_t{2048}, m_LastValues->capacity) * 2 : size_t{64});
+		if (capacity > std::numeric_limits<size_t>::max() - sizeof(ValueChunk) || capacity > std::numeric_limits<size_t>::max() - m_ValueCapacity) throw std::length_error("checkpoint field block is too large");
+		void* address = m_Arena->storage->allocate(sizeof(ValueChunk) + capacity, alignof(ValueChunk));
+		auto* chunk = std::construct_at(static_cast<ValueChunk*>(address), capacity);
+		if (m_LastValues) m_LastValues->next = chunk; else m_FirstValues = chunk;
+		m_LastValues = chunk;
+		m_ValueCapacity += capacity;
+	}
+	char* into = m_LastValues->Bytes() + m_LastValues->size;
+	m_LastValues->size += size;
+	m_ValueSize += size;
+	return into;
 }
 
-void CheckpointBuffer::Raw(std::string_view text) { Copy(CaptureValue::Raw, static_cast<uint64_t>(text.size())); m_Values.append(text); }
+void CheckpointBuffer::AppendValues(std::string_view values) {
+	if (!m_Arena) m_Values.append(values);
+	else if (!values.empty()) std::memcpy(ReserveValues(values.size()), values.data(), values.size());
+}
+
+void CheckpointBuffer::Raw(std::string_view text) { Copy(CaptureValue::Raw, static_cast<uint64_t>(text.size())); AppendValues(text); }
 void CheckpointBuffer::Integer(int64_t value, bool space) { Copy(space ? CaptureValue::SpacedInteger : CaptureValue::Integer, value); }
 void CheckpointBuffer::Unsigned(uint64_t value, bool space) { Copy(space ? CaptureValue::SpacedUnsigned : CaptureValue::Unsigned, value); }
 void CheckpointBuffer::Real(float value) { Copy(CaptureValue::Float, value); }
@@ -1001,17 +1068,17 @@ void CheckpointBuffer::ElapsedSimTime(int64_t startTicks, double ticksPerMS) {
 	m_UsesSimTime = true;
 	m_SimTimeTicks = g_TimerMan.GetSimTickCount();
 }
-void CheckpointBuffer::String(std::string_view value) { Copy(CaptureValue::String, static_cast<uint64_t>(value.size())); m_Values.append(value); }
+void CheckpointBuffer::String(std::string_view value) { Copy(CaptureValue::String, static_cast<uint64_t>(value.size())); AppendValues(value); }
 void CheckpointBuffer::Child(const CheckpointText& value, bool sized) { Copy(sized ? CaptureValue::SizedChild : CaptureValue::Child, static_cast<uint64_t>(m_Children.size())); m_Children.push_back(value); }
 void CheckpointBuffer::Base64(const CheckpointText& value, bool url) { Copy(url ? CaptureValue::UrlBase64 : CaptureValue::Base64, static_cast<uint64_t>(m_Children.size())); m_Children.push_back(value); }
 void CheckpointBuffer::GraphString(const CheckpointText& value) { Copy(CaptureValue::GraphString, static_cast<uint64_t>(m_Children.size())); m_Children.push_back(value); }
 void CheckpointBuffer::NewLine(int indent, int count) { Copy(CaptureValue::NewLine, indent, count); }
-void CheckpointBuffer::Property(std::string_view name, int indent) { Copy(CaptureValue::Property, indent, static_cast<uint64_t>(name.size())); m_Values.append(name); }
+void CheckpointBuffer::Property(std::string_view name, int indent) { Copy(CaptureValue::Property, indent, static_cast<uint64_t>(name.size())); AppendValues(name); }
 void CheckpointBuffer::PeerBegin() { Copy(CaptureValue::PeerBegin); m_HasPeer = true; }
 void CheckpointBuffer::PeerEnd() { Copy(CaptureValue::PeerEnd); }
 void CheckpointBuffer::PrimitiveBlock(std::string_view values, PrimitiveDecoder decoder) {
 	Copy(CaptureValue::PrimitiveBlock, decoder, static_cast<uint64_t>(values.size()));
-	m_Values.append(values);
+	AppendValues(values);
 	m_HasPrimitiveBlocks = true;
 }
 
@@ -1021,8 +1088,8 @@ void CheckpointBuffer::SizedRunEnd() { Copy(CaptureValue::SizedRunEnd); }
 CheckpointText CheckpointBuffer::Finish() {
 	if (m_Arena && CaptureTrace::Active()) {
 		++m_Arena->nodes;
-		m_Arena->valueBytes += m_Values.size();
-		m_Arena->valueCapacity += m_Values.capacity();
+		m_Arena->valueBytes += m_ValueSize;
+		m_Arena->valueCapacity += m_ValueCapacity;
 		m_Arena->childBytes += m_Children.size() * sizeof(CheckpointText);
 		m_Arena->childCapacity += m_Children.capacity() * sizeof(CheckpointText);
 	}
@@ -1032,8 +1099,12 @@ CheckpointText CheckpointBuffer::Finish() {
 		else data = std::allocate_shared<CheckpointText::Data::Legacy>(CheckpointAllocator<CheckpointText::Data::Legacy>(m_Arena.get()), m_Arena->storage);
 	} else data = CheckpointText::Data::Create();
 	data->values = std::move(m_Values);
+	data->chunks = std::exchange(m_FirstValues, nullptr);
+	data->valueSize = std::exchange(m_ValueSize, 0);
+	m_LastValues = nullptr;
+	m_ValueCapacity = 0;
 	data->children = std::move(m_Children);
-	data->ownedBytes = data->values.size();
+	data->ownedBytes = data->chunks ? data->valueSize : data->values.size();
 	data->hasPeer = m_HasPeer;
 	data->hasPrimitiveBlocks = m_HasPrimitiveBlocks;
 	data->usesSimTime = m_UsesSimTime;
@@ -1584,6 +1655,41 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			const auto actual = std::async(std::launch::async, [frozen] { return std::pair{frozen.Text(), frozen.SharedText()}; }).get();
 			check(frozen.SameValues(ordinary) && actual.first == full && actual.second == shared,
 			      "packed_string_blocks_preserve_binary_arrays_peer_lengths_and_source_lifetime");
+		}
+		{
+			CheckpointText frozen, equal, changed;
+			std::string full, shared;
+			{
+				std::string source(8193, 'q'); source[4096] = '\0';
+				const auto write = [&](CheckpointBuffer& buffer) {
+					for (int index = 0; index < 1024; ++index) {
+						buffer.Integer(index, true);
+						if (index == 63) buffer.String(source);
+						if (index == 127) buffer.PeerBegin();
+						if (index == 255) buffer.PeerEnd();
+					}
+				};
+				CheckpointBuffer ordinary; write(ordinary);
+				const auto expected = ordinary.Finish();
+				full = expected.Text(); shared = expected.SharedText();
+				CheckpointWriter::BatchScope batch(true);
+				CheckpointBuffer::AllocationScope allocation(true);
+				CheckpointBuffer first; write(first); frozen = first.Finish();
+				first.Raw("fresh");
+				check(first.Finish().Text() == "fresh", "published_checkpoint_chunks_survive_writer_reuse");
+				CheckpointBuffer second; write(second); equal = second.Finish();
+				source.back() = 'r';
+				CheckpointBuffer third; write(third); changed = third.Finish();
+				check(frozen.SameValues(equal) && !frozen.SameValues(changed) && frozen.m_Data->Output().tape.empty() &&
+				    equal.m_Data->Output().tape.empty() && changed.m_Data->Output().tape.empty(), "checkpoint_chunk_comparison_preserves_bytes_without_flattening");
+			}
+			std::array<std::future<bool>, 4> readers;
+			for (auto& reader: readers) reader = std::async(std::launch::async, [frozen, full, shared] {
+				return frozen.Text() == full && frozen.SharedText() == shared;
+			});
+			bool exact = true;
+			for (auto& reader: readers) exact = reader.get() && exact;
+			check(exact, "owned_checkpoint_chunks_preserve_peer_bytes_after_scope_exit_for_concurrent_readers");
 		}
 		{
 			struct InlineRecord {

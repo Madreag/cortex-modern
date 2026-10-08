@@ -250,9 +250,7 @@ namespace RTE {
 				(add(std::get<Begin + Index>(fields)), ...);
 				Buffer().CapturePrimitiveBlock(size, &DecodePrimitives<FieldType<Fields, Begin + Index>...>, copy);
 			} else {
-				std::array<char, fixedBytes> record;
-				copy(record.data());
-				Buffer().PrimitiveBlock(std::string_view(record.data(), record.size()), &DecodePrimitives<FieldType<Fields, Begin + Index>...>);
+				Buffer().CapturePrimitiveBlock(fixedBytes, &DecodePrimitives<FieldType<Fields, Begin + Index>...>, copy);
 			}
 		}
 		template<size_t Begin, class Fields> void CaptureFields(const Fields& fields) {

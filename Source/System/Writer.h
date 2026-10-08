@@ -205,17 +205,16 @@ namespace RTE {
 		/// Keeps only the backing block of a prepared byte allocation until its last reader ends.
 		static std::shared_ptr<void> AllocateCaptureBytes(size_t bytes);
 		explicit CheckpointBuffer(bool reserve = true);
+		CheckpointBuffer(const CheckpointBuffer&) = delete;
+		CheckpointBuffer& operator=(const CheckpointBuffer&) = delete;
 		bool IsBatched() const { return m_Arena != nullptr; }
 		/// Appends the same typed scalar tape as the individual value calls.
-		void AppendValues(std::string_view values) { m_Values.append(values); }
+		void AppendValues(std::string_view values);
 		void PrimitiveBlock(std::string_view values, PrimitiveDecoder decoder);
 		/// Copies variable-size fields directly into their owned tape allocation.
 		template<class Capture> void CapturePrimitiveBlock(size_t size, PrimitiveDecoder decoder, const Capture& capture) {
 			Copy(ValueKind::PrimitiveBlock, decoder, static_cast<uint64_t>(size));
-			const size_t offset = m_Values.size();
-			if (size > m_Values.max_size() - offset) throw std::length_error("checkpoint field block is too large");
-			m_Values.resize(offset + size);
-			capture(m_Values.data() + offset);
+			capture(ReserveValues(size));
 			m_HasPrimitiveBlocks = true;
 		}
 		void Raw(std::string_view text);
@@ -240,24 +239,28 @@ namespace RTE {
 		inline static thread_local std::shared_ptr<CheckpointArena> s_Arena;
 		std::shared_ptr<CheckpointArena> m_Arena;
 		std::pmr::string m_Values;
+		struct ValueChunk;
+		ValueChunk* m_FirstValues = nullptr;
+		ValueChunk* m_LastValues = nullptr;
+		size_t m_ValueSize = 0, m_ValueCapacity = 0;
 		std::pmr::vector<CheckpointText> m_Children;
 		bool m_HasPeer = false;
 		bool m_HasPrimitiveBlocks = false;
 		bool m_UsesSimTime = false;
 		int64_t m_SimTimeTicks = 0;
+		char* ReserveValues(size_t size);
 		template<class... T> void Copy(const T&... values) {
 			if (!m_Arena) {
 				(m_Values.append(reinterpret_cast<const char*>(&values), sizeof(values)), ...);
 				return;
 			}
-			std::array<char, (sizeof(T) + ...)> record;
+			char* into = ReserveValues((sizeof(T) + ...));
 			size_t at = 0;
 			const auto put = [&](const auto& value) {
-				std::memcpy(record.data() + at, &value, sizeof(value));
+				std::memcpy(into + at, &value, sizeof(value));
 				at += sizeof(value);
 			};
 			(put(values), ...);
-			m_Values.append(record.data(), record.size());
 		}
 	};
 
@@ -383,6 +386,11 @@ namespace RTE {
 		void AppendPropertyBlock(std::string_view values, CheckpointBuffer::PrimitiveDecoder decoder) {
 			if (!m_Capture) throw std::logic_error("property blocks require an owned writer");
 			m_Capture->PrimitiveBlock(values, decoder);
+		}
+		/// Copies property fields directly into their owned allocation.
+		template<class Capture> void CapturePropertyBlock(size_t size, CheckpointBuffer::PrimitiveDecoder decoder, const Capture& capture) {
+			if (!m_Capture) throw std::logic_error("property blocks require an owned writer");
+			m_Capture->CapturePrimitiveBlock(size, decoder, capture);
 		}
 		void Append(const CheckpointText& text);
 		void ElapsedSimTime(const Timer& timer);
