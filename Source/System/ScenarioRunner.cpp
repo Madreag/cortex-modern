@@ -2260,8 +2260,18 @@ namespace RTE {
 		}
 		std::vector<NetGameCommand> commands;
 		const uint64_t targetFrame = tick + producing->InputDelayAt(config.localPeerId, tick);
-		if (producing->IsSeatReclaimGap(config.localPeerId, targetFrame) ||
-		    (config.localPeerId == producing->GetHostPeerId() && producing->IsSeatUnderAI(config.localPeerId, targetFrame))) {
+		if (producing->IsSeatReclaimGap(config.localPeerId, targetFrame)) {
+			// The returned player can act before its first input is due. Keep those
+			// accepted events for that input; only sampled AI writes and bindings expire.
+			std::erase_if(s_PendingLocalGameCommands, [](const NetGameCommand& command) {
+				return std::holds_alternative<NetGameAIOrder>(command.payload) ||
+				       std::holds_alternative<NetGameAIScriptMessage>(command.payload) ||
+				       std::holds_alternative<NetGameAIGib>(command.payload) ||
+				       std::holds_alternative<NetGamePlayerBindings>(command.payload);
+			});
+			return producing->QueueLocalInput(tick, frames, {}, error);
+		}
+		if (config.localPeerId == producing->GetHostPeerId() && producing->IsSeatUnderAI(config.localPeerId, targetFrame)) {
 			s_PendingLocalGameCommands.clear();
 			return producing->QueueLocalInput(tick, frames, {}, error);
 		}

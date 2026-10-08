@@ -2969,6 +2969,17 @@ namespace RTE {
 			if (!VerifyReclaimedSeatControllerState(host, ready, returning, second, error)) return false;
 			(void)host.FinishSimulationTick(ready.frame); (void)returning.FinishSimulationTick(second.frame);
 			const uint64_t firstRequired = b.initialSeatReclaims[2].neutralThroughFrame + 1;
+			struct ReturnInputScope {
+				~ReturnInputScope() { ScenarioRunner::SetLockstepCoordinator(nullptr); ScenarioRunner::DrainLocalGameCommands(); }
+			} returnInputScope;
+			const NetGamePlaceBrain placement{1, 1, 200, 100, "Actor", "Brain Case", "Base.rte"};
+			if (boundedReturn) {
+				ScenarioRunner::SetLockstepCoordinator(&returning);
+				if (!returning.IsSeatReclaimGap(2, 10 + b.inputDelayFrames) || !ScenarioRunner::EnqueueLocalGameCommand({2, placement})) {
+					*error = "the returned seat could not accept its editor placement inside the neutral gap"; return false;
+				}
+				if (!ScenarioRunner::QueueLockstepLocalControllerFrames(10, {}, error)) return false;
+			}
 			for (uint64_t frame = 11; frame < firstRequired; ++frame) {
 				if (!host.QueueLocalInput(frame, {}, {}, error)) return false;
 				host.Tick(60);
@@ -2983,18 +2994,31 @@ namespace RTE {
 			std::vector<NetGameCommand> queued;
 			if (host.PeekQueuedCommands(11, 2, queued) && !queued.empty()) { *error = "the fenced transport replayed a stale purchase after reclaim"; return false; }
 			if (boundedReturn) {
-				if (!host.QueueLocalInput(firstRequired, {}, {}, error) || !returning.QueueLocalInput(firstRequired - b.inputDelayFrames, {}, {}, error)) return false;
-				bool hostTook = false, clientTook = false;
-				for (uint64_t now = 62; now < 72 && !(hostTook && clientTook); ++now) {
-					hostWire.AdvanceTimeMs(1); returnWire.AdvanceTimeMs(1); host.Tick(now); returning.Tick(now);
-					if (!hostTook && host.PopReadyFrame(ready)) { hostTook = ready.frame == firstRequired; (void)host.FinishSimulationTick(ready.frame); }
-					while (!clientTook && returning.PopReadyFrame(second)) { clientTook = second.frame == firstRequired; (void)returning.FinishSimulationTick(second.frame); }
+				std::vector<NetGameCommand> hostPlacements, clientPlacements;
+				const auto collect = [](const NetLockstepReadyFrame& frame, auto& placements) {
+					for (const auto* commands: {&frame.localCommands, &frame.remoteCommands})
+						for (const auto& command: *commands) if (std::holds_alternative<NetGamePlaceBrain>(command.payload)) placements.push_back(command);
+				};
+				for (uint64_t frame = firstRequired; frame <= firstRequired + 1; ++frame) {
+					if (!host.QueueLocalInput(frame, {}, {}, error) || !ScenarioRunner::QueueLockstepLocalControllerFrames(frame - b.inputDelayFrames, {}, error)) return false;
+					bool hostTook = false, clientTook = false;
+					const uint64_t began = 62 + 10 * (frame - firstRequired);
+					for (uint64_t now = began; now < began + 10 && !(hostTook && clientTook); ++now) {
+						hostWire.AdvanceTimeMs(1); returnWire.AdvanceTimeMs(1); host.Tick(now); returning.Tick(now);
+						if (!hostTook && host.PopReadyFrame(ready)) { hostTook = ready.frame == frame; collect(ready, hostPlacements); (void)host.FinishSimulationTick(ready.frame); }
+						while (!clientTook && returning.PopReadyFrame(second)) { clientTook = second.frame == frame; collect(second, clientPlacements); (void)returning.FinishSimulationTick(second.frame); }
+					}
+					if (!hostTook || !clientTook) { *error = "the return did not establish its accepted input stream"; return false; }
 				}
-				if (!hostTook || !clientTook) { *error = "the return did not establish its accepted input stream"; return false; }
-				const uint64_t missing = firstRequired + 1;
+				if (hostPlacements.size() != 1 || hostPlacements != clientPlacements || hostPlacements.front().senderPeerId != 2 ||
+				    hostPlacements.front().sequence == 0 || std::get<NetGamePlaceBrain>(hostPlacements.front().payload) != placement) {
+					*error = "the placement accepted during the reclaim gap did not commit exactly once on both peers"; return false;
+				}
+				std::cout << "[net-lockstep-selftest] PASS placement_during_reclaim_gap_commits_once" << std::endl;
+				const uint64_t missing = firstRequired + 2;
 				host.NoteLocalStartPark(1000);
 				if (!host.QueueLocalInput(missing, {}, {}, error)) return false;
-				for (uint64_t now = 72; now <= 122; ++now) { host.Tick(now); host.NoteFrameWait(missing, now); }
+				for (uint64_t now = 82; now <= 132; ++now) { host.Tick(now); host.NoteFrameWait(missing, now); }
 				if (!host.IsPeerGoneAtFrame(2, missing) || !host.IsRunning()) {
 					*error = "a reclaimed seat received another startup allowance beyond the wait bound";
 					return false;
@@ -27546,6 +27570,10 @@ namespace {
 
 	int NetLockstepSelfTest::RunRecoveryAfterReclaim() {
 		std::string error;
+		if (!TestPrivateReclaimKeepsRoundRunning(&error, true)) {
+			std::cerr << "[net-lockstep-selftest] FAIL recovery_after_reclaim: " << error << std::endl;
+			return 1;
+		}
 		for (size_t observations: {size_t{3}, size_t{4096}}) {
 			RecoveryWireRound round;
 			if (!round.Start(4, 48906, &error)) {
