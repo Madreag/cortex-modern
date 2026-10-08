@@ -1013,6 +1013,20 @@ CheckpointText CheckpointBuffer::Finish() {
 	return CheckpointText(std::move(data));
 }
 
+CheckpointCache::CheckpointCache(const CheckpointCache& other) :
+	m_Transient(other.m_Transient), m_Entries(other.m_Entries), m_Presets(other.m_Presets), m_Retired(other.m_Retired),
+	m_Generation(other.m_Generation), m_Touched(other.m_Touched), m_Reused(other.m_Reused), m_Pixels(other.m_Pixels) {
+	if (other.m_CapturedEntries) {
+		m_CapturedEntries = std::make_unique<CapturedEntries>(std::shared_ptr<std::pmr::memory_resource>{});
+		m_CapturedEntries->values = other.m_CapturedEntries->values;
+	}
+}
+
+CheckpointCache& CheckpointCache::operator=(const CheckpointCache& other) {
+	if (this != &other) *this = CheckpointCache(other);
+	return *this;
+}
+
 const Entity* CheckpointCache::FindPreset(const std::string& type, const std::string& name, int module) {
 	const bool batch = CheckpointWriter::BatchEnabled();
 	if (batch && (module < 0 || name.find('/') != std::string::npos)) return g_PresetMan.GetEntityPreset(type, name, module);
@@ -1032,7 +1046,7 @@ CheckpointText CheckpointCache::Remember(const void* owner, unsigned channel, Ch
 }
 
 CheckpointText CheckpointCache::Remember(const void* owner, unsigned channel, CheckpointText value, uint64_t stamp, uint64_t identity, const MovableObject* object) {
-	Entry& entry = m_Entries[owner][channel];
+	Entry& entry = CaptureEntry(owner, channel);
 	++m_Touched;
 	entry.generation = m_Generation;
 	entry.stamp = stamp;
@@ -1046,41 +1060,47 @@ CheckpointText CheckpointCache::Remember(const void* owner, unsigned channel, Ch
 	return entry.text;
 }
 
-const CheckpointText* CheckpointCache::Peek(const void* owner, unsigned channel) const {
+CheckpointCache::Entry& CheckpointCache::CaptureEntry(const void* owner, unsigned channel) {
+	if (!m_CapturedEntries && m_Transient && CheckpointWriter::BatchEnabled() && m_Entries.empty()) m_CapturedEntries = std::make_unique<CapturedEntries>();
+	return m_CapturedEntries ? m_CapturedEntries->values[{owner, channel}] : m_Entries[owner][channel];
+}
+
+const CheckpointCache::Entry* CheckpointCache::FindEntry(const void* owner, unsigned channel) const {
+	if (m_CapturedEntries) {
+		const auto found = m_CapturedEntries->values.find({owner, channel});
+		return found == m_CapturedEntries->values.end() ? nullptr : &found->second;
+	}
 	const auto owners = m_Entries.find(owner);
 	if (owners == m_Entries.end()) return nullptr;
 	const auto entry = owners->second.find(channel);
 	if (entry == owners->second.end()) return nullptr;
-	return &entry->second.text;
+	return &entry->second;
+}
+
+const CheckpointText* CheckpointCache::Peek(const void* owner, unsigned channel) const {
+	const Entry* entry = FindEntry(owner, channel);
+	return entry ? &entry->text : nullptr;
 }
 
 const CheckpointText* CheckpointCache::PeekCurrent(const void* owner, unsigned channel) const {
-	const auto owners = m_Entries.find(owner);
-	if (owners == m_Entries.end()) return nullptr;
-	const auto entry = owners->second.find(channel);
-	return entry == owners->second.end() || entry->second.generation != m_Generation ? nullptr : &entry->second.text;
+	const Entry* entry = FindEntry(owner, channel);
+	return entry && entry->generation == m_Generation ? &entry->text : nullptr;
 }
 
 uint64_t CheckpointCache::Identity(const void* owner, unsigned channel) const {
-	const auto owners = m_Entries.find(owner);
-	if (owners == m_Entries.end()) return 0;
-	const auto entry = owners->second.find(channel);
-	return entry == owners->second.end() || !entry->second.object.get() ? 0 : entry->second.identity;
+	const Entry* entry = FindEntry(owner, channel);
+	return entry && entry->object.get() ? entry->identity : 0;
 }
 
 uint64_t CheckpointCache::Stamp(const void* owner, unsigned channel) const {
-	const auto owners = m_Entries.find(owner);
-	if (owners == m_Entries.end()) return 0;
-	const auto entry = owners->second.find(channel);
-	return entry == owners->second.end() ? 0 : entry->second.stamp;
+	const Entry* entry = FindEntry(owner, channel);
+	return entry ? entry->stamp : 0;
 }
 
 bool CheckpointCache::Touch(const void* owner, unsigned channel) {
-	const auto owners = m_Entries.find(owner);
-	if (owners == m_Entries.end()) return false;
-	const auto entry = owners->second.find(channel);
-	if (entry == owners->second.end()) return false;
-	entry->second.generation = m_Generation;
+	Entry* entry = const_cast<Entry*>(FindEntry(owner, channel));
+	if (!entry) return false;
+	entry->generation = m_Generation;
 	++m_Touched;
 	++m_Reused;
 	return true;
@@ -1205,9 +1225,17 @@ std::string CheckpointCache::Census() const {
 		}
 	}
 	std::string channelText;
+	std::unordered_set<const void*> capturedOwners;
+	if (m_CapturedEntries) {
+		for (const auto& [key, entry]: m_CapturedEntries->values) {
+			++entries; bytes += entry.text.OwnedBytes(); ++perChannel[key.second];
+			if (entry.identity != 0) ++withObject;
+			capturedOwners.insert(key.first);
+		}
+	}
 	for (const auto& [channel, count]: perChannel) channelText += std::format("{}{}:{}", channelText.empty() ? "" : ",", channel, count);
 	return std::format("entries={} entry_mb={} pixels={} retired={} retired_mb={} owners={} with_identity={} channels={}", entries, bytes >> 20, m_Pixels.size(), m_Retired.size(),
-	                   retiredBytes >> 20, m_Entries.size(), withObject, channelText.empty() ? "none" : channelText);
+	                   retiredBytes >> 20, m_Entries.size() + capturedOwners.size(), withObject, channelText.empty() ? "none" : channelText);
 }
 
 std::vector<CheckpointText> CheckpointCache::RetireUnused() {
@@ -1225,6 +1253,14 @@ std::vector<CheckpointText> CheckpointCache::RetireUnused() {
 			} else ++entry;
 		}
 		if (owners->second.empty()) owners = m_Entries.erase(owners); else ++owners;
+	}
+	if (m_CapturedEntries) {
+		for (auto entry = m_CapturedEntries->values.begin(); entry != m_CapturedEntries->values.end();) {
+			if (entry->second.generation != m_Generation) {
+				m_Retired.push_back(std::move(entry->second.text));
+				entry = m_CapturedEntries->values.erase(entry);
+			} else ++entry;
+		}
 	}
 	return std::exchange(m_Retired, {});
 }
@@ -1567,6 +1603,38 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			const std::string census = cache.Census();
 			check(kept && !retired.empty() && census.starts_with("entries=1 ") && census.find("channels=7:1") != std::string::npos,
 			      "transient_checkpoint_cache_keeps_channels_generations_and_expired_owners");
+		}
+		{
+			std::optional<CheckpointCache> cache;
+			std::weak_ptr<std::pmr::memory_resource> storage;
+			CheckpointText first("one"), second("two"), third("three");
+			const void* address = nullptr;
+			int other = 0;
+			bool exact = true;
+			{
+				CheckpointWriter::BatchScope batch(true);
+				CheckpointBuffer::AllocationScope allocation(true);
+				cache.emplace(true); cache->Begin();
+				storage = CheckpointBuffer::LeaseCaptureStorage();
+				auto owner = std::make_unique<MOPixel>(); address = owner.get();
+				cache->Remember(address, 7, first, 11, 13, owner.get());
+				cache->Remember(address, 8, second, 17, 19, owner.get());
+				cache->Remember(&other, 7, third, 23);
+				exact = cache->m_CapturedEntries && cache->m_CapturedEntries->storage == storage.lock() && cache->m_Entries.empty() &&
+				    cache->Peek(address, 7)->Text() == "one" && cache->Peek(address, 8)->Text() == "two" && cache->Identity(address, 7) == 13;
+			}
+			exact = !storage.expired() && cache->Identity(address, 7) == 0 && cache->Stamp(address, 8) == 17 && exact;
+			CheckpointCache copy = *cache;
+			copy.Begin();
+			exact = copy.Touch(&other, 7) && copy.PeekCurrent(&other, 7) && !copy.PeekCurrent(address, 7) && cache->PeekCurrent(address, 7) && exact;
+			cache->Begin();
+			exact = !cache->PeekCurrent(address, 7) && cache->Touch(address, 7) && cache->PeekCurrent(address, 7) && exact;
+			const auto retired = cache->RetireUnused();
+			const std::string census = cache->Census();
+			exact = !retired.empty() && !cache->Peek(address, 8) && !cache->Peek(&other, 7) && copy.Peek(&other, 7)->Text() == "three" && cache->Peek(address, 7)->Text() == "one" &&
+			    census.starts_with("entries=1 ") && census.find("owners=1 ") != std::string::npos && census.find("channels=7:1") != std::string::npos && exact;
+			cache.reset();
+			check(exact && storage.expired(), "transient_checkpoint_entries_keep_capture_storage_channels_and_last_lease");
 		}
 		{
 			const std::string type = "MOPixel", missing = "__checkpoint_preset_lookup_missing__";

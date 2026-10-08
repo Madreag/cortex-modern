@@ -217,6 +217,11 @@ namespace RTE {
 	public:
 		CheckpointCache() = default;
 		explicit CheckpointCache(bool transient) : m_Transient(transient) {}
+		/// Copies cache bookkeeping independently while retaining immutable texts.
+		CheckpointCache(const CheckpointCache& other);
+		CheckpointCache& operator=(const CheckpointCache& other);
+		CheckpointCache(CheckpointCache&&) = default;
+		CheckpointCache& operator=(CheckpointCache&&) = default;
 		bool IsTransient() const { return m_Transient; }
 		void Begin() { ++m_Generation; m_Touched = 0; m_Reused = 0; m_Presets.clear(); }
 		/// Reuses existing local presets while leaving misses and module fallbacks fresh.
@@ -242,6 +247,19 @@ namespace RTE {
 	private:
 		bool m_Transient = false;
 		struct Entry { CheckpointText text; uint64_t generation = 0; uint64_t stamp = 0; uint64_t identity = 0; MovableObjectReference object; };
+		friend bool RunOwnedCheckpointSelfTest();
+		struct CapturedEntries {
+			using Key = std::pair<const void*, unsigned>;
+			struct Hash {
+				size_t operator()(const Key& key) const { return std::hash<const void*>{}(key.first) ^ (std::hash<unsigned>{}(key.second) + 0x9e3779b9); }
+			};
+			explicit CapturedEntries(std::shared_ptr<std::pmr::memory_resource> resource = CheckpointBuffer::LeaseCaptureStorage()) : storage(std::move(resource)), values(storage ? storage.get() : std::pmr::get_default_resource()) {}
+			std::shared_ptr<std::pmr::memory_resource> storage;
+			std::pmr::unordered_map<Key, Entry, Hash> values;
+		};
+		std::unique_ptr<CapturedEntries> m_CapturedEntries;
+		Entry& CaptureEntry(const void* owner, unsigned channel);
+		const Entry* FindEntry(const void* owner, unsigned channel) const;
 		std::unordered_map<const void*, std::unordered_map<unsigned, Entry>> m_Entries;
 		std::map<std::tuple<int, std::string, std::string>, const Entity*, std::less<>> m_Presets;
 		std::vector<CheckpointText> m_Retired;
