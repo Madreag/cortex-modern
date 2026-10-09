@@ -753,6 +753,13 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 	std::shared_future<bool> task;
 	size_t bytes = 0;
 	const auto captureStart = std::chrono::steady_clock::now();
+	std::promise<int64_t> simDone;
+	const auto captureClock = std::make_shared<CheckpointCaptureClock>(CheckpointCaptureClock{captureStart, simDone.get_future().share()});
+	struct SimulationDone {
+		std::promise<int64_t>& done;
+		std::chrono::steady_clock::time_point started;
+		~SimulationDone() { done.set_value(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()); }
+	} simulationDone{simDone, captureStart};
 #ifdef _WIN32
 	const char* phases = std::getenv("CCCP_CHECKPOINT_PHASES");
 	const bool phaseClock = phases && std::string_view(phases) == "1";
@@ -760,7 +767,7 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 	if (phaseClock) QueryPerformanceCounter(&clockStart);
 #endif
 	try {
-		if (!QueueIncrementalAutosave(fileName, path, matchId, tick, task, bytes, SaveCompression::Fast, &identity)) {
+		if (!QueueIncrementalAutosave(fileName, path, matchId, tick, task, bytes, SaveCompression::Fast, &identity, false, captureClock)) {
 			{
 				std::ostringstream line;
 				line << "[autosave] failed tick=" << tick << " reason=capture refused";
@@ -799,7 +806,7 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 
 bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
                                           std::shared_future<bool>& task, size_t& bytes, SaveCompression compression,
-                                          const AutosaveIdentity* identity, bool fullStateOnly) {
+                                          const AutosaveIdentity* identity, bool fullStateOnly, std::shared_ptr<const CheckpointCaptureClock> captureClock) {
 	Scene* scene = g_SceneMan.GetScene();
 	GAScripted* activity = dynamic_cast<GAScripted*>(GetActivity());
 	if (!scene || !activity || activity->GetActivityState() == Activity::Over) return false;
@@ -835,8 +842,11 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	CheckpointWriter::CacheScope cache(&cow.Cache());
 	CheckpointWriter::BatchScope nativeBatches(!matchId.empty(), !matchId.empty());
 	CheckpointLua::CopyPool::PauseScope pageCopies(!matchId.empty());
+	const auto nativeStarted = std::chrono::steady_clock::now();
 	Atom::SnapshotScope nativePages(!matchId.empty());
 	auto image = std::make_shared<CheckpointImage>();
+	image->nativeBoundaryUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();
+	image->captureClock = std::move(captureClock);
 	image->nativePages = nativePages.Pages();
 	if (image->nativePages) image->nativeReady = CheckpointLua::CopyPool::Submit([pages = image->nativePages] { pages->Drain(); }).share();
 	image->tick = tick;
@@ -1245,11 +1255,26 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			const CheckpointText main = AssembleOwnedSave(*image);
 			const CheckpointText index = AssembleOwnedIndex(*image);
 			const auto images = ReuseAutosaveImages(matchId, image->layers, palette);
+			const std::string& saveText = main.Text();
+			const std::string& indexText = index.Text();
+			if (layerCosts && image->captureClock) {
+				const int64_t simUs = image->captureClock->simulationUs.get();
+				const int64_t totalUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - image->captureClock->started).count();
+				const auto native = image->nativePages ? image->nativePages->Cost() : CheckpointPagePool::Costs{};
+				System::PrintDiagnosticLine(std::format("[checkpoint-completion] tick={} sim_call_us={} total_capture_us={} native_boundary_us={} native_copy_worker_us={} native_sim_fault_observer_us={} native_other_fault_observer_us={} native_sim_faults={} native_other_faults={} native_bytes={} serializer_off_sim={}",
+				    tick, simUs, totalUs, image->nativeBoundaryUs, native.workerUs, native.simFaultUs, native.otherFaultUs,
+				    native.simFaults, native.otherFaults, native.bytes, std::this_thread::get_id() != simThread));
+				for (const auto& [name, layer]: image->layers) {
+					layer->Finalize();
+					System::PrintDiagnosticLine(std::format("[checkpoint-layer-completion] name={} freeze_copy_bytes={} worker_copy_bytes={} compare_bytes={} dirty_bytes={} unmarked_dirty_bytes={}",
+					    name, layer->copiedBytes, layer->workerCopyBytes, layer->scannedBytes, layer->dirtyBytes, layer->unmarkedDirtyBytes));
+				}
+			}
 			const auto archiveStart = std::chrono::steady_clock::now();
 			if (automatic) {
 				descriptor.worldStructureHash = NetIdentity::HashHex(NetIdentity::HashCanonicalText("autosave-world", {{"structure", image->structure.Text()}}));
 			}
-			WriteCheckpointArchive(fileName, path, zipLevel, matchId, main.Text(), index.Text(), layerNames,
+			WriteCheckpointArchive(fileName, path, zipLevel, matchId, saveText, indexText, layerNames,
 			    [&](size_t i, std::vector<unsigned char>& png) {
 				    png = images[i]->Bytes();
 				    return true;

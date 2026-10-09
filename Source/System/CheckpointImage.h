@@ -5,6 +5,7 @@
 #include "CheckpointPagePool.h"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <future>
@@ -55,6 +56,12 @@ namespace RTE {
 		CheckpointText text;
 	};
 
+	/// Measures the complete simulation call and the owned capture's worker completion.
+	struct CheckpointCaptureClock {
+		std::chrono::steady_clock::time_point started;
+		std::shared_future<int64_t> simulationUs;
+	};
+
 	/// Frozen checkpoint values at one sim tick. The worker formats this image.
 	struct CheckpointImage {
 		uint64_t tick = 0;
@@ -68,6 +75,8 @@ namespace RTE {
 		std::vector<CheckpointText> graphs;
 		std::shared_ptr<const CheckpointPagePool::Snapshot> nativePages;
 		std::shared_future<void> nativeReady;
+		std::shared_ptr<const CheckpointCaptureClock> captureClock;
+		int64_t nativeBoundaryUs = 0;
 		std::vector<CheckpointScope> graphScopes; //!< Each graph's scope, in the graphs' order; a graph with none is shared.
 		std::string activityName;
 		std::string originalScenePresetName;

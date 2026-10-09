@@ -26,6 +26,7 @@ namespace RTE {
 	class GAScripted;
 	struct AudioCheckpointCapture;
 	struct CheckpointSection;
+	struct CheckpointCaptureClock;
 	enum class CheckpointScope : uint8_t;
 
 	/// The singleton manager of the Activities and rules of Cortex Command.
@@ -401,7 +402,8 @@ namespace RTE {
 		/// With fullStateOnly the capture is hashed by the oracle instead of written.
 		bool QueueIncrementalAutosave(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
 		                              std::shared_future<bool>& task, size_t& bytes, SaveCompression compression = SaveCompression::Fast,
-		                              const AutosaveIdentity* identity = nullptr, bool fullStateOnly = false);
+		                              const AutosaveIdentity* identity = nullptr, bool fullStateOnly = false,
+		                              std::shared_ptr<const CheckpointCaptureClock> captureClock = {});
 		/// Sections, when given with the manager parts, receives every part the globals carry under its name and scope.
 		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage,
 		    std::vector<std::pair<std::string, int64_t>>* timings = nullptr, const std::vector<CheckpointText>* managerParts = nullptr,
