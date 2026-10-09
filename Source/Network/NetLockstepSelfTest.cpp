@@ -97,6 +97,9 @@ namespace RTE {
 	bool TestAReturnersRoundSkipsTheRoundsEarlierTicks(std::string* error);
 	bool TestAReturnedSeatThatLeavesAgainIsGone(std::string* error);
 	bool TestARoundsOwnEndIsNoHold(std::string* error);
+	bool TestFourPlayerHoldWaitsForALiveAcknowledgement(std::string* error);
+	bool TestBriefHostJitterKeepsItsHumanSeat(std::string* error);
+	bool TestHeldHostReturnsPastThePreparedHorizon(std::string* error);
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
 	bool TestAHostWithNoOtherPlayingSeatIsNotHeld(std::string* error);
 	bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error);
@@ -23638,6 +23641,156 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+
+	bool TestFourPlayerHoldWaitsForALiveAcknowledgement(std::string* error) {
+		class DelayedReceiptWire final: public LoopbackTransport {
+		public:
+			bool wait = false;
+			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* reason = nullptr, bool* congested = nullptr) override {
+				const auto decoded = NetLockstepCodec::Decode(bytes);
+				if (wait && decoded.ok) if (const auto* timing = std::get_if<NetLockstepTiming>(&decoded.packet.payload))
+					if (timing->action == NetTimingAction::Hold && timing->phase == NetTimingPhase::Acknowledge) return false;
+				return LoopbackTransport::Send(peer, lane, bytes, reason, congested);
+			}
+		} secondWire;
+		LoopbackTransport hostWire, thirdWire, fourthWire;
+		NetLockstepCoordinator host, second, third, fourth;
+		std::array<LoopbackTransport*, 4> wires{&hostWire, &secondWire, &thirdWire, &fourthWire};
+		std::array<NetLockstepCoordinator*, 4> peers{&host, &second, &third, &fourth};
+		auto partition = std::make_shared<QuorumPartition>();
+		if (!hostWire.StartHost(49610, error)) return false;
+		for (size_t i = 1; i < wires.size(); ++i) if (!wires[i]->Connect("loopback", 49610, error)) return false;
+		for (uint8_t i = 0; i < 4; ++i) {
+			auto config = QuorumConfig(i + 1, 4, 49610, 0x9B01, partition);
+			config.startFrame = 0;
+			if (!peers[i]->Start(*wires[i], config, error)) return false;
+		}
+		uint64_t now = 0;
+		const auto pump = [&] {
+			for (auto* wire: wires) wire->AdvanceTimeMs(1);
+			for (auto* peer: peers) peer->Tick(now);
+			++now;
+		};
+		for (int pass = 0; pass < 10; ++pass) pump();
+		if (!WarmBoundedInputFixture({{&host, &hostWire}, {&second, &secondWire}, {&third, &thirdWire}, {&fourth, &fourthWire}}, now, error)) return false;
+		// Three continuing seats have input; the fourth really stopped. The second seat's reliable send is backpressured.
+		for (auto* peer: {&host, &second, &third}) if (!peer->QueueLocalInput(101, {}, {}, error)) return false;
+		secondWire.wait = true;
+		if (!host.ProposePeerHold(4, now, error)) return false;
+		const auto proposal = host.m_TimingDecisions.rbegin()->second.proposal;
+		if (proposal.requiredPeers != 0x7 || proposal.heldPeers != 0x8 || std::popcount(proposal.requiredPeers) != 3) {
+			*error = "a four-player hold did not require exactly its three continuing members"; return false;
+		}
+		const uint64_t began = now;
+		for (; now < began + 350;) {
+			if ((now - began) % 20 == 0) {
+				std::vector<uint8_t> heartbeat;
+				if (!NetProtocol::Encode({static_cast<uint32_t>(now), 0, NetHeartbeat{now, 0, 3}}, heartbeat, nullptr) ||
+				    !secondWire.Send(1, NetTransportLane::ControlReliable, heartbeat)) return false;
+			}
+			host.NoteFrameWait(101, now);
+			pump();
+		}
+		const auto waiting = host.m_TimingDecisions.find(proposal.revision);
+		if (waiting == host.m_TimingDecisions.end() || waiting->second.committed || waiting->second.proposal.heldPeers != 0x8 ||
+		    waiting->second.proposal.requiredPeers != 0x7 || host.IsSeatUnderAI(2, 101) || !host.IsRunning()) {
+			*error = "a delayed acknowledgement from a live member erased its vote and stranded the four-player hold"; return false;
+		}
+		secondWire.wait = false;
+		for (int pass = 0; pass < 20; ++pass) pump();
+		std::vector<NetGameCommand> canonical;
+		for (auto* peer: {&host, &second, &third}) {
+			NetLockstepReadyFrame ready;
+			if (!peer->PopReadyFrame(ready) || ready.frame != 101 || ready.aiHeldPeerIds != std::vector<uint8_t>{4} ||
+			    peer->HostAuthorityAt(101) != 1 || peer->TimingDecisionPendingAt(101)) {
+				*error = "the continuing members did not resume at the acknowledged four-player hold boundary"; return false;
+			}
+			std::vector<NetGameCommand> holds;
+			for (const auto* commands: {&ready.localCommands, &ready.remoteCommands}) for (const auto& command: *commands)
+				if (std::holds_alternative<NetGameSeatHold>(command.payload)) holds.push_back(command);
+			if (canonical.empty()) canonical = holds;
+			if (holds.size() != 1 || holds != canonical) { *error = "the continuing members committed different hold records"; return false; }
+			(void)peer->FinishSimulationTick(ready.frame);
+		}
+		return true;
+	}
+
+	bool TestBriefHostJitterKeepsItsHumanSeat(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = QuorumConfig(1, 4, 49620, 0x9B02, std::make_shared<QuorumPartition>());
+		if (!wire.StartHost(49620, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RoundId = config.roundId;
+		host.m_Stats.nextFrame = 75; host.m_LastQueuedTargetFrame = 74; host.m_LastCompletedSimulationTick = 73;
+		host.m_PeersPlayedThisRound = {1, 2, 3, 4};
+		for (uint8_t peer: {2, 3, 4}) { host.m_RemoteFrames[75][peer] = {}; host.m_PeerEffectiveStart[peer] = 1; }
+		for (uint64_t now: {1000ULL, 1053ULL, 1083ULL}) host.AdvanceReadyFrames(now);
+		const bool ownHold = std::any_of(host.m_TimingDecisions.begin(), host.m_TimingDecisions.end(), [](const auto& item) {
+			return item.second.proposal.action == NetTimingAction::Hold && (item.second.proposal.heldPeers & 1U) != 0;
+		});
+		if (ownHold || host.IsSeatUnderAI(1, 75) || host.AiAuthorityAt(75) != 1) {
+			*error = "53-83 ms of host jitter proposed handing its human seat to another peer"; return false;
+		}
+		if (host.ProposePeerHold(1, 1084, nullptr)) { *error = "the current authority can still hold its own human seat"; return false; }
+		host.GoQuiet(75);
+		if (host.m_SelfHeld || !host.QueueLocalInput(75, {}, {}, error)) { *error = "a slow-host notification silenced the host's returning input"; return false; }
+		// The same short jitter on a remote mobile link must also remain a wait, with the sender's seat intact.
+		host.m_Stats.nextFrame = 5014; host.m_Stats.peers[4].lastProgressMs = 2000;
+		host.m_Stats.peers[4].pingMs = 80; host.m_Stats.peers[4].jitterMs = 6;
+		(void)host.DeclareOverdueInputs(5014, 2083, 2000, {4});
+		if (std::any_of(host.m_TimingDecisions.begin(), host.m_TimingDecisions.end(), [](const auto& item) { return item.second.proposal.action == NetTimingAction::Hold; })) {
+			*error = "83 ms of mobile-link jitter was mistaken for an absent player"; return false;
+		}
+		return true;
+	}
+
+	bool TestHeldHostReturnsPastThePreparedHorizon(std::string* error) {
+		LoopbackTransport hostWire, secondWire, thirdWire, fourthWire;
+		NetLockstepCoordinator host, second, third, fourth;
+		std::array<LoopbackTransport*, 4> wires{&hostWire, &secondWire, &thirdWire, &fourthWire};
+		std::array<NetLockstepCoordinator*, 4> peers{&host, &second, &third, &fourth};
+		auto partition = std::make_shared<QuorumPartition>();
+		if (!hostWire.StartHost(49630, error)) return false;
+		for (size_t i = 1; i < wires.size(); ++i) if (!wires[i]->Connect("loopback", 49630, error)) return false;
+		for (uint8_t i = 0; i < 4; ++i) if (!peers[i]->Start(*wires[i], QuorumConfig(i + 1, 4, 49630, 0x9B03, partition), error)) return false;
+		uint64_t now = 0;
+		const auto pump = [&] { for (auto* wire: wires) wire->AdvanceTimeMs(1); for (auto* peer: peers) peer->Tick(now); ++now; };
+		for (int pass = 0; pass < 10; ++pass) pump();
+		// Restore a held-host state recorded by an older build: its simulation reached 75, while peers already prepared 96.
+		NetLockstepTiming held;
+		held.senderPeerId = held.peerId = 1; held.action = NetTimingAction::Hold; held.phase = NetTimingPhase::HoldAtFrame;
+		held.sessionId = 0x9B03; held.roundId = host.GetRoundId(); held.revision = 1;
+		held.applyFrame = held.cutoffFrame = 75; held.heldPeers = 1; held.requiredPeers = 14; held.seatIncarnations[0] = 1;
+		for (auto* peer: peers) {
+			peer->ApplyTiming(held);
+			peer->m_Stats.nextFrame = 97; peer->m_LastQueuedTargetFrame = 96;
+			peer->m_LastCompletedSimulationTick = peer == &host ? 75 : 96;
+			peer->m_NextTimingRevision = 2;
+		}
+		host.m_Stats.peers[2].highestTargetFrame = 120; host.m_Stats.peers[2].pingMs = 50;
+		host.ReclaimOwnSeat(now);
+		const auto pending = std::find_if(host.m_TimingDecisions.begin(), host.m_TimingDecisions.end(), [](const auto& item) { return item.second.proposal.action == NetTimingAction::Reclaim; });
+		if (pending == host.m_TimingDecisions.end()) { *error = "the held host's return waited forever behind the prepared input horizon"; return false; }
+		const auto proposal = pending->second.proposal;
+		if (pending->second.committed || host.HasAgreedSeatReclaim(1) || proposal.applyFrame < 124 || proposal.requiredPeers != 14) {
+			*error = "a held host's return skipped survivor agreement or overlapped already-produced AI input"; return false;
+		}
+		for (int pass = 0; pass < 12; ++pass) pump();
+		for (auto* peer: peers) {
+			if (!peer->HasAgreedSeatReclaim(1) || peer->ReclaimTransactions().at(1) != host.ReclaimTransactions().at(1) ||
+			    !peer->IsSeatUnderAI(1, proposal.applyFrame - 1) || peer->IsSeatUnderAI(1, proposal.applyFrame)) {
+				*error = "the held seat did not return at one agreed boundary on all four members"; return false;
+			}
+		}
+		// The first live input after the agreed gap is accepted again, on the original host connection.
+		const uint64_t firstInput = proposal.neutralThroughFrame + 1;
+		if (!host.QueueLocalInput(firstInput, {}, {}, error) || !host.m_LocalFrames.contains(firstInput)) {
+			*error = "the returned host could not produce human input after its neutral gap"; return false;
+		}
+		return true;
+	}
+
 	bool TestAHostWithNoOtherPlayingSeatIsNotHeld(std::string* error) {
 		// Every other seat is held: a hold of the host's own could only hand it to the host's own AI, and nobody waits on it. The row
 		// before this one is the control: with its clients playing, the same stall is a hold.
@@ -28299,6 +28452,9 @@ namespace {
 		row([](std::string* rowError) { return TestCaptureParkWindowIsTheHostsAlone(rowError); }, "TestCaptureParkWindowIsTheHostsAlone");
 		row([](std::string* rowError) { return TestAgreedStartKeepsARejoinedHorizon(rowError); }, "TestAgreedStartKeepsARejoinedHorizon");
 		row([](std::string* rowError) { return TestOverdueBoundWaitsForTheCommittedRunway(rowError); }, "TestOverdueBoundWaitsForTheCommittedRunway");
+		row(&TestFourPlayerHoldWaitsForALiveAcknowledgement, "TestFourPlayerHoldWaitsForALiveAcknowledgement");
+		row(&TestBriefHostJitterKeepsItsHumanSeat, "TestBriefHostJitterKeepsItsHumanSeat");
+		row(&TestHeldHostReturnsPastThePreparedHorizon, "TestHeldHostReturnsPastThePreparedHorizon");
 		row([](std::string* rowError) { return TestBoundedHoldKeepsCommitting(rowError); }, "TestBoundedHoldKeepsCommitting");
 		row([](std::string* rowError) { return TestHoldDeadlinePrecedesConsumerWait(rowError); }, "TestHoldDeadlinePrecedesConsumerWait");
 		row([](std::string* rowError) { return TestBoundedWaitGivesASenderItsRampIn(rowError); }, "TestBoundedWaitGivesASenderItsRampIn");
