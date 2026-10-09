@@ -803,7 +803,9 @@ namespace RTE {
 				}
 				const bool stopped = ScenarioRunner::FinishLockstepSimulationTick(target);
 				if (!Check(stopped == (target == last) && (target == last ? pair.host.IsFailed() : pair.host.IsRunning()), error,
-				           "recovery stopped before the committed world was complete")) return false;
+				           "recovery stopped before the committed world was complete: tick=" + std::to_string(target) +
+				           " last=" + std::to_string(last) + " state=" + NetLockstepCoordinator::StateName(pair.host.GetState()) +
+				           " reason=" + pair.host.GetStats().timeoutReason)) return false;
 				pair.Step();
 			}
 			uint64_t dropFrame = 0;

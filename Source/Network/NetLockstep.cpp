@@ -13062,6 +13062,8 @@ namespace RTE {
 				if (encoded && link != m_RemoteTransports.end() && m_LastQueuedTargetFrame <= through) (void)m_Transport->Send(link->second, m_Config.frameLane, bytes);
 			}
 		}
+		// Input beyond the recovery boundary is not owed while the simulation drains its committed ticks.
+		if (m_RecoveryDrainThrough && m_Stats.nextFrame > *m_RecoveryDrainThrough) return;
 		const bool pending = hasLocal || hasRemote || hasFutureLocal || hasFutureRemote || !m_RecoveryOutgoing.empty();
 		if (!pending) {
 			return;
