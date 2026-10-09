@@ -6441,7 +6441,7 @@ namespace RTE {
 			NetLockstepCoordinator& round = *peer.round;
 			const uint64_t nowMs = fixture.clock.NowMs();
 			if (peer.host) {
-				peer.admission.SetLiveMatch(true);
+				peer.admission.SetLiveMatch(true); peer.admission.NotePlacementPhase(false, 0);
 				peer.session.SetLockstepFrame(round.GetStats().nextFrame);
 				peer.session.TickAdmissionPlane(nowMs);
 			}
@@ -8597,7 +8597,7 @@ namespace RTE {
 			if (!service.m_Coordinator->StartReplay(wire, config, error)) return false;
 			const NetMatchConfig matchConfig;
 			service.m_ReconnectHost.SetSeatTable(NetH4BuildSeatTable(matchConfig), matchConfig.mode);
-			service.m_ReconnectHost.SetLiveMatch(true);
+			service.m_ReconnectHost.SetLiveMatch(true); service.m_ReconnectHost.NotePlacementPhase(false, 0);
 			if (ended) service.Complete("match over");
 			const NetRosterStage expected = ended ? NetRosterStage::Ended : NetRosterStage::Running;
 			const uint64_t revision = service.m_ReconnectHost.GetRoster().revision;
@@ -12148,7 +12148,7 @@ namespace RTE {
 			return false;
 		}
 		// The round was played and ended: this is its rematch lobby, and a rematch forms its round there as the host's runner does.
-		admission.SetLiveMatch(true);
+		admission.SetLiveMatch(true); admission.NotePlacementPhase(false, 0);
 		admission.SetMatchEnded();
 		if (rematch) admission.FormRematch();
 		NetPeerId seated = c_InvalidNetPeerId;
@@ -13106,7 +13106,7 @@ namespace RTE {
 			former.store.SetPath((fixture.ticketDirectory / "host.ticket").string());
 			if (!former.store.Store(ticket, error)) return false;
 			const NetRosterSeat original = *former.admission.GetRoster().Find(1);
-			former.admission.SetLiveMatch(true);
+			former.admission.SetLiveMatch(true); former.admission.NotePlacementPhase(false, 0);
 			const auto capsule = former.admission.ExportMigrationState();
 			NetMatchConfig migrated = former.config.matchConfig;
 			migrated.hostPeerId = 2;
@@ -14346,11 +14346,11 @@ namespace RTE {
 		const bool opened = ServiceRematchRoster(service, MakeConfig(), local, unused, &refusal);
 		const auto snapshot = service.GetLobbySnapshot();
 		if (opened ||
-		    snapshot.errorText != "The host left the match" || service.GetState() != NetMatchServiceState::Failed) {
+		    snapshot.errorText != "Could not reach the host - the match can be rejoined" || service.GetState() != NetMatchServiceState::Failed) {
 			*error = "host departure opened rematch=" + std::to_string(opened) + " player error='" + snapshot.errorText + "' refusal='" + refusal + "'";
 			return false;
 		}
-		std::cout << "PASS rematch_host_departure message=The host left the match" << std::endl;
+		std::cout << "PASS rematch_host_departure message=Could not reach the host - the match can be rejoined" << std::endl;
 		return true;
 	}
 
@@ -14426,15 +14426,15 @@ namespace RTE {
 				service.ReportRuntimeError("resync failed: " + service.GetErrorText());
 			}
 			const NetLobbySnapshot snapshot = service.GetLobbySnapshot();
-			if (service.GetState() != NetMatchServiceState::Failed || snapshot.errorText != "The host left the match" ||
-			    snapshot.statusText != "The host left the match" || snapshot.members.size() != 1 || !snapshot.members[0].isLocal) {
+			if (service.GetState() != NetMatchServiceState::Failed || snapshot.errorText != "Could not reach the host - the match can be rejoined" ||
+			    snapshot.statusText != "Could not reach the host - the match can be rejoined" || snapshot.members.size() != 1 || !snapshot.members[0].isLocal) {
 				*error = "arm " + std::to_string(arm) + " state=" + std::to_string(static_cast<int>(service.GetState())) +
 				         " status='" + snapshot.statusText + "' error='" + snapshot.errorText +
 				         "' members=" + std::to_string(snapshot.members.size());
 				return false;
 			}
 		}
-		std::cout << "PASS resync_failure_after_host_departure message=The host left the match" << std::endl;
+		std::cout << "PASS resync_failure_after_host_departure message=Could not reach the host - the match can be rejoined" << std::endl;
 		return true;
 	}
 
@@ -15321,7 +15321,7 @@ namespace RTE {
 				return std::string(path) + " fixture: the old epoch already uses late peer " + std::to_string(latePeer);
 			}
 
-			service.m_ReconnectHost.SetLiveMatch(true);
+			service.m_ReconnectHost.SetLiveMatch(true); service.m_ReconnectHost.NotePlacementPhase(false, 0);
 			service.m_AdmissionAttached = true;
 #ifdef CCCP_WITH_GNS
 			GnsTransport dispatcherWire;

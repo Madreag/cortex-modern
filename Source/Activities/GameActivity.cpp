@@ -2178,6 +2178,8 @@ void GameActivity::UpdateSpectatorView(int player, bool lookedAround) {
 }
 
 void GameActivity::Update() {
+	if (m_ActivityState == ActivityState::Running && IsLockstepPlacement() && NetMatchService::IsConstructed())
+		g_NetMatchService.NotePlacementPhase(false, ScenarioRunner::GetLockstepAppliedFrame());
 	if (g_ActivityMan.LockstepRelaunchInProgress()) {
 		g_ActivityMan.NoteStaleActivitySlots(CountStaleRelaunchSlots(static_cast<int>(g_TimerMan.GetSimUpdateCount())));
 	}

@@ -134,6 +134,10 @@ namespace RTE {
 				case NetRosterEventKind::ProcessRelaunched: {
 					if (!seat || seat->owner == 0) return refuse("the seat has no player");
 					if (seat->phase == NetSeatPhase::Relaunching) return keep("the player's game is already restarting");
+					if (seat->seatId == next.hostSeat || !IsAway(seat->phase)) {
+						seat->link = NetSeatLink::Dropped;
+						return commit("The player's process restarted - waiting for the host's ordered recovery");
+					}
 					seat->phase = NetSeatPhase::Relaunching;
 					seat->link = NetSeatLink::Dropped;
 					seat->holdCause = NetSeatHoldCause::Crash;
@@ -235,6 +239,7 @@ namespace RTE {
 				case NetRosterEventKind::RoundStarted: {
 					if (next.stage != NetRosterStage::Starting) return refuse("no round is at its start");
 					next.stage = NetRosterStage::Running;
+					next.stageFrame = event.frame;
 					for (NetRosterSeat& each: next.seats)
 						if (each.phase == NetSeatPhase::Starting) each.phase = NetSeatPhase::Running;
 					return commit("the round started");
@@ -414,8 +419,7 @@ namespace RTE {
 			                        kind == NetRosterEventKind::Admitted || kind == NetRosterEventKind::ApplicantAccepted;
 			if (was.owner != is.owner && !ownerMoves) return fail("seat " + std::to_string(was.seatId) + " changed owner on a " + NetRosterEventName(kind));
 			if (was.owner == is.owner && is.incarnation < was.incarnation) return fail("seat " + std::to_string(was.seatId) + " went back an incarnation");
-			if (is.owner != 0 && is.link == NetSeatLink::Dropped && !IsAway(is.phase))
-				return fail("seat " + std::to_string(is.seatId) + " has a dropped link in phase " + NetSeatPhaseName(is.phase));
+			// Connectivity is a fact; only a host decision changes the seat's phase.
 			if (IsBanned(after, is.owner)) return fail("a banned player holds seat " + std::to_string(is.seatId));
 		}
 		for (size_t i = 0; i < after.seats.size(); ++i)

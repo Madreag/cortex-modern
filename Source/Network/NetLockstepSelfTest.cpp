@@ -1553,8 +1553,8 @@ namespace RTE {
 			if (!host.IsRunning() || !client.IsRunning()) { *error = "live delay fixture did not start"; return false; }
 			const NetHash32 opening = host.GetRoundConfigHash();
 			if (!host.ProposeInputDelay(2, 5, 20, error)) return false;
-			if (!host.TimingDecisionPendingAt(20) || host.InputDelayAt(2, 20) != 2) {
-				*error = "delay changed before the remote acknowledged its frame"; return false;
+			if (host.TimingDecisionPendingAt(20) || host.InputDelayAt(2, 20) != 5) {
+				*error = "the host did not order its named delay boundary"; return false;
 			}
 			for (int pass = 0; pass < 10; ++pass) pump();
 			if (host.TimingDecisionPendingAt(20) || client.TimingDecisionPendingAt(20) || host.InputDelayAt(2, 19) != 2 ||
@@ -24776,7 +24776,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			bool committedReleasesOnly = false;
 
 			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
-				if (lateTo.contains(peer) && IsSeatNotice(bytes, committedReleasesOnly)) {
+				if (lateTo.contains(peer) && (IsSeatNotice(bytes, committedReleasesOnly) ||
+				    (lane == NetTransportLane::ControlReliable && std::any_of(m_Held.begin(), m_Held.end(), [&](const auto& held) { return held.peer == peer && held.lane == lane; })))) {
 					m_Held.push_back({peer, lane, bytes});
 					return true;
 				}
@@ -25580,7 +25581,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				if (bounded) round.peers[0].EvictRemovedPeer(4, "playing seat kicked", round.now);
 				round.alive[3] = false;
 				if (!bounded) {
-					for (int turn = 0; turn < 400 && !round.peers[0].AnyDroppedSeatHeld(); ++turn) round.Pump();
+					for (int turn = 0; turn < 1400 && !round.peers[0].AnyDroppedSeatHeld(); ++turn) round.Pump();
 					if (!round.peers[0].AnyDroppedSeatHeld()) return fail("the unbounded seat was not held for expiry");
 					round.peers[0].ResolveHeldSeat(4, NetLockstepHoldResolution::Expired, round.now);
 				}
@@ -25591,7 +25592,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				auto config = ReleasedClaimsConfig(round.match, 3, {}, bounded);
 				config.startFrame = from;
 				if (!replay.StartReplay(replayWire, config, &round.failure) || !tail.StartReplay(tailWire, config, &round.failure)) return fail(round.failure);
-				const uint16_t tailPort = bounded ? 47434 : 47439;
+				const uint16_t tailPort = bounded ? 48434 : 48439;
 				if (!coldHostWire.StartHost(tailPort, &round.failure) || !coldWire.Connect("loopback", tailPort, &round.failure)) return fail(round.failure);
 				auto tailConfig = ReleasedClaimsConfig(round.match, 3, {{1, 1}}, bounded);
 				tailConfig.startFrame = from;
@@ -26684,7 +26685,7 @@ namespace {
 				peers.emplace_back(index + 1, &clients[index]); nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
 				if (!clients[index].BeginNewJoin(nowMs, error) || !Pump(host, peers, error) || clients[index].GetState() != NetH4ClientState::Joined) { if (error->empty()) *error = "survivor ticket admission failed"; return false; }
 			}
-			host.SetLiveMatch(true); return Pump(host, peers, error);
+			host.SetLiveMatch(true); host.NotePlacementPhase(false, 0); return Pump(host, peers, error);
 		}
 	};
 
@@ -27577,7 +27578,7 @@ namespace {
 			NetParticipantId participant{};
 			if (!hostSession.GetPeerParticipantId(1, participant) || participant != applicants[0].identity.PublicId()) return done("HELLO did not bind the proved participant identity");
 			const auto original = applicants[0].client.GetRecord();
-			host.SetLiveMatch(true); host.NotifyDisconnect(1, round.peers[0].GetResumeFrame()); applicants[0].wire.Stop(); active.clear(); pump(10);
+			host.SetLiveMatch(true); host.NotePlacementPhase(false, 0); host.NotifyDisconnect(1, round.peers[0].GetResumeFrame()); applicants[0].wire.Stop(); active.clear(); pump(10);
 			if (!start(1, true) || !start(2, true)) return done(round.failure);
 			pump(200);
 			if (host.GetApplicantCount() != 2) return done("the two authenticated applications did not compete for the held seat");

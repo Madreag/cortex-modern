@@ -933,7 +933,9 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::NotePlacementPhase(bool placing, uint64_t frame) {
-		ApplyStageEvent(placing ? NetRosterEventKind::PlacementStarted : NetRosterEventKind::CombatStarted, frame);
+		if (!placing && m_Roster.stage == NetRosterStage::Running) return;
+		ApplyStageEvent(placing ? NetRosterEventKind::PlacementStarted :
+		    m_Roster.stage == NetRosterStage::Starting ? NetRosterEventKind::RoundStarted : NetRosterEventKind::CombatStarted, frame);
 	}
 
 	void NetReconnectHost::SetLiveMatch(bool live) {
@@ -947,7 +949,6 @@ namespace RTE {
 		}
 		m_MatchEnded = false;
 		if (m_Roster.stage == NetRosterStage::Lobby || m_Roster.stage == NetRosterStage::Ended) ApplyStageEvent(NetRosterEventKind::RematchFormed);
-		if (m_Roster.stage == NetRosterStage::Starting) ApplyStageEvent(NetRosterEventKind::RoundStarted);
 	}
 
 	NetReconnectHost::SeatState* NetReconnectHost::FindSeat(uint16_t stableSeat) {

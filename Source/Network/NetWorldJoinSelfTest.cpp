@@ -636,7 +636,7 @@ namespace RTE {
 			NetReconnectHost host;
 			host.Configure(&registry, 0x5741ULL, identity);
 			host.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
-			host.SetLiveMatch(true);
+			host.SetLiveMatch(true); host.NotePlacementPhase(false, 0);
 			host.SetPersistentWorld(false);
 			// Ordinary live matches offer an unused seat through the private catch-up path.
 			host.HandleMessage(11, join, 0);
@@ -681,7 +681,7 @@ namespace RTE {
 			NetReconnectHost host;
 			host.Configure(&registry, 0x5742ULL, identity);
 			host.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
-			host.SetLiveMatch(true);
+			host.SetLiveMatch(true); host.NotePlacementPhase(false, 0);
 			host.SetPersistentWorld(true);
 			host.HandleMessage(12, join, 0);
 			host.Tick(NetReconnectAdmission::c_DenialReleaseMs);
@@ -2595,7 +2595,7 @@ namespace RTE {
 			NetReconnectHost host;
 			host.Configure(&registry, 0x5743ULL, identity);
 			host.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
-			host.SetLiveMatch(true);
+			host.SetLiveMatch(true); host.NotePlacementPhase(false, 0);
 			host.SetPersistentWorld(true);
 			NetH4TicketOffer offer;
 			if (!commitJoin(host, 12, "alice", offer)) {
@@ -2630,7 +2630,7 @@ namespace RTE {
 			if (!commitJoin(host, 13, "alice", offer)) {
 				return Fail("ordinary H4 join did not offer a ticket");
 			}
-			host.SetLiveMatch(true);
+			host.SetLiveMatch(true); host.NotePlacementPhase(false, 0);
 			NetH4LeaveRequest leave;
 			leave.txId.fill(22);
 			leave.epoch = offer.epoch;
@@ -2663,7 +2663,7 @@ namespace RTE {
 		NetReconnectHost host;
 		host.Configure(&registry, 0x5745ULL, identity);
 		host.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
-		host.SetLiveMatch(true);
+		host.SetLiveMatch(true); host.NotePlacementPhase(false, 0);
 		host.SetPersistentWorld(true);
 		NetH4NewJoin join;
 		join.identity = identity;
@@ -5088,7 +5088,7 @@ namespace RTE {
 		NetReconnectHost admission;
 		admission.Configure(&registry, 0x5747ULL, identity);
 		admission.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
-		admission.SetLiveMatch(true);
+		admission.SetLiveMatch(true); admission.NotePlacementPhase(false, 0);
 		admission.SetPersistentWorld(true);
 		NetH4TicketOffer leaverOffer;
 		NetH4TicketOffer watcherOffer;
@@ -5179,7 +5179,7 @@ namespace RTE {
 		NetReconnectHost admission;
 		admission.Configure(&registry, 0x5748ULL, identity);
 		admission.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
-		admission.SetLiveMatch(true);
+		admission.SetLiveMatch(true); admission.NotePlacementPhase(false, 0);
 		admission.SetPersistentWorld(true);
 		NetH4TicketOffer aliceOffer;
 		NetH4TicketOffer bobOffer;
@@ -5331,7 +5331,7 @@ namespace RTE {
 		NetReconnectHost admission;
 		admission.Configure(&registry, 0x5749ULL, identity);
 		admission.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
-		admission.SetLiveMatch(true);
+		admission.SetLiveMatch(true); admission.NotePlacementPhase(false, 0);
 		admission.SetPersistentWorld(true);
 		admission.SetDropOwnershipSource(&PromotedWorldCensus, nullptr);
 		NetH4TicketOffer aliceOffer;
@@ -5549,7 +5549,7 @@ namespace RTE {
 		if (!oldHost.EnsureLocalTicket(own) || own.stableSeat != 0) return Fail("original-host-return: the original host's own seat took no seat-0 ticket");
 		NetH4TicketOffer successorOffer;
 		if (!CommitWorldSeat(oldHost, identity, 72, "successor", successorOffer)) return Fail("original-host-return: the successor could not join the old host");
-		oldHost.SetLiveMatch(true);
+		oldHost.SetLiveMatch(true); oldHost.NotePlacementPhase(false, 0);
 		const std::vector<uint8_t> state = oldHost.ExportMigrationState();
 		NetMatchConfig successorMatch = match;
 		successorMatch.hostPeerId = 2;
@@ -5613,7 +5613,7 @@ namespace RTE {
 		NetReconnectHost admission;
 		admission.Configure(&registry, 0x574400ULL, identity);
 		admission.SetSeatTable(table, config.mode);
-		admission.SetLiveMatch(true);
+		admission.SetLiveMatch(true); admission.NotePlacementPhase(false, 0);
 		admission.SetPersistentWorld(true);
 		NetH4TicketOffer offer;
 		if (!CommitWorldSeat(admission, identity, 61, "first", offer)) {
@@ -5664,7 +5664,7 @@ namespace RTE {
 		NetReconnectHost admission;
 		admission.Configure(&registry, 0x574401ULL, identity);
 		admission.SetSeatTable(table, config.mode);
-		admission.SetLiveMatch(true);
+		admission.SetLiveMatch(true); admission.NotePlacementPhase(false, 0);
 		admission.SetPersistentWorld(true);
 		NetH4TicketOffer firstOffer;
 		NetH4TicketOffer secondOffer;
@@ -6910,7 +6910,7 @@ namespace RTE {
 		NetReconnectHost hostN;
 		hostN.Configure(&bootN, config.sessionId, identity);
 		hostN.SetSeatTable(seats, config.mode);
-		hostN.SetLiveMatch(true);
+		hostN.SetLiveMatch(true); hostN.NotePlacementPhase(false, 0);
 		hostN.SetPersistentWorld(true);
 		NetH4NewJoin join;
 		join.identity = identity;
@@ -8199,7 +8199,7 @@ namespace RTE {
 			*error = "the between-rounds leave row could not seat its player";
 			return false;
 		}
-		host.SetLiveMatch(true);
+		host.SetLiveMatch(true); host.NotePlacementPhase(false, 0);
 		host.SetMatchEnded();
 		const uint32_t releasedBefore = host.GetStats().seatsReleased;
 		NetH4LeaveRequest leave;
@@ -8245,7 +8245,7 @@ namespace RTE {
 			*error = "the resumed-lobby row could not seat the host and its player";
 			return false;
 		}
-		host.SetLiveMatch(true);
+		host.SetLiveMatch(true); host.NotePlacementPhase(false, 0);
 		// The match is saved, and resumed from disk: the host imports what it saved, nobody has reconnected, and its lobby opens.
 		const std::vector<uint8_t> saved = host.ExportMigrationState();
 		NetSeatAuthRegistry resumedRegistry;
@@ -8301,7 +8301,7 @@ namespace RTE {
 			*error = "the private-return row could not seat its player";
 			return false;
 		}
-		plane.SetLiveMatch(true);
+		plane.SetLiveMatch(true); plane.NotePlacementPhase(false, 0);
 		uint8_t peer = 0;
 		for (const NetH4Seat& seat: plane.GetSeatTable())
 			if (seat.stableSeat == offer.stableSeat) peer = seat.lockstepPeerId;
@@ -8310,6 +8310,7 @@ namespace RTE {
 		const auto phaseText = [&held]() { return std::string(held() ? NetSeatPhaseName(held()->phase) : "no seat"); };
 		// The player plays the round, drops, and returns with its ticket on a new link.
 		plane.NotifyDisconnect(61, 100);
+		plane.NoteSeatHeldInPlace(peer, NetSeatHoldCause::LinkDrop);
 		if (!ReclaimWorldSeat(plane, identity, offer, 65, 1500) || !held() || held()->phase != NetSeatPhase::RejoinImage) {
 			*error = "the private-return row's return was not admitted into its image: " + phaseText();
 			return false;
@@ -8896,7 +8897,7 @@ namespace RTE {
 			if (!leaver.m_Coordinator->IsRunning() || leaver.m_Coordinator->GetResumeFrame() < 15) { why = "the leaver's service has no running round"; return false; }
 			if (!registry.BeginHostedSession()) { why = "the leaver's ticket registry did not start"; return false; }
 			leaver.m_ReconnectHost.Configure(&registry, match.sessionId, MakeH4Identity());
-			leaver.m_ReconnectHost.SetSeatTable(NetH4BuildSeatTable(match), match.mode); leaver.m_ReconnectHost.SetLiveMatch(true);
+			leaver.m_ReconnectHost.SetSeatTable(NetH4BuildSeatTable(match), match.mode); leaver.m_ReconnectHost.SetLiveMatch(true); leaver.m_ReconnectHost.NotePlacementPhase(false, 0);
 			NetH4TicketRecord ticket;
 			if (!leaver.m_ReconnectHost.EnsureLocalTicket(ticket)) { why = "the leaver did not have its own ticket"; return false; }
 			ticket.hostAddress = "loopback";
@@ -9162,7 +9163,7 @@ namespace RTE {
 		NetReconnectHost admission;
 		admission.Configure(&registry, 0x5750ULL, identity);
 		admission.SetSeatTable(table, NetMatchMode::PvPSkirmish);
-		admission.SetLiveMatch(true);
+		admission.SetLiveMatch(true); admission.NotePlacementPhase(false, 0);
 		admission.SetPersistentWorld(true);
 		NetWorldJoinHost world;
 		std::string error;

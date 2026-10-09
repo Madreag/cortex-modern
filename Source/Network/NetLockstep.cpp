@@ -3645,7 +3645,7 @@ namespace RTE {
 	void NetLockstepCoordinator::UpdateHostReach(uint64_t nowMs) {
 		m_HostLossFrame = UINT64_MAX;
 		m_HostReach = {};
-		m_HostProvisional = false;
+		m_HostProvisional = m_Config.localPeerId == GetHostPeerId() && !m_ReadyFrames.empty() && !PreparedFrameReplicated(m_ReadyFrames.front().frame);
 		ProbeSuccessors(nowMs);
 	}
 
@@ -7860,9 +7860,20 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::PreparedFrameReplicated(uint64_t frame) const {
-		if (!UsesPreparedFrameReceipts() || IsMigrationCatchUp() || m_Config.localPeerId == GetHostPeerId()) return true;
-		// The host orders input and commands; another client's prepared receipt is not an authority decision.
-		return m_HostOrderedFrame && *m_HostOrderedFrame >= frame;
+		if (!UsesPreparedFrameReceipts() || IsMigrationCatchUp()) return true;
+		if (m_Config.localPeerId != GetHostPeerId()) return m_HostOrderedFrame && *m_HostOrderedFrame >= frame;
+		if (m_Config.matchConfig.dedicated || m_Config.matchConfig.persistentWorld || m_Config.matchConfig.successorOrder.empty()) return true;
+		// The host alone makes decisions. Before consuming their input frame it keeps
+		// one complete copy on a possible survivor, so a lost host cannot take the
+		// only committed history with it. This is a data receipt, never a policy vote.
+		bool hasSurvivor = false;
+		for (uint8_t peer: MigrationElectorate()) {
+			if (peer == m_Config.localPeerId) continue;
+			hasSurvivor = true;
+			const auto copy = m_PreparedFrameReceipts.find(peer);
+			if (copy != m_PreparedFrameReceipts.end() && copy->second >= frame) return true;
+		}
+		return !hasSurvivor;
 	}
 
 	void NetLockstepCoordinator::PublishPreparedFrame(uint64_t nowMs) {
@@ -12035,7 +12046,7 @@ namespace RTE {
 	// tick: ownership cannot change under a subsystem halfway through one.
 	void NetLockstepCoordinator::DropRecordedHeldSeat(uint8_t peerId) {
 		// Only a bounded wait holds a seat; a held host stays the round's hub, and our own seat is ours again once this round plays it.
-		if (!UsesBoundedWait() || peerId == GetHostPeerId() || (peerId == m_Config.localPeerId && !m_Playback)) return;
+		if (peerId == GetHostPeerId() || (peerId == m_Config.localPeerId && !m_Playback)) return;
 		m_DroppedSeats.insert(peerId);
 		m_LeftSeatsHeld.insert(peerId);
 	}
@@ -12049,7 +12060,7 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::IsSeatHeldForReclaimAtFrame(uint64_t) const {
 		NET_PLANE_CHECK();
-		return !UsesBoundedWait() && m_State == NetLockstepState::Running && !m_DroppedSeats.empty();
+		return false; // Held seats use the host-ordered AI boundary under every input-delay policy.
 	}
 
 	NetLockstepHoldResolution NetLockstepCoordinator::HeldSeatResolution(uint8_t peerId) const {
@@ -12193,48 +12204,11 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay) {
-		if (UsesBoundedWait() && m_AiHeldSeats.contains(peerId)) {
-			// A seat whose returner is already agreed has nothing left to release: the return stands.
-			if (resolution == NetLockstepHoldResolution::Expired && !m_ReclaimTransactions.contains(peerId)) ReleaseHeldSeat(peerId, nowMs, relay, "its hold expired");
-			return;
-		}
-		if (resolution == NetLockstepHoldResolution::None || m_DroppedSeats.find(peerId) == m_DroppedSeats.end()) {
-			return;
-		}
-		if (HeldSeatResolution(peerId) != NetLockstepHoldResolution::None && !m_AiHeldSeats.contains(peerId)) {
-			return;
-		}
-		m_DroppedSeatResolutions[peerId] = resolution;
-		if (resolution == NetLockstepHoldResolution::Reclaimed) ++m_Stats.peers[peerId].rejoins;
-		m_DroppedSeats.erase(peerId);
-		RefreshLeftSeatHolds();
-		const auto leaveIt = m_PeerLeaveFrames.find(peerId);
-		const uint64_t heldFrame = leaveIt != m_PeerLeaveFrames.end() ? leaveIt->second : m_Stats.nextFrame;
-		if (relay && m_RelayHost && m_Transport) {
-			NetLockstepStop notice;
-			notice.senderPeerId = peerId;
-			notice.reason = StopReasonOf(resolution);
-			notice.frame = heldFrame;
-			notice.message = std::string(NetLockstepCodec::StopReasonName(notice.reason));
-			std::string ignored;
-			(void)SendPacket({notice}, NetTransportLane::ControlReliable, &ignored);
-		}
-		if (resolution == NetLockstepHoldResolution::Expired) {
-			RecordSeatDeparture(peerId, heldFrame);
-			if (!IsPersistentWorldRound() && m_AiHeldSeats.empty() && LeftPeersNotRefilling() >= m_RemotePeerIds.size() && !AnyLeftSeatHeld() && !ReclaimResyncPending()) {
-				m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) + ":" + m_LastLeaveMessage;
-				m_State = NetLockstepState::Stopped;
-			}
-			return;
-		}
-		if (IsPersistentWorldRound()) {
-			return;
-		}
-		DiagnosticLine() << "[net-match] rejoin: " << DescribePeer(peerId) << " reconnected - resyncing the match" << std::endl;
-		// Deferred: the tick in flight commits first, or the heal snapshots half a tick under the label
-		// of the one before it.
-		RequestResync(resolution == NetLockstepHoldResolution::Reclaimed ? "seat reclaimed" : "seat substituted");
-		(void)nowMs;
+		// Expiry is a host decision at the same ordered release boundary under every
+		// input-delay policy. A wire notice alone cannot change a client's claims.
+		if (m_Config.localPeerId != GetHostPeerId() || !relay || !m_AiHeldSeats.contains(peerId)) return;
+		if (resolution == NetLockstepHoldResolution::Expired && !m_ReclaimTransactions.contains(peerId))
+			ReleaseHeldSeat(peerId, nowMs, true, "its hold expired");
 	}
 
 	void NetLockstepCoordinator::ReleaseHeldSeat(uint8_t peerId, uint64_t nowMs, bool relay, const char* why) {
