@@ -4,6 +4,7 @@
 */
 
 #include "lj_obj.h"
+#include "lj_vm.h"
 
 #if LJ_HASFFI
 
@@ -1198,6 +1199,7 @@ int lj_ccall_func(lua_State *L, GCcdata *cd)
     gcsteps = ccall_set_args(L, cts, ct, &cc);
     cts->cb.slot = ~0u;
     lj_vm_ffi_call(&cc);
+    lj_vm_fp_assert();
     if (cts->cb.slot != ~0u) {  /* Blacklist function that called a callback. */
       TValue tv;
       tv.u64 = ((uintptr_t)(void *)cc.func >> 2) | U64x(800000000, 00000000);

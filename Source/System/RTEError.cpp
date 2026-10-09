@@ -1,3 +1,4 @@
+#include "FloatingPointEnvironment.h"
 #include "RTEError.h"
 
 #include "WindowMan.h"
@@ -378,9 +379,9 @@ static LONG WINAPI RTEWindowsExceptionHandler([[maybe_unused]] EXCEPTION_POINTER
 void RTEError::ThrowOnWorkerThread() {
 #ifdef _WIN32
 	// A thread of the system's own, as the transport's workers are: nothing above the throw catches it.
-	if (const HANDLE thread = CreateThread(nullptr, 0, [](LPVOID) -> DWORD { throw std::bad_alloc(); }, nullptr, 0, nullptr)) CloseHandle(thread);
+	if (const HANDLE thread = CreateThread(nullptr, 0, [](LPVOID) -> DWORD { FloatingPointEnvironment::Initialize(); throw std::bad_alloc(); }, nullptr, 0, nullptr)) CloseHandle(thread);
 #else
-	std::thread([] { throw std::bad_alloc(); }).detach();
+	FloatingPointEnvironment::StartThread([] { throw std::bad_alloc(); }).detach();
 #endif
 }
 
@@ -955,7 +956,7 @@ bool RTEError::RunAssertPolicySelfTest() {
 
 	s_AssertFired = false;
 	SDL_setenv_unsafe("CCCP_HEADLESS", "1", 1);
-	std::thread worker([] {
+	auto worker = FloatingPointEnvironment::StartThread([] {
 		AssertFunc("worker-thread probe", RTECurrentSourceLocation);
 	});
 	worker.join();
@@ -978,7 +979,7 @@ bool RTEError::RunAssertPolicySelfTest() {
 	s_ForceAssertDialogPathForTest = true;
 	DispatchPendingWorkerMessages();
 	ResetAssertMessageBoxCallCount();
-	std::thread dispatchWorker([] {
+	auto dispatchWorker = FloatingPointEnvironment::StartThread([] {
 		AssertFunc("worker dispatch probe", RTECurrentSourceLocation);
 	});
 	dispatchWorker.join();

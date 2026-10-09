@@ -389,6 +389,13 @@
 static void build_subroutines(BuildCtx *ctx)
 {
   |.code_sub
+  |->vm_nummode:
+  |.if DUALNUM
+  |  mov eax, 1
+  |.else
+  |  xor eax, eax
+  |.endif
+  |  ret
   |
   |//-----------------------------------------------------------------------
   |//-- Return handling ----------------------------------------------------
@@ -1705,7 +1712,10 @@ static void build_subroutines(BuildCtx *ctx)
   |  mov [BASE-16], RB
   |  jmp ->fff_res1
   |
-  |.ffunc_n math_sqrt, sqrtsd
+  |.ffunc_n math_sqrt
+  |  mov RB, BASE
+  |  call extern lj_vm_math_sqrt
+  |  mov BASE, RB
   |->fff_resxmm0:
   |  mov PC, [BASE-8]
   |  movsd qword [BASE-16], xmm0
@@ -1767,14 +1777,14 @@ static void build_subroutines(BuildCtx *ctx)
   |  checknumtp [BASE], ->fff_fallback
   |  movsd xmm0, qword [BASE]
   |  mov RB, BASE
-  |  call extern log
+  |  call extern lj_vm_math_log
   |  mov BASE, RB
   |  jmp ->fff_resxmm0
   |
   |.macro math_extern, func
   |  .ffunc_n math_ .. func
   |  mov RB, BASE
-  |  call extern func
+  |  call extern lj_vm_math_ .. func
   |  mov BASE, RB
   |  jmp ->fff_resxmm0
   |.endmacro
@@ -1782,7 +1792,7 @@ static void build_subroutines(BuildCtx *ctx)
   |.macro math_extern2, func
   |  .ffunc_nn math_ .. func
   |  mov RB, BASE
-  |  call extern func
+  |  call extern lj_vm_math_ .. func
   |  mov BASE, RB
   |  jmp ->fff_resxmm0
   |.endmacro
@@ -1802,16 +1812,8 @@ static void build_subroutines(BuildCtx *ctx)
   |  math_extern2 atan2
   |  math_extern2 fmod
   |
-  |.ffunc_2 math_ldexp
-  |  checknumtp [BASE], ->fff_fallback
-  |  checknumtp [BASE+8], ->fff_fallback
-  |  fld qword [BASE+8]
-  |  fld qword [BASE]
-  |  fscale
-  |  fpop1
-  |  mov PC, [BASE-8]
-  |  fstp qword [BASE-16]
-  |  jmp ->fff_res1
+  |.ffunc math_ldexp
+  |  jmp ->fff_fallback
   |
   |.ffunc_n math_frexp
   |  mov RB, BASE
@@ -3451,7 +3453,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
   case BC_POW:
     |  ins_arithpre movsd, xmm1
     |  mov RB, BASE
-    |  call extern pow
+    |  call extern lj_vm_math_pow
     |  movzx RAd, PC_RA
     |  mov BASE, RB
     |  ins_arithpost
@@ -5108,4 +5110,3 @@ static void emit_asm_debug(BuildCtx *ctx)
     break;
   }
 }
-

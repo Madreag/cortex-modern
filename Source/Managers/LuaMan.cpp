@@ -1,3 +1,4 @@
+#include "DeterministicMath.h"
 #include "LuaMan.h"
 #include "FloatText.h"
 
@@ -9,6 +10,10 @@
 #include "MetricsCollector.h"
 #include "SimChecksum.h"
 #include "RTETools.h"
+#include "FloatingPointEnvironment.h"
+#include <cfenv>
+#include <bit>
+#include <cstdlib>
 #include "LuaThreadCodec.h"
 #include "CheckpointImage.h"
 #include "CheckpointCast.h"
@@ -220,6 +225,31 @@ namespace {
 		lua_pop(L, 1);
 	}
 
+	int CheckedNativeCall(lua_State* state, lua_CFunction function) {
+		const FloatingPointEnvironment::Scope scope("Lua native callback");
+		return function(state);
+	}
+
+	void RegisterFloatingPointChecks(lua_State* state) {
+		static std::once_flag installed;
+		std::call_once(installed, [] {
+			luaJIT_set_fp_assert([] { FloatingPointEnvironment::Enter("Lua library return"); });
+			const luaJIT_MathHooks hooks = {
+				DeterministicSin, DeterministicCos, DeterministicTan,
+				DeterministicAsin, DeterministicAcos, DeterministicAtan,
+				DeterministicSinh, DeterministicCosh, DeterministicTanh,
+				DeterministicExp, DeterministicLog, DeterministicLog2, DeterministicLog10,
+				static_cast<double (*)(double)>(DeterministicSqrt),
+				DeterministicPow, DeterministicAtan2, static_cast<double (*)(double, double)>(DeterministicFmod)
+			};
+			if (!luaJIT_set_math_hooks(&hooks)) { std::abort(); }
+		});
+		if (luaJIT_math_policy(state) != 1) { std::abort(); }
+		lua_pushlightuserdata(state, reinterpret_cast<void*>(&CheckedNativeCall));
+		if (!luaJIT_setmode(state, -1, LUAJIT_MODE_WRAPCFUNC | LUAJIT_MODE_ON)) { std::abort(); }
+		lua_pop(state, 1);
+	}
+
 	// Route math.atan/atan2 through the cross-platform poly — AI ballistics aim through these and the platform libm atan2 diverges cross-toolchain.
 	int det_math_atan(lua_State* L) {
 		lua_pushnumber(L, DeterministicAtan2(luaL_checknumber(L, 1), luaL_optnumber(L, 2, 1.0)));
@@ -263,14 +293,14 @@ namespace {
 	int det_math_asin(lua_State* L) {
 		const double x = luaL_checknumber(L, 1);
 		const double t = 1.0 - x * x;
-		lua_pushnumber(L, DeterministicAtan2(x, std::sqrt(t < 0.0 ? 0.0 : t)));
+		lua_pushnumber(L, DeterministicAtan2(x, DeterministicSqrt(t < 0.0 ? 0.0 : t)));
 		return 1;
 	}
 
 	int det_math_acos(lua_State* L) {
 		const double x = luaL_checknumber(L, 1);
 		const double t = 1.0 - x * x;
-		lua_pushnumber(L, DeterministicAtan2(std::sqrt(t < 0.0 ? 0.0 : t), x));
+		lua_pushnumber(L, DeterministicAtan2(DeterministicSqrt(t < 0.0 ? 0.0 : t), x));
 		return 1;
 	}
 
@@ -1150,9 +1180,12 @@ end
 				lua_settop(state, top);
 			}
 			lua_gc(state, LUA_GCCOLLECT, 0);
-			auto worker = std::async(std::launch::async, [captured = std::move(captured)] {
+			auto worker = FloatingPointEnvironment::Async(std::launch::async, [captured = std::move(captured)] {
 				std::vector<std::string> output;
-				for (const auto& produce: captured) output.push_back(produce());
+				for (const auto& produce: captured) {
+					const FloatingPointEnvironment::Scope scope("capture callback");
+					output.push_back(produce());
+				}
 				return output;
 			});
 			passed = changed && worker.get() == expected;
@@ -3233,18 +3266,23 @@ coroutine.resume(a.dead)
 do
 	local source = "return function() local n = 0 while true do n = n + 1 coroutine.yield(n) end end"
 	local stitchedStep, interpretedStep = assert(loadstring(source))(), assert(loadstring(source))()
-	jit.off(interpretedStep, true)
+	local compiled = jit ~= nil and jit.status()
+	if jit then jit.off(interpretedStep, true) end
 	a.stitched = coroutine.create(stitchedStep)
 	a.interpreted = coroutine.create(interpretedStep)
-	jit.opt.start("hotloop=1")
+	if jit then jit.opt.start("hotloop=1") end
 	for _ = 1, 8 do coroutine.resume(a.stitched); coroutine.resume(a.interpreted) end
-	jit.opt.start("hotloop=56")
+	if jit then jit.opt.start("hotloop=56") end
 	local raw = _ScriptGraphThreadCapture(a.stitched, true)
 	local canonical = _ScriptGraphThreadCapture(a.stitched)
 	local plain = _ScriptGraphThreadCapture(a.interpreted)
 	local rawStitched = false
 	for _, name in pairs(raw and raw.conts or {}) do if name == "stitch" then rawStitched = true end end
-	check("coroutine_stitch_control_reached", jit.status() and rawStitched and raw.base == plain.base + 3, raw and plain and (raw.base .. " vs " .. plain.base) or "no capture")
+	if compiled then
+		check("coroutine_stitch_control_reached", rawStitched and raw.base == plain.base + 3, raw and plain and (raw.base .. " vs " .. plain.base) or "no capture")
+	else
+		check("coroutine_interpreter_control_reached", not rawStitched and raw.base == plain.base, raw and plain and (raw.base .. " vs " .. plain.base) or "no capture")
+	end
 	local function sameLayout(x, y)
 		if not x or not y then return false, "no capture" end
 		if x.status ~= y.status or x.first ~= y.first or x.base ~= y.base or x.top ~= y.top then return false, "bounds " .. x.base .. "/" .. x.top .. " vs " .. y.base .. "/" .. y.top end
@@ -3265,7 +3303,7 @@ do
 	local fromRaw = collapsed and _ScriptGraphThreadRestore(collapsed)
 	check("coroutine_stitch_canonical_resumes", fromCanonical and resumed(fromCanonical) == "true/9/suspended" and resumed(fromCanonical) == "true/10/suspended")
 	check("coroutine_stitch_raw_resumes", fromRaw and resumed(fromRaw) == "true/9/suspended" and resumed(fromRaw) == "true/10/suspended")
-	local malformed = raw and _ScriptGraph.canonicalThread({ status = raw.status, first = raw.first, base = raw.base, top = raw.top, slots = raw.slots, links = {}, conts = raw.conts })
+	local malformed = raw and _ScriptGraph.canonicalThread({ status = raw.status, first = raw.first, base = raw.base, top = raw.top, slots = raw.slots, links = {}, conts = compiled and raw.conts or { [raw.base - 4] = "stitch" } })
 	check("coroutine_stitch_malformed_refused", malformed == nil)
 end
 b.shared = _SelfTestShared
@@ -3443,7 +3481,7 @@ do
 	for _, case in ipairs({ { 2657, 5, 7980, 7984 }, { 2658, 3, 7983, 7985 }, { 2658, 28, 7983, 8010 }, { 2658, 29, 7983, 8011 } }) do
 		local depth, pads, wantTop, wantNeeded = case[1], case[2], case[3], case[4]
 		local chunk = assert(loadstring(program(pads)))
-		jit.off(chunk, true)
+		if jit then jit.off(chunk, true) end
 		local original = coroutine.create(chunk())
 		local startOk, startValue = coroutine.resume(original, depth)
 		local desc = _ScriptGraphThreadCapture(original)
@@ -3493,7 +3531,7 @@ do
 	for _, case in ipairs({ { "shallow", 3, 96 }, { "near_limit", 2640, 90 } }) do
 		local tag, depth, pads = case[1], case[2], case[3]
 		local chunk = assert(loadstring(program(pads)))
-		jit.off(chunk, true)
+		if jit then jit.off(chunk, true) end
 		local original = coroutine.create(chunk())
 		local startOk, alias = coroutine.resume(original, depth)
 		local slot
@@ -3551,7 +3589,7 @@ do
 				string.format("bytes %s needed %s maxstack %s status %s resumed %s/%s refused %s", tostring(text and #text), tostring(needed), tostring(maxstack), status, tostring(ok), tostring(value), tostring(refusal)))
 		else
 			local chunk = assert(loadstring(source))
-			jit.off(chunk, true)
+			if jit then jit.off(chunk, true) end
 			local original = coroutine.create(chunk())
 			local startOk, startValue = coroutine.resume(original, depth)
 			local needed = select(2, _ScriptGraphThreadStackFits(original))
@@ -3581,7 +3619,7 @@ do
 	end
 	local source = "local " .. table.concat(names, ", ") .. " = " .. table.concat(values, ", ") .. "\ncoroutine.yield(a96)\nlocal " .. table.concat(extras, ", ") .. " = " .. table.concat(extraVals, ", ") .. "\nlocal t = setmetatable({}, { __index = function(_, k) return k .. \"!\" end })\nreturn t.probe, a1 + a96"
 	local fn = assert(loadstring(source))
-	jit.off(fn, true)
+	if jit then jit.off(fn, true) end
 	local original = coroutine.create(fn)
 	coroutine.resume(original)
 	local bigText = _ScriptGraph.serialize({ ["1"] = { co = original } })
@@ -3624,7 +3662,7 @@ do
 	for _, arm in ipairs(arms) do
 		local name, source, yielded = arm[1], arm[2], arm[3]
 		local fn = assert(loadstring(source))
-		jit.off(fn, true)
+		if jit then jit.off(fn, true) end
 		local original = coroutine.create(fn)
 		local startOk, startValue = coroutine.resume(original)
 		local text = _ScriptGraph.serialize({ ["1"] = { co = original } })
@@ -5323,7 +5361,7 @@ static int ScriptGraphPathQueueSelfTest(lua_State* L) {
 	std::promise<void> entered;
 	std::promise<void> destroyed;
 	auto destroyedFuture = destroyed.get_future();
-	std::thread destroyer([heldFinder, &entered, &destroyed]() { entered.set_value(); delete heldFinder; destroyed.set_value(); });
+	auto destroyer = FloatingPointEnvironment::StartThread([heldFinder, &entered, &destroyed]() { entered.set_value(); delete heldFinder; destroyed.set_value(); });
 	entered.get_future().wait();
 	if (destroyedFuture.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready) {
 		std::cout << "[path-queue-selftest] FAIL destroyed_with_queued_request" << std::endl;
@@ -7843,11 +7881,206 @@ PreviewWindowCreateFunctionsForType(Scene);
 	    luabind::def((std::string("Is") + std::string(#TYPE)).c_str(), &LuaAdaptersEntityCast::IsConst##TYPE), \
 	    OWNINGSCOPE::Register##TYPE##LuaBindings()
 
+bool LuaStateWrapper::RunDeterministicMathSelfTest() {
+	lua_State* state = luaL_newstate();
+	if (!state) { return false; }
+	RegisterFloatingPointChecks(state);
+	luaL_openlibs(state);
+	bool passed = true;
+	const auto check = [&passed](bool ok, const char* name) {
+		std::printf("[deterministic-math-selftest] %s %s\n", ok ? "PASS" : "FAIL", name);
+		passed = passed && ok;
+	};
+	check(luaJIT_math_policy(state) == 1, "linked_vm_math_policy");
+	check(std::bit_cast<uint64_t>(DeterministicSqrt(2.0)) == 0x3FF6A09E667F3BCDULL, "binary64_sqrt_rounding");
+	check(std::bit_cast<uint32_t>(DeterministicSqrt(2.0F)) == 0x3FB504F3U, "binary32_sqrt_rounding");
+	check(DeterministicFmod(0x1p1023, 3.0) == 2.0, "fmod_large_exponent");
+	check(std::bit_cast<uint64_t>(DeterministicFmod(-4.0, 2.0)) == 0x8000000000000000ULL, "fmod_negative_zero");
+	check(std::bit_cast<uint64_t>(DeterministicFmod(0x1p-1000, 0x3p-1050)) == (1ULL << 24), "fmod_subnormal");
+	check(DeterministicPow(2.0, -1024.0) == 0x1p-1024 && DeterministicPow(0x1p-1024, -1.0) == std::numeric_limits<double>::infinity(), "power_extreme_reciprocal");
+	check(std::bit_cast<uint64_t>(DeterministicPow(-0.0, 3.0)) == 0x8000000000000000ULL && std::isnan(DeterministicPow(-2.0, 0.5)), "power_zero_and_domain");
+	bool exactLog2 = true;
+	for (int exponent = -1074; exponent <= 1023; ++exponent) {
+		exactLog2 = exactLog2 && DeterministicLog2(std::ldexp(1.0, exponent)) == static_cast<double>(exponent);
+	}
+	check(exactLog2, "log2_powers_of_two_exact");
+	struct Unary { const char* name; double (*function)(double); };
+	const Unary unary[] = {
+		{"sin", DeterministicSin}, {"cos", DeterministicCos}, {"tan", DeterministicTan},
+		{"asin", DeterministicAsin}, {"acos", DeterministicAcos}, {"atan", DeterministicAtan},
+		{"sinh", DeterministicSinh}, {"cosh", DeterministicCosh}, {"tanh", DeterministicTanh},
+		{"exp", DeterministicExp}, {"log", DeterministicLog}, {"log10", DeterministicLog10},
+		{"sqrt", static_cast<double (*)(double)>(DeterministicSqrt)}
+	};
+	uint64_t digest = 14695981039346656037ULL;
+	const auto record = [&digest](double value) {
+		const uint64_t bits = std::bit_cast<uint64_t>(value);
+		for (unsigned shift = 0; shift < 64; shift += 8) { digest = (digest ^ ((bits >> shift) & 0xFFULL)) * 1099511628211ULL; }
+	};
+	for (const int mode : {LUAJIT_MODE_OFF, LUAJIT_MODE_ON}) {
+		luaJIT_setmode(state, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_FLUSH);
+		luaJIT_setmode(state, 0, LUAJIT_MODE_ENGINE | mode);
+		const char* powers =
+			"local function power(x,y) return x^y end; "
+			"local sum=0; for i=1,12000 do sum=sum+power(i/16384,3.0)+power(i/16384,0.9)+math.pow(i/16384,3.0) end; "
+			"local values={}; for i=1,64 do local x=i/64; "
+			"values[#values+1]=power(x,3.0); values[#values+1]=power(x,0.9); "
+			"values[#values+1]=math.pow(x,3.0) end; "
+			"values[#values+1]=1.125^0.9; values[#values+1]=('1.125')^('0.9'); "
+			"return values";
+		const bool loaded = luaL_dostring(state, powers) == 0;
+		check(loaded, mode == LUAJIT_MODE_ON ? "jit_power_kernel" : "interpreter_power_kernel");
+		if (loaded) {
+			bool same = true;
+			int index = 1;
+			const auto equal = [&](double expected) {
+				lua_rawgeti(state, -1, index++);
+				const double actual = lua_tonumber(state, -1);
+				lua_pop(state, 1);
+				record(actual);
+				same = same && std::bit_cast<uint64_t>(actual) == std::bit_cast<uint64_t>(expected);
+			};
+			for (int i = 1; i <= 64; ++i) {
+				const double value = static_cast<double>(i) / 64.0;
+				equal(DeterministicPow(value, 3.0)); equal(DeterministicPow(value, 0.9)); equal(DeterministicPow(value, 3.0));
+			}
+			equal(DeterministicPow(1.125, 0.9)); equal(DeterministicPow(1.125, 0.9));
+			check(same, "bytecode_jit_constant_fold_and_string_power_bits");
+		}
+		lua_settop(state, 0);
+		if (mode == LUAJIT_MODE_ON) {
+			check(luaL_dostring(state, "assert(require('jit.util').traceinfo(1)~=nil)") == 0, "power_trace_executed");
+			lua_settop(state, 0);
+		}
+		for (const Unary& entry : unary) {
+			const std::string script = std::string("local fn=math.") + entry.name + "; local out={}; for i=1,12000 do local k=i%31+1; out[k]=fn(k/32) end; return out";
+			const bool called = luaL_dostring(state, script.c_str()) == 0;
+			bool same = called;
+			if (called) for (int i = 1; i <= 31; ++i) {
+				lua_rawgeti(state, -1, i);
+				const double actual = lua_tonumber(state, -1);
+				const double expected = entry.function(static_cast<double>(i) / 32.0);
+				same = same && std::bit_cast<uint64_t>(actual) == std::bit_cast<uint64_t>(expected);
+				record(actual);
+				lua_pop(state, 1);
+			}
+			check(same, entry.name);
+			lua_settop(state, 0);
+		}
+		const Unary binary[] = {
+			{"atan2", [](double value) { return DeterministicAtan2(value, 1.75); }},
+			{"fmod", [](double value) { return DeterministicFmod(value, 1.75); }},
+			{"log", [](double value) { return DeterministicLog2(value) * (1.0 / DeterministicLog2(1.75)); }},
+			{"ldexp", [](double value) { return std::ldexp(value, 1); }}
+		};
+		for (const Unary& entry : binary) {
+			const std::string script = std::string("local fn=math.") + entry.name + "; local out={}; for i=1,12000 do local k=i%31+1; out[k]=fn(k/16,1.75) end; return out";
+			const bool called = luaL_dostring(state, script.c_str()) == 0;
+			bool same = called;
+			if (called) for (int i = 1; i <= 31; ++i) {
+				lua_rawgeti(state, -1, i);
+				const double actual = lua_tonumber(state, -1);
+				const double expected = entry.function(static_cast<double>(i) / 16.0);
+				same = same && std::bit_cast<uint64_t>(actual) == std::bit_cast<uint64_t>(expected);
+				record(actual);
+				lua_pop(state, 1);
+			}
+			check(same, entry.name);
+			lua_settop(state, 0);
+		}
+		check(luaL_dostring(state, "jit.opt.start('fma'); local function f(a,b,c) return a*b+c end; for i=1,12000 do assert(f(1+2^-27,1-2^-27,-1)==0) end") == 0 && luaJIT_math_policy(state) == 1, "fma_stays_disabled");
+		lua_settop(state, 0);
+		const int semantics = luaL_dostring(state, "assert(math.ldexp(1.5,3.9)==12); assert(math.fmod(2^1023,3)==2); assert(math.log(8,2)==3)");
+		check(semantics == 0, "ldexp_fmod_log_base_semantics");
+		if (semantics != 0) {
+			std::printf("[deterministic-math-selftest] semantics error: %s\n", lua_tostring(state, -1));
+			lua_settop(state, 0);
+			if (luaL_dostring(state, "return math.ldexp(1.5,3.9), math.fmod(2^1023,3), math.log(8,2)") == 0) {
+				std::printf("[deterministic-math-selftest] ldexp=%.17g fmod=%.17g log_base=%.17g\n", lua_tonumber(state, 1), lua_tonumber(state, 2), lua_tonumber(state, 3));
+			}
+		}
+		lua_settop(state, 0);
+		check(luaL_dostring(state, "for pass=1,6 do for exponent=-1074,1023 do assert(math.log(math.ldexp(1,exponent),2)==exponent) end end") == 0, "log_base_two_exact_exponent_range");
+		lua_settop(state, 0);
+	}
+	lua_close(state);
+	FloatingPointEnvironment::Assert("math selftest return");
+	std::printf("[deterministic-math-selftest] digest=%016llx\n", static_cast<unsigned long long>(digest));
+	std::printf("[deterministic-math-selftest] %s\n", passed ? "PASS" : "FAIL");
+	return passed;
+}
+
+bool LuaStateWrapper::RunFloatingPointCallbackSelfTest(int drift) {
+#if defined(_MSC_VER)
+	if (drift != 0) { _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT); }
+#endif
+	if (drift == 3) {
+		const CheckpointText captured = CheckpointText::Deferred([] {
+			std::fesetround(FE_DOWNWARD);
+			return std::string("floating point probe");
+		}, 0, "FloatingPointCallbackProbe");
+		captured.Text();
+		std::fputs("[fp-environment-selftest] FAIL capture_callback\n", stderr);
+		return false;
+	}
+	lua_State* state = luaL_newstate();
+	if (!state) { return false; }
+	RegisterFloatingPointChecks(state);
+	luaL_openlibs(state);
+	lua_pushinteger(state, drift);
+	lua_pushcclosure(state, [](lua_State* current) -> int {
+		const int kind = static_cast<int>(lua_tointeger(current, lua_upvalueindex(1)));
+		if (kind != 0) { std::fesetround(FE_DOWNWARD); }
+		if (kind == 2) { return luaL_error(current, "callback error"); }
+		lua_pushinteger(current, 17);
+		return 1;
+	}, 1);
+	lua_setglobal(state, "native_check");
+	const bool called = luaL_dostring(state, "assert(native_check()==17)") == 0;
+	const bool passed = called && FloatingPointEnvironment::IsValid() && drift == 0;
+	lua_close(state);
+	std::printf("[fp-environment-selftest] %s native_callback\n", passed ? "PASS" : "FAIL");
+	return passed;
+}
+
+bool LuaStateWrapper::RunNumericPolicySelfTest() {
+	const unsigned int expected = LUAJIT_NUMERIC_DUAL | LUAJIT_NUMERIC_DOUBLE | (sizeof(void*) == 8 ? LUAJIT_NUMERIC_GC64 : 0);
+	bool passed = luaJIT_numeric_policy() == expected;
+	std::printf("[lua-numeric-policy-selftest] %s linked_vm policy=%u expected=%u\n", passed ? "PASS" : "FAIL", luaJIT_numeric_policy(), expected);
+	if (!passed) { return false; }
+	lua_State* state = luaL_newstate();
+	if (!state) { return false; }
+	RegisterFloatingPointChecks(state);
+	luaL_openlibs(state);
+	const char* arithmetic =
+		"local function check() local a=2147483647; local b=a+1; "
+		"assert(b==2147483648 and b-a==1); assert(1/(0/-1)==-math.huge); "
+		"assert(tonumber('9007199254740991')+1==9007199254740992); end "
+		"for i=1,10000 do check() end";
+	for (const int mode : {LUAJIT_MODE_OFF, LUAJIT_MODE_ON}) {
+		luaJIT_setmode(state, 0, LUAJIT_MODE_ENGINE | mode | LUAJIT_MODE_FLUSH);
+		luaJIT_setmode(state, 0, LUAJIT_MODE_ENGINE | mode);
+		const bool ok = luaL_dostring(state, arithmetic) == 0;
+		std::printf("[lua-numeric-policy-selftest] %s %s_arithmetic runtime_flags=%08x\n", ok ? "PASS" : "FAIL", mode == LUAJIT_MODE_ON ? "jit" : "interpreter", luaJIT_runtime_flags(state));
+		if (!ok) { std::fprintf(stderr, "%s\n", lua_tostring(state, -1)); lua_pop(state, 1); }
+		passed = passed && ok;
+	}
+	lua_close(state);
+	std::printf("[lua-numeric-policy-selftest] %s\n", passed ? "PASS" : "FAIL");
+	return passed;
+}
+
 void LuaStateWrapper::Initialize() {
+	FloatingPointEnvironment::Enter();
+	if (luaJIT_numeric_policy() != (LUAJIT_NUMERIC_DUAL | LUAJIT_NUMERIC_DOUBLE | (sizeof(void*) == 8 ? LUAJIT_NUMERIC_GC64 : 0))) {
+		RTEAbort("LuaJIT numeric policy mismatch");
+		std::abort();
+	}
 	m_NativeCache.reset();
 	m_GraphWorker.reset();
 	m_CheckpointHeap = CheckpointLua::HeapOwner::Create();
 	m_State = m_CheckpointHeap->State();
+	RegisterFloatingPointChecks(m_State);
 	luabind::open(m_State);
 	tracy::LuaRegister(m_State);
 
@@ -7888,6 +8121,8 @@ void LuaStateWrapper::Initialize() {
 	if (!g_SettingsMan.DisableLuaJIT() && !luaJIT_setmode(m_State, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_ON)) {
 		RTEAbort("Failed to initialize LuaJIT!\nIf this error persists, please disable LuaJIT with \"Settings.ini\" property \"DisableLuaJIT\".");
 	}
+	if (luaJIT_math_policy(m_State) != 1) { std::abort(); }
+	std::printf("[lua-numeric-policy] policy=%u runtime_flags=%08x math=engine fma=off\n", luaJIT_numeric_policy(), luaJIT_runtime_flags(m_State));
 
 	// A state made between two captures still owes the next capture its first table write.
 	luaJIT_arm_tab_write_trap(m_State);
@@ -8948,6 +9183,12 @@ bool LuaMan::RunScriptGraphSelfTest() {
 		LuaStateWrapper& threaded = m_ScriptStates.front();
 		std::vector<uint8_t> blob, again;
 		std::string captureError, restoreError;
+		std::vector<std::string> ownersBefore;
+		VisitScriptOwnedObjects(state, [&ownersBefore](MovableObject* object) {
+			ownersBefore.push_back(std::to_string(object->GetUniqueID()) + " " + object->GetClassName() + " " + object->GetPresetName() +
+			    " registered=" + std::to_string(g_MovableMan.FindObjectByUniqueID(object->GetUniqueID()) == object) +
+			    " scripts=" + std::to_string(object->ObjectScriptsInitialized()));
+		});
 		// A global holding what no capture can name (a class dropped under its instance) is nil after any restore, so the start state is taken twice.
 		const bool normalized = CaptureRoundStartScripts(blob, &captureError) && RestoreRoundStartScripts(blob, &restoreError);
 		const bool captured = normalized && CaptureRoundStartScripts(blob, &captureError);
@@ -8976,6 +9217,9 @@ bool LuaMan::RunScriptGraphSelfTest() {
 		          << " compiled=" << compiled << " restored=" << restored << " globals=" << globalGone << " path=" << pathBack << " cache=" << cacheBack << " births=" << birthsBack
 		          << " registrations=" << registrationsBack << " recaptured_same=" << same << " first_difference=" << firstDifference << "/" << again.size()
 		          << (captureError.empty() ? "" : " capture_error=" + captureError) << (restoreError.empty() ? "" : " restore_error=" + restoreError) << std::endl;
+		if (!normalized) {
+			for (const auto& owner: ownersBefore) std::cout << "[script-graph-selftest] round start Lua owner: " << owner << std::endl;
+		}
 		if (!same && firstDifference < again.size()) {
 			// The tokens only one capture holds name what the restore did not carry.
 			const auto tokens = [](const std::vector<uint8_t>& bytes) {
@@ -12237,7 +12481,7 @@ shared.parent = _AutosaveCaptureProbe
 		const bool mutated = RunScriptString("if _AutosaveCaptureProbe then _AutosaveCaptureProbe.first.tick = 91; _AutosaveCaptureProbe.vector.X = 17; _AutosaveCaptureProbe.open(99); _AutosaveCaptureProbe.controller:SetState(Controller.WEAPON_FIRE, false); _AutosaveCaptureProbe.soundSet.SoundSelectionCycleMode = SoundSet.ALL; _AutosaveCaptureProbe = nil end") == 0;
 		lua_gc(m_State, LUA_GCCOLLECT, 0);
 		try {
-			ownedGraph = copied && mutated && std::async(std::launch::async, [captured] { return captured.Text(); }).get() == reference;
+			ownedGraph = copied && mutated && FloatingPointEnvironment::Async(std::launch::async, [captured] { return captured.Text(); }).get() == reference;
 		} catch (const std::exception& error) { problems.push_back(error.what()); }
 		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] owned capture: " << problem << std::endl;
 		lua_pushvalue(m_State, previous); lua_setglobal(m_State, "_AutosaveCaptureProbe"); lua_pop(m_State, 1);

@@ -768,6 +768,7 @@ static void err_raise_ext(global_State *g, int errcode)
 LJ_NOINLINE void LJ_FASTCALL lj_err_throw(lua_State *L, int errcode)
 {
   global_State *g = G(L);
+  lj_vm_fp_assert();
   lj_trace_abort(g);
   L->status = LUA_OK;
 #if LJ_UNWIND_EXT
@@ -887,6 +888,7 @@ static ptrdiff_t finderrfunc(lua_State *L)
 LJ_NOINLINE void LJ_FASTCALL lj_err_run(lua_State *L)
 {
   ptrdiff_t ef = (LJ_HASJIT && tvref(G(L)->jit_base)) ? 0 : finderrfunc(L);
+  lj_vm_fp_assert();
   if (ef) {
     TValue *errfunc, *top;
     lj_state_checkstack(L, LUA_MINSTACK * 2);  /* Might raise new error. */
@@ -1161,4 +1163,3 @@ LUALIB_API int luaL_error(lua_State *L, const char *fmt, ...)
   lj_err_callermsg(L, msg);
   return 0;  /* unreachable */
 }
-

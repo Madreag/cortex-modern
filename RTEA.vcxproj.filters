@@ -628,6 +628,12 @@
     <ClInclude Include="Source\System\RTETools.h">
       <Filter>System</Filter>
     </ClInclude>
+    <ClInclude Include="Source\System\FloatingPointEnvironment.h">
+      <Filter>System</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\System\DeterministicMath.h">
+      <Filter>System</Filter>
+    </ClInclude>
     <ClInclude Include="Source\System\RTEError.h">
       <Filter>System</Filter>
     </ClInclude>
@@ -1419,6 +1425,9 @@
       <Filter>GUI</Filter>
     </ClCompile>
     <ClCompile Include="Source\System\RTETools.cpp">
+      <Filter>System</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\System\FloatingPointEnvironment.cpp">
       <Filter>System</Filter>
     </ClCompile>
     <ClCompile Include="Source\System\RTEError.cpp">

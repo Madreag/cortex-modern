@@ -1,3 +1,4 @@
+#include "DeterministicMath.h"
 #include "Actor.h"
 #include "CheckpointProperties.h"
 #include "MetricsCollector.h"
@@ -1870,7 +1871,7 @@ void Actor::DropAllInventory() {
 		if (pObject) {
 			// Generate the velocities procedurally
 			velMin = 3.0F;
-			velMax = velMin + std::sqrt(m_SpriteRadius);
+			velMax = velMin + DeterministicSqrt(m_SpriteRadius);
 
 			// Randomize the offset from center to be within the original object
 			gibROffset.SetXY(m_SpriteRadius * 0.35F * RandomNum(), 0);
@@ -1935,7 +1936,7 @@ void Actor::DropAllInventory() {
 void Actor::DropAllGold() {
 	const Material* goldMaterial = g_SceneMan.GetMaterialFromID(g_MaterialGold);
 	float velMin = 3.0F;
-	float velMax = velMin + std::sqrt(m_SpriteRadius);
+	float velMax = velMin + DeterministicSqrt(m_SpriteRadius);
 
 	for (int i = 0; i < static_cast<int>(std::floor(m_GoldCarried)); i++) {
 		Vector dropOffset(m_SpriteRadius * 0.3F * RandomNum(), 0);
@@ -2529,7 +2530,7 @@ void Actor::Update() {
 
 	// But only actually damage ourselves if we're unstable
 	if (m_Status == Actor::UNSTABLE && travelImpulseMagnitudeSqr > (m_TravelImpulseDamage * m_TravelImpulseDamage)) {
-		const float impulse = std::sqrt(travelImpulseMagnitudeSqr) - m_TravelImpulseDamage;
+		const float impulse = DeterministicSqrt(travelImpulseMagnitudeSqr) - m_TravelImpulseDamage;
 		const float damage = std::max(impulse / (m_GibImpulseLimit - m_TravelImpulseDamage) * m_MaxHealth, 0.0F);
 		m_Health -= damage;
 		if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled() && damage > 0) g_MetricsCollector.RecordEvent("impact_damage", this, "unattributed", damage);

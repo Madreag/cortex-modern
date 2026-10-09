@@ -7,6 +7,7 @@
 #define g_ThreadMan ThreadMan::Instance()
 
 #include "BS_thread_pool.hpp"
+#include "FloatingPointEnvironment.h"
 
 #include <algorithm>
 #include <atomic>
@@ -77,6 +78,7 @@ namespace RTE {
 
 		static void Run(Shared& shared) {
 			for (size_t index = shared.next.fetch_add(1, std::memory_order_relaxed); index < shared.count; index = shared.next.fetch_add(1, std::memory_order_relaxed)) {
+				const FloatingPointEnvironment::Scope scope("parallel callback");
 				std::exception_ptr failure;
 				try {
 					shared.work(index);

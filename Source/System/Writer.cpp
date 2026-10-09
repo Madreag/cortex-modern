@@ -1,3 +1,4 @@
+#include "FloatingPointEnvironment.h"
 #include "Writer.h"
 #include "System.h"
 #include "CheckpointArchive.h"
@@ -718,10 +719,13 @@ const std::string& CheckpointText::Text() const {
 		}
 		const auto format = [node] {
 			if (node->deferred) {
-				node->Output().text = std::visit([](const auto& produce) -> std::string {
-					if constexpr (std::is_same_v<std::remove_cvref_t<decltype(produce)>, std::monostate>) throw std::bad_function_call();
-					else return produce();
-				}, node->produce);
+				{
+					const FloatingPointEnvironment::Scope scope("capture callback");
+					node->Output().text = std::visit([](const auto& produce) -> std::string {
+						if constexpr (std::is_same_v<std::remove_cvref_t<decltype(produce)>, std::monostate>) throw std::bad_function_call();
+						else return produce();
+					}, node->produce);
+				}
 				if (!node->peerMark.empty()) StripPeerMarks(node->Output().text, node->peerMark, node->Output().peerRuns);
 				node->Output().formatted.store(true, std::memory_order_release);
 				node->produce.emplace<std::monostate>();
@@ -2305,8 +2309,8 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			      "owned_checkpoint_caches_timer_values_without_formatting_or_binding",
 			      "same_values=" + std::to_string(first.SameValues(fresh)) + " reused=" + std::to_string(timerCache.Reused()) +
 			          " timeless_calls=" + std::to_string(timelessCalls->load()));
-			auto firstText = std::async(std::launch::async, [firstImage] { return firstImage.Text(); });
-			auto secondText = std::async(std::launch::async, [secondImage] { return secondImage.Text(); });
+			auto firstText = FloatingPointEnvironment::Async(std::launch::async, [firstImage] { return firstImage.Text(); });
+			auto secondText = FloatingPointEnvironment::Async(std::launch::async, [secondImage] { return secondImage.Text(); });
 			const std::string firstBound = firstText.get();
 			const std::string secondBound = secondText.get();
 			check(firstBound == firstReference && secondBound == secondReference && firstReference != secondReference &&
@@ -2592,7 +2596,7 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		std::vector<std::future<std::string>> readers;
 		std::promise<void> start;
 		const auto ready = start.get_future().share();
-		for (int index = 0; index < 4; ++index) readers.push_back(std::async(std::launch::async, [readersText, ready] { ready.wait(); return readersText.Text(); }));
+		for (int index = 0; index < 4; ++index) readers.push_back(FloatingPointEnvironment::Async(std::launch::async, [readersText, ready] { ready.wait(); return readersText.Text(); }));
 		start.set_value();
 		bool same = true;
 		for (auto& reader: readers) same = reader.get() == "read|shared" && same;
@@ -2608,7 +2612,7 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		payload.reset();
 		auto equal = chain(CheckpointText::Deferred([] { return std::string("a"); }, 0, "OwnedCheckpointDeepA1"));
 		auto changed = chain(CheckpointText(std::string("b")));
-		auto deep = std::async(std::launch::async, [first = std::move(first), equal = std::move(equal), changed = std::move(changed), witness]() mutable {
+		auto deep = FloatingPointEnvironment::Async(std::launch::async, [first = std::move(first), equal = std::move(equal), changed = std::move(changed), witness]() mutable {
 			bool result = !witness.expired() && first.SameValues(equal) && !first.SameValues(changed);
 			auto reused = changed.ReuseChildren(first);
 			result = reused.SameValues(changed) && reused.Text() == "b" && first.Text() == "a" && result;

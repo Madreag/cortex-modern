@@ -1298,6 +1298,7 @@ static int crec_call(jit_State *J, RecordFFData *rd, GCcdata *cd)
       func = emitir(IRT(IR_CARG, IRT_NIL), func,
 		    lj_ir_kint(J, ctype_typeid(cts, ct)));
     tr = emitir(IRT(IR_CALLXS, t), crec_call_args(J, rd, cts, ct), func);
+    lj_ir_call(J, IRCALL_lj_vm_fp_assert);
     if (ctype_isbool(ctr_info)) {
       if (frame_islua(J->L->base-1) && bc_b(frame_pc(J->L->base-1)[-1]) == 1) {
 	/* Don't check result if ignored. */
