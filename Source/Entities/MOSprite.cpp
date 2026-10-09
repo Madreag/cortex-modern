@@ -1,3 +1,4 @@
+#include "DeterministicMath.h"
 #include "MOSprite.h"
 #include "HDFirearm.h"
 #include "CheckpointArchive.h"
@@ -95,7 +96,7 @@ int MOSprite::Create() {
 		// Calc maximum dimensions from the Pos, based on the sprite
 		float maxX = std::max(std::fabs(m_SpriteOffset.GetX()), std::fabs(static_cast<float>(m_aSprite[0]->w) + m_SpriteOffset.GetX()));
 		float maxY = std::max(std::fabs(m_SpriteOffset.GetY()), std::fabs(static_cast<float>(m_aSprite[0]->h) + m_SpriteOffset.GetY()));
-		m_SpriteRadius = std::sqrt((maxX * maxX) + (maxY * maxY));
+		m_SpriteRadius = DeterministicSqrt((maxX * maxX) + (maxY * maxY));
 		m_SpriteDiameter = m_SpriteRadius * 2.0F;
 	} else
 		return -1;
@@ -125,7 +126,7 @@ int MOSprite::Create(ContentFile spriteFile,
 	// Calc maximum dimensions from the Pos, based on the sprite
 	float maxX = std::max(std::fabs(m_SpriteOffset.GetX()), std::fabs(static_cast<float>(m_aSprite[0]->w) + m_SpriteOffset.GetX()));
 	float maxY = std::max(std::fabs(m_SpriteOffset.GetY()), std::fabs(static_cast<float>(m_aSprite[0]->h) + m_SpriteOffset.GetY()));
-	m_SpriteRadius = std::sqrt((maxX * maxX) + (maxY * maxY));
+	m_SpriteRadius = DeterministicSqrt((maxX * maxX) + (maxY * maxY));
 	m_SpriteDiameter = m_SpriteRadius * 2.0F;
 
 	return 0;

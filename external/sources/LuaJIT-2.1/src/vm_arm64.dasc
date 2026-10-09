@@ -361,6 +361,13 @@
 static void build_subroutines(BuildCtx *ctx)
 {
   |.code_sub
+  |->vm_nummode:
+  |.if DUALNUM
+  |  mov w0, #1
+  |.else
+  |  mov w0, #0
+  |.endif
+  |  ret
   |
   |//-----------------------------------------------------------------------
   |//-- Return handling ----------------------------------------------------
@@ -1465,18 +1472,18 @@ static void build_subroutines(BuildCtx *ctx)
   |
   |.macro math_extern, func
   |  .ffunc_n math_ .. func
-  |  bl extern func
+  |  bl extern lj_vm_math_ .. func
   |  b ->fff_resn
   |.endmacro
   |
   |.macro math_extern2, func
   |  .ffunc_nn math_ .. func
-  |  bl extern func
+  |  bl extern lj_vm_math_ .. func
   |  b ->fff_resn
   |.endmacro
   |
   |.ffunc_n math_sqrt
-  |  fsqrt d0, d0
+  |  bl extern lj_vm_math_sqrt
   |->fff_resn:
   |  ldr PC, [BASE, FRAME_PC]
   |  str d0, [BASE, #-16]
@@ -1488,7 +1495,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  ldr FARG1, [BASE]
   |   bne ->fff_fallback			// Need exactly 1 argument.
   |  checknum CARG1, ->fff_fallback
-  |  bl extern log
+  |  bl extern lj_vm_math_log
   |  b ->fff_resn
   |
   |  math_extern log10
@@ -1506,13 +1513,8 @@ static void build_subroutines(BuildCtx *ctx)
   |  math_extern2 atan2
   |  math_extern2 fmod
   |
-  |.ffunc_2 math_ldexp
-  |  ldr FARG1, [BASE]
-  |  checknum CARG1, ->fff_fallback
-  |  checkint CARG2, ->fff_fallback
-  |  sxtw CARG1, CARG2w
-  |  bl extern ldexp			// (double x, int exp)
-  |  b ->fff_resn
+  |.ffunc math_ldexp
+  |  b ->fff_fallback
   |
   |.ffunc_n math_frexp
   |  add CARG1, sp, TMPDofs
@@ -2833,7 +2835,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  ins_arithload FARG1, FARG2
     |  ins_arithfallback ins_arithcheck_num
     |.if "fpins" == "fpow"
-    |  bl extern pow
+    |  bl extern lj_vm_math_pow
     |.else
     |  fpins FARG1, FARG1, FARG2
     |.endif
@@ -4369,4 +4371,3 @@ static void emit_asm_debug(BuildCtx *ctx)
     break;
   }
 }
-
