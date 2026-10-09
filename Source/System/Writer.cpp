@@ -507,7 +507,8 @@ std::pmr::memory_resource* CheckpointText::ProducerStorage() {
 }
 
 CheckpointText CheckpointText::DeferredOwned(CapturedProducer produce, size_t ownedBytes, std::string identity, std::string peerMark) {
-	auto data = Data::Create();
+	// The allocation scope survives callable construction even when the batch flag ends.
+	auto data = std::allocate_shared<Data>(CheckpointAllocator<Data>(CheckpointBuffer::s_Arena.get()), produce.storage);
 	data->produce = std::move(produce);
 	data->deferred = true;
 	data->ownedBytes = ownedBytes;
@@ -2412,6 +2413,26 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			const bool kept = !witness.expired();
 			discarded = CheckpointText();
 			check(kept && witness.expired() && calls->load() == 2, "captured_producer_releases_unformatted_fields_after_arena_scope");
+		}
+		{
+			struct EndBatchOnMove {
+				std::string value;
+				std::unique_ptr<CheckpointWriter::BatchScope>* batch;
+				EndBatchOnMove(std::string text, std::unique_ptr<CheckpointWriter::BatchScope>* owner) : value(std::move(text)), batch(owner) {}
+				EndBatchOnMove(const EndBatchOnMove&) = default;
+				EndBatchOnMove(EndBatchOnMove&& other) noexcept : value(std::move(other.value)), batch(other.batch) { batch->reset(); }
+				std::string operator()() { return value; }
+			};
+			CheckpointText frozen;
+			{
+				auto batch = std::make_unique<CheckpointWriter::BatchScope>(true);
+				CheckpointBuffer::AllocationScope allocation(true);
+				EndBatchOnMove source("retained after batch construction", &batch);
+				frozen = CheckpointText::Deferred(std::move(source));
+			}
+			const auto actual = std::async(std::launch::async, [frozen] { return std::pair{frozen.Text(), frozen.SharedText()}; }).get();
+			check(actual.first == "retained after batch construction" && actual.second == actual.first,
+			    "captured_producer_retains_its_arena_when_construction_ends_the_batch");
 		}
 		auto attempts = std::make_shared<std::atomic<int>>(0);
 		const auto flaky = CheckpointText::Deferred([attempts] {
