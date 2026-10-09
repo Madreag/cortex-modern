@@ -47,6 +47,7 @@ namespace RTE {
 		std::string displayName = "Player";
 		std::string platform = "unknown";
 		bool autoReady = true;
+		std::optional<NetMatchConfig> readyForSetup; //!< A reconnect retains Ready only for this exact setup in this session.
 		bool autoStart = true;
 		/// Host: a Start with someone not ready counts down this long and then starts with everyone present; 0 waits for every Ready.
 		uint32_t startCountdownMs = 0;

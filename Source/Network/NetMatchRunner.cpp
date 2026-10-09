@@ -583,6 +583,7 @@ namespace RTE {
 		lobbyConfig.displayName = m_Config.sessionConfig.displayName;
 		lobbyConfig.platform = m_Config.sessionConfig.localIdentity.platform;
 		lobbyConfig.autoReady = m_Config.autoReady;
+		lobbyConfig.readyForSetup = m_Config.readyForSetup;
 		lobbyConfig.autoStart = m_Config.autoStart && relayReady;
 		lobbyConfig.startCountdownMs = m_Config.startCountdownMs;
 		lobbyConfig.session = &session;

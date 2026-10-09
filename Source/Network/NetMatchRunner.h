@@ -101,6 +101,7 @@ namespace RTE {
 		bool autoStart = true;
 		bool waitForSlot = false; //!< A joiner a world refused because its slots are held knocks again for one to open, within the join's wait.
 		std::atomic<bool>* readyRequested = nullptr;
+		std::optional<NetMatchConfig> readyForSetup; //!< Reconnect Ready must match this prior setup and session.
 		std::atomic<bool>* startRequested = nullptr;
 		std::atomic<bool>* cancelStartRequested = nullptr; //!< Host: withdraws its Start and its countdown.
 		std::atomic<bool>* hostSetupOpen = nullptr; //!< Host: its setup screen is open.
