@@ -8693,7 +8693,7 @@ namespace RTE {
 				hostTransport.AdvanceTimeMs(5);
 				clientTransport.AdvanceTimeMs(5);
 			}
-			if (!host->IsRunning() || !host->ProposePeerHold(2, 80, &why) || !host->AnyHeldAISeat()) {
+			if (!host->IsRunning() || !host->ProposePeerHold(2, 80 + c_NetSeatDisconnectSilenceMs, &why) || !host->AnyHeldAISeat()) {
 				why = "round " + std::to_string(round) + " did not hold seat 2: " + why;
 				return false;
 			}

@@ -6496,7 +6496,7 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error, uint64_t trailFrames) {
 		NET_PLANE_CHECK();
-		if (!IsRunning() || m_Config.localPeerId != GetHostPeerId() || !HasHeldAISeat(peerId) ||
+		if (!IsRunning() || m_Config.localPeerId != GetHostPeerId() || peerId == GetHostPeerId() || !HasHeldAISeat(peerId) ||
 		    peerId == 0 || peerId > 4 || transport == c_InvalidNetPeerId || incarnation <= m_Config.peerIncarnations[peerId] ||
 		    frame <= std::max(m_Stats.nextFrame, SentInputThrough()) || m_NextTimingRevision == UINT64_MAX) {
 			if (error) *error = "private reclaim requires a held incarnation and a future activation";
@@ -10117,10 +10117,7 @@ namespace RTE {
 		// A leaver's team falls to its next surviving human peer, so the units play on. The lockstep gate synchronizes leave
 		// knowledge, so every peer re-resolves identically - except for a leave heard before its frame: the leaver's own
 		// inputs drive its units until that frame is committed, so the round re-resolves them there.
-		const auto leave = m_PeerLeaveFrames.find(ownerPeerId);
-		const bool heardAhead = leave != m_PeerLeaveFrames.end() && m_LeavesHeardAhead.contains(ownerPeerId) && (!frame || *frame < leave->second);
-		if (UsesBoundedWait() || m_Playback ? frame && IsPeerGoneAtFrame(ownerPeerId, *frame)
-		                                 : leave != m_PeerLeaveFrames.end() && !heardAhead) {
+		if (frame && IsPeerGoneAtFrame(ownerPeerId, *frame)) {
 			const uint8_t survivor = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
 			// The host produces AI controllers for a departed team while the round continues.
 			ownerPeerId = survivor != 0 ? survivor : (IsRunning() || IsHoldingSeatForReclaim() ? GetHostPeerId() : survivor);
@@ -12287,8 +12284,6 @@ namespace RTE {
 			const auto held = m_AiHeldSeats.find(peerId);
 			if (after != releases->second.begin() && (held == m_AiHeldSeats.end() || std::prev(after)->first >= held->second)) return false;
 		}
-		// The unbounded policies stop every peer's commits until the host resolves a dropped seat, so their set reads the same everywhere.
-		if (!UsesBoundedWait()) return IsSeatHeldForReclaim(peerId);
 		const auto seat = m_SeatTransitions.find(peerId);
 		if (seat == m_SeatTransitions.end() || seat->second.empty() || seat->second.begin()->first > frame) return false;
 		if (const auto past = SeatStateBeforeNewest(peerId, frame)) return *past == SeatTransition::Held;

@@ -896,7 +896,7 @@ static std::string ResyncSaveName() {
 			const NetMatchConfig& round = m_Runner ? m_Runner->GetMatchConfig() : m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig;
 			if (m_State == NetMatchServiceState::Completed && round.persistentWorld) {
 				m_State = NetMatchServiceState::Failed;
-				m_ErrorText = m_IsHost ? "The world is closed" : "The host left the match";
+				m_ErrorText = m_IsHost ? "The world is closed" : "The host ended the match";
 				m_StatusText = m_ErrorText;
 				if (!m_IsHost) NoteHostEndedTheMatchLocked();
 				if (error) *error = m_ErrorText;
@@ -1249,7 +1249,7 @@ static std::string ResyncSaveName() {
 		if (!m_Session->IsReady()) {
 			m_State = NetMatchServiceState::Failed;
 			if (!m_IsHost && ClientSessionLossIsHostDeparture(*m_Session)) {
-				m_StatusText = "The host left the match";
+				m_StatusText = "Could not reach the host - the match can be rejoined";
 				m_ErrorText = m_StatusText;
 			} else {
 				m_StatusText = "Resync unavailable";
@@ -1681,7 +1681,7 @@ static std::string ResyncSaveName() {
 				// A resync that died with the host's session is the departure itself, not a resync fault.
 				const bool lostHost = !m_IsHost &&
 				    (m_Runner->DidLoseHostDuringSetup() || (m_Session && ClientSessionLossIsHostDeparture(*m_Session)));
-				m_StatusText = lostHost ? "The host left the match" : "Resync failed";
+				m_StatusText = lostHost ? "Could not reach the host - the match can be rejoined" : "Resync failed";
 				m_ErrorText = lostHost ? m_StatusText : error;
 			}
 			m_WorkerDone = true;
@@ -2166,7 +2166,7 @@ static std::string ResyncSaveName() {
 				                                                      m_Session && m_Session->HasReject(), m_Session && m_Session->HasReject() ? m_Session->GetRejectReason() : NetRejectReason::InternalError,
 				                                                      m_Runner->DidLoseHostDuringSetup(), error == "timed out waiting for lockstep start",
 				                                                      error == NetMatchRunner::c_SeatStartsHeld);
-				m_ErrorText = lostHost ? "The host left the match" :
+				m_ErrorText = lostHost ? "Could not reach the host - the match can be rejoined" :
 				              missingPlayers ? "The other players left the match" :
 				              error.starts_with("rematch roster") ? "The match could not return to the lobby" : error;
 				m_StatusText = lostHost || missingPlayers ? m_ErrorText : "Rematch setup failed";
@@ -2527,7 +2527,7 @@ static std::string ResyncSaveName() {
 			m_PendingLobbyBytes = 0;
 			// A worker that already named the host's departure keeps that verdict; the caller's bare
 			// pump error would demote it back to a generic fault.
-			if (m_ErrorText == "The host left the match") {
+			if (m_ErrorText == "Could not reach the host - the match can be rejoined") {
 				m_StatusText = m_ErrorText;
 			} else {
 				m_StatusText = "Match stopped";
@@ -2654,8 +2654,6 @@ static std::string ResyncSaveName() {
 			m_HeldRejoinDriving = false;
 			heldSeatNeedsAnswer = m_IsHost && m_Coordinator && m_Coordinator->AnyHeldAISeat();
 			if (m_IsHost) m_ReconnectHost.SetMatchEnded();
-			// A terminal host departure without a successor ends the round for this seat.
-			if (!m_IsHost && m_Coordinator && m_Coordinator->GetPeerLeaveFrames().contains(m_Coordinator->GetHostPeerId())) NoteHostEndedTheMatchLocked();
 			if (heldSeatNeedsAnswer) m_KeepEndedDirectoryLease = true;
 			DrainPendingSessionEventsLocked(false);
 			// The survivors hear the end before anything here waits on a disk: the last checkpoint's archive may still be writing.
@@ -3228,9 +3226,9 @@ static std::string ResyncSaveName() {
 			if (m_LandedWithoutFrame) return;
 			if (m_FailedWithoutFrame) {
 				m_LandedWithoutFrame = true;
-				m_ErrorText = "The host left the match";
+				m_ErrorText = "Could not reach the host - the match can be rejoined";
 				m_StatusText = m_ErrorText;
-				System::PrintDiagnosticLine("[net-match] resync failed: The host left the match before this seat committed a frame; nothing to reclaim, landing");
+				System::PrintDiagnosticLine("[net-match] recovery attempt failed before a frame was committed; retaining the seat for retry");
 				return;
 			}
 		}
@@ -10560,7 +10558,7 @@ static std::string ResyncSaveName() {
 					                            "; the others play on under a new host");
 					if (applying) replica->CarryApplicationToNextHost();
 				}
-				m_StatusText = changingHost ? std::string(c_NetMatchChangingHostLine) : lostHost ? "The host left the match"
+				m_StatusText = changingHost ? std::string(c_NetMatchChangingHostLine) : lostHost ? "Could not reach the host - the match can be rejoined"
 				                        : SetupFailureStatus(m_Session.get(), noDirectRoute, (m_RelayAttempted && noDirectRoute) || error.starts_with("Relay "));
 				m_ErrorText = lostHost ? m_StatusText : SetupFailureDetail(m_Session.get(), error);
 				if (error == NetDirectoryClient::c_CapacityNotice) m_StatusText = m_ErrorText = error;
