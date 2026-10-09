@@ -447,6 +447,7 @@ namespace RTE {
 		uint8_t successorPeerId = 0;
 		NetHash32 configHash{};
 		uint64_t appliedFrame = 0;
+		uint64_t preparedFrame = 0; //!< Highest complete input frame retained for the handover, even before simulation.
 		uint64_t completeFrom = 0;
 		uint64_t boundary = 0;
 		uint64_t frame = 0;
@@ -726,6 +727,8 @@ namespace RTE {
 		/// Advertised in Ack.receivedMask; the older peer decodes the Ack and ignores receivedMask.
 		static constexpr uint32_t c_FrameWindowCapabilityMask = 0x80000000U;
 		static constexpr uint32_t c_InputAcceptedMask = 0x40000000U;
+		static constexpr uint32_t c_FramePreparedMask = 0x04000000U;
+		static constexpr uint16_t c_FramePreparedVersion = 50;
 		/// Asks the named sender (the low byte) to resend its ticks from highestContiguousFrame on the reliable lane; an older peer ignores it.
 		static constexpr uint32_t c_FrameResendRequestMask = 0x20000000U;
 		/// The sender goes quiet after highestContiguousFrame, the last frame it fed, for the reason in the low byte: the host holds
@@ -1084,7 +1087,7 @@ namespace RTE {
 
 		//! Frames committed and not yet consumed: the round's runway.
 		size_t ReadyFrameCount() const { NET_PLANE_CHECK(); return m_ReadyFrames.size(); }
-		bool HasReadyFrame(uint64_t frame) const { NET_PLANE_CHECK(); return !NeedsMigrationSnapshot() && !m_ReadyFrames.empty() && m_ReadyFrames.front().frame == frame; }
+		bool HasReadyFrame(uint64_t frame) const { NET_PLANE_CHECK(); return !NeedsMigrationSnapshot() && !m_ReadyFrames.empty() && m_ReadyFrames.front().frame == frame && PreparedFrameReplicated(frame); }
 		/// The local frames already queued for a future frame; the local-actor preview runs them early.
 		bool PeekLocalFrames(uint64_t frame, std::vector<ControllerFrame>& outFrames) const;
 		bool PeekLocalInput(uint64_t frame, NetLockstepFrame& outFrame) const { NET_PLANE_CHECK(); return FindLocalInput(frame, outFrame); }
@@ -2103,6 +2106,12 @@ namespace RTE {
 		uint8_t m_ReplayOpeningAuthority = 0;
 		uint64_t m_ReplayOpeningGeneration = 0;
 		std::map<uint64_t, NetGameHostAuthority> m_AuthorityEvents;
+		std::optional<uint64_t> m_LocalPreparedFrame, m_LastPreparedSentFrame;
+		std::map<uint8_t, uint64_t> m_PreparedFrameReceipts;
+		uint64_t m_LastPreparedSentMs = 0;
+		bool UsesPreparedFrameReceipts() const;
+		bool PreparedFrameReplicated(uint64_t frame) const;
+		void PublishPreparedFrame(uint64_t nowMs);
 		std::map<uint64_t, std::map<uint8_t, std::vector<ControllerFrame>>> m_RemoteFrames; //!< frame -> (peerId -> frames)
 		std::map<uint64_t, std::vector<NetGameCommand>> m_LocalCommands;
 		std::map<uint64_t, std::map<uint8_t, std::vector<NetGameCommand>>> m_RemoteCommands; //!< frame -> (peerId -> commands)
