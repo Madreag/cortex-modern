@@ -1,3 +1,4 @@
+#include "DeterministicMath.h"
 #include "Arm.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
@@ -414,7 +415,7 @@ void Arm::AccountForHeldDeviceRecoil(const HeldDevice* heldDevice, Vector& targe
 		if (totalGripStrength > 0.0F) {
 			// Diminish recoil effect when body is horizontal so that the device doesn't get pushed into terrain when prone.
 			float rotAngleScalar = std::abs(DeterministicCos(m_Parent->GetRotAngle()));
-			float recoilScalar = std::sqrt(std::min(heldDevice->GetRecoilForce().GetMagnitude() / totalGripStrength, 0.7F)) * rotAngleScalar;
+			float recoilScalar = DeterministicSqrt(std::min(heldDevice->GetRecoilForce().GetMagnitude() / totalGripStrength, 0.7F)) * rotAngleScalar;
 			recoilScalar *= heldDevice->GetVisualRecoilMultiplier();
 
 			targetOffset.SetX(targetOffset.GetX() * (1.0F - recoilScalar));

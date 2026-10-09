@@ -1,3 +1,4 @@
+#include "FloatingPointEnvironment.h"
 #include "ActivityMan.h"
 #include "AutosaveStore.h"
 #include "MetricsCollector.h"
@@ -255,7 +256,7 @@ namespace {
 			std::optional<uint64_t> writingTick; //!< The capture the writer held when this one arrived.
 		};
 
-		AutosaveArchiveWriter() : m_Worker([this] { Write(); }), m_Releaser([this] { Release(); }) {}
+		AutosaveArchiveWriter() : m_Worker(FloatingPointEnvironment::StartThread([this] { Write(); })), m_Releaser(FloatingPointEnvironment::StartThread([this] { Release(); })) {}
 		~AutosaveArchiveWriter() {
 			{
 				std::lock_guard lock(m_Mutex);
@@ -1890,7 +1891,7 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 		std::vector<std::string> frozenProblems, deferred;
 		const bool frozenCaptured = state.CaptureScriptGraph(frozenText, frozenProblems, true);
 		try {
-			if (frozenCaptured) std::async(std::launch::async, [frozenText] { return frozenText.Text(); }).get();
+			if (frozenCaptured) FloatingPointEnvironment::Async(std::launch::async, [frozenText] { return frozenText.Text(); }).get();
 		} catch (const ScriptGraphRefusal& refusal) {
 			deferred = refusal.problems;
 		}

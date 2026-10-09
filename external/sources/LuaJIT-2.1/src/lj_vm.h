@@ -31,6 +31,25 @@ LJ_ASMF void lj_vm_unwind_stub(void);
 #endif
 
 /* Miscellaneous functions. */
+LJ_FUNC void lj_vm_fp_assert(void);
+LJ_FUNC double lj_vm_math_sin(double);
+LJ_FUNC double lj_vm_math_cos(double);
+LJ_FUNC double lj_vm_math_tan(double);
+LJ_FUNC double lj_vm_math_asin(double);
+LJ_FUNC double lj_vm_math_acos(double);
+LJ_FUNC double lj_vm_math_atan(double);
+LJ_FUNC double lj_vm_math_sinh(double);
+LJ_FUNC double lj_vm_math_cosh(double);
+LJ_FUNC double lj_vm_math_tanh(double);
+LJ_FUNC double lj_vm_math_exp(double);
+LJ_FUNC double lj_vm_math_log(double);
+LJ_FUNC double lj_vm_math_log2(double);
+LJ_FUNC double lj_vm_math_log10(double);
+LJ_FUNC double lj_vm_math_sqrt(double);
+LJ_FUNC double lj_vm_math_pow(double, double);
+LJ_FUNC double lj_vm_math_atan2(double, double);
+LJ_FUNC double lj_vm_math_fmod(double, double);
+LJ_FUNC double lj_vm_math_ldexp(double, int32_t);
 #if LJ_TARGET_X86ORX64
 LJ_ASMF int lj_vm_cpuid(uint32_t f, uint32_t res[4]);
 #endif
@@ -78,7 +97,7 @@ LJ_ASMF double lj_vm_ceil_sf(double);
 #ifdef LUAJIT_NO_LOG2
 LJ_ASMF LJ_CONSTF double lj_vm_log2(double);
 #else
-#define lj_vm_log2	log2
+#define lj_vm_log2	lj_vm_math_log2
 #endif
 #if !(defined(_LJ_DISPATCH_H) && LJ_TARGET_MIPS)
 LJ_ASMF int32_t LJ_FASTCALL lj_vm_modi(int32_t, int32_t);
