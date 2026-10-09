@@ -18950,15 +18950,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return ok;
 		}
 
-		// followups-1 (second read HIGH-3): NetLockstep.cpp ResolveActorOwner hands a team with no surviving
-		// human to matchConfig.hostPeerId without asking whether the host itself departed, and IsActorOwnerGone
-		// no longer stands those units down while the round runs. A survivor told the host has left would
-		// therefore play on with actors whose producer is gone - and it could not reach the other survivor
-		// either, since the host is the star's hub. The ruled behaviour is that the round ends for everyone.
-		// This arm pins the RECEIVER side of that contract: it puts the host's own PeerLeft notice on the
-		// wire and reads what the survivors do with it. The host's own send path is another arm's business.
+		// A departure fact cannot authorize End or let surviving clients produce the host's units.
+		// The receiver keeps its exact shared prefix until a configured host change is agreed.
+		// This raw fixture has no successor endpoints; configured succession is covered by the migration matrix.
 		bool TestDepartedHostEndsTheRound(std::string* error) {
-			const char* name = "departed_host_ends_the_round";
+			const char* name = "host_departure_waits_for_authority";
 			const uint16_t port = 48490;
 			const uint64_t sessionId = 0x7000000000048490ULL;
 			LoopbackTransport hostT, aT, bT;
@@ -18974,6 +18970,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			const auto config = [&](uint8_t peer, std::map<uint8_t, NetPeerId> transports) {
 				NetLockstepConfig result;
 				result.sessionId = sessionId;
+				result.roundId = peer == 1 ? sessionId + 1 : 0;
 				result.timeoutMs = 5000;
 				result.localPeerId = peer;
 				result.peerCount = 3;
@@ -18986,10 +18983,27 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return result;
 			};
 			NetLockstepCoordinator host, clientA, clientB;
+			uint64_t now = 0;
+			bool pumpHost = true;
+			const auto step = [&] {
+				if (pumpHost) host.Tick(now);
+				clientA.Tick(now); clientB.Tick(now);
+				hostT.AdvanceTimeMs(5); aT.AdvanceTimeMs(5); bT.AdvanceTimeMs(5);
+				now += 5;
+			};
+			const auto drive = [&](const std::function<bool()>& done, std::string* detail, uint64_t budget = 4000) {
+				const uint64_t until = now + budget;
+				while (now <= until) {
+					step();
+					if (done()) return true;
+				}
+				if (detail) *detail = "the host-departure fixture did not reach its initial shared prefix";
+				return false;
+			};
 			if (!host.Start(hostT, config(1, {{2, 1}, {3, 2}}), error) ||
 			    !clientA.Start(aT, config(2, {{1, 1}}), error) ||
 			    !clientB.Start(bT, config(3, {{1, 1}}), error) ||
-			    !DriveTrio(hostT, aT, bT, host, clientA, clientB,
+			    !drive(
 			               [&] { return host.IsRunning() && clientA.IsRunning() && clientB.IsRunning(); }, error)) {
 				return false;
 			}
@@ -19001,7 +19015,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				}
 			}
 			size_t committed = 0;
-			if (!DriveTrio(hostT, aT, bT, host, clientA, clientB, [&] {
+			if (!drive( [&] {
 					NetLockstepReadyFrame ready;
 					while (host.PopReadyFrame(ready)) {}
 					while (clientB.PopReadyFrame(ready)) {}
@@ -19032,34 +19046,40 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			    !hostT.Send(2, NetTransportLane::ControlReliable, bytes, error)) {
 				return false;
 			}
-			DriveTrio(hostT, aT, bT, host, clientA, clientB,
-			          [&] { return clientA.GetPeerLeaveFrames().contains(1) && clientB.GetPeerLeaveFrames().contains(1); }, nullptr, 2000);
-			if (!clientA.GetPeerLeaveFrames().contains(1) || !clientB.GetPeerLeaveFrames().contains(1)) {
-				*error = "the survivors never recorded the host's departure";
-				return false;
-			}
-			// Bounded driving, not a timeout: DriveTrio restarts its clock, so no missing-frame grace can fire.
-			DriveTrio(hostT, aT, bT, host, clientA, clientB, [&] { return !clientA.IsRunning() && !clientB.IsRunning(); }, nullptr, 500);
-			bool passed = true;
-			for (NetLockstepCoordinator* survivor: {&clientA, &clientB}) {
-				const uint64_t at = survivor->GetStats().nextFrame;
-				const uint8_t owner = survivor->ResolveActorOwner(hostTeamActor, 0, false);
-				const bool gone = survivor->IsActorOwnerGone(hostTeamActor, 0, false, at);
-				const bool stopped = !survivor->IsRunning();
-				const std::string& reason = survivor->GetStats().timeoutReason;
-				const bool named = reason.find(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) != std::string::npos;
-				// Nobody may be left playing an actor whose producer has departed.
-				const bool ok = stopped && named && !(owner == 1 && !gone);
-				passed &= ok;
-				std::cout << "[net-lockstep-selftest] " << (ok ? "PASS " : "FAIL ") << name
-				          << " peer=" << static_cast<int>(survivor->GetConfig().localPeerId)
-				          << " running=" << (survivor->IsRunning() ? 1 : 0)
-				          << " state=" << static_cast<int>(survivor->GetState())
-				          << " host_team_owner=" << static_cast<int>(owner) << " owner_gone=" << (gone ? 1 : 0)
-				          << " reason=" << reason << std::endl;
-			}
-			if (!passed && error) *error = "a survivor kept playing after the host departed; the rows above carry the observed values";
-			return passed;
+			const std::array<NetLockstepCoordinator*, 2> survivors{&clientA, &clientB};
+			const std::array<uint64_t, 2> next{clientA.GetStats().nextFrame, clientB.GetStats().nextFrame};
+			if (!clientA.QueueLocalInput(next[0], {MakeFrame(200, next[0] + 1)}, {}, error) ||
+			    !clientB.QueueLocalInput(next[1], {MakeFrame(300, next[1] + 1)}, {}, error)) return false;
+			const auto waitWithoutAuthorityChange = [&](uint64_t duration, const char* phase) {
+				const uint64_t until = now + duration;
+				while (now < until) {
+					step();
+					for (size_t index = 0; index < survivors.size(); ++index) {
+						NetLockstepCoordinator& survivor = *survivors[index];
+						NetLockstepReadyFrame extra;
+						if (!survivor.IsRunning() || survivor.IsMigrating() || survivor.GetHostPeerId() != 1 ||
+						    survivor.GetConfig().migrationGeneration != 0 || survivor.GetStats().nextFrame != next[index] ||
+						    survivor.PopReadyFrame(extra) || survivor.AnyHeldAISeat() || survivor.GetPeerLeaveFrames().contains(1) ||
+						    survivor.ResolveActorOwner(hostTeamActor, 0, false) != 1 ||
+						    survivor.IsActorOwnerGone(hostTeamActor, 0, false, next[index])) {
+							*error = std::string(phase) + ": a departure fact or missing host invented an end, producer or simulation frame; " + survivor.BuildReportJson();
+							return false;
+						}
+					}
+				}
+				for (size_t index = 0; index < survivors.size(); ++index)
+					std::cout << "[net-lockstep-selftest] PASS " << name << " phase=" << phase
+					          << " peer=" << static_cast<int>(survivors[index]->GetConfig().localPeerId)
+					          << " next_frame=" << next[index] << " owner=1 generation=0 waited_ms=" << duration << std::endl;
+				return true;
+			};
+			// PeerLeft is an authenticated fact, not an explicit End. Live keepalives prevent any loss decision.
+			if (!waitWithoutAuthorityChange(2000, "live_host_notice")) return false;
+			hostT.Stop();
+			pumpHost = false;
+			// This raw fixture names no successor endpoints. Actual absence cannot invent an authority:
+			// all supplied survivor input waits on the same prefix until a configured host change is agreed.
+			return waitWithoutAuthorityChange(16000, "silent_host_without_successor_agreement");
 		}
 
 		// The shape both remaining follow-ups need: host=1 on team 0, leaver=2 and survivor=3 on team 1, a
@@ -28721,15 +28741,20 @@ namespace {
 				for (bool teammate: {false, true}) leavePassed &= TestDepartedActorsGoToAI(policy, dropped, teammate, &error);
 			}
 		}
-		std::string followupError;
 		bool followupsPassed = true;
-		followupsPassed &= TestPausedFramesDoNotSpendTheTickBudget(&followupError);
-		followupsPassed &= TestPausedFramesResetOnResyncRelaunch(&followupError);
-		followupsPassed &= TestDepartedHostEndsTheRound(&followupError);
-		followupsPassed &= TestReseatWithoutAReadoptionKeepsItsSeat(&followupError);
-		followupsPassed &= TestMidLeaveSaveAgreesAcrossPeers(&followupError);
+		const auto followup = [&](const char* name, const auto& check) {
+			std::string detail;
+			if (!check(&detail)) {
+				followupsPassed = false;
+				(void)fail(std::string(name) + ": " + detail);
+			}
+		};
+		followup("TestPausedFramesDoNotSpendTheTickBudget", TestPausedFramesDoNotSpendTheTickBudget);
+		followup("TestPausedFramesResetOnResyncRelaunch", TestPausedFramesResetOnResyncRelaunch);
+		followup("TestDepartedHostEndsTheRound", TestDepartedHostEndsTheRound);
+		followup("TestReseatWithoutAReadoptionKeepsItsSeat", TestReseatWithoutAReadoptionKeepsItsSeat);
+		followup("TestMidLeaveSaveAgreesAcrossPeers", TestMidLeaveSaveAgreesAcrossPeers);
 		if (!leavePassed) (void)fail(error);
-		if (!followupsPassed) (void)fail(followupError);
 		aggregatePassed &= migrationsPassed && leavePassed && followupsPassed;
 
 		const int resyncCodecResult = NetResyncSelfTest::Run();
