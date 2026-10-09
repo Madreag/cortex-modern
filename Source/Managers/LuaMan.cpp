@@ -7684,6 +7684,11 @@ bool LuaStateWrapper::RunDeterministicMathSelfTest() {
 	check(std::bit_cast<uint64_t>(DeterministicFmod(0x1p-1000, 0x3p-1050)) == (1ULL << 24), "fmod_subnormal");
 	check(DeterministicPow(2.0, -1024.0) == 0x1p-1024 && DeterministicPow(0x1p-1024, -1.0) == std::numeric_limits<double>::infinity(), "power_extreme_reciprocal");
 	check(std::bit_cast<uint64_t>(DeterministicPow(-0.0, 3.0)) == 0x8000000000000000ULL && std::isnan(DeterministicPow(-2.0, 0.5)), "power_zero_and_domain");
+	bool exactLog2 = true;
+	for (int exponent = -1074; exponent <= 1023; ++exponent) {
+		exactLog2 = exactLog2 && DeterministicLog2(std::ldexp(1.0, exponent)) == static_cast<double>(exponent);
+	}
+	check(exactLog2, "log2_powers_of_two_exact");
 	struct Unary { const char* name; double (*function)(double); };
 	const Unary unary[] = {
 		{"sin", DeterministicSin}, {"cos", DeterministicCos}, {"tan", DeterministicTan},
@@ -7770,7 +7775,17 @@ bool LuaStateWrapper::RunDeterministicMathSelfTest() {
 		}
 		check(luaL_dostring(state, "jit.opt.start('fma'); local function f(a,b,c) return a*b+c end; for i=1,12000 do assert(f(1+2^-27,1-2^-27,-1)==0) end") == 0 && luaJIT_math_policy(state) == 1, "fma_stays_disabled");
 		lua_settop(state, 0);
-		check(luaL_dostring(state, "assert(math.ldexp(1.5,3.9)==12); assert(math.fmod(2^1023,3)==2); assert(math.log(8,2)==3)") == 0, "ldexp_fmod_log_base_semantics");
+		const int semantics = luaL_dostring(state, "assert(math.ldexp(1.5,3.9)==12); assert(math.fmod(2^1023,3)==2); assert(math.log(8,2)==3)");
+		check(semantics == 0, "ldexp_fmod_log_base_semantics");
+		if (semantics != 0) {
+			std::printf("[deterministic-math-selftest] semantics error: %s\n", lua_tostring(state, -1));
+			lua_settop(state, 0);
+			if (luaL_dostring(state, "return math.ldexp(1.5,3.9), math.fmod(2^1023,3), math.log(8,2)") == 0) {
+				std::printf("[deterministic-math-selftest] ldexp=%.17g fmod=%.17g log_base=%.17g\n", lua_tonumber(state, 1), lua_tonumber(state, 2), lua_tonumber(state, 3));
+			}
+		}
+		lua_settop(state, 0);
+		check(luaL_dostring(state, "for pass=1,6 do for exponent=-1074,1023 do assert(math.log(math.ldexp(1,exponent),2)==exponent) end end") == 0, "log_base_two_exact_exponent_range");
 		lua_settop(state, 0);
 	}
 	lua_close(state);

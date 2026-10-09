@@ -48,6 +48,8 @@ because it is exported to Lua. LuaJIT's bytecode `^`, parser/constant folding,
 fast math functions and JIT call table use the installed engine hooks. Table
 overrides alone cannot cover these paths. `math.log(x, base)` follows one operation
 sequence and `math.ldexp` uses one int32 exponent conversion on all targets.
+The log2 primitive extracts the exact exponent of binary powers, including
+subnormals, before the general logarithm path.
 
 Allegro bitmap rotation remains shared: it stamps terrain and collision pixels.
 Its existing `_AL_SINCOS` override in `alconfig.h` uses the same sin/cos polynomial.
@@ -91,7 +93,8 @@ tables require source correspondence rather than a linear instruction scan.
   with the FP diagnostic, rather than accepting a crash or nonzero exit alone.
 - `-deterministic-math-selftest`: exact sqrt/remainder edge cases, VM and engine
   result-bit comparisons in both execution modes, bytecode/string/constant/JIT
-  power, optional-base log, fractional ldexp and a request to enable FMA. It prints
+  power, optional-base log, every binary64 power's exact log2, fractional ldexp and
+  a request to enable FMA. It prints
   a digest that must match on Windows x64, Linux GCC x64 and macOS GCC ARM64.
 - The existing `-rotate-primitive-selftest` must match across those rebuilt targets.
 

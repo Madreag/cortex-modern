@@ -237,7 +237,13 @@ namespace RTE {
 		return base < 0.0 && odd ? -result : result;
 	}
 
-	inline double DeterministicLog2(double value) { return DeterministicLog(value) * 1.4426950408889634074; }
+	inline double DeterministicLog2(double value) {
+		if (value > 0.0 && std::isfinite(value)) {
+			int exponent;
+			if (std::frexp(value, &exponent) == 0.5) { return static_cast<double>(exponent - 1); }
+		}
+		return DeterministicLog(value) * 1.4426950408889634074;
+	}
 	inline double DeterministicLog10(double value) { return DeterministicLog(value) * 0.43429448190325182765; }
 	inline double DeterministicTan(double value) { double sine, cosine; DeterministicSinCos(value, sine, cosine); return sine / cosine; }
 	inline double DeterministicAsin(double value) {
