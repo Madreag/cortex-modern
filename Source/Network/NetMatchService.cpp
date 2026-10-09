@@ -5083,21 +5083,6 @@ static std::string ResyncSaveName() {
 		System::PrintDiagnosticLine(line.str());
 	}
 
-	std::vector<uint8_t> NetMatchService::HeldSuccessionRoutes(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer,
-	                                                          const std::vector<uint8_t>& reachable, const std::set<uint8_t>& held) {
-		// A held seat is never a successor: the catch-up moves to a live one.
-		std::vector<uint8_t> live;
-		for (const uint8_t peer: reachable) if (!held.contains(peer)) live.push_back(peer);
-		if (!live.empty()) return live;
-		// Every survivor is held: the first of them in the match's order hosts, and the others dial it.
-		for (const uint8_t peer: successorOrder) {
-			if (peer == lostHost) continue;
-			if (peer == localPeer) return {};
-			if (std::find(reachable.begin(), reachable.end(), peer) != reachable.end()) return {peer};
-		}
-		return {};
-	}
-
 	namespace {
 		/// A listener opened before the plane that owns it: what it heard first reaches that plane first, in order.
 		class EarlyListener final : public INetTransport {
@@ -5126,28 +5111,9 @@ static std::string ResyncSaveName() {
 		};
 	} // namespace
 
-	bool NetMatchService::HeldSeatListens(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer, const std::vector<uint8_t>& reachable,
-	                                      const std::set<uint8_t>& held, const std::set<uint8_t>& departed) {
-		// The first survivor in the match's order listens whatever it reads of the others: a held seat holding a later revision of the
-		// lost host's holds may know it held and dial it.
-		for (const uint8_t peer: successorOrder) {
-			if (peer == lostHost || departed.contains(peer)) continue;
-			if (peer == localPeer) return true;
-			break;
-		}
-		return HeldSuccessionRoutes(successorOrder, lostHost, localPeer, reachable, held).empty();
-	}
-
 	bool NetMatchService::HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool ownStop, bool imageRejoin, uint64_t hostSilentMs, uint64_t hostRttMs) {
 		(void)linkLost;
 		return !hasReject && !ownStop && !imageRejoin && NetHostLinkLost(false, hostSilentMs, hostRttMs);
-	}
-
-	NetMatchService::LoneElection NetMatchService::LoneElectionOutcome(bool hostAnnounced, bool liveMembersUnheard) {
-		// An announced leave is the host's decision; a lost host is absent, and the match goes on.
-		if (hostAnnounced) return LoneElection::EndMatch;
-		// Live members that went silent with the host say this peer lost its own link: it rejoins rather than host a match of its own.
-		(void)liveMembersUnheard; return LoneElection::RejoinHost;
 	}
 
 	bool NetMatchService::PrivateReturnerInFlightLocked() const {
@@ -7686,29 +7652,8 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		const auto& result = m_Coordinator->GetMigrationResult();
-		// A handover is the survivors' election, and a held seat is a present player whose input the AI holds.
-		if (!m_Coordinator->MigrationUsesDirectory() && std::none_of(result.members.begin(), result.members.end(), [&](uint8_t peer) { return peer != m_LocalPeerId; })) {
-			const NetMatchConfig& played = m_Coordinator->GetConfig().matchConfig;
-			bool liveMembersUnheard = false;
-			for (const NetMatchPlayerSlot& slot: played.players) {
-				const uint8_t peer = slot.peerId;
-				if (slot.cpu || peer == 0 || peer == m_LocalPeerId || peer == played.hostPeerId || peer == result.hostPeerId) continue;
-				if (!played.activePeerIds.empty() && std::find(played.activePeerIds.begin(), played.activePeerIds.end(), peer) == played.activePeerIds.end()) continue;
-				if (m_Coordinator->HasHeldAISeat(peer) || m_Coordinator->IsPeerGoneAtFrame(peer, result.boundary)) continue;
-				liveMembersUnheard = true;
-			}
-			switch (LoneElectionOutcome(m_Coordinator->MigrationHostAnnouncedLeave(), liveMembersUnheard)) {
-				case LoneElection::EndMatch:
-					System::PrintDiagnosticLine("[net-match] host left with no other survivor: the match is over for this seat");
-					ScenarioRunner::SetControllerReplayError("PeerLeft:The host left the match");
-					return;
-				case LoneElection::RejoinHost:
-					System::PrintDiagnosticLine("[net-match] host lost with no other survivor: rejoining the host instead of taking the match over");
-					ScenarioRunner::SetControllerReplayError("PeerHeld:The host connection was lost - rejoining");
-					return;
-				case LoneElection::HostAlone: return; // No direct-game path can authorize a lone host.
-			}
-		}
+		// The coordinator is the only host-change protocol, including for held seats.
+		if (!m_Coordinator->MigrationUsesDirectory() && result.members.size() < 2) return;
 		const auto& config = m_Coordinator->GetConfig().matchConfig;
 		auto wire = m_Coordinator->TakeMigrationTransport();
 		if (!wire) {

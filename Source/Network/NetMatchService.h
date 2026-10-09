@@ -1100,23 +1100,10 @@ namespace RTE {
 		void AnswerStalledReturnersLocked(uint64_t nowMs);
 		bool PrivateReturnerInFlightLocked() const;
 	public:
-		enum class LoneElection { EndMatch, RejoinHost, HostAlone };
-		/// What a survivor that published a handover alone does: the host's leave record ends its match; otherwise its quorum (the
-		/// two-seat exception, or every other connected seat gone or held) lets it host, and the held seats rejoin it.
-		/// liveMembersUnheard: the round had other live members, neither held nor gone, and none answered - this peer is the one cut off.
-		static LoneElection LoneElectionOutcome(bool hostAnnounced, bool liveMembersUnheard);
 		/// Whether a held seat's host is gone: the host ended or timed out its link (the transport's verdict), or the seat heard nothing
 		/// at all from it past the host-loss bound for its round trip (NetHostLinkLost, the round's own reading). Its own transport
 		/// stopping is not the host's doing, and a seat told to come back through the image has a host that answered.
 		static bool HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool ownStop, bool imageRejoin, uint64_t hostSilentMs, uint64_t hostRttMs);
-		/// Where a held seat's catch-up goes when its host is gone, from the match's successor order, the peers it can dial in that
-		/// order and the seats it knows are held. Returns the peers to dial; empty when this seat hosts the match itself.
-		static std::vector<uint8_t> HeldSuccessionRoutes(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer,
-		                                                const std::vector<uint8_t>& reachable, const std::set<uint8_t>& held);
-		/// Whether a held seat whose host is gone listens for the other held seats, from the same view plus the survivors known to have
-		/// left the match.
-		static bool HeldSeatListens(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer, const std::vector<uint8_t>& reachable,
-		                            const std::set<uint8_t>& held, const std::set<uint8_t>& departed);
 	private:
 		std::set<NetPeerId> m_SlowReturnersNoted; //!< Returners already told they keep catching up below the round's rate.
 		/// Host: ends one returner's rejoin and tells its client why, so it tries again instead of waiting.

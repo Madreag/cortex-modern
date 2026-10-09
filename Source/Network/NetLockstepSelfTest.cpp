@@ -101,8 +101,6 @@ namespace RTE {
 	bool TestFourPeersCommitPlacement(std::string* error);
 	bool TestPlacementSessionSequence(unsigned fight, std::string* error);
 	bool TestBriefHostJitterKeepsItsHumanSeat(std::string* error);
-	bool TestHeldHostReturnsPastThePreparedHorizon(std::string* error);
-	bool TestAPreviouslyHeldHostTakesItsSeatBack(std::string* error);
 	bool TestAHostWithNoOtherPlayingSeatIsNotHeld(std::string* error);
 	bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error);
 	bool TestAHostKeepsItsSeatBeforeCapture(std::string* error);
@@ -22687,37 +22685,6 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
-	bool TestAHeldHostCanReachItsReclaimHorizon(std::string* error) {
-		for (uint16_t delay: {0, 6}) {
-			LoopbackTransport wire;
-			NetLockstepCoordinator host;
-			auto config = MakeCoordinatorConfig(1, 2, 0x9A52, delay, NetTransportLane::InputUnreliable);
-			config.startFrame = 1; config.roundId = 0x9A52;
-			config.remoteTransportPeerId = 1;
-			config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0;
-			config.relayToOtherPeers = true;
-			config.peerInputDelayFrames = {{1, delay}, {2, delay}};
-			config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A52);
-			if (!wire.StartHost(49741, error) || !host.Start(wire, config, error)) return false;
-			host.m_State = NetLockstepState::Running;
-			host.m_Stats.nextFrame = 301;
-			host.m_LastCompletedSimulationTick = 300;
-			host.m_LastQueuedTargetFrame = 300;
-			host.m_AiHeldSeats = {{1, 290}, {2, 290}};
-			host.m_PeerLeaveFrames = {{1, 290}, {2, 290}};
-			host.AdvanceReadyFrames(1000);
-			const uint64_t limit = 300 + std::max<uint16_t>(1, delay) + 1;
-			if (host.m_Stats.nextFrame != limit) {
-				*error = "the held host's plane outran its own reclaim horizon: next=" + std::to_string(host.m_Stats.nextFrame) + " expected=" + std::to_string(limit);
-				return false;
-			}
-			host.ReclaimOwnSeat(1000);
-			if (!host.m_ReclaimTransactions.contains(1)) { *error = "the host at its paced horizon could not reclaim its own seat"; return false; }
-		}
-		std::cout << "[net-lockstep-selftest] PASS a_held_host_can_reach_its_reclaim_horizon" << std::endl;
-		return true;
-	}
-
 	bool TestAnAnnouncedCaptureExcusesEverySeatForItsCost(std::string* error) {
 		for (bool own: {true, false}) {
 			LoopbackTransport wire;
@@ -22797,86 +22764,31 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
-	bool TestHeldHostMarkerPrecedesItsHold(std::string* error) {
-		for (int delivery = 0; delivery < 3; ++delivery) {
-			LoopbackTransport hostWire, clientWire;
-			NetLockstepCoordinator host, client;
-			auto a = MakeCoordinatorConfig(1, 2, 0x9A60, 2, NetTransportLane::InputUnreliable);
-			a.roundId = 0x9A60; a.relayToOtherPeers = true; a.authorityPeerId = 1;
-			a.startFrame = 98;
-			a.substituteSlowPeers = true; a.simTickMs = 1000.0 / 60.0;
-			a.remoteTransportPeerIds = {{2, 1}};
-			auto b = a; b.localPeerId = 2; b.remotePeerId = 1; b.relayToOtherPeers = false;
-			b.remoteTransportPeerIds = {{1, 1}};
-			if (!hostWire.StartHost(49746, error) || !clientWire.Connect("loopback", 49746, error) ||
-			    !host.Start(hostWire, a, error) || !client.Start(clientWire, b, error)) return false;
-			for (auto* peer: {&host, &client}) {
-				peer->m_State = NetLockstepState::Running; peer->m_Stats.nextFrame = 100;
-				peer->m_ReadyFrames.clear(); peer->m_LocalFrames.clear(); peer->m_RemoteFrames.clear();
-			}
-			host.m_RemoteStartsReceived.insert(2); client.m_RemoteStartsReceived.insert(1);
-			host.m_LastQueuedTargetFrame = 99;
-			host.m_RemoteFrames[100][2] = {};
-			if (!client.QueueLocalInput(98, {}, {}, error)) return false;
-			(void)hostWire.PollEvents(); (void)clientWire.PollEvents();
-			host.AcknowledgeAcceptedInput(2, 100);
-			// Resume a historical proposal; new hosts cannot author an own-seat hold.
+	bool TestHostOwnHoldIsRejectedOnEveryWirePhase(std::string* error) {
+		LoopbackTransport hostWire, clientWire;
+		NetLockstepCoordinator host, client;
+		auto a = MakeCoordinatorConfig(1, 2, 0x9A60, 2, NetTransportLane::ControlReliable);
+		a.roundId = 0x9A60; a.relayToOtherPeers = true; a.authorityPeerId = 1;
+		a.substituteSlowPeers = true; a.simTickMs = 1000.0 / 60.0;
+		auto b = a; b.localPeerId = 2; b.remotePeerId = 1; b.relayToOtherPeers = false;
+		if (!StartCoordinatorPair(49746, hostWire, clientWire, host, client, a, b, error)) return false;
+		for (int i = 0; i < 10; ++i) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(i); client.Tick(i); }
+		for (auto phase: {NetTimingPhase::Propose, NetTimingPhase::HoldAtFrame, NetTimingPhase::Commit}) {
 			NetLockstepTiming held;
-			held.senderPeerId = held.peerId = 1; held.sessionId = a.sessionId; held.roundId = a.roundId;
-			held.action = NetTimingAction::Hold; held.phase = NetTimingPhase::Propose;
+			held.senderPeerId = held.peerId = 1; held.sessionId = a.sessionId; held.roundId = host.GetRoundId();
+			held.action = NetTimingAction::Hold; held.phase = phase;
 			held.applyFrame = held.cutoffFrame = held.nextFrame = 100; held.revision = 1;
 			held.heldPeers = 1; held.requiredPeers = 2; held.seatIncarnations[0] = 1;
-			host.m_TimingDecisions[1] = {held, 1, false, 1000}; host.m_NextTimingRevision = 2;
-			host.QueueTiming(held); host.FlushTimingOutgoing();
-			// The marker is trusted only after the survivor has acknowledged this exact proposal.
+			std::vector<uint8_t> bytes;
+			if (!NetLockstepCodec::Encode({held}, bytes) || !hostWire.Send(1, NetTransportLane::ControlReliable, bytes)) return false;
 			hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
-			for (const auto& event: clientWire.PollEvents()) client.HandleEvent(event, 1001);
-			client.FlushTimingOutgoing();
-			hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
-			for (const auto& event: hostWire.PollEvents()) host.HandleEvent(event, 1002);
-			host.AdvanceReadyFrames(1002);
-			hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10);
-			std::vector<NetTransportEvent> reliable;
-			bool marker = false;
-			for (const auto& event: clientWire.PollEvents()) {
-				if (event.type != NetTransportEventType::PacketReceived) continue;
-				if (event.lane == NetTransportLane::ControlReliable) {
-					const auto decoded = NetLockstepCodec::Decode(event.bytes);
-					if (decoded.ok && std::holds_alternative<NetLockstepTiming>(decoded.packet.payload)) reliable.push_back(event);
-					continue;
-				}
-				const auto decoded = NetLockstepCodec::Decode(event.bytes);
-				if (decoded.ok && std::holds_alternative<NetLockstepAck>(decoded.packet.payload)) { client.HandleEvent(event, 1010); continue; }
-				if (!decoded.ok || !std::holds_alternative<NetLockstepFrame>(decoded.packet.payload)) continue;
-				marker = true;
-				NetTransportEvent delivered = event;
-				NetLockstepFrame copied = std::get<NetLockstepFrame>(decoded.packet.payload);
-				if (delivery == 1) {
-					NetLockstepFrame next = copied; next.targetFrame = 101; next.priorWindow = {copied};
-					if (!NetLockstepCodec::Encode({next}, delivered.bytes)) { *error = "the marker window did not encode"; return false; }
-				} else if (delivery == 2) {
-					NetLockstepRecoveryChunk recovery;
-					recovery.senderPeerId = 1; recovery.sessionId = a.sessionId; recovery.roundId = a.roundId; recovery.targetFrame = 100;
-					if (!NetLockstepCodec::EncodeRecoveryInput(copied, recovery.bytes)) { *error = "the recovered marker did not encode"; return false; }
-					recovery.totalBytes = static_cast<uint32_t>(recovery.bytes.size());
-					if (!NetLockstepCodec::Encode({recovery}, delivered.bytes)) { *error = "the marker datagram did not encode"; return false; }
-				}
-				client.HandleEvent(delivered, 1010);
-			}
-			if (!marker || host.m_ReadyFrames.empty() || client.m_ReadyFrames.empty() ||
-			    host.m_ReadyFrames.front().frame != 100 || client.m_ReadyFrames.front().frame != 100 ||
-			    host.m_ReadyFrames.front().aiHeldPeerIds != std::vector<uint8_t>{1} ||
-			    client.m_ReadyFrames.front().aiHeldPeerIds != std::vector<uint8_t>{1}) {
-				*error = "the independently delivered host marker committed without the hold at frame 100: marker=" + std::to_string(marker) +
-				    " host_ready=" + std::to_string(host.m_ReadyFrames.size()) + " client_ready=" + std::to_string(client.m_ReadyFrames.size()) +
-				    " host_held=" + std::to_string(host.IsSeatUnderAI(1, 100)) + " client_held=" + std::to_string(client.IsSeatUnderAI(1, 100)); return false;
-			}
-			for (const auto& event: reliable) client.HandleEvent(event, 1020);
-			if (!client.IsRunning() || !client.IsSeatUnderAI(1, 100)) {
-				*error = "the late reliable hold stopped its survivor: " + client.GetStats().timeoutReason; return false;
+			for (const auto& event: clientWire.PollEvents()) client.HandleEvent(event, 20);
+			host.m_TimingDecisions[1] = {held, 3, false, 20}; host.CommitTiming(1);
+			if (!host.IsRunning() || !client.IsRunning() || host.IsSeatUnderAI(1, 100) || client.IsSeatUnderAI(1, 100) ||
+			    host.m_TimingDecisions.contains(1) || client.m_TimingDecisions.contains(1)) {
+				*error = "a host-own-seat hold survived a live protocol entry"; return false;
 			}
 		}
-		std::cout << "[net-lockstep-selftest] PASS held_host_marker_precedes_its_hold copies=3" << std::endl;
 		return true;
 	}
 
@@ -24116,52 +24028,6 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
-	bool TestHeldHostReturnsPastThePreparedHorizon(std::string* error) {
-		LoopbackTransport hostWire, secondWire, thirdWire, fourthWire;
-		NetLockstepCoordinator host, second, third, fourth;
-		std::array<LoopbackTransport*, 4> wires{&hostWire, &secondWire, &thirdWire, &fourthWire};
-		std::array<NetLockstepCoordinator*, 4> peers{&host, &second, &third, &fourth};
-		auto partition = std::make_shared<QuorumPartition>();
-		if (!hostWire.StartHost(49630, error)) return false;
-		for (size_t i = 1; i < wires.size(); ++i) if (!wires[i]->Connect("loopback", 49630, error)) return false;
-		for (uint8_t i = 0; i < 4; ++i) if (!peers[i]->Start(*wires[i], QuorumConfig(i + 1, 4, 49630, 0x9B03, partition), error)) return false;
-		uint64_t now = 0;
-		const auto pump = [&] { for (auto* wire: wires) wire->AdvanceTimeMs(1); for (auto* peer: peers) peer->Tick(now); ++now; };
-		for (int pass = 0; pass < 10; ++pass) pump();
-		// Restore a held-host state recorded by an older build: its simulation reached 75, while peers already prepared 96.
-		NetLockstepTiming held;
-		held.senderPeerId = held.peerId = 1; held.action = NetTimingAction::Hold; held.phase = NetTimingPhase::HoldAtFrame;
-		held.sessionId = 0x9B03; held.roundId = host.GetRoundId(); held.revision = 1;
-		held.applyFrame = held.cutoffFrame = 75; held.heldPeers = 1; held.requiredPeers = 14; held.seatIncarnations[0] = 1;
-		for (auto* peer: peers) {
-			peer->ApplyTiming(held);
-			peer->m_Stats.nextFrame = 97; peer->m_LastQueuedTargetFrame = 96;
-			peer->m_LastCompletedSimulationTick = peer == &host ? 75 : 96;
-			peer->m_NextTimingRevision = 2;
-		}
-		host.m_Stats.peers[2].highestTargetFrame = 120; host.m_Stats.peers[2].pingMs = 50;
-		host.ReclaimOwnSeat(now);
-		const auto pending = std::find_if(host.m_TimingDecisions.begin(), host.m_TimingDecisions.end(), [](const auto& item) { return item.second.proposal.action == NetTimingAction::Reclaim; });
-		if (pending == host.m_TimingDecisions.end()) { *error = "the held host's return waited forever behind the prepared input horizon"; return false; }
-		const auto proposal = pending->second.proposal;
-		if (pending->second.committed || host.HasAgreedSeatReclaim(1) || proposal.applyFrame < 124 || proposal.requiredPeers != 14) {
-			*error = "a held host's return skipped survivor agreement or overlapped already-produced AI input"; return false;
-		}
-		for (int pass = 0; pass < 12; ++pass) pump();
-		for (auto* peer: peers) {
-			if (!peer->HasAgreedSeatReclaim(1) || peer->ReclaimTransactions().at(1) != host.ReclaimTransactions().at(1) ||
-			    !peer->IsSeatUnderAI(1, proposal.applyFrame - 1) || peer->IsSeatUnderAI(1, proposal.applyFrame)) {
-				*error = "the held seat did not return at one agreed boundary on all four members"; return false;
-			}
-		}
-		// The first live input after the agreed gap is accepted again, on the original host connection.
-		const uint64_t firstInput = proposal.neutralThroughFrame + 1;
-		if (!host.QueueLocalInput(firstInput, {}, {}, error) || !host.m_LocalFrames.contains(firstInput)) {
-			*error = "the returned host could not produce human input after its neutral gap"; return false;
-		}
-		return true;
-	}
-
 	bool TestAHostWithNoOtherPlayingSeatIsNotHeld(std::string* error) {
 		// Every other seat is held. The host keeps its own human seat even with no other playing seat.
 		LoopbackTransport wire;
@@ -24196,167 +24062,6 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
-	bool TestAPreviouslyHeldHostTakesItsSeatBack(std::string* error) {
-		LoopbackTransport wire;
-		NetLockstepCoordinator host;
-		NetLockstepCoordinator client;
-		auto config = MakeCoordinatorConfig(1, 2, 0x9A11, 6, NetTransportLane::ControlReliable);
-		config.peerCount = 3; config.startFrame = 1; config.roundId = 35;
-		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
-		config.relayToOtherPeers = true;
-		config.peerInputDelayFrames = {{1, 6}, {2, 6}, {3, 6}};
-		config.remoteTransportPeerIds = {{2, 1}, {3, 2}};
-		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A11);
-		config.matchConfig.successorOrder = {3, 2};
-		if (!wire.StartHost(48895, error) || !host.Start(wire, config, error)) return false;
-		host.m_State = NetLockstepState::Running;
-		host.m_RoundId = 35;
-		host.m_RemotePeerIds = {2, 3};
-		host.m_PeersPlayedThisRound = {1, 2, 3};
-		for (uint8_t peer: {1, 2, 3}) host.m_PeerEffectiveStart[peer] = 7;
-		host.m_Stats.nextFrame = 200;
-		host.m_LastQueuedTargetFrame = 199;
-		host.m_LastCompletedSimulationTick = 193;
-		// Every other seat's input for frame 200 is in hand; the host's own is not.
-		host.m_RemoteFrames[200][2] = {};
-		host.m_RemoteFrames[200][3] = {};
-		host.AdvanceReadyFrames(1000);
-		host.AdvanceReadyFrames(1040);
-		host.AdvanceReadyFrames(1051);
-		if (host.IsSeatUnderAI(1, 200) || !host.m_TimingDecisions.empty()) {
-			*error = "a host's late input proposed taking its own seat"; return false;
-		}
-		// Recovery still understands a host hold committed by an older build.
-		NetLockstepTiming hold;
-		hold.senderPeerId = hold.peerId = 1; hold.sessionId = config.sessionId; hold.roundId = 35;
-		hold.action = NetTimingAction::Hold; hold.phase = NetTimingPhase::HoldAtFrame;
-		hold.applyFrame = hold.cutoffFrame = 200; hold.revision = 1; hold.heldPeers = 1;
-		hold.requiredPeers = 6; hold.seatIncarnations[0] = 1;
-		host.ApplyTiming(hold);
-		host.m_NextTimingRevision = 2;
-		host.m_TimingDecisions[1] = {hold, 6, true, 1052};
-		NetLockstepTiming agree;
-		std::vector<uint8_t> bytes;
-		if (hold.applyFrame != 200 || !NetLockstepCodec::Encode({hold}, bytes)) {
-			*error = "the host's own hold cannot reach its peers: frame=" + std::to_string(hold.applyFrame) + " encoded=" + std::to_string(!bytes.empty());
-			return false;
-		}
-		host.m_LastDeliveredFrame = 200;
-		if (host.AiAuthorityAt(200) != 3 || host.AiProducerOf(1) != 3 || host.AiAuthorityAt(199) != 1) {
-			*error = "the held host's actors are not driven by the first playing peer of its succession: authority=" + std::to_string(host.AiAuthorityAt(200));
-			return false;
-		}
-		// What the host produces for a frame its held seat does not play is dropped, never refused as already committed.
-		if (!host.QueueLocalInput(195, {}, {}, error) || host.m_LocalFrames.contains(201)) {
-			if (error->empty()) *error = "the held host queued input for a frame the AI plays";
-			return false;
-		}
-		// Every other peer keeps its link to the held host and stops waiting on the host's seat from the hold frame.
-		auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A11, 6, NetTransportLane::ControlReliable);
-		clientConfig.peerCount = 3; clientConfig.startFrame = 1; clientConfig.roundId = 35;
-		clientConfig.substituteSlowPeers = true; clientConfig.simTickMs = 1000.0 / 60.0; clientConfig.slowPlayerBoundTicks = 3;
-		clientConfig.matchConfig = config.matchConfig;
-		// Only the client's decisions are read here, so it takes the round's configuration without a wire of its own.
-		client.m_Config = clientConfig;
-		client.m_State = NetLockstepState::Running;
-		client.m_RoundId = 35;
-		client.m_RemotePeerIds = {1, 3};
-		client.m_RemoteTransports[1] = 7;
-		for (uint8_t peer: {1, 2, 3}) client.m_PeerEffectiveStart[peer] = 7;
-		client.m_Stats.nextFrame = 200;
-		client.ApplyTiming(hold);
-		if (!client.IsRemoteRequiredForFrame(1, 200) || client.CommitsRemoteInput(1, 200) || !client.m_RemoteTransports.contains(1) || client.IsPeerGoneAtFrame(1, 200)) {
-			*error = "a client left its held host's link, stopped following the host's commits or committed the held host's input: commits_200=" +
-			         std::to_string(client.CommitsRemoteInput(1, 200));
-			return false;
-		}
-		// The held host commits frame 200 on the others' input alone and sends its empty frame for it.
-		host.AdvanceReadyFrames(1060);
-		if (host.GetStats().nextFrame != 201 || host.SentInputThrough() != 200 || host.m_LocalFrames.contains(200)) {
-			*error = "the held host did not commit and announce frame 200 on the others' input: next=" + std::to_string(host.GetStats().nextFrame) +
-			         " sent_through=" + std::to_string(host.SentInputThrough());
-			return false;
-		}
-		// A seat returning in place takes the host's hold from the tail it replayed: the host is under the AI there, never gone.
-		NetLockstepCoordinator replayed;
-		NetLockstepCoordinator returner;
-		auto returnerConfig = clientConfig;
-		returnerConfig.localPeerId = 3;
-		replayed.m_Config = returnerConfig;
-		returner.m_Config = returnerConfig;
-		replayed.m_HoldTransactions[1] = NetGameSeatHold{1, hold.authorityGeneration, hold.revision, hold.seatIncarnations[0], 200};
-		replayed.m_AiHeldSeats[1] = 200;
-		returner.m_RemotePeerIds = {1, 2};
-		returner.AdoptReplayedSeatTransitions(replayed, 203);
-		if (!returner.IsSeatUnderAI(1, 204) || returner.IsPeerGoneAtFrame(1, 204) || !returner.IsRemoteRequiredForFrame(1, 204)) {
-			*error = "a returner that took the host's hold from its replayed tail reads the host as gone: gone_204=" + std::to_string(returner.IsPeerGoneAtFrame(1, 204));
-			return false;
-		}
-		// Caught up to within its delay of the committed frames, the host takes its seat back past everything already committed.
-		host.m_LastCompletedSimulationTick = 199;
-		host.m_Stats.nextFrame = 205;
-		host.m_LastQueuedTargetFrame = 204;
-		// Peer 3 drives the held host's actors and has sent its AI orders through 240; a round trip of 50 ms is three more frames of them.
-		host.m_Stats.peers[3].highestTargetFrame = 240;
-		host.m_Stats.peers[3].pingMs = 50;
-		if (!host.ProposeInputDelay(2, 7, host.FutureTimingFrame(), error)) return false;
-		const auto pendingDelay = host.m_TimingDecisions.rbegin()->second.proposal;
-		host.ReclaimOwnSeat(1200);
-		if (host.m_ReclaimTransactions.contains(1) || host.m_TimingDecisions.empty()) { *error = "the host reclaimed its own seat before agreement"; return false; }
-		agree = host.m_TimingDecisions.rbegin()->second.proposal;
-		if (agree.action != NetTimingAction::Reclaim) { *error = "a pending delay change starved the held host's return"; return false; }
-		NetLockstepTiming delayAck = pendingDelay;
-		delayAck.phase = NetTimingPhase::Acknowledge;
-		for (uint8_t peer: {2, 3}) { delayAck.senderPeerId = peer; host.HandleTiming(delayAck, 1201, host.m_RemoteTransports.at(peer)); }
-		agree.phase = NetTimingPhase::Acknowledge;
-		for (uint8_t peer: {2, 3}) { agree.senderPeerId = peer; host.HandleTiming(agree, 1201, host.m_RemoteTransports.at(peer)); }
-		const auto back = host.m_ReclaimTransactions.find(1);
-		if (back == host.m_ReclaimTransactions.end() || back->second.activationFrame <= 205 || host.IsSeatUnderAI(1, back->second.activationFrame) ||
-		    !host.IsSeatUnderAI(1, back->second.activationFrame - 1)) {
-			*error = "the caught-up host did not take its seat back at a frame past the committed ones";
-			return false;
-		}
-		if (back->second.activationFrame < 244) {
-			*error = "the host took its seat back at " + std::to_string(back->second.activationFrame) + ", inside the AI orders its producer had already sent through 243";
-			return false;
-		}
-		// A producer writing now for a frame past the agreed return reads the seat table there: the host drives its own actors again.
-		host.m_LastDeliveredFrame = 205;
-		if (host.AiProducerOf(1) != 3 || host.AiProducerOf(1, back->second.activationFrame - 1) != 3 || host.AiProducerOf(1, back->second.activationFrame) != 1) {
-			*error = "the held host's producer is not read at the frame its orders land on: now=" + std::to_string(host.AiProducerOf(1)) +
-			         " at_return=" + std::to_string(host.AiProducerOf(1, back->second.activationFrame));
-			return false;
-		}
-		NetLockstepTiming reclaim;
-		for (const auto& [revision, decision]: host.m_TimingDecisions) if (decision.proposal.action == NetTimingAction::Reclaim) reclaim = decision.proposal;
-		bytes.clear();
-		if (!NetLockstepCodec::Encode({reclaim}, bytes)) {
-			*error = "the host's own return cannot reach its peers";
-			return false;
-		}
-		// The frames between the host's horizon and its new start are the AI's, and nobody waits on the host for them: it commits
-		// them on the others' input without a frame of its own, never refusing to because its new start is later.
-		host.m_RemoteFrames[205][2] = {};
-		host.m_RemoteFrames[205][3] = {};
-		host.AdvanceReadyFrames(1210);
-		if (host.GetStats().nextFrame != 206 || host.SentInputThrough() != 204) {
-			*error = "the returning host stopped committing below its new start: next=" + std::to_string(host.GetStats().nextFrame) +
-			         " sent_through=" + std::to_string(host.SentInputThrough());
-			return false;
-		}
-		client.ApplyTiming(reclaim);
-		const uint64_t firstRequired = back->second.activationFrame + back->second.delayFrames + 1;
-		if (!client.IsRemoteRequiredForFrame(1, firstRequired) || client.IsRemoteRequiredForFrame(1, firstRequired - 1)) {
-			*error = "a client does not wait on the host's seat again after its return's gap: first_required=" + std::to_string(firstRequired);
-			return false;
-		}
-		std::cout << "[net-lockstep-selftest] PASS a_hosts_own_late_seat_is_held_and_taken_back hold=200 back=" << back->second.activationFrame
-		          << " ai_of=" << static_cast<int>(host.AiAuthorityAt(200)) << std::endl;
-		return true;
-	}
-
-	// A host whose only other seat is held has nobody waiting on it: its own late input is no hold, and a host already held commits
-	// the round only as far as its own input would have reached, so it finds itself caught up and takes its seat back.
 	bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error) {
 		const auto makeHost = [&](NetLockstepCoordinator& host, LoopbackTransport& wire, LoopbackTransport& second, LoopbackTransport& third, uint16_t port) {
 			auto config = MakeCoordinatorConfig(1, 2, 0x9A21, 4, NetTransportLane::ControlReliable);
@@ -24392,23 +24097,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return false;
 			}
 		}
-		LoopbackTransport wire, second, third;
-		NetLockstepCoordinator host;
-		if (!makeHost(host, wire, second, third, 48912)) return false;
-		// The host was held at 150, before the other seats; its simulation has completed 200.
-		host.m_AiHeldSeats[1] = 150;
-		host.m_Stats.nextFrame = 201;
-		host.m_LastQueuedTargetFrame = 200;
-		host.m_LastCompletedSimulationTick = 200;
-		host.AdvanceReadyFrames(1000);
-		const uint64_t paced = host.GetStats().nextFrame;
-		host.ReclaimOwnSeat(1000);
-		if (paced != 205 || !host.m_ReclaimTransactions.contains(1)) {
-			*error = "a-host-nobody-waits-on-keeps-its-seat: a held host with no other seat to wait on committed to " + std::to_string(paced) +
-			         " past its simulation at 200 (delay 4), and took its seat back: " + std::to_string(host.m_ReclaimTransactions.contains(1)) + " (" + host.m_AdvanceBlock + ")";
-			return false;
-		}
-		std::cout << "[net-lockstep-selftest] PASS a_host_nobody_waits_on_keeps_its_seat paced_to=" << paced << " back=" << host.m_ReclaimTransactions.at(1).activationFrame << std::endl;
+		std::cout << "[net-lockstep-selftest] PASS a_host_nobody_waits_on_keeps_its_seat" << std::endl;
 		return true;
 	}
 
@@ -27103,8 +26792,16 @@ namespace {
 	}
 
 	bool TestAnnouncedLeaveLoneOutcome(std::string* error) {
-		const auto result = NetMatchService::LoneElectionOutcome(true, false);
-		return ReportReleasedClaimsRow("announced_leave_lone_outcome", result == NetMatchService::LoneElection::EndMatch ? "" : "an announced leave with one connected survivor does not end the match", error);
+		QuorumRig round;
+		if (!StartQuorumRig(round, 2, 49787, error) || !PumpQuorumRig(round, 4000, [&] { return round.simulated[0] >= 24 && round.simulated[1] >= 24; })) return false;
+		round.Peer(1).Leave("host process leaving");
+		for (int i = 0; i < 5; ++i) StepQuorumRig(round);
+		KillQuorumPeer(round, 1);
+		for (int i = 0; i < 23000; ++i) StepQuorumRig(round);
+		if (round.Peer(2).GetHostPeerId() != 1 || round.Peer(2).IsStopped() || round.Peer(2).GetMigrationResult().hostPeerId != 0) {
+			*error = "a lone direct survivor changed the host or inferred a match end"; return false;
+		}
+		return true;
 	}
 
 	bool TestAnnouncedHostLeaveKeepsOneSurvivor(std::string* error) {
@@ -28715,11 +28412,10 @@ namespace {
 		row(&TestNoStartGateWaitsForAHeldSeat, "no_start_gate_waits_for_a_held_seat");
 		row(&TestARefusedHoldEscalatesToTheFirstOwedFrame, "a_refused_hold_escalates_to_the_first_owed_frame");
 		row(&TestAStartHeldSeatsReturnCompletes, "a_start_held_seats_return_completes");
-		row(&TestAHeldHostCanReachItsReclaimHorizon, "a_held_host_can_reach_its_reclaim_horizon");
 		row(&TestAnAnnouncedCaptureExcusesEverySeatForItsCost, "an_announced_capture_excuses_every_seat_for_its_cost");
 		row(&TestDelayTracksASteadySendersArrivalPhase, "delay_tracks_a_steady_senders_arrival_phase");
 		row(&TestAheadInputIsNotASimulationStall, "ahead_input_is_not_a_simulation_stall");
-		row(&TestHeldHostMarkerPrecedesItsHold, "held_host_marker_precedes_its_hold");
+		row(&TestHostOwnHoldIsRejectedOnEveryWirePhase, "host_own_hold_is_rejected_on_every_wire_phase");
 		row(&TestAReturnerDelayCoversItsTrail, "a_returner_delay_covers_its_trail");
 		row(&TestADecisionRepeatedPastItsFrameIsNotANewOne, "a_decision_repeated_past_its_frame_is_not_a_new_one");
 		row(&TestABrokenPeersSeatStaysReturnable, "a_broken_peers_seat_stays_returnable");
@@ -28787,46 +28483,6 @@ namespace {
 		row(&TestAHostIsProvisionalUntilItHearsAMajority, "a_host_is_provisional_until_it_hears_a_majority");
 		row(&TestAHostReachesAPlayerBackOnANewLink, "a_host_reaches_a_player_back_on_a_new_link");
 		row(&TestAHostStallInsideTheLossBoundMigratesNobody, "a_host_stall_inside_the_loss_bound_migrates_nobody");
-		if (!rowsPassed) return fail("a reporting row failed");
-		bool leavePassed = true;
-		bool migrationsPassed = true;
-		for (const auto [skip, heal]: {std::pair{false, false}, std::pair{true, false}, std::pair{false, true}}) {
-			std::string migrationError;
-			if (!TestHostMigrationRecovery<NetLockstepConfig, NetLockstepCoordinator, NetLobbySessionConfig>(skip, heal, &migrationError)) {
-				std::cerr << "[host-migration-selftest] FAIL: " << (heal ? "mid-heal resync: " : skip ? "successor order: "
-				                                                                                      : "roll-call recovery and AI handoff: ")
-				          << migrationError << std::endl;
-				if (!skip && !heal)
-					std::cerr << "[host-migration-selftest] FAIL: departed-host AI controller equality: " << migrationError << std::endl;
-				migrationsPassed = false;
-			}
-		}
-		if (!migrationsPassed)
-			return fail("host migration detecting rows failed");
-		for (MigrationCase scenario: {MigrationCase::DelayedAnswer, MigrationCase::StaleAnswer, MigrationCase::AddressFallback, MigrationCase::ZeroStart, MigrationCase::SuccessorLostAfterPlan, MigrationCase::StalledSuccessor, MigrationCase::SuccessorSilentAfterRollCall}) {
-			if (!TestHostMigrationRecovery<NetLockstepConfig, NetLockstepCoordinator, NetLobbySessionConfig>(false, false, &error, scenario)) {
-				return fail("migration case=" + std::to_string(static_cast<int>(scenario)) + " " + error);
-			}
-		}
-		const bool diagnosticPassed = TestHostMigrationRecovery<NetLockstepConfig, NetLockstepCoordinator, NetLobbySessionConfig>(false, false, &error, MigrationCase::FailureActuals);
-		if (diagnosticPassed || error.find("applied A=4 B=5") == std::string::npos || error.find("dropped=1") == std::string::npos) {
-			return fail("diagnostic fixture passed=" + std::to_string(diagnosticPassed) + " text=" + error);
-		}
-		error.clear();
-		for (auto policy: {NetActorOwnershipPolicy::TeamOwner, NetActorOwnershipPolicy::HostCpuRemoteHuman}) {
-			for (bool dropped: {false, true}) {
-				for (bool teammate: {false, true}) leavePassed &= TestDepartedActorsGoToAI(policy, dropped, teammate, &error);
-			}
-		}
-		std::string followupError;
-		bool followupsPassed = true;
-		followupsPassed &= TestPausedFramesDoNotSpendTheTickBudget(&followupError);
-		followupsPassed &= TestPausedFramesResetOnResyncRelaunch(&followupError);
-		followupsPassed &= TestDepartedHostEndsTheRound(&followupError);
-		followupsPassed &= TestReseatWithoutAReadoptionKeepsItsSeat(&followupError);
-		followupsPassed &= TestMidLeaveSaveAgreesAcrossPeers(&followupError);
-		if (!leavePassed) return fail(error);
-		if (!followupsPassed) return fail(followupError);
 		row([](std::string* rowError) { return TestSilentHostResumesWithinTwoSeconds(rowError); }, "TestSilentHostResumesWithinTwoSeconds");
 		row([](std::string* rowError) { return TestALongLinkedHostIsJudgedByItsSilenceAlone(rowError); }, "TestALongLinkedHostIsJudgedByItsSilenceAlone");
 		row([](std::string* rowError) { return TestALoneSurvivorConfirmsTheHostIsGone(rowError); }, "TestALoneSurvivorConfirmsTheHostIsGone");
@@ -28856,7 +28512,6 @@ namespace {
 		row([](std::string* rowError) { return TestOverdueBoundWaitsForTheCommittedRunway(rowError); }, "TestOverdueBoundWaitsForTheCommittedRunway");
 		row(&TestFourPlayerHoldWaitsForALiveAcknowledgement, "TestFourPlayerHoldWaitsForALiveAcknowledgement");
 		row(&TestBriefHostJitterKeepsItsHumanSeat, "TestBriefHostJitterKeepsItsHumanSeat");
-		row(&TestHeldHostReturnsPastThePreparedHorizon, "TestHeldHostReturnsPastThePreparedHorizon");
 		row([](std::string* rowError) { return TestBoundedHoldKeepsCommitting(rowError); }, "TestBoundedHoldKeepsCommitting");
 		row([](std::string* rowError) { return TestHoldDeadlinePrecedesConsumerWait(rowError); }, "TestHoldDeadlinePrecedesConsumerWait");
 		row([](std::string* rowError) { return TestBoundedWaitGivesASenderItsRampIn(rowError); }, "TestBoundedWaitGivesASenderItsRampIn");
@@ -28872,7 +28527,6 @@ namespace {
 		row([](std::string* rowError) { return TestAReturnersRoundSkipsTheRoundsEarlierTicks(rowError); }, "TestAReturnersRoundSkipsTheRoundsEarlierTicks");
 		row([](std::string* rowError) { return TestAReturnedSeatThatLeavesAgainIsGone(rowError); }, "TestAReturnedSeatThatLeavesAgainIsGone");
 		row([](std::string* rowError) { return TestARoundsOwnEndIsNoHold(rowError); }, "TestARoundsOwnEndIsNoHold");
-		row([](std::string* rowError) { return TestAPreviouslyHeldHostTakesItsSeatBack(rowError); }, "TestAPreviouslyHeldHostTakesItsSeatBack");
 		row([](std::string* rowError) { return TestAHostWithNoOtherPlayingSeatIsNotHeld(rowError); }, "TestAHostWithNoOtherPlayingSeatIsNotHeld");
 		row([](std::string* rowError) { return TestAHostNobodyWaitsOnKeepsItsSeat(rowError); }, "TestAHostNobodyWaitsOnKeepsItsSeat");
 		row([](std::string* rowError) { return TestAHostKeepsItsSeatBeforeCapture(rowError); }, "TestAHostKeepsItsSeatBeforeCapture");
@@ -29060,6 +28714,46 @@ namespace {
 		row([](std::string* rowError) { return TestTheBudgetStartsAtTheHostsOwnStartup(rowError); }, "TestTheBudgetStartsAtTheHostsOwnStartup");
 		row([](std::string* rowError) { return TestAParkClosesOnItsBudget(rowError); }, "TestAParkClosesOnItsBudget");
 		row([](std::string* rowError) { return TestADeferredDecisionWaitsForTheFinalEnd(rowError); }, "TestADeferredDecisionWaitsForTheFinalEnd");
+		if (!rowsPassed) return fail("a reporting row failed");
+		bool leavePassed = true;
+		bool migrationsPassed = true;
+		for (const auto [skip, heal]: {std::pair{false, false}, std::pair{true, false}, std::pair{false, true}}) {
+			std::string migrationError;
+			if (!TestHostMigrationRecovery<NetLockstepConfig, NetLockstepCoordinator, NetLobbySessionConfig>(skip, heal, &migrationError)) {
+				std::cerr << "[host-migration-selftest] FAIL: " << (heal ? "mid-heal resync: " : skip ? "successor order: "
+				                                                                                      : "roll-call recovery and AI handoff: ")
+				          << migrationError << std::endl;
+				if (!skip && !heal)
+					std::cerr << "[host-migration-selftest] FAIL: departed-host AI controller equality: " << migrationError << std::endl;
+				migrationsPassed = false;
+			}
+		}
+		if (!migrationsPassed)
+			return fail("host migration detecting rows failed");
+		for (MigrationCase scenario: {MigrationCase::DelayedAnswer, MigrationCase::StaleAnswer, MigrationCase::AddressFallback, MigrationCase::ZeroStart, MigrationCase::SuccessorLostAfterPlan, MigrationCase::StalledSuccessor, MigrationCase::SuccessorSilentAfterRollCall}) {
+			if (!TestHostMigrationRecovery<NetLockstepConfig, NetLockstepCoordinator, NetLobbySessionConfig>(false, false, &error, scenario)) {
+				return fail("migration case=" + std::to_string(static_cast<int>(scenario)) + " " + error);
+			}
+		}
+		const bool diagnosticPassed = TestHostMigrationRecovery<NetLockstepConfig, NetLockstepCoordinator, NetLobbySessionConfig>(false, false, &error, MigrationCase::FailureActuals);
+		if (diagnosticPassed || error.find("applied A=4 B=5") == std::string::npos || error.find("dropped=1") == std::string::npos) {
+			return fail("diagnostic fixture passed=" + std::to_string(diagnosticPassed) + " text=" + error);
+		}
+		error.clear();
+		for (auto policy: {NetActorOwnershipPolicy::TeamOwner, NetActorOwnershipPolicy::HostCpuRemoteHuman}) {
+			for (bool dropped: {false, true}) {
+				for (bool teammate: {false, true}) leavePassed &= TestDepartedActorsGoToAI(policy, dropped, teammate, &error);
+			}
+		}
+		std::string followupError;
+		bool followupsPassed = true;
+		followupsPassed &= TestPausedFramesDoNotSpendTheTickBudget(&followupError);
+		followupsPassed &= TestPausedFramesResetOnResyncRelaunch(&followupError);
+		followupsPassed &= TestDepartedHostEndsTheRound(&followupError);
+		followupsPassed &= TestReseatWithoutAReadoptionKeepsItsSeat(&followupError);
+		followupsPassed &= TestMidLeaveSaveAgreesAcrossPeers(&followupError);
+		if (!leavePassed) return fail(error);
+		if (!followupsPassed) return fail(followupError);
 		if (!rowsPassed) return fail("lockstep regression rows failed");
 
 		if (NetResyncSelfTest::Run() != 0 || NetResyncRuntimeSelfTest::Run() != 0) return fail("resync regression suite failed");

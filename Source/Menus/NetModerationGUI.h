@@ -156,6 +156,7 @@ namespace RTE {
 		static bool MatchSurfacesDrawn(bool controllerSyncActive, bool matchResyncing, bool hostLost, bool lockstepAttached, bool matchEnded, bool activityInMatch, bool postMatchLobby, bool lobbyMenuActive);
 		/// The match activity this peer is standing in, paused or not, until it ends.
 		static bool ActivityInMatch();
+		static long long StatusWaitMs(uint8_t reason, long long nowUs, uint8_t& previousReason, long long& startedUs);
 		/// The menu-loop arm as the menu loop asks it: a finished match's lobby stands while its
 		/// playedAMatch mark is on, and while the multiplayer lobby is the screen up it draws the
 		/// surfaces the game loop did. The title screen, settings and every other menu leave it off.
@@ -257,6 +258,7 @@ namespace RTE {
 		int m_GhostWatchProbe = -1;      //!< The last frame's pixel inside the live band, so a blind scan shows.
 		void GhostWatchTick();
 		long long m_StatusWaitStartedUs = 0;
+		uint8_t m_StatusWaitReason = 0;
 		uint32_t m_StatusWaitReclaimEpoch = 0;
 		long long m_LastStatusObservationMs = 0;
 		bool m_LastSlowNotice = false;

@@ -6248,7 +6248,7 @@ namespace RTE {
 					const auto left = ApplyRosterEvent(before, event);
 					const auto* oldSeat = before.Find(droppedId);
 					if (left.refused || left.roster.Find(droppedId)->owner != oldSeat->owner || left.roster.Find(droppedId)->ticket != oldSeat->ticket ||
-					    left.roster.Find(droppedId)->phase != NetSeatPhase::Held || !CheckRosterInvariants(before, left.roster, event.kind, error)) {
+					    left.roster.Find(droppedId)->phase != (kind == NetRosterEventKind::LivenessPassed ? oldSeat->phase : NetSeatPhase::Held) || !CheckRosterInvariants(before, left.roster, event.kind, error)) {
 						*error = "a leave or silent link before the first start released the owner or ticket"; return false;
 					}
 				}
@@ -17007,6 +17007,14 @@ namespace RTE {
 	}
 
 	bool TestHandoverSnapshotStatus(std::string* error) {
+		uint8_t reason = 0; long long startedUs = 0;
+		(void)NetModerationGUI::StatusWaitMs(3, 1000000, reason, startedUs);
+		if (NetModerationGUI::StatusWaitMs(3, 524600000, reason, startedUs) != 523600 ||
+		    NetModerationGUI::StatusWaitMs(1, 524600000, reason, startedUs) != 0 ||
+		    NetModerationGUI::StatusWaitMs(1, 526600000, reason, startedUs) != 2000 ||
+		    NetModerationGUI::StatusWaitMs(0, 526600000, reason, startedUs) != 0) {
+			*error = "host loss inherited the placement wait clock"; return false;
+		}
 		LoopbackTransport hostWire, clientWire;
 		if (!hostWire.StartHost(49461, error) || !clientWire.Connect("loopback", 49461, error)) return false;
 		NetLockstepConfig hc; hc.sessionId = 152; hc.localPeerId = 1; hc.remotePeerId = 2; hc.remoteTransportPeerId = 1; hc.roundId = 152;
@@ -17018,7 +17026,7 @@ namespace RTE {
 		service.m_Coordinator = std::make_unique<NetLockstepCoordinator>(); service.m_State = NetMatchServiceState::Running;
 		if (!host.Start(hostWire, hc, error) || !service.m_Coordinator->Start(clientWire, cc, error)) return false;
 		for (uint64_t now = 0; now < 10; ++now) { host.Tick(now); service.m_Coordinator->Tick(now); }
-		if (!service.m_Coordinator->BeginHostMigrationAfterHeal(10)) { *error = "status fixture could not begin handover"; return false; }
+		if (!service.m_Coordinator->BeginHostMigrationAfterHeal(c_NetHostLossSilenceMs + 10)) { *error = "status fixture could not begin handover"; return false; }
 		const auto snapshot = service.GetLobbySnapshot();
 		if (!snapshot.running || !snapshot.hostLost || !snapshot.migrating || snapshot.serviceState != "HostLost" || snapshot.statusText.find("Host lost") == std::string::npos ||
 		    service.GetHostHandoverState() != NetHostHandoverState::HostLost) { *error = "host handover was not exposed to the running overlay"; return false; }

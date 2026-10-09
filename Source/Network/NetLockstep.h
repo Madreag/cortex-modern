@@ -1471,8 +1471,6 @@ namespace RTE {
 		friend bool TestOwnerHostChange(unsigned mode, std::string* error);
 		friend bool TestPlacementSessionSequence(unsigned fight, std::string* error);
 		friend bool TestBriefHostJitterKeepsItsHumanSeat(std::string* error);
-		friend bool TestHeldHostReturnsPastThePreparedHorizon(std::string* error);
-		friend bool TestAPreviouslyHeldHostTakesItsSeatBack(std::string* error);
 		friend bool TestAHostWithNoOtherPlayingSeatIsNotHeld(std::string* error);
 		friend bool TestAReturnGapDoesNotStartTheHostsClock(std::string* error);
 		friend bool TestAHoldLandsAtTheFirstFrameItsSeatOwes(std::string* error);
@@ -1480,11 +1478,10 @@ namespace RTE {
 		friend bool TestARefusedHoldEscalatesToTheFirstOwedFrame(std::string* error);
 		friend bool TestAStartHeldSeatsReturnCompletes(std::string* error);
 		friend bool TestANeutralGapLeavesNoCommandsToResend(std::string* error);
-		friend bool TestAHeldHostCanReachItsReclaimHorizon(std::string* error);
 		friend bool TestAnAnnouncedCaptureExcusesEverySeatForItsCost(std::string* error);
 		friend bool TestDelayTracksASteadySendersArrivalPhase(std::string* error);
 		friend bool TestAheadInputIsNotASimulationStall(std::string* error);
-		friend bool TestHeldHostMarkerPrecedesItsHold(std::string* error);
+		friend bool TestHostOwnHoldIsRejectedOnEveryWirePhase(std::string* error);
 		friend bool TestAReturnerDelayCoversItsTrail(std::string* error);
 		friend bool TestADecisionRepeatedPastItsFrameIsNotANewOne(std::string* error);
 		friend bool TestAHostKeepsItsSeatAfterItsRunwayExpires(std::string* error);
@@ -1757,7 +1754,6 @@ namespace RTE {
 		bool AnySeatRefilling() const;
 		size_t LeftPeersNotRefilling() const;
 		/// Ends a round every remote has left once the last held seat's reclaim window has closed.
-		void EndRoundIfNobodyIsComingBack();
 		/// Whether a scheduled resync owns the end of this round; a last-player leave must not take it.
 		bool ReclaimResyncPending() const;
 		bool IsRemoteRequiredForFrame(uint8_t peerId, uint64_t frame) const;
@@ -1842,8 +1838,6 @@ namespace RTE {
 		void TakeSceneLoadStatus(const NetLockstepTiming& timing, uint64_t nowMs);
 		uint64_t CaptureExcuseUntil(uint8_t peerId, uint64_t frame, uint64_t firstMissingMs);
 		/// Host: returns a seat held by an older build at a fixed, agreed future boundary.
-		void ReclaimOwnSeat(uint64_t nowMs);
-		std::string m_OwnSeatWaitLogged; //!< Host: why its held seat last waited to come back, as last logged.
 		uint64_t FutureTimingFrame() const;
 		struct TimingDecision {
 			NetLockstepTiming proposal;
