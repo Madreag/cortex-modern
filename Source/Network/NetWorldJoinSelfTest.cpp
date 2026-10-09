@@ -1599,8 +1599,12 @@ namespace RTE {
 			if (internet.address != live.address || internet.sessionId != live.sessionId || internet.port != live.port)
 				return Fail("a held Internet client lost its live session route");
 			const auto restarted = NetMatchService::BuildTicketRejoinRequest(record, "Player", false);
-			if (restarted.address != record.hostAddress || restarted.sessionId != record.directorySessionId)
-				return Fail("a restarted client lost its stored ticket route");
+			if (restarted.address != "ice:" || restarted.sessionId != record.directorySessionId)
+				return Fail("a restarted Internet client lost its stored directory identity");
+			record.directorySessionId.clear();
+			const auto direct = NetMatchService::BuildTicketRejoinRequest(record, "Player", false);
+			if (direct.address != record.hostAddress || !direct.sessionId.empty())
+				return Fail("a restarted direct-IP client lost its stored address");
 			return 0;
 		}
 

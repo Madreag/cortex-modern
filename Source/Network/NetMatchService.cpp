@@ -11638,7 +11638,7 @@ static std::string ResyncSaveName() {
 		NetMatchServiceRequest request = BuildTicketRejoinRequest(record, playerName, liveWorldTarget);
 		if (!liveRoute.host && (!liveRoute.address.empty() || !liveRoute.sessionId.empty())) {
 			request.address = liveRoute.address;
-			if (!liveRoute.sessionId.empty()) request.sessionId = liveRoute.sessionId;
+			request.sessionId = liveRoute.sessionId;
 			request.port = liveRoute.port;
 		}
 		return request;
