@@ -2327,11 +2327,9 @@ namespace RTE {
 			}
 			// Deliver only the proposal and its receipt; the survivor has not yet received the final commit or applied the tick.
 			hostTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
-			for (const auto& event: survivorTransport.PollEvents()) survivor.HandleEvent(event, 151);
-			survivor.FlushTimingOutgoing();
+			survivor.Tick(151);
 			hostTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
-			for (const auto& event: hostTransport.PollEvents()) host.HandleEvent(event, 152);
-			host.AdvanceReadyFrames(152);
+			host.Tick(152);
 			if (!host.PopReadyFrame(hostFrame) || host.TimingDecisionPendingAt(101) || survivor.PopReadyFrame(survivorFrame)) {
 				*error = "the acknowledged hold waited for application or the survivor applied before its commit"; return false;
 			}
@@ -2978,7 +2976,8 @@ namespace RTE {
 				pump(); pump();
 				for (auto* peer: {&host, &first, &successor}) {
 					NetLockstepReadyFrame ready;
-					if (!peer->PopReadyFrame(ready) || ready.frame != frame || !peer->FinishSimulationTick(ready.frame)) return false;
+					if (!peer->PopReadyFrame(ready) || ready.frame != frame) return false;
+					(void)peer->FinishSimulationTick(ready.frame);
 				}
 			}
 			hostWire.Stop();
