@@ -8,6 +8,17 @@
 
 #include "lua.h"
 
+/* All engine targets use the ARM64-compatible number mode. */
+#if defined(LUAJIT_NUMMODE) && LUAJIT_NUMMODE != 2
+#error "The engine requires LUAJIT_NUMMODE=2"
+#endif
+#ifndef LUAJIT_NUMMODE
+#define LUAJIT_NUMMODE 2
+#endif
+#ifdef LUAJIT_ENABLE_LUA52COMPAT
+#error "The engine requires Lua 5.1 number semantics"
+#endif
+
 /* -- Target definitions -------------------------------------------------- */
 
 /* Target endianess. */

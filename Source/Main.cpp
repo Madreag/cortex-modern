@@ -10997,6 +10997,9 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-rotate-primitive-selftest") {
 			return RotatePrimitiveSelfTest::Run();
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-lua-numeric-policy-selftest") {
+			return LuaStateWrapper::RunNumericPolicySelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-sim-checksum-selftest") {
 			return SimChecksum::RunRowBlockSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 		}

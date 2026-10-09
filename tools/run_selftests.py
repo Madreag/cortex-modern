@@ -53,6 +53,7 @@ SELFTESTS = [
     "net-roster",
     "camera-null-scene",
     "rotate-primitive",
+    "lua-numeric-policy",
     "sim-checksum",
     "cow-checkpoint",
     "frame-recorder",

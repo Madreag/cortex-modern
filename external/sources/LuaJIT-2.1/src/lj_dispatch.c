@@ -241,6 +241,18 @@ static void setptmode_all(global_State *g, GCproto *pt, int mode)
 }
 #endif
 
+unsigned int luaJIT_numeric_policy(void)
+{
+  unsigned int policy = 0;
+  if (LJ_DUALNUM) policy |= LUAJIT_NUMERIC_DUAL;
+  if (sizeof(lua_Number) == 8) policy |= LUAJIT_NUMERIC_DOUBLE;
+  if (LJ_GC64) policy |= LUAJIT_NUMERIC_GC64;
+#ifdef LUAJIT_ENABLE_LUA52COMPAT
+  policy |= LUAJIT_NUMERIC_LUA52;
+#endif
+  return policy;
+}
+
 /* Public API function: control the JIT engine. */
 int luaJIT_setmode(lua_State *L, int idx, int mode)
 {
@@ -558,4 +570,3 @@ void LJ_FASTCALL lj_dispatch_profile(lua_State *L, const BCIns *pc)
   ERRNO_RESTORE
 }
 #endif
-

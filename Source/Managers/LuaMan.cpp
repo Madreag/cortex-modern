@@ -7633,7 +7633,36 @@ PreviewWindowCreateFunctionsForType(Scene);
 	    luabind::def((std::string("Is") + std::string(#TYPE)).c_str(), &LuaAdaptersEntityCast::IsConst##TYPE), \
 	    OWNINGSCOPE::Register##TYPE##LuaBindings()
 
+bool LuaStateWrapper::RunNumericPolicySelfTest() {
+	const unsigned int expected = LUAJIT_NUMERIC_DUAL | LUAJIT_NUMERIC_DOUBLE | (sizeof(void*) == 8 ? LUAJIT_NUMERIC_GC64 : 0);
+	bool passed = luaJIT_numeric_policy() == expected;
+	std::printf("[lua-numeric-policy-selftest] %s linked_vm policy=%u expected=%u\n", passed ? "PASS" : "FAIL", luaJIT_numeric_policy(), expected);
+	lua_State* state = luaL_newstate();
+	if (!state) { return false; }
+	luaL_openlibs(state);
+	const char* arithmetic =
+		"local function check() local a=2147483647; local b=a+1; "
+		"assert(b==2147483648 and b-a==1); assert(1/(0/-1)==-math.huge); "
+		"assert(tonumber('9007199254740991')+1==9007199254740992); end "
+		"for i=1,10000 do check() end";
+	for (const int mode : {LUAJIT_MODE_OFF, LUAJIT_MODE_ON}) {
+		luaJIT_setmode(state, 0, LUAJIT_MODE_ENGINE | mode | LUAJIT_MODE_FLUSH);
+		luaJIT_setmode(state, 0, LUAJIT_MODE_ENGINE | mode);
+		const bool ok = luaL_dostring(state, arithmetic) == 0;
+		std::printf("[lua-numeric-policy-selftest] %s %s_arithmetic\n", ok ? "PASS" : "FAIL", mode == LUAJIT_MODE_ON ? "jit" : "interpreter");
+		if (!ok) { std::fprintf(stderr, "%s\n", lua_tostring(state, -1)); lua_pop(state, 1); }
+		passed = passed && ok;
+	}
+	lua_close(state);
+	std::printf("[lua-numeric-policy-selftest] %s\n", passed ? "PASS" : "FAIL");
+	return passed;
+}
+
 void LuaStateWrapper::Initialize() {
+	if (luaJIT_numeric_policy() != (LUAJIT_NUMERIC_DUAL | LUAJIT_NUMERIC_DOUBLE | (sizeof(void*) == 8 ? LUAJIT_NUMERIC_GC64 : 0))) {
+		RTEAbort("LuaJIT numeric policy mismatch");
+		std::abort();
+	}
 	m_NativeCache.reset();
 	m_GraphWorker.reset();
 	m_CheckpointHeap = CheckpointLua::HeapOwner::Create();
