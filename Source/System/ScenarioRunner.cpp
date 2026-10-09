@@ -3452,18 +3452,12 @@ namespace RTE {
 			return true;
 		}
 
-		const uint32_t timeoutMs = s_LockstepCoordinator->GetConfig().timeoutMs;
-		// The grace is a wall-clock budget. Feeding the coordinator a poll counter made it a count of
-		// ~1ms sleeps instead, so a peer that stopped sending was waited on for far longer than the
-		// configured milliseconds - long enough for the host's drop notice to arrive too late.
-		const uint64_t giveUpMs = timeoutMs > 0 ? static_cast<uint64_t>(timeoutMs) + 50 : 500;
+		// Late input is a lockstep wait. Only an explicit round stop, a protocol
+		// failure, or replacement of this coordinator ends it; elapsed lag never does.
 		const auto waitStart = std::chrono::steady_clock::now();
-		auto giveUpOrigin = waitStart;
-		bool heldThisWait = false;
 		// A sub-second wait is a normal frame exchange; only a real stall gets the marker + overlay.
 		uint32_t nextOverlayMs = 1500;
 		bool stalled = false;
-		bool stalledOnHold = false;
 		uint32_t nextPumpMs = 0;
 		// The round's activity restart runs before the first frame wait, so publish what it cost us here.
 		if (!s_LocalStartParkPublished) {
@@ -3498,9 +3492,6 @@ namespace RTE {
 					if (stalled) {
 						const auto stallMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
 						std::cout << "[net-match] peer stall recovered after " << stallMs << "ms (tick " << tick << ")" << std::endl;
-						if (stalledOnHold) {
-							PushNetUiToast("resumed", "Match resumed");
-						}
 					}
 					if (s_ReplayWriter.IsOpen() || s_PendingWorldSegment) record(ready);
 					outFrame = std::move(ready);
@@ -3522,47 +3513,17 @@ namespace RTE {
 				return false;
 			}
 			const uint32_t stallMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count());
-			uint32_t holdSeconds = 0;
-			std::string holdName;
-			const bool holdPause = DescribeLockstepHoldPause(holdName, holdSeconds);
 			if (stallMs >= nextOverlayMs) {
-				const std::string missing = s_LockstepCoordinator->DescribeMissingPeers();
 				if (!stalled) {
 					stalled = true;
-					if (!holdPause) {
-						std::cout << "[net-match] waiting on peer frames (tick " << tick << (missing.empty() ? "" : ", " + missing) << ")" << std::endl;
-					}
+					const std::string missing = s_LockstepCoordinator->DescribeMissingPeers();
+					std::cout << "[net-match] waiting on peer frames (tick " << tick << (missing.empty() ? "" : ", " + missing) << ")" << std::endl;
 				}
-				// The seat hold engages seconds after the drop the stall began with, so the wait banner
-				// follows the hold instead of only the moment the stall was first noticed.
-				if (holdPause && !stalledOnHold) {
-					stalledOnHold = true;
-					const std::string who = holdName.empty() ? "a player" : holdName;
-					std::cout << "[net-match] match paused waiting for " << who
-					          << " (" << holdSeconds << "s left, tick " << tick << ")" << std::endl;
-					PushNetUiToast("paused", "Match paused: waiting for " + who + " to return (" + std::to_string(holdSeconds) + "s left)");
-				}
-				if (s_LockstepStallOverlayEnabled || s_LockstepStallUiProbeArmed) {
-					PumpLockstepStallUI();
-				}
+				if (s_LockstepStallOverlayEnabled || s_LockstepStallUiProbeArmed) PumpLockstepStallUI();
 				nextOverlayMs = stallMs + 200;
-			}
-			if (holdPause || s_LockstepCoordinator->IsMigrating()) {
-				heldThisWait = true;
-			} else {
-				if (heldThisWait) {
-					giveUpOrigin = std::chrono::steady_clock::now();
-					heldThisWait = false;
-				}
-				const uint32_t giveUpStallMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - giveUpOrigin).count());
-				if (giveUpStallMs >= giveUpMs) {
-					break;
-				}
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
-		if (error) *error = "timed out waiting for lockstep frame " + std::to_string(tick);
-		return false;
 	}
 
 	void ScenarioRunner::ApplyDeterministicConfig() {

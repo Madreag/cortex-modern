@@ -5756,12 +5756,15 @@ namespace RTE {
 				*error = "four-peer round 1 setup failed: " + *error + "; peer=" + peerError;
 				return false;
 			}
-			for (int spin = 0; spin < 400 && (!clients[0].coordinator.IsRunning() || !clients[1].coordinator.IsRunning() || !clients[2].coordinator.IsRunning()); ++spin) {
+			// The game thread publishes actual activity startup after the lobby handshake.
+			round1.NoteLocalStartPark(0);
+			for (ClientPeer& client: clients) client.coordinator.NoteLocalStartPark(0);
+			for (int spin = 0; spin < 400 && (!round1.IsRunning() || !clients[0].coordinator.IsRunning() || !clients[1].coordinator.IsRunning() || !clients[2].coordinator.IsRunning()); ++spin) {
 				pumpClients();
 				round1.Tick(NetLockstepNowMs());
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
-			if (!clients[0].coordinator.IsRunning() || !clients[1].coordinator.IsRunning() || !clients[2].coordinator.IsRunning()) {
+			if (!round1.IsRunning() || !clients[0].coordinator.IsRunning() || !clients[1].coordinator.IsRunning() || !clients[2].coordinator.IsRunning()) {
 				*error = "four-peer round 1 did not reach Running on every client; peer=" + peerError;
 				return false;
 			}
@@ -5816,6 +5819,8 @@ namespace RTE {
 				*error = "rematch relaunch failed: " + rematchError + "; peer=" + peerError;
 				return false;
 			}
+			round2.NoteLocalStartPark(0);
+			for (ClientPeer& client: clients) if (!client.left) client.coordinator.NoteLocalStartPark(0);
 			const NetMatchConfig& rematchConfig = runner.GetMatchConfig();
 			std::string present;
 			for (const uint8_t peer: rematchConfig.activePeerIds) present += (present.empty() ? "" : ",") + std::to_string(peer);

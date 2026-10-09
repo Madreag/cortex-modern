@@ -702,23 +702,29 @@ namespace RTE {
 				RecoveryWireRound round;
 				if (!round.Start(3, 44951, error, false)) return false;
 				auto& host = round.peer[0];
-				const auto accepted = RecoveryWireInput(3, 42, host.GetRoundId());
-				if (!round.peer[2].QueueRecoveredInput(accepted, error)) return false;
+				const std::vector<NetLockstepFrame> accepted{RecoveryWireInput(3, 41, host.GetRoundId()), RecoveryWireInput(3, 42, host.GetRoundId())};
+				for (const auto& input: accepted) if (!round.peer[2].QueueRecoveredInput(input, error)) return false;
 				round.Pump(4);
-				if (!RecoveryWireCheck(SameRecoveryInputs(host.CapturePendingInputs(40), {accepted}), error, "departed-input fixture never accepted its source input")) return false;
+				if (!RecoveryWireCheck(SameRecoveryInputs(host.CapturePendingInputs(40), accepted), error, "departed-input fixture never accepted its source input")) return false;
 				round.transport[2].Disconnect(1, "membership control");
-				round.Pump(1200);
-				if (!RecoveryWireCheck(host.IsRunning() && host.GetConfig().peerCount == 3 && host.IsPeerGoneAtFrame(3, 42) &&
-				                       !host.UsesTransportPeer(2) && SameRecoveryInputs(host.CapturePendingInputs(40), {accepted}),
+				// The restore has not primed the simulator yet. Its independent control
+				// plane still reports the surviving client's authenticated liveness.
+				NetLockstepAck alive; alive.senderPeerId = 2; alive.highestContiguousFrame = 41;
+				std::vector<uint8_t> heartbeat;
+				if (!NetLockstepCodec::Encode({alive}, heartbeat)) return false;
+				for (unsigned step = 0; step < 1200; ++step) {
+					if (!round.transport[1].Send(1, NetTransportLane::ControlReliable, heartbeat, error)) return false;
+					round.Pump(1);
+				}
+				if (!RecoveryWireCheck(host.IsRunning() && host.GetConfig().peerCount == 3 && !host.IsPeerGoneAtFrame(3, 42) && host.IsPeerGoneAtFrame(3, 43) && !host.HasHeldAISeat(2) &&
+				                       !host.UsesTransportPeer(2) && SameRecoveryInputs(host.CapturePendingInputs(40), accepted),
 				                       error, "departed configured slot lost its accepted future input")) return false;
 				host.ResolveHeldSeat(3, NetLockstepHoldResolution::Expired, round.now);
-				std::vector<NetLockstepFrame> inputs{accepted};
+				std::vector<NetLockstepFrame> inputs = accepted;
 				for (uint8_t sender: {1, 2}) for (uint64_t target: {41ULL, 42ULL}) inputs.push_back(RecoveryWireInput(sender, target, host.GetRoundId()));
 				if (!host.InstallResyncInputs(inputs, error) || !host.PrimeResyncInputs({}, error)) return false;
 				host.Tick(++round.now);
 				auto committed = inputs;
-				for (auto& input: committed) if (input.senderPeerId == 1 && input.targetFrame == 41)
-					input.commands.push_back({1, host.HeldTransactions().at(3)});
 				if (!RecoveryWireCheck(host.IsRunning() && host.GetStats().nextFrame == 43 && host.SeatReleases().at(3).rbegin()->first > 42 && host.IsSeatReclaimableAt(3, 42) && SameRecoveryInputs(host.CapturePendingInputs(40), committed),
 				                       error, "restoration dropped a configured departed sender's accepted controller, commands or observations")) {
 					*error += " next=" + std::to_string(host.GetStats().nextFrame) + " release=" + std::to_string(host.SeatReleases().at(3).rbegin()->first) +
@@ -15326,17 +15332,19 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			}
 			uint32_t pumps = 0;
 			bool dropped = false;
+			bool held = false;
 			ScenarioRunner::SetLockstepCoordinator(&host);
 			ScenarioRunner::SetSessionPump([&] {
 				++pumps;
 				now += 15;
+				hostT.AdvanceTimeMs(15); clientT.AdvanceTimeMs(15);
+				if (!dropped) client.Tick(NetLockstepNowMs());
 				if (!dropped && pumps == 200) {
 					clientT.Stop();
 					dropped = true;
 				}
-				if (dropped && host.AnyDroppedSeatHeld() && pumps == 900) {
-					host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, now);
-				}
+				held = held || host.AnyDroppedSeatHeld();
+				if (pumps == 900) host.Complete("explicit host end after late input and disconnect");
 			});
 			const auto waitStart = std::chrono::steady_clock::now();
 			NetLockstepReadyFrame out;
@@ -15345,7 +15353,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
 			ScenarioRunner::SetSessionPump(nullptr);
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
-			if (pumps < 900) {
+			if (pumps < 900 || !dropped || !held) {
 				*error = "WaitForLockstepControllerFrame gave up before the hold resolved after " +
 				         std::to_string(elapsedMs) + "ms pumps=" + std::to_string(pumps) + ": " + waitError;
 				return false;
