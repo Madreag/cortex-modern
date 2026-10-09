@@ -1658,6 +1658,26 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			check(actual.first == expected && actual.second == expected, "owned_atom_group_columns_preserve_order_and_outlive_mutated_sources");
 		}
 		{
+			CheckpointText frozen;
+			std::string expected;
+			{
+				AtomGroup group;
+				for (int index = 0; index < 7; ++index) {
+					auto atom = std::make_unique<Atom>();
+					atom->SetOffset(Vector(index, -index));
+					group.AddAtom(atom.release(), index % 3 + 1);
+				}
+				expected = group.SaveCheckpoint();
+				{
+					CheckpointWriter::BatchScope batch(true);
+					frozen = CheckpointWriter::CaptureNative([&group] { return group.SaveCheckpoint(); });
+				}
+				group.RemoveAtoms(2);
+			}
+			const auto actual = std::async(std::launch::async, [frozen] { return frozen.Text(); }).get();
+			check(actual == expected, "owned_atom_subgroups_resolve_indices_after_source_death");
+		}
+		{
 			enum class SignedByte : int8_t { Low = -127 };
 			const uint8_t unusualBool = 0xFE;
 			bool flag;

@@ -173,6 +173,31 @@ std::string AtomGroup::SaveCheckpoint() const {
 	std::vector<CheckpointText> atoms;
 	std::unordered_map<const Atom*, size_t> indices;
 	const bool inlineAtoms = CheckpointWriter::IsCapturing() && CheckpointWriter::BatchEnabled();
+	if (inlineAtoms) {
+		writer.AppendFields(Atom::CaptureCheckpointList(m_Atoms));
+		if (m_SubGroups.empty()) writer(size_t{0});
+		else {
+			std::vector<std::pair<long, std::vector<Atom*>>> groups(m_SubGroups.begin(), m_SubGroups.end());
+			size_t bytes = m_Atoms.size() * sizeof(Atom*) + groups.size() * sizeof(groups.front());
+			for (const auto& group: groups) bytes += group.second.size() * sizeof(Atom*);
+			writer.AppendFields(CheckpointText::Deferred([order = m_Atoms, groups = std::move(groups)] {
+				std::unordered_map<const Atom*, size_t> indices;
+				indices.reserve(order.size());
+				for (size_t index = 0; index < order.size(); ++index) indices.emplace(order[index], index);
+				std::map<long, std::vector<size_t>> subgroups;
+				for (const auto& [id, group]: groups) {
+					auto& saved = subgroups[id];
+					for (const Atom* atom: group) saved.push_back(indices.at(atom));
+				}
+				return CheckpointWriter::CaptureNative([&subgroups] {
+					CheckpointWriter writer(CheckpointWriter::FieldsOnly{});
+					writer(subgroups);
+					return writer.Text();
+				}).Text();
+			}, bytes));
+		}
+		return writer.Text();
+	}
 	if (!inlineAtoms) atoms.reserve(m_Atoms.size());
 	const bool needIndices = !CheckpointWriter::BatchEnabled() || !m_SubGroups.empty();
 	if (CheckpointWriter::BatchEnabled() && needIndices) indices.reserve(m_Atoms.size());
