@@ -439,6 +439,7 @@ namespace RTE {
 			std::unique_ptr<Scene> scene;
 			std::unique_ptr<Activity> activity, startActivity;
 			bool hasStartActivity = false;
+			bool nativeSnapshotStorage = false;
 			std::string restartPreset;
 			bool restartObjects = true, restartUnits = true;
 			long long simUpdateCount = -1, simTimeTicks = 0;

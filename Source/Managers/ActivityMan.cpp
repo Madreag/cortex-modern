@@ -7,6 +7,7 @@
 #include "GUISound.h"
 #include "CheckpointArchive.h"
 #include "BitmapCheckpoint.h"
+#include "Atom.h"
 #include "NetIdentity.h"
 #include "LuaMan.h"
 #include "Base64/base64.h"
@@ -1552,6 +1553,14 @@ bool ActivityMan::ReadSavedGameArchive(const std::string& archivePath, const std
 		std::string text;
 		archive.ReadEntry("Save.ini", text);
 		if (text.empty() || text.find('\0') != std::string::npos) throw std::runtime_error("empty or invalid Save.ini");
+		bool nativeSnapshotStorage = false;
+		// Optional multiplayer metadata selects storage without changing manual-load acceptance.
+		try {
+			std::string descriptorText;
+			AutosaveDescriptor descriptor;
+			nativeSnapshotStorage = archive.ReadEntry(AutosaveStore::c_DescriptorEntry, descriptorText, false) && AutosaveStore::ParseDescriptor(descriptorText, descriptor);
+		} catch (const std::exception&) {}
+		Atom::AllocationScope nativeAtoms(nativeSnapshotStorage);
 
 		using Image = std::unique_ptr<SDL_Surface, decltype(&SDL_DestroySurface)>;
 		std::vector<std::pair<std::string, Image>> images;
@@ -1703,6 +1712,7 @@ bool ActivityMan::ReadSavedGameArchive(const std::string& archivePath, const std
 		out.activity = std::move(activity);
 		out.startActivity = std::move(startActivity);
 		out.hasStartActivity = startActivityDeclared;
+		out.nativeSnapshotStorage = nativeSnapshotStorage;
 		out.restartPreset = std::move(originalScenePresetName);
 		out.restartObjects = placeObjects;
 		out.restartUnits = placeUnits;
@@ -2850,6 +2860,7 @@ bool ActivityMan::RestartActivity() {
 		ScenarioRunner::ResetRetiredChecksumCounters();
 	}
 	if (!m_RestartRestoresSnapshot) return RestartActivityCandidate();
+	Atom::AllocationScope nativeAtoms(m_PendingCheckpoint.nativeSnapshotStorage);
 	std::string error;
 	if (!m_PendingCheckpoint.activity || !m_PendingCheckpoint.scene || !g_MovableMan.ValidateScriptGraphs(m_PendingCheckpoint.scriptGraphs, &error)) {
 		g_ConsoleMan.PrintString("ERROR: the saved script state is invalid: " + error);

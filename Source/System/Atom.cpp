@@ -39,7 +39,14 @@ namespace {
 		std::vector<void*> free;
 	};
 	NativeAtomPool* s_NativeAtomPool = nullptr;
+	thread_local bool s_NativeAtomAllocation = false;
 }
+
+Atom::AllocationScope::AllocationScope(bool enabled) : m_Previous(s_NativeAtomAllocation) {
+	s_NativeAtomAllocation = s_NativeAtomAllocation || enabled;
+}
+
+Atom::AllocationScope::~AllocationScope() { s_NativeAtomAllocation = m_Previous; }
 
 struct Atom::FreezeState : std::enable_shared_from_this<FreezeState> {
 	std::shared_ptr<const CheckpointPagePool::Snapshot> pages;
@@ -991,7 +998,7 @@ int Atom::Save(Writer& writer) const {
 
 void* Atom::GetPoolMemory() {
 	std::lock_guard<std::mutex> guard(s_MemoryPoolMutex);
-	if (ScenarioRunner::HasLockstepCoordinator()) {
+	if (s_NativeAtomAllocation || ScenarioRunner::HasLockstepCoordinator()) {
 		// The native pool stays alive through manager and static teardown.
 		if (!s_NativeAtomPool) s_NativeAtomPool = new NativeAtomPool;
 		if (s_NativeAtomPool->free.empty()) s_NativeAtomPool->pages.Grow(sizeof(Atom), std::max(s_PoolAllocBlockCount, 10), s_NativeAtomPool->free);

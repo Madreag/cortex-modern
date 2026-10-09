@@ -76,6 +76,16 @@ namespace RTE {
 		std::string SaveCheckpoint() const;
 		/// Owns atom fields before the saver thread formats the existing list.
 		static CheckpointText CaptureCheckpointList(const std::vector<Atom*>& atoms);
+		/// Keeps restored multiplayer atoms in pages that can outlive the live capture.
+		class AllocationScope {
+		public:
+			explicit AllocationScope(bool enabled);
+			~AllocationScope();
+			AllocationScope(const AllocationScope&) = delete;
+			AllocationScope& operator=(const AllocationScope&) = delete;
+		private:
+			bool m_Previous;
+		};
 		/// Freezes native pages while the live capture records its small owned inputs.
 		class SnapshotScope {
 		public:
