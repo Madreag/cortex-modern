@@ -11017,6 +11017,9 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-fp-environment-error-drift-selftest") {
 			return LuaStateWrapper::RunFloatingPointCallbackSelfTest(2) ? EXIT_SUCCESS : EXIT_FAILURE;
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-fp-environment-capture-drift-selftest") {
+			return LuaStateWrapper::RunFloatingPointCallbackSelfTest(3) ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-sim-checksum-selftest") {
 			return SimChecksum::RunRowBlockSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 		}

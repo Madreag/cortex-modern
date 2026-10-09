@@ -85,7 +85,7 @@ tables require source correspondence rather than a linear instruction scan.
   single-number policy fails the required dual-number receipt.
 - `-fp-environment-selftest`: rounding/denormal drift detection, inherited worker
   drift, gradual underflow and a clean native callback. `tools/test_fp_environment.py`
-  additionally requires deliberate native-return and Lua-error drift to abort
+  additionally requires deliberate native-return, Lua-error and capture drift to abort
   with the FP diagnostic, rather than accepting a crash or nonzero exit alone.
 - `-deterministic-math-selftest`: exact sqrt/remainder edge cases, VM and engine
   result-bit comparisons in both execution modes, bytecode/string/constant/JIT

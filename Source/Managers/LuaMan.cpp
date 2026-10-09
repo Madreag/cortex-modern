@@ -13,6 +13,7 @@
 #include "FloatingPointEnvironment.h"
 #include <cfenv>
 #include <bit>
+#include <cstdlib>
 #include "LuaThreadCodec.h"
 #include "CheckpointImage.h"
 #include "ScenarioRunner.h"
@@ -7780,6 +7781,18 @@ bool LuaStateWrapper::RunDeterministicMathSelfTest() {
 }
 
 bool LuaStateWrapper::RunFloatingPointCallbackSelfTest(int drift) {
+#if defined(_MSC_VER)
+	if (drift != 0) { _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT); }
+#endif
+	if (drift == 3) {
+		const CheckpointText captured = CheckpointText::Deferred([] {
+			std::fesetround(FE_DOWNWARD);
+			return std::string("floating point probe");
+		}, 0, "FloatingPointCallbackProbe");
+		captured.Text();
+		std::fputs("[fp-environment-selftest] FAIL capture_callback\n", stderr);
+		return false;
+	}
 	lua_State* state = luaL_newstate();
 	if (!state) { return false; }
 	RegisterFloatingPointChecks(state);

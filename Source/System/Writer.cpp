@@ -319,7 +319,10 @@ const std::string& CheckpointText::Text() const {
 		}
 		const auto format = [node] {
 			if (node->deferred) {
-				node->text = node->produce();
+				{
+					const FloatingPointEnvironment::Scope scope("capture callback");
+					node->text = node->produce();
+				}
 				if (!node->peerMark.empty()) StripPeerMarks(node->text, node->peerMark, node->peerRuns);
 				node->formatted.store(true, std::memory_order_release);
 				node->produce = nullptr;
