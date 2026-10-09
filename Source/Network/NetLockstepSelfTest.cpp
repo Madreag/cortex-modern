@@ -2872,15 +2872,18 @@ namespace RTE {
 			if (host.QueueLocalInput(20, {}, {}, &pending) || pending != "input is waiting for a timing decision") {
 				*error = "local production crossed an unacknowledged timing boundary"; return false;
 			}
-			for (uint64_t now = 41; now <= 150; ++now) {
+			for (uint64_t now = 41; now <= 1100; ++now) {
 				hostWire.AdvanceTimeMs(1); host.Tick(now);
 				if (now >= 100) host.NoteFrameWait(20, now, true);
+				if (now == 1000 && !host.TimingDecisionPendingAt(20)) {
+					*error = "an acknowledgement wait removed a member before a full second of silence"; return false;
+				}
 			}
 			if (!host.QueueLocalInput(20, {}, {}, error)) {
 				*error = "timing fixture after deadline: " + *error + " next=" + std::to_string(host.GetStats().nextFrame) +
 				         " holds=" + std::to_string(host.GetStats().peers.at(2).holds) + " " + host.DescribePendingTimingDecisions(20); return false;
 			}
-			host.Tick(151);
+			host.Tick(1101);
 			if (host.TimingDecisionPendingAt(20) || !host.PopReadyFrame(ready) || ready.frame != 20 ||
 			    host.IsPeerGoneAtFrame(2, 20) || !host.IsPeerGoneAtFrame(2, 21) || host.InputDelayAt(2, 20) != 4) {
 				*error = "an unacknowledged delay blocked the survivor or contradicted buffered input"; return false;
@@ -22812,16 +22815,20 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!client.QueueLocalInput(98, {}, {}, error)) return false;
 			(void)hostWire.PollEvents(); (void)clientWire.PollEvents();
 			host.AcknowledgeAcceptedInput(2, 100);
-			// Restore a host hold already committed by an older build. New hosts cannot create one,
-			// but its marker and delayed reliable record must still replay as the same boundary.
+			// Resume a historical proposal; new hosts cannot author an own-seat hold.
 			NetLockstepTiming held;
 			held.senderPeerId = held.peerId = 1; held.sessionId = a.sessionId; held.roundId = a.roundId;
-			held.action = NetTimingAction::Hold; held.phase = NetTimingPhase::HoldAtFrame;
+			held.action = NetTimingAction::Hold; held.phase = NetTimingPhase::Propose;
 			held.applyFrame = held.cutoffFrame = held.nextFrame = 100; held.revision = 1;
 			held.heldPeers = 1; held.requiredPeers = 2; held.seatIncarnations[0] = 1;
-			host.ApplyTiming(held);
-			host.m_TimingDecisions[1] = {held, 0, true, 1000}; host.m_NextTimingRevision = 2;
+			host.m_TimingDecisions[1] = {held, 1, false, 1000}; host.m_NextTimingRevision = 2;
 			host.QueueTiming(held); host.FlushTimingOutgoing();
+			// The marker is trusted only after the survivor has acknowledged this exact proposal.
+			hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+			for (const auto& event: clientWire.PollEvents()) client.HandleEvent(event, 1001);
+			client.FlushTimingOutgoing();
+			hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+			for (const auto& event: hostWire.PollEvents()) host.HandleEvent(event, 1002);
 			host.AdvanceReadyFrames(1002);
 			hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10);
 			std::vector<NetTransportEvent> reliable;
