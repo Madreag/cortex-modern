@@ -829,13 +829,16 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	AudioMan::SoundCheckpointSaveScope carriedSounds(false);
 	ContentFile::LoadedBitmapIndexScope bitmapIndex;
 	const uint64_t liveSoundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
-	BitmapPixelCaptureScope pixels;
+	BitmapPixelCaptureScope pixels(!matchId.empty());
 	auto& cow = CheckpointCow::Get();
 	cow.BeginImage();
 	CheckpointWriter::CacheScope cache(&cow.Cache());
 	CheckpointWriter::BatchScope nativeBatches(!matchId.empty(), !matchId.empty());
 	CheckpointLua::CopyPool::PauseScope pageCopies(!matchId.empty());
+	Atom::SnapshotScope nativePages(!matchId.empty());
 	auto image = std::make_shared<CheckpointImage>();
+	image->nativePages = nativePages.Pages();
+	if (image->nativePages) image->nativeReady = CheckpointLua::CopyPool::Submit([pages = image->nativePages] { pages->Drain(); }).share();
 	image->tick = tick;
 	std::vector<std::shared_ptr<const BitmapSnapshot>> retiredLayers;
 	// Each record is timed on its own so the completion pass can see where the freeze goes.
@@ -957,10 +960,10 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	const auto layersStart = std::chrono::steady_clock::now();
 	static const bool layerCosts = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
 	for (LayerCapture& captured: layers) {
-		captureAside("layer", captured.name, [&captured, &layersUs, &since, layersStart, queued = layerCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}] {
+		captureAside("layer", captured.name, [&captured, &layersUs, &since, layersStart, deferRows = !matchId.empty(), queued = layerCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}] {
 			const auto started = layerCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			const uint64_t cpuStart = layerCosts ? CheckpointCaptureCpuUnits() : 0;
-			captured.snapshot = captured.layer->CaptureBitmapSnapshot(&captured.retired);
+			captured.snapshot = captured.layer->CaptureBitmapSnapshot(&captured.retired, deferRows);
 			if (layerCosts) {
 				captured.captureUs = since(started);
 				captured.queueUs = std::chrono::duration_cast<std::chrono::microseconds>(started - queued).count();
@@ -1137,6 +1140,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			}
 			const auto start = std::chrono::steady_clock::now();
 			try {
+				if (image->nativeReady.valid()) image->nativeReady.get();
 				std::string line = FullStateHashLine(*image, dump) + " round=" + std::to_string(round);
 				if (!label.empty()) line.replace(0, std::string_view("[fullstate]").size(), "[fullstate-" + label + "]");
 				System::PrintDiagnosticLine(line);
@@ -1237,6 +1241,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			retiredLayers.clear();
 			previousImage.reset();
 			sceneCache.reset();
+			if (image->nativeReady.valid()) image->nativeReady.get();
 			const CheckpointText main = AssembleOwnedSave(*image);
 			const CheckpointText index = AssembleOwnedIndex(*image);
 			const auto images = ReuseAutosaveImages(matchId, image->layers, palette);

@@ -2,10 +2,12 @@
 
 #include "Writer.h"
 #include "SceneLayer.h"
+#include "CheckpointPagePool.h"
 
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -64,6 +66,8 @@ namespace RTE {
 		CheckpointText globals;
 		std::vector<CheckpointSection> globalSections; //!< The runtime globals' parts in the archive's order; filled only when asked for.
 		std::vector<CheckpointText> graphs;
+		std::shared_ptr<const CheckpointPagePool::Snapshot> nativePages;
+		std::shared_future<void> nativeReady;
 		std::vector<CheckpointScope> graphScopes; //!< Each graph's scope, in the graphs' order; a graph with none is shared.
 		std::string activityName;
 		std::string originalScenePresetName;
