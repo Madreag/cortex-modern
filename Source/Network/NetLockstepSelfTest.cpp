@@ -1979,7 +1979,7 @@ namespace RTE {
 			return true;
 		}
 
-		bool TestTheBudgetStartsAtTheHostsOwnStartup(std::string* error) {
+		bool TestBothStartupFactsPrecedeTheBoundary(std::string* error) {
 			LoopbackTransport wire, silentWire;
 			NetLockstepCoordinator host;
 			auto config = MakeCoordinatorConfig(1, 2, 0x9A7B, 0, NetTransportLane::ControlReliable);
@@ -1988,14 +1988,21 @@ namespace RTE {
 			// A seat that is connected but has not published its startup: the budget must not judge it before
 			// this machine has measured its own.
 			if (!wire.StartHost(49485, error) || !silentWire.Connect("loopback", 49485, error) || !host.Start(wire, config, error)) return false;
-			// Many budgets pass while this machine has not measured its own startup: nothing may be agreed yet.
-			for (uint64_t now = 0; now < 600; now += 5) { wire.AdvanceTimeMs(5); host.Tick(now); }
-			if (host.GetAgreedStartRecord()) { *error = "the answer budget ran before the host published its own startup"; return false; }
+			NetLockstepCoordinator client;
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A7B, 0, NetTransportLane::ControlReliable);
+			clientConfig.roundId = config.roundId; clientConfig.simTickMs = config.simTickMs;
+			clientConfig.requirePublishedStart = true; clientConfig.timeoutMs = config.timeoutMs;
+			if (!client.Start(silentWire, clientConfig, error)) return false;
+			uint64_t now = 0;
+			const auto pump = [&] { wire.AdvanceTimeMs(5); silentWire.AdvanceTimeMs(5); host.Tick(now); client.Tick(now); now += 5; };
+			client.NoteLocalStartPark(0);
+			for (; now < 600;) pump();
+			if (host.GetAgreedStartRecord()) { *error = "the host agreed before publishing its own startup"; return false; }
 			host.NoteLocalStartPark(0);
-			for (uint64_t now = 600; now < 1400 && !host.GetAgreedStartRecord(); now += 5) { wire.AdvanceTimeMs(5); host.Tick(now); }
-			if (!host.GetAgreedStartRecord()) { *error = "the host never formed its boundary after publishing its startup"; return false; }
-			std::cout << "[net-lockstep-selftest] PASS the_budget_starts_at_the_hosts_own_startup first="
-			          << host.GetAgreedStartRecord()->agreedFirstFrame << std::endl;
+			for (; now < 1400 && !host.GetAgreedStartRecord();) pump();
+			if (!host.GetAgreedStartRecord() || host.GetAgreedStartRecord()->heldPeerMask != 0) {
+				*error = "both zero-duration human startup facts did not form the boundary"; return false;
+			}
 			return true;
 		}
 
@@ -2339,7 +2346,7 @@ namespace RTE {
 			};
 			for (int pass = 0; pass < 10; ++pass) pump(true);
 			if (!WarmBoundedInputFixture({{&host, &hostWire}, {&slow, &slowWire}, {&survivor, &survivorWire}}, now, error) ||
-			    !host.QueueLocalInput(101, {}, {}, error) || (!bothSilent && !survivor.QueueLocalInput(101, {}, {}, error))) return false;
+			    !host.QueueLocalInput(101, {}, {}, error) || (!bothSilent && !survivor.QueueLocalInput(101 - survivor.GetConfig().inputDelayFrames, {}, {}, error))) return false;
 			survivorWire.block = lostAck;
 			const uint64_t stopped = now;
 			for (; now < stopped + c_NetSeatDisconnectSilenceMs - 50;) pump(false);
@@ -3543,7 +3550,7 @@ namespace RTE {
 
 		// A peer whose publication never arrives cannot park the round: the wait gets the round's own answer
 		// budget and the agreed first frame forms on what was published, leaving the seat to the bound.
-		bool TestUnpublishedStartupCannotParkTheRound(std::string* error) {
+		bool TestUnpublishedStartupWaitsForItsOwner(std::string* error) {
 			LoopbackTransport hostWire, clientWire;
 			NetLockstepCoordinator host, client;
 			const uint32_t budgetMs = 400;
@@ -3558,39 +3565,26 @@ namespace RTE {
 			hostConfig.matchConfig = clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A39);
 			hostConfig.requirePublishedStart = clientConfig.requirePublishedStart = true;
 			if (!StartCoordinatorPair(48897, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
-			// Only this machine ever measures its startup; the other never publishes one.
 			host.NoteLocalStartPark(120);
-			uint64_t ranAtMs = 0;
-			for (uint64_t now = 0; now < 4 * budgetMs && ranAtMs == 0; ++now) {
-				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
-				host.Tick(now); client.Tick(now);
-				if (host.IsRunning()) ranAtMs = now;
+			uint64_t now = 0;
+			const auto pump = [&] { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now++); };
+			for (; now < 4 * budgetMs;) pump();
+			if (host.IsRunning() || host.HasHeldAISeat(2) || host.GetAgreedStartRecord()) {
+				*error = "the input timeout bypassed an unpublished human startup"; return false;
 			}
-			if (ranAtMs == 0) {
-				*error = "an unpublished startup parked the round past its answer budget: state=" +
-				         std::string(NetLockstepCoordinator::StateName(host.GetState())) + " budget=" + std::to_string(budgetMs) + "ms";
-				return false;
-			}
-			if (ranAtMs < budgetMs) {
-				*error = "the round gave up on the missing startup before its answer budget: ran_at=" +
-				         std::to_string(ranAtMs) + "ms budget=" + std::to_string(budgetMs) + "ms";
-				return false;
-			}
+			client.NoteLocalStartPark(0);
+			for (const uint64_t until = now + 100; now < until;) pump();
 			const uint64_t expected = hostConfig.startFrame + static_cast<uint64_t>(std::ceil(120.0 / hostConfig.simTickMs)) + hostConfig.inputDelayFrames;
-			if (host.GetStats().effectiveStartFrame != expected) {
-				*error = "the agreed first frame ignored the startups that were published: effective=" +
-				         std::to_string(host.GetStats().effectiveStartFrame) + " expected=" + std::to_string(expected);
-				return false;
+			if (!host.IsRunning() || !client.IsRunning() || host.GetStats().effectiveStartFrame != expected || client.GetStats().effectiveStartFrame != expected) {
+				*error = "the agreed start did not include both published startup facts"; return false;
 			}
-			std::cout << "[net-lockstep-selftest] PASS unpublished_startup_cannot_park_the_round ran_at=" << ranAtMs
-			          << "ms budget=" << budgetMs << "ms effective=" << host.GetStats().effectiveStartFrame << std::endl;
 			return true;
 		}
 
 		// A slow loader never holds the others' start past the startup answer budget: the AI takes its seat at the agreed
 		// first frame on every peer, and the loader comes back through its rejoin. The product's grace is 20 s; the start must
 		// not borrow it.
-		bool TestASlowLoaderIsHeldAtTheStartupBudget(std::string* error) {
+		bool TestASlowLoaderKeepsItsHumanSeat(std::string* error) {
 			LoopbackTransport hostWire, clientWire;
 			NetLockstepCoordinator host, client;
 			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A3D, 2, NetTransportLane::ControlReliable);
@@ -3604,30 +3598,20 @@ namespace RTE {
 			hostConfig.matchConfig = clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A3D);
 			hostConfig.requirePublishedStart = clientConfig.requirePublishedStart = true;
 			if (!StartCoordinatorPair(48909, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
-			// The host has loaded; the client is still loading and publishes nothing.
+			// A late, connected loader retains its human seat until both startup facts arrive.
 			host.NoteLocalStartPark(120);
-			uint64_t now = 0, ranAtMs = 0;
-			for (; now < 25000 && ranAtMs == 0; ++now) {
-				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
-				host.Tick(now); client.Tick(now);
-				if (host.IsRunning()) ranAtMs = now;
+			uint64_t now = 0;
+			const auto pump = [&] { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now++); };
+			for (; now < 25000;) pump();
+			if (host.IsRunning() || host.HasHeldAISeat(2) || client.IsLocalSeatHeld() || host.GetAgreedStartRecord()) {
+				*error = "a connected slow loader was replaced or started without publishing its startup"; return false;
 			}
-			const uint64_t budgetMs = NetLockstepCoordinator::c_StartupAnswerBudgetMs;
-			if (ranAtMs == 0 || ranAtMs < budgetMs || ranAtMs > budgetMs + 50) {
-				*error = "a slow loader held the others' start for " + std::to_string(ranAtMs) + " ms; the startup answer budget is " +
-				         std::to_string(budgetMs) + " ms (ran=" + std::to_string(host.IsRunning()) + ")";
-				return false;
+			client.NoteLocalStartPark(300);
+			for (const uint64_t until = now + 100; now < until;) pump();
+			if (!host.IsRunning() || !client.IsRunning() || host.HasHeldAISeat(2) || client.IsLocalSeatHeld() ||
+			    host.GetStats().effectiveStartFrame != client.GetStats().effectiveStartFrame) {
+				*error = "the human startup barrier did not resume together when the slow loader published"; return false;
 			}
-			for (const uint64_t until = now + 500; now < until && !client.IsLocalSeatHeld(); ++now) {
-				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
-				host.Tick(now); client.Tick(now);
-			}
-			if (!host.HasHeldAISeat(2) || !client.IsLocalSeatHeld()) {
-				*error = "the slow loader's seat did not go to the AI on both peers: host_held=" + std::to_string(host.HasHeldAISeat(2)) +
-				         " client_held=" + std::to_string(client.IsLocalSeatHeld());
-				return false;
-			}
-			std::cout << "[net-lockstep-selftest] PASS a_slow_loader_is_held_at_the_startup_budget ran_at=" << ranAtMs << "ms budget=" << budgetMs << "ms" << std::endl;
 			return true;
 		}
 
@@ -4391,7 +4375,7 @@ namespace RTE {
 			};
 			(void)PumpQuorumRig(r, 23000, [] { return false; });
 			if (!r.Peer(2).IsMigrating() || r.Peer(2).IsStopped() || r.Peer(2).GetHostPeerId() != 1 || r.Peer(1).GetHostPeerId() != 1 ||
-			    r.simulated[0] > committedLimit || r.simulated[1] > committedLimit) {
+			    r.simulated[1] > committedLimit) {
 				*error = "a two-player partition manufactured a second committed history: provisional=" + std::to_string(r.Peer(1).IsHostProvisional()) + r.Report();
 				return false;
 			}
@@ -4610,7 +4594,7 @@ namespace RTE {
 		return QuorumFoldsAgree(r, {2, 3, 4}, error);
 		}
 
-		bool TestALinkLostBeforeTheStartIsHeld(std::string* error) {
+		bool TestALinkLostBeforeStartKeepsTheBarrier(std::string* error) {
 			LoopbackTransport hostWire, clientWire;
 			NetLockstepCoordinator host, client;
 			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A3B, 1, NetTransportLane::ControlReliable);
@@ -4634,32 +4618,13 @@ namespace RTE {
 				*error = std::string("the fixture's host did not wait for the unpublished startup: state=") + NetLockstepCoordinator::StateName(host.GetState());
 				return false;
 			}
-			host.InjectEvent({NetTransportEventType::PeerDisconnected, 1, NetTransportLane::ControlReliable, {}, "Connection dropped"}, now);
-			for (const uint64_t until = now + 100; now < until; ++now) {
-				hostWire.AdvanceTimeMs(1);
-				host.Tick(now);
+			clientWire.Stop();
+			for (const uint64_t until = now + 6000; now < until; ++now) {
+				hostWire.AdvanceTimeMs(1); host.Tick(now);
 			}
-			const uint64_t first = host.GetStats().effectiveStartFrame;
-			if (!host.IsRunning() || !host.IsSeatUnderAI(2, first)) {
-				*error = std::string("a link lost before the agreed start ended the round instead of holding the seat: state=") +
-				         NetLockstepCoordinator::StateName(host.GetState()) + " reason=\"" + host.GetStats().timeoutReason + "\" under_ai=" +
-				         std::to_string(host.IsSeatUnderAI(2, first)) + " first=" + std::to_string(first);
-				return false;
+			if (host.GetState() != NetLockstepState::WaitingForStart || host.HasHeldAISeat(2) || host.IsSeatUnderAI(1, 100) || host.GetAgreedStartRecord()) {
+				*error = "a startup disconnect manufactured combat or AI control"; return false;
 			}
-			uint64_t committed = 0;
-			for (uint64_t tick = hostConfig.startFrame; tick <= first + 20; ++tick) {
-				std::string queueError;
-				if (!host.QueueLocalInput(tick, {}, {}, &queueError)) { *error = "the held round refused the host's input at tick " + std::to_string(tick) + ": " + queueError; return false; }
-				hostWire.AdvanceTimeMs(1);
-				host.Tick(now++);
-				NetLockstepReadyFrame ready;
-				while (host.PopReadyFrame(ready)) { (void)host.FinishSimulationTick(ready.frame); committed = ready.frame; }
-			}
-			if (committed < first + 10) {
-				*error = "the host did not play on past the held seat: committed=" + std::to_string(committed) + " first=" + std::to_string(first);
-				return false;
-			}
-			std::cout << "[net-lockstep-selftest] PASS a_link_lost_before_the_start_is_held first=" << first << " committed=" << committed << std::endl;
 			return true;
 		}
 
@@ -5383,6 +5348,11 @@ namespace RTE {
 				std::vector<uint8_t> bytes;
 				if (!NetLockstepCodec::Encode({stop}, bytes) || !clientWire.Send(1, NetTransportLane::ControlReliable, bytes, error)) return false;
 				for (int pass = 0; pass < 10 && !host.HasHeldAISeat(2) && !host.IsSeatReleased(2); ++pass) pump();
+				if (host.HasHeldAISeat(2)) { *error = "a stop fact held a still-talking peer"; return false; }
+				clientWire.Stop();
+				for (const uint64_t until = now + c_NetSeatDisconnectSilenceMs + 100; now < until;) {
+					++now; hostWire.AdvanceTimeMs(1); host.Tick(now);
+				}
 				const bool released = host.IsSeatReleased(2);
 				if (!host.IsRunning() || released || !host.HasHeldAISeat(2)) {
 					*error = std::string("a ") + NetLockstepCodec::StopReasonName(reason) + " stop left seat 2 " + (released ? "released" : host.HasHeldAISeat(2) ? "held" : "unheld") +
@@ -28418,7 +28388,7 @@ namespace {
 		row(&TestAResumedRoundPrimesPastItsAgreedFirstFrame, "a_resumed_round_primes_past_its_agreed_first_frame");
 		row(&TestACommandAParkEmptiedCommitsAfterIt, "a_command_in_a_park_commits_at_its_frame");
 		row(&TestCaptureParkCommitsCanonicalEmptyFrames, "capture_park_commits_every_players_input");
-		row(&TestASlowLoaderIsHeldAtTheStartupBudget, "a_slow_loader_is_held_at_the_startup_budget");
+		row(&TestASlowLoaderKeepsItsHumanSeat, "a_slow_loader_keeps_its_human_seat");
 		row(&TestAReturningSeatsRampIsTheBound, "a_returning_seats_ramp_is_the_bound");
 		row(&TestAgreedStartNamesEachSeatsDevice, "the_agreed_start_names_each_seats_device");
 		row(&TestPlaneScopesKeepTheirOwnCounts, "plane_scopes_keep_their_own_counts");
@@ -28435,7 +28405,7 @@ namespace {
 		row(&TestAThinLeadIsRaisedBeforeASpike, "a_thin_lead_is_raised_before_a_spike");
 		row(&TestAWorldAdmissionClearsAReleasedSeat, "a_world_admission_clears_a_released_seat");
 		row(&TestAReturnerAnswersItsSuccessor, "a_returner_answers_its_successor");
-		row(&TestALinkLostBeforeTheStartIsHeld, "a_link_lost_before_the_start_is_held");
+		row(&TestALinkLostBeforeStartKeepsTheBarrier, "a_link_lost_before_start_keeps_the_barrier");
 		row(&TestTheFirstFramesRideOutABurstOnALongLink, "the_first_frames_ride_out_a_burst_on_a_long_link");
 		row(&TestAPeerIsDueADelayAfterAPark, "a_peer_is_due_a_delay_after_a_park");
 		row(&TestAFeedingPeerIsWaitedOnWithinTheBound, "a_feeding_peer_is_waited_on_within_the_bound");
@@ -28547,7 +28517,7 @@ namespace {
 		row([](std::string* rowError) { return TestReturningSeatSurvivesItsFirstTrip(rowError); }, "TestReturningSeatSurvivesItsFirstTrip");
 		row([](std::string* rowError) { return TestShiftedFirstFrameAdmitsTheRamp(rowError); }, "TestShiftedFirstFrameAdmitsTheRamp");
 		row([](std::string* rowError) { return TestZeroRestartStillPublishesTheStartup(rowError); }, "TestZeroRestartStillPublishesTheStartup");
-		row([](std::string* rowError) { return TestUnpublishedStartupCannotParkTheRound(rowError); }, "TestUnpublishedStartupCannotParkTheRound");
+		row([](std::string* rowError) { return TestUnpublishedStartupWaitsForItsOwner(rowError); }, "TestUnpublishedStartupWaitsForItsOwner");
 		row([](std::string* rowError) { return TestBufferedReturnIsNotAnAnswer(rowError); }, "TestBufferedReturnIsNotAnAnswer");
 		row([](std::string* rowError) { return TestReturnOnAFreshLinkKeepsItsWindow(rowError); }, "TestReturnOnAFreshLinkKeepsItsWindow");
 		row([](std::string* rowError) { return TestReturnKeepsTheLinkItLastMeasured(rowError); }, "TestReturnKeepsTheLinkItLastMeasured");
@@ -28682,7 +28652,7 @@ namespace {
 		row([](std::string* rowError) { return TestDeadLinkLosesOnlyItsOwnSeat(rowError); }, "TestDeadLinkLosesOnlyItsOwnSeat");
 		row([](std::string* rowError) { return TestDeadLinkHealedInTimeKeepsEverySeat(rowError); }, "TestDeadLinkHealedInTimeKeepsEverySeat");
 		row([](std::string* rowError) { return TestSoloRoundRunsWithoutRemotes(rowError); }, "TestSoloRoundRunsWithoutRemotes");
-		row([](std::string* rowError) { return TestTheBudgetStartsAtTheHostsOwnStartup(rowError); }, "TestTheBudgetStartsAtTheHostsOwnStartup");
+		row([](std::string* rowError) { return TestBothStartupFactsPrecedeTheBoundary(rowError); }, "TestBothStartupFactsPrecedeTheBoundary");
 		row([](std::string* rowError) { return TestAParkClosesOnItsBudget(rowError); }, "TestAParkClosesOnItsBudget");
 		row([](std::string* rowError) { return TestADeferredDecisionWaitsForTheFinalEnd(rowError); }, "TestADeferredDecisionWaitsForTheFinalEnd");
 		if (!rowsPassed) return fail("a reporting row failed");

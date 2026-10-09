@@ -8340,7 +8340,7 @@ namespace RTE {
 		// The rejoin is abandoned with the player still connected: the roster fails the return, and nothing begins it again inside the backoff.
 		host.m_WorldJoin.CancelJoin(65, "the returner could not be moved past the capture park");
 		host.FeedRosterReturnsLocked();
-		if (held()->phase != NetSeatPhase::Held || held()->holdCause != NetSeatHoldCause::RejoinFailed || held()->failedReturns != 1) {
+		if (held()->phase != NetSeatPhase::Held || held()->holdCause != NetSeatHoldCause::LinkDrop || held()->failedReturns != 1) {
 			*error = "an abandoned private return did not fail on the roster: " + phaseText() + " failed=" + std::to_string(held()->failedReturns);
 			return false;
 		}

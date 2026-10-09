@@ -5778,7 +5778,9 @@ namespace RTE {
 			const uint8_t leaverPeerId = leaver->peerId;
 			leaver->coordinator.Leave("player left");
 			leaver->left = true;
-            for (int spin = 0; spin < 400 && !round1.GetPeerLeaveFrames().contains(leaverPeerId); ++spin) {
+			pumpClients();
+			round1.Tick(NetLockstepNowMs()); // Receive the last authenticated leave before advancing the silence clock.
+			for (int spin = 0; spin < 400 && !round1.GetPeerLeaveFrames().contains(leaverPeerId); ++spin) {
 				pumpClients();
 				round1.Tick(NetLockstepNowMs() + c_NetSeatDisconnectSilenceMs + 100);
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));

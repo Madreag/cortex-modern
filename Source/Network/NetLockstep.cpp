@@ -3902,6 +3902,10 @@ namespace RTE {
 			m_MigrationResult.snapshotProviderPeerId = m_MigrationDonor;
 		m_MigrationResult.transports = m_MigrationPeers;
 		std::erase_if(m_MigrationResult.transports, [&](const auto& peer) { return !m_MigrationAnswers.contains(peer.first); });
+		// Roll calls to an unselected warm connection are not part of the agreed publication.
+		std::erase_if(m_MigrationOutbox, [&](const auto& queued) {
+			return std::none_of(m_MigrationResult.transports.begin(), m_MigrationResult.transports.end(), [&](const auto& peer) { return peer.second == queued.first; });
+		});
 		m_MigrationPhase = NetHostMigrationPhase::Recovering;
 		m_MigrationSinceMs = nowMs;
 		auto plan = MigrationMessage(NetHostMigrationMessageType::Plan);
@@ -3976,6 +3980,7 @@ namespace RTE {
 			return;
 		if (!hosting && (message.senderPeerId != m_MigrationSuccessor || event.peerId != m_MigrationHostTransport))
 			return;
+		if (hosting && !m_MigrationExpected.contains(message.senderPeerId)) return;
 		if (hosting && m_MigrationPeers.contains(message.senderPeerId) && m_MigrationPeers.at(message.senderPeerId) != event.peerId)
 			return;
 		switch (message.type) {
@@ -9509,6 +9514,7 @@ namespace RTE {
 		}
 		RefreshLeftSeatHolds();
 		HandleTransportEvents(nowMs);
+		CheckHostSilence(nowMs);
 		if (IsMigrating()) {
 			TickHostMigration(nowMs);
 			return;
@@ -10314,6 +10320,9 @@ namespace RTE {
 		out << "\"migration_history_bytes\":" << m_MigrationHistoryBytes << ",";
 		out << "\"migration_boundary\":" << m_MigrationResult.boundary << ",";
 		out << "\"migration_phase\":" << static_cast<int>(m_MigrationPhase) << ",";
+		out << "\"migration_reported_members\":" << m_MigrationAnswers.size() << ",";
+		out << "\"migration_ready_members\":" << m_MigrationReady.size() << ",";
+		out << "\"migration_pending_routes\":" << std::count_if(m_MigrationOutbox.begin(), m_MigrationOutbox.end(), [](const auto& queued) { return !queued.second.empty(); }) << ",";
 		out << "\"remote_peer_id\":" << static_cast<int>(m_Stats.remotePeerId) << ",";
 		out << "\"configured_start_frame\":" << m_Stats.configuredStartFrame << ",";
 		out << "\"effective_start_frame\":" << m_Stats.effectiveStartFrame << ",";
@@ -12820,6 +12829,11 @@ namespace RTE {
 			m_Stats.longestStallMs = nowMs - m_WaitStartMs;
 			m_Stats.lastMissingPeers = DescribeMissingPeers();
 		}
+
+	}
+
+	void NetLockstepCoordinator::CheckHostSilence(uint64_t nowMs) {
+		if (!IsRunning() || IsMigrating() || m_Playback || m_Config.localPeerId == GetHostPeerId()) return;
 		const uint64_t lastAuthorityTraffic = m_AuthorityLastHeardMs;
 		uint64_t hostRttMs = 0;
 		// Past this peer's last tick the host has nothing left to send: its quiet there is the round's end, not a death.

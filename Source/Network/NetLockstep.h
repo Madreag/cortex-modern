@@ -1535,6 +1535,7 @@ namespace RTE {
 		friend class ScenarioRunner;
 
 	private:
+		void CheckHostSilence(uint64_t nowMs);
 		void TickHostMigration(uint64_t nowMs);
 		void TickMigrationRollCallLinks(uint64_t nowMs);
 		void WarmMigrationLinks(uint64_t nowMs);
