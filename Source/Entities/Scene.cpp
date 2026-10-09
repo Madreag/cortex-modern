@@ -2022,12 +2022,13 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 	if (const MOSRotating* mosRotatingToSave = CheckpointCast<const MOSRotating>(sceneObjectToSave)) {
 		if (saveFullData) {
 			if (const AtomGroup* atomGroupToSave = const_cast<MOSRotating*>(mosRotatingToSave)->GetAtomGroup()) {
-				WriteCapturedPropertySequence<"AtomGroupResidue">(writer, atomGroupToSave->GetTravelResidue());
-				// Attachable subgroup folds move atom offsets off the preset; carry them verbatim.
-				WriteCapturedPropertySequence<"AtomGroupOffset">(writer, atomGroupToSave->GetAtomOffsets());
-				// Subgroup identities bind the two arrays above; live order records attach history.
-				WriteCapturedPropertySequence<"AtomGroupSubID">(writer, atomGroupToSave->GetAtomSubIDs());
-				WriteCapturedPropertySequence<"AtomGroupMaterial">(writer, atomGroupToSave->GetAtomMaterialIndices());
+				if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) atomGroupToSave->CaptureSnapshotProperties(writer);
+				else {
+					WriteCapturedPropertySequence<"AtomGroupResidue">(writer, atomGroupToSave->GetTravelResidue());
+					WriteCapturedPropertySequence<"AtomGroupOffset">(writer, atomGroupToSave->GetAtomOffsets());
+					WriteCapturedPropertySequence<"AtomGroupSubID">(writer, atomGroupToSave->GetAtomSubIDs());
+					WriteCapturedPropertySequence<"AtomGroupMaterial">(writer, atomGroupToSave->GetAtomMaterialIndices());
+				}
 				// The moment of inertia accumulates over attach history; carry the value, not the recompute.
 				writer.NewPropertyWithValue("AtomGroupMomentOfInertia", atomGroupToSave->GetStoredMomentOfInertia());
 				writer.NewPropertyWithValue("AtomGroupStoredOwnerMass", atomGroupToSave->GetStoredOwnerMass());

@@ -1,6 +1,7 @@
 #include "AtomGroup.h"
 #include "Base64/base64.h"
 #include "CheckpointArchive.h"
+#include "CheckpointProperties.h"
 #include "CaptureSentinel.h"
 #include "MovableMan.h"
 
@@ -373,6 +374,32 @@ std::vector<long long> AtomGroup::GetTravelResidue() const {
 		residue.push_back(atom->PackTravelResidue());
 	}
 	return residue;
+}
+
+void AtomGroup::CaptureSnapshotProperties(Writer& writer) const {
+	struct Record {
+		long long residue;
+		CheckpointProperties::VectorValue offset;
+		long long subgroup;
+		int material;
+	};
+	auto storage = CheckpointBuffer::LeaseCaptureStorage();
+	std::pmr::vector<Record> records(storage ? storage.get() : std::pmr::get_default_resource());
+	records.reserve(m_Atoms.size());
+	for (const Atom* atom: m_Atoms) {
+		const Vector& offset = atom->GetOffset();
+		records.push_back({atom->PackTravelResidue(), {offset.m_X, offset.m_Y}, atom->GetSubID(), atom->GetMaterial()->GetIndex()});
+	}
+	const size_t bytes = records.size() * sizeof(Record);
+	const int indent = writer.GetIndent();
+	writer.Append(CheckpointText::Deferred([storage = std::move(storage), records = std::move(records), indent] {
+		return Writer::Capture([&](Writer& output) {
+			for (const auto& record: records) output.NewPropertyWithValue("AtomGroupResidue", record.residue);
+			for (const auto& record: records) CheckpointProperties::Owned<"AtomGroupOffset", CheckpointProperties::VectorValue>::WriteValue(output, record.offset);
+			for (const auto& record: records) output.NewPropertyWithValue("AtomGroupSubID", record.subgroup);
+			for (const auto& record: records) output.NewPropertyWithValue("AtomGroupMaterial", record.material);
+		}, indent).Text();
+	}, bytes));
 }
 
 // Pairs each saved entry with a live atom: by subgroup identity (in-bucket order) when the

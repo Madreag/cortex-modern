@@ -91,6 +91,8 @@ namespace RTE {
 
 		/// The per-atom travel residue (carried error + direction flag), in atom order, for full-game saves.
 		std::vector<long long> GetTravelResidue() const;
+		/// Captures the four per-atom property sequences in one owned traversal.
+		void CaptureSnapshotProperties(Writer& writer) const;
 		void SetTravelResidue(const std::vector<long long>& residue) { SetTravelResidue(residue, std::vector<long long>()); }
 		void SetTravelResidue(const std::vector<long long>& residue, const std::vector<long long>& subIDs);
 

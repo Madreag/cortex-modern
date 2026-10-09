@@ -12,6 +12,7 @@
 #include "Scene.h"
 #include "MOPixel.h"
 #include "Actor.h"
+#include "AtomGroup.h"
 #include "Deployment.h"
 #include "Reader.h"
 #include "Timer.h"
@@ -1579,6 +1580,31 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			}
 			const auto actual = std::async(std::launch::async, [frozen] { return std::pair{frozen.Text(), frozen.SharedText()}; }).get();
 			check(actual.first == full && actual.second == shared, "owned_property_sequences_outlive_sources_and_preserve_full_and_shared_bytes");
+		}
+		{
+			CheckpointText frozen;
+			std::string expected;
+			{
+				AtomGroup group;
+				for (int index = 0; index < 3; ++index) {
+					auto atom = std::make_unique<Atom>();
+					atom->SetOffset(Vector(index == 0 ? -0.0F : float(index), -float(index + 7)));
+					atom->SetPrevError(index * 31 - 7);
+					atom->SetChangedDir(index != 1);
+					group.AddAtom(atom.release(), index == 1 ? 13 : 7);
+				}
+				expected = Writer::Capture([&](Writer& writer) {
+					WriteCapturedPropertySequence<"AtomGroupResidue">(writer, group.GetTravelResidue());
+					WriteCapturedPropertySequence<"AtomGroupOffset">(writer, group.GetAtomOffsets());
+					WriteCapturedPropertySequence<"AtomGroupSubID">(writer, group.GetAtomSubIDs());
+					WriteCapturedPropertySequence<"AtomGroupMaterial">(writer, group.GetAtomMaterialIndices());
+				}, 3).Text();
+				CheckpointWriter::BatchScope batch(true);
+				frozen = Writer::Capture([&](Writer& writer) { group.CaptureSnapshotProperties(writer); }, 3);
+				for (Atom* atom: group.GetAtomList()) { atom->SetOffset(Vector(99, 101)); atom->SetPrevError(127); }
+			}
+			const auto actual = std::async(std::launch::async, [frozen] { return std::pair{frozen.Text(), frozen.SharedText()}; }).get();
+			check(actual.first == expected && actual.second == expected, "owned_atom_group_columns_preserve_order_and_outlive_mutated_sources");
 		}
 		{
 			enum class SignedByte : int8_t { Low = -127 };
