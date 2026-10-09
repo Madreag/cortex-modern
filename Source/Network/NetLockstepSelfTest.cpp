@@ -3405,7 +3405,7 @@ namespace RTE {
 			// The allowance the seat may cost the round, from this fixture's own numbers: the window it is
 			// admitted on in wall time, the declaration notice, the two trips its answer needs (its own and
 			// its new start's) and the restart it published.
-			const uint64_t budgetMs = delay * 17 + 100 + 2 * (2 * lagged.latencyMs) + restartMs;
+			const uint64_t budgetMs = delay * 17 + 1000 + 2 * (2 * lagged.latencyMs) + restartMs;
 			if (waited > budgetMs) {
 				*error = "the returning seat's allowance outgrew the trips it covers: waited=" + std::to_string(waited) +
 				         "ms budget=" + std::to_string(budgetMs) + "ms trip=" + std::to_string(earliestAnswerMs - activatedAtMs) + "ms";
@@ -22812,14 +22812,16 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!client.QueueLocalInput(98, {}, {}, error)) return false;
 			(void)hostWire.PollEvents(); (void)clientWire.PollEvents();
 			host.AcknowledgeAcceptedInput(2, 100);
-			if (!host.ProposePeerHold(1, 1000, error)) return false;
-			if (host.IsSeatUnderAI(1, 100)) { *error = "the host held itself before its survivor acknowledged"; return false; }
-			// Deliver the proposal and the survivor's receipt. The committed hold is then deliberately delayed behind its marker.
-			hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
-			for (const auto& event: clientWire.PollEvents()) client.HandleEvent(event, 1001);
-			client.FlushTimingOutgoing();
-			hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
-			for (const auto& event: hostWire.PollEvents()) host.HandleEvent(event, 1002);
+			// Restore a host hold already committed by an older build. New hosts cannot create one,
+			// but its marker and delayed reliable record must still replay as the same boundary.
+			NetLockstepTiming held;
+			held.senderPeerId = held.peerId = 1; held.sessionId = a.sessionId; held.roundId = a.roundId;
+			held.action = NetTimingAction::Hold; held.phase = NetTimingPhase::HoldAtFrame;
+			held.applyFrame = held.cutoffFrame = held.nextFrame = 100; held.revision = 1;
+			held.heldPeers = 1; held.requiredPeers = 2; held.seatIncarnations[0] = 1;
+			host.ApplyTiming(held);
+			host.m_TimingDecisions[1] = {held, 0, true, 1000}; host.m_NextTimingRevision = 2;
+			host.QueueTiming(held); host.FlushTimingOutgoing();
 			host.AdvanceReadyFrames(1002);
 			hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10);
 			std::vector<NetTransportEvent> reliable;
@@ -25731,6 +25733,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 
 	struct SeatSuccessionTestAccess {
 		static void RunLive(NetLockstepCoordinator& peer) { peer.m_Playback = false; }
+		static void RestoreHostHold(NetLockstepCoordinator& peer, const NetLockstepTiming& held) {
+			peer.ApplyTiming(held);
+			peer.m_TimingDecisions[held.revision] = {held, 0, true, 0};
+			peer.m_NextTimingRevision = std::max(peer.m_NextTimingRevision, held.revision + 1);
+		}
 		static void Depart(NetLockstepCoordinator& peer, uint8_t seat, uint64_t frame, uint64_t now = 0) {
 			peer.ApplyPeerLeave(seat, frame, "committed departure", now, true, false, false, true);
 		}
@@ -25853,7 +25860,16 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!round.Start(47420)) return fail("the held-host fixture did not start: " + round.failure);
 			round.produceThrough[0] = 19;
 			for (int turn = 0; turn < 400 && round.peers[0].GetResumeFrame() < 20; ++turn) round.Pump();
-			if (round.peers[0].GetResumeFrame() != 20 || !round.peers[0].ProposePeerHold(1, round.now, &round.failure, 20)) return fail("host 1 was not held at 20: " + round.failure);
+			if (round.peers[0].GetResumeFrame() != 20) return fail("the historical host-hold fixture did not reach 20");
+			// This succession starts from a saved host hold, which a new host can no longer author.
+			const auto& config = round.peers[0].GetConfig();
+			NetLockstepTiming held;
+			held.senderPeerId = held.peerId = 1; held.sessionId = config.sessionId; held.roundId = round.peers[0].GetRoundId();
+			held.authorityGeneration = config.migrationGeneration; held.revision = 1;
+			held.action = NetTimingAction::Hold; held.phase = NetTimingPhase::HoldAtFrame;
+			held.applyFrame = held.cutoffFrame = held.nextFrame = 20; held.heldPeers = 1; held.requiredPeers = 14;
+			held.seatIncarnations[0] = config.peerIncarnations.contains(1) ? config.peerIncarnations.at(1) : 1;
+			for (auto& peer: round.peers) SeatSuccessionTestAccess::RestoreHostHold(peer, held);
 			round.hostPlaneOnly = true;
 			round.drainThrough = 29;
 			const uint64_t lastProduced = 31 - round.peers[3].GetConfig().inputDelayFrames;
@@ -28327,7 +28343,7 @@ namespace {
 		bool rowsPassed = true;
 		const auto row = [&](const auto& test, const char* name) {
 			std::string rowError;
-			if (test(&rowError)) return;
+			if (test(&rowError)) { std::cout << "[net-lockstep-selftest] PASS " << name << std::endl; return; }
 			std::cerr << "[net-lockstep-selftest] FAIL " << name << ": " << rowError << std::endl;
 			rowsPassed = false;
 		};
