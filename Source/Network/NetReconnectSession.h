@@ -480,6 +480,8 @@ namespace RTE {
 		std::vector<NetH4SeatStatus> GetSeatStatuses() const;
 		/// The host's seat roster: the one record of whether each seat's holder is away, why and since when.
 		const NetSeatRoster& GetRoster() const { return m_Roster; }
+		/// Records placement or its committed combat barrier in the replicated roster.
+		void NotePlacementPhase(bool placing, uint64_t frame);
 		/// A world seat plays this slot (0: its own): the roster carries it to every peer.
 		void NoteSeatSlot(uint16_t stableSeat, uint8_t slot);
 		/// The roster seat a lockstep peer plays, read off the same binding the coordinator asks by; null when none.
@@ -655,7 +657,7 @@ namespace RTE {
 		void ApplySeatEvent(const SeatState& seat, NetRosterEventKind kind, bool byChoice = false, bool keptWorld = false, NetSeatHoldCause cause = NetSeatHoldCause::None);
 		/// The roster holds the seat for its player: it has an owner who is away while the AI plays it.
 		bool RosterHoldsSeat(const SeatState& seat) const;
-		void ApplyStageEvent(NetRosterEventKind kind);
+		void ApplyStageEvent(NetRosterEventKind kind, uint64_t frame = 0);
 		/// Sends the roster's current revision to every connected holder, or to one connection.
 		void SendRoster(NetPeerId only = c_InvalidNetPeerId);
 		std::vector<std::pair<uint32_t, std::vector<uint8_t>>> m_RosterHistory; //!< The revisions this host published, oldest first, bounded.
@@ -704,6 +706,8 @@ namespace RTE {
 		void RenewSeatLeases();
 		void IssueReseat(const SeatState& seat);
 		void QueueHoldResolution(uint8_t lockstepPeerId, NetHoldResolution resolution);
+		friend bool TestFourPeersCommitPlacement(std::string* error);
+		friend bool TestPlacementSessionSequence(unsigned fight, std::string* error);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		const NetPayload* FindCached(const NetAuthBytes16& txId, const NetH4TxKey& key, uint64_t nowMs);

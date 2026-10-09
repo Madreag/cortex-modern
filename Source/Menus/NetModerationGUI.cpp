@@ -613,6 +613,12 @@ NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanelOnScreen(int s
 	return PlaceSeatsPanel(highestTop, screenHeight - c_PanelGap, wanted, minHeight, bands);
 }
 
+long long NetModerationGUI::StatusWaitMs(uint8_t reason, long long nowUs, uint8_t& previousReason, long long& startedUs) {
+	if (reason != previousReason || reason == 0 || startedUs == 0 || nowUs < startedUs) startedUs = reason == 0 ? 0 : nowUs;
+	previousReason = reason;
+	return reason == 0 ? 0 : (nowUs - startedUs) / 1000;
+}
+
 bool NetModerationGUI::MatchSurfacesDrawn(bool controllerSyncActive, bool matchResyncing, bool hostLost, bool lockstepAttached, bool matchEnded, bool activityInMatch, bool postMatchLobby, bool lobbyMenuActive) {
 	return controllerSyncActive || matchResyncing || hostLost || ((lockstepAttached || matchEnded) && activityInMatch) ||
 	    (postMatchLobby && lobbyMenuActive);
@@ -1513,16 +1519,15 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) > ScenarioRunner::GetLockstepCompletedFrame());
 	const bool paused = !menuLobby && !resyncing && !placing && !holdPause && !missingFrames && ScenarioRunner::IsLockstepPaused();
 	const int countdown = paused ? ScenarioRunner::GetLockstepResumeCountdown() : 0;
-	const bool waiting = resyncing || placing || holdPause || missingFrames;
+	const uint8_t waitReason = hostLost ? 1 : resyncing ? 2 : placing ? 3 : holdPause ? 4 : missingFrames ? 5 : 0;
+	const bool waiting = waitReason != 0;
 	// A wait that began before this seat was reclaimed is not the wait the player is in now: the round
 	// was stopped for the rejoin, so the clock would read the whole absence back to them.
 	if (const uint32_t reclaims = ScenarioRunner::GetLockstepSeatReclaimEpoch(); reclaims != m_StatusWaitReclaimEpoch) {
 		m_StatusWaitReclaimEpoch = reclaims;
 		m_StatusWaitStartedUs = 0;
 	}
-	if (!waiting) m_StatusWaitStartedUs = 0;
-	else if (m_StatusWaitStartedUs == 0) m_StatusWaitStartedUs = paceNowUs;
-	const long long currentWaitMs = waiting ? (paceNowUs - m_StatusWaitStartedUs) / 1000 : 0;
+	const long long currentWaitMs = StatusWaitMs(waitReason, paceNowUs, m_StatusWaitReason, m_StatusWaitStartedUs);
 	EditorArea editor = FreeArea(backbuffer->w);
 	if (menuLobby) LobbyMenuColumn(editor);
 	const std::string countOnly = std::to_string(placed) + " of " + std::to_string(seats);

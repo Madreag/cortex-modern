@@ -173,6 +173,7 @@ namespace RTE {
 	void NetConnectionAuthority::Suspend() {
 		std::lock_guard lock(m_Mutex);
 		m_CheckIn.reset(); m_Bootstrap.reset(); m_Operations.clear(); m_LocalLease.reset(); m_HostToken.clear();
+		m_HostChange.reset(); m_HostChangeRequest.reset(); m_HostChangeReply = {}; m_HostChangeToken.clear();
 		m_HostSigningKey.fill(0);
 		m_BootstrapWanted = false;
 		m_Suspended = true;
@@ -180,6 +181,7 @@ namespace RTE {
 	void NetConnectionAuthority::Reset() {
 		std::lock_guard lock(m_Mutex);
 		m_Operations.clear(); m_CheckIn.reset(); m_Bootstrap.reset(); m_LocalLease.reset(); m_Host.reset();
+		m_HostChange.reset(); m_HostChangeRequest.reset(); m_HostChangeReply = {}; m_HostChangeToken.clear(); m_NextHostChange = 0;
 		m_SessionId.clear(); m_HostToken.clear(); m_DirectoryKey = {}; m_Route = {}; m_Relay = {};
 		m_HostSigningKey.fill(0);
 		m_Removals.clear(); m_PeerRoutes.clear();
@@ -199,6 +201,7 @@ namespace RTE {
 	void NetConnectionAuthority::SetDirectory(std::string sessionId, std::string hostToken, uint32_t hostGeneration, std::string authorityKey) {
 		std::lock_guard lock(m_Mutex);
 		if (m_SessionId != sessionId) {
+			m_HostChange.reset(); m_HostChangeRequest.reset(); m_HostChangeReply = {}; m_HostChangeToken.clear(); m_NextHostChange = 0;
 			m_Host.reset(); m_Bootstrap.reset(); m_CheckIn.reset(); m_Operations.clear(); m_DirectoryKey = {}; m_Removals.clear(); m_PeerRoutes.clear(); m_Relay = {};
 			if (m_LocalLease && m_LocalLease->directorySessionId != sessionId) m_LocalLease.reset();
 			m_CheckIns = m_NextCheckIn = m_NextBootstrap = 0; m_BootstrapWanted = m_Refused = m_Ended = false; m_Error.clear();
@@ -388,6 +391,25 @@ namespace RTE {
 		}
 		if (m_BootstrapWanted && !m_Bootstrap && !m_Refused && steadyMs >= m_NextBootstrap) m_Bootstrap = StartRequest("GET", "");
 	}
+	std::string NetConnectionAuthority::SignedSeatRequest(const std::string& operation, uint64_t unixSeconds, const NetHostChangeRequest* change) {
+		NetAuthBytes16 nonce{};
+		if (!GetNetAuthCrypto().RandomBytes(nonce.data(), nonce.size())) return {};
+		json contents{{"session_id", m_SessionId}, {"seat_token", m_LocalLease->token}, {"nonce", Hex(nonce)}, {"instance", Hex(m_Instance)}, {"sent_at", unixSeconds},
+			{"route", {{"ice_identity", m_Route.iceIdentity}, {"ice_virtual_port", m_Route.iceVirtualPort}, {"listen_port", m_Route.listenPort}, {"listen_addrs", m_Route.listenAddrs}, {"generation", m_Route.generation}, {"state", m_Route.state}}}};
+		if (!change && !m_HostToken.empty()) contents["host"] = {{"token", m_HostToken}, {"generation", m_HostGeneration}};
+		if (change) {
+			contents["host_change"] = {{"generation", change->generation}, {"round_id", change->roundId},
+				{"applied_frame", change->appliedFrame}, {"prepared_frame", change->preparedFrame}, {"config_hash", Hex(change->configHash)}};
+			if (change->agreedHost != UINT16_MAX)
+				contents["host_change"]["agreement"] = {{"host_seat", change->agreedHost}, {"boundary", change->agreedBoundary}, {"members", change->agreedMembers}};
+		}
+		const std::string request = contents.dump();
+		std::vector<uint8_t> message(std::begin(c_RequestDomain), std::end(c_RequestDomain)); message.insert(message.end(), request.begin(), request.end());
+		NetParticipantSignature signature{};
+		if (!m_Player->Sign(message, signature)) { m_Error = "Your player key is unavailable. Restart the game and rejoin."; m_Refused = true; return {}; }
+		return json{{"connection_protocol", NetSeatLease::c_Version}, {"operation", operation}, {"participant", Hex(m_Player->PublicId())}, {"signature", Hex(signature)}, {"signed_request", base64_encode(request)}}.dump();
+	}
+
 	void NetConnectionAuthority::PollCheckIn(uint64_t steadyMs, uint64_t unixSeconds) {
 		if (!m_LocalLease || m_LocalLease->directorySessionId.empty() || m_LocalLease->directorySessionId != m_SessionId || !m_Player || m_Instance == NetAuthBytes16{}) return;
 		if (m_CheckIn) {
@@ -432,19 +454,69 @@ namespace RTE {
 			} else m_Error = ReplyError(response, m_Refused, m_Ended);
 		}
 		if (m_CheckIn || m_Refused || steadyMs < m_NextCheckIn) return;
-		NetAuthBytes16 nonce{};
-		if (!GetNetAuthCrypto().RandomBytes(nonce.data(), nonce.size())) return;
-		json contents{{"session_id", m_SessionId}, {"seat_token", m_LocalLease->token}, {"nonce", Hex(nonce)}, {"instance", Hex(m_Instance)}, {"sent_at", unixSeconds},
-			{"route", {{"ice_identity", m_Route.iceIdentity}, {"ice_virtual_port", m_Route.iceVirtualPort}, {"listen_port", m_Route.listenPort}, {"listen_addrs", m_Route.listenAddrs}, {"generation", m_Route.generation}, {"state", m_Route.state}}}};
-		if (!m_HostToken.empty()) contents["host"] = {{"token", m_HostToken}, {"generation", m_HostGeneration}};
-		const std::string request = contents.dump();
-		std::vector<uint8_t> message(std::begin(c_RequestDomain), std::end(c_RequestDomain)); message.insert(message.end(), request.begin(), request.end());
-		NetParticipantSignature signature{};
-		if (!m_Player->Sign(message, signature)) { m_Error = "Your player key is unavailable. Restart the game and rejoin."; m_Refused = true; return; }
-		const std::string body = json{{"connection_protocol", NetSeatLease::c_Version}, {"operation", "check-in"}, {"participant", Hex(m_Player->PublicId())}, {"signature", Hex(signature)}, {"signed_request", base64_encode(request)}}.dump();
+		const std::string body = SignedSeatRequest("check-in", unixSeconds);
+		if (body.empty()) return;
 		m_CheckInGeneration = m_Route.generation;
 		m_CheckIn = StartRequest("POST", body);
 	}
+	NetHostChangeReply NetConnectionAuthority::QueryHostChange(const NetHostChangeRequest& request) {
+		std::lock_guard lock(m_Mutex);
+		if (m_Suspended || m_SessionId.empty() || m_BaseUrl.empty() || !m_Player || !m_LocalLease || m_LocalLease->directorySessionId != m_SessionId) return {};
+		if (!m_HostChangeRequest || *m_HostChangeRequest != request) {
+			m_HostChange.reset(); m_HostChangeRequest = request; m_NextHostChange = 0;
+			m_HostChangeReply = {}; m_HostChangeReply.state = NetHostChangeReply::State::Waiting;
+		}
+		return m_HostChangeReply;
+	}
+	std::string NetConnectionAuthority::HostChangeToken(uint64_t generation) const {
+		std::lock_guard lock(m_Mutex);
+		return m_HostChangeReply.state == NetHostChangeReply::State::Decided && m_HostChangeReply.generation == generation ? m_HostChangeToken : std::string();
+	}
+	void NetConnectionAuthority::PollHostChange(uint64_t steadyMs, uint64_t unixSeconds) {
+		if (!m_HostChangeRequest || !m_LocalLease || !m_Player || m_Instance == NetAuthBytes16{}) return;
+		if (m_HostChange) {
+			if (m_HostChange->Poll() == NetHttpClient::PollResult::Pending) return;
+			const auto response = m_HostChange->GetResponse(); m_HostChange.reset(); m_NextHostChange = steadyMs + 1000;
+			m_HostChangeReply.state = NetHostChangeReply::State::Unavailable;
+			if (response.statusCode == 200) {
+				try {
+					const auto body = json::parse(response.body);
+					std::string error;
+					if (!Protocol(body, error)) return;
+					if (body.at("status") == "waiting") { m_HostChangeReply.state = NetHostChangeReply::State::Waiting; return; }
+					const auto& decision = body.at("decision");
+					const auto& request = *m_HostChangeRequest;
+					NetHash32 hash{};
+					if (decision.at("session_id") != m_SessionId || decision.at("previous_generation") != request.generation ||
+					    decision.at("generation") != request.generation + 1 || decision.at("round_id") != request.roundId ||
+					    !Unhex(decision.at("config_hash").get<std::string>(), hash) || hash != request.configHash) return;
+					NetHostChangeReply reply;
+					reply.generation = decision.at("generation").get<uint64_t>(); reply.boundary = decision.at("boundary").get<uint64_t>();
+					const auto host = decision.at("host_seat").get<uint64_t>(), donor = decision.at("donor_seat").get<uint64_t>();
+					const auto members = decision.at("members").get<std::vector<uint64_t>>();
+					if (host > NetSeatLease::c_MaxStableSeat || donor > NetSeatLease::c_MaxStableSeat || reply.boundary == UINT64_MAX ||
+					    members.empty() || members.size() > NetMatchConfigUtil::c_MaxPlayers || !std::is_sorted(members.begin(), members.end()) ||
+					    std::adjacent_find(members.begin(), members.end()) != members.end() || members.back() > NetSeatLease::c_MaxStableSeat ||
+					    !std::binary_search(members.begin(), members.end(), host) || !std::binary_search(members.begin(), members.end(), donor)) return;
+					if (request.agreedHost != UINT16_MAX && (host != request.agreedHost || reply.boundary != request.agreedBoundary ||
+					    std::vector<uint64_t>(request.agreedMembers.begin(), request.agreedMembers.end()) != members)) return;
+					reply.host = static_cast<uint16_t>(host); reply.donor = static_cast<uint16_t>(donor);
+					for (const auto seat: members) reply.members.push_back(static_cast<uint16_t>(seat));
+					if (host == m_LocalLease->seat && body.contains("host_token")) {
+						const std::string token = body.at("host_token").get<std::string>();
+						if (token.empty() || token.size() > NetSeatLease::c_MaxTokenBytes) return;
+						m_HostChangeToken = token; NetRelayLogins::Remember(token);
+					}
+					reply.state = NetHostChangeReply::State::Decided; m_HostChangeReply = std::move(reply);
+				} catch (const json::exception&) { /* Invalid replies never end an established match. */ }
+			}
+		}
+		if (!m_HostChange && m_HostChangeReply.state != NetHostChangeReply::State::Decided && steadyMs >= m_NextHostChange) {
+			const std::string body = SignedSeatRequest("host-change", unixSeconds, &*m_HostChangeRequest);
+			if (!body.empty()) m_HostChange = StartRequest("POST", body);
+		}
+	}
+
 	void NetConnectionAuthority::Update(uint64_t steadyMs, uint64_t unixSeconds) {
 		std::lock_guard lock(m_Mutex);
 		if (m_LanBrowser) {
@@ -463,7 +535,7 @@ namespace RTE {
 		}
 		ObserveNetwork(steadyMs, unixSeconds);
 		if (m_Suspended) { PollBootstrap(steadyMs); return; }
-		PollOperations(steadyMs); PollBootstrap(steadyMs); PollCheckIn(steadyMs, unixSeconds);
+		PollOperations(steadyMs); PollBootstrap(steadyMs); PollCheckIn(steadyMs, unixSeconds); PollHostChange(steadyMs, unixSeconds);
 	}
 
 	void NetConnectionAuthority::ObserveNetwork(uint64_t steadyMs, uint64_t unixSeconds) {

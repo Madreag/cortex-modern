@@ -61,6 +61,10 @@ namespace RTE {
 			return !value.empty() && value.size() <= NetDirectoryLimits::c_MaxStringChars && std::all_of(value.begin(), value.end(), IsInstallKeyChar);
 		}
 
+		bool IsHostPeer(const std::string& peer) {
+			return peer == "host" || (peer.rfind("host:", 0) == 0 && IsPeerSecret(peer.substr(5)));
+		}
+
 		bool IsClientPeer(const std::string& peer) {
 			return peer.rfind("client:", 0) == 0 && IsPeerSecret(peer.substr(7));
 		}
@@ -129,9 +133,10 @@ namespace RTE {
 
 	void NetDirectorySignalChannel::SetTransportFactory(NetDirectoryClient::TransportFactory factory) { m_Factory = std::move(factory); }
 
-	void NetDirectorySignalChannel::ConfigureHost(std::string baseUrl, std::string installKey, std::string certPinSha256, std::string sessionId, std::string sessionToken) {
+	void NetDirectorySignalChannel::ConfigureHost(std::string baseUrl, std::string installKey, std::string certPinSha256, std::string sessionId, std::string sessionToken, std::string signalPeer) {
 		m_JoinNonce.clear();
-		Configure(std::move(baseUrl), std::move(installKey), std::move(certPinSha256), std::move(sessionId), "host", std::move(sessionToken));
+		if (!IsHostPeer(signalPeer)) { Fail("invalid host signal peer"); return; }
+		Configure(std::move(baseUrl), std::move(installKey), std::move(certPinSha256), std::move(sessionId), std::move(signalPeer), std::move(sessionToken));
 	}
 
 	void NetDirectorySignalChannel::ConfigureClient(std::string baseUrl, std::string installKey, std::string certPinSha256, std::string sessionId) {
@@ -140,7 +145,7 @@ namespace RTE {
 	}
 
 	void NetDirectorySignalChannel::RebindHost(const std::string& sessionId, const std::string& sessionToken) {
-		if (m_LocalPeer != "host" || m_BaseUrl.empty() || !IsSessionId(sessionId) || !IsPeerSecret(sessionToken)) return;
+		if (!IsHostPeer(m_LocalPeer) || m_BaseUrl.empty() || !IsSessionId(sessionId) || !IsPeerSecret(sessionToken)) return;
 		AbortRequest();
 		m_SessionPath = "/v1/sessions/" + sessionId;
 		m_Credential = sessionToken;
@@ -184,7 +189,7 @@ namespace RTE {
 		m_LocalPeer = std::move(localPeer);
 		m_Credential = std::move(credential);
 		m_Headers = {{"Content-Type", "application/json"}, {"X-Install-Key", std::move(installKey)}, {"X-Signal-Peer", m_LocalPeer}};
-		if (m_LocalPeer == "host") {
+		if (IsHostPeer(m_LocalPeer)) {
 			m_Headers.emplace_back("X-Session-Token", m_Credential);
 		}
 		if (!m_Factory) {
@@ -204,7 +209,7 @@ namespace RTE {
 
 	bool NetDirectorySignalChannel::Post(const std::string& to, const std::string& bytes) {
 		// A joiner only ever signals the host; the host answers joiners, never itself.
-		const bool reachable = m_LocalPeer == "host" ? IsClientPeer(to) : to == "host";
+		const bool reachable = IsHostPeer(m_LocalPeer) ? IsClientPeer(to) : IsHostPeer(to);
 		if (m_State != State::Open || !reachable || bytes.size() > c_MaxSignalBytes || m_Outbox.size() >= c_MaxPendingPosts) {
 			return false;
 		}
@@ -287,7 +292,7 @@ namespace RTE {
 		SetState(State::Closed);
 	}
 
-	const char* NetDirectorySignalChannel::Role() const { return m_LocalPeer == "host" ? "host" : "client"; }
+	const char* NetDirectorySignalChannel::Role() const { return IsHostPeer(m_LocalPeer) ? "host" : "client"; }
 
 	void NetDirectorySignalChannel::SetState(State state) {
 		if (m_State == state) {
@@ -309,7 +314,7 @@ namespace RTE {
 		m_LastError = reason;
 		DiagnosticLine() << "[net-directory-signal] " << Role() << " failed: " << reason << (detail.empty() ? "" : " (" + detail + ")") << std::endl;
 		AbortRequest();
-		if (m_LocalPeer != "host") m_Outbox.clear();
+		if (!IsHostPeer(m_LocalPeer)) m_Outbox.clear();
 		SetState(State::Failed);
 	}
 

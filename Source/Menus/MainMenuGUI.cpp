@@ -4249,13 +4249,10 @@ void MainMenuGUI::RefreshReconnectControls() {
 	const bool waitOffered = landing && applying && refusal == NetJoinRefusalOffer::SlotsHeld;
 	m_MainMenuButtons[MenuButton::MultiplayerWaitSlotButton]->SetVisible(waitOffered);
 	m_MainMenuButtons[MenuButton::MultiplayerResumeGameButton]->SetVisible(!waitOffered);
-	// 7e: the match died with its host and no successor took it. The prompt stays up and waits for that
-	// host to come back: enabled once its row is listed again, or at once when there is no directory to
-	// watch and the only route left is the address the player types.
+	// Discovery is advisory. An explicit rejoin remains available while the directory or old route is absent.
 	const bool awaiting = reconnect.IsAwaitingHostReturn() && !recovering;
-	const bool hostBack = reconnect.HasHostReturned() || !reconnect.CanWatchHostReturn();
 	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || manualOffer || applying || awaiting || reconnect.CanRetryManually()));
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering ? (!awaiting || hostBack) : (manualOffer || applying || reconnect.CanRetryManually()));
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering || manualOffer || applying || reconnect.CanRetryManually());
 	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(offering || manualOffer ? "Rejoin Match" : (applying ? NetJoinRefusalApplyCaption(refusal) : "Retry"));
 	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetVisible(landing && (offering || applying || awaiting || recovering));
 	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetEnabled(offering || applying || awaiting || reconnect.CanCancel());

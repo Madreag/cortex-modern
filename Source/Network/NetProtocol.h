@@ -581,7 +581,7 @@ namespace RTE {
 	class NetProtocol {
 	public:
 		static constexpr uint32_t c_Magic = 0x324E4343U;
-		static constexpr uint16_t c_Version = 6;
+		static constexpr uint16_t c_Version = 7;
 		static constexpr uint16_t c_HeaderBytes = 24;
 		static constexpr size_t c_MaxControlPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxDisplayNameBytes = 64;

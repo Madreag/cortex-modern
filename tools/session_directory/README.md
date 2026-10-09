@@ -21,6 +21,32 @@ Seat signatures expire after five minutes and renew at half their lifetime. Peer
 
 State mutations use full SQLite transactions and AES-GCM with a key derived separately from the service's Ed25519 signing key. The database is private to the service account. An unreadable record stops startup with a recovery instruction rather than silently discarding ownership. Never log request bodies, seat tokens, relay logins or the service key.
 
+## Host change
+
+`POST /v1/sessions/{id}/connections` also accepts `operation: "host-change"`.
+It uses the same signed seat proof as a check-in; its signed `host_change` report
+names the previous generation, round, configuration hash and that seat's applied
+and prepared frame. Only fifteen continuous seconds without the authenticated
+host permit replacement. Each live survivor reports its retained prefix. The
+directory chooses the lowest live stable seat and one boundary covering those
+prefixes, then persists the decision, generation and route atomically. Repeated
+requests receive the same decision; only the chosen seat receives the new host
+capability. The old capability cannot renew or replace that generation.
+
+This endpoint changes only host authority. Gameplay phases, holds, returns and
+match start/end remain host decisions. Direct games and a directory outage use
+the engine's unanimous agreement among all surviving owners, with no solo or
+majority promotion. An outage never ends an established match.
+
+When the directory returns after a completed fallback, every surviving owner
+independently signs the same successor, generation, membership and boundary in
+its next report. The directory requires all remaining owners' matching reports
+before recording that authority and issuing its host capability. This can
+reconcile an earlier reservation whose answer reached no participant; a single
+report cannot overwrite it, and an owner cannot attest two choices for one
+generation. The new host continues the established match while reconciliation
+and publication retry.
+
 ## What the install key is
 
 The `X-Install-Key` header is a rate-limit identity, not a secret. Each install keeps its own 16–32 character key. Registration ownership and reconnect credentials are separate from this header.

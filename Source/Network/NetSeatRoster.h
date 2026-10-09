@@ -20,6 +20,7 @@ namespace RTE {
 		RematchLobby,  ///< Its owner is in the lobby that follows a round.
 		Relaunching,   ///< Its owner's process restarted and has not been admitted again.
 		Migrating,     ///< Its owner plays on while the round changes host.
+		Placement,     ///< Its owner places a brain while the world is paused.
 		Count
 	};
 
@@ -31,7 +32,7 @@ namespace RTE {
 	enum class NetSeatLink : uint8_t { Connected, Dropped };
 
 	/// Where the match is; a present owner's phase follows it.
-	enum class NetRosterStage : uint8_t { Lobby, Starting, Running, Ended, Migrating };
+	enum class NetRosterStage : uint8_t { Lobby, Starting, Running, Ended, Migrating, Placement };
 
 	/// One seat of the match.
 	struct NetRosterSeat {
@@ -57,6 +58,8 @@ namespace RTE {
 		uint64_t matchId = 0;
 		uint32_t roundNo = 0;
 		NetRosterStage stage = NetRosterStage::Lobby;
+		NetRosterStage resumeStage = NetRosterStage::Running; ///< The stage a certified handover carries.
+		uint64_t stageFrame = 0;                              ///< The committed boundary of the current stage.
 		uint8_t hostSeat = 1;
 		uint16_t migrationGen = 0;
 		std::vector<NetRosterSeat> seats;
@@ -74,7 +77,7 @@ namespace RTE {
 	enum class NetRosterEventKind : uint8_t {
 		LinkDropped, ProcessRelaunched, Returned, Kicked, Banned, RoundEnded, RematchFormed, HostLinkLost, MemberSetProposed, TransferAborted,
 		LivenessPassed, SlowMachine, HostStalled, Admitted, ApplicantAccepted, RoundStarted, ImageLoaded, CaughtUp, HostResumed, HostChanged, SeatReleased, HeldInPlace,
-		SlotBound, Count
+		SlotBound, PlacementStarted, CombatStarted, Count
 	};
 
 	struct NetRosterEvent {
@@ -89,8 +92,9 @@ namespace RTE {
 		bool byChoice = false;         ///< LinkDropped: the owner left on purpose.
 		bool afterGrace = false;       ///< SlowMachine: the round is past its warm-up grace.
 		bool keptWorld = false;        ///< Returned: the owner's process kept the round's world.
-		bool quorum = false;           ///< HostLinkLost: a strict majority of the connected seats agree the host's link is gone.
+		bool quorum = false;           ///< HostLinkLost: validated directory decision or unanimous survivor agreement.
 		std::vector<uint8_t> members;  ///< MemberSetProposed: the members the host proposes to start.
+		uint64_t frame = 0;           ///< A stage transition belongs to this committed frame.
 		uint8_t slot = 0;              ///< SlotBound: the world slot the seat plays when not its own; 0 when it plays its own.
 	};
 
