@@ -4275,7 +4275,7 @@ namespace RTE {
 			m_Config.peerInputDelayFrames[peer] = InputDelayAt(peer, m_MigrationBoundary);
 		m_Config.inputDelayFrames = m_Config.peerInputDelayFrames.at(m_Config.localPeerId);
 		m_OpeningMatchConfig = m_Config.matchConfig;
-		m_RoundConfigHash = NetMatchConfigUtil::HashConfig(m_OpeningMatchConfig);
+		// Late survivors still identify this round by the hash they agreed before its live delay changes.
 		m_Config.authorityPeerId = m_MigrationSuccessor;
 		m_Config.migrationGeneration = m_MigrationGeneration;
 		m_RoundId = m_MigrationWireRound;

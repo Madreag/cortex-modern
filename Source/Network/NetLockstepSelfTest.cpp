@@ -4482,6 +4482,15 @@ namespace RTE {
 				*error = "the four-player round never ran twenty frames:" + r.Report();
 				return false;
 			}
+			const NetHash32 roundHash = r.Peer(1).GetRoundConfigHash();
+			const uint64_t delayAt = r.queued[0] + 16;
+			if (!r.Peer(1).ProposeInputDelay(3, 2, delayAt, error) ||
+			    !PumpQuorumRig(r, 4000, [&r, delayAt] { return std::all_of(r.simulated.begin(), r.simulated.end(), [delayAt](uint64_t tick) { return tick > delayAt; }); })) {
+				*error = "the late-voter fixture did not apply its live delay: " + *error + r.Report(); return false;
+			}
+			if (NetMatchConfigUtil::HashConfig(r.Peer(2).GetConfig().matchConfig) == roundHash) {
+				*error = "the late-voter fixture did not change its live configuration"; return false;
+			}
 			// Seat 4 hears nothing of the successor for the answer budget, then the host leaves by its record.
 			r.partition->Split({4}, {2});
 			r.Peer(1).Leave("host left");
@@ -4507,6 +4516,27 @@ namespace RTE {
 				         std::to_string(r.Peer(2).MigrationHostAnnouncedLeave()) + " phase4=" + std::to_string(static_cast<int>(r.Peer(4).GetMigrationPhase())) + " elapsed=" + std::to_string(r.now - killedAt) + r.Report();
 				return false;
 			}
+			LoopbackTransport lateWire;
+			if (!lateWire.Connect("loopback", 47142, error)) return false;
+			NetHostMigrationMessage hello;
+			hello.type = NetHostMigrationMessageType::Hello;
+			hello.sessionId = r.Peer(2).GetConfig().sessionId;
+			hello.roundId = r.Peer(2).GetConfig().matchConfig.roundId;
+			hello.generation = result.generation;
+			hello.senderPeerId = 4; hello.successorPeerId = 2; hello.configHash = roundHash;
+			std::vector<uint8_t> bytes;
+			if (!NetHostMigrationCodec::Encode(hello, r.Peer(2).GetConfig().migrationKey, bytes) || !lateWire.Send(1, NetTransportLane::ControlReliable, bytes, error)) return false;
+			bool answered = false;
+			for (int pass = 0; pass < 20 && !answered; ++pass) {
+				lateWire.AdvanceTimeMs(1);
+				StepQuorumRig(r);
+				for (const auto& event: lateWire.PollEvents()) {
+					NetHostMigrationMessage reply;
+					if (event.type == NetTransportEventType::PacketReceived && NetHostMigrationCodec::Decode(event.bytes, r.Peer(2).GetConfig().migrationKey, reply))
+						answered = reply.type == NetHostMigrationMessageType::Rejoin && reply.configHash == roundHash && reply.generation == result.generation;
+				}
+			}
+			if (!answered) { *error = "the successor discarded a late survivor's round identity after a live delay change"; return false; }
 			std::cout << "[net-lockstep-selftest] PASS a_late_voter_resyncs_after_the_majority_closes members=" << nlohmann::json(result.members).dump() << " late=\"" << r.Peer(4).GetStats().timeoutReason << "\"" << std::endl;
 			return true;
 		}
