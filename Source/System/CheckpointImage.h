@@ -94,6 +94,7 @@ namespace RTE {
 		int64_t freezeUs = 0;
 		int64_t activityUs = 0;
 		int64_t graphUs = 0;
+		std::vector<std::pair<std::string, int64_t>> simParts;
 		int64_t graphWalkUs = 0;
 		int64_t graphTextUs = 0;
 		uint64_t graphSerial = 0;

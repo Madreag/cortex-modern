@@ -847,6 +847,19 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	auto image = std::make_shared<CheckpointImage>();
 	image->nativeBoundaryUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();
 	image->captureClock = std::move(captureClock);
+	static const bool simCosts = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
+	auto simPartStart = simCosts ? (image->captureClock ? image->captureClock->started : std::chrono::steady_clock::now()) : std::chrono::steady_clock::time_point{};
+	const char* simPart = "sim_prepare";
+	// The sim stages partition one clock; pool times overlap them.
+	const auto simPhase = [&](const char* next) {
+		if (simCosts) {
+			const auto now = std::chrono::steady_clock::now();
+			image->simParts.emplace_back(simPart, std::chrono::duration_cast<std::chrono::microseconds>(now - simPartStart).count());
+			simPartStart = now;
+			simPart = next;
+		}
+		if (next) simSpan.emplace(next);
+	};
 	image->nativePages = nativePages.Pages();
 	if (image->nativePages) image->nativeReady = CheckpointLua::CopyPool::Submit([pages = image->nativePages] { pages->Drain(); }).share();
 	image->tick = tick;
@@ -1001,7 +1014,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		audio = g_AudioMan.CaptureCheckpointState(false);
 		audioReadUs = since(audioStart);
 	};
-	simSpan.emplace("sim_graphs");
+	simPhase("sim_graphs");
 	const auto graphStart = std::chrono::steady_clock::now();
 	bool frozenGraphs = false;
 	const SaveKind kind = matchId.empty() ? (compression == SaveCompression::Small ? SaveKind::Resync : SaveKind::Manual) : SaveKind::Autosave;
@@ -1040,12 +1053,12 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// feeds no index and reuses no root, so it reports neither rather than the last live walk's sample.
 	image->graphRootsReused = image->luaReused ? image->graph.roots : (frozenGraphs ? 0 : image->graph.rootsReused);
 	image->graphRootsRewritten = image->luaReused || frozenGraphs ? 0 : image->graph.rootsRewritten;
-	simSpan.emplace("sim_audio");
+	simPhase("sim_audio");
 	readAudio();
-	simSpan.emplace("sim_join");
+	simPhase("sim_join");
 	asideWork.Finish();
 	parallel.reset();
-	simSpan.emplace("sim_after_join");
+	simPhase("sim_after_join");
 	// The start activity is the restart this machine configured for its own seats, not the match being played.
 	image->activity = Writer::Capture([&](Writer& writer) {
 		writer.Append(playedActivity);
@@ -1078,11 +1091,11 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	effectsSoFar();
 	g_AudioMan.SetCheckpointSoundContainerCursor(liveSoundCursor);
 	allocation.RestoreCounters();
-	simSpan.emplace("sim_structure");
+	simPhase("sim_structure");
 	const auto structureStart = std::chrono::steady_clock::now();
 	image->structure = CheckpointWriter::CaptureNative([] { return g_MovableMan.SaveWorldStructure(); });
 	image->structureUs = since(structureStart);
-	simSpan.emplace("sim_globals");
+	simPhase("sim_globals");
 	const auto globalsStart = std::chrono::steady_clock::now();
 	image->globals = CheckpointWriter::CaptureNative([&] {
 		return CaptureRuntimeGlobals(carriedSounds.Carried(), false, &image->globalParts, &managerParts, audio.get(), audioSamples.get(), fullStateOnly ? &image->globalSections : nullptr);
@@ -1090,7 +1103,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->globalParts.insert(image->globalParts.end(), managerTimings.begin(), managerTimings.end());
 	image->globalParts.emplace_back("audio_read", audioReadUs);
 	image->globalsUs = since(globalsStart);
-	simSpan.emplace("sim_finish");
+	simPhase("sim_finish");
 	effectsSoFar();
 	m_LastCaptureEffects = effects;
 	image->activityName = activity->GetPresetName();
@@ -1129,6 +1142,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	}
 	// The full-state oracle's own freeze is an instrument's cost; an autosave's is the product's.
 	if (fullStateOnly) HarnessCost::Charge(HarnessCost::FullState, freezeNs);
+	simPhase(nullptr);
 	simSpan.reset();
 	CaptureTrace::End();
 	bytes = image->imageBytes;
@@ -1265,6 +1279,12 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 				System::PrintDiagnosticLine(std::format("[checkpoint-completion] tick={} sim_call_us={} total_capture_us={} native_boundary_us={} native_copy_worker_us={} native_sim_fault_observer_us={} native_other_fault_observer_us={} native_sim_faults={} native_other_faults={} native_bytes={} serializer_off_sim={}",
 				    tick, simUs, totalUs, image->nativeBoundaryUs, native.workerUs, native.simFaultUs, native.otherFaultUs,
 				    native.simFaults, native.otherFaults, native.bytes, std::this_thread::get_id() != simThread));
+				int64_t simPartsUs = 0;
+				for (const auto& [part, micros]: image->simParts) {
+					simPartsUs += micros;
+					System::PrintDiagnosticLine(std::format("[checkpoint-sim-phase] tick={} part={} us={}", tick, part, micros));
+				}
+				System::PrintDiagnosticLine(std::format("[checkpoint-sim-phase] tick={} part=sim_return_tail us={}", tick, simUs - simPartsUs));
 				for (const auto& [name, layer]: image->layers) {
 					System::PrintDiagnosticLine(std::format("[checkpoint-layer-completion] name={} freeze_copy_bytes={} worker_copy_bytes={} compare_bytes={} dirty_bytes={} unmarked_dirty_bytes={}",
 					    name, layer->copiedBytes, layer->workerCopyBytes, layer->scannedBytes, layer->dirtyBytes, layer->unmarkedDirtyBytes));
