@@ -25007,7 +25007,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			for (int turn = 0; turn < 400 && host.GetStats().nextFrame < 10; ++turn) pump(true);
 			if (!host.IsRunning() || host.GetStats().nextFrame < 10) return fail("the three seats never played: " + host.BuildReportJson());
 			std::string decision;
-			if (!host.ProposePeerHold(3, now, &decision)) return fail("the host could not hold seat 3: " + decision);
+			held.Leave("fixture player leaves");
+			for (int turn = 0; turn < 1200 && !host.HasHeldAISeat(3); ++turn) pump(false);
+			if (!host.HasHeldAISeat(3)) return fail("the host did not hold the disconnected seat after five seconds");
 			for (int turn = 0; turn < 600 && !(hostView.claimant == 3 && survivorView.claimant == 3); ++turn) pump(false);
 			if (hostView.claimant != 3 || survivorView.claimant != 3) {
 				return fail("the held seat's actor never got its claim: host " + std::to_string(hostView.claimant) + " survivor " + std::to_string(survivorView.claimant));
@@ -25253,8 +25255,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			for (int turn = 0; turn < 400 && host.GetStats().nextFrame < 10; ++turn) pump();
 			if (!host.IsRunning() || host.GetStats().nextFrame < 10) return fail("the four seats never played: " + host.BuildReportJson());
 			std::string decision;
-			if (!host.ProposePeerHold(4, now, &decision)) return fail("the host could not hold seat 4: " + decision);
+			held.Leave("fixture player leaves");
 			heldPlays = false;
+			for (int turn = 0; turn < 1200 && !host.HasHeldAISeat(4); ++turn) pump();
+			if (!host.HasHeldAISeat(4)) return fail("the host did not hold the disconnected seat after five seconds");
 			for (int turn = 0; turn < 600 && !(firstView.claimant == 4 && secondView.claimant == 4); ++turn) pump();
 			if (firstView.claimant != 4 || secondView.claimant != 4) {
 				return fail("the held seat's actor never got its claim: first " + std::to_string(firstView.claimant) + " second " + std::to_string(secondView.claimant));
@@ -25498,11 +25502,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				now += 5;
 			}
 			bool HoldFourth() {
-				if (!peers[0].ProposePeerHold(4, now, &failure)) return false;
+				size_t host = 0;
+				while (host < 3 && (!alive[host] || peers[host].GetHostPeerId() != host + 1)) ++host;
+				if (host >= 3) { failure = "fixture has no current host"; return false; }
+				peers[3].Leave("fixture player leaves");
 				alive[3] = false;
-				for (int turn = 0; turn < 400 && !peers[2].HasHeldAISeat(4); ++turn) Pump();
+				for (int turn = 0; turn < 1200 && !peers[2].HasHeldAISeat(4); ++turn) Pump();
 				for (int turn = 0; turn < 10; ++turn) Pump();
-				return peers[0].HasHeldAISeat(4) && peers[2].HasHeldAISeat(4);
+				return peers[host].HasHeldAISeat(4) && peers[2].HasHeldAISeat(4);
 			}
 			bool Migrate() {
 				alive[0] = false;
@@ -25663,8 +25670,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			for (int turn = 0; turn < 15; ++turn) round.Pump();
 			if (!round.Migrate()) return fail("the recording fixture did not migrate");
 			const uint64_t boundary = round.peers[1].GetMigrationResult().boundary;
-			if (!round.peers[1].ProposePeerHold(4, round.now, &round.failure)) return fail(round.failure);
-			round.alive[3] = false;
+			if (!round.HoldFourth()) return fail(round.failure);
 			for (int turn = 0; turn < 25; ++turn) round.Pump();
 			round.peers[1].EvictRemovedPeer(4, "successor releases seat", round.now);
 			for (int turn = 0; turn < 80; ++turn) round.Pump();

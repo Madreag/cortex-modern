@@ -1520,6 +1520,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	const bool paused = !menuLobby && !resyncing && !placing && !holdPause && !missingFrames && ScenarioRunner::IsLockstepPaused();
 	const int countdown = paused ? ScenarioRunner::GetLockstepResumeCountdown() : 0;
 	const uint8_t waitReason = hostLost ? 1 : resyncing ? 2 : placing ? 3 : holdPause ? 4 : missingFrames ? 5 : 0;
+	const bool waiting = waitReason != 0;
 	// A wait that began before this seat was reclaimed is not the wait the player is in now: the round
 	// was stopped for the rejoin, so the clock would read the whole absence back to them.
 	if (const uint32_t reclaims = ScenarioRunner::GetLockstepSeatReclaimEpoch(); reclaims != m_StatusWaitReclaimEpoch) {
