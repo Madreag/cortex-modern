@@ -9723,6 +9723,10 @@ namespace RTE {
 			m_RecoveryDrainThrough = m_ReadyFrames.empty() ? m_LastDeliveredFrame.value_or(m_LastCompletedSimulationTick.value_or(m_Config.startFrame)) : m_ReadyFrames.back().frame;
 			if (m_GrantedSimulationTick) *m_RecoveryDrainThrough = std::max(*m_RecoveryDrainThrough, *m_GrantedSimulationTick);
 			for (const auto& [peer, heldFrame]: m_AiHeldSeats) *m_RecoveryDrainThrough = std::max(*m_RecoveryDrainThrough, heldFrame);
+			// Between ticks the committed world may already be drained, with no later Finish call due.
+			if (!m_GrantedSimulationTick && m_LastCompletedSimulationTick && *m_LastCompletedSimulationTick >= *m_RecoveryDrainThrough) {
+				(void)FinishSimulationTick(*m_LastCompletedSimulationTick);
+			}
 		}
 		if (m_Config.localPeerId != GetHostPeerId()) {
 			// A client requests the stop while continuing to supply the host's current tick.

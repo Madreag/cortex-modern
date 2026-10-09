@@ -822,6 +822,28 @@ namespace RTE {
 		}
 
 		bool TestRecoveryAtGrantedBoundary(std::string* error) {
+			// A request between ticks must finish at the completed world without inventing another tick.
+			{
+				Pair completed(44218, 0, 0);
+				if (!completed.Start(error) || !completed.Running(error) ||
+				    !completed.host.PrimeResyncInputs({}, error) || !completed.client.PrimeResyncInputs({}, error)) return false;
+				completed.host.DeferStopsToTickBoundary();
+				if (!QueueFull(completed.host, FullInput(1, c_Start, completed.host.GetRoundId()), error) ||
+				    !QueueFull(completed.client, FullInput(2, c_Start, completed.client.GetRoundId()), error) ||
+				    !completed.Until([&] { return completed.host.GetStats().nextFrame == c_Start + 1 && completed.client.GetStats().nextFrame == c_Start + 1; }, error)) return false;
+				NetLockstepReadyFrame ready;
+				if (!Check(completed.host.PopReadyFrame(ready) && ready.frame == c_Start &&
+				           completed.client.PopReadyFrame(ready) && ready.frame == c_Start, error, "between-ticks fixture did not deliver its completed world")) return false;
+				completed.host.FinishSimulationTick(c_Start);
+				completed.client.FinishSimulationTick(c_Start);
+				completed.host.RequestResync("between ticks recovery");
+				if (!Check(completed.host.IsFailed() && !completed.host.HasPendingRecoveryStop() &&
+				           completed.host.GetResumeFrame() == c_Start + 1 && !completed.host.PopReadyFrame(ready), error,
+				           "between-ticks recovery waited for a nonexistent tick or changed the completed boundary")) return false;
+				if (!completed.Until([&] { return completed.client.IsFailed(); }, error) ||
+				    !Check(completed.client.GetResumeFrame() == c_Start + 1 && !completed.client.PopReadyFrame(ready), error,
+				           "between-ticks recovery did not stop its peer at the completed boundary")) return false;
+			}
 			Pair pair(44218, 0, 0);
 			if (!pair.Start(error) || !pair.Running(error) || !pair.host.PrimeResyncInputs({}, error) || !pair.client.PrimeResyncInputs({}, error)) return false;
 			pair.host.DeferStopsToTickBoundary();
