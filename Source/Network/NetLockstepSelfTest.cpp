@@ -20841,18 +20841,26 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 						return false;
 					}
 				}
-				// Drain the old host's last authenticated packets, then exercise the common
-				// handover only after the owner's full fifteen-second silence interval.
+				// Keep both survivor loops active throughout the full silence interval.
+				// A clock jump would instead model a local main-loop stall and exclude it.
 				hostWire.Stop();
 				for (int drain = 0; drain < 20; ++drain) { a.Tick(now); if (!skipSuccessor) b.Tick(now); now += 5; }
-				now += c_NetHostLossSilenceMs + 1;
 				schedule->contactedPorts.clear();
-				if (midHeal) {
-					worldA.position[101] += 37;
-					if (!a.BeginHostMigrationAfterHeal(now)) {
-						*error = "mid-heal survivor did not enter handover";
-						return false;
-					}
+				if (delayedAnswer || successorLost) schedule->releaseAt = now + c_NetHostLossSilenceMs + 1050;
+				if (midHeal) worldA.position[101] += 37;
+				bool healingMigration = false;
+				const uint64_t silenceWaitStarted = now;
+				while (now - silenceWaitStarted <= c_NetHostLossSilenceMs + 1000 &&
+				       (!a.IsMigrating() || (!skipSuccessor && !b.IsMigrating()))) {
+					schedule->now = now;
+					if (midHeal && !healingMigration) healingMigration = a.BeginHostMigrationAfterHeal(now);
+					a.Tick(now);
+					if (!skipSuccessor) b.Tick(now);
+					now += 5;
+				}
+				if (!a.IsMigrating() || (!skipSuccessor && !b.IsMigrating()) || (midHeal && !healingMigration)) {
+					*error = "continuous host silence did not begin the common handover: A=" + a.BuildReportJson();
+					return false;
 				}
 				if (delayedAnswer || successorLost) {
 					schedule->releaseAt = now + 1050;
@@ -20879,8 +20887,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					return true;
 				}
 				if (successorLost) {
-					// The successor waits for peer 2's delayed vote (alone it is one of three connected seats), sends it the plan, then stops
-					// answering: peer 2 cannot tell the successor's loss from its own link's, elects again and, alone, waits as a held seat.
+					// The successor waits for peer 2's agreement, sends its plan, then stops answering.
+					// Peer 2 must retain that uncommitted choice without electing itself or ending.
 					uint64_t plannedAt = 0;
 					for (int turn = 0; turn < 4000 && plannedAt == 0; ++turn) {
 						schedule->now = now;

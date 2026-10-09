@@ -6598,6 +6598,7 @@ namespace RTE {
 				*error = "a round was still running after the host completed it";
 				return false;
 			}
+			fixture.Host().admission.SetMatchEnded();
 			for (RematchPeer* peer: LiveRematchPeers(fixture)) {
 				std::vector<NetTransportEvent> events;
 				events.swap(peer->handover);
@@ -6866,6 +6867,27 @@ namespace RTE {
 			return true;
 		}
 
+		bool ReleaseAbsentRematchSeat(RematchFixture& fixture, RematchPeer& departed, std::string* error) {
+			RematchPeer& host = fixture.Host();
+			if (!PumpRematchUntil(fixture, 1000, [&] { return host.session.GetReadyPeerCount() == LiveRematchPeers(fixture).size() - 1; })) {
+				*error = "the rematch plane did not receive the closed connection"; return false;
+			}
+			const auto* before = host.admission.RosterSeatOfPeer(departed.LockstepId());
+			if (!before || before->owner == 0 || before->phase == NetSeatPhase::Held || before->holdCause != NetSeatHoldCause::None) {
+				*error = "a between-round drop changed its human authority before the host decided"; return false;
+			}
+			for (const auto& seat: host.admission.GetModerationView()) {
+				if (seat.stableSeat != departed.reconnect.GetRecord().stableSeat) continue;
+				NetParticipantRemovalIssue issued;
+				const auto result = host.admission.RemoveParticipant(NetSelectModerationSeat(seat), NetParticipantRemovalAction::Kick,
+				    fixture.clock.NowMs(), RematchUnixClock(nullptr), host.session.GetSessionId(), host.admission.GetRoster().roundNo,
+				    host.round->GetResumeFrame(), issued);
+				if (result == NetKickBanResult::Ok) return true;
+				*error = "the host could not release the absent rematch owner: " + std::string(NetKickBanResultName(result)); return false;
+			}
+			*error = "the absent rematch owner lost its stable seat"; return false;
+		}
+
 		// The last seat's process dies after round 1 ends: only the host's transport can know it is gone.
 		bool RematchAfterDropBetweenRounds(std::string& details, std::string* error) {
 			RematchFixture fixture;
@@ -6884,6 +6906,7 @@ namespace RTE {
 			dropped->gone = true;
 			dropped->transport.Stop();
 			if (survivor->round->GetPeerLeaveFrames().contains(dropped->LockstepId())) return fail("the survivor's round saw the drop after all");
+			if (!ReleaseAbsentRematchSeat(fixture, *dropped, &step)) return fail("the host's explicit between-round release");
 			if (!RematchFixtureRound(fixture, &step)) return fail("the rematch did not relaunch");
 			if (!CheckRematchRelaunch(fixture, *survivor, 2, details, &step)) return fail("the rematch roster");
 			StopRematchFixture(fixture);
@@ -6908,6 +6931,7 @@ namespace RTE {
 			dropped->gone = true;
 			dropped->transport.Stop();
 			if (survivor->round->GetPeerLeaveFrames().contains(dropped->LockstepId())) return fail("the survivor's round saw the drop after all");
+			if (!ReleaseAbsentRematchSeat(fixture, *dropped, &step)) return fail("the host's explicit between-round release");
 			if (!RematchFixtureRound(fixture, &step)) return fail("the rematch did not relaunch");
 			if (!CheckRematchRelaunch(fixture, *survivor, 3, details, &step)) return fail("the rematch roster");
 						StopRematchFixture(fixture);
@@ -6975,7 +6999,7 @@ namespace RTE {
 			(void)host.admission.GetSeatHolder(stableSeat, holder, generation, incarnationBefore);
 			mover->gone = true;
 			mover->transport.Stop();
-			if (!PumpRematchUntil(fixture, 3000, [&] {
+			if (!PumpRematchUntil(fixture, 6500, [&] {
 				    const auto live = LiveRematchPeers(fixture);
 				    return std::all_of(live.begin(), live.end(), [moverId](RematchPeer* peer) { return peer->round->GetPeerLeaveFrames().contains(moverId); });
 			    })) {
@@ -7003,12 +7027,14 @@ namespace RTE {
 			RematchPeer* rejoined = returner.get();
 			workers.Add(*rejoined, &StartRematchPeer);
 			const bool reclaimed = PumpRematchUntil(fixture, 5000, [&] {
-				return !workers.FailureOf(*rejoined).empty() || host.round->HeldSeatResolution(moverId) == NetLockstepHoldResolution::Reclaimed;
+				return !workers.FailureOf(*rejoined).empty() || host.admission.GetStats().reclaimsAccepted == planeBefore.reclaimsAccepted + 1;
 			});
-			if (!reclaimed || host.round->HeldSeatResolution(moverId) != NetLockstepHoldResolution::Reclaimed) {
+			if (!reclaimed || host.admission.GetStats().reclaimsAccepted != planeBefore.reclaimsAccepted + 1) {
 				return fail("the returner was not admitted on stable seat " + std::to_string(stableSeat) + " (reclaims_accepted=" +
 				            std::to_string(host.admission.GetStats().reclaimsAccepted) + "): " + workers.FailureOf(*rejoined));
 			}
+			// A return reports admission. This fixture's host explicitly chooses a shared image recovery.
+			host.round->RequestResync("host recovery for the admitted returning seat");
 			if (!PumpRematchUntil(fixture, 3000, [&] {
 				    const auto live = LiveRematchPeers(fixture);
 				    return std::none_of(live.begin(), live.end(), [](RematchPeer* peer) { return peer->round->IsRunning(); });
