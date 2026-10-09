@@ -7867,8 +7867,9 @@ namespace RTE {
 		// one complete copy on a possible survivor, so a lost host cannot take the
 		// only committed history with it. This is a data receipt, never a policy vote.
 		bool hasSurvivor = false;
-		for (uint8_t peer: MigrationElectorate()) {
-			if (peer == m_Config.localPeerId) continue;
+		const uint32_t survivors = MigrationElectorate();
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+			if (peer == m_Config.localPeerId || (survivors & (1U << (peer - 1))) == 0) continue;
 			hasSurvivor = true;
 			const auto copy = m_PreparedFrameReceipts.find(peer);
 			if (copy != m_PreparedFrameReceipts.end() && copy->second >= frame) return true;
@@ -12383,6 +12384,10 @@ namespace RTE {
 	// frame without processing this, so every peer drops the requirement at the same tick.
 	void NetLockstepCoordinator::ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport, bool agreedBoundary, bool removed, bool cleanLeave, bool linkDropped) {
 		if (!agreedBoundary && !removed) {
+			if (firstFrameWithout > m_FinalFrame) {
+				m_PeerLeaveFrames.try_emplace(peerId, firstFrameWithout);
+				return;
+			}
 			if (announced && cleanLeave && m_AnnouncedLeavers.insert(peerId).second) {
 				NetLockstepStop fact{peerId, NetLockstepStopReason::PeerLeft, firstFrameWithout, message};
 				RelayToOtherRemotes({fact}, peerId);
