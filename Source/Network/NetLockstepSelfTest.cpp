@@ -18711,6 +18711,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			const auto config = [&](uint8_t peer, std::map<uint8_t, NetPeerId> transports) {
 				NetLockstepConfig result;
 				result.sessionId = match.sessionId;
+				result.roundId = peer == 1 ? match.sessionId + 1 : 0;
 				result.inputDelayFrames = delay;
 				result.timeoutMs = 4000;
 				result.localPeerId = peer;
@@ -19079,6 +19080,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				const auto config = [&](uint8_t peer, std::map<uint8_t, NetPeerId> transports) {
 					NetLockstepConfig result;
 					result.sessionId = sessionId;
+					result.roundId = peer == 1 ? sessionId + 1 : 0;
 					result.timeoutMs = 4000;
 					result.localPeerId = peer;
 					result.peerCount = 3;
