@@ -704,6 +704,7 @@ namespace RTE {
 		void RenewSeatLeases();
 		void IssueReseat(const SeatState& seat);
 		void QueueHoldResolution(uint8_t lockstepPeerId, NetHoldResolution resolution);
+		friend bool TestFourPeersCommitPlacement(std::string* error);
 		friend bool TestPlacementSessionSequence(unsigned fight, std::string* error);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);

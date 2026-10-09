@@ -1349,6 +1349,7 @@ namespace RTE {
 		friend bool HostMappingEndsInALine(NetPortMapWan& router, uint16_t port, uint64_t budgetMs, PortMapStatus& status, std::string* error);
 		friend bool TestAHostMappingOutlastsItsPendingIdentity(std::string* error);
 		friend bool TestAHostWithNoRouterReadsNoRouterMapping(std::string* error);
+		friend bool TestFourPeersCommitPlacement(std::string* error);
 		friend bool TestPlacementSessionSequence(unsigned fight, std::string* error);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestAParkReachesTheSessionAWorkerOwns(std::string* error);

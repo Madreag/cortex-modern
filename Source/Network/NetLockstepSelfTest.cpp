@@ -98,6 +98,7 @@ namespace RTE {
 	bool TestAReturnedSeatThatLeavesAgainIsGone(std::string* error);
 	bool TestARoundsOwnEndIsNoHold(std::string* error);
 	bool TestFourPlayerHoldWaitsForALiveAcknowledgement(std::string* error);
+	bool TestFourPeersCommitPlacement(std::string* error);
 	bool TestPlacementSessionSequence(unsigned fight, std::string* error);
 	bool TestBriefHostJitterKeepsItsHumanSeat(std::string* error);
 	bool TestHeldHostReturnsPastThePreparedHorizon(std::string* error);
@@ -23762,6 +23763,115 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	}
 
 
+
+	bool TestFourPeersCommitPlacement(std::string* error) {
+		std::array<LoopbackTransport, 4> wires;
+		std::array<NetMatchService, 4> services;
+		std::array<NetLockstepCoordinator*, 4> peers{};
+		auto partition = std::make_shared<QuorumPartition>();
+		if (!wires[0].StartHost(49720, error)) return false;
+		for (unsigned i = 1; i < 4; ++i) if (!wires[i].Connect("loopback", 49720, error)) return false;
+		for (uint8_t i = 0; i < 4; ++i) {
+			services[i].m_IsHost = i == 0;
+			services[i].m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+			peers[i] = services[i].m_Coordinator.get();
+			auto config = QuorumConfig(i + 1, 4, 49720, 0x9C20, partition);
+			for (size_t seat = 0; seat < config.matchConfig.players.size(); ++seat) config.matchConfig.players[seat].team = static_cast<uint8_t>(seat % 2);
+			config.startFrame = 0;
+			if (!peers[i]->Start(wires[i], config, error)) return false;
+		}
+		auto& roster = services[0].m_ReconnectHost.m_Roster;
+		roster.matchId = 0x9C20; roster.roundNo = 1; roster.stage = NetRosterStage::Starting;
+		for (uint8_t i = 1; i <= 4; ++i) {
+			NetRosterSeat seat;
+			seat.seatId = i; seat.owner = 300 + i; seat.ticket = 400 + i; seat.phase = NetSeatPhase::Starting;
+			roster.seats.push_back(seat);
+		}
+		roster = ApplyRosterEvent(roster, {NetRosterEventKind::RoundStarted}).roster;
+		NetRosterEventKind placement = NetRosterEventKind::Count, combat = NetRosterEventKind::Count;
+		for (unsigned i = 0; i < static_cast<unsigned>(NetRosterEventKind::Count); ++i) {
+			const auto event = static_cast<NetRosterEventKind>(i);
+			if (std::string(NetRosterEventName(event)) == "PlacementStarted") placement = event;
+			if (std::string(NetRosterEventName(event)) == "CombatStarted") combat = event;
+		}
+		roster = ApplyRosterEvent(roster, {placement}).roster;
+		const auto replicate = [&] {
+			NetSeatRoster decoded;
+			if (!DecodeRoster(EncodeRoster(roster), decoded, error)) return false;
+			for (unsigned i = 1; i < 4; ++i)
+				if (!const_cast<NetRosterReplica&>(services[i].m_ReconnectClient.GetRosterReplica()).Apply(decoded, error)) return false;
+			return true;
+		};
+		if (!replicate()) return false;
+		for (auto& service: services) service.AttachCoordinatorSessionSink();
+		uint64_t now = 0;
+		const auto pump = [&] {
+			for (auto& wire: wires) wire.AdvanceTimeMs(1);
+			for (auto* peer: peers) peer->Tick(now);
+			++now;
+		};
+		for (unsigned i = 0; i < 10; ++i) pump();
+		if (!WarmBoundedInputFixture({{peers[0], &wires[0]}, {peers[1], &wires[1]}, {peers[2], &wires[2]}, {peers[3], &wires[3]}}, now, error)) return false;
+		for (unsigned i = 0; i < 4; ++i) {
+			LoopbackTransportConfig faults;
+			faults.latencyMs = 30 + i * 10; faults.jitterMs = 40; faults.reorderUnreliable = true;
+			faults.unreliableDropEveryN = 7; faults.unreliableDuplicateEveryN = 3;
+			wires[i].SetFaultConfig(faults);
+		}
+		std::array<uint64_t, 4> produced{}, barrier{};
+		std::array<std::vector<std::pair<uint64_t, NetGameCommand>>, 4> ledger;
+		std::array<std::map<uint64_t, uint8_t>, 4> authorities;
+		for (unsigned i = 0; i < 4; ++i) produced[i] = 101 - peers[i]->InputDelayAt(i + 1, 101);
+		const uint64_t began = now;
+		bool clean = true, sharedBarrier = false;
+		for (; now < began + 6000;) {
+			for (uint8_t i = 0; i < 4; ++i) {
+				const uint64_t pause = i == 2 ? 1300 : i == 1 ? 152 : i == 3 ? 83 : 53;
+				if (now >= began + pause && produced[i] <= 145 && (now - began) % 7 == 0) {
+					std::vector<NetGameCommand> commands;
+					if (produced[i] == 105) commands.push_back({static_cast<uint8_t>(i + 1), NetGamePlaceBrain{static_cast<int32_t>(i % 2), i, 100.0F + i * 80.0F, 100.0F, "Actor", "Brain Case", "Base.rte"}, 1});
+					if (!peers[i]->QueueLocalInput(produced[i]++, {}, commands, error)) { clean = false; break; }
+				}
+			}
+			if (!clean) break;
+			pump();
+			for (unsigned i = 0; i < 4; ++i) {
+				NetLockstepReadyFrame frame;
+				while (peers[i]->PopReadyFrame(frame)) {
+					for (const auto* commands: {&frame.localCommands, &frame.remoteCommands})
+						for (const auto& command: *commands)
+							if (std::holds_alternative<NetGamePlaceBrain>(command.payload)) ledger[i].emplace_back(frame.frame, command);
+					authorities[i][frame.frame] = frame.authorityPeerId;
+					if (ledger[i].size() == 4 && barrier[i] == 0) barrier[i] = frame.frame;
+					(void)peers[i]->FinishSimulationTick(frame.frame);
+				}
+				const bool held = std::any_of(peers[i]->m_TimingDecisions.begin(), peers[i]->m_TimingDecisions.end(), [](const auto& decision) { return decision.second.proposal.action == NetTimingAction::Hold; });
+				clean = clean && peers[i]->IsRunning() && !held && !peers[i]->IsSeatUnderAI(3, peers[i]->GetStats().nextFrame);
+			}
+			if (!sharedBarrier && barrier[0] != 0) {
+				NetRosterEvent barrierEvent{combat};
+				[]<typename Event>(Event& event, uint64_t frame) { if constexpr (requires(Event e) { e.frame; }) event.frame = frame; }(barrierEvent, barrier[0]);
+				const auto started = ApplyRosterEvent(roster, barrierEvent);
+				sharedBarrier = !started.refused && started.roster.stage == NetRosterStage::Running;
+				if (sharedBarrier) { roster = started.roster; if (!replicate()) return false; }
+			}
+			if (!clean || (barrier[3] != 0 && std::all_of(peers.begin(), peers.end(), [](const auto* peer) { return peer->GetResumeFrame() >= 140; }))) break;
+		}
+		for (auto& entries: ledger) std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.second.senderPeerId < b.second.senderPeerId; });
+		bool same = clean && sharedBarrier && ledger[0].size() == 4 && barrier[0] != 0;
+		for (unsigned i = 1; i < 4; ++i) {
+			same = same && ledger[i] == ledger[0] && barrier[i] == barrier[0];
+			for (const auto& [frame, authority]: authorities[0]) if (frame <= barrier[0]) same = same && authorities[i].contains(frame) && authorities[i][frame] == authority;
+		}
+		if (!same) {
+			*error = "four jittery editors did not commit one shared brain barrier";
+			for (unsigned i = 0; i < 4; ++i) *error += " p" + std::to_string(i + 1) + "=" + std::to_string(ledger[i].size()) + "/" + std::to_string(barrier[i]) + "/" + NetLockstepCoordinator::StateName(peers[i]->GetState());
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS four_brains_late_jitter_duplicate_reorder barrier=" << barrier[0] << std::endl;
+		return true;
+	}
+
 	bool TestPlacementSessionSequence(unsigned fight, std::string* error) {
 		LoopbackTransport wire;
 		NetMatchService service;
@@ -23839,7 +23949,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			LoopbackTransport clientWire;
 			NetLockstepCoordinator client;
 			auto clientConfig = QuorumConfig(3, 4, 49713, config.sessionId, std::make_shared<QuorumPartition>());
-			if (!client.Start(clientWire, clientConfig, error)) return false;
+			if (!clientWire.Connect("loopback", 49713, error) || !client.Start(clientWire, clientConfig, error)) return false;
 			client.m_State = NetLockstepState::Running; client.m_SimTickedMs.store(1000);
 			require(client.PlaneShouldTick(1000 + 79610), "the client had zero plane ticks through its 79610 ms frame-head stall");
 		}
@@ -28616,6 +28726,7 @@ namespace {
 		row([](std::string* rowError) { return TestAgreedStartKeepsARejoinedHorizon(rowError); }, "TestAgreedStartKeepsARejoinedHorizon");
 		row([](std::string* rowError) { return TestOverdueBoundWaitsForTheCommittedRunway(rowError); }, "TestOverdueBoundWaitsForTheCommittedRunway");
 		row(&TestFourPlayerHoldWaitsForALiveAcknowledgement, "TestFourPlayerHoldWaitsForALiveAcknowledgement");
+		row(&TestFourPeersCommitPlacement, "four_brains_late_jitter_duplicate_reorder");
 		row([](std::string* why) { return TestPlacementSessionSequence(10, why); }, "placement_session_fight_10");
 		row([](std::string* why) { return TestPlacementSessionSequence(11, why); }, "placement_session_fight_11");
 		row([](std::string* why) { return TestPlacementSessionSequence(12, why); }, "placement_session_fight_12");
