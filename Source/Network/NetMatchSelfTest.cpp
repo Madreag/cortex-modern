@@ -17573,8 +17573,8 @@ namespace RTE {
 				return false;
 			}
 			if (noDirectRoute && NetMatchService::SetupFailureStatus(&session, noDirectRoute) !=
-			    "No direct route (NAT): forward the host's UDP port or use LAN") {
-				*error = "ice failure message still uses the generic setup failure";
+			    "No direct route connected. Retry with your Connection set to Automatic, and ask the host to enable its relay.") {
+				*error = "ice failure message lost its connection recovery guidance: " + NetMatchService::SetupFailureStatus(&session, noDirectRoute);
 				return false;
 			}
 			if (arm == 4 && NetMatchService::SetupFailureStatus(&session, noDirectRoute) != "The host banned you from this session") {
@@ -17582,9 +17582,9 @@ namespace RTE {
 				return false;
 			}
 			if (arm >= 9 && (why.find("relay") == std::string::npos && why.find("Relay") == std::string::npos)) { *error = "failure hid the relay stage"; return false; }
-			if (arm == 10 && NetMatchService::SetupFailureStatus(&session, true, true) != "Relay route failed (TURN): check the relay or forward the host's UDP port") { *error = "relay failure action missing"; return false; }
+			if (arm == 10 && NetMatchService::SetupFailureStatus(&session, true, true) != "The relay could not connect. Retry joining; the host can check its Relay choice in Host Options > Network.") { *error = "relay failure action missing"; return false; }
 		}
-		std::cout << "[net-match-selftest] PASS ice failure message: failed ICE and IP stages name the port-forward or LAN action" << std::endl;
+		std::cout << "[net-match-selftest] PASS ice failure message: failed ICE and IP stages name Connection and host Relay actions" << std::endl;
 		std::cout << "[net-match-selftest] PASS ice IP retry: runtime, immediate and signaling refusals dial the advertised IP once" << std::endl;
 		std::cout << "[net-match-selftest] PASS ice refusal policy: no invented address, no retry of a ban or cancellation" << std::endl;
 		std::cout << "[net-match-selftest] PASS ice deadline: directory lookup time does not consume the connection budget" << std::endl;
