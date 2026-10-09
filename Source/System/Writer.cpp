@@ -1521,6 +1521,35 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			CheckpointText frozen;
 			std::string full, shared;
 			{
+				std::vector<std::pair<Vector, float>> vectors{{Vector(-0.0F, 7.25F), std::bit_cast<float>(uint32_t{0x7fc01234})}, {Vector(9, -13), -0.0F}};
+				std::list<std::array<int, 3>> integers{{-7, 0, 19}, {31, -43, 59}};
+				std::deque<std::string> strings{std::string("x\0y\xff", 4), "", "last"};
+				std::set<std::string> names{"z", std::string("a\0b", 3), "a"};
+				std::map<long, std::vector<std::pair<unsigned, double>>> nested{{-3, {{7, -0.0}, {9, 1.25}}}, {11, {}}};
+				const auto saveCollections = [&] {
+					CheckpointWriter writer("OwnedCollections1");
+					writer(vectors, integers, strings, names);
+					writer.PerPeer(nested);
+					return writer.Text();
+				};
+				const auto ordinary = CheckpointWriter::CaptureNative(saveCollections);
+				full = ordinary.Text(); shared = ordinary.SharedText();
+				{
+					CheckpointWriter::BatchScope batch(true);
+					frozen = CheckpointWriter::CaptureNative(saveCollections);
+				}
+				vectors.clear(); integers.clear(); strings.clear(); names.clear(); nested.clear();
+			}
+			std::array<std::future<bool>, 4> readers;
+			for (auto& reader: readers) reader = std::async(std::launch::async, [frozen, &full, &shared] { return frozen.Text() == full && frozen.SharedText() == shared; });
+			bool exact = true;
+			for (auto& reader: readers) exact = reader.get() && exact;
+			check(exact, "owned_native_collections_pack_after_source_death_and_preserve_full_and_shared_bytes");
+		}
+		{
+			CheckpointText frozen;
+			std::string full, shared;
+			{
 				std::unordered_map<std::string, float> numbers{{"z", -0.0F}, {std::string("a\0b", 3), std::bit_cast<float>(uint32_t{0x7fc01234})}, {"a", 1.25F}};
 				std::unordered_map<uint64_t, int64_t> integers{{std::numeric_limits<uint64_t>::max(), std::numeric_limits<int64_t>::min()}, {0, 17}, {31, -7}};
 				std::unordered_map<int, std::string> peers{{9, std::string("x\0y\xff", 4)}, {-7, "first"}, {0, ""}};

@@ -160,13 +160,13 @@ namespace RTE {
 		template <class T, size_t N> void Value(const std::array<T, N>& values) { for (const auto& value: values) Value(value); }
 		template <class T, size_t N> void Value(const T (&values)[N]) { for (const auto& value: values) Value(value); }
 		template <class T, class U> void Value(const std::pair<T, U>& value) { (*this)(value.first, value.second); }
-		template <class T> void Value(const std::vector<T>& values) { Value(values.size()); for (const auto& value: values) Value(value); }
+		template <class T> void Value(const std::vector<T>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
 		// vector<bool> packs bits, so its elements have no storage byte of their own to copy.
 		void Value(const std::vector<bool>& values) { Value(values.size()); for (bool value: values) Value(value ? 1u : 0u); }
-		template <class T> void Value(const std::list<T>& values) { Value(values.size()); for (const auto& value: values) Value(value); }
-		template <class T> void Value(const std::deque<T>& values) { Value(values.size()); for (const auto& value: values) Value(value); }
-		template <class T> void Value(const std::set<T>& values) { Value(values.size()); for (const auto& value: values) Value(value); }
-		template <class K, class V> void Value(const std::map<K, V>& values) { Value(values.size()); for (const auto& [key, value]: values) (*this)(key, value); }
+		template <class T> void Value(const std::list<T>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
+		template <class T> void Value(const std::deque<T>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
+		template <class T> void Value(const std::set<T>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
+		template <class K, class V> void Value(const std::map<K, V>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& [key, value]: values) (*this)(key, value); }
 		template <class K, class V> void Value(const std::unordered_map<K, V>& values) {
 			constexpr bool plainKey = (std::is_integral_v<K> && !std::is_same_v<K, bool>) || std::is_enum_v<K> || std::is_same_v<K, std::string>;
 			constexpr bool plainValue = (std::is_integral_v<V> && !std::is_same_v<V, bool>) || std::is_enum_v<V> || std::is_same_v<V, float> || std::is_same_v<V, double> || std::is_same_v<V, std::string>;
@@ -204,6 +204,70 @@ namespace RTE {
 
 	private:
 		CheckpointBuffer& Buffer() const { return m_Output ? *m_Output : m_Capture; }
+		template<class T> static constexpr bool PlainOwnedValue() {
+			if constexpr (std::is_arithmetic_v<T> || std::is_enum_v<T> || std::is_same_v<T, std::string> || std::is_same_v<T, Vector> || std::is_same_v<T, Box>) return true;
+			else if constexpr (CheckpointArray<T>) return PlainOwnedValue<typename T::value_type>();
+			else if constexpr (requires { typename T::first_type; typename T::second_type; }) return PlainOwnedValue<std::remove_const_t<typename T::first_type>>() && PlainOwnedValue<typename T::second_type>();
+			else if constexpr (requires { typename T::value_type; }) return PlainOwnedValue<typename T::value_type>();
+			else return false;
+		}
+		template<class T> static auto OwnValue(const T& value) {
+			if constexpr (std::is_same_v<T, bool>) {
+				unsigned char byte;
+				std::memcpy(&byte, &value, sizeof(byte));
+				return static_cast<unsigned int>(byte);
+			} else if constexpr (std::is_same_v<T, Vector>) return std::array{value.m_X, value.m_Y};
+			else if constexpr (std::is_same_v<T, Box>) return std::array{value.m_Corner.m_X, value.m_Corner.m_Y, value.m_Width, value.m_Height};
+			else if constexpr (CheckpointArray<T>) {
+				std::array<decltype(OwnValue(value[0])), std::tuple_size_v<T>> owned;
+				for (size_t index = 0; index < owned.size(); ++index) owned[index] = OwnValue(value[index]);
+				return owned;
+			} else if constexpr (requires { typename T::first_type; typename T::second_type; }) return std::pair{OwnValue(value.first), OwnValue(value.second)};
+			else if constexpr (!std::is_same_v<T, std::string> && requires { typename T::value_type; }) {
+				std::vector<decltype(OwnValue(std::declval<const typename T::value_type&>()))> owned;
+				owned.reserve(value.size());
+				for (const auto& field: value) owned.push_back(OwnValue(field));
+				return owned;
+			} else return value;
+		}
+		template<class T> static size_t OwnedValueBytes(const T& value) {
+			if constexpr (std::is_trivially_copyable_v<T>) return sizeof(T);
+			else if constexpr (std::is_same_v<T, std::string>) return sizeof(T) + value.size();
+			else if constexpr (requires { typename T::first_type; typename T::second_type; }) return OwnedValueBytes(value.first) + OwnedValueBytes(value.second);
+			else if constexpr (requires { typename T::value_type; }) {
+				size_t bytes = sizeof(T);
+				for (const auto& field: value) bytes += OwnedValueBytes(field);
+				return bytes;
+			} else return sizeof(T);
+		}
+		// The boundary owns values in wire order; collection packing belongs to the saver.
+		template<class Sequence> bool CaptureSequence(const Sequence& values) {
+			if constexpr (PlainOwnedValue<typename Sequence::value_type>()) {
+				if (m_Recording && BatchEnabled() && !values.empty()) {
+					using Value = decltype(OwnValue(std::declval<const typename Sequence::value_type&>()));
+					struct Owned {
+						std::shared_ptr<std::pmr::memory_resource> storage = CheckpointBuffer::LeaseCaptureStorage();
+						std::pmr::vector<Value> values{storage ? storage.get() : std::pmr::get_default_resource()};
+					} owned;
+					owned.values.reserve(values.size());
+					size_t bytes = sizeof(owned);
+					for (const auto& field: values) {
+						owned.values.push_back(OwnValue(field));
+						bytes += OwnedValueBytes(owned.values.back());
+					}
+					AppendFields(CheckpointText::Deferred([owned = std::move(owned)] {
+						return CaptureNative([&owned] {
+							CheckpointWriter writer(FieldsOnly{});
+							writer.Value(owned.values.size());
+							for (const auto& field: owned.values) writer.Value(field);
+							return writer.Text();
+						}).Text();
+					}, bytes));
+					return true;
+				}
+			}
+			return false;
+		}
 		template<class Visit> void InlineNative(Visit visit) {
 			RefuseDivertedValue();
 			Buffer().SizedRunBegin();
