@@ -59,7 +59,7 @@ struct CheckpointPagePool::Copy {
 	Pages pages;
 	std::vector<unsigned char> saved;
 	std::thread::id simThread = std::this_thread::get_id();
-	std::atomic<int64_t> workerUs{0}, simFaultUs{0}, otherFaultUs{0};
+	std::atomic<int64_t> workerUs{0}, simFaultNs{0}, otherFaultNs{0};
 	std::atomic<uint64_t> simFaults{0}, otherFaults{0};
 	bool completed = false;
 	Copy(size_t bytes, size_t pageBytes) : pages(bytes), saved(bytes / pageBytes, 0) {}
@@ -89,17 +89,23 @@ struct CheckpointPagePool::Block {
 		const auto started = fault ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		Locked guard(lock);
 		const size_t offset = page * pageBytes;
+		bool savedAny = false;
 		for (const auto& copy: copies) {
 			if (copy->saved[page]) continue;
 			std::memcpy(copy->pages.data + offset, live.data + offset, pageBytes);
 			copy->saved[page] = 1;
-			if (fault) {
+			savedAny = true;
+		}
+		const bool opened = (!fault && !savedAny) || PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data + offset), pageBytes);
+		if (fault) {
+			const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
+			for (const auto& copy: copies) if (!copy->completed) {
 				const bool simulation = std::this_thread::get_id() == copy->simThread;
 				(simulation ? copy->simFaults : copy->otherFaults).fetch_add(1, std::memory_order_relaxed);
-				(simulation ? copy->simFaultUs : copy->otherFaultUs).fetch_add(Since(started), std::memory_order_relaxed);
+				(simulation ? copy->simFaultNs : copy->otherFaultNs).fetch_add(elapsed, std::memory_order_relaxed);
 			}
 		}
-		return PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data + offset), pageBytes);
+		return opened;
 	}
 	static bool OnWrite(void* context, uintptr_t address) noexcept {
 		auto& block = *static_cast<Block*>(context);
@@ -203,8 +209,8 @@ CheckpointPagePool::Costs CheckpointPagePool::Snapshot::Cost() const {
 	for (const auto& part: m_Parts) {
 		result.bytes += part.copy->pages.bytes;
 		result.workerUs += part.copy->workerUs.load(std::memory_order_relaxed);
-		result.simFaultUs += part.copy->simFaultUs.load(std::memory_order_relaxed);
-		result.otherFaultUs += part.copy->otherFaultUs.load(std::memory_order_relaxed);
+		result.simFaultUs += (part.copy->simFaultNs.load(std::memory_order_relaxed) + 999) / 1000;
+		result.otherFaultUs += (part.copy->otherFaultNs.load(std::memory_order_relaxed) + 999) / 1000;
 		result.simFaults += part.copy->simFaults.load(std::memory_order_relaxed);
 		result.otherFaults += part.copy->otherFaults.load(std::memory_order_relaxed);
 	}

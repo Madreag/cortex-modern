@@ -402,18 +402,19 @@ namespace {
 		else ranges.push_back({source, offset, into, size});
 		into += size;
 	}
-	template<class T> void AtomFieldRanges(std::vector<AtomFieldRange>& ranges, const Atom* atom, size_t& into, size_t& colors, size_t& dynamic, const T& value) {
+	template<class T> void AtomFieldRanges(std::vector<AtomFieldRange>& ranges, const Atom* atom, size_t& into, size_t& colors, size_t& dynamic, const T& value, bool frozenColors = false) {
 		using Source = AtomFieldRange::Source;
 		if constexpr (std::is_same_v<T, Vector>) {
-			AtomFieldRanges(ranges, atom, into, colors, dynamic, value.m_X);
-			AtomFieldRanges(ranges, atom, into, colors, dynamic, value.m_Y);
+			AtomFieldRanges(ranges, atom, into, colors, dynamic, value.m_X, frozenColors);
+			AtomFieldRanges(ranges, atom, into, colors, dynamic, value.m_Y, frozenColors);
 		} else if constexpr (std::is_same_v<T, Color>) {
-			AddAtomRange(ranges, Source::Colors, colors++ * 4 * sizeof(int), into, 4 * sizeof(int));
+			if (frozenColors) value.VisitCheckpointFields([&](const auto&... channels) { (AtomFieldRanges(ranges, atom, into, colors, dynamic, channels, true), ...); });
+			else AddAtomRange(ranges, Source::Colors, colors++ * 4 * sizeof(int), into, 4 * sizeof(int));
 		} else if constexpr (std::is_array_v<T> || CheckpointArray<T>) {
-			for (const auto& field: value) AtomFieldRanges(ranges, atom, into, colors, dynamic, field);
+			for (const auto& field: value) AtomFieldRanges(ranges, atom, into, colors, dynamic, field, frozenColors);
 		} else if constexpr (requires { typename T::first_type; typename T::second_type; }) {
-			AtomFieldRanges(ranges, atom, into, colors, dynamic, value.first);
-			AtomFieldRanges(ranges, atom, into, colors, dynamic, value.second);
+			AtomFieldRanges(ranges, atom, into, colors, dynamic, value.first, frozenColors);
+			AtomFieldRanges(ranges, atom, into, colors, dynamic, value.second, frozenColors);
 		} else if constexpr (AtomDynamicField<T>) {
 			AddAtomRange(ranges, Source::Dynamic, dynamic++ * 2 * sizeof(size_t), into, 2 * sizeof(size_t));
 		} else {
@@ -492,7 +493,189 @@ namespace {
 	}
 }
 
+struct Atom::FrozenList {
+	struct Tail {
+		std::vector<MOID> ignored;
+		std::vector<std::pair<int, int>> previous, trail;
+		std::array<std::string, 3> materials;
+	};
+	struct Record { const Atom* address; size_t backup, tail; };
+	struct MaterialValue { CheckpointText text; int index; };
+	std::shared_ptr<FreezeState> state;
+	std::vector<Record> records;
+	std::vector<Tail> tails;
+	std::vector<char> backup;
+	std::vector<AtomFieldRange> ranges;
+	std::unordered_map<const Material*, MaterialValue> materials;
+	std::unordered_map<const MovableObject*, long> owners;
+	struct Layout {
+		size_t material, hitMaterials[2], owner, bodies[2], roots[2], links, hasLinks, hasMaterials, groupIgnore;
+		size_t prevError, penetrations, terrainDisabled, changedDir, offsetX, offsetY, subgroup;
+	} layout{};
+	static constexpr size_t none = std::numeric_limits<size_t>::max();
+	using Raw = std::array<char, sizeof(Atom)>;
+	Raw Read(const Record& record) const {
+		Raw result;
+		if (record.backup != none) std::memcpy(result.data(), backup.data() + record.backup, result.size());
+		else if (!state->pages->Read(record.address, result.data(), result.size())) throw std::logic_error("frozen atom lies outside its recorded pool");
+		return result;
+	}
+	template<class T> static T Field(const Raw& raw, size_t offset) {
+		static_assert(std::is_trivially_copyable_v<T>);
+		T result;
+		std::memcpy(&result, raw.data() + offset, sizeof(result));
+		return result;
+	}
+	size_t Bytes() const {
+		size_t bytes = records.size() * (sizeof(Record) + sizeof(Atom)) + ranges.size() * sizeof(AtomFieldRange);
+		for (const Tail& tail: tails) {
+			bytes += sizeof(Tail) + tail.ignored.size() * sizeof(MOID) + (tail.previous.size() + tail.trail.size()) * sizeof(std::pair<int, int>);
+			for (const auto& text: tail.materials) bytes += text.size();
+		}
+		for (const auto& [source, material]: materials) bytes += sizeof(MaterialValue) + material.text.OwnedBytes();
+		return bytes;
+	}
+	std::array<long, 5> Links(const Raw& raw) const {
+		if (Field<unsigned char>(raw, layout.hasLinks)) return Field<std::array<long, 5>>(raw, layout.links);
+		const auto knownID = [&](size_t offset) {
+			const auto found = state->knownIDs.find(Field<const MovableObject*>(raw, offset));
+			return found == state->knownIDs.end() ? 0L : found->second;
+		};
+		const auto owner = Field<const MovableObject*>(raw, layout.owner);
+		long ownerID = 0;
+		if (owner) {
+			const auto found = state->knownIDs.find(owner);
+			ownerID = found == state->knownIDs.end() ? owners.at(owner) : found->second;
+		}
+		return {ownerID, knownID(layout.bodies[0]), knownID(layout.bodies[1]), knownID(layout.roots[0]), knownID(layout.roots[1])};
+	}
+};
+
+std::shared_ptr<const Atom::FrozenList> Atom::FreezeList(const std::vector<Atom*>& atoms, bool values) {
+	auto list = std::make_shared<FrozenList>();
+	list->state = s_FreezeState.load(std::memory_order_acquire)->shared_from_this();
+	list->records.reserve(atoms.size());
+	if (!atoms.empty()) {
+		const Atom& atom = *atoms.front();
+		const auto offset = [&](const auto& value) { return reinterpret_cast<const char*>(&value) - reinterpret_cast<const char*>(&atom); };
+		auto& layout = list->layout;
+		layout.material = offset(atom.m_Material); layout.owner = offset(atom.m_OwnerMO);
+		for (size_t i = 0; i < 2; ++i) {
+			layout.hitMaterials[i] = offset(atom.m_LastHit.HitMaterial[i]);
+			layout.bodies[i] = offset(atom.m_LastHit.Body[i]); layout.roots[i] = offset(atom.m_LastHit.RootBody[i]);
+		}
+		layout.links = offset(atom.m_CheckpointLinkIDs); layout.hasLinks = offset(atom.m_HasCheckpointLinks);
+		layout.hasMaterials = offset(atom.m_HasCheckpointMaterials); layout.groupIgnore = offset(atom.m_IgnoreMOIDsByGroup);
+		layout.prevError = offset(atom.m_PrevError); layout.penetrations = offset(atom.m_NumPenetrations);
+		layout.terrainDisabled = offset(atom.m_TerrainHitsDisabled); layout.changedDir = offset(atom.m_ChangedDir);
+		layout.offsetX = offset(atom.m_Offset.m_X); layout.offsetY = offset(atom.m_Offset.m_Y); layout.subgroup = offset(atom.m_SubgroupID);
+		size_t into = 0, colors = 0, dynamic = 0;
+		const auto describe = [&](const auto&... values) { (AtomFieldRanges(list->ranges, &atom, into, colors, dynamic, values, true), ...); };
+		VisitCheckpoint(describe, atom);
+	}
+	std::array<const Material*, 3> lastMaterials{};
+	std::array<bool, 3> haveMaterial{};
+	const MovableObject* lastOwner = nullptr;
+	for (const Atom* atom: atoms) {
+		FrozenList::Record record{atom, FrozenList::none, FrozenList::none};
+		if (!list->state->pages || !list->state->pages->Contains(atom, sizeof(Atom))) {
+			record.backup = list->backup.size();
+			const char* source = reinterpret_cast<const char*>(atom);
+			list->backup.insert(list->backup.end(), source, source + sizeof(Atom));
+		}
+		if (values && (!atom->m_IgnoreMOIDs.empty() || !atom->m_LastTrailPoints.empty() || !atom->m_TrailPoints.empty() || atom->m_HasCheckpointMaterials)) {
+			record.tail = list->tails.size();
+			list->tails.push_back({atom->m_IgnoreMOIDs, atom->m_LastTrailPoints, atom->m_TrailPoints,
+			    atom->m_HasCheckpointMaterials ? atom->m_CheckpointMaterialReferences : std::array<std::string, 3>{}});
+		}
+		const Material* sources[] = {atom->m_Material, atom->m_LastHit.HitMaterial[0], atom->m_LastHit.HitMaterial[1]};
+		for (size_t index = 0; index < (values ? 3 : 1); ++index) {
+			if (values && atom->m_HasCheckpointMaterials) break;
+			const Material* source = sources[index];
+			if (haveMaterial[index] && lastMaterials[index] == source) continue;
+			haveMaterial[index] = true; lastMaterials[index] = source;
+			if (list->materials.contains(source)) continue;
+			const CheckpointText text = values ? CheckpointWriter::Native([source] { return g_SceneMan.SaveMaterialReference(source); }) : CheckpointText();
+			list->materials.emplace(source, FrozenList::MaterialValue{text, source ? source->GetIndex() : -1});
+		}
+		const MovableObject* owner = atom->m_OwnerMO;
+		if (values && owner && owner != lastOwner && !list->state->knownIDs.contains(owner) && !list->owners.contains(owner)) list->owners.emplace(owner, owner->GetUniqueID());
+		lastOwner = owner;
+		list->records.push_back(record);
+	}
+	return list;
+}
+
+CheckpointText Atom::CaptureFrozenList(const std::shared_ptr<const FrozenList>& list) {
+	const auto types = [](const auto&... values) { return std::type_identity<std::tuple<std::remove_cvref_t<decltype(values)>...>>{}; };
+	using Types = decltype(VisitCheckpoint(types, std::declval<const Atom&>()));
+	const auto size = [](const auto&... values) { return std::integral_constant<size_t, (AtomPackedSize<std::remove_cvref_t<decltype(values)>>() + ... + size_t{0})>{}; };
+	constexpr size_t width = decltype(VisitCheckpoint(size, std::declval<const Atom&>()))::value;
+	const auto dynamicCount = [](const auto&... values) { return std::integral_constant<size_t, (AtomMetadataCount<std::remove_cvref_t<decltype(values)>, false>() + ... + size_t{0})>{}; };
+	static_assert(decltype(VisitCheckpoint(dynamicCount, std::declval<const Atom&>()))::value == 3);
+	return CheckpointText::Deferred([list] {
+		std::string result = std::to_string(list->records.size()) + " ";
+		for (const auto& record: list->records) {
+			const auto raw = list->Read(record);
+			struct Dynamic { std::array<size_t, 6> dynamic; std::array<int, 4> colors; } metadata;
+			std::pmr::vector<char> dynamic;
+			size_t color = 0, at = 0;
+			const FrozenList::Tail empty;
+			const auto& tail = record.tail == FrozenList::none ? empty : list->tails.at(record.tail);
+			CaptureAtomMetadata(metadata, dynamic, color, at, tail.ignored);
+			CaptureAtomMetadata(metadata, dynamic, color, at, tail.previous);
+			CaptureAtomMetadata(metadata, dynamic, color, at, tail.trail);
+			std::array<char, width> packed;
+			for (const auto& range: list->ranges) {
+				const char* source = range.source == AtomFieldRange::Source::Image ? raw.data() : reinterpret_cast<const char*>(metadata.dynamic.data());
+				std::memcpy(packed.data() + range.into, source + range.offset, range.size);
+			}
+			CheckpointWriter writer("Atom2");
+			const auto fields = UnpackAtomFields(Types{}, std::string_view(packed.data(), packed.size()), std::string_view(dynamic.data(), dynamic.size()));
+			std::apply([&writer](const auto&... values) { writer(values...); }, fields);
+			if (FrozenList::Field<unsigned char>(raw, list->layout.hasMaterials)) {
+				for (const auto& reference: tail.materials) writer(CheckpointText(reference));
+			} else {
+				writer(list->materials.at(FrozenList::Field<const Material*>(raw, list->layout.material)).text);
+				for (size_t offset: list->layout.hitMaterials) writer(list->materials.at(FrozenList::Field<const Material*>(raw, offset)).text);
+			}
+			writer(list->Links(raw), FrozenList::Field<const void*>(raw, list->layout.groupIgnore) != nullptr);
+			const std::string& text = writer.Text();
+			result += std::to_string(text.size()); result += " "; result += text; result += " ";
+		}
+		return result;
+	}, list->Bytes());
+}
+
+bool Atom::CaptureFrozenProperties(Writer& writer, const std::vector<Atom*>& atoms) {
+	if (!CheckpointWriter::BatchEnabled() || !s_FreezeState.load(std::memory_order_acquire)) return false;
+	const auto list = FreezeList(atoms, false);
+	const int indent = writer.GetIndent();
+	writer.Append(CheckpointText::Deferred([list, indent] {
+		struct Record { long long residue; CheckpointProperties::VectorValue offset; long long subgroup; int material; };
+		std::vector<Record> records;
+		records.reserve(list->records.size());
+		for (const auto& atom: list->records) {
+			const auto raw = list->Read(atom);
+			const auto& layout = list->layout;
+			const int penetrations = FrozenList::Field<int>(raw, layout.penetrations);
+			long long residue = static_cast<long long>(FrozenList::Field<int>(raw, layout.prevError)) * 256 + (penetrations < 255 ? penetrations : 255);
+			residue = residue * 4 + (FrozenList::Field<unsigned char>(raw, layout.terrainDisabled) ? 2 : 0) + (FrozenList::Field<unsigned char>(raw, layout.changedDir) ? 1 : 0);
+			records.push_back({residue, {FrozenList::Field<float>(raw, layout.offsetX), FrozenList::Field<float>(raw, layout.offsetY)},
+			    FrozenList::Field<int>(raw, layout.subgroup), list->materials.at(FrozenList::Field<const Material*>(raw, layout.material)).index});
+		}
+		return Writer::Capture([&](Writer& output) {
+			for (const auto& record: records) output.NewPropertyWithValue("AtomGroupResidue", record.residue);
+			for (const auto& record: records) CheckpointProperties::Owned<"AtomGroupOffset", CheckpointProperties::VectorValue>::WriteValue(output, record.offset);
+			for (const auto& record: records) output.NewPropertyWithValue("AtomGroupSubID", record.subgroup);
+			for (const auto& record: records) output.NewPropertyWithValue("AtomGroupMaterial", record.material);
+		}, indent).Text();
+	}, list->Bytes()));
+	return true;
+}
+
 CheckpointText Atom::CaptureCheckpointList(const std::vector<Atom*>& atoms) {
+	if (CheckpointWriter::BatchEnabled() && s_FreezeState.load(std::memory_order_acquire)) return CaptureFrozenList(FreezeList(atoms));
 	const auto types = [](const auto&... values) { return std::type_identity<std::tuple<std::remove_cvref_t<decltype(values)>...>>{}; };
 	using Types = decltype(VisitCheckpoint(types, std::declval<const Atom&>()));
 	const auto size = [](const auto&... values) { return std::integral_constant<size_t, (AtomPackedSize<std::remove_cvref_t<decltype(values)>>() + ... + size_t{0})>{}; };
@@ -607,9 +790,18 @@ CheckpointText Atom::CaptureCheckpointList(const std::vector<Atom*>& atoms) {
 std::string Atom::CheckpointListSelfTestMismatch() {
 	std::string expected;
 	CheckpointText captured;
+	CheckpointText frozen, properties;
+	std::string expectedProperties;
 	{
 		auto first = std::make_unique<Atom>();
-		auto second = std::make_unique<Atom>();
+		void* native;
+		{
+			std::lock_guard lock(s_MemoryPoolMutex);
+			if (!s_NativeAtomPool) s_NativeAtomPool = new NativeAtomPool;
+			if (s_NativeAtomPool->free.empty()) s_NativeAtomPool->pages.Grow(sizeof(Atom), 2, s_NativeAtomPool->free);
+			native = s_NativeAtomPool->free.back(); s_NativeAtomPool->free.pop_back(); ++s_InstancesInUse;
+		}
+		std::unique_ptr<Atom> second(::new (native) Atom);
 		const auto fill = []<class Self, class T>(Self& self, T& value, uint64_t& bits) -> void {
 			if constexpr (std::is_same_v<T, Vector>) {
 				self(self, value.m_X, bits); self(self, value.m_Y, bits);
@@ -626,6 +818,7 @@ std::string Atom::CheckpointListSelfTestMismatch() {
 		uint64_t bits = 31;
 		const auto allFields = [&](auto&... values) { (fill(fill, values, bits), ...); };
 		VisitCheckpoint(allFields, *second);
+		second->m_ChangedDir = true; second->m_TerrainHitsDisabled = false;
 		first->m_Offset.m_X = std::bit_cast<float>(uint32_t{0x7fc01234});
 		first->m_OriginalOffset.m_Y = -0.0F;
 		first->m_IgnoreMOIDs = {1, 17, 99};
@@ -651,14 +844,34 @@ std::string Atom::CheckpointListSelfTestMismatch() {
 			return result;
 		};
 		expected = ordinary(atoms);
+		expectedProperties = Writer::Capture([&](Writer& writer) {
+			for (const Atom* atom: atoms) writer.NewPropertyWithValue("AtomGroupResidue", atom->PackTravelResidue());
+			for (const Atom* atom: atoms) writer.NewPropertyWithValue("AtomGroupOffset", atom->GetOffset());
+			for (const Atom* atom: atoms) writer.NewPropertyWithValue("AtomGroupSubID", static_cast<long long>(atom->GetSubID()));
+			for (const Atom* atom: atoms) writer.NewPropertyWithValue("AtomGroupMaterial", static_cast<int>(atom->GetMaterial()->GetIndex()));
+		}, 3).Text();
 		{
 			CheckpointWriter::BatchScope batch(true);
 			captured = CheckpointWriter::CaptureValues([&] { return CaptureCheckpointList(atoms); });
+			SnapshotScope snapshot(true);
+			frozen = CheckpointWriter::CaptureValues([&] { return CaptureCheckpointList(atoms); });
+			properties = Writer::Capture([&](Writer& writer) {
+				if (!CaptureFrozenProperties(writer, atoms)) throw std::logic_error("atom page snapshot was not used");
+			}, 3);
 		}
 		first->m_IgnoreMOIDs.clear();
 		first->m_LastTrailPoints.clear();
 		first->m_CheckpointMaterialReferences.fill("changed");
 		first->m_LastHit.TotalMass[1] = 123.0F;
+		second->m_Offset.m_X = 123.0F;
+		second.reset();
+		{
+			std::lock_guard lock(s_MemoryPoolMutex);
+			if (s_NativeAtomPool->free.back() != native) return "native atom slot did not return to its pool";
+			s_NativeAtomPool->free.pop_back(); ++s_InstancesInUse;
+		}
+		std::unique_ptr<Atom> reused(::new (native) Atom);
+		reused->SetPrevError(-123);
 	}
 	// All live atoms, strings, trails and group pointers have died before traversal.
 	std::array<std::future<std::pair<std::string, std::string>>, 4> readers;
@@ -672,6 +885,12 @@ std::string Atom::CheckpointListSelfTestMismatch() {
 		const auto [full, shared] = reader.get();
 		if (full != expected) return "owned atom list differs from the ordinary field order";
 		if (shared != expected) return "atom list lost shared fields";
+	}
+	for (auto& reader: readers) reader = std::async(std::launch::async, [frozen, properties] { return std::pair{frozen.Text(), properties.Text()}; });
+	for (auto& reader: readers) {
+		const auto [full, columns] = reader.get();
+		if (full != expected || frozen.SharedText() != expected) return "frozen atom pages differ after mutation, death and pool reuse";
+		if (columns != expectedProperties || properties.SharedText() != expectedProperties) return "frozen atom columns differ after source death";
 	}
 	CheckpointWriter::BatchScope batch(true);
 	const auto empty = CaptureCheckpointList({});

@@ -66,6 +66,8 @@ namespace RTE {
 		/// Gets the entry in the current color palette that most closely matches this Color's RGB values.
 		/// @return The color entry index number.
 		int GetIndex() const { return m_Index; }
+		/// Visits the stored channels without palette conversion.
+		template<class Visit> decltype(auto) VisitCheckpointFields(Visit&& visit) const { return visit(m_R, m_G, m_B, m_Index); }
 
 		/// Sets all three RGB values of this Color, using an index from the current color palette.
 		/// @param index The index of the palette entry that this Color object's RGB values should be set to.

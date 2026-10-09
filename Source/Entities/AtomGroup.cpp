@@ -377,6 +377,7 @@ std::vector<long long> AtomGroup::GetTravelResidue() const {
 }
 
 void AtomGroup::CaptureSnapshotProperties(Writer& writer) const {
+	if (Atom::CaptureFrozenProperties(writer, m_Atoms)) return;
 	struct Record {
 		long long residue;
 		CheckpointProperties::VectorValue offset;

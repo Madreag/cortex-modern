@@ -494,7 +494,7 @@ namespace RTE {
 
 	private:
 		static inline std::atomic<FreezeState*> s_FreezeState{nullptr};
-		static std::shared_ptr<const FrozenList> FreezeList(const std::vector<Atom*>& atoms);
+		static std::shared_ptr<const FrozenList> FreezeList(const std::vector<Atom*>& atoms, bool values = true);
 		static CheckpointText CaptureFrozenList(const std::shared_ptr<const FrozenList>& list);
 		// Owner, collision bodies and their roots are resolved after the complete
 		// native world has adopted its saved identities.
