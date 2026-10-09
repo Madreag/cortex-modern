@@ -580,6 +580,10 @@ namespace RTE::CheckpointLua {
 					std::erase_if(merged->entries, [this](const auto& entry) { return !m_SeenClasses.Contains(entry.first); });
 					std::erase_if(merged->compact, [this](const auto& entry) { return !m_SeenClasses.Contains(entry.first); });
 				}
+				if (CheckpointWriter::BatchEnabled()) {
+					merged->entries.reserve(merged->entries.size() + m_NewClasses.size());
+					merged->compact.reserve(merged->compact.size() + m_NewCompactClasses.size());
+				}
 				for (auto& [address, entry]: m_NewClasses) {
 					merged->compact.erase(address);
 					merged->entries[address] = std::move(entry);
@@ -592,6 +596,7 @@ namespace RTE::CheckpointLua {
 			}
 			// References this walk neither reused nor made again name objects that are gone.
 			std::erase_if(m_Cache.references, [this](const auto& entry) { return !m_Kept.Contains(entry.first); });
+			if (CheckpointWriter::BatchEnabled()) m_Cache.references.reserve(m_Cache.references.size() + m_NewReferences.size());
 			for (auto& [address, reference]: m_NewReferences) m_Cache.references[address] = std::move(reference);
 			m_Image->m_Classes = m_Cache.classes;
 			std::shared_ptr<const NativeImage> result = std::move(m_Image);
@@ -783,7 +788,7 @@ namespace RTE::CheckpointLua {
 			Push(value); Keep(-1); lua_pop(State(), 1);
 			m_Queue.push_back(value);
 		}
-		using ResultTables = std::optional<std::pmr::unordered_set<const void*>>;
+		using ResultTables = std::optional<CaptureAddressSet>;
 		void NewResults(int index, uint64_t before, uint64_t after, ResultTables& seen) {
 			if (index < 0) index += lua_gettop(State()) + 1;
 			const TValue value = At(index);
@@ -799,7 +804,7 @@ namespace RTE::CheckpointLua {
 			if (!fresh || !tvistab(&value)) return;
 			// Only newly returned tables need a cycle set.
 			if (!seen) seen.emplace(m_TransientResource);
-			if (!seen->insert(gcval(&value)).second) return;
+			if (!seen->Insert(gcval(&value))) return;
 			lua_pushnil(State());
 			while (lua_next(State(), index)) {
 				NewResults(-2, before, after, seen);
