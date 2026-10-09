@@ -10414,7 +10414,8 @@ namespace RTE {
 			if (pending.proposal.peerId == local) delay = std::max(delay, pending.proposal.delayFrames);
 		}
 		// Every AI order the seat's producer sent, and those it sends before it hears of this return, lands before it: the round takes them all.
-		if (const uint8_t producer = AiProducerOf(local); producer != 0 && producer != local) {
+		// The prepared frame names the AI producer while this simulation is still catching up.
+		if (const uint8_t producer = AiProducerOf(local, m_Stats.nextFrame); producer != 0 && producer != local) {
 			const auto& stats = m_Stats.peers[producer];
 			const uint64_t transit = m_Config.simTickMs > 0 ? static_cast<uint64_t>(std::ceil(stats.pingMs / m_Config.simTickMs)) : 0;
 			applyFrame = std::max(applyFrame, stats.highestTargetFrame + transit + 1);

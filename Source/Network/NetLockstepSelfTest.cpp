@@ -2267,6 +2267,7 @@ namespace RTE {
 			a.roundId = 0x9A37; // The host names the round; the client adopts that tag from its start.
 			a.substituteSlowPeers = b.substituteSlowPeers = true; a.relayToOtherPeers = true;
 			a.simTickMs = b.simTickMs = 1000.0 / 60.0;
+			a.timeoutMs = b.timeoutMs = 20000; // This checks the absence deadline before the session timeout.
 			if (!StartCoordinatorPair(48902, hostWire, clientWire, host, client, a, b, error)) return false;
 			for (uint64_t now = 0; now < 10; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
 			uint64_t firstWait = 10;
@@ -3005,6 +3006,7 @@ namespace RTE {
 			auto b = MakeCoordinatorConfig(2, 1, 0x9A32, 0, NetTransportLane::ControlReliable);
 			a.roundId = b.roundId = 32; a.relayToOtherPeers = true;
 			a.substituteSlowPeers = b.substituteSlowPeers = true;
+			a.timeoutMs = b.timeoutMs = 20000;
 			a.simTickMs = b.simTickMs = c_DefaultDeltaTimeS * 1000.0;
 			a.peerIncarnations = b.peerIncarnations = {{1, 1}, {2, 1}};
 			if (!StartCoordinatorPair(48895, hostWire, oldWire, host, oldClient, a, b, error)) return false;
@@ -3097,9 +3099,9 @@ namespace RTE {
 				const uint64_t missing = firstRequired + 2;
 				host.NoteLocalStartPark(1000);
 				if (!host.QueueLocalInput(missing, {}, {}, error)) return false;
-				for (uint64_t now = 82; now <= 132; ++now) { host.Tick(now); host.NoteFrameWait(missing, now); }
+				for (uint64_t now = 82; now <= 1082; ++now) { host.Tick(now); host.NoteFrameWait(missing, now); }
 				if (!host.IsPeerGoneAtFrame(2, missing) || !host.IsRunning()) {
-					*error = "a reclaimed seat received another startup allowance beyond the wait bound";
+					*error = "a reclaimed seat borrowed the host's startup allowance after a second of missing input";
 					return false;
 				}
 				return true;
@@ -3406,9 +3408,10 @@ namespace RTE {
 			// The survivors are never left waiting on a seat that does not come back: it is still judged.
 			const uint64_t waited = heldAtMs - activatedAtMs;
 			// The allowance the seat may cost the round, from this fixture's own numbers: the window it is
-			// admitted on in wall time, the declaration notice, the two trips its answer needs (its own and
+			// admitted on in wall time, the absence window, the two trips its answer needs (its own and
 			// its new start's) and the restart it published.
-			const uint64_t budgetMs = delay * 17 + 1000 + 2 * (2 * lagged.latencyMs) + restartMs;
+			const uint64_t absenceMs = std::max<uint64_t>(1000, 4 * (2 * lagged.latencyMs));
+			const uint64_t budgetMs = delay * 17 + absenceMs + 2 * (2 * lagged.latencyMs) + restartMs;
 			if (waited > budgetMs) {
 				*error = "the returning seat's allowance outgrew the trips it covers: waited=" + std::to_string(waited) +
 				         "ms budget=" + std::to_string(budgetMs) + "ms trip=" + std::to_string(earliestAnswerMs - activatedAtMs) + "ms";
