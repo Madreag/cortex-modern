@@ -16438,7 +16438,18 @@ namespace RTE {
 		const auto confirmed = [](NetMatchService& service) {
 			return nlohmann::json::parse(service.m_Directory.BuildReportJson()).value("confirmed_listed", nlohmann::json());
 		};
-		// A running host registers without the lobby's LAN beacon, then pins its identity as SetUpIceTransport does.
+		const auto prepareListener = [](NetMatchService& service, bool ice) {
+			// Observe the initial network before publishing the fixture's listener, as startup does.
+			const auto wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+			service.m_ConnectionAuthority.Update(NetLockstepNowMs(), wall);
+			service.m_ConnectionNetworkRevision = service.m_ConnectionAuthority.NetworkRevision();
+			if (ice) {
+				service.m_IceIdentity = NetIceHostIdentity("directory-lease-selftest");
+				service.m_DirectoryRow.iceIdentity = service.m_IceIdentity;
+				service.m_DirectoryRow.iceVirtualPort = NetMatchService::c_IceVirtualPort;
+			}
+		};
+		// A running host already has a listener and a bound row; publish that same lease.
 		const auto hostAndBind = [&](NetMatchService& service, bool ice, const std::shared_ptr<Wire>& wire, std::string& step) {
 			service.m_Directory.SetTransportFactory([wire] { return std::make_unique<ScriptedTransport>(wire); });
 			{
@@ -16457,16 +16468,23 @@ namespace RTE {
 			service.m_DirectoryRow.seatsFree = 1;
 			service.m_DirectoryRow.listenPort = 48041;
 			service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
+			prepareListener(service, ice);
+			if (ice) {
+				const auto lease = nlohmann::json::parse(wire->replies.front().body);
+				service.m_IceBoundSessionId = lease.at("session_id").get<std::string>();
+				service.m_DirectoryRow.resumeSessionId = service.m_IceBoundSessionId;
+				service.m_DirectoryRow.resumeToken = lease.at("token").get<std::string>();
+			}
 			// The router is asked and never answers: the row registers anyway.
 			NetMatchService::RequestHostPortMap(48041, &router);
 			if (!pumpUntil(service, 500, [&] { return service.m_Directory.GetState() == NetDirectoryClient::State::Registered; })) {
 				step = std::string("the directory never registered; state=") + NetDirectoryClient::StateName(service.m_Directory.GetState());
 				return false;
 			}
-			if (ice) {
-				std::lock_guard<std::mutex> lock(service.m_Mutex);
-				service.m_IceBoundSessionId = service.m_Directory.GetSessionId();
-				service.m_IceIdentity = NetIceHostIdentity(service.m_IceBoundSessionId);
+			if (ice && (service.m_IceBoundSessionId != service.m_Directory.GetSessionId() ||
+			            service.m_IceIdentity != NetIceHostIdentity("directory-lease-selftest"))) {
+				step = "publishing the running host changed its bound row or listener identity";
+				return false;
 			}
 			return true;
 		};
@@ -16518,7 +16536,7 @@ namespace RTE {
 		std::vector<std::string> misses;
 		SettingsGuard settings;
 
-		for (bool ice : {false, true}) { // An Unlisted lobby registers before ICE has a bound identity.
+		for (bool ice : {false, true}) { // An Unlisted lobby publishes its listener before the directory binds a row.
 			auto wire = std::make_shared<Wire>();
 			wire->replies = {registerReply(idA, "tok-unlisted", 60, true), hidden, deleted};
 			NetMatchService service;
@@ -16534,6 +16552,7 @@ namespace RTE {
 			service.m_DirectoryRow.peerCount = 2;
 			service.m_DirectoryRow.listenPort = 48041;
 			service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
+			prepareListener(service, ice);
 			service.Update();
 			std::string step;
 			if (service.m_DirectoryRetracted || count(*wire, "POST", "/v1/sessions") != 0) {
@@ -16608,6 +16627,8 @@ namespace RTE {
 					rematchRow.listenPort = service.m_DirectoryRow.listenPort;
 					rematchRow.listenAddrs = service.m_DirectoryRow.listenAddrs;
 					rematchRow.joinMode = service.m_DirectoryRow.joinMode;
+					rematchRow.iceIdentity = service.m_DirectoryRow.iceIdentity;
+					rematchRow.iceVirtualPort = service.m_DirectoryRow.iceVirtualPort;
 					NetIceJoinTarget laterJoin;
 					const std::string refusal = NetIceResolveSessionRow({rematchRow}, {}, rematchRow.sessionId, &laterJoin);
 					if (!refusal.empty() || laterJoin.identity != service.m_IceIdentity || laterJoin.joinMode != "either") {
