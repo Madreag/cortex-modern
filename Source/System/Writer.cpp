@@ -377,7 +377,7 @@ struct CheckpointText::Data {
 		std::string tape;
 	};
 	static std::shared_ptr<Data> Create();
-	explicit Data(std::pmr::memory_resource* resource = std::pmr::get_default_resource()) : values(resource), children(resource) {}
+	explicit Data(std::pmr::memory_resource* resource = std::pmr::get_default_resource()) : values(resource), children(resource), ownedBlocks(resource) {}
 	struct Pair {
 		const Data* current;
 		const Data* previous;
@@ -393,6 +393,7 @@ struct CheckpointText::Data {
 	const CheckpointBuffer::ValueChunk* chunks = nullptr;
 	size_t valueSize = 0;
 	std::pmr::vector<CheckpointText> children;
+	std::pmr::vector<std::shared_ptr<const void>> ownedBlocks;
 	// A deferred node's producer, dropped once it has produced: what it captured (a frozen heap, a pixel snapshot) goes with it.
 	mutable std::variant<std::monostate, std::function<std::string()>, CapturedProducer> produce;
 	bool deferred = false;
@@ -570,6 +571,7 @@ CheckpointText CheckpointText::AtSimTime(int64_t ticks) const {
 	const auto copy = [&](const Data* source) {
 		auto node = Data::Create();
 		node->values = source->Values();
+		node->ownedBlocks = source->ownedBlocks;
 		node->children.reserve(source->children.size());
 		node->ownedBytes = source->ownedBytes;
 		node->hasPeer = source->hasPeer;
@@ -672,6 +674,7 @@ CheckpointText CheckpointText::ReuseChildren(const CheckpointText& previous) con
 		if (!frame.equal && frame.changed) {
 			value = Data::Create();
 			value->values = frame.current->Values();
+			value->ownedBlocks = frame.current->ownedBlocks;
 			value->children = frame.current->children;
 			value->ownedBytes = frame.current->ownedBytes;
 			value->hasPeer = frame.current->hasPeer;
@@ -1032,7 +1035,8 @@ std::shared_ptr<void> CheckpointBuffer::AllocateCaptureBytes(size_t bytes) {
 
 CheckpointBuffer::CheckpointBuffer(bool reserve) : m_Arena(reserve ? s_Arena : nullptr),
 	m_Values(m_Arena ? m_Arena->storage : std::pmr::get_default_resource()),
-	m_Children(m_Arena ? m_Arena->storage : std::pmr::get_default_resource()) {}
+	m_Children(m_Arena ? m_Arena->storage : std::pmr::get_default_resource()),
+	m_OwnedBlocks(m_Arena ? m_Arena->storage : std::pmr::get_default_resource()) {}
 
 char* CheckpointBuffer::ReserveValues(size_t size) {
 	if (!m_Arena) {
@@ -1086,6 +1090,14 @@ void CheckpointBuffer::PrimitiveBlock(std::string_view values, PrimitiveDecoder 
 	m_HasPrimitiveBlocks = true;
 }
 
+void CheckpointBuffer::OwnedPrimitiveBlock(std::shared_ptr<const void> storage, PrimitiveDecoder decoder, size_t ownedBytes) {
+	const void* address = storage.get();
+	if (!address) throw std::logic_error("owned primitive block has no storage");
+	m_OwnedBlocks.push_back(std::move(storage));
+	PrimitiveBlock({reinterpret_cast<const char*>(&address), sizeof(address)}, decoder);
+	m_OwnedBlockBytes += ownedBytes;
+}
+
 void CheckpointBuffer::SizedRunBegin() { Copy(CaptureValue::SizedRunBegin); }
 void CheckpointBuffer::SizedRunEnd() { Copy(CaptureValue::SizedRunEnd); }
 
@@ -1108,7 +1120,8 @@ CheckpointText CheckpointBuffer::Finish() {
 	m_LastValues = nullptr;
 	m_ValueCapacity = 0;
 	data->children = std::move(m_Children);
-	data->ownedBytes = data->chunks ? data->valueSize : data->values.size();
+	data->ownedBlocks = std::move(m_OwnedBlocks);
+	data->ownedBytes = (data->chunks ? data->valueSize : data->values.size()) + std::exchange(m_OwnedBlockBytes, 0);
 	data->hasPeer = m_HasPeer;
 	data->hasPrimitiveBlocks = m_HasPrimitiveBlocks;
 	data->usesSimTime = m_UsesSimTime;

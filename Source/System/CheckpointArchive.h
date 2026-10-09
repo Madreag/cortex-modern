@@ -240,6 +240,27 @@ namespace RTE {
 				return bytes;
 			} else return sizeof(T);
 		}
+		template<class T> static void ExpandOwnedValue(std::string& text, const T& value, bool tape) {
+			if constexpr (CheckpointArray<T>) {
+				for (const auto& field: value) ExpandOwnedValue(text, field, tape);
+			} else if constexpr (requires { typename T::first_type; typename T::second_type; }) {
+				ExpandOwnedValue(text, value.first, tape); ExpandOwnedValue(text, value.second, tape);
+			} else if constexpr (!std::is_same_v<T, std::string> && requires { typename T::value_type; }) {
+				ExpandOwnedValue(text, static_cast<uint64_t>(value.size()), tape);
+				for (const auto& field: value) ExpandOwnedValue(text, field, tape);
+			} else if constexpr (std::is_same_v<T, std::string>) {
+				std::string packed(sizeof(uint64_t) + value.size(), '\0');
+				size_t at = 0;
+				WritePrimitive(packed.data(), at, value);
+				std::string_view bytes(packed);
+				DecodePrimitive<T>(text, bytes, tape);
+			} else {
+				std::array<char, sizeof(T)> packed;
+				std::memcpy(packed.data(), &value, sizeof(T));
+				std::string_view bytes(packed.data(), packed.size());
+				DecodePrimitive<T>(text, bytes, tape);
+			}
+		}
 		// The boundary owns values in wire order; collection packing belongs to the saver.
 		template<class Sequence> bool CaptureSequence(const Sequence& values) {
 			if constexpr (PlainOwnedValue<typename Sequence::value_type>()) {
@@ -248,21 +269,20 @@ namespace RTE {
 					struct Owned {
 						std::shared_ptr<std::pmr::memory_resource> storage = CheckpointBuffer::LeaseCaptureStorage();
 						std::pmr::vector<Value> values{storage ? storage.get() : std::pmr::get_default_resource()};
-					} owned;
-					owned.values.reserve(values.size());
-					size_t bytes = sizeof(owned);
+					};
+					auto owned = std::make_shared<Owned>();
+					owned->values.reserve(values.size());
+					size_t bytes = sizeof(Owned);
 					for (const auto& field: values) {
-						owned.values.push_back(OwnValue(field));
-						bytes += OwnedValueBytes(owned.values.back());
+						owned->values.push_back(OwnValue(field));
+						bytes += OwnedValueBytes(owned->values.back());
 					}
-					AppendFields(CheckpointText::Deferred([owned = std::move(owned)] {
-						return CaptureNative([&owned] {
-							CheckpointWriter writer(FieldsOnly{});
-							writer.Value(owned.values.size());
-							for (const auto& field: owned.values) writer.Value(field);
-							return writer.Text();
-						}).Text();
-					}, bytes));
+					Buffer().OwnedPrimitiveBlock(owned, [](std::string& text, std::string_view data, bool tape) {
+						if (data.size() != sizeof(const void*)) throw std::logic_error("invalid owned collection block");
+						const void* address;
+						std::memcpy(&address, data.data(), sizeof(address));
+						ExpandOwnedValue(text, static_cast<const Owned*>(address)->values, tape);
+					}, bytes);
 					return true;
 				}
 			}

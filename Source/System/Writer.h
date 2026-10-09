@@ -211,6 +211,8 @@ namespace RTE {
 		/// Appends the same typed scalar tape as the individual value calls.
 		void AppendValues(std::string_view values);
 		void PrimitiveBlock(std::string_view values, PrimitiveDecoder decoder);
+		/// Keeps owned collection storage until a worker expands its primitive block.
+		void OwnedPrimitiveBlock(std::shared_ptr<const void> storage, PrimitiveDecoder decoder, size_t ownedBytes);
 		/// Copies variable-size fields directly into their owned tape allocation.
 		template<class Capture> void CapturePrimitiveBlock(size_t size, PrimitiveDecoder decoder, const Capture& capture) {
 			Copy(ValueKind::PrimitiveBlock, decoder, static_cast<uint64_t>(size));
@@ -244,6 +246,8 @@ namespace RTE {
 		ValueChunk* m_LastValues = nullptr;
 		size_t m_ValueSize = 0, m_ValueCapacity = 0;
 		std::pmr::vector<CheckpointText> m_Children;
+		std::pmr::vector<std::shared_ptr<const void>> m_OwnedBlocks;
+		size_t m_OwnedBlockBytes = 0;
 		bool m_HasPeer = false;
 		bool m_HasPrimitiveBlocks = false;
 		bool m_UsesSimTime = false;
