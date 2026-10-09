@@ -38,6 +38,15 @@ match start/end remain host decisions. Direct games and a directory outage use
 the engine's unanimous agreement among all surviving owners, with no solo or
 majority promotion. An outage never ends an established match.
 
+When the directory returns after a completed fallback, every surviving owner
+independently signs the same successor, generation, membership and boundary in
+its next report. The directory requires all remaining owners' matching reports
+before recording that authority and issuing its host capability. This can
+reconcile an earlier reservation whose answer reached no participant; a single
+report cannot overwrite it, and an owner cannot attest two choices for one
+generation. The new host continues the established match while reconciliation
+and publication retry.
+
 ## What the install key is
 
 The `X-Install-Key` header is a rate-limit identity, not a secret. Each install keeps its own 16–32 character key. Registration ownership and reconnect credentials are separate from this header.

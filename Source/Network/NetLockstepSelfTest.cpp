@@ -18674,6 +18674,18 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			const uint16_t delay = 2;
 			LoopbackTransport hostT, leaverT, survivorT;
 			NetLockstepCoordinator host, leaver, survivor;
+			uint64_t now = 0;
+			const auto drive = [&](const std::function<bool()>& done, std::string* detail, uint64_t maxMs = 4000) {
+				const uint64_t until = now + maxMs;
+				while (now <= until) {
+					host.Tick(now); leaver.Tick(now); survivor.Tick(now);
+					now += 5;
+					hostT.AdvanceTimeMs(5); leaverT.AdvanceTimeMs(5); survivorT.AdvanceTimeMs(5);
+					if (done()) return true;
+				}
+				if (detail) *detail = "trio condition not reached; host=" + host.BuildReportJson();
+				return false;
+			};
 			SceneMan::SceneSetAside fixtureScene; // Owns the arm's Scene once it is out of SceneMan again.
 			const auto finish = [&](const std::string& message) {
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
@@ -18714,7 +18726,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!host.Start(hostT, config(1, {{2, 1}, {3, 2}}), error) ||
 				!leaver.Start(leaverT, config(2, {{1, 1}}), error) ||
 				!survivor.Start(survivorT, config(3, {{1, 1}}), error) ||
-				!DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor,
+				!drive(
 					[&] { return host.IsRunning() && leaver.IsRunning() && survivor.IsRunning(); }, error)) {
 				return finish("trio did not reach Running");
 			}
@@ -18723,13 +18735,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					!leaver.QueueLocalInput(tick, {MakeFrame(200, tick)}, {}, error) ||
 					!survivor.QueueLocalInput(tick, {MakeFrame(300, tick)}, {}, error)) return finish("initial input refused");
 			}
-			if (!DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor,
+			if (!drive(
 				[&] { return host.GetStats().framesAccepted >= 4 && survivor.GetStats().framesAccepted >= 4; }, error)) {
 				return finish("initial input did not arrive");
 			}
-			if (dropped) leaverT.Stop();
-			else leaver.Leave("leave handoff selftest");
-			if (!DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor,
+			if (!dropped) leaver.Leave("leave handoff selftest");
+			// A departed process no longer emits authenticated keepalives after its final leave fact.
+			leaverT.Stop();
+			if (!drive(
 				[&] { return host.GetPeerLeaveFrames().contains(2) && survivor.GetPeerLeaveFrames().contains(2); }, error, 8000)) {
 				return finish("departure did not reach both survivors");
 			}
@@ -18740,10 +18753,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					!survivor.QueueLocalInput(tick, {MakeFrame(300, tick)}, {}, error)) return finish("survivor input refused");
 			}
 			bool passed = true;
-			// A dropped seat pauses commits until the host resolves it, so the round reaches leaveFrame+1 only past the hold.
+			// The host may explicitly release a held owner; its AI handoff remains at the original ordered boundary.
 			if (dropped) {
-				host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, 20000);
-				if (!DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor, [&] {
+				host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, now);
+				if (!drive( [&] {
 					return host.HeldSeatResolution(2) == NetLockstepHoldResolution::Expired &&
 						survivor.HeldSeatResolution(2) == NetLockstepHoldResolution::Expired;
 				}, error)) return finish("expiry did not reach both survivors");
@@ -18753,7 +18766,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					<< " expired host_state=" << static_cast<int>(host.GetState()) << " survivor_state=" << static_cast<int>(survivor.GetState()) << std::endl;
 			}
 			std::array<std::map<uint64_t, NetLockstepReadyFrame>, 2> committed;
-			if (!DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor, [&] {
+			if (!drive( [&] {
 				NetLockstepReadyFrame ready;
 				while (host.PopReadyFrame(ready)) committed[0][ready.frame] = ready;
 				while (survivor.PopReadyFrame(ready)) committed[1][ready.frame] = ready;

@@ -6457,7 +6457,7 @@ namespace RTE {
 			NetLockstepCoordinator& round = *peer.round;
 			const uint64_t nowMs = fixture.clock.NowMs();
 			if (peer.host) {
-				peer.admission.SetLiveMatch(true); peer.admission.NotePlacementPhase(false, 0);
+				if (round.IsRunning()) { peer.admission.SetLiveMatch(true); peer.admission.NotePlacementPhase(false, 0); }
 				peer.session.SetLockstepFrame(round.GetStats().nextFrame);
 				peer.session.TickAdmissionPlane(nowMs);
 			}
@@ -6466,6 +6466,8 @@ namespace RTE {
 			for (const NetTransportEvent& event: events) {
 				peer.session.InjectEvent(event, nowMs);
 			}
+			// After the round ends the lobby session owns transport polling again.
+			if (round.IsStopped() || round.IsFailed()) { peer.session.Tick(nowMs); return; }
 			if (peer.host) {
 				(void)peer.admission.TakePendingReseats();
 				for (const NetHoldResolutionNotice& notice: peer.admission.TakePendingHoldResolutions()) {
@@ -6564,6 +6566,7 @@ namespace RTE {
 				return false;
 			}
 			leaver.round->Leave("player left");
+			leaver.transport.Stop();
 			const bool recorded = PumpRematchUntil(fixture, 6500, [&] {
 				for (RematchPeer* peer: LiveRematchPeers(fixture)) {
 					if (peer != &leaver && !peer->round->GetPeerLeaveFrames().contains(leaverId)) return false;
@@ -6571,7 +6574,10 @@ namespace RTE {
 				return true;
 			});
 			if (!recorded) {
-				*error = "the round never recorded " + leaver.name + "'s leave";
+				*error = "the round never recorded " + leaver.name + "'s leave, peer=" + std::to_string(leaverId) +
+				         " roster_stage=" + std::to_string(static_cast<int>(fixture.Host().admission.GetRoster().stage));
+				for (RematchPeer* peer: LiveRematchPeers(fixture)) if (peer != &leaver)
+					*error += " survivor=" + peer->name + " " + peer->round->BuildReportJson();
 				return false;
 			}
 			leaver.gone = true;
