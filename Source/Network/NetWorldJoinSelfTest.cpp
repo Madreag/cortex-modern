@@ -8640,7 +8640,7 @@ namespace RTE {
 		return true;
 	}
 
-	// (e) The browser row: a world reads its boot, state, seats and watchers; an ordinary row does not move.
+	// The browser row describes the game and its availability without exposing its network address.
 	bool TestBrowserWorldRowText(std::string* error) {
 		NetDirectoryLocalIdentity local;
 		local.networkProtocolVersion = 11;
@@ -8693,7 +8693,7 @@ namespace RTE {
 			return false;
 		}
 		const std::string ordinaryText = NetDirectoryClient::DescribeGameRow(rows[1]);
-		const std::string expectedOrdinary = "[NET] Duel - P4 Alpha Duel (3/4) 10.0.0.4:42124";
+		const std::string expectedOrdinary = "[NET] Duel - P4 Alpha Duel (3/4)";
 		if (ordinaryText != expectedOrdinary) {
 			*error = "browser-ordinary-row-text-changed: the row reads \"" + ordinaryText + "\", it must read \"" + expectedOrdinary + "\"";
 			return false;
