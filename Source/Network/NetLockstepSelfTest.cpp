@@ -2322,8 +2322,18 @@ namespace RTE {
 				}
 				return true;
 			}
+			if (host.PopReadyFrame(hostFrame) || !host.TimingDecisionPendingAt(101) || host.IsSeatUnderAI(2, 101) || survivor.PopReadyFrame(survivorFrame)) {
+				*error = "a peer applied a hold before its survivor acknowledged the proposal"; return false;
+			}
+			// Deliver only the proposal and its receipt; the survivor has not yet received the final commit or applied the tick.
+			hostTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
+			for (const auto& event: survivorTransport.PollEvents()) survivor.HandleEvent(event, 151);
+			survivor.FlushTimingOutgoing();
+			hostTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
+			for (const auto& event: hostTransport.PollEvents()) host.HandleEvent(event, 152);
+			host.AdvanceReadyFrames(152);
 			if (!host.PopReadyFrame(hostFrame) || host.TimingDecisionPendingAt(101) || survivor.PopReadyFrame(survivorFrame)) {
-				*error = "the host waited for an application acknowledgement or a survivor guessed the hold"; return false;
+				*error = "the acknowledged hold waited for application or the survivor applied before its commit"; return false;
 			}
 			const auto held = std::find_if(hostFrame.localCommands.begin(), hostFrame.localCommands.end(), [](const auto& command) { return std::holds_alternative<NetGameSeatHold>(command.payload); });
 			if (held == hostFrame.localCommands.end() || std::get<NetGameSeatHold>(held->payload) != NetGameSeatHold{2, 7, 1, 3, 101}) {
@@ -2336,7 +2346,7 @@ namespace RTE {
 				}
 				return true;
 			}
-			for (uint64_t now = 151; now < 165; ++now) {
+			for (uint64_t now = 153; now < 167; ++now) {
 				hostTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
 				host.Tick(now); survivor.Tick(now);
 			}
@@ -2966,7 +2976,10 @@ namespace RTE {
 			for (uint64_t frame = 1; frame <= 5; ++frame) {
 				for (auto* peer: {&host, &first, &successor}) if (!peer->QueueLocalInput(frame, {}, {}, error)) return false;
 				pump(); pump();
-				for (auto* peer: {&host, &first, &successor}) { NetLockstepReadyFrame ready; if (!peer->PopReadyFrame(ready) || ready.frame != frame) return false; }
+				for (auto* peer: {&host, &first, &successor}) {
+					NetLockstepReadyFrame ready;
+					if (!peer->PopReadyFrame(ready) || ready.frame != frame || !peer->FinishSimulationTick(ready.frame)) return false;
+				}
 			}
 			hostWire.Stop();
 			for (int pass = 0; pass < 1000; ++pass) {
@@ -5641,6 +5654,10 @@ namespace RTE {
 			if (!host.IsRunning() || !other.IsRunning()) { *error = "the three seats never started"; return false; }
 			// Peer 2 is held at the round's first frame; peer 3 plays frames 0-4, then goes quiet and is held at 5.
 			if (!host.ProposePeerHold(2, now, error)) return false;
+			for (const uint64_t until = now + 10; now < until; ++now) {
+				hostWire.AdvanceTimeMs(1); otherWire.AdvanceTimeMs(1); host.Tick(now); other.Tick(now);
+			}
+			if (!host.IsSeatUnderAI(2, 0) || !other.IsSeatUnderAI(2, 0)) { *error = "the survivor did not agree to the initial hold"; return false; }
 			const auto held = host.HeldTransactions();
 			NetLockstepReadyFrame ready, otherReady;
 			for (uint64_t frame = 0; frame < 10; ++frame) {
@@ -23644,14 +23661,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		host.m_Stats.nextFrame = 200;
 		host.m_LastQueuedTargetFrame = 199;
 		host.m_LastCompletedSimulationTick = 193;
-		// The holds' sends find no connected client on this wire; only the holds themselves are under test.
-		std::string holdError;
-		for (uint8_t peer: {2, 3}) (void)host.ProposePeerHold(peer, 990, &holdError);
-		for (auto& [revision, decision]: host.m_TimingDecisions) decision.committed = true;
-		if (!host.IsSeatUnderAI(2, 200) || !host.IsSeatUnderAI(3, 200)) {
-			*error = "a-host-with-no-other-playing-seat-is-not-held: the clients' holds did not take: " + holdError;
-			return false;
-		}
+		// This judgment-only fixture begins after the other seats' committed departure boundary.
+		for (uint8_t peer: {2, 3}) { host.m_AiHeldSeats[peer] = 150; host.m_PeerLeaveFrames[peer] = 150; }
 		if (host.JudgeOwnSeat(200, 1000) || host.JudgeOwnSeat(200, 1100) || host.IsSeatUnderAI(1, 200)) {
 			*error = "a-host-with-no-other-playing-seat-is-not-held: with every client held, the host's seat was held to the AI of peer " +
 			         std::to_string(host.AiProducerOf(1, 200));
@@ -23689,7 +23700,13 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			*error = "a host whose own input was missing inside the bound (40 ms) was held";
 			return false;
 		}
-		if (!host.JudgeOwnSeat(200, 1051) || !host.IsSeatUnderAI(1, 200) || host.IsSeatUnderAI(1, 199)) {
+		if (!host.JudgeOwnSeat(200, 1051) || host.m_TimingDecisions.empty() || host.IsSeatUnderAI(1, 200)) {
+			*error = "the host's own late seat changed before its survivors acknowledged"; return false;
+		}
+		NetLockstepTiming agree = host.m_TimingDecisions.rbegin()->second.proposal;
+		agree.phase = NetTimingPhase::Acknowledge;
+		for (uint8_t peer: {2, 3}) { agree.senderPeerId = peer; host.HandleTiming(agree, 1052, host.m_RemoteTransports.at(peer)); }
+		if (!host.IsSeatUnderAI(1, 200) || host.IsSeatUnderAI(1, 199)) {
 			*error = "a host whose own input was missing past the bound was not held at the first frame it had not sent: under_ai_200=" +
 			         std::to_string(host.IsSeatUnderAI(1, 200));
 			return false;
@@ -23760,6 +23777,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		host.m_Stats.peers[3].highestTargetFrame = 240;
 		host.m_Stats.peers[3].pingMs = 50;
 		host.ReclaimOwnSeat(1200);
+		if (host.m_ReclaimTransactions.contains(1) || host.m_TimingDecisions.empty()) { *error = "the host reclaimed its own seat before agreement"; return false; }
+		agree = host.m_TimingDecisions.rbegin()->second.proposal;
+		agree.phase = NetTimingPhase::Acknowledge;
+		for (uint8_t peer: {2, 3}) { agree.senderPeerId = peer; host.HandleTiming(agree, 1201, host.m_RemoteTransports.at(peer)); }
 		const auto back = host.m_ReclaimTransactions.find(1);
 		if (back == host.m_ReclaimTransactions.end() || back->second.activationFrame <= 205 || host.IsSeatUnderAI(1, back->second.activationFrame) ||
 		    !host.IsSeatUnderAI(1, back->second.activationFrame - 1)) {
@@ -23886,12 +23907,17 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		// tick 614 and now waits on 615 itself.
 		for (uint64_t frame = 601; frame < 615; ++frame) { NetLockstepReadyFrame ready; ready.frame = frame; host.m_ReadyFrames.push_back(ready); }
 		host.m_Stats.peers[2].highestTargetFrame = 615;
-		if (!host.DeclareOverdueInputs(615, 1060, 1000, {3})) {
+		(void)host.DeclareOverdueInputs(615, 1060, 1000, {3});
+		if (host.m_TimingDecisions.empty() || host.m_TimingDecisions.rbegin()->second.proposal.applyFrame != 615 || host.IsSeatUnderAI(3, 615)) {
 			*error = "a survivor that had run dry waited on this host's own runway: host_runway_frames=14 holds=" +
 			         std::to_string(host.GetStats().peers.at(3).holds);
 			return false;
 		}
-		std::cout << "[net-lockstep-selftest] PASS a_survivors_runway_is_the_rounds held_after_ms=60" << std::endl;
+		NetLockstepTiming agree = host.m_TimingDecisions.rbegin()->second.proposal;
+		agree.phase = NetTimingPhase::Acknowledge; agree.senderPeerId = 2;
+		host.HandleTiming(agree, 1061, host.m_RemoteTransports.at(2));
+		if (!host.IsSeatUnderAI(3, 615) || host.IsSeatUnderAI(3, 614)) { *error = "the agreed survivor-runway hold moved its cutoff"; return false; }
+		std::cout << "[net-lockstep-selftest] PASS a_survivors_runway_is_the_rounds proposed_after_ms=60" << std::endl;
 		return true;
 	}
 
@@ -24407,10 +24433,15 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		if (host.DeclareOverdueInputs(206, 530, 500, {2}) || host.GetStats().peers.at(2).holds != 0) {
 			return describe("a peer was held before the slow-player bound elapsed", 30);
 		}
-		// Negative control: past the bound the seat is still declared.
-		if (!host.DeclareOverdueInputs(206, 560, 500, {2})) {
-			return describe("the bound no longer declares a peer that stopped sending", 60);
+		// Negative control: past the same bound a hold is proposed, and takes effect only after the survivor's receipt.
+		(void)host.DeclareOverdueInputs(206, 560, 500, {2});
+		if (host.m_TimingDecisions.empty() || host.m_TimingDecisions.rbegin()->second.proposal.applyFrame != 206 || host.IsSeatUnderAI(2, 206)) {
+			return describe("the bound did not propose a hold at the first missing frame", 60);
 		}
+		NetLockstepTiming agree = host.m_TimingDecisions.rbegin()->second.proposal;
+		agree.phase = NetTimingPhase::Acknowledge; agree.senderPeerId = 3;
+		host.HandleTiming(agree, 561, host.m_RemoteTransports.at(3));
+		if (!host.IsSeatUnderAI(2, 206) || host.IsSeatUnderAI(2, 205)) return describe("the survivor receipt changed the hold cutoff", 60);
 		return true;
 	}
 

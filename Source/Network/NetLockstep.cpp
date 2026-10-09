@@ -8119,6 +8119,9 @@ namespace RTE {
 			return;
 		}
 		if (ack.receivedMask == NetLockstepCodec::c_FramePreparedMask) {
+			// Complete-input receipts arrive directly at the authority even when a two-player host needs no relay.
+			const auto link = m_RemoteTransports.find(ack.senderPeerId);
+			if (link == m_RemoteTransports.end() || link->second != fromTransport) return;
 			if (!UsesPreparedFrameReceipts() || IsMigrating() || m_Config.localPeerId != GetHostPeerId() ||
 			    ack.sessionId != m_Config.sessionId || ack.roundId != m_RoundId || ack.authorityGeneration != m_Config.migrationGeneration ||
 			    ack.highestContiguousFrame < m_Config.startFrame || ack.highestContiguousFrame > m_Stats.nextFrame + NetLockstepCodec::c_MaxFutureFrameSkew) return;
@@ -10456,7 +10459,7 @@ namespace RTE {
 		NetLockstepTiming timing;
 		timing.senderPeerId = local; timing.peerId = local;
 		timing.action = NetTimingAction::Reclaim;
-		timing.phase = NetTimingPhase::ReclaimAtFrame;
+		timing.phase = NetTimingPhase::Propose;
 		timing.sessionId = m_Config.sessionId; timing.roundId = m_RoundId;
 		timing.authorityGeneration = m_Config.migrationGeneration;
 		timing.revision = m_NextTimingRevision++;
@@ -10481,12 +10484,12 @@ namespace RTE {
 		m_OthersTickSamples.clear();
 		m_SlowTicks = 0;
 		m_JudgeAfterFrame = applyFrame + static_cast<uint64_t>(std::ceil(1000.0 / m_Config.simTickMs));
-		DiagnosticLine() << "[net-lockstep] own seat back at frame " << applyFrame << " delay=" << delay << " applied_through=" << *m_LastCompletedSimulationTick
+		DiagnosticLine() << "[net-lockstep] own seat return proposed at frame " << applyFrame << " delay=" << delay << " applied_through=" << *m_LastCompletedSimulationTick
 		          << " next_frame=" << m_Stats.nextFrame << " held_from=" << m_AiHeldSeats.at(local) << std::endl;
-		m_TimingDecisions[timing.revision] = {timing, 0, true, nowMs};
+		m_TimingDecisions[timing.revision] = {timing, static_cast<uint8_t>(1U << (local - 1)), false, nowMs};
 		QueueTiming(timing);
+		CommitTiming(timing.revision);
 		FlushTimingOutgoing();
-		ApplyTiming(timing);
 	}
 
 	bool NetLockstepCoordinator::IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {
