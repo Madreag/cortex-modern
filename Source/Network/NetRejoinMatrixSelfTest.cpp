@@ -36,7 +36,7 @@ namespace RTE {
 	bool TestAStartHeldSeatsReturnCompletes(std::string* error);
 	bool TestASeatKnockingWhileTheRoundFormsIsAnswered(std::string* error);
 	bool TestAQueuedReturnLeavesALaterHold(std::string* error);
-	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
+	bool TestAPreviouslyHeldHostTakesItsSeatBack(std::string* error);
 	bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error);
 	bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error);
 	bool TestAHeldHostsFrameCrossesAMigration(std::string* error);
@@ -1170,7 +1170,7 @@ namespace RTE {
 		const Row abandoned{"a_lobby_drops_an_abandoned_transfers_tail", &TestALobbyDropsAnAbandonedTransfersTail}, laterLobby{"a_later_lobbys_transfer_is_new_to_its_peers", &TestALaterLobbysTransferIsNewToItsPeers};
 		const Row traffic{"lobby_traffic_keeps_a_host_link_alive", &TestLobbyTrafficKeepsAHostLinkAlive}, startHeld{"a_start_held_seats_return_completes", &TestAStartHeldSeatsReturnCompletes};
 		const Row knocking{"a_seat_knocking_while_the_round_forms_is_answered", &TestASeatKnockingWhileTheRoundFormsIsAnswered}, queued{"a_queued_return_leaves_a_later_hold", &TestAQueuedReturnLeavesALaterHold};
-		const Row ownSeat{"a_hosts_own_late_seat_is_held_and_taken_back", &TestAHostsOwnLateSeatIsHeldAndTakenBack}, nobodyWaits{"a_host_nobody_waits_on_keeps_its_seat", &TestAHostNobodyWaitsOnKeepsItsSeat};
+		const Row ownSeat{"a_previously_held_host_takes_its_seat_back", &TestAPreviouslyHeldHostTakesItsSeatBack}, nobodyWaits{"a_host_nobody_waits_on_keeps_its_seat", &TestAHostNobodyWaitsOnKeepsItsSeat};
 		const Row hearsHost{"a_held_seat_hears_its_host_until_its_catch_up_opens", &TestAHeldSeatHearsItsHostUntilItsCatchUpOpens}, crossesMigration{"a_held_hosts_frame_crosses_a_migration", &TestAHeldHostsFrameCrossesAMigration};
 		const Row lease{"end_match_with_held_seat_keeps_its_lease", &TestEndMatchWithHeldSeatKeepsItsLease}, toldOver{"a_returner_told_the_match_is_over_gets_its_record", &TestAReturnerToldTheMatchIsOverGetsItsRecord};
 		const Row stuckImage{"a_stuck_private_image_is_retaken_once_then_refused", &TestAStuckPrivateImageIsRetakenOnceThenRefused}, rematchCatchUp{"a_rematch_starts_without_the_ended_rounds_catch_up", &TestARematchStartsWithoutTheEndedRoundsCatchUp};
