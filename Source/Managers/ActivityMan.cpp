@@ -1258,6 +1258,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			const std::string& saveText = main.Text();
 			const std::string& indexText = index.Text();
 			if (layerCosts && image->captureClock) {
+				for (const auto& [name, layer]: image->layers) layer->Finalize();
 				const int64_t simUs = image->captureClock->simulationUs.get();
 				const int64_t totalUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - image->captureClock->started).count();
 				const auto native = image->nativePages ? image->nativePages->Cost() : CheckpointPagePool::Costs{};
@@ -1265,7 +1266,6 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 				    tick, simUs, totalUs, image->nativeBoundaryUs, native.workerUs, native.simFaultUs, native.otherFaultUs,
 				    native.simFaults, native.otherFaults, native.bytes, std::this_thread::get_id() != simThread));
 				for (const auto& [name, layer]: image->layers) {
-					layer->Finalize();
 					System::PrintDiagnosticLine(std::format("[checkpoint-layer-completion] name={} freeze_copy_bytes={} worker_copy_bytes={} compare_bytes={} dirty_bytes={} unmarked_dirty_bytes={}",
 					    name, layer->copiedBytes, layer->workerCopyBytes, layer->scannedBytes, layer->dirtyBytes, layer->unmarkedDirtyBytes));
 				}
