@@ -1,6 +1,7 @@
 #include "CheckpointPagePool.h"
 
 #include "PageWriteFence.h"
+#include "CheckpointFailure.h"
 
 #include <algorithm>
 #include <atomic>
@@ -32,6 +33,7 @@ namespace {
 		unsigned char* data = nullptr;
 		size_t bytes;
 		explicit Pages(size_t bytes) : bytes(bytes) {
+			CheckpointFailure::Check(CheckpointFailure::Point::NativePages);
 #ifdef _WIN32
 			data = static_cast<unsigned char*>(VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
 #else
@@ -154,17 +156,12 @@ bool CheckpointPagePool::Contains(const void* address) const {
 std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointPagePool::Freeze() const {
 	auto snapshot = std::make_shared<Snapshot>();
 	snapshot->m_Parts.reserve(m_Blocks.size());
-	try {
-		for (const auto& block: m_Blocks) {
-			auto copy = std::make_shared<Copy>(block->live.bytes, block->pageBytes);
-			Block::Prepared prepared{block.get(), copy};
-			if (!PageWriteFence::WatchCopies(block.get(), {block->live.data, block->live.bytes}, Block::OnWrite, block.get(), Block::Arm, &prepared))
-				throw std::runtime_error("could not fence native checkpoint pages");
-			snapshot->m_Parts.push_back({block, std::move(copy)});
-		}
-	} catch (...) {
-		snapshot->Drain();
-		throw;
+	for (const auto& block: m_Blocks) {
+		auto copy = std::make_shared<Copy>(block->live.bytes, block->pageBytes);
+		Block::Prepared prepared{block.get(), copy};
+		if (!PageWriteFence::WatchCopies(block.get(), {block->live.data, block->live.bytes}, Block::OnWrite, block.get(), Block::Arm, &prepared))
+			throw std::runtime_error("could not fence native checkpoint pages");
+		snapshot->m_Parts.push_back({block, std::move(copy)});
 	}
 	std::sort(snapshot->m_Parts.begin(), snapshot->m_Parts.end(), [](const auto& a, const auto& b) {
 		return reinterpret_cast<uintptr_t>(a.block->live.data) < reinterpret_cast<uintptr_t>(b.block->live.data);
@@ -249,6 +246,17 @@ std::string CheckpointPagePool::SelfTestMismatch() {
 		pool.Grow(expected.size() + 37, 2, free);
 		source = static_cast<unsigned char*>(free.back()) + 17;
 		std::memcpy(source, expected.data(), expected.size());
+		pool.Grow(expected.size() + 37, 2, free);
+		for (size_t after: {size_t{0}, size_t{1}}) {
+			bool refused = false;
+			{
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativePages, after);
+				try { pool.Freeze(); } catch (const std::bad_alloc&) { refused = true; }
+			}
+			if (!refused || std::memcmp(source, expected.data(), expected.size())) return "native page allocation failure changed live bytes";
+			std::memset(source, 71, expected.size());
+			std::memcpy(source, expected.data(), expected.size());
+		}
 		first = pool.Freeze();
 		if (!first->CanBorrow(source, expected.size())) return "fresh native pages could not be borrowed";
 		std::memset(source, 71, expected.size());

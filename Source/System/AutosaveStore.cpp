@@ -1,6 +1,7 @@
 #include "AutosaveStore.h"
 
 #include "SaveGameArchive.h"
+#include "CheckpointFailure.h"
 #include "NetLobbyProtocol.h"
 #include "System.h"
 
@@ -259,6 +260,7 @@ namespace RTE {
 
 	bool AutosaveStore::Validate(const std::filesystem::path& path, AutosaveDescriptor& out, std::string* error, const std::filesystem::path* publishedPath) {
 		try {
+			CheckpointFailure::Check(CheckpointFailure::Point::ArchiveValidation);
 			std::error_code status;
 			if (!std::filesystem::is_regular_file(path, status)) {
 				if (error) *error = "not a regular file";
@@ -308,6 +310,9 @@ namespace RTE {
 			descriptor.resumable = matchingManifest && ReadAdmission(path.parent_path(), descriptor.matchId, admission);
 			out = std::move(descriptor);
 			return true;
+		} catch (const std::bad_alloc&) {
+			if (error) { error->clear(); if (error->capacity() >= 13) error->append("out of memory"); }
+			return false;
 		} catch (const std::exception& exception) {
 			if (error) *error = exception.what();
 			return false;

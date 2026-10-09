@@ -92,6 +92,7 @@
 #include <map>
 #include <cstdlib>
 #include <ctime>
+#include <cstdio>
 #include <cstring>
 #include <execution>
 #include <format>
@@ -744,6 +745,7 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 
 bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick, const AutosaveIdentity& identity) {
 	if (!AutosaveStore::ValidMatchId(matchId) || tick == 0) return false;
+	try {
 	std::erase_if(m_AutosaveTasks, [](const auto& task) {
 		return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
 	});
@@ -765,7 +767,6 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 	LARGE_INTEGER clockStart{};
 	if (phaseClock) QueryPerformanceCounter(&clockStart);
 #endif
-	try {
 		if (!QueueIncrementalAutosave(fileName, path, matchId, tick, task, bytes, SaveCompression::Fast, &identity, false, captureClock)) {
 			{
 				std::ostringstream line;
@@ -793,11 +794,16 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 		System::PrintDiagnosticLine(std::format("[autosave-effects] tick={} uids_allocated={} sim_draws={} render_draws={} sound_cursor_moves={}\n", tick,
 		                         m_LastCaptureEffects.uidsAllocated, m_LastCaptureEffects.simDraws, m_LastCaptureEffects.renderDraws, m_LastCaptureEffects.soundCursorMoves));
 		return true;
+	} catch (const std::bad_alloc&) {
+		std::fputs("[autosave] failed reason=out of memory\n", stdout);
+		return false;
 	} catch (const std::exception& error) {
 		{
-			std::ostringstream line;
-			line << "[autosave] failed tick=" << tick << " reason=" << error.what();
-			System::PrintDiagnosticLine(line.str());
+			try {
+				std::ostringstream line;
+				line << "[autosave] failed tick=" << tick << " reason=" << error.what();
+				System::PrintDiagnosticLine(line.str());
+			} catch (const std::bad_alloc&) { std::fputs("[autosave] failed reason=out of memory\n", stdout); }
 		}
 		return false;
 	}
@@ -1241,7 +1247,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// are one series; a save the player asked for has none and is always written.
 	const AutosaveArchiveWriter::Submitted submitted = AutosaveWriter().Submit([this, image, layerNames, palette, fileName, path, matchId, tick, simThread, zipLevel, kind,
 	                                automatic, descriptor, manifest, pinnedCheckpointSource, sceneCache, previousImage,
-	                                retired = std::move(retired), retiredLayers = std::move(retiredLayers), pixelStorage = std::move(pixelStorage)](bool replaced) mutable {
+	                                retired = std::move(retired), retiredLayers = std::move(retiredLayers), failure = CheckpointFailure::Current(), pixelStorage = std::move(pixelStorage)](bool replaced) mutable {
+		CheckpointFailure::Scope failureScope(failure);
 		pixelStorage.reset();
 		if (replaced) {
 			retired.clear();
@@ -1331,6 +1338,11 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			CheckpointCow::Get().WriteMetricsJson(metricsPath);
 			image.reset();
 			return true;
+		} catch (const std::bad_alloc&) {
+			image.reset();
+			std::fputs("[autosave] failed reason=out of memory\n", stdout);
+			if (automatic) { try { NoteAutosaveVerdict(tick, false); } catch (const std::bad_alloc&) {} }
+			return false;
 		} catch (const ScriptGraphRefusal& refusal) {
 			CheckpointCow::Get().RecordWorker(sinceStart());
 			System::PrintDiagnosticLine("[autosave] failed tick=" + std::to_string(tick) + " reason=capture refused\n");

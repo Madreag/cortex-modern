@@ -17,6 +17,11 @@ namespace RTE::CheckpointLua {
 		std::mutex mutex;
 		std::unique_ptr<lua_State, decltype(&lua_close)> state{nullptr, lua_close};
 		std::shared_ptr<void> context;
+		static void* Allocate(void*, void* address, size_t, size_t bytes) noexcept {
+			if (!bytes) { std::free(address); return nullptr; }
+			if (CheckpointFailure::Fails(CheckpointFailure::Point::LuaAllocation)) return nullptr;
+			return std::realloc(address, bytes);
+		}
 		~GraphWorker() { state.reset(); context.reset(); }
 	};
 
@@ -53,7 +58,7 @@ namespace RTE::CheckpointLua {
 			std::lock_guard lock(owner->mutex);
 			const bool first = !owner->state;
 			if (first) {
-				owner->state.reset(luaL_newstate());
+				owner->state.reset(lua_newstate(GraphWorker::Allocate, nullptr));
 				if (!owner->state) throw std::bad_alloc();
 			}
 			lua_State* worker = owner->state.get();
@@ -138,6 +143,10 @@ namespace RTE::CheckpointLua {
 					context.Part("native_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeFinish).count(), false, {});
 					*observations = context.stats;
 					result.assign(bytes, size);
+					context.view.ReleaseSnapshot();
+					context.prototypes = PrototypeCapture(Snapshot{});
+					context.image = nullptr;
+					context.carried = nullptr;
 				});
 			} catch (const std::exception&) {
 				owner->state.reset();

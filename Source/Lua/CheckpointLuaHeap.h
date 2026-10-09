@@ -11,6 +11,7 @@ extern "C" {
 
 #include "CaptureSentinel.h"
 #include "PageWriteFence.h"
+#include "CheckpointFailure.h"
 
 #include <algorithm>
 #include <array>
@@ -317,6 +318,24 @@ namespace RTE::CheckpointLua {
 			}
 			m_CowGateFree.store(keepCow, std::memory_order_release);
 			m_FreshBytes = 0;
+			auto done = submit ? std::make_shared<std::promise<void>>() : nullptr;
+			if (done) {
+				data->ready = done->get_future().share();
+				std::lock_guard lock(m_CopyMutex);
+				std::erase_if(m_PreviousCopies, [](const auto& future) { return future.wait_for(std::chrono::seconds(0)) == std::future_status::ready; });
+				m_PreviousCopies.reserve(m_PreviousCopies.size() + 1);
+			}
+			struct Rollback {
+				HeapOwner& owner;
+				std::shared_ptr<CowCopy> previous;
+				bool keepCow, committed = false;
+				~Rollback() {
+					if (committed) return;
+					if (owner.m_CowCopy != previous && owner.m_CowCoordinator) owner.m_CowCoordinator->Cancel(owner.m_CowCopy);
+					owner.m_CowCopy = std::move(previous);
+					owner.m_CowGateFree.store(keepCow, std::memory_order_release);
+				}
+			} rollback{*this, m_CowCopy, keepCow};
 			if (copyOnWrite && data->committed) {
 				const size_t pageBytes = PageWriteFence::SystemPageBytes();
 				if (!pageBytes || m_Base % pageBytes || data->committed % pageBytes)
@@ -339,10 +358,10 @@ namespace RTE::CheckpointLua {
 				}
 				CowCoordinator::Prepared prepared{m_CowCoordinator.get(), cow};
 				if (costs) costs->setupUs = MicrosecondsSince(started);
+				m_CowCopy = cow;
 				if (!PageWriteFence::WatchCopies(this, {reinterpret_cast<uint8_t*>(m_Base), data->committed}, CowCoordinator::OnWrite,
 				                                m_CowCoordinator.get(), CowCoordinator::Arm, &prepared, costs ? &costs->watch : nullptr))
 					throw std::runtime_error("could not fence the Lua heap page copy");
-				m_CowCopy = std::move(cow);
 				m_CowGateFree.store(true, std::memory_order_release);
 			}
 			const bool receipt = Receipts().load(std::memory_order_acquire);
@@ -372,11 +391,8 @@ namespace RTE::CheckpointLua {
 			if (submit) {
 				// The snapshot waits on a promise of its own: a task's future can keep the task, and with it this
 				// snapshot, alive for as long as the snapshot holds that future.
-				auto done = std::make_shared<std::promise<void>>();
-				data->ready = done->get_future().share();
 				{
 					std::lock_guard lock(m_CopyMutex);
-					std::erase_if(m_PreviousCopies, [](const auto& future) { return future.wait_for(std::chrono::seconds(0)) == std::future_status::ready; });
 					if (m_PendingCopy.valid() && m_PendingCopy.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
 						m_PreviousCopies.push_back(m_PendingCopy);
 					m_PendingCopy = data->ready;
@@ -384,23 +400,24 @@ namespace RTE::CheckpointLua {
 					m_CopyPending.store(true, std::memory_order_release);
 				}
 				try {
-					submit([copy = std::move(copy), done] {
+					CheckpointFailure::Check(CheckpointFailure::Point::LuaSubmission);
+					submit([copy = std::move(copy), done, cow = m_CowCopy, coordinator = m_CowCoordinator] {
 						try {
 							copy();
 							done->set_value();
 						} catch (...) {
+							if (cow && coordinator) coordinator->Cancel(cow);
 							done->set_exception(std::current_exception());
 						}
 					});
 				} catch (...) {
 					done->set_exception(std::current_exception());
-					if (m_CowCoordinator && m_CowCopy) m_CowCoordinator->Cancel(m_CowCopy);
-					m_CowCopy.reset();
 					throw;
 				}
 			} else {
 				copy();
 			}
+			rollback.committed = true;
 			data->freezeUs = MicrosecondsSince(started);
 			return Snapshot(std::move(data));
 		}
@@ -412,18 +429,21 @@ namespace RTE::CheckpointLua {
 			if (!m_CopyPending.load(std::memory_order_acquire)) return;
 			std::unique_lock lock(m_CopyMutex);
 			if (!m_PendingCopy.valid()) return;
-			auto pending = m_PreviousCopies;
-			pending.push_back(m_PendingCopy);
 			const uint64_t generation = m_CopyGeneration;
-			lock.unlock();
-			for (const auto& future: pending) if (future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
-				const auto waited = std::chrono::steady_clock::now();
-				future.wait();
-				const int64_t waitedUs = MicrosecondsSince(waited);
-				GateWaitUs().fetch_add(waitedUs, std::memory_order_relaxed);
-				ThreadGateWaitUs() += waitedUs;
+			const size_t count = m_PreviousCopies.size();
+			for (size_t index = 0; index <= count; ++index) {
+				const auto future = index < count ? m_PreviousCopies[index] : m_PendingCopy;
+				lock.unlock();
+				if (future.valid() && future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+					const auto waited = std::chrono::steady_clock::now();
+					future.wait();
+					const int64_t waitedUs = MicrosecondsSince(waited);
+					GateWaitUs().fetch_add(waitedUs, std::memory_order_relaxed);
+					ThreadGateWaitUs() += waitedUs;
+				}
+				lock.lock();
+				if (generation != m_CopyGeneration) { lock.unlock(); WaitCopy(force); return; }
 			}
-			lock.lock();
 			if (generation == m_CopyGeneration) {
 				m_PendingCopy = {};
 				m_PreviousCopies.clear();
@@ -586,6 +606,9 @@ namespace RTE::CheckpointLua {
 			void Cancel(const std::shared_ptr<CowCopy>& copy) {
 				Locked guard(lock);
 				std::erase(copies, copy);
+				if (copy) { copy->completed = true; copy->buffer.reset(); }
+				if (std::all_of(copies.begin(), copies.end(), [](const auto& generation) { return generation->completed; }) && copy)
+					PageWriteFence::OpenCopiedPage(base, copy->saved.size() * pageBytes);
 			}
 			static bool OnWrite(void* context, uintptr_t address) noexcept {
 				auto& coordinator = *static_cast<CowCoordinator*>(context);
@@ -632,6 +655,7 @@ namespace RTE::CheckpointLua {
 			return calls;
 		}
 		std::shared_ptr<Slab> TakeSlab(size_t pages) {
+			CheckpointFailure::Check(CheckpointFailure::Point::LuaPages);
 			if (pages > std::numeric_limits<size_t>::max() / Snapshot::c_PageBytes) throw std::bad_alloc();
 			std::unique_ptr<Slab> slab;
 			{
@@ -850,6 +874,7 @@ namespace RTE::CheckpointLua {
 		friend struct Slab;
 		static void* Allocate(void* opaque, void* address, size_t previousSize, size_t size) noexcept {
 			auto& owner = *static_cast<HeapOwner*>(opaque);
+			if (size && CheckpointFailure::Fails(CheckpointFailure::Point::LuaAllocation)) return nullptr;
 			// A VM that reached its heap past the state's lock still meets the gate before it writes a block.
 			owner.WaitCopy();
 			if (size == 0) {

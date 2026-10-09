@@ -17,6 +17,8 @@ namespace RTE::CheckpointLua {
 		using Dump = std::function<std::string(const GCproto*)>;
 		View(Snapshot heap, NativeCall native, Dump dump) : m_Heap(std::move(heap)), m_Native(std::move(native)), m_Dump(std::move(dump)) {}
 		const Snapshot& Heap() const { return m_Heap; }
+		/// Retains proxy identities between jobs without retaining the completed heap copy.
+		void ReleaseSnapshot() { m_Heap = {}; m_Tables.clear(); m_Alive.clear(); }
 		std::function<void(const TValue&)> observe;
 		// A persistent saver VM keeps proxy identity, but every read belongs to the
 		// new copied heap. Remove dead/reborn source objects before its weak caches run.
