@@ -281,7 +281,6 @@ namespace RTE {
 
 		bool TestCrossTimedTransport(std::string* error) {
 #ifdef CCCP_WITH_GNS
-			DirectConnectionScope direct;
 			GnsTransport transport;
 			if (!transport.StartHost(49915, error)) return false;
 			if (ApplyCrossTransportFault(-1, 0, 0, 10) || ApplyCrossTransportFault(0, 101, 0, 10) || !ApplyCrossTransportFault(10, 5, 2, 1)) {
@@ -8035,7 +8034,6 @@ namespace RTE {
 	// its link is the wire a migration hands it.
 	bool TestTheReportListsEveryConnection(std::string* error) {
 		if (!GnsTransport::IsCompiledIn()) return true;
-		DirectConnectionScope direct;
 		NetMatchService host, joiner;
 		host.m_IsHost = true;
 		host.m_Transport = std::make_unique<GnsTransport>();
@@ -18436,6 +18434,7 @@ namespace RTE {
 	}
 
 	int NetMatchSelfTest::Run() {
+		DirectConnectionScope direct;
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-match-selftest] FAIL: " << message << std::endl;
 			return 1;
