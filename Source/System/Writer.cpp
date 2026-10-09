@@ -2332,6 +2332,47 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		}
 
 		{
+			CheckpointText frozen;
+			std::weak_ptr<const std::string> owned;
+			std::string reference;
+			{
+				CheckpointWriter::BatchScope batch(true);
+				auto values = std::make_shared<const std::string>("owned|");
+				owned = values;
+				const auto capture = [&](std::string_view prefix, const CheckpointText& child) {
+					CheckpointBuffer buffer;
+					buffer.Raw(prefix);
+					buffer.OwnedPrimitiveBlock(values, [](std::string& text, std::string_view data, bool tape) {
+						if (data.size() != sizeof(const void*)) throw std::logic_error("invalid owned fixture block");
+						const void* pointer;
+						std::memcpy(&pointer, data.data(), sizeof(pointer));
+						const auto& value = *static_cast<const std::string*>(pointer);
+						if (tape) {
+							text.push_back(static_cast<char>(CheckpointBuffer::ValueKind::Raw));
+							const uint64_t size = value.size();
+							text.append(reinterpret_cast<const char*>(&size), sizeof(size));
+						}
+						text += value;
+					}, values->size());
+					buffer.ElapsedSimTime(37, 1.0);
+					buffer.Child(child);
+					return buffer.Finish();
+				};
+				const auto previousChild = CheckpointText::Deferred([] { return std::string("child"); }, 0, "OwnedBlockChild1");
+				const auto freshChild = CheckpointText::Deferred([] { return std::string("child"); }, 0, "OwnedBlockChild1");
+				const auto previous = capture("previous|", previousChild);
+				frozen = capture("current|", freshChild).ReuseChildren(previous).BindSimTime(91);
+				CheckpointBuffer expected;
+				expected.Raw("current|owned|"); expected.ElapsedSimTime(37, 1.0); expected.Raw("child");
+				reference = expected.Finish().BindSimTime(91).Text();
+			}
+			const bool retained = !owned.expired();
+			const std::string output = std::async(std::launch::async, [frozen] { return frozen.Text(); }).get();
+			frozen = {};
+			check(retained && output == reference && owned.expired(), "owned_primitive_blocks_survive_child_reuse_and_timer_rebinding");
+		}
+
+		{
 			CheckpointCache sceneCache;
 			CheckpointWriter::CacheScope cacheScope(&sceneCache);
 			const auto capture = [](const SceneObject& object) {
