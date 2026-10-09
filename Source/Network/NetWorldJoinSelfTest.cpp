@@ -657,7 +657,7 @@ namespace RTE {
 			for (const NetH4Outbound& outbound: host.TakeOutbound()) {
 				if (outbound.connection != 12) continue;
 				if (std::holds_alternative<NetH4TicketOffer>(outbound.payload)) return Fail("an ordinary live match offered a reserved seat twice");
-				if (const auto* rejected = std::get_if<NetJoinRejected>(&outbound.payload)) refused = rejected->reason == NetRejectReason::SessionFull;
+				if (const auto* rejected = std::get_if<NetJoinRejected>(&outbound.payload)) refused = rejected->rejectReason == NetRejectReason::SessionFull;
 			}
 			if (!refused) return Fail("an ordinary live match did not refuse a join with no open seat");
 			return 0;
