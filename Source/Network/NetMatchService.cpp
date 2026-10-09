@@ -10382,11 +10382,8 @@ static std::string ResyncSaveName() {
 				config.authorityPeerId = m_MigrationAuthority;
 			if (!m_MigrationMembers.empty())
 				config.activePeerIds = m_MigrationMembers;
-			if (m_IsHost && m_ChatSession) {
-				config.activePeerIds = {static_cast<uint8_t>(m_ChatSession->GetLocalPeerId() + 1)};
-				for (const auto& peer: m_ChatSession->GetReadyPeers())
-					config.activePeerIds.push_back(static_cast<uint8_t>(peer.assignedPeerId + 1));
-			}
+			if (m_IsHost && m_ChatSession && m_ReconnectHost.GetRoster().stage == NetRosterStage::Starting)
+				config.activePeerIds = m_ReconnectHost.StartMembers();
 		};
 
 		NetIceJoinTarget iceTarget;

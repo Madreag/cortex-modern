@@ -880,7 +880,8 @@ namespace RTE {
 	bool NetReconnectHost::ReofferReturn(uint8_t lockstepPeerId, std::string* refusal) {
 		SeatState* seat = SeatOfPeer(lockstepPeerId);
 		const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr;
-		if (!held || held->phase != NetSeatPhase::Held || held->holdCause != NetSeatHoldCause::RejoinFailed || seat->activeConnection == c_InvalidNetPeerId) return false;
+		if (!held || held->failedReturns == 0 || held->phase == NetSeatPhase::RejoinImage || held->phase == NetSeatPhase::RejoinCatchUp ||
+		    seat->activeConnection == c_InvalidNetPeerId) return false;
 		if (held->failedReturns >= c_RosterReturnAttempts) {
 			if (refusal) *refusal = "Could not rejoin - the return failed " + std::to_string(held->failedReturns) + " times";
 			return false;

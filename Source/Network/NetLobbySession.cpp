@@ -1018,7 +1018,7 @@ namespace RTE {
 		// The initial lobby has not agreed on round members. Removing a held owner from that
 		// set now would also hide its authenticated return from SyncSessionPeers. FormRematch
 		// selects the present members when the host actually asks to start.
-		if (plane->GetRoster().stage == NetRosterStage::Lobby) return true;
+		if (plane->GetRoster().stage == NetRosterStage::Lobby || seat->holdCause == NetSeatHoldCause::None) return true;
 		// The formed round starts that seat held by the AI; nobody waits for its old endpoint.
 		NetMatchConfig held = m_Config.matchConfig;
 		if (LeaveRoundMembers(held, peerId)) {
@@ -1161,8 +1161,7 @@ namespace RTE {
 		if (m_Config.host) {
 			const NetReconnectHost* plane = m_Config.session ? m_Config.session->GetReconnectHost() : nullptr;
 			if (plane && plane->GetRoster().stage == NetRosterStage::Starting) {
-				// A forming round waits on the seats its roster has at the start on a live link, never on a held or an opened one;
-				// the host alone starts it when every other seat is held for its player.
+				// Every human owner in the new round must be present. A lobby drop is not a combat hold.
 				for (const uint8_t member: plane->StartMembers())
 					if (member != m_Config.matchConfig.hostPeerId && !IsKnownRemote(member)) return false;
 				return true;

@@ -6067,7 +6067,7 @@ namespace RTE {
 				RematchPeer& peer = *fixture.peers[i];
 				if (i == 1 && leftLobby && !returnedToLobby) {
 					const auto* held = host.admission.GetRoster().Find(2);
-					if (host.session.GetReadyPeerCount() == 2 && held && held->phase == NetSeatPhase::Held) sawHeldSeat = true;
+					if (host.session.GetReadyPeerCount() == 2 && held && held->phase == NetSeatPhase::Lobby && held->link == NetSeatLink::Dropped) sawHeldSeat = true;
 					if (!sawHeldSeat || pumps < leftAtPump + 10) continue;
 					peer.reconnect.Configure(&peer.store, RematchIdentity(), "Client 1");
 					peer.reconnect.SetUnixClock(&RematchUnixClock, nullptr);
@@ -6249,7 +6249,7 @@ namespace RTE {
 					const auto left = ApplyRosterEvent(before, event);
 					const auto* oldSeat = before.Find(droppedId);
 					if (left.refused || left.roster.Find(droppedId)->owner != oldSeat->owner || left.roster.Find(droppedId)->ticket != oldSeat->ticket ||
-					    left.roster.Find(droppedId)->phase != (kind == NetRosterEventKind::LivenessPassed ? oldSeat->phase : NetSeatPhase::Held) || !CheckRosterInvariants(before, left.roster, event.kind, error)) {
+					    left.roster.Find(droppedId)->phase != oldSeat->phase || !CheckRosterInvariants(before, left.roster, event.kind, error)) {
 						*error = "a leave or silent link before the first start released the owner or ticket"; return false;
 					}
 				}
@@ -6258,7 +6258,7 @@ namespace RTE {
 					const uint8_t id = static_cast<uint8_t>(remote.assignedPeerId + 1);
 					host.session.DisconnectReadyPeer(remote.transportPeerId, NetRejectReason::Timeout, "heartbeat timeout");
 					const auto* held = host.admission.GetRoster().Find(id);
-					if (!held || held->owner != before.Find(id)->owner || held->ticket != before.Find(id)->ticket || held->phase != NetSeatPhase::Held) {
+					if (!held || held->owner != before.Find(id)->owner || held->ticket != before.Find(id)->ticket || held->phase != NetSeatPhase::Lobby || held->holdCause != NetSeatHoldCause::None) {
 						*error = "a disconnect before the first start released the owner or ticket"; return false;
 					}
 				}
@@ -6291,7 +6291,15 @@ namespace RTE {
 				fixture.clock.skippedMs.fetch_add(10);
 				if (fixture.clock.NowMs() - began > 2000) cancel.store(true);
 			};
-			if (!runner.RunLobby(host.transport, host.session, 4000, error)) { *error = "the first lobby could not start with held seats: " + *error; return false; }
+			const bool started = runner.RunLobby(host.transport, host.session, 4000, error);
+			if (!neverJoined) {
+				if (started || !cancel.load()) { *error = "the lobby started by turning a disconnected human into AI"; return false; }
+				for (const auto& seat: host.admission.GetRoster().seats) if (seat.owner != 0 && seat.phase == NetSeatPhase::Held) {
+					*error = "the lobby created an AI hold for an absent human"; return false;
+				}
+				error->clear(); continue;
+			}
+			if (!started) { *error = "the first lobby could not start with an open seat: " + *error; return false; }
 			const auto& agreed = runner.GetMatchConfig();
 			if (agreed.peerCount != 4 || agreed.players.size() != 4 || agreed.activePeerIds.size() != (alone ? 1 : 3) ||
 			    std::find(agreed.activePeerIds.begin(), agreed.activePeerIds.end(), droppedId) != agreed.activePeerIds.end() ||

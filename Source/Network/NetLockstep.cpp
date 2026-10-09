@@ -9392,7 +9392,6 @@ namespace RTE {
 
 	void NetLockstepCoordinator::FormAgreedFirstFrame(uint64_t nowMs) {
 		if (m_AgreedStartApplied || m_Config.localPeerId != GetHostPeerId()) return;
-		const bool expired = StartupWaitExpired(nowMs);
 		uint32_t slowestStartupMs = 0;
 		uint32_t publishedPeerMask = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
@@ -9437,7 +9436,6 @@ namespace RTE {
 		// A wall-clock deadline is local state, not a deterministic boundary.  The host's frame record
 		// carries the agreed frames and masks only; each peer keeps the answer budget in its handshake state.
 		record.agreedDeadlineMs = 0;
-		uint32_t heldPeerMask = 0;
 		uint64_t firstCommitFrame = UINT64_MAX;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 			const auto delayIt = m_Config.peerInputDelayFrames.find(peer);
@@ -9447,13 +9445,9 @@ namespace RTE {
 			record.peerInputDelays[peer - 1] = delay;
 			record.peerDeviceClasses[peer - 1] = peer == m_Config.localPeerId ? m_LocalDeviceClass : m_PeerDeviceClasses[peer - 1];
 			firstCommitFrame = std::min(firstCommitFrame, record.peerEffectiveStartFrames[peer - 1]);
-			if ((expired || m_StartupLinksLost.contains(peer)) && m_Config.substituteSlowPeers && peer != m_Config.localPeerId &&
-			    std::find(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), peer) != m_RemotePeerIds.end() &&
-			    !IsPeerGoneAtFrame(peer, record.agreedFirstFrame) &&
-			    (publishedPeerMask & (uint32_t{1} << (peer - 1))) == 0)
-				heldPeerMask |= uint32_t{1} << (peer - 1);
+
 		}
-		record.heldPeerMask = heldPeerMask;
+		record.heldPeerMask = 0; // Loading and startup silence cannot create a combat hold.
 		record.agreedEffectiveStartFrame = firstCommitFrame == UINT64_MAX ? record.agreedFirstFrame : firstCommitFrame;
 		m_AgreedStartRecord = record;
 		ApplyAgreedStart(record, nowMs);
@@ -9485,10 +9479,10 @@ namespace RTE {
 			// announced leave is already the host-authored boundary for that seat; it must not hold the
 			// surviving seats behind the startup publication budget.
 			if (IsPeerGoneAtFrame(peer, m_Config.startFrame)) continue;
-			// A seat whose link died before it published never will; the start holds it instead of waiting out the budget.
-			allPublished = allPublished && (m_PeerStartupPublished.contains(peer) || (m_Config.substituteSlowPeers && m_StartupLinksLost.contains(peer)));
+			// Startup is a host barrier. A late or disconnected loader retains its human seat.
+			allPublished = allPublished && m_PeerStartupPublished.contains(peer);
 		}
-		if (allPublished || StartupWaitExpired(nowMs)) FormAgreedFirstFrame(nowMs);
+		if (allPublished) FormAgreedFirstFrame(nowMs);
 	}
 
 	void NetLockstepCoordinator::Tick(uint64_t nowMs) {

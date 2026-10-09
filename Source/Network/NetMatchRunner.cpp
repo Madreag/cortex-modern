@@ -557,8 +557,7 @@ namespace RTE {
 		NetReconnectHost* admission = m_Config.host ? session.GetReconnectHost() : nullptr;
 		const auto formInitialRound = [&] {
 			if (!admission || m_MatchConfig.persistentWorld || admission->GetRoster().stage != NetRosterStage::Lobby) return;
-			// The first round forms on the same roster transition as a rematch: open or held seats
-			// keep their number and start with AI; only connected owners wait at the start gate.
+			// The canonical roster retains every human owner; a disconnected owner waits at the start gate.
 			admission->FormRematch();
 			const std::vector<uint8_t> present = RematchMembers(m_MatchConfig.hostPeerId, m_MatchConfig.peerCount, admission->StartMembers());
 			m_MatchConfig.activePeerIds = present.size() < m_MatchConfig.peerCount ? present : std::vector<uint8_t>{};
