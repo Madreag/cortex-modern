@@ -34,6 +34,7 @@ MATCH_RETENTION_SECONDS = 24 * 60 * 60
 CHECK_IN_SECONDS = 5
 INSTANCE_GRACE_SECONDS = 20
 REQUEST_WINDOW_SECONDS = 60
+HOST_DISCONNECT_SECONDS = 15  # Keep aligned with the engine host-silence policy.
 MAX_SEATS = 7 + 16 + 1  # Match slots, world watchers, and the world's unused seat zero.
 MAX_MATCHES = 4096
 MAX_RECORD_BYTES = 2 * 1024 * 1024
@@ -346,6 +347,149 @@ class ConnectionAuthority:
             self._save(sid, record)
             needs_relay = path_changed or not seat["relay"] or seat["relay"].get("expires_at", 0) - now <= SEAT_TOKEN_SECONDS
             return self._reply(sid, record, seat, now), needs_relay, dict(host_claim, route=route) if host_claim else None
+
+    def note_host(self, sid: str, seat_id: int, generation: int, now: float) -> None:
+        """Only SessionDirectory calls this after verifying the current host token."""
+        with self._lock:
+            record = self._match(sid, now)
+            if record.get("session", {}).get("migration_gen", 0) != generation:
+                return
+            record.update(host_seat=seat_id, host_last_heard=now)
+            self._save(sid, record)
+
+    def host_change(self, sid: str, envelope: dict[str, Any], now: float,
+                    host_heard_at: float, issue_token) -> dict[str, Any]:
+        # check_in verifies the participant signature, seat binding, instance,
+        # request age and nonce before any authority report is consumed.
+        answer, _renew, _host_claim = self.check_in(sid, envelope, now)
+        request = json.loads(base64.b64decode(envelope["signed_request"], validate=True))
+        change = request.get("host_change")
+        if not isinstance(change, dict):
+            raise ConnectionErrorReply(400, "host_change_request", "The host-change report was incomplete. Reconnecting will retry.")
+        generation = bounded_int(change, "generation", 0, 2**32 - 2)
+        round_id = bounded_int(change, "round_id", 1, 2**64 - 1)
+        applied = bounded_int(change, "applied_frame", 0, 2**64 - 2)
+        prepared = bounded_int(change, "prepared_frame", applied, 2**64 - 2)
+        config_hash = bounded_hex(change, "config_hash", 32).hex()
+        with self._lock:
+            record = self._match(sid, now)
+            snapshot = record.get("session") or {}
+            decision = record.get("host_change")
+            if snapshot.get("fields", {}).get("persistent_world") is True:
+                raise ConnectionErrorReply(409, "world_host_fixed", "This world keeps its configured host. Reconnecting will retry.")
+            agreement = change.get("agreement")
+            if agreement is not None:
+                return self._host_agreement(sid, record, answer["seat"], agreement, generation, round_id, config_hash, now, issue_token)
+            if decision and decision["previous_generation"] == generation:
+                if decision["round_id"] != round_id or decision["config_hash"] != config_hash:
+                    raise ConnectionErrorReply(409, "host_change_round", "The host changed in another round. Refreshing the match will retry.")
+                return self._host_change_reply(record, answer["seat"])
+            current = snapshot.get("migration_gen", 0)
+            if generation != current:
+                raise ConnectionErrorReply(409, "host_generation", "This host generation has been superseded. Reconnecting will follow the current host.", host_generation=current)
+            old_host = record.get("host_seat")
+            if old_host is None:
+                return dict(connection_protocol=CONNECTION_PROTOCOL, status="waiting", reason="host_not_bound")
+            if config_hash != snapshot.get("fields", {}).get("match_config_hash"):
+                raise ConnectionErrorReply(409, "host_change_config", "The host-change report names another match configuration. Reconnecting will retry.")
+            heard = max(host_heard_at, record.get("host_last_heard", 0), record["seats"].get(str(old_host), {}).get("last_check_in", 0))
+            if now < heard or now - heard < HOST_DISCONNECT_SECONDS:
+                return dict(connection_protocol=CONNECTION_PROTOCOL, status="waiting", reason="host_alive")
+            # The caller only reports its own retained prefix. It cannot name a
+            # host or remove another participant from the directory's live set.
+            seat_id = answer["seat"]
+            if seat_id == old_host:
+                return dict(connection_protocol=CONNECTION_PROTOCOL, status="waiting", reason="host_alive")
+            reports = record.setdefault("host_change_reports", {})
+            reports[str(seat_id)] = dict(generation=generation, round_id=round_id, config_hash=config_hash,
+                                        applied_frame=applied, prepared_frame=prepared, received_at=now)
+            live = sorted(int(key) for key, seat in record["seats"].items()
+                          if int(key) != old_host and seat["participant"] not in record["removed"]
+                          and seat.get("route", {}).get("state") != "left"
+                          and 0 <= now - seat.get("last_check_in", 0) < HOST_DISCONNECT_SECONDS)
+            complete = live and all(str(peer) in reports and all(reports[str(peer)][field] == value
+                                    for field, value in (("generation", generation), ("round_id", round_id), ("config_hash", config_hash)))
+                                    and now - reports[str(peer)]["received_at"] < HOST_DISCONNECT_SECONDS for peer in live)
+            if not complete:
+                self._save(sid, record)
+                return dict(connection_protocol=CONNECTION_PROTOCOL, status="waiting", reason="collecting_prefixes")
+            successor = live[0]
+            donor = min(live, key=lambda peer: (-reports[str(peer)]["prepared_frame"], peer))
+            boundary = reports[str(donor)]["prepared_frame"]
+            decision = dict(session_id=sid, previous_generation=generation, generation=generation + 1,
+                            old_host_seat=old_host, host_seat=successor, members=live, donor_seat=donor,
+                            boundary=boundary, round_id=round_id, config_hash=config_hash)
+            self._commit_host_change(sid, record, decision, now, issue_token)
+            return self._host_change_reply(record, seat_id)
+
+    def _host_agreement(self, sid, record, seat_id, agreement, generation, round_id, config_hash, now, issue_token):
+        if not isinstance(agreement, dict):
+            raise ConnectionErrorReply(400, "host_agreement", "The host agreement was incomplete. Reconnecting will retry.")
+        host = bounded_int(agreement, "host_seat", 0, 3)
+        boundary = bounded_int(agreement, "boundary", 0, 2**64 - 2)
+        members = agreement.get("members")
+        previous = record.get("host_change")
+        current = record.get("session", {}).get("migration_gen", 0)
+        old_host = previous["old_host_seat"] if previous and previous["previous_generation"] == generation else record.get("host_seat")
+        expected = sorted(int(key) for key, seat in record["seats"].items()
+                          if int(key) < 4 and int(key) != old_host and seat["participant"] not in record["removed"]
+                          and seat.get("route", {}).get("state") != "left")
+        if (not isinstance(members, list) or any(type(peer) is not int for peer in members)
+                or members != expected or len(members) < 2 or host not in members or seat_id not in members
+                or current not in (generation, generation + 1)
+                or config_hash != record.get("session", {}).get("fields", {}).get("match_config_hash")):
+            raise ConnectionErrorReply(409, "host_agreement", "The host agreement does not name every remaining owner. Reconnecting will retry.")
+        value = dict(previous_generation=generation, generation=generation + 1, round_id=round_id,
+                     config_hash=config_hash, host_seat=host, boundary=boundary, members=members)
+        reports = record.setdefault("host_agreement_reports", {})
+        prior = reports.get(str(seat_id))
+        if prior and prior["previous_generation"] == generation and prior != value:
+            raise ConnectionErrorReply(409, "host_agreement_conflict", "This player already agreed another host. Reconnecting will retry.")
+        reports[str(seat_id)] = value
+        if not all(reports.get(str(peer)) == value for peer in members):
+            self._save(sid, record)
+            return dict(connection_protocol=CONNECTION_PROTOCOL, status="waiting", reason="collecting_agreement")
+        if previous and all(previous.get(key) == item for key, item in value.items()):
+            return self._host_change_reply(record, seat_id)
+        # No single peer can overwrite a reservation. Every remaining owner must
+        # independently attest the exact same completed fallback, including its tick.
+        decision = dict(value, session_id=sid, old_host_seat=old_host, donor_seat=host)
+        self._commit_host_change(sid, record, decision, now, issue_token)
+        return self._host_change_reply(record, seat_id)
+
+    def _commit_host_change(self, sid, record, decision, now, issue_token):
+        snapshot = record["session"]
+        successor = decision["host_seat"]
+        snapshot["migration_gen"] = decision["generation"]
+        snapshot["token"] = issue_token(decision["generation"])
+        snapshot["last_beat"] = now
+        route = record["seats"][str(successor)].get("route", {})
+        fields = snapshot["fields"]
+        fields.update(listen_addrs=route.get("listen_addrs", []), listen_port=route.get("listen_port", 0))
+        identity, virtual_port = route.get("ice_identity", ""), route.get("ice_virtual_port", 0)
+        if identity and virtual_port:
+            fields.update(ice_identity=identity, ice_virtual_port=virtual_port)
+        else:
+            fields.pop("ice_identity", None); fields.pop("ice_virtual_port", None)
+        fields["join_mode"] = "either" if identity and fields["listen_addrs"] else "ice" if identity else "ip"
+        record.update(session=snapshot, host_change=decision, host_seat=successor, host_last_heard=now,
+                      host_change_reports={}, retain_until=now + MATCH_RETENTION_SECONDS)
+        self._save(sid, record)
+
+    @staticmethod
+    def _host_change_reply(record: dict[str, Any], seat_id: int) -> dict[str, Any]:
+        decision = record["host_change"]
+        reply = dict(connection_protocol=CONNECTION_PROTOCOL, status="decided", decision=dict(decision))
+        if seat_id == decision["host_seat"]:
+            reply["host_token"] = record["session"]["token"]
+        return reply
+
+    def reserved_host(self, sid: str, generation: int, token: str) -> bool:
+        with self._lock:
+            record = self._records.get(sid, {})
+            decision = record.get("host_change", {})
+            return (decision.get("generation") == generation and isinstance(token, str)
+                    and hmac.compare_digest(token, record.get("session", {}).get("token", "")))
 
     def set_relay(self, sid: str, seat_id: int, generation: int, offer: dict[str, Any], now: float) -> bool:
         with self._lock:

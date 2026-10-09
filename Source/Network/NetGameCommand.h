@@ -437,7 +437,7 @@ namespace RTE {
 		bool IsValid() const {
 			return formerPeerId > 0 && formerPeerId <= 4 && peerId > 0 && peerId <= 4 && formerPeerId != peerId &&
 			    generation != 0 && applyFrame != 0 && electorate != 0 && (electorate & ~0xFU) == 0 && (voters & ~electorate) == 0 &&
-			    (members & ~voters) == 0 && (members & (1u << (peerId - 1))) != 0 && 2 * std::popcount(voters) > std::popcount(electorate);
+			    (members & ~voters) == 0 && (members & (1u << (peerId - 1))) != 0 && voters == electorate;
 		}
 		bool operator==(const NetGameHostAuthority&) const = default;
 	};

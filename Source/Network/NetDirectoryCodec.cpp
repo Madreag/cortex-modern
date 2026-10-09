@@ -158,6 +158,7 @@ namespace RTE {
 			std::string value;
 			if (!ReadStr(obj, key, value, reason, c_MaxPeerChars)) return false;
 			const bool valid = value == "host" ||
+				(value.size() > 5 && value.compare(0, 5, "host:") == 0 && std::all_of(value.begin() + 5, value.end(), IsInstallKeyChar)) ||
 				(value.size() > 7 && value.compare(0, 7, "client:") == 0 &&
 				 std::all_of(value.begin() + 7, value.end(), IsInstallKeyChar));
 			if (!valid) return Fail(reason, "invalid_field", key);

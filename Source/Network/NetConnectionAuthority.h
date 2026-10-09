@@ -62,6 +62,24 @@ namespace RTE {
 		bool operator==(const NetConnectionHost&) const = default;
 	};
 
+	// These are authenticated directory facts, not a second copy of seat phase.
+	struct NetHostChangeRequest {
+		uint64_t generation = 0, roundId = 0, appliedFrame = 0, preparedFrame = 0;
+		NetHash32 configHash{};
+		// A completed unanimous fallback is reported by every signer when HTTP returns.
+		uint16_t agreedHost = UINT16_MAX;
+		uint64_t agreedBoundary = 0;
+		std::vector<uint16_t> agreedMembers;
+		bool operator==(const NetHostChangeRequest&) const = default;
+	};
+	struct NetHostChangeReply {
+		enum class State { Unavailable, Waiting, Decided };
+		State state = State::Unavailable;
+		uint64_t generation = 0, boundary = 0;
+		uint16_t host = UINT16_MAX, donor = UINT16_MAX;
+		std::vector<uint16_t> members;
+	};
+
 	/// One connection control plane, shared by admission and recovery. Every HTTP
 	/// operation is asynchronous. A direct match never starts a directory request.
 	/// It owns route/check-in state only; NetSeatRoster remains the sole seat phase.
@@ -104,6 +122,8 @@ namespace RTE {
 		std::map<uint16_t, NetConnectionRoute> PeerRoutes() const;
 		std::vector<std::string> LocalAddresses() const;
 		std::optional<NetConnectionRoute> DirectHost(uint64_t matchId) const;
+		NetHostChangeReply QueryHostChange(const NetHostChangeRequest& request);
+		std::string HostChangeToken(uint64_t generation) const;
 		void Update(uint64_t steadyMs, uint64_t unixSeconds);
 
 	private:
@@ -122,6 +142,8 @@ namespace RTE {
 		void PollOperations(uint64_t steadyMs);
 		void PollCheckIn(uint64_t steadyMs, uint64_t unixSeconds);
 		void PollBootstrap(uint64_t steadyMs);
+		void PollHostChange(uint64_t steadyMs, uint64_t unixSeconds);
+		std::string SignedSeatRequest(const std::string& operation, uint64_t unixSeconds, const NetHostChangeRequest* change = nullptr);
 		void ObserveNetwork(uint64_t steadyMs, uint64_t unixSeconds);
 
 		mutable std::mutex m_Mutex;
@@ -141,7 +163,11 @@ namespace RTE {
 		std::map<uint64_t, NetConnectionRoute> m_DirectHosts;
 		std::vector<std::string> m_NetworkAddresses;
 		NetRelayConfig m_Relay;
-		std::unique_ptr<NetHttpClient> m_CheckIn, m_Bootstrap;
+		std::unique_ptr<NetHttpClient> m_CheckIn, m_Bootstrap, m_HostChange;
+		std::optional<NetHostChangeRequest> m_HostChangeRequest;
+		NetHostChangeReply m_HostChangeReply;
+		std::string m_HostChangeToken;
+		uint64_t m_NextHostChange = 0;
 		uint64_t m_NextCheckIn = 0, m_NextBootstrap = 0, m_CheckIns = 0;
 		uint64_t m_NextNetworkProbe = 0, m_LastWallSeconds = 0;
 		uint32_t m_NetworkRevision = 0;
