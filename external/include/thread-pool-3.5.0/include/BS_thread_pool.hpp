@@ -248,7 +248,7 @@ public:
      *
      * @param thread_count_ The number of threads to use. The default value is the total number of hardware threads available, as reported by the implementation. This is usually determined by the number of cores in the CPU. If a core is hyperthreaded, it will count as two threads.
      */
-    thread_pool(const concurrency_t thread_count_ = 0, std::function<void()> initialize_ = {}, std::function<void()> check_ = {}) : thread_count(determine_thread_count(thread_count_)), threads(std::make_unique<std::thread[]>(determine_thread_count(thread_count_))), initialize_worker(std::move(initialize_)), check_worker(std::move(check_))
+    thread_pool(const concurrency_t thread_count_ = 0) : thread_count(determine_thread_count(thread_count_)), threads(std::make_unique<std::thread[]>(determine_thread_count(thread_count_)))
     {
         create_threads();
     }
@@ -621,7 +621,6 @@ private:
      */
     void worker()
     {
-        if (initialize_worker) initialize_worker();
         std::function<void()> task;
         while (true)
         {
@@ -635,9 +634,7 @@ private:
             tasks.pop();
             ++tasks_running;
             tasks_lock.unlock();
-            if (check_worker) check_worker();
             task();
-            if (check_worker) check_worker();
             tasks_lock.lock();
             --tasks_running;
             if (waiting && !tasks_running && (paused || tasks.empty()))
@@ -698,8 +695,6 @@ private:
      * @brief A flag indicating to the workers to keep running. When set to false, the workers terminate permanently.
      */
     bool workers_running = false;
-    std::function<void()> initialize_worker;
-    std::function<void()> check_worker;
 };
 
 //                                     End class thread_pool                                     //

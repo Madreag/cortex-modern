@@ -1,4 +1,3 @@
-#include "DeterministicMath.h"
 #include "LimbPath.h"
 #include "CheckpointArchive.h"
 #include "MovableObject.h"
@@ -580,7 +579,7 @@ void LimbPath::ReportProgress(const Vector& limbPos) {
 			// We're too far away from this target.
 			m_SegProgress = 0.0;
 		else
-			m_SegProgress = (1.0F - (DeterministicSqrt(distanceSqr) / DeterministicSqrt(segMagSqr)));
+			m_SegProgress = (1.0F - (std::sqrt(distanceSqr) / std::sqrt(segMagSqr)));
 
 		m_Ended = distVec.MagnitudeIsLessThan(m_SegmentEndedThreshold);
 	} else {
@@ -699,7 +698,7 @@ void LimbPath::ReportProgress(const Vector& limbPos) {
 			// We're too far away from this target.
 			m_SegProgress = 0.0;
 		else
-			m_SegProgress = (1.0F - (DeterministicSqrt(distanceToCurrentSegmentTargetSqr) / DeterministicSqrt(currentSegmentMagnitudeSqr)));
+			m_SegProgress = (1.0F - (std::sqrt(distanceToCurrentSegmentTargetSqr) / std::sqrt(currentSegmentMagnitudeSqr)));
 	}
 }
 

@@ -717,7 +717,6 @@ lua_State * LJ_FASTCALL lj_ccallback_enter(CTState *cts, void *cf)
 {
   lua_State *L = cts->L;
   global_State *g = cts->g;
-  lj_vm_fp_assert();
   lj_assertG(L != NULL, "uninitialized cts->L in callback");
   if (tvref(g->jit_base)) {
     setstrV(L, L->top++, lj_err_str(L, LJ_ERR_FFI_BADCBACK));
@@ -741,7 +740,6 @@ void LJ_FASTCALL lj_ccallback_leave(CTState *cts, TValue *o)
   lua_State *L = cts->L;
   GCfunc *fn;
   TValue *obase = L->base;
-  lj_vm_fp_assert();
   L->base = L->top;  /* Keep continuation frame for throwing errors. */
   if (o >= L->base) {
     /* PC of RET* is lost. Point to last line for result conv. errors. */

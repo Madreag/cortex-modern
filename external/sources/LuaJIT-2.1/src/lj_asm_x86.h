@@ -2005,7 +2005,11 @@ static void asm_x87load(ASMState *as, IRRef ref)
 static void asm_fpmath(ASMState *as, IRIns *ir)
 {
   IRFPMathOp fpm = (IRFPMathOp)ir->op2;
-  if (fpm <= IRFPM_TRUNC) {
+  if (fpm == IRFPM_SQRT) {
+    Reg dest = ra_dest(as, ir, RSET_FPR);
+    Reg left = asm_fuseload(as, ir->op1, RSET_FPR);
+    emit_mrm(as, XO_SQRTSD, dest, left);
+  } else if (fpm <= IRFPM_TRUNC) {
     if (as->flags & JIT_F_SSE4_1) {  /* SSE4.1 has a rounding instruction. */
       Reg dest = ra_dest(as, ir, RSET_FPR);
       Reg left = asm_fuseload(as, ir->op1, RSET_FPR);

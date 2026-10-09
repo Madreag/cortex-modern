@@ -490,7 +490,7 @@ static int jitopt_flag(jit_State *J, const char *str)
     if (len == 0)
       break;
     if (strncmp(str, lst+1, len) == 0 && str[len] == '\0') {
-      if (set && opt != JIT_F_OPT_FMA) J->flags |= opt; else J->flags &= ~opt;
+      if (set) J->flags |= opt; else J->flags &= ~opt;
       return 1;  /* Ok. */
     }
     lst += 1+len;

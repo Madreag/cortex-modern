@@ -1,4 +1,3 @@
-#include "FloatingPointEnvironment.h"
 #include "NetworkServer.h"
 
 #include "GUI.h"
@@ -434,7 +433,7 @@ void NetworkServer::ReceiveRegisterMsg(RakNet::Packet* packet) {
 
 			m_Server->SetTimeoutTime(5000, m_ClientConnections[index].ClientId);
 
-			m_ClientConnections[index].SendThread = new std::thread(FloatingPointEnvironment::StartThread(BackgroundSendThreadFunction, this, index));
+			m_ClientConnections[index].SendThread = new std::thread(BackgroundSendThreadFunction, this, index);
 			SendAcceptedMsg(index);
 
 			m_SendSceneSetupData[index] = true;

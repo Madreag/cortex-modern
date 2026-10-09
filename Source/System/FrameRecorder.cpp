@@ -1,4 +1,3 @@
-#include "FloatingPointEnvironment.h"
 #include "FrameRecorder.h"
 #include "FrameCaptureStream.h"
 #include "GLFrameReadback.h"
@@ -258,7 +257,7 @@ namespace RTE {
 		WriteManifest();
 		// An encoder takes the frames in order on one pipe, so it has one writer; PNGs encode on a pool.
 		const std::size_t writers = m_EncoderPath.empty() ? WriterCount() : 1;
-		for (std::size_t writer = 0; writer < writers; ++writer) m_Writers.push_back(FloatingPointEnvironment::StartThread(&FrameRecorder::WriterLoop, this));
+		for (std::size_t writer = 0; writer < writers; ++writer) m_Writers.emplace_back(&FrameRecorder::WriterLoop, this);
 		return true;
 	}
 

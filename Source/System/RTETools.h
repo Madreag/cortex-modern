@@ -1,7 +1,5 @@
 #pragma once
 
-#include "DeterministicMath.h"
-
 // Header file for global utility methods.
 
 #include "RTEError.h"
@@ -418,6 +416,151 @@ namespace RTE {
 	/// @return The converted angle in degrees.
 	inline float RadiansToDegrees(float angleRadians) { return angleRadians / c_PI * 180.0F; }
 
+	// Deterministic sin/cos for on-wire physics — platform libm differs in the last ULP cross-toolchain; this range-reduced polynomial in basic ops (FP contraction is off) is bit-identical on every toolchain.
+	inline void DeterministicSinCos(double angle, double& sinOut, double& cosOut) {
+		const double twoOverPi = 0.63661977236758134308;
+		const double halfPi = 1.57079632679489661923;
+		const double q = angle * twoOverPi;
+		const long k = static_cast<long>(q >= 0.0 ? q + 0.5 : q - 0.5);
+		const double r = angle - static_cast<double>(k) * halfPi;
+		const double r2 = r * r;
+		const double sinR = r * (1.0 + r2 * (-1.0 / 6.0 + r2 * (1.0 / 120.0 + r2 * (-1.0 / 5040.0 + r2 * (1.0 / 362880.0)))));
+		const double cosR = 1.0 + r2 * (-1.0 / 2.0 + r2 * (1.0 / 24.0 + r2 * (-1.0 / 720.0 + r2 * (1.0 / 40320.0 + r2 * (-1.0 / 3628800.0)))));
+		switch (k & 3) {
+			case 1: sinOut = cosR; cosOut = -sinR; break;
+			case 2: sinOut = -sinR; cosOut = -cosR; break;
+			case 3: sinOut = -cosR; cosOut = sinR; break;
+			default: sinOut = sinR; cosOut = cosR; break;
+		}
+	}
+
+	// Deterministic sin/cos convenience wrappers over DeterministicSinCos.
+	inline double DeterministicSin(double angle) { double s, c; DeterministicSinCos(angle, s, c); return s; }
+	inline double DeterministicCos(double angle) { double s, c; DeterministicSinCos(angle, s, c); return c; }
+
+	// Deterministic atan core (fdlibm s_atan, public domain) — platform libm atan differs in the last ULPs cross-toolchain; this rational reduction in basic ops (FP contraction is off) is bit-identical on every toolchain.
+	inline double DeterministicAtan(double x) {
+		static const double atanhi[] = {4.63647609000806093515e-01, 7.85398163397448278999e-01, 9.82793723247329054082e-01, 1.57079632679489655800e+00};
+		static const double atanlo[] = {2.26987774529616870924e-17, 3.06161699786838301793e-17, 1.39033110312309984516e-17, 6.12323399573676603587e-17};
+		static const double aT[] = {3.33333333333329318027e-01, -1.99999999998764832476e-01, 1.42857142725034663711e-01, -1.11111104054623557880e-01, 9.09088713343650656196e-02, -7.69187620504482999495e-02, 6.66107313738753120669e-02, -5.83357013379057348645e-02, 4.97687799461593236017e-02, -3.65315727442169155270e-02, 1.62858201153657823623e-02};
+		const bool sign = x < 0.0;
+		double ax = sign ? -x : x;
+		if (ax >= 7.3786976294838206464e+19) { // |x| >= 2^66: saturates to +-pi/2
+			const double z = atanhi[3] + atanlo[3];
+			return sign ? -z : z;
+		}
+		int id;
+		if (ax < 0.4375) {
+			if (ax < 7.450580596923828125e-09) { return x; } // |x| < 2^-27: atan(x) == x
+			id = -1;
+		} else if (ax < 1.1875) {
+			if (ax < 0.6875) { id = 0; ax = (2.0 * ax - 1.0) / (2.0 + ax); }
+			else { id = 1; ax = (ax - 1.0) / (ax + 1.0); }
+		} else if (ax < 2.4375) {
+			id = 2; ax = (ax - 1.5) / (1.0 + 1.5 * ax);
+		} else {
+			id = 3; ax = -1.0 / ax;
+		}
+		const double z = ax * ax;
+		const double w = z * z;
+		const double s1 = z * (aT[0] + w * (aT[2] + w * (aT[4] + w * (aT[6] + w * (aT[8] + w * aT[10])))));
+		const double s2 = w * (aT[1] + w * (aT[3] + w * (aT[5] + w * (aT[7] + w * aT[9]))));
+		if (id < 0) {
+			const double r = ax - ax * (s1 + s2);
+			return sign ? -r : r;
+		}
+		const double r = atanhi[id] - ((ax * (s1 + s2) - atanlo[id]) - ax);
+		return sign ? -r : r;
+	}
+
+	// Deterministic atan2 — wraps DeterministicAtan with fdlibm quadrant handling.
+	inline double DeterministicAtan2(double y, double x) {
+		const double pi = 3.14159265358979311600e+00;
+		const double piLo = 1.22464679914735317720e-16;
+		const double halfPi = 1.57079632679489655800e+00;
+		if (x == 0.0 && y == 0.0) { return 0.0; }
+		if (x == 0.0) { return y > 0.0 ? halfPi : -halfPi; }
+		if (y == 0.0) { return x > 0.0 ? 0.0 : pi; }
+		const double ay = y < 0.0 ? -y : y;
+		const double axx = x < 0.0 ? -x : x;
+		const double z = DeterministicAtan(ay / axx); // atan(|y/x|), in [0, pi/2)
+		if (x > 0.0) { return y < 0.0 ? -z : z; }
+		return y < 0.0 ? (z - piLo) - pi : pi - (z - piLo);
+	}
+
+	// Deterministic exp (fdlibm e_exp, public domain) — platform libm exp differs cross-toolchain; this range-reduced rational in basic ops + an exact ldexp scale is bit-identical everywhere.
+	inline double DeterministicExp(double x) {
+		const double halF[2] = {0.5, -0.5};
+		const double ln2HI[2] = {6.93147180369123816490e-01, -6.93147180369123816490e-01};
+		const double ln2LO[2] = {1.90821492927058770002e-10, -1.90821492927058770002e-10};
+		const double invln2 = 1.44269504088896338700e+00;
+		const double P1 = 1.66666666666666019037e-01, P2 = -2.77777777770155933842e-03, P3 = 6.61375632143793436117e-05, P4 = -1.65339022054652515390e-06, P5 = 4.13813679705723846039e-08;
+		if (x >= 7.09782712893383973096e+02) { const double huge = 1.0e300; return huge * huge; } // overflow -> +inf
+		if (x <= -7.45133219101941108420e+02) { return 0.0; } // underflow -> 0
+		const int xsb = x < 0.0 ? 1 : 0;
+		const double ax = x < 0.0 ? -x : x;
+		double hi, lo;
+		int k;
+		if (ax > 0.34657359027997264311) { // |x| > 0.5*ln2
+			if (ax < 1.03972077083991796313) { // |x| < 1.5*ln2
+				hi = x - ln2HI[xsb];
+				lo = ln2LO[xsb];
+				k = 1 - xsb - xsb;
+			} else {
+				k = static_cast<int>(invln2 * x + halF[xsb]);
+				const double t = static_cast<double>(k);
+				hi = x - t * ln2HI[0];
+				lo = t * ln2LO[0];
+			}
+			x = hi - lo;
+		} else if (ax < 3.7252902984619140625e-09) { // |x| < 2^-28: exp(x) == 1+x
+			return 1.0 + x;
+		} else {
+			hi = 0.0;
+			lo = 0.0;
+			k = 0;
+		}
+		const double t = x * x;
+		const double c = x - t * (P1 + t * (P2 + t * (P3 + t * (P4 + t * P5))));
+		if (k == 0) {
+			return 1.0 - ((x * c) / (c - 2.0) - x);
+		}
+		const double y = 1.0 - ((lo - (x * c) / (2.0 - c)) - hi);
+		return std::ldexp(y, k);
+	}
+
+	// Deterministic natural log (fdlibm e_log, public domain) via an exact frexp decomposition — platform libm log differs cross-toolchain; this is bit-identical everywhere.
+	inline double DeterministicLog(double x) {
+		const double ln2HI = 6.93147180369123816490e-01;
+		const double ln2LO = 1.90821492927058770002e-10;
+		const double Lg1 = 6.666666666666735130e-01, Lg2 = 3.999999999940941908e-01, Lg3 = 2.857142874366239149e-01, Lg4 = 2.222219843214978396e-01, Lg5 = 1.818357216161805012e-01, Lg6 = 1.531383769920937332e-01, Lg7 = 1.479819860511658591e-01;
+		if (x <= 0.0) { const double huge = 1.0e300; const double inf = huge * huge; return x < 0.0 ? inf - inf : -inf; }
+		int k;
+		double f = std::frexp(x, &k); // x = f * 2^k, f in [0.5, 1)
+		if (f < 0.70710678118654752440) { f += f; --k; } // center the mantissa around 1
+		f -= 1.0;
+		const double s = f / (2.0 + f);
+		const double z = s * s;
+		const double w = z * z;
+		const double t1 = w * (Lg2 + w * (Lg4 + w * Lg6));
+		const double t2 = z * (Lg1 + w * (Lg3 + w * (Lg5 + w * Lg7)));
+		const double R = t2 + t1;
+		const double hfsq = 0.5 * f * f;
+		const double dk = static_cast<double>(k);
+		return dk * ln2HI - ((hfsq - (s * (hfsq + R) + dk * ln2LO)) - f);
+	}
+
+	// Deterministic pow — exact integer-exponent path via repeated multiply (the sim's powers are integral), general path through the exp/log polys. Platform libm pow routes through exp(y*log(x)) even for integer y and diverges cross-toolchain.
+	inline double DeterministicPow(double base, double exponent) {
+		const long long intExponent = static_cast<long long>(exponent);
+		if (static_cast<double>(intExponent) == exponent && intExponent >= -1024 && intExponent <= 1024) {
+			double result = 1.0;
+			const long long count = intExponent < 0 ? -intExponent : intExponent;
+			for (long long i = 0; i < count; ++i) { result *= base; }
+			return intExponent < 0 ? 1.0 / result : result;
+		}
+		return DeterministicExp(exponent * DeterministicLog(base));
+	}
 #pragma endregion
 
 #pragma region Strings

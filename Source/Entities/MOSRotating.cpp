@@ -1,4 +1,3 @@
-#include "DeterministicMath.h"
 #include "MOSRotating.h"
 #include "MetricsCollector.h"
 #include "CheckpointArchive.h"
@@ -1139,7 +1138,7 @@ void MOSRotating::CreateGibsWhenGibbing(const Vector& impactImpulse, MovableObje
 
 		// The "Spiral" spread mode uses the fermat spiral as means to determine the velocity of the gib particles, resulting in a evenly spaced out circle (or ring) of particles.
 		if (gibSettingsObject->GetSpreadMode() == Gib::SpreadMode::SpreadSpiral) {
-			float maxRadius = DeterministicSqrt(static_cast<float>(count));
+			float maxRadius = std::sqrt(static_cast<float>(count));
 			float scale = velocityRange / maxRadius;
 			float randAngle = c_PI * RandomNormalNum();
 			float goldenAngle = 2.39996F;
@@ -1149,7 +1148,7 @@ void MOSRotating::CreateGibsWhenGibbing(const Vector& impactImpulse, MovableObje
 					gibParticleClone = dynamic_cast<MovableObject*>(gibSettingsObject->GetParticlePreset()->Clone());
 				}
 
-				float radius = DeterministicSqrt(static_cast<float>(count - i));
+				float radius = std::sqrt(static_cast<float>(count - i));
 				gibParticleClone->SetPos(m_Pos + rotatedGibOffset);
 				gibParticleClone->SetPrevPos(GetPrevPos() + rotatedGibOffset);
 				gibParticleClone->SetHFlipped(m_HFlipped);

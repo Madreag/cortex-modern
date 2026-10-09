@@ -1,5 +1,4 @@
 #include "StallStackSampler.h"
-#include "FloatingPointEnvironment.h"
 
 #include "System.h"
 #include "HarnessCost.h"
@@ -50,7 +49,7 @@ namespace RTE {
 		}
 		const int64_t loadNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - loadStart).count();
 		HarnessCost::Charge(HarnessCost::StallSampler, loadNs);
-		s_Watcher = std::jthread([](std::stop_token stop) { FloatingPointEnvironment::Initialize(); const FloatingPointEnvironment::Scope scope("stack sampler"); Watch(stop); });
+		s_Watcher = std::jthread([](std::stop_token stop) { Watch(stop); });
 		System::PrintDiagnosticLine("[stall-stack] armed: a tick past " + std::to_string(threshold) + " ms is sampled every " + std::to_string(threshold) +
 		                            " ms; symbols " + (s_Symbols ? "loaded" : "unavailable") + " in " + std::to_string(loadNs / 1000000) + " ms before the first frame");
 #else

@@ -1003,8 +1003,6 @@
     <ClInclude Include="Source\System\DataModule.h" />
     <ClInclude Include="Source\System\RTEError.h" />
     <ClInclude Include="Source\System\RTETools.h" />
-    <ClInclude Include="Source\System\FloatingPointEnvironment.h" />
-    <ClInclude Include="Source\System\DeterministicMath.h" />
     <ClInclude Include="Source\System\Matrix.h" />
     <ClInclude Include="Source\System\PathFinder.h" />
     <ClInclude Include="Source\System\Reader.h" />
@@ -1645,7 +1643,6 @@
     <ClCompile Include="Source\System\DataModule.cpp" />
     <ClCompile Include="Source\System\RTEError.cpp" />
     <ClCompile Include="Source\System\RTETools.cpp" />
-    <ClCompile Include="Source\System\FloatingPointEnvironment.cpp" />
     <ClCompile Include="Source\System\Matrix.cpp" />
     <ClCompile Include="Source\System\MicroPather\micropather.cpp">
       <IncludeInUnityFile Condition="'$(Configuration)|$(Platform)'=='Debug Release|Win32'">false</IncludeInUnityFile>

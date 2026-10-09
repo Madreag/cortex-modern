@@ -1,4 +1,3 @@
-#include "DeterministicMath.h"
 #include "ACrab.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
@@ -1570,7 +1569,7 @@ void ACrab::Update() {
 
 	// Add velocity also so the viewpoint moves ahead at high speeds
 	if (m_Vel.MagnitudeIsGreaterThan(10.0F))
-		m_ViewPoint += m_Vel * DeterministicSqrt(m_Vel.GetMagnitude() * 0.1F);
+		m_ViewPoint += m_Vel * std::sqrt(m_Vel.GetMagnitude() * 0.1F);
 
 	////////////////////////////////////////
 	// Balance stuff
