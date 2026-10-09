@@ -4,6 +4,7 @@
 #include "CheckpointLuaAddresses.h"
 #include "CaptureSentinel.h"
 #include "CheckpointCast.h"
+#include "MOPixel.h"
 
 #include <algorithm>
 #include <array>
@@ -11,6 +12,7 @@
 #include <iostream>
 #include <exception>
 #include <functional>
+#include <future>
 #include <limits>
 #include <map>
 #include <memory>
@@ -309,6 +311,31 @@ namespace RTE::CheckpointLua {
 		struct World {
 			std::vector<NativeId> objects;
 			Topology topology;
+			std::vector<std::pair<NativeId, Object>> records;
+			CaptureAddressSet addresses{std::pmr::get_default_resource(), true};
+			bool frozen = false;
+			mutable std::once_flag indexed;
+			mutable std::vector<const std::pair<NativeId, Object>*> index;
+			std::thread::id captureThread = std::this_thread::get_id();
+			bool Contains(NativeId identity) const { return frozen ? addresses.Contains(reinterpret_cast<const void*>(identity)) : topology.contains(identity); }
+			const Object* Find(NativeId identity) const {
+				if (!frozen) {
+					const auto found = topology.find(identity);
+					return found == topology.end() ? nullptr : &found->second;
+				}
+				std::call_once(indexed, [this] {
+					const auto started = std::chrono::steady_clock::now();
+					index.reserve(records.size());
+					for (const auto& record: records) index.push_back(&record);
+					std::sort(index.begin(), index.end(), [](const auto* first, const auto* second) { return first->first < second->first; });
+					static const bool report = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
+					if (report) System::PrintDiagnosticLine(std::format("[checkpoint-topology-index] objects={} capture_thread={} worker_thread={} off_capture_thread={} us={}", records.size(),
+					    std::hash<std::thread::id>{}(captureThread), std::hash<std::thread::id>{}(std::this_thread::get_id()), captureThread != std::this_thread::get_id(),
+					    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()));
+				});
+				const auto found = std::lower_bound(index.begin(), index.end(), identity, [](const auto* record, NativeId key) { return record->first < key; });
+				return found == index.end() || (*found)->first != identity ? nullptr : &(*found)->second;
+			}
 		};
 		std::unordered_map<const void*, Entry, std::hash<const void*>, std::equal_to<const void*>, NativeAllocator<std::pair<const void* const, Entry>>> m_Entries;
 		using ScalarRecord = std::pair<const void*, ScalarEntry>;
@@ -350,9 +377,7 @@ namespace RTE::CheckpointLua {
 		Topology m_Owned;
 		const Object* Find(NativeId identity) const {
 			if (const auto owned = m_Owned.find(identity); owned != m_Owned.end()) return &owned->second;
-			if (m_World) {
-				if (const auto world = m_World->topology.find(identity); world != m_World->topology.end()) return &world->second;
-			}
+			if (m_World) return m_World->Find(identity);
 			return nullptr;
 		}
 
@@ -1303,11 +1328,64 @@ namespace RTE::CheckpointLua {
 		}
 
 	public:
+		static bool FrozenTopologySelfTest() {
+			NativeEffects effects;
+			auto world = std::make_shared<NativeImage::World>();
+			world->frozen = true;
+			NativeImage::Topology expected;
+			{
+				MOPixel first, second;
+				first.MovableObject::Create(); second.MovableObject::Create();
+				CaptureAddressSet seen{std::pmr::get_default_resource(), true};
+				for (const MovableObject* object: {static_cast<const MovableObject*>(&second), static_cast<const MovableObject*>(&first)}) {
+					Describe(object, expected, nullptr);
+					DescribeFrozen(object, world->records, seen);
+					DescribeFrozen(object, world->records, seen);
+				}
+				for (const auto& record: world->records) world->addresses.Insert(reinterpret_cast<const void*>(record.first));
+			}
+			if (!world->index.empty() || world->records.size() != expected.size()) return false;
+			std::array<std::future<bool>, 4> readers;
+			for (auto& reader: readers) reader = std::async(std::launch::async, [world, &expected] {
+				for (const auto& [identity, before]: expected) {
+					const auto* after = world->Find(identity);
+					if (!after || after->uid != before.uid || after->rotating != before.rotating || after->children != before.children || !after->gibs.empty()) return false;
+				}
+				return world->Find(0) == nullptr;
+			});
+			bool exact = true;
+			for (auto& reader: readers) exact = reader.get() && exact;
+			return exact;
+		}
 		// The world's trees, walked in chunks side by side; an object two chunks reach is described the same by both.
 		static std::shared_ptr<const void> BuildWorld(const std::vector<MovableObject*>& known) {
 			CheckpointBuffer::AllocationScope allocation(CheckpointWriter::BatchEnabled());
 			auto world = std::make_shared<NativeImage::World>();
 			const size_t chunks = CaptureTrace::Serial() ? 1 : std::clamp<size_t>(known.size() / 512, 1, 16);
+			if (CheckpointWriter::BatchEnabled()) {
+				world->frozen = true;
+				std::vector<std::vector<std::pair<NativeImage::NativeId, NativeImage::Object>>> records(chunks);
+				std::vector<std::vector<NativeImage::NativeId>> roots(chunks);
+				const auto capture = [&](size_t chunk) {
+					CaptureAddressSet seen{std::pmr::get_default_resource(), true};
+					seen.Reserve(known.size() / chunks);
+					records[chunk].reserve(known.size() / chunks);
+					for (size_t index = chunk * known.size() / chunks; index < (chunk + 1) * known.size() / chunks; ++index) {
+						const MovableObject* object = known[index];
+						if (!g_MovableMan.ValidMO(object)) continue;
+						roots[chunk].push_back(reinterpret_cast<uintptr_t>(object));
+						DescribeFrozen(object, records[chunk], seen);
+					}
+				};
+				ParallelWork(g_ThreadMan.GetCheckpointThreadPool(), chunks, capture).Finish();
+				world->addresses.Reserve(known.size());
+				world->records.reserve(known.size());
+				for (size_t chunk = 0; chunk < chunks; ++chunk) {
+					world->objects.insert(world->objects.end(), roots[chunk].begin(), roots[chunk].end());
+					for (auto& record: records[chunk]) if (world->addresses.Insert(reinterpret_cast<const void*>(record.first))) world->records.push_back(std::move(record));
+				}
+				return world;
+			}
 			std::vector<NativeImage::Topology> topologies(chunks);
 			std::vector<std::vector<NativeImage::NativeId>> objects(chunks);
 			const auto walk = [&](size_t chunk) {
@@ -1330,20 +1408,28 @@ namespace RTE::CheckpointLua {
 
 	private:
 		void CaptureObject(const MovableObject* source) {
-			Describe(source, m_Image->m_Owned, m_Image->m_World ? &m_Image->m_World->topology : nullptr);
+			Describe(source, m_Image->m_Owned, m_Image->m_World.get());
 		}
 
-		static void Describe(const MovableObject* source, NativeImage::Topology& into, const NativeImage::Topology* shared) {
+		static void Describe(const MovableObject* source, NativeImage::Topology& into, const NativeImage::World* shared) {
 			if (!source) return;
 			const uintptr_t identity = reinterpret_cast<uintptr_t>(source);
-			if (into.contains(identity) || (shared && shared->contains(identity))) return;
+			if (into.contains(identity) || (shared && shared->Contains(identity))) return;
 			into.emplace(identity, NativeImage::Object{});
+			into.at(identity) = DescribeFields(source, [&](const MovableObject* part) { Describe(part, into, shared); });
+		}
+		// The boundary owns topology fields; the saver builds their lookup index.
+		static void DescribeFrozen(const MovableObject* source, std::vector<std::pair<NativeImage::NativeId, NativeImage::Object>>& into, CaptureAddressSet& seen) {
+			if (!source || !seen.Insert(source)) return;
+			const size_t index = into.size();
+			into.emplace_back(reinterpret_cast<uintptr_t>(source), NativeImage::Object{});
+			auto object = DescribeFields(source, [&](const MovableObject* part) { DescribeFrozen(part, into, seen); });
+			into[index].second = std::move(object);
+		}
+		template<class Visit> static NativeImage::Object DescribeFields(const MovableObject* source, Visit visit) {
 			NativeImage::Object object;
 			object.uid = source->GetUniqueID();
-			const auto child = [&](const MovableObject* part) {
-				object.children.push_back(reinterpret_cast<uintptr_t>(part));
-				Describe(part, into, shared);
-			};
+			const auto child = [&](const MovableObject* part) { object.children.push_back(reinterpret_cast<uintptr_t>(part)); visit(part); };
 			if (const auto* rotating = CheckpointCast<const MOSRotating>(source)) {
 				object.rotating = true;
 				for (const Attachable* part: rotating->GetAttachables()) child(part);
@@ -1357,7 +1443,7 @@ namespace RTE::CheckpointLua {
 			}
 			if (const auto* actor = CheckpointCast<const Actor>(source)) for (const MovableObject* part: *actor->GetInventory()) child(part);
 			if (const auto* craft = CheckpointCast<const ACraft>(source)) for (const MovableObject* part: craft->GetCollectedInventory()) child(part);
-			into.at(identity) = std::move(object);
+			return object;
 		}
 	};
 }

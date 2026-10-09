@@ -9109,6 +9109,11 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
 	{
+		const bool exact = CheckpointLua::CaptureScope::FrozenTopologySelfTest();
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " owned_world_topology_indexes_after_source_death_for_concurrent_readers" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
 		struct Base { virtual ~Base() = default; };
 		struct Left : Base {};
 		struct Right : Base {};
