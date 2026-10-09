@@ -87,18 +87,20 @@ struct CheckpointPagePool::Block {
 		block.copies.pop_back();
 		return false;
 	}
-	bool SavePage(size_t page, bool fault) noexcept {
+	bool SavePages(size_t first, size_t count, bool fault) noexcept {
 		const auto started = fault ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		Locked guard(lock);
-		const size_t offset = page * pageBytes;
 		bool savedAny = false;
 		for (const auto& copy: copies) {
-			if (copy->saved[page].load(std::memory_order_relaxed)) continue;
-			std::memcpy(copy->pages.data + offset, live.data + offset, pageBytes);
-			copy->saved[page].store(1, std::memory_order_release);
-			savedAny = true;
+			for (size_t page = first; page < first + count; ++page) {
+				if (copy->saved[page].load(std::memory_order_relaxed)) continue;
+				const size_t offset = page * pageBytes;
+				std::memcpy(copy->pages.data + offset, live.data + offset, pageBytes);
+				copy->saved[page].store(1, std::memory_order_release);
+				savedAny = true;
+			}
 		}
-		const bool opened = (!fault && !savedAny) || PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data + offset), pageBytes);
+		const bool opened = (!fault && !savedAny) || PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data + first * pageBytes), count * pageBytes);
 		if (fault) {
 			const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
 			for (const auto& copy: copies) if (!copy->completed) {
@@ -109,6 +111,7 @@ struct CheckpointPagePool::Block {
 		}
 		return opened;
 	}
+	bool SavePage(size_t page, bool fault) noexcept { return SavePages(page, 1, fault); }
 	static bool OnWrite(void* context, uintptr_t address) noexcept {
 		auto& block = *static_cast<Block*>(context);
 		return block.SavePage((address - reinterpret_cast<uintptr_t>(block.live.data)) / block.pageBytes, true);
@@ -214,8 +217,9 @@ bool CheckpointPagePool::Snapshot::Read(const void* source, void* destination, s
 void CheckpointPagePool::Snapshot::Drain() const {
 	for (const auto& part: m_Parts) {
 		const auto start = std::chrono::steady_clock::now();
-		for (size_t page = 0; page < part.copy->saved.size(); ++page)
-			if (!part.block->SavePage(page, false)) throw std::runtime_error("could not drain native checkpoint pages");
+		const size_t batch = std::max<size_t>(1, (size_t{64} << 10) / part.block->pageBytes);
+		for (size_t page = 0; page < part.copy->saved.size(); page += batch)
+			if (!part.block->SavePages(page, std::min(batch, part.copy->saved.size() - page), false)) throw std::runtime_error("could not drain native checkpoint pages");
 		part.block->Complete(part.copy);
 		part.copy->workerUs.fetch_add(Since(start), std::memory_order_relaxed);
 	}
