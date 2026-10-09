@@ -6,6 +6,8 @@
 
 #include <future>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -35,17 +37,22 @@ namespace RTE {
 		int depth = 0;
 		size_t rowBytes = 0;
 		size_t copiedBytes = 0;
-		size_t scannedBytes = 0;
-		size_t markedBytes = 0;
-		size_t dirtyBytes = 0;
-		size_t unmarkedDirtyBytes = 0;
-		size_t dirtyRegionCount = 0;
-		size_t reusedRows = 0;
+		mutable size_t workerCopyBytes = 0;
+		mutable size_t scannedBytes = 0;
+		mutable size_t markedBytes = 0;
+		mutable size_t dirtyBytes = 0;
+		mutable size_t unmarkedDirtyBytes = 0;
+		mutable size_t dirtyRegionCount = 0;
+		mutable size_t reusedRows = 0;
 		unsigned int fullCopyPercent = 50;
-		bool fullCopy = false;
+		mutable bool fullCopy = false;
 
 		/// Copies a live bitmap at the sim boundary, reusing unchanged owned rows.
 		static std::shared_ptr<const BitmapSnapshot> Capture(const BITMAP* source, std::shared_ptr<const BitmapSnapshot> previous = {});
+		/// Owns raw rows at the tick boundary and compares them on the reading worker.
+		static std::shared_ptr<const BitmapSnapshot> Freeze(const BITMAP* source, std::shared_ptr<const BitmapSnapshot> previous = {});
+		/// Completes exact row comparison from owned bytes before reading its statistics.
+		void Finalize() const;
 		/// Compares owned pixels exactly, using shared rows as the fast path.
 		bool SamePixels(const BitmapSnapshot& other) const;
 		/// Reconstructs a bitmap from owned pixels on the save worker.
@@ -60,7 +67,8 @@ namespace RTE {
 
 	private:
 		template <bool, bool> friend class SceneLayerImpl;
-		static std::shared_ptr<const BitmapSnapshot> CaptureRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll);
+		static std::shared_ptr<const BitmapSnapshot> CaptureRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll, std::optional<bool> packed = {});
+		static std::shared_ptr<const BitmapSnapshot> FreezeRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll);
 		struct Pixels {
 			Pixels(size_t size, size_t rowBytes);
 			std::unique_ptr<uint8_t[]> bytes;
@@ -79,9 +87,19 @@ namespace RTE {
 			std::shared_ptr<const Pixels> pixels;
 			size_t offset = 0;
 		};
-		std::vector<Row> rows;
-		std::shared_ptr<const Pixels> fullPixels;
+		struct FrozenRows {
+			std::shared_ptr<const Pixels> pixels;
+			std::shared_ptr<const BitmapSnapshot> previous;
+			std::vector<uint8_t> marked;
+			bool hasMarks = false, markedAll = false;
+		};
+		bool frozen = false;
+		mutable std::once_flag ready;
+		mutable std::unique_ptr<FrozenRows> frozenRows;
+		mutable std::vector<Row> rows;
+		mutable std::shared_ptr<const Pixels> fullPixels;
 		const uint8_t* RowBytes(int y) const {
+			Finalize();
 			return fullPixels ? fullPixels->At(static_cast<size_t>(y) * rowBytes) : rows[y].pixels->At(rows[y].offset);
 		}
 	};
@@ -174,7 +192,7 @@ namespace RTE {
 		std::unique_ptr<BITMAP> CopyBitmap() const;
 
 		/// Captures changed pixel rows at a completed sim tick without image encoding.
-		std::shared_ptr<const BitmapSnapshot> CaptureBitmapSnapshot(std::vector<std::shared_ptr<const BitmapSnapshot>>* retired = nullptr) const;
+		std::shared_ptr<const BitmapSnapshot> CaptureBitmapSnapshot(std::vector<std::shared_ptr<const BitmapSnapshot>>* retired = nullptr, bool deferRows = false) const;
 #pragma endregion
 
 #pragma region Getters and Setters

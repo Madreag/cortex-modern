@@ -11,7 +11,7 @@ namespace RTE {
 	// by many actors. Only the frozen readers use this scope, before they join.
 	class BitmapPixelCaptureScope {
 	public:
-		BitmapPixelCaptureScope();
+		explicit BitmapPixelCaptureScope(bool deferRows = false);
 		~BitmapPixelCaptureScope();
 		BitmapPixelCaptureScope(const BitmapPixelCaptureScope&) = delete;
 		BitmapPixelCaptureScope& operator=(const BitmapPixelCaptureScope&) = delete;

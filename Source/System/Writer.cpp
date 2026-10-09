@@ -1237,6 +1237,7 @@ CheckpointText CheckpointCache::CapturePixels(const BITMAP* bitmap) {
 }
 
 struct BitmapPixelCaptureScope::State {
+	bool deferRows = false;
 	struct Cell { std::once_flag once; std::shared_ptr<const BitmapSnapshot> snapshot; CheckpointText text; };
 	struct Cells {
 		std::mutex mutex;
@@ -1264,7 +1265,10 @@ struct BitmapPixelCaptureScope::State {
 	}
 };
 std::atomic<BitmapPixelCaptureScope::State*> BitmapPixelCaptureScope::s_Current{nullptr};
-BitmapPixelCaptureScope::BitmapPixelCaptureScope() : m_State(std::make_unique<State>()), m_Previous(s_Current.exchange(m_State.get())) {}
+BitmapPixelCaptureScope::BitmapPixelCaptureScope(bool deferRows) : m_State(std::make_unique<State>()) {
+	m_State->deferRows = deferRows;
+	m_Previous = s_Current.exchange(m_State.get());
+}
 BitmapPixelCaptureScope::~BitmapPixelCaptureScope() { if (m_State) s_Current.store(m_Previous); }
 std::shared_ptr<const void> BitmapPixelCaptureScope::TakeStorage() {
 	if (!m_State || s_Current.load() != m_State.get()) throw std::logic_error("pixel storage requires the current joined capture");
@@ -1307,7 +1311,7 @@ std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> 
 		cell = entry;
 	}
 	std::call_once(cell->once, [&] {
-		cell->snapshot = BitmapSnapshot::Capture(bitmap, previous);
+		cell->snapshot = state->deferRows ? BitmapSnapshot::Freeze(bitmap, previous) : BitmapSnapshot::Capture(bitmap, previous);
 		cell->text = CheckpointText::Deferred([snapshot = cell->snapshot] { return snapshot->PixelBytes(); }, cell->snapshot->LogicalBytes());
 	});
 	return std::pair{cell->snapshot, cell->text};

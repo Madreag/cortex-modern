@@ -88,7 +88,45 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::Capture(const BITMAP* sour
 	return CaptureRows(source, previous, nullptr, false);
 }
 
+std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::Freeze(const BITMAP* source, std::shared_ptr<const BitmapSnapshot> previous) {
+	return FreezeRows(source, previous, nullptr, false);
+}
+
+std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::FreezeRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll) {
+	auto snapshot = std::const_pointer_cast<BitmapSnapshot>(CaptureRows(source, {}, markedRows, markedAll, true));
+	if (!snapshot || !previous || previous->width != snapshot->width || previous->height != snapshot->height || previous->depth != snapshot->depth) return snapshot;
+	auto rows = std::make_unique<FrozenRows>();
+	rows->pixels = std::move(snapshot->fullPixels);
+	rows->previous = previous;
+	rows->hasMarks = markedRows != nullptr;
+	if (markedRows) rows->marked = *markedRows;
+	rows->markedAll = markedAll;
+	snapshot->dirtyBytes = snapshot->unmarkedDirtyBytes = snapshot->dirtyRegionCount = snapshot->markedBytes = 0;
+	snapshot->fullCopy = false;
+	snapshot->frozenRows = std::move(rows);
+	snapshot->frozen = true;
+	return snapshot;
+}
+
+void BitmapSnapshot::Finalize() const {
+	if (!frozen) return;
+	std::call_once(ready, [this] {
+		std::vector<uint8_t*> lines(height);
+		for (int y = 0; y < height; ++y) lines[y] = frozenRows->pixels->At(static_cast<size_t>(y) * rowBytes);
+		GFX_VTABLE vtable{}; vtable.color_depth = depth;
+		BITMAP source{}; source.w = width; source.h = height; source.vtable = &vtable; source.line = lines.data();
+		auto result = CaptureRows(&source, frozenRows->previous, frozenRows->hasMarks ? &frozenRows->marked : nullptr, frozenRows->markedAll, true);
+		rows = result->rows;
+		fullPixels = result->fullPixels;
+		scannedBytes = result->scannedBytes; markedBytes = result->markedBytes; dirtyBytes = result->dirtyBytes;
+		unmarkedDirtyBytes = result->unmarkedDirtyBytes; dirtyRegionCount = result->dirtyRegionCount;
+		reusedRows = result->reusedRows; fullCopy = result->fullCopy; workerCopyBytes = result->copiedBytes;
+		frozenRows.reset();
+	});
+}
+
 bool BitmapSnapshot::SamePixels(const BitmapSnapshot& other) const {
+	Finalize(); other.Finalize();
 	if (this == &other) return true;
 	if (width != other.width || height != other.height || depth != other.depth || rowBytes != other.rowBytes) return false;
 	for (int y = 0; y < height; ++y) {
@@ -100,6 +138,7 @@ bool BitmapSnapshot::SamePixels(const BitmapSnapshot& other) const {
 }
 
 BitmapSnapshot::BitmapPtr BitmapSnapshot::CopyBitmap() const {
+	Finalize();
 	if (width <= 0 || height <= 0) return {};
 	BitmapPtr bitmap(create_bitmap_ex(depth, width, height));
 	if (!bitmap) throw std::bad_alloc();
@@ -110,6 +149,7 @@ BitmapSnapshot::BitmapPtr BitmapSnapshot::CopyBitmap() const {
 }
 
 std::string BitmapSnapshot::PixelBytes() const {
+	Finalize();
 	if (fullPixels && fullPixels->bytes) return std::string(reinterpret_cast<const char*>(fullPixels->bytes.get()), LogicalBytes());
 	std::string bytes;
 	bytes.reserve(LogicalBytes());
@@ -118,6 +158,7 @@ std::string BitmapSnapshot::PixelBytes() const {
 }
 
 size_t BitmapSnapshot::OwnedBytes() const {
+	Finalize();
 	if (fullPixels) return fullPixels->size;
 	size_t bytes = 0;
 	std::unordered_set<const Pixels*> allocations;
@@ -283,6 +324,39 @@ bool BitmapSnapshot::RunSelfTest() {
 			bool exact = true;
 			for (auto& reader: readers) exact = reader.get() && exact;
 			check(prefix + "multiplayer_prepared_pixels_outlive_source_pool_and_concurrent_readers", exact);
+		}
+		for (const int colorDepth: {8, 15, 16, 24, 32}) {
+			std::array<std::shared_ptr<const BitmapSnapshot>, 3> snapshots;
+			std::array<std::string, 3> expected;
+			bool unscanned = false;
+			{
+				BitmapPtr source(create_bitmap_ex(colorDepth, 17, 101));
+				if (!source) throw std::bad_alloc();
+				const size_t stride = static_cast<size_t>(source->w) * ((colorDepth + 7) / 8);
+				const auto remember = [&](size_t index) {
+					for (int y = 0; y < source->h; ++y) expected[index].append(reinterpret_cast<const char*>(source->line[y]), stride);
+				};
+				clear_bitmap(source.get());
+				snapshots[0] = Freeze(source.get()); remember(0);
+				source->line[13][3] ^= 0x5a;
+				snapshots[1] = Freeze(source.get(), snapshots[0]); remember(1);
+				snapshots[2] = Freeze(source.get(), snapshots[1]); remember(2);
+				unscanned = snapshots[1]->scannedBytes == 0 && snapshots[2]->scannedBytes == 0;
+				clear_to_color(source.get(), 77);
+			}
+			const auto read = [snapshots, expected] {
+				bool exact = true;
+				for (size_t index = 0; index < snapshots.size(); ++index) exact = snapshots[index]->PixelBytes() == expected[index] && exact;
+				return exact && snapshots[1]->scannedBytes == snapshots[1]->LogicalBytes() &&
+				    snapshots[1]->dirtyBytes == snapshots[1]->rowBytes && snapshots[1]->unmarkedDirtyBytes == snapshots[1]->rowBytes &&
+				    snapshots[2]->dirtyBytes == 0 && snapshots[2]->reusedRows == static_cast<size_t>(snapshots[2]->height) &&
+				    snapshots[1]->copiedBytes == snapshots[1]->LogicalBytes();
+			};
+			std::array<std::future<bool>, 4> readers;
+			for (auto& reader: readers) reader = std::async(std::launch::async, read);
+			bool exact = unscanned;
+			for (auto& reader: readers) exact = reader.get() && exact;
+			check("depth_" + std::to_string(colorDepth) + "_frozen_pixels_compare_unmarked_rows_on_workers_after_source_destruction", exact);
 		}
 		// A layer's back buffer reaches saves before anything draws to it, so it never holds what its memory held before.
 		{
@@ -569,7 +643,7 @@ std::unique_ptr<BITMAP> SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::CopyBitm
 	return std::unique_ptr<BITMAP>(outputBitmap);
 }
 
-std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::CaptureRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll) {
+std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::CaptureRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll, std::optional<bool> packedOverride) {
 	if (!source) return {};
 	auto snapshot = std::make_shared<BitmapSnapshot>();
 	snapshot->width = source->w;
@@ -585,7 +659,7 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::CaptureRows(const BITMAP* 
 	const bool compatible = previous && previous->width == snapshot->width &&
 	    previous->height == snapshot->height && previous->depth == snapshot->depth;
 	markedAll = markedAll || (markedRows && markedRows->size() != static_cast<size_t>(snapshot->height));
-	const bool packed = CheckpointWriter::BatchEnabled();
+	const bool packed = packedOverride.value_or(CheckpointWriter::BatchEnabled());
 	const auto copyFull = [&] {
 		auto pixels = std::make_shared<Pixels>(snapshot->LogicalBytes(), snapshot->rowBytes);
 		for (int y = 0; y < snapshot->height; ++y) std::memcpy(pixels->At(static_cast<size_t>(y) * snapshot->rowBytes), source->line[y], snapshot->rowBytes);
@@ -604,6 +678,7 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::CaptureRows(const BITMAP* 
 		copyFull();
 		return snapshot;
 	}
+	if (compatible) previous->Finalize();
 	std::vector<uint8_t> dirtyRows(snapshot->height, compatible ? 0 : 1);
 	bool previousDirty = false;
 	for (int y = 0; y < snapshot->height; ++y) {
@@ -662,8 +737,9 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::CaptureRows(const BITMAP* 
 }
 
 template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
-std::shared_ptr<const BitmapSnapshot> SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::CaptureBitmapSnapshot(std::vector<std::shared_ptr<const BitmapSnapshot>>* retired) const {
-	auto snapshot = BitmapSnapshot::CaptureRows(m_MainBitmap, m_BitmapSnapshot, &m_BitmapSnapshotDirtyRows, m_BitmapSnapshotAllDirty);
+std::shared_ptr<const BitmapSnapshot> SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::CaptureBitmapSnapshot(std::vector<std::shared_ptr<const BitmapSnapshot>>* retired, bool deferRows) const {
+	auto snapshot = deferRows ? BitmapSnapshot::FreezeRows(m_MainBitmap, m_BitmapSnapshot, &m_BitmapSnapshotDirtyRows, m_BitmapSnapshotAllDirty) :
+	    BitmapSnapshot::CaptureRows(m_MainBitmap, m_BitmapSnapshot, &m_BitmapSnapshotDirtyRows, m_BitmapSnapshotAllDirty);
 	if (retired && m_BitmapSnapshot) retired->push_back(std::move(m_BitmapSnapshot));
 	if (!snapshot) {
 		ResetBitmapSnapshot();
