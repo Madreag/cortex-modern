@@ -6,7 +6,7 @@ cd %~dp0\src\
 
 @setlocal
 @set PATH=.;%PATH%
-@set LJCOMPILE=cl /nologo /c /O2 /W3 /D_CRT_SECURE_NO_DEPRECATE /D_CRT_STDIO_INLINE=__declspec(dllexport)__inline
+@set LJCOMPILE=cl /nologo /c /O2 /W3 /fp:precise /D_CRT_SECURE_NO_DEPRECATE /D_CRT_STDIO_INLINE=__declspec(dllexport)__inline
 @set LJLINK=link /nologo
 @set LJMT=mt /nologo
 @set DASMDIR=../dynasm
@@ -22,14 +22,14 @@ if exist minilua.exe.manifest^
 
 @set LJARCH=x64
 @set DASC=vm_x64.dasc
-@set DASMFLAGS=-D WIN -D JIT -D FFI -D P64
+@set DASMFLAGS=-D WIN -D JIT -D FFI -D P64 -D DUALNUM
 
 @rem Call minilua to determine what the architecture is.
 @minilua
 @if errorlevel 8 goto :X64
 @set LJARCH=x86
 @set DASC=vm_x86.dasc
-@set DASMFLAGS=-D WIN -D JIT -D FFI
+@set DASMFLAGS=-D WIN -D JIT -D FFI -D DUALNUM
 @set LJCOMPILE=%LJCOMPILE% /arch:SSE2
 :X64
 @if "%1" neq "nogc64" goto :GC64

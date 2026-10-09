@@ -1,3 +1,4 @@
+#include "DeterministicMath.h"
 #include "ThrownDevice.h"
 #include "PresetMan.h"
 #include "SoundContainer.h"
@@ -114,7 +115,7 @@ float ThrownDevice::GetCalculatedMaxThrowVelIncludingArmThrowStrength() {
 	if (m_MaxThrowVel > 0) {
 		return m_MaxThrowVel;
 	} else if (const Arm* parentAsArm = dynamic_cast<Arm*>(GetParent())) {
-		return (parentAsArm->GetThrowStrength() + std::abs(GetRootParent()->GetAngularVel() * 0.5F)) / std::sqrt(std::abs(GetMass()) + 1.0F);
+		return (parentAsArm->GetThrowStrength() + std::abs(GetRootParent()->GetAngularVel() * 0.5F)) / DeterministicSqrt(std::abs(GetMass()) + 1.0F);
 	}
 	return 0;
 }

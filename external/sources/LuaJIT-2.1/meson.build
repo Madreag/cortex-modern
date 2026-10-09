@@ -22,7 +22,7 @@ subdir('src')
 
 libluajit = library(lj_libname, ljlib_sources + ljcore_sources + buildvm_headers,
     include_directories: luajit_source_dir,
-    c_args: lj_defines,
+    c_args: lj_defines + cc.get_supported_arguments(['-ffp-contract=off', '-fno-fast-math']),
     name_prefix: lj_libprefix,
     dependencies: luajit_dependencies,
     build_by_default: false,

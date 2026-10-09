@@ -1,3 +1,4 @@
+#include "FloatingPointEnvironment.h"
 #include "UInputMan.h"
 #include "LuaMan.h"
 #include "ScenarioRunner.h"
@@ -371,7 +372,7 @@ void UInputMan::StartJoystickUpdater() {
 	s_JoystickUpdaterStop = false;
 	const char* rescanText = std::getenv("CCCP_TEST_HID_RESCAN_MS");
 	const uint64_t rescanMS = rescanText ? std::strtoull(rescanText, nullptr, 10) : 0;
-	s_JoystickUpdater = std::thread([rescanMS]() {
+	s_JoystickUpdater = FloatingPointEnvironment::StartThread([rescanMS]() {
 		uint64_t nextRescan = rescanMS ? SDL_GetTicks() + rescanMS : 0;
 		bool spelledTrue = false;
 		int rescans = 0;
