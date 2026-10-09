@@ -7,8 +7,10 @@
 #endif
 
 #include <array>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace RTE {
 
@@ -49,6 +51,27 @@ namespace RTE {
 				throw std::runtime_error("incomplete or corrupt " + name);
 			}
 			return true;
+		}
+
+		/// Visits a complete checksummed entry without retaining its inflated bytes.
+		template<class Visit> uint64_t VisitEntry(const std::string& name, Visit visit) {
+			if (unzLocateFile(m_File, name.c_str(), NULL) != UNZ_OK) throw std::runtime_error("missing or unreadable " + name);
+			unz_file_info64 info{};
+			if (unzGetCurrentFileInfo64(m_File, &info, nullptr, 0, nullptr, 0, nullptr, 0) != UNZ_OK || unzOpenCurrentFile(m_File) != UNZ_OK)
+				throw std::runtime_error("could not open " + name);
+			struct Entry { unzFile file; ~Entry() { if (file) unzCloseCurrentFile(file); } } entry{m_File};
+			std::array<char, 65536> chunk;
+			uint64_t size = 0;
+			int count;
+			while ((count = unzReadCurrentFile(m_File, chunk.data(), chunk.size())) > 0) {
+				if (static_cast<uint64_t>(count) > info.uncompressed_size - size) throw std::runtime_error("incorrect size for " + name);
+				size += count;
+				visit(std::string_view(chunk.data(), count));
+			}
+			const int closed = unzCloseCurrentFile(m_File);
+			entry.file = nullptr;
+			if (count < 0 || closed != UNZ_OK || size != info.uncompressed_size) throw std::runtime_error("incomplete or corrupt " + name);
+			return size;
 		}
 
 	private:

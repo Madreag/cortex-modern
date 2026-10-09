@@ -13,6 +13,7 @@ extern "C" {
 #include "PageWriteFence.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -40,6 +41,29 @@ extern "C" {
 #endif
 
 namespace RTE::CheckpointLua {
+	/// Keeps worker API allocations inside Lua's memory-error boundary.
+	template<class Work> void ProtectedCall(lua_State* state, const Work& work) {
+		struct Call {
+			const Work& work;
+			std::exception_ptr failure;
+			static int Run(lua_State* state) {
+				auto& call = *static_cast<Call*>(lua_touserdata(state, 1));
+				try {
+					lua_settop(state, 0);
+					call.work();
+				} catch (const std::exception&) { call.failure = std::current_exception(); }
+				return 0;
+			}
+		} call{work};
+		const int status = lua_cpcall(state, Call::Run, &call);
+		if (call.failure) std::rethrow_exception(call.failure);
+		if (status == LUA_ERRMEM) throw std::bad_alloc();
+		if (status) {
+			const char* reason = lua_tostring(state, -1);
+			throw std::runtime_error(reason ? reason : "protected checkpoint Lua call failed");
+		}
+	}
+
 
 	struct AllocationStats {
 		size_t bytes = 0;
@@ -97,17 +121,8 @@ namespace RTE::CheckpointLua {
 			if (source < m_Data->base || size > m_Data->committed || source - m_Data->base > m_Data->committed - size)
 				throw std::runtime_error("a Lua heap read lies outside the recorded heap");
 			const size_t offset = source - m_Data->base;
-			const size_t first = offset / c_PageBytes, within = offset % c_PageBytes;
-			if (within + size <= c_PageBytes) return {PageBytes(first) + within, size};
-			// A read across pages is assembled once and kept with the snapshot.
-			auto& buffer = m_Data->assembled.emplace_back(size);
-			size_t done = 0;
-			for (size_t page = first, at = within; done < size; ++page, at = 0) {
-				const size_t chunk = std::min(size - done, c_PageBytes - at);
-				std::memcpy(buffer.data() + done, PageBytes(page) + at, chunk);
-				done += chunk;
-			}
-			return {buffer.data(), size};
+			// The copied pages occupy one contiguous mapping.
+			return {reinterpret_cast<const std::byte*>(m_Data->pages) + offset, size};
 		}
 
 		std::string ReadString(const char* address, size_t size) const {
@@ -131,7 +146,6 @@ namespace RTE::CheckpointLua {
 			const Page* pages = nullptr; // One per committed page, in order.
 			std::shared_future<void> ready; // Set only when a freeze was given somewhere to run its copy.
 			mutable std::atomic<bool> copiedFlag{false};
-			mutable std::deque<std::vector<std::byte>> assembled; // Read by the one worker that walks this snapshot.
 			void WaitCopied() const {
 				if (copiedFlag.load(std::memory_order_acquire)) return;
 				// A copy that failed left pages unread, so its reader fails with it instead of reading zeros.
@@ -141,8 +155,6 @@ namespace RTE::CheckpointLua {
 		};
 		std::shared_ptr<const Data> m_Data;
 		explicit Snapshot(std::shared_ptr<const Data> data) : m_Data(std::move(data)) {}
-
-		const std::byte* PageBytes(size_t index) const { return m_Data->pages[index].bytes; }
 
 		friend class HeapOwner;
 	};
@@ -247,10 +259,11 @@ namespace RTE::CheckpointLua {
 			{
 				std::lock_guard lock(m_SlabMutex);
 				for (const auto& slab: m_IdleSlabs) {
+					if (!slab) continue;
 					CopyBytes(true).fetch_sub(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 					slab->owner = nullptr;
 				}
-				m_IdleSlabs.clear();
+				for (auto& slab: m_IdleSlabs) slab.reset();
 			}
 			// The wrapper keeps lua_close from destroying the bootstrap's shared arena.
 			if (m_State) lua_close(std::exchange(m_State, nullptr));
@@ -482,7 +495,7 @@ namespace RTE::CheckpointLua {
 		};
 		static constexpr size_t c_IdleSlabs = 1; // With one capture in flight, the next freeze reuses the buffer the last one gave back.
 		std::mutex m_SlabMutex;
-		std::vector<std::unique_ptr<Slab>> m_IdleSlabs;
+		std::array<std::unique_ptr<Slab>, c_IdleSlabs> m_IdleSlabs;
 		std::atomic<size_t> m_LiveSlabs{0};
 		std::mutex m_CopyMutex;
 		std::shared_future<void> m_PendingCopy;
@@ -619,28 +632,27 @@ namespace RTE::CheckpointLua {
 			return calls;
 		}
 		std::shared_ptr<Slab> TakeSlab(size_t pages) {
+			if (pages > std::numeric_limits<size_t>::max() / Snapshot::c_PageBytes) throw std::bad_alloc();
 			std::unique_ptr<Slab> slab;
 			{
 				std::lock_guard lock(m_SlabMutex);
-				const auto fit = std::find_if(m_IdleSlabs.begin(), m_IdleSlabs.end(), [pages](const auto& candidate) { return candidate->capacity >= pages; });
+				const auto fit = std::find_if(m_IdleSlabs.begin(), m_IdleSlabs.end(), [pages](const auto& candidate) { return candidate && candidate->capacity >= pages; });
 				if (fit != m_IdleSlabs.end()) {
 					slab = std::move(*fit);
-					m_IdleSlabs.erase(fit);
 					CopyBytes(true).fetch_sub(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 				}
 			}
 			if (!slab) {
 				slab = std::make_unique<Slab>();
 				slab->owner = this;
-				// Room for the heap to grow before a freeze needs a bigger buffer.
-				slab->capacity = pages + pages / 4;
+				slab->capacity = pages;
 				slab->pages = static_cast<Snapshot::Page*>(MapPages(slab->capacity * Snapshot::c_PageBytes));
-				if (!slab->pages) throw std::runtime_error("could not map a Lua heap copy");
+				if (!slab->pages) throw std::bad_alloc();
 				m_FreshBytes += slab->capacity * Snapshot::c_PageBytes;
 				CopyBytes(false).fetch_add(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 			}
 			m_LiveSlabs.fetch_add(1, std::memory_order_relaxed);
-			return std::shared_ptr<Slab>(std::move(slab));
+			return std::shared_ptr<Slab>(slab.release(), [](Slab* returned) { ReturnSlab(returned->owner, returned); });
 		}
 		// A buffer goes back to its heap only while that heap exists; one released after it is unmapped instead.
 		static void ReturnSlab(HeapOwner* owner, Slab* slab) {
@@ -664,7 +676,9 @@ namespace RTE::CheckpointLua {
 			m_LiveSlabs.fetch_sub(1, std::memory_order_relaxed);
 			std::lock_guard lock(m_SlabMutex);
 			// The next freeze needs a buffer as big as the heap, so a full pool keeps its largest.
-			if (m_IdleSlabs.size() >= c_IdleSlabs) {
+			const auto empty = std::find_if(m_IdleSlabs.begin(), m_IdleSlabs.end(), [](const auto& value) { return !value; });
+			auto target = empty;
+			if (target == m_IdleSlabs.end()) {
 				const auto smallest = std::min_element(m_IdleSlabs.begin(), m_IdleSlabs.end(), [](const auto& a, const auto& b) { return a->capacity < b->capacity; });
 				if ((*smallest)->capacity >= slab->capacity) {
 					DropSlab(slab);
@@ -672,9 +686,9 @@ namespace RTE::CheckpointLua {
 				}
 				CopyBytes(true).fetch_sub((*smallest)->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 				DropSlab(smallest->release());
-				m_IdleSlabs.erase(smallest);
+				target = smallest;
 			}
-			m_IdleSlabs.push_back(std::unique_ptr<Slab>(slab));
+			target->reset(slab);
 			CopyBytes(true).fetch_add(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 		}
 		static void DropSlab(Slab* slab) {
@@ -866,17 +880,8 @@ namespace RTE::CheckpointLua {
 		}
 	};
 
-	// The last page of a slab released gives the buffer back to the pool of its owner.
 	inline HeapOwner::Slab::~Slab() {
 		if (!pages) return;
-		if (owner) {
-			auto* kept = new Slab();
-			kept->pages = std::exchange(pages, nullptr);
-			kept->capacity = capacity;
-			kept->owner = owner;
-			HeapOwner::ReturnSlab(owner, kept);
-			return;
-		}
 		HeapOwner::Unmap(pages, capacity * Snapshot::c_PageBytes);
 		HeapOwner::CopyBytes(false).fetch_sub(capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 	}

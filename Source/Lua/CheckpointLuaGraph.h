@@ -54,85 +54,97 @@ namespace RTE::CheckpointLua {
 			const bool first = !owner->state;
 			if (first) {
 				owner->state.reset(luaL_newstate());
-				if (!owner->state) throw std::runtime_error("could not create the frozen graph worker");
-				luaL_openlibs(owner->state.get());
-				owner->context = std::make_shared<Context>(*this, carried);
+				if (!owner->state) throw std::bad_alloc();
 			}
 			lua_State* worker = owner->state.get();
-			Context& context = *std::static_pointer_cast<Context>(owner->context);
-			struct ClearStack { lua_State* state; ~ClearStack() { lua_settop(state, 0); } } clear{worker};
-			context.Update(worker, *this, carried);
-			if (first) context.view.Install(worker);
-			context.view.scratch.insert(scratch.begin(), scratch.end());
-			native->Bind(worker, context.view);
-			lua_pushboolean(worker, true); lua_setglobal(worker, "_ScriptGraphFrozenDependencies");
-			Bind(worker, context, "_ScriptGraphThreadCapture", Guard<ThreadCapture>);
-			Bind(worker, context, "_ScriptGraphOpenUpvalues", Guard<OpenUpvalues>);
-			Bind(worker, context, "_ScriptGraphRandomState", Guard<RandomState>);
-			Bind(worker, context, "_ScriptGraphDirtyRoots", Guard<DirtyRoots>);
-			Bind(worker, context, "_ScriptGraphClock", Clock);
-			Bind(worker, context, "_ScriptGraphNoteCarried", Guard<NoteCarried>);
-			Bind(worker, context, "_ScriptGraphBeginCapture", Guard<BeginCapture>);
-			Bind(worker, context, "_ScriptGraphEndCapture", Guard<EndCapture>);
-			Bind(worker, context, "_ScriptGraphBeginRoot", Guard<BeginRoot>);
-			Bind(worker, context, "_ScriptGraphReuseRoot", Guard<ReuseRoot>);
-			Bind(worker, context, "_ScriptGraphNoteTable", Guard<NoteValue>);
-			Bind(worker, context, "_ScriptGraphNoteValue", Guard<NoteValue>);
-			Bind(worker, context, "_ScriptGraphNoteUncacheable", Guard<NoteUncacheable>);
-			Bind(worker, context, "_ScriptGraphNoteRootReuse", Guard<NoteRootReuse>);
-			Bind(worker, context, "_ScriptGraphWalkPart", Guard<WalkPart>);
-			// The capture's descriptor was taken out of the live globals before the freeze; the walk reads it under its name.
-			if (callbackObjects && tvistab(&callbacks)) {
-				callbackObjects->Push(worker, context.view);
-				context.view.InjectLocal(worker, tabV(&callbacks), "objects");
+			std::string result;
+			try {
+				ProtectedCall(worker, [&] {
+					if (first) {
+						luaL_openlibs(worker);
+						owner->context = std::make_shared<Context>(*this, carried);
+					}
+					Context& context = *std::static_pointer_cast<Context>(owner->context);
+					struct ClearStack { lua_State* state; ~ClearStack() { lua_settop(state, 0); } } clear{worker};
+					context.Update(worker, *this, carried);
+					if (first) context.view.Install(worker);
+					context.view.scratch.insert(scratch.begin(), scratch.end());
+					native->Bind(worker, context.view);
+					lua_pushboolean(worker, true); lua_setglobal(worker, "_ScriptGraphFrozenDependencies");
+					Bind(worker, context, "_ScriptGraphThreadCapture", Guard<ThreadCapture>);
+					Bind(worker, context, "_ScriptGraphOpenUpvalues", Guard<OpenUpvalues>);
+					Bind(worker, context, "_ScriptGraphRandomState", Guard<RandomState>);
+					Bind(worker, context, "_ScriptGraphDirtyRoots", Guard<DirtyRoots>);
+					Bind(worker, context, "_ScriptGraphClock", Clock);
+					Bind(worker, context, "_ScriptGraphNoteCarried", Guard<NoteCarried>);
+					Bind(worker, context, "_ScriptGraphBeginCapture", Guard<BeginCapture>);
+					Bind(worker, context, "_ScriptGraphEndCapture", Guard<EndCapture>);
+					Bind(worker, context, "_ScriptGraphBeginRoot", Guard<BeginRoot>);
+					Bind(worker, context, "_ScriptGraphReuseRoot", Guard<ReuseRoot>);
+					Bind(worker, context, "_ScriptGraphNoteTable", Guard<NoteValue>);
+					Bind(worker, context, "_ScriptGraphNoteValue", Guard<NoteValue>);
+					Bind(worker, context, "_ScriptGraphNoteUncacheable", Guard<NoteUncacheable>);
+					Bind(worker, context, "_ScriptGraphNoteRootReuse", Guard<NoteRootReuse>);
+					Bind(worker, context, "_ScriptGraphWalkPart", Guard<WalkPart>);
+					// The capture's descriptor was taken out of the live globals before the freeze; the walk reads it under its name.
+					if (callbackObjects && tvistab(&callbacks)) {
+						callbackObjects->Push(worker, context.view);
+						context.view.InjectLocal(worker, tabV(&callbacks), "objects");
+					}
+					if (tvistab(&callbacks)) context.view.Inject(tabV(&globals), "_ScriptGraphCallbacks", callbacks);
+					context.view.Push(worker, globals); lua_setglobal(worker, "_G");
+					context.view.Push(worker, baseline); lua_setglobal(worker, "_ScriptGraphBaseline");
+					context.view.Push(worker, package); lua_setglobal(worker, "package");
+					if (first) {
+						Check(worker, luaL_loadstring(worker, helperSource), "could not load the frozen graph helper");
+						lua_newtable(worker);
+						lua_pushcfunction(worker, NotCapturing); lua_setfield(worker, -2, "active");
+						if (!peerMark.empty()) { lua_pushlstring(worker, peerMark.data(), peerMark.size()); lua_setfield(worker, -2, "peerMark"); }
+						context.view.Push(worker, *labels); lua_setfield(worker, -2, "keyLabels");
+						Check(worker, lua_pcall(worker, 1, 0, 0), "could not initialize the frozen graph helper");
+					}
+					lua_getglobal(worker, "_ScriptGraph");
+					if (!lua_istable(worker, -1)) throw std::runtime_error("the frozen graph helper supplied no graph interface");
+					const int graph = lua_gettop(worker);
+					lua_getfield(worker, graph, "replaceCaptureKeyLabels"); context.view.Push(worker, *labels);
+					Check(worker, lua_pcall(worker, 1, 0, 0), "could not refresh frozen graph key labels");
+					lua_getfield(worker, graph, "captureKeyLabels");
+					if (!lua_isfunction(worker, -1)) throw std::runtime_error("the frozen graph helper has no key-label handoff");
+					Check(worker, lua_pcall(worker, 0, 1, 0), "could not inspect frozen graph key labels");
+					VerifyLabels(worker, context.view, lua_gettop(worker));
+					lua_pop(worker, 1);
+					lua_getfield(worker, graph, "serialize");
+					if (!lua_isfunction(worker, -1)) throw std::runtime_error("the frozen graph helper supplied no serializer");
+					context.view.Push(worker, roots);
+					lua_pushnumber(worker, static_cast<lua_Number>(liveSerial));
+					Check(worker, lua_pcall(worker, 2, 2, 0), "could not serialize the frozen Lua graph");
+					const auto nativeFinish = std::chrono::steady_clock::now();
+					if (!lua_istable(worker, -1)) throw std::runtime_error("the frozen graph serializer supplied no refusal list");
+					std::vector<std::string> problems;
+					const int refusals = lua_gettop(worker);
+					lua_pushnil(worker);
+					while (lua_next(worker, refusals)) {
+						if (lua_type(worker, -1) != LUA_TSTRING) throw std::runtime_error("the frozen graph serializer supplied an invalid refusal");
+						size_t size = 0;
+						const char* message = lua_tolstring(worker, -1, &size);
+						problems.emplace_back(message, size);
+						lua_pop(worker, 1);
+					}
+					for (std::string& problem: native->UnreachedOwners(context.carriedObjects)) problems.push_back(std::move(problem));
+					if (!problems.empty()) { context.walked = false; context.dependencies.clear(); throw ScriptGraphRefusal(std::move(problems)); }
+					if (lua_type(worker, -2) != LUA_TSTRING) throw std::runtime_error("the frozen graph serializer supplied no archive text");
+					size_t size = 0;
+					const char* bytes = lua_tolstring(worker, -2, &size);
+					context.Part("native_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeFinish).count(), false, {});
+					*observations = context.stats;
+					result.assign(bytes, size);
+				});
+			} catch (const std::exception&) {
+				owner->state.reset();
+				owner->context.reset();
+				throw;
 			}
-			if (tvistab(&callbacks)) context.view.Inject(tabV(&globals), "_ScriptGraphCallbacks", callbacks);
-			context.view.Push(worker, globals); lua_setglobal(worker, "_G");
-			context.view.Push(worker, baseline); lua_setglobal(worker, "_ScriptGraphBaseline");
-			context.view.Push(worker, package); lua_setglobal(worker, "package");
-			if (first) {
-				Check(worker, luaL_loadstring(worker, helperSource), "could not load the frozen graph helper");
-				lua_newtable(worker);
-				lua_pushcfunction(worker, NotCapturing); lua_setfield(worker, -2, "active");
-				if (!peerMark.empty()) { lua_pushlstring(worker, peerMark.data(), peerMark.size()); lua_setfield(worker, -2, "peerMark"); }
-				context.view.Push(worker, *labels); lua_setfield(worker, -2, "keyLabels");
-				Check(worker, lua_pcall(worker, 1, 0, 0), "could not initialize the frozen graph helper");
-			}
-			lua_getglobal(worker, "_ScriptGraph");
-			if (!lua_istable(worker, -1)) throw std::runtime_error("the frozen graph helper supplied no graph interface");
-			const int graph = lua_gettop(worker);
-			lua_getfield(worker, graph, "replaceCaptureKeyLabels"); context.view.Push(worker, *labels);
-			Check(worker, lua_pcall(worker, 1, 0, 0), "could not refresh frozen graph key labels");
-			lua_getfield(worker, graph, "captureKeyLabels");
-			if (!lua_isfunction(worker, -1)) throw std::runtime_error("the frozen graph helper has no key-label handoff");
-			Check(worker, lua_pcall(worker, 0, 1, 0), "could not inspect frozen graph key labels");
-			VerifyLabels(worker, context.view, lua_gettop(worker));
-			lua_pop(worker, 1);
-			lua_getfield(worker, graph, "serialize");
-			if (!lua_isfunction(worker, -1)) throw std::runtime_error("the frozen graph helper supplied no serializer");
-			context.view.Push(worker, roots);
-			lua_pushnumber(worker, static_cast<lua_Number>(liveSerial));
-			Check(worker, lua_pcall(worker, 2, 2, 0), "could not serialize the frozen Lua graph");
-			const auto nativeFinish = std::chrono::steady_clock::now();
-			if (!lua_istable(worker, -1)) throw std::runtime_error("the frozen graph serializer supplied no refusal list");
-			std::vector<std::string> problems;
-			const int refusals = lua_gettop(worker);
-			lua_pushnil(worker);
-			while (lua_next(worker, refusals)) {
-				if (lua_type(worker, -1) != LUA_TSTRING) throw std::runtime_error("the frozen graph serializer supplied an invalid refusal");
-				size_t size = 0;
-				const char* message = lua_tolstring(worker, -1, &size);
-				problems.emplace_back(message, size);
-				lua_pop(worker, 1);
-			}
-			for (std::string& problem: native->UnreachedOwners(context.carriedObjects)) problems.push_back(std::move(problem));
-			if (!problems.empty()) { context.walked = false; context.dependencies.clear(); throw ScriptGraphRefusal(std::move(problems)); }
-			if (lua_type(worker, -2) != LUA_TSTRING) throw std::runtime_error("the frozen graph serializer supplied no archive text");
-			size_t size = 0;
-			const char* bytes = lua_tolstring(worker, -2, &size);
-			context.Part("native_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeFinish).count(), false, {});
-			*observations = context.stats;
-			return std::string(bytes, size);
+			return result;
 		}
 
 	private:
@@ -212,6 +224,7 @@ namespace RTE::CheckpointLua {
 
 		static void Check(lua_State* state, int status, const char* operation) {
 			if (status == 0) return;
+			if (status == LUA_ERRMEM) throw std::bad_alloc();
 			size_t size = 0;
 			const char* bytes = lua_tolstring(state, -1, &size);
 			std::string message = operation;

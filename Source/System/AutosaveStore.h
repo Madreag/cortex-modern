@@ -191,7 +191,8 @@ namespace RTE {
 
 		/// Whether the archive is restorable: every entry a restore reads is complete, a descriptor of a schema
 		/// we know rides along, and the tick in the name, in the descriptor and in the world all agree.
-		static bool Validate(const std::filesystem::path& path, AutosaveDescriptor& out, std::string* error = nullptr);
+		/// A pending archive validates against its final name before publication.
+		static bool Validate(const std::filesystem::path& path, AutosaveDescriptor& out, std::string* error = nullptr, const std::filesystem::path* publishedPath = nullptr);
 		/// Whether this directory already holds the match's checkpoint at that tick under a higher host generation: a writer of a
 		/// lower one never replaces it.
 		static bool HigherGenerationHolds(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick, uint64_t generation);

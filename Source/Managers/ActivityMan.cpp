@@ -535,6 +535,12 @@ namespace {
 			std::filesystem::remove(archive.path, ignored);
 			throw std::runtime_error("a higher host generation already holds tick " + std::to_string(manifest->savedTick));
 		}
+		AutosaveDescriptor published;
+		if (automatic) {
+			std::string refusal;
+			if (!AutosaveStore::Validate(archive.path, published, &refusal, &savePath))
+				throw std::runtime_error("the pending checkpoint is not restorable: " + refusal);
+		}
 #ifdef _WIN32
 		if (automatic) {
 			if (!MoveFileExW(archive.path.c_str(), savePath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) throw std::runtime_error("could not publish autosave: " + std::to_string(GetLastError()));
@@ -544,14 +550,6 @@ namespace {
 			std::filesystem::rename(archive.path, savePath);
 		}
 		if (automatic) {
-			// A checkpoint nobody can restore is not a checkpoint: it is proven readable before it counts.
-			AutosaveDescriptor published;
-			std::string refusal;
-			if (!AutosaveStore::Validate(savePath, published, &refusal)) {
-				std::error_code ignored;
-				std::filesystem::remove(savePath, ignored);
-				throw std::runtime_error("the published checkpoint is not restorable: " + refusal);
-			}
 			// A heal names the rewind point from this record instead of reading every archive again.
 			if (manifest) {
 				published.worldBoot = manifest->worldBoot;

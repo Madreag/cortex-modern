@@ -10458,10 +10458,17 @@ end
 		const auto waitedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - entered).count();
 		for (auto& task: busy) task.wait();
 		bool imageHeld = false, liveWritten = false;
+		bool borrowedReads = false;
 		try {
 			const auto image = frozen.ReadBytes(array, bytes);
 			imageHeld = bytes > 0 && image.size() == bytes && std::memcmp(image.data(), before.data(), bytes) == 0;
 			liveWritten = bytes > 0 && std::memcmp(array, before.data(), bytes) != 0;
+			borrowedReads = bytes > CheckpointLua::Snapshot::c_PageBytes * 2;
+			for (size_t pass = 0; pass < 256 && borrowedReads; ++pass) {
+				const size_t offset = pass % sizeof(TValue);
+				const auto again = frozen.ReadBytes(reinterpret_cast<const std::byte*>(array) + offset, bytes - offset);
+				borrowedReads = again.data() == image.data() + offset && std::memcmp(again.data(), before.data() + offset, bytes - offset) == 0;
+			}
 		} catch (const std::exception& error) {
 			std::cout << "[script-graph-selftest] gate probe: " << error.what() << std::endl;
 		}
@@ -10470,6 +10477,8 @@ end
 		std::cout << "[script-graph-selftest] " << (gated ? "PASS" : "FAIL") << " a_state_entered_during_its_page_copy_waits_for_it image_held="
 		          << imageHeld << " live_written=" << liveWritten << " entry_waited_ms=" << waitedMs << std::endl;
 		checkpointValues = gated && checkpointValues;
+		std::cout << "[script-graph-selftest] " << (borrowedReads ? "PASS" : "FAIL") << " repeated_cross_page_reads_borrow_the_frozen_mapping" << std::endl;
+		checkpointValues = borrowedReads && checkpointValues;
 	}
 
 	if (m_CheckpointHeap) {
