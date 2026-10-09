@@ -11108,16 +11108,17 @@ namespace RTE {
 					++m_Stats.ignoredAdmissionFaults;
 					break;
 				}
-				// The relay host adjudicates a client drop as a leave at the first frame it has no data
-				// for, so the survivors keep playing; a host drop still ends the match. The relayed
+				// The relay host records a client disconnect; continuous silence is adjudicated
+				// separately at the first missing input. A host drop uses the common host-change wait. The relayed
 				// frames precede this notice on the reliable lane, so no survivor learns of the leave
 				// before it holds everything the leave references.
 				if (m_RelayHost && lockstepPeer != 0 && m_State == NetLockstepState::Running) {
 					ApplyPeerLeave(lockstepPeer, FirstFrameWithout(lockstepPeer), "connection lost", nowMs, false, false, false, false, false, true);
 					break;
 				}
-				// Before the agreed start the bounded wait holds a seat whose link died, as its answer budget would.
-				if (m_RelayHost && lockstepPeer != 0 && m_State == NetLockstepState::WaitingForStart && UsesBoundedWait() && m_RequirePublishedStart &&
+				// Every startup keeps the human barrier after a closed link. Timing/catch-up settings
+				// cannot turn this into an End or an AI hold before the host commits combat.
+				if (m_RelayHost && lockstepPeer != 0 && m_State == NetLockstepState::WaitingForStart &&
 				    m_Config.localPeerId == GetHostPeerId() && !m_AgreedStartApplied) {
 					m_StartupLinksLost.insert(lockstepPeer);
 					m_RemoteTransports.erase(lockstepPeer);

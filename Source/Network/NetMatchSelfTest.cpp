@@ -6986,6 +6986,7 @@ namespace RTE {
 			if (!mover) return fail("round 1 did not seat lockstep peer 4");
 			const uint16_t stableSeat = mover->reconnect.GetRecord().stableSeat;
 			for (int shrink = 1; shrink <= shrinks; ++shrink) {
+				if (!PlayRematchTicks(fixture, 2)) return fail("the round before clean leave " + std::to_string(shrink) + " never committed");
 				RematchPeer* leaver = fixture.Client(shrink == 1 ? 3 : 2);
 				if (!leaver || !LeaveRematchRound(fixture, *leaver, &step)) {
 					return fail("clean leave " + std::to_string(shrink) + " did not settle");

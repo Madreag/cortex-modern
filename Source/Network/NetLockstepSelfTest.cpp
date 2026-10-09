@@ -4615,17 +4615,17 @@ namespace RTE {
 		return QuorumFoldsAgree(r, {2, 3, 4}, error);
 		}
 
-		bool TestALinkLostBeforeStartKeepsTheBarrier(std::string* error) {
+		bool TestALinkLostBeforeStartKeepsTheBarrier(std::string* error, bool paced = true) {
 			LoopbackTransport hostWire, clientWire;
 			NetLockstepCoordinator host, client;
 			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A3B, 1, NetTransportLane::ControlReliable);
 			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A3B, 1, NetTransportLane::ControlReliable);
 			hostConfig.startFrame = clientConfig.startFrame = 1;
 			hostConfig.roundId = clientConfig.roundId = 0x9A3B;
-			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			hostConfig.simTickMs = clientConfig.simTickMs = paced ? 1000.0 / 60.0 : 0.0;
 			hostConfig.timeoutMs = clientConfig.timeoutMs = 30000;
 			hostConfig.relayToOtherPeers = true;
-			hostConfig.substituteSlowPeers = clientConfig.substituteSlowPeers = true;
+			hostConfig.substituteSlowPeers = clientConfig.substituteSlowPeers = paced;
 			hostConfig.matchConfig = clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A3B);
 			hostConfig.requirePublishedStart = clientConfig.requirePublishedStart = true;
 			if (!StartCoordinatorPair(48905, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
@@ -18743,11 +18743,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			// A departed process no longer emits authenticated keepalives after its final leave fact.
 			leaverT.Stop();
 			if (!drive(
-				[&] { return host.GetPeerLeaveFrames().contains(2) && survivor.GetPeerLeaveFrames().contains(2); }, error, 8000)) {
+				[&] { return host.GetPeerLeaveFrames().contains(2); }, error, 8000)) {
 				return finish("departure did not reach both survivors");
 			}
 			const uint64_t leaveFrame = host.GetPeerLeaveFrames().at(2);
-			if (leaveFrame == 0 || survivor.GetPeerLeaveFrames().at(2) != leaveFrame) return finish("leave frames disagree");
+			if (leaveFrame == 0) return finish("the host ordered an invalid leave frame");
 			for (uint64_t tick = 4; tick <= leaveFrame + 1; ++tick) {
 				if (!host.QueueLocalInput(tick, {MakeFrame(100, tick)}, {}, error) ||
 					!survivor.QueueLocalInput(tick, {MakeFrame(300, tick)}, {}, error)) return finish("survivor input refused");
@@ -18773,6 +18773,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return committed[0].contains(leaveFrame + 1) && committed[1].contains(leaveFrame + 1);
 			}, error)) return finish("survivors did not commit leaveFrame+1; committed=" + std::to_string(committed[0].size()) + "/" + std::to_string(committed[1].size()) +
 				" host=" + host.BuildReportJson() + " survivor=" + survivor.BuildReportJson());
+			if (!survivor.GetPeerLeaveFrames().contains(2) || survivor.GetPeerLeaveFrames().at(2) != leaveFrame)
+				return finish("the committed leave frames disagree");
 
 			std::unique_ptr<Activity> activity(new Activity());
 			g_ActivityMan.SwapCheckpointActivity(activity);
@@ -19051,6 +19053,18 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			NetLockstepCoordinator host, leaver, survivor;
 			NetMatchConfig match;
 			uint64_t leaveFrame = 0;
+			uint64_t now = 0;
+			bool Drive(const std::function<bool()>& done, std::string* error, uint64_t maxMs = 4000) {
+				const uint64_t until = now + maxMs;
+				while (now <= until) {
+					host.Tick(now); leaver.Tick(now); survivor.Tick(now);
+					now += 5;
+					hostT.AdvanceTimeMs(5); leaverT.AdvanceTimeMs(5); survivorT.AdvanceTimeMs(5);
+					if (done()) return true;
+				}
+				if (error) *error = "leave trio did not reach its condition: " + host.BuildReportJson();
+				return false;
+			}
 			std::array<std::map<uint64_t, NetLockstepReadyFrame>, 2> committed; // [0] host's view, [1] survivor's.
 
 			bool Start(uint16_t port, uint64_t sessionId, std::string* error) {
@@ -19079,7 +19093,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				if (!host.Start(hostT, config(1, {{2, 1}, {3, 2}}), error) ||
 				    !leaver.Start(leaverT, config(2, {{1, 1}}), error) ||
 				    !survivor.Start(survivorT, config(3, {{1, 1}}), error) ||
-				    !DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor,
+				    !Drive(
 				               [&] { return host.IsRunning() && leaver.IsRunning() && survivor.IsRunning(); }, error)) {
 					return false;
 				}
@@ -19090,18 +19104,19 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 						return false;
 					}
 				}
-				return DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor,
+				return Drive(
 				                 [&] { return host.GetStats().framesAccepted >= 4 && survivor.GetStats().framesAccepted >= 4; }, error);
 			}
 
 			bool Depart(uint64_t throughFrames, std::string* error) {
 				leaver.Leave("leave follow-up selftest");
-				if (!DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor,
-				               [&] { return host.GetPeerLeaveFrames().contains(2) && survivor.GetPeerLeaveFrames().contains(2); }, error, 8000)) {
+				leaverT.Stop();
+				if (!Drive(
+				               [&] { return host.GetPeerLeaveFrames().contains(2); }, error, 8000)) {
 					return false;
 				}
 				leaveFrame = host.GetPeerLeaveFrames().at(2);
-				if (leaveFrame == 0 || survivor.GetPeerLeaveFrames().at(2) != leaveFrame) {
+				if (leaveFrame == 0) {
 					if (error) *error = "leave frames disagree";
 					return false;
 				}
@@ -19111,11 +19126,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 						return false;
 					}
 				}
-				return DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor, [&] {
+				return Drive( [&] {
 					NetLockstepReadyFrame ready;
 					while (host.PopReadyFrame(ready)) committed[0][ready.frame] = ready;
 					while (survivor.PopReadyFrame(ready)) committed[1][ready.frame] = ready;
-					return committed[0].contains(leaveFrame + throughFrames) && committed[1].contains(leaveFrame + throughFrames);
+					return committed[0].contains(leaveFrame + throughFrames) && committed[1].contains(leaveFrame + throughFrames) &&
+					       survivor.GetPeerLeaveFrames().contains(2) && survivor.GetPeerLeaveFrames().at(2) == leaveFrame;
 				}, error);
 			}
 		};
@@ -28382,7 +28398,8 @@ namespace {
 		row(&TestAThinLeadIsRaisedBeforeASpike, "a_thin_lead_is_raised_before_a_spike");
 		row(&TestAWorldAdmissionClearsAReleasedSeat, "a_world_admission_clears_a_released_seat");
 		row(&TestAReturnerAnswersItsSuccessor, "a_returner_answers_its_successor");
-		row(&TestALinkLostBeforeStartKeepsTheBarrier, "a_link_lost_before_start_keeps_the_barrier");
+		row([](std::string* rowError) { return TestALinkLostBeforeStartKeepsTheBarrier(rowError); }, "a_link_lost_before_start_keeps_the_barrier");
+		row([](std::string* rowError) { return TestALinkLostBeforeStartKeepsTheBarrier(rowError, false); }, "an_unpaced_start_keeps_the_human_barrier");
 		row(&TestTheFirstFramesRideOutABurstOnALongLink, "the_first_frames_ride_out_a_burst_on_a_long_link");
 		row(&TestAPeerIsDueADelayAfterAPark, "a_peer_is_due_a_delay_after_a_park");
 		row(&TestAFeedingPeerIsWaitedOnWithinTheBound, "a_feeding_peer_is_waited_on_within_the_bound");
