@@ -20073,6 +20073,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					if (message.type == NetHostMigrationMessageType::Answer && message.senderPeerId == 2) {
 						if (m_Schedule->staleAnswer && m_Schedule->plans == 0) {
 							message.appliedFrame = 4;
+							message.preparedFrame = 4;
 							std::vector<uint8_t> stale;
 							return NetHostMigrationCodec::Encode(message, key, stale) && LoopbackTransport::Send(peer, lane, stale, error, congested);
 						}
@@ -21028,6 +21029,18 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					if (a.IsStopped() || a.IsFailed() || (!skipSuccessor && (b.IsStopped() || b.IsFailed())))
 						break;
 				}
+				if (skipSuccessor) {
+					const bool contactedGone = std::find(schedule->contactedPorts.begin(), schedule->contactedPorts.end(), port + 3) != schedule->contactedPorts.end();
+					// Skipping a departed candidate does not supply the remaining voter with the old host's vote.
+					if (resumed || !a.IsStopped() || a.GetHostPeerId() != 1 || a.GetConfig().migrationGeneration != 0 ||
+					    a.GetResumeFrame() != 6 || !a.IsPeerGoneAtFrame(3, 6) || contactedGone || schedule->plans != 0 ||
+					    a.GetStats().timeoutReason != "PeerHeld:The host is unreachable - 1 of 2 players reachable") {
+						*error = "skip without quorum elapsed=" + std::to_string(now - migrationStarted) + " contacted=" + nlohmann::json(schedule->contactedPorts).dump() + " A=" + a.BuildReportJson();
+						return false;
+					}
+					std::cout << "[host-migration-selftest] PASS: the departed successor is skipped and one remaining voter cannot replace the silent host" << std::endl;
+					return true;
+				}
 				if (!resumed) {
 					*error = "handover A=" + a.BuildReportJson() + " B=" + b.BuildReportJson();
 					return false;
@@ -21047,15 +21060,6 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 						*error = "delayed answers=" + std::to_string(schedule->delayedAnswers) + " released=" + std::to_string(schedule->releasedAnswers) + " successors=" + nlohmann::json(schedule->successors).dump() + " local departures=" + nlohmann::json(a.GetPeerLeaveFrames()).dump() + " A=" + a.BuildReportJson() + " B=" + b.BuildReportJson();
 						return false;
 					}
-				}
-				if (skipSuccessor) {
-					const bool contactedGone = std::find(schedule->contactedPorts.begin(), schedule->contactedPorts.end(), port + 3) != schedule->contactedPorts.end();
-					if (a.GetHostPeerId() != 2 || !a.GetConfig().relayToOtherPeers || !a.IsPeerGoneAtFrame(3, 6) || contactedGone || now - migrationStarted >= a.GetConfig().timeoutMs) {
-						*error = "skip elapsed=" + std::to_string(now - migrationStarted) + " contacted=" + nlohmann::json(schedule->contactedPorts).dump() + " A=" + a.BuildReportJson();
-						return false;
-					}
-					std::cout << "[host-migration-selftest] PASS: peer3 leave observed before host loss; peer2 hosts without dialing peer3 or expiring Contacting" << std::endl;
-					return true;
 				}
 				if (b.GetHostPeerId() != 3 || !b.GetConfig().relayToOtherPeers || b.GetConfig().localPeerId != 3 || b.GetMigrationResult().boundary != 5 || b.GetConfig().startFrame != 6 || b.GetRoundId() != 0x45791002 || b.GetConfig().matchConfig != match) {
 					*error = "successor=" + b.BuildReportJson() + " config_hash=" + NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(b.GetConfig().matchConfig));
