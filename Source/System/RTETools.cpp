@@ -1,4 +1,3 @@
-#include "DeterministicMath.h"
 #include "RTETools.h"
 
 #include "Vector.h"
@@ -152,15 +151,15 @@ namespace RTE {
 
 	Matrix Lerp(float scaleStart, float scaleEnd, const Matrix& startRot, const Matrix& endRot, float progressScalar) {
 		const float fullTurn = c_PI * 2.0F;
-		float angleDelta = DeterministicFmod(endRot.GetRadAngle() - startRot.GetRadAngle(), fullTurn);
-		float angleDistance = DeterministicFmod(angleDelta * 2.0F, fullTurn) - angleDelta;
+		float angleDelta = std::fmod(endRot.GetRadAngle() - startRot.GetRadAngle(), fullTurn);
+		float angleDistance = std::fmod(angleDelta * 2.0F, fullTurn) - angleDelta;
 		return Matrix(startRot.GetRadAngle() + (angleDistance * Lerp(scaleStart, scaleEnd, 0.0F, 1.0F, progressScalar)));
 	}
 
 	Matrix Lerp(const Matrix& startRot, const Matrix& endRot, float progressScalar) {
 		const float fullTurn = c_PI * 2.0F;
-		float angleDelta = DeterministicFmod(endRot.GetRadAngle() - startRot.GetRadAngle(), fullTurn);
-		float angleDistance = DeterministicFmod(angleDelta * 2.0F, fullTurn) - angleDelta;
+		float angleDelta = std::fmod(endRot.GetRadAngle() - startRot.GetRadAngle(), fullTurn);
+		float angleDistance = std::fmod(angleDelta * 2.0F, fullTurn) - angleDelta;
 		return Matrix(startRot.GetRadAngle() + (angleDistance * progressScalar));
 	}
 
@@ -228,14 +227,14 @@ namespace RTE {
 		while (angle < 0) {
 			angle += c_TwoPI;
 		}
-		return (angle > c_TwoPI) ? DeterministicFmod(angle + c_TwoPI, c_TwoPI) : angle;
+		return (angle > c_TwoPI) ? fmodf(angle + c_TwoPI, c_TwoPI) : angle;
 	}
 
 	float NormalizeAngleBetweenNegativePIAndPI(float angle) {
 		while (angle < 0) {
 			angle += c_TwoPI;
 		}
-		return (angle > c_PI) ? DeterministicFmod(angle + c_PI, c_TwoPI) - c_PI : angle;
+		return (angle > c_PI) ? fmodf(angle + c_PI, c_TwoPI) - c_PI : angle;
 	}
 
 	bool AngleWithinRange(float angleToCheck, float startAngle, float endAngle) {
@@ -275,7 +274,7 @@ namespace RTE {
 			floatStream << std::fixed << std::setprecision(precision) << input;
 			return floatStream.str();
 		} else {
-			float precisionMagnitude = static_cast<float>(DeterministicPow(10.0, static_cast<double>(precision)));
+			float precisionMagnitude = std::pow(10.0F, static_cast<float>(precision));
 			RTEAssert(precisionMagnitude < std::numeric_limits<float>::max(), "Precision set greater than able to display (exponent too high)!");
 			RTEAssert(precisionMagnitude > 0, "Negative precision will yield divide by zero error!");
 			RTEAssert(input < (std::numeric_limits<float>::max() / precisionMagnitude), "Value will exceed numeric limits with precision " + std::to_string(precision));

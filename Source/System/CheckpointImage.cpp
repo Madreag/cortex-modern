@@ -1,4 +1,3 @@
-#include "FloatingPointEnvironment.h"
 #include "CheckpointImage.h"
 #include "PageWriteFence.h"
 #include "CheckpointArchive.h"
@@ -1041,7 +1040,7 @@ end
 	const CheckpointText shadow = capture(&cache);
 	const float pinned = live->GetPinStrength();
 	std::atomic<bool> go{false};
-	auto worker = FloatingPointEnvironment::Async(std::launch::async, [&shadow, &go] {
+	auto worker = std::async(std::launch::async, [&shadow, &go] {
 		while (!go.load(std::memory_order_acquire)) {}
 		return shadow.Text();
 	});
@@ -1128,7 +1127,7 @@ bool RTE::RunCheckpointImageSelfTest() {
 				LuaCheckpointBarrierPause pause;
 				OnLuaTableWrite(&table);
 				duringOwn = LuaCheckpointPausedWrites();
-				auto foreign = FloatingPointEnvironment::StartThread([&table] { OnLuaTableWrite(&table); });
+				std::thread foreign([&table] { OnLuaTableWrite(&table); });
 				foreign.join();
 			}
 			const uint64_t after = LuaCheckpointPausedWrites();

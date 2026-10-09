@@ -1,4 +1,3 @@
-#include "FloatingPointEnvironment.h"
 #include "MetricsCollector.h"
 
 #include "ScenarioRunner.h"
@@ -140,7 +139,7 @@ namespace RTE {
 		}
 
 		bool Start() {
-			thread = FloatingPointEnvironment::StartThread([this] { Run(); });
+			thread = std::thread([this] { Run(); });
 			return true;
 		}
 

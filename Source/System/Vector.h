@@ -1,6 +1,5 @@
 #pragma once
 
-#include "DeterministicMath.h"
 #include "Serializable.h"
 #include "RTETools.h"
 #include "glm/vec2.hpp"
@@ -146,7 +145,7 @@ namespace RTE {
 
 		/// Gets the magnitude of this Vector.
 		/// @return A float describing the magnitude.
-		inline float GetMagnitude() const { return DeterministicSqrt(GetSqrMagnitude()); }
+		inline float GetMagnitude() const { return std::sqrt(GetSqrMagnitude()); }
 
 		/// Gets whether this Vector's magnitude is less than the specified value.
 		/// @param magnitude A float value that this Vector's magnitude will be compared against.

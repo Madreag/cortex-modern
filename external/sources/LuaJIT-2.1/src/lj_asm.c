@@ -1725,7 +1725,7 @@ static void asm_loop(ASMState *as)
 
 #if !LJ_SOFTFP32
 #if !LJ_TARGET_X86ORX64
-#define asm_ldexp(as, ir)	asm_callid(as, ir, IRCALL_lj_vm_math_ldexp)
+#define asm_ldexp(as, ir)	asm_callid(as, ir, IRCALL_ldexp)
 #endif
 
 static void asm_pow(ASMState *as, IRIns *ir)
@@ -1736,7 +1736,7 @@ static void asm_pow(ASMState *as, IRIns *ir)
 					  IRCALL_lj_carith_powu64);
   else
 #endif
-  asm_callid(as, ir, IRCALL_lj_vm_math_pow);
+  asm_callid(as, ir, IRCALL_pow);
 }
 
 static void asm_div(ASMState *as, IRIns *ir)

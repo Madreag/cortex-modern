@@ -1,4 +1,3 @@
-#include "FloatingPointEnvironment.h"
 #include "PathFinder.h"
 
 #include "Material.h"
@@ -649,7 +648,6 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 			    request.pathLength = request.path.size();
 
 			    if (callback) {
-				    const FloatingPointEnvironment::Scope scope("path callback");
 				    callback(volRequest);
 			    }
 
@@ -728,7 +726,6 @@ void PathFinder::PublishDeferredPathRequest(DeferredPathRequest& deferred) {
 	}
 	request.pathLength = request.path.size();
 	if (deferred.callback) {
-		const FloatingPointEnvironment::Scope scope("deferred path callback");
 		deferred.callback(deferred.request);
 	}
 	// Same order as the immediate path: the callback runs first, so anything blocking on complete knows it has run.
@@ -2498,7 +2495,7 @@ int PathFinder::RunHorizonGridSelfTest() {
 		const int other = genFinder.TestNodeIdAt(5, 2);
 		std::atomic<bool> hold{true};
 		std::atomic<bool> holding{false};
-		auto reader = FloatingPointEnvironment::StartThread([&]() {
+		std::thread reader([&]() {
 			const uint64_t pinned = genFinder.BeginCommittedHorizonRead();
 			holding.store(true);
 			while (hold.load()) {
@@ -2509,7 +2506,7 @@ int PathFinder::RunHorizonGridSelfTest() {
 		while (!holding.load()) {
 			std::this_thread::yield();
 		}
-		auto releaser = FloatingPointEnvironment::StartThread([&]() {
+		std::thread releaser([&]() {
 			std::this_thread::sleep_for(std::chrono::milliseconds(20));
 			hold.store(false);
 		});

@@ -2,9 +2,7 @@
 
 using namespace RTE;
 
-ThreadMan::ThreadMan() :
-    m_PriorityThreadPool(0, FloatingPointEnvironment::Initialize, [] { FloatingPointEnvironment::Assert("priority task"); }),
-    m_BackgroundThreadPool(0, FloatingPointEnvironment::Initialize, [] { FloatingPointEnvironment::Assert("background task"); }) {
+ThreadMan::ThreadMan() {
 	Clear();
 	Create();
 }

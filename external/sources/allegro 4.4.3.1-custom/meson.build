@@ -83,7 +83,6 @@ if compiler.get_argument_syntax() == 'gcc'
   c_args = ['-Wno-deprecated-declarations', '-DTRACY_ENABLE']
 else
 endif
-c_args += compiler.get_supported_arguments(['-ffp-contract=off', '-fno-fast-math', '/fp:precise'])
 allegro_args = ['-DALLEGRO_NO_COMPATIBILITY']
 allegro_lib = []
 loadpng_lib = []

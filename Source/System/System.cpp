@@ -1,4 +1,3 @@
-#include "FloatingPointEnvironment.h"
 #include "System.h"
 
 #include "RTETools.h"
@@ -138,7 +137,7 @@ namespace {
 		/// How long a fault or the exit waits for the writer before writing past it.
 		static constexpr int c_WriterWaitMs = 2000;
 
-		explicit AsyncConsoleBuf(std::streambuf* target, size_t maxPendingBytes = c_MaxPendingBytes) : m_Target(target), m_MaxPending(maxPendingBytes), m_Writer(FloatingPointEnvironment::StartThread([this] { Run(); })) {}
+		explicit AsyncConsoleBuf(std::streambuf* target, size_t maxPendingBytes = c_MaxPendingBytes) : m_Target(target), m_MaxPending(maxPendingBytes), m_Writer([this] { Run(); }) {}
 
 		// Writes what is queued; with tryOnly it gives up rather than wait on a writer or a queueing thread.
 		bool Drain(bool tryOnly) {
@@ -818,8 +817,8 @@ bool System::RunPrintDisciplineSelfTest() {
 				System::PrintDiagnosticLine(std::string("[print-discipline-selftest] ") + tag + " line " + std::to_string(index));
 			}
 		};
-		auto first = FloatingPointEnvironment::StartThread(printer, "first");
-		auto second = FloatingPointEnvironment::StartThread(printer, "second");
+		std::thread first(printer, "first");
+		std::thread second(printer, "second");
 		while (ready.load() < 2) std::this_thread::yield();
 		go.store(true);
 		first.join();
@@ -851,7 +850,7 @@ bool System::RunPrintDisciplineSelfTest() {
 		const std::string firstLine = "[print-discipline-selftest] parked writer line";
 		const std::string secondLine = "[print-discipline-selftest] other writer line";
 		std::streambuf* original = std::cout.rdbuf(&splicer);
-		auto other = FloatingPointEnvironment::StartThread([&splicer, &secondLine] {
+		std::thread other([&splicer, &secondLine] {
 			splicer.WaitUntilParked();
 			System::PrintDiagnosticLine(secondLine);
 		});

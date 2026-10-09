@@ -35,17 +35,17 @@ LJLIB_ASM(math_sqrt)		LJLIB_REC(math_unary IRFPM_SQRT)
   lj_lib_checknum(L, 1);
   return FFH_RETRY;
 }
-LJLIB_ASM_(math_log10)		LJLIB_REC(math_call IRCALL_lj_vm_math_log10)
-LJLIB_ASM_(math_exp)		LJLIB_REC(math_call IRCALL_lj_vm_math_exp)
-LJLIB_ASM_(math_sin)		LJLIB_REC(math_call IRCALL_lj_vm_math_sin)
-LJLIB_ASM_(math_cos)		LJLIB_REC(math_call IRCALL_lj_vm_math_cos)
-LJLIB_ASM_(math_tan)		LJLIB_REC(math_call IRCALL_lj_vm_math_tan)
-LJLIB_ASM_(math_asin)		LJLIB_REC(math_call IRCALL_lj_vm_math_asin)
-LJLIB_ASM_(math_acos)		LJLIB_REC(math_call IRCALL_lj_vm_math_acos)
-LJLIB_ASM_(math_atan)		LJLIB_REC(math_call IRCALL_lj_vm_math_atan)
-LJLIB_ASM_(math_sinh)		LJLIB_REC(math_call IRCALL_lj_vm_math_sinh)
-LJLIB_ASM_(math_cosh)		LJLIB_REC(math_call IRCALL_lj_vm_math_cosh)
-LJLIB_ASM_(math_tanh)		LJLIB_REC(math_call IRCALL_lj_vm_math_tanh)
+LJLIB_ASM_(math_log10)		LJLIB_REC(math_call IRCALL_log10)
+LJLIB_ASM_(math_exp)		LJLIB_REC(math_call IRCALL_exp)
+LJLIB_ASM_(math_sin)		LJLIB_REC(math_call IRCALL_sin)
+LJLIB_ASM_(math_cos)		LJLIB_REC(math_call IRCALL_cos)
+LJLIB_ASM_(math_tan)		LJLIB_REC(math_call IRCALL_tan)
+LJLIB_ASM_(math_asin)		LJLIB_REC(math_call IRCALL_asin)
+LJLIB_ASM_(math_acos)		LJLIB_REC(math_call IRCALL_acos)
+LJLIB_ASM_(math_atan)		LJLIB_REC(math_call IRCALL_atan)
+LJLIB_ASM_(math_sinh)		LJLIB_REC(math_call IRCALL_sinh)
+LJLIB_ASM_(math_cosh)		LJLIB_REC(math_call IRCALL_cosh)
+LJLIB_ASM_(math_tanh)		LJLIB_REC(math_call IRCALL_tanh)
 LJLIB_ASM_(math_frexp)
 LJLIB_ASM_(math_modf)
 
@@ -54,7 +54,11 @@ LJLIB_ASM(math_log)		LJLIB_REC(math_log)
   double x = lj_lib_checknum(L, 1);
   if (L->base+1 < L->top) {
     double y = lj_lib_checknum(L, 2);
-    x = lj_vm_math_log2(x); y = 1.0 / lj_vm_math_log2(y);
+#ifdef LUAJIT_NO_LOG2
+    x = log(x); y = 1.0 / log(y);
+#else
+    x = lj_vm_log2(x); y = 1.0 / lj_vm_log2(y);
+#endif
     setnumV(L->base-1-LJ_FR2, x*y);  /* Do NOT join the expression to x / y. */
     return FFH_RES(1);
   }
@@ -75,10 +79,13 @@ LJLIB_ASM_(math_fmod)
 
 LJLIB_ASM(math_ldexp)		LJLIB_REC(.)
 {
-  double x = lj_lib_checknum(L, 1);
-  int32_t exponent = lj_lib_checkint(L, 2);
-  setnumV(L->base-1-LJ_FR2, lj_vm_math_ldexp(x, exponent));
-  return FFH_RES(1);
+  lj_lib_checknum(L, 1);
+#if LJ_DUALNUM && !LJ_TARGET_X86ORX64
+  lj_lib_checkint(L, 2);
+#else
+  lj_lib_checknum(L, 2);
+#endif
+  return FFH_RETRY;
 }
 
 LJLIB_ASM(math_min)		LJLIB_REC(math_minmax IR_MIN)
@@ -195,3 +202,4 @@ LUALIB_API int luaopen_math(lua_State *L)
   LJ_LIB_REG(L, LUA_MATHLIBNAME, math);
   return 1;
 }
+

@@ -1,4 +1,3 @@
-#include "DeterministicMath.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "SceneMan.h"
@@ -694,7 +693,7 @@ namespace {
 		// Zero-sharpness particles can meet a zero-strength material, including an
 		// undefined terrain index resolved to Air. That material has no resistance.
 		if (integrity == 0.0F && squaredImpulse == 0.0F) return 0.0F;
-		return -(integrity / DeterministicSqrt(squaredImpulse));
+		return -(integrity / std::sqrt(squaredImpulse));
 	}
 
 	// Feeds one penetration decision into the `carve_math` subsystem. kind: 0 = WillPenetrate,
@@ -939,7 +938,7 @@ bool SceneMan::TryPenetrate(int posX,
 		retardation = PenetrationRetardation(sceneMat->GetIntegrity(), sqrImpMag);
 		if (tracePenetration) {
 			const auto bits = [](float value) { return std::bit_cast<int32_t>(value); };
-			TraceTerrainEvent("pres", bits(DeterministicSqrt(sqrImpMag)), bits(retardation), bits(sceneMat->GetIntegrity()), bits(sqrImpMag), static_cast<int>(s_TerrainEventContextUID));
+			TraceTerrainEvent("pres", bits(std::sqrt(sqrImpMag)), bits(retardation), bits(sceneMat->GetIntegrity()), bits(sqrImpMag), static_cast<int>(s_TerrainEventContextUID));
 		}
 
 		// If this is a scrap pixel, or there is no background pixel 'supporting' the knocked-loose pixel, make the column above also turn into particles.
@@ -952,7 +951,7 @@ bool SceneMan::TryPenetrate(int posX,
 			int testMaterialID = g_MaterialAir;
 			MOPixel* pixelMO = 0;
 			Color spawnColor;
-			float sprayMag = DeterministicSqrt(velocity.GetMagnitude() * sprayScale);
+			float sprayMag = std::sqrt(velocity.GetMagnitude() * sprayScale);
 			Vector sprayVel;
 
 			for (int testY = posY - 1; testY > posY - m_ScrapCompactingHeight && testY >= 0; --testY) {

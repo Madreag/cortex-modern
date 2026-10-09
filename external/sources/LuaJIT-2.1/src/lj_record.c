@@ -2516,11 +2516,9 @@ void lj_record_ins(jit_State *J)
     break;
 
   case BC_POW:
-    if (tref_isnumber_str(rb) && tref_isnumber_str(rc)) {
-      TRef left = lj_ir_tonum(J, rb);
-      TRef right = lj_ir_tonum(J, rc);
-      rc = lj_ir_call(J, IRCALL_lj_vm_math_pow, left, right);
-    } else
+    if (tref_isnumber_str(rb) && tref_isnumber_str(rc))
+      rc = lj_opt_narrow_arith(J, rb, rc, rbv, rcv, IR_POW);
+    else
       rc = rec_mm_arith(J, &ix, MM_pow);
     break;
 

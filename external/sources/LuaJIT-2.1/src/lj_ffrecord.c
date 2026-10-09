@@ -605,7 +605,11 @@ static void LJ_FASTCALL recff_math_log(jit_State *J, RecordFFData *rd)
 {
   TRef tr = lj_ir_tonum(J, J->base[0]);
   if (J->base[1]) {
+#ifdef LUAJIT_NO_LOG2
+    uint32_t fpm = IRFPM_LOG;
+#else
     uint32_t fpm = IRFPM_LOG2;
+#endif
     TRef trb = lj_ir_tonum(J, J->base[1]);
     tr = emitir(IRTN(IR_FPMATH), tr, fpm);
     trb = emitir(IRTN(IR_FPMATH), trb, fpm);
@@ -623,7 +627,7 @@ static void LJ_FASTCALL recff_math_atan2(jit_State *J, RecordFFData *rd)
 {
   TRef tr = lj_ir_tonum(J, J->base[0]);
   TRef tr2 = lj_ir_tonum(J, J->base[1]);
-  J->base[0] = lj_ir_call(J, IRCALL_lj_vm_math_atan2, tr, tr2);
+  J->base[0] = lj_ir_call(J, IRCALL_atan2, tr, tr2);
   UNUSED(rd);
 }
 
@@ -631,8 +635,12 @@ static void LJ_FASTCALL recff_math_atan2(jit_State *J, RecordFFData *rd)
 static void LJ_FASTCALL recff_math_ldexp(jit_State *J, RecordFFData *rd)
 {
   TRef tr = lj_ir_tonum(J, J->base[0]);
+#if LJ_TARGET_X86ORX64
+  TRef tr2 = lj_ir_tonum(J, J->base[1]);
+#else
   TRef tr2 = lj_opt_narrow_toint(J, J->base[1]);
-  J->base[0] = lj_ir_call(J, IRCALL_lj_vm_math_ldexp, tr, tr2);
+#endif
+  J->base[0] = emitir(IRTN(IR_LDEXP), tr, tr2);
   UNUSED(rd);
 }
 
@@ -644,9 +652,8 @@ static void LJ_FASTCALL recff_math_call(jit_State *J, RecordFFData *rd)
 
 static void LJ_FASTCALL recff_math_pow(jit_State *J, RecordFFData *rd)
 {
-  TRef left = lj_ir_tonum(J, J->base[0]);
-  TRef right = lj_ir_tonum(J, J->base[1]);
-  J->base[0] = lj_ir_call(J, IRCALL_lj_vm_math_pow, left, right);
+  J->base[0] = lj_opt_narrow_arith(J, J->base[0], J->base[1],
+				   &rd->argv[0], &rd->argv[1], IR_POW);
   UNUSED(rd);
 }
 

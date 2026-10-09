@@ -1,4 +1,3 @@
-#include "DeterministicMath.h"
 #include "AHuman.h"
 #include "MetricsCollector.h"
 #include "CheckpointArchive.h"
@@ -2821,9 +2820,7 @@ void AHuman::PreControllerUpdate() {
 					}
 				} else {
 					heldDevice->SetPos(arm->GetJointPos() + Vector(arm->GetMaxLength() * GetFlipFactor(), 0).RadRotate(adjustedAimAngle));
-					const float tossSpeed = 1.0F + DeterministicSqrt(std::abs(arm->GetThrowStrength()) / DeterministicSqrt(std::abs(heldDevice->GetMass()) + 1.0F));
-					const float tossDeviation = RandomNormalNum();
-					Vector tossVec(tossSpeed, tossDeviation);
+					Vector tossVec(1.0F + std::sqrt(std::abs(arm->GetThrowStrength()) / std::sqrt(std::abs(heldDevice->GetMass()) + 1.0F)), RandomNormalNum());
 					heldDevice->SetVel(heldDevice->GetVel() * 0.5F + tossVec.RadRotate(m_AimAngle).GetXFlipped(m_HFlipped));
 					heldDevice->SetAngularVel(heldDevice->GetAngularVel() + m_AngularVel * 0.5F + 3.0F * RandomNormalNum());
 
@@ -3356,7 +3353,7 @@ void AHuman::Update() {
 
 	// Add velocity also so the viewpoint moves ahead at high speeds
 	if (m_Vel.MagnitudeIsGreaterThan(10.0F)) {
-		m_ViewPoint += m_Vel * DeterministicSqrt(m_Vel.GetMagnitude() * 0.1F);
+		m_ViewPoint += m_Vel * std::sqrt(m_Vel.GetMagnitude() * 0.1F);
 	}
 
 	////////////////////////////////////////

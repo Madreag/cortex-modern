@@ -1,4 +1,3 @@
-#include "DeterministicMath.h"
 #include "AtomGroup.h"
 #include "Base64/base64.h"
 #include "CheckpointArchive.h"
@@ -518,7 +517,7 @@ float AtomGroup::CalculateMaxRadius() const {
 			sqrLongest = sqrMagnitude;
 		}
 	}
-	return DeterministicSqrt(sqrLongest);
+	return std::sqrt(sqrLongest);
 }
 
 void AtomGroup::SetOwner(MOSRotating* newOwner) {

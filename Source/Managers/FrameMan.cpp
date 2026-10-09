@@ -1,4 +1,3 @@
-#include "FloatingPointEnvironment.h"
 #include "FrameMan.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
@@ -158,7 +157,7 @@ namespace {
 		bool Open(const std::filesystem::path& directory) { return OpenStream(directory) && Start(); }
 		bool OpenStream(const std::filesystem::path& directory) { return m_Stream.Open(directory); }
 		bool Start() {
-			m_Thread = FloatingPointEnvironment::StartThread([this] { Run(); });
+			m_Thread = std::thread([this] { Run(); });
 			return true;
 		}
 		/// False after Close, or once a queued line failed to reach its chunk (the failure shows on the next write). A line past
@@ -518,7 +517,7 @@ void FrameMan::FeelAfterPresent() {
 		SDL_Surface* copy = m_ScreenDumpBuffer ? SDL_DuplicateSurface(m_ScreenDumpBuffer.get()) : nullptr;
 		s_Feel.captures.push_back({{{"type", "capture"}, {"requested_tick", s_Feel.nextCaptureTick}, {"tick", tick}, {"frame", s_Feel.frameNumber},
 		    {"path", name.generic_string()}, {"capture_ms", FeelNowMS() - now}},
-		    FloatingPointEnvironment::Async(std::launch::async, [copy, path = name.string()] {
+		    std::async(std::launch::async, [copy, path = name.string()] {
 			    // The encode's processor time is the recorder's, charged to the frame it ends in.
 			    const auto began = std::chrono::steady_clock::now();
 			    const int64_t cpuBefore = FrameRecorder::ThreadCpuNanoseconds();
