@@ -25,6 +25,8 @@ namespace RTE {
 			/// Copies only from frozen pages; false means the address is outside this pool.
 			bool Read(const void* source, void* destination, size_t bytes) const;
 			bool Contains(const void* source, size_t bytes) const;
+			/// Borrowed fields still match the live capture until a page has opened.
+			bool CanBorrow(const void* source, size_t bytes) const;
 			/// Materializes the remaining pages on the calling worker.
 			void Drain() const;
 			Costs Cost() const;

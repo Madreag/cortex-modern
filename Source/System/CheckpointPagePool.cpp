@@ -57,12 +57,14 @@ namespace {
 
 struct CheckpointPagePool::Copy {
 	Pages pages;
-	std::vector<unsigned char> saved;
+	std::vector<std::atomic<unsigned char>> saved;
 	std::thread::id simThread = std::this_thread::get_id();
 	std::atomic<int64_t> workerUs{0}, simFaultNs{0}, otherFaultNs{0};
 	std::atomic<uint64_t> simFaults{0}, otherFaults{0};
 	bool completed = false;
-	Copy(size_t bytes, size_t pageBytes) : pages(bytes), saved(bytes / pageBytes, 0) {}
+	Copy(size_t bytes, size_t pageBytes) : pages(bytes), saved(bytes / pageBytes) {
+		for (auto& page: saved) page.store(0, std::memory_order_relaxed);
+	}
 };
 
 struct CheckpointPagePool::Block {
@@ -91,9 +93,9 @@ struct CheckpointPagePool::Block {
 		const size_t offset = page * pageBytes;
 		bool savedAny = false;
 		for (const auto& copy: copies) {
-			if (copy->saved[page]) continue;
+			if (copy->saved[page].load(std::memory_order_relaxed)) continue;
 			std::memcpy(copy->pages.data + offset, live.data + offset, pageBytes);
-			copy->saved[page] = 1;
+			copy->saved[page].store(1, std::memory_order_release);
 			savedAny = true;
 		}
 		const bool opened = (!fault && !savedAny) || PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data + offset), pageBytes);
@@ -171,6 +173,21 @@ bool CheckpointPagePool::Snapshot::Contains(const void* source, size_t bytes) co
 	return std::any_of(m_Parts.begin(), m_Parts.end(), [&](const auto& part) { return part.block->Contains(source, bytes); });
 }
 
+bool CheckpointPagePool::Snapshot::CanBorrow(const void* source, size_t bytes) const {
+	const uintptr_t address = reinterpret_cast<uintptr_t>(source);
+	const auto end = std::upper_bound(m_Parts.begin(), m_Parts.end(), address, [](uintptr_t address, const Part& part) {
+		return address < reinterpret_cast<uintptr_t>(part.block->live.data);
+	});
+	if (end == m_Parts.begin()) return false;
+	const Part& part = *std::prev(end);
+	if (!part.block->Contains(source, bytes)) return false;
+	if (!bytes) return true;
+	const size_t first = (address - reinterpret_cast<uintptr_t>(part.block->live.data)) / part.block->pageBytes;
+	const size_t last = (address - reinterpret_cast<uintptr_t>(part.block->live.data) + bytes - 1) / part.block->pageBytes;
+	for (size_t page = first; page <= last; ++page) if (part.copy->saved[page].load(std::memory_order_acquire)) return false;
+	return true;
+}
+
 CheckpointPagePool::Snapshot::~Snapshot() {
 	for (const auto& part: m_Parts) part.block->Abandon(part.copy);
 }
@@ -229,7 +246,9 @@ std::string CheckpointPagePool::SelfTestMismatch() {
 		source = static_cast<unsigned char*>(free.back()) + 17;
 		std::memcpy(source, expected.data(), expected.size());
 		first = pool.Freeze();
+		if (!first->CanBorrow(source, expected.size())) return "fresh native pages could not be borrowed";
 		std::memset(source, 71, expected.size());
+		if (first->CanBorrow(source, expected.size())) return "changed native pages were still borrowed";
 		second = pool.Freeze();
 		std::memset(source, 99, expected.size());
 		if (!first->Read(source, restored.data(), restored.size()) || restored != expected) return "first native page generation differs";

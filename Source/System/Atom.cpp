@@ -598,7 +598,7 @@ std::shared_ptr<const Atom::FrozenList> Atom::FreezeList(const std::vector<Atom*
 	const MovableObject* lastOwner = nullptr;
 	for (const Atom* atom: atoms) {
 		FrozenList::Record record{atom, FrozenList::none, FrozenList::none};
-		if (!list->state->pages || !list->state->pages->Contains(atom, sizeof(Atom))) {
+		if (!list->state->pages || !list->state->pages->CanBorrow(atom, sizeof(Atom))) {
 			record.backup = list->backup.size();
 			const char* source = reinterpret_cast<const char*>(atom);
 			list->backup.insert(list->backup.end(), source, source + sizeof(Atom));
@@ -820,7 +820,8 @@ CheckpointText Atom::CaptureCheckpointList(const std::vector<Atom*>& atoms) {
 std::string Atom::CheckpointListSelfTestMismatch() {
 	std::string expected;
 	CheckpointText captured;
-	CheckpointText frozen, properties;
+	CheckpointText frozen, properties, later;
+	std::string expectedLater;
 	std::string expectedProperties;
 	{
 		auto first = std::make_unique<Atom>();
@@ -888,6 +889,9 @@ std::string Atom::CheckpointListSelfTestMismatch() {
 			properties = Writer::Capture([&](Writer& writer) {
 				if (!CaptureFrozenProperties(writer, atoms)) throw std::logic_error("atom page snapshot was not used");
 			}, 3);
+			second->SetTrailLength(409);
+			expectedLater = ordinary(atoms);
+			later = CheckpointWriter::CaptureValues([&] { return CaptureCheckpointList(atoms); });
 		}
 		first->m_IgnoreMOIDs.clear();
 		first->m_LastTrailPoints.clear();
@@ -922,6 +926,8 @@ std::string Atom::CheckpointListSelfTestMismatch() {
 		if (full != expected || frozen.SharedText() != expected) return "frozen atom pages differ after mutation, death and pool reuse";
 		if (columns != expectedProperties || properties.SharedText() != expectedProperties) return "frozen atom columns differ after source death";
 	}
+	if (std::async(std::launch::async, [later] { return later.Text(); }).get() != expectedLater || later.SharedText() != expectedLater)
+		return "atom changes during the capture were hidden from later native readers";
 	CheckpointWriter::BatchScope batch(true);
 	const auto empty = CaptureCheckpointList({});
 	if (empty.Text() != "0 " || empty.SharedText() != "0 ") return "empty atom list differs";
