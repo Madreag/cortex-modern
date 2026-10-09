@@ -6123,7 +6123,9 @@ namespace RTE {
 			if (decision.committed || decision.proposal.applyFrame > frame) continue;
 			out << " [rev=" << revision << " peer=" << static_cast<int>(decision.proposal.peerId)
 			    << " action=" << static_cast<int>(decision.proposal.action) << " apply=" << decision.proposal.applyFrame
-			    << " required=" << static_cast<int>(decision.proposal.requiredPeers) << " acked=" << static_cast<int>(decision.acknowledgedPeers)
+			    << " required_mask=" << static_cast<int>(decision.proposal.requiredPeers) << " required_count=" << std::popcount(decision.proposal.requiredPeers)
+			    << " acknowledged_mask=" << static_cast<int>(decision.acknowledgedPeers)
+			    << " acknowledged_count=" << std::popcount(static_cast<uint8_t>(decision.acknowledgedPeers & decision.proposal.requiredPeers))
 			    << " proposed_ms=" << decision.proposedAtMs << "]";
 		}
 		return out.str();
@@ -6333,18 +6335,18 @@ namespace RTE {
 	bool NetLockstepCoordinator::ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error, uint64_t fromFrame, const char* cause) {
 		NET_PLANE_CHECK();
 		m_TimingNowMs = nowMs;
-		// The host holds its own seat like any other: its session plane authors the hold while its simulation is away.
-		const bool ownSeat = peerId == m_Config.localPeerId && peerId == GetHostPeerId();
+		// The authority's human seat stays with its player, including during placement and local stalls.
+		// A recovered hold from an older round can still be returned by ReclaimOwnSeat.
 		// The leaves the simulation last took can still name a seat whose agreed return the round has already committed to, when that
 		// simulation is behind its commits (a host held for its own): that seat is back, and holdable like any.
 		const auto back = m_ReclaimTransactions.find(peerId);
 		const bool returned = back != m_ReclaimTransactions.end() && m_Stats.nextFrame >= back->second.activationFrame;
 		// A seat whose agreed boundary lies past frames it still owes would stop the round on them: its hold moves to the first one.
 		const auto boundary = m_PeerLeaveFrames.find(peerId);
-		const bool escalates = boundary != m_PeerLeaveFrames.end() && !returned && !ownSeat && boundary->second > m_Stats.nextFrame &&
+		const bool escalates = boundary != m_PeerLeaveFrames.end() && !returned && boundary->second > m_Stats.nextFrame &&
 		                       FirstFrameWithout(peerId) < boundary->second;
-		if (!IsRunning() || !UsesBoundedWait() || m_Config.localPeerId != GetHostPeerId() || (peerId == GetHostPeerId() && !ownSeat) ||
-		    (!ownSeat && !IsKnownRemotePeer(peerId)) || (m_PeerLeaveFrames.contains(peerId) && !returned && !escalates) || m_NextTimingRevision == UINT64_MAX) {
+		if (!IsRunning() || !UsesBoundedWait() || m_Config.localPeerId != GetHostPeerId() || peerId == GetHostPeerId() ||
+		    !IsKnownRemotePeer(peerId) || (m_PeerLeaveFrames.contains(peerId) && !returned && !escalates) || m_NextTimingRevision == UINT64_MAX) {
 			// A refusal is named once per frame; asking again at the same frame is not a new decision.
 			const bool again = m_RefusedHoldFrames.contains(peerId) && m_RefusedHoldFrames.at(peerId) == m_Stats.nextFrame;
 			m_RefusedHoldFrames[peerId] = m_Stats.nextFrame;
@@ -6375,8 +6377,7 @@ namespace RTE {
 		// A hold is a host-authored boundary.  The host may have advanced less than a survivor
 		// that already accepted the same input, so the first missing frame alone is not safe: every
 		// peer must see the hold at or after its accepted horizon.
-		// The host's own first frame without input is the one after the last it put on the wire.
-		timing.applyFrame = std::max(fromFrame != 0 ? fromFrame : ownSeat ? SentInputThrough() + 1 : FirstFrameWithout(peerId), m_Stats.nextFrame);
+		timing.applyFrame = std::max(fromFrame != 0 ? fromFrame : FirstFrameWithout(peerId), m_Stats.nextFrame);
 		// A returning seat's reclaim gap carries none of its input, so the survivors commit through it without the seat: a hold starts after it.
 		if (const auto back = m_ReclaimTransactions.find(peerId); back != m_ReclaimTransactions.end() && timing.applyFrame >= back->second.activationFrame)
 			timing.applyFrame = std::max(timing.applyFrame, std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames) + 1);
@@ -6413,8 +6414,8 @@ namespace RTE {
 			timing.seatIncarnations[peer - 1] = incarnation == m_Config.peerIncarnations.end() ? 1 : incarnation->second;
 		}
 		timing.nextFrame = m_Stats.nextFrame;
-		// A held seat is never also a required one: the host's own hold is acknowledged by the peers it keeps playing with.
-		timing.requiredPeers = ownSeat ? 0 : static_cast<uint8_t>(1U << (m_Config.localPeerId - 1));
+		// This is a membership bitmask, not a count: only the authority and continuing current members vote.
+		timing.requiredPeers = static_cast<uint8_t>(1U << (m_Config.localPeerId - 1));
 		for (uint8_t peer: m_RemotePeerIds)
 			if ((timing.heldPeers & (1U << (peer - 1))) == 0 && !IsPeerGoneAtFrame(peer, timing.applyFrame)) timing.requiredPeers |= static_cast<uint8_t>(1U << (peer - 1));
 		if (timing.applyFrame < m_Stats.nextFrame) {
@@ -6426,7 +6427,7 @@ namespace RTE {
 		m_TimingDecisions[timing.revision] = {timing, static_cast<uint8_t>(1U << (m_Config.localPeerId - 1)), false, nowMs};
 		const uint64_t lastProgress = m_Stats.peers[peerId].lastProgressMs;
 		m_HoldFacts[peerId] = {timing.applyFrame, lastProgress != 0 && nowMs >= lastProgress ? nowMs - lastProgress : nowMs >= m_FirstMissingMs ? nowMs - m_FirstMissingMs : 0,
-		                       std::max<uint16_t>(1, m_Config.slowPlayerBoundTicks) * m_Config.simTickMs, cause};
+		                       static_cast<double>(PeerAbsenceBudgetMs(peerId)), cause};
 		QueueTiming(timing);
 		FlushTimingOutgoing();
 		CommitTiming(timing.revision);
@@ -6787,8 +6788,25 @@ namespace RTE {
 		return peers;
 	}
 
+	uint64_t NetLockstepCoordinator::PeerAbsenceBudgetMs(uint8_t peer) const {
+		uint64_t ping = 0, jitter = 0;
+		if (const auto stats = m_Stats.peers.find(peer); stats != m_Stats.peers.end()) {
+			ping = stats->second.pingMs; jitter = stats->second.jitterMs;
+		}
+		if (const auto estimate = m_DelayEstimators.find(peer); estimate != m_DelayEstimators.end()) {
+			ping = std::max<uint64_t>(ping, estimate->second.P95Ms());
+			jitter = std::max<uint64_t>(jitter, estimate->second.JitterMs());
+		}
+		// A few simulation ticks measure lateness, not absence on a mobile link. Allow a second and
+		// several measured round trips before changing membership; explicit departures keep their boundary.
+		return std::max<uint64_t>(1000, 4 * (ping + jitter));
+	}
+
 	bool NetLockstepCoordinator::DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing) {
 		if (!UsesBoundedWait() || m_Playback || m_Config.localPeerId != GetHostPeerId() || missing.empty()) return false;
+		// A peer parked for our uncommitted decision owes an acknowledgement, not another input frame.
+		// TickTiming judges that wait using link liveness and retries the proposal without deleting its vote.
+		if (TimingDecisionPendingAt(frame)) return false;
 		// A host back from its own hold runs its catch-up through its reclaim gap to the newest input it holds: an input missing
 		// there is this host ahead of the round, never a seat late to it.
 		if (IsSeatReclaimGap(m_Config.localPeerId, frame)) return false;
@@ -6851,27 +6869,25 @@ namespace RTE {
 			noticeDue |= static_cast<uint64_t>(std::llround(runway * m_Config.simTickMs)) <= notice;
 		}
 		if (!noticeDue) return false;
-		// Declaring early lets the decision land by the bound. When the notice alone costs more than the
-		// bound - a survivor on a long link - it cannot, and the survivors wait for the decision instead;
-		// the seat is still only declared after the bound of missing input, never the instant one is late.
-		const uint64_t declarationDeadline = noticeMs < boundMs ? boundMs - noticeMs : boundMs;
-		if (nowMs >= firstMissingMs && nowMs - firstMissingMs >= declarationDeadline) {
+		// A hold changes membership. Notification time must never shorten the evidence of absence.
+		if (nowMs >= firstMissingMs) {
 			m_Stats.lastHoldDeclarationMs = nowMs - firstMissingMs;
 			bool held = false;
 			for (uint8_t peer: missing) {
 				const auto& peerStats = m_Stats.peers[peer];
-				if (SceneLoadInputPending(peer, frame, nowMs)) continue;
-				// A hold is for a seat gone silent. One still feeding - its newest frame landed within a tick and its jitter - is late,
-				// and the live delay re-size answers that, never a hold.
-				if (peerStats.lastProgressMs != 0 && nowMs >= peerStats.lastProgressMs &&
-				    nowMs - peerStats.lastProgressMs < static_cast<uint64_t>(std::ceil(m_Config.simTickMs)) + peerStats.jitterMs) continue;
+				const uint64_t declarationDeadline = PeerAbsenceBudgetMs(peer);
+				if (nowMs - firstMissingMs < declarationDeadline || SceneLoadInputPending(peer, frame, nowMs)) continue;
+				// Sustained missing input is evidence of absence. A recent input restarts that evidence,
+				// including when its stream is behind the frame this machine has prepared.
+				if (peerStats.lastProgressMs != 0 && (nowMs < peerStats.lastProgressMs ||
+				    nowMs - peerStats.lastProgressMs < declarationDeadline)) continue;
 				const uint64_t captureUntil = CaptureExcuseUntil(peer, frame, firstMissingMs);
 				if (captureUntil > firstMissingMs && (nowMs < captureUntil || nowMs - captureUntil < declarationDeadline)) continue;
 				// A seat whose packets this machine set aside for its simulation thread may have sent the input it is missing; a simulation
 				// thread that has not taken them within the bound leaves the seat judged like any silent one.
 				if (const auto link = m_RemoteTransports.find(peer); link != m_RemoteTransports.end() && m_PlaneHeldTransports.contains(link->second)) {
 					const auto since = m_PlaneHeldSinceMs.find(link->second);
-					if (since == m_PlaneHeldSinceMs.end() || nowMs < since->second || nowMs - since->second < boundMs) continue;
+					if (since == m_PlaneHeldSinceMs.end() || nowMs < since->second || nowMs - since->second < declarationDeadline) continue;
 				}
 				// A park commits its frames with no input from anyone, so a seat owes nothing until the frames after it fall
 				// due: its first post-park inputs are due a delay after the park's last frame ran here, never at the release.
@@ -7147,18 +7163,12 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::GoQuiet(uint64_t producedFrame) {
+		// Hosting continues to require the host's simulation. Silencing its own input cannot fix a slow host.
+		if (m_Config.localPeerId == GetHostPeerId()) return;
 		m_SelfHeld = true;
 		DiagnosticLine() << "[net-lockstep] this machine cannot keep up at frame " << producedFrame << ": " << m_Stats.localCapacityTps << " ticks/s against the others' "
 		                 << m_Stats.localOthersTps << ", " << m_Stats.localRunwayTicks << " ticks of slack; its seat goes quiet after frame " << m_LastQueuedTargetFrame
 		                 << " for the AI" << std::endl;
-		if (m_Config.localPeerId == GetHostPeerId()) {
-			std::string holdError;
-			if (!ProposePeerHold(m_Config.localPeerId, m_TimingNowMs, &holdError, m_LastQueuedTargetFrame + 1, "own_seat")) {
-				if (!holdError.empty()) DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(m_Config.localPeerId) << ": " << holdError << std::endl;
-				m_SelfHeld = false;
-			}
-			return;
-		}
 		if (!m_Transport) return;
 		NetLockstepAck quiet;
 		quiet.senderPeerId = m_Config.localPeerId;
@@ -7685,13 +7695,20 @@ namespace RTE {
 		std::vector<uint64_t> pending;
 		if (host && UsesBoundedWait() && m_ConsumerWaitingFrame) {
 			std::set<uint8_t> unresponsive;
-			const auto boundMs = static_cast<uint64_t>(std::max<long long>(1, std::llround(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
-			for (const auto& [revision, decision]: m_TimingDecisions) {
+			for (auto& [revision, decision]: m_TimingDecisions) {
 				if (decision.committed || decision.proposal.applyFrame > *m_ConsumerWaitingFrame) continue;
+				const uint64_t lastSent = std::max(decision.proposedAtMs, decision.lastRetryAtMs);
+				const bool retry = nowMs >= lastSent && nowMs - lastSent >= 500;
+				if (retry) decision.lastRetryAtMs = nowMs;
 				for (uint8_t peer: m_RemotePeerIds) {
 					const uint8_t bit = static_cast<uint8_t>(1U << (peer - 1));
 					const auto& stats = m_Stats.peers[peer];
-					const uint64_t budget = boundMs + stats.pingMs + stats.jitterMs;
+					if ((decision.proposal.requiredPeers & bit) == 0 || (decision.acknowledgedPeers & bit) != 0) continue;
+					if (retry) QueueTiming(decision.proposal, peer);
+					const uint64_t budget = PeerAbsenceBudgetMs(peer);
+					const auto link = m_PeerLinkHeardMs.find(peer);
+					const uint64_t heard = std::max({decision.proposedAtMs, stats.lastHeardMs, stats.lastProgressMs,
+					    link == m_PeerLinkHeardMs.end() ? uint64_t{0} : link->second});
 					// A returner refills through its agreed neutral gap; its old playing state grants no earlier deadline.
 					const auto reclaim = m_ReclaimTransactions.find(peer);
 					const bool refilling = reclaim != m_ReclaimTransactions.end() &&
@@ -7700,12 +7717,12 @@ namespace RTE {
 					const uint64_t ramp = !refilling && (m_PeersPlayedThisRound.contains(peer) || m_PeerAdmissions.contains(peer)) ? 0 :
 					    static_cast<uint64_t>(std::llround(InputDelayAt(peer, *m_ConsumerWaitingFrame) * m_Config.simTickMs)) +
 					        std::max(stats.startParkMs, m_Stats.longestOwnParkMs);
-					if ((decision.proposal.requiredPeers & bit) != 0 && (decision.acknowledgedPeers & bit) == 0 &&
-					    nowMs >= decision.proposedAtMs && nowMs - decision.proposedAtMs >= budget + ramp) {
+					if (nowMs >= decision.proposedAtMs && nowMs - decision.proposedAtMs >= budget + ramp &&
+					    nowMs >= heard && nowMs - heard >= budget) {
 						DiagnosticLine() << "[net-lockstep] timing ack overdue from peer " << static_cast<int>(peer)
 						          << " at frame " << *m_ConsumerWaitingFrame << ": waited=" << (nowMs - decision.proposedAtMs)
 						          << "ms budget=" << budget << "ms ramp=" << ramp << "ms own_park=" << m_Stats.longestOwnParkMs
-						          << "ms peer_park=" << stats.startParkMs << std::endl;
+						          << "ms peer_park=" << stats.startParkMs << "ms silent=" << (nowMs - heard) << "ms" << std::endl;
 						unresponsive.insert(peer);
 					}
 				}
@@ -9038,7 +9055,7 @@ namespace RTE {
 		shift(m_AuthorityLastHeardMs);
 		for (auto& [peer, heard]: m_PeerLastHeardMs) shift(heard);
 		for (auto& [peer, stats]: m_Stats.peers) { shift(stats.lastHeardMs); shift(stats.lastProgressMs); }
-		for (auto& [revision, decision]: m_TimingDecisions) shift(decision.proposedAtMs);
+		for (auto& [revision, decision]: m_TimingDecisions) { shift(decision.proposedAtMs); shift(decision.lastRetryAtMs); }
 		++m_Stats.ownParksExcluded;
 		m_Stats.longestOwnParkMs = std::max(m_Stats.longestOwnParkMs, gap);
 	}
@@ -10361,79 +10378,6 @@ namespace RTE {
 		return local == GetHostPeerId() && m_AiHeldSeats.contains(local);
 	}
 
-	bool NetLockstepCoordinator::JudgeOwnSeat(uint64_t frame, uint64_t nowMs) {
-		const uint8_t local = m_Config.localPeerId;
-		// A return the round agreed ends the hold from its own frame, whether or not this simulation has delivered it yet.
-		const auto back = m_ReclaimTransactions.find(local);
-		const bool backBy = back != m_ReclaimTransactions.end() && back->second.activationFrame <= frame;
-		if (!UsesBoundedWait() || local != GetHostPeerId() || m_GoodbyeDrain || frame > m_FinalFrame || (IsOwnHostSeatHeld() && !backBy) || m_RemotePeerIds.empty()) return false;
-		if (SceneLoadInputPending(local, frame, nowMs)) { m_OwnMissingFrame.reset(); return false; }
-		// The host's start work excuses its first ticks once; after a return only the return's own gap carries none of its input.
-		const uint64_t excusedThrough = back != m_ReclaimTransactions.end()
-			? std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames)
-			: EffectiveStartOf(local) + std::max<uint64_t>(m_Config.slowPlayerBoundTicks, c_StartupSettleTicks);
-		// This engine's own capture and the catch-up of the ticks it cost are the engine's own work, not a slow machine: up to
-		// twice the park's size from the capture's start, whether or not it is still running.
-		const bool capturing = nowMs < CaptureExcuseUntil(local, frame, m_OwnMissingFrame == frame ? m_OwnMissingSinceMs : nowMs) ||
-		                       (m_LocalCaptureStartedMs != 0 && nowMs < m_LocalCaptureStartedMs + static_cast<uint64_t>(2.0 * ParkCaptureCostMs()));
-		if (frame <= excusedThrough || m_CaptureParkAwaitingReports || TimingDecisionPendingAt(frame) || capturing) {
-			m_OwnMissingFrame.reset();
-			return false;
-		}
-		// A hold hands the seat to another playing peer's AI: with every other seat held or gone there is none, and nobody waits on this one.
-		if (std::none_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) { return !IsPeerGoneAtFrame(peer, frame) && !IsSeatUnderAI(peer, frame); })) {
-			m_OwnMissingFrame.reset();
-			return false;
-		}
-		// Only a seat the others are waiting on is late: the clock runs from the moment every other seat's input for the frame is in.
-		const auto remote = m_RemoteFrames.find(frame);
-		bool waitedOn = false;
-		for (uint8_t peer: m_RemotePeerIds) {
-			if (!IsRemoteRequiredForFrame(peer, frame)) continue;
-			if (remote == m_RemoteFrames.end() || !remote->second.contains(peer)) {
-				m_OwnMissingFrame.reset();
-				return false;
-			}
-			waitedOn = true;
-		}
-		// With every other seat held or gone nobody waits on this one: the host's own simulation paces the round.
-		if (!waitedOn) {
-			m_OwnMissingFrame.reset();
-			return false;
-		}
-		if (m_OwnMissingFrame != frame) {
-			m_OwnMissingFrame = frame;
-			m_OwnMissingSinceMs = nowMs;
-		}
-		// Every receiver has its own runway and delivery time for this decision.
-		bool noticeDue = std::llround(m_ReadyFrames.size() * m_Config.simTickMs) <= 2;
-		for (uint8_t peer: m_RemotePeerIds) {
-			if (!IsRemoteRequiredForFrame(peer, frame)) continue;
-			const auto& stats = m_Stats.peers[peer];
-			const auto estimate = m_DelayEstimators.find(peer);
-			const uint64_t notice = uint64_t(2) + std::max(stats.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms()) + stats.jitterMs;
-			const uint64_t delay = InputDelayAt(peer, frame), produced = stats.highestTargetFrame;
-			const uint64_t runway = produced >= delay && frame > produced - delay + 1 ? frame - (produced - delay + 1) : 0;
-			noticeDue |= static_cast<uint64_t>(std::llround(runway * m_Config.simTickMs)) <= notice;
-		}
-		if (!noticeDue) {
-			return false;
-		}
-		const uint64_t boundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
-		if (nowMs < m_OwnMissingSinceMs || nowMs - m_OwnMissingSinceMs < boundMs) return false;
-		const uint64_t simTickedMs = m_SimTickedMs.load(std::memory_order_acquire);
-		DiagnosticLine() << "[net-lockstep] own seat late at frame " << frame << ": missing_ms=" << (nowMs - m_OwnMissingSinceMs) << " sim_quiet_ms="
-		          << (simTickedMs != 0 && nowMs >= simTickedMs ? nowMs - simTickedMs : 0) << " sent_through=" << SentInputThrough() << " plane=" << m_PlaneTicking
-		          << " sim_window=" << NetLockstepPlane::OpenWindow() << std::endl;
-		std::string holdError;
-		if (!ProposePeerHold(local, nowMs, &holdError, 0, "own_seat")) {
-			if (!holdError.empty()) DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(local) << ": " << holdError << std::endl;
-			return false;
-		}
-		m_OwnMissingFrame.reset();
-		return true;
-	}
-
 	void NetLockstepCoordinator::ReclaimOwnSeat(uint64_t nowMs) {
 		const uint8_t local = m_Config.localPeerId;
 		if (m_PlaneTicking || !IsRunning() || !IsOwnHostSeatHeld() || m_ReclaimTransactions.contains(local) || !m_LastCompletedSimulationTick || m_NextTimingRevision == UINT64_MAX) return;
@@ -10444,18 +10388,15 @@ namespace RTE {
 			DiagnosticLine() << "[net-lockstep] own seat waits to come back: " << reason << " next_frame=" << m_Stats.nextFrame << std::endl;
 		};
 		for (const auto& [revision, pending]: m_TimingDecisions) {
-			if (pending.committed) continue;
+			if (pending.committed || pending.proposal.action == NetTimingAction::Delay) continue;
 			noteWait("decision revision=" + std::to_string(revision) + " action=" + std::to_string(static_cast<int>(pending.proposal.action)) + " peer=" +
-			         std::to_string(pending.proposal.peerId) + " required=" + std::to_string(pending.proposal.requiredPeers) + " acknowledged=" + std::to_string(pending.acknowledgedPeers));
+			         std::to_string(pending.proposal.peerId) + " required_mask=" + std::to_string(pending.proposal.requiredPeers) + " required_count=" + std::to_string(std::popcount(pending.proposal.requiredPeers)) +
+			         " acknowledged_mask=" + std::to_string(pending.acknowledgedPeers));
 			return;
 		}
-		// Back once the simulation has replayed what the AI played and is producing for frames not yet committed.
-		const uint16_t delay = InputDelayAt(local, m_Stats.nextFrame);
-		if (*m_LastCompletedSimulationTick + std::max<uint16_t>(1, delay) + 1 < m_Stats.nextFrame) {
-			// Logged in steps of a second of lag, so a steady gap is one line.
-			noteWait("the simulation is " + std::to_string((m_Stats.nextFrame - *m_LastCompletedSimulationTick) / 60 * 60) + "+ frames behind the committed horizon");
-			return;
-		}
+		// Fix a future boundary while the simulation catches up. Requiring it to overtake the prepared
+		// horizon first can wait forever: the session keeps preparing new frames at the same rate.
+		uint16_t delay = InputDelayAt(local, m_Stats.nextFrame);
 		NetLockstepTiming timing;
 		timing.senderPeerId = local; timing.peerId = local;
 		timing.action = NetTimingAction::Reclaim;
@@ -10463,8 +10404,13 @@ namespace RTE {
 		timing.sessionId = m_Config.sessionId; timing.roundId = m_RoundId;
 		timing.authorityGeneration = m_Config.migrationGeneration;
 		timing.revision = m_NextTimingRevision++;
-		uint64_t applyFrame = std::max(m_Stats.nextFrame, SentInputThrough() + 1) + 1;
-		for (uint8_t peer: m_RemotePeerIds) if (!IsPeerGoneAtFrame(peer, applyFrame)) applyFrame = std::max(applyFrame, m_Stats.peers[peer].reportedNextFrame + 1);
+		uint64_t applyFrame = FutureTimingFrame();
+		// Delay agreement runs independently; a steady stream of future delay changes must not starve a return.
+		for (const auto& [revision, pending]: m_TimingDecisions) {
+			if (pending.committed || pending.proposal.action != NetTimingAction::Delay) continue;
+			applyFrame = std::max(applyFrame, pending.proposal.applyFrame + 1);
+			if (pending.proposal.peerId == local) delay = std::max(delay, pending.proposal.delayFrames);
+		}
 		// Every AI order the seat's producer sent, and those it sends before it hears of this return, lands before it: the round takes them all.
 		if (const uint8_t producer = AiProducerOf(local); producer != 0 && producer != local) {
 			const auto& stats = m_Stats.peers[producer];
@@ -10479,7 +10425,7 @@ namespace RTE {
 		const auto incarnation = m_Config.peerIncarnations.find(local);
 		timing.seatIncarnations[local - 1] = incarnation == m_Config.peerIncarnations.end() ? 1 : incarnation->second;
 		for (uint8_t peer: m_RemotePeerIds) if (!IsPeerGoneAtFrame(peer, applyFrame)) timing.requiredPeers |= static_cast<uint8_t>(1U << (peer - 1));
-		// A host that held itself for its machine is judged again a second after its seat is back.
+		// Clear the older build's self-held pacing state so human input can resume at the agreed boundary.
 		m_SelfHeld = false;
 		m_OthersTickSamples.clear();
 		m_SlowTicks = 0;
@@ -12981,9 +12927,8 @@ namespace RTE {
 			auto localIt = m_LocalFrames.find(m_Stats.nextFrame);
 			if (localIt == m_LocalFrames.end() && (m_Playback || (m_Stats.nextFrame >= EffectiveStartOf(m_Config.localPeerId) &&
 			    !IsSeatReclaimGap(m_Config.localPeerId, m_Stats.nextFrame) && !IsSeatUnderAI(m_Config.localPeerId, m_Stats.nextFrame)))) {
-				if (!m_Playback && JudgeOwnSeat(m_Stats.nextFrame, nowMs)) continue;
-				// The host judges its own seat only once every other seat's input is in, so a seat missing beside it is judged first, on its
-				// own clock - once a survivor's input is in and it is the one waiting.
+				// Missing local input waits for this player. A genuinely absent remote may still be held
+				// when another survivor is waiting, but this host never gives its own seat to the AI.
 				if (!m_Playback && UsesBoundedWait() && m_Config.localPeerId == GetHostPeerId()) {
 					const auto remoteIt = m_RemoteFrames.find(m_Stats.nextFrame);
 					std::vector<uint8_t> missing;
@@ -13000,7 +12945,6 @@ namespace RTE {
 				m_AdvanceBlock = "own-input";
 				break;
 			}
-			m_OwnMissingFrame.reset();
 			if (!LocalInputAccepted(m_Stats.nextFrame)) {
 				m_AdvanceBlock = "own-input-acceptance";
 				break;

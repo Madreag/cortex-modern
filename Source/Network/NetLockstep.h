@@ -1455,7 +1455,7 @@ namespace RTE {
 		friend bool TestFourPlayerHoldWaitsForALiveAcknowledgement(std::string* error);
 		friend bool TestBriefHostJitterKeepsItsHumanSeat(std::string* error);
 		friend bool TestHeldHostReturnsPastThePreparedHorizon(std::string* error);
-		friend bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
+		friend bool TestAPreviouslyHeldHostTakesItsSeatBack(std::string* error);
 		friend bool TestAHostWithNoOtherPlayingSeatIsNotHeld(std::string* error);
 		friend bool TestAReturnGapDoesNotStartTheHostsClock(std::string* error);
 		friend bool TestAHoldLandsAtTheFirstFrameItsSeatOwes(std::string* error);
@@ -1470,7 +1470,7 @@ namespace RTE {
 		friend bool TestHeldHostMarkerPrecedesItsHold(std::string* error);
 		friend bool TestAReturnerDelayCoversItsTrail(std::string* error);
 		friend bool TestADecisionRepeatedPastItsFrameIsNotANewOne(std::string* error);
-		friend bool TestTheHostsRunwayPrecedesItsLateClock(std::string* error);
+		friend bool TestAHostKeepsItsSeatAfterItsRunwayExpires(std::string* error);
 		friend bool TestArrivalLeadIncludesTheFastestSurvivor(std::string* error);
 		friend bool TestHostStatusKeepsTheReceiversLinkMeasurement(std::string* error);
 		friend bool TestEachSurvivorsRunwayUsesItsOwnLink(std::string* error);
@@ -1483,7 +1483,7 @@ namespace RTE {
 		friend bool TestAHeldSeatsSilenceCarriesItsReturn(std::string* error);
 		friend bool TestReturnFramesBypassReliableLoss(std::string* error);
 		friend bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error);
-		friend bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);
+		friend bool TestAHostKeepsItsSeatBeforeCapture(std::string* error);
 		friend bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error);
 		friend bool TestAHeldClientsHashIsNotTheRounds(std::string* error);
 		friend bool TestAReplayTakesTheRecordedSeatPolicy(std::string* error);
@@ -1495,7 +1495,7 @@ namespace RTE {
 		friend bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 		friend bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
 		friend bool TestAQueuedReturnLeavesALaterHold(std::string* error);
-		friend bool TestAHostIsJudgedAgainAfterItsOwnReturn(std::string* error);
+		friend bool TestAHostKeepsItsSeatAfterItsOwnReturn(std::string* error);
 		friend bool TestARepeatedStartHoldsNoFramesBehindIt(std::string* error);
 		friend bool TestALaggingSimulationReadsTheFrameItTook(std::string* error);
 		friend bool TestAHeldHostsFrameCrossesAMigration(std::string* error);
@@ -1813,15 +1813,12 @@ namespace RTE {
 		void RetryLateStartReclaims();
 		void FlushDeferredParkTimings();
 		bool DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing);
-		/// Host: holds its own seat when every other seat's input for the frame is in hand and its own simulation has not produced its input within the bound.
-		bool JudgeOwnSeat(uint64_t frame, uint64_t nowMs);
+		uint64_t PeerAbsenceBudgetMs(uint8_t peer) const;
 		bool SceneLoadInputPending(uint8_t peer, uint64_t frame, uint64_t nowMs);
 		void TakeSceneLoadStatus(const NetLockstepTiming& timing, uint64_t nowMs);
 		uint64_t CaptureExcuseUntil(uint8_t peerId, uint64_t frame, uint64_t firstMissingMs);
-		/// Host: takes its own held seat back once its simulation has caught up to the committed frames.
+		/// Host: returns a seat held by an older build at a fixed, agreed future boundary.
 		void ReclaimOwnSeat(uint64_t nowMs);
-		std::optional<uint64_t> m_OwnMissingFrame; //!< Host: the frame its own input was first missing for with every other seat's in hand.
-		uint64_t m_OwnMissingSinceMs = 0;
 		std::string m_OwnSeatWaitLogged; //!< Host: why its held seat last waited to come back, as last logged.
 		uint64_t FutureTimingFrame() const;
 		struct TimingDecision {
@@ -1829,6 +1826,7 @@ namespace RTE {
 			uint8_t acknowledgedPeers = 0;
 			bool committed = false;
 			uint64_t proposedAtMs = 0;
+			uint64_t lastRetryAtMs = 0;
 		};
 		std::map<uint64_t, TimingDecision> m_TimingDecisions;
 		std::map<uint64_t, NetLockstepTiming> m_SettledTimings; //!< The newest proposals this peer took and has since let go of, by revision.
