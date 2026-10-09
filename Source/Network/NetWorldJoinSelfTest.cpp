@@ -638,19 +638,28 @@ namespace RTE {
 			host.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
 			host.SetLiveMatch(true);
 			host.SetPersistentWorld(false);
+			// Ordinary live matches offer an unused seat through the private catch-up path.
 			host.HandleMessage(11, join, 0);
-			host.Tick(NetReconnectAdmission::c_DenialReleaseMs);
+			bool offered = false;
+			for (const NetH4Outbound& outbound: host.TakeOutbound()) {
+				if (const auto* offer = std::get_if<NetH4TicketOffer>(&outbound.payload)) {
+					offered = outbound.connection == 11 && offer->stableSeat == 1;
+				}
+				if (std::holds_alternative<NetJoinRejected>(outbound.payload)) return Fail("an ordinary live match refused its unused seat");
+			}
+			if (!offered) return Fail("an ordinary live match did not offer its unused seat");
+			// The same live match must not offer that provisionally reserved seat to another player.
+			join.displayName = "bob";
+			join.txId.fill(10);
+			host.HandleMessage(12, join, 1);
+			host.Tick(NetReconnectAdmission::c_DenialReleaseMs + 1);
 			bool refused = false;
 			for (const NetH4Outbound& outbound: host.TakeOutbound()) {
-				if (const auto* rejected = std::get_if<NetJoinRejected>(&outbound.payload)) {
-					if (rejected->humanMessage == "the match is already in progress") {
-						refused = true;
-					}
-				}
+				if (outbound.connection != 12) continue;
+				if (std::holds_alternative<NetH4TicketOffer>(outbound.payload)) return Fail("an ordinary live match offered a reserved seat twice");
+				if (const auto* rejected = std::get_if<NetJoinRejected>(&outbound.payload)) refused = rejected->reason == NetRejectReason::SessionFull;
 			}
-			if (!refused) {
-				return Fail("an ordinary NewJoin was accepted");
-			}
+			if (!refused) return Fail("an ordinary live match did not refuse a join with no open seat");
 			return 0;
 		}
 
