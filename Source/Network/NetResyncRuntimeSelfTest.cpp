@@ -878,7 +878,8 @@ namespace RTE {
 			for (uint8_t peer = 1; peer <= 3; ++peer) {
 				auto input = FullInput(peer, c_Start, coordinators[peer - 1].GetRoundId());
 				if (!withBoundary) { input.commands.clear(); input.observations.clear(); }
-				if (!coordinators[peer - 1].PrimeResyncInputs({}, error) || !QueueFull(coordinators[peer - 1], input, error)) return false;
+				// A recovered packet keeps its target even when the boundary changes its peer's delay.
+				if (!coordinators[peer - 1].PrimeResyncInputs({}, error) || !coordinators[peer - 1].QueueRecoveredInput(input, error)) return false;
 				expected.push_back(std::move(input));
 			}
 			if (!Check(drive([&] { return std::all_of(coordinators.begin(), coordinators.end(), [](const auto& item) { return item.GetStats().nextFrame == c_Start + 1; }); }),
