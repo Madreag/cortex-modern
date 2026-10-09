@@ -1,5 +1,6 @@
 #pragma once
 
+#include "FloatingPointEnvironment.h"
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -37,7 +38,7 @@ namespace RTE {
 				return false;
 			}
 			m_Stopping = false;
-			m_Thread = std::thread([this] { Run(); });
+			m_Thread = FloatingPointEnvironment::StartThread([this] { Run(); });
 			return true;
 		}
 
@@ -181,7 +182,7 @@ namespace RTE {
 					return false;
 				}
 				if (!m_Thread.joinable()) {
-					m_Thread = std::thread([this] { Run(); });
+					m_Thread = FloatingPointEnvironment::StartThread([this] { Run(); });
 				}
 				m_Waiting[std::move(path)] = Pending{std::move(text), opener};
 				++m_Queued;

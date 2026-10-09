@@ -1144,6 +1144,7 @@ LUA_API int lua_pcall(lua_State *L, int nargs, int nresults, int errfunc)
     ef = savestack(L, o);
   }
   status = lj_vm_pcall(L, api_call_base(L, nargs), nresults+1, ef);
+  lj_vm_fp_assert();
   if (status) hook_restore(g, oldh);
 #if LJ_HASJIT
   if (G2J(g)->state != LJ_TRACE_IDLE)
@@ -1176,6 +1177,7 @@ LUA_API int lua_cpcall(lua_State *L, lua_CFunction func, void *ud)
   lj_checkapi(L->status == LUA_OK || L->status == LUA_ERRERR,
 	      "thread called in wrong state %d", L->status);
   status = lj_vm_cpcall(L, func, ud, cpcall);
+  lj_vm_fp_assert();
   if (status) hook_restore(g, oldh);
   return status;
 }
@@ -1204,6 +1206,7 @@ LUA_API int lua_yield(lua_State *L, int nresults)
 {
   void *cf = L->cframe;
   global_State *g = G(L);
+  lj_vm_fp_assert();
   if (cframe_canyield(cf)) {
 #if LJ_HASJIT
     lj_trace_abort_leftover(L);
@@ -1250,6 +1253,7 @@ LUA_API int lua_resume(lua_State *L, int nargs)
     int status = lj_vm_resume(L,
       L->status == LUA_OK ? api_call_base(L, nargs) : L->top - nargs,
       0, 0);
+    lj_vm_fp_assert();
 #if LJ_HASJIT
     if (G2J(G(L))->state != LJ_TRACE_IDLE)
       lj_trace_abort_leftover(L);
@@ -1324,4 +1328,3 @@ LUA_API void lua_setallocf(lua_State *L, lua_Alloc f, void *ud)
   g->allocd = ud;
   g->allocf = f;
 }
-

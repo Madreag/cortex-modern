@@ -1,5 +1,6 @@
 #include "CheckpointArchive.h"
 #include "TimerMan.h"
+#include "FloatingPointEnvironment.h"
 
 #include "Constants.h"
 #include "PerformanceMan.h"
@@ -93,6 +94,8 @@ void TimerMan::BeginSimFrame(long long budgetTicks) {
 }
 
 void TimerMan::UpdateSim() {
+	FloatingPointEnvironment::Enter();
+	FloatingPointEnvironment::Assert("simulation tick entry");
 	if (TimeForSimUpdate()) {
 		// Owed ticks past the budget wait for the next frame; this one, expected to end past it, is drawn.
 		bool budgetSpent = false;

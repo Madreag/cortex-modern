@@ -1,3 +1,4 @@
+#include "FloatingPointEnvironment.h"
 #include "TelemetryBundle.h"
 
 #include "GameVersion.h"
@@ -414,7 +415,7 @@ namespace RTE {
 		s_State.err = std::make_unique<LogMirror>(std::cerr.rdbuf(), s_State.log);
 		std::cout.rdbuf(s_State.out.get());
 		std::cerr.rdbuf(s_State.err.get());
-		s_State.worker = std::thread([] {
+		s_State.worker = FloatingPointEnvironment::StartThread([] {
 			while (true) {
 				Job job;
 				{

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "FloatingPointEnvironment.h"
 extern "C" {
 #include "lua.h"
 #include "lauxlib.h"
@@ -162,7 +163,7 @@ namespace RTE::CheckpointLua {
 		CopyPool() {
 			const unsigned threads = std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
 			for (unsigned index = 0; index < threads; ++index) {
-				std::thread([this] {
+				FloatingPointEnvironment::StartThread([this] {
 					while (true) {
 						std::packaged_task<void()> task;
 						{
@@ -172,6 +173,7 @@ namespace RTE::CheckpointLua {
 							m_Tasks.pop_front();
 						}
 						CaptureSentinel::WorkerScope worker("heap-copy");
+						const FloatingPointEnvironment::Scope scope("Lua copy task");
 						task();
 					}
 				}).detach();
