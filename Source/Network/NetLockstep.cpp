@@ -3519,8 +3519,8 @@ namespace RTE {
 		const bool hosting = m_MigrationSuccessor == m_Config.localPeerId;
 		bool opened = hosting;
 		if (hosting) m_MigrationTransport = std::move(m_MigrationListener);
-		else if (auto warm = m_MigrationProbes.find(m_MigrationSuccessor); warm != m_MigrationProbes.end() && warm->second.connection != c_InvalidNetPeerId) {
-			// The established route survives a directory outage without another rendezvous.
+		else if (auto warm = m_MigrationProbes.find(m_MigrationSuccessor); warm != m_MigrationProbes.end() && warm->second.transport && warm->second.lastDialMs != 0) {
+			// Keep an established or pending dial; a second socket can bind the same survivor twice.
 			m_MigrationTransport = std::move(warm->second.transport);
 			m_MigrationHostTransport = warm->second.connection;
 			m_MigrationAddress = warm->second.address;
@@ -7868,6 +7868,7 @@ namespace RTE {
 		// only committed history with it. This is a data receipt, never a policy vote.
 		bool hasSurvivor = false;
 		const uint32_t survivors = MigrationElectorate();
+		if (!m_Config.hostChangeReferee && std::popcount(survivors) < 2) return true;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 			if (peer == m_Config.localPeerId || (survivors & (1U << (peer - 1))) == 0) continue;
 			hasSurvivor = true;

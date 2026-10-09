@@ -1465,7 +1465,7 @@ namespace RTE {
 		friend bool TestAReturnedSeatThatLeavesAgainIsGone(std::string* error);
 		friend bool TestARoundsOwnEndIsNoHold(std::string* error);
 		friend bool TestAStarvedSeatIsNotLate(std::string* error);
-		friend bool TestFourPlayerHoldWaitsForALiveAcknowledgement(std::string* error);
+		friend bool TestFourPlayerHoldDoesNotWaitForPolicyReceipts(std::string* error);
 		friend bool TestFourPeersCommitPlacement(std::string* error);
 		friend bool TestOwnerSilenceThreshold(unsigned check, std::string* error);
 		friend bool TestOwnerHostChange(unsigned mode, std::string* error);

@@ -8936,7 +8936,7 @@ namespace RTE {
 			         " error='" + own.errorText + "' reconnecting=" + std::to_string(own.reconnecting);
 			return false;
 		}
-		if (!departed.landed || departed.errorText != "The host left the match") {
+		if (!departed.landed || departed.errorText != "Could not reach the host - the match can be rejoined") {
 			*error = "a seat with nothing committed stayed on after its host left: landed=" + std::to_string(departed.landed) + " error='" + departed.errorText + "'";
 			return false;
 		}

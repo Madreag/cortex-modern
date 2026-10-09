@@ -110,7 +110,7 @@ namespace RTE {
 	bool TestAReturnersRoundSkipsTheRoundsEarlierTicks(std::string* error);
 	bool TestAReturnedSeatThatLeavesAgainIsGone(std::string* error);
 	bool TestARoundsOwnEndIsNoHold(std::string* error);
-	bool TestFourPlayerHoldWaitsForALiveAcknowledgement(std::string* error);
+	bool TestFourPlayerHoldDoesNotWaitForPolicyReceipts(std::string* error);
 	bool TestFourPeersCommitPlacement(std::string* error);
 	bool TestPlacementSessionSequence(unsigned fight, std::string* error);
 	bool TestBriefHostJitterKeepsItsHumanSeat(std::string* error);
@@ -2150,7 +2150,7 @@ namespace RTE {
 			}
 			NetLockstepReadyFrame ready;
 			while (host.PopReadyFrame(ready)) (void)host.FinishSimulationTick(ready.frame);
-			for (uint64_t step = 0; step < 600 && holdsOfPeerTwo() == 0; step += 2, now += 2) {
+			for (uint64_t step = 0; step < 6000 && holdsOfPeerTwo() == 0; step += 2, now += 2) {
 				hostWire.AdvanceTimeMs(2); host.Tick(now); host.NoteFrameWait(host.GetStats().nextFrame, now);
 			}
 			if (holdsOfPeerTwo() == 0) {
@@ -2305,9 +2305,19 @@ namespace RTE {
 			return true;
 		}
 
-		bool TestHoldWaitsForSurvivorDecision(std::string* error, bool bothSilent = false, bool lostAck = false) {
-			LoopbackTransport hostTransport, slowTransport, survivorTransport;
-			if (!hostTransport.StartHost(48893, error) || !slowTransport.Connect("loopback", 48893, error) || !survivorTransport.Connect("loopback", 48893, error)) return false;
+		bool TestHostHoldsWithoutPolicyVotes(std::string* error, bool bothSilent = false, bool lostAck = false) {
+			class ReceiptWire final: public LoopbackTransport {
+			public:
+				bool block = false;
+				bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* reason = nullptr, bool* congested = nullptr) override {
+					const auto decoded = NetLockstepCodec::Decode(bytes);
+					if (block && decoded.ok) if (const auto* timing = std::get_if<NetLockstepTiming>(&decoded.packet.payload))
+						if (timing->phase == NetTimingPhase::Acknowledge || timing->phase == NetTimingPhase::HoldAppliedAck) return false;
+					return LoopbackTransport::Send(peer, lane, bytes, reason, congested);
+				}
+			} survivorWire;
+			LoopbackTransport hostWire, slowWire;
+			if (!hostWire.StartHost(48893, error) || !slowWire.Connect("loopback", 48893, error) || !survivorWire.Connect("loopback", 48893, error)) return false;
 			const auto config = [](uint8_t local, std::map<uint8_t, NetPeerId> remotes) {
 				NetLockstepConfig value;
 				value.sessionId = 0x9A03; value.roundId = 19; value.localPeerId = local; value.peerCount = 3;
@@ -2315,64 +2325,40 @@ namespace RTE {
 				value.remoteTransportPeerIds = std::move(remotes); value.relayToOtherPeers = local == 1;
 				value.matchConfig = NetMatchConfigUtil::MakeDefault(value.sessionId);
 				value.matchConfig.peerCount = 3; value.matchConfig.players.push_back({3, 2, false, "Survivor"});
-				value.ownershipPolicy = "team-owner";
-				value.migrationGeneration = 7;
+				value.ownershipPolicy = "team-owner"; value.migrationGeneration = 7;
 				value.peerIncarnations = {{1, 1}, {2, 3}, {3, 4}};
 				return value;
 			};
 			NetLockstepCoordinator host, slow, survivor;
-			if (!host.Start(hostTransport, config(1, {{2, 1}, {3, 2}}), error) || !slow.Start(slowTransport, config(2, {{1, 1}}), error) ||
-			    !survivor.Start(survivorTransport, config(3, {{1, 1}}), error)) return false;
-			for (uint64_t now = 0; now < 10; ++now) {
-				hostTransport.AdvanceTimeMs(1); slowTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
-				host.Tick(now); slow.Tick(now); survivor.Tick(now);
-			}
-			uint64_t warmedAt = 10;
-			if (!WarmBoundedInputFixture({{&host, &hostTransport}, {&slow, &slowTransport}, {&survivor, &survivorTransport}}, warmedAt, error) ||
-			    !host.QueueLocalInput(101, {}, {}, error) || (!bothSilent && !survivor.QueueLocalInput(100, {}, {}, error))) return false;
-			host.Tick(20);
-			host.NoteFrameWait(101, 100);
-			host.NoteFrameWait(101, 1150);
-			host.Tick(1150);
+			if (!host.Start(hostWire, config(1, {{2, 1}, {3, 2}}), error) || !slow.Start(slowWire, config(2, {{1, 1}}), error) ||
+			    !survivor.Start(survivorWire, config(3, {{1, 1}}), error)) return false;
+			uint64_t now = 0;
+			const auto pump = [&](bool slowAlive) {
+				hostWire.AdvanceTimeMs(1); slowWire.AdvanceTimeMs(1); survivorWire.AdvanceTimeMs(1);
+				host.Tick(now); if (slowAlive) slow.Tick(now); if (!bothSilent || slowAlive) survivor.Tick(now); ++now;
+			};
+			for (int pass = 0; pass < 10; ++pass) pump(true);
+			if (!WarmBoundedInputFixture({{&host, &hostWire}, {&slow, &slowWire}, {&survivor, &survivorWire}}, now, error) ||
+			    !host.QueueLocalInput(101, {}, {}, error) || (!bothSilent && !survivor.QueueLocalInput(101, {}, {}, error))) return false;
+			survivorWire.block = lostAck;
+			const uint64_t stopped = now;
+			for (; now < stopped + c_NetSeatDisconnectSilenceMs - 50;) pump(false);
+			if (host.HasHeldAISeat(2) || host.HasHeldAISeat(3)) { *error = "a host held a seat before five seconds of silence"; return false; }
+			for (; now < stopped + c_NetSeatDisconnectSilenceMs + 100;) pump(false);
 			NetLockstepReadyFrame hostFrame, survivorFrame;
-			if (bothSilent) {
-				if (!host.PopReadyFrame(hostFrame) || hostFrame.aiHeldPeerIds != std::vector<uint8_t>({2, 3}) ||
-				    host.GetStats().peers.at(2).holds != 1 || host.GetStats().peers.at(3).holds != 1) {
-					*error = "simultaneously silent seats waited for each other's acknowledgement"; return false;
-				}
-				return true;
-			}
-			if (host.PopReadyFrame(hostFrame) || !host.TimingDecisionPendingAt(101) || host.IsSeatUnderAI(2, 101) || survivor.PopReadyFrame(survivorFrame)) {
-				*error = "a peer applied a hold before its survivor acknowledged the proposal"; return false;
-			}
-			// Deliver only the proposal and its receipt; the survivor has not yet received the final commit or applied the tick.
-			hostTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
-			survivor.Tick(1151);
-			hostTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
-			host.Tick(1152);
-			if (!host.PopReadyFrame(hostFrame) || host.TimingDecisionPendingAt(101) || survivor.PopReadyFrame(survivorFrame)) {
-				*error = "the acknowledged hold waited for application or the survivor applied before its commit"; return false;
+			const std::vector<uint8_t> expected = bothSilent ? std::vector<uint8_t>{2, 3} : std::vector<uint8_t>{2};
+			if (!host.PopReadyFrame(hostFrame) || hostFrame.frame != 101 || hostFrame.aiHeldPeerIds != expected ||
+			    host.TimingDecisionPendingAt(101) || host.IsSeatUnderAI(1, 101)) {
+				*error = "the host's disconnected-seat order waited for a policy vote or changed its own seat"; return false;
 			}
 			const auto held = std::find_if(hostFrame.localCommands.begin(), hostFrame.localCommands.end(), [](const auto& command) { return std::holds_alternative<NetGameSeatHold>(command.payload); });
 			if (held == hostFrame.localCommands.end() || std::get<NetGameSeatHold>(held->payload) != NetGameSeatHold{2, 7, 1, 3, 101}) {
-				*error = "the committed hold lost its authority, event sequence, incarnation or cutoff"; return false;
+				*error = "the host order lost its generation, revision, incarnation or cutoff"; return false;
 			}
-			if (lostAck) {
-				host.Tick(1201);
-				if (!host.IsRunning() || hostFrame.aiHeldPeerIds != std::vector<uint8_t>{2} || host.IsSeatUnderAI(3, 101)) {
-					*error = "a missing application acknowledgement changed another seat or stopped the survivor"; return false;
-				}
-				return true;
-			}
-			for (uint64_t now = 1153; now < 1167; ++now) {
-				hostTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
-				host.Tick(now); survivor.Tick(now);
-			}
-			if (!survivor.PopReadyFrame(survivorFrame) || hostFrame.frame != 101 || survivorFrame.frame != 101 ||
-			    hostFrame.aiHeldPeerIds != std::vector<uint8_t>{2} || survivorFrame.aiHeldPeerIds != hostFrame.aiHeldPeerIds ||
-			    host.ResolveActorOwner(987654321, 1, false) != 1 || survivor.ResolveActorOwner(987654321, 1, false) != 1 ||
+			if (bothSilent) return true;
+			if (!survivor.PopReadyFrame(survivorFrame) || survivorFrame.frame != 101 || survivorFrame.aiHeldPeerIds != expected ||
 			    hostFrame.localCommands != survivorFrame.remoteCommands) {
-				*error = "survivors did not commit the same hold event and AI producer"; return false;
+				*error = "the survivor did not apply the same host hold order"; return false;
 			}
 			return VerifyHeldSeatControllerState(host, hostFrame, survivor, survivorFrame, error);
 		}
@@ -2535,7 +2521,7 @@ namespace RTE {
 				if constexpr (requires { coordinator.CompleteSharedSceneLoad(loadFrame, ordinal, now); })
 					coordinator.CompleteSharedSceneLoad(loadFrame, ordinal, now);
 			};
-			uint64_t hostProduced = 1, clientProduced = 1, loadBeganMs = 0, resumedAtMs = 0;
+			uint64_t hostProduced = 1, clientProduced = 1, loadBeganMs = 0, resumedAtMs = 0, disconnectedAtMs = 0;
 			uint64_t clientLoadOrdinal = 0;
 			bool clientLoading = false, clientStopped = false;
 			std::string queueError;
@@ -2566,7 +2552,9 @@ namespace RTE {
 							if (!simulate(client, clientProduced, 200)) { *error = queueError; return false; }
 						}
 					}
-					if (resumedAtMs != 0 && clientProduced > loadFrame + 12) clientStopped = true;
+					if (!clientStopped && resumedAtMs != 0 && clientProduced > loadFrame + 12) {
+                        clientStopped = true; disconnectedAtMs = now; clientWire.Stop();
+                    }
 				}
 				const uint64_t holds = host.GetStats().peers.at(2).holds;
 				if (!clientStopped && holds != 0) {
@@ -2576,8 +2564,8 @@ namespace RTE {
 					return false;
 				}
 				if (clientStopped && holds != 0) {
-					const uint64_t boundMs = 1000;
-					if (holds != 1 || host.GetStats().lastHoldDeclarationMs < boundMs || host.GetStats().lastHoldDeclarationMs > boundMs + 2) {
+					const uint64_t boundMs = c_NetSeatDisconnectSilenceMs;
+					if (holds != 1 || now + 100 < disconnectedAtMs + boundMs || now > disconnectedAtMs + boundMs + 100) {
 						*error = "scene-load completion changed the ordinary silent-input bound";
 						return false;
 					}
@@ -2643,7 +2631,10 @@ namespace RTE {
 				return false;
 			}
 			// It stops sending for 1200 ms: allow one second of absence and its own 50 ms of start work, not our restore's 1200.
-			pump(600, 1800, false);
+			pump(600, 6600, false);
+            if (host.GetStats().peers.at(2).holds != 0) { *error = "a stalled input producer sending control traffic was held"; return false; }
+            clientWire.Stop();
+            pump(6600, 12600, false);
 			const auto holds = host.GetStats().peers.at(2).holds;
 			if (holds != 1 || !host.IsSeatUnderAI(2, host.GetStats().nextFrame)) {
 				*error = "a playing seat that stalled in its first second waited out the host's own restore park: holds=" + std::to_string(holds) +
@@ -3004,7 +2995,7 @@ namespace RTE {
 				}
 			}
 			hostWire.Stop();
-			for (int pass = 0; pass < 1000; ++pass) {
+			for (int pass = 0; pass < 5000; ++pass) {
 				first.Tick(now); successor.Tick(now); now += 5;
 				if (first.GetMigrationResult().generation != 0 && successor.GetMigrationResult().generation != 0 && !first.IsMigrating() && !successor.IsMigrating()) break;
 			}
@@ -4511,11 +4502,11 @@ namespace RTE {
 				return false;
 			}
 			KillQuorumPeer(r, 2);
-			if (!PumpQuorumRig(r, 6000, [&r] { return r.Peer(1).IsHostProvisional(); })) {
+			if (!PumpQuorumRig(r, 6000, [&r] { return r.Peer(1).HasHeldAISeat(2); })) {
 				*error = "the host of a two-player round whose client died was not provisional:" + r.Report();
 				return false;
 			}
-			if (r.Peer(1).IsSeatUnderAI(2, r.simulated[0])) { *error = "a single voter held the other half of its electorate"; return false; }
+			if (r.Peer(1).IsSeatUnderAI(1, r.simulated[0]) || r.Peer(1).IsHostProvisional()) { *error = "the live host held itself or waited for a nonexistent host-change electorate"; return false; }
 			NetPeerId returnerLink = c_InvalidNetPeerId;
 			r.Peer(1).SetSessionEventSink([&returnerLink](const NetTransportEvent& event) {
 				if (event.type == NetTransportEventType::PeerConnected) returnerLink = event.peerId;
@@ -4551,12 +4542,12 @@ namespace RTE {
 			}
 			back = false;
 			returner.Stop();
-			for (uint64_t i = 0; i < 6000 && !r.Peer(1).IsHostProvisional(); ++i) step();
-			if (!r.Peer(1).IsHostProvisional()) {
+			for (uint64_t i = 0; i < 6000; ++i) step();
+			if (!r.Peer(1).IsRunning() || !r.Peer(1).HasHeldAISeat(2) || r.Peer(1).IsSeatUnderAI(1, r.simulated[0])) {
 				*error = "a host whose returning player's link closed was not provisional again:" + r.Report();
 				return false;
 			}
-			std::cout << "[net-lockstep-selftest] PASS a_host_reaches_a_player_back_on_a_new_link died=provisional back=real held_real_ms=3000 closed=provisional" << std::endl;
+			std::cout << "[net-lockstep-selftest] PASS a_host_reaches_a_player_back_on_a_new_link died=held back=awaiting_recovery connected_ms=3000 closed=held" << std::endl;
 			return true;
 		}
 
@@ -4744,10 +4735,11 @@ namespace RTE {
 					}
 					continue;
 				}
+				const uint64_t disconnectedMs = now; clientWire.Stop();
 				uint64_t heldMs = 0;
-				while (now < dueMs + c_NetSeatDisconnectSilenceMs + 10 && heldMs == 0) { pump(); if (holdsOfPeerTwo() != 0) heldMs = now; }
-				const uint64_t boundMs = 1000;
-				if (heldMs == 0 || heldMs + 4 < dueMs + boundMs || heldMs > dueMs + boundMs + 4) {
+				while (now < disconnectedMs + c_NetSeatDisconnectSilenceMs + 100 && heldMs == 0) { pump(); if (holdsOfPeerTwo() != 0) heldMs = now; }
+				const uint64_t boundMs = c_NetSeatDisconnectSilenceMs;
+				if (heldMs == 0 || heldMs + 100 < disconnectedMs + boundMs || heldMs > disconnectedMs + boundMs + 100) {
 					*error = "a seat silent after a park was not held at the bound from its due time: held_ms=" + std::to_string(heldMs) +
 					         " park_end_ran_ms=" + std::to_string(parkEndRanMs) + " due_ms=" + std::to_string(dueMs) + " bound_ms=" + std::to_string(boundMs);
 					return false;
@@ -5010,9 +5002,12 @@ namespace RTE {
 			if (!client.QueueLocalInput(stray - delay, {}, {}, error)) return false;
 			step(now + 30);
 			if (holdsOfPeerTwo() != 0) { *error = "a live stream was held for a missing frame during short jitter"; return false; }
-			step(now + 1001);
+			step(now + 6000);
+            if (holdsOfPeerTwo() != 0) { *error = "keepalives did not preserve a late input producer"; return false; }
+            clientWire.Stop();
+            step(now + 6000);
 			if (holdsOfPeerTwo() == 0) {
-				*error = "a stream that stopped for over a second was not held at its first missing frame: sent_through=" + std::to_string(stray);
+				*error = "a link silent for six seconds was not held at its first missing frame: sent_through=" + std::to_string(stray);
 				return false;
 			}
 			std::cout << "[net-lockstep-selftest] PASS a_feeding_peer_is_waited_on_within_the_bound held_at_tick=" << stray << std::endl;
@@ -8442,7 +8437,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
-		bool TestCoordinatorMissingFrameTimeout(std::string* error) {
+		bool TestCoordinatorWaitsForLateInput(std::string* error) {
 			const uint16_t port = 43003;
 			const uint64_t sessionId = 0x7000000000000003ULL;
 			LoopbackTransportConfig clientFaults;
@@ -8467,14 +8462,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error)) {
 				return false;
 			}
-			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsFailed(); }, error, 500)) {
-				return false;
+			for (uint64_t now = 0; now <= 2000; now += 5) {
+				hostTransport.AdvanceTimeMs(5); clientTransport.AdvanceTimeMs(5); host.Tick(now); client.Tick(now);
 			}
-			if (host.GetStats().missingFrameStalls == 0 ||
-			    host.GetStats().timeoutReason.find("MissingFrameTimeout") == std::string::npos ||
-			    host.BuildReportJson().find("\"timeouts\":1") == std::string::npos) {
-				*error = "missing-frame timeout did not produce the expected report";
-				return false;
+			if (!host.IsRunning() || !client.IsRunning() || host.HasHeldAISeat(2) || host.GetStats().missingFrameStalls == 0 ||
+			    !host.GetStats().timeoutReason.empty()) {
+				*error = "late input with authenticated traffic changed the session instead of waiting"; return false;
 			}
 			return true;
 		}
@@ -9599,6 +9592,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = sessionId;
+				c.roundId = c.sessionId;
 				c.startFrame = 0;
 				c.inputDelayFrames = 0;
 				c.timeoutMs = 500;
@@ -9882,6 +9876,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = sessionId;
+				c.roundId = c.sessionId;
 				c.timeoutMs = 500;
 				c.localPeerId = local;
 				c.peerCount = 3;
@@ -9987,7 +9982,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				}
 				auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 					NetLockstepConfig c;
-					c.sessionId = sessionId;
+					c.sessionId = sessionId; c.roundId = sessionId;
 					c.timeoutMs = timeoutMs;
 					c.localPeerId = local;
 					c.peerCount = 3;
@@ -10140,7 +10135,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		// The negative control for the rule above: a client NEVER adjudicates. Two survivors judging
 		// independently would drop the same peer at different frames and diverge, so a client whose
 		// host has gone quiet must still die on its own missing-frame grace, with the same text.
-		bool TestCoordinatorSilentHostStillTimesOut(std::string* error) {
+		bool TestCoordinatorWaitsWithoutSuccessorAuthority(std::string* error) {
 			StarFixture fx;
 			const uint32_t timeoutMs = 300;
 			if (!fx.Start(43013, 0x7000000000000013ULL, timeoutMs, error)) {
@@ -10158,14 +10153,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "silent-host fixture did not get the round moving";
 				return false;
 			}
-			// The host wedges: A now waits on the host and, through it, on B.
-			if (!fx.Drive(false, true, true, [&] { return fx.clientA.IsFailed(); }, fx.now + 6 * timeoutMs)) {
-				*error = "a client with a silent host did not time out";
-				return false;
-			}
-			if (fx.clientA.GetStats().timeoutReason.find("MissingFrameTimeout") == std::string::npos) {
-				*error = "a client with a silent host stopped for the wrong reason: " + fx.clientA.GetStats().timeoutReason;
-				return false;
+			// Without configured successor routes, a client waits for authority; it cannot end the match.
+			fx.Drive(false, true, true, [&] { return false; }, fx.now + 16000);
+			if (!fx.clientA.IsRunning() || fx.clientA.IsMigrating() || !fx.clientA.GetStats().timeoutReason.empty()) {
+				*error = "a client invented a session end without a successor authority"; return false;
 			}
 			if (!fx.clientA.GetPeerLeaveFrames().empty() || fx.clientA.GetStats().peersDroppedSilent != 0) {
 				*error = "a client adjudicated a peer drop, which only the relay host may do";
@@ -10443,6 +10434,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = sessionId;
+				c.roundId = c.sessionId;
 				c.timeoutMs = 5000;
 				c.localPeerId = local;
 				c.peerCount = 3;
@@ -10734,6 +10726,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = sessionId;
+				c.roundId = c.sessionId;
 				c.timeoutMs = 5000;
 				c.localPeerId = local;
 				c.peerCount = 3;
@@ -10828,6 +10821,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = sessionId;
+				c.roundId = c.sessionId;
 				c.timeoutMs = 5000;
 				c.localPeerId = local;
 				c.peerCount = 3;
@@ -10918,6 +10912,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = sessionId;
+				c.roundId = c.sessionId;
 				c.timeoutMs = 5000;
 				c.localPeerId = local;
 				c.peerCount = 3;
@@ -11117,6 +11112,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 					NetLockstepConfig c;
 					c.sessionId = sessionId;
+					c.roundId = c.sessionId;
 					c.timeoutMs = 5000;
 					c.localPeerId = local;
 					c.peerCount = 2;
@@ -11360,6 +11356,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = sessionId;
+				c.roundId = c.sessionId;
 				c.timeoutMs = 5000;
 				c.localPeerId = local;
 				c.peerCount = 2;
@@ -11552,6 +11549,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = sessionId;
+				c.roundId = c.sessionId;
 				c.timeoutMs = 5000;
 				c.localPeerId = local;
 				c.peerCount = 3;
@@ -11733,6 +11731,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = sessionId;
+				c.roundId = c.sessionId;
 				c.timeoutMs = 200;
 				c.localPeerId = local;
 				c.peerCount = 2;
@@ -14289,12 +14288,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "the follower never committed the frame it owes";
 				return false;
 			}
-			// The client's own grace is 500ms and nothing is pending on it, so it keeps retrying and
-			// stays Running. The host, which IS waiting, gives up on its own grace.
-			if (!drive([&] { return !host.IsRunning(); }, 4000)) {
-				*error = "the host never gave up on the frame the link refuses";
-				return false;
-			}
+			// Input lateness never ends a round. The authority explicitly ends this one.
+			drive([&] { return false; }, 2000);
+			if (!host.IsRunning() || !client.IsRunning()) { *error = "an input retry ended the round without the host"; return false; }
+			host.Complete("host ended the retry fixture");
 			if (!drive([&] { return !client.IsRunning(); }, 2000)) {
 				*error = "the host's stop never reached the follower: " + client.BuildReportJson();
 				return false;
@@ -14554,7 +14551,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
-		bool TestHoldPauseCommitsNothing(std::string* error) {
+		bool TestHoldContinuesWithAI(std::string* error) {
 			const uint16_t port = 43080;
 			LoopbackTransport hostT, leaverT, stayerT;
 			if (!hostT.StartHost(port, error) || !leaverT.Connect("loopback", port, error) || !stayerT.Connect("loopback", port, error)) {
@@ -14563,6 +14560,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = 0x7000000000000080ULL;
+				c.roundId = c.sessionId;
 				c.timeoutMs = 5000;
 				c.localPeerId = local;
 				c.peerCount = 3;
@@ -14619,7 +14617,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			}
 			const uint64_t frozen = host.GetStats().nextFrame;
 			leaverT.Stop();
-			if (!drive(2000, [&] { return host.GetPeerLeaveFrames().count(2) != 0 && host.AnyDroppedSeatHeld(); })) {
+			if (!drive(6000, [&] { return host.GetPeerLeaveFrames().count(2) != 0 && host.AnyDroppedSeatHeld(); })) {
 				*error = "the drop never paused the coordinator";
 				return false;
 			}
@@ -14634,8 +14632,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				}
 				return false;
 			});
-			if (extra != 0 || host.GetStats().nextFrame != frozen) {
-				*error = "the coordinator committed while a dropped seat was held";
+			if (extra != 3 || host.GetStats().nextFrame != frozen + 3 || !host.IsSeatUnderAI(2, frozen)) {
+				*error = "the host did not continue the held seat under AI at its ordered cutoff";
 				return false;
 			}
 			return true;
@@ -14650,6 +14648,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = 0x7000000000000081ULL;
+				c.roundId = c.sessionId;
 				c.timeoutMs = 5000;
 				c.localPeerId = local;
 				c.peerCount = 3;
@@ -14705,19 +14704,15 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return false;
 			}
 			leaverT.Stop();
-			if (!drive(2000, [&] { return host.GetPeerLeaveFrames().count(2) != 0; })) {
+			if (!drive(6000, [&] { return host.GetPeerLeaveFrames().count(2) != 0; })) {
 				*error = "expired-resume drop was never recorded";
 				return false;
 			}
 			const uint64_t leaveFrame = host.GetPeerLeaveFrames().at(2);
 			host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, now);
-			if (!drive(2000, [&] { return !host.AnyDroppedSeatHeld() && !stayer.AnyDroppedSeatHeld(); })) {
-				*error = "Expired never cleared the held seat on both peers";
-				return false;
-			}
-			if (host.HeldSeatResolution(2) != NetLockstepHoldResolution::Expired) {
-				*error = "the host did not record Expired";
-				return false;
+			drive(100, [&] { return false; });
+			if (!host.IsSeatReleased(2) || !stayer.IsSeatReleased(2) || !host.IsRunning() || !stayer.IsRunning()) {
+				*error = "the host's release did not reach both survivors without ending their round"; return false;
 			}
 			for (uint64_t f = leaveFrame; f < leaveFrame + 3; ++f) {
 				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
@@ -14744,7 +14739,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
-		bool TestHoldReclaimedResyncsAtLeaveFrame(std::string* error) {
+		bool TestReturnNoticePreservesHostRecovery(std::string* error) {
 			const uint16_t port = 43082;
 			LoopbackTransport hostT, leaverT, stayerT;
 			if (!hostT.StartHost(port, error) || !leaverT.Connect("loopback", port, error) || !stayerT.Connect("loopback", port, error)) {
@@ -14753,6 +14748,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = 0x7000000000000082ULL;
+				c.roundId = c.sessionId;
 				c.timeoutMs = 5000;
 				c.localPeerId = local;
 				c.peerCount = 3;
@@ -14806,7 +14802,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return false;
 			}
 			leaverT.Stop();
-			if (!drive(2000, [&] { return host.GetPeerLeaveFrames().count(2) != 0; })) {
+			if (!drive(6000, [&] { return host.GetPeerLeaveFrames().count(2) != 0; })) {
 				*error = "reclaim-resync drop was never recorded";
 				return false;
 			}
@@ -14820,9 +14816,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "Reclaimed moved the stop frame off the leave frame";
 				return false;
 			}
-			if (host.GetStats().timeoutReason.find("ResyncRequested") == std::string::npos) {
-				*error = "Reclaimed did not resume through the resync path: " + host.GetStats().timeoutReason;
-				return false;
+			if (!host.IsRunning() || host.HasPendingRecoveryStop() || !host.HasHeldAISeat(2)) {
+				*error = "a return notice skipped host-controlled recovery or ended the round"; return false;
 			}
 			return true;
 		}
@@ -14838,6 +14833,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = sessionId;
+				c.roundId = c.sessionId;
 				c.timeoutMs = 5000;
 				c.localPeerId = local;
 				c.peerCount = 2;
@@ -14888,14 +14884,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return false;
 			}
 			clientT.Stop();
-			if (!drive(2000, [&] { return host.GetPeerLeaveFrames().count(2) != 0 && host.AnyDroppedSeatHeld(); })) {
+			if (!drive(6000, [&] { return host.GetPeerLeaveFrames().count(2) != 0 && host.AnyDroppedSeatHeld(); })) {
 				*error = "two-peer hold fixture never recorded the drop";
 				return false;
 			}
 			leaveFrame = host.GetPeerLeaveFrames().at(2);
 			host.ResolveHeldSeat(2, resolution, now);
 			host.Tick(now + 5);
-			if (resolution != NetLockstepHoldResolution::Expired && (!host.IsRunning() || !host.HasPendingRecoveryStop())) {
+			if (!host.IsRunning() || host.HasPendingRecoveryStop()) {
 				*error = "the hold resolution ended the round before its tick boundary: " + host.GetStats().timeoutReason;
 				return false;
 			}
@@ -14903,7 +14899,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
-		bool TestTwoPeerReclaimedRequestsResync(std::string* error) {
+		bool TestTwoPeerReturnNoticePreservesHold(std::string* error) {
 			LoopbackTransport hostT, clientT;
 			NetLockstepCoordinator host;
 			uint64_t leaveFrame = 0;
@@ -14915,8 +14911,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "Reclaimed stopped a 2-peer round: " + host.GetStats().timeoutReason;
 				return false;
 			}
-			if (host.GetStats().timeoutReason.find("ResyncRequested") == std::string::npos) {
-				*error = "Reclaimed did not request resync: " + host.GetStats().timeoutReason;
+			if (!host.IsRunning() || host.HasPendingRecoveryStop() || !host.HasHeldAISeat(2)) {
+				*error = "Reclaimed bypassed the host recovery boundary: " + host.GetStats().timeoutReason;
 				return false;
 			}
 			if (host.GetStats().nextFrame != leaveFrame) {
@@ -14926,7 +14922,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
-		bool TestTwoPeerSubstitutedRequestsResync(std::string* error) {
+		bool TestTwoPeerSubstitutionPreservesRound(std::string* error) {
 			LoopbackTransport hostT, clientT;
 			NetLockstepCoordinator host;
 			uint64_t leaveFrame = 0;
@@ -14938,8 +14934,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "Substituted stopped a 2-peer round: " + host.GetStats().timeoutReason;
 				return false;
 			}
-			if (host.GetStats().timeoutReason.find("ResyncRequested") == std::string::npos) {
-				*error = "Substituted did not request resync: " + host.GetStats().timeoutReason;
+			if (!host.IsRunning() || host.HasPendingRecoveryStop() || !host.HasHeldAISeat(2)) {
+				*error = "Substituted bypassed the host recovery boundary: " + host.GetStats().timeoutReason;
 				return false;
 			}
 			if (host.GetStats().nextFrame != leaveFrame) {
@@ -14949,7 +14945,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
-		bool TestTwoPeerExpiredEndsLastPlayer(std::string* error) {
+		bool TestTwoPeerExpiryPreservesHost(std::string* error) {
 			LoopbackTransport hostT, clientT;
 			NetLockstepCoordinator host;
 			uint64_t leaveFrame = 0;
@@ -14957,14 +14953,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!DriveTwoPeerHoldResolution(43088, 0x7000000000000088ULL, NetLockstepHoldResolution::Expired, host, hostT, clientT, leaveFrame, now, error)) {
 				return false;
 			}
-			if (!host.IsStopped() || host.GetStats().timeoutReason.find("PeerLeft") == std::string::npos) {
-				*error = "Expired did not stop the last-player round: " + host.GetStats().timeoutReason;
+			if (!host.IsRunning() || !host.IsSeatReleased(2) || host.IsSeatUnderAI(1, host.GetStats().nextFrame)) {
+				*error = "Expiry changed the last player's session: " + host.GetStats().timeoutReason;
 				return false;
 			}
 			return true;
 		}
 
-		bool TestThreePeerReclaimedRequestsResync(std::string* error) {
+		bool TestThreePeerReturnNoticePreservesHold(std::string* error) {
 			const uint16_t port = 43089;
 			LoopbackTransport hostT, leaverT, stayerT;
 			if (!hostT.StartHost(port, error) || !leaverT.Connect("loopback", port, error) || !stayerT.Connect("loopback", port, error)) {
@@ -14973,6 +14969,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = 0x7000000000000089ULL;
+				c.roundId = c.sessionId;
 				c.timeoutMs = 5000;
 				c.localPeerId = local;
 				c.peerCount = 3;
@@ -15027,13 +15024,13 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return false;
 			}
 			leaverT.Stop();
-			if (!drive(2000, [&] { return host.GetPeerLeaveFrames().count(2) != 0 && host.AnyDroppedSeatHeld(); })) {
+			if (!drive(6000, [&] { return host.GetPeerLeaveFrames().count(2) != 0 && host.AnyDroppedSeatHeld(); })) {
 				*error = "three-peer reclaim fixture never recorded the drop";
 				return false;
 			}
 			host.ResolveHeldSeat(2, NetLockstepHoldResolution::Reclaimed, now);
 			host.Tick(now + 5);
-			if (!host.IsRunning() || !host.HasPendingRecoveryStop()) {
+			if (!host.IsRunning() || host.HasPendingRecoveryStop() || !host.HasHeldAISeat(2)) {
 				*error = "3-peer Reclaimed did not hold its resync for the tick boundary: " + host.GetStats().timeoutReason;
 				return false;
 			}
@@ -15042,7 +15039,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "Reclaimed stopped a 3-peer round: " + host.GetStats().timeoutReason;
 				return false;
 			}
-			if (host.GetStats().timeoutReason.find("ResyncRequested") == std::string::npos) {
+			if (!host.IsRunning() || host.HasPendingRecoveryStop()) {
 				*error = "3-peer Reclaimed did not request resync: " + host.GetStats().timeoutReason;
 				return false;
 			}
@@ -15172,6 +15169,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = 0x7000000000000083ULL;
+				c.roundId = c.sessionId;
 				c.timeoutMs = timeoutMs;
 				c.localPeerId = local;
 				c.peerCount = 4;
@@ -15242,7 +15240,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return false;
 			}
 			bT.Stop();
-			for (uint64_t guard = 0; guard < 400 && host.GetPeerLeaveFrames().count(3) == 0; ++guard) {
+			for (uint64_t guard = 0; guard < 1200 && host.GetPeerLeaveFrames().count(3) == 0; ++guard) {
 				tickLive(true, false, true);
 			}
 			if (host.GetPeerLeaveFrames().count(3) == 0 || !host.AnyDroppedSeatHeld()) {
@@ -15269,7 +15267,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
-		bool TestWaitDoesNotGiveUpDuringHoldPause(std::string* error) {
+		bool TestWaitPumpsUntilExplicitHostEnd(std::string* error) {
 			const uint16_t port = 43084;
 			LoopbackTransport hostT, clientT;
 			if (!hostT.StartHost(port, error) || !clientT.Connect("loopback", port, error)) {
@@ -15278,6 +15276,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = 0x7000000000000084ULL;
+				c.roundId = c.sessionId;
 				c.timeoutMs = 200;
 				c.localPeerId = local;
 				c.peerCount = 2;
@@ -15323,7 +15322,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				}
 			}
 			clientT.Stop();
-			for (uint64_t guard = 0; guard < 80; ++guard, now += 5) {
+			for (uint64_t guard = 0; guard < 1200; ++guard, now += 5) {
 				host.Tick(now);
 				hostT.AdvanceTimeMs(5);
 				if (host.AnyDroppedSeatHeld()) {
@@ -15339,7 +15338,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			ScenarioRunner::SetSessionPump([&] {
 				++pumps;
 				if (pumps == 40) {
-					host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, now + 5);
+					host.Complete("explicit host end from session pump");
 				}
 			});
 			const auto waitStart = std::chrono::steady_clock::now();
@@ -15738,6 +15737,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			const auto cfg = [](uint64_t sessionId, uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = sessionId;
+				c.roundId = c.sessionId;
 				c.timeoutMs = 5000;
 				c.localPeerId = local;
 				c.peerCount = 2;
@@ -15885,6 +15885,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = 0x7000000000000085ULL;
+				c.roundId = c.sessionId;
 				c.timeoutMs = 5000;
 				c.localPeerId = local;
 				c.peerCount = 3;
@@ -20228,7 +20229,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			NetHash32 Hash() const { return NetIdentity::HashCanonicalText("migration-sim", {{"state", Save()}}); }
 		};
 
-		bool TestSilentHostResumesWithinTwoSeconds(std::string* error) {
+		bool TestSilentHostResumesAfterRequiredSilence(std::string* error) {
 			LoopbackTransport hostWire, aWire, bWire;
 			if (!hostWire.StartHost(49464, error) || !aWire.Connect("loopback", 49464, error) || !bWire.Connect("loopback", 49464, error)) return false;
 			auto match = NetMatchConfigUtil::MakeDefault(0x151);
@@ -20267,13 +20268,13 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			};
 			for (auto* peer: {&a, &b}) if (!peer->QueueLocalInput(6, {}, {}, error)) return false;
 			// The dead process sends neither a close callback nor a final packet.
-			for (; now - lastHostFrame <= 2000; now += 5) {
+			for (; now - lastHostFrame <= c_NetHostLossSilenceMs + 5000; now += 5) {
 				a.Tick(now); b.Tick(now); collect(a, &worldA); collect(b, &worldB);
 				if (!noSnapshotAdmission()) return false;
 				if (worldA.applied >= 6 && worldB.applied >= 6) break;
 			}
 			if (worldA.applied < 6 || worldB.applied < 6 || worldA.Hash() != worldB.Hash() || a.GetHostPeerId() != 2 || b.GetHostPeerId() != 2 || a.IsFailed() || b.IsFailed()) {
-				*error = "silent host blocked survivors beyond 2000 ms: A=" + a.BuildReportJson() + " B=" + b.BuildReportJson(); return false;
+				*error = "silent host blocked survivors after the host-loss and handover window: A=" + a.BuildReportJson() + " B=" + b.BuildReportJson(); return false;
 			}
 			const uint64_t waitMs = now - lastHostFrame;
 			if (a.GetMigrationResult().boundary != 5 || b.GetMigrationResult().boundary != 5) {
@@ -20290,7 +20291,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					*error = "handover survivors diverged after the boundary at frame " + std::to_string(frame); return false;
 				}
 			}
-			std::cout << "[net-lockstep-selftest] PASS silent_host_bound wait_ms=" << waitMs << " bound_ms=2000 survivors=2 hashes=equal continued_frames=60 snapshot_admissions=0" << std::endl;
+			std::cout << "[net-lockstep-selftest] PASS silent_host_bound wait_ms=" << waitMs << " bound_ms=20000 survivors=2 hashes=equal continued_frames=60 snapshot_admissions=0" << std::endl;
 			return true;
 		}
 
@@ -20358,9 +20359,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "a host silent " + std::to_string(takenAt) + " ms, inside the host-loss bound, was taken for gone";
 				return false;
 			}
-			while (now - silentFrom < 2000 && !lost(a)) step(false);
+			while (now - silentFrom < c_NetHostLossSilenceMs + 1000 && !lost(a)) step(false);
 			if (!lost(a)) {
-				*error = "a host silent past the host-loss bound was not taken for gone within 2000 ms: state=" + std::string(NetLockstepCoordinator::StateName(a.GetState())) +
+				*error = "a host silent past the host-loss bound was not taken for gone after fifteen seconds: state=" + std::string(NetLockstepCoordinator::StateName(a.GetState())) +
 				         " next=" + std::to_string(a.GetStats().nextFrame);
 				return false;
 			}
@@ -20370,7 +20371,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 
 		/// A survivor with no other playing peer beside it cannot have the host's death confirmed: a loss burst on its own link must not make it
 		/// host a second match beside a live host, so it waits a confirmation window before it elects.
-		bool TestALoneSurvivorConfirmsTheHostIsGone(std::string* error) {
+		bool TestALoneSurvivorCannotElectItself(std::string* error) {
 			LoopbackTransport hostWire, aWire;
 			if (!hostWire.StartHost(49540, error) || !aWire.Connect("loopback", 49540, error)) return false;
 			auto match = NetMatchConfigUtil::MakeDefault(0x154);
@@ -20406,10 +20407,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			const uint64_t silentFrom = now;
 			while (now - silentFrom < 400 && !lost()) step(false);
 			const uint64_t early = lost() ? now - silentFrom : 0;
-			while (now - silentFrom < 1400 && !lost()) step(false);
-			if (early != 0 || !lost()) {
+			while (now - silentFrom < c_NetHostLossSilenceMs + 1000 && !lost()) step(false);
+			if (early != 0 || !lost() || a.GetHostPeerId() != 1 || a.GetMigrationResult().generation != 0) {
 				*error = "a-lone-survivor-confirms-the-host-is-gone: a survivor with nobody beside it took a silent host for gone after " + std::to_string(early) +
-				         " ms (expected not within 400 ms), lost=" + std::to_string(lost()) + " by 1400 ms (expected 1)";
+				         " ms (expected not within 400 ms), lost=" + std::to_string(lost()) + " after 16000 ms (expected 1)";
 				return false;
 			}
 			std::cout << "[net-lockstep-selftest] PASS a_lone_survivor_confirms_the_host_is_gone migrated_after_ms=" << (now - silentFrom) << std::endl;
@@ -20450,7 +20451,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			}
 			for (uint64_t frame = 6; frame <= 7; ++frame) if (!a.QueueLocalInput(frame, {MakeFrame(102, frame)}, {}, error)) return false;
 			const uint64_t silentFrom = now;
-			while (now - silentFrom < 4000) step(false);
+			while (now - silentFrom < c_NetHostLossSilenceMs + 4000) step(false);
 			const uint64_t seconds = (now - silentFrom) / 1000 + 1;
 			if (!a.IsRunning() || a.IsMigrating() || a.GetHostSilentReports() == 0 || a.GetHostSilentReports() > seconds) {
 				*error = "a-silent-host-is-reported-once-a-second: in " + std::to_string(now - silentFrom) + " ms of a silent host the survivor said so " +
@@ -21435,10 +21436,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		const bool excused = !host.DeclareOverdueInputs(148, 2260, 1000, {2});
 		// Set aside past the bound, the seat is judged like any silent one.
 		host.m_PlaneHeldSinceMs[link] = 1000;
-		const bool judged = host.DeclareOverdueInputs(148, 2260, 1000, {2});
+		const bool judged = host.DeclareOverdueInputs(148, 6001, 1000, {2});
 		if (!excused || !judged) {
 			*error = "a-deferred-stop-does-not-excuse-a-seat-past-the-bound: a seat whose connection the plane set aside 10 ms ago read excused=" + std::to_string(excused) +
-			         ", set aside 1260 ms ago read judged=" + std::to_string(judged) + "; expected 1 and 1";
+			         ", silent for over 5000 ms read judged=" + std::to_string(judged) + "; expected 1 and 1";
 			return false;
 		}
 		return true;
@@ -21464,8 +21465,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		host.m_PeerEffectiveStart[2] = 15;
 		host.m_Stats.nextFrame = 148;
 		for (uint64_t frame = 120; frame < 148; ++frame) host.m_CommittedAtMs[frame] = 700;
-		host.m_TimingNowMs = 2260;
-		if (!host.DeclareOverdueInputs(148, 2260, 1000, {2}) || !host.HasHeldAISeat(2)) {
+		host.m_TimingNowMs = 7260;
+		if (!host.DeclareOverdueInputs(148, 7260, 1000, {2}) || !host.HasHeldAISeat(2)) {
 			*error = "held-seat-hears-its-host: the silent seat was not held past the bound";
 			return false;
 		}
@@ -21483,13 +21484,13 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return arrivals;
 		};
 		(void)seat.PollEvents();
-		const std::vector<uint64_t> held = heard(2260, 2760);
-		uint64_t longestGap = held.empty() ? 500 : held.front() - 2260;
+		const std::vector<uint64_t> held = heard(7260, 7760);
+		uint64_t longestGap = held.empty() ? 500 : held.front() - 7260;
 		for (size_t index = 1; index < held.size(); ++index) longestGap = std::max(longestGap, held[index] - held[index - 1]);
 		// The seat's own silence bound with no jitter at all: the slow-player bound and one tick.
 		const uint64_t silenceBoundMs = 50 + 17;
 		host.NoteInPlaceReturn(2);
-		const std::vector<uint64_t> after = heard(2765, 3000);
+		const std::vector<uint64_t> after = heard(7765, 8000);
 		if (held.size() < 25 || longestGap >= silenceBoundMs || !after.empty()) {
 			*error = "held-seat-hears-its-host: over the 500 ms after its hold the seat heard the host " + std::to_string(held.size()) + " times, the longest gap " +
 			         std::to_string(longestGap) + " ms against its " + std::to_string(silenceBoundMs) + " ms silence bound, and " + std::to_string(after.size()) +
@@ -21904,7 +21905,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			*error = "every-hold-producer-writes-the-seat-log: a hold adopted from a replayed tail at 25, back at 90, read (under_ai, gone) at 40/96 as " + seen + "; expected 11/00";
 			return false;
 		}
-		// A continuing survivor must acknowledge the hold before either seat ownership or its vote changes.
+		// The host alone orders a hold; held owners remain in the host-change electorate.
 		LoopbackTransport hostWire, survivorWire;
 		if (!hostWire.StartHost(43565, error) || !survivorWire.Connect("loopback", 43565, error)) return false;
 		hostWire.PollEvents(); survivorWire.PollEvents();
@@ -21914,20 +21915,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		host.m_State = NetLockstepState::Running; host.m_RoundId = 41; host.m_Stats.nextFrame = 100;
 		host.m_Transport = &hostWire; host.m_RemotePeerIds = {2, 3}; host.m_RemoteTransports[2] = 1;
 		for (uint8_t peer: {1, 2, 3}) host.m_PeerEffectiveStart[peer] = 5;
-		if (!host.ProposePeerHold(3, 1000, error, 100)) return false;
-		if (host.IsSeatUnderAI(3, 100) || host.MigrationElectorate() != 7 || !host.TimingDecisionPendingAt(100)) {
-			*error = "an unacknowledged hold changed the seat, electorate, or commit barrier"; return false;
+		if (!host.ProposePeerHold(3, 6000, error, 100)) return false;
+		if (host.IsSeatUnderAI(3, 99) || !host.IsSeatUnderAI(3, 100) || host.MigrationElectorate() != 6 || host.TimingDecisionPendingAt(100)) {
+			*error = "a host-ordered hold missed its cutoff or removed a held survivor from host-change agreement"; return false;
 		}
-		const auto proposed = host.m_TimingDecisions.begin()->second.proposal;
-		auto ack = proposed; ack.senderPeerId = 2; ack.phase = NetTimingPhase::Acknowledge; ack.nextFrame = 100;
-		host.HandleTiming(ack, 1001, 1);
-		if (host.IsSeatUnderAI(3, 99) || !host.IsSeatUnderAI(3, 100) || host.TimingDecisionPendingAt(100)) {
-			*error = "an acknowledged hold missed its exact committed tick"; return false;
-		}
-		// A later attempt to remove the last survivor cannot be committed by the host alone.
 		host.m_LastDeliveredFrame = 100; host.m_LastCompletedSimulationTick = 100; host.m_Stats.nextFrame = 101;
-		if (!host.ProposePeerHold(2, 1100, error, 101) || host.IsSeatUnderAI(2, 101) || !host.TimingDecisionPendingAt(101)) {
-			*error = "repeated late holds manufactured a lone authority"; return false;
+		if (!host.ProposePeerHold(2, 6100, error, 101) || !host.IsSeatUnderAI(2, 101) || host.TimingDecisionPendingAt(101) ||
+		    host.IsSeatUnderAI(1, 101) || host.MigrationElectorate() != 6) {
+			*error = "the host could not order another disconnected seat's hold without changing host authority"; return false;
 		}
 		return true;
 	}
@@ -22694,7 +22689,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				host.AdvanceReadyFrames(now);
 				return host.IsSeatUnderAI(1, 607) || !host.m_TimingDecisions.empty();
 			};
-			if (judge(1000) || judge(1099) || judge(1101) || judge(2099) || judge(2101) == own) {
+			if (judge(1000) || judge(1099) || judge(1101) || judge(2099) || judge(c_NetSeatDisconnectSilenceMs + 1) == own) {
 				*error = std::string(own ? "host" : "remote") + " capture did not preserve the host or give the remote its capture cost followed by sustained absence";
 				return false;
 			}
@@ -23385,7 +23380,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 
 		LoopbackTransport wire; NetLockstepCoordinator host;
 		auto config = MakeCoordinatorConfig(1, 2, 0x9A76, 6, NetTransportLane::InputUnreliable);
-		config.relayToOtherPeers = true; config.peerIncarnations = {{1, 1}, {2, 1}};
+		config.relayToOtherPeers = true; config.remoteTransportPeerId = 1; config.peerIncarnations = {{1, 1}, {2, 1}};
 		if (!wire.StartHost(49575, error) || !host.Start(wire, config, error)) return false;
 		host.m_State = NetLockstepState::Running; host.m_Stats.nextFrame = 802;
 		host.m_AiHeldSeats[1] = 800; // A stale image cannot authorize a live own-host return.
@@ -23565,7 +23560,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	}
 
 
-	bool TestFourPlayerHoldWaitsForALiveAcknowledgement(std::string* error) {
+	bool TestFourPlayerHoldDoesNotWaitForPolicyReceipts(std::string* error) {
 		class DelayedReceiptWire final: public LoopbackTransport {
 		public:
 			bool wait = false;
@@ -28214,7 +28209,7 @@ namespace {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		bool passed = true;
 		for (bool (*test)(std::string*): {TestEveryHoldProducerWritesTheSeatLog, TestAnOlderDeliveryLeavesTheNewerSeatState, TestEveryGapStaysForASimulationBehind,
-		                                   TestADeferredStopDoesNotExcuseASeatPastTheBound, TestALoneSurvivorConfirmsTheHostIsGone}) {
+		                                   TestADeferredStopDoesNotExcuseASeatPastTheBound, TestALoneSurvivorCannotElectItself}) {
 			std::string error;
 			if (test(&error)) continue;
 			passed = false;
@@ -28459,9 +28454,9 @@ namespace {
 		row(&TestAHostIsProvisionalUntilItHearsAMajority, "a_host_is_provisional_until_it_hears_a_majority");
 		row(&TestAHostReachesAPlayerBackOnANewLink, "a_host_reaches_a_player_back_on_a_new_link");
 		row(&TestAHostStallInsideTheLossBoundMigratesNobody, "a_host_stall_inside_the_loss_bound_migrates_nobody");
-		row([](std::string* rowError) { return TestSilentHostResumesWithinTwoSeconds(rowError); }, "TestSilentHostResumesWithinTwoSeconds");
+		row([](std::string* rowError) { return TestSilentHostResumesAfterRequiredSilence(rowError); }, "TestSilentHostResumesAfterRequiredSilence");
 		row([](std::string* rowError) { return TestALongLinkedHostIsJudgedByItsSilenceAlone(rowError); }, "TestALongLinkedHostIsJudgedByItsSilenceAlone");
-		row([](std::string* rowError) { return TestALoneSurvivorConfirmsTheHostIsGone(rowError); }, "TestALoneSurvivorConfirmsTheHostIsGone");
+		row([](std::string* rowError) { return TestALoneSurvivorCannotElectItself(rowError); }, "TestALoneSurvivorCannotElectItself");
 		row([](std::string* rowError) { return TestASilentHostIsReportedOnceASecond(rowError); }, "TestASilentHostIsReportedOnceASecond");
 		row([](std::string* rowError) { return TestAHostQuietPastTheLastTickIsNotLost(rowError); }, "TestAHostQuietPastTheLastTickIsNotLost");
 		row([](std::string* rowError) { return TestAHostClosingAfterItsEndIsNotLost(rowError); }, "TestAHostClosingAfterItsEndIsNotLost");
@@ -28486,7 +28481,7 @@ namespace {
 		row([](std::string* rowError) { return TestCaptureParkWindowIsTheHostsAlone(rowError); }, "TestCaptureParkWindowIsTheHostsAlone");
 		row([](std::string* rowError) { return TestAgreedStartKeepsARejoinedHorizon(rowError); }, "TestAgreedStartKeepsARejoinedHorizon");
 		row([](std::string* rowError) { return TestOverdueBoundWaitsForTheCommittedRunway(rowError); }, "TestOverdueBoundWaitsForTheCommittedRunway");
-		row(&TestFourPlayerHoldWaitsForALiveAcknowledgement, "TestFourPlayerHoldWaitsForALiveAcknowledgement");
+		row(&TestFourPlayerHoldDoesNotWaitForPolicyReceipts, "TestFourPlayerHoldDoesNotWaitForPolicyReceipts");
 		row(&TestBriefHostJitterKeepsItsHumanSeat, "TestBriefHostJitterKeepsItsHumanSeat");
 		row([](std::string* rowError) { return TestBoundedHoldKeepsCommitting(rowError); }, "TestBoundedHoldKeepsCommitting");
 		row([](std::string* rowError) { return TestHoldDeadlinePrecedesConsumerWait(rowError); }, "TestHoldDeadlinePrecedesConsumerWait");
@@ -28526,9 +28521,9 @@ namespace {
 		row([](std::string* rowError) { return TestTheGoodbyeDrainJudgesNoSeat(rowError); }, "TestTheGoodbyeDrainJudgesNoSeat");
 		row([](std::string* rowError) { return TestNoSeatIsJudgedPastTheLastTick(rowError); }, "TestNoSeatIsJudgedPastTheLastTick");
 		row([](std::string* rowError) { return TestTimingAcknowledgementLossIsBounded(rowError); }, "TestTimingAcknowledgementLossIsBounded");
-		row([](std::string* rowError) { return TestHoldWaitsForSurvivorDecision(rowError); }, "TestHoldWaitsForSurvivorDecision");
-		row([](std::string* rowError) { return TestHoldWaitsForSurvivorDecision(rowError, true); }, "TestHoldWaitsForSurvivorDecision:true");
-		row([](std::string* rowError) { return TestHoldWaitsForSurvivorDecision(rowError, false, true); }, "TestHoldWaitsForSurvivorDecision:false, true");
+		row([](std::string* rowError) { return TestHostHoldsWithoutPolicyVotes(rowError); }, "TestHostHoldsWithoutPolicyVotes");
+		row([](std::string* rowError) { return TestHostHoldsWithoutPolicyVotes(rowError, true); }, "TestHostHoldsWithoutPolicyVotes:true");
+		row([](std::string* rowError) { return TestHostHoldsWithoutPolicyVotes(rowError, false, true); }, "TestHostHoldsWithoutPolicyVotes:false, true");
 		row([](std::string* rowError) { return TestRecordedHoldReplaysAtItsFrame(rowError); }, "TestRecordedHoldReplaysAtItsFrame");
 		row([](std::string* rowError) { return TestARecordedHoldAfterAReturnHoldsTheSeat(rowError); }, "TestARecordedHoldAfterAReturnHoldsTheSeat");
 		row([](std::string* rowError) { return TestCommittedCatchUpKeepsSharedState(rowError); }, "TestCommittedCatchUpKeepsSharedState");
@@ -28610,7 +28605,7 @@ namespace {
 		row([](std::string* rowError) { return TestCoordinatorPerSenderDelayMismatch(rowError); }, "TestCoordinatorPerSenderDelayMismatch");
 		row([](std::string* rowError) { return TestCoordinatorIgnoresSessionPacketsAtHandoff(rowError); }, "TestCoordinatorIgnoresSessionPacketsAtHandoff");
 		row([](std::string* rowError) { return TestCoordinatorUnreliableOutOfOrderDuplicate(rowError); }, "TestCoordinatorUnreliableOutOfOrderDuplicate");
-		row([](std::string* rowError) { return TestCoordinatorMissingFrameTimeout(rowError); }, "TestCoordinatorMissingFrameTimeout");
+		row([](std::string* rowError) { return TestCoordinatorWaitsForLateInput(rowError); }, "TestCoordinatorWaitsForLateInput");
 		row([](std::string* rowError) { return TestFrameWindowKeepsClassicReservedZero(rowError); }, "TestFrameWindowKeepsClassicReservedZero");
 		row([](std::string* rowError) { return TestFrameWindowCodecRoundTrip(rowError); }, "TestFrameWindowCodecRoundTrip");
 		row([](std::string* rowError) { return TestFrameWindowRepeatsObservationBlocks(rowError); }, "TestFrameWindowRepeatsObservationBlocks");
@@ -28633,16 +28628,16 @@ namespace {
 		row([](std::string* rowError) { return TestADepartedTransportCannotStopTheSurvivors(rowError); }, "TestADepartedTransportCannotStopTheSurvivors");
 		row([](std::string* rowError) { return TestAnnouncedLeaveHoldsNothing(rowError); }, "TestAnnouncedLeaveHoldsNothing");
 		row([](std::string* rowError) { return TestAClassicLeaverDrivesItsUnitsUntilItsFrame(rowError); }, "TestAClassicLeaverDrivesItsUnitsUntilItsFrame");
-		row([](std::string* rowError) { return TestHoldPauseCommitsNothing(rowError); }, "TestHoldPauseCommitsNothing");
+		row([](std::string* rowError) { return TestHoldContinuesWithAI(rowError); }, "TestHoldContinuesWithAI");
 		row([](std::string* rowError) { return TestHoldExpiredResumesWithoutSeat(rowError); }, "TestHoldExpiredResumesWithoutSeat");
-		row([](std::string* rowError) { return TestHoldReclaimedResyncsAtLeaveFrame(rowError); }, "TestHoldReclaimedResyncsAtLeaveFrame");
-		row([](std::string* rowError) { return TestTwoPeerReclaimedRequestsResync(rowError); }, "TestTwoPeerReclaimedRequestsResync");
-		row([](std::string* rowError) { return TestTwoPeerSubstitutedRequestsResync(rowError); }, "TestTwoPeerSubstitutedRequestsResync");
-		row([](std::string* rowError) { return TestTwoPeerExpiredEndsLastPlayer(rowError); }, "TestTwoPeerExpiredEndsLastPlayer");
-		row([](std::string* rowError) { return TestThreePeerReclaimedRequestsResync(rowError); }, "TestThreePeerReclaimedRequestsResync");
+		row([](std::string* rowError) { return TestReturnNoticePreservesHostRecovery(rowError); }, "TestReturnNoticePreservesHostRecovery");
+		row([](std::string* rowError) { return TestTwoPeerReturnNoticePreservesHold(rowError); }, "TestTwoPeerReturnNoticePreservesHold");
+		row([](std::string* rowError) { return TestTwoPeerSubstitutionPreservesRound(rowError); }, "TestTwoPeerSubstitutionPreservesRound");
+		row([](std::string* rowError) { return TestTwoPeerExpiryPreservesHost(rowError); }, "TestTwoPeerExpiryPreservesHost");
+		row([](std::string* rowError) { return TestThreePeerReturnNoticePreservesHold(rowError); }, "TestThreePeerReturnNoticePreservesHold");
 		row([](std::string* rowError) { return TestResyncRoundCommitsAfterReclaimed(rowError); }, "TestResyncRoundCommitsAfterReclaimed");
 		row([](std::string* rowError) { return TestHoldHeartbeatsKeepPeersUnadjudicated(rowError); }, "TestHoldHeartbeatsKeepPeersUnadjudicated");
-		row([](std::string* rowError) { return TestWaitDoesNotGiveUpDuringHoldPause(rowError); }, "TestWaitDoesNotGiveUpDuringHoldPause");
+		row([](std::string* rowError) { return TestWaitPumpsUntilExplicitHostEnd(rowError); }, "TestWaitPumpsUntilExplicitHostEnd");
 		row([](std::string* rowError) { return TestWaitSurvivesHoldAfterPreHoldStall(rowError); }, "TestWaitSurvivesHoldAfterPreHoldStall");
 		row([](std::string* rowError) { return TestParkedWaitAppliesPendingResync(rowError); }, "TestParkedWaitAppliesPendingResync");
 		row([](std::string* rowError) { return TestFencedPeerWaivedAtTheParkedTick(rowError); }, "TestFencedPeerWaivedAtTheParkedTick");
@@ -28653,7 +28648,7 @@ namespace {
 		row([](std::string* rowError) { return TestCoordinatorRejectsUnboundPackets(rowError); }, "TestCoordinatorRejectsUnboundPackets");
 		row([](std::string* rowError) { return TestCoordinatorPeerLeave(rowError); }, "TestCoordinatorPeerLeave");
 		row([](std::string* rowError) { return TestCoordinatorHostAdjudicatesSilentPeer(rowError); }, "TestCoordinatorHostAdjudicatesSilentPeer");
-		row([](std::string* rowError) { return TestCoordinatorSilentHostStillTimesOut(rowError); }, "TestCoordinatorSilentHostStillTimesOut");
+		row([](std::string* rowError) { return TestCoordinatorWaitsWithoutSuccessorAuthority(rowError); }, "TestCoordinatorWaitsWithoutSuccessorAuthority");
 		row([](std::string* rowError) { return TestCoordinatorClientProtocolErrorIsALeave(rowError); }, "TestCoordinatorClientProtocolErrorIsALeave");
 		row([](std::string* rowError) { return TestCoordinatorHostProtocolErrorFailsClients(rowError); }, "TestCoordinatorHostProtocolErrorFailsClients");
 		row([](std::string* rowError) { return TestCoordinatorRelayBacklogHeals(rowError); }, "TestCoordinatorRelayBacklogHeals");
