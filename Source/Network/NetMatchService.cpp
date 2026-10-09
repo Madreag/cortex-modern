@@ -3933,21 +3933,24 @@ static std::string ResyncSaveName() {
 		const bool joinCapture = m_WorldCapturePending && m_WorldJoin.IsConfigured() &&
 		                         std::none_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [](const AwaitedAutosave& entry) { return entry.joinCapture; });
 		if (!joinCapture && !ask && seconds == 0) return output;
+		if (input.paused && !joinCapture && !ask) return output;
 		// A park commits empty frames, so an activation inside one would never be stamped: nothing is named until it lands.
 		// The startup frames before a round's agreed first frame carry no commands either, so a capture named in them never
 		// reaches a writer and the schedule would wait on it for the rest of the round.
 		if (input.activationPending || input.startupPending || input.ownSeatHeld || input.hostProvisional) return output;
-		const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
-		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
-		if (m_NextAutosaveSimTime < 0 || input.now < m_LastAutosaveSimTime) {
-			m_NextAutosaveSimTime = input.now - tickLength + interval;
+		if (!input.paused) {
+			const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
+			const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
+			if (m_NextAutosaveSimTime < 0 || input.now < m_LastAutosaveSimTime) {
+				m_NextAutosaveSimTime = input.now - tickLength + interval;
+			}
+			m_LastAutosaveSimTime = input.now;
+			// The capture is named `lead` ticks ahead, so it reaches every peer's stream before its tick.
+			const int64_t takenAt = input.now + static_cast<int64_t>(input.lead) * tickLength;
+			// The host's ask never moves the interval: it is advanced only when its own capture is due.
+			if (!joinCapture && !ask && takenAt < m_NextAutosaveSimTime) return output;
+			if (interval > 0 && takenAt >= m_NextAutosaveSimTime) m_NextAutosaveSimTime += ((takenAt - m_NextAutosaveSimTime) / interval + 1) * interval;
 		}
-		m_LastAutosaveSimTime = input.now;
-		// The capture is named `lead` ticks ahead, so it reaches every peer's stream before its tick.
-		const int64_t takenAt = input.now + static_cast<int64_t>(input.lead) * tickLength;
-		// The host's ask never moves the interval: it is advanced only when its own capture is due.
-		if (!joinCapture && !ask && takenAt < m_NextAutosaveSimTime) return output;
-		if (interval > 0 && takenAt >= m_NextAutosaveSimTime) m_NextAutosaveSimTime += ((takenAt - m_NextAutosaveSimTime) / interval + 1) * interval;
 		m_OpenCaptureTick = input.tick + input.lead;
 		m_OpenCaptureApplied = false;
 		m_OpenCaptureForJoin = joinCapture;
@@ -4143,7 +4146,7 @@ static std::string ResyncSaveName() {
 		return taken;
 	}
 
-	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick) {
+	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick, bool paused) {
 		std::vector<CheckpointNote> applied;
 		for (const auto& [sender, checkpoint]: ScenarioRunner::TakeAppliedCheckpoints()) applied.push_back({sender, checkpoint.kind, checkpoint.tick});
 		// A segment held for its checkpoint opens the moment the archive thread has named the digest.
@@ -4155,6 +4158,7 @@ static std::string ResyncSaveName() {
 		AutosaveTickInput input;
 		input.tick = tick;
 		input.now = g_TimerMan.GetSimTimeTicks();
+		input.paused = paused;
 		input.unwritten = g_ActivityMan.UnwrittenAutosaves();
 		input.applied = std::move(applied);
 		input.finished = finished;
@@ -4662,18 +4666,16 @@ static std::string ResyncSaveName() {
 				     << " reports_refused=" << lobby.GetStats().catchUpReportsRefused << " reports_dropped=" << lobby.GetStats().catchUpReportsDropped << detail;
 				System::PrintDiagnosticLine(line.str());
 			};
-			if ((host.IsPrivateMatch() || (prior && prior->returnsToHeldSeat)) && !host.NoteRejoinCapacity(connection, report.workTicks, report.workUs, report.sentThrough)) {
-				noteGate("capacity-dropped", " work_us=" + std::to_string(report.workUs));
-				return 0;
-			}
+			const bool capacityValid = !(host.IsPrivateMatch() || (prior && prior->returnsToHeldSeat)) ||
+			    host.NoteRejoinCapacity(connection, report.workTicks, report.workUs, report.sentThrough, report.replayStart);
 			uint64_t activation = 0;
 			const uint64_t previous = prior ? prior->acknowledgedThrough : 0;
 			const uint64_t lastMs = prior ? prior->lastCatchUpReportMs : 0;
 			const uint64_t ticks = report.value > previous ? report.value - previous : 0;
 			const uint64_t elapsed = (lastMs != 0 && nowMs > lastMs) ? nowMs - lastMs : 1;
 			std::string progressError;
-			if (!host.NoteCatchUpProgress(connection, report.value, ticks, elapsed, nowFrame, &activation, &progressError)) noteGate("refused", " error=" + progressError);
-			else noteGate(nullptr, "");
+			if (!host.NoteCatchUpProgress(connection, report.value, ticks, elapsed, nowFrame, &activation, &progressError, capacityValid)) noteGate("refused", " error=" + progressError);
+			else noteGate(nullptr, capacityValid ? "" : " work_us=" + std::to_string(report.workUs));
 			host.NoteCatchUpClock(connection, nowMs);
 			host.AcknowledgeTailDatagrams(connection, SteadyNowMs());
 			if (activation != 0) {
@@ -10532,7 +10534,7 @@ static std::string ResyncSaveName() {
 		};
 		if (m_ConnectionMode == 2) {
 			// A setup that never reached the transport already says why; only a relay that failed to connect is named here.
-			if (error && transportReady && !directoryFull) *error = "Relay connection failed: " + *error + "; retry joining or check the relay in Settings > Network";
+			if (error && transportReady && !directoryFull && routeFailed()) *error = "Relay connection failed: " + *error + "; retry joining or check the relay in Settings > Network";
 			return false;
 		}
 		if (transportReady && !routeFailed()) return false;

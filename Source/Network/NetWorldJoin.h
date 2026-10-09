@@ -152,6 +152,7 @@ namespace RTE {
 		uint32_t holderGeneration = 0;
 		uint32_t incarnation = 0;
 		uint64_t priorInputThrough = 0;
+		uint64_t replayStart = 0; //!< The replay whose cumulative work counters are being measured.
 		bool linkFits = false;
 		NetCatchUpHeadroom headroom;
 		bool returnsToHeldSeat = false; //!< A world member taking back the seat held for it: it proves headroom as a private return does.
@@ -601,7 +602,7 @@ namespace RTE {
 	NetLobbyStateChunk MakeWorldJoinHandoverReport(const NetWorldHandover& handover);
 	/// Reads a handover report's fields as ParseWorldJoinReport returns them.
 	NetWorldHandover WorldJoinHandoverFromReport(uint64_t value, uint64_t generation, uint64_t authority, uint64_t departedMask);
-	bool ParseWorldJoinReport(const NetLobbyStateChunk& chunk, uint8_t& kind, uint64_t& value, uint64_t* workTicks = nullptr, uint64_t* workUs = nullptr, uint64_t* sentThrough = nullptr);
+	bool ParseWorldJoinReport(const NetLobbyStateChunk& chunk, uint8_t& kind, uint64_t& value, uint64_t* workTicks = nullptr, uint64_t* workUs = nullptr, uint64_t* sentThrough = nullptr, uint64_t* replayStart = nullptr);
 
 	/// Host-authored Activate binding: seat, team, brain preset and spawn (Persistent World respawn API).
 	NetGameWorldTransition BuildWorldActivateTransition(const NetWorldJoinSession& session, const NetMatchConfig& config, uint64_t membershipRevision);
@@ -655,7 +656,7 @@ namespace RTE {
 		bool BeginRejoin(NetPeerId connection, uint16_t stableSeat, uint8_t peerId, uint32_t incarnation, const std::string& name, uint64_t nowMs, std::string* error = nullptr);
 		/// A held seat whose player kept its state: its catch-up streams the committed tail from the tick that state stands at, with no image.
 		bool BeginInPlaceRejoin(NetPeerId connection, uint16_t stableSeat, uint8_t peerId, uint32_t incarnation, const std::string& name, uint64_t nowMs, uint64_t heldThrough, std::string* error = nullptr);
-		bool NoteRejoinCapacity(NetPeerId connection, uint64_t workTicks, uint64_t workUs, uint64_t sentThrough);
+		bool NoteRejoinCapacity(NetPeerId connection, uint64_t workTicks, uint64_t workUs, uint64_t sentThrough, uint64_t replayStart = 0);
 		void NoteRejoinLinkFit(NetPeerId connection, bool fits);
 		/// The session whose catch-up gate is due in the log (a change, or a second of the round since); gate, when set, is the one its report met first.
 		const NetWorldJoinSession* TakeCatchUpGateToLog(NetPeerId connection, const char* gate, uint64_t nowFrame);
@@ -723,7 +724,8 @@ namespace RTE {
 		/// Records the tail the joiner has applied and, once it has caught the world, schedules E.
 		/// @param nowFrame The world's committed frame.
 		/// @param outActivationTick The announced activation tick when this call scheduled one.
-		bool NoteCatchUpProgress(NetPeerId connection, uint64_t appliedThrough, uint64_t ticksReplayed, uint64_t elapsedMs, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error = nullptr);
+		/// @param capacityValid Whether this report's work counters may support an activation.
+		bool NoteCatchUpProgress(NetPeerId connection, uint64_t appliedThrough, uint64_t ticksReplayed, uint64_t elapsedMs, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error = nullptr, bool capacityValid = true);
 		void NoteCatchUpClock(NetPeerId connection, uint64_t nowMs);
 		/// Returning seats that have replayed for longer than the bound without coming inside the activation lead.
 		/// A returner that replays slower than the round plays never closes on it, so it is never activated.

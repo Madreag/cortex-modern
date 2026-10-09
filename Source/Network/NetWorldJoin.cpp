@@ -689,6 +689,7 @@ namespace RTE {
 		AppendU64LE(report.bytes, ScenarioRunner::WorldCatchUpWorkTicks());
 		AppendU64LE(report.bytes, ScenarioRunner::WorldCatchUpWorkUs());
 		AppendU64LE(report.bytes, ScenarioRunner::WorldCatchUpPriorInputThrough());
+		AppendU64LE(report.bytes, ScenarioRunner::WorldCatchUpStartTick());
 		report.totalBytes = report.bytes.size();
 		return report;
 	}
@@ -753,11 +754,12 @@ namespace RTE {
 		return "the world refused the join";
 	}
 
-	bool ParseWorldJoinReport(const NetLobbyStateChunk& chunk, uint8_t& kind, uint64_t& value, uint64_t* workTicks, uint64_t* workUs, uint64_t* sentThrough) {
+	bool ParseWorldJoinReport(const NetLobbyStateChunk& chunk, uint8_t& kind, uint64_t& value, uint64_t* workTicks, uint64_t* workUs, uint64_t* sentThrough, uint64_t* replayStart) {
 		if (workTicks) *workTicks = 0;
 		if (workUs) *workUs = 0;
 		if (sentThrough) *sentThrough = 0;
-		if (chunk.transferId != c_NetWorldReportTransferId || (chunk.bytes.size() != 9 && chunk.bytes.size() != 33) || chunk.totalBytes != chunk.bytes.size() ||
+		if (replayStart) *replayStart = 0;
+		if (chunk.transferId != c_NetWorldReportTransferId || (chunk.bytes.size() != 9 && chunk.bytes.size() != 33 && chunk.bytes.size() != 41) || chunk.totalBytes != chunk.bytes.size() ||
 		    chunk.chunkCount != 1 || chunk.chunkIndex != 0) {
 			return false;
 		}
@@ -772,7 +774,8 @@ namespace RTE {
 			value |= static_cast<uint64_t>(chunk.bytes[static_cast<size_t>(i + 1)]) << (8 * i);
 		}
 		if ((chunk.bytes.size() == 33) != (kind == c_NetWorldReportHandover) && kind != c_NetWorldReportCatchUp) return false;
-		if (chunk.bytes.size() == 33) {
+		if (chunk.bytes.size() == 41 && kind != c_NetWorldReportCatchUp) return false;
+		if (chunk.bytes.size() >= 33) {
 			const uint8_t* cursor = chunk.bytes.data() + 9;
 			const uint8_t* end = chunk.bytes.data() + chunk.bytes.size();
 			bool ok = true;
@@ -780,6 +783,11 @@ namespace RTE {
 			if (workTicks) *workTicks = ticks;
 			if (workUs) *workUs = us;
 			if (sentThrough) *sentThrough = sent;
+			if (chunk.bytes.size() == 41) {
+				const uint64_t start = ReadU64LE(cursor, end, ok);
+				if (!ok || start > value) return false;
+				if (replayStart) *replayStart = start;
+			}
 		}
 		return true;
 	}
@@ -1808,9 +1816,21 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetWorldJoinHost::NoteRejoinCapacity(NetPeerId connection, uint64_t workTicks, uint64_t workUs, uint64_t sentThrough) {
+	bool NetWorldJoinHost::NoteRejoinCapacity(NetPeerId connection, uint64_t workTicks, uint64_t workUs, uint64_t sentThrough, uint64_t replayStart) {
 		auto* session = Find(connection);
 		if (!session || (!IsPrivateMatch() && !session->returnsToHeldSeat)) return false;
+		if (replayStart < session->replayStart) return false;
+		// Work from an earlier replay cannot establish this return's capacity.
+		if (replayStart > session->replayStart) {
+			session->headroom = {};
+			session->closingAnchorApplied = session->closingAnchorHorizon = session->atHeadSinceFrame = 0;
+			session->closingRate = 0;
+			session->closingMeasured = false;
+			session->windowsWithoutProgress = 0;
+			session->catchUpTicks = session->catchUpMs = session->wallCatchUpTicks = session->wallCatchUpMs = 0;
+			session->lastCatchUpReportMs = session->catchUpSinceMs = 0;
+			session->replayStart = replayStart;
+		}
 		session->priorInputThrough = std::max(session->priorInputThrough, sentThrough);
 		return session->headroom.Observe(workTicks, workUs, m_SimTickMs);
 	}
@@ -2277,7 +2297,7 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetWorldJoinHost::NoteCatchUpProgress(NetPeerId connection, uint64_t appliedThrough, uint64_t ticksReplayed, uint64_t elapsedMs, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error) {
+	bool NetWorldJoinHost::NoteCatchUpProgress(NetPeerId connection, uint64_t appliedThrough, uint64_t ticksReplayed, uint64_t elapsedMs, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error, bool capacityValid) {
 		if (outActivationTick) *outActivationTick = 0;
 		NetWorldJoinSession* session = Find(connection);
 		if (session == nullptr) {
@@ -2294,6 +2314,11 @@ namespace RTE {
 		}
 		session->acknowledgedThrough = appliedThrough;
 		if (session->finalTailFrame) return true;
+		// Applied frames free the resend queue even when this report cannot prove replay capacity.
+		if (!capacityValid) {
+			session->catchUpGate = "capacity-dropped";
+			return true;
+		}
 		// The replay's own progress against the round's committed horizon, both in frames: a loaded machine slows the round too,
 		// so no wall clock enters it.
 		if (session->closingAnchorHorizon == 0 || nowFrame < session->closingAnchorHorizon) {

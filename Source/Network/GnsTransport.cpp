@@ -749,11 +749,17 @@ namespace RTE {
 		std::map<uint32_t, std::string> m_CandidateIdentities;
 		std::map<std::pair<std::string, std::string>, std::string> m_CandidateTypes;
 
+		static std::optional<bool> SelectedRoute(const SteamNetConnectionInfo_t& info) {
+			return GnsRouteTracker::SelectedRoute((info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0, !info.m_addrRemote.IsIPv6AllZeros());
+		}
+
 		bool RouteAllowed(HSteamNetConnection connection) const {
 			if (m_P2PMode <= 0 && m_RouteLogged.contains(connection)) return true;
 			SteamNetConnectionInfo_t info{};
 			if (!m_Interface->GetConnectionInfo(connection, &info) || info.m_eState != k_ESteamNetworkingConnectionState_Connected) return true;
-			const bool relayed = (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0;
+			const auto route = SelectedRoute(info);
+			if (!route) return true;
+			const bool relayed = *route;
 			const bool allowed = GnsTransport::ConnectionPolicyAllowsRoute(m_P2PMode, relayed);
 			if (m_RouteLogged.insert(connection).second) {
 				m_RouteTracker.Observe(connection, relayed);
@@ -794,9 +800,9 @@ namespace RTE {
 				if (!m_RouteLogged.contains(connection)) continue;
 				SteamNetConnectionInfo_t info{};
 				if (!m_Interface->GetConnectionInfo(connection, &info) || info.m_eState != k_ESteamNetworkingConnectionState_Connected) continue;
-				const bool relayed = (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0;
-				if (m_RouteTracker.Observe(connection, relayed) == GnsRouteTracker::Observation::Moved) {
-					WriteRouteReceipt(connection, info, relayed, GnsTransport::ConnectionPolicyAllowsRoute(m_P2PMode, relayed), GnsRouteTracker::MoveName(relayed));
+				const auto route = SelectedRoute(info);
+				if (m_RouteTracker.Observe(connection, route) == GnsRouteTracker::Observation::Moved) {
+					WriteRouteReceipt(connection, info, *route, GnsTransport::ConnectionPolicyAllowsRoute(m_P2PMode, route), GnsRouteTracker::MoveName(*route));
 				}
 			}
 		}
@@ -1126,8 +1132,10 @@ namespace RTE {
 			result.flags = info.m_nFlags;
 			result.relayPop = info.m_idPOPRelay;
 			if (info.m_eState == k_ESteamNetworkingConnectionState_Connected) {
-				result.connectedRoute = (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0 ? "relay" : "direct";
-				result.selectedCandidateType = CandidateType(info);
+				if (const auto route = SelectedRoute(info)) {
+					result.connectedRoute = *route ? "relay" : "direct";
+					result.selectedCandidateType = CandidateType(info);
+				}
 			}
 			result.relayOffer = RouteOffer(connection, (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0);
 			if (const auto receipt = m_RouteReceipts.find(connection); receipt != m_RouteReceipts.end()) result.routeReceipt = receipt->second;

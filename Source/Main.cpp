@@ -8570,8 +8570,7 @@ void RunGameLoop() {
 				if (landed) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump, "landed");
 				if (!catchingUp && ((roundStart && !reclaimStart) || simTick % s_netFullStateEvery == 0)) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump);
 			}
-			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
-			else g_NetMatchService.AppendCommittedJoinFrame(simTick);
+			g_NetMatchService.AutosaveAtTickBoundary(simTick, lockstepPausedTick);
 			TelemetryBundle::CaptureAtTickBoundary();
 			const long long crossCaptureUs = g_TimerMan.GetAbsoluteTime() - crossCaptureStartUs;
 			const long long crossCaptureWaitUs = ScenarioRunner::GetLockstepWaitUs() - crossCaptureWaitStartUs;

@@ -1888,7 +1888,7 @@ namespace RTE {
 			return value.size() > 12 ? value.substr(0, 8) + ".." : value;
 		};
 		std::string text = m_RejectSummary.empty() ? NetProtocol::RejectReasonName(m_RejectReason) : m_RejectSummary;
-		if (!m_MismatchKey.empty()) {
+		if (!m_MismatchKey.empty() && (!m_ExpectedValue.empty() || !m_ActualValue.empty())) {
 			text += " (" + m_MismatchKey + ": " + shortValue(m_ExpectedValue) + " vs " + shortValue(m_ActualValue) + ")";
 		}
 		return text;

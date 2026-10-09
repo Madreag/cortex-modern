@@ -4277,7 +4277,7 @@ namespace RTE {
 			m_Config.peerInputDelayFrames[peer] = InputDelayAt(peer, m_MigrationBoundary);
 		m_Config.inputDelayFrames = m_Config.peerInputDelayFrames.at(m_Config.localPeerId);
 		m_OpeningMatchConfig = m_Config.matchConfig;
-		m_RoundConfigHash = NetMatchConfigUtil::HashConfig(m_OpeningMatchConfig);
+		// Late survivors still identify this round by the hash they agreed before its live delay changes.
 		m_Config.authorityPeerId = m_MigrationSuccessor;
 		m_Config.migrationGeneration = m_MigrationGeneration;
 		m_RoundId = m_MigrationWireRound;
@@ -7562,12 +7562,11 @@ namespace RTE {
 					const uint8_t bit = static_cast<uint8_t>(1U << (peer - 1));
 					const auto& stats = m_Stats.peers[peer];
 					const uint64_t budget = boundMs + stats.pingMs + stats.jitterMs;
-					// A peer still filling its pipeline owes its delay window before it counts as silent, and a
-					// peer still starting cannot acknowledge anything: its own start work is part of the ramp. A
-					// reclaimed seat refills the same way until its activation and its delay window have passed.
+					// A returner refills through its agreed neutral gap; its old playing state grants no earlier deadline.
 					const auto reclaim = m_ReclaimTransactions.find(peer);
 					const bool refilling = reclaim != m_ReclaimTransactions.end() &&
-					    *m_ConsumerWaitingFrame <= reclaim->second.activationFrame + InputDelayAt(peer, *m_ConsumerWaitingFrame);
+					    *m_ConsumerWaitingFrame <= std::max(reclaim->second.neutralThroughFrame,
+					        reclaim->second.activationFrame + InputDelayAt(peer, *m_ConsumerWaitingFrame));
 					const uint64_t ramp = !refilling && (m_PeersPlayedThisRound.contains(peer) || m_PeerAdmissions.contains(peer)) ? 0 :
 					    static_cast<uint64_t>(std::llround(InputDelayAt(peer, *m_ConsumerWaitingFrame) * m_Config.simTickMs)) +
 					        std::max(stats.startParkMs, m_Stats.longestOwnParkMs);

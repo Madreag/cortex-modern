@@ -616,7 +616,15 @@ namespace RTE {
 			{
 				using Observation = GnsRouteTracker::Observation;
 				GnsRouteTracker tracker;
-				bool ok = tracker.Observe(7, true) == Observation::First && tracker.Observe(7, true) == Observation::Same &&
+				const auto unavailable = GnsRouteTracker::SelectedRoute(false, false);
+				const auto relay = GnsRouteTracker::SelectedRoute(true, false);
+				const auto direct = GnsRouteTracker::SelectedRoute(false, true);
+				bool ok = tracker.Observe(7, unavailable) == Observation::Unavailable &&
+				          tracker.Observe(7, relay) == Observation::First && tracker.Observe(7, unavailable) == Observation::Unavailable &&
+				          tracker.Observe(7, relay) == Observation::Same &&
+				          GnsTransport::ConnectionPolicyAllowsRoute(2, unavailable) && GnsTransport::ConnectionPolicyAllowsRoute(2, relay) &&
+				          !GnsTransport::ConnectionPolicyAllowsRoute(2, direct) && !GnsTransport::ConnectionPolicyAllowsRoute(1, relay) &&
+				          GnsTransport::ConnectionPolicyAllowsRoute(1, direct) &&
 				          tracker.Observe(7, false) == Observation::Moved && tracker.Observe(7, false) == Observation::Same &&
 				          tracker.Observe(7, true) == Observation::Moved && tracker.Observe(8, false) == Observation::First &&
 				          std::string(GnsRouteTracker::MoveName(false)) == "relay->direct" && std::string(GnsRouteTracker::MoveName(true)) == "direct->relay";
