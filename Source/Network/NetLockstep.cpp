@@ -10114,7 +10114,10 @@ namespace RTE {
 		}
 		const uint8_t team = actorTeam < 0 ? 0 : static_cast<uint8_t>(actorTeam);
 		const std::optional<uint64_t> frame = atFrame ? atFrame : m_LastDeliveredFrame;
-		if (frame && IsSeatUnderAI(ownerPeerId, *frame)) return AiAuthorityAt(*frame);
+		if (frame && IsSeatUnderAI(ownerPeerId, *frame)) {
+			if (!IsRunning() && !m_Playback && FirstAliveHumanPeerForTeam(team, *frame) == 0) return 0;
+			return AiAuthorityAt(*frame);
+		}
 		// A leaver's team falls to its next surviving human peer, so the units play on. The lockstep gate synchronizes leave
 		// knowledge, so every peer re-resolves identically - except for a leave heard before its frame: the leaver's own
 		// inputs drive its units until that frame is committed, so the round re-resolves them there.
@@ -12478,16 +12481,14 @@ namespace RTE {
 		}
 	}
 
-	// Only the relay host may call a peer gone: every survivor has to drop the requirement at the same
-	// frame, and it can only do that from one relayed notice. The transport's own disconnect is no use
-	// here - it waits on the dead peer's process, which outlasts every survivor's missing-frame grace,
-	// so the star's other clients kill themselves waiting for someone the host knows nothing about yet.
-	// A 2-peer host has no survivor to protect and keeps failing with MissingFrameTimeout.
+	// The host measures authenticated silence even when no simulation input is currently owed.
+	// ProposePeerHold chooses the first future missing frame, preserving every accepted earlier input.
+	// Startup and placement remain barriers; neither phase can create an absence hold.
 	void NetLockstepCoordinator::AdjudicateSilentPeers(uint64_t nowMs) {
 		if (!IsRunning() || WaitsForPlacement() || m_Config.localPeerId != GetHostPeerId()) return;
 		std::vector<uint8_t> missing;
 		for (uint8_t peer: m_RemotePeerIds)
-			if (IsRemoteRequiredForFrame(peer, m_Stats.nextFrame) && FirstFrameWithout(peer) == m_Stats.nextFrame) missing.push_back(peer);
+			if (!IsPeerGoneAtFrame(peer, m_Stats.nextFrame) && !IsSeatUnderAI(peer, m_Stats.nextFrame)) missing.push_back(peer);
 		(void)DeclareOverdueInputs(m_Stats.nextFrame, nowMs, m_FirstMissingMs, missing);
 	}
 

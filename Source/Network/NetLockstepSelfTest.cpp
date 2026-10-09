@@ -718,8 +718,8 @@ namespace RTE {
 				host.Tick(++round.now);
 				auto committed = inputs;
 				for (auto& input: committed) if (input.senderPeerId == 1 && input.targetFrame == 41)
-					input.commands.push_back({1, NetGameSeatRelease{3, 0, 42, 1, 41}});
-				if (!RecoveryWireCheck(host.IsRunning() && host.GetStats().nextFrame == 43 && SameRecoveryInputs(host.CapturePendingInputs(40), committed),
+					input.commands.push_back({1, host.HeldTransactions().at(3)});
+				if (!RecoveryWireCheck(host.IsRunning() && host.GetStats().nextFrame == 43 && host.SeatReleases().at(3).rbegin()->first > 42 && host.IsSeatReclaimableAt(3, 42) && SameRecoveryInputs(host.CapturePendingInputs(40), committed),
 				                       error, "restoration dropped a configured departed sender's accepted controller, commands or observations")) return false;
 			}
 			std::cout << "[net-lockstep-selftest] PASS recovery_input_membership never_member=refused accepted_departed=preserved" << std::endl;
@@ -10519,7 +10519,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return false;
 			}
 			host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, now);
-			for (uint64_t frame = hostLeaveFrame; frame < hostLeaveFrame + 3; ++frame)
+			for (uint64_t frame = hostLeaveFrame; frame <= host.SeatReleases().at(2).rbegin()->first + 1; ++frame)
 				if (!host.QueueLocalInput(frame, {}, {}, error) || !stayer.QueueLocalInput(frame, {}, {}, error)) return false;
 			if (!drive(2000, [&] {
 				while (host.PopReadyFrame(ready)) (void)host.FinishSimulationTick(ready.frame);
@@ -10963,7 +10963,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "the AI hold blocked activity progression or engine teardown"; return false;
 			}
 			host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, now);
-			for (uint64_t frame = leaveFrame; frame < leaveFrame + 3; ++frame)
+			for (uint64_t frame = leaveFrame; frame <= host.SeatReleases().at(2).rbegin()->first + 1; ++frame)
 				if (!host.QueueLocalInput(frame, {}, {}, error) || !stayer.QueueLocalInput(frame, {}, {}, error)) return false;
 			if (!drive(2000, [&] {
 				while (host.PopReadyFrame(ready)) (void)host.FinishSimulationTick(ready.frame);
@@ -14604,7 +14604,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, now);
 			drive(100, [&] { return false; });
 
-			for (uint64_t f = leaveFrame; f < leaveFrame + 3; ++f) {
+			const uint64_t releaseFrame = host.SeatReleases().at(2).rbegin()->first;
+			for (uint64_t f = leaveFrame; f <= releaseFrame + 1; ++f) {
 				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
 				    !stayer.QueueLocalInput(f, {MakeFrame(300, f + 1)}, {}, error)) {
 					return false;
@@ -14617,7 +14618,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					}
 					while (stayer.PopReadyFrame(ready)) {
 					}
-					return extra >= 3;
+					return extra >= releaseFrame + 2 - leaveFrame;
 				})) {
 				*error = "commits did not resume after Expired";
 				return false;

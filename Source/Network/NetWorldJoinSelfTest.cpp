@@ -8213,7 +8213,7 @@ namespace RTE {
 		for (const NetH4Outbound& outbound: answered)
 			if (const auto* told = std::get_if<NetH4LeaveAck>(&outbound.payload)) ack = told;
 		const NetRosterSeat* seat = host.GetRoster().Find(static_cast<uint8_t>(offer.stableSeat + 1));
-		if (ack == nullptr || ack->seatClosed || !seat || seat->owner == 0 || seat->phase != NetSeatPhase::Held || seat->holdCause != NetSeatHoldCause::Leave ||
+		if (ack == nullptr || ack->seatClosed || !seat || seat->owner == 0 || seat->phase != NetSeatPhase::RematchLobby || seat->link != NetSeatLink::Dropped || seat->holdCause != NetSeatHoldCause::None ||
 		    host.GetStats().seatsReleased != releasedBefore || host.IsSeatClosed(offer.stableSeat)) {
 			*error = std::string("a leave between rounds did not keep the seat: ack=") + (ack ? (ack->seatClosed ? "closed" : "kept") : "none") + " roster=" +
 			         (seat ? RosterSeatLabel(*seat) : std::string("no seat")) + " released=" + std::to_string(host.GetStats().seatsReleased - releasedBefore);
@@ -8270,7 +8270,7 @@ namespace RTE {
 		const uint32_t releasedBefore = resumed.GetStats().seatsReleased;
 		resumed.NotifyDisconnect(65, 0);
 		const NetRosterSeat* seat = resumed.GetRoster().Find(seatId);
-		if (!seat || seat->owner == 0 || seat->phase != NetSeatPhase::Held || resumed.GetStats().seatsReleased != releasedBefore || resumed.IsSeatClosed(offer.stableSeat)) {
+		if (!seat || seat->owner == 0 || seat->phase != NetSeatPhase::RematchLobby || seat->link != NetSeatLink::Dropped || seat->holdCause != NetSeatHoldCause::None || resumed.GetStats().seatsReleased != releasedBefore || resumed.IsSeatClosed(offer.stableSeat)) {
 			*error = "a drop in a resumed match's lobby released the seat: roster=" + (seat ? RosterSeatLabel(*seat) : std::string("no seat")) +
 			         " released=" + std::to_string(resumed.GetStats().seatsReleased - releasedBefore);
 			return false;
