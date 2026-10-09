@@ -170,7 +170,11 @@ std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointPagePool::Freeze()
 }
 
 bool CheckpointPagePool::Snapshot::Contains(const void* source, size_t bytes) const {
-	return std::any_of(m_Parts.begin(), m_Parts.end(), [&](const auto& part) { return part.block->Contains(source, bytes); });
+	const uintptr_t address = reinterpret_cast<uintptr_t>(source);
+	const auto end = std::upper_bound(m_Parts.begin(), m_Parts.end(), address, [](uintptr_t address, const Part& part) {
+		return address < reinterpret_cast<uintptr_t>(part.block->live.data);
+	});
+	return end != m_Parts.begin() && std::prev(end)->block->Contains(source, bytes);
 }
 
 bool CheckpointPagePool::Snapshot::CanBorrow(const void* source, size_t bytes) const {
@@ -267,6 +271,9 @@ std::string CheckpointPagePool::SelfTestMismatch() {
 	}
 	auto drain = std::async(std::launch::async, [&] { first->Drain(); second->Drain(); });
 	drain.get();
+	if (!first->Contains(source, expected.size()) || first->CanBorrow(source, expected.size()) ||
+	    !first->Read(source, restored.data(), restored.size()) || restored != expected)
+		return "drained native pages lost their frozen ownership";
 	if (!second->Read(source, restored.data(), restored.size()) || !std::all_of(restored.begin(), restored.end(), [](auto byte) { return byte == 71; }))
 		return "native page snapshot did not survive its pool";
 	if (first->Read(expected.data(), restored.data(), restored.size())) return "native page snapshot accepted an unrelated address";

@@ -573,7 +573,7 @@ std::shared_ptr<const Atom::FrozenList> Atom::FreezeList(const std::vector<Atom*
 	std::array<bool, 3> haveMaterial{};
 	for (const Atom* atom: atoms) {
 		FrozenList::Record record{atom, FrozenList::none, FrozenList::none, values ? atom->CaptureCheckpointLinkIDs() : std::array<long, 5>{}};
-		if (!list->state->pages || !list->state->pages->CanBorrow(atom, sizeof(Atom))) {
+		if (!list->state->pages || !list->state->pages->Contains(atom, sizeof(Atom))) {
 			record.backup = list->backup.size();
 			const char* source = reinterpret_cast<const char*>(atom);
 			list->backup.insert(list->backup.end(), source, source + sizeof(Atom));
