@@ -5300,7 +5300,7 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::RosterOffersReturnLocked(uint8_t lockstepPeerId, NetPeerId holder) {
 		const NetRosterSeat* seat = m_ReconnectHost.RosterSeatOfPeer(lockstepPeerId);
-		if (!seat || seat->phase != NetSeatPhase::Held || seat->holdCause != NetSeatHoldCause::RejoinFailed) return true;
+		if (!seat || seat->failedReturns == 0 || seat->phase == NetSeatPhase::RejoinImage || seat->phase == NetSeatPhase::RejoinCatchUp) return true;
 		std::string refusal;
 		if (m_ReconnectHost.ReofferReturn(lockstepPeerId, &refusal)) return true;
 		if (!refusal.empty()) {

@@ -5780,9 +5780,9 @@ namespace RTE {
 			leaver->left = true;
 			pumpClients();
 			round1.Tick(NetLockstepNowMs()); // Receive the last authenticated leave before advancing the silence clock.
-			for (int spin = 0; spin < 400 && !round1.GetPeerLeaveFrames().contains(leaverPeerId); ++spin) {
+			for (int spin = 0; spin < 6500 && !round1.GetPeerLeaveFrames().contains(leaverPeerId); ++spin) {
 				pumpClients();
-				round1.Tick(NetLockstepNowMs() + c_NetSeatDisconnectSilenceMs + 100);
+				round1.Tick(NetLockstepNowMs());
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 			if (!round1.GetPeerLeaveFrames().contains(leaverPeerId)) {
