@@ -1225,8 +1225,7 @@ namespace RTE {
 		bool IsLocalSeatHeld() const { NET_PLANE_CHECK(); return m_LocalSeatHeld; }
 		/// Whether the host the last handover replaced sent its leave record: its departure was its own decision, never read from a silence.
 		bool MigrationHostAnnouncedLeave() const { NET_PLANE_CHECK(); return m_MigrationHostAnnounced; }
-		/// Host: whether it reaches fewer than a strict majority of the seats its round had connected when its links began to go - its play
-		/// then is provisional: the others may hand the match on without it.
+		/// Host: whether a prepared frame lacks the retained remote copy needed to preserve one history through host change.
 		bool IsHostProvisional() const { NET_PLANE_CHECK(); return m_HostProvisional; }
 		/// Host: the seats it reaches and the connected seats it counts them against, while a link is lost.
 		NetHostMigrationReach GetHostReach() const { NET_PLANE_CHECK(); return m_HostReach; }
@@ -1238,9 +1237,6 @@ namespace RTE {
 		/// Host: the directory says the row is held at a later generation; the round stops to rejoin the match as a player.
 		void NoteSuperseded(uint64_t generation);
 
-		/// Whether this machine judged itself unable to hold the round's rate and went quiet for the host's bound to hold its seat.
-		/// @return Whether it did.
-		bool IsSelfHeld() const { NET_PLANE_CHECK(); return m_SelfHeld; }
 		/// The peer whose AI drives the seats the AI holds at a frame: the host, or while the host's own seat is held, the first playing peer of its succession.
 		uint8_t AiAuthorityAt(uint64_t frame) const;
 		/// Who produces an actor's frames that its owner would: the owner, unless the owner is a host whose own seat the AI holds.
@@ -1361,11 +1357,11 @@ namespace RTE {
 		/// Whether a seat the AI holds comes back to its player by a frame: its agreed return lands at or before it.
 		bool HeldSeatReturnsBy(uint8_t peerId, uint64_t frame) const;
 		// Kept for estimates that still speak in frames (1200 frames = 20 s). The hold itself
-		// is the admission wall-clock; commits do not advance while a dropped seat is unresolved.
+		// does not pause simulation; the host alone chooses a later release or return boundary.
 		static constexpr uint64_t c_ReclaimHoldFrames = 1200;
 		static constexpr uint64_t c_HoldPauseMs = 20000;
-		/// How long past the host's own startup a bounded-wait round waits for a slow loader before the AI takes its seat.
-		static constexpr uint64_t c_StartupAnswerBudgetMs = 5000;
+		/// Scene-load observation budget, used only for readiness diagnostics.
+		static constexpr uint64_t c_SceneLoadAnswerBudgetMs = 5000;
 		/// A sender's first second of play is judged by its startup ramp, not the bare slow-player bound.
 		static constexpr uint64_t c_StartupSettleTicks = 60;
 		static constexpr uint64_t c_HoldHeartbeatMs = 50;
@@ -1753,10 +1749,8 @@ namespace RTE {
 		/// A Reclaimed or Substituted seat is being refilled; it is not a last-player close.
 		bool SeatIsRefilling(uint8_t peerId) const;
 		bool AnySeatRefilling() const;
-		size_t LeftPeersNotRefilling() const;
 		/// Ends a round every remote has left once the last held seat's reclaim window has closed.
 		/// Whether a scheduled resync owns the end of this round; a last-player leave must not take it.
-		bool ReclaimResyncPending() const;
 		bool IsRemoteRequiredForFrame(uint8_t peerId, uint64_t frame) const;
 		/// Whether a committed frame carries this remote's input: exactly the senders the round requires at it.
 		bool CommitsRemoteInput(uint8_t peerId, uint64_t frame) const;
@@ -1806,7 +1800,6 @@ namespace RTE {
 		bool FeedsBelowRoundRate(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* rate = nullptr);
 		static void NoteArrival(NetLockstepPeerStats& stats, uint64_t nowMs, uint64_t frame);
 		/// Whether the wait for every peer's published startup has used the round's answer budget.
-		bool StartupWaitExpired(uint64_t nowMs) const;
 		void TickStartupWait(uint64_t nowMs);
 		void FormAgreedFirstFrame(uint64_t nowMs);
 		bool SendAgreedStart(uint8_t onlyPeerId = 0);
@@ -1887,14 +1880,10 @@ namespace RTE {
 		static constexpr size_t c_OwnPaceTicks = 15; //!< The ticks whose cost this machine judges its own pace on.
 		static constexpr size_t c_FirstCapacityTicks = 3; //!< The fewest ticks whose median this machine publishes, until it has its full window.
 		static constexpr uint64_t c_CapacityGraceTicks = 180; //!< A seat's first ticks are its warm-up: no capacity hold reads them.
-		static constexpr uint32_t c_SlowReadings = 5; //!< The slow capacity readings in a row that make this machine go quiet.
-		uint64_t m_JudgeAfterFrame = 0; //!< A machine back from its own hold judges itself again from this frame.
 		std::map<uint8_t, double> m_PublishedCapacity; //!< What each machine this one talks to published it can run, in ticks a second.
 		uint64_t m_CapacityPublishedAt = 0; //!< The produced frame this machine last published its capacity at.
-		uint32_t m_SlowTicks = 0; //!< The consecutive ticks this machine's capacity has been slow against the fastest published one.
 		std::deque<double> m_TickCosts; //!< This machine's own recent ticks' cost, in ms.
 		std::deque<std::array<double, 3>> m_OthersTickSamples; //!< When (us), at which tick the fastest other machine stood, and this machine's own tick.
-		bool m_SelfHeld = false; //!< This machine judged itself unable to hold the round's rate: its seat sends nothing more.
 		uint64_t m_ProductionBaseUs = 0;
 		uint64_t m_ProductionWaitBaseUs = 0;
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;

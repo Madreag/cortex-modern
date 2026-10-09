@@ -23877,7 +23877,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		}
 		if (host.ProposePeerHold(1, 1084, nullptr)) { *error = "the current authority can still hold its own human seat"; return false; }
 		// Capacity is only a reported fact; no self-hold operation exists.
-		if (host.m_SelfHeld || !host.QueueLocalInput(75, {}, {}, error)) { *error = "a slow-host notification silenced the host's returning input"; return false; }
+		if (host.IsLocalSeatHeld() || !host.QueueLocalInput(75, {}, {}, error)) { *error = "a slow-host notification silenced the host's returning input"; return false; }
 		// The same short jitter on a remote mobile link must also remain a wait, with the sender's seat intact.
 		host.m_Stats.nextFrame = 5014; host.m_Stats.peers[4].lastProgressMs = 2000;
 		host.m_Stats.peers[4].pingMs = 80; host.m_Stats.peers[4].jitterMs = 6;
@@ -24347,17 +24347,17 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				for (const uint64_t until = now + 5000; now < until && !queueFailed && host.IsRunning();) pump();
 			}
 			// Held either way it is known first: by the host at its first wait on a seat whose published capacity is slow, or by itself.
-			const bool slowWaited = !spikeCase && holds == 0 && !client.IsSelfHeld() && sims[0].tick >= hostTickAtHold + 150;
+			const bool slowWaited = !spikeCase && holds == 0 && !client.IsLocalSeatHeld() && sims[0].tick >= hostTickAtHold + 150;
 			if (queueFailed || !host.IsRunning() || sims[0].longestWaitMs > 50 || (!warmCase && extraDelay > 3) ||
-			    (warmCase ? holds != 0 || client.IsSelfHeld() || sims[0].tick < 300 : spikeCase ? holds != 0 || !stalled || delay <= start || sims[0].tick < 300 : !slowWaited)) {
-				*error = std::string(test.name) + ": holds=" + std::to_string(holds) + " self_held=" + std::to_string(client.IsSelfHeld()) + " stalled=" + std::to_string(stalled) +
+			    (warmCase ? holds != 0 || client.IsLocalSeatHeld() || sims[0].tick < 300 : spikeCase ? holds != 0 || !stalled || delay <= start || sims[0].tick < 300 : !slowWaited)) {
+				*error = std::string(test.name) + ": holds=" + std::to_string(holds) + " self_held=" + std::to_string(client.IsLocalSeatHeld()) + " stalled=" + std::to_string(stalled) +
 				         " start_delay=" + std::to_string(start) + " delay=" + std::to_string(delay) + " link_delay=" + std::to_string(linkDelay) + " extra_delay=" + std::to_string(extraDelay) +
 				         " host_tick=" + std::to_string(sims[0].tick) + " host_tick_at_hold=" + std::to_string(hostTickAtHold) + " host_longest_wait_ms=" + std::to_string(sims[0].longestWaitMs) +
 				         " host_wait_before_hold_ms=" + std::to_string(hostWaitBeforeHold) + " queue=" + queueError;
 				return false;
 			}
 			std::cout << "[net-lockstep-selftest] PASS a_thin_lead_is_raised_before_a_spike case=\"" << test.name << "\" delay=" << start << "->" << delay
-			          << " holds=" << holds << " self_held=" << client.IsSelfHeld() << " host_longest_wait_ms=" << sims[0].longestWaitMs
+			          << " holds=" << holds << " self_held=" << client.IsLocalSeatHeld() << " host_longest_wait_ms=" << sims[0].longestWaitMs
 			          << " host_wait_before_hold_ms=" << hostWaitBeforeHold << " host_ticks_after_hold=" << (sims[0].tick - hostTickAtHold) << std::endl;
 		}
 		return true;

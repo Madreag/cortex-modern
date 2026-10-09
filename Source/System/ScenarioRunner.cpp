@@ -1038,20 +1038,16 @@ namespace RTE {
 			// it ends: the line says how far it has come and promises no time.
 			visible.push_back({applied, "catch_up", NetCatchUpLine(applied, target, fixed ? s_framesPerSecond : 0.0, 0.0), localPeer});
 		}
-		if (WorldCatchUpActive() && IsLockstepLocalMachineSlow()) visible.push_back({s_WorldCatchUpAppliedThrough, "slow_machine", "Your machine cannot keep up with this match. The AI is playing your seat.", GetLockstepLocalPeerId()});
-		// A host whose own machine held its seat catches up in place, and says so on its own screen.
-		uint64_t heldAt = 0;
+		if (WorldCatchUpActive() && IsLockstepLocalMachineSlow()) visible.push_back({s_WorldCatchUpAppliedThrough, "slow_machine", "Your game is catching up with the match.", GetLockstepLocalPeerId()});
 		uint64_t provisionalAt = 0;
 		{
 			NetLockstepPlaneGuard plane;
-			if (s_LockstepCoordinator && s_LockstepCoordinator->IsOwnHostSeatHeld() && s_LockstepCoordinator->IsSelfHeld()) heldAt = s_LockstepCoordinator->GetStats().nextFrame;
 			if (s_LockstepCoordinator && s_LockstepCoordinator->IsHostProvisional()) provisionalAt = s_LockstepCoordinator->GetStats().nextFrame;
 		}
 		if (provisionalAt != 0)
 			visible.push_back({provisionalAt, "host_provisional",
 			                   "Connection to the other players lost - reconnecting. If they continue without you, you rejoin them as a player and your play since the loss will not count",
 			                   GetLockstepLocalPeerId()});
-		if (heldAt != 0 && !WorldCatchUpActive() && IsLockstepLocalMachineSlow()) visible.push_back({heldAt, "slow_machine", "Your machine cannot keep up with this match. The AI is playing your seat.", GetLockstepLocalPeerId()});
 		return visible;
 	}
 
@@ -2088,14 +2084,10 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::DescribeLockstepHoldPause(std::string& outWho, uint32_t& outSecondsLeft) {
-		NetLockstepPlaneGuard plane;
+		// AI holds no longer pause the activity. Keep the HUD query inactive for all input policies.
 		outWho.clear();
 		outSecondsLeft = 0;
-		if (!s_LockstepCoordinator || s_LockstepCoordinator->UsesBoundedWait() || !s_LockstepCoordinator->AnyDroppedSeatHeld()) {
-			return false;
-		}
-		outWho = s_LockstepCoordinator->DescribeHeldPause(outSecondsLeft, NetLockstepNowMs());
-		return true;
+		return false;
 	}
 
 	bool ScenarioRunner::IsLockstepActorOwnerGone(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) {

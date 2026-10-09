@@ -4697,33 +4697,12 @@ namespace RTE {
 	bool NetLockstepCoordinator::PlaneShouldTick(uint64_t nowMs) const {
 		NET_PLANE_CHECK();
 		if (m_State != NetLockstepState::Running || !m_Transport || m_Playback || IsMigrating()) return false;
-		// A host whose own seat the AI holds commits and sends the others its frames on the plane's clock, at the round's cadence,
-		// never when its slow simulation gets round to them.
-		if (IsOwnHostSeatHeld()) return true;
 		const uint64_t simTickedMs = m_SimTickedMs.load(std::memory_order_acquire);
 		return simTickedMs != 0 && nowMs >= simTickedMs && static_cast<double>(nowMs - simTickedMs) >= std::max(1.0, m_Config.simTickMs);
 	}
 
 	void NetLockstepCoordinator::PlaneTick(uint64_t nowMs) {
 		NET_PLANE_CHECK();
-		// Test lever: the plane's longest stretch without a tick while this host's own seat is held, once a second.
-		static const bool s_TracePlane = std::getenv("CCCP_TEST_OWN_PACE_TRACE") != nullptr;
-		if (s_TracePlane && IsOwnHostSeatHeld()) {
-			static uint64_t s_LastMs = 0, s_SinceMs = 0, s_LongestMs = 0, s_Ticks = 0, s_Over8 = 0;
-			if (s_LastMs != 0 && nowMs >= s_LastMs) {
-				s_LongestMs = std::max(s_LongestMs, nowMs - s_LastMs);
-				s_Over8 += nowMs - s_LastMs > 8 ? 1 : 0;
-			}
-			s_LastMs = nowMs;
-			++s_Ticks;
-			if (s_SinceMs == 0) s_SinceMs = nowMs;
-			if (nowMs - s_SinceMs >= 1000) {
-				DiagnosticLine() << "[plane-trace] ticks=" << s_Ticks << " longest_gap_ms=" << s_LongestMs << " gaps_over_8ms=" << s_Over8
-				                 << " held_transports=" << m_PlaneHeldTransports.size() << " deferred=" << m_PlaneDeferredEvents.size() << " next_frame=" << m_Stats.nextFrame << std::endl;
-				s_SinceMs = nowMs;
-				s_LongestMs = s_Ticks = s_Over8 = 0;
-			}
-		}
 		m_PlaneTicking = true;
 		Tick(nowMs);
 		m_PlaneTicking = false;
@@ -5199,11 +5178,8 @@ namespace RTE {
 		m_ProductionBaseUs = m_ProductionWaitBaseUs = 0;
 		m_TickCosts.clear();
 		m_OthersTickSamples.clear();
-		m_SelfHeld = false;
-		m_JudgeAfterFrame = 0;
 		m_PublishedCapacity.clear();
 		m_CapacityPublishedAt = 0;
-		m_SlowTicks = 0;
 		m_TimingDecisions.clear();
 		m_SettledTimings.clear();
 		m_PreStartTiming.clear();
@@ -5776,7 +5752,6 @@ namespace RTE {
 		}
 		if (IsSeatReclaimGap(m_Config.localPeerId, target)) { m_DeferredControllerFrames.clear(); return true; }
 		// A machine that judged itself too slow sends nothing more: the host's bound holds its silent seat.
-		if (m_SelfHeld) { m_DeferredControllerFrames.clear(); return true; }
 		// A host whose own seat the AI holds catches up in place: its input for the frames the AI played is discarded, as on every peer.
 		if (m_Config.localPeerId == GetHostPeerId() && IsSeatUnderAI(m_Config.localPeerId, target)) { m_DeferredControllerFrames.clear(); return true; }
 		// Past the round's agreed end the host's input would let a peer play a frame the round never has.
@@ -6412,7 +6387,7 @@ namespace RTE {
 			timing.seatIncarnations[peer - 1] = incarnation == m_Config.peerIncarnations.end() ? 1 : incarnation->second;
 		}
 		timing.nextFrame = m_Stats.nextFrame;
-		// This is a membership bitmask, not a count: only the authority and continuing current members vote.
+		// This membership bitmask names delivery recipients; it never gates the host decision.
 		timing.requiredPeers = static_cast<uint8_t>(1U << (m_Config.localPeerId - 1));
 		for (uint8_t peer: m_RemotePeerIds)
 			if ((timing.heldPeers & (1U << (peer - 1))) == 0 && !IsPeerGoneAtFrame(peer, timing.applyFrame)) timing.requiredPeers |= static_cast<uint8_t>(1U << (peer - 1));
@@ -6420,7 +6395,7 @@ namespace RTE {
 			if (error) *error = "hold would contradict an accepted frame";
 			return false;
 		}
-		// No seat or controller route changes on a proposal. Every continuing peer first parks at this boundary.
+		// The host announces and commits this exact boundary; no recipient vote is needed.
 		if (timing.supersededRevision != 0) m_TimingDecisions.erase(timing.supersededRevision);
 		m_TimingDecisions[timing.revision] = {timing, static_cast<uint8_t>(1U << (m_Config.localPeerId - 1)), false, nowMs};
 		const uint64_t lastProgress = m_Stats.peers[peerId].lastProgressMs;
@@ -6654,9 +6629,7 @@ namespace RTE {
 	}
 
 	std::string NetLockstepCoordinator::LocalHoldReason() const {
-		// This machine's own ticks ran over the step: the seat is held for the machine, not the link.
-		return m_Stats.localMachineSlow || m_SelfHeld ? "PeerHeld:Your machine cannot keep up with this match. The AI is playing your seat."
-		                                : "PeerHeld:Your seat is held by the AI. Rejoin when your connection and machine can keep up.";
+		return "PeerHeld:Rejoining - the AI is holding your seat.";
 	}
 
 	bool NetLockstepCoordinator::FeedsBelowRoundRate(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* rate) {
@@ -6911,7 +6884,6 @@ namespace RTE {
 		else m_Stats.consecutiveLateInputs = 0;
 		m_Stats.localMachineSlow = m_Stats.consecutiveLateInputs >= 8 && m_Stats.localComputeDebtMs >= m_Config.simTickMs;
 		JudgeOwnPace(producedFrame, nowUs, localElapsedMs);
-		if (m_SelfHeld) m_Stats.localMachineSlow = true;
 	}
 
 	void NetLockstepCoordinator::JudgeOwnPace(uint64_t producedFrame, uint64_t nowUs, double localElapsedMs) {
@@ -6938,17 +6910,8 @@ namespace RTE {
 		}
 		if (othersTick < 0 || m_LastQueuedTargetFrame == UINT64_MAX) return;
 		m_Stats.localRunwayTicks = static_cast<double>(m_LastQueuedTargetFrame) - othersTick - othersTrip;
-		// With the others' capacities published nothing is estimated: this machine is slow when what it can run falls short of the
-		// fastest machine's past the tolerance for nearly equal machines - its capacity is already the median of a 15-tick window, and
-		// five slow readings in a row outlast a burst's uneven end - and it goes quiet when its slack to the others is down to one tick,
-		// before any of them waits on it.
-		if (const double fastest = FastestPublishedCapacity(m_Config.localPeerId, false); fastest > 0) {
-			m_Stats.localOthersTps = fastest;
-			m_SlowTicks = SlowAgainst(m_Stats.localCapacityTps, fastest) ? m_SlowTicks + 1 : 0;
-			if (!m_SelfHeld && UsesBoundedWait() && !IsReturningSeatBeforeItsFirstInput(m_Config.localPeerId) && !IsOwnHostSeatHeld() &&
-			    producedFrame >= std::max(m_JudgeAfterFrame, CapacityJudgedFrom(m_Config.localPeerId, c_OwnPaceTicks)) && m_SlowTicks >= c_SlowReadings && m_Stats.localRunwayTicks <= 1.0)
-			return;
-		}
+		// Capacity reports are diagnostics. A slower machine keeps sending and retains its human seat.
+		if (const double fastest = FastestPublishedCapacity(m_Config.localPeerId, false); fastest > 0) m_Stats.localOthersTps = fastest;
 		// The last half second: how fast the fastest other machine advanced, and this one.
 		m_OthersTickSamples.push_back({static_cast<double>(nowUs), othersTick, static_cast<double>(producedFrame)});
 		while (m_OthersTickSamples.size() > 2 && m_OthersTickSamples[1][0] + 500000 <= nowUs) m_OthersTickSamples.pop_front();
@@ -6963,18 +6926,12 @@ namespace RTE {
 		m_Stats.localRunwayFallTps = m_Stats.localOthersTps - (static_cast<double>(producedFrame) - thenOwn) / spanS;
 		m_Stats.localCostTps = m_Stats.localOthersTps - m_Stats.localCapacityTps;
 		const double tolerance = m_Stats.localOthersTps >= 59.5 ? 0.5 : m_Stats.localOthersTps / 10.0;
-		// A slow machine goes quiet while the others are still two ticks from waiting on it, and says so: the host holds its seat from
-		// the frame after its last at once. A slow host holds its own seat through its plane the same way and catches up in place; a
-		// returning seat is judged after its return.
 		// Test lever: the judgement's inputs every third tick.
 		static const bool s_TracePace = std::getenv("CCCP_TEST_OWN_PACE_TRACE") != nullptr;
 		if (s_TracePace && producedFrame % 3 == 0)
 			DiagnosticLine() << "[net-lockstep] own pace at frame " << producedFrame << ": capacity " << m_Stats.localCapacityTps << " others " << m_Stats.localOthersTps
 			                 << " runway " << m_Stats.localRunwayTicks << " falling " << m_Stats.localRunwayFallTps << " tolerance " << tolerance << std::endl;
-		// A machine back from its own hold is judged again only a second later.
-		if (m_SelfHeld || !UsesBoundedWait() || IsReturningSeatBeforeItsFirstInput(m_Config.localPeerId) || IsOwnHostSeatHeld() ||
-		    producedFrame < std::max(m_JudgeAfterFrame, CapacityJudgedFrom(m_Config.localPeerId, c_OwnPaceTicks)) ||
-		    m_Stats.localRunwayTicks > 2.0 || m_Stats.localCostTps <= tolerance || m_Stats.localRunwayFallTps <= tolerance) return;
+
 	}
 
 	double NetLockstepCoordinator::FastestPublishedCapacity(uint8_t except, bool includeOwn) const {
@@ -7248,7 +7205,6 @@ namespace RTE {
 				return;
 			}
 			found->second.acknowledgedPeers |= static_cast<uint8_t>(1U << (timing.senderPeerId - 1));
-			CommitTiming(timing.revision);
 			return;
 		}
 		if (!authority) return;
@@ -8940,8 +8896,8 @@ namespace RTE {
 				return nowMs < status.completedAtMs || nowMs - status.completedAtMs < boundMs;
 			}
 		}
-		// Loading is a discrete world operation. It uses the existing startup answer budget, never an enlarged input bound.
-		const uint64_t budgetMs = std::min<uint64_t>(m_Config.timeoutMs, c_StartupAnswerBudgetMs);
+		// This budget reports scene-load readiness; it cannot change a human seat or end the round.
+		const uint64_t budgetMs = std::min<uint64_t>(m_Config.timeoutMs, c_SceneLoadAnswerBudgetMs);
 		if (nowMs >= m_SceneLoadStartedMs && nowMs - m_SceneLoadStartedMs >= budgetMs) {
 			if (!m_SceneLoadBudgetNamed) {
 				m_SceneLoadBudgetNamed = true;
@@ -9459,13 +9415,6 @@ namespace RTE {
 		(void)SendAgreedStart();
 	}
 
-	bool NetLockstepCoordinator::StartupWaitExpired(uint64_t nowMs) const {
-		// A publication that never arrives cannot park the round: a slow loader gets the startup answer budget past
-		// the host's own startup and no more; the AI takes its seat at the agreed first frame on every peer.
-		if (!m_StartWaitAnnounced || m_Config.timeoutMs == 0) return false;
-		const uint64_t budgetMs = m_Config.substituteSlowPeers ? std::min<uint64_t>(m_Config.timeoutMs, c_StartupAnswerBudgetMs) : m_Config.timeoutMs;
-		return nowMs >= m_StartWaitSinceMs && nowMs - m_StartWaitSinceMs >= budgetMs;
-	}
 
 	void NetLockstepCoordinator::TickStartupWait(uint64_t nowMs) {
 		if (m_State != NetLockstepState::WaitingForStart || !m_RequirePublishedStart || m_AgreedStartApplied) {
@@ -10410,7 +10359,7 @@ namespace RTE {
 		out << "\"local_compute_debt_ms\":" << m_Stats.localComputeDebtMs << ",";
 		out << "\"local_production_late_ms\":" << m_Stats.localProductionLateMs << ",";
 		out << "\"local_machine_slow\":" << (m_Stats.localMachineSlow ? "true" : "false") << ",";
-		out << "\"local_self_held\":" << (m_SelfHeld ? "true" : "false") << ",\"local_capacity_tps\":" << m_Stats.localCapacityTps << ",";
+		out << "\"local_capacity_tps\":" << m_Stats.localCapacityTps << ",";
 		out << "\"slow_player_bound_ticks\":" << m_Config.slowPlayerBoundTicks << ",";
 		out << "\"sim_tick_ms\":" << m_Config.simTickMs << ",";
 		out << "\"longest_stall_ms\":" << m_Stats.longestStallMs << ",";
@@ -12359,16 +12308,6 @@ namespace RTE {
 		return false;
 	}
 
-	size_t NetLockstepCoordinator::LeftPeersNotRefilling() const {
-		size_t left = 0;
-		for (const auto& [peerId, frame]: m_PeerLeaveFrames) {
-			(void)frame;
-			if (!SeatIsRefilling(peerId) && std::find(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), peerId) != m_RemotePeerIds.end()) {
-				++left;
-			}
-		}
-		return left;
-	}
 
 	bool NetLockstepCoordinator::IsHoldingSeatForReclaim() const {
 		NET_PLANE_CHECK();
@@ -12378,9 +12317,6 @@ namespace RTE {
 
 	// The round is already ending through the pending resync, one boundary from now; ending it as a
 	// last-player leave first would throw the reclaim away.
-	bool NetLockstepCoordinator::ReclaimResyncPending() const {
-		return m_PendingRecoveryStop && m_PendingRecoveryStop->reason == NetLockstepStopReason::ResyncRequested;
-	}
 
 	// A leave is deterministic by construction: no survivor can advance to the leaver's first missing
 	// frame without processing this, so every peer drops the requirement at the same tick.
