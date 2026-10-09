@@ -5786,7 +5786,7 @@ namespace RTE {
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 			if (!round1.GetPeerLeaveFrames().contains(leaverPeerId)) {
-				*error = "the host round never saw the clean leave";
+				*error = "the host round never saw the clean leave: " + round1.BuildReportJson() + " roster_stage=" + (hostSession.GetReconnectHost() ? std::to_string(static_cast<int>(hostSession.GetReconnectHost()->GetRoster().stage)) : "none");
 				return false;
 			}
 			leaver->left = true;

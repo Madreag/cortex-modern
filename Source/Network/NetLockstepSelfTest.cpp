@@ -720,7 +720,20 @@ namespace RTE {
 				for (auto& input: committed) if (input.senderPeerId == 1 && input.targetFrame == 41)
 					input.commands.push_back({1, host.HeldTransactions().at(3)});
 				if (!RecoveryWireCheck(host.IsRunning() && host.GetStats().nextFrame == 43 && host.SeatReleases().at(3).rbegin()->first > 42 && host.IsSeatReclaimableAt(3, 42) && SameRecoveryInputs(host.CapturePendingInputs(40), committed),
-				                       error, "restoration dropped a configured departed sender's accepted controller, commands or observations")) return false;
+				                       error, "restoration dropped a configured departed sender's accepted controller, commands or observations")) {
+					*error += " next=" + std::to_string(host.GetStats().nextFrame) + " release=" + std::to_string(host.SeatReleases().at(3).rbegin()->first) +
+					    " reclaimable42=" + std::to_string(host.IsSeatReclaimableAt(3, 42)) + " same=" + std::to_string(SameRecoveryInputs(host.CapturePendingInputs(40), committed));
+					const auto describe = [](const std::vector<NetLockstepFrame>& inputs) {
+						std::string out;
+						for (const auto& input: inputs) {
+							out += " p" + std::to_string(input.senderPeerId) + "f" + std::to_string(input.targetFrame) + "c" + std::to_string(input.commands.size()) + ":";
+							for (const auto& command: input.commands) out += std::to_string(command.payload.index()) + ",";
+						}
+						return out;
+					};
+					*error += " actual=" + describe(host.CapturePendingInputs(40)) + " expected=" + describe(committed);
+					return false;
+				}
 			}
 			std::cout << "[net-lockstep-selftest] PASS recovery_input_membership never_member=refused accepted_departed=preserved" << std::endl;
 			return true;
