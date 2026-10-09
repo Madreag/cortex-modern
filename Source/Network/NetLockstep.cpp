@@ -3495,21 +3495,44 @@ namespace RTE {
 				for (uint8_t peer: m_Config.matchConfig.successorOrder)
 					if (electorate & (1u << (peer - 1))) { choice.host = peer; break; }
 				if (choice.host == UINT16_MAX || std::popcount(electorate) < 2) { StopHostUnreachable(); return false; }
-				for (uint16_t peer: m_MigrationChoice->members) m_MigrationExpected.insert(static_cast<uint8_t>(peer));
-		if (hosting)
-			for (const auto& agreed: m_Config.matchConfig.migrationPeers) {
-				const auto peer = m_Config.migrationEndpoint ? m_Config.migrationEndpoint(agreed) : agreed;
-				if (peer.peerId == m_Config.localPeerId || !m_MigrationExpected.contains(peer.peerId))
-					continue;
-				MigrationProbe probe;
-				probe.transport = m_Config.migrationTransportFactory();
-				probe.lastDialMs = nowMs;
-				if (probe.transport && ConnectMigrationEndpoint(*probe.transport, peer, probe.nextAddress, probe.address, nullptr, &m_Config.migrationIceDial)) {
-					m_MigrationProbes[peer.peerId] = std::move(probe);
-				}
+				for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+					if (electorate & (1u << (peer - 1))) choice.members.push_back(peer);
+				choice.generation = m_MigrationGeneration;
 			}
-		if (hosting)
-			m_MigrationAnswers[m_Config.localPeerId] = MigrationMessage(NetHostMigrationMessageType::Answer);
+			m_MigrationChoice = std::move(choice);
+		}
+		m_MigrationSuccessor = static_cast<uint8_t>(m_MigrationChoice->host);
+		const auto endpoint = MigrationEndpoint(m_MigrationSuccessor);
+		if (!endpoint) { FailHostMigration("successor has no agreed listen endpoint"); return false; }
+		if (!m_MigrationListener) {
+			const auto local = MigrationEndpoint(m_Config.localPeerId);
+			m_MigrationListener = m_Config.migrationTransportFactory();
+			if (!local || !m_MigrationListener || !m_MigrationListener->StartHost(local->listenPort)) {
+				FailHostMigration("the local handover listener could not open"); return false;
+			}
+		}
+		m_MigrationSinceMs = nowMs; m_MigrationLastSendMs = nowMs;
+		m_MigrationPeers.clear(); m_MigrationAnswers.clear(); m_MigrationOutbox.clear(); m_MigrationFrameQueue.clear();
+		m_MigrationHostTransport = c_InvalidNetPeerId;
+		std::string error;
+		const bool hosting = m_MigrationSuccessor == m_Config.localPeerId;
+		m_MigrationTransport = hosting ? std::move(m_MigrationListener) : m_Config.migrationTransportFactory();
+		if (!m_MigrationTransport) { FailHostMigration("the handover transport could not be created"); return false; }
+		if (m_MigrationNextAddress >= endpoint->listenAddrs.size()) m_MigrationNextAddress = 0;
+		const bool opened = hosting || ConnectMigrationEndpoint(*m_MigrationTransport, *endpoint, m_MigrationNextAddress, m_MigrationAddress, &error, &m_Config.migrationIceDial);
+		if (!opened && hosting) { FailHostMigration("successor listen failed: " + error); return false; }
+		if (hosting && m_Config.migrationIceHost) m_Config.migrationIceHost(*m_MigrationTransport);
+		m_MigrationProbes.clear(); m_MigrationExpected.clear();
+		for (uint16_t peer: m_MigrationChoice->members) m_MigrationExpected.insert(static_cast<uint8_t>(peer));
+		if (hosting) for (const auto& agreed: m_Config.matchConfig.migrationPeers) {
+			const auto peer = m_Config.migrationEndpoint ? m_Config.migrationEndpoint(agreed) : agreed;
+			if (peer.peerId == m_Config.localPeerId || !m_MigrationExpected.contains(peer.peerId)) continue;
+			MigrationProbe probe;
+			probe.transport = m_Config.migrationTransportFactory(); probe.lastDialMs = nowMs;
+			if (probe.transport && ConnectMigrationEndpoint(*probe.transport, peer, probe.nextAddress, probe.address, nullptr, &m_Config.migrationIceDial))
+				m_MigrationProbes[peer.peerId] = std::move(probe);
+		}
+		if (hosting) m_MigrationAnswers[m_Config.localPeerId] = MigrationMessage(NetHostMigrationMessageType::Answer);
 		return true;
 	}
 
