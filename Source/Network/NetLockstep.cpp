@@ -6823,7 +6823,7 @@ namespace RTE {
 			noticeMs = std::max(noticeMs, uint64_t(2) + std::max(stats.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms()) + stats.jitterMs);
 		}
 		m_Stats.holdNoticeBudgetMs = noticeMs;
-		m_Stats.holdDeadlineFeasible = m_Stats.holdDeadlineFeasible && noticeMs <= boundMs;
+		for (uint8_t peer: missing) m_Stats.holdDeadlineFeasible = m_Stats.holdDeadlineFeasible && noticeMs <= PeerAbsenceBudgetMs(peer);
 		// A park handshake is in flight: every boundary authored now is deferred to its final end, so declaring
 		// one would propose a seat hold that cannot take effect and the caller would ask again next tick.
 		if (m_CaptureParkAwaitingReports) return false;
@@ -6871,7 +6871,6 @@ namespace RTE {
 		if (!noticeDue) return false;
 		// A hold changes membership. Notification time must never shorten the evidence of absence.
 		if (nowMs >= firstMissingMs) {
-			m_Stats.lastHoldDeclarationMs = nowMs - firstMissingMs;
 			bool held = false;
 			for (uint8_t peer: missing) {
 				const auto& peerStats = m_Stats.peers[peer];
@@ -6975,7 +6974,10 @@ namespace RTE {
 					continue;
 				}
 				std::string holdError;
-				if (ProposePeerHold(peer, nowMs, &holdError, 0, "late_stream")) { held |= IsSeatUnderAI(peer, frame); m_SlowMachineHolds.erase(peer); }
+				if (ProposePeerHold(peer, nowMs, &holdError, 0, "late_stream")) {
+					m_Stats.lastHoldDeclarationMs = nowMs - firstMissingMs;
+					held |= IsSeatUnderAI(peer, frame); m_SlowMachineHolds.erase(peer);
+				}
 				else if (!holdError.empty()) DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(peer) << ": " << holdError << std::endl;
 			}
 			return held;
@@ -7467,7 +7469,7 @@ namespace RTE {
 		if (timing.phase == NetTimingPhase::Propose) {
 			const bool ownHold = timing.action == NetTimingAction::Hold && (timing.heldPeers & (1U << (m_Config.localPeerId - 1))) != 0;
 			if ((timing.action == NetTimingAction::Hold && !UsesBoundedWait()) || (!ownHold && !tailDelay && timing.applyFrame < m_Stats.nextFrame) ||
-			    (timing.applyFrame > m_Stats.nextFrame && timing.applyFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew) || std::count_if(m_TimingDecisions.begin(), m_TimingDecisions.end(), [](const auto& decision) { return !decision.second.committed; }) >= 16) {
+			    (timing.applyFrame > m_Stats.nextFrame && timing.applyFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew) || (!m_TimingDecisions.contains(timing.revision) && std::count_if(m_TimingDecisions.begin(), m_TimingDecisions.end(), [](const auto& decision) { return !decision.second.committed; }) >= 16)) {
 				DiagnosticLine() << "[net-lockstep] timing proposal missed its boundary: action=" << static_cast<int>(timing.action) << " peer=" << static_cast<int>(timing.peerId)
 				          << " frame=" << timing.applyFrame << " next=" << m_Stats.nextFrame << " revision=" << timing.revision << " pending=" << m_TimingDecisions.size()
 				          << " start=" << m_Config.startFrame << std::endl;
