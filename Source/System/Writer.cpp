@@ -43,6 +43,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#undef AddAtom
 #undef GetClassName
 #undef LoadBitmap
 #endif
