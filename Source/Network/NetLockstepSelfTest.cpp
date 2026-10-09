@@ -7897,6 +7897,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) return false;
 					if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error) || !client.QueueLocalInput(0, {MakeFrame(101, 1)}, {}, error)) return false;
 					if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.GetStats().framesAccepted == 1 && client.GetStats().framesAccepted == 1; }, error)) return false;
+					NetLockstepReadyFrame completed;
+					if (!host.PopReadyFrame(completed) || completed.frame != delay || !client.PopReadyFrame(completed) || completed.frame != delay) {
+						*error = "the recovery fixture did not deliver its completed tick"; return false;
+					}
+					host.FinishSimulationTick(delay); client.FinishSimulationTick(delay);
+					if (!host.BeginSimulationTick(delay + 1, error) || !client.BeginSimulationTick(delay + 1, error)) return false;
 					if (rejoin) {
 						host.RequestResync("player rejoined");
 					} else {
@@ -7911,6 +7917,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					}
 					if (!host.QueueLocalInput(1, {MakeFrame(100, 2)}, {}, error) || !client.QueueLocalInput(1, {MakeFrame(101, 2)}, {}, error)) return false;
 					if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.GetStats().framesAccepted == 2 && client.GetStats().framesAccepted == 2; }, error)) return false;
+					if (!host.PopReadyFrame(completed) || completed.frame != delay + 1 || !client.PopReadyFrame(completed) || completed.frame != delay + 1) {
+						*error = "the recovery fixture did not deliver its granted tick"; return false;
+					}
 					if (client.FinishSimulationTick(delay + 1) || !host.FinishSimulationTick(delay + 1) || !host.IsFailed()) {
 						*error = "the host did not own the recovery boundary";
 						return false;
