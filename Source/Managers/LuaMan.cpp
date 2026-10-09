@@ -3257,18 +3257,23 @@ coroutine.resume(a.dead)
 do
 	local source = "return function() local n = 0 while true do n = n + 1 coroutine.yield(n) end end"
 	local stitchedStep, interpretedStep = assert(loadstring(source))(), assert(loadstring(source))()
-	jit.off(interpretedStep, true)
+	local compiled = jit ~= nil and jit.status()
+	if jit then jit.off(interpretedStep, true) end
 	a.stitched = coroutine.create(stitchedStep)
 	a.interpreted = coroutine.create(interpretedStep)
-	jit.opt.start("hotloop=1")
+	if jit then jit.opt.start("hotloop=1") end
 	for _ = 1, 8 do coroutine.resume(a.stitched); coroutine.resume(a.interpreted) end
-	jit.opt.start("hotloop=56")
+	if jit then jit.opt.start("hotloop=56") end
 	local raw = _ScriptGraphThreadCapture(a.stitched, true)
 	local canonical = _ScriptGraphThreadCapture(a.stitched)
 	local plain = _ScriptGraphThreadCapture(a.interpreted)
 	local rawStitched = false
 	for _, name in pairs(raw and raw.conts or {}) do if name == "stitch" then rawStitched = true end end
-	check("coroutine_stitch_control_reached", jit.status() and rawStitched and raw.base == plain.base + 3, raw and plain and (raw.base .. " vs " .. plain.base) or "no capture")
+	if compiled then
+		check("coroutine_stitch_control_reached", rawStitched and raw.base == plain.base + 3, raw and plain and (raw.base .. " vs " .. plain.base) or "no capture")
+	else
+		check("coroutine_interpreter_control_reached", not rawStitched and raw.base == plain.base, raw and plain and (raw.base .. " vs " .. plain.base) or "no capture")
+	end
 	local function sameLayout(x, y)
 		if not x or not y then return false, "no capture" end
 		if x.status ~= y.status or x.first ~= y.first or x.base ~= y.base or x.top ~= y.top then return false, "bounds " .. x.base .. "/" .. x.top .. " vs " .. y.base .. "/" .. y.top end
@@ -3289,7 +3294,7 @@ do
 	local fromRaw = collapsed and _ScriptGraphThreadRestore(collapsed)
 	check("coroutine_stitch_canonical_resumes", fromCanonical and resumed(fromCanonical) == "true/9/suspended" and resumed(fromCanonical) == "true/10/suspended")
 	check("coroutine_stitch_raw_resumes", fromRaw and resumed(fromRaw) == "true/9/suspended" and resumed(fromRaw) == "true/10/suspended")
-	local malformed = raw and _ScriptGraph.canonicalThread({ status = raw.status, first = raw.first, base = raw.base, top = raw.top, slots = raw.slots, links = {}, conts = raw.conts })
+	local malformed = raw and _ScriptGraph.canonicalThread({ status = raw.status, first = raw.first, base = raw.base, top = raw.top, slots = raw.slots, links = {}, conts = compiled and raw.conts or { [raw.base - 4] = "stitch" } })
 	check("coroutine_stitch_malformed_refused", malformed == nil)
 end
 b.shared = _SelfTestShared
@@ -3467,7 +3472,7 @@ do
 	for _, case in ipairs({ { 2657, 5, 7980, 7984 }, { 2658, 3, 7983, 7985 }, { 2658, 28, 7983, 8010 }, { 2658, 29, 7983, 8011 } }) do
 		local depth, pads, wantTop, wantNeeded = case[1], case[2], case[3], case[4]
 		local chunk = assert(loadstring(program(pads)))
-		jit.off(chunk, true)
+		if jit then jit.off(chunk, true) end
 		local original = coroutine.create(chunk())
 		local startOk, startValue = coroutine.resume(original, depth)
 		local desc = _ScriptGraphThreadCapture(original)
@@ -3517,7 +3522,7 @@ do
 	for _, case in ipairs({ { "shallow", 3, 96 }, { "near_limit", 2640, 90 } }) do
 		local tag, depth, pads = case[1], case[2], case[3]
 		local chunk = assert(loadstring(program(pads)))
-		jit.off(chunk, true)
+		if jit then jit.off(chunk, true) end
 		local original = coroutine.create(chunk())
 		local startOk, alias = coroutine.resume(original, depth)
 		local slot
@@ -3575,7 +3580,7 @@ do
 				string.format("bytes %s needed %s maxstack %s status %s resumed %s/%s refused %s", tostring(text and #text), tostring(needed), tostring(maxstack), status, tostring(ok), tostring(value), tostring(refusal)))
 		else
 			local chunk = assert(loadstring(source))
-			jit.off(chunk, true)
+			if jit then jit.off(chunk, true) end
 			local original = coroutine.create(chunk())
 			local startOk, startValue = coroutine.resume(original, depth)
 			local needed = select(2, _ScriptGraphThreadStackFits(original))
@@ -3605,7 +3610,7 @@ do
 	end
 	local source = "local " .. table.concat(names, ", ") .. " = " .. table.concat(values, ", ") .. "\ncoroutine.yield(a96)\nlocal " .. table.concat(extras, ", ") .. " = " .. table.concat(extraVals, ", ") .. "\nlocal t = setmetatable({}, { __index = function(_, k) return k .. \"!\" end })\nreturn t.probe, a1 + a96"
 	local fn = assert(loadstring(source))
-	jit.off(fn, true)
+	if jit then jit.off(fn, true) end
 	local original = coroutine.create(fn)
 	coroutine.resume(original)
 	local bigText = _ScriptGraph.serialize({ ["1"] = { co = original } })
@@ -3648,7 +3653,7 @@ do
 	for _, arm in ipairs(arms) do
 		local name, source, yielded = arm[1], arm[2], arm[3]
 		local fn = assert(loadstring(source))
-		jit.off(fn, true)
+		if jit then jit.off(fn, true) end
 		local original = coroutine.create(fn)
 		local startOk, startValue = coroutine.resume(original)
 		local text = _ScriptGraph.serialize({ ["1"] = { co = original } })
@@ -8957,6 +8962,12 @@ bool LuaMan::RunScriptGraphSelfTest() {
 		LuaStateWrapper& threaded = m_ScriptStates.front();
 		std::vector<uint8_t> blob, again;
 		std::string captureError, restoreError;
+		std::vector<std::string> ownersBefore;
+		VisitScriptOwnedObjects(state, [&ownersBefore](MovableObject* object) {
+			ownersBefore.push_back(std::to_string(object->GetUniqueID()) + " " + object->GetClassName() + " " + object->GetPresetName() +
+			    " registered=" + std::to_string(g_MovableMan.FindObjectByUniqueID(object->GetUniqueID()) == object) +
+			    " scripts=" + std::to_string(object->ObjectScriptsInitialized()));
+		});
 		// A global holding what no capture can name (a class dropped under its instance) is nil after any restore, so the start state is taken twice.
 		const bool normalized = CaptureRoundStartScripts(blob, &captureError) && RestoreRoundStartScripts(blob, &restoreError);
 		const bool captured = normalized && CaptureRoundStartScripts(blob, &captureError);
@@ -8985,6 +8996,9 @@ bool LuaMan::RunScriptGraphSelfTest() {
 		          << " compiled=" << compiled << " restored=" << restored << " globals=" << globalGone << " path=" << pathBack << " cache=" << cacheBack << " births=" << birthsBack
 		          << " registrations=" << registrationsBack << " recaptured_same=" << same << " first_difference=" << firstDifference << "/" << again.size()
 		          << (captureError.empty() ? "" : " capture_error=" + captureError) << (restoreError.empty() ? "" : " restore_error=" + restoreError) << std::endl;
+		if (!normalized) {
+			for (const auto& owner: ownersBefore) std::cout << "[script-graph-selftest] round start Lua owner: " << owner << std::endl;
+		}
 		if (!same && firstDifference < again.size()) {
 			// The tokens only one capture holds name what the restore did not carry.
 			const auto tokens = [](const std::vector<uint8_t>& bytes) {

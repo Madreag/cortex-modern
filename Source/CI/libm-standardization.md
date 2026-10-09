@@ -97,6 +97,9 @@ tables require source correspondence rather than a linear instruction scan.
   a request to enable FMA. It prints
   a digest that must match on Windows x64, Linux GCC x64 and macOS GCC ARM64.
 - The existing `-rotate-primitive-selftest` must match across those rebuilt targets.
+- `-script-graph-selftest` keeps interpreted fixtures interpreted when the `jit`
+  library is absent. Both execution modes retain exact capture, resume, malformed
+  continuation refusal and round-start byte comparison checks.
 
 These are source changes awaiting queued platform builds and checks. A source
 review or an old binary cannot establish a green runtime result.
