@@ -1096,6 +1096,18 @@ namespace RTE {
 				transports[worldPeer] = bound->second;
 			}
 		}
+		// An owner can be explicitly removed after its lobby link has already gone.
+		// The authority's open seat must republish even when the transport map is unchanged.
+		std::vector<uint8_t> releasedSeats;
+		for (const NetMatchPlayerSlot& slot: m_Config.matchConfig.players) {
+			if (slot.cpu || slot.peerId == m_Config.matchConfig.hostPeerId || transports.contains(slot.peerId) ||
+			    !RosterStartsSeatOpen(slot.peerId)) continue;
+			const auto& members = m_Config.matchConfig.activePeerIds;
+			if (slot.displayName != NetMatchConfigUtil::UnseatedSlotName(slot.peerId, m_Config.matchConfig.persistentWorld) ||
+			    members.empty() || std::find(members.begin(), members.end(), slot.peerId) != members.end())
+				releasedSeats.push_back(slot.peerId);
+		}
+		for (uint8_t peer: releasedSeats) RemoveRemotePeer(peer);
 		if (transports == m_RemoteTransports) return;
 		++m_ActivitySerial;
 		const auto previous = m_RemoteTransports;

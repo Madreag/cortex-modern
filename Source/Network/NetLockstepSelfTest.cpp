@@ -18836,9 +18836,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 						Controller& controller = *actor.GetController();
 						const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(actor.GetUniqueID(), actor.GetTeam(), !actor.IsPlayerControlled());
 						const auto wantedMode = index == 2 ? Controller::CIM_PLAYER : Controller::CIM_AI;
-						const uint8_t wantedOwner = index == 2 || (index == 0 && teammate) ? 3 : 1;
+						// Every absence is a held seat until its host-ordered release. Held AI runs
+						// on the host and preserves the script-disabled bit, including a claimed actor.
+						const uint8_t wantedOwner = index == 2 ? 3 : 1;
+						const bool wantedDisabled = index == 1;
 						const uint8_t classified = NetActorOwnership::ResolveOwnerPeer(match, {-(static_cast<int64_t>(index) + 1), Activity::TeamTwo, !actor.IsPlayerControlled()});
-						const bool ok = controller.GetInputMode() == wantedMode && !controller.IsDisabled() &&
+						const bool ok = controller.GetInputMode() == wantedMode && controller.IsDisabled() == wantedDisabled &&
 							actor.IsPlayerControlled() == (index == 2) && owner == wantedOwner &&
 							(index >= 2 || (controller.GetSeatMode() == Controller::CIM_AI &&
 								classified == (policy == NetActorOwnershipPolicy::HostCpuRemoteHuman ? 1 : 2)));
@@ -19539,6 +19542,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 				NetLockstepConfig c;
 				c.sessionId = 0x5732315433573135ULL;
+				c.roundId = local == 1 ? c.sessionId + 1 : 0;
 				c.startFrame = 0;
 				c.inputDelayFrames = delay;
 				c.timeoutMs = 4000;
@@ -19553,12 +19557,24 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return c;
 			};
 			NetLockstepCoordinator host, leaver, stayer;
+			uint64_t now = 0;
+			const auto drive = [&](const std::function<bool()>& done, std::string* detail, uint64_t maxMs = 4000) {
+				const uint64_t until = now + maxMs;
+				while (now <= until) {
+					host.Tick(now); leaver.Tick(now); stayer.Tick(now);
+					now += 5;
+					hostT.AdvanceTimeMs(5); leaverT.AdvanceTimeMs(5); stayerT.AdvanceTimeMs(5);
+					if (done()) return true;
+				}
+				if (detail) *detail = "claim fixture condition not reached; host=" + host.BuildReportJson() + " survivor=" + stayer.BuildReportJson();
+				return false;
+			};
 			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
 			    !leaver.Start(leaverT, cfg(2, {{1, 1}}, false), error) ||
 			    !stayer.Start(stayerT, cfg(3, {{1, 1}}, false), error)) {
 				return finish(error && !error->empty() ? error->c_str() : "trio start failed");
 			}
-			if (!DriveTrio(hostT, leaverT, stayerT, host, leaver, stayer, [&] { return host.IsRunning() && leaver.IsRunning() && stayer.IsRunning(); }, error)) {
+			if (!drive([&] { return host.IsRunning() && leaver.IsRunning() && stayer.IsRunning(); }, error)) {
 				return finish(error && !error->empty() ? error->c_str() : "trio did not reach Running");
 			}
 			std::unique_ptr<Activity> activity(new Activity());
@@ -19585,7 +19601,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					return finish(queueError.c_str());
 				}
 			}
-			if (!DriveTrio(hostT, leaverT, stayerT, host, leaver, stayer, [&] { return host.GetStats().framesAccepted >= switchFrame; }, &queueError)) {
+			if (!drive([&] { return host.GetStats().framesAccepted >= switchFrame; }, &queueError)) {
 				return finish(queueError.c_str());
 			}
 			ScenarioRunner::SetLockstepCoordinator(&leaver);
@@ -19610,7 +19626,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				}
 			}
 			std::map<uint64_t, NetLockstepReadyFrame> hostReady;
-			if (!DriveTrio(hostT, leaverT, stayerT, host, leaver, stayer, [&] {
+			if (!drive([&] {
 					NetLockstepReadyFrame ready;
 					while (host.PopReadyFrame(ready)) {
 						hostReady[ready.frame] = ready;
@@ -19637,39 +19653,48 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				                  .c_str());
 			}
 			leaverT.Stop();
-			if (!DriveTrio(hostT, leaverT, stayerT, host, leaver, stayer, [&] { return host.GetPeerLeaveFrames().count(2) != 0 && stayer.GetPeerLeaveFrames().count(2) != 0; }, &queueError, 8000)) {
-				return finish(queueError.empty() ? "peer 2 drop was never adjudicated" : queueError.c_str());
-			}
-			if (!host.AnyDroppedSeatHeld() || !stayer.AnyDroppedSeatHeld()) {
-				return finish("the dropped claim seat was not held for reclaim");
+			if (!drive([&] { return host.GetPeerLeaveFrames().contains(2); }, &queueError, 6500)) {
+				return finish(queueError.empty() ? "peer 2 was not held after five seconds of silence" : queueError.c_str());
 			}
 			const uint64_t leaveFrame = host.GetPeerLeaveFrames().at(2);
-			host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, 20000);
-			if (!DriveTrio(hostT, leaverT, stayerT, host, leaver, stayer, [&] {
-					return host.HeldSeatResolution(2) == NetLockstepHoldResolution::Expired &&
-					       stayer.HeldSeatResolution(2) == NetLockstepHoldResolution::Expired;
-				}, &queueError, 4000)) {
-				return finish(queueError.empty() ? "Expired never reached both survivors" : queueError.c_str());
+			if (!host.AnyHeldAISeat() || leaveFrame <= switchFrame + delay) return finish("the claim hold did not follow its accepted human input");
+			host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, now);
+			if (!host.SeatReleases().contains(2) || host.SeatReleases().at(2).empty()) return finish("the host did not order claim release");
+			const uint64_t releaseFrame = host.SeatReleases().at(2).rbegin()->first;
+			if (releaseFrame <= leaveFrame) return finish("the claim was released before its held boundary");
+			for (uint64_t produced = switchFrame + delay + 1; produced <= releaseFrame + 1; ++produced) {
+				if (!host.QueueLocalInput(produced, {MakeFrame(100, produced + 1)}, {}, &queueError) ||
+				    !stayer.QueueLocalInput(produced, {MakeFrame(300, produced + 1)}, {}, &queueError)) return finish(queueError.c_str());
 			}
-			ScenarioRunner::SetLockstepCoordinator(&host);
-			// Install clears the live claim map; put it back so Purge can move it.
-			ScenarioRunner::SetLockstepControlOverride(uid, 2);
-			ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(leaveFrame);
-			const bool expired = ScenarioRunner::TakeExpiredDroppedClaim(uid, leaveFrame);
-			const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
-			const uint8_t resolved = ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamTwo, true);
-			auto applyPost = [&](NetLockstepCoordinator& peer, Actor& view) {
-				ScenarioRunner::SetLockstepCoordinator(&peer);
-				if (expired && seeded != 0 && resolved == seeded) {
-					MovableMan::ApplyLockstepControlHandoffToActor(view, false);
-					return;
+			std::array<std::map<uint64_t, NetLockstepReadyFrame>, 2> committed;
+			if (!drive([&] {
+				NetLockstepReadyFrame ready;
+				while (host.PopReadyFrame(ready)) committed[0][ready.frame] = ready;
+				while (stayer.PopReadyFrame(ready)) committed[1][ready.frame] = ready;
+				return committed[0].contains(releaseFrame) && committed[1].contains(releaseFrame);
+			}, &queueError)) return finish(queueError.c_str());
+			if (!stayer.GetPeerLeaveFrames().contains(2) || stayer.GetPeerLeaveFrames().at(2) != leaveFrame ||
+			    host.SeatReleases() != stayer.SeatReleases() || !host.IsSeatReclaimableAt(2, releaseFrame - 1) ||
+			    !stayer.IsSeatReclaimableAt(2, releaseFrame - 1) || host.IsSeatReclaimableAt(2, releaseFrame) ||
+			    stayer.IsSeatReclaimableAt(2, releaseFrame)) return finish("the claim release did not land at one exact shared boundary");
+			std::array<NetLockstepCoordinator*, 2> peers{&host, &stayer};
+			std::array<Actor*, 2> views{hostView, survivorView};
+			for (size_t index = 0; index < peers.size(); ++index) {
+				ScenarioRunner::SetLockstepCoordinator(peers[index]);
+				Actor& view = *views[index];
+				const int64_t viewUID = static_cast<int64_t>(view.GetUniqueID());
+				NetActorOwnership::SeedOwner(viewUID, 1, Activity::TeamTwo);
+				ScenarioRunner::SetLockstepControlOverride(viewUID, 2);
+				for (const auto& [frame, ready]: committed[index]) {
+					if (frame > releaseFrame) break;
+					ApplyLockstepLeaveHandoffs(ready, {&view}, false);
+					const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(viewUID, Activity::TeamTwo, true);
+					if (frame < releaseFrame && claimant != 2) return finish("the held claim ended before the host's release frame");
+					if (frame == releaseFrame && (claimant != 1 ||
+					    std::find(ready.releasedPeerIds.begin(), ready.releasedPeerIds.end(), 2) == ready.releasedPeerIds.end()))
+						return finish("the claim survived its committed host release");
 				}
-				if (ScenarioRunner::IsLockstepActorOwnerGone(uid, view.GetTeam(), !view.IsPlayerControlled(), leaveFrame)) {
-					view.GetController()->SetDisabled(true);
-				}
-			};
-			applyPost(host, *hostView);
-			applyPost(stayer, *survivorView);
+			}
 			auto describe = [&](Actor& view, uint8_t owner) {
 				return "owner=" + std::to_string(static_cast<int>(owner)) +
 				       " disabled=" + std::to_string(view.GetController()->IsDisabled() ? 1 : 0) +
@@ -28663,7 +28688,8 @@ namespace {
 		row([](std::string* rowError) { return TestBothStartupFactsPrecedeTheBoundary(rowError); }, "TestBothStartupFactsPrecedeTheBoundary");
 		row([](std::string* rowError) { return TestAParkClosesOnItsBudget(rowError); }, "TestAParkClosesOnItsBudget");
 		row([](std::string* rowError) { return TestADeferredDecisionWaitsForTheFinalEnd(rowError); }, "TestADeferredDecisionWaitsForTheFinalEnd");
-		if (!rowsPassed) return fail("a reporting row failed");
+		bool aggregatePassed = rowsPassed;
+		if (!rowsPassed) (void)fail("a reporting row failed");
 		bool leavePassed = true;
 		bool migrationsPassed = true;
 		for (const auto [skip, heal]: {std::pair{false, false}, std::pair{true, false}, std::pair{false, true}}) {
@@ -28677,16 +28703,17 @@ namespace {
 				migrationsPassed = false;
 			}
 		}
-		if (!migrationsPassed)
-			return fail("host migration detecting rows failed");
+		if (!migrationsPassed) (void)fail("host migration detecting rows failed");
 		for (MigrationCase scenario: {MigrationCase::DelayedAnswer, MigrationCase::StaleAnswer, MigrationCase::AddressFallback, MigrationCase::ZeroStart, MigrationCase::SuccessorLostAfterPlan, MigrationCase::StalledSuccessor, MigrationCase::SuccessorSilentAfterRollCall}) {
 			if (!TestHostMigrationRecovery<NetLockstepConfig, NetLockstepCoordinator, NetLobbySessionConfig>(false, false, &error, scenario)) {
-				return fail("migration case=" + std::to_string(static_cast<int>(scenario)) + " " + error);
+				migrationsPassed = false;
+				(void)fail("migration case=" + std::to_string(static_cast<int>(scenario)) + " " + error);
 			}
 		}
 		const bool diagnosticPassed = TestHostMigrationRecovery<NetLockstepConfig, NetLockstepCoordinator, NetLobbySessionConfig>(false, false, &error, MigrationCase::FailureActuals);
 		if (diagnosticPassed || error.find("applied A=4 B=5") == std::string::npos || error.find("dropped=1") == std::string::npos) {
-			return fail("diagnostic fixture passed=" + std::to_string(diagnosticPassed) + " text=" + error);
+			migrationsPassed = false;
+			(void)fail("diagnostic fixture passed=" + std::to_string(diagnosticPassed) + " text=" + error);
 		}
 		error.clear();
 		for (auto policy: {NetActorOwnershipPolicy::TeamOwner, NetActorOwnershipPolicy::HostCpuRemoteHuman}) {
@@ -28701,11 +28728,16 @@ namespace {
 		followupsPassed &= TestDepartedHostEndsTheRound(&followupError);
 		followupsPassed &= TestReseatWithoutAReadoptionKeepsItsSeat(&followupError);
 		followupsPassed &= TestMidLeaveSaveAgreesAcrossPeers(&followupError);
-		if (!leavePassed) return fail(error);
-		if (!followupsPassed) return fail(followupError);
-		if (!rowsPassed) return fail("lockstep regression rows failed");
+		if (!leavePassed) (void)fail(error);
+		if (!followupsPassed) (void)fail(followupError);
+		aggregatePassed &= migrationsPassed && leavePassed && followupsPassed;
 
-		if (NetResyncSelfTest::Run() != 0 || NetResyncRuntimeSelfTest::Run() != 0) return fail("resync regression suite failed");
+		const int resyncCodecResult = NetResyncSelfTest::Run();
+		const int resyncRuntimeResult = NetResyncRuntimeSelfTest::Run();
+		if (resyncCodecResult != 0 || resyncRuntimeResult != 0) {
+			aggregatePassed = false;
+			(void)fail("resync regression suite failed");
+		}
 
 		std::string switchLandsError;
 		std::string claimTieError;
@@ -28749,7 +28781,7 @@ namespace {
 		const bool producingSet = TestProducingPassEndsTheSetItBeganWith(&producingSetError);
 		std::string readdedError;
 		const bool readdedFromWire = TestReaddedActorBeginsFromTheWire(&readdedError);
-		if (!pendingAcrossAck || !reclaimOnce || !pendingSwitches || !ordinaryModes || !switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry || !teamChangeOwner || !remoteSeatInput || !seatMapSurvivesEnd ||
+		if (!aggregatePassed || !pendingAcrossAck || !reclaimOnce || !pendingSwitches || !ordinaryModes || !switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry || !teamChangeOwner || !remoteSeatInput || !seatMapSurvivesEnd ||
 		    !sharedSeatAnswer || !speculativeBinding || !startWindow || !checkpointBinding || !producingSet || !readdedFromWire) {
 			return 1;
 		}

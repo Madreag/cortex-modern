@@ -7673,7 +7673,7 @@ namespace RTE {
 			service.m_AdoptedMatchConfig.persistentWorld = true;
 			std::string refusal;
 			const bool rematched = service.ReturnToLobby(&refusal);
-			const std::string landed = host ? "The world is closed" : "The host left the match";
+			const std::string landed = host ? "The world is closed" : "The host ended the match";
 			if (rematched || service.GetState() != NetMatchServiceState::Failed || service.GetErrorText() != landed || refusal != landed) {
 				*error = std::string(host ? "the host" : "a seat") + " of an ended world was offered a rematch it never gets: state=" +
 				         std::to_string(static_cast<int>(service.GetState())) + " text='" + service.GetErrorText() + "' refusal='" + refusal + "'";
@@ -10455,10 +10455,11 @@ namespace RTE {
 			bool cpu = false;
 		};
 		const std::vector<CensusActor> world = {{101, 1, false}, {102, 1, false}, {201, 2, false}};
-		const auto ownedBy = [&coordinator, &world](uint8_t peerId) {
+		uint64_t censusFrame = committedFrame - 1;
+		const auto ownedBy = [&coordinator, &world, &censusFrame](uint8_t peerId) {
 			std::vector<int64_t> uids;
 			for (const CensusActor& actor : world) {
-				if (coordinator.ResolveActorOwner(actor.uid, actor.team, actor.cpu) == peerId) {
+				if (coordinator.ResolveActorOwner(actor.uid, actor.team, actor.cpu, censusFrame) == peerId) {
 					uids.push_back(actor.uid);
 				}
 			}
@@ -10508,6 +10509,15 @@ namespace RTE {
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
+		if (coordinator.GetPeerLeaveFrames().find(2) == coordinator.GetPeerLeaveFrames().end() ||
+		    coordinator.GetPeerLeaveFrames().at(2) != committedFrame || ownedBy(2) != beforeTargetUIDs ||
+		    ownedBy(3) != beforeKeeperUIDs) {
+			*error = "the kick changed ownership before its host-named removal frame";
+			leaveCensus();
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		censusFrame = committedFrame;
 		running = g_ActivityMan.GetActivity();
 		if (running == nullptr) {
 			*error = "the kick took the running activity out of the ActivityMan";
@@ -10549,7 +10559,7 @@ namespace RTE {
 			return false;
 		}
 		for (const int64_t uid : beforeTargetUIDs) {
-			const uint8_t owner = coordinator.ResolveActorOwner(uid, 1, false);
+			const uint8_t owner = coordinator.ResolveActorOwner(uid, 1, false, censusFrame);
 			if (owner != coordinator.m_Config.matchConfig.hostPeerId) {
 				*error = "actor " + std::to_string(uid) + " went to peer " + std::to_string(owner) + " instead of the host's takeover";
 				leaveCensus();
@@ -12273,6 +12283,16 @@ namespace RTE {
 		ack.matchConfigHash = hostLobby.GetMatchConfigHash();
 		hostLobby.HandleConfigAck(ack);
 		const uint64_t revisionBefore = hostLobby.GetMatchConfig().configRevision;
+		std::map<uint8_t, NetRosterSeat> absentBefore;
+		for (uint8_t peer: {kickedPeerId, stayingPeerId}) {
+			if (peer == stayingPeerId && !alone) continue;
+			const NetRosterSeat* seat = admission.RosterSeatOfPeer(peer);
+			if (!seat || seat->owner == 0 || seat->ticket == 0 || seat->holdCause != NetSeatHoldCause::None) {
+				*error = "the lobby-drop fixture did not begin with a live human reservation";
+				return false;
+			}
+			absentBefore.emplace(peer, *seat);
+		}
 		// l4p-25: the Mac's link dropped by heartbeat timeout in round 5's lobby, its seat was opened and the host waited for its
 		// handover endpoint forever ('waiting at WaitingForConfigAck ... config_sent=0'), so the second machine's 'timed out waiting for lobby start'.
 		if (kick) {
@@ -12302,6 +12322,42 @@ namespace RTE {
 			clientTransport.AdvanceTimeMs(10);
 			stayingTransport.AdvanceTimeMs(10);
 		}
+		if (!kick) {
+			for (const auto& [peer, before]: absentBefore) {
+				const NetRosterSeat* seat = admission.RosterSeatOfPeer(peer);
+				if (!seat || seat->owner != before.owner || seat->ticket != before.ticket || seat->incarnation != before.incarnation ||
+				    seat->phase == NetSeatPhase::Held || seat->holdCause != NetSeatHoldCause::None || seat->link != NetSeatLink::Dropped ||
+				    slotName(peer) != before.name) {
+					*error = "a lobby disconnect changed the absent human reservation or created an AI hold";
+					return false;
+				}
+			}
+			if (hostLobby.AllConfigAcked() || hostLobby.IsStarted() || hostLobby.GetMatchConfig().configRevision != revisionBefore) {
+				*error = "a lobby disconnect opened the start barrier before an explicit host decision";
+				return false;
+			}
+			// The owner may release an absent reservation. No second disconnect event will arrive:
+			// the live lobby must discover this host decision from the same admission roster.
+			for (const auto& [peer, before]: absentBefore) {
+				NetModerationSelection selected{};
+				for (const NetH4ModerationSeat& seat: admission.GetModerationView())
+					if (seat.lockstepPeerId == peer) selected = NetSelectModerationSeat(seat);
+				NetParticipantRemovalIssue issued;
+				if (admission.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, now, 1'700'000'000'000ULL,
+				    matchConfig.sessionId, 1, 10, issued) != NetKickBanResult::Ok) {
+					*error = "the host could not explicitly release the absent lobby owner";
+					return false;
+				}
+			}
+			for (const uint64_t until = now + 500; now <= until; now += 10) {
+				hostLobby.Tick(now);
+				clientSession.Tick(now);
+				stayingSession.Tick(now);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+				stayingTransport.AdvanceTimeMs(10);
+			}
+		}
 		const std::vector<uint8_t>& active = hostLobby.GetMatchConfig().activePeerIds;
 		const std::string members = [&active] {
 			std::string text;
@@ -12316,20 +12372,21 @@ namespace RTE {
 			return false;
 		}
 		if (alone) {
-			// D54.2: the round starts on the host alone, its two players' seats held for them.
+			// The host starts alone only after explicitly releasing both absent reservations.
 			if (!hostLobby.AllConfigAcked() || std::find(active.begin(), active.end(), kickedPeerId) != active.end() || std::find(active.begin(), active.end(), stayingPeerId) != active.end()) {
 				*error = std::string("the ") + (rematch ? "rematch" : "resumed") + " lobby whose every other player dropped never lets the host start alone: members " + members +
 				         " present " + std::to_string(hostLobby.m_RemotePeerIds.size() + 1) + " acked=" + std::to_string(hostLobby.AllConfigAcked());
 				return false;
 			}
-			std::cout << "[net-match-selftest] PASS " << (rematch ? "a_host_alone_starts_a_rematch_against_held_seats" : "a_host_alone_starts_a_resumed_lobby") << " members=" << members << std::endl;
+			std::cout << "[net-match-selftest] PASS " << (rematch ? "a_host_alone_starts_after_releasing_absent_rematch_owners" : "a_host_alone_starts_after_releasing_absent_resumed_owners") << " members=" << members << std::endl;
 			return true;
 		}
-		const bool held = slotName(kickedPeerId) == "Joiner" && std::find(active.begin(), active.end(), kickedPeerId) == active.end() &&
+		const bool opened = slotName(kickedPeerId) == NetMatchConfigUtil::UnseatedSlotName(kickedPeerId, false) &&
+		                    std::find(active.begin(), active.end(), kickedPeerId) == active.end() &&
 		                  std::find(active.begin(), active.end(), stayingPeerId) != active.end() && hostLobby.GetMatchConfig().configRevision == revisionBefore + 1;
-		if (!kick && !held) {
+		if (!kick && !opened) {
 			*error = "a rematch member whose link dropped had its seat named '" + slotName(kickedPeerId) + "' with " + std::to_string(active.size()) +
-			         " active members: the round waits for a player who is not there instead of starting the seat held";
+			         " active members after explicit host release: the round still waits for a released reservation";
 			return false;
 		}
 		// l4p-28: the round's start gate counts the members present; with the held seat still counted it waited forever ('occupancy=0').
@@ -12339,12 +12396,12 @@ namespace RTE {
 		reack.matchConfigHash = hostLobby.GetMatchConfigHash();
 		hostLobby.HandleConfigAck(reack);
 		if (!hostLobby.AllConfigAcked()) {
-			*error = "the rematch lobby with " + std::string(kick ? "an opened" : "a held") + " seat has " + std::to_string(hostLobby.m_RemotePeerIds.size() + 1) +
+			*error = "the rematch lobby with " + std::string("an explicitly opened") + " seat has " + std::to_string(hostLobby.m_RemotePeerIds.size() + 1) +
 			         " members present and the members " + members + " named, and its start still waits: the round never starts";
 			return false;
 		}
-		// l4p-26: the held seat sends no handover endpoint, so the round's migration roster must stand on its members present, as a
-		// seat held from the rematch's start does - not wait for it, and not fail as "migration roster does not cover the match".
+		// A released seat sends no handover endpoint. The round keeps its stable seat numbers,
+		// while the new host-agreed member set requires only its remaining owners' endpoints.
 		hostLobby.m_Config.enableMigration = true;
 		hostLobby.m_Config.matchConfig.successorOrder = {kickedPeerId, stayingPeerId};
 		const bool rosterReady = hostLobby.PrepareMigrationRoster();
@@ -12353,7 +12410,7 @@ namespace RTE {
 			return false;
 		}
 		std::cout << "[net-match-selftest] PASS "
-		          << (kick ? "a_formed_round_starts_without_a_seat_the_host_opened" : rematch ? "a_rematch_lobby_holds_a_dropped_seat" : "a_resumed_match_lobby_holds_a_dropped_seat")
+		          << (kick ? "a_formed_round_starts_without_a_seat_the_host_opened" : rematch ? "a_rematch_lobby_waits_for_owner_or_explicit_release" : "a_resumed_lobby_waits_for_owner_or_explicit_release")
 		          << " members=" << members << std::endl;
 		return true;
 	}
@@ -15765,6 +15822,7 @@ namespace RTE {
 		auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
 			NetLockstepConfig config;
 			config.sessionId = 0x484F4C4445443031ULL;
+			config.roundId = local == 1 ? config.sessionId : 0;
 			config.timeoutMs = 2000;
 			config.localPeerId = local;
 			config.peerCount = 2;
@@ -15793,7 +15851,14 @@ namespace RTE {
 			hostTransport.AdvanceTimeMs(5);
 			clientTransport.AdvanceTimeMs(5);
 		}
-		if (!service.m_Coordinator->IsRunning() || !service.m_Coordinator->ProposePeerHold(2, 80, error)) return false;
+		if (!service.m_Coordinator->IsRunning() || service.m_Coordinator->AnyHeldAISeat()) {
+			*error = "the live lease fixture did not begin with both human owners"; return false;
+		}
+		clientTransport.Stop();
+		for (uint64_t now = 80; now <= 6080 && !service.m_Coordinator->AnyHeldAISeat(); now += 5) {
+			service.m_Coordinator->Tick(now);
+			hostTransport.AdvanceTimeMs(5);
+		}
 		if (!service.m_Coordinator->AnyHeldAISeat()) {
 			*error = "the hold-at-end fixture did not put the seat under AI";
 			return false;
