@@ -608,6 +608,35 @@ namespace RTE {
 		/// connect-limit: requests wait past GNS's 10 s default and replies wait delayMs, so a two-signal rendezvous
 		/// must still reach Connected inside the ICE limit; then a joiner whose signals are never
 		/// delivered gives up inside that limit; and the route tracker reports one move per change of the live route.
+
+		bool PendingIncomingAllowsThreeRehosts(std::string& failure) {
+			for (unsigned cycle = 0; cycle != 3; ++cycle) {
+				Side host("pending-host"), joiner("pending-joiner");
+				GnsP2PConfig hostConfig, joinerConfig;
+				SingleProcessConfigs(&hostConfig, &joinerConfig);
+				hostConfig.localIdentity = "str:pending-rehost-" + std::to_string(cycle);
+				const auto toHost = std::make_shared<SignalQueue>("pending->host");
+				const auto toJoiner = std::make_shared<SignalQueue>("host->pending");
+				const auto releases = std::make_shared<std::atomic<int>>(0);
+				StubRecvContext context(toJoiner, releases, Answer::Accept);
+				if (!host.transport.StartHostP2P(c_HostVirtualPort, hostConfig, &failure) ||
+				    !joiner.transport.ConnectP2P(new StubConnectionSignaling(toHost, releases), host.transport.GetLocalIdentity(), c_HostVirtualPort, joinerConfig, &failure)) return false;
+				const bool requested = WaitUntil(3000, [&] { Deliver(*toHost, host.transport, context, nullptr); }, [&] { return context.Requests() != 0; });
+				if (!requested) { failure = "pending incoming fixture did not allocate its native request"; return false; }
+				// No PollEvents promotes the incoming connection to an accepted transport peer.
+				host.transport.Stop(); joiner.transport.Stop();
+				GnsTransport reopened;
+				hostConfig.localIdentity = "str:pending-reopened-" + std::to_string(cycle);
+				if (!reopened.StartHostP2P(c_HostVirtualPort, hostConfig, &failure)) {
+					failure = "pending native ownership survived Stop before rehost " + std::to_string(cycle + 1) + ": " + failure;
+					return false;
+				}
+				reopened.Stop();
+			}
+			Say("PASS pending_incoming_stop_and_three_same_process_rehosts");
+			return true;
+		}
+
 		int RunConnectLimit(double delayMs) {
 			const uint32_t limitMs = GnsTransport::IceConnectTimeoutMs();
 			const double defaultLimitMs = 10000.0;
@@ -708,6 +737,7 @@ namespace RTE {
 				joiner.transport.Stop();
 			}
 			Say("transports destroyed; GNS released " + std::to_string(releases->load()) + " stub signaling object(s)");
+			if (failure.empty()) (void)PendingIncomingAllowsThreeRehosts(failure);
 			return Finish(failure);
 		}
 

@@ -4354,17 +4354,20 @@ bool GameActivity::RunSetupEditorSelfTest(bool confirmOnly) {
 		bool singlePlayerReceivedReturn = false;
 		bool receivedReturn = false;
 		bool refusedUnplacedBrain = false;
+		bool delayedSharedTick = false;
 		const auto drawFrame = [&] {
 			SDL_Event event;
 			while (SDL_PollEvent(&event)) g_UInputMan.HandleInputEvent(event);
 			g_UInputMan.Update(false);
 			if (g_UInputMan.KeyPressed(SDLK_RETURN)) receivedReturn = true;
 			if (!ScenarioRunner::HasLockstepCoordinator() && g_UInputMan.KeyPressed(SDLK_RETURN)) singlePlayerReceivedReturn = true;
-			game->UpdateEditing();
+			game->RenderUpdate();
+			if (!delayedSharedTick) game->UpdateEditing();
 			if (g_UInputMan.KeyPressed(SDLK_RETURN) && g_FrameMan.GetScreenText(0).find("Place your brain in a valid spot first") != std::string::npos) refusedUnplacedBrain = true;
 			editor->Draw(g_FrameMan.GetBackBuffer32(), Vector());
 			MenuAutomation::AfterDrawnFrame();
 			g_UInputMan.EndFrame();
+			if (delayedSharedTick) game->UpdateEditing();
 			g_UInputMan.EndSimUpdate();
 		};
 		std::string observation;
@@ -4400,7 +4403,8 @@ bool GameActivity::RunSetupEditorSelfTest(bool confirmOnly) {
 				System::PrintDiagnosticLine("[placement-confirm-selftest] FAIL return_stole_existing_player_binding " + observation); return false;
 			}
 		}
-		if (!MenuAutomation::HandGameKey("Return", [&] { return game->m_LockstepPlacementSubmitted[0]; }, "placement confirmation", observation)) return false;
+		delayedSharedTick = true;
+		if (!MenuAutomation::HandGameKey("Return", [&] { return game->m_LockstepPlacementSubmitted[0]; }, "placement confirmation after EndFrame", observation)) return false;
 		for (int frames = 0; frames < 90 && MenuAutomation::HandBusy(); ++frames) drawFrame();
 		bool confirmed = false;
 		const bool finished = MenuAutomation::HandFinished(confirmed, observation);

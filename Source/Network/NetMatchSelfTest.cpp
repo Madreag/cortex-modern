@@ -18633,6 +18633,7 @@ namespace RTE {
 			std::cerr << "[net-match-selftest] FAIL " << name << ": " << rowError << std::endl;
 			rowsPassed = false;
 		};
+		row([](std::string* why) { const bool ok = GameActivity::RunSetupEditorSelfTest(true); if (!ok) *why = "a frame-owned Enter did not survive the shared tick wait"; return ok; }, "placement_confirmation_across_frame_wait");
 		row(&TestTheDrainSaysGoodbyeAtItsCap, "the_drain_says_goodbye_at_its_cap");
 		row(&TestNetworkRevisionsKeepReady, "network_revisions_keep_ready_and_require_ack");
 		row(&TestMenuLobbyWaitsForALiveHost, "live_menu_lobby_outlasts_ten_minutes");

@@ -98,6 +98,7 @@ namespace RTE {
 	bool TestAReturnedSeatThatLeavesAgainIsGone(std::string* error);
 	bool TestARoundsOwnEndIsNoHold(std::string* error);
 	bool TestFourPlayerHoldWaitsForALiveAcknowledgement(std::string* error);
+	bool TestPlacementSessionSequence(unsigned fight, std::string* error);
 	bool TestBriefHostJitterKeepsItsHumanSeat(std::string* error);
 	bool TestHeldHostReturnsPastThePreparedHorizon(std::string* error);
 	bool TestAPreviouslyHeldHostTakesItsSeatBack(std::string* error);
@@ -23760,6 +23761,103 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+
+	bool TestPlacementSessionSequence(unsigned fight, std::string* error) {
+		LoopbackTransport wire;
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+		auto& host = *service.m_Coordinator;
+		auto config = QuorumConfig(1, 4, static_cast<uint16_t>(49700 + fight), 0x9C00 + fight, std::make_shared<QuorumPartition>());
+		if (!wire.StartHost(static_cast<uint16_t>(49700 + fight), error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RoundId = config.roundId;
+		host.m_PeersPlayedThisRound = {1, 2, 3, 4};
+		for (uint8_t peer: {2, 3, 4}) host.m_PeerEffectiveStart[peer] = 1;
+		auto& roster = service.m_ReconnectHost.m_Roster;
+		roster.matchId = config.sessionId; roster.roundNo = 1; roster.stage = NetRosterStage::Starting;
+		for (uint8_t peer = 1; peer <= 4; ++peer) {
+			NetRosterSeat seat;
+			seat.seatId = peer; seat.owner = 100 + peer; seat.ticket = 200 + peer; seat.phase = NetSeatPhase::Starting;
+			roster.seats.push_back(seat);
+		}
+		roster = ApplyRosterEvent(roster, {NetRosterEventKind::RoundStarted}).roster;
+		const auto eventNamed = [](const char* name) {
+			for (unsigned value = 0; value < static_cast<unsigned>(NetRosterEventKind::Count); ++value)
+				if (std::string(NetRosterEventName(static_cast<NetRosterEventKind>(value))) == name) return static_cast<NetRosterEventKind>(value);
+			return NetRosterEventKind::Count;
+		};
+		roster = ApplyRosterEvent(roster, {eventNamed("PlacementStarted")}).roster;
+		service.AttachCoordinatorSessionSink();
+		std::vector<std::string> failures;
+		const auto require = [&](bool condition, const std::string& why) { if (!condition) failures.push_back(why); };
+		const auto placing = [](const NetSeatRoster& state) { return std::string(NetSeatPhaseName(state.seats.front().phase)) == "PLACEMENT"; };
+		require(placing(roster), "Start has no authoritative placement phase");
+		const auto waitAt = [&](uint64_t frame, uint64_t since, uint64_t late, uint8_t missing) {
+			host.m_Stats.nextFrame = frame; host.m_LastQueuedTargetFrame = frame - 1;
+			host.m_LastCompletedSimulationTick = frame - 1;
+			host.m_Stats.peers[missing].highestFrameReceived = frame - 1;
+			host.m_Stats.peers[missing].lastProgressMs = since;
+			(void)host.DeclareOverdueInputs(frame, since + late, since, {missing});
+			require(host.m_TimingDecisions.empty(), "late placement input proposed a hold at " + std::to_string(frame));
+		};
+		if (fight == 10) {
+			for (const auto& point: std::array<std::pair<uint64_t, uint8_t>, 4>{{{83, 2}, {365, 2}, {513, 4}, {522, 3}}})
+				waitAt(point.first, 10000 + point.first, 1100, point.second);
+			for (const char* cause: {"late_stream", "capacity", "quiet", "timing_ack"})
+				require(!host.ProposePeerHold(2, 20000, nullptr, 0, cause), std::string("placement admitted ") + cause);
+			NetRosterEvent loss{NetRosterEventKind::HostLinkLost};
+			require(ApplyRosterEvent(roster, loss).refused && roster.hostSeat == 1, "one survivor changed authority at 14480");
+		} else if (fight == 11) {
+			waitAt(18879, 10000, 1100, 4); waitAt(18888, 12000, 1100, 4);
+			NetRosterEvent slow{NetRosterEventKind::SlowMachine}; slow.seat = 1; slow.afterGrace = true;
+			require(placing(ApplyRosterEvent(roster, slow).roster), "capacity handed the host's seat to AI");
+			require(placing(ApplyRosterEvent(roster, {NetRosterEventKind::HostStalled}).roster), "HostStalled changed placement ownership");
+			NetRosterEvent loss{NetRosterEventKind::HostLinkLost};
+			require(ApplyRosterEvent(roster, loss).refused, "one of three changed authority at 25737");
+			loss.quorum = true;
+			const auto electing = ApplyRosterEvent(roster, loss);
+			NetRosterEvent elected{NetRosterEventKind::HostChanged}; elected.seat = 2;
+			const auto electedRoster = ApplyRosterEvent(electing.roster, elected);
+			require(!electing.refused && !electedRoster.refused && std::string(NetSeatPhaseName(electedRoster.roster.Find(2)->phase)) == "PLACEMENT",
+			        "a certified handover opened combat before the brain barrier");
+			const auto combat = ApplyRosterEvent(roster, {eventNamed("CombatStarted")});
+			require(!combat.refused && combat.roster.stage == NetRosterStage::Running, "the committed brain barrier cannot enter combat");
+		loss.quorum = false;
+		require(ApplyRosterEvent(combat.roster, loss).refused, "a minority changed combat authority at 25782");
+		} else if (fight == 12) {
+			host.m_Stats.nextFrame = 75; host.m_LastQueuedTargetFrame = 74;
+			for (uint8_t peer: {2, 3, 4}) host.m_RemoteFrames[75][peer] = {};
+			host.AdvanceReadyFrames(1000); host.AdvanceReadyFrames(1053);
+			require(!host.IsSeatUnderAI(1, 75) && !host.ProposePeerHold(1, 1053, nullptr), "53 ms held the Captain's own seat");
+			waitAt(5014, 1056692, 83, 4);
+			host.m_Stats.peers[2].highestFrameReceived = 5025; host.m_Stats.peers[2].lastProgressMs = 1056888;
+			require(!host.ProposePeerHold(2, 1056927, nullptr, 0, "timing_ack"), "a 152 ms live receipt erased a placement voter");
+		} else if (fight == 13) {
+			for (const auto& point: std::array<std::pair<uint64_t, uint8_t>, 3>{{{4533, 3}, {5142, 4}, {5202, 2}}})
+				waitAt(point.first, 100000 + point.first, point.second == 3 ? 1004 : 1005, point.second);
+			LoopbackTransport clientWire;
+			NetLockstepCoordinator client;
+			auto clientConfig = QuorumConfig(3, 4, 49713, config.sessionId, std::make_shared<QuorumPartition>());
+			if (!client.Start(clientWire, clientConfig, error)) return false;
+			client.m_State = NetLockstepState::Running; client.m_SimTickedMs.store(1000);
+			require(client.PlaneShouldTick(1000 + 79610), "the client had zero plane ticks through its 79610 ms frame-head stall");
+		}
+		const uint64_t blocked = fight == 13 ? 5192 : fight == 12 ? 5014 : fight == 11 ? 25737 : 365;
+		host.m_Stats.nextFrame = blocked; host.m_LastQueuedTargetFrame = blocked - 1;
+		host.m_RemoteFrames[blocked][2] = {};
+		host.m_WaitingFrame = blocked; host.m_WaitStartMs = 2000000;
+		host.AdvanceReadyFrames(2020001);
+		require(host.IsRunning() && host.GetStats().timeouts == 0, "placement progress became MissingFrameTimeout at " + std::to_string(blocked));
+		if (!failures.empty()) {
+			*error = "fight " + std::to_string(fight) + ": ";
+			for (const auto& failure: failures) *error += failure + "; ";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS placement_session_fight_" << fight << std::endl;
+		return true;
+	}
+
 	bool TestBriefHostJitterKeepsItsHumanSeat(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
@@ -28518,6 +28616,10 @@ namespace {
 		row([](std::string* rowError) { return TestAgreedStartKeepsARejoinedHorizon(rowError); }, "TestAgreedStartKeepsARejoinedHorizon");
 		row([](std::string* rowError) { return TestOverdueBoundWaitsForTheCommittedRunway(rowError); }, "TestOverdueBoundWaitsForTheCommittedRunway");
 		row(&TestFourPlayerHoldWaitsForALiveAcknowledgement, "TestFourPlayerHoldWaitsForALiveAcknowledgement");
+		row([](std::string* why) { return TestPlacementSessionSequence(10, why); }, "placement_session_fight_10");
+		row([](std::string* why) { return TestPlacementSessionSequence(11, why); }, "placement_session_fight_11");
+		row([](std::string* why) { return TestPlacementSessionSequence(12, why); }, "placement_session_fight_12");
+		row([](std::string* why) { return TestPlacementSessionSequence(13, why); }, "placement_session_fight_13");
 		row(&TestBriefHostJitterKeepsItsHumanSeat, "TestBriefHostJitterKeepsItsHumanSeat");
 		row(&TestHeldHostReturnsPastThePreparedHorizon, "TestHeldHostReturnsPastThePreparedHorizon");
 		row([](std::string* rowError) { return TestBoundedHoldKeepsCommitting(rowError); }, "TestBoundedHoldKeepsCommitting");
