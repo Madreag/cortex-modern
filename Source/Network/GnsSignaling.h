@@ -97,6 +97,7 @@ namespace RTE {
 			std::string certPinSha256;
 			std::string sessionId;
 			std::string sessionToken; //!< Host only.
+			std::string signalPeer = "host"; //!< Each standby has a separate inbox; it cannot drain the live host's signals.
 		};
 		struct Counters {
 			uint64_t signalsOut = 0;
@@ -145,6 +146,7 @@ namespace RTE {
 		void RebindHost(const std::string& sessionId, const std::string& sessionToken);
 
 		static std::string HostIdentity(const std::string& sessionId);
+		static std::string MigrationSignalPeer(const std::string& identity);
 		static std::string JoinerIdentity(const std::string& joinNonce);
 		std::string LocalIdentity() const;
 

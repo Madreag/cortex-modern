@@ -9433,7 +9433,7 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> iceLock(m_MigrationIceMutex);
 			ice = m_MigrationIce;
 		}
-		if (!mux || !mux->P2PGns() || ice.session.empty()) {
+		if (!mux || !mux->P2PGns() || ice.session.empty() || identity.empty()) {
 			if (error) *error = "the handover has no ICE route: " + std::string(!mux || !mux->P2PGns() ? "its transport has no ICE half" : "no directory session reached this peer");
 			return false;
 		}
@@ -9444,6 +9444,7 @@ static std::string ResyncSaveName() {
 		config.installKey = g_SettingsMan.GetOrCreateSessionDirectoryInstallKey();
 		config.certPinSha256 = g_SettingsMan.GetSessionDirectoryCertSha256();
 		config.sessionId = ice.session;
+		config.signalPeer = GnsDirectorySignalDispatcher::MigrationSignalPeer(identity);
 		if (!dispatcher->Start(*mux->P2PGns(), config)) {
 			if (error) *error = "the handover's signal channel would not open";
 			return false;
@@ -9487,6 +9488,7 @@ static std::string ResyncSaveName() {
 		config.certPinSha256 = g_SettingsMan.GetSessionDirectoryCertSha256();
 		config.sessionId = ice.session;
 		config.sessionToken = ice.token;
+		config.signalPeer = GnsDirectorySignalDispatcher::MigrationSignalPeer(GnsTransport::ProcessIdentity());
 		if (!dispatcher->Start(*mux->P2PGns(), config)) {
 			System::PrintDiagnosticLine("[net-migration] the successor's signal channel would not open");
 			return;
@@ -9904,6 +9906,7 @@ static std::string ResyncSaveName() {
 
 		config.role = GnsDirectorySignalDispatcher::Role::Joiner;
 		config.sessionId = request.sessionId;
+		if (target.virtualPort == c_MigrationVirtualPort) config.signalPeer = GnsDirectorySignalDispatcher::MigrationSignalPeer(target.identity);
 		if (!m_Dispatcher->Start(*mux.P2PGns(), config)) {
 			if (error) *error = "ICE signaling failed: the joiner signal channel would not open";
 			return false;
@@ -10418,12 +10421,12 @@ static std::string ResyncSaveName() {
 			config.migrationEndpoint = [this, seats = NetH4BuildSeatTable(config.matchConfig)](const NetMatchMigrationPeer& agreed) {
 				if (m_ConnectionAuthority.DirectorySessionId().empty()) return agreed;
 				NetMatchMigrationPeer current = agreed;
-				current.listenAddrs.clear();
 				const auto slot = std::find_if(seats.begin(), seats.end(), [&](const auto& seat) { return seat.lockstepPeerId == agreed.peerId; });
 				const auto routes = m_ConnectionAuthority.PeerRoutes();
 				const auto route = slot != seats.end() ? routes.find(slot->stableSeat) : routes.end();
 				if (route == routes.end()) return current;
-				if (route->second.listenPort) current.listenPort = route->second.listenPort;
+				// Directory routes refresh addresses; the agreed handover listener keeps its own port.
+				current.listenAddrs.clear();
 				if (!route->second.iceIdentity.empty()) current.listenAddrs.push_back(std::string(NetLockstepCoordinator::c_MigrationIcePrefix) + route->second.iceIdentity);
 				if (m_ConnectionMode != 2) for (const auto& address: route->second.listenAddrs) current.listenAddrs.push_back(address);
 				return current;

@@ -1540,6 +1540,7 @@ namespace RTE {
 	private:
 		void TickHostMigration(uint64_t nowMs);
 		void TickMigrationRollCallLinks(uint64_t nowMs);
+		void WarmMigrationLinks(uint64_t nowMs);
 		void HandleMigrationEvent(const NetTransportEvent& event, uint64_t nowMs);
 		bool SendMigration(NetPeerId peer, NetHostMigrationMessage message);
 		NetHostMigrationMessage MigrationMessage(NetHostMigrationMessageType type) const;
@@ -1583,6 +1584,8 @@ namespace RTE {
 			uint64_t lastDialMs = 0;
 			std::string address;
 			bool answered = false;
+			NetPeerId connection = c_InvalidNetPeerId;
+			uint64_t lastHelloMs = 0;
 		};
 		std::map<uint8_t, MigrationProbe> m_MigrationProbes;
 		size_t m_MigrationNextAddress = 0;

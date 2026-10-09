@@ -1423,6 +1423,31 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(row["session_id"], created["session_id"])
         self.assertEqual(row["seats_free"], 2)
 
+    def test_migration_standby_inboxes_keep_each_survivors_routes(self) -> None:
+        store = session_directory.SessionDirectory(60, 5)
+        self.addCleanup(store.stop)
+        row = store.register(sample_register(), "192.0.2.1", 10, INSTALL_KEY)
+        sid, token = row["session_id"], row["token"]
+        destinations = ["host:" + "a" * 32, "host:" + "b" * 32]
+        for index, destination in enumerate(destinations):
+            nonce = "survivor" + str(index)
+            store.post_signal(sid, {"from": "client:" + nonce, "to": destination,
+                              "token_or_join_nonce": nonce, "payload_b64": base64.b64encode(b"route-offer").decode()}, 10)
+        self.assertFalse(store.get_signals(sid, "host", 0, token, 10)["signals"])
+        for index, destination in enumerate(destinations):
+            with self.assertRaises(PermissionError): store.get_signals(sid, destination, 0, "invalid", 10)
+            offers = store.get_signals(sid, destination, 0, token, 10)["signals"]
+            self.assertEqual(len(offers), 1)
+            self.assertEqual(offers[0]["from"], "client:survivor" + str(index))
+            store.get_signals(sid, destination, offers[0]["seq"], token, 10)
+            store.post_signal(sid, {"from": destination, "to": "client:survivor" + str(index),
+                              "token_or_join_nonce": token, "payload_b64": base64.b64encode(b"route-answer").decode()}, 10)
+            replies = store.get_signals(sid, "client:survivor" + str(index), 0, None, 10)["signals"]
+            self.assertEqual(replies[0]["from"], destination)
+        with self.assertRaises(PermissionError):
+            store.post_signal(sid, {"from": destinations[0], "to": "client:survivor0",
+                              "token_or_join_nonce": "invalid", "payload_b64": "AA=="}, 10)
+
     def test_signal_round_trip_and_after(self) -> None:
         self.start()
         status, created = self.register()

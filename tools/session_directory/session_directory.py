@@ -267,8 +267,13 @@ def valid_install_key(key: str) -> bool:
     return all(ch in INSTALL_KEY_CHARS for ch in key)
 
 
+def host_signal_peer(peer: str) -> bool:
+    return peer == "host" or (peer.startswith("host:") and 1 <= len(peer) - 5 <= MAX_STR
+                              and all(ch in INSTALL_KEY_CHARS for ch in peer[5:]))
+
+
 def valid_peer(peer: str) -> bool:
-    if peer == "host":
+    if host_signal_peer(peer):
         return True
     if peer.startswith("client:") and 1 <= len(peer) - 7 <= MAX_STR:
         return all(ch in INSTALL_KEY_CHARS for ch in peer[7:])
@@ -1676,27 +1681,27 @@ class SessionDirectory:
             sess = self._signalling(session_id, now)
             if sess is None:
                 raise KeyError("not_found")
-            if from_peer == "host":
+            if host_signal_peer(from_peer):
                 if not tokens_equal(token_or_nonce, sess.token):
                     raise PermissionError("forbidden")
             elif not tokens_equal(token_or_nonce, client_nonce(from_peer)):
                 raise PermissionError("forbidden")
-            elif to_peer != "host":
+            elif not host_signal_peer(to_peer):
                 raise PermissionError("forbidden")
             if to_peer not in sess.queues and len(sess.queues) >= MAX_DEST_QUEUES:
                 raise BufferError("queue_full")
             queue = list(sess.queues.get(to_peer, []))
             victims = []
-            anonymous = [item for item in sess.queues.get("host", []) if item.from_peer != "host"]
+            anonymous = [item for destination, queued in sess.queues.items() if host_signal_peer(destination) for item in queued if not host_signal_peer(item.from_peer)]
             projected_payload = sess.undrained_bytes
             projected_stored = self._stored_signal_bytes
             charge = len(payload_b64) + SIGNAL_METADATA_BYTES
             while True:
                 source = [item for item in anonymous if item.source_ip == source_ip]
                 nonce = [item for item in source if item.from_peer == from_peer]
-                source_full = from_peer != "host" and (len(source) >= MAX_SIGNAL_SOURCE_MESSAGES or sum(item.stored_bytes for item in source) + charge > MAX_SIGNAL_SOURCE_BYTES)
-                nonce_full = from_peer != "host" and len(nonce) >= MAX_SIGNAL_NONCE_MESSAGES
-                anonymous_full = from_peer != "host" and sum(item.payload_len for item in anonymous) + len(raw) > MAX_ANONYMOUS_SIGNAL_BYTES
+                source_full = not host_signal_peer(from_peer) and (len(source) >= MAX_SIGNAL_SOURCE_MESSAGES or sum(item.stored_bytes for item in source) + charge > MAX_SIGNAL_SOURCE_BYTES)
+                nonce_full = not host_signal_peer(from_peer) and len(nonce) >= MAX_SIGNAL_NONCE_MESSAGES
+                anonymous_full = not host_signal_peer(from_peer) and sum(item.payload_len for item in anonymous) + len(raw) > MAX_ANONYMOUS_SIGNAL_BYTES
                 if not (source_full or nonce_full or anonymous_full or len(queue) >= MAX_QUEUE or projected_payload + len(raw) > MAX_SESSION_PAYLOAD
                         or projected_stored + charge > MAX_STORED_SIGNAL_BYTES):
                     break
@@ -1718,7 +1723,7 @@ class SessionDirectory:
                 projected_payload -= victim.payload_len
                 projected_stored -= victim.stored_bytes
             for victim in victims:
-                sess.queues["host"].remove(victim)
+                sess.queues[victim.to_peer].remove(victim)
                 sess.undrained_bytes -= victim.payload_len
                 self._stored_signal_bytes -= victim.stored_bytes
             queue = sess.queues.setdefault(to_peer, [])
@@ -1748,7 +1753,7 @@ class SessionDirectory:
             sess = self._signalling(session_id, now)
             if sess is None:
                 raise KeyError("not_found")
-            if peer == "host":
+            if host_signal_peer(peer):
                 if host_token is None or not tokens_equal(host_token, sess.token):
                     raise PermissionError("forbidden")
             authenticated_lease = sess
@@ -1768,7 +1773,7 @@ class SessionDirectory:
                 sess = self._signalling(session_id, time.monotonic(), pruned=True)
                 if sess is None:
                     raise KeyError("not_found")
-                if peer == "host" and (sess is not authenticated_lease or not tokens_equal(host_token or "", sess.token)):
+                if host_signal_peer(peer) and (sess is not authenticated_lease or not tokens_equal(host_token or "", sess.token)):
                     raise PermissionError("forbidden")
             now = time.monotonic()
             queue = sess.queues.get(peer)

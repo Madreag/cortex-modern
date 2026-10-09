@@ -23845,6 +23845,17 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			}
 			return decided;
 		};
+		if (mode == 1) {
+			if (!PumpQuorumRig(r, 6000, [&] {
+				for (uint8_t peer: {3, 4}) {
+					const auto warm = r.Peer(peer).m_MigrationProbes.find(2);
+					if (warm == r.Peer(peer).m_MigrationProbes.end() || !warm->second.answered) return false;
+				}
+				return true;
+			})) { *error = "survivor routes did not warm before the directory outage"; return false; }
+			for (uint8_t peer = 2; peer <= 4; ++peer)
+				r.Peer(peer).m_Config.migrationTransportFactory = []() -> std::unique_ptr<INetTransport> { return {}; };
+		}
 		const uint64_t killedAt = r.now, frame = r.simulated[1];
 		KillQuorumPeer(r, 1);
 		(void)PumpQuorumRig(r, 14900, [] { return false; });
@@ -28675,6 +28686,17 @@ namespace {
 			std::cerr << "[net-lockstep-selftest] FAIL " << name << ": " << rowError << std::endl;
 			rowsPassed = false;
 		};
+		row([](std::string* why) { return TestOwnerSilenceThreshold(0, why); }, "late_input_2s_authenticated_traffic_no_hold");
+		row([](std::string* why) { return TestOwnerSilenceThreshold(1, why); }, "combat_silence_6s_host_orders_hold");
+		row([](std::string* why) { return TestOwnerSilenceThreshold(2, why); }, "main_loop_stall_10s_real_keepalive_thread_no_hold");
+		row([](std::string* why) { return TestOwnerHostChange(0, why); }, "host_loss_directory_referee");
+		row([](std::string* why) { return TestOwnerHostChange(1, why); }, "host_loss_directory_down_unanimous_fallback");
+		row([](std::string* why) { return TestOwnerHostChange(2, why); }, "host_loss_direct_unanimous_survivors");
+		row(&TestFourPeersCommitPlacement, "four_brains_late_jitter_duplicate_reorder");
+		row([](std::string* why) { return TestPlacementSessionSequence(10, why); }, "placement_session_fight_10");
+		row([](std::string* why) { return TestPlacementSessionSequence(11, why); }, "placement_session_fight_11");
+		row([](std::string* why) { return TestPlacementSessionSequence(12, why); }, "placement_session_fight_12");
+		row([](std::string* why) { return TestPlacementSessionSequence(13, why); }, "placement_session_fight_13");
 		row(&TestSuccessorWaitsForAThirtySecondDial, "successor_waits_for_a_thirty_second_dial");
 		row(&TestCatchUpScriptSwitchKeepsSharedControl, "catch_up_script_switch_keeps_shared_control");
 		row(&TestCatchUpActorOwnerUsesAppliedTick, "catch_up_actor_owner_uses_applied_tick");
@@ -28833,17 +28855,6 @@ namespace {
 		row([](std::string* rowError) { return TestAgreedStartKeepsARejoinedHorizon(rowError); }, "TestAgreedStartKeepsARejoinedHorizon");
 		row([](std::string* rowError) { return TestOverdueBoundWaitsForTheCommittedRunway(rowError); }, "TestOverdueBoundWaitsForTheCommittedRunway");
 		row(&TestFourPlayerHoldWaitsForALiveAcknowledgement, "TestFourPlayerHoldWaitsForALiveAcknowledgement");
-		row([](std::string* why) { return TestOwnerSilenceThreshold(0, why); }, "late_input_2s_authenticated_traffic_no_hold");
-		row([](std::string* why) { return TestOwnerSilenceThreshold(1, why); }, "combat_silence_6s_host_orders_hold");
-		row([](std::string* why) { return TestOwnerSilenceThreshold(2, why); }, "main_loop_stall_10s_real_keepalive_thread_no_hold");
-		row([](std::string* why) { return TestOwnerHostChange(0, why); }, "host_loss_directory_referee");
-		row([](std::string* why) { return TestOwnerHostChange(1, why); }, "host_loss_directory_down_unanimous_fallback");
-		row([](std::string* why) { return TestOwnerHostChange(2, why); }, "host_loss_direct_unanimous_survivors");
-		row(&TestFourPeersCommitPlacement, "four_brains_late_jitter_duplicate_reorder");
-		row([](std::string* why) { return TestPlacementSessionSequence(10, why); }, "placement_session_fight_10");
-		row([](std::string* why) { return TestPlacementSessionSequence(11, why); }, "placement_session_fight_11");
-		row([](std::string* why) { return TestPlacementSessionSequence(12, why); }, "placement_session_fight_12");
-		row([](std::string* why) { return TestPlacementSessionSequence(13, why); }, "placement_session_fight_13");
 		row(&TestBriefHostJitterKeepsItsHumanSeat, "TestBriefHostJitterKeepsItsHumanSeat");
 		row(&TestHeldHostReturnsPastThePreparedHorizon, "TestHeldHostReturnsPastThePreparedHorizon");
 		row([](std::string* rowError) { return TestBoundedHoldKeepsCommitting(rowError); }, "TestBoundedHoldKeepsCommitting");

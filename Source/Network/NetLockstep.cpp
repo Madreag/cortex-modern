@@ -3510,28 +3510,30 @@ namespace RTE {
 			if (!local || !m_MigrationListener || !m_MigrationListener->StartHost(local->listenPort)) {
 				FailHostMigration("the local handover listener could not open"); return false;
 			}
+			if (m_Config.migrationIceHost) m_Config.migrationIceHost(*m_MigrationListener);
 		}
 		m_MigrationSinceMs = nowMs; m_MigrationLastSendMs = nowMs;
 		m_MigrationPeers.clear(); m_MigrationAnswers.clear(); m_MigrationOutbox.clear(); m_MigrationFrameQueue.clear();
 		m_MigrationHostTransport = c_InvalidNetPeerId;
 		std::string error;
 		const bool hosting = m_MigrationSuccessor == m_Config.localPeerId;
-		m_MigrationTransport = hosting ? std::move(m_MigrationListener) : m_Config.migrationTransportFactory();
+		bool opened = hosting;
+		if (hosting) m_MigrationTransport = std::move(m_MigrationListener);
+		else if (auto warm = m_MigrationProbes.find(m_MigrationSuccessor); warm != m_MigrationProbes.end() && warm->second.connection != c_InvalidNetPeerId) {
+			// The established route survives a directory outage without another rendezvous.
+			m_MigrationTransport = std::move(warm->second.transport);
+			m_MigrationHostTransport = warm->second.connection;
+			m_MigrationAddress = warm->second.address;
+			m_MigrationProbes.erase(warm); opened = true;
+		} else m_MigrationTransport = m_Config.migrationTransportFactory();
 		if (!m_MigrationTransport) { FailHostMigration("the handover transport could not be created"); return false; }
 		if (m_MigrationNextAddress >= endpoint->listenAddrs.size()) m_MigrationNextAddress = 0;
-		const bool opened = hosting || ConnectMigrationEndpoint(*m_MigrationTransport, *endpoint, m_MigrationNextAddress, m_MigrationAddress, &error, &m_Config.migrationIceDial);
-		if (!opened && hosting) { FailHostMigration("successor listen failed: " + error); return false; }
-		if (hosting && m_Config.migrationIceHost) m_Config.migrationIceHost(*m_MigrationTransport);
-		m_MigrationProbes.clear(); m_MigrationExpected.clear();
+		if (!opened) opened = ConnectMigrationEndpoint(*m_MigrationTransport, *endpoint, m_MigrationNextAddress, m_MigrationAddress, &error, &m_Config.migrationIceDial);
+		if (!opened) return true;
+		m_MigrationExpected.clear();
 		for (uint16_t peer: m_MigrationChoice->members) m_MigrationExpected.insert(static_cast<uint8_t>(peer));
-		if (hosting) for (const auto& agreed: m_Config.matchConfig.migrationPeers) {
-			const auto peer = m_Config.migrationEndpoint ? m_Config.migrationEndpoint(agreed) : agreed;
-			if (peer.peerId == m_Config.localPeerId || !m_MigrationExpected.contains(peer.peerId)) continue;
-			MigrationProbe probe;
-			probe.transport = m_Config.migrationTransportFactory(); probe.lastDialMs = nowMs;
-			if (probe.transport && ConnectMigrationEndpoint(*probe.transport, peer, probe.nextAddress, probe.address, nullptr, &m_Config.migrationIceDial))
-				m_MigrationProbes[peer.peerId] = std::move(probe);
-		}
+		if (!hosting && m_MigrationHostTransport != c_InvalidNetPeerId)
+			(void)SendMigration(m_MigrationHostTransport, MigrationMessage(NetHostMigrationMessageType::Hello));
 		if (hosting) m_MigrationAnswers[m_Config.localPeerId] = MigrationMessage(NetHostMigrationMessageType::Answer);
 		return true;
 	}
@@ -3730,6 +3732,34 @@ namespace RTE {
 		return false; // An uncommitted successor is not a new host whose loss authorizes another election.
 	}
 
+	void NetLockstepCoordinator::WarmMigrationLinks(uint64_t nowMs) {
+		if (!IsRunning() || IsMigrating() || m_Config.localPeerId == GetHostPeerId() || m_Config.matchConfig.dedicated ||
+		    m_Config.matchConfig.persistentWorld || m_Config.matchConfig.successorOrder.empty() || !m_Config.migrationTransportFactory ||
+		    m_RoundId == 0 || m_MigrationGeneration == UINT64_MAX ||
+		    std::all_of(m_Config.migrationKey.begin(), m_Config.migrationKey.end(), [](uint8_t value) { return value == 0; })) return;
+		if (!m_MigrationListener) {
+			const auto local = MigrationEndpoint(m_Config.localPeerId);
+			auto listener = m_Config.migrationTransportFactory();
+			if (!local || !listener || !listener->StartHost(local->listenPort)) return;
+			if (m_Config.migrationIceHost) m_Config.migrationIceHost(*listener);
+			m_MigrationListener = std::move(listener);
+		}
+		const uint32_t owners = MigrationElectorate();
+		for (const auto& agreed: m_Config.matchConfig.migrationPeers) {
+			if (agreed.peerId == m_Config.localPeerId || (owners & (1u << (agreed.peerId - 1))) == 0) continue;
+			auto& probe = m_MigrationProbes[agreed.peerId];
+			const uint64_t patience = IsMigrationIceEndpoint(probe.address) ? c_MigrationIceDialMs : NetHostMigrationTimeouts::c_RetryMs;
+			if (probe.connection != c_InvalidNetPeerId || (probe.lastDialMs != 0 && nowMs < probe.lastDialMs + patience)) continue;
+			const auto endpoint = MigrationEndpoint(agreed.peerId);
+			if (!endpoint || endpoint->listenAddrs.empty()) continue;
+			if (!probe.transport) probe.transport = m_Config.migrationTransportFactory();
+			if (!probe.transport) continue;
+			if (probe.nextAddress >= endpoint->listenAddrs.size()) probe.nextAddress = 0;
+			probe.transport->Stop(); probe.lastDialMs = nowMs; probe.answered = false;
+			(void)ConnectMigrationEndpoint(*probe.transport, *endpoint, probe.nextAddress, probe.address, nullptr, &m_Config.migrationIceDial);
+		}
+	}
+
 	void NetLockstepCoordinator::TickMigrationRollCallLinks(uint64_t nowMs) {
 		const auto authenticated = [&](const NetTransportEvent& event, NetHostMigrationMessage& message) {
 			return event.type == NetTransportEventType::PacketReceived && event.lane == NetTransportLane::ControlReliable && NetHostMigrationCodec::Decode(event.bytes, m_Config.migrationKey, message) &&
@@ -3739,8 +3769,15 @@ namespace RTE {
 			INetTransport* listener = m_MigrationListener.get();
 			for (const auto& event: listener->PollEvents()) {
 				NetHostMigrationMessage request;
-				if (!authenticated(event, request) || request.type != NetHostMigrationMessageType::RollCall || request.senderPeerId != request.successorPeerId)
+				if (!authenticated(event, request) || request.senderPeerId == 0 || request.senderPeerId > m_Config.peerCount || request.senderPeerId == m_Config.localPeerId) continue;
+				if (request.type == NetHostMigrationMessageType::Hello && request.successorPeerId == m_Config.localPeerId &&
+				    request.generation == m_MigrationGeneration + (IsMigrating() ? 0 : 1)) {
+					auto reply = request; reply.senderPeerId = m_Config.localPeerId;
+					std::vector<uint8_t> bytes;
+					if (NetHostMigrationCodec::Encode(reply, m_Config.migrationKey, bytes)) (void)listener->Send(event.peerId, NetTransportLane::ControlReliable, bytes);
 					continue;
+				}
+				if (request.type != NetHostMigrationMessageType::RollCall || request.senderPeerId != request.successorPeerId) continue;
 				// A peer that elected again is a generation or more ahead; a peer left behind joins the one it is shown, but only on its own
 				// evidence that the host is gone: one member's timer never takes a host every other member still hears.
 				uint64_t hostRttMs = 0;
@@ -3765,51 +3802,32 @@ namespace RTE {
 					(void)listener->Send(event.peerId, NetTransportLane::ControlReliable, bytes);
 			}
 		}
-		uint8_t earlier = 0;
-		NetTransportEvent redirect;
-		uint8_t redirectPeer = 0;
-		NetHostMigrationMessage redirectMessage;
 		for (auto& [peer, dial]: m_MigrationProbes) {
-			auto& probe = dial.transport;
-			if (!probe)
-				continue;
-			const auto endpoint = MigrationEndpoint(peer);
-			if (endpoint && !dial.address.empty() && std::find(endpoint->listenAddrs.begin(), endpoint->listenAddrs.end(), dial.address) == endpoint->listenAddrs.end()) dial.nextAddress = 0;
-			if (!dial.answered && endpoint && dial.nextAddress < endpoint->listenAddrs.size() && nowMs >= dial.lastDialMs + NetHostMigrationTimeouts::c_RetryMs) {
-				probe->Stop();
-				(void)ConnectMigrationEndpoint(*probe, *endpoint, dial.nextAddress, dial.address, nullptr, &m_Config.migrationIceDial);
-				dial.lastDialMs = nowMs;
-			}
-			for (const auto& event: probe->PollEvents()) {
-				if (event.type == NetTransportEventType::PeerConnected) {
-					std::vector<uint8_t> bytes;
-					if (NetHostMigrationCodec::Encode(MigrationMessage(NetHostMigrationMessageType::RollCall), m_Config.migrationKey, bytes))
-						(void)probe->Send(event.peerId, NetTransportLane::ControlReliable, bytes);
+			if (!dial.transport) continue;
+			for (const auto& event: dial.transport->PollEvents()) {
+				if (event.type == NetTransportEventType::PeerConnected) { dial.connection = event.peerId; dial.lastHelloMs = 0; }
+				if (event.type == NetTransportEventType::PeerDisconnected || event.type == NetTransportEventType::ConnectionFailed) {
+					dial.connection = c_InvalidNetPeerId; dial.answered = false;
 				}
 				NetHostMigrationMessage answer;
-				if (!authenticated(event, answer) || answer.senderPeerId != peer)
-					continue;
-				dial.answered = true;
-				if (answer.type == NetHostMigrationMessageType::Rejoin && answer.successorPeerId == peer && answer.generation >= m_MigrationGeneration) {
-					redirectPeer = peer;
-					redirect = event;
-					redirectMessage = answer;
-				}
-				if (m_MigrationPhase == NetHostMigrationPhase::Contacting && answer.type == NetHostMigrationMessageType::Answer && answer.successorPeerId == peer && answer.generation == m_MigrationGeneration) {
-					const auto& order = m_Config.matchConfig.successorOrder;
-					if (std::find(order.begin(), order.end(), peer) < std::find(order.begin(), order.end(), m_MigrationSuccessor))
-						earlier = peer;
-				}
+				if (authenticated(event, answer) && answer.senderPeerId == peer && answer.type == NetHostMigrationMessageType::Hello &&
+				    answer.generation == m_MigrationGeneration + (IsMigrating() ? 0 : 1)) dial.answered = true;
 			}
+			if (dial.connection == c_InvalidNetPeerId || (dial.lastHelloMs != 0 && nowMs < dial.lastHelloMs + 1000)) continue;
+			auto hello = MigrationMessage(NetHostMigrationMessageType::Hello);
+			hello.generation = m_MigrationGeneration + (IsMigrating() ? 0 : 1); hello.successorPeerId = peer;
+			std::vector<uint8_t> bytes;
+			if (NetHostMigrationCodec::Encode(hello, m_Config.migrationKey, bytes)) (void)dial.transport->Send(dial.connection, NetTransportLane::ControlReliable, bytes);
+			dial.lastHelloMs = nowMs;
 		}
-		(void)earlier; (void)redirectPeer; (void)redirect; (void)redirectMessage;
 	}
 
 	void NetLockstepCoordinator::FailHostMigration(const std::string& reason) {
 		// Recovery trouble is not a host-authored match end. Keep the same decision and retry.
-		m_MigrationTransport.reset(); m_MigrationListener.reset(); m_MigrationProbes.clear();
-		m_MigrationSuccessor = 0; m_MigrationAuthoritySeen = false;
+		m_MigrationAnswers.clear(); m_MigrationReady.clear(); m_MigrationOutbox.clear(); m_MigrationFrameQueue.clear();
+		m_MigrationCommitQueued = false; m_MigrationAuthoritySeen = false;
 		StopHostUnreachable();
+		if (m_MigrationSuccessor == m_Config.localPeerId) m_MigrationAnswers[m_Config.localPeerId] = MigrationMessage(NetHostMigrationMessageType::Answer);
 		DiagnosticLine() << "[net-match] waiting for host-change recovery: " << reason << std::endl;
 	}
 
@@ -9469,7 +9487,7 @@ namespace RTE {
 			Complete(message);
 			return;
 		}
-		if (!m_PlaneTicking) TickMigrationRollCallLinks(nowMs);
+		if (!m_PlaneTicking) { WarmMigrationLinks(nowMs); TickMigrationRollCallLinks(nowMs); }
 		if (IsMigrating()) {
 			if (!m_PlaneTicking) TickHostMigration(nowMs);
 			return;
