@@ -713,11 +713,12 @@ namespace RTE {
 			const std::map<uint8_t, std::map<uint64_t, uint16_t>> delays{{2, {{43, 2}}}};
 			if (!round.Start(2, 44988, error, true, delays)) return false;
 			std::vector<NetLockstepFrame> source;
+			// Recovered packets retain their targets across a committed delay change.
 			for (uint64_t target = 41; target <= 43; ++target) {
 				for (uint8_t index = 0; index < 2; ++index) {
 					auto input = RecoveryWireInput(index + 1, target, round.peer[index].GetRoundId());
 					if (target == 43 && index == 0) input.commands.push_back({1, NetGameSetTeamFunds{0, 919}});
-					if (!round.peer[index].QueueLocalInput(target, input.frames, input.commands, error, input.observations)) return false;
+					if (!round.peer[index].QueueRecoveredInput(input, error)) return false;
 					if (target == 43) source.push_back(std::move(input));
 				}
 				round.Pump();
@@ -750,7 +751,7 @@ namespace RTE {
 								input.commands.push_back({1, NetGameSetTeamFunds{0, 919}});
 								input.frames.front().aimAngle = 0.375F;
 							}
-							if (!conflicting.peer[peer].QueueLocalInput(target, input.frames, input.commands, error, input.observations)) return false;
+							if (!conflicting.peer[peer].QueueRecoveredInput(input, error)) return false;
 						}
 						conflicting.Pump();
 					}
