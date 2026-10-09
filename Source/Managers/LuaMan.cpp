@@ -224,7 +224,7 @@ namespace {
 	void RegisterFloatingPointChecks(lua_State* state) {
 		static std::once_flag installed;
 		std::call_once(installed, [] {
-			luaJIT_set_fp_assert([] { FloatingPointEnvironment::Enter(); FloatingPointEnvironment::Assert("Lua library return"); });
+			luaJIT_set_fp_assert([] { FloatingPointEnvironment::Enter("Lua library return"); });
 			const luaJIT_MathHooks hooks = {
 				DeterministicSin, DeterministicCos, DeterministicTan,
 				DeterministicAsin, DeterministicAcos, DeterministicAtan,

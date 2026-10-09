@@ -10,12 +10,12 @@ namespace RTE::FloatingPointEnvironment {
 	void Initialize();
 	bool IsValid();
 	void Assert(const char* boundary);
-	void Enter();
+	void Enter(const char* boundary = "thread entry");
 	bool RunSelfTest();
 
 	class Scope {
 	public:
-		explicit Scope(const char* boundary) : m_Boundary(boundary) { Enter(); Assert(boundary); }
+		explicit Scope(const char* boundary) : m_Boundary(boundary) { Enter(boundary); }
 		~Scope() { Assert(m_Boundary); }
 		Scope(const Scope&) = delete;
 		Scope& operator=(const Scope&) = delete;

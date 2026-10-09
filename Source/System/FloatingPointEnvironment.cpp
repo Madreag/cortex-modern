@@ -57,9 +57,9 @@ namespace RTE::FloatingPointEnvironment {
 		Assert("thread startup");
 	}
 
-	void Enter() {
+	void Enter(const char* boundary) {
 		if (!s_Initialized) { Initialize(); }
-		else { Assert("thread entry"); }
+		else { Assert(boundary); }
 	}
 
 	bool RunSelfTest() {
