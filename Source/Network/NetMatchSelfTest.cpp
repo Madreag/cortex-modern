@@ -16201,6 +16201,16 @@ namespace RTE {
 			service.m_DirectoryRow.seatsFree = 1;
 			service.m_DirectoryRow.listenPort = port;
 			service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
+			// This running host already has its local network, listener and directory lease.
+			const auto wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+			service.m_ConnectionAuthority.Update(NetLockstepNowMs(), wall);
+			service.m_ConnectionNetworkRevision = service.m_ConnectionAuthority.NetworkRevision();
+			service.m_IceIdentity = NetIceHostIdentity("completed-lobby-expiry");
+			service.m_DirectoryRow.iceIdentity = service.m_IceIdentity;
+			service.m_DirectoryRow.iceVirtualPort = NetMatchService::c_IceVirtualPort;
+			service.m_IceBoundSessionId = id;
+			service.m_DirectoryRow.resumeSessionId = id;
+			service.m_DirectoryRow.resumeToken = "tok-expiry";
 			// The router is asked and never answers: the row registers anyway.
 			NetMatchService::RequestHostPortMap(port, &router);
 			for (int spin = 0; spin < 250 && service.m_Directory.GetState() != NetDirectoryClient::State::Registered; ++spin) {
@@ -16211,9 +16221,11 @@ namespace RTE {
 				step = std::string("the directory never registered; state=") + NetDirectoryClient::StateName(service.m_Directory.GetState());
 				return false;
 			}
-			std::lock_guard<std::mutex> lock(service.m_Mutex);
-			service.m_IceBoundSessionId = service.m_Directory.GetSessionId();
-			service.m_IceIdentity = NetIceHostIdentity(service.m_IceBoundSessionId);
+			if (service.m_IceBoundSessionId != service.m_Directory.GetSessionId() ||
+			    service.m_IceIdentity != NetIceHostIdentity("completed-lobby-expiry")) {
+				step = "publishing the expiry fixture changed its bound row or listener identity";
+				return false;
+			}
 			return true;
 		};
 		// Moves the lobby's wait into the past. The steady clock's own origin is the only limit.
