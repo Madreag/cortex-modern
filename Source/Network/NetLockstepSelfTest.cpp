@@ -23713,7 +23713,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		for (int pass = 0; pass < 10; ++pass) pump();
 		if (!WarmBoundedInputFixture({{&host, &hostWire}, {&second, &secondWire}, {&third, &thirdWire}, {&fourth, &fourthWire}}, now, error)) return false;
 		// Three continuing seats have input; the fourth really stopped. The second seat's reliable send is backpressured.
-		for (auto* peer: {&host, &second, &third}) if (!peer->QueueLocalInput(101, {}, {}, error)) return false;
+		for (auto* peer: {&host, &second, &third})
+			if (!peer->QueueLocalInput(101 - peer->InputDelayAt(peer->GetConfig().localPeerId, 101), {}, {}, error)) return false;
 		secondWire.wait = true;
 		if (!host.ProposePeerHold(4, now, error)) return false;
 		const auto proposal = host.m_TimingDecisions.rbegin()->second.proposal;
@@ -23742,7 +23743,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			NetLockstepReadyFrame ready;
 			if (!peer->PopReadyFrame(ready) || ready.frame != 101 || ready.aiHeldPeerIds != std::vector<uint8_t>{4} ||
 			    peer->HostAuthorityAt(101) != 1 || peer->TimingDecisionPendingAt(101)) {
-				*error = "the continuing members did not resume at the acknowledged four-player hold boundary"; return false;
+				*error = "the continuing members did not resume at the acknowledged four-player hold boundary: peer=" +
+				    std::to_string(peer->GetConfig().localPeerId) + " next=" + std::to_string(peer->GetStats().nextFrame) +
+				    " ready=" + std::to_string(ready.frame) + " pending=" + std::to_string(peer->TimingDecisionPendingAt(101)); return false;
 			}
 			std::vector<NetGameCommand> holds;
 			for (const auto* commands: {&ready.localCommands, &ready.remoteCommands}) for (const auto& command: *commands)
