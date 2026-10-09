@@ -102,6 +102,12 @@ namespace RTE {
 	bool RunLobbySeatHoldSelfTest(std::string* error);
 
 	namespace {
+		struct DirectConnectionScope {
+			SettingsMan::NetworkConnectionMode saved = g_SettingsMan.GetNetworkConnectionMode();
+			DirectConnectionScope() { g_SettingsMan.SetNetworkConnectionMode(SettingsMan::NetworkConnectionMode::Automatic); }
+			~DirectConnectionScope() { g_SettingsMan.SetNetworkConnectionMode(saved); }
+		};
+
 		bool TestCrossCaptureBarrier(std::string* error) {
 			const auto root = std::filesystem::path("Userdata") / "cross-barrier-selftest";
 			std::filesystem::create_directories(root);
@@ -275,6 +281,7 @@ namespace RTE {
 
 		bool TestCrossTimedTransport(std::string* error) {
 #ifdef CCCP_WITH_GNS
+			DirectConnectionScope direct;
 			GnsTransport transport;
 			if (!transport.StartHost(49915, error)) return false;
 			if (ApplyCrossTransportFault(-1, 0, 0, 10) || ApplyCrossTransportFault(0, 101, 0, 10) || !ApplyCrossTransportFault(10, 5, 2, 1)) {
@@ -8028,6 +8035,7 @@ namespace RTE {
 	// its link is the wire a migration hands it.
 	bool TestTheReportListsEveryConnection(std::string* error) {
 		if (!GnsTransport::IsCompiledIn()) return true;
+		DirectConnectionScope direct;
 		NetMatchService host, joiner;
 		host.m_IsHost = true;
 		host.m_Transport = std::make_unique<GnsTransport>();
