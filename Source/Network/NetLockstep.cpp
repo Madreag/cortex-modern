@@ -6010,10 +6010,9 @@ namespace RTE {
 		NET_PLANE_CHECK();
 		// A player who came back to this host reaches it: without that, a host that lost its only other player writes no image for its return.
 		if (m_Config.localPeerId != GetHostPeerId() || transportPeerId == c_InvalidNetPeerId || peerId == 0 || peerId > m_Config.peerCount) return;
-		const bool holdPending = std::any_of(m_TimingDecisions.begin(), m_TimingDecisions.end(), [peerId](const auto& entry) {
-			return !entry.second.committed && entry.second.proposal.action == NetTimingAction::Hold && (entry.second.proposal.heldPeers & (1U << (peerId - 1))) != 0;
-		});
-		if (!m_AiHeldSeats.contains(peerId) && !holdPending) return;
+		// The session has authenticated this returning player. A minority host may be waiting for complete-input receipts
+		// before it can even propose a hold, so reaching that player must not depend on a hold already being recorded.
+		if (!m_AiHeldSeats.contains(peerId) && !IsKnownRemotePeer(peerId)) return;
 		if (m_ReturningLinks.insert_or_assign(peerId, transportPeerId).second) m_PeerLinkHeardMs[peerId] = nowMs;
 	}
 

@@ -4423,7 +4423,7 @@ namespace RTE {
 			// finish a tick that the surviving majority cannot retain and recover before changing authority.
 			QuorumRig oneWay;
 			oneWay.keepalives = true;
-			if (!StartQuorumRig(oneWay, 4, 47151, error) || !PumpQuorumRig(oneWay, 4000, [&] {
+			if (!StartQuorumRig(oneWay, 4, 47160, error) || !PumpQuorumRig(oneWay, 4000, [&] {
 				return std::all_of(oneWay.simulated.begin(), oneWay.simulated.end(), [](uint64_t frame) { return frame >= 20; });
 			})) { *error = "the one-way-loss round did not start:" + oneWay.Report(); return false; }
 			for (uint8_t peer = 2; peer <= 4; ++peer) oneWay.partition->deaf.insert({1, peer});
@@ -22781,6 +22781,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			// Deliver the proposal and the survivor's receipt. The committed hold is then deliberately delayed behind its marker.
 			hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
 			for (const auto& event: clientWire.PollEvents()) client.HandleEvent(event, 1001);
+			client.FlushTimingOutgoing();
 			hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
 			for (const auto& event: hostWire.PollEvents()) host.HandleEvent(event, 1002);
 			host.AdvanceReadyFrames(1002);
@@ -22816,7 +22817,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			    host.m_ReadyFrames.front().frame != 100 || client.m_ReadyFrames.front().frame != 100 ||
 			    host.m_ReadyFrames.front().aiHeldPeerIds != std::vector<uint8_t>{1} ||
 			    client.m_ReadyFrames.front().aiHeldPeerIds != std::vector<uint8_t>{1}) {
-				*error = "the independently delivered host marker committed without the hold at frame 100"; return false;
+				*error = "the independently delivered host marker committed without the hold at frame 100: marker=" + std::to_string(marker) +
+				    " host_ready=" + std::to_string(host.m_ReadyFrames.size()) + " client_ready=" + std::to_string(client.m_ReadyFrames.size()) +
+				    " host_held=" + std::to_string(host.IsSeatUnderAI(1, 100)) + " client_held=" + std::to_string(client.IsSeatUnderAI(1, 100)); return false;
 			}
 			for (const auto& event: reliable) client.HandleEvent(event, 1020);
 			if (!client.IsRunning() || !client.IsSeatUnderAI(1, 100)) {
@@ -25466,9 +25469,19 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		if (!agreed || round.peers[1].SeatReleases().empty() || round.peers[1].m_ReleasedAiSeats.contains(4) ||
 		    round.peers[1].GetResumeFrame() >= agreed->applyFrame) return fail("the successor did not learn only a future release Commit");
 		if (!round.Migrate()) return fail("the commit-only survivor did not become host");
+		const auto settlePrefix = [&] {
+			// A successor waits for retained-input receipts; its survivor may have applied one more tick. Stop both at the
+			// same completed prefix so the claim comparison neither reapplies that tick nor compares unequal ranges.
+			round.drainThrough = std::max(round.committed[1].rbegin()->first, round.committed[2].rbegin()->first);
+			for (int turn = 0; turn < 20 && (round.peers[1].GetResumeFrame() <= round.drainThrough || round.peers[2].GetResumeFrame() <= round.drainThrough); ++turn) round.Pump();
+			const bool settled = round.peers[1].GetResumeFrame() == round.drainThrough + 1 && round.peers[2].GetResumeFrame() == round.drainThrough + 1;
+			round.drainThrough = UINT64_MAX;
+			return settled;
+		};
 		const uint64_t boundary = round.peers[1].GetMigrationResult().boundary;
 		if (boundary >= agreed->applyFrame) return fail("the migration did not drop the future release");
 		for (int turn = 0; turn < 150; ++turn) round.Pump();
+		if (!settlePrefix()) return fail("the survivors did not finish the same prefix before the release");
 		for (size_t index: {size_t{1}, size_t{2}}) if (round.peers[index].IsSeatReleased(4) || round.peers[index].SeatReleases().contains(4)) return fail("the future Commit survives the agreed boundary");
 		std::array<ReleasePathClaimView, 2> views;
 		for (size_t index = 0; index < views.size(); ++index) {
@@ -25481,6 +25494,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		const uint64_t after = round.peers[1].GetResumeFrame();
 		round.peers[1].EvictRemovedPeer(4, "successor releases the held seat", round.now);
 		for (int turn = 0; turn < 150; ++turn) round.Pump();
+		if (!settlePrefix()) return fail("the survivors did not finish the same prefix after the release");
 		std::array<size_t, 2> releases{};
 		for (size_t index = 0; index < views.size(); ++index) for (const auto& [frame, ready]: round.committed[index + 1]) if (frame >= after) {
 			views[index].ApplyTick(ready);
