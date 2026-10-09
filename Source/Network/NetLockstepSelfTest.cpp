@@ -22046,6 +22046,20 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			*error = "a returner's neutral gap started the host's missing-input clock or held its seat";
 			return false;
 		}
+		NetLockstepTiming decision;
+		decision.senderPeerId = 1; decision.peerId = 2; decision.sessionId = config.sessionId; decision.roundId = config.roundId;
+		decision.revision = 2; decision.applyFrame = 315; decision.delayFrames = 6; decision.requiredPeers = 3;
+		host.m_NextTimingRevision = 3;
+		host.m_TimingDecisions[2] = {decision, 1, false, 1000};
+		host.m_ConsumerWaitingFrame = 315;
+		host.m_Stats.nextFrame = 315;
+		host.TickTiming(1060);
+		if (host.IsPeerGoneAtFrame(2, 321) || !host.m_TimingDecisions.contains(2) || host.m_TimingDecisions.at(2).committed) {
+			*error = "a timing acknowledgement ignored the returner's neutral gap beyond its input-delay window";
+			return false;
+		}
+		host.m_TimingDecisions.clear();
+		host.m_ConsumerWaitingFrame.reset();
 		host.m_Stats.nextFrame = 321;
 		host.m_RemoteFrames[321][2] = {};
 		if (host.JudgeOwnSeat(321, 1200) || !host.JudgeOwnSeat(321, 1251)) {
