@@ -18754,19 +18754,31 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					!survivor.QueueLocalInput(tick, {MakeFrame(300, tick)}, {}, error)) return finish("survivor input refused");
 			}
 			bool passed = true;
+			std::array<std::map<uint64_t, NetLockstepReadyFrame>, 2> committed;
 			// The host may explicitly release a held owner; its AI handoff remains at the original ordered boundary.
 			if (dropped) {
 				host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, now);
-				if (!drive( [&] {
-					return host.HeldSeatResolution(2) == NetLockstepHoldResolution::Expired &&
-						survivor.HeldSeatResolution(2) == NetLockstepHoldResolution::Expired;
-				}, error)) return finish("expiry did not reach both survivors");
+				if (!host.SeatReleases().contains(2) || host.SeatReleases().at(2).empty()) return finish("the host did not schedule its release");
+				const uint64_t releaseFrame = host.SeatReleases().at(2).rbegin()->first;
+				for (uint64_t tick = leaveFrame + 2; tick <= releaseFrame + 1; ++tick) {
+					if (!host.QueueLocalInput(tick, {MakeFrame(100, tick)}, {}, error) ||
+					    !survivor.QueueLocalInput(tick, {MakeFrame(300, tick)}, {}, error)) return finish("release-boundary input refused");
+				}
+				if (!drive([&] {
+					NetLockstepReadyFrame ready;
+					while (host.PopReadyFrame(ready)) committed[0][ready.frame] = ready;
+					while (survivor.PopReadyFrame(ready)) committed[1][ready.frame] = ready;
+					return committed[0].contains(releaseFrame) && committed[1].contains(releaseFrame) &&
+					       host.IsSeatReleased(2) && survivor.IsSeatReleased(2);
+				}, error)) return finish("expiry did not reach both survivors at its ordered frame");
+				if (host.SeatReleases() != survivor.SeatReleases() || !host.IsSeatReclaimableAt(2, releaseFrame - 1) ||
+				    !survivor.IsSeatReclaimableAt(2, releaseFrame - 1) || host.IsSeatReclaimableAt(2, releaseFrame) ||
+				    survivor.IsSeatReclaimableAt(2, releaseFrame)) return finish("release records or frame-scoped claims disagree");
 				const bool running = host.IsRunning() && survivor.IsRunning();
 				passed &= running;
 				std::cout << "[net-lockstep-selftest] " << (running ? "PASS " : "FAIL ") << name
 					<< " expired host_state=" << static_cast<int>(host.GetState()) << " survivor_state=" << static_cast<int>(survivor.GetState()) << std::endl;
 			}
-			std::array<std::map<uint64_t, NetLockstepReadyFrame>, 2> committed;
 			if (!drive( [&] {
 				NetLockstepReadyFrame ready;
 				while (host.PopReadyFrame(ready)) committed[0][ready.frame] = ready;

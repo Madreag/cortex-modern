@@ -8900,15 +8900,18 @@ namespace RTE {
 			coordinator.m_DroppedAtMs[2] = 0;
 			coordinator.m_PeerLeaveFrames[2] = 0;
 			coordinator.m_LeftSeatsHeld.insert(2);
+			coordinator.m_AiHeldSeats[2] = 0;
+			coordinator.m_DroppedSeatResolutions[2] = NetLockstepHoldResolution::Substituted;
 			coordinator.SetSeatStateSource(&NetMatchService::QuerySeatState, &service);
 			service.m_ReconnectHost.QueueHoldResolution(2, resolution);
 			service.PumpSessionEvents();
-			if (coordinator.AnyDroppedSeatHeld()) {
-				*error = "Reclaimed left the dropped seat held after PumpSessionEvents";
+			if (!coordinator.AnyDroppedSeatHeld() || !coordinator.HasHeldAISeat(2) || !coordinator.IsRunning() ||
+			    coordinator.HeldSeatResolution(2) != NetLockstepHoldResolution::Substituted || !coordinator.m_ReclaimTransactions.empty()) {
+				*error = "an admission notice changed seat authority without a host-ordered return";
 				return false;
 			}
-			if (coordinator.HeldSeatResolution(2) != NetLockstepHoldResolution::Reclaimed) {
-				*error = "Reclaimed did not resolve the held seat";
+			if (!service.m_ReconnectHost.TakePendingHoldResolutions().empty()) {
+				*error = "the session pump did not consume its admission facts";
 				return false;
 			}
 			return true;
@@ -18947,36 +18950,44 @@ namespace RTE {
 		if (!executedTickError.empty()) return fail(executedTickError);
 		if (!earlyOverTickError.empty()) return fail(earlyOverTickError);
 		if (!healedEndError.empty()) return fail(healedEndError);
-		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
-		if (!TestAnInPlaceReturnKeepsAnOpenReturnGap(&error)) return fail(error);
-		if (!TestAReturnerToldTheMatchIsOverGetsItsRecord(&error)) return fail(error);
-		if (!TestACaughtUpSeatTakesItsRoundsRecordOnce(&error)) return fail(error);
-		if (!TestARematchKeepsAnAbsentPlayersSeatHeld(&error)) return fail(error);
-		if (!TestARematchLobbyDropReturnsThroughTheRejoin(&error)) return fail(error);
-		if (!TestAHeldRejoinAsksAnUnansweringHostAgain(&error)) return fail(error);
-		if (!TestAHeldRejoinAsksItsHostAgainOffTheGameThread(&error)) return fail(error);
-		if (!TestARoundStartsDelayCoversTheStartWork(&error)) return fail(error);
-		if (!TestARematchStartsWithoutTheEndedRoundsCatchUp(&error)) return fail(error);
-		if (!TestLeavingEndsTheSeatsCatchUp(&error)) return fail(error);
-		if (!TestALobbyDropsAnAbandonedTransfersTail(&error)) return fail(error);
-		if (!TestALaterLobbysTransferIsNewToItsPeers(&error)) return fail(error);
-		if (!TestANextRoundLandingEndsTheRejoinPhase(&error)) return fail(error);
-		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
-		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
-		if (!TestTwoThreadsSendOnOneTransport(&error)) return fail(error);
-		if (!TestALateCaptureVerdictLeavesTheNextJoinItsCapture(&error)) return fail(error);
-		if (!TestAnEndedWorldLandsInsteadOfRematching(&error)) return fail(error);
-		if (!TestServiceWorldJoinAdoptsConfig(&error)) return fail(error);
-		if (!TestRemovedWoundReleasesItsRadiusCache(&error)) return fail(error);
-		if (!TestLobbyStartReturnsBeforeHashingModules(&error)) return fail(error);
-		if (!TestRestartManifestAndAdmission(&error)) return fail(error);
-		if (!TestWorldCheckpointOrderAndRoundPin(&error)) return fail(error);
-		if (!TestAResumePicksTheHighestGeneration(&error)) return fail(error);
-		if (!TestResumeCarriesTheAgreedSeats(&error)) return fail(error);
-		if (!TestResumeHeldPeerSkipsTheTransfer(&error)) return fail(error);
-		if (!TestResumePreparesTheAgreedLobby(&error)) return fail(error);
-		if (!TestRosterTransitionsRecordHoldThenPresent(&error)) return fail(error);
-		if (!TestRosterBannerNamesThePlayerOnce(&error)) return fail(error);
+		bool sessionRowsPassed = true;
+		const auto sessionRow = [&](const auto& check, const char* name) {
+			error.clear();
+			if (!check()) {
+				sessionRowsPassed = false;
+				std::cerr << "[net-match-selftest] FAIL " << name << ": " << error << std::endl;
+			}
+		};
+		sessionRow([&] { return TestHoldResolutionPumpDoesNotRelock(&error); }, "TestHoldResolutionPumpDoesNotRelock()");
+		sessionRow([&] { return TestAnInPlaceReturnKeepsAnOpenReturnGap(&error); }, "TestAnInPlaceReturnKeepsAnOpenReturnGap()");
+		sessionRow([&] { return TestAReturnerToldTheMatchIsOverGetsItsRecord(&error); }, "TestAReturnerToldTheMatchIsOverGetsItsRecord()");
+		sessionRow([&] { return TestACaughtUpSeatTakesItsRoundsRecordOnce(&error); }, "TestACaughtUpSeatTakesItsRoundsRecordOnce()");
+		sessionRow([&] { return TestARematchKeepsAnAbsentPlayersSeatHeld(&error); }, "TestARematchKeepsAnAbsentPlayersSeatHeld()");
+		sessionRow([&] { return TestARematchLobbyDropReturnsThroughTheRejoin(&error); }, "TestARematchLobbyDropReturnsThroughTheRejoin()");
+		sessionRow([&] { return TestAHeldRejoinAsksAnUnansweringHostAgain(&error); }, "TestAHeldRejoinAsksAnUnansweringHostAgain()");
+		sessionRow([&] { return TestAHeldRejoinAsksItsHostAgainOffTheGameThread(&error); }, "TestAHeldRejoinAsksItsHostAgainOffTheGameThread()");
+		sessionRow([&] { return TestARoundStartsDelayCoversTheStartWork(&error); }, "TestARoundStartsDelayCoversTheStartWork()");
+		sessionRow([&] { return TestARematchStartsWithoutTheEndedRoundsCatchUp(&error); }, "TestARematchStartsWithoutTheEndedRoundsCatchUp()");
+		sessionRow([&] { return TestLeavingEndsTheSeatsCatchUp(&error); }, "TestLeavingEndsTheSeatsCatchUp()");
+		sessionRow([&] { return TestALobbyDropsAnAbandonedTransfersTail(&error); }, "TestALobbyDropsAnAbandonedTransfersTail()");
+		sessionRow([&] { return TestALaterLobbysTransferIsNewToItsPeers(&error); }, "TestALaterLobbysTransferIsNewToItsPeers()");
+		sessionRow([&] { return TestANextRoundLandingEndsTheRejoinPhase(&error); }, "TestANextRoundLandingEndsTheRejoinPhase()");
+		sessionRow([&] { return TestAParkReachesTheSessionAWorkerOwns(&error); }, "TestAParkReachesTheSessionAWorkerOwns()");
+		sessionRow([&] { return TestConnectionCallbacksReachTheirListener(&error); }, "TestConnectionCallbacksReachTheirListener()");
+		sessionRow([&] { return TestTwoThreadsSendOnOneTransport(&error); }, "TestTwoThreadsSendOnOneTransport()");
+		sessionRow([&] { return TestALateCaptureVerdictLeavesTheNextJoinItsCapture(&error); }, "TestALateCaptureVerdictLeavesTheNextJoinItsCapture()");
+		sessionRow([&] { return TestAnEndedWorldLandsInsteadOfRematching(&error); }, "TestAnEndedWorldLandsInsteadOfRematching()");
+		sessionRow([&] { return TestServiceWorldJoinAdoptsConfig(&error); }, "TestServiceWorldJoinAdoptsConfig()");
+		sessionRow([&] { return TestRemovedWoundReleasesItsRadiusCache(&error); }, "TestRemovedWoundReleasesItsRadiusCache()");
+		sessionRow([&] { return TestLobbyStartReturnsBeforeHashingModules(&error); }, "TestLobbyStartReturnsBeforeHashingModules()");
+		sessionRow([&] { return TestRestartManifestAndAdmission(&error); }, "TestRestartManifestAndAdmission()");
+		sessionRow([&] { return TestWorldCheckpointOrderAndRoundPin(&error); }, "TestWorldCheckpointOrderAndRoundPin()");
+		sessionRow([&] { return TestAResumePicksTheHighestGeneration(&error); }, "TestAResumePicksTheHighestGeneration()");
+		sessionRow([&] { return TestResumeCarriesTheAgreedSeats(&error); }, "TestResumeCarriesTheAgreedSeats()");
+		sessionRow([&] { return TestResumeHeldPeerSkipsTheTransfer(&error); }, "TestResumeHeldPeerSkipsTheTransfer()");
+		sessionRow([&] { return TestResumePreparesTheAgreedLobby(&error); }, "TestResumePreparesTheAgreedLobby()");
+		sessionRow([&] { return TestRosterTransitionsRecordHoldThenPresent(&error); }, "TestRosterTransitionsRecordHoldThenPresent()");
+		sessionRow([&] { return TestRosterBannerNamesThePlayerOnce(&error); }, "TestRosterBannerNamesThePlayerOnce()");
 		// The chat arms accumulate like the other independent tests so one defective build shows
 		// every defect instead of stopping at the first.
 		std::string chatRoutingError, chatRaceError, chatCarryError;
@@ -18989,60 +19000,62 @@ namespace RTE {
 		if (!TestChatSendRefusedOutsideCarry(&chatCarryError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << chatCarryError << std::endl;
 		}
-		if (!chatRoutingError.empty()) return fail(chatRoutingError);
-		if (!chatRaceError.empty()) return fail(chatRaceError);
-		if (!chatCarryError.empty()) return fail(chatCarryError);
-		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
-		if (!TestLobbyTrafficKeepsAHostLinkAlive(&error)) return fail(error);
-		if (!TestAJoinedRoundGivesTheSessionItsTraffic(&error)) return fail(error);
-		if (!TestASeatKnockingWhileTheRoundFormsIsAnswered(&error)) return fail(error);
-		if (!TestAStartHeldSeatReturnsAsTheNextIncarnation(&error)) return fail(error);
-		if (!TestALinkClosedForTheImageKeepsTheSeatAtTheRematch(&error)) return fail(error);
-		if (!TestServiceKick(&error)) return fail(error);
-		if (!TestServiceKickRejoin(&error)) return fail(error);
-		if (!TestTheGoodbyeReachesAHandshakingReturner(&error)) return fail(error);
-		if (!TestStartingKickMarshals(&error)) return fail(error);
-		if (!TestUnreadableBanListHoldsAdmission(&error)) return fail(error);
-		if (!TestLobbyModerationRows(&error)) return fail(error);
-		if (!TestSeatsPanelClearsBands(&error)) return fail(error);
-		if (!TestMatchSurfacesOutliveTheRound(&error)) return fail(error);
-		if (!TestPostMatchLobbySurfacesDraw(&error)) return fail(error);
-		if (!TestPrimedManifestSkipsTheDiskWalk(&error)) return fail(error);
-		if (!TestManifestPrimingStopsOnRequest(&error)) return fail(error);
-		if (!TestUnseatedSlotNameForms(&error)) return fail(error);
-		if (!TestKickedSeatReadsOpen(&error)) return fail(error);
-		if (!TestARematchLobbyHoldsADroppedSeat(&error, true, false, false)) return fail(error);
-		if (!TestARematchLobbyHoldsADroppedSeat(&error, false, false, false)) return fail("a resumed match's lobby: " + error);
-		if (!TestARematchLobbyHoldsADroppedSeat(&error, true, true, false)) return fail("a formed rematch's kick: " + error);
-		if (!TestARematchLobbyHoldsADroppedSeat(&error, true, false, true)) return fail("a rematch the host plays alone: " + error);
-		if (!TestARematchLobbyHoldsADroppedSeat(&error, false, false, true)) return fail("a resumed lobby the host plays alone: " + error);
-		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);
+		if (!chatRoutingError.empty()) { sessionRowsPassed = false; (void)fail(chatRoutingError); }
+		if (!chatRaceError.empty()) { sessionRowsPassed = false; (void)fail(chatRaceError); }
+		if (!chatCarryError.empty()) { sessionRowsPassed = false; (void)fail(chatCarryError); }
+		sessionRow([&] { return TestPendingSessionEventSurvivesTeardown(&error); }, "TestPendingSessionEventSurvivesTeardown()");
+		sessionRow([&] { return TestLobbyTrafficKeepsAHostLinkAlive(&error); }, "TestLobbyTrafficKeepsAHostLinkAlive()");
+		sessionRow([&] { return TestAJoinedRoundGivesTheSessionItsTraffic(&error); }, "TestAJoinedRoundGivesTheSessionItsTraffic()");
+		sessionRow([&] { return TestASeatKnockingWhileTheRoundFormsIsAnswered(&error); }, "TestASeatKnockingWhileTheRoundFormsIsAnswered()");
+		sessionRow([&] { return TestAStartHeldSeatReturnsAsTheNextIncarnation(&error); }, "TestAStartHeldSeatReturnsAsTheNextIncarnation()");
+		sessionRow([&] { return TestALinkClosedForTheImageKeepsTheSeatAtTheRematch(&error); }, "TestALinkClosedForTheImageKeepsTheSeatAtTheRematch()");
+		sessionRow([&] { return TestServiceKick(&error); }, "TestServiceKick()");
+		sessionRow([&] { return TestServiceKickRejoin(&error); }, "TestServiceKickRejoin()");
+		sessionRow([&] { return TestTheGoodbyeReachesAHandshakingReturner(&error); }, "TestTheGoodbyeReachesAHandshakingReturner()");
+		sessionRow([&] { return TestStartingKickMarshals(&error); }, "TestStartingKickMarshals()");
+		sessionRow([&] { return TestUnreadableBanListHoldsAdmission(&error); }, "TestUnreadableBanListHoldsAdmission()");
+		sessionRow([&] { return TestLobbyModerationRows(&error); }, "TestLobbyModerationRows()");
+		sessionRow([&] { return TestSeatsPanelClearsBands(&error); }, "TestSeatsPanelClearsBands()");
+		sessionRow([&] { return TestMatchSurfacesOutliveTheRound(&error); }, "TestMatchSurfacesOutliveTheRound()");
+		sessionRow([&] { return TestPostMatchLobbySurfacesDraw(&error); }, "TestPostMatchLobbySurfacesDraw()");
+		sessionRow([&] { return TestPrimedManifestSkipsTheDiskWalk(&error); }, "TestPrimedManifestSkipsTheDiskWalk()");
+		sessionRow([&] { return TestManifestPrimingStopsOnRequest(&error); }, "TestManifestPrimingStopsOnRequest()");
+		sessionRow([&] { return TestUnseatedSlotNameForms(&error); }, "TestUnseatedSlotNameForms()");
+		sessionRow([&] { return TestKickedSeatReadsOpen(&error); }, "TestKickedSeatReadsOpen()");
+		sessionRow([&] { return TestARematchLobbyHoldsADroppedSeat(&error, true, false, false); }, "TestARematchLobbyHoldsADroppedSeat(, true, false, false)");
+		sessionRow([&] { return TestARematchLobbyHoldsADroppedSeat(&error, false, false, false); }, "TestARematchLobbyHoldsADroppedSeat(, false, false, false)");
+		sessionRow([&] { return TestARematchLobbyHoldsADroppedSeat(&error, true, true, false); }, "TestARematchLobbyHoldsADroppedSeat(, true, true, false)");
+		sessionRow([&] { return TestARematchLobbyHoldsADroppedSeat(&error, true, false, true); }, "TestARematchLobbyHoldsADroppedSeat(, true, false, true)");
+		sessionRow([&] { return TestARematchLobbyHoldsADroppedSeat(&error, false, false, true); }, "TestARematchLobbyHoldsADroppedSeat(, false, false, true)");
+		sessionRow([&] { return TestFinishMatchDrainsFencedDisconnect(&error); }, "TestFinishMatchDrainsFencedDisconnect()");
 		std::string stopCancelError, endedAdmissionError, twoIceRoundsError;
 		if (!TestServiceIceRematchPlaysTwoRounds(&twoIceRoundsError)) std::cerr << "[net-match-selftest] FAIL: " << twoIceRoundsError << std::endl;
 		if (!TestGnsStopCancelContracts(&stopCancelError)) std::cerr << "[net-match-selftest] FAIL: " << stopCancelError << std::endl;
 		if (!TestEndedWorldLateAdmission(&endedAdmissionError)) std::cerr << "[net-match-selftest] FAIL: " << endedAdmissionError << std::endl;
-		if (!TestMuxOpensIceListenFirst(&error)) return fail(error);
-		if (!TestMuxRoutesByTag(&error)) return fail(error);
+		sessionRow([&] { return TestMuxOpensIceListenFirst(&error); }, "TestMuxOpensIceListenFirst()");
+		sessionRow([&] { return TestMuxRoutesByTag(&error); }, "TestMuxRoutesByTag()");
 		std::string iceRowError;
 		if (!TestIceRowJoinMode(&iceRowError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << iceRowError << std::endl;
 		}
-		if (!TestIceSettingsOverrideIsNotPersisted(&error)) return fail(error);
-		if (!TestP2PJoinSpecRidesTheSessionConfig(&error)) return fail(error);
-		if (!TestServiceDirectoryIceLeaseKeepsIdentity(&error)) return fail(error);
-		if (!TestEndMatchWithHeldSeatKeepsItsLease(&error)) return fail(error);
-		if (!TestCompletedLobbyIsNotARecovery(&error)) return fail(error);
-		if (!TestARunningMatchRejoinIsReadyOnConnect(&error)) return fail(error);
-		if (!TestCompletedLobbyExpires(&error)) return fail(error);
-		if (!TestCapturedWorldIdentityKeepsTheWorldStamp(&error)) return fail(error);
+		sessionRow([&] { return TestIceSettingsOverrideIsNotPersisted(&error); }, "TestIceSettingsOverrideIsNotPersisted()");
+		sessionRow([&] { return TestP2PJoinSpecRidesTheSessionConfig(&error); }, "TestP2PJoinSpecRidesTheSessionConfig()");
+		sessionRow([&] { return TestServiceDirectoryIceLeaseKeepsIdentity(&error); }, "TestServiceDirectoryIceLeaseKeepsIdentity()");
+		sessionRow([&] { return TestEndMatchWithHeldSeatKeepsItsLease(&error); }, "TestEndMatchWithHeldSeatKeepsItsLease()");
+		sessionRow([&] { return TestCompletedLobbyIsNotARecovery(&error); }, "TestCompletedLobbyIsNotARecovery()");
+		sessionRow([&] { return TestARunningMatchRejoinIsReadyOnConnect(&error); }, "TestARunningMatchRejoinIsReadyOnConnect()");
+		sessionRow([&] { return TestCompletedLobbyExpires(&error); }, "TestCompletedLobbyExpires()");
+		sessionRow([&] { return TestCapturedWorldIdentityKeepsTheWorldStamp(&error); }, "TestCapturedWorldIdentityKeepsTheWorldStamp()");
 		NetMatchService keepaliveService;
-		if (!keepaliveService.RunSnapshotLoadKeepaliveSelfTest(&error)) return fail(error);
-		if (!twoIceRoundsError.empty()) return fail(twoIceRoundsError);
-		if (!stopCancelError.empty()) return fail(stopCancelError);
-		if (!endedAdmissionError.empty()) return fail(endedAdmissionError);
-		if (!serviceRosterError.empty()) return fail(serviceRosterError);
-		if (!rejoinWaitError.empty()) return fail(rejoinWaitError);
-		if (!iceRowError.empty()) return fail(iceRowError);
+		sessionRow([&] { return keepaliveService.RunSnapshotLoadKeepaliveSelfTest(&error); }, "keepaliveService.RunSnapshotLoadKeepaliveSelfTest()");
+		if (!twoIceRoundsError.empty()) { sessionRowsPassed = false; (void)fail(twoIceRoundsError); }
+		if (!stopCancelError.empty()) { sessionRowsPassed = false; (void)fail(stopCancelError); }
+		if (!endedAdmissionError.empty()) { sessionRowsPassed = false; (void)fail(endedAdmissionError); }
+		if (!serviceRosterError.empty()) { sessionRowsPassed = false; (void)fail(serviceRosterError); }
+		if (!rejoinWaitError.empty()) { sessionRowsPassed = false; (void)fail(rejoinWaitError); }
+		if (!iceRowError.empty()) { sessionRowsPassed = false; (void)fail(iceRowError); }
+
+		if (!sessionRowsPassed) return fail("one or more lifecycle checks failed");
 
 		std::cout << "[net-match-selftest] PASS" << std::endl;
 		return 0;
