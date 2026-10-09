@@ -5293,7 +5293,7 @@ static std::string ResyncSaveName() {
 		// The round's own hold of a playing seat whose link stays open is the roster's too, and so is that seat's return in place.
 		for (const uint8_t peer: m_ReconnectHost.PlayingPeers())
 			if (m_Coordinator->HasHeldAISeat(peer) && m_Coordinator->IsSeatUnderAI(peer, next - 1))
-				m_ReconnectHost.NoteSeatHeldInPlace(peer, m_Coordinator->IsHeldAsSlowMachine(peer) ? NetSeatHoldCause::Capacity : NetSeatHoldCause::LateStream);
+				m_ReconnectHost.NoteSeatHeldInPlace(peer, NetSeatHoldCause::LinkDrop);
 		for (const uint8_t peer: m_ReconnectHost.HeldInPlacePeers())
 			if (m_Coordinator->SeatPlaysAtFrame(peer, next - 1)) m_ReconnectHost.NoteSeatPlaysAgain(peer);
 	}

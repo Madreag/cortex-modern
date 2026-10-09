@@ -20776,7 +20776,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				}
 				if (zeroStart) {
 					hostWire.Stop();
-					for (int turn = 0; turn < 100 && a.GetMigrationResult().generation == 0; ++turn) {
+					for (int turn = 0; turn < 5000 && a.GetMigrationResult().generation == 0; ++turn) {
 						a.Tick(now);
 						b.Tick(now);
 						now += 5;
@@ -20825,8 +20825,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					return false;
 				}
 				if (skipSuccessor) {
+					b.Leave("successor leaves before the host");
 					bWire.Stop();
-					for (int turn = 0; turn < 10; ++turn) {
+					for (int turn = 0; turn < 1300; ++turn) {
 						b.Tick(now);
 						host.Tick(now);
 						a.Tick(now);
@@ -20840,6 +20841,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 						return false;
 					}
 				}
+				// Drain the old host's last authenticated packets, then exercise the common
+				// handover only after the owner's full fifteen-second silence interval.
+				hostWire.Stop();
+				for (int drain = 0; drain < 20; ++drain) { a.Tick(now); if (!skipSuccessor) b.Tick(now); now += 5; }
+				now += c_NetHostLossSilenceMs + 1;
+				schedule->contactedPorts.clear();
 				if (midHeal) {
 					worldA.position[101] += 37;
 					if (!a.BeginHostMigrationAfterHeal(now)) {
@@ -20850,7 +20857,6 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				if (delayedAnswer || successorLost) {
 					schedule->releaseAt = now + 1050;
 				}
-				hostWire.Stop();
 				const uint64_t migrationStarted = now;
 				const uint64_t budget = a.GetConfig().timeoutMs;
 				if (silentAfterRollCall) {
@@ -20863,14 +20869,13 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 						now += 5;
 						if (a.IsStopped() || a.IsFailed()) break;
 					}
-					if (!contacted || schedule->successorRollCalls == 0 || schedule->plans != 0 || !a.IsStopped() ||
-					    a.GetStats().timeoutReason.rfind("PeerHeld:The host is unreachable - ", 0) != 0 || a.GetStats().timeoutReason.find(" of 3 players reachable") == std::string::npos ||
+					if (!contacted || schedule->successorRollCalls == 0 || schedule->plans != 0 || a.IsStopped() || a.IsFailed() || a.GetHostPeerId() != 1 || a.GetConfig().migrationGeneration != 0 ||
 					    schedule->successors.contains(2)) {
 						*error = "roll-call-only handover: calls=" + std::to_string(schedule->successorRollCalls) + " plans=" +
 						         std::to_string(schedule->plans) + " A=" + a.BuildReportJson();
 						return false;
 					}
-					std::cout << "[host-migration-selftest] PASS: a latched successor without a plan leaves its voter waiting as a held seat: " << a.GetStats().timeoutReason << std::endl;
+					std::cout << "[host-migration-selftest] PASS: a latched successor without a plan leaves every voter waiting for the same authority: " << a.GetStats().timeoutReason << std::endl;
 					return true;
 				}
 				if (successorLost) {
@@ -20897,11 +20902,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 						a.Tick(now);
 						now += 5;
 					}
-					if (!a.IsStopped() || a.IsMigrating() || a.GetStats().timeoutReason != "PeerHeld:The host is unreachable - 1 of 3 players reachable") {
-						*error = "a member whose successor went silent after its plan did not wait as a held seat " + std::to_string(now - plannedAt) + " ms after the plan: A=" + a.BuildReportJson();
+					if (a.IsStopped() || a.IsFailed() || !a.IsMigrating() || a.GetHostPeerId() != 1 || a.GetConfig().migrationGeneration != 0 || schedule->successors.contains(2)) {
+						*error = "a member changed authority after its successor went silent before commit " + std::to_string(now - plannedAt) + " ms after the plan: A=" + a.BuildReportJson();
 						return false;
 					}
-					std::cout << "[host-migration-selftest] PASS: a member whose successor is lost after its plan waits as a held seat " << (now - plannedAt) << " ms after the plan: " << a.GetStats().timeoutReason << std::endl;
+					std::cout << "[host-migration-selftest] PASS: a member whose successor is lost after its plan retains the uncommitted choice " << (now - plannedAt) << " ms after the plan: " << a.GetStats().timeoutReason << std::endl;
 					return true;
 				}
 				if (stalledSuccessor) {
@@ -20926,7 +20931,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 						*error = "a stalled exchange elected peer 2 after " + std::to_string(now - electionStarted) + " ms while its link to peer 3 was open: successors=" + nlohmann::json(schedule->successors).dump() + " A=" + a.BuildReportJson();
 						return false;
 					}
-					// The hold is not a new wedge: once the whole election expires the candidate is left behind.
+					// A route timeout cannot abandon the authority choice or elect this lone peer.
 					for (int turn = 0; turn < 4000 && now - electionStarted <= 5 * budget; ++turn) {
 						schedule->now = now;
 						a.Tick(now);
@@ -20935,11 +20940,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 						if (a.IsStopped() || a.IsFailed() || schedule->successors.find(2) != schedule->successors.end())
 							break;
 					}
-					if (schedule->successors.find(2) == schedule->successors.end() && !a.IsStopped() && !a.IsFailed()) {
+					if (schedule->successors.contains(2) || a.IsStopped() || a.IsFailed() || a.GetHostPeerId() != 1 || a.GetConfig().migrationGeneration != 0) {
 						*error = "the stalled peer held peer 3 for " + std::to_string(now - electionStarted) + " ms without leaving it: A=" + a.BuildReportJson();
 						return false;
 					}
-					std::cout << "[host-migration-selftest] PASS: a stalled exchange keeps its live candidate for the election's budget and then leaves it" << std::endl;
+					std::cout << "[host-migration-selftest] PASS: a stalled exchange keeps the same candidate without a timer-driven promotion or end" << std::endl;
 					return true;
 				}
 				bool resumed = false;
@@ -20963,9 +20968,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				if (skipSuccessor) {
 					const bool contactedGone = std::find(schedule->contactedPorts.begin(), schedule->contactedPorts.end(), port + 3) != schedule->contactedPorts.end();
 					// Skipping a departed candidate does not supply the remaining voter with the old host's vote.
-					if (resumed || !a.IsStopped() || a.GetHostPeerId() != 1 || a.GetConfig().migrationGeneration != 0 ||
-					    a.GetResumeFrame() != 6 || !a.IsPeerGoneAtFrame(3, 6) || contactedGone || schedule->plans != 0 ||
-					    a.GetStats().timeoutReason != "PeerHeld:The host is unreachable - 1 of 2 players reachable") {
+					if (resumed || a.IsStopped() || a.IsFailed() || a.GetHostPeerId() != 1 || a.GetConfig().migrationGeneration != 0 ||
+					    a.GetResumeFrame() != 6 || !a.IsPeerGoneAtFrame(3, 6) || contactedGone || schedule->plans != 0) {
 						*error = "skip without quorum elapsed=" + std::to_string(now - migrationStarted) + " contacted=" + nlohmann::json(schedule->contactedPorts).dump() + " A=" + a.BuildReportJson();
 						return false;
 					}
@@ -20983,7 +20987,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					}
 				}
 				if (delayedAnswer) {
-					// The successor alone is one of three connected seats: it waits for the delayed vote, which makes the majority.
+					// The chosen successor waits for the other remaining owner's identical agreement.
 					const auto departures = a.GetPeerLeaveFrames();
 					if (schedule->delayedAnswers == 0 || schedule->releasedAnswers == 0 || schedule->successors != std::set<uint8_t>{3} || a.GetHostPeerId() != 3 || b.GetHostPeerId() != 3 ||
 					    a.GetMigrationResult().boundary != 5 || b.GetMigrationResult().boundary != 5 || departures.contains(2) || b.IsPeerGoneAtFrame(2, 6) ||

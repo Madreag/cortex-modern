@@ -3252,7 +3252,7 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::RetainMigrationFrame(const NetLockstepReadyFrame& ready) {
-		if (m_Config.matchConfig.successorOrder.empty())
+		if (!UsesPreparedFrameReceipts())
 			return;
 		std::vector<uint8_t> bytes;
 		if (EncodeMigrationFrame(ready, bytes)) {

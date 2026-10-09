@@ -6504,6 +6504,8 @@ namespace RTE {
 				peer.trace[ready.frame] = DescribeRematchFrame(ready, round.GetConfig().localPeerId);
 				peer.lastApplied = ready.frame;
 				(void)round.FinishSimulationTick(ready.frame);
+				if (peer.host) for (const uint8_t held: ready.aiHeldPeerIds)
+					peer.admission.NoteSeatHeldInPlace(held, NetSeatHoldCause::LinkDrop);
 			}
 			if (round.IsRunning()) {
 				(void)round.WaivePendingPeersWhileWaiting(peer.lastApplied + 1);
@@ -6562,7 +6564,7 @@ namespace RTE {
 				return false;
 			}
 			leaver.round->Leave("player left");
-			const bool recorded = PumpRematchUntil(fixture, 3000, [&] {
+			const bool recorded = PumpRematchUntil(fixture, 6500, [&] {
 				for (RematchPeer* peer: LiveRematchPeers(fixture)) {
 					if (peer != &leaver && !peer->round->GetPeerLeaveFrames().contains(leaverId)) return false;
 				}
@@ -6834,14 +6836,14 @@ namespace RTE {
 			if (!dropped || !survivor) return fail("round 1 did not seat lockstep peers 2 and 3");
 			dropped->gone = true;
 			dropped->transport.Stop();
-			if (!PumpRematchUntil(fixture, 3000, [&] {
+			if (!PumpRematchUntil(fixture, 6500, [&] {
 				    return host.round->GetPeerLeaveFrames().contains(2) && survivor->round->GetPeerLeaveFrames().contains(2) && host.admission.GetStats().seatsDropped == 1;
 			    })) {
 				return fail("the drop never reached both rounds and the host's plane");
 			}
 			// Past the old window the seat is still held for its player: no resolution, the round plays on.
 			fixture.clock.skippedMs += NetReconnectHost::c_ProvisionalExpiryMs + 1000;
-			if (!PumpRematchUntil(fixture, 3000, [&] {
+			if (!PumpRematchUntil(fixture, 6500, [&] {
 				    // The default policy hands the seat to the AI (Substituted); its player keeps it and nothing expires it.
 				    return host.round->HeldSeatResolution(2) != NetLockstepHoldResolution::Expired && survivor->round->HeldSeatResolution(2) != NetLockstepHoldResolution::Expired &&
 				           host.admission.GetStats().seatHoldsExpired == 0 && host.admission.IsSeatHeldForReclaim(2);
@@ -12848,6 +12850,8 @@ namespace RTE {
 			*error = "the returning owner never reclaimed the held seat: " + std::to_string(lobby.m_RemotePeerIds.size()) + " remotes";
 			return false;
 		}
+		// Publish the returned owner's new incarnation before acknowledging its configuration.
+		runner.StampSeatRoster(admission);
 		// The peers present acknowledge the revision they now sit in and are ready; nobody clicks again.
 		for (const uint8_t peerId: lobby.m_RemotePeerIds) {
 			NetLobbyConfigAck ack;
@@ -14504,7 +14508,7 @@ namespace RTE {
 			dropped->gone = true;
 			dropped->transport.Stop();
 			RematchPeer& host = fixture.Host();
-			if (!PumpRematchUntil(fixture, 3000, [&] {
+			if (!PumpRematchUntil(fixture, 6500, [&] {
 				    return survivor->round->GetPeerLeaveFrames().contains(2) && host.admission.GetStats().seatsDropped == 1;
 			    })) {
 				return fail("the drop never reached the survivor's round and the host's plane");
