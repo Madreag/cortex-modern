@@ -11,7 +11,7 @@
 namespace RTE {
 
 	namespace {
-		bool IsInRound(NetRosterStage stage) { return stage == NetRosterStage::Starting || stage == NetRosterStage::Running || stage == NetRosterStage::Migrating; }
+		bool IsInRound(NetRosterStage stage) { return stage == NetRosterStage::Starting || stage == NetRosterStage::Placement || stage == NetRosterStage::Running || stage == NetRosterStage::Migrating; }
 
 		/// Where a present owner stands at each stage.
 		NetSeatPhase PresentPhase(NetRosterStage stage) {
@@ -19,6 +19,7 @@ namespace RTE {
 				case NetRosterStage::Lobby: return NetSeatPhase::Lobby;
 				case NetRosterStage::Starting: return NetSeatPhase::Starting;
 				case NetRosterStage::Running: return NetSeatPhase::Running;
+				case NetRosterStage::Placement: return NetSeatPhase::Placement;
 				case NetRosterStage::Ended: return NetSeatPhase::RematchLobby;
 				default: return NetSeatPhase::Migrating;
 			}
@@ -55,7 +56,7 @@ namespace RTE {
 
 		/// The phase a returning or newly seated owner enters at the match's stage.
 		NetSeatPhase ReturnPhase(NetRosterStage stage, bool keptWorld) {
-			if (stage == NetRosterStage::Running) return keptWorld ? NetSeatPhase::RejoinCatchUp : NetSeatPhase::RejoinImage;
+			if (stage == NetRosterStage::Running || stage == NetRosterStage::Placement) return keptWorld ? NetSeatPhase::RejoinCatchUp : NetSeatPhase::RejoinImage;
 			return PresentPhase(stage);
 		}
 	} // namespace
@@ -94,7 +95,7 @@ namespace RTE {
 			const auto commit = [&](const std::string& reason) {
 				// A seat that plays the round, or has no player, is nobody's way in.
 				for (NetRosterSeat& each: next.seats) {
-					if (each.phase == NetSeatPhase::Running || each.owner == 0) each.joining = false;
+					if (each.phase == NetSeatPhase::Running || each.phase == NetSeatPhase::Placement || each.owner == 0) each.joining = false;
 				}
 				++next.revision;
 				result.changed = true;
@@ -112,6 +113,9 @@ namespace RTE {
 					const bool heldInPlace = seat->phase == NetSeatPhase::Held && seat->link == NetSeatLink::Connected && seat->owner != 0;
 					seat->link = NetSeatLink::Dropped;
 					if (seat->owner == 0) return commit("the open seat's link closed");
+					if (next.stage == NetRosterStage::Placement ||
+					    (next.stage == NetRosterStage::Running && seat->phase == NetSeatPhase::Running))
+						return commit("Connection lost - waiting for the host's ordered recovery");
 					if (heldInPlace) {
 						seat->holdCause = event.byChoice ? NetSeatHoldCause::Leave : NetSeatHoldCause::LinkDrop;
 						return commit(event.byChoice ? "Left - the AI plays the seat until the player returns" : "Connection lost - the AI plays the seat until the player returns");
@@ -156,7 +160,7 @@ namespace RTE {
 					seat->heldSinceMs = 0;
 					seat->joining = false;
 					// A newer connection of a seat that plays the round takes over the play; any other return goes through its stage's path.
-					if (seat->phase != NetSeatPhase::Running || next.stage != NetRosterStage::Running) seat->phase = ReturnPhase(next.stage, event.keptWorld);
+					if (seat->phase != PresentPhase(next.stage) || (next.stage != NetRosterStage::Running && next.stage != NetRosterStage::Placement)) seat->phase = ReturnPhase(next.stage, event.keptWorld);
 					return commit(next.stage == NetRosterStage::Running ? "Rejoining - the AI plays the seat until the player is back" : "the player is back");
 				}
 				case NetRosterEventKind::Kicked:
@@ -192,7 +196,7 @@ namespace RTE {
 					              event.kind == NetRosterEventKind::Kicked ? "The host removed the player - the seat is open" : "The host released the seat - it is open");
 				}
 				case NetRosterEventKind::RoundEnded: {
-					if (next.stage != NetRosterStage::Running) return refuse("no round is running");
+					if (next.stage != NetRosterStage::Running && next.stage != NetRosterStage::Placement) return refuse("no round is running");
 					next.stage = NetRosterStage::Ended;
 					for (NetRosterSeat& each: next.seats) {
 						if (each.owner == 0) continue;
@@ -213,6 +217,8 @@ namespace RTE {
 					if (next.stage != NetRosterStage::Lobby && next.stage != NetRosterStage::Ended) return refuse("a round forms only from a lobby");
 					if (next.stage == NetRosterStage::Ended) ++next.roundNo;
 					next.stage = NetRosterStage::Starting;
+					next.stageFrame = 0;
+					next.resumeStage = NetRosterStage::Running;
 					for (NetRosterSeat& each: next.seats) {
 						// Every seat keeps its number; one whose owner is away starts held and its return is offered at the start.
 						if (each.owner != 0 && !IsAway(each.phase) && each.link == NetSeatLink::Connected) {
@@ -233,6 +239,24 @@ namespace RTE {
 						if (each.phase == NetSeatPhase::Starting) each.phase = NetSeatPhase::Running;
 					return commit("the round started");
 				}
+				case NetRosterEventKind::PlacementStarted: {
+					if (next.stage == NetRosterStage::Placement) return keep("the round is placing brains");
+					if (next.stage != NetRosterStage::Starting && (next.stage != NetRosterStage::Running || next.stageFrame != 0)) return refuse("placement starts only with a new round");
+					next.stage = NetRosterStage::Placement;
+					next.stageFrame = event.frame;
+					for (NetRosterSeat& each: next.seats)
+						if (each.phase == NetSeatPhase::Starting || each.phase == NetSeatPhase::Running) each.phase = NetSeatPhase::Placement;
+					return commit("the world waits for committed brains");
+				}
+				case NetRosterEventKind::CombatStarted: {
+					if (next.stage == NetRosterStage::Running && next.stageFrame == event.frame) return keep("the brain barrier is committed");
+					if (next.stage != NetRosterStage::Placement || event.frame < next.stageFrame) return refuse("no placement barrier is ready");
+					next.stage = NetRosterStage::Running;
+					next.stageFrame = event.frame;
+					for (NetRosterSeat& each: next.seats)
+						if (each.phase == NetSeatPhase::Placement) each.phase = NetSeatPhase::Running;
+					return commit("every required brain is committed");
+				}
 				case NetRosterEventKind::MemberSetProposed: {
 					if (next.stage != NetRosterStage::Lobby && next.stage != NetRosterStage::Ended) return refuse("the members are agreed only in a lobby");
 					bool changed = false;
@@ -251,57 +275,44 @@ namespace RTE {
 				case NetRosterEventKind::TransferAborted: {
 					if (!seat || (seat->phase != NetSeatPhase::RejoinImage && seat->phase != NetSeatPhase::RejoinCatchUp)) return refuse("no return is in transfer to the seat");
 					FailReturn(*seat, event.nowMs);
+					if (next.stage == NetRosterStage::Placement) seat->phase = NetSeatPhase::Placement;
 					return commit("Could not rejoin - retrying");
 				}
 				case NetRosterEventKind::LivenessPassed: {
 					if (!seat) return refuse("no such seat");
 					// Any authenticated traffic is liveness: a link that carries it is alive.
 					if (event.withTraffic) return keep("the link carries traffic");
-					NetRosterEvent dropped = event;
-					dropped.kind = NetRosterEventKind::LinkDropped;
-					return ApplyRosterEvent(roster, dropped);
+					return keep("silence does not close a transport link");
 				}
 				case NetRosterEventKind::HeldInPlace: {
 					// The round holds a playing seat whose link stays open - its input late, its player quiet - and the AI plays it.
 					if (!seat || seat->phase != NetSeatPhase::Running) return keep("only a playing seat is held by the round");
-					if (event.seat == next.hostSeat) return refuse("the host's own seat is held for its stall");
+					if (event.seat == next.hostSeat) return refuse("the host keeps its own human seat");
 					seat->phase = NetSeatPhase::Held;
 					seat->holdCause = event.cause == NetSeatHoldCause::None ? NetSeatHoldCause::LateStream : event.cause;
 					seat->heldSinceMs = event.nowMs;
 					return commit("The connection cannot keep up - the AI plays the seat");
 				}
-				case NetRosterEventKind::SlowMachine: {
-					if (!seat || seat->phase != NetSeatPhase::Running) return keep("only a playing seat is judged for its machine");
-					// A round's first seconds are warm-up on every machine; only a machine slow after them is held.
-					if (!event.afterGrace) return keep("the round is in its warm-up");
-					seat->phase = NetSeatPhase::Held;
-					seat->holdCause = NetSeatHoldCause::Capacity;
-					return commit("Your machine cannot keep up with this match - the AI plays the seat");
-				}
-				case NetRosterEventKind::HostStalled: {
-					// The host's plane holds its own seat while its simulation stalls; nothing else changes and nobody elects.
-					if (!host || host->phase != NetSeatPhase::Running) return keep("the host's seat is not playing");
-					host->phase = NetSeatPhase::Held;
-					host->holdCause = NetSeatHoldCause::OwnSeat;
-					return commit("the host's seat is held while its game catches up");
-				}
+				case NetRosterEventKind::SlowMachine: return keep("late input waits without changing the human seat");
+				case NetRosterEventKind::HostStalled: return keep("the host keeps its human seat while its plane pumps");
 				case NetRosterEventKind::HostResumed: {
 					if (!host || host->phase != NetSeatPhase::Held || host->holdCause != NetSeatHoldCause::OwnSeat) return keep("the host's seat is not held for a stall");
-					host->phase = NetSeatPhase::Running;
+					host->phase = PresentPhase(next.stage);
 					host->holdCause = NetSeatHoldCause::None;
 					return commit("the host's seat plays again");
 				}
 				case NetRosterEventKind::HostLinkLost: {
-					if (!event.quorum) return refuse("the host is still the host: its loss needs a majority of the connected seats");
+					if (!event.quorum) return refuse("the host is still the host: its replacement needs the directory or every survivor");
 					if (next.stage == NetRosterStage::Migrating) return keep("the round is already changing host");
-					if (next.stage != NetRosterStage::Running) return refuse("no committed round to carry: the match ends with 'The host left the match'");
+					if (next.stage != NetRosterStage::Running && next.stage != NetRosterStage::Placement) return refuse("no committed round to carry");
+					next.resumeStage = next.stage;
 					next.stage = NetRosterStage::Migrating;
 					for (NetRosterSeat& each: next.seats) {
 						if (each.seatId == next.hostSeat) {
-							each.phase = NetSeatPhase::Held;
+							each.phase = next.resumeStage == NetRosterStage::Placement ? NetSeatPhase::Placement : NetSeatPhase::Held;
 							each.link = NetSeatLink::Dropped;
 							each.holdCause = NetSeatHoldCause::LinkDrop;
-						} else if (each.phase == NetSeatPhase::Running) {
+						} else if (each.phase == NetSeatPhase::Running || each.phase == NetSeatPhase::Placement) {
 							each.phase = NetSeatPhase::Migrating;
 						} else if (each.phase == NetSeatPhase::RejoinImage || each.phase == NetSeatPhase::RejoinCatchUp) {
 							// Its return was the lost host's to serve; it returns to the new host.
@@ -315,9 +326,9 @@ namespace RTE {
 					if (!seat || seat->owner == 0 || seat->link != NetSeatLink::Connected || seat->phase != NetSeatPhase::Migrating) return refuse("the new host must be a playing member");
 					next.hostSeat = event.seat;
 					++next.migrationGen;
-					next.stage = NetRosterStage::Running;
+					next.stage = next.resumeStage;
 					for (NetRosterSeat& each: next.seats)
-						if (each.phase == NetSeatPhase::Migrating) each.phase = NetSeatPhase::Running;
+						if (each.phase == NetSeatPhase::Migrating) each.phase = PresentPhase(next.stage);
 					return commit("the round goes on under its new host");
 				}
 				case NetRosterEventKind::Admitted:
@@ -348,8 +359,8 @@ namespace RTE {
 					return commit("Rejoining - replaying the match");
 				}
 				case NetRosterEventKind::CaughtUp: {
-					if (!seat || seat->phase != NetSeatPhase::RejoinCatchUp || next.stage != NetRosterStage::Running) return refuse("the seat is not catching up");
-					seat->phase = NetSeatPhase::Running;
+					if (!seat || seat->phase != NetSeatPhase::RejoinCatchUp || (next.stage != NetRosterStage::Running && next.stage != NetRosterStage::Placement)) return refuse("the seat is not catching up");
+					seat->phase = PresentPhase(next.stage);
 					seat->failedReturns = 0;
 					seat->returnAfterMs = 0;
 					return commit("the player is back");
@@ -419,7 +430,7 @@ namespace RTE {
 
 	const char* NetSeatPhaseName(NetSeatPhase phase) {
 		static constexpr std::array<const char*, static_cast<size_t>(NetSeatPhase::Count)> names{
-			"LOBBY", "STARTING", "RUNNING", "HELD", "REJOIN_IMAGE", "REJOIN_CATCHUP", "ROUND_END", "REMATCH_LOBBY", "RELAUNCHING", "MIGRATING"};
+			"LOBBY", "STARTING", "RUNNING", "HELD", "REJOIN_IMAGE", "REJOIN_CATCHUP", "ROUND_END", "REMATCH_LOBBY", "RELAUNCHING", "MIGRATING", "PLACEMENT"};
 		return phase < NetSeatPhase::Count ? names[static_cast<size_t>(phase)] : "?";
 	}
 
@@ -434,7 +445,7 @@ namespace RTE {
 		static constexpr std::array<const char*, static_cast<size_t>(NetRosterEventKind::Count)> names{
 			"LinkDropped", "ProcessRelaunched", "Returned", "Kicked", "Banned", "RoundEnded", "RematchFormed", "HostLinkLost", "MemberSetProposed", "TransferAborted",
 			"LivenessPassed", "SlowMachine", "HostStalled", "Admitted", "ApplicantAccepted", "RoundStarted", "ImageLoaded", "CaughtUp", "HostResumed", "HostChanged",
-			"SeatReleased", "HeldInPlace", "SlotBound"};
+			"SeatReleased", "HeldInPlace", "SlotBound", "PlacementStarted", "CombatStarted"};
 		return kind < NetRosterEventKind::Count ? names[static_cast<size_t>(kind)] : "?";
 	}
 
@@ -448,6 +459,7 @@ namespace RTE {
 			}
 		}
 		switch (seat.phase) {
+			case NetSeatPhase::Placement: return seat.link == NetSeatLink::Dropped ? "Placing - waiting for connection" : "Placing brain";
 			case NetSeatPhase::Held:
 				switch (seat.holdCause) {
 					case NetSeatHoldCause::Capacity: return "Held - AI in control (machine too slow)";
@@ -471,6 +483,7 @@ namespace RTE {
 
 	const char* RosterSeatStateWord(const NetRosterSeat& seat) {
 		if (seat.owner == 0) return "Left";
+		if (seat.phase == NetSeatPhase::Placement) return seat.link == NetSeatLink::Dropped ? "Reconnecting" : "Present";
 		if (seat.phase == NetSeatPhase::RejoinImage || seat.phase == NetSeatPhase::RejoinCatchUp) return "Reconnecting";
 		if (IsAway(seat.phase) || seat.link == NetSeatLink::Dropped) return "Held";
 		return "Present";
@@ -482,7 +495,7 @@ namespace RTE {
 	}
 
 	namespace {
-		constexpr uint8_t c_RosterWireVersion = 3;
+		constexpr uint8_t c_RosterWireVersion = 4;
 		constexpr size_t c_RosterMaxSeats = 32;
 
 		void PutBytes(std::vector<uint8_t>& out, uint64_t value, int bytes) {
@@ -507,6 +520,8 @@ namespace RTE {
 		PutBytes(out, static_cast<uint8_t>(roster.stage), 1);
 		PutBytes(out, roster.hostSeat, 1);
 		PutBytes(out, roster.migrationGen, 2);
+		PutBytes(out, static_cast<uint8_t>(roster.resumeStage), 1);
+		PutBytes(out, roster.stageFrame, 8);
 		PutBytes(out, std::min(roster.seats.size(), c_RosterMaxSeats), 1);
 		for (size_t i = 0; i < roster.seats.size() && i < c_RosterMaxSeats; ++i) {
 			const NetRosterSeat& seat = roster.seats[i];
@@ -531,16 +546,20 @@ namespace RTE {
 			return false;
 		};
 		size_t at = 0;
-		uint64_t version = 0, matchId = 0, roundNo = 0, revision = 0, stage = 0, hostSeat = 0, migrationGen = 0, count = 0;
+		uint64_t version = 0, matchId = 0, roundNo = 0, revision = 0, stage = 0, hostSeat = 0, migrationGen = 0, resumeStage = 0, stageFrame = 0, count = 0;
 		if (!TakeBytes(bytes, at, 1, version) || version != c_RosterWireVersion) return fail("a seat roster of another version");
 		if (!TakeBytes(bytes, at, 8, matchId) || !TakeBytes(bytes, at, 4, roundNo) || !TakeBytes(bytes, at, 4, revision) || !TakeBytes(bytes, at, 1, stage) ||
-		    !TakeBytes(bytes, at, 1, hostSeat) || !TakeBytes(bytes, at, 2, migrationGen) || !TakeBytes(bytes, at, 1, count)) return fail("a short seat roster");
-		if (stage > static_cast<uint64_t>(NetRosterStage::Migrating) || count > c_RosterMaxSeats) return fail("a seat roster out of range");
+		    !TakeBytes(bytes, at, 1, hostSeat) || !TakeBytes(bytes, at, 2, migrationGen) || !TakeBytes(bytes, at, 1, resumeStage) ||
+		    !TakeBytes(bytes, at, 8, stageFrame) || !TakeBytes(bytes, at, 1, count)) return fail("a short seat roster");
+		if (stage > static_cast<uint64_t>(NetRosterStage::Placement) ||
+		    (resumeStage != static_cast<uint64_t>(NetRosterStage::Running) && resumeStage != static_cast<uint64_t>(NetRosterStage::Placement)) || count > c_RosterMaxSeats) return fail("a seat roster out of range");
 		NetSeatRoster decoded;
 		decoded.matchId = matchId;
 		decoded.roundNo = static_cast<uint32_t>(roundNo);
 		decoded.revision = static_cast<uint32_t>(revision);
 		decoded.stage = static_cast<NetRosterStage>(stage);
+		decoded.resumeStage = static_cast<NetRosterStage>(resumeStage);
+		decoded.stageFrame = stageFrame;
 		decoded.hostSeat = static_cast<uint8_t>(hostSeat);
 		decoded.migrationGen = static_cast<uint16_t>(migrationGen);
 		for (uint64_t i = 0; i < count; ++i) {

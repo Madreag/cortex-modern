@@ -387,9 +387,9 @@ namespace RTE {
 			if (handover) next.ApplySeatEvent(*own, NetRosterEventKind::HostChanged);
 			if (next.m_Roster.stage == NetRosterStage::Migrating) {
 				// A plane whose own seat holds no player cannot take the round over as a member: it carries it on unchanged.
-				next.m_Roster.stage = NetRosterStage::Running;
+				next.m_Roster.stage = next.m_Roster.resumeStage;
 				for (NetRosterSeat& seat: next.m_Roster.seats)
-					if (seat.phase == NetSeatPhase::Migrating) seat.phase = NetSeatPhase::Running;
+					if (seat.phase == NetSeatPhase::Migrating) seat.phase = next.m_Roster.stage == NetRosterStage::Placement ? NetSeatPhase::Placement : NetSeatPhase::Running;
 			}
 			registry = std::move(nextRegistry);
 			next.m_Registry = &registry;
@@ -611,7 +611,7 @@ namespace RTE {
 		m_PendingReseats.clear();
 		m_PendingHoldResolutions.clear();
 		m_Ledger.Clear();
-		if (m_Roster.stage == NetRosterStage::Running) ApplyStageEvent(NetRosterEventKind::RoundEnded);
+		if (m_Roster.stage == NetRosterStage::Running || m_Roster.stage == NetRosterStage::Placement) ApplyStageEvent(NetRosterEventKind::RoundEnded);
 	}
 
 	NetAuthBytes16 NetReconnectHost::GetEpoch() const {
@@ -891,9 +891,10 @@ namespace RTE {
 		return after && (after->phase == NetSeatPhase::RejoinImage || after->phase == NetSeatPhase::RejoinCatchUp);
 	}
 
-	void NetReconnectHost::ApplyStageEvent(NetRosterEventKind kind) {
+	void NetReconnectHost::ApplyStageEvent(NetRosterEventKind kind, uint64_t frame) {
 		NetRosterEvent event;
 		event.kind = kind;
+		event.frame = frame;
 		event.nowMs = m_NowMs;
 		const NetRosterResult result = RTE::ApplyRosterEvent(m_Roster, event);
 		if (result.refused) {
@@ -923,12 +924,16 @@ namespace RTE {
 			// A seat the roster never heard of has no player yet: the holder's seating is the event that names one.
 			seat.owner = 0;
 			seat.ticket = seat.owner;
-			seat.phase = next.stage == NetRosterStage::Running ? NetSeatPhase::Running : next.stage == NetRosterStage::Ended ? NetSeatPhase::RematchLobby :
+			seat.phase = next.stage == NetRosterStage::Running ? NetSeatPhase::Running : next.stage == NetRosterStage::Placement ? NetSeatPhase::Placement : next.stage == NetRosterStage::Ended ? NetSeatPhase::RematchLobby :
 			             next.stage == NetRosterStage::Starting ? NetSeatPhase::Starting : NetSeatPhase::Lobby;
 			seat.link = seat.owner != 0 && (state.seat.local || state.activeConnection != c_InvalidNetPeerId) ? NetSeatLink::Connected : NetSeatLink::Dropped;
 			next.seats.push_back(seat);
 		}
 		m_Roster = std::move(next);
+	}
+
+	void NetReconnectHost::NotePlacementPhase(bool placing, uint64_t frame) {
+		ApplyStageEvent(placing ? NetRosterEventKind::PlacementStarted : NetRosterEventKind::CombatStarted, frame);
 	}
 
 	void NetReconnectHost::SetLiveMatch(bool live) {
@@ -937,7 +942,7 @@ namespace RTE {
 		m_LiveMatch = live;
 		if (!live) {
 			// A match that stops being live without its end (a resume from disk waiting for its players) is a lobby after a round.
-			if (m_Roster.stage == NetRosterStage::Running) ApplyStageEvent(NetRosterEventKind::RoundEnded);
+			if (m_Roster.stage == NetRosterStage::Running || m_Roster.stage == NetRosterStage::Placement) ApplyStageEvent(NetRosterEventKind::RoundEnded);
 			return;
 		}
 		m_MatchEnded = false;

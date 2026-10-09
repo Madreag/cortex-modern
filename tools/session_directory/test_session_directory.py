@@ -247,7 +247,7 @@ class DirectoryTests(unittest.TestCase):
         store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 0, "state": "running"}, 1, INSTALL_KEY)
         with mock.patch.object(session_directory.time, "time", return_value=1000):
             offer = store.mint_ice_servers(sid, {"token": token, "match_id": "match:1", "ttl": 300,
-                "iceServers": [{"urls": ["turn:relay.example:3478?transport=udp"], "username": "test-user", "credential": "test-password"}]}, INSTALL_KEY, 2)
+                "iceServers": [{"urls": ["turn:relay.example:3478?transport=udp"], "username": "<synthetic-username>", "credential": "<synthetic-credential>"}]}, INSTALL_KEY, 2)
             self.assertEqual(store.get_ice_servers(sid, 17), offer, "live rendezvous lost its unexpired relay offer")
             resumed = store.register(sample_register(resume_session_id=sid, resume_token=token), "192.0.2.2", 18, INSTALL_KEY)
             self.assertEqual(resumed["session_id"], sid)
@@ -267,7 +267,7 @@ class DirectoryTests(unittest.TestCase):
         store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 0, "state": "running"}, 1, INSTALL_KEY)
         with mock.patch.object(session_directory.time, "time", return_value=1000):
             offer = store.mint_ice_servers(sid, {"token": token, "match_id": "match:1", "ttl": 300,
-                "iceServers": [{"urls": ["turn:relay.example:3478?transport=udp"], "username": "test-user", "credential": "test-password"}]}, INSTALL_KEY, 2)
+                "iceServers": [{"urls": ["turn:relay.example:3478?transport=udp"], "username": "<synthetic-username>", "credential": "<synthetic-credential>"}]}, INSTALL_KEY, 2)
             store.register(sample_register(resume_session_id=sid, resume_token=token), "192.0.2.2", 3, INSTALL_KEY)
             self.assertEqual(store.get_ice_servers(sid, 4), offer)
 
@@ -3267,6 +3267,133 @@ class ConnectionAuthorityTests(unittest.TestCase):
 
     def check(self, **kwargs):
         return self.store.connection_request(self.sid, self.envelope(**kwargs), self.now, INSTALL_KEY)
+
+    def referee_fixture(self):
+        self.referee_players = {1: (self.player, self.lease["seat_token"])}
+        for seat in (0, 2, 3):
+            key = Ed25519PrivateKey.generate()
+            lease = self.store.connection_request(self.sid, dict(self.issue, seat=seat,
+                participant=key.public_key().public_bytes_raw().hex(), name=f"Seat {seat}"), self.now, INSTALL_KEY)
+            self.referee_players[seat] = (key, lease["seat_token"])
+        for seat in self.referee_players:
+            self.referee_request(seat, check_in=True)
+
+    def referee_envelope(self, seat, *, frame=50, generation=0, check_in=False):
+        key, token = self.referee_players[seat]
+        envelope = self.envelope(key=key, token=token,
+            host={"token": self.row["token"], "generation": 0} if seat == 0 else None,
+            route=dict(self.route, ice_identity=f"str:seat-{seat}", listen_port=41012 + seat))
+        if check_in:
+            return envelope
+        data = json.loads(base64.b64decode(envelope["signed_request"]))
+        data["host_change"] = dict(generation=generation, round_id=7, applied_frame=frame,
+            prepared_frame=frame, config_hash=sample_register()["match_config_hash"])
+        raw = json.dumps(data, separators=(",", ":")).encode()
+        envelope.update(operation="host-change", signed_request=base64.b64encode(raw).decode(),
+                        signature=key.sign(REQUEST_DOMAIN + raw).hex())
+        return envelope
+
+    def referee_request(self, seat, **kwargs):
+        return self.store.connection_request(self.sid, self.referee_envelope(seat, **kwargs), self.now, INSTALL_KEY)
+
+    def referee_silent_host(self):
+        self.wall += 16; self.now += 16
+        for seat in (1, 2, 3):
+            self.referee_request(seat, check_in=True)
+
+    def test_host_referee_requires_fifteen_seconds_total_silence(self):
+        self.referee_fixture()
+        self.wall += 2; self.now += 2
+        self.assertEqual(self.referee_request(1)["reason"], "host_alive")
+        self.wall += 8; self.now += 8
+        self.referee_request(0, check_in=True)
+        self.wall += 6; self.now += 6
+        for seat in (1, 2, 3):
+            self.assertEqual(self.referee_request(seat)["reason"], "host_alive")
+        self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["host_generation"], 0)
+
+    def test_host_referee_names_one_host_boundary_and_fences_old_owner(self):
+        self.referee_fixture(); self.referee_silent_host()
+        before = dict(self.store.connections.records())[self.sid]["seats"]
+        self.assertEqual(self.referee_request(3, frame=49)["status"], "waiting")
+        self.assertEqual(self.referee_request(2, frame=52)["status"], "waiting")
+        chosen = self.referee_request(1, frame=50)
+        decision = chosen["decision"]
+        self.assertEqual((decision["host_seat"], decision["donor_seat"], decision["boundary"], decision["generation"]), (1, 2, 52, 1))
+        self.assertEqual(decision["members"], [1, 2, 3])
+        self.assertTrue(bool(chosen.get("host_token")))
+        for seat in (2, 3):
+            answer = self.referee_request(seat)
+            self.assertEqual(answer["decision"], decision)
+            self.assertNotIn("host_token", answer)
+        after = dict(self.store.connections.records())[self.sid]["seats"]
+        for seat in before:
+            self.assertTrue(all(before[seat][field] == after[seat][field] for field in ("seat", "generation", "participant", "credential", "epoch")))
+        with self.assertRaises((PermissionError, session_directory.Superseded)):
+            self.store.heartbeat(self.sid, dict(token=self.row["token"], migration_gen=0, peer_count=4, seats_free=0), self.now, INSTALL_KEY)
+        resumed = self.store.register(dict(sample_register(), resume_session_id=self.sid,
+            resume_token=chosen["host_token"], migration_gen=1), "192.0.2.2", self.now, INSTALL_KEY)
+        self.assertEqual(resumed["session_id"], self.sid)
+
+    def referee_agreement(self, seat, host=1, boundary=52):
+        envelope = self.referee_envelope(seat)
+        data = json.loads(base64.b64decode(envelope["signed_request"]))
+        data["host_change"]["agreement"] = dict(host_seat=host, boundary=boundary, members=[1, 2, 3])
+        raw = json.dumps(data, separators=(",", ":")).encode()
+        envelope.update(signed_request=base64.b64encode(raw).decode(),
+                        signature=self.referee_players[seat][0].sign(REQUEST_DOMAIN + raw).hex())
+        return self.store.connection_request(self.sid, envelope, self.now, INSTALL_KEY)
+
+    def test_host_referee_recovers_unanimous_fallback_after_outage(self):
+        self.referee_fixture(); self.referee_silent_host()
+        for seat in (1, 2):
+            self.assertEqual(self.referee_agreement(seat)["status"], "waiting")
+            self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["host_generation"], 0)
+        self.assertEqual(self.referee_agreement(3)["decision"]["host_seat"], 1)
+        self.assertTrue(bool(self.referee_agreement(1).get("host_token")))
+
+    def test_host_referee_undelivered_choice_requires_every_fallback_attestation(self):
+        self.referee_fixture()
+        self.wall += 16; self.now += 16
+        for seat in (2, 3): self.referee_request(seat, check_in=True)
+        self.referee_request(2); reserved = self.referee_request(3)
+        self.assertEqual(reserved["decision"]["host_seat"], 2)
+        for seat in (1, 2):
+            self.assertEqual(self.referee_agreement(seat)["status"], "waiting")
+            self.assertEqual(dict(self.store.connections.records())[self.sid]["host_change"]["host_seat"], 2)
+        decided = self.referee_agreement(3)
+        self.assertEqual((decided["decision"]["host_seat"], decided["decision"]["generation"]), (1, 1))
+        with self.assertRaises(ConnectionErrorReply): self.referee_agreement(2, host=2)
+        self.assertEqual(dict(self.store.connections.records())[self.sid]["host_change"]["host_seat"], 1)
+
+    def test_host_referee_signed_request_and_stale_generation(self):
+        self.referee_fixture(); self.referee_silent_host()
+        request = self.referee_envelope(1)
+        request["signature"] = "00" * 64
+        with self.assertRaises(ConnectionErrorReply) as refusal:
+            self.store.connection_request(self.sid, request, self.now, INSTALL_KEY)
+        self.assertEqual(refusal.exception.body["error"], "player_unproven")
+        with self.assertRaises(ConnectionErrorReply) as stale:
+            self.referee_request(1, generation=2)
+        self.assertEqual(stale.exception.body["error"], "host_generation")
+        self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["host_generation"], 0)
+
+    def test_host_referee_concurrent_requests_and_restart_are_idempotent(self):
+        self.referee_fixture(); self.referee_silent_host()
+        from concurrent.futures import ThreadPoolExecutor
+        envelopes = [self.referee_envelope(seat, frame=50 + seat) for seat in (3, 1, 2)]
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            replies = list(executor.map(lambda envelope: self.store.connection_request(self.sid, envelope, self.now, INSTALL_KEY), envelopes))
+        self.assertTrue(any(reply["status"] == "decided" for reply in replies))
+        chosen = self.referee_request(1)
+        decision = chosen["decision"]
+        self.assertEqual((decision["host_seat"], decision["generation"], decision["boundary"]), (1, 1, 53))
+        self.store.stop()
+        self.store = session_directory.SessionDirectory(15, 5, **self.options)
+        self.now = time.monotonic()
+        repeated = self.referee_request(1)
+        self.assertEqual(repeated["decision"], decision)
+        self.assertTrue(repeated.get("host_token") == chosen.get("host_token"))
 
     def test_signed_seat_copy_replay_and_concurrent_instance_keep_the_owner(self) -> None:
         raw = base64.b64decode(self.lease["seat_token"], validate=True)

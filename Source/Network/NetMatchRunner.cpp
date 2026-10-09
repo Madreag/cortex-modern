@@ -885,6 +885,11 @@ namespace RTE {
 		}
 		// A seat knocking to come back while the round forms is the session's traffic, never dropped for want of a reader.
 		CarrySessionTraffic(coordinator);
+		coordinator.SetRosterReader([&session]() -> const NetSeatRoster* {
+			if (const auto* host = session.GetReconnectHost()) return &host->GetRoster();
+			if (const auto* client = session.GetReconnectClient(); client && client->GetRosterReplica().HasRoster()) return &client->GetRosterReplica().Roster();
+			return nullptr;
+		});
 		if (!coordinator.Start(transport, lockstepConfig, error)) {
 			SetFailed(error ? *error : "lockstep start failed");
 			return false;

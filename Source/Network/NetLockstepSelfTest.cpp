@@ -23764,6 +23764,113 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 
 
 
+	bool TestOwnerSilenceThreshold(unsigned check, std::string* error) {
+		LoopbackTransport hostWire;
+		NetLockstepCoordinator host;
+		auto config = QuorumConfig(1, 2, static_cast<uint16_t>(49800 + check), 0x9D00 + check, std::make_shared<QuorumPartition>());
+		if (!hostWire.StartHost(static_cast<uint16_t>(49800 + check), error) || !host.Start(hostWire, config, error)) return false;
+		host.m_State = NetLockstepState::Running; host.m_RoundId = config.roundId;
+		host.m_Stats.nextFrame = 100; host.m_LastQueuedTargetFrame = 99; host.m_LastCompletedSimulationTick = 99;
+		host.m_PeerEffectiveStart[2] = 1; host.m_PeersPlayedThisRound = {1, 2};
+		const auto receive = [&](const std::vector<uint8_t>& bytes, uint64_t now) {
+			NetTransportEvent event; event.type = NetTransportEventType::PacketReceived;
+			event.peerId = 1; event.lane = NetTransportLane::ControlReliable; event.bytes = bytes;
+			host.HandleEvent(event, now);
+		};
+		if (check < 2) {
+			NetLockstepAck ack; ack.senderPeerId = 2; ack.highestContiguousFrame = 99;
+			std::vector<uint8_t> bytes; if (!NetLockstepCodec::Encode({ack}, bytes)) return false;
+			receive(bytes, 10000);
+			for (uint64_t now = 10001; now <= (check == 0 ? 12000 : 16000); now += 20) {
+				if (check == 0) receive(bytes, now);
+				(void)host.DeclareOverdueInputs(100, now, 10000, {2});
+			}
+			const bool held = host.IsSeatUnderAI(2, 100) || std::any_of(host.m_TimingDecisions.begin(), host.m_TimingDecisions.end(), [](const auto& entry) {
+				return entry.second.committed && entry.second.proposal.action == NetTimingAction::Hold;
+			});
+			if (held != (check == 1) || host.IsSeatUnderAI(1, 100)) { *error = "the host did not distinguish late authenticated input from total silence"; return false; }
+			return true;
+		}
+		// Exercise the real session sender on its own thread. The stalled client's
+		// coordinator and rendering loop receive no tick for ten wall-clock seconds.
+		class MailboxWire final : public LoopbackTransport {
+		public:
+			std::mutex mutex;
+			std::vector<std::vector<uint8_t>> packets;
+			bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>& bytes, std::string*, bool*) override {
+				std::lock_guard lock(mutex); packets.push_back(bytes); return true;
+			}
+			std::vector<std::vector<uint8_t>> Drain() { std::lock_guard lock(mutex); return std::exchange(packets, {}); }
+		};
+		NetMatchService client;
+		auto mailbox = std::make_unique<MailboxWire>(); auto* incoming = mailbox.get();
+		client.m_MigratedTransport = std::move(mailbox); client.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+		auto clientConfig = QuorumConfig(2, 2, 49802, config.sessionId, std::make_shared<QuorumPartition>());
+		if (!client.m_Coordinator->Start(*incoming, clientConfig, error)) return false;
+		client.m_Coordinator->m_State = NetLockstepState::Running; client.m_Coordinator->m_RoundId = config.roundId;
+		const uint64_t began = NetLockstepNowMs();
+		host.m_PeerLastHeardMs[2] = began;
+		client.ArmSessionLivenessLocked();
+		uint64_t received = 0;
+		while (NetLockstepNowMs() < began + 10000) {
+			const uint64_t now = NetLockstepNowMs();
+			for (const auto& bytes: incoming->Drain()) { receive(bytes, now); ++received; }
+			(void)host.DeclareOverdueInputs(100, now, began, {2});
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		}
+		client.DisarmSessionLiveness();
+		client.m_LivenessThread.request_stop(); client.m_LivenessThread.join();
+		if (received < 100 || host.IsSeatUnderAI(2, 100) || !host.m_TimingDecisions.empty() || client.m_Coordinator->HasCompletedSimulationTick()) {
+			*error = "a ten-second stalled main loop did not preserve its seat with independent authenticated keepalives"; return false;
+		}
+		return true;
+	}
+
+	bool TestOwnerHostChange(unsigned mode, std::string* error) {
+		QuorumRig r;
+		if (!StartQuorumRig(r, 4, static_cast<uint16_t>(49810 + mode * 10), error)) return false;
+		if (!PumpQuorumRig(r, 4000, [&] { return std::all_of(r.simulated.begin(), r.simulated.end(), [](uint64_t frame) { return frame >= 20; }); })) {
+			*error = "the host-change fixture did not reach combat" + r.Report(); return false;
+		}
+		std::map<uint8_t, NetHostChangeRequest> requests;
+		NetHostChangeReply decided;
+		if (mode < 2) for (uint8_t peer = 2; peer <= 4; ++peer) r.Peer(peer).m_Config.hostChangeReferee = [&, peer](const NetHostChangeRequest& request) {
+			if (mode == 1) return NetHostChangeReply{}; // Network unavailable; the normal unanimous wire path must finish.
+			requests[peer] = request;
+			if (requests.size() != 3) { NetHostChangeReply wait; wait.state = NetHostChangeReply::State::Waiting; return wait; }
+			if (decided.state != NetHostChangeReply::State::Decided) {
+				decided.state = NetHostChangeReply::State::Decided; decided.generation = request.generation + 1;
+				decided.host = 2; decided.donor = 2; decided.members = {2, 3, 4};
+				for (const auto& [member, report]: requests) if (report.preparedFrame > decided.boundary) { decided.boundary = report.preparedFrame; decided.donor = member; }
+			}
+			return decided;
+		};
+		const uint64_t killedAt = r.now, frame = r.simulated[1];
+		KillQuorumPeer(r, 1);
+		(void)PumpQuorumRig(r, 14900, [] { return false; });
+		for (uint8_t peer = 2; peer <= 4; ++peer) if (r.Peer(peer).IsMigrating() || r.Peer(peer).GetHostPeerId() != 1) {
+			*error = "host change began before fifteen seconds of silence"; return false;
+		}
+		(void)PumpQuorumRig(r, 1100, [] { return false; });
+		for (uint8_t peer = 2; peer <= 4; ++peer) if (!r.Peer(peer).IsMigrating() && r.Peer(peer).GetHostPeerId() == 1) {
+			*error = "sixteen seconds of host silence did not start host change" + r.Report(); return false;
+		}
+		const auto done = [&] {
+			for (uint8_t peer = 2; peer <= 4; ++peer)
+				if (r.Peer(peer).IsMigrating() || r.Peer(peer).GetHostPeerId() != 2 || r.simulated[peer - 1] < frame + 20) return false;
+			return true;
+		};
+		if (!PumpQuorumRig(r, 14000, done)) { *error = "the selected survivors did not resume one history" + r.Report(); return false; }
+		if (!QuorumFoldsAgree(r, {2, 3, 4}, error)) return false;
+		for (uint8_t peer = 2; peer <= 4; ++peer) {
+			const auto result = r.Peer(peer).GetMigrationResult();
+			if (result.generation != 1 || result.hostPeerId != 2 || result.boundary != r.Peer(2).GetMigrationResult().boundary ||
+			    r.Peer(peer).MigrationUsesDirectory() != (mode == 0)) { *error = "host-change decisions disagree"; return false; }
+		}
+		std::cout << "[net-lockstep-selftest] PASS host_silence_16s mode=" << mode << " waited_ms=" << r.now - killedAt << std::endl;
+		return true;
+	}
+
 	bool TestFourPeersCommitPlacement(std::string* error) {
 		std::array<LoopbackTransport, 4> wires;
 		std::array<NetMatchService, 4> services;
@@ -23986,7 +24093,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			*error = "53-83 ms of host jitter proposed handing its human seat to another peer"; return false;
 		}
 		if (host.ProposePeerHold(1, 1084, nullptr)) { *error = "the current authority can still hold its own human seat"; return false; }
-		host.GoQuiet(75);
+		// Capacity is only a reported fact; no self-hold operation exists.
 		if (host.m_SelfHeld || !host.QueueLocalInput(75, {}, {}, error)) { *error = "a slow-host notification silenced the host's returning input"; return false; }
 		// The same short jitter on a remote mobile link must also remain a wait, with the sender's seat intact.
 		host.m_Stats.nextFrame = 5014; host.m_Stats.peers[4].lastProgressMs = 2000;
@@ -28726,6 +28833,12 @@ namespace {
 		row([](std::string* rowError) { return TestAgreedStartKeepsARejoinedHorizon(rowError); }, "TestAgreedStartKeepsARejoinedHorizon");
 		row([](std::string* rowError) { return TestOverdueBoundWaitsForTheCommittedRunway(rowError); }, "TestOverdueBoundWaitsForTheCommittedRunway");
 		row(&TestFourPlayerHoldWaitsForALiveAcknowledgement, "TestFourPlayerHoldWaitsForALiveAcknowledgement");
+		row([](std::string* why) { return TestOwnerSilenceThreshold(0, why); }, "late_input_2s_authenticated_traffic_no_hold");
+		row([](std::string* why) { return TestOwnerSilenceThreshold(1, why); }, "combat_silence_6s_host_orders_hold");
+		row([](std::string* why) { return TestOwnerSilenceThreshold(2, why); }, "main_loop_stall_10s_real_keepalive_thread_no_hold");
+		row([](std::string* why) { return TestOwnerHostChange(0, why); }, "host_loss_directory_referee");
+		row([](std::string* why) { return TestOwnerHostChange(1, why); }, "host_loss_directory_down_unanimous_fallback");
+		row([](std::string* why) { return TestOwnerHostChange(2, why); }, "host_loss_direct_unanimous_survivors");
 		row(&TestFourPeersCommitPlacement, "four_brains_late_jitter_duplicate_reorder");
 		row([](std::string* why) { return TestPlacementSessionSequence(10, why); }, "placement_session_fight_10");
 		row([](std::string* why) { return TestPlacementSessionSequence(11, why); }, "placement_session_fight_11");

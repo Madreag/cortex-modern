@@ -623,6 +623,8 @@ namespace RTE {
 		bool StageResyncedMatchLaunch(std::string* error = nullptr);
 		void Destroy(bool preserveMatch = false);
 		void Update();
+		/// Publishes placement or its shared brain barrier through the session roster.
+		void NotePlacementPhase(bool placing, uint64_t frame);
 
 		/// Watcher: tell the world whether this player wants a seat when one frees. A declining
 		/// watcher keeps its stream and promotion passes it over.
@@ -1151,42 +1153,29 @@ namespace RTE {
 		/// Host: a held seat's player reporting the tick its own state stands at gets the committed tail from there on its live connection.
 		void OpenInPlaceRejoinLocked(const NetLobbySession::WorldJoinReport& report, const std::vector<NetSessionPeerInfo>& readyPeers, uint64_t nowMs);
 		/// Held client: the other survivors it knows are held, at its replay or by the stopped round.
-		std::set<uint8_t> HeldSurvivorsLocked() const;
 		/// Held client, host gone: keeps only the routes its catch-up moves to; returns whether this seat hosts the match itself.
-		bool HeldSeatHostsLocked();
 		/// The human seats of the round: a held seat hosts alone only when it and the lost host are all of them.
-		size_t HumanSeatCountLocked() const;
 		std::string m_HeldUnreachableText; //!< Held client: why it waits for its host instead of hosting, for the screen.
 		/// Held client: opens the match's published listener for the held seats that may dial this one.
-		bool OpenHeldListenerLocked();
 		/// Held client moving to a successor: sends it the lost host's frames this seat replayed, then a record of no bytes that ends them.
-		void SendHeldRecordLocked();
 		/// First survivor: takes a held seat's record of the lost host's round off its listener into its own replay. False for any other traffic.
-		bool TakeHeldRecordLocked(const NetTransportEvent& event);
 		/// First survivor: hosts the match once the other held seats' records are in and replayed, or their time is up. False when it cannot host.
-		bool HostHeldMatchLocked();
 		/// Held client: closes that listener once another host took the seat.
-		void CloseHeldListenerLocked();
 		/// Held client: its host is gone, so its catch-up moves to the next successor on a new connection with the world it holds.
 		/// Returns whether a successor is being tried; otherwise the seat takes the image path.
-		bool BeginInPlaceMoveLocked(uint64_t nowMs);
 		/// Ends the start a held client's return began; what that start's round heard of the others goes back on the catch-up wire.
 		void DropReturnStartLocked(const std::string& why);
 		/// Held client: dials the next successor route. Returns whether one is being dialed.
-		bool DialNextInPlaceRouteLocked(uint64_t nowMs);
 		/// Held client: drives the move's connection until the successor admits the seat, then asks it for the tail.
 		/// Returns whether the catch-up goes on; false means the move gave up and the seat takes the image path.
-		bool DriveInPlaceMoveLocked(uint64_t nowMs);
 		/// Held client: at the frame the round changed hands, the replay goes on under the authority that committed it.
 		bool CrossReplayHandoverLocked(std::string* error);
 		/// Client: its lobby speaks to this host on this connection, silent until asked: it carries a held return's reports and tail.
 		bool BindClientLobbyToHostLocked(INetTransport& wire, uint8_t hostPeerId, NetPeerId hostLink, uint64_t startFrame);
 		/// Held client: its host is gone and nobody else is left, so it plays the round on from its own committed state with the
 		/// AI in every other seat and its own hold ended. Returns whether the round runs on it.
-		bool HostAloneFromOwnStateLocked();
 		/// Held client hosting from its own state: takes the host's admission, lobby and rejoin plane on the round's listener, so the
 		/// other held seats rejoin it. Returns whether they can.
-		bool OpenHeldHostPlaneLocked(uint64_t handoverFrame, uint8_t lostHost);
 		bool PrepareReceivedWorldJoin(const std::vector<uint8_t>& bytes, const NetMatchConfig& adopted, std::string& pendingLoad, std::string* error);
 		/// Restarts the silence windows of a session handed to a worker thread.
 		void NoteSessionHandedToWorker(NetSession& session);
@@ -1350,6 +1339,8 @@ namespace RTE {
 		friend bool TestAHostMappingOutlastsItsPendingIdentity(std::string* error);
 		friend bool TestAHostWithNoRouterReadsNoRouterMapping(std::string* error);
 		friend bool TestFourPeersCommitPlacement(std::string* error);
+		friend bool TestOwnerSilenceThreshold(unsigned check, std::string* error);
+		friend bool TestOwnerHostChange(unsigned mode, std::string* error);
 		friend bool TestPlacementSessionSequence(unsigned fight, std::string* error);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestAParkReachesTheSessionAWorkerOwns(std::string* error);
@@ -1558,7 +1549,7 @@ namespace RTE {
 		std::jthread m_SnapshotLoadKeepalive;
 		/// Host: the round's liveness ack, sent from off the simulation thread while that thread is busy, so a park of any length reads
 		/// as a busy host, never a gone one. The session pump arms it every tick and it is disarmed around every transport change.
-		struct HostLiveness {
+		struct SessionLiveness {
 			INetTransport* wire = nullptr;
 			std::vector<NetPeerId> targets;
 			std::vector<uint8_t> bytes;
@@ -1567,10 +1558,12 @@ namespace RTE {
 			uint64_t sentWhileBusy = 0;
 		};
 		std::mutex m_LivenessMutex;
-		HostLiveness m_Liveness;
+		SessionLiveness m_Liveness;
 		std::jthread m_LivenessThread;
-		void ArmHostLivenessLocked();
-		void DisarmHostLiveness();
+		void ArmSessionLivenessLocked();
+		void DisarmSessionLiveness();
+		struct WireOwners;
+		std::unique_ptr<WireOwners> DetachWireOwnersLocked();
 		std::atomic<uint64_t> m_SnapshotLoadKeepaliveTicks{0};
 		std::atomic<uint64_t> m_SnapshotLoadKeepaliveWindowTicks{0};
 		bool m_WorkerDone = false;
@@ -1957,42 +1950,14 @@ namespace RTE {
 		size_t m_CatchUpWireBytes = 0;
 		std::unique_ptr<LoopbackTransport> m_CatchUpTransport;
 		std::unique_ptr<NetLockstepCoordinator> m_CatchUpCoordinator;
+		bool BeginCatchUpHostChangeLocked(uint64_t nowMs);
 		bool m_InPlaceCatchUp = false;   //!< Held client: the catch-up replays on its own state over its live connection.
 		uint64_t m_InPlaceAskedMs = 0;   //!< When it last asked the host for its tail.
 		uint64_t m_InPlaceSinceMs = 0;   //!< When it began; a host that never serves it sends it to the image path.
 		uint64_t m_InPlaceHeardMs = 0;   //!< When its host's link last carried anything to it.
 		uint64_t m_InPlaceProgressApplied = 0;
 		uint64_t m_InPlaceProgressLogged = 0; //!< The applied frame its progress was last logged at.
-		uint64_t m_HeldHostStatusAtMs = 0; //!< Held seat hosting: when its status turns from the handover to its hosting.
-		static constexpr uint64_t c_HeldHostArrangingMs = 1500; //!< How long a held seat that hosts reads the loss as a handover.
-		static constexpr uint64_t c_InPlaceHostSilenceMs = 3000; //!< A host that feeds a held seat nothing this long is gone.
 		uint64_t m_HandoverFrame = 0; //!< The first frame the round committed under the authority that took it over here; 0 before a handover.
-		struct InPlaceRoute {
-			uint8_t peerId = 0;
-			NetMatchMigrationPeer endpoint;
-		};
-		std::deque<InPlaceRoute> m_InPlaceRoutes; //!< Held client: the successors its catch-up has yet to try.
-		std::unique_ptr<INetTransport> m_HeldListener; //!< Held client, first survivor: the listener it opens at its verdict while it dials the others.
-		std::vector<NetTransportEvent> m_HeldListenerEvents; //!< What that listener heard before a plane took it over, in order.
-		bool m_HeldDialSeen = false; //!< A held seat's own session reached that listener.
-		bool m_HeldDialNoted = false; //!< The dial that came while this seat's host still spoke is said once.
-		uint64_t m_HeldGatherSinceMs = 0; //!< First survivor: when it began waiting for the other held seats' records before it hosts.
-		size_t m_HeldGatherExpected = 0; //!< The held seats it waits for.
-		std::set<NetPeerId> m_HeldRecordsEnded; //!< Listener connections whose whole record of the lost host's round has arrived.
-		uint64_t m_HeldRecordFramesTaken = 0; //!< Frames of those records this seat's replay did not hold yet.
-		uint64_t m_HeldRecordThrough = 0; //!< The newest frame those records carried.
-		static constexpr uint64_t c_HeldGatherMs = 1500; //!< How long the first survivor waits for the other held seats' records; every seat is held meanwhile.
-		std::deque<std::vector<uint8_t>> m_HeldRecordPackets; //!< Held client moving to a successor: its record of the lost host's round, still to send.
-		bool m_HeldRecordQueued = false; //!< That record was packed for the successor being dialed.
-		static constexpr size_t c_HeldRecordFrames = 3600; //!< The newest frames of the lost host's round a moving seat hands its successor.
-		static constexpr size_t c_HeldRecordChunkBytes = 32 * 1024; //!< Payload of one record chunk, inside the lobby's state chunk limit.
-		static constexpr uint64_t c_HeldDialProofSilenceMs = 1000; //!< A live host acks each held seat every tick; this long without it is no live host.
-		std::unique_ptr<INetTransport> m_InPlaceMoveTransport; //!< Held client: the new connection while the successor admits it.
-		uint8_t m_InPlaceMoveHost = 0; //!< Held client: the successor being dialed; 0 when no move is under way.
-		std::string m_InPlaceMoveAddress;
-		std::string m_InPlaceTicketHost; //!< Held client: the host its ticket named before the move, restored if no successor takes the seat.
-		uint64_t m_InPlaceMoveSinceMs = 0;
-		static constexpr uint64_t c_InPlaceMoveBudgetMs = 10000; //!< How long one successor has to admit a moving seat.
 		static constexpr uint64_t c_ReturnerReportGapMs = 500; //!< Host: a returner that has reported within this is still catching up.
 		std::map<uint8_t, uint32_t> m_InPlaceIncarnationBumps; //!< Host: in-place returns per seat since its holder last bound, over the admission plane's count.
 		std::map<uint8_t, std::string> m_RejoinFitReasons; //!< Host: the last reason each held seat's return was held back for.

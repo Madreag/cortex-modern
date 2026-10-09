@@ -9315,10 +9315,10 @@ void RunGameLoop() {
 			g_UInputMan.Update();
 			{
 				NetLockstepPlane::Gap plane("network UI update");
+				g_ActivityMan.RenderUpdate();
 				g_MenuMan.UpdateNetworkUI();
 			}
 			g_MenuMan.UpdateLocalPauseMenu();
-			g_ActivityMan.RenderUpdate();
 			g_UInputMan.EndFrame();
 			g_SceneMan.SetRenderDrawContext(false);
 			t_simRNGOverride = prevSimRNG;

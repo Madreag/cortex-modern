@@ -758,11 +758,30 @@ class SessionDirectory:
                     raise Superseded("superseded", sess.migration_gen)
                 self._persist_session(sess, now)
                 return self.connections.issue(session_id, data, wall) if operation == "issue" else self.connections.remove(session_id, data, wall)
+            if operation == "host-change":
+                answer = self.connections.host_change(session_id, data, wall,
+                    wall - max(0, now - sess.last_beat),
+                    lambda generation: self._issue_token(session_id, generation, sess.token))
+                if answer.get("status") == "decided":
+                    saved = dict(self.connections.records())[session_id]["session"]
+                    sess.token = saved["token"]
+                    sess.migration_gen = saved["migration_gen"]
+                    sess.fields = dict(saved["fields"])
+                    sess.last_beat = now - max(0, wall - saved["last_beat"])
+                    # The former host's fifteen-second listing has usually expired.
+                    # Publish the reserved generation so old heartbeats are fenced
+                    # and every survivor resolves the same successor while it recovers.
+                    self._sessions[session_id] = sess
+                    if session_id in self._resume_tokens:
+                        _, deadline, _ = self._resume_tokens[session_id]
+                        self._resume_tokens[session_id] = (sess.token, deadline, sess.migration_gen)
+                return answer
             if operation != "check-in":
                 raise ConnectionErrorReply(400, "connection_request", "The connection request was incomplete. Cancel and join again.")
             answer, renew, host_claim = self.connections.check_in(session_id, data, wall)
             hosting = bool(host_claim and host_claim["generation"] == sess.migration_gen and tokens_equal(host_claim["token"], sess.token))
             if hosting:
+                self.connections.note_host(session_id, answer["seat"], sess.migration_gen, wall)
                 route = host_claim["route"]
                 addresses = require_listen_addrs(route)
                 port = require_int(route, "listen_port", 1, 65535)
@@ -1308,7 +1327,8 @@ class SessionDirectory:
                     held = generation
                 if world and owner is None and previous is None and proof is not None:
                     held = proof[2]
-                if claimed is not None and claimed <= held and not ((replayed_owner or same_host or first_world) and claimed == held):
+                referee_host = not world and claimed is not None and self.connections.reserved_host(session_id, claimed, presented)
+                if claimed is not None and claimed <= held and not ((replayed_owner or same_host or first_world or referee_host) and claimed == held):
                     raise Superseded("already_migrated", held)
                 if claimed is None and held > 0 and not (replayed_owner or same_host):
                     raise Superseded("already_migrated", held)
@@ -1498,11 +1518,12 @@ class SessionDirectory:
             sess = self._get(session_id, now)
             if sess is None:
                 raise KeyError("not_found")
-            if not tokens_equal(token, sess.token):
-                raise PermissionError("forbidden")
-            # A host the match left behind no longer keeps the row its successor holds.
+            # A stale generation learns the published fence before its retired
+            # capability is rejected; it must relinquish gameplay authority too.
             if generation is not None and generation < sess.migration_gen:
                 raise Superseded("superseded", sess.migration_gen)
+            if not tokens_equal(token, sess.token):
+                raise PermissionError("forbidden")
             if valid_install_key(install_key):
                 sess.install_key = install_key
                 sess.install_key_sha256 = hashlib.sha256(install_key.encode()).hexdigest()

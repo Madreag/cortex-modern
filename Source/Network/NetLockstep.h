@@ -1,5 +1,9 @@
 #pragma once
 
+#include "NetConnectionAuthority.h"
+
+#include "NetSeatRoster.h"
+
 #include "ControllerFrame.h"
 #include "NetGameCommand.h"
 #include "NetMatchConfig.h"
@@ -395,6 +399,8 @@ namespace RTE {
 		std::function<std::unique_ptr<INetTransport>()> migrationTransportFactory;
 		/// The connection authority supplies current routes without changing the agreed game config.
 		std::function<NetMatchMigrationPeer(const NetMatchMigrationPeer&)> migrationEndpoint;
+		// The adapter translates stable directory seats to this round's peer ids.
+		std::function<NetHostChangeReply(const NetHostChangeRequest&)> hostChangeReferee;
 		/// Dials a handover endpoint that names an ICE route through the session's rendezvous; the identity may be empty.
 		std::function<bool(INetTransport& transport, const std::string& identity, std::string* error)> migrationIceDial;
 		/// Opens the rendezvous on this peer's handover listener once it hosts the handover.
@@ -460,13 +466,14 @@ namespace RTE {
 		uint32_t connectedMask = 0; ///< Answer: the seats the voter's committed round has connected at its applied frame, the host's among them; roll call and abort: the roster the vote is counted against.
 	};
 
-	/// The host is lost when its link closes or stays silent for this long plus two of the listener's round trips to it.
-	constexpr uint64_t c_NetHostLossSilenceMs = 1000;
+	/// Only continuous authenticated-traffic silence permits these host decisions.
+	constexpr uint64_t c_NetSeatDisconnectSilenceMs = 5000;
+	constexpr uint64_t c_NetHostLossSilenceMs = 15000;
 	/// One reading of host loss for every path that judges it: the round's own check, the roll call and a held seat's catch-up.
-	inline uint64_t NetHostLossBoundMs(uint64_t rttMs) { return c_NetHostLossSilenceMs + 2 * rttMs; }
-	inline bool NetHostLinkLost(bool linkClosed, uint64_t silentMs, uint64_t rttMs) { return linkClosed || silentMs >= NetHostLossBoundMs(rttMs); }
+	inline uint64_t NetHostLossBoundMs(uint64_t rttMs) { (void)rttMs; return c_NetHostLossSilenceMs; }
+	inline bool NetHostLinkLost(bool linkClosed, uint64_t silentMs, uint64_t rttMs) { (void)linkClosed; return silentMs >= NetHostLossBoundMs(rttMs); }
 
-	/// How far a handover's vote has come: the seats that voted for it and the connected seats it needs a strict majority of.
+	/// Progress toward the same boundary for every survivor named by the authority decision.
 	struct NetHostMigrationReach {
 		size_t votes = 0;
 		size_t seats = 0;
@@ -1071,6 +1078,10 @@ namespace RTE {
 		/// Receives the session-protocol traffic (a reconnecting peer's handshake) the coordinator
 		/// would otherwise discard while it owns the transport queue.
 		void SetSessionEventSink(std::function<void(const NetTransportEvent&)> sink) { NET_PLANE_CHECK(); m_SessionEventSink = std::move(sink); }
+		/// Reads the existing session roster; the coordinator owns no second phase.
+		void SetRosterReader(std::function<const NetSeatRoster*()> reader) { NET_PLANE_CHECK(); m_RosterReader = std::move(reader); }
+		/// Placement stays paused until this peer has applied the committed combat boundary.
+		bool WaitsForPlacement() const;
 		/// The H4 seat state, asked for by lockstep peer id and (on a disconnect) the transport that
 		/// went away. Without one every seat reads as neither fenced nor held, which is the pre-H4 round.
 		void SetSeatStateSource(NetLockstepSeatState (*source)(void*, uint8_t, NetPeerId), void* context);
@@ -1306,6 +1317,8 @@ namespace RTE {
 		}
 		/// A transport fault starts agreement without choosing a simulation departure.
 		bool BeginHostMigration(uint64_t nowMs);
+		bool MigrationUsesDirectory() const { return m_MigrationChoice && m_MigrationChoice->state == NetHostChangeReply::State::Decided; }
+		void NoteDirectorySuperseded(uint64_t generation) { NET_PLANE_CHECK(); m_CertifiedSupersedingGeneration = std::max(m_CertifiedSupersedingGeneration, generation); NoteSuperseded(generation); }
 		/// A changed local route rejoins its seat; false leaves an already granted tick to finish first.
 		bool NoteLocalRouteChanged();
 		/// The handover's vote as this peer last saw it: the successor's own tally, or the one its roll call told a voter.
@@ -1454,6 +1467,8 @@ namespace RTE {
 		friend bool TestAStarvedSeatIsNotLate(std::string* error);
 		friend bool TestFourPlayerHoldWaitsForALiveAcknowledgement(std::string* error);
 		friend bool TestFourPeersCommitPlacement(std::string* error);
+		friend bool TestOwnerSilenceThreshold(unsigned check, std::string* error);
+		friend bool TestOwnerHostChange(unsigned mode, std::string* error);
 		friend bool TestPlacementSessionSequence(unsigned fight, std::string* error);
 		friend bool TestBriefHostJitterKeepsItsHumanSeat(std::string* error);
 		friend bool TestHeldHostReturnsPastThePreparedHorizon(std::string* error);
@@ -1534,6 +1549,8 @@ namespace RTE {
 		/// The seats connected at a committed frame - neither gone nor held by the AI - the host's among them, one bit per peer.
 		uint32_t ConnectedSeatsAt(uint64_t frame) const;
 		uint32_t MigrationElectorate() const;
+		NetHostChangeRequest HostChangeRequest() const;
+		void ReportHostAgreement();
 		bool HasMigrationCertificate(const NetHostMigrationMessage& message) const;
 		/// A strict majority of the committed roster; proposed holds never remove a vote.
 		bool MigrationQuorum(NetHostMigrationReach& reach);
@@ -1556,6 +1573,8 @@ namespace RTE {
 		void RetainMigrationFrame(const NetLockstepReadyFrame& ready);
 		void StoreMigrationFrame(uint64_t frame, std::vector<uint8_t> bytes);
 		NetHostMigrationPhase m_MigrationPhase = NetHostMigrationPhase::None;
+		// One immutable choice per generation. Timeouts cannot switch a voter to another host.
+		std::optional<NetHostChangeReply> m_MigrationChoice;
 		std::unique_ptr<INetTransport> m_MigrationTransport;
 		std::unique_ptr<INetTransport> m_MigrationListener;
 		struct MigrationProbe {
@@ -1674,7 +1693,7 @@ namespace RTE {
 		void AdvanceReadyFrames(uint64_t nowMs);
 		std::vector<NetLockstepFrame> CapturePendingInputsImpl(uint64_t afterFrame, bool includeBoundaryCommands) const;
 		void StampFrameAuthority(NetLockstepReadyFrame& ready);
-		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false, bool agreedBoundary = false, bool removed = false, bool cleanLeave = true);
+		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false, bool agreedBoundary = false, bool removed = false, bool cleanLeave = true, bool linkDropped = false);
 		void ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay);
 		/// Ends an AI-held seat's wait for its returner: an agreed reclaim still ahead of every peer is withdrawn, the AI keeps the units.
 		void ReleaseHeldSeat(uint8_t peerId, uint64_t nowMs, bool relay, const char* why = "released");
@@ -1686,7 +1705,7 @@ namespace RTE {
 		bool PrepareSeatImageJoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error);
 		/// Whether a release of the seat lands at or after the seat's newest hold.
 		bool HasReleaseSinceHold(uint8_t peerId) const;
-		void MaybeSendHoldHeartbeats(uint64_t nowMs);
+		void MaybeSendControlHeartbeat(uint64_t nowMs);
 		static bool IsHoldResolutionReason(NetLockstepStopReason reason);
 		static NetLockstepStopReason StopReasonOf(NetLockstepHoldResolution resolution);
 		static NetLockstepHoldResolution HoldResolutionOf(NetLockstepStopReason reason);
@@ -1770,7 +1789,6 @@ namespace RTE {
 		static bool SlowAgainst(double capacity, double fastest);
 
 		/// Goes quiet: a client stops queueing input and announces it, a host holds its own seat through its plane.
-		void GoQuiet(uint64_t producedFrame);
 
 		/// The ticks a second this machine's own recent ticks allow; 0 before it has measured them.
 		/// @param capped Whether to cap it at the round's rate, which is all this machine can run the round at.
@@ -1816,6 +1834,7 @@ namespace RTE {
 		void FlushDeferredParkTimings();
 		bool DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing);
 		uint64_t PeerAbsenceBudgetMs(uint8_t peer) const;
+		uint64_t LastAuthenticatedTraffic(uint8_t peer) const;
 		bool SceneLoadInputPending(uint8_t peer, uint64_t frame, uint64_t nowMs);
 		void TakeSceneLoadStatus(const NetLockstepTiming& timing, uint64_t nowMs);
 		uint64_t CaptureExcuseUntil(uint8_t peerId, uint64_t frame, uint64_t firstMissingMs);
@@ -1975,6 +1994,7 @@ namespace RTE {
 		std::map<std::string, uint64_t> m_InputAcceptanceRejections;
 		std::map<uint8_t, uint64_t> m_ObservationEpochApplied; //!< sender -> the newest epoch its encode table was reset at.
 		size_t m_LastAdmissionReplayFrames = 0;        //!< What the last admission replayed, for the report.
+		std::function<const NetSeatRoster*()> m_RosterReader;
 		std::function<void(const NetTransportEvent&)> m_SessionEventSink; //!< Forwards session traffic (reconnect handshakes) mid-match.
 		NetLockstepSeatState (*m_SeatStateSource)(void*, uint8_t, NetPeerId) = nullptr;
 		void* m_SeatStateContext = nullptr;
@@ -2109,7 +2129,7 @@ namespace RTE {
 		uint8_t m_ReplayOpeningAuthority = 0;
 		uint64_t m_ReplayOpeningGeneration = 0;
 		std::map<uint64_t, NetGameHostAuthority> m_AuthorityEvents;
-		std::optional<uint64_t> m_LocalPreparedFrame, m_LastPreparedSentFrame;
+		std::optional<uint64_t> m_LocalPreparedFrame, m_LastPreparedSentFrame, m_HostOrderedFrame;
 		std::map<uint8_t, uint64_t> m_PreparedFrameReceipts;
 		uint64_t m_LastPreparedSentMs = 0;
 		bool UsesPreparedFrameReceipts() const;
