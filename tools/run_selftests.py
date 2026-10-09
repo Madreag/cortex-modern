@@ -54,6 +54,7 @@ SELFTESTS = [
     "camera-null-scene",
     "rotate-primitive",
     "lua-numeric-policy",
+    "fp-environment",
     "sim-checksum",
     "cow-checkpoint",
     "frame-recorder",

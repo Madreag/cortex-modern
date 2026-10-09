@@ -31,6 +31,7 @@ LJ_ASMF void lj_vm_unwind_stub(void);
 #endif
 
 /* Miscellaneous functions. */
+LJ_FUNC void lj_vm_fp_assert(void);
 #if LJ_TARGET_X86ORX64
 LJ_ASMF int lj_vm_cpuid(uint32_t f, uint32_t res[4]);
 #endif

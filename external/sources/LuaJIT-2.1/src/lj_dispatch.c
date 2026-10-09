@@ -241,6 +241,18 @@ static void setptmode_all(global_State *g, GCproto *pt, int mode)
 }
 #endif
 
+static void (*engine_fp_assert)(void);
+
+void luaJIT_set_fp_assert(void (*check)(void))
+{
+  engine_fp_assert = check;
+}
+
+void lj_vm_fp_assert(void)
+{
+  if (engine_fp_assert) engine_fp_assert();
+}
+
 unsigned int luaJIT_numeric_policy(void)
 {
   unsigned int policy = 0;

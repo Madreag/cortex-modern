@@ -9,6 +9,8 @@
 #include "MetricsCollector.h"
 #include "SimChecksum.h"
 #include "RTETools.h"
+#include "FloatingPointEnvironment.h"
+#include <cfenv>
 #include "LuaThreadCodec.h"
 #include "CheckpointImage.h"
 #include "ScenarioRunner.h"
@@ -209,6 +211,21 @@ namespace {
 		lua_pushcfunction(L, det_os_clock);
 		lua_setfield(L, -2, "clock");
 		lua_pop(L, 1);
+	}
+
+	int CheckedNativeCall(lua_State* state, lua_CFunction function) {
+		const FloatingPointEnvironment::Scope scope("Lua native callback");
+		return function(state);
+	}
+
+	void RegisterFloatingPointChecks(lua_State* state) {
+		static std::once_flag installed;
+		std::call_once(installed, [] {
+			luaJIT_set_fp_assert([] { FloatingPointEnvironment::Enter(); FloatingPointEnvironment::Assert("Lua library return"); });
+		});
+		lua_pushlightuserdata(state, reinterpret_cast<void*>(&CheckedNativeCall));
+		if (!luaJIT_setmode(state, -1, LUAJIT_MODE_WRAPCFUNC | LUAJIT_MODE_ON)) { std::abort(); }
+		lua_pop(state, 1);
 	}
 
 	// Route math.atan/atan2 through the cross-platform poly — AI ballistics aim through these and the platform libm atan2 diverges cross-toolchain.
@@ -1141,9 +1158,12 @@ end
 				lua_settop(state, top);
 			}
 			lua_gc(state, LUA_GCCOLLECT, 0);
-			auto worker = std::async(std::launch::async, [captured = std::move(captured)] {
+			auto worker = FloatingPointEnvironment::Async(std::launch::async, [captured = std::move(captured)] {
 				std::vector<std::string> output;
-				for (const auto& produce: captured) output.push_back(produce());
+				for (const auto& produce: captured) {
+					const FloatingPointEnvironment::Scope scope("capture callback");
+					output.push_back(produce());
+				}
 				return output;
 			});
 			passed = changed && worker.get() == expected;
@@ -5274,7 +5294,7 @@ static int ScriptGraphPathQueueSelfTest(lua_State* L) {
 	std::promise<void> entered;
 	std::promise<void> destroyed;
 	auto destroyedFuture = destroyed.get_future();
-	std::thread destroyer([heldFinder, &entered, &destroyed]() { entered.set_value(); delete heldFinder; destroyed.set_value(); });
+	auto destroyer = FloatingPointEnvironment::StartThread([heldFinder, &entered, &destroyed]() { entered.set_value(); delete heldFinder; destroyed.set_value(); });
 	entered.get_future().wait();
 	if (destroyedFuture.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready) {
 		std::cout << "[path-queue-selftest] FAIL destroyed_with_queued_request" << std::endl;
@@ -7633,12 +7653,34 @@ PreviewWindowCreateFunctionsForType(Scene);
 	    luabind::def((std::string("Is") + std::string(#TYPE)).c_str(), &LuaAdaptersEntityCast::IsConst##TYPE), \
 	    OWNINGSCOPE::Register##TYPE##LuaBindings()
 
+bool LuaStateWrapper::RunFloatingPointCallbackSelfTest(int drift) {
+	lua_State* state = luaL_newstate();
+	if (!state) { return false; }
+	RegisterFloatingPointChecks(state);
+	luaL_openlibs(state);
+	lua_pushinteger(state, drift);
+	lua_pushcclosure(state, [](lua_State* current) -> int {
+		const int kind = static_cast<int>(lua_tointeger(current, lua_upvalueindex(1)));
+		if (kind != 0) { std::fesetround(FE_DOWNWARD); }
+		if (kind == 2) { return luaL_error(current, "callback error"); }
+		lua_pushinteger(current, 17);
+		return 1;
+	}, 1);
+	lua_setglobal(state, "native_check");
+	const bool called = luaL_dostring(state, "assert(native_check()==17)") == 0;
+	const bool passed = called && FloatingPointEnvironment::IsValid() && drift == 0;
+	lua_close(state);
+	std::printf("[fp-environment-selftest] %s native_callback\n", passed ? "PASS" : "FAIL");
+	return passed;
+}
+
 bool LuaStateWrapper::RunNumericPolicySelfTest() {
 	const unsigned int expected = LUAJIT_NUMERIC_DUAL | LUAJIT_NUMERIC_DOUBLE | (sizeof(void*) == 8 ? LUAJIT_NUMERIC_GC64 : 0);
 	bool passed = luaJIT_numeric_policy() == expected;
 	std::printf("[lua-numeric-policy-selftest] %s linked_vm policy=%u expected=%u\n", passed ? "PASS" : "FAIL", luaJIT_numeric_policy(), expected);
 	lua_State* state = luaL_newstate();
 	if (!state) { return false; }
+	RegisterFloatingPointChecks(state);
 	luaL_openlibs(state);
 	const char* arithmetic =
 		"local function check() local a=2147483647; local b=a+1; "
@@ -7659,6 +7701,7 @@ bool LuaStateWrapper::RunNumericPolicySelfTest() {
 }
 
 void LuaStateWrapper::Initialize() {
+	FloatingPointEnvironment::Enter();
 	if (luaJIT_numeric_policy() != (LUAJIT_NUMERIC_DUAL | LUAJIT_NUMERIC_DOUBLE | (sizeof(void*) == 8 ? LUAJIT_NUMERIC_GC64 : 0))) {
 		RTEAbort("LuaJIT numeric policy mismatch");
 		std::abort();
@@ -7667,6 +7710,7 @@ void LuaStateWrapper::Initialize() {
 	m_GraphWorker.reset();
 	m_CheckpointHeap = CheckpointLua::HeapOwner::Create();
 	m_State = m_CheckpointHeap->State();
+	RegisterFloatingPointChecks(m_State);
 	luabind::open(m_State);
 	tracy::LuaRegister(m_State);
 
@@ -11429,7 +11473,7 @@ shared.parent = _AutosaveCaptureProbe
 		const bool mutated = RunScriptString("if _AutosaveCaptureProbe then _AutosaveCaptureProbe.first.tick = 91; _AutosaveCaptureProbe.vector.X = 17; _AutosaveCaptureProbe.open(99); _AutosaveCaptureProbe.controller:SetState(Controller.WEAPON_FIRE, false); _AutosaveCaptureProbe.soundSet.SoundSelectionCycleMode = SoundSet.ALL; _AutosaveCaptureProbe = nil end") == 0;
 		lua_gc(m_State, LUA_GCCOLLECT, 0);
 		try {
-			ownedGraph = copied && mutated && std::async(std::launch::async, [captured] { return captured.Text(); }).get() == reference;
+			ownedGraph = copied && mutated && FloatingPointEnvironment::Async(std::launch::async, [captured] { return captured.Text(); }).get() == reference;
 		} catch (const std::exception& error) { problems.push_back(error.what()); }
 		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] owned capture: " << problem << std::endl;
 		lua_pushvalue(m_State, previous); lua_setglobal(m_State, "_AutosaveCaptureProbe"); lua_pop(m_State, 1);

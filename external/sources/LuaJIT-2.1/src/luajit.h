@@ -72,6 +72,7 @@ LUA_API int luaJIT_setmode(lua_State *L, int idx, int mode);
 #define LUAJIT_NUMERIC_GC64 0x04u
 #define LUAJIT_NUMERIC_LUA52 0x08u
 LUA_API unsigned int luaJIT_numeric_policy(void);
+LUA_API void luaJIT_set_fp_assert(void (*check)(void));
 
 /* Native preview boundary; no Lua library entry points. */
 #define LUAJIT_PREVIEW_REGISTRY_ROOT	0x0001	/* Roll the registry back with the globals. */

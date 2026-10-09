@@ -68,6 +68,7 @@
 #include "MovableObject.h"
 #include "MOPixel.h"
 #include "RTETools.h"
+#include "FloatingPointEnvironment.h"
 #include "RotatePrimitiveSelfTest.h"
 #include "FrameRecorder.h"
 #include "ScenarioGUI.h"
@@ -449,7 +450,7 @@ public:
 
 private:
 	CensusWorker() :
-	    m_Thread([this] { Run(); }) {}
+	    m_Thread(FloatingPointEnvironment::StartThread([this] { Run(); })) {}
 
 	// Every posted line is printed before the worker stops.
 	void Run() {
@@ -945,6 +946,8 @@ static bool CrossEffectsChanged(uint64_t& seenGeneration, nlohmann::json& effect
 	static nlohmann::json latest = nlohmann::json::array();
 	static std::atomic<uint64_t> generation{0};
 	static std::jthread watcher([](std::stop_token stop) {
+		FloatingPointEnvironment::Initialize();
+		const FloatingPointEnvironment::Scope floatingPointScope("diagnostic watcher");
 		const auto path = std::filesystem::path(CrossEnvironment("CC_TEST_CROSS_RECORDS")).parent_path() / "h4-effects.json";
 		std::filesystem::file_time_type seenTime{};
 		uintmax_t seenSize = UINTMAX_MAX;
@@ -3423,9 +3426,9 @@ static bool RunFrameRecorderSelfTest() {
 		constexpr int c_PerThread = 2000;
 		std::vector<std::thread> loggers;
 		for (int thread = 0; thread < c_Threads; ++thread) {
-			loggers.emplace_back([&eventRecorder, thread] {
+			loggers.push_back(FloatingPointEnvironment::StartThread([&eventRecorder, thread] {
 				for (int event = 0; event < c_PerThread; ++event) eventRecorder.RecordEvent("thread " + std::to_string(thread) + " event " + std::to_string(event) + " " + std::string(64, 'x'));
-			});
+			}));
 		}
 		for (std::thread& logger: loggers) logger.join();
 		eventRecorder.Finish();
@@ -7596,6 +7599,7 @@ void RunGameLoop() {
 				break;
 			}
 			ZoneScopedN("Simulation Update");
+			const FloatingPointEnvironment::Scope floatingPointScope("simulation tick");
 			HarnessCost::BeginFrame();
 
 			// The probe's sim-rate keys land before the update that reads them; SDL events only arrive per frame.
@@ -10987,6 +10991,7 @@ int RunNetPortMapProbe() {
 /// Implementation of the main function.
 /// </summary>
 int main(int argc, char** argv) {
+	FloatingPointEnvironment::Initialize();
 	bool netMatchSelfTest = false;
 	bool netSeatSuccessionSelfTest = false;
 	bool netSeatAdmissionSelfTest = false;
@@ -10999,6 +11004,15 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-lua-numeric-policy-selftest") {
 			return LuaStateWrapper::RunNumericPolicySelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-fp-environment-selftest") {
+			return FloatingPointEnvironment::RunSelfTest() && LuaStateWrapper::RunFloatingPointCallbackSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-fp-environment-native-drift-selftest") {
+			return LuaStateWrapper::RunFloatingPointCallbackSelfTest(1) ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-fp-environment-error-drift-selftest") {
+			return LuaStateWrapper::RunFloatingPointCallbackSelfTest(2) ? EXIT_SUCCESS : EXIT_FAILURE;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-sim-checksum-selftest") {
 			return SimChecksum::RunRowBlockSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;

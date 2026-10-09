@@ -261,6 +261,7 @@ namespace RTE {
 		/// A Lua-held object keeps a world borrowed reference, and an off-world owner is refused.
 		bool RunLuaHeldReferenceSelfTest();
 		static bool RunNumericPolicySelfTest();
+		static bool RunFloatingPointCallbackSelfTest(int drift = 0);
 
 		/// Every script-owned MovableObject still live in this state's heap.
 		void VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit);
