@@ -15500,7 +15500,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			while (host.PopReadyFrame(committed)) {
 			}
 			host.FinishSimulationTick(0);
-			// Tick 1 is queued locally and the remote's frames stop with no drop notice: the fenced reclaim.
+			// Tick 1 is granted and queued locally; the remote stops with no drop notice: the fenced reclaim.
+			if (!host.BeginSimulationTick(1, error)) return false;
 			if (!host.QueueLocalInput(1, {MakeFrame(100, 2)}, {}, error)) {
 				return false;
 			}
@@ -15638,6 +15639,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			host.FinishSimulationTick(0);
 			survivor.FinishSimulationTick(0);
 			// Tick 1: the fenced incarnation goes silent with no drop notice; the survivor still plays.
+			if (!host.BeginSimulationTick(1, error) || !survivor.BeginSimulationTick(1, error)) return false;
 			if (!host.QueueLocalInput(1, {MakeFrame(100, 2)}, {}, error) ||
 			    !survivor.QueueLocalInput(1, {MakeFrame(300, 2)}, {}, error)) {
 				return false;
@@ -15776,6 +15778,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					*error = "boundary-resync fixture did not freeze on tick 2";
 					return false;
 				}
+				if (!host.BeginSimulationTick(2, error)) return false;
 				return host.QueueLocalInput(2, {MakeFrame(100, 3)}, {}, error);
 			};
 			{
