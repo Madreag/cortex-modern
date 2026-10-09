@@ -1379,7 +1379,7 @@ namespace RTE {
 		return true;
 	}
 
-	static uint64_t s_CatchUpWorkTicks = 0, s_CatchUpWorkUs = 0, s_CatchUpLastMeasured = 0, s_CatchUpPriorInputThrough = 0;
+	static uint64_t s_CatchUpWorkTicks = 0, s_CatchUpWorkUs = 0, s_CatchUpLastMeasured = 0, s_CatchUpPriorInputThrough = 0, s_CatchUpStartTick = 0;
 	static uint64_t s_CatchUpLastWallUs = 0;
 	static bool s_CatchUpHadQueuedWork = false;
 
@@ -1394,6 +1394,7 @@ namespace RTE {
 	}
 
 	uint64_t ScenarioRunner::WorldCatchUpWorkTicks() { return s_CatchUpWorkTicks; }
+	uint64_t ScenarioRunner::WorldCatchUpStartTick() { return s_CatchUpStartTick; }
 	uint64_t ScenarioRunner::WorldCatchUpWorkUs() { return s_CatchUpWorkUs; }
 	uint64_t ScenarioRunner::WorldCatchUpPriorInputThrough() { return s_CatchUpPriorInputThrough; }
 	void ScenarioRunner::SetWorldCatchUpPriorInputThrough(uint64_t frame) { s_CatchUpPriorInputThrough = frame; }
@@ -1408,6 +1409,7 @@ namespace RTE {
 			s_WorldCatchUpTail.push_back(std::move(frame));
 		}
 		s_WorldCatchUpAppliedThrough = snapshotTick;
+		s_CatchUpStartTick = snapshotTick;
 		s_CatchUpWorkTicks = s_CatchUpWorkUs = s_CatchUpLastWallUs = 0;
 		s_CatchUpHadQueuedWork = false;
 		s_CatchUpHeadroom = {};

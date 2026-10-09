@@ -273,6 +273,7 @@ namespace RTE {
 		static void SetWorldCatchUpWatcher(bool watcher);
 		static void NoteWorldCatchUpTickCost(uint64_t tick, uint64_t workUs, uint64_t wallUs = 0);
 		static uint64_t WorldCatchUpWorkTicks();
+		static uint64_t WorldCatchUpStartTick();
 		static uint64_t WorldCatchUpWorkUs();
 		static uint64_t WorldCatchUpPriorInputThrough();
 		static void SetWorldCatchUpPriorInputThrough(uint64_t frame);

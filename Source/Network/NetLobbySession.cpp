@@ -1677,7 +1677,7 @@ namespace RTE {
 					uint8_t kind = 0;
 					uint64_t value = 0;
 					WorldJoinReport report;
-					if (ParseWorldJoinReport(*chunk, kind, value, &report.workTicks, &report.workUs, &report.sentThrough)) {
+					if (ParseWorldJoinReport(*chunk, kind, value, &report.workTicks, &report.workUs, &report.sentThrough, &report.replayStart)) {
 						if (kind == c_NetWorldReportCatchUp) ++m_Stats.catchUpReportsReceived;
 						report.kind = kind; report.value = value; report.fromPeer = sender->first; report.pending = true;
 						if (kind == c_NetWorldReportRoundEnded && !m_Config.host) m_RoundEndedRecord = value;

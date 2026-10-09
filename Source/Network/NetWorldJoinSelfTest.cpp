@@ -981,6 +981,7 @@ namespace RTE {
 			if (!sent.pending || sent.kind != c_NetWorldReportCatchUp) {
 				return Fail("appliedThrough-did-not-reach-E-minus-1: the joiner sent no catch-up report");
 			}
+			if (sent.replayStart != 40) return Fail("the catch-up report lost its replay's starting tick");
 			const uint64_t reportsBefore = catchUp.reportsSent;
 			const uint64_t repeatBegan = NetLockstepNowMs();
 			for (int pump = 0; pump < 100; ++pump) NetMatchService::StepWorldJoinCatchUpClient(pair.client, catchUp);
@@ -4150,6 +4151,48 @@ namespace RTE {
 		NetLockstepFrame first;
 		if (chunk.size() < 4 + size || !DecodeCommittedJoinFrame(std::vector<uint8_t>(chunk.begin() + 4, chunk.begin() + 4 + size), first, &error) || first.targetFrame != 51)
 			return Fail("an in-place tail did not start at the frame after the seat's own state: " + error);
+		for (uint64_t tick = 81; tick <= 400; ++tick) {
+			NetLockstepFrame frame;
+			frame.senderPeerId = 1; frame.targetFrame = tick; frame.roundId = 9;
+			if (!host.Tail().Append(frame, &error)) return Fail(error);
+		}
+		host.CancelJoin(42, "held again");
+		if (!host.BeginInPlaceRejoin(42, 2, 2, 4, "returning", 2, 282, &error)) return Fail(error);
+		host.NoteRejoinLinkFit(42, true);
+		while (host.NextTailDatagram(42, 1000, chunk)) {}
+		NetLobbySession lobby;
+		const auto report = [&](uint64_t applied, uint64_t ticks, uint64_t workUs, uint64_t sentThrough, uint64_t replayStart) {
+			NetLobbySession::WorldJoinReport progress;
+			progress.pending = true; progress.kind = c_NetWorldReportCatchUp; progress.fromPeer = 2;
+			progress.value = applied; progress.workTicks = ticks; progress.workUs = workUs; progress.sentThrough = sentThrough;
+			progress.replayStart = replayStart;
+			return NetMatchService::ApplyWorldJoinReport(lobby, host, progress, 42, 800, 2000);
+		};
+		if (report(326, 279, 300000, 82, 47) != 0 || !host.FindSession(42)->headroom.Ready())
+			return Fail("the prior replay did not establish the counter baseline");
+		if (report(365, 0, 0, 0, 365) != 0) return Fail("a restarted replay activated without proving capacity");
+		session = host.FindSession(42);
+		if (session->acknowledgedThrough != 365 || session->headroom.Ready() || session->headroom.Ratio() != 0 ||
+		    session->tailInFlight.empty() || session->tailInFlight.front().last <= 365)
+			return Fail("a second hold retained the first replay's work or unacknowledged tail");
+		if (!host.NextTailDatagram(42, 3000, chunk)) return Fail("the missing tail was not resent");
+		bool missingResent = false;
+		for (size_t offset = 0; offset + 4 <= chunk.size();) {
+			const uint32_t bytes = static_cast<uint32_t>(chunk[offset]) | (static_cast<uint32_t>(chunk[offset + 1]) << 8) |
+			    (static_cast<uint32_t>(chunk[offset + 2]) << 16) | (static_cast<uint32_t>(chunk[offset + 3]) << 24);
+			offset += 4;
+			NetLockstepFrame resent;
+			if (bytes > chunk.size() - offset || !DecodeCommittedJoinFrame(std::vector<uint8_t>(chunk.begin() + offset, chunk.begin() + offset + bytes), resent, &error)) return Fail(error);
+			missingResent = missingResent || resent.targetFrame == 366;
+			offset += bytes;
+		}
+		if (!missingResent) return Fail("the resend queue stayed behind the returner's missing frame 366");
+		(void)report(375, 10, 10000, 0, 365);
+		if (report(376, 9, 9000, 0, 365) != 0 || host.FindSession(42)->acknowledgedThrough != 376)
+			return Fail("invalid capacity counters blocked an applied-frame acknowledgement");
+		(void)report(326, 279, 300000, 82, 47);
+		if (host.FindSession(42)->acknowledgedThrough != 376 || host.FindSession(42)->priorInputThrough != 82 || host.FindSession(42)->replayStart != 365)
+			return Fail("a previous replay rolled back progress or the input fence");
 		std::cout << "[net-world-join-selftest] PASS a_held_seat_catches_up_in_place_without_an_image from=50 first=" << first.targetFrame << std::endl;
 		return 0;
 	}

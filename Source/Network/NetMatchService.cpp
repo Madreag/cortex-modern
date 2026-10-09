@@ -4662,18 +4662,16 @@ static std::string ResyncSaveName() {
 				     << " reports_refused=" << lobby.GetStats().catchUpReportsRefused << " reports_dropped=" << lobby.GetStats().catchUpReportsDropped << detail;
 				System::PrintDiagnosticLine(line.str());
 			};
-			if ((host.IsPrivateMatch() || (prior && prior->returnsToHeldSeat)) && !host.NoteRejoinCapacity(connection, report.workTicks, report.workUs, report.sentThrough)) {
-				noteGate("capacity-dropped", " work_us=" + std::to_string(report.workUs));
-				return 0;
-			}
+			const bool capacityValid = !(host.IsPrivateMatch() || (prior && prior->returnsToHeldSeat)) ||
+			    host.NoteRejoinCapacity(connection, report.workTicks, report.workUs, report.sentThrough, report.replayStart);
 			uint64_t activation = 0;
 			const uint64_t previous = prior ? prior->acknowledgedThrough : 0;
 			const uint64_t lastMs = prior ? prior->lastCatchUpReportMs : 0;
 			const uint64_t ticks = report.value > previous ? report.value - previous : 0;
 			const uint64_t elapsed = (lastMs != 0 && nowMs > lastMs) ? nowMs - lastMs : 1;
 			std::string progressError;
-			if (!host.NoteCatchUpProgress(connection, report.value, ticks, elapsed, nowFrame, &activation, &progressError)) noteGate("refused", " error=" + progressError);
-			else noteGate(nullptr, "");
+			if (!host.NoteCatchUpProgress(connection, report.value, ticks, elapsed, nowFrame, &activation, &progressError, capacityValid)) noteGate("refused", " error=" + progressError);
+			else noteGate(nullptr, capacityValid ? "" : " work_us=" + std::to_string(report.workUs));
 			host.NoteCatchUpClock(connection, nowMs);
 			host.AcknowledgeTailDatagrams(connection, SteadyNowMs());
 			if (activation != 0) {

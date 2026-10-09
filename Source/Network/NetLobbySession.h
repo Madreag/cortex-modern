@@ -212,7 +212,7 @@ namespace RTE {
 			uint64_t value = 0;
 			uint8_t fromPeer = 0;
 			bool pending = false;
-			uint64_t workTicks = 0, workUs = 0, sentThrough = 0;
+			uint64_t workTicks = 0, workUs = 0, sentThrough = 0, replayStart = 0;
 		};
 		WorldJoinReport TakeWorldJoinReport();
 		/// The end record of a round that ended while this seat was held or rejoining; the events after it belong to the next lobby.
